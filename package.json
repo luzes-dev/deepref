@@ -1,0 +1,31 @@
+{
+	"name": "deepref",
+	"private": true,
+	"version": "0.1.0",
+	"packageManager": "pnpm@11.3.0",
+	"engines": {
+		"node": ">=24"
+	},
+	"scripts": {
+		"dev:web": "pnpm --filter @deepref/web dev",
+		"build": "pnpm --filter @deepref/web build",
+		"check": "pnpm --filter @deepref/web check",
+		"lint": "pnpm --filter @deepref/web lint",
+		"format": "pnpm --filter @deepref/web format",
+		"generate:openapi": "cargo run -q -p deepref-api -- --print-openapi > docs/openapi.json",
+		"generate:client": "pnpm --filter @deepref/web generate:client",
+		"generate:api": "pnpm generate:openapi && pnpm generate:client",
+		"generate:api:check": "bash scripts/check-api-codegen.sh",
+		"test": "pnpm --filter @deepref/web test",
+		"test:e2e": "pnpm --filter @deepref/web test:e2e",
+		"quality:ts": "fallow --workspace apps/web --score --summary",
+		"quality:ts:json": "fallow --workspace apps/web --format json --quiet --explain",
+		"quality:ts:audit": "fallow audit --workspace apps/web --base ${FALLOW_AUDIT_BASE:-origin/main} --gate new-only",
+		"ci": "pnpm lint && pnpm check && pnpm test",
+		"docker:build": "docker build -f docker/rust-service.Dockerfile --build-arg PACKAGE=deepref-api --build-arg BIN=deepref-api . && docker build -f docker/rust-service.Dockerfile --build-arg PACKAGE=deepref-worker --build-arg BIN=deepref-worker . && docker build -f apps/web/Dockerfile .",
+		"compose:config": "docker compose -f examples/docker-compose/docker-compose.selfhost.yml config"
+	},
+	"devDependencies": {
+		"fallow": "2.101.0"
+	}
+}

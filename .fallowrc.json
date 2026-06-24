@@ -1,0 +1,68 @@
+{
+  "$schema": "https://raw.githubusercontent.com/fallow-rs/fallow/main/schema.json",
+  "ignoreUnresolvedImports": ["/env.js"],
+  "ignorePatterns": [
+    "apps/web/jsrepo.config.ts",
+    "apps/web/static/env.js",
+    "apps/web/src/lib/index.ts",
+    "apps/web/src/lib/hooks/is-mobile.svelte.ts",
+    "apps/web/src/routes/demo/**",
+    "apps/web/src/lib/components/ui/alert/**",
+    "apps/web/src/lib/components/ui/breadcrumb/**",
+    "apps/web/src/lib/components/ui/checkbox/**",
+    "apps/web/src/lib/components/ui/command/**",
+    "apps/web/src/lib/components/ui/input-group/**",
+    "apps/web/src/lib/components/ui/pagination/**",
+    "apps/web/src/lib/components/ui/popover/**",
+    "apps/web/src/lib/components/ui/resizable/**",
+    "apps/web/src/lib/components/ui/scroll-area/**",
+    "apps/web/src/lib/components/ui/select/**",
+    "apps/web/src/lib/components/ui/sidebar/**",
+    "apps/web/src/lib/components/ui/skeleton/**",
+    "apps/web/src/lib/components/ui/stepper/**",
+    "apps/web/src/lib/components/ui/tags-input/**",
+    "apps/web/src/lib/components/ui/toggle/**",
+    "apps/web/src/lib/components/ui/toggle-group/**",
+    "apps/web/src/lib/components/ui/tooltip/**"
+  ],
+  "duplicates": {
+    "minLines": 15
+  },
+  "health": {
+    "ignore": ["apps/web/src/**/*.svelte"],
+    "thresholdOverrides": [
+      {
+        "files": ["apps/web/src/lib/api/client.ts"],
+        "maxCrap": 50,
+        "reason": "Small API wrapper; risk is covered by route type checking and fetch error handling."
+      },
+      {
+        "files": [
+          "apps/web/src/lib/components/ui/number-field/number-field.svelte.ts"
+        ],
+        "maxCrap": 80,
+        "reason": "Svelte rune context helper with low cognitive complexity but high static estimated CRAP."
+      },
+      {
+        "files": [
+          "apps/web/src/lib/hooks/use-clipboard.svelte.ts",
+          "apps/web/src/lib/hooks/use-ramp.svelte.ts"
+        ],
+        "maxCrap": 35,
+        "reason": "Browser interaction helpers with low cyclomatic and cognitive complexity."
+      }
+    ]
+  },
+  "ignoreDependencies": ["jsrepo", "paneforge"],
+  "ignoreExports": [
+    { "file": "apps/web/src/lib/components/ui/**/index.ts", "exports": ["*"] },
+    {
+      "file": "apps/web/src/lib/components/ui/terminal/terminal.svelte.ts",
+      "exports": ["*"]
+    },
+    {
+      "file": "apps/web/src/lib/components/ui/terminal/types.ts",
+      "exports": ["*"]
+    }
+  ]
+}

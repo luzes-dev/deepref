@@ -1,0 +1,137 @@
+name: Release
+
+on:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+    branches: [development, staging, main]
+  push:
+    tags:
+      - "v*.*.*"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  packages: write
+
+env:
+  REGISTRY: ghcr.io
+
+jobs:
+  images:
+    name: Publish Images
+    runs-on: ubuntu-latest
+    if: github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success'
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.event.workflow_run.head_sha || github.ref }}
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Metadata
+        id: meta
+        env:
+          EVENT_NAME: ${{ github.event_name }}
+          REF_NAME: ${{ github.ref_name }}
+          WORKFLOW_BRANCH: ${{ github.event.workflow_run.head_branch }}
+        run: |
+          if [ "$EVENT_NAME" = "workflow_run" ]; then
+            ref_name="$WORKFLOW_BRANCH"
+          else
+            ref_name="${REF_NAME:-manual}"
+          fi
+
+          short_sha="$(git rev-parse --short HEAD)"
+          owner="$(echo '${{ github.repository_owner }}' | tr '[:upper:]' '[:lower:]')"
+          case "$ref_name" in
+            development)
+              channel="development"
+              extra_tags="development-${short_sha}"
+              ;;
+            staging)
+              channel="staging"
+              extra_tags="staging-${short_sha}"
+              ;;
+            main)
+              channel="production"
+              extra_tags="production-${short_sha} latest"
+              ;;
+            v*.*.*)
+              channel="$ref_name"
+              extra_tags="${short_sha} latest"
+              ;;
+            *)
+              channel="manual"
+              extra_tags="manual-${short_sha}"
+              ;;
+          esac
+          echo "channel=${channel}" >> "$GITHUB_OUTPUT"
+          echo "extra_tags=${extra_tags}" >> "$GITHUB_OUTPUT"
+          echo "short_sha=${short_sha}" >> "$GITHUB_OUTPUT"
+          echo "owner=${owner}" >> "$GITHUB_OUTPUT"
+      - name: Docker tags
+        id: tags
+        env:
+          OWNER: ${{ steps.meta.outputs.owner }}
+          CHANNEL: ${{ steps.meta.outputs.channel }}
+          EXTRA_TAGS: ${{ steps.meta.outputs.extra_tags }}
+        run: |
+          set -eu
+
+          tags_for() {
+            image="$1"
+            printf '%s/%s/%s:%s\n' "${{ env.REGISTRY }}" "$OWNER" "$image" "$CHANNEL"
+            for tag in $EXTRA_TAGS; do
+              printf '%s/%s/%s:%s\n' "${{ env.REGISTRY }}" "$OWNER" "$image" "$tag"
+            done
+          }
+
+          {
+            echo "api<<EOF"
+            tags_for deepref-api
+            echo "EOF"
+            echo "worker<<EOF"
+            tags_for deepref-worker
+            echo "EOF"
+            echo "web<<EOF"
+            tags_for deepref-web
+            echo "EOF"
+          } >> "$GITHUB_OUTPUT"
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: docker/rust-service.Dockerfile
+          build-args: |
+            PACKAGE=deepref-api
+            BIN=deepref-api
+          push: true
+          tags: ${{ steps.tags.outputs.api }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: docker/rust-service.Dockerfile
+          build-args: |
+            PACKAGE=deepref-worker
+            BIN=deepref-worker
+          push: true
+          tags: ${{ steps.tags.outputs.worker }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          file: apps/web/Dockerfile
+          push: true
+          tags: ${{ steps.tags.outputs.web }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+      - uses: softprops/action-gh-release@v2
+        if: startsWith(github.ref, 'refs/tags/')
+        with:
+          generate_release_notes: true

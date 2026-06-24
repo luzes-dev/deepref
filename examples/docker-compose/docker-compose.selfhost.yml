@@ -1,0 +1,105 @@
+services:
+  postgres:
+    image: postgres:17
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-deepref}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-deepref}
+      POSTGRES_DB: ${POSTGRES_DB:-deepref}
+    ports:
+      - "5432:5432"
+    volumes:
+      - deepref-postgres-data:/var/lib/postgresql/data
+      - ../../services/api/migrations:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "pg_isready -U ${POSTGRES_USER:-deepref} -d ${POSTGRES_DB:-deepref}",
+        ]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+
+  nats:
+    image: nats:2
+    restart: unless-stopped
+    command: ["-js", "-sd", "/data", "-m", "8222"]
+    ports:
+      - "4222:4222"
+      - "8222:8222"
+    volumes:
+      - deepref-nats-data:/data
+
+  neo4j:
+    image: neo4j:5-community
+    restart: unless-stopped
+    environment:
+      NEO4J_AUTH: ${NEO4J_AUTH:-neo4j/deepref}
+    ports:
+      - "7474:7474"
+      - "7687:7687"
+    volumes:
+      - deepref-neo4j-data:/data
+
+  api:
+    build:
+      context: ../..
+      dockerfile: docker/rust-service.Dockerfile
+      args:
+        PACKAGE: deepref-api
+        BIN: deepref-api
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: postgres://${POSTGRES_USER:-deepref}:${POSTGRES_PASSWORD:-deepref}@postgres:5432/${POSTGRES_DB:-deepref}
+      NATS_URL: nats://nats:4222
+      API_BIND_ADDR: 0.0.0.0:8080
+      API_CORS_ORIGINS: ${API_CORS_ORIGINS:-http://localhost:3000,http://127.0.0.1:3000,http://localhost:5173,http://127.0.0.1:5173}
+      API_CORS_ALLOW_ANY: ${API_CORS_ALLOW_ANY:-false}
+      RUST_LOG: ${RUST_LOG:-info}
+    ports:
+      - "8080:8080"
+    depends_on:
+      postgres:
+        condition: service_healthy
+      nats:
+        condition: service_started
+
+  worker:
+    build:
+      context: ../..
+      dockerfile: docker/rust-service.Dockerfile
+      args:
+        PACKAGE: deepref-worker
+        BIN: deepref-worker
+    restart: unless-stopped
+    environment:
+      DATABASE_URL: postgres://${POSTGRES_USER:-deepref}:${POSTGRES_PASSWORD:-deepref}@postgres:5432/${POSTGRES_DB:-deepref}
+      NATS_URL: nats://nats:4222
+      WORKER_CONCURRENCY: 8
+      RUST_LOG: ${RUST_LOG:-info}
+    depends_on:
+      postgres:
+        condition: service_healthy
+      nats:
+        condition: service_started
+      api:
+        condition: service_started
+
+  web:
+    build:
+      context: ../..
+      dockerfile: apps/web/Dockerfile
+    restart: unless-stopped
+    environment:
+      PUBLIC_API_BASE_URL: ${PUBLIC_API_BASE_URL:-http://localhost:8080}
+    ports:
+      - "3000:80"
+    depends_on:
+      api:
+        condition: service_started
+
+volumes:
+  deepref-postgres-data:
+  deepref-nats-data:
+  deepref-neo4j-data:

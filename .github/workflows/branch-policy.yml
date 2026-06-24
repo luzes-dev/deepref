@@ -1,0 +1,63 @@
+name: Branch Policy
+
+on:
+  pull_request:
+    branches: [development, staging, main]
+
+concurrency:
+  group: branch-policy-${{ github.event.pull_request.number || github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  validate:
+    name: Validate PR branch ladder
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check source and target branches
+        env:
+          BASE_BRANCH: ${{ github.base_ref }}
+          HEAD_BRANCH: ${{ github.head_ref }}
+        run: |
+          set -eu
+
+          case "$BASE_BRANCH" in
+            development)
+              case "$HEAD_BRANCH" in
+                feature/*|fix/*|bugfix/*|chore/*|docs/*|refactor/*|test/*|dependabot/*|main)
+                  ;;
+                *)
+                  echo "PRs into development must come from feature/*, fix/*, bugfix/*, chore/*, docs/*, refactor/*, test/*, dependabot/*, or main for hotfix back-merges."
+                  exit 1
+                  ;;
+              esac
+              ;;
+            staging)
+              case "$HEAD_BRANCH" in
+                development|main)
+                  ;;
+                *)
+                  echo "PRs into staging must come from development, or main for hotfix back-merges."
+                  exit 1
+                  ;;
+              esac
+              ;;
+            main)
+              case "$HEAD_BRANCH" in
+                staging|hotfix/*)
+                  ;;
+                *)
+                  echo "PRs into main must come from staging or hotfix/*."
+                  exit 1
+                  ;;
+              esac
+              ;;
+            *)
+              echo "Unsupported base branch: $BASE_BRANCH"
+              exit 1
+              ;;
+          esac
+
+          echo "Branch policy accepted: $HEAD_BRANCH -> $BASE_BRANCH"

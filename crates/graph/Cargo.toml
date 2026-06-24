@@ -1,0 +1,15 @@
+[package]
+name = "deepref-graph"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+deepref-core = { version = "0.1.0", path = "../core" }
+anyhow.workspace = true
+chrono.workspace = true
+neo4rs.workspace = true
+serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true
+sha2.workspace = true
+uuid.workspace = true

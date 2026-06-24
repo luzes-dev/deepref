@@ -1,0 +1,9 @@
+pub const STREAM: &str = "INGESTION";
+pub const SUBJECT_INGESTION_REQUESTED: &str = "ingestion.requested";
+pub const SUBJECT_WORK_FETCH_REQUESTED: &str = "work.fetch.requested";
+pub const SUBJECT_WORK_FETCH_COMPLETED: &str = "work.fetch.completed";
+pub const SUBJECT_WORK_FETCH_FAILED: &str = "work.fetch.failed";
+pub const SUBJECT_REFERENCES_DISCOVERED: &str = "work.references.discovered";
+pub const SUBJECT_METRICS_RECOMPUTE_REQUESTED: &str = "metrics.recompute.requested";
+pub const SUBJECT_METRICS_UPDATED: &str = "metrics.updated";
+pub const SUBJECT_INGESTION_ITEM_UPDATED: &str = "ingestion.item.updated";

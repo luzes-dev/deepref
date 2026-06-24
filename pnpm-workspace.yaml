@@ -1,0 +1,14 @@
+packages:
+  - apps/*
+
+onlyBuiltDependencies:
+  - esbuild
+allowBuilds:
+  esbuild: true
+
+overrides:
+  cookie: ^0.7.2
+
+minimumReleaseAgeExclude:
+  - '@tanstack/query-core@5.101.1'
+  - '@tanstack/svelte-query@6.1.35'

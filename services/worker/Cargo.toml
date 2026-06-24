@@ -1,0 +1,25 @@
+[package]
+name = "deepref-worker"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+deepref-core = { version = "0.1.0", path = "../../crates/core" }
+deepref-crossref = { version = "0.1.0", path = "../../crates/crossref" }
+deepref-events = { version = "0.1.0", path = "../../crates/events" }
+deepref-graph = { version = "0.1.0", path = "../../crates/graph" }
+anyhow.workspace = true
+async-nats.workspace = true
+futures.workspace = true
+governor.workspace = true
+serde.workspace = true
+serde_json.workspace = true
+sqlx.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+tracing-subscriber.workspace = true
+uuid.workspace = true
+
+[dev-dependencies]
+reqwest.workspace = true

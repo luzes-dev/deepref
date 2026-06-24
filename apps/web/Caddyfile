@@ -1,0 +1,7 @@
+:80 {
+	root * /usr/share/caddy
+	encode zstd gzip
+	header /env.js Cache-Control "no-store"
+	try_files {path} /200.html
+	file_server
+}
