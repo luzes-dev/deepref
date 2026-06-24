@@ -95,7 +95,8 @@ jobs:
           FALLOW_AUDIT_BASE: ${{ github.event_name == 'pull_request' && github.event.pull_request.base.sha || github.event.before }}
         run: |
           base="$FALLOW_AUDIT_BASE"
-          if ! git rev-parse --verify "$base" >/dev/null 2>&1; then
+          if [ "$base" = "0000000000000000000000000000000000000000" ] ||
+             ! git cat-file -e "$base^{commit}" 2>/dev/null; then
             base="$(git rev-parse HEAD^ 2>/dev/null || true)"
           fi
           if [ -z "$base" ]; then
