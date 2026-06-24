@@ -22,7 +22,7 @@ deepref-events = { path = "crates/events" }
 deepref-graph = { path = "crates/graph" }
 deepref-metrics = { path = "crates/metrics" }
 anyhow = "1"
-async-nats = "0.44"
+async-nats = "0.49"
 axum = "0.8"
 backoff = { version = "0.4", features = ["tokio"] }
 base64 = "0.22"
