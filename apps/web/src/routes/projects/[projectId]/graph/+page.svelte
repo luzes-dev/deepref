@@ -8,16 +8,17 @@
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
 	import { Slider } from '$lib/components/ui/slider';
-	import type { ArticleDto } from '$lib/api/generated/models';
+	import type { ArticleDto, GraphEdgeDto } from '$lib/api/generated/models';
 	import { createGetProjectGraph } from '$lib/api/generated/articles/articles';
 	import RotateCcwIcon from '@lucide/svelte/icons/rotate-ccw';
 	import type SigmaType from 'sigma';
 
-	let container: HTMLDivElement;
+	let container = $state<HTMLDivElement | null>(null);
 	let selected = $state<ArticleDto | null>(null);
 	let search = $state('');
 	let minInternal = $state(0);
 	let renderer: SigmaType | undefined;
+	let renderRun = 0;
 	const projectId = $derived(page.params.projectId ?? '');
 	const graphQuery = createGetProjectGraph(
 		() => projectId,
@@ -31,28 +32,32 @@
 		})
 	);
 
-	async function renderGraph() {
+	async function renderGraph(target: HTMLDivElement, nodes: ArticleDto[], edges: GraphEdgeDto[]) {
+		const run = ++renderRun;
 		const [{ default: Graph }, { default: Sigma }, forceAtlas2] = await Promise.all([
 			import('graphology'),
 			import('sigma'),
 			import('graphology-layout-forceatlas2')
 		]);
+		if (run !== renderRun) return;
 
 		const nextGraph = new Graph();
-		for (const [index, node] of visibleNodes.entries()) {
+		for (const [index, node] of nodes.entries()) {
 			nextGraph.addNode(node.doi, {
 				...node,
 				label: node.title ?? node.doi,
+				type: 'circle',
 				x: Math.cos(index) * 10,
 				y: Math.sin(index) * 10,
 				size: 4 + Math.max(1, node.rank_score * 12),
 				color: node.internal_citations > 0 ? '#2563eb' : '#64748b'
 			});
 		}
-		for (const edge of graphData.edges) {
+		for (const edge of edges) {
 			if (
 				nextGraph.hasNode(edge.source) &&
 				nextGraph.hasNode(edge.target) &&
+				edge.source !== edge.target &&
 				!nextGraph.hasEdge(edge.source, edge.target)
 			) {
 				nextGraph.addDirectedEdge(edge.source, edge.target, { size: 1, color: '#94a3b8' });
@@ -65,14 +70,33 @@
 			});
 		}
 		renderer?.kill();
-		renderer = new Sigma(nextGraph, container);
+		renderer = new Sigma(nextGraph, target);
 		renderer.on('clickNode', ({ node }: { node: string }) => {
 			selected = nextGraph.getNodeAttributes(node) as ArticleDto;
 		});
 	}
 
+	function clearGraph() {
+		renderRun += 1;
+		renderer?.kill();
+		renderer = undefined;
+	}
+
+	function resetLayout() {
+		if (container) void renderGraph(container, visibleNodes, graphData.edges);
+	}
+
 	$effect(() => {
-		if (graphData.nodes.length && container) renderGraph();
+		const target = container;
+		const nodes = visibleNodes;
+		const edges = graphData.edges;
+
+		if (!target || nodes.length === 0) {
+			clearGraph();
+			return;
+		}
+
+		void renderGraph(target, nodes, edges);
 	});
 
 	onDestroy(() => renderer?.kill());
@@ -86,7 +110,7 @@
 				Project-local citation network, directed from citing work to cited work.
 			</p>
 		</div>
-		<Button variant="outline" onclick={renderGraph}
+		<Button variant="outline" onclick={resetLayout}
 			><RotateCcwIcon data-icon="inline-start" />Reset layout</Button
 		>
 	</div>
@@ -107,7 +131,10 @@
 		</Card.Content>
 	</Card.Root>
 	<div class="grid gap-4 lg:grid-cols-[1fr_320px]">
-		<div bind:this={container} class="h-[620px] rounded-md border bg-muted"></div>
+		<div
+			bind:this={container}
+			class="relative h-[620px] overflow-hidden rounded-md border bg-muted"
+		></div>
 		<Card.Root>
 			<Card.Header>
 				<Card.Title>Matches</Card.Title>
