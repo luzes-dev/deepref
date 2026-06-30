@@ -21,28 +21,28 @@ deepref-crossref = { path = "crates/crossref" }
 deepref-events = { path = "crates/events" }
 deepref-graph = { path = "crates/graph" }
 deepref-metrics = { path = "crates/metrics" }
-anyhow = "1"
-async-nats = "0.44"
-axum = "0.8"
+anyhow = "1.0.103"
+async-nats = "0.49.1"
+axum = "0.8.9"
 backoff = { version = "0.4", features = ["tokio"] }
-base64 = "0.22"
-chrono = { version = "0.4", features = ["serde"] }
-futures = "0.3"
-governor = "0.10"
+base64 = "0.22.1"
+chrono = { version = "0.4.45", features = ["serde"] }
+futures = "0.3.32"
+governor = "0.10.4"
 neo4rs = "0.8"
-reqwest = { version = "0.12", default-features = false, features = ["json", "rustls-tls", "gzip", "brotli"] }
-serde = { version = "1", features = ["derive"] }
-serde_json = "1"
-sha2 = "0.10"
-sqlx = { version = "0.8", features = ["runtime-tokio-rustls", "postgres", "uuid", "chrono", "json", "migrate"] }
-thiserror = "2"
-tokio = { version = "1", features = ["full"] }
-tower = { version = "0.5", features = ["util"] }
-tower-http = { version = "0.6", features = ["cors", "trace"] }
-tracing = "0.1"
-tracing-subscriber = { version = "0.3", features = ["env-filter", "json"] }
+reqwest = { version = "0.13.4", default-features = false, features = ["json", "rustls", "gzip", "brotli"] }
+serde = { version = "1.0.228", features = ["derive"] }
+serde_json = "1.0.150"
+sha2 = "0.11.0"
+sqlx = { version = "0.9.0", features = ["runtime-tokio", "tls-rustls", "postgres", "uuid", "chrono", "json", "migrate"] }
+thiserror = "2.0.18"
+tokio = { version = "1.52.3", features = ["full"] }
+tower = { version = "0.5.3", features = ["util"] }
+tower-http = { version = "0.7.0", features = ["cors", "trace"] }
+tracing = "0.1.44"
+tracing-subscriber = { version = "0.3.23", features = ["env-filter", "json"] }
 utoipa = { version = "5.5.0", features = ["axum_extras", "chrono", "uuid"] }
 utoipa-axum = "0.2.0"
-urlencoding = "2"
-uuid = { version = "1", features = ["serde", "v4"] }
-wiremock = "0.6"
+urlencoding = "2.1.3"
+uuid = { version = "1.23.4", features = ["serde", "v4"] }
+wiremock = "0.6.5"

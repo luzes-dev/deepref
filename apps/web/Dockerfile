@@ -1,16 +1,16 @@
-FROM node:24-bookworm-slim AS deps
+FROM node:26-bookworm-slim AS deps
 
 WORKDIR /app
-RUN corepack enable
+RUN npm install -g pnpm@11.3.0
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
 COPY apps/web/package.json ./apps/web/package.json
 COPY apps/web/svelte.config.js ./apps/web/svelte.config.js
 RUN pnpm install --frozen-lockfile --filter @deepref/web...
 
-FROM node:24-bookworm-slim AS builder
+FROM node:26-bookworm-slim AS builder
 
 WORKDIR /app
-RUN corepack enable
+RUN npm install -g pnpm@11.3.0
 COPY --from=deps /app/node_modules ./node_modules
 COPY --from=deps /app/apps/web/node_modules ./apps/web/node_modules
 COPY . .

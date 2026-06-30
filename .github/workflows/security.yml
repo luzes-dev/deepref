@@ -25,7 +25,7 @@ jobs:
       matrix:
         language: [rust, javascript-typescript]
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - uses: github/codeql-action/init@v4
         with:
           languages: ${{ matrix.language }}
@@ -35,18 +35,22 @@ jobs:
     name: Dependency Scans
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
-      - uses: Swatinem/rust-cache@v2
+      - uses: actions/checkout@v7
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
+        with:
+          toolchain: 1.95.0
+          rustflags: ""
       - uses: pnpm/action-setup@v4
         with:
           version: 11.3.0
-      - uses: actions/setup-node@v4
+      - uses: actions/setup-node@v6
         with:
           node-version: 24
           cache: pnpm
-      - run: cargo install cargo-deny cargo-audit --locked
-      - run: cargo deny check
-      - run: cargo audit
+      - uses: EmbarkStudios/cargo-deny-action@v2
+      - uses: actions-rust-lang/audit@v1
+        with:
+          createIssues: false
       - run: pnpm install --frozen-lockfile
       - run: pnpm audit --audit-level high
 
@@ -54,5 +58,5 @@ jobs:
     name: Fallow Security Candidates
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v7
       - run: npx fallow security --workspace apps/web --surface --format json --quiet
