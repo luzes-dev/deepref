@@ -19,10 +19,11 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
-      - uses: dtolnay/rust-toolchain@1.95.0
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
+          toolchain: 1.95.0
           components: rustfmt, clippy
-      - uses: Swatinem/rust-cache@v2
+          rustflags: ""
       - run: cargo fmt --all -- --check
       - run: cargo clippy --workspace --all-targets --locked -- -D warnings
       - run: cargo test --workspace --locked
@@ -51,10 +52,11 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v7
-      - uses: dtolnay/rust-toolchain@1.95.0
+      - uses: actions-rust-lang/setup-rust-toolchain@v1
         with:
+          toolchain: 1.95.0
           components: rustfmt, clippy
-      - uses: Swatinem/rust-cache@v2
+          rustflags: ""
       - uses: pnpm/action-setup@v4
         with:
           version: 11.3.0
