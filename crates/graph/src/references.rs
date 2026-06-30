@@ -6,5 +6,10 @@ pub fn unresolved_reference_id(source_doi: &str, reference: &Reference) -> Strin
     hasher.update(source_doi.as_bytes());
     hasher.update(reference.raw_unstructured.as_deref().unwrap_or_default());
     hasher.update(reference.article_title.as_deref().unwrap_or_default());
-    format!("{:x}", hasher.finalize())
+    let digest = hasher.finalize();
+    let mut id = String::with_capacity(digest.len() * 2);
+    for byte in digest {
+        id.push_str(&format!("{byte:02x}"));
+    }
+    id
 }
