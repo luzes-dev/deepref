@@ -42,6 +42,26 @@ async function mockWorkspace(page: Page) {
 	await page.route('http://localhost:8080/projects/test-project/articles', async (route) => {
 		await route.fulfill({ json: articles });
 	});
+	await page.route('http://localhost:8080/projects/test-project/graph', async (route) => {
+		await route.fulfill({
+			json: {
+				nodes: articles,
+				edges: [{ source: '10.1/source', target: '10.1/source' }]
+			}
+		});
+	});
+	await page.route(
+		'http://localhost:8080/projects/test-project/recommendations',
+		async (route) => {
+			await route.fulfill({
+				json: {
+					foundational: [],
+					core_to_project: [],
+					underexplored: []
+				}
+			});
+		}
+	);
 	await page.route(
 		'http://localhost:8080/projects/test-project/articles/MTAuMS9zb3VyY2U',
 		async (route) => {
@@ -168,6 +188,20 @@ async function mockProjectCreateWorkspace(page: Page, initialProjects = [project
 				await route.fulfill({ json: mockedProject.id === project.id ? articles : [] });
 			}
 		);
+		await page.route(
+			`http://localhost:8080/projects/${mockedProject.id}/graph`,
+			async (route) => {
+				await route.fulfill({ json: { nodes: [], edges: [] } });
+			}
+		);
+		await page.route(
+			`http://localhost:8080/projects/${mockedProject.id}/recommendations`,
+			async (route) => {
+				await route.fulfill({
+					json: { foundational: [], core_to_project: [], underexplored: [] }
+				});
+			}
+		);
 	}
 
 	await page.route('http://localhost:8080/ingestions', async (route) => {
@@ -184,24 +218,47 @@ test('renders unified workspace without global ingestion links', async ({ page }
 	await expect(page.getByRole('link', { name: 'Ingest' })).toHaveCount(0);
 });
 
-test('selecting an article updates URL and shows inspector', async ({ page }) => {
+test('selecting an article shows inspector', async ({ page }) => {
 	await mockWorkspace(page);
-	await page.goto('/?project=test-project&view=articles');
+	await page.goto('/');
 
+	await page.getByRole('button', { name: 'Articles' }).click();
 	await page.getByRole('button', { name: 'Open' }).first().click();
-	await expect(page).toHaveURL(/article=MTAuMS9zb3VyY2U/);
 	await expect(page.getByText('A useful article abstract.')).toBeVisible();
+});
+
+test('secondary article views reuse selected article inspector', async ({ page }) => {
+	await mockWorkspace(page);
+	await page.goto('/');
+
+	await page.getByRole('button', { name: 'Articles' }).click();
+	await page.getByRole('button', { name: 'Open' }).first().click();
+	await expect(page.getByText('A useful article abstract.')).toBeVisible();
+
+	await page.getByRole('button', { name: 'Recommendations' }).click();
+	await expect(page.getByText('A useful article abstract.')).toBeVisible();
+
+	await page.getByRole('button', { name: 'Ingestions' }).click();
+	await expect(page.getByText('1 project runs')).toBeVisible();
+
+	await page.getByRole('button', { name: 'Graph' }).click();
+	await expect(page.getByText('A useful article abstract.')).toBeVisible();
+	await expect(page.getByText('Matches')).toHaveCount(0);
+	await expect(page.getByRole('button', { name: 'Reset graph layout' })).toBeVisible();
 });
 
 test('ingestions are filtered and create uses current project', async ({ page }) => {
 	await mockWorkspace(page);
-	await page.goto('/?project=test-project&view=ingestions');
+	await page.goto('/');
 
+	await page.getByRole('button', { name: 'Ingestions' }).click();
 	await expect(page.getByText('1 project runs')).toBeVisible();
 	await expect(page.getByText('other-ingestion')).toHaveCount(0);
 	await page.locator('#dois').fill('10.1/new');
 	await page.getByRole('button', { name: 'Start ingestion' }).click();
-	await expect(page).toHaveURL(/ingestion=new-ingestion/);
+	await expect(page.getByText('new-ingestion')).toBeVisible();
+	await expect(page.getByText('Status')).toBeVisible();
+	await expect(page.getByText('queued')).toBeVisible();
 });
 
 test('empty workspace creates a first project', async ({ page }) => {
@@ -213,13 +270,15 @@ test('empty workspace creates a first project', async ({ page }) => {
 	await page.locator('#empty-project-description').fill('Created from test');
 	await page.getByRole('button', { name: 'Create', exact: true }).click();
 
-	await expect(page).toHaveURL(/project=created-project/);
 	await expect(page.getByRole('heading', { name: 'Created Project' })).toBeVisible();
+	await expect(page.getByRole('combobox', { name: 'Select project' })).toContainText(
+		'Created Project'
+	);
 });
 
 test('selector create path creates and selects a project', async ({ page }) => {
 	await mockProjectCreateWorkspace(page);
-	await page.goto('/?project=test-project');
+	await page.goto('/');
 
 	await page.getByRole('combobox', { name: 'Select project' }).click();
 	await page.getByText('Create project').click();
@@ -227,6 +286,8 @@ test('selector create path creates and selects a project', async ({ page }) => {
 	await page.locator('#selector-project-description').fill('Created from test');
 	await page.getByRole('button', { name: 'Create', exact: true }).click();
 
-	await expect(page).toHaveURL(/project=created-project/);
 	await expect(page.getByRole('heading', { name: 'Created Project' })).toBeVisible();
+	await expect(page.getByRole('combobox', { name: 'Select project' })).toContainText(
+		'Created Project'
+	);
 });

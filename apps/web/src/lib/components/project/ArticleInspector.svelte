@@ -2,12 +2,10 @@
 	import * as Alert from '$lib/components/ui/alert';
 	import * as Card from '$lib/components/ui/card';
 	import { Badge } from '$lib/components/ui/badge';
-	import { Button } from '$lib/components/ui/button';
 	import { CopyButton } from '$lib/components/ui/copy-button';
 	import { Skeleton } from '$lib/components/ui/skeleton';
 	import { createGetProjectArticle } from '$lib/api/generated/articles/articles';
 	import CircleAlertIcon from '@lucide/svelte/icons/circle-alert';
-	import XIcon from '@lucide/svelte/icons/x';
 	import { useProjectWorkspaceContext } from './context.svelte.js';
 
 	const workspace = useProjectWorkspaceContext();
@@ -33,14 +31,6 @@
 				{workspace.selectedArticle ?? 'No article selected'}
 			</p>
 		</div>
-		<Button
-			variant="ghost"
-			size="icon"
-			onclick={workspace.clearArticle}
-			aria-label="Clear article"
-		>
-			<XIcon data-icon />
-		</Button>
 	</div>
 
 	<div class="min-h-0 flex-1 overflow-auto p-4">
@@ -67,7 +57,7 @@
 			<div class="flex flex-col gap-4">
 				<div class="flex items-start justify-between gap-3">
 					<div class="min-w-0">
-						<h3 class="break-words text-lg font-semibold">
+						<h3 class="wrap-break-word text-lg font-semibold">
 							{article.title ?? article.doi}
 						</h3>
 						<p class="break-all text-sm text-muted-foreground">{article.doi}</p>
@@ -103,7 +93,7 @@
 				<section class="flex flex-col gap-2">
 					<h4 class="font-medium">Metadata</h4>
 					<p class="text-sm text-muted-foreground">{article.publisher}</p>
-					<p class="break-words text-sm">
+					<p class="wrap-break-word text-sm">
 						{article.abstract ?? 'No abstract available.'}
 					</p>
 					<pre

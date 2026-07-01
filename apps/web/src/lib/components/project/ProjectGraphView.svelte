@@ -2,7 +2,6 @@
 	import * as Alert from '$lib/components/ui/alert';
 	import * as Empty from '$lib/components/ui/empty';
 	import * as InputGroup from '$lib/components/ui/input-group';
-	import * as Sheet from '$lib/components/ui/sheet';
 	import { Badge } from '$lib/components/ui/badge';
 	import { Button } from '$lib/components/ui/button';
 	import { Skeleton } from '$lib/components/ui/skeleton';
@@ -38,7 +37,12 @@
 		})
 	);
 
-	async function renderGraph(target: HTMLDivElement, nodes: ArticleDto[], edges: GraphEdgeDto[]) {
+	async function renderGraph(
+		target: HTMLDivElement,
+		nodes: ArticleDto[],
+		edges: GraphEdgeDto[],
+		selectedArticle: string | undefined
+	) {
 		const run = ++renderRun;
 		const [{ default: Graph }, { default: Sigma }, forceAtlas2] = await Promise.all([
 			import('graphology'),
@@ -56,7 +60,12 @@
 				x: Math.cos(index) * 10,
 				y: Math.sin(index) * 10,
 				size: 4 + Math.max(1, node.rank_score * 12),
-				color: node.internal_citations > 0 ? '#2563eb' : '#64748b'
+				color:
+					node.doi_key === selectedArticle
+						? '#f59e0b'
+						: node.internal_citations > 0
+							? '#2563eb'
+							: '#64748b'
 			});
 		}
 		for (const edge of edges) {
@@ -78,7 +87,8 @@
 		renderer?.kill();
 		renderer = new Sigma(nextGraph, target);
 		renderer.on('clickNode', ({ node }: { node: string }) => {
-			workspace.graphFilters.selected = nextGraph.getNodeAttributes(node) as ArticleDto;
+			const article = nextGraph.getNodeAttributes(node) as ArticleDto;
+			workspace.openArticle(article.doi_key);
 		});
 	}
 
@@ -90,7 +100,7 @@
 
 	function resetLayout() {
 		if (container && enabled && visibleNodes.length > 0) {
-			void renderGraph(container, visibleNodes, graphData.edges);
+			void renderGraph(container, visibleNodes, graphData.edges, workspace.selectedArticle);
 		}
 	}
 
@@ -99,13 +109,14 @@
 		const nodes = visibleNodes;
 		const edges = graphData.edges;
 		const active = enabled;
+		const selectedArticle = workspace.selectedArticle;
 
 		if (!active || !target || nodes.length === 0) {
 			clearGraph();
 			return;
 		}
 
-		void renderGraph(target, nodes, edges);
+		void renderGraph(target, nodes, edges, selectedArticle);
 	});
 
 	onCleanup(() => clearGraph());
@@ -119,9 +130,6 @@
 				Project-local citation network, directed from citing work to cited work.
 			</p>
 		</div>
-		<Button variant="outline" onclick={resetLayout}>
-			<RotateCcwIcon data-icon="inline-start" />Reset layout
-		</Button>
 	</div>
 
 	<div class="grid gap-3 md:grid-cols-[1fr_280px_auto]">
@@ -164,68 +172,19 @@
 			</Empty.Header>
 		</Empty.Root>
 	{:else}
-		<div class="grid min-h-0 flex-1 gap-4 lg:grid-cols-[1fr_300px]">
-			<div
-				bind:this={container}
-				class="relative min-h-[520px] overflow-hidden rounded-md border bg-muted"
-			></div>
-			<section class="hidden min-h-0 rounded-md border lg:block">
-				<div class="border-b p-4">
-					<h2 class="font-medium">Matches</h2>
-					<p class="text-sm text-muted-foreground">
-						Click a node or list item to inspect it.
-					</p>
-				</div>
-				<div class="flex max-h-[calc(100vh-18rem)] flex-col gap-2 overflow-auto p-3">
-					{#each visibleNodes.slice(0, 30) as node (node.doi)}
-						<button
-							class="rounded-md border p-3 text-left hover:bg-muted"
-							onclick={() => (workspace.graphFilters.selected = node)}
-						>
-							<div class="truncate font-medium">{node.title ?? node.doi}</div>
-							<div class="truncate text-xs text-muted-foreground">{node.doi}</div>
-						</button>
-					{/each}
-				</div>
-			</section>
+		<div class="min-h-0 flex-1">
+			<div class="relative min-h-[520px] overflow-hidden rounded-md border bg-muted">
+				<div bind:this={container} class="absolute inset-0"></div>
+				<Button
+					variant="ghost"
+					size="icon"
+					class="absolute right-3 top-3 z-10 bg-background/80"
+					onclick={resetLayout}
+					aria-label="Reset graph layout"
+				>
+					<RotateCcwIcon data-icon />
+				</Button>
+			</div>
 		</div>
 	{/if}
 </div>
-
-<Sheet.Root
-	open={!!workspace.graphFilters.selected}
-	onOpenChange={(open) => !open && workspace.resetGraphSelection()}
->
-	<Sheet.Content>
-		<Sheet.Header>
-			<Sheet.Title>
-				{workspace.graphFilters.selected?.title ??
-					workspace.graphFilters.selected?.doi ??
-					'Article'}
-			</Sheet.Title>
-			<Sheet.Description>{workspace.graphFilters.selected?.doi}</Sheet.Description>
-		</Sheet.Header>
-		{#if workspace.graphFilters.selected}
-			<div class="mt-4 flex flex-col gap-3">
-				<div class="flex flex-wrap gap-2">
-					<Badge
-						>Rank {Number(workspace.graphFilters.selected.rank_score ?? 0).toFixed(
-							2
-						)}</Badge
-					>
-					<Badge variant="secondary"
-						>Internal {workspace.graphFilters.selected.internal_citations}</Badge
-					>
-					<Badge variant="outline"
-						>Total {workspace.graphFilters.selected.total_citations}</Badge
-					>
-				</div>
-				<Button
-					onclick={() =>
-						workspace.openArticle(workspace.graphFilters.selected?.doi_key ?? '')}
-					>Open article</Button
-				>
-			</div>
-		{/if}
-	</Sheet.Content>
-</Sheet.Root>

@@ -1,9 +1,3 @@
-export const PROJECTS_ROUTE = '/';
-export const PROJECT_PARAM = 'project';
-export const VIEW_PARAM = 'view';
-export const ARTICLE_PARAM = 'article';
-export const INGESTION_PARAM = 'ingestion';
-
 export const PROJECT_WORKSPACE_VIEWS = [
 	'overview',
 	'articles',

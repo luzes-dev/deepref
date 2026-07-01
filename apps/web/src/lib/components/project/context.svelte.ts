@@ -5,37 +5,38 @@ import type { ProjectWorkspaceCounts, ProjectWorkspaceState, ProjectWorkspaceVie
 
 export type ArticleSort = 'rank' | 'internal' | 'total' | 'year' | 'title';
 
-export type ProjectWorkspaceContextInput = {
+export type ProjectWorkspaceDataSources = {
 	projects: Getter<ProjectDto[]>;
-	project: Getter<ProjectDto>;
-	workspaceState: Getter<ProjectWorkspaceState>;
+	project: Getter<ProjectDto | undefined>;
 	articles: Getter<ArticleDto[]>;
 	ingestions: Getter<IngestionDto[]>;
 	articlesLoading: Getter<boolean>;
 	ingestionsLoading: Getter<boolean>;
 	articlesError: Getter<string | undefined>;
 	ingestionsError: Getter<string | undefined>;
-
-	selectProject: (projectId: string) => void;
-	selectView: (view: ProjectWorkspaceView) => void;
-	projectCreated: (projectId: string) => void;
-	openArticle: (doiKey: string) => void;
-	clearArticle: () => void;
-	openIngestion: (ingestionId: string) => void;
-	clearIngestion: () => void;
-	switchToIngestionProject: (projectId: string) => void;
 };
 
 export class ProjectWorkspaceContext {
-	projects = $derived.by(() => this.input.projects());
-	project = $derived.by(() => this.input.project());
-	workspaceState = $derived.by(() => this.input.workspaceState());
-	articles = $derived.by(() => this.input.articles());
-	ingestions = $derived.by(() => this.input.ingestions());
-	articlesLoading = $derived.by(() => this.input.articlesLoading());
-	ingestionsLoading = $derived.by(() => this.input.ingestionsLoading());
-	articlesError = $derived.by(() => this.input.articlesError());
-	ingestionsError = $derived.by(() => this.input.ingestionsError());
+	#dataSources = $state<ProjectWorkspaceDataSources>({
+		projects: () => [],
+		project: () => undefined,
+		articles: () => [],
+		ingestions: () => [],
+		articlesLoading: () => false,
+		ingestionsLoading: () => false,
+		articlesError: () => undefined,
+		ingestionsError: () => undefined
+	});
+
+	workspaceState = $state<ProjectWorkspaceState>({ view: 'overview' });
+	projects = $derived.by(() => this.#dataSources.projects());
+	project = $derived.by(() => this.#dataSources.project() as ProjectDto);
+	articles = $derived.by(() => this.#dataSources.articles());
+	ingestions = $derived.by(() => this.#dataSources.ingestions());
+	articlesLoading = $derived.by(() => this.#dataSources.articlesLoading());
+	ingestionsLoading = $derived.by(() => this.#dataSources.ingestionsLoading());
+	articlesError = $derived.by(() => this.#dataSources.articlesError());
+	ingestionsError = $derived.by(() => this.#dataSources.ingestionsError());
 
 	selectedProjectId = $derived.by(() => this.workspaceState.project ?? '');
 	selectedArticle = $derived.by(() => this.workspaceState.article);
@@ -56,16 +57,13 @@ export class ProjectWorkspaceContext {
 	});
 	graphFilters = $state({
 		search: '',
-		minInternal: 0,
-		selected: null as ArticleDto | null
+		minInternal: 0
 	});
 	#ingestionDraftProjectId = $state<string | undefined>(undefined);
 	ingestionDraft = $state({
 		dois: '',
 		maxDepth: undefined as number | undefined
 	});
-
-	constructor(readonly input: ProjectWorkspaceContextInput) {}
 
 	get ingestionMaxDepth() {
 		const maxDepth =
@@ -81,46 +79,97 @@ export class ProjectWorkspaceContext {
 		this.ingestionDraft.maxDepth = value;
 	}
 
+	setDataSources = (dataSources: ProjectWorkspaceDataSources) => {
+		this.#dataSources = dataSources;
+	};
+
+	syncProjectSelection = (
+		projects: ProjectDto[],
+		loading: boolean,
+		selectedProjectFailed: boolean
+	) => {
+		if (loading) return;
+
+		if (projects.length === 0) {
+			this.workspaceState.project = undefined;
+			this.workspaceState.article = undefined;
+			this.workspaceState.ingestion = undefined;
+			this.workspaceState.view = 'overview';
+			return;
+		}
+
+		if (!this.workspaceState.project) {
+			this.workspaceState.project = projects[0].id;
+			return;
+		}
+
+		if (
+			selectedProjectFailed &&
+			!projects.some((project) => project.id === this.workspaceState.project)
+		) {
+			this.workspaceState.project = projects[0].id;
+			this.workspaceState.article = undefined;
+			this.workspaceState.ingestion = undefined;
+			this.workspaceState.view = 'overview';
+		}
+	};
+
 	#resetIngestionMaxDepth = (projectId: string) => {
 		this.#ingestionDraftProjectId = projectId;
 		this.ingestionDraft.maxDepth = undefined;
 	};
 
 	selectProject = (projectId: string) => {
+		if (!projectId) return;
+		this.workspaceState.project = projectId;
+		this.workspaceState.article = undefined;
+		this.workspaceState.ingestion = undefined;
 		this.#resetIngestionMaxDepth(projectId);
-		this.input.selectProject(projectId);
 	};
 
 	selectView = (view: ProjectWorkspaceView) => {
-		if (view !== 'graph') this.resetGraphSelection();
-		this.input.selectView(view);
+		this.workspaceState.view = view;
+		if (view !== 'ingestions') this.workspaceState.ingestion = undefined;
 	};
 
 	openArticle = (doiKey: string) => {
-		this.resetGraphSelection();
-		this.input.openArticle(doiKey);
+		if (!doiKey) return;
+		this.workspaceState.article = doiKey;
+		if (this.workspaceState.view !== 'articles' && this.workspaceState.view !== 'graph') {
+			this.workspaceState.view = 'articles';
+		}
 	};
 
 	clearArticle = () => {
-		this.input.clearArticle();
+		this.workspaceState.article = undefined;
 	};
 
 	openIngestion = (ingestionId: string) => {
-		this.input.openIngestion(ingestionId);
+		if (!ingestionId) return;
+		this.workspaceState.ingestion = ingestionId;
+		this.workspaceState.view = 'ingestions';
 	};
 
 	clearIngestion = () => {
-		this.input.clearIngestion();
+		this.workspaceState.ingestion = undefined;
 	};
 
 	projectCreated = (projectId: string) => {
+		if (!projectId) return;
+		this.closeProjectCreate();
+		this.workspaceState.project = projectId;
+		this.workspaceState.view = 'overview';
+		this.workspaceState.article = undefined;
+		this.workspaceState.ingestion = undefined;
 		this.#resetIngestionMaxDepth(projectId);
-		this.input.projectCreated(projectId);
 	};
 
 	switchToIngestionProject = (projectId: string) => {
+		if (!projectId) return;
+		this.workspaceState.project = projectId;
+		this.workspaceState.view = 'ingestions';
+		this.workspaceState.article = undefined;
 		this.#resetIngestionMaxDepth(projectId);
-		this.input.switchToIngestionProject(projectId);
 	};
 
 	setNavCollapsed = (value: boolean) => {
@@ -146,21 +195,14 @@ export class ProjectWorkspaceContext {
 	};
 
 	finishProjectCreated = (projectId: string) => {
-		this.closeProjectCreate();
 		this.projectCreated(projectId);
-	};
-
-	resetGraphSelection = () => {
-		this.graphFilters.selected = null;
 	};
 }
 
 const projectWorkspaceContext = new Context<ProjectWorkspaceContext>('project-workspace');
 
-export function setProjectWorkspaceContext(
-	input: ProjectWorkspaceContextInput
-): ProjectWorkspaceContext {
-	return projectWorkspaceContext.set(new ProjectWorkspaceContext(input));
+export function setProjectWorkspaceContext(): ProjectWorkspaceContext {
+	return projectWorkspaceContext.set(new ProjectWorkspaceContext());
 }
 
 export function useProjectWorkspaceContext(): ProjectWorkspaceContext {
