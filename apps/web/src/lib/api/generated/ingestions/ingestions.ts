@@ -146,9 +146,7 @@ export type createIngestionResponseSuccess = createIngestionResponse201 & {
 	headers: Headers;
 };
 export type createIngestionResponseError = (
-	| createIngestionResponse400
-	| createIngestionResponse404
-	| createIngestionResponse500
+	createIngestionResponse400 | createIngestionResponse404 | createIngestionResponse500
 ) & {
 	headers: Headers;
 };

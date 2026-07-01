@@ -480,9 +480,7 @@ export type updateProjectResponseSuccess = updateProjectResponse200 & {
 	headers: Headers;
 };
 export type updateProjectResponseError = (
-	| updateProjectResponse400
-	| updateProjectResponse404
-	| updateProjectResponse500
+	updateProjectResponse400 | updateProjectResponse404 | updateProjectResponse500
 ) & {
 	headers: Headers;
 };
