@@ -50,6 +50,7 @@ export class ProjectWorkspaceContext {
 	navCollapsed = new PersistedState(PROJECT_NAV_COLLAPSED_KEY, false, { syncTabs: false });
 	projectSelectorOpen = $state(false);
 	projectCreateOpen = $state(false);
+	projectManagementOpen = $state(false);
 	articleFilters = $state({
 		filter: '',
 		minInternal: 0,
@@ -184,6 +185,14 @@ export class ProjectWorkspaceContext {
 		this.projectCreateOpen = false;
 	};
 
+	openProjectManagement = () => {
+		this.projectManagementOpen = true;
+	};
+
+	closeProjectManagement = () => {
+		this.projectManagementOpen = false;
+	};
+
 	selectProjectFromSelector = (projectId: string) => {
 		this.projectSelectorOpen = false;
 		this.selectProject(projectId);
@@ -194,8 +203,37 @@ export class ProjectWorkspaceContext {
 		this.openProjectCreate();
 	};
 
+	openManagementFromSelector = () => {
+		this.projectSelectorOpen = false;
+		this.openProjectManagement();
+	};
+
 	finishProjectCreated = (projectId: string) => {
 		this.projectCreated(projectId);
+	};
+
+	finishProjectDeleted = (projectId: string) => {
+		if (!projectId) return;
+
+		const remainingProjects = this.projects.filter((project) => project.id !== projectId);
+
+		if (remainingProjects.length === 0) {
+			this.workspaceState.project = undefined;
+			this.workspaceState.article = undefined;
+			this.workspaceState.ingestion = undefined;
+			this.workspaceState.view = 'overview';
+			this.closeProjectManagement();
+			return;
+		}
+
+		if (this.selectedProjectId === projectId) {
+			const nextProjectId = remainingProjects[0].id;
+			this.workspaceState.project = nextProjectId;
+			this.workspaceState.view = 'overview';
+			this.workspaceState.article = undefined;
+			this.workspaceState.ingestion = undefined;
+			this.#resetIngestionMaxDepth(nextProjectId);
+		}
 	};
 }
 

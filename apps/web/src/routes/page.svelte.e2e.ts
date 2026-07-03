@@ -18,6 +18,15 @@ const createdProject = {
 	updated_at: '2026-01-02T00:00:00Z'
 };
 
+const secondaryProject = {
+	id: 'secondary-project',
+	name: 'Secondary Project',
+	description: 'Another mocked project',
+	default_max_depth: 3,
+	created_at: '2026-01-03T00:00:00Z',
+	updated_at: '2026-01-03T00:00:00Z'
+};
+
 const articles = [
 	{
 		doi: '10.1/source',
@@ -245,6 +254,83 @@ async function mockProjectCreateWorkspace(page: Page, initialProjects = [project
 	});
 }
 
+async function mockProjectManagementWorkspace(
+	page: Page,
+	initialProjects = [project, secondaryProject]
+) {
+	let projects = [...initialProjects];
+
+	await page.route('http://localhost:8080/projects', async (route) => {
+		await route.fulfill({ json: projects });
+	});
+
+	await page.route(/http:\/\/localhost:8080\/projects\/[^/]+(?:\/.*)?$/, async (route) => {
+		const request = route.request();
+		const url = new URL(request.url());
+		const [, , projectId, resource] = url.pathname.split('/');
+		const mockedProject = projects.find((candidate) => candidate.id === projectId);
+
+		if (!mockedProject) {
+			await route.fulfill({ status: 404, json: { message: 'Project not found' } });
+			return;
+		}
+
+		if (resource === 'articles') {
+			await route.fulfill({ json: projectId === project.id ? articles : [] });
+			return;
+		}
+
+		if (resource === 'graph') {
+			await route.fulfill({ json: { nodes: [], edges: [] } });
+			return;
+		}
+
+		if (resource === 'recommendations') {
+			await route.fulfill({
+				json: { foundational: [], core_to_project: [], underexplored: [] }
+			});
+			return;
+		}
+
+		if (request.method() === 'PATCH') {
+			const body = request.postDataJSON();
+			expect(body).toMatchObject({
+				name: 'Renamed Project',
+				description: 'Updated from management',
+				default_max_depth: project.default_max_depth
+			});
+			projects = projects.map((candidate) =>
+				candidate.id === projectId
+					? {
+							...candidate,
+							name: body.name,
+							description: body.description,
+							default_max_depth: body.default_max_depth,
+							updated_at: '2026-01-04T00:00:00Z'
+						}
+					: candidate
+			);
+			await route.fulfill({
+				status: 200,
+				json: projects.find((candidate) => candidate.id === projectId)
+			});
+			return;
+		}
+
+		if (request.method() === 'DELETE') {
+			projects = projects.filter((candidate) => candidate.id !== projectId);
+			await route.fulfill({ status: 204, body: '' });
+			return;
+		}
+
+		await route.fulfill({ json: mockedProject });
+	});
+
+	await page.route('http://localhost:8080/ingestions', async (route) => {
+		await route.fulfill({ json: [] });
+	});
+}
+
 async function openSourceArticle(page: Page) {
 	await page.getByRole('button', { name: 'Articles' }).click();
 	await page.getByRole('button', { name: /Source Article/ }).click();
@@ -368,4 +454,120 @@ test('selector create path creates and selects a project', async ({ page }) => {
 	await expect(page.getByRole('combobox', { name: 'Select project' })).toContainText(
 		'Created Project'
 	);
+});
+
+test('selector management edits and deletes projects', async ({ page }) => {
+	await mockProjectManagementWorkspace(page);
+	await page.goto('/');
+
+	await page.getByRole('combobox', { name: 'Select project' }).click();
+	const createItem = page.getByText('Create project', { exact: true });
+	const manageItem = page.getByText('Manage projects', { exact: true });
+	await expect(createItem).toBeVisible();
+	await expect(manageItem).toBeVisible();
+	const createBox = await createItem.boundingBox();
+	const manageBox = await manageItem.boundingBox();
+	expect(createBox?.y).toBeLessThan(manageBox?.y ?? 0);
+
+	await manageItem.click();
+	await expect(page.getByRole('heading', { name: 'Manage projects' })).toBeVisible();
+
+	await page.locator('#management-project-name-test-project').fill('Renamed Project');
+	await page
+		.locator('#management-project-description-test-project')
+		.fill('Updated from management');
+	await page
+		.locator('fieldset')
+		.filter({ has: page.locator('#management-project-name-test-project') })
+		.getByRole('button', { name: 'Save changes' })
+		.click();
+	await expect(page.getByRole('heading', { name: 'Renamed Project' })).toBeVisible();
+	await expect(page.getByRole('combobox', { name: 'Select project' })).toContainText(
+		'Renamed Project'
+	);
+
+	await page
+		.locator('fieldset')
+		.filter({ hasText: 'Secondary Project' })
+		.getByRole('button', { name: 'Delete' })
+		.click();
+	await expect(page.getByRole('button', { name: 'Confirm delete' })).toBeVisible();
+	await page.getByRole('button', { name: 'Cancel' }).click();
+	await expect(page.locator('fieldset').filter({ hasText: 'Secondary Project' })).toBeVisible();
+
+	await page
+		.locator('fieldset')
+		.filter({ hasText: 'Renamed Project' })
+		.getByRole('button', { name: 'Delete' })
+		.click();
+	await page.getByRole('button', { name: 'Confirm delete' }).click();
+	await expect(page.locator('fieldset').filter({ hasText: 'Renamed Project' })).toHaveCount(0);
+	await expect(page.getByRole('heading', { name: 'Secondary Project' })).toBeVisible();
+	await expect(page.getByRole('combobox', { name: 'Select project' })).toContainText(
+		'Secondary Project'
+	);
+});
+
+test('mobile project management modal is padded and scrollable', async ({ page }) => {
+	await page.setViewportSize({ width: 390, height: 844 });
+	const manyProjects = Array.from({ length: 8 }, (_, index) => ({
+		...project,
+		id: `mobile-project-${index + 1}`,
+		name: `Mobile Project ${index + 1}`,
+		description: `Mobile project ${index + 1}`,
+		created_at: `2026-01-${String(index + 1).padStart(2, '0')}T00:00:00Z`,
+		updated_at: `2026-01-${String(index + 1).padStart(2, '0')}T00:00:00Z`
+	}));
+	await mockProjectManagementWorkspace(page, manyProjects);
+	await page.goto('/');
+
+	await page.getByRole('combobox', { name: 'Select project' }).click();
+	await page.getByText('Manage projects', { exact: true }).click();
+	await expect(page.getByRole('heading', { name: 'Manage projects' })).toBeVisible();
+
+	const drawer = page.getByRole('dialog', { name: 'Manage projects' });
+	const firstProject = page.locator('fieldset').filter({ hasText: 'Mobile Project 1' });
+	const drawerBox = await drawer.boundingBox();
+	const firstProjectBox = await firstProject.boundingBox();
+	expect(firstProjectBox?.x ?? 0).toBeGreaterThan((drawerBox?.x ?? 0) + 8);
+
+	const viewport = drawer.locator('[data-slot="scroll-area-viewport"]');
+	const canScroll = await viewport.evaluate(
+		(element) => element.scrollHeight > element.clientHeight
+	);
+	expect(canScroll).toBe(true);
+	await viewport.evaluate((element) => {
+		element.scrollTop = element.scrollHeight;
+	});
+
+	await expect(page.locator('fieldset').filter({ hasText: 'Mobile Project 8' })).toBeVisible();
+});
+
+test('desktop project management modal contains long lists', async ({ page }) => {
+	const manyProjects = Array.from({ length: 10 }, (_, index) => ({
+		...project,
+		id: `desktop-project-${index + 1}`,
+		name: `Desktop Project ${index + 1}`,
+		description: `Desktop project ${index + 1}`,
+		created_at: `2026-02-${String(index + 1).padStart(2, '0')}T00:00:00Z`,
+		updated_at: `2026-02-${String(index + 1).padStart(2, '0')}T00:00:00Z`
+	}));
+	await mockProjectManagementWorkspace(page, manyProjects);
+	await page.goto('/');
+
+	await page.getByRole('combobox', { name: 'Select project' }).click();
+	await page.getByText('Manage projects', { exact: true }).click();
+	await expect(page.getByRole('heading', { name: 'Manage projects' })).toBeVisible();
+
+	const dialog = page.getByRole('dialog', { name: 'Manage projects' });
+	const viewport = dialog.locator('[data-slot="scroll-area-viewport"]');
+	const dialogBox = await dialog.boundingBox();
+	const viewportBox = await viewport.boundingBox();
+	expect((viewportBox?.y ?? 0) + (viewportBox?.height ?? 0)).toBeLessThanOrEqual(
+		(dialogBox?.y ?? 0) + (dialogBox?.height ?? 0)
+	);
+	const canScroll = await viewport.evaluate(
+		(element) => element.scrollHeight > element.clientHeight
+	);
+	expect(canScroll).toBe(true);
 });

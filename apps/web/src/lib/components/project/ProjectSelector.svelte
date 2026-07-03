@@ -10,8 +10,10 @@
 	import ChevronsUpDownIcon from '@lucide/svelte/icons/chevrons-up-down';
 	import FoldersIcon from '@lucide/svelte/icons/folders';
 	import PlusIcon from '@lucide/svelte/icons/plus';
+	import SettingsIcon from '@lucide/svelte/icons/settings';
 	import { useProjectWorkspaceContext } from './context.svelte.js';
 	import ProjectCreateForm from './ProjectCreateForm.svelte';
+	import ProjectManagementModal from './ProjectManagementModal.svelte';
 
 	type TriggerProps = ComponentProps<typeof Button>;
 
@@ -75,6 +77,13 @@
 					<PlusIcon />
 					Create project
 				</Command.Item>
+				<Command.Item
+					value="Manage projects"
+					onSelect={workspace.openManagementFromSelector}
+				>
+					<SettingsIcon />
+					Manage projects
+				</Command.Item>
 			</Command.Group>
 		</Command.List>
 	</Command.Root>
@@ -126,3 +135,5 @@
 		/>
 	</Dialog.Content>
 </Dialog.Root>
+
+<ProjectManagementModal />
