@@ -18,7 +18,8 @@
 		"test:e2e": "playwright test"
 	},
 	"dependencies": {
-		"@tanstack/svelte-query": "^6.1.35"
+		"@tanstack/svelte-query": "^6.1.35",
+		"@tanstack/table-core": "^8.21.3"
 	},
 	"devDependencies": {
 		"@eslint/js": "^10.0.1",

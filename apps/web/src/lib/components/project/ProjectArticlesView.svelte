@@ -3,13 +3,13 @@
 	import * as Empty from '$lib/components/ui/empty';
 	import * as InputGroup from '$lib/components/ui/input-group';
 	import * as Select from '$lib/components/ui/select';
-	import * as Table from '$lib/components/ui/table';
 	import { Badge } from '$lib/components/ui/badge';
 	import { Button } from '$lib/components/ui/button';
 	import { Skeleton } from '$lib/components/ui/skeleton';
 	import { Slider } from '$lib/components/ui/slider';
 	import CircleAlertIcon from '@lucide/svelte/icons/circle-alert';
 	import SearchIcon from '@lucide/svelte/icons/search';
+	import ArticleDataTable from './articles-table/ArticleDataTable.svelte';
 	import { useProjectWorkspaceContext, type ArticleSort } from './context.svelte.js';
 
 	const workspace = useProjectWorkspaceContext();
@@ -55,13 +55,13 @@
 		<div>
 			<h1 class="text-2xl font-semibold">Articles</h1>
 			<p class="text-sm text-muted-foreground">
-				{filtered.length} visible of {workspace.articles.length}
+				{workspace.articles.length} project articles
 			</p>
 		</div>
 		<Badge variant="secondary">{workspace.articles.length} articles</Badge>
 	</div>
 
-	<div class="grid gap-3 md:grid-cols-[1fr_220px_240px]">
+	<div class="grid gap-3 md:hidden">
 		<InputGroup.Root>
 			<InputGroup.Input
 				placeholder="Search title or DOI"
@@ -112,6 +112,15 @@
 			</Empty.Header>
 		</Empty.Root>
 	{:else}
+		<div class="hidden min-h-0 flex-1 md:flex">
+			{#key workspace.selectedProjectId}
+				<ArticleDataTable
+					articles={workspace.articles}
+					selectedArticle={workspace.selectedArticle}
+					openArticle={workspace.openArticle}
+				/>
+			{/key}
+		</div>
 		<div class="flex min-h-0 flex-1 flex-col gap-3 overflow-auto md:hidden">
 			{#each filtered as article (article.doi)}
 				<section
@@ -140,53 +149,6 @@
 					No articles match the current filters.
 				</div>
 			{/each}
-		</div>
-		<div class="hidden min-h-0 flex-1 overflow-auto rounded-md border md:block">
-			<Table.Root>
-				<Table.Header>
-					<Table.Row>
-						<Table.Head>Article</Table.Head>
-						<Table.Head>Year</Table.Head>
-						<Table.Head>Total</Table.Head>
-						<Table.Head>Internal</Table.Head>
-						<Table.Head>Rank</Table.Head>
-						<Table.Head></Table.Head>
-					</Table.Row>
-				</Table.Header>
-				<Table.Body>
-					{#each filtered as article (article.doi)}
-						<Table.Row data-selected={workspace.selectedArticle === article.doi_key}>
-							<Table.Cell>
-								<div class="max-w-[36rem] truncate font-medium">
-									{article.title ?? article.doi}
-								</div>
-								<div class="max-w-[36rem] truncate text-xs text-muted-foreground">
-									{article.doi}
-								</div>
-							</Table.Cell>
-							<Table.Cell>{article.issued_year ?? '-'}</Table.Cell>
-							<Table.Cell>{article.total_citations}</Table.Cell>
-							<Table.Cell>{article.internal_citations}</Table.Cell>
-							<Table.Cell>{article.rank_score.toFixed(2)}</Table.Cell>
-							<Table.Cell class="text-right">
-								<Button
-									variant="outline"
-									size="sm"
-									onclick={() => workspace.openArticle(article.doi_key)}
-								>
-									Open
-								</Button>
-							</Table.Cell>
-						</Table.Row>
-					{:else}
-						<Table.Row>
-							<Table.Cell colspan={6} class="h-28 text-center text-muted-foreground">
-								No articles match the current filters.
-							</Table.Cell>
-						</Table.Row>
-					{/each}
-				</Table.Body>
-			</Table.Root>
 		</div>
 	{/if}
 </div>

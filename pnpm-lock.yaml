@@ -20,6 +20,9 @@ importers:
       '@tanstack/svelte-query':
         specifier: ^6.1.35
         version: 6.1.35(svelte@5.56.3(@typescript-eslint/types@8.61.1))
+      '@tanstack/table-core':
+        specifier: ^8.21.3
+        version: 8.21.3
     devDependencies:
       '@eslint/js':
         specifier: ^10.0.1
@@ -951,6 +954,10 @@ packages:
     resolution: {integrity: sha512-aMJMdAGFeM5vBuLbrQrQcsmZmqHwNOcfXPVlSyvVl18jc5TvT3oh1+zJJJqE+ZA8KV9M4pq5wCLJNkQjUHbh9Q==}
     peerDependencies:
       svelte: ^5.25.0
+
+  '@tanstack/table-core@8.21.3':
+    resolution: {integrity: sha512-ldZXEhOBb8Is7xLs01fR3YEc3DERiz5silj8tnGkFZytt1abEvl/GhUmCE0PMLaMPTa3Jk4HbKmRlHmu+gCftg==}
+    engines: {node: '>=12'}
 
   '@tybys/wasm-util@0.10.2':
     resolution: {integrity: sha512-RoBvJ2X0wuKlWFIjrwffGw1IqZHKQqzIchKaadZZfnNpsAYp2mM0h36JtPCjNDAHGgYez/15uMBpfGwchhiMgg==}
@@ -2966,6 +2973,8 @@ snapshots:
     dependencies:
       '@tanstack/query-core': 5.101.1
       svelte: 5.56.3(@typescript-eslint/types@8.61.1)
+
+  '@tanstack/table-core@8.21.3': {}
 
   '@tybys/wasm-util@0.10.2':
     dependencies:

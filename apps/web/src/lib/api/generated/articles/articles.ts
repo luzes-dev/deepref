@@ -166,7 +166,9 @@ export type getProjectArticleResponseSuccess = getProjectArticleResponse200 & {
 	headers: Headers;
 };
 export type getProjectArticleResponseError = (
-	getProjectArticleResponse400 | getProjectArticleResponse404 | getProjectArticleResponse500
+	| getProjectArticleResponse400
+	| getProjectArticleResponse404
+	| getProjectArticleResponse500
 ) & {
 	headers: Headers;
 };

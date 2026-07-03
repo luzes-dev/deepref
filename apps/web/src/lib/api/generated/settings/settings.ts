@@ -135,7 +135,8 @@ export type updateSettingsResponseSuccess = updateSettingsResponse200 & {
 	headers: Headers;
 };
 export type updateSettingsResponseError = (
-	updateSettingsResponse400 | updateSettingsResponse500
+	| updateSettingsResponse400
+	| updateSettingsResponse500
 ) & {
 	headers: Headers;
 };
