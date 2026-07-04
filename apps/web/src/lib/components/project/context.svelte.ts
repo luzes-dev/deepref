@@ -5,7 +5,7 @@ import type { ProjectWorkspaceCounts, ProjectWorkspaceState, ProjectWorkspaceVie
 
 export type ArticleSort = 'rank' | 'internal' | 'total' | 'year' | 'title';
 
-export type ProjectWorkspaceDataSources = {
+type ProjectWorkspaceDataSources = {
 	projects: Getter<ProjectDto[]>;
 	project: Getter<ProjectDto | undefined>;
 	articles: Getter<ArticleDto[]>;
@@ -16,7 +16,7 @@ export type ProjectWorkspaceDataSources = {
 	ingestionsError: Getter<string | undefined>;
 };
 
-export class ProjectWorkspaceContext {
+class ProjectWorkspaceContext {
 	#dataSources = $state<ProjectWorkspaceDataSources>({
 		projects: () => [],
 		project: () => undefined,
@@ -84,6 +84,19 @@ export class ProjectWorkspaceContext {
 		this.#dataSources = dataSources;
 	};
 
+	#resetSelection = (projectId?: string) => {
+		this.workspaceState.project = projectId;
+		this.workspaceState.article = undefined;
+		this.workspaceState.ingestion = undefined;
+		this.workspaceState.view = 'overview';
+	};
+
+	#shouldSelectFirstProject = (projects: ProjectDto[], selectedProjectFailed: boolean) => {
+		if (!this.workspaceState.project) return true;
+		if (!selectedProjectFailed) return false;
+		return !projects.some((project) => project.id === this.workspaceState.project);
+	};
+
 	syncProjectSelection = (
 		projects: ProjectDto[],
 		loading: boolean,
@@ -92,26 +105,13 @@ export class ProjectWorkspaceContext {
 		if (loading) return;
 
 		if (projects.length === 0) {
-			this.workspaceState.project = undefined;
-			this.workspaceState.article = undefined;
-			this.workspaceState.ingestion = undefined;
-			this.workspaceState.view = 'overview';
+			this.#resetSelection();
 			return;
 		}
 
-		if (!this.workspaceState.project) {
-			this.workspaceState.project = projects[0].id;
-			return;
-		}
-
-		if (
-			selectedProjectFailed &&
-			!projects.some((project) => project.id === this.workspaceState.project)
-		) {
-			this.workspaceState.project = projects[0].id;
-			this.workspaceState.article = undefined;
-			this.workspaceState.ingestion = undefined;
-			this.workspaceState.view = 'overview';
+		const firstProjectId = projects[0].id;
+		if (this.#shouldSelectFirstProject(projects, selectedProjectFailed)) {
+			this.#resetSelection(firstProjectId);
 		}
 	};
 

@@ -9,5 +9,7 @@ export function cn(...inputs: ClassValue[]) {
 export type WithoutChild<T> = T extends { child?: any } ? Omit<T, 'child'> : T;
 // eslint-disable-next-line @typescript-eslint/no-explicit-any
 export type WithoutChildren<T> = T extends { children?: any } ? Omit<T, 'children'> : T;
+// fallow-ignore-next-line unused-type
 export type WithoutChildrenOrChild<T> = WithoutChildren<WithoutChild<T>>;
+// fallow-ignore-next-line unused-type
 export type WithElementRef<T, U extends HTMLElement = HTMLElement> = T & { ref?: U | null };

@@ -1,4 +1,4 @@
-export const PROJECT_WORKSPACE_VIEWS = [
+const PROJECT_WORKSPACE_VIEWS = [
 	'overview',
 	'articles',
 	'graph',

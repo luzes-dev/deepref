@@ -10,6 +10,12 @@ function yearLabel(year: ArticleDto['issued_year']) {
 	return String(year ?? 'No year');
 }
 
+function articleMatchesTerm(article: ArticleDto, term: string) {
+	const title = article.title?.toLowerCase();
+	const doi = article.doi.toLowerCase();
+	return doi.includes(term) || Boolean(title?.includes(term));
+}
+
 export function createArticleColumns({
 	openArticle,
 	selectedArticle
@@ -56,11 +62,7 @@ export function createArticleColumns({
 					.trim()
 					.toLowerCase();
 				if (!term) return true;
-				const article = row.original;
-				return (
-					article.doi.toLowerCase().includes(term) ||
-					(article.title ?? '').toLowerCase().includes(term)
-				);
+				return articleMatchesTerm(row.original, term);
 			},
 			enableHiding: false
 		},
@@ -131,7 +133,7 @@ export function createArticleColumns({
 	];
 }
 
-export const articleColumnLabels: Record<string, string> = {
+const articleColumnLabels: Record<string, string> = {
 	title: 'Article',
 	type: 'Type',
 	issued_year: 'Year',

@@ -11,7 +11,7 @@ declare global {
 const runtimeApiBase =
 	typeof window === 'undefined' ? undefined : window.__DEEPREF_CONFIG__?.apiBaseUrl;
 
-export const apiBase = runtimeApiBase || publicEnv.PUBLIC_API_BASE_URL || 'http://localhost:8080';
+const apiBase = runtimeApiBase || publicEnv.PUBLIC_API_BASE_URL || 'http://localhost:8080';
 
 export class ApiError<T = unknown> extends Error {
 	readonly status: number;
@@ -25,7 +25,9 @@ export class ApiError<T = unknown> extends Error {
 	}
 }
 
+// fallow-ignore-next-line unused-type
 export type ErrorType<T> = ApiError<T>;
+// fallow-ignore-next-line unused-type
 export type BodyType<T> = T;
 
 function requestUrl(contextUrl: string): string {
