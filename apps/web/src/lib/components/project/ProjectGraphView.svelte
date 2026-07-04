@@ -173,7 +173,7 @@
 		</Empty.Root>
 	{:else}
 		<div class="min-h-0 flex-1">
-			<div class="relative min-h-[520px] overflow-hidden rounded-md border bg-muted">
+			<div class="relative h-full overflow-hidden rounded-md border bg-muted">
 				<div bind:this={container} class="absolute inset-0"></div>
 				<Button
 					variant="ghost"
