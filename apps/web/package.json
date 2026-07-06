@@ -41,6 +41,7 @@
 		"globals": "^17.6.0",
 		"graphology": "^0.26.0",
 		"graphology-layout-forceatlas2": "^0.10.1",
+		"graphology-layout-noverlap": "^0.4.2",
 		"jsrepo": "^3.8.0",
 		"mode-watcher": "^1.1.0",
 		"orval": "8.18.0",

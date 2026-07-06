@@ -6,6 +6,7 @@
 	import { Button } from '$lib/components/ui/button';
 	import { Skeleton } from '$lib/components/ui/skeleton';
 	import { Slider } from '$lib/components/ui/slider';
+	import { Spinner } from '$lib/components/ui/spinner';
 	import type { ArticleDto, GraphEdgeDto } from '$lib/api/generated/models';
 	import { createGetProjectGraph } from '$lib/api/generated/articles/articles';
 	import CircleAlertIcon from '@lucide/svelte/icons/circle-alert';
@@ -13,19 +14,26 @@
 	import SearchIcon from '@lucide/svelte/icons/search';
 	import { onCleanup } from 'runed';
 	import { untrack } from 'svelte';
-	import { SvelteMap } from 'svelte/reactivity';
 	import { useProjectWorkspaceContext } from './context.svelte.js';
+	import { getGraphNodeSize } from './graph-layout';
 	import type SigmaType from 'sigma';
 	import type { NodeHoverDrawingFunction, NodeLabelDrawingFunction } from 'sigma/rendering';
 	import type { Settings } from 'sigma/settings';
 	import type { MouseCoords } from 'sigma/types';
 
 	const FILTER_UPDATE_DELAY_MS = 150;
+	const DIMMED_NODE_ALPHA = 0.22;
+	const DIMMED_EDGE_ALPHA = 0.24;
 	const NORMAL_LABEL_MAX_WIDTH = 220;
 	const HOVER_LABEL_MAX_WIDTH = 360;
-	const NODE_OVERLAP_PADDING = 2;
-	const NODE_OVERLAP_ITERATIONS = 18;
-	const NODE_OVERLAP_GRID_SIZE = 56;
+	const SMALL_GRAPH_NODE_COUNT = 100;
+	const LARGE_GRAPH_NODE_COUNT = 500;
+	const SMALL_GRAPH_FORCE_ATLAS_ITERATIONS = 120;
+	const MEDIUM_GRAPH_FORCE_ATLAS_ITERATIONS = 220;
+	const LARGE_GRAPH_FORCE_ATLAS_ITERATIONS = 300;
+	const SMALL_GRAPH_NOVERLAP_ITERATIONS = 150;
+	const MEDIUM_GRAPH_NOVERLAP_ITERATIONS = 300;
+	const LARGE_GRAPH_NOVERLAP_ITERATIONS = 500;
 
 	type GraphPalette = {
 		background: string;
@@ -111,6 +119,7 @@
 		| undefined;
 	let themeObserver: MutationObserver | undefined;
 	let renderRun = 0;
+	let graphRendering = $state(false);
 	const enabled = $derived(workspace.view === 'graph');
 	const interaction: GraphInteractionState = {
 		visibleNodeIds: new Set(),
@@ -183,6 +192,30 @@
 		});
 	}
 
+	function withAlpha(color: string, alpha: number) {
+		const trimmed = color.trim();
+		const hex = trimmed.match(/^#([0-9a-f]{3}|[0-9a-f]{6})$/i)?.[1];
+		if (!hex) return trimmed;
+
+		const expanded =
+			hex.length === 3
+				? hex
+						.split('')
+						.map((char) => char + char)
+						.join('')
+				: hex;
+		const value = Number.parseInt(expanded, 16);
+		const red = (value >> 16) & 255;
+		const green = (value >> 8) & 255;
+		const blue = value & 255;
+
+		return `rgba(${red}, ${green}, ${blue}, ${alpha})`;
+	}
+
+	function waitForNextFrame() {
+		return new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
+	}
+
 	function getBaseNodeColor(node: Pick<ArticleDto, 'doi_key' | 'internal_citations'>) {
 		if (node.doi_key === interaction.selectedArticle) return interaction.palette.nodeSelected;
 		if (node.internal_citations > 0) return interaction.palette.nodeCited;
@@ -200,28 +233,34 @@
 			const focused = interaction.focusedNodeIds.has(node);
 			const focusActive = Boolean(interaction.hoveredNode || interaction.selectedNode);
 			let color = getBaseNodeColor(data);
+			let label = data.label;
+			let forceLabel = false;
 			let zIndex = selected ? 3 : 0;
 
 			if (focusActive) {
 				if (hovered) {
 					color = interaction.palette.nodeFocused;
+					forceLabel = true;
 					zIndex = 4;
 				} else if (focused) {
 					color = selected
 						? interaction.palette.nodeSelected
 						: interaction.palette.nodeFocused;
+					forceLabel = true;
 					zIndex = Math.max(zIndex, 2);
 				} else {
-					color = interaction.palette.nodeDimmed;
+					color = withAlpha(interaction.palette.nodeDimmed, DIMMED_NODE_ALPHA);
+					label = '';
 				}
 			}
 
 			return {
 				...data,
 				color,
+				label,
 				hidden: false,
 				highlighted: hovered || selected,
-				forceLabel: hovered || selected,
+				forceLabel,
 				zIndex
 			};
 		};
@@ -257,7 +296,9 @@
 			const focused = interaction.focusedEdgeIds.has(edge);
 			return {
 				...data,
-				color: focused ? interaction.palette.edgeFocused : interaction.palette.edgeDimmed,
+				color: focused
+					? interaction.palette.edgeFocused
+					: withAlpha(interaction.palette.edgeDimmed, DIMMED_EDGE_ALPHA),
 				hidden: false,
 				size: focused ? 2 : 0.5,
 				zIndex: focused ? 2 : 0
@@ -288,67 +329,16 @@
 		renderer?.scheduleRefresh({ layoutUnchange: true });
 	}
 
-	function resolveNodeOverlaps(nodes: string[]) {
-		if (!graph || nodes.length < 2) return;
+	function getForceAtlasIterations(nodeCount: number) {
+		if (nodeCount >= LARGE_GRAPH_NODE_COUNT) return LARGE_GRAPH_FORCE_ATLAS_ITERATIONS;
+		if (nodeCount >= SMALL_GRAPH_NODE_COUNT) return MEDIUM_GRAPH_FORCE_ATLAS_ITERATIONS;
+		return SMALL_GRAPH_FORCE_ATLAS_ITERATIONS;
+	}
 
-		for (let iteration = 0; iteration < NODE_OVERLAP_ITERATIONS; iteration += 1) {
-			let moved = false;
-			const grid = new SvelteMap<string, string[]>();
-
-			for (const node of nodes) {
-				const { x, y } = graph.getNodeAttributes(node);
-				const cellX = Math.floor(x / NODE_OVERLAP_GRID_SIZE);
-				const cellY = Math.floor(y / NODE_OVERLAP_GRID_SIZE);
-				const key = `${cellX}:${cellY}`;
-				const bucket = grid.get(key);
-				if (bucket) {
-					bucket.push(node);
-				} else {
-					grid.set(key, [node]);
-				}
-			}
-
-			for (let i = 0; i < nodes.length; i += 1) {
-				const source = nodes[i];
-				const sourceAttributes = graph.getNodeAttributes(source);
-				const cellX = Math.floor(sourceAttributes.x / NODE_OVERLAP_GRID_SIZE);
-				const cellY = Math.floor(sourceAttributes.y / NODE_OVERLAP_GRID_SIZE);
-
-				for (let x = cellX - 1; x <= cellX + 1; x += 1) {
-					for (let y = cellY - 1; y <= cellY + 1; y += 1) {
-						const bucket = grid.get(`${x}:${y}`);
-						if (!bucket) continue;
-
-						for (const target of bucket) {
-							if (source >= target) continue;
-
-							const targetAttributes = graph.getNodeAttributes(target);
-							const dx = targetAttributes.x - sourceAttributes.x;
-							const dy = targetAttributes.y - sourceAttributes.y;
-							const distance = Math.hypot(dx, dy) || 0.001;
-							const minDistance =
-								sourceAttributes.size +
-								targetAttributes.size +
-								NODE_OVERLAP_PADDING;
-
-							if (distance >= minDistance) continue;
-
-							const offset = (minDistance - distance) / 2;
-							const xOffset = (dx / distance) * offset;
-							const yOffset = (dy / distance) * offset;
-
-							sourceAttributes.x -= xOffset;
-							sourceAttributes.y -= yOffset;
-							targetAttributes.x += xOffset;
-							targetAttributes.y += yOffset;
-							moved = true;
-						}
-					}
-				}
-			}
-
-			if (!moved) break;
-		}
+	function getNoverlapIterations(nodeCount: number) {
+		if (nodeCount >= LARGE_GRAPH_NODE_COUNT) return LARGE_GRAPH_NOVERLAP_ITERATIONS;
+		if (nodeCount >= SMALL_GRAPH_NODE_COUNT) return MEDIUM_GRAPH_NOVERLAP_ITERATIONS;
+		return SMALL_GRAPH_NOVERLAP_ITERATIONS;
 	}
 
 	function truncateTextToWidth(
@@ -675,66 +665,95 @@
 		options: { resetCamera?: boolean } = {}
 	) {
 		const run = ++renderRun;
-		const [{ default: Graph }, { default: Sigma }, forceAtlas2] = await Promise.all([
-			import('graphology'),
-			import('sigma'),
-			import('graphology-layout-forceatlas2')
-		]);
-		if (run !== renderRun) return;
+		graphRendering = true;
 
-		const nextGraph = new Graph<GraphNodeAttributes, GraphEdgeAttributes>();
-		for (const [index, node] of nodes.entries()) {
-			nextGraph.addNode(node.doi, {
-				...node,
-				label: node.title ?? node.doi,
-				fullLabel: node.title ?? node.doi,
-				type: 'circle',
-				x: Math.cos(index) * 10,
-				y: Math.sin(index) * 10,
-				size: 4
-			});
-		}
-		for (const edge of edges) {
-			if (
-				nextGraph.hasNode(edge.source) &&
-				nextGraph.hasNode(edge.target) &&
-				edge.source !== edge.target &&
-				!nextGraph.hasEdge(edge.source, edge.target)
-			) {
-				nextGraph.addDirectedEdge(edge.source, edge.target, {
-					size: 1
+		try {
+			const [{ default: Graph }, { default: Sigma }, forceAtlas2, noverlap] =
+				await Promise.all([
+					import('graphology'),
+					import('sigma'),
+					import('graphology-layout-forceatlas2'),
+					import('graphology-layout-noverlap')
+				]);
+			if (run !== renderRun) return;
+
+			await waitForNextFrame();
+			if (run !== renderRun) return;
+
+			const nextGraph = new Graph<GraphNodeAttributes, GraphEdgeAttributes>();
+			for (const [index, node] of nodes.entries()) {
+				nextGraph.addNode(node.doi, {
+					...node,
+					label: node.title ?? node.doi,
+					fullLabel: node.title ?? node.doi,
+					type: 'circle',
+					x: Math.cos(index) * 10,
+					y: Math.sin(index) * 10,
+					size: 4
 				});
 			}
-		}
-		nextGraph.forEachNode((node) => {
-			const degree = nextGraph.degree(node);
-			nextGraph.setNodeAttribute(node, 'size', Math.min(24, 4 + Math.sqrt(degree) * 3));
-		});
-		if (nextGraph.order > 2) {
-			forceAtlas2.default.assign(nextGraph, {
-				iterations: 80,
-				settings: forceAtlas2.default.inferSettings(nextGraph)
+			for (const edge of edges) {
+				if (
+					nextGraph.hasNode(edge.source) &&
+					nextGraph.hasNode(edge.target) &&
+					edge.source !== edge.target &&
+					!nextGraph.hasEdge(edge.source, edge.target)
+				) {
+					nextGraph.addDirectedEdge(edge.source, edge.target, {
+						size: 1
+					});
+				}
+			}
+			nextGraph.forEachNode((node) => {
+				const degree = nextGraph.degree(node);
+				nextGraph.setNodeAttribute(node, 'size', getGraphNodeSize(degree, nextGraph.order));
 			});
+			if (nextGraph.order > 2) {
+				const inferredSettings = forceAtlas2.default.inferSettings(nextGraph);
+				forceAtlas2.default.assign(nextGraph, {
+					iterations: getForceAtlasIterations(nextGraph.order),
+					settings: {
+						...inferredSettings,
+						adjustSizes: false,
+						barnesHutOptimize: true,
+						gravity: inferredSettings.gravity ?? 1,
+						scalingRatio: Math.max(inferredSettings.scalingRatio ?? 1, 5),
+						slowDown: inferredSettings.slowDown ?? 1
+					}
+				});
+			}
+			graph = nextGraph;
+			if (nextGraph.order > 1) {
+				noverlap.default.assign(nextGraph, {
+					maxIterations: getNoverlapIterations(nextGraph.order),
+					settings: {
+						margin: 2,
+						ratio: 1,
+						expansion: 1.1,
+						speed: 3
+					}
+				});
+			}
+			interaction.visibleNodeIds = untrack(getVisibleNodeIds);
+			interaction.selectedArticle = untrack(() => workspace.selectedArticle);
+			interaction.palette = readGraphPalette(target);
+			setupThemeObserver(target);
+			if (renderer) {
+				renderer.setGraph(nextGraph);
+				graph = renderer.getGraph();
+				renderer.setSettings(buildSigmaSettings());
+				renderer.scheduleRefresh({ layoutUnchange: true });
+			} else {
+				renderer = new Sigma(nextGraph, target, buildSigmaSettings());
+				graph = renderer.getGraph();
+				registerGraphEvents(renderer);
+			}
+			interaction.selectedNode = getNodeIdByArticle(interaction.selectedArticle);
+			setHoveredNode(undefined);
+			if (options.resetCamera) resetGraphCamera();
+		} finally {
+			if (run === renderRun) graphRendering = false;
 		}
-		graph = nextGraph;
-		resolveNodeOverlaps(nextGraph.nodes());
-		interaction.visibleNodeIds = untrack(getVisibleNodeIds);
-		interaction.selectedArticle = untrack(() => workspace.selectedArticle);
-		interaction.palette = readGraphPalette(target);
-		setupThemeObserver(target);
-		if (renderer) {
-			renderer.setGraph(nextGraph);
-			graph = renderer.getGraph();
-			renderer.setSettings(buildSigmaSettings());
-			renderer.scheduleRefresh({ layoutUnchange: true });
-		} else {
-			renderer = new Sigma(nextGraph, target, buildSigmaSettings());
-			graph = renderer.getGraph();
-			registerGraphEvents(renderer);
-		}
-		interaction.selectedNode = getNodeIdByArticle(interaction.selectedArticle);
-		setHoveredNode(undefined);
-		if (options.resetCamera) resetGraphCamera();
 	}
 
 	function clearGraph() {
@@ -748,11 +767,14 @@
 		renderer?.kill();
 		renderer = undefined;
 		graph = undefined;
+		graphRendering = false;
 	}
 
 	function resetLayout() {
 		if (container && enabled && visibleNodes.length > 0) {
-			void renderGraph(container, graphData.nodes, graphData.edges, { resetCamera: true });
+			void renderGraph(container, graphData.nodes, graphData.edges, {
+				resetCamera: true
+			});
 		}
 	}
 
@@ -826,7 +848,6 @@
 			>{graphData.nodes.length} nodes and {graphData.edges.length} edges</Badge
 		>
 	</div>
-
 	{#if graphQuery.error}
 		<Alert.Root variant="destructive">
 			<CircleAlertIcon />
@@ -846,13 +867,29 @@
 		</Empty.Root>
 	{:else}
 		<div class="min-h-0 flex-1">
-			<div class="graph-frame relative h-full overflow-hidden rounded-md border">
+			<div
+				class="graph-frame relative h-full overflow-hidden rounded-md border"
+				aria-busy={graphRendering}
+			>
 				<div bind:this={container} class="absolute inset-0"></div>
+				{#if graphRendering}
+					<div
+						class="absolute inset-0 z-20 flex items-center justify-center bg-background/70 backdrop-blur-[1px]"
+					>
+						<div
+							class="flex items-center gap-2 rounded-md border bg-background px-3 py-2 text-sm shadow-sm"
+						>
+							<Spinner class="size-4" />
+							<span>Creating graph layout</span>
+						</div>
+					</div>
+				{/if}
 				<Button
 					variant="ghost"
 					size="icon"
 					class="absolute right-3 top-3 z-10 bg-background/80"
 					onclick={resetLayout}
+					disabled={graphRendering}
 					aria-label="Reset graph layout"
 				>
 					<RotateCcwIcon data-icon />
