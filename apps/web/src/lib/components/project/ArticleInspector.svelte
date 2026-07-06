@@ -2,10 +2,12 @@
 	import * as Alert from '$lib/components/ui/alert';
 	import * as Card from '$lib/components/ui/card';
 	import { Badge } from '$lib/components/ui/badge';
+	import { Button } from '$lib/components/ui/button';
 	import { CopyButton } from '$lib/components/ui/copy-button';
 	import { Skeleton } from '$lib/components/ui/skeleton';
 	import { createGetProjectArticle } from '$lib/api/generated/articles/articles';
 	import CircleAlertIcon from '@lucide/svelte/icons/circle-alert';
+	import XIcon from '@lucide/svelte/icons/x';
 	import { useProjectWorkspaceContext } from './context.svelte.js';
 
 	const workspace = useProjectWorkspaceContext();
@@ -31,6 +33,17 @@
 				{workspace.selectedArticle ?? 'No article selected'}
 			</p>
 		</div>
+		{#if workspace.selectedArticle}
+			<Button
+				variant="ghost"
+				size="icon"
+				class="hidden md:inline-flex"
+				onclick={workspace.clearArticle}
+				aria-label="Deselect article"
+			>
+				<XIcon data-icon />
+			</Button>
+		{/if}
 	</div>
 
 	<div class="min-h-0 flex-1 overflow-auto p-4">
