@@ -79,7 +79,7 @@
 								<div class="truncate font-medium">
 									{article.title ?? article.doi}
 								</div>
-								<div class="break-all text-xs text-muted-foreground">
+								<div class="text-xs break-all text-muted-foreground">
 									{article.doi}
 								</div>
 								<div class="mt-2 flex flex-wrap gap-2">

@@ -127,8 +127,8 @@
 					class="rounded-md border p-3"
 					data-selected={workspace.selectedArticle === article.doi_key}
 				>
-					<div class="break-words font-medium">{article.title ?? article.doi}</div>
-					<div class="break-all text-xs text-muted-foreground">{article.doi}</div>
+					<div class="font-medium break-words">{article.title ?? article.doi}</div>
+					<div class="text-xs break-all text-muted-foreground">{article.doi}</div>
 					<div class="mt-3 flex flex-wrap gap-2">
 						<Badge variant="outline">{article.issued_year ?? 'No year'}</Badge>
 						<Badge variant="secondary">Total {article.total_citations}</Badge>

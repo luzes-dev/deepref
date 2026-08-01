@@ -84,7 +84,7 @@
 							<Tooltip.Content side="right" class="flex items-center gap-4">
 								{item.label}
 								{#if item.count}
-									<span class="text-muted-foreground ml-auto">
+									<span class="ml-auto text-muted-foreground">
 										{item.count}
 									</span>
 								{/if}
@@ -95,7 +95,7 @@
 							variant={workspace.view === item.view ? 'default' : 'ghost'}
 							size="sm"
 							class={cn('justify-start', {
-								'dark:bg-muted dark:hover:bg-muted dark:text-white dark:hover:text-white':
+								'dark:bg-muted dark:text-white dark:hover:bg-muted dark:hover:text-white':
 									workspace.view === item.view
 							})}
 							onclick={() => workspace.selectView(item.view)}
