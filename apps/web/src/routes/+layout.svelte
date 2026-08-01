@@ -1,7 +1,6 @@
 <script lang="ts">
 	import './layout.css';
 	import favicon from '$lib/assets/favicon.svg';
-	import AppHeader from '$lib/components/app/AppHeader.svelte';
 	import { Toaster } from '$lib/components/ui/sonner';
 	import { createAppQueryClient } from '$lib/api/query-client';
 	import { ModeWatcher } from 'mode-watcher';
@@ -16,10 +15,7 @@
 <ModeWatcher />
 <QueryClientProvider client={queryClient}>
 	<div class="min-h-svh bg-background text-foreground">
-		<AppHeader />
-		<main class="mx-auto max-w-7xl px-4 py-6">
-			{@render children()}
-		</main>
+		{@render children()}
 	</div>
 	<Toaster />
 </QueryClientProvider>
