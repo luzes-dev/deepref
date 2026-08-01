@@ -16,12 +16,19 @@ function articleMatchesTerm(article: ArticleDto, term: string) {
 	return doi.includes(term) || Boolean(title?.includes(term));
 }
 
-function articleMatchesYearRange(year: ArticleDto['issued_year'], value: unknown) {
-	if (!Array.isArray(value) || value.length < 2) return true;
-	if (typeof year !== 'number') return false;
+function hasYearRange(value: unknown): value is unknown[] {
+	return Array.isArray(value) && value.length >= 2;
+}
 
-	const [min, max] = value.map(Number);
+function isWithinYearRange(year: number, range: unknown[]) {
+	const [min, max] = range.map(Number);
 	return year >= min && year <= max;
+}
+
+function articleMatchesYearRange(year: ArticleDto['issued_year'], value: unknown) {
+	if (!hasYearRange(value)) return true;
+
+	return typeof year === 'number' && isWithinYearRange(year, value);
 }
 
 export function createArticleColumns({
