@@ -16,6 +16,14 @@ function articleMatchesTerm(article: ArticleDto, term: string) {
 	return doi.includes(term) || Boolean(title?.includes(term));
 }
 
+function articleMatchesYearRange(year: ArticleDto['issued_year'], value: unknown) {
+	if (!Array.isArray(value) || value.length < 2) return true;
+	if (typeof year !== 'number') return false;
+
+	const [min, max] = value.map(Number);
+	return year >= min && year <= max;
+}
+
 export function createArticleColumns({
 	openArticle,
 	selectedArticle
@@ -86,7 +94,7 @@ export function createArticleColumns({
 					title: 'Year'
 				}),
 			cell: ({ row }) => row.original.issued_year ?? '-',
-			filterFn: (row, id, value) => (value as string[]).includes(row.getValue(id)),
+			filterFn: (row, _id, value) => articleMatchesYearRange(row.original.issued_year, value),
 			sortingFn: (rowA, rowB) =>
 				(rowA.original.issued_year ?? 0) - (rowB.original.issued_year ?? 0)
 		},

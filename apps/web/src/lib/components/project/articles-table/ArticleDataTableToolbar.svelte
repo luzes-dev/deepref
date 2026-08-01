@@ -9,6 +9,7 @@
 	import { Slider } from '$lib/components/ui/slider';
 	import ArticleDataTableFacetedFilter from './ArticleDataTableFacetedFilter.svelte';
 	import ArticleDataTableViewOptions from './ArticleDataTableViewOptions.svelte';
+	import ArticleDataTableYearFilter from './ArticleDataTableYearFilter.svelte';
 
 	type FilterOption = {
 		label: string;
@@ -34,15 +35,17 @@
 			.sort((a, b) => a.localeCompare(b))
 			.map((value) => ({ label: value, value }));
 	});
-	const yearOptions = $derived.by<FilterOption[]>(() => {
-		const labels = new Set(articles.map((article) => String(article.issued_year ?? 'No year')));
-		return Array.from(labels)
-			.sort((a, b) => {
-				if (a === 'No year') return 1;
-				if (b === 'No year') return -1;
-				return Number(b) - Number(a);
-			})
-			.map((value) => ({ label: value, value }));
+	const yearBounds = $derived.by(() => {
+		const years = articles
+			.map((article) => article.issued_year)
+			.filter((year): year is number => typeof year === 'number');
+
+		return years.length
+			? {
+					min: Math.min(...years),
+					max: Math.max(...years)
+				}
+			: undefined;
 	});
 </script>
 
@@ -66,11 +69,11 @@
 					options={typeOptions}
 				/>
 			{/if}
-			{#if yearColumn && yearOptions.length > 0}
-				<ArticleDataTableFacetedFilter
+			{#if yearColumn && yearBounds}
+				<ArticleDataTableYearFilter
 					column={yearColumn}
-					title="Year"
-					options={yearOptions}
+					minYear={yearBounds.min}
+					maxYear={yearBounds.max}
 				/>
 			{/if}
 			{#if internalColumn}

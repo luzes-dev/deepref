@@ -95,13 +95,15 @@
 
 <div class="flex min-h-0 flex-1 flex-col gap-4">
 	<ArticleDataTableToolbar {table} {articles} />
-	<div class="min-h-0 flex-1 overflow-auto rounded-md border">
+	<div
+		class="min-h-0 flex-1 rounded-md border [&_[data-slot=table-container]]:h-full [&_[data-slot=table-container]]:overflow-auto"
+	>
 		<Table.Root>
 			<Table.Header>
 				{#each table.getHeaderGroups() as headerGroup (headerGroup.id)}
 					<Table.Row>
 						{#each headerGroup.headers as header (header.id)}
-							<Table.Head colspan={header.colSpan}>
+							<Table.Head colspan={header.colSpan} class="sticky top-0 z-10 bg-background">
 								{#if !header.isPlaceholder}
 									<FlexRender
 										content={header.column.columnDef.header}
