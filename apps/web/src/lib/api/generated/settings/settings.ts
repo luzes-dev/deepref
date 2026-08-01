@@ -43,7 +43,7 @@ export type getSettingsResponseError = getSettingsResponse500 & {
 };
 
 export const getGetSettingsUrl = () => {
-	return `http://localhost:8080/settings`;
+	return `/api/settings`;
 };
 
 export const getSettings = async (options?: RequestInit): Promise<getSettingsResponseSuccess> => {
@@ -54,7 +54,7 @@ export const getSettings = async (options?: RequestInit): Promise<getSettingsRes
 };
 
 export const getGetSettingsQueryKey = () => {
-	return [`http://localhost:8080/settings`] as const;
+	return [`/api/settings`] as const;
 };
 
 export const getGetSettingsQueryOptions = <
@@ -142,7 +142,7 @@ export type updateSettingsResponseError = (
 };
 
 export const getUpdateSettingsUrl = () => {
-	return `http://localhost:8080/settings`;
+	return `/api/settings`;
 };
 
 export const updateSettings = async (

@@ -19,11 +19,7 @@ RUN pnpm --filter @deepref/web build
 FROM caddy:2-alpine AS runtime
 
 COPY apps/web/Caddyfile /etc/caddy/Caddyfile
-COPY apps/web/docker-entrypoint.sh /usr/local/bin/docker-entrypoint.sh
 COPY --from=builder /app/apps/web/build /usr/share/caddy
 
-RUN chmod +x /usr/local/bin/docker-entrypoint.sh
-
 EXPOSE 80
-ENTRYPOINT ["/usr/local/bin/docker-entrypoint.sh"]
 CMD ["caddy", "run", "--config", "/etc/caddy/Caddyfile", "--adapter", "caddyfile"]

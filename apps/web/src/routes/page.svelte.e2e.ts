@@ -78,16 +78,16 @@ const paginatedArticles = Array.from({ length: 9 }, (_, index) => ({
 const workspaceArticles = [...articles, ...paginatedArticles];
 
 async function mockWorkspace(page: Page) {
-	await page.route('http://localhost:8080/projects', async (route) => {
+	await page.route('http://localhost:4173/api/projects', async (route) => {
 		await route.fulfill({ json: [project] });
 	});
-	await page.route('http://localhost:8080/projects/test-project', async (route) => {
+	await page.route('http://localhost:4173/api/projects/test-project', async (route) => {
 		await route.fulfill({ json: project });
 	});
-	await page.route('http://localhost:8080/projects/test-project/articles', async (route) => {
+	await page.route('http://localhost:4173/api/projects/test-project/articles', async (route) => {
 		await route.fulfill({ json: workspaceArticles });
 	});
-	await page.route('http://localhost:8080/projects/test-project/graph', async (route) => {
+	await page.route('http://localhost:4173/api/projects/test-project/graph', async (route) => {
 		await route.fulfill({
 			json: {
 				nodes: workspaceArticles,
@@ -96,7 +96,7 @@ async function mockWorkspace(page: Page) {
 		});
 	});
 	await page.route(
-		'http://localhost:8080/projects/test-project/recommendations',
+		'http://localhost:4173/api/projects/test-project/recommendations',
 		async (route) => {
 			await route.fulfill({
 				json: {
@@ -108,7 +108,7 @@ async function mockWorkspace(page: Page) {
 		}
 	);
 	await page.route(
-		'http://localhost:8080/projects/test-project/articles/MTAuMS9zb3VyY2U',
+		'http://localhost:4173/api/projects/test-project/articles/MTAuMS9zb3VyY2U',
 		async (route) => {
 			await route.fulfill({
 				json: {
@@ -124,7 +124,7 @@ async function mockWorkspace(page: Page) {
 			});
 		}
 	);
-	await page.route('http://localhost:8080/ingestions', async (route) => {
+	await page.route('http://localhost:4173/api/ingestions', async (route) => {
 		if (route.request().method() === 'POST') {
 			const body = route.request().postDataJSON();
 			expect(body).toMatchObject({
@@ -183,7 +183,7 @@ async function mockWorkspace(page: Page) {
 			]
 		});
 	});
-	await page.route('http://localhost:8080/ingestions/new-ingestion', async (route) => {
+	await page.route('http://localhost:4173/api/ingestions/new-ingestion', async (route) => {
 		await route.fulfill({
 			json: {
 				id: 'new-ingestion',
@@ -200,7 +200,7 @@ async function mockWorkspace(page: Page) {
 			}
 		});
 	});
-	await page.route('http://localhost:8080/ingestions/new-ingestion/items', async (route) => {
+	await page.route('http://localhost:4173/api/ingestions/new-ingestion/items', async (route) => {
 		await route.fulfill({ json: [] });
 	});
 }
@@ -208,7 +208,7 @@ async function mockWorkspace(page: Page) {
 async function mockProjectCreateWorkspace(page: Page, initialProjects = [project]) {
 	let projects = [...initialProjects];
 
-	await page.route('http://localhost:8080/projects', async (route) => {
+	await page.route('http://localhost:4173/api/projects', async (route) => {
 		if (route.request().method() === 'POST') {
 			const body = route.request().postDataJSON();
 			expect(body).toMatchObject({
@@ -224,23 +224,26 @@ async function mockProjectCreateWorkspace(page: Page, initialProjects = [project
 	});
 
 	for (const mockedProject of [project, createdProject]) {
-		await page.route(`http://localhost:8080/projects/${mockedProject.id}`, async (route) => {
-			await route.fulfill({ json: mockedProject });
-		});
 		await page.route(
-			`http://localhost:8080/projects/${mockedProject.id}/articles`,
+			`http://localhost:4173/api/projects/${mockedProject.id}`,
+			async (route) => {
+				await route.fulfill({ json: mockedProject });
+			}
+		);
+		await page.route(
+			`http://localhost:4173/api/projects/${mockedProject.id}/articles`,
 			async (route) => {
 				await route.fulfill({ json: mockedProject.id === project.id ? articles : [] });
 			}
 		);
 		await page.route(
-			`http://localhost:8080/projects/${mockedProject.id}/graph`,
+			`http://localhost:4173/api/projects/${mockedProject.id}/graph`,
 			async (route) => {
 				await route.fulfill({ json: { nodes: [], edges: [] } });
 			}
 		);
 		await page.route(
-			`http://localhost:8080/projects/${mockedProject.id}/recommendations`,
+			`http://localhost:4173/api/projects/${mockedProject.id}/recommendations`,
 			async (route) => {
 				await route.fulfill({
 					json: { foundational: [], core_to_project: [], underexplored: [] }
@@ -249,7 +252,7 @@ async function mockProjectCreateWorkspace(page: Page, initialProjects = [project
 		);
 	}
 
-	await page.route('http://localhost:8080/ingestions', async (route) => {
+	await page.route('http://localhost:4173/api/ingestions', async (route) => {
 		await route.fulfill({ json: [] });
 	});
 }
@@ -260,11 +263,11 @@ async function mockProjectManagementWorkspace(
 ) {
 	let projects = [...initialProjects];
 
-	await page.route('http://localhost:8080/projects', async (route) => {
+	await page.route('http://localhost:4173/api/projects', async (route) => {
 		await route.fulfill({ json: projects });
 	});
 
-	await page.route(/http:\/\/localhost:8080\/projects\/[^/]+(?:\/.*)?$/, async (route) => {
+	await page.route(/http:\/\/localhost:4173\/api\/projects\/[^/]+(?:\/.*)?$/, async (route) => {
 		const request = route.request();
 		const url = new URL(request.url());
 		const [, , projectId, resource] = url.pathname.split('/');
@@ -326,7 +329,7 @@ async function mockProjectManagementWorkspace(
 		await route.fulfill({ json: mockedProject });
 	});
 
-	await page.route('http://localhost:8080/ingestions', async (route) => {
+	await page.route('http://localhost:4173/api/ingestions', async (route) => {
 		await route.fulfill({ json: [] });
 	});
 }
@@ -351,6 +354,51 @@ test('selecting an article shows inspector', async ({ page }) => {
 
 	await openSourceArticle(page);
 	await expect(page.getByText('A useful article abstract.')).toBeVisible();
+});
+
+test('sidebar keeps its size and remains collapsible when the inspector appears', async ({
+	page
+}) => {
+	await mockWorkspace(page);
+	await page.goto('/');
+
+	const sidebarPane = page.locator('[data-pane]').first();
+	const sidebarHandle = page.locator('[data-pane-resizer]').first();
+
+	const collapseSidebar = async () => {
+		await sidebarHandle.focus();
+		await sidebarHandle.press('Enter');
+		await expect
+			.poll(async () => (await sidebarPane.boundingBox())?.width ?? Infinity)
+			.toBeLessThan(80);
+	};
+
+	await collapseSidebar();
+	await page.getByRole('button', { name: 'Articles' }).click();
+	await expect(page.getByRole('heading', { name: 'Article inspector' })).toBeVisible();
+	await expect
+		.poll(async () => (await sidebarPane.boundingBox())?.width ?? Infinity)
+		.toBeLessThan(80);
+
+	await sidebarHandle.focus();
+	await sidebarHandle.press('Enter');
+	await expect
+		.poll(async () => (await sidebarPane.boundingBox())?.width ?? 0)
+		.toBeGreaterThan(150);
+
+	await page.waitForTimeout(350);
+	const expandedHandle = await sidebarHandle.boundingBox();
+	if (!expandedHandle) throw new Error('Expanded sidebar resize handle is not visible');
+	await page.mouse.move(
+		expandedHandle.x + expandedHandle.width / 2,
+		expandedHandle.y + expandedHandle.height / 2
+	);
+	await page.mouse.down();
+	await page.mouse.move(20, expandedHandle.y + expandedHandle.height / 2, { steps: 5 });
+	await page.mouse.up();
+	await expect
+		.poll(async () => (await sidebarPane.boundingBox())?.width ?? Infinity)
+		.toBeLessThan(80);
 });
 
 test('secondary article views reuse selected article inspector', async ({ page }) => {

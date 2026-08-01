@@ -1,18 +1,3 @@
-const publicEnv = import.meta.env as Record<string, string | undefined>;
-
-declare global {
-	interface Window {
-		__DEEPREF_CONFIG__?: {
-			apiBaseUrl?: string;
-		};
-	}
-}
-
-const runtimeApiBase =
-	typeof window === 'undefined' ? undefined : window.__DEEPREF_CONFIG__?.apiBaseUrl;
-
-const apiBase = runtimeApiBase || publicEnv.PUBLIC_API_BASE_URL || 'http://localhost:8080';
-
 export class ApiError<T = unknown> extends Error {
 	readonly status: number;
 	readonly info: T;
@@ -31,8 +16,10 @@ export type ErrorType<T> = ApiError<T>;
 export type BodyType<T> = T;
 
 function requestUrl(contextUrl: string): string {
-	const generatedUrl = new URL(contextUrl);
-	return new URL(`${generatedUrl.pathname}${generatedUrl.search}`, apiBase).toString();
+	const generatedUrl = new URL(contextUrl, 'http://localhost');
+	const path = `${generatedUrl.pathname}${generatedUrl.search}`;
+
+	return typeof window === 'undefined' ? new URL(path, 'http://localhost').toString() : path;
 }
 
 async function responseBody(response: Response): Promise<unknown> {

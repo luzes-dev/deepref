@@ -11,7 +11,7 @@ export default defineConfig({
 			schemas: 'src/lib/api/generated/models',
 			client: 'svelte-query',
 			httpClient: 'fetch',
-			baseUrl: 'http://localhost:8080',
+			baseUrl: '/api',
 			clean: true,
 			formatter: 'prettier',
 			override: {

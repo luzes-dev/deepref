@@ -30,7 +30,7 @@ export type getHealthResponseSuccess = getHealthResponse200 & {
 	headers: Headers;
 };
 export const getGetHealthUrl = () => {
-	return `http://localhost:8080/health`;
+	return `/api/health`;
 };
 
 export const getHealth = async (options?: RequestInit): Promise<getHealthResponseSuccess> => {
@@ -41,7 +41,7 @@ export const getHealth = async (options?: RequestInit): Promise<getHealthRespons
 };
 
 export const getGetHealthQueryKey = () => {
-	return [`http://localhost:8080/health`] as const;
+	return [`/api/health`] as const;
 };
 
 export const getGetHealthQueryOptions = <
