@@ -140,13 +140,3 @@ export function createArticleColumns({
 		}
 	];
 }
-
-const articleColumnLabels: Record<string, string> = {
-	title: 'Article',
-	type: 'Type',
-	issued_year: 'Year',
-	total_citations: 'Total',
-	internal_citations: 'Internal',
-	outbound_internal_references: 'Outbound',
-	rank_score: 'Rank'
-};

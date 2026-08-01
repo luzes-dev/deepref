@@ -1,12 +1,9 @@
-const PROJECT_WORKSPACE_VIEWS = [
-	'overview',
-	'articles',
-	'graph',
-	'recommendations',
-	'ingestions'
-] as const;
-
-export type ProjectWorkspaceView = (typeof PROJECT_WORKSPACE_VIEWS)[number];
+export type ProjectWorkspaceView =
+	| 'overview'
+	| 'articles'
+	| 'graph'
+	| 'recommendations'
+	| 'ingestions';
 
 export type ProjectWorkspaceState = {
 	project?: string;

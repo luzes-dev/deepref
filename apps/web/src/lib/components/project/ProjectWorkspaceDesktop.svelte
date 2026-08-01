@@ -30,7 +30,7 @@
 	}
 
 	$effect(() => {
-		hasInspector;
+		const inspectorVisible = hasInspector;
 
 		queueMicrotask(() => {
 			if (navPane && !workspace.navCollapsed.current) {
@@ -40,7 +40,7 @@
 				}
 			}
 
-			if (inspectorPane && !workspace.inspectorCollapsed.current) {
+			if (inspectorVisible && inspectorPane && !workspace.inspectorCollapsed.current) {
 				const targetSize = workspace.inspectorSize.current;
 				if (Math.abs(inspectorPane.getSize() - targetSize) > 0.5) {
 					inspectorPane.resize(targetSize);
@@ -51,12 +51,8 @@
 </script>
 
 <div class="h-full">
-	{@key layoutId}
-		<Resizable.PaneGroup
-			direction="horizontal"
-			class="h-full"
-			autoSaveId={layoutId}
-		>
+	{#key layoutId}
+		<Resizable.PaneGroup direction="horizontal" class="h-full" autoSaveId={layoutId}>
 			<Resizable.Pane
 				order={1}
 				bind:this={navPane}
@@ -75,11 +71,7 @@
 				<ProjectSidebar collapsed={workspace.navCollapsed.current} />
 			</Resizable.Pane>
 			<Resizable.Handle withHandle />
-			<Resizable.Pane
-				order={2}
-				defaultSize={hasInspector ? 57 : 82}
-				minSize={36}
-			>
+			<Resizable.Pane order={2} defaultSize={hasInspector ? 57 : 82} minSize={36}>
 				<ProjectWorkspaceViewPanel />
 			</Resizable.Pane>
 			{#if hasInspector}
@@ -87,7 +79,9 @@
 				<Resizable.Pane
 					order={3}
 					bind:this={inspectorPane}
-					defaultSize={workspace.inspectorCollapsed.current ? 4 : workspace.inspectorSize.current}
+					defaultSize={workspace.inspectorCollapsed.current
+						? 4
+						: workspace.inspectorSize.current}
 					collapsedSize={4}
 					collapsible
 					minSize={20}
