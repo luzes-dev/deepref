@@ -270,7 +270,7 @@ async function mockProjectManagementWorkspace(
 	await page.route(/http:\/\/localhost:4173\/api\/projects\/[^/]+(?:\/.*)?$/, async (route) => {
 		const request = route.request();
 		const url = new URL(request.url());
-		const [, , projectId, resource] = url.pathname.split('/');
+		const [, , , projectId, resource] = url.pathname.split('/');
 		const mockedProject = projects.find((candidate) => candidate.id === projectId);
 
 		if (!mockedProject) {

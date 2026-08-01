@@ -103,7 +103,10 @@
 				{#each table.getHeaderGroups() as headerGroup (headerGroup.id)}
 					<Table.Row>
 						{#each headerGroup.headers as header (header.id)}
-							<Table.Head colspan={header.colSpan} class="sticky top-0 z-10 bg-background">
+							<Table.Head
+								colspan={header.colSpan}
+								class="sticky top-0 z-10 bg-background"
+							>
 								{#if !header.isPlaceholder}
 									<FlexRender
 										content={header.column.columnDef.header}

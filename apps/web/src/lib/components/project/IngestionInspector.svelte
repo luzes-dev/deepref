@@ -246,7 +246,8 @@
 								<Table.Body>
 									{#each items as item (item.doi)}
 										<Table.Row>
-											<Table.Cell class="max-w-48 truncate">{item.doi}</Table.Cell
+											<Table.Cell class="max-w-48 truncate"
+												>{item.doi}</Table.Cell
 											>
 											<Table.Cell>{item.depth}</Table.Cell>
 											<Table.Cell
