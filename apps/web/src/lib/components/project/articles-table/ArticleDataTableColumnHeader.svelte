@@ -33,7 +33,7 @@
 						{...props}
 						variant="ghost"
 						size="sm"
-						class="data-[state=open]:bg-accent -ml-3 h-8"
+						class="-ml-3 h-8 data-[state=open]:bg-accent"
 					>
 						<span>{title}</span>
 						{#if column.getIsSorted() === 'desc'}

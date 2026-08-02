@@ -76,7 +76,7 @@
 				disabled={minYear === maxYear}
 				onValueChange={applyRange}
 			/>
-			<div class="text-muted-foreground flex items-center justify-between text-xs">
+			<div class="flex items-center justify-between text-xs text-muted-foreground">
 				<span>{minYear}</span>
 				<span>{maxYear}</span>
 			</div>

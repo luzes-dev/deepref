@@ -886,7 +886,7 @@
 				<Button
 					variant="ghost"
 					size="icon"
-					class="absolute right-3 top-3 z-10 bg-background/80"
+					class="absolute top-3 right-3 z-10 bg-background/80"
 					onclick={resetLayout}
 					disabled={graphRendering}
 					aria-label="Reset graph layout"

@@ -99,10 +99,10 @@
 			</Button>
 			<div class="flex min-h-0 flex-1 items-center justify-center">
 				<div
-					class="text-muted-foreground flex -rotate-180 items-center gap-3 [writing-mode:vertical-rl]"
+					class="flex -rotate-180 items-center gap-3 text-muted-foreground [writing-mode:vertical-rl]"
 				>
-					<span class="text-xs font-medium uppercase tracking-[0.2em]">Inspector</span>
-					<span class="max-h-48 overflow-hidden text-ellipsis text-sm font-medium">
+					<span class="text-xs font-medium tracking-[0.2em] uppercase">Inspector</span>
+					<span class="max-h-48 overflow-hidden text-sm font-medium text-ellipsis">
 						{workspace.selectedIngestion ? 'Ingestion' : 'No ingestion'}
 					</span>
 				</div>

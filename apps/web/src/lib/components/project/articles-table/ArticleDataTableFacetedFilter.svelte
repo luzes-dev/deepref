@@ -87,7 +87,7 @@
 						>
 							<div
 								class={cn(
-									'border-primary flex size-4 items-center justify-center rounded-sm border',
+									'flex size-4 items-center justify-center rounded-sm border border-primary',
 									isSelected
 										? 'bg-primary text-primary-foreground'
 										: 'opacity-50 [&_svg]:invisible'

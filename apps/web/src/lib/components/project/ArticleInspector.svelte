@@ -48,10 +48,10 @@
 			</Button>
 			<div class="flex min-h-0 flex-1 items-center justify-center">
 				<div
-					class="text-muted-foreground flex -rotate-180 items-center gap-3 [writing-mode:vertical-rl]"
+					class="flex -rotate-180 items-center gap-3 text-muted-foreground [writing-mode:vertical-rl]"
 				>
-					<span class="text-xs font-medium uppercase tracking-[0.2em]">Inspector</span>
-					<span class="max-h-48 overflow-hidden text-ellipsis text-sm font-medium">
+					<span class="text-xs font-medium tracking-[0.2em] uppercase">Inspector</span>
+					<span class="max-h-48 overflow-hidden text-sm font-medium text-ellipsis">
 						{workspace.selectedArticle ? 'Article' : 'No article'}
 					</span>
 				</div>
@@ -113,10 +113,10 @@
 				<div class="flex flex-col gap-4">
 					<div class="flex items-start justify-between gap-3">
 						<div class="min-w-0">
-							<h3 class="wrap-break-word text-lg font-semibold">
+							<h3 class="text-lg font-semibold wrap-break-word">
 								{article.title ?? article.doi}
 							</h3>
-							<p class="break-all text-sm text-muted-foreground">{article.doi}</p>
+							<p class="text-sm break-all text-muted-foreground">{article.doi}</p>
 						</div>
 						<CopyButton text={article.doi} />
 					</div>
@@ -149,7 +149,7 @@
 					<section class="flex flex-col gap-2">
 						<h4 class="font-medium">Metadata</h4>
 						<p class="text-sm text-muted-foreground">{article.publisher}</p>
-						<p class="wrap-break-word text-sm">
+						<p class="text-sm wrap-break-word">
 							{article.abstract ?? 'No abstract available.'}
 						</p>
 						<pre
