@@ -26,10 +26,10 @@ jobs:
         language: [rust, javascript-typescript]
     steps:
       - uses: actions/checkout@v7
-      - uses: github/codeql-action/init@v4
+      - uses: github/codeql-action/init@v4.37.3
         with:
           languages: ${{ matrix.language }}
-      - uses: github/codeql-action/analyze@v4
+      - uses: github/codeql-action/analyze@v4.37.3
 
   dependencies:
     name: Dependency Scans
