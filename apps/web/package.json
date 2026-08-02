@@ -42,7 +42,7 @@
 		"graphology": "^0.26.0",
 		"graphology-layout-forceatlas2": "^0.10.1",
 		"graphology-layout-noverlap": "^0.4.2",
-		"jsrepo": "^3.8.0",
+		"jsrepo": "^3.8.1",
 		"mode-watcher": "^1.1.0",
 		"orval": "8.18.0",
 		"paneforge": "^1.0.2",
