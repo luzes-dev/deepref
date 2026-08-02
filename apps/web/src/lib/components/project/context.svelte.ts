@@ -3,9 +3,7 @@ import { Context, PersistedState, type Getter } from 'runed';
 import {
 	DEFAULT_PROJECT_MAX_DEPTH,
 	PROJECT_INSPECTOR_COLLAPSED_KEY,
-	PROJECT_INSPECTOR_SIZE_KEY,
-	PROJECT_NAV_COLLAPSED_KEY,
-	PROJECT_NAV_SIZE_KEY
+	PROJECT_NAV_COLLAPSED_KEY
 } from './constants';
 import type { ProjectWorkspaceCounts, ProjectWorkspaceState, ProjectWorkspaceView } from './types';
 
@@ -54,11 +52,9 @@ class ProjectWorkspaceContext {
 	}));
 
 	navCollapsed = new PersistedState(PROJECT_NAV_COLLAPSED_KEY, false, { syncTabs: false });
-	navSize = new PersistedState(PROJECT_NAV_SIZE_KEY, 18, { syncTabs: false });
 	inspectorCollapsed = new PersistedState(PROJECT_INSPECTOR_COLLAPSED_KEY, false, {
 		syncTabs: false
 	});
-	inspectorSize = new PersistedState(PROJECT_INSPECTOR_SIZE_KEY, 25, { syncTabs: false });
 	projectSelectorOpen = $state(false);
 	projectCreateOpen = $state(false);
 	projectManagementOpen = $state(false);
@@ -188,16 +184,8 @@ class ProjectWorkspaceContext {
 		this.navCollapsed.current = value;
 	};
 
-	setNavSize = (value: number) => {
-		this.navSize.current = value;
-	};
-
 	setInspectorCollapsed = (value: boolean) => {
 		this.inspectorCollapsed.current = value;
-	};
-
-	setInspectorSize = (value: number) => {
-		this.inspectorSize.current = value;
 	};
 
 	openProjectCreate = () => {

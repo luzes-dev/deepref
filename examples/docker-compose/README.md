@@ -26,20 +26,23 @@ http://localhost:3000
 
 Before running a real ingestion, open `/settings` and set `crossref_mailto`.
 
-## Public API URL
-
-`PUBLIC_API_BASE_URL` is read by the web container at startup. To change it, update the environment and restart/recreate the web container. No image rebuild is needed:
-
-```bash
-PUBLIC_API_BASE_URL=https://api.example.org \
-docker compose --env-file .env -f docker-compose.selfhost.yml up -d web
-```
-
-For a single host using the default port mapping, keep:
+If one of the host ports is already in use, set the corresponding `*_HOST_PORT`
+variable in `.env`. The service ports used inside the Compose network do not
+change. For example, to run alongside another local stack:
 
 ```text
-PUBLIC_API_BASE_URL=http://localhost:8080
+POSTGRES_HOST_PORT=5433
+NATS_HOST_PORT=4223
+NATS_MONITOR_HOST_PORT=8223
+NEO4J_HTTP_HOST_PORT=7475
+NEO4J_BOLT_HOST_PORT=7688
+API_HOST_PORT=8081
+WEB_HOST_PORT=3001
 ```
+
+The web container proxies `/api/*` to the Compose `api:8080` service, so the
+browser always uses the web origin and does not need a separate API URL or CORS
+configuration.
 
 ## Local CORS
 

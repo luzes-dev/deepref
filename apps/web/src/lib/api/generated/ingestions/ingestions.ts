@@ -43,7 +43,7 @@ export type listIngestionsResponseError = listIngestionsResponse500 & {
 };
 
 export const getListIngestionsUrl = () => {
-	return `http://localhost:8080/ingestions`;
+	return `/api/ingestions`;
 };
 
 export const listIngestions = async (
@@ -56,7 +56,7 @@ export const listIngestions = async (
 };
 
 export const getListIngestionsQueryKey = () => {
-	return [`http://localhost:8080/ingestions`] as const;
+	return [`/api/ingestions`] as const;
 };
 
 export const getListIngestionsQueryOptions = <
@@ -146,15 +146,13 @@ export type createIngestionResponseSuccess = createIngestionResponse201 & {
 	headers: Headers;
 };
 export type createIngestionResponseError = (
-	| createIngestionResponse400
-	| createIngestionResponse404
-	| createIngestionResponse500
+	createIngestionResponse400 | createIngestionResponse404 | createIngestionResponse500
 ) & {
 	headers: Headers;
 };
 
 export const getCreateIngestionUrl = () => {
-	return `http://localhost:8080/ingestions`;
+	return `/api/ingestions`;
 };
 
 export const createIngestion = async (
@@ -274,7 +272,7 @@ export type getIngestionResponseError = (getIngestionResponse404 | getIngestionR
 };
 
 export const getGetIngestionUrl = (ingestionId: string) => {
-	return `http://localhost:8080/ingestions/${ingestionId}`;
+	return `/api/ingestions/${ingestionId}`;
 };
 
 export const getIngestion = async (
@@ -288,7 +286,7 @@ export const getIngestion = async (
 };
 
 export const getGetIngestionQueryKey = (ingestionId: string) => {
-	return [`http://localhost:8080/ingestions/${ingestionId}`] as const;
+	return [`/api/ingestions/${ingestionId}`] as const;
 };
 
 export const getGetIngestionQueryOptions = <
@@ -382,7 +380,7 @@ export type cancelIngestionResponseError = cancelIngestionResponse500 & {
 };
 
 export const getCancelIngestionUrl = (ingestionId: string) => {
-	return `http://localhost:8080/ingestions/${ingestionId}/cancel`;
+	return `/api/ingestions/${ingestionId}/cancel`;
 };
 
 export const cancelIngestion = async (
@@ -501,7 +499,7 @@ export type listIngestionItemsResponseError = listIngestionItemsResponse500 & {
 };
 
 export const getListIngestionItemsUrl = (ingestionId: string) => {
-	return `http://localhost:8080/ingestions/${ingestionId}/items`;
+	return `/api/ingestions/${ingestionId}/items`;
 };
 
 export const listIngestionItems = async (
@@ -515,7 +513,7 @@ export const listIngestionItems = async (
 };
 
 export const getListIngestionItemsQueryKey = (ingestionId: string) => {
-	return [`http://localhost:8080/ingestions/${ingestionId}/items`] as const;
+	return [`/api/ingestions/${ingestionId}/items`] as const;
 };
 
 export const getListIngestionItemsQueryOptions = <

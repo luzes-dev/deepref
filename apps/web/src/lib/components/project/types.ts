@@ -1,9 +1,5 @@
 export type ProjectWorkspaceView =
-	| 'overview'
-	| 'articles'
-	| 'graph'
-	| 'recommendations'
-	| 'ingestions';
+	'overview' | 'articles' | 'graph' | 'recommendations' | 'ingestions';
 
 export type ProjectWorkspaceState = {
 	project?: string;

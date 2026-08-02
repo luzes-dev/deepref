@@ -50,7 +50,7 @@ export type listProjectArticlesResponseError = listProjectArticlesResponse500 & 
 };
 
 export const getListProjectArticlesUrl = (projectId: string) => {
-	return `http://localhost:8080/projects/${projectId}/articles`;
+	return `/api/projects/${projectId}/articles`;
 };
 
 export const listProjectArticles = async (
@@ -64,7 +64,7 @@ export const listProjectArticles = async (
 };
 
 export const getListProjectArticlesQueryKey = (projectId: string) => {
-	return [`http://localhost:8080/projects/${projectId}/articles`] as const;
+	return [`/api/projects/${projectId}/articles`] as const;
 };
 
 export const getListProjectArticlesQueryOptions = <
@@ -166,15 +166,13 @@ export type getProjectArticleResponseSuccess = getProjectArticleResponse200 & {
 	headers: Headers;
 };
 export type getProjectArticleResponseError = (
-	| getProjectArticleResponse400
-	| getProjectArticleResponse404
-	| getProjectArticleResponse500
+	getProjectArticleResponse400 | getProjectArticleResponse404 | getProjectArticleResponse500
 ) & {
 	headers: Headers;
 };
 
 export const getGetProjectArticleUrl = (projectId: string, doiKey: string) => {
-	return `http://localhost:8080/projects/${projectId}/articles/${doiKey}`;
+	return `/api/projects/${projectId}/articles/${doiKey}`;
 };
 
 export const getProjectArticle = async (
@@ -192,7 +190,7 @@ export const getProjectArticle = async (
 };
 
 export const getGetProjectArticleQueryKey = (projectId: string, doiKey: string) => {
-	return [`http://localhost:8080/projects/${projectId}/articles/${doiKey}`] as const;
+	return [`/api/projects/${projectId}/articles/${doiKey}`] as const;
 };
 
 export const getGetProjectArticleQueryOptions = <
@@ -295,7 +293,7 @@ export type getProjectGraphResponseError = getProjectGraphResponse500 & {
 };
 
 export const getGetProjectGraphUrl = (projectId: string) => {
-	return `http://localhost:8080/projects/${projectId}/graph`;
+	return `/api/projects/${projectId}/graph`;
 };
 
 export const getProjectGraph = async (
@@ -309,7 +307,7 @@ export const getProjectGraph = async (
 };
 
 export const getGetProjectGraphQueryKey = (projectId: string) => {
-	return [`http://localhost:8080/projects/${projectId}/graph`] as const;
+	return [`/api/projects/${projectId}/graph`] as const;
 };
 
 export const getGetProjectGraphQueryOptions = <
@@ -403,7 +401,7 @@ export type recomputeProjectMetricsResponseError = recomputeProjectMetricsRespon
 };
 
 export const getRecomputeProjectMetricsUrl = (projectId: string) => {
-	return `http://localhost:8080/projects/${projectId}/metrics/recompute`;
+	return `/api/projects/${projectId}/metrics/recompute`;
 };
 
 export const recomputeProjectMetrics = async (
@@ -530,7 +528,7 @@ export type getProjectRecommendationsResponseError = getProjectRecommendationsRe
 };
 
 export const getGetProjectRecommendationsUrl = (projectId: string) => {
-	return `http://localhost:8080/projects/${projectId}/recommendations`;
+	return `/api/projects/${projectId}/recommendations`;
 };
 
 export const getProjectRecommendations = async (
@@ -547,7 +545,7 @@ export const getProjectRecommendations = async (
 };
 
 export const getGetProjectRecommendationsQueryKey = (projectId: string) => {
-	return [`http://localhost:8080/projects/${projectId}/recommendations`] as const;
+	return [`/api/projects/${projectId}/recommendations`] as const;
 };
 
 export const getGetProjectRecommendationsQueryOptions = <

@@ -43,7 +43,7 @@ export type listProjectsResponseError = listProjectsResponse500 & {
 };
 
 export const getListProjectsUrl = () => {
-	return `http://localhost:8080/projects`;
+	return `/api/projects`;
 };
 
 export const listProjects = async (options?: RequestInit): Promise<listProjectsResponseSuccess> => {
@@ -54,7 +54,7 @@ export const listProjects = async (options?: RequestInit): Promise<listProjectsR
 };
 
 export const getListProjectsQueryKey = () => {
-	return [`http://localhost:8080/projects`] as const;
+	return [`/api/projects`] as const;
 };
 
 export const getListProjectsQueryOptions = <
@@ -143,7 +143,7 @@ export type createProjectResponseError = (createProjectResponse400 | createProje
 };
 
 export const getCreateProjectUrl = () => {
-	return `http://localhost:8080/projects`;
+	return `/api/projects`;
 };
 
 export const createProject = async (
@@ -261,7 +261,7 @@ export type getProjectResponseError = (getProjectResponse404 | getProjectRespons
 };
 
 export const getGetProjectUrl = (projectId: string) => {
-	return `http://localhost:8080/projects/${projectId}`;
+	return `/api/projects/${projectId}`;
 };
 
 export const getProject = async (
@@ -275,7 +275,7 @@ export const getProject = async (
 };
 
 export const getGetProjectQueryKey = (projectId: string) => {
-	return [`http://localhost:8080/projects/${projectId}`] as const;
+	return [`/api/projects/${projectId}`] as const;
 };
 
 export const getGetProjectQueryOptions = <
@@ -363,7 +363,7 @@ export type deleteProjectResponseError = deleteProjectResponse500 & {
 };
 
 export const getDeleteProjectUrl = (projectId: string) => {
-	return `http://localhost:8080/projects/${projectId}`;
+	return `/api/projects/${projectId}`;
 };
 
 export const deleteProject = async (
@@ -480,15 +480,13 @@ export type updateProjectResponseSuccess = updateProjectResponse200 & {
 	headers: Headers;
 };
 export type updateProjectResponseError = (
-	| updateProjectResponse400
-	| updateProjectResponse404
-	| updateProjectResponse500
+	updateProjectResponse400 | updateProjectResponse404 | updateProjectResponse500
 ) & {
 	headers: Headers;
 };
 
 export const getUpdateProjectUrl = (projectId: string) => {
-	return `http://localhost:8080/projects/${projectId}`;
+	return `/api/projects/${projectId}`;
 };
 
 export const updateProject = async (

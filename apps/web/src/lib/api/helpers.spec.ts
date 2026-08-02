@@ -12,14 +12,12 @@ import { shouldPollIngestion } from './helpers';
 
 describe('generated query keys', () => {
 	it('include every path parameter', () => {
-		expect(getGetIngestionQueryKey('ingestion-1')).toEqual([
-			'http://localhost:8080/ingestions/ingestion-1'
-		]);
+		expect(getGetIngestionQueryKey('ingestion-1')).toEqual(['/api/ingestions/ingestion-1']);
 		expect(getListIngestionItemsQueryKey('ingestion-1')).toEqual([
-			'http://localhost:8080/ingestions/ingestion-1/items'
+			'/api/ingestions/ingestion-1/items'
 		]);
 		expect(getGetProjectArticleQueryKey('project-1', 'doi-key')).toEqual([
-			'http://localhost:8080/projects/project-1/articles/doi-key'
+			'/api/projects/project-1/articles/doi-key'
 		]);
 	});
 });

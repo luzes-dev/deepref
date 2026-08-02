@@ -115,8 +115,7 @@
 	let container = $state<HTMLDivElement | null>(null);
 	let renderer: SigmaType<GraphNodeAttributes, GraphEdgeAttributes> | undefined;
 	let graph:
-		| ReturnType<SigmaType<GraphNodeAttributes, GraphEdgeAttributes>['getGraph']>
-		| undefined;
+		ReturnType<SigmaType<GraphNodeAttributes, GraphEdgeAttributes>['getGraph']> | undefined;
 	let themeObserver: MutationObserver | undefined;
 	let renderRun = 0;
 	let graphRendering = $state(false);
