@@ -1,0 +1,9 @@
+argocd/appproject.yaml
+argocd/applicationset.yaml
+argocd/root-application.yaml
+environments/development/release-lock.yaml
+environments/development/values.yaml
+environments/production/release-lock.yaml
+environments/production/values.yaml
+environments/staging/release-lock.yaml
+environments/staging/values.yaml

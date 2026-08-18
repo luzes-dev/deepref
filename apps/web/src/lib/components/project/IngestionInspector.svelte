@@ -54,7 +54,7 @@
 		})
 	);
 	const cancelIngestion = createCancelIngestion();
-	const items = $derived(itemsQuery.data?.data ?? []);
+	const items = $derived(itemsQuery.data?.data.items ?? []);
 	const polling = $derived(shouldPollIngestion(ingestion?.status) !== false);
 	const isFetching = $derived(ingestionQuery.isFetching || itemsQuery.isFetching);
 	const dataUpdatedAt = $derived(

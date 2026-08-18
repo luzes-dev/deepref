@@ -1,0 +1,57 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "deepref.componentName" (dict "root" . "component" "projector") }}
+  namespace: {{ include "deepref.namespace" . }}
+  labels:
+    {{- include "deepref.labels" . | nindent 4 }}
+    app.kubernetes.io/component: projector
+spec:
+  replicas: {{ .Values.projector.replicas }}
+  revisionHistoryLimit: 3
+  strategy:
+    type: RollingUpdate
+    rollingUpdate: {maxUnavailable: 1, maxSurge: 1}
+  selector:
+    matchLabels:
+      {{- include "deepref.selectorLabels" (dict "root" . "component" "projector") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "deepref.selectorLabels" (dict "root" . "component" "projector") | nindent 8 }}
+        {{- with .Values.global.podLabels }}{{ toYaml . | nindent 8 }}{{- end }}
+    spec:
+      serviceAccountName: {{ .Values.serviceAccounts.projector }}
+      automountServiceAccountToken: false
+      terminationGracePeriodSeconds: {{ .Values.projector.terminationGracePeriodSeconds }}
+      securityContext:
+        {{- include "deepref.podSecurityContext" . | nindent 8 }}
+        fsGroup: 65532
+        fsGroupChangePolicy: OnRootMismatch
+      {{- include "deepref.imagePullSecrets" . | nindent 6 }}
+      {{- include "deepref.topology" (dict "root" . "component" "projector") | nindent 6 }}
+      containers:
+        - name: projector
+          image: {{ include "deepref.image" (dict "name" "projector" "image" .Values.images.projector) }}
+          imagePullPolicy: {{ .Values.global.imagePullPolicy }}
+          args: ["run"]
+          securityContext:
+            {{- include "deepref.containerSecurityContext" . | nindent 12 }}
+            runAsUser: 65532
+            runAsGroup: 65532
+          env:
+            {{- include "deepref.runtimeEnv" (dict "root" . "serviceName" "deepref-projector") | nindent 12 }}
+            - {name: PROJECTOR_BATCH_SIZE, value: {{ .Values.projector.batchSize | quote }}}
+          volumeMounts:
+            {{- include "deepref.runtimeVolumeMounts" . | nindent 12 }}
+          resources: {{- toYaml .Values.projector.resources | nindent 12 }}
+          livenessProbe:
+            exec: {command: ["/bin/sh", "-c", "test -r /proc/1/status"]}
+            periodSeconds: 15
+            timeoutSeconds: 2
+          readinessProbe:
+            exec: {command: ["/bin/sh", "-c", "test -r /proc/1/status"]}
+            periodSeconds: 10
+            timeoutSeconds: 2
+      volumes:
+        {{- include "deepref.runtimeVolumes" (dict "root" . "credential" "projector") | nindent 8 }}

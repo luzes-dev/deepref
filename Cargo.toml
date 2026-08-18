@@ -1,11 +1,14 @@
 [workspace]
 members = [
+    "crates/config",
     "crates/core",
     "crates/crossref",
     "crates/events",
     "crates/graph",
     "crates/metrics",
+    "crates/telemetry",
     "services/api",
+    "services/projector",
     "services/worker",
 ]
 resolver = "3"
@@ -17,10 +20,12 @@ version = "0.1.0"
 
 [workspace.dependencies]
 deepref-core = { path = "crates/core" }
+deepref-config = { path = "crates/config" }
 deepref-crossref = { path = "crates/crossref" }
 deepref-events = { path = "crates/events" }
 deepref-graph = { path = "crates/graph" }
 deepref-metrics = { path = "crates/metrics" }
+deepref-telemetry = { path = "crates/telemetry" }
 anyhow = "1.0.103"
 async-nats = "0.50.0"
 axum = "0.8.9"
@@ -28,7 +33,6 @@ backoff = { version = "0.4", features = ["tokio"] }
 base64 = "0.23.0"
 chrono = { version = "0.4.45", features = ["serde"] }
 futures = "0.3.32"
-governor = "0.10.4"
 neo4rs = "0.8"
 reqwest = { version = "0.13.4", default-features = false, features = ["json", "rustls", "gzip", "brotli"] }
 serde = { version = "1.0.228", features = ["derive"] }
@@ -44,5 +48,5 @@ tracing-subscriber = { version = "0.3.23", features = ["env-filter", "json"] }
 utoipa = { version = "5.5.0", features = ["axum_extras", "chrono", "uuid"] }
 utoipa-axum = "0.2.0"
 urlencoding = "2.1.3"
-uuid = { version = "1.23.4", features = ["serde", "v4"] }
+uuid = { version = "1.23.4", features = ["serde", "v4", "v5"] }
 wiremock = "0.6.5"

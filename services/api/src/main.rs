@@ -1,45 +1,22 @@
-mod config;
-mod error;
-mod nats;
-mod outbox;
-mod routes;
-mod state;
-
-use sqlx::postgres::PgPoolOptions;
-use tokio::net::TcpListener;
-use tracing_subscriber::{layer::SubscriberExt, util::SubscriberInitExt};
-
-use crate::{config::ApiConfig, state::AppState};
+use deepref_api::config::{ApiCommand, ApiConfig};
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
-    if std::env::args().any(|argument| argument == "--print-openapi") {
+    let command = ApiCommand::parse(std::env::args().skip(1))?;
+    if command == ApiCommand::PrintOpenApi {
         println!(
             "{}",
-            serde_json::to_string_pretty(&routes::openapi_document())?
+            serde_json::to_string_pretty(&deepref_api::routes::openapi_document())?
         );
         return Ok(());
     }
-
-    tracing_subscriber::registry()
-        .with(tracing_subscriber::EnvFilter::from_default_env())
-        .with(tracing_subscriber::fmt::layer())
-        .init();
-
-    let config = ApiConfig::from_env();
-    let pool = PgPoolOptions::new()
-        .max_connections(10)
-        .connect(&config.database_url)
-        .await?;
-    sqlx::migrate!("./migrations").run(&pool).await?;
-
-    let jetstream = nats::connect_jetstream(&config.nats_url).await?;
-    if let Some(jetstream) = jetstream.clone() {
-        tokio::spawn(outbox::run_publisher(pool.clone(), jetstream));
-    }
-    let app = routes::router(AppState { pool });
-    let listener = TcpListener::bind(&config.bind_addr).await?;
-    tracing::info!(bind_addr = %config.bind_addr, "deepref API listening");
-    axum::serve(listener, app).await?;
-    Ok(())
+    let config = ApiConfig::from_env()?;
+    let telemetry = deepref_telemetry::init(config.runtime.telemetry.clone())?;
+    let result = match command {
+        ApiCommand::Serve => deepref_api::serve(config).await,
+        ApiCommand::Migrate => deepref_api::migrate(&config).await,
+        ApiCommand::PrintOpenApi => unreachable!(),
+    };
+    telemetry.shutdown().await;
+    result
 }

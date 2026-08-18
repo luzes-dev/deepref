@@ -1,0 +1,21 @@
+suite: nats jetstream
+templates:
+  - templates/nats-config.yaml
+  - templates/nats-statefulset.yaml
+  - templates/nats-bootstrap-job.yaml
+values:
+  - tests/values/staging.yaml
+tests:
+  - it: renders a three-node staging cluster
+    template: templates/nats-statefulset.yaml
+    documentIndex: 2
+    asserts:
+      - equal: {path: spec.replicas, value: 3}
+  - it: provisions all streams and durable consumers
+    template: templates/nats-bootstrap-job.yaml
+    asserts:
+      - matchRegex: {path: "spec.template.spec.containers[0].args[0]", pattern: DEEPREF_WORK}
+      - matchRegex: {path: "spec.template.spec.containers[0].args[0]", pattern: DEEPREF_DOMAIN}
+      - matchRegex: {path: "spec.template.spec.containers[0].args[0]", pattern: DEEPREF_DLQ}
+      - matchRegex: {path: "spec.template.spec.containers[0].args[0]", pattern: deepref-worker}
+      - matchRegex: {path: "spec.template.spec.containers[0].args[0]", pattern: deepref-projector}

@@ -14,89 +14,373 @@ import type {
 	QueryKey
 } from '@tanstack/svelte-query';
 
-import type { HealthResponse } from '../models';
+import type {
+	ApiErrorBody,
+	DependencyStatus,
+	LivenessResponse,
+	ReadinessResponse
+} from '../models';
 
 import { customFetch } from '../../custom-fetch.ts';
 import type { ErrorType } from '../../custom-fetch.ts';
 
 type SecondParameter<T extends (...args: never) => unknown> = Parameters<T>[1];
 
-export type getHealthResponse200 = {
-	data: HealthResponse;
+export type getDeprecatedHealthResponse200 = {
+	data: LivenessResponse;
 	status: 200;
 };
 
-export type getHealthResponseSuccess = getHealthResponse200 & {
+export type getDeprecatedHealthResponseSuccess = getDeprecatedHealthResponse200 & {
 	headers: Headers;
 };
-export const getGetHealthUrl = () => {
+export const getGetDeprecatedHealthUrl = () => {
 	return `/api/health`;
 };
 
-export const getHealth = async (options?: RequestInit): Promise<getHealthResponseSuccess> => {
-	return customFetch<getHealthResponseSuccess>(getGetHealthUrl(), {
+export const getDeprecatedHealth = async (
+	options?: RequestInit
+): Promise<getDeprecatedHealthResponseSuccess> => {
+	return customFetch<getDeprecatedHealthResponseSuccess>(getGetDeprecatedHealthUrl(), {
 		...options,
 		method: 'GET'
 	});
 };
 
-export const getGetHealthQueryKey = () => {
+export const getGetDeprecatedHealthQueryKey = () => {
 	return [`/api/health`] as const;
 };
 
-export const getGetHealthQueryOptions = <
-	TData = Awaited<ReturnType<typeof getHealth>>,
+export const getGetDeprecatedHealthQueryOptions = <
+	TData = Awaited<ReturnType<typeof getDeprecatedHealth>>,
 	TError = ErrorType<unknown>
 >(options?: {
-	query?: Partial<CreateQueryOptions<Awaited<ReturnType<typeof getHealth>>, TError, TData>>;
+	query?: Partial<
+		CreateQueryOptions<Awaited<ReturnType<typeof getDeprecatedHealth>>, TError, TData>
+	>;
 	request?: SecondParameter<typeof customFetch>;
 }) => {
 	const { query: queryOptions, request: requestOptions } = options ?? {};
 
-	const queryKey = queryOptions?.queryKey ?? getGetHealthQueryKey();
+	const queryKey = queryOptions?.queryKey ?? getGetDeprecatedHealthQueryKey();
 
-	const queryFn: QueryFunction<Awaited<ReturnType<typeof getHealth>>> = ({ signal }) =>
-		getHealth({ signal, ...requestOptions });
+	const queryFn: QueryFunction<Awaited<ReturnType<typeof getDeprecatedHealth>>> = ({ signal }) =>
+		getDeprecatedHealth({ signal, ...requestOptions });
 
 	return { queryKey, queryFn, ...queryOptions } as CreateQueryOptions<
-		Awaited<ReturnType<typeof getHealth>>,
+		Awaited<ReturnType<typeof getDeprecatedHealth>>,
 		TError,
 		TData
 	> & { queryKey: DataTag<QueryKey, TData, TError> };
 };
 
-export type GetHealthQueryResult = NonNullable<Awaited<ReturnType<typeof getHealth>>>;
-export type GetHealthQueryError = ErrorType<unknown>;
+export type GetDeprecatedHealthQueryResult = NonNullable<
+	Awaited<ReturnType<typeof getDeprecatedHealth>>
+>;
+export type GetDeprecatedHealthQueryError = ErrorType<unknown>;
 
-export function createGetHealth<
-	TData = Awaited<ReturnType<typeof getHealth>>,
+export function createGetDeprecatedHealth<
+	TData = Awaited<ReturnType<typeof getDeprecatedHealth>>,
 	TError = ErrorType<unknown>
 >(
 	options?: () => {
-		query?: Partial<CreateQueryOptions<Awaited<ReturnType<typeof getHealth>>, TError, TData>>;
+		query?: Partial<
+			CreateQueryOptions<Awaited<ReturnType<typeof getDeprecatedHealth>>, TError, TData>
+		>;
 		request?: SecondParameter<typeof customFetch>;
 	},
 	queryClient?: () => QueryClient
 ): CreateQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> } {
 	const query = createQuery(
-		() => getGetHealthQueryOptions(options?.()),
+		() => getGetDeprecatedHealthQueryOptions(options?.()),
 		queryClient
 	) as CreateQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> };
 
 	return query;
 }
 
-export const prefetchGetHealthQuery = async <
-	TData = Awaited<ReturnType<typeof getHealth>>,
+export const prefetchGetDeprecatedHealthQuery = async <
+	TData = Awaited<ReturnType<typeof getDeprecatedHealth>>,
 	TError = ErrorType<unknown>
 >(
 	queryClient: QueryClient,
 	options?: {
-		query?: Partial<CreateQueryOptions<Awaited<ReturnType<typeof getHealth>>, TError, TData>>;
+		query?: Partial<
+			CreateQueryOptions<Awaited<ReturnType<typeof getDeprecatedHealth>>, TError, TData>
+		>;
 		request?: SecondParameter<typeof customFetch>;
 	}
 ): Promise<QueryClient> => {
-	const queryOptions = getGetHealthQueryOptions(options);
+	const queryOptions = getGetDeprecatedHealthQueryOptions(options);
+
+	await queryClient.prefetchQuery(queryOptions);
+
+	return queryClient;
+};
+
+export type getDependencyStatusResponse200 = {
+	data: DependencyStatus;
+	status: 200;
+};
+
+export type getDependencyStatusResponseSuccess = getDependencyStatusResponse200 & {
+	headers: Headers;
+};
+export const getGetDependencyStatusUrl = () => {
+	return `/api/health/dependencies`;
+};
+
+export const getDependencyStatus = async (
+	options?: RequestInit
+): Promise<getDependencyStatusResponseSuccess> => {
+	return customFetch<getDependencyStatusResponseSuccess>(getGetDependencyStatusUrl(), {
+		...options,
+		method: 'GET'
+	});
+};
+
+export const getGetDependencyStatusQueryKey = () => {
+	return [`/api/health/dependencies`] as const;
+};
+
+export const getGetDependencyStatusQueryOptions = <
+	TData = Awaited<ReturnType<typeof getDependencyStatus>>,
+	TError = ErrorType<unknown>
+>(options?: {
+	query?: Partial<
+		CreateQueryOptions<Awaited<ReturnType<typeof getDependencyStatus>>, TError, TData>
+	>;
+	request?: SecondParameter<typeof customFetch>;
+}) => {
+	const { query: queryOptions, request: requestOptions } = options ?? {};
+
+	const queryKey = queryOptions?.queryKey ?? getGetDependencyStatusQueryKey();
+
+	const queryFn: QueryFunction<Awaited<ReturnType<typeof getDependencyStatus>>> = ({ signal }) =>
+		getDependencyStatus({ signal, ...requestOptions });
+
+	return { queryKey, queryFn, ...queryOptions } as CreateQueryOptions<
+		Awaited<ReturnType<typeof getDependencyStatus>>,
+		TError,
+		TData
+	> & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type GetDependencyStatusQueryResult = NonNullable<
+	Awaited<ReturnType<typeof getDependencyStatus>>
+>;
+export type GetDependencyStatusQueryError = ErrorType<unknown>;
+
+export function createGetDependencyStatus<
+	TData = Awaited<ReturnType<typeof getDependencyStatus>>,
+	TError = ErrorType<unknown>
+>(
+	options?: () => {
+		query?: Partial<
+			CreateQueryOptions<Awaited<ReturnType<typeof getDependencyStatus>>, TError, TData>
+		>;
+		request?: SecondParameter<typeof customFetch>;
+	},
+	queryClient?: () => QueryClient
+): CreateQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> } {
+	const query = createQuery(
+		() => getGetDependencyStatusQueryOptions(options?.()),
+		queryClient
+	) as CreateQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> };
+
+	return query;
+}
+
+export const prefetchGetDependencyStatusQuery = async <
+	TData = Awaited<ReturnType<typeof getDependencyStatus>>,
+	TError = ErrorType<unknown>
+>(
+	queryClient: QueryClient,
+	options?: {
+		query?: Partial<
+			CreateQueryOptions<Awaited<ReturnType<typeof getDependencyStatus>>, TError, TData>
+		>;
+		request?: SecondParameter<typeof customFetch>;
+	}
+): Promise<QueryClient> => {
+	const queryOptions = getGetDependencyStatusQueryOptions(options);
+
+	await queryClient.prefetchQuery(queryOptions);
+
+	return queryClient;
+};
+
+export type getLivenessResponse200 = {
+	data: LivenessResponse;
+	status: 200;
+};
+
+export type getLivenessResponseSuccess = getLivenessResponse200 & {
+	headers: Headers;
+};
+export const getGetLivenessUrl = () => {
+	return `/api/health/live`;
+};
+
+export const getLiveness = async (options?: RequestInit): Promise<getLivenessResponseSuccess> => {
+	return customFetch<getLivenessResponseSuccess>(getGetLivenessUrl(), {
+		...options,
+		method: 'GET'
+	});
+};
+
+export const getGetLivenessQueryKey = () => {
+	return [`/api/health/live`] as const;
+};
+
+export const getGetLivenessQueryOptions = <
+	TData = Awaited<ReturnType<typeof getLiveness>>,
+	TError = ErrorType<unknown>
+>(options?: {
+	query?: Partial<CreateQueryOptions<Awaited<ReturnType<typeof getLiveness>>, TError, TData>>;
+	request?: SecondParameter<typeof customFetch>;
+}) => {
+	const { query: queryOptions, request: requestOptions } = options ?? {};
+
+	const queryKey = queryOptions?.queryKey ?? getGetLivenessQueryKey();
+
+	const queryFn: QueryFunction<Awaited<ReturnType<typeof getLiveness>>> = ({ signal }) =>
+		getLiveness({ signal, ...requestOptions });
+
+	return { queryKey, queryFn, ...queryOptions } as CreateQueryOptions<
+		Awaited<ReturnType<typeof getLiveness>>,
+		TError,
+		TData
+	> & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type GetLivenessQueryResult = NonNullable<Awaited<ReturnType<typeof getLiveness>>>;
+export type GetLivenessQueryError = ErrorType<unknown>;
+
+export function createGetLiveness<
+	TData = Awaited<ReturnType<typeof getLiveness>>,
+	TError = ErrorType<unknown>
+>(
+	options?: () => {
+		query?: Partial<CreateQueryOptions<Awaited<ReturnType<typeof getLiveness>>, TError, TData>>;
+		request?: SecondParameter<typeof customFetch>;
+	},
+	queryClient?: () => QueryClient
+): CreateQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> } {
+	const query = createQuery(
+		() => getGetLivenessQueryOptions(options?.()),
+		queryClient
+	) as CreateQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> };
+
+	return query;
+}
+
+export const prefetchGetLivenessQuery = async <
+	TData = Awaited<ReturnType<typeof getLiveness>>,
+	TError = ErrorType<unknown>
+>(
+	queryClient: QueryClient,
+	options?: {
+		query?: Partial<CreateQueryOptions<Awaited<ReturnType<typeof getLiveness>>, TError, TData>>;
+		request?: SecondParameter<typeof customFetch>;
+	}
+): Promise<QueryClient> => {
+	const queryOptions = getGetLivenessQueryOptions(options);
+
+	await queryClient.prefetchQuery(queryOptions);
+
+	return queryClient;
+};
+
+export type getReadinessResponse200 = {
+	data: ReadinessResponse;
+	status: 200;
+};
+
+export type getReadinessResponse503 = {
+	data: ApiErrorBody;
+	status: 503;
+};
+
+export type getReadinessResponseSuccess = getReadinessResponse200 & {
+	headers: Headers;
+};
+export type getReadinessResponseError = getReadinessResponse503 & {
+	headers: Headers;
+};
+
+export const getGetReadinessUrl = () => {
+	return `/api/health/ready`;
+};
+
+export const getReadiness = async (options?: RequestInit): Promise<getReadinessResponseSuccess> => {
+	return customFetch<getReadinessResponseSuccess>(getGetReadinessUrl(), {
+		...options,
+		method: 'GET'
+	});
+};
+
+export const getGetReadinessQueryKey = () => {
+	return [`/api/health/ready`] as const;
+};
+
+export const getGetReadinessQueryOptions = <
+	TData = Awaited<ReturnType<typeof getReadiness>>,
+	TError = ErrorType<ApiErrorBody>
+>(options?: {
+	query?: Partial<CreateQueryOptions<Awaited<ReturnType<typeof getReadiness>>, TError, TData>>;
+	request?: SecondParameter<typeof customFetch>;
+}) => {
+	const { query: queryOptions, request: requestOptions } = options ?? {};
+
+	const queryKey = queryOptions?.queryKey ?? getGetReadinessQueryKey();
+
+	const queryFn: QueryFunction<Awaited<ReturnType<typeof getReadiness>>> = ({ signal }) =>
+		getReadiness({ signal, ...requestOptions });
+
+	return { queryKey, queryFn, ...queryOptions } as CreateQueryOptions<
+		Awaited<ReturnType<typeof getReadiness>>,
+		TError,
+		TData
+	> & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type GetReadinessQueryResult = NonNullable<Awaited<ReturnType<typeof getReadiness>>>;
+export type GetReadinessQueryError = ErrorType<ApiErrorBody>;
+
+export function createGetReadiness<
+	TData = Awaited<ReturnType<typeof getReadiness>>,
+	TError = ErrorType<ApiErrorBody>
+>(
+	options?: () => {
+		query?: Partial<
+			CreateQueryOptions<Awaited<ReturnType<typeof getReadiness>>, TError, TData>
+		>;
+		request?: SecondParameter<typeof customFetch>;
+	},
+	queryClient?: () => QueryClient
+): CreateQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> } {
+	const query = createQuery(
+		() => getGetReadinessQueryOptions(options?.()),
+		queryClient
+	) as CreateQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> };
+
+	return query;
+}
+
+export const prefetchGetReadinessQuery = async <
+	TData = Awaited<ReturnType<typeof getReadiness>>,
+	TError = ErrorType<ApiErrorBody>
+>(
+	queryClient: QueryClient,
+	options?: {
+		query?: Partial<
+			CreateQueryOptions<Awaited<ReturnType<typeof getReadiness>>, TError, TData>
+		>;
+		request?: SecondParameter<typeof customFetch>;
+	}
+): Promise<QueryClient> => {
+	const queryOptions = getGetReadinessQueryOptions(options);
 
 	await queryClient.prefetchQuery(queryOptions);
 

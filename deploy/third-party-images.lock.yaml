@@ -1,0 +1,51 @@
+apiVersion: deepref.dev/v1alpha1
+kind: ThirdPartyImageLock
+metadata:
+  generatedAt: "2026-08-04T00:00:00Z"
+spec:
+  requiredPlatforms:
+    - linux/amd64
+    - linux/arm64
+  images:
+    - name: rust-builder
+      source: docker.io/library/rust@sha256:6258907abe69656e41cd992e0b705cdcfabcbbe3db374f92ed2d47121282d4a1
+      destinationRepository: build/rust
+    - name: debian-runtime
+      source: docker.io/library/debian@sha256:7b140f374b289a7c2befc338f42ebe6441b7ea838a042bbd5acbfca6ec875818
+      destinationRepository: runtime/debian
+    - name: node-builder
+      source: docker.io/library/node@sha256:b31e7a42fdf8b8aa5f5ed477c72d694301273f1069c5a2f71d53c6482e99a2fc
+      destinationRepository: build/node
+    - name: caddy-runtime
+      source: docker.io/library/caddy@sha256:4c6e91c6ed0e2fa03efd5b44747b625fec79bc9cd06ac5235a779726618e530d
+      destinationRepository: runtime/caddy
+    - name: nats
+      source: docker.io/library/nats@sha256:ddb480f4b97d90f183123e96bbc7c96ab2a126883f7a380531cc208fc8ba9ca7
+      destinationRepository: runtime/nats
+    - name: nats-box
+      source: docker.io/natsio/nats-box@sha256:abdc9f9f0120bb8adfbf674eb037d1551db55356eb198b7bd4ffed377f6950a6
+      destinationRepository: runtime/nats-box
+    - name: neo4j
+      source: docker.io/library/neo4j@sha256:ff5de78d1e953427df7a8e1782aa18a5680ea8127c2d39649298319db2d6ea6a
+      destinationRepository: runtime/neo4j
+    - name: cloudflared
+      source: docker.io/cloudflare/cloudflared@sha256:6d91c121b803126f7a5344005d17a9324788fc09d305b6e2560ec6040a7ae283
+      destinationRepository: runtime/cloudflared
+    - name: external-secrets
+      source: ghcr.io/external-secrets/external-secrets@sha256:36e606279dbebac51b4b9300b9fa85e8c08c1c673ba3ecc38af1402a0b035554
+      destinationRepository: controllers/external-secrets
+    - name: adot-collector
+      source: docker.io/amazon/aws-otel-collector@sha256:8aa9ea5f67b8d318f7d6af24677e3c70f7098bc0631147cb5fa91addbe980b06
+      destinationRepository: runtime/adot-collector
+    - name: kyverno
+      source: ghcr.io/kyverno/kyverno@sha256:c2d33cc05ca2c7bab7ca13f4ef24276f4f1a83687e13a971945475b0e931bde8
+      destinationRepository: controllers/kyverno
+    - name: kyverno-background-controller
+      source: ghcr.io/kyverno/background-controller@sha256:b3dbcc1ec0bc3b30f2a1de0746a5ca016e2a3736535b46d11d74802736af6d7c
+      destinationRepository: controllers/kyverno-background-controller
+    - name: kyverno-cleanup-controller
+      source: ghcr.io/kyverno/cleanup-controller@sha256:79f6a4824063c2078921107b322d04847d5fbdcfac8a054fe4a50eeed621445a
+      destinationRepository: controllers/kyverno-cleanup-controller
+    - name: kyverno-reports-controller
+      source: ghcr.io/kyverno/reports-controller@sha256:e9cddf1464cbd9625aa02d6ce239b37a18a29a3f9a7c16851c08d68831cde83a
+      destinationRepository: controllers/kyverno-reports-controller

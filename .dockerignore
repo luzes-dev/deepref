@@ -1,11 +1,54 @@
+# Source-control and agent metadata
 .git
+.git/**
 .agents
+.agents/**
+.codex
+.codex/**
+.repos
+.repos/**
+.fallow
+.fallow/**
+.fallowrc.json
+
+# Local configuration and secret material
+**/.env
+**/.env.*
+**/*.key
+**/*.pem
+**/*.p12
+**/*.pfx
+**/credentials
+**/credentials.*
+**/secrets
+**/secrets.*
+!.env.example
+
+# Language, test, and build caches/artifacts
 target
 **/target
+node_modules
 **/node_modules
 **/.svelte-kit
 **/build
 **/dist
-**/.env
-**/.env.*
+**/coverage
+**/.cache
+**/.pytest_cache
+**/__pycache__
 *.log
+
+# Infrastructure state, plans, and generated working directories
+**/.terraform
+**/.terraform/**
+**/*.tfstate
+**/*.tfstate.*
+**/*.tfplan
+**/crash.log
+**/crash.*.log
+
+# Editor and operating-system debris
+.idea
+.vscode
+**/.DS_Store
+**/*~

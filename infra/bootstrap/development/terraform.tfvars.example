@@ -1,0 +1,15 @@
+# Placeholder values only. Copy outside version control and replace every REPLACE_WITH value.
+expected_account_id = "REPLACE_WITH_12_DIGIT_ACCOUNT_ID"
+state_bucket_name   = "REPLACE_WITH_GLOBALLY_UNIQUE_DEVELOPMENT_STATE_BUCKET"
+
+state_access_principal_arns = [
+  "arn:aws:iam::REPLACE_WITH_12_DIGIT_ACCOUNT_ID:role/REPLACE_WITH_INFRA_ROLE",
+]
+
+kms_administrator_principal_arns = [
+  "arn:aws:iam::REPLACE_WITH_12_DIGIT_ACCOUNT_ID:role/REPLACE_WITH_KMS_ADMIN_ROLE",
+]
+
+tags = {
+  Owner = "REPLACE_WITH_PLATFORM_OWNER"
+}

@@ -1,0 +1,30 @@
+{{- if .Values.podDisruptionBudgets.enabled }}
+{{- $root := . }}
+{{- $components := list
+  (dict "name" "api" "replicas" .Values.api.replicas)
+  (dict "name" "worker" "replicas" .Values.worker.replicas)
+  (dict "name" "projector" "replicas" .Values.projector.replicas)
+  (dict "name" "web" "replicas" .Values.web.replicas)
+  (dict "name" "cloudflared" "replicas" .Values.cloudflared.replicas)
+  (dict "name" "adot" "replicas" .Values.adot.replicas)
+  (dict "name" "nats" "replicas" .Values.nats.replicas)
+}}
+{{- range $component := $components }}
+{{- if gt (int $component.replicas) 1 }}
+---
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: {{ include "deepref.componentName" (dict "root" $root "component" $component.name) }}
+  namespace: {{ include "deepref.namespace" $root }}
+  labels:
+    {{- include "deepref.labels" $root | nindent 4 }}
+    app.kubernetes.io/component: {{ $component.name }}
+spec:
+  maxUnavailable: 1
+  selector:
+    matchLabels:
+      {{- include "deepref.selectorLabels" (dict "root" $root "component" $component.name) | nindent 6 }}
+{{- end }}
+{{- end }}
+{{- end }}

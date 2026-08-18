@@ -1,0 +1,50 @@
+{{- if .Values.migration.enabled }}
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "deepref.componentName" (dict "root" . "component" "migration") }}
+  namespace: {{ include "deepref.namespace" . }}
+  labels:
+    {{- include "deepref.labels" . | nindent 4 }}
+    app.kubernetes.io/component: migration
+  annotations:
+    argocd.argoproj.io/hook: PreSync
+    argocd.argoproj.io/hook-delete-policy: BeforeHookCreation,HookSucceeded
+    argocd.argoproj.io/sync-wave: "-20"
+spec:
+  backoffLimit: {{ .Values.migration.backoffLimit }}
+  activeDeadlineSeconds: {{ .Values.migration.activeDeadlineSeconds }}
+  ttlSecondsAfterFinished: 86400
+  template:
+    metadata:
+      labels:
+        {{- include "deepref.selectorLabels" (dict "root" . "component" "migration") | nindent 8 }}
+    spec:
+      restartPolicy: Never
+      serviceAccountName: {{ .Values.serviceAccounts.api }}
+      automountServiceAccountToken: false
+      terminationGracePeriodSeconds: {{ .Values.runtime.shutdownDeadlineSeconds }}
+      securityContext:
+        {{- include "deepref.podSecurityContext" . | nindent 8 }}
+        fsGroup: 65532
+      {{- include "deepref.imagePullSecrets" . | nindent 6 }}
+      {{- include "deepref.topology" (dict "root" . "component" "migration") | nindent 6 }}
+      containers:
+        - name: migrate
+          image: {{ include "deepref.image" (dict "name" "api" "image" .Values.images.api) }}
+          imagePullPolicy: {{ .Values.global.imagePullPolicy }}
+          args: ["migrate"]
+          securityContext:
+            {{- include "deepref.containerSecurityContext" . | nindent 12 }}
+            runAsUser: 65532
+            runAsGroup: 65532
+          env:
+            {{- include "deepref.runtimeEnv" (dict "root" . "serviceName" "deepref-migration") | nindent 12 }}
+            - name: API_CORS_ORIGINS
+              value: {{ join "," .Values.api.corsOrigins | quote }}
+          volumeMounts:
+            {{- include "deepref.runtimeVolumeMounts" . | nindent 12 }}
+          resources: {{- toYaml .Values.migration.resources | nindent 12 }}
+      volumes:
+        {{- include "deepref.runtimeVolumes" (dict "root" . "credential" "api") | nindent 8 }}
+{{- end }}

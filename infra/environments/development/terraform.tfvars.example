@@ -1,0 +1,31 @@
+# Copy only to a secure, ignored local path or provide these values through CI.
+# Never commit a real terraform.tfvars file.
+expected_account_id = "111111111111"
+
+kms_administrator_principal_arns = [
+  "arn:aws:iam::111111111111:role/REPLACE_WITH_KMS_ADMIN_ROLE",
+]
+
+eks_access_entries = {
+  platform_admin = {
+    principal_arn = "arn:aws:iam::111111111111:role/REPLACE_WITH_EKS_ADMIN_ROLE"
+    access_policy_arns = [
+      "arn:aws:eks::aws:cluster-access-policy/AmazonEKSClusterAdminPolicy",
+    ]
+  }
+}
+
+# Add support-module role ARNs when that slice is installed.
+secret_reader_principal_arns = {}
+repository_pull_principal_arns = [
+  "arn:aws:iam::222222222222:role/ambient-scribes-staging-ecr-promotion",
+]
+promotion_trusted_principal_arns = []
+promotion_oidc_provider_arn       = null
+promotion_oidc_subjects           = []
+promotion_source_repository_arns = []
+
+tags = {
+  CostCenter = "REPLACE_WITH_COST_CENTER"
+  Owner      = "REPLACE_WITH_OWNER"
+}

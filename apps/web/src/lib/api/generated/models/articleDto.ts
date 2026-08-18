@@ -11,6 +11,9 @@ export interface ArticleDto {
 	internal_citations: number;
 	/** @nullable */
 	issued_year?: number | null;
+	/** @nullable */
+	metrics_as_of?: string | null;
+	metrics_stale: boolean;
 	outbound_internal_references: number;
 	rank_score: number;
 	/** @nullable */

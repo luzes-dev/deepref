@@ -7,6 +7,7 @@
 	import { Button } from '$lib/components/ui/button';
 	import { Skeleton } from '$lib/components/ui/skeleton';
 	import { Slider } from '$lib/components/ui/slider';
+	import PaginationLoadMore from '$lib/components/PaginationLoadMore.svelte';
 	import CircleAlertIcon from '@lucide/svelte/icons/circle-alert';
 	import SearchIcon from '@lucide/svelte/icons/search';
 	import ArticleDataTable from './articles-table/ArticleDataTable.svelte';
@@ -48,6 +49,15 @@
 				return b.rank_score - a.rank_score;
 			})
 	);
+	const staleMetrics = $derived(workspace.articles.filter((article) => article.metrics_stale));
+	const latestMetricsAsOf = $derived.by(() => {
+		const values = workspace.articles
+			.map((article) => article.metrics_as_of)
+			.filter((value): value is string => Boolean(value))
+			.map(Date.parse)
+			.filter(Number.isFinite);
+		return values.length > 0 ? new Date(Math.max(...values)).toLocaleString() : undefined;
+	});
 </script>
 
 <div class="flex h-full min-h-0 flex-col gap-4 p-4">
@@ -91,6 +101,18 @@
 			<Badge variant="outline">Min {workspace.articleFilters.minInternal}</Badge>
 		</div>
 	</div>
+	{#if staleMetrics.length > 0}
+		<Alert.Root data-testid="stale-metrics-banner">
+			<CircleAlertIcon />
+			<Alert.Title>Metrics may be stale</Alert.Title>
+			<Alert.Description>
+				{staleMetrics.length} loaded article metrics are awaiting graph projection. Metrics as
+				of {latestMetricsAsOf ?? 'not yet computed'}.
+			</Alert.Description>
+		</Alert.Root>
+	{:else if latestMetricsAsOf}
+		<p class="text-sm text-muted-foreground">Metrics as of {latestMetricsAsOf}</p>
+	{/if}
 
 	{#if workspace.articlesError}
 		<Alert.Root variant="destructive">
@@ -112,7 +134,7 @@
 			</Empty.Header>
 		</Empty.Root>
 	{:else}
-		<div class="hidden min-h-0 flex-1 md:flex">
+		<div class="hidden min-h-0 flex-1 flex-col gap-3 md:flex">
 			{#key workspace.selectedProjectId}
 				<ArticleDataTable
 					articles={workspace.articles}
@@ -120,6 +142,13 @@
 					openArticle={workspace.openArticle}
 				/>
 			{/key}
+			<PaginationLoadMore
+				hasNextPage={workspace.articlesHasNextPage}
+				isLoading={workspace.articlesLoadingMore}
+				loadedCount={workspace.articles.length}
+				label="articles"
+				onLoadMore={workspace.loadMoreArticles}
+			/>
 		</div>
 		<div class="flex min-h-0 flex-1 flex-col gap-3 overflow-auto md:hidden">
 			{#each filtered as article (article.doi)}
@@ -149,6 +178,13 @@
 					No articles match the current filters.
 				</div>
 			{/each}
+			<PaginationLoadMore
+				hasNextPage={workspace.articlesHasNextPage}
+				isLoading={workspace.articlesLoadingMore}
+				loadedCount={workspace.articles.length}
+				label="articles"
+				onLoadMore={workspace.loadMoreArticles}
+			/>
 		</div>
 	{/if}
 </div>

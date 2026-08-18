@@ -1,0 +1,17 @@
+apiVersion: v1
+kind: Pod
+metadata:
+  name: immutable-pod
+spec:
+  containers:
+    - name: app
+      image: docker.io/library/debian@sha256:7b140f374b289a7c2befc338f42ebe6441b7ea838a042bbd5acbfca6ec875818
+---
+apiVersion: v1
+kind: Pod
+metadata:
+  name: mutable-pod
+spec:
+  containers:
+    - name: app
+      image: docker.io/library/debian:bookworm-slim

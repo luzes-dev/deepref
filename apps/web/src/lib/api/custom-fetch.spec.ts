@@ -43,17 +43,42 @@ describe('customFetch', () => {
 		vi.stubGlobal(
 			'fetch',
 			vi.fn().mockResolvedValue(
-				new Response(JSON.stringify({ error: 'invalid request' }), {
-					status: 400,
-					statusText: 'Bad Request',
-					headers: { 'content-type': 'application/json' }
-				})
+				new Response(
+					JSON.stringify({
+						code: 'GRAPH_UNAVAILABLE',
+						message: 'graph is rebuilding',
+						correlation_id: 'body-correlation'
+					}),
+					{
+						status: 503,
+						statusText: 'Service Unavailable',
+						headers: {
+							'content-type': 'application/json',
+							'retry-after': '30',
+							'x-correlation-id': 'response-correlation',
+							'x-request-id': 'request-123'
+						}
+					}
+				)
 			)
 		);
 
-		await expect(customFetch('/api/projects', { method: 'POST' })).rejects.toEqual(
-			new ApiError(400, 'invalid request', { error: 'invalid request' })
+		const error = await customFetch('/api/projects/test/graph', { method: 'GET' }).catch(
+			(reason: unknown) => reason
 		);
+
+		expect(error).toBeInstanceOf(ApiError);
+		expect(error).toMatchObject({
+			status: 503,
+			code: 'GRAPH_UNAVAILABLE',
+			message: 'graph is rebuilding',
+			retryAfter: '30',
+			retryAfterSeconds: 30,
+			correlationId: 'body-correlation',
+			requestId: 'request-123'
+		});
+		expect((error as ApiError).requestHeaders.get('x-correlation-id')).toBeTruthy();
+		expect((error as ApiError).responseHeaders.get('retry-after')).toBe('30');
 	});
 
 	it('preserves request signals', async () => {

@@ -1,0 +1,89 @@
+version: "0.5"
+is_strict: true
+ordered_shutdown: true
+log_level: info
+log_configuration:
+  disable_json: true
+  add_timestamp: true
+  no_metadata: false
+
+environment:
+  - "APP_ENV=${APP_ENV:-local}"
+  - "DATABASE_URL=${DATABASE_URL:-postgres://postgres:postgres@127.0.0.1:5432/deepref}"
+  - "NATS_URL=${NATS_URL:-nats://127.0.0.1:4222}"
+  - "NEO4J_URI=${NEO4J_URI:-bolt://127.0.0.1:7687}"
+  - "NEO4J_USER=${NEO4J_USER:-neo4j}"
+  - "NEO4J_PASSWORD=${NEO4J_PASSWORD:-deepref-local}"
+  - "API_BIND_ADDR=${API_BIND_ADDR:-127.0.0.1:8080}"
+  - "API_CORS_ORIGINS=${API_CORS_ORIGINS:-http://127.0.0.1:5173,http://localhost:5173}"
+  - "API_CORS_ALLOW_ANY=${API_CORS_ALLOW_ANY:-false}"
+  - "RUST_LOG=${RUST_LOG:-info}"
+
+processes:
+  api:
+    description: DeepRef Axum API
+    command: cargo run -p deepref-api -- serve
+    readiness_probe:
+      http_get:
+        host: 127.0.0.1
+        port: 8080
+        scheme: http
+        path: /health/live
+      initial_delay_seconds: 1
+      period_seconds: 2
+      timeout_seconds: 1
+      success_threshold: 1
+      failure_threshold: 60
+    availability:
+      restart: exit_on_failure
+    shutdown:
+      signal: 15
+      timeout_seconds: 40
+
+  worker:
+    description: DeepRef durable ingestion worker
+    command: cargo run -p deepref-worker
+    depends_on:
+      api:
+        condition: process_healthy
+    availability:
+      restart: exit_on_failure
+    shutdown:
+      signal: 15
+      timeout_seconds: 40
+
+  projector:
+    description: DeepRef PostgreSQL-to-Neo4j projector
+    command: cargo run -p deepref-projector -- run
+    depends_on:
+      api:
+        condition: process_healthy
+    availability:
+      restart: exit_on_failure
+    shutdown:
+      signal: 15
+      timeout_seconds: 40
+
+  web:
+    description: DeepRef SvelteKit development server
+    command: pnpm --filter @deepref/web dev --host 127.0.0.1 --port 5173
+    depends_on:
+      api:
+        condition: process_healthy
+    readiness_probe:
+      http_get:
+        host: 127.0.0.1
+        port: 5173
+        scheme: http
+        path: /
+      initial_delay_seconds: 1
+      period_seconds: 2
+      timeout_seconds: 1
+      success_threshold: 1
+      failure_threshold: 60
+    availability:
+      restart: exit_on_failure
+    success_exit_codes: [130]
+    shutdown:
+      signal: 2
+      timeout_seconds: 10

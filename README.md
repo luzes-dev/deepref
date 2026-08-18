@@ -11,49 +11,48 @@ apps/web        SvelteKit frontend
 crates/*        Rust library crates
 services/api    Rust HTTP API
 services/worker Rust ingestion worker
-infra           Local infrastructure
-docs            Architecture and API notes
-examples        Self-hosting examples
+services/projector Rust graph projector
+infra           Local dependencies and production infrastructure
+ docs            Architecture, API, operations, and acceptance
 ```
 
 ## Requirements
 
-- Node 24
-- pnpm 11.3.0
-- Rust 1.95.0
+- mise
 - Docker
 
 ## Setup
 
 ```bash
-pnpm install
-docker compose -f infra/docker-compose.yml up -d
+mise trust
+mise install
+mise exec -- just bootstrap
 ```
 
 ## Development
 
 ```bash
-pnpm run dev:web
-cargo run -p deepref-api
-cargo run -p deepref-worker
+mise exec -- just dev
 ```
 
-The API defaults to `postgres://deepref:deepref@localhost:5432/deepref` and
-`nats://localhost:4222`.
+See [Local development](docs/local-development.md) for ports, seed data, reset behavior, and the full command surface. Compose is disposable local dependency tooling only; it is not a deployment artifact.
+
+Production operations are documented in the [operations index](docs/operations/README.md). The source/apply/drill boundary is tracked in [AC-01 through AC-16](docs/acceptance/production-platform.md); repository source does not by itself mean AWS, Cloudflare, Argo, RDS, NATS, or Neo4j has been deployed or drilled. See the [documentation index](docs/README.md) for all platform references.
 
 ## Checks
 
 ```bash
-pnpm run ci
-cargo fmt --all -- --check
-cargo clippy --workspace --all-targets --locked -- -D warnings
-cargo test --workspace --locked
+mise exec -- just verify
+mise exec -- just test-unit
+mise exec -- just test-integration
+mise exec -- just test-e2e
+mise exec -- just docs-check
 ```
 
 Run the TypeScript quality audit directly with:
 
 ```bash
-pnpm run quality:ts
+mise exec -- pnpm run quality:ts
 ```
 
 ## Development Workflow
@@ -63,14 +62,9 @@ Daily work happens through pull requests into `development`. Promote tested work
 ## Containers
 
 ```bash
-pnpm run docker:build
-pnpm run compose:config
+mise exec -- just docker-build
 ```
 
-Tagged releases publish:
+Protected delivery workflows publish immutable images to ECR and promote exact signed digests through Helm and Argo CD without rebuilding them.
 
-- `ghcr.io/<owner>/deepref-api`
-- `ghcr.io/<owner>/deepref-worker`
-- `ghcr.io/<owner>/deepref-web`
-
-Merges to `development`, `staging`, and `main` publish environment-tagged images to the same repositories.
+Hosted workloads are Argo-owned. Normal release, rollback, rebuild, and configuration changes use reviewed GitOps automation; direct workload mutation is reserved for explicitly authorized break-glass incidents.

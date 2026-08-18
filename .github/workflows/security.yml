@@ -9,54 +9,129 @@ on:
     - cron: "17 3 * * 1"
 
 concurrency:
-  group: security-${{ github.workflow }}-${{ github.event.pull_request.number || github.ref }}
+  group: security-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 permissions:
   contents: read
-  security-events: write
 
 jobs:
   codeql:
-    name: CodeQL
+    name: CodeQL / ${{ matrix.language }}
     runs-on: ubuntu-latest
+    timeout-minutes: 40
+    permissions:
+      contents: read
+      security-events: write
     strategy:
       fail-fast: false
       matrix:
         language: [rust, javascript-typescript]
     steps:
-      - uses: actions/checkout@v7
-      - uses: github/codeql-action/init@v4.37.3
+      - name: Checkout trusted source
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - name: Initialize CodeQL
+        uses: github/codeql-action/init@28deaeda66b76a949646a63ec01825cc03e8ab1b # v3.28.10
         with:
           languages: ${{ matrix.language }}
-      - uses: github/codeql-action/analyze@v4.37.3
+      - name: Analyze
+        uses: github/codeql-action/analyze@28deaeda66b76a949646a63ec01825cc03e8ab1b # v3.28.10
 
   dependencies:
-    name: Dependency Scans
+    name: Dependency policy
     runs-on: ubuntu-latest
+    timeout-minutes: 30
     steps:
-      - uses: actions/checkout@v7
-      - uses: actions-rust-lang/setup-rust-toolchain@v1
+      - name: Checkout trusted source
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
-          toolchain: 1.95.0
-          rustflags: ""
-      - uses: pnpm/action-setup@v6
+          persist-credentials: false
+      - name: Install pinned Rust toolchain and auditors
+        run: |
+          rustup toolchain install 1.95.0 --profile minimal
+          rustup override set 1.95.0
+          cargo install --locked cargo-audit --version 0.22.0
+          cargo install --locked cargo-deny --version 0.18.4
+      - run: cargo audit --deny warnings
+      - run: cargo deny --locked check
+      - name: Set up pnpm
+        uses: pnpm/action-setup@f2b2b233b538f500472c7274c7012f57857d8ce0 # v4.1.0
         with:
           version: 11.3.0
-      - uses: actions/setup-node@v7
+      - name: Set up Node.js
+        uses: actions/setup-node@1e60f620b9541dca151540678f0b70b4003d8bda # v4.0.3
         with:
-          node-version: 24
+          node-version: 24.4.1
           cache: pnpm
-      - uses: EmbarkStudios/cargo-deny-action@v2
-      - uses: actions-rust-lang/audit@v1
-        with:
-          createIssues: false
       - run: pnpm install --frozen-lockfile
       - run: pnpm audit --audit-level high
 
-  fallow-security:
-    name: Fallow Security Candidates
+  repository-policy:
+    name: Workflow and shell policy
     runs-on: ubuntu-latest
+    timeout-minutes: 20
     steps:
-      - uses: actions/checkout@v7
-      - run: npx fallow security --workspace apps/web --surface --format json --quiet
+      - name: Checkout trusted source
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - name: Require immutable action references with version comments
+        run: |
+          python3 - <<'PY'
+          import pathlib, re, sys
+
+          bad = []
+          pattern = re.compile(r"^\s*-?\s*uses:\s*([^\s#]+)(?:\s+#\s*(\S.*))?$")
+          for path in pathlib.Path(".github/workflows").glob("*.y*ml"):
+              for number, line in enumerate(path.read_text().splitlines(), 1):
+                  match = pattern.match(line)
+                  if not match:
+                      continue
+                  action, comment = match.groups()
+                  if action.startswith("./"):
+                      continue
+                  ref = action.rsplit("@", 1)[-1]
+                  if not re.fullmatch(r"[0-9a-f]{40}", ref) or not comment:
+                      bad.append(f"{path}:{number}: {line.strip()}")
+          if bad:
+              print("Every external action must use a 40-character SHA and version comment:", file=sys.stderr)
+              print("\n".join(bad), file=sys.stderr)
+              sys.exit(1)
+          PY
+      - name: Run actionlint and ShellCheck
+        run: |
+          go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.7
+          mapfile -t scripts < <(git ls-files '*.sh')
+          if [ "${#scripts[@]}" -gt 0 ]; then shellcheck "${scripts[@]}"; fi
+      - name: Run workflow security analysis
+        run: |
+          pipx run --spec zizmor==1.11.0 zizmor --pedantic .github/workflows
+
+  configuration:
+    name: IaC and container configuration scan
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      security-events: write
+    steps:
+      - name: Checkout trusted source
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - name: Scan configuration
+        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        with:
+          scan-type: config
+          scan-ref: .
+          format: sarif
+          output: trivy-config.sarif
+          severity: HIGH,CRITICAL
+          exit-code: "1"
+      - name: Upload configuration findings
+        if: always() && hashFiles('trivy-config.sarif') != ''
+        uses: github/codeql-action/upload-sarif@28deaeda66b76a949646a63ec01825cc03e8ab1b # v3.28.10
+        with:
+          sarif_file: trivy-config.sarif

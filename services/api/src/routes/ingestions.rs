@@ -1,16 +1,17 @@
 use axum::{
     Json,
-    extract::{Path, State},
+    extract::{Path, Query, State},
     http::StatusCode,
 };
 use chrono::{DateTime, Utc};
 use deepref_core::{IngestionStatus, normalize_doi};
-use deepref_events::{EventEnvelope, SUBJECT_WORK_FETCH_REQUESTED, WorkFetchRequested};
+use deepref_events::{EntityType, EventEnvelope, SUBJECT_WORK_FETCH_REQUESTED, WorkFetchRequested};
 use serde::{Deserialize, Serialize};
 use sqlx::Row;
 use utoipa::ToSchema;
 use uuid::Uuid;
 
+use super::pagination::{PaginatedResponse, PaginationParams, page};
 use crate::{
     error::{ApiError, ErrorResponse},
     outbox,
@@ -71,7 +72,7 @@ impl CreateIngestion {
     }
 }
 
-#[derive(Debug, Serialize, ToSchema)]
+#[derive(Debug, Clone, Serialize, ToSchema)]
 pub(crate) struct IngestionDto {
     pub(crate) id: Uuid,
     pub(crate) project_id: Uuid,
@@ -86,7 +87,7 @@ pub(crate) struct IngestionDto {
     pub(crate) completed_at: Option<DateTime<Utc>>,
 }
 
-#[derive(Debug, Serialize, ToSchema)]
+#[derive(Debug, Clone, Serialize, ToSchema)]
 pub(crate) struct IngestionItemDto {
     doi: String,
     depth: i32,
@@ -116,6 +117,16 @@ pub(crate) async fn create_ingestion(
     Json(input): Json<CreateIngestion>,
 ) -> Result<(StatusCode, Json<IngestionDto>), ApiError> {
     let input = input.validate()?;
+    let crossref_mailto: String =
+        sqlx::query_scalar("SELECT crossref_mailto FROM settings WHERE id=1")
+            .fetch_optional(&state.pool)
+            .await?
+            .unwrap_or_default();
+    if !valid_email(&crossref_mailto) {
+        return Err(ApiError::Configuration(
+            "a valid Crossref mail address must be configured before creating an ingestion".into(),
+        ));
+    }
     let ingestion_id = Uuid::new_v4();
     let max_depth = match input.max_depth {
         Some(value) => value,
@@ -147,38 +158,47 @@ pub(crate) async fn create_ingestion(
     .fetch_one(&mut *tx)
     .await?;
 
-    for doi in &input.seed_dois {
+    for doi in input.seed_dois {
+        let revision: i64 = sqlx::query_scalar("SELECT nextval('graph_domain_revision_seq')")
+            .fetch_one(&mut *tx)
+            .await?;
+        let event = EventEnvelope::v1(
+            SUBJECT_WORK_FETCH_REQUESTED,
+            "deepref.api",
+            EntityType::Work,
+            format!("{ingestion_id}|{doi}"),
+            revision,
+            ingestion_id,
+            None,
+            WorkFetchRequested {
+                project_id: input.project_id,
+                ingestion_id,
+                doi: doi.clone(),
+                depth: 0,
+                max_depth,
+                parent_doi: None,
+            },
+        );
         sqlx::query(
             r#"
-            INSERT INTO ingestion_items (ingestion_id, project_id, canonical_doi, depth, parent_doi, status)
-            VALUES ($1, $2, $3, 0, NULL, 'queued')
+            INSERT INTO ingestion_items (ingestion_id, project_id, canonical_doi, depth, parent_doi, status, work_event_id)
+            VALUES ($1, $2, $3, 0, NULL, 'queued', $4)
             ON CONFLICT (ingestion_id, canonical_doi) DO NOTHING
             "#,
         )
         .bind(ingestion_id)
         .bind(input.project_id)
         .bind(doi)
+        .bind(event.event_id)
         .execute(&mut *tx)
         .await?;
-    }
-    for doi in input.seed_dois {
-        let payload = WorkFetchRequested {
-            project_id: input.project_id,
-            ingestion_id,
-            doi: doi.clone(),
-            depth: 0,
-            max_depth,
-            parent_doi: None,
-        };
-        let event = EventEnvelope::new(
+        outbox::enqueue(
+            &mut tx,
+            event.event_id,
             SUBJECT_WORK_FETCH_REQUESTED,
-            "deepref.api",
-            format!("doi:{doi}"),
-            ingestion_id,
-            None,
-            payload,
-        );
-        outbox::enqueue(&mut tx, event.id, SUBJECT_WORK_FETCH_REQUESTED, &event).await?;
+            &event,
+        )
+        .await?;
     }
     tx.commit().await?;
 
@@ -191,23 +211,33 @@ pub(crate) async fn create_ingestion(
     operation_id = "listIngestions",
     tag = "ingestions",
     responses(
-        (status = 200, description = "Ingestions ordered newest first", body = [IngestionDto]),
+        (status = 200, description = "Ingestions ordered newest first", body = PaginatedResponse<IngestionDto>),
         (status = 500, description = "Internal server error", body = ErrorResponse)
     )
 )]
 pub(crate) async fn list_ingestions(
     State(state): State<AppState>,
-) -> Result<Json<Vec<IngestionDto>>, ApiError> {
+    Query(pagination): Query<PaginationParams>,
+) -> Result<Json<PaginatedResponse<IngestionDto>>, ApiError> {
+    let limit = pagination.limit()?;
+    let cursor: Option<(DateTime<Utc>, Uuid)> = pagination.decode()?;
     let rows = sqlx::query(
         r#"
         SELECT id, project_id, status, max_depth, seed_count, queued_count, fetched_count,
                failed_count, created_at, started_at, completed_at
-        FROM ingestions ORDER BY created_at DESC
+        FROM ingestions WHERE ($1::timestamptz IS NULL OR (created_at,id)<($1,$2))
+        ORDER BY created_at DESC,id DESC LIMIT $3
         "#,
     )
+    .bind(cursor.as_ref().map(|value| value.0))
+    .bind(cursor.as_ref().map(|value| value.1))
+    .bind(limit + 1)
     .fetch_all(&state.pool)
     .await?;
-    Ok(Json(rows.into_iter().map(ingestion_from_row).collect()))
+    let items = rows.into_iter().map(ingestion_from_row).collect();
+    Ok(Json(page(items, limit as usize, |item| {
+        (item.created_at, item.id)
+    })?))
 }
 
 #[utoipa::path(
@@ -269,26 +299,43 @@ pub(crate) async fn cancel_ingestion(
     tag = "ingestions",
     params(("ingestion_id" = Uuid, Path, description = "Ingestion identifier")),
     responses(
-        (status = 200, description = "Ingestion items", body = [IngestionItemDto]),
+        (status = 200, description = "Ingestion items", body = PaginatedResponse<IngestionItemDto>),
         (status = 500, description = "Internal server error", body = ErrorResponse)
     )
 )]
 pub(crate) async fn list_ingestion_items(
     State(state): State<AppState>,
     Path(ingestion_id): Path<Uuid>,
-) -> Result<Json<Vec<IngestionItemDto>>, ApiError> {
+    Query(pagination): Query<PaginationParams>,
+) -> Result<Json<PaginatedResponse<IngestionItemDto>>, ApiError> {
+    let limit = pagination.limit()?;
+    let cursor: Option<(DateTime<Utc>, String)> = pagination.decode()?;
     let rows = sqlx::query(
         r#"
         SELECT canonical_doi, depth, parent_doi, status, attempts, last_error, queued_at, fetched_at
-        FROM ingestion_items WHERE ingestion_id = $1 ORDER BY queued_at DESC
+        FROM ingestion_items WHERE ingestion_id = $1
+          AND ($2::timestamptz IS NULL OR (queued_at,canonical_doi)<($2,$3))
+        ORDER BY queued_at DESC,canonical_doi DESC LIMIT $4
         "#,
     )
     .bind(ingestion_id)
+    .bind(cursor.as_ref().map(|value| value.0))
+    .bind(cursor.as_ref().map(|value| value.1.clone()))
+    .bind(limit + 1)
     .fetch_all(&state.pool)
     .await?;
-    Ok(Json(
-        rows.into_iter().map(ingestion_item_from_row).collect(),
-    ))
+    let items = rows.into_iter().map(ingestion_item_from_row).collect();
+    Ok(Json(page(items, limit as usize, |item| {
+        (item.queued_at, item.doi.clone())
+    })?))
+}
+
+fn valid_email(value: &str) -> bool {
+    let value = value.trim();
+    let Some((local, domain)) = value.split_once('@') else {
+        return false;
+    };
+    !local.is_empty() && domain.contains('.') && !domain.starts_with('.') && !domain.ends_with('.')
 }
 
 pub(crate) fn ingestion_from_row(row: sqlx::postgres::PgRow) -> IngestionDto {
@@ -352,5 +399,11 @@ mod tests {
             .validate()
             .is_err()
         );
+    }
+
+    #[test]
+    fn validates_crossref_email_shape() {
+        assert!(valid_email("ops@example.com"));
+        assert!(!valid_email("blank"));
     }
 }

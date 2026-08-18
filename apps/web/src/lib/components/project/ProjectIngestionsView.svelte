@@ -8,6 +8,7 @@
 	import { Button } from '$lib/components/ui/button';
 	import * as NumberField from '$lib/components/ui/number-field';
 	import { Skeleton } from '$lib/components/ui/skeleton';
+	import PaginationLoadMore from '$lib/components/PaginationLoadMore.svelte';
 	import { statusVariant } from '$lib/api/helpers';
 	import { createCreateIngestion } from '$lib/api/generated/ingestions/ingestions';
 	import CircleAlertIcon from '@lucide/svelte/icons/circle-alert';
@@ -164,6 +165,15 @@
 						{/each}
 					</Table.Body>
 				</Table.Root>
+				<div class="border-t p-4">
+					<PaginationLoadMore
+						hasNextPage={workspace.ingestionsHasNextPage}
+						isLoading={workspace.ingestionsLoadingMore}
+						loadedCount={workspace.ingestions.length}
+						label="project runs"
+						onLoadMore={workspace.loadMoreIngestions}
+					/>
+				</div>
 			</div>
 		{/if}
 	</section>

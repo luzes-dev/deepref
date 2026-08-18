@@ -1,0 +1,84 @@
+apiVersion: batch/v1
+kind: Job
+metadata:
+  name: {{ include "deepref.componentName" (dict "root" . "component" "nats-bootstrap") }}
+  namespace: {{ include "deepref.namespace" . }}
+  labels:
+    {{- include "deepref.labels" . | nindent 4 }}
+    app.kubernetes.io/component: nats-bootstrap
+  annotations:
+    argocd.argoproj.io/hook: Sync
+    argocd.argoproj.io/hook-delete-policy: BeforeHookCreation,HookSucceeded
+    argocd.argoproj.io/sync-wave: "-10"
+spec:
+  backoffLimit: 3
+  activeDeadlineSeconds: {{ .Values.nats.bootstrap.activeDeadlineSeconds }}
+  ttlSecondsAfterFinished: 86400
+  template:
+    metadata:
+      labels:
+        {{- include "deepref.selectorLabels" (dict "root" . "component" "nats-bootstrap") | nindent 8 }}
+    spec:
+      restartPolicy: OnFailure
+      serviceAccountName: {{ .Values.serviceAccounts.natsAdmin }}
+      automountServiceAccountToken: false
+      terminationGracePeriodSeconds: 30
+      securityContext:
+        {{- include "deepref.podSecurityContext" . | nindent 8 }}
+        fsGroup: 1000
+      {{- include "deepref.imagePullSecrets" . | nindent 6 }}
+      {{- include "deepref.topology" (dict "root" . "component" "nats-bootstrap") | nindent 6 }}
+      containers:
+        - name: bootstrap
+          image: {{ include "deepref.image" (dict "name" "natsBox" "image" .Values.images.natsBox) }}
+          imagePullPolicy: {{ .Values.global.imagePullPolicy }}
+          command: ["/bin/sh", "-ec"]
+          args:
+            - |
+              request() {
+                subject=$1
+                payload=$2
+                response=$(nats --server "$NATS_URL" --creds "$NATS_CREDENTIALS_FILE" --tlsca "$NATS_CA_FILE" request --raw --timeout 20s "$subject" "$payload")
+                echo "$response" | jq -e 'if .error then error(.error.description) else . end' >/dev/null
+              }
+
+              upsert_stream() {
+                name=$1
+                payload=$2
+                if nats --server "$NATS_URL" --creds "$NATS_CREDENTIALS_FILE" --tlsca "$NATS_CA_FILE" stream info "$name" --json >/dev/null 2>&1; then
+                  action=UPDATE
+                else
+                  action=CREATE
+                fi
+                request "\$JS.API.STREAM.${action}.${name}" "$payload"
+              }
+
+              upsert_stream DEEPREF_WORK '{"name":"DEEPREF_WORK","subjects":["work.fetch.requested.v1"],"retention":"workqueue","storage":"file","discard":"old","num_replicas":{{ .Values.nats.replicas }},"duplicate_window":120000000000}'
+              upsert_stream DEEPREF_DOMAIN '{"name":"DEEPREF_DOMAIN","subjects":["domain.>","projection.>"],"retention":"limits","storage":"file","discard":"old","max_age":2592000000000000,"num_replicas":{{ .Values.nats.replicas }},"duplicate_window":120000000000}'
+              upsert_stream DEEPREF_DLQ '{"name":"DEEPREF_DLQ","subjects":["dlq.recorded.v1"],"retention":"limits","storage":"file","discard":"old","max_age":7776000000000000,"num_replicas":{{ .Values.nats.replicas }},"duplicate_window":120000000000}'
+              request '$JS.API.CONSUMER.DURABLE.CREATE.DEEPREF_WORK.deepref-worker' '{"stream_name":"DEEPREF_WORK","config":{"durable_name":"deepref-worker","name":"deepref-worker","deliver_policy":"all","ack_policy":"explicit","ack_wait":1800000000000,"max_deliver":5,"backoff":[5000000000,30000000000,120000000000,600000000000,1800000000000],"filter_subject":"work.fetch.requested.v1","replay_policy":"instant","max_ack_pending":1024}}'
+              request '$JS.API.CONSUMER.DURABLE.CREATE.DEEPREF_DOMAIN.deepref-projector' '{"stream_name":"DEEPREF_DOMAIN","config":{"durable_name":"deepref-projector","name":"deepref-projector","deliver_policy":"all","ack_policy":"explicit","ack_wait":1800000000000,"max_deliver":5,"backoff":[5000000000,30000000000,120000000000,600000000000,1800000000000],"filter_subject":"domain.>","replay_policy":"instant","max_ack_pending":1024}}'
+          env:
+            - {name: HOME, value: /tmp}
+            - {name: XDG_CONFIG_HOME, value: /tmp}
+            - name: NATS_URL
+              value: tls://{{ include "deepref.componentName" (dict "root" . "component" "nats") }}:4222
+            - {name: NATS_CREDENTIALS_FILE, value: /var/run/secrets/deepref/nats/credentials}
+            - {name: NATS_CA_FILE, value: /var/run/secrets/deepref/nats-ca/ca.crt}
+          securityContext:
+            {{- include "deepref.containerSecurityContext" . | nindent 12 }}
+            runAsUser: 1000
+            runAsGroup: 1000
+          volumeMounts:
+            - {name: tmp, mountPath: /tmp}
+            - {name: credentials, mountPath: /var/run/secrets/deepref/nats, readOnly: true}
+            - {name: ca, mountPath: /var/run/secrets/deepref/nats-ca, readOnly: true}
+          resources: {{- toYaml .Values.nats.bootstrap.resources | nindent 12 }}
+      volumes:
+        - {name: tmp, emptyDir: {sizeLimit: 64Mi}}
+        - name: credentials
+          secret:
+            secretName: {{ include "deepref.componentName" (dict "root" . "component" "nats-admin") }}
+        - name: ca
+          secret:
+            secretName: {{ include "deepref.componentName" (dict "root" . "component" "nats-tls") }}

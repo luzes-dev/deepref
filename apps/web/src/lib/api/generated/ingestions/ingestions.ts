@@ -18,7 +18,13 @@ import type {
 	QueryKey
 } from '@tanstack/svelte-query';
 
-import type { CreateIngestion, ErrorResponse, IngestionDto, IngestionItemDto } from '../models';
+import type {
+	ApiErrorBody,
+	CreateIngestion,
+	IngestionDto,
+	PaginatedResponseIngestionDto,
+	PaginatedResponseIngestionItemDto
+} from '../models';
 
 import { customFetch } from '../../custom-fetch.ts';
 import type { ErrorType, BodyType } from '../../custom-fetch.ts';
@@ -26,12 +32,12 @@ import type { ErrorType, BodyType } from '../../custom-fetch.ts';
 type SecondParameter<T extends (...args: never) => unknown> = Parameters<T>[1];
 
 export type listIngestionsResponse200 = {
-	data: IngestionDto[];
+	data: PaginatedResponseIngestionDto;
 	status: 200;
 };
 
 export type listIngestionsResponse500 = {
-	data: ErrorResponse;
+	data: ApiErrorBody;
 	status: 500;
 };
 
@@ -61,7 +67,7 @@ export const getListIngestionsQueryKey = () => {
 
 export const getListIngestionsQueryOptions = <
 	TData = Awaited<ReturnType<typeof listIngestions>>,
-	TError = ErrorType<ErrorResponse>
+	TError = ErrorType<ApiErrorBody>
 >(options?: {
 	query?: Partial<CreateQueryOptions<Awaited<ReturnType<typeof listIngestions>>, TError, TData>>;
 	request?: SecondParameter<typeof customFetch>;
@@ -81,11 +87,11 @@ export const getListIngestionsQueryOptions = <
 };
 
 export type ListIngestionsQueryResult = NonNullable<Awaited<ReturnType<typeof listIngestions>>>;
-export type ListIngestionsQueryError = ErrorType<ErrorResponse>;
+export type ListIngestionsQueryError = ErrorType<ApiErrorBody>;
 
 export function createListIngestions<
 	TData = Awaited<ReturnType<typeof listIngestions>>,
-	TError = ErrorType<ErrorResponse>
+	TError = ErrorType<ApiErrorBody>
 >(
 	options?: () => {
 		query?: Partial<
@@ -105,7 +111,7 @@ export function createListIngestions<
 
 export const prefetchListIngestionsQuery = async <
 	TData = Awaited<ReturnType<typeof listIngestions>>,
-	TError = ErrorType<ErrorResponse>
+	TError = ErrorType<ApiErrorBody>
 >(
 	queryClient: QueryClient,
 	options?: {
@@ -128,17 +134,17 @@ export type createIngestionResponse201 = {
 };
 
 export type createIngestionResponse400 = {
-	data: ErrorResponse;
+	data: ApiErrorBody;
 	status: 400;
 };
 
 export type createIngestionResponse404 = {
-	data: ErrorResponse;
+	data: ApiErrorBody;
 	status: 404;
 };
 
 export type createIngestionResponse500 = {
-	data: ErrorResponse;
+	data: ApiErrorBody;
 	status: 500;
 };
 
@@ -168,7 +174,7 @@ export const createIngestion = async (
 };
 
 export const getCreateIngestionMutationOptions = <
-	TError = ErrorType<ErrorResponse>,
+	TError = ErrorType<ApiErrorBody>,
 	TContext = unknown
 >(
 	queryClient: QueryClient,
@@ -223,9 +229,9 @@ export type CreateIngestionMutationResult = NonNullable<
 	Awaited<ReturnType<typeof createIngestion>>
 >;
 export type CreateIngestionMutationBody = BodyType<CreateIngestion>;
-export type CreateIngestionMutationError = ErrorType<ErrorResponse>;
+export type CreateIngestionMutationError = ErrorType<ApiErrorBody>;
 
-export const createCreateIngestion = <TError = ErrorType<ErrorResponse>, TContext = unknown>(
+export const createCreateIngestion = <TError = ErrorType<ApiErrorBody>, TContext = unknown>(
 	options?: () => {
 		mutation?: CreateMutationOptions<
 			Awaited<ReturnType<typeof createIngestion>>,
@@ -255,12 +261,12 @@ export type getIngestionResponse200 = {
 };
 
 export type getIngestionResponse404 = {
-	data: ErrorResponse;
+	data: ApiErrorBody;
 	status: 404;
 };
 
 export type getIngestionResponse500 = {
-	data: ErrorResponse;
+	data: ApiErrorBody;
 	status: 500;
 };
 
@@ -291,7 +297,7 @@ export const getGetIngestionQueryKey = (ingestionId: string) => {
 
 export const getGetIngestionQueryOptions = <
 	TData = Awaited<ReturnType<typeof getIngestion>>,
-	TError = ErrorType<ErrorResponse>
+	TError = ErrorType<ApiErrorBody>
 >(
 	ingestionId: string,
 	options?: {
@@ -319,11 +325,11 @@ export const getGetIngestionQueryOptions = <
 };
 
 export type GetIngestionQueryResult = NonNullable<Awaited<ReturnType<typeof getIngestion>>>;
-export type GetIngestionQueryError = ErrorType<ErrorResponse>;
+export type GetIngestionQueryError = ErrorType<ApiErrorBody>;
 
 export function createGetIngestion<
 	TData = Awaited<ReturnType<typeof getIngestion>>,
-	TError = ErrorType<ErrorResponse>
+	TError = ErrorType<ApiErrorBody>
 >(
 	ingestionId: () => string,
 	options?: () => {
@@ -344,7 +350,7 @@ export function createGetIngestion<
 
 export const prefetchGetIngestionQuery = async <
 	TData = Awaited<ReturnType<typeof getIngestion>>,
-	TError = ErrorType<ErrorResponse>
+	TError = ErrorType<ApiErrorBody>
 >(
 	queryClient: QueryClient,
 	ingestionId: string,
@@ -368,7 +374,7 @@ export type cancelIngestionResponse202 = {
 };
 
 export type cancelIngestionResponse500 = {
-	data: ErrorResponse;
+	data: ApiErrorBody;
 	status: 500;
 };
 
@@ -394,7 +400,7 @@ export const cancelIngestion = async (
 };
 
 export const getCancelIngestionMutationOptions = <
-	TError = ErrorType<ErrorResponse>,
+	TError = ErrorType<ApiErrorBody>,
 	TContext = unknown
 >(
 	queryClient: QueryClient,
@@ -455,9 +461,9 @@ export type CancelIngestionMutationResult = NonNullable<
 	Awaited<ReturnType<typeof cancelIngestion>>
 >;
 
-export type CancelIngestionMutationError = ErrorType<ErrorResponse>;
+export type CancelIngestionMutationError = ErrorType<ApiErrorBody>;
 
-export const createCancelIngestion = <TError = ErrorType<ErrorResponse>, TContext = unknown>(
+export const createCancelIngestion = <TError = ErrorType<ApiErrorBody>, TContext = unknown>(
 	options?: () => {
 		mutation?: CreateMutationOptions<
 			Awaited<ReturnType<typeof cancelIngestion>>,
@@ -482,12 +488,12 @@ export const createCancelIngestion = <TError = ErrorType<ErrorResponse>, TContex
 	);
 };
 export type listIngestionItemsResponse200 = {
-	data: IngestionItemDto[];
+	data: PaginatedResponseIngestionItemDto;
 	status: 200;
 };
 
 export type listIngestionItemsResponse500 = {
-	data: ErrorResponse;
+	data: ApiErrorBody;
 	status: 500;
 };
 
@@ -518,7 +524,7 @@ export const getListIngestionItemsQueryKey = (ingestionId: string) => {
 
 export const getListIngestionItemsQueryOptions = <
 	TData = Awaited<ReturnType<typeof listIngestionItems>>,
-	TError = ErrorType<ErrorResponse>
+	TError = ErrorType<ApiErrorBody>
 >(
 	ingestionId: string,
 	options?: {
@@ -548,11 +554,11 @@ export const getListIngestionItemsQueryOptions = <
 export type ListIngestionItemsQueryResult = NonNullable<
 	Awaited<ReturnType<typeof listIngestionItems>>
 >;
-export type ListIngestionItemsQueryError = ErrorType<ErrorResponse>;
+export type ListIngestionItemsQueryError = ErrorType<ApiErrorBody>;
 
 export function createListIngestionItems<
 	TData = Awaited<ReturnType<typeof listIngestionItems>>,
-	TError = ErrorType<ErrorResponse>
+	TError = ErrorType<ApiErrorBody>
 >(
 	ingestionId: () => string,
 	options?: () => {
@@ -573,7 +579,7 @@ export function createListIngestionItems<
 
 export const prefetchListIngestionItemsQuery = async <
 	TData = Awaited<ReturnType<typeof listIngestionItems>>,
-	TError = ErrorType<ErrorResponse>
+	TError = ErrorType<ApiErrorBody>
 >(
 	queryClient: QueryClient,
 	ingestionId: string,

@@ -6,8 +6,11 @@
  */
 import type { ArticleDto } from './articleDto.ts';
 import type { GraphEdgeDto } from './graphEdgeDto.ts';
+import type { ProjectionMetadata } from './projectionMetadata.ts';
 
 export interface ProjectGraphDto {
 	edges: GraphEdgeDto[];
 	nodes: ArticleDto[];
+	projection: ProjectionMetadata;
+	truncated: boolean;
 }

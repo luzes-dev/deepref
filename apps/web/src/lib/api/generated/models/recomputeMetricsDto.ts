@@ -6,6 +6,7 @@
  */
 
 export interface RecomputeMetricsDto {
+	event_id: string;
 	project_id: string;
 	status: string;
 }

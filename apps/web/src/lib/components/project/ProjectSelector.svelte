@@ -4,6 +4,7 @@
 	import * as Drawer from '$lib/components/ui/drawer';
 	import * as Popover from '$lib/components/ui/popover';
 	import { Button } from '$lib/components/ui/button';
+	import PaginationLoadMore from '$lib/components/PaginationLoadMore.svelte';
 	import { IsMobile } from '$lib/hooks/is-mobile.svelte';
 	import { cn } from '$lib/utils';
 	import type { ComponentProps } from 'svelte';
@@ -71,6 +72,15 @@
 					</Command.Item>
 				{/each}
 			</Command.Group>
+			<div class="border-t p-2">
+				<PaginationLoadMore
+					hasNextPage={workspace.projectsHasNextPage}
+					isLoading={workspace.projectsLoadingMore}
+					loadedCount={workspace.projects.length}
+					label="projects"
+					onLoadMore={workspace.loadMoreProjects}
+				/>
+			</div>
 			<Command.Separator />
 			<Command.Group>
 				<Command.Item value="Create project" onSelect={workspace.openCreateFromSelector}>

@@ -1,0 +1,162 @@
+name: Promote Staging
+
+on:
+  workflow_dispatch:
+    inputs:
+      manifest_reference:
+        description: Digest-pinned development release manifest OCI reference
+        required: true
+        type: string
+      release_tree:
+        description: Tested 40-character Git tree hash
+        required: true
+        type: string
+
+concurrency:
+  group: promote-staging
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  id-token: write
+
+env:
+  AWS_REGION: sa-east-1
+
+jobs:
+  promote:
+    name: Copy exact development release and propose staging
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    environment: staging-promotion
+    steps:
+      - name: Require immutable inputs
+        env:
+          MANIFEST_REFERENCE: ${{ inputs.manifest_reference }}
+          RELEASE_TREE: ${{ inputs.release_tree }}
+        run: |
+          [[ "$MANIFEST_REFERENCE" =~ @sha256:[0-9a-f]{64}$ ]] || { echo 'manifest_reference must be digest-pinned' >&2; exit 1; }
+          [[ "$RELEASE_TREE" =~ ^[0-9a-f]{40}$ ]] || { echo 'release_tree must be a Git tree hash' >&2; exit 1; }
+      - name: Checkout trusted source automation
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+          ref: development
+      - name: Assume cross-account staging promotion role
+        uses: aws-actions/configure-aws-credentials@7474bc4690e29a8392af63c5b98e7449536d5c3a # v4.3.1
+        with:
+          aws-region: ${{ env.AWS_REGION }}
+          role-to-assume: ${{ vars.AWS_PROMOTION_ROLE_ARN }}
+          role-session-name: deepref-staging-${{ github.run_id }}
+      - name: Set up ORAS
+        uses: oras-project/setup-oras@22ce207df3b08e061f537244349aac6ae1d214f6 # v1.2.4
+        with:
+          version: 1.3.0
+      - name: Set up Cosign
+        uses: sigstore/cosign-installer@d58896d6a1865668819e1d91763c7751a165e159 # v3.9.2
+        with:
+          cosign-release: v2.5.3
+      - name: Install pinned release tooling
+        run: |
+          set -euo pipefail
+          python3 -m pip install --disable-pip-version-check jsonschema==4.25.1 PyYAML==6.0.2
+          curl --fail --location --silent --show-error --output "$RUNNER_TEMP/regctl" \
+            https://github.com/regclient/regclient/releases/download/v0.11.5/regctl-linux-amd64
+          echo "c93aa7638749f5aaac1a8e01787321889c78f0101809bb2880343478d0ba0467  $RUNNER_TEMP/regctl" | sha256sum --check
+          chmod 0755 "$RUNNER_TEMP/regctl"
+          printf '%s\n' "$RUNNER_TEMP" >> "$GITHUB_PATH"
+      - name: Authenticate source and staging registries
+        env:
+          DESTINATION_REGISTRY: ${{ vars.AWS_ECR_REGISTRY }}
+          SOURCE_REGISTRY: ${{ vars.DEVELOPMENT_ECR_REGISTRY }}
+        run: |
+          set -euo pipefail
+          password="$(aws ecr get-login-password --region "$AWS_REGION")"
+          printf '%s' "$password" | oras login --username AWS --password-stdin "$SOURCE_REGISTRY"
+          printf '%s' "$password" | oras login --username AWS --password-stdin "$DESTINATION_REGISTRY"
+          printf '%s' "$password" | regctl registry login "$SOURCE_REGISTRY" --user AWS --pass-stdin
+          printf '%s' "$password" | regctl registry login "$DESTINATION_REGISTRY" --user AWS --pass-stdin
+      - name: Verify and pull the signed manifest
+        env:
+          MANIFEST_REFERENCE: ${{ inputs.manifest_reference }}
+        run: |
+          set -euo pipefail
+          cosign verify \
+            --certificate-identity-regexp "^https://github.com/${GITHUB_REPOSITORY}/.github/workflows/release.yml@" \
+            --certificate-oidc-issuer https://token.actions.githubusercontent.com \
+            "$MANIFEST_REFERENCE" >/dev/null
+          mkdir -p "$RUNNER_TEMP/release"
+          oras pull "$MANIFEST_REFERENCE" --output "$RUNNER_TEMP/release"
+          test -f "$RUNNER_TEMP/release/release-manifest.json"
+          test "$(jq -r .source.tree "$RUNNER_TEMP/release/release-manifest.json")" = "${{ inputs.release_tree }}"
+      - name: Copy the complete OCI release without rebuilding
+        env:
+          DESTINATION_REGISTRY: ${{ vars.AWS_ECR_REGISTRY }}
+          REPOSITORY_PREFIX: ${{ vars.ECR_REPOSITORY_PREFIX }}
+        run: |
+          scripts/ci/copy-oci-release.sh \
+            --source-manifest "$RUNNER_TEMP/release/release-manifest.json" \
+            --environment staging \
+            --destination-registry "$DESTINATION_REGISTRY" \
+            --repository-prefix "$REPOSITORY_PREFIX" \
+            --output "$RUNNER_TEMP/staging-release-lock.yaml"
+      - name: Cryptographically verify promoted subjects
+        run: |
+          set -euo pipefail
+          python3 - "$RUNNER_TEMP/staging-release-lock.yaml" <<'PY' | while IFS= read -r subject; do
+          import pathlib, sys, yaml
+          doc = yaml.safe_load(pathlib.Path(sys.argv[1]).read_text())
+          for item in [doc["chart"], *doc["images"].values()]: print(f"{item['repository']}@{item['digest']}")
+          PY
+            cosign verify --certificate-identity-regexp "^https://github.com/${GITHUB_REPOSITORY}/.github/workflows/release.yml@" \
+              --certificate-oidc-issuer https://token.actions.githubusercontent.com "$subject" >/dev/null
+          done
+          for name in api worker projector web; do
+            subject="$(python3 - "$RUNNER_TEMP/staging-release-lock.yaml" "$name" <<'PY'
+          import pathlib, sys, yaml
+          item = yaml.safe_load(pathlib.Path(sys.argv[1]).read_text())["images"][sys.argv[2]]
+          print(f"{item['repository']}@{item['digest']}")
+          PY
+            )"
+            cosign verify-attestation --type vuln \
+              --certificate-identity-regexp "^https://github.com/${GITHUB_REPOSITORY}/.github/workflows/release.yml@" \
+              --certificate-oidc-issuer https://token.actions.githubusercontent.com "$subject" >/dev/null
+          done
+      - name: Mint deployment App token
+        id: app-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          app-id: ${{ vars.DEPLOYMENT_APP_ID }}
+          private-key: ${{ secrets.DEPLOYMENT_APP_PRIVATE_KEY }}
+          repositories: ${{ github.event.repository.name }}
+          permission-contents: write
+          permission-pull-requests: write
+      - name: Checkout protected GitOps branch
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          path: gitops
+          persist-credentials: false
+          ref: gitops
+          token: ${{ steps.app-token.outputs.token }}
+      - name: Require deployed development identity and open staging PR
+        env:
+          APP_SLUG: ${{ steps.app-token.outputs.app-slug }}
+          APP_TOKEN: ${{ steps.app-token.outputs.token }}
+          RELEASE_TREE: ${{ inputs.release_tree }}
+        run: |
+          set -euo pipefail
+          scripts/ci/verify-release-digests.sh \
+            --source-manifest "$RUNNER_TEMP/release/release-manifest.json" \
+            gitops/environments/development/release-lock.yaml
+          cd gitops
+          branch="deploy/staging/$RELEASE_TREE"
+          git switch -c "$branch"
+          cp "$RUNNER_TEMP/staging-release-lock.yaml" environments/staging/release-lock.yaml
+          git add environments/staging/release-lock.yaml
+          git -c user.name="${APP_SLUG}[bot]" -c user.email="${APP_SLUG}[bot]@users.noreply.github.com" \
+            commit -m "deploy(staging): tree $RELEASE_TREE"
+          auth="$(printf 'x-access-token:%s' "$APP_TOKEN" | base64 -w0)"
+          git -c http.extraheader="AUTHORIZATION: basic $auth" push origin "HEAD:refs/heads/$branch"
+          export GH_TOKEN="$APP_TOKEN"
+          gh pr create --base gitops --head "$branch" --title "deploy(staging): tree $RELEASE_TREE" \
+            --body "Promotes the exact signed development release. One staging approval is required."

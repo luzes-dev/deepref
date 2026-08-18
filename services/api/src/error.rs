@@ -1,59 +1,112 @@
 use axum::{
     Json,
-    http::StatusCode,
+    http::{HeaderValue, StatusCode, header},
     response::{IntoResponse, Response},
 };
 use serde::Serialize;
 use utoipa::ToSchema;
+use uuid::Uuid;
 
-#[derive(Debug, Serialize, ToSchema)]
-pub(crate) struct ErrorResponse {
-    pub(crate) error: String,
+#[derive(Debug, Clone, Serialize, ToSchema)]
+pub struct ApiErrorBody {
+    pub code: String,
+    pub message: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub correlation_id: Option<Uuid>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    #[schema(value_type = Option<Object>)]
+    pub details: Option<serde_json::Value>,
 }
 
-#[derive(Debug)]
-pub(crate) enum ApiError {
-    Db(sqlx::Error),
+#[derive(Debug, thiserror::Error)]
+pub enum ApiError {
+    #[error("database operation failed")]
+    Database(#[from] sqlx::Error),
+    #[error("{0}")]
     BadRequest(String),
-    Json(serde_json::Error),
-    Doi(deepref_core::DoiError),
+    #[error("{0}")]
+    NotFound(String),
+    #[error("{0}")]
+    Configuration(String),
+    #[error("graph read model is unavailable")]
+    GraphUnavailable { retry_after_seconds: u64 },
+    #[error("invalid JSON payload")]
+    Json(#[from] serde_json::Error),
+    #[error("invalid DOI: {0}")]
+    Doi(#[from] deepref_core::DoiError),
 }
 
-impl From<sqlx::Error> for ApiError {
-    fn from(error: sqlx::Error) -> Self {
-        Self::Db(error)
-    }
-}
-
-impl From<serde_json::Error> for ApiError {
-    fn from(error: serde_json::Error) -> Self {
-        Self::Json(error)
-    }
-}
-
-impl From<deepref_core::DoiError> for ApiError {
-    fn from(error: deepref_core::DoiError) -> Self {
-        Self::Doi(error)
+impl ApiError {
+    pub fn graph_unavailable(retry_after: std::time::Duration) -> Self {
+        Self::GraphUnavailable {
+            retry_after_seconds: retry_after.as_secs().max(1),
+        }
     }
 }
 
 impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
-        let (status, message) = match self {
-            ApiError::Db(sqlx::Error::RowNotFound) => {
-                (StatusCode::NOT_FOUND, "not found".to_owned())
-            }
-            ApiError::Db(error) => {
-                tracing::error!(%error, "database error");
+        let correlation_id = None;
+        let (status, code, message, retry_after) = match self {
+            Self::Database(sqlx::Error::RowNotFound) | Self::NotFound(_) => (
+                StatusCode::NOT_FOUND,
+                "NOT_FOUND",
+                "resource not found".to_owned(),
+                None,
+            ),
+            Self::Database(error) => {
+                tracing::error!(%error, "database operation failed");
                 (
                     StatusCode::INTERNAL_SERVER_ERROR,
+                    "INTERNAL_ERROR",
                     "internal server error".to_owned(),
+                    None,
                 )
             }
-            ApiError::BadRequest(error) => (StatusCode::BAD_REQUEST, error),
-            ApiError::Json(error) => (StatusCode::BAD_REQUEST, error.to_string()),
-            ApiError::Doi(error) => (StatusCode::BAD_REQUEST, error.to_string()),
+            Self::BadRequest(message) => {
+                (StatusCode::BAD_REQUEST, "INVALID_REQUEST", message, None)
+            }
+            Self::Doi(error) => (
+                StatusCode::BAD_REQUEST,
+                "INVALID_DOI",
+                error.to_string(),
+                None,
+            ),
+            Self::Configuration(message) => (
+                StatusCode::SERVICE_UNAVAILABLE,
+                "CONFIGURATION_ERROR",
+                message,
+                None,
+            ),
+            Self::GraphUnavailable {
+                retry_after_seconds,
+            } => (
+                StatusCode::SERVICE_UNAVAILABLE,
+                "GRAPH_UNAVAILABLE",
+                "graph features are temporarily unavailable".to_owned(),
+                Some(retry_after_seconds),
+            ),
+            Self::Json(error) => (
+                StatusCode::BAD_REQUEST,
+                "INVALID_JSON",
+                error.to_string(),
+                None,
+            ),
         };
-        (status, Json(ErrorResponse { error: message })).into_response()
+        let body = ApiErrorBody {
+            code: code.to_owned(),
+            message,
+            correlation_id,
+            details: None,
+        };
+        let mut response = (status, Json(body)).into_response();
+        if let Some(seconds) = retry_after
+            && let Ok(value) = HeaderValue::from_str(&seconds.to_string())
+        {
+            response.headers_mut().insert(header::RETRY_AFTER, value);
+        }
+        response
     }
 }
+
+pub type ErrorResponse = ApiErrorBody;

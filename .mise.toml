@@ -1,0 +1,25 @@
+[tools]
+node = "24.4.1"
+pnpm = "11.3.0"
+rust = "1.95.0"
+opentofu = "1.12.2"
+aws-cli = { version = "2.36.16", symlink_bins = true }
+kubectl = "1.36.3"
+helm = "3.18.4"
+argocd = "3.5.0"
+"aqua:nats-io/natscli" = "0.4.0"
+neo4j = "5.26.26"
+cosign = "2.5.3"
+
+# Local orchestration and repository validators.
+just = "1.42.4"
+process-compose = "1.120.0"
+actionlint = "1.7.7"
+shellcheck = "0.10.0"
+tflint = "0.59.1"
+kubeconform = "0.7.0"
+conftest = "0.62.0"
+kyverno = "1.15.2"
+taplo = "0.10.0"
+jq = "1.8.1"
+yq = "4.47.1"

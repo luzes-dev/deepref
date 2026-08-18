@@ -1,0 +1,132 @@
+name: Rollback
+
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: Environment to roll back
+        required: true
+        type: choice
+        options: [staging, production]
+      target_gitops_commit:
+        description: Full prior gitops commit SHA containing the reviewed release lock
+        required: true
+        type: string
+      expected_current_tree:
+        description: Currently deployed Git tree hash
+        required: true
+        type: string
+      confirmation:
+        description: Type ROLLBACK
+        required: true
+        type: string
+
+concurrency:
+  group: rollback-${{ inputs.environment }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+
+jobs:
+  rollback:
+    name: Propose migration-compatible rollback / ${{ inputs.environment }}
+    if: inputs.confirmation == 'ROLLBACK'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    environment: rollback-${{ inputs.environment }}
+    steps:
+      - name: Checkout trusted source automation
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          path: source
+          persist-credentials: false
+          ref: development
+      - name: Mint deployment App token
+        id: app-token
+        uses: actions/create-github-app-token@bcd2ba49218906704ab6c1aa796996da409d3eb1 # v3.2.0
+        with:
+          app-id: ${{ vars.DEPLOYMENT_APP_ID }}
+          private-key: ${{ secrets.DEPLOYMENT_APP_PRIVATE_KEY }}
+          repositories: ${{ github.event.repository.name }}
+          permission-contents: write
+          permission-pull-requests: write
+      - name: Checkout protected GitOps branch
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          fetch-depth: 0
+          path: gitops
+          persist-credentials: false
+          ref: gitops
+          token: ${{ steps.app-token.outputs.token }}
+      - name: Checkout the prior GitOps evidence commit
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          path: previous
+          persist-credentials: false
+          ref: ${{ inputs.target_gitops_commit }}
+          token: ${{ steps.app-token.outputs.token }}
+      - name: Install pinned schema dependencies
+        run: python3 -m pip install --disable-pip-version-check jsonschema==4.25.1 PyYAML==6.0.2
+      - name: Validate reviewed prior lock and compatibility
+        env:
+          ENVIRONMENT: ${{ inputs.environment }}
+          EXPECTED_CURRENT_TREE: ${{ inputs.expected_current_tree }}
+          TARGET_GITOPS_COMMIT: ${{ inputs.target_gitops_commit }}
+        run: |
+          set -euo pipefail
+          [[ "$EXPECTED_CURRENT_TREE" =~ ^[0-9a-f]{40}$ ]]
+          [[ "$TARGET_GITOPS_COMMIT" =~ ^[0-9a-f]{40}$ ]]
+          git -C gitops merge-base --is-ancestor "$TARGET_GITOPS_COMMIT" HEAD
+          test "$(git -C previous rev-parse HEAD)" = "$TARGET_GITOPS_COMMIT"
+          cp "previous/environments/$ENVIRONMENT/release-lock.yaml" "$RUNNER_TEMP/rollback-release-lock.yaml"
+          (
+            cd source
+            scripts/ci/validate-release-lock.sh --environment "$ENVIRONMENT" "$RUNNER_TEMP/rollback-release-lock.yaml"
+            scripts/ci/verify-release-digests.sh "$RUNNER_TEMP/rollback-release-lock.yaml"
+          )
+          current="gitops/environments/$ENVIRONMENT/release-lock.yaml"
+          test "$(python3 - "$current" <<'PY'
+          import pathlib, sys, yaml
+          print(yaml.safe_load(pathlib.Path(sys.argv[1]).read_text())["source"]["tree"])
+          PY
+          )" = "$EXPECTED_CURRENT_TREE"
+          current_migration="$(python3 - "$current" <<'PY'
+          import pathlib, sys, yaml
+          print(yaml.safe_load(pathlib.Path(sys.argv[1]).read_text())["migration_version"])
+          PY
+          )"
+          target_migration="$(python3 - "$RUNNER_TEMP/rollback-release-lock.yaml" <<'PY'
+          import pathlib, sys, yaml
+          print(yaml.safe_load(pathlib.Path(sys.argv[1]).read_text())["migration_version"])
+          PY
+          )"
+          test "$target_migration" = "$current_migration" || {
+            echo 'automatic rollback is allowed only within the same migration version' >&2
+            exit 1
+          }
+      - name: Open protected rollback PR
+        env:
+          APP_SLUG: ${{ steps.app-token.outputs.app-slug }}
+          APP_TOKEN: ${{ steps.app-token.outputs.token }}
+          ENVIRONMENT: ${{ inputs.environment }}
+          TARGET_GITOPS_COMMIT: ${{ inputs.target_gitops_commit }}
+        run: |
+          set -euo pipefail
+          cd gitops
+          tree="$(python3 - "$RUNNER_TEMP/rollback-release-lock.yaml" <<'PY'
+          import pathlib, sys, yaml
+          print(yaml.safe_load(pathlib.Path(sys.argv[1]).read_text())["source"]["tree"])
+          PY
+          )"
+          branch="deploy/rollback/$ENVIRONMENT/$tree"
+          git switch -c "$branch"
+          cp "$RUNNER_TEMP/rollback-release-lock.yaml" "environments/$ENVIRONMENT/release-lock.yaml"
+          git add "environments/$ENVIRONMENT/release-lock.yaml"
+          git -c user.name="${APP_SLUG}[bot]" -c user.email="${APP_SLUG}[bot]@users.noreply.github.com" \
+            commit -m "rollback($ENVIRONMENT): tree $tree"
+          auth="$(printf 'x-access-token:%s' "$APP_TOKEN" | base64 -w0)"
+          git -c http.extraheader="AUTHORIZATION: basic $auth" push origin "HEAD:refs/heads/$branch"
+          export GH_TOKEN="$APP_TOKEN"
+          gh pr create --base gitops --head "$branch" --title "rollback($ENVIRONMENT): tree $tree" \
+            --body "Protected rollback to a reviewed lock with the same migration version."

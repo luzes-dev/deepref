@@ -1,0 +1,32 @@
+global:
+  environment: staging
+images:
+  api: {repository: docker.io/library/debian, digest: sha256:7b140f374b289a7c2befc338f42ebe6441b7ea838a042bbd5acbfca6ec875818}
+  worker: {repository: docker.io/library/debian, digest: sha256:7b140f374b289a7c2befc338f42ebe6441b7ea838a042bbd5acbfca6ec875818}
+  projector: {repository: docker.io/library/debian, digest: sha256:7b140f374b289a7c2befc338f42ebe6441b7ea838a042bbd5acbfca6ec875818}
+  web: {repository: docker.io/library/caddy, digest: sha256:4c6e91c6ed0e2fa03efd5b44747b625fec79bc9cd06ac5235a779726618e530d}
+nats: {replicas: 3}
+cloudflared: {replicas: 2}
+api:
+  corsOrigins: [https://deepref-staging.example.com]
+externalSecrets:
+  remote:
+    database: {key: deepref/staging/database, urlProperty: url}
+    neo4j: {key: deepref/staging/neo4j, usernameProperty: username, passwordProperty: password, authProperty: auth}
+    nats:
+      accountsKey: deepref/staging/nats/accounts
+      accountsProperty: accounts.conf
+      tlsKey: deepref/staging/nats/tls
+      caProperty: ca.crt
+      certificateProperty: tls.crt
+      privateKeyProperty: tls.key
+      apiCredentialsKey: deepref/staging/nats/api
+      workerCredentialsKey: deepref/staging/nats/worker
+      projectorCredentialsKey: deepref/staging/nats/projector
+      adminCredentialsKey: deepref/staging/nats/admin
+      credentialsProperty: credentials
+    cloudflared: {key: deepref/staging/cloudflared, tokenProperty: token}
+imageVerification:
+  repositoryPatterns: ["docker.io/library/*", "docker.io/natsio/*", "docker.io/cloudflare/*", "docker.io/amazon/*"]
+  keyless:
+    subject: https://github.com/luzes-dev/deepref/.github/workflows/release.yml@refs/heads/development

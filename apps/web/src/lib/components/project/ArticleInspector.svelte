@@ -111,6 +111,21 @@
 				</div>
 			{:else if article}
 				<div class="flex flex-col gap-4">
+					{#if article.metrics_stale}
+						<Alert.Root data-testid="article-stale-metrics">
+							<CircleAlertIcon />
+							<Alert.Title>Metrics are stale</Alert.Title>
+							<Alert.Description>
+								Last computed {article.metrics_as_of
+									? new Date(article.metrics_as_of).toLocaleString()
+									: 'not yet'}.
+							</Alert.Description>
+						</Alert.Root>
+					{:else if article.metrics_as_of}
+						<p class="text-sm text-muted-foreground">
+							Metrics as of {new Date(article.metrics_as_of).toLocaleString()}
+						</p>
+					{/if}
 					<div class="flex items-start justify-between gap-3">
 						<div class="min-w-0">
 							<h3 class="text-lg font-semibold wrap-break-word">

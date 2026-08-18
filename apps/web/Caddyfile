@@ -1,9 +1,38 @@
-:80 {
-	root * /usr/share/caddy
-	encode zstd gzip
-	handle_path /api/* {
-		reverse_proxy api:8080
+{
+	admin off
+	auto_https off
+	persist_config off
+}
+
+:8080 {
+	log {
+		output stdout
+		format json
 	}
-	try_files {path} /200.html
-	file_server
+
+	header {
+		-Server
+		Referrer-Policy "strict-origin-when-cross-origin"
+		X-Content-Type-Options "nosniff"
+		X-Frame-Options "DENY"
+	}
+
+	encode zstd gzip
+
+	@health path /healthz
+	handle @health {
+		respond "ok" 200
+	}
+
+	@api path /api /api/*
+	handle @api {
+		uri strip_prefix /api
+		reverse_proxy {$DEEPREF_API_UPSTREAM:deepref-api:8080}
+	}
+
+	handle {
+		root * /usr/share/caddy
+		try_files {path} /200.html
+		file_server
+	}
 }

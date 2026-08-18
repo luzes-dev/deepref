@@ -1,0 +1,19 @@
+# Placeholder partial backend configuration. Copy outside version control and replace values.
+bucket       = "REPLACE_WITH_GLOBALLY_UNIQUE_PRODUCTION_STATE_BUCKET"
+key          = "ambient-scribes/bootstrap/production/terraform.tfstate"
+region       = "sa-east-1"
+encrypt      = true
+kms_key_id   = "REPLACE_WITH_PRODUCTION_STATE_KMS_KEY_ARN"
+use_lockfile = true
+
+state_tags = {
+  Environment = "production"
+  ManagedBy   = "OpenTofu"
+  ObjectType  = "state"
+}
+
+lock_tags = {
+  Environment = "production"
+  ManagedBy   = "OpenTofu"
+  ObjectType  = "lock"
+}

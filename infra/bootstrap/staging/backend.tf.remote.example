@@ -1,0 +1,5 @@
+# Activate only after the bucket/key exist: copy this file to backend.tf locally,
+# then run the migration command documented in README.md. Never add credentials.
+terraform {
+  backend "s3" {}
+}

@@ -18,7 +18,12 @@ import type {
 	QueryKey
 } from '@tanstack/svelte-query';
 
-import type { CreateProject, ErrorResponse, ProjectDto } from '../models';
+import type {
+	ApiErrorBody,
+	CreateProject,
+	PaginatedResponseProjectDto,
+	ProjectDto
+} from '../models';
 
 import { customFetch } from '../../custom-fetch.ts';
 import type { ErrorType, BodyType } from '../../custom-fetch.ts';
@@ -26,12 +31,12 @@ import type { ErrorType, BodyType } from '../../custom-fetch.ts';
 type SecondParameter<T extends (...args: never) => unknown> = Parameters<T>[1];
 
 export type listProjectsResponse200 = {
-	data: ProjectDto[];
+	data: PaginatedResponseProjectDto;
 	status: 200;
 };
 
 export type listProjectsResponse500 = {
-	data: ErrorResponse;
+	data: ApiErrorBody;
 	status: 500;
 };
 
@@ -59,7 +64,7 @@ export const getListProjectsQueryKey = () => {
 
 export const getListProjectsQueryOptions = <
 	TData = Awaited<ReturnType<typeof listProjects>>,
-	TError = ErrorType<ErrorResponse>
+	TError = ErrorType<ApiErrorBody>
 >(options?: {
 	query?: Partial<CreateQueryOptions<Awaited<ReturnType<typeof listProjects>>, TError, TData>>;
 	request?: SecondParameter<typeof customFetch>;
@@ -79,11 +84,11 @@ export const getListProjectsQueryOptions = <
 };
 
 export type ListProjectsQueryResult = NonNullable<Awaited<ReturnType<typeof listProjects>>>;
-export type ListProjectsQueryError = ErrorType<ErrorResponse>;
+export type ListProjectsQueryError = ErrorType<ApiErrorBody>;
 
 export function createListProjects<
 	TData = Awaited<ReturnType<typeof listProjects>>,
-	TError = ErrorType<ErrorResponse>
+	TError = ErrorType<ApiErrorBody>
 >(
 	options?: () => {
 		query?: Partial<
@@ -103,7 +108,7 @@ export function createListProjects<
 
 export const prefetchListProjectsQuery = async <
 	TData = Awaited<ReturnType<typeof listProjects>>,
-	TError = ErrorType<ErrorResponse>
+	TError = ErrorType<ApiErrorBody>
 >(
 	queryClient: QueryClient,
 	options?: {
@@ -126,12 +131,12 @@ export type createProjectResponse201 = {
 };
 
 export type createProjectResponse400 = {
-	data: ErrorResponse;
+	data: ApiErrorBody;
 	status: 400;
 };
 
 export type createProjectResponse500 = {
-	data: ErrorResponse;
+	data: ApiErrorBody;
 	status: 500;
 };
 
@@ -159,7 +164,7 @@ export const createProject = async (
 };
 
 export const getCreateProjectMutationOptions = <
-	TError = ErrorType<ErrorResponse>,
+	TError = ErrorType<ApiErrorBody>,
 	TContext = unknown
 >(
 	queryClient: QueryClient,
@@ -212,9 +217,9 @@ export const getCreateProjectMutationOptions = <
 
 export type CreateProjectMutationResult = NonNullable<Awaited<ReturnType<typeof createProject>>>;
 export type CreateProjectMutationBody = BodyType<CreateProject>;
-export type CreateProjectMutationError = ErrorType<ErrorResponse>;
+export type CreateProjectMutationError = ErrorType<ApiErrorBody>;
 
-export const createCreateProject = <TError = ErrorType<ErrorResponse>, TContext = unknown>(
+export const createCreateProject = <TError = ErrorType<ApiErrorBody>, TContext = unknown>(
 	options?: () => {
 		mutation?: CreateMutationOptions<
 			Awaited<ReturnType<typeof createProject>>,
@@ -244,12 +249,12 @@ export type getProjectResponse200 = {
 };
 
 export type getProjectResponse404 = {
-	data: ErrorResponse;
+	data: ApiErrorBody;
 	status: 404;
 };
 
 export type getProjectResponse500 = {
-	data: ErrorResponse;
+	data: ApiErrorBody;
 	status: 500;
 };
 
@@ -280,7 +285,7 @@ export const getGetProjectQueryKey = (projectId: string) => {
 
 export const getGetProjectQueryOptions = <
 	TData = Awaited<ReturnType<typeof getProject>>,
-	TError = ErrorType<ErrorResponse>
+	TError = ErrorType<ApiErrorBody>
 >(
 	projectId: string,
 	options?: {
@@ -306,11 +311,11 @@ export const getGetProjectQueryOptions = <
 };
 
 export type GetProjectQueryResult = NonNullable<Awaited<ReturnType<typeof getProject>>>;
-export type GetProjectQueryError = ErrorType<ErrorResponse>;
+export type GetProjectQueryError = ErrorType<ApiErrorBody>;
 
 export function createGetProject<
 	TData = Awaited<ReturnType<typeof getProject>>,
-	TError = ErrorType<ErrorResponse>
+	TError = ErrorType<ApiErrorBody>
 >(
 	projectId: () => string,
 	options?: () => {
@@ -329,7 +334,7 @@ export function createGetProject<
 
 export const prefetchGetProjectQuery = async <
 	TData = Awaited<ReturnType<typeof getProject>>,
-	TError = ErrorType<ErrorResponse>
+	TError = ErrorType<ApiErrorBody>
 >(
 	queryClient: QueryClient,
 	projectId: string,
@@ -351,7 +356,7 @@ export type deleteProjectResponse204 = {
 };
 
 export type deleteProjectResponse500 = {
-	data: ErrorResponse;
+	data: ApiErrorBody;
 	status: 500;
 };
 
@@ -377,7 +382,7 @@ export const deleteProject = async (
 };
 
 export const getDeleteProjectMutationOptions = <
-	TError = ErrorType<ErrorResponse>,
+	TError = ErrorType<ApiErrorBody>,
 	TContext = unknown
 >(
 	queryClient: QueryClient,
@@ -430,9 +435,9 @@ export const getDeleteProjectMutationOptions = <
 
 export type DeleteProjectMutationResult = NonNullable<Awaited<ReturnType<typeof deleteProject>>>;
 
-export type DeleteProjectMutationError = ErrorType<ErrorResponse>;
+export type DeleteProjectMutationError = ErrorType<ApiErrorBody>;
 
-export const createDeleteProject = <TError = ErrorType<ErrorResponse>, TContext = unknown>(
+export const createDeleteProject = <TError = ErrorType<ApiErrorBody>, TContext = unknown>(
 	options?: () => {
 		mutation?: CreateMutationOptions<
 			Awaited<ReturnType<typeof deleteProject>>,
@@ -462,17 +467,17 @@ export type updateProjectResponse200 = {
 };
 
 export type updateProjectResponse400 = {
-	data: ErrorResponse;
+	data: ApiErrorBody;
 	status: 400;
 };
 
 export type updateProjectResponse404 = {
-	data: ErrorResponse;
+	data: ApiErrorBody;
 	status: 404;
 };
 
 export type updateProjectResponse500 = {
-	data: ErrorResponse;
+	data: ApiErrorBody;
 	status: 500;
 };
 
@@ -503,7 +508,7 @@ export const updateProject = async (
 };
 
 export const getUpdateProjectMutationOptions = <
-	TError = ErrorType<ErrorResponse>,
+	TError = ErrorType<ApiErrorBody>,
 	TContext = unknown
 >(
 	queryClient: QueryClient,
@@ -557,9 +562,9 @@ export const getUpdateProjectMutationOptions = <
 
 export type UpdateProjectMutationResult = NonNullable<Awaited<ReturnType<typeof updateProject>>>;
 export type UpdateProjectMutationBody = BodyType<CreateProject>;
-export type UpdateProjectMutationError = ErrorType<ErrorResponse>;
+export type UpdateProjectMutationError = ErrorType<ApiErrorBody>;
 
-export const createUpdateProject = <TError = ErrorType<ErrorResponse>, TContext = unknown>(
+export const createUpdateProject = <TError = ErrorType<ApiErrorBody>, TContext = unknown>(
 	options?: () => {
 		mutation?: CreateMutationOptions<
 			Awaited<ReturnType<typeof updateProject>>,

@@ -1,0 +1,69 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "deepref.componentName" (dict "root" . "component" "api") }}
+  namespace: {{ include "deepref.namespace" . }}
+  labels:
+    {{- include "deepref.labels" . | nindent 4 }}
+    app.kubernetes.io/component: api
+spec:
+  replicas: {{ .Values.api.replicas }}
+  revisionHistoryLimit: 3
+  strategy:
+    type: RollingUpdate
+    rollingUpdate: {maxUnavailable: 0, maxSurge: 1}
+  selector:
+    matchLabels:
+      {{- include "deepref.selectorLabels" (dict "root" . "component" "api") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "deepref.selectorLabels" (dict "root" . "component" "api") | nindent 8 }}
+        {{- with .Values.global.podLabels }}{{ toYaml . | nindent 8 }}{{- end }}
+    spec:
+      serviceAccountName: {{ .Values.serviceAccounts.api }}
+      automountServiceAccountToken: false
+      terminationGracePeriodSeconds: {{ .Values.api.terminationGracePeriodSeconds }}
+      securityContext:
+        {{- include "deepref.podSecurityContext" . | nindent 8 }}
+        fsGroup: 65532
+        fsGroupChangePolicy: OnRootMismatch
+      {{- include "deepref.imagePullSecrets" . | nindent 6 }}
+      {{- include "deepref.topology" (dict "root" . "component" "api") | nindent 6 }}
+      containers:
+        - name: api
+          image: {{ include "deepref.image" (dict "name" "api" "image" .Values.images.api) }}
+          imagePullPolicy: {{ .Values.global.imagePullPolicy }}
+          args: ["serve"]
+          securityContext:
+            {{- include "deepref.containerSecurityContext" . | nindent 12 }}
+            runAsUser: 65532
+            runAsGroup: 65532
+          ports:
+            - {name: http, containerPort: 8080, protocol: TCP}
+          env:
+            {{- include "deepref.runtimeEnv" (dict "root" . "serviceName" "deepref-api") | nindent 12 }}
+            - {name: API_BIND_ADDR, value: "0.0.0.0:8080"}
+            - name: API_CORS_ORIGINS
+              value: {{ join "," .Values.api.corsOrigins | quote }}
+            - name: API_GRAPH_RETRY_AFTER_SECS
+              value: {{ .Values.api.graphRetryAfterSeconds | quote }}
+          volumeMounts:
+            {{- include "deepref.runtimeVolumeMounts" . | nindent 12 }}
+          resources: {{- toYaml .Values.api.resources | nindent 12 }}
+          startupProbe:
+            httpGet: {path: /health/live, port: http}
+            failureThreshold: 30
+            periodSeconds: 2
+          livenessProbe:
+            httpGet: {path: /health/live, port: http}
+            periodSeconds: 10
+            timeoutSeconds: 2
+            failureThreshold: 3
+          readinessProbe:
+            httpGet: {path: /health/ready, port: http}
+            periodSeconds: 5
+            timeoutSeconds: 2
+            failureThreshold: 3
+      volumes:
+        {{- include "deepref.runtimeVolumes" (dict "root" . "credential" "api") | nindent 8 }}

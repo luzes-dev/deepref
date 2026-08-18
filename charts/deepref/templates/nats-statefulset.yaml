@@ -1,0 +1,125 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "deepref.componentName" (dict "root" . "component" "nats") }}
+  namespace: {{ include "deepref.namespace" . }}
+  labels:
+    {{- include "deepref.labels" . | nindent 4 }}
+    app.kubernetes.io/component: nats
+spec:
+  type: ClusterIP
+  selector:
+    {{- include "deepref.selectorLabels" (dict "root" . "component" "nats") | nindent 4 }}
+  ports:
+    - {name: client, port: 4222, targetPort: client}
+    - {name: monitor, port: 8222, targetPort: monitor}
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: {{ include "deepref.componentName" (dict "root" . "component" "nats-headless") }}
+  namespace: {{ include "deepref.namespace" . }}
+  labels:
+    {{- include "deepref.labels" . | nindent 4 }}
+    app.kubernetes.io/component: nats
+spec:
+  clusterIP: None
+  publishNotReadyAddresses: true
+  selector:
+    {{- include "deepref.selectorLabels" (dict "root" . "component" "nats") | nindent 4 }}
+  ports:
+    - {name: client, port: 4222, targetPort: client}
+    - {name: cluster, port: 6222, targetPort: cluster}
+    - {name: monitor, port: 8222, targetPort: monitor}
+---
+apiVersion: apps/v1
+kind: StatefulSet
+metadata:
+  name: {{ include "deepref.componentName" (dict "root" . "component" "nats") }}
+  namespace: {{ include "deepref.namespace" . }}
+  labels:
+    {{- include "deepref.labels" . | nindent 4 }}
+    app.kubernetes.io/component: nats
+  annotations:
+    argocd.argoproj.io/sync-wave: "-15"
+spec:
+  serviceName: {{ include "deepref.componentName" (dict "root" . "component" "nats-headless") }}
+  replicas: {{ .Values.nats.replicas }}
+  podManagementPolicy: Parallel
+  updateStrategy: {type: RollingUpdate}
+  selector:
+    matchLabels:
+      {{- include "deepref.selectorLabels" (dict "root" . "component" "nats") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "deepref.selectorLabels" (dict "root" . "component" "nats") | nindent 8 }}
+      annotations:
+        checksum/config: {{ include (print $.Template.BasePath "/nats-config.yaml") . | sha256sum }}
+    spec:
+      serviceAccountName: {{ .Values.serviceAccounts.nats }}
+      automountServiceAccountToken: false
+      terminationGracePeriodSeconds: {{ .Values.nats.terminationGracePeriodSeconds }}
+      nodeSelector:
+        deepref.io/workload-class: stateful
+      securityContext:
+        {{- include "deepref.podSecurityContext" . | nindent 8 }}
+        fsGroup: 1000
+        fsGroupChangePolicy: OnRootMismatch
+      {{- include "deepref.imagePullSecrets" . | nindent 6 }}
+      {{- include "deepref.topology" (dict "root" . "component" "nats") | nindent 6 }}
+      containers:
+        - name: nats
+          image: {{ include "deepref.image" (dict "name" "nats" "image" .Values.images.nats) }}
+          imagePullPolicy: {{ .Values.global.imagePullPolicy }}
+          args: ["--config", "/etc/nats/nats.conf"]
+          securityContext:
+            {{- include "deepref.containerSecurityContext" . | nindent 12 }}
+            runAsUser: 1000
+            runAsGroup: 1000
+          env:
+            - name: POD_NAME
+              valueFrom: {fieldRef: {fieldPath: metadata.name}}
+          ports:
+            - {name: client, containerPort: 4222}
+            - {name: cluster, containerPort: 6222}
+            - {name: monitor, containerPort: 8222}
+          volumeMounts:
+            - {name: config, mountPath: /etc/nats/nats.conf, subPath: nats.conf, readOnly: true}
+            - {name: accounts, mountPath: /etc/nats/accounts, readOnly: true}
+            - {name: tls, mountPath: /etc/nats/tls, readOnly: true}
+            - {name: tmp, mountPath: /tmp/nats}
+            - {name: data, mountPath: /data}
+          resources: {{- toYaml .Values.nats.resources | nindent 12 }}
+          startupProbe:
+            httpGet: {path: /healthz?js-enabled-only=true, port: monitor}
+            failureThreshold: 60
+            periodSeconds: 2
+          livenessProbe:
+            httpGet: {path: /healthz, port: monitor}
+            periodSeconds: 10
+          readinessProbe:
+            httpGet: {path: /healthz?js-server-only=true, port: monitor}
+            periodSeconds: 5
+      volumes:
+        - name: config
+          configMap:
+            name: {{ include "deepref.componentName" (dict "root" . "component" "nats-config") }}
+        - name: accounts
+          secret:
+            secretName: {{ include "deepref.componentName" (dict "root" . "component" "nats-accounts") }}
+        - name: tls
+          secret:
+            secretName: {{ include "deepref.componentName" (dict "root" . "component" "nats-tls") }}
+        - {name: tmp, emptyDir: {sizeLimit: 64Mi}}
+  volumeClaimTemplates:
+    - metadata:
+        name: data
+        labels:
+          {{- include "deepref.labels" . | nindent 10 }}
+      spec:
+        accessModes: [ReadWriteOnce]
+        storageClassName: {{ .Values.nats.storage.storageClassName }}
+        resources:
+          requests:
+            storage: {{ .Values.nats.storage.size }}

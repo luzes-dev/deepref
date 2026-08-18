@@ -1,9 +1,12 @@
 use axum::{
     Json,
-    extract::{Path, State},
+    extract::{Path, Query, State},
     http::StatusCode,
 };
 use chrono::{DateTime, Utc};
+use deepref_events::{
+    DomainPayload, EntityType, EventEnvelope, ProjectTombstoned, SUBJECT_PROJECT_TOMBSTONED,
+};
 use serde::{Deserialize, Serialize};
 use sqlx::Row;
 use utoipa::ToSchema;
@@ -11,12 +14,16 @@ use uuid::Uuid;
 
 use crate::{
     error::{ApiError, ErrorResponse},
+    outbox,
     state::AppState,
 };
 
-use super::settings;
+use super::{
+    pagination::{PaginatedResponse, PaginationParams, page},
+    settings,
+};
 
-#[derive(Debug, Serialize, ToSchema)]
+#[derive(Debug, Clone, Serialize, ToSchema)]
 pub(crate) struct ProjectDto {
     id: Uuid,
     name: String,
@@ -54,19 +61,30 @@ impl CreateProject {
     operation_id = "listProjects",
     tag = "projects",
     responses(
-        (status = 200, description = "Projects ordered by most recently updated", body = [ProjectDto]),
+        (status = 200, description = "Projects ordered by most recently updated", body = PaginatedResponse<ProjectDto>),
         (status = 500, description = "Internal server error", body = ErrorResponse)
     )
 )]
 pub(crate) async fn list_projects(
     State(state): State<AppState>,
-) -> Result<Json<Vec<ProjectDto>>, ApiError> {
+    Query(pagination): Query<PaginationParams>,
+) -> Result<Json<PaginatedResponse<ProjectDto>>, ApiError> {
+    let limit = pagination.limit()?;
+    let cursor: Option<(DateTime<Utc>, Uuid)> = pagination.decode()?;
     let rows = sqlx::query(
-        "SELECT id, name, description, default_max_depth, created_at, updated_at FROM projects ORDER BY updated_at DESC",
+        "SELECT id,name,description,default_max_depth,created_at,updated_at FROM projects \
+         WHERE ($1::timestamptz IS NULL OR (updated_at,id)<($1,$2)) \
+         ORDER BY updated_at DESC,id DESC LIMIT $3",
     )
+    .bind(cursor.as_ref().map(|value| value.0))
+    .bind(cursor.as_ref().map(|value| value.1))
+    .bind(limit + 1)
     .fetch_all(&state.pool)
     .await?;
-    Ok(Json(rows.into_iter().map(project_from_row).collect()))
+    let projects = rows.into_iter().map(project_from_row).collect();
+    Ok(Json(page(projects, limit as usize, |project| {
+        (project.updated_at, project.id)
+    })?))
 }
 
 #[utoipa::path(
@@ -190,10 +208,45 @@ pub(crate) async fn delete_project(
     State(state): State<AppState>,
     Path(project_id): Path<Uuid>,
 ) -> Result<StatusCode, ApiError> {
-    sqlx::query("DELETE FROM projects WHERE id = $1")
-        .bind(project_id)
-        .execute(&state.pool)
+    let mut tx = state.pool.begin().await?;
+    let revision: i64 = sqlx::query_scalar("SELECT nextval('graph_domain_revision_seq')")
+        .fetch_one(&mut *tx)
         .await?;
+    let event = EventEnvelope::v1(
+        SUBJECT_PROJECT_TOMBSTONED,
+        "deepref.api",
+        EntityType::Project,
+        project_id.to_string(),
+        revision,
+        project_id,
+        None,
+        DomainPayload::ProjectTombstoned(ProjectTombstoned { project_id }),
+    );
+    sqlx::query(
+        "INSERT INTO domain_events (event_id,schema_version,event_type,entity_type,entity_key,revision,payload,correlation_id,causation_id,created_at) \
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)",
+    ).bind(event.event_id).bind(event.schema_version as i16).bind(&event.event_type)
+        .bind(event.entity_type.as_str()).bind(&event.entity_key).bind(event.revision)
+        .bind(serde_json::to_value(&event.payload)?).bind(event.correlation_id)
+        .bind(event.causation_id).bind(event.occurred_at).execute(&mut *tx).await?;
+    sqlx::query(
+        "INSERT INTO domain_tombstones (entity_type,entity_key,project_id,revision,event_id) \
+         VALUES ('project',$1::text,$1,$2,$3)",
+    )
+    .bind(project_id)
+    .bind(revision)
+    .bind(event.event_id)
+    .execute(&mut *tx)
+    .await?;
+    outbox::enqueue(&mut tx, event.event_id, SUBJECT_PROJECT_TOMBSTONED, &event).await?;
+    let result = sqlx::query("DELETE FROM projects WHERE id = $1")
+        .bind(project_id)
+        .execute(&mut *tx)
+        .await?;
+    if result.rows_affected() == 0 {
+        return Err(ApiError::NotFound("project not found".into()));
+    }
+    tx.commit().await?;
     Ok(StatusCode::NO_CONTENT)
 }
 

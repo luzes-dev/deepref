@@ -1,0 +1,18 @@
+apiVersion: kyverno.io/v1
+kind: ClusterPolicy
+metadata:
+  name: deepref-test-immutable-images
+spec:
+  validationFailureAction: Enforce
+  rules:
+    - name: require-digest
+      match:
+        any:
+          - resources:
+              kinds: [Pod]
+      validate:
+        message: every image must be pinned by digest
+        pattern:
+          spec:
+            containers:
+              - image: "*@sha256:*"

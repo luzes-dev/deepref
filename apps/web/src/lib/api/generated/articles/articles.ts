@@ -19,9 +19,10 @@ import type {
 } from '@tanstack/svelte-query';
 
 import type {
+	ApiErrorBody,
 	ArticleDetailDto,
-	ArticleDto,
-	ErrorResponse,
+	ListProjectArticlesParams,
+	PaginatedResponseArticleDto,
 	ProjectGraphDto,
 	RecommendationGroupsDto,
 	RecomputeMetricsDto
@@ -33,12 +34,12 @@ import type { ErrorType } from '../../custom-fetch.ts';
 type SecondParameter<T extends (...args: never) => unknown> = Parameters<T>[1];
 
 export type listProjectArticlesResponse200 = {
-	data: ArticleDto[];
+	data: PaginatedResponseArticleDto;
 	status: 200;
 };
 
 export type listProjectArticlesResponse500 = {
-	data: ErrorResponse;
+	data: ApiErrorBody;
 	status: 500;
 };
 
@@ -49,29 +50,52 @@ export type listProjectArticlesResponseError = listProjectArticlesResponse500 & 
 	headers: Headers;
 };
 
-export const getListProjectArticlesUrl = (projectId: string) => {
-	return `/api/projects/${projectId}/articles`;
+export const getListProjectArticlesUrl = (
+	projectId: string,
+	params?: ListProjectArticlesParams
+) => {
+	const normalizedParams = new URLSearchParams();
+
+	Object.entries(params || {}).forEach(([key, value]) => {
+		if (value !== undefined) {
+			normalizedParams.append(key, value === null ? 'null' : String(value));
+		}
+	});
+
+	const stringifiedParams = normalizedParams.toString();
+
+	return stringifiedParams.length > 0
+		? `/api/projects/${projectId}/articles?${stringifiedParams}`
+		: `/api/projects/${projectId}/articles`;
 };
 
 export const listProjectArticles = async (
 	projectId: string,
+	params?: ListProjectArticlesParams,
 	options?: RequestInit
 ): Promise<listProjectArticlesResponseSuccess> => {
-	return customFetch<listProjectArticlesResponseSuccess>(getListProjectArticlesUrl(projectId), {
-		...options,
-		method: 'GET'
-	});
+	return customFetch<listProjectArticlesResponseSuccess>(
+		getListProjectArticlesUrl(projectId, params),
+		{
+			...options,
+			method: 'GET'
+		}
+	);
 };
 
-export const getListProjectArticlesQueryKey = (projectId: string) => {
-	return [`/api/projects/${projectId}/articles`] as const;
+export const getListProjectArticlesQueryKey = (
+	projectId: string,
+	params?: ListProjectArticlesParams
+) => {
+	return [`/api/projects/${projectId}/articles`, ...(params ? [params] : [])] as const;
 };
 
 export const getListProjectArticlesQueryOptions = <
 	TData = Awaited<ReturnType<typeof listProjectArticles>>,
-	TError = ErrorType<ErrorResponse>
+	TError = ErrorType<ApiErrorBody>
 >(
 	projectId: string,
+	params?: ListProjectArticlesParams,
 	options?: {
 		query?: Partial<
 			CreateQueryOptions<Awaited<ReturnType<typeof listProjectArticles>>, TError, TData>
@@ -81,10 +105,10 @@ export const getListProjectArticlesQueryOptions = <
 ) => {
 	const { query: queryOptions, request: requestOptions } = options ?? {};
 
-	const queryKey = queryOptions?.queryKey ?? getListProjectArticlesQueryKey(projectId);
+	const queryKey = queryOptions?.queryKey ?? getListProjectArticlesQueryKey(projectId, params);
 
 	const queryFn: QueryFunction<Awaited<ReturnType<typeof listProjectArticles>>> = ({ signal }) =>
-		listProjectArticles(projectId, { signal, ...requestOptions });
+		listProjectArticles(projectId, params, { signal, ...requestOptions });
 
 	return {
 		queryKey,
@@ -99,13 +123,14 @@ export const getListProjectArticlesQueryOptions = <
 export type ListProjectArticlesQueryResult = NonNullable<
 	Awaited<ReturnType<typeof listProjectArticles>>
 >;
-export type ListProjectArticlesQueryError = ErrorType<ErrorResponse>;
+export type ListProjectArticlesQueryError = ErrorType<ApiErrorBody>;
 
 export function createListProjectArticles<
 	TData = Awaited<ReturnType<typeof listProjectArticles>>,
-	TError = ErrorType<ErrorResponse>
+	TError = ErrorType<ApiErrorBody>
 >(
 	projectId: () => string,
+	params?: () => ListProjectArticlesParams,
 	options?: () => {
 		query?: Partial<
 			CreateQueryOptions<Awaited<ReturnType<typeof listProjectArticles>>, TError, TData>
@@ -115,7 +140,7 @@ export function createListProjectArticles<
 	queryClient?: () => QueryClient
 ): CreateQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> } {
 	const query = createQuery(
-		() => getListProjectArticlesQueryOptions(projectId(), options?.()),
+		() => getListProjectArticlesQueryOptions(projectId(), params?.(), options?.()),
 		queryClient
 	) as CreateQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> };
 
@@ -124,10 +149,11 @@ export function createListProjectArticles<
 
 export const prefetchListProjectArticlesQuery = async <
 	TData = Awaited<ReturnType<typeof listProjectArticles>>,
-	TError = ErrorType<ErrorResponse>
+	TError = ErrorType<ApiErrorBody>
 >(
 	queryClient: QueryClient,
 	projectId: string,
+	params?: ListProjectArticlesParams,
 	options?: {
 		query?: Partial<
 			CreateQueryOptions<Awaited<ReturnType<typeof listProjectArticles>>, TError, TData>
@@ -135,7 +161,7 @@ export const prefetchListProjectArticlesQuery = async <
 		request?: SecondParameter<typeof customFetch>;
 	}
 ): Promise<QueryClient> => {
-	const queryOptions = getListProjectArticlesQueryOptions(projectId, options);
+	const queryOptions = getListProjectArticlesQueryOptions(projectId, params, options);
 
 	await queryClient.prefetchQuery(queryOptions);
 
@@ -148,25 +174,20 @@ export type getProjectArticleResponse200 = {
 };
 
 export type getProjectArticleResponse400 = {
-	data: ErrorResponse;
+	data: ApiErrorBody;
 	status: 400;
 };
 
 export type getProjectArticleResponse404 = {
-	data: ErrorResponse;
+	data: ApiErrorBody;
 	status: 404;
-};
-
-export type getProjectArticleResponse500 = {
-	data: ErrorResponse;
-	status: 500;
 };
 
 export type getProjectArticleResponseSuccess = getProjectArticleResponse200 & {
 	headers: Headers;
 };
 export type getProjectArticleResponseError = (
-	getProjectArticleResponse400 | getProjectArticleResponse404 | getProjectArticleResponse500
+	getProjectArticleResponse400 | getProjectArticleResponse404
 ) & {
 	headers: Headers;
 };
@@ -195,7 +216,7 @@ export const getGetProjectArticleQueryKey = (projectId: string, doiKey: string) 
 
 export const getGetProjectArticleQueryOptions = <
 	TData = Awaited<ReturnType<typeof getProjectArticle>>,
-	TError = ErrorType<ErrorResponse>
+	TError = ErrorType<ApiErrorBody>
 >(
 	projectId: string,
 	doiKey: string,
@@ -230,11 +251,11 @@ export const getGetProjectArticleQueryOptions = <
 export type GetProjectArticleQueryResult = NonNullable<
 	Awaited<ReturnType<typeof getProjectArticle>>
 >;
-export type GetProjectArticleQueryError = ErrorType<ErrorResponse>;
+export type GetProjectArticleQueryError = ErrorType<ApiErrorBody>;
 
 export function createGetProjectArticle<
 	TData = Awaited<ReturnType<typeof getProjectArticle>>,
-	TError = ErrorType<ErrorResponse>
+	TError = ErrorType<ApiErrorBody>
 >(
 	projectId: () => string,
 	doiKey: () => string,
@@ -256,7 +277,7 @@ export function createGetProjectArticle<
 
 export const prefetchGetProjectArticleQuery = async <
 	TData = Awaited<ReturnType<typeof getProjectArticle>>,
-	TError = ErrorType<ErrorResponse>
+	TError = ErrorType<ApiErrorBody>
 >(
 	queryClient: QueryClient,
 	projectId: string,
@@ -280,15 +301,15 @@ export type getProjectGraphResponse200 = {
 	status: 200;
 };
 
-export type getProjectGraphResponse500 = {
-	data: ErrorResponse;
-	status: 500;
+export type getProjectGraphResponse503 = {
+	data: ApiErrorBody;
+	status: 503;
 };
 
 export type getProjectGraphResponseSuccess = getProjectGraphResponse200 & {
 	headers: Headers;
 };
-export type getProjectGraphResponseError = getProjectGraphResponse500 & {
+export type getProjectGraphResponseError = getProjectGraphResponse503 & {
 	headers: Headers;
 };
 
@@ -312,7 +333,7 @@ export const getGetProjectGraphQueryKey = (projectId: string) => {
 
 export const getGetProjectGraphQueryOptions = <
 	TData = Awaited<ReturnType<typeof getProjectGraph>>,
-	TError = ErrorType<ErrorResponse>
+	TError = ErrorType<ApiErrorBody>
 >(
 	projectId: string,
 	options?: {
@@ -340,11 +361,11 @@ export const getGetProjectGraphQueryOptions = <
 };
 
 export type GetProjectGraphQueryResult = NonNullable<Awaited<ReturnType<typeof getProjectGraph>>>;
-export type GetProjectGraphQueryError = ErrorType<ErrorResponse>;
+export type GetProjectGraphQueryError = ErrorType<ApiErrorBody>;
 
 export function createGetProjectGraph<
 	TData = Awaited<ReturnType<typeof getProjectGraph>>,
-	TError = ErrorType<ErrorResponse>
+	TError = ErrorType<ApiErrorBody>
 >(
 	projectId: () => string,
 	options?: () => {
@@ -365,7 +386,7 @@ export function createGetProjectGraph<
 
 export const prefetchGetProjectGraphQuery = async <
 	TData = Awaited<ReturnType<typeof getProjectGraph>>,
-	TError = ErrorType<ErrorResponse>
+	TError = ErrorType<ApiErrorBody>
 >(
 	queryClient: QueryClient,
 	projectId: string,
@@ -383,17 +404,17 @@ export const prefetchGetProjectGraphQuery = async <
 	return queryClient;
 };
 
-export type recomputeProjectMetricsResponse200 = {
+export type recomputeProjectMetricsResponse202 = {
 	data: RecomputeMetricsDto;
-	status: 200;
+	status: 202;
 };
 
 export type recomputeProjectMetricsResponse500 = {
-	data: ErrorResponse;
+	data: ApiErrorBody;
 	status: 500;
 };
 
-export type recomputeProjectMetricsResponseSuccess = recomputeProjectMetricsResponse200 & {
+export type recomputeProjectMetricsResponseSuccess = recomputeProjectMetricsResponse202 & {
 	headers: Headers;
 };
 export type recomputeProjectMetricsResponseError = recomputeProjectMetricsResponse500 & {
@@ -418,7 +439,7 @@ export const recomputeProjectMetrics = async (
 };
 
 export const getRecomputeProjectMetricsMutationOptions = <
-	TError = ErrorType<ErrorResponse>,
+	TError = ErrorType<ApiErrorBody>,
 	TContext = unknown
 >(
 	queryClient: QueryClient,
@@ -481,12 +502,9 @@ export type RecomputeProjectMetricsMutationResult = NonNullable<
 	Awaited<ReturnType<typeof recomputeProjectMetrics>>
 >;
 
-export type RecomputeProjectMetricsMutationError = ErrorType<ErrorResponse>;
+export type RecomputeProjectMetricsMutationError = ErrorType<ApiErrorBody>;
 
-export const createRecomputeProjectMetrics = <
-	TError = ErrorType<ErrorResponse>,
-	TContext = unknown
->(
+export const createRecomputeProjectMetrics = <TError = ErrorType<ApiErrorBody>, TContext = unknown>(
 	options?: () => {
 		mutation?: CreateMutationOptions<
 			Awaited<ReturnType<typeof recomputeProjectMetrics>>,
@@ -515,15 +533,15 @@ export type getProjectRecommendationsResponse200 = {
 	status: 200;
 };
 
-export type getProjectRecommendationsResponse500 = {
-	data: ErrorResponse;
-	status: 500;
+export type getProjectRecommendationsResponse503 = {
+	data: ApiErrorBody;
+	status: 503;
 };
 
 export type getProjectRecommendationsResponseSuccess = getProjectRecommendationsResponse200 & {
 	headers: Headers;
 };
-export type getProjectRecommendationsResponseError = getProjectRecommendationsResponse500 & {
+export type getProjectRecommendationsResponseError = getProjectRecommendationsResponse503 & {
 	headers: Headers;
 };
 
@@ -550,7 +568,7 @@ export const getGetProjectRecommendationsQueryKey = (projectId: string) => {
 
 export const getGetProjectRecommendationsQueryOptions = <
 	TData = Awaited<ReturnType<typeof getProjectRecommendations>>,
-	TError = ErrorType<ErrorResponse>
+	TError = ErrorType<ApiErrorBody>
 >(
 	projectId: string,
 	options?: {
@@ -585,11 +603,11 @@ export const getGetProjectRecommendationsQueryOptions = <
 export type GetProjectRecommendationsQueryResult = NonNullable<
 	Awaited<ReturnType<typeof getProjectRecommendations>>
 >;
-export type GetProjectRecommendationsQueryError = ErrorType<ErrorResponse>;
+export type GetProjectRecommendationsQueryError = ErrorType<ApiErrorBody>;
 
 export function createGetProjectRecommendations<
 	TData = Awaited<ReturnType<typeof getProjectRecommendations>>,
-	TError = ErrorType<ErrorResponse>
+	TError = ErrorType<ApiErrorBody>
 >(
 	projectId: () => string,
 	options?: () => {
@@ -610,7 +628,7 @@ export function createGetProjectRecommendations<
 
 export const prefetchGetProjectRecommendationsQuery = async <
 	TData = Awaited<ReturnType<typeof getProjectRecommendations>>,
-	TError = ErrorType<ErrorResponse>
+	TError = ErrorType<ApiErrorBody>
 >(
 	queryClient: QueryClient,
 	projectId: string,

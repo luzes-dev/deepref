@@ -1,111 +1,247 @@
-use deepref_core::{FetchStatus, IngestionItemStatus, normalize_doi};
+use std::time::Duration;
+
+use deepref_core::{IngestionItemStatus, normalize_doi};
 use deepref_crossref::{CrossrefClient, CrossrefError};
-use deepref_events::{EventEnvelope, WorkFetchRequested};
+use deepref_events::{DeadLetterRecord, EventEnvelope, WorkFetchRequested, deserialize_compatible};
+use sha2::{Digest, Sha256};
 use sqlx::PgPool;
-use std::sync::Arc;
+use tokio::sync::watch;
+use uuid::Uuid;
 
-use crate::{limiter::DirectRateLimiter, nats, store};
+use crate::{
+    delivery::{DeliveryAction, FailureClass, action_for},
+    limiter, store,
+};
 
-pub(crate) async fn handle_message(
+pub async fn handle_message(
     pool: PgPool,
-    limiter: Arc<DirectRateLimiter>,
     bytes: Vec<u8>,
-) -> anyhow::Result<()> {
-    let event: EventEnvelope<WorkFetchRequested> = serde_json::from_slice(&bytes)?;
-    if store::event_processed(&pool, event.id).await? {
-        tracing::debug!(event_id = %event.id, "event already processed");
-        return Ok(());
+    delivery_count: u64,
+    claim_lease: Duration,
+) -> anyhow::Result<DeliveryAction> {
+    let event: EventEnvelope<WorkFetchRequested> = match deserialize_compatible(&bytes) {
+        Ok(event) => event,
+        Err(error) => {
+            let record = dead_letter(&bytes, None, delivery_count, "MALFORMED_PAYLOAD");
+            store::persist_malformed_dead_letter(
+                &pool,
+                &record,
+                serde_json::json!({ "payload_utf8_lossy": String::from_utf8_lossy(&bytes), "error": error.to_string() }),
+            ).await?;
+            return Ok(action_for(FailureClass::Malformed, delivery_count));
+        }
+    };
+    let owner = Uuid::new_v4();
+    match store::claim_event(&pool, event.event_id, owner, claim_lease).await? {
+        store::ClaimState::Completed => return Ok(DeliveryAction::Ack),
+        store::ClaimState::Busy => {
+            return Ok(DeliveryAction::Nak(
+                (claim_lease / 3).max(Duration::from_secs(1)),
+            ));
+        }
+        store::ClaimState::Acquired => {}
     }
 
-    let payload = event.payload.clone();
-    let doi = normalize_doi(&payload.doi)?;
-
-    if payload.depth > payload.max_depth {
-        store::mark_item(&pool, &payload, &doi, IngestionItemStatus::Skipped, None).await?;
-        store::mark_event_processed(&pool, event.id).await?;
-        return Ok(());
-    }
-
-    if !store::claim_item(&pool, &payload, &doi).await? {
-        tracing::debug!(doi, "item already terminal or claimed");
-        store::mark_event_processed(&pool, event.id).await?;
-        return Ok(());
-    }
-
-    if store::ingestion_cancelled(&pool, payload.ingestion_id).await? {
-        store::mark_item(
+    let doi = match normalize_doi(&event.payload.doi) {
+        Ok(doi) => doi,
+        Err(error) => {
+            let record = dead_letter(&bytes, Some(event.event_id), delivery_count, "INVALID_DOI");
+            store::complete_without_doi(
+                &pool,
+                &event,
+                &event.payload.doi,
+                owner,
+                IngestionItemStatus::Failed,
+                Some(&error.to_string()),
+                Some(&record),
+            )
+            .await?;
+            return Ok(DeliveryAction::Terminate);
+        }
+    };
+    store::mark_fetching(&pool, &event, &doi).await?;
+    if event.payload.depth > event.payload.max_depth {
+        store::complete_without_doi(
             &pool,
-            &payload,
+            &event,
             &doi,
+            owner,
+            IngestionItemStatus::Skipped,
+            Some("maximum depth exceeded"),
+            None,
+        )
+        .await?;
+        return Ok(DeliveryAction::Ack);
+    }
+    if store::ingestion_cancelled(&pool, event.payload.ingestion_id).await? {
+        store::complete_without_doi(
+            &pool,
+            &event,
+            &doi,
+            owner,
             IngestionItemStatus::Skipped,
             Some("ingestion cancelled"),
+            None,
         )
         .await?;
-        store::mark_event_processed(&pool, event.id).await?;
-        return Ok(());
+        return Ok(DeliveryAction::Ack);
     }
-
-    if !store::claim_global_fetch(&pool, &doi).await? {
-        store::mark_item(
-            &pool,
-            &payload,
-            &doi,
-            IngestionItemStatus::Skipped,
-            Some("already fetched or in progress"),
-        )
-        .await?;
-        store::mark_event_processed(&pool, event.id).await?;
-        return Ok(());
+    if store::is_cached(&pool, &doi).await? {
+        store::attach_cached(&pool, &event, &doi, owner).await?;
+        return Ok(DeliveryAction::Ack);
+    }
+    if store::claim_doi(&pool, &doi, owner, claim_lease).await? != store::ClaimState::Acquired {
+        let action = action_for(FailureClass::Retryable, delivery_count);
+        if action == DeliveryAction::Terminate {
+            let record = dead_letter(
+                &bytes,
+                Some(event.event_id),
+                delivery_count,
+                "DOI_LEASE_EXHAUSTED",
+            );
+            store::complete_without_doi(
+                &pool,
+                &event,
+                &doi,
+                owner,
+                IngestionItemStatus::Failed,
+                Some("DOI lease remained busy through the final delivery"),
+                Some(&record),
+            )
+            .await?;
+        } else {
+            store::release_event_claim(&pool, event.event_id, owner, "DOI lease is busy").await?;
+        }
+        return Ok(action);
     }
 
     let settings = store::load_runtime_settings(&pool).await?;
-    let client =
-        CrossrefClient::new(settings.crossref_mailto)?.with_max_attempts(settings.retry_attempts);
-    limiter.until_ready().await;
+    let client = match CrossrefClient::new(settings.crossref_mailto.clone()) {
+        Ok(client) => client.with_max_attempts(settings.retry_attempts),
+        Err(error) => {
+            store::finalize_terminal_failure(
+                &pool,
+                &event,
+                &doi,
+                owner,
+                IngestionItemStatus::Failed,
+                &error.to_string(),
+                None,
+            )
+            .await?;
+            return Ok(DeliveryAction::Ack);
+        }
+    };
+    limiter::acquire(&pool, "crossref", settings.rate_limit_per_second).await?;
+    let (cancel_heartbeat, heartbeat_done) = spawn_heartbeat(
+        pool.clone(),
+        event.event_id,
+        doi.clone(),
+        owner,
+        claim_lease,
+    );
+    let fetched = client.fetch_work(&doi).await;
+    cancel_heartbeat.send_replace(true);
+    let _ = heartbeat_done.await;
 
-    match client.fetch_work(&doi).await {
+    match fetched {
         Ok(work) => {
-            store::persist_work(&pool, &payload, &work).await?;
-            store::mark_item(&pool, &payload, &doi, IngestionItemStatus::Fetched, None).await?;
-            store::mark_global_fetch(&pool, &doi, FetchStatus::Fetched, None).await?;
-
-            let mut discovered = 0usize;
-            for reference in &work.references {
-                let Some(reference_doi) = &reference.doi else {
-                    store::persist_unresolved_reference(&pool, &payload, &doi, reference).await?;
-                    continue;
-                };
-                store::persist_citation(&pool, &payload, &doi, reference_doi).await?;
-                if payload.depth < payload.max_depth {
-                    discovered += 1;
-                    nats::enqueue_reference(&pool, &event, &payload, reference_doi).await?;
-                }
+            store::finalize_success(&pool, &event, &doi, owner, &work).await?;
+            Ok(DeliveryAction::Ack)
+        }
+        Err(error) if is_retryable_crossref_error(&error) => {
+            let action = action_for(FailureClass::Retryable, delivery_count);
+            if action == DeliveryAction::Terminate {
+                let record = dead_letter(
+                    &bytes,
+                    Some(event.event_id),
+                    delivery_count,
+                    "DELIVERY_EXHAUSTED",
+                );
+                store::finalize_terminal_failure(
+                    &pool,
+                    &event,
+                    &doi,
+                    owner,
+                    IngestionItemStatus::Failed,
+                    &error.to_string(),
+                    Some(&record),
+                )
+                .await?;
+            } else {
+                store::release_retryable(&pool, event.event_id, &doi, owner, &error.to_string())
+                    .await?;
             }
-
-            nats::publish_completed(&pool, &payload, &doi, discovered).await?;
-            nats::publish_metrics_recompute(&pool, &payload).await?;
+            Ok(action)
         }
         Err(error) => {
-            let retryable = is_retryable_crossref_error(&error);
-            let item_status = if matches!(error, CrossrefError::NotFound(_)) {
+            let status = if matches!(error, CrossrefError::NotFound(_)) {
                 IngestionItemStatus::NotFound
             } else {
                 IngestionItemStatus::Failed
             };
-            let fetch_status = if matches!(error, CrossrefError::NotFound(_)) {
-                FetchStatus::NotFound
-            } else {
-                FetchStatus::Failed
-            };
-            let message = error.to_string();
-            store::mark_item(&pool, &payload, &doi, item_status, Some(&message)).await?;
-            store::mark_global_fetch(&pool, &doi, fetch_status, Some(&message)).await?;
-            nats::publish_failed(&pool, &payload, &doi, &message, retryable).await?;
+            store::finalize_terminal_failure(
+                &pool,
+                &event,
+                &doi,
+                owner,
+                status,
+                &error.to_string(),
+                None,
+            )
+            .await?;
+            Ok(DeliveryAction::Ack)
         }
     }
+}
 
-    store::mark_event_processed(&pool, event.id).await?;
-    Ok(())
+fn spawn_heartbeat(
+    pool: PgPool,
+    event_id: Uuid,
+    doi: String,
+    owner: Uuid,
+    lease: Duration,
+) -> (watch::Sender<bool>, tokio::task::JoinHandle<()>) {
+    let (sender, mut receiver) = watch::channel(false);
+    let interval = (lease / 3).max(Duration::from_secs(1));
+    let handle = tokio::spawn(async move {
+        loop {
+            tokio::select! {
+                result = receiver.changed() => {
+                    if result.is_err() || *receiver.borrow() { break; }
+                }
+                _ = tokio::time::sleep(interval) => {
+                    match store::renew_claims(&pool, event_id, &doi, owner, lease).await {
+                        Ok(true) => tracing::debug!(%event_id, %doi, "processing lease renewed"),
+                        Ok(false) => { tracing::error!(%event_id, %doi, "processing lease was lost"); break; }
+                        Err(error) => tracing::warn!(%error, %event_id, %doi, "lease heartbeat failed"),
+                    }
+                }
+            }
+        }
+    });
+    (sender, handle)
+}
+
+fn dead_letter(
+    bytes: &[u8],
+    event_id: Option<Uuid>,
+    delivery_count: u64,
+    reason: &str,
+) -> DeadLetterRecord {
+    let digest = Sha256::digest(bytes);
+    let payload_sha256 = digest
+        .iter()
+        .map(|byte| format!("{byte:02x}"))
+        .collect::<String>();
+    DeadLetterRecord {
+        identity: format!("sha256:{payload_sha256}"),
+        source_subject: deepref_events::SUBJECT_WORK_FETCH_REQUESTED.to_owned(),
+        source_event_id: event_id,
+        delivery_count,
+        reason_code: reason.to_owned(),
+        payload_sha256,
+    }
 }
 
 fn is_retryable_crossref_error(error: &CrossrefError) -> bool {
@@ -118,15 +254,11 @@ fn is_retryable_crossref_error(error: &CrossrefError) -> bool {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use reqwest::StatusCode;
-
     #[test]
-    fn classifies_retryable_crossref_errors() {
-        assert!(is_retryable_crossref_error(
-            &CrossrefError::RetryableStatus(StatusCode::TOO_MANY_REQUESTS)
-        ));
-        assert!(!is_retryable_crossref_error(&CrossrefError::NotFound(
-            "10.1/x".to_owned()
-        )));
+    fn malformed_identity_is_stable() {
+        assert_eq!(
+            dead_letter(b"bad", None, 1, "bad").identity,
+            dead_letter(b"bad", None, 5, "other").identity
+        );
     }
 }

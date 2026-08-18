@@ -1,33 +1,21 @@
-use async_nats::jetstream;
-use deepref_events::STREAM;
+use std::path::PathBuf;
 
-pub(crate) async fn connect_jetstream(
-    nats_url: &str,
-) -> anyhow::Result<Option<jetstream::Context>> {
-    match async_nats::connect(nats_url).await {
-        Ok(client) => {
-            let jetstream = jetstream::new(client);
-            ensure_stream(&jetstream).await?;
-            Ok(Some(jetstream))
-        }
-        Err(error) => {
-            tracing::warn!(%error, "NATS JetStream unavailable; ingestion publishing is disabled");
-            Ok(None)
-        }
+use async_nats::{ConnectOptions, jetstream};
+use deepref_config::NatsConfig;
+
+/// Connects and returns a publish context. Stream and consumer ownership lives
+/// exclusively in local bootstrap/Helm.
+pub async fn connect_jetstream(config: &NatsConfig) -> anyhow::Result<jetstream::Context> {
+    let mut options = ConnectOptions::new().connection_timeout(config.connect_timeout);
+    if let Some(path) = &config.credentials_file {
+        options = options.credentials_file(path).await?;
     }
-}
-
-async fn ensure_stream(jetstream: &jetstream::Context) -> anyhow::Result<()> {
-    jetstream
-        .create_or_update_stream(jetstream::stream::Config {
-            name: STREAM.to_owned(),
-            subjects: vec![
-                "work.>".to_owned(),
-                "metrics.>".to_owned(),
-                "ingestion.>".to_owned(),
-            ],
-            ..Default::default()
-        })
-        .await?;
-    Ok(())
+    if let Some(path) = &config.ca_file {
+        options = options
+            .add_root_certificates(PathBuf::from(path))
+            .require_tls(true);
+    }
+    let client =
+        tokio::time::timeout(config.connect_timeout, options.connect(&config.url)).await??;
+    Ok(jetstream::new(client))
 }

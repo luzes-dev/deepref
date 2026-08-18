@@ -1,0 +1,64 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: {{ include "deepref.componentName" (dict "root" . "component" "web") }}
+  namespace: {{ include "deepref.namespace" . }}
+  labels:
+    {{- include "deepref.labels" . | nindent 4 }}
+    app.kubernetes.io/component: web
+spec:
+  replicas: {{ .Values.web.replicas }}
+  revisionHistoryLimit: 3
+  strategy:
+    type: RollingUpdate
+    rollingUpdate: {maxUnavailable: 0, maxSurge: 1}
+  selector:
+    matchLabels:
+      {{- include "deepref.selectorLabels" (dict "root" . "component" "web") | nindent 6 }}
+  template:
+    metadata:
+      labels:
+        {{- include "deepref.selectorLabels" (dict "root" . "component" "web") | nindent 8 }}
+        {{- with .Values.global.podLabels }}{{ toYaml . | nindent 8 }}{{- end }}
+    spec:
+      serviceAccountName: {{ .Values.serviceAccounts.web }}
+      automountServiceAccountToken: false
+      terminationGracePeriodSeconds: {{ .Values.web.terminationGracePeriodSeconds }}
+      securityContext:
+        {{- include "deepref.podSecurityContext" . | nindent 8 }}
+        fsGroup: 65532
+        fsGroupChangePolicy: OnRootMismatch
+      {{- include "deepref.imagePullSecrets" . | nindent 6 }}
+      {{- include "deepref.topology" (dict "root" . "component" "web") | nindent 6 }}
+      containers:
+        - name: web
+          image: {{ include "deepref.image" (dict "name" "web" "image" .Values.images.web) }}
+          imagePullPolicy: {{ .Values.global.imagePullPolicy }}
+          securityContext:
+            {{- include "deepref.containerSecurityContext" . | nindent 12 }}
+            runAsUser: 65532
+            runAsGroup: 65532
+          ports:
+            - {name: http, containerPort: 8080, protocol: TCP}
+          env:
+            - name: DEEPREF_API_UPSTREAM
+              value: {{ printf "%s:8080" (include "deepref.componentName" (dict "root" . "component" "api")) | quote }}
+          volumeMounts:
+            - {name: tmp, mountPath: /tmp}
+            - {name: caddy-config, mountPath: /config}
+            - {name: caddy-data, mountPath: /data}
+          resources: {{- toYaml .Values.web.resources | nindent 12 }}
+          startupProbe:
+            httpGet: {path: /healthz, port: http}
+            failureThreshold: 30
+            periodSeconds: 2
+          livenessProbe:
+            httpGet: {path: /healthz, port: http}
+            periodSeconds: 10
+          readinessProbe:
+            httpGet: {path: /healthz, port: http}
+            periodSeconds: 5
+      volumes:
+        - {name: tmp, emptyDir: {sizeLimit: 64Mi}}
+        - {name: caddy-config, emptyDir: {sizeLimit: 64Mi}}
+        - {name: caddy-data, emptyDir: {sizeLimit: 64Mi}}

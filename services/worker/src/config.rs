@@ -1,44 +1,43 @@
-use std::env;
+use std::time::Duration;
 
-pub(crate) struct WorkerConfig {
-    pub(crate) database_url: String,
-    pub(crate) nats_url: String,
-    pub(crate) concurrency: usize,
+use deepref_config::RuntimeConfig;
+
+#[derive(Debug, Clone)]
+pub struct WorkerConfig {
+    pub runtime: RuntimeConfig,
+    pub concurrency: usize,
+    pub claim_lease: Duration,
+    pub reconciler_interval: Duration,
 }
 
 impl WorkerConfig {
-    pub(crate) fn from_env() -> anyhow::Result<Self> {
-        let concurrency = match env::var("WORKER_CONCURRENCY") {
-            Ok(value) => value.parse::<usize>()?,
-            Err(_) => 8,
-        };
+    pub fn from_env() -> anyhow::Result<Self> {
+        let concurrency = parse("WORKER_CONCURRENCY", 8_usize)?;
         if concurrency == 0 {
             anyhow::bail!("WORKER_CONCURRENCY must be >= 1");
         }
-
+        let lease = parse("WORKER_CLAIM_LEASE_SECS", 60_u64)?;
+        let reconcile = parse("WORKER_RECONCILER_INTERVAL_SECS", 30_u64)?;
+        if lease == 0 || reconcile == 0 {
+            anyhow::bail!("worker durations must be greater than zero");
+        }
         Ok(Self {
-            database_url: env::var("DATABASE_URL")
-                .unwrap_or_else(|_| "postgres://deepref:deepref@localhost:5432/deepref".to_owned()),
-            nats_url: env::var("NATS_URL").unwrap_or_else(|_| "nats://localhost:4222".to_owned()),
+            runtime: RuntimeConfig::from_env("deepref-worker")?,
             concurrency,
+            claim_lease: Duration::from_secs(lease),
+            reconciler_interval: Duration::from_secs(reconcile),
         })
     }
 }
 
-#[cfg(test)]
-mod tests {
-    #[test]
-    fn rejects_zero_concurrency() {
-        let result = "0"
-            .parse::<usize>()
-            .map_err(anyhow::Error::from)
-            .and_then(|value| {
-                if value == 0 {
-                    anyhow::bail!("WORKER_CONCURRENCY must be >= 1");
-                }
-                Ok(value)
-            });
-
-        assert!(result.is_err());
-    }
+fn parse<T>(name: &str, default: T) -> anyhow::Result<T>
+where
+    T: std::str::FromStr,
+    T::Err: std::error::Error + Send + Sync + 'static,
+{
+    Ok(std::env::var(name)
+        .ok()
+        .map(|value| value.parse())
+        .transpose()?
+        .unwrap_or(default))
 }

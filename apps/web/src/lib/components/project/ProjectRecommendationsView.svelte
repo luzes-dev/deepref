@@ -1,11 +1,11 @@
 <script lang="ts">
-	import * as Alert from '$lib/components/ui/alert';
 	import * as Empty from '$lib/components/ui/empty';
 	import { Badge } from '$lib/components/ui/badge';
 	import { Skeleton } from '$lib/components/ui/skeleton';
+	import GraphDegradedState from '$lib/components/GraphDegradedState.svelte';
 	import { createGetProjectRecommendations } from '$lib/api/generated/articles/articles';
+	import { createGetProjectProjection } from '$lib/api/generated/projection/projection';
 	import type { ArticleDto, RecommendationGroupsDto } from '$lib/api/generated/models';
-	import CircleAlertIcon from '@lucide/svelte/icons/circle-alert';
 	import { useProjectWorkspaceContext } from './context.svelte.js';
 
 	const workspace = useProjectWorkspaceContext();
@@ -15,11 +15,16 @@
 		() => workspace.project.id,
 		() => ({ query: { enabled: Boolean(workspace.project.id && enabled), staleTime: 0 } })
 	);
+	const projectionQuery = createGetProjectProjection(
+		() => workspace.project.id,
+		() => ({ query: { enabled: Boolean(workspace.project.id && enabled), staleTime: 0 } })
+	);
 	const groups = $derived<RecommendationGroupsDto>(
 		recommendations.data?.data ?? {
 			foundational: [],
 			core_to_project: [],
-			underexplored: []
+			underexplored: [],
+			projection: { revision: 0, lag: 0 }
 		}
 	);
 	const groupEntries = $derived([
@@ -38,15 +43,27 @@
 				Reading groups from project citation signals.
 			</p>
 		</div>
-		<Badge variant="secondary">{total} articles</Badge>
+		<div class="flex flex-wrap gap-2">
+			<Badge variant="secondary">{total} articles</Badge>
+			{#if recommendations.data}
+				<Badge variant="secondary">Projection revision {groups.projection.revision}</Badge>
+				<Badge variant="outline">Lag {groups.projection.lag}</Badge>
+				{#if groups.projection.last_success_at}
+					<Badge variant="outline">
+						Projected {new Date(groups.projection.last_success_at).toLocaleString()}
+					</Badge>
+				{/if}
+			{/if}
+		</div>
 	</div>
 
 	{#if recommendations.error}
-		<Alert.Root variant="destructive">
-			<CircleAlertIcon />
-			<Alert.Title>Recommendations unavailable</Alert.Title>
-			<Alert.Description>{recommendations.error.message}</Alert.Description>
-		</Alert.Root>
+		<GraphDegradedState
+			error={recommendations.error}
+			feature="Recommendations"
+			projection={projectionQuery.data?.data}
+			onRetry={() => void recommendations.refetch()}
+		/>
 	{:else if recommendations.isPending && enabled}
 		<div class="grid gap-4 lg:grid-cols-3">
 			{#each [0, 1, 2] as index (index)}

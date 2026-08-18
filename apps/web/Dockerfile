@@ -1,25 +1,44 @@
-FROM node:26-bookworm-slim AS deps
+ARG NODE_BASE_REPOSITORY="docker.io/library/node"
+ARG CADDY_BASE_REPOSITORY="docker.io/library/caddy"
 
-WORKDIR /app
-RUN npm install -g pnpm@11.3.0
+FROM ${NODE_BASE_REPOSITORY}@sha256:b31e7a42fdf8b8aa5f5ed477c72d694301273f1069c5a2f71d53c6482e99a2fc AS builder
+
+ENV PNPM_HOME=/pnpm \
+    PATH=/pnpm:$PATH
+WORKDIR /build
+
+RUN corepack enable pnpm
+
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
-COPY apps/web/package.json ./apps/web/package.json
-COPY apps/web/svelte.config.js ./apps/web/svelte.config.js
-RUN pnpm install --frozen-lockfile --filter @deepref/web...
+COPY apps/web ./apps/web
 
-FROM node:26-bookworm-slim AS builder
+RUN pnpm install --frozen-lockfile --filter @deepref/web... \
+    && pnpm --filter @deepref/web build
 
-WORKDIR /app
-RUN npm install -g pnpm@11.3.0
-COPY --from=deps /app/node_modules ./node_modules
-COPY --from=deps /app/apps/web/node_modules ./apps/web/node_modules
-COPY . .
-RUN pnpm --filter @deepref/web build
+FROM ${CADDY_BASE_REPOSITORY}@sha256:4c6e91c6ed0e2fa03efd5b44747b625fec79bc9cd06ac5235a779726618e530d AS runtime
 
-FROM caddy:2-alpine AS runtime
+ARG OCI_SOURCE="https://github.com/luzes-dev/deepref"
+ARG OCI_REVISION="local"
+ARG OCI_VERSION="0.0.0-dev"
+ARG GIT_TREE_HASH="local"
 
-COPY apps/web/Caddyfile /etc/caddy/Caddyfile
-COPY --from=builder /app/apps/web/build /usr/share/caddy
+LABEL org.opencontainers.image.source="${OCI_SOURCE}" \
+      org.opencontainers.image.revision="${OCI_REVISION}" \
+      org.opencontainers.image.version="${OCI_VERSION}" \
+      org.opencontainers.image.licenses="MIT" \
+      dev.deepref.git.tree="${GIT_TREE_HASH}"
 
-EXPOSE 80
+ENV HOME=/tmp \
+    XDG_CONFIG_HOME=/config \
+    XDG_DATA_HOME=/data
+
+RUN mkdir -p /config/caddy /data/caddy \
+    && chown -R 65532:65532 /config /data
+
+COPY --chown=65532:65532 apps/web/Caddyfile /etc/caddy/Caddyfile
+COPY --from=builder --chown=65532:65532 /build/apps/web/build /usr/share/caddy
+
+USER 65532:65532
+EXPOSE 8080
+STOPSIGNAL SIGTERM
 CMD ["caddy", "run", "--config", "/etc/caddy/Caddyfile", "--adapter", "caddyfile"]

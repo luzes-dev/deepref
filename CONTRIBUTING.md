@@ -28,36 +28,32 @@ Production hotfixes may use `hotfix/*` branches directly into `main`. After a ho
 ## Setup
 
 ```bash
-pnpm install
-docker compose -f infra/docker-compose.yml up -d
+mise trust
+mise install
+mise exec -- just bootstrap
 ```
 
 ## Checks
 
 ```bash
-pnpm run ci
-cargo fmt --all -- --check
-cargo clippy --workspace --all-targets --locked -- -D warnings
-cargo test --workspace --locked
+mise exec -- just verify
+mise exec -- just test-unit
+mise exec -- just docs-check
 ```
 
 Run Fallow before larger TypeScript changes:
 
 ```bash
-pnpm run quality:ts
+mise exec -- pnpm run quality:ts
 ```
 
 ## CI/CD
 
 GitHub Actions runs Rust, web, E2E, TypeScript quality, Docker build, and security checks on pull requests to `development`, `staging`, and `main`.
 
-Merges to long-lived branches publish GHCR images:
+Merges to `development` build signed immutable images and charts once in ECR. Protected promotion workflows copy the exact tested digests to staging and production and update reviewed GitOps release locks; promotion never rebuilds an artifact.
 
-- `development`: `development` and `development-<short-sha>`
-- `staging`: `staging` and `staging-<short-sha>`
-- `main`: `production`, `production-<short-sha>`, and `latest`
-
-Version tags matching `v*.*.*` also publish release images and create a GitHub release.
+Operational changes must preserve the ownership boundaries in [Production operations](docs/operations/README.md). Hosted workload changes are proposed through GitOps automation; do not document or normalize direct `kubectl` mutation. Documentation that changes platform behavior or acceptance evidence must update [AC-01 through AC-16](docs/acceptance/production-platform.md) without marking apply-time work complete from local checks.
 
 ## Repository Settings
 

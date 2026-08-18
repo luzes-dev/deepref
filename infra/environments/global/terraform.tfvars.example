@@ -1,0 +1,39 @@
+# Placeholder identifiers only. Copy outside version control and replace every REPLACE_WITH value.
+# Inject github_oauth_client_secret via an approved TF_VAR environment or equivalent secret broker.
+expected_global_state_account_id = "REPLACE_WITH_12_DIGIT_SELECTED_STATE_ACCOUNT_ID"
+
+aws_environments = {
+  development = {
+    account_id              = "REPLACE_WITH_12_DIGIT_DEVELOPMENT_ACCOUNT_ID"
+    cluster_access_role_arn = "arn:aws:iam::REPLACE_WITH_12_DIGIT_DEVELOPMENT_ACCOUNT_ID:role/REPLACE_WITH_GLOBAL_BOOTSTRAP_ROLE"
+    eks_cluster_name        = "REPLACE_WITH_DEVELOPMENT_EKS_CLUSTER_NAME"
+  }
+  staging = {
+    account_id              = "REPLACE_WITH_12_DIGIT_STAGING_ACCOUNT_ID"
+    cluster_access_role_arn = "arn:aws:iam::REPLACE_WITH_12_DIGIT_STAGING_ACCOUNT_ID:role/REPLACE_WITH_GLOBAL_BOOTSTRAP_ROLE"
+    eks_cluster_name        = "REPLACE_WITH_STAGING_EKS_CLUSTER_NAME"
+  }
+  production = {
+    account_id              = "REPLACE_WITH_12_DIGIT_PRODUCTION_ACCOUNT_ID"
+    cluster_access_role_arn = "arn:aws:iam::REPLACE_WITH_12_DIGIT_PRODUCTION_ACCOUNT_ID:role/REPLACE_WITH_GLOBAL_BOOTSTRAP_ROLE"
+    eks_cluster_name        = "REPLACE_WITH_PRODUCTION_EKS_CLUSTER_NAME"
+  }
+}
+
+argo_chart_version    = "REPLACE_WITH_PINNED_ARGO_CD_CHART_VERSION"
+gitops_repository_url = "https://github.com/REPLACE_WITH_GITHUB_ORGANIZATION/REPLACE_WITH_REPOSITORY"
+
+cloudflare_account_id       = "REPLACE_WITH_32_CHARACTER_CLOUDFLARE_ACCOUNT_ID"
+cloudflare_zone_id          = "REPLACE_WITH_32_CHARACTER_CLOUDFLARE_ZONE_ID"
+base_domain                = "REPLACE_WITH_BASE_DOMAIN"
+cloudflare_access_team_name = "REPLACE_WITH_ZERO_TRUST_TEAM_SLUG"
+github_oauth_client_id      = "REPLACE_WITH_GITHUB_OAUTH_CLIENT_ID"
+
+github_owner              = "REPLACE_WITH_GITHUB_ORGANIZATION"
+github_repository         = "REPLACE_WITH_REPOSITORY"
+github_reviewer_team_slug = "REPLACE_WITH_REVIEWER_TEAM_SLUG"
+# deployment_github_app_id = REPLACE_WITH_NUMERIC_DEPLOYMENT_APP_ID
+
+tags = {
+  Owner = "REPLACE_WITH_PLATFORM_OWNER"
+}

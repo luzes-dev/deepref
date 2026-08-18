@@ -1,5 +1,4 @@
 <script lang="ts">
-	import * as Alert from '$lib/components/ui/alert';
 	import * as Empty from '$lib/components/ui/empty';
 	import * as InputGroup from '$lib/components/ui/input-group';
 	import { Badge } from '$lib/components/ui/badge';
@@ -7,9 +6,10 @@
 	import { Skeleton } from '$lib/components/ui/skeleton';
 	import { Slider } from '$lib/components/ui/slider';
 	import { Spinner } from '$lib/components/ui/spinner';
-	import type { ArticleDto, GraphEdgeDto } from '$lib/api/generated/models';
+	import GraphDegradedState from '$lib/components/GraphDegradedState.svelte';
+	import type { ArticleDto, GraphEdgeDto, ProjectGraphDto } from '$lib/api/generated/models';
 	import { createGetProjectGraph } from '$lib/api/generated/articles/articles';
-	import CircleAlertIcon from '@lucide/svelte/icons/circle-alert';
+	import { createGetProjectProjection } from '$lib/api/generated/projection/projection';
 	import RotateCcwIcon from '@lucide/svelte/icons/rotate-ccw';
 	import SearchIcon from '@lucide/svelte/icons/search';
 	import { onCleanup } from 'runed';
@@ -137,7 +137,18 @@
 		() => workspace.project.id,
 		() => ({ query: { enabled: Boolean(workspace.project.id && enabled), staleTime: 0 } })
 	);
-	const graphData = $derived(graphQuery.data?.data ?? { nodes: [], edges: [] });
+	const projectionQuery = createGetProjectProjection(
+		() => workspace.project.id,
+		() => ({ query: { enabled: Boolean(workspace.project.id && enabled), staleTime: 0 } })
+	);
+	const graphData = $derived<ProjectGraphDto>(
+		graphQuery.data?.data ?? {
+			nodes: [],
+			edges: [],
+			projection: { revision: 0, lag: 0 },
+			truncated: false
+		}
+	);
 	const visibleNodes = $derived(
 		graphData.nodes.filter((node) => {
 			const label = (node.title ?? node.doi).toLowerCase();
@@ -824,6 +835,20 @@
 				Project-local citation network, directed from citing work to cited work.
 			</p>
 		</div>
+		{#if graphQuery.data}
+			<div class="flex flex-wrap gap-2" data-testid="projection-metadata">
+				<Badge variant="secondary"
+					>Projection revision {graphData.projection.revision}</Badge
+				>
+				<Badge variant="outline">Lag {graphData.projection.lag}</Badge>
+				{#if graphData.projection.last_success_at}
+					<Badge variant="outline">
+						Projected {new Date(graphData.projection.last_success_at).toLocaleString()}
+					</Badge>
+				{/if}
+				{#if graphData.truncated}<Badge variant="secondary">Bounded result</Badge>{/if}
+			</div>
+		{/if}
 	</div>
 
 	<div class="grid gap-3 md:grid-cols-[1fr_280px_auto]">
@@ -848,11 +873,11 @@
 		>
 	</div>
 	{#if graphQuery.error}
-		<Alert.Root variant="destructive">
-			<CircleAlertIcon />
-			<Alert.Title>Graph unavailable</Alert.Title>
-			<Alert.Description>{graphQuery.error.message}</Alert.Description>
-		</Alert.Root>
+		<GraphDegradedState
+			error={graphQuery.error}
+			projection={projectionQuery.data?.data}
+			onRetry={() => void graphQuery.refetch()}
+		/>
 	{:else if graphQuery.isPending && enabled}
 		<Skeleton class="min-h-[520px] flex-1" />
 	{:else if graphData.nodes.length === 0 || visibleNodes.length === 0}

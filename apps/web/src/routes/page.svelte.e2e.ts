@@ -37,7 +37,9 @@ const articles = [
 		total_citations: 10,
 		internal_citations: 2,
 		outbound_internal_references: 1,
-		rank_score: 0.99
+		rank_score: 0.99,
+		metrics_as_of: '2026-01-01T00:00:00Z',
+		metrics_stale: false
 	},
 	{
 		doi: '10.2/review',
@@ -48,7 +50,9 @@ const articles = [
 		total_citations: 22,
 		internal_citations: 4,
 		outbound_internal_references: 2,
-		rank_score: 0.74
+		rank_score: 0.74,
+		metrics_as_of: '2026-01-01T00:00:00Z',
+		metrics_stale: false
 	},
 	{
 		doi: '10.3/archive',
@@ -59,7 +63,9 @@ const articles = [
 		total_citations: 5,
 		internal_citations: 1,
 		outbound_internal_references: 0,
-		rank_score: 0.12
+		rank_score: 0.12,
+		metrics_as_of: '2026-01-01T00:00:00Z',
+		metrics_stale: false
 	}
 ];
 
@@ -72,26 +78,65 @@ const paginatedArticles = Array.from({ length: 9 }, (_, index) => ({
 	total_citations: index + 1,
 	internal_citations: index % 3,
 	outbound_internal_references: index % 2,
-	rank_score: 0.65 - index * 0.03
+	rank_score: 0.65 - index * 0.03,
+	metrics_as_of: '2026-01-01T00:00:00Z',
+	metrics_stale: false
 }));
 
 const workspaceArticles = [...articles, ...paginatedArticles];
 
+const availableDependencies = {
+	postgresql: { state: 'available', lag: null, backlog: null, oldest_age_seconds: null },
+	nats: { state: 'available', lag: null, backlog: null, oldest_age_seconds: null },
+	outbox: { state: 'available', lag: null, backlog: 0, oldest_age_seconds: 0 },
+	worker: { state: 'available', lag: 0, backlog: 0, oldest_age_seconds: null },
+	neo4j: { state: 'available', lag: null, backlog: null, oldest_age_seconds: null },
+	projection: { state: 'available', lag: 0, backlog: null, oldest_age_seconds: null }
+};
+
+const projection = {
+	revision: 42,
+	lag: 0,
+	last_success_at: '2026-01-01T00:00:00Z'
+};
+
+const pageOf = <T>(items: T[], next_cursor: string | null = null) => ({ items, next_cursor });
+
+async function mockHealth(page: Page) {
+	await page.route('http://localhost:4173/api/health/dependencies', async (route) => {
+		await route.fulfill({ json: availableDependencies });
+	});
+}
+
 async function mockWorkspace(page: Page) {
-	await page.route('http://localhost:4173/api/projects', async (route) => {
-		await route.fulfill({ json: [project] });
+	await mockHealth(page);
+	await page.route(/http:\/\/localhost:4173\/api\/projects(?:\?.*)?$/, async (route) => {
+		await route.fulfill({ json: pageOf([project]) });
 	});
 	await page.route('http://localhost:4173/api/projects/test-project', async (route) => {
 		await route.fulfill({ json: project });
 	});
-	await page.route('http://localhost:4173/api/projects/test-project/articles', async (route) => {
-		await route.fulfill({ json: workspaceArticles });
-	});
+	await page.route(
+		/http:\/\/localhost:4173\/api\/projects\/test-project\/articles(?:\?.*)?$/,
+		async (route) => {
+			await route.fulfill({ json: pageOf(workspaceArticles) });
+		}
+	);
+	await page.route(
+		'http://localhost:4173/api/projects/test-project/projection',
+		async (route) => {
+			await route.fulfill({
+				json: { project_id: project.id, state: 'ready', watermark: 42, ...projection }
+			});
+		}
+	);
 	await page.route('http://localhost:4173/api/projects/test-project/graph', async (route) => {
 		await route.fulfill({
 			json: {
 				nodes: workspaceArticles,
-				edges: [{ source: '10.1/source', target: '10.1/source' }]
+				edges: [{ source: '10.1/source', target: '10.1/source' }],
+				projection,
+				truncated: false
 			}
 		});
 	});
@@ -102,7 +147,8 @@ async function mockWorkspace(page: Page) {
 				json: {
 					foundational: [],
 					core_to_project: [],
-					underexplored: []
+					underexplored: [],
+					projection
 				}
 			});
 		}
@@ -124,7 +170,7 @@ async function mockWorkspace(page: Page) {
 			});
 		}
 	);
-	await page.route('http://localhost:4173/api/ingestions', async (route) => {
+	await page.route(/http:\/\/localhost:4173\/api\/ingestions(?:\?.*)?$/, async (route) => {
 		if (route.request().method() === 'POST') {
 			const body = route.request().postDataJSON();
 			expect(body).toMatchObject({
@@ -153,7 +199,7 @@ async function mockWorkspace(page: Page) {
 			return;
 		}
 		await route.fulfill({
-			json: [
+			json: pageOf([
 				{
 					id: 'project-ingestion',
 					project_id: 'test-project',
@@ -180,7 +226,7 @@ async function mockWorkspace(page: Page) {
 					started_at: null,
 					completed_at: '2026-01-01T00:01:00Z'
 				}
-			]
+			])
 		});
 	});
 	await page.route('http://localhost:4173/api/ingestions/new-ingestion', async (route) => {
@@ -201,14 +247,15 @@ async function mockWorkspace(page: Page) {
 		});
 	});
 	await page.route('http://localhost:4173/api/ingestions/new-ingestion/items', async (route) => {
-		await route.fulfill({ json: [] });
+		await route.fulfill({ json: pageOf([]) });
 	});
 }
 
 async function mockProjectCreateWorkspace(page: Page, initialProjects = [project]) {
 	let projects = [...initialProjects];
+	await mockHealth(page);
 
-	await page.route('http://localhost:4173/api/projects', async (route) => {
+	await page.route(/http:\/\/localhost:4173\/api\/projects(?:\?.*)?$/, async (route) => {
 		if (route.request().method() === 'POST') {
 			const body = route.request().postDataJSON();
 			expect(body).toMatchObject({
@@ -220,7 +267,7 @@ async function mockProjectCreateWorkspace(page: Page, initialProjects = [project
 			await route.fulfill({ status: 201, json: createdProject });
 			return;
 		}
-		await route.fulfill({ json: projects });
+		await route.fulfill({ json: pageOf(projects) });
 	});
 
 	for (const mockedProject of [project, createdProject]) {
@@ -231,29 +278,33 @@ async function mockProjectCreateWorkspace(page: Page, initialProjects = [project
 			}
 		);
 		await page.route(
-			`http://localhost:4173/api/projects/${mockedProject.id}/articles`,
+			`http://localhost:4173/api/projects/${mockedProject.id}/articles**`,
 			async (route) => {
-				await route.fulfill({ json: mockedProject.id === project.id ? articles : [] });
+				await route.fulfill({
+					json: pageOf(mockedProject.id === project.id ? articles : [])
+				});
 			}
 		);
 		await page.route(
 			`http://localhost:4173/api/projects/${mockedProject.id}/graph`,
 			async (route) => {
-				await route.fulfill({ json: { nodes: [], edges: [] } });
+				await route.fulfill({
+					json: { nodes: [], edges: [], projection, truncated: false }
+				});
 			}
 		);
 		await page.route(
 			`http://localhost:4173/api/projects/${mockedProject.id}/recommendations`,
 			async (route) => {
 				await route.fulfill({
-					json: { foundational: [], core_to_project: [], underexplored: [] }
+					json: { foundational: [], core_to_project: [], underexplored: [], projection }
 				});
 			}
 		);
 	}
 
-	await page.route('http://localhost:4173/api/ingestions', async (route) => {
-		await route.fulfill({ json: [] });
+	await page.route(/http:\/\/localhost:4173\/api\/ingestions(?:\?.*)?$/, async (route) => {
+		await route.fulfill({ json: pageOf([]) });
 	});
 }
 
@@ -262,9 +313,10 @@ async function mockProjectManagementWorkspace(
 	initialProjects = [project, secondaryProject]
 ) {
 	let projects = [...initialProjects];
+	await mockHealth(page);
 
-	await page.route('http://localhost:4173/api/projects', async (route) => {
-		await route.fulfill({ json: projects });
+	await page.route(/http:\/\/localhost:4173\/api\/projects(?:\?.*)?$/, async (route) => {
+		await route.fulfill({ json: pageOf(projects) });
 	});
 
 	await page.route(/http:\/\/localhost:4173\/api\/projects\/[^/]+(?:\/.*)?$/, async (route) => {
@@ -279,18 +331,18 @@ async function mockProjectManagementWorkspace(
 		}
 
 		if (resource === 'articles') {
-			await route.fulfill({ json: projectId === project.id ? articles : [] });
+			await route.fulfill({ json: pageOf(projectId === project.id ? articles : []) });
 			return;
 		}
 
 		if (resource === 'graph') {
-			await route.fulfill({ json: { nodes: [], edges: [] } });
+			await route.fulfill({ json: { nodes: [], edges: [], projection, truncated: false } });
 			return;
 		}
 
 		if (resource === 'recommendations') {
 			await route.fulfill({
-				json: { foundational: [], core_to_project: [], underexplored: [] }
+				json: { foundational: [], core_to_project: [], underexplored: [], projection }
 			});
 			return;
 		}
@@ -329,8 +381,8 @@ async function mockProjectManagementWorkspace(
 		await route.fulfill({ json: mockedProject });
 	});
 
-	await page.route('http://localhost:4173/api/ingestions', async (route) => {
-		await route.fulfill({ json: [] });
+	await page.route(/http:\/\/localhost:4173\/api\/ingestions(?:\?.*)?$/, async (route) => {
+		await route.fulfill({ json: pageOf([]) });
 	});
 }
 
@@ -346,6 +398,143 @@ test('renders unified workspace without global ingestion links', async ({ page }
 	await expect(page.getByRole('heading', { name: 'Test Project' })).toBeVisible();
 	await expect(page.getByRole('link', { name: 'Ingestions' })).toHaveCount(0);
 	await expect(page.getByRole('link', { name: 'Ingest' })).toHaveCount(0);
+});
+
+test('shows dependency degradation without blocking core workspace views', async ({ page }) => {
+	await mockWorkspace(page);
+	await page.route('http://localhost:4173/api/health/dependencies', async (route) => {
+		await route.fulfill({
+			json: {
+				...availableDependencies,
+				neo4j: { ...availableDependencies.neo4j, state: 'unavailable' },
+				projection: { ...availableDependencies.projection, state: 'degraded', lag: 7 }
+			}
+		});
+	});
+	await page.goto('/');
+
+	await expect(page.getByTestId('dependency-banner')).toContainText('neo4j: unavailable');
+	await expect(page.getByTestId('dependency-banner')).toContainText(
+		'Projects, articles, and ingestions remain available'
+	);
+	await page.getByRole('button', { name: 'Articles' }).click();
+	await expect(page.getByRole('heading', { name: 'Articles' })).toBeVisible();
+});
+
+test('shows stale metric timestamps from the typed article contract', async ({ page }) => {
+	await mockWorkspace(page);
+	await page.route(
+		/http:\/\/localhost:4173\/api\/projects\/test-project\/articles(?:\?.*)?$/,
+		async (route) => {
+			await route.fulfill({
+				json: pageOf([{ ...articles[0], metrics_stale: true }])
+			});
+		}
+	);
+	await page.goto('/');
+	await page.getByRole('button', { name: 'Articles' }).click();
+
+	await expect(page.getByTestId('stale-metrics-banner')).toContainText('Metrics may be stale');
+	await expect(page.getByTestId('stale-metrics-banner')).toContainText('Metrics as of');
+});
+
+test('renders typed graph-only degradation and keeps articles and ingestions usable', async ({
+	page
+}) => {
+	await mockWorkspace(page);
+	await page.route('http://localhost:4173/api/projects/test-project/graph', async (route) => {
+		await route.fulfill({
+			status: 503,
+			headers: {
+				'content-type': 'application/json',
+				'retry-after': '30',
+				'x-correlation-id': 'graph-correlation'
+			},
+			json: {
+				code: 'GRAPH_UNAVAILABLE',
+				message: 'graph features are temporarily unavailable',
+				correlation_id: 'graph-correlation'
+			}
+		});
+	});
+	await page.goto('/');
+	await page.getByRole('button', { name: 'Graph' }).click();
+
+	await expect(page.getByTestId('graph-degraded-state')).toContainText(
+		'Graph temporarily unavailable'
+	);
+	await expect(page.getByTestId('graph-degraded-state')).toContainText('GRAPH_UNAVAILABLE');
+	await expect(page.getByTestId('graph-degraded-state')).toContainText('Retry after 30 seconds');
+	await expect(page.getByTestId('graph-degraded-state')).toContainText('Projection revision 42');
+
+	await page.getByRole('button', { name: 'Articles' }).click();
+	await expect(page.getByRole('button', { name: /Source Article/ })).toBeVisible();
+	await page.getByRole('button', { name: 'Ingestions' }).click();
+	await expect(page.getByText('1 project runs')).toBeVisible();
+});
+
+test('loads opaque cursor pages for projects, articles, and ingestions', async ({ page }) => {
+	await mockWorkspace(page);
+	await page.route(/http:\/\/localhost:4173\/api\/projects(?:\?.*)?$/, async (route) => {
+		const cursor = new URL(route.request().url()).searchParams.get('cursor');
+		await route.fulfill({
+			json: cursor ? pageOf([secondaryProject]) : pageOf([project], 'opaque-project+/=cursor')
+		});
+	});
+	await page.route(
+		/http:\/\/localhost:4173\/api\/projects\/test-project\/articles(?:\?.*)?$/,
+		async (route) => {
+			const cursor = new URL(route.request().url()).searchParams.get('cursor');
+			await route.fulfill({
+				json: cursor
+					? pageOf([articles[1]])
+					: pageOf([articles[0]], 'opaque-article+/=cursor')
+			});
+		}
+	);
+	await page.route(/http:\/\/localhost:4173\/api\/ingestions(?:\?.*)?$/, async (route) => {
+		const cursor = new URL(route.request().url()).searchParams.get('cursor');
+		const baseIngestion = {
+			id: cursor ? 'second-project-ingestion' : 'first-project-ingestion',
+			project_id: project.id,
+			status: 'completed',
+			seed_count: 1,
+			fetched_count: 1,
+			failed_count: 0,
+			queued_count: 0,
+			max_depth: 2,
+			created_at: cursor ? '2026-01-01T00:00:00Z' : '2026-01-02T00:00:00Z',
+			started_at: null,
+			completed_at: '2026-01-02T00:01:00Z'
+		};
+		await route.fulfill({
+			json: pageOf([baseIngestion], cursor ? null : 'opaque-ingestion+/=cursor')
+		});
+	});
+	await page.goto('/');
+
+	await page.getByRole('combobox', { name: 'Select project' }).click();
+	await page
+		.getByTestId('pagination-load-more')
+		.getByRole('button', { name: 'Load more' })
+		.click();
+	await expect(page.getByText('Secondary Project')).toBeVisible();
+	await page.keyboard.press('Escape');
+
+	await page.getByRole('button', { name: 'Articles' }).click();
+	await page
+		.getByTestId('pagination-load-more')
+		.filter({ visible: true })
+		.getByRole('button', { name: 'Load more' })
+		.click();
+	await expect(page.getByRole('button', { name: /Review Article/ })).toBeVisible();
+
+	await page.getByRole('button', { name: 'Ingestions' }).click();
+	await page
+		.getByTestId('pagination-load-more')
+		.getByRole('button', { name: 'Load more' })
+		.click();
+	await expect(page.getByText('2 project runs')).toBeVisible();
 });
 
 test('selecting an article shows inspector', async ({ page }) => {

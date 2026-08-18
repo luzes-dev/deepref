@@ -18,7 +18,7 @@ import type {
 	QueryKey
 } from '@tanstack/svelte-query';
 
-import type { ErrorResponse, SettingsDto, UpdateSettings } from '../models';
+import type { ApiErrorBody, SettingsDto, UpdateSettings } from '../models';
 
 import { customFetch } from '../../custom-fetch.ts';
 import type { ErrorType, BodyType } from '../../custom-fetch.ts';
@@ -31,7 +31,7 @@ export type getSettingsResponse200 = {
 };
 
 export type getSettingsResponse500 = {
-	data: ErrorResponse;
+	data: ApiErrorBody;
 	status: 500;
 };
 
@@ -59,7 +59,7 @@ export const getGetSettingsQueryKey = () => {
 
 export const getGetSettingsQueryOptions = <
 	TData = Awaited<ReturnType<typeof getSettings>>,
-	TError = ErrorType<ErrorResponse>
+	TError = ErrorType<ApiErrorBody>
 >(options?: {
 	query?: Partial<CreateQueryOptions<Awaited<ReturnType<typeof getSettings>>, TError, TData>>;
 	request?: SecondParameter<typeof customFetch>;
@@ -79,11 +79,11 @@ export const getGetSettingsQueryOptions = <
 };
 
 export type GetSettingsQueryResult = NonNullable<Awaited<ReturnType<typeof getSettings>>>;
-export type GetSettingsQueryError = ErrorType<ErrorResponse>;
+export type GetSettingsQueryError = ErrorType<ApiErrorBody>;
 
 export function createGetSettings<
 	TData = Awaited<ReturnType<typeof getSettings>>,
-	TError = ErrorType<ErrorResponse>
+	TError = ErrorType<ApiErrorBody>
 >(
 	options?: () => {
 		query?: Partial<CreateQueryOptions<Awaited<ReturnType<typeof getSettings>>, TError, TData>>;
@@ -101,7 +101,7 @@ export function createGetSettings<
 
 export const prefetchGetSettingsQuery = async <
 	TData = Awaited<ReturnType<typeof getSettings>>,
-	TError = ErrorType<ErrorResponse>
+	TError = ErrorType<ApiErrorBody>
 >(
 	queryClient: QueryClient,
 	options?: {
@@ -122,12 +122,12 @@ export type updateSettingsResponse200 = {
 };
 
 export type updateSettingsResponse400 = {
-	data: ErrorResponse;
+	data: ApiErrorBody;
 	status: 400;
 };
 
 export type updateSettingsResponse500 = {
-	data: ErrorResponse;
+	data: ApiErrorBody;
 	status: 500;
 };
 
@@ -157,7 +157,7 @@ export const updateSettings = async (
 };
 
 export const getUpdateSettingsMutationOptions = <
-	TError = ErrorType<ErrorResponse>,
+	TError = ErrorType<ApiErrorBody>,
 	TContext = unknown
 >(
 	queryClient: QueryClient,
@@ -210,9 +210,9 @@ export const getUpdateSettingsMutationOptions = <
 
 export type UpdateSettingsMutationResult = NonNullable<Awaited<ReturnType<typeof updateSettings>>>;
 export type UpdateSettingsMutationBody = BodyType<UpdateSettings>;
-export type UpdateSettingsMutationError = ErrorType<ErrorResponse>;
+export type UpdateSettingsMutationError = ErrorType<ApiErrorBody>;
 
-export const createUpdateSettings = <TError = ErrorType<ErrorResponse>, TContext = unknown>(
+export const createUpdateSettings = <TError = ErrorType<ApiErrorBody>, TContext = unknown>(
 	options?: () => {
 		mutation?: CreateMutationOptions<
 			Awaited<ReturnType<typeof updateSettings>>,

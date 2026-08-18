@@ -10,14 +10,84 @@
         "tags": [
           "health"
         ],
-        "operationId": "getHealth",
+        "operationId": "getDeprecatedHealth",
         "responses": {
           "200": {
-            "description": "API is healthy",
+            "description": "",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/HealthResponse"
+                  "$ref": "#/components/schemas/LivenessResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/health/dependencies": {
+      "get": {
+        "tags": [
+          "health"
+        ],
+        "operationId": "getDependencyStatus",
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DependencyStatus"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/health/live": {
+      "get": {
+        "tags": [
+          "health"
+        ],
+        "operationId": "getLiveness",
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/LivenessResponse"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/health/ready": {
+      "get": {
+        "tags": [
+          "health"
+        ],
+        "operationId": "getReadiness",
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReadinessResponse"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
                 }
               }
             }
@@ -37,10 +107,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "type": "array",
-                  "items": {
-                    "$ref": "#/components/schemas/IngestionDto"
-                  }
+                  "$ref": "#/components/schemas/PaginatedResponse_IngestionDto"
                 }
               }
             }
@@ -50,7 +117,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
+                  "$ref": "#/components/schemas/ApiErrorBody"
                 }
               }
             }
@@ -88,7 +155,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
+                  "$ref": "#/components/schemas/ApiErrorBody"
                 }
               }
             }
@@ -98,7 +165,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
+                  "$ref": "#/components/schemas/ApiErrorBody"
                 }
               }
             }
@@ -108,7 +175,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
+                  "$ref": "#/components/schemas/ApiErrorBody"
                 }
               }
             }
@@ -150,7 +217,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
+                  "$ref": "#/components/schemas/ApiErrorBody"
                 }
               }
             }
@@ -160,7 +227,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
+                  "$ref": "#/components/schemas/ApiErrorBody"
                 }
               }
             }
@@ -195,7 +262,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
+                  "$ref": "#/components/schemas/ApiErrorBody"
                 }
               }
             }
@@ -227,10 +294,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "type": "array",
-                  "items": {
-                    "$ref": "#/components/schemas/IngestionItemDto"
-                  }
+                  "$ref": "#/components/schemas/PaginatedResponse_IngestionItemDto"
                 }
               }
             }
@@ -240,7 +304,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
+                  "$ref": "#/components/schemas/ApiErrorBody"
                 }
               }
             }
@@ -260,10 +324,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "type": "array",
-                  "items": {
-                    "$ref": "#/components/schemas/ProjectDto"
-                  }
+                  "$ref": "#/components/schemas/PaginatedResponse_ProjectDto"
                 }
               }
             }
@@ -273,7 +334,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
+                  "$ref": "#/components/schemas/ApiErrorBody"
                 }
               }
             }
@@ -311,7 +372,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
+                  "$ref": "#/components/schemas/ApiErrorBody"
                 }
               }
             }
@@ -321,7 +382,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
+                  "$ref": "#/components/schemas/ApiErrorBody"
                 }
               }
             }
@@ -363,7 +424,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
+                  "$ref": "#/components/schemas/ApiErrorBody"
                 }
               }
             }
@@ -373,7 +434,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
+                  "$ref": "#/components/schemas/ApiErrorBody"
                 }
               }
             }
@@ -406,7 +467,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
+                  "$ref": "#/components/schemas/ApiErrorBody"
                 }
               }
             }
@@ -456,7 +517,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
+                  "$ref": "#/components/schemas/ApiErrorBody"
                 }
               }
             }
@@ -466,7 +527,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
+                  "$ref": "#/components/schemas/ApiErrorBody"
                 }
               }
             }
@@ -476,7 +537,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
+                  "$ref": "#/components/schemas/ApiErrorBody"
                 }
               }
             }
@@ -494,34 +555,55 @@
           {
             "name": "project_id",
             "in": "path",
-            "description": "Project identifier",
             "required": true,
             "schema": {
               "type": "string",
               "format": "uuid"
             }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "description": "Opaque cursor returned by the previous page.",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "Page size from 1 through 100.",
+            "required": false,
+            "schema": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "format": "int64"
+            }
           }
         ],
         "responses": {
           "200": {
-            "description": "Project articles ranked by citation metrics",
+            "description": "",
             "content": {
               "application/json": {
                 "schema": {
-                  "type": "array",
-                  "items": {
-                    "$ref": "#/components/schemas/ArticleDto"
-                  }
+                  "$ref": "#/components/schemas/PaginatedResponse_ArticleDto"
                 }
               }
             }
           },
           "500": {
-            "description": "Internal server error",
+            "description": "",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
+                  "$ref": "#/components/schemas/ApiErrorBody"
                 }
               }
             }
@@ -539,7 +621,6 @@
           {
             "name": "project_id",
             "in": "path",
-            "description": "Project identifier",
             "required": true,
             "schema": {
               "type": "string",
@@ -549,7 +630,6 @@
           {
             "name": "doi_key",
             "in": "path",
-            "description": "Base64url-encoded canonical DOI",
             "required": true,
             "schema": {
               "type": "string"
@@ -558,7 +638,7 @@
         ],
         "responses": {
           "200": {
-            "description": "Project article metadata",
+            "description": "",
             "content": {
               "application/json": {
                 "schema": {
@@ -568,31 +648,21 @@
             }
           },
           "400": {
-            "description": "Invalid DOI key",
+            "description": "",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
+                  "$ref": "#/components/schemas/ApiErrorBody"
                 }
               }
             }
           },
           "404": {
-            "description": "Article not found",
+            "description": "",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
-                }
-              }
-            }
-          },
-          "500": {
-            "description": "Internal server error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
+                  "$ref": "#/components/schemas/ApiErrorBody"
                 }
               }
             }
@@ -610,7 +680,6 @@
           {
             "name": "project_id",
             "in": "path",
-            "description": "Project identifier",
             "required": true,
             "schema": {
               "type": "string",
@@ -620,7 +689,7 @@
         ],
         "responses": {
           "200": {
-            "description": "Project citation graph",
+            "description": "",
             "content": {
               "application/json": {
                 "schema": {
@@ -629,12 +698,12 @@
               }
             }
           },
-          "500": {
-            "description": "Internal server error",
+          "503": {
+            "description": "",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
+                  "$ref": "#/components/schemas/ApiErrorBody"
                 }
               }
             }
@@ -652,7 +721,6 @@
           {
             "name": "project_id",
             "in": "path",
-            "description": "Project identifier",
             "required": true,
             "schema": {
               "type": "string",
@@ -661,8 +729,8 @@
           }
         ],
         "responses": {
-          "200": {
-            "description": "Metrics recomputation queued",
+          "202": {
+            "description": "",
             "content": {
               "application/json": {
                 "schema": {
@@ -672,11 +740,52 @@
             }
           },
           "500": {
-            "description": "Internal server error",
+            "description": "",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/projects/{project_id}/projection": {
+      "get": {
+        "tags": [
+          "projection"
+        ],
+        "operationId": "getProjectProjection",
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProjectionStatusDto"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
                 }
               }
             }
@@ -694,7 +803,6 @@
           {
             "name": "project_id",
             "in": "path",
-            "description": "Project identifier",
             "required": true,
             "schema": {
               "type": "string",
@@ -704,7 +812,7 @@
         ],
         "responses": {
           "200": {
-            "description": "Project recommendation groups",
+            "description": "",
             "content": {
               "application/json": {
                 "schema": {
@@ -713,12 +821,12 @@
               }
             }
           },
-          "500": {
-            "description": "Internal server error",
+          "503": {
+            "description": "",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
+                  "$ref": "#/components/schemas/ApiErrorBody"
                 }
               }
             }
@@ -748,7 +856,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
+                  "$ref": "#/components/schemas/ApiErrorBody"
                 }
               }
             }
@@ -786,7 +894,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
+                  "$ref": "#/components/schemas/ApiErrorBody"
                 }
               }
             }
@@ -796,7 +904,7 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ErrorResponse"
+                  "$ref": "#/components/schemas/ApiErrorBody"
                 }
               }
             }
@@ -807,12 +915,41 @@
   },
   "components": {
     "schemas": {
+      "ApiErrorBody": {
+        "type": "object",
+        "required": [
+          "code",
+          "message"
+        ],
+        "properties": {
+          "code": {
+            "type": "string"
+          },
+          "correlation_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          },
+          "details": {
+            "type": [
+              "object",
+              "null"
+            ]
+          },
+          "message": {
+            "type": "string"
+          }
+        }
+      },
       "ArticleDetailDto": {
         "type": "object",
         "required": [
           "doi",
           "total_citations",
           "references_count",
+          "metrics_stale",
           "raw"
         ],
         "properties": {
@@ -837,6 +974,16 @@
               "null"
             ],
             "format": "int32"
+          },
+          "metrics_as_of": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "metrics_stale": {
+            "type": "boolean"
           },
           "published_year": {
             "type": [
@@ -890,7 +1037,8 @@
           "total_citations",
           "internal_citations",
           "outbound_internal_references",
-          "rank_score"
+          "rank_score",
+          "metrics_stale"
         ],
         "properties": {
           "doi": {
@@ -909,6 +1057,16 @@
               "null"
             ],
             "format": "int32"
+          },
+          "metrics_as_of": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "metrics_stale": {
+            "type": "boolean"
           },
           "outbound_internal_references": {
             "type": "integer",
@@ -998,14 +1156,81 @@
           }
         }
       },
-      "ErrorResponse": {
+      "DependencyDetail": {
         "type": "object",
         "required": [
-          "error"
+          "state"
         ],
         "properties": {
-          "error": {
-            "type": "string"
+          "backlog": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64"
+          },
+          "lag": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64"
+          },
+          "last_success_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "oldest_age_seconds": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64"
+          },
+          "state": {
+            "$ref": "#/components/schemas/DependencyState"
+          }
+        }
+      },
+      "DependencyState": {
+        "type": "string",
+        "enum": [
+          "available",
+          "degraded",
+          "unavailable"
+        ]
+      },
+      "DependencyStatus": {
+        "type": "object",
+        "required": [
+          "postgresql",
+          "nats",
+          "outbox",
+          "worker",
+          "neo4j",
+          "projection"
+        ],
+        "properties": {
+          "nats": {
+            "$ref": "#/components/schemas/DependencyDetail"
+          },
+          "neo4j": {
+            "$ref": "#/components/schemas/DependencyDetail"
+          },
+          "outbox": {
+            "$ref": "#/components/schemas/DependencyDetail"
+          },
+          "postgresql": {
+            "$ref": "#/components/schemas/DependencyDetail"
+          },
+          "projection": {
+            "$ref": "#/components/schemas/DependencyDetail"
+          },
+          "worker": {
+            "$ref": "#/components/schemas/DependencyDetail"
           }
         }
       },
@@ -1020,17 +1245,6 @@
             "type": "string"
           },
           "target": {
-            "type": "string"
-          }
-        }
-      },
-      "HealthResponse": {
-        "type": "object",
-        "required": [
-          "status"
-        ],
-        "properties": {
-          "status": {
             "type": "string"
           }
         }
@@ -1149,6 +1363,307 @@
           }
         }
       },
+      "LivenessResponse": {
+        "type": "object",
+        "required": [
+          "status",
+          "uptime_seconds"
+        ],
+        "properties": {
+          "status": {
+            "type": "string"
+          },
+          "uptime_seconds": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          }
+        }
+      },
+      "PaginatedResponse_ArticleDto": {
+        "type": "object",
+        "required": [
+          "items"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": [
+                "doi",
+                "doi_key",
+                "total_citations",
+                "internal_citations",
+                "outbound_internal_references",
+                "rank_score",
+                "metrics_stale"
+              ],
+              "properties": {
+                "doi": {
+                  "type": "string"
+                },
+                "doi_key": {
+                  "type": "string"
+                },
+                "internal_citations": {
+                  "type": "integer",
+                  "format": "int32"
+                },
+                "issued_year": {
+                  "type": [
+                    "integer",
+                    "null"
+                  ],
+                  "format": "int32"
+                },
+                "metrics_as_of": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "format": "date-time"
+                },
+                "metrics_stale": {
+                  "type": "boolean"
+                },
+                "outbound_internal_references": {
+                  "type": "integer",
+                  "format": "int32"
+                },
+                "rank_score": {
+                  "type": "number",
+                  "format": "double"
+                },
+                "title": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "total_citations": {
+                  "type": "integer",
+                  "format": "int32"
+                },
+                "type": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                }
+              }
+            }
+          },
+          "next_cursor": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "PaginatedResponse_IngestionDto": {
+        "type": "object",
+        "required": [
+          "items"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": [
+                "id",
+                "project_id",
+                "status",
+                "max_depth",
+                "seed_count",
+                "queued_count",
+                "fetched_count",
+                "failed_count",
+                "created_at"
+              ],
+              "properties": {
+                "completed_at": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "format": "date-time"
+                },
+                "created_at": {
+                  "type": "string",
+                  "format": "date-time"
+                },
+                "failed_count": {
+                  "type": "integer",
+                  "format": "int32"
+                },
+                "fetched_count": {
+                  "type": "integer",
+                  "format": "int32"
+                },
+                "id": {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                "max_depth": {
+                  "type": "integer",
+                  "format": "int32"
+                },
+                "project_id": {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                "queued_count": {
+                  "type": "integer",
+                  "format": "int32"
+                },
+                "seed_count": {
+                  "type": "integer",
+                  "format": "int32"
+                },
+                "started_at": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "format": "date-time"
+                },
+                "status": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "next_cursor": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "PaginatedResponse_IngestionItemDto": {
+        "type": "object",
+        "required": [
+          "items"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": [
+                "doi",
+                "depth",
+                "status",
+                "attempts",
+                "queued_at"
+              ],
+              "properties": {
+                "attempts": {
+                  "type": "integer",
+                  "format": "int32"
+                },
+                "depth": {
+                  "type": "integer",
+                  "format": "int32"
+                },
+                "doi": {
+                  "type": "string"
+                },
+                "fetched_at": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "format": "date-time"
+                },
+                "last_error": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "parent_doi": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "queued_at": {
+                  "type": "string",
+                  "format": "date-time"
+                },
+                "status": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "next_cursor": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "PaginatedResponse_ProjectDto": {
+        "type": "object",
+        "required": [
+          "items"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": [
+                "id",
+                "name",
+                "default_max_depth",
+                "created_at",
+                "updated_at"
+              ],
+              "properties": {
+                "created_at": {
+                  "type": "string",
+                  "format": "date-time"
+                },
+                "default_max_depth": {
+                  "type": "integer",
+                  "format": "int32"
+                },
+                "description": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "id": {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                "name": {
+                  "type": "string"
+                },
+                "updated_at": {
+                  "type": "string",
+                  "format": "date-time"
+                }
+              }
+            }
+          },
+          "next_cursor": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
       "ProjectDto": {
         "type": "object",
         "required": [
@@ -1190,7 +1705,9 @@
         "type": "object",
         "required": [
           "nodes",
-          "edges"
+          "edges",
+          "projection",
+          "truncated"
         ],
         "properties": {
           "edges": {
@@ -1204,6 +1721,107 @@
             "items": {
               "$ref": "#/components/schemas/ArticleDto"
             }
+          },
+          "projection": {
+            "$ref": "#/components/schemas/ProjectionMetadata"
+          },
+          "truncated": {
+            "type": "boolean"
+          }
+        }
+      },
+      "ProjectionMetadata": {
+        "type": "object",
+        "required": [
+          "revision",
+          "lag"
+        ],
+        "properties": {
+          "lag": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "last_success_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "revision": {
+            "type": "integer",
+            "format": "int64"
+          }
+        }
+      },
+      "ProjectionStatusDto": {
+        "type": "object",
+        "required": [
+          "project_id",
+          "state",
+          "revision",
+          "watermark",
+          "lag"
+        ],
+        "properties": {
+          "lag": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "last_error": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "last_success_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "project_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "rebuild_state": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "revision": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "state": {
+            "type": "string"
+          },
+          "watermark": {
+            "type": "integer",
+            "format": "int64"
+          }
+        }
+      },
+      "ReadinessResponse": {
+        "type": "object",
+        "required": [
+          "status",
+          "schema_version",
+          "required_schema_version"
+        ],
+        "properties": {
+          "required_schema_version": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "schema_version": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "status": {
+            "type": "string"
           }
         }
       },
@@ -1212,7 +1830,8 @@
         "required": [
           "foundational",
           "core_to_project",
-          "underexplored"
+          "underexplored",
+          "projection"
         ],
         "properties": {
           "core_to_project": {
@@ -1227,6 +1846,9 @@
               "$ref": "#/components/schemas/ArticleDto"
             }
           },
+          "projection": {
+            "$ref": "#/components/schemas/ProjectionMetadata"
+          },
           "underexplored": {
             "type": "array",
             "items": {
@@ -1239,9 +1861,14 @@
         "type": "object",
         "required": [
           "status",
-          "project_id"
+          "project_id",
+          "event_id"
         ],
         "properties": {
+          "event_id": {
+            "type": "string",
+            "format": "uuid"
+          },
           "project_id": {
             "type": "string",
             "format": "uuid"

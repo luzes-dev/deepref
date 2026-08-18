@@ -15,6 +15,9 @@ export interface ArticleDetailDto {
 	/** @nullable */
 	issued_year?: number | null;
 	/** @nullable */
+	metrics_as_of?: string | null;
+	metrics_stale: boolean;
+	/** @nullable */
 	published_year?: number | null;
 	/** @nullable */
 	publisher?: string | null;

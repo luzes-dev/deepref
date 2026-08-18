@@ -1,0 +1,220 @@
+{{- if .Values.networkPolicy.enabled }}
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "deepref.componentName" (dict "root" . "component" "default-deny") }}
+  namespace: {{ include "deepref.namespace" . }}
+  labels: {{- include "deepref.labels" . | nindent 4 }}
+spec:
+  podSelector: {}
+  policyTypes: [Ingress, Egress]
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "deepref.componentName" (dict "root" . "component" "dns-egress") }}
+  namespace: {{ include "deepref.namespace" . }}
+  labels: {{- include "deepref.labels" . | nindent 4 }}
+spec:
+  podSelector: {}
+  policyTypes: [Egress]
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
+        - {protocol: UDP, port: 53}
+        - {protocol: TCP, port: 53}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "deepref.componentName" (dict "root" . "component" "web") }}
+  namespace: {{ include "deepref.namespace" . }}
+  labels: {{- include "deepref.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels: {{- include "deepref.selectorLabels" (dict "root" . "component" "web") | nindent 6 }}
+  policyTypes: [Ingress, Egress]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels: {{- include "deepref.selectorLabels" (dict "root" . "component" "cloudflared") | nindent 14 }}
+      ports: [{protocol: TCP, port: 8080}]
+  egress:
+    - to:
+        - podSelector:
+            matchLabels: {{- include "deepref.selectorLabels" (dict "root" . "component" "api") | nindent 14 }}
+      ports: [{protocol: TCP, port: 8080}]
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "deepref.componentName" (dict "root" . "component" "application-data") }}
+  namespace: {{ include "deepref.namespace" . }}
+  labels: {{- include "deepref.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchExpressions:
+      - key: app.kubernetes.io/component
+        operator: In
+        values: [api, worker, projector, migration, projector-rebuild]
+  policyTypes: [Egress]
+  egress:
+    - to:
+        - podSelector:
+            matchLabels: {{- include "deepref.selectorLabels" (dict "root" . "component" "nats") | nindent 14 }}
+      ports: [{protocol: TCP, port: 4222}]
+    - to:
+        - podSelector:
+            matchLabels: {{- include "deepref.selectorLabels" (dict "root" . "component" "neo4j") | nindent 14 }}
+      ports: [{protocol: TCP, port: 7687}]
+    - to:
+        - podSelector:
+            matchLabels: {{- include "deepref.selectorLabels" (dict "root" . "component" "adot") | nindent 14 }}
+      ports:
+        - {protocol: TCP, port: 4317}
+        - {protocol: TCP, port: 4318}
+    {{- range .Values.networkPolicy.databaseEgress.cidrs }}
+    - to: [{ipBlock: {cidr: {{ . | quote }}}}]
+      ports: [{protocol: TCP, port: {{ $.Values.networkPolicy.databaseEgress.port }}}]
+    {{- end }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "deepref.componentName" (dict "root" . "component" "api-ingress") }}
+  namespace: {{ include "deepref.namespace" . }}
+  labels: {{- include "deepref.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels: {{- include "deepref.selectorLabels" (dict "root" . "component" "api") | nindent 6 }}
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels: {{- include "deepref.selectorLabels" (dict "root" . "component" "web") | nindent 14 }}
+      ports: [{protocol: TCP, port: 8080}]
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "deepref.componentName" (dict "root" . "component" "nats-bootstrap") }}
+  namespace: {{ include "deepref.namespace" . }}
+  labels: {{- include "deepref.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels: {{- include "deepref.selectorLabels" (dict "root" . "component" "nats-bootstrap") | nindent 6 }}
+  policyTypes: [Egress]
+  egress:
+    - to:
+        - podSelector:
+            matchLabels: {{- include "deepref.selectorLabels" (dict "root" . "component" "nats") | nindent 14 }}
+      ports: [{protocol: TCP, port: 4222}]
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "deepref.componentName" (dict "root" . "component" "nats") }}
+  namespace: {{ include "deepref.namespace" . }}
+  labels: {{- include "deepref.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels: {{- include "deepref.selectorLabels" (dict "root" . "component" "nats") | nindent 6 }}
+  policyTypes: [Ingress, Egress]
+  ingress:
+    - from:
+        - podSelector:
+            matchExpressions:
+              - key: app.kubernetes.io/component
+                operator: In
+                values: [api, worker, projector, migration, projector-rebuild, nats-bootstrap, nats]
+      ports:
+        - {protocol: TCP, port: 4222}
+        - {protocol: TCP, port: 6222}
+        - {protocol: TCP, port: 8222}
+  egress:
+    - to:
+        - podSelector:
+            matchLabels: {{- include "deepref.selectorLabels" (dict "root" . "component" "nats") | nindent 14 }}
+      ports: [{protocol: TCP, port: 6222}]
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "deepref.componentName" (dict "root" . "component" "neo4j") }}
+  namespace: {{ include "deepref.namespace" . }}
+  labels: {{- include "deepref.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels: {{- include "deepref.selectorLabels" (dict "root" . "component" "neo4j") | nindent 6 }}
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - podSelector:
+            matchExpressions:
+              - key: app.kubernetes.io/component
+                operator: In
+                values: [api, projector, projector-rebuild]
+      ports:
+        - {protocol: TCP, port: 7687}
+        - {protocol: TCP, port: 7474}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "deepref.componentName" (dict "root" . "component" "adot") }}
+  namespace: {{ include "deepref.namespace" . }}
+  labels: {{- include "deepref.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels: {{- include "deepref.selectorLabels" (dict "root" . "component" "adot") | nindent 6 }}
+  policyTypes: [Ingress, Egress]
+  ingress:
+    - from:
+        - podSelector:
+            matchExpressions:
+              - key: app.kubernetes.io/component
+                operator: In
+                values: [api, worker, projector, migration, projector-rebuild]
+      ports:
+        - {protocol: TCP, port: 4317}
+        - {protocol: TCP, port: 4318}
+  egress:
+    - to: [{ipBlock: {cidr: 169.254.170.23/32}}]
+      ports: [{protocol: TCP, port: 80}]
+    {{- range .Values.networkPolicy.telemetryEgress.cidrs }}
+    - to: [{ipBlock: {cidr: {{ . | quote }}}}]
+      ports:
+        {{- range $.Values.networkPolicy.telemetryEgress.ports }}
+        - {protocol: TCP, port: {{ . }}}
+        {{- end }}
+    {{- end }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: {{ include "deepref.componentName" (dict "root" . "component" "cloudflared") }}
+  namespace: {{ include "deepref.namespace" . }}
+  labels: {{- include "deepref.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels: {{- include "deepref.selectorLabels" (dict "root" . "component" "cloudflared") | nindent 6 }}
+  policyTypes: [Egress]
+  egress:
+    - to:
+        - podSelector:
+            matchLabels: {{- include "deepref.selectorLabels" (dict "root" . "component" "web") | nindent 14 }}
+      ports: [{protocol: TCP, port: 8080}]
+    {{- range .Values.networkPolicy.cloudflareEgress.cidrs }}
+    - to: [{ipBlock: {cidr: {{ . | quote }}}}]
+      ports:
+        {{- range $.Values.networkPolicy.cloudflareEgress.ports }}
+        - {protocol: TCP, port: {{ . }}}
+        {{- end }}
+    {{- end }}
+{{- end }}

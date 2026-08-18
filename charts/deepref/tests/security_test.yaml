@@ -1,0 +1,17 @@
+suite: workload security
+templates:
+  - templates/api-deployment.yaml
+  - templates/nats-statefulset.yaml
+  - templates/neo4j-statefulset.yaml
+values:
+  - tests/values/development.yaml
+tests:
+  - it: runs as non-root
+    asserts:
+      - equal: {path: spec.template.spec.securityContext.runAsNonRoot, value: true}
+  - it: uses a read-only root filesystem
+    asserts:
+      - equal: {path: "spec.template.spec.containers[0].securityContext.readOnlyRootFilesystem", value: true}
+  - it: drops all Linux capabilities
+    asserts:
+      - contains: {path: "spec.template.spec.containers[0].securityContext.capabilities.drop", content: ALL}

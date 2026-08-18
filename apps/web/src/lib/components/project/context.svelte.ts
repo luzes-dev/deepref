@@ -16,6 +16,15 @@ type ProjectWorkspaceDataSources = {
 	ingestions: Getter<IngestionDto[]>;
 	articlesLoading: Getter<boolean>;
 	ingestionsLoading: Getter<boolean>;
+	projectsHasNextPage: Getter<boolean>;
+	articlesHasNextPage: Getter<boolean>;
+	ingestionsHasNextPage: Getter<boolean>;
+	projectsLoadingMore: Getter<boolean>;
+	articlesLoadingMore: Getter<boolean>;
+	ingestionsLoadingMore: Getter<boolean>;
+	loadMoreProjects: () => void;
+	loadMoreArticles: () => void;
+	loadMoreIngestions: () => void;
 	articlesError: Getter<string | undefined>;
 	ingestionsError: Getter<string | undefined>;
 };
@@ -28,6 +37,15 @@ class ProjectWorkspaceContext {
 		ingestions: () => [],
 		articlesLoading: () => false,
 		ingestionsLoading: () => false,
+		projectsHasNextPage: () => false,
+		articlesHasNextPage: () => false,
+		ingestionsHasNextPage: () => false,
+		projectsLoadingMore: () => false,
+		articlesLoadingMore: () => false,
+		ingestionsLoadingMore: () => false,
+		loadMoreProjects: () => undefined,
+		loadMoreArticles: () => undefined,
+		loadMoreIngestions: () => undefined,
 		articlesError: () => undefined,
 		ingestionsError: () => undefined
 	});
@@ -39,6 +57,12 @@ class ProjectWorkspaceContext {
 	ingestions = $derived.by(() => this.#dataSources.ingestions());
 	articlesLoading = $derived.by(() => this.#dataSources.articlesLoading());
 	ingestionsLoading = $derived.by(() => this.#dataSources.ingestionsLoading());
+	projectsHasNextPage = $derived.by(() => this.#dataSources.projectsHasNextPage());
+	articlesHasNextPage = $derived.by(() => this.#dataSources.articlesHasNextPage());
+	ingestionsHasNextPage = $derived.by(() => this.#dataSources.ingestionsHasNextPage());
+	projectsLoadingMore = $derived.by(() => this.#dataSources.projectsLoadingMore());
+	articlesLoadingMore = $derived.by(() => this.#dataSources.articlesLoadingMore());
+	ingestionsLoadingMore = $derived.by(() => this.#dataSources.ingestionsLoadingMore());
 	articlesError = $derived.by(() => this.#dataSources.articlesError());
 	ingestionsError = $derived.by(() => this.#dataSources.ingestionsError());
 
@@ -90,6 +114,10 @@ class ProjectWorkspaceContext {
 	setDataSources = (dataSources: ProjectWorkspaceDataSources) => {
 		this.#dataSources = dataSources;
 	};
+
+	loadMoreProjects = () => this.#dataSources.loadMoreProjects();
+	loadMoreArticles = () => this.#dataSources.loadMoreArticles();
+	loadMoreIngestions = () => this.#dataSources.loadMoreIngestions();
 
 	#resetSelection = (projectId?: string) => {
 		this.workspaceState.project = projectId;

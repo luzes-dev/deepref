@@ -5,9 +5,11 @@
  * OpenAPI spec version: 0.1.0
  */
 import type { ArticleDto } from './articleDto.ts';
+import type { ProjectionMetadata } from './projectionMetadata.ts';
 
 export interface RecommendationGroupsDto {
 	core_to_project: ArticleDto[];
 	foundational: ArticleDto[];
+	projection: ProjectionMetadata;
 	underexplored: ArticleDto[];
 }

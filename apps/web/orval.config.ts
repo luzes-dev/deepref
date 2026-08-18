@@ -1,14 +1,18 @@
 import { defineConfig } from 'orval';
 
+const openapiTarget = process.env.DEEPREF_OPENAPI_TARGET ?? '../../docs/openapi.json';
+const generatedDirectory = process.env.DEEPREF_GENERATED_DIR ?? 'src/lib/api/generated';
+const mutatorPath = process.env.DEEPREF_MUTATOR_PATH ?? './src/lib/api/custom-fetch.ts';
+
 export default defineConfig({
 	deepref: {
 		input: {
-			target: '../../docs/openapi.json'
+			target: openapiTarget
 		},
 		output: {
 			mode: 'tags-split',
-			target: 'src/lib/api/generated/deepref.ts',
-			schemas: 'src/lib/api/generated/models',
+			target: `${generatedDirectory}/deepref.ts`,
+			schemas: `${generatedDirectory}/models`,
 			client: 'svelte-query',
 			httpClient: 'fetch',
 			baseUrl: '/api',
@@ -19,7 +23,7 @@ export default defineConfig({
 					forceSuccessResponse: true
 				},
 				mutator: {
-					path: './src/lib/api/custom-fetch.ts',
+					path: mutatorPath,
 					name: 'customFetch'
 				},
 				query: {
