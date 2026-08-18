@@ -1,1 +1,3 @@
-helm-kube-version: "1.30.0"
+misconfiguration:
+  helm:
+    kube-version: "v1.30.0"
