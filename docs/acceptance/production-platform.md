@@ -1,6 +1,6 @@
 # Production platform acceptance
 
-This register maps `AC-01` through `AC-16` one-for-one, in order, to the sixteen acceptance bullets in `docs/production-platform-plan.html`. A source file or local static test is not apply-time evidence. Status is current as of 2026-08-05 and must be updated only when the named evidence has actually been produced and reviewed.
+This register maps `AC-01` through `AC-16` one-for-one, in order, to the sixteen production-platform acceptance requirements. A source file or local static test is not apply-time evidence. Status is current as of 2026-08-05 and must be updated only when the named evidence has actually been produced and reviewed.
 
 Status terms: **Pending** means no sufficient evidence; **Partial** means source/static evidence exists but the full criterion is not demonstrated; **Verified locally** means the complete locally provable criterion passed in this tree; **Accepted** requires reviewed environment/drill evidence.
 

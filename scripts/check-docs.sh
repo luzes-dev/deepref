@@ -83,8 +83,7 @@ done < <(
 
 if rg --ignore-case --line-number \
   'docker-compose\.selfhost|Self-hosting Example|examples/docker-compose|infra/docker-compose\.yml|ghcr\.io|compose:config|docs/runbooks/' \
-  README.md CONTRIBUTING.md SECURITY.md docs apps/web/README.md package.json \
-  --glob '!docs/production-platform-plan.html'; then
+  README.md CONTRIBUTING.md SECURITY.md docs apps/web/README.md package.json; then
   fail "obsolete deployment or runbook guidance remains"
 fi
 
