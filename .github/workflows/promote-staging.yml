@@ -18,7 +18,6 @@ concurrency:
 
 permissions:
   contents: read
-  id-token: write
 
 env:
   AWS_REGION: sa-east-1
@@ -28,6 +27,9 @@ jobs:
     name: Copy exact development release and propose staging
     runs-on: ubuntu-latest
     timeout-minutes: 40
+    permissions:
+      contents: read
+      id-token: write
     environment: staging-promotion
     steps:
       - name: Require immutable inputs
@@ -79,6 +81,7 @@ jobs:
       - name: Verify and pull the signed manifest
         env:
           MANIFEST_REFERENCE: ${{ inputs.manifest_reference }}
+          RELEASE_TREE: ${{ inputs.release_tree }}
         run: |
           set -euo pipefail
           cosign verify \
@@ -88,7 +91,7 @@ jobs:
           mkdir -p "$RUNNER_TEMP/release"
           oras pull "$MANIFEST_REFERENCE" --output "$RUNNER_TEMP/release"
           test -f "$RUNNER_TEMP/release/release-manifest.json"
-          test "$(jq -r .source.tree "$RUNNER_TEMP/release/release-manifest.json")" = "${{ inputs.release_tree }}"
+          test "$(jq -r .source.tree "$RUNNER_TEMP/release/release-manifest.json")" = "$RELEASE_TREE"
       - name: Copy the complete OCI release without rebuilding
         env:
           DESTINATION_REGISTRY: ${{ vars.AWS_ECR_REGISTRY }}

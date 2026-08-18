@@ -23,7 +23,6 @@ concurrency:
 permissions:
   contents: read
   deployments: read
-  id-token: write
 
 env:
   AWS_REGION: sa-east-1
@@ -33,6 +32,10 @@ jobs:
     name: Copy exact staging release and propose production
     runs-on: ubuntu-latest
     timeout-minutes: 45
+    permissions:
+      contents: read
+      deployments: read
+      id-token: write
     environment: production-promotion
     steps:
       - name: Require immutable inputs and successful staging deployment evidence
