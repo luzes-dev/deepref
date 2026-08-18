@@ -1,4 +1,5 @@
 mod config;
+mod jobs;
 mod limiter;
 mod nats;
 mod outbox;
@@ -26,6 +27,15 @@ async fn main() -> anyhow::Result<()> {
         .max_connections(10)
         .connect(&config.database_url)
         .await?;
+
+    let recovered_jobs = jobs::recover_expired_leases(&pool).await.unwrap_or_else(|error| {
+        tracing::warn!(%error, "postgres job queue is not available yet");
+        0
+    });
+    if recovered_jobs > 0 {
+        tracing::info!(recovered_jobs, "recovered expired postgres job leases");
+    }
+
     let nats_client = async_nats::connect(config.nats_url).await?;
     let jetstream = jetstream::new(nats_client);
     let consumer = nats::ensure_stream_and_consumer(&jetstream).await?;
