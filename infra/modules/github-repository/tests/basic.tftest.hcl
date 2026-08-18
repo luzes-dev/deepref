@@ -45,8 +45,8 @@ run "branch_ladder_app_only_gitops_and_environments" {
 
   assert {
     condition = (
-      github_repository_ruleset.gitops.rules[0].required_reviewers[0].minimum_approvals == 1 &&
-      github_repository_ruleset.gitops.rules[0].required_reviewers[1].minimum_approvals == 2
+      github_repository_ruleset.gitops.rules[0].pull_request[0].required_reviewers[0].minimum_approvals == 1 &&
+      github_repository_ruleset.gitops.rules[0].pull_request[0].required_reviewers[1].minimum_approvals == 2
     )
     error_message = "GitOps staging and production changes must require one and two team approvals respectively."
   }

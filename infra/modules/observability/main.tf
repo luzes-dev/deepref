@@ -154,9 +154,9 @@ resource "aws_iam_policy" "adot" {
         Resource = "*"
       },
       {
-        Sid    = "CloudWatchMetricsWrite"
-        Effect = "Allow"
-        Action = "cloudwatch:PutMetricData"
+        Sid      = "CloudWatchMetricsWrite"
+        Effect   = "Allow"
+        Action   = "cloudwatch:PutMetricData"
         Resource = "*"
         Condition = {
           StringEquals = { "cloudwatch:namespace" = "${var.name}/ADOT" }

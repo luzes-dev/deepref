@@ -43,9 +43,9 @@ variable "control_plane_log_retention_days" {
 variable "access_entries" {
   description = "EKS API access entries and cluster-scoped access policies."
   type = map(object({
-    principal_arn     = string
-    type              = optional(string, "STANDARD")
-    kubernetes_groups = optional(set(string), [])
+    principal_arn      = string
+    type               = optional(string, "STANDARD")
+    kubernetes_groups  = optional(set(string), [])
     access_policy_arns = optional(set(string), [])
   }))
   default = {}
@@ -115,11 +115,11 @@ variable "addon_versions" {
   description = "Optional explicit EKS add-on versions keyed by add-on name. Null selects the AWS default compatible version."
   type        = map(string)
   default = {
-    aws-ebs-csi-driver         = null
-    coredns                    = null
-    eks-pod-identity-agent     = null
-    kube-proxy                 = null
-    vpc-cni                    = null
+    aws-ebs-csi-driver     = null
+    coredns                = null
+    eks-pod-identity-agent = null
+    kube-proxy             = null
+    vpc-cni                = null
   }
 }
 

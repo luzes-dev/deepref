@@ -104,9 +104,9 @@ resource "aws_db_instance" "this" {
   publicly_accessible    = false
   network_type           = "IPV4"
 
-  parameter_group_name = aws_db_parameter_group.this.name
+  parameter_group_name       = aws_db_parameter_group.this.name
   auto_minor_version_upgrade = true
-  apply_immediately           = false
+  apply_immediately          = false
 
   backup_retention_period = var.backup_retention_days
   backup_window           = var.backup_window

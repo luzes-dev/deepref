@@ -37,13 +37,13 @@ variable "currency" {
 variable "budget_notifications" {
   description = "Percentage thresholds and ACTUAL or FORECASTED notification type."
   type = map(object({
-    threshold        = number
+    threshold         = number
     notification_type = optional(string, "ACTUAL")
   }))
   default = {
-    actual_80     = { threshold = 80 }
-    actual_100    = { threshold = 100 }
-    forecast_100  = { threshold = 100, notification_type = "FORECASTED" }
+    actual_80    = { threshold = 80 }
+    actual_100   = { threshold = 100 }
+    forecast_100 = { threshold = 100, notification_type = "FORECASTED" }
   }
 
   validation {
@@ -68,18 +68,18 @@ variable "email_subscribers" {
 variable "metric_alarms" {
   description = "CloudWatch metric alarms that publish to the same encrypted operations topic."
   type = map(object({
-    namespace                   = string
-    metric_name                 = string
-    statistic                   = optional(string, "Average")
-    period_seconds              = optional(number, 300)
-    evaluation_periods          = optional(number, 2)
-    datapoints_to_alarm         = optional(number)
-    threshold                   = number
-    comparison_operator         = string
-    dimensions                  = optional(map(string), {})
-    treat_missing_data          = optional(string, "missing")
-    alarm_description           = optional(string)
-    insufficient_data_actions   = optional(bool, false)
+    namespace                 = string
+    metric_name               = string
+    statistic                 = optional(string, "Average")
+    period_seconds            = optional(number, 300)
+    evaluation_periods        = optional(number, 2)
+    datapoints_to_alarm       = optional(number)
+    threshold                 = number
+    comparison_operator       = string
+    dimensions                = optional(map(string), {})
+    treat_missing_data        = optional(string, "missing")
+    alarm_description         = optional(string)
+    insufficient_data_actions = optional(bool, false)
   }))
   default = {}
 }

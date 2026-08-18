@@ -43,10 +43,10 @@ resource "aws_ecr_lifecycle_policy" "this" {
         rulePriority = 2
         description  = "Retain bounded immutable release history"
         selection = {
-          tagStatus   = "tagged"
+          tagStatus     = "tagged"
           tagPrefixList = ["sha-", "tree-", "v"]
-          countType   = "imageCountMoreThan"
-          countNumber = each.value.retain_tagged_images
+          countType     = "imageCountMoreThan"
+          countNumber   = each.value.retain_tagged_images
         }
         action = { type = "expire" }
       },

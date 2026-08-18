@@ -45,12 +45,23 @@ jobs:
           source/scripts/ci/validate-gitops-tree.sh "$RUNNER_TEMP/gitops-tree.txt"
           git -C candidate diff --binary "$BASE_SHA" "$HEAD_SHA" > "$RUNNER_TEMP/gitops.diff"
           source/scripts/ci/validate-gitops-diff.sh "$RUNNER_TEMP/gitops.diff"
-          lock="$(git -C candidate diff --name-only "$BASE_SHA" "$HEAD_SHA")"
-          environment="${lock#environments/}"
-          environment="${environment%%/*}"
-          git -C candidate show "$HEAD_SHA:$lock" > "$RUNNER_TEMP/release-lock.yaml"
-          (
-            cd source
-            scripts/ci/validate-release-lock.sh --environment "$environment" "$RUNNER_TEMP/release-lock.yaml"
-            scripts/ci/verify-release-digests.sh "$RUNNER_TEMP/release-lock.yaml"
-          )
+          changed="$(git -C candidate diff --name-only "$BASE_SHA" "$HEAD_SHA")"
+          case "$changed" in
+            environments/development/release-lock.yaml|environments/staging/release-lock.yaml|environments/production/release-lock.yaml)
+              environment="${changed#environments/}"
+              environment="${environment%%/*}"
+              git -C candidate show "$HEAD_SHA:$changed" > "$RUNNER_TEMP/release-lock.yaml"
+              (
+                cd source
+                scripts/ci/validate-release-lock.sh --environment "$environment" "$RUNNER_TEMP/release-lock.yaml"
+                scripts/ci/verify-release-digests.sh "$RUNNER_TEMP/release-lock.yaml"
+              )
+              ;;
+            environments/development/values.yaml|environments/staging/values.yaml|environments/production/values.yaml)
+              source/scripts/ci/validate-gitops-values.sh --mode any "$RUNNER_TEMP/gitops.diff"
+              ;;
+            *)
+              echo "Unsupported GitOps change: $changed" >&2
+              exit 1
+              ;;
+          esac

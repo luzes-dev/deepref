@@ -6,7 +6,7 @@ Create or adopt encrypted OpenTofu state backends for `development`, `staging`, 
 
 ## Safety warnings
 
-- Source files are deployable definitions, not proof that any resource exists. The current roots do not yet wire backup, observability, budgets/SNS, admin-runner, or Pod Identity modules; do not claim those controls after applying only the current roots.
+- Source files are deployable definitions, not proof that any resource exists. The environment roots now wire backup, observability, budgets/SNS, the private administration runner, and Pod Identity; do not claim those controls are active until the roots are applied and verified.
 - Never use the wrong account or a non-default OpenTofu workspace. Account preconditions are a last defense, not authorization.
 - Bootstrap begins with sensitive local state. Use an encrypted, access-controlled ephemeral runner and migrate state immediately.
 - Do not commit/copy into evidence populated tfvars, backend configuration, state, saved plans, OAuth/App keys, provider tokens, tunnel tokens, or generated credentials.
@@ -97,7 +97,7 @@ Create or adopt encrypted OpenTofu state backends for `development`, `staging`, 
 
 8. From the selected global state account and private-cluster-capable runner, dispatch `environment=global` against an approved `main` SHA. This creates Cloudflare/GitHub policy and initial Argo installations but not child workloads or secret values.
 
-9. Through the approved broker, deliver Argo read credentials and Cloudflare tunnel tokens directly to the pre-created containers. Confirm intended SNS recipients have accepted subscriptions after the budgets/SNS module is wired and applied.
+9. Through the approved broker, deliver Argo read credentials and Cloudflare tunnel tokens directly to the pre-created containers. Confirm intended SNS recipients have accepted subscriptions after the budgets/SNS module is applied.
 
 10. Establish the protected orphan GitOps tree with exactly the paths enforced by `scripts/ci/validate-gitops-tree.sh`. If the App-only initialization mechanism and branch protection are not yet operational, stop; do not have a human bypass them. Let the development release workflow open the first lock PR.
 

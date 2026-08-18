@@ -23,6 +23,13 @@ for environment in development staging production global; do
     "$environment environment backend must use native S3 lockfiles"
 done
 
+for environment in development staging production; do
+  for module in backup observability budgets_alerts admin_runner pod_identity; do
+    require_pattern "module \"$module\"" "infra/environments/$environment" \
+      "$environment root must wire the $module module"
+  done
+done
+
 for bootstrap in development staging production global; do
   require_pattern 'terraform\.workspace == "default"' "infra/bootstrap/$bootstrap" \
     "$bootstrap bootstrap root must reject non-default workspaces"
@@ -58,6 +65,10 @@ if rg --quiet --glob '*.tf' 'tunnel_cloudflared_token|tunnel_secret|aws_(lb|alb|
   infra/modules/cloudflare-perimeter infra/environments/global; then
   fail 'global perimeter must not read tunnel credentials or create a public origin'
 fi
+
+[[ -f .github/workflows/rebuild.yml ]] || fail 'constrained projector rebuild workflow must exist'
+rg --quiet 'deploy/rebuild/\*' .github/workflows/branch-policy.yml || fail 'rebuild branches must be admitted only through the GitOps App policy'
+[[ -x scripts/ci/validate-gitops-values.sh ]] || fail 'GitOps rebuild values validator must be executable'
 
 require_pattern 'actor_type[[:space:]]*=[[:space:]]*"Integration"' infra/modules/github-repository \
   'GitOps bypass actor must be a GitHub App integration'

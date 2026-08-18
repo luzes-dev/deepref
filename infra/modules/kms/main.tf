@@ -62,7 +62,8 @@ resource "aws_kms_key" "this" {
           "kms:ReEncrypt*",
         ]
         Resource = "*"
-      }, {
+      }],
+      length(each.value.service_principals) == 0 ? [] : [{
         Sid       = "ServiceGrantManagement"
         Effect    = "Allow"
         Principal = { Service = sort(tolist(each.value.service_principals)) }

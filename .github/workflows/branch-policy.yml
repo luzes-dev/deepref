@@ -55,7 +55,7 @@ jobs:
               ;;
             gitops)
               case "$HEAD_BRANCH" in
-                deploy/dev/*|deploy/staging/*|deploy/production/*|deploy/rollback/*) ;;
+                deploy/dev/*|deploy/staging/*|deploy/production/*|deploy/rollback/*|deploy/rebuild/*) ;;
                 *) echo "Only deployment GitHub App branches may target gitops."; exit 1 ;;
               esac
               if [ -z "$DEPLOYMENT_APP_SLUG" ] || [ "$ACTOR" != "${DEPLOYMENT_APP_SLUG}[bot]" ]; then

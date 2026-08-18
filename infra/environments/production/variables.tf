@@ -111,6 +111,54 @@ variable "database_max_allocated_storage_gib" {
   default     = 1000
 }
 
+variable "monthly_budget_amount" {
+  description = "Monthly AWS cost budget for production alerts."
+  type        = number
+  default     = 5000
+}
+
+variable "operations_email_addresses" {
+  description = "Operations recipients who must confirm encrypted SNS subscriptions."
+  type        = set(string)
+  default     = []
+}
+
+variable "grafana_admin_user_ids" {
+  description = "Optional IAM Identity Center user IDs for Grafana administrators."
+  type        = set(string)
+  default     = []
+}
+
+variable "grafana_editor_user_ids" {
+  description = "Optional IAM Identity Center user IDs for Grafana editors."
+  type        = set(string)
+  default     = []
+}
+
+variable "grafana_viewer_user_ids" {
+  description = "Optional IAM Identity Center user IDs for Grafana viewers."
+  type        = set(string)
+  default     = []
+}
+
+variable "admin_runner_assumable_role_arns" {
+  description = "Explicit break-glass roles the private administration runner may assume."
+  type        = set(string)
+  default     = []
+}
+
+variable "admin_runner_kms_decrypt_key_arns" {
+  description = "Explicit KMS keys the private administration runner may decrypt."
+  type        = set(string)
+  default     = []
+}
+
+variable "admin_runner_egress_cidr_blocks" {
+  description = "Approved IPv4 egress destinations for the private administration runner."
+  type        = set(string)
+  default     = ["0.0.0.0/0"]
+}
+
 variable "tags" {
   description = "Additional non-sensitive resource tags."
   type        = map(string)

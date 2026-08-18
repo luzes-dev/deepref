@@ -8,7 +8,7 @@ Recreate the single-node Neo4j graph read model from authoritative PostgreSQL, r
 
 - Rebuild clears Neo4j. It must never alter PostgreSQL authority, and it is not a remedy for suspected PostgreSQL corruption.
 - Do not run `deepref-projector rebuild` interactively in a hosted projector pod or create an ad-hoc Kubernetes Job.
-- The Helm source renders a rebuild Job only with `rebuild.enabled=true` and a unique UUID `rebuild.runId`. Current GitOps policy permits deployment PRs to change only release locks; there is no repository workflow that safely opens/approves a one-off environment values change. Hosted rebuild is therefore blocked until an App-authored values-change workflow and matching policy are implemented and applied.
+- The Helm source renders a rebuild Job only with `rebuild.enabled=true` and a unique UUID `rebuild.runId`. The `Projector Rebuild` workflow creates an App-authored PR, and GitOps policy accepts only the exact start/stop transition for those two fields. Hosted rebuild remains blocked until that workflow is applied and tested in the target environment.
 - Never disable graph degradation/readiness controls or make Neo4j authoritative to avoid a rebuild.
 
 ## Prerequisites and authorization
@@ -16,7 +16,7 @@ Recreate the single-node Neo4j graph read model from authoritative PostgreSQL, r
 - Incident/maintenance record; data owner, service owner, and platform operator approval; production requires protected GitOps approvals.
 - PostgreSQL healthy/current, domain-event/outbox state understood, enough Neo4j storage, no migration/PITR/promotion, and an accepted backup status.
 - Baseline work/membership/citation counts and sampled deterministic hash method.
-- The missing App-only rebuild workflow/policy has been implemented, reviewed, tested in development/staging, and retains the environment values audit trail.
+- The App-only rebuild workflow/policy has been reviewed and retains the environment values audit trail; it must be tested in development/staging before production use.
 - Representative performance test and at least one deployed staging rebuild completed successfully before production.
 
 ## Triggers and symptoms
@@ -55,7 +55,7 @@ Recreate the single-node Neo4j graph read model from authoritative PostgreSQL, r
    printf '%s\n' "$REBUILD_RUN_ID"
    ```
 
-5. Through the approved deployment-App workflow (which must exist before this step), propose an environment values change setting only:
+5. Through the approved deployment-App workflow, propose an environment values change setting only:
 
    ```yaml
    rebuild:
@@ -93,4 +93,4 @@ Escalate PostgreSQL/snapshot ambiguity to the data owner, Neo4j storage/query fa
 
 ## Evidence and audit capture
 
-Retain App workflow/PR/approvals, release/projector digest, run ID, baseline/watermark, eight-stage logs with redaction, start/end/duration, counts/hashes, projection/graph/core health, alerts, safe-stop decisions, and cleanup PR. Record the current missing workflow/policy as a blocker until resolved.
+Retain App workflow/PR/approvals, release/projector digest, run ID, baseline/watermark, eight-stage logs with redaction, start/end/duration, counts/hashes, projection/graph/core health, alerts, safe-stop decisions, and cleanup PR. Record the missing apply-time workflow/PR/drill evidence as a blocker until resolved.

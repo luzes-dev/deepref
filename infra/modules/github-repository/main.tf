@@ -48,6 +48,21 @@ locals {
       requires_review = true
       restrict_branch = true
     }
+    "rebuild-development" = {
+      branch          = "development"
+      requires_review = true
+      restrict_branch = true
+    }
+    "rebuild-staging" = {
+      branch          = "staging"
+      requires_review = true
+      restrict_branch = true
+    }
+    "rebuild-production" = {
+      branch          = "main"
+      requires_review = true
+      restrict_branch = true
+    }
     "infra-development-plan" = {
       branch          = null
       requires_review = false
@@ -116,7 +131,7 @@ resource "github_repository_ruleset" "source" {
     required_linear_history = each.value.linear
 
     pull_request {
-      allowed_merge_methods            = each.value.merge_methods
+      allowed_merge_methods             = each.value.merge_methods
       dismiss_stale_reviews_on_push     = true
       require_code_owner_review         = true
       require_last_push_approval        = true
@@ -163,12 +178,32 @@ resource "github_repository_ruleset" "gitops" {
     update                  = true
 
     pull_request {
-      allowed_merge_methods            = ["squash"]
+      allowed_merge_methods             = ["squash"]
       dismiss_stale_reviews_on_push     = true
       require_code_owner_review         = false
       require_last_push_approval        = false
       required_approving_review_count   = 0
       required_review_thread_resolution = true
+
+      required_reviewers {
+        file_patterns     = ["environments/staging/**"]
+        minimum_approvals = 1
+
+        reviewer {
+          id   = data.github_team.reviewers.id
+          type = "Team"
+        }
+      }
+
+      required_reviewers {
+        file_patterns     = ["environments/production/**"]
+        minimum_approvals = 2
+
+        reviewer {
+          id   = data.github_team.reviewers.id
+          type = "Team"
+        }
+      }
     }
 
     required_status_checks {
@@ -182,25 +217,6 @@ resource "github_repository_ruleset" "gitops" {
       }
     }
 
-    required_reviewers {
-      file_patterns     = ["environments/staging/**"]
-      minimum_approvals = 1
-
-      reviewer {
-        id   = data.github_team.reviewers.id
-        type = "Team"
-      }
-    }
-
-    required_reviewers {
-      file_patterns     = ["environments/production/**"]
-      minimum_approvals = 2
-
-      reviewer {
-        id   = data.github_team.reviewers.id
-        type = "Team"
-      }
-    }
   }
 }
 

@@ -4,18 +4,18 @@ run "production_durability" {
   command = plan
 
   variables {
-    name                         = "test-production"
-    deployment_tier              = "production"
-    vpc_id                       = "vpc-00000000"
-    subnet_ids                   = ["subnet-a", "subnet-b", "subnet-c"]
-    instance_class               = "db.r7g.large"
-    allocated_storage_gib        = 100
-    max_allocated_storage_gib    = 500
-    multi_az                      = true
-    deletion_protection           = true
-    backup_retention_days         = 35
-    kms_key_arn                   = "arn:aws:kms:sa-east-1:111111111111:key/rds"
-    master_secret_kms_key_arn     = "arn:aws:kms:sa-east-1:111111111111:key/secrets"
+    name                      = "test-production"
+    deployment_tier           = "production"
+    vpc_id                    = "vpc-00000000"
+    subnet_ids                = ["subnet-a", "subnet-b", "subnet-c"]
+    instance_class            = "db.r7g.large"
+    allocated_storage_gib     = 100
+    max_allocated_storage_gib = 500
+    multi_az                  = true
+    deletion_protection       = true
+    backup_retention_days     = 35
+    kms_key_arn               = "arn:aws:kms:sa-east-1:111111111111:key/rds"
+    master_secret_kms_key_arn = "arn:aws:kms:sa-east-1:111111111111:key/secrets"
   }
 
   assert {
@@ -45,12 +45,12 @@ run "staging_single_az" {
     instance_class              = "db.r7g.large"
     allocated_storage_gib       = 50
     max_allocated_storage_gib   = 200
-    multi_az                     = false
-    deletion_protection          = false
-    backup_retention_days        = 14
-    preferred_availability_zone  = "sa-east-1a"
-    kms_key_arn                  = "arn:aws:kms:sa-east-1:222222222222:key/rds"
-    master_secret_kms_key_arn    = "arn:aws:kms:sa-east-1:222222222222:key/secrets"
+    multi_az                    = false
+    deletion_protection         = false
+    backup_retention_days       = 14
+    preferred_availability_zone = "sa-east-1a"
+    kms_key_arn                 = "arn:aws:kms:sa-east-1:222222222222:key/rds"
+    master_secret_kms_key_arn   = "arn:aws:kms:sa-east-1:222222222222:key/secrets"
   }
 
   assert {

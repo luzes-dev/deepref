@@ -43,3 +43,23 @@ output "kms_key_arns" {
   description = "Purpose-specific platform KMS key ARNs."
   value       = module.kms.key_arns
 }
+
+output "backup_vault_arn" {
+  description = "Encrypted, Vault-Locked AWS Backup vault ARN."
+  value       = module.backup.vault_arn
+}
+
+output "prometheus_workspace_endpoint" {
+  description = "Amazon Managed Prometheus remote-write endpoint."
+  value       = module.observability.prometheus_endpoint
+}
+
+output "grafana_workspace_endpoint" {
+  description = "Amazon Managed Grafana workspace endpoint."
+  value       = module.observability.grafana_endpoint
+}
+
+output "admin_runner_project_name" {
+  description = "On-demand private CodeBuild administration runner name."
+  value       = module.admin_runner.project_name
+}

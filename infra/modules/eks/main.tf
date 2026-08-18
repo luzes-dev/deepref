@@ -13,10 +13,10 @@ locals {
     for association in flatten([
       for entry_name, entry in var.access_entries : [
         for policy_arn in entry.access_policy_arns : {
-          key          = "${entry_name}:${policy_arn}"
-          entry_name   = entry_name
+          key           = "${entry_name}:${policy_arn}"
+          entry_name    = entry_name
           principal_arn = entry.principal_arn
-          policy_arn   = policy_arn
+          policy_arn    = policy_arn
         }
       ]
     ]) : association.key => association
@@ -254,9 +254,9 @@ resource "aws_eks_node_group" "stateful" {
   node_group_name = "stateful-${each.key}"
   node_role_arn   = aws_iam_role.node.arn
   subnet_ids      = [each.value]
-  capacity_type  = "ON_DEMAND"
-  ami_type       = var.node_ami_type
-  instance_types = var.stateful_instance_types
+  capacity_type   = "ON_DEMAND"
+  ami_type        = var.node_ami_type
+  instance_types  = var.stateful_instance_types
 
   launch_template {
     id      = aws_launch_template.stateful.id
@@ -293,9 +293,9 @@ resource "aws_eks_node_group" "stateless" {
   node_group_name = "stateless"
   node_role_arn   = aws_iam_role.node.arn
   subnet_ids      = values(var.private_subnets_by_az)
-  capacity_type  = "ON_DEMAND"
-  ami_type       = var.node_ami_type
-  instance_types = var.stateless_instance_types
+  capacity_type   = "ON_DEMAND"
+  ami_type        = var.node_ami_type
+  instance_types  = var.stateless_instance_types
 
   launch_template {
     id      = aws_launch_template.stateless.id

@@ -4,11 +4,11 @@ run "github_access_tunnel_only_perimeter" {
   command = plan
 
   variables {
-    account_id                = "11111111111111111111111111111111"
-    zone_id                   = "22222222222222222222222222222222"
-    base_domain               = "example.com"
-    access_team_name          = "deepref"
-    github_oauth_client_id    = "Iv1.placeholder"
+    account_id                 = "11111111111111111111111111111111"
+    zone_id                    = "22222222222222222222222222222222"
+    base_domain                = "example.com"
+    access_team_name           = "deepref"
+    github_oauth_client_id     = "Iv1.placeholder"
     github_oauth_client_secret = "placeholder-not-a-real-secret"
     github_organization        = "example-org"
   }

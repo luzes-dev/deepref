@@ -1,7 +1,7 @@
 locals {
-  common_tags          = merge(var.tags, { ManagedBy = "OpenTofu" })
-  create_service_role  = var.selection_role_arn == null
-  effective_role_arn   = local.create_service_role ? aws_iam_role.backup[0].arn : var.selection_role_arn
+  common_tags         = merge(var.tags, { ManagedBy = "OpenTofu" })
+  create_service_role = var.selection_role_arn == null
+  effective_role_arn  = local.create_service_role ? aws_iam_role.backup[0].arn : var.selection_role_arn
 }
 
 resource "aws_backup_vault" "this" {

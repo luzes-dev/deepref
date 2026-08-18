@@ -10,10 +10,10 @@ The declared production target is PostgreSQL RPO no more than five minutes and R
 
 - `infra/modules/rds` encodes automated backups, maintenance windows, encryption, private networking, Performance Insights, and production safeguards.
 - `infra/modules/backup` encodes an encrypted Backup Vault, Vault Lock, scheduled recovery points, and restore role.
-- The per-environment roots currently instantiate RDS but do **not** instantiate the reusable backup module. Backup Vault/Vault Lock is therefore source implemented but not connected or deployable from those roots yet.
+- The per-environment roots instantiate the reusable backup module against the environment RDS instance, with environment-specific retention of 7, 14, and 35 days. This is source wiring, not proof that a vault or recovery point exists.
 - No apply output, recovery-point inventory, restored-instance proof, or measured RPO/RTO is present.
 
-Wiring the backup module into each intended root, reviewing its retention/compliance mode, and applying it is a production blocker.
+Reviewing the retention/compliance mode, applying each root, and completing the failover/PITR drills remains a production blocker.
 
 ## Backup verification
 
@@ -33,7 +33,7 @@ aws rds describe-db-snapshots \
   --snapshot-type automated
 ```
 
-If AWS Backup has been wired and applied, also verify the exact vault output and recovery points. Do not assume a vault named in an unused module exists.
+Verify the exact `backup_vault_arn` root output and recovery points. Do not infer active protection from source alone.
 
 ## Restore principles
 

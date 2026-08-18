@@ -66,7 +66,7 @@ Status terms: **Pending** means no sufficient evidence; **Partial** means source
 - **Automated evidence path/command:** `services/projector/tests/rebuild.rs`, ignored `services/projector/tests/rebuild_performance.rs`; `cargo test -p deepref-projector --test rebuild_performance -- --ignored --nocapture`.
 - **Manual drill/apply-time evidence:** Rebuild 250,000 works and 2.5 million edges against deployed production-like PostgreSQL/Neo4j; retain eight-stage timing, watermark/replay, work/membership/citation counts, sampled deterministic hashes, final lag/state, and core availability.
 - **Prerequisites:** Representative generated dataset, sufficient staging capacity, approved rebuild workflow/GitOps values change, monitoring, and [Neo4j rebuild runbook](../operations/runbooks/neo4j-rebuild.md).
-- **Current verification status:** **Pending.** The ignored test currently verifies only the numeric dataset shape; it does not execute a rebuild. The required App-authored values-change workflow/policy is also missing.
+- **Current verification status:** **Pending.** The ignored test currently verifies only the numeric dataset shape; it does not execute a rebuild. The App-authored values-change workflow and matching policy are now source-implemented, but no deployed rebuild or performance evidence exists.
 
 ## AC-09 — Failed migration blocks rollout
 
@@ -82,7 +82,7 @@ Status terms: **Pending** means no sufficient evidence; **Partial** means source
 - **Automated evidence path/command:** `infra/modules/rds/**`, `infra/environments/production/main.tf`, module tests; `mise exec -- just infra-validate`.
 - **Manual drill/apply-time evidence:** Production or production-equivalent Multi-AZ failover plus isolated PITR restore with approved clock definitions, transaction/data invariants, observed RPO <=5 minutes and RTO <=60 minutes, private posture, and application recovery.
 - **Prerequisites:** Applied production RDS, healthy recovery points/quotas, approved validation and [RDS runbook](../operations/runbooks/rds-failover-pitr.md), data/platform owners, and evidence store.
-- **Current verification status:** **Pending apply-time drill.** No RDS exists/proof is available from local source, and the reusable AWS Backup module is not wired into environment roots.
+- **Current verification status:** **Pending apply-time drill.** The reusable AWS Backup module is now wired into each environment root, but no RDS exists/proof, recovery-point inventory, or measured RPO/RTO is available from local source.
 
 ## AC-11 — Exact signed digest promotion
 

@@ -4,9 +4,9 @@ run "encrypted_versioned_native_lock_backend" {
   command = plan
 
   variables {
-    account_id   = "111111111111"
-    bucket_name  = "ambient-scribes-test-state-111111111111"
-    kms_alias    = "alias/ambient-scribes-test-state"
+    account_id  = "111111111111"
+    bucket_name = "ambient-scribes-test-state-111111111111"
+    kms_alias   = "alias/ambient-scribes-test-state"
     state_access_principal_arns = [
       "arn:aws:iam::111111111111:role/ambient-scribes-infra",
     ]

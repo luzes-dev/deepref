@@ -68,11 +68,11 @@ resource "aws_budgets_budget" "monthly" {
   dynamic "notification" {
     for_each = var.budget_notifications
     content {
-      comparison_operator        = "GREATER_THAN"
-      threshold                  = notification.value.threshold
-      threshold_type             = "PERCENTAGE"
-      notification_type          = notification.value.notification_type
-      subscriber_sns_topic_arns  = [aws_sns_topic.operations.arn]
+      comparison_operator       = "GREATER_THAN"
+      threshold                 = notification.value.threshold
+      threshold_type            = "PERCENTAGE"
+      notification_type         = notification.value.notification_type
+      subscriber_sns_topic_arns = [aws_sns_topic.operations.arn]
     }
   }
 

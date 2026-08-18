@@ -55,9 +55,9 @@ module "cloudflare_perimeter" {
 module "github_repository" {
   source = "../../modules/github-repository"
 
-  repository                    = var.github_repository
-  deployment_app_id             = var.deployment_github_app_id
-  reviewer_team_slug            = var.github_reviewer_team_slug
+  repository         = var.github_repository
+  deployment_app_id  = var.deployment_github_app_id
+  reviewer_team_slug = var.github_reviewer_team_slug
   source_required_status_checks = var.source_required_status_checks == null ? [
     "CodeQL / javascript-typescript",
     "CodeQL / rust",

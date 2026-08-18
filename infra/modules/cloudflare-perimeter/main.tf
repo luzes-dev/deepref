@@ -89,13 +89,13 @@ resource "cloudflare_zero_trust_tunnel_cloudflared_config" "environment" {
             team_name = var.access_team_name
             required  = true
           }
-          connect_timeout       = 10
-          http_host_header      = each.value.hostname
-          keep_alive_timeout    = 90
-          no_happy_eyeballs     = false
-          no_tls_verify         = false
-          tcp_keep_alive        = 30
-          tls_timeout           = 10
+          connect_timeout    = 10
+          http_host_header   = each.value.hostname
+          keep_alive_timeout = 90
+          no_happy_eyeballs  = false
+          no_tls_verify      = false
+          tcp_keep_alive     = 30
+          tls_timeout        = 10
         }
       },
       {

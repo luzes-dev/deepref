@@ -86,7 +86,8 @@ variable "origin_services" {
 
   validation {
     condition = (
-      setequals(toset(keys(var.origin_services)), toset(["development", "staging", "production"])) &&
+      length(setsubtract(toset(keys(var.origin_services)), toset(["development", "staging", "production"]))) == 0 &&
+      length(setsubtract(toset(["development", "staging", "production"]), toset(keys(var.origin_services)))) == 0 &&
       alltrue([
         for service in values(var.origin_services) :
         can(regex("^https?://[a-z0-9]([-a-z0-9.]*[a-z0-9])?\\.svc\\.cluster\\.local(:[0-9]{2,5})?$", service))

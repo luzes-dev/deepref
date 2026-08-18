@@ -25,13 +25,13 @@ resource "terraform_data" "account_and_workspace_guard" {
 module "state_backend" {
   source = "../../modules/state-backend"
 
-  account_id                         = var.expected_account_id
-  bucket_name                        = var.state_bucket_name
-  kms_alias                          = var.state_kms_alias
-  kms_administrator_principal_arns   = var.kms_administrator_principal_arns
-  state_access_principal_arns        = var.state_access_principal_arns
-  noncurrent_version_retention_days  = var.noncurrent_version_retention_days
-  tags                               = local.common_tags
+  account_id                        = var.expected_account_id
+  bucket_name                       = var.state_bucket_name
+  kms_alias                         = var.state_kms_alias
+  kms_administrator_principal_arns  = var.kms_administrator_principal_arns
+  state_access_principal_arns       = var.state_access_principal_arns
+  noncurrent_version_retention_days = var.noncurrent_version_retention_days
+  tags                              = local.common_tags
 
   depends_on = [terraform_data.account_and_workspace_guard]
 }
