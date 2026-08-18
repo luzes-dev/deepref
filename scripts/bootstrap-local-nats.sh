@@ -28,9 +28,9 @@ upsert_stream DEEPREF_DOMAIN \
 upsert_stream DEEPREF_DLQ \
   '{"name":"DEEPREF_DLQ","subjects":["dlq.recorded.v1"],"retention":"limits","storage":"file","discard":"old","max_age":7776000000000000,"num_replicas":1,"duplicate_window":120000000000}'
 
-request '$JS.API.CONSUMER.DURABLE.CREATE.DEEPREF_WORK.deepref-worker' \
+request "\$JS.API.CONSUMER.DURABLE.CREATE.DEEPREF_WORK.deepref-worker" \
   '{"stream_name":"DEEPREF_WORK","config":{"durable_name":"deepref-worker","name":"deepref-worker","deliver_policy":"all","ack_policy":"explicit","ack_wait":1800000000000,"max_deliver":5,"backoff":[5000000000,30000000000,120000000000,600000000000,1800000000000],"filter_subject":"work.fetch.requested.v1","replay_policy":"instant","max_ack_pending":1024}}'
-request '$JS.API.CONSUMER.DURABLE.CREATE.DEEPREF_DOMAIN.deepref-projector' \
+request "\$JS.API.CONSUMER.DURABLE.CREATE.DEEPREF_DOMAIN.deepref-projector" \
   '{"stream_name":"DEEPREF_DOMAIN","config":{"durable_name":"deepref-projector","name":"deepref-projector","deliver_policy":"all","ack_policy":"explicit","ack_wait":1800000000000,"max_deliver":5,"backoff":[5000000000,30000000000,120000000000,600000000000,1800000000000],"filter_subject":"domain.>","replay_policy":"instant","max_ack_pending":1024}}'
 
 printf 'local JetStream resources are ready at %s\n' "$nats_url"

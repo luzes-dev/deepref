@@ -90,16 +90,17 @@ spec:
             - {name: tls, mountPath: /etc/nats/tls, readOnly: true}
             - {name: tmp, mountPath: /tmp/nats}
             - {name: data, mountPath: /data}
-          resources: {{- toYaml .Values.nats.resources | nindent 12 }}
+          resources:
+            {{ toYaml .Values.nats.resources | nindent 12 }}
           startupProbe:
-            httpGet: {path: /healthz?js-enabled-only=true, port: monitor}
+            httpGet: {path: "/healthz?js-enabled-only=true", port: monitor}
             failureThreshold: 60
             periodSeconds: 2
           livenessProbe:
             httpGet: {path: /healthz, port: monitor}
             periodSeconds: 10
           readinessProbe:
-            httpGet: {path: /healthz?js-server-only=true, port: monitor}
+            httpGet: {path: "/healthz?js-server-only=true", port: monitor}
             periodSeconds: 5
       volumes:
         - name: config

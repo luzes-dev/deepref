@@ -29,7 +29,7 @@ else
 fi
 
 if command -v conftest >/dev/null 2>&1; then
-  conftest test "$tmp_dir"/*.yaml --policy policy/helm
+  conftest test "$tmp_dir"/*.yaml --policy policy/helm --rego-version v0
 else
   echo "skip conftest: not installed" >&2
 fi
