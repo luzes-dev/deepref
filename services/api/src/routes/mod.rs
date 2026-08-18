@@ -2,6 +2,7 @@ mod articles;
 mod health;
 mod ingestions;
 mod projects;
+mod screening;
 mod settings;
 
 use std::sync::Arc;
@@ -42,6 +43,8 @@ fn openapi_router() -> OpenApiRouter<AppState> {
         .routes(routes!(ingestions::get_ingestion))
         .routes(routes!(ingestions::list_ingestion_items))
         .routes(routes!(ingestions::cancel_ingestion))
+        .routes(routes!(screening::screen_report))
+        .routes(routes!(screening::screening_history))
 }
 
 pub(crate) fn openapi_document() -> OpenApi {
@@ -100,6 +103,8 @@ mod tests {
             "/ingestions/{ingestion_id}",
             "/ingestions/{ingestion_id}/items",
             "/ingestions/{ingestion_id}/cancel",
+            "/projects/{project_id}/reports/{report_id}/screening",
+            "/projects/{project_id}/reports/{report_id}/screening/history",
         ];
 
         for path in expected_paths {
