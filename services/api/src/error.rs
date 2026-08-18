@@ -15,6 +15,7 @@ pub(crate) struct ErrorResponse {
 pub(crate) enum ApiError {
     Db(sqlx::Error),
     BadRequest(String),
+    Conflict(String),
     Json(serde_json::Error),
     Doi(deepref_core::DoiError),
 }
@@ -51,6 +52,7 @@ impl IntoResponse for ApiError {
                 )
             }
             ApiError::BadRequest(error) => (StatusCode::BAD_REQUEST, error),
+            ApiError::Conflict(error) => (StatusCode::CONFLICT, error),
             ApiError::Json(error) => (StatusCode::BAD_REQUEST, error.to_string()),
             ApiError::Doi(error) => (StatusCode::BAD_REQUEST, error.to_string()),
         };
