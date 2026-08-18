@@ -6,6 +6,16 @@ DeepRef maps article citation networks from seed DOIs. The SvelteKit SPA uses a 
 
 PostgreSQL 17 is authoritative for projects, ingestions/items, works, project membership, canonical fetched-reference facts, citations, unresolved references, claims/leases, outbox rows, domain events, projection state, and metric snapshots.
 
+The v2 evidence workspace is layered alongside the legacy citation-ingestion model. Its canonical entities are
+records → reports → studies; report identifiers are external attributes rather than primary keys. Protocol versions,
+append-only screening events, current screening state, review events, documents, AI audit rows, and leased jobs are
+PostgreSQL tables. The v2 screening command writes its event, state projection, project lifecycle status, and PRISMA
+recomputation job in one transaction.
+
+The first route-driven v2 workflow is available at /projects/{project_id}/screening/title-abstract. It uses optimistic
+revisions and returns 409 screening_revision_conflict when a second browser, worker, or automation has changed the
+same report.
+
 The worker claims versioned work events and DOI leases transactionally, performs the provider request outside the final transaction while renewing the lease, then atomically attaches cached/fetched facts, inserts discovered children, emits deterministic outbox/domain events, completes the item/claim, and commits before ACK. PostgreSQL also owns the provider-wide permit schedule and reconciliation state.
 
 Hosted NATS JetStream resources are pre-provisioned by the Helm/GitOps bootstrap Job; application credentials do not administer them:
@@ -19,6 +29,10 @@ Hosted NATS JetStream resources are pre-provisioned by the Helm/GitOps bootstrap
 Staging/production use three stream replicas; development/local use one. Durable consumers are `deepref-worker` and `deepref-projector`, with five bounded deliveries and backoff `5s, 30s, 2m, 10m, 30m`.
 
 Neo4j Community is a single-node, asynchronous projection used for graph/recommendation reads and graph metrics. The projector applies versioned constraints/indexes, processes V1 domain events idempotently with entity revision cursors, and updates projection status/metric freshness. PostgreSQL can rebuild Neo4j through the explicit `deepref-projector rebuild --run-id <UUID>` flow. During Neo4j failure, core API readiness remains PostgreSQL-based while graph routes return typed `503 GRAPH_UNAVAILABLE` with `Retry-After`.
+
+The v2 job runner is intentionally PostgreSQL-native for review-derived work. It claims queued jobs with
+FOR UPDATE SKIP LOCKED, leases them for bounded execution, retries failures, and materializes deterministic PRISMA
+counts. The legacy NATS/Neo4j ingestion projection remains available while the migration proceeds.
 
 ## API and web degradation
 

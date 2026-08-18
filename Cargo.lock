@@ -616,6 +616,7 @@ dependencies = [
  "chrono",
  "deepref-config",
  "deepref-core",
+ "deepref-domain",
  "deepref-events",
  "deepref-graph",
  "deepref-telemetry",
@@ -667,6 +668,15 @@ dependencies = [
  "thiserror 2.0.19",
  "tokio",
  "urlencoding",
+]
+
+[[package]]
+name = "deepref-domain"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "thiserror 2.0.19",
+ "uuid",
 ]
 
 [[package]]

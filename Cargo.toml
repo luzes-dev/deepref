@@ -1,5 +1,6 @@
 [workspace]
 members = [
+    "crates/domain",
     "crates/config",
     "crates/core",
     "crates/crossref",
@@ -19,6 +20,7 @@ license = "MIT"
 version = "0.1.0"
 
 [workspace.dependencies]
+deepref-domain = { path = "crates/domain" }
 deepref-core = { path = "crates/core" }
 deepref-config = { path = "crates/config" }
 deepref-crossref = { path = "crates/crossref" }

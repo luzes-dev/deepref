@@ -6,6 +6,7 @@ license.workspace = true
 
 [dependencies]
 deepref-core = { version = "0.1.0", path = "../../crates/core" }
+deepref-domain.workspace = true
 deepref-config.workspace = true
 deepref-events = { version = "0.1.0", path = "../../crates/events" }
 deepref-graph.workspace = true

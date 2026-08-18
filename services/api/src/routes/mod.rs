@@ -4,6 +4,7 @@ mod ingestions;
 mod pagination;
 mod projection;
 mod projects;
+mod review;
 mod settings;
 
 use std::sync::Arc;
@@ -51,6 +52,10 @@ fn openapi_router() -> OpenApiRouter<AppState> {
         .routes(routes!(ingestions::get_ingestion))
         .routes(routes!(ingestions::list_ingestion_items))
         .routes(routes!(ingestions::cancel_ingestion))
+        .routes(routes!(review::get_protocol))
+        .routes(routes!(review::list_title_abstract_queue))
+        .routes(routes!(review::screen_report))
+        .routes(routes!(review::get_prisma))
 }
 
 pub fn openapi_document() -> OpenApi {
@@ -134,6 +139,10 @@ mod tests {
             "/ingestions/{ingestion_id}",
             "/ingestions/{ingestion_id}/items",
             "/ingestions/{ingestion_id}/cancel",
+            "/projects/{project_id}/protocol",
+            "/projects/{project_id}/screening/title-abstract",
+            "/projects/{project_id}/reports/{report_id}/screening",
+            "/projects/{project_id}/prisma",
         ];
 
         for path in expected_paths {

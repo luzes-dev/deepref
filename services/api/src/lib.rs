@@ -1,5 +1,6 @@
 pub mod config;
 pub mod error;
+mod jobs;
 mod nats;
 mod outbox;
 pub mod routes;
@@ -67,8 +68,9 @@ pub async fn serve(config: ApiConfig) -> anyhow::Result<()> {
         config.graph_retry_after,
     );
     if let Some(context) = jetstream {
-        tokio::spawn(outbox::run_publisher(pool, context));
+        tokio::spawn(outbox::run_publisher(pool.clone(), context));
     }
+    tokio::spawn(jobs::run(pool.clone()));
     let listener = tokio::net::TcpListener::bind(config.bind_addr).await?;
     tracing::info!(address = %config.bind_addr, "API listening");
     axum::serve(listener, routes::router(state, &config))

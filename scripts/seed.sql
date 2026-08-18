@@ -189,4 +189,61 @@ WHERE project_id = '00000000-0000-4000-8000-000000000001'
     '10.5555/deepref.seed.3'
   );
 
+-- Seed the v2 evidence workspace after the legacy fixture rows exist. The production migration
+-- performs the same deterministic compatibility import for data that already exists.
+INSERT INTO reports (id, title, abstract_text, publication_year, journal, url, raw)
+SELECT
+  format('%s-%s-%s-%s-%s', substr(md5('deepref:report:' || w.canonical_doi), 1, 8),
+    substr(md5('deepref:report:' || w.canonical_doi), 9, 4), substr(md5('deepref:report:' || w.canonical_doi), 13, 4),
+    substr(md5('deepref:report:' || w.canonical_doi), 17, 4), substr(md5('deepref:report:' || w.canonical_doi), 21, 12))::uuid,
+  w.title, w.abstract_text, COALESCE(w.published_year, w.issued_year), w.container_title, w.url, w.raw
+FROM works w
+ON CONFLICT (id) DO UPDATE SET title = EXCLUDED.title, publication_year = EXCLUDED.publication_year, raw = EXCLUDED.raw, updated_at = now();
+
+INSERT INTO report_identifiers (id, report_id, scheme, value, normalized_value)
+SELECT gen_random_uuid(), r.id, 'doi', w.canonical_doi, lower(w.canonical_doi)
+FROM works w
+JOIN reports r ON r.id = format('%s-%s-%s-%s-%s', substr(md5('deepref:report:' || w.canonical_doi), 1, 8),
+  substr(md5('deepref:report:' || w.canonical_doi), 9, 4), substr(md5('deepref:report:' || w.canonical_doi), 13, 4),
+  substr(md5('deepref:report:' || w.canonical_doi), 17, 4), substr(md5('deepref:report:' || w.canonical_doi), 21, 12))::uuid
+ON CONFLICT (scheme, normalized_value) DO NOTHING;
+
+INSERT INTO records (id, project_id, report_id, source, source_key, title, publication_year, raw)
+SELECT
+  format('%s-%s-%s-%s-%s', substr(md5('deepref:record:' || pw.project_id::text || ':' || pw.canonical_doi), 1, 8),
+    substr(md5('deepref:record:' || pw.project_id::text || ':' || pw.canonical_doi), 9, 4), substr(md5('deepref:record:' || pw.project_id::text || ':' || pw.canonical_doi), 13, 4),
+    substr(md5('deepref:record:' || pw.project_id::text || ':' || pw.canonical_doi), 17, 4), substr(md5('deepref:record:' || pw.project_id::text || ':' || pw.canonical_doi), 21, 12))::uuid,
+  pw.project_id, r.id, 'legacy_project_works', pw.canonical_doi, w.title,
+  COALESCE(w.published_year, w.issued_year), jsonb_build_object('legacy_doi', pw.canonical_doi, 'seed', pw.seed)
+FROM project_works pw
+JOIN works w ON w.canonical_doi = pw.canonical_doi
+JOIN report_identifiers ri ON ri.scheme = 'doi' AND ri.normalized_value = lower(pw.canonical_doi)
+JOIN reports r ON r.id = ri.report_id
+ON CONFLICT (id) DO NOTHING;
+
+INSERT INTO project_reports (project_id, report_id, first_seen_record_id)
+SELECT project_id, report_id, id FROM records WHERE project_id = '00000000-0000-4000-8000-000000000001' AND report_id IS NOT NULL
+ON CONFLICT (project_id, report_id) DO UPDATE SET first_seen_record_id = COALESCE(project_reports.first_seen_record_id, EXCLUDED.first_seen_record_id);
+
+INSERT INTO protocol_versions (id, project_id, version, name, status, criteria, published_at)
+VALUES (
+  '00000000-0000-4000-8000-000000000101',
+  '00000000-0000-4000-8000-000000000001',
+  1,
+  'Default evidence screening protocol',
+  'published',
+  '[{"id":"population","label":"Population","description":"Matches the review population."},{"id":"intervention","label":"Intervention or exposure","description":"Matches the intervention or exposure of interest."},{"id":"outcome","label":"Outcome","description":"Reports a relevant outcome."}]'::jsonb,
+  '2026-01-01T00:00:00Z'
+)
+ON CONFLICT (id) DO NOTHING;
+
+INSERT INTO exclusion_reasons (id, project_id, code, label, stage)
+VALUES
+  ('00000000-0000-4000-8000-000000000111', '00000000-0000-4000-8000-000000000001', 'wrong_population', 'Wrong population', 'full_text'),
+  ('00000000-0000-4000-8000-000000000112', '00000000-0000-4000-8000-000000000001', 'wrong_intervention', 'Wrong intervention or exposure', 'full_text'),
+  ('00000000-0000-4000-8000-000000000113', '00000000-0000-4000-8000-000000000001', 'wrong_outcome', 'Wrong outcome', 'full_text'),
+  ('00000000-0000-4000-8000-000000000114', '00000000-0000-4000-8000-000000000001', 'wrong_design', 'Wrong study design', 'full_text'),
+  ('00000000-0000-4000-8000-000000000115', '00000000-0000-4000-8000-000000000001', 'no_usable_full_text', 'No usable full text', 'full_text')
+ON CONFLICT (id) DO NOTHING;
+
 COMMIT;
