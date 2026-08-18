@@ -158,9 +158,9 @@ variable "admin_runner_kms_decrypt_key_arns" {
 }
 
 variable "admin_runner_egress_cidr_blocks" {
-  description = "Approved IPv4 egress destinations for the private administration runner."
+  description = "Additional approved IPv4 egress destinations for the private administration runner."
   type        = set(string)
-  default     = ["0.0.0.0/0"]
+  default     = []
 }
 
 variable "tags" {

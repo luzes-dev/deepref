@@ -18,6 +18,11 @@ variable "vpc_id" {
   type        = string
 }
 
+variable "vpc_cidr" {
+  description = "VPC CIDR used to restrict database egress."
+  type        = string
+}
+
 variable "subnet_ids" {
   description = "Exactly three isolated data subnet IDs."
   type        = list(string)

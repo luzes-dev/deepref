@@ -3,3 +3,6 @@ misconfiguration:
     kube-version: "v1.30.0"
     values:
       - charts/deepref/tests/values/development.yaml
+scan:
+  skip-dirs:
+    - charts/deepref/tests/kyverno

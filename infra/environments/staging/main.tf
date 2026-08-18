@@ -189,6 +189,7 @@ module "rds" {
   name                           = local.name
   deployment_tier                = local.environment
   vpc_id                         = module.network.vpc_id
+  vpc_cidr                       = var.vpc_cidr
   subnet_ids                     = module.network.data_subnet_ids
   application_security_group_ids = [module.eks.cluster_primary_security_group_id]
   allowed_cidr_blocks            = var.database_allowed_cidrs
@@ -263,7 +264,7 @@ module "admin_runner" {
   log_kms_key_arn      = module.kms.key_arns["logs"]
   assumable_role_arns  = var.admin_runner_assumable_role_arns
   kms_decrypt_key_arns = var.admin_runner_kms_decrypt_key_arns
-  egress_cidr_blocks   = var.admin_runner_egress_cidr_blocks
+  egress_cidr_blocks   = toset(concat(tolist(var.admin_runner_egress_cidr_blocks), [var.vpc_cidr]))
   tags                 = local.common_tags
 
   depends_on = [terraform_data.account_guard]
