@@ -1,3 +1,6 @@
+severity:
+  - HIGH
+  - CRITICAL
 misconfiguration:
   helm:
     kube-version: "v1.30.0"
