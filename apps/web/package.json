@@ -30,7 +30,7 @@
 		"@sveltejs/adapter-static": "^3.0.10",
 		"@sveltejs/kit": "^2.70.2",
 		"@sveltejs/vite-plugin-svelte": "^7.1.2",
-		"@tailwindcss/vite": "^4.3.1",
+		"@tailwindcss/vite": "^4.3.3",
 		"@tanstack/eslint-plugin-query": "^5.101.0",
 		"@types/node": "^24.13.2",
 		"bits-ui": "^2.18.1",
