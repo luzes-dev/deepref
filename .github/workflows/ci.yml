@@ -143,6 +143,19 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - name: Install pinned task runner
         run: cargo install --locked just --version 1.42.4
+      - name: Install pinned NATS CLI
+        run: |
+          archive="$RUNNER_TEMP/nats-0.4.0-linux-amd64.zip"
+          install_dir="$RUNNER_TEMP/nats-cli"
+          curl --fail --location --silent --show-error --retry 3 \
+            --output "$archive" \
+            https://github.com/nats-io/natscli/releases/download/v0.4.0/nats-0.4.0-linux-amd64.zip
+          printf '%s  %s\n' \
+            8dbd437c826b953dbd7432cf890ef22ba3c33dccc3dce5e71b3e8d055427849c \
+            "$archive" | sha256sum --check --status
+          mkdir -p "$install_dir"
+          unzip -q "$archive" -d "$install_dir"
+          echo "$install_dir/nats-0.4.0-linux-amd64" >> "$GITHUB_PATH"
       - name: Start disposable dependencies
         run: docker compose -f infra/local/compose.yaml up -d --wait
       - name: Run integration tests
