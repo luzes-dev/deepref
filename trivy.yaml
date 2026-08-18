@@ -1,3 +1,5 @@
 misconfiguration:
   helm:
     kube-version: "v1.30.0"
+    values:
+      - charts/deepref/tests/values/development.yaml
