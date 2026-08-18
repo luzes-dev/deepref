@@ -40,14 +40,14 @@ for runbook in "${expected_runbooks[@]}"; do
     'Rollback or safe stop' \
     'Escalation' \
     'Evidence and audit capture'; do
-    rg --quiet --fixed-strings "## $heading" "$file" || fail "$file is missing heading: $heading"
+    grep --quiet --fixed-strings "## $heading" "$file" || fail "$file is missing heading: $heading"
   done
 done
 
 acceptance=docs/acceptance/production-platform.md
 [[ -s $acceptance ]] || fail "missing acceptance register"
 for number in $(seq -w 1 16); do
-  count=$(rg --count "^## AC-${number} — " "$acceptance" || true)
+  count=$(grep --count --extended-regexp "^## AC-${number} — " "$acceptance" || true)
   [[ $count -eq 1 ]] || fail "AC-${number} must have exactly one acceptance heading"
 done
 
@@ -77,17 +77,17 @@ done
 while IFS= read -r runbook_path; do
   [[ -f $runbook_path ]] || fail "observability alert has a broken runbook path: $runbook_path"
 done < <(
-  rg --no-filename --only-matching 'runbook: "[^"]+"' observability/alerts |
+  grep --recursive --no-filename --only-matching --extended-regexp 'runbook: "[^"]+"' observability/alerts |
     cut -d'"' -f2
 )
 
-if rg --ignore-case --line-number \
+if grep --recursive --ignore-case --line-number --extended-regexp \
   'docker-compose\.selfhost|Self-hosting Example|examples/docker-compose|infra/docker-compose\.yml|ghcr\.io|compose:config|docs/runbooks/' \
   README.md CONTRIBUTING.md SECURITY.md docs apps/web/README.md package.json; then
   fail "obsolete deployment or runbook guidance remains"
 fi
 
-if rg --line-number 'https://REPLACE_WITH_[A-Z_]*HOST/(health|projects)' docs/operations; then
+if grep --recursive --line-number --extended-regexp 'https://REPLACE_WITH_[A-Z_]*HOST/(health|projects)' docs/operations; then
   fail "hosted same-origin API commands must use the /api prefix"
 fi
 
