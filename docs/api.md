@@ -44,6 +44,14 @@ Use `API_CORS_ALLOW_ANY=true` only for local testing when the browser origin is 
 
 ## Health and degradation
 
+The v2 review workflow exposes:
+
+- GET /projects/{project_id}/protocol returns the published review protocol.
+- GET /projects/{project_id}/screening/title-abstract returns the bounded v2 screening queue.
+- POST /projects/{project_id}/reports/{report_id}/screening appends a screening decision. The request includes
+  protocol_version_id and expected_revision; stale writes return 409.
+- GET /projects/{project_id}/prisma returns the PostgreSQL-backed PRISMA projection.
+
 - `GET /health/live` reports process liveness.
 - `GET /health/ready` checks PostgreSQL reachability and schema compatibility.
 - `GET /health/dependencies` reports PostgreSQL, NATS, outbox, worker, Neo4j, and projection state without making graph dependencies part of core readiness.

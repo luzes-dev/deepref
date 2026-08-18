@@ -24,6 +24,12 @@ pub enum ApiError {
     Database(#[from] sqlx::Error),
     #[error("{0}")]
     BadRequest(String),
+    #[error("{message}")]
+    Conflict {
+        code: String,
+        message: String,
+        details: serde_json::Value,
+    },
     #[error("{0}")]
     NotFound(String),
     #[error("{0}")]
@@ -47,49 +53,64 @@ impl ApiError {
 impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
         let correlation_id = None;
-        let (status, code, message, retry_after) = match self {
+        let (status, code, message, retry_after, details) = match self {
             Self::Database(sqlx::Error::RowNotFound) | Self::NotFound(_) => (
                 StatusCode::NOT_FOUND,
-                "NOT_FOUND",
+                "NOT_FOUND".to_owned(),
                 "resource not found".to_owned(),
+                None,
                 None,
             ),
             Self::Database(error) => {
                 tracing::error!(%error, "database operation failed");
                 (
                     StatusCode::INTERNAL_SERVER_ERROR,
-                    "INTERNAL_ERROR",
+                    "INTERNAL_ERROR".to_owned(),
                     "internal server error".to_owned(),
+                    None,
                     None,
                 )
             }
-            Self::BadRequest(message) => {
-                (StatusCode::BAD_REQUEST, "INVALID_REQUEST", message, None)
-            }
+            Self::BadRequest(message) => (
+                StatusCode::BAD_REQUEST,
+                "INVALID_REQUEST".to_owned(),
+                message,
+                None,
+                None,
+            ),
+            Self::Conflict {
+                code,
+                message,
+                details,
+            } => (StatusCode::CONFLICT, code, message, None, Some(details)),
             Self::Doi(error) => (
                 StatusCode::BAD_REQUEST,
-                "INVALID_DOI",
+                "INVALID_DOI".to_owned(),
                 error.to_string(),
+                None,
                 None,
             ),
             Self::Configuration(message) => (
                 StatusCode::SERVICE_UNAVAILABLE,
-                "CONFIGURATION_ERROR",
+                "CONFIGURATION_ERROR".to_owned(),
                 message,
+                None,
                 None,
             ),
             Self::GraphUnavailable {
                 retry_after_seconds,
             } => (
                 StatusCode::SERVICE_UNAVAILABLE,
-                "GRAPH_UNAVAILABLE",
+                "GRAPH_UNAVAILABLE".to_owned(),
                 "graph features are temporarily unavailable".to_owned(),
                 Some(retry_after_seconds),
+                None,
             ),
             Self::Json(error) => (
                 StatusCode::BAD_REQUEST,
-                "INVALID_JSON",
+                "INVALID_JSON".to_owned(),
                 error.to_string(),
+                None,
                 None,
             ),
         };
@@ -97,7 +118,7 @@ impl IntoResponse for ApiError {
             code: code.to_owned(),
             message,
             correlation_id,
-            details: None,
+            details,
         };
         let mut response = (status, Json(body)).into_response();
         if let Some(seconds) = retry_after

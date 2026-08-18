@@ -1,10 +1,12 @@
 <script lang="ts">
+	import { resolve } from '$app/paths';
 	import { ScrollArea } from '$lib/components/ui/scroll-area';
 	import * as Tooltip from '$lib/components/ui/tooltip';
 	import { useProjectWorkspaceContext } from './context.svelte.js';
 	import type { ProjectWorkspaceView } from './types';
 	import type { LucideIcon } from '@lucide/svelte';
 	import ArchiveIcon from '@lucide/svelte/icons/archive';
+	import ClipboardCheckIcon from '@lucide/svelte/icons/clipboard-check';
 	import FileTextIcon from '@lucide/svelte/icons/file-text';
 	import GitForkIcon from '@lucide/svelte/icons/git-fork';
 	import HomeIcon from '@lucide/svelte/icons/home';
@@ -47,6 +49,13 @@
 			count: workspace.counts.ingestions
 		}
 	]);
+	const screeningHref = $derived(
+		workspace.selectedProjectId
+			? resolve('/projects/[projectId]/screening/title-abstract', {
+					projectId: workspace.selectedProjectId
+				})
+			: undefined
+	);
 </script>
 
 <Tooltip.Provider>
@@ -115,6 +124,42 @@
 						</Button>
 					{/if}
 				{/each}
+				{#if screeningHref}
+					{#if collapsed}
+						<a
+							href={resolve('/projects/[projectId]/screening/title-abstract', {
+								projectId: workspace.selectedProjectId
+							})}
+							title="Screening"
+							class={cn(
+								buttonVariants({
+									variant: 'outline',
+									size: 'icon',
+									class: 'size-9'
+								})
+							)}
+						>
+							<ClipboardCheckIcon aria-hidden={true} />
+							<span class="sr-only">Screening</span>
+						</a>
+					{:else}
+						<a
+							href={resolve('/projects/[projectId]/screening/title-abstract', {
+								projectId: workspace.selectedProjectId
+							})}
+							class={cn(
+								buttonVariants({
+									variant: 'outline',
+									size: 'sm',
+									class: 'justify-start'
+								})
+							)}
+						>
+							<ClipboardCheckIcon class="mr-2 size-4" aria-hidden={true} />
+							Screening
+						</a>
+					{/if}
+				{/if}
 			</nav>
 		</ScrollArea>
 	</aside>

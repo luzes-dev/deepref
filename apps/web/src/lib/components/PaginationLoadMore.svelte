@@ -18,7 +18,7 @@
 </script>
 
 <div class="flex flex-wrap items-center justify-between gap-3" data-testid="pagination-load-more">
-	<p class="text-sm text-muted-foreground">{loadedCount} {label} loaded</p>
+	<p class="text-sm text-muted-foreground">Loaded {loadedCount}</p>
 	{#if hasNextPage}
 		<Button variant="outline" onclick={onLoadMore} disabled={isLoading}>
 			{#if isLoading}<Spinner data-icon="inline-start" />{/if}

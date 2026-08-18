@@ -752,6 +752,58 @@
         }
       }
     },
+    "/projects/{project_id}/prisma": {
+      "get": {
+        "tags": [
+          "review"
+        ],
+        "operationId": "getProjectPrisma",
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "path",
+            "description": "Project identifier",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "PRISMA projection counts",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PrismaDto"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Project not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/projects/{project_id}/projection": {
       "get": {
         "tags": [
@@ -793,6 +845,58 @@
         }
       }
     },
+    "/projects/{project_id}/protocol": {
+      "get": {
+        "tags": [
+          "review"
+        ],
+        "operationId": "getProjectProtocol",
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "path",
+            "description": "Project identifier",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Published protocol",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProtocolDto"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Project not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/projects/{project_id}/recommendations": {
       "get": {
         "tags": [
@@ -823,6 +927,169 @@
           },
           "503": {
             "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/projects/{project_id}/reports/{report_id}/screening": {
+      "post": {
+        "tags": [
+          "review"
+        ],
+        "operationId": "screenReport",
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "path",
+            "description": "Project identifier",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "report_id",
+            "in": "path",
+            "description": "Report identifier",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ScreenReportRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Current screening state",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScreeningStateDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid decision",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Report or protocol not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Revision conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/projects/{project_id}/screening/title-abstract": {
+      "get": {
+        "tags": [
+          "review"
+        ],
+        "operationId": "listTitleAbstractScreeningQueue",
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "path",
+            "description": "Project identifier",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "status",
+            "in": "query",
+            "description": "Queue status",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "Maximum rows, 1 through 100",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Title/abstract screening queue",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScreeningQueueDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid queue parameters",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error",
             "content": {
               "application/json": {
                 "schema": {
@@ -1664,6 +1931,70 @@
           }
         }
       },
+      "PrismaDto": {
+        "type": "object",
+        "required": [
+          "project_id",
+          "records_identified",
+          "records_deduplicated",
+          "title_abstract_pending",
+          "title_abstract_included",
+          "title_abstract_excluded",
+          "full_text_pending",
+          "full_text_included",
+          "full_text_excluded",
+          "revision"
+        ],
+        "properties": {
+          "full_text_excluded": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "full_text_included": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "full_text_pending": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "project_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "records_deduplicated": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "records_identified": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "revision": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "title_abstract_excluded": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "title_abstract_included": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "title_abstract_pending": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "updated_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          }
+        }
+      },
       "ProjectDto": {
         "type": "object",
         "required": [
@@ -1804,6 +2135,40 @@
           }
         }
       },
+      "ProtocolDto": {
+        "type": "object",
+        "required": [
+          "id",
+          "version",
+          "name",
+          "status",
+          "criteria"
+        ],
+        "properties": {
+          "criteria": {},
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "name": {
+            "type": "string"
+          },
+          "published_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "status": {
+            "type": "string"
+          },
+          "version": {
+            "type": "integer",
+            "format": "int32"
+          }
+        }
+      },
       "ReadinessResponse": {
         "type": "object",
         "required": [
@@ -1875,6 +2240,182 @@
           },
           "status": {
             "type": "string"
+          }
+        }
+      },
+      "ScreenReportRequest": {
+        "type": "object",
+        "required": [
+          "stage",
+          "decision",
+          "protocol_version_id",
+          "expected_revision"
+        ],
+        "properties": {
+          "decision": {
+            "$ref": "#/components/schemas/ScreeningDecisionInput"
+          },
+          "exclusion_reason_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          },
+          "expected_revision": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "notes": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "protocol_version_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "stage": {
+            "$ref": "#/components/schemas/ScreeningStageInput"
+          }
+        }
+      },
+      "ScreeningDecisionInput": {
+        "type": "string",
+        "enum": [
+          "include",
+          "exclude",
+          "maybe"
+        ]
+      },
+      "ScreeningQueueDto": {
+        "type": "object",
+        "required": [
+          "items",
+          "status",
+          "total"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ScreeningQueueItemDto"
+            }
+          },
+          "status": {
+            "type": "string"
+          },
+          "total": {
+            "type": "integer",
+            "format": "int64"
+          }
+        }
+      },
+      "ScreeningQueueItemDto": {
+        "type": "object",
+        "required": [
+          "report_id",
+          "title_abstract_status",
+          "full_text_status",
+          "final_status",
+          "revision"
+        ],
+        "properties": {
+          "abstract_text": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "doi": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "final_status": {
+            "type": "string"
+          },
+          "full_text_status": {
+            "type": "string"
+          },
+          "publication_year": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32"
+          },
+          "report_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "revision": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "title": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "title_abstract_status": {
+            "type": "string"
+          }
+        }
+      },
+      "ScreeningStageInput": {
+        "type": "string",
+        "enum": [
+          "title_abstract",
+          "full_text"
+        ]
+      },
+      "ScreeningStateDto": {
+        "type": "object",
+        "required": [
+          "project_id",
+          "report_id",
+          "title_abstract_status",
+          "full_text_status",
+          "final_status",
+          "revision",
+          "updated_at"
+        ],
+        "properties": {
+          "final_status": {
+            "type": "string"
+          },
+          "full_text_status": {
+            "type": "string"
+          },
+          "last_event_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          },
+          "project_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "report_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "revision": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "title_abstract_status": {
+            "type": "string"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time"
           }
         }
       },
