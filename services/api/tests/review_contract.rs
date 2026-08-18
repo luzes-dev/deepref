@@ -10,8 +10,10 @@ fn v2_review_contract_is_exposed_in_openapi() {
     ] {
         assert!(paths.contains_key(path), "missing v2 path {path}");
     }
-    assert!(document["components"]["schemas"]
-        .as_object()
-        .unwrap()
-        .contains_key("ScreenReportRequest"));
+    assert!(
+        document["components"]["schemas"]
+            .as_object()
+            .unwrap()
+            .contains_key("ScreenReportRequest")
+    );
 }
