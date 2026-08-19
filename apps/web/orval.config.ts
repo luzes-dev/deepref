@@ -65,7 +65,7 @@ export default defineConfig({
 						{
 							onMutations: ['recomputeProjectMetrics'],
 							invalidates: [
-								{ query: 'listProjectArticles', params: ['projectId'] },
+								{ query: 'listProjectReports', params: ['projectId'] },
 								{ query: 'getProjectGraph', params: ['projectId'] },
 								{ query: 'getProjectRecommendations', params: ['projectId'] }
 							]

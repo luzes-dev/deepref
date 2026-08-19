@@ -1,4 +1,4 @@
-import type { ArticleDto, IngestionDto, ProjectDto } from '$lib/api/generated/models';
+import type { IngestionDto, ProjectDto, ReportDto } from '$lib/api/generated/models';
 import { Context, PersistedState, type Getter } from 'runed';
 import {
 	DEFAULT_PROJECT_MAX_DEPTH,
@@ -12,7 +12,7 @@ export type ArticleSort = 'rank' | 'internal' | 'total' | 'year' | 'title';
 type ProjectWorkspaceDataSources = {
 	projects: Getter<ProjectDto[]>;
 	project: Getter<ProjectDto | undefined>;
-	articles: Getter<ArticleDto[]>;
+	articles: Getter<ReportDto[]>;
 	ingestions: Getter<IngestionDto[]>;
 	articlesLoading: Getter<boolean>;
 	ingestionsLoading: Getter<boolean>;
@@ -168,9 +168,9 @@ class ProjectWorkspaceContext {
 		if (view !== 'ingestions') this.workspaceState.ingestion = undefined;
 	};
 
-	openArticle = (doiKey: string) => {
-		if (!doiKey) return;
-		this.workspaceState.article = doiKey;
+	openArticle = (reportId: string) => {
+		if (!reportId) return;
+		this.workspaceState.article = reportId;
 		if (this.workspaceState.view !== 'articles' && this.workspaceState.view !== 'graph') {
 			this.workspaceState.view = 'articles';
 		}

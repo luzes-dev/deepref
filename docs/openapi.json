@@ -545,135 +545,10 @@
         }
       }
     },
-    "/projects/{project_id}/articles": {
-      "get": {
-        "tags": [
-          "articles"
-        ],
-        "operationId": "listProjectArticles",
-        "parameters": [
-          {
-            "name": "project_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "format": "uuid"
-            }
-          },
-          {
-            "name": "cursor",
-            "in": "query",
-            "description": "Opaque cursor returned by the previous page.",
-            "required": false,
-            "schema": {
-              "type": [
-                "string",
-                "null"
-              ]
-            }
-          },
-          {
-            "name": "limit",
-            "in": "query",
-            "description": "Page size from 1 through 100.",
-            "required": false,
-            "schema": {
-              "type": [
-                "integer",
-                "null"
-              ],
-              "format": "int64"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/PaginatedResponse_ArticleDto"
-                }
-              }
-            }
-          },
-          "500": {
-            "description": "",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ApiErrorBody"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/projects/{project_id}/articles/{doi_key}": {
-      "get": {
-        "tags": [
-          "articles"
-        ],
-        "operationId": "getProjectArticle",
-        "parameters": [
-          {
-            "name": "project_id",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "format": "uuid"
-            }
-          },
-          {
-            "name": "doi_key",
-            "in": "path",
-            "required": true,
-            "schema": {
-              "type": "string"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ArticleDetailDto"
-                }
-              }
-            }
-          },
-          "400": {
-            "description": "",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ApiErrorBody"
-                }
-              }
-            }
-          },
-          "404": {
-            "description": "",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ApiErrorBody"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
     "/projects/{project_id}/graph": {
       "get": {
         "tags": [
-          "articles"
+          "reports"
         ],
         "operationId": "getProjectGraph",
         "parameters": [
@@ -714,7 +589,7 @@
     "/projects/{project_id}/metrics/recompute": {
       "post": {
         "tags": [
-          "articles"
+          "reports"
         ],
         "operationId": "recomputeProjectMetrics",
         "parameters": [
@@ -900,7 +775,7 @@
     "/projects/{project_id}/recommendations": {
       "get": {
         "tags": [
-          "articles"
+          "reports"
         ],
         "operationId": "getProjectRecommendations",
         "parameters": [
@@ -926,6 +801,132 @@
             }
           },
           "503": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/projects/{project_id}/reports": {
+      "get": {
+        "tags": [
+          "reports"
+        ],
+        "operationId": "listProjectReports",
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "description": "Opaque cursor returned by the previous page.",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "Page size from 1 through 100.",
+            "required": false,
+            "schema": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "format": "int64"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PaginatedResponse_ReportDto"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/projects/{project_id}/reports/{report_id}": {
+      "get": {
+        "tags": [
+          "reports"
+        ],
+        "operationId": "getProjectReport",
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "report_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReportDetailDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
             "description": "",
             "content": {
               "application/json": {
@@ -1210,157 +1211,6 @@
           }
         }
       },
-      "ArticleDetailDto": {
-        "type": "object",
-        "required": [
-          "doi",
-          "total_citations",
-          "references_count",
-          "metrics_stale",
-          "raw"
-        ],
-        "properties": {
-          "abstract": {
-            "type": [
-              "string",
-              "null"
-            ]
-          },
-          "container_title": {
-            "type": [
-              "string",
-              "null"
-            ]
-          },
-          "doi": {
-            "type": "string"
-          },
-          "issued_year": {
-            "type": [
-              "integer",
-              "null"
-            ],
-            "format": "int32"
-          },
-          "metrics_as_of": {
-            "type": [
-              "string",
-              "null"
-            ],
-            "format": "date-time"
-          },
-          "metrics_stale": {
-            "type": "boolean"
-          },
-          "published_year": {
-            "type": [
-              "integer",
-              "null"
-            ],
-            "format": "int32"
-          },
-          "publisher": {
-            "type": [
-              "string",
-              "null"
-            ]
-          },
-          "raw": {
-            "type": "object"
-          },
-          "references_count": {
-            "type": "integer",
-            "format": "int32"
-          },
-          "title": {
-            "type": [
-              "string",
-              "null"
-            ]
-          },
-          "total_citations": {
-            "type": "integer",
-            "format": "int32"
-          },
-          "type": {
-            "type": [
-              "string",
-              "null"
-            ]
-          },
-          "url": {
-            "type": [
-              "string",
-              "null"
-            ]
-          }
-        }
-      },
-      "ArticleDto": {
-        "type": "object",
-        "required": [
-          "doi",
-          "doi_key",
-          "total_citations",
-          "internal_citations",
-          "outbound_internal_references",
-          "rank_score",
-          "metrics_stale"
-        ],
-        "properties": {
-          "doi": {
-            "type": "string"
-          },
-          "doi_key": {
-            "type": "string"
-          },
-          "internal_citations": {
-            "type": "integer",
-            "format": "int32"
-          },
-          "issued_year": {
-            "type": [
-              "integer",
-              "null"
-            ],
-            "format": "int32"
-          },
-          "metrics_as_of": {
-            "type": [
-              "string",
-              "null"
-            ],
-            "format": "date-time"
-          },
-          "metrics_stale": {
-            "type": "boolean"
-          },
-          "outbound_internal_references": {
-            "type": "integer",
-            "format": "int32"
-          },
-          "rank_score": {
-            "type": "number",
-            "format": "double"
-          },
-          "title": {
-            "type": [
-              "string",
-              "null"
-            ]
-          },
-          "total_citations": {
-            "type": "integer",
-            "format": "int32"
-          },
-          "type": {
-            "type": [
-              "string",
-              "null"
-            ]
-          }
-        }
-      },
       "CreateIngestion": {
         "type": "object",
         "required": [
@@ -1509,10 +1359,12 @@
         ],
         "properties": {
           "source": {
-            "type": "string"
+            "type": "string",
+            "format": "uuid"
           },
           "target": {
-            "type": "string"
+            "type": "string",
+            "format": "uuid"
           }
         }
       },
@@ -1644,88 +1496,6 @@
             "type": "integer",
             "format": "int64",
             "minimum": 0
-          }
-        }
-      },
-      "PaginatedResponse_ArticleDto": {
-        "type": "object",
-        "required": [
-          "items"
-        ],
-        "properties": {
-          "items": {
-            "type": "array",
-            "items": {
-              "type": "object",
-              "required": [
-                "doi",
-                "doi_key",
-                "total_citations",
-                "internal_citations",
-                "outbound_internal_references",
-                "rank_score",
-                "metrics_stale"
-              ],
-              "properties": {
-                "doi": {
-                  "type": "string"
-                },
-                "doi_key": {
-                  "type": "string"
-                },
-                "internal_citations": {
-                  "type": "integer",
-                  "format": "int32"
-                },
-                "issued_year": {
-                  "type": [
-                    "integer",
-                    "null"
-                  ],
-                  "format": "int32"
-                },
-                "metrics_as_of": {
-                  "type": [
-                    "string",
-                    "null"
-                  ],
-                  "format": "date-time"
-                },
-                "metrics_stale": {
-                  "type": "boolean"
-                },
-                "outbound_internal_references": {
-                  "type": "integer",
-                  "format": "int32"
-                },
-                "rank_score": {
-                  "type": "number",
-                  "format": "double"
-                },
-                "title": {
-                  "type": [
-                    "string",
-                    "null"
-                  ]
-                },
-                "total_citations": {
-                  "type": "integer",
-                  "format": "int32"
-                },
-                "type": {
-                  "type": [
-                    "string",
-                    "null"
-                  ]
-                }
-              }
-            }
-          },
-          "next_cursor": {
-            "type": [
-              "string",
-              "null"
-            ]
           }
         }
       },
@@ -1931,6 +1701,91 @@
           }
         }
       },
+      "PaginatedResponse_ReportDto": {
+        "type": "object",
+        "required": [
+          "items"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": [
+                "report_id",
+                "total_citations",
+                "internal_citations",
+                "outbound_internal_references",
+                "rank_score",
+                "metrics_stale"
+              ],
+              "properties": {
+                "doi": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "internal_citations": {
+                  "type": "integer",
+                  "format": "int32"
+                },
+                "issued_year": {
+                  "type": [
+                    "integer",
+                    "null"
+                  ],
+                  "format": "int32"
+                },
+                "metrics_as_of": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "format": "date-time"
+                },
+                "metrics_stale": {
+                  "type": "boolean"
+                },
+                "outbound_internal_references": {
+                  "type": "integer",
+                  "format": "int32"
+                },
+                "rank_score": {
+                  "type": "number",
+                  "format": "double"
+                },
+                "report_id": {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                "title": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "total_citations": {
+                  "type": "integer",
+                  "format": "int32"
+                },
+                "type": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                }
+              }
+            }
+          },
+          "next_cursor": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
       "PrismaDto": {
         "type": "object",
         "required": [
@@ -2050,7 +1905,7 @@
           "nodes": {
             "type": "array",
             "items": {
-              "$ref": "#/components/schemas/ArticleDto"
+              "$ref": "#/components/schemas/ReportDto"
             }
           },
           "projection": {
@@ -2202,13 +2057,13 @@
           "core_to_project": {
             "type": "array",
             "items": {
-              "$ref": "#/components/schemas/ArticleDto"
+              "$ref": "#/components/schemas/ReportDto"
             }
           },
           "foundational": {
             "type": "array",
             "items": {
-              "$ref": "#/components/schemas/ArticleDto"
+              "$ref": "#/components/schemas/ReportDto"
             }
           },
           "projection": {
@@ -2217,7 +2072,7 @@
           "underexplored": {
             "type": "array",
             "items": {
-              "$ref": "#/components/schemas/ArticleDto"
+              "$ref": "#/components/schemas/ReportDto"
             }
           }
         }
@@ -2240,6 +2095,167 @@
           },
           "status": {
             "type": "string"
+          }
+        }
+      },
+      "ReportDetailDto": {
+        "type": "object",
+        "required": [
+          "report_id",
+          "total_citations",
+          "references_count",
+          "metrics_stale",
+          "raw"
+        ],
+        "properties": {
+          "abstract": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "container_title": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "doi": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "issued_year": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32"
+          },
+          "metrics_as_of": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "metrics_stale": {
+            "type": "boolean"
+          },
+          "published_year": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32"
+          },
+          "publisher": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "raw": {
+            "type": "object"
+          },
+          "references_count": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "report_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "title": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "total_citations": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "type": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "url": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "ReportDto": {
+        "type": "object",
+        "required": [
+          "report_id",
+          "total_citations",
+          "internal_citations",
+          "outbound_internal_references",
+          "rank_score",
+          "metrics_stale"
+        ],
+        "properties": {
+          "doi": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "internal_citations": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "issued_year": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32"
+          },
+          "metrics_as_of": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "metrics_stale": {
+            "type": "boolean"
+          },
+          "outbound_internal_references": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "rank_score": {
+            "type": "number",
+            "format": "double"
+          },
+          "report_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "title": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "total_citations": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "type": {
+            "type": [
+              "string",
+              "null"
+            ]
           }
         }
       },

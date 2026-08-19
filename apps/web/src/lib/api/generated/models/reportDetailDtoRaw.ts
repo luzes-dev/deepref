@@ -5,4 +5,4 @@
  * OpenAPI spec version: 0.1.0
  */
 
-export type ArticleDetailDtoRaw = { [key: string]: unknown };
+export type ReportDetailDtoRaw = { [key: string]: unknown };

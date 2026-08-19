@@ -7,8 +7,8 @@
 	import { Slider } from '$lib/components/ui/slider';
 	import { Spinner } from '$lib/components/ui/spinner';
 	import GraphDegradedState from '$lib/components/GraphDegradedState.svelte';
-	import type { ArticleDto, GraphEdgeDto, ProjectGraphDto } from '$lib/api/generated/models';
-	import { createGetProjectGraph } from '$lib/api/generated/articles/articles';
+	import type { GraphEdgeDto, ProjectGraphDto, ReportDto } from '$lib/api/generated/models';
+	import { createGetProjectGraph } from '$lib/api/generated/reports/reports';
 	import { createGetProjectProjection } from '$lib/api/generated/projection/projection';
 	import RotateCcwIcon from '@lucide/svelte/icons/rotate-ccw';
 	import SearchIcon from '@lucide/svelte/icons/search';
@@ -16,6 +16,7 @@
 	import { untrack } from 'svelte';
 	import { useProjectWorkspaceContext } from './context.svelte.js';
 	import { getGraphNodeSize } from './graph-layout';
+	import { reportLabel, reportSearchText } from './report-label';
 	import type SigmaType from 'sigma';
 	import type { NodeHoverDrawingFunction, NodeLabelDrawingFunction } from 'sigma/rendering';
 	import type { Settings } from 'sigma/settings';
@@ -51,7 +52,7 @@
 		hoverBackground: string;
 	};
 
-	type GraphNodeAttributes = ArticleDto & {
+	type GraphNodeAttributes = ReportDto & {
 		label: string;
 		fullLabel: string;
 		type: string;
@@ -75,7 +76,7 @@
 	type GraphLabelData = {
 		color?: string;
 		doi?: string;
-		doi_key?: string;
+		report_id?: string;
 		fullLabel?: string | null;
 		label?: string | null;
 		size: number;
@@ -151,17 +152,16 @@
 	);
 	const visibleNodes = $derived(
 		graphData.nodes.filter((node) => {
-			const label = (node.title ?? node.doi).toLowerCase();
 			const term = workspace.graphFilters.search.toLowerCase();
 			return (
 				node.internal_citations >= workspace.graphFilters.minInternal &&
-				(label.includes(term) || node.doi.toLowerCase().includes(term))
+				reportSearchText(node).includes(term)
 			);
 		})
 	);
 
 	function getVisibleNodeIds() {
-		return new Set(visibleNodes.map((node) => node.doi));
+		return new Set(visibleNodes.map((node) => node.report_id));
 	}
 
 	function readGraphPalette(target: HTMLElement): GraphPalette {
@@ -226,8 +226,8 @@
 		return new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
 	}
 
-	function getBaseNodeColor(node: Pick<ArticleDto, 'doi_key' | 'internal_citations'>) {
-		if (node.doi_key === interaction.selectedArticle) return interaction.palette.nodeSelected;
+	function getBaseNodeColor(node: Pick<ReportDto, 'report_id' | 'internal_citations'>) {
+		if (node.report_id === interaction.selectedArticle) return interaction.palette.nodeSelected;
 		if (node.internal_citations > 0) return interaction.palette.nodeCited;
 		return interaction.palette.nodeDefault;
 	}
@@ -238,7 +238,7 @@
 				return { ...data, hidden: true };
 			}
 
-			const selected = data.doi_key === interaction.selectedArticle;
+			const selected = data.report_id === interaction.selectedArticle;
 			const hovered = node === interaction.hoveredNode;
 			const focused = interaction.focusedNodeIds.has(node);
 			const focusActive = Boolean(interaction.hoveredNode || interaction.selectedNode);
@@ -446,8 +446,8 @@
 	> = (context, data, settings) => {
 		if (!data.label) return;
 		const active = Boolean(
-			data.doi_key === interaction.selectedArticle ||
-			(data.doi && data.doi === interaction.hoveredNode)
+			data.report_id === interaction.selectedArticle ||
+			data.report_id === interaction.hoveredNode
 		);
 		if (active) {
 			drawFullNodeLabel(context, data, settings);
@@ -529,12 +529,12 @@
 		context.restore();
 	}
 
-	function getNodeIdByArticle(doiKey: string | undefined) {
-		if (!doiKey || !graph) return undefined;
+	function getNodeIdByArticle(reportId: string | undefined) {
+		if (!reportId || !graph) return undefined;
 
 		let nodeId: string | undefined;
 		graph.someNode((node, attributes) => {
-			if (attributes.doi_key !== doiKey) return false;
+			if (attributes.report_id !== reportId) return false;
 
 			nodeId = node;
 			return true;
@@ -635,8 +635,8 @@
 	function registerGraphEvents(nextRenderer: SigmaType) {
 		nextRenderer.on('clickNode', ({ node }: { node: string }) => {
 			if (interaction.draggedNode || shouldIgnoreClickAfterDrag()) return;
-			const article = graph?.getNodeAttributes(node) as ArticleDto | undefined;
-			if (article) workspace.openArticle(article.doi_key);
+			const article = graph?.getNodeAttributes(node) as ReportDto | undefined;
+			if (article) workspace.openArticle(article.report_id);
 		});
 		nextRenderer.on('clickStage', () => {
 			if (interaction.draggedNode || shouldIgnoreClickAfterDrag()) return;
@@ -670,7 +670,7 @@
 
 	async function renderGraph(
 		target: HTMLDivElement,
-		nodes: ArticleDto[],
+		nodes: ReportDto[],
 		edges: GraphEdgeDto[],
 		options: { resetCamera?: boolean } = {}
 	) {
@@ -692,10 +692,10 @@
 
 			const nextGraph = new Graph<GraphNodeAttributes, GraphEdgeAttributes>();
 			for (const [index, node] of nodes.entries()) {
-				nextGraph.addNode(node.doi, {
+				nextGraph.addNode(node.report_id, {
 					...node,
-					label: node.title ?? node.doi,
-					fullLabel: node.title ?? node.doi,
+					label: reportLabel(node),
+					fullLabel: reportLabel(node),
 					type: 'circle',
 					x: Math.cos(index) * 10,
 					y: Math.sin(index) * 10,

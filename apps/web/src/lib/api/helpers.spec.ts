@@ -7,7 +7,7 @@ import {
 	getListIngestionsQueryKey,
 	getListIngestionItemsQueryKey
 } from './generated/ingestions/ingestions';
-import { getGetProjectArticleQueryKey } from './generated/articles/articles';
+import { getGetProjectReportQueryKey } from './generated/reports/reports';
 import { shouldPollIngestion } from './helpers';
 
 describe('generated query keys', () => {
@@ -16,8 +16,8 @@ describe('generated query keys', () => {
 		expect(getListIngestionItemsQueryKey('ingestion-1')).toEqual([
 			'/api/ingestions/ingestion-1/items'
 		]);
-		expect(getGetProjectArticleQueryKey('project-1', 'doi-key')).toEqual([
-			'/api/projects/project-1/articles/doi-key'
+		expect(getGetProjectReportQueryKey('project-1', 'report-1')).toEqual([
+			'/api/projects/project-1/reports/report-1'
 		]);
 	});
 });

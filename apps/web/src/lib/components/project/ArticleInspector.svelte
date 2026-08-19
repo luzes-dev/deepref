@@ -5,12 +5,13 @@
 	import { Button } from '$lib/components/ui/button';
 	import { CopyButton } from '$lib/components/ui/copy-button';
 	import { Skeleton } from '$lib/components/ui/skeleton';
-	import { createGetProjectArticle } from '$lib/api/generated/articles/articles';
+	import { createGetProjectReport } from '$lib/api/generated/reports/reports';
 	import CircleAlertIcon from '@lucide/svelte/icons/circle-alert';
 	import PanelRightCloseIcon from '@lucide/svelte/icons/panel-right-close';
 	import PanelRightOpenIcon from '@lucide/svelte/icons/panel-right-open';
 	import XIcon from '@lucide/svelte/icons/x';
 	import { useProjectWorkspaceContext } from './context.svelte.js';
+	import { reportLabel } from './report-label';
 
 	let {
 		collapsed = false,
@@ -22,7 +23,7 @@
 
 	const workspace = useProjectWorkspaceContext();
 
-	const articleQuery = createGetProjectArticle(
+	const articleQuery = createGetProjectReport(
 		() => workspace.project.id,
 		() => workspace.selectedArticle ?? '',
 		() => ({
@@ -129,11 +130,13 @@
 					<div class="flex items-start justify-between gap-3">
 						<div class="min-w-0">
 							<h3 class="text-lg font-semibold wrap-break-word">
-								{article.title ?? article.doi}
+								{reportLabel(article)}
 							</h3>
-							<p class="text-sm break-all text-muted-foreground">{article.doi}</p>
+							{#if article.doi}
+								<p class="text-sm break-all text-muted-foreground">{article.doi}</p>
+							{/if}
 						</div>
-						<CopyButton text={article.doi} />
+						{#if article.doi}<CopyButton text={article.doi} />{/if}
 					</div>
 
 					<div class="grid grid-cols-2 gap-3">
