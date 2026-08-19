@@ -9,3 +9,7 @@ serde.workspace = true
 thiserror.workspace = true
 uuid.workspace = true
 unicode-normalization.workspace = true
+unicode_categories.workspace = true
+
+[dev-dependencies]
+proptest = "1.9.0"

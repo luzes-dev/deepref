@@ -73,15 +73,15 @@ pub async fn ready(State(state): State<AppState>) -> Result<Json<ReadinessRespon
     .fetch_one(&state.pool)
     .await
     .map_err(ApiError::Database)?;
-    if schema_version < 9 {
+    if schema_version < 10 {
         return Err(ApiError::Configuration(format!(
-            "database schema {schema_version} is older than required version 9"
+            "database schema {schema_version} is older than required version 10"
         )));
     }
     Ok(Json(ReadinessResponse {
         status: "ready",
         schema_version,
-        required_schema_version: 9,
+        required_schema_version: 10,
     }))
 }
 

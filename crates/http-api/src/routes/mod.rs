@@ -1,5 +1,6 @@
 mod acquisitions;
 mod articles;
+mod deduplication;
 mod health;
 mod ingestions;
 mod pagination;
@@ -52,6 +53,10 @@ fn openapi_router() -> OpenApiRouter<AppState> {
             acquisitions::create_acquisition
         ))
         .routes(routes!(acquisitions::import_project_records))
+        .routes(routes!(deduplication::run_project_deduplication))
+        .routes(routes!(deduplication::list_project_dedupe_proposals))
+        .routes(routes!(deduplication::decide_project_dedupe_proposal))
+        .routes(routes!(deduplication::resolve_project_record))
         .routes(routes!(
             ingestions::list_ingestions,
             ingestions::create_ingestion
@@ -148,6 +153,10 @@ mod tests {
             "/projects/{project_id}/metrics/recompute",
             "/projects/{project_id}/acquisitions",
             "/projects/{project_id}/imports",
+            "/projects/{project_id}/deduplication/run",
+            "/projects/{project_id}/deduplication/proposals",
+            "/projects/{project_id}/deduplication/proposals/{proposal_id}/decision",
+            "/projects/{project_id}/records/{record_id}/resolution",
             "/ingestions",
             "/ingestions/{ingestion_id}",
             "/ingestions/{ingestion_id}/items",
@@ -285,6 +294,45 @@ mod tests {
             assert_eq!(
                 actual, expected,
                 "unexpected POST response contract for {path}"
+            );
+        }
+    }
+
+    #[test]
+    fn deduplication_response_contracts_match_handler_statuses() {
+        let document =
+            serde_json::to_value(openapi_document()).expect("OpenAPI document must serialize");
+        let cases: [(&str, &str, &[&str]); 4] = [
+            (
+                "/projects/{project_id}/deduplication/run",
+                "post",
+                &["200", "400", "404", "500"],
+            ),
+            (
+                "/projects/{project_id}/deduplication/proposals",
+                "get",
+                &["200", "400", "404", "500"],
+            ),
+            (
+                "/projects/{project_id}/deduplication/proposals/{proposal_id}/decision",
+                "post",
+                &["200", "400", "404", "409", "500"],
+            ),
+            (
+                "/projects/{project_id}/records/{record_id}/resolution",
+                "post",
+                &["200", "400", "404", "409", "500"],
+            ),
+        ];
+        for (path, method, expected) in cases {
+            let responses = document["paths"][path][method]["responses"]
+                .as_object()
+                .unwrap_or_else(|| panic!("missing {method} responses for {path}"));
+            let actual: HashSet<_> = responses.keys().map(String::as_str).collect();
+            let expected: HashSet<_> = expected.iter().copied().collect();
+            assert_eq!(
+                actual, expected,
+                "unexpected response contract for {method} {path}"
             );
         }
     }

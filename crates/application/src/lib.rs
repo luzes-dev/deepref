@@ -5,12 +5,19 @@ use deepref_domain::{
 };
 
 pub mod acquisition;
+pub mod deduplication;
 pub mod jobs;
 
 pub use acquisition::{
     CitationProvider, CsvColumnMapping, FullTextResolver, ImportError, ImportParser,
     MetadataProvider, ProviderError, ProviderFuture, RawAuthor, RawIdentifier, RawRecord,
     SearchProvider,
+};
+pub use deduplication::{
+    DecideProposalCommand, DedupeCandidate, DedupeDisposition, DedupeProposalCommand, DedupeScore,
+    FUZZY_PROPOSAL_THRESHOLD, FUZZY_SHORTLIST_LIMIT, ProposalDecision, ProposalKind,
+    RecordResolutionAction, ResolutionCommandError, ResolveRecordCommand, disposition,
+    score_candidate,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]

@@ -1,4 +1,5 @@
 mod acquisition;
+mod deduplication;
 mod graph;
 mod jobs;
 mod legacy_import;
@@ -17,6 +18,11 @@ pub async fn migrate(pool: &PgPool) -> Result<(), MigrateError> {
 pub use acquisition::{
     AcquisitionError, ImportPersistRequest, ImportPersistResult, ensure_legacy_acquisition_run,
     persist_import,
+};
+pub use deduplication::{
+    DedupeError, DedupeProposal, DedupeProposalCursor, DedupeRunRequest, DedupeRunSummary,
+    ProposalDecisionRequest, ResolutionResult, decide_proposal, list_proposals, resolve_record,
+    run_deduplication,
 };
 pub use graph::{MAX_GRAPH_NODES, load_project_graph, recompute_project_metrics};
 pub use jobs::{

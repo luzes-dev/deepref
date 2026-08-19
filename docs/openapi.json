@@ -718,6 +718,260 @@
         }
       }
     },
+    "/projects/{project_id}/deduplication/proposals": {
+      "get": {
+        "tags": [
+          "deduplication"
+        ],
+        "operationId": "listProjectDedupeProposals",
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "path",
+            "description": "Project identifier",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "description": "Opaque pagination cursor",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "Page size from 1 through 100",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          },
+          {
+            "name": "status",
+            "in": "query",
+            "description": "pending, accepted, or rejected",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Dedupe proposals",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PaginatedResponse_DedupeProposalDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid pagination or status",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Project not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/projects/{project_id}/deduplication/proposals/{proposal_id}/decision": {
+      "post": {
+        "tags": [
+          "deduplication"
+        ],
+        "operationId": "decideProjectDedupeProposal",
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "path",
+            "description": "Project identifier",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "proposal_id",
+            "in": "path",
+            "description": "Proposal identifier",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ProposalDecisionRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Resolution result",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ResolutionDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid decision",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Proposal or report not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Proposal is no longer pending or create-new is invalid for an identifier conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/projects/{project_id}/deduplication/run": {
+      "post": {
+        "tags": [
+          "deduplication"
+        ],
+        "operationId": "runProjectDeduplication",
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "path",
+            "description": "Project identifier",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RunDeduplicationRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Bounded deduplication run summary",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DedupeRunDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid run bounds or actor",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Project not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/projects/{project_id}/graph": {
       "get": {
         "tags": [
@@ -1089,6 +1343,98 @@
           },
           "500": {
             "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/projects/{project_id}/records/{record_id}/resolution": {
+      "post": {
+        "tags": [
+          "deduplication"
+        ],
+        "operationId": "resolveProjectRecord",
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "path",
+            "description": "Project identifier",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "record_id",
+            "in": "path",
+            "description": "Source record identifier",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RecordResolutionRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Resolution result",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ResolutionDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid resolution",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Record or report not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Resolution conflict, including an exhausted revert history",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error",
             "content": {
               "application/json": {
                 "schema": {
@@ -1667,6 +2013,198 @@
           }
         }
       },
+      "DedupeProposalDto": {
+        "type": "object",
+        "required": [
+          "id",
+          "project_id",
+          "record_id",
+          "proposal_kind",
+          "source_authors",
+          "source_identifiers",
+          "candidate_authors",
+          "candidate_identifiers",
+          "title_similarity",
+          "exact_identifier_match",
+          "conflicting_identifier",
+          "score",
+          "metadata",
+          "status",
+          "revision",
+          "created_at"
+        ],
+        "properties": {
+          "candidate_authors": {
+            "type": "object"
+          },
+          "candidate_identifiers": {
+            "type": "object"
+          },
+          "candidate_report_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          },
+          "candidate_title": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "candidate_year": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32"
+          },
+          "conflicting_identifier": {
+            "type": "boolean"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "decided_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "decision_reason": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "exact_identifier_match": {
+            "type": "boolean"
+          },
+          "first_author_similarity": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double"
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "metadata": {
+            "type": "object"
+          },
+          "project_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "proposal_kind": {
+            "type": "string"
+          },
+          "record_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "reviewer_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "reviewer_kind": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "revision": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "score": {
+            "type": "number",
+            "format": "double"
+          },
+          "source_abstract": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "source_authors": {
+            "type": "object"
+          },
+          "source_identifiers": {
+            "type": "object"
+          },
+          "source_title": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "source_year": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32"
+          },
+          "status": {
+            "type": "string"
+          },
+          "title_similarity": {
+            "type": "number",
+            "format": "double"
+          },
+          "year_match": {
+            "type": [
+              "boolean",
+              "null"
+            ]
+          }
+        }
+      },
+      "DedupeRunDto": {
+        "type": "object",
+        "required": [
+          "project_id",
+          "processed",
+          "auto_linked",
+          "created_reports",
+          "proposals_created",
+          "conflicts"
+        ],
+        "properties": {
+          "auto_linked": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "conflicts": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "created_reports": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "processed": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "project_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "proposals_created": {
+            "type": "integer",
+            "format": "int64"
+          }
+        }
+      },
       "DependencyDetail": {
         "type": "object",
         "required": [
@@ -1978,6 +2516,178 @@
                 },
                 "strategy": {
                   "type": "string"
+                }
+              }
+            }
+          },
+          "next_cursor": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "PaginatedResponse_DedupeProposalDto": {
+        "type": "object",
+        "required": [
+          "items"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": [
+                "id",
+                "project_id",
+                "record_id",
+                "proposal_kind",
+                "source_authors",
+                "source_identifiers",
+                "candidate_authors",
+                "candidate_identifiers",
+                "title_similarity",
+                "exact_identifier_match",
+                "conflicting_identifier",
+                "score",
+                "metadata",
+                "status",
+                "revision",
+                "created_at"
+              ],
+              "properties": {
+                "candidate_authors": {
+                  "type": "object"
+                },
+                "candidate_identifiers": {
+                  "type": "object"
+                },
+                "candidate_report_id": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "format": "uuid"
+                },
+                "candidate_title": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "candidate_year": {
+                  "type": [
+                    "integer",
+                    "null"
+                  ],
+                  "format": "int32"
+                },
+                "conflicting_identifier": {
+                  "type": "boolean"
+                },
+                "created_at": {
+                  "type": "string",
+                  "format": "date-time"
+                },
+                "decided_at": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "format": "date-time"
+                },
+                "decision_reason": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "exact_identifier_match": {
+                  "type": "boolean"
+                },
+                "first_author_similarity": {
+                  "type": [
+                    "number",
+                    "null"
+                  ],
+                  "format": "double"
+                },
+                "id": {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                "metadata": {
+                  "type": "object"
+                },
+                "project_id": {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                "proposal_kind": {
+                  "type": "string"
+                },
+                "record_id": {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                "reviewer_id": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "reviewer_kind": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "revision": {
+                  "type": "integer",
+                  "format": "int64"
+                },
+                "score": {
+                  "type": "number",
+                  "format": "double"
+                },
+                "source_abstract": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "source_authors": {
+                  "type": "object"
+                },
+                "source_identifiers": {
+                  "type": "object"
+                },
+                "source_title": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "source_year": {
+                  "type": [
+                    "integer",
+                    "null"
+                  ],
+                  "format": "int32"
+                },
+                "status": {
+                  "type": "string"
+                },
+                "title_similarity": {
+                  "type": "number",
+                  "format": "double"
+                },
+                "year_match": {
+                  "type": [
+                    "boolean",
+                    "null"
+                  ]
                 }
               }
             }
@@ -2481,6 +3191,41 @@
           }
         }
       },
+      "ProposalDecisionInput": {
+        "type": "string",
+        "enum": [
+          "accept",
+          "reject",
+          "create_new"
+        ]
+      },
+      "ProposalDecisionRequest": {
+        "type": "object",
+        "required": [
+          "decision",
+          "reason"
+        ],
+        "properties": {
+          "actor_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "actor_kind": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "decision": {
+            "$ref": "#/components/schemas/ProposalDecisionInput"
+          },
+          "reason": {
+            "type": "string"
+          }
+        }
+      },
       "ProtocolDto": {
         "type": "object",
         "required": [
@@ -2586,6 +3331,56 @@
           },
           "status": {
             "type": "string"
+          }
+        }
+      },
+      "RecordResolutionActionInput": {
+        "type": "string",
+        "enum": [
+          "create",
+          "link",
+          "reassign",
+          "revert"
+        ]
+      },
+      "RecordResolutionRequest": {
+        "type": "object",
+        "required": [
+          "action",
+          "reason"
+        ],
+        "properties": {
+          "action": {
+            "$ref": "#/components/schemas/RecordResolutionActionInput"
+          },
+          "actor_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "actor_kind": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "proposal_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          },
+          "reason": {
+            "type": "string"
+          },
+          "report_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
           }
         }
       },
@@ -2747,6 +3542,61 @@
               "string",
               "null"
             ]
+          }
+        }
+      },
+      "ResolutionDto": {
+        "type": "object",
+        "required": [
+          "record_id",
+          "action"
+        ],
+        "properties": {
+          "action": {
+            "type": "string"
+          },
+          "prior_report_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          },
+          "record_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "resolved_report_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          }
+        }
+      },
+      "RunDeduplicationRequest": {
+        "type": "object",
+        "properties": {
+          "actor_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "actor_kind": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "limit": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Number of unresolved source records to process, from 1 through 100."
           }
         }
       },

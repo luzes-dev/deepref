@@ -5,6 +5,7 @@ fn migrations_are_append_only_and_define_durability_contract() {
     let evidence = include_str!("../../postgres/migrations/0006_evidence_workspace.sql");
     let identity = include_str!("../../postgres/migrations/0007_evidence_identity.sql");
     let acquisition = include_str!("../../postgres/migrations/0009_acquisition_runs.sql");
+    let deduplication = include_str!("../../postgres/migrations/0010_deduplication.sql");
     for required in [
         "owner_token",
         "lease_expires_at",
@@ -62,6 +63,23 @@ fn migrations_are_append_only_and_define_durability_contract() {
         assert!(
             acquisition.contains(required),
             "missing acquisition migration contract: {required}"
+        );
+    }
+    for required in [
+        "dedupe_proposals",
+        "dedupe_resolution_events",
+        "reports_normalized_title_trgm_idx",
+        "Rust NFKC",
+        "dedupe_proposals_candidate_project_report_fkey",
+        "dedupe_resolution_events_prior_project_report_fkey",
+        "dedupe_resolution_events_resolved_project_report_fkey",
+        "dedupe_resolution_events_proposal_project_fkey",
+        "dedupe_proposals_status_reviewer_check",
+        "reverted_event_id",
+    ] {
+        assert!(
+            deduplication.contains(required),
+            "missing deduplication migration contract: {required}"
         );
     }
 }
