@@ -7,6 +7,7 @@ members = [
     "crates/config",
     "crates/core",
     "crates/crossref",
+    "crates/providers",
     "crates/events",
     "crates/graph",
     "crates/metrics",
@@ -29,6 +30,7 @@ deepref-http-api = { path = "crates/http-api" }
 deepref-core = { path = "crates/core" }
 deepref-config = { path = "crates/config" }
 deepref-crossref = { path = "crates/crossref" }
+deepref-providers = { path = "crates/providers" }
 deepref-events = { path = "crates/events" }
 deepref-graph = { path = "crates/graph" }
 deepref-metrics = { path = "crates/metrics" }
@@ -36,8 +38,11 @@ deepref-telemetry = { path = "crates/telemetry" }
 anyhow = "1.0.103"
 axum = "0.8.9"
 backoff = { version = "0.4", features = ["tokio"] }
+biblio = "0.1.0"
+biblatex = "0.12.0"
 base64 = "0.23.0"
 chrono = { version = "0.4.45", features = ["serde"] }
+csv = "1.4.0"
 futures = "0.3.32"
 petgraph = "0.8.2"
 reqwest = { version = "0.13.4", default-features = false, features = ["json", "rustls", "gzip", "brotli"] }

@@ -4,8 +4,7 @@ use axum::{
     http::StatusCode,
 };
 use chrono::{DateTime, Utc};
-use deepref_core::{IngestionStatus, normalize_doi};
-use deepref_events::{EntityType, EventEnvelope, SUBJECT_WORK_FETCH_REQUESTED, WorkFetchRequested};
+use deepref_core::IngestionStatus;
 use serde::{Deserialize, Serialize};
 use sqlx::Row;
 use utoipa::ToSchema;
@@ -36,11 +35,6 @@ struct ValidatedIngestion {
 
 impl CreateIngestion {
     fn validate(self) -> Result<ValidatedIngestion, ApiError> {
-        if self.seed_dois.is_empty() {
-            return Err(ApiError::BadRequest(
-                "seed_dois must not be empty".to_owned(),
-            ));
-        }
         if self.max_depth.is_some_and(|value| value < 0) {
             return Err(ApiError::BadRequest("max_depth must be >= 0".to_owned()));
         }
@@ -55,11 +49,7 @@ impl CreateIngestion {
                 "only the crossref provider is supported".to_owned(),
             ));
         }
-        let seed_dois = self
-            .seed_dois
-            .iter()
-            .map(|doi| normalize_doi(doi))
-            .collect::<Result<Vec<_>, _>>()?;
+        let seed_dois = super::acquisitions::validate_seeds(self.seed_dois)?;
 
         Ok(ValidatedIngestion {
             project_id: self.project_id,
@@ -152,72 +142,29 @@ pub(crate) async fn create_ingestion(
     .bind(input.project_id)
     .bind(max_depth)
     .bind(input.seed_dois.len() as i32)
-    .bind(input.metadata_provider)
-    .bind(input.citation_provider)
+    .bind(&input.metadata_provider)
+    .bind(&input.citation_provider)
     .fetch_one(&mut *tx)
     .await?;
+    deepref_postgres::ensure_legacy_acquisition_run(
+        &mut tx,
+        ingestion_id,
+        input.project_id,
+        max_depth,
+        input.seed_dois.len() as i32,
+        &input.metadata_provider,
+        &input.citation_provider,
+    )
+    .await?;
 
-    for doi in input.seed_dois {
-        let revision: i64 = sqlx::query_scalar("SELECT nextval('graph_domain_revision_seq')")
-            .fetch_one(&mut *tx)
-            .await?;
-        let event = EventEnvelope::v1(
-            SUBJECT_WORK_FETCH_REQUESTED,
-            "deepref.api",
-            EntityType::Work,
-            format!("{ingestion_id}|{doi}"),
-            revision,
-            ingestion_id,
-            None,
-            WorkFetchRequested {
-                project_id: input.project_id,
-                ingestion_id,
-                doi: doi.clone(),
-                depth: 0,
-                max_depth,
-                parent_doi: None,
-            },
-        );
-        sqlx::query(
-            "INSERT INTO domain_events (event_id,schema_version,event_type,entity_type,entity_key,revision,payload,correlation_id,causation_id,created_at) \
-             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) ON CONFLICT (event_id) DO NOTHING",
-        )
-        .bind(event.event_id)
-        .bind(event.schema_version as i16)
-        .bind(&event.event_type)
-        .bind(event.entity_type.as_str())
-        .bind(&event.entity_key)
-        .bind(event.revision)
-        .bind(serde_json::to_value(&event.payload)?)
-        .bind(event.correlation_id)
-        .bind(event.causation_id)
-        .bind(event.occurred_at)
-        .execute(&mut *tx)
-        .await?;
-        sqlx::query(
-            r#"
-            INSERT INTO ingestion_items (ingestion_id, project_id, canonical_doi, depth, parent_doi, status, work_event_id)
-            VALUES ($1, $2, $3, 0, NULL, 'queued', $4)
-            ON CONFLICT (ingestion_id, canonical_doi) DO NOTHING
-            "#,
-        )
-        .bind(ingestion_id)
-        .bind(input.project_id)
-        .bind(doi)
-        .bind(event.event_id)
-        .execute(&mut *tx)
-        .await?;
-        deepref_postgres::enqueue_job(
-            &mut tx,
-            &deepref_postgres::job(
-                event.event_id,
-                "work_fetch_requested",
-                serde_json::to_value(&event)?,
-                format!("work_fetch:{}", event.event_id),
-            ),
-        )
-        .await?;
-    }
+    super::acquisitions::enqueue_seed_jobs(
+        &mut tx,
+        input.project_id,
+        ingestion_id,
+        max_depth,
+        &input.seed_dois,
+    )
+    .await?;
     tx.commit().await?;
 
     Ok((StatusCode::CREATED, Json(ingestion_from_row(row))))
@@ -412,6 +359,41 @@ mod tests {
                 seed_dois: vec!["10.1/x".to_owned()],
                 max_depth: None,
                 metadata_provider: Some("other".to_owned()),
+                citation_provider: None,
+            }
+            .validate()
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn normalizes_and_deduplicates_seed_dois_before_persistence() {
+        let validated = CreateIngestion {
+            project_id: Uuid::new_v4(),
+            seed_dois: vec![
+                "https://doi.org/10.5555/SEED.".to_owned(),
+                "doi:10.5555/seed".to_owned(),
+            ],
+            max_depth: None,
+            metadata_provider: None,
+            citation_provider: None,
+        }
+        .validate()
+        .unwrap();
+        assert_eq!(validated.seed_dois, vec!["10.5555/seed"]);
+    }
+
+    #[test]
+    fn rejects_seed_lists_over_the_explicit_bound() {
+        let seed_dois = (0..=crate::routes::acquisitions::MAX_SEED_DOIS)
+            .map(|index| format!("10.5555/seed-{index}"))
+            .collect();
+        assert!(
+            CreateIngestion {
+                project_id: Uuid::new_v4(),
+                seed_dois,
+                max_depth: None,
+                metadata_provider: None,
                 citation_provider: None,
             }
             .validate()

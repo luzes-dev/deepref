@@ -41,7 +41,7 @@ Status terms: **Pending** means no sufficient evidence; **Partial** means source
 - **Criterion:** UUID reports/project membership/citations produce deterministic bounded nodes and edges; identifier-free reports are included; metrics match the legacy fixture semantics.
 - **Automated evidence path/command:** `crates/postgres/src/graph.rs`, `crates/postgres/tests/graph.rs`, migration 0008; `cargo test -p deepref-postgres --test graph --locked` with `DATABASE_URL`.
 - **Manual drill/apply-time evidence:** Seed the exact fixture, compare node/edge/internal/outbound/rank values, repeat import, and verify later recomputation freshness.
-- **Prerequisites:** Disposable PostgreSQL with migrations 0001 through 0008 applied.
+- **Prerequisites:** Disposable PostgreSQL with migrations 0001 through 0009 applied.
 - **Current verification status:** **Partial.** Deterministic fixture is present; database execution is pending environment access.
 
 ## AC-06 — Runtime roles and shutdown

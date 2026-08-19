@@ -7,4 +7,8 @@ fn durability_schema_supports_idempotent_repair() {
         include_str!("../../../crates/postgres/migrations/0008_infrastructure_collapse.sql")
             .contains("jobs_expired_running_idx")
     );
+    assert!(
+        include_str!("../../../crates/postgres/migrations/0009_acquisition_runs.sql")
+            .contains("record_identifiers")
+    );
 }

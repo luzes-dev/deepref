@@ -1,0 +1,21 @@
+[package]
+name = "deepref-providers"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+biblio.workspace = true
+biblatex.workspace = true
+csv.workspace = true
+deepref-application.workspace = true
+deepref-core.workspace = true
+deepref-crossref.workspace = true
+deepref-domain.workspace = true
+serde_json.workspace = true
+thiserror.workspace = true
+unicode-normalization.workspace = true
+
+[dev-dependencies]
+chrono.workspace = true
+serde_json.workspace = true

@@ -2,8 +2,10 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use uuid::Uuid;
 
+pub mod acquisition;
 pub mod bibliography;
 
+pub use acquisition::{AcquisitionRunId, AcquisitionSource, AcquisitionStatus, ImportFormat};
 pub use bibliography::{
     Citation, DoiError, IdentifierError, IdentifierScheme, Record, RecordId, Report, ReportId,
     ReportIdentifier, Study, StudyId, Title, TitleError, normalize_doi,

@@ -1,8 +1,9 @@
 use std::time::Duration;
 
 use deepref_core::{IngestionItemStatus, normalize_doi};
-use deepref_crossref::{CrossrefClient, CrossrefError};
+use deepref_crossref::CrossrefError;
 use deepref_events::{DeadLetterRecord, EventEnvelope, WorkFetchRequested, deserialize_compatible};
+use deepref_providers::CrossrefProvider;
 use sha2::{Digest, Sha256};
 use sqlx::PgPool;
 use tokio::sync::watch;
@@ -116,7 +117,7 @@ pub async fn handle_message(
     }
 
     let settings = store::load_runtime_settings(&pool).await?;
-    let client = match CrossrefClient::new(settings.crossref_mailto.clone()) {
+    let client = match CrossrefProvider::new(settings.crossref_mailto.clone()) {
         Ok(client) => client.with_max_attempts(settings.retry_attempts),
         Err(error) => {
             store::finalize_terminal_failure(
@@ -140,7 +141,7 @@ pub async fn handle_message(
         owner,
         claim_lease,
     );
-    let fetched = client.fetch_work(&doi).await;
+    let fetched = client.fetch_work_with_references(&doi).await;
     cancel_heartbeat.send_replace(true);
     let _ = heartbeat_done.await;
 

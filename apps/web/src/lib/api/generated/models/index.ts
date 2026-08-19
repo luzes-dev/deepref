@@ -5,19 +5,26 @@
  * OpenAPI spec version: 0.1.0
  */
 
+export * from './acquisitionDto.ts';
 export * from './apiErrorBody.ts';
 export * from './apiErrorBodyDetails.ts';
+export * from './createAcquisition.ts';
 export * from './createIngestion.ts';
 export * from './createProject.ts';
 export * from './dependencyDetail.ts';
 export * from './dependencyState.ts';
 export * from './dependencyStatus.ts';
 export * from './graphEdgeDto.ts';
+export * from './importRecords.ts';
+export * from './importRecordsCsvMapping.ts';
 export * from './ingestionDto.ts';
 export * from './ingestionItemDto.ts';
+export * from './listAcquisitionsParams.ts';
 export * from './listProjectReportsParams.ts';
 export * from './listTitleAbstractScreeningQueueParams.ts';
 export * from './livenessResponse.ts';
+export * from './paginatedResponseAcquisitionDto.ts';
+export * from './paginatedResponseAcquisitionDtoItemsItem.ts';
 export * from './paginatedResponseIngestionDto.ts';
 export * from './paginatedResponseIngestionDtoItemsItem.ts';
 export * from './paginatedResponseIngestionItemDto.ts';

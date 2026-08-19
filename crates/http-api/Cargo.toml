@@ -16,6 +16,7 @@ deepref-config.workspace = true
 deepref-events = { version = "0.1.0", path = "../../crates/events" }
 deepref-graph.workspace = true
 deepref-postgres.workspace = true
+deepref-providers.workspace = true
 deepref-telemetry.workspace = true
 anyhow.workspace = true
 axum.workspace = true
@@ -23,6 +24,7 @@ base64.workspace = true
 chrono.workspace = true
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
+sha2.workspace = true
 sqlx.workspace = true
 thiserror.workspace = true
 tokio.workspace = true

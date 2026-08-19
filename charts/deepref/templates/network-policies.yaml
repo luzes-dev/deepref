@@ -95,6 +95,25 @@ spec:
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
+  name: {{ include "deepref.componentName" (dict "root" . "component" "worker-provider-egress") }}
+  namespace: {{ include "deepref.namespace" . }}
+  labels: {{- include "deepref.labels" . | nindent 4 }}
+spec:
+  podSelector:
+    matchLabels: {{- include "deepref.selectorLabels" (dict "root" . "component" "worker") | nindent 6 }}
+  policyTypes: [Egress]
+  egress:
+    {{- range .Values.networkPolicy.providerEgress.cidrs }}
+    - to: [{ipBlock: {cidr: {{ . | quote }}}}]
+      ports:
+        {{- range $.Values.networkPolicy.providerEgress.ports }}
+        - {protocol: TCP, port: {{ . }}}
+        {{- end }}
+    {{- end }}
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
   name: {{ include "deepref.componentName" (dict "root" . "component" "adot") }}
   namespace: {{ include "deepref.namespace" . }}
   labels: {{- include "deepref.labels" . | nindent 4 }}
