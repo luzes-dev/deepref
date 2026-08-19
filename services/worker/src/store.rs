@@ -847,6 +847,22 @@ async fn complete_item_and_claim(
         queued_count=(SELECT count(*)::int FROM ingestion_items WHERE ingestion_id=$1 AND status IN ('queued','fetching'))
         WHERE id=$1"#,
     ).bind(event.payload.ingestion_id).execute(&mut **tx).await?;
+    sqlx::query(
+        r#"UPDATE acquisition_runs SET
+        status = CASE WHEN status='cancelled' THEN status
+          WHEN NOT EXISTS (SELECT 1 FROM ingestion_items WHERE ingestion_id=$1 AND status IN ('queued','fetching'))
+          THEN CASE WHEN EXISTS (SELECT 1 FROM ingestion_items WHERE ingestion_id=$1 AND status IN ('failed','not_found')) THEN 'failed' ELSE 'completed' END
+          WHEN status='queued' THEN 'running' ELSE status END,
+        started_at=COALESCE(started_at,now()),
+        completed_at=CASE WHEN NOT EXISTS (SELECT 1 FROM ingestion_items WHERE ingestion_id=$1 AND status IN ('queued','fetching')) THEN now() ELSE completed_at END,
+        fetched_count=(SELECT count(*)::int FROM ingestion_items WHERE ingestion_id=$1 AND status='fetched'),
+        failed_count=(SELECT count(*)::int FROM ingestion_items WHERE ingestion_id=$1 AND status IN ('failed','not_found')),
+        queued_count=(SELECT count(*)::int FROM ingestion_items WHERE ingestion_id=$1 AND status IN ('queued','fetching'))
+        WHERE id=$1"#,
+    )
+    .bind(event.payload.ingestion_id)
+    .execute(&mut **tx)
+    .await?;
     let completed = sqlx::query(
         "UPDATE processed_events SET completed_at=now(),processed_at=now(),owner_token=NULL,lease_expires_at=NULL,last_error=$3 \
          WHERE event_id=$1 AND owner_token=$2 AND completed_at IS NULL",

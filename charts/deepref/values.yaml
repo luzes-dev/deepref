@@ -116,6 +116,11 @@ networkPolicy:
   cloudflareEgress:
     cidrs: []
     ports: [443, 7844]
+  providerEgress:
+    # Crossref and other HTTPS metadata providers are public endpoints. Production
+    # overlays must replace this with reviewed provider CIDRs where possible.
+    cidrs: [0.0.0.0/0]
+    ports: [443]
 
 podDisruptionBudgets:
   enabled: true

@@ -1,3 +1,4 @@
+mod acquisitions;
 mod articles;
 mod health;
 mod ingestions;
@@ -9,6 +10,7 @@ mod settings;
 
 use std::sync::Arc;
 
+use axum::extract::DefaultBodyLimit;
 use axum::{
     Json, Router,
     extract::Request,
@@ -46,6 +48,11 @@ fn openapi_router() -> OpenApiRouter<AppState> {
         .routes(routes!(articles::recommendations))
         .routes(routes!(articles::recompute_metrics))
         .routes(routes!(
+            acquisitions::list_acquisitions,
+            acquisitions::create_acquisition
+        ))
+        .routes(routes!(acquisitions::import_project_records))
+        .routes(routes!(
             ingestions::list_ingestions,
             ingestions::create_ingestion
         ))
@@ -70,7 +77,10 @@ pub fn router(state: AppState, config: &ApiConfig) -> Router {
             tower_http::cors::AllowOrigin::list(config.cors_origins.clone())
         })
         .allow_methods([Method::GET, Method::POST, Method::PATCH, Method::DELETE])
-        .allow_headers([header::CONTENT_TYPE]);
+        .allow_headers([
+            header::CONTENT_TYPE,
+            header::HeaderName::from_static("idempotency-key"),
+        ]);
 
     let (router, openapi) = openapi_router().split_for_parts();
     let openapi = Arc::new(openapi);
@@ -84,6 +94,7 @@ pub fn router(state: AppState, config: &ApiConfig) -> Router {
             })
         })
         .layer(cors)
+        .layer(DefaultBodyLimit::max(acquisitions::MAX_REQUEST_BODY_BYTES))
         .layer(from_fn(correlation))
         .layer(TraceLayer::new_for_http())
         .with_state(state)
@@ -135,6 +146,8 @@ mod tests {
             "/projects/{project_id}/graph",
             "/projects/{project_id}/recommendations",
             "/projects/{project_id}/metrics/recompute",
+            "/projects/{project_id}/acquisitions",
+            "/projects/{project_id}/imports",
             "/ingestions",
             "/ingestions/{ingestion_id}",
             "/ingestions/{ingestion_id}/items",
@@ -235,6 +248,45 @@ mod tests {
             schemas["GraphEdgeDto"]["properties"]["target"]["format"],
             "uuid"
         );
+    }
+
+    #[test]
+    fn import_body_limit_allows_bounded_json_string_escaping() {
+        const {
+            assert!(
+                acquisitions::MAX_REQUEST_BODY_BYTES
+                    >= acquisitions::MAX_IMPORT_BYTES * 2 + 64 * 1024
+            );
+            assert!(acquisitions::MAX_REQUEST_BODY_BYTES <= 16 * 1024 * 1024);
+        }
+    }
+
+    #[test]
+    fn acquisition_post_responses_match_handler_statuses() {
+        let document =
+            serde_json::to_value(openapi_document()).expect("OpenAPI document must serialize");
+        let cases: [(&str, &[&str]); 2] = [
+            (
+                "/projects/{project_id}/acquisitions",
+                &["200", "201", "400", "404", "409", "500"],
+            ),
+            (
+                "/projects/{project_id}/imports",
+                &["200", "201", "400", "404", "409", "413", "500"],
+            ),
+        ];
+
+        for (path, expected) in cases {
+            let responses = document["paths"][path]["post"]["responses"]
+                .as_object()
+                .unwrap_or_else(|| panic!("missing POST responses for {path}"));
+            let actual: HashSet<_> = responses.keys().map(String::as_str).collect();
+            let expected: HashSet<_> = expected.iter().copied().collect();
+            assert_eq!(
+                actual, expected,
+                "unexpected POST response contract for {path}"
+            );
+        }
     }
 
     #[tokio::test]

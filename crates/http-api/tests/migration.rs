@@ -4,6 +4,7 @@ fn migrations_are_append_only_and_define_durability_contract() {
     let projection = include_str!("../../postgres/migrations/0005_domain_projection.sql");
     let evidence = include_str!("../../postgres/migrations/0006_evidence_workspace.sql");
     let identity = include_str!("../../postgres/migrations/0007_evidence_identity.sql");
+    let acquisition = include_str!("../../postgres/migrations/0009_acquisition_runs.sql");
     for required in [
         "owner_token",
         "lease_expires_at",
@@ -49,6 +50,18 @@ fn migrations_are_append_only_and_define_durability_contract() {
         assert!(
             identity.contains(required),
             "missing migration contract: {required}"
+        );
+    }
+    for required in [
+        "legacy_ingestion_id DROP NOT NULL",
+        "acquisition_runs_project_idempotency_idx",
+        "record_identifiers",
+        "source_identifiers jsonb",
+        "authors jsonb",
+    ] {
+        assert!(
+            acquisition.contains(required),
+            "missing acquisition migration contract: {required}"
         );
     }
 }

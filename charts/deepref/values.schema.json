@@ -133,12 +133,13 @@
       }
     },
     "networkPolicy": {
-      "type": "object", "additionalProperties": false, "required": ["enabled", "databaseEgress", "telemetryEgress", "cloudflareEgress"],
+      "type": "object", "additionalProperties": false, "required": ["enabled", "databaseEgress", "telemetryEgress", "cloudflareEgress", "providerEgress"],
       "properties": {
         "enabled": {"type": "boolean"},
         "databaseEgress": {"type": "object", "additionalProperties": false, "required": ["cidrs", "port"], "properties": {"cidrs": {"$ref": "#/definitions/cidrs"}, "port": {"type": "integer", "minimum": 1, "maximum": 65535}}},
         "telemetryEgress": {"type": "object", "additionalProperties": false, "required": ["cidrs", "ports"], "properties": {"cidrs": {"$ref": "#/definitions/cidrs"}, "ports": {"type": "array", "items": {"type": "integer", "minimum": 1, "maximum": 65535}, "uniqueItems": true}}},
-        "cloudflareEgress": {"type": "object", "additionalProperties": false, "required": ["cidrs", "ports"], "properties": {"cidrs": {"$ref": "#/definitions/cidrs"}, "ports": {"type": "array", "items": {"type": "integer", "minimum": 1, "maximum": 65535}, "uniqueItems": true}}}
+        "cloudflareEgress": {"type": "object", "additionalProperties": false, "required": ["cidrs", "ports"], "properties": {"cidrs": {"$ref": "#/definitions/cidrs"}, "ports": {"type": "array", "items": {"type": "integer", "minimum": 1, "maximum": 65535}, "uniqueItems": true}}},
+        "providerEgress": {"type": "object", "additionalProperties": false, "required": ["cidrs", "ports"], "properties": {"cidrs": {"$ref": "#/definitions/cidrs"}, "ports": {"type": "array", "items": {"type": "integer", "minimum": 1, "maximum": 65535}, "uniqueItems": true}}}
       }
     },
     "podDisruptionBudgets": {"type": "object", "additionalProperties": false, "required": ["enabled"], "properties": {"enabled": {"type": "boolean"}}},
@@ -173,7 +174,8 @@
             "properties": {
               "databaseEgress": {"properties": {"cidrs": {"minItems": 1}}},
               "telemetryEgress": {"properties": {"cidrs": {"minItems": 1}}},
-              "cloudflareEgress": {"properties": {"cidrs": {"minItems": 1}}}
+              "cloudflareEgress": {"properties": {"cidrs": {"minItems": 1}}},
+              "providerEgress": {"properties": {"cidrs": {"minItems": 1}}}
             }
           }
         }

@@ -545,6 +545,179 @@
         }
       }
     },
+    "/projects/{project_id}/acquisitions": {
+      "get": {
+        "tags": [
+          "acquisitions"
+        ],
+        "operationId": "listAcquisitions",
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "path",
+            "description": "Project identifier",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "description": "Opaque pagination cursor",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "Page size",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Acquisition runs ordered newest first",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PaginatedResponse_AcquisitionDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid pagination cursor",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "acquisitions"
+        ],
+        "operationId": "createAcquisition",
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "path",
+            "description": "Project identifier",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "description": "Stable key for replay-safe acquisition creation",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateAcquisition"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Existing idempotent acquisition",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AcquisitionDto"
+                }
+              }
+            }
+          },
+          "201": {
+            "description": "Acquisition created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AcquisitionDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid acquisition",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Project not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Idempotency conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/projects/{project_id}/graph": {
       "get": {
         "tags": [
@@ -575,6 +748,120 @@
           },
           "500": {
             "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/projects/{project_id}/imports": {
+      "post": {
+        "tags": [
+          "acquisitions"
+        ],
+        "operationId": "importProjectRecords",
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "path",
+            "description": "Project identifier",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "description": "Stable key for replay-safe imports",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ImportRecords"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Existing idempotent import",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AcquisitionDto"
+                }
+              }
+            }
+          },
+          "201": {
+            "description": "Import created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AcquisitionDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid import",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Project not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Idempotency conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Import exceeds the request size limit",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error",
             "content": {
               "application/json": {
                 "schema": {
@@ -1183,6 +1470,80 @@
   },
   "components": {
     "schemas": {
+      "AcquisitionDto": {
+        "type": "object",
+        "required": [
+          "id",
+          "project_id",
+          "source",
+          "strategy",
+          "status",
+          "seed_count",
+          "queued_count",
+          "fetched_count",
+          "failed_count",
+          "created_at"
+        ],
+        "properties": {
+          "completed_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "failed_count": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "fetched_count": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "format": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "project_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "queued_count": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "seed_count": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "source": {
+            "type": "string"
+          },
+          "started_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "status": {
+            "type": "string"
+          },
+          "strategy": {
+            "type": "string"
+          }
+        }
+      },
       "ApiErrorBody": {
         "type": "object",
         "required": [
@@ -1208,6 +1569,39 @@
           },
           "message": {
             "type": "string"
+          }
+        }
+      },
+      "CreateAcquisition": {
+        "type": "object",
+        "required": [
+          "seed_dois"
+        ],
+        "properties": {
+          "citation_provider": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "max_depth": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32"
+          },
+          "metadata_provider": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "seed_dois": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
           }
         }
       },
@@ -1352,6 +1746,28 @@
           }
         }
       },
+      "ImportRecords": {
+        "type": "object",
+        "required": [
+          "format",
+          "content"
+        ],
+        "properties": {
+          "content": {
+            "type": "string"
+          },
+          "csv_mapping": {
+            "type": [
+              "object",
+              "null"
+            ]
+          },
+          "format": {
+            "type": "string",
+            "description": "One of doi, ris, bibtex, nbib, or csv."
+          }
+        }
+      },
       "IngestionDto": {
         "type": "object",
         "required": [
@@ -1480,6 +1896,97 @@
             "type": "integer",
             "format": "int64",
             "minimum": 0
+          }
+        }
+      },
+      "PaginatedResponse_AcquisitionDto": {
+        "type": "object",
+        "required": [
+          "items"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": [
+                "id",
+                "project_id",
+                "source",
+                "strategy",
+                "status",
+                "seed_count",
+                "queued_count",
+                "fetched_count",
+                "failed_count",
+                "created_at"
+              ],
+              "properties": {
+                "completed_at": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "format": "date-time"
+                },
+                "created_at": {
+                  "type": "string",
+                  "format": "date-time"
+                },
+                "failed_count": {
+                  "type": "integer",
+                  "format": "int32"
+                },
+                "fetched_count": {
+                  "type": "integer",
+                  "format": "int32"
+                },
+                "format": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "id": {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                "project_id": {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                "queued_count": {
+                  "type": "integer",
+                  "format": "int32"
+                },
+                "seed_count": {
+                  "type": "integer",
+                  "format": "int32"
+                },
+                "source": {
+                  "type": "string"
+                },
+                "started_at": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "format": "date-time"
+                },
+                "status": {
+                  "type": "string"
+                },
+                "strategy": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "next_cursor": {
+            "type": [
+              "string",
+              "null"
+            ]
           }
         }
       },

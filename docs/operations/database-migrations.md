@@ -2,7 +2,7 @@
 
 ## Authority and compatibility
 
-SQLx migrations under `crates/postgres/migrations` are the only schema authority. Migration 0008 completes the infrastructure collapse: durable jobs, UUID graph reads, metric recomputation, and PostgreSQL graph freshness are supported from the same database. Migrations 0001 through 0008 must apply in order and remain idempotent at the SQL operation level.
+SQLx migrations under `crates/postgres/migrations` are the only schema authority. Migration 0008 completes the infrastructure collapse: durable jobs, UUID graph reads, metric recomputation, and PostgreSQL graph freshness are supported from the same database. Migration 0009 adds generic acquisition provenance and source-record metadata. Migrations 0001 through 0009 must apply in order and remain idempotent at the SQL operation level.
 
 `deepref-server migrate` is the only supported migration command in local, CI, and hosted workflows. The Helm migration Job runs as an Argo PreSync hook before application Deployments. Normal `serve` and `worker` roles never migrate.
 

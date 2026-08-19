@@ -98,9 +98,12 @@ async fn enqueue_returns_canonical_id_and_concurrent_claims_are_exclusive() -> R
             .execute(&pool)
             .await?;
 
-        queue
-            .enqueue(fixture_job(claim_id, "integration_claim", claim_dedupe_key))
-            .await?;
+        let mut claim_fixture = fixture_job(claim_id, "integration_claim", claim_dedupe_key);
+        // Other workspace integration tests may leave legitimate queued work
+        // in the shared database. Keep this concurrency assertion focused on
+        // its fixture without changing production queue semantics.
+        claim_fixture.priority = i32::MAX;
+        queue.enqueue(claim_fixture).await?;
         let (first_claim, second_claim) = tokio::join!(
             queue.claim("concurrent-owner-a", Duration::from_secs(10)),
             queue.claim("concurrent-owner-b", Duration::from_secs(10)),
@@ -136,13 +139,13 @@ async fn expired_leases_are_fenced_and_retries_reach_dead_at_max_attempts() -> R
     let fixture_ids = [lease_job_id, retry_job_id];
 
     let result = async {
-        queue
-            .enqueue(fixture_job(
-                lease_job_id,
-                "integration_lease",
-                format!("jobs-integration-lease:{lease_job_id}"),
-            ))
-            .await?;
+        let mut lease_fixture = fixture_job(
+            lease_job_id,
+            "integration_lease",
+            format!("jobs-integration-lease:{lease_job_id}"),
+        );
+        lease_fixture.priority = i32::MAX;
+        queue.enqueue(lease_fixture).await?;
         let stale = queue
             .claim("stale-owner", Duration::from_secs(10))
             .await?
@@ -222,6 +225,7 @@ async fn expired_leases_are_fenced_and_retries_reach_dead_at_max_attempts() -> R
             "integration_retry",
             format!("jobs-integration-retry:{retry_job_id}"),
         );
+        retry_job.priority = i32::MAX;
         retry_job.max_attempts = 2;
         queue.enqueue(retry_job).await?;
 

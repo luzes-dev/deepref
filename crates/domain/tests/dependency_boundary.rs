@@ -81,6 +81,7 @@ fn infrastructure_and_adapter_dependencies_cannot_point_outward() {
     let application = dependencies(manifest("application").as_path());
     let postgres = dependencies(manifest("postgres").as_path());
     let http_api = dependencies(manifest("http-api").as_path());
+    let providers = dependencies(manifest("providers").as_path());
 
     assert!(http_api.contains("deepref-application"));
     assert!(http_api.contains("deepref-postgres"));
@@ -103,6 +104,7 @@ fn infrastructure_and_adapter_dependencies_cannot_point_outward() {
         );
     }
     assert!(!postgres.contains("deepref-http-api"));
+    assert!(providers.contains("deepref-application"));
 
     for dependency in [
         "axum",
@@ -118,6 +120,12 @@ fn infrastructure_and_adapter_dependencies_cannot_point_outward() {
         assert!(
             !application.contains(dependency),
             "application must not depend on infrastructure crate {dependency}"
+        );
+    }
+    for dependency in ["biblio", "biblatex", "csv", "reqwest", "sqlx"] {
+        assert!(
+            !application.contains(dependency),
+            "application must not depend on provider/parser crate {dependency}"
         );
     }
 }

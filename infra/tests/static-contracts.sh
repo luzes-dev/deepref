@@ -77,6 +77,7 @@ fi
 [[ ! -e infra/neo4j/constraints.cypher ]] || fail 'legacy Neo4j constraints file must be removed'
 [[ ! -d crates/graph/migrations ]] || fail 'legacy graph migrations must be removed after the PostgreSQL graph cutover'
 [[ -e crates/postgres/migrations/0008_infrastructure_collapse.sql ]] || fail 'PostgreSQL infrastructure collapse migration must exist'
+[[ -e crates/postgres/migrations/0009_acquisition_runs.sql ]] || fail 'PostgreSQL acquisition migration must exist'
 
 mapfile -t forbidden_artifacts < <(
   find infra -type f \( -name '*.tfstate' -o -name '*.tfstate.*' -o -name '*.tfplan' -o -name 'terraform.tfvars' \) -print

@@ -11,6 +11,7 @@ deepref-crossref = { version = "0.1.0", path = "../../crates/crossref" }
 deepref-events = { version = "0.1.0", path = "../../crates/events" }
 deepref-graph = { version = "0.1.0", path = "../../crates/graph" }
 deepref-postgres.workspace = true
+deepref-providers.workspace = true
 deepref-application.workspace = true
 deepref-telemetry.workspace = true
 anyhow.workspace = true

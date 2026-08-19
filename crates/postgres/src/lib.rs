@@ -1,3 +1,4 @@
+mod acquisition;
 mod graph;
 mod jobs;
 mod legacy_import;
@@ -13,6 +14,10 @@ pub async fn migrate(pool: &PgPool) -> Result<(), MigrateError> {
     MIGRATOR.run(pool).await
 }
 
+pub use acquisition::{
+    AcquisitionError, ImportPersistRequest, ImportPersistResult, ensure_legacy_acquisition_run,
+    persist_import,
+};
 pub use graph::{MAX_GRAPH_NODES, load_project_graph, recompute_project_metrics};
 pub use jobs::{
     PostgresJobQueue, claim_job, complete_job, enqueue_job, enqueue_job_pool, fail_job, job,

@@ -4,7 +4,14 @@ use deepref_domain::{
     ScreeningValidationError, transition,
 };
 
+pub mod acquisition;
 pub mod jobs;
+
+pub use acquisition::{
+    CitationProvider, CsvColumnMapping, FullTextResolver, ImportError, ImportParser,
+    MetadataProvider, ProviderError, ProviderFuture, RawAuthor, RawIdentifier, RawRecord,
+    SearchProvider,
+};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ScreenReportCommand {

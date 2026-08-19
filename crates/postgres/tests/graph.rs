@@ -138,22 +138,23 @@ async fn seed_and_assert(
     let graph = load_project_graph(pool, project_id).await?;
 
     ensure!(graph.nodes.len() == 3, "expected three project nodes");
+    let mut expected_edges = vec![
+        GraphEdge {
+            source: report_a,
+            target: report_b,
+        },
+        GraphEdge {
+            source: report_a,
+            target: report_without_doi,
+        },
+        GraphEdge {
+            source: report_without_doi,
+            target: report_b,
+        },
+    ];
+    expected_edges.sort_by_key(|edge| (edge.source, edge.target));
     ensure!(
-        graph.edges
-            == vec![
-                GraphEdge {
-                    source: report_a,
-                    target: report_b
-                },
-                GraphEdge {
-                    source: report_a,
-                    target: report_without_doi
-                },
-                GraphEdge {
-                    source: report_without_doi,
-                    target: report_b
-                },
-            ],
+        graph.edges == expected_edges,
         "UUID edges must be sorted and project-bounded: {:?}",
         graph.edges
     );
