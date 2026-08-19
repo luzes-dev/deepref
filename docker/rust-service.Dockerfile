@@ -9,6 +9,7 @@ ARG BIN
 WORKDIR /build
 
 COPY Cargo.toml Cargo.lock ./
+COPY apps ./apps
 COPY crates ./crates
 COPY services ./services
 
