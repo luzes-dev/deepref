@@ -32,7 +32,7 @@ LABEL org.opencontainers.image.source="${OCI_SOURCE}" \
       dev.deepref.git.tree="${GIT_TREE_HASH}"
 
 COPY --from=builder /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/ca-certificates.crt
-COPY --from=builder --chown=65532:65532 /build/target/release/deepref-api /usr/local/bin/deepref-api
+COPY --from=builder --chown=65532:65532 /build/target/release/deepref-server /usr/local/bin/deepref-server
 
 WORKDIR /app
 ENV HOME=/tmp \
@@ -40,7 +40,7 @@ ENV HOME=/tmp \
     RUST_LOG=info
 USER 65532:65532
 STOPSIGNAL SIGTERM
-ENTRYPOINT ["/usr/local/bin/deepref-api"]
+ENTRYPOINT ["/usr/local/bin/deepref-server"]
 CMD ["serve"]
 
 FROM ${DEBIAN_BASE_REPOSITORY}@sha256:7b140f374b289a7c2befc338f42ebe6441b7ea838a042bbd5acbfca6ec875818 AS worker
@@ -57,7 +57,7 @@ LABEL org.opencontainers.image.source="${OCI_SOURCE}" \
       dev.deepref.git.tree="${GIT_TREE_HASH}"
 
 COPY --from=builder /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/ca-certificates.crt
-COPY --from=builder --chown=65532:65532 /build/target/release/deepref-worker /usr/local/bin/deepref-worker
+COPY --from=builder --chown=65532:65532 /build/target/release/deepref-server /usr/local/bin/deepref-server
 
 WORKDIR /app
 ENV HOME=/tmp \
@@ -65,30 +65,5 @@ ENV HOME=/tmp \
     RUST_LOG=info
 USER 65532:65532
 STOPSIGNAL SIGTERM
-ENTRYPOINT ["/usr/local/bin/deepref-worker"]
-CMD []
-
-FROM ${DEBIAN_BASE_REPOSITORY}@sha256:7b140f374b289a7c2befc338f42ebe6441b7ea838a042bbd5acbfca6ec875818 AS projector
-
-ARG OCI_SOURCE="https://github.com/luzes-dev/deepref"
-ARG OCI_REVISION="local"
-ARG OCI_VERSION="0.0.0-dev"
-ARG GIT_TREE_HASH="local"
-
-LABEL org.opencontainers.image.source="${OCI_SOURCE}" \
-      org.opencontainers.image.revision="${OCI_REVISION}" \
-      org.opencontainers.image.version="${OCI_VERSION}" \
-      org.opencontainers.image.licenses="MIT" \
-      dev.deepref.git.tree="${GIT_TREE_HASH}"
-
-COPY --from=builder /etc/ssl/certs/ca-certificates.crt /etc/ssl/certs/ca-certificates.crt
-COPY --from=builder --chown=65532:65532 /build/target/release/deepref-projector /usr/local/bin/deepref-projector
-
-WORKDIR /app
-ENV HOME=/tmp \
-    SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt \
-    RUST_LOG=info
-USER 65532:65532
-STOPSIGNAL SIGTERM
-ENTRYPOINT ["/usr/local/bin/deepref-projector"]
-CMD ["run"]
+ENTRYPOINT ["/usr/local/bin/deepref-server"]
+CMD ["worker"]

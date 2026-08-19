@@ -6,12 +6,10 @@ license.workspace = true
 
 [dependencies]
 deepref-core = { version = "0.1.0", path = "../core" }
-deepref-events.workspace = true
+deepref-domain.workspace = true
 chrono.workspace = true
-neo4rs.workspace = true
+petgraph.workspace = true
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
 sha2.workspace = true
-thiserror.workspace = true
-tokio.workspace = true
 uuid.workspace = true

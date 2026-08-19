@@ -1,8 +1,6 @@
 mod database;
 mod environment;
 mod error;
-mod nats;
-mod neo4j;
 mod telemetry;
 
 use std::collections::HashMap;
@@ -10,16 +8,12 @@ use std::collections::HashMap;
 pub use database::DatabaseConfig;
 pub use environment::Environment;
 pub use error::ConfigError;
-pub use nats::NatsConfig;
-pub use neo4j::Neo4jConfig;
 pub use telemetry::TelemetryConfig;
 
 #[derive(Debug, Clone)]
 pub struct RuntimeConfig {
     pub environment: Environment,
     pub database: DatabaseConfig,
-    pub nats: NatsConfig,
-    pub neo4j: Neo4jConfig,
     pub telemetry: TelemetryConfig,
 }
 
@@ -42,8 +36,6 @@ impl RuntimeConfig {
         let environment = Environment::parse(get("APP_ENV").as_deref().unwrap_or("local"))?;
         Ok(Self {
             database: DatabaseConfig::from_source(environment, get)?,
-            nats: NatsConfig::from_source(environment, get)?,
-            neo4j: Neo4jConfig::from_source(environment, get)?,
             telemetry: TelemetryConfig::from_source(service_name, get)?,
             environment,
         })

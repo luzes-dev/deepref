@@ -8,8 +8,8 @@ This tree implements isolated OpenTofu roots for three AWS accounts plus one glo
 | --- | --- |
 | Per-environment OpenTofu roots | VPC, private EKS, RDS, ECR, KMS, secret containers, Pod Identity, backups, budgets, observability, and private administration/bootstrap support |
 | Global OpenTofu root | Cloudflare GitHub IdP, Access policy/applications, Tunnel/DNS configuration, GitHub rulesets/environments, the `argocd` namespace and pinned Argo CD Helm release, and one root Application per cluster |
-| Argo/GitOps | Workload namespaces, application workloads, NATS, Neo4j, External Secrets, policies, collectors, `cloudflared` Deployments, ApplicationSets, environment values, and immutable release locks |
-| Versioned application migrations | PostgreSQL schema and Neo4j constraints/indexes; the legacy `infra/neo4j/constraints.cypher` is intentionally removed |
+| Argo/GitOps | Workload namespaces, application workloads, External Secrets, policies, collectors, `cloudflared` Deployments, ApplicationSets, environment values, and immutable release locks |
+| Versioned application migrations | PostgreSQL schema, graph constraints, and graph metrics |
 | Out-of-band credential delivery | Cloudflare/GitHub provider tokens, OAuth client secret, deployment App key, Argo read credential, tunnel tokens, and populated secret values |
 
 No resource may have two owners. In particular, OpenTofu installs Argo but does not manage Argo child workloads; it creates Cloudflare tunnels but does not manage `cloudflared` pods; and it creates secret containers but never secret values.

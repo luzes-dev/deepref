@@ -1,15 +1,16 @@
-use std::{future::Future, sync::Arc};
+use std::{future::Future, sync::Arc, time::Duration};
 
-use async_nats::jetstream::AckKind;
-use futures::StreamExt;
+use deepref_application::jobs::ClaimedJob;
+use deepref_postgres::{claim_job, complete_job, fail_job, renew_job};
 use sqlx::postgres::PgPoolOptions;
-use tokio::{sync::Semaphore, task::JoinSet};
+use tokio::{
+    sync::{Semaphore, watch},
+    task::JoinSet,
+};
 
 pub mod config;
 pub mod delivery;
 pub mod limiter;
-pub mod nats;
-pub mod outbox;
 pub mod processor;
 pub mod reconciler;
 pub mod shutdown;
@@ -32,68 +33,180 @@ pub async fn run_with_shutdown(
         .max_lifetime(Some(database.max_lifetime))
         .connect(&database.url)
         .await?;
-    let jetstream = nats::connect(&config.runtime.nats).await?;
-    let consumer = nats::bind_consumer(&jetstream, &config.runtime.nats.worker_consumer).await?;
-    let mut messages = consumer.messages().await?;
-    let outbox_task = tokio::spawn(outbox::run_publisher(pool.clone(), jetstream.clone()));
-    let reconciler_task = tokio::spawn(reconciler::run(pool.clone(), config.reconciler_interval));
+    let owner = format!("deepref-worker-{}", uuid::Uuid::new_v4());
     let semaphore = Arc::new(Semaphore::new(config.concurrency));
     let mut active = JoinSet::new();
+    let (reconciler_shutdown, reconciler_signal) = watch::channel(false);
+    let reconciler_task = tokio::spawn(reconciler::run(
+        pool.clone(),
+        config.reconciler_interval,
+        reconciler_signal,
+    ));
     let mut shutdown_signal = Box::pin(shutdown_signal);
+    let mut loop_error = None;
+    let mut claim_tick = tokio::time::interval(Duration::from_millis(100));
+    claim_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
 
     loop {
         tokio::select! {
             _ = &mut shutdown_signal => {
                 tracing::info!(active=active.len(), "worker drain started");
+                reconciler_shutdown.send_replace(true);
                 break;
             }
             Some(joined) = active.join_next(), if !active.is_empty() => {
-                if let Err(error) = joined { tracing::error!(%error, "worker task failed to join"); }
-            }
-            message = messages.next() => {
-                let Some(message) = message else { break; };
-                let message = message?;
-                let permit = semaphore.clone().acquire_owned().await?;
-                let pool = pool.clone();
-                let claim_lease = config.claim_lease;
-                active.spawn(async move {
-                    let _permit = permit;
-                    let delivered = message.info().map(|info| info.delivered.max(1) as u64).unwrap_or(1);
-                    let action = processor::handle_message(pool, message.payload.to_vec(), delivered, claim_lease).await;
-                    match action {
-                        Ok(delivery::DeliveryAction::Ack) => message.ack().await.map_err(ack_error)?,
-                        Ok(delivery::DeliveryAction::Nak(delay)) => message.ack_with(AckKind::Nak(Some(delay))).await.map_err(ack_error)?,
-                        Ok(delivery::DeliveryAction::Terminate) => message.ack_with(AckKind::Term).await.map_err(ack_error)?,
-                        Err(error) => {
-                            tracing::error!(%error, delivered, "processing failed before durable disposition");
-                            message.ack_with(AckKind::Nak(None)).await.map_err(ack_error)?;
-                        }
+                match joined {
+                    Ok(Ok(())) => {}
+                    Ok(Err(error)) => {
+                        loop_error = Some(error);
+                        break;
                     }
-                    Ok::<(), anyhow::Error>(())
-                });
+                    Err(error) => {
+                        loop_error = Some(error.into());
+                        break;
+                    }
+                }
+            }
+            _ = claim_tick.tick(), if active.len() < config.concurrency => {
+                match claim_job(&pool, &owner, config.claim_lease).await {
+                    Ok(Some(job)) => {
+                        let permit = match semaphore.clone().acquire_owned().await {
+                            Ok(permit) => permit,
+                            Err(error) => {
+                                loop_error = Some(error.into());
+                                break;
+                            }
+                        };
+                        let pool = pool.clone();
+                        let owner = owner.clone();
+                        let lease = config.claim_lease;
+                        active.spawn(async move {
+                            let _permit = permit;
+                            process_claimed_job(pool, owner, job, lease).await
+                        });
+                    }
+                    Ok(None) => {}
+                    Err(error) => {
+                        loop_error = Some(error);
+                        break;
+                    }
+                }
             }
         }
     }
 
-    outbox_task.abort();
-    reconciler_task.abort();
-    let drained = tokio::time::timeout(config.runtime.telemetry.shutdown_deadline, async {
+    reconciler_shutdown.send_replace(true);
+    let active_drained = tokio::time::timeout(config.runtime.telemetry.shutdown_deadline, async {
         while let Some(result) = active.join_next().await {
             result??;
         }
         Ok::<(), anyhow::Error>(())
     })
     .await;
-    match drained {
+    let reconciler_drained =
+        tokio::time::timeout(config.runtime.telemetry.shutdown_deadline, reconciler_task).await;
+    match active_drained {
         Ok(result) => result?,
         Err(_) => anyhow::bail!(
             "worker drain deadline exceeded with {} active tasks",
             active.len()
         ),
     }
+    match reconciler_drained {
+        Ok(result) => result?,
+        Err(_) => anyhow::bail!("worker reconciler drain deadline exceeded"),
+    }
+    if let Some(error) = loop_error {
+        return Err(error);
+    }
     Ok(())
 }
 
-fn ack_error(error: Box<dyn std::error::Error + Send + Sync>) -> anyhow::Error {
-    anyhow::anyhow!(error.to_string())
+async fn process_claimed_job(
+    pool: sqlx::PgPool,
+    owner: String,
+    job: ClaimedJob,
+    lease: Duration,
+) -> anyhow::Result<()> {
+    let result = run_with_lease_renewal(
+        pool.clone(),
+        owner.clone(),
+        job.id,
+        lease,
+        processor::handle_job(pool.clone(), &job, lease),
+    )
+    .await;
+    match result {
+        Ok(delivery::DeliveryAction::Ack) => {
+            if !complete_job(&pool, &owner, job.id).await? {
+                tracing::warn!(job_id=%job.id, "job completion rejected because the lease is no longer owned");
+            }
+        }
+        Ok(delivery::DeliveryAction::Nak(delay)) => {
+            if !fail_job(&pool, &owner, &job, "retry requested", delay).await? {
+                tracing::warn!(job_id=%job.id, "job retry update rejected because the lease is no longer owned");
+            }
+        }
+        Ok(delivery::DeliveryAction::Terminate) => {
+            let terminal = ClaimedJob {
+                attempts: job.max_attempts,
+                ..job.clone()
+            };
+            if !fail_job(
+                &pool,
+                &owner,
+                &terminal,
+                "terminal job failure",
+                Duration::ZERO,
+            )
+            .await?
+            {
+                tracing::warn!(job_id=%job.id, "terminal job update rejected because the lease is no longer owned");
+            }
+        }
+        Err(error) => {
+            // A job failure is durable work state, not a worker-process failure. The
+            // queue update decides whether this attempt is retried or dead-lettered;
+            // only an error while persisting that decision should stop the worker.
+            if !fail_job(
+                &pool,
+                &owner,
+                &job,
+                &error.to_string(),
+                Duration::from_secs(10),
+            )
+            .await?
+            {
+                tracing::warn!(job_id=%job.id, "job failure update rejected because the lease is no longer owned");
+            }
+        }
+    }
+    Ok(())
+}
+
+async fn run_with_lease_renewal<F>(
+    pool: sqlx::PgPool,
+    owner: String,
+    job_id: uuid::Uuid,
+    lease: Duration,
+    work: F,
+) -> anyhow::Result<delivery::DeliveryAction>
+where
+    F: Future<Output = anyhow::Result<delivery::DeliveryAction>>,
+{
+    let interval = (lease / 3).max(Duration::from_millis(100));
+    tokio::pin!(work);
+    let mut renewal = tokio::time::interval(interval);
+    renewal.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    renewal.tick().await;
+    loop {
+        tokio::select! {
+            result = &mut work => return result,
+            _ = renewal.tick() => {
+                if !renew_job(&pool, &owner, job_id, lease).await? {
+                    anyhow::bail!("job lease was lost before completion");
+                }
+            }
+        }
+    }
 }

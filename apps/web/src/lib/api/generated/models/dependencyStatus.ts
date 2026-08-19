@@ -7,10 +7,6 @@
 import type { DependencyDetail } from './dependencyDetail.ts';
 
 export interface DependencyStatus {
-	nats: DependencyDetail;
-	neo4j: DependencyDetail;
-	outbox: DependencyDetail;
 	postgresql: DependencyDetail;
-	projection: DependencyDetail;
 	worker: DependencyDetail;
 }

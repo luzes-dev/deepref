@@ -1,8 +1,8 @@
 suite: workload security
 templates:
   - templates/api-deployment.yaml
-  - templates/nats-statefulset.yaml
-  - templates/neo4j-statefulset.yaml
+  - templates/worker-deployment.yaml
+  - templates/web-deployment.yaml
 values:
   - tests/values/development.yaml
 tests:

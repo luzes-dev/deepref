@@ -14,7 +14,6 @@ use uuid::Uuid;
 use super::pagination::{PaginatedResponse, PaginationParams, page};
 use crate::{
     error::{ApiError, ErrorResponse},
-    outbox,
     state::AppState,
 };
 
@@ -180,6 +179,22 @@ pub(crate) async fn create_ingestion(
             },
         );
         sqlx::query(
+            "INSERT INTO domain_events (event_id,schema_version,event_type,entity_type,entity_key,revision,payload,correlation_id,causation_id,created_at) \
+             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) ON CONFLICT (event_id) DO NOTHING",
+        )
+        .bind(event.event_id)
+        .bind(event.schema_version as i16)
+        .bind(&event.event_type)
+        .bind(event.entity_type.as_str())
+        .bind(&event.entity_key)
+        .bind(event.revision)
+        .bind(serde_json::to_value(&event.payload)?)
+        .bind(event.correlation_id)
+        .bind(event.causation_id)
+        .bind(event.occurred_at)
+        .execute(&mut *tx)
+        .await?;
+        sqlx::query(
             r#"
             INSERT INTO ingestion_items (ingestion_id, project_id, canonical_doi, depth, parent_doi, status, work_event_id)
             VALUES ($1, $2, $3, 0, NULL, 'queued', $4)
@@ -192,11 +207,14 @@ pub(crate) async fn create_ingestion(
         .bind(event.event_id)
         .execute(&mut *tx)
         .await?;
-        outbox::enqueue(
+        deepref_postgres::enqueue_job(
             &mut tx,
-            event.event_id,
-            SUBJECT_WORK_FETCH_REQUESTED,
-            &event,
+            &deepref_postgres::job(
+                event.event_id,
+                "work_fetch_requested",
+                serde_json::to_value(&event)?,
+                format!("work_fetch:{}", event.event_id),
+            ),
         )
         .await?;
     }

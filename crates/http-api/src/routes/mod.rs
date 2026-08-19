@@ -250,7 +250,6 @@ mod tests {
             bind_addr: "127.0.0.1:0".parse().unwrap(),
             cors_allow_any: false,
             cors_origins: vec!["http://localhost:3000".parse().unwrap()],
-            graph_retry_after: std::time::Duration::from_secs(30),
         };
         let response = router(AppState::core(pool), &config)
             .oneshot(

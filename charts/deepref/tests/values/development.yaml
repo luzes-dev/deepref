@@ -3,28 +3,14 @@ global:
 images:
   api: {repository: docker.io/library/debian, digest: sha256:7b140f374b289a7c2befc338f42ebe6441b7ea838a042bbd5acbfca6ec875818}
   worker: {repository: docker.io/library/debian, digest: sha256:7b140f374b289a7c2befc338f42ebe6441b7ea838a042bbd5acbfca6ec875818}
-  projector: {repository: docker.io/library/debian, digest: sha256:7b140f374b289a7c2befc338f42ebe6441b7ea838a042bbd5acbfca6ec875818}
   web: {repository: docker.io/library/caddy, digest: sha256:4c6e91c6ed0e2fa03efd5b44747b625fec79bc9cd06ac5235a779726618e530d}
 api:
   corsOrigins: [https://deepref-dev.example.com]
 externalSecrets:
   remote:
     database: {key: deepref/development/database, urlProperty: url}
-    neo4j: {key: deepref/development/neo4j, usernameProperty: username, passwordProperty: password, authProperty: auth}
-    nats:
-      accountsKey: deepref/development/nats/accounts
-      accountsProperty: accounts.conf
-      tlsKey: deepref/development/nats/tls
-      caProperty: ca.crt
-      certificateProperty: tls.crt
-      privateKeyProperty: tls.key
-      apiCredentialsKey: deepref/development/nats/api
-      workerCredentialsKey: deepref/development/nats/worker
-      projectorCredentialsKey: deepref/development/nats/projector
-      adminCredentialsKey: deepref/development/nats/admin
-      credentialsProperty: credentials
     cloudflared: {key: deepref/development/cloudflared, tokenProperty: token}
 imageVerification:
-  repositoryPatterns: ["docker.io/library/*", "docker.io/natsio/*", "docker.io/cloudflare/*", "docker.io/amazon/*"]
+  repositoryPatterns: ["docker.io/library/*", "docker.io/cloudflare/*", "docker.io/amazon/*"]
   keyless:
     subject: https://github.com/luzes-dev/deepref/.github/workflows/release.yml@refs/heads/development

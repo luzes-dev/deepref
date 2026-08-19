@@ -8,10 +8,10 @@ PMCID, arXiv, ISBN, registry, and other values are report identifiers and may be
 absent or multiple.
 
 Migration 0007 renames the DOI-keyed citation table to `legacy_citations` and adds a
-UUID-keyed `citations` table. The legacy worker, projector, and metric function keep
-using `legacy_citations` until the later dual-write/API replacement slice. The
-explicit `import-legacy` command copies old projects, works, memberships, source
-records, ingestion provenance, and citation edges transactionally and idempotently.
+UUID-keyed `citations` table. Migration 0008 makes the UUID graph the runtime read
+model and recomputes project metrics in PostgreSQL. The explicit `import-legacy`
+command copies old projects, works, memberships, source records, ingestion
+provenance, and citation edges transactionally and idempotently.
 
 ## Consequences
 

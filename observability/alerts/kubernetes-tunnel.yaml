@@ -3,7 +3,7 @@ groups:
     interval: 30s
     rules:
       - alert: DeepRefKubernetesWorkloadUnavailable
-        expr: kube_deployment_status_replicas_available{namespace="deepref",deployment=~"deepref-(api|worker|projector|web)"} < 1
+        expr: kube_deployment_status_replicas_available{namespace="deepref",deployment=~"deepref-(api|worker|web)"} < 1
         for: 5m
         labels: {severity: critical, service: kubernetes}
         annotations: {summary: "A DeepRef deployment has no available replica"}

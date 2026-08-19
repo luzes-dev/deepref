@@ -10,8 +10,6 @@ locals {
     application = "Runtime application configuration"
     cloudflare  = "Cloudflare tunnel credentials"
     github_app  = "Deployment GitHub App credentials"
-    nats        = "NATS application credentials"
-    neo4j       = "Neo4j application credentials"
   }
 
   common_tags = merge(var.tags, {
@@ -121,17 +119,16 @@ module "ecr" {
   repositories = {
     api         = { name = "${var.project_name}/api" }
     chart       = { name = "${var.project_name}/charts/platform" }
-    projector   = { name = "${var.project_name}/projector" }
     third_party = { name = "${var.project_name}/third-party" }
     web         = { name = "${var.project_name}/web" }
     worker      = { name = "${var.project_name}/worker" }
   }
   repository_pull_principal_arns   = var.repository_pull_principal_arns
   promotion_trusted_principal_arns = var.promotion_trusted_principal_arns
-  promotion_oidc_provider_arn       = var.promotion_oidc_provider_arn
-  promotion_oidc_subjects           = var.promotion_oidc_subjects
+  promotion_oidc_provider_arn      = var.promotion_oidc_provider_arn
+  promotion_oidc_subjects          = var.promotion_oidc_subjects
   promotion_source_repository_arns = var.promotion_source_repository_arns
-  tags                              = local.common_tags
+  tags                             = local.common_tags
 
   depends_on = [terraform_data.account_guard]
 }

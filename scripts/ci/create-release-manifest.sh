@@ -8,7 +8,6 @@ required=(
   CHART_REPOSITORY CHART_VERSION CHART_DIGEST CHART_REFERRERS_JSON
   API_REPOSITORY API_DIGEST API_REFERRERS_JSON
   WORKER_REPOSITORY WORKER_DIGEST WORKER_REFERRERS_JSON
-  PROJECTOR_REPOSITORY PROJECTOR_DIGEST PROJECTOR_REFERRERS_JSON
   WEB_REPOSITORY WEB_DIGEST WEB_REFERRERS_JSON
 )
 for name in "${required[@]}"; do
@@ -30,7 +29,6 @@ normalize_referrers() {
 chart_referrers=$(normalize_referrers "$CHART_REFERRERS_JSON")
 api_referrers=$(normalize_referrers "$API_REFERRERS_JSON")
 worker_referrers=$(normalize_referrers "$WORKER_REFERRERS_JSON")
-projector_referrers=$(normalize_referrers "$PROJECTOR_REFERRERS_JSON")
 web_referrers=$(normalize_referrers "$WEB_REFERRERS_JSON")
 
 jq -n \
@@ -46,9 +44,6 @@ jq -n \
   --arg worker_repository "$WORKER_REPOSITORY" \
   --arg worker_digest "$WORKER_DIGEST" \
   --argjson worker_referrers "$worker_referrers" \
-  --arg projector_repository "$PROJECTOR_REPOSITORY" \
-  --arg projector_digest "$PROJECTOR_DIGEST" \
-  --argjson projector_referrers "$projector_referrers" \
   --arg web_repository "$WEB_REPOSITORY" \
   --arg web_digest "$WEB_DIGEST" \
   --argjson web_referrers "$web_referrers" \
@@ -66,7 +61,6 @@ jq -n \
     images: {
       api: {repository: $api_repository, digest: $api_digest, referrers: $api_referrers},
       worker: {repository: $worker_repository, digest: $worker_digest, referrers: $worker_referrers},
-      projector: {repository: $projector_repository, digest: $projector_digest, referrers: $projector_referrers},
       web: {repository: $web_repository, digest: $web_digest, referrers: $web_referrers}
     },
     migration_version: $migration_version,

@@ -1,84 +1,31 @@
 # Database migrations
 
-## Contract
+## Authority and compatibility
 
-PostgreSQL is authoritative. Migrations under `crates/postgres/migrations` are append-only and are applied through the shared `deepref-postgres` adapter. `deepref-api serve` never migrates; `deepref-api migrate` is the only application migration command. In hosted environments the Helm chart runs it as an Argo `PreSync` Job with `backoffLimit: 0` and a bounded active deadline, so failure stops the new sync before application Deployments change.
+SQLx migrations under `crates/postgres/migrations` are the only schema authority. Migration 0008 completes the infrastructure collapse: durable jobs, UUID graph reads, metric recomputation, and PostgreSQL graph freshness are supported from the same database. Migrations 0001 through 0008 must apply in order and remain idempotent at the SQL operation level.
 
-Local commands are:
+`deepref-server migrate` is the only supported migration command in local, CI, and hosted workflows. The Helm migration Job runs as an Argo PreSync hook before application Deployments. Normal `serve` and `worker` roles never migrate.
 
-```bash
-mise exec -- just migrate
-mise exec -- just test-integration
-```
+## Release compatibility
 
-After migration 0007 is applied, run the one-time compatibility import explicitly
-with `deepref-server import-legacy` or `deepref-api import-legacy`. `serve` never
-runs this import implicitly; the command prints/logs typed convergence counts.
+- Additive schema changes must support the previous deployed application until rollout completes.
+- A migration that changes data shape requires importer/worker/API compatibility review and a fixture proving deterministic UUID graph semantics.
+- Never edit `_sqlx_migrations`, mark a failed migration successful, or apply untracked production DDL.
+- Rollback across a migration boundary is not automatic; use a forward fix or isolated restore decision.
 
-The current required schema version is defined by code and exposed at `GET /health/ready`. Never infer compatibility only from a migration filename.
-
-## Migration design policy
-
-1. Use expand/contract changes. Land additive schema and dual-compatible code before removing an old shape.
-2. Do not rewrite already-shipped migration files. Add a new ordered migration.
-3. Avoid long blocking DDL. State a lock-timeout, statement-timeout, expected table size, index strategy, and abort signal in the review.
-4. Make application behavior backward-compatible for the complete promotion/rollback window.
-5. Treat destructive data change as a separately authorized data operation with a tested restore path.
-6. Keep Neo4j constraints and indexes in `crates/graph/migrations`; the projector applies them idempotently. Neo4j data remains rebuildable from PostgreSQL.
-7. A rollback may select only a release with the same migration version through the current workflow. Schema downgrade is not automated.
-
-The accountable data owner must define the compatibility window, migration timeout, acceptable lock budget, and cleanup date for each nontrivial migration. These are change-specific decisions, not repository-wide defaults.
-
-## Review checklist
-
-- Migration is additive or has a documented multi-release contract.
-- Queries used by the old and new application versions both work after migration.
-- Default/backfill behavior is bounded and observable.
-- Index creation and constraints are safe for expected production volume.
-- Backup/PITR health was checked and a restore drill is current.
-- `crates/http-api/tests/migration.rs`, affected worker/projector tests, and Helm migration tests pass.
-- Release lock migration version and rollback compatibility are understood.
-- Production approval identifies a data owner and safe-stop authority.
-
-## Hosted observation
-
-Do not create the Job manually. Merge the approved release lock and observe the Argo-owned hook:
+## Local and CI checks
 
 ```bash
-argocd app get deepref-root --refresh
-kubectl get jobs --namespace "$NAMESPACE" -l app.kubernetes.io/component=migration
-kubectl logs --namespace "$NAMESPACE" \
-  -l app.kubernetes.io/component=migration \
-  --all-containers --tail=200
-kubectl get events --namespace "$NAMESPACE" --sort-by=.lastTimestamp
+cargo fmt --all --check
+cargo test --workspace --locked
+DATABASE_URL=postgres://postgres:deepref@127.0.0.1:55432/deepref_pr2_review \
+  cargo test -p deepref-postgres --test graph --locked
+bash scripts/check-api-codegen.sh
+bash scripts/helm-check.sh
 ```
 
-Logs may contain database error context; redact before retention. Never print `DATABASE_URL_FILE`, mount contents, or Secret values.
+The graph fixture must include reports without DOI, internal and outbound UUID edges, deterministic bounds/order, legacy rank parity, fresh-import metrics, and later recomputation freshness. Apply migrations to a fresh disposable database for acceptance evidence.
 
-## Verification
+## Failure handling
 
-After a successful hook:
-
-```bash
-curl --fail --silent --show-error "https://REPLACE_WITH_ACCESS_HOST/api/health/ready"
-kubectl get deployments --namespace "$NAMESPACE" -o wide
-argocd app wait deepref-root --sync --health --timeout 900
-```
-
-If authorized database access is required, connect through the approved private runner and query only metadata needed for verification. Do not use the master credential for routine application validation.
-
-## Failure and rollback boundaries
-
-On PreSync failure, do not delete/retry the Job repeatedly or bypass the hook. The prior application should remain serving; verify it, capture failure evidence, and follow [migration failure](runbooks/migration-failure.md). Fix the source and create a new release, or perform an explicitly authorized forward data repair.
-
-Never:
-
-- downgrade schema ad hoc;
-- restore production over the existing instance;
-- mark a failed SQLx migration successful manually;
-- patch the Deployment to skip readiness/schema checks;
-- run `deepref-api migrate` from multiple shells “until it works.”
-
-## Evidence
-
-Retain the migration review, source/release/GitOps identities, pre-change recovery-point health, hook start/end and status, redacted logs, readiness schema response, lock/latency observations, and any forward-fix or safe-stop decision.
+Stop the release when the PreSync Job fails. Preserve job logs, migration metadata, database blockers, and the prior workload state; then follow [migration failure](runbooks/migration-failure.md).

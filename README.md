@@ -1,8 +1,7 @@
 # DeepRef
 
 DeepRef maps article citation networks from seed DOIs. It ships a SvelteKit web
-app, a Rust Axum API, a Rust ingestion worker, PostgreSQL state, NATS JetStream,
-and Neo4j graph infrastructure.
+app, a Rust Axum API, a Rust worker, and PostgreSQL state plus graph storage.
 
 ## Layout
 
@@ -10,7 +9,6 @@ and Neo4j graph infrastructure.
 apps/web        SvelteKit frontend
 crates/*        Rust library crates, including the HTTP API and PostgreSQL adapter
 services/worker Rust ingestion worker
-services/projector Rust graph projector
 infra           Local dependencies and production infrastructure
  docs            Architecture, API, operations, and acceptance
 ```
@@ -36,7 +34,7 @@ mise exec -- just dev
 
 See [Local development](docs/local-development.md) for ports, seed data, reset behavior, and the full command surface. Compose is disposable local dependency tooling only; it is not a deployment artifact.
 
-Production operations are documented in the [operations index](docs/operations/README.md). The source/apply/drill boundary is tracked in [AC-01 through AC-16](docs/acceptance/production-platform.md); repository source does not by itself mean AWS, Cloudflare, Argo, RDS, NATS, or Neo4j has been deployed or drilled. See the [documentation index](docs/README.md) for all platform references.
+Production operations are documented in the [operations index](docs/operations/README.md). The source/apply/drill boundary is tracked in [AC-01 through AC-16](docs/acceptance/production-platform.md); repository source does not by itself mean AWS, Cloudflare, Argo, or RDS has been deployed or drilled. See the [documentation index](docs/README.md) for all platform references.
 
 ## Checks
 

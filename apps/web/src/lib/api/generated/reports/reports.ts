@@ -38,15 +38,15 @@ export type getProjectGraphResponse200 = {
 	status: 200;
 };
 
-export type getProjectGraphResponse503 = {
+export type getProjectGraphResponse500 = {
 	data: ApiErrorBody;
-	status: 503;
+	status: 500;
 };
 
 export type getProjectGraphResponseSuccess = getProjectGraphResponse200 & {
 	headers: Headers;
 };
-export type getProjectGraphResponseError = getProjectGraphResponse503 & {
+export type getProjectGraphResponseError = getProjectGraphResponse500 & {
 	headers: Headers;
 };
 
@@ -270,15 +270,15 @@ export type getProjectRecommendationsResponse200 = {
 	status: 200;
 };
 
-export type getProjectRecommendationsResponse503 = {
+export type getProjectRecommendationsResponse500 = {
 	data: ApiErrorBody;
-	status: 503;
+	status: 500;
 };
 
 export type getProjectRecommendationsResponseSuccess = getProjectRecommendationsResponse200 & {
 	headers: Headers;
 };
-export type getProjectRecommendationsResponseError = getProjectRecommendationsResponse503 & {
+export type getProjectRecommendationsResponseError = getProjectRecommendationsResponse500 & {
 	headers: Headers;
 };
 

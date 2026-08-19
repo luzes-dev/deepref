@@ -42,11 +42,7 @@ pub struct DependencyDetail {
 #[derive(Debug, Serialize, ToSchema)]
 pub struct DependencyStatus {
     pub postgresql: DependencyDetail,
-    pub nats: DependencyDetail,
-    pub outbox: DependencyDetail,
     pub worker: DependencyDetail,
-    pub neo4j: DependencyDetail,
-    pub projection: DependencyDetail,
 }
 
 fn available() -> DependencyDetail {
@@ -77,15 +73,15 @@ pub async fn ready(State(state): State<AppState>) -> Result<Json<ReadinessRespon
     .fetch_one(&state.pool)
     .await
     .map_err(ApiError::Database)?;
-    if schema_version < 6 {
+    if schema_version < 8 {
         return Err(ApiError::Configuration(format!(
-            "database schema {schema_version} is older than required version 6"
+            "database schema {schema_version} is older than required version 8"
         )));
     }
     Ok(Json(ReadinessResponse {
         status: "ready",
         schema_version,
-        required_schema_version: 6,
+        required_schema_version: 8,
     }))
 }
 
@@ -102,90 +98,41 @@ pub async fn dependencies(State(state): State<AppState>) -> Json<DependencyStatu
             }
         }
     };
-    let outbox_row = sqlx::query(
-        "SELECT count(*)::bigint AS backlog, COALESCE(EXTRACT(EPOCH FROM now()-min(created_at))::bigint,0) AS age \
-         FROM event_outbox WHERE published_at IS NULL AND exhausted_at IS NULL",
-    ).fetch_optional(&state.pool).await.ok().flatten();
-    let outbox = outbox_row
-        .map(|row| {
-            let backlog = row.get::<i64, _>("backlog");
+    let worker = match sqlx::query(
+        "SELECT count(*) FILTER (WHERE state IN ('queued','running'))::bigint AS backlog,
+                count(*) FILTER (WHERE state = 'dead')::bigint AS dead,
+                EXTRACT(EPOCH FROM (now() - min(available_at) FILTER (WHERE state = 'queued')))::bigint AS oldest_age_seconds,
+                max(completed_at) AS last_success_at
+         FROM jobs",
+    )
+    .fetch_one(&state.pool)
+    .await
+    {
+        Ok(row) => {
+            let backlog: i64 = row.get("backlog");
+            let dead: i64 = row.get("dead");
+            let oldest_age_seconds: Option<i64> = row.get("oldest_age_seconds");
             DependencyDetail {
-                state: if backlog > 0 {
+                state: if dead > 0 || oldest_age_seconds.is_some_and(|age| age > 300) {
                     DependencyState::Degraded
                 } else {
                     DependencyState::Available
                 },
                 backlog: Some(backlog),
-                oldest_age_seconds: Some(row.get("age")),
                 lag: None,
-                last_success_at: None,
+                oldest_age_seconds,
+                last_success_at: row.get("last_success_at"),
             }
-        })
-        .unwrap_or(DependencyDetail {
-            state: DependencyState::Unavailable,
-            ..available()
-        });
-    let worker_backlog = sqlx::query_scalar::<_, i64>(
-        "SELECT count(*)::bigint FROM ingestion_items WHERE status IN ('queued','fetching')",
-    )
-    .fetch_one(&state.pool)
-    .await
-    .ok();
-    let worker = DependencyDetail {
-        state: worker_backlog.map_or(DependencyState::Unavailable, |count| {
-            if count > 0 {
-                DependencyState::Degraded
-            } else {
-                DependencyState::Available
+        }
+        Err(error) => {
+            tracing::warn!(%error, "durable worker job check failed");
+            DependencyDetail {
+                state: DependencyState::Unavailable,
+                ..available()
             }
-        }),
-        backlog: worker_backlog,
-        lag: worker_backlog,
-        oldest_age_seconds: None,
-        last_success_at: None,
+        }
     };
-    let nats = DependencyDetail {
-        state: if state.jetstream.is_some() {
-            DependencyState::Available
-        } else {
-            DependencyState::Unavailable
-        },
-        ..available()
-    };
-    let neo4j = match &state.graph {
-        Some(graph) if graph.ping().await.is_ok() => available(),
-        _ => DependencyDetail {
-            state: DependencyState::Unavailable,
-            ..available()
-        },
-    };
-    let projection_row = sqlx::query(
-        "SELECT state,lag,last_success_at FROM projection_state WHERE projection_name='graph' AND project_id IS NULL",
-    ).fetch_optional(&state.pool).await.ok().flatten();
-    let projection = projection_row
-        .map(|row| DependencyDetail {
-            state: if row.get::<String, _>("state") == "ready" {
-                DependencyState::Available
-            } else {
-                DependencyState::Degraded
-            },
-            lag: Some(row.get("lag")),
-            backlog: None,
-            oldest_age_seconds: None,
-            last_success_at: row.get("last_success_at"),
-        })
-        .unwrap_or(DependencyDetail {
-            state: DependencyState::Unavailable,
-            ..available()
-        });
-    Json(DependencyStatus {
-        postgresql,
-        nats,
-        outbox,
-        worker,
-        neo4j,
-        projection,
-    })
+    Json(DependencyStatus { postgresql, worker })
 }
 
 #[utoipa::path(get, path="/health", operation_id="getDeprecatedHealth", tag="health",

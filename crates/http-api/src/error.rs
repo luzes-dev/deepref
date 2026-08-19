@@ -22,6 +22,8 @@ pub struct ApiErrorBody {
 pub enum ApiError {
     #[error("database operation failed")]
     Database(#[from] sqlx::Error),
+    #[error("internal operation failed")]
+    Internal(#[from] anyhow::Error),
     #[error("{0}")]
     BadRequest(String),
     #[error("{message}")]
@@ -36,25 +38,23 @@ pub enum ApiError {
     Configuration(String),
     #[error("screening data integrity failure: {0}")]
     DataIntegrity(String),
-    #[error("graph read model is unavailable")]
-    GraphUnavailable { retry_after_seconds: u64 },
     #[error("invalid JSON payload")]
     Json(#[from] serde_json::Error),
     #[error("invalid DOI: {0}")]
     Doi(#[from] deepref_core::DoiError),
 }
 
-impl ApiError {
-    pub fn graph_unavailable(retry_after: std::time::Duration) -> Self {
-        Self::GraphUnavailable {
-            retry_after_seconds: retry_after.as_secs().max(1),
-        }
-    }
-}
+impl ApiError {}
 
 impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
-        let (status, code, message, retry_after, details) = match self {
+        let (status, code, message, retry_after, details): (
+            StatusCode,
+            String,
+            String,
+            Option<u64>,
+            Option<serde_json::Value>,
+        ) = match self {
             Self::Database(sqlx::Error::RowNotFound) | Self::NotFound(_) => (
                 StatusCode::NOT_FOUND,
                 "NOT_FOUND".to_owned(),
@@ -64,6 +64,16 @@ impl IntoResponse for ApiError {
             ),
             Self::Database(error) => {
                 tracing::error!(%error, "database operation failed");
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    "INTERNAL_ERROR".to_owned(),
+                    "internal server error".to_owned(),
+                    None,
+                    None,
+                )
+            }
+            Self::Internal(error) => {
+                tracing::error!(%error, "internal operation failed");
                 (
                     StatusCode::INTERNAL_SERVER_ERROR,
                     "INTERNAL_ERROR".to_owned(),
@@ -108,15 +118,6 @@ impl IntoResponse for ApiError {
                     None,
                 )
             }
-            Self::GraphUnavailable {
-                retry_after_seconds,
-            } => (
-                StatusCode::SERVICE_UNAVAILABLE,
-                "GRAPH_UNAVAILABLE".to_owned(),
-                "graph features are temporarily unavailable".to_owned(),
-                Some(retry_after_seconds),
-                None,
-            ),
             Self::Json(error) => (
                 StatusCode::BAD_REQUEST,
                 "INVALID_JSON".to_owned(),

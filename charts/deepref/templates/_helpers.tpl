@@ -93,35 +93,6 @@ topologySpreadConstraints:
   value: {{ .root.Values.runtime.database.idleTimeoutSeconds | quote }}
 - name: DATABASE_MAX_LIFETIME_SECS
   value: {{ .root.Values.runtime.database.maxLifetimeSeconds | quote }}
-- name: NATS_URL
-  value: tls://{{ include "deepref.componentName" (dict "root" .root "component" "nats") }}:4222
-- name: NATS_CREDENTIALS_FILE
-  value: /var/run/secrets/deepref/nats/credentials
-- name: NATS_CA_FILE
-  value: /var/run/secrets/deepref/nats-ca/ca.crt
-- name: NATS_CONNECT_TIMEOUT_SECS
-  value: {{ .root.Values.runtime.nats.connectTimeoutSeconds | quote }}
-- name: NATS_REQUEST_TIMEOUT_SECS
-  value: {{ .root.Values.runtime.nats.requestTimeoutSeconds | quote }}
-- name: NATS_WORKER_CONSUMER
-  value: deepref-worker
-- name: NATS_PROJECTOR_CONSUMER
-  value: deepref-projector
-- name: NEO4J_URI
-  value: bolt://{{ include "deepref.componentName" (dict "root" .root "component" "neo4j") }}:7687
-- name: NEO4J_USER
-  valueFrom:
-    secretKeyRef:
-      name: {{ include "deepref.componentName" (dict "root" .root "component" "neo4j-auth") }}
-      key: username
-- name: NEO4J_PASSWORD_FILE
-  value: /var/run/secrets/deepref/neo4j/password
-- name: NEO4J_POOL_MAX
-  value: {{ .root.Values.runtime.neo4j.poolMax | quote }}
-- name: NEO4J_CONNECT_TIMEOUT_SECS
-  value: {{ .root.Values.runtime.neo4j.connectTimeoutSeconds | quote }}
-- name: NEO4J_QUERY_TIMEOUT_SECS
-  value: {{ .root.Values.runtime.neo4j.queryTimeoutSeconds | quote }}
 - name: OTEL_SERVICE_NAME
   value: {{ .serviceName | quote }}
 - name: OTEL_EXPORTER_OTLP_ENDPOINT
@@ -136,15 +107,6 @@ topologySpreadConstraints:
 - name: database-secret
   mountPath: /var/run/secrets/deepref/database
   readOnly: true
-- name: nats-credentials
-  mountPath: /var/run/secrets/deepref/nats
-  readOnly: true
-- name: nats-ca
-  mountPath: /var/run/secrets/deepref/nats-ca
-  readOnly: true
-- name: neo4j-secret
-  mountPath: /var/run/secrets/deepref/neo4j
-  readOnly: true
 {{- end -}}
 
 {{- define "deepref.runtimeVolumes" -}}
@@ -157,22 +119,4 @@ topologySpreadConstraints:
     items:
       - key: url
         path: url
-- name: nats-credentials
-  secret:
-    secretName: {{ include "deepref.componentName" (dict "root" .root "component" (printf "nats-%s" .credential)) }}
-    items:
-      - key: credentials
-        path: credentials
-- name: nats-ca
-  secret:
-    secretName: {{ include "deepref.componentName" (dict "root" .root "component" "nats-tls") }}
-    items:
-      - key: ca.crt
-        path: ca.crt
-- name: neo4j-secret
-  secret:
-    secretName: {{ include "deepref.componentName" (dict "root" .root "component" "neo4j-auth") }}
-    items:
-      - key: password
-        path: password
 {{- end -}}

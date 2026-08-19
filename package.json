@@ -12,7 +12,7 @@
     "check": "pnpm --filter @deepref/web check",
     "lint": "pnpm --filter @deepref/web lint",
     "format": "pnpm --filter @deepref/web format",
-    "generate:openapi": "cargo run -q -p deepref-http-api -- --print-openapi > docs/openapi.json",
+    "generate:openapi": "cargo run -q -p deepref-server -- --print-openapi > docs/openapi.json",
     "generate:client": "pnpm --filter @deepref/web generate:client",
     "generate:api": "pnpm generate:openapi && pnpm generate:client",
     "generate:api:check": "bash scripts/check-api-codegen.sh",
@@ -22,7 +22,7 @@
     "quality:ts:json": "fallow --workspace apps/web --format json --quiet --explain",
     "quality:ts:audit": "fallow audit --workspace apps/web --base ${FALLOW_AUDIT_BASE:-origin/main} --gate new-only",
     "ci": "pnpm lint && pnpm check && pnpm test",
-    "docker:build": "docker buildx bake api worker projector web"
+    "docker:build": "docker buildx bake api worker web"
   },
   "devDependencies": {
     "fallow": "2.101.0"

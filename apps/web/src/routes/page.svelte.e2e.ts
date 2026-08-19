@@ -87,11 +87,7 @@ const workspaceArticles = [...articles, ...paginatedArticles];
 
 const availableDependencies = {
 	postgresql: { state: 'available', lag: null, backlog: null, oldest_age_seconds: null },
-	nats: { state: 'available', lag: null, backlog: null, oldest_age_seconds: null },
-	outbox: { state: 'available', lag: null, backlog: 0, oldest_age_seconds: 0 },
-	worker: { state: 'available', lag: 0, backlog: 0, oldest_age_seconds: null },
-	neo4j: { state: 'available', lag: null, backlog: null, oldest_age_seconds: null },
-	projection: { state: 'available', lag: 0, backlog: null, oldest_age_seconds: null }
+	worker: { state: 'available', lag: 0, backlog: 0, oldest_age_seconds: null }
 };
 
 const projection = {
@@ -406,16 +402,15 @@ test('shows dependency degradation without blocking core workspace views', async
 		await route.fulfill({
 			json: {
 				...availableDependencies,
-				neo4j: { ...availableDependencies.neo4j, state: 'unavailable' },
-				projection: { ...availableDependencies.projection, state: 'degraded', lag: 7 }
+				worker: { ...availableDependencies.worker, state: 'degraded', backlog: 7 }
 			}
 		});
 	});
 	await page.goto('/');
 
-	await expect(page.getByTestId('dependency-banner')).toContainText('neo4j: unavailable');
+	await expect(page.getByTestId('dependency-banner')).toContainText('worker: degraded');
 	await expect(page.getByTestId('dependency-banner')).toContainText(
-		'Projects, articles, and ingestions remain available'
+		'Projects, articles, and ingestions remain available while durable jobs drain'
 	);
 	await page.getByRole('button', { name: 'Articles' }).click();
 	await expect(page.getByRole('heading', { name: 'Articles' })).toBeVisible();
@@ -436,41 +431,6 @@ test('shows stale metric timestamps from the typed article contract', async ({ p
 
 	await expect(page.getByTestId('stale-metrics-banner')).toContainText('Metrics may be stale');
 	await expect(page.getByTestId('stale-metrics-banner')).toContainText('Metrics as of');
-});
-
-test('renders typed graph-only degradation and keeps articles and ingestions usable', async ({
-	page
-}) => {
-	await mockWorkspace(page);
-	await page.route('http://localhost:4173/api/projects/test-project/graph', async (route) => {
-		await route.fulfill({
-			status: 503,
-			headers: {
-				'content-type': 'application/json',
-				'retry-after': '30',
-				'x-correlation-id': 'graph-correlation'
-			},
-			json: {
-				code: 'GRAPH_UNAVAILABLE',
-				message: 'graph features are temporarily unavailable',
-				correlation_id: 'graph-correlation'
-			}
-		});
-	});
-	await page.goto('/');
-	await page.getByRole('button', { name: 'Graph' }).click();
-
-	await expect(page.getByTestId('graph-degraded-state')).toContainText(
-		'Graph temporarily unavailable'
-	);
-	await expect(page.getByTestId('graph-degraded-state')).toContainText('GRAPH_UNAVAILABLE');
-	await expect(page.getByTestId('graph-degraded-state')).toContainText('Retry after 30 seconds');
-	await expect(page.getByTestId('graph-degraded-state')).toContainText('Projection revision 42');
-
-	await page.getByRole('button', { name: 'Articles' }).click();
-	await expect(page.getByRole('button', { name: /Source Article/ })).toBeVisible();
-	await page.getByRole('button', { name: 'Ingestions' }).click();
-	await expect(page.getByText('1 project runs')).toBeVisible();
 });
 
 test('loads opaque cursor pages for projects, articles, and ingestions', async ({ page }) => {

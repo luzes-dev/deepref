@@ -9,5 +9,6 @@ deepref-http-api.workspace = true
 deepref-config.workspace = true
 deepref-telemetry.workspace = true
 deepref-worker = { path = "../../services/worker" }
+serde_json.workspace = true
 anyhow.workspace = true
 tokio.workspace = true

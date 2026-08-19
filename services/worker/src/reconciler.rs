@@ -1,114 +1,112 @@
 use std::time::Duration;
 
-use deepref_events::{EntityType, EventEnvelope, SUBJECT_WORK_FETCH_REQUESTED, WorkFetchRequested};
 use sqlx::{PgPool, Row};
-
-pub async fn run(pool: PgPool, interval: Duration) {
-    let mut ticker = tokio::time::interval(interval);
-    loop {
-        ticker.tick().await;
-        match reconcile_once(&pool).await {
-            Ok(report) => tracing::info!(
-                expired_event_claims = report.expired_event_claims,
-                expired_doi_leases = report.expired_doi_leases,
-                repaired_work = report.repaired_work,
-                exhausted_outbox = report.exhausted_outbox,
-                "worker reconciliation completed"
-            ),
-            Err(error) => tracing::error!(%error, "worker reconciliation failed"),
-        }
-    }
-}
+use tokio::sync::watch;
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct ReconcileReport {
     pub expired_event_claims: u64,
     pub expired_doi_leases: u64,
     pub repaired_work: u64,
-    pub exhausted_outbox: i64,
+    pub expired_jobs: u64,
+}
+
+pub async fn run(pool: PgPool, interval: Duration, mut shutdown: watch::Receiver<bool>) {
+    let mut ticker = tokio::time::interval(interval);
+    loop {
+        tokio::select! {
+            _ = ticker.tick() => {}
+            changed = shutdown.changed() => {
+                if changed.is_err() || *shutdown.borrow() {
+                    return;
+                }
+                continue;
+            }
+        }
+        match reconcile_once(&pool).await {
+            Ok(report) => tracing::debug!(?report, "worker lease reconciliation completed"),
+            Err(error) => tracing::error!(%error, "worker lease reconciliation failed"),
+        }
+    }
 }
 
 pub async fn reconcile_once(pool: &PgPool) -> anyhow::Result<ReconcileReport> {
+    let expired_jobs = deepref_postgres::recover_expired_jobs(pool).await?;
     let expired_event_claims = sqlx::query(
-        "UPDATE processed_events SET owner_token=NULL,last_error=COALESCE(last_error,'lease expired') \
-         WHERE completed_at IS NULL AND owner_token IS NOT NULL AND lease_expires_at < now()",
-    ).execute(pool).await?.rows_affected();
-    let expired_doi_leases = sqlx::query(
-        "UPDATE doi_fetch_state SET status='failed',owner_token=NULL,last_error=COALESCE(last_error,'lease expired'),updated_at=now() \
-         WHERE status='fetching' AND lease_expires_at < now()",
-    ).execute(pool).await?.rows_affected();
-    sqlx::query(
-        "UPDATE ingestion_items SET status='queued',last_error=COALESCE(last_error,'lease recovered') \
-         WHERE status='fetching' AND NOT EXISTS (SELECT 1 FROM doi_fetch_state d \
-         WHERE d.canonical_doi=ingestion_items.canonical_doi AND d.status='fetching' AND d.lease_expires_at>now())",
-    ).execute(pool).await?;
-    let repaired_work = repair_missing_work(pool).await?;
-    sqlx::query(
-        "UPDATE event_outbox SET locked_at=NULL,next_attempt_at=now() \
-         WHERE published_at IS NULL AND exhausted_at IS NULL AND locked_at < now()-interval '30 seconds'",
-    ).execute(pool).await?;
-    let exhausted_outbox = sqlx::query_scalar(
-        "SELECT count(*)::bigint FROM event_outbox WHERE exhausted_at IS NOT NULL",
+        "UPDATE processed_events SET owner_token=NULL,last_error=COALESCE(last_error,'lease expired') WHERE completed_at IS NULL AND owner_token IS NOT NULL AND lease_expires_at < now()",
     )
-    .fetch_one(pool)
+    .execute(pool)
+    .await?
+    .rows_affected();
+    let expired_doi_leases = sqlx::query(
+        "UPDATE doi_fetch_state SET status='failed',owner_token=NULL,last_error=COALESCE(last_error,'lease expired'),updated_at=now() WHERE status='fetching' AND lease_expires_at < now()",
+    )
+    .execute(pool)
+    .await?
+    .rows_affected();
+    sqlx::query(
+        "UPDATE ingestion_items SET status='queued',last_error=COALESCE(last_error,'lease recovered') WHERE status='fetching' AND NOT EXISTS (SELECT 1 FROM doi_fetch_state d WHERE d.canonical_doi=ingestion_items.canonical_doi AND d.status='fetching' AND d.lease_expires_at>now())",
+    )
+    .execute(pool)
     .await?;
+    let repaired_work = repair_missing_work(pool).await?;
     Ok(ReconcileReport {
         expired_event_claims,
         expired_doi_leases,
         repaired_work,
-        exhausted_outbox,
+        expired_jobs,
     })
 }
 
 async fn repair_missing_work(pool: &PgPool) -> anyhow::Result<u64> {
     let rows = sqlx::query(
-        "SELECT i.ingestion_id,i.project_id,i.canonical_doi,i.depth,i.parent_doi,g.max_depth \
-         FROM ingestion_items i JOIN ingestions g ON g.id=i.ingestion_id \
-         LEFT JOIN event_outbox o ON o.id=i.work_event_id \
-         WHERE i.status='queued' AND o.id IS NULL ORDER BY i.queued_at LIMIT 100",
+        "SELECT i.ingestion_id,i.project_id,i.canonical_doi,i.depth,i.parent_doi,g.max_depth FROM ingestion_items i JOIN ingestions g ON g.id=i.ingestion_id WHERE i.status='queued' AND NOT EXISTS (SELECT 1 FROM jobs j WHERE j.id=i.work_event_id) ORDER BY i.queued_at LIMIT 100",
     )
     .fetch_all(pool)
     .await?;
     let mut repaired = 0;
     for row in rows {
-        let ingestion_id = row.get("ingestion_id");
-        let project_id = row.get("project_id");
+        let ingestion_id: uuid::Uuid = row.get("ingestion_id");
+        let project_id: uuid::Uuid = row.get("project_id");
         let doi: String = row.get("canonical_doi");
-        let mut tx = pool.begin().await?;
-        let revision: i64 = sqlx::query_scalar("SELECT nextval('graph_domain_revision_seq')")
-            .fetch_one(&mut *tx)
-            .await?;
-        let event = EventEnvelope::v1(
-            SUBJECT_WORK_FETCH_REQUESTED,
-            "deepref.worker.reconciler",
-            EntityType::Work,
-            format!("{ingestion_id}|{doi}"),
-            revision,
-            ingestion_id,
-            None,
-            WorkFetchRequested {
-                project_id,
-                ingestion_id,
-                doi: doi.clone(),
-                depth: row.get("depth"),
-                max_depth: row.get("max_depth"),
-                parent_doi: row.get("parent_doi"),
-            },
-        );
-        let updated = sqlx::query(
-            "UPDATE ingestion_items SET work_event_id=$3 WHERE ingestion_id=$1 AND canonical_doi=$2 AND status='queued'",
-        ).bind(ingestion_id).bind(&doi).bind(event.event_id).execute(&mut *tx).await?;
-        if updated.rows_affected() == 1 {
-            crate::store::enqueue(
-                &mut tx,
-                event.event_id,
-                SUBJECT_WORK_FETCH_REQUESTED,
-                &event,
-            )
-            .await?;
-            repaired += 1;
-        }
-        tx.commit().await?;
+        let event_id: uuid::Uuid = sqlx::query_scalar(
+            "SELECT work_event_id FROM ingestion_items WHERE ingestion_id=$1 AND canonical_doi=$2",
+        )
+        .bind(ingestion_id)
+        .bind(&doi)
+        .fetch_one(pool)
+        .await?;
+        let payload = serde_json::json!({
+            "schema_version": 1,
+            "event_id": event_id,
+            "event_type": deepref_events::SUBJECT_WORK_FETCH_REQUESTED,
+            "occurred_at": chrono::Utc::now(),
+            "producer": "deepref.worker.reconciler",
+            "correlation_id": ingestion_id,
+            "causation_id": null,
+            "entity_type": "work",
+            "entity_key": format!("{ingestion_id}|{doi}"),
+            "revision": 0,
+            "payload": {
+                "doi": doi,
+                "project_id": project_id,
+                "ingestion_id": ingestion_id,
+                "depth": row.get::<i32, _>("depth"),
+                "max_depth": row.get::<i32, _>("max_depth"),
+                "parent_doi": row.get::<Option<String>, _>("parent_doi")
+            }
+        });
+        deepref_postgres::enqueue_job_pool(
+            pool,
+            &deepref_postgres::job(
+                event_id,
+                "work_fetch_requested",
+                payload,
+                format!("work_fetch:{event_id}"),
+            ),
+        )
+        .await?;
+        repaired += 1;
     }
     Ok(repaired)
 }

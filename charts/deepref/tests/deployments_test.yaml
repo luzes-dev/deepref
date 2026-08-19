@@ -2,14 +2,13 @@ suite: application deployments
 templates:
   - templates/api-deployment.yaml
   - templates/worker-deployment.yaml
-  - templates/projector-deployment.yaml
   - templates/web-deployment.yaml
 values:
   - tests/values/development.yaml
 tests:
-  - it: renders four hardened deployments
+  - it: renders three hardened deployments
     asserts:
-      - hasDocuments: {count: 4}
+      - hasDocuments: {count: 3}
   - it: pins every application image by digest
     asserts:
       - matchRegex: {path: "spec.template.spec.containers[0].image", pattern: "@sha256:[0-9a-f]{64}$"}

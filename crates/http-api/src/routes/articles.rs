@@ -1,12 +1,9 @@
-use std::collections::HashMap;
-
 use axum::{
     Json,
     extract::{Path, Query, State},
     http::StatusCode,
 };
 use chrono::{DateTime, Utc};
-use deepref_core::normalize_doi;
 use deepref_events::{
     DomainPayload, EntityType, EventEnvelope, MetricsRecomputeRequested,
     SUBJECT_METRICS_RECOMPUTE_REQUESTED,
@@ -19,7 +16,6 @@ use uuid::Uuid;
 use super::pagination::{PaginatedResponse, PaginationParams, page};
 use crate::{
     error::{ApiError, ErrorResponse},
-    outbox,
     state::AppState,
 };
 
@@ -108,44 +104,34 @@ pub(crate) async fn list_reports(
     let limit = pagination.limit()?;
     let cursor: Option<(f64, i32, i32, Uuid)> = pagination.decode()?;
     let rows = sqlx::query(
-        r#"SELECT r.id AS report_id,doi.value AS doi,
-        r.title,COALESCE(r.publication_year,w.issued_year) AS issued_year,w.work_type,
-        COALESCE(w.total_citations,0) AS total_citations,
-        COALESCE(pw.internal_citations,0) AS internal_citations,
-        COALESCE(pw.outbound_internal_references,0) AS outbound_internal_references,
-        COALESCE(pw.rank_score,0) AS rank_score,pw.metrics_computed_at,
-        (pw.metrics_computed_at IS NULL OR pw.metrics_computed_at < now()-interval '1 hour') AS metrics_stale
+        r#"SELECT r.id AS report_id, doi.value AS doi, r.title,
+          r.publication_year AS issued_year, r.work_type,
+          r.total_citations::int AS total_citations,
+          pr.internal_citations::int AS internal_citations,
+          pr.outbound_internal_references::int AS outbound_internal_references,
+          pr.rank_score, pr.metrics_computed_at,
+          (pr.metrics_computed_at IS NULL OR pr.metrics_computed_at < now()-interval '1 hour') AS metrics_stale
         FROM project_reports pr
-        JOIN reports r ON r.id=pr.report_id
+        JOIN reports r ON r.id = pr.report_id
         LEFT JOIN LATERAL (
-          SELECT value,normalized_value
-          FROM report_identifiers
-          WHERE report_id=r.id AND scheme='doi'
-          ORDER BY created_at,id
-          LIMIT 1
-        ) doi ON TRUE
-        LEFT JOIN project_works pw ON pw.project_id=pr.project_id AND pw.canonical_doi=doi.normalized_value
-        LEFT JOIN works w ON w.canonical_doi=pw.canonical_doi
-        WHERE pr.project_id=$1 AND ($2::float8 IS NULL OR
-          (COALESCE(pw.rank_score,0),COALESCE(pw.internal_citations,0),COALESCE(w.total_citations,0),pr.report_id)<($2,$3,$4,$5))
-        ORDER BY COALESCE(pw.rank_score,0) DESC,COALESCE(pw.internal_citations,0) DESC,
-          COALESCE(w.total_citations,0) DESC,pr.report_id DESC LIMIT $6"#,
-    ).bind(project_id).bind(cursor.as_ref().map(|value| value.0))
-        .bind(cursor.as_ref().map(|value| value.1)).bind(cursor.as_ref().map(|value| value.2))
-        .bind(cursor.as_ref().map(|value| value.3)).bind(limit + 1)
-        .fetch_all(&state.pool).await?;
-    let graph_stale = match &state.graph {
-        Some(graph) => graph.ping().await.is_err(),
-        None => true,
-    };
-    let reports = rows
-        .into_iter()
-        .map(report_from_row)
-        .map(|mut report| {
-            report.metrics_stale |= graph_stale;
-            report
-        })
-        .collect();
+          SELECT value FROM report_identifiers
+          WHERE report_id = pr.report_id AND scheme = 'doi'
+          ORDER BY created_at, id LIMIT 1
+        ) doi ON true
+        WHERE pr.project_id = $1 AND ($2::float8 IS NULL OR
+          (pr.rank_score,pr.internal_citations::int,r.total_citations::int,pr.report_id) < ($2,$3,$4,$5))
+        ORDER BY pr.rank_score DESC,pr.internal_citations DESC,r.total_citations DESC,pr.report_id DESC
+        LIMIT $6"#,
+    )
+    .bind(project_id)
+    .bind(cursor.as_ref().map(|value| value.0))
+    .bind(cursor.as_ref().map(|value| value.1))
+    .bind(cursor.as_ref().map(|value| value.2))
+    .bind(cursor.as_ref().map(|value| value.3))
+    .bind(limit + 1)
+    .fetch_all(&state.pool)
+    .await?;
+    let reports = rows.into_iter().map(report_from_row).collect();
     Ok(Json(page(reports, limit as usize, |report| {
         (
             report.rank_score,
@@ -164,34 +150,25 @@ pub(crate) async fn get_report(
     Path((project_id, report_id)): Path<(Uuid, Uuid)>,
 ) -> Result<Json<ReportDetailDto>, ApiError> {
     let row = sqlx::query(
-        r#"SELECT r.id AS report_id,doi.value AS doi,
-        COALESCE(r.title,w.title) AS title,COALESCE(r.abstract_text,w.abstract_text) AS abstract_text,
-        COALESCE(r.publication_year,w.issued_year) AS issued_year,w.published_year,w.work_type,
-        w.publisher,COALESCE(r.journal,w.container_title) AS container_title,COALESCE(r.url,w.url) AS url,
-        COALESCE(w.total_citations,0) AS total_citations,COALESCE(w.references_count,0) AS references_count,
-        r.raw,pw.metrics_computed_at,
-        (pw.metrics_computed_at IS NULL OR pw.metrics_computed_at<now()-interval '1 hour') AS metrics_stale
+        r#"SELECT r.id AS report_id,doi.value AS doi,r.title,r.abstract_text,
+          r.publication_year AS issued_year,r.publication_year AS published_year,
+          r.work_type,r.publisher,COALESCE(r.journal,r.container_title) AS container_title,r.url,
+          r.total_citations::int AS total_citations,r.references_count::int AS references_count,
+          r.raw,pr.metrics_computed_at,
+          (pr.metrics_computed_at IS NULL OR pr.metrics_computed_at < now()-interval '1 hour') AS metrics_stale
         FROM project_reports pr
-        JOIN reports r ON r.id=pr.report_id
+        JOIN reports r ON r.id = pr.report_id
         LEFT JOIN LATERAL (
-          SELECT value,normalized_value
-          FROM report_identifiers
-          WHERE report_id=r.id AND scheme='doi'
-          ORDER BY created_at,id
-          LIMIT 1
-        ) doi ON TRUE
-        LEFT JOIN project_works pw ON pw.project_id=pr.project_id AND pw.canonical_doi=doi.normalized_value
-        LEFT JOIN works w ON w.canonical_doi=pw.canonical_doi
-        WHERE pr.project_id=$1 AND pr.report_id=$2"#,
+          SELECT value FROM report_identifiers
+          WHERE report_id = pr.report_id AND scheme = 'doi'
+          ORDER BY created_at, id LIMIT 1
+        ) doi ON true
+        WHERE pr.project_id = $1 AND pr.report_id = $2"#,
     )
     .bind(project_id)
     .bind(report_id)
     .fetch_one(&state.pool)
     .await?;
-    let graph_stale = match &state.graph {
-        Some(graph) => graph.ping().await.is_err(),
-        None => true,
-    };
     Ok(Json(ReportDetailDto {
         report_id: row.get("report_id"),
         doi: row.get("doi"),
@@ -206,94 +183,48 @@ pub(crate) async fn get_report(
         total_citations: row.get("total_citations"),
         references_count: row.get("references_count"),
         metrics_as_of: row.get("metrics_computed_at"),
-        metrics_stale: row.get::<bool, _>("metrics_stale") || graph_stale,
+        metrics_stale: row.get("metrics_stale"),
         raw: row.get("raw"),
     }))
 }
 
 #[utoipa::path(get, path="/projects/{project_id}/graph", operation_id="getProjectGraph", tag="reports",
     params(("project_id"=Uuid, Path)),
-    responses((status=200,body=ProjectGraphDto),(status=503,body=ErrorResponse)))]
+    responses((status=200,body=ProjectGraphDto),(status=500,body=ErrorResponse)))]
 pub(crate) async fn project_graph(
     State(state): State<AppState>,
     Path(project_id): Path<Uuid>,
 ) -> Result<Json<ProjectGraphDto>, ApiError> {
-    let graph = state
-        .graph
-        .as_ref()
-        .ok_or_else(|| ApiError::graph_unavailable(state.graph_retry_after))?;
     let projection = projection_metadata(&state, project_id).await?;
-    let graph_data = graph
-        .project_graph(
-            project_id,
-            deepref_graph::ProjectionMetadata {
-                revision: projection.revision,
-                lag: projection.lag,
-                last_success_at: projection.last_success_at,
-            },
-        )
-        .await
-        .map_err(|error| {
-            tracing::warn!(%error, %project_id, "graph query failed");
-            ApiError::graph_unavailable(state.graph_retry_after)
-        })?;
-    let report_mappings = graph_report_mappings(&state, project_id, &graph_data.nodes).await?;
-    let nodes = graph_data
+    let graph = deepref_postgres::load_project_graph(&state.pool, project_id).await?;
+    let nodes = graph
         .nodes
         .into_iter()
-        .filter_map(|node| {
-            let normalized_doi = normalize_doi(&node.doi).ok()?;
-            let report = report_mappings.get(&normalized_doi)?;
-            Some(ReportDto {
-                report_id: report.report_id,
-                doi: Some(report.doi.clone()),
-                title: report.title.clone().or(node.title),
-                issued_year: report
-                    .issued_year
-                    .or_else(|| node.issued_year.map(|year| year as i32)),
-                work_type: None,
-                total_citations: node.total_citations as i32,
-                internal_citations: 0,
-                outbound_internal_references: 0,
-                rank_score: 0.0,
-                metrics_as_of: projection.last_success_at,
-                metrics_stale: projection.lag > 0,
-            })
-        })
+        .map(report_from_graph_node)
         .collect();
-    let edges = graph_data
+    let edges = graph
         .edges
         .into_iter()
-        .filter_map(|edge| {
-            let source = normalize_doi(&edge.source)
-                .ok()
-                .and_then(|doi| report_mappings.get(&doi))?;
-            let target = normalize_doi(&edge.target)
-                .ok()
-                .and_then(|doi| report_mappings.get(&doi))?;
-            Some(GraphEdgeDto {
-                source: source.report_id,
-                target: target.report_id,
-            })
+        .map(|edge| GraphEdgeDto {
+            source: edge.source,
+            target: edge.target,
         })
         .collect();
     Ok(Json(ProjectGraphDto {
         nodes,
         edges,
         projection,
-        truncated: graph_data.truncated,
+        truncated: graph.truncated,
     }))
 }
 
 #[utoipa::path(get, path="/projects/{project_id}/recommendations", operation_id="getProjectRecommendations", tag="reports",
-    params(("project_id"=Uuid, Path)), responses((status=200,body=RecommendationGroupsDto),(status=503,body=ErrorResponse)))]
+    params(("project_id"=Uuid, Path)), responses((status=200,body=RecommendationGroupsDto),(status=500,body=ErrorResponse)))]
 pub(crate) async fn recommendations(
     State(state): State<AppState>,
     Path(project_id): Path<Uuid>,
 ) -> Result<Json<RecommendationGroupsDto>, ApiError> {
     let graph = project_graph(State(state), Path(project_id)).await?.0;
-    // The graph query itself is bounded at 2,000 nodes; response groups are
-    // explicitly limited and never load an unbounded SQL article set.
     Ok(Json(RecommendationGroupsDto {
         foundational: graph.nodes.iter().take(5).cloned().collect(),
         core_to_project: graph.nodes.iter().skip(5).take(5).cloned().collect(),
@@ -326,17 +257,28 @@ pub(crate) async fn recompute_metrics(
         }),
     );
     sqlx::query(
-        "INSERT INTO domain_events (event_id,schema_version,event_type,entity_type,entity_key,revision,payload,correlation_id,causation_id,created_at) \
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)",
-    ).bind(event.event_id).bind(event.schema_version as i16).bind(&event.event_type)
-        .bind(event.entity_type.as_str()).bind(&event.entity_key).bind(event.revision)
-        .bind(serde_json::to_value(&event.payload)?).bind(event.correlation_id)
-        .bind(event.causation_id).bind(event.occurred_at).execute(&mut *tx).await?;
-    outbox::enqueue(
+        "INSERT INTO domain_events (event_id,schema_version,event_type,entity_type,entity_key,revision,payload,correlation_id,causation_id,created_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)",
+    )
+    .bind(event.event_id)
+    .bind(event.schema_version as i16)
+    .bind(&event.event_type)
+    .bind(event.entity_type.as_str())
+    .bind(&event.entity_key)
+    .bind(event.revision)
+    .bind(serde_json::to_value(&event.payload)?)
+    .bind(event.correlation_id)
+    .bind(event.causation_id)
+    .bind(event.occurred_at)
+    .execute(&mut *tx)
+    .await?;
+    deepref_postgres::enqueue_job(
         &mut tx,
-        event.event_id,
-        SUBJECT_METRICS_RECOMPUTE_REQUESTED,
-        &event,
+        &deepref_postgres::job(
+            event.event_id,
+            "recompute_metrics",
+            serde_json::to_value(&event)?,
+            format!("recompute_metrics:{project_id}:{}", event.event_id),
+        ),
     )
     .await?;
     tx.commit().await?;
@@ -355,17 +297,23 @@ async fn projection_metadata(
     project_id: Uuid,
 ) -> Result<ProjectionMetadata, ApiError> {
     let row = sqlx::query(
-        "SELECT revision,lag,last_success_at FROM projection_state WHERE projection_name='graph' \
-         AND (project_id=$1 OR project_id IS NULL) ORDER BY project_id NULLS LAST LIMIT 1",
+    "SELECT revision,lag,last_success_at FROM projection_state WHERE projection_name='postgres_graph' AND (project_id=$1 OR project_id IS NULL) ORDER BY project_id NULLS LAST LIMIT 1",
     )
     .bind(project_id)
-    .fetch_one(&state.pool)
+    .fetch_optional(&state.pool)
     .await?;
-    Ok(ProjectionMetadata {
-        revision: row.get("revision"),
-        lag: row.get("lag"),
-        last_success_at: row.get("last_success_at"),
-    })
+    Ok(row.map_or(
+        ProjectionMetadata {
+            revision: 0,
+            lag: 0,
+            last_success_at: None,
+        },
+        |row| ProjectionMetadata {
+            revision: row.get("revision"),
+            lag: row.get("lag"),
+            last_success_at: row.get("last_success_at"),
+        },
+    ))
 }
 
 fn report_from_row(row: sqlx::postgres::PgRow) -> ReportDto {
@@ -384,53 +332,18 @@ fn report_from_row(row: sqlx::postgres::PgRow) -> ReportDto {
     }
 }
 
-#[derive(Debug, Clone)]
-struct GraphReportMapping {
-    report_id: Uuid,
-    doi: String,
-    title: Option<String>,
-    issued_year: Option<i32>,
-}
-
-async fn graph_report_mappings(
-    state: &AppState,
-    project_id: Uuid,
-    nodes: &[deepref_graph::GraphNode],
-) -> Result<HashMap<String, GraphReportMapping>, ApiError> {
-    let normalized_dois = nodes
-        .iter()
-        .filter_map(|node| normalize_doi(&node.doi).ok())
-        .collect::<Vec<_>>();
-    if normalized_dois.is_empty() {
-        return Ok(HashMap::new());
+fn report_from_graph_node(node: deepref_graph::GraphNode) -> ReportDto {
+    ReportDto {
+        report_id: node.report_id,
+        doi: node.doi,
+        title: node.title,
+        issued_year: node.issued_year,
+        work_type: node.work_type,
+        total_citations: node.total_citations as i32,
+        internal_citations: node.internal_citations as i32,
+        outbound_internal_references: node.outbound_internal_references as i32,
+        rank_score: node.rank_score,
+        metrics_as_of: node.metrics_as_of,
+        metrics_stale: node.metrics_as_of.is_none(),
     }
-
-    let rows = sqlx::query(
-        r#"SELECT requested.normalized_doi,r.id AS report_id,ri.value AS doi,
-        r.title,r.publication_year AS issued_year
-        FROM unnest($2::text[]) AS requested(normalized_doi)
-        JOIN report_identifiers ri ON ri.scheme='doi' AND ri.normalized_value=requested.normalized_doi
-        JOIN project_reports pr ON pr.project_id=$1 AND pr.report_id=ri.report_id
-        JOIN reports r ON r.id=pr.report_id"#,
-    )
-    .bind(project_id)
-    .bind(normalized_dois)
-    .fetch_all(&state.pool)
-    .await?;
-
-    Ok(rows
-        .into_iter()
-        .map(|row| {
-            let normalized_doi: String = row.get("normalized_doi");
-            (
-                normalized_doi,
-                GraphReportMapping {
-                    report_id: row.get("report_id"),
-                    doi: row.get("doi"),
-                    title: row.get("title"),
-                    issued_year: row.get("issued_year"),
-                },
-            )
-        })
-        .collect())
 }

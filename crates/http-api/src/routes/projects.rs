@@ -14,7 +14,6 @@ use uuid::Uuid;
 
 use crate::{
     error::{ApiError, ErrorResponse},
-    outbox,
     state::AppState,
 };
 
@@ -238,7 +237,6 @@ pub(crate) async fn delete_project(
     .bind(event.event_id)
     .execute(&mut *tx)
     .await?;
-    outbox::enqueue(&mut tx, event.event_id, SUBJECT_PROJECT_TOMBSTONED, &event).await?;
     let result = sqlx::query("DELETE FROM projects WHERE id = $1")
         .bind(project_id)
         .execute(&mut *tx)

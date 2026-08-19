@@ -191,14 +191,30 @@ WHERE project_id = '00000000-0000-4000-8000-000000000001'
 
 -- Seed the v2 evidence workspace after the legacy fixture rows exist. The production migration
 -- performs the same deterministic compatibility import for data that already exists.
-INSERT INTO reports (id, title, abstract_text, publication_year, journal, url, raw)
+INSERT INTO reports (
+  id, title, abstract_text, publication_year, journal, container_title, url,
+  work_type, publisher, total_citations, references_count, raw
+)
 SELECT
   format('%s-%s-%s-%s-%s', substr(md5('deepref:report:' || w.canonical_doi), 1, 8),
     substr(md5('deepref:report:' || w.canonical_doi), 9, 4), substr(md5('deepref:report:' || w.canonical_doi), 13, 4),
     substr(md5('deepref:report:' || w.canonical_doi), 17, 4), substr(md5('deepref:report:' || w.canonical_doi), 21, 12))::uuid,
-  w.title, w.abstract_text, COALESCE(w.published_year, w.issued_year), w.container_title, w.url, w.raw
+  w.title, w.abstract_text, COALESCE(w.published_year, w.issued_year), w.container_title,
+  w.container_title, w.url, w.work_type, w.publisher, w.total_citations, w.references_count, w.raw
 FROM works w
-ON CONFLICT (id) DO UPDATE SET title = EXCLUDED.title, publication_year = EXCLUDED.publication_year, raw = EXCLUDED.raw, updated_at = now();
+ON CONFLICT (id) DO UPDATE SET
+  title = EXCLUDED.title,
+  abstract_text = EXCLUDED.abstract_text,
+  publication_year = EXCLUDED.publication_year,
+  journal = EXCLUDED.journal,
+  container_title = EXCLUDED.container_title,
+  url = EXCLUDED.url,
+  work_type = EXCLUDED.work_type,
+  publisher = EXCLUDED.publisher,
+  total_citations = EXCLUDED.total_citations,
+  references_count = EXCLUDED.references_count,
+  raw = EXCLUDED.raw,
+  updated_at = now();
 
 INSERT INTO report_identifiers (id, report_id, scheme, value, normalized_value)
 SELECT gen_random_uuid(), r.id, 'doi', w.canonical_doi, lower(w.canonical_doi)
@@ -224,6 +240,35 @@ ON CONFLICT (id) DO NOTHING;
 INSERT INTO project_reports (project_id, report_id, first_seen_record_id)
 SELECT project_id, report_id, id FROM records WHERE project_id = '00000000-0000-4000-8000-000000000001' AND report_id IS NOT NULL
 ON CONFLICT (project_id, report_id) DO UPDATE SET first_seen_record_id = COALESCE(project_reports.first_seen_record_id, EXCLUDED.first_seen_record_id);
+
+INSERT INTO citations (
+  project_id, source_report_id, target_report_id, source,
+  legacy_source_doi, legacy_target_doi, created_at
+)
+SELECT
+  '00000000-0000-4000-8000-000000000001', source_report.report_id, target_report.report_id,
+  'local-fixture', edge.source_doi, edge.target_doi, '2026-01-01T00:00:00Z'
+FROM (
+  VALUES
+    ('10.5555/deepref.seed.1', '10.5555/deepref.seed.2'),
+    ('10.5555/deepref.seed.1', '10.5555/deepref.seed.3'),
+    ('10.5555/deepref.seed.2', '10.5555/deepref.seed.3')
+) AS edge(source_doi, target_doi)
+JOIN report_identifiers source_report_identifier
+  ON source_report_identifier.scheme = 'doi'
+ AND source_report_identifier.normalized_value = edge.source_doi
+JOIN report_identifiers target_report_identifier
+  ON target_report_identifier.scheme = 'doi'
+ AND target_report_identifier.normalized_value = edge.target_doi
+JOIN reports source_report ON source_report.id = source_report_identifier.report_id
+JOIN reports target_report ON target_report.id = target_report_identifier.report_id
+ON CONFLICT (project_id, source_report_id, target_report_id) DO UPDATE SET
+  source = EXCLUDED.source,
+  legacy_source_doi = EXCLUDED.legacy_source_doi,
+  legacy_target_doi = EXCLUDED.legacy_target_doi,
+  created_at = EXCLUDED.created_at;
+
+SELECT recompute_project_report_metrics('00000000-0000-4000-8000-000000000001');
 
 INSERT INTO protocol_versions (id, project_id, version, name, status, criteria, published_at)
 VALUES (

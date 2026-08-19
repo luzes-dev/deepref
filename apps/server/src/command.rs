@@ -5,6 +5,7 @@ pub enum Command {
     All,
     Migrate,
     ImportLegacy,
+    PrintOpenApi,
 }
 
 impl Command {
@@ -17,7 +18,10 @@ impl Command {
             [command] if command == "all" => Ok(Self::All),
             [command] if command == "migrate" => Ok(Self::Migrate),
             [command] if command == "import-legacy" => Ok(Self::ImportLegacy),
-            _ => anyhow::bail!("usage: deepref-server [serve|worker|all|migrate|import-legacy]"),
+            [command] if command == "--print-openapi" => Ok(Self::PrintOpenApi),
+            _ => anyhow::bail!(
+                "usage: deepref-server [serve|worker|all|migrate|import-legacy|--print-openapi]"
+            ),
         }
     }
 }
@@ -38,6 +42,10 @@ mod tests {
         assert_eq!(
             Command::parse(["import-legacy".into()]).unwrap(),
             Command::ImportLegacy
+        );
+        assert_eq!(
+            Command::parse(["--print-openapi".into()]).unwrap(),
+            Command::PrintOpenApi
         );
     }
 

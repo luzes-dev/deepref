@@ -2,97 +2,43 @@
 
 ## Purpose and scope
 
-Validate or recover production PostgreSQL from an instance/AZ failure using Multi-AZ failover, or restore an isolated new instance to an approved point in time. The target is RPO no more than five minutes and RTO no more than sixty minutes for service/AZ failures; regional loss is excluded.
+Validate or recover production PostgreSQL from an instance/AZ failure using Multi-AZ failover, or restore an isolated new instance to an approved point in time. The target is RPO no more than five minutes and RTO no more than sixty minutes; regional loss is excluded.
 
 ## Safety warnings
 
-- `reboot-db-instance --force-failover` is disruptive and production-only Multi-AZ behavior. Run it only as an approved drill or incident mitigation.
-- PITR creates a new database. Never restore over, delete, rename, or disable protection on the source as the first action.
-- Never make the restored database public or attach unreviewed security groups/subnets.
-- Do not infer data correctness from `available`; validate schema, counts/hashes, transactions, and application behavior.
-- RPO/RTO clocks and requested restore time must be recorded before action.
+- `reboot-db-instance --force-failover` is disruptive and production-only behavior.
+- PITR creates a new database. Never restore over, delete, rename, or disable protection on the source first.
+- Keep the restored database private and validate data, schema, jobs, and graph metrics rather than only instance availability.
 
 ## Prerequisites and authorization
 
-- Incident or approved production recovery drill with incident commander, data owner, platform operator, UTC clock observer, and protected AWS role.
-- Caller/account verified, source identifier `ambient-scribes-production`, current `LatestRestorableTime`, healthy automated backups, and sufficient RDS quota/storage/IP capacity.
-- Approved RPO/RTO clock definitions, validation queries, quarantine network, cutover plan, rollback/safe-stop authority, and evidence store.
-- Promotions, migrations, drains, and unrelated maintenance frozen.
+Approved incident/drill, data/platform owners, protected AWS role, current `LatestRestorableTime`, healthy backups, private validation network, cutover plan, and evidence store.
 
 ## Triggers and symptoms
 
-- RDS instance/AZ failure, connection outage, or AWS failover event.
-- Suspected logical data corruption/deletion requiring recovery to a pre-event timestamp.
-- Scheduled Multi-AZ failover or PITR acceptance drill.
+RDS instance/AZ failure, connection outage, logical corruption requiring recovery, or scheduled Multi-AZ/PITR acceptance drill.
 
 ## Ordered steps
 
-1. Establish identity, source metadata, and clocks:
-
-   ```bash
-   export AWS_REGION=sa-east-1
-   export DB_INSTANCE_ID=ambient-scribes-production
-   export STARTED_AT="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
-   aws sts get-caller-identity
-   aws rds describe-db-instances --region "$AWS_REGION" \
-     --db-instance-identifier "$DB_INSTANCE_ID" > /tmp/deepref-rds-before.json
-   jq '.DBInstances[0] | {DBInstanceStatus,MultiAZ,DeletionProtection,BackupRetentionPeriod,LatestRestorableTime,DBSubnetGroup,VpcSecurityGroups}' \
-     /tmp/deepref-rds-before.json
-   ```
-
-2. Confirm `MultiAZ=true`, `DeletionProtection=true`, retention `35`, private networking, the approved incident/drill, and the exact selected path.
-
-3. **Failover path only**: announce the disruption and force one controlled failover:
-
-   ```bash
-   aws rds reboot-db-instance --region "$AWS_REGION" \
-     --db-instance-identifier "$DB_INSTANCE_ID" \
-     --force-failover
-   aws rds wait db-instance-available --region "$AWS_REGION" \
-     --db-instance-identifier "$DB_INSTANCE_ID"
-   ```
-
-   Observe API readiness, reconnects, worker leases/outbox, and RDS events continuously. Do not issue a second failover to “unstick” the first.
-
-4. **PITR path only**: record an approved RFC3339 `RESTORE_TIME` not later than `LatestRestorableTime`. Derive the original private subnet group and security group IDs from the captured description:
-
-   ```bash
-   export RESTORE_TIME=REPLACE_WITH_APPROVED_RFC3339_UTC
-   export TARGET_DB_INSTANCE_ID="ambient-scribes-production-pitr-$(date -u +%Y%m%d%H%M%S)"
-   export DB_SUBNET_GROUP="$(jq -r '.DBInstances[0].DBSubnetGroup.DBSubnetGroupName' /tmp/deepref-rds-before.json)"
-   mapfile -t DB_SECURITY_GROUPS < <(jq -r '.DBInstances[0].VpcSecurityGroups[].VpcSecurityGroupId' /tmp/deepref-rds-before.json)
-
-   aws rds restore-db-instance-to-point-in-time \
-     --region "$AWS_REGION" \
-     --source-db-instance-identifier "$DB_INSTANCE_ID" \
-     --target-db-instance-identifier "$TARGET_DB_INSTANCE_ID" \
-     --restore-time "$RESTORE_TIME" \
-     --db-subnet-group-name "$DB_SUBNET_GROUP" \
-     --vpc-security-group-ids "${DB_SECURITY_GROUPS[@]}" \
-     --no-publicly-accessible \
-     --deletion-protection
-   aws rds wait db-instance-available --region "$AWS_REGION" \
-     --db-instance-identifier "$TARGET_DB_INSTANCE_ID"
-   ```
-
-5. From the quarantined private validator, use approved temporary credentials to verify TLS, schema version, critical row/count invariants, newest durable transaction, sampled hashes, and absence/presence of the incident transaction at the selected time. Do not connect production workloads yet.
-
-6. For actual recovery, prepare a reviewed OpenTofu/secret/GitOps cutover that preserves the original instance. Because the current roots own a specific RDS resource, do not point Terraform at the restored instance or edit runtime Secrets ad hoc without an import/configuration plan and data-owner approval.
-
-7. After cutover, verify API, worker/outbox, NATS delivery, projection lag, and graph behavior. A Neo4j rebuild may follow only after PostgreSQL is accepted as authoritative.
+1. Capture caller, source metadata, start time, backup state, private networking, and clocks.
+2. For failover, perform one approved forced failover and wait for availability.
+3. For PITR, restore a new private instance at the approved timestamp with the source subnet/security groups.
+4. From the quarantined validator, verify schema, critical row/count invariants, newest durable transaction, queued/running/dead jobs, UUID graph facts, metric snapshots, and application behavior.
+5. Prepare a reviewed OpenTofu/secret/GitOps cutover if recovery is accepted; preserve the source.
+6. Verify API, worker lease recovery, ingestion durability, graph freshness, and alerts.
 
 ## Verification
 
-Record `RECOVERED_AT` when the agreed core service and data checks pass, and compute observed RTO from `STARTED_AT`. For PITR, compare the newest accepted durable transaction timestamp to the failure/restore target for observed RPO. Verify RDS events, private/deletion-protected posture, `/health/ready`, `/health/dependencies`, ingestion durability, and alerts.
+Record recovery time and observed RTO. For PITR, compare the newest accepted transaction with the failure/restore target for observed RPO. Verify RDS private/deletion-protected posture, `/api/health/ready`, `/api/health/dependencies`, and durable job convergence.
 
 ## Rollback or safe stop
 
-For failover, stop after one API request and await AWS; do not toggle AZs repeatedly. For PITR, keep the restored instance quarantined if validation fails and preserve the source. Cancel cutover before changing ownership. Cleanup of a deletion-protected restored instance is a later, separately approved data-retention change—never an automatic runbook step.
+Stop after one failover and await AWS. Keep an invalid PITR quarantined and preserve the source. Cancel cutover before changing ownership; cleanup is a separate approved retention action.
 
 ## Escalation
 
-Escalate stalled/unavailable RDS or restore failures to AWS Support/platform owner; data ambiguity to the data owner and incident commander; suspected malicious deletion to security; an approaching target breach to leadership/communications.
+Escalate RDS/restore failures to AWS/platform, data ambiguity to the data owner and incident commander, suspected malicious deletion to security, and target breach to leadership.
 
 ## Evidence and audit capture
 
-Retain authorization, caller/account, source/target identifiers, redacted before/after descriptions, AWS events, recovery-point/restore time, clock definitions and observed RPO/RTO, validation queries/results, cutover plan/approvals, health/queue/projection evidence, alerts, and cleanup decision. Delete `/tmp` metadata per runner policy; it must contain no credentials.
+Retain authorization, caller/account, source/target IDs, redacted descriptions, AWS events, recovery/restore time, clock definitions, validation results, cutover approvals, health/job evidence, alerts, and cleanup decision.

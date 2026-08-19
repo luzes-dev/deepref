@@ -4,6 +4,8 @@ use deepref_domain::{
     ScreeningValidationError, transition,
 };
 
+pub mod jobs;
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ScreenReportCommand {
     pub project_id: ProjectId,

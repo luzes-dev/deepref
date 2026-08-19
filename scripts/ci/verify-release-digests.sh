@@ -27,7 +27,7 @@ if source_path:
             raise SystemExit(f"promoted lock changed immutable field: {field}")
     if lock["chart"]["version"] != source["chart"]["version"]:
         raise SystemExit("promoted lock changed chart version")
-    for name in ("chart", "api", "worker", "projector", "web"):
+    for name in ("chart", "api", "worker", "web"):
         left = lock["chart"] if name == "chart" else lock["images"][name]
         right = source["chart"] if name == "chart" else source["images"][name]
         for field in ("digest", "referrers"):
