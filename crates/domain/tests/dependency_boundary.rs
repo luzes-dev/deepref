@@ -41,10 +41,16 @@ fn domain_dependencies_remain_pure() {
                 .join("Cargo.toml")
                 .as_path()
         ),
-        ["serde", "thiserror", "unicode-normalization", "uuid"]
-            .into_iter()
-            .map(str::to_owned)
-            .collect()
+        [
+            "serde",
+            "thiserror",
+            "unicode-normalization",
+            "unicode_categories",
+            "uuid",
+        ]
+        .into_iter()
+        .map(str::to_owned)
+        .collect()
     );
 }
 
@@ -59,6 +65,7 @@ fn application_dependencies_are_domain_and_pure_data_or_error_crates() {
         "serde_json",
         "thiserror",
         "time",
+        "rapidfuzz",
         "uuid",
     ];
 

@@ -8,7 +8,8 @@ pub mod bibliography;
 pub use acquisition::{AcquisitionRunId, AcquisitionSource, AcquisitionStatus, ImportFormat};
 pub use bibliography::{
     Citation, DoiError, IdentifierError, IdentifierScheme, Record, RecordId, Report, ReportId,
-    ReportIdentifier, Study, StudyId, Title, TitleError, normalize_doi,
+    ReportIdentifier, Study, StudyId, Title, TitleError, normalize_bibliography_title,
+    normalize_doi,
 };
 
 macro_rules! typed_id {

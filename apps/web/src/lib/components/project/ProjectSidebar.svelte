@@ -9,6 +9,7 @@
 	import ClipboardCheckIcon from '@lucide/svelte/icons/clipboard-check';
 	import FileTextIcon from '@lucide/svelte/icons/file-text';
 	import GitForkIcon from '@lucide/svelte/icons/git-fork';
+	import GitCompareIcon from '@lucide/svelte/icons/git-compare';
 	import HomeIcon from '@lucide/svelte/icons/home';
 	import LightbulbIcon from '@lucide/svelte/icons/lightbulb';
 	import ProjectSelector from './ProjectSelector.svelte';
@@ -52,6 +53,13 @@
 	const screeningHref = $derived(
 		workspace.selectedProjectId
 			? resolve('/projects/[projectId]/screening/title-abstract', {
+					projectId: workspace.selectedProjectId
+				})
+			: undefined
+	);
+	const deduplicationHref = $derived(
+		workspace.selectedProjectId
+			? resolve('/projects/[projectId]/deduplication', {
 					projectId: workspace.selectedProjectId
 				})
 			: undefined
@@ -157,6 +165,38 @@
 						>
 							<ClipboardCheckIcon class="mr-2 size-4" aria-hidden={true} />
 							Screening
+						</a>
+					{/if}
+				{/if}
+				{#if deduplicationHref}
+					{#if collapsed}
+						<a
+							href={deduplicationHref}
+							title="Deduplication"
+							class={cn(
+								buttonVariants({
+									variant: 'outline',
+									size: 'icon',
+									class: 'size-9'
+								})
+							)}
+						>
+							<GitCompareIcon aria-hidden={true} />
+							<span class="sr-only">Deduplication</span>
+						</a>
+					{:else}
+						<a
+							href={deduplicationHref}
+							class={cn(
+								buttonVariants({
+									variant: 'outline',
+									size: 'sm',
+									class: 'justify-start'
+								})
+							)}
+						>
+							<GitCompareIcon class="mr-2 size-4" aria-hidden={true} />
+							Deduplication
 						</a>
 					{/if}
 				{/if}

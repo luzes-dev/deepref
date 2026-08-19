@@ -1,5 +1,5 @@
 use deepref_application::RawRecord;
-use deepref_domain::ImportFormat;
+use deepref_domain::{ImportFormat, normalize_bibliography_title};
 use serde_json::Value;
 use sqlx::{PgPool, Postgres, Row, Transaction};
 use thiserror::Error;
@@ -132,8 +132,8 @@ pub async fn persist_import(
         let inserted = sqlx::query(
             "INSERT INTO records
              (id,project_id,report_id,acquisition_run_id,source,source_key,title,abstract_text,
-              publication_year,journal,authors,source_identifiers,raw)
-             VALUES ($1,$2,NULL,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12)
+              publication_year,journal,authors,source_identifiers,normalized_title,raw)
+             VALUES ($1,$2,NULL,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
              ON CONFLICT (project_id,source,source_key) DO NOTHING",
         )
         .bind(record_id)
@@ -147,6 +147,7 @@ pub async fn persist_import(
         .bind(&record.journal)
         .bind(serde_json::to_value(&record.authors)?)
         .bind(serde_json::to_value(&record.source_identifiers)?)
+        .bind(record.title.as_deref().map(normalize_bibliography_title))
         .bind(&record.raw)
         .execute(&mut *tx)
         .await?;
