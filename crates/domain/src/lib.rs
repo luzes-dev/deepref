@@ -2,6 +2,13 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use uuid::Uuid;
 
+pub mod bibliography;
+
+pub use bibliography::{
+    Citation, DoiError, IdentifierError, IdentifierScheme, Record, RecordId, Report, ReportId,
+    ReportIdentifier, Study, StudyId, Title, TitleError, normalize_doi,
+};
+
 macro_rules! typed_id {
     ($name:ident) => {
         #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -32,8 +39,6 @@ macro_rules! typed_id {
     };
 }
 
-typed_id!(ReportId);
-typed_id!(StudyId);
 typed_id!(ProjectId);
 typed_id!(ProtocolVersionId);
 typed_id!(ExclusionReasonId);

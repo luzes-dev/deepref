@@ -4,6 +4,7 @@ pub enum Command {
     Worker,
     All,
     Migrate,
+    ImportLegacy,
 }
 
 impl Command {
@@ -15,7 +16,8 @@ impl Command {
             [command] if command == "worker" => Ok(Self::Worker),
             [command] if command == "all" => Ok(Self::All),
             [command] if command == "migrate" => Ok(Self::Migrate),
-            _ => anyhow::bail!("usage: deepref-server [serve|worker|all|migrate]"),
+            [command] if command == "import-legacy" => Ok(Self::ImportLegacy),
+            _ => anyhow::bail!("usage: deepref-server [serve|worker|all|migrate|import-legacy]"),
         }
     }
 }
@@ -32,6 +34,10 @@ mod tests {
         assert_eq!(
             Command::parse(["migrate".into()]).unwrap(),
             Command::Migrate
+        );
+        assert_eq!(
+            Command::parse(["import-legacy".into()]).unwrap(),
+            Command::ImportLegacy
         );
     }
 

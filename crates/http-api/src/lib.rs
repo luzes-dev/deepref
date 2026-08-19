@@ -10,23 +10,22 @@ use std::future::Future;
 use std::sync::Arc;
 
 use deepref_graph::GraphRepository;
-use sqlx::postgres::PgPoolOptions;
+use sqlx::{PgPool, postgres::PgPoolOptions};
 
 use crate::{config::ApiConfig, state::AppState};
 
 pub async fn migrate(config: &ApiConfig) -> anyhow::Result<()> {
-    let database = &config.runtime.database;
-    let pool = PgPoolOptions::new()
-        .min_connections(database.pool_min)
-        .max_connections(database.pool_max)
-        .acquire_timeout(database.acquire_timeout)
-        .idle_timeout(Some(database.idle_timeout))
-        .max_lifetime(Some(database.max_lifetime))
-        .connect(&database.url)
-        .await?;
+    let pool = database_pool(config).await?;
     deepref_postgres::migrate(&pool).await?;
     tracing::info!("database migrations completed");
     Ok(())
+}
+
+pub async fn import_legacy(
+    config: &ApiConfig,
+) -> anyhow::Result<deepref_postgres::LegacyImportCounts> {
+    let pool = database_pool(config).await?;
+    deepref_postgres::import_legacy(&pool).await
 }
 
 pub async fn serve(config: ApiConfig) -> anyhow::Result<()> {
@@ -37,15 +36,7 @@ pub async fn serve_with_shutdown(
     config: ApiConfig,
     shutdown: impl Future<Output = ()> + Send + 'static,
 ) -> anyhow::Result<()> {
-    let database = &config.runtime.database;
-    let pool = PgPoolOptions::new()
-        .min_connections(database.pool_min)
-        .max_connections(database.pool_max)
-        .acquire_timeout(database.acquire_timeout)
-        .idle_timeout(Some(database.idle_timeout))
-        .max_lifetime(Some(database.max_lifetime))
-        .connect(&database.url)
-        .await?;
+    let pool = database_pool(&config).await?;
 
     let jetstream = match nats::connect_jetstream(&config.runtime.nats).await {
         Ok(context) => Some(context),
@@ -85,6 +76,18 @@ pub async fn serve_with_shutdown(
         .with_graceful_shutdown(shutdown)
         .await?;
     Ok(())
+}
+
+async fn database_pool(config: &ApiConfig) -> anyhow::Result<PgPool> {
+    let database = &config.runtime.database;
+    Ok(PgPoolOptions::new()
+        .min_connections(database.pool_min)
+        .max_connections(database.pool_max)
+        .acquire_timeout(database.acquire_timeout)
+        .idle_timeout(Some(database.idle_timeout))
+        .max_lifetime(Some(database.max_lifetime))
+        .connect(&database.url)
+        .await?)
 }
 
 async fn shutdown_signal() {

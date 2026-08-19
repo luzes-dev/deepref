@@ -11,6 +11,10 @@ mise exec -- just migrate
 mise exec -- just test-integration
 ```
 
+After migration 0007 is applied, run the one-time compatibility import explicitly
+with `deepref-server import-legacy` or `deepref-api import-legacy`. `serve` never
+runs this import implicitly; the command prints/logs typed convergence counts.
+
 The current required schema version is defined by code and exposed at `GET /health/ready`. Never infer compatibility only from a migration filename.
 
 ## Migration design policy

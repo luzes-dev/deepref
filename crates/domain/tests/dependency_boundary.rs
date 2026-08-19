@@ -41,7 +41,7 @@ fn domain_dependencies_remain_pure() {
                 .join("Cargo.toml")
                 .as_path()
         ),
-        ["serde", "thiserror", "uuid"]
+        ["serde", "thiserror", "unicode-normalization", "uuid"]
             .into_iter()
             .map(str::to_owned)
             .collect()

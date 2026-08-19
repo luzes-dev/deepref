@@ -41,6 +41,15 @@ pub async fn run(command: Command) -> anyhow::Result<()> {
             )
             .await
         }
+        Command::ImportLegacy => {
+            let config = deepref_http_api::config::ApiConfig::from_env()?;
+            with_telemetry(config.runtime.telemetry.clone(), async move {
+                let counts = deepref_http_api::import_legacy(&config).await?;
+                println!("legacy import completed: {counts:?}");
+                Ok(())
+            })
+            .await
+        }
     }
 }
 

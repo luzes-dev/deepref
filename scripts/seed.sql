@@ -131,7 +131,7 @@ ON CONFLICT (project_id, canonical_doi) DO UPDATE SET
   seed = EXCLUDED.seed,
   min_depth = EXCLUDED.min_depth;
 
-INSERT INTO citations (
+INSERT INTO legacy_citations (
   project_id,
   source_doi,
   target_doi,

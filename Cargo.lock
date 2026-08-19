@@ -628,10 +628,10 @@ dependencies = [
  "anyhow",
  "base64 0.23.1",
  "chrono",
+ "deepref-domain",
  "serde",
  "serde_json",
  "sha2 0.11.0",
- "thiserror 2.0.19",
  "uuid",
 ]
 
@@ -655,6 +655,7 @@ version = "0.1.0"
 dependencies = [
  "serde",
  "thiserror 2.0.19",
+ "unicode-normalization",
  "uuid",
 ]
 
@@ -731,7 +732,13 @@ dependencies = [
 name = "deepref-postgres"
 version = "0.1.0"
 dependencies = [
+ "anyhow",
+ "chrono",
+ "deepref-domain",
+ "serde_json",
  "sqlx",
+ "tokio",
+ "uuid",
 ]
 
 [[package]]

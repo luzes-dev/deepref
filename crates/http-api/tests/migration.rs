@@ -3,6 +3,7 @@ fn migrations_are_append_only_and_define_durability_contract() {
     let durability = include_str!("../../postgres/migrations/0004_ingestion_durability.sql");
     let projection = include_str!("../../postgres/migrations/0005_domain_projection.sql");
     let evidence = include_str!("../../postgres/migrations/0006_evidence_workspace.sql");
+    let identity = include_str!("../../postgres/migrations/0007_evidence_identity.sql");
     for required in [
         "owner_token",
         "lease_expires_at",
@@ -29,5 +30,25 @@ fn migrations_are_append_only_and_define_durability_contract() {
         "prisma_snapshots",
     ] {
         assert!(evidence.contains(required));
+    }
+    for required in [
+        "ALTER TABLE citations RENAME TO legacy_citations",
+        "source_report_id uuid",
+        "target_report_id uuid",
+        "CREATE TABLE acquisition_runs",
+        "max_depth integer NOT NULL",
+        "seed_count integer NOT NULL",
+        "queued_count integer NOT NULL",
+        "fetched_count integer NOT NULL",
+        "failed_count integer NOT NULL",
+        "CREATE TABLE record_provenance",
+        "last_error text",
+        "work_event_id uuid",
+        "FROM legacy_citations",
+    ] {
+        assert!(
+            identity.contains(required),
+            "missing migration contract: {required}"
+        );
     }
 }
