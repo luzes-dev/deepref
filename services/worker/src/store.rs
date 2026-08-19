@@ -224,7 +224,7 @@ pub async fn attach_cached(
     validate_event_ownership(&mut tx, event.event_id, owner).await?;
     attach_project_work(&mut tx, &event.payload, doi).await?;
     sqlx::query(
-        "INSERT INTO citations (project_id, source_doi, target_doi, source, first_seen_ingestion_id) \
+        "INSERT INTO legacy_citations (project_id, source_doi, target_doi, source, first_seen_ingestion_id) \
          SELECT $1, source_doi, target_doi, source, $2 FROM fetched_citation_facts WHERE source_doi = $3 \
          ON CONFLICT DO NOTHING",
     ).bind(event.payload.project_id).bind(event.payload.ingestion_id).bind(doi)
@@ -500,7 +500,7 @@ async fn persist_citation(
         "INSERT INTO fetched_citation_facts (source_doi,target_doi) VALUES ($1,$2) ON CONFLICT DO NOTHING",
     ).bind(source).bind(target).execute(&mut **tx).await?;
     sqlx::query(
-        "INSERT INTO citations (project_id,source_doi,target_doi,first_seen_ingestion_id) VALUES ($1,$2,$3,$4) ON CONFLICT DO NOTHING",
+        "INSERT INTO legacy_citations (project_id,source_doi,target_doi,first_seen_ingestion_id) VALUES ($1,$2,$3,$4) ON CONFLICT DO NOTHING",
     ).bind(event.payload.project_id).bind(source).bind(target).bind(event.payload.ingestion_id)
         .execute(&mut **tx).await?;
     let payload = DomainPayload::CitationUpserted(CitationUpserted {

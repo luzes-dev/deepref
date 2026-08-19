@@ -15,6 +15,13 @@ async fn main() -> anyhow::Result<()> {
     let result = match command {
         ApiCommand::Serve => deepref_http_api::serve(config).await,
         ApiCommand::Migrate => deepref_http_api::migrate(&config).await,
+        ApiCommand::ImportLegacy => match deepref_http_api::import_legacy(&config).await {
+            Ok(counts) => {
+                println!("legacy import completed: {counts:?}");
+                Ok(())
+            }
+            Err(error) => Err(error),
+        },
         ApiCommand::PrintOpenApi => unreachable!(),
     };
     telemetry.shutdown().await;

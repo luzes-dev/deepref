@@ -111,7 +111,7 @@ async fn rebuild_locked(
     let mut citation_offset = 0_i64;
     loop {
         let rows = sqlx::query(
-            "SELECT DISTINCT source_doi,target_doi FROM citations ORDER BY source_doi,target_doi OFFSET $1 LIMIT $2",
+            "SELECT DISTINCT source_doi,target_doi FROM legacy_citations ORDER BY source_doi,target_doi OFFSET $1 LIMIT $2",
         ).bind(citation_offset).bind(batch_size).fetch_all(&mut *snapshot).await?;
         if rows.is_empty() {
             break;
@@ -130,9 +130,11 @@ async fn rebuild_locked(
         sqlx::query_scalar("SELECT count(*)::bigint FROM works")
             .fetch_one(&mut *snapshot)
             .await?,
-        sqlx::query_scalar("SELECT count(DISTINCT (source_doi,target_doi))::bigint FROM citations")
-            .fetch_one(&mut *snapshot)
-            .await?,
+        sqlx::query_scalar(
+            "SELECT count(DISTINCT (source_doi,target_doi))::bigint FROM legacy_citations",
+        )
+        .fetch_one(&mut *snapshot)
+        .await?,
     );
     let snapshot_hash = snapshot_hasher.finish();
     let graph_counts = graph.counts().await?;

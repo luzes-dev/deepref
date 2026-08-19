@@ -65,6 +65,7 @@ fn bool_env(name: &str) -> bool {
 pub enum ApiCommand {
     Serve,
     Migrate,
+    ImportLegacy,
     PrintOpenApi,
 }
 
@@ -75,8 +76,9 @@ impl ApiCommand {
             [] => Ok(Self::Serve),
             [value] if value == "serve" => Ok(Self::Serve),
             [value] if value == "migrate" => Ok(Self::Migrate),
+            [value] if value == "import-legacy" => Ok(Self::ImportLegacy),
             [value] if value == "--print-openapi" => Ok(Self::PrintOpenApi),
-            _ => anyhow::bail!("usage: deepref-api [serve|migrate|--print-openapi]"),
+            _ => anyhow::bail!("usage: deepref-api [serve|migrate|import-legacy|--print-openapi]"),
         }
     }
 }
@@ -89,6 +91,10 @@ mod tests {
         assert_eq!(
             ApiCommand::parse(["migrate".into()]).unwrap(),
             ApiCommand::Migrate
+        );
+        assert_eq!(
+            ApiCommand::parse(["import-legacy".into()]).unwrap(),
+            ApiCommand::ImportLegacy
         );
         assert!(ApiCommand::parse(["serve".into(), "migrate".into()]).is_err());
     }
