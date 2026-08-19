@@ -16,13 +16,12 @@ The Rust workspace follows inward dependency direction:
 
 Domain and application crates must not depend on infrastructure adapters. Adapter crates may depend inward; inward crates must never depend on them. Manifest inspection tests in `crates/domain/tests/dependency_boundaries.rs` enforce the direct dependency rules without adding a TOML parser.
 
-## Transitional compatibility
+## Package naming
 
 The HTTP API package is named `deepref-http-api` and its library crate is
-`deepref_http_api`. It retains an explicit `deepref-api` binary target so
-existing deployment images, runtime service names, and CLI documentation can
-continue using the current executable name during migration. This compatibility
-name is operational identity, not the Cargo package name.
+`deepref_http_api`. The only supported executable is the composition-root
+`deepref-server` binary; API and worker deployment roles select its `serve` and
+`worker` commands.
 
 PostgreSQL migrations now live at `crates/postgres/migrations`; the HTTP API
 and database-backed test fixtures use the shared `deepref-postgres` migrator.

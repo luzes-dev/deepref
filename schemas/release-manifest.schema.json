@@ -71,11 +71,10 @@
     "images": {
       "type": "object",
       "additionalProperties": false,
-      "required": ["api", "worker", "projector", "web"],
+      "required": ["api", "worker", "web"],
       "properties": {
         "api": { "$ref": "#/$defs/artifact" },
         "worker": { "$ref": "#/$defs/artifact" },
-        "projector": { "$ref": "#/$defs/artifact" },
         "web": { "$ref": "#/$defs/artifact" }
       }
     }

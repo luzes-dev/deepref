@@ -2,7 +2,7 @@
 
 DeepRef uses mise for pinned tools, Just for the developer command surface, Docker Compose for disposable dependencies, and Process Compose for application processes.
 
-The Compose file is disposable local tooling only. It contains PostgreSQL, NATS JetStream, and Neo4j Community; it contains no application services and is not a deployment artifact or a supported deployment path. Production workloads are built and promoted through the ECR, Helm, Argo CD, and OpenTofu workflow.
+The Compose file is disposable local tooling only. It contains PostgreSQL and no application services; it is not a deployment artifact or a supported deployment path. Production workloads are built and promoted through the ECR, Helm, Argo CD, and OpenTofu workflow.
 
 ## Prerequisites
 
@@ -19,7 +19,7 @@ mise install
 mise exec -- just bootstrap
 ```
 
-`bootstrap` creates `.env` from `.env.example` only when `.env` is absent, installs locked JavaScript and Rust dependencies, installs the Playwright Chromium build, and pulls the three local dependency images.
+`bootstrap` creates `.env` from `.env.example` only when `.env` is absent, installs locked JavaScript and Rust dependencies, and installs the Playwright Chromium build.
 
 ## Run the stack
 
@@ -27,7 +27,7 @@ mise exec -- just bootstrap
 mise exec -- just dev
 ```
 
-`just dev` waits for all three containers to become healthy, applies PostgreSQL migrations, idempotently provisions the three local JetStream streams and two durable consumers, and then starts the web app, API, worker, and projector under Process Compose. Process names prefix their logs. API readiness gates the other processes, and Ctrl-C sends each service its configured clean shutdown signal in reverse dependency order.
+`just dev` waits for PostgreSQL to become healthy, applies PostgreSQL migrations, and then starts the web app, API, and worker under Process Compose. Process names prefix their logs. API readiness gates the other processes, and Ctrl-C sends each service its configured clean shutdown signal in reverse dependency order.
 
 Local endpoints:
 
@@ -36,10 +36,6 @@ Local endpoints:
 | Web             | `http://127.0.0.1:5173` |
 | API             | `http://127.0.0.1:8080` |
 | PostgreSQL      | `127.0.0.1:5432`        |
-| NATS            | `127.0.0.1:4222`        |
-| NATS monitoring | `http://127.0.0.1:8222` |
-| Neo4j Browser   | `http://127.0.0.1:7474` |
-| Neo4j Bolt      | `127.0.0.1:7687`        |
 
 Every published dependency port binds only to `127.0.0.1`.
 
@@ -59,13 +55,13 @@ The seed is deterministic and idempotent. It creates one project with three work
 mise exec -- just dev-down
 ```
 
-This stops local processes and containers but retains dependency volumes. To delete all disposable PostgreSQL, JetStream, and Neo4j data:
+This stops local processes and containers but retains the PostgreSQL volume. To delete all disposable PostgreSQL data:
 
 ```bash
 mise exec -- just dev-reset
 ```
 
-`dev-reset` permanently removes only the three named volumes owned by `infra/local/compose.yaml`.
+`dev-reset` permanently removes only the named PostgreSQL volume owned by `infra/local/compose.yaml`.
 
 ## Common commands
 

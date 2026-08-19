@@ -1,12 +1,3 @@
-pub const STREAM_WORK: &str = "DEEPREF_WORK";
-pub const STREAM_DOMAIN: &str = "DEEPREF_DOMAIN";
-pub const STREAM_DLQ: &str = "DEEPREF_DLQ";
-#[deprecated(note = "use STREAM_WORK")]
-pub const STREAM: &str = STREAM_WORK;
-
-pub const CONSUMER_WORKER: &str = "deepref-worker";
-pub const CONSUMER_PROJECTOR: &str = "deepref-projector";
-
 pub const SUBJECT_WORK_FETCH_REQUESTED: &str = "work.fetch.requested.v1";
 pub const SUBJECT_WORK_FETCH_COMPLETED: &str = "work.fetch.completed.v1";
 pub const SUBJECT_WORK_FETCH_FAILED: &str = "work.fetch.failed.v1";

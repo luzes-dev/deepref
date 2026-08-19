@@ -17,15 +17,18 @@ impl WorkerConfig {
             anyhow::bail!("WORKER_CONCURRENCY must be >= 1");
         }
         let lease = parse("WORKER_CLAIM_LEASE_SECS", 60_u64)?;
-        let reconcile = parse("WORKER_RECONCILER_INTERVAL_SECS", 30_u64)?;
-        if lease == 0 || reconcile == 0 {
-            anyhow::bail!("worker durations must be greater than zero");
+        if lease == 0 {
+            anyhow::bail!("worker lease duration must be greater than zero");
+        }
+        let reconciler_interval = parse("WORKER_RECONCILER_INTERVAL_SECS", 30_u64)?;
+        if reconciler_interval == 0 {
+            anyhow::bail!("worker reconciler interval must be greater than zero");
         }
         Ok(Self {
             runtime: RuntimeConfig::from_env("deepref-worker")?,
             concurrency,
             claim_lease: Duration::from_secs(lease),
-            reconciler_interval: Duration::from_secs(reconcile),
+            reconciler_interval: Duration::from_secs(reconciler_interval),
         })
     }
 }

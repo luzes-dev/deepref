@@ -3,5 +3,8 @@ mod support;
 #[test]
 fn durability_schema_supports_idempotent_repair() {
     assert!(support::DURABILITY_MIGRATION.contains("work_event_id"));
-    assert!(support::DURABILITY_MIGRATION.contains("event_outbox_retry_idx"));
+    assert!(
+        include_str!("../../../crates/postgres/migrations/0008_infrastructure_collapse.sql")
+            .contains("jobs_expired_running_idx")
+    );
 }

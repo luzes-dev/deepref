@@ -195,6 +195,42 @@ pub async fn handle_message(
     }
 }
 
+pub async fn handle_job(
+    pool: sqlx::PgPool,
+    job: &deepref_application::jobs::ClaimedJob,
+    claim_lease: Duration,
+) -> anyhow::Result<DeliveryAction> {
+    match job.kind.as_str() {
+        "work_fetch_requested" => {
+            let bytes = serde_json::to_vec(&job.payload)?;
+            handle_message(pool, bytes, job.attempts.max(1) as u64, claim_lease).await
+        }
+        "recompute_metrics" => {
+            let event: EventEnvelope<deepref_events::DomainPayload> =
+                serde_json::from_value(job.payload.clone())?;
+            let project_id = match event.payload {
+                deepref_events::DomainPayload::MetricsRecomputeRequested(payload) => {
+                    payload.project_id
+                }
+                _ => anyhow::bail!("recompute_metrics job has an unsupported payload"),
+            };
+            deepref_postgres::recompute_project_metrics(&pool, project_id).await?;
+            Ok(DeliveryAction::Ack)
+        }
+        "recompute_prisma" => {
+            let project_id = job
+                .payload
+                .get("project_id")
+                .and_then(serde_json::Value::as_str)
+                .ok_or_else(|| anyhow::anyhow!("recompute_prisma payload is missing project_id"))?
+                .parse()?;
+            deepref_postgres::recompute_prisma_snapshot(&pool, project_id).await?;
+            Ok(DeliveryAction::Ack)
+        }
+        other => anyhow::bail!("unsupported durable job kind: {other}"),
+    }
+}
+
 fn spawn_heartbeat(
     pool: PgPool,
     event_id: Uuid,

@@ -1,55 +1,35 @@
 # DeepRef architecture
 
-DeepRef maps article citation networks from seed DOIs. The SvelteKit SPA uses a same-origin `/api` contract through the web gateway. A Rust Axum API owns HTTP behavior; a Rust worker performs durable recursive ingestion; a Rust projector maintains the graph read model.
+DeepRef maps article citation networks from seed DOIs. The SvelteKit SPA uses a same-origin `/api` contract through the web gateway. A Rust Axum API owns HTTP behavior; the Rust worker performs durable recursive ingestion and reconciliation; PostgreSQL is authoritative for state, jobs, graph facts, and metrics.
 
 ## Data and event planes
 
-PostgreSQL 17 is authoritative for projects, ingestions/items, works, project membership, canonical fetched-reference facts, citations, unresolved references, claims/leases, outbox rows, domain events, projection state, and metric snapshots.
+PostgreSQL owns projects, ingestions/items, works, project membership, canonical fetched-reference facts, citations, unresolved references, claims/leases, domain events, durable jobs, graph status, and metric snapshots. The v2 evidence workspace is layered alongside the citation-ingestion model: records, reports, studies, screening events/state, review events, documents, audit rows, and leased jobs are all PostgreSQL tables.
 
-The v2 evidence workspace is layered alongside the legacy citation-ingestion model. Its canonical entities are
-records → reports → studies; report identifiers are external attributes rather than primary keys. Protocol versions,
-append-only screening events, current screening state, review events, documents, AI audit rows, and leased jobs are
-PostgreSQL tables. The v2 screening command writes its event, state projection, project lifecycle status, and PRISMA
-recomputation job in one transaction.
+Authoritative state changes and their follow-up jobs are committed in one transaction. The worker claims jobs with `FOR UPDATE SKIP LOCKED`, owns a lease with expiry renewal, retries failures with persisted attempts, marks terminal failures dead, and reclaims expired work. Stable dedupe keys prevent duplicate logical jobs. Ingestion preserves cached/fetched facts, discovered children, citations, events, and completion in the same transaction boundary; reconciliation repairs already-committed rows without silently dropping work.
 
-The first route-driven v2 workflow is available at /projects/{project_id}/screening/title-abstract. It uses optimistic
-revisions and returns 409 screening_revision_conflict when a second browser, worker, or automation has changed the
-same report.
+Graph reads use canonical UUIDs from `reports`, `project_reports`, and `citations`. Reports without DOI identifiers remain graph nodes. Responses are deterministic and bounded; edges are UUID-to-UUID and never depend on DOI mapping. Project metrics use the same degree/rank semantics as the legacy fixture and are recomputed after imports and later ingestions. The PostgreSQL graph status endpoint reports metric/projection freshness for compatibility with existing clients; it is not an external graph service.
 
-The worker claims versioned work events and DOI leases transactionally, performs the provider request outside the final transaction while renewing the lease, then atomically attaches cached/fetched facts, inserts discovered children, emits deterministic outbox/domain events, completes the item/claim, and commits before ACK. PostgreSQL also owns the provider-wide permit schedule and reconciliation state.
+The v2 screening command writes its event, state projection, project lifecycle status, and PRISMA recomputation job in one transaction. It uses optimistic revisions and returns `409 screening_revision_conflict` when another browser, worker, or automation changes the same report.
 
-Hosted NATS JetStream resources are pre-provisioned by the Helm/GitOps bootstrap Job; application credentials do not administer them:
+## Runtime roles and shutdown
 
-| Stream           | Subjects/purpose              | Hosted contract         |
-| ---------------- | ----------------------------- | ----------------------- |
-| `DEEPREF_WORK`   | `work.fetch.requested.v1`     | Work-queue retention    |
-| `DEEPREF_DOMAIN` | `domain.>` and `projection.>` | 30-day limits retention |
-| `DEEPREF_DLQ`    | `dlq.recorded.v1`             | 90-day limits retention |
+`deepref-server serve` runs HTTP only. `deepref-server worker` runs the bounded PostgreSQL job executor. `deepref-server all` runs both roles in one process with coordinated shutdown. Hosted deployments package the same `deepref-server` binary for API and worker targets; local Process Compose supervises the API, worker, and web processes.
 
-Staging/production use three stream replicas; development/local use one. Durable consumers are `deepref-worker` and `deepref-projector`, with five bounded deliveries and backoff `5s, 30s, 2m, 10m, 30m`.
-
-Neo4j Community is a single-node, asynchronous projection used for graph/recommendation reads and graph metrics. The projector applies versioned constraints/indexes, processes V1 domain events idempotently with entity revision cursors, and updates projection status/metric freshness. PostgreSQL can rebuild Neo4j through the explicit `deepref-projector rebuild --run-id <UUID>` flow. During Neo4j failure, core API readiness remains PostgreSQL-based while graph routes return typed `503 GRAPH_UNAVAILABLE` with `Retry-After`.
-
-The v2 job runner is intentionally PostgreSQL-native for review-derived work. It claims queued jobs with
-FOR UPDATE SKIP LOCKED, leases them for bounded execution, retries failures, and materializes deterministic PRISMA
-counts. The legacy NATS/Neo4j ingestion projection remains available while the migration proceeds.
-
-Crate boundaries follow dependency direction: `deepref-domain` owns pure invariants, `deepref-application` owns
-use-case commands, `deepref-postgres` owns SQLx migrations, and `deepref-http-api` owns HTTP adapters and SQL-backed
-handlers. See [ADR 0002](adr/0002-layered-crate-boundaries.md).
+Crate boundaries follow dependency direction: `deepref-domain` owns pure invariants, `deepref-application` owns use-case commands and the minimal `JobQueue` port, `deepref-postgres` owns SQLx migrations and adapters, and `deepref-http-api` owns HTTP adapters and SQL-backed handlers. See [ADR 0002](adr/0002-layered-crate-boundaries.md).
 
 ## API and web degradation
 
-The API exposes process liveness, PostgreSQL/schema readiness, dependency detail, and per-project projection status. Collections use bounded cursor pagination. The web app polls dependency status independently and keeps project, article metadata, ingestion, settings, and navigation available during graph degradation.
+The API exposes process liveness, PostgreSQL/schema readiness, durable worker-job status, and per-project graph metric freshness. Collections use bounded cursor pagination. The web app polls dependency status independently and keeps project, article metadata, ingestion, settings, and navigation available while queued work drains. Graph and recommendation routes read PostgreSQL directly and do not return an external-graph `503`.
 
 The application has no user/tenant model. Cloudflare Access protects each hosted environment using configured GitHub organization membership, and all admitted users have equal application privileges.
 
 ## Hosted platform ownership
 
 - OpenTofu roots under `infra/environments` own AWS infrastructure and global Cloudflare/GitHub policy plus initial Argo installations.
-- The protected orphan `gitops` branch and Argo own hosted namespaces, workloads, NATS, Neo4j, External Secrets, policies, telemetry collectors, and `cloudflared`.
-- Releases build four images and one chart once from tested development source, sign/attest them, then copy exact OCI subjects through staging and production without rebuild.
-- PostgreSQL migrations run only through `deepref-api migrate`; hosted Helm runs it as an Argo PreSync Job before Deployment changes. Normal `deepref-api serve` never migrates.
+- The protected orphan `gitops` branch and Argo own hosted namespaces, workloads, External Secrets, policies, telemetry collectors, and `cloudflared`.
+- Releases build three application images and one chart once from tested development source, sign/attest them, then copy exact OCI subjects through staging and production without rebuild.
+- PostgreSQL migrations run only through `deepref-server migrate`; hosted Helm runs it as an Argo PreSync Job before Deployment changes. Normal `deepref-server serve` never migrates.
 
 The repository contains deployable source, not proof of a deployed platform. Current apply/drill gaps are recorded in [production acceptance](acceptance/production-platform.md) and [operations](operations/README.md).
 
@@ -59,4 +39,4 @@ The repository contains deployable source, not proof of a deployed platform. Cur
 mise exec -- just dev
 ```
 
-This starts loopback-only PostgreSQL, single-node NATS JetStream, and Neo4j as disposable dependencies, applies migrations/JetStream bootstrap, then supervises web, API, worker, and projector. Compose contains no application services and is not a deployment artifact. See [local development](local-development.md).
+This starts loopback-only PostgreSQL, applies migrations, then supervises web, API, and worker. Compose contains no application services and is not a deployment artifact. See [local development](local-development.md).

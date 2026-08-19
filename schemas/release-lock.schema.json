@@ -36,8 +36,8 @@
       "properties": {"repository": {"$ref": "#/$defs/repository"}, "version": {"type": "string", "minLength": 1}, "digest": {"$ref": "#/$defs/digest"}, "referrers": {"$ref": "#/$defs/referrers"}}
     },
     "images": {
-      "type": "object", "additionalProperties": false, "required": ["api", "worker", "projector", "web"],
-      "properties": {"api": {"$ref": "#/$defs/artifact"}, "worker": {"$ref": "#/$defs/artifact"}, "projector": {"$ref": "#/$defs/artifact"}, "web": {"$ref": "#/$defs/artifact"}}
+      "type": "object", "additionalProperties": false, "required": ["api", "worker", "web"],
+      "properties": {"api": {"$ref": "#/$defs/artifact"}, "worker": {"$ref": "#/$defs/artifact"}, "web": {"$ref": "#/$defs/artifact"}}
     }
   }
 }

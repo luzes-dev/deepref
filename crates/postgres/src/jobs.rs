@@ -1,0 +1,210 @@
+use std::time::Duration;
+
+use deepref_application::jobs::{ClaimedJob, EnqueueJob, JobQueue};
+use serde_json::Value;
+use sqlx::{PgPool, Postgres, Row, Transaction};
+use uuid::Uuid;
+
+const CLAIM: &str = r#"
+WITH candidate AS (
+  SELECT id
+  FROM jobs
+  WHERE state = 'queued' AND available_at <= now()
+  ORDER BY priority DESC, available_at ASC, id ASC
+  FOR UPDATE SKIP LOCKED
+  LIMIT 1
+)
+UPDATE jobs j
+SET state = 'running', lease_owner = $1,
+    leased_until = now() + ($2 * interval '1 millisecond'),
+    lease_renewed_at = now(), attempts = j.attempts + 1
+FROM candidate
+WHERE j.id = candidate.id
+RETURNING j.id, j.kind, j.payload, j.attempts, j.max_attempts
+"#;
+
+pub async fn enqueue_job(
+    tx: &mut Transaction<'_, Postgres>,
+    job: &EnqueueJob,
+) -> anyhow::Result<Uuid> {
+    let id = sqlx::query_scalar::<_, Uuid>(
+        "INSERT INTO jobs (id,kind,payload,priority,max_attempts,dedupe_key) VALUES ($1,$2,$3,$4,$5,$6) ON CONFLICT (dedupe_key) DO UPDATE SET id = jobs.id RETURNING id",
+    )
+    .bind(job.id)
+    .bind(&job.kind)
+    .bind(&job.payload)
+    .bind(job.priority)
+    .bind(job.max_attempts)
+    .bind(&job.dedupe_key)
+    .fetch_one(&mut **tx)
+    .await?;
+    Ok(id)
+}
+
+pub async fn enqueue_job_pool(pool: &PgPool, job: &EnqueueJob) -> anyhow::Result<Uuid> {
+    let mut tx = pool.begin().await?;
+    let id = enqueue_job(&mut tx, job).await?;
+    tx.commit().await?;
+    Ok(id)
+}
+
+pub async fn recover_expired_jobs(pool: &PgPool) -> anyhow::Result<u64> {
+    Ok(sqlx::query(
+        "UPDATE jobs SET state='queued',lease_owner=NULL,leased_until=NULL,lease_renewed_at=NULL WHERE state='running' AND leased_until < now()",
+    )
+    .execute(pool)
+    .await?
+    .rows_affected())
+}
+
+pub async fn claim_job(
+    pool: &PgPool,
+    owner: &str,
+    lease: Duration,
+) -> anyhow::Result<Option<ClaimedJob>> {
+    // Reclaim before selecting so callers using the minimal JobQueue contract
+    // get crash recovery even when they do not run the reconciler loop.
+    recover_expired_jobs(pool).await?;
+    let row = sqlx::query(CLAIM)
+        .bind(owner)
+        .bind(lease.as_millis() as i64)
+        .fetch_optional(pool)
+        .await?;
+    Ok(row.map(|row| ClaimedJob {
+        id: row.get("id"),
+        kind: row.get("kind"),
+        payload: row.get("payload"),
+        attempts: row.get("attempts"),
+        max_attempts: row.get("max_attempts"),
+    }))
+}
+
+pub async fn renew_job(
+    pool: &PgPool,
+    owner: &str,
+    job_id: Uuid,
+    lease: Duration,
+) -> anyhow::Result<bool> {
+    Ok(sqlx::query(
+        "UPDATE jobs SET leased_until=now()+($3 * interval '1 millisecond'),lease_renewed_at=now() WHERE id=$1 AND state='running' AND lease_owner=$2 AND leased_until > now()",
+    )
+    .bind(job_id)
+    .bind(owner)
+    .bind(lease.as_millis() as i64)
+    .execute(pool)
+    .await?
+    .rows_affected()
+        == 1)
+}
+
+pub async fn complete_job(pool: &PgPool, owner: &str, job_id: Uuid) -> anyhow::Result<bool> {
+    Ok(sqlx::query(
+        "UPDATE jobs SET state='completed',completed_at=now(),lease_owner=NULL,leased_until=NULL,lease_renewed_at=NULL WHERE id=$1 AND state='running' AND lease_owner=$2 AND leased_until > now()",
+    )
+    .bind(job_id)
+    .bind(owner)
+    .execute(pool)
+    .await?
+    .rows_affected()
+        == 1)
+}
+
+pub async fn fail_job(
+    pool: &PgPool,
+    owner: &str,
+    job: &ClaimedJob,
+    error: &str,
+    retry_after: Duration,
+) -> anyhow::Result<bool> {
+    let next_state = if job.attempts >= job.max_attempts {
+        "dead"
+    } else {
+        "queued"
+    };
+    Ok(sqlx::query(
+        "UPDATE jobs SET state=$3,last_error=$4,available_at=now()+($5 * interval '1 millisecond'),lease_owner=NULL,leased_until=NULL,lease_renewed_at=NULL WHERE id=$1 AND state='running' AND lease_owner=$2 AND leased_until > now()",
+    )
+    .bind(job.id)
+    .bind(owner)
+    .bind(next_state)
+    .bind(error)
+    .bind(retry_after.as_millis() as i64)
+    .execute(pool)
+    .await?
+    .rows_affected()
+        == 1)
+}
+
+#[derive(Clone)]
+pub struct PostgresJobQueue {
+    pub pool: PgPool,
+}
+
+impl JobQueue for PostgresJobQueue {
+    async fn enqueue(&self, job: EnqueueJob) -> anyhow::Result<Uuid> {
+        enqueue_job_pool(&self.pool, &job).await
+    }
+
+    async fn claim(&self, owner: &str, lease: Duration) -> anyhow::Result<Option<ClaimedJob>> {
+        claim_job(&self.pool, owner, lease).await
+    }
+
+    async fn renew(&self, owner: &str, job_id: Uuid, lease: Duration) -> anyhow::Result<bool> {
+        renew_job(&self.pool, owner, job_id, lease).await
+    }
+
+    async fn complete(&self, owner: &str, job_id: Uuid) -> anyhow::Result<bool> {
+        complete_job(&self.pool, owner, job_id).await
+    }
+
+    async fn fail(
+        &self,
+        owner: &str,
+        job: &ClaimedJob,
+        error: &str,
+        retry_after: Duration,
+    ) -> anyhow::Result<bool> {
+        fail_job(&self.pool, owner, job, error, retry_after).await
+    }
+}
+
+pub async fn recompute_prisma_snapshot(pool: &PgPool, project_id: Uuid) -> anyhow::Result<()> {
+    let row = sqlx::query(
+        "SELECT count(*)::bigint AS records_identified,count(*) FILTER (WHERE pr.report_id IS NOT NULL)::bigint AS records_deduplicated,count(*) FILTER (WHERE coalesce(ss.title_abstract_status,'unscreened')='unscreened')::bigint AS title_abstract_pending,count(*) FILTER (WHERE ss.title_abstract_status='include')::bigint AS title_abstract_included,count(*) FILTER (WHERE ss.title_abstract_status='exclude')::bigint AS title_abstract_excluded,count(*) FILTER (WHERE coalesce(ss.final_status,'unscreened')='pending_full_text')::bigint AS full_text_pending,count(*) FILTER (WHERE ss.full_text_status='include')::bigint AS full_text_included,count(*) FILTER (WHERE ss.full_text_status='exclude')::bigint AS full_text_excluded,coalesce(max(ss.revision),0)::bigint AS revision FROM records rec LEFT JOIN project_reports pr ON pr.project_id=rec.project_id AND pr.report_id=rec.report_id LEFT JOIN screening_state ss ON ss.project_id=rec.project_id AND ss.report_id=rec.report_id WHERE rec.project_id=$1",
+    )
+    .bind(project_id)
+    .fetch_one(pool)
+    .await?;
+    sqlx::query(
+        "INSERT INTO prisma_snapshots (project_id,records_identified,records_deduplicated,title_abstract_pending,title_abstract_included,title_abstract_excluded,full_text_pending,full_text_included,full_text_excluded,revision,updated_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,now()) ON CONFLICT (project_id) DO UPDATE SET records_identified=EXCLUDED.records_identified,records_deduplicated=EXCLUDED.records_deduplicated,title_abstract_pending=EXCLUDED.title_abstract_pending,title_abstract_included=EXCLUDED.title_abstract_included,title_abstract_excluded=EXCLUDED.title_abstract_excluded,full_text_pending=EXCLUDED.full_text_pending,full_text_included=EXCLUDED.full_text_included,full_text_excluded=EXCLUDED.full_text_excluded,revision=EXCLUDED.revision,updated_at=now()",
+    )
+    .bind(project_id)
+    .bind(row.get::<i64, _>("records_identified"))
+    .bind(row.get::<i64, _>("records_deduplicated"))
+    .bind(row.get::<i64, _>("title_abstract_pending"))
+    .bind(row.get::<i64, _>("title_abstract_included"))
+    .bind(row.get::<i64, _>("title_abstract_excluded"))
+    .bind(row.get::<i64, _>("full_text_pending"))
+    .bind(row.get::<i64, _>("full_text_included"))
+    .bind(row.get::<i64, _>("full_text_excluded"))
+    .bind(row.get::<i64, _>("revision"))
+    .execute(pool)
+    .await?;
+    Ok(())
+}
+
+pub fn job(
+    id: Uuid,
+    kind: impl Into<String>,
+    payload: Value,
+    dedupe_key: impl Into<String>,
+) -> EnqueueJob {
+    EnqueueJob {
+        id,
+        kind: kind.into(),
+        payload,
+        priority: 0,
+        max_attempts: 5,
+        dedupe_key: dedupe_key.into(),
+    }
+}

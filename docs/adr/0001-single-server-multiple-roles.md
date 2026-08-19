@@ -7,9 +7,8 @@ Accepted.
 ## Decision
 
 The `deepref-server` binary exposes four typed commands: `serve`, `worker`,
-`all`, and `migrate`. The commands delegate to the `deepref-http-api` and
-`deepref-worker` libraries. The HTTP API package retains its compatibility
-`deepref-api` binary for existing deployments and CLI documentation. `serve`
+`all`, and `migrate`. The commands delegate to the HTTP and worker libraries.
+`serve`
 starts the API only and never runs migrations; migrations are an explicit
 operation.
 

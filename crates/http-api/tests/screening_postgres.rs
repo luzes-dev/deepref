@@ -42,7 +42,6 @@ fn api_config() -> ApiConfig {
                 .parse()
                 .expect("test origin is valid"),
         ],
-        graph_retry_after: std::time::Duration::from_secs(30),
     }
 }
 

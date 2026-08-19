@@ -17,7 +17,6 @@ use uuid::Uuid;
 
 use crate::{
     error::{ApiError, ErrorResponse},
-    jobs::recompute_prisma_dedupe_key,
     state::AppState,
 };
 
@@ -529,13 +528,15 @@ pub(crate) async fn screen_report(
     .bind(&actor.id)
     .execute(&mut *tx)
     .await?;
-    sqlx::query(
-        "INSERT INTO jobs (id,kind,payload,priority,max_attempts,dedupe_key) VALUES ($1,'recompute_prisma',$2,10,5,$3) ON CONFLICT (dedupe_key) DO NOTHING",
+    deepref_postgres::enqueue_job(
+        &mut tx,
+        &deepref_postgres::job(
+            Uuid::new_v4(),
+            "recompute_prisma",
+            json!({ "project_id": project_id }),
+            format!("recompute_prisma:{project_id}:{event_id}"),
+        ),
     )
-    .bind(Uuid::new_v4())
-    .bind(json!({ "project_id": project_id }))
-    .bind(recompute_prisma_dedupe_key(project_id, event_id))
-    .execute(&mut *tx)
     .await?;
     tx.commit().await?;
     Ok(Json(screening_state_dto_from_row(&row)))

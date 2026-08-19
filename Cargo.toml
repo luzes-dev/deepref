@@ -12,7 +12,6 @@ members = [
     "crates/metrics",
     "crates/telemetry",
     "apps/server",
-    "services/projector",
     "services/worker",
 ]
 resolver = "3"
@@ -35,13 +34,12 @@ deepref-graph = { path = "crates/graph" }
 deepref-metrics = { path = "crates/metrics" }
 deepref-telemetry = { path = "crates/telemetry" }
 anyhow = "1.0.103"
-async-nats = "0.50.0"
 axum = "0.8.9"
 backoff = { version = "0.4", features = ["tokio"] }
 base64 = "0.23.0"
 chrono = { version = "0.4.45", features = ["serde"] }
 futures = "0.3.32"
-neo4rs = "0.8"
+petgraph = "0.8.2"
 reqwest = { version = "0.13.4", default-features = false, features = ["json", "rustls", "gzip", "brotli"] }
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = "1.0.150"

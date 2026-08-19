@@ -21,7 +21,7 @@ ln -s "$root/apps/web/node_modules" "$tmp_root/apps/web/node_modules"
 
 (
 	cd "$root"
-	cargo run -q -p deepref-http-api -- --print-openapi > "$tmp_openapi"
+	cargo run -q -p deepref-server -- --print-openapi > "$tmp_openapi"
 )
 
 (

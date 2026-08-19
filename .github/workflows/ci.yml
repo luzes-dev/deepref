@@ -169,4 +169,4 @@ jobs:
       - name: Validate and build every release target
         run: |
           docker buildx bake --print
-          docker buildx bake --set '*.output=type=cacheonly' api worker projector web
+          docker buildx bake --set '*.output=type=cacheonly' api worker web

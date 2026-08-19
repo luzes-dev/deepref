@@ -50,6 +50,13 @@ pub async fn run(command: Command) -> anyhow::Result<()> {
             })
             .await
         }
+        Command::PrintOpenApi => {
+            println!(
+                "{}",
+                serde_json::to_string_pretty(&deepref_http_api::routes::openapi_document())?
+            );
+            Ok(())
+        }
     }
 }
 

@@ -1,16 +1,10 @@
 pub mod config;
 pub mod error;
-mod jobs;
-mod nats;
-mod outbox;
 pub mod routes;
 pub mod state;
 
-use std::future::Future;
-use std::sync::Arc;
-
-use deepref_graph::GraphRepository;
 use sqlx::{PgPool, postgres::PgPoolOptions};
+use std::future::Future;
 
 use crate::{config::ApiConfig, state::AppState};
 
@@ -38,38 +32,7 @@ pub async fn serve_with_shutdown(
 ) -> anyhow::Result<()> {
     let pool = database_pool(&config).await?;
 
-    let jetstream = match nats::connect_jetstream(&config.runtime.nats).await {
-        Ok(context) => Some(context),
-        Err(error) => {
-            tracing::warn!(%error, "NATS unavailable; API starts degraded");
-            None
-        }
-    };
-    let neo4j = &config.runtime.neo4j;
-    let graph = match GraphRepository::connect(
-        &neo4j.uri,
-        &neo4j.user,
-        &neo4j.password,
-        neo4j.query_timeout,
-    )
-    .await
-    {
-        Ok(repository) => Some(Arc::new(repository)),
-        Err(error) => {
-            tracing::warn!(%error, "Neo4j unavailable; graph routes start degraded");
-            None
-        }
-    };
-    let state = AppState::new(
-        pool.clone(),
-        jetstream.clone(),
-        graph,
-        config.graph_retry_after,
-    );
-    if let Some(context) = jetstream {
-        tokio::spawn(outbox::run_publisher(pool.clone(), context));
-    }
-    tokio::spawn(jobs::run(pool.clone()));
+    let state = AppState::new(pool);
     let listener = tokio::net::TcpListener::bind(config.bind_addr).await?;
     tracing::info!(address = %config.bind_addr, "API listening");
     axum::serve(listener, routes::router(state, &config))

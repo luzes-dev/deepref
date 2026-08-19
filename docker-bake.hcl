@@ -39,7 +39,7 @@ variable "CADDY_BASE_REPOSITORY" {
 }
 
 group "default" {
-  targets = ["api", "worker", "projector", "web"]
+  targets = ["api", "worker", "web"]
 }
 
 target "release" {
@@ -75,8 +75,8 @@ target "api" {
   target   = "api"
   tags     = ["${REGISTRY}/${IMAGE_PREFIX}-api:${GIT_TREE_HASH}"]
   args = {
-    PACKAGE = "deepref-http-api"
-    BIN     = "deepref-api"
+    PACKAGE = "deepref-server"
+    BIN     = "deepref-server"
   }
 }
 
@@ -85,18 +85,8 @@ target "worker" {
   target   = "worker"
   tags     = ["${REGISTRY}/${IMAGE_PREFIX}-worker:${GIT_TREE_HASH}"]
   args = {
-    PACKAGE = "deepref-worker"
-    BIN     = "deepref-worker"
-  }
-}
-
-target "projector" {
-  inherits = ["rust-service"]
-  target   = "projector"
-  tags     = ["${REGISTRY}/${IMAGE_PREFIX}-projector:${GIT_TREE_HASH}"]
-  args = {
-    PACKAGE = "deepref-projector"
-    BIN     = "deepref-projector"
+    PACKAGE = "deepref-server"
+    BIN     = "deepref-server"
   }
 }
 

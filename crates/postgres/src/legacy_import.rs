@@ -31,6 +31,10 @@ struct LegacyReport {
     published_year: Option<i32>,
     journal: Option<String>,
     url: Option<String>,
+    work_type: Option<String>,
+    publisher: Option<String>,
+    total_citations: i32,
+    references_count: i32,
     raw: serde_json::Value,
 }
 
@@ -61,7 +65,8 @@ async fn import_in_transaction(
     counts.projects_seen = project_count as u64;
 
     let work_rows = sqlx::query(
-        "SELECT canonical_doi,title,abstract_text,issued_year,published_year,container_title,url,raw \
+        "SELECT canonical_doi,title,abstract_text,issued_year,published_year,container_title,url,\
+                work_type,publisher,total_citations,references_count,raw \
          FROM works ORDER BY canonical_doi",
     )
     .fetch_all(&mut **transaction)
@@ -76,6 +81,10 @@ async fn import_in_transaction(
             published_year: row.get("published_year"),
             journal: row.get("container_title"),
             url: row.get("url"),
+            work_type: row.get("work_type"),
+            publisher: row.get("publisher"),
+            total_citations: row.get("total_citations"),
+            references_count: row.get("references_count"),
             raw: row.get("raw"),
         };
         let normalized = normalize(&legacy_report.doi)?;
@@ -340,6 +349,13 @@ async fn import_in_transaction(
         }
     }
 
+    // Import and repair are authoritative writes too: populate the UUID
+    // membership metrics before committing so graph reads never depend on a
+    // one-time migration-only backfill.
+    sqlx::query("SELECT recompute_project_report_metrics(id) FROM projects")
+        .execute(&mut **transaction)
+        .await?;
+
     Ok(counts)
 }
 
@@ -361,7 +377,8 @@ async fn ensure_report(
         if repair_existing {
             sqlx::query(
                 "UPDATE reports SET title=$2,abstract_text=$3,publication_year=COALESCE($4,$5),\
-                 journal=$6,url=$7,raw=$8,updated_at=now() WHERE id=$1",
+                 journal=$6,container_title=$6,url=$7,work_type=$8,publisher=$9,total_citations=$10,\
+                 references_count=$11,raw=$12,updated_at=now() WHERE id=$1",
             )
             .bind(report_id)
             .bind(legacy_report.title.as_deref())
@@ -370,6 +387,10 @@ async fn ensure_report(
             .bind(legacy_report.issued_year)
             .bind(legacy_report.journal.as_deref())
             .bind(legacy_report.url.as_deref())
+            .bind(legacy_report.work_type.as_deref())
+            .bind(legacy_report.publisher.as_deref())
+            .bind(legacy_report.total_citations)
+            .bind(legacy_report.references_count)
             .bind(&legacy_report.raw)
             .execute(&mut **transaction)
             .await?;
@@ -379,9 +400,11 @@ async fn ensure_report(
 
     let report_id = stable_uuid("report", &normalized);
     let inserted = sqlx::query(
-        "INSERT INTO reports (id,title,abstract_text,publication_year,journal,url,raw) \
-         VALUES ($1,$2,$3,COALESCE($4,$5),$6,$7,$8) ON CONFLICT (id) DO UPDATE SET title=EXCLUDED.title,\
-           abstract_text=EXCLUDED.abstract_text,publication_year=EXCLUDED.publication_year,journal=EXCLUDED.journal,url=EXCLUDED.url,raw=EXCLUDED.raw,updated_at=now()",
+        "INSERT INTO reports (id,title,abstract_text,publication_year,journal,container_title,url,work_type,publisher,total_citations,references_count,raw) \
+         VALUES ($1,$2,$3,COALESCE($4,$5),$6,$6,$7,$8,$9,$10,$11,$12) ON CONFLICT (id) DO UPDATE SET title=EXCLUDED.title,\
+           abstract_text=EXCLUDED.abstract_text,publication_year=EXCLUDED.publication_year,journal=EXCLUDED.journal,container_title=EXCLUDED.container_title,url=EXCLUDED.url,\
+           work_type=EXCLUDED.work_type,publisher=EXCLUDED.publisher,total_citations=EXCLUDED.total_citations,\
+           references_count=EXCLUDED.references_count,raw=EXCLUDED.raw,updated_at=now()",
     )
     .bind(report_id)
     .bind(legacy_report.title)
@@ -390,6 +413,10 @@ async fn ensure_report(
     .bind(legacy_report.issued_year)
     .bind(legacy_report.journal)
     .bind(legacy_report.url)
+    .bind(legacy_report.work_type)
+    .bind(legacy_report.publisher)
+    .bind(legacy_report.total_citations)
+    .bind(legacy_report.references_count)
     .bind(legacy_report.raw)
     .execute(&mut **transaction)
     .await?;
@@ -439,6 +466,10 @@ async fn report_for_doi(
             published_year: None,
             journal: None,
             url: None,
+            work_type: None,
+            publisher: None,
+            total_citations: 0,
+            references_count: 0,
             raw: serde_json::json!({"legacy_doi": doi}),
         },
         counts,

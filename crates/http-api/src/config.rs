@@ -1,4 +1,4 @@
-use std::{net::SocketAddr, time::Duration};
+use std::net::SocketAddr;
 
 use axum::http::HeaderValue;
 use deepref_config::RuntimeConfig;
@@ -9,7 +9,6 @@ pub struct ApiConfig {
     pub bind_addr: SocketAddr,
     pub cors_allow_any: bool,
     pub cors_origins: Vec<HeaderValue>,
-    pub graph_retry_after: Duration,
 }
 
 impl ApiConfig {
@@ -38,20 +37,11 @@ impl ApiConfig {
         if !cors_allow_any && cors_origins.is_empty() && !runtime.environment.is_local() {
             anyhow::bail!("API_CORS_ORIGINS must contain at least one exact hosted origin");
         }
-        let retry_after = std::env::var("API_GRAPH_RETRY_AFTER_SECS")
-            .ok()
-            .map(|value| value.parse())
-            .transpose()?
-            .unwrap_or(30_u64);
-        if retry_after == 0 {
-            anyhow::bail!("API_GRAPH_RETRY_AFTER_SECS must be greater than zero");
-        }
         Ok(Self {
             runtime,
             bind_addr,
             cors_allow_any,
             cors_origins,
-            graph_retry_after: Duration::from_secs(retry_after),
         })
     }
 }

@@ -7,7 +7,7 @@ fn local_has_disposable_defaults() {
     let values = HashMap::from([("APP_ENV".to_owned(), "local".to_owned())]);
     let config = RuntimeConfig::from_map("test", &values).unwrap();
     assert!(config.database.url.contains("127.0.0.1"));
-    assert!(config.nats.url.starts_with("nats://"));
+    assert!(!config.database.acquire_timeout.is_zero());
 }
 
 #[test]

@@ -84,7 +84,20 @@ async fn seed_and_assert(
     .execute(pool)
     .await?;
 
-    for (doi, title, abstract_text, issued_year, published_year, journal, url, raw) in [
+    for (
+        doi,
+        title,
+        abstract_text,
+        issued_year,
+        published_year,
+        journal,
+        url,
+        work_type,
+        publisher,
+        total_citations,
+        references_count,
+        raw,
+    ) in [
         (
             doi_one,
             "Repaired source one",
@@ -93,6 +106,10 @@ async fn seed_and_assert(
             Some(2025),
             Some("Repaired journal"),
             Some("https://example.test/one"),
+            Some("article"),
+            Some("Repaired publisher"),
+            27,
+            4,
             serde_json::json!({"fixture": "one", "revision": 2}),
         ),
         (
@@ -103,12 +120,16 @@ async fn seed_and_assert(
             None,
             Some("Legacy journal"),
             Some("https://example.test/two"),
+            Some("review"),
+            Some("Legacy publisher"),
+            11,
+            2,
             serde_json::json!({"fixture": "two"}),
         ),
     ] {
         sqlx::query(
-            "INSERT INTO works (canonical_doi,title,abstract_text,issued_year,published_year,container_title,url,fetch_status,raw) \
-             VALUES ($1,$2,$3,$4,$5,$6,$7,'fetched',$8)",
+            "INSERT INTO works (canonical_doi,title,abstract_text,issued_year,published_year,container_title,url,work_type,publisher,total_citations,references_count,fetch_status,raw) \
+             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,'fetched',$12)",
         )
         .bind(doi)
         .bind(title)
@@ -117,6 +138,10 @@ async fn seed_and_assert(
         .bind(published_year)
         .bind(journal)
         .bind(url)
+        .bind(work_type)
+        .bind(publisher)
+        .bind(total_citations)
+        .bind(references_count)
         .bind(raw)
         .execute(pool)
         .await?;
@@ -241,7 +266,7 @@ async fn seed_and_assert(
     );
 
     let repaired_report = sqlx::query(
-        "SELECT ri.report_id,r.title,r.abstract_text,r.publication_year,r.journal,r.url,r.raw \
+        "SELECT ri.report_id,r.title,r.abstract_text,r.publication_year,r.journal,r.container_title,r.url,r.work_type,r.publisher,r.total_citations,r.references_count,r.raw \
          FROM report_identifiers ri JOIN reports r ON r.id=ri.report_id \
          WHERE ri.scheme='doi' AND ri.normalized_value=$1",
     )
@@ -257,7 +282,12 @@ async fn seed_and_assert(
             && repaired_report.get::<String, _>("abstract_text") == "Repaired abstract one"
             && repaired_report.get::<i32, _>("publication_year") == 2025
             && repaired_report.get::<String, _>("journal") == "Repaired journal"
+            && repaired_report.get::<String, _>("container_title") == "Repaired journal"
             && repaired_report.get::<String, _>("url") == "https://example.test/one"
+            && repaired_report.get::<String, _>("work_type") == "article"
+            && repaired_report.get::<String, _>("publisher") == "Repaired publisher"
+            && repaired_report.get::<i64, _>("total_citations") == 27
+            && repaired_report.get::<i64, _>("references_count") == 4
             && repaired_report.get::<serde_json::Value, _>("raw")
                 == serde_json::json!({"fixture": "one", "revision": 2}),
         "existing report metadata was not repaired from works"
@@ -492,6 +522,10 @@ async fn cleanup_fixture(
     report_ids.sort_unstable();
     report_ids.dedup();
 
+    sqlx::query("DELETE FROM projection_state WHERE project_id=$1")
+        .bind(project_id)
+        .execute(pool)
+        .await?;
     sqlx::query("DELETE FROM projects WHERE id=$1")
         .bind(project_id)
         .execute(pool)

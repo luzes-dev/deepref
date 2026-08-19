@@ -62,8 +62,7 @@
 			</div>
 			{#if !coreUnavailable}
 				<p class="mt-2">
-					Projects, articles, and ingestions remain available while graph services
-					recover.
+					Projects, articles, and ingestions remain available while durable jobs drain.
 				</p>
 			{/if}
 		</Alert.Description>

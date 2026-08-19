@@ -34,7 +34,7 @@ pub async fn get_projection(
 ) -> Result<Json<ProjectionStatusDto>, ApiError> {
     let row = sqlx::query(
         "SELECT state,revision,watermark,lag,last_success_at,last_error,rebuild_state \
-         FROM projection_state WHERE projection_name='graph' AND (project_id=$1 OR project_id IS NULL) \
+         FROM projection_state WHERE projection_name='postgres_graph' AND (project_id=$1 OR project_id IS NULL) \
          ORDER BY project_id NULLS LAST LIMIT 1",
     ).bind(project_id).fetch_one(&state.pool).await?;
     Ok(Json(ProjectionStatusDto {

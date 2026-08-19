@@ -1,7 +1,6 @@
-suite: migration and rebuild jobs
+suite: PostgreSQL migration job
 templates:
   - templates/migration-job.yaml
-  - templates/projector-rebuild-job.yaml
 values:
   - tests/values/development.yaml
 tests:
@@ -11,15 +10,3 @@ tests:
       - equal: {path: 'metadata.annotations["argocd.argoproj.io/hook"]', value: PreSync}
       - contains: {path: "spec.template.spec.containers[0].args", content: migrate}
       - equal: {path: spec.backoffLimit, value: 0}
-  - it: omits rebuild by default
-    template: templates/projector-rebuild-job.yaml
-    asserts:
-      - hasDocuments: {count: 0}
-  - it: requires and passes an explicit rebuild run id
-    template: templates/projector-rebuild-job.yaml
-    set:
-      rebuild.enabled: true
-      rebuild.runId: 123e4567-e89b-42d3-a456-426614174000
-    asserts:
-      - contains: {path: "spec.template.spec.containers[0].args", content: rebuild}
-      - contains: {path: "spec.template.spec.containers[0].args", content: 123e4567-e89b-42d3-a456-426614174000}
