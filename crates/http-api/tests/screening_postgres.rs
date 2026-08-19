@@ -4,7 +4,7 @@ use axum::{
     body::{Body, to_bytes},
     http::{Request, Response, StatusCode},
 };
-use deepref_api::{config::ApiConfig, routes::router, state::AppState};
+use deepref_http_api::{config::ApiConfig, routes::router, state::AppState};
 use sqlx::{PgPool, postgres::PgPoolOptions};
 use tower::ServiceExt;
 use uuid::Uuid;
@@ -21,10 +21,9 @@ async fn database() -> Option<PgPool> {
         .unwrap_or_else(|error| {
             panic!("DATABASE_URL is set but PostgreSQL is unavailable: {error}")
         });
-    sqlx::migrate!("./migrations")
-        .run(&pool)
+    deepref_postgres::migrate(&pool)
         .await
-        .unwrap_or_else(|error| panic!("failed to apply API migrations: {error}"));
+        .unwrap_or_else(|error| panic!("failed to apply PostgreSQL migrations: {error}"));
     Some(pool)
 }
 

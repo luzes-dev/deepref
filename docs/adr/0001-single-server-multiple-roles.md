@@ -7,9 +7,11 @@ Accepted.
 ## Decision
 
 The `deepref-server` binary exposes four typed commands: `serve`, `worker`,
-`all`, and `migrate`. The commands delegate to the extracted `deepref-api` and
-`deepref-worker` entrypoints. `serve` starts the API only and never runs
-migrations; migrations are an explicit operation.
+`all`, and `migrate`. The commands delegate to the `deepref-http-api` and
+`deepref-worker` libraries. The HTTP API package retains its compatibility
+`deepref-api` binary for existing deployments and CLI documentation. `serve`
+starts the API only and never runs migrations; migrations are an explicit
+operation.
 
 `all` starts the API and worker together and gives both entrypoints the same
 shutdown notification. A signal, or an early exit from either role, asks the

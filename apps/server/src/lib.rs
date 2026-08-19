@@ -9,8 +9,12 @@ pub use command::Command;
 pub async fn run(command: Command) -> anyhow::Result<()> {
     match command {
         Command::Serve => {
-            let config = deepref_api::config::ApiConfig::from_env()?;
-            with_telemetry(config.runtime.telemetry.clone(), deepref_api::serve(config)).await
+            let config = deepref_http_api::config::ApiConfig::from_env()?;
+            with_telemetry(
+                config.runtime.telemetry.clone(),
+                deepref_http_api::serve(config),
+            )
+            .await
         }
         Command::Worker => {
             let config = deepref_worker::config::WorkerConfig::from_env()?;
@@ -21,7 +25,7 @@ pub async fn run(command: Command) -> anyhow::Result<()> {
             .await
         }
         Command::All => {
-            let api = deepref_api::config::ApiConfig::from_env()?;
+            let api = deepref_http_api::config::ApiConfig::from_env()?;
             let worker = deepref_worker::config::WorkerConfig::from_env()?;
             with_telemetry(
                 api.runtime.telemetry.clone(),
@@ -30,10 +34,10 @@ pub async fn run(command: Command) -> anyhow::Result<()> {
             .await
         }
         Command::Migrate => {
-            let config = deepref_api::config::ApiConfig::from_env()?;
+            let config = deepref_http_api::config::ApiConfig::from_env()?;
             with_telemetry(
                 config.runtime.telemetry.clone(),
-                deepref_api::migrate(&config),
+                deepref_http_api::migrate(&config),
             )
             .await
         }
@@ -54,14 +58,14 @@ where
 }
 
 async fn run_all(
-    api: deepref_api::config::ApiConfig,
+    api: deepref_http_api::config::ApiConfig,
     worker: deepref_worker::config::WorkerConfig,
     shutdown: impl Future<Output = ()> + Send + 'static,
 ) -> anyhow::Result<()> {
     let (shutdown_tx, shutdown_rx) = watch::channel(false);
     let api_shutdown = wait_for_notification(shutdown_rx.clone());
     let worker_shutdown = wait_for_notification(shutdown_rx);
-    let mut api_task = tokio::spawn(deepref_api::serve_with_shutdown(api, api_shutdown));
+    let mut api_task = tokio::spawn(deepref_http_api::serve_with_shutdown(api, api_shutdown));
     let mut worker_task = tokio::spawn(deepref_worker::run_with_shutdown(worker, worker_shutdown));
     let mut shutdown = Box::pin(shutdown);
 

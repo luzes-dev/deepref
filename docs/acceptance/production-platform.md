@@ -55,7 +55,7 @@ Status terms: **Pending** means no sufficient evidence; **Partial** means source
 ## AC-07 — Graph-only degradation
 
 - **Criterion:** Stopping Neo4j preserves core operations and produces typed graph-only degradation.
-- **Automated evidence path/command:** `services/api/tests/degradation.rs`, `services/api/src/error.rs`, web degraded-state components/tests, chart probes; `cargo test -p deepref-api --test degradation --locked` and `mise exec -- just test-e2e`.
+- **Automated evidence path/command:** `crates/http-api/tests/degradation.rs`, `crates/http-api/src/error.rs`, web degraded-state components/tests, chart probes; `cargo test -p deepref-http-api --test degradation --locked` and `mise exec -- just test-e2e`.
 - **Manual drill/apply-time evidence:** Stop/fail Neo4j in development/staging through an approved drill; prove core project/article/ingestion/settings workflows remain usable, graph/recommendations return `503 GRAPH_UNAVAILABLE` with `Retry-After`, stale metrics are labeled, UI degradation renders, and recovery succeeds.
 - **Prerequisites:** Deployed stack, Cloudflare-authenticated test user/synthetic, representative data, and graph/core monitoring.
 - **Current verification status:** **Partial.** Typed response construction and mocked UI paths exist; no running Neo4j outage drill is retained.
@@ -71,7 +71,7 @@ Status terms: **Pending** means no sufficient evidence; **Partial** means source
 ## AC-09 — Failed migration blocks rollout
 
 - **Criterion:** A failed migration blocks rollout while the previous application continues serving.
-- **Automated evidence path/command:** `charts/deepref/templates/migration-job.yaml`, `charts/deepref/tests/migration_test.yaml`, `services/api/tests/migration.rs`; `mise exec -- just helm-check`.
+- **Automated evidence path/command:** `charts/deepref/templates/migration-job.yaml`, `charts/deepref/tests/migration_test.yaml`, `crates/http-api/tests/migration.rs`; `mise exec -- just helm-check`.
 - **Manual drill/apply-time evidence:** Deploy an intentionally failing additive test migration in a safe environment, show Argo PreSync failure before Deployment change, old ReplicaSet and core endpoints serving, then safe-stop/forward-fix recovery.
 - **Prerequisites:** Deployed Argo/chart, immutable test release, reversible safe test schema, monitoring, data owner, and [migration-failure runbook](../operations/runbooks/migration-failure.md).
 - **Current verification status:** **Partial.** Hook ordering/backoff are source tested; no live Argo failure drill proves previous service continuity.

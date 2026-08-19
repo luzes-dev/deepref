@@ -606,31 +606,10 @@ source = "registry+https://github.com/rust-lang/crates.io-index"
 checksum = "092966b41edc516079bdf31ec78a2e0588d1d0c08f78b91d8307215928642b2b"
 
 [[package]]
-name = "deepref-api"
+name = "deepref-application"
 version = "0.1.0"
 dependencies = [
- "anyhow",
- "async-nats",
- "axum",
- "base64 0.23.1",
- "chrono",
- "deepref-config",
- "deepref-core",
  "deepref-domain",
- "deepref-events",
- "deepref-graph",
- "deepref-telemetry",
- "serde",
- "serde_json",
- "sqlx",
- "thiserror 2.0.19",
- "tokio",
- "tower",
- "tower-http 0.7.0",
- "tracing",
- "tracing-subscriber",
- "utoipa",
- "utoipa-axum",
  "uuid",
 ]
 
@@ -707,6 +686,37 @@ dependencies = [
 ]
 
 [[package]]
+name = "deepref-http-api"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "async-nats",
+ "axum",
+ "base64 0.23.1",
+ "chrono",
+ "deepref-application",
+ "deepref-config",
+ "deepref-core",
+ "deepref-domain",
+ "deepref-events",
+ "deepref-graph",
+ "deepref-postgres",
+ "deepref-telemetry",
+ "serde",
+ "serde_json",
+ "sqlx",
+ "thiserror 2.0.19",
+ "tokio",
+ "tower",
+ "tower-http 0.7.0",
+ "tracing",
+ "tracing-subscriber",
+ "utoipa",
+ "utoipa-axum",
+ "uuid",
+]
+
+[[package]]
 name = "deepref-metrics"
 version = "0.1.0"
 dependencies = [
@@ -715,6 +725,13 @@ dependencies = [
  "deepref-graph",
  "serde",
  "serde_json",
+]
+
+[[package]]
+name = "deepref-postgres"
+version = "0.1.0"
+dependencies = [
+ "sqlx",
 ]
 
 [[package]]
@@ -742,8 +759,8 @@ name = "deepref-server"
 version = "0.1.0"
 dependencies = [
  "anyhow",
- "deepref-api",
  "deepref-config",
+ "deepref-http-api",
  "deepref-telemetry",
  "deepref-worker",
  "tokio",

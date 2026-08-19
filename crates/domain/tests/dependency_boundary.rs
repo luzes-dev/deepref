@@ -1,32 +1,123 @@
-use std::{fs, path::PathBuf};
+use std::{collections::BTreeSet, fs, path::Path};
+
+fn dependencies(manifest: &Path) -> BTreeSet<String> {
+    let source = fs::read_to_string(manifest).expect("crate manifest must be readable");
+    let mut section = "";
+    let mut names = BTreeSet::new();
+
+    for line in source.lines() {
+        let line = line.split('#').next().unwrap_or_default().trim();
+        if line.starts_with('[') && line.ends_with(']') {
+            section = line.trim_matches(['[', ']'].as_ref());
+            assert!(
+                !section.starts_with("dependencies."),
+                "manifest dependency tables must remain explicit direct dependencies"
+            );
+            continue;
+        }
+        if section != "dependencies" || line.is_empty() {
+            continue;
+        }
+        if let Some((name, _)) = line.split_once('=') {
+            names.insert(name.trim().trim_end_matches(".workspace").to_owned());
+        }
+    }
+
+    names
+}
+
+fn manifest(crate_name: &str) -> std::path::PathBuf {
+    Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("..")
+        .join(crate_name)
+        .join("Cargo.toml")
+}
 
 #[test]
 fn domain_dependencies_remain_pure() {
-    let manifest_path = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("Cargo.toml");
-    let manifest = fs::read_to_string(&manifest_path)
-        .unwrap_or_else(|error| panic!("failed to read {}: {error}", manifest_path.display()));
+    assert_eq!(
+        dependencies(
+            Path::new(env!("CARGO_MANIFEST_DIR"))
+                .join("Cargo.toml")
+                .as_path()
+        ),
+        ["serde", "thiserror", "uuid"]
+            .into_iter()
+            .map(str::to_owned)
+            .collect()
+    );
+}
 
-    let allowed = ["serde", "thiserror", "uuid"];
-    let mut section = "";
-    for raw_line in manifest.lines() {
-        let line = raw_line.trim();
-        if line.starts_with('[') && line.ends_with(']') {
-            section = line;
-            if section.starts_with("[dependencies.") {
-                panic!("domain must not declare dependency tables: {section}");
-            }
-            continue;
-        }
-        if section != "[dependencies]" || line.is_empty() || line.starts_with('#') {
-            continue;
-        }
-        let Some((name, _)) = line.split_once('=') else {
-            continue;
-        };
-        let name = name.trim().split('.').next().unwrap_or(name.trim());
+#[test]
+fn application_dependencies_are_domain_and_pure_data_or_error_crates() {
+    let actual = dependencies(manifest("application").as_path());
+    let allowed = [
+        "deepref-domain",
+        "anyhow",
+        "chrono",
+        "serde",
+        "serde_json",
+        "thiserror",
+        "time",
+        "uuid",
+    ];
+
+    assert!(actual.contains("deepref-domain"));
+    for dependency in actual {
         assert!(
-            allowed.contains(&name),
-            "deepref-domain gained a non-domain dependency {name:?}"
+            allowed.contains(&dependency.as_str()),
+            "application dependency {dependency:?} is not a pure data/error dependency"
+        );
+    }
+}
+
+#[test]
+fn infrastructure_and_adapter_dependencies_cannot_point_outward() {
+    let domain = dependencies(
+        Path::new(env!("CARGO_MANIFEST_DIR"))
+            .join("Cargo.toml")
+            .as_path(),
+    );
+    let application = dependencies(manifest("application").as_path());
+    let postgres = dependencies(manifest("postgres").as_path());
+    let http_api = dependencies(manifest("http-api").as_path());
+
+    assert!(http_api.contains("deepref-application"));
+    assert!(http_api.contains("deepref-postgres"));
+    assert!(postgres.contains("sqlx"));
+
+    for dependency in [
+        "deepref-application",
+        "deepref-postgres",
+        "deepref-http-api",
+    ] {
+        assert!(
+            !domain.contains(dependency),
+            "domain must not depend on adapter/application crate {dependency}"
+        );
+    }
+    for dependency in ["deepref-postgres", "deepref-http-api"] {
+        assert!(
+            !application.contains(dependency),
+            "application must not depend on adapter crate {dependency}"
+        );
+    }
+    assert!(!postgres.contains("deepref-http-api"));
+
+    for dependency in [
+        "axum",
+        "sqlx",
+        "reqwest",
+        "async-nats",
+        "neo4rs",
+        "object_store",
+        "object-store",
+        "aws-sdk-s3",
+        "s3",
+    ] {
+        assert!(
+            !application.contains(dependency),
+            "application must not depend on infrastructure crate {dependency}"
         );
     }
 }

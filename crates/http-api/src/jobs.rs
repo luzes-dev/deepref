@@ -289,10 +289,9 @@ mod tests {
             .unwrap_or_else(|error| {
                 panic!("DATABASE_URL is set but PostgreSQL is unavailable: {error}")
             });
-        sqlx::migrate!("./migrations")
-            .run(&pool)
+        deepref_postgres::migrate(&pool)
             .await
-            .unwrap_or_else(|error| panic!("failed to apply API migrations: {error}"));
+            .unwrap_or_else(|error| panic!("failed to apply PostgreSQL migrations: {error}"));
         Some(pool)
     }
 

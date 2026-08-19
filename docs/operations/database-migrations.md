@@ -2,7 +2,7 @@
 
 ## Contract
 
-PostgreSQL is authoritative. Migrations under `services/api/migrations` are append-only. `deepref-api serve` never migrates; `deepref-api migrate` is the only application migration command. In hosted environments the Helm chart runs it as an Argo `PreSync` Job with `backoffLimit: 0` and a bounded active deadline, so failure stops the new sync before application Deployments change.
+PostgreSQL is authoritative. Migrations under `crates/postgres/migrations` are append-only and are applied through the shared `deepref-postgres` adapter. `deepref-api serve` never migrates; `deepref-api migrate` is the only application migration command. In hosted environments the Helm chart runs it as an Argo `PreSync` Job with `backoffLimit: 0` and a bounded active deadline, so failure stops the new sync before application Deployments change.
 
 Local commands are:
 
@@ -32,7 +32,7 @@ The accountable data owner must define the compatibility window, migration timeo
 - Default/backfill behavior is bounded and observable.
 - Index creation and constraints are safe for expected production volume.
 - Backup/PITR health was checked and a restore drill is current.
-- `services/api/tests/migration.rs`, affected worker/projector tests, and Helm migration tests pass.
+- `crates/http-api/tests/migration.rs`, affected worker/projector tests, and Helm migration tests pass.
 - Release lock migration version and rollback compatibility are understood.
 - Production approval identifies a data owner and safe-stop authority.
 

@@ -1,6 +1,6 @@
 #[test]
 fn every_collection_operation_exposes_a_bounded_contract() {
-    let document = serde_json::to_value(deepref_api::routes::openapi_document()).unwrap();
+    let document = serde_json::to_value(deepref_http_api::routes::openapi_document()).unwrap();
     for path in [
         "/projects",
         "/ingestions",

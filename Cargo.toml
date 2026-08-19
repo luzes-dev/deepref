@@ -1,6 +1,9 @@
 [workspace]
 members = [
     "crates/domain",
+    "crates/application",
+    "crates/postgres",
+    "crates/http-api",
     "crates/config",
     "crates/core",
     "crates/crossref",
@@ -9,7 +12,6 @@ members = [
     "crates/metrics",
     "crates/telemetry",
     "apps/server",
-    "services/api",
     "services/projector",
     "services/worker",
 ]
@@ -22,6 +24,9 @@ version = "0.1.0"
 
 [workspace.dependencies]
 deepref-domain = { path = "crates/domain" }
+deepref-application = { path = "crates/application" }
+deepref-postgres = { path = "crates/postgres" }
+deepref-http-api = { path = "crates/http-api" }
 deepref-core = { path = "crates/core" }
 deepref-config = { path = "crates/config" }
 deepref-crossref = { path = "crates/crossref" }

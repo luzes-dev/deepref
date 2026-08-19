@@ -22,7 +22,7 @@ environment:
 processes:
   api:
     description: DeepRef Axum API
-    command: cargo run -p deepref-api -- serve
+    command: cargo run -p deepref-http-api --bin deepref-api -- serve
     readiness_probe:
       http_get:
         host: 127.0.0.1
