@@ -34,6 +34,10 @@ The v2 job runner is intentionally PostgreSQL-native for review-derived work. It
 FOR UPDATE SKIP LOCKED, leases them for bounded execution, retries failures, and materializes deterministic PRISMA
 counts. The legacy NATS/Neo4j ingestion projection remains available while the migration proceeds.
 
+Crate boundaries follow dependency direction: `deepref-domain` owns pure invariants, `deepref-application` owns
+use-case commands, `deepref-postgres` owns SQLx migrations, and `deepref-http-api` owns HTTP adapters and SQL-backed
+handlers. See [ADR 0002](adr/0002-layered-crate-boundaries.md).
+
 ## API and web degradation
 
 The API exposes process liveness, PostgreSQL/schema readiness, dependency detail, and per-project projection status. Collections use bounded cursor pagination. The web app polls dependency status independently and keeps project, article metadata, ingestion, settings, and navigation available during graph degradation.

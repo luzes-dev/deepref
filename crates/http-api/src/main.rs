@@ -1,4 +1,4 @@
-use deepref_api::config::{ApiCommand, ApiConfig};
+use deepref_http_api::config::{ApiCommand, ApiConfig};
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -6,15 +6,15 @@ async fn main() -> anyhow::Result<()> {
     if command == ApiCommand::PrintOpenApi {
         println!(
             "{}",
-            serde_json::to_string_pretty(&deepref_api::routes::openapi_document())?
+            serde_json::to_string_pretty(&deepref_http_api::routes::openapi_document())?
         );
         return Ok(());
     }
     let config = ApiConfig::from_env()?;
     let telemetry = deepref_telemetry::init(config.runtime.telemetry.clone())?;
     let result = match command {
-        ApiCommand::Serve => deepref_api::serve(config).await,
-        ApiCommand::Migrate => deepref_api::migrate(&config).await,
+        ApiCommand::Serve => deepref_http_api::serve(config).await,
+        ApiCommand::Migrate => deepref_http_api::migrate(&config).await,
         ApiCommand::PrintOpenApi => unreachable!(),
     };
     telemetry.shutdown().await;

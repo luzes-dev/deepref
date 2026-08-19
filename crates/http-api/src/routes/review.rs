@@ -4,9 +4,10 @@ use axum::{
     http::HeaderMap,
 };
 use chrono::{DateTime, Utc};
+use deepref_application::ScreenReportCommand;
 use deepref_domain::{
-    CurrentScreeningState, ProjectId, ProtocolVersionId, ReportId, ScreenReportCommand,
-    ScreeningDecision, ScreeningStage, ScreeningTransition, ScreeningValidationError,
+    CurrentScreeningState, ProjectId, ProtocolVersionId, ReportId, ScreeningDecision,
+    ScreeningStage, ScreeningTransition, ScreeningValidationError,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::json;

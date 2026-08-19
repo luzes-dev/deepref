@@ -6,7 +6,7 @@
 /infra/ @luzes-dev
 /schemas/ @luzes-dev
 /scripts/ci/ @luzes-dev
-/services/api/migrations/ @luzes-dev
+/crates/postgres/migrations/ @luzes-dev
 
 # This path exists only on the protected orphan gitops branch.
 /environments/production/release-lock.yaml @luzes-dev

@@ -17,7 +17,7 @@ bootstrap:
 # Start disposable dependencies, prepare their schemas, and supervise every app process.
 dev:
     {{compose}} up -d --wait
-    cargo run -q -p deepref-api -- migrate
+    cargo run -q -p deepref-http-api -- migrate
     scripts/bootstrap-local-nats.sh
     exec process-compose -f process-compose.yaml up
 
@@ -34,7 +34,7 @@ dev-reset:
 # Apply all PostgreSQL migrations with the one-shot API command.
 migrate:
     {{compose}} up -d --wait postgres
-    cargo run -q -p deepref-api -- migrate
+    cargo run -q -p deepref-http-api -- migrate
 
 # Load the deterministic, idempotent local fixture set.
 seed: migrate
@@ -66,7 +66,7 @@ test-unit:
 # Start dependencies and run integration test targets.
 test-integration:
     {{compose}} up -d --wait
-    cargo run -q -p deepref-api -- migrate
+    cargo run -q -p deepref-http-api -- migrate
     scripts/bootstrap-local-nats.sh
     cargo test --workspace --tests --locked
 

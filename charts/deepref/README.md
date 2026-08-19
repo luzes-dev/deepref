@@ -12,7 +12,7 @@ The chart never accepts secret values. `externalSecrets.remote` contains only AW
 
 - OpenTofu owns infrastructure, IAM roles, EKS Pod Identity associations, secret containers, and the initial controller installations.
 - Helm owns Kubernetes service accounts, application workloads, NATS/Neo4j, ExternalSecret objects, policies, and collectors.
-- `deepref-api migrate` runs as an Argo CD `PreSync` hook. A failed migration blocks the new sync before Deployments change.
+- `deepref-api migrate` runs as an Argo CD `PreSync` hook through the `deepref-http-api` package. A failed migration blocks the new sync before Deployments change.
 - The NATS bootstrap Job owns the three streams and two durable consumers. Application credentials never receive administration permissions.
 - The projector rebuild Job is absent unless `rebuild.enabled=true` and a unique `rebuild.runId` is supplied.
 - Neo4j is deliberately single-node and has no PDB; it is rebuilt from PostgreSQL.

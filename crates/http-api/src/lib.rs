@@ -24,7 +24,7 @@ pub async fn migrate(config: &ApiConfig) -> anyhow::Result<()> {
         .max_lifetime(Some(database.max_lifetime))
         .connect(&database.url)
         .await?;
-    sqlx::migrate!("./migrations").run(&pool).await?;
+    deepref_postgres::migrate(&pool).await?;
     tracing::info!("database migrations completed");
     Ok(())
 }

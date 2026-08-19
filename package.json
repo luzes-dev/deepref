@@ -12,7 +12,7 @@
     "check": "pnpm --filter @deepref/web check",
     "lint": "pnpm --filter @deepref/web lint",
     "format": "pnpm --filter @deepref/web format",
-    "generate:openapi": "cargo run -q -p deepref-api -- --print-openapi > docs/openapi.json",
+    "generate:openapi": "cargo run -q -p deepref-http-api -- --print-openapi > docs/openapi.json",
     "generate:client": "pnpm --filter @deepref/web generate:client",
     "generate:api": "pnpm generate:openapi && pnpm generate:client",
     "generate:api:check": "bash scripts/check-api-codegen.sh",

@@ -1,15 +1,25 @@
 [package]
-name = "deepref-api"
+name = "deepref-http-api"
 version.workspace = true
 edition.workspace = true
 license.workspace = true
 
+[lib]
+name = "deepref_http_api"
+path = "src/lib.rs"
+
+[[bin]]
+name = "deepref-api"
+path = "src/main.rs"
+
 [dependencies]
+deepref-application.workspace = true
 deepref-core = { version = "0.1.0", path = "../../crates/core" }
 deepref-domain.workspace = true
 deepref-config.workspace = true
 deepref-events = { version = "0.1.0", path = "../../crates/events" }
 deepref-graph.workspace = true
+deepref-postgres.workspace = true
 deepref-telemetry.workspace = true
 anyhow.workspace = true
 async-nats.workspace = true

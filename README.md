@@ -8,8 +8,7 @@ and Neo4j graph infrastructure.
 
 ```text
 apps/web        SvelteKit frontend
-crates/*        Rust library crates
-services/api    Rust HTTP API
+crates/*        Rust library crates, including the HTTP API and PostgreSQL adapter
 services/worker Rust ingestion worker
 services/projector Rust graph projector
 infra           Local dependencies and production infrastructure

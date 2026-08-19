@@ -75,7 +75,7 @@ target "api" {
   target   = "api"
   tags     = ["${REGISTRY}/${IMAGE_PREFIX}-api:${GIT_TREE_HASH}"]
   args = {
-    PACKAGE = "deepref-api"
+    PACKAGE = "deepref-http-api"
     BIN     = "deepref-api"
   }
 }

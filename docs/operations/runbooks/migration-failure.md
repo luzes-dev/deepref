@@ -64,7 +64,7 @@ Respond to a failed PostgreSQL migration PreSync hook while preserving the previ
      --command='SELECT pid, wait_event_type, wait_event, state, left(query,160) FROM pg_stat_activity WHERE datname=current_database();'
    ```
 
-5. Compare the error to the exact new migration under `services/api/migrations`. Determine whether SQLx rolled the migration back, it committed fully, or a reviewed idempotent forward repair is required. Record the conclusion and reviewer.
+5. Compare the error to the exact new migration under `crates/postgres/migrations`. Determine whether SQLx rolled the migration back, it committed fully, or a reviewed idempotent forward repair is required. Record the conclusion and reviewer.
 
 6. Choose one safe path:
 

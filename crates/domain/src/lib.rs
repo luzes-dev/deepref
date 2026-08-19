@@ -78,28 +78,15 @@ pub enum ScreeningTransition {
     Repeated,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
-pub struct ScreenReportCommand {
-    pub project_id: ProjectId,
-    pub report_id: ReportId,
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ScreenReportTransitionCommand {
     pub stage: ScreeningStage,
     pub decision: ScreeningDecision,
     pub exclusion_reason_id: Option<ExclusionReasonId>,
-    pub protocol_version_id: ProtocolVersionId,
-    pub expected_revision: i64,
-}
-
-impl ScreenReportCommand {
-    pub fn validate(
-        &self,
-        current: CurrentScreeningState,
-    ) -> Result<ScreeningTransition, ScreeningValidationError> {
-        transition(self, current)
-    }
 }
 
 pub fn transition(
-    command: &ScreenReportCommand,
+    command: &ScreenReportTransitionCommand,
     current: CurrentScreeningState,
 ) -> Result<ScreeningTransition, ScreeningValidationError> {
     match command.stage {
@@ -162,22 +149,19 @@ mod tests {
         stage: ScreeningStage,
         decision: ScreeningDecision,
         exclusion_reason_id: Option<ExclusionReasonId>,
-    ) -> ScreenReportCommand {
-        ScreenReportCommand {
-            project_id: Uuid::new_v4().into(),
-            report_id: Uuid::new_v4().into(),
+    ) -> ScreenReportTransitionCommand {
+        ScreenReportTransitionCommand {
             stage,
             decision,
             exclusion_reason_id,
-            protocol_version_id: Uuid::new_v4().into(),
-            expected_revision: 0,
         }
     }
 
     #[test]
     fn full_text_exclusion_requires_a_reason() {
         assert_eq!(
-            command(ScreeningStage::FullText, ScreeningDecision::Exclude, None).validate(
+            transition(
+                &command(ScreeningStage::FullText, ScreeningDecision::Exclude, None),
                 CurrentScreeningState {
                     title_abstract: Some(ScreeningDecision::Include),
                     ..CurrentScreeningState::default()
@@ -190,12 +174,14 @@ mod tests {
     #[test]
     fn title_abstract_decisions_cannot_carry_a_reason() {
         assert!(matches!(
-            command(
-                ScreeningStage::TitleAbstract,
-                ScreeningDecision::Exclude,
-                Some(Uuid::new_v4().into())
-            )
-            .validate(CurrentScreeningState::default()),
+            transition(
+                &command(
+                    ScreeningStage::TitleAbstract,
+                    ScreeningDecision::Exclude,
+                    Some(Uuid::new_v4().into()),
+                ),
+                CurrentScreeningState::default(),
+            ),
             Err(ScreeningValidationError::TitleAbstractReasonNotAllowed)
         ));
     }
@@ -203,8 +189,10 @@ mod tests {
     #[test]
     fn full_text_requires_title_abstract_include() {
         assert_eq!(
-            command(ScreeningStage::FullText, ScreeningDecision::Maybe, None)
-                .validate(CurrentScreeningState::default()),
+            transition(
+                &command(ScreeningStage::FullText, ScreeningDecision::Maybe, None),
+                CurrentScreeningState::default(),
+            ),
             Err(ScreeningValidationError::FullTextRequiresTitleAbstractInclude)
         );
     }
@@ -212,15 +200,17 @@ mod tests {
     #[test]
     fn non_exclude_full_text_decisions_cannot_carry_a_reason() {
         assert_eq!(
-            command(
-                ScreeningStage::FullText,
-                ScreeningDecision::Include,
-                Some(Uuid::new_v4().into())
-            )
-            .validate(CurrentScreeningState {
-                title_abstract: Some(ScreeningDecision::Include),
-                ..CurrentScreeningState::default()
-            }),
+            transition(
+                &command(
+                    ScreeningStage::FullText,
+                    ScreeningDecision::Include,
+                    Some(Uuid::new_v4().into()),
+                ),
+                CurrentScreeningState {
+                    title_abstract: Some(ScreeningDecision::Include),
+                    ..CurrentScreeningState::default()
+                },
+            ),
             Err(ScreeningValidationError::FullTextNonExclusionReasonNotAllowed)
         );
     }
@@ -228,12 +218,14 @@ mod tests {
     #[test]
     fn maybe_is_distinct_and_repeated_decisions_are_typed() {
         let current = CurrentScreeningState::default();
-        let maybe = command(
-            ScreeningStage::TitleAbstract,
-            ScreeningDecision::Maybe,
-            None,
+        let maybe = transition(
+            &command(
+                ScreeningStage::TitleAbstract,
+                ScreeningDecision::Maybe,
+                None,
+            ),
+            current,
         )
-        .validate(current)
         .expect("Maybe should be a valid first decision");
         assert_eq!(
             maybe,
@@ -243,15 +235,17 @@ mod tests {
             })
         );
         assert_eq!(
-            command(
-                ScreeningStage::TitleAbstract,
-                ScreeningDecision::Maybe,
-                None
-            )
-            .validate(CurrentScreeningState {
-                title_abstract: Some(ScreeningDecision::Maybe),
-                ..current
-            }),
+            transition(
+                &command(
+                    ScreeningStage::TitleAbstract,
+                    ScreeningDecision::Maybe,
+                    None,
+                ),
+                CurrentScreeningState {
+                    title_abstract: Some(ScreeningDecision::Maybe),
+                    ..current
+                },
+            ),
             Ok(ScreeningTransition::Repeated)
         );
     }
@@ -260,16 +254,18 @@ mod tests {
     fn repeated_full_text_exclusion_includes_its_reason() {
         let reason = ExclusionReasonId::from(Uuid::new_v4());
         assert_eq!(
-            command(
-                ScreeningStage::FullText,
-                ScreeningDecision::Exclude,
-                Some(reason)
-            )
-            .validate(CurrentScreeningState {
-                title_abstract: Some(ScreeningDecision::Include),
-                full_text: Some(ScreeningDecision::Exclude),
-                full_text_exclusion_reason_id: Some(reason),
-            }),
+            transition(
+                &command(
+                    ScreeningStage::FullText,
+                    ScreeningDecision::Exclude,
+                    Some(reason),
+                ),
+                CurrentScreeningState {
+                    title_abstract: Some(ScreeningDecision::Include),
+                    full_text: Some(ScreeningDecision::Exclude),
+                    full_text_exclusion_reason_id: Some(reason),
+                },
+            ),
             Ok(ScreeningTransition::Repeated)
         );
     }
@@ -277,16 +273,18 @@ mod tests {
     #[test]
     fn title_abstract_change_away_from_include_clears_full_text_state() {
         let reason = ExclusionReasonId::from(Uuid::new_v4());
-        let next = command(
-            ScreeningStage::TitleAbstract,
-            ScreeningDecision::Maybe,
-            None,
+        let next = transition(
+            &command(
+                ScreeningStage::TitleAbstract,
+                ScreeningDecision::Maybe,
+                None,
+            ),
+            CurrentScreeningState {
+                title_abstract: Some(ScreeningDecision::Include),
+                full_text: Some(ScreeningDecision::Exclude),
+                full_text_exclusion_reason_id: Some(reason),
+            },
         )
-        .validate(CurrentScreeningState {
-            title_abstract: Some(ScreeningDecision::Include),
-            full_text: Some(ScreeningDecision::Exclude),
-            full_text_exclusion_reason_id: Some(reason),
-        })
         .expect("changing the title/abstract decision should be valid");
 
         assert_eq!(

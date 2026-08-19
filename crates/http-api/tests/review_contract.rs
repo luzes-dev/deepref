@@ -1,6 +1,6 @@
 #[test]
 fn v2_review_contract_is_exposed_in_openapi() {
-    let document = serde_json::to_value(deepref_api::routes::openapi_document()).unwrap();
+    let document = serde_json::to_value(deepref_http_api::routes::openapi_document()).unwrap();
     let paths = document["paths"].as_object().unwrap();
     for path in [
         "/projects/{project_id}/protocol",
