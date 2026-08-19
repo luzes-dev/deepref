@@ -1,10 +1,12 @@
 use axum::{
     Json,
     extract::{Path, Query, State},
+    http::HeaderMap,
 };
 use chrono::{DateTime, Utc};
 use deepref_domain::{
-    ProjectId, ProtocolVersionId, ReportId, ScreenReportCommand, ScreeningDecision, ScreeningStage,
+    CurrentScreeningState, ProjectId, ProtocolVersionId, ReportId, ScreenReportCommand,
+    ScreeningDecision, ScreeningStage, ScreeningTransition, ScreeningValidationError,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -14,6 +16,7 @@ use uuid::Uuid;
 
 use crate::{
     error::{ApiError, ErrorResponse},
+    jobs::recompute_prisma_dedupe_key,
     state::AppState,
 };
 
@@ -22,6 +25,55 @@ const DEFAULT_CRITERIA: &str = r#"[
   {"id":"intervention","label":"Intervention or exposure","description":"Matches the intervention or exposure of interest."},
   {"id":"outcome","label":"Outcome","description":"Reports a relevant outcome."}
 ]"#;
+
+const ACTOR_KIND_HEADER: &str = "x-actor-kind";
+const ACTOR_ID_HEADER: &str = "x-actor-id";
+
+#[derive(Debug, Clone)]
+struct Actor {
+    kind: String,
+    id: String,
+}
+
+/// Extracts the caller-provided actor context for review audit events.
+///
+/// Authentication and actor verification are intentionally outside this API's
+/// scope. Until that boundary exists, missing headers use the documented local
+/// fallback `user/local-user`; callers can provide the same fields explicitly.
+fn extract_actor(headers: &HeaderMap) -> Result<Actor, ApiError> {
+    let kind = headers
+        .get(ACTOR_KIND_HEADER)
+        .map(|value| {
+            value
+                .to_str()
+                .map(str::to_owned)
+                .map_err(|_| ApiError::BadRequest("x-actor-kind must be valid ASCII".to_owned()))
+        })
+        .transpose()?
+        .unwrap_or_else(|| "user".to_owned());
+    if !matches!(kind.as_str(), "user" | "automation" | "system") {
+        return Err(ApiError::BadRequest(
+            "x-actor-kind must be user, automation, or system".to_owned(),
+        ));
+    }
+    let id = headers
+        .get(ACTOR_ID_HEADER)
+        .map(|value| {
+            value
+                .to_str()
+                .map(str::trim)
+                .map(str::to_owned)
+                .map_err(|_| ApiError::BadRequest("x-actor-id must be valid ASCII".to_owned()))
+        })
+        .transpose()?
+        .unwrap_or_else(|| "local-user".to_owned());
+    if id.is_empty() {
+        return Err(ApiError::BadRequest(
+            "x-actor-id must not be blank".to_owned(),
+        ));
+    }
+    Ok(Actor { kind, id })
+}
 
 #[derive(Debug, Clone, Serialize, ToSchema)]
 pub(crate) struct ProtocolDto {
@@ -250,8 +302,10 @@ pub(crate) async fn list_title_abstract_queue(
 pub(crate) async fn screen_report(
     State(state): State<AppState>,
     Path((project_id, report_id)): Path<(Uuid, Uuid)>,
+    headers: HeaderMap,
     Json(input): Json<ScreenReportRequest>,
 ) -> Result<Json<ScreeningStateDto>, ApiError> {
+    let actor = extract_actor(&headers)?;
     let command = ScreenReportCommand {
         project_id: ProjectId::from(project_id),
         report_id: ReportId::from(report_id),
@@ -261,9 +315,10 @@ pub(crate) async fn screen_report(
         protocol_version_id: ProtocolVersionId::from(input.protocol_version_id),
         expected_revision: input.expected_revision,
     };
-    command
-        .validate()
-        .map_err(|error| ApiError::BadRequest(error.to_string()))?;
+    let stage = match &input.stage {
+        ScreeningStageInput::TitleAbstract => "title_abstract",
+        ScreeningStageInput::FullText => "full_text",
+    };
 
     let mut tx = state.pool.begin().await?;
     sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))")
@@ -295,17 +350,21 @@ pub(crate) async fn screen_report(
         ));
     }
     if let Some(reason_id) = input.exclusion_reason_id {
-        let reason_exists: bool = sqlx::query_scalar(
-            "SELECT EXISTS(SELECT 1 FROM exclusion_reasons WHERE id=$1 AND project_id=$2)",
-        )
-        .bind(reason_id)
-        .bind(project_id)
-        .fetch_one(&mut *tx)
-        .await?;
-        if !reason_exists {
+        let reason_stage: Option<String> =
+            sqlx::query_scalar("SELECT stage FROM exclusion_reasons WHERE id=$1 AND project_id=$2")
+                .bind(reason_id)
+                .bind(project_id)
+                .fetch_optional(&mut *tx)
+                .await?;
+        let Some(reason_stage) = reason_stage else {
             return Err(ApiError::BadRequest(
                 "exclusion_reason_id does not belong to this project".to_owned(),
             ));
+        };
+        if reason_stage != stage {
+            return Err(ApiError::BadRequest(format!(
+                "exclusion_reason_id is for {reason_stage} screening, not {stage} screening"
+            )));
         }
     }
     let current = sqlx::query(
@@ -323,9 +382,16 @@ pub(crate) async fn screen_report(
         .as_ref()
         .map(|row| row.get::<String, _>("full_text_status"))
         .unwrap_or_else(|| "not_required".to_owned());
+    let final_status = current
+        .as_ref()
+        .map(|row| row.get::<String, _>("final_status"))
+        .unwrap_or_else(|| "unscreened".to_owned());
     let old_reason = current
         .as_ref()
         .and_then(|row| row.get::<Option<Uuid>, _>("full_text_exclusion_reason_id"));
+    let title_decision = screening_decision_from_status(&title_status)?;
+    let full_decision = screening_decision_from_status(&full_status)?;
+    validate_final_status(&final_status)?;
     let old_revision = current
         .as_ref()
         .map(|row| row.get::<i64, _>("revision"))
@@ -350,44 +416,51 @@ pub(crate) async fn screen_report(
             details: json!({ "currentRevision": old_revision, "currentState": current_state }),
         });
     }
+    let current_state = CurrentScreeningState {
+        title_abstract: title_decision,
+        full_text: full_decision,
+        full_text_exclusion_reason_id: old_reason.map(Into::into),
+    };
+    let next_state = match command
+        .validate(current_state)
+        .map_err(map_screening_validation_error)?
+    {
+        ScreeningTransition::Applied(next_state) => next_state,
+        ScreeningTransition::Repeated => {
+            return Err(ApiError::Conflict {
+                code: "screening_decision_repeated".to_owned(),
+                message: "screening decision is already current".to_owned(),
+                details: json!({ "currentRevision": old_revision }),
+            });
+        }
+    };
     let decision = match input.decision {
         ScreeningDecisionInput::Include => "include",
         ScreeningDecisionInput::Exclude => "exclude",
         ScreeningDecisionInput::Maybe => "maybe",
     };
-    let stage = match input.stage {
-        ScreeningStageInput::TitleAbstract => "title_abstract",
-        ScreeningStageInput::FullText => "full_text",
+    let next_title_status = next_state
+        .title_abstract
+        .map(screening_decision_status)
+        .unwrap_or("unscreened");
+    let next_full_status = next_state
+        .full_text
+        .map(screening_decision_status)
+        .unwrap_or("not_required");
+    let final_status = match (next_state.title_abstract, next_state.full_text) {
+        (Some(ScreeningDecision::Include), Some(full_text)) => screening_decision_status(full_text),
+        (Some(ScreeningDecision::Include), None) => "pending_full_text",
+        (Some(ScreeningDecision::Exclude), _) => "exclude",
+        (Some(ScreeningDecision::Maybe), _) => "maybe",
+        (None, _) => "unscreened",
     };
-    let next_title_status = if stage == "title_abstract" {
-        decision
-    } else {
-        title_status.as_str()
-    };
-    let next_full_status = if stage == "full_text" {
-        decision
-    } else {
-        full_status.as_str()
-    };
-    let final_status = if stage == "full_text" {
-        decision
-    } else {
-        match decision {
-            "include" => "pending_full_text",
-            other => other,
-        }
-    };
-    let full_text_reason = if stage == "full_text" {
-        input.exclusion_reason_id
-    } else {
-        old_reason
-    };
+    let full_text_reason: Option<Uuid> = next_state.full_text_exclusion_reason_id.map(Into::into);
     let event_id = Uuid::new_v4();
     let previous_event_id = current
         .as_ref()
         .and_then(|row| row.get::<Option<Uuid>, _>("last_event_id"));
     sqlx::query(
-        "INSERT INTO screening_events (id,project_id,report_id,stage,decision,exclusion_reason_id,notes,protocol_version_id,actor_kind,actor_id,supersedes_event_id) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,'user','local-user',$9)",
+        "INSERT INTO screening_events (id,project_id,report_id,stage,decision,exclusion_reason_id,notes,protocol_version_id,actor_kind,actor_id,supersedes_event_id) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)",
     )
     .bind(event_id)
     .bind(project_id)
@@ -397,6 +470,8 @@ pub(crate) async fn screen_report(
     .bind(input.exclusion_reason_id)
     .bind(input.notes)
     .bind(input.protocol_version_id)
+    .bind(&actor.kind)
+    .bind(&actor.id)
     .bind(previous_event_id)
     .execute(&mut *tx)
     .await?;
@@ -443,12 +518,14 @@ pub(crate) async fn screen_report(
     .execute(&mut *tx)
     .await?;
     sqlx::query(
-        "INSERT INTO review_events (id,project_id,event_type,aggregate_type,aggregate_id,payload,actor_kind,actor_id) VALUES ($1,$2,'report_screened','report',$3,$4,'user','local-user')",
+        "INSERT INTO review_events (id,project_id,event_type,aggregate_type,aggregate_id,payload,actor_kind,actor_id) VALUES ($1,$2,'report_screened','report',$3,$4,$5,$6)",
     )
     .bind(Uuid::new_v4())
     .bind(project_id)
     .bind(report_id)
     .bind(json!({ "stage": stage, "decision": decision, "revision": revision, "protocol_version_id": input.protocol_version_id }))
+    .bind(&actor.kind)
+    .bind(&actor.id)
     .execute(&mut *tx)
     .await?;
     sqlx::query(
@@ -456,7 +533,7 @@ pub(crate) async fn screen_report(
     )
     .bind(Uuid::new_v4())
     .bind(json!({ "project_id": project_id }))
-    .bind(format!("recompute_prisma:{project_id}:{revision}"))
+    .bind(recompute_prisma_dedupe_key(project_id, event_id))
     .execute(&mut *tx)
     .await?;
     tx.commit().await?;
@@ -581,4 +658,41 @@ fn screening_state_dto_from_row(row: &sqlx::postgres::PgRow) -> ScreeningStateDt
 
 fn screening_state_json_from_row(row: &sqlx::postgres::PgRow) -> serde_json::Value {
     json!(screening_state_dto_from_row(row))
+}
+
+fn map_screening_validation_error(error: ScreeningValidationError) -> ApiError {
+    ApiError::BadRequest(error.to_string())
+}
+
+fn screening_decision_from_status(status: &str) -> Result<Option<ScreeningDecision>, ApiError> {
+    match status {
+        "include" => Ok(Some(ScreeningDecision::Include)),
+        "exclude" => Ok(Some(ScreeningDecision::Exclude)),
+        "maybe" => Ok(Some(ScreeningDecision::Maybe)),
+        "unscreened" | "not_required" => Ok(None),
+        other => Err(ApiError::DataIntegrity(format!(
+            "unknown screening status {other:?}"
+        ))),
+    }
+}
+
+fn validate_final_status(status: &str) -> Result<(), ApiError> {
+    if matches!(
+        status,
+        "unscreened" | "pending_full_text" | "include" | "exclude" | "maybe"
+    ) {
+        Ok(())
+    } else {
+        Err(ApiError::DataIntegrity(format!(
+            "unknown screening final status {status:?}"
+        )))
+    }
+}
+
+fn screening_decision_status(decision: ScreeningDecision) -> &'static str {
+    match decision {
+        ScreeningDecision::Include => "include",
+        ScreeningDecision::Exclude => "exclude",
+        ScreeningDecision::Maybe => "maybe",
+    }
 }

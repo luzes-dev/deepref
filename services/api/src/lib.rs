@@ -6,6 +6,7 @@ mod outbox;
 pub mod routes;
 pub mod state;
 
+use std::future::Future;
 use std::sync::Arc;
 
 use deepref_graph::GraphRepository;
@@ -29,6 +30,13 @@ pub async fn migrate(config: &ApiConfig) -> anyhow::Result<()> {
 }
 
 pub async fn serve(config: ApiConfig) -> anyhow::Result<()> {
+    serve_with_shutdown(config, shutdown_signal()).await
+}
+
+pub async fn serve_with_shutdown(
+    config: ApiConfig,
+    shutdown: impl Future<Output = ()> + Send + 'static,
+) -> anyhow::Result<()> {
     let database = &config.runtime.database;
     let pool = PgPoolOptions::new()
         .min_connections(database.pool_min)
@@ -74,7 +82,7 @@ pub async fn serve(config: ApiConfig) -> anyhow::Result<()> {
     let listener = tokio::net::TcpListener::bind(config.bind_addr).await?;
     tracing::info!(address = %config.bind_addr, "API listening");
     axum::serve(listener, routes::router(state, &config))
-        .with_graceful_shutdown(shutdown_signal())
+        .with_graceful_shutdown(shutdown)
         .await?;
     Ok(())
 }

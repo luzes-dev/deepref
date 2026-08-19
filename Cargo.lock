@@ -738,6 +738,18 @@ dependencies = [
 ]
 
 [[package]]
+name = "deepref-server"
+version = "0.1.0"
+dependencies = [
+ "anyhow",
+ "deepref-api",
+ "deepref-config",
+ "deepref-telemetry",
+ "deepref-worker",
+ "tokio",
+]
+
+[[package]]
 name = "deepref-telemetry"
 version = "0.1.0"
 dependencies = [
