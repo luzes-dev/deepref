@@ -1,10 +1,12 @@
+use std::collections::HashMap;
+
 use axum::{
     Json,
     extract::{Path, Query, State},
     http::StatusCode,
 };
-use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};
 use chrono::{DateTime, Utc};
+use deepref_core::normalize_doi;
 use deepref_events::{
     DomainPayload, EntityType, EventEnvelope, MetricsRecomputeRequested,
     SUBJECT_METRICS_RECOMPUTE_REQUESTED,
@@ -22,9 +24,9 @@ use crate::{
 };
 
 #[derive(Debug, Serialize, Clone, ToSchema)]
-pub(crate) struct ArticleDto {
-    doi: String,
-    doi_key: String,
+pub(crate) struct ReportDto {
+    report_id: Uuid,
+    doi: Option<String>,
     title: Option<String>,
     issued_year: Option<i32>,
     #[serde(rename = "type")]
@@ -38,8 +40,9 @@ pub(crate) struct ArticleDto {
 }
 
 #[derive(Debug, Serialize, ToSchema)]
-pub(crate) struct ArticleDetailDto {
-    doi: String,
+pub(crate) struct ReportDetailDto {
+    report_id: Uuid,
+    doi: Option<String>,
     title: Option<String>,
     #[serde(rename = "abstract")]
     abstract_text: Option<String>,
@@ -60,8 +63,8 @@ pub(crate) struct ArticleDetailDto {
 
 #[derive(Debug, Serialize, ToSchema)]
 pub(crate) struct GraphEdgeDto {
-    source: String,
-    target: String,
+    source: Uuid,
+    target: Uuid,
 }
 
 #[derive(Debug, Serialize, ToSchema)]
@@ -73,7 +76,7 @@ pub(crate) struct ProjectionMetadata {
 
 #[derive(Debug, Serialize, ToSchema)]
 pub(crate) struct ProjectGraphDto {
-    nodes: Vec<ArticleDto>,
+    nodes: Vec<ReportDto>,
     edges: Vec<GraphEdgeDto>,
     projection: ProjectionMetadata,
     truncated: bool,
@@ -81,9 +84,9 @@ pub(crate) struct ProjectGraphDto {
 
 #[derive(Debug, Serialize, ToSchema)]
 pub(crate) struct RecommendationGroupsDto {
-    foundational: Vec<ArticleDto>,
-    core_to_project: Vec<ArticleDto>,
-    underexplored: Vec<ArticleDto>,
+    foundational: Vec<ReportDto>,
+    core_to_project: Vec<ReportDto>,
+    underexplored: Vec<ReportDto>,
     projection: ProjectionMetadata,
 }
 
@@ -94,77 +97,104 @@ pub(crate) struct RecomputeMetricsDto {
     event_id: Uuid,
 }
 
-#[utoipa::path(get, path="/projects/{project_id}/articles", operation_id="listProjectArticles", tag="articles",
+#[utoipa::path(get, path="/projects/{project_id}/reports", operation_id="listProjectReports", tag="reports",
     params(("project_id"=Uuid, Path), PaginationParams),
-    responses((status=200, body=PaginatedResponse<ArticleDto>), (status=500, body=ErrorResponse)))]
-pub(crate) async fn list_articles(
+    responses((status=200, body=PaginatedResponse<ReportDto>), (status=500, body=ErrorResponse)))]
+pub(crate) async fn list_reports(
     State(state): State<AppState>,
     Path(project_id): Path<Uuid>,
     Query(pagination): Query<PaginationParams>,
-) -> Result<Json<PaginatedResponse<ArticleDto>>, ApiError> {
+) -> Result<Json<PaginatedResponse<ReportDto>>, ApiError> {
     let limit = pagination.limit()?;
-    let cursor: Option<(f64, i32, i32, String)> = pagination.decode()?;
+    let cursor: Option<(f64, i32, i32, Uuid)> = pagination.decode()?;
     let rows = sqlx::query(
-        r#"SELECT w.canonical_doi,w.title,w.issued_year,w.work_type,w.total_citations,
+        r#"SELECT r.id AS report_id,doi.value AS doi,
+        r.title,COALESCE(r.publication_year,w.issued_year) AS issued_year,w.work_type,
+        COALESCE(w.total_citations,0) AS total_citations,
         COALESCE(pw.internal_citations,0) AS internal_citations,
         COALESCE(pw.outbound_internal_references,0) AS outbound_internal_references,
         COALESCE(pw.rank_score,0) AS rank_score,pw.metrics_computed_at,
         (pw.metrics_computed_at IS NULL OR pw.metrics_computed_at < now()-interval '1 hour') AS metrics_stale
-        FROM project_works pw JOIN works w ON w.canonical_doi=pw.canonical_doi
-        WHERE pw.project_id=$1 AND ($2::float8 IS NULL OR
-          (pw.rank_score,pw.internal_citations,w.total_citations,w.canonical_doi)<($2,$3,$4,$5))
-        ORDER BY pw.rank_score DESC,pw.internal_citations DESC,w.total_citations DESC,w.canonical_doi DESC LIMIT $6"#,
+        FROM project_reports pr
+        JOIN reports r ON r.id=pr.report_id
+        LEFT JOIN LATERAL (
+          SELECT value,normalized_value
+          FROM report_identifiers
+          WHERE report_id=r.id AND scheme='doi'
+          ORDER BY created_at,id
+          LIMIT 1
+        ) doi ON TRUE
+        LEFT JOIN project_works pw ON pw.project_id=pr.project_id AND pw.canonical_doi=doi.normalized_value
+        LEFT JOIN works w ON w.canonical_doi=pw.canonical_doi
+        WHERE pr.project_id=$1 AND ($2::float8 IS NULL OR
+          (COALESCE(pw.rank_score,0),COALESCE(pw.internal_citations,0),COALESCE(w.total_citations,0),pr.report_id)<($2,$3,$4,$5))
+        ORDER BY COALESCE(pw.rank_score,0) DESC,COALESCE(pw.internal_citations,0) DESC,
+          COALESCE(w.total_citations,0) DESC,pr.report_id DESC LIMIT $6"#,
     ).bind(project_id).bind(cursor.as_ref().map(|value| value.0))
         .bind(cursor.as_ref().map(|value| value.1)).bind(cursor.as_ref().map(|value| value.2))
-        .bind(cursor.as_ref().map(|value| value.3.clone())).bind(limit + 1)
+        .bind(cursor.as_ref().map(|value| value.3)).bind(limit + 1)
         .fetch_all(&state.pool).await?;
     let graph_stale = match &state.graph {
         Some(graph) => graph.ping().await.is_err(),
         None => true,
     };
-    let articles = rows
+    let reports = rows
         .into_iter()
-        .map(article_from_row)
-        .map(|mut article| {
-            article.metrics_stale |= graph_stale;
-            article
+        .map(report_from_row)
+        .map(|mut report| {
+            report.metrics_stale |= graph_stale;
+            report
         })
         .collect();
-    Ok(Json(page(articles, limit as usize, |article| {
+    Ok(Json(page(reports, limit as usize, |report| {
         (
-            article.rank_score,
-            article.internal_citations,
-            article.total_citations,
-            article.doi.clone(),
+            report.rank_score,
+            report.internal_citations,
+            report.total_citations,
+            report.report_id,
         )
     })?))
 }
 
-#[utoipa::path(get, path="/projects/{project_id}/articles/{doi_key}", operation_id="getProjectArticle", tag="articles",
-    params(("project_id"=Uuid, Path),("doi_key"=String, Path)),
-    responses((status=200, body=ArticleDetailDto),(status=400,body=ErrorResponse),(status=404,body=ErrorResponse)))]
-pub(crate) async fn get_article(
+#[utoipa::path(get, path="/projects/{project_id}/reports/{report_id}", operation_id="getProjectReport", tag="reports",
+    params(("project_id"=Uuid, Path),("report_id"=Uuid, Path)),
+    responses((status=200, body=ReportDetailDto),(status=400,body=ErrorResponse),(status=404,body=ErrorResponse)))]
+pub(crate) async fn get_report(
     State(state): State<AppState>,
-    Path((project_id, doi_key)): Path<(Uuid, String)>,
-) -> Result<Json<ArticleDetailDto>, ApiError> {
-    let bytes = URL_SAFE_NO_PAD
-        .decode(doi_key.as_bytes())
-        .map_err(|_| ApiError::BadRequest("invalid DOI key".into()))?;
-    let doi =
-        String::from_utf8(bytes).map_err(|_| ApiError::BadRequest("invalid DOI key".into()))?;
+    Path((project_id, report_id)): Path<(Uuid, Uuid)>,
+) -> Result<Json<ReportDetailDto>, ApiError> {
     let row = sqlx::query(
-        r#"SELECT w.canonical_doi,w.title,w.abstract_text,w.issued_year,w.published_year,w.work_type,
-        w.publisher,w.container_title,w.url,w.total_citations,w.references_count,w.raw,
-        pw.metrics_computed_at,(pw.metrics_computed_at IS NULL OR pw.metrics_computed_at<now()-interval '1 hour') AS metrics_stale
-        FROM works w JOIN project_works pw ON pw.canonical_doi=w.canonical_doi
-        WHERE w.canonical_doi=$1 AND pw.project_id=$2"#,
-    ).bind(doi).bind(project_id).fetch_one(&state.pool).await?;
+        r#"SELECT r.id AS report_id,doi.value AS doi,
+        COALESCE(r.title,w.title) AS title,COALESCE(r.abstract_text,w.abstract_text) AS abstract_text,
+        COALESCE(r.publication_year,w.issued_year) AS issued_year,w.published_year,w.work_type,
+        w.publisher,COALESCE(r.journal,w.container_title) AS container_title,COALESCE(r.url,w.url) AS url,
+        COALESCE(w.total_citations,0) AS total_citations,COALESCE(w.references_count,0) AS references_count,
+        r.raw,pw.metrics_computed_at,
+        (pw.metrics_computed_at IS NULL OR pw.metrics_computed_at<now()-interval '1 hour') AS metrics_stale
+        FROM project_reports pr
+        JOIN reports r ON r.id=pr.report_id
+        LEFT JOIN LATERAL (
+          SELECT value,normalized_value
+          FROM report_identifiers
+          WHERE report_id=r.id AND scheme='doi'
+          ORDER BY created_at,id
+          LIMIT 1
+        ) doi ON TRUE
+        LEFT JOIN project_works pw ON pw.project_id=pr.project_id AND pw.canonical_doi=doi.normalized_value
+        LEFT JOIN works w ON w.canonical_doi=pw.canonical_doi
+        WHERE pr.project_id=$1 AND pr.report_id=$2"#,
+    )
+    .bind(project_id)
+    .bind(report_id)
+    .fetch_one(&state.pool)
+    .await?;
     let graph_stale = match &state.graph {
         Some(graph) => graph.ping().await.is_err(),
         None => true,
     };
-    Ok(Json(ArticleDetailDto {
-        doi: row.get("canonical_doi"),
+    Ok(Json(ReportDetailDto {
+        report_id: row.get("report_id"),
+        doi: row.get("doi"),
         title: row.get("title"),
         abstract_text: row.get("abstract_text"),
         issued_year: row.get("issued_year"),
@@ -181,7 +211,7 @@ pub(crate) async fn get_article(
     }))
 }
 
-#[utoipa::path(get, path="/projects/{project_id}/graph", operation_id="getProjectGraph", tag="articles",
+#[utoipa::path(get, path="/projects/{project_id}/graph", operation_id="getProjectGraph", tag="reports",
     params(("project_id"=Uuid, Path)),
     responses((status=200,body=ProjectGraphDto),(status=503,body=ErrorResponse)))]
 pub(crate) async fn project_graph(
@@ -207,29 +237,44 @@ pub(crate) async fn project_graph(
             tracing::warn!(%error, %project_id, "graph query failed");
             ApiError::graph_unavailable(state.graph_retry_after)
         })?;
+    let report_mappings = graph_report_mappings(&state, project_id, &graph_data.nodes).await?;
     let nodes = graph_data
         .nodes
         .into_iter()
-        .map(|node| ArticleDto {
-            doi_key: URL_SAFE_NO_PAD.encode(node.doi.as_bytes()),
-            doi: node.doi,
-            title: node.title,
-            issued_year: node.issued_year.map(|year| year as i32),
-            work_type: None,
-            total_citations: node.total_citations as i32,
-            internal_citations: 0,
-            outbound_internal_references: 0,
-            rank_score: 0.0,
-            metrics_as_of: projection.last_success_at,
-            metrics_stale: projection.lag > 0,
+        .filter_map(|node| {
+            let normalized_doi = normalize_doi(&node.doi).ok()?;
+            let report = report_mappings.get(&normalized_doi)?;
+            Some(ReportDto {
+                report_id: report.report_id,
+                doi: Some(report.doi.clone()),
+                title: report.title.clone().or(node.title),
+                issued_year: report
+                    .issued_year
+                    .or_else(|| node.issued_year.map(|year| year as i32)),
+                work_type: None,
+                total_citations: node.total_citations as i32,
+                internal_citations: 0,
+                outbound_internal_references: 0,
+                rank_score: 0.0,
+                metrics_as_of: projection.last_success_at,
+                metrics_stale: projection.lag > 0,
+            })
         })
         .collect();
     let edges = graph_data
         .edges
         .into_iter()
-        .map(|edge| GraphEdgeDto {
-            source: edge.source,
-            target: edge.target,
+        .filter_map(|edge| {
+            let source = normalize_doi(&edge.source)
+                .ok()
+                .and_then(|doi| report_mappings.get(&doi))?;
+            let target = normalize_doi(&edge.target)
+                .ok()
+                .and_then(|doi| report_mappings.get(&doi))?;
+            Some(GraphEdgeDto {
+                source: source.report_id,
+                target: target.report_id,
+            })
         })
         .collect();
     Ok(Json(ProjectGraphDto {
@@ -240,7 +285,7 @@ pub(crate) async fn project_graph(
     }))
 }
 
-#[utoipa::path(get, path="/projects/{project_id}/recommendations", operation_id="getProjectRecommendations", tag="articles",
+#[utoipa::path(get, path="/projects/{project_id}/recommendations", operation_id="getProjectRecommendations", tag="reports",
     params(("project_id"=Uuid, Path)), responses((status=200,body=RecommendationGroupsDto),(status=503,body=ErrorResponse)))]
 pub(crate) async fn recommendations(
     State(state): State<AppState>,
@@ -257,7 +302,7 @@ pub(crate) async fn recommendations(
     }))
 }
 
-#[utoipa::path(post, path="/projects/{project_id}/metrics/recompute", operation_id="recomputeProjectMetrics", tag="articles",
+#[utoipa::path(post, path="/projects/{project_id}/metrics/recompute", operation_id="recomputeProjectMetrics", tag="reports",
     params(("project_id"=Uuid, Path)), responses((status=202,body=RecomputeMetricsDto),(status=500,body=ErrorResponse)))]
 pub(crate) async fn recompute_metrics(
     State(state): State<AppState>,
@@ -323,11 +368,10 @@ async fn projection_metadata(
     })
 }
 
-fn article_from_row(row: sqlx::postgres::PgRow) -> ArticleDto {
-    let doi: String = row.get("canonical_doi");
-    ArticleDto {
-        doi_key: URL_SAFE_NO_PAD.encode(doi.as_bytes()),
-        doi,
+fn report_from_row(row: sqlx::postgres::PgRow) -> ReportDto {
+    ReportDto {
+        report_id: row.get("report_id"),
+        doi: row.get("doi"),
         title: row.get("title"),
         issued_year: row.get("issued_year"),
         work_type: row.get("work_type"),
@@ -338,4 +382,55 @@ fn article_from_row(row: sqlx::postgres::PgRow) -> ArticleDto {
         metrics_as_of: row.get("metrics_computed_at"),
         metrics_stale: row.get("metrics_stale"),
     }
+}
+
+#[derive(Debug, Clone)]
+struct GraphReportMapping {
+    report_id: Uuid,
+    doi: String,
+    title: Option<String>,
+    issued_year: Option<i32>,
+}
+
+async fn graph_report_mappings(
+    state: &AppState,
+    project_id: Uuid,
+    nodes: &[deepref_graph::GraphNode],
+) -> Result<HashMap<String, GraphReportMapping>, ApiError> {
+    let normalized_dois = nodes
+        .iter()
+        .filter_map(|node| normalize_doi(&node.doi).ok())
+        .collect::<Vec<_>>();
+    if normalized_dois.is_empty() {
+        return Ok(HashMap::new());
+    }
+
+    let rows = sqlx::query(
+        r#"SELECT requested.normalized_doi,r.id AS report_id,ri.value AS doi,
+        r.title,r.publication_year AS issued_year
+        FROM unnest($2::text[]) AS requested(normalized_doi)
+        JOIN report_identifiers ri ON ri.scheme='doi' AND ri.normalized_value=requested.normalized_doi
+        JOIN project_reports pr ON pr.project_id=$1 AND pr.report_id=ri.report_id
+        JOIN reports r ON r.id=pr.report_id"#,
+    )
+    .bind(project_id)
+    .bind(normalized_dois)
+    .fetch_all(&state.pool)
+    .await?;
+
+    Ok(rows
+        .into_iter()
+        .map(|row| {
+            let normalized_doi: String = row.get("normalized_doi");
+            (
+                normalized_doi,
+                GraphReportMapping {
+                    report_id: row.get("report_id"),
+                    doi: row.get("doi"),
+                    title: row.get("title"),
+                    issued_year: row.get("issued_year"),
+                },
+            )
+        })
+        .collect())
 }

@@ -2,7 +2,7 @@
 	import SearchIcon from '@lucide/svelte/icons/search';
 	import XIcon from '@lucide/svelte/icons/x';
 	import type { Table } from '@tanstack/table-core';
-	import type { ArticleDto } from '$lib/api/generated/models';
+	import type { ReportDto } from '$lib/api/generated/models';
 	import { Badge } from '$lib/components/ui/badge';
 	import { Button } from '$lib/components/ui/button';
 	import * as InputGroup from '$lib/components/ui/input-group';
@@ -16,7 +16,7 @@
 		value: string;
 	};
 
-	let { table, articles }: { table: Table<ArticleDto>; articles: ArticleDto[] } = $props();
+	let { table, articles }: { table: Table<ReportDto>; articles: ReportDto[] } = $props();
 
 	const isFiltered = $derived(table.getState().columnFilters.length > 0);
 	const titleColumn = $derived(table.getColumn('title'));
@@ -53,7 +53,7 @@
 	<div class="flex flex-1 flex-col gap-2 lg:flex-row lg:items-center">
 		<InputGroup.Root class="h-8 lg:max-w-72">
 			<InputGroup.Input
-				placeholder="Search title or DOI"
+				placeholder="Search title, DOI, or report ID"
 				value={(titleColumn?.getFilterValue() as string) ?? ''}
 				oninput={(event) => titleColumn?.setFilterValue(event.currentTarget.value)}
 				onchange={(event) => titleColumn?.setFilterValue(event.currentTarget.value)}

@@ -29,8 +29,8 @@ const secondaryProject = {
 
 const articles = [
 	{
+		report_id: '00000000-0000-4000-8000-000000000001',
 		doi: '10.1/source',
-		doi_key: 'MTAuMS9zb3VyY2U',
 		title: 'Source Article',
 		issued_year: 2024,
 		type: 'article',
@@ -42,8 +42,8 @@ const articles = [
 		metrics_stale: false
 	},
 	{
+		report_id: '00000000-0000-4000-8000-000000000002',
 		doi: '10.2/review',
-		doi_key: 'MTAuMi9yZXZpZXc',
 		title: 'Review Article',
 		issued_year: 2022,
 		type: 'review',
@@ -55,8 +55,8 @@ const articles = [
 		metrics_stale: false
 	},
 	{
+		report_id: '00000000-0000-4000-8000-000000000003',
 		doi: '10.3/archive',
-		doi_key: 'MTAuMy9hcmNoaXZl',
 		title: 'Archive Article',
 		issued_year: 2018,
 		type: 'article',
@@ -70,8 +70,8 @@ const articles = [
 ];
 
 const paginatedArticles = Array.from({ length: 9 }, (_, index) => ({
+	report_id: `00000000-0000-4000-8000-${String(index + 4).padStart(12, '0')}`,
 	doi: `10.4/page-${index + 1}`,
-	doi_key: `MTAuNC9wYWdlLTE${index}`,
 	title: `Pagination Article ${index + 1}`,
 	issued_year: 2020 + (index % 4),
 	type: index % 2 === 0 ? 'article' : 'preprint',
@@ -117,7 +117,7 @@ async function mockWorkspace(page: Page) {
 		await route.fulfill({ json: project });
 	});
 	await page.route(
-		/http:\/\/localhost:4173\/api\/projects\/test-project\/articles(?:\?.*)?$/,
+		/http:\/\/localhost:4173\/api\/projects\/test-project\/reports(?:\?.*)?$/,
 		async (route) => {
 			await route.fulfill({ json: pageOf(workspaceArticles) });
 		}
@@ -134,7 +134,7 @@ async function mockWorkspace(page: Page) {
 		await route.fulfill({
 			json: {
 				nodes: workspaceArticles,
-				edges: [{ source: '10.1/source', target: '10.1/source' }],
+				edges: [{ source: articles[0].report_id, target: articles[0].report_id }],
 				projection,
 				truncated: false
 			}
@@ -154,7 +154,7 @@ async function mockWorkspace(page: Page) {
 		}
 	);
 	await page.route(
-		'http://localhost:4173/api/projects/test-project/articles/MTAuMS9zb3VyY2U',
+		`http://localhost:4173/api/projects/test-project/reports/${articles[0].report_id}`,
 		async (route) => {
 			await route.fulfill({
 				json: {
@@ -278,7 +278,7 @@ async function mockProjectCreateWorkspace(page: Page, initialProjects = [project
 			}
 		);
 		await page.route(
-			`http://localhost:4173/api/projects/${mockedProject.id}/articles**`,
+			`http://localhost:4173/api/projects/${mockedProject.id}/reports**`,
 			async (route) => {
 				await route.fulfill({
 					json: pageOf(mockedProject.id === project.id ? articles : [])
@@ -330,7 +330,7 @@ async function mockProjectManagementWorkspace(
 			return;
 		}
 
-		if (resource === 'articles') {
+		if (resource === 'reports') {
 			await route.fulfill({ json: pageOf(projectId === project.id ? articles : []) });
 			return;
 		}
@@ -424,7 +424,7 @@ test('shows dependency degradation without blocking core workspace views', async
 test('shows stale metric timestamps from the typed article contract', async ({ page }) => {
 	await mockWorkspace(page);
 	await page.route(
-		/http:\/\/localhost:4173\/api\/projects\/test-project\/articles(?:\?.*)?$/,
+		/http:\/\/localhost:4173\/api\/projects\/test-project\/reports(?:\?.*)?$/,
 		async (route) => {
 			await route.fulfill({
 				json: pageOf([{ ...articles[0], metrics_stale: true }])
@@ -482,7 +482,7 @@ test('loads opaque cursor pages for projects, articles, and ingestions', async (
 		});
 	});
 	await page.route(
-		/http:\/\/localhost:4173\/api\/projects\/test-project\/articles(?:\?.*)?$/,
+		/http:\/\/localhost:4173\/api\/projects\/test-project\/reports(?:\?.*)?$/,
 		async (route) => {
 			const cursor = new URL(route.request().url()).searchParams.get('cursor');
 			await route.fulfill({
@@ -616,7 +616,7 @@ test('article table filters, resets, sorts, and paginates', async ({ page }) => 
 	await page.getByRole('button', { name: 'Articles' }).click();
 	await expect(page.getByText('Page 1 of 2')).toBeVisible();
 
-	await page.getByRole('textbox', { name: 'Search title or DOI' }).fill('review');
+	await page.getByRole('textbox', { name: 'Search title, DOI, or report ID' }).fill('review');
 	await expect(page.getByRole('button', { name: /Review Article/ })).toBeVisible();
 	await expect(page.getByRole('button', { name: /Source Article/ })).toHaveCount(0);
 

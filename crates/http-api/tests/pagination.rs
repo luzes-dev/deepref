@@ -5,7 +5,7 @@ fn every_collection_operation_exposes_a_bounded_contract() {
         "/projects",
         "/ingestions",
         "/ingestions/{ingestion_id}/items",
-        "/projects/{project_id}/articles",
+        "/projects/{project_id}/reports",
     ] {
         let get = &document["paths"][path]["get"];
         assert!(

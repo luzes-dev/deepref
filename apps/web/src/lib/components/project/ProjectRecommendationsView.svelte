@@ -3,10 +3,11 @@
 	import { Badge } from '$lib/components/ui/badge';
 	import { Skeleton } from '$lib/components/ui/skeleton';
 	import GraphDegradedState from '$lib/components/GraphDegradedState.svelte';
-	import { createGetProjectRecommendations } from '$lib/api/generated/articles/articles';
+	import { createGetProjectRecommendations } from '$lib/api/generated/reports/reports';
 	import { createGetProjectProjection } from '$lib/api/generated/projection/projection';
-	import type { ArticleDto, RecommendationGroupsDto } from '$lib/api/generated/models';
+	import type { RecommendationGroupsDto, ReportDto } from '$lib/api/generated/models';
 	import { useProjectWorkspaceContext } from './context.svelte.js';
+	import { reportLabel } from './report-label';
 
 	const workspace = useProjectWorkspaceContext();
 	const enabled = $derived(workspace.view === 'recommendations');
@@ -31,7 +32,7 @@
 		['foundational', groups.foundational],
 		['core_to_project', groups.core_to_project],
 		['underexplored', groups.underexplored]
-	] as [string, ArticleDto[]][]);
+	] as [string, ReportDto[]][]);
 	const total = $derived(groupEntries.reduce((sum, [, articles]) => sum + articles.length, 0));
 </script>
 
@@ -88,17 +89,19 @@
 						<p class="text-sm text-muted-foreground">{articles.length} articles</p>
 					</div>
 					<div class="flex max-h-[calc(100vh-18rem)] flex-col gap-3 overflow-auto p-3">
-						{#each articles as article (article.doi)}
+						{#each articles as article (article.report_id)}
 							<button
 								class="rounded-md border p-3 text-left hover:bg-muted"
-								onclick={() => workspace.openArticle(article.doi_key)}
+								onclick={() => workspace.openArticle(article.report_id)}
 							>
 								<div class="truncate font-medium">
-									{article.title ?? article.doi}
+									{reportLabel(article)}
 								</div>
-								<div class="text-xs break-all text-muted-foreground">
-									{article.doi}
-								</div>
+								{#if article.doi}
+									<div class="text-xs break-all text-muted-foreground">
+										{article.doi}
+									</div>
+								{/if}
 								<div class="mt-2 flex flex-wrap gap-2">
 									<Badge variant="secondary"
 										>Internal {article.internal_citations}</Badge

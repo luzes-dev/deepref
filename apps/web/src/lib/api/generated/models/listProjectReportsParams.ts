@@ -5,7 +5,7 @@
  * OpenAPI spec version: 0.1.0
  */
 
-export type ListProjectArticlesParams = {
+export type ListProjectReportsParams = {
 	/**
 	 * Opaque cursor returned by the previous page.
 	 * @nullable

@@ -40,8 +40,8 @@ fn openapi_router() -> OpenApiRouter<AppState> {
             projects::update_project,
             projects::delete_project
         ))
-        .routes(routes!(articles::list_articles))
-        .routes(routes!(articles::get_article))
+        .routes(routes!(articles::list_reports))
+        .routes(routes!(articles::get_report))
         .routes(routes!(articles::project_graph))
         .routes(routes!(articles::recommendations))
         .routes(routes!(articles::recompute_metrics))
@@ -130,8 +130,8 @@ mod tests {
             "/settings",
             "/projects",
             "/projects/{project_id}",
-            "/projects/{project_id}/articles",
-            "/projects/{project_id}/articles/{doi_key}",
+            "/projects/{project_id}/reports",
+            "/projects/{project_id}/reports/{report_id}",
             "/projects/{project_id}/graph",
             "/projects/{project_id}/recommendations",
             "/projects/{project_id}/metrics/recompute",
@@ -151,6 +151,26 @@ mod tests {
                 "missing path {path}"
             );
         }
+        assert_eq!(
+            openapi.paths.paths["/projects/{project_id}/reports"]
+                .get
+                .as_ref()
+                .and_then(|operation| operation.operation_id.as_deref()),
+            Some("listProjectReports")
+        );
+        assert_eq!(
+            openapi.paths.paths["/projects/{project_id}/reports/{report_id}"]
+                .get
+                .as_ref()
+                .and_then(|operation| operation.operation_id.as_deref()),
+            Some("getProjectReport")
+        );
+        assert!(
+            !openapi
+                .paths
+                .paths
+                .contains_key("/projects/{project_id}/articles")
+        );
 
         let mut operation_ids = HashSet::new();
         for path_item in openapi.paths.paths.values() {
@@ -177,6 +197,44 @@ mod tests {
                 );
             }
         }
+
+        let document = serde_json::to_value(&openapi).expect("OpenAPI document must serialize");
+        let schemas = &document["components"]["schemas"];
+        for schema_name in [
+            "ReportDto",
+            "ReportDetailDto",
+            "PaginatedResponse_ReportDto",
+            "ProjectGraphDto",
+            "RecommendationGroupsDto",
+        ] {
+            let schema = &schemas[schema_name];
+            assert!(schema.is_object(), "missing public schema {schema_name}");
+            assert!(
+                schema.to_string().contains("report_id")
+                    || schema
+                        .to_string()
+                        .contains("#/components/schemas/ReportDto"),
+                "public schema {schema_name} must expose or reference report_id"
+            );
+            assert!(
+                !schema.to_string().contains("doi_key"),
+                "public schema {schema_name} leaks DOI identity"
+            );
+        }
+        for schema_name in ["ReportDto", "ReportDetailDto"] {
+            assert!(
+                schemas[schema_name]["properties"]["report_id"].is_object(),
+                "public schema {schema_name} must expose report_id"
+            );
+        }
+        assert_eq!(
+            schemas["GraphEdgeDto"]["properties"]["source"]["format"],
+            "uuid"
+        );
+        assert_eq!(
+            schemas["GraphEdgeDto"]["properties"]["target"]["format"],
+            "uuid"
+        );
     }
 
     #[tokio::test]

@@ -20,281 +20,18 @@ import type {
 
 import type {
 	ApiErrorBody,
-	ArticleDetailDto,
-	ListProjectArticlesParams,
-	PaginatedResponseArticleDto,
+	ListProjectReportsParams,
+	PaginatedResponseReportDto,
 	ProjectGraphDto,
 	RecommendationGroupsDto,
-	RecomputeMetricsDto
+	RecomputeMetricsDto,
+	ReportDetailDto
 } from '../models';
 
 import { customFetch } from '../../custom-fetch.ts';
 import type { ErrorType } from '../../custom-fetch.ts';
 
 type SecondParameter<T extends (...args: never) => unknown> = Parameters<T>[1];
-
-export type listProjectArticlesResponse200 = {
-	data: PaginatedResponseArticleDto;
-	status: 200;
-};
-
-export type listProjectArticlesResponse500 = {
-	data: ApiErrorBody;
-	status: 500;
-};
-
-export type listProjectArticlesResponseSuccess = listProjectArticlesResponse200 & {
-	headers: Headers;
-};
-export type listProjectArticlesResponseError = listProjectArticlesResponse500 & {
-	headers: Headers;
-};
-
-export const getListProjectArticlesUrl = (
-	projectId: string,
-	params?: ListProjectArticlesParams
-) => {
-	const normalizedParams = new URLSearchParams();
-
-	Object.entries(params || {}).forEach(([key, value]) => {
-		if (value !== undefined) {
-			normalizedParams.append(key, value === null ? 'null' : String(value));
-		}
-	});
-
-	const stringifiedParams = normalizedParams.toString();
-
-	return stringifiedParams.length > 0
-		? `/api/projects/${projectId}/articles?${stringifiedParams}`
-		: `/api/projects/${projectId}/articles`;
-};
-
-export const listProjectArticles = async (
-	projectId: string,
-	params?: ListProjectArticlesParams,
-	options?: RequestInit
-): Promise<listProjectArticlesResponseSuccess> => {
-	return customFetch<listProjectArticlesResponseSuccess>(
-		getListProjectArticlesUrl(projectId, params),
-		{
-			...options,
-			method: 'GET'
-		}
-	);
-};
-
-export const getListProjectArticlesQueryKey = (
-	projectId: string,
-	params?: ListProjectArticlesParams
-) => {
-	return [`/api/projects/${projectId}/articles`, ...(params ? [params] : [])] as const;
-};
-
-export const getListProjectArticlesQueryOptions = <
-	TData = Awaited<ReturnType<typeof listProjectArticles>>,
-	TError = ErrorType<ApiErrorBody>
->(
-	projectId: string,
-	params?: ListProjectArticlesParams,
-	options?: {
-		query?: Partial<
-			CreateQueryOptions<Awaited<ReturnType<typeof listProjectArticles>>, TError, TData>
-		>;
-		request?: SecondParameter<typeof customFetch>;
-	}
-) => {
-	const { query: queryOptions, request: requestOptions } = options ?? {};
-
-	const queryKey = queryOptions?.queryKey ?? getListProjectArticlesQueryKey(projectId, params);
-
-	const queryFn: QueryFunction<Awaited<ReturnType<typeof listProjectArticles>>> = ({ signal }) =>
-		listProjectArticles(projectId, params, { signal, ...requestOptions });
-
-	return {
-		queryKey,
-		queryFn,
-		enabled: projectId !== null && projectId !== undefined,
-		...queryOptions
-	} as CreateQueryOptions<Awaited<ReturnType<typeof listProjectArticles>>, TError, TData> & {
-		queryKey: DataTag<QueryKey, TData, TError>;
-	};
-};
-
-export type ListProjectArticlesQueryResult = NonNullable<
-	Awaited<ReturnType<typeof listProjectArticles>>
->;
-export type ListProjectArticlesQueryError = ErrorType<ApiErrorBody>;
-
-export function createListProjectArticles<
-	TData = Awaited<ReturnType<typeof listProjectArticles>>,
-	TError = ErrorType<ApiErrorBody>
->(
-	projectId: () => string,
-	params?: () => ListProjectArticlesParams,
-	options?: () => {
-		query?: Partial<
-			CreateQueryOptions<Awaited<ReturnType<typeof listProjectArticles>>, TError, TData>
-		>;
-		request?: SecondParameter<typeof customFetch>;
-	},
-	queryClient?: () => QueryClient
-): CreateQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> } {
-	const query = createQuery(
-		() => getListProjectArticlesQueryOptions(projectId(), params?.(), options?.()),
-		queryClient
-	) as CreateQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> };
-
-	return query;
-}
-
-export const prefetchListProjectArticlesQuery = async <
-	TData = Awaited<ReturnType<typeof listProjectArticles>>,
-	TError = ErrorType<ApiErrorBody>
->(
-	queryClient: QueryClient,
-	projectId: string,
-	params?: ListProjectArticlesParams,
-	options?: {
-		query?: Partial<
-			CreateQueryOptions<Awaited<ReturnType<typeof listProjectArticles>>, TError, TData>
-		>;
-		request?: SecondParameter<typeof customFetch>;
-	}
-): Promise<QueryClient> => {
-	const queryOptions = getListProjectArticlesQueryOptions(projectId, params, options);
-
-	await queryClient.prefetchQuery(queryOptions);
-
-	return queryClient;
-};
-
-export type getProjectArticleResponse200 = {
-	data: ArticleDetailDto;
-	status: 200;
-};
-
-export type getProjectArticleResponse400 = {
-	data: ApiErrorBody;
-	status: 400;
-};
-
-export type getProjectArticleResponse404 = {
-	data: ApiErrorBody;
-	status: 404;
-};
-
-export type getProjectArticleResponseSuccess = getProjectArticleResponse200 & {
-	headers: Headers;
-};
-export type getProjectArticleResponseError = (
-	getProjectArticleResponse400 | getProjectArticleResponse404
-) & {
-	headers: Headers;
-};
-
-export const getGetProjectArticleUrl = (projectId: string, doiKey: string) => {
-	return `/api/projects/${projectId}/articles/${doiKey}`;
-};
-
-export const getProjectArticle = async (
-	projectId: string,
-	doiKey: string,
-	options?: RequestInit
-): Promise<getProjectArticleResponseSuccess> => {
-	return customFetch<getProjectArticleResponseSuccess>(
-		getGetProjectArticleUrl(projectId, doiKey),
-		{
-			...options,
-			method: 'GET'
-		}
-	);
-};
-
-export const getGetProjectArticleQueryKey = (projectId: string, doiKey: string) => {
-	return [`/api/projects/${projectId}/articles/${doiKey}`] as const;
-};
-
-export const getGetProjectArticleQueryOptions = <
-	TData = Awaited<ReturnType<typeof getProjectArticle>>,
-	TError = ErrorType<ApiErrorBody>
->(
-	projectId: string,
-	doiKey: string,
-	options?: {
-		query?: Partial<
-			CreateQueryOptions<Awaited<ReturnType<typeof getProjectArticle>>, TError, TData>
-		>;
-		request?: SecondParameter<typeof customFetch>;
-	}
-) => {
-	const { query: queryOptions, request: requestOptions } = options ?? {};
-
-	const queryKey = queryOptions?.queryKey ?? getGetProjectArticleQueryKey(projectId, doiKey);
-
-	const queryFn: QueryFunction<Awaited<ReturnType<typeof getProjectArticle>>> = ({ signal }) =>
-		getProjectArticle(projectId, doiKey, { signal, ...requestOptions });
-
-	return {
-		queryKey,
-		queryFn,
-		enabled:
-			projectId !== null &&
-			projectId !== undefined &&
-			doiKey !== null &&
-			doiKey !== undefined,
-		...queryOptions
-	} as CreateQueryOptions<Awaited<ReturnType<typeof getProjectArticle>>, TError, TData> & {
-		queryKey: DataTag<QueryKey, TData, TError>;
-	};
-};
-
-export type GetProjectArticleQueryResult = NonNullable<
-	Awaited<ReturnType<typeof getProjectArticle>>
->;
-export type GetProjectArticleQueryError = ErrorType<ApiErrorBody>;
-
-export function createGetProjectArticle<
-	TData = Awaited<ReturnType<typeof getProjectArticle>>,
-	TError = ErrorType<ApiErrorBody>
->(
-	projectId: () => string,
-	doiKey: () => string,
-	options?: () => {
-		query?: Partial<
-			CreateQueryOptions<Awaited<ReturnType<typeof getProjectArticle>>, TError, TData>
-		>;
-		request?: SecondParameter<typeof customFetch>;
-	},
-	queryClient?: () => QueryClient
-): CreateQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> } {
-	const query = createQuery(
-		() => getGetProjectArticleQueryOptions(projectId(), doiKey(), options?.()),
-		queryClient
-	) as CreateQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> };
-
-	return query;
-}
-
-export const prefetchGetProjectArticleQuery = async <
-	TData = Awaited<ReturnType<typeof getProjectArticle>>,
-	TError = ErrorType<ApiErrorBody>
->(
-	queryClient: QueryClient,
-	projectId: string,
-	doiKey: string,
-	options?: {
-		query?: Partial<
-			CreateQueryOptions<Awaited<ReturnType<typeof getProjectArticle>>, TError, TData>
-		>;
-		request?: SecondParameter<typeof customFetch>;
-	}
-): Promise<QueryClient> => {
-	const queryOptions = getGetProjectArticleQueryOptions(projectId, doiKey, options);
-
-	await queryClient.prefetchQuery(queryOptions);
-
-	return queryClient;
-};
 
 export type getProjectGraphResponse200 = {
 	data: ProjectGraphDto;
@@ -483,7 +220,7 @@ export const getRecomputeProjectMetricsMutationOptions = <
 	) => {
 		if (!options?.skipInvalidation) {
 			queryClient.invalidateQueries({
-				queryKey: getListProjectArticlesQueryKey(variables.projectId)
+				queryKey: getListProjectReportsQueryKey(variables.projectId)
 			});
 			queryClient.invalidateQueries({
 				queryKey: getGetProjectGraphQueryKey(variables.projectId)
@@ -640,6 +377,264 @@ export const prefetchGetProjectRecommendationsQuery = async <
 	}
 ): Promise<QueryClient> => {
 	const queryOptions = getGetProjectRecommendationsQueryOptions(projectId, options);
+
+	await queryClient.prefetchQuery(queryOptions);
+
+	return queryClient;
+};
+
+export type listProjectReportsResponse200 = {
+	data: PaginatedResponseReportDto;
+	status: 200;
+};
+
+export type listProjectReportsResponse500 = {
+	data: ApiErrorBody;
+	status: 500;
+};
+
+export type listProjectReportsResponseSuccess = listProjectReportsResponse200 & {
+	headers: Headers;
+};
+export type listProjectReportsResponseError = listProjectReportsResponse500 & {
+	headers: Headers;
+};
+
+export const getListProjectReportsUrl = (projectId: string, params?: ListProjectReportsParams) => {
+	const normalizedParams = new URLSearchParams();
+
+	Object.entries(params || {}).forEach(([key, value]) => {
+		if (value !== undefined) {
+			normalizedParams.append(key, value === null ? 'null' : String(value));
+		}
+	});
+
+	const stringifiedParams = normalizedParams.toString();
+
+	return stringifiedParams.length > 0
+		? `/api/projects/${projectId}/reports?${stringifiedParams}`
+		: `/api/projects/${projectId}/reports`;
+};
+
+export const listProjectReports = async (
+	projectId: string,
+	params?: ListProjectReportsParams,
+	options?: RequestInit
+): Promise<listProjectReportsResponseSuccess> => {
+	return customFetch<listProjectReportsResponseSuccess>(
+		getListProjectReportsUrl(projectId, params),
+		{
+			...options,
+			method: 'GET'
+		}
+	);
+};
+
+export const getListProjectReportsQueryKey = (
+	projectId: string,
+	params?: ListProjectReportsParams
+) => {
+	return [`/api/projects/${projectId}/reports`, ...(params ? [params] : [])] as const;
+};
+
+export const getListProjectReportsQueryOptions = <
+	TData = Awaited<ReturnType<typeof listProjectReports>>,
+	TError = ErrorType<ApiErrorBody>
+>(
+	projectId: string,
+	params?: ListProjectReportsParams,
+	options?: {
+		query?: Partial<
+			CreateQueryOptions<Awaited<ReturnType<typeof listProjectReports>>, TError, TData>
+		>;
+		request?: SecondParameter<typeof customFetch>;
+	}
+) => {
+	const { query: queryOptions, request: requestOptions } = options ?? {};
+
+	const queryKey = queryOptions?.queryKey ?? getListProjectReportsQueryKey(projectId, params);
+
+	const queryFn: QueryFunction<Awaited<ReturnType<typeof listProjectReports>>> = ({ signal }) =>
+		listProjectReports(projectId, params, { signal, ...requestOptions });
+
+	return {
+		queryKey,
+		queryFn,
+		enabled: projectId !== null && projectId !== undefined,
+		...queryOptions
+	} as CreateQueryOptions<Awaited<ReturnType<typeof listProjectReports>>, TError, TData> & {
+		queryKey: DataTag<QueryKey, TData, TError>;
+	};
+};
+
+export type ListProjectReportsQueryResult = NonNullable<
+	Awaited<ReturnType<typeof listProjectReports>>
+>;
+export type ListProjectReportsQueryError = ErrorType<ApiErrorBody>;
+
+export function createListProjectReports<
+	TData = Awaited<ReturnType<typeof listProjectReports>>,
+	TError = ErrorType<ApiErrorBody>
+>(
+	projectId: () => string,
+	params?: () => ListProjectReportsParams,
+	options?: () => {
+		query?: Partial<
+			CreateQueryOptions<Awaited<ReturnType<typeof listProjectReports>>, TError, TData>
+		>;
+		request?: SecondParameter<typeof customFetch>;
+	},
+	queryClient?: () => QueryClient
+): CreateQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> } {
+	const query = createQuery(
+		() => getListProjectReportsQueryOptions(projectId(), params?.(), options?.()),
+		queryClient
+	) as CreateQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> };
+
+	return query;
+}
+
+export const prefetchListProjectReportsQuery = async <
+	TData = Awaited<ReturnType<typeof listProjectReports>>,
+	TError = ErrorType<ApiErrorBody>
+>(
+	queryClient: QueryClient,
+	projectId: string,
+	params?: ListProjectReportsParams,
+	options?: {
+		query?: Partial<
+			CreateQueryOptions<Awaited<ReturnType<typeof listProjectReports>>, TError, TData>
+		>;
+		request?: SecondParameter<typeof customFetch>;
+	}
+): Promise<QueryClient> => {
+	const queryOptions = getListProjectReportsQueryOptions(projectId, params, options);
+
+	await queryClient.prefetchQuery(queryOptions);
+
+	return queryClient;
+};
+
+export type getProjectReportResponse200 = {
+	data: ReportDetailDto;
+	status: 200;
+};
+
+export type getProjectReportResponse400 = {
+	data: ApiErrorBody;
+	status: 400;
+};
+
+export type getProjectReportResponse404 = {
+	data: ApiErrorBody;
+	status: 404;
+};
+
+export type getProjectReportResponseSuccess = getProjectReportResponse200 & {
+	headers: Headers;
+};
+export type getProjectReportResponseError = (
+	getProjectReportResponse400 | getProjectReportResponse404
+) & {
+	headers: Headers;
+};
+
+export const getGetProjectReportUrl = (projectId: string, reportId: string) => {
+	return `/api/projects/${projectId}/reports/${reportId}`;
+};
+
+export const getProjectReport = async (
+	projectId: string,
+	reportId: string,
+	options?: RequestInit
+): Promise<getProjectReportResponseSuccess> => {
+	return customFetch<getProjectReportResponseSuccess>(
+		getGetProjectReportUrl(projectId, reportId),
+		{
+			...options,
+			method: 'GET'
+		}
+	);
+};
+
+export const getGetProjectReportQueryKey = (projectId: string, reportId: string) => {
+	return [`/api/projects/${projectId}/reports/${reportId}`] as const;
+};
+
+export const getGetProjectReportQueryOptions = <
+	TData = Awaited<ReturnType<typeof getProjectReport>>,
+	TError = ErrorType<ApiErrorBody>
+>(
+	projectId: string,
+	reportId: string,
+	options?: {
+		query?: Partial<
+			CreateQueryOptions<Awaited<ReturnType<typeof getProjectReport>>, TError, TData>
+		>;
+		request?: SecondParameter<typeof customFetch>;
+	}
+) => {
+	const { query: queryOptions, request: requestOptions } = options ?? {};
+
+	const queryKey = queryOptions?.queryKey ?? getGetProjectReportQueryKey(projectId, reportId);
+
+	const queryFn: QueryFunction<Awaited<ReturnType<typeof getProjectReport>>> = ({ signal }) =>
+		getProjectReport(projectId, reportId, { signal, ...requestOptions });
+
+	return {
+		queryKey,
+		queryFn,
+		enabled:
+			projectId !== null &&
+			projectId !== undefined &&
+			reportId !== null &&
+			reportId !== undefined,
+		...queryOptions
+	} as CreateQueryOptions<Awaited<ReturnType<typeof getProjectReport>>, TError, TData> & {
+		queryKey: DataTag<QueryKey, TData, TError>;
+	};
+};
+
+export type GetProjectReportQueryResult = NonNullable<Awaited<ReturnType<typeof getProjectReport>>>;
+export type GetProjectReportQueryError = ErrorType<ApiErrorBody>;
+
+export function createGetProjectReport<
+	TData = Awaited<ReturnType<typeof getProjectReport>>,
+	TError = ErrorType<ApiErrorBody>
+>(
+	projectId: () => string,
+	reportId: () => string,
+	options?: () => {
+		query?: Partial<
+			CreateQueryOptions<Awaited<ReturnType<typeof getProjectReport>>, TError, TData>
+		>;
+		request?: SecondParameter<typeof customFetch>;
+	},
+	queryClient?: () => QueryClient
+): CreateQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> } {
+	const query = createQuery(
+		() => getGetProjectReportQueryOptions(projectId(), reportId(), options?.()),
+		queryClient
+	) as CreateQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> };
+
+	return query;
+}
+
+export const prefetchGetProjectReportQuery = async <
+	TData = Awaited<ReturnType<typeof getProjectReport>>,
+	TError = ErrorType<ApiErrorBody>
+>(
+	queryClient: QueryClient,
+	projectId: string,
+	reportId: string,
+	options?: {
+		query?: Partial<
+			CreateQueryOptions<Awaited<ReturnType<typeof getProjectReport>>, TError, TData>
+		>;
+		request?: SecondParameter<typeof customFetch>;
+	}
+): Promise<QueryClient> => {
+	const queryOptions = getGetProjectReportQueryOptions(projectId, reportId, options);
 
 	await queryClient.prefetchQuery(queryOptions);
 

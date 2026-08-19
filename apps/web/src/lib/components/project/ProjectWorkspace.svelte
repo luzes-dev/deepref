@@ -5,9 +5,9 @@
 	import DependencyBanner from '$lib/components/DependencyBanner.svelte';
 	import { shouldPollIngestion } from '$lib/api/helpers';
 	import {
-		getListProjectArticlesQueryKey,
-		listProjectArticles
-	} from '$lib/api/generated/articles/articles';
+		getListProjectReportsQueryKey,
+		listProjectReports
+	} from '$lib/api/generated/reports/reports';
 	import { createGetDependencyStatus } from '$lib/api/generated/health/health';
 	import { getListIngestionsQueryKey } from '$lib/api/generated/ingestions/ingestions';
 	import {
@@ -53,9 +53,9 @@
 	);
 
 	const articlesQuery = createInfiniteQuery(() => ({
-		queryKey: getListProjectArticlesQueryKey(selectedProjectId),
+		queryKey: getListProjectReportsQueryKey(selectedProjectId),
 		queryFn: ({ pageParam, signal }) =>
-			listProjectArticles(
+			listProjectReports(
 				selectedProjectId,
 				{ cursor: pageParam || undefined, limit: 50 },
 				{ signal }

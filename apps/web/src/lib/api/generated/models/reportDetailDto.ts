@@ -4,14 +4,15 @@
  * DeepRef API
  * OpenAPI spec version: 0.1.0
  */
-import type { ArticleDetailDtoRaw } from './articleDetailDtoRaw.ts';
+import type { ReportDetailDtoRaw } from './reportDetailDtoRaw.ts';
 
-export interface ArticleDetailDto {
+export interface ReportDetailDto {
 	/** @nullable */
 	abstract?: string | null;
 	/** @nullable */
 	container_title?: string | null;
-	doi: string;
+	/** @nullable */
+	doi?: string | null;
 	/** @nullable */
 	issued_year?: number | null;
 	/** @nullable */
@@ -21,8 +22,9 @@ export interface ArticleDetailDto {
 	published_year?: number | null;
 	/** @nullable */
 	publisher?: string | null;
-	raw: ArticleDetailDtoRaw;
+	raw: ReportDetailDtoRaw;
 	references_count: number;
+	report_id: string;
 	/** @nullable */
 	title?: string | null;
 	total_citations: number;

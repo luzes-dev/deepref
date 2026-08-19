@@ -5,9 +5,9 @@
  * OpenAPI spec version: 0.1.0
  */
 
-export interface ArticleDto {
-	doi: string;
-	doi_key: string;
+export type PaginatedResponseReportDtoItemsItem = {
+	/** @nullable */
+	doi?: string | null;
 	internal_citations: number;
 	/** @nullable */
 	issued_year?: number | null;
@@ -16,9 +16,10 @@ export interface ArticleDto {
 	metrics_stale: boolean;
 	outbound_internal_references: number;
 	rank_score: number;
+	report_id: string;
 	/** @nullable */
 	title?: string | null;
 	total_citations: number;
 	/** @nullable */
 	type?: string | null;
-}
+};
