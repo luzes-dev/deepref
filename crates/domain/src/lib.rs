@@ -4,12 +4,17 @@ use uuid::Uuid;
 
 pub mod acquisition;
 pub mod bibliography;
+pub mod protocol;
 
 pub use acquisition::{AcquisitionRunId, AcquisitionSource, AcquisitionStatus, ImportFormat};
 pub use bibliography::{
     Citation, DoiError, IdentifierError, IdentifierScheme, Record, RecordId, Report, ReportId,
     ReportIdentifier, Study, StudyId, Title, TitleError, normalize_bibliography_title,
     normalize_doi,
+};
+pub use protocol::{
+    CriterionDimension, CriterionKind, CriterionStage, EligibilityCriterion, FrameworkKind,
+    ProtocolFramework, ProtocolStatus, ProtocolValidationError, validate_criteria,
 };
 
 macro_rules! typed_id {

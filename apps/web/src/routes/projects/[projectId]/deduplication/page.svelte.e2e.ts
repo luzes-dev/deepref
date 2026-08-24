@@ -1,4 +1,39 @@
-import { expect, test } from '@playwright/test';
+import { expect, test, type Page } from '@playwright/test';
+
+const project = {
+	id: 'project-1',
+	name: 'Deduplication project',
+	description: 'A mocked project',
+	default_max_depth: 2,
+	created_at: '2026-01-01T00:00:00Z',
+	updated_at: '2026-01-01T00:00:00Z'
+};
+
+const dependencies = {
+	postgresql: { state: 'available', lag: null, backlog: null, oldest_age_seconds: null },
+	worker: { state: 'available', lag: 0, backlog: 0, oldest_age_seconds: null }
+};
+
+async function mockProjectShell(page: Page): Promise<void> {
+	await page.route('http://localhost:4173/api/health/dependencies', async (route) => {
+		await route.fulfill({ json: dependencies });
+	});
+	await page.route(/http:\/\/localhost:4173\/api\/projects(?:\?.*)?$/, async (route) => {
+		await route.fulfill({ json: { items: [project], next_cursor: null } });
+	});
+	await page.route('http://localhost:4173/api/projects/project-1', async (route) => {
+		await route.fulfill({ json: project });
+	});
+	await page.route(
+		/http:\/\/localhost:4173\/api\/projects\/project-1\/reports(?:\?.*)?$/,
+		async (route) => {
+			await route.fulfill({ json: { items: [], next_cursor: null } });
+		}
+	);
+	await page.route(/http:\/\/localhost:4173\/api\/ingestions(?:\?.*)?$/, async (route) => {
+		await route.fulfill({ json: { items: [], next_cursor: null } });
+	});
+}
 
 const proposal = {
 	id: 'proposal-1',
@@ -30,6 +65,7 @@ const proposal = {
 test('navigates to deduplication and resolves a proposal with an auditable decision', async ({
 	page
 }) => {
+	await mockProjectShell(page);
 	let remaining = [proposal];
 	const decisions: Array<Record<string, unknown>> = [];
 
@@ -81,6 +117,7 @@ test('navigates to deduplication and resolves a proposal with an auditable decis
 });
 
 test('shows a loading state and an empty queue', async ({ page }) => {
+	await mockProjectShell(page);
 	await page.route(
 		'http://localhost:4173/api/projects/project-1/deduplication/proposals?limit=100&status=pending',
 		async (route) => {
@@ -95,6 +132,7 @@ test('shows a loading state and an empty queue', async ({ page }) => {
 });
 
 test('does not offer create-new for identifier conflicts', async ({ page }) => {
+	await mockProjectShell(page);
 	const conflictProposal = {
 		...proposal,
 		id: 'conflict-proposal-1',

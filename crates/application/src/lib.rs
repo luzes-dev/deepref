@@ -7,6 +7,7 @@ use deepref_domain::{
 pub mod acquisition;
 pub mod deduplication;
 pub mod jobs;
+pub mod protocol;
 
 pub use acquisition::{
     CitationProvider, CsvColumnMapping, FullTextResolver, ImportError, ImportParser,
@@ -18,6 +19,10 @@ pub use deduplication::{
     FUZZY_PROPOSAL_THRESHOLD, FUZZY_SHORTLIST_LIMIT, ProposalDecision, ProposalKind,
     RecordResolutionAction, ResolutionCommandError, ResolveRecordCommand, disposition,
     score_candidate,
+};
+pub use protocol::{
+    ProtocolCommandError, ProtocolCriterionCommand, PublishProtocolCommand,
+    SaveProtocolDraftCommand, validate_protocol_text,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq)]

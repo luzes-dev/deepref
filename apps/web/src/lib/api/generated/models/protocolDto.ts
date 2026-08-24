@@ -4,13 +4,27 @@
  * DeepRef API
  * OpenAPI spec version: 0.1.0
  */
+import type { EligibilityCriterionDto } from './eligibilityCriterionDto.ts';
+import type { FrameworkKindInput } from './frameworkKindInput.ts';
+import type { ProtocolDtoFrameworkFields } from './protocolDtoFrameworkFields.ts';
+import type { ProtocolStatusDto } from './protocolStatusDto.ts';
 
 export interface ProtocolDto {
-	criteria: unknown;
+	/** @nullable */
+	amendment_of?: string | null;
+	created_at: string;
+	criteria: EligibilityCriterionDto[];
+	framework_fields: ProtocolDtoFrameworkFields;
+	framework_kind: FrameworkKindInput;
 	id: string;
 	name: string;
+	objective: string;
+	project_id: string;
 	/** @nullable */
 	published_at?: string | null;
-	status: string;
+	question: string;
+	revision: number;
+	status: ProtocolStatusDto;
+	updated_at: string;
 	version: number;
 }

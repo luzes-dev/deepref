@@ -3,6 +3,7 @@ mod deduplication;
 mod graph;
 mod jobs;
 mod legacy_import;
+mod protocol;
 
 use sqlx::{
     PgPool,
@@ -30,3 +31,7 @@ pub use jobs::{
     recompute_prisma_snapshot, recover_expired_jobs, renew_job,
 };
 pub use legacy_import::{LegacyImportCounts, import_legacy};
+pub use protocol::{
+    ProtocolActor, ProtocolDocument, ProtocolError, get_protocol_editor, get_published_protocol,
+    publish_protocol, save_protocol_draft,
+};
