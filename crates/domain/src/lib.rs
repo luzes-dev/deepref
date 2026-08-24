@@ -9,9 +9,12 @@ pub mod protocol;
 
 pub use acquisition::{AcquisitionRunId, AcquisitionSource, AcquisitionStatus, ImportFormat};
 pub use bibliography::{
-    Citation, DoiError, IdentifierError, IdentifierScheme, Record, RecordId, Report, ReportId,
-    ReportIdentifier, Study, StudyId, Title, TitleError, normalize_bibliography_title,
-    normalize_doi,
+    AppraisalToolSuggestion, Citation, DoiError, IdentifierError, IdentifierScheme, Record,
+    RecordId, Report, ReportAssignedToStudy, ReportId, ReportIdentifier, ReportRemovedFromStudy,
+    Study, StudyClassified, StudyCreated, StudyDesign, StudyDesignContext, StudyEvent, StudyId,
+    StudyMembershipChange, StudyMembershipError, StudyRenamed, StudyReportRole, StudyRevisionError,
+    StudyTitle, StudyTitleError, Title, TitleError, normalize_bibliography_title, normalize_doi,
+    suggest_appraisal_tools,
 };
 pub use documents::{
     DocumentBlock, DocumentBlockId, DocumentContent, DocumentId, DocumentMetadata, DocumentSource,

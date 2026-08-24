@@ -30,6 +30,8 @@ pub async fn serve_with_shutdown(
     config: ApiConfig,
     shutdown: impl Future<Output = ()> + Send + 'static,
 ) -> anyhow::Result<()> {
+    deepref_application::validate_shipped_appraisal_definitions()
+        .map_err(|error| anyhow::anyhow!("invalid shipped appraisal definition: {error}"))?;
     let pool = database_pool(&config).await?;
 
     let document_store = deepref_documents::DocumentStore::from_env()?;
