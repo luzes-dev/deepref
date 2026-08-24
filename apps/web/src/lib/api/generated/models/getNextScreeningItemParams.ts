@@ -5,7 +5,7 @@
  * OpenAPI spec version: 0.1.0
  */
 
-export type ListTitleAbstractScreeningQueueParams = {
+export type GetNextScreeningItemParams = {
 	/**
 	 * Title/abstract status filter
 	 */
@@ -22,8 +22,4 @@ export type ListTitleAbstractScreeningQueueParams = {
 	 * Opaque page cursor
 	 */
 	cursor?: string;
-	/**
-	 * Maximum rows, 1 through 100
-	 */
-	limit?: number;
 };

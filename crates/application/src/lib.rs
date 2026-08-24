@@ -1,7 +1,8 @@
 use deepref_domain::{
-    CurrentScreeningState, ExclusionReasonId, ProjectId, ProtocolVersionId, ReportId,
+    Actor, CurrentScreeningState, ExclusionReasonId, ProjectId, ProtocolVersionId, ReportId,
     ScreenReportTransitionCommand, ScreeningDecision, ScreeningStage, ScreeningTransition,
-    ScreeningValidationError, transition,
+    ScreeningUndoValidationError, ScreeningValidationError, UndoScreeningTransitionCommand,
+    transition, undo_transition,
 };
 
 pub mod acquisition;
@@ -25,6 +26,83 @@ pub use protocol::{
     SaveProtocolDraftCommand, validate_protocol_text,
 };
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ScreeningQueueStatus {
+    Unscreened,
+    Include,
+    Exclude,
+    Maybe,
+    All,
+}
+
+impl ScreeningQueueStatus {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Unscreened => "unscreened",
+            Self::Include => "include",
+            Self::Exclude => "exclude",
+            Self::Maybe => "maybe",
+            Self::All => "all",
+        }
+    }
+
+    pub fn parse(value: &str) -> Option<Self> {
+        match value {
+            "unscreened" => Some(Self::Unscreened),
+            "include" => Some(Self::Include),
+            "exclude" => Some(Self::Exclude),
+            "maybe" => Some(Self::Maybe),
+            "all" => Some(Self::All),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ScreeningQueueSort {
+    CreatedAscending,
+    CreatedDescending,
+    TitleAscending,
+    TitleDescending,
+    YearAscending,
+    YearDescending,
+}
+
+impl ScreeningQueueSort {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::CreatedAscending => "created_asc",
+            Self::CreatedDescending => "created_desc",
+            Self::TitleAscending => "title_asc",
+            Self::TitleDescending => "title_desc",
+            Self::YearAscending => "year_asc",
+            Self::YearDescending => "year_desc",
+        }
+    }
+
+    pub fn parse(value: &str) -> Option<Self> {
+        match value {
+            "created_asc" => Some(Self::CreatedAscending),
+            "created_desc" => Some(Self::CreatedDescending),
+            "title_asc" => Some(Self::TitleAscending),
+            "title_desc" => Some(Self::TitleDescending),
+            "year_asc" => Some(Self::YearAscending),
+            "year_desc" => Some(Self::YearDescending),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct GetScreeningQueueQuery {
+    pub project_id: ProjectId,
+    pub status: ScreeningQueueStatus,
+    pub search: Option<String>,
+    pub sort: ScreeningQueueSort,
+    pub cursor: Option<String>,
+    pub limit: i64,
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct ScreenReportCommand {
     pub project_id: ProjectId,
@@ -34,6 +112,8 @@ pub struct ScreenReportCommand {
     pub exclusion_reason_id: Option<ExclusionReasonId>,
     pub protocol_version_id: ProtocolVersionId,
     pub expected_revision: i64,
+    pub notes: Option<String>,
+    pub actor: Actor,
 }
 
 impl ScreenReportCommand {
@@ -48,6 +128,31 @@ impl ScreenReportCommand {
                 exclusion_reason_id: self.exclusion_reason_id,
             },
             current,
+        )
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UndoScreeningCommand {
+    pub project_id: ProjectId,
+    pub report_id: ReportId,
+    pub stage: ScreeningStage,
+    pub protocol_version_id: ProtocolVersionId,
+    pub expected_revision: i64,
+    pub notes: Option<String>,
+    pub actor: Actor,
+}
+
+impl UndoScreeningCommand {
+    pub fn validate(
+        &self,
+        current: CurrentScreeningState,
+        restored: CurrentScreeningState,
+    ) -> Result<ScreeningTransition, ScreeningUndoValidationError> {
+        undo_transition(
+            &UndoScreeningTransitionCommand { stage: self.stage },
+            current,
+            restored,
         )
     }
 }
@@ -67,6 +172,9 @@ mod tests {
             exclusion_reason_id: None,
             protocol_version_id: Uuid::new_v4().into(),
             expected_revision: 3,
+            notes: None,
+            actor: Actor::new(deepref_domain::ActorKind::User, "test")
+                .expect("test actor should be valid"),
         };
 
         assert_eq!(

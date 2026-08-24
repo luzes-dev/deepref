@@ -1664,6 +1664,160 @@
         }
       }
     },
+    "/projects/{project_id}/reports/{report_id}/screening/history": {
+      "get": {
+        "tags": [
+          "review"
+        ],
+        "operationId": "getScreeningHistory",
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "path",
+            "description": "Project identifier",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "report_id",
+            "in": "path",
+            "description": "Report identifier",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Append-only screening history",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScreeningHistoryDto"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Report not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/projects/{project_id}/reports/{report_id}/screening/undo": {
+      "post": {
+        "tags": [
+          "review"
+        ],
+        "operationId": "undoScreening",
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "path",
+            "description": "Project identifier",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "report_id",
+            "in": "path",
+            "description": "Report identifier",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UndoScreeningRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Restored screening state",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScreeningStateDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid undo",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Report or protocol not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Revision conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/projects/{project_id}/review/protocol": {
       "get": {
         "tags": [
@@ -1878,6 +2032,212 @@
         }
       }
     },
+    "/projects/{project_id}/screening": {
+      "get": {
+        "tags": [
+          "review"
+        ],
+        "operationId": "getScreeningQueue",
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "path",
+            "description": "Project identifier",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "status",
+            "in": "query",
+            "description": "Title/abstract status filter",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "search",
+            "in": "query",
+            "description": "Title/abstract search",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "sort",
+            "in": "query",
+            "description": "Stable queue sort",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "description": "Opaque page cursor",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "Maximum rows, 1 through 100",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Bounded title/abstract screening queue",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScreeningQueueDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid queue parameters",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Project not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/projects/{project_id}/screening/next": {
+      "get": {
+        "tags": [
+          "review"
+        ],
+        "operationId": "getNextScreeningItem",
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "path",
+            "description": "Project identifier",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "status",
+            "in": "query",
+            "description": "Title/abstract status filter",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "search",
+            "in": "query",
+            "description": "Title/abstract search",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "sort",
+            "in": "query",
+            "description": "Stable queue sort",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "description": "Opaque page cursor",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Next title/abstract screening item",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ScreeningQueueItemDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid queue parameters",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Queue item or project not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/projects/{project_id}/screening/title-abstract": {
       "get": {
         "tags": [
@@ -1898,7 +2258,34 @@
           {
             "name": "status",
             "in": "query",
-            "description": "Queue status",
+            "description": "Title/abstract status filter",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "search",
+            "in": "query",
+            "description": "Title/abstract search",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "sort",
+            "in": "query",
+            "description": "Stable queue sort",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "description": "Opaque page cursor",
             "required": false,
             "schema": {
               "type": "string"
@@ -1917,7 +2304,7 @@
         ],
         "responses": {
           "200": {
-            "description": "Title/abstract screening queue",
+            "description": "Bounded title/abstract screening queue",
             "content": {
               "application/json": {
                 "schema": {
@@ -1928,6 +2315,16 @@
           },
           "400": {
             "description": "Invalid queue parameters",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Project not found",
             "content": {
               "application/json": {
                 "schema": {
@@ -4114,12 +4511,177 @@
           "maybe"
         ]
       },
+      "ScreeningHistoryDto": {
+        "type": "object",
+        "required": [
+          "project_id",
+          "report_id",
+          "items"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ScreeningHistoryItemDto"
+            }
+          },
+          "project_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "report_id": {
+            "type": "string",
+            "format": "uuid"
+          }
+        }
+      },
+      "ScreeningHistoryItemDto": {
+        "type": "object",
+        "required": [
+          "id",
+          "event_kind",
+          "stage",
+          "protocol_version_id",
+          "actor_kind",
+          "actor_id",
+          "created_at",
+          "previous_title_abstract_status",
+          "previous_full_text_status",
+          "previous_final_status",
+          "result_title_abstract_status",
+          "result_full_text_status",
+          "result_final_status"
+        ],
+        "properties": {
+          "actor_id": {
+            "type": "string"
+          },
+          "actor_kind": {
+            "type": "string"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "decision": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "event_kind": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "notes": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "previous_final_status": {
+            "type": "string"
+          },
+          "previous_full_text_exclusion_reason_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          },
+          "previous_full_text_status": {
+            "type": "string"
+          },
+          "previous_title_abstract_status": {
+            "type": "string"
+          },
+          "protocol_version_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "result_final_status": {
+            "type": "string"
+          },
+          "result_full_text_exclusion_reason_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          },
+          "result_full_text_status": {
+            "type": "string"
+          },
+          "result_title_abstract_status": {
+            "type": "string"
+          },
+          "stage": {
+            "type": "string"
+          },
+          "supersedes_event_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          },
+          "undoes_event_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          }
+        }
+      },
+      "ScreeningProgressDto": {
+        "type": "object",
+        "required": [
+          "total",
+          "screened",
+          "unscreened",
+          "included",
+          "excluded",
+          "maybe"
+        ],
+        "properties": {
+          "excluded": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "included": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "maybe": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "screened": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "total": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "unscreened": {
+            "type": "integer",
+            "format": "int64"
+          }
+        }
+      },
       "ScreeningQueueDto": {
         "type": "object",
         "required": [
           "items",
           "status",
-          "total"
+          "sort",
+          "total",
+          "progress"
         ],
         "properties": {
           "items": {
@@ -4127,6 +4689,18 @@
             "items": {
               "$ref": "#/components/schemas/ScreeningQueueItemDto"
             }
+          },
+          "next_cursor": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "progress": {
+            "$ref": "#/components/schemas/ScreeningProgressDto"
+          },
+          "sort": {
+            "type": "string"
           },
           "status": {
             "type": "string"
@@ -4206,12 +4780,18 @@
           "title_abstract_status",
           "full_text_status",
           "final_status",
-          "revision",
-          "updated_at"
+          "revision"
         ],
         "properties": {
           "final_status": {
             "type": "string"
+          },
+          "full_text_exclusion_reason_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
           },
           "full_text_status": {
             "type": "string"
@@ -4239,7 +4819,10 @@
             "type": "string"
           },
           "updated_at": {
-            "type": "string",
+            "type": [
+              "string",
+              "null"
+            ],
             "format": "date-time"
           }
         }
@@ -4280,6 +4863,33 @@
           "retry_attempts": {
             "type": "integer",
             "format": "int32"
+          }
+        }
+      },
+      "UndoScreeningRequest": {
+        "type": "object",
+        "required": [
+          "stage",
+          "protocol_version_id",
+          "expected_revision"
+        ],
+        "properties": {
+          "expected_revision": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "notes": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "protocol_version_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "stage": {
+            "$ref": "#/components/schemas/ScreeningStageInput"
           }
         }
       },

@@ -5,11 +5,15 @@
 	let {
 		disabled = false,
 		pending = false,
-		onDecision
+		onDecision,
+		onUndo,
+		canUndo = false
 	}: {
 		disabled?: boolean;
 		pending?: boolean;
 		onDecision: (decision: ScreeningDecisionInput) => void | Promise<void>;
+		onUndo?: () => void | Promise<void>;
+		canUndo?: boolean;
 	} = $props();
 </script>
 
@@ -38,9 +42,18 @@
 	>
 		Maybe <kbd class="ml-1 rounded bg-muted px-1.5 py-0.5 text-xs">M</kbd>
 	</Button>
+	<Button
+		variant="ghost"
+		class="min-w-24"
+		disabled={disabled || pending || !canUndo}
+		aria-label="Undo latest screening decision"
+		onclick={() => onUndo?.()}
+	>
+		Undo <kbd class="ml-1 rounded bg-muted px-1.5 py-0.5 text-xs">U</kbd>
+	</Button>
 	{#if pending}
 		<span class="text-sm text-muted-foreground" aria-live="polite">Saving decision…</span>
 	{:else}
-		<span class="ml-auto text-xs text-muted-foreground">Keyboard shortcuts: I / E / M</span>
+		<span class="ml-auto text-xs text-muted-foreground">I / E / M decide · U undo</span>
 	{/if}
 </div>

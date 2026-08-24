@@ -51,6 +51,63 @@ typed_id!(ProjectId);
 typed_id!(ProtocolVersionId);
 typed_id!(ExclusionReasonId);
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ActorKind {
+    User,
+    Automation,
+    System,
+}
+
+impl ActorKind {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::User => "user",
+            Self::Automation => "automation",
+            Self::System => "system",
+        }
+    }
+
+    pub fn parse(value: &str) -> Option<Self> {
+        match value {
+            "user" => Some(Self::User),
+            "automation" => Some(Self::Automation),
+            "system" => Some(Self::System),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Error)]
+pub enum ActorValidationError {
+    #[error("actor id must not be blank")]
+    BlankId,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Actor {
+    kind: ActorKind,
+    id: String,
+}
+
+impl Actor {
+    pub fn new(kind: ActorKind, id: impl Into<String>) -> Result<Self, ActorValidationError> {
+        let id = id.into();
+        if id.trim().is_empty() {
+            return Err(ActorValidationError::BlankId);
+        }
+        Ok(Self { kind, id })
+    }
+
+    pub const fn kind(&self) -> ActorKind {
+        self.kind
+    }
+
+    pub fn id(&self) -> &str {
+        &self.id
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ScreeningStage {
@@ -91,11 +148,24 @@ pub enum ScreeningTransition {
     Repeated,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
+pub enum ScreeningUndoValidationError {
+    #[error("the restored screening state is not valid")]
+    InvalidRestoredState,
+    #[error("full-text undo cannot alter the title/abstract decision")]
+    FullTextCannotAlterTitleAbstract,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct ScreenReportTransitionCommand {
     pub stage: ScreeningStage,
     pub decision: ScreeningDecision,
     pub exclusion_reason_id: Option<ExclusionReasonId>,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct UndoScreeningTransitionCommand {
+    pub stage: ScreeningStage,
 }
 
 pub fn transition(
@@ -151,6 +221,55 @@ pub fn transition(
                 }
             }
         }
+    }
+}
+
+pub fn undo_transition(
+    command: &UndoScreeningTransitionCommand,
+    current: CurrentScreeningState,
+    restored: CurrentScreeningState,
+) -> Result<ScreeningTransition, ScreeningUndoValidationError> {
+    match command.stage {
+        ScreeningStage::TitleAbstract => {
+            let mut restored = restored;
+            // A title/abstract exclusion or Maybe makes dependent full-text
+            // state inapplicable. Undoing that decision is allowed to clear it.
+            if restored.title_abstract != Some(ScreeningDecision::Include) {
+                restored.full_text = None;
+                restored.full_text_exclusion_reason_id = None;
+            }
+            validate_screening_state(restored)?;
+            if current == restored {
+                return Ok(ScreeningTransition::Repeated);
+            }
+            Ok(ScreeningTransition::Applied(restored))
+        }
+        ScreeningStage::FullText => {
+            if current.title_abstract != restored.title_abstract {
+                return Err(ScreeningUndoValidationError::FullTextCannotAlterTitleAbstract);
+            }
+            validate_screening_state(restored)?;
+            if current == restored {
+                return Ok(ScreeningTransition::Repeated);
+            }
+            Ok(ScreeningTransition::Applied(restored))
+        }
+    }
+}
+
+fn validate_screening_state(
+    state: CurrentScreeningState,
+) -> Result<(), ScreeningUndoValidationError> {
+    if state.title_abstract != Some(ScreeningDecision::Include)
+        && (state.full_text.is_some() || state.full_text_exclusion_reason_id.is_some())
+    {
+        return Err(ScreeningUndoValidationError::InvalidRestoredState);
+    }
+    match (state.full_text, state.full_text_exclusion_reason_id) {
+        (Some(ScreeningDecision::Exclude), None)
+        | (Some(ScreeningDecision::Include | ScreeningDecision::Maybe), Some(_))
+        | (None, Some(_)) => Err(ScreeningUndoValidationError::InvalidRestoredState),
+        _ => Ok(()),
     }
 }
 
@@ -308,5 +427,99 @@ mod tests {
                 full_text_exclusion_reason_id: None,
             })
         );
+    }
+
+    #[test]
+    fn undo_restores_the_previous_title_abstract_state() {
+        let current = CurrentScreeningState {
+            title_abstract: Some(ScreeningDecision::Maybe),
+            ..CurrentScreeningState::default()
+        };
+        assert_eq!(
+            undo_transition(
+                &UndoScreeningTransitionCommand {
+                    stage: ScreeningStage::TitleAbstract,
+                },
+                current,
+                CurrentScreeningState::default(),
+            ),
+            Ok(ScreeningTransition::Applied(
+                CurrentScreeningState::default()
+            ))
+        );
+    }
+
+    #[test]
+    fn undo_rejects_a_full_text_exclusion_without_a_reason() {
+        assert_eq!(
+            undo_transition(
+                &UndoScreeningTransitionCommand {
+                    stage: ScreeningStage::FullText,
+                },
+                CurrentScreeningState {
+                    title_abstract: Some(ScreeningDecision::Include),
+                    ..CurrentScreeningState::default()
+                },
+                CurrentScreeningState {
+                    title_abstract: Some(ScreeningDecision::Include),
+                    full_text: Some(ScreeningDecision::Exclude),
+                    ..CurrentScreeningState::default()
+                },
+            ),
+            Err(ScreeningUndoValidationError::InvalidRestoredState)
+        );
+    }
+
+    #[test]
+    fn full_text_undo_cannot_change_the_title_abstract_decision() {
+        assert_eq!(
+            undo_transition(
+                &UndoScreeningTransitionCommand {
+                    stage: ScreeningStage::FullText,
+                },
+                CurrentScreeningState {
+                    title_abstract: Some(ScreeningDecision::Include),
+                    ..CurrentScreeningState::default()
+                },
+                CurrentScreeningState::default(),
+            ),
+            Err(ScreeningUndoValidationError::FullTextCannotAlterTitleAbstract)
+        );
+    }
+
+    #[test]
+    fn title_undo_clears_dependent_full_text_state() {
+        assert_eq!(
+            undo_transition(
+                &UndoScreeningTransitionCommand {
+                    stage: ScreeningStage::TitleAbstract,
+                },
+                CurrentScreeningState {
+                    title_abstract: Some(ScreeningDecision::Maybe),
+                    ..CurrentScreeningState::default()
+                },
+                CurrentScreeningState {
+                    title_abstract: Some(ScreeningDecision::Exclude),
+                    full_text: Some(ScreeningDecision::Include),
+                    ..CurrentScreeningState::default()
+                },
+            ),
+            Ok(ScreeningTransition::Applied(CurrentScreeningState {
+                title_abstract: Some(ScreeningDecision::Exclude),
+                ..CurrentScreeningState::default()
+            }))
+        );
+    }
+
+    #[test]
+    fn actor_constructor_rejects_blank_ids_and_parses_allowed_kinds() {
+        assert_eq!(ActorKind::parse("automation"), Some(ActorKind::Automation));
+        assert_eq!(
+            Actor::new(ActorKind::User, "  "),
+            Err(ActorValidationError::BlankId)
+        );
+        let actor = Actor::new(ActorKind::System, "worker").expect("actor should be valid");
+        assert_eq!(actor.kind(), ActorKind::System);
+        assert_eq!(actor.id(), "worker");
     }
 }

@@ -4,6 +4,7 @@ mod graph;
 mod jobs;
 mod legacy_import;
 mod protocol;
+mod screening;
 
 use sqlx::{
     PgPool,
@@ -34,4 +35,9 @@ pub use legacy_import::{LegacyImportCounts, import_legacy};
 pub use protocol::{
     ProtocolActor, ProtocolDocument, ProtocolError, get_protocol_editor, get_published_protocol,
     publish_protocol, save_protocol_draft,
+};
+pub use screening::{
+    ScreeningError, ScreeningHistory, ScreeningHistoryItem, ScreeningProgress, ScreeningQueue,
+    ScreeningQueueItem, ScreeningStateSnapshot, get_next_screening_item, get_screening_history,
+    get_screening_queue, screen_report, undo_screening,
 };
