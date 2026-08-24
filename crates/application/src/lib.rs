@@ -7,6 +7,7 @@ use deepref_domain::{
 
 pub mod acquisition;
 pub mod deduplication;
+pub mod documents;
 pub mod jobs;
 pub mod protocol;
 
@@ -20,6 +21,11 @@ pub use deduplication::{
     FUZZY_PROPOSAL_THRESHOLD, FUZZY_SHORTLIST_LIMIT, ProposalDecision, ProposalKind,
     RecordResolutionAction, ResolutionCommandError, ResolveRecordCommand, disposition,
     score_candidate,
+};
+pub use documents::{
+    AttachDocumentCommand, DocumentByteStream, DocumentDetailQuery, DocumentFuture,
+    DocumentListQuery, DocumentPortError, DocumentQueryError, DocumentRepository,
+    DocumentStorageId, DocumentStore, MissingFullTextQuery, OcrEngine, StoredDocumentContent,
 };
 pub use protocol::{
     ProtocolCommandError, ProtocolCriterionCommand, PublishProtocolCommand,

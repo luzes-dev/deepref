@@ -110,12 +110,29 @@ async fn enqueue_returns_canonical_id_and_concurrent_claims_are_exclusive() -> R
         );
         let first_claim = first_claim?;
         let second_claim = second_claim?;
+        let fixture_claim_count = [&first_claim, &second_claim]
+            .into_iter()
+            .filter(|claim| claim.as_ref().is_some_and(|job| job.id == claim_id))
+            .count();
         ensure!(
-            first_claim.is_some() ^ second_claim.is_some(),
-            "concurrent owners must produce exactly one claim for one queued job"
+            fixture_claim_count == 1,
+            "concurrent owners must claim the fixture exactly once"
         );
+        for unrelated in [&first_claim, &second_claim]
+            .into_iter()
+            .filter_map(Option::as_ref)
+            .filter(|job| job.id != claim_id)
+        {
+            sqlx::query(
+                "UPDATE jobs SET state='queued',lease_owner=NULL,leased_until=NULL,lease_renewed_at=NULL WHERE id=$1",
+            )
+            .bind(unrelated.id)
+            .execute(&pool)
+            .await?;
+        }
         let claimed = first_claim
-            .or(second_claim)
+            .filter(|job| job.id == claim_id)
+            .or_else(|| second_claim.filter(|job| job.id == claim_id))
             .ok_or_else(|| anyhow::anyhow!("exclusive claim should exist"))?;
         ensure!(claimed.id == claim_id, "the fixture job should be claimed");
         Ok::<_, anyhow::Error>(())

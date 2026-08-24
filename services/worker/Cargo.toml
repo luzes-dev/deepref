@@ -13,6 +13,7 @@ deepref-graph = { version = "0.1.0", path = "../../crates/graph" }
 deepref-postgres.workspace = true
 deepref-providers.workspace = true
 deepref-application.workspace = true
+deepref-documents.workspace = true
 deepref-telemetry.workspace = true
 anyhow.workspace = true
 chrono.workspace = true
@@ -27,4 +28,7 @@ tracing.workspace = true
 uuid.workspace = true
 
 [dev-dependencies]
+bytes.workspace = true
+deepref-domain.workspace = true
 reqwest.workspace = true
+url.workspace = true

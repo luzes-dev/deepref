@@ -2,7 +2,7 @@
   "$schema": "http://json-schema.org/draft-07/schema#",
   "type": "object",
   "additionalProperties": false,
-  "required": ["global", "namespace", "images", "serviceAccounts", "runtime", "api", "worker", "web", "migration", "cloudflared", "adot", "externalSecrets", "networkPolicy", "podDisruptionBudgets", "imageVerification"],
+  "required": ["global", "namespace", "images", "serviceAccounts", "runtime", "documentStorage", "api", "worker", "web", "migration", "cloudflared", "adot", "externalSecrets", "networkPolicy", "podDisruptionBudgets", "imageVerification"],
   "definitions": {
     "digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
     "digestOrEmpty": {"type": "string", "pattern": "^(|sha256:[0-9a-f]{64})$"},
@@ -94,6 +94,16 @@
         "shutdownDeadlineSeconds": {"type": "integer", "minimum": 1}
       }
     },
+    "documentStorage": {
+      "type": "object", "additionalProperties": false,
+      "required": ["backend", "root", "maxBytes", "secretName"],
+      "properties": {
+        "backend": {"enum": ["s3", "local"]},
+        "root": {"type": "string"},
+        "maxBytes": {"type": "integer", "minimum": 1, "maximum": 104857600},
+        "secretName": {"type": "string"}
+      }
+    },
     "api": {
       "type": "object", "additionalProperties": false, "required": ["replicas", "corsOrigins", "terminationGracePeriodSeconds", "resources"],
       "properties": {"replicas": {"type": "integer", "minimum": 2}, "corsOrigins": {"type": "array", "uniqueItems": true, "items": {"type": "string", "format": "uri"}}, "terminationGracePeriodSeconds": {"type": "integer", "minimum": 1}, "resources": {"$ref": "#/definitions/resources"}}
@@ -124,10 +134,11 @@
         "enabled": {"type": "boolean"}, "refreshInterval": {"type": "string", "pattern": "^[1-9][0-9]*(s|m|h)$"},
         "secretStoreRef": {"type": "object", "additionalProperties": false, "required": ["name", "kind"], "properties": {"name": {"type": "string", "minLength": 1}, "kind": {"enum": ["SecretStore", "ClusterSecretStore"]}}},
         "remote": {
-          "type": "object", "additionalProperties": false, "required": ["database", "cloudflared"],
+          "type": "object", "additionalProperties": false, "required": ["database", "cloudflared", "documentStorage"],
           "properties": {
             "database": {"type": "object", "additionalProperties": false, "required": ["key", "urlProperty"], "properties": {"key": {"$ref": "#/definitions/remoteProperty"}, "urlProperty": {"$ref": "#/definitions/remoteProperty"}}},
-            "cloudflared": {"type": "object", "additionalProperties": false, "required": ["key", "tokenProperty"], "properties": {"key": {"$ref": "#/definitions/remoteProperty"}, "tokenProperty": {"$ref": "#/definitions/remoteProperty"}}}
+            "cloudflared": {"type": "object", "additionalProperties": false, "required": ["key", "tokenProperty"], "properties": {"key": {"$ref": "#/definitions/remoteProperty"}, "tokenProperty": {"$ref": "#/definitions/remoteProperty"}}},
+            "documentStorage": {"type": "object", "additionalProperties": false, "required": ["key", "endpointProperty", "bucketProperty", "regionProperty", "accessKeyIdProperty", "secretAccessKeyProperty"], "properties": {"key": {"$ref": "#/definitions/remoteProperty"}, "endpointProperty": {"$ref": "#/definitions/remoteProperty"}, "bucketProperty": {"$ref": "#/definitions/remoteProperty"}, "regionProperty": {"$ref": "#/definitions/remoteProperty"}, "accessKeyIdProperty": {"$ref": "#/definitions/remoteProperty"}, "secretAccessKeyProperty": {"$ref": "#/definitions/remoteProperty"}}}
           }
         }
       }
