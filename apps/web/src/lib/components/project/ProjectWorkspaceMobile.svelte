@@ -13,7 +13,12 @@
 
 	const workspace = useProjectWorkspaceContext();
 	const mobileViewLabel = $derived(workspace.view[0].toUpperCase() + workspace.view.slice(1));
-	const articleSheetOpen = $derived(Boolean(workspace.selectedArticle));
+	const articleSheetOpen = $derived(
+		Boolean(workspace.selectedArticle) &&
+			(workspace.view === 'articles' ||
+				workspace.view === 'graph' ||
+				workspace.view === 'recommendations')
+	);
 	const ingestionSheetOpen = $derived(Boolean(workspace.selectedIngestion));
 </script>
 

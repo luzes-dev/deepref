@@ -32,7 +32,8 @@ pub async fn serve_with_shutdown(
 ) -> anyhow::Result<()> {
     let pool = database_pool(&config).await?;
 
-    let state = AppState::new(pool);
+    let document_store = deepref_documents::DocumentStore::from_env()?;
+    let state = AppState::new(pool).with_document_store(document_store);
     let listener = tokio::net::TcpListener::bind(config.bind_addr).await?;
     tracing::info!(address = %config.bind_addr, "API listening");
     axum::serve(listener, routes::router(state, &config))

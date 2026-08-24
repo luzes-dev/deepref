@@ -137,7 +137,7 @@ async fn postgres_screening_enforces_transition_and_project_boundaries() {
     .await
     .expect("test protocols should insert");
     sqlx::query(
-        "INSERT INTO exclusion_reasons (id,project_id,code,label,stage) VALUES ($1,$2,'test','Test reason','full_text'),($3,$4,'other','Other reason','full_text'),($5,$2,'wrong_stage','Wrong stage reason','title_abstract')",
+        "INSERT INTO exclusion_reasons (id,project_id,code,label,stage) VALUES ($1,$2,'test','Test reason','full_text'),($3,$4,'other_test','Other reason','full_text'),($5,$2,'wrong_stage','Wrong stage reason','title_abstract')",
     )
     .bind(exclusion_reason_id)
     .bind(project_id)
@@ -204,6 +204,36 @@ async fn postgres_screening_enforces_transition_and_project_boundaries() {
     )
     .await;
     assert_eq!(title_include.status(), StatusCode::OK);
+
+    for decision in ["include", "maybe"] {
+        let response = screen(
+            &pool,
+            project_id,
+            report_id,
+            serde_json::json!({
+                "stage": "full_text",
+                "decision": decision,
+                "protocol_version_id": protocol_id,
+                "exclusion_reason_id": exclusion_reason_id,
+                "expected_revision": 1
+            }),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
+    let exclude_without_reason = screen(
+        &pool,
+        project_id,
+        report_id,
+        serde_json::json!({
+            "stage": "full_text",
+            "decision": "exclude",
+            "protocol_version_id": protocol_id,
+            "expected_revision": 1
+        }),
+    )
+    .await;
+    assert_eq!(exclude_without_reason.status(), StatusCode::BAD_REQUEST);
 
     let wrong_stage_full_text_exclude = screen(
         &pool,

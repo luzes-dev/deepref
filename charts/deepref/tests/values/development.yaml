@@ -10,6 +10,7 @@ externalSecrets:
   remote:
     database: {key: deepref/development/database, urlProperty: url}
     cloudflared: {key: deepref/development/cloudflared, tokenProperty: token}
+    documentStorage: {key: deepref/development/document-storage, endpointProperty: endpoint, bucketProperty: bucket, regionProperty: region, accessKeyIdProperty: access_key_id, secretAccessKeyProperty: secret_access_key}
 imageVerification:
   repositoryPatterns: ["docker.io/library/*", "docker.io/cloudflare/*", "docker.io/amazon/*"]
   keyless:

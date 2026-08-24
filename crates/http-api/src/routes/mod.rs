@@ -1,6 +1,7 @@
 mod acquisitions;
 mod articles;
 mod deduplication;
+mod documents;
 mod health;
 mod ingestions;
 mod pagination;
@@ -27,11 +28,13 @@ use utoipa_axum::{router::OpenApiRouter, routes};
 
 use crate::{config::ApiConfig, state::AppState};
 
-fn openapi_router() -> OpenApiRouter<AppState> {
+const MULTIPART_OVERHEAD_BYTES: usize = 1024 * 1024;
+
+fn openapi_router(document_max_bytes: usize) -> OpenApiRouter<AppState> {
     let mut openapi = OpenApi::default();
     openapi.info = Info::new("DeepRef API", env!("CARGO_PKG_VERSION"));
 
-    OpenApiRouter::with_openapi(openapi)
+    let base = OpenApiRouter::with_openapi(openapi)
         .routes(routes!(health::live))
         .routes(routes!(health::ready))
         .routes(routes!(health::dependencies))
@@ -78,10 +81,26 @@ fn openapi_router() -> OpenApiRouter<AppState> {
         .routes(routes!(review::undo_screening))
         .routes(routes!(review::get_screening_history))
         .routes(routes!(review::get_prisma))
+        .routes(routes!(documents::list_documents))
+        .routes(routes!(documents::list_missing_full_text))
+        .routes(routes!(documents::list_full_text_queue))
+        .routes(routes!(documents::list_full_text_reasons))
+        .routes(routes!(documents::get_document))
+        .routes(routes!(documents::list_document_blocks))
+        .routes(routes!(documents::list_document_pages))
+        .routes(routes!(documents::get_document_content))
+        .routes(routes!(documents::attach_external_document))
+        .layer(DefaultBodyLimit::max(acquisitions::MAX_REQUEST_BODY_BYTES));
+    let uploads = OpenApiRouter::new()
+        .routes(routes!(documents::upload_document))
+        .layer(DefaultBodyLimit::max(
+            document_max_bytes.saturating_add(MULTIPART_OVERHEAD_BYTES),
+        ));
+    base.merge(uploads)
 }
 
 pub fn openapi_document() -> OpenApi {
-    openapi_router().into_openapi()
+    openapi_router(deepref_documents::DEFAULT_MAX_DOCUMENT_BYTES).into_openapi()
 }
 
 pub fn router(state: AppState, config: &ApiConfig) -> Router {
@@ -105,7 +124,13 @@ pub fn router(state: AppState, config: &ApiConfig) -> Router {
             header::HeaderName::from_static("x-actor-id"),
         ]);
 
-    let (router, openapi) = openapi_router().split_for_parts();
+    let document_max_bytes = state
+        .document_store
+        .as_ref()
+        .map_or(deepref_documents::DEFAULT_MAX_DOCUMENT_BYTES, |store| {
+            store.max_bytes()
+        });
+    let (router, openapi) = openapi_router(document_max_bytes).split_for_parts();
     let openapi = Arc::new(openapi);
 
     router
@@ -117,7 +142,6 @@ pub fn router(state: AppState, config: &ApiConfig) -> Router {
             })
         })
         .layer(cors)
-        .layer(DefaultBodyLimit::max(acquisitions::MAX_REQUEST_BODY_BYTES))
         .layer(from_fn(correlation))
         .layer(TraceLayer::new_for_http())
         .with_state(state)
@@ -189,6 +213,15 @@ mod tests {
             "/projects/{project_id}/reports/{report_id}/screening/undo",
             "/projects/{project_id}/reports/{report_id}/screening/history",
             "/projects/{project_id}/prisma",
+            "/projects/{project_id}/reports/{report_id}/documents",
+            "/projects/{project_id}/reports/{report_id}/documents/{document_id}",
+            "/projects/{project_id}/reports/{report_id}/documents/{document_id}/blocks",
+            "/projects/{project_id}/reports/{report_id}/documents/{document_id}/pages",
+            "/projects/{project_id}/reports/{report_id}/documents/{document_id}/content",
+            "/projects/{project_id}/screening/full-text",
+            "/projects/{project_id}/screening/full-text/missing",
+            "/projects/{project_id}/screening/full-text/reasons",
+            "/projects/{project_id}/reports/{report_id}/documents/external",
         ];
 
         for path in expected_paths {

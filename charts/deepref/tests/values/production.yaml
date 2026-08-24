@@ -14,6 +14,7 @@ externalSecrets:
   remote:
     database: {key: deepref/production/database, urlProperty: url}
     cloudflared: {key: deepref/production/cloudflared, tokenProperty: token}
+    documentStorage: {key: deepref/production/document-storage, endpointProperty: endpoint, bucketProperty: bucket, regionProperty: region, accessKeyIdProperty: access_key_id, secretAccessKeyProperty: secret_access_key}
 networkPolicy:
   databaseEgress: {cidrs: [192.0.2.0/24], port: 5432}
   telemetryEgress: {cidrs: [198.51.100.0/24], ports: [443]}

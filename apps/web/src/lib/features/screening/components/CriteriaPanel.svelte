@@ -4,16 +4,16 @@
 
 	let {
 		criteria,
-		protocolVersion
+		protocolVersion,
+		stage = 'title_abstract'
 	}: {
 		criteria: EligibilityCriterionDto[];
 		protocolVersion: number | undefined;
+		stage?: 'title_abstract' | 'full_text';
 	} = $props();
 
-	const titleAbstractCriteria = $derived(
-		criteria.filter(
-			(criterion) => criterion.stage === 'title_abstract' || criterion.stage === 'both'
-		)
+	const stageCriteria = $derived(
+		criteria.filter((criterion) => criterion.stage === stage || criterion.stage === 'both')
 	);
 </script>
 
@@ -21,13 +21,14 @@
 	<Card.Header>
 		<Card.Title>Eligibility criteria</Card.Title>
 		<Card.Description
-			>Title/abstract criteria · Protocol v{protocolVersion ?? '—'}</Card.Description
+			>{stage === 'full_text' ? 'Full-text' : 'Title/abstract'} criteria · Protocol v{protocolVersion ??
+				'—'}</Card.Description
 		>
 	</Card.Header>
 	<Card.Content>
-		{#if titleAbstractCriteria.length > 0}
+		{#if stageCriteria.length > 0}
 			<ol class="flex flex-col gap-4">
-				{#each titleAbstractCriteria as criterion (criterion.id)}
+				{#each stageCriteria as criterion (criterion.id)}
 					<li class="flex flex-col gap-1">
 						<div class="flex flex-wrap items-center gap-2">
 							<span class="text-sm font-medium">{criterion.label}</span>

@@ -4,6 +4,7 @@ use uuid::Uuid;
 
 pub mod acquisition;
 pub mod bibliography;
+pub mod documents;
 pub mod protocol;
 
 pub use acquisition::{AcquisitionRunId, AcquisitionSource, AcquisitionStatus, ImportFormat};
@@ -11,6 +12,10 @@ pub use bibliography::{
     Citation, DoiError, IdentifierError, IdentifierScheme, Record, RecordId, Report, ReportId,
     ReportIdentifier, Study, StudyId, Title, TitleError, normalize_bibliography_title,
     normalize_doi,
+};
+pub use documents::{
+    DocumentBlock, DocumentBlockId, DocumentContent, DocumentId, DocumentMetadata, DocumentSource,
+    DocumentStatus, DocumentStatusTransitionError, NormalizedBoundingBox, OcrRequirement,
 };
 pub use protocol::{
     CriterionDimension, CriterionKind, CriterionStage, EligibilityCriterion, FrameworkKind,
@@ -84,7 +89,7 @@ pub enum ActorValidationError {
     BlankId,
 }
 
-#[derive(Debug, Clone, PartialEq, Eq)]
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Actor {
     kind: ActorKind,
     id: String,

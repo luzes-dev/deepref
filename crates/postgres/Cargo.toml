@@ -11,6 +11,7 @@ deepref-application.workspace = true
 deepref-graph.workspace = true
 chrono.workspace = true
 deepref-domain.workspace = true
+deepref-documents.workspace = true
 serde_json.workspace = true
 serde.workspace = true
 sqlx.workspace = true

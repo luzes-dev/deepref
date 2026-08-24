@@ -12,6 +12,7 @@ path = "src/lib.rs"
 deepref-application.workspace = true
 deepref-core = { version = "0.1.0", path = "../../crates/core" }
 deepref-domain.workspace = true
+deepref-documents = { version = "0.1.0", path = "../../crates/documents" }
 deepref-config.workspace = true
 deepref-events = { version = "0.1.0", path = "../../crates/events" }
 deepref-graph.workspace = true
@@ -20,18 +21,22 @@ deepref-providers.workspace = true
 deepref-telemetry.workspace = true
 anyhow.workspace = true
 axum.workspace = true
+bytes.workspace = true
 base64.workspace = true
 chrono.workspace = true
 garde.workspace = true
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
 sha2.workspace = true
+futures.workspace = true
+reqwest.workspace = true
 sqlx.workspace = true
 thiserror.workspace = true
 tokio.workspace = true
 tower-http.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
+url.workspace = true
 utoipa.workspace = true
 utoipa-axum.workspace = true
 uuid.workspace = true

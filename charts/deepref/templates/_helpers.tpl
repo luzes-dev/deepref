@@ -99,6 +99,25 @@ topologySpreadConstraints:
   value: http://{{ include "deepref.componentName" (dict "root" .root "component" "adot") }}:4317
 - name: SHUTDOWN_DEADLINE_SECS
   value: {{ .root.Values.runtime.shutdownDeadlineSeconds | quote }}
+- name: DOCUMENT_STORAGE_BACKEND
+  value: {{ .root.Values.documentStorage.backend | quote }}
+- name: DOCUMENT_MAX_BYTES
+  value: {{ .root.Values.documentStorage.maxBytes | quote }}
+{{- if .root.Values.documentStorage.root }}
+- name: DOCUMENT_STORAGE_ROOT
+  value: {{ .root.Values.documentStorage.root | quote }}
+{{- end }}
+{{- $storageSecret := default (include "deepref.componentName" (dict "root" .root "component" "document-storage")) .root.Values.documentStorage.secretName }}
+- name: DOCUMENT_STORAGE_ENDPOINT
+  valueFrom: {secretKeyRef: {name: {{ $storageSecret }}, key: endpoint}}
+- name: DOCUMENT_STORAGE_BUCKET
+  valueFrom: {secretKeyRef: {name: {{ $storageSecret }}, key: bucket}}
+- name: DOCUMENT_STORAGE_REGION
+  valueFrom: {secretKeyRef: {name: {{ $storageSecret }}, key: region}}
+- name: DOCUMENT_STORAGE_ACCESS_KEY_ID
+  valueFrom: {secretKeyRef: {name: {{ $storageSecret }}, key: access_key_id}}
+- name: DOCUMENT_STORAGE_SECRET_ACCESS_KEY
+  valueFrom: {secretKeyRef: {name: {{ $storageSecret }}, key: secret_access_key}}
 {{- end -}}
 
 {{- define "deepref.runtimeVolumeMounts" -}}
