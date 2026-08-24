@@ -4,18 +4,49 @@
  * DeepRef API
  * OpenAPI spec version: 0.1.0
  */
+import type { PrismaReasonDto } from './prismaReasonDto.ts';
 
 export interface PrismaDto {
-	full_text_excluded: number;
-	full_text_included: number;
-	full_text_pending: number;
-	project_id: string;
-	records_deduplicated: number;
-	records_identified: number;
-	revision: number;
-	title_abstract_excluded: number;
-	title_abstract_included: number;
-	title_abstract_pending: number;
 	/** @nullable */
-	updated_at?: string | null;
+	as_of?: string | null;
+	/** @minimum 0 */
+	duplicates_removed: number;
+	/** @minimum 0 */
+	full_text_assessed: number;
+	/** @minimum 0 */
+	full_text_excluded: number;
+	full_text_exclusions: PrismaReasonDto[];
+	/** @minimum 0 */
+	full_text_included: number;
+	/** @minimum 0 */
+	full_text_pending: number;
+	/** @minimum 0 */
+	identified_records: number;
+	/** @minimum 0 */
+	included_reports_not_grouped: number;
+	/** @minimum 0 */
+	included_studies: number;
+	/** @minimum 0 */
+	linked_records: number;
+	/** @minimum 0 */
+	manually_created_reports: number;
+	/** @minimum 0 */
+	pending_dedupe_proposals: number;
+	project_id: string;
+	/** @minimum 0 */
+	reports_not_retrieved: number;
+	/** @minimum 0 */
+	reports_sought: number;
+	/** @minimum 0 */
+	screened_records: number;
+	/** @minimum 0 */
+	screening_high_watermark: number;
+	/** @minimum 0 */
+	source_canonical_reports: number;
+	/** @minimum 0 */
+	title_abstract_excluded: number;
+	/** @minimum 0 */
+	title_abstract_pending: number;
+	/** @minimum 0 */
+	unresolved_records: number;
 }

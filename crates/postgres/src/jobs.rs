@@ -168,31 +168,6 @@ impl JobQueue for PostgresJobQueue {
     }
 }
 
-pub async fn recompute_prisma_snapshot(pool: &PgPool, project_id: Uuid) -> anyhow::Result<()> {
-    let row = sqlx::query(
-        "SELECT count(*)::bigint AS records_identified,count(*) FILTER (WHERE pr.report_id IS NOT NULL)::bigint AS records_deduplicated,count(*) FILTER (WHERE coalesce(ss.title_abstract_status,'unscreened')='unscreened')::bigint AS title_abstract_pending,count(*) FILTER (WHERE ss.title_abstract_status='include')::bigint AS title_abstract_included,count(*) FILTER (WHERE ss.title_abstract_status='exclude')::bigint AS title_abstract_excluded,count(*) FILTER (WHERE coalesce(ss.final_status,'unscreened')='pending_full_text')::bigint AS full_text_pending,count(*) FILTER (WHERE ss.full_text_status='include')::bigint AS full_text_included,count(*) FILTER (WHERE ss.full_text_status='exclude')::bigint AS full_text_excluded,coalesce(max(ss.revision),0)::bigint AS revision FROM records rec LEFT JOIN project_reports pr ON pr.project_id=rec.project_id AND pr.report_id=rec.report_id LEFT JOIN screening_state ss ON ss.project_id=rec.project_id AND ss.report_id=rec.report_id WHERE rec.project_id=$1",
-    )
-    .bind(project_id)
-    .fetch_one(pool)
-    .await?;
-    sqlx::query(
-        "INSERT INTO prisma_snapshots (project_id,records_identified,records_deduplicated,title_abstract_pending,title_abstract_included,title_abstract_excluded,full_text_pending,full_text_included,full_text_excluded,revision,updated_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,now()) ON CONFLICT (project_id) DO UPDATE SET records_identified=EXCLUDED.records_identified,records_deduplicated=EXCLUDED.records_deduplicated,title_abstract_pending=EXCLUDED.title_abstract_pending,title_abstract_included=EXCLUDED.title_abstract_included,title_abstract_excluded=EXCLUDED.title_abstract_excluded,full_text_pending=EXCLUDED.full_text_pending,full_text_included=EXCLUDED.full_text_included,full_text_excluded=EXCLUDED.full_text_excluded,revision=EXCLUDED.revision,updated_at=now()",
-    )
-    .bind(project_id)
-    .bind(row.get::<i64, _>("records_identified"))
-    .bind(row.get::<i64, _>("records_deduplicated"))
-    .bind(row.get::<i64, _>("title_abstract_pending"))
-    .bind(row.get::<i64, _>("title_abstract_included"))
-    .bind(row.get::<i64, _>("title_abstract_excluded"))
-    .bind(row.get::<i64, _>("full_text_pending"))
-    .bind(row.get::<i64, _>("full_text_included"))
-    .bind(row.get::<i64, _>("full_text_excluded"))
-    .bind(row.get::<i64, _>("revision"))
-    .execute(pool)
-    .await?;
-    Ok(())
-}
-
 pub fn job(
     id: Uuid,
     kind: impl Into<String>,

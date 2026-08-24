@@ -32,6 +32,7 @@
 			<Tabs.List class="w-full overflow-x-auto">
 				<Tabs.Trigger value="overview">Overview</Tabs.Trigger>
 				<Tabs.Trigger value="protocol">Protocol</Tabs.Trigger>
+				<Tabs.Trigger value="prisma">PRISMA</Tabs.Trigger>
 				<Tabs.Trigger value="articles">Articles</Tabs.Trigger>
 				<Tabs.Trigger value="graph">Graph</Tabs.Trigger>
 				<Tabs.Trigger value="recommendations">Recs</Tabs.Trigger>

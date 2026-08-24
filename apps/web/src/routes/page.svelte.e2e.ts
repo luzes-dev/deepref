@@ -126,16 +126,19 @@ async function mockWorkspace(page: Page) {
 			});
 		}
 	);
-	await page.route('http://localhost:4173/api/projects/test-project/graph', async (route) => {
-		await route.fulfill({
-			json: {
-				nodes: workspaceArticles,
-				edges: [{ source: articles[0].report_id, target: articles[0].report_id }],
-				projection,
-				truncated: false
-			}
-		});
-	});
+	await page.route(
+		/http:\/\/localhost:4173\/api\/projects\/test-project\/graph(?:\?.*)?$/,
+		async (route) => {
+			await route.fulfill({
+				json: {
+					nodes: workspaceArticles,
+					edges: [{ source: articles[0].report_id, target: articles[0].report_id }],
+					projection,
+					truncated: false
+				}
+			});
+		}
+	);
 	await page.route(
 		'http://localhost:4173/api/projects/test-project/recommendations',
 		async (route) => {
@@ -282,7 +285,7 @@ async function mockProjectCreateWorkspace(page: Page, initialProjects = [project
 			}
 		);
 		await page.route(
-			`http://localhost:4173/api/projects/${mockedProject.id}/graph`,
+			new RegExp(`http://localhost:4173/api/projects/${mockedProject.id}/graph(?:\\?.*)?$`),
 			async (route) => {
 				await route.fulfill({
 					json: { nodes: [], edges: [], projection, truncated: false }

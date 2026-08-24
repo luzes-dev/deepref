@@ -17,6 +17,15 @@ import type {
 } from './types';
 
 export type ArticleSort = 'rank' | 'internal' | 'total' | 'year' | 'title';
+export const GRAPH_OVERLAY_FIELDS = [
+	'metrics',
+	'screening',
+	'study',
+	'appraisal',
+	'provenance'
+] as const;
+export type GraphOverlayField = (typeof GRAPH_OVERLAY_FIELDS)[number];
+export type GraphColorMode = GraphOverlayField;
 
 type ProjectWorkspaceDataSources = {
 	projects: Getter<ProjectDto[]>;
@@ -40,6 +49,7 @@ type ProjectWorkspaceDataSources = {
 
 function viewForPathname(pathname: string): ProjectWorkspaceView {
 	if (pathname.endsWith('/protocol')) return 'protocol';
+	if (pathname.endsWith('/prisma')) return 'prisma';
 	if (pathname.endsWith('/articles')) return 'articles';
 	if (pathname.endsWith('/graph')) return 'graph';
 	if (pathname.endsWith('/recommendations')) return 'recommendations';
@@ -55,6 +65,8 @@ function pathnameForView(projectId: string, view: ProjectWorkspaceNavView): Reso
 			return resolve('/projects/[projectId]/overview', { projectId });
 		case 'protocol':
 			return resolve('/projects/[projectId]/protocol', { projectId });
+		case 'prisma':
+			return resolve('/projects/[projectId]/prisma', { projectId });
 		case 'articles':
 			return resolve('/projects/[projectId]/articles', { projectId });
 		case 'graph':
@@ -176,6 +188,28 @@ class ProjectWorkspaceContext {
 		},
 		set minInternal(value: number) {
 			setSearchParam('graphMinInternal', value > 0 ? String(value) : undefined);
+		},
+		get fields(): GraphOverlayField[] {
+			const values = page.url.searchParams.get('graphFields')?.split(',') ?? [];
+			const selected = GRAPH_OVERLAY_FIELDS.filter((field) => values.includes(field));
+			return selected.length > 0 ? [...selected] : [...GRAPH_OVERLAY_FIELDS];
+		},
+		setField(field: GraphOverlayField, enabled: boolean) {
+			const current = this.fields;
+			const selected = GRAPH_OVERLAY_FIELDS.filter((name) =>
+				name === field ? enabled : current.includes(name)
+			);
+			if (selected.length === 0) selected.push('metrics');
+			setSearchParam('graphFields', selected.join(','));
+		},
+		get colorBy(): GraphColorMode {
+			const value = page.url.searchParams.get('graphColorBy');
+			return GRAPH_OVERLAY_FIELDS.includes(value as GraphColorMode)
+				? (value as GraphColorMode)
+				: 'metrics';
+		},
+		set colorBy(value: GraphColorMode) {
+			setSearchParam('graphColorBy', value === 'metrics' ? undefined : value);
 		}
 	};
 

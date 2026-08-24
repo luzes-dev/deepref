@@ -5,8 +5,8 @@ use axum::{
 };
 use chrono::{DateTime, Utc};
 use deepref_application::{
-    GetScreeningQueueQuery, ScreenReportCommand, ScreeningQueueSort, ScreeningQueueStatus,
-    UndoScreeningCommand,
+    GetScreeningQueueQuery, PrismaProjection, ScreenReportCommand, ScreeningQueueSort,
+    ScreeningQueueStatus, UndoScreeningCommand,
 };
 use deepref_domain::{Actor as DomainActor, ActorKind, ScreeningDecision, ScreeningStage};
 use deepref_postgres::{
@@ -17,7 +17,6 @@ use deepref_postgres::{
 };
 use serde::{Deserialize, Serialize};
 use serde_json::json;
-use sqlx::Row;
 use utoipa::ToSchema;
 use uuid::Uuid;
 
@@ -199,16 +198,35 @@ pub(crate) struct ScreeningHistoryItemDto {
 #[derive(Debug, Clone, Serialize, ToSchema)]
 pub(crate) struct PrismaDto {
     pub project_id: Uuid,
-    pub records_identified: i64,
-    pub records_deduplicated: i64,
-    pub title_abstract_pending: i64,
-    pub title_abstract_included: i64,
-    pub title_abstract_excluded: i64,
-    pub full_text_pending: i64,
-    pub full_text_included: i64,
-    pub full_text_excluded: i64,
-    pub revision: i64,
-    pub updated_at: Option<DateTime<Utc>>,
+    pub screening_high_watermark: u64,
+    pub as_of: Option<DateTime<Utc>>,
+    pub identified_records: u64,
+    pub linked_records: u64,
+    pub duplicates_removed: u64,
+    pub unresolved_records: u64,
+    pub pending_dedupe_proposals: u64,
+    pub source_canonical_reports: u64,
+    pub manually_created_reports: u64,
+    pub screened_records: u64,
+    pub title_abstract_excluded: u64,
+    pub title_abstract_pending: u64,
+    pub reports_sought: u64,
+    pub reports_not_retrieved: u64,
+    pub full_text_assessed: u64,
+    pub full_text_pending: u64,
+    pub full_text_included: u64,
+    pub full_text_excluded: u64,
+    pub full_text_exclusions: Vec<PrismaReasonDto>,
+    pub included_reports_not_grouped: u64,
+    pub included_studies: u64,
+}
+
+#[derive(Debug, Clone, Serialize, ToSchema)]
+pub(crate) struct PrismaReasonDto {
+    pub id: Uuid,
+    pub code: String,
+    pub label: String,
+    pub count: u64,
 }
 
 #[utoipa::path(
@@ -429,35 +447,58 @@ pub(crate) async fn get_prisma(
     State(state): State<AppState>,
     Path(project_id): Path<Uuid>,
 ) -> Result<Json<PrismaDto>, ApiError> {
-    let row = sqlx::query(
-        "SELECT records_identified,records_deduplicated,title_abstract_pending,title_abstract_included,title_abstract_excluded,full_text_pending,full_text_included,full_text_excluded,revision,updated_at FROM prisma_snapshots WHERE project_id=$1",
-    )
-    .bind(project_id)
-    .fetch_optional(&state.pool)
-    .await?;
-    if row.is_none() {
-        let project_exists: bool =
-            sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM projects WHERE id=$1)")
-                .bind(project_id)
-                .fetch_one(&state.pool)
-                .await?;
-        if !project_exists {
-            return Err(ApiError::NotFound("project not found".to_owned()));
-        }
+    let projection = deepref_postgres::get_prisma_projection(&state.pool, project_id)
+        .await
+        .map_err(|error| match error {
+            deepref_postgres::PrismaProjectionError::Invariant(error) => {
+                ApiError::DataIntegrity(error.to_string())
+            }
+            deepref_postgres::PrismaProjectionError::NegativeCount { .. } => {
+                ApiError::DataIntegrity(error.to_string())
+            }
+            deepref_postgres::PrismaProjectionError::Database(error) => ApiError::Database(error),
+            deepref_postgres::PrismaProjectionError::Json(error) => {
+                ApiError::Internal(error.into())
+            }
+        })?
+        .ok_or_else(|| ApiError::NotFound("project not found".to_owned()))?;
+    Ok(Json(prisma_dto(projection)))
+}
+
+fn prisma_dto(projection: PrismaProjection) -> PrismaDto {
+    PrismaDto {
+        project_id: projection.project_id,
+        screening_high_watermark: projection.screening_high_watermark.get(),
+        as_of: projection.as_of,
+        identified_records: projection.identified_records.get(),
+        linked_records: projection.linked_records.get(),
+        duplicates_removed: projection.duplicates_removed.get(),
+        unresolved_records: projection.unresolved_records.get(),
+        pending_dedupe_proposals: projection.pending_dedupe_proposals.get(),
+        source_canonical_reports: projection.source_canonical_reports.get(),
+        manually_created_reports: projection.manually_created_reports.get(),
+        screened_records: projection.screened_records.get(),
+        title_abstract_excluded: projection.title_abstract_excluded.get(),
+        title_abstract_pending: projection.title_abstract_pending.get(),
+        reports_sought: projection.reports_sought.get(),
+        reports_not_retrieved: projection.reports_not_retrieved.get(),
+        full_text_assessed: projection.full_text_assessed.get(),
+        full_text_pending: projection.full_text_pending.get(),
+        full_text_included: projection.full_text_included.get(),
+        full_text_excluded: projection.full_text_excluded.get(),
+        full_text_exclusions: projection
+            .full_text_exclusions
+            .into_iter()
+            .map(|reason| PrismaReasonDto {
+                id: reason.id,
+                code: reason.code,
+                label: reason.label,
+                count: reason.count.get(),
+            })
+            .collect(),
+        included_reports_not_grouped: projection.included_reports_not_grouped.get(),
+        included_studies: projection.included_studies.get(),
     }
-    Ok(Json(PrismaDto {
-        project_id,
-        records_identified: row.as_ref().map_or(0, |r| r.get("records_identified")),
-        records_deduplicated: row.as_ref().map_or(0, |r| r.get("records_deduplicated")),
-        title_abstract_pending: row.as_ref().map_or(0, |r| r.get("title_abstract_pending")),
-        title_abstract_included: row.as_ref().map_or(0, |r| r.get("title_abstract_included")),
-        title_abstract_excluded: row.as_ref().map_or(0, |r| r.get("title_abstract_excluded")),
-        full_text_pending: row.as_ref().map_or(0, |r| r.get("full_text_pending")),
-        full_text_included: row.as_ref().map_or(0, |r| r.get("full_text_included")),
-        full_text_excluded: row.as_ref().map_or(0, |r| r.get("full_text_excluded")),
-        revision: row.as_ref().map_or(0, |r| r.get("revision")),
-        updated_at: row.as_ref().and_then(|r| r.get("updated_at")),
-    }))
 }
 
 fn queue_query(

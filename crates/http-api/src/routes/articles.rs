@@ -8,9 +8,10 @@ use deepref_events::{
     DomainPayload, EntityType, EventEnvelope, MetricsRecomputeRequested,
     SUBJECT_METRICS_RECOMPUTE_REQUESTED,
 };
+use serde::Deserialize;
 use serde::Serialize;
 use sqlx::Row;
-use utoipa::ToSchema;
+use utoipa::{IntoParams, ToSchema};
 use uuid::Uuid;
 
 use super::pagination::{PaginatedResponse, PaginationParams, page};
@@ -33,6 +34,58 @@ pub(crate) struct ReportDto {
     rank_score: f64,
     metrics_as_of: Option<DateTime<Utc>>,
     metrics_stale: bool,
+}
+
+#[derive(Debug, Serialize, ToSchema, Clone)]
+pub(crate) struct GraphNodeDto {
+    report_id: Uuid,
+    doi: Option<String>,
+    title: Option<String>,
+    issued_year: Option<i32>,
+    #[serde(rename = "type")]
+    work_type: Option<String>,
+    metrics: Option<GraphMetricsDto>,
+    screening: Option<GraphScreeningDto>,
+    study: Option<GraphStudyDto>,
+    appraisal: Option<GraphAppraisalDto>,
+    provenance: Option<GraphProvenanceDto>,
+}
+
+#[derive(Debug, Serialize, ToSchema, Clone)]
+struct GraphMetricsDto {
+    total_citations: i64,
+    references_count: i64,
+    internal_citations: i64,
+    outbound_internal_references: i64,
+    rank_score: f64,
+    metrics_as_of: Option<DateTime<Utc>>,
+    metrics_stale: bool,
+}
+
+#[derive(Debug, Serialize, ToSchema, Clone)]
+struct GraphScreeningDto {
+    title_abstract_status: String,
+    full_text_status: String,
+    final_status: String,
+}
+
+#[derive(Debug, Serialize, ToSchema, Clone)]
+struct GraphStudyDto {
+    study_id: Option<Uuid>,
+    title: Option<String>,
+}
+
+#[derive(Debug, Serialize, ToSchema, Clone)]
+struct GraphAppraisalDto {
+    assessment_count: i64,
+    completed_count: i64,
+    latest_completed_at: Option<DateTime<Utc>>,
+}
+
+#[derive(Debug, Serialize, ToSchema, Clone)]
+struct GraphProvenanceDto {
+    sources: Vec<String>,
+    source_record_count: i64,
 }
 
 #[derive(Debug, Serialize, ToSchema)]
@@ -72,10 +125,15 @@ pub(crate) struct ProjectionMetadata {
 
 #[derive(Debug, Serialize, ToSchema)]
 pub(crate) struct ProjectGraphDto {
-    nodes: Vec<ReportDto>,
+    nodes: Vec<GraphNodeDto>,
     edges: Vec<GraphEdgeDto>,
     projection: ProjectionMetadata,
     truncated: bool,
+}
+
+#[derive(Debug, Deserialize, IntoParams)]
+pub(crate) struct GraphQuery {
+    fields: Option<String>,
 }
 
 #[derive(Debug, Serialize, ToSchema)]
@@ -189,19 +247,25 @@ pub(crate) async fn get_report(
 }
 
 #[utoipa::path(get, path="/projects/{project_id}/graph", operation_id="getProjectGraph", tag="reports",
-    params(("project_id"=Uuid, Path)),
-    responses((status=200,body=ProjectGraphDto),(status=500,body=ErrorResponse)))]
+    params(("project_id"=Uuid, Path), GraphQuery),
+    responses((status=200,body=ProjectGraphDto),(status=400,body=ErrorResponse),(status=404,body=ErrorResponse),(status=500,body=ErrorResponse)))]
 pub(crate) async fn project_graph(
     State(state): State<AppState>,
     Path(project_id): Path<Uuid>,
+    Query(query): Query<GraphQuery>,
 ) -> Result<Json<ProjectGraphDto>, ApiError> {
+    let fields = parse_graph_fields(query.fields.as_deref())?;
+    let project_exists: bool =
+        sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM projects WHERE id=$1)")
+            .bind(project_id)
+            .fetch_one(&state.pool)
+            .await?;
+    if !project_exists {
+        return Err(ApiError::NotFound("project not found".to_owned()));
+    }
     let projection = projection_metadata(&state, project_id).await?;
-    let graph = deepref_postgres::load_project_graph(&state.pool, project_id).await?;
-    let nodes = graph
-        .nodes
-        .into_iter()
-        .map(report_from_graph_node)
-        .collect();
+    let graph = deepref_postgres::load_project_graph(&state.pool, project_id, fields).await?;
+    let nodes = graph.nodes.into_iter().map(graph_node_dto).collect();
     let edges = graph
         .edges
         .into_iter()
@@ -224,12 +288,23 @@ pub(crate) async fn recommendations(
     State(state): State<AppState>,
     Path(project_id): Path<Uuid>,
 ) -> Result<Json<RecommendationGroupsDto>, ApiError> {
-    let graph = project_graph(State(state), Path(project_id)).await?.0;
+    let projection = projection_metadata(&state, project_id).await?;
+    let graph = deepref_postgres::load_project_graph(
+        &state.pool,
+        project_id,
+        deepref_graph::GraphFieldSelection::metrics(),
+    )
+    .await?;
+    let nodes = graph
+        .nodes
+        .into_iter()
+        .map(report_from_graph_node)
+        .collect::<Result<Vec<_>, _>>()?;
     Ok(Json(RecommendationGroupsDto {
-        foundational: graph.nodes.iter().take(5).cloned().collect(),
-        core_to_project: graph.nodes.iter().skip(5).take(5).cloned().collect(),
-        underexplored: graph.nodes.iter().rev().take(5).cloned().collect(),
-        projection: graph.projection,
+        foundational: nodes.iter().take(5).cloned().collect(),
+        core_to_project: nodes.iter().skip(5).take(5).cloned().collect(),
+        underexplored: nodes.iter().rev().take(5).cloned().collect(),
+        projection,
     }))
 }
 
@@ -332,18 +407,137 @@ fn report_from_row(row: sqlx::postgres::PgRow) -> ReportDto {
     }
 }
 
-fn report_from_graph_node(node: deepref_graph::GraphNode) -> ReportDto {
-    ReportDto {
+fn report_from_graph_node(node: deepref_graph::GraphNode) -> Result<ReportDto, ApiError> {
+    let metrics = node.metrics.unwrap_or(deepref_graph::GraphMetricsOverlay {
+        total_citations: 0,
+        references_count: 0,
+        internal_citations: 0,
+        outbound_internal_references: 0,
+        rank_score: 0.0,
+        metrics_as_of: None,
+        metrics_stale: true,
+    });
+    Ok(ReportDto {
         report_id: node.report_id,
         doi: node.doi,
         title: node.title,
         issued_year: node.issued_year,
         work_type: node.work_type,
-        total_citations: node.total_citations as i32,
-        internal_citations: node.internal_citations as i32,
-        outbound_internal_references: node.outbound_internal_references as i32,
-        rank_score: node.rank_score,
-        metrics_as_of: node.metrics_as_of,
-        metrics_stale: node.metrics_as_of.is_none(),
+        total_citations: i32::try_from(metrics.total_citations)
+            .map_err(|_| ApiError::DataIntegrity("total citations exceed API range".to_owned()))?,
+        internal_citations: i32::try_from(metrics.internal_citations).map_err(|_| {
+            ApiError::DataIntegrity("internal citations exceed API range".to_owned())
+        })?,
+        outbound_internal_references: i32::try_from(metrics.outbound_internal_references).map_err(
+            |_| ApiError::DataIntegrity("outbound references exceed API range".to_owned()),
+        )?,
+        rank_score: metrics.rank_score,
+        metrics_as_of: metrics.metrics_as_of,
+        metrics_stale: metrics.metrics_stale,
+    })
+}
+
+fn graph_node_dto(node: deepref_graph::GraphNode) -> GraphNodeDto {
+    GraphNodeDto {
+        report_id: node.report_id,
+        doi: node.doi,
+        title: node.title,
+        issued_year: node.issued_year,
+        work_type: node.work_type,
+        metrics: node.metrics.map(|overlay| GraphMetricsDto {
+            total_citations: overlay.total_citations,
+            references_count: overlay.references_count,
+            internal_citations: overlay.internal_citations,
+            outbound_internal_references: overlay.outbound_internal_references,
+            rank_score: overlay.rank_score,
+            metrics_as_of: overlay.metrics_as_of,
+            metrics_stale: overlay.metrics_stale,
+        }),
+        screening: node.screening.map(|overlay| GraphScreeningDto {
+            title_abstract_status: overlay.title_abstract_status,
+            full_text_status: overlay.full_text_status,
+            final_status: overlay.final_status,
+        }),
+        study: node.study.map(|overlay| GraphStudyDto {
+            study_id: overlay.study_id,
+            title: overlay.title,
+        }),
+        appraisal: node.appraisal.map(|overlay| GraphAppraisalDto {
+            assessment_count: overlay.assessment_count,
+            completed_count: overlay.completed_count,
+            latest_completed_at: overlay.latest_completed_at,
+        }),
+        provenance: node.provenance.map(|overlay| GraphProvenanceDto {
+            sources: overlay.sources,
+            source_record_count: overlay.source_record_count,
+        }),
+    }
+}
+
+fn parse_graph_fields(value: Option<&str>) -> Result<deepref_graph::GraphFieldSelection, ApiError> {
+    let Some(value) = value else {
+        return Ok(deepref_graph::GraphFieldSelection::all());
+    };
+    if value.trim().is_empty() {
+        return Err(ApiError::BadRequest(
+            "graph fields must not be empty".to_owned(),
+        ));
+    }
+    let mut fields = deepref_graph::GraphFieldSelection {
+        screening: false,
+        metrics: false,
+        study: false,
+        appraisal: false,
+        provenance: false,
+    };
+    for field in value.split(',').map(str::trim) {
+        match field {
+            "screening" if !fields.screening => fields.screening = true,
+            "metrics" if !fields.metrics => fields.metrics = true,
+            "study" if !fields.study => fields.study = true,
+            "appraisal" if !fields.appraisal => fields.appraisal = true,
+            "provenance" if !fields.provenance => fields.provenance = true,
+            "screening" | "metrics" | "study" | "appraisal" | "provenance" => {
+                return Err(ApiError::BadRequest(
+                    "graph fields must not contain duplicates".to_owned(),
+                ));
+            }
+            _ => return Err(ApiError::BadRequest("invalid graph fields".to_owned())),
+        }
+    }
+    Ok(fields)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn graph_fields_default_and_selection_are_explicit() {
+        assert_eq!(
+            parse_graph_fields(None).expect("default fields"),
+            deepref_graph::GraphFieldSelection::all()
+        );
+        assert_eq!(
+            parse_graph_fields(Some("screening,metrics,study,appraisal,provenance"))
+                .expect("all fields"),
+            deepref_graph::GraphFieldSelection::all()
+        );
+        let screening = parse_graph_fields(Some("screening")).expect("screening field");
+        assert!(screening.screening);
+        assert!(!screening.metrics);
+        assert!(!screening.study);
+        assert!(!screening.appraisal);
+        assert!(!screening.provenance);
+    }
+
+    #[test]
+    fn graph_fields_reject_empty_unknown_and_duplicate_values() {
+        for fields in [Some(""), Some("unknown"), Some("screening,screening")] {
+            assert!(matches!(
+                parse_graph_fields(fields),
+                Err(ApiError::BadRequest(_))
+            ));
+        }
     }
 }

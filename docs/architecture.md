@@ -10,7 +10,7 @@ Authoritative state changes and their follow-up jobs are committed in one transa
 
 Graph reads use canonical UUIDs from `reports`, `project_reports`, and `citations`. Reports without DOI identifiers remain graph nodes. Responses are deterministic and bounded; edges are UUID-to-UUID and never depend on DOI mapping. Project metrics use the same degree/rank semantics as the legacy fixture and are recomputed after imports and later ingestions. The PostgreSQL graph status endpoint reports metric/projection freshness for compatibility with existing clients; it is not an external graph service.
 
-The v2 screening command writes its event, state projection, project lifecycle status, and PRISMA recomputation job in one transaction. It uses optimistic revisions and returns `409 screening_revision_conflict` when another browser, worker, or automation changes the same report.
+The v2 screening command writes its event, state projection, and project lifecycle status in one transaction. PRISMA is a live deterministic projection of canonical relational state; no recomputation job or snapshot is authoritative. The command uses optimistic revisions and returns `409 screening_revision_conflict` when another browser, worker, or automation changes the same report.
 
 ## Runtime roles and shutdown
 
