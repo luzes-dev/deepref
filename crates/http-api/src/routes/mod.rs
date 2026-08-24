@@ -10,6 +10,7 @@ mod projects;
 mod protocol;
 mod review;
 mod settings;
+mod study;
 
 use std::sync::Arc;
 
@@ -90,6 +91,24 @@ fn openapi_router(document_max_bytes: usize) -> OpenApiRouter<AppState> {
         .routes(routes!(documents::list_document_pages))
         .routes(routes!(documents::get_document_content))
         .routes(routes!(documents::attach_external_document))
+        .routes(routes!(
+            study::list_project_studies,
+            study::create_project_study
+        ))
+        .routes(routes!(
+            study::get_project_study,
+            study::rename_project_study
+        ))
+        .routes(routes!(study::list_project_study_history))
+        .routes(routes!(study::classify_project_study))
+        .routes(routes!(study::get_report_study_membership))
+        .routes(routes!(study::put_report_study_membership))
+        .routes(routes!(study::list_appraisal_definitions))
+        .routes(routes!(study::get_appraisal_definition_route))
+        .routes(routes!(
+            study::list_report_appraisals,
+            study::complete_report_appraisal
+        ))
         .layer(DefaultBodyLimit::max(acquisitions::MAX_REQUEST_BODY_BYTES));
     let uploads = OpenApiRouter::new()
         .routes(routes!(documents::upload_document))
@@ -222,6 +241,14 @@ mod tests {
             "/projects/{project_id}/screening/full-text/missing",
             "/projects/{project_id}/screening/full-text/reasons",
             "/projects/{project_id}/reports/{report_id}/documents/external",
+            "/projects/{project_id}/studies",
+            "/projects/{project_id}/studies/{study_id}",
+            "/projects/{project_id}/studies/{study_id}/history",
+            "/projects/{project_id}/studies/{study_id}/classification",
+            "/projects/{project_id}/reports/{report_id}/study",
+            "/projects/{project_id}/appraisal-definitions",
+            "/projects/{project_id}/appraisal-definitions/{definition_id}/{version}",
+            "/projects/{project_id}/reports/{report_id}/appraisals",
         ];
 
         for path in expected_paths {
@@ -230,6 +257,13 @@ mod tests {
                 "missing path {path}"
             );
         }
+        assert_eq!(
+            openapi.paths.paths["/projects/{project_id}/reports/{report_id}/study"]
+                .get
+                .as_ref()
+                .and_then(|operation| operation.operation_id.as_deref()),
+            Some("getReportStudyMembership")
+        );
         assert_eq!(
             openapi.paths.paths["/projects/{project_id}/review/protocol"]
                 .get

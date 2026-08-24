@@ -1,4 +1,5 @@
 mod acquisition;
+mod appraisal;
 mod deduplication;
 mod documents;
 mod graph;
@@ -6,6 +7,7 @@ mod jobs;
 mod legacy_import;
 mod protocol;
 mod screening;
+mod study;
 
 use sqlx::{
     PgPool,
@@ -21,6 +23,10 @@ pub async fn migrate(pool: &PgPool) -> Result<(), MigrateError> {
 pub use acquisition::{
     AcquisitionError, ImportPersistRequest, ImportPersistResult, ensure_legacy_acquisition_run,
     persist_import,
+};
+pub use appraisal::{
+    AppraisalAssessmentRecord, AppraisalError, AppraisalEvidenceRecord, complete_appraisal,
+    get_appraisal, list_appraisals,
 };
 pub use deduplication::{
     DedupeError, DedupeProposal, DedupeProposalCursor, DedupeRunRequest, DedupeRunSummary,
@@ -50,4 +56,10 @@ pub use screening::{
     ScreeningError, ScreeningHistory, ScreeningHistoryItem, ScreeningProgress, ScreeningQueue,
     ScreeningQueueItem, ScreeningStateSnapshot, get_next_screening_item, get_screening_history,
     get_screening_queue, screen_report, undo_screening,
+};
+pub use study::{
+    StudyDetailRecord, StudyError, StudyEventRecord, StudyListRecord, StudyMembershipRecord,
+    StudyRecord, StudyReportRecord, assign_report_to_study, classify_study, create_study,
+    get_study, get_study_for_report, list_studies, list_study_events, remove_report_from_study,
+    rename_study,
 };

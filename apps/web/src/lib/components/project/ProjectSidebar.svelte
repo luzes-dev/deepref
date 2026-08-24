@@ -8,6 +8,7 @@
 	import ArchiveIcon from '@lucide/svelte/icons/archive';
 	import ClipboardCheckIcon from '@lucide/svelte/icons/clipboard-check';
 	import ClipboardListIcon from '@lucide/svelte/icons/clipboard-list';
+	import ClipboardPenLineIcon from '@lucide/svelte/icons/clipboard-pen-line';
 	import FileTextIcon from '@lucide/svelte/icons/file-text';
 	import GitForkIcon from '@lucide/svelte/icons/git-fork';
 	import GitCompareIcon from '@lucide/svelte/icons/git-compare';
@@ -24,6 +25,14 @@
 	} = $props();
 
 	const workspace = useProjectWorkspaceContext();
+	const projectItems: ReadonlyArray<{
+		label: string;
+		path: '/projects/[projectId]/studies' | '/projects/[projectId]/appraisal';
+		icon: LucideIcon;
+	}> = [
+		{ label: 'Studies', path: '/projects/[projectId]/studies', icon: ClipboardListIcon },
+		{ label: 'Appraisal', path: '/projects/[projectId]/appraisal', icon: ClipboardPenLineIcon }
+	];
 	const navItems: {
 		view: ProjectWorkspaceNavView;
 		label: string;
@@ -162,6 +171,31 @@
 							Screening
 						</a>
 					{/if}
+				{/if}
+				{#if workspace.selectedProjectId}
+					{#each projectItems as projectItem (projectItem.label)}
+						{@const ProjectIcon = projectItem.icon}
+						<a
+							href={resolve(projectItem.path, {
+								projectId: workspace.selectedProjectId
+							})}
+							title={projectItem.label}
+							class={cn(
+								buttonVariants({
+									variant: 'outline',
+									size: collapsed ? 'icon' : 'sm',
+									class: collapsed ? 'size-9' : 'justify-start'
+								})
+							)}
+						>
+							<ProjectIcon
+								class={collapsed ? 'size-4' : 'mr-2 size-4'}
+								aria-hidden={true}
+							/>
+							{#if collapsed}<span class="sr-only">{projectItem.label}</span
+								>{:else}{projectItem.label}{/if}
+						</a>
+					{/each}
 				{/if}
 				{#if workspace.selectedProjectId}
 					{#if collapsed}

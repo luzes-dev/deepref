@@ -2,6 +2,8 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use uuid::Uuid;
 
+use super::study::{StudyDesign, StudyTitle};
+
 macro_rules! typed_id {
     ($name:ident) => {
         #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
@@ -75,7 +77,9 @@ pub struct Report {
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Study {
     pub id: StudyId,
-    pub title: Option<Title>,
+    pub title: StudyTitle,
+    pub design: Option<StudyDesign>,
+    pub revision: u64,
     pub report_ids: Vec<ReportId>,
 }
 
@@ -119,7 +123,9 @@ mod tests {
         let second: ReportId = Uuid::new_v4().into();
         let study = Study {
             id: Uuid::new_v4().into(),
-            title: None,
+            title: StudyTitle::new("One investigation").unwrap(),
+            design: None,
+            revision: 0,
             report_ids: vec![first, second],
         };
         assert_eq!(study.report_ids, vec![first, second]);

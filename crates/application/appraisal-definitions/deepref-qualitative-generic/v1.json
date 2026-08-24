@@ -1,0 +1,58 @@
+{
+  "id": "deepref-qualitative-generic",
+  "version": 1,
+  "name": "DeepRef generic qualitative appraisal",
+  "description": "A minimal redistributable schema for recording reflexivity and methodological transparency.",
+  "applicability": {
+    "designs": ["qualitative"],
+    "note": "This is generic DeepRef scaffolding, not an official tool question bank."
+  },
+  "domains": [
+    {
+      "id": "methodological_transparency",
+      "label": "Methodological transparency",
+      "description": "Use a small reviewer-entered scale plus a concise rationale.",
+      "questions": [
+        {
+          "id": "transparency_score",
+          "label": "How clearly is the method described?",
+          "help": "0 means not described; 2 means described clearly.",
+          "answer_schema": {
+            "kind": "scale",
+            "min": 0,
+            "max": 2,
+            "labels": {"0": "Not described", "1": "Partly described", "2": "Clearly described"}
+          },
+          "required": true,
+          "requires_evidence": true
+        },
+        {
+          "id": "reflexivity_note",
+          "label": "Reviewer reflexivity note",
+          "help": null,
+          "answer_schema": {"kind": "text", "max_length": 2000},
+          "required": false,
+          "requires_evidence": false
+        }
+      ],
+      "judgment": {
+        "options": [
+          {"value": "adequate", "label": "Adequate"},
+          {"value": "partial", "label": "Partial"},
+          {"value": "unclear", "label": "Unclear"}
+        ],
+        "allow_custom": true,
+        "required": true
+      }
+    }
+  ],
+  "overall_judgment": {
+    "options": [
+      {"value": "adequate", "label": "Adequate"},
+      {"value": "partial", "label": "Partial"},
+      {"value": "unclear", "label": "Unclear"}
+    ],
+    "allow_custom": true,
+    "required": true
+  }
+}
