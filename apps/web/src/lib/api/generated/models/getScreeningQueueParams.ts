@@ -5,7 +5,7 @@
  * OpenAPI spec version: 0.1.0
  */
 
-export type ListTitleAbstractScreeningQueueParams = {
+export type GetScreeningQueueParams = {
 	/**
 	 * Title/abstract status filter
 	 */

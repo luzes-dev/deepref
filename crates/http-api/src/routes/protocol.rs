@@ -337,8 +337,8 @@ fn save_command(
 
 fn protocol_actor(actor: &Actor) -> deepref_postgres::ProtocolActor {
     deepref_postgres::ProtocolActor {
-        kind: actor.kind.clone(),
-        id: actor.id.clone(),
+        kind: actor.kind().as_str().to_owned(),
+        id: actor.id().to_owned(),
     }
 }
 

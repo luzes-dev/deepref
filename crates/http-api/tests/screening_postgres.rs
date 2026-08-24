@@ -66,6 +66,27 @@ async fn screen(
         .expect("screening request should be handled")
 }
 
+async fn undo(
+    pool: &PgPool,
+    project_id: Uuid,
+    report_id: Uuid,
+    body: serde_json::Value,
+) -> Response<Body> {
+    router(AppState::core(pool.clone()), &api_config())
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!(
+                    "/projects/{project_id}/reports/{report_id}/screening/undo"
+                ))
+                .header("content-type", "application/json")
+                .body(Body::from(body.to_string()))
+                .expect("undo request should be valid"),
+        )
+        .await
+        .expect("undo request should be handled")
+}
+
 async fn response_json(response: Response<Body>) -> serde_json::Value {
     let body = to_bytes(response.into_body(), usize::MAX)
         .await
@@ -274,4 +295,140 @@ async fn postgres_screening_enforces_transition_and_project_boundaries() {
         .execute(&pool)
         .await
         .expect("test projects should clean up");
+}
+
+#[tokio::test]
+async fn screening_conflicts_and_history_contracts_include_reconciliation_state() {
+    let Some(pool) = database().await else {
+        return;
+    };
+    let project_id = Uuid::new_v4();
+    let report_id = Uuid::new_v4();
+    let protocol_id = Uuid::new_v4();
+    sqlx::query("INSERT INTO projects (id,name) VALUES ($1,'screening contract test')")
+        .bind(project_id)
+        .execute(&pool)
+        .await
+        .expect("project should insert");
+    sqlx::query(
+        "INSERT INTO reports (id,title,abstract_text) VALUES ($1,'Contract report','Abstract')",
+    )
+    .bind(report_id)
+    .execute(&pool)
+    .await
+    .expect("report should insert");
+    sqlx::query("INSERT INTO project_reports (project_id,report_id) VALUES ($1,$2)")
+        .bind(project_id)
+        .bind(report_id)
+        .execute(&pool)
+        .await
+        .expect("project report should insert");
+    sqlx::query(
+        "INSERT INTO protocol_versions (id,project_id,version,name,status,criteria) VALUES ($1,$2,1,'contract','published','[]')",
+    )
+    .bind(protocol_id)
+    .bind(project_id)
+    .execute(&pool)
+    .await
+    .expect("protocol should insert");
+
+    let first = screen(
+        &pool,
+        project_id,
+        report_id,
+        serde_json::json!({
+            "stage": "title_abstract",
+            "decision": "include",
+            "protocol_version_id": protocol_id,
+            "expected_revision": 0
+        }),
+    )
+    .await;
+    assert_eq!(first.status(), StatusCode::OK);
+
+    let stale = screen(
+        &pool,
+        project_id,
+        report_id,
+        serde_json::json!({
+            "stage": "title_abstract",
+            "decision": "maybe",
+            "protocol_version_id": protocol_id,
+            "expected_revision": 0
+        }),
+    )
+    .await;
+    assert_eq!(stale.status(), StatusCode::CONFLICT);
+    let stale_body = response_json(stale).await;
+    assert_eq!(stale_body["code"], "screening_revision_conflict");
+    assert_eq!(stale_body["details"]["currentRevision"], 1);
+    assert_eq!(
+        stale_body["details"]["currentState"]["title_abstract_status"],
+        "include"
+    );
+
+    let full_text = screen(
+        &pool,
+        project_id,
+        report_id,
+        serde_json::json!({
+            "stage": "full_text",
+            "decision": "include",
+            "protocol_version_id": protocol_id,
+            "expected_revision": 1
+        }),
+    )
+    .await;
+    assert_eq!(full_text.status(), StatusCode::OK);
+
+    let wrong_stage_undo = undo(
+        &pool,
+        project_id,
+        report_id,
+        serde_json::json!({
+            "stage": "title_abstract",
+            "protocol_version_id": protocol_id,
+            "expected_revision": 2
+        }),
+    )
+    .await;
+    assert_eq!(wrong_stage_undo.status(), StatusCode::CONFLICT);
+    let wrong_stage_body = response_json(wrong_stage_undo).await;
+    assert_eq!(wrong_stage_body["code"], "screening_undo_not_latest");
+    assert_eq!(wrong_stage_body["details"]["currentRevision"], 2);
+    assert_eq!(
+        wrong_stage_body["details"]["currentState"]["full_text_status"],
+        "include"
+    );
+
+    let history = router(AppState::core(pool.clone()), &api_config())
+        .oneshot(
+            Request::builder()
+                .uri(format!(
+                    "/projects/{project_id}/reports/{report_id}/screening/history"
+                ))
+                .body(Body::empty())
+                .expect("history request should be valid"),
+        )
+        .await
+        .expect("history request should be handled");
+    assert_eq!(history.status(), StatusCode::OK);
+    let history_body = response_json(history).await;
+    assert_eq!(history_body["items"].as_array().map(Vec::len), Some(2));
+    assert!(history_body["items"][0]["protocol_version_id"].is_string());
+    assert_eq!(
+        history_body["items"][1]["supersedes_event_id"],
+        serde_json::Value::Null
+    );
+
+    sqlx::query("DELETE FROM jobs WHERE payload->>'project_id'=$1")
+        .bind(project_id.to_string())
+        .execute(&pool)
+        .await
+        .expect("jobs should clean up");
+    sqlx::query("DELETE FROM projects WHERE id=$1")
+        .bind(project_id)
+        .execute(&pool)
+        .await
+        .expect("project should clean up");
 }

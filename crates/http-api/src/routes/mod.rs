@@ -71,8 +71,12 @@ fn openapi_router() -> OpenApiRouter<AppState> {
             protocol::save_protocol_draft,
             protocol::publish_protocol
         ))
+        .routes(routes!(review::get_screening_queue))
         .routes(routes!(review::list_title_abstract_queue))
+        .routes(routes!(review::get_next_screening_item))
         .routes(routes!(review::screen_report))
+        .routes(routes!(review::undo_screening))
+        .routes(routes!(review::get_screening_history))
         .routes(routes!(review::get_prisma))
 }
 
@@ -178,8 +182,12 @@ mod tests {
             "/projects/{project_id}/protocol",
             "/projects/{project_id}/review/protocol",
             "/projects/{project_id}/review/protocol/publish",
+            "/projects/{project_id}/screening",
             "/projects/{project_id}/screening/title-abstract",
+            "/projects/{project_id}/screening/next",
             "/projects/{project_id}/reports/{report_id}/screening",
+            "/projects/{project_id}/reports/{report_id}/screening/undo",
+            "/projects/{project_id}/reports/{report_id}/screening/history",
             "/projects/{project_id}/prisma",
         ];
 
@@ -224,6 +232,46 @@ mod tests {
                 .and_then(|operation| operation.operation_id.as_deref()),
             Some("getProjectReport")
         );
+        for (path, method, operation_id) in [
+            (
+                "/projects/{project_id}/screening",
+                "get",
+                "getScreeningQueue",
+            ),
+            (
+                "/projects/{project_id}/screening/title-abstract",
+                "get",
+                "listTitleAbstractScreeningQueue",
+            ),
+            (
+                "/projects/{project_id}/screening/next",
+                "get",
+                "getNextScreeningItem",
+            ),
+            (
+                "/projects/{project_id}/reports/{report_id}/screening",
+                "post",
+                "screenReport",
+            ),
+            (
+                "/projects/{project_id}/reports/{report_id}/screening/undo",
+                "post",
+                "undoScreening",
+            ),
+            (
+                "/projects/{project_id}/reports/{report_id}/screening/history",
+                "get",
+                "getScreeningHistory",
+            ),
+        ] {
+            let operation = match method {
+                "get" => openapi.paths.paths[path].get.as_ref(),
+                "post" => openapi.paths.paths[path].post.as_ref(),
+                _ => unreachable!(),
+            }
+            .expect("screening operation should be present");
+            assert_eq!(operation.operation_id.as_deref(), Some(operation_id));
+        }
         assert!(
             !openapi
                 .paths
@@ -259,6 +307,20 @@ mod tests {
 
         let document = serde_json::to_value(&openapi).expect("OpenAPI document must serialize");
         let schemas = &document["components"]["schemas"];
+        for schema_name in [
+            "ScreeningQueueDto",
+            "ScreeningQueueItemDto",
+            "ScreeningProgressDto",
+            "ScreeningStateDto",
+            "ScreeningHistoryDto",
+            "ScreeningHistoryItemDto",
+            "UndoScreeningRequest",
+        ] {
+            assert!(
+                schemas[schema_name].is_object(),
+                "missing screening schema {schema_name}"
+            );
+        }
         for schema_name in [
             "ReportDto",
             "ReportDetailDto",

@@ -19,14 +19,19 @@ import type {
 
 import type {
 	ApiErrorBody,
+	GetNextScreeningItemParams,
+	GetScreeningQueueParams,
 	ListTitleAbstractScreeningQueueParams,
 	PrismaDto,
 	ProtocolDto,
 	PublishProtocolRequest,
 	SaveProtocolRequest,
 	ScreenReportRequest,
+	ScreeningHistoryDto,
 	ScreeningQueueDto,
-	ScreeningStateDto
+	ScreeningQueueItemDto,
+	ScreeningStateDto,
+	UndoScreeningRequest
 } from '../models';
 
 import { customFetch } from '../../custom-fetch.ts';
@@ -379,6 +384,248 @@ export const createScreenReport = <TError = ErrorType<ApiErrorBody>, TContext = 
 	TContext
 > => {
 	return createMutation(() => ({ ...getScreenReportMutationOptions(options?.()) }), queryClient);
+};
+export type getScreeningHistoryResponse200 = {
+	data: ScreeningHistoryDto;
+	status: 200;
+};
+
+export type getScreeningHistoryResponse404 = {
+	data: ApiErrorBody;
+	status: 404;
+};
+
+export type getScreeningHistoryResponse500 = {
+	data: ApiErrorBody;
+	status: 500;
+};
+
+export type getScreeningHistoryResponseSuccess = getScreeningHistoryResponse200 & {
+	headers: Headers;
+};
+export type getScreeningHistoryResponseError = (
+	getScreeningHistoryResponse404 | getScreeningHistoryResponse500
+) & {
+	headers: Headers;
+};
+
+export const getGetScreeningHistoryUrl = (projectId: string, reportId: string) => {
+	return `/api/projects/${projectId}/reports/${reportId}/screening/history`;
+};
+
+export const getScreeningHistory = async (
+	projectId: string,
+	reportId: string,
+	options?: RequestInit
+): Promise<getScreeningHistoryResponseSuccess> => {
+	return customFetch<getScreeningHistoryResponseSuccess>(
+		getGetScreeningHistoryUrl(projectId, reportId),
+		{
+			...options,
+			method: 'GET'
+		}
+	);
+};
+
+export const getGetScreeningHistoryQueryKey = (projectId: string, reportId: string) => {
+	return [`/api/projects/${projectId}/reports/${reportId}/screening/history`] as const;
+};
+
+export const getGetScreeningHistoryQueryOptions = <
+	TData = Awaited<ReturnType<typeof getScreeningHistory>>,
+	TError = ErrorType<ApiErrorBody>
+>(
+	projectId: string,
+	reportId: string,
+	options?: {
+		query?: Partial<
+			CreateQueryOptions<Awaited<ReturnType<typeof getScreeningHistory>>, TError, TData>
+		>;
+		request?: SecondParameter<typeof customFetch>;
+	}
+) => {
+	const { query: queryOptions, request: requestOptions } = options ?? {};
+
+	const queryKey = queryOptions?.queryKey ?? getGetScreeningHistoryQueryKey(projectId, reportId);
+
+	const queryFn: QueryFunction<Awaited<ReturnType<typeof getScreeningHistory>>> = ({ signal }) =>
+		getScreeningHistory(projectId, reportId, { signal, ...requestOptions });
+
+	return {
+		queryKey,
+		queryFn,
+		enabled:
+			projectId !== null &&
+			projectId !== undefined &&
+			reportId !== null &&
+			reportId !== undefined,
+		...queryOptions
+	} as CreateQueryOptions<Awaited<ReturnType<typeof getScreeningHistory>>, TError, TData> & {
+		queryKey: DataTag<QueryKey, TData, TError>;
+	};
+};
+
+export type GetScreeningHistoryQueryResult = NonNullable<
+	Awaited<ReturnType<typeof getScreeningHistory>>
+>;
+export type GetScreeningHistoryQueryError = ErrorType<ApiErrorBody>;
+
+export function createGetScreeningHistory<
+	TData = Awaited<ReturnType<typeof getScreeningHistory>>,
+	TError = ErrorType<ApiErrorBody>
+>(
+	projectId: () => string,
+	reportId: () => string,
+	options?: () => {
+		query?: Partial<
+			CreateQueryOptions<Awaited<ReturnType<typeof getScreeningHistory>>, TError, TData>
+		>;
+		request?: SecondParameter<typeof customFetch>;
+	},
+	queryClient?: () => QueryClient
+): CreateQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> } {
+	const query = createQuery(
+		() => getGetScreeningHistoryQueryOptions(projectId(), reportId(), options?.()),
+		queryClient
+	) as CreateQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> };
+
+	return query;
+}
+
+export const prefetchGetScreeningHistoryQuery = async <
+	TData = Awaited<ReturnType<typeof getScreeningHistory>>,
+	TError = ErrorType<ApiErrorBody>
+>(
+	queryClient: QueryClient,
+	projectId: string,
+	reportId: string,
+	options?: {
+		query?: Partial<
+			CreateQueryOptions<Awaited<ReturnType<typeof getScreeningHistory>>, TError, TData>
+		>;
+		request?: SecondParameter<typeof customFetch>;
+	}
+): Promise<QueryClient> => {
+	const queryOptions = getGetScreeningHistoryQueryOptions(projectId, reportId, options);
+
+	await queryClient.prefetchQuery(queryOptions);
+
+	return queryClient;
+};
+
+export type undoScreeningResponse200 = {
+	data: ScreeningStateDto;
+	status: 200;
+};
+
+export type undoScreeningResponse400 = {
+	data: ApiErrorBody;
+	status: 400;
+};
+
+export type undoScreeningResponse404 = {
+	data: ApiErrorBody;
+	status: 404;
+};
+
+export type undoScreeningResponse409 = {
+	data: ApiErrorBody;
+	status: 409;
+};
+
+export type undoScreeningResponse500 = {
+	data: ApiErrorBody;
+	status: 500;
+};
+
+export type undoScreeningResponseSuccess = undoScreeningResponse200 & {
+	headers: Headers;
+};
+export type undoScreeningResponseError = (
+	| undoScreeningResponse400
+	| undoScreeningResponse404
+	| undoScreeningResponse409
+	| undoScreeningResponse500
+) & {
+	headers: Headers;
+};
+
+export const getUndoScreeningUrl = (projectId: string, reportId: string) => {
+	return `/api/projects/${projectId}/reports/${reportId}/screening/undo`;
+};
+
+export const undoScreening = async (
+	projectId: string,
+	reportId: string,
+	undoScreeningRequest: UndoScreeningRequest,
+	options?: RequestInit
+): Promise<undoScreeningResponseSuccess> => {
+	return customFetch<undoScreeningResponseSuccess>(getUndoScreeningUrl(projectId, reportId), {
+		...options,
+		method: 'POST',
+		headers: { 'Content-Type': 'application/json', ...options?.headers },
+		body: JSON.stringify(undoScreeningRequest)
+	});
+};
+
+export const getUndoScreeningMutationOptions = <
+	TError = ErrorType<ApiErrorBody>,
+	TContext = unknown
+>(options?: {
+	mutation?: CreateMutationOptions<
+		Awaited<ReturnType<typeof undoScreening>>,
+		TError,
+		{ projectId: string; reportId: string; data: BodyType<UndoScreeningRequest> },
+		TContext
+	>;
+	request?: SecondParameter<typeof customFetch>;
+}): CreateMutationOptions<
+	Awaited<ReturnType<typeof undoScreening>>,
+	TError,
+	{ projectId: string; reportId: string; data: BodyType<UndoScreeningRequest> },
+	TContext
+> => {
+	const mutationKey = ['undoScreening'];
+	const { mutation: mutationOptions, request: requestOptions } = options
+		? options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey
+			? options
+			: { ...options, mutation: { ...options.mutation, mutationKey } }
+		: { mutation: { mutationKey }, request: undefined };
+
+	const mutationFn: MutationFunction<
+		Awaited<ReturnType<typeof undoScreening>>,
+		{ projectId: string; reportId: string; data: BodyType<UndoScreeningRequest> }
+	> = (props) => {
+		const { projectId, reportId, data } = props ?? {};
+
+		return undoScreening(projectId, reportId, data, requestOptions);
+	};
+
+	return { mutationFn, ...mutationOptions };
+};
+
+export type UndoScreeningMutationResult = NonNullable<Awaited<ReturnType<typeof undoScreening>>>;
+export type UndoScreeningMutationBody = BodyType<UndoScreeningRequest>;
+export type UndoScreeningMutationError = ErrorType<ApiErrorBody>;
+
+export const createUndoScreening = <TError = ErrorType<ApiErrorBody>, TContext = unknown>(
+	options?: () => {
+		mutation?: CreateMutationOptions<
+			Awaited<ReturnType<typeof undoScreening>>,
+			TError,
+			{ projectId: string; reportId: string; data: BodyType<UndoScreeningRequest> },
+			TContext
+		>;
+		request?: SecondParameter<typeof customFetch>;
+	},
+	queryClient?: () => QueryClient
+): CreateMutationResult<
+	Awaited<ReturnType<typeof undoScreening>>,
+	TError,
+	{ projectId: string; reportId: string; data: BodyType<UndoScreeningRequest> },
+	TContext
+> => {
+	return createMutation(() => ({ ...getUndoScreeningMutationOptions(options?.()) }), queryClient);
 };
 export type getProjectReviewProtocolResponse200 = {
 	data: ProtocolDto;
@@ -750,6 +997,299 @@ export const createPublishProjectReviewProtocol = <
 		queryClient
 	);
 };
+export type getScreeningQueueResponse200 = {
+	data: ScreeningQueueDto;
+	status: 200;
+};
+
+export type getScreeningQueueResponse400 = {
+	data: ApiErrorBody;
+	status: 400;
+};
+
+export type getScreeningQueueResponse404 = {
+	data: ApiErrorBody;
+	status: 404;
+};
+
+export type getScreeningQueueResponse500 = {
+	data: ApiErrorBody;
+	status: 500;
+};
+
+export type getScreeningQueueResponseSuccess = getScreeningQueueResponse200 & {
+	headers: Headers;
+};
+export type getScreeningQueueResponseError = (
+	getScreeningQueueResponse400 | getScreeningQueueResponse404 | getScreeningQueueResponse500
+) & {
+	headers: Headers;
+};
+
+export const getGetScreeningQueueUrl = (projectId: string, params?: GetScreeningQueueParams) => {
+	const normalizedParams = new URLSearchParams();
+
+	Object.entries(params || {}).forEach(([key, value]) => {
+		if (value !== undefined) {
+			normalizedParams.append(key, value === null ? 'null' : String(value));
+		}
+	});
+
+	const stringifiedParams = normalizedParams.toString();
+
+	return stringifiedParams.length > 0
+		? `/api/projects/${projectId}/screening?${stringifiedParams}`
+		: `/api/projects/${projectId}/screening`;
+};
+
+export const getScreeningQueue = async (
+	projectId: string,
+	params?: GetScreeningQueueParams,
+	options?: RequestInit
+): Promise<getScreeningQueueResponseSuccess> => {
+	return customFetch<getScreeningQueueResponseSuccess>(
+		getGetScreeningQueueUrl(projectId, params),
+		{
+			...options,
+			method: 'GET'
+		}
+	);
+};
+
+export const getGetScreeningQueueQueryKey = (
+	projectId: string,
+	params?: GetScreeningQueueParams
+) => {
+	return [`/api/projects/${projectId}/screening`, ...(params ? [params] : [])] as const;
+};
+
+export const getGetScreeningQueueQueryOptions = <
+	TData = Awaited<ReturnType<typeof getScreeningQueue>>,
+	TError = ErrorType<ApiErrorBody>
+>(
+	projectId: string,
+	params?: GetScreeningQueueParams,
+	options?: {
+		query?: Partial<
+			CreateQueryOptions<Awaited<ReturnType<typeof getScreeningQueue>>, TError, TData>
+		>;
+		request?: SecondParameter<typeof customFetch>;
+	}
+) => {
+	const { query: queryOptions, request: requestOptions } = options ?? {};
+
+	const queryKey = queryOptions?.queryKey ?? getGetScreeningQueueQueryKey(projectId, params);
+
+	const queryFn: QueryFunction<Awaited<ReturnType<typeof getScreeningQueue>>> = ({ signal }) =>
+		getScreeningQueue(projectId, params, { signal, ...requestOptions });
+
+	return {
+		queryKey,
+		queryFn,
+		enabled: projectId !== null && projectId !== undefined,
+		...queryOptions
+	} as CreateQueryOptions<Awaited<ReturnType<typeof getScreeningQueue>>, TError, TData> & {
+		queryKey: DataTag<QueryKey, TData, TError>;
+	};
+};
+
+export type GetScreeningQueueQueryResult = NonNullable<
+	Awaited<ReturnType<typeof getScreeningQueue>>
+>;
+export type GetScreeningQueueQueryError = ErrorType<ApiErrorBody>;
+
+export function createGetScreeningQueue<
+	TData = Awaited<ReturnType<typeof getScreeningQueue>>,
+	TError = ErrorType<ApiErrorBody>
+>(
+	projectId: () => string,
+	params?: () => GetScreeningQueueParams,
+	options?: () => {
+		query?: Partial<
+			CreateQueryOptions<Awaited<ReturnType<typeof getScreeningQueue>>, TError, TData>
+		>;
+		request?: SecondParameter<typeof customFetch>;
+	},
+	queryClient?: () => QueryClient
+): CreateQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> } {
+	const query = createQuery(
+		() => getGetScreeningQueueQueryOptions(projectId(), params?.(), options?.()),
+		queryClient
+	) as CreateQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> };
+
+	return query;
+}
+
+export const prefetchGetScreeningQueueQuery = async <
+	TData = Awaited<ReturnType<typeof getScreeningQueue>>,
+	TError = ErrorType<ApiErrorBody>
+>(
+	queryClient: QueryClient,
+	projectId: string,
+	params?: GetScreeningQueueParams,
+	options?: {
+		query?: Partial<
+			CreateQueryOptions<Awaited<ReturnType<typeof getScreeningQueue>>, TError, TData>
+		>;
+		request?: SecondParameter<typeof customFetch>;
+	}
+): Promise<QueryClient> => {
+	const queryOptions = getGetScreeningQueueQueryOptions(projectId, params, options);
+
+	await queryClient.prefetchQuery(queryOptions);
+
+	return queryClient;
+};
+
+export type getNextScreeningItemResponse200 = {
+	data: ScreeningQueueItemDto;
+	status: 200;
+};
+
+export type getNextScreeningItemResponse400 = {
+	data: ApiErrorBody;
+	status: 400;
+};
+
+export type getNextScreeningItemResponse404 = {
+	data: ApiErrorBody;
+	status: 404;
+};
+
+export type getNextScreeningItemResponse500 = {
+	data: ApiErrorBody;
+	status: 500;
+};
+
+export type getNextScreeningItemResponseSuccess = getNextScreeningItemResponse200 & {
+	headers: Headers;
+};
+export type getNextScreeningItemResponseError = (
+	| getNextScreeningItemResponse400
+	| getNextScreeningItemResponse404
+	| getNextScreeningItemResponse500
+) & {
+	headers: Headers;
+};
+
+export const getGetNextScreeningItemUrl = (
+	projectId: string,
+	params?: GetNextScreeningItemParams
+) => {
+	const normalizedParams = new URLSearchParams();
+
+	Object.entries(params || {}).forEach(([key, value]) => {
+		if (value !== undefined) {
+			normalizedParams.append(key, value === null ? 'null' : String(value));
+		}
+	});
+
+	const stringifiedParams = normalizedParams.toString();
+
+	return stringifiedParams.length > 0
+		? `/api/projects/${projectId}/screening/next?${stringifiedParams}`
+		: `/api/projects/${projectId}/screening/next`;
+};
+
+export const getNextScreeningItem = async (
+	projectId: string,
+	params?: GetNextScreeningItemParams,
+	options?: RequestInit
+): Promise<getNextScreeningItemResponseSuccess> => {
+	return customFetch<getNextScreeningItemResponseSuccess>(
+		getGetNextScreeningItemUrl(projectId, params),
+		{
+			...options,
+			method: 'GET'
+		}
+	);
+};
+
+export const getGetNextScreeningItemQueryKey = (
+	projectId: string,
+	params?: GetNextScreeningItemParams
+) => {
+	return [`/api/projects/${projectId}/screening/next`, ...(params ? [params] : [])] as const;
+};
+
+export const getGetNextScreeningItemQueryOptions = <
+	TData = Awaited<ReturnType<typeof getNextScreeningItem>>,
+	TError = ErrorType<ApiErrorBody>
+>(
+	projectId: string,
+	params?: GetNextScreeningItemParams,
+	options?: {
+		query?: Partial<
+			CreateQueryOptions<Awaited<ReturnType<typeof getNextScreeningItem>>, TError, TData>
+		>;
+		request?: SecondParameter<typeof customFetch>;
+	}
+) => {
+	const { query: queryOptions, request: requestOptions } = options ?? {};
+
+	const queryKey = queryOptions?.queryKey ?? getGetNextScreeningItemQueryKey(projectId, params);
+
+	const queryFn: QueryFunction<Awaited<ReturnType<typeof getNextScreeningItem>>> = ({ signal }) =>
+		getNextScreeningItem(projectId, params, { signal, ...requestOptions });
+
+	return {
+		queryKey,
+		queryFn,
+		enabled: projectId !== null && projectId !== undefined,
+		...queryOptions
+	} as CreateQueryOptions<Awaited<ReturnType<typeof getNextScreeningItem>>, TError, TData> & {
+		queryKey: DataTag<QueryKey, TData, TError>;
+	};
+};
+
+export type GetNextScreeningItemQueryResult = NonNullable<
+	Awaited<ReturnType<typeof getNextScreeningItem>>
+>;
+export type GetNextScreeningItemQueryError = ErrorType<ApiErrorBody>;
+
+export function createGetNextScreeningItem<
+	TData = Awaited<ReturnType<typeof getNextScreeningItem>>,
+	TError = ErrorType<ApiErrorBody>
+>(
+	projectId: () => string,
+	params?: () => GetNextScreeningItemParams,
+	options?: () => {
+		query?: Partial<
+			CreateQueryOptions<Awaited<ReturnType<typeof getNextScreeningItem>>, TError, TData>
+		>;
+		request?: SecondParameter<typeof customFetch>;
+	},
+	queryClient?: () => QueryClient
+): CreateQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> } {
+	const query = createQuery(
+		() => getGetNextScreeningItemQueryOptions(projectId(), params?.(), options?.()),
+		queryClient
+	) as CreateQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> };
+
+	return query;
+}
+
+export const prefetchGetNextScreeningItemQuery = async <
+	TData = Awaited<ReturnType<typeof getNextScreeningItem>>,
+	TError = ErrorType<ApiErrorBody>
+>(
+	queryClient: QueryClient,
+	projectId: string,
+	params?: GetNextScreeningItemParams,
+	options?: {
+		query?: Partial<
+			CreateQueryOptions<Awaited<ReturnType<typeof getNextScreeningItem>>, TError, TData>
+		>;
+		request?: SecondParameter<typeof customFetch>;
+	}
+): Promise<QueryClient> => {
+	const queryOptions = getGetNextScreeningItemQueryOptions(projectId, params, options);
+
+	await queryClient.prefetchQuery(queryOptions);
+
+	return queryClient;
+};
+
 export type listTitleAbstractScreeningQueueResponse200 = {
 	data: ScreeningQueueDto;
 	status: 200;
@@ -758,6 +1298,11 @@ export type listTitleAbstractScreeningQueueResponse200 = {
 export type listTitleAbstractScreeningQueueResponse400 = {
 	data: ApiErrorBody;
 	status: 400;
+};
+
+export type listTitleAbstractScreeningQueueResponse404 = {
+	data: ApiErrorBody;
+	status: 404;
 };
 
 export type listTitleAbstractScreeningQueueResponse500 = {
@@ -770,7 +1315,9 @@ export type listTitleAbstractScreeningQueueResponseSuccess =
 		headers: Headers;
 	};
 export type listTitleAbstractScreeningQueueResponseError = (
-	listTitleAbstractScreeningQueueResponse400 | listTitleAbstractScreeningQueueResponse500
+	| listTitleAbstractScreeningQueueResponse400
+	| listTitleAbstractScreeningQueueResponse404
+	| listTitleAbstractScreeningQueueResponse500
 ) & {
 	headers: Headers;
 };

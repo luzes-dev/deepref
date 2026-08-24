@@ -7,6 +7,8 @@
 
 export interface ScreeningStateDto {
 	final_status: string;
+	/** @nullable */
+	full_text_exclusion_reason_id?: string | null;
 	full_text_status: string;
 	/** @nullable */
 	last_event_id?: string | null;
@@ -14,5 +16,6 @@ export interface ScreeningStateDto {
 	report_id: string;
 	revision: number;
 	title_abstract_status: string;
-	updated_at: string;
+	/** @nullable */
+	updated_at?: string | null;
 }
