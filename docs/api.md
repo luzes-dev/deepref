@@ -50,7 +50,9 @@ The v2 review workflow exposes:
 - GET /projects/{project_id}/screening/title-abstract returns the bounded v2 screening queue.
 - POST /projects/{project_id}/reports/{report_id}/screening appends a screening decision. The request includes
   protocol_version_id and expected_revision; stale writes return 409.
-- GET /projects/{project_id}/prisma returns the PostgreSQL-backed PRISMA projection.
+- GET /projects/{project_id}/prisma returns the live canonical PRISMA projection.
+- GET /projects/{project_id}/graph?fields=... returns bounded citation nodes with compact, explicitly selected overlays.
+- GET /projects/{project_id}/exports/{kind} returns a deterministic report, PRISMA, audit, or protocol export.
 
 - `GET /health/live` reports process liveness.
 - `GET /health/ready` checks PostgreSQL reachability and schema compatibility.

@@ -268,16 +268,10 @@ pub async fn handle_job_with_document_services(
             deepref_postgres::recompute_project_metrics(&pool, project_id).await?;
             Ok(DeliveryAction::Ack)
         }
-        "recompute_prisma" => {
-            let project_id = job
-                .payload
-                .get("project_id")
-                .and_then(serde_json::Value::as_str)
-                .ok_or_else(|| anyhow::anyhow!("recompute_prisma payload is missing project_id"))?
-                .parse()?;
-            deepref_postgres::recompute_prisma_snapshot(&pool, project_id).await?;
-            Ok(DeliveryAction::Ack)
-        }
+        // Pre-PR10 deployments may have queued this obsolete kind. The
+        // canonical PRISMA endpoint reads live tables directly, so acknowledge
+        // the legacy job without recreating a competing snapshot.
+        "recompute_prisma" => Ok(DeliveryAction::Ack),
         "retrieve_document" => {
             let document_id = job
                 .payload

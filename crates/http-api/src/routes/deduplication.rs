@@ -154,9 +154,6 @@ pub(crate) async fn run_project_deduplication(
     )
     .await
     .map_err(map_dedupe_error)?;
-    deepref_postgres::recompute_prisma_snapshot(&state.pool, project_id)
-        .await
-        .map_err(ApiError::Internal)?;
     Ok(Json(DedupeRunDto {
         project_id,
         processed: summary.processed,
@@ -254,9 +251,6 @@ pub(crate) async fn decide_project_dedupe_proposal(
     )
     .await
     .map_err(map_dedupe_error)?;
-    deepref_postgres::recompute_prisma_snapshot(&state.pool, project_id)
-        .await
-        .map_err(ApiError::Internal)?;
     Ok(Json(resolution_dto(result)))
 }
 
@@ -299,9 +293,6 @@ pub(crate) async fn resolve_project_record(
     )
     .await
     .map_err(map_dedupe_error)?;
-    deepref_postgres::recompute_prisma_snapshot(&state.pool, project_id)
-        .await
-        .map_err(ApiError::Internal)?;
     Ok(Json(resolution_dto(result)))
 }
 

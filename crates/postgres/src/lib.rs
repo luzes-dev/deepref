@@ -5,6 +5,7 @@ mod documents;
 mod graph;
 mod jobs;
 mod legacy_import;
+mod prisma;
 mod protocol;
 mod screening;
 mod study;
@@ -45,9 +46,10 @@ pub use documents::{
 pub use graph::{MAX_GRAPH_NODES, load_project_graph, recompute_project_metrics};
 pub use jobs::{
     PostgresJobQueue, claim_job, complete_job, enqueue_job, enqueue_job_pool, fail_job, job,
-    recompute_prisma_snapshot, recover_expired_jobs, renew_job,
+    recover_expired_jobs, renew_job,
 };
 pub use legacy_import::{LegacyImportCounts, import_legacy};
+pub use prisma::{PrismaProjectionError, get_prisma_projection};
 pub use protocol::{
     ProtocolActor, ProtocolDocument, ProtocolError, get_protocol_editor, get_published_protocol,
     publish_protocol, save_protocol_draft,

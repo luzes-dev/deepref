@@ -1,6 +1,7 @@
 export type ProjectWorkspaceView =
 	| 'overview'
 	| 'protocol'
+	| 'prisma'
 	| 'articles'
 	| 'graph'
 	| 'recommendations'

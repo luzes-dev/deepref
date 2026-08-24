@@ -516,17 +516,6 @@ async fn persist_event_and_state(
     .execute(&mut **tx)
     .await?;
 
-    crate::jobs::enqueue_job(
-        tx,
-        &crate::jobs::job(
-            Uuid::new_v4(),
-            "recompute_prisma",
-            json!({ "project_id": next.project_id }),
-            format!("recompute_prisma:{}:{}", next.project_id, write.event_id),
-        ),
-    )
-    .await
-    .map_err(|error| ScreeningError::InvalidData(error.to_string()))?;
     Ok(next)
 }
 

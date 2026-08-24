@@ -54,6 +54,10 @@ function requestUrl(contextUrl: string): string {
 async function responseBody(response: Response): Promise<unknown> {
 	if (response.status === 204) return undefined;
 
+	if (/\battachment\b/i.test(response.headers.get('content-disposition') ?? '')) {
+		return response.blob();
+	}
+
 	const contentType = response.headers.get('content-type') ?? '';
 	if (contentType.includes('application/json')) return response.json();
 	if (contentType.includes('application/pdf')) return response.blob();

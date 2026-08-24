@@ -20,6 +20,7 @@ import type {
 
 import type {
 	ApiErrorBody,
+	GetProjectGraphParams,
 	ListProjectReportsParams,
 	PaginatedResponseReportDto,
 	ProjectGraphDto,
@@ -38,6 +39,16 @@ export type getProjectGraphResponse200 = {
 	status: 200;
 };
 
+export type getProjectGraphResponse400 = {
+	data: ApiErrorBody;
+	status: 400;
+};
+
+export type getProjectGraphResponse404 = {
+	data: ApiErrorBody;
+	status: 404;
+};
+
 export type getProjectGraphResponse500 = {
 	data: ApiErrorBody;
 	status: 500;
@@ -46,26 +57,41 @@ export type getProjectGraphResponse500 = {
 export type getProjectGraphResponseSuccess = getProjectGraphResponse200 & {
 	headers: Headers;
 };
-export type getProjectGraphResponseError = getProjectGraphResponse500 & {
+export type getProjectGraphResponseError = (
+	getProjectGraphResponse400 | getProjectGraphResponse404 | getProjectGraphResponse500
+) & {
 	headers: Headers;
 };
 
-export const getGetProjectGraphUrl = (projectId: string) => {
-	return `/api/projects/${projectId}/graph`;
+export const getGetProjectGraphUrl = (projectId: string, params?: GetProjectGraphParams) => {
+	const normalizedParams = new URLSearchParams();
+
+	Object.entries(params || {}).forEach(([key, value]) => {
+		if (value !== undefined) {
+			normalizedParams.append(key, value === null ? 'null' : String(value));
+		}
+	});
+
+	const stringifiedParams = normalizedParams.toString();
+
+	return stringifiedParams.length > 0
+		? `/api/projects/${projectId}/graph?${stringifiedParams}`
+		: `/api/projects/${projectId}/graph`;
 };
 
 export const getProjectGraph = async (
 	projectId: string,
+	params?: GetProjectGraphParams,
 	options?: RequestInit
 ): Promise<getProjectGraphResponseSuccess> => {
-	return customFetch<getProjectGraphResponseSuccess>(getGetProjectGraphUrl(projectId), {
+	return customFetch<getProjectGraphResponseSuccess>(getGetProjectGraphUrl(projectId, params), {
 		...options,
 		method: 'GET'
 	});
 };
 
-export const getGetProjectGraphQueryKey = (projectId: string) => {
-	return [`/api/projects/${projectId}/graph`] as const;
+export const getGetProjectGraphQueryKey = (projectId: string, params?: GetProjectGraphParams) => {
+	return [`/api/projects/${projectId}/graph`, ...(params ? [params] : [])] as const;
 };
 
 export const getGetProjectGraphQueryOptions = <
@@ -73,6 +99,7 @@ export const getGetProjectGraphQueryOptions = <
 	TError = ErrorType<ApiErrorBody>
 >(
 	projectId: string,
+	params?: GetProjectGraphParams,
 	options?: {
 		query?: Partial<
 			CreateQueryOptions<Awaited<ReturnType<typeof getProjectGraph>>, TError, TData>
@@ -82,10 +109,10 @@ export const getGetProjectGraphQueryOptions = <
 ) => {
 	const { query: queryOptions, request: requestOptions } = options ?? {};
 
-	const queryKey = queryOptions?.queryKey ?? getGetProjectGraphQueryKey(projectId);
+	const queryKey = queryOptions?.queryKey ?? getGetProjectGraphQueryKey(projectId, params);
 
 	const queryFn: QueryFunction<Awaited<ReturnType<typeof getProjectGraph>>> = ({ signal }) =>
-		getProjectGraph(projectId, { signal, ...requestOptions });
+		getProjectGraph(projectId, params, { signal, ...requestOptions });
 
 	return {
 		queryKey,
@@ -105,6 +132,7 @@ export function createGetProjectGraph<
 	TError = ErrorType<ApiErrorBody>
 >(
 	projectId: () => string,
+	params?: () => GetProjectGraphParams,
 	options?: () => {
 		query?: Partial<
 			CreateQueryOptions<Awaited<ReturnType<typeof getProjectGraph>>, TError, TData>
@@ -114,7 +142,7 @@ export function createGetProjectGraph<
 	queryClient?: () => QueryClient
 ): CreateQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> } {
 	const query = createQuery(
-		() => getGetProjectGraphQueryOptions(projectId(), options?.()),
+		() => getGetProjectGraphQueryOptions(projectId(), params?.(), options?.()),
 		queryClient
 	) as CreateQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> };
 
@@ -127,6 +155,7 @@ export const prefetchGetProjectGraphQuery = async <
 >(
 	queryClient: QueryClient,
 	projectId: string,
+	params?: GetProjectGraphParams,
 	options?: {
 		query?: Partial<
 			CreateQueryOptions<Awaited<ReturnType<typeof getProjectGraph>>, TError, TData>
@@ -134,7 +163,7 @@ export const prefetchGetProjectGraphQuery = async <
 		request?: SecondParameter<typeof customFetch>;
 	}
 ): Promise<QueryClient> => {
-	const queryOptions = getGetProjectGraphQueryOptions(projectId, options);
+	const queryOptions = getGetProjectGraphQueryOptions(projectId, params, options);
 
 	await queryClient.prefetchQuery(queryOptions);
 

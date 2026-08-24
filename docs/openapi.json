@@ -1095,6 +1095,121 @@
         }
       }
     },
+    "/projects/{project_id}/exports/{export_kind}": {
+      "get": {
+        "tags": [
+          "exports"
+        ],
+        "operationId": "exportProjectArtifact",
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "path",
+            "description": "Project identifier",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "export_kind",
+            "in": "path",
+            "description": "One of: reports.csv, reports.json, reports.ris, reports.bib, prisma.json, prisma.svg, audit.csv, protocol.json",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Deterministic project-scoped binary attachment",
+            "headers": {
+              "Content-Disposition": {
+                "schema": {
+                  "type": "string"
+                },
+                "description": "Deterministic attachment filename"
+              },
+              "Content-Type": {
+                "schema": {
+                  "type": "string"
+                },
+                "description": "Artifact media type"
+              }
+            },
+            "content": {
+              "text/csv": {
+                "schema": {
+                  "$ref": "#/components/schemas/BinaryAttachment"
+                }
+              },
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BinaryAttachment"
+                }
+              },
+              "application/x-research-info-systems": {
+                "schema": {
+                  "$ref": "#/components/schemas/BinaryAttachment"
+                }
+              },
+              "application/x-bibtex": {
+                "schema": {
+                  "$ref": "#/components/schemas/BinaryAttachment"
+                }
+              },
+              "image/svg+xml": {
+                "schema": {
+                  "$ref": "#/components/schemas/BinaryAttachment"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Unknown export kind",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Project or published protocol not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Export exceeds the deterministic row limit",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/projects/{project_id}/graph": {
       "get": {
         "tags": [
@@ -1110,6 +1225,17 @@
               "type": "string",
               "format": "uuid"
             }
+          },
+          {
+            "name": "fields",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
           }
         ],
         "responses": {
@@ -1119,6 +1245,26 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/ProjectGraphDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
                 }
               }
             }
@@ -4499,6 +4645,10 @@
           }
         }
       },
+      "BinaryAttachment": {
+        "type": "string",
+        "format": "binary"
+      },
       "CompleteAppraisalRequest": {
         "type": "object",
         "required": [
@@ -5279,6 +5429,30 @@
           }
         }
       },
+      "GraphAppraisalDto": {
+        "type": "object",
+        "required": [
+          "assessment_count",
+          "completed_count"
+        ],
+        "properties": {
+          "assessment_count": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "completed_count": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "latest_completed_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          }
+        }
+      },
       "GraphEdgeDto": {
         "type": "object",
         "required": [
@@ -5293,6 +5467,192 @@
           "target": {
             "type": "string",
             "format": "uuid"
+          }
+        }
+      },
+      "GraphMetricsDto": {
+        "type": "object",
+        "required": [
+          "total_citations",
+          "references_count",
+          "internal_citations",
+          "outbound_internal_references",
+          "rank_score",
+          "metrics_stale"
+        ],
+        "properties": {
+          "internal_citations": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "metrics_as_of": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "metrics_stale": {
+            "type": "boolean"
+          },
+          "outbound_internal_references": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "rank_score": {
+            "type": "number",
+            "format": "double"
+          },
+          "references_count": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "total_citations": {
+            "type": "integer",
+            "format": "int64"
+          }
+        }
+      },
+      "GraphNodeDto": {
+        "type": "object",
+        "required": [
+          "report_id"
+        ],
+        "properties": {
+          "appraisal": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/GraphAppraisalDto"
+              }
+            ]
+          },
+          "doi": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "issued_year": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32"
+          },
+          "metrics": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/GraphMetricsDto"
+              }
+            ]
+          },
+          "provenance": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/GraphProvenanceDto"
+              }
+            ]
+          },
+          "report_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "screening": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/GraphScreeningDto"
+              }
+            ]
+          },
+          "study": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/GraphStudyDto"
+              }
+            ]
+          },
+          "title": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "type": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "GraphProvenanceDto": {
+        "type": "object",
+        "required": [
+          "sources",
+          "source_record_count"
+        ],
+        "properties": {
+          "source_record_count": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "sources": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "GraphScreeningDto": {
+        "type": "object",
+        "required": [
+          "title_abstract_status",
+          "full_text_status",
+          "final_status"
+        ],
+        "properties": {
+          "final_status": {
+            "type": "string"
+          },
+          "full_text_status": {
+            "type": "string"
+          },
+          "title_abstract_status": {
+            "type": "string"
+          }
+        }
+      },
+      "GraphStudyDto": {
+        "type": "object",
+        "properties": {
+          "study_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          },
+          "title": {
+            "type": [
+              "string",
+              "null"
+            ]
           }
         }
       },
@@ -6031,63 +6391,165 @@
         "type": "object",
         "required": [
           "project_id",
-          "records_identified",
-          "records_deduplicated",
-          "title_abstract_pending",
-          "title_abstract_included",
+          "screening_high_watermark",
+          "identified_records",
+          "linked_records",
+          "duplicates_removed",
+          "unresolved_records",
+          "pending_dedupe_proposals",
+          "source_canonical_reports",
+          "manually_created_reports",
+          "screened_records",
           "title_abstract_excluded",
+          "title_abstract_pending",
+          "reports_sought",
+          "reports_not_retrieved",
+          "full_text_assessed",
           "full_text_pending",
           "full_text_included",
           "full_text_excluded",
-          "revision"
+          "full_text_exclusions",
+          "included_reports_not_grouped",
+          "included_studies"
         ],
         "properties": {
-          "full_text_excluded": {
-            "type": "integer",
-            "format": "int64"
-          },
-          "full_text_included": {
-            "type": "integer",
-            "format": "int64"
-          },
-          "full_text_pending": {
-            "type": "integer",
-            "format": "int64"
-          },
-          "project_id": {
-            "type": "string",
-            "format": "uuid"
-          },
-          "records_deduplicated": {
-            "type": "integer",
-            "format": "int64"
-          },
-          "records_identified": {
-            "type": "integer",
-            "format": "int64"
-          },
-          "revision": {
-            "type": "integer",
-            "format": "int64"
-          },
-          "title_abstract_excluded": {
-            "type": "integer",
-            "format": "int64"
-          },
-          "title_abstract_included": {
-            "type": "integer",
-            "format": "int64"
-          },
-          "title_abstract_pending": {
-            "type": "integer",
-            "format": "int64"
-          },
-          "updated_at": {
+          "as_of": {
             "type": [
               "string",
               "null"
             ],
             "format": "date-time"
+          },
+          "duplicates_removed": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "full_text_assessed": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "full_text_excluded": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "full_text_exclusions": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PrismaReasonDto"
+            }
+          },
+          "full_text_included": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "full_text_pending": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "identified_records": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "included_reports_not_grouped": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "included_studies": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "linked_records": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "manually_created_reports": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "pending_dedupe_proposals": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "project_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "reports_not_retrieved": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "reports_sought": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "screened_records": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "screening_high_watermark": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "source_canonical_reports": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "title_abstract_excluded": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "title_abstract_pending": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "unresolved_records": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          }
+        }
+      },
+      "PrismaReasonDto": {
+        "type": "object",
+        "required": [
+          "id",
+          "code",
+          "label",
+          "count"
+        ],
+        "properties": {
+          "code": {
+            "type": "string"
+          },
+          "count": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "label": {
+            "type": "string"
           }
         }
       },
@@ -6146,7 +6608,7 @@
           "nodes": {
             "type": "array",
             "items": {
-              "$ref": "#/components/schemas/ReportDto"
+              "$ref": "#/components/schemas/GraphNodeDto"
             }
           },
           "projection": {

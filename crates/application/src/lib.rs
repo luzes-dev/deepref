@@ -10,6 +10,7 @@ pub mod appraisal;
 pub mod deduplication;
 pub mod documents;
 pub mod jobs;
+pub mod prisma;
 pub mod protocol;
 pub mod study;
 
@@ -36,6 +37,9 @@ pub use documents::{
     AttachDocumentCommand, DocumentByteStream, DocumentDetailQuery, DocumentFuture,
     DocumentListQuery, DocumentPortError, DocumentQueryError, DocumentRepository,
     DocumentStorageId, DocumentStore, MissingFullTextQuery, OcrEngine, StoredDocumentContent,
+};
+pub use prisma::{
+    NonNegativeCount, PrismaInvariantError, PrismaProjection, PrismaReasonCount, render_prisma_svg,
 };
 pub use protocol::{
     ProtocolCommandError, ProtocolCriterionCommand, PublishProtocolCommand,

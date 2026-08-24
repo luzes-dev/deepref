@@ -41,6 +41,7 @@
 	}[] = $derived([
 		{ view: 'overview', label: 'Overview', icon: HomeIcon },
 		{ view: 'protocol', label: 'Protocol', icon: ClipboardListIcon },
+		{ view: 'prisma', label: 'PRISMA', icon: ClipboardCheckIcon },
 		{
 			view: 'articles',
 			label: 'Articles',

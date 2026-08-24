@@ -7,7 +7,7 @@ use deepref_application::{
 use deepref_domain::{Actor, ActorKind, ProjectId, StudyDesign, StudyDesignContext, StudyTitle};
 use deepref_postgres::{
     StudyError, assign_report_to_study, classify_study, complete_appraisal, create_study,
-    get_study, list_study_events, migrate, remove_report_from_study,
+    get_prisma_projection, get_study, list_study_events, migrate, remove_report_from_study,
 };
 use sqlx::{PgPool, postgres::PgPoolOptions};
 use tokio::time::{Duration, timeout};
@@ -197,6 +197,13 @@ async fn study_grouping_is_reversible_and_appraisal_is_immutable_and_scoped() {
             .all(|report| report.report_id != report_a.into())
     );
 
+    let prisma_before_grouping_removal = get_prisma_projection(&pool, project_a)
+        .await
+        .expect("PRISMA projection before grouping removal")
+        .expect("grouping fixture project exists")
+        .as_of
+        .expect("grouping event gives PRISMA freshness");
+    tokio::time::sleep(Duration::from_millis(2)).await;
     let unassigned = remove_report_from_study(
         &pool,
         RemoveReportFromStudy {
@@ -210,6 +217,16 @@ async fn study_grouping_is_reversible_and_appraisal_is_immutable_and_scoped() {
     .await
     .expect("report unassigns");
     assert!(unassigned.reports.is_empty());
+    let prisma_after_grouping_removal = get_prisma_projection(&pool, project_a)
+        .await
+        .expect("PRISMA projection after grouping removal")
+        .expect("grouping fixture project exists")
+        .as_of
+        .expect("grouping removal event gives PRISMA freshness");
+    assert!(
+        prisma_after_grouping_removal > prisma_before_grouping_removal,
+        "append-only study event must advance PRISMA freshness after grouping removal"
+    );
 
     let reassigned = assign_report_to_study(
         &pool,

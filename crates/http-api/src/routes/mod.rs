@@ -2,6 +2,7 @@ mod acquisitions;
 mod articles;
 mod deduplication;
 mod documents;
+mod exports;
 mod health;
 mod ingestions;
 mod pagination;
@@ -82,6 +83,7 @@ fn openapi_router(document_max_bytes: usize) -> OpenApiRouter<AppState> {
         .routes(routes!(review::undo_screening))
         .routes(routes!(review::get_screening_history))
         .routes(routes!(review::get_prisma))
+        .routes(routes!(exports::export_project_artifact))
         .routes(routes!(documents::list_documents))
         .routes(routes!(documents::list_missing_full_text))
         .routes(routes!(documents::list_full_text_queue))
@@ -393,17 +395,21 @@ mod tests {
             "ReportDetailDto",
             "PaginatedResponse_ReportDto",
             "ProjectGraphDto",
+            "GraphNodeDto",
+            "GraphMetricsDto",
             "RecommendationGroupsDto",
         ] {
             let schema = &schemas[schema_name];
             assert!(schema.is_object(), "missing public schema {schema_name}");
-            assert!(
-                schema.to_string().contains("report_id")
-                    || schema
-                        .to_string()
-                        .contains("#/components/schemas/ReportDto"),
-                "public schema {schema_name} must expose or reference report_id"
-            );
+            if !matches!(schema_name, "ProjectGraphDto" | "GraphMetricsDto") {
+                assert!(
+                    schema.to_string().contains("report_id")
+                        || schema
+                            .to_string()
+                            .contains("#/components/schemas/ReportDto"),
+                    "public schema {schema_name} must expose or reference report_id"
+                );
+            }
             assert!(
                 !schema.to_string().contains("doi_key"),
                 "public schema {schema_name} leaks DOI identity"
@@ -415,6 +421,10 @@ mod tests {
                 "public schema {schema_name} must expose report_id"
             );
         }
+        assert_eq!(
+            schemas["ProjectGraphDto"]["properties"]["nodes"]["items"]["$ref"],
+            "#/components/schemas/GraphNodeDto"
+        );
         assert_eq!(
             schemas["GraphEdgeDto"]["properties"]["source"]["format"],
             "uuid"

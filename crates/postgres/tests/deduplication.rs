@@ -4,8 +4,8 @@ use deepref_application::{
 };
 use deepref_domain::IdentifierScheme;
 use deepref_postgres::{
-    DedupeError, DedupeRunRequest, ProposalDecisionRequest, decide_proposal, list_proposals,
-    migrate, persist_import, recompute_prisma_snapshot, resolve_record, run_deduplication,
+    DedupeError, DedupeRunRequest, ProposalDecisionRequest, decide_proposal, get_prisma_projection,
+    list_proposals, migrate, persist_import, resolve_record, run_deduplication,
 };
 use serde_json::json;
 use sqlx::{PgPool, Row, postgres::PgPoolOptions};
@@ -140,16 +140,17 @@ async fn exact_identifier_resolution_preserves_source_records_and_prisma_counts(
         .unwrap();
     assert_eq!(report_count, 1);
 
-    recompute_prisma_snapshot(&pool, project_id).await.unwrap();
-    let prisma = sqlx::query(
-        "SELECT records_identified,records_deduplicated FROM prisma_snapshots WHERE project_id=$1",
-    )
-    .bind(project_id)
-    .fetch_one(&pool)
-    .await
-    .unwrap();
-    assert_eq!(prisma.get::<i64, _>("records_identified"), 2);
-    assert_eq!(prisma.get::<i64, _>("records_deduplicated"), 2);
+    let prisma = get_prisma_projection(&pool, project_id)
+        .await
+        .unwrap()
+        .unwrap();
+    assert_eq!(prisma.identified_records.get(), 2);
+    assert_eq!(prisma.linked_records.get(), 2);
+    assert_eq!(prisma.duplicates_removed.get(), 1);
+    assert_eq!(prisma.source_canonical_reports.get(), 1);
+    assert_eq!(prisma.screened_records.get(), 1);
+    assert_eq!(prisma.unresolved_records.get(), 0);
+    assert!(prisma.validate().is_ok());
     sqlx::query("DELETE FROM projects WHERE id=$1")
         .bind(project_id)
         .execute(&pool)
