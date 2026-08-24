@@ -1,4 +1,5 @@
 <script lang="ts">
+	import type { Snippet } from 'svelte';
 	import * as Sheet from '$lib/components/ui/sheet';
 	import * as Tabs from '$lib/components/ui/tabs';
 	import ArticleInspector from './ArticleInspector.svelte';
@@ -6,7 +7,9 @@
 	import IngestionInspector from './IngestionInspector.svelte';
 	import ProjectSelector from './ProjectSelector.svelte';
 	import ProjectWorkspaceViewPanel from './ProjectWorkspaceViewPanel.svelte';
-	import type { ProjectWorkspaceView } from './types';
+	import type { ProjectWorkspaceNavView } from './types';
+
+	let { children }: { children?: Snippet } = $props();
 
 	const workspace = useProjectWorkspaceContext();
 	const mobileViewLabel = $derived(workspace.view[0].toUpperCase() + workspace.view.slice(1));
@@ -19,10 +22,11 @@
 		<ProjectSelector />
 		<Tabs.Root
 			value={workspace.view}
-			onValueChange={(value) => workspace.selectView(value as ProjectWorkspaceView)}
+			onValueChange={(value) => workspace.selectView(value as ProjectWorkspaceNavView)}
 		>
 			<Tabs.List class="w-full overflow-x-auto">
 				<Tabs.Trigger value="overview">Overview</Tabs.Trigger>
+				<Tabs.Trigger value="protocol">Protocol</Tabs.Trigger>
 				<Tabs.Trigger value="articles">Articles</Tabs.Trigger>
 				<Tabs.Trigger value="graph">Graph</Tabs.Trigger>
 				<Tabs.Trigger value="recommendations">Recs</Tabs.Trigger>
@@ -32,7 +36,7 @@
 		<div class="sr-only">{mobileViewLabel}</div>
 	</div>
 	<div class="min-h-0 flex-1 overflow-auto">
-		<ProjectWorkspaceViewPanel />
+		<ProjectWorkspaceViewPanel {children} />
 	</div>
 
 	<Sheet.Root open={articleSheetOpen} onOpenChange={(open) => !open && workspace.clearArticle()}>

@@ -1,12 +1,14 @@
 export type ProjectWorkspaceView =
-	'overview' | 'articles' | 'graph' | 'recommendations' | 'ingestions';
+	| 'overview'
+	| 'protocol'
+	| 'articles'
+	| 'graph'
+	| 'recommendations'
+	| 'ingestions'
+	| 'duplicates'
+	| 'screening';
 
-export type ProjectWorkspaceState = {
-	project?: string;
-	view: ProjectWorkspaceView;
-	article?: string;
-	ingestion?: string;
-};
+export type ProjectWorkspaceNavView = Exclude<ProjectWorkspaceView, 'duplicates' | 'screening'>;
 
 export type ProjectWorkspaceCounts = {
 	articles?: number;

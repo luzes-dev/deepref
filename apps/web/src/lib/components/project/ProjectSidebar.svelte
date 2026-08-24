@@ -3,10 +3,11 @@
 	import { ScrollArea } from '$lib/components/ui/scroll-area';
 	import * as Tooltip from '$lib/components/ui/tooltip';
 	import { useProjectWorkspaceContext } from './context.svelte.js';
-	import type { ProjectWorkspaceView } from './types';
+	import type { ProjectWorkspaceNavView } from './types';
 	import type { LucideIcon } from '@lucide/svelte';
 	import ArchiveIcon from '@lucide/svelte/icons/archive';
 	import ClipboardCheckIcon from '@lucide/svelte/icons/clipboard-check';
+	import ClipboardListIcon from '@lucide/svelte/icons/clipboard-list';
 	import FileTextIcon from '@lucide/svelte/icons/file-text';
 	import GitForkIcon from '@lucide/svelte/icons/git-fork';
 	import GitCompareIcon from '@lucide/svelte/icons/git-compare';
@@ -24,12 +25,13 @@
 
 	const workspace = useProjectWorkspaceContext();
 	const navItems: {
-		view: ProjectWorkspaceView;
+		view: ProjectWorkspaceNavView;
 		label: string;
 		icon: LucideIcon;
 		count?: number;
 	}[] = $derived([
 		{ view: 'overview', label: 'Overview', icon: HomeIcon },
+		{ view: 'protocol', label: 'Protocol', icon: ClipboardListIcon },
 		{
 			view: 'articles',
 			label: 'Articles',
@@ -53,13 +55,6 @@
 	const screeningHref = $derived(
 		workspace.selectedProjectId
 			? resolve('/projects/[projectId]/screening/title-abstract', {
-					projectId: workspace.selectedProjectId
-				})
-			: undefined
-	);
-	const deduplicationHref = $derived(
-		workspace.selectedProjectId
-			? resolve('/projects/[projectId]/deduplication', {
 					projectId: workspace.selectedProjectId
 				})
 			: undefined
@@ -168,10 +163,12 @@
 						</a>
 					{/if}
 				{/if}
-				{#if deduplicationHref}
+				{#if workspace.selectedProjectId}
 					{#if collapsed}
 						<a
-							href={deduplicationHref}
+							href={resolve('/projects/[projectId]/discovery/duplicates', {
+								projectId: workspace.selectedProjectId
+							})}
 							title="Deduplication"
 							class={cn(
 								buttonVariants({
@@ -186,7 +183,9 @@
 						</a>
 					{:else}
 						<a
-							href={deduplicationHref}
+							href={resolve('/projects/[projectId]/discovery/duplicates', {
+								projectId: workspace.selectedProjectId
+							})}
 							class={cn(
 								buttonVariants({
 									variant: 'outline',

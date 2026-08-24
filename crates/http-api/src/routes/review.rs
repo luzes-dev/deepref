@@ -20,19 +20,13 @@ use crate::{
     state::AppState,
 };
 
-const DEFAULT_CRITERIA: &str = r#"[
-  {"id":"population","label":"Population","description":"Matches the review population."},
-  {"id":"intervention","label":"Intervention or exposure","description":"Matches the intervention or exposure of interest."},
-  {"id":"outcome","label":"Outcome","description":"Reports a relevant outcome."}
-]"#;
-
 const ACTOR_KIND_HEADER: &str = "x-actor-kind";
 const ACTOR_ID_HEADER: &str = "x-actor-id";
 
 #[derive(Debug, Clone)]
-struct Actor {
-    kind: String,
-    id: String,
+pub(crate) struct Actor {
+    pub(crate) kind: String,
+    pub(crate) id: String,
 }
 
 /// Extracts the caller-provided actor context for review audit events.
@@ -40,7 +34,7 @@ struct Actor {
 /// Authentication and actor verification are intentionally outside this API's
 /// scope. Until that boundary exists, missing headers use the documented local
 /// fallback `user/local-user`; callers can provide the same fields explicitly.
-fn extract_actor(headers: &HeaderMap) -> Result<Actor, ApiError> {
+pub(crate) fn extract_actor(headers: &HeaderMap) -> Result<Actor, ApiError> {
     let kind = headers
         .get(ACTOR_KIND_HEADER)
         .map(|value| {
@@ -73,16 +67,6 @@ fn extract_actor(headers: &HeaderMap) -> Result<Actor, ApiError> {
         ));
     }
     Ok(Actor { kind, id })
-}
-
-#[derive(Debug, Clone, Serialize, ToSchema)]
-pub(crate) struct ProtocolDto {
-    pub id: Uuid,
-    pub version: i32,
-    pub name: String,
-    pub status: String,
-    pub criteria: serde_json::Value,
-    pub published_at: Option<DateTime<Utc>>,
 }
 
 #[derive(Debug, Clone, Serialize, ToSchema)]
@@ -180,26 +164,6 @@ pub(crate) struct PrismaDto {
     pub full_text_excluded: i64,
     pub revision: i64,
     pub updated_at: Option<DateTime<Utc>>,
-}
-
-#[utoipa::path(
-    get,
-    path = "/projects/{project_id}/protocol",
-    operation_id = "getProjectProtocol",
-    tag = "review",
-    params(("project_id" = Uuid, Path, description = "Project identifier")),
-    responses(
-        (status = 200, description = "Published protocol", body = ProtocolDto),
-        (status = 404, description = "Project not found", body = ErrorResponse),
-        (status = 500, description = "Internal server error", body = ErrorResponse)
-    )
-)]
-pub(crate) async fn get_protocol(
-    State(state): State<AppState>,
-    Path(project_id): Path<Uuid>,
-) -> Result<Json<ProtocolDto>, ApiError> {
-    let row = ensure_protocol(&state, project_id).await?;
-    Ok(Json(protocol_from_row(row)))
 }
 
 #[utoipa::path(
@@ -587,48 +551,6 @@ pub(crate) async fn get_prisma(
         revision: row.as_ref().map_or(0, |r| r.get("revision")),
         updated_at: row.as_ref().and_then(|r| r.get("updated_at")),
     }))
-}
-
-async fn ensure_protocol(
-    state: &AppState,
-    project_id: Uuid,
-) -> Result<sqlx::postgres::PgRow, ApiError> {
-    let mut tx = state.pool.begin().await?;
-    let project_exists: bool =
-        sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM projects WHERE id=$1)")
-            .bind(project_id)
-            .fetch_one(&mut *tx)
-            .await?;
-    if !project_exists {
-        return Err(ApiError::NotFound("project not found".to_owned()));
-    }
-    sqlx::query(
-        "INSERT INTO protocol_versions (id,project_id,version,name,status,criteria,published_at) VALUES ($1,$2,1,'Default evidence screening protocol','published',$3,now()) ON CONFLICT (project_id,version) DO NOTHING",
-    )
-    .bind(Uuid::new_v4())
-    .bind(project_id)
-    .bind(serde_json::from_str::<serde_json::Value>(DEFAULT_CRITERIA).expect("default criteria is valid JSON"))
-    .execute(&mut *tx)
-    .await?;
-    let row = sqlx::query(
-        "SELECT id,version,name,status,criteria,published_at FROM protocol_versions WHERE project_id=$1 ORDER BY version DESC LIMIT 1",
-    )
-    .bind(project_id)
-    .fetch_one(&mut *tx)
-    .await?;
-    tx.commit().await?;
-    Ok(row)
-}
-
-fn protocol_from_row(row: sqlx::postgres::PgRow) -> ProtocolDto {
-    ProtocolDto {
-        id: row.get("id"),
-        version: row.get("version"),
-        name: row.get("name"),
-        status: row.get("status"),
-        criteria: row.get("criteria"),
-        published_at: row.get("published_at"),
-    }
 }
 
 fn queue_item_from_row(row: sqlx::postgres::PgRow) -> ScreeningQueueItemDto {

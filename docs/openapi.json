@@ -1281,7 +1281,7 @@
         ],
         "responses": {
           "200": {
-            "description": "Published protocol",
+            "description": "Latest published protocol",
             "content": {
               "application/json": {
                 "schema": {
@@ -1291,7 +1291,7 @@
             }
           },
           "404": {
-            "description": "Project not found",
+            "description": "Project or published protocol not found",
             "content": {
               "application/json": {
                 "schema": {
@@ -1664,6 +1664,220 @@
         }
       }
     },
+    "/projects/{project_id}/review/protocol": {
+      "get": {
+        "tags": [
+          "review"
+        ],
+        "operationId": "getProjectReviewProtocol",
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "path",
+            "description": "Project identifier",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Current protocol editor aggregate",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProtocolDto"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Project or protocol not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "review"
+        ],
+        "operationId": "saveProjectReviewProtocol",
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "path",
+            "description": "Project identifier",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SaveProtocolRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Saved protocol draft",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProtocolDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid protocol",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Project or protocol not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Protocol revision conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/projects/{project_id}/review/protocol/publish": {
+      "post": {
+        "tags": [
+          "review"
+        ],
+        "operationId": "publishProjectReviewProtocol",
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "path",
+            "description": "Project identifier",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PublishProtocolRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Published protocol",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProtocolDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid protocol publication",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Project or protocol draft not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Protocol revision conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/projects/{project_id}/screening/title-abstract": {
       "get": {
         "tags": [
@@ -2013,6 +2227,35 @@
           }
         }
       },
+      "CriterionDimensionInput": {
+        "type": "string",
+        "enum": [
+          "population",
+          "intervention",
+          "comparator",
+          "outcome",
+          "design",
+          "setting",
+          "language",
+          "date",
+          "other"
+        ]
+      },
+      "CriterionKindInput": {
+        "type": "string",
+        "enum": [
+          "inclusion",
+          "exclusion"
+        ]
+      },
+      "CriterionStageInput": {
+        "type": "string",
+        "enum": [
+          "title_abstract",
+          "full_text",
+          "both"
+        ]
+      },
       "DedupeProposalDto": {
         "type": "object",
         "required": [
@@ -2266,6 +2509,55 @@
             "$ref": "#/components/schemas/DependencyDetail"
           }
         }
+      },
+      "EligibilityCriterionDto": {
+        "type": "object",
+        "required": [
+          "id",
+          "kind",
+          "stage",
+          "dimension",
+          "label",
+          "description",
+          "ordinal"
+        ],
+        "properties": {
+          "description": {
+            "type": "string"
+          },
+          "dimension": {
+            "$ref": "#/components/schemas/CriterionDimensionInput"
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/CriterionKindInput"
+          },
+          "label": {
+            "type": "string"
+          },
+          "ordinal": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "stage": {
+            "$ref": "#/components/schemas/CriterionStageInput"
+          }
+        }
+      },
+      "FrameworkKindInput": {
+        "type": "string",
+        "enum": [
+          "pico",
+          "picos",
+          "peco",
+          "peo",
+          "pcc",
+          "spider",
+          "custom"
+        ]
       },
       "GraphEdgeDto": {
         "type": "object",
@@ -3226,23 +3518,100 @@
           }
         }
       },
+      "ProtocolCriterionInput": {
+        "type": "object",
+        "required": [
+          "kind",
+          "stage",
+          "dimension",
+          "label",
+          "description"
+        ],
+        "properties": {
+          "description": {
+            "type": "string"
+          },
+          "dimension": {
+            "$ref": "#/components/schemas/CriterionDimensionInput"
+          },
+          "id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/CriterionKindInput"
+          },
+          "label": {
+            "type": "string"
+          },
+          "stage": {
+            "$ref": "#/components/schemas/CriterionStageInput"
+          }
+        }
+      },
       "ProtocolDto": {
         "type": "object",
         "required": [
           "id",
+          "project_id",
           "version",
           "name",
           "status",
-          "criteria"
+          "framework_kind",
+          "framework_fields",
+          "objective",
+          "question",
+          "criteria",
+          "revision",
+          "created_at",
+          "updated_at"
         ],
         "properties": {
-          "criteria": {},
+          "amendment_of": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "criteria": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/EligibilityCriterionDto"
+            }
+          },
+          "framework_fields": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string"
+            },
+            "propertyNames": {
+              "type": "string"
+            }
+          },
+          "framework_kind": {
+            "$ref": "#/components/schemas/FrameworkKindInput"
+          },
           "id": {
             "type": "string",
             "format": "uuid"
           },
           "name": {
             "type": "string"
+          },
+          "objective": {
+            "type": "string"
+          },
+          "project_id": {
+            "type": "string",
+            "format": "uuid"
           },
           "published_at": {
             "type": [
@@ -3251,12 +3620,69 @@
             ],
             "format": "date-time"
           },
-          "status": {
+          "question": {
             "type": "string"
+          },
+          "revision": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "status": {
+            "$ref": "#/components/schemas/ProtocolStatusDto"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time"
           },
           "version": {
             "type": "integer",
             "format": "int32"
+          }
+        }
+      },
+      "ProtocolFrameworkInput": {
+        "type": "object",
+        "required": [
+          "kind",
+          "fields"
+        ],
+        "properties": {
+          "fields": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string"
+            },
+            "propertyNames": {
+              "type": "string"
+            }
+          },
+          "kind": {
+            "$ref": "#/components/schemas/FrameworkKindInput"
+          }
+        }
+      },
+      "ProtocolStatusDto": {
+        "type": "string",
+        "enum": [
+          "draft",
+          "published",
+          "superseded"
+        ]
+      },
+      "PublishProtocolRequest": {
+        "type": "object",
+        "required": [
+          "protocol_version_id",
+          "expected_revision"
+        ],
+        "properties": {
+          "expected_revision": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "protocol_version_id": {
+            "type": "string",
+            "format": "uuid"
           }
         }
       },
@@ -3597,6 +4023,48 @@
             ],
             "format": "int64",
             "description": "Number of unresolved source records to process, from 1 through 100."
+          }
+        }
+      },
+      "SaveProtocolRequest": {
+        "type": "object",
+        "required": [
+          "name",
+          "objective",
+          "question",
+          "framework",
+          "criteria",
+          "expected_revision"
+        ],
+        "properties": {
+          "criteria": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ProtocolCriterionInput"
+            }
+          },
+          "expected_revision": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "framework": {
+            "$ref": "#/components/schemas/ProtocolFrameworkInput"
+          },
+          "name": {
+            "type": "string"
+          },
+          "objective": {
+            "type": "string"
+          },
+          "protocol_version_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          },
+          "question": {
+            "type": "string"
           }
         }
       },

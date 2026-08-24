@@ -44,6 +44,7 @@ base64 = "0.23.0"
 chrono = { version = "0.4.45", features = ["serde"] }
 csv = "1.4.0"
 futures = "0.3.32"
+garde = { version = "0.22.0", features = ["derive"] }
 petgraph = "0.8.2"
 reqwest = { version = "0.13.4", default-features = false, features = ["json", "rustls", "gzip", "brotli"] }
 rapidfuzz = "0.5.0"

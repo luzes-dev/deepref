@@ -569,6 +569,31 @@ test('secondary article views reuse selected article inspector', async ({ page }
 	await expect(page.getByRole('button', { name: 'Reset graph layout' })).toBeVisible();
 });
 
+test('project views are deep-linkable and preserve browser history state', async ({ page }) => {
+	await mockWorkspace(page);
+	await page.goto(
+		'/projects/test-project/articles?filter=review&sort=year&report=00000000-0000-4000-8000-000000000001'
+	);
+
+	await expect(page).toHaveURL(
+		/\/projects\/test-project\/articles\?filter=review&sort=year&report=00000000-0000-4000-8000-000000000001$/
+	);
+	await expect(page.getByRole('heading', { name: 'Articles' })).toBeVisible();
+
+	await page.getByRole('button', { name: 'Graph' }).click();
+	await expect(page).toHaveURL(
+		/\/projects\/test-project\/graph\?filter=review&sort=year&report=00000000-0000-4000-8000-000000000001$/
+	);
+	await page.goBack();
+	await expect(page).toHaveURL(
+		/\/projects\/test-project\/articles\?filter=review&sort=year&report=00000000-0000-4000-8000-000000000001$/
+	);
+	await page.goForward();
+	await expect(page).toHaveURL(
+		/\/projects\/test-project\/graph\?filter=review&sort=year&report=00000000-0000-4000-8000-000000000001$/
+	);
+});
+
 test('article table filters, resets, sorts, and paginates', async ({ page }) => {
 	await mockWorkspace(page);
 	await page.goto('/');

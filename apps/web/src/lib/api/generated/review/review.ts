@@ -22,6 +22,8 @@ import type {
 	ListTitleAbstractScreeningQueueParams,
 	PrismaDto,
 	ProtocolDto,
+	PublishProtocolRequest,
+	SaveProtocolRequest,
 	ScreenReportRequest,
 	ScreeningQueueDto,
 	ScreeningStateDto
@@ -377,6 +379,376 @@ export const createScreenReport = <TError = ErrorType<ApiErrorBody>, TContext = 
 	TContext
 > => {
 	return createMutation(() => ({ ...getScreenReportMutationOptions(options?.()) }), queryClient);
+};
+export type getProjectReviewProtocolResponse200 = {
+	data: ProtocolDto;
+	status: 200;
+};
+
+export type getProjectReviewProtocolResponse404 = {
+	data: ApiErrorBody;
+	status: 404;
+};
+
+export type getProjectReviewProtocolResponse500 = {
+	data: ApiErrorBody;
+	status: 500;
+};
+
+export type getProjectReviewProtocolResponseSuccess = getProjectReviewProtocolResponse200 & {
+	headers: Headers;
+};
+export type getProjectReviewProtocolResponseError = (
+	getProjectReviewProtocolResponse404 | getProjectReviewProtocolResponse500
+) & {
+	headers: Headers;
+};
+
+export const getGetProjectReviewProtocolUrl = (projectId: string) => {
+	return `/api/projects/${projectId}/review/protocol`;
+};
+
+export const getProjectReviewProtocol = async (
+	projectId: string,
+	options?: RequestInit
+): Promise<getProjectReviewProtocolResponseSuccess> => {
+	return customFetch<getProjectReviewProtocolResponseSuccess>(
+		getGetProjectReviewProtocolUrl(projectId),
+		{
+			...options,
+			method: 'GET'
+		}
+	);
+};
+
+export const getGetProjectReviewProtocolQueryKey = (projectId: string) => {
+	return [`/api/projects/${projectId}/review/protocol`] as const;
+};
+
+export const getGetProjectReviewProtocolQueryOptions = <
+	TData = Awaited<ReturnType<typeof getProjectReviewProtocol>>,
+	TError = ErrorType<ApiErrorBody>
+>(
+	projectId: string,
+	options?: {
+		query?: Partial<
+			CreateQueryOptions<Awaited<ReturnType<typeof getProjectReviewProtocol>>, TError, TData>
+		>;
+		request?: SecondParameter<typeof customFetch>;
+	}
+) => {
+	const { query: queryOptions, request: requestOptions } = options ?? {};
+
+	const queryKey = queryOptions?.queryKey ?? getGetProjectReviewProtocolQueryKey(projectId);
+
+	const queryFn: QueryFunction<Awaited<ReturnType<typeof getProjectReviewProtocol>>> = ({
+		signal
+	}) => getProjectReviewProtocol(projectId, { signal, ...requestOptions });
+
+	return {
+		queryKey,
+		queryFn,
+		enabled: projectId !== null && projectId !== undefined,
+		...queryOptions
+	} as CreateQueryOptions<Awaited<ReturnType<typeof getProjectReviewProtocol>>, TError, TData> & {
+		queryKey: DataTag<QueryKey, TData, TError>;
+	};
+};
+
+export type GetProjectReviewProtocolQueryResult = NonNullable<
+	Awaited<ReturnType<typeof getProjectReviewProtocol>>
+>;
+export type GetProjectReviewProtocolQueryError = ErrorType<ApiErrorBody>;
+
+export function createGetProjectReviewProtocol<
+	TData = Awaited<ReturnType<typeof getProjectReviewProtocol>>,
+	TError = ErrorType<ApiErrorBody>
+>(
+	projectId: () => string,
+	options?: () => {
+		query?: Partial<
+			CreateQueryOptions<Awaited<ReturnType<typeof getProjectReviewProtocol>>, TError, TData>
+		>;
+		request?: SecondParameter<typeof customFetch>;
+	},
+	queryClient?: () => QueryClient
+): CreateQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> } {
+	const query = createQuery(
+		() => getGetProjectReviewProtocolQueryOptions(projectId(), options?.()),
+		queryClient
+	) as CreateQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> };
+
+	return query;
+}
+
+export const prefetchGetProjectReviewProtocolQuery = async <
+	TData = Awaited<ReturnType<typeof getProjectReviewProtocol>>,
+	TError = ErrorType<ApiErrorBody>
+>(
+	queryClient: QueryClient,
+	projectId: string,
+	options?: {
+		query?: Partial<
+			CreateQueryOptions<Awaited<ReturnType<typeof getProjectReviewProtocol>>, TError, TData>
+		>;
+		request?: SecondParameter<typeof customFetch>;
+	}
+): Promise<QueryClient> => {
+	const queryOptions = getGetProjectReviewProtocolQueryOptions(projectId, options);
+
+	await queryClient.prefetchQuery(queryOptions);
+
+	return queryClient;
+};
+
+export type saveProjectReviewProtocolResponse200 = {
+	data: ProtocolDto;
+	status: 200;
+};
+
+export type saveProjectReviewProtocolResponse400 = {
+	data: ApiErrorBody;
+	status: 400;
+};
+
+export type saveProjectReviewProtocolResponse404 = {
+	data: ApiErrorBody;
+	status: 404;
+};
+
+export type saveProjectReviewProtocolResponse409 = {
+	data: ApiErrorBody;
+	status: 409;
+};
+
+export type saveProjectReviewProtocolResponse500 = {
+	data: ApiErrorBody;
+	status: 500;
+};
+
+export type saveProjectReviewProtocolResponseSuccess = saveProjectReviewProtocolResponse200 & {
+	headers: Headers;
+};
+export type saveProjectReviewProtocolResponseError = (
+	| saveProjectReviewProtocolResponse400
+	| saveProjectReviewProtocolResponse404
+	| saveProjectReviewProtocolResponse409
+	| saveProjectReviewProtocolResponse500
+) & {
+	headers: Headers;
+};
+
+export const getSaveProjectReviewProtocolUrl = (projectId: string) => {
+	return `/api/projects/${projectId}/review/protocol`;
+};
+
+export const saveProjectReviewProtocol = async (
+	projectId: string,
+	saveProtocolRequest: SaveProtocolRequest,
+	options?: RequestInit
+): Promise<saveProjectReviewProtocolResponseSuccess> => {
+	return customFetch<saveProjectReviewProtocolResponseSuccess>(
+		getSaveProjectReviewProtocolUrl(projectId),
+		{
+			...options,
+			method: 'PUT',
+			headers: { 'Content-Type': 'application/json', ...options?.headers },
+			body: JSON.stringify(saveProtocolRequest)
+		}
+	);
+};
+
+export const getSaveProjectReviewProtocolMutationOptions = <
+	TError = ErrorType<ApiErrorBody>,
+	TContext = unknown
+>(options?: {
+	mutation?: CreateMutationOptions<
+		Awaited<ReturnType<typeof saveProjectReviewProtocol>>,
+		TError,
+		{ projectId: string; data: BodyType<SaveProtocolRequest> },
+		TContext
+	>;
+	request?: SecondParameter<typeof customFetch>;
+}): CreateMutationOptions<
+	Awaited<ReturnType<typeof saveProjectReviewProtocol>>,
+	TError,
+	{ projectId: string; data: BodyType<SaveProtocolRequest> },
+	TContext
+> => {
+	const mutationKey = ['saveProjectReviewProtocol'];
+	const { mutation: mutationOptions, request: requestOptions } = options
+		? options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey
+			? options
+			: { ...options, mutation: { ...options.mutation, mutationKey } }
+		: { mutation: { mutationKey }, request: undefined };
+
+	const mutationFn: MutationFunction<
+		Awaited<ReturnType<typeof saveProjectReviewProtocol>>,
+		{ projectId: string; data: BodyType<SaveProtocolRequest> }
+	> = (props) => {
+		const { projectId, data } = props ?? {};
+
+		return saveProjectReviewProtocol(projectId, data, requestOptions);
+	};
+
+	return { mutationFn, ...mutationOptions };
+};
+
+export type SaveProjectReviewProtocolMutationResult = NonNullable<
+	Awaited<ReturnType<typeof saveProjectReviewProtocol>>
+>;
+export type SaveProjectReviewProtocolMutationBody = BodyType<SaveProtocolRequest>;
+export type SaveProjectReviewProtocolMutationError = ErrorType<ApiErrorBody>;
+
+export const createSaveProjectReviewProtocol = <
+	TError = ErrorType<ApiErrorBody>,
+	TContext = unknown
+>(
+	options?: () => {
+		mutation?: CreateMutationOptions<
+			Awaited<ReturnType<typeof saveProjectReviewProtocol>>,
+			TError,
+			{ projectId: string; data: BodyType<SaveProtocolRequest> },
+			TContext
+		>;
+		request?: SecondParameter<typeof customFetch>;
+	},
+	queryClient?: () => QueryClient
+): CreateMutationResult<
+	Awaited<ReturnType<typeof saveProjectReviewProtocol>>,
+	TError,
+	{ projectId: string; data: BodyType<SaveProtocolRequest> },
+	TContext
+> => {
+	return createMutation(
+		() => ({ ...getSaveProjectReviewProtocolMutationOptions(options?.()) }),
+		queryClient
+	);
+};
+export type publishProjectReviewProtocolResponse200 = {
+	data: ProtocolDto;
+	status: 200;
+};
+
+export type publishProjectReviewProtocolResponse400 = {
+	data: ApiErrorBody;
+	status: 400;
+};
+
+export type publishProjectReviewProtocolResponse404 = {
+	data: ApiErrorBody;
+	status: 404;
+};
+
+export type publishProjectReviewProtocolResponse409 = {
+	data: ApiErrorBody;
+	status: 409;
+};
+
+export type publishProjectReviewProtocolResponse500 = {
+	data: ApiErrorBody;
+	status: 500;
+};
+
+export type publishProjectReviewProtocolResponseSuccess =
+	publishProjectReviewProtocolResponse200 & {
+		headers: Headers;
+	};
+export type publishProjectReviewProtocolResponseError = (
+	| publishProjectReviewProtocolResponse400
+	| publishProjectReviewProtocolResponse404
+	| publishProjectReviewProtocolResponse409
+	| publishProjectReviewProtocolResponse500
+) & {
+	headers: Headers;
+};
+
+export const getPublishProjectReviewProtocolUrl = (projectId: string) => {
+	return `/api/projects/${projectId}/review/protocol/publish`;
+};
+
+export const publishProjectReviewProtocol = async (
+	projectId: string,
+	publishProtocolRequest: PublishProtocolRequest,
+	options?: RequestInit
+): Promise<publishProjectReviewProtocolResponseSuccess> => {
+	return customFetch<publishProjectReviewProtocolResponseSuccess>(
+		getPublishProjectReviewProtocolUrl(projectId),
+		{
+			...options,
+			method: 'POST',
+			headers: { 'Content-Type': 'application/json', ...options?.headers },
+			body: JSON.stringify(publishProtocolRequest)
+		}
+	);
+};
+
+export const getPublishProjectReviewProtocolMutationOptions = <
+	TError = ErrorType<ApiErrorBody>,
+	TContext = unknown
+>(options?: {
+	mutation?: CreateMutationOptions<
+		Awaited<ReturnType<typeof publishProjectReviewProtocol>>,
+		TError,
+		{ projectId: string; data: BodyType<PublishProtocolRequest> },
+		TContext
+	>;
+	request?: SecondParameter<typeof customFetch>;
+}): CreateMutationOptions<
+	Awaited<ReturnType<typeof publishProjectReviewProtocol>>,
+	TError,
+	{ projectId: string; data: BodyType<PublishProtocolRequest> },
+	TContext
+> => {
+	const mutationKey = ['publishProjectReviewProtocol'];
+	const { mutation: mutationOptions, request: requestOptions } = options
+		? options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey
+			? options
+			: { ...options, mutation: { ...options.mutation, mutationKey } }
+		: { mutation: { mutationKey }, request: undefined };
+
+	const mutationFn: MutationFunction<
+		Awaited<ReturnType<typeof publishProjectReviewProtocol>>,
+		{ projectId: string; data: BodyType<PublishProtocolRequest> }
+	> = (props) => {
+		const { projectId, data } = props ?? {};
+
+		return publishProjectReviewProtocol(projectId, data, requestOptions);
+	};
+
+	return { mutationFn, ...mutationOptions };
+};
+
+export type PublishProjectReviewProtocolMutationResult = NonNullable<
+	Awaited<ReturnType<typeof publishProjectReviewProtocol>>
+>;
+export type PublishProjectReviewProtocolMutationBody = BodyType<PublishProtocolRequest>;
+export type PublishProjectReviewProtocolMutationError = ErrorType<ApiErrorBody>;
+
+export const createPublishProjectReviewProtocol = <
+	TError = ErrorType<ApiErrorBody>,
+	TContext = unknown
+>(
+	options?: () => {
+		mutation?: CreateMutationOptions<
+			Awaited<ReturnType<typeof publishProjectReviewProtocol>>,
+			TError,
+			{ projectId: string; data: BodyType<PublishProtocolRequest> },
+			TContext
+		>;
+		request?: SecondParameter<typeof customFetch>;
+	},
+	queryClient?: () => QueryClient
+): CreateMutationResult<
+	Awaited<ReturnType<typeof publishProjectReviewProtocol>>,
+	TError,
+	{ projectId: string; data: BodyType<PublishProtocolRequest> },
+	TContext
+> => {
+	return createMutation(
+		() => ({ ...getPublishProjectReviewProtocolMutationOptions(options?.()) }),
+		queryClient
+	);
 };
 export type listTitleAbstractScreeningQueueResponse200 = {
 	data: ScreeningQueueDto;

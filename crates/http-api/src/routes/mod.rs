@@ -6,6 +6,7 @@ mod ingestions;
 mod pagination;
 mod projection;
 mod projects;
+mod protocol;
 mod review;
 mod settings;
 
@@ -64,7 +65,12 @@ fn openapi_router() -> OpenApiRouter<AppState> {
         .routes(routes!(ingestions::get_ingestion))
         .routes(routes!(ingestions::list_ingestion_items))
         .routes(routes!(ingestions::cancel_ingestion))
-        .routes(routes!(review::get_protocol))
+        .routes(routes!(protocol::get_published_protocol))
+        .routes(routes!(
+            protocol::get_protocol_editor,
+            protocol::save_protocol_draft,
+            protocol::publish_protocol
+        ))
         .routes(routes!(review::list_title_abstract_queue))
         .routes(routes!(review::screen_report))
         .routes(routes!(review::get_prisma))
@@ -81,10 +87,18 @@ pub fn router(state: AppState, config: &ApiConfig) -> Router {
         } else {
             tower_http::cors::AllowOrigin::list(config.cors_origins.clone())
         })
-        .allow_methods([Method::GET, Method::POST, Method::PATCH, Method::DELETE])
+        .allow_methods([
+            Method::GET,
+            Method::POST,
+            Method::PUT,
+            Method::PATCH,
+            Method::DELETE,
+        ])
         .allow_headers([
             header::CONTENT_TYPE,
             header::HeaderName::from_static("idempotency-key"),
+            header::HeaderName::from_static("x-actor-kind"),
+            header::HeaderName::from_static("x-actor-id"),
         ]);
 
     let (router, openapi) = openapi_router().split_for_parts();
@@ -162,6 +176,8 @@ mod tests {
             "/ingestions/{ingestion_id}/items",
             "/ingestions/{ingestion_id}/cancel",
             "/projects/{project_id}/protocol",
+            "/projects/{project_id}/review/protocol",
+            "/projects/{project_id}/review/protocol/publish",
             "/projects/{project_id}/screening/title-abstract",
             "/projects/{project_id}/reports/{report_id}/screening",
             "/projects/{project_id}/prisma",
@@ -173,6 +189,27 @@ mod tests {
                 "missing path {path}"
             );
         }
+        assert_eq!(
+            openapi.paths.paths["/projects/{project_id}/review/protocol"]
+                .get
+                .as_ref()
+                .and_then(|operation| operation.operation_id.as_deref()),
+            Some("getProjectReviewProtocol")
+        );
+        assert_eq!(
+            openapi.paths.paths["/projects/{project_id}/review/protocol"]
+                .put
+                .as_ref()
+                .and_then(|operation| operation.operation_id.as_deref()),
+            Some("saveProjectReviewProtocol")
+        );
+        assert_eq!(
+            openapi.paths.paths["/projects/{project_id}/review/protocol/publish"]
+                .post
+                .as_ref()
+                .and_then(|operation| operation.operation_id.as_deref()),
+            Some("publishProjectReviewProtocol")
+        );
         assert_eq!(
             openapi.paths.paths["/projects/{project_id}/reports"]
                 .get
