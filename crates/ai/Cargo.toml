@@ -1,0 +1,20 @@
+[package]
+name = "deepref-ai"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+chrono.workspace = true
+deepref-domain.workspace = true
+futures.workspace = true
+jsonschema.workspace = true
+rig-core.workspace = true
+schemars.workspace = true
+serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true
+sha2.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+tracing.workspace = true
+uuid.workspace = true
