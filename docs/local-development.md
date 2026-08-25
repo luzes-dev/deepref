@@ -4,6 +4,13 @@ DeepRef uses mise for pinned tools, Just for the developer command surface, Dock
 
 The Compose file is disposable local tooling only. It contains PostgreSQL and no application services; it is not a deployment artifact or a supported deployment path. Production workloads are built and promoted through the ECR, Helm, Argo CD, and OpenTofu workflow.
 
+The local PostgreSQL service uses the pinned `pgvector/pgvector:0.8.0-pg17`
+image. This is required because migration `0016_ai_foundation.sql` installs
+the `vector` extension; use the same pgvector-enabled PostgreSQL 17 image for
+disposable migration/integration fixtures. Production PostgreSQL extension
+availability remains a deployment responsibility and is not inferred from
+this local Compose fixture.
+
 ## Prerequisites
 
 Install:

@@ -1,4 +1,5 @@
 mod acquisition;
+mod ai;
 mod appraisal;
 mod deduplication;
 mod documents;
@@ -24,6 +25,9 @@ pub async fn migrate(pool: &PgPool) -> Result<(), MigrateError> {
 pub use acquisition::{
     AcquisitionError, ImportPersistRequest, ImportPersistResult, ensure_legacy_acquisition_run,
     persist_import,
+};
+pub use ai::{
+    PostgresAiStore, insert_model_route, persist_document_block_embedding, resolve_ai_proposal,
 };
 pub use appraisal::{
     AppraisalAssessmentRecord, AppraisalError, AppraisalEvidenceRecord, complete_appraisal,
