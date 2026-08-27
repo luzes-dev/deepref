@@ -8,6 +8,8 @@ import type { StudyReportRoleInput } from './studyReportRoleInput.ts';
 
 export interface StudyMembershipRequest {
 	/** @nullable */
+	expected_previous_study_id?: string | null;
+	/** @nullable */
 	expected_previous_study_revision?: number | null;
 	expected_revision: number;
 	role?: null | StudyReportRoleInput;

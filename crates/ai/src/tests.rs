@@ -15,6 +15,13 @@ use uuid::Uuid;
 
 use crate::*;
 
+#[test]
+fn hashes_require_the_canonical_lowercase_hex_encoding() {
+    assert!(is_sha256(&"a".repeat(64)));
+    assert!(!is_sha256(&"A".repeat(64)));
+    assert!(!is_sha256(&"g".repeat(64)));
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, JsonSchema, PartialEq)]
 struct Label {
     label: String,

@@ -13,14 +13,18 @@ export type PaginatedResponseAiProposalDtoItemsItem = {
 	entity_id?: string | null;
 	entity_type: string;
 	/** @nullable */
+	evidence_hash?: string | null;
+	/** @nullable */
 	expected_revision?: number | null;
 	id: string;
+	input_hash: string;
 	model: string;
 	model_run_id: string;
 	model_version: string;
 	operation: string;
 	payload: AiProposalPayload;
 	project_id: string;
+	prompt_hash: string;
 	prompt_version: string;
 	/** @nullable */
 	protocol_version_id?: string | null;
@@ -33,11 +37,14 @@ export type PaginatedResponseAiProposalDtoItemsItem = {
 	resolved_by_actor_id?: string | null;
 	/** @nullable */
 	resolved_by_actor_kind?: string | null;
+	schema_hash: string;
 	schema_version: string;
 	status: string;
 	/** @nullable */
 	target_record_id?: string | null;
 	/** @nullable */
 	target_report_id?: string | null;
+	/** @nullable */
+	target_study_id?: string | null;
 	task_kind: string;
 };

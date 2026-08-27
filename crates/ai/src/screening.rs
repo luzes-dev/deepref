@@ -440,6 +440,7 @@ impl AiTask for ScreeningTask {
         }))?;
         let retrieval = input.retrieval_query.clone().map(|query| RetrievalRequest {
             project_id: self.project_id,
+            study_id: None,
             report_id: Some(self.report_id.as_uuid()),
             document_id: None,
             query,

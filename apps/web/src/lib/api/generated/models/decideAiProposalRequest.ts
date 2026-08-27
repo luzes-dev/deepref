@@ -5,8 +5,10 @@
  * OpenAPI spec version: 0.1.0
  */
 import type { AiProposalDecisionInput } from './aiProposalDecisionInput.ts';
+import type { AiReviewedProposalPayload } from './aiReviewedProposalPayload.ts';
 
 export interface DecideAiProposalRequest {
 	decision: AiProposalDecisionInput;
 	reason: string;
+	reviewed_payload?: null | AiReviewedProposalPayload;
 }

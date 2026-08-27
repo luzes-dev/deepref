@@ -9,6 +9,7 @@ pub mod acquisition;
 pub mod appraisal;
 pub mod deduplication;
 pub mod documents;
+pub mod extraction;
 pub mod jobs;
 pub mod prisma;
 pub mod protocol;
@@ -37,6 +38,9 @@ pub use documents::{
     AttachDocumentCommand, DocumentByteStream, DocumentDetailQuery, DocumentFuture,
     DocumentListQuery, DocumentPortError, DocumentQueryError, DocumentRepository,
     DocumentStorageId, DocumentStore, MissingFullTextQuery, OcrEngine, StoredDocumentContent,
+};
+pub use extraction::{
+    ExtractionFieldDefinition, ExtractionFieldType, ExtractionValidationError, ExtractionValue,
 };
 pub use prisma::{
     NonNegativeCount, PrismaInvariantError, PrismaProjection, PrismaReasonCount, render_prisma_svg,

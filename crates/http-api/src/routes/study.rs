@@ -78,6 +78,7 @@ pub(crate) struct StudyMembershipRequest {
     pub study_id: Option<Uuid>,
     pub role: Option<StudyReportRoleInput>,
     pub expected_revision: i64,
+    pub expected_previous_study_id: Option<Uuid>,
     pub expected_previous_study_revision: Option<i64>,
 }
 
@@ -495,6 +496,7 @@ pub(crate) async fn put_report_study_membership(
                     .as_ref()
                     .map_or(StudyReportRole::ReportOfStudy, StudyReportRoleInput::domain),
                 expected_revision,
+                expected_previous_study_id: input.expected_previous_study_id.map(Into::into),
                 expected_previous_study_revision: input
                     .expected_previous_study_revision
                     .map(non_negative_revision)
@@ -645,6 +647,9 @@ pub(crate) async fn complete_report_appraisal(
             question_id: evidence.question_id,
             document_id: evidence.document_id,
             block_id: evidence.block_id,
+            page: None,
+            parser_version: None,
+            content_hash: None,
         })
         .collect();
     let assessment = deepref_postgres::complete_appraisal(
@@ -908,7 +913,7 @@ fn validate_definition_for_response(
         .map_err(|error| ApiError::DataIntegrity(error.to_string()))
 }
 
-fn map_study_error(error: deepref_postgres::StudyError) -> ApiError {
+pub(crate) fn map_study_error(error: deepref_postgres::StudyError) -> ApiError {
     match error {
         deepref_postgres::StudyError::Database(error) => ApiError::Database(error),
         deepref_postgres::StudyError::ProjectNotFound
@@ -926,7 +931,7 @@ fn map_study_error(error: deepref_postgres::StudyError) -> ApiError {
     }
 }
 
-fn map_appraisal_error(error: deepref_postgres::AppraisalError) -> ApiError {
+pub(crate) fn map_appraisal_error(error: deepref_postgres::AppraisalError) -> ApiError {
     match error {
         deepref_postgres::AppraisalError::Database(error) => ApiError::Database(error),
         deepref_postgres::AppraisalError::ReportNotInProject

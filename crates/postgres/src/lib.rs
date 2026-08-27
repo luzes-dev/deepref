@@ -3,6 +3,7 @@ mod ai;
 mod appraisal;
 mod deduplication;
 mod documents;
+mod extraction;
 mod graph;
 mod jobs;
 mod legacy_import;
@@ -27,16 +28,17 @@ pub use acquisition::{
     persist_import,
 };
 pub use ai::{
-    AiDedupeTarget, AiGroundingBlock, AiProposalCursor, AiProposalDecision,
-    AiProposalDecisionRequest, AiProposalError, AiProposalFilters, AiProposalRecord,
-    AiProposalResolution, AiScreeningTarget, PostgresAiStore, decide_ai_proposal,
-    get_ai_dedupe_target, get_ai_proposal, get_ai_screening_target, insert_model_route,
-    list_ai_exclusion_reasons, list_ai_grounding_blocks, list_ai_proposals,
-    persist_document_block_embedding, resolve_ai_proposal,
+    AiDedupeTarget, AiGroundingBlock, AiGroupingReport, AiGroupingStudy, AiProposalCursor,
+    AiProposalDecision, AiProposalDecisionRequest, AiProposalError, AiProposalFilters,
+    AiProposalRecord, AiProposalResolution, AiScreeningTarget, AiStudyGroupingTarget,
+    PostgresAiStore, ReviewedAiProposalPayload, decide_ai_proposal, get_ai_dedupe_target,
+    get_ai_proposal, get_ai_screening_target, get_ai_study_grouping_target, insert_model_route,
+    list_ai_exclusion_reasons, list_ai_extraction_evidence, list_ai_grounding_blocks,
+    list_ai_proposals, persist_document_block_embedding, resolve_ai_proposal,
 };
 pub use appraisal::{
     AppraisalAssessmentRecord, AppraisalError, AppraisalEvidenceRecord, complete_appraisal,
-    get_appraisal, list_appraisals,
+    complete_appraisal_in_transaction, get_appraisal, list_appraisals,
 };
 pub use deduplication::{
     DedupeError, DedupeProposal, DedupeProposalCursor, DedupeRunRequest, DedupeRunSummary,
@@ -51,6 +53,10 @@ pub use documents::{
     list_documents, list_full_text_queue, list_full_text_reasons, list_missing_full_text,
     mark_document_failed, mark_document_parsing, mark_document_retrieval_failed,
     mark_document_retrieving, persist_parsed_document, search_document_blocks,
+};
+pub use extraction::{
+    ExtractionError, ExtractionValueRecord, apply_data_extraction_in_transaction,
+    create_field_definition, list_field_definitions, list_values,
 };
 pub use graph::{MAX_GRAPH_NODES, load_project_graph, recompute_project_metrics};
 pub use jobs::{
@@ -70,7 +76,7 @@ pub use screening::{
 };
 pub use study::{
     StudyDetailRecord, StudyError, StudyEventRecord, StudyListRecord, StudyMembershipRecord,
-    StudyRecord, StudyReportRecord, assign_report_to_study, classify_study, create_study,
-    get_study, get_study_for_report, list_studies, list_study_events, remove_report_from_study,
-    rename_study,
+    StudyRecord, StudyReportRecord, assign_report_to_study, assign_report_to_study_in_transaction,
+    classify_study, create_study, create_study_and_assign_report_in_transaction, get_study,
+    get_study_for_report, list_studies, list_study_events, remove_report_from_study, rename_study,
 };

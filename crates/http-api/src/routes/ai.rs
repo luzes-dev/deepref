@@ -5,9 +5,11 @@ use axum::{
 };
 use chrono::{DateTime, Utc};
 use deepref_ai::{
-    AiError, AiTaskRunner, CriterionPrompt, DedupeInput, DedupeTask, IdentityProvenance,
-    ScreeningEvidence, ScreeningEvidenceField, ScreeningInput, ScreeningStage, ScreeningTask,
-    ScreeningTaskConfig, SystemClock, UuidProvider,
+    AiError, AiTaskRunner, AppraisalAnswerSchema, AppraisalPrefillDomain, AppraisalPrefillEvidence,
+    AppraisalPrefillInput, AppraisalPrefillQuestion, CriterionPrompt, DedupeInput, DedupeTask,
+    IdentityProvenance, ScreeningEvidence, ScreeningEvidenceField, ScreeningInput, ScreeningStage,
+    ScreeningTask, ScreeningTaskConfig, StudyGroupingCandidate, StudyGroupingEvidence,
+    StudyGroupingField, StudyGroupingInput, StudyGroupingTask, SystemClock, UuidProvider,
 };
 use deepref_application::{DedupeCandidate, FUZZY_PROPOSAL_THRESHOLD, score_candidate};
 use deepref_domain::{
@@ -15,6 +17,7 @@ use deepref_domain::{
 };
 use deepref_postgres::{
     AiProposalDecision, AiProposalDecisionRequest, AiProposalError, AiProposalRecord,
+    ReviewedAiProposalPayload,
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -54,7 +57,7 @@ impl AiScreeningStageInput {
     }
 }
 
-#[derive(Debug, Deserialize, ToSchema)]
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
 pub(crate) struct GenerateScreeningRequest {
     pub stage: AiScreeningStageInput,
     pub protocol_version_id: Option<Uuid>,
@@ -64,6 +67,12 @@ pub(crate) struct GenerateScreeningRequest {
 #[derive(Debug, Deserialize, ToSchema)]
 pub(crate) struct GenerateDuplicateRequest {
     pub candidate_report_id: Uuid,
+}
+
+#[derive(Debug, Deserialize, ToSchema)]
+pub(crate) struct GenerateAppraisalPrefillRequest {
+    pub definition_id: String,
+    pub definition_version: u32,
 }
 
 #[derive(Debug, Deserialize, ToSchema)]
@@ -77,6 +86,26 @@ pub(crate) enum AiProposalDecisionInput {
 pub(crate) struct DecideAiProposalRequest {
     pub decision: AiProposalDecisionInput,
     pub reason: String,
+    #[serde(default)]
+    #[schema(required = false)]
+    pub reviewed_payload: Option<AiReviewedProposalPayload>,
+}
+
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub(crate) enum AiReviewedProposalPayload {
+    AppraisalPrefill {
+        report_id: Uuid,
+        definition_id: String,
+        definition_version: u32,
+        answers: Vec<AiAppraisalPrefillAnswerDto>,
+        domain_judgments: std::collections::BTreeMap<String, String>,
+        overall_judgment: String,
+    },
+    DataExtraction {
+        study_id: Uuid,
+        fields: Vec<AiExtractedFieldDto>,
+    },
 }
 
 #[derive(Debug, Deserialize, ToSchema)]
@@ -88,6 +117,7 @@ pub(crate) struct AiProposalListParams {
     pub target_report_id: Option<Uuid>,
     pub target_record_id: Option<Uuid>,
     pub candidate_report_id: Option<Uuid>,
+    pub target_study_id: Option<Uuid>,
 }
 
 #[derive(Debug, Serialize, Deserialize, ToSchema)]
@@ -95,6 +125,141 @@ pub(crate) struct AiProposalListParams {
 pub(crate) enum AiProposalPayload {
     Screening(AiScreeningProposalPayload),
     Duplicate(AiDuplicateProposalPayload),
+    StudyGrouping(AiStudyGroupingProposalPayload),
+    AppraisalPrefill(AiAppraisalPrefillProposalPayload),
+    DataExtraction(AiDataExtractionProposalPayload),
+}
+
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
+pub(crate) struct AiStudyGroupingProposalPayload {
+    pub report_id: Uuid,
+    pub expected_previous_study_id: Option<Uuid>,
+    pub expected_previous_study_revision: Option<i64>,
+    pub choice: AiStudyGroupingChoiceDto,
+    pub rationale: String,
+    pub provenance: Vec<AiStudyGroupingEvidenceDto>,
+    pub uncertainties: Vec<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub(crate) enum AiStudyGroupingChoiceDto {
+    ExistingStudy {
+        study_id: Uuid,
+        expected_revision: i64,
+    },
+    NewStudy {
+        title: String,
+    },
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum AiStudyGroupingFieldDto {
+    Title,
+    Abstract,
+    PublicationYear,
+    FirstAuthor,
+}
+
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+#[allow(clippy::enum_variant_names)]
+pub(crate) enum AiStudyGroupingEvidenceDto {
+    ReportMetadata {
+        report_id: Uuid,
+        field: AiStudyGroupingFieldDto,
+        content_hash: String,
+    },
+    StudyMetadata {
+        study_id: Uuid,
+        field: AiStudyGroupingFieldDto,
+        content_hash: String,
+    },
+    StudyReportMetadata {
+        study_id: Uuid,
+        report_id: Uuid,
+        field: AiStudyGroupingFieldDto,
+        content_hash: String,
+    },
+}
+
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
+pub(crate) struct AiAppraisalPrefillProposalPayload {
+    pub report_id: Uuid,
+    pub definition_id: String,
+    pub definition_version: u32,
+    pub answers: Vec<AiAppraisalPrefillAnswerDto>,
+    pub domain_judgments: std::collections::BTreeMap<String, String>,
+    pub overall_judgment: String,
+}
+
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
+pub(crate) struct AiAppraisalPrefillAnswerDto {
+    pub question_id: String,
+    pub answer: AiAppraisalAnswerValueDto,
+    pub rationale: String,
+    pub evidence: Vec<AiAppraisalPrefillEvidenceDto>,
+}
+
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub(crate) enum AiAppraisalAnswerValueDto {
+    Enum { value: String },
+    Boolean { value: bool },
+    Scale { value: i64 },
+    Text { value: String },
+}
+
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
+pub(crate) struct AiAppraisalPrefillEvidenceDto {
+    pub document_id: Uuid,
+    pub document_block_id: Uuid,
+    pub page: u32,
+    pub parser_version: String,
+    pub content_hash: String,
+}
+
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
+pub(crate) struct AiDataExtractionProposalPayload {
+    pub study_id: Uuid,
+    pub fields: Vec<AiExtractedFieldDto>,
+}
+
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub(crate) enum AiExtractedFieldDto {
+    Value {
+        field_id: Uuid,
+        field_version: u32,
+        value: AiTypedExtractionValueDto,
+        rationale: String,
+        source: AiExtractionEvidenceDto,
+    },
+    InsufficientEvidence {
+        field_id: Uuid,
+        field_version: u32,
+        rationale: String,
+    },
+}
+
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub(crate) enum AiTypedExtractionValueDto {
+    Text { value: String },
+    Number { value: f64 },
+    Boolean { value: bool },
+    Date { value: String },
+}
+
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
+pub(crate) struct AiExtractionEvidenceDto {
+    pub report_id: Uuid,
+    pub document_id: Uuid,
+    pub document_block_id: Uuid,
+    pub page: u32,
+    pub parser_version: String,
+    pub content_hash: String,
 }
 
 #[derive(Debug, Serialize, Deserialize, ToSchema)]
@@ -239,11 +404,16 @@ pub(crate) struct AiProposalDto {
     pub model_version: String,
     pub prompt_version: String,
     pub schema_version: String,
+    pub prompt_hash: String,
+    pub schema_hash: String,
+    pub input_hash: String,
+    pub evidence_hash: Option<String>,
     pub status: String,
     pub protocol_version_id: Option<Uuid>,
     pub expected_revision: Option<i64>,
     pub target_report_id: Option<Uuid>,
     pub target_record_id: Option<Uuid>,
+    pub target_study_id: Option<Uuid>,
     pub resolved_at: Option<DateTime<Utc>>,
     pub resolved_by_actor_kind: Option<String>,
     pub resolved_by_actor_id: Option<String>,
@@ -335,6 +505,163 @@ pub(crate) async fn generate_screening_suggestion(
 
 #[utoipa::path(
     post,
+    path = "/projects/{project_id}/reports/{report_id}/ai/study-grouping",
+    operation_id = "generateStudyGroupingSuggestion",
+    tag = "ai",
+    params(("project_id" = Uuid, Path), ("report_id" = Uuid, Path)),
+    responses(
+        (status = 200, body = AiProposalDto),
+        (status = 400, body = ErrorResponse),
+        (status = 404, body = ErrorResponse),
+        (status = 409, body = ErrorResponse),
+        (status = 503, body = ErrorResponse),
+        (status = 500, body = ErrorResponse)
+    )
+)]
+pub(crate) async fn generate_study_grouping_suggestion(
+    State(state): State<AppState>,
+    Path((project_id, report_id)): Path<(Uuid, Uuid)>,
+) -> Result<Json<AiProposalDto>, ApiError> {
+    let target = deepref_postgres::get_ai_study_grouping_target(&state.pool, project_id, report_id)
+        .await
+        .map_err(map_ai_proposal_error)?;
+    let grounded_evidence = grouping_evidence(&target);
+    let task_input = StudyGroupingInput {
+        project_id: project_id.into(),
+        report_id: report_id.into(),
+        report_title: target.report.title.clone(),
+        report_abstract: target.report.abstract_text.clone(),
+        publication_year: target.report.publication_year,
+        first_author: target.report.first_author.clone(),
+        current_study_id: target.current_study_id.map(Into::into),
+        current_study_revision: target.current_study_revision,
+        candidates: target
+            .studies
+            .iter()
+            .map(|study| StudyGroupingCandidate {
+                study_id: study.study_id,
+                title: study.title.clone(),
+                revision: study.revision,
+                report_ids: study
+                    .reports
+                    .iter()
+                    .map(|report| report.report_id)
+                    .collect(),
+            })
+            .collect(),
+        grounded_evidence,
+    };
+    let task = StudyGroupingTask::new(&task_input).map_err(map_ai_error)?;
+    let proposal = run_task(&state, &task, task_input).await?;
+    Ok(Json(proposal_dto(proposal)?))
+}
+
+#[utoipa::path(
+    post,
+    path = "/projects/{project_id}/reports/{report_id}/ai/appraisal-prefill",
+    operation_id = "generateAppraisalPrefillSuggestion",
+    tag = "ai",
+    params(("project_id" = Uuid, Path), ("report_id" = Uuid, Path)),
+    request_body = GenerateAppraisalPrefillRequest,
+    responses(
+        (status = 200, body = AiProposalDto),
+        (status = 400, body = ErrorResponse),
+        (status = 404, body = ErrorResponse),
+        (status = 409, body = ErrorResponse),
+        (status = 503, body = ErrorResponse),
+        (status = 500, body = ErrorResponse)
+    )
+)]
+pub(crate) async fn generate_appraisal_prefill_suggestion(
+    State(state): State<AppState>,
+    Path((project_id, report_id)): Path<(Uuid, Uuid)>,
+    Json(input): Json<GenerateAppraisalPrefillRequest>,
+) -> Result<Json<AiProposalDto>, ApiError> {
+    let definition = deepref_application::get_appraisal_definition(
+        &input.definition_id,
+        input.definition_version,
+    )
+    .map_err(|error| ApiError::BadRequest(error.to_string()))?;
+    let target = deepref_postgres::get_ai_screening_target(&state.pool, project_id, report_id)
+        .await
+        .map_err(map_ai_proposal_error)?;
+    let query = definition
+        .domains
+        .iter()
+        .flat_map(|domain| {
+            domain.questions.iter().map(|question| {
+                format!(
+                    "{} {}",
+                    question.label,
+                    question.help.as_deref().unwrap_or("")
+                )
+            })
+        })
+        .collect::<Vec<_>>()
+        .join(" ");
+    let blocks =
+        deepref_postgres::list_ai_grounding_blocks(&state.pool, project_id, report_id, &query)
+            .await
+            .map_err(map_ai_proposal_error)?;
+    let questions = definition
+        .domains
+        .iter()
+        .flat_map(|domain| domain.questions.iter())
+        .map(|question| AppraisalPrefillQuestion {
+            id: question.id.clone(),
+            answer_schema: appraisal_answer_schema(&question.answer_schema),
+            required: question.required,
+            requires_evidence: question.requires_evidence,
+        })
+        .collect::<Vec<_>>();
+    let domains = definition
+        .domains
+        .iter()
+        .map(|domain| AppraisalPrefillDomain {
+            id: domain.id.clone(),
+            allowed_judgments: domain
+                .judgment
+                .options
+                .iter()
+                .map(|option| option.value.clone())
+                .collect(),
+            required: domain.judgment.required,
+        })
+        .collect::<Vec<_>>();
+    let grounded_evidence = blocks
+        .iter()
+        .map(|block| AppraisalPrefillEvidence {
+            document_id: block.document_id,
+            document_block_id: block.document_block_id,
+            page: block.page,
+            parser_version: block.parser_version.clone(),
+            content_hash: block.content_hash.clone(),
+        })
+        .collect();
+    let task_input = AppraisalPrefillInput {
+        project_id: project_id.into(),
+        report_id: report_id.into(),
+        definition_id: definition.id.as_str().to_owned(),
+        definition_version: definition.version.get(),
+        questions,
+        domains,
+        overall_allowed_judgments: definition
+            .overall_judgment
+            .options
+            .iter()
+            .map(|option| option.value.clone())
+            .collect(),
+        report_title: target.title,
+        report_abstract: target.abstract_text,
+        grounded_evidence,
+    };
+    let task = deepref_ai::AppraisalPrefillTask::new(&task_input).map_err(map_ai_error)?;
+    let proposal = run_task(&state, &task, task_input).await?;
+    Ok(Json(proposal_dto(proposal)?))
+}
+
+#[utoipa::path(
+    post,
     path = "/projects/{project_id}/records/{record_id}/ai/deduplication",
     operation_id = "generateDuplicateSuggestion",
     tag = "ai",
@@ -408,7 +735,8 @@ pub(crate) async fn generate_duplicate_suggestion(
         ("task_kind" = Option<String>, Query, description = "AI task kind filter"),
         ("target_report_id" = Option<Uuid>, Query, description = "Screening report target"),
         ("target_record_id" = Option<Uuid>, Query, description = "Dedupe source record target"),
-        ("candidate_report_id" = Option<Uuid>, Query, description = "Dedupe candidate report target")
+        ("candidate_report_id" = Option<Uuid>, Query, description = "Dedupe candidate report target"),
+        ("target_study_id" = Option<Uuid>, Query, description = "Study-scoped proposal target")
     ),
     responses(
         (status = 200, description = "Project-scoped AI proposals", body = PaginatedResponse<AiProposalDto>),
@@ -436,6 +764,7 @@ pub(crate) async fn list_ai_proposals(
             target_report_id: params.target_report_id,
             target_record_id: params.target_record_id,
             candidate_report_id: params.candidate_report_id,
+            target_study_id: params.target_study_id,
         },
         cursor.map(|(created_at, id)| deepref_postgres::AiProposalCursor { created_at, id }),
         limit,
@@ -518,6 +847,10 @@ pub(crate) async fn decide_ai_proposal(
             proposal_id,
             decision,
             reason: input.reason,
+            reviewed_payload: input
+                .reviewed_payload
+                .map(reviewed_payload_to_internal)
+                .transpose()?,
             actor,
         },
     )
@@ -530,6 +863,46 @@ pub(crate) async fn decide_ai_proposal(
         proposal: proposal_dto(proposal)?,
         applied_revision: resolution.applied_revision,
     }))
+}
+
+fn reviewed_payload_to_internal(
+    payload: AiReviewedProposalPayload,
+) -> Result<ReviewedAiProposalPayload, ApiError> {
+    match payload {
+        AiReviewedProposalPayload::AppraisalPrefill {
+            report_id,
+            definition_id,
+            definition_version,
+            answers,
+            domain_judgments,
+            overall_judgment,
+        } => Ok(ReviewedAiProposalPayload::AppraisalPrefill(
+            deepref_ai::AppraisalPrefill {
+                report_id,
+                definition_id,
+                definition_version,
+                answers: serde_json::from_value(serde_json::to_value(answers).map_err(
+                    |error| ApiError::BadRequest(format!("reviewed payload is invalid: {error}")),
+                )?)
+                .map_err(|error| {
+                    ApiError::BadRequest(format!("reviewed payload is invalid: {error}"))
+                })?,
+                domain_judgments,
+                overall_judgment,
+            },
+        )),
+        AiReviewedProposalPayload::DataExtraction { study_id, fields } => Ok(
+            ReviewedAiProposalPayload::DataExtraction(deepref_ai::DataExtraction {
+                study_id,
+                fields: serde_json::from_value(serde_json::to_value(fields).map_err(|error| {
+                    ApiError::BadRequest(format!("reviewed payload is invalid: {error}"))
+                })?)
+                .map_err(|error| {
+                    ApiError::BadRequest(format!("reviewed payload is invalid: {error}"))
+                })?,
+            }),
+        ),
+    }
 }
 
 async fn run_task<T>(
@@ -583,6 +956,101 @@ fn metadata_evidence(
         });
     }
     evidence
+}
+
+fn grouping_evidence(
+    target: &deepref_postgres::AiStudyGroupingTarget,
+) -> Vec<StudyGroupingEvidence> {
+    let mut evidence = Vec::new();
+    let mut add_report = |report: &deepref_postgres::AiGroupingReport| {
+        if let Some(title) = &report.title {
+            evidence.push(StudyGroupingEvidence::ReportMetadata {
+                report_id: report.report_id,
+                field: StudyGroupingField::Title,
+                content_hash: deepref_ai::sha256_bytes(title.as_bytes()),
+            });
+        }
+        if let Some(abstract_text) = &report.abstract_text {
+            evidence.push(StudyGroupingEvidence::ReportMetadata {
+                report_id: report.report_id,
+                field: StudyGroupingField::Abstract,
+                content_hash: deepref_ai::sha256_bytes(abstract_text.as_bytes()),
+            });
+        }
+        if let Some(year) = report.publication_year {
+            evidence.push(StudyGroupingEvidence::ReportMetadata {
+                report_id: report.report_id,
+                field: StudyGroupingField::PublicationYear,
+                content_hash: deepref_ai::sha256_bytes(year.to_string().as_bytes()),
+            });
+        }
+        if let Some(author) = &report.first_author {
+            evidence.push(StudyGroupingEvidence::ReportMetadata {
+                report_id: report.report_id,
+                field: StudyGroupingField::FirstAuthor,
+                content_hash: deepref_ai::sha256_bytes(author.as_bytes()),
+            });
+        }
+    };
+    add_report(&target.report);
+    for study in &target.studies {
+        evidence.push(StudyGroupingEvidence::StudyMetadata {
+            study_id: study.study_id,
+            field: StudyGroupingField::Title,
+            content_hash: deepref_ai::sha256_bytes(study.title.as_bytes()),
+        });
+        for report in &study.reports {
+            if let Some(title) = &report.title {
+                evidence.push(StudyGroupingEvidence::StudyReportMetadata {
+                    study_id: study.study_id,
+                    report_id: report.report_id,
+                    field: StudyGroupingField::Title,
+                    content_hash: deepref_ai::sha256_bytes(title.as_bytes()),
+                });
+            }
+            if let Some(abstract_text) = &report.abstract_text {
+                evidence.push(StudyGroupingEvidence::StudyReportMetadata {
+                    study_id: study.study_id,
+                    report_id: report.report_id,
+                    field: StudyGroupingField::Abstract,
+                    content_hash: deepref_ai::sha256_bytes(abstract_text.as_bytes()),
+                });
+            }
+            if let Some(year) = report.publication_year {
+                evidence.push(StudyGroupingEvidence::StudyReportMetadata {
+                    study_id: study.study_id,
+                    report_id: report.report_id,
+                    field: StudyGroupingField::PublicationYear,
+                    content_hash: deepref_ai::sha256_bytes(year.to_string().as_bytes()),
+                });
+            }
+            if let Some(author) = &report.first_author {
+                evidence.push(StudyGroupingEvidence::StudyReportMetadata {
+                    study_id: study.study_id,
+                    report_id: report.report_id,
+                    field: StudyGroupingField::FirstAuthor,
+                    content_hash: deepref_ai::sha256_bytes(author.as_bytes()),
+                });
+            }
+        }
+    }
+    evidence
+}
+
+fn appraisal_answer_schema(schema: &deepref_application::AnswerSchema) -> AppraisalAnswerSchema {
+    match schema {
+        deepref_application::AnswerSchema::Enum { options } => AppraisalAnswerSchema::Enum {
+            options: options.iter().map(|option| option.value.clone()).collect(),
+        },
+        deepref_application::AnswerSchema::Boolean => AppraisalAnswerSchema::Boolean,
+        deepref_application::AnswerSchema::Scale { min, max, .. } => AppraisalAnswerSchema::Scale {
+            min: *min,
+            max: *max,
+        },
+        deepref_application::AnswerSchema::Text { max_length } => AppraisalAnswerSchema::Text {
+            max_length: *max_length,
+        },
+    }
 }
 
 fn criterion_prompt(criterion: &EligibilityCriterion) -> CriterionPrompt {
@@ -755,7 +1223,7 @@ fn dedupe_signals(
     signals
 }
 
-fn proposal_dto(proposal: AiProposalRecord) -> Result<AiProposalDto, ApiError> {
+pub(crate) fn proposal_dto(proposal: AiProposalRecord) -> Result<AiProposalDto, ApiError> {
     let payload = typed_payload(&proposal)?;
     Ok(AiProposalDto {
         id: proposal.id,
@@ -772,11 +1240,16 @@ fn proposal_dto(proposal: AiProposalRecord) -> Result<AiProposalDto, ApiError> {
         model_version: proposal.model_version,
         prompt_version: proposal.prompt_version,
         schema_version: proposal.schema_version,
+        prompt_hash: proposal.prompt_hash,
+        schema_hash: proposal.schema_hash,
+        input_hash: proposal.input_hash,
+        evidence_hash: proposal.evidence_hash,
         status: proposal.status,
         protocol_version_id: proposal.protocol_version_id,
         expected_revision: proposal.expected_revision,
         target_report_id: proposal.target_report_id,
         target_record_id: proposal.target_record_id,
+        target_study_id: proposal.target_study_id,
         resolved_at: proposal.resolved_at,
         resolved_by_actor_kind: proposal.resolved_by_actor_kind,
         resolved_by_actor_id: proposal.resolved_by_actor_id,
@@ -795,6 +1268,9 @@ fn typed_payload(proposal: &AiProposalRecord) -> Result<AiProposalPayload, ApiEr
     let kind = match proposal.task_kind.as_str() {
         "title_abstract_screening" | "full_text_screening" => "screening",
         "duplicate_candidate_detection" => "duplicate",
+        "study_grouping" => "study_grouping",
+        "appraisal_prefill" => "appraisal_prefill",
+        "data_extraction" => "data_extraction",
         task_kind => {
             return Err(ApiError::Internal(anyhow::anyhow!(
                 "unsupported AI proposal task kind: {task_kind}"
@@ -844,6 +1320,23 @@ fn map_ai_proposal_error(error: AiProposalError) -> ApiError {
         AiProposalError::InvalidActor => ApiError::BadRequest("actor is invalid".to_owned()),
         AiProposalError::Screening(error) => super::review::map_screening_error(error),
         AiProposalError::Dedupe(error) => super::deduplication::map_dedupe_error(error),
+        AiProposalError::Study(error) => super::study::map_study_error(error),
+        AiProposalError::Appraisal(error) => super::study::map_appraisal_error(error),
+        AiProposalError::Extraction(
+            error @ (deepref_postgres::ExtractionError::EvidenceNotInStudy
+            | deepref_postgres::ExtractionError::RequiredFieldInsufficient
+            | deepref_postgres::ExtractionError::StaleDefinitionVersion
+            | deepref_postgres::ExtractionError::ValueAlreadyApproved),
+        ) => ApiError::Conflict {
+            code: "extraction_conflict".to_owned(),
+            message: error.to_string(),
+            details: Value::Null,
+        },
+        AiProposalError::Extraction(
+            error @ (deepref_postgres::ExtractionError::DefinitionNotFound
+            | deepref_postgres::ExtractionError::StudyNotFound),
+        ) => ApiError::NotFound(error.to_string()),
+        AiProposalError::Extraction(error) => ApiError::BadRequest(error.to_string()),
     }
 }
 

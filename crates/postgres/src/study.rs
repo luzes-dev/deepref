@@ -368,8 +368,17 @@ pub async fn assign_report_to_study(
     command: AssignReportToStudy,
 ) -> Result<StudyDetailRecord, StudyError> {
     let mut transaction = pool.begin().await?;
+    assign_report_to_study_in_transaction(&mut transaction, command.clone()).await?;
+    transaction.commit().await?;
+    get_study(pool, command.project_id.into(), command.study_id.into()).await
+}
+
+pub async fn assign_report_to_study_in_transaction(
+    transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    command: AssignReportToStudy,
+) -> Result<(), StudyError> {
     ensure_project_report(
-        &mut transaction,
+        transaction,
         command.project_id.into(),
         command.report_id.into(),
     )
@@ -380,11 +389,28 @@ pub async fn assign_report_to_study(
     )
     .bind(command.project_id.as_uuid())
     .bind(command.report_id.as_uuid())
-    .fetch_optional(&mut *transaction)
+    .fetch_optional(&mut **transaction)
     .await?;
     let previous_study_id = membership
         .as_ref()
         .map(|row| row.get::<Uuid, _>("study_id"));
+    if command
+        .expected_previous_study_id
+        .map(Into::into)
+        .is_some_and(|id| previous_study_id != Some(id))
+        || (previous_study_id.is_none() && command.expected_previous_study_revision.is_some())
+    {
+        return Err(StudyError::RevisionConflict {
+            current: Box::new(
+                get_study_with_connection(
+                    transaction,
+                    command.project_id.into(),
+                    command.study_id.into(),
+                )
+                .await?,
+            ),
+        });
+    }
     if previous_study_id == Some(command.study_id.as_uuid()) {
         return Err(StudyError::AlreadyMember);
     }
@@ -396,8 +422,7 @@ pub async fn assign_report_to_study(
     study_ids.dedup();
     let mut locked_studies = Vec::with_capacity(study_ids.len());
     for study_id in study_ids {
-        locked_studies
-            .push(lock_study(&mut transaction, command.project_id.into(), study_id).await?);
+        locked_studies.push(lock_study(transaction, command.project_id.into(), study_id).await?);
     }
     let target = locked_studies
         .iter()
@@ -408,7 +433,7 @@ pub async fn assign_report_to_study(
         return Err(StudyError::RevisionConflict {
             current: Box::new(
                 get_study_with_connection(
-                    &mut transaction,
+                    transaction,
                     command.project_id.into(),
                     command.study_id.into(),
                 )
@@ -425,12 +450,8 @@ pub async fn assign_report_to_study(
         if command.expected_previous_study_revision != Some(previous.revision as u64) {
             return Err(StudyError::RevisionConflict {
                 current: Box::new(
-                    get_study_with_connection(
-                        &mut transaction,
-                        command.project_id.into(),
-                        previous_id,
-                    )
-                    .await?,
+                    get_study_with_connection(transaction, command.project_id.into(), previous_id)
+                        .await?,
                 ),
             });
         }
@@ -443,7 +464,7 @@ pub async fn assign_report_to_study(
         sqlx::query("DELETE FROM study_reports WHERE project_id=$1 AND report_id=$2")
             .bind(command.project_id.as_uuid())
             .bind(command.report_id.as_uuid())
-            .execute(&mut *transaction)
+            .execute(&mut **transaction)
             .await?;
         sqlx::query(
             "UPDATE studies SET study_revision=$1, updated_by_actor_kind=$2,
@@ -455,7 +476,7 @@ pub async fn assign_report_to_study(
         .bind(command.actor.id())
         .bind(command.project_id.as_uuid())
         .bind(previous.id.as_uuid())
-        .execute(&mut *transaction)
+        .execute(&mut **transaction)
         .await?;
     }
     sqlx::query(
@@ -466,7 +487,7 @@ pub async fn assign_report_to_study(
     .bind(command.study_id.as_uuid())
     .bind(command.report_id.as_uuid())
     .bind(command.role.as_str())
-    .execute(&mut *transaction)
+    .execute(&mut **transaction)
     .await?;
     sqlx::query(
         "UPDATE studies SET study_revision=$1, updated_by_actor_kind=$2,
@@ -478,7 +499,7 @@ pub async fn assign_report_to_study(
     .bind(command.actor.id())
     .bind(command.project_id.as_uuid())
     .bind(command.study_id.as_uuid())
-    .execute(&mut *transaction)
+    .execute(&mut **transaction)
     .await?;
     let event_type = if previous.is_some() {
         "report_moved"
@@ -486,7 +507,7 @@ pub async fn assign_report_to_study(
         "report_assigned"
     };
     insert_study_event(
-        &mut transaction,
+        transaction,
         command.project_id.into(),
         command.study_id.as_uuid(),
         Some(command.report_id.as_uuid()),
@@ -509,8 +530,65 @@ pub async fn assign_report_to_study(
         &command.actor,
     )
     .await?;
-    transaction.commit().await?;
-    get_study(pool, command.project_id.into(), command.study_id.into()).await
+    Ok(())
+}
+
+pub async fn create_study_and_assign_report_in_transaction(
+    transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    command: CreateStudy,
+    report_id: ReportId,
+    role: StudyReportRole,
+    expected_previous_study_id: Option<StudyId>,
+    expected_previous_study_revision: Option<u64>,
+) -> Result<(), StudyError> {
+    ensure_project(transaction, command.project_id.into()).await?;
+    sqlx::query(
+        "INSERT INTO studies
+          (id, project_id, title, design, design_context,
+           study_revision, updated_by_actor_kind, updated_by_actor_id)
+         VALUES ($1,$2,$3,NULL,'{}'::jsonb,0,$4,$5)",
+    )
+    .bind(command.study_id.as_uuid())
+    .bind(command.project_id.as_uuid())
+    .bind(command.title.as_str())
+    .bind(command.actor.kind().as_str())
+    .bind(command.actor.id())
+    .execute(&mut **transaction)
+    .await?;
+    insert_study_event(
+        transaction,
+        command.project_id.into(),
+        command.study_id.as_uuid(),
+        None,
+        "study_created",
+        None,
+        Some(command.study_id.as_uuid()),
+        0,
+        0,
+        json!({}),
+        json!({ "title": command.title.as_str(), "revision": 0 }),
+        study_event_payload(StudyEvent::StudyCreated(StudyCreated {
+            study_id: command.study_id,
+            title: command.title.clone(),
+            actor: command.actor.clone(),
+        }))?,
+        &command.actor,
+    )
+    .await?;
+    assign_report_to_study_in_transaction(
+        transaction,
+        AssignReportToStudy {
+            project_id: command.project_id,
+            study_id: command.study_id,
+            report_id,
+            role,
+            expected_revision: 0,
+            expected_previous_study_id,
+            expected_previous_study_revision,
+            actor: command.actor,
+        },
+    )
+    .await
 }
 
 pub async fn remove_report_from_study(
