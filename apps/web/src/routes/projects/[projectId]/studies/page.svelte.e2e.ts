@@ -1,4 +1,5 @@
 import { expect, test, type Page } from '@playwright/test';
+import type { AiProposalDto } from '$lib/api/generated/models';
 
 const project = {
 	id: 'project-1',
@@ -165,4 +166,204 @@ test('groups, unassigns, and preserves study history', async ({ page }) => {
 	await page.getByRole('button', { name: 'Unassign' }).click();
 	await expect(page.getByText('No reports assigned yet.', { exact: true })).toBeVisible();
 	await expect(page.getByText('report_unassigned', { exact: true })).toBeVisible();
+});
+
+test('reviews study grouping proposals with typed provenance and refreshes after decisions', async ({
+	page
+}) => {
+	await mockProjectShell(page);
+
+	let study = {
+		id: 'study-1',
+		project_id: project.id,
+		title: 'One investigation',
+		design: null,
+		design_label: null,
+		design_context: { physiotherapy: false, exposure: false, prediction_or_ai: false },
+		revision: 2,
+		reports: [] as Array<{
+			report_id: string;
+			title: string;
+			abstract_text: string | null;
+			publication_year: number;
+			role: string;
+			assigned_at: string;
+		}>,
+		tool_suggestions: [],
+		created_at: '2026-01-01T00:00:00Z',
+		updated_at: '2026-01-01T00:00:00Z',
+		updated_by_actor_kind: 'user',
+		updated_by_actor_id: 'tester'
+	};
+	const groupingProposal = (id: string): AiProposalDto => ({
+		authority_tier: 'ai_proposal',
+		created_at: '2026-01-01T00:00:00Z',
+		entity_id: null,
+		entity_type: 'report',
+		evidence_hash: 'evidence-hash',
+		expected_revision: null,
+		id,
+		input_hash: 'input-hash',
+		model: 'test-model',
+		model_run_id: 'run-1',
+		model_version: '1',
+		operation: 'study_grouping',
+		payload: {
+			choice: { kind: 'existing_study', study_id: 'study-1', expected_revision: 2 },
+			expected_previous_study_id: null,
+			expected_previous_study_revision: null,
+			kind: 'study_grouping',
+			provenance: [
+				{
+					content_hash: 'report-title-hash-fully-visible',
+					field: 'title',
+					kind: 'report_metadata',
+					report_id: report.report_id
+				},
+				{
+					content_hash: 'study-title-hash-fully-visible',
+					field: 'title',
+					kind: 'study_metadata',
+					study_id: 'study-1'
+				}
+			],
+			rationale: 'The report title and publication year match the existing investigation.',
+			report_id: report.report_id,
+			uncertainties: []
+		},
+		project_id: project.id,
+		prompt_hash: 'prompt-hash',
+		prompt_version: 'study-grouping-v1',
+		protocol_version_id: null,
+		provider: 'mock-provider',
+		resolution_reason: null,
+		resolved_at: null,
+		resolved_by_actor_id: null,
+		resolved_by_actor_kind: null,
+		schema_hash: 'schema-hash',
+		schema_version: '1',
+		status: 'pending',
+		target_record_id: null,
+		target_report_id: report.report_id,
+		target_study_id: null,
+		task_kind: 'study_grouping'
+	});
+
+	let pendingProposal: AiProposalDto | undefined;
+	let generationRequests = 0;
+	let proposalListRequests = 0;
+	let reportsReady = false;
+	type GroupingDecisionBody = {
+		decision: 'accept' | 'reject';
+		reason: string;
+		reviewed_payload?: never;
+	};
+	const decisionBodies: GroupingDecisionBody[] = [];
+
+	await page.route(
+		/http:\/\/localhost:4173\/api\/projects\/project-1\/reports(?:\?.*)?$/,
+		async (route) => {
+			reportsReady = true;
+			await route.fulfill({ json: { items: [report], next_cursor: null } });
+		}
+	);
+	await page.route(
+		/http:\/\/localhost:4173\/api\/projects\/project-1\/studies(?:\/.*)?(?:\?.*)?$/,
+		async (route) => {
+			const url = new URL(route.request().url());
+			const path = url.pathname;
+			if (path.endsWith('/history')) {
+				await route.fulfill({ json: [] });
+			} else if (route.request().method() === 'GET') {
+				await route.fulfill({
+					json: path.endsWith('/study-1') ? study : { items: [study], next_cursor: null }
+				});
+			} else {
+				await route.continue();
+			}
+		}
+	);
+	await page.route(
+		'http://localhost:4173/api/projects/project-1/reports/report-1/study',
+		async (route) => {
+			await route.fulfill({ status: 204, body: '' });
+		}
+	);
+	await page.route(
+		/http:\/\/localhost:4173\/api\/projects\/project-1\/ai\/proposals(?:\?.*)?$/,
+		async (route) => {
+			proposalListRequests += 1;
+			await route.fulfill({
+				json: {
+					items: pendingProposal ? [pendingProposal] : [],
+					next_cursor: null
+				}
+			});
+		}
+	);
+	await page.route(
+		'http://localhost:4173/api/projects/project-1/reports/report-1/ai/study-grouping',
+		async (route) => {
+			generationRequests += 1;
+			pendingProposal = groupingProposal(`grouping-${generationRequests}`);
+			await route.fulfill({ json: pendingProposal });
+		}
+	);
+	await page.route(
+		/http:\/\/localhost:4173\/api\/projects\/project-1\/ai\/proposals\/[^/]+\/decision$/,
+		async (route) => {
+			const body: GroupingDecisionBody = route.request().postDataJSON();
+			decisionBodies.push(body);
+			if (body.decision === 'accept') {
+				study = { ...study, revision: 3 };
+				pendingProposal = undefined;
+				await route.fulfill({
+					json: {
+						applied_revision: 3,
+						proposal: { ...groupingProposal('grouping-1'), status: 'accepted' }
+					}
+				});
+				return;
+			}
+			await route.fulfill({
+				status: 409,
+				json: { code: 'stale_revision', message: 'Study revision is stale.' }
+			});
+		}
+	);
+
+	await page.goto('/projects/project-1/studies?study=study-1');
+	await expect.poll(() => reportsReady).toBe(true);
+	await page.locator('#study-report').click();
+	await page.getByRole('option', { name: 'Primary trial report' }).click();
+	await expect(page.getByRole('button', { name: 'Suggest study group' })).toBeVisible();
+	await page.getByRole('button', { name: 'Suggest study group' }).click();
+	await expect(page.getByTestId('study-grouping-choice')).toContainText('Existing study');
+	await expect(page.getByTestId('study-grouping-provenance')).toContainText(
+		'report-title-hash-fully-visible'
+	);
+	await expect(page.getByTestId('study-grouping-provenance')).toContainText(
+		'study-title-hash-fully-visible'
+	);
+
+	const listRequestsBeforeAccept = proposalListRequests;
+	await page.getByRole('button', { name: 'Accept and apply' }).click();
+	await expect.poll(() => decisionBodies.length).toBe(1);
+	await expect.poll(() => proposalListRequests).toBeGreaterThan(listRequestsBeforeAccept);
+	await expect(decisionBodies[0]).toEqual({
+		decision: 'accept',
+		reason: 'Human reviewer accepted study grouping suggestion.'
+	});
+	await expect(page.getByText('No pending grouping suggestion', { exact: true })).toBeVisible();
+	await expect(page.getByText('Revision 3 · changes are audited and reversible')).toBeVisible();
+
+	await page.getByRole('button', { name: 'Suggest study group' }).click();
+	await expect(page.getByTestId('study-grouping-choice')).toBeVisible();
+	await page.getByRole('button', { name: 'Reject' }).click();
+	await expect.poll(() => decisionBodies.length).toBe(2);
+	await expect(decisionBodies[1]).toEqual({
+		decision: 'reject',
+		reason: 'Human reviewer rejected study grouping suggestion.'
+	});
+	await expect(page.getByRole('alert')).toContainText('Study data changed elsewhere');
 });

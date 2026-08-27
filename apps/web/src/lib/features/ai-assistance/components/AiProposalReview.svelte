@@ -88,17 +88,53 @@
 	);
 
 	function criterionRows(proposal: AiProposalDto) {
-		return proposal.payload.kind === 'screening' ? proposal.payload.criteria : [];
+		switch (proposal.payload.kind) {
+			case 'screening':
+				return proposal.payload.criteria;
+			case 'duplicate':
+			case 'study_grouping':
+			case 'appraisal_prefill':
+			case 'data_extraction':
+				return [];
+			default: {
+				const exhaustive: never = proposal.payload;
+				return exhaustive;
+			}
+		}
 	}
 
 	function suggestedDecision(proposal: AiProposalDto): string {
-		if (proposal.payload.kind === 'duplicate') return proposal.payload.decision;
-		return proposal.payload.suggested_decision.kind;
+		switch (proposal.payload.kind) {
+			case 'screening':
+				return proposal.payload.suggested_decision.kind;
+			case 'duplicate':
+				return proposal.payload.decision;
+			case 'study_grouping':
+			case 'appraisal_prefill':
+			case 'data_extraction':
+				return 'unavailable';
+			default: {
+				const exhaustive: never = proposal.payload;
+				return exhaustive;
+			}
+		}
 	}
 
 	function canApprove(proposal: AiProposalDto): boolean {
-		if (proposal.payload.kind === 'duplicate') return proposal.payload.decision === 'match';
-		return proposal.payload.suggested_decision.kind !== 'insufficient_evidence';
+		switch (proposal.payload.kind) {
+			case 'screening':
+				return proposal.payload.suggested_decision.kind !== 'insufficient_evidence';
+			case 'duplicate':
+				return proposal.payload.decision === 'match';
+			case 'study_grouping':
+			case 'appraisal_prefill':
+			case 'data_extraction':
+				return false;
+			default: {
+				const exhaustive: never = proposal.payload;
+				return exhaustive;
+			}
+		}
 	}
 
 	function dedupeRationales(proposal: AiProposalDto) {
@@ -141,7 +177,19 @@
 	}
 
 	function uncertainties(proposal: AiProposalDto): string[] {
-		return proposal.payload.uncertainties;
+		switch (proposal.payload.kind) {
+			case 'screening':
+			case 'duplicate':
+			case 'study_grouping':
+				return proposal.payload.uncertainties;
+			case 'appraisal_prefill':
+			case 'data_extraction':
+				return [];
+			default: {
+				const exhaustive: never = proposal.payload;
+				return exhaustive;
+			}
+		}
 	}
 
 	function candidateReportLabel(proposal: AiProposalDto): string {
