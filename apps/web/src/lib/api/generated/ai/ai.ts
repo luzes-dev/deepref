@@ -23,6 +23,7 @@ import type {
 	AiProposalDto,
 	ApiErrorBody,
 	DecideAiProposalRequest,
+	GenerateAppraisalPrefillRequest,
 	GenerateDuplicateRequest,
 	GenerateScreeningRequest,
 	ListAiProposalsParams,
@@ -611,6 +612,143 @@ export const createGenerateDuplicateSuggestion = <
 		queryClient
 	);
 };
+export type generateAppraisalPrefillSuggestionResponse200 = {
+	data: AiProposalDto;
+	status: 200;
+};
+
+export type generateAppraisalPrefillSuggestionResponse400 = {
+	data: ApiErrorBody;
+	status: 400;
+};
+
+export type generateAppraisalPrefillSuggestionResponse404 = {
+	data: ApiErrorBody;
+	status: 404;
+};
+
+export type generateAppraisalPrefillSuggestionResponse409 = {
+	data: ApiErrorBody;
+	status: 409;
+};
+
+export type generateAppraisalPrefillSuggestionResponse500 = {
+	data: ApiErrorBody;
+	status: 500;
+};
+
+export type generateAppraisalPrefillSuggestionResponse503 = {
+	data: ApiErrorBody;
+	status: 503;
+};
+
+export type generateAppraisalPrefillSuggestionResponseSuccess =
+	generateAppraisalPrefillSuggestionResponse200 & {
+		headers: Headers;
+	};
+export type generateAppraisalPrefillSuggestionResponseError = (
+	| generateAppraisalPrefillSuggestionResponse400
+	| generateAppraisalPrefillSuggestionResponse404
+	| generateAppraisalPrefillSuggestionResponse409
+	| generateAppraisalPrefillSuggestionResponse500
+	| generateAppraisalPrefillSuggestionResponse503
+) & {
+	headers: Headers;
+};
+
+export const getGenerateAppraisalPrefillSuggestionUrl = (projectId: string, reportId: string) => {
+	return `/api/projects/${projectId}/reports/${reportId}/ai/appraisal-prefill`;
+};
+
+export const generateAppraisalPrefillSuggestion = async (
+	projectId: string,
+	reportId: string,
+	generateAppraisalPrefillRequest: GenerateAppraisalPrefillRequest,
+	options?: RequestInit
+): Promise<generateAppraisalPrefillSuggestionResponseSuccess> => {
+	return customFetch<generateAppraisalPrefillSuggestionResponseSuccess>(
+		getGenerateAppraisalPrefillSuggestionUrl(projectId, reportId),
+		{
+			...options,
+			method: 'POST',
+			headers: { 'Content-Type': 'application/json', ...options?.headers },
+			body: JSON.stringify(generateAppraisalPrefillRequest)
+		}
+	);
+};
+
+export const getGenerateAppraisalPrefillSuggestionMutationOptions = <
+	TError = ErrorType<ApiErrorBody>,
+	TContext = unknown
+>(options?: {
+	mutation?: CreateMutationOptions<
+		Awaited<ReturnType<typeof generateAppraisalPrefillSuggestion>>,
+		TError,
+		{ projectId: string; reportId: string; data: BodyType<GenerateAppraisalPrefillRequest> },
+		TContext
+	>;
+	request?: SecondParameter<typeof customFetch>;
+}): CreateMutationOptions<
+	Awaited<ReturnType<typeof generateAppraisalPrefillSuggestion>>,
+	TError,
+	{ projectId: string; reportId: string; data: BodyType<GenerateAppraisalPrefillRequest> },
+	TContext
+> => {
+	const mutationKey = ['generateAppraisalPrefillSuggestion'];
+	const { mutation: mutationOptions, request: requestOptions } = options
+		? options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey
+			? options
+			: { ...options, mutation: { ...options.mutation, mutationKey } }
+		: { mutation: { mutationKey }, request: undefined };
+
+	const mutationFn: MutationFunction<
+		Awaited<ReturnType<typeof generateAppraisalPrefillSuggestion>>,
+		{ projectId: string; reportId: string; data: BodyType<GenerateAppraisalPrefillRequest> }
+	> = (props) => {
+		const { projectId, reportId, data } = props ?? {};
+
+		return generateAppraisalPrefillSuggestion(projectId, reportId, data, requestOptions);
+	};
+
+	return { mutationFn, ...mutationOptions };
+};
+
+export type GenerateAppraisalPrefillSuggestionMutationResult = NonNullable<
+	Awaited<ReturnType<typeof generateAppraisalPrefillSuggestion>>
+>;
+export type GenerateAppraisalPrefillSuggestionMutationBody =
+	BodyType<GenerateAppraisalPrefillRequest>;
+export type GenerateAppraisalPrefillSuggestionMutationError = ErrorType<ApiErrorBody>;
+
+export const createGenerateAppraisalPrefillSuggestion = <
+	TError = ErrorType<ApiErrorBody>,
+	TContext = unknown
+>(
+	options?: () => {
+		mutation?: CreateMutationOptions<
+			Awaited<ReturnType<typeof generateAppraisalPrefillSuggestion>>,
+			TError,
+			{
+				projectId: string;
+				reportId: string;
+				data: BodyType<GenerateAppraisalPrefillRequest>;
+			},
+			TContext
+		>;
+		request?: SecondParameter<typeof customFetch>;
+	},
+	queryClient?: () => QueryClient
+): CreateMutationResult<
+	Awaited<ReturnType<typeof generateAppraisalPrefillSuggestion>>,
+	TError,
+	{ projectId: string; reportId: string; data: BodyType<GenerateAppraisalPrefillRequest> },
+	TContext
+> => {
+	return createMutation(
+		() => ({ ...getGenerateAppraisalPrefillSuggestionMutationOptions(options?.()) }),
+		queryClient
+	);
+};
 export type generateScreeningSuggestionResponse200 = {
 	data: AiProposalDto;
 	status: 200;
@@ -767,6 +905,258 @@ export const createGenerateScreeningSuggestion = <
 		() => ({
 			...getGenerateScreeningSuggestionMutationOptions(backupQueryClient, options?.())
 		}),
+		queryClient
+	);
+};
+export type generateStudyGroupingSuggestionResponse200 = {
+	data: AiProposalDto;
+	status: 200;
+};
+
+export type generateStudyGroupingSuggestionResponse400 = {
+	data: ApiErrorBody;
+	status: 400;
+};
+
+export type generateStudyGroupingSuggestionResponse404 = {
+	data: ApiErrorBody;
+	status: 404;
+};
+
+export type generateStudyGroupingSuggestionResponse409 = {
+	data: ApiErrorBody;
+	status: 409;
+};
+
+export type generateStudyGroupingSuggestionResponse500 = {
+	data: ApiErrorBody;
+	status: 500;
+};
+
+export type generateStudyGroupingSuggestionResponse503 = {
+	data: ApiErrorBody;
+	status: 503;
+};
+
+export type generateStudyGroupingSuggestionResponseSuccess =
+	generateStudyGroupingSuggestionResponse200 & {
+		headers: Headers;
+	};
+export type generateStudyGroupingSuggestionResponseError = (
+	| generateStudyGroupingSuggestionResponse400
+	| generateStudyGroupingSuggestionResponse404
+	| generateStudyGroupingSuggestionResponse409
+	| generateStudyGroupingSuggestionResponse500
+	| generateStudyGroupingSuggestionResponse503
+) & {
+	headers: Headers;
+};
+
+export const getGenerateStudyGroupingSuggestionUrl = (projectId: string, reportId: string) => {
+	return `/api/projects/${projectId}/reports/${reportId}/ai/study-grouping`;
+};
+
+export const generateStudyGroupingSuggestion = async (
+	projectId: string,
+	reportId: string,
+	options?: RequestInit
+): Promise<generateStudyGroupingSuggestionResponseSuccess> => {
+	return customFetch<generateStudyGroupingSuggestionResponseSuccess>(
+		getGenerateStudyGroupingSuggestionUrl(projectId, reportId),
+		{
+			...options,
+			method: 'POST'
+		}
+	);
+};
+
+export const getGenerateStudyGroupingSuggestionMutationOptions = <
+	TError = ErrorType<ApiErrorBody>,
+	TContext = unknown
+>(options?: {
+	mutation?: CreateMutationOptions<
+		Awaited<ReturnType<typeof generateStudyGroupingSuggestion>>,
+		TError,
+		{ projectId: string; reportId: string },
+		TContext
+	>;
+	request?: SecondParameter<typeof customFetch>;
+}): CreateMutationOptions<
+	Awaited<ReturnType<typeof generateStudyGroupingSuggestion>>,
+	TError,
+	{ projectId: string; reportId: string },
+	TContext
+> => {
+	const mutationKey = ['generateStudyGroupingSuggestion'];
+	const { mutation: mutationOptions, request: requestOptions } = options
+		? options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey
+			? options
+			: { ...options, mutation: { ...options.mutation, mutationKey } }
+		: { mutation: { mutationKey }, request: undefined };
+
+	const mutationFn: MutationFunction<
+		Awaited<ReturnType<typeof generateStudyGroupingSuggestion>>,
+		{ projectId: string; reportId: string }
+	> = (props) => {
+		const { projectId, reportId } = props ?? {};
+
+		return generateStudyGroupingSuggestion(projectId, reportId, requestOptions);
+	};
+
+	return { mutationFn, ...mutationOptions };
+};
+
+export type GenerateStudyGroupingSuggestionMutationResult = NonNullable<
+	Awaited<ReturnType<typeof generateStudyGroupingSuggestion>>
+>;
+
+export type GenerateStudyGroupingSuggestionMutationError = ErrorType<ApiErrorBody>;
+
+export const createGenerateStudyGroupingSuggestion = <
+	TError = ErrorType<ApiErrorBody>,
+	TContext = unknown
+>(
+	options?: () => {
+		mutation?: CreateMutationOptions<
+			Awaited<ReturnType<typeof generateStudyGroupingSuggestion>>,
+			TError,
+			{ projectId: string; reportId: string },
+			TContext
+		>;
+		request?: SecondParameter<typeof customFetch>;
+	},
+	queryClient?: () => QueryClient
+): CreateMutationResult<
+	Awaited<ReturnType<typeof generateStudyGroupingSuggestion>>,
+	TError,
+	{ projectId: string; reportId: string },
+	TContext
+> => {
+	return createMutation(
+		() => ({ ...getGenerateStudyGroupingSuggestionMutationOptions(options?.()) }),
+		queryClient
+	);
+};
+export type generateDataExtractionSuggestionResponse200 = {
+	data: AiProposalDto;
+	status: 200;
+};
+
+export type generateDataExtractionSuggestionResponse400 = {
+	data: ApiErrorBody;
+	status: 400;
+};
+
+export type generateDataExtractionSuggestionResponse404 = {
+	data: ApiErrorBody;
+	status: 404;
+};
+
+export type generateDataExtractionSuggestionResponse500 = {
+	data: ApiErrorBody;
+	status: 500;
+};
+
+export type generateDataExtractionSuggestionResponse503 = {
+	data: ApiErrorBody;
+	status: 503;
+};
+
+export type generateDataExtractionSuggestionResponseSuccess =
+	generateDataExtractionSuggestionResponse200 & {
+		headers: Headers;
+	};
+export type generateDataExtractionSuggestionResponseError = (
+	| generateDataExtractionSuggestionResponse400
+	| generateDataExtractionSuggestionResponse404
+	| generateDataExtractionSuggestionResponse500
+	| generateDataExtractionSuggestionResponse503
+) & {
+	headers: Headers;
+};
+
+export const getGenerateDataExtractionSuggestionUrl = (projectId: string, studyId: string) => {
+	return `/api/projects/${projectId}/studies/${studyId}/ai/extraction`;
+};
+
+export const generateDataExtractionSuggestion = async (
+	projectId: string,
+	studyId: string,
+	options?: RequestInit
+): Promise<generateDataExtractionSuggestionResponseSuccess> => {
+	return customFetch<generateDataExtractionSuggestionResponseSuccess>(
+		getGenerateDataExtractionSuggestionUrl(projectId, studyId),
+		{
+			...options,
+			method: 'POST'
+		}
+	);
+};
+
+export const getGenerateDataExtractionSuggestionMutationOptions = <
+	TError = ErrorType<ApiErrorBody>,
+	TContext = unknown
+>(options?: {
+	mutation?: CreateMutationOptions<
+		Awaited<ReturnType<typeof generateDataExtractionSuggestion>>,
+		TError,
+		{ projectId: string; studyId: string },
+		TContext
+	>;
+	request?: SecondParameter<typeof customFetch>;
+}): CreateMutationOptions<
+	Awaited<ReturnType<typeof generateDataExtractionSuggestion>>,
+	TError,
+	{ projectId: string; studyId: string },
+	TContext
+> => {
+	const mutationKey = ['generateDataExtractionSuggestion'];
+	const { mutation: mutationOptions, request: requestOptions } = options
+		? options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey
+			? options
+			: { ...options, mutation: { ...options.mutation, mutationKey } }
+		: { mutation: { mutationKey }, request: undefined };
+
+	const mutationFn: MutationFunction<
+		Awaited<ReturnType<typeof generateDataExtractionSuggestion>>,
+		{ projectId: string; studyId: string }
+	> = (props) => {
+		const { projectId, studyId } = props ?? {};
+
+		return generateDataExtractionSuggestion(projectId, studyId, requestOptions);
+	};
+
+	return { mutationFn, ...mutationOptions };
+};
+
+export type GenerateDataExtractionSuggestionMutationResult = NonNullable<
+	Awaited<ReturnType<typeof generateDataExtractionSuggestion>>
+>;
+
+export type GenerateDataExtractionSuggestionMutationError = ErrorType<ApiErrorBody>;
+
+export const createGenerateDataExtractionSuggestion = <
+	TError = ErrorType<ApiErrorBody>,
+	TContext = unknown
+>(
+	options?: () => {
+		mutation?: CreateMutationOptions<
+			Awaited<ReturnType<typeof generateDataExtractionSuggestion>>,
+			TError,
+			{ projectId: string; studyId: string },
+			TContext
+		>;
+		request?: SecondParameter<typeof customFetch>;
+	},
+	queryClient?: () => QueryClient
+): CreateMutationResult<
+	Awaited<ReturnType<typeof generateDataExtractionSuggestion>>,
+	TError,
+	{ projectId: string; studyId: string },
+	TContext
+> => {
+	return createMutation(
+		() => ({ ...getGenerateDataExtractionSuggestionMutationOptions(options?.()) }),
 		queryClient
 	);
 };

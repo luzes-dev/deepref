@@ -6,8 +6,8 @@ use deepref_ai::{
 };
 use deepref_domain::{DocumentBlockId, DocumentId, ProjectId};
 use deepref_postgres::{
-    PostgresAiStore, insert_model_route, migrate, persist_document_block_embedding,
-    resolve_ai_proposal,
+    PostgresAiStore, get_ai_study_grouping_target, insert_model_route, migrate,
+    persist_document_block_embedding, resolve_ai_proposal,
 };
 use sqlx::{PgPool, postgres::PgPoolOptions};
 use uuid::Uuid;
@@ -134,6 +134,77 @@ async fn extra_block(
     .expect("extra block");
 }
 
+#[tokio::test]
+async fn study_grouping_target_executes_without_candidates_and_with_current_candidate() {
+    let Some(pool) = database().await else { return };
+    let project_id = Uuid::new_v4();
+    let report_id = Uuid::new_v4();
+    sqlx::query("INSERT INTO projects (id,name) VALUES ($1,'grouping SQL bind test')")
+        .bind(project_id)
+        .execute(&pool)
+        .await
+        .expect("project inserts");
+    sqlx::query(
+        "INSERT INTO reports (id,title,abstract_text,publication_year)
+         VALUES ($1,'Current grouping report','A grouping test',2026)",
+    )
+    .bind(report_id)
+    .execute(&pool)
+    .await
+    .expect("report inserts");
+    sqlx::query("INSERT INTO project_reports (project_id,report_id) VALUES ($1,$2)")
+        .bind(project_id)
+        .bind(report_id)
+        .execute(&pool)
+        .await
+        .expect("project report inserts");
+
+    let empty = get_ai_study_grouping_target(&pool, project_id, report_id)
+        .await
+        .expect("empty-candidate grouping target");
+    assert!(empty.current_study_id.is_none());
+    assert!(empty.current_study_revision.is_none());
+    assert!(empty.studies.is_empty());
+
+    let study_id = Uuid::new_v4();
+    sqlx::query(
+        "INSERT INTO studies
+         (id,project_id,title,design_context,study_revision,updated_by_actor_kind,updated_by_actor_id)
+         VALUES ($1,$2,'Current study','{}'::jsonb,0,'system','grouping-test')",
+    )
+    .bind(study_id)
+    .bind(project_id)
+    .execute(&pool)
+    .await
+    .expect("study inserts");
+    sqlx::query(
+        "INSERT INTO study_reports (project_id,study_id,report_id,relationship)
+         VALUES ($1,$2,$3,'report_of_study')",
+    )
+    .bind(project_id)
+    .bind(study_id)
+    .bind(report_id)
+    .execute(&pool)
+    .await
+    .expect("study membership inserts");
+
+    let current = get_ai_study_grouping_target(&pool, project_id, report_id)
+        .await
+        .expect("current-candidate grouping target");
+    assert_eq!(current.current_study_id, Some(study_id));
+    assert_eq!(current.current_study_revision, Some(0));
+    assert_eq!(current.studies.len(), 1);
+    assert_eq!(current.studies[0].study_id, study_id);
+    assert_eq!(current.studies[0].reports.len(), 1);
+    assert_eq!(current.studies[0].reports[0].report_id, report_id);
+
+    sqlx::query("DELETE FROM projects WHERE id=$1")
+        .bind(project_id)
+        .execute(&pool)
+        .await
+        .expect("grouping SQL bind test cleanup");
+}
+
 fn route(provider: &str) -> ResolvedModel {
     ResolvedModel {
         profile: ModelProfile::FastClassifier,
@@ -203,6 +274,7 @@ async fn postgres_ai_adapters_persist_routes_runs_embeddings_hybrid_results_and_
     let results = store
         .retrieve(RetrievalRequest {
             project_id,
+            study_id: None,
             report_id: None,
             document_id: Some(DocumentId::new(document_id)),
             query: "alpha".to_owned(),
@@ -590,6 +662,7 @@ async fn hybrid_retrieval_is_dimension_safe_parser_scoped_and_prefix_ordered() {
     let report_scoped = store
         .retrieve(RetrievalRequest {
             project_id,
+            study_id: None,
             report_id: Some(original_report_id),
             document_id: None,
             query: "alpha".to_owned(),
@@ -656,6 +729,7 @@ async fn hybrid_retrieval_is_dimension_safe_parser_scoped_and_prefix_ordered() {
     let lexical = store
         .retrieve(RetrievalRequest {
             project_id,
+            study_id: None,
             report_id: None,
             document_id: Some(DocumentId::new(document_id)),
             query: "alpha".to_owned(),
@@ -677,6 +751,7 @@ async fn hybrid_retrieval_is_dimension_safe_parser_scoped_and_prefix_ordered() {
     let vector_only = store
         .retrieve(RetrievalRequest {
             project_id,
+            study_id: None,
             report_id: None,
             document_id: Some(DocumentId::new(document_id)),
             query: String::new(),
@@ -692,6 +767,7 @@ async fn hybrid_retrieval_is_dimension_safe_parser_scoped_and_prefix_ordered() {
     let prefix = store
         .retrieve(RetrievalRequest {
             project_id,
+            study_id: None,
             report_id: None,
             document_id: Some(DocumentId::new(document_id)),
             query: "alpha".to_owned(),
@@ -992,6 +1068,7 @@ async fn embedding_generations_are_versioned_and_evidence_is_project_scoped_with
     let retrieved = store
         .retrieve(RetrievalRequest {
             project_id: project_a,
+            study_id: None,
             report_id: None,
             document_id: Some(DocumentId::new(document_a)),
             query: "alpha".to_owned(),

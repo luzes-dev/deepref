@@ -34,4 +34,8 @@ export type ListAiProposalsParams = {
 	 * Dedupe candidate report target
 	 */
 	candidate_report_id?: string;
+	/**
+	 * Study-scoped proposal target
+	 */
+	target_study_id?: string;
 };

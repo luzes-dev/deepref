@@ -82,19 +82,28 @@ pub async fn complete_appraisal(
     input: AppraisalAssessmentInput,
     actor: Actor,
 ) -> Result<AppraisalAssessmentRecord, AppraisalError> {
+    let mut transaction = pool.begin().await?;
+    let assessment_id =
+        complete_appraisal_in_transaction(&mut transaction, project_id, report_id, input, actor)
+            .await?;
+    transaction.commit().await?;
+    get_appraisal(pool, project_id.into(), report_id.into(), assessment_id).await
+}
+
+pub async fn complete_appraisal_in_transaction(
+    transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    project_id: ProjectId,
+    report_id: ReportId,
+    input: AppraisalAssessmentInput,
+    actor: Actor,
+) -> Result<Uuid, AppraisalError> {
     let definition =
         get_appraisal_definition(input.definition_id.as_str(), input.definition_version.get())?;
     validate_assessment_input(&definition, &input)?;
-    let mut transaction = pool.begin().await?;
-    ensure_project_report_tx(&mut transaction, project_id.into(), report_id.into()).await?;
+    ensure_project_report_tx(transaction, project_id.into(), report_id.into()).await?;
     for evidence in &input.evidence {
-        if !evidence_belongs_to_report(
-            &mut transaction,
-            project_id.into(),
-            report_id.into(),
-            evidence,
-        )
-        .await?
+        if !evidence_belongs_to_report(transaction, project_id.into(), report_id.into(), evidence)
+            .await?
         {
             return Err(AppraisalError::EvidenceNotInReport);
         }
@@ -122,17 +131,10 @@ pub async fn complete_appraisal(
     .bind(&judgments)
     .bind(actor.kind().as_str())
     .bind(actor.id())
-    .execute(&mut *transaction)
+    .execute(&mut **transaction)
     .await?;
     for evidence in &input.evidence {
-        insert_evidence(
-            &mut transaction,
-            assessment_id,
-            project_id,
-            report_id,
-            evidence,
-        )
-        .await?;
+        insert_evidence(transaction, assessment_id, project_id, report_id, evidence).await?;
     }
     let event = AppraisalCompleted {
         assessment_id,
@@ -157,10 +159,9 @@ pub async fn complete_appraisal(
     )
     .bind(actor.kind().as_str())
     .bind(actor.id())
-    .execute(&mut *transaction)
+    .execute(&mut **transaction)
     .await?;
-    transaction.commit().await?;
-    get_appraisal(pool, project_id.into(), report_id.into(), assessment_id).await
+    Ok(assessment_id)
 }
 
 pub async fn get_appraisal(
@@ -264,18 +265,32 @@ async fn evidence_belongs_to_report(
     report_id: Uuid,
     evidence: &EvidenceReferenceInput,
 ) -> Result<bool, AppraisalError> {
+    let page = match evidence.page {
+        Some(page) => Some(i32::try_from(page).map_err(|_| AppraisalError::EvidenceNotInReport)?),
+        None => None,
+    };
     let exists = sqlx::query_scalar::<_, bool>(
         "SELECT EXISTS(
            SELECT 1 FROM document_blocks b
            JOIN documents d ON d.id=b.document_id
+           JOIN document_pages p ON p.document_id=b.document_id
+             AND p.parser_version=b.parser_version
+             AND p.page_number=b.page_number AND p.active
            WHERE b.id=$1 AND b.document_id=$2 AND b.active
              AND d.project_id=$3 AND d.report_id=$4
+             AND ($5::integer IS NULL OR b.page_number=$5)
+             AND ($6::text IS NULL OR b.parser_version=$6)
+             AND ($7::text IS NULL OR b.content_hash=$7)
+             AND ($6::text IS NULL OR d.active_parser_version=$6)
          )",
     )
     .bind(evidence.block_id)
     .bind(evidence.document_id)
     .bind(project_id)
     .bind(report_id)
+    .bind(page)
+    .bind(evidence.parser_version.as_deref())
+    .bind(evidence.content_hash.as_deref())
     .fetch_one(&mut **transaction)
     .await?;
     Ok(exists)

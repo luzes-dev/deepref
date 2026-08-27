@@ -8,6 +8,7 @@ mod dedupe;
 mod gateway;
 mod grounding;
 mod policy;
+mod pr13;
 mod prompts;
 mod runner;
 mod screening;
@@ -21,6 +22,7 @@ pub use deepref_domain::{Actor, ActorKind};
 pub use gateway::{AiGateway, EmbeddingGateway, RigEmbeddingGateway, RigGateway, RoutedGateway};
 pub use grounding::GroundingContextBuilder;
 pub use policy::{PolicyDecision, PolicyEngine, PolicyInput, ProjectAiPolicy, RequestedAction};
+pub use pr13::*;
 pub use prompts::{PromptDefinition, PromptRegistry, PromptVersion};
 pub use runner::{
     AiRunStore, AiTask, AiTaskResult, AiTaskRunner, Clock, EvidenceRetriever, IdProvider,

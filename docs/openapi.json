@@ -801,6 +801,16 @@
               "type": "string",
               "format": "uuid"
             }
+          },
+          {
+            "name": "target_study_id",
+            "in": "query",
+            "description": "Study-scoped proposal target",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
           }
         ],
         "responses": {
@@ -1472,6 +1482,139 @@
           },
           "500": {
             "description": "Internal server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/projects/{project_id}/extraction/fields": {
+      "get": {
+        "tags": [
+          "extraction"
+        ],
+        "operationId": "listExtractionFields",
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/ExtractionFieldDto"
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "extraction"
+        ],
+        "operationId": "createExtractionField",
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateExtractionFieldRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExtractionFieldDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "",
             "content": {
               "application/json": {
                 "schema": {
@@ -2216,6 +2359,106 @@
         }
       }
     },
+    "/projects/{project_id}/reports/{report_id}/ai/appraisal-prefill": {
+      "post": {
+        "tags": [
+          "ai"
+        ],
+        "operationId": "generateAppraisalPrefillSuggestion",
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "report_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GenerateAppraisalPrefillRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AiProposalDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/projects/{project_id}/reports/{report_id}/ai/screening": {
       "post": {
         "tags": [
@@ -2307,6 +2550,96 @@
           },
           "503": {
             "description": "AI provider is unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/projects/{project_id}/reports/{report_id}/ai/study-grouping": {
+      "post": {
+        "tags": [
+          "ai"
+        ],
+        "operationId": "generateStudyGroupingSuggestion",
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "report_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AiProposalDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "",
             "content": {
               "application/json": {
                 "schema": {
@@ -4425,6 +4758,86 @@
         }
       }
     },
+    "/projects/{project_id}/studies/{study_id}/ai/extraction": {
+      "post": {
+        "tags": [
+          "ai"
+        ],
+        "operationId": "generateDataExtractionSuggestion",
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "study_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AiProposalDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/projects/{project_id}/studies/{study_id}/classification": {
       "put": {
         "tags": [
@@ -4493,6 +4906,69 @@
             }
           },
           "409": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/projects/{project_id}/studies/{study_id}/extraction": {
+      "get": {
+        "tags": [
+          "extraction"
+        ],
+        "operationId": "listStudyExtractionValues",
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "study_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/ExtractionValueDto"
+                  }
+                }
+              }
+            }
+          },
+          "404": {
             "description": "",
             "content": {
               "application/json": {
@@ -4733,6 +5209,183 @@
           }
         }
       },
+      "AiAppraisalAnswerValueDto": {
+        "oneOf": [
+          {
+            "type": "object",
+            "required": [
+              "value",
+              "kind"
+            ],
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "enum"
+                ]
+              },
+              "value": {
+                "type": "string"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "value",
+              "kind"
+            ],
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "boolean"
+                ]
+              },
+              "value": {
+                "type": "boolean"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "value",
+              "kind"
+            ],
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "scale"
+                ]
+              },
+              "value": {
+                "type": "integer",
+                "format": "int64"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "value",
+              "kind"
+            ],
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "text"
+                ]
+              },
+              "value": {
+                "type": "string"
+              }
+            }
+          }
+        ]
+      },
+      "AiAppraisalPrefillAnswerDto": {
+        "type": "object",
+        "required": [
+          "question_id",
+          "answer",
+          "rationale",
+          "evidence"
+        ],
+        "properties": {
+          "answer": {
+            "$ref": "#/components/schemas/AiAppraisalAnswerValueDto"
+          },
+          "evidence": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AiAppraisalPrefillEvidenceDto"
+            }
+          },
+          "question_id": {
+            "type": "string"
+          },
+          "rationale": {
+            "type": "string"
+          }
+        }
+      },
+      "AiAppraisalPrefillEvidenceDto": {
+        "type": "object",
+        "required": [
+          "document_id",
+          "document_block_id",
+          "page",
+          "parser_version",
+          "content_hash"
+        ],
+        "properties": {
+          "content_hash": {
+            "type": "string"
+          },
+          "document_block_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "document_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "page": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "parser_version": {
+            "type": "string"
+          }
+        }
+      },
+      "AiAppraisalPrefillProposalPayload": {
+        "type": "object",
+        "required": [
+          "report_id",
+          "definition_id",
+          "definition_version",
+          "answers",
+          "domain_judgments",
+          "overall_judgment"
+        ],
+        "properties": {
+          "answers": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AiAppraisalPrefillAnswerDto"
+            }
+          },
+          "definition_id": {
+            "type": "string"
+          },
+          "definition_version": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "domain_judgments": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string"
+            },
+            "propertyNames": {
+              "type": "string"
+            }
+          },
+          "overall_judgment": {
+            "type": "string"
+          },
+          "report_id": {
+            "type": "string",
+            "format": "uuid"
+          }
+        }
+      },
       "AiCriterionJudgmentDto": {
         "type": "object",
         "required": [
@@ -4771,6 +5424,25 @@
           "does_not_meet",
           "unclear"
         ]
+      },
+      "AiDataExtractionProposalPayload": {
+        "type": "object",
+        "required": [
+          "study_id",
+          "fields"
+        ],
+        "properties": {
+          "fields": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AiExtractedFieldDto"
+            }
+          },
+          "study_id": {
+            "type": "string",
+            "format": "uuid"
+          }
+        }
       },
       "AiDuplicateCandidateDto": {
         "type": "object",
@@ -4975,6 +5647,112 @@
           }
         ]
       },
+      "AiExtractedFieldDto": {
+        "oneOf": [
+          {
+            "type": "object",
+            "required": [
+              "field_id",
+              "field_version",
+              "value",
+              "rationale",
+              "source",
+              "kind"
+            ],
+            "properties": {
+              "field_id": {
+                "type": "string",
+                "format": "uuid"
+              },
+              "field_version": {
+                "type": "integer",
+                "format": "int32",
+                "minimum": 0
+              },
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "value"
+                ]
+              },
+              "rationale": {
+                "type": "string"
+              },
+              "source": {
+                "$ref": "#/components/schemas/AiExtractionEvidenceDto"
+              },
+              "value": {
+                "$ref": "#/components/schemas/AiTypedExtractionValueDto"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "field_id",
+              "field_version",
+              "rationale",
+              "kind"
+            ],
+            "properties": {
+              "field_id": {
+                "type": "string",
+                "format": "uuid"
+              },
+              "field_version": {
+                "type": "integer",
+                "format": "int32",
+                "minimum": 0
+              },
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "insufficient_evidence"
+                ]
+              },
+              "rationale": {
+                "type": "string"
+              }
+            }
+          }
+        ]
+      },
+      "AiExtractionEvidenceDto": {
+        "type": "object",
+        "required": [
+          "report_id",
+          "document_id",
+          "document_block_id",
+          "page",
+          "parser_version",
+          "content_hash"
+        ],
+        "properties": {
+          "content_hash": {
+            "type": "string"
+          },
+          "document_block_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "document_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "page": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "parser_version": {
+            "type": "string"
+          },
+          "report_id": {
+            "type": "string",
+            "format": "uuid"
+          }
+        }
+      },
       "AiIdentityProvenanceDto": {
         "type": "object",
         "required": [
@@ -5039,6 +5817,9 @@
           "model_version",
           "prompt_version",
           "schema_version",
+          "prompt_hash",
+          "schema_hash",
+          "input_hash",
           "status",
           "created_at"
         ],
@@ -5060,6 +5841,12 @@
           "entity_type": {
             "type": "string"
           },
+          "evidence_hash": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "expected_revision": {
             "type": [
               "integer",
@@ -5070,6 +5857,9 @@
           "id": {
             "type": "string",
             "format": "uuid"
+          },
+          "input_hash": {
+            "type": "string"
           },
           "model": {
             "type": "string"
@@ -5090,6 +5880,9 @@
           "project_id": {
             "type": "string",
             "format": "uuid"
+          },
+          "prompt_hash": {
+            "type": "string"
           },
           "prompt_version": {
             "type": "string"
@@ -5129,6 +5922,9 @@
               "null"
             ]
           },
+          "schema_hash": {
+            "type": "string"
+          },
           "schema_version": {
             "type": "string"
           },
@@ -5143,6 +5939,13 @@
             "format": "uuid"
           },
           "target_report_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          },
+          "target_study_id": {
             "type": [
               "string",
               "null"
@@ -5197,6 +6000,149 @@
                 }
               }
             ]
+          },
+          {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/AiStudyGroupingProposalPayload"
+              },
+              {
+                "type": "object",
+                "required": [
+                  "kind"
+                ],
+                "properties": {
+                  "kind": {
+                    "type": "string",
+                    "enum": [
+                      "study_grouping"
+                    ]
+                  }
+                }
+              }
+            ]
+          },
+          {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/AiAppraisalPrefillProposalPayload"
+              },
+              {
+                "type": "object",
+                "required": [
+                  "kind"
+                ],
+                "properties": {
+                  "kind": {
+                    "type": "string",
+                    "enum": [
+                      "appraisal_prefill"
+                    ]
+                  }
+                }
+              }
+            ]
+          },
+          {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/AiDataExtractionProposalPayload"
+              },
+              {
+                "type": "object",
+                "required": [
+                  "kind"
+                ],
+                "properties": {
+                  "kind": {
+                    "type": "string",
+                    "enum": [
+                      "data_extraction"
+                    ]
+                  }
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "AiReviewedProposalPayload": {
+        "oneOf": [
+          {
+            "type": "object",
+            "required": [
+              "report_id",
+              "definition_id",
+              "definition_version",
+              "answers",
+              "domain_judgments",
+              "overall_judgment",
+              "kind"
+            ],
+            "properties": {
+              "answers": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/AiAppraisalPrefillAnswerDto"
+                }
+              },
+              "definition_id": {
+                "type": "string"
+              },
+              "definition_version": {
+                "type": "integer",
+                "format": "int32",
+                "minimum": 0
+              },
+              "domain_judgments": {
+                "type": "object",
+                "additionalProperties": {
+                  "type": "string"
+                },
+                "propertyNames": {
+                  "type": "string"
+                }
+              },
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "appraisal_prefill"
+                ]
+              },
+              "overall_judgment": {
+                "type": "string"
+              },
+              "report_id": {
+                "type": "string",
+                "format": "uuid"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "study_id",
+              "fields",
+              "kind"
+            ],
+            "properties": {
+              "fields": {
+                "type": "array",
+                "items": {
+                  "$ref": "#/components/schemas/AiExtractedFieldDto"
+                }
+              },
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "data_extraction"
+                ]
+              },
+              "study_id": {
+                "type": "string",
+                "format": "uuid"
+              }
+            }
           }
         ]
       },
@@ -5329,6 +6275,199 @@
           "full_text"
         ]
       },
+      "AiStudyGroupingChoiceDto": {
+        "oneOf": [
+          {
+            "type": "object",
+            "required": [
+              "study_id",
+              "expected_revision",
+              "kind"
+            ],
+            "properties": {
+              "expected_revision": {
+                "type": "integer",
+                "format": "int64"
+              },
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "existing_study"
+                ]
+              },
+              "study_id": {
+                "type": "string",
+                "format": "uuid"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "title",
+              "kind"
+            ],
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "new_study"
+                ]
+              },
+              "title": {
+                "type": "string"
+              }
+            }
+          }
+        ]
+      },
+      "AiStudyGroupingEvidenceDto": {
+        "oneOf": [
+          {
+            "type": "object",
+            "required": [
+              "report_id",
+              "field",
+              "content_hash",
+              "kind"
+            ],
+            "properties": {
+              "content_hash": {
+                "type": "string"
+              },
+              "field": {
+                "$ref": "#/components/schemas/AiStudyGroupingFieldDto"
+              },
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "report_metadata"
+                ]
+              },
+              "report_id": {
+                "type": "string",
+                "format": "uuid"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "study_id",
+              "field",
+              "content_hash",
+              "kind"
+            ],
+            "properties": {
+              "content_hash": {
+                "type": "string"
+              },
+              "field": {
+                "$ref": "#/components/schemas/AiStudyGroupingFieldDto"
+              },
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "study_metadata"
+                ]
+              },
+              "study_id": {
+                "type": "string",
+                "format": "uuid"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "study_id",
+              "report_id",
+              "field",
+              "content_hash",
+              "kind"
+            ],
+            "properties": {
+              "content_hash": {
+                "type": "string"
+              },
+              "field": {
+                "$ref": "#/components/schemas/AiStudyGroupingFieldDto"
+              },
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "study_report_metadata"
+                ]
+              },
+              "report_id": {
+                "type": "string",
+                "format": "uuid"
+              },
+              "study_id": {
+                "type": "string",
+                "format": "uuid"
+              }
+            }
+          }
+        ]
+      },
+      "AiStudyGroupingFieldDto": {
+        "type": "string",
+        "enum": [
+          "title",
+          "abstract",
+          "publication_year",
+          "first_author"
+        ]
+      },
+      "AiStudyGroupingProposalPayload": {
+        "type": "object",
+        "required": [
+          "report_id",
+          "choice",
+          "rationale",
+          "provenance",
+          "uncertainties"
+        ],
+        "properties": {
+          "choice": {
+            "$ref": "#/components/schemas/AiStudyGroupingChoiceDto"
+          },
+          "expected_previous_study_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          },
+          "expected_previous_study_revision": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64"
+          },
+          "provenance": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AiStudyGroupingEvidenceDto"
+            }
+          },
+          "rationale": {
+            "type": "string"
+          },
+          "report_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "uncertainties": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      },
       "AiSuggestedDecisionDto": {
         "oneOf": [
           {
@@ -5391,6 +6530,83 @@
                 "enum": [
                   "insufficient_evidence"
                 ]
+              }
+            }
+          }
+        ]
+      },
+      "AiTypedExtractionValueDto": {
+        "oneOf": [
+          {
+            "type": "object",
+            "required": [
+              "value",
+              "kind"
+            ],
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "text"
+                ]
+              },
+              "value": {
+                "type": "string"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "value",
+              "kind"
+            ],
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "number"
+                ]
+              },
+              "value": {
+                "type": "number",
+                "format": "double"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "value",
+              "kind"
+            ],
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "boolean"
+                ]
+              },
+              "value": {
+                "type": "boolean"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "value",
+              "kind"
+            ],
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "date"
+                ]
+              },
+              "value": {
+                "type": "string"
               }
             }
           }
@@ -5866,6 +7082,42 @@
           }
         }
       },
+      "CreateExtractionFieldRequest": {
+        "type": "object",
+        "required": [
+          "version",
+          "field_key",
+          "label",
+          "value_type",
+          "required"
+        ],
+        "properties": {
+          "field_key": {
+            "type": "string"
+          },
+          "id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          },
+          "label": {
+            "type": "string"
+          },
+          "required": {
+            "type": "boolean"
+          },
+          "value_type": {
+            "type": "string"
+          },
+          "version": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          }
+        }
+      },
       "CreateIngestion": {
         "type": "object",
         "required": [
@@ -5980,6 +7232,16 @@
           },
           "reason": {
             "type": "string"
+          },
+          "reviewed_payload": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/AiReviewedProposalPayload"
+              }
+            ]
           }
         }
       },
@@ -6472,6 +7734,198 @@
           }
         }
       },
+      "ExtractionFieldDto": {
+        "type": "object",
+        "required": [
+          "id",
+          "project_id",
+          "version",
+          "field_key",
+          "label",
+          "value_type",
+          "required"
+        ],
+        "properties": {
+          "field_key": {
+            "type": "string"
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "label": {
+            "type": "string"
+          },
+          "project_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "required": {
+            "type": "boolean"
+          },
+          "value_type": {
+            "type": "string"
+          },
+          "version": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          }
+        }
+      },
+      "ExtractionValueDto": {
+        "type": "object",
+        "required": [
+          "id",
+          "study_id",
+          "report_id",
+          "field_definition_id",
+          "field_definition_version",
+          "value",
+          "rationale",
+          "source_document_id",
+          "source_block_id",
+          "source_page",
+          "source_parser_version",
+          "source_content_hash",
+          "approved_by_actor_kind",
+          "approved_by_actor_id",
+          "approved_at"
+        ],
+        "properties": {
+          "approved_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "approved_by_actor_id": {
+            "type": "string"
+          },
+          "approved_by_actor_kind": {
+            "type": "string"
+          },
+          "field_definition_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "field_definition_version": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "rationale": {
+            "type": "string"
+          },
+          "report_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "source_block_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "source_content_hash": {
+            "type": "string"
+          },
+          "source_document_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "source_page": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "source_parser_version": {
+            "type": "string"
+          },
+          "study_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "value": {
+            "$ref": "#/components/schemas/ExtractionValueDtoValue"
+          }
+        }
+      },
+      "ExtractionValueDtoValue": {
+        "oneOf": [
+          {
+            "type": "object",
+            "required": [
+              "value",
+              "kind"
+            ],
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "text"
+                ]
+              },
+              "value": {
+                "type": "string"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "value",
+              "kind"
+            ],
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "number"
+                ]
+              },
+              "value": {
+                "type": "number",
+                "format": "double"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "value",
+              "kind"
+            ],
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "boolean"
+                ]
+              },
+              "value": {
+                "type": "boolean"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "value",
+              "kind"
+            ],
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "date"
+                ]
+              },
+              "value": {
+                "type": "string"
+              }
+            }
+          }
+        ]
+      },
       "FrameworkKindInput": {
         "type": "string",
         "enum": [
@@ -6581,6 +8035,23 @@
               "string",
               "null"
             ]
+          }
+        }
+      },
+      "GenerateAppraisalPrefillRequest": {
+        "type": "object",
+        "required": [
+          "definition_id",
+          "definition_version"
+        ],
+        "properties": {
+          "definition_id": {
+            "type": "string"
+          },
+          "definition_version": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
           }
         }
       },
@@ -7144,6 +8615,9 @@
                 "model_version",
                 "prompt_version",
                 "schema_version",
+                "prompt_hash",
+                "schema_hash",
+                "input_hash",
                 "status",
                 "created_at"
               ],
@@ -7165,6 +8639,12 @@
                 "entity_type": {
                   "type": "string"
                 },
+                "evidence_hash": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
                 "expected_revision": {
                   "type": [
                     "integer",
@@ -7175,6 +8655,9 @@
                 "id": {
                   "type": "string",
                   "format": "uuid"
+                },
+                "input_hash": {
+                  "type": "string"
                 },
                 "model": {
                   "type": "string"
@@ -7195,6 +8678,9 @@
                 "project_id": {
                   "type": "string",
                   "format": "uuid"
+                },
+                "prompt_hash": {
+                  "type": "string"
                 },
                 "prompt_version": {
                   "type": "string"
@@ -7234,6 +8720,9 @@
                     "null"
                   ]
                 },
+                "schema_hash": {
+                  "type": "string"
+                },
                 "schema_version": {
                   "type": "string"
                 },
@@ -7248,6 +8737,13 @@
                   "format": "uuid"
                 },
                 "target_report_id": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "format": "uuid"
+                },
+                "target_study_id": {
                   "type": [
                     "string",
                     "null"
@@ -9275,6 +10771,13 @@
           "expected_revision"
         ],
         "properties": {
+          "expected_previous_study_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          },
           "expected_previous_study_revision": {
             "type": [
               "integer",

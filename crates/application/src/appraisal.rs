@@ -111,6 +111,9 @@ pub struct EvidenceReferenceInput {
     pub question_id: String,
     pub document_id: Uuid,
     pub block_id: Uuid,
+    pub page: Option<u32>,
+    pub parser_version: Option<String>,
+    pub content_hash: Option<String>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -523,6 +526,9 @@ mod tests {
                 question_id: "allocation_description".to_owned(),
                 document_id: Uuid::new_v4(),
                 block_id: Uuid::new_v4(),
+                page: None,
+                parser_version: None,
+                content_hash: None,
             }],
             domain_judgments: BTreeMap::from([
                 ("allocation".to_owned(), "low_concern".to_owned()),

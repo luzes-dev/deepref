@@ -283,6 +283,7 @@ impl GroundedBlock {
 #[derive(Debug, Clone, PartialEq)]
 pub struct RetrievalRequest {
     pub project_id: ProjectId,
+    pub study_id: Option<Uuid>,
     pub report_id: Option<Uuid>,
     pub document_id: Option<DocumentId>,
     pub query: String,
@@ -575,7 +576,10 @@ pub fn sha256_bytes(bytes: &[u8]) -> String {
 }
 
 pub fn is_sha256(value: &str) -> bool {
-    value.len() == 64 && value.bytes().all(|byte| byte.is_ascii_hexdigit())
+    value.len() == 64
+        && value
+            .bytes()
+            .all(|byte| byte.is_ascii_digit() || (b'a'..=b'f').contains(&byte))
 }
 
 fn canonicalize(value: &Value) -> Value {

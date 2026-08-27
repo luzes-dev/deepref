@@ -4,8 +4,11 @@
  * DeepRef API
  * OpenAPI spec version: 0.1.0
  */
+import type { AiAppraisalPrefillProposalPayload } from './aiAppraisalPrefillProposalPayload.ts';
+import type { AiDataExtractionProposalPayload } from './aiDataExtractionProposalPayload.ts';
 import type { AiDuplicateProposalPayload } from './aiDuplicateProposalPayload.ts';
 import type { AiScreeningProposalPayload } from './aiScreeningProposalPayload.ts';
+import type { AiStudyGroupingProposalPayload } from './aiStudyGroupingProposalPayload.ts';
 
 export type AiProposalPayload =
 	| (AiScreeningProposalPayload & {
@@ -13,4 +16,13 @@ export type AiProposalPayload =
 	  })
 	| (AiDuplicateProposalPayload & {
 			kind: 'duplicate';
+	  })
+	| (AiStudyGroupingProposalPayload & {
+			kind: 'study_grouping';
+	  })
+	| (AiAppraisalPrefillProposalPayload & {
+			kind: 'appraisal_prefill';
+	  })
+	| (AiDataExtractionProposalPayload & {
+			kind: 'data_extraction';
 	  });

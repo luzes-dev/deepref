@@ -4,6 +4,7 @@ mod articles;
 mod deduplication;
 mod documents;
 mod exports;
+mod extraction;
 mod health;
 mod ingestions;
 mod pagination;
@@ -65,7 +66,13 @@ fn openapi_router(document_max_bytes: usize) -> OpenApiRouter<AppState> {
         .routes(routes!(deduplication::decide_project_dedupe_proposal))
         .routes(routes!(deduplication::resolve_project_record))
         .routes(routes!(ai::generate_screening_suggestion))
+        .routes(routes!(ai::generate_study_grouping_suggestion))
+        .routes(routes!(ai::generate_appraisal_prefill_suggestion))
         .routes(routes!(ai::generate_duplicate_suggestion))
+        .routes(routes!(extraction::list_extraction_fields))
+        .routes(routes!(extraction::create_extraction_field))
+        .routes(routes!(extraction::list_study_extraction_values))
+        .routes(routes!(extraction::generate_data_extraction_suggestion))
         .routes(routes!(ai::list_ai_proposals))
         .routes(routes!(ai::get_ai_proposal))
         .routes(routes!(ai::decide_ai_proposal))
@@ -468,6 +475,33 @@ mod tests {
         assert_eq!(
             schemas["GraphEdgeDto"]["properties"]["target"]["format"],
             "uuid"
+        );
+        assert_eq!(
+            schemas["AiStudyGroupingFieldDto"]["enum"],
+            serde_json::json!(["title", "abstract", "publication_year", "first_author"])
+        );
+        for variant in schemas["AiStudyGroupingEvidenceDto"]["oneOf"]
+            .as_array()
+            .expect("grouping evidence must be a union")
+        {
+            assert_eq!(
+                variant["properties"]["field"]["$ref"],
+                "#/components/schemas/AiStudyGroupingFieldDto"
+            );
+        }
+        assert!(
+            !schemas["DecideAiProposalRequest"]["required"]
+                .as_array()
+                .expect("decision request required fields")
+                .iter()
+                .any(|field| field == "reviewed_payload")
+        );
+        assert_eq!(
+            schemas["AiTypedExtractionValueDto"]["oneOf"]
+                .as_array()
+                .expect("extraction values must be a union")
+                .len(),
+            4
         );
     }
 

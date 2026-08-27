@@ -27,6 +27,7 @@ pub struct AssignReportToStudy {
     pub report_id: ReportId,
     pub role: StudyReportRole,
     pub expected_revision: u64,
+    pub expected_previous_study_id: Option<StudyId>,
     pub expected_previous_study_revision: Option<u64>,
     pub actor: Actor,
 }
