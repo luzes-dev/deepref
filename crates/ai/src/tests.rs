@@ -1,7 +1,13 @@
-use std::sync::{Arc, Mutex};
+use std::{
+    collections::BTreeSet,
+    sync::{Arc, Mutex},
+};
 
 use chrono::{DateTime, Utc};
-use deepref_domain::{DocumentBlockId, ProjectId};
+use deepref_domain::{
+    CriterionDimension, CriterionKind, CriterionStage, DocumentBlockId, EligibilityCriterion,
+    ProjectId,
+};
 use schemars::JsonSchema;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
@@ -72,6 +78,39 @@ impl AiGateway for FakeGateway {
             *self.calls.lock().expect("calls") += 1;
             Ok(GatewayCompletion {
                 output_json: self.output.clone(),
+                input_tokens: 1,
+                output_tokens: 1,
+                cost_micros: None,
+            })
+        })
+    }
+}
+
+struct DedupeEchoGateway;
+
+impl AiGateway for DedupeEchoGateway {
+    fn complete<'a>(&'a self, request: CompletionRequest) -> AiFuture<'a, GatewayCompletion> {
+        Box::pin(async move {
+            let input: DedupeInput = serde_json::from_str(&request.user_prompt)
+                .map_err(|_| AiError::Gateway("dedupe input was not rendered".to_owned()))?;
+            let output = DuplicateAssistance {
+                candidate: DuplicateCandidate {
+                    source_record_id: input.source_record_id.as_uuid(),
+                    candidate_report_id: input.candidate_report_id.as_uuid(),
+                },
+                decision: DuplicateDecision::Match,
+                rationale: vec![DuplicateRationale {
+                    code: "grounded_signal".to_owned(),
+                    explanation: "The provider copied the deterministic grounded evidence."
+                        .to_owned(),
+                }],
+                signals: input.grounded_signals,
+                provenance: input.grounded_provenance,
+                uncertainties: Vec::new(),
+            };
+            Ok(GatewayCompletion {
+                output_json: serde_json::to_string(&output)
+                    .map_err(|_| AiError::Gateway("dedupe output failed".to_owned()))?,
                 input_tokens: 1,
                 output_tokens: 1,
                 cost_micros: None,
@@ -254,6 +293,133 @@ async fn failed_run_does_not_block_retry_and_reuse_repairs_missing_proposal() {
         .expect("reuse repair");
     assert!(reused.proposal.is_some());
     assert_eq!(*succeeding.calls.lock().expect("calls"), 1);
+}
+
+fn dedupe_task_and_input() -> (DedupeTask, DedupeInput) {
+    let project_id = ProjectId::new(Uuid::from_u128(500));
+    let source_record_id = Uuid::from_u128(501);
+    let candidate_report_id = Uuid::from_u128(502);
+    let grounded_provenance = vec![
+        IdentityProvenance {
+            entity_type: "record".to_owned(),
+            entity_id: source_record_id.to_string(),
+            field: "title".to_owned(),
+            content_hash: "a".repeat(64),
+        },
+        IdentityProvenance {
+            entity_type: "report".to_owned(),
+            entity_id: candidate_report_id.to_string(),
+            field: "title".to_owned(),
+            content_hash: "b".repeat(64),
+        },
+    ];
+    let grounded_signals = vec![DuplicateSignal::TitleSimilarity {
+        similarity: 0.9375,
+        supports_match: true,
+    }];
+    let task = DedupeTask::new(
+        project_id,
+        source_record_id.into(),
+        candidate_report_id.into(),
+        grounded_provenance.clone(),
+        grounded_signals.clone(),
+    );
+    let input = DedupeInput {
+        project_id,
+        source_record_id: source_record_id.into(),
+        candidate_report_id: candidate_report_id.into(),
+        source_title: Some("A source title".to_owned()),
+        candidate_title: Some("A candidate title".to_owned()),
+        source_year: None,
+        candidate_year: None,
+        source_author: None,
+        candidate_author: None,
+        source_title_hash: "a".repeat(64),
+        candidate_title_hash: "b".repeat(64),
+        grounded_signals,
+        grounded_provenance,
+    };
+    (task, input)
+}
+
+#[test]
+fn dedupe_context_renders_exact_grounded_signals_and_both_provenance_sides() {
+    let (task, input) = dedupe_task_and_input();
+    let context = task.build_context(&input).expect("grounded input is valid");
+    let rendered: Value = serde_json::from_str(&context.user_prompt).expect("JSON context");
+    assert_eq!(
+        rendered["grounded_signals"],
+        serde_json::to_value(&input.grounded_signals).expect("signals JSON")
+    );
+    assert_eq!(
+        rendered["grounded_provenance"],
+        serde_json::to_value(&input.grounded_provenance).expect("provenance JSON")
+    );
+    assert!(
+        context
+            .system_prompt
+            .contains("never recalculate, alter, or invent values")
+    );
+}
+
+#[tokio::test]
+async fn dedupe_rejects_divergent_grounding_before_provider_call() {
+    let (task, mut input) = dedupe_task_and_input();
+    input.grounded_signals = vec![DuplicateSignal::TitleSimilarity {
+        similarity: 0.5,
+        supports_match: false,
+    }];
+    let calls = Arc::new(Mutex::new(0));
+    let gateway = FakeGateway {
+        output: "{}".to_owned(),
+        calls: Arc::clone(&calls),
+    };
+    let runs = MemoryRuns::default();
+    let proposals = MemoryProposals::default();
+    let ids = Ids(Mutex::new(510));
+    let error = runner(
+        &gateway,
+        &Router(route("dedupe-grounding")),
+        &runs,
+        &proposals,
+        &ids,
+    )
+    .run(&task, input)
+    .await
+    .expect_err("divergent grounded signal must fail");
+    assert!(matches!(error, AiError::InvalidContext(message) if message.contains("grounding")));
+    assert_eq!(*calls.lock().expect("gateway calls"), 0);
+
+    let (task, mut input) = dedupe_task_and_input();
+    input.grounded_provenance[0].content_hash = "c".repeat(64);
+    let error = task
+        .build_context(&input)
+        .expect_err("divergent grounded provenance must fail");
+    assert!(matches!(error, AiError::InvalidContext(message) if message.contains("grounding")));
+}
+
+#[tokio::test]
+async fn dedupe_runner_accepts_provider_output_that_copies_prompted_grounding() {
+    let (task, input) = dedupe_task_and_input();
+    let runs = MemoryRuns::default();
+    let proposals = MemoryProposals::default();
+    let ids = Ids(Mutex::new(520));
+    let gateway = DedupeEchoGateway;
+    let router = Router(route("dedupe-echo"));
+    let result = AiTaskRunner::new(
+        &gateway,
+        &router,
+        &EmptyRetriever,
+        &runs,
+        &proposals,
+        &ClockFixed,
+        &ids,
+    )
+    .run(&task, input)
+    .await
+    .expect("provider output copied from grounded prompt");
+    assert_eq!(result.output.decision, DuplicateDecision::Match);
+    assert!(result.proposal.is_some());
 }
 
 #[tokio::test]
@@ -576,4 +742,333 @@ fn routed_gateway_dispatches_without_reconstructing_the_runner() {
     });
     assert_eq!(*a.calls.lock().expect("a calls"), 1);
     assert_eq!(*b.calls.lock().expect("b calls"), 1);
+}
+
+fn screening_criterion(id: Uuid, ordinal: i32, stage: CriterionStage) -> EligibilityCriterion {
+    EligibilityCriterion::new(
+        id,
+        CriterionKind::Inclusion,
+        stage,
+        CriterionDimension::Population,
+        format!("Criterion {ordinal}"),
+        "A bounded protocol criterion".to_owned(),
+        ordinal,
+    )
+    .expect("criterion")
+}
+
+fn screening_task(stage: ScreeningStage, evidence: Vec<ScreeningEvidence>) -> ScreeningTask {
+    screening_task_with_criteria(
+        stage,
+        vec![screening_criterion(
+            Uuid::from_u128(103),
+            0,
+            match stage {
+                ScreeningStage::TitleAbstract => CriterionStage::TitleAbstract,
+                ScreeningStage::FullText => CriterionStage::FullText,
+            },
+        )],
+        evidence,
+    )
+}
+
+fn screening_task_with_criteria(
+    stage: ScreeningStage,
+    criteria: Vec<EligibilityCriterion>,
+    evidence: Vec<ScreeningEvidence>,
+) -> ScreeningTask {
+    ScreeningTask::new(ScreeningTaskConfig {
+        project_id: ProjectId::new(Uuid::from_u128(100)),
+        report_id: Uuid::from_u128(101).into(),
+        stage,
+        protocol_version_id: Uuid::from_u128(102).into(),
+        expected_revision: 3,
+        criteria,
+        allowed_evidence: evidence,
+        allowed_exclusion_reasons: BTreeSet::new(),
+    })
+}
+
+#[test]
+fn screening_semantics_require_ordered_criteria_and_first_class_abstention() {
+    let task = screening_task(
+        ScreeningStage::TitleAbstract,
+        vec![ScreeningEvidence::ReportMetadata {
+            report_id: Uuid::from_u128(101),
+            field: ScreeningEvidenceField::Title,
+            content_hash: "a".repeat(64),
+        }],
+    );
+    let base = ScreeningAnalysis {
+        report_id: Uuid::from_u128(101),
+        expected_revision: 3,
+        stage: ScreeningStage::TitleAbstract,
+        protocol_version_id: Uuid::from_u128(102),
+        criteria: vec![CriterionJudgment {
+            criterion_id: Uuid::from_u128(103),
+            judgment: CriterionResult::Unclear,
+            rationale: "The abstract does not settle this criterion.".to_owned(),
+            evidence: vec![],
+        }],
+        suggested_decision: SuggestedDecision::InsufficientEvidence,
+        uncertainties: vec!["Abstract is incomplete.".to_owned()],
+    };
+    assert!(task.semantic_validate(&base).is_ok());
+
+    let mut duplicate = base.clone();
+    duplicate.criteria[0].criterion_id = Uuid::from_u128(104);
+    assert!(task.semantic_validate(&duplicate).is_err());
+
+    let mut collapsed = base;
+    collapsed.uncertainties.clear();
+    assert!(task.semantic_validate(&collapsed).is_err());
+}
+
+#[test]
+fn full_text_screening_rejects_evidence_not_in_retrieved_context() {
+    let block_id = Uuid::from_u128(201);
+    let hash = "b".repeat(64);
+    let task = screening_task(
+        ScreeningStage::FullText,
+        vec![ScreeningEvidence::DocumentBlock {
+            document_block_id: block_id,
+            page: 2,
+            content_hash: hash.clone(),
+            section_path: vec!["Results".to_owned()],
+        }],
+    );
+    assert_eq!(task.prompt_version(), "screening.full_text.v1");
+    let output = ScreeningAnalysis {
+        report_id: Uuid::from_u128(101),
+        expected_revision: 3,
+        stage: ScreeningStage::FullText,
+        protocol_version_id: Uuid::from_u128(102),
+        criteria: vec![CriterionJudgment {
+            criterion_id: Uuid::from_u128(103),
+            judgment: CriterionResult::Unclear,
+            rationale: "The retrieved block needs reviewer interpretation.".to_owned(),
+            evidence: vec![ScreeningEvidence::DocumentBlock {
+                document_block_id: block_id,
+                page: 2,
+                content_hash: hash.clone(),
+                section_path: vec!["Results".to_owned()],
+            }],
+        }],
+        suggested_decision: SuggestedDecision::Maybe,
+        uncertainties: vec![],
+    };
+    assert!(task.semantic_validate_with_evidence(&output, &[]).is_err());
+    let grounded = GroundedBlock {
+        evidence: EvidenceRef::new(DocumentBlockId::new(block_id), 2, hash)
+            .expect("grounded evidence")
+            .with_section_path(vec!["Results".to_owned()])
+            .with_retrieval(1, 1.0)
+            .expect("retrieval metadata"),
+        text: "A stable document block".to_owned(),
+        retrieval_rank: 1,
+        retrieval_score: 1.0,
+    };
+    assert!(
+        task.semantic_validate_with_evidence(&output, &[grounded])
+            .is_ok()
+    );
+}
+
+#[test]
+fn screening_decisions_respect_inclusion_and_exclusion_criterion_kinds() {
+    let inclusion = EligibilityCriterion::new(
+        Uuid::from_u128(401),
+        CriterionKind::Inclusion,
+        CriterionStage::TitleAbstract,
+        CriterionDimension::Population,
+        "Population included".to_owned(),
+        "The population is eligible.".to_owned(),
+        0,
+    )
+    .expect("inclusion criterion");
+    let exclusion = EligibilityCriterion::new(
+        Uuid::from_u128(402),
+        CriterionKind::Exclusion,
+        CriterionStage::TitleAbstract,
+        CriterionDimension::Design,
+        "Disallowed design".to_owned(),
+        "The design is not eligible.".to_owned(),
+        1,
+    )
+    .expect("exclusion criterion");
+    let evidence = ScreeningEvidence::ReportMetadata {
+        report_id: Uuid::from_u128(101),
+        field: ScreeningEvidenceField::Title,
+        content_hash: "d".repeat(64),
+    };
+    let task = screening_task_with_criteria(
+        ScreeningStage::TitleAbstract,
+        vec![inclusion, exclusion],
+        vec![evidence.clone()],
+    );
+    let output = |first: CriterionResult, second: CriterionResult, decision| ScreeningAnalysis {
+        report_id: Uuid::from_u128(101),
+        expected_revision: 3,
+        stage: ScreeningStage::TitleAbstract,
+        protocol_version_id: Uuid::from_u128(102),
+        criteria: vec![
+            CriterionJudgment {
+                criterion_id: Uuid::from_u128(401),
+                judgment: first,
+                rationale: "The title provides bounded evidence.".to_owned(),
+                evidence: vec![evidence.clone()],
+            },
+            CriterionJudgment {
+                criterion_id: Uuid::from_u128(402),
+                judgment: second,
+                rationale: "The title provides bounded evidence.".to_owned(),
+                evidence: vec![evidence.clone()],
+            },
+        ],
+        suggested_decision: decision,
+        uncertainties: vec![],
+    };
+
+    assert!(
+        task.semantic_validate(&output(
+            CriterionResult::Meets,
+            CriterionResult::DoesNotMeet,
+            SuggestedDecision::Include,
+        ))
+        .is_ok()
+    );
+    assert!(
+        task.semantic_validate(&output(
+            CriterionResult::DoesNotMeet,
+            CriterionResult::DoesNotMeet,
+            SuggestedDecision::Exclude {
+                exclusion_reason_id: None,
+            },
+        ))
+        .is_ok()
+    );
+    assert!(
+        task.semantic_validate(&output(
+            CriterionResult::Meets,
+            CriterionResult::DoesNotMeet,
+            SuggestedDecision::Exclude {
+                exclusion_reason_id: None,
+            },
+        ))
+        .is_err()
+    );
+    assert!(
+        task.semantic_validate(&output(
+            CriterionResult::Meets,
+            CriterionResult::Unclear,
+            SuggestedDecision::Include,
+        ))
+        .is_err()
+    );
+    assert!(
+        task.semantic_validate(&output(
+            CriterionResult::Meets,
+            CriterionResult::Unclear,
+            SuggestedDecision::Maybe,
+        ))
+        .is_ok()
+    );
+
+    let mut insufficient = output(
+        CriterionResult::Unclear,
+        CriterionResult::Unclear,
+        SuggestedDecision::InsufficientEvidence,
+    );
+    insufficient
+        .uncertainties
+        .push("The title is inconclusive.".to_owned());
+    assert!(task.semantic_validate(&insufficient).is_ok());
+}
+
+#[test]
+fn duplicate_assistance_requires_grounded_typed_evidence() {
+    let source_id = Uuid::from_u128(301);
+    let candidate_id = Uuid::from_u128(302);
+    let source_title = IdentityProvenance {
+        entity_type: "record".to_owned(),
+        entity_id: source_id.to_string(),
+        field: "title".to_owned(),
+        content_hash: "c".repeat(64),
+    };
+    let candidate_title = IdentityProvenance {
+        entity_type: "report".to_owned(),
+        entity_id: candidate_id.to_string(),
+        field: "title".to_owned(),
+        content_hash: "d".repeat(64),
+    };
+    let allowed_signals = vec![DuplicateSignal::TitleSimilarity {
+        similarity: 0.96,
+        supports_match: true,
+    }];
+    let task = DedupeTask::new(
+        ProjectId::new(Uuid::from_u128(300)),
+        source_id.into(),
+        candidate_id.into(),
+        [source_title.clone(), candidate_title.clone()],
+        allowed_signals.clone(),
+    );
+    let grounded = DuplicateAssistance {
+        candidate: DuplicateCandidate {
+            source_record_id: source_id,
+            candidate_report_id: candidate_id,
+        },
+        decision: DuplicateDecision::InsufficientEvidence,
+        rationale: vec![DuplicateRationale {
+            code: "missing_title".to_owned(),
+            explanation: "The candidate identity is incomplete.".to_owned(),
+        }],
+        signals: allowed_signals.clone(),
+        provenance: vec![source_title.clone(), candidate_title.clone()],
+        uncertainties: vec!["Title identity is missing.".to_owned()],
+    };
+    assert!(task.semantic_validate(&grounded).is_ok());
+
+    let mut missing_uncertainty = grounded.clone();
+    missing_uncertainty.uncertainties.clear();
+    assert!(task.semantic_validate(&missing_uncertainty).is_err());
+
+    let mut fabricated_id = grounded.clone();
+    fabricated_id.signals = vec![DuplicateSignal::DurableIdentifier {
+        scheme: "doi".to_owned(),
+        source_value: "10.1000/not-supplied".to_owned(),
+        candidate_value: "10.1000/not-supplied".to_owned(),
+        supports_match: true,
+    }];
+    fabricated_id.decision = DuplicateDecision::Match;
+    assert!(task.semantic_validate(&fabricated_id).is_err());
+
+    let mut altered_signal = grounded.clone();
+    altered_signal.signals = vec![DuplicateSignal::TitleSimilarity {
+        similarity: 0.42,
+        supports_match: false,
+    }];
+    altered_signal.decision = DuplicateDecision::Match;
+    assert!(task.semantic_validate(&altered_signal).is_err());
+
+    let mut missing_candidate_provenance = grounded.clone();
+    missing_candidate_provenance.decision = DuplicateDecision::Match;
+    missing_candidate_provenance.provenance = vec![source_title];
+    assert!(
+        task.semantic_validate(&missing_candidate_provenance)
+            .is_err()
+    );
+
+    let mut valid_match = grounded.clone();
+    valid_match.decision = DuplicateDecision::Match;
+    assert!(task.semantic_validate(&valid_match).is_ok());
+
+    let mut valid_no_match = grounded.clone();
+    valid_no_match.decision = DuplicateDecision::NoMatch;
+    assert!(task.semantic_validate(&valid_no_match).is_ok());
+
+    let mut valid_abstention = grounded;
+    valid_abstention.decision = DuplicateDecision::InsufficientEvidence;
+    valid_abstention.signals.clear();
+    valid_abstention.provenance.clear();
+    assert!(task.semantic_validate(&valid_abstention).is_ok());
 }

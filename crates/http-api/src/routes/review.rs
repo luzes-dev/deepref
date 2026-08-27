@@ -618,7 +618,7 @@ fn history_item_dto(item: PersistenceScreeningHistoryItem) -> ScreeningHistoryIt
     }
 }
 
-fn map_screening_error(error: ScreeningError) -> ApiError {
+pub(crate) fn map_screening_error(error: ScreeningError) -> ApiError {
     match error {
         ScreeningError::Database(error) => ApiError::Database(error),
         ScreeningError::ProjectNotFound => ApiError::NotFound("project not found".to_owned()),

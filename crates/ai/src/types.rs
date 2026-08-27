@@ -283,6 +283,7 @@ impl GroundedBlock {
 #[derive(Debug, Clone, PartialEq)]
 pub struct RetrievalRequest {
     pub project_id: ProjectId,
+    pub report_id: Option<Uuid>,
     pub document_id: Option<DocumentId>,
     pub query: String,
     pub embedding: Option<Embedding>,

@@ -15,6 +15,7 @@ use crate::{
 pub trait ModelRouter: Send + Sync {
     fn resolve<'a>(&'a self, profile: ModelProfile) -> AiFuture<'a, ResolvedModel>;
 }
+
 pub trait EvidenceRetriever: Send + Sync {
     fn retrieve<'a>(&'a self, request: crate::RetrievalRequest)
     -> AiFuture<'a, Vec<GroundedBlock>>;
@@ -54,9 +55,22 @@ pub trait AiTask {
     const KIND: AiTaskKind;
     const PROMPT_VERSION: &'static str;
     const SCHEMA_VERSION: &'static str;
+    fn kind(&self) -> AiTaskKind {
+        Self::KIND
+    }
+    fn prompt_version(&self) -> &str {
+        Self::PROMPT_VERSION
+    }
     fn model_profile(&self) -> ModelProfile;
     fn build_context(&self, input: &Self::Input) -> Result<AiContext, AiError>;
     fn semantic_validate(&self, output: &Self::Output) -> Result<(), AiError>;
+    fn semantic_validate_with_evidence(
+        &self,
+        output: &Self::Output,
+        _evidence: &[GroundedBlock],
+    ) -> Result<(), AiError> {
+        self.semantic_validate(output)
+    }
     fn authority(&self) -> AuthorityTier {
         AuthorityTier::ReadOnly
     }
@@ -72,7 +86,7 @@ pub struct AiTaskResult<T> {
     pub proposal: Option<AiProposal>,
 }
 
-pub struct AiTaskRunner<'a, G, R, E, S, P, C, I> {
+pub struct AiTaskRunner<'a, G: ?Sized, R, E, S, P, C, I> {
     gateway: &'a G,
     router: &'a R,
     retriever: &'a E,
@@ -82,7 +96,7 @@ pub struct AiTaskRunner<'a, G, R, E, S, P, C, I> {
     ids: &'a I,
 }
 
-impl<'a, G, R, E, S, P, C, I> AiTaskRunner<'a, G, R, E, S, P, C, I>
+impl<'a, G: ?Sized, R, E, S, P, C, I> AiTaskRunner<'a, G, R, E, S, P, C, I>
 where
     G: AiGateway,
     R: ModelRouter,
@@ -134,7 +148,7 @@ where
                     .retrieve(request)
                     .instrument(tracing::info_span!(
                         "retrieval.search",
-                        ai.task_kind = T::KIND.as_str()
+                        ai.task_kind = task.kind().as_str()
                     ))
                     .await?
             }
@@ -162,13 +176,13 @@ where
         let prompt_hash =
             hash_json(&json!({"system": context.system_prompt, "user": context.user_prompt}))?;
         let reuse_hash = compute_reuse_hash(&ReuseKeyInput {
-            task_kind: T::KIND.as_str().to_owned(),
+            task_kind: task.kind().as_str().to_owned(),
             provider: route.provider.clone(),
             model: route.model.clone(),
             model_version: route.model_version.clone(),
             parameters: serde_json::to_value(&route.parameters)
                 .map_err(|_| AiError::InputSerialization("route parameters".to_owned()))?,
-            prompt_version: T::PROMPT_VERSION.to_owned(),
+            prompt_version: task.prompt_version().to_owned(),
             prompt_hash: prompt_hash.clone(),
             schema_version: T::SCHEMA_VERSION.to_owned(),
             schema_hash: schema_hash.clone(),
@@ -184,7 +198,7 @@ where
                 .output
                 .clone()
                 .ok_or_else(|| AiError::Persistence("completed run has no output".to_owned()))?;
-            let output = validate_output(task, raw)?;
+            let output = validate_output(task, raw, &evidence)?;
             let proposal = self
                 .ensure_proposal(task, &output, &run, project_id)
                 .await?;
@@ -198,9 +212,9 @@ where
         let mut run = AiRunRecord {
             id: self.ids.next_id(),
             project_id,
-            task_kind: T::KIND,
+            task_kind: task.kind(),
             route: route.clone(),
-            prompt_version: T::PROMPT_VERSION.to_owned(),
+            prompt_version: task.prompt_version().to_owned(),
             prompt_hash,
             schema_version: T::SCHEMA_VERSION.to_owned(),
             schema_hash,
@@ -227,13 +241,13 @@ where
                 route,
                 system_prompt: context.system_prompt,
                 user_prompt: context.user_prompt,
-                evidence,
+                evidence: evidence.clone(),
                 schema,
             })
             .instrument(tracing::info_span!(
                 "model.complete",
-                ai.task_kind = T::KIND.as_str(),
-                ai.prompt_version = T::PROMPT_VERSION,
+                ai.task_kind = task.kind().as_str(),
+                ai.prompt_version = task.prompt_version(),
                 ai.schema_version = T::SCHEMA_VERSION
             ))
             .await
@@ -249,7 +263,7 @@ where
                     .await);
             }
         };
-        let output = match validate_output(task, raw.clone()) {
+        let output = match validate_output(task, raw.clone(), &evidence) {
             Ok(output) => output,
             Err(error) => return Err(self.persist_failure(run, error).await),
         };
@@ -297,6 +311,15 @@ where
             ));
         }
         draft.authority = task.authority();
+        let Some(payload) = draft.payload.as_object_mut() else {
+            return Err(AiError::Proposal(
+                "proposal payload must be an object".to_owned(),
+            ));
+        };
+        payload.insert(
+            "task_kind".to_owned(),
+            Value::String(task.kind().as_str().to_owned()),
+        );
         if let Some(existing) = self.proposals.find_for_run(run.id).await? {
             if same_proposal_content(&existing, &draft, run.id) {
                 return Ok(Some(existing));
@@ -346,7 +369,11 @@ fn same_proposal_content(
         && existing.draft.authority == expected.authority
 }
 
-fn validate_output<T: AiTask>(task: &T, raw: Value) -> Result<T::Output, AiError> {
+fn validate_output<T: AiTask>(
+    task: &T,
+    raw: Value,
+    evidence: &[GroundedBlock],
+) -> Result<T::Output, AiError> {
     let schema = serde_json::to_value(schemars::schema_for!(T::Output))
         .map_err(|_| AiError::InputSerialization("output schema".to_owned()))?;
     jsonschema::validator_for(&schema)
@@ -355,7 +382,7 @@ fn validate_output<T: AiTask>(task: &T, raw: Value) -> Result<T::Output, AiError
         .map_err(|_| AiError::SchemaValidation(String::new()))?;
     let output =
         serde_json::from_value(raw).map_err(|_| AiError::SchemaValidation(String::new()))?;
-    task.semantic_validate(&output)
+    task.semantic_validate_with_evidence(&output, evidence)
         .map_err(|_| AiError::SemanticValidation(String::new()))?;
     Ok(output)
 }

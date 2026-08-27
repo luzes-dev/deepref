@@ -27,7 +27,12 @@ pub use acquisition::{
     persist_import,
 };
 pub use ai::{
-    PostgresAiStore, insert_model_route, persist_document_block_embedding, resolve_ai_proposal,
+    AiDedupeTarget, AiGroundingBlock, AiProposalCursor, AiProposalDecision,
+    AiProposalDecisionRequest, AiProposalError, AiProposalFilters, AiProposalRecord,
+    AiProposalResolution, AiScreeningTarget, PostgresAiStore, decide_ai_proposal,
+    get_ai_dedupe_target, get_ai_proposal, get_ai_screening_target, insert_model_route,
+    list_ai_exclusion_reasons, list_ai_grounding_blocks, list_ai_proposals,
+    persist_document_block_embedding, resolve_ai_proposal,
 };
 pub use appraisal::{
     AppraisalAssessmentRecord, AppraisalError, AppraisalEvidenceRecord, complete_appraisal,

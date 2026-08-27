@@ -4,13 +4,19 @@
 //! gateways, prompt definitions, grounding, policy, and task orchestration.
 //! SQLx and pgvector stay in `deepref-postgres`.
 
+mod dedupe;
 mod gateway;
 mod grounding;
 mod policy;
 mod prompts;
 mod runner;
+mod screening;
 mod types;
 
+pub use dedupe::{
+    DedupeInput, DedupeTask, DuplicateAssistance, DuplicateCandidate, DuplicateDecision,
+    DuplicateRationale, DuplicateSignal, DuplicateSignalKind, IdentityProvenance,
+};
 pub use deepref_domain::{Actor, ActorKind};
 pub use gateway::{AiGateway, EmbeddingGateway, RigEmbeddingGateway, RigGateway, RoutedGateway};
 pub use grounding::GroundingContextBuilder;
@@ -19,6 +25,11 @@ pub use prompts::{PromptDefinition, PromptRegistry, PromptVersion};
 pub use runner::{
     AiRunStore, AiTask, AiTaskResult, AiTaskRunner, Clock, EvidenceRetriever, IdProvider,
     ModelRouter, ProposalStore, SystemClock, UuidProvider, safe_error_metadata,
+};
+pub use screening::{
+    CriterionJudgment, CriterionPrompt, CriterionResult, ScreeningAnalysis, ScreeningEvidence,
+    ScreeningEvidenceField, ScreeningInput, ScreeningStage, ScreeningTask, ScreeningTaskConfig,
+    SuggestedDecision,
 };
 pub use types::*;
 

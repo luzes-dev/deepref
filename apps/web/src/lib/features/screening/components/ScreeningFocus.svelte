@@ -25,6 +25,7 @@
 	import { resolve } from '$app/paths';
 	import type { ResolvedPathname } from '$app/types';
 	import { page } from '$app/state';
+	import AiProposalReview from '$lib/features/ai-assistance/components/AiProposalReview.svelte';
 	import DecisionBar from './DecisionBar.svelte';
 	import CriteriaPanel from './CriteriaPanel.svelte';
 	import ScreeningHistory from './ScreeningHistory.svelte';
@@ -56,7 +57,9 @@
 		priorStatus: string;
 		returnedRevision: number;
 	};
-
+	type ScreeningPath =
+		| `/projects/${string}/screening/title-abstract`
+		| `/projects/${string}/screening/title-abstract?${string}`;
 	let { projectId }: { projectId: string } = $props();
 	const queryClient = useQueryClient();
 
@@ -184,12 +187,12 @@
 		return { ...urlState, ...changes };
 	}
 
-	function appendSearch(pathname: ResolvedPathname, search: string): ResolvedPathname {
-		return `${pathname}${search}` as ResolvedPathname;
+	function appendSearch(pathname: ResolvedPathname, search: string): ScreeningPath {
+		return `${pathname}${search}` as ScreeningPath;
 	}
 
-	function navigateTo(url: ResolvedPathname, options: Parameters<typeof goto>[1]) {
-		return goto(url, options);
+	function navigateTo(url: ScreeningPath, options: Parameters<typeof goto>[1]) {
+		return goto(resolve(url), options);
 	}
 
 	async function updateUrl(changes: Partial<ScreeningUrlState>, replaceState = true) {
@@ -642,6 +645,15 @@
 								onDecision={decide}
 								onUndo={undo}
 							/>
+							{#if current}
+								<AiProposalReview
+									{projectId}
+									reportId={current.report_id}
+									stage="title_abstract"
+									protocolVersionId={protocol?.id}
+									expectedRevision={current.revision}
+								/>
+							{/if}
 						</article>
 					{/if}
 				</Card.Content>

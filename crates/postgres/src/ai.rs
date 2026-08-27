@@ -4,8 +4,11 @@ use deepref_ai::{
     Embedding, EvidenceRef, EvidenceRetriever, GroundedBlock, ModelParameters, ModelProfile,
     ModelRouter, ProposalDraft, ProposalStatus, ProposalStore, ResolvedModel, RetrievalRequest,
 };
+use deepref_application::{ResolveRecordCommand, ScreenReportCommand};
+use deepref_domain::{Actor, ScreeningDecision, ScreeningStage};
 use pgvector::Vector;
 use sqlx::{PgPool, Postgres, Row, Transaction};
+use thiserror::Error;
 use uuid::Uuid;
 
 #[derive(Clone)]
@@ -19,6 +22,242 @@ impl PostgresAiStore {
     pub fn pool(&self) -> &PgPool {
         &self.pool
     }
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AiScreeningTarget {
+    pub title: Option<String>,
+    pub abstract_text: Option<String>,
+    pub expected_revision: i64,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AiGroundingBlock {
+    pub document_block_id: Uuid,
+    pub page: u32,
+    pub section_path: Vec<String>,
+    pub text: String,
+    pub content_hash: String,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct AiDedupeTarget {
+    pub source_title: Option<String>,
+    pub candidate_title: Option<String>,
+    pub source_year: Option<i32>,
+    pub candidate_year: Option<i32>,
+    pub source_author: Option<String>,
+    pub candidate_author: Option<String>,
+    pub source_title_hash: String,
+    pub candidate_title_hash: String,
+}
+
+pub async fn get_ai_screening_target(
+    pool: &PgPool,
+    project_id: Uuid,
+    report_id: Uuid,
+) -> Result<AiScreeningTarget, AiProposalError> {
+    sqlx::query(
+        "SELECT r.title,r.abstract_text,coalesce(ss.revision,0)::bigint AS expected_revision
+         FROM project_reports pr
+         JOIN reports r ON r.id=pr.report_id
+         LEFT JOIN screening_state ss ON ss.project_id=pr.project_id AND ss.report_id=pr.report_id
+         WHERE pr.project_id=$1 AND pr.report_id=$2",
+    )
+    .bind(project_id)
+    .bind(report_id)
+    .fetch_optional(pool)
+    .await?
+    .map(|row| AiScreeningTarget {
+        title: row.get("title"),
+        abstract_text: row.get("abstract_text"),
+        expected_revision: row.get("expected_revision"),
+    })
+    .ok_or(AiProposalError::NotFound)
+}
+
+pub async fn list_ai_grounding_blocks(
+    pool: &PgPool,
+    project_id: Uuid,
+    report_id: Uuid,
+) -> Result<Vec<AiGroundingBlock>, AiProposalError> {
+    let rows = sqlx::query(
+        "SELECT b.id,b.page_number,b.section_path,b.text,b.content_hash
+         FROM project_reports pr
+         JOIN documents d ON d.report_id=pr.report_id AND d.project_id=pr.project_id
+         JOIN document_blocks b ON b.document_id=d.id
+         WHERE pr.project_id=$1 AND pr.report_id=$2 AND d.active_parser_version=d.parser_version
+           AND b.active AND b.parser_version=d.active_parser_version
+         ORDER BY b.page_number,b.ordinal,b.id
+         LIMIT 20",
+    )
+    .bind(project_id)
+    .bind(report_id)
+    .fetch_all(pool)
+    .await?;
+    rows.into_iter()
+        .map(|row| {
+            let page = row.get::<i32, _>("page_number");
+            let text = row.get::<String, _>("text");
+            let content_hash = row.get::<String, _>("content_hash");
+            let page = u32::try_from(page).map_err(|_| {
+                AiProposalError::InvalidPayload("document page is invalid".to_owned())
+            })?;
+            if page == 0 || text.trim().is_empty() || !deepref_ai::is_sha256(&content_hash) {
+                return Err(AiProposalError::InvalidPayload(
+                    "document grounding block is invalid".to_owned(),
+                ));
+            }
+            Ok(AiGroundingBlock {
+                document_block_id: row.get("id"),
+                page,
+                section_path: row.get("section_path"),
+                text,
+                content_hash,
+            })
+        })
+        .collect()
+}
+
+pub async fn list_ai_exclusion_reasons(
+    pool: &PgPool,
+    project_id: Uuid,
+    stage: ScreeningStage,
+) -> Result<Vec<Uuid>, AiProposalError> {
+    let stage = match stage {
+        ScreeningStage::TitleAbstract => "title_abstract",
+        ScreeningStage::FullText => "full_text",
+    };
+    Ok(sqlx::query_scalar(
+        "SELECT id FROM exclusion_reasons WHERE project_id=$1 AND stage=$2 ORDER BY code,id",
+    )
+    .bind(project_id)
+    .bind(stage)
+    .fetch_all(pool)
+    .await?)
+}
+
+pub async fn get_ai_dedupe_target(
+    pool: &PgPool,
+    project_id: Uuid,
+    source_record_id: Uuid,
+    candidate_report_id: Uuid,
+) -> Result<AiDedupeTarget, AiProposalError> {
+    let row = sqlx::query(
+        "SELECT rec.title AS source_title,rec.publication_year AS source_year,rec.authors AS source_authors,
+                r.title AS candidate_title,r.publication_year AS candidate_year,r.authors AS candidate_authors
+         FROM records rec
+         JOIN project_reports pr ON pr.project_id=rec.project_id AND pr.report_id=$3
+         JOIN reports r ON r.id=pr.report_id
+         WHERE rec.project_id=$1 AND rec.id=$2",
+    )
+    .bind(project_id)
+    .bind(source_record_id)
+    .bind(candidate_report_id)
+    .fetch_optional(pool)
+    .await?
+    .ok_or(AiProposalError::NotFound)?;
+    let source_title: Option<String> = row.get("source_title");
+    let candidate_title: Option<String> = row.get("candidate_title");
+    Ok(AiDedupeTarget {
+        source_title_hash: deepref_ai::sha256_bytes(
+            source_title.as_deref().unwrap_or("").as_bytes(),
+        ),
+        candidate_title_hash: deepref_ai::sha256_bytes(
+            candidate_title.as_deref().unwrap_or("").as_bytes(),
+        ),
+        source_author: first_author(row.get("source_authors")),
+        candidate_author: first_author(row.get("candidate_authors")),
+        source_title,
+        candidate_title,
+        source_year: row.get("source_year"),
+        candidate_year: row.get("candidate_year"),
+    })
+}
+
+fn first_author(authors: serde_json::Value) -> Option<String> {
+    authors
+        .as_array()
+        .and_then(|items| items.first())
+        .and_then(|item| {
+            item.get("literal")
+                .or_else(|| item.get("family"))
+                .or_else(|| item.get("name"))
+                .and_then(serde_json::Value::as_str)
+                .map(str::to_owned)
+        })
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum AiProposalDecision {
+    Accept,
+    Reject,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AiProposalDecisionRequest {
+    pub project_id: Uuid,
+    pub proposal_id: Uuid,
+    pub decision: AiProposalDecision,
+    pub reason: String,
+    pub actor: Actor,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AiProposalResolution {
+    pub proposal_id: Uuid,
+    pub status: String,
+    pub target_report_id: Option<Uuid>,
+    pub target_record_id: Option<Uuid>,
+    pub applied_revision: Option<i64>,
+}
+
+#[derive(Debug, Error)]
+pub enum AiProposalError {
+    #[error("database operation failed")]
+    Database(#[from] sqlx::Error),
+    #[error("AI proposal not found in this project")]
+    NotFound,
+    #[error("AI proposal is no longer pending")]
+    NotPending,
+    #[error("AI proposal payload is invalid: {0}")]
+    InvalidPayload(String),
+    #[error("AI proposal target is invalid: {0}")]
+    InvalidTarget(String),
+    #[error("screening command failed: {0}")]
+    Screening(#[from] crate::ScreeningError),
+    #[error("deduplication command failed: {0}")]
+    Dedupe(#[from] crate::DedupeError),
+    #[error("actor is invalid")]
+    InvalidActor,
+}
+
+#[derive(Debug, Clone, PartialEq, serde::Serialize)]
+pub struct AiProposalRecord {
+    pub id: Uuid,
+    pub project_id: Uuid,
+    pub task_kind: String,
+    pub entity_type: String,
+    pub entity_id: Option<Uuid>,
+    pub operation: String,
+    pub payload: serde_json::Value,
+    pub authority_tier: String,
+    pub model_run_id: Uuid,
+    pub provider: String,
+    pub model: String,
+    pub model_version: String,
+    pub prompt_version: String,
+    pub schema_version: String,
+    pub status: String,
+    pub protocol_version_id: Option<Uuid>,
+    pub expected_revision: Option<i64>,
+    pub target_report_id: Option<Uuid>,
+    pub target_record_id: Option<Uuid>,
+    pub resolved_at: Option<DateTime<Utc>>,
+    pub resolved_by_actor_kind: Option<String>,
+    pub resolved_by_actor_id: Option<String>,
+    pub resolution_reason: Option<String>,
+    pub created_at: DateTime<Utc>,
 }
 
 impl ModelRouter for PostgresAiStore {
@@ -278,34 +517,41 @@ impl EvidenceRetriever for PostgresAiStore {
             let rows = sqlx::query(
                 "WITH candidates AS (
                    SELECT b.id,b.document_id,b.page_number,b.section_path,b.text,b.content_hash,b.ordinal,
-                     GREATEST(CASE WHEN $3::text IS NULL THEN 0.0 ELSE ts_rank_cd(b.search_vector,websearch_to_tsquery('simple',$3)) END,0.0)
-                     + CASE WHEN $4::vector IS NULL THEN 0.0
-                            WHEN e.embedding IS NOT NULL AND e.dimension=vector_dims($4::vector)
-                            THEN GREATEST(0.0,1.0-(e.embedding <=> $4::vector))
+                     GREATEST(CASE WHEN $4::text IS NULL THEN 0.0 ELSE ts_rank_cd(b.search_vector,websearch_to_tsquery('simple',$4)) END,0.0)
+                     + CASE WHEN $5::vector IS NULL THEN 0.0
+                            WHEN e.embedding IS NOT NULL AND e.dimension=vector_dims($5::vector)
+                            THEN GREATEST(0.0,1.0-(e.embedding <=> $5::vector))
                             ELSE 0.0 END AS retrieval_score
                    FROM document_blocks b
                    JOIN documents d ON d.id=b.document_id
                    LEFT JOIN document_block_embeddings e ON e.document_block_id=b.id
                      AND e.is_current AND e.content_hash=b.content_hash
-                   WHERE d.project_id=$1 AND ($2::uuid IS NULL OR b.document_id=$2)
+                   WHERE d.project_id=$1 AND ($2::uuid IS NULL OR d.report_id=$2)
+                     AND ($3::uuid IS NULL OR b.document_id=$3)
                      AND b.active AND b.parser_version=d.active_parser_version
-                     AND ($5::text[] IS NULL OR cardinality($5::text[])=0
-                          OR b.section_path[1:cardinality($5::text[])]= $5::text[])
-                     AND ($6::text IS NULL OR b.kind=$6)
-                     AND ($4::vector IS NULL OR
-                          ($3::text IS NOT NULL AND b.search_vector @@ websearch_to_tsquery('simple',$3))
-                          OR (e.embedding IS NOT NULL AND e.dimension=vector_dims($4::vector)))
-                     AND (($3::text IS NOT NULL AND b.search_vector @@ websearch_to_tsquery('simple',$3))
-                          OR ($4::vector IS NOT NULL AND e.embedding IS NOT NULL AND e.dimension=vector_dims($4::vector)))
+                     AND ($6::text[] IS NULL OR cardinality($6::text[])=0
+                          OR b.section_path[1:cardinality($6::text[])]= $6::text[])
+                     AND ($7::text IS NULL OR b.kind=$7)
+                     AND ($5::vector IS NULL OR
+                          ($4::text IS NOT NULL AND b.search_vector @@ websearch_to_tsquery('simple',$4))
+                          OR (e.embedding IS NOT NULL AND e.dimension=vector_dims($5::vector)))
+                     AND (($4::text IS NOT NULL AND b.search_vector @@ websearch_to_tsquery('simple',$4))
+                          OR ($5::vector IS NOT NULL AND e.embedding IS NOT NULL AND e.dimension=vector_dims($5::vector)))
                  ), ranked AS (
                    SELECT *,row_number() OVER (ORDER BY retrieval_score DESC,page_number,ordinal,id) AS retrieval_rank
                    FROM candidates
                  )
                  SELECT id,document_id,page_number,section_path,text,content_hash,retrieval_score,retrieval_rank
-                 FROM ranked ORDER BY retrieval_rank LIMIT $7",
+                 FROM ranked ORDER BY retrieval_rank LIMIT $8",
             )
-            .bind(request.project_id.as_uuid()).bind(request.document_id.map(|id| id.as_uuid())).bind(lexical).bind(vector)
-            .bind(request.section_prefix).bind(request.kind).bind(i64::from(request.limit))
+            .bind(request.project_id.as_uuid())
+            .bind(request.report_id)
+            .bind(request.document_id.map(|id| id.as_uuid()))
+            .bind(lexical)
+            .bind(vector)
+            .bind(request.section_prefix)
+            .bind(request.kind)
+            .bind(i64::from(request.limit))
             .fetch_all(&self.pool).await.map_err(|_| AiError::Persistence("hybrid retrieval failed".to_owned()))?;
             rows.into_iter()
                 .map(|row| {
@@ -340,18 +586,61 @@ impl ProposalStore for PostgresAiStore {
     }
     fn create<'a>(&'a self, proposal: AiProposal) -> AiFuture<'a, AiProposal> {
         Box::pin(async move {
+            let candidate = proposal.draft.payload.get("candidate");
+            let target_report_id = payload_uuid(&proposal.draft.payload, "report_id")
+                .or_else(|| candidate.and_then(|value| value_uuid(value, "candidate_report_id")))
+                .or_else(|| {
+                    (proposal.draft.entity_type == "screening_report")
+                        .then_some(proposal.draft.entity_id)
+                        .flatten()
+                });
+            let target_record_id = payload_uuid(&proposal.draft.payload, "source_record_id")
+                .or_else(|| candidate.and_then(|value| value_uuid(value, "source_record_id")))
+                .or_else(|| {
+                    (proposal.draft.entity_type == "dedupe_record")
+                        .then_some(proposal.draft.entity_id)
+                        .flatten()
+                });
+            let protocol_version_id = payload_uuid(&proposal.draft.payload, "protocol_version_id");
+            let expected_revision = proposal
+                .draft
+                .payload
+                .get("expected_revision")
+                .and_then(serde_json::Value::as_i64);
+            let task_kind = proposal
+                .draft
+                .payload
+                .get("task_kind")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or(&proposal.draft.operation);
+            let mut transaction = self
+                .pool
+                .begin()
+                .await
+                .map_err(|_| AiError::Proposal("proposal transaction failed".to_owned()))?;
             let inserted = sqlx::query(
-                "INSERT INTO ai_proposals (id,project_id,ai_run_id,proposal_type,payload,status,entity_type,entity_id,operation,model_run_id,authority_tier)
-                 VALUES ($1,$2,$3,$4,$5,'pending',$6,$7,$8,$3,$9)
+                "INSERT INTO ai_proposals
+                 (id,project_id,ai_run_id,proposal_type,payload,status,entity_type,entity_id,operation,
+                  model_run_id,authority_tier,task_kind,target_report_id,target_record_id,protocol_version_id,expected_revision)
+                 VALUES ($1,$2,$3,$4,$5,'pending',$6,$7,$8,$3,$9,$10,$11,$12,$13,$14)
                  ON CONFLICT (model_run_id) DO NOTHING",
             ).bind(proposal.id).bind(proposal.draft.project_id.as_uuid()).bind(proposal.model_run_id)
             .bind(&proposal.draft.operation).bind(&proposal.draft.payload).bind(&proposal.draft.entity_type).bind(proposal.draft.entity_id)
-            .bind(&proposal.draft.operation).bind(proposal.draft.authority.as_str())
-            .execute(&self.pool).await.map_err(|_| AiError::Proposal("proposal write failed".to_owned()))?;
-            let existing = self
-                .find_for_run(proposal.model_run_id)
-                .await?
-                .ok_or_else(|| AiError::Proposal("proposal write was not visible".to_owned()))?;
+            .bind(&proposal.draft.operation).bind(proposal.draft.authority.as_str()).bind(task_kind)
+            .bind(target_report_id).bind(target_record_id).bind(protocol_version_id).bind(expected_revision)
+            .execute(&mut *transaction).await.map_err(|_| AiError::Proposal("proposal write failed".to_owned()))?;
+            let existing = sqlx::query(
+                "SELECT id,project_id,entity_type,entity_id,operation,payload,authority_tier,
+                        model_run_id,status,resolved_at,resolved_by_actor_id
+                 FROM ai_proposals WHERE model_run_id=$1 ORDER BY created_at DESC,id DESC LIMIT 1",
+            )
+            .bind(proposal.model_run_id)
+            .fetch_optional(&mut *transaction)
+            .await
+            .map_err(|_| AiError::Proposal("proposal lookup failed".to_owned()))?
+            .map(proposal_from_row)
+            .transpose()?
+            .ok_or_else(|| AiError::Proposal("proposal write was not visible".to_owned()))?;
             if inserted.rows_affected() == 0
                 && (existing.draft.project_id != proposal.draft.project_id
                     || existing.draft.entity_type != proposal.draft.entity_type
@@ -365,9 +654,524 @@ impl ProposalStore for PostgresAiStore {
                     "model run proposal idempotency conflict".to_owned(),
                 ));
             }
+            if inserted.rows_affected() == 1 {
+                persist_typed_proposal_projection(&mut transaction, &existing).await?;
+            }
+            transaction
+                .commit()
+                .await
+                .map_err(|_| AiError::Proposal("proposal transaction commit failed".to_owned()))?;
             Ok(existing)
         })
     }
+}
+
+fn payload_uuid(payload: &serde_json::Value, field: &str) -> Option<Uuid> {
+    payload
+        .get(field)
+        .and_then(serde_json::Value::as_str)
+        .and_then(|value| Uuid::parse_str(value).ok())
+}
+
+async fn persist_typed_proposal_projection(
+    transaction: &mut Transaction<'_, Postgres>,
+    proposal: &AiProposal,
+) -> Result<(), AiError> {
+    let Some(criteria) = proposal
+        .draft
+        .payload
+        .get("criteria")
+        .and_then(serde_json::Value::as_array)
+    else {
+        return Ok(());
+    };
+    let protocol_version_id = payload_uuid(&proposal.draft.payload, "protocol_version_id")
+        .ok_or_else(|| AiError::Proposal("protocol version projection is invalid".to_owned()))?;
+    let target_report_id = payload_uuid(&proposal.draft.payload, "report_id")
+        .ok_or_else(|| AiError::Proposal("screening report projection is invalid".to_owned()))?;
+    for (ordinal, criterion) in criteria.iter().enumerate() {
+        let Some(criterion_id) = criterion
+            .get("criterion_id")
+            .and_then(serde_json::Value::as_str)
+            .and_then(|value| Uuid::parse_str(value).ok())
+        else {
+            return Err(AiError::Proposal(
+                "criterion projection is invalid".to_owned(),
+            ));
+        };
+        let judgment = criterion
+            .get("judgment")
+            .and_then(serde_json::Value::as_str)
+            .ok_or_else(|| AiError::Proposal("criterion judgment is invalid".to_owned()))?;
+        let rationale = criterion
+            .get("rationale")
+            .and_then(serde_json::Value::as_str)
+            .ok_or_else(|| AiError::Proposal("criterion rationale is invalid".to_owned()))?;
+        sqlx::query(
+            "INSERT INTO ai_proposal_criterion_judgments
+             (proposal_id,project_id,criterion_id,protocol_version_id,ordinal,judgment,rationale,evidence)
+             VALUES ($1,$2,$3,$4,$5,$6,$7,$8)",
+        )
+        .bind(proposal.id)
+        .bind(proposal.draft.project_id.as_uuid())
+        .bind(criterion_id)
+        .bind(protocol_version_id)
+        .bind(
+            i32::try_from(ordinal)
+                .map_err(|_| AiError::Proposal("criterion ordinal overflow".to_owned()))?,
+        )
+        .bind(judgment)
+        .bind(rationale)
+        .bind(
+            criterion
+                .get("evidence")
+                .cloned()
+                .unwrap_or_else(|| serde_json::json!([])),
+        )
+        .execute(&mut **transaction)
+        .await
+        .map_err(|_| AiError::Proposal("criterion projection write failed".to_owned()))?;
+
+        if let Some(evidence) = criterion
+            .get("evidence")
+            .and_then(serde_json::Value::as_array)
+        {
+            for (evidence_ordinal, reference) in evidence.iter().enumerate() {
+                let kind = reference.get("kind").and_then(serde_json::Value::as_str);
+                let content_hash = reference
+                    .get("content_hash")
+                    .and_then(serde_json::Value::as_str)
+                    .ok_or_else(|| AiError::Proposal("evidence hash is invalid".to_owned()))?;
+                let (evidence_kind, report_id, document_id, document_block_id, page, source_field) =
+                    match kind {
+                        Some("report_metadata") => {
+                            let report_id =
+                                payload_uuid(reference, "report_id").ok_or_else(|| {
+                                    AiError::Proposal(
+                                        "metadata evidence report is invalid".to_owned(),
+                                    )
+                                })?;
+                            if report_id != target_report_id {
+                                return Err(AiError::Proposal(
+                                    "metadata evidence is outside the proposal report".to_owned(),
+                                ));
+                            }
+                            let source_field = reference
+                                .get("field")
+                                .and_then(serde_json::Value::as_str)
+                                .ok_or_else(|| {
+                                    AiError::Proposal(
+                                        "metadata evidence field is invalid".to_owned(),
+                                    )
+                                })?;
+                            (
+                                "report_metadata",
+                                report_id,
+                                None,
+                                None,
+                                None,
+                                Some(source_field),
+                            )
+                        }
+                        Some("document_block") => {
+                            let document_block_id = payload_uuid(reference, "document_block_id")
+                                .ok_or_else(|| {
+                                    AiError::Proposal(
+                                        "document evidence block is invalid".to_owned(),
+                                    )
+                                })?;
+                            let page = reference
+                                .get("page")
+                                .and_then(serde_json::Value::as_i64)
+                                .and_then(|value| i32::try_from(value).ok())
+                                .filter(|value| *value > 0)
+                                .ok_or_else(|| {
+                                    AiError::Proposal(
+                                        "document evidence page is invalid".to_owned(),
+                                    )
+                                })?;
+                            let document_id = sqlx::query_scalar::<_, Uuid>(
+                                "SELECT d.id
+                             FROM document_blocks b
+                             JOIN documents d ON d.id=b.document_id
+                             WHERE b.id=$1 AND d.project_id=$2 AND d.report_id=$3
+                               AND b.content_hash=$4 AND b.active
+                               AND d.active_parser_version=b.parser_version",
+                            )
+                            .bind(document_block_id)
+                            .bind(proposal.draft.project_id.as_uuid())
+                            .bind(target_report_id)
+                            .bind(content_hash)
+                            .fetch_optional(&mut **transaction)
+                            .await
+                            .map_err(|_| {
+                                AiError::Proposal("document evidence lookup failed".to_owned())
+                            })?
+                            .ok_or_else(|| {
+                                AiError::Proposal(
+                                    "document evidence is outside the active proposal report"
+                                        .to_owned(),
+                                )
+                            })?;
+                            (
+                                "document_block",
+                                target_report_id,
+                                Some(document_id),
+                                Some(document_block_id),
+                                Some(page),
+                                None,
+                            )
+                        }
+                        _ => return Err(AiError::Proposal("evidence kind is invalid".to_owned())),
+                    };
+                sqlx::query(
+                    "INSERT INTO ai_proposal_evidence
+                     (proposal_id,project_id,ordinal,evidence_kind,report_id,document_id,document_block_id,page,source_field,content_hash)
+                     VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)",
+                )
+                .bind(proposal.id)
+                .bind(proposal.draft.project_id.as_uuid())
+                .bind(i32::try_from(ordinal.saturating_mul(1000).saturating_add(evidence_ordinal)).map_err(|_| AiError::Proposal("evidence ordinal overflow".to_owned()))?)
+                .bind(evidence_kind)
+                .bind(report_id)
+                .bind(document_id)
+                .bind(document_block_id)
+                .bind(page)
+                .bind(source_field)
+                .bind(content_hash)
+                .execute(&mut **transaction)
+                .await
+                .map_err(|_| AiError::Proposal("evidence projection write failed".to_owned()))?;
+            }
+        }
+    }
+    Ok(())
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AiProposalCursor {
+    pub created_at: DateTime<Utc>,
+    pub id: Uuid,
+}
+
+#[derive(Debug, Clone, Copy)]
+pub struct AiProposalFilters<'a> {
+    pub status: Option<&'a str>,
+    pub task_kind: Option<&'a str>,
+    pub target_report_id: Option<Uuid>,
+    pub target_record_id: Option<Uuid>,
+    pub candidate_report_id: Option<Uuid>,
+}
+
+const AI_PROPOSAL_SELECT: &str =
+    "SELECT p.id,p.project_id,p.task_kind,p.entity_type,p.entity_id,p.operation,p.payload,
+            p.authority_tier,p.model_run_id,r.provider,r.model,r.model_version,r.prompt_version,
+            r.schema_version,p.status,p.protocol_version_id,p.expected_revision,p.target_report_id,
+            p.target_record_id,p.resolved_at,p.resolved_by_actor_kind,p.resolved_by_actor_id,
+            p.resolution_reason,p.created_at
+     FROM ai_proposals p JOIN ai_runs r ON r.id=p.model_run_id
+     WHERE p.project_id=$1";
+
+pub async fn get_ai_proposal(
+    pool: &PgPool,
+    project_id: Uuid,
+    proposal_id: Uuid,
+) -> Result<AiProposalRecord, AiProposalError> {
+    let query = format!("{AI_PROPOSAL_SELECT} AND p.id=$2");
+    let row = sqlx::query(sqlx::AssertSqlSafe(query))
+        .bind(project_id)
+        .bind(proposal_id)
+        .fetch_optional(pool)
+        .await?
+        .ok_or(AiProposalError::NotFound)?;
+    proposal_record_from_row(row).map_err(AiProposalError::InvalidPayload)
+}
+
+pub async fn list_ai_proposals(
+    pool: &PgPool,
+    project_id: Uuid,
+    filters: AiProposalFilters<'_>,
+    cursor: Option<AiProposalCursor>,
+    limit: i64,
+) -> Result<Vec<AiProposalRecord>, AiProposalError> {
+    let status = filters.status.unwrap_or("pending");
+    if !matches!(status, "pending" | "accepted" | "rejected" | "expired") {
+        return Err(AiProposalError::InvalidPayload(
+            "status is invalid".to_owned(),
+        ));
+    }
+    let query = format!(
+        "{AI_PROPOSAL_SELECT}
+         AND p.status=$2 AND ($3::text IS NULL OR p.task_kind=$3)
+         AND ($4::uuid IS NULL OR p.target_report_id=$4)
+         AND ($5::uuid IS NULL OR p.target_record_id=$5)
+         AND ($6::uuid IS NULL OR (p.task_kind='duplicate_candidate_detection'
+                                   AND p.target_report_id=$6))
+         AND ($7::timestamptz IS NULL OR (p.created_at,p.id)<($7,$8))
+         ORDER BY p.created_at DESC,p.id DESC LIMIT $9"
+    );
+    let rows = sqlx::query(sqlx::AssertSqlSafe(query))
+        .bind(project_id)
+        .bind(status)
+        .bind(filters.task_kind)
+        .bind(filters.target_report_id)
+        .bind(filters.target_record_id)
+        .bind(filters.candidate_report_id)
+        .bind(cursor.as_ref().map(|value| value.created_at))
+        .bind(cursor.as_ref().map(|value| value.id))
+        .bind(limit + 1)
+        .fetch_all(pool)
+        .await?;
+    rows.into_iter()
+        .map(proposal_record_from_row)
+        .map(|result| result.map_err(AiProposalError::InvalidPayload))
+        .collect()
+}
+
+pub async fn decide_ai_proposal(
+    pool: &PgPool,
+    request: AiProposalDecisionRequest,
+) -> Result<AiProposalResolution, AiProposalError> {
+    if request.reason.trim().is_empty() {
+        return Err(AiProposalError::InvalidPayload(
+            "resolution reason must not be empty".to_owned(),
+        ));
+    }
+    if request.actor.id().trim().is_empty() {
+        return Err(AiProposalError::InvalidActor);
+    }
+    let mut tx = pool.begin().await?;
+    let query = format!("{AI_PROPOSAL_SELECT} AND p.id=$2 FOR UPDATE");
+    let row = sqlx::query(sqlx::AssertSqlSafe(query))
+        .bind(request.project_id)
+        .bind(request.proposal_id)
+        .fetch_optional(&mut *tx)
+        .await?
+        .ok_or(AiProposalError::NotFound)?;
+    let proposal = proposal_record_from_row(row).map_err(AiProposalError::InvalidPayload)?;
+    if proposal.status != "pending" {
+        return Err(AiProposalError::NotPending);
+    }
+
+    let mut applied_revision = None;
+    if request.decision == AiProposalDecision::Accept {
+        match proposal.operation.as_str() {
+            "screening_suggestion" => {
+                let report_id = proposal.target_report_id.ok_or_else(|| {
+                    AiProposalError::InvalidTarget("screening report is missing".to_owned())
+                })?;
+                let protocol_version_id = proposal.protocol_version_id.ok_or_else(|| {
+                    AiProposalError::InvalidTarget("protocol version is missing".to_owned())
+                })?;
+                let expected_revision = proposal.expected_revision.ok_or_else(|| {
+                    AiProposalError::InvalidTarget("screening revision is missing".to_owned())
+                })?;
+                let stage = parse_screening_stage(
+                    proposal
+                        .payload
+                        .get("stage")
+                        .and_then(serde_json::Value::as_str),
+                )?;
+                let decision = parse_screening_decision(&proposal.payload, stage)?;
+                let reason_id = screening_reason_id(&proposal.payload)?;
+                let actor = request.actor.clone();
+                let snapshot = crate::screening::screen_report_in_transaction(
+                    &mut tx,
+                    ScreenReportCommand {
+                        project_id: proposal.project_id.into(),
+                        report_id: report_id.into(),
+                        stage,
+                        decision,
+                        exclusion_reason_id: reason_id.map(Into::into),
+                        protocol_version_id: protocol_version_id.into(),
+                        expected_revision,
+                        notes: Some("Accepted AI screening proposal".to_owned()),
+                        actor,
+                    },
+                )
+                .await?;
+                applied_revision = Some(snapshot.revision);
+            }
+            "dedupe_suggestion" => {
+                let candidate = proposal.payload.get("candidate").ok_or_else(|| {
+                    AiProposalError::InvalidTarget("duplicate candidate is missing".to_owned())
+                })?;
+                let source_record_id =
+                    value_uuid(candidate, "source_record_id").ok_or_else(|| {
+                        AiProposalError::InvalidTarget("source record is missing".to_owned())
+                    })?;
+                let candidate_report_id =
+                    value_uuid(candidate, "candidate_report_id").ok_or_else(|| {
+                        AiProposalError::InvalidTarget("candidate report is missing".to_owned())
+                    })?;
+                let decision = proposal
+                    .payload
+                    .get("decision")
+                    .and_then(serde_json::Value::as_str)
+                    .ok_or_else(|| {
+                        AiProposalError::InvalidPayload("duplicate decision is missing".to_owned())
+                    })?;
+                if decision != "match" {
+                    return Err(AiProposalError::InvalidPayload(
+                        "only a duplicate match can be accepted; reject abstentions or no-match suggestions"
+                            .to_owned(),
+                    ));
+                }
+                crate::deduplication::resolve_record_in_transaction(
+                    &mut tx,
+                    ResolveRecordCommand {
+                        project_id: proposal.project_id.into(),
+                        record_id: source_record_id.into(),
+                        action: deepref_application::RecordResolutionAction::Link,
+                        report_id: Some(candidate_report_id.into()),
+                        proposal_id: None,
+                        reason: request.reason.clone(),
+                        actor_kind: request.actor.kind().as_str().to_owned(),
+                        actor_id: request.actor.id().to_owned(),
+                    },
+                )
+                .await?;
+            }
+            operation => {
+                return Err(AiProposalError::InvalidTarget(format!(
+                    "operation {operation} cannot be accepted in PR12"
+                )));
+            }
+        }
+    }
+
+    let status = match request.decision {
+        AiProposalDecision::Accept => "accepted",
+        AiProposalDecision::Reject => "rejected",
+    };
+    let updated = sqlx::query(
+        "UPDATE ai_proposals
+         SET status=$3,resolved_at=now(),resolved_by_actor_kind=$4,resolved_by_actor_id=$5,
+             resolution_reason=$6,decided_by=$5,decided_at=now()
+         WHERE project_id=$1 AND id=$2 AND status='pending'",
+    )
+    .bind(request.project_id)
+    .bind(request.proposal_id)
+    .bind(status)
+    .bind(request.actor.kind().as_str())
+    .bind(request.actor.id())
+    .bind(&request.reason)
+    .execute(&mut *tx)
+    .await?;
+    if updated.rows_affected() != 1 {
+        return Err(AiProposalError::NotPending);
+    }
+    sqlx::query(
+        "INSERT INTO review_events
+         (id,project_id,event_type,aggregate_type,aggregate_id,payload,actor_kind,actor_id)
+         VALUES ($1,$2,'ai_proposal_resolved','ai_proposal',$3,$4,$5,$6)",
+    )
+    .bind(Uuid::new_v4())
+    .bind(request.project_id)
+    .bind(request.proposal_id)
+    .bind(serde_json::json!({"status": status, "operation": proposal.operation, "applied_revision": applied_revision}))
+    .bind(request.actor.kind().as_str())
+    .bind(request.actor.id())
+    .execute(&mut *tx)
+    .await?;
+    tx.commit().await?;
+    Ok(AiProposalResolution {
+        proposal_id: request.proposal_id,
+        status: status.to_owned(),
+        target_report_id: proposal.target_report_id,
+        target_record_id: proposal.target_record_id,
+        applied_revision,
+    })
+}
+
+fn value_uuid(value: &serde_json::Value, field: &str) -> Option<Uuid> {
+    value
+        .get(field)
+        .and_then(serde_json::Value::as_str)
+        .and_then(|value| Uuid::parse_str(value).ok())
+}
+
+fn parse_screening_stage(value: Option<&str>) -> Result<ScreeningStage, AiProposalError> {
+    match value {
+        Some("title_abstract") => Ok(ScreeningStage::TitleAbstract),
+        Some("full_text") => Ok(ScreeningStage::FullText),
+        _ => Err(AiProposalError::InvalidPayload(
+            "screening stage is invalid".to_owned(),
+        )),
+    }
+}
+
+fn parse_screening_decision(
+    payload: &serde_json::Value,
+    stage: ScreeningStage,
+) -> Result<ScreeningDecision, AiProposalError> {
+    let kind = payload
+        .get("suggested_decision")
+        .and_then(|value| value.get("kind"))
+        .and_then(serde_json::Value::as_str)
+        .ok_or_else(|| {
+            AiProposalError::InvalidPayload("suggested decision is missing".to_owned())
+        })?;
+    match (stage, kind) {
+        (_, "include") => Ok(ScreeningDecision::Include),
+        (_, "maybe") => Ok(ScreeningDecision::Maybe),
+        (_, "exclude") => Ok(ScreeningDecision::Exclude),
+        (_, "insufficient_evidence") => Err(AiProposalError::InvalidPayload(
+            "insufficient evidence must be reviewed rather than accepted as a decision".to_owned(),
+        )),
+        _ => Err(AiProposalError::InvalidPayload(
+            "suggested decision is invalid".to_owned(),
+        )),
+    }
+}
+
+fn screening_reason_id(payload: &serde_json::Value) -> Result<Option<Uuid>, AiProposalError> {
+    let Some(decision) = payload.get("suggested_decision") else {
+        return Err(AiProposalError::InvalidPayload(
+            "suggested decision is missing".to_owned(),
+        ));
+    };
+    if decision.get("kind").and_then(serde_json::Value::as_str) != Some("exclude") {
+        return Ok(None);
+    }
+    decision
+        .get("exclusion_reason_id")
+        .and_then(serde_json::Value::as_str)
+        .map(|value| {
+            Uuid::parse_str(value).map_err(|_| {
+                AiProposalError::InvalidPayload("exclusion reason is invalid".to_owned())
+            })
+        })
+        .transpose()
+}
+
+fn proposal_record_from_row(row: sqlx::postgres::PgRow) -> Result<AiProposalRecord, String> {
+    Ok(AiProposalRecord {
+        id: row.get("id"),
+        project_id: row.get("project_id"),
+        task_kind: row.get("task_kind"),
+        entity_type: row.get("entity_type"),
+        entity_id: row.get("entity_id"),
+        operation: row.get("operation"),
+        payload: row.get("payload"),
+        authority_tier: row.get("authority_tier"),
+        model_run_id: row.get("model_run_id"),
+        provider: row.get("provider"),
+        model: row.get("model"),
+        model_version: row.get("model_version"),
+        prompt_version: row.get("prompt_version"),
+        schema_version: row.get("schema_version"),
+        status: row.get("status"),
+        protocol_version_id: row.get("protocol_version_id"),
+        expected_revision: row.get("expected_revision"),
+        target_report_id: row.get("target_report_id"),
+        target_record_id: row.get("target_record_id"),
+        resolved_at: row.get("resolved_at"),
+        resolved_by_actor_kind: row.get("resolved_by_actor_kind"),
+        resolved_by_actor_id: row.get("resolved_by_actor_id"),
+        resolution_reason: row.get("resolution_reason"),
+        created_at: row.get("created_at"),
+    })
 }
 
 pub async fn insert_model_route(
