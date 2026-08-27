@@ -14,6 +14,7 @@
 	import GitCompareIcon from '@lucide/svelte/icons/git-compare';
 	import HomeIcon from '@lucide/svelte/icons/home';
 	import LightbulbIcon from '@lucide/svelte/icons/lightbulb';
+	import TablePropertiesIcon from '@lucide/svelte/icons/table-properties';
 	import ProjectSelector from './ProjectSelector.svelte';
 	import { cn } from '$lib/utils';
 	import { Button, buttonVariants } from '$lib/components/ui/button';
@@ -27,11 +28,15 @@
 	const workspace = useProjectWorkspaceContext();
 	const projectItems: ReadonlyArray<{
 		label: string;
-		path: '/projects/[projectId]/studies' | '/projects/[projectId]/appraisal';
+		path:
+			| '/projects/[projectId]/studies'
+			| '/projects/[projectId]/appraisal'
+			| '/projects/[projectId]/extraction';
 		icon: LucideIcon;
 	}> = [
 		{ label: 'Studies', path: '/projects/[projectId]/studies', icon: ClipboardListIcon },
-		{ label: 'Appraisal', path: '/projects/[projectId]/appraisal', icon: ClipboardPenLineIcon }
+		{ label: 'Appraisal', path: '/projects/[projectId]/appraisal', icon: ClipboardPenLineIcon },
+		{ label: 'Extraction', path: '/projects/[projectId]/extraction', icon: TablePropertiesIcon }
 	];
 	const navItems: {
 		view: ProjectWorkspaceNavView;

@@ -1,5 +1,9 @@
 <script lang="ts">
+	import { resolve } from '$app/paths';
+	import { untrack } from 'svelte';
 	import type {
+		AiAppraisalPrefillEvidenceDto,
+		AiAppraisalPrefillProposalPayload,
 		AppraisalDefinitionDto,
 		CompleteAppraisalRequest,
 		DocumentBlockDto
@@ -12,16 +16,49 @@
 		questionHasRequiredEvidence,
 		type AppraisalFormState
 	} from '../form';
+	import { appraisalEvidenceLabel, resolveAppraisalEvidence } from '../ai-prefill';
+	import { fullTextUrlString } from '$lib/features/full-text/url';
 	import { responseIsComplete } from '../renderer';
 
 	type Props = {
 		definition: AppraisalDefinitionDto;
 		blocks: DocumentBlockDto[];
-		onSubmit: (request: CompleteAppraisalRequest) => Promise<void>;
+		onSubmit: (request: CompleteAppraisalRequest, state: AppraisalFormState) => Promise<void>;
+		initialState?: AppraisalFormState;
+		projectId?: string;
+		reportId?: string;
+		originalPrefill?: AiAppraisalPrefillProposalPayload;
+		submitLabel?: string;
 	};
 
-	let { definition, blocks, onSubmit }: Props = $props();
-	let formState = $state<AppraisalFormState>(createInitialFormState());
+	let {
+		definition,
+		blocks,
+		onSubmit,
+		initialState,
+		projectId = '',
+		reportId = '',
+		originalPrefill,
+		submitLabel = 'Complete appraisal'
+	}: Props = $props();
+
+	function copyFormState(source: AppraisalFormState): AppraisalFormState {
+		return {
+			responses: { ...source.responses },
+			evidence: Object.fromEntries(
+				Object.entries(source.evidence).map(([questionId, selections]) => [
+					questionId,
+					selections.map((selection) => ({ ...selection }))
+				])
+			),
+			domainJudgments: { ...source.domainJudgments },
+			overallJudgment: source.overallJudgment
+		};
+	}
+
+	let formState = $state<AppraisalFormState>(
+		untrack(() => (initialState ? copyFormState(initialState) : createInitialFormState()))
+	);
 	let error = $state<string | undefined>();
 	let submitting = $state(false);
 
@@ -81,6 +118,13 @@
 		return typeof value === 'string' ? value : '';
 	}
 
+	function originalEvidence(questionId: string): AiAppraisalPrefillEvidenceDto[] {
+		return (
+			originalPrefill?.answers.find((answer) => answer.question_id === questionId)
+				?.evidence ?? []
+		);
+	}
+
 	async function submit(): Promise<void> {
 		error = undefined;
 		const incomplete = questions.find(
@@ -105,7 +149,7 @@
 		}
 		submitting = true;
 		try {
-			await onSubmit(buildAppraisalPayload(definition, formState));
+			await onSubmit(buildAppraisalPayload(definition, formState), formState);
 		} catch (submitError) {
 			error =
 				submitError instanceof Error
@@ -216,6 +260,47 @@
 										? event.currentTarget.value
 										: ''
 								)}></textarea>
+					{/if}
+					{#if originalPrefill && projectId && reportId}
+						<div
+							class="flex flex-col gap-2 rounded-md bg-muted/30 p-3"
+							data-testid={`ai-evidence-${question.id}`}
+						>
+							<span class="text-xs font-medium text-muted-foreground"
+								>Evidence provenance</span
+							>
+							{#each formState.evidence[question.id] ?? [] as selection, index (`${question.id}-source-${index}`)}
+								{@const evidence = resolveAppraisalEvidence(
+									selection,
+									originalEvidence(question.id),
+									blocks
+								)}
+								{#if evidence}
+									<a
+										class="text-xs text-primary underline underline-offset-2"
+										href={resolve(
+											`/projects/${encodeURIComponent(projectId)}/screening/full-text${fullTextUrlString(
+												{
+													filter: 'all',
+													report: reportId,
+													page: evidence.page,
+													block: evidence.document_block_id
+												}
+											)}`
+										)}
+										data-testid={`ai-evidence-link-${question.id}-${index}`}
+									>
+										{appraisalEvidenceLabel(evidence)}
+									</a>
+								{:else}
+									<p class="text-xs text-destructive">
+										This evidence block is no longer available.
+									</p>
+								{/if}
+							{:else}
+								<p class="text-xs text-muted-foreground">No evidence selected.</p>
+							{/each}
+						</div>
 					{/if}
 					{#if question.requires_evidence}
 						<div class="flex flex-col gap-2">
@@ -361,8 +446,7 @@
 	<button
 		type="submit"
 		class="inline-flex min-h-10 items-center justify-center rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90 disabled:pointer-events-none disabled:opacity-50"
-		disabled={submitting || (hasRequiredEvidence && blocks.length === 0)}
-		>Complete appraisal</button
+		disabled={submitting || (hasRequiredEvidence && blocks.length === 0)}>{submitLabel}</button
 	>
 	{#if hasRequiredEvidence && blocks.length === 0}<p class="text-xs text-muted-foreground">
 			A parsed document block is required before completing an appraisal.

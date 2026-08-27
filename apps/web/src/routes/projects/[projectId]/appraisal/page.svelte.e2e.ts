@@ -1,4 +1,5 @@
 import { expect, test, type Page } from '@playwright/test';
+import type { AiProposalDto } from '$lib/api/generated/models';
 
 const project = {
 	id: 'project-1',
@@ -140,25 +141,26 @@ async function mockShell(page: Page): Promise<void> {
 	await page.route('http://localhost:4173/api/health/dependencies', async (route) =>
 		route.fulfill({ json: dependencies })
 	);
-	await page.route(/http:\/\/localhost:4173\/api\/projects(?:\?.*)?$/, async (route) =>
+	await page.route(/\/api\/projects(?:\?.*)?$/, async (route) =>
 		route.fulfill({ json: { items: [project], next_cursor: null } })
 	);
-	await page.route('http://localhost:4173/api/projects/project-1', async (route) =>
+	await page.route(/\/api\/projects\/project-1(?:\?.*)?$/, async (route) =>
 		route.fulfill({ json: project })
 	);
-	await page.route(/http:\/\/localhost:4173\/api\/ingestions(?:\?.*)?$/, async (route) =>
+	await page.route(/\/api\/ingestions(?:\?.*)?$/, async (route) =>
 		route.fulfill({ json: { items: [], next_cursor: null } })
 	);
-	await page.route(
-		/http:\/\/localhost:4173\/api\/projects\/project-1\/reports(?:\?.*)?$/,
-		async (route) => route.fulfill({ json: { items: [report], next_cursor: null } })
+	await page.route(/\/api\/projects\/project-1\/reports(?:\?.*)?$/, async (route) =>
+		route.fulfill({ json: { items: [report], next_cursor: null } })
+	);
+	await page.route(/\/api\/projects\/project-1\/ai\/proposals(?:\?.*)?$/, async (route) =>
+		route.fulfill({ json: { items: [], next_cursor: null } })
+	);
+	await page.route(/\/api\/projects\/project-1\/appraisal-definitions(?:\?.*)?$/, async (route) =>
+		route.fulfill({ json: definitions })
 	);
 	await page.route(
-		'http://localhost:4173/api/projects/project-1/appraisal-definitions',
-		async (route) => route.fulfill({ json: definitions })
-	);
-	await page.route(
-		'http://localhost:4173/api/projects/project-1/reports/report-1/documents?limit=100',
+		/\/api\/projects\/project-1\/reports\/report-1\/documents(?:\?.*)?$/,
 		async (route) =>
 			route.fulfill({
 				json: [
@@ -181,7 +183,7 @@ async function mockShell(page: Page): Promise<void> {
 			})
 	);
 	await page.route(
-		'http://localhost:4173/api/projects/project-1/reports/report-1/documents/document-1/blocks?limit=100',
+		/\/api\/projects\/project-1\/reports\/report-1\/documents\/document-1\/blocks(?:\?.*)?$/,
 		async (route) =>
 			route.fulfill({
 				json: [
@@ -213,7 +215,7 @@ async function mockShell(page: Page): Promise<void> {
 			})
 	);
 	await page.route(
-		'http://localhost:4173/api/projects/project-1/reports/report-1/appraisals',
+		/\/api\/projects\/project-1\/reports\/report-1\/appraisals(?:\?.*)?$/,
 		async (route) => {
 			if (route.request().method() === 'GET') await route.fulfill({ json: [] });
 			else
@@ -339,4 +341,221 @@ test('renders and submits both generic appraisal shapes with required evidence',
 	expect(payloads[1]?.evidence).toEqual([
 		{ question_id: 'transparency_score', document_id: 'document-1', block_id: 'block-1' }
 	]);
+});
+
+test('reviews an edited AI appraisal pre-fill with evidence navigation and decision refreshes', async ({
+	page
+}) => {
+	await mockShell(page);
+	const evidenceHash = 'a'.repeat(64);
+	const proposalPayload = {
+		kind: 'appraisal_prefill' as const,
+		report_id: report.report_id,
+		definition_id: 'deepref-rct-generic',
+		definition_version: 1,
+		answers: [
+			{
+				question_id: 'allocation_description',
+				answer: { kind: 'enum' as const, value: 'yes' },
+				rationale: 'The report describes the allocation process.',
+				evidence: [
+					{
+						document_id: 'document-1',
+						document_block_id: 'block-1',
+						page: 1,
+						parser_version: 'parser-1',
+						content_hash: evidenceHash
+					}
+				]
+			},
+			{
+				question_id: 'outcome_measure_prespecified',
+				answer: { kind: 'boolean' as const, value: true },
+				rationale: 'The outcome measure was prespecified.',
+				evidence: []
+			}
+		],
+		domain_judgments: { allocation: 'low_concern', outcome_reporting: 'low_concern' },
+		overall_judgment: 'low_concern'
+	};
+	let proposalNumber = 0;
+	let pendingProposal: AiProposalDto | null = null;
+	let historyReads = 0;
+	let completeCalls = 0;
+	const decisions: unknown[] = [];
+	const appraisalHistory: Record<string, unknown>[] = [];
+
+	function createProposal(): AiProposalDto {
+		proposalNumber += 1;
+		return {
+			authority_tier: 'grounded',
+			created_at: '2026-01-01T00:00:00Z',
+			entity_id: null,
+			entity_type: 'report',
+			evidence_hash: evidenceHash,
+			expected_revision: null,
+			id: `proposal-${proposalNumber}`,
+			input_hash: `input-${proposalNumber}`,
+			model: 'mock-model',
+			model_run_id: `run-${proposalNumber}`,
+			model_version: '1',
+			operation: 'appraisal_prefill',
+			payload: proposalPayload,
+			project_id: project.id,
+			prompt_hash: 'prompt-hash',
+			prompt_version: '1',
+			protocol_version_id: null,
+			provider: 'mock-provider',
+			resolution_reason: null,
+			resolved_at: null,
+			resolved_by_actor_id: null,
+			resolved_by_actor_kind: null,
+			schema_hash: 'schema-hash',
+			schema_version: '1',
+			status: 'pending',
+			target_record_id: null,
+			target_report_id: report.report_id,
+			target_study_id: null,
+			task_kind: 'appraisal_prefill'
+		};
+	}
+
+	await page.route(
+		/http:\/\/localhost:4173\/api\/projects\/project-1\/ai\/proposals(?:\?.*)?$/,
+		async (route) =>
+			await route.fulfill({
+				json: { items: pendingProposal ? [pendingProposal] : [], next_cursor: null }
+			})
+	);
+	await page.route(
+		'http://localhost:4173/api/projects/project-1/reports/report-1/ai/appraisal-prefill',
+		async (route) => {
+			pendingProposal = createProposal();
+			await route.fulfill({ json: pendingProposal });
+		}
+	);
+	await page.route(
+		/http:\/\/localhost:4173\/api\/projects\/project-1\/ai\/proposals\/proposal-\d+\/decision$/,
+		async (route) => {
+			const body: unknown = route.request().postDataJSON();
+			decisions.push(body);
+			const resolvedProposal = pendingProposal ?? createProposal();
+			const isAccept =
+				typeof body === 'object' &&
+				body !== null &&
+				'decision' in body &&
+				body.decision === 'accept';
+			if (isAccept) {
+				appraisalHistory.push({
+					id: 'assessment-ai-1',
+					project_id: project.id,
+					report_id: report.report_id,
+					definition_id: proposalPayload.definition_id,
+					definition_version: proposalPayload.definition_version,
+					responses: {
+						allocation_description: 'yes',
+						outcome_measure_prespecified: false
+					},
+					judgments: proposalPayload.domain_judgments,
+					evidence: proposalPayload.answers[0].evidence,
+					actor_kind: 'user',
+					actor_id: 'tester',
+					completed_at: '2026-01-02T00:00:00Z',
+					created_at: '2026-01-02T00:00:00Z'
+				});
+			}
+			pendingProposal = null;
+			await route.fulfill({
+				json: {
+					proposal: { ...resolvedProposal, status: isAccept ? 'accepted' : 'rejected' },
+					applied_revision: 1
+				}
+			});
+		}
+	);
+	await page.route(
+		'http://localhost:4173/api/projects/project-1/reports/report-1/appraisals',
+		async (route) => {
+			if (route.request().method() === 'POST') completeCalls += 1;
+			if (route.request().method() === 'GET') {
+				historyReads += 1;
+				await route.fulfill({ json: appraisalHistory });
+				return;
+			}
+			await route.fallback();
+		}
+	);
+
+	await page.goto(
+		'/projects/project-1/appraisal?report=report-1&definition=deepref-rct-generic&definition_version=1'
+	);
+	await page.getByTestId('generate-ai-prefill').click();
+	await expect(page.getByTestId('ai-prefill-proposal')).toBeVisible();
+	await expect(page.getByTestId('ai-answer-allocation_description')).toContainText(
+		'Suggested answer: yes'
+	);
+	const evidenceLink = page.getByTestId('ai-evidence-link-allocation_description').first();
+	await expect(evidenceLink).toHaveAttribute(
+		'href',
+		'/projects/project-1/screening/full-text?report=report-1&page=1&block=block-1'
+	);
+	await evidenceLink.click();
+	await expect(page).toHaveURL(
+		/projects\/project-1\/screening\/full-text\?report=report-1&page=1&block=block-1/
+	);
+	await page.goto(
+		'/projects/project-1/appraisal?report=report-1&definition=deepref-rct-generic&definition_version=1'
+	);
+	await expect(page.getByTestId('ai-prefill-proposal')).toBeVisible();
+
+	await page.locator('#outcome_measure_prespecified').uncheck();
+	await page.locator('#allocation_description-evidence-0').selectOption('block-2');
+	await page.getByRole('button', { name: 'Accept reviewed AI pre-fill' }).click();
+	await expect.poll(() => decisions.length).toBe(1);
+	const acceptedBody = decisions[0];
+	expect(acceptedBody).toMatchObject({
+		decision: 'accept',
+		reviewed_payload: {
+			kind: 'appraisal_prefill',
+			report_id: 'report-1',
+			definition_id: 'deepref-rct-generic',
+			definition_version: 1,
+			answers: [
+				{
+					question_id: 'allocation_description',
+					evidence: [{ document_block_id: 'block-2', content_hash: 'b'.repeat(64) }]
+				},
+				{
+					question_id: 'outcome_measure_prespecified',
+					answer: { kind: 'boolean', value: false }
+				}
+			]
+		}
+	});
+	await expect(page.getByText('assessment-ai-1')).toBeVisible();
+	await expect.poll(() => historyReads).toBeGreaterThan(1);
+	expect(completeCalls).toBe(0);
+	await expect(page.getByText('No pending AI pre-fill')).toBeVisible();
+
+	await page.getByTestId('generate-ai-prefill').click();
+	await expect(page.getByTestId('ai-prefill-proposal')).toBeVisible();
+	await page.getByTestId('reject-ai-prefill').click();
+	await expect.poll(() => decisions.length).toBe(2);
+	expect(decisions[1]).toEqual({
+		decision: 'reject',
+		reason: 'Human reviewer rejected the AI appraisal prefill.'
+	});
+	if (decisions[1] && typeof decisions[1] === 'object') {
+		expect('reviewed_payload' in decisions[1]).toBe(false);
+	}
+
+	await page.getByTestId('generate-ai-prefill').click();
+	await expect(page.getByTestId('ai-prefill-proposal')).toBeVisible();
+	await page.route(
+		'http://localhost:4173/api/projects/project-1/ai/proposals/proposal-3/decision',
+		async (route) => await route.fulfill({ status: 409, json: { message: 'revision changed' } })
+	);
+	await page.getByTestId('reject-ai-prefill').click();
+	await expect(page.getByRole('alert')).toContainText('stale');
+	await expect(page.getByTestId('ai-prefill-proposal')).toBeVisible();
 });
