@@ -718,6 +718,279 @@
         }
       }
     },
+    "/projects/{project_id}/ai/proposals": {
+      "get": {
+        "tags": [
+          "ai"
+        ],
+        "operationId": "listAiProposals",
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "path",
+            "description": "Project identifier",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "description": "Opaque pagination cursor",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "Page size from 1 through 100",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          },
+          {
+            "name": "status",
+            "in": "query",
+            "description": "pending, accepted, rejected, or expired",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "task_kind",
+            "in": "query",
+            "description": "AI task kind filter",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "target_report_id",
+            "in": "query",
+            "description": "Screening report target",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "target_record_id",
+            "in": "query",
+            "description": "Dedupe source record target",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "candidate_report_id",
+            "in": "query",
+            "description": "Dedupe candidate report target",
+            "required": false,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Project-scoped AI proposals",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PaginatedResponse_AiProposalDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid pagination or filter",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/projects/{project_id}/ai/proposals/{proposal_id}": {
+      "get": {
+        "tags": [
+          "ai"
+        ],
+        "operationId": "getAiProposal",
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "path",
+            "description": "Project identifier",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "proposal_id",
+            "in": "path",
+            "description": "AI proposal identifier",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "AI proposal",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AiProposalDto"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "AI proposal not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/projects/{project_id}/ai/proposals/{proposal_id}/decision": {
+      "post": {
+        "tags": [
+          "ai"
+        ],
+        "operationId": "decideAiProposal",
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "path",
+            "description": "Project identifier",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "proposal_id",
+            "in": "path",
+            "description": "AI proposal identifier",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DecideAiProposalRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "AI proposal resolution",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AiProposalDecisionDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid decision",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "AI proposal target not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Proposal or domain revision conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/projects/{project_id}/appraisal-definitions": {
       "get": {
         "tags": [
@@ -1623,6 +1896,108 @@
         }
       }
     },
+    "/projects/{project_id}/records/{record_id}/ai/deduplication": {
+      "post": {
+        "tags": [
+          "ai"
+        ],
+        "operationId": "generateDuplicateSuggestion",
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "path",
+            "description": "Project identifier",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "record_id",
+            "in": "path",
+            "description": "Source record identifier",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GenerateDuplicateRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "AI duplicate assistance proposal",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AiProposalDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid AI request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Record or candidate report not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "A proposal conflicts",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "AI provider is unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/projects/{project_id}/records/{record_id}/resolution": {
       "post": {
         "tags": [
@@ -1830,6 +2205,108 @@
           },
           "404": {
             "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/projects/{project_id}/reports/{report_id}/ai/screening": {
+      "post": {
+        "tags": [
+          "ai"
+        ],
+        "operationId": "generateScreeningSuggestion",
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "path",
+            "description": "Project identifier",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "report_id",
+            "in": "path",
+            "description": "Report identifier",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/GenerateScreeningRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "AI screening proposal",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AiProposalDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid AI request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Project, report, or protocol not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "A current proposal or revision conflicts",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "AI provider is unavailable",
             "content": {
               "application/json": {
                 "schema": {
@@ -4256,6 +4733,669 @@
           }
         }
       },
+      "AiCriterionJudgmentDto": {
+        "type": "object",
+        "required": [
+          "criterion_id",
+          "criterion_label",
+          "judgment",
+          "rationale",
+          "evidence"
+        ],
+        "properties": {
+          "criterion_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "criterion_label": {
+            "type": "string"
+          },
+          "evidence": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AiScreeningEvidenceDto"
+            }
+          },
+          "judgment": {
+            "$ref": "#/components/schemas/AiCriterionResultDto"
+          },
+          "rationale": {
+            "type": "string"
+          }
+        }
+      },
+      "AiCriterionResultDto": {
+        "type": "string",
+        "enum": [
+          "meets",
+          "does_not_meet",
+          "unclear"
+        ]
+      },
+      "AiDuplicateCandidateDto": {
+        "type": "object",
+        "required": [
+          "source_record_id",
+          "candidate_report_id"
+        ],
+        "properties": {
+          "candidate_report_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "source_record_id": {
+            "type": "string",
+            "format": "uuid"
+          }
+        }
+      },
+      "AiDuplicateDecisionDto": {
+        "type": "string",
+        "enum": [
+          "match",
+          "no_match",
+          "insufficient_evidence"
+        ]
+      },
+      "AiDuplicateProposalPayload": {
+        "type": "object",
+        "required": [
+          "task_kind",
+          "candidate",
+          "decision",
+          "rationale",
+          "signals",
+          "provenance",
+          "uncertainties"
+        ],
+        "properties": {
+          "candidate": {
+            "$ref": "#/components/schemas/AiDuplicateCandidateDto"
+          },
+          "decision": {
+            "$ref": "#/components/schemas/AiDuplicateDecisionDto"
+          },
+          "provenance": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AiIdentityProvenanceDto"
+            }
+          },
+          "rationale": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AiDuplicateRationaleDto"
+            }
+          },
+          "signals": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AiDuplicateSignalDto"
+            }
+          },
+          "task_kind": {
+            "type": "string"
+          },
+          "uncertainties": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "AiDuplicateRationaleDto": {
+        "type": "object",
+        "required": [
+          "code",
+          "explanation"
+        ],
+        "properties": {
+          "code": {
+            "type": "string"
+          },
+          "explanation": {
+            "type": "string"
+          }
+        }
+      },
+      "AiDuplicateSignalDto": {
+        "oneOf": [
+          {
+            "type": "object",
+            "required": [
+              "similarity",
+              "supports_match",
+              "kind"
+            ],
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "title_similarity"
+                ]
+              },
+              "similarity": {
+                "type": "number",
+                "format": "double"
+              },
+              "supports_match": {
+                "type": "boolean"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "source_year",
+              "candidate_year",
+              "supports_match",
+              "kind"
+            ],
+            "properties": {
+              "candidate_year": {
+                "type": "integer",
+                "format": "int32"
+              },
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "publication_year"
+                ]
+              },
+              "source_year": {
+                "type": "integer",
+                "format": "int32"
+              },
+              "supports_match": {
+                "type": "boolean"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "source_author",
+              "candidate_author",
+              "similarity",
+              "supports_match",
+              "kind"
+            ],
+            "properties": {
+              "candidate_author": {
+                "type": "string"
+              },
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "first_author"
+                ]
+              },
+              "similarity": {
+                "type": "number",
+                "format": "double"
+              },
+              "source_author": {
+                "type": "string"
+              },
+              "supports_match": {
+                "type": "boolean"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "scheme",
+              "source_value",
+              "candidate_value",
+              "supports_match",
+              "kind"
+            ],
+            "properties": {
+              "candidate_value": {
+                "type": "string"
+              },
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "durable_identifier"
+                ]
+              },
+              "scheme": {
+                "type": "string"
+              },
+              "source_value": {
+                "type": "string"
+              },
+              "supports_match": {
+                "type": "boolean"
+              }
+            }
+          }
+        ]
+      },
+      "AiIdentityProvenanceDto": {
+        "type": "object",
+        "required": [
+          "entity_type",
+          "entity_id",
+          "field",
+          "content_hash"
+        ],
+        "properties": {
+          "content_hash": {
+            "type": "string"
+          },
+          "entity_id": {
+            "type": "string"
+          },
+          "entity_type": {
+            "type": "string"
+          },
+          "field": {
+            "type": "string"
+          }
+        }
+      },
+      "AiProposalDecisionDto": {
+        "type": "object",
+        "required": [
+          "proposal"
+        ],
+        "properties": {
+          "applied_revision": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64"
+          },
+          "proposal": {
+            "$ref": "#/components/schemas/AiProposalDto"
+          }
+        }
+      },
+      "AiProposalDecisionInput": {
+        "type": "string",
+        "enum": [
+          "accept",
+          "reject"
+        ]
+      },
+      "AiProposalDto": {
+        "type": "object",
+        "required": [
+          "id",
+          "project_id",
+          "task_kind",
+          "entity_type",
+          "operation",
+          "payload",
+          "authority_tier",
+          "model_run_id",
+          "provider",
+          "model",
+          "model_version",
+          "prompt_version",
+          "schema_version",
+          "status",
+          "created_at"
+        ],
+        "properties": {
+          "authority_tier": {
+            "type": "string"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "entity_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          },
+          "entity_type": {
+            "type": "string"
+          },
+          "expected_revision": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64"
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "model": {
+            "type": "string"
+          },
+          "model_run_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "model_version": {
+            "type": "string"
+          },
+          "operation": {
+            "type": "string"
+          },
+          "payload": {
+            "$ref": "#/components/schemas/AiProposalPayload"
+          },
+          "project_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "prompt_version": {
+            "type": "string"
+          },
+          "protocol_version_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          },
+          "provider": {
+            "type": "string"
+          },
+          "resolution_reason": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "resolved_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "resolved_by_actor_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "resolved_by_actor_kind": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "schema_version": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          },
+          "target_record_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          },
+          "target_report_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          },
+          "task_kind": {
+            "type": "string"
+          }
+        }
+      },
+      "AiProposalPayload": {
+        "oneOf": [
+          {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/AiScreeningProposalPayload"
+              },
+              {
+                "type": "object",
+                "required": [
+                  "kind"
+                ],
+                "properties": {
+                  "kind": {
+                    "type": "string",
+                    "enum": [
+                      "screening"
+                    ]
+                  }
+                }
+              }
+            ]
+          },
+          {
+            "allOf": [
+              {
+                "$ref": "#/components/schemas/AiDuplicateProposalPayload"
+              },
+              {
+                "type": "object",
+                "required": [
+                  "kind"
+                ],
+                "properties": {
+                  "kind": {
+                    "type": "string",
+                    "enum": [
+                      "duplicate"
+                    ]
+                  }
+                }
+              }
+            ]
+          }
+        ]
+      },
+      "AiScreeningEvidenceDto": {
+        "oneOf": [
+          {
+            "type": "object",
+            "required": [
+              "report_id",
+              "field",
+              "content_hash",
+              "kind"
+            ],
+            "properties": {
+              "content_hash": {
+                "type": "string"
+              },
+              "field": {
+                "$ref": "#/components/schemas/AiScreeningEvidenceFieldDto"
+              },
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "report_metadata"
+                ]
+              },
+              "report_id": {
+                "type": "string",
+                "format": "uuid"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "document_block_id",
+              "page",
+              "content_hash",
+              "section_path",
+              "kind"
+            ],
+            "properties": {
+              "content_hash": {
+                "type": "string"
+              },
+              "document_block_id": {
+                "type": "string",
+                "format": "uuid"
+              },
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "document_block"
+                ]
+              },
+              "page": {
+                "type": "integer",
+                "format": "int32",
+                "minimum": 0
+              },
+              "section_path": {
+                "type": "array",
+                "items": {
+                  "type": "string"
+                }
+              }
+            }
+          }
+        ]
+      },
+      "AiScreeningEvidenceFieldDto": {
+        "type": "string",
+        "enum": [
+          "title",
+          "abstract"
+        ]
+      },
+      "AiScreeningProposalPayload": {
+        "type": "object",
+        "required": [
+          "task_kind",
+          "report_id",
+          "expected_revision",
+          "stage",
+          "protocol_version_id",
+          "criteria",
+          "suggested_decision",
+          "uncertainties"
+        ],
+        "properties": {
+          "criteria": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AiCriterionJudgmentDto"
+            }
+          },
+          "expected_revision": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "protocol_version_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "report_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "stage": {
+            "$ref": "#/components/schemas/AiScreeningStageInput"
+          },
+          "suggested_decision": {
+            "$ref": "#/components/schemas/AiSuggestedDecisionDto"
+          },
+          "task_kind": {
+            "type": "string"
+          },
+          "uncertainties": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "AiScreeningStageInput": {
+        "type": "string",
+        "enum": [
+          "title_abstract",
+          "full_text"
+        ]
+      },
+      "AiSuggestedDecisionDto": {
+        "oneOf": [
+          {
+            "type": "object",
+            "required": [
+              "kind"
+            ],
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "include"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "kind"
+            ],
+            "properties": {
+              "exclusion_reason_id": {
+                "type": [
+                  "string",
+                  "null"
+                ],
+                "format": "uuid"
+              },
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "exclude"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "kind"
+            ],
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "maybe"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "kind"
+            ],
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "insufficient_evidence"
+                ]
+              }
+            }
+          }
+        ]
+      },
       "ApiErrorBody": {
         "type": "object",
         "required": [
@@ -4827,6 +5967,21 @@
           "full_text",
           "both"
         ]
+      },
+      "DecideAiProposalRequest": {
+        "type": "object",
+        "required": [
+          "decision",
+          "reason"
+        ],
+        "properties": {
+          "decision": {
+            "$ref": "#/components/schemas/AiProposalDecisionInput"
+          },
+          "reason": {
+            "type": "string"
+          }
+        }
       },
       "DedupeProposalDto": {
         "type": "object",
@@ -5429,6 +6584,43 @@
           }
         }
       },
+      "GenerateDuplicateRequest": {
+        "type": "object",
+        "required": [
+          "candidate_report_id"
+        ],
+        "properties": {
+          "candidate_report_id": {
+            "type": "string",
+            "format": "uuid"
+          }
+        }
+      },
+      "GenerateScreeningRequest": {
+        "type": "object",
+        "required": [
+          "stage"
+        ],
+        "properties": {
+          "expected_revision": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64"
+          },
+          "protocol_version_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          },
+          "stage": {
+            "$ref": "#/components/schemas/AiScreeningStageInput"
+          }
+        }
+      },
       "GraphAppraisalDto": {
         "type": "object",
         "required": [
@@ -5915,6 +7107,154 @@
                   "type": "string"
                 },
                 "strategy": {
+                  "type": "string"
+                }
+              }
+            }
+          },
+          "next_cursor": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "PaginatedResponse_AiProposalDto": {
+        "type": "object",
+        "required": [
+          "items"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": [
+                "id",
+                "project_id",
+                "task_kind",
+                "entity_type",
+                "operation",
+                "payload",
+                "authority_tier",
+                "model_run_id",
+                "provider",
+                "model",
+                "model_version",
+                "prompt_version",
+                "schema_version",
+                "status",
+                "created_at"
+              ],
+              "properties": {
+                "authority_tier": {
+                  "type": "string"
+                },
+                "created_at": {
+                  "type": "string",
+                  "format": "date-time"
+                },
+                "entity_id": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "format": "uuid"
+                },
+                "entity_type": {
+                  "type": "string"
+                },
+                "expected_revision": {
+                  "type": [
+                    "integer",
+                    "null"
+                  ],
+                  "format": "int64"
+                },
+                "id": {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                "model": {
+                  "type": "string"
+                },
+                "model_run_id": {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                "model_version": {
+                  "type": "string"
+                },
+                "operation": {
+                  "type": "string"
+                },
+                "payload": {
+                  "$ref": "#/components/schemas/AiProposalPayload"
+                },
+                "project_id": {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                "prompt_version": {
+                  "type": "string"
+                },
+                "protocol_version_id": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "format": "uuid"
+                },
+                "provider": {
+                  "type": "string"
+                },
+                "resolution_reason": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "resolved_at": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "format": "date-time"
+                },
+                "resolved_by_actor_id": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "resolved_by_actor_kind": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "schema_version": {
+                  "type": "string"
+                },
+                "status": {
+                  "type": "string"
+                },
+                "target_record_id": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "format": "uuid"
+                },
+                "target_report_id": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "format": "uuid"
+                },
+                "task_kind": {
                   "type": "string"
                 }
               }

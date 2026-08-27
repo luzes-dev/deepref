@@ -26,6 +26,7 @@
 		ScreeningStateDto
 	} from '$lib/api/generated/models';
 	import { page } from '$app/state';
+	import AiProposalReview from '$lib/features/ai-assistance/components/AiProposalReview.svelte';
 	import { resolve } from '$app/paths';
 	import { pushState, replaceState } from '$app/navigation';
 	import { ApiError } from '$lib/api/custom-fetch';
@@ -238,6 +239,17 @@
 	function handleBlockSelect(block: DocumentBlockDto) {
 		void updateUrl(
 			{ report: currentReportId, page: block.page_number, block: block.id },
+			false
+		);
+	}
+
+	function handleAiEvidenceSelect(evidence: {
+		document_block_id: string;
+		page: number;
+		section_path: string[];
+	}) {
+		void updateUrl(
+			{ report: currentReportId, page: evidence.page, block: evidence.document_block_id },
 			false
 		);
 	}
@@ -607,7 +619,18 @@
 					criteria={protocol?.criteria ?? []}
 					protocolVersion={protocol?.version}
 					stage="full_text"
-				/><ScreeningHistory items={historyItems} />
+				/>
+				{#if currentReportId}
+					<AiProposalReview
+						{projectId}
+						reportId={currentReportId}
+						stage="full_text"
+						protocolVersionId={protocol?.id}
+						expectedRevision={screenRevision}
+						onEvidenceSelect={handleAiEvidenceSelect}
+					/>
+				{/if}
+				<ScreeningHistory items={historyItems} />
 			</aside>
 		</div>
 	{/if}

@@ -203,6 +203,7 @@ async fn postgres_ai_adapters_persist_routes_runs_embeddings_hybrid_results_and_
     let results = store
         .retrieve(RetrievalRequest {
             project_id,
+            report_id: None,
             document_id: Some(DocumentId::new(document_id)),
             query: "alpha".to_owned(),
             embedding: Some(embedding),
@@ -531,6 +532,80 @@ async fn hybrid_retrieval_is_dimension_safe_parser_scoped_and_prefix_ordered() {
     let Some(pool) = database().await else { return };
     let store = PostgresAiStore::new(&pool);
     let (project_id, document_id, first_block) = fixture(&pool).await;
+    let original_report_id: Uuid =
+        sqlx::query_scalar("SELECT report_id FROM documents WHERE id=$1")
+            .bind(document_id)
+            .fetch_one(&pool)
+            .await
+            .expect("original report");
+    let other_report_id = Uuid::new_v4();
+    let other_document_id = Uuid::new_v4();
+    let other_block_id = Uuid::new_v4();
+    sqlx::query("INSERT INTO reports (id,title) VALUES ($1,'Other report in same project')")
+        .bind(other_report_id)
+        .execute(&pool)
+        .await
+        .expect("other report");
+    sqlx::query("INSERT INTO project_reports (project_id,report_id) VALUES ($1,$2)")
+        .bind(project_id.as_uuid())
+        .bind(other_report_id)
+        .execute(&pool)
+        .await
+        .expect("other report membership");
+    sqlx::query(
+        "INSERT INTO documents
+         (id,project_id,report_id,object_key,content_hash,mime_type,byte_size,source,status,
+          actor_kind,actor_id,active_parser_version,parser_version)
+         VALUES ($1,$2,$3,$4,$5,'application/pdf',10,'upload','available','system','ai-test','parser.v1','parser.v1')",
+    )
+    .bind(other_document_id)
+    .bind(project_id.as_uuid())
+    .bind(other_report_id)
+    .bind(format!("documents/{other_document_id}"))
+    .bind("c".repeat(64))
+    .execute(&pool)
+    .await
+    .expect("other document");
+    sqlx::query(
+        "INSERT INTO document_pages(document_id,parser_version,page_number,width,height,active)
+         VALUES ($1,'parser.v1',1,600,800,true)",
+    )
+    .bind(other_document_id)
+    .execute(&pool)
+    .await
+    .expect("other page");
+    sqlx::query(
+        "INSERT INTO document_blocks
+         (id,document_id,parser_version,page_number,page_width,page_height,kind,section_path,
+          ordinal,text,content_hash,active)
+         VALUES ($1,$2,'parser.v1',1,600,800,'text',ARRAY['Results'],0,
+                 'Alpha evidence from another report', $3,true)",
+    )
+    .bind(other_block_id)
+    .bind(other_document_id)
+    .bind("c".repeat(64))
+    .execute(&pool)
+    .await
+    .expect("other block");
+    let report_scoped = store
+        .retrieve(RetrievalRequest {
+            project_id,
+            report_id: Some(original_report_id),
+            document_id: None,
+            query: "alpha".to_owned(),
+            embedding: None,
+            section_prefix: None,
+            kind: None,
+            limit: 10,
+        })
+        .await
+        .expect("report-scoped retrieval");
+    assert_eq!(report_scoped.len(), 1);
+    assert!(
+        report_scoped
+            .iter()
+            .all(|block| block.evidence.document_block_id.as_uuid() != other_block_id)
+    );
     let second_block = DocumentBlockId::new(Uuid::new_v4());
     let stale_block = DocumentBlockId::new(Uuid::new_v4());
     extra_block(
@@ -581,6 +656,7 @@ async fn hybrid_retrieval_is_dimension_safe_parser_scoped_and_prefix_ordered() {
     let lexical = store
         .retrieve(RetrievalRequest {
             project_id,
+            report_id: None,
             document_id: Some(DocumentId::new(document_id)),
             query: "alpha".to_owned(),
             embedding: Some(second_embedding.clone()),
@@ -601,6 +677,7 @@ async fn hybrid_retrieval_is_dimension_safe_parser_scoped_and_prefix_ordered() {
     let vector_only = store
         .retrieve(RetrievalRequest {
             project_id,
+            report_id: None,
             document_id: Some(DocumentId::new(document_id)),
             query: String::new(),
             embedding: Some(second_embedding),
@@ -615,6 +692,7 @@ async fn hybrid_retrieval_is_dimension_safe_parser_scoped_and_prefix_ordered() {
     let prefix = store
         .retrieve(RetrievalRequest {
             project_id,
+            report_id: None,
             document_id: Some(DocumentId::new(document_id)),
             query: "alpha".to_owned(),
             embedding: None,
@@ -627,6 +705,191 @@ async fn hybrid_retrieval_is_dimension_safe_parser_scoped_and_prefix_ordered() {
     assert_eq!(prefix.len(), 1);
     assert_eq!(prefix[0].evidence.document_block_id, second_block);
     cleanup(&pool, project_id).await;
+}
+
+#[tokio::test]
+async fn pr12_migration_installs_project_scoped_typed_proposal_fields() {
+    let Some(pool) = database().await else { return };
+    let columns: Vec<String> = sqlx::query_scalar(
+        "SELECT column_name FROM information_schema.columns
+         WHERE table_name='ai_proposals' AND column_name = ANY($1::text[])
+         ORDER BY column_name",
+    )
+    .bind(vec![
+        "task_kind",
+        "target_report_id",
+        "target_record_id",
+        "protocol_version_id",
+        "expected_revision",
+    ])
+    .fetch_all(&pool)
+    .await
+    .expect("PR12 proposal columns");
+    assert_eq!(columns.len(), 5);
+
+    for table in ["ai_proposal_criterion_judgments", "ai_proposal_evidence"] {
+        let exists: bool = sqlx::query_scalar("SELECT to_regclass($1) IS NOT NULL")
+            .bind(table)
+            .fetch_one(&pool)
+            .await
+            .expect("PR12 typed proposal table");
+        assert!(exists, "missing {table}");
+    }
+    let judgment_columns: Vec<String> = sqlx::query_scalar(
+        "SELECT column_name FROM information_schema.columns
+         WHERE table_name='ai_proposal_criterion_judgments'
+           AND column_name = ANY($1::text[])",
+    )
+    .bind(vec!["protocol_version_id"])
+    .fetch_all(&pool)
+    .await
+    .expect("criterion projection columns");
+    assert_eq!(judgment_columns, vec!["protocol_version_id"]);
+    let evidence_columns: Vec<String> = sqlx::query_scalar(
+        "SELECT column_name FROM information_schema.columns
+         WHERE table_name='ai_proposal_evidence'
+           AND column_name = ANY($1::text[])
+         ORDER BY column_name",
+    )
+    .bind(vec!["document_id", "report_id"])
+    .fetch_all(&pool)
+    .await
+    .expect("evidence projection columns");
+    assert_eq!(evidence_columns, vec!["document_id", "report_id"]);
+    let projection_constraints: i64 = sqlx::query_scalar(
+        "SELECT count(*)::bigint FROM pg_constraint
+         WHERE conname IN ('ai_proposal_criterion_judgments_protocol_version_id_fkey',
+                           'ai_proposal_evidence_project_report_fkey',
+                           'ai_proposal_evidence_document_project_report_fkey',
+                           'ai_proposal_evidence_document_block_fkey')",
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("projection constraints");
+    assert_eq!(projection_constraints, 4);
+    let project_target_fk: i64 = sqlx::query_scalar(
+        "SELECT count(*)::bigint FROM pg_constraint
+         WHERE conname IN ('ai_proposals_project_report_target_fkey',
+                           'ai_proposals_project_record_target_fkey',
+                           'ai_proposals_project_protocol_target_fkey')",
+    )
+    .fetch_one(&pool)
+    .await
+    .expect("PR12 project target constraints");
+    assert_eq!(project_target_fk, 3);
+}
+
+#[tokio::test]
+async fn pr12_projection_foreign_keys_reject_cross_project_criterion_and_block_references() {
+    let Some(pool) = database().await else { return };
+    let (project_a, document_a, _block_a) = fixture(&pool).await;
+    let (project_b, document_b, block_b) = fixture(&pool).await;
+    let report_a: Uuid = sqlx::query_scalar("SELECT report_id FROM documents WHERE id=$1")
+        .bind(document_a)
+        .fetch_one(&pool)
+        .await
+        .expect("project A report");
+    let report_b: Uuid = sqlx::query_scalar("SELECT report_id FROM documents WHERE id=$1")
+        .bind(document_b)
+        .fetch_one(&pool)
+        .await
+        .expect("project B report");
+    let protocol_a = Uuid::new_v4();
+    let protocol_b = Uuid::new_v4();
+    let criterion_a = Uuid::new_v4();
+    let criterion_b = Uuid::new_v4();
+    sqlx::query(
+        "INSERT INTO protocol_versions (id,project_id,version,name,status,criteria)
+         VALUES ($1,$2,1,'A','draft','[]'::jsonb),($3,$4,1,'B','draft','[]'::jsonb)",
+    )
+    .bind(protocol_a)
+    .bind(project_a.as_uuid())
+    .bind(protocol_b)
+    .bind(project_b.as_uuid())
+    .execute(&pool)
+    .await
+    .expect("protocols");
+    sqlx::query(
+        "INSERT INTO eligibility_criteria
+         (id,protocol_version_id,criterion_type,stage,dimension,label,description,ordinal)
+         VALUES ($1,$2,'include','title_abstract','population','A','A',0),
+                ($3,$4,'include','title_abstract','population','B','B',0)",
+    )
+    .bind(criterion_a)
+    .bind(protocol_a)
+    .bind(criterion_b)
+    .bind(protocol_b)
+    .execute(&pool)
+    .await
+    .expect("criteria");
+    sqlx::query(
+        "UPDATE protocol_versions SET status='published',published_at=now()
+         WHERE id IN ($1,$2)",
+    )
+    .bind(protocol_a)
+    .bind(protocol_b)
+    .execute(&pool)
+    .await
+    .expect("protocol publication");
+    let run_id = Uuid::new_v4();
+    let store = PostgresAiStore::new(&pool);
+    store
+        .save_run(run(
+            project_a,
+            route("projection-scope"),
+            run_id,
+            &"8".repeat(64),
+        ))
+        .await
+        .expect("run");
+    let proposal_id = Uuid::new_v4();
+    sqlx::query(
+        "INSERT INTO ai_proposals
+         (id,project_id,ai_run_id,proposal_type,payload,status,entity_type,operation,
+          model_run_id,authority_tier,task_kind,protocol_version_id,target_report_id)
+         VALUES ($1,$2,$3,'screening_suggestion','{}'::jsonb,'pending','screening_report',
+                 'screening_suggestion',$3,'scientific_conclusion','title_abstract_screening',$4,$5)",
+    )
+    .bind(proposal_id)
+    .bind(project_a.as_uuid())
+    .bind(run_id)
+    .bind(protocol_a)
+    .bind(report_a)
+    .execute(&pool)
+    .await
+    .expect("proposal");
+
+    let cross_project_criterion = sqlx::query(
+        "INSERT INTO ai_proposal_criterion_judgments
+         (proposal_id,project_id,criterion_id,protocol_version_id,ordinal,judgment,rationale)
+         VALUES ($1,$2,$3,$4,0,'meets','cross-project criterion')",
+    )
+    .bind(proposal_id)
+    .bind(project_a.as_uuid())
+    .bind(criterion_b)
+    .bind(protocol_b)
+    .execute(&pool)
+    .await;
+    assert!(cross_project_criterion.is_err());
+
+    let cross_project_block = sqlx::query(
+        "INSERT INTO ai_proposal_evidence
+         (proposal_id,project_id,ordinal,evidence_kind,report_id,document_id,document_block_id,
+          page,content_hash)
+         VALUES ($1,$2,0,'document_block',$3,$4,$5,1,$6)",
+    )
+    .bind(proposal_id)
+    .bind(project_a.as_uuid())
+    .bind(report_b)
+    .bind(document_b)
+    .bind(block_b.as_uuid())
+    .bind("b".repeat(64))
+    .execute(&pool)
+    .await;
+    assert!(cross_project_block.is_err());
+
+    cleanup(&pool, project_a).await;
+    cleanup(&pool, project_b).await;
 }
 
 #[tokio::test]
@@ -729,6 +992,7 @@ async fn embedding_generations_are_versioned_and_evidence_is_project_scoped_with
     let retrieved = store
         .retrieve(RetrievalRequest {
             project_id: project_a,
+            report_id: None,
             document_id: Some(DocumentId::new(document_a)),
             query: "alpha".to_owned(),
             embedding: Some(embedding_a),

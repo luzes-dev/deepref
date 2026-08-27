@@ -381,7 +381,7 @@ fn resolution_dto(result: deepref_postgres::ResolutionResult) -> ResolutionDto {
     }
 }
 
-fn map_dedupe_error(error: deepref_postgres::DedupeError) -> ApiError {
+pub(crate) fn map_dedupe_error(error: deepref_postgres::DedupeError) -> ApiError {
     match error {
         deepref_postgres::DedupeError::ProjectNotFound
         | deepref_postgres::DedupeError::RecordNotFound

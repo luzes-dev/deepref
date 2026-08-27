@@ -989,17 +989,30 @@ pub async fn resolve_record(
         .validate()
         .map_err(|error| DedupeError::InvalidCommand(error.to_string()))?;
     validate_actor(&request.actor_kind, &request.actor_id)?;
+    let mut tx = pool.begin().await?;
+    let result = resolve_record_in_transaction(&mut tx, request).await?;
+    tx.commit().await?;
+    Ok(result)
+}
+
+pub(crate) async fn resolve_record_in_transaction(
+    tx: &mut Transaction<'_, Postgres>,
+    request: ResolveRecordCommand,
+) -> Result<ResolutionResult, DedupeError> {
+    request
+        .validate()
+        .map_err(|error| DedupeError::InvalidCommand(error.to_string()))?;
+    validate_actor(&request.actor_kind, &request.actor_id)?;
     let project_id = request.project_id.as_uuid();
     let record_id = request.record_id.as_uuid();
-    let mut tx = pool.begin().await?;
-    ensure_project(&mut tx, project_id).await?;
-    lock_project(&mut tx, project_id).await?;
+    ensure_project(tx, project_id).await?;
+    lock_project(tx, project_id).await?;
     let prior_report_id: Option<Uuid> = sqlx::query_scalar(
         "SELECT report_id FROM records WHERE project_id=$1 AND id=$2 FOR UPDATE",
     )
     .bind(project_id)
     .bind(record_id)
-    .fetch_optional(&mut *tx)
+    .fetch_optional(&mut **tx)
     .await?
     .flatten();
     if prior_report_id.is_none() {
@@ -1008,7 +1021,7 @@ pub async fn resolve_record(
         )
         .bind(project_id)
         .bind(record_id)
-        .fetch_one(&mut *tx)
+        .fetch_one(&mut **tx)
         .await?;
         if !exists {
             return Err(DedupeError::RecordNotFound);
@@ -1024,7 +1037,7 @@ pub async fn resolve_record(
         )
         .bind(project_id)
         .bind(proposal_id)
-        .fetch_optional(&mut *tx)
+        .fetch_optional(&mut **tx)
         .await?
         .ok_or(DedupeError::ProposalNotFound)?;
         if proposal.get::<Uuid, _>("record_id") != record_id {
@@ -1043,20 +1056,20 @@ pub async fn resolve_record(
 
     let resolved_report_id = match request.action {
         RecordResolutionAction::Create => {
-            let source = load_source_record(&mut tx, project_id, record_id).await?;
-            lock_record_identifiers(&mut tx, record_id).await?;
-            let identifiers = record_identifiers(&mut tx, record_id).await?;
-            if !matched_report_ids(&mut tx, &identifiers).await?.is_empty() {
+            let source = load_source_record(tx, project_id, record_id).await?;
+            lock_record_identifiers(tx, record_id).await?;
+            let identifiers = record_identifiers(tx, record_id).await?;
+            if !matched_report_ids(tx, &identifiers).await?.is_empty() {
                 return Err(DedupeError::IdentifierConflict);
             }
             let report_id = create_report(
-                &mut tx,
+                tx,
                 &source,
                 source.title.as_deref().map(normalize_bibliography_title),
             )
             .await?;
             link_record(
-                &mut tx,
+                tx,
                 ResolutionLink {
                     project_id,
                     record_id,
@@ -1079,18 +1092,18 @@ pub async fn resolve_record(
                     DedupeError::InvalidCommand("link/reassign requires report_id".to_owned())
                 })?
                 .as_uuid();
-            ensure_report_membership(&mut tx, project_id, report_id).await?;
-            let source = load_source_record(&mut tx, project_id, record_id).await?;
-            lock_record_identifiers(&mut tx, record_id).await?;
+            ensure_report_membership(tx, project_id, report_id).await?;
+            let source = load_source_record(tx, project_id, record_id).await?;
+            lock_record_identifiers(tx, record_id).await?;
             attach_record_identifiers(
-                &mut tx,
+                tx,
                 &source,
                 report_id,
                 proposal_kind.as_deref() == Some("conflict"),
             )
             .await?;
             link_record(
-                &mut tx,
+                tx,
                 ResolutionLink {
                     project_id,
                     record_id,
@@ -1124,7 +1137,7 @@ pub async fn resolve_record(
             )
             .bind(project_id)
             .bind(record_id)
-            .fetch_optional(&mut *tx)
+            .fetch_optional(&mut **tx)
             .await?
             .ok_or(DedupeError::RevertConflict)?;
             let latest_event_id: Uuid = latest.get("id");
@@ -1134,16 +1147,16 @@ pub async fn resolve_record(
             }
             let resolved_report_id: Option<Uuid> = latest.get("prior_report_id");
             if let Some(report_id) = resolved_report_id {
-                ensure_report_membership(&mut tx, project_id, report_id).await?;
+                ensure_report_membership(tx, project_id, report_id).await?;
             }
             sqlx::query("UPDATE records SET report_id=$3 WHERE project_id=$1 AND id=$2")
                 .bind(project_id)
                 .bind(record_id)
                 .bind(resolved_report_id)
-                .execute(&mut *tx)
+                .execute(&mut **tx)
                 .await?;
             insert_resolution_event(
-                &mut tx,
+                tx,
                 ResolutionEvent {
                     project_id,
                     record_id,
@@ -1165,7 +1178,7 @@ pub async fn resolve_record(
         && let Some(proposal_id) = request.proposal_id
     {
         supersede_sibling_proposals(
-            &mut tx,
+            tx,
             project_id,
             record_id,
             proposal_id,
@@ -1186,10 +1199,9 @@ pub async fn resolve_record(
         .bind(&request.actor_kind)
         .bind(&request.actor_id)
         .bind(&request.reason)
-        .execute(&mut *tx)
+        .execute(&mut **tx)
         .await?;
     }
-    tx.commit().await?;
     Ok(ResolutionResult {
         record_id,
         prior_report_id,

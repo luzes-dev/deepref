@@ -423,3 +423,98 @@ test('reconciles a 409 with authoritative state and sends its revision next', as
 	await expect.poll(() => mock.decisionExpectedRevisions.at(-1)).toBe(1);
 	await expect(page.getByRole('heading', { name: 'Screening report 02' })).toBeVisible();
 });
+
+test('reviews a deterministic title and abstract AI proposal before applying it', async ({
+	page
+}) => {
+	await setup(page, { count: 1 });
+	const proposal = {
+		id: 'ai-proposal-1',
+		project_id: projectId,
+		task_kind: 'title_abstract_screening',
+		status: 'pending',
+		target_report_id: 'report-1',
+		target_record_id: null,
+		protocol_version_id: 'protocol-1',
+		expected_revision: 0,
+		provider: 'deterministic-fixture',
+		model: 'fixture-model',
+		model_version: 'fixture-v1',
+		prompt_version: 'screening.v1',
+		schema_version: 'screening.schema.v1',
+		model_run_id: 'run-1',
+		operation: 'screening_suggestion',
+		entity_type: 'report',
+		entity_id: 'report-1',
+		authority_tier: 'scientific_conclusion',
+		created_at: '2026-01-01T00:00:00Z',
+		payload: {
+			kind: 'screening',
+			task_kind: 'title_abstract_screening',
+			report_id: 'report-1',
+			expected_revision: 0,
+			stage: 'title_abstract',
+			protocol_version_id: 'protocol-1',
+			criteria: [
+				{
+					criterion_id: 'population',
+					criterion_label: 'Population',
+					judgment: 'unclear',
+					rationale: 'The fixture abstains when the abstract is insufficient.',
+					evidence: [
+						{
+							kind: 'report_metadata',
+							report_id: 'report-1',
+							field: 'title',
+							content_hash: 'a'.repeat(64)
+						}
+					]
+				}
+			],
+			suggested_decision: { kind: 'maybe' },
+			uncertainties: ['Abstract does not identify the target population.']
+		}
+	};
+	let pending = false;
+	const decisions: Array<Record<string, unknown>> = [];
+	await page.route(
+		new RegExp(`/api/projects/${projectId}/ai/proposals(?:\\?.*)?$`),
+		async (route) => {
+			const url = new URL(route.request().url());
+			expect(url.searchParams.get('target_report_id')).toBe('report-1');
+			await route.fulfill({ json: { items: pending ? [proposal] : [], next_cursor: null } });
+		}
+	);
+	await page.route(
+		new RegExp(`/api/projects/${projectId}/reports/report-1/ai/screening$`),
+		async (route) => {
+			expect(route.request().method()).toBe('POST');
+			pending = true;
+			await route.fulfill({ status: 200, json: proposal });
+		}
+	);
+	await page.route(
+		new RegExp(`/api/projects/${projectId}/ai/proposals/${proposal.id}/decision$`),
+		async (route) => {
+			expect(route.request().method()).toBe('POST');
+			decisions.push(route.request().postDataJSON());
+			pending = false;
+			await route.fulfill({
+				status: 200,
+				json: { data: { ...proposal, status: 'accepted' } }
+			});
+		}
+	);
+
+	await page.goto(`/projects/${projectId}/screening/title-abstract`);
+	const ai = page.getByTestId('ai-proposal-review');
+	await ai.getByRole('button', { name: 'Request suggestion' }).click();
+	await expect(ai.getByText('Population', { exact: true })).toBeVisible();
+	await expect(ai.getByText('maybe', { exact: true })).toBeVisible();
+	await expect(ai.getByText(/Report metadata.*hash a{12}/)).toBeVisible();
+	await expect(ai.getByText('Abstract does not identify the target population.')).toBeVisible();
+	await ai.getByRole('button', { name: 'Approve and apply' }).click();
+	await expect(ai.getByText('No pending suggestion', { exact: true })).toBeVisible();
+	await expect.poll(() => decisions.length).toBe(1);
+	expect(decisions[0]).toMatchObject({ decision: 'accept' });
+});

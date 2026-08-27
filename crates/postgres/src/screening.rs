@@ -140,16 +140,25 @@ pub async fn screen_report(
     command: ScreenReportCommand,
 ) -> Result<ScreeningStateSnapshot, ScreeningError> {
     let mut tx = pool.begin().await?;
-    ensure_project_and_report(&mut tx, command.project_id.into(), command.report_id.into()).await?;
-    lock_screening_target(&mut tx, command.project_id.into(), command.report_id.into()).await?;
+    let next_snapshot = screen_report_in_transaction(&mut tx, command).await?;
+    tx.commit().await?;
+    Ok(next_snapshot)
+}
+
+pub(crate) async fn screen_report_in_transaction(
+    tx: &mut Transaction<'_, Postgres>,
+    command: ScreenReportCommand,
+) -> Result<ScreeningStateSnapshot, ScreeningError> {
+    ensure_project_and_report(tx, command.project_id.into(), command.report_id.into()).await?;
+    lock_screening_target(tx, command.project_id.into(), command.report_id.into()).await?;
     ensure_published_protocol(
-        &mut tx,
+        tx,
         command.project_id.into(),
         command.protocol_version_id.into(),
     )
     .await?;
     ensure_exclusion_reason(
-        &mut tx,
+        tx,
         command.project_id.into(),
         command.stage,
         command.exclusion_reason_id.map(Into::into),
@@ -157,7 +166,7 @@ pub async fn screen_report(
     .await?;
 
     let current =
-        load_state_for_update(&mut tx, command.project_id.into(), command.report_id.into()).await?;
+        load_state_for_update(tx, command.project_id.into(), command.report_id.into()).await?;
     let current_snapshot = current
         .clone()
         .unwrap_or_else(|| default_state(command.project_id.into(), command.report_id.into()));
@@ -168,7 +177,7 @@ pub async fn screen_report(
     }
     let current_domain = domain_state(&current_snapshot)?;
     let supersedes_event_id = latest_stage_event_id(
-        &mut tx,
+        tx,
         command.project_id.into(),
         command.report_id.into(),
         command.stage,
@@ -187,7 +196,7 @@ pub async fn screen_report(
     };
     let event_id = Uuid::new_v4();
     let next_snapshot = persist_event_and_state(
-        &mut tx,
+        tx,
         &EventWrite {
             event_id,
             event_kind: "decision",
@@ -210,7 +219,6 @@ pub async fn screen_report(
         },
     )
     .await?;
-    tx.commit().await?;
     Ok(next_snapshot)
 }
 

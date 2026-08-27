@@ -1,4 +1,5 @@
 mod acquisitions;
+mod ai;
 mod articles;
 mod deduplication;
 mod documents;
@@ -63,6 +64,11 @@ fn openapi_router(document_max_bytes: usize) -> OpenApiRouter<AppState> {
         .routes(routes!(deduplication::list_project_dedupe_proposals))
         .routes(routes!(deduplication::decide_project_dedupe_proposal))
         .routes(routes!(deduplication::resolve_project_record))
+        .routes(routes!(ai::generate_screening_suggestion))
+        .routes(routes!(ai::generate_duplicate_suggestion))
+        .routes(routes!(ai::list_ai_proposals))
+        .routes(routes!(ai::get_ai_proposal))
+        .routes(routes!(ai::decide_ai_proposal))
         .routes(routes!(
             ingestions::list_ingestions,
             ingestions::create_ingestion
@@ -220,6 +226,11 @@ mod tests {
             "/projects/{project_id}/deduplication/proposals",
             "/projects/{project_id}/deduplication/proposals/{proposal_id}/decision",
             "/projects/{project_id}/records/{record_id}/resolution",
+            "/projects/{project_id}/reports/{report_id}/ai/screening",
+            "/projects/{project_id}/records/{record_id}/ai/deduplication",
+            "/projects/{project_id}/ai/proposals",
+            "/projects/{project_id}/ai/proposals/{proposal_id}",
+            "/projects/{project_id}/ai/proposals/{proposal_id}/decision",
             "/ingestions",
             "/ingestions/{ingestion_id}",
             "/ingestions/{ingestion_id}/items",
@@ -331,6 +342,31 @@ mod tests {
                 "/projects/{project_id}/reports/{report_id}/screening/history",
                 "get",
                 "getScreeningHistory",
+            ),
+            (
+                "/projects/{project_id}/reports/{report_id}/ai/screening",
+                "post",
+                "generateScreeningSuggestion",
+            ),
+            (
+                "/projects/{project_id}/records/{record_id}/ai/deduplication",
+                "post",
+                "generateDuplicateSuggestion",
+            ),
+            (
+                "/projects/{project_id}/ai/proposals",
+                "get",
+                "listAiProposals",
+            ),
+            (
+                "/projects/{project_id}/ai/proposals/{proposal_id}",
+                "get",
+                "getAiProposal",
+            ),
+            (
+                "/projects/{project_id}/ai/proposals/{proposal_id}/decision",
+                "post",
+                "decideAiProposal",
             ),
         ] {
             let operation = match method {
