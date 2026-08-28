@@ -99,7 +99,7 @@ jobs:
           printf '%s' "$password" | regctl registry login "$ECR_REGISTRY" --user AWS --pass-stdin
       - name: Build and push API once
         id: api
-        uses: docker/build-push-action@ca052bb54ab0790a636c9b5f226502c73d547a25 # v6.15.0
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v6.15.0
         with:
           context: .
           file: docker/rust-service.Dockerfile
@@ -114,7 +114,7 @@ jobs:
           sbom: true
       - name: Build and push worker once
         id: worker
-        uses: docker/build-push-action@ca052bb54ab0790a636c9b5f226502c73d547a25 # v6.15.0
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v6.15.0
         with:
           context: .
           file: docker/rust-service.Dockerfile
@@ -129,7 +129,7 @@ jobs:
           sbom: true
       - name: Build and push projector once
         id: projector
-        uses: docker/build-push-action@ca052bb54ab0790a636c9b5f226502c73d547a25 # v6.15.0
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v6.15.0
         with:
           context: .
           file: docker/rust-service.Dockerfile
@@ -144,7 +144,7 @@ jobs:
           sbom: true
       - name: Build and push web once
         id: web
-        uses: docker/build-push-action@ca052bb54ab0790a636c9b5f226502c73d547a25 # v6.15.0
+        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v6.15.0
         with:
           context: .
           file: apps/web/Dockerfile
