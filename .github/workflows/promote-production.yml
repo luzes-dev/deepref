@@ -23,7 +23,6 @@ concurrency:
 permissions:
   contents: read
   deployments: read
-  id-token: write
 
 env:
   AWS_REGION: sa-east-1
@@ -34,6 +33,10 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 45
     environment: production-promotion
+    permissions:
+      contents: read
+      deployments: read
+      id-token: write
     steps:
       - name: Require immutable inputs and successful staging deployment evidence
         env:
