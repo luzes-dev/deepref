@@ -23,7 +23,6 @@ concurrency:
 
 permissions:
   contents: read
-  id-token: write
 
 env:
   AWS_REGION: sa-east-1
@@ -36,6 +35,9 @@ jobs:
     runs-on: ubuntu-latest
     timeout-minutes: 60
     environment: infra-${{ inputs.environment }}-apply
+    permissions:
+      contents: read
+      id-token: write
     steps:
       - name: Require immutable source identity
         env:
