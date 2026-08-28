@@ -4,6 +4,7 @@
 //! gateways, prompt definitions, grounding, policy, and task orchestration.
 //! SQLx and pgvector stay in `deepref-postgres`.
 
+mod agents;
 mod dedupe;
 mod gateway;
 mod grounding;
@@ -14,6 +15,7 @@ mod runner;
 mod screening;
 mod types;
 
+pub use agents::*;
 pub use dedupe::{
     DedupeInput, DedupeTask, DuplicateAssistance, DuplicateCandidate, DuplicateDecision,
     DuplicateRationale, DuplicateSignal, DuplicateSignalKind, IdentityProvenance,
@@ -37,3 +39,6 @@ pub use types::*;
 
 #[cfg(test)]
 mod tests;
+
+#[cfg(test)]
+mod agent_tests;
