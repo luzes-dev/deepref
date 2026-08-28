@@ -1,6 +1,7 @@
 mod acquisitions;
 mod ai;
 mod articles;
+mod automations;
 mod deduplication;
 mod documents;
 mod exports;
@@ -56,6 +57,11 @@ fn openapi_router(document_max_bytes: usize) -> OpenApiRouter<AppState> {
         .routes(routes!(articles::project_graph))
         .routes(routes!(articles::recommendations))
         .routes(routes!(articles::recompute_metrics))
+        .routes(routes!(automations::list_definitions))
+        .routes(routes!(automations::configure_definition))
+        .routes(routes!(automations::trigger_manually))
+        .routes(routes!(automations::list_runs))
+        .routes(routes!(automations::get_run))
         .routes(routes!(
             acquisitions::list_acquisitions,
             acquisitions::create_acquisition
@@ -227,6 +233,10 @@ mod tests {
             "/projects/{project_id}/graph",
             "/projects/{project_id}/recommendations",
             "/projects/{project_id}/metrics/recompute",
+            "/projects/{project_id}/automations/definitions",
+            "/projects/{project_id}/automations/definitions/{recipe}",
+            "/projects/{project_id}/automations/runs",
+            "/projects/{project_id}/automations/runs/{run_id}",
             "/projects/{project_id}/acquisitions",
             "/projects/{project_id}/imports",
             "/projects/{project_id}/deduplication/run",
