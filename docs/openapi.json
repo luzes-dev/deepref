@@ -1124,6 +1124,411 @@
         }
       }
     },
+    "/projects/{project_id}/automations/definitions": {
+      "get": {
+        "tags": [
+          "automations"
+        ],
+        "operationId": "listAutomationDefinitions",
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "path",
+            "description": "Project identifier",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Configured automation definitions",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/AutomationDefinitionDto"
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid project identifier",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Project not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/projects/{project_id}/automations/definitions/{recipe}": {
+      "put": {
+        "tags": [
+          "automations"
+        ],
+        "operationId": "configureAutomationDefinition",
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "path",
+            "description": "Project identifier",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "recipe",
+            "in": "path",
+            "description": "Closed built-in recipe identifier",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ConfigureAutomationRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Configured automation definition",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AutomationDefinitionDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid automation configuration",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Project not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Automation configuration conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/projects/{project_id}/automations/runs": {
+      "get": {
+        "tags": [
+          "automations"
+        ],
+        "operationId": "listAutomationRuns",
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "path",
+            "description": "Project identifier",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "Maximum number of runs to return, from 1 through 100.",
+            "required": false,
+            "schema": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "format": "int64"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Automation runs with job and usage visibility",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/AutomationRunDto"
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid list limit",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Project not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "automations"
+        ],
+        "operationId": "triggerAutomationManually",
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "path",
+            "description": "Project identifier",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "description": "Required stable key for replay-safe automation runs",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StartAutomationRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Existing idempotent automation run",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StartAutomationResponse"
+                }
+              }
+            }
+          },
+          "201": {
+            "description": "Automation run queued",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StartAutomationResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid automation request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Project or definition not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Automation definition is paused or conflicting",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/projects/{project_id}/automations/runs/{run_id}": {
+      "get": {
+        "tags": [
+          "automations"
+        ],
+        "operationId": "getAutomationRun",
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "path",
+            "description": "Project identifier",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "run_id",
+            "in": "path",
+            "description": "Automation run identifier",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Automation run with job and usage visibility",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AutomationRunDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid identifier",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Project or run not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/projects/{project_id}/deduplication/proposals": {
       "get": {
         "tags": [
@@ -7001,6 +7406,311 @@
           }
         }
       },
+      "AutomationDefinitionDto": {
+        "type": "object",
+        "required": [
+          "id",
+          "project_id",
+          "name",
+          "recipe",
+          "version",
+          "trigger",
+          "status",
+          "steps",
+          "created_at",
+          "updated_at"
+        ],
+        "properties": {
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "name": {
+            "type": "string"
+          },
+          "project_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "recipe": {
+            "type": "string"
+          },
+          "status": {
+            "type": "string"
+          },
+          "steps": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AutomationStepDto"
+            }
+          },
+          "trigger": {
+            "type": "string"
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "version": {
+            "type": "integer",
+            "format": "int32"
+          }
+        }
+      },
+      "AutomationDefinitionStatusInput": {
+        "type": "string",
+        "enum": [
+          "active",
+          "paused"
+        ]
+      },
+      "AutomationJobDto": {
+        "type": "object",
+        "required": [
+          "id",
+          "status",
+          "attempts",
+          "max_attempts",
+          "available_at"
+        ],
+        "properties": {
+          "attempts": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "available_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "last_error": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "leased_until": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "max_attempts": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "status": {
+            "type": "string"
+          }
+        }
+      },
+      "AutomationRunDto": {
+        "type": "object",
+        "required": [
+          "id",
+          "project_id",
+          "definition_id",
+          "recipe",
+          "version",
+          "trigger",
+          "status",
+          "created_at",
+          "job",
+          "steps",
+          "usage"
+        ],
+        "properties": {
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "definition_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "error": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "finished_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "job": {
+            "$ref": "#/components/schemas/AutomationJobDto"
+          },
+          "project_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "recipe": {
+            "type": "string"
+          },
+          "started_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "status": {
+            "type": "string"
+          },
+          "steps": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AutomationStepRunDto"
+            }
+          },
+          "trigger": {
+            "type": "string"
+          },
+          "trigger_reference": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "usage": {
+            "$ref": "#/components/schemas/AutomationUsageDto"
+          },
+          "version": {
+            "type": "integer",
+            "format": "int32"
+          }
+        }
+      },
+      "AutomationStepDto": {
+        "type": "object",
+        "required": [
+          "ordinal",
+          "key",
+          "kind"
+        ],
+        "properties": {
+          "key": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "ordinal": {
+            "type": "integer",
+            "format": "int32"
+          }
+        }
+      },
+      "AutomationStepRunDto": {
+        "type": "object",
+        "required": [
+          "id",
+          "ordinal",
+          "key",
+          "kind",
+          "status",
+          "attempts"
+        ],
+        "properties": {
+          "attempts": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "claimed_by": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "error": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "finished_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "key": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string"
+          },
+          "ordinal": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "started_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "status": {
+            "type": "string"
+          }
+        }
+      },
+      "AutomationTriggerInput": {
+        "type": "string",
+        "enum": [
+          "report_added",
+          "acquisition_completed",
+          "full_text_attached",
+          "report_included",
+          "study_created",
+          "appraisal_completed",
+          "manual"
+        ]
+      },
+      "AutomationUsageDto": {
+        "type": "object",
+        "required": [
+          "input_tokens",
+          "output_tokens",
+          "cost_micros"
+        ],
+        "properties": {
+          "cost_micros": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "input_tokens": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "output_tokens": {
+            "type": "integer",
+            "format": "int64"
+          }
+        }
+      },
       "BinaryAttachment": {
         "type": "string",
         "format": "binary"
@@ -7046,6 +7756,25 @@
           },
           "responses": {
             "type": "object"
+          }
+        }
+      },
+      "ConfigureAutomationRequest": {
+        "type": "object",
+        "required": [
+          "name",
+          "trigger",
+          "status"
+        ],
+        "properties": {
+          "name": {
+            "type": "string"
+          },
+          "status": {
+            "$ref": "#/components/schemas/AutomationDefinitionStatusInput"
+          },
+          "trigger": {
+            "$ref": "#/components/schemas/AutomationTriggerInput"
           }
         }
       },
@@ -10512,6 +11241,39 @@
           "retry_attempts": {
             "type": "integer",
             "format": "int32"
+          }
+        }
+      },
+      "StartAutomationRequest": {
+        "type": "object",
+        "required": [
+          "definition_id"
+        ],
+        "properties": {
+          "definition_id": {
+            "type": "string",
+            "format": "uuid"
+          }
+        }
+      },
+      "StartAutomationResponse": {
+        "type": "object",
+        "required": [
+          "run_id",
+          "job_id",
+          "created"
+        ],
+        "properties": {
+          "created": {
+            "type": "boolean"
+          },
+          "job_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "run_id": {
+            "type": "string",
+            "format": "uuid"
           }
         }
       },
