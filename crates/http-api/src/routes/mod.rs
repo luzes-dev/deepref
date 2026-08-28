@@ -1,6 +1,7 @@
 mod acquisitions;
 mod ai;
 mod articles;
+mod assistant;
 mod automations;
 mod deduplication;
 mod documents;
@@ -57,6 +58,8 @@ fn openapi_router(document_max_bytes: usize) -> OpenApiRouter<AppState> {
         .routes(routes!(articles::project_graph))
         .routes(routes!(articles::recommendations))
         .routes(routes!(articles::recompute_metrics))
+        .routes(routes!(assistant::list_tools))
+        .routes(routes!(assistant::execute_tool))
         .routes(routes!(automations::list_definitions))
         .routes(routes!(automations::configure_definition))
         .routes(routes!(automations::trigger_manually))
@@ -211,6 +214,7 @@ mod tests {
         body::{Body, to_bytes},
         http::{Request, StatusCode},
     };
+    use deepref_ai::AgentToolName;
     use sqlx::postgres::PgPoolOptions;
     use tower::ServiceExt;
 
@@ -248,6 +252,8 @@ mod tests {
             "/projects/{project_id}/ai/proposals",
             "/projects/{project_id}/ai/proposals/{proposal_id}",
             "/projects/{project_id}/ai/proposals/{proposal_id}/decision",
+            "/projects/{project_id}/assistant/tools",
+            "/projects/{project_id}/assistant/tools/execute",
             "/ingestions",
             "/ingestions/{ingestion_id}",
             "/ingestions/{ingestion_id}/items",
@@ -385,6 +391,16 @@ mod tests {
                 "post",
                 "decideAiProposal",
             ),
+            (
+                "/projects/{project_id}/assistant/tools",
+                "get",
+                "listProjectAssistantTools",
+            ),
+            (
+                "/projects/{project_id}/assistant/tools/execute",
+                "post",
+                "executeProjectAssistantTool",
+            ),
         ] {
             let operation = match method {
                 "get" => openapi.paths.paths[path].get.as_ref(),
@@ -513,6 +529,21 @@ mod tests {
                 .len(),
             4
         );
+        let expected_assistant_tool_names = AgentToolName::ALL
+            .into_iter()
+            .map(|name| serde_json::Value::String(name.as_str().to_owned()))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            schemas["AssistantToolNameDto"]["enum"],
+            serde_json::Value::Array(expected_assistant_tool_names),
+            "HTTP assistant tool names must exactly match the closed AI catalog"
+        );
+        assert_eq!(
+            schemas["AssistantToolRequest"]["properties"]["tool"]["$ref"],
+            "#/components/schemas/AssistantToolNameDto"
+        );
+        assert!(schemas["AssistantToolDescriptor"].is_object());
+        assert!(schemas["AssistantToolResponse"].is_object());
     }
 
     #[test]

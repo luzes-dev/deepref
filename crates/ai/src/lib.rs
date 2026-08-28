@@ -5,6 +5,7 @@
 //! SQLx and pgvector stay in `deepref-postgres`.
 
 mod agents;
+mod classification;
 mod dedupe;
 mod gateway;
 mod grounding;
@@ -16,6 +17,11 @@ mod screening;
 mod types;
 
 pub use agents::*;
+pub use classification::{
+    ClassificationReportField, StudyDesignClassification, StudyDesignClassificationInput,
+    StudyDesignClassificationTask, StudyDesignEvidence, StudyDesignLabel, StudyDesignReport,
+    StudyMetadataField,
+};
 pub use dedupe::{
     DedupeInput, DedupeTask, DuplicateAssistance, DuplicateCandidate, DuplicateDecision,
     DuplicateRationale, DuplicateSignal, DuplicateSignalKind, IdentityProvenance,

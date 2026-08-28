@@ -1,4 +1,5 @@
 mod acquisition;
+mod agent_tools;
 mod ai;
 mod appraisal;
 mod automations;
@@ -27,6 +28,12 @@ pub async fn migrate(pool: &PgPool) -> Result<(), MigrateError> {
 pub use acquisition::{
     AcquisitionError, ImportPersistRequest, ImportPersistResult, ensure_legacy_acquisition_run,
     persist_import,
+};
+pub use agent_tools::{
+    AgentAppraisalEvidence, AgentAppraisalRecord, AgentDocumentBlockRecord, AgentReadError,
+    AgentReportIdentifier, AgentReportRecord, get_agent_report, get_agent_screening_state,
+    get_latest_agent_appraisal, project_exists, read_agent_document_blocks, search_agent_document,
+    search_agent_reports,
 };
 pub use ai::{
     AiDedupeTarget, AiGroundingBlock, AiGroupingReport, AiGroupingStudy, AiProposalCursor,

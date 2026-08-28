@@ -126,8 +126,62 @@ pub(crate) enum AiProposalPayload {
     Screening(AiScreeningProposalPayload),
     Duplicate(AiDuplicateProposalPayload),
     StudyGrouping(AiStudyGroupingProposalPayload),
+    Classification(AiStudyDesignClassificationProposalPayload),
     AppraisalPrefill(AiAppraisalPrefillProposalPayload),
     DataExtraction(AiDataExtractionProposalPayload),
+}
+
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
+pub(crate) struct AiStudyDesignClassificationProposalPayload {
+    pub study_id: Uuid,
+    pub suggested_design: Option<AiStudyDesignLabelDto>,
+    pub rationale: String,
+    pub evidence: Vec<AiStudyDesignEvidenceDto>,
+    pub uncertainties: Vec<String>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum AiStudyDesignLabelDto {
+    Rct,
+    NonRandomizedIntervention,
+    Cohort,
+    CaseControl,
+    CrossSectional,
+    DiagnosticAccuracy,
+    PredictionModel,
+    Qualitative,
+    SystematicReview,
+    CaseSeries,
+}
+
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub(crate) enum AiStudyDesignEvidenceDto {
+    StudyMetadata {
+        study_id: Uuid,
+        field: AiStudyMetadataFieldDto,
+        content_hash: String,
+    },
+    ReportMetadata {
+        report_id: Uuid,
+        field: AiClassificationReportFieldDto,
+        content_hash: String,
+    },
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum AiStudyMetadataFieldDto {
+    Title,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum AiClassificationReportFieldDto {
+    Title,
+    Abstract,
+    PublicationYear,
 }
 
 #[derive(Debug, Serialize, Deserialize, ToSchema)]
@@ -451,6 +505,17 @@ pub(crate) async fn generate_screening_suggestion(
     Path((project_id, report_id)): Path<(Uuid, Uuid)>,
     Json(input): Json<GenerateScreeningRequest>,
 ) -> Result<Json<AiProposalDto>, ApiError> {
+    Ok(Json(proposal_dto(
+        create_screening_proposal(&state, project_id, report_id, input).await?,
+    )?))
+}
+
+pub(crate) async fn create_screening_proposal(
+    state: &AppState,
+    project_id: Uuid,
+    report_id: Uuid,
+    input: GenerateScreeningRequest,
+) -> Result<AiProposalRecord, ApiError> {
     let stage = input.stage.ai();
     let protocol = deepref_postgres::get_published_protocol(&state.pool, project_id)
         .await
@@ -499,8 +564,8 @@ pub(crate) async fn generate_screening_suggestion(
             .then(|| screening_retrieval_query(&target, &criteria)),
         criteria: prompts,
     };
-    let proposal = run_task(&state, &task, ai_input).await?;
-    Ok(Json(proposal_dto(proposal)?))
+    let proposal = run_task(state, &task, ai_input).await?;
+    Ok(proposal)
 }
 
 #[utoipa::path(
@@ -522,6 +587,16 @@ pub(crate) async fn generate_study_grouping_suggestion(
     State(state): State<AppState>,
     Path((project_id, report_id)): Path<(Uuid, Uuid)>,
 ) -> Result<Json<AiProposalDto>, ApiError> {
+    Ok(Json(proposal_dto(
+        create_study_grouping_proposal(&state, project_id, report_id).await?,
+    )?))
+}
+
+pub(crate) async fn create_study_grouping_proposal(
+    state: &AppState,
+    project_id: Uuid,
+    report_id: Uuid,
+) -> Result<AiProposalRecord, ApiError> {
     let target = deepref_postgres::get_ai_study_grouping_target(&state.pool, project_id, report_id)
         .await
         .map_err(map_ai_proposal_error)?;
@@ -552,8 +627,8 @@ pub(crate) async fn generate_study_grouping_suggestion(
         grounded_evidence,
     };
     let task = StudyGroupingTask::new(&task_input).map_err(map_ai_error)?;
-    let proposal = run_task(&state, &task, task_input).await?;
-    Ok(Json(proposal_dto(proposal)?))
+    let proposal = run_task(state, &task, task_input).await?;
+    Ok(proposal)
 }
 
 #[utoipa::path(
@@ -577,6 +652,17 @@ pub(crate) async fn generate_appraisal_prefill_suggestion(
     Path((project_id, report_id)): Path<(Uuid, Uuid)>,
     Json(input): Json<GenerateAppraisalPrefillRequest>,
 ) -> Result<Json<AiProposalDto>, ApiError> {
+    Ok(Json(proposal_dto(
+        create_appraisal_prefill_proposal(&state, project_id, report_id, input).await?,
+    )?))
+}
+
+pub(crate) async fn create_appraisal_prefill_proposal(
+    state: &AppState,
+    project_id: Uuid,
+    report_id: Uuid,
+    input: GenerateAppraisalPrefillRequest,
+) -> Result<AiProposalRecord, ApiError> {
     let definition = deepref_application::get_appraisal_definition(
         &input.definition_id,
         input.definition_version,
@@ -656,8 +742,8 @@ pub(crate) async fn generate_appraisal_prefill_suggestion(
         grounded_evidence,
     };
     let task = deepref_ai::AppraisalPrefillTask::new(&task_input).map_err(map_ai_error)?;
-    let proposal = run_task(&state, &task, task_input).await?;
-    Ok(Json(proposal_dto(proposal)?))
+    let proposal = run_task(state, &task, task_input).await?;
+    Ok(proposal)
 }
 
 #[utoipa::path(
@@ -684,16 +770,27 @@ pub(crate) async fn generate_duplicate_suggestion(
     Path((project_id, record_id)): Path<(Uuid, Uuid)>,
     Json(input): Json<GenerateDuplicateRequest>,
 ) -> Result<Json<AiProposalDto>, ApiError> {
+    Ok(Json(proposal_dto(
+        create_duplicate_proposal(&state, project_id, record_id, input.candidate_report_id).await?,
+    )?))
+}
+
+pub(crate) async fn create_duplicate_proposal(
+    state: &AppState,
+    project_id: Uuid,
+    record_id: Uuid,
+    candidate_report_id: Uuid,
+) -> Result<AiProposalRecord, ApiError> {
     let target = deepref_postgres::get_ai_dedupe_target(
         &state.pool,
         project_id,
         record_id,
-        input.candidate_report_id,
+        candidate_report_id,
     )
     .await
     .map_err(map_ai_proposal_error)?;
     let source_id = record_id;
-    let candidate_id = input.candidate_report_id;
+    let candidate_id = candidate_report_id;
     let provenance = dedupe_provenance(source_id, candidate_id, &target);
     let signals = dedupe_signals(candidate_id, &target);
     let task = DedupeTask::new(
@@ -718,8 +815,8 @@ pub(crate) async fn generate_duplicate_suggestion(
         grounded_signals: signals,
         grounded_provenance: provenance,
     };
-    let proposal = run_task(&state, &task, ai_input).await?;
-    Ok(Json(proposal_dto(proposal)?))
+    let proposal = run_task(state, &task, ai_input).await?;
+    Ok(proposal)
 }
 
 #[utoipa::path(
@@ -905,7 +1002,7 @@ fn reviewed_payload_to_internal(
     }
 }
 
-async fn run_task<T>(
+pub(crate) async fn run_task<T>(
     state: &AppState,
     task: &T,
     input: T::Input,
@@ -1269,6 +1366,7 @@ fn typed_payload(proposal: &AiProposalRecord) -> Result<AiProposalPayload, ApiEr
         "title_abstract_screening" | "full_text_screening" => "screening",
         "duplicate_candidate_detection" => "duplicate",
         "study_grouping" => "study_grouping",
+        "study_design_classification" => "classification",
         "appraisal_prefill" => "appraisal_prefill",
         "data_extraction" => "data_extraction",
         task_kind => {
@@ -1285,7 +1383,7 @@ fn typed_payload(proposal: &AiProposalRecord) -> Result<AiProposalPayload, ApiEr
     })
 }
 
-fn map_ai_error(error: AiError) -> ApiError {
+pub(crate) fn map_ai_error(error: AiError) -> ApiError {
     match error {
         AiError::InvalidContext(message)
         | AiError::SemanticValidation(message)
