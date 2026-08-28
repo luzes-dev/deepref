@@ -27,6 +27,8 @@ pub enum ApiError {
     #[error("{0}")]
     BadRequest(String),
     #[error("{0}")]
+    Forbidden(String),
+    #[error("{0}")]
     PayloadTooLarge(String),
     #[error("{message}")]
     Conflict {
@@ -87,6 +89,13 @@ impl IntoResponse for ApiError {
             Self::BadRequest(message) => (
                 StatusCode::BAD_REQUEST,
                 "INVALID_REQUEST".to_owned(),
+                message,
+                None,
+                None,
+            ),
+            Self::Forbidden(message) => (
+                StatusCode::FORBIDDEN,
+                "FORBIDDEN".to_owned(),
                 message,
                 None,
                 None,

@@ -144,6 +144,16 @@ pub(crate) async fn generate_data_extraction_suggestion(
     State(state): State<AppState>,
     Path((project_id, study_id)): Path<(Uuid, Uuid)>,
 ) -> Result<Json<AiProposalResponse>, ApiError> {
+    Ok(Json(proposal_dto(
+        create_data_extraction_proposal(&state, project_id, study_id).await?,
+    )?))
+}
+
+pub(crate) async fn create_data_extraction_proposal(
+    state: &AppState,
+    project_id: Uuid,
+    study_id: Uuid,
+) -> Result<deepref_postgres::AiProposalRecord, ApiError> {
     let definitions = deepref_postgres::list_field_definitions(&state.pool, project_id)
         .await
         .map_err(map_extraction_error)?;
@@ -211,7 +221,7 @@ pub(crate) async fn generate_data_extraction_suggestion(
     )
     .await
     .map_err(map_ai_proposal_error)?;
-    Ok(Json(proposal_dto(proposal)?))
+    Ok(proposal)
 }
 
 fn field_dto(definition: ExtractionFieldDefinition) -> ExtractionFieldDto {
