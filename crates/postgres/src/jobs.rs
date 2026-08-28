@@ -1,6 +1,10 @@
 use std::time::Duration;
 
-use deepref_application::jobs::{ClaimedJob, EnqueueJob, JobQueue};
+use deepref_application::{
+    AutomationRunId,
+    jobs::{ClaimedJob, EnqueueJob, JobQueue},
+};
+use deepref_domain::ProjectId;
 use serde_json::Value;
 use sqlx::{PgPool, Postgres, Row, Transaction};
 use uuid::Uuid;
@@ -77,6 +81,32 @@ pub async fn claim_job(
         attempts: row.get("attempts"),
         max_attempts: row.get("max_attempts"),
     }))
+}
+
+/// Resolve the project for an owned automation job without exposing a
+/// project-less job row to the worker. The lease predicate is repeated here
+/// because the caller may have waited between claiming and dispatching.
+pub async fn get_claimed_automation_job_project_id_for_run(
+    pool: &PgPool,
+    job_id: Uuid,
+    run_id: AutomationRunId,
+    owner: &str,
+) -> anyhow::Result<Option<ProjectId>> {
+    let project_id = sqlx::query_scalar::<_, Uuid>(
+        "SELECT j.project_id
+         FROM jobs AS j
+         JOIN automation_runs AS r
+           ON r.project_id = j.project_id AND r.job_id = j.id
+         WHERE j.id=$1 AND j.kind='automation_run' AND j.state='running'
+           AND j.lease_owner=$2 AND j.leased_until > now()
+           AND r.id=$3 AND j.project_id IS NOT NULL",
+    )
+    .bind(job_id)
+    .bind(owner)
+    .bind(run_id.as_uuid())
+    .fetch_optional(pool)
+    .await?;
+    Ok(project_id.map(ProjectId::new))
 }
 
 pub async fn renew_job(
