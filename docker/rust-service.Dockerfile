@@ -18,7 +18,32 @@ RUN test -n "${PACKAGE}" \
     && cargo build --release --locked --package "${PACKAGE}" --bin "${BIN}" \
     && strip "/build/target/release/${BIN}"
 
-FROM ${DEBIAN_BASE_REPOSITORY}@sha256:7b140f374b289a7c2befc338f42ebe6441b7ea838a042bbd5acbfca6ec875818 AS api
+FROM ${DEBIAN_BASE_REPOSITORY}@sha256:7b140f374b289a7c2befc338f42ebe6441b7ea838a042bbd5acbfca6ec875818 AS pdfium
+
+ARG PDFIUM_VERSION="7881"
+ARG PDFIUM_URL="https://github.com/bblanchon/pdfium-binaries/releases/download/chromium%2F7881/pdfium-linux-x64.tgz"
+ARG PDFIUM_SHA256="1470e21b8b4a3b4ad7f85684e2da11d94f3b69a86d81dee11b9b6709d927ac1d"
+
+RUN apt-get update \
+    && apt-get install --yes --no-install-recommends ca-certificates curl \
+    && curl --fail --location --silent --show-error "${PDFIUM_URL}" --output /tmp/pdfium.tgz \
+    && echo "${PDFIUM_SHA256}  /tmp/pdfium.tgz" | sha256sum --check --strict \
+    && mkdir -p "/opt/pdfium/${PDFIUM_VERSION}" \
+    && tar -xzf /tmp/pdfium.tgz -C "/opt/pdfium/${PDFIUM_VERSION}" lib/libpdfium.so LICENSE VERSION \
+    && grep --fixed-strings --line-regexp "BUILD=${PDFIUM_VERSION}" "/opt/pdfium/${PDFIUM_VERSION}/VERSION" \
+    && rm -f /tmp/pdfium.tgz
+
+FROM ${DEBIAN_BASE_REPOSITORY}@sha256:7b140f374b289a7c2befc338f42ebe6441b7ea838a042bbd5acbfca6ec875818 AS runtime
+
+ARG PDFIUM_VERSION="7881"
+RUN apt-get update \
+    && apt-get install --yes --no-install-recommends libstdc++6 \
+    && rm -rf /var/lib/apt/lists/*
+COPY --from=pdfium "/opt/pdfium/${PDFIUM_VERSION}/lib/libpdfium.so" /usr/local/lib/libpdfium.so
+
+ENV PDFIUM_LIBRARY_PATH=/usr/local/lib/libpdfium.so
+
+FROM runtime AS api
 
 ARG OCI_SOURCE="https://github.com/luzes-dev/deepref"
 ARG OCI_REVISION="local"
@@ -43,7 +68,7 @@ STOPSIGNAL SIGTERM
 ENTRYPOINT ["/usr/local/bin/deepref-server"]
 CMD ["serve"]
 
-FROM ${DEBIAN_BASE_REPOSITORY}@sha256:7b140f374b289a7c2befc338f42ebe6441b7ea838a042bbd5acbfca6ec875818 AS worker
+FROM runtime AS worker
 
 ARG OCI_SOURCE="https://github.com/luzes-dev/deepref"
 ARG OCI_REVISION="local"

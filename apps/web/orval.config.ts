@@ -69,6 +69,23 @@ export default defineConfig({
 								{ query: 'getProjectGraph', params: ['projectId'] },
 								{ query: 'getProjectRecommendations', params: ['projectId'] }
 							]
+						},
+						{
+							onMutations: [
+								'generateScreeningSuggestion',
+								'generateDuplicateSuggestion'
+							],
+							invalidates: ['listAiProposals']
+						},
+						{
+							onMutations: ['decideAiProposal'],
+							invalidates: [
+								'listAiProposals',
+								{ query: 'getAiProposal', params: ['projectId', 'proposalId'] },
+								'listTitleAbstractScreeningQueue',
+								'listFullTextScreeningQueue',
+								'listProjectDedupeProposals'
+							]
 						}
 					]
 				}

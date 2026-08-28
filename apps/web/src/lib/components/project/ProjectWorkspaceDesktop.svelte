@@ -1,4 +1,5 @@
 <script lang="ts">
+	import type { Snippet } from 'svelte';
 	import * as Resizable from '$lib/components/ui/resizable';
 	import type { PaneAPI } from 'paneforge';
 	import ArticleInspector from './ArticleInspector.svelte';
@@ -11,8 +12,15 @@
 	import ProjectSidebar from './ProjectSidebar.svelte';
 	import ProjectWorkspaceViewPanel from './ProjectWorkspaceViewPanel.svelte';
 
+	let { children }: { children?: Snippet } = $props();
+
 	const workspace = useProjectWorkspaceContext();
-	const hasInspector = $derived(workspace.view !== 'overview');
+	const hasInspector = $derived(
+		workspace.view === 'articles' ||
+			workspace.view === 'graph' ||
+			workspace.view === 'recommendations' ||
+			workspace.view === 'ingestions'
+	);
 	let inspectorPane = $state<PaneAPI | undefined>(undefined);
 
 	function toggleInspector() {
@@ -54,7 +62,7 @@
 					autoSaveId={PROJECT_WORKSPACE_INSPECTOR_LAYOUT_ID}
 				>
 					<Resizable.Pane order={1} defaultSize={75} minSize={36}>
-						<ProjectWorkspaceViewPanel />
+						<ProjectWorkspaceViewPanel {children} />
 					</Resizable.Pane>
 					<Resizable.Handle withHandle />
 					<Resizable.Pane
@@ -74,7 +82,7 @@
 								collapsed={workspace.inspectorCollapsed.current}
 								onToggleCollapse={toggleInspector}
 							/>
-						{:else}
+						{:else if workspace.view === 'articles' || workspace.view === 'graph' || workspace.view === 'recommendations'}
 							<ArticleInspector
 								collapsed={workspace.inspectorCollapsed.current}
 								onToggleCollapse={toggleInspector}
@@ -83,7 +91,7 @@
 					</Resizable.Pane>
 				</Resizable.PaneGroup>
 			{:else}
-				<ProjectWorkspaceViewPanel />
+				<ProjectWorkspaceViewPanel {children} />
 			{/if}
 		</Resizable.Pane>
 	</Resizable.PaneGroup>

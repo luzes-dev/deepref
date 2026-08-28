@@ -6,6 +6,7 @@ fn migrations_are_append_only_and_define_durability_contract() {
     let identity = include_str!("../../postgres/migrations/0007_evidence_identity.sql");
     let acquisition = include_str!("../../postgres/migrations/0009_acquisition_runs.sql");
     let deduplication = include_str!("../../postgres/migrations/0010_deduplication.sql");
+    let studies_appraisals = include_str!("../../postgres/migrations/0014_studies_appraisals.sql");
     for required in [
         "owner_token",
         "lease_expires_at",
@@ -82,4 +83,23 @@ fn migrations_are_append_only_and_define_durability_contract() {
             "missing deduplication migration contract: {required}"
         );
     }
+    for required in [
+        "study_revision",
+        "studies_title_check",
+        "studies_design_check",
+        "study_reports_study_project_fk",
+        "study_reports_report_project_fk",
+        "study_events",
+        "appraisal_assessments",
+        "appraisal_assessment_evidence",
+        "appraisal_events",
+        "definition_version",
+        "ON DELETE CASCADE",
+    ] {
+        assert!(
+            studies_appraisals.contains(required),
+            "missing PR9 migration contract: {required}"
+        );
+    }
+    assert!(!studies_appraisals.contains("normalized_design"));
 }

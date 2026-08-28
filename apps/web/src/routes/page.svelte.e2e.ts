@@ -98,13 +98,17 @@ const projection = {
 
 const pageOf = <T>(items: T[], next_cursor: string | null = null) => ({ items, next_cursor });
 
+type WorkspaceMockOptions = {
+	ingestions?: () => ReturnType<typeof pageOf>;
+};
+
 async function mockHealth(page: Page) {
 	await page.route('http://localhost:4173/api/health/dependencies', async (route) => {
 		await route.fulfill({ json: availableDependencies });
 	});
 }
 
-async function mockWorkspace(page: Page) {
+async function mockWorkspace(page: Page, options: WorkspaceMockOptions = {}) {
 	await mockHealth(page);
 	await page.route(/http:\/\/localhost:4173\/api\/projects(?:\?.*)?$/, async (route) => {
 		await route.fulfill({ json: pageOf([project]) });
@@ -126,16 +130,19 @@ async function mockWorkspace(page: Page) {
 			});
 		}
 	);
-	await page.route('http://localhost:4173/api/projects/test-project/graph', async (route) => {
-		await route.fulfill({
-			json: {
-				nodes: workspaceArticles,
-				edges: [{ source: articles[0].report_id, target: articles[0].report_id }],
-				projection,
-				truncated: false
-			}
-		});
-	});
+	await page.route(
+		/http:\/\/localhost:4173\/api\/projects\/test-project\/graph(?:\?.*)?$/,
+		async (route) => {
+			await route.fulfill({
+				json: {
+					nodes: workspaceArticles,
+					edges: [{ source: articles[0].report_id, target: articles[0].report_id }],
+					projection,
+					truncated: false
+				}
+			});
+		}
+	);
 	await page.route(
 		'http://localhost:4173/api/projects/test-project/recommendations',
 		async (route) => {
@@ -192,6 +199,10 @@ async function mockWorkspace(page: Page) {
 					completed_at: null
 				}
 			});
+			return;
+		}
+		if (options.ingestions) {
+			await route.fulfill({ json: options.ingestions() });
 			return;
 		}
 		await route.fulfill({
@@ -282,7 +293,7 @@ async function mockProjectCreateWorkspace(page: Page, initialProjects = [project
 			}
 		);
 		await page.route(
-			`http://localhost:4173/api/projects/${mockedProject.id}/graph`,
+			new RegExp(`http://localhost:4173/api/projects/${mockedProject.id}/graph(?:\\?.*)?$`),
 			async (route) => {
 				await route.fulfill({
 					json: { nodes: [], edges: [], projection, truncated: false }
@@ -569,6 +580,31 @@ test('secondary article views reuse selected article inspector', async ({ page }
 	await expect(page.getByRole('button', { name: 'Reset graph layout' })).toBeVisible();
 });
 
+test('project views are deep-linkable and preserve browser history state', async ({ page }) => {
+	await mockWorkspace(page);
+	await page.goto(
+		'/projects/test-project/articles?filter=review&sort=year&report=00000000-0000-4000-8000-000000000001'
+	);
+
+	await expect(page).toHaveURL(
+		/\/projects\/test-project\/articles\?filter=review&sort=year&report=00000000-0000-4000-8000-000000000001$/
+	);
+	await expect(page.getByRole('heading', { name: 'Articles' })).toBeVisible();
+
+	await page.getByRole('button', { name: 'Graph' }).click();
+	await expect(page).toHaveURL(
+		/\/projects\/test-project\/graph\?filter=review&sort=year&report=00000000-0000-4000-8000-000000000001$/
+	);
+	await page.goBack();
+	await expect(page).toHaveURL(
+		/\/projects\/test-project\/articles\?filter=review&sort=year&report=00000000-0000-4000-8000-000000000001$/
+	);
+	await page.goForward();
+	await expect(page).toHaveURL(
+		/\/projects\/test-project\/graph\?filter=review&sort=year&report=00000000-0000-4000-8000-000000000001$/
+	);
+});
+
 test('article table filters, resets, sorts, and paginates', async ({ page }) => {
 	await mockWorkspace(page);
 	await page.goto('/');
@@ -620,6 +656,111 @@ test('ingestions are filtered and create uses current project', async ({ page })
 	await expect(page.getByText('new-ingestion')).toBeVisible();
 	await expect(page.getByRole('heading', { name: 'Status queued' })).toBeVisible();
 	await expect(page.getByText('queued', { exact: true }).first()).toBeVisible();
+});
+
+test('refreshes completed provider runs with stable retry keys', async ({ page }) => {
+	const completedIngestion = {
+		id: 'project-ingestion',
+		project_id: 'test-project',
+		status: 'completed',
+		seed_count: 1,
+		fetched_count: 1,
+		failed_count: 0,
+		queued_count: 0,
+		max_depth: 2,
+		created_at: '2026-01-01T00:00:00Z',
+		started_at: null,
+		completed_at: '2026-01-01T00:01:00Z'
+	};
+	const runningIngestion = {
+		...completedIngestion,
+		id: 'running-ingestion',
+		status: 'running',
+		queued_count: 1,
+		created_at: '2026-01-01T00:02:00Z',
+		completed_at: null
+	};
+	const refreshedIngestion = {
+		...completedIngestion,
+		id: 'refreshed-ingestion',
+		status: 'queued',
+		queued_count: 1,
+		created_at: '2026-01-01T00:03:00Z',
+		completed_at: null
+	};
+	let listedIngestions = [completedIngestion, runningIngestion];
+	const refreshKeys: string[] = [];
+	const refreshPaths: string[] = [];
+
+	await mockWorkspace(page, { ingestions: () => pageOf(listedIngestions) });
+	await page.route(
+		'http://localhost:4173/api/projects/test-project/acquisitions/project-ingestion/refresh',
+		async (route) => {
+			const request = route.request();
+			expect(request.method()).toBe('POST');
+			const url = new URL(request.url());
+			refreshPaths.push(url.pathname);
+			expect(url.pathname).toBe(
+				'/api/projects/test-project/acquisitions/project-ingestion/refresh'
+			);
+			const idempotencyKey = request.headers()['idempotency-key'];
+			expect(idempotencyKey).toBeTruthy();
+			refreshKeys.push(idempotencyKey);
+
+			if (refreshKeys.length === 1) {
+				await route.fulfill({
+					status: 503,
+					json: {
+						code: 'provider_unavailable',
+						message: 'provider temporarily unavailable; retry safely'
+					}
+				});
+				return;
+			}
+
+			listedIngestions = [refreshedIngestion, completedIngestion, runningIngestion];
+			await route.fulfill({ status: 201, json: refreshedIngestion });
+		}
+	);
+	await page.route('http://localhost:4173/api/ingestions/refreshed-ingestion', async (route) => {
+		await route.fulfill({ json: refreshedIngestion });
+	});
+	await page.route(
+		'http://localhost:4173/api/ingestions/refreshed-ingestion/items',
+		async (route) => {
+			await route.fulfill({ json: pageOf([]) });
+		}
+	);
+
+	await page.goto('/');
+	await page.getByRole('button', { name: 'Ingestions' }).click();
+	const completedRow = page.locator('[data-ingestion-id="project-ingestion"]');
+	const runningRow = page.locator('[data-ingestion-id="running-ingestion"]');
+	await expect(completedRow.getByRole('button', { name: 'Refresh provider' })).toBeVisible();
+	await expect(runningRow.getByRole('button', { name: /Refresh provider/ })).toHaveCount(0);
+
+	await completedRow.getByRole('button', { name: 'Refresh provider' }).click();
+	await expect(page.getByRole('button', { name: 'Retry refresh provider' })).toBeVisible();
+	await expect(page.getByRole('alert')).toContainText('provider temporarily unavailable');
+	await expect.poll(() => refreshKeys).toHaveLength(1);
+	await expect(refreshKeys[0]).not.toBe('');
+
+	await completedRow.getByRole('button', { name: 'Retry refresh provider' }).click();
+	await expect.poll(() => refreshKeys).toHaveLength(2);
+	await expect(refreshKeys[1]).toBe(refreshKeys[0]);
+	await expect(refreshPaths).toHaveLength(2);
+	await expect(page.locator('[data-ingestion-id="refreshed-ingestion"]')).toBeVisible();
+	await expect(page.getByRole('heading', { name: 'Status queued' })).toBeVisible();
+	await expect(page.getByText('refreshed-ingestion').last()).toBeVisible();
+
+	await page
+		.locator('[data-ingestion-id="project-ingestion"]')
+		.getByRole('button', { name: 'Refresh provider' })
+		.click();
+	await expect.poll(() => refreshKeys).toHaveLength(3);
+	await expect(refreshKeys[2]).not.toBe(refreshKeys[1]);
+	await expect(refreshKeys[2]).not.toBe('');
+	await expect(refreshPaths).toHaveLength(3);
 });
 
 test('empty workspace creates a first project', async ({ page }) => {

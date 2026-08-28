@@ -1,18 +1,40 @@
-use std::time::Duration;
+use std::{
+    sync::{Arc, OnceLock},
+    time::Duration,
+};
 
 use deepref_core::{IngestionItemStatus, normalize_doi};
 use deepref_crossref::CrossrefError;
+use deepref_documents::{
+    DocumentParser, DocumentStore, HttpsPdfFetcher, PARSER_VERSION, PdfiumParser,
+    RemoteDocumentFetcher,
+};
 use deepref_events::{DeadLetterRecord, EventEnvelope, WorkFetchRequested, deserialize_compatible};
 use deepref_providers::CrossrefProvider;
+use serde::Deserialize;
 use sha2::{Digest, Sha256};
 use sqlx::PgPool;
-use tokio::sync::watch;
+use tokio::sync::{Semaphore, watch};
 use uuid::Uuid;
 
 use crate::{
     delivery::{DeliveryAction, FailureClass, action_for},
     limiter, store,
 };
+
+static PDF_PARSE_SEMAPHORE: OnceLock<Arc<Semaphore>> = OnceLock::new();
+
+pub fn validate_pdf_parse_concurrency() -> anyhow::Result<()> {
+    if let Ok(value) = std::env::var("DOCUMENT_PARSE_CONCURRENCY") {
+        let parsed = value.parse::<usize>().map_err(|_| {
+            anyhow::anyhow!("DOCUMENT_PARSE_CONCURRENCY must be a positive integer up to 16")
+        })?;
+        if !(1..=16).contains(&parsed) {
+            anyhow::bail!("DOCUMENT_PARSE_CONCURRENCY must be a positive integer up to 16");
+        }
+    }
+    Ok(())
+}
 
 pub async fn handle_message(
     pool: PgPool,
@@ -201,6 +223,77 @@ pub async fn handle_job(
     job: &deepref_application::jobs::ClaimedJob,
     claim_lease: Duration,
 ) -> anyhow::Result<DeliveryAction> {
+    handle_job_with_document_services_inner(pool, job, claim_lease, None, None, None, None).await
+}
+
+pub async fn handle_job_with_documents(
+    pool: sqlx::PgPool,
+    job: &deepref_application::jobs::ClaimedJob,
+    claim_lease: Duration,
+    document_store: Option<Arc<DocumentStore>>,
+    document_parser: Option<Arc<dyn DocumentParser>>,
+) -> anyhow::Result<DeliveryAction> {
+    handle_job_with_document_services_inner(
+        pool,
+        job,
+        claim_lease,
+        document_store,
+        document_parser,
+        None,
+        None,
+    )
+    .await
+}
+
+pub async fn handle_job_with_documents_owned(
+    pool: sqlx::PgPool,
+    job: &deepref_application::jobs::ClaimedJob,
+    owner: &str,
+    claim_lease: Duration,
+    document_store: Option<Arc<DocumentStore>>,
+    document_parser: Option<Arc<dyn DocumentParser>>,
+) -> anyhow::Result<DeliveryAction> {
+    handle_job_with_document_services_inner(
+        pool,
+        job,
+        claim_lease,
+        document_store,
+        document_parser,
+        None,
+        Some(owner),
+    )
+    .await
+}
+
+pub async fn handle_job_with_document_services(
+    pool: sqlx::PgPool,
+    job: &deepref_application::jobs::ClaimedJob,
+    claim_lease: Duration,
+    document_store: Option<Arc<DocumentStore>>,
+    document_parser: Option<Arc<dyn DocumentParser>>,
+    remote_fetcher: Option<Arc<dyn RemoteDocumentFetcher>>,
+) -> anyhow::Result<DeliveryAction> {
+    handle_job_with_document_services_inner(
+        pool,
+        job,
+        claim_lease,
+        document_store,
+        document_parser,
+        remote_fetcher,
+        None,
+    )
+    .await
+}
+
+async fn handle_job_with_document_services_inner(
+    pool: sqlx::PgPool,
+    job: &deepref_application::jobs::ClaimedJob,
+    claim_lease: Duration,
+    document_store: Option<Arc<DocumentStore>>,
+    document_parser: Option<Arc<dyn DocumentParser>>,
+    remote_fetcher: Option<Arc<dyn RemoteDocumentFetcher>>,
+    owner: Option<&str>,
+) -> anyhow::Result<DeliveryAction> {
     match job.kind.as_str() {
         "work_fetch_requested" => {
             let bytes = serde_json::to_vec(&job.payload)?;
@@ -218,18 +311,275 @@ pub async fn handle_job(
             deepref_postgres::recompute_project_metrics(&pool, project_id).await?;
             Ok(DeliveryAction::Ack)
         }
-        "recompute_prisma" => {
-            let project_id = job
+        "automation_run" => {
+            let owner = owner.ok_or_else(|| {
+                anyhow::anyhow!("automation job processing requires its lease owner")
+            })?;
+            handle_automation_run(&pool, job, owner).await
+        }
+        // Pre-PR10 deployments may have queued this obsolete kind. The
+        // canonical PRISMA endpoint reads live tables directly, so acknowledge
+        // the legacy job without recreating a competing snapshot.
+        "recompute_prisma" => Ok(DeliveryAction::Ack),
+        "retrieve_document" => {
+            let document_id = job
                 .payload
-                .get("project_id")
+                .get("document_id")
                 .and_then(serde_json::Value::as_str)
-                .ok_or_else(|| anyhow::anyhow!("recompute_prisma payload is missing project_id"))?
-                .parse()?;
-            deepref_postgres::recompute_prisma_snapshot(&pool, project_id).await?;
+                .ok_or_else(|| anyhow::anyhow!("retrieve_document payload is missing document_id"))?
+                .parse::<Uuid>()?;
+            let document = deepref_postgres::get_document_by_id(&pool, document_id).await?;
+            if document.object_key.is_some()
+                && matches!(document.status.as_str(), "uploaded" | "available")
+            {
+                return Ok(DeliveryAction::Ack);
+            }
+            let external_url = document
+                .external_url
+                .as_deref()
+                .ok_or_else(|| anyhow::anyhow!("external document has no source URL"))?;
+            let store = match document_store {
+                Some(store) => store,
+                None => Arc::new(DocumentStore::from_env()?),
+            };
+            if !deepref_postgres::mark_document_retrieving(&pool, document_id).await? {
+                return Ok(DeliveryAction::Ack);
+            }
+            let fetcher: Arc<dyn RemoteDocumentFetcher> =
+                remote_fetcher.unwrap_or_else(|| Arc::new(HttpsPdfFetcher::default()));
+            let (stored, _) = match fetcher.fetch(external_url, &store).await {
+                Ok(result) => result,
+                Err(error) => {
+                    deepref_postgres::mark_document_retrieval_failed(
+                        &pool,
+                        document_id,
+                        &error.to_string(),
+                    )
+                    .await?;
+                    return Err(error.into());
+                }
+            };
+            let byte_size = match i64::try_from(stored.byte_size) {
+                Ok(value) => value,
+                Err(error) => {
+                    let _ = store.delete(&stored.opaque_id).await;
+                    deepref_postgres::mark_document_retrieval_failed(
+                        &pool,
+                        document_id,
+                        "retrieved document size overflowed persistence bounds",
+                    )
+                    .await?;
+                    return Err(error.into());
+                }
+            };
+            let mut transaction = pool.begin().await?;
+            let completion = match deepref_postgres::complete_document_retrieval(
+                &mut transaction,
+                document_id,
+                &stored.opaque_id,
+                &stored.sha256,
+                byte_size,
+            )
+            .await
+            {
+                Ok(outcome) => outcome,
+                Err(error) => {
+                    let _ = transaction.rollback().await;
+                    let _ = store.delete(&stored.opaque_id).await;
+                    deepref_postgres::mark_document_retrieval_failed(
+                        &pool,
+                        document_id,
+                        "retrieved document could not be persisted",
+                    )
+                    .await?;
+                    return Err(error);
+                }
+            };
+            if let Err(error) = transaction.commit().await {
+                let _ = store.delete(&stored.opaque_id).await;
+                if matches!(
+                    completion,
+                    deepref_postgres::CompleteDocumentRetrievalOutcome::Applied
+                ) {
+                    deepref_postgres::mark_document_retrieval_failed(
+                        &pool,
+                        document_id,
+                        "retrieved document transaction could not commit",
+                    )
+                    .await?;
+                }
+                return Err(error.into());
+            }
+            match completion {
+                deepref_postgres::CompleteDocumentRetrievalOutcome::Applied => {}
+                deepref_postgres::CompleteDocumentRetrievalOutcome::AlreadyCompleted => {
+                    store.delete(&stored.opaque_id).await?;
+                }
+            }
+            Ok(DeliveryAction::Ack)
+        }
+        "parse_document" => {
+            let document_id = job
+                .payload
+                .get("document_id")
+                .and_then(serde_json::Value::as_str)
+                .ok_or_else(|| anyhow::anyhow!("parse_document payload is missing document_id"))?
+                .parse::<Uuid>()?;
+            let requested_version = job
+                .payload
+                .get("parser_version")
+                .and_then(serde_json::Value::as_str)
+                .unwrap_or(PARSER_VERSION);
+            if requested_version != PARSER_VERSION {
+                anyhow::bail!("parse_document requested unsupported parser version");
+            }
+            let document = deepref_postgres::get_document_by_id(&pool, document_id).await?;
+            if document.active_parser_version.as_deref() == Some(PARSER_VERSION) {
+                return Ok(DeliveryAction::Ack);
+            }
+            let object_key = document
+                .object_key
+                .as_deref()
+                .ok_or_else(|| anyhow::anyhow!("document has no stored object"))?;
+            let store = match document_store {
+                Some(store) => store,
+                None => Arc::new(DocumentStore::from_env()?),
+            };
+            deepref_postgres::mark_document_parsing(&pool, document_id).await?;
+            let parse_permit = pdf_parse_semaphore()
+                .acquire_owned()
+                .await
+                .map_err(|error| {
+                    anyhow::anyhow!("PDF parser concurrency limiter closed: {error}")
+                })?;
+            let parsed = match parse_stored_document(
+                &document,
+                object_key,
+                Arc::clone(&store),
+                document_parser,
+            )
+            .await
+            {
+                Ok(parsed) => parsed,
+                Err(error) => {
+                    drop(parse_permit);
+                    deepref_postgres::mark_document_failed(&pool, document_id, &error.to_string())
+                        .await?;
+                    return Err(error);
+                }
+            };
+            drop(parse_permit);
+            deepref_postgres::persist_parsed_document(&pool, document_id, &parsed, PARSER_VERSION)
+                .await?;
             Ok(DeliveryAction::Ack)
         }
         other => anyhow::bail!("unsupported durable job kind: {other}"),
     }
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct AutomationRunJobPayload {
+    automation_run_id: Uuid,
+}
+
+const UNKNOWN_AUTOMATION_STEP_ERROR: &str =
+    "automation step is not an accepted built-in deterministic action";
+
+async fn handle_automation_run(
+    pool: &sqlx::PgPool,
+    job: &deepref_application::jobs::ClaimedJob,
+    owner: &str,
+) -> anyhow::Result<DeliveryAction> {
+    let payload: AutomationRunJobPayload = serde_json::from_value(job.payload.clone())?;
+    let run_id = deepref_application::AutomationRunId::new(payload.automation_run_id)
+        .map_err(|error| anyhow::anyhow!("automation run id is invalid: {error}"))?;
+    let project_id = deepref_postgres::get_claimed_automation_job_project_id_for_run(
+        pool, job.id, run_id, owner,
+    )
+    .await?
+    .ok_or_else(|| anyhow::anyhow!("automation job and run association is invalid"))?;
+    let project_uuid = project_id.as_uuid();
+
+    loop {
+        let Some(step) =
+            deepref_postgres::begin_next_automation_step(pool, project_id, run_id, owner).await?
+        else {
+            deepref_postgres::finalize_automation_run(pool, project_id, run_id).await?;
+            return Ok(DeliveryAction::Ack);
+        };
+
+        if step.key == "recompute_project_metrics"
+            && step.kind == deepref_application::AutomationStepKind::DeterministicAction
+        {
+            deepref_postgres::recompute_project_metrics(pool, project_uuid).await?;
+            deepref_postgres::complete_automation_step(pool, project_id, step.id, owner).await?;
+            continue;
+        }
+
+        deepref_postgres::fail_automation_step(
+            pool,
+            project_id,
+            step.id,
+            owner,
+            UNKNOWN_AUTOMATION_STEP_ERROR,
+        )
+        .await?;
+        deepref_postgres::finalize_automation_run(pool, project_id, run_id).await?;
+        return Ok(DeliveryAction::Terminate);
+    }
+}
+
+fn pdf_parse_semaphore() -> Arc<Semaphore> {
+    Arc::clone(PDF_PARSE_SEMAPHORE.get_or_init(|| {
+        let permits = std::env::var("DOCUMENT_PARSE_CONCURRENCY")
+            .ok()
+            .and_then(|value| value.parse::<usize>().ok())
+            .filter(|value| (1..=16).contains(value))
+            .unwrap_or(2);
+        Arc::new(Semaphore::new(permits))
+    }))
+}
+
+async fn parse_stored_document(
+    document: &deepref_postgres::DocumentRecord,
+    object_key: &str,
+    store: Arc<DocumentStore>,
+    parser: Option<Arc<dyn DocumentParser>>,
+) -> anyhow::Result<deepref_documents::ParsedDocument> {
+    let path = std::env::temp_dir().join(format!("deepref-parse-{}.pdf", Uuid::new_v4()));
+    let mut file = tokio::fs::OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&path)
+        .await?;
+    let read = store.read_to_writer(object_key, &mut file).await;
+    drop(file);
+    let stored = match read {
+        Ok(stored) => stored,
+        Err(error) => {
+            let _ = tokio::fs::remove_file(&path).await;
+            return Err(error.into());
+        }
+    };
+    if document.content_hash.as_deref() != Some(stored.sha256.as_str())
+        || usize::try_from(document.byte_size).ok() != Some(stored.byte_size)
+    {
+        let _ = tokio::fs::remove_file(&path).await;
+        anyhow::bail!("stored document integrity check failed");
+    }
+    let parser = match parser {
+        Some(parser) => parser,
+        None => Arc::new(PdfiumParser::from_env()?),
+    };
+    if parser.version() != PARSER_VERSION {
+        let _ = tokio::fs::remove_file(&path).await;
+        anyhow::bail!("document parser version does not match the job");
+    }
+    let parse_path = path.clone();
+    let parsed = tokio::task::spawn_blocking(move || parser.parse_file(&parse_path)).await;
+    let _ = tokio::fs::remove_file(&path).await;
+    Ok(parsed??)
 }
 
 fn spawn_heartbeat(

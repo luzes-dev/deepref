@@ -1,4 +1,5 @@
 <script lang="ts">
+	import type { Snippet } from 'svelte';
 	import * as Alert from '$lib/components/ui/alert';
 	import { Skeleton } from '$lib/components/ui/skeleton';
 	import { Spinner } from '$lib/components/ui/spinner';
@@ -22,6 +23,8 @@
 	import ProjectWorkspaceDesktop from './ProjectWorkspaceDesktop.svelte';
 	import ProjectWorkspaceEmptyState from './ProjectWorkspaceEmptyState.svelte';
 	import ProjectWorkspaceMobile from './ProjectWorkspaceMobile.svelte';
+
+	let { children }: { children?: Snippet } = $props();
 
 	const isMobile = new IsMobile();
 	const workspace = setProjectWorkspaceContext();
@@ -152,9 +155,9 @@
 				<Skeleton class="h-80" />
 			</div>
 		{:else if isMobile.current}
-			<ProjectWorkspaceMobile />
+			<ProjectWorkspaceMobile {children} />
 		{:else}
-			<ProjectWorkspaceDesktop />
+			<ProjectWorkspaceDesktop {children} />
 		{/if}
 	</div>
 </div>

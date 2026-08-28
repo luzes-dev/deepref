@@ -10,7 +10,49 @@ Authoritative state changes and their follow-up jobs are committed in one transa
 
 Graph reads use canonical UUIDs from `reports`, `project_reports`, and `citations`. Reports without DOI identifiers remain graph nodes. Responses are deterministic and bounded; edges are UUID-to-UUID and never depend on DOI mapping. Project metrics use the same degree/rank semantics as the legacy fixture and are recomputed after imports and later ingestions. The PostgreSQL graph status endpoint reports metric/projection freshness for compatibility with existing clients; it is not an external graph service.
 
-The v2 screening command writes its event, state projection, project lifecycle status, and PRISMA recomputation job in one transaction. It uses optimistic revisions and returns `409 screening_revision_conflict` when another browser, worker, or automation changes the same report.
+The v2 screening command writes its event, state projection, and project lifecycle status in one transaction. PRISMA is a live deterministic projection of canonical relational state; no recomputation job or snapshot is authoritative. The command uses optimistic revisions and returns `409 screening_revision_conflict` when another browser, worker, or automation changes the same report.
+
+## AI foundation and evidence grounding
+
+`deepref-ai` is the provider-neutral seam for structured AI work. It owns typed
+task contracts, model-profile routing, immutable prompt/schema versions,
+canonical input/reuse hashes, JSON Schema validation before semantic
+validation, grounded evidence references, and proposal authority. Rig is
+wrapped at the gateway seam; task code never depends on Rig, a provider SDK,
+SQLx, or PostgreSQL row types. AI output is never scientific state: tier 2/3
+work creates an auditable proposal and the normal domain command remains the
+only state-changing authority.
+
+PostgreSQL migration `0016_ai_foundation.sql` enables `vector`, stores
+versioned document-block embeddings, adds the active-block HNSW projection for
+the 1536-dimensional default route, persists resolved model configuration and
+evidence references for every run, and enforces compare-and-set proposal
+resolution. Hybrid retrieval combines PostgreSQL FTS and cosine similarity with
+deterministic section/kind filters and tie-breaking. Article text is untrusted
+evidence and is fenced as data before it reaches a model context.
+
+The default local fixture is the pinned `pgvector/pgvector:0.8.0-pg17` image.
+This is disposable migration/integration tooling; production extension and
+backup choices remain deployment-owned. The local acceptance evidence is
+tracked in [AI foundation acceptance](acceptance/ai-foundation.md).
+
+## Corrected AI foundation details
+
+Every AI attempt is an audit row. Failed and running rows do not reserve a
+reuse key; completed reuse is selected deterministically. The runner hashes the
+rendered prompt envelope and canonical derived schema in addition to their
+immutable version labels, and proposal creation is idempotent and recovered
+when a completed run is reused.
+
+Embeddings are historical rows keyed by block, model, generation, and content
+hash, with one current selection per block. Retrieval guards vector scoring by
+dimension, requires the document active parser version, and treats section
+filters as path prefixes. Run evidence carries project/document scope and the
+actual rank and score, with composite database constraints preventing
+cross-project citations. Policy input is typed and includes actor, project,
+tool, authority, action, arguments, and project capabilities; scientific work
+always becomes a proposal. Telemetry is fmt-only without an endpoint and uses
+an OTLP batch layer with flush/shutdown when configured.
 
 ## Runtime roles and shutdown
 

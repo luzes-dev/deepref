@@ -2,7 +2,8 @@ name: deepref-local
 
 services:
   postgres:
-    image: postgres:17.6-alpine
+    # Migration 0016 installs vector, so the disposable runtime must provide it.
+    image: pgvector/pgvector:0.8.0-pg17
     environment:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: postgres

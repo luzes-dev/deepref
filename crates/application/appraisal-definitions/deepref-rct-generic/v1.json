@@ -1,0 +1,76 @@
+{
+  "id": "deepref-rct-generic",
+  "version": 1,
+  "name": "DeepRef generic intervention appraisal",
+  "description": "A minimal redistributable schema for recording reviewer judgments about an intervention study.",
+  "applicability": {
+    "designs": ["rct", "non_randomized_intervention"],
+    "note": "This is generic DeepRef scaffolding, not an official tool question bank."
+  },
+  "domains": [
+    {
+      "id": "allocation",
+      "label": "Allocation process",
+      "description": "Record whether the allocation process is sufficiently described.",
+      "questions": [
+        {
+          "id": "allocation_description",
+          "label": "Was the allocation process described?",
+          "help": null,
+          "answer_schema": {
+            "kind": "enum",
+            "options": [
+              {"value": "yes", "label": "Yes"},
+              {"value": "no", "label": "No"},
+              {"value": "unclear", "label": "Unclear"}
+            ]
+          },
+          "required": true,
+          "requires_evidence": true
+        }
+      ],
+      "judgment": {
+        "options": [
+          {"value": "low_concern", "label": "Low concern"},
+          {"value": "some_concern", "label": "Some concern"},
+          {"value": "high_concern", "label": "High concern"}
+        ],
+        "allow_custom": true,
+        "required": true
+      }
+    },
+    {
+      "id": "outcome_reporting",
+      "label": "Outcome reporting",
+      "description": null,
+      "questions": [
+        {
+          "id": "outcome_measure_prespecified",
+          "label": "Was the outcome measure prespecified?",
+          "help": null,
+          "answer_schema": {"kind": "boolean"},
+          "required": true,
+          "requires_evidence": false
+        }
+      ],
+      "judgment": {
+        "options": [
+          {"value": "low_concern", "label": "Low concern"},
+          {"value": "some_concern", "label": "Some concern"},
+          {"value": "high_concern", "label": "High concern"}
+        ],
+        "allow_custom": true,
+        "required": true
+      }
+    }
+  ],
+  "overall_judgment": {
+    "options": [
+      {"value": "low_concern", "label": "Low concern"},
+      {"value": "some_concern", "label": "Some concern"},
+      {"value": "high_concern", "label": "High concern"}
+    ],
+    "allow_custom": true,
+    "required": true
+  }
+}

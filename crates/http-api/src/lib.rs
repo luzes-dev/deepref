@@ -30,9 +30,12 @@ pub async fn serve_with_shutdown(
     config: ApiConfig,
     shutdown: impl Future<Output = ()> + Send + 'static,
 ) -> anyhow::Result<()> {
+    deepref_application::validate_shipped_appraisal_definitions()
+        .map_err(|error| anyhow::anyhow!("invalid shipped appraisal definition: {error}"))?;
     let pool = database_pool(&config).await?;
 
-    let state = AppState::new(pool);
+    let document_store = deepref_documents::DocumentStore::from_env()?;
+    let state = AppState::new(pool).with_document_store(document_store);
     let listener = tokio::net::TcpListener::bind(config.bind_addr).await?;
     tracing::info!(address = %config.bind_addr, "API listening");
     axum::serve(listener, routes::router(state, &config))

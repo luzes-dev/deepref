@@ -26,6 +26,7 @@
 		formatDedupeYear
 	} from '$lib/features/deduplication/formatters';
 	import { useQueryClient } from '@tanstack/svelte-query';
+	import AiProposalReview from '$lib/features/ai-assistance/components/AiProposalReview.svelte';
 	import CheckIcon from '@lucide/svelte/icons/check';
 	import GitCompareIcon from '@lucide/svelte/icons/git-compare';
 	import FileQuestionIcon from '@lucide/svelte/icons/file-question';
@@ -302,6 +303,12 @@
 								Accept candidate
 							</Button>
 						</Card.Footer>
+						<AiProposalReview
+							{projectId}
+							stage="dedupe"
+							recordId={proposal.record_id}
+							candidateReportId={proposal.candidate_report_id}
+						/>
 					</Card.Root>
 				{/each}
 			</div>

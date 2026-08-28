@@ -10,18 +10,88 @@
 	import { Skeleton } from '$lib/components/ui/skeleton';
 	import PaginationLoadMore from '$lib/components/PaginationLoadMore.svelte';
 	import { statusVariant } from '$lib/api/helpers';
-	import { createCreateIngestion } from '$lib/api/generated/ingestions/ingestions';
+	import { ApiError } from '$lib/api/custom-fetch';
+	import {
+		createCreateIngestion,
+		getListIngestionsQueryKey
+	} from '$lib/api/generated/ingestions/ingestions';
+	import { refreshAcquisition } from '$lib/api/generated/acquisitions/acquisitions';
+	import { useQueryClient } from '@tanstack/svelte-query';
 	import CircleAlertIcon from '@lucide/svelte/icons/circle-alert';
 	import PlayIcon from '@lucide/svelte/icons/play';
+	import RefreshCwIcon from '@lucide/svelte/icons/refresh-cw';
 	import { useProjectWorkspaceContext } from './context.svelte.js';
 
 	const workspace = useProjectWorkspaceContext();
 	const createIngestion = createCreateIngestion();
+	const queryClient = useQueryClient();
+
+	type RefreshState =
+		| { kind: 'pending'; idempotencyKey: string }
+		| { kind: 'failed'; idempotencyKey: string; message: string; retriable: boolean }
+		| { kind: 'key-unavailable'; message: string };
+
+	let refreshStates = $state<Record<string, RefreshState>>({});
 
 	const sortedIngestions = $derived(
 		workspace.ingestions.toSorted((a, b) => Date.parse(b.created_at) - Date.parse(a.created_at))
 	);
 	const formError = $derived(createIngestion.error?.message ?? workspace.ingestionsError ?? '');
+
+	function refreshErrorMessage(error: unknown): string {
+		const message = error instanceof Error ? error.message.trim() : '';
+		const boundedMessage = message || 'The provider refresh could not be started.';
+		return boundedMessage.length <= 240 ? boundedMessage : `${boundedMessage.slice(0, 237)}…`;
+	}
+
+	function isRetriableRefreshError(error: unknown): boolean {
+		if (!(error instanceof ApiError)) return true;
+		return (
+			error.status === 408 ||
+			error.status === 425 ||
+			error.status === 429 ||
+			error.status >= 500
+		);
+	}
+
+	async function refreshProvider(ingestionId: string): Promise<void> {
+		const previous = refreshStates[ingestionId];
+		if (previous?.kind === 'pending') return;
+
+		const idempotencyKey =
+			previous?.kind === 'failed' && previous.retriable
+				? previous.idempotencyKey
+				: globalThis.crypto?.randomUUID?.();
+		if (!idempotencyKey?.trim()) {
+			refreshStates[ingestionId] = {
+				kind: 'key-unavailable',
+				message:
+					'A secure refresh request key is unavailable. Try again in a supported browser.'
+			};
+			return;
+		}
+
+		refreshStates[ingestionId] = { kind: 'pending', idempotencyKey };
+		try {
+			const response = await refreshAcquisition(workspace.project.id, ingestionId, {
+				headers: { 'Idempotency-Key': idempotencyKey }
+			});
+			try {
+				await queryClient.invalidateQueries({ queryKey: getListIngestionsQueryKey() });
+			} catch {
+				// The workspace query renders any refetch error; the refresh itself succeeded.
+			}
+			delete refreshStates[ingestionId];
+			workspace.openIngestion(response.data.id);
+		} catch (error: unknown) {
+			refreshStates[ingestionId] = {
+				kind: 'failed',
+				idempotencyKey,
+				message: refreshErrorMessage(error),
+				retriable: isRetriableRefreshError(error)
+			};
+		}
+	}
 
 	async function submitIngestion() {
 		const seed_dois = workspace.ingestionDraft.dois
@@ -140,7 +210,12 @@
 					</Table.Header>
 					<Table.Body>
 						{#each sortedIngestions as ingestion (ingestion.id)}
-							<Table.Row data-selected={workspace.selectedIngestion === ingestion.id}>
+							{@const refreshState = refreshStates[ingestion.id]}
+							<Table.Row
+								data-selected={workspace.selectedIngestion === ingestion.id}
+								data-ingestion-id={ingestion.id}
+								data-refresh-pending={refreshState?.kind === 'pending'}
+							>
 								<Table.Cell>
 									<Badge variant={statusVariant(ingestion.status)}
 										>{ingestion.status}</Badge
@@ -153,13 +228,45 @@
 									>{new Date(ingestion.created_at).toLocaleString()}</Table.Cell
 								>
 								<Table.Cell class="text-right">
-									<Button
-										variant="outline"
-										size="sm"
-										onclick={() => workspace.openIngestion(ingestion.id)}
-									>
-										Open
-									</Button>
+									<div class="flex flex-wrap justify-end gap-2">
+										<Button
+											variant="outline"
+											size="sm"
+											onclick={() => workspace.openIngestion(ingestion.id)}
+										>
+											Open
+										</Button>
+										{#if ingestion.status === 'completed'}
+											<Button
+												variant="outline"
+												size="sm"
+												onclick={() => refreshProvider(ingestion.id)}
+												disabled={refreshState?.kind === 'pending'}
+											>
+												<RefreshCwIcon data-icon="inline-start" />
+												{refreshState?.kind === 'pending'
+													? 'Refreshing provider…'
+													: refreshState?.kind === 'failed' &&
+														  refreshState.retriable
+														? 'Retry refresh provider'
+														: 'Refresh provider'}
+											</Button>
+										{/if}
+									</div>
+									{#if refreshState?.kind === 'pending'}
+										<p class="mt-2 text-xs text-muted-foreground" role="status">
+											Provider refresh is in progress.
+										</p>
+									{:else if refreshState?.kind === 'failed' || refreshState?.kind === 'key-unavailable'}
+										<div
+											class="mt-2 flex flex-wrap items-center justify-end gap-2"
+											role="alert"
+										>
+											<span class="max-w-64 text-xs text-destructive"
+												>{refreshState.message}</span
+											>
+										</div>
+									{/if}
 								</Table.Cell>
 							</Table.Row>
 						{/each}

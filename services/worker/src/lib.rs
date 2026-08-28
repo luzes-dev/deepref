@@ -1,6 +1,7 @@
 use std::{future::Future, sync::Arc, time::Duration};
 
 use deepref_application::jobs::ClaimedJob;
+use deepref_documents::DocumentStore;
 use deepref_postgres::{claim_job, complete_job, fail_job, renew_job};
 use sqlx::postgres::PgPoolOptions;
 use tokio::{
@@ -34,6 +35,8 @@ pub async fn run_with_shutdown(
         .connect(&database.url)
         .await?;
     let owner = format!("deepref-worker-{}", uuid::Uuid::new_v4());
+    processor::validate_pdf_parse_concurrency()?;
+    let document_store = Arc::new(DocumentStore::from_env()?);
     let semaphore = Arc::new(Semaphore::new(config.concurrency));
     let mut active = JoinSet::new();
     let (reconciler_shutdown, reconciler_signal) = watch::channel(false);
@@ -79,10 +82,11 @@ pub async fn run_with_shutdown(
                         };
                         let pool = pool.clone();
                         let owner = owner.clone();
+                        let document_store = Arc::clone(&document_store);
                         let lease = config.claim_lease;
                         active.spawn(async move {
                             let _permit = permit;
-                            process_claimed_job(pool, owner, job, lease).await
+                            process_claimed_job(pool, owner, job, lease, document_store).await
                         });
                     }
                     Ok(None) => {}
@@ -127,13 +131,21 @@ async fn process_claimed_job(
     owner: String,
     job: ClaimedJob,
     lease: Duration,
+    document_store: Arc<DocumentStore>,
 ) -> anyhow::Result<()> {
     let result = run_with_lease_renewal(
         pool.clone(),
         owner.clone(),
         job.id,
         lease,
-        processor::handle_job(pool.clone(), &job, lease),
+        processor::handle_job_with_documents_owned(
+            pool.clone(),
+            &job,
+            &owner,
+            lease,
+            Some(document_store),
+            None,
+        ),
     )
     .await;
     match result {

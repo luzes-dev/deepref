@@ -287,6 +287,132 @@ export const createCreateAcquisition = <TError = ErrorType<ApiErrorBody>, TConte
 		queryClient
 	);
 };
+export type refreshAcquisitionResponse200 = {
+	data: AcquisitionDto;
+	status: 200;
+};
+
+export type refreshAcquisitionResponse201 = {
+	data: AcquisitionDto;
+	status: 201;
+};
+
+export type refreshAcquisitionResponse400 = {
+	data: ApiErrorBody;
+	status: 400;
+};
+
+export type refreshAcquisitionResponse404 = {
+	data: ApiErrorBody;
+	status: 404;
+};
+
+export type refreshAcquisitionResponse409 = {
+	data: ApiErrorBody;
+	status: 409;
+};
+
+export type refreshAcquisitionResponse500 = {
+	data: ApiErrorBody;
+	status: 500;
+};
+
+export type refreshAcquisitionResponseSuccess = (
+	refreshAcquisitionResponse200 | refreshAcquisitionResponse201
+) & {
+	headers: Headers;
+};
+export type refreshAcquisitionResponseError = (
+	| refreshAcquisitionResponse400
+	| refreshAcquisitionResponse404
+	| refreshAcquisitionResponse409
+	| refreshAcquisitionResponse500
+) & {
+	headers: Headers;
+};
+
+export const getRefreshAcquisitionUrl = (projectId: string, acquisitionId: string) => {
+	return `/api/projects/${projectId}/acquisitions/${acquisitionId}/refresh`;
+};
+
+export const refreshAcquisition = async (
+	projectId: string,
+	acquisitionId: string,
+	options?: RequestInit
+): Promise<refreshAcquisitionResponseSuccess> => {
+	return customFetch<refreshAcquisitionResponseSuccess>(
+		getRefreshAcquisitionUrl(projectId, acquisitionId),
+		{
+			...options,
+			method: 'POST'
+		}
+	);
+};
+
+export const getRefreshAcquisitionMutationOptions = <
+	TError = ErrorType<ApiErrorBody>,
+	TContext = unknown
+>(options?: {
+	mutation?: CreateMutationOptions<
+		Awaited<ReturnType<typeof refreshAcquisition>>,
+		TError,
+		{ projectId: string; acquisitionId: string },
+		TContext
+	>;
+	request?: SecondParameter<typeof customFetch>;
+}): CreateMutationOptions<
+	Awaited<ReturnType<typeof refreshAcquisition>>,
+	TError,
+	{ projectId: string; acquisitionId: string },
+	TContext
+> => {
+	const mutationKey = ['refreshAcquisition'];
+	const { mutation: mutationOptions, request: requestOptions } = options
+		? options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey
+			? options
+			: { ...options, mutation: { ...options.mutation, mutationKey } }
+		: { mutation: { mutationKey }, request: undefined };
+
+	const mutationFn: MutationFunction<
+		Awaited<ReturnType<typeof refreshAcquisition>>,
+		{ projectId: string; acquisitionId: string }
+	> = (props) => {
+		const { projectId, acquisitionId } = props ?? {};
+
+		return refreshAcquisition(projectId, acquisitionId, requestOptions);
+	};
+
+	return { mutationFn, ...mutationOptions };
+};
+
+export type RefreshAcquisitionMutationResult = NonNullable<
+	Awaited<ReturnType<typeof refreshAcquisition>>
+>;
+
+export type RefreshAcquisitionMutationError = ErrorType<ApiErrorBody>;
+
+export const createRefreshAcquisition = <TError = ErrorType<ApiErrorBody>, TContext = unknown>(
+	options?: () => {
+		mutation?: CreateMutationOptions<
+			Awaited<ReturnType<typeof refreshAcquisition>>,
+			TError,
+			{ projectId: string; acquisitionId: string },
+			TContext
+		>;
+		request?: SecondParameter<typeof customFetch>;
+	},
+	queryClient?: () => QueryClient
+): CreateMutationResult<
+	Awaited<ReturnType<typeof refreshAcquisition>>,
+	TError,
+	{ projectId: string; acquisitionId: string },
+	TContext
+> => {
+	return createMutation(
+		() => ({ ...getRefreshAcquisitionMutationOptions(options?.()) }),
+		queryClient
+	);
+};
 export type importProjectRecordsResponse200 = {
 	data: AcquisitionDto;
 	status: 200;

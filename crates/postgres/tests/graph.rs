@@ -1,5 +1,5 @@
 use anyhow::{Result, ensure};
-use chrono::{Datelike, Utc};
+use chrono::Utc;
 use deepref_graph::GraphEdge;
 use deepref_postgres::{load_project_graph, migrate, recompute_project_metrics};
 use sqlx::{PgPool, Row, postgres::PgPoolOptions};
@@ -135,7 +135,8 @@ async fn seed_and_assert(
     }
 
     recompute_project_metrics(pool, project_id).await?;
-    let graph = load_project_graph(pool, project_id).await?;
+    let graph =
+        load_project_graph(pool, project_id, deepref_graph::GraphFieldSelection::all()).await?;
 
     ensure!(graph.nodes.len() == 3, "expected three project nodes");
     let mut expected_edges = vec![
@@ -165,6 +166,18 @@ async fn seed_and_assert(
                 && node.title.as_deref() == Some("No DOI")
         }),
         "identifier-free report must remain a graph node"
+    );
+    ensure!(
+        graph.nodes.iter().all(|node| {
+            node.screening.as_ref().is_some_and(|screening| {
+                screening.title_abstract_status == "unscreened"
+                    && screening.final_status == "unscreened"
+            }) && node
+                .study
+                .as_ref()
+                .is_some_and(|study| study.study_id.is_none())
+        }),
+        "graph-only projects must receive neutral review and ungrouped overlays"
     );
 
     let metrics = sqlx::query(
@@ -228,7 +241,10 @@ async fn seed_and_assert(
     );
 
     let max_total = (100_f64 + 1.0).log10();
-    let freshness_a = 1.0 / (1.0 + ((Utc::now().year() - 2024).max(0) as f64 / 10.0));
+    let current_year: i32 = sqlx::query_scalar("SELECT EXTRACT(YEAR FROM CURRENT_DATE)::int")
+        .fetch_one(pool)
+        .await?;
+    let freshness_a = 1.0 / (1.0 + ((current_year - 2024).max(0) as f64 / 10.0));
     let expected_rank_a = 0.45 * ((100_f64 + 1.0).log10() / max_total)
         + 0.40 * (0.0 / 2.0)
         + 0.10

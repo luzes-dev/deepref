@@ -1,11 +1,11 @@
 import {
 	getGetProjectProtocolQueryKey,
-	getListTitleAbstractScreeningQueueQueryKey
+	getGetScreeningHistoryQueryKey
 } from '$lib/api/generated/review/review';
 
 export const screeningKeys = {
-	all: (projectId: string) => ['screening', projectId] as const,
 	protocol: (projectId: string) => getGetProjectProtocolQueryKey(projectId),
-	titleAbstractQueue: (projectId: string, status = 'unscreened') =>
-		getListTitleAbstractScreeningQueueQueryKey(projectId, { status, limit: 100 })
+	queue: (projectId: string) => ['screening-queue', projectId] as const,
+	history: (projectId: string, reportId: string) =>
+		getGetScreeningHistoryQueryKey(projectId, reportId)
 };

@@ -42,6 +42,12 @@ runtime:
     maxLifetimeSeconds: 1800
   shutdownDeadlineSeconds: 30
 
+documentStorage:
+  backend: s3
+  root: ""
+  maxBytes: 26214400
+  secretName: ""
+
 api:
   replicas: 2
   corsOrigins: []
@@ -104,6 +110,13 @@ externalSecrets:
     cloudflared:
       key: deepref/development/cloudflared
       tokenProperty: token
+    documentStorage:
+      key: deepref/development/document-storage
+      endpointProperty: endpoint
+      bucketProperty: bucket
+      regionProperty: region
+      accessKeyIdProperty: access_key_id
+      secretAccessKeyProperty: secret_access_key
 
 networkPolicy:
   enabled: true

@@ -7,9 +7,21 @@
 
 export type ListTitleAbstractScreeningQueueParams = {
 	/**
-	 * Queue status
+	 * Title/abstract status filter
 	 */
 	status?: string;
+	/**
+	 * Title/abstract search
+	 */
+	search?: string;
+	/**
+	 * Stable queue sort
+	 */
+	sort?: string;
+	/**
+	 * Opaque page cursor
+	 */
+	cursor?: string;
 	/**
 	 * Maximum rows, 1 through 100
 	 */

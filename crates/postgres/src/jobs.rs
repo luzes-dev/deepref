@@ -1,6 +1,10 @@
 use std::time::Duration;
 
-use deepref_application::jobs::{ClaimedJob, EnqueueJob, JobQueue};
+use deepref_application::{
+    AutomationRunId,
+    jobs::{ClaimedJob, EnqueueJob, JobQueue},
+};
+use deepref_domain::ProjectId;
 use serde_json::Value;
 use sqlx::{PgPool, Postgres, Row, Transaction};
 use uuid::Uuid;
@@ -77,6 +81,32 @@ pub async fn claim_job(
         attempts: row.get("attempts"),
         max_attempts: row.get("max_attempts"),
     }))
+}
+
+/// Resolve the project for an owned automation job without exposing a
+/// project-less job row to the worker. The lease predicate is repeated here
+/// because the caller may have waited between claiming and dispatching.
+pub async fn get_claimed_automation_job_project_id_for_run(
+    pool: &PgPool,
+    job_id: Uuid,
+    run_id: AutomationRunId,
+    owner: &str,
+) -> anyhow::Result<Option<ProjectId>> {
+    let project_id = sqlx::query_scalar::<_, Uuid>(
+        "SELECT j.project_id
+         FROM jobs AS j
+         JOIN automation_runs AS r
+           ON r.project_id = j.project_id AND r.job_id = j.id
+         WHERE j.id=$1 AND j.kind='automation_run' AND j.state='running'
+           AND j.lease_owner=$2 AND j.leased_until > now()
+           AND r.id=$3 AND j.project_id IS NOT NULL",
+    )
+    .bind(job_id)
+    .bind(owner)
+    .bind(run_id.as_uuid())
+    .fetch_optional(pool)
+    .await?;
+    Ok(project_id.map(ProjectId::new))
 }
 
 pub async fn renew_job(
@@ -166,31 +196,6 @@ impl JobQueue for PostgresJobQueue {
     ) -> anyhow::Result<bool> {
         fail_job(&self.pool, owner, job, error, retry_after).await
     }
-}
-
-pub async fn recompute_prisma_snapshot(pool: &PgPool, project_id: Uuid) -> anyhow::Result<()> {
-    let row = sqlx::query(
-        "SELECT count(*)::bigint AS records_identified,count(*) FILTER (WHERE pr.report_id IS NOT NULL)::bigint AS records_deduplicated,count(*) FILTER (WHERE coalesce(ss.title_abstract_status,'unscreened')='unscreened')::bigint AS title_abstract_pending,count(*) FILTER (WHERE ss.title_abstract_status='include')::bigint AS title_abstract_included,count(*) FILTER (WHERE ss.title_abstract_status='exclude')::bigint AS title_abstract_excluded,count(*) FILTER (WHERE coalesce(ss.final_status,'unscreened')='pending_full_text')::bigint AS full_text_pending,count(*) FILTER (WHERE ss.full_text_status='include')::bigint AS full_text_included,count(*) FILTER (WHERE ss.full_text_status='exclude')::bigint AS full_text_excluded,coalesce(max(ss.revision),0)::bigint AS revision FROM records rec LEFT JOIN project_reports pr ON pr.project_id=rec.project_id AND pr.report_id=rec.report_id LEFT JOIN screening_state ss ON ss.project_id=rec.project_id AND ss.report_id=rec.report_id WHERE rec.project_id=$1",
-    )
-    .bind(project_id)
-    .fetch_one(pool)
-    .await?;
-    sqlx::query(
-        "INSERT INTO prisma_snapshots (project_id,records_identified,records_deduplicated,title_abstract_pending,title_abstract_included,title_abstract_excluded,full_text_pending,full_text_included,full_text_excluded,revision,updated_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,now()) ON CONFLICT (project_id) DO UPDATE SET records_identified=EXCLUDED.records_identified,records_deduplicated=EXCLUDED.records_deduplicated,title_abstract_pending=EXCLUDED.title_abstract_pending,title_abstract_included=EXCLUDED.title_abstract_included,title_abstract_excluded=EXCLUDED.title_abstract_excluded,full_text_pending=EXCLUDED.full_text_pending,full_text_included=EXCLUDED.full_text_included,full_text_excluded=EXCLUDED.full_text_excluded,revision=EXCLUDED.revision,updated_at=now()",
-    )
-    .bind(project_id)
-    .bind(row.get::<i64, _>("records_identified"))
-    .bind(row.get::<i64, _>("records_deduplicated"))
-    .bind(row.get::<i64, _>("title_abstract_pending"))
-    .bind(row.get::<i64, _>("title_abstract_included"))
-    .bind(row.get::<i64, _>("title_abstract_excluded"))
-    .bind(row.get::<i64, _>("full_text_pending"))
-    .bind(row.get::<i64, _>("full_text_included"))
-    .bind(row.get::<i64, _>("full_text_excluded"))
-    .bind(row.get::<i64, _>("revision"))
-    .execute(pool)
-    .await?;
-    Ok(())
 }
 
 pub fn job(

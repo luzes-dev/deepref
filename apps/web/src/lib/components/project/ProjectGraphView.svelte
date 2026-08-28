@@ -5,16 +5,24 @@
 	import { Button } from '$lib/components/ui/button';
 	import { Skeleton } from '$lib/components/ui/skeleton';
 	import { Slider } from '$lib/components/ui/slider';
+	import { Checkbox } from '$lib/components/ui/checkbox';
 	import { Spinner } from '$lib/components/ui/spinner';
 	import GraphDegradedState from '$lib/components/GraphDegradedState.svelte';
-	import type { GraphEdgeDto, ProjectGraphDto, ReportDto } from '$lib/api/generated/models';
+	import type { GraphEdgeDto, GraphNodeDto, ProjectGraphDto } from '$lib/api/generated/models';
 	import { createGetProjectGraph } from '$lib/api/generated/reports/reports';
 	import { createGetProjectProjection } from '$lib/api/generated/projection/projection';
 	import RotateCcwIcon from '@lucide/svelte/icons/rotate-ccw';
 	import SearchIcon from '@lucide/svelte/icons/search';
-	import { onCleanup } from 'runed';
+	import { onCleanup, watch } from 'runed';
 	import { untrack } from 'svelte';
-	import { useProjectWorkspaceContext } from './context.svelte.js';
+	import { useProjectWorkspaceContext, type GraphOverlayField } from './context.svelte.js';
+	import {
+		appraisalStatus,
+		overlaySummary,
+		provenanceStatus,
+		screeningStatus,
+		studyStatus
+	} from './graph-overlays';
 	import { getGraphNodeSize } from './graph-layout';
 	import { reportLabel, reportSearchText } from './report-label';
 	import type SigmaType from 'sigma';
@@ -35,6 +43,13 @@
 	const SMALL_GRAPH_NOVERLAP_ITERATIONS = 150;
 	const MEDIUM_GRAPH_NOVERLAP_ITERATIONS = 300;
 	const LARGE_GRAPH_NOVERLAP_ITERATIONS = 500;
+	const overlayLabels: ReadonlyArray<{ field: GraphOverlayField; label: string }> = [
+		{ field: 'metrics', label: 'Metrics' },
+		{ field: 'screening', label: 'Screening' },
+		{ field: 'study', label: 'Study' },
+		{ field: 'appraisal', label: 'Appraisal' },
+		{ field: 'provenance', label: 'Provenance' }
+	];
 
 	type GraphPalette = {
 		background: string;
@@ -52,7 +67,7 @@
 		hoverBackground: string;
 	};
 
-	type GraphNodeAttributes = ReportDto & {
+	type GraphNodeAttributes = GraphNodeDto & {
 		label: string;
 		fullLabel: string;
 		type: string;
@@ -136,6 +151,7 @@
 
 	const graphQuery = createGetProjectGraph(
 		() => workspace.project.id,
+		() => ({ fields: workspace.graphFilters.fields.join(',') }),
 		() => ({ query: { enabled: Boolean(workspace.project.id && enabled), staleTime: 0 } })
 	);
 	const projectionQuery = createGetProjectProjection(
@@ -150,14 +166,26 @@
 			truncated: false
 		}
 	);
+	function internalCitations(node: GraphNodeDto): number {
+		return node.metrics?.internal_citations ?? 0;
+	}
+
+	function overlayEnabled(field: GraphOverlayField): boolean {
+		return workspace.graphFilters.fields.includes(field);
+	}
+
 	const visibleNodes = $derived(
 		graphData.nodes.filter((node) => {
 			const term = workspace.graphFilters.search.toLowerCase();
 			return (
-				node.internal_citations >= workspace.graphFilters.minInternal &&
+				(!overlayEnabled('metrics') ||
+					internalCitations(node) >= workspace.graphFilters.minInternal) &&
 				reportSearchText(node).includes(term)
 			);
 		})
+	);
+	const selectedGraphNode = $derived(
+		graphData.nodes.find((node) => node.report_id === workspace.selectedArticle)
 	);
 
 	function getVisibleNodeIds() {
@@ -226,9 +254,36 @@
 		return new Promise<void>((resolve) => requestAnimationFrame(() => resolve()));
 	}
 
-	function getBaseNodeColor(node: Pick<ReportDto, 'report_id' | 'internal_citations'>) {
+	function getBaseNodeColor(node: GraphNodeDto) {
 		if (node.report_id === interaction.selectedArticle) return interaction.palette.nodeSelected;
-		if (node.internal_citations > 0) return interaction.palette.nodeCited;
+		const colorBy = workspace.graphFilters.colorBy;
+		if (!overlayEnabled(colorBy)) return interaction.palette.nodeDefault;
+		if (colorBy === 'screening') {
+			const status = screeningStatus(node);
+			if (status === 'not-loaded') return interaction.palette.nodeDefault;
+			if (status === 'include') return interaction.palette.nodeCited;
+			if (status === 'exclude') return interaction.palette.nodeSelected;
+			return interaction.palette.nodeFocused;
+		}
+		if (colorBy === 'study') {
+			if (studyStatus(node) === 'not-loaded') return interaction.palette.nodeDefault;
+			return studyStatus(node) === 'grouped'
+				? interaction.palette.nodeFocused
+				: interaction.palette.nodeDimmed;
+		}
+		if (colorBy === 'appraisal') {
+			if (appraisalStatus(node) === 'not-loaded') return interaction.palette.nodeDefault;
+			return appraisalStatus(node) === 'appraised'
+				? interaction.palette.nodeCited
+				: interaction.palette.nodeDefault;
+		}
+		if (colorBy === 'provenance') {
+			if (provenanceStatus(node) === 'not-loaded') return interaction.palette.nodeDefault;
+			return provenanceStatus(node) === 'acquired'
+				? interaction.palette.nodeFocused
+				: interaction.palette.nodeDimmed;
+		}
+		if (internalCitations(node) > 0) return interaction.palette.nodeCited;
 		return interaction.palette.nodeDefault;
 	}
 
@@ -635,7 +690,7 @@
 	function registerGraphEvents(nextRenderer: SigmaType) {
 		nextRenderer.on('clickNode', ({ node }: { node: string }) => {
 			if (interaction.draggedNode || shouldIgnoreClickAfterDrag()) return;
-			const article = graph?.getNodeAttributes(node) as ReportDto | undefined;
+			const article = graph?.getNodeAttributes(node) as GraphNodeDto | undefined;
 			if (article) workspace.openArticle(article.report_id);
 		});
 		nextRenderer.on('clickStage', () => {
@@ -670,7 +725,7 @@
 
 	async function renderGraph(
 		target: HTMLDivElement,
-		nodes: ReportDto[],
+		nodes: GraphNodeDto[],
 		edges: GraphEdgeDto[],
 		options: { resetCamera?: boolean } = {}
 	) {
@@ -788,41 +843,54 @@
 		}
 	}
 
-	$effect(() => {
-		const target = container;
-		const nodes = graphData.nodes;
-		const edges = graphData.edges;
-		const active = enabled;
+	function graphContainerAttachment(element: Element) {
+		container = element as HTMLDivElement;
+		return () => {
+			if (container === element) container = null;
+		};
+	}
 
-		if (!active || !target || nodes.length === 0) {
-			clearGraph();
-			return;
+	const visibleNodeIds = $derived(getVisibleNodeIds());
+
+	watch(
+		[() => enabled, () => container, () => graphData.nodes, () => graphData.edges],
+		([active, target, nodes, edges]) => {
+			if (!active || !target || nodes.length === 0) {
+				clearGraph();
+				return;
+			}
+
+			void renderGraph(target, nodes, edges);
 		}
+	);
 
-		void renderGraph(target, nodes, edges);
-	});
-
-	$effect(() => {
-		const active = enabled;
-		const visibleNodeIds = getVisibleNodeIds();
-
+	watch([() => enabled, () => visibleNodeIds], ([active, nextVisibleNodeIds]) => {
 		if (!active) return;
 
 		const timeout = setTimeout(
-			() => updateVisibleNodes(visibleNodeIds),
+			() => updateVisibleNodes(nextVisibleNodeIds),
 			FILTER_UPDATE_DELAY_MS
 		);
 		return () => clearTimeout(timeout);
 	});
 
-	$effect(() => {
-		const active = enabled;
-		const selectedArticle = workspace.selectedArticle;
-
+	watch([() => enabled, () => workspace.selectedArticle], ([active, selectedArticle]) => {
 		if (!active) return;
 
 		updateSelection(selectedArticle);
 	});
+
+	watch(
+		[
+			() => enabled,
+			() => workspace.graphFilters.colorBy,
+			() => workspace.graphFilters.fields.join(',')
+		],
+		([active]) => {
+			if (!active) return;
+			renderer?.scheduleRefresh({ layoutUnchange: true });
+		}
+	);
 
 	onCleanup(() => clearGraph());
 </script>
@@ -865,13 +933,100 @@
 				bind:value={workspace.graphFilters.minInternal}
 				max={20}
 				step={1}
+				disabled={!overlayEnabled('metrics')}
 			/>
-			<Badge variant="outline">Internal {workspace.graphFilters.minInternal}+</Badge>
+			<Badge variant="outline">
+				{overlayEnabled('metrics')
+					? `Internal ${workspace.graphFilters.minInternal}+`
+					: 'Internal filter unavailable'}
+			</Badge>
 		</div>
 		<Badge variant="secondary"
 			>{graphData.nodes.length} nodes and {graphData.edges.length} edges</Badge
 		>
 	</div>
+	<fieldset class="flex flex-wrap items-center gap-3" data-testid="graph-overlay-filters">
+		<legend class="mr-1 text-sm font-medium">Visual overlays</legend>
+		{#each overlayLabels as { field, label } (field)}
+			<label class="flex items-center gap-2 text-sm text-muted-foreground">
+				<Checkbox
+					checked={overlayEnabled(field)}
+					onCheckedChange={(checked) =>
+						workspace.graphFilters.setField(field, checked === true)}
+					aria-label={`Load ${label.toLowerCase()} overlay`}
+					data-testid={`graph-overlay-${field}`}
+				/>
+				{label}
+			</label>
+		{/each}
+		<label class="ml-auto flex items-center gap-2 text-sm">
+			<span class="text-muted-foreground">Color by</span>
+			<select
+				aria-label="Color graph by"
+				class="h-8 rounded-md border bg-background px-2"
+				value={workspace.graphFilters.colorBy}
+				onchange={(event) =>
+					(workspace.graphFilters.colorBy = (event.currentTarget as HTMLSelectElement)
+						.value as GraphOverlayField)}
+			>
+				{#each overlayLabels as { field, label } (field)}
+					<option value={field} disabled={!overlayEnabled(field)}>{label}</option>
+				{/each}
+			</select>
+		</label>
+	</fieldset>
+	<div class="grid gap-3 md:grid-cols-2" data-testid="graph-overlay-legend">
+		{#if !overlayEnabled(workspace.graphFilters.colorBy)}
+			<div class="rounded-md border p-3 text-sm text-muted-foreground">
+				Color-by overlay is not loaded. Select it above or enable its field.
+			</div>
+		{:else if workspace.graphFilters.colorBy === 'screening'}
+			<div class="rounded-md border p-3 text-sm">
+				<div class="font-medium">Screening overlay</div>
+				<div class="mt-2 flex flex-wrap gap-3 text-muted-foreground">
+					<span class="screening-include">● include</span>
+					<span class="screening-exclude">● exclude</span>
+					<span class="screening-pending">● pending / unscreened</span>
+				</div>
+			</div>
+		{:else if workspace.graphFilters.colorBy === 'metrics'}
+			<div class="rounded-md border p-3 text-sm">
+				<div class="font-medium">Metrics overlay</div>
+				<div class="mt-2 flex flex-wrap gap-3 text-muted-foreground">
+					<span class="metrics-cited">● internally cited</span>
+					<span class="metrics-uncited">● no internal citations</span>
+				</div>
+				<p class="mt-2 text-xs text-muted-foreground">
+					Rank and citation counts are available when a node is selected.
+				</p>
+			</div>
+		{:else}
+			<div class="rounded-md border p-3 text-sm">
+				<div class="font-medium">Evidence overlays</div>
+				<div class="mt-2 flex flex-wrap gap-3 text-muted-foreground">
+					{#if workspace.graphFilters.colorBy === 'study'}<span class="evidence-grouped"
+							>● grouped</span
+						><span class="evidence-ungrouped">● ungrouped</span>{/if}
+					{#if workspace.graphFilters.colorBy === 'appraisal'}<span
+							class="evidence-appraised">● appraised</span
+						><span class="evidence-not-appraised">● not appraised</span>{/if}
+					{#if workspace.graphFilters.colorBy === 'provenance'}<span
+							class="evidence-acquired">● acquired</span
+						><span class="evidence-no-source">● no source</span>{/if}
+				</div>
+			</div>
+		{/if}
+	</div>
+	{#if selectedGraphNode}
+		<aside class="rounded-md border bg-muted/20 p-3" aria-label="Selected node overlay summary">
+			<div class="text-sm font-medium">Selected node overlays</div>
+			<div class="mt-2 grid gap-1 text-sm text-muted-foreground sm:grid-cols-2">
+				{#each overlaySummary(selectedGraphNode, workspace.graphFilters.fields) as summary (summary)}
+					<div>{summary}</div>
+				{/each}
+			</div>
+		</aside>
+	{/if}
 	{#if graphQuery.error}
 		<GraphDegradedState
 			error={graphQuery.error}
@@ -895,7 +1050,7 @@
 				class="graph-frame relative h-full overflow-hidden rounded-md border"
 				aria-busy={graphRendering}
 			>
-				<div bind:this={container} class="absolute inset-0"></div>
+				<div {@attach graphContainerAttachment} class="absolute inset-0"></div>
 				{#if graphRendering}
 					<div
 						class="absolute inset-0 z-20 flex items-center justify-center bg-background/70 backdrop-blur-[1px]"
@@ -964,5 +1119,40 @@
 
 	.graph-frame :global(canvas) {
 		cursor: inherit;
+	}
+
+	.screening-include,
+	.evidence-appraised {
+		color: #2563eb;
+	}
+
+	.screening-exclude {
+		color: #d97706;
+	}
+
+	.screening-pending {
+		color: #0891b2;
+	}
+
+	.metrics-cited {
+		color: #2563eb;
+	}
+
+	.metrics-uncited {
+		color: #64748b;
+	}
+
+	.evidence-grouped,
+	.evidence-acquired {
+		color: #0891b2;
+	}
+
+	.evidence-ungrouped,
+	.evidence-no-source {
+		color: #cbd5e1;
+	}
+
+	.evidence-not-appraised {
+		color: #64748b;
 	}
 </style>

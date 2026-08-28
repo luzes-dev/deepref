@@ -59,6 +59,46 @@ pub(crate) struct AcquisitionDto {
     pub created_at: DateTime<Utc>,
     pub started_at: Option<DateTime<Utc>>,
     pub completed_at: Option<DateTime<Utc>>,
+    pub refresh_of: Option<Uuid>,
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct StoredDoiAcquisitionConfig {
+    seed_dois: Vec<String>,
+    max_depth: i32,
+    metadata_provider: String,
+    citation_provider: String,
+    #[serde(default)]
+    refresh_of: Option<Uuid>,
+}
+
+#[derive(Debug, Clone, Copy)]
+enum IdempotencyComparison {
+    ConfigOnly,
+    SourceStrategyAndConfig,
+}
+
+#[derive(Debug)]
+struct DoiAcquisitionRequest {
+    run_id: Uuid,
+    project_id: Uuid,
+    seed_dois: Vec<String>,
+    max_depth: i32,
+    metadata_provider: String,
+    citation_provider: String,
+    source: String,
+    strategy: String,
+    idempotency_key: Option<String>,
+    config: serde_json::Value,
+    metadata: serde_json::Value,
+    idempotency_comparison: IdempotencyComparison,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct DoiAcquisitionResult {
+    run_id: Uuid,
+    created: bool,
 }
 
 #[utoipa::path(
@@ -86,7 +126,7 @@ pub(crate) async fn list_acquisitions(
     let cursor: Option<(DateTime<Utc>, Uuid)> = pagination.decode()?;
     let rows = sqlx::query(
         "SELECT id,project_id,source,strategy,format,status,seed_count,queued_count,fetched_count,
-                failed_count,created_at,started_at,completed_at
+                failed_count,created_at,started_at,completed_at,config
          FROM acquisition_runs
          WHERE project_id=$1 AND ($2::timestamptz IS NULL OR (created_at,id)<($2,$3))
          ORDER BY created_at DESC,id DESC LIMIT $4",
@@ -153,6 +193,7 @@ pub(crate) async fn create_acquisition(
             .await?
             .ok_or_else(|| ApiError::NotFound("project not found".to_owned()))?;
     let max_depth = requested_max_depth.unwrap_or(project_default_depth);
+    let seed_count = i32::try_from(seed_dois.len()).unwrap_or(i32::MAX);
     let config = json!({
         "seed_dois": seed_dois,
         "max_depth": max_depth,
@@ -165,99 +206,172 @@ pub(crate) async fn create_acquisition(
             format!("deepref:acquisition:{project_id}:{key}").as_bytes(),
         )
     });
-    let seed_count = i32::try_from(seed_dois.len()).unwrap_or(i32::MAX);
-    let ingestion_inserted = if idempotency_key.is_some() {
-        sqlx::query_scalar::<_, Uuid>(
-            "INSERT INTO ingestions
-             (id,project_id,status,max_depth,seed_count,queued_count,metadata_provider,citation_provider)
-             VALUES ($1,$2,'queued',$3,$4,$4,$5,$6)
-             ON CONFLICT (id) DO NOTHING RETURNING id",
-        )
-        .bind(run_id)
-        .bind(project_id)
-        .bind(max_depth)
-        .bind(seed_count)
-        .bind(&metadata_provider)
-        .bind(&citation_provider)
-        .fetch_optional(&mut *tx)
-        .await?
-        .is_some()
-    } else {
-        sqlx::query_scalar::<_, Uuid>(
-            "INSERT INTO ingestions
-             (id,project_id,status,max_depth,seed_count,queued_count,metadata_provider,citation_provider)
-             VALUES ($1,$2,'queued',$3,$4,$4,$5,$6) RETURNING id",
-        )
-        .bind(run_id)
-        .bind(project_id)
-        .bind(max_depth)
-        .bind(seed_count)
-        .bind(&metadata_provider)
-        .bind(&citation_provider)
-        .fetch_one(&mut *tx)
-        .await?;
-        true
-    };
-    let inserted_run_id = sqlx::query_scalar::<_, Uuid>(
-        "INSERT INTO acquisition_runs
-         (id,project_id,legacy_ingestion_id,source,strategy,format,idempotency_key,config,metadata,status,
-          max_depth,seed_count,queued_count,fetched_count,failed_count,metadata_provider,citation_provider,created_at)
-         VALUES ($1,$2,$3,'crossref','citation_traversal',NULL,$4,$5,$6,'queued',$7,$8,$8,0,0,$9,$10,now())
-         ON CONFLICT (project_id,idempotency_key) WHERE idempotency_key IS NOT NULL DO NOTHING
-         RETURNING id",
+    let result = persist_doi_acquisition(
+        &mut tx,
+        DoiAcquisitionRequest {
+            run_id,
+            project_id,
+            seed_dois,
+            max_depth,
+            metadata_provider,
+            citation_provider,
+            source: "crossref".to_owned(),
+            strategy: "citation_traversal".to_owned(),
+            idempotency_key,
+            config,
+            metadata: json!({ "seed_dois": seed_count }),
+            idempotency_comparison: IdempotencyComparison::ConfigOnly,
+        },
     )
-    .bind(run_id)
-    .bind(project_id)
-    .bind(run_id)
-    .bind(idempotency_key.as_deref())
-    .bind(&config)
-    .bind(json!({ "seed_dois": seed_count }))
-    .bind(max_depth)
-    .bind(seed_count)
-    .bind(&metadata_provider)
-    .bind(&citation_provider)
-    .fetch_optional(&mut *tx)
     .await?;
-
-    let Some(run_id) = inserted_run_id else {
-        if ingestion_inserted {
-            sqlx::query("DELETE FROM ingestions WHERE id=$1")
-                .bind(run_id)
-                .execute(&mut *tx)
-                .await?;
-        }
-        let row = sqlx::query(
-            "SELECT id,config FROM acquisition_runs WHERE project_id=$1 AND idempotency_key=$2 FOR UPDATE",
-        )
-        .bind(project_id)
-        .bind(idempotency_key.as_deref())
-        .fetch_one(&mut *tx)
-        .await?;
-        let existing_id: Uuid = row.get("id");
-        let existing_config: serde_json::Value = row.get("config");
-        if existing_config != config {
-            return Err(ApiError::Conflict {
-                code: "IDEMPOTENCY_KEY_REUSED".to_owned(),
-                message: "Idempotency-Key was already used with different acquisition input"
-                    .to_owned(),
-                details: json!({ "acquisition_id": existing_id }),
-            });
-        }
-        let run = sqlx::query(acquisition_select())
-            .bind(existing_id)
-            .fetch_one(&mut *tx)
-            .await?;
-        tx.commit().await?;
-        return Ok((StatusCode::OK, Json(acquisition_from_row(run))));
-    };
-
-    enqueue_seed_jobs(&mut tx, project_id, run_id, max_depth, &seed_dois).await?;
     let run = sqlx::query(acquisition_select())
-        .bind(run_id)
+        .bind(result.run_id)
         .fetch_one(&mut *tx)
         .await?;
     tx.commit().await?;
-    Ok((StatusCode::CREATED, Json(acquisition_from_row(run))))
+    Ok((
+        if result.created {
+            StatusCode::CREATED
+        } else {
+            StatusCode::OK
+        },
+        Json(acquisition_from_row(run)),
+    ))
+}
+
+#[utoipa::path(
+    post,
+    path = "/projects/{project_id}/acquisitions/{acquisition_id}/refresh",
+    operation_id = "refreshAcquisition",
+    tag = "acquisitions",
+    params(
+        ("project_id" = Uuid, Path, description = "Project identifier"),
+        ("acquisition_id" = Uuid, Path, description = "Completed acquisition to refresh"),
+        ("Idempotency-Key" = String, Header, description = "Required replay-safe refresh key")
+    ),
+    responses(
+        (status = 200, description = "Existing idempotent refresh", body = AcquisitionDto),
+        (status = 201, description = "Provider refresh created", body = AcquisitionDto),
+        (status = 400, description = "Missing or invalid idempotency key", body = ErrorResponse),
+        (status = 404, description = "Project or acquisition not found", body = ErrorResponse),
+        (status = 409, description = "Acquisition cannot be refreshed or key conflicts", body = ErrorResponse),
+        (status = 500, description = "Internal server error", body = ErrorResponse)
+    )
+)]
+pub(crate) async fn refresh_acquisition(
+    State(state): State<AppState>,
+    Path((project_id, acquisition_id)): Path<(Uuid, Uuid)>,
+    headers: HeaderMap,
+) -> Result<(StatusCode, Json<AcquisitionDto>), ApiError> {
+    let idempotency_key = idempotency_key(&headers)?.ok_or_else(|| {
+        ApiError::BadRequest("Idempotency-Key is required for acquisition refresh".to_owned())
+    })?;
+    let mut tx = state.pool.begin().await?;
+    let source = sqlx::query(
+        "SELECT id,source,strategy,format,status,config
+         FROM acquisition_runs
+         WHERE project_id=$1 AND id=$2
+         FOR UPDATE",
+    )
+    .bind(project_id)
+    .bind(acquisition_id)
+    .fetch_optional(&mut *tx)
+    .await?
+    .ok_or_else(|| ApiError::NotFound("acquisition not found".to_owned()))?;
+    let source_status: String = source.get("status");
+    if source_status != "completed" {
+        return Err(ApiError::Conflict {
+            code: "ACQUISITION_NOT_COMPLETED".to_owned(),
+            message: "only completed acquisitions can be refreshed".to_owned(),
+            details: json!({
+                "acquisition_id": acquisition_id,
+                "status": bounded_detail(&source_status, 32),
+            }),
+        });
+    }
+
+    let source_strategy: String = source.get("strategy");
+    let source_format: Option<String> = source.get("format");
+    let source_name: String = source.get("source");
+    if source_strategy == "file_import" || source_format.is_some() {
+        return Err(ApiError::Conflict {
+            code: "ACQUISITION_REFRESH_UNSUPPORTED".to_owned(),
+            message: "file-import acquisitions cannot be refreshed by a DOI provider".to_owned(),
+            details: json!({ "acquisition_id": acquisition_id }),
+        });
+    }
+    if source_name != "crossref"
+        || !matches!(
+            source_strategy.as_str(),
+            "citation_traversal" | "provider_refresh"
+        )
+    {
+        return Err(ApiError::Conflict {
+            code: "ACQUISITION_REFRESH_UNSUPPORTED".to_owned(),
+            message: "this acquisition strategy is not supported for provider refresh".to_owned(),
+            details: json!({
+                "acquisition_id": acquisition_id,
+                "strategy": bounded_detail(&source_strategy, 64),
+            }),
+        });
+    }
+
+    let stored_config: serde_json::Value = source.get("config");
+    let StoredDoiAcquisitionConfig {
+        seed_dois,
+        max_depth,
+        metadata_provider,
+        citation_provider,
+        refresh_of: _,
+    } = parse_stored_doi_config(stored_config, acquisition_id)?;
+    let config = json!({
+        "seed_dois": &seed_dois,
+        "max_depth": max_depth,
+        "metadata_provider": &metadata_provider,
+        "citation_provider": &citation_provider,
+        "refresh_of": acquisition_id,
+    });
+    let seed_count = i32::try_from(seed_dois.len()).unwrap_or(i32::MAX);
+    let metadata = json!({
+        "seed_dois": seed_count,
+        "refresh_of": acquisition_id,
+        "refresh_kind": "provider_refresh",
+    });
+    let run_id = Uuid::new_v5(
+        &Uuid::NAMESPACE_URL,
+        format!("deepref:acquisition-refresh:{project_id}:{idempotency_key}").as_bytes(),
+    );
+    let result = persist_doi_acquisition(
+        &mut tx,
+        DoiAcquisitionRequest {
+            run_id,
+            project_id,
+            seed_dois,
+            max_depth,
+            metadata_provider,
+            citation_provider,
+            source: source_name,
+            strategy: "provider_refresh".to_owned(),
+            idempotency_key: Some(idempotency_key),
+            config,
+            metadata,
+            idempotency_comparison: IdempotencyComparison::SourceStrategyAndConfig,
+        },
+    )
+    .await?;
+    let run = sqlx::query(acquisition_select())
+        .bind(result.run_id)
+        .fetch_one(&mut *tx)
+        .await?;
+    tx.commit().await?;
+    Ok((
+        if result.created {
+            StatusCode::CREATED
+        } else {
+            StatusCode::OK
+        },
+        Json(acquisition_from_row(run)),
+    ))
 }
 
 #[utoipa::path(
@@ -351,6 +465,129 @@ pub(crate) async fn import_project_records(
     ))
 }
 
+async fn persist_doi_acquisition(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    request: DoiAcquisitionRequest,
+) -> Result<DoiAcquisitionResult, ApiError> {
+    let seed_count = i32::try_from(request.seed_dois.len()).unwrap_or(i32::MAX);
+    let ingestion_inserted = if request.idempotency_key.is_some() {
+        sqlx::query_scalar::<_, Uuid>(
+            "INSERT INTO ingestions
+             (id,project_id,status,max_depth,seed_count,queued_count,metadata_provider,citation_provider)
+             VALUES ($1,$2,'queued',$3,$4,$4,$5,$6)
+             ON CONFLICT (id) DO NOTHING RETURNING id",
+        )
+        .bind(request.run_id)
+        .bind(request.project_id)
+        .bind(request.max_depth)
+        .bind(seed_count)
+        .bind(&request.metadata_provider)
+        .bind(&request.citation_provider)
+        .fetch_optional(&mut **tx)
+        .await?
+        .is_some()
+    } else {
+        sqlx::query_scalar::<_, Uuid>(
+            "INSERT INTO ingestions
+             (id,project_id,status,max_depth,seed_count,queued_count,metadata_provider,citation_provider)
+             VALUES ($1,$2,'queued',$3,$4,$4,$5,$6) RETURNING id",
+        )
+        .bind(request.run_id)
+        .bind(request.project_id)
+        .bind(request.max_depth)
+        .bind(seed_count)
+        .bind(&request.metadata_provider)
+        .bind(&request.citation_provider)
+        .fetch_one(&mut **tx)
+        .await?;
+        true
+    };
+    let inserted_run_id = sqlx::query_scalar::<_, Uuid>(
+        "INSERT INTO acquisition_runs
+         (id,project_id,legacy_ingestion_id,source,strategy,format,idempotency_key,config,metadata,status,
+          max_depth,seed_count,queued_count,fetched_count,failed_count,metadata_provider,citation_provider,created_at)
+         VALUES ($1,$2,$3,$4,$5,NULL,$6,$7,$8,'queued',$9,$10,$10,0,0,$11,$12,now())
+         ON CONFLICT (project_id,idempotency_key) WHERE idempotency_key IS NOT NULL
+         DO NOTHING RETURNING id",
+    )
+    .bind(request.run_id)
+    .bind(request.project_id)
+    .bind(request.run_id)
+    .bind(&request.source)
+    .bind(&request.strategy)
+    .bind(request.idempotency_key.as_deref())
+    .bind(&request.config)
+    .bind(&request.metadata)
+    .bind(request.max_depth)
+    .bind(seed_count)
+    .bind(&request.metadata_provider)
+    .bind(&request.citation_provider)
+    .fetch_optional(&mut **tx)
+    .await?;
+
+    let Some(run_id) = inserted_run_id else {
+        if ingestion_inserted {
+            sqlx::query("DELETE FROM ingestions WHERE id=$1")
+                .bind(request.run_id)
+                .execute(&mut **tx)
+                .await?;
+        }
+        let row = sqlx::query(
+            "SELECT id,source,strategy,config
+             FROM acquisition_runs
+             WHERE project_id=$1 AND idempotency_key=$2
+             FOR UPDATE",
+        )
+        .bind(request.project_id)
+        .bind(request.idempotency_key.as_deref())
+        .fetch_one(&mut **tx)
+        .await?;
+        let existing_id: Uuid = row.get("id");
+        let existing_source: String = row.get("source");
+        let existing_strategy: String = row.get("strategy");
+        let existing_config: serde_json::Value = row.get("config");
+        let matches = existing_config == request.config
+            && match request.idempotency_comparison {
+                IdempotencyComparison::ConfigOnly => true,
+                IdempotencyComparison::SourceStrategyAndConfig => {
+                    existing_source == request.source && existing_strategy == request.strategy
+                }
+            };
+        if !matches {
+            let message = match request.idempotency_comparison {
+                IdempotencyComparison::ConfigOnly => {
+                    "Idempotency-Key was already used with different acquisition input"
+                }
+                IdempotencyComparison::SourceStrategyAndConfig => {
+                    "Idempotency-Key was already used with a different refresh source or configuration"
+                }
+            };
+            return Err(ApiError::Conflict {
+                code: "IDEMPOTENCY_KEY_REUSED".to_owned(),
+                message: message.to_owned(),
+                details: json!({ "acquisition_id": existing_id }),
+            });
+        }
+        return Ok(DoiAcquisitionResult {
+            run_id: existing_id,
+            created: false,
+        });
+    };
+
+    enqueue_seed_jobs(
+        tx,
+        request.project_id,
+        run_id,
+        request.max_depth,
+        &request.seed_dois,
+    )
+    .await?;
+    Ok(DoiAcquisitionResult {
+        run_id,
+        created: true,
+    })
+}
+
 pub(crate) async fn enqueue_seed_jobs(
     tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     project_id: Uuid,
@@ -421,7 +658,50 @@ pub(crate) async fn enqueue_seed_jobs(
 
 fn acquisition_select() -> &'static str {
     "SELECT id,project_id,source,strategy,format,status,seed_count,queued_count,fetched_count,
-            failed_count,created_at,started_at,completed_at FROM acquisition_runs WHERE id=$1"
+            failed_count,created_at,started_at,completed_at,config FROM acquisition_runs WHERE id=$1"
+}
+
+fn parse_stored_doi_config(
+    config: serde_json::Value,
+    acquisition_id: Uuid,
+) -> Result<StoredDoiAcquisitionConfig, ApiError> {
+    let stored: StoredDoiAcquisitionConfig =
+        serde_json::from_value(config.clone()).map_err(|_| ApiError::Conflict {
+            code: "ACQUISITION_REFRESH_CONFIG_INVALID".to_owned(),
+            message: "the persisted DOI acquisition configuration is invalid".to_owned(),
+            details: json!({ "acquisition_id": acquisition_id }),
+        })?;
+    let normalized = validate_seeds(stored.seed_dois.clone()).map_err(|_| ApiError::Conflict {
+        code: "ACQUISITION_REFRESH_CONFIG_INVALID".to_owned(),
+        message: "the persisted DOI acquisition configuration is invalid".to_owned(),
+        details: json!({ "acquisition_id": acquisition_id }),
+    })?;
+    let mut canonical = json!({
+        "seed_dois": &normalized,
+        "max_depth": stored.max_depth,
+        "metadata_provider": &stored.metadata_provider,
+        "citation_provider": &stored.citation_provider,
+    });
+    if let Some(refresh_of) = stored.refresh_of {
+        canonical["refresh_of"] = json!(refresh_of);
+    }
+    if stored.max_depth < 0
+        || stored.metadata_provider != "crossref"
+        || stored.citation_provider != "crossref"
+        || stored.seed_dois != normalized
+        || config != canonical
+    {
+        return Err(ApiError::Conflict {
+            code: "ACQUISITION_REFRESH_CONFIG_INVALID".to_owned(),
+            message: "the persisted DOI acquisition configuration is invalid".to_owned(),
+            details: json!({ "acquisition_id": acquisition_id }),
+        });
+    }
+    Ok(stored)
+}
+
+fn bounded_detail(value: &str, max_chars: usize) -> String {
+    value.chars().take(max_chars).collect()
 }
 
 pub(crate) fn validate_seeds(seed_dois: Vec<String>) -> Result<Vec<String>, ApiError> {
@@ -505,6 +785,15 @@ fn map_acquisition_error(error: deepref_postgres::AcquisitionError) -> ApiError 
 }
 
 fn acquisition_from_row(row: sqlx::postgres::PgRow) -> AcquisitionDto {
+    let refresh_of = row
+        .try_get::<serde_json::Value, _>("config")
+        .ok()
+        .and_then(|config| {
+            config
+                .get("refresh_of")
+                .and_then(serde_json::Value::as_str)
+                .and_then(|value| Uuid::parse_str(value).ok())
+        });
     AcquisitionDto {
         id: row.get("id"),
         project_id: row.get("project_id"),
@@ -519,5 +808,6 @@ fn acquisition_from_row(row: sqlx::postgres::PgRow) -> AcquisitionDto {
         created_at: row.get("created_at"),
         started_at: row.get("started_at"),
         completed_at: row.get("completed_at"),
+        refresh_of,
     }
 }

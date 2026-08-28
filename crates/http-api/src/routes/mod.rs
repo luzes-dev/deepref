@@ -1,13 +1,21 @@
 mod acquisitions;
+mod ai;
 mod articles;
+mod assistant;
+mod automations;
 mod deduplication;
+mod documents;
+mod exports;
+mod extraction;
 mod health;
 mod ingestions;
 mod pagination;
 mod projection;
 mod projects;
+mod protocol;
 mod review;
 mod settings;
+mod study;
 
 use std::sync::Arc;
 
@@ -26,11 +34,13 @@ use utoipa_axum::{router::OpenApiRouter, routes};
 
 use crate::{config::ApiConfig, state::AppState};
 
-fn openapi_router() -> OpenApiRouter<AppState> {
+const MULTIPART_OVERHEAD_BYTES: usize = 1024 * 1024;
+
+fn openapi_router(document_max_bytes: usize) -> OpenApiRouter<AppState> {
     let mut openapi = OpenApi::default();
     openapi.info = Info::new("DeepRef API", env!("CARGO_PKG_VERSION"));
 
-    OpenApiRouter::with_openapi(openapi)
+    let base = OpenApiRouter::with_openapi(openapi)
         .routes(routes!(health::live))
         .routes(routes!(health::ready))
         .routes(routes!(health::dependencies))
@@ -48,15 +58,34 @@ fn openapi_router() -> OpenApiRouter<AppState> {
         .routes(routes!(articles::project_graph))
         .routes(routes!(articles::recommendations))
         .routes(routes!(articles::recompute_metrics))
+        .routes(routes!(assistant::list_tools))
+        .routes(routes!(assistant::execute_tool))
+        .routes(routes!(automations::list_definitions))
+        .routes(routes!(automations::configure_definition))
+        .routes(routes!(automations::trigger_manually))
+        .routes(routes!(automations::list_runs))
+        .routes(routes!(automations::get_run))
         .routes(routes!(
             acquisitions::list_acquisitions,
             acquisitions::create_acquisition
         ))
+        .routes(routes!(acquisitions::refresh_acquisition))
         .routes(routes!(acquisitions::import_project_records))
         .routes(routes!(deduplication::run_project_deduplication))
         .routes(routes!(deduplication::list_project_dedupe_proposals))
         .routes(routes!(deduplication::decide_project_dedupe_proposal))
         .routes(routes!(deduplication::resolve_project_record))
+        .routes(routes!(ai::generate_screening_suggestion))
+        .routes(routes!(ai::generate_study_grouping_suggestion))
+        .routes(routes!(ai::generate_appraisal_prefill_suggestion))
+        .routes(routes!(ai::generate_duplicate_suggestion))
+        .routes(routes!(extraction::list_extraction_fields))
+        .routes(routes!(extraction::create_extraction_field))
+        .routes(routes!(extraction::list_study_extraction_values))
+        .routes(routes!(extraction::generate_data_extraction_suggestion))
+        .routes(routes!(ai::list_ai_proposals))
+        .routes(routes!(ai::get_ai_proposal))
+        .routes(routes!(ai::decide_ai_proposal))
         .routes(routes!(
             ingestions::list_ingestions,
             ingestions::create_ingestion
@@ -64,14 +93,58 @@ fn openapi_router() -> OpenApiRouter<AppState> {
         .routes(routes!(ingestions::get_ingestion))
         .routes(routes!(ingestions::list_ingestion_items))
         .routes(routes!(ingestions::cancel_ingestion))
-        .routes(routes!(review::get_protocol))
+        .routes(routes!(protocol::get_published_protocol))
+        .routes(routes!(
+            protocol::get_protocol_editor,
+            protocol::save_protocol_draft,
+            protocol::publish_protocol
+        ))
+        .routes(routes!(review::get_screening_queue))
         .routes(routes!(review::list_title_abstract_queue))
+        .routes(routes!(review::get_next_screening_item))
         .routes(routes!(review::screen_report))
+        .routes(routes!(review::undo_screening))
+        .routes(routes!(review::get_screening_history))
         .routes(routes!(review::get_prisma))
+        .routes(routes!(exports::export_project_artifact))
+        .routes(routes!(documents::list_documents))
+        .routes(routes!(documents::list_missing_full_text))
+        .routes(routes!(documents::list_full_text_queue))
+        .routes(routes!(documents::list_full_text_reasons))
+        .routes(routes!(documents::get_document))
+        .routes(routes!(documents::list_document_blocks))
+        .routes(routes!(documents::list_document_pages))
+        .routes(routes!(documents::get_document_content))
+        .routes(routes!(documents::attach_external_document))
+        .routes(routes!(
+            study::list_project_studies,
+            study::create_project_study
+        ))
+        .routes(routes!(
+            study::get_project_study,
+            study::rename_project_study
+        ))
+        .routes(routes!(study::list_project_study_history))
+        .routes(routes!(study::classify_project_study))
+        .routes(routes!(study::get_report_study_membership))
+        .routes(routes!(study::put_report_study_membership))
+        .routes(routes!(study::list_appraisal_definitions))
+        .routes(routes!(study::get_appraisal_definition_route))
+        .routes(routes!(
+            study::list_report_appraisals,
+            study::complete_report_appraisal
+        ))
+        .layer(DefaultBodyLimit::max(acquisitions::MAX_REQUEST_BODY_BYTES));
+    let uploads = OpenApiRouter::new()
+        .routes(routes!(documents::upload_document))
+        .layer(DefaultBodyLimit::max(
+            document_max_bytes.saturating_add(MULTIPART_OVERHEAD_BYTES),
+        ));
+    base.merge(uploads)
 }
 
 pub fn openapi_document() -> OpenApi {
-    openapi_router().into_openapi()
+    openapi_router(deepref_documents::DEFAULT_MAX_DOCUMENT_BYTES).into_openapi()
 }
 
 pub fn router(state: AppState, config: &ApiConfig) -> Router {
@@ -81,13 +154,27 @@ pub fn router(state: AppState, config: &ApiConfig) -> Router {
         } else {
             tower_http::cors::AllowOrigin::list(config.cors_origins.clone())
         })
-        .allow_methods([Method::GET, Method::POST, Method::PATCH, Method::DELETE])
+        .allow_methods([
+            Method::GET,
+            Method::POST,
+            Method::PUT,
+            Method::PATCH,
+            Method::DELETE,
+        ])
         .allow_headers([
             header::CONTENT_TYPE,
             header::HeaderName::from_static("idempotency-key"),
+            header::HeaderName::from_static("x-actor-kind"),
+            header::HeaderName::from_static("x-actor-id"),
         ]);
 
-    let (router, openapi) = openapi_router().split_for_parts();
+    let document_max_bytes = state
+        .document_store
+        .as_ref()
+        .map_or(deepref_documents::DEFAULT_MAX_DOCUMENT_BYTES, |store| {
+            store.max_bytes()
+        });
+    let (router, openapi) = openapi_router(document_max_bytes).split_for_parts();
     let openapi = Arc::new(openapi);
 
     router
@@ -99,7 +186,6 @@ pub fn router(state: AppState, config: &ApiConfig) -> Router {
             })
         })
         .layer(cors)
-        .layer(DefaultBodyLimit::max(acquisitions::MAX_REQUEST_BODY_BYTES))
         .layer(from_fn(correlation))
         .layer(TraceLayer::new_for_http())
         .with_state(state)
@@ -129,6 +215,7 @@ mod tests {
         body::{Body, to_bytes},
         http::{Request, StatusCode},
     };
+    use deepref_ai::AgentToolName;
     use sqlx::postgres::PgPoolOptions;
     use tower::ServiceExt;
 
@@ -151,20 +238,55 @@ mod tests {
             "/projects/{project_id}/graph",
             "/projects/{project_id}/recommendations",
             "/projects/{project_id}/metrics/recompute",
+            "/projects/{project_id}/automations/definitions",
+            "/projects/{project_id}/automations/definitions/{recipe}",
+            "/projects/{project_id}/automations/runs",
+            "/projects/{project_id}/automations/runs/{run_id}",
             "/projects/{project_id}/acquisitions",
+            "/projects/{project_id}/acquisitions/{acquisition_id}/refresh",
             "/projects/{project_id}/imports",
             "/projects/{project_id}/deduplication/run",
             "/projects/{project_id}/deduplication/proposals",
             "/projects/{project_id}/deduplication/proposals/{proposal_id}/decision",
             "/projects/{project_id}/records/{record_id}/resolution",
+            "/projects/{project_id}/reports/{report_id}/ai/screening",
+            "/projects/{project_id}/records/{record_id}/ai/deduplication",
+            "/projects/{project_id}/ai/proposals",
+            "/projects/{project_id}/ai/proposals/{proposal_id}",
+            "/projects/{project_id}/ai/proposals/{proposal_id}/decision",
+            "/projects/{project_id}/assistant/tools",
+            "/projects/{project_id}/assistant/tools/execute",
             "/ingestions",
             "/ingestions/{ingestion_id}",
             "/ingestions/{ingestion_id}/items",
             "/ingestions/{ingestion_id}/cancel",
             "/projects/{project_id}/protocol",
+            "/projects/{project_id}/review/protocol",
+            "/projects/{project_id}/review/protocol/publish",
+            "/projects/{project_id}/screening",
             "/projects/{project_id}/screening/title-abstract",
+            "/projects/{project_id}/screening/next",
             "/projects/{project_id}/reports/{report_id}/screening",
+            "/projects/{project_id}/reports/{report_id}/screening/undo",
+            "/projects/{project_id}/reports/{report_id}/screening/history",
             "/projects/{project_id}/prisma",
+            "/projects/{project_id}/reports/{report_id}/documents",
+            "/projects/{project_id}/reports/{report_id}/documents/{document_id}",
+            "/projects/{project_id}/reports/{report_id}/documents/{document_id}/blocks",
+            "/projects/{project_id}/reports/{report_id}/documents/{document_id}/pages",
+            "/projects/{project_id}/reports/{report_id}/documents/{document_id}/content",
+            "/projects/{project_id}/screening/full-text",
+            "/projects/{project_id}/screening/full-text/missing",
+            "/projects/{project_id}/screening/full-text/reasons",
+            "/projects/{project_id}/reports/{report_id}/documents/external",
+            "/projects/{project_id}/studies",
+            "/projects/{project_id}/studies/{study_id}",
+            "/projects/{project_id}/studies/{study_id}/history",
+            "/projects/{project_id}/studies/{study_id}/classification",
+            "/projects/{project_id}/reports/{report_id}/study",
+            "/projects/{project_id}/appraisal-definitions",
+            "/projects/{project_id}/appraisal-definitions/{definition_id}/{version}",
+            "/projects/{project_id}/reports/{report_id}/appraisals",
         ];
 
         for path in expected_paths {
@@ -173,6 +295,34 @@ mod tests {
                 "missing path {path}"
             );
         }
+        assert_eq!(
+            openapi.paths.paths["/projects/{project_id}/reports/{report_id}/study"]
+                .get
+                .as_ref()
+                .and_then(|operation| operation.operation_id.as_deref()),
+            Some("getReportStudyMembership")
+        );
+        assert_eq!(
+            openapi.paths.paths["/projects/{project_id}/review/protocol"]
+                .get
+                .as_ref()
+                .and_then(|operation| operation.operation_id.as_deref()),
+            Some("getProjectReviewProtocol")
+        );
+        assert_eq!(
+            openapi.paths.paths["/projects/{project_id}/review/protocol"]
+                .put
+                .as_ref()
+                .and_then(|operation| operation.operation_id.as_deref()),
+            Some("saveProjectReviewProtocol")
+        );
+        assert_eq!(
+            openapi.paths.paths["/projects/{project_id}/review/protocol/publish"]
+                .post
+                .as_ref()
+                .and_then(|operation| operation.operation_id.as_deref()),
+            Some("publishProjectReviewProtocol")
+        );
         assert_eq!(
             openapi.paths.paths["/projects/{project_id}/reports"]
                 .get
@@ -187,6 +337,81 @@ mod tests {
                 .and_then(|operation| operation.operation_id.as_deref()),
             Some("getProjectReport")
         );
+        for (path, method, operation_id) in [
+            (
+                "/projects/{project_id}/screening",
+                "get",
+                "getScreeningQueue",
+            ),
+            (
+                "/projects/{project_id}/screening/title-abstract",
+                "get",
+                "listTitleAbstractScreeningQueue",
+            ),
+            (
+                "/projects/{project_id}/screening/next",
+                "get",
+                "getNextScreeningItem",
+            ),
+            (
+                "/projects/{project_id}/reports/{report_id}/screening",
+                "post",
+                "screenReport",
+            ),
+            (
+                "/projects/{project_id}/reports/{report_id}/screening/undo",
+                "post",
+                "undoScreening",
+            ),
+            (
+                "/projects/{project_id}/reports/{report_id}/screening/history",
+                "get",
+                "getScreeningHistory",
+            ),
+            (
+                "/projects/{project_id}/reports/{report_id}/ai/screening",
+                "post",
+                "generateScreeningSuggestion",
+            ),
+            (
+                "/projects/{project_id}/records/{record_id}/ai/deduplication",
+                "post",
+                "generateDuplicateSuggestion",
+            ),
+            (
+                "/projects/{project_id}/ai/proposals",
+                "get",
+                "listAiProposals",
+            ),
+            (
+                "/projects/{project_id}/ai/proposals/{proposal_id}",
+                "get",
+                "getAiProposal",
+            ),
+            (
+                "/projects/{project_id}/ai/proposals/{proposal_id}/decision",
+                "post",
+                "decideAiProposal",
+            ),
+            (
+                "/projects/{project_id}/assistant/tools",
+                "get",
+                "listProjectAssistantTools",
+            ),
+            (
+                "/projects/{project_id}/assistant/tools/execute",
+                "post",
+                "executeProjectAssistantTool",
+            ),
+        ] {
+            let operation = match method {
+                "get" => openapi.paths.paths[path].get.as_ref(),
+                "post" => openapi.paths.paths[path].post.as_ref(),
+                _ => unreachable!(),
+            }
+            .expect("screening operation should be present");
+            assert_eq!(operation.operation_id.as_deref(), Some(operation_id));
+        }
         assert!(
             !openapi
                 .paths
@@ -223,21 +448,39 @@ mod tests {
         let document = serde_json::to_value(&openapi).expect("OpenAPI document must serialize");
         let schemas = &document["components"]["schemas"];
         for schema_name in [
+            "ScreeningQueueDto",
+            "ScreeningQueueItemDto",
+            "ScreeningProgressDto",
+            "ScreeningStateDto",
+            "ScreeningHistoryDto",
+            "ScreeningHistoryItemDto",
+            "UndoScreeningRequest",
+        ] {
+            assert!(
+                schemas[schema_name].is_object(),
+                "missing screening schema {schema_name}"
+            );
+        }
+        for schema_name in [
             "ReportDto",
             "ReportDetailDto",
             "PaginatedResponse_ReportDto",
             "ProjectGraphDto",
+            "GraphNodeDto",
+            "GraphMetricsDto",
             "RecommendationGroupsDto",
         ] {
             let schema = &schemas[schema_name];
             assert!(schema.is_object(), "missing public schema {schema_name}");
-            assert!(
-                schema.to_string().contains("report_id")
-                    || schema
-                        .to_string()
-                        .contains("#/components/schemas/ReportDto"),
-                "public schema {schema_name} must expose or reference report_id"
-            );
+            if !matches!(schema_name, "ProjectGraphDto" | "GraphMetricsDto") {
+                assert!(
+                    schema.to_string().contains("report_id")
+                        || schema
+                            .to_string()
+                            .contains("#/components/schemas/ReportDto"),
+                    "public schema {schema_name} must expose or reference report_id"
+                );
+            }
             assert!(
                 !schema.to_string().contains("doi_key"),
                 "public schema {schema_name} leaks DOI identity"
@@ -250,6 +493,10 @@ mod tests {
             );
         }
         assert_eq!(
+            schemas["ProjectGraphDto"]["properties"]["nodes"]["items"]["$ref"],
+            "#/components/schemas/GraphNodeDto"
+        );
+        assert_eq!(
             schemas["GraphEdgeDto"]["properties"]["source"]["format"],
             "uuid"
         );
@@ -257,6 +504,48 @@ mod tests {
             schemas["GraphEdgeDto"]["properties"]["target"]["format"],
             "uuid"
         );
+        assert_eq!(
+            schemas["AiStudyGroupingFieldDto"]["enum"],
+            serde_json::json!(["title", "abstract", "publication_year", "first_author"])
+        );
+        for variant in schemas["AiStudyGroupingEvidenceDto"]["oneOf"]
+            .as_array()
+            .expect("grouping evidence must be a union")
+        {
+            assert_eq!(
+                variant["properties"]["field"]["$ref"],
+                "#/components/schemas/AiStudyGroupingFieldDto"
+            );
+        }
+        assert!(
+            !schemas["DecideAiProposalRequest"]["required"]
+                .as_array()
+                .expect("decision request required fields")
+                .iter()
+                .any(|field| field == "reviewed_payload")
+        );
+        assert_eq!(
+            schemas["AiTypedExtractionValueDto"]["oneOf"]
+                .as_array()
+                .expect("extraction values must be a union")
+                .len(),
+            4
+        );
+        let expected_assistant_tool_names = AgentToolName::ALL
+            .into_iter()
+            .map(|name| serde_json::Value::String(name.as_str().to_owned()))
+            .collect::<Vec<_>>();
+        assert_eq!(
+            schemas["AssistantToolNameDto"]["enum"],
+            serde_json::Value::Array(expected_assistant_tool_names),
+            "HTTP assistant tool names must exactly match the closed AI catalog"
+        );
+        assert_eq!(
+            schemas["AssistantToolRequest"]["properties"]["tool"]["$ref"],
+            "#/components/schemas/AssistantToolNameDto"
+        );
+        assert!(schemas["AssistantToolDescriptor"].is_object());
+        assert!(schemas["AssistantToolResponse"].is_object());
     }
 
     #[test]
@@ -274,7 +563,7 @@ mod tests {
     fn acquisition_post_responses_match_handler_statuses() {
         let document =
             serde_json::to_value(openapi_document()).expect("OpenAPI document must serialize");
-        let cases: [(&str, &[&str]); 2] = [
+        let cases: [(&str, &[&str]); 3] = [
             (
                 "/projects/{project_id}/acquisitions",
                 &["200", "201", "400", "404", "409", "500"],
@@ -282,6 +571,10 @@ mod tests {
             (
                 "/projects/{project_id}/imports",
                 &["200", "201", "400", "404", "409", "413", "500"],
+            ),
+            (
+                "/projects/{project_id}/acquisitions/{acquisition_id}/refresh",
+                &["200", "201", "400", "404", "409", "500"],
             ),
         ];
 
@@ -296,6 +589,24 @@ mod tests {
                 "unexpected POST response contract for {path}"
             );
         }
+    }
+
+    #[test]
+    fn acquisition_refresh_openapi_contract_requires_idempotency_key() {
+        let document =
+            serde_json::to_value(openapi_document()).expect("OpenAPI document must serialize");
+        let operation = &document["paths"]["/projects/{project_id}/acquisitions/{acquisition_id}/refresh"]
+            ["post"];
+        assert_eq!(operation["operationId"], "refreshAcquisition");
+        assert_eq!(
+            operation["parameters"]
+                .as_array()
+                .expect("refresh parameters must be an array")
+                .iter()
+                .find(|parameter| parameter["name"] == "Idempotency-Key")
+                .map(|parameter| parameter["required"].clone()),
+            Some(serde_json::Value::Bool(true))
+        );
     }
 
     #[test]

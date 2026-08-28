@@ -60,9 +60,13 @@ fn application_dependencies_are_domain_and_pure_data_or_error_crates() {
     let allowed = [
         "deepref-domain",
         "anyhow",
+        "bytes",
         "chrono",
+        "futures",
+        "jsonschema",
         "serde",
         "serde_json",
+        "schemars",
         "thiserror",
         "time",
         "rapidfuzz",

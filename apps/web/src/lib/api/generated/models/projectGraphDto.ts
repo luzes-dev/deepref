@@ -5,12 +5,12 @@
  * OpenAPI spec version: 0.1.0
  */
 import type { GraphEdgeDto } from './graphEdgeDto.ts';
+import type { GraphNodeDto } from './graphNodeDto.ts';
 import type { ProjectionMetadata } from './projectionMetadata.ts';
-import type { ReportDto } from './reportDto.ts';
 
 export interface ProjectGraphDto {
 	edges: GraphEdgeDto[];
-	nodes: ReportDto[];
+	nodes: GraphNodeDto[];
 	projection: ProjectionMetadata;
 	truncated: boolean;
 }

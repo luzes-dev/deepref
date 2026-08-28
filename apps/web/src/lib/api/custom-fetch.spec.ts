@@ -39,6 +39,31 @@ describe('customFetch', () => {
 		).resolves.toMatchObject({ data: undefined, status: 204 });
 	});
 
+	it('returns every attachment as a Blob and preserves download metadata', async () => {
+		const bytes = new Uint8Array([0, 1, 2, 255]);
+		vi.stubGlobal(
+			'fetch',
+			vi.fn().mockResolvedValue(
+				new Response(bytes, {
+					status: 200,
+					headers: {
+						'content-type': 'text/csv; charset=utf-8',
+						'content-disposition': 'attachment; filename="reports.csv"'
+					}
+				})
+			)
+		);
+
+		const response = await customFetch<{ data: Blob; status: 200; headers: Headers }>(
+			'/api/projects/project/exports/reports.csv',
+			{ method: 'GET' }
+		);
+		expect(response.data).toBeInstanceOf(Blob);
+		expect(response.data.type).toMatch(/^text\/csv(?:;|$)/);
+		expect(new Uint8Array(await response.data.arrayBuffer())).toEqual(bytes);
+		expect(response.headers.get('content-disposition')).toContain('reports.csv');
+	});
+
 	it('throws structured API errors', async () => {
 		vi.stubGlobal(
 			'fetch',
