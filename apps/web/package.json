@@ -37,7 +37,7 @@
 		"clsx": "^2.1.1",
 		"eslint": "^10.8.1",
 		"eslint-config-prettier": "^10.1.8",
-		"eslint-plugin-svelte": "^3.19.0",
+		"eslint-plugin-svelte": "^3.23.0",
 		"globals": "^17.6.0",
 		"graphology": "^0.26.0",
 		"graphology-layout-forceatlas2": "^0.10.1",
