@@ -114,6 +114,7 @@ pub struct StudyDesignReport {
 pub struct StudyDesignClassificationInput {
     pub project_id: ProjectId,
     pub study_id: StudyId,
+    pub expected_revision: u64,
     pub study_title: String,
     pub current_design: Option<StudyDesignLabel>,
     pub reports: Vec<StudyDesignReport>,
@@ -134,6 +135,7 @@ pub struct StudyDesignClassification {
 pub struct StudyDesignClassificationTask {
     project_id: ProjectId,
     study_id: StudyId,
+    expected_revision: u64,
     allowed_designs: BTreeSet<StudyDesignLabel>,
     allowed_evidence: BTreeSet<String>,
 }
@@ -201,6 +203,7 @@ impl StudyDesignClassificationTask {
         Ok(Self {
             project_id: input.project_id,
             study_id: input.study_id,
+            expected_revision: input.expected_revision,
             allowed_designs: input.allowed_designs.iter().copied().collect(),
             allowed_evidence,
         })
@@ -254,7 +257,10 @@ impl AiTask for StudyDesignClassificationTask {
     }
 
     fn build_context(&self, input: &Self::Input) -> Result<AiContext, AiError> {
-        if input.project_id != self.project_id || input.study_id != self.study_id {
+        if input.project_id != self.project_id
+            || input.study_id != self.study_id
+            || input.expected_revision != self.expected_revision
+        {
             return Err(AiError::InvalidContext(
                 "study classification task and input identities disagree".to_owned(),
             ));
@@ -293,12 +299,17 @@ impl AiTask for StudyDesignClassificationTask {
     }
 
     fn proposal(&self, output: &Self::Output) -> Option<crate::ProposalDraft> {
+        let mut payload = serde_json::to_value(output).ok()?;
+        payload.as_object_mut()?.insert(
+            "expected_revision".to_owned(),
+            json!(self.expected_revision),
+        );
         Some(crate::ProposalDraft {
             project_id: self.project_id,
             entity_type: "study_classification".to_owned(),
             entity_id: Some(self.study_id.into()),
             operation: "study_design_classification_suggestion".to_owned(),
-            payload: serde_json::to_value(output).ok()?,
+            payload,
             authority: self.authority(),
         })
     }
@@ -319,6 +330,7 @@ mod tests {
         StudyDesignClassificationInput {
             project_id: ProjectId::new(PROJECT_UUID),
             study_id: StudyId::new(STUDY_UUID),
+            expected_revision: 0,
             study_title: study_title.to_owned(),
             current_design: Some(StudyDesignLabel::Rct),
             reports: vec![StudyDesignReport {
@@ -385,6 +397,7 @@ mod tests {
         assert_eq!(proposal.entity_id, Some(STUDY_UUID));
         assert_eq!(proposal.operation, "study_design_classification_suggestion");
         assert_eq!(proposal.authority, AuthorityTier::ScientificConclusion);
+        assert_eq!(proposal.payload["expected_revision"], 0);
     }
 
     #[test]

@@ -7,6 +7,7 @@
 mod agents;
 mod classification;
 mod dedupe;
+mod evals;
 mod gateway;
 mod grounding;
 mod policy;
@@ -27,6 +28,7 @@ pub use dedupe::{
     DuplicateRationale, DuplicateSignal, DuplicateSignalKind, IdentityProvenance,
 };
 pub use deepref_domain::{Actor, ActorKind};
+pub use evals::*;
 pub use gateway::{AiGateway, EmbeddingGateway, RigEmbeddingGateway, RigGateway, RoutedGateway};
 pub use grounding::GroundingContextBuilder;
 pub use policy::{PolicyDecision, PolicyEngine, PolicyInput, ProjectAiPolicy, RequestedAction};

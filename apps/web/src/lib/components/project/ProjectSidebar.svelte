@@ -16,6 +16,7 @@
 	import LightbulbIcon from '@lucide/svelte/icons/lightbulb';
 	import TablePropertiesIcon from '@lucide/svelte/icons/table-properties';
 	import Settings2Icon from '@lucide/svelte/icons/settings-2';
+	import BotIcon from '@lucide/svelte/icons/bot';
 	import ProjectSelector from './ProjectSelector.svelte';
 	import { cn } from '$lib/utils';
 	import { Button, buttonVariants } from '$lib/components/ui/button';
@@ -33,7 +34,8 @@
 			| '/projects/[projectId]/studies'
 			| '/projects/[projectId]/appraisal'
 			| '/projects/[projectId]/extraction'
-			| '/projects/[projectId]/automations';
+			| '/projects/[projectId]/automations'
+			| '/projects/[projectId]/assistant';
 		icon: LucideIcon;
 	}> = [
 		{ label: 'Studies', path: '/projects/[projectId]/studies', icon: ClipboardListIcon },
@@ -43,7 +45,8 @@
 			path: '/projects/[projectId]/extraction',
 			icon: TablePropertiesIcon
 		},
-		{ label: 'Automations', path: '/projects/[projectId]/automations', icon: Settings2Icon }
+		{ label: 'Automations', path: '/projects/[projectId]/automations', icon: Settings2Icon },
+		{ label: 'Assistant', path: '/projects/[projectId]/assistant', icon: BotIcon }
 	];
 	const navItems: {
 		view: ProjectWorkspaceNavView;

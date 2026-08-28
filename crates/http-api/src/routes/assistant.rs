@@ -511,29 +511,31 @@ async fn create_classification_proposal(
             publication_year: report.publication_year,
         })
         .collect::<Vec<_>>();
+    let expected_revision = u64::try_from(target.study.revision)
+        .map_err(|_| ApiError::BadRequest("study revision is invalid".to_owned()))?;
     let mut grounded_evidence = vec![StudyDesignEvidence::StudyMetadata {
         study_id,
         field: StudyMetadataField::Title,
         content_hash: deepref_ai::sha256_bytes(target.study.title.as_bytes()),
     }];
-    for report in &reports {
+    for report in target.reports.iter().take(100) {
         if let Some(title) = &report.title {
             grounded_evidence.push(StudyDesignEvidence::ReportMetadata {
-                report_id: report.report_id,
+                report_id: report.report_id.as_uuid(),
                 field: ClassificationReportField::Title,
                 content_hash: deepref_ai::sha256_bytes(title.as_bytes()),
             });
         }
         if let Some(abstract_text) = &report.abstract_text {
             grounded_evidence.push(StudyDesignEvidence::ReportMetadata {
-                report_id: report.report_id,
+                report_id: report.report_id.as_uuid(),
                 field: ClassificationReportField::Abstract,
                 content_hash: deepref_ai::sha256_bytes(abstract_text.as_bytes()),
             });
         }
         if let Some(year) = report.publication_year {
             grounded_evidence.push(StudyDesignEvidence::ReportMetadata {
-                report_id: report.report_id,
+                report_id: report.report_id.as_uuid(),
                 field: ClassificationReportField::PublicationYear,
                 content_hash: deepref_ai::sha256_bytes(year.to_string().as_bytes()),
             });
@@ -542,6 +544,7 @@ async fn create_classification_proposal(
     let input = StudyDesignClassificationInput {
         project_id: project_id.into(),
         study_id: study_id.into(),
+        expected_revision,
         study_title: target.study.title,
         current_design: target.study.design.map(study_design_label),
         reports,

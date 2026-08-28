@@ -693,6 +693,316 @@ async fn all_proposal_tools_persist_pending_proposals_without_domain_writes() {
     cleanup(&pool, fixture).await;
 }
 
+async fn create_classification_proposal(pool: &PgPool, fixture: Fixture) -> Uuid {
+    deepref_postgres::insert_model_route(
+        pool,
+        &model_route(ModelProfile::FastClassifier),
+        Utc::now() - Duration::seconds(1),
+    )
+    .await
+    .expect("classification model route inserts");
+    let state = AppState::new(pool.clone()).with_ai_gateway(ProposalGateway {
+        fixture,
+        calls: Arc::new(Mutex::new(0)),
+    });
+    let (status, body) = execute_with_state(
+        state,
+        fixture.project_id,
+        "propose_classification",
+        json!({"project_id": fixture.project_id, "study_id": fixture.study_id}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "classification proposal: {body}");
+    Uuid::parse_str(
+        body["proposal_id"]
+            .as_str()
+            .expect("classification proposal id"),
+    )
+    .expect("classification proposal id is a UUID")
+}
+
+async fn decide_classification_proposal(
+    pool: &PgPool,
+    fixture: Fixture,
+    proposal_id: Uuid,
+    decision: &str,
+) -> (StatusCode, Value) {
+    let response = router(AppState::new(pool.clone()), &api_config())
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!(
+                    "/projects/{}/ai/proposals/{}/decision",
+                    fixture.project_id, proposal_id
+                ))
+                .header("content-type", "application/json")
+                .header("x-actor-id", "classification-reviewer")
+                .body(Body::from(
+                    json!({"decision": decision, "reason": "Human classification review."})
+                        .to_string(),
+                ))
+                .expect("classification decision request should be valid"),
+        )
+        .await
+        .expect("classification decision should be handled");
+    let status = response.status();
+    (status, response_json(response).await)
+}
+
+async fn classification_state(pool: &PgPool, fixture: Fixture) -> (Option<String>, i64) {
+    sqlx::query_as("SELECT design,study_revision FROM studies WHERE project_id=$1 AND id=$2")
+        .bind(fixture.project_id)
+        .bind(fixture.study_id)
+        .fetch_one(pool)
+        .await
+        .expect("classification study state")
+}
+
+async fn proposal_status(pool: &PgPool, fixture: Fixture, proposal_id: Uuid) -> String {
+    sqlx::query_scalar("SELECT status FROM ai_proposals WHERE project_id=$1 AND id=$2")
+        .bind(fixture.project_id)
+        .bind(proposal_id)
+        .fetch_one(pool)
+        .await
+        .expect("classification proposal status")
+}
+
+#[tokio::test]
+async fn classification_proposal_lifecycle_is_atomic_and_fail_closed() {
+    let _guard = test_lock().lock().await;
+    let Some(pool) = database().await else { return };
+
+    let rejected = seed(&pool).await;
+    let rejected_proposal = create_classification_proposal(&pool, rejected).await;
+    let (expected_revision, status, target_study_id): (i64, String, Uuid) = sqlx::query_as(
+        "SELECT expected_revision,status,target_study_id
+         FROM ai_proposals WHERE project_id=$1 AND id=$2",
+    )
+    .bind(rejected.project_id)
+    .bind(rejected_proposal)
+    .fetch_one(&pool)
+    .await
+    .expect("classification proposal projection");
+    assert_eq!(expected_revision, 0);
+    assert_eq!(status, "pending");
+    assert_eq!(target_study_id, rejected.study_id);
+    assert_eq!(classification_state(&pool, rejected).await, (None, 0));
+    let (status_code, body) =
+        decide_classification_proposal(&pool, rejected, rejected_proposal, "reject").await;
+    assert_eq!(
+        status_code,
+        StatusCode::OK,
+        "classification rejection: {body}"
+    );
+    assert_eq!(
+        proposal_status(&pool, rejected, rejected_proposal).await,
+        "rejected"
+    );
+    assert_eq!(classification_state(&pool, rejected).await, (None, 0));
+    cleanup(&pool, rejected).await;
+
+    let accepted = seed(&pool).await;
+    let accepted_proposal = create_classification_proposal(&pool, accepted).await;
+    let list_response = router(AppState::new(pool.clone()), &api_config())
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri(format!(
+                    "/projects/{}/ai/proposals?task_kind=study_design_classification",
+                    accepted.project_id
+                ))
+                .body(Body::empty())
+                .expect("classification proposal list request should be valid"),
+        )
+        .await
+        .expect("classification proposal list request should be handled");
+    assert_eq!(list_response.status(), StatusCode::OK);
+    let listed = response_json(list_response).await;
+    let accepted_proposal_id = accepted_proposal.to_string();
+    let listed_proposal = listed["items"]
+        .as_array()
+        .and_then(|items| {
+            items
+                .iter()
+                .find(|item| item["id"].as_str() == Some(accepted_proposal_id.as_str()))
+        })
+        .expect("canonical task kind should list the classification proposal");
+    assert_eq!(listed_proposal["task_kind"], "study_design_classification");
+    assert_eq!(listed_proposal["payload"]["kind"], "classification");
+    let (status_code, body) =
+        decide_classification_proposal(&pool, accepted, accepted_proposal, "accept").await;
+    assert_eq!(
+        status_code,
+        StatusCode::OK,
+        "classification acceptance: {body}"
+    );
+    assert_eq!(body["applied_revision"], 1);
+    assert_eq!(body["proposal"]["status"], "accepted");
+    assert_eq!(
+        classification_state(&pool, accepted).await,
+        (Some("rct".to_owned()), 1)
+    );
+    let (event_type, actor_id, before_revision, result_revision): (String, String, i64, i64) =
+        sqlx::query_as(
+            "SELECT event_type,actor_id,before_revision,result_revision
+             FROM study_events WHERE project_id=$1 AND study_id=$2
+             ORDER BY created_at DESC,id DESC LIMIT 1",
+        )
+        .bind(accepted.project_id)
+        .bind(accepted.study_id)
+        .fetch_one(&pool)
+        .await
+        .expect("classification history event");
+    assert_eq!(event_type, "study_classified");
+    assert_eq!(actor_id, "classification-reviewer");
+    assert_eq!((before_revision, result_revision), (0, 1));
+    let (review_event, review_actor): (String, String) = sqlx::query_as(
+        "SELECT event_type,actor_id FROM review_events
+         WHERE project_id=$1 AND aggregate_type='ai_proposal' AND aggregate_id=$2",
+    )
+    .bind(accepted.project_id)
+    .bind(accepted_proposal)
+    .fetch_one(&pool)
+    .await
+    .expect("classification review event");
+    assert_eq!(review_event, "ai_proposal_resolved");
+    assert_eq!(review_actor, "classification-reviewer");
+    cleanup(&pool, accepted).await;
+
+    let stale = seed(&pool).await;
+    let stale_proposal = create_classification_proposal(&pool, stale).await;
+    sqlx::query(
+        "UPDATE studies SET design='cohort',study_revision=1
+         WHERE project_id=$1 AND id=$2",
+    )
+    .bind(stale.project_id)
+    .bind(stale.study_id)
+    .execute(&pool)
+    .await
+    .expect("stale study update");
+    let (status_code, _) =
+        decide_classification_proposal(&pool, stale, stale_proposal, "accept").await;
+    assert!(matches!(
+        status_code,
+        StatusCode::BAD_REQUEST | StatusCode::CONFLICT
+    ));
+    assert_eq!(
+        proposal_status(&pool, stale, stale_proposal).await,
+        "pending"
+    );
+    assert_eq!(
+        classification_state(&pool, stale).await,
+        (Some("cohort".to_owned()), 1)
+    );
+    cleanup(&pool, stale).await;
+
+    let tampered = seed(&pool).await;
+    let tampered_proposal = create_classification_proposal(&pool, tampered).await;
+    sqlx::query("UPDATE reports SET title='Tampered report' WHERE id=$1")
+        .bind(tampered.report_id)
+        .execute(&pool)
+        .await
+        .expect("evidence tamper");
+    let (status_code, _) =
+        decide_classification_proposal(&pool, tampered, tampered_proposal, "accept").await;
+    assert!(matches!(
+        status_code,
+        StatusCode::BAD_REQUEST | StatusCode::CONFLICT
+    ));
+    assert_eq!(
+        proposal_status(&pool, tampered, tampered_proposal).await,
+        "pending"
+    );
+    assert_eq!(classification_state(&pool, tampered).await, (None, 0));
+    cleanup(&pool, tampered).await;
+
+    let cross_project = seed(&pool).await;
+    let cross_project_study = Uuid::new_v4();
+    sqlx::query(
+        "INSERT INTO studies
+         (id,project_id,title,design_context,study_revision,updated_by_actor_kind,updated_by_actor_id)
+         VALUES ($1,$2,'Other study','{}'::jsonb,0,'system','assistant-test')",
+    )
+    .bind(cross_project_study)
+    .bind(cross_project.other_project_id)
+    .execute(&pool)
+    .await
+    .expect("cross-project study");
+    let cross_project_proposal = create_classification_proposal(&pool, cross_project).await;
+    sqlx::query(
+        "UPDATE ai_proposals
+         SET payload=jsonb_set(payload,'{study_id}',to_jsonb($1::text),true)
+         WHERE project_id=$2 AND id=$3",
+    )
+    .bind(cross_project_study.to_string())
+    .bind(cross_project.project_id)
+    .bind(cross_project_proposal)
+    .execute(&pool)
+    .await
+    .expect("cross-project proposal tamper");
+    let (status_code, _) =
+        decide_classification_proposal(&pool, cross_project, cross_project_proposal, "accept")
+            .await;
+    assert!(matches!(
+        status_code,
+        StatusCode::BAD_REQUEST | StatusCode::CONFLICT
+    ));
+    assert_eq!(
+        proposal_status(&pool, cross_project, cross_project_proposal).await,
+        "pending"
+    );
+    assert_eq!(classification_state(&pool, cross_project).await, (None, 0));
+    cleanup(&pool, cross_project).await;
+
+    let abstention = seed(&pool).await;
+    let abstention_proposal = create_classification_proposal(&pool, abstention).await;
+    sqlx::query(
+        "UPDATE ai_proposals
+         SET payload=jsonb_set(
+             jsonb_set(payload,'{suggested_design}','null'::jsonb,true),
+             '{uncertainties}','[\"insufficient evidence\"]'::jsonb,true)
+         WHERE project_id=$1 AND id=$2",
+    )
+    .bind(abstention.project_id)
+    .bind(abstention_proposal)
+    .execute(&pool)
+    .await
+    .expect("abstention proposal tamper");
+    let (status_code, _) =
+        decide_classification_proposal(&pool, abstention, abstention_proposal, "accept").await;
+    assert!(matches!(
+        status_code,
+        StatusCode::BAD_REQUEST | StatusCode::CONFLICT
+    ));
+    assert_eq!(
+        proposal_status(&pool, abstention, abstention_proposal).await,
+        "pending"
+    );
+    assert_eq!(classification_state(&pool, abstention).await, (None, 0));
+    cleanup(&pool, abstention).await;
+
+    let malformed = seed(&pool).await;
+    let malformed_proposal = create_classification_proposal(&pool, malformed).await;
+    sqlx::query("UPDATE ai_proposals SET payload='{}'::jsonb WHERE project_id=$1 AND id=$2")
+        .bind(malformed.project_id)
+        .bind(malformed_proposal)
+        .execute(&pool)
+        .await
+        .expect("malformed proposal tamper");
+    let (status_code, _) =
+        decide_classification_proposal(&pool, malformed, malformed_proposal, "accept").await;
+    assert!(matches!(
+        status_code,
+        StatusCode::BAD_REQUEST | StatusCode::CONFLICT
+    ));
+    assert_eq!(
+        proposal_status(&pool, malformed, malformed_proposal).await,
+        "pending"
+    );
+    assert_eq!(classification_state(&pool, malformed).await, (None, 0));
+    cleanup(&pool, malformed).await;
+}
+
 #[tokio::test]
 async fn assistant_envelope_and_unsupported_actions_fail_closed() {
     let _guard = test_lock().lock().await;

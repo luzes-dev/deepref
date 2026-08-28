@@ -8,6 +8,7 @@ import type { AiAppraisalPrefillProposalPayload } from './aiAppraisalPrefillProp
 import type { AiDataExtractionProposalPayload } from './aiDataExtractionProposalPayload.ts';
 import type { AiDuplicateProposalPayload } from './aiDuplicateProposalPayload.ts';
 import type { AiScreeningProposalPayload } from './aiScreeningProposalPayload.ts';
+import type { AiStudyDesignClassificationProposalPayload } from './aiStudyDesignClassificationProposalPayload.ts';
 import type { AiStudyGroupingProposalPayload } from './aiStudyGroupingProposalPayload.ts';
 
 export type AiProposalPayload =
@@ -19,6 +20,9 @@ export type AiProposalPayload =
 	  })
 	| (AiStudyGroupingProposalPayload & {
 			kind: 'study_grouping';
+	  })
+	| (AiStudyDesignClassificationProposalPayload & {
+			kind: 'classification';
 	  })
 	| (AiAppraisalPrefillProposalPayload & {
 			kind: 'appraisal_prefill';

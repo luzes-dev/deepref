@@ -373,8 +373,12 @@
 			hydratedKey = `${result.data.id}:${result.data.revision}`;
 			dirty = false;
 			amending = false;
+			queryClient.setQueryData(getGetProjectReviewProtocolQueryKey(projectId), {
+				data: result.data
+			});
 			await queryClient.invalidateQueries({
-				queryKey: getGetProjectReviewProtocolQueryKey(projectId)
+				queryKey: getGetProjectReviewProtocolQueryKey(projectId),
+				refetchType: 'none'
 			});
 		} catch {
 			// The mutation error and conflict recovery action are rendered below.
@@ -393,8 +397,12 @@
 			draft = fromProtocol(result.data);
 			hydratedKey = `${result.data.id}:${result.data.revision}`;
 			dirty = false;
+			queryClient.setQueryData(getGetProjectReviewProtocolQueryKey(projectId), {
+				data: result.data
+			});
 			await queryClient.invalidateQueries({
-				queryKey: getGetProjectReviewProtocolQueryKey(projectId)
+				queryKey: getGetProjectReviewProtocolQueryKey(projectId),
+				refetchType: 'none'
 			});
 		} catch {
 			// The mutation error and conflict recovery action are rendered below.

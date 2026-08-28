@@ -299,17 +299,34 @@ pub async fn classify_study(
     command: ClassifyStudy,
 ) -> Result<StudyDetailRecord, StudyError> {
     let mut transaction = pool.begin().await?;
+    classify_study_in_transaction(&mut transaction, command.clone()).await?;
+    transaction.commit().await?;
+    get_study(pool, command.project_id.into(), command.study_id.into()).await
+}
+
+pub(crate) async fn classify_study_in_transaction(
+    transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    command: ClassifyStudy,
+) -> Result<i64, StudyError> {
     let current = lock_study(
-        &mut transaction,
+        transaction,
         command.project_id.into(),
         command.study_id.into(),
     )
     .await?;
+    apply_classification_in_transaction(transaction, command, current).await
+}
+
+pub(crate) async fn apply_classification_in_transaction(
+    transaction: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    command: ClassifyStudy,
+    current: LockedStudy,
+) -> Result<i64, StudyError> {
     if current.revision != command.expected_revision as i64 {
         return Err(StudyError::RevisionConflict {
             current: Box::new(
                 get_study_with_connection(
-                    &mut transaction,
+                    transaction,
                     command.project_id.into(),
                     command.study_id.into(),
                 )
@@ -333,10 +350,10 @@ pub async fn classify_study(
     .bind(command.actor.id())
     .bind(command.project_id.as_uuid())
     .bind(command.study_id.as_uuid())
-    .execute(&mut *transaction)
+    .execute(&mut **transaction)
     .await?;
     insert_study_event(
-        &mut transaction,
+        transaction,
         command.project_id.into(),
         command.study_id.as_uuid(),
         None,
@@ -359,8 +376,7 @@ pub async fn classify_study(
         &command.actor,
     )
     .await?;
-    transaction.commit().await?;
-    get_study(pool, command.project_id.into(), command.study_id.into()).await
+    Ok(result_revision)
 }
 
 pub async fn assign_report_to_study(
@@ -717,15 +733,15 @@ async fn ensure_project_report_pool(
 }
 
 #[derive(Debug, Clone)]
-struct LockedStudy {
-    id: StudyId,
-    title: String,
-    design: Option<StudyDesign>,
-    design_context: StudyDesignContext,
-    revision: i64,
+pub(crate) struct LockedStudy {
+    pub(crate) id: StudyId,
+    pub(crate) title: String,
+    pub(crate) design: Option<StudyDesign>,
+    pub(crate) design_context: StudyDesignContext,
+    pub(crate) revision: i64,
 }
 
-async fn lock_study(
+pub(crate) async fn lock_study(
     connection: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     project_id: Uuid,
     study_id: Uuid,

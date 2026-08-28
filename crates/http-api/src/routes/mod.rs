@@ -69,6 +69,7 @@ fn openapi_router(document_max_bytes: usize) -> OpenApiRouter<AppState> {
             acquisitions::list_acquisitions,
             acquisitions::create_acquisition
         ))
+        .routes(routes!(acquisitions::refresh_acquisition))
         .routes(routes!(acquisitions::import_project_records))
         .routes(routes!(deduplication::run_project_deduplication))
         .routes(routes!(deduplication::list_project_dedupe_proposals))
@@ -242,6 +243,7 @@ mod tests {
             "/projects/{project_id}/automations/runs",
             "/projects/{project_id}/automations/runs/{run_id}",
             "/projects/{project_id}/acquisitions",
+            "/projects/{project_id}/acquisitions/{acquisition_id}/refresh",
             "/projects/{project_id}/imports",
             "/projects/{project_id}/deduplication/run",
             "/projects/{project_id}/deduplication/proposals",
@@ -561,7 +563,7 @@ mod tests {
     fn acquisition_post_responses_match_handler_statuses() {
         let document =
             serde_json::to_value(openapi_document()).expect("OpenAPI document must serialize");
-        let cases: [(&str, &[&str]); 2] = [
+        let cases: [(&str, &[&str]); 3] = [
             (
                 "/projects/{project_id}/acquisitions",
                 &["200", "201", "400", "404", "409", "500"],
@@ -569,6 +571,10 @@ mod tests {
             (
                 "/projects/{project_id}/imports",
                 &["200", "201", "400", "404", "409", "413", "500"],
+            ),
+            (
+                "/projects/{project_id}/acquisitions/{acquisition_id}/refresh",
+                &["200", "201", "400", "404", "409", "500"],
             ),
         ];
 
@@ -583,6 +589,24 @@ mod tests {
                 "unexpected POST response contract for {path}"
             );
         }
+    }
+
+    #[test]
+    fn acquisition_refresh_openapi_contract_requires_idempotency_key() {
+        let document =
+            serde_json::to_value(openapi_document()).expect("OpenAPI document must serialize");
+        let operation = &document["paths"]["/projects/{project_id}/acquisitions/{acquisition_id}/refresh"]
+            ["post"];
+        assert_eq!(operation["operationId"], "refreshAcquisition");
+        assert_eq!(
+            operation["parameters"]
+                .as_array()
+                .expect("refresh parameters must be an array")
+                .iter()
+                .find(|parameter| parameter["name"] == "Idempotency-Key")
+                .map(|parameter| parameter["required"].clone()),
+            Some(serde_json::Value::Bool(true))
+        );
     }
 
     #[test]

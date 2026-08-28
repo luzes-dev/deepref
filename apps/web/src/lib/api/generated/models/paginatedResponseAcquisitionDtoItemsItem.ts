@@ -16,6 +16,8 @@ export type PaginatedResponseAcquisitionDtoItemsItem = {
 	id: string;
 	project_id: string;
 	queued_count: number;
+	/** @nullable */
+	refresh_of?: string | null;
 	seed_count: number;
 	source: string;
 	/** @nullable */

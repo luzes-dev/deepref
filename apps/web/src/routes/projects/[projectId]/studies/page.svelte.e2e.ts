@@ -332,10 +332,8 @@ test('reviews study grouping proposals with typed provenance and refreshes after
 		}
 	);
 
-	await page.goto('/projects/project-1/studies?study=study-1');
+	await page.goto('/projects/project-1/studies?study=study-1&report=report-1');
 	await expect.poll(() => reportsReady).toBe(true);
-	await page.locator('#study-report').click();
-	await page.getByRole('option', { name: 'Primary trial report' }).click();
 	await expect(page.getByRole('button', { name: 'Suggest study group' })).toBeVisible();
 	await page.getByRole('button', { name: 'Suggest study group' }).click();
 	await expect(page.getByTestId('study-grouping-choice')).toContainText('Existing study');
@@ -366,4 +364,321 @@ test('reviews study grouping proposals with typed provenance and refreshes after
 		reason: 'Human reviewer rejected study grouping suggestion.'
 	});
 	await expect(page.getByRole('alert')).toContainText('Study data changed elsewhere');
+});
+
+test('reviews study classification proposals without calling manual classification', async ({
+	page
+}) => {
+	await mockProjectShell(page);
+	let study = {
+		id: 'study-1',
+		project_id: project.id,
+		title: 'One investigation',
+		design: null as string | null,
+		design_label: null as string | null,
+		design_context: { physiotherapy: false, exposure: false, prediction_or_ai: false },
+		revision: 2,
+		reports: [],
+		tool_suggestions: [],
+		created_at: '2026-01-01T00:00:00Z',
+		updated_at: '2026-01-01T00:00:00Z',
+		updated_by_actor_kind: 'user',
+		updated_by_actor_id: 'tester'
+	};
+	const classificationProposal: AiProposalDto = {
+		authority_tier: 'ai_proposal',
+		created_at: '2026-01-01T00:00:00Z',
+		entity_id: 'study-1',
+		entity_type: 'study_classification',
+		evidence_hash: 'evidence-hash',
+		expected_revision: 2,
+		id: 'classification-1',
+		input_hash: 'input-hash',
+		model: 'test-model',
+		model_run_id: 'run-1',
+		model_version: '1',
+		operation: 'study_design_classification_suggestion',
+		payload: {
+			evidence: [
+				{
+					content_hash:
+						'aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa',
+					field: 'title',
+					kind: 'study_metadata',
+					study_id: 'study-1'
+				},
+				{
+					content_hash:
+						'bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb',
+					field: 'abstract',
+					kind: 'report_metadata',
+					report_id: 'report-1'
+				}
+			],
+			kind: 'classification',
+			rationale: 'The report describes randomized allocation for this investigation.',
+			study_id: 'study-1',
+			suggested_design: 'rct',
+			uncertainties: ['The allocation wording should be checked against the full text.']
+		},
+		project_id: project.id,
+		prompt_hash: 'prompt-hash',
+		prompt_version: 'study-design-v1',
+		protocol_version_id: null,
+		provider: 'mock-provider',
+		resolution_reason: null,
+		resolved_at: null,
+		resolved_by_actor_id: null,
+		resolved_by_actor_kind: null,
+		schema_hash: 'schema-hash',
+		schema_version: '1',
+		status: 'pending',
+		target_record_id: null,
+		target_report_id: null,
+		target_study_id: 'study-1',
+		task_kind: 'study_design_classification'
+	};
+	let pendingProposal: AiProposalDto | undefined = classificationProposal;
+	let proposalQueryRequests = 0;
+	let manualClassifyRequests = 0;
+	const decisionBodies: Array<Record<string, unknown>> = [];
+	const history: Array<Record<string, unknown>> = [];
+
+	await page.route(
+		/http:\/\/localhost:4173\/api\/projects\/project-1\/reports(?:\?.*)?$/,
+		async (route) => {
+			await route.fulfill({ json: { items: [report], next_cursor: null } });
+		}
+	);
+	await page.route(
+		/http:\/\/localhost:4173\/api\/projects\/project-1\/studies(?:\/.*)?(?:\?.*)?$/,
+		async (route) => {
+			const path = new URL(route.request().url()).pathname;
+			if (path.endsWith('/history')) {
+				await route.fulfill({ json: history });
+			} else if (route.request().method() === 'GET') {
+				await route.fulfill({
+					json: path.endsWith('/study-1') ? study : { items: [study], next_cursor: null }
+				});
+			} else {
+				await route.continue();
+			}
+		}
+	);
+	await page.route(
+		'http://localhost:4173/api/projects/project-1/studies/study-1/classification',
+		async (route) => {
+			manualClassifyRequests += 1;
+			await route.fulfill({
+				status: 500,
+				json: { message: 'manual classification must not run' }
+			});
+		}
+	);
+	await page.route(
+		/http:\/\/localhost:4173\/api\/projects\/project-1\/ai\/proposals(?:\?.*)?$/,
+		async (route) => {
+			const params = new URL(route.request().url()).searchParams;
+			if (params.get('task_kind') !== 'study_design_classification') {
+				await route.fulfill({ json: { items: [], next_cursor: null } });
+				return;
+			}
+			proposalQueryRequests += 1;
+			expect(params.get('status')).toBe('pending');
+			expect(params.get('target_study_id')).toBe('study-1');
+			expect(params.get('limit')).toBe('1');
+			await route.fulfill({
+				json: { items: pendingProposal ? [pendingProposal] : [], next_cursor: null }
+			});
+		}
+	);
+	await page.route(
+		/http:\/\/localhost:4173\/api\/projects\/project-1\/ai\/proposals\/[^/]+\/decision$/,
+		async (route) => {
+			const body = route.request().postDataJSON() as Record<string, unknown>;
+			decisionBodies.push(body);
+			expect(body).toEqual({
+				decision: 'accept',
+				reason: 'Human reviewer accepted study design classification suggestion.'
+			});
+			pendingProposal = undefined;
+			study = { ...study, design: 'rct', design_label: 'rct', revision: 3 };
+			history.push({
+				id: 'history-1',
+				study_id: 'study-1',
+				report_id: null,
+				event_type: 'study_classified',
+				before_revision: 2,
+				result_revision: 3,
+				actor_id: 'local-user',
+				actor_kind: 'user',
+				created_at: '2026-01-01T00:00:00Z'
+			});
+			await route.fulfill({
+				json: {
+					applied_revision: 3,
+					proposal: { ...classificationProposal, status: 'accepted' }
+				}
+			});
+		}
+	);
+
+	await page.goto('/projects/project-1/studies?study=study-1');
+	await expect.poll(() => proposalQueryRequests).toBeGreaterThan(0);
+	await expect(page.getByTestId('study-classification-suggestion')).toContainText(
+		'Randomized controlled trial'
+	);
+	await expect(page.getByTestId('study-classification-suggestion')).toContainText('rct');
+	await expect(page.getByTestId('study-classification-provenance')).toContainText(
+		'Study One investigation · study-1'
+	);
+	await expect(page.getByTestId('study-classification-provenance')).toContainText(
+		'Report report-1'
+	);
+	await expect(page.getByTestId('study-classification-provenance')).toContainText(
+		'content hash: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
+	);
+	await expect(page.getByTestId('study-classification-provenance')).toContainText(
+		'content hash: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb'
+	);
+	await expect(page.getByTestId('study-classification-uncertainties')).toContainText(
+		'allocation wording'
+	);
+	await expect(page.getByTestId('study-classification-accept')).toBeEnabled();
+	await page.getByTestId('study-classification-accept').click();
+	await expect.poll(() => decisionBodies.length).toBe(1);
+	await expect.poll(() => proposalQueryRequests).toBeGreaterThan(1);
+	await expect(
+		page.getByText('No pending classification suggestion', { exact: true })
+	).toBeVisible();
+	await expect(page.getByText('Revision 3 · changes are audited and reversible')).toBeVisible();
+	await expect(page.getByText('study_classified', { exact: true })).toBeVisible();
+	await expect.poll(() => manualClassifyRequests).toBe(0);
+});
+
+test('rejects abstention classification proposals while keeping accept disabled', async ({
+	page
+}) => {
+	await mockProjectShell(page);
+	const study = {
+		id: 'study-1',
+		project_id: project.id,
+		title: 'One investigation',
+		design: null,
+		design_label: null,
+		design_context: { physiotherapy: false, exposure: false, prediction_or_ai: false },
+		revision: 2,
+		reports: [],
+		tool_suggestions: [],
+		created_at: '2026-01-01T00:00:00Z',
+		updated_at: '2026-01-01T00:00:00Z',
+		updated_by_actor_kind: 'user',
+		updated_by_actor_id: 'tester'
+	};
+	const abstentionProposal: AiProposalDto = {
+		authority_tier: 'ai_proposal',
+		created_at: '2026-01-01T00:00:00Z',
+		entity_id: 'study-1',
+		entity_type: 'study_classification',
+		evidence_hash: 'evidence-hash',
+		expected_revision: 2,
+		id: 'classification-abstention',
+		input_hash: 'input-hash',
+		model: 'test-model',
+		model_run_id: 'run-1',
+		model_version: '1',
+		operation: 'study_design_classification_suggestion',
+		payload: {
+			evidence: [
+				{
+					content_hash:
+						'cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc',
+					field: 'title',
+					kind: 'study_metadata',
+					study_id: 'study-1'
+				}
+			],
+			kind: 'classification',
+			rationale: 'The available metadata does not identify a closed design.',
+			study_id: 'study-1',
+			suggested_design: null,
+			uncertainties: ['The study design remains unclear.']
+		},
+		project_id: project.id,
+		prompt_hash: 'prompt-hash',
+		prompt_version: 'study-design-v1',
+		protocol_version_id: null,
+		provider: 'mock-provider',
+		resolution_reason: null,
+		resolved_at: null,
+		resolved_by_actor_id: null,
+		resolved_by_actor_kind: null,
+		schema_hash: 'schema-hash',
+		schema_version: '1',
+		status: 'pending',
+		target_record_id: null,
+		target_report_id: null,
+		target_study_id: 'study-1',
+		task_kind: 'study_design_classification'
+	};
+	let pendingProposal: AiProposalDto | undefined = abstentionProposal;
+	let rejectCount = 0;
+	let manualClassifyRequests = 0;
+	await page.route(/\/api\/projects\/project-1\/reports(?:\?.*)?$/, (route) =>
+		route.fulfill({ json: { items: [], next_cursor: null } })
+	);
+	await page.route(/\/api\/projects\/project-1\/studies(?:\/.*)?(?:\?.*)?$/, async (route) => {
+		const path = new URL(route.request().url()).pathname;
+		if (path.endsWith('/history')) await route.fulfill({ json: [] });
+		else if (route.request().method() === 'GET') {
+			await route.fulfill({
+				json: path.endsWith('/study-1') ? study : { items: [study], next_cursor: null }
+			});
+		} else await route.continue();
+	});
+	await page.route(
+		'http://localhost:4173/api/projects/project-1/studies/study-1/classification',
+		async (route) => {
+			manualClassifyRequests += 1;
+			await route.fulfill({
+				status: 500,
+				json: { message: 'manual classification must not run' }
+			});
+		}
+	);
+	await page.route(/\/api\/projects\/project-1\/ai\/proposals(?:\?.*)?$/, async (route) => {
+		const params = new URL(route.request().url()).searchParams;
+		if (params.get('task_kind') === 'study_design_classification') {
+			expect(params.get('target_study_id')).toBe('study-1');
+			await route.fulfill({
+				json: { items: pendingProposal ? [pendingProposal] : [], next_cursor: null }
+			});
+		} else await route.fulfill({ json: { items: [], next_cursor: null } });
+	});
+	await page.route(
+		/\/api\/projects\/project-1\/ai\/proposals\/[^/]+\/decision$/,
+		async (route) => {
+			const body = route.request().postDataJSON() as { decision: string };
+			expect(body.decision).toBe('reject');
+			rejectCount += 1;
+			pendingProposal = undefined;
+			await route.fulfill({
+				json: {
+					applied_revision: null,
+					proposal: { ...abstentionProposal, status: 'rejected' }
+				}
+			});
+		}
+	);
+
+	await page.goto('/projects/project-1/studies?study=study-1');
+	await expect(page.getByTestId('study-classification-suggestion')).toContainText('Abstention');
+	await expect(page.getByTestId('study-classification-accept')).toBeDisabled();
+	await expect(page.getByTestId('study-classification-reject')).toBeEnabled();
+	await page.getByTestId('study-classification-reject').click();
+	await expect.poll(() => rejectCount).toBe(1);
+	await expect(
+		page.getByText('No pending classification suggestion', { exact: true })
+	).toBeVisible();
+	await expect.poll(() => manualClassifyRequests).toBe(0);
 });

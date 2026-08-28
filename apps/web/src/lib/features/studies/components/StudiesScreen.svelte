@@ -11,6 +11,8 @@
 	import type {
 		AiProposalDecisionInput,
 		AiProposalDto,
+		AiStudyDesignClassificationProposalPayload,
+		AiStudyDesignEvidenceDto,
 		AiStudyGroupingEvidenceDto,
 		AiStudyGroupingFieldDto,
 		AiStudyGroupingProposalPayload
@@ -52,18 +54,22 @@
 
 	let { projectId }: { projectId: string } = $props();
 	const queryClient = useQueryClient();
+	const location = $derived(parseStudyLocation(page.url.searchParams));
+	const selectedStudyId = $derived(location.studyId);
 	let newTitle = $state('');
 	let renameTitle = $state('');
-	let reportId = $state('');
+	let reportId = $derived(location.reportId ?? '');
 	let role = $state<StudyReportRole>(StudyReportRoleInput.report_of_study);
 	let formError = $state<string | undefined>();
 	let groupingError = $state('');
 	let groupingErrorStatus = $state<number | null>(null);
 	let groupingAction = $state<'generate' | 'accept' | 'reject' | null>(null);
 	let pendingGroupingProposalId = $state<string | null>(null);
+	let classificationError = $state('');
+	let classificationErrorStatus = $state<number | null>(null);
+	let classificationAction = $state<'accept' | 'reject' | null>(null);
+	let pendingClassificationProposalId = $state<string | null>(null);
 
-	const location = $derived(parseStudyLocation(page.url.searchParams));
-	const selectedStudyId = $derived(location.studyId);
 	const studiesQuery = createListProjectStudies(
 		() => projectId,
 		() => ({ limit: 100 })
@@ -97,12 +103,23 @@
 		}),
 		() => ({ query: { enabled: Boolean(reportId) } })
 	);
+	const classificationProposalsQuery = createListAiProposals(
+		() => projectId,
+		() => ({
+			status: 'pending',
+			task_kind: 'study_design_classification',
+			target_study_id: selectedStudyId,
+			limit: 1
+		}),
+		() => ({ query: { enabled: Boolean(selectedStudyId) } })
+	);
 	const createMutation = createCreateProjectStudy();
 	const renameMutation = createRenameProjectStudy();
 	const classifyMutation = createClassifyProjectStudy();
 	const membershipMutation = createPutReportStudyMembership();
 	const generateGroupingMutation = createGenerateStudyGroupingSuggestion();
 	const decideGroupingMutation = createDecideAiProposal();
+	const decideClassificationMutation = createDecideAiProposal();
 
 	const studies = $derived(studiesQuery.data?.data.items ?? []);
 	const reports = $derived(reportsQuery.data?.data.items ?? []);
@@ -142,6 +159,27 @@
 			isApiErrorWithStatus(generateGroupingMutation.error, 503) ||
 			isApiErrorWithStatus(decideGroupingMutation.error, 503)
 	);
+	const classificationProposals = $derived(
+		(classificationProposalsQuery.data?.data.items ?? []).filter((proposal) =>
+			isClassificationProposal(proposal, selectedStudyId)
+		)
+	);
+	const activeClassificationProposal = $derived(classificationProposals[0]);
+	const classificationQueryError = $derived(classificationProposalsQuery.error?.message ?? '');
+	const classificationMutationError = $derived(decideClassificationMutation.error?.message ?? '');
+	const classificationErrorMessage = $derived(
+		classificationError || classificationQueryError || classificationMutationError
+	);
+	const classificationConflict = $derived(
+		classificationErrorStatus === 409 ||
+			isApiErrorWithStatus(classificationProposalsQuery.error, 409) ||
+			isApiErrorWithStatus(decideClassificationMutation.error, 409)
+	);
+	const classificationProviderUnavailable = $derived(
+		classificationErrorStatus === 503 ||
+			isApiErrorWithStatus(classificationProposalsQuery.error, 503) ||
+			isApiErrorWithStatus(decideClassificationMutation.error, 503)
+	);
 	const designs = [
 		{ value: 'rct', label: 'Randomized controlled trial' },
 		{ value: 'non_randomized_intervention', label: 'Non-randomized intervention' },
@@ -159,12 +197,31 @@
 		return error instanceof ApiError && error.status === status;
 	}
 
+	type ClassificationProposal = AiProposalDto & {
+		payload: Extract<AiProposalDto['payload'], { kind: 'classification' }>;
+	};
+
+	function isClassificationProposal(
+		proposal: AiProposalDto,
+		studyId: string | undefined
+	): proposal is ClassificationProposal {
+		return (
+			Boolean(studyId) &&
+			proposal.status === 'pending' &&
+			proposal.task_kind === 'study_design_classification' &&
+			proposal.target_study_id === studyId &&
+			proposal.payload.kind === 'classification' &&
+			proposal.payload.study_id === studyId
+		);
+	}
+
 	function groupingPayload(proposal: AiProposalDto): AiStudyGroupingProposalPayload | undefined {
 		switch (proposal.payload.kind) {
 			case 'study_grouping':
 				return proposal.payload;
 			case 'screening':
 			case 'duplicate':
+			case 'classification':
 			case 'appraisal_prefill':
 			case 'data_extraction':
 				return undefined;
@@ -209,6 +266,97 @@
 				return exhaustive;
 			}
 		}
+	}
+
+	function classificationDesignLabel(
+		design: NonNullable<AiStudyDesignClassificationProposalPayload['suggested_design']>
+	): string {
+		switch (design) {
+			case 'rct':
+				return 'Randomized controlled trial';
+			case 'non_randomized_intervention':
+				return 'Non-randomized intervention';
+			case 'cohort':
+				return 'Cohort';
+			case 'case_control':
+				return 'Case-control';
+			case 'cross_sectional':
+				return 'Cross-sectional';
+			case 'diagnostic_accuracy':
+				return 'Diagnostic accuracy';
+			case 'prediction_model':
+				return 'Prediction model';
+			case 'qualitative':
+				return 'Qualitative';
+			case 'systematic_review':
+				return 'Systematic review';
+			case 'case_series':
+				return 'Case series';
+			default: {
+				const exhaustive: never = design;
+				return exhaustive;
+			}
+		}
+	}
+
+	function classificationEvidenceSubject(evidence: AiStudyDesignEvidenceDto): string {
+		switch (evidence.kind) {
+			case 'study_metadata':
+				return `Study ${studyLabel(evidence.study_id)} · ${evidence.study_id}`;
+			case 'report_metadata':
+				return `Report ${evidence.report_id}`;
+			default: {
+				const exhaustive: never = evidence;
+				return exhaustive;
+			}
+		}
+	}
+
+	function classificationEvidenceFieldLabel(evidence: AiStudyDesignEvidenceDto): string {
+		switch (evidence.kind) {
+			case 'study_metadata':
+				return classificationStudyFieldLabel(evidence.field);
+			case 'report_metadata':
+				return classificationReportFieldLabel(evidence.field);
+			default: {
+				const exhaustive: never = evidence;
+				return exhaustive;
+			}
+		}
+	}
+
+	function classificationStudyFieldLabel(
+		field: Extract<AiStudyDesignEvidenceDto, { kind: 'study_metadata' }>['field']
+	): string {
+		switch (field) {
+			case 'title':
+				return 'Title';
+			default: {
+				const exhaustive: never = field;
+				return exhaustive;
+			}
+		}
+	}
+
+	function classificationReportFieldLabel(
+		field: Extract<AiStudyDesignEvidenceDto, { kind: 'report_metadata' }>['field']
+	): string {
+		switch (field) {
+			case 'title':
+				return 'Title';
+			case 'abstract':
+				return 'Abstract';
+			case 'publication_year':
+				return 'Publication year';
+			default: {
+				const exhaustive: never = field;
+				return exhaustive;
+			}
+		}
+	}
+
+	function classificationEvidenceKey(evidence: AiStudyDesignEvidenceDto): string {
+		return `${evidence.kind}:${evidence.kind === 'study_metadata' ? evidence.study_id : evidence.report_id}:${evidence.field}:${evidence.content_hash}`;
 	}
 
 	function affectedStudyIds(payload: AiStudyGroupingProposalPayload): string[] {
@@ -289,6 +437,48 @@
 		} finally {
 			pendingGroupingProposalId = null;
 			groupingAction = null;
+		}
+	}
+
+	async function refreshClassificationQueries(): Promise<void> {
+		await queryClient.invalidateQueries({
+			queryKey: getListAiProposalsQueryKey(projectId)
+		});
+		await refreshStudy();
+		await classificationProposalsQuery.refetch();
+	}
+
+	async function decideClassification(decision: AiProposalDecisionInput): Promise<void> {
+		if (!activeClassificationProposal || pendingClassificationProposalId) return;
+		const proposal = activeClassificationProposal;
+		pendingClassificationProposalId = proposal.id;
+		classificationError = '';
+		classificationErrorStatus = null;
+		classificationAction = decision;
+		try {
+			await decideClassificationMutation.mutateAsync({
+				projectId,
+				proposalId: proposal.id,
+				data: {
+					decision,
+					reason: `Human reviewer ${decision === 'accept' ? 'accepted' : 'rejected'} study design classification suggestion.`
+				}
+			});
+			await refreshClassificationQueries();
+		} catch (error) {
+			classificationError =
+				error instanceof ApiError && error.status === 409
+					? 'This study or classification proposal changed elsewhere. Refresh the proposal and review it again.'
+					: error instanceof ApiError && error.status === 503
+						? 'The AI provider is unavailable. The proposal remains unchanged; try again later.'
+						: error instanceof Error
+							? error.message
+							: 'The study classification decision failed.';
+			classificationErrorStatus = error instanceof ApiError ? error.status : null;
+			await classificationProposalsQuery.refetch();
+		} finally {
+			pendingClassificationProposalId = null;
+			classificationAction = null;
 		}
 	}
 
@@ -566,6 +756,192 @@
 								</div>
 							</div>
 						</div>
+
+						<Card.Root data-testid="study-classification-assistance">
+							<Card.Header class="gap-3">
+								<div class="flex flex-wrap items-center justify-between gap-2">
+									<div class="flex items-center gap-2">
+										<Brain aria-hidden="true" class="size-4" />
+										<Card.Title
+											>Study design classification assistance</Card.Title
+										>
+									</div>
+									<Badge variant="outline">Proposal only</Badge>
+								</div>
+								<Card.Description>
+									AI classifications are evidence-linked suggestions. A reviewer
+									must approve or reject the proposal; accepting it records the
+									reviewer decision and study history.
+								</Card.Description>
+							</Card.Header>
+							<Card.Content class="flex flex-col gap-4">
+								{#if classificationErrorMessage}
+									<Alert.Root variant="destructive" role="alert">
+										<Alert.Title>
+											{classificationConflict
+												? 'Study classification changed elsewhere'
+												: classificationProviderUnavailable
+													? 'AI provider unavailable'
+													: 'Study classification suggestion unavailable'}
+										</Alert.Title>
+										<Alert.Description
+											>{classificationErrorMessage}</Alert.Description
+										>
+									</Alert.Root>
+								{/if}
+								{#if classificationProposalsQuery.isPending && !activeClassificationProposal}
+									<div
+										class="flex flex-col gap-3"
+										aria-label="Loading study classification suggestion"
+									>
+										<Skeleton class="h-5 w-2/3" />
+										<Skeleton class="h-20 w-full" />
+									</div>
+								{:else if !activeClassificationProposal}
+									<Empty.Root class="border-0 p-0">
+										<Empty.Media variant="icon"><Info /></Empty.Media>
+										<Empty.Header>
+											<Empty.Title
+												>No pending classification suggestion</Empty.Title
+											>
+											<Empty.Description>
+												The assistant has not created a study-design
+												proposal for this study.
+											</Empty.Description>
+										</Empty.Header>
+									</Empty.Root>
+								{:else}
+									{@const proposal = activeClassificationProposal}
+									{@const payload = proposal.payload}
+									<div class="flex flex-wrap items-center gap-2">
+										<Badge variant="secondary">{proposal.status}</Badge>
+										<span class="text-xs text-muted-foreground">
+											{proposal.provider} / {proposal.model} · prompt {proposal.prompt_version}
+										</span>
+									</div>
+
+									<div
+										class="rounded-md border p-4"
+										data-testid="study-classification-suggestion"
+									>
+										<p class="text-sm font-medium">
+											Suggested closed study design
+										</p>
+										{#if payload.suggested_design}
+											<div class="mt-2 flex flex-wrap items-center gap-2">
+												<Badge variant="secondary">
+													{classificationDesignLabel(
+														payload.suggested_design
+													)}
+												</Badge>
+												<code class="text-xs"
+													>{payload.suggested_design}</code
+												>
+											</div>
+										{:else}
+											<Badge class="mt-2" variant="outline">Abstention</Badge>
+											<p class="mt-2 text-sm text-muted-foreground">
+												The evidence does not support a closed study-design
+												label.
+											</p>
+										{/if}
+									</div>
+
+									<div class="rounded-md border p-4">
+										<p class="text-sm font-medium">Rationale</p>
+										<p class="mt-1 text-sm text-muted-foreground">
+											{payload.rationale}
+										</p>
+									</div>
+
+									<div
+										class="rounded-md border p-4"
+										data-testid="study-classification-provenance"
+									>
+										<p class="text-sm font-medium">Evidence identity</p>
+										<p class="mt-1 text-xs break-all text-muted-foreground">
+											Prompt hash: {proposal.prompt_hash}
+										</p>
+										{#if payload.evidence.length}
+											<ul class="mt-2 flex flex-col gap-2 text-xs">
+												{#each payload.evidence as evidence (classificationEvidenceKey(evidence))}
+													<li class="rounded-md bg-muted/40 p-2">
+														<div class="flex flex-wrap gap-x-2 gap-y-1">
+															<span class="font-medium">
+																{classificationEvidenceSubject(
+																	evidence
+																)}
+															</span>
+															<span class="text-muted-foreground">
+																· {classificationEvidenceFieldLabel(
+																	evidence
+																)} ({evidence.field})
+															</span>
+														</div>
+														<code
+															class="mt-1 block break-all text-muted-foreground"
+															>content hash: {evidence.content_hash}</code
+														>
+													</li>
+												{/each}
+											</ul>
+										{:else}
+											<p class="mt-1 text-xs text-muted-foreground">
+												No evidence identity recorded.
+											</p>
+										{/if}
+									</div>
+
+									{#if payload.uncertainties.length}
+										<Alert.Root
+											role="status"
+											data-testid="study-classification-uncertainties"
+										>
+											<Alert.Title>Uncertainties</Alert.Title>
+											<Alert.Description>
+												<ul class="list-disc pl-5">
+													{#each payload.uncertainties as uncertainty (uncertainty)}
+														<li>{uncertainty}</li>
+													{/each}
+												</ul>
+											</Alert.Description>
+										</Alert.Root>
+									{:else}
+										<p
+											class="text-xs text-muted-foreground"
+											data-testid="study-classification-uncertainties"
+										>
+											Uncertainties: none reported.
+										</p>
+									{/if}
+
+									<div class="flex flex-wrap justify-end gap-2 border-t pt-4">
+										<Button
+											variant="outline"
+											disabled={pendingClassificationProposalId !== null}
+											onclick={() => void decideClassification('reject')}
+											data-testid="study-classification-reject"
+										>
+											{#if classificationAction === 'reject'}<Spinner
+													data-icon="inline-start"
+												/>{:else}<X data-icon="inline-start" />{/if}
+											Reject classification
+										</Button>
+										<Button
+											disabled={pendingClassificationProposalId !== null ||
+												!payload.suggested_design}
+											onclick={() => void decideClassification('accept')}
+											data-testid="study-classification-accept"
+										>
+											{#if classificationAction === 'accept'}<Spinner
+													data-icon="inline-start"
+												/>{:else}<Check data-icon="inline-start" />{/if}
+											Accept and apply classification
+										</Button>
+									</div>
+								{/if}
+							</Card.Content>
+						</Card.Root>
 
 						<Separator />
 						<form

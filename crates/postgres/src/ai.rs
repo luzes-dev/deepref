@@ -2,13 +2,15 @@ use std::collections::HashMap;
 
 use chrono::{DateTime, Utc};
 use deepref_ai::{
-    AiError, AiFuture, AiProposal, AiRunRecord, AiRunStatus, AiRunStore, AiTaskKind, AuthorityTier,
-    Embedding, EvidenceRef, EvidenceRetriever, GroundedBlock, ModelParameters, ModelProfile,
-    ModelRouter, ProposalDraft, ProposalStatus, ProposalStore, ResolvedModel, RetrievalRequest,
+    AiError, AiFuture, AiProposal, AiRunRecord, AiRunStatus, AiRunStore, AiTask, AiTaskKind,
+    AuthorityTier, ClassificationReportField, Embedding, EvidenceRef, EvidenceRetriever,
+    GroundedBlock, ModelParameters, ModelProfile, ModelRouter, ProposalDraft, ProposalStatus,
+    ProposalStore, ResolvedModel, RetrievalRequest, StudyDesignClassification,
+    StudyDesignClassificationInput, StudyDesignEvidence, StudyDesignLabel, StudyMetadataField,
 };
 use deepref_application::{
-    AppraisalAssessmentInput, DefinitionId, DefinitionVersion, EvidenceReferenceInput,
-    ResolveRecordCommand, ScreenReportCommand, get_appraisal_definition,
+    AppraisalAssessmentInput, ClassifyStudy, DefinitionId, DefinitionVersion,
+    EvidenceReferenceInput, ResolveRecordCommand, ScreenReportCommand, get_appraisal_definition,
 };
 use deepref_domain::{Actor, ScreeningDecision, ScreeningStage, StudyReportRole, StudyTitle};
 use pgvector::Vector;
@@ -879,6 +881,7 @@ impl ProposalStore for PostgresAiStore {
                 .and_then(serde_json::Value::as_i64);
             let operation_task_kind = match proposal.draft.operation.as_str() {
                 "study_grouping_suggestion" => "study_grouping",
+                "study_design_classification_suggestion" => "study_design_classification",
                 operation => operation,
             };
             let task_kind = proposal
@@ -1323,6 +1326,17 @@ pub async fn decide_ai_proposal(
             "study_grouping_suggestion" => {
                 apply_study_grouping(&mut tx, &proposal, &applied_payload, &request.actor).await?;
             }
+            "study_design_classification_suggestion" => {
+                applied_revision = Some(
+                    apply_study_classification(
+                        &mut tx,
+                        &proposal,
+                        &applied_payload,
+                        &request.actor,
+                    )
+                    .await?,
+                );
+            }
             "appraisal_prefill" => {
                 apply_appraisal_prefill(&mut tx, &proposal, &applied_payload, &request.actor)
                     .await?;
@@ -1487,6 +1501,266 @@ fn extraction_field_set(
             } => (*field_id, *field_version),
         })
         .collect()
+}
+
+#[derive(Debug, Clone)]
+struct ClassificationReportMetadata {
+    report_id: Uuid,
+    title: Option<String>,
+    abstract_text: Option<String>,
+    publication_year: Option<i32>,
+}
+
+async fn apply_study_classification(
+    tx: &mut Transaction<'_, Postgres>,
+    proposal: &AiProposalRecord,
+    payload: &serde_json::Value,
+    actor: &Actor,
+) -> Result<i64, AiProposalError> {
+    let classification: StudyDesignClassification = serde_json::from_value(payload.clone())
+        .map_err(|_| {
+            AiProposalError::InvalidPayload("classification payload is invalid".to_owned())
+        })?;
+    let study_id = proposal.target_study_id.ok_or_else(|| {
+        AiProposalError::InvalidTarget("classification study is missing".to_owned())
+    })?;
+    if proposal.entity_type != "study_classification"
+        || proposal.entity_id != Some(study_id)
+        || classification.study_id != study_id
+    {
+        return Err(AiProposalError::InvalidTarget(
+            "classification target is invalid".to_owned(),
+        ));
+    }
+    let expected_revision = proposal.expected_revision.ok_or_else(|| {
+        AiProposalError::InvalidTarget("classification revision is missing".to_owned())
+    })?;
+    if expected_revision < 0
+        || payload
+            .get("expected_revision")
+            .and_then(serde_json::Value::as_i64)
+            != Some(expected_revision)
+    {
+        return Err(AiProposalError::InvalidPayload(
+            "classification revision is invalid".to_owned(),
+        ));
+    }
+    let expected_revision_u64 = u64::try_from(expected_revision).map_err(|_| {
+        AiProposalError::InvalidPayload("classification revision is invalid".to_owned())
+    })?;
+    if classification.suggested_design.is_none() {
+        return Err(AiProposalError::InvalidPayload(
+            "classification abstention cannot be accepted".to_owned(),
+        ));
+    }
+
+    let current = crate::study::lock_study(tx, proposal.project_id, study_id).await?;
+    if current.revision != expected_revision {
+        return Err(AiProposalError::InvalidTarget(
+            "classification study revision is stale".to_owned(),
+        ));
+    }
+    let report_rows = sqlx::query(
+        "SELECT sr.report_id,r.title,r.abstract_text,r.publication_year
+         FROM study_reports sr
+         JOIN reports r ON r.id=sr.report_id
+         WHERE sr.project_id=$1 AND sr.study_id=$2
+         ORDER BY sr.created_at,sr.report_id
+         LIMIT 100
+         FOR UPDATE OF r",
+    )
+    .bind(proposal.project_id)
+    .bind(study_id)
+    .fetch_all(&mut **tx)
+    .await?;
+    let reports = report_rows
+        .into_iter()
+        .map(|row| ClassificationReportMetadata {
+            report_id: row.get("report_id"),
+            title: row.get("title"),
+            abstract_text: row.get("abstract_text"),
+            publication_year: row.get("publication_year"),
+        })
+        .collect::<Vec<_>>();
+    let grounded_evidence = classification_grounding(&current, &reports);
+    let input = StudyDesignClassificationInput {
+        project_id: proposal.project_id.into(),
+        study_id: study_id.into(),
+        expected_revision: expected_revision_u64,
+        study_title: current.title.clone(),
+        current_design: current.design.map(classification_label),
+        reports: reports
+            .iter()
+            .map(|report| deepref_ai::StudyDesignReport {
+                report_id: report.report_id,
+                title: report
+                    .title
+                    .as_deref()
+                    .map(|value| bounded_classification_text(value, 4_000)),
+                abstract_text: report
+                    .abstract_text
+                    .as_deref()
+                    .map(|value| bounded_classification_text(value, 16_000)),
+                publication_year: report.publication_year,
+            })
+            .collect(),
+        allowed_designs: StudyDesignLabel::ALL.to_vec(),
+        grounded_evidence,
+    };
+    let task = deepref_ai::StudyDesignClassificationTask::new(&input).map_err(|_| {
+        AiProposalError::InvalidPayload("classification payload is invalid".to_owned())
+    })?;
+    task.semantic_validate(&classification).map_err(|_| {
+        AiProposalError::InvalidPayload("classification payload is invalid".to_owned())
+    })?;
+    validate_classification_evidence(&current, &reports, &classification.evidence)?;
+
+    let design = classification
+        .suggested_design
+        .map(classification_design)
+        .ok_or_else(|| {
+            AiProposalError::InvalidPayload(
+                "classification abstention cannot be accepted".to_owned(),
+            )
+        })?;
+    crate::study::apply_classification_in_transaction(
+        tx,
+        ClassifyStudy {
+            project_id: proposal.project_id.into(),
+            study_id: study_id.into(),
+            design,
+            context: current.design_context,
+            expected_revision: expected_revision_u64,
+            actor: actor.clone(),
+        },
+        current,
+    )
+    .await
+    .map_err(AiProposalError::Study)
+}
+
+fn classification_grounding(
+    study: &crate::study::LockedStudy,
+    reports: &[ClassificationReportMetadata],
+) -> Vec<StudyDesignEvidence> {
+    let mut evidence = vec![StudyDesignEvidence::StudyMetadata {
+        study_id: study.id.into(),
+        field: StudyMetadataField::Title,
+        content_hash: deepref_ai::sha256_bytes(study.title.as_bytes()),
+    }];
+    for report in reports {
+        if let Some(title) = &report.title {
+            evidence.push(StudyDesignEvidence::ReportMetadata {
+                report_id: report.report_id,
+                field: ClassificationReportField::Title,
+                content_hash: deepref_ai::sha256_bytes(title.as_bytes()),
+            });
+        }
+        if let Some(abstract_text) = &report.abstract_text {
+            evidence.push(StudyDesignEvidence::ReportMetadata {
+                report_id: report.report_id,
+                field: ClassificationReportField::Abstract,
+                content_hash: deepref_ai::sha256_bytes(abstract_text.as_bytes()),
+            });
+        }
+        if let Some(publication_year) = report.publication_year {
+            evidence.push(StudyDesignEvidence::ReportMetadata {
+                report_id: report.report_id,
+                field: ClassificationReportField::PublicationYear,
+                content_hash: deepref_ai::sha256_bytes(publication_year.to_string().as_bytes()),
+            });
+        }
+    }
+    evidence
+}
+
+fn validate_classification_evidence(
+    study: &crate::study::LockedStudy,
+    reports: &[ClassificationReportMetadata],
+    evidence: &[StudyDesignEvidence],
+) -> Result<(), AiProposalError> {
+    let reports_by_id = reports
+        .iter()
+        .map(|report| (report.report_id, report))
+        .collect::<HashMap<_, _>>();
+    for item in evidence {
+        let (content, expected_hash) = match item {
+            StudyDesignEvidence::StudyMetadata {
+                study_id,
+                field: StudyMetadataField::Title,
+                content_hash,
+            } if *study_id == study.id.as_uuid() => (study.title.clone(), content_hash),
+            StudyDesignEvidence::StudyMetadata { .. } => {
+                return Err(AiProposalError::InvalidPayload(
+                    "classification evidence is invalid".to_owned(),
+                ));
+            }
+            StudyDesignEvidence::ReportMetadata {
+                report_id,
+                field,
+                content_hash,
+            } => {
+                let report = reports_by_id.get(report_id).ok_or_else(|| {
+                    AiProposalError::InvalidPayload("classification evidence is invalid".to_owned())
+                })?;
+                let content = match field {
+                    ClassificationReportField::Title => report.title.clone(),
+                    ClassificationReportField::Abstract => report.abstract_text.clone(),
+                    ClassificationReportField::PublicationYear => {
+                        report.publication_year.map(|value| value.to_string())
+                    }
+                }
+                .ok_or_else(|| {
+                    AiProposalError::InvalidPayload("classification evidence is invalid".to_owned())
+                })?;
+                (content, content_hash)
+            }
+        };
+        if deepref_ai::sha256_bytes(content.as_bytes()) != *expected_hash {
+            return Err(AiProposalError::InvalidPayload(
+                "classification evidence is stale".to_owned(),
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn bounded_classification_text(value: &str, max_chars: usize) -> String {
+    value.chars().take(max_chars).collect()
+}
+
+fn classification_label(design: deepref_domain::StudyDesign) -> StudyDesignLabel {
+    match design {
+        deepref_domain::StudyDesign::Rct => StudyDesignLabel::Rct,
+        deepref_domain::StudyDesign::NonRandomizedIntervention => {
+            StudyDesignLabel::NonRandomizedIntervention
+        }
+        deepref_domain::StudyDesign::Cohort => StudyDesignLabel::Cohort,
+        deepref_domain::StudyDesign::CaseControl => StudyDesignLabel::CaseControl,
+        deepref_domain::StudyDesign::CrossSectional => StudyDesignLabel::CrossSectional,
+        deepref_domain::StudyDesign::DiagnosticAccuracy => StudyDesignLabel::DiagnosticAccuracy,
+        deepref_domain::StudyDesign::PredictionModel => StudyDesignLabel::PredictionModel,
+        deepref_domain::StudyDesign::Qualitative => StudyDesignLabel::Qualitative,
+        deepref_domain::StudyDesign::SystematicReview => StudyDesignLabel::SystematicReview,
+        deepref_domain::StudyDesign::CaseSeries => StudyDesignLabel::CaseSeries,
+    }
+}
+
+fn classification_design(label: StudyDesignLabel) -> deepref_domain::StudyDesign {
+    match label {
+        StudyDesignLabel::Rct => deepref_domain::StudyDesign::Rct,
+        StudyDesignLabel::NonRandomizedIntervention => {
+            deepref_domain::StudyDesign::NonRandomizedIntervention
+        }
+        StudyDesignLabel::Cohort => deepref_domain::StudyDesign::Cohort,
+        StudyDesignLabel::CaseControl => deepref_domain::StudyDesign::CaseControl,
+        StudyDesignLabel::CrossSectional => deepref_domain::StudyDesign::CrossSectional,
+        StudyDesignLabel::DiagnosticAccuracy => deepref_domain::StudyDesign::DiagnosticAccuracy,
+        StudyDesignLabel::PredictionModel => deepref_domain::StudyDesign::PredictionModel,
+        StudyDesignLabel::Qualitative => deepref_domain::StudyDesign::Qualitative,
+        StudyDesignLabel::SystematicReview => deepref_domain::StudyDesign::SystematicReview,
+        StudyDesignLabel::CaseSeries => deepref_domain::StudyDesign::CaseSeries,
+    }
 }
 
 async fn validate_study_grouping_provenance(

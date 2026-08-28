@@ -718,6 +718,107 @@
         }
       }
     },
+    "/projects/{project_id}/acquisitions/{acquisition_id}/refresh": {
+      "post": {
+        "tags": [
+          "acquisitions"
+        ],
+        "operationId": "refreshAcquisition",
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "path",
+            "description": "Project identifier",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "acquisition_id",
+            "in": "path",
+            "description": "Completed acquisition to refresh",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "description": "Required replay-safe refresh key",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Existing idempotent refresh",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AcquisitionDto"
+                }
+              }
+            }
+          },
+          "201": {
+            "description": "Provider refresh created",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AcquisitionDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Missing or invalid idempotency key",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Project or acquisition not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Acquisition cannot be refreshed or key conflicts",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/projects/{project_id}/ai/proposals": {
       "get": {
         "tags": [
@@ -1113,6 +1214,173 @@
           },
           "500": {
             "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/projects/{project_id}/assistant/tools": {
+      "get": {
+        "tags": [
+          "assistant"
+        ],
+        "operationId": "listProjectAssistantTools",
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "path",
+            "description": "Project identifier",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The closed project-assistant tool catalog",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/AssistantToolDescriptor"
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid project identifier",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Project not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/projects/{project_id}/assistant/tools/execute": {
+      "post": {
+        "tags": [
+          "assistant"
+        ],
+        "operationId": "executeProjectAssistantTool",
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "path",
+            "description": "Project identifier",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AssistantToolRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Bounded read result or persisted proposal identifier",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AssistantToolResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Malformed or invalid tool request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Tool is forbidden by the project policy",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Scoped project or resource was not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Proposal conflicts with current state",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Opaque tool execution failure",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "AI provider is unavailable",
             "content": {
               "application/json": {
                 "schema": {
@@ -5592,6 +5860,13 @@
             "type": "integer",
             "format": "int32"
           },
+          "refresh_of": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          },
           "seed_count": {
             "type": "integer",
             "format": "int32"
@@ -5790,6 +6065,14 @@
             "format": "uuid"
           }
         }
+      },
+      "AiClassificationReportFieldDto": {
+        "type": "string",
+        "enum": [
+          "title",
+          "abstract",
+          "publication_year"
+        ]
       },
       "AiCriterionJudgmentDto": {
         "type": "object",
@@ -6430,6 +6713,27 @@
           {
             "allOf": [
               {
+                "$ref": "#/components/schemas/AiStudyDesignClassificationProposalPayload"
+              },
+              {
+                "type": "object",
+                "required": [
+                  "kind"
+                ],
+                "properties": {
+                  "kind": {
+                    "type": "string",
+                    "enum": [
+                      "classification"
+                    ]
+                  }
+                }
+              }
+            ]
+          },
+          {
+            "allOf": [
+              {
                 "$ref": "#/components/schemas/AiAppraisalPrefillProposalPayload"
               },
               {
@@ -6680,6 +6984,119 @@
           "full_text"
         ]
       },
+      "AiStudyDesignClassificationProposalPayload": {
+        "type": "object",
+        "required": [
+          "study_id",
+          "rationale",
+          "evidence",
+          "uncertainties"
+        ],
+        "properties": {
+          "evidence": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AiStudyDesignEvidenceDto"
+            }
+          },
+          "rationale": {
+            "type": "string"
+          },
+          "study_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "suggested_design": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/AiStudyDesignLabelDto"
+              }
+            ]
+          },
+          "uncertainties": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "AiStudyDesignEvidenceDto": {
+        "oneOf": [
+          {
+            "type": "object",
+            "required": [
+              "study_id",
+              "field",
+              "content_hash",
+              "kind"
+            ],
+            "properties": {
+              "content_hash": {
+                "type": "string"
+              },
+              "field": {
+                "$ref": "#/components/schemas/AiStudyMetadataFieldDto"
+              },
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "study_metadata"
+                ]
+              },
+              "study_id": {
+                "type": "string",
+                "format": "uuid"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "report_id",
+              "field",
+              "content_hash",
+              "kind"
+            ],
+            "properties": {
+              "content_hash": {
+                "type": "string"
+              },
+              "field": {
+                "$ref": "#/components/schemas/AiClassificationReportFieldDto"
+              },
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "report_metadata"
+                ]
+              },
+              "report_id": {
+                "type": "string",
+                "format": "uuid"
+              }
+            }
+          }
+        ]
+      },
+      "AiStudyDesignLabelDto": {
+        "type": "string",
+        "enum": [
+          "rct",
+          "non_randomized_intervention",
+          "cohort",
+          "case_control",
+          "cross_sectional",
+          "diagnostic_accuracy",
+          "prediction_model",
+          "qualitative",
+          "systematic_review",
+          "case_series"
+        ]
+      },
       "AiStudyGroupingChoiceDto": {
         "oneOf": [
           {
@@ -6872,6 +7289,12 @@
             }
           }
         }
+      },
+      "AiStudyMetadataFieldDto": {
+        "type": "string",
+        "enum": [
+          "title"
+        ]
       },
       "AiSuggestedDecisionDto": {
         "oneOf": [
@@ -7405,6 +7828,112 @@
             "type": "boolean"
           }
         }
+      },
+      "AssistantToolDescriptor": {
+        "type": "object",
+        "required": [
+          "name",
+          "kind",
+          "authority_tier",
+          "description"
+        ],
+        "properties": {
+          "authority_tier": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string"
+          },
+          "kind": {
+            "$ref": "#/components/schemas/AssistantToolKind"
+          },
+          "name": {
+            "type": "string"
+          }
+        }
+      },
+      "AssistantToolKind": {
+        "type": "string",
+        "enum": [
+          "read",
+          "proposal"
+        ]
+      },
+      "AssistantToolNameDto": {
+        "type": "string",
+        "enum": [
+          "get_project_protocol",
+          "get_report",
+          "read_document_blocks",
+          "search_document",
+          "search_project_reports",
+          "get_screening_state",
+          "get_study",
+          "get_appraisal",
+          "propose_screening_decision",
+          "propose_duplicate_merge",
+          "propose_study_grouping",
+          "propose_classification",
+          "propose_extraction",
+          "propose_appraisal_answer"
+        ]
+      },
+      "AssistantToolRequest": {
+        "type": "object",
+        "required": [
+          "tool",
+          "args"
+        ],
+        "properties": {
+          "args": {
+            "type": "object"
+          },
+          "tool": {
+            "$ref": "#/components/schemas/AssistantToolNameDto",
+            "description": "The value is parsed by deepref_ai::AgentTool, which owns the closed\nname and typed-argument schema."
+          }
+        }
+      },
+      "AssistantToolResponse": {
+        "oneOf": [
+          {
+            "type": "object",
+            "required": [
+              "data",
+              "kind"
+            ],
+            "properties": {
+              "data": {
+                "type": "object"
+              },
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "read"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "proposal_id",
+              "kind"
+            ],
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "proposal"
+                ]
+              },
+              "proposal_id": {
+                "type": "string",
+                "format": "uuid"
+              }
+            }
+          }
+        ]
       },
       "AutomationDefinitionDto": {
         "type": "object",
@@ -9288,6 +9817,13 @@
                 "queued_count": {
                   "type": "integer",
                   "format": "int32"
+                },
+                "refresh_of": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "format": "uuid"
                 },
                 "seed_count": {
                   "type": "integer",

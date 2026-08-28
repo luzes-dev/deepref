@@ -1,0 +1,196 @@
+{
+  "schema": "deepref.ai.evaluation",
+  "version": 1,
+  "gold_set_id": "pr15-reviewed-methodology-small-v1",
+  "reviewer": {
+    "reviewer_id": "reviewer-methodology-1",
+    "reviewed_at": "2026-08-28T12:00:00Z",
+    "review_notes": "Synthetic, internally consistent cases reviewed for metric semantics and safety-gate behavior."
+  },
+  "thresholds": {
+    "min_sensitivity": 0.66,
+    "min_specificity": 0.33,
+    "max_false_negative_rate": 0.0,
+    "max_abstention_rate": 0.34,
+    "min_numeric_extraction_accuracy": 1.0,
+    "min_citation_correctness": 1.0,
+    "false_exclusion_weight": 20,
+    "unnecessary_inclusion_weight": 1,
+    "max_false_exclusion_increase": 0,
+    "max_weighted_loss_increase": 0.0
+  },
+  "screening_cases": [
+    { "id": "screening-relevant-include-1", "truth": "relevant" },
+    { "id": "screening-relevant-maybe-1", "truth": "relevant" },
+    { "id": "screening-relevant-include-2", "truth": "relevant" },
+    { "id": "screening-irrelevant-exclude-1", "truth": "irrelevant" },
+    { "id": "screening-irrelevant-include-1", "truth": "irrelevant" },
+    { "id": "screening-irrelevant-maybe-1", "truth": "irrelevant" }
+  ],
+  "numeric_extraction_cases": [
+    {
+      "id": "numeric-relative-tolerance-1",
+      "gold_value": 100.0,
+      "tolerance": { "absolute": 0.1, "relative": 0.02 }
+    },
+    {
+      "id": "numeric-absolute-zero-1",
+      "gold_value": 0.0,
+      "tolerance": { "absolute": 0.05, "relative": 0.02 }
+    },
+    {
+      "id": "numeric-absolute-tolerance-1",
+      "gold_value": 5.0,
+      "tolerance": { "absolute": 0.01, "relative": 0.001 }
+    }
+  ],
+  "citation_cases": [
+    {
+      "id": "citation-exact-single-1",
+      "expected_evidence": [
+        {
+          "evidence_id": "block-001",
+          "content_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        }
+      ]
+    },
+    {
+      "id": "citation-exact-set-1",
+      "expected_evidence": [
+        {
+          "evidence_id": "block-002",
+          "content_hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+        },
+        {
+          "evidence_id": "block-003",
+          "content_hash": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+        }
+      ]
+    },
+    {
+      "id": "citation-baseline-wrong-1",
+      "expected_evidence": [
+        {
+          "evidence_id": "block-004",
+          "content_hash": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+        }
+      ]
+    }
+  ],
+  "baseline": {
+    "metadata": {
+      "provider": "fixture-provider",
+      "model": "reviewed-baseline",
+      "model_version": "2026-08-01",
+      "prompt_versions": [
+        { "task": "screening", "version": "screening.title_abstract.v1" },
+        { "task": "numeric_extraction", "version": "extraction.data.v1" },
+        { "task": "citation", "version": "grounding.citation.v1" }
+      ]
+    },
+    "screening_predictions": [
+      { "case_id": "screening-relevant-include-1", "prediction": "include" },
+      { "case_id": "screening-relevant-maybe-1", "prediction": "maybe" },
+      { "case_id": "screening-relevant-include-2", "prediction": "include" },
+      { "case_id": "screening-irrelevant-exclude-1", "prediction": "exclude" },
+      { "case_id": "screening-irrelevant-include-1", "prediction": "include" },
+      { "case_id": "screening-irrelevant-maybe-1", "prediction": "maybe" }
+    ],
+    "numeric_predictions": [
+      { "case_id": "numeric-relative-tolerance-1", "prediction": { "kind": "value", "value": 110.0 } },
+      { "case_id": "numeric-absolute-zero-1", "prediction": { "kind": "value", "value": 0.0 } },
+      { "case_id": "numeric-absolute-tolerance-1", "prediction": { "kind": "value", "value": 4.6 } }
+    ],
+    "citation_predictions": [
+      {
+        "case_id": "citation-exact-single-1",
+        "citations": [
+          {
+            "evidence_id": "block-001",
+            "content_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+          }
+        ]
+      },
+      {
+        "case_id": "citation-exact-set-1",
+        "citations": [
+          {
+            "evidence_id": "block-002",
+            "content_hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+          },
+          {
+            "evidence_id": "block-003",
+            "content_hash": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+          }
+        ]
+      },
+      {
+        "case_id": "citation-baseline-wrong-1",
+        "citations": [
+          {
+            "evidence_id": "fabricated-block",
+            "content_hash": "eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee"
+          }
+        ]
+      }
+    ]
+  },
+  "candidate": {
+    "metadata": {
+      "provider": "fixture-provider",
+      "model": "reviewed-candidate",
+      "model_version": "2026-08-28",
+      "prompt_versions": [
+        { "task": "screening", "version": "screening.title_abstract.v2" },
+        { "task": "numeric_extraction", "version": "extraction.data.v2" },
+        { "task": "citation", "version": "grounding.citation.v2" }
+      ]
+    },
+    "screening_predictions": [
+      { "case_id": "screening-relevant-include-1", "prediction": "include" },
+      { "case_id": "screening-relevant-maybe-1", "prediction": "maybe" },
+      { "case_id": "screening-relevant-include-2", "prediction": "include" },
+      { "case_id": "screening-irrelevant-exclude-1", "prediction": "exclude" },
+      { "case_id": "screening-irrelevant-include-1", "prediction": "include" },
+      { "case_id": "screening-irrelevant-maybe-1", "prediction": "maybe" }
+    ],
+    "numeric_predictions": [
+      { "case_id": "numeric-relative-tolerance-1", "prediction": { "kind": "value", "value": 101.5 } },
+      { "case_id": "numeric-absolute-zero-1", "prediction": { "kind": "value", "value": 0.03 } },
+      { "case_id": "numeric-absolute-tolerance-1", "prediction": { "kind": "value", "value": 5.007 } }
+    ],
+    "citation_predictions": [
+      {
+        "case_id": "citation-exact-single-1",
+        "citations": [
+          {
+            "evidence_id": "block-001",
+            "content_hash": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+          }
+        ]
+      },
+      {
+        "case_id": "citation-exact-set-1",
+        "citations": [
+          {
+            "evidence_id": "block-002",
+            "content_hash": "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+          },
+          {
+            "evidence_id": "block-003",
+            "content_hash": "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc"
+          }
+        ]
+      },
+      {
+        "case_id": "citation-baseline-wrong-1",
+        "citations": [
+          {
+            "evidence_id": "block-004",
+            "content_hash": "dddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddddd"
+          }
+        ]
+      }
+    ]
+  }
+}

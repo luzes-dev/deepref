@@ -93,6 +93,7 @@
 				return proposal.payload.criteria;
 			case 'duplicate':
 			case 'study_grouping':
+			case 'classification':
 			case 'appraisal_prefill':
 			case 'data_extraction':
 				return [];
@@ -109,6 +110,8 @@
 				return proposal.payload.suggested_decision.kind;
 			case 'duplicate':
 				return proposal.payload.decision;
+			case 'classification':
+				return proposal.payload.suggested_design ?? 'unavailable';
 			case 'study_grouping':
 			case 'appraisal_prefill':
 			case 'data_extraction':
@@ -126,6 +129,7 @@
 				return proposal.payload.suggested_decision.kind !== 'insufficient_evidence';
 			case 'duplicate':
 				return proposal.payload.decision === 'match';
+			case 'classification':
 			case 'study_grouping':
 			case 'appraisal_prefill':
 			case 'data_extraction':
@@ -181,6 +185,7 @@
 			case 'screening':
 			case 'duplicate':
 			case 'study_grouping':
+			case 'classification':
 				return proposal.payload.uncertainties;
 			case 'appraisal_prefill':
 			case 'data_extraction':
