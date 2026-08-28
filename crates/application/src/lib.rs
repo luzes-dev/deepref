@@ -7,6 +7,7 @@ use deepref_domain::{
 
 pub mod acquisition;
 pub mod appraisal;
+pub mod automations;
 pub mod deduplication;
 pub mod documents;
 pub mod extraction;
@@ -27,6 +28,16 @@ pub use appraisal::{
     all_appraisal_definitions, get_appraisal_definition, parse_appraisal_definition_resource,
     validate_assessment_input, validate_definition_resource,
     validate_shipped_appraisal_definitions,
+};
+pub use automations::{
+    AutomationDefinition, AutomationDefinitionId, AutomationDefinitionStatus,
+    AutomationIdempotencyKey, AutomationJobStatus, AutomationJobVisibility, AutomationName,
+    AutomationRun, AutomationRunId, AutomationRunStatus, AutomationStepKind, AutomationStepRun,
+    AutomationStepRunId, AutomationStepRunStatus, AutomationStepSnapshot,
+    AutomationTransitionError, AutomationTriggerKind, AutomationTriggerReference, AutomationUsage,
+    AutomationValidationError, BuiltInAutomationRecipe, BuiltInAutomationStep,
+    ConfigureAutomationDefinition, DispatchAutomationTrigger, StartAutomationManually,
+    validate_error, validate_run_list_limit, validate_worker_id,
 };
 pub use deduplication::{
     DecideProposalCommand, DedupeCandidate, DedupeDisposition, DedupeProposalCommand, DedupeScore,

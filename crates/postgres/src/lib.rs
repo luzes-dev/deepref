@@ -1,6 +1,7 @@
 mod acquisition;
 mod ai;
 mod appraisal;
+mod automations;
 mod deduplication;
 mod documents;
 mod extraction;
@@ -39,6 +40,13 @@ pub use ai::{
 pub use appraisal::{
     AppraisalAssessmentRecord, AppraisalError, AppraisalEvidenceRecord, complete_appraisal,
     complete_appraisal_in_transaction, get_appraisal, list_appraisals,
+};
+pub use automations::{
+    AutomationDispatchResult, AutomationError, AutomationFinalization, begin_next_automation_step,
+    complete_automation_step, complete_automation_step_with_output,
+    configure_automation_definition, dispatch_automation_trigger, fail_automation_step,
+    finalize_automation_run, get_automation_run, list_automation_definitions, list_automation_runs,
+    retry_automation_run, start_automation_manually,
 };
 pub use deduplication::{
     DedupeError, DedupeProposal, DedupeProposalCursor, DedupeRunRequest, DedupeRunSummary,
