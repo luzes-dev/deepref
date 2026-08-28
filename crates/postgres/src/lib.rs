@@ -68,8 +68,8 @@ pub use extraction::{
 };
 pub use graph::{MAX_GRAPH_NODES, load_project_graph, recompute_project_metrics};
 pub use jobs::{
-    PostgresJobQueue, claim_job, complete_job, enqueue_job, enqueue_job_pool, fail_job, job,
-    recover_expired_jobs, renew_job,
+    PostgresJobQueue, claim_job, complete_job, enqueue_job, enqueue_job_pool, fail_job,
+    get_claimed_automation_job_project_id_for_run, job, recover_expired_jobs, renew_job,
 };
 pub use legacy_import::{LegacyImportCounts, import_legacy};
 pub use prisma::{PrismaProjectionError, get_prisma_projection};

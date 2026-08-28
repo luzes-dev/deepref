@@ -11,6 +11,7 @@ use deepref_documents::{
 };
 use deepref_events::{DeadLetterRecord, EventEnvelope, WorkFetchRequested, deserialize_compatible};
 use deepref_providers::CrossrefProvider;
+use serde::Deserialize;
 use sha2::{Digest, Sha256};
 use sqlx::PgPool;
 use tokio::sync::{Semaphore, watch};
@@ -222,7 +223,7 @@ pub async fn handle_job(
     job: &deepref_application::jobs::ClaimedJob,
     claim_lease: Duration,
 ) -> anyhow::Result<DeliveryAction> {
-    handle_job_with_document_services(pool, job, claim_lease, None, None, None).await
+    handle_job_with_document_services_inner(pool, job, claim_lease, None, None, None, None).await
 }
 
 pub async fn handle_job_with_documents(
@@ -232,13 +233,34 @@ pub async fn handle_job_with_documents(
     document_store: Option<Arc<DocumentStore>>,
     document_parser: Option<Arc<dyn DocumentParser>>,
 ) -> anyhow::Result<DeliveryAction> {
-    handle_job_with_document_services(
+    handle_job_with_document_services_inner(
         pool,
         job,
         claim_lease,
         document_store,
         document_parser,
         None,
+        None,
+    )
+    .await
+}
+
+pub async fn handle_job_with_documents_owned(
+    pool: sqlx::PgPool,
+    job: &deepref_application::jobs::ClaimedJob,
+    owner: &str,
+    claim_lease: Duration,
+    document_store: Option<Arc<DocumentStore>>,
+    document_parser: Option<Arc<dyn DocumentParser>>,
+) -> anyhow::Result<DeliveryAction> {
+    handle_job_with_document_services_inner(
+        pool,
+        job,
+        claim_lease,
+        document_store,
+        document_parser,
+        None,
+        Some(owner),
     )
     .await
 }
@@ -250,6 +272,27 @@ pub async fn handle_job_with_document_services(
     document_store: Option<Arc<DocumentStore>>,
     document_parser: Option<Arc<dyn DocumentParser>>,
     remote_fetcher: Option<Arc<dyn RemoteDocumentFetcher>>,
+) -> anyhow::Result<DeliveryAction> {
+    handle_job_with_document_services_inner(
+        pool,
+        job,
+        claim_lease,
+        document_store,
+        document_parser,
+        remote_fetcher,
+        None,
+    )
+    .await
+}
+
+async fn handle_job_with_document_services_inner(
+    pool: sqlx::PgPool,
+    job: &deepref_application::jobs::ClaimedJob,
+    claim_lease: Duration,
+    document_store: Option<Arc<DocumentStore>>,
+    document_parser: Option<Arc<dyn DocumentParser>>,
+    remote_fetcher: Option<Arc<dyn RemoteDocumentFetcher>>,
+    owner: Option<&str>,
 ) -> anyhow::Result<DeliveryAction> {
     match job.kind.as_str() {
         "work_fetch_requested" => {
@@ -267,6 +310,12 @@ pub async fn handle_job_with_document_services(
             };
             deepref_postgres::recompute_project_metrics(&pool, project_id).await?;
             Ok(DeliveryAction::Ack)
+        }
+        "automation_run" => {
+            let owner = owner.ok_or_else(|| {
+                anyhow::anyhow!("automation job processing requires its lease owner")
+            })?;
+            handle_automation_run(&pool, job, owner).await
         }
         // Pre-PR10 deployments may have queued this obsolete kind. The
         // canonical PRISMA endpoint reads live tables directly, so acknowledge
@@ -425,6 +474,59 @@ pub async fn handle_job_with_document_services(
             Ok(DeliveryAction::Ack)
         }
         other => anyhow::bail!("unsupported durable job kind: {other}"),
+    }
+}
+
+#[derive(Debug, Deserialize)]
+#[serde(deny_unknown_fields)]
+struct AutomationRunJobPayload {
+    automation_run_id: Uuid,
+}
+
+const UNKNOWN_AUTOMATION_STEP_ERROR: &str =
+    "automation step is not an accepted built-in deterministic action";
+
+async fn handle_automation_run(
+    pool: &sqlx::PgPool,
+    job: &deepref_application::jobs::ClaimedJob,
+    owner: &str,
+) -> anyhow::Result<DeliveryAction> {
+    let payload: AutomationRunJobPayload = serde_json::from_value(job.payload.clone())?;
+    let run_id = deepref_application::AutomationRunId::new(payload.automation_run_id)
+        .map_err(|error| anyhow::anyhow!("automation run id is invalid: {error}"))?;
+    let project_id = deepref_postgres::get_claimed_automation_job_project_id_for_run(
+        pool, job.id, run_id, owner,
+    )
+    .await?
+    .ok_or_else(|| anyhow::anyhow!("automation job and run association is invalid"))?;
+    let project_uuid = project_id.as_uuid();
+
+    loop {
+        let Some(step) =
+            deepref_postgres::begin_next_automation_step(pool, project_id, run_id, owner).await?
+        else {
+            deepref_postgres::finalize_automation_run(pool, project_id, run_id).await?;
+            return Ok(DeliveryAction::Ack);
+        };
+
+        if step.key == "recompute_project_metrics"
+            && step.kind == deepref_application::AutomationStepKind::DeterministicAction
+        {
+            deepref_postgres::recompute_project_metrics(pool, project_uuid).await?;
+            deepref_postgres::complete_automation_step(pool, project_id, step.id, owner).await?;
+            continue;
+        }
+
+        deepref_postgres::fail_automation_step(
+            pool,
+            project_id,
+            step.id,
+            owner,
+            UNKNOWN_AUTOMATION_STEP_ERROR,
+        )
+        .await?;
+        deepref_postgres::finalize_automation_run(pool, project_id, run_id).await?;
+        return Ok(DeliveryAction::Terminate);
     }
 }
 

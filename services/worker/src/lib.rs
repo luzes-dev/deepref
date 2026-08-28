@@ -138,7 +138,14 @@ async fn process_claimed_job(
         owner.clone(),
         job.id,
         lease,
-        processor::handle_job_with_documents(pool.clone(), &job, lease, Some(document_store), None),
+        processor::handle_job_with_documents_owned(
+            pool.clone(),
+            &job,
+            &owner,
+            lease,
+            Some(document_store),
+            None,
+        ),
     )
     .await;
     match result {
