@@ -497,7 +497,7 @@ test('loads opaque cursor pages for projects, articles, and ingestions', async (
 		.getByTestId('pagination-load-more')
 		.getByRole('button', { name: 'Load more' })
 		.click();
-	await expect(page.getByText('2 project runs')).toBeVisible();
+	await expect(page.getByText('2 project runs', { exact: true })).toBeVisible();
 });
 
 test('selecting an article shows inspector', async ({ page }) => {
@@ -564,7 +564,7 @@ test('secondary article views reuse selected article inspector', async ({ page }
 	await expect(page.getByText('A useful article abstract.')).toBeVisible();
 
 	await page.getByRole('button', { name: 'Ingestions' }).click();
-	await expect(page.getByText('1 project runs')).toBeVisible();
+	await expect(page.getByText('1 project runs', { exact: true })).toBeVisible();
 
 	await page.getByRole('button', { name: 'Graph' }).click();
 	await expect(page.getByText('A useful article abstract.')).toBeVisible();
@@ -641,7 +641,7 @@ test('ingestions are filtered and create uses current project', async ({ page })
 	await page.goto('/');
 
 	await page.getByRole('button', { name: 'Ingestions' }).click();
-	await expect(page.getByText('1 project runs')).toBeVisible();
+	await expect(page.getByText('1 project runs', { exact: true })).toBeVisible();
 	await expect(page.getByText('other-ingestion')).toHaveCount(0);
 	await page.locator('#dois').fill('10.1/new');
 	await page.getByRole('button', { name: 'Start ingestion' }).click();

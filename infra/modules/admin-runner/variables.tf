@@ -71,9 +71,9 @@ variable "kms_decrypt_key_arns" {
 }
 
 variable "egress_cidr_blocks" {
-  description = "IPv4 egress destinations. Restrict to private endpoints where the network supports it."
+  description = "Explicit IPv4 egress destinations for approved administration traffic. Empty by default; callers must opt in to required destinations."
   type        = set(string)
-  default     = ["0.0.0.0/0"]
+  default     = []
 }
 
 variable "tags" {

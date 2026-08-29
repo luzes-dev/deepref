@@ -1,0 +1,7 @@
+[advisories]
+ignore = [
+  "RUSTSEC-2024-0384", # instant, transitive through neo4rs 0.8
+  "RUSTSEC-2024-0436", # paste, transitive through neo4rs and utoipa-axum
+  "RUSTSEC-2025-0012", # backoff, transitive through neo4rs 0.8
+  "RUSTSEC-2025-0134", # rustls-pemfile, transitive through neo4rs 0.8
+]
