@@ -3,6 +3,8 @@ name: Finalize Orval update
 on:
   push:
     branches: [development]
+    paths:
+      - .github/workflows/finalize-orval.yml
 
 permissions:
   contents: write
@@ -37,11 +39,12 @@ jobs:
           pnpm run check
           pnpm --filter @deepref/web test:unit -- --run
           pnpm run build
-      - name: Commit resolved update and remove helper
+      - name: Stage verified update on a PR branch
         run: |
+          git checkout -b fix/orval-8.26-generated
           rm .github/workflows/finalize-orval.yml
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
           git add pnpm-lock.yaml docs/openapi.json apps/web/src/lib/api/generated .github/workflows/finalize-orval.yml
           git commit -m "chore: regenerate API client with Orval 8.26"
-          git push origin development
+          git push origin HEAD:fix/orval-8.26-generated
