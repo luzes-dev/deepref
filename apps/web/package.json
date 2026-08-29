@@ -33,7 +33,7 @@
 		"@tailwindcss/vite": "^4.3.3",
 		"@tanstack/eslint-plugin-query": "^5.102.4",
 		"@types/node": "^24.13.2",
-		"bits-ui": "^2.18.1",
+		"bits-ui": "^2.19.0",
 		"clsx": "^2.1.1",
 		"eslint": "^10.8.1",
 		"eslint-config-prettier": "^10.1.8",
