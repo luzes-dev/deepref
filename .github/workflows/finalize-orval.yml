@@ -9,7 +9,6 @@ permissions:
 
 jobs:
   finalize:
-    if: github.event.head_commit.message == 'ci: finalize Orval dependency update'
     runs-on: ubuntu-latest
     timeout-minutes: 25
     steps:
