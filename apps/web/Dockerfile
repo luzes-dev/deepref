@@ -1,7 +1,9 @@
 ARG NODE_BASE_REPOSITORY="docker.io/library/node"
 ARG CADDY_BASE_REPOSITORY="docker.io/library/caddy"
 
-FROM ${NODE_BASE_REPOSITORY}@sha256:b31e7a42fdf8b8aa5f5ed477c72d694301273f1069c5a2f71d53c6482e99a2fc AS builder
+# The web build emits architecture-independent static assets, so run it on the
+# native BuildKit platform once and reuse the result for every runtime platform.
+FROM --platform=$BUILDPLATFORM ${NODE_BASE_REPOSITORY}@sha256:b31e7a42fdf8b8aa5f5ed477c72d694301273f1069c5a2f71d53c6482e99a2fc AS builder
 
 ENV PNPM_HOME=/pnpm \
     PATH=/pnpm:$PATH

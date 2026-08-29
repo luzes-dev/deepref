@@ -74,30 +74,18 @@ target "api" {
   inherits = ["rust-service"]
   target   = "api"
   tags     = ["${REGISTRY}/${IMAGE_PREFIX}-api:${GIT_TREE_HASH}"]
-  args = {
-    PACKAGE = "deepref-api"
-    BIN     = "deepref-api"
-  }
 }
 
 target "worker" {
   inherits = ["rust-service"]
   target   = "worker"
   tags     = ["${REGISTRY}/${IMAGE_PREFIX}-worker:${GIT_TREE_HASH}"]
-  args = {
-    PACKAGE = "deepref-worker"
-    BIN     = "deepref-worker"
-  }
 }
 
 target "projector" {
   inherits = ["rust-service"]
   target   = "projector"
   tags     = ["${REGISTRY}/${IMAGE_PREFIX}-projector:${GIT_TREE_HASH}"]
-  args = {
-    PACKAGE = "deepref-projector"
-    BIN     = "deepref-projector"
-  }
 }
 
 target "web" {
