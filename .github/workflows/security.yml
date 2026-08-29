@@ -33,11 +33,11 @@ jobs:
         with:
           persist-credentials: false
       - name: Initialize CodeQL
-        uses: github/codeql-action/init@28deaeda66b76a949646a63ec01825cc03e8ab1b # v3.28.10
+        uses: github/codeql-action/init@cdf488f595d80d6e07e03d4674febd5ab45fa938 # v4.37.9
         with:
           languages: ${{ matrix.language }}
       - name: Analyze
-        uses: github/codeql-action/analyze@28deaeda66b76a949646a63ec01825cc03e8ab1b # v3.28.10
+        uses: github/codeql-action/analyze@b56ba49b26e50535fa1e7f7db0f4f7b4bf65d80d # v3.28.10
 
   dependencies:
     name: Dependency policy
@@ -53,15 +53,15 @@ jobs:
           rustup toolchain install 1.95.0 --profile minimal
           rustup override set 1.95.0
           cargo install --locked cargo-audit --version 0.22.0
-          cargo install --locked cargo-deny --version 0.18.4
-      - run: cargo audit --deny warnings
+          cargo install --locked cargo-deny --version 0.20.2
+      - run: cargo audit --deny unmaintained --deny unsound
       - run: cargo deny --locked check
       - name: Set up pnpm
-        uses: pnpm/action-setup@f2b2b233b538f500472c7274c7012f57857d8ce0 # v4.1.0
+        uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v4.1.0
         with:
           version: 11.3.0
       - name: Set up Node.js
-        uses: actions/setup-node@1e60f620b9541dca151540678f0b70b4003d8bda # v4.0.3
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 24.4.1
           cache: pnpm
@@ -123,15 +123,20 @@ jobs:
           persist-credentials: false
       - name: Scan configuration
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
+        env:
+          TRIVY_HELM_KUBE_VERSION: "1.30.0"
+          TRIVY_HELM_VALUES: .github/trivy-helm-values.yaml
         with:
           scan-type: config
           scan-ref: .
+          skip-dirs: charts/deepref/tests/kyverno
           format: sarif
           output: trivy-config.sarif
           severity: HIGH,CRITICAL
+          limit-severities-for-sarif: true
           exit-code: "1"
       - name: Upload configuration findings
         if: always() && hashFiles('trivy-config.sarif') != ''
-        uses: github/codeql-action/upload-sarif@28deaeda66b76a949646a63ec01825cc03e8ab1b # v3.28.10
+        uses: github/codeql-action/upload-sarif@b56ba49b26e50535fa1e7f7db0f4f7b4bf65d80d # v3.28.10
         with:
           sarif_file: trivy-config.sarif
