@@ -13,13 +13,6 @@ resource "aws_security_group" "this" {
   description = "PostgreSQL ingress from approved workloads"
   vpc_id      = var.vpc_id
 
-  egress {
-    from_port   = 0
-    to_port     = 0
-    protocol    = "-1"
-    cidr_blocks = ["0.0.0.0/0"]
-  }
-
   tags = merge(local.common_tags, { Name = "${var.name}-db" })
 }
 
@@ -104,7 +97,7 @@ resource "aws_db_instance" "this" {
   publicly_accessible    = false
   network_type           = "IPV4"
 
-  parameter_group_name = aws_db_parameter_group.this.name
+  parameter_group_name        = aws_db_parameter_group.this.name
   auto_minor_version_upgrade = true
   apply_immediately           = false
 

@@ -37,7 +37,7 @@ jobs:
           case "$BASE_BRANCH" in
             development)
               case "$HEAD_BRANCH" in
-                feature/*|fix/*|bugfix/*|chore/*|docs/*|refactor/*|test/*|dependabot/*|main) ;;
+                feat/*|feature/*|fix/*|bugfix/*|chore/*|docs/*|refactor/*|test/*|dependabot/*|main) ;;
                 *) echo "Invalid source for development: $HEAD_BRANCH"; exit 1 ;;
               esac
               ;;
