@@ -1,0 +1,18 @@
+images:
+  api:
+    repository: ghcr.io/deepref/security-scan-api
+    digest: sha256:0000000000000000000000000000000000000000000000000000000000000000
+  worker:
+    repository: ghcr.io/deepref/security-scan-worker
+    digest: sha256:0000000000000000000000000000000000000000000000000000000000000000
+  projector:
+    repository: ghcr.io/deepref/security-scan-projector
+    digest: sha256:0000000000000000000000000000000000000000000000000000000000000000
+  web:
+    repository: ghcr.io/deepref/security-scan-web
+    digest: sha256:0000000000000000000000000000000000000000000000000000000000000000
+imageVerification:
+  repositoryPatterns:
+    - "ghcr.io/deepref/security-scan-*"
+  keyless:
+    subject: "https://github.com/luzes-dev/deepref/.github/workflows/release.yml@refs/heads/development"

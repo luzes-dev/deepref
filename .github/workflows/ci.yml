@@ -28,6 +28,8 @@ jobs:
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
           persist-credentials: false
+      - name: Install documentation tooling
+        run: sudo apt-get update && sudo apt-get install --yes ripgrep
       - name: Validate operations, acceptance, and links
         run: bash scripts/check-docs.sh
 
@@ -49,7 +51,7 @@ jobs:
           rustup toolchain install 1.95.0 --profile minimal --component rustfmt,clippy
           rustup override set 1.95.0
       - name: Restore Cargo cache
-        uses: actions/cache@5a3ec84eff668545956fd18022155c47e93e2684 # v4.2.3
+        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
             ~/.cargo/registry
@@ -95,11 +97,11 @@ jobs:
         with:
           persist-credentials: false
       - name: Set up pnpm
-        uses: pnpm/action-setup@f2b2b233b538f500472c7274c7012f57857d8ce0 # v4.1.0
+        uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v4.1.0
         with:
           version: 11.3.0
       - name: Set up Node.js
-        uses: actions/setup-node@1e60f620b9541dca151540678f0b70b4003d8bda # v4.0.3
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 24.4.1
           cache: pnpm
@@ -123,11 +125,11 @@ jobs:
           rustup toolchain install 1.95.0 --profile minimal
           rustup override set 1.95.0
       - name: Set up pnpm
-        uses: pnpm/action-setup@f2b2b233b538f500472c7274c7012f57857d8ce0 # v4.1.0
+        uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v4.1.0
         with:
           version: 11.3.0
       - name: Set up Node.js
-        uses: actions/setup-node@1e60f620b9541dca151540678f0b70b4003d8bda # v4.0.3
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 24.4.1
           cache: pnpm
@@ -150,17 +152,21 @@ jobs:
           rustup toolchain install 1.95.0 --profile minimal
           rustup override set 1.95.0
       - name: Set up pnpm
-        uses: pnpm/action-setup@f2b2b233b538f500472c7274c7012f57857d8ce0 # v4.1.0
+        uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v4.1.0
         with:
           version: 11.3.0
       - name: Set up Node.js
-        uses: actions/setup-node@1e60f620b9541dca151540678f0b70b4003d8bda # v4.0.3
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 24.4.1
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - name: Install pinned task runner
         run: cargo install --locked just --version 1.42.4
+      - name: Install pinned NATS CLI
+        run: |
+          go install github.com/nats-io/natscli/nats@v0.4.0
+          sudo install -m 0755 "$(go env GOPATH)/bin/nats" /usr/local/bin/nats
       - name: Start disposable dependencies
         run: docker compose -f infra/local/compose.yaml up -d --wait
       - name: Run integration tests
@@ -182,9 +188,27 @@ jobs:
         uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
           persist-credentials: false
+      - name: Set up QEMU for multi-architecture push validation
+        if: github.event_name == 'push'
+        uses: docker/setup-qemu-action@96fe6ef7f33517b61c61be40b68a1882f3264fb8 # v4.2.0
+        with:
+          platforms: arm64
       - name: Set up Buildx
-        uses: docker/setup-buildx-action@e468171a9de216ec08956ac3ada2f0791b6bd435 # v3.11.1
+        uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.3.0
       - name: Validate and build every release target
+        shell: bash
         run: |
           docker buildx bake --print
-          docker buildx bake --set '*.output=type=cacheonly' api worker web
+          bake_args=(
+            --set '*.output=type=cacheonly'
+            --set '*.cache-from=type=gha,scope=deepref-containers'
+            --set '*.cache-to=type=gha,scope=deepref-containers,mode=max'
+          )
+
+          # Pull requests only need to prove that every image builds on the native
+          # CI architecture. Pushes keep validating the full release platform set.
+          if [[ "${GITHUB_EVENT_NAME}" == "pull_request" ]]; then
+            bake_args+=(--set '*.platform=linux/amd64')
+          fi
+
+          docker buildx bake "${bake_args[@]}" api worker web
