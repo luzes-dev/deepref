@@ -145,6 +145,10 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - name: Install pinned task runner
         run: cargo install --locked just --version 1.42.4
+      - name: Install pinned NATS CLI
+        run: |
+          go install github.com/nats-io/natscli/nats@v0.4.0
+          sudo install -m 0755 "$(go env GOPATH)/bin/nats" /usr/local/bin/nats
       - name: Start disposable dependencies
         run: docker compose -f infra/local/compose.yaml up -d --wait
       - name: Run integration tests
