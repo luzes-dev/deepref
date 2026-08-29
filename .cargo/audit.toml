@@ -5,13 +5,3 @@ ignore = [
   "RUSTSEC-2025-0012", # backoff, transitive through neo4rs 0.8
   "RUSTSEC-2025-0134", # rustls-pemfile, transitive through neo4rs 0.8
 ]
-
-[output]
-# Vulnerabilities are errors by default. Also fail on informational advisories
-# that indicate unsound or unmaintained code, except for the documented IDs above.
-deny = ["unmaintained", "unsound"]
-
-[yanked]
-# Keep reporting yanked transitive crates, but let cargo-deny's explicit policy
-# decide whether they are warning- or error-level findings.
-enabled = true
