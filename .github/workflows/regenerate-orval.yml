@@ -40,3 +40,5 @@ jobs:
           git add docs/openapi.json apps/web/src/lib/api/generated .github/workflows/regenerate-orval.yml
           git commit -m "chore: regenerate API client with Orval 8.26"
           git push origin "HEAD:${GITHUB_REF_NAME}"
+
+# helper activated from development
