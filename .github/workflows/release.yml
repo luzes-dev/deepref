@@ -255,10 +255,11 @@ jobs:
                 artifactType: (.artifactType // null)
               }] | sort_by(.digest, .mediaType, .artifactType)'
           }
-          export CHART_REFERRERS_JSON="$(referrer_set "$CHART_REPOSITORY@$CHART_DIGEST")"
-          export API_REFERRERS_JSON="$(referrer_set "$API_REPOSITORY@$API_DIGEST")"
-          export WORKER_REFERRERS_JSON="$(referrer_set "$WORKER_REPOSITORY@$WORKER_DIGEST")"
-          export WEB_REFERRERS_JSON="$(referrer_set "$WEB_REPOSITORY@$WEB_DIGEST")"
+          CHART_REFERRERS_JSON="$(referrer_set "$CHART_REPOSITORY@$CHART_DIGEST")"
+          API_REFERRERS_JSON="$(referrer_set "$API_REPOSITORY@$API_DIGEST")"
+          WORKER_REFERRERS_JSON="$(referrer_set "$WORKER_REPOSITORY@$WORKER_DIGEST")"
+          WEB_REFERRERS_JSON="$(referrer_set "$WEB_REPOSITORY@$WEB_DIGEST")"
+          export CHART_REFERRERS_JSON API_REFERRERS_JSON WORKER_REFERRERS_JSON WEB_REFERRERS_JSON
           scripts/ci/create-release-manifest.sh release-manifest.json
           jq '. + {environment:"development"}' release-manifest.json > development-release-lock.yaml
           scripts/ci/validate-release-lock.sh --environment development --manifest release-manifest.json development-release-lock.yaml
