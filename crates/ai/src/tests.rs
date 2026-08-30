@@ -157,14 +157,22 @@ impl IdProvider for Ids {
 #[derive(Default)]
 struct MemoryRuns(Mutex<Vec<AiRunRecord>>);
 impl AiRunStore for MemoryRuns {
-    fn find_reusable<'a>(&'a self, hash: &'a str) -> AiFuture<'a, Option<AiRunRecord>> {
+    fn find_reusable<'a>(
+        &'a self,
+        project_id: Option<ProjectId>,
+        hash: &'a str,
+    ) -> AiFuture<'a, Option<AiRunRecord>> {
         Box::pin(async move {
             Ok(self
                 .0
                 .lock()
                 .expect("runs")
                 .iter()
-                .filter(|run| run.reuse_hash == hash && run.status == AiRunStatus::Completed)
+                .filter(|run| {
+                    run.project_id == project_id
+                        && run.reuse_hash == hash
+                        && run.status == AiRunStatus::Completed
+                })
                 .max_by_key(|run| (run.completed_at, run.created_at, run.id))
                 .cloned())
         })
@@ -465,6 +473,64 @@ async fn reused_consequential_run_returns_identical_resolved_proposal_without_du
         create_calls
     );
     assert_eq!(*gateway.calls.lock().expect("calls"), 1);
+}
+
+#[tokio::test]
+async fn automation_context_scopes_reuse_and_suppresses_intermediate_proposals() {
+    let runs = MemoryRuns::default();
+    let proposals = MemoryProposals::default();
+    let ids = Ids(Mutex::new(25));
+    let calls = Arc::new(Mutex::new(0));
+    let gateway = FakeGateway {
+        output: r#"{"label":"rct"}"#.to_owned(),
+        calls: Arc::clone(&calls),
+    };
+    let router = Router(route("automation-context"));
+    let context = AiExecutionContext {
+        parent_automation_run_id: Some(Uuid::from_u128(26)),
+        node_fingerprint: Some("a".repeat(64)),
+        proposal_persistence: ProposalPersistence::Skip,
+    };
+    let first_task = Task {
+        project_id: ProjectId::new(Uuid::from_u128(27)),
+        authority: AuthorityTier::ScientificConclusion,
+        prompt: "return JSON".to_owned(),
+    };
+    let first = runner(&gateway, &router, &runs, &proposals, &ids)
+        .run_with_context(&first_task, "input".to_owned(), context.clone())
+        .await
+        .expect("first node run");
+    assert_eq!(
+        first.run.parent_automation_run_id,
+        context.parent_automation_run_id
+    );
+    assert!(first.proposal.is_none());
+    assert!(proposals.proposals.lock().expect("proposals").is_empty());
+
+    let reused = runner(&gateway, &router, &runs, &proposals, &ids)
+        .run_with_context(&first_task, "input".to_owned(), context.clone())
+        .await
+        .expect("same project and node can reuse");
+    assert_eq!(reused.run.id, first.run.id);
+
+    let other_project = Task {
+        project_id: ProjectId::new(Uuid::from_u128(28)),
+        ..first_task.clone()
+    };
+    runner(&gateway, &router, &runs, &proposals, &ids)
+        .run_with_context(&other_project, "input".to_owned(), context.clone())
+        .await
+        .expect("another project must run independently");
+
+    let changed_node = AiExecutionContext {
+        node_fingerprint: Some("b".repeat(64)),
+        ..context
+    };
+    runner(&gateway, &router, &runs, &proposals, &ids)
+        .run_with_context(&first_task, "input".to_owned(), changed_node)
+        .await
+        .expect("changed node fingerprint invalidates reuse");
+    assert_eq!(*calls.lock().expect("calls"), 3);
 }
 
 #[tokio::test]

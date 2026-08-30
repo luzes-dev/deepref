@@ -293,7 +293,7 @@ async fn postgres_ai_adapters_persist_routes_runs_embeddings_hybrid_results_and_
     let run = run(project_id, route, run_id, &reuse_hash);
     store.save_run(run.clone()).await.expect("run persists");
     let reused = store
-        .find_reusable(&reuse_hash)
+        .find_reusable(Some(project_id), &reuse_hash)
         .await
         .expect("run reuse query succeeds")
         .expect("completed run is reusable");
@@ -353,7 +353,7 @@ async fn postgres_ai_retry_and_proposal_recovery_keep_every_attempt_audited() {
         .expect("running attempt persists");
     assert!(
         store
-            .find_reusable(&reuse_hash)
+            .find_reusable(Some(project_id), &reuse_hash)
             .await
             .expect("running lookup")
             .is_none()
@@ -372,7 +372,7 @@ async fn postgres_ai_retry_and_proposal_recovery_keep_every_attempt_audited() {
         .expect("failed attempt persists");
     assert!(
         store
-            .find_reusable(&reuse_hash)
+            .find_reusable(Some(project_id), &reuse_hash)
             .await
             .expect("failed lookup")
             .is_none()
@@ -384,7 +384,7 @@ async fn postgres_ai_retry_and_proposal_recovery_keep_every_attempt_audited() {
         .await
         .expect("retry persists");
     let reusable = store
-        .find_reusable(&reuse_hash)
+        .find_reusable(Some(project_id), &reuse_hash)
         .await
         .expect("completed lookup")
         .expect("completed retry is reusable");
