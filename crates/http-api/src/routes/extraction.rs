@@ -190,27 +190,13 @@ pub(crate) async fn generate_data_extraction_suggestion(
         grounded_evidence,
     };
     let task = DataExtractionTask::new(&task_input).map_err(map_ai_error)?;
-    let store = deepref_postgres::PostgresAiStore::new(&state.pool);
-    let runner = deepref_ai::AiTaskRunner::new(
-        state.ai_gateway.as_ref(),
-        &store,
-        &store,
-        &store,
-        &store,
-        &deepref_ai::SystemClock,
-        &deepref_ai::UuidProvider,
-    );
-    let result = runner.run(&task, task_input).await.map_err(map_ai_error)?;
-    let proposal = result
-        .proposal
-        .ok_or_else(|| ApiError::Internal(anyhow::anyhow!("AI task did not produce a proposal")))?;
-    let proposal = deepref_postgres::get_ai_proposal(
-        &state.pool,
-        proposal.draft.project_id.as_uuid(),
-        proposal.id,
+    let proposal = super::ai::run_task(
+        &state,
+        deepref_review::ReviewDefinitionKey::DataExtraction,
+        task,
+        task_input,
     )
-    .await
-    .map_err(map_ai_proposal_error)?;
+    .await?;
     Ok(Json(proposal_dto(proposal)?))
 }
 

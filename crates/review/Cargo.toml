@@ -1,0 +1,20 @@
+[package]
+name = "deepref-review"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+chrono.workspace = true
+deepref-ai.workspace = true
+deepref-application.workspace = true
+deepref-domain.workspace = true
+serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true
+sha2.workspace = true
+thiserror.workspace = true
+uuid.workspace = true
+
+[dev-dependencies]
+schemars.workspace = true
+tokio.workspace = true

@@ -1,0 +1,8 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "deepref.review.data-extraction.v1",
+  "title": "DataExtraction",
+  "type": "object",
+  "x-deepref-rust-type": "deepref_ai::DataExtraction",
+  "required": ["study_id", "fields"]
+}

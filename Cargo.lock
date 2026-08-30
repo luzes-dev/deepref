@@ -776,6 +776,7 @@ dependencies = [
  "deepref-graph",
  "deepref-postgres",
  "deepref-providers",
+ "deepref-review",
  "deepref-telemetry",
  "futures",
  "garde",
@@ -842,6 +843,23 @@ dependencies = [
  "serde_json",
  "thiserror 2.0.20",
  "unicode-normalization",
+]
+
+[[package]]
+name = "deepref-review"
+version = "0.1.0"
+dependencies = [
+ "chrono",
+ "deepref-ai",
+ "deepref-application",
+ "deepref-domain",
+ "schemars",
+ "serde",
+ "serde_json",
+ "sha2 0.11.0",
+ "thiserror 2.0.20",
+ "tokio",
+ "uuid",
 ]
 
 [[package]]
