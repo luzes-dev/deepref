@@ -1666,7 +1666,7 @@ async fn decision_is_project_scoped_and_reviewed_variant_must_match_operation() 
 }
 
 #[tokio::test]
-async fn study_grouping_provider_failure_is_http_503_without_a_proposal() {
+async fn study_grouping_schedules_a_review_run_without_calling_the_provider_inline() {
     let _guard = test_lock().lock().await;
     let Some(pool) = database().await else { return };
     let fixture = fixture(&pool).await;
@@ -1691,7 +1691,8 @@ async fn study_grouping_provider_failure_is_http_503_without_a_proposal() {
     )
     .await
     .expect("grouping request should be handled");
-    assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+    assert_eq!(response.status(), StatusCode::ACCEPTED);
+    assert!(response.headers().contains_key("location"));
 
     let proposals: i64 =
         sqlx::query_scalar("SELECT count(*) FROM ai_proposals WHERE project_id=$1")

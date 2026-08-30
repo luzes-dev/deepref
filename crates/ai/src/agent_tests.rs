@@ -39,7 +39,7 @@ impl AgentToolExecutor for RecordingExecutor {
         Box::pin(async move {
             proposals.lock().expect("proposal lock").push(operation);
             Ok(AgentProposalReceipt {
-                proposal_id: Uuid::from_u128(0xfeed),
+                review_run_id: Uuid::from_u128(0xfeed),
             })
         })
     }
@@ -242,7 +242,7 @@ fn every_proposal_tool_can_only_create_a_typed_proposal() {
         match dispatch {
             AgentDispatch::Proposal(future) => {
                 assert_eq!(
-                    block_on(future).expect("proposal receipt").proposal_id,
+                    block_on(future).expect("proposal receipt").review_run_id,
                     Uuid::from_u128(0xfeed)
                 );
             }

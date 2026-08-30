@@ -11,6 +11,8 @@ mod jobs;
 mod legacy_import;
 mod prisma;
 mod protocol;
+mod review_preparation;
+mod review_runs;
 mod screening;
 mod study;
 
@@ -83,6 +85,18 @@ pub use prisma::{PrismaProjectionError, get_prisma_projection};
 pub use protocol::{
     ProtocolActor, ProtocolDocument, ProtocolError, get_protocol_editor, get_published_protocol,
     publish_protocol, save_protocol_draft,
+};
+pub use review_preparation::{
+    ReviewPreparationError, schedule_appraisal_prefill_review, schedule_data_extraction_review,
+    schedule_duplicate_detection_review, schedule_screening_review,
+    schedule_study_classification_review, schedule_study_grouping_review,
+};
+pub use review_runs::{
+    AcceptedReviewAttempt, LeasedReviewRun, PostgresReviewError, PreparedReviewRun,
+    ReviewAttemptCompletion, ReviewAttemptStart, ReviewFinalization, begin_review_attempt,
+    bind_review_step_acceptance, block_review_run, complete_review_attempt, fail_review_attempt,
+    fail_review_run, finalize_review_proposal, get_review_run, load_leased_review_run,
+    mark_review_run_running, schedule_prepared_review_run,
 };
 pub use screening::{
     ScreeningError, ScreeningHistory, ScreeningHistoryItem, ScreeningProgress, ScreeningQueue,

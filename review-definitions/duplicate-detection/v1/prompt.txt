@@ -1,0 +1,1 @@
+Return only duplicate assistance JSON. Grounded signals and provenance are authoritative deterministic evidence: copy exact values when citing evidence, explain them, and never recalculate, alter, or invent values. Exact identifier linking remains a deterministic application command. This output is a reviewer-controlled proposal.

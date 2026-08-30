@@ -1,5 +1,6 @@
 use std::{future::Future, sync::Arc, time::Duration};
 
+use deepref_ai::{AiGateway, RoutedGateway};
 use deepref_application::jobs::ClaimedJob;
 use deepref_documents::DocumentStore;
 use deepref_postgres::{claim_job, complete_job, fail_job, renew_job};
@@ -37,6 +38,7 @@ pub async fn run_with_shutdown(
     let owner = format!("deepref-worker-{}", uuid::Uuid::new_v4());
     processor::validate_pdf_parse_concurrency()?;
     let document_store = Arc::new(DocumentStore::from_env()?);
+    let ai_gateway: Arc<dyn AiGateway> = Arc::new(RoutedGateway::default());
     let semaphore = Arc::new(Semaphore::new(config.concurrency));
     let mut active = JoinSet::new();
     let (reconciler_shutdown, reconciler_signal) = watch::channel(false);
@@ -83,10 +85,19 @@ pub async fn run_with_shutdown(
                         let pool = pool.clone();
                         let owner = owner.clone();
                         let document_store = Arc::clone(&document_store);
+                        let ai_gateway = Arc::clone(&ai_gateway);
                         let lease = config.claim_lease;
                         active.spawn(async move {
                             let _permit = permit;
-                            process_claimed_job(pool, owner, job, lease, document_store).await
+                            process_claimed_job(
+                                pool,
+                                owner,
+                                job,
+                                lease,
+                                document_store,
+                                ai_gateway,
+                            )
+                            .await
                         });
                     }
                     Ok(None) => {}
@@ -132,19 +143,21 @@ async fn process_claimed_job(
     job: ClaimedJob,
     lease: Duration,
     document_store: Arc<DocumentStore>,
+    ai_gateway: Arc<dyn AiGateway>,
 ) -> anyhow::Result<()> {
     let result = run_with_lease_renewal(
         pool.clone(),
         owner.clone(),
         job.id,
         lease,
-        processor::handle_job_with_documents_owned(
+        processor::handle_job_with_documents_owned_and_ai(
             pool.clone(),
             &job,
             &owner,
             lease,
             Some(document_store),
             None,
+            ai_gateway,
         ),
     )
     .await;

@@ -11,7 +11,7 @@ use super::*;
     ),
     request_body = GenerateScreeningRequest,
     responses(
-        (status = 200, description = "AI screening proposal", body = AiProposalDto),
+        (status = 202, description = "Compiled screening review scheduled", body = ReviewRunDto),
         (status = 400, description = "Invalid AI request", body = ErrorResponse),
         (status = 404, description = "Project, report, or protocol not found", body = ErrorResponse),
         (status = 409, description = "A current proposal or revision conflicts", body = ErrorResponse),
@@ -22,74 +22,21 @@ use super::*;
 pub(crate) async fn generate_screening_suggestion(
     State(state): State<AppState>,
     Path((project_id, report_id)): Path<(Uuid, Uuid)>,
+    headers: HeaderMap,
     Json(input): Json<GenerateScreeningRequest>,
-) -> Result<Json<AiProposalDto>, ApiError> {
-    let proposal = AiReviewService::new(&state)
-        .screening(ScreeningReviewCommand {
-            project_id,
-            report_id,
-            input,
-        })
-        .await?;
-    Ok(Json(proposal_dto(proposal)?))
-}
-
-pub(crate) async fn create_screening_proposal(
-    state: &AppState,
-    project_id: Uuid,
-    report_id: Uuid,
-    input: GenerateScreeningRequest,
-) -> Result<AiProposalRecord, ApiError> {
-    let stage = input.stage.ai();
-    let protocol = deepref_postgres::get_published_protocol(&state.pool, project_id)
-        .await
-        .map_err(map_protocol_error)?;
-    if input
-        .protocol_version_id
-        .is_some_and(|id| id != protocol.id)
-    {
-        return Err(ApiError::Conflict {
-            code: "ai_protocol_changed".to_owned(),
-            message: "the requested protocol is not the current published version".to_owned(),
-            details: json!({"protocolVersionId": protocol.id}),
-        });
-    }
-    let target = deepref_postgres::get_ai_screening_target(&state.pool, project_id, report_id)
-        .await
-        .map_err(map_ai_proposal_error)?;
-    let expected_revision = input.expected_revision.unwrap_or(target.expected_revision);
-    let allowed_reasons =
-        deepref_postgres::list_ai_exclusion_reasons(&state.pool, project_id, input.stage.domain())
-            .await
-            .map_err(map_ai_proposal_error)?;
-    let allowed_evidence = metadata_evidence(report_id, &target);
-    let criteria = protocol.criteria.clone();
-    let task = ScreeningTask::new(ScreeningTaskConfig {
-        project_id: project_id.into(),
-        report_id: report_id.into(),
-        stage,
-        protocol_version_id: protocol.id.into(),
-        expected_revision,
-        criteria: criteria.clone(),
-        allowed_evidence,
-        allowed_exclusion_reasons: allowed_reasons.into_iter().collect(),
-    });
-    let prompts = criteria.iter().map(criterion_prompt).collect::<Vec<_>>();
-    let ai_input = ScreeningInput {
-        project_id: project_id.into(),
-        report_id: report_id.into(),
-        stage,
-        protocol_version_id: protocol.id.into(),
-        expected_revision,
-        title: target.title.clone(),
-        abstract_text: target.abstract_text.clone(),
-        document_hash: None,
-        retrieval_query: (stage == ScreeningStage::FullText)
-            .then(|| screening_retrieval_query(&target, &criteria)),
-        criteria: prompts,
-    };
-    let proposal = run_task(state, &task, ai_input).await?;
-    Ok(proposal)
+) -> Result<AcceptedReviewRun, ApiError> {
+    let snapshot = deepref_postgres::schedule_screening_review(
+        &state.pool,
+        project_id,
+        report_id,
+        input.stage.ai(),
+        input.protocol_version_id,
+        input.expected_revision,
+        extract_actor(&headers)?,
+    )
+    .await
+    .map_err(map_review_preparation_error)?;
+    accepted_review_run(snapshot)
 }
 
 #[utoipa::path(
@@ -99,7 +46,7 @@ pub(crate) async fn create_screening_proposal(
     tag = "ai",
     params(("project_id" = Uuid, Path), ("report_id" = Uuid, Path)),
     responses(
-        (status = 200, body = AiProposalDto),
+        (status = 202, body = ReviewRunDto),
         (status = 400, body = ErrorResponse),
         (status = 404, body = ErrorResponse),
         (status = 409, body = ErrorResponse),
@@ -110,53 +57,17 @@ pub(crate) async fn create_screening_proposal(
 pub(crate) async fn generate_study_grouping_suggestion(
     State(state): State<AppState>,
     Path((project_id, report_id)): Path<(Uuid, Uuid)>,
-) -> Result<Json<AiProposalDto>, ApiError> {
-    let proposal = AiReviewService::new(&state)
-        .study_grouping(StudyGroupingReviewCommand {
-            project_id,
-            report_id,
-        })
-        .await?;
-    Ok(Json(proposal_dto(proposal)?))
-}
-
-pub(crate) async fn create_study_grouping_proposal(
-    state: &AppState,
-    project_id: Uuid,
-    report_id: Uuid,
-) -> Result<AiProposalRecord, ApiError> {
-    let target = deepref_postgres::get_ai_study_grouping_target(&state.pool, project_id, report_id)
-        .await
-        .map_err(map_ai_proposal_error)?;
-    let grounded_evidence = grouping_evidence(&target);
-    let task_input = StudyGroupingInput {
-        project_id: project_id.into(),
-        report_id: report_id.into(),
-        report_title: target.report.title.clone(),
-        report_abstract: target.report.abstract_text.clone(),
-        publication_year: target.report.publication_year,
-        first_author: target.report.first_author.clone(),
-        current_study_id: target.current_study_id.map(Into::into),
-        current_study_revision: target.current_study_revision,
-        candidates: target
-            .studies
-            .iter()
-            .map(|study| StudyGroupingCandidate {
-                study_id: study.study_id,
-                title: study.title.clone(),
-                revision: study.revision,
-                report_ids: study
-                    .reports
-                    .iter()
-                    .map(|report| report.report_id)
-                    .collect(),
-            })
-            .collect(),
-        grounded_evidence,
-    };
-    let task = StudyGroupingTask::new(&task_input).map_err(map_ai_error)?;
-    let proposal = run_task(state, &task, task_input).await?;
-    Ok(proposal)
+    headers: HeaderMap,
+) -> Result<AcceptedReviewRun, ApiError> {
+    let snapshot = deepref_postgres::schedule_study_grouping_review(
+        &state.pool,
+        project_id,
+        report_id,
+        extract_actor(&headers)?,
+    )
+    .await
+    .map_err(map_review_preparation_error)?;
+    accepted_review_run(snapshot)
 }
 
 #[utoipa::path(
@@ -167,7 +78,7 @@ pub(crate) async fn create_study_grouping_proposal(
     params(("project_id" = Uuid, Path), ("report_id" = Uuid, Path)),
     request_body = GenerateAppraisalPrefillRequest,
     responses(
-        (status = 200, body = AiProposalDto),
+        (status = 202, body = ReviewRunDto),
         (status = 400, body = ErrorResponse),
         (status = 404, body = ErrorResponse),
         (status = 409, body = ErrorResponse),
@@ -178,105 +89,20 @@ pub(crate) async fn create_study_grouping_proposal(
 pub(crate) async fn generate_appraisal_prefill_suggestion(
     State(state): State<AppState>,
     Path((project_id, report_id)): Path<(Uuid, Uuid)>,
+    headers: HeaderMap,
     Json(input): Json<GenerateAppraisalPrefillRequest>,
-) -> Result<Json<AiProposalDto>, ApiError> {
-    let proposal = AiReviewService::new(&state)
-        .appraisal_prefill(AppraisalPrefillReviewCommand {
-            project_id,
-            report_id,
-            input,
-        })
-        .await?;
-    Ok(Json(proposal_dto(proposal)?))
-}
-
-pub(crate) async fn create_appraisal_prefill_proposal(
-    state: &AppState,
-    project_id: Uuid,
-    report_id: Uuid,
-    input: GenerateAppraisalPrefillRequest,
-) -> Result<AiProposalRecord, ApiError> {
-    let definition = deepref_application::get_appraisal_definition(
+) -> Result<AcceptedReviewRun, ApiError> {
+    let snapshot = deepref_postgres::schedule_appraisal_prefill_review(
+        &state.pool,
+        project_id,
+        report_id,
         &input.definition_id,
         input.definition_version,
+        extract_actor(&headers)?,
     )
-    .map_err(|error| ApiError::BadRequest(error.to_string()))?;
-    let target = deepref_postgres::get_ai_screening_target(&state.pool, project_id, report_id)
-        .await
-        .map_err(map_ai_proposal_error)?;
-    let query = definition
-        .domains
-        .iter()
-        .flat_map(|domain| {
-            domain.questions.iter().map(|question| {
-                format!(
-                    "{} {}",
-                    question.label,
-                    question.help.as_deref().unwrap_or("")
-                )
-            })
-        })
-        .collect::<Vec<_>>()
-        .join(" ");
-    let blocks =
-        deepref_postgres::list_ai_grounding_blocks(&state.pool, project_id, report_id, &query)
-            .await
-            .map_err(map_ai_proposal_error)?;
-    let questions = definition
-        .domains
-        .iter()
-        .flat_map(|domain| domain.questions.iter())
-        .map(|question| AppraisalPrefillQuestion {
-            id: question.id.clone(),
-            answer_schema: appraisal_answer_schema(&question.answer_schema),
-            required: question.required,
-            requires_evidence: question.requires_evidence,
-        })
-        .collect::<Vec<_>>();
-    let domains = definition
-        .domains
-        .iter()
-        .map(|domain| AppraisalPrefillDomain {
-            id: domain.id.clone(),
-            allowed_judgments: domain
-                .judgment
-                .options
-                .iter()
-                .map(|option| option.value.clone())
-                .collect(),
-            required: domain.judgment.required,
-        })
-        .collect::<Vec<_>>();
-    let grounded_evidence = blocks
-        .iter()
-        .map(|block| AppraisalPrefillEvidence {
-            document_id: block.document_id,
-            document_block_id: block.document_block_id,
-            page: block.page,
-            parser_version: block.parser_version.clone(),
-            content_hash: block.content_hash.clone(),
-        })
-        .collect();
-    let task_input = AppraisalPrefillInput {
-        project_id: project_id.into(),
-        report_id: report_id.into(),
-        definition_id: definition.id.as_str().to_owned(),
-        definition_version: definition.version.get(),
-        questions,
-        domains,
-        overall_allowed_judgments: definition
-            .overall_judgment
-            .options
-            .iter()
-            .map(|option| option.value.clone())
-            .collect(),
-        report_title: target.title,
-        report_abstract: target.abstract_text,
-        grounded_evidence,
-    };
-    let task = deepref_ai::AppraisalPrefillTask::new(&task_input).map_err(map_ai_error)?;
-    let proposal = run_task(state, &task, task_input).await?;
-    Ok(proposal)
+    .await
+    .map_err(map_review_preparation_error)?;
+    accepted_review_run(snapshot)
 }
 
 #[utoipa::path(
@@ -290,7 +116,7 @@ pub(crate) async fn create_appraisal_prefill_proposal(
     ),
     request_body = GenerateDuplicateRequest,
     responses(
-        (status = 200, description = "AI duplicate assistance proposal", body = AiProposalDto),
+        (status = 202, description = "Compiled duplicate review scheduled", body = ReviewRunDto),
         (status = 400, description = "Invalid AI request", body = ErrorResponse),
         (status = 404, description = "Record or candidate report not found", body = ErrorResponse),
         (status = 409, description = "A proposal conflicts", body = ErrorResponse),
@@ -301,58 +127,163 @@ pub(crate) async fn create_appraisal_prefill_proposal(
 pub(crate) async fn generate_duplicate_suggestion(
     State(state): State<AppState>,
     Path((project_id, record_id)): Path<(Uuid, Uuid)>,
+    headers: HeaderMap,
     Json(input): Json<GenerateDuplicateRequest>,
-) -> Result<Json<AiProposalDto>, ApiError> {
-    let proposal = AiReviewService::new(&state)
-        .duplicate(DuplicateReviewCommand {
-            project_id,
-            record_id,
-            candidate_report_id: input.candidate_report_id,
-        })
-        .await?;
-    Ok(Json(proposal_dto(proposal)?))
-}
-
-pub(crate) async fn create_duplicate_proposal(
-    state: &AppState,
-    project_id: Uuid,
-    record_id: Uuid,
-    candidate_report_id: Uuid,
-) -> Result<AiProposalRecord, ApiError> {
-    let target = deepref_postgres::get_ai_dedupe_target(
+) -> Result<AcceptedReviewRun, ApiError> {
+    let snapshot = deepref_postgres::schedule_duplicate_detection_review(
         &state.pool,
         project_id,
         record_id,
-        candidate_report_id,
+        input.candidate_report_id,
+        extract_actor(&headers)?,
     )
     .await
-    .map_err(map_ai_proposal_error)?;
-    let source_id = record_id;
-    let candidate_id = candidate_report_id;
-    let provenance = dedupe_provenance(source_id, candidate_id, &target);
-    let signals = dedupe_signals(candidate_id, &target);
-    let task = DedupeTask::new(
-        project_id.into(),
-        record_id.into(),
-        candidate_id.into(),
-        provenance.clone(),
-        signals.clone(),
+    .map_err(map_review_preparation_error)?;
+    accepted_review_run(snapshot)
+}
+
+#[utoipa::path(
+    get,
+    path = "/projects/{project_id}/review-runs/{run_id}",
+    operation_id = "getReviewRun",
+    tag = "ai",
+    params(
+        ("project_id" = Uuid, Path, description = "Project identifier"),
+        ("run_id" = Uuid, Path, description = "Review run identifier")
+    ),
+    responses(
+        (status = 200, description = "Compiled review run status and result linkage", body = ReviewRunDto),
+        (status = 404, description = "Review run not found", body = ErrorResponse),
+        (status = 500, description = "Internal server error", body = ErrorResponse)
+    )
+)]
+pub(crate) async fn get_review_run(
+    State(state): State<AppState>,
+    Path((project_id, run_id)): Path<(Uuid, Uuid)>,
+) -> Result<Json<ReviewRunDto>, ApiError> {
+    let run_id = deepref_review::ReviewRunId::new(run_id)
+        .map_err(|error| ApiError::BadRequest(error.to_string()))?;
+    let snapshot = deepref_postgres::get_review_run(&state.pool, project_id.into(), run_id)
+        .await
+        .map_err(map_postgres_review_error)?;
+    Ok(Json(review_run_dto(snapshot)?))
+}
+
+pub(crate) fn accepted_review_run(
+    snapshot: deepref_review::ReviewRunSnapshot,
+) -> Result<AcceptedReviewRun, ApiError> {
+    let location = format!(
+        "/projects/{}/review-runs/{}",
+        snapshot.project_id.as_uuid(),
+        snapshot.id.as_uuid()
     );
-    let ai_input = DedupeInput {
-        project_id: project_id.into(),
-        source_record_id: record_id.into(),
-        candidate_report_id: candidate_id.into(),
-        source_title: target.source_title.clone(),
-        candidate_title: target.candidate_title.clone(),
-        source_year: target.source_year,
-        candidate_year: target.candidate_year,
-        source_author: target.source_author.clone(),
-        candidate_author: target.candidate_author.clone(),
-        source_title_hash: target.source_title_hash.clone(),
-        candidate_title_hash: target.candidate_title_hash.clone(),
-        grounded_signals: signals,
-        grounded_provenance: provenance,
+    let mut headers = HeaderMap::new();
+    headers.insert(
+        axum::http::header::LOCATION,
+        location.parse().map_err(|error| {
+            ApiError::Internal(anyhow::anyhow!("invalid run location: {error}"))
+        })?,
+    );
+    Ok((
+        axum::http::StatusCode::ACCEPTED,
+        headers,
+        Json(review_run_dto(snapshot)?),
+    ))
+}
+
+pub(super) fn review_run_dto(
+    snapshot: deepref_review::ReviewRunSnapshot,
+) -> Result<ReviewRunDto, ApiError> {
+    let state = match snapshot.state {
+        deepref_review::ReviewRunState::Queued => ReviewRunStateDto::Queued,
+        deepref_review::ReviewRunState::Running => ReviewRunStateDto::Running,
+        deepref_review::ReviewRunState::Blocked { code, message } => ReviewRunStateDto::Blocked {
+            code: code.as_str().to_owned(),
+            message,
+        },
+        deepref_review::ReviewRunState::Failed { code, message } => {
+            ReviewRunStateDto::Failed { code, message }
+        }
+        deepref_review::ReviewRunState::Completed { proposal_id } => {
+            ReviewRunStateDto::Completed { proposal_id }
+        }
     };
-    let proposal = run_task(state, &task, ai_input).await?;
-    Ok(proposal)
+    Ok(ReviewRunDto {
+        id: snapshot.id.as_uuid(),
+        project_id: snapshot.project_id.as_uuid(),
+        definition: snapshot.definition.as_str().to_owned(),
+        subject: serde_json::to_value(snapshot.subject)
+            .map_err(|error| ApiError::Internal(error.into()))?,
+        origin: serde_json::to_value(snapshot.origin)
+            .map_err(|error| ApiError::Internal(error.into()))?,
+        state,
+        created_at: snapshot.created_at,
+        started_at: snapshot.started_at,
+        finished_at: snapshot.finished_at,
+    })
+}
+
+pub(crate) fn map_review_preparation_error(
+    error: deepref_postgres::ReviewPreparationError,
+) -> ApiError {
+    match error {
+        deepref_postgres::ReviewPreparationError::Review(error) => map_postgres_review_error(error),
+        deepref_postgres::ReviewPreparationError::Protocol(error) => map_protocol_error(error),
+        deepref_postgres::ReviewPreparationError::AiProposal(error) => map_ai_proposal_error(error),
+        deepref_postgres::ReviewPreparationError::Extraction(error) => match error {
+            deepref_postgres::ExtractionError::Database(error) => ApiError::Database(error),
+            deepref_postgres::ExtractionError::DefinitionNotFound
+            | deepref_postgres::ExtractionError::StudyNotFound => {
+                ApiError::NotFound(error.to_string())
+            }
+            _ => ApiError::BadRequest(error.to_string()),
+        },
+        deepref_postgres::ReviewPreparationError::Study(error) => {
+            super::super::study::map_study_error(error)
+        }
+        deepref_postgres::ReviewPreparationError::InvalidInput(message)
+            if message.contains("changed") =>
+        {
+            ApiError::Conflict {
+                code: "review_subject_changed".to_owned(),
+                message,
+                details: Value::Null,
+            }
+        }
+        deepref_postgres::ReviewPreparationError::InvalidInput(message) => {
+            ApiError::BadRequest(message)
+        }
+    }
+}
+
+fn map_postgres_review_error(error: deepref_postgres::PostgresReviewError) -> ApiError {
+    match error {
+        deepref_postgres::PostgresReviewError::Database(error) => ApiError::Database(error),
+        deepref_postgres::PostgresReviewError::Serialization(error) => {
+            ApiError::Internal(error.into())
+        }
+        deepref_postgres::PostgresReviewError::Review(error) => {
+            ApiError::Configuration(error.to_string())
+        }
+        deepref_postgres::PostgresReviewError::Ai(error) => map_ai_error(error),
+        deepref_postgres::PostgresReviewError::RunNotFound => {
+            ApiError::NotFound("review run not found".to_owned())
+        }
+        deepref_postgres::PostgresReviewError::InvalidState(message) => ApiError::Conflict {
+            code: "review_run_state_conflict".to_owned(),
+            message,
+            details: Value::Null,
+        },
+        deepref_postgres::PostgresReviewError::InvalidStoredValue(message) => {
+            ApiError::Internal(anyhow::anyhow!(message))
+        }
+        deepref_postgres::PostgresReviewError::WorkerOwnership => {
+            ApiError::Internal(anyhow::anyhow!("review worker lease is not owned"))
+        }
+        deepref_postgres::PostgresReviewError::FinalizationConflict => ApiError::Conflict {
+            code: "review_finalization_conflict".to_owned(),
+            message: "review proposal finalization conflicts with persisted state".to_owned(),
+            details: Value::Null,
+        },
+    }
 }

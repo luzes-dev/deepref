@@ -55,7 +55,7 @@ impl AgentToolExecutor for RecordingExecutor {
         self.proposal_calls.fetch_add(1, Ordering::SeqCst);
         Box::pin(async {
             Ok(AgentProposalReceipt {
-                proposal_id: Uuid::from_u128(900),
+                review_run_id: Uuid::from_u128(900),
             })
         })
     }

@@ -1,8 +1,8 @@
 use axum::{
     Json,
     extract::{Path, State},
+    http::HeaderMap,
 };
-use deepref_ai::{DataExtractionInput, DataExtractionTask, ExtractionField, ExtractionValueType};
 use deepref_application::{ExtractionFieldDefinition, ExtractionFieldType, ExtractionValue};
 use deepref_domain::ProjectId;
 use serde::{Deserialize, Serialize};
@@ -10,7 +10,10 @@ use serde_json::Value;
 use utoipa::ToSchema;
 use uuid::Uuid;
 
-use super::ai::{AiProposalDto as AiProposalResponse, proposal_dto};
+use super::{
+    ai::{AcceptedReviewRun, ReviewRunDto, accepted_review_run},
+    review::extract_actor,
+};
 use crate::{
     error::{ApiError, ErrorResponse},
     state::AppState,
@@ -138,90 +141,22 @@ pub(crate) async fn list_study_extraction_values(
     operation_id = "generateDataExtractionSuggestion",
     tag = "ai",
     params(("project_id" = Uuid, Path), ("study_id" = Uuid, Path)),
-    responses((status = 200, body = AiProposalResponse), (status = 400, body = ErrorResponse), (status = 404, body = ErrorResponse), (status = 503, body = ErrorResponse), (status = 500, body = ErrorResponse))
+    responses((status = 202, body = ReviewRunDto), (status = 400, body = ErrorResponse), (status = 404, body = ErrorResponse), (status = 503, body = ErrorResponse), (status = 500, body = ErrorResponse))
 )]
 pub(crate) async fn generate_data_extraction_suggestion(
     State(state): State<AppState>,
     Path((project_id, study_id)): Path<(Uuid, Uuid)>,
-) -> Result<Json<AiProposalResponse>, ApiError> {
-    Ok(Json(proposal_dto(
-        create_data_extraction_proposal(&state, project_id, study_id).await?,
-    )?))
-}
-
-pub(crate) async fn create_data_extraction_proposal(
-    state: &AppState,
-    project_id: Uuid,
-    study_id: Uuid,
-) -> Result<deepref_postgres::AiProposalRecord, ApiError> {
-    let definitions = deepref_postgres::list_field_definitions(&state.pool, project_id)
-        .await
-        .map_err(map_extraction_error)?;
-    if definitions.is_empty() {
-        return Err(ApiError::BadRequest(
-            "create at least one extraction field before generating a proposal".to_owned(),
-        ));
-    }
-    let query = definitions
-        .iter()
-        .map(|definition| format!("{} {}", definition.field_key, definition.label))
-        .collect::<Vec<_>>()
-        .join(" ");
-    let blocks =
-        deepref_postgres::list_ai_extraction_evidence(&state.pool, project_id, study_id, &query)
-            .await
-            .map_err(map_ai_proposal_error)?;
-    let fields = definitions
-        .iter()
-        .map(|definition| ExtractionField {
-            id: definition.id,
-            version: definition.version,
-            field_key: definition.field_key.clone(),
-            label: definition.label.clone(),
-            value_type: extraction_value_type(definition.value_type),
-            required: definition.required,
-        })
-        .collect();
-    let grounded_evidence = blocks
-        .iter()
-        .map(|block| deepref_ai::ExtractionEvidence {
-            report_id: block.report_id,
-            document_id: block.document_id,
-            document_block_id: block.document_block_id,
-            page: block.page,
-            parser_version: block.parser_version.clone(),
-            content_hash: block.content_hash.clone(),
-        })
-        .collect();
-    let task_input = DataExtractionInput {
-        project_id: project_id.into(),
-        study_id: study_id.into(),
-        fields,
-        grounded_evidence,
-    };
-    let task = DataExtractionTask::new(&task_input).map_err(map_ai_error)?;
-    let store = deepref_postgres::PostgresAiStore::new(&state.pool);
-    let runner = deepref_ai::AiTaskRunner::new(
-        state.ai_gateway.as_ref(),
-        &store,
-        &store,
-        &store,
-        &store,
-        &deepref_ai::SystemClock,
-        &deepref_ai::UuidProvider,
-    );
-    let result = runner.run(&task, task_input).await.map_err(map_ai_error)?;
-    let proposal = result
-        .proposal
-        .ok_or_else(|| ApiError::Internal(anyhow::anyhow!("AI task did not produce a proposal")))?;
-    let proposal = deepref_postgres::get_ai_proposal(
+    headers: HeaderMap,
+) -> Result<AcceptedReviewRun, ApiError> {
+    let snapshot = deepref_postgres::schedule_data_extraction_review(
         &state.pool,
-        proposal.draft.project_id.as_uuid(),
-        proposal.id,
+        project_id,
+        study_id,
+        extract_actor(&headers)?,
     )
     .await
-    .map_err(map_ai_proposal_error)?;
-    Ok(proposal)
+    .map_err(super::ai::map_review_preparation_error)?;
+    accepted_review_run(snapshot)
 }
 
 fn field_dto(definition: ExtractionFieldDefinition) -> ExtractionFieldDto {
@@ -264,15 +199,6 @@ fn value_dto(value: deepref_postgres::ExtractionValueRecord) -> ExtractionValueD
     }
 }
 
-fn extraction_value_type(value_type: ExtractionFieldType) -> ExtractionValueType {
-    match value_type {
-        ExtractionFieldType::Text => ExtractionValueType::Text,
-        ExtractionFieldType::Number => ExtractionValueType::Number,
-        ExtractionFieldType::Boolean => ExtractionValueType::Boolean,
-        ExtractionFieldType::Date => ExtractionValueType::Date,
-    }
-}
-
 fn map_extraction_error(error: deepref_postgres::ExtractionError) -> ApiError {
     match error {
         deepref_postgres::ExtractionError::Database(error) => ApiError::Database(error),
@@ -297,42 +223,5 @@ fn map_extraction_error(error: deepref_postgres::ExtractionError) -> ApiError {
             message: error.to_string(),
             details: Value::Null,
         },
-    }
-}
-
-fn map_ai_error(error: deepref_ai::AiError) -> ApiError {
-    match error {
-        deepref_ai::AiError::InvalidContext(message)
-        | deepref_ai::AiError::SemanticValidation(message)
-        | deepref_ai::AiError::SchemaValidation(message)
-        | deepref_ai::AiError::MalformedOutput(message)
-        | deepref_ai::AiError::InputSerialization(message)
-        | deepref_ai::AiError::PromptRegistry(message)
-        | deepref_ai::AiError::InvalidEmbedding(message) => ApiError::BadRequest(message),
-        deepref_ai::AiError::Route(message) | deepref_ai::AiError::Gateway(message) => {
-            ApiError::Configuration(message)
-        }
-        deepref_ai::AiError::Persistence(message) | deepref_ai::AiError::Proposal(message) => {
-            ApiError::Internal(anyhow::anyhow!(message))
-        }
-    }
-}
-
-fn map_ai_proposal_error(error: deepref_postgres::AiProposalError) -> ApiError {
-    match error {
-        deepref_postgres::AiProposalError::Database(error) => ApiError::Database(error),
-        deepref_postgres::AiProposalError::NotFound => {
-            ApiError::NotFound("extraction target not found".to_owned())
-        }
-        deepref_postgres::AiProposalError::NotPending => ApiError::Conflict {
-            code: "ai_proposal_not_pending".to_owned(),
-            message: error.to_string(),
-            details: Value::Null,
-        },
-        deepref_postgres::AiProposalError::InvalidPayload(message)
-        | deepref_postgres::AiProposalError::InvalidTarget(message) => {
-            ApiError::BadRequest(message)
-        }
-        other => ApiError::BadRequest(other.to_string()),
     }
 }

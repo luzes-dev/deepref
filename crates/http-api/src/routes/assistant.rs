@@ -8,31 +8,19 @@ use axum::{
 use deepref_ai::{
     AgentDispatch, AgentProposalOperation, AgentProposalReceipt, AgentReadOperation, AgentRuntime,
     AgentTool, AgentToolError, AgentToolExecutionError, AgentToolExecutor, AgentToolName,
-    AgentToolParseError, BoundedAgentJson, ClassificationReportField,
-    StudyDesignClassificationInput, StudyDesignClassificationTask, StudyDesignEvidence,
-    StudyDesignLabel, StudyDesignReport, StudyMetadataField,
+    AgentToolParseError, BoundedAgentJson,
 };
-use deepref_domain::{ProjectId, ScreeningStage, StudyDesign};
+use deepref_domain::{Actor, ProjectId, ScreeningStage, StudyDesign};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use utoipa::ToSchema;
 use uuid::Uuid;
 
-use super::{
-    ai::{
-        GenerateAppraisalPrefillRequest, GenerateScreeningRequest,
-        create_appraisal_prefill_proposal, create_duplicate_proposal, create_screening_proposal,
-        create_study_grouping_proposal, run_task,
-    },
-    extraction::create_data_extraction_proposal,
-    review::extract_actor,
-};
+use super::review::extract_actor;
 use crate::{
     error::{ApiError, ErrorResponse},
     state::AppState,
 };
-use deepref_postgres::AiProposalRecord;
-
 const MAX_BLOCK_TEXT_CHARS: usize = 2_000;
 const MAX_REPORT_ABSTRACT_CHARS: usize = 4_000;
 
@@ -87,8 +75,9 @@ pub(crate) enum AssistantToolResponse {
         #[schema(value_type = Object)]
         data: Value,
     },
-    Proposal {
-        proposal_id: Uuid,
+    ReviewRun {
+        review_run_id: Uuid,
+        status_path: String,
     },
 }
 
@@ -129,7 +118,7 @@ pub(crate) async fn list_tools(
     params(("project_id" = Uuid, Path, description = "Project identifier")),
     request_body = AssistantToolRequest,
     responses(
-        (status = 200, description = "Bounded read result or persisted proposal identifier", body = AssistantToolResponse),
+        (status = 200, description = "Bounded read result or scheduled review run", body = AssistantToolResponse),
         (status = 400, description = "Malformed or invalid tool request", body = ErrorResponse),
         (status = 403, description = "Tool is forbidden by the project policy", body = ErrorResponse),
         (status = 404, description = "Scoped project or resource was not found", body = ErrorResponse),
@@ -156,7 +145,7 @@ pub(crate) async fn execute_tool(
         ProjectId::new(project_id),
         deepref_ai::ProjectAiPolicy::default(),
     );
-    let executor = ProjectAgentToolExecutor::new(state);
+    let executor = ProjectAgentToolExecutor::new(state, actor.clone());
     let dispatch = runtime
         .dispatch(&actor, tool, &executor)
         .map_err(map_runtime_error)?;
@@ -168,9 +157,10 @@ pub(crate) async fn execute_tool(
             Err(_) => return Err(executor.take_failure()),
         },
         AgentDispatch::Proposal(future) => match future.await {
-            Ok(AgentProposalReceipt { proposal_id }) => {
-                AssistantToolResponse::Proposal { proposal_id }
-            }
+            Ok(AgentProposalReceipt { review_run_id }) => AssistantToolResponse::ReviewRun {
+                review_run_id,
+                status_path: format!("/projects/{project_id}/review-runs/{review_run_id}"),
+            },
             Err(_) => return Err(executor.take_failure()),
         },
     };
@@ -227,19 +217,20 @@ fn tool_description(name: AgentToolName) -> &'static str {
 enum AssistantFailure {
     NotFound,
     Conflict,
-    Unavailable,
     Internal,
 }
 
 struct ProjectAgentToolExecutor {
     state: AppState,
+    actor: Actor,
     failure: Arc<Mutex<Option<AssistantFailure>>>,
 }
 
 impl ProjectAgentToolExecutor {
-    fn new(state: AppState) -> Self {
+    fn new(state: AppState, actor: Actor) -> Self {
         Self {
             state,
+            actor,
             failure: Arc::new(Mutex::new(None)),
         }
     }
@@ -270,9 +261,6 @@ impl ProjectAgentToolExecutor {
                 message: "proposal conflicts with current state".to_owned(),
                 details: Value::Null,
             },
-            AssistantFailure::Unavailable => {
-                ApiError::Configuration("AI provider is unavailable".to_owned())
-            }
             AssistantFailure::Internal => {
                 ApiError::Internal(anyhow::anyhow!("assistant tool execution failed"))
             }
@@ -301,11 +289,12 @@ impl AgentToolExecutor for ProjectAgentToolExecutor {
         operation: AgentProposalOperation,
     ) -> deepref_ai::AgentProposalFuture<'a> {
         let state = self.state.clone();
+        let actor = self.actor.clone();
         let failure = Arc::clone(&self.failure);
         Box::pin(async move {
-            match execute_proposal(&state, operation).await {
-                Ok(proposal) => Ok(AgentProposalReceipt {
-                    proposal_id: proposal.id,
+            match execute_proposal(&state, operation, actor).await {
+                Ok(run) => Ok(AgentProposalReceipt {
+                    review_run_id: run.id.as_uuid(),
                 }),
                 Err(kind) => Err(Self::record_failure(&failure, kind)),
             }
@@ -417,157 +406,74 @@ async fn execute_read(
 async fn execute_proposal(
     state: &AppState,
     operation: AgentProposalOperation,
-) -> Result<AiProposalRecord, AssistantFailure> {
+    actor: Actor,
+) -> Result<deepref_review::ReviewRunSnapshot, AssistantFailure> {
     let result = match operation {
         AgentProposalOperation::ProposeScreeningDecision(args) => {
-            create_screening_proposal(
-                state,
+            deepref_postgres::schedule_screening_review(
+                &state.pool,
                 args.project_id.as_uuid(),
                 args.report_id.as_uuid(),
-                GenerateScreeningRequest {
-                    stage: match args.stage {
-                        ScreeningStage::TitleAbstract => {
-                            super::ai::AiScreeningStageInput::TitleAbstract
-                        }
-                        ScreeningStage::FullText => super::ai::AiScreeningStageInput::FullText,
-                    },
-                    protocol_version_id: None,
-                    expected_revision: None,
+                match args.stage {
+                    ScreeningStage::TitleAbstract => deepref_ai::ScreeningStage::TitleAbstract,
+                    ScreeningStage::FullText => deepref_ai::ScreeningStage::FullText,
                 },
+                None,
+                None,
+                actor,
             )
             .await
         }
         AgentProposalOperation::ProposeDuplicateMerge(args) => {
-            create_duplicate_proposal(
-                state,
+            deepref_postgres::schedule_duplicate_detection_review(
+                &state.pool,
                 args.project_id.as_uuid(),
                 args.source_record_id.as_uuid(),
                 args.candidate_report_id.as_uuid(),
+                actor,
             )
             .await
         }
         AgentProposalOperation::ProposeStudyGrouping(args) => {
-            create_study_grouping_proposal(
-                state,
+            deepref_postgres::schedule_study_grouping_review(
+                &state.pool,
                 args.project_id.as_uuid(),
                 args.report_id.as_uuid(),
+                actor,
             )
             .await
         }
         AgentProposalOperation::ProposeClassification(args) => {
-            create_classification_proposal(
-                state,
+            deepref_postgres::schedule_study_classification_review(
+                &state.pool,
                 args.project_id.as_uuid(),
                 args.study_id.as_uuid(),
+                actor,
             )
             .await
         }
         AgentProposalOperation::ProposeExtraction(args) => {
-            create_data_extraction_proposal(
-                state,
+            deepref_postgres::schedule_data_extraction_review(
+                &state.pool,
                 args.project_id.as_uuid(),
                 args.study_id.as_uuid(),
+                actor,
             )
             .await
         }
         AgentProposalOperation::ProposeAppraisalAnswer(args) => {
-            create_appraisal_prefill_proposal(
-                state,
+            deepref_postgres::schedule_appraisal_prefill_review(
+                &state.pool,
                 args.project_id.as_uuid(),
                 args.report_id.as_uuid(),
-                GenerateAppraisalPrefillRequest {
-                    definition_id: args.definition_id,
-                    definition_version: args.definition_version,
-                },
+                &args.definition_id,
+                args.definition_version,
+                actor,
             )
             .await
         }
     };
-    result.map_err(api_failure)
-}
-
-async fn create_classification_proposal(
-    state: &AppState,
-    project_id: Uuid,
-    study_id: Uuid,
-) -> Result<AiProposalRecord, ApiError> {
-    let target = deepref_postgres::get_study(&state.pool, project_id, study_id)
-        .await
-        .map_err(super::study::map_study_error)?;
-    let reports = target
-        .reports
-        .iter()
-        .take(100)
-        .map(|report| StudyDesignReport {
-            report_id: report.report_id.as_uuid(),
-            title: report
-                .title
-                .as_deref()
-                .map(|value| bounded_text(value, 4_000)),
-            abstract_text: report
-                .abstract_text
-                .as_deref()
-                .map(|value| bounded_text(value, 16_000)),
-            publication_year: report.publication_year,
-        })
-        .collect::<Vec<_>>();
-    let expected_revision = u64::try_from(target.study.revision)
-        .map_err(|_| ApiError::BadRequest("study revision is invalid".to_owned()))?;
-    let mut grounded_evidence = vec![StudyDesignEvidence::StudyMetadata {
-        study_id,
-        field: StudyMetadataField::Title,
-        content_hash: deepref_ai::sha256_bytes(target.study.title.as_bytes()),
-    }];
-    for report in target.reports.iter().take(100) {
-        if let Some(title) = &report.title {
-            grounded_evidence.push(StudyDesignEvidence::ReportMetadata {
-                report_id: report.report_id.as_uuid(),
-                field: ClassificationReportField::Title,
-                content_hash: deepref_ai::sha256_bytes(title.as_bytes()),
-            });
-        }
-        if let Some(abstract_text) = &report.abstract_text {
-            grounded_evidence.push(StudyDesignEvidence::ReportMetadata {
-                report_id: report.report_id.as_uuid(),
-                field: ClassificationReportField::Abstract,
-                content_hash: deepref_ai::sha256_bytes(abstract_text.as_bytes()),
-            });
-        }
-        if let Some(year) = report.publication_year {
-            grounded_evidence.push(StudyDesignEvidence::ReportMetadata {
-                report_id: report.report_id.as_uuid(),
-                field: ClassificationReportField::PublicationYear,
-                content_hash: deepref_ai::sha256_bytes(year.to_string().as_bytes()),
-            });
-        }
-    }
-    let input = StudyDesignClassificationInput {
-        project_id: project_id.into(),
-        study_id: study_id.into(),
-        expected_revision,
-        study_title: target.study.title,
-        current_design: target.study.design.map(study_design_label),
-        reports,
-        allowed_designs: StudyDesignLabel::ALL.to_vec(),
-        grounded_evidence,
-    };
-    let task = StudyDesignClassificationTask::new(&input).map_err(super::ai::map_ai_error)?;
-    run_task(state, &task, input).await
-}
-
-fn study_design_label(design: StudyDesign) -> StudyDesignLabel {
-    match design {
-        StudyDesign::Rct => StudyDesignLabel::Rct,
-        StudyDesign::NonRandomizedIntervention => StudyDesignLabel::NonRandomizedIntervention,
-        StudyDesign::Cohort => StudyDesignLabel::Cohort,
-        StudyDesign::CaseControl => StudyDesignLabel::CaseControl,
-        StudyDesign::CrossSectional => StudyDesignLabel::CrossSectional,
-        StudyDesign::DiagnosticAccuracy => StudyDesignLabel::DiagnosticAccuracy,
-        StudyDesign::PredictionModel => StudyDesignLabel::PredictionModel,
-        StudyDesign::Qualitative => StudyDesignLabel::Qualitative,
-        StudyDesign::SystematicReview => StudyDesignLabel::SystematicReview,
-        StudyDesign::CaseSeries => StudyDesignLabel::CaseSeries,
-    }
+    result.map_err(review_preparation_failure)
 }
 
 fn protocol_value(protocol: deepref_postgres::ProtocolDocument) -> Result<Value, AssistantFailure> {
@@ -703,11 +609,18 @@ fn study_failure(error: deepref_postgres::StudyError) -> AssistantFailure {
     }
 }
 
-fn api_failure(error: ApiError) -> AssistantFailure {
+fn review_preparation_failure(error: deepref_postgres::ReviewPreparationError) -> AssistantFailure {
     match error {
-        ApiError::NotFound(_) => AssistantFailure::NotFound,
-        ApiError::Conflict { .. } => AssistantFailure::Conflict,
-        ApiError::Configuration(_) => AssistantFailure::Unavailable,
+        deepref_postgres::ReviewPreparationError::Protocol(
+            deepref_postgres::ProtocolError::ProjectNotFound
+            | deepref_postgres::ProtocolError::NotFound,
+        )
+        | deepref_postgres::ReviewPreparationError::Study(
+            deepref_postgres::StudyError::ProjectNotFound
+            | deepref_postgres::StudyError::StudyNotFound
+            | deepref_postgres::StudyError::ReportNotInProject,
+        ) => AssistantFailure::NotFound,
+        deepref_postgres::ReviewPreparationError::InvalidInput(_) => AssistantFailure::Conflict,
         _ => AssistantFailure::Internal,
     }
 }

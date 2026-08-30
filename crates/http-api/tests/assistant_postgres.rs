@@ -1,5 +1,6 @@
 use std::collections::HashMap;
 use std::sync::{Arc, Mutex, OnceLock};
+use std::time::Duration as StdDuration;
 
 use axum::{
     body::{Body, to_bytes},
@@ -10,10 +11,12 @@ use deepref_ai::{
     AiError, AiFuture, AiGateway, CompletionRequest, GatewayCompletion, ModelParameters,
     ModelProfile, ResolvedModel, sha256_bytes,
 };
+use deepref_application::jobs::ClaimedJob;
 use deepref_config::RuntimeConfig;
 use deepref_http_api::{config::ApiConfig, routes::router, state::AppState};
+use deepref_worker::{delivery::DeliveryAction, processor::handle_job_with_documents_owned_and_ai};
 use serde_json::{Value, json};
-use sqlx::{PgPool, postgres::PgPoolOptions};
+use sqlx::{PgPool, Row, postgres::PgPoolOptions};
 use tower::ServiceExt;
 use uuid::Uuid;
 
@@ -243,38 +246,9 @@ async fn seed(pool: &PgPool) -> Fixture {
 }
 
 async fn cleanup(pool: &PgPool, fixture: Fixture) {
-    sqlx::query("DELETE FROM ai_proposal_criterion_judgments WHERE project_id IN ($1,$2)")
-        .bind(fixture.project_id)
-        .bind(fixture.other_project_id)
-        .execute(pool)
-        .await
-        .expect("proposal criterion cleanup");
-    sqlx::query("DELETE FROM ai_proposal_evidence WHERE project_id IN ($1,$2)")
-        .bind(fixture.project_id)
-        .bind(fixture.other_project_id)
-        .execute(pool)
-        .await
-        .expect("proposal evidence cleanup");
-    sqlx::query("DELETE FROM ai_proposals WHERE project_id IN ($1,$2)")
-        .bind(fixture.project_id)
-        .bind(fixture.other_project_id)
-        .execute(pool)
-        .await
-        .expect("proposal cleanup");
-    sqlx::query("DELETE FROM ai_run_evidence WHERE project_id IN ($1,$2)")
-        .bind(fixture.project_id)
-        .bind(fixture.other_project_id)
-        .execute(pool)
-        .await
-        .expect("run evidence cleanup");
-    sqlx::query("DELETE FROM ai_runs WHERE project_id IN ($1,$2)")
-        .bind(fixture.project_id)
-        .bind(fixture.other_project_id)
-        .execute(pool)
-        .await
-        .expect("run cleanup");
     // Published protocol rows are immutable when deleted directly; the
-    // project cascade is the supported cleanup path for this fixture data.
+    // project cascade is the supported cleanup path for all project-scoped
+    // review manifests, attempts, artifacts, AI runs, and proposals.
     sqlx::query("DELETE FROM projects WHERE id IN ($1,$2)")
         .bind(fixture.project_id)
         .bind(fixture.other_project_id)
@@ -616,8 +590,47 @@ fn model_route(profile: ModelProfile) -> ResolvedModel {
     }
 }
 
+async fn process_review_run<G>(pool: &PgPool, run_id: Uuid, gateway: G) -> DeliveryAction
+where
+    G: AiGateway + 'static,
+{
+    let owner = format!("assistant-review-test-{run_id}");
+    let row = sqlx::query(
+        "UPDATE jobs AS j
+         SET state='running',lease_owner=$2,leased_until=now()+interval '5 minutes',
+             lease_renewed_at=now(),attempts=attempts+1
+         FROM automation_runs AS r
+         WHERE r.id=$1 AND j.id=r.job_id AND j.state='queued'
+         RETURNING j.id,j.project_id,j.kind,j.payload,j.attempts,j.max_attempts",
+    )
+    .bind(run_id)
+    .bind(&owner)
+    .fetch_one(pool)
+    .await
+    .expect("scheduled assistant review job claims");
+    let job = ClaimedJob {
+        id: row.get("id"),
+        project_id: row.get::<Uuid, _>("project_id").into(),
+        kind: row.get("kind"),
+        payload: row.get("payload"),
+        attempts: row.get("attempts"),
+        max_attempts: row.get("max_attempts"),
+    };
+    handle_job_with_documents_owned_and_ai(
+        pool.clone(),
+        &job,
+        &owner,
+        StdDuration::from_secs(300),
+        None,
+        None,
+        Arc::new(gateway),
+    )
+    .await
+    .expect("assistant review worker handles terminal delivery")
+}
+
 #[tokio::test]
-async fn all_proposal_tools_persist_pending_proposals_without_domain_writes() {
+async fn all_proposal_tools_schedule_observable_review_runs_without_domain_writes() {
     let _guard = test_lock().lock().await;
     let Some(pool) = database().await else { return };
     let fixture = seed(&pool).await;
@@ -669,10 +682,32 @@ async fn all_proposal_tools_persist_pending_proposals_without_domain_writes() {
         let (status, body) =
             execute_with_state(state.clone(), fixture.project_id, tool, tool_args).await;
         assert_eq!(status, StatusCode::OK, "{tool} response: {body}");
-        assert_eq!(body["kind"], "proposal", "{tool} response: {body}");
-        assert!(body["proposal_id"].as_str().is_some());
+        assert_eq!(body["kind"], "review_run", "{tool} response: {body}");
+        let run_id = body["review_run_id"].as_str().expect("review run id");
+        let status_path = body["status_path"].as_str().expect("status path");
+        assert!(status_path.ends_with(run_id));
+        let response = router(state.clone(), &api_config())
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri(status_path)
+                    .body(Body::empty())
+                    .expect("review status request should be valid"),
+            )
+            .await
+            .expect("review status request should be handled");
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(response_json(response).await["state"]["kind"], "queued");
     }
-    assert_eq!(*calls.lock().expect("gateway calls lock"), 6);
+    assert_eq!(*calls.lock().expect("gateway calls lock"), 0);
+    let queued: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM review_run_manifests WHERE project_id=$1 AND state='queued'",
+    )
+    .bind(fixture.project_id)
+    .fetch_one(&pool)
+    .await
+    .expect("queued review run count");
+    assert_eq!(queued, 6);
     let pending: i64 = sqlx::query_scalar(
         "SELECT count(*) FROM ai_proposals WHERE project_id=$1 AND status='pending'",
     )
@@ -680,7 +715,7 @@ async fn all_proposal_tools_persist_pending_proposals_without_domain_writes() {
     .fetch_one(&pool)
     .await
     .expect("pending proposal count");
-    assert_eq!(pending, 6);
+    assert_eq!(pending, 0);
     let (design, revision): (Option<String>, i64) =
         sqlx::query_as("SELECT design,study_revision FROM studies WHERE project_id=$1 AND id=$2")
             .bind(fixture.project_id)
@@ -701,10 +736,11 @@ async fn create_classification_proposal(pool: &PgPool, fixture: Fixture) -> Uuid
     )
     .await
     .expect("classification model route inserts");
-    let state = AppState::new(pool.clone()).with_ai_gateway(ProposalGateway {
+    let gateway = ProposalGateway {
         fixture,
         calls: Arc::new(Mutex::new(0)),
-    });
+    };
+    let state = AppState::new(pool.clone());
     let (status, body) = execute_with_state(
         state,
         fixture.project_id,
@@ -713,12 +749,27 @@ async fn create_classification_proposal(pool: &PgPool, fixture: Fixture) -> Uuid
     )
     .await;
     assert_eq!(status, StatusCode::OK, "classification proposal: {body}");
-    Uuid::parse_str(
-        body["proposal_id"]
+    let run_id = Uuid::parse_str(
+        body["review_run_id"]
             .as_str()
-            .expect("classification proposal id"),
+            .expect("classification review run id"),
     )
-    .expect("classification proposal id is a UUID")
+    .expect("classification review run id is a UUID");
+    assert_eq!(
+        process_review_run(pool, run_id, gateway).await,
+        DeliveryAction::Ack
+    );
+    let snapshot = deepref_postgres::get_review_run(
+        pool,
+        fixture.project_id.into(),
+        deepref_review::ReviewRunId::new(run_id).expect("valid run id"),
+    )
+    .await
+    .expect("completed classification review run");
+    match snapshot.state {
+        deepref_review::ReviewRunState::Completed { proposal_id } => proposal_id,
+        state => panic!("classification review should complete, got {state:?}"),
+    }
 }
 
 async fn decide_classification_proposal(

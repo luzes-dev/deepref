@@ -1,0 +1,8 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "deepref.review.study-grouping.v1",
+  "title": "StudyGroupingSuggestion",
+  "type": "object",
+  "x-deepref-rust-type": "deepref_ai::StudyGroupingSuggestion",
+  "required": ["report_id", "choice", "rationale", "provenance", "uncertainties"]
+}

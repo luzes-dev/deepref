@@ -591,7 +591,7 @@ impl BoundedAgentJson {
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize)]
 pub struct AgentProposalReceipt {
-    pub proposal_id: Uuid,
+    pub review_run_id: Uuid,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]

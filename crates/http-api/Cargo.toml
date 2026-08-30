@@ -11,6 +11,7 @@ path = "src/lib.rs"
 [dependencies]
 deepref-application.workspace = true
 deepref-ai.workspace = true
+deepref-review.workspace = true
 deepref-core = { version = "0.1.0", path = "../../crates/core" }
 deepref-domain.workspace = true
 deepref-documents = { version = "0.1.0", path = "../../crates/documents" }
@@ -43,4 +44,5 @@ utoipa-axum.workspace = true
 uuid.workspace = true
 
 [dev-dependencies]
+deepref-worker = { version = "0.1.0", path = "../../services/worker" }
 tower.workspace = true

@@ -3,6 +3,9 @@ use std::{
     time::Duration,
 };
 
+use deepref_ai::{
+    AiExecutionContext, AiGateway, AiTaskRunner, ProposalPersistence, SystemClock, UuidProvider,
+};
 use deepref_core::{IngestionItemStatus, normalize_doi};
 use deepref_crossref::CrossrefError;
 use deepref_documents::{
@@ -223,7 +226,7 @@ pub async fn handle_job(
     job: &deepref_application::jobs::ClaimedJob,
     claim_lease: Duration,
 ) -> anyhow::Result<DeliveryAction> {
-    handle_job_with_document_services_inner(pool, job, claim_lease, None, None, None, None).await
+    handle_job_with_document_services_inner(pool, job, claim_lease, JobServices::default()).await
 }
 
 pub async fn handle_job_with_documents(
@@ -237,10 +240,11 @@ pub async fn handle_job_with_documents(
         pool,
         job,
         claim_lease,
-        document_store,
-        document_parser,
-        None,
-        None,
+        JobServices {
+            document_store,
+            document_parser,
+            ..JobServices::default()
+        },
     )
     .await
 }
@@ -257,10 +261,12 @@ pub async fn handle_job_with_documents_owned(
         pool,
         job,
         claim_lease,
-        document_store,
-        document_parser,
-        None,
-        Some(owner),
+        JobServices {
+            document_store,
+            document_parser,
+            owner: Some(owner),
+            ..JobServices::default()
+        },
     )
     .await
 }
@@ -277,23 +283,62 @@ pub async fn handle_job_with_document_services(
         pool,
         job,
         claim_lease,
-        document_store,
-        document_parser,
-        remote_fetcher,
-        None,
+        JobServices {
+            document_store,
+            document_parser,
+            remote_fetcher,
+            ..JobServices::default()
+        },
     )
     .await
+}
+
+pub async fn handle_job_with_documents_owned_and_ai(
+    pool: sqlx::PgPool,
+    job: &deepref_application::jobs::ClaimedJob,
+    owner: &str,
+    claim_lease: Duration,
+    document_store: Option<Arc<DocumentStore>>,
+    document_parser: Option<Arc<dyn DocumentParser>>,
+    ai_gateway: Arc<dyn AiGateway>,
+) -> anyhow::Result<DeliveryAction> {
+    handle_job_with_document_services_inner(
+        pool,
+        job,
+        claim_lease,
+        JobServices {
+            document_store,
+            document_parser,
+            owner: Some(owner),
+            ai_gateway: Some(ai_gateway),
+            ..JobServices::default()
+        },
+    )
+    .await
+}
+
+#[derive(Default)]
+struct JobServices<'a> {
+    document_store: Option<Arc<DocumentStore>>,
+    document_parser: Option<Arc<dyn DocumentParser>>,
+    remote_fetcher: Option<Arc<dyn RemoteDocumentFetcher>>,
+    owner: Option<&'a str>,
+    ai_gateway: Option<Arc<dyn AiGateway>>,
 }
 
 async fn handle_job_with_document_services_inner(
     pool: sqlx::PgPool,
     job: &deepref_application::jobs::ClaimedJob,
     claim_lease: Duration,
-    document_store: Option<Arc<DocumentStore>>,
-    document_parser: Option<Arc<dyn DocumentParser>>,
-    remote_fetcher: Option<Arc<dyn RemoteDocumentFetcher>>,
-    owner: Option<&str>,
+    services: JobServices<'_>,
 ) -> anyhow::Result<DeliveryAction> {
+    let JobServices {
+        document_store,
+        document_parser,
+        remote_fetcher,
+        owner,
+        ai_gateway,
+    } = services;
     match job.kind.as_str() {
         "work_fetch_requested" => {
             let bytes = serde_json::to_vec(&job.payload)?;
@@ -315,7 +360,7 @@ async fn handle_job_with_document_services_inner(
             let owner = owner.ok_or_else(|| {
                 anyhow::anyhow!("automation job processing requires its lease owner")
             })?;
-            handle_automation_run(&pool, job, owner).await
+            handle_automation_run(&pool, job, owner, ai_gateway.as_deref()).await
         }
         // Pre-PR10 deployments may have queued this obsolete kind. The
         // canonical PRISMA endpoint reads live tables directly, so acknowledge
@@ -491,6 +536,7 @@ async fn handle_automation_run(
     pool: &sqlx::PgPool,
     job: &deepref_application::jobs::ClaimedJob,
     owner: &str,
+    ai_gateway: Option<&dyn AiGateway>,
 ) -> anyhow::Result<DeliveryAction> {
     let payload: AutomationRunJobPayload = serde_json::from_value(job.payload.clone())?;
     let run_id = deepref_application::AutomationRunId::new(payload.automation_run_id)
@@ -518,6 +564,35 @@ async fn handle_automation_run(
             continue;
         }
 
+        if step.key == "execute_compiled_review"
+            && step.kind == deepref_application::AutomationStepKind::AiTask
+        {
+            let gateway = ai_gateway.ok_or_else(|| {
+                anyhow::anyhow!("compiled review execution requires an AI gateway")
+            })?;
+            match execute_compiled_review(pool, project_id, run_id, &step, owner, gateway).await {
+                Ok(()) => continue,
+                Err(error) if job.attempts < job.max_attempts => return Err(error),
+                Err(error) => {
+                    let message = bounded_worker_error(&error);
+                    deepref_postgres::fail_review_run(
+                        pool,
+                        project_id,
+                        deepref_review::ReviewRunId::new(run_id.as_uuid())?,
+                        "review_execution_failed",
+                        &message,
+                    )
+                    .await?;
+                    deepref_postgres::fail_automation_step(
+                        pool, project_id, step.id, owner, &message,
+                    )
+                    .await?;
+                    deepref_postgres::finalize_automation_run(pool, project_id, run_id).await?;
+                    return Ok(DeliveryAction::Terminate);
+                }
+            }
+        }
+
         deepref_postgres::fail_automation_step(
             pool,
             project_id,
@@ -529,6 +604,760 @@ async fn handle_automation_run(
         deepref_postgres::finalize_automation_run(pool, project_id, run_id).await?;
         return Ok(DeliveryAction::Terminate);
     }
+}
+
+async fn execute_compiled_review(
+    pool: &sqlx::PgPool,
+    project_id: deepref_domain::ProjectId,
+    automation_run_id: deepref_application::AutomationRunId,
+    automation_step: &deepref_application::AutomationStepRun,
+    owner: &str,
+    gateway: &dyn AiGateway,
+) -> anyhow::Result<()> {
+    let review_run_id = deepref_review::ReviewRunId::new(automation_run_id.as_uuid())?;
+    let run =
+        deepref_postgres::load_leased_review_run(pool, project_id, review_run_id, owner).await?;
+    if let deepref_review::ReviewRunState::Completed { .. }
+    | deepref_review::ReviewRunState::Blocked { .. } = run.snapshot.state
+    {
+        let accepted = latest_accepted_review_attempt(pool, project_id, review_run_id).await?;
+        deepref_postgres::bind_review_step_acceptance(
+            pool,
+            project_id,
+            automation_step.id,
+            accepted,
+            owner,
+        )
+        .await?;
+        deepref_postgres::complete_automation_step_with_output(
+            pool,
+            project_id,
+            automation_step.id,
+            owner,
+            Some(serde_json::to_value(&run.snapshot)?),
+        )
+        .await?;
+        return Ok(());
+    }
+    deepref_postgres::mark_review_run_running(pool, project_id, review_run_id, owner).await?;
+    let definition = deepref_review::ReviewCatalog.compile(run.snapshot.definition)?;
+
+    let prepare = persist_review_node(
+        pool,
+        &run,
+        &definition,
+        owner,
+        ReviewNodeWrite {
+            node_id: "prepare",
+            payload: serde_json::to_value(&run.task)?,
+            predecessors: &[],
+            model_run_id: None,
+        },
+    )
+    .await?;
+    if run.snapshot.definition == deepref_review::ReviewDefinitionKey::Screening {
+        return execute_compiled_screening(
+            pool,
+            &run,
+            &definition,
+            prepare,
+            automation_step,
+            owner,
+            gateway,
+        )
+        .await;
+    }
+    let generated = execute_review_ai_node(
+        pool,
+        &run,
+        &definition,
+        "generate",
+        std::slice::from_ref(&prepare),
+        owner,
+        gateway,
+    )
+    .await?;
+    let validated = persist_review_node(
+        pool,
+        &run,
+        &definition,
+        owner,
+        ReviewNodeWrite {
+            node_id: "validate",
+            payload: serde_json::json!({
+                "model_run_id": generated.model_run_id,
+                "output_hash": deepref_ai::hash_json(&generated.executed.output)?,
+                "semantic_validation": "passed"
+            }),
+            predecessors: std::slice::from_ref(&generated.artifact),
+            model_run_id: None,
+        },
+    )
+    .await?;
+    let assembled = persist_review_node(
+        pool,
+        &run,
+        &definition,
+        owner,
+        ReviewNodeWrite {
+            node_id: "assemble",
+            payload: serde_json::to_value(&generated.executed)?,
+            predecessors: std::slice::from_ref(&validated),
+            model_run_id: Some(generated.model_run_id),
+        },
+    )
+    .await?;
+
+    finalize_compiled_candidate(
+        pool,
+        &run,
+        &definition,
+        &assembled,
+        generated.executed,
+        automation_step,
+        owner,
+    )
+    .await
+}
+
+async fn execute_compiled_screening(
+    pool: &sqlx::PgPool,
+    run: &deepref_postgres::LeasedReviewRun,
+    definition: &deepref_review::CompiledReviewDefinition,
+    prepare: AcceptedNodeArtifact,
+    automation_step: &deepref_application::AutomationStepRun,
+    owner: &str,
+    gateway: &dyn AiGateway,
+) -> anyhow::Result<()> {
+    let primary = execute_review_ai_node(
+        pool,
+        run,
+        definition,
+        "primary_screen",
+        std::slice::from_ref(&prepare),
+        owner,
+        gateway,
+    )
+    .await?;
+    let primary_analysis = screening_analysis(&primary)?;
+    let validated_primary = persist_review_node(
+        pool,
+        run,
+        definition,
+        owner,
+        ReviewNodeWrite {
+            node_id: "validate_primary",
+            payload: serde_json::json!({
+                "model_run_id": primary.model_run_id,
+                "output_hash": deepref_ai::hash_json(&primary.executed.output)?,
+                "semantic_validation":"passed"
+            }),
+            predecessors: std::slice::from_ref(&primary.artifact),
+            model_run_id: None,
+        },
+    )
+    .await?;
+    let needs_independent = matches!(primary_analysis.stage, deepref_ai::ScreeningStage::FullText)
+        || matches!(
+            primary_analysis.suggested_decision,
+            deepref_ai::SuggestedDecision::Exclude { .. }
+        );
+    let derived = persist_review_node(
+        pool,
+        run,
+        definition,
+        owner,
+        ReviewNodeWrite {
+            node_id: "derive_primary",
+            payload: serde_json::json!({
+                "suggested_decision": primary_analysis.suggested_decision,
+                "needs_independent_screen": needs_independent
+            }),
+            predecessors: std::slice::from_ref(&validated_primary),
+            model_run_id: None,
+        },
+    )
+    .await?;
+
+    let (mut candidate, reconciliation) = if needs_independent {
+        // The independent task receives only the immutable prepared source. The
+        // primary artifact affects its fingerprint and lineage, never its model context.
+        let independent = execute_review_ai_node(
+            pool,
+            run,
+            definition,
+            "independent_screen",
+            std::slice::from_ref(&derived),
+            owner,
+            gateway,
+        )
+        .await?;
+        let independent_analysis = screening_analysis(&independent)?;
+        let validated_independent = persist_review_node(
+            pool,
+            run,
+            definition,
+            owner,
+            ReviewNodeWrite {
+                node_id: "validate_independent",
+                payload: serde_json::json!({
+                    "model_run_id": independent.model_run_id,
+                    "output_hash": deepref_ai::hash_json(&independent.executed.output)?,
+                    "semantic_validation":"passed"
+                }),
+                predecessors: std::slice::from_ref(&independent.artifact),
+                model_run_id: None,
+            },
+        )
+        .await?;
+        let agreement =
+            primary_analysis.suggested_decision == independent_analysis.suggested_decision;
+        let reconciliation = persist_review_node(
+            pool,
+            run,
+            definition,
+            owner,
+            ReviewNodeWrite {
+                node_id: "reconcile",
+                payload: serde_json::json!({
+                    "agreement": agreement,
+                    "primary_decision": primary_analysis.suggested_decision,
+                    "independent_decision": independent_analysis.suggested_decision,
+                    "authority": if agreement { "deterministic_agreement" } else { "human_adjudication_required" }
+                }),
+                predecessors: std::slice::from_ref(&validated_independent),
+                model_run_id: None,
+            },
+        )
+        .await?;
+        if !agreement {
+            return finalize_blocked_review(
+                pool,
+                run,
+                definition,
+                automation_step,
+                owner,
+                BlockedReview {
+                    predecessor: &reconciliation,
+                    code: deepref_review::ReviewBlockCode::HumanAdjudicationRequired,
+                    message: "independent screening disagreed with the primary screening",
+                },
+            )
+            .await;
+        }
+        (primary, reconciliation)
+    } else {
+        (primary, derived)
+    };
+
+    let protected_decision = screening_analysis(&candidate)?.suggested_decision;
+    let mut predecessor = reconciliation;
+    for repair_cycle in 0..=2_u8 {
+        let assembled = persist_review_node(
+            pool,
+            run,
+            definition,
+            owner,
+            ReviewNodeWrite {
+                node_id: "assemble",
+                payload: serde_json::to_value(&candidate.executed)?,
+                predecessors: std::slice::from_ref(&predecessor),
+                model_run_id: Some(candidate.model_run_id),
+            },
+        )
+        .await?;
+        let candidate_hash = deepref_ai::hash_json(&candidate.executed.output)?;
+        let audit = execute_review_ai_node_with_context(
+            pool,
+            run,
+            definition,
+            owner,
+            gateway,
+            ReviewAiNodeRequest {
+                node_id: "candidate_audit",
+                predecessors: std::slice::from_ref(&assembled),
+                semantic_context: Some(serde_json::json!({
+                    "candidate_hash": candidate_hash,
+                    "candidate": candidate.executed.output.clone()
+                })),
+            },
+        )
+        .await?;
+        let audit_decision = screening_analysis(&audit)?.suggested_decision;
+        if audit_decision == protected_decision {
+            return finalize_compiled_candidate(
+                pool,
+                run,
+                definition,
+                &audit.artifact,
+                audit.executed,
+                automation_step,
+                owner,
+            )
+            .await;
+        }
+        if repair_cycle == 2 {
+            return finalize_blocked_review(
+                pool,
+                run,
+                definition,
+                automation_step,
+                owner,
+                BlockedReview {
+                    predecessor: &audit.artifact,
+                    code: deepref_review::ReviewBlockCode::RepairBudgetExhausted,
+                    message: "candidate audit did not pass within the bounded semantic repair budget",
+                },
+            )
+            .await;
+        }
+        let repair = execute_review_ai_node_with_context(
+            pool,
+            run,
+            definition,
+            owner,
+            gateway,
+            ReviewAiNodeRequest {
+                node_id: "semantic_repair",
+                predecessors: std::slice::from_ref(&audit.artifact),
+                semantic_context: Some(serde_json::json!({
+                    "candidate_hash": candidate_hash,
+                    "candidate": candidate.executed.output.clone(),
+                    "audit": audit.executed.output.clone(),
+                    "protected_decision": protected_decision.clone()
+                })),
+            },
+        )
+        .await?;
+        let repaired = screening_analysis(&repair)?;
+        predecessor = persist_review_node(
+            pool,
+            run,
+            definition,
+            owner,
+            ReviewNodeWrite {
+                node_id: "validate_primary",
+                payload: serde_json::json!({
+                    "repair_cycle": repair_cycle + 1,
+                    "protected_decision_unchanged": repaired.suggested_decision == protected_decision,
+                    "output_hash": deepref_ai::hash_json(&repair.executed.output)?
+                }),
+                predecessors: std::slice::from_ref(&repair.artifact),
+                model_run_id: None,
+            },
+        )
+        .await?;
+        if repaired.suggested_decision == protected_decision {
+            // Only the semantic judgments, rationales, evidence, and
+            // uncertainties come from the repair. Identity and decision stay protected.
+            candidate = repair;
+        }
+    }
+    unreachable!("bounded screening repair loop always returns")
+}
+
+fn screening_analysis(node: &GeneratedReviewNode) -> anyhow::Result<deepref_ai::ScreeningAnalysis> {
+    serde_json::from_value(node.executed.output.clone())
+        .map_err(|error| anyhow::anyhow!("stored screening output is invalid: {error}"))
+}
+
+async fn finalize_compiled_candidate(
+    pool: &sqlx::PgPool,
+    run: &deepref_postgres::LeasedReviewRun,
+    definition: &deepref_review::CompiledReviewDefinition,
+    predecessor: &AcceptedNodeArtifact,
+    executed: deepref_review::execution::ExecutedReviewTask,
+    automation_step: &deepref_application::AutomationStepRun,
+    owner: &str,
+) -> anyhow::Result<()> {
+    let predecessor_input = artifact_input(predecessor);
+    let final_start = deepref_postgres::begin_review_attempt(
+        pool,
+        run,
+        definition,
+        "finalize",
+        std::slice::from_ref(&predecessor_input),
+        owner,
+    )
+    .await?;
+    let final_attempt = match final_start {
+        deepref_postgres::ReviewAttemptStart::Reused { attempt_id, .. } => attempt_id,
+        deepref_postgres::ReviewAttemptStart::Started { attempt_id, .. } => {
+            let model_run_id = executed.model_run_id;
+            let outcome =
+                deepref_postgres::finalize_review_proposal(pool, run, executed, owner).await?;
+            let payload = match outcome {
+                deepref_postgres::ReviewFinalization::Completed { proposal_id } => {
+                    serde_json::json!({"state":"completed","proposal_id":proposal_id})
+                }
+                deepref_postgres::ReviewFinalization::Blocked => {
+                    serde_json::json!({"state":"blocked","code":"subject_changed"})
+                }
+            };
+            deepref_postgres::complete_review_attempt(
+                pool,
+                run,
+                deepref_postgres::ReviewAttemptCompletion {
+                    attempt_id,
+                    payload,
+                    media_type: "application/vnd.deepref.review-finalization+json",
+                    predecessors: std::slice::from_ref(&predecessor_input),
+                    model_run_id: Some(model_run_id),
+                    worker_id: owner,
+                },
+            )
+            .await?
+            .attempt_id
+        }
+    };
+    complete_review_automation_step(pool, run, automation_step, final_attempt, owner).await
+}
+
+async fn finalize_blocked_review(
+    pool: &sqlx::PgPool,
+    run: &deepref_postgres::LeasedReviewRun,
+    definition: &deepref_review::CompiledReviewDefinition,
+    automation_step: &deepref_application::AutomationStepRun,
+    owner: &str,
+    blocked: BlockedReview<'_>,
+) -> anyhow::Result<()> {
+    let BlockedReview {
+        predecessor,
+        code,
+        message,
+    } = blocked;
+    deepref_postgres::block_review_run(
+        pool,
+        run.snapshot.project_id,
+        run.snapshot.id,
+        code,
+        message,
+    )
+    .await?;
+    let final_artifact = persist_review_node(
+        pool,
+        run,
+        definition,
+        owner,
+        ReviewNodeWrite {
+            node_id: "finalize",
+            payload: serde_json::json!({"state":"blocked","code":code.as_str(),"message":message}),
+            predecessors: std::slice::from_ref(predecessor),
+            model_run_id: None,
+        },
+    )
+    .await?;
+    let final_attempt = latest_accepted_attempt_for_artifact(
+        pool,
+        run.snapshot.project_id,
+        run.snapshot.id,
+        final_artifact.artifact_id,
+    )
+    .await?;
+    complete_review_automation_step(pool, run, automation_step, final_attempt, owner).await
+}
+
+async fn complete_review_automation_step(
+    pool: &sqlx::PgPool,
+    run: &deepref_postgres::LeasedReviewRun,
+    automation_step: &deepref_application::AutomationStepRun,
+    final_attempt: Uuid,
+    owner: &str,
+) -> anyhow::Result<()> {
+    deepref_postgres::bind_review_step_acceptance(
+        pool,
+        run.snapshot.project_id,
+        automation_step.id,
+        final_attempt,
+        owner,
+    )
+    .await?;
+    let snapshot =
+        deepref_postgres::get_review_run(pool, run.snapshot.project_id, run.snapshot.id).await?;
+    deepref_postgres::complete_automation_step_with_output(
+        pool,
+        run.snapshot.project_id,
+        automation_step.id,
+        owner,
+        Some(serde_json::to_value(snapshot)?),
+    )
+    .await?;
+    Ok(())
+}
+
+#[derive(Clone)]
+struct AcceptedNodeArtifact {
+    artifact_id: Uuid,
+    artifact_hash: deepref_review::ReviewHash,
+}
+
+#[derive(Clone)]
+struct GeneratedReviewNode {
+    executed: deepref_review::execution::ExecutedReviewTask,
+    model_run_id: Uuid,
+    artifact: AcceptedNodeArtifact,
+}
+
+struct BlockedReview<'a> {
+    predecessor: &'a AcceptedNodeArtifact,
+    code: deepref_review::ReviewBlockCode,
+    message: &'a str,
+}
+
+struct ReviewNodeWrite<'a> {
+    node_id: &'a str,
+    payload: serde_json::Value,
+    predecessors: &'a [AcceptedNodeArtifact],
+    model_run_id: Option<Uuid>,
+}
+
+async fn persist_review_node(
+    pool: &sqlx::PgPool,
+    run: &deepref_postgres::LeasedReviewRun,
+    definition: &deepref_review::CompiledReviewDefinition,
+    owner: &str,
+    write: ReviewNodeWrite<'_>,
+) -> anyhow::Result<AcceptedNodeArtifact> {
+    let ReviewNodeWrite {
+        node_id,
+        payload,
+        predecessors,
+        model_run_id,
+    } = write;
+    let predecessor_inputs = predecessors.iter().map(artifact_input).collect::<Vec<_>>();
+    match deepref_postgres::begin_review_attempt(
+        pool,
+        run,
+        definition,
+        node_id,
+        &predecessor_inputs,
+        owner,
+    )
+    .await?
+    {
+        deepref_postgres::ReviewAttemptStart::Reused {
+            artifact_id,
+            artifact_hash,
+            ..
+        } => Ok(AcceptedNodeArtifact {
+            artifact_id,
+            artifact_hash,
+        }),
+        deepref_postgres::ReviewAttemptStart::Started { attempt_id, .. } => {
+            let accepted = deepref_postgres::complete_review_attempt(
+                pool,
+                run,
+                deepref_postgres::ReviewAttemptCompletion {
+                    attempt_id,
+                    payload,
+                    media_type: "application/vnd.deepref.review-artifact+json",
+                    predecessors: &predecessor_inputs,
+                    model_run_id,
+                    worker_id: owner,
+                },
+            )
+            .await?;
+            Ok(AcceptedNodeArtifact {
+                artifact_id: accepted.artifact_id,
+                artifact_hash: accepted.artifact_hash,
+            })
+        }
+    }
+}
+
+async fn execute_review_ai_node(
+    pool: &sqlx::PgPool,
+    run: &deepref_postgres::LeasedReviewRun,
+    definition: &deepref_review::CompiledReviewDefinition,
+    node_id: &str,
+    predecessors: &[AcceptedNodeArtifact],
+    owner: &str,
+    gateway: &dyn AiGateway,
+) -> anyhow::Result<GeneratedReviewNode> {
+    execute_review_ai_node_with_context(
+        pool,
+        run,
+        definition,
+        owner,
+        gateway,
+        ReviewAiNodeRequest {
+            node_id,
+            predecessors,
+            semantic_context: None,
+        },
+    )
+    .await
+}
+
+struct ReviewAiNodeRequest<'a> {
+    node_id: &'a str,
+    predecessors: &'a [AcceptedNodeArtifact],
+    semantic_context: Option<serde_json::Value>,
+}
+
+async fn execute_review_ai_node_with_context(
+    pool: &sqlx::PgPool,
+    run: &deepref_postgres::LeasedReviewRun,
+    definition: &deepref_review::CompiledReviewDefinition,
+    owner: &str,
+    gateway: &dyn AiGateway,
+    request: ReviewAiNodeRequest<'_>,
+) -> anyhow::Result<GeneratedReviewNode> {
+    let ReviewAiNodeRequest {
+        node_id,
+        predecessors,
+        semantic_context,
+    } = request;
+    let predecessor_inputs = predecessors.iter().map(artifact_input).collect::<Vec<_>>();
+    let start = deepref_postgres::begin_review_attempt(
+        pool,
+        run,
+        definition,
+        node_id,
+        &predecessor_inputs,
+        owner,
+    )
+    .await?;
+    match start {
+        deepref_postgres::ReviewAttemptStart::Reused {
+            artifact_id,
+            artifact_hash,
+            payload,
+            ..
+        } => {
+            let executed =
+                serde_json::from_value::<deepref_review::execution::ExecutedReviewTask>(payload)?;
+            Ok(GeneratedReviewNode {
+                model_run_id: executed.model_run_id,
+                executed,
+                artifact: AcceptedNodeArtifact {
+                    artifact_id,
+                    artifact_hash,
+                },
+            })
+        }
+        deepref_postgres::ReviewAttemptStart::Started {
+            attempt_id,
+            input_fingerprint,
+            ..
+        } => {
+            let store = deepref_postgres::PostgresAiStore::new(pool);
+            let runner = AiTaskRunner::new(
+                gateway,
+                &store,
+                &store,
+                &store,
+                &store,
+                &SystemClock,
+                &UuidProvider,
+            );
+            let execution = AiExecutionContext {
+                parent_automation_run_id: Some(run.snapshot.id.as_uuid()),
+                node_fingerprint: Some(input_fingerprint.to_string()),
+                proposal_persistence: ProposalPersistence::Skip,
+            };
+            let executed = match run
+                .task
+                .execute_for_node(&runner, execution, node_id, semantic_context)
+                .await
+            {
+                Ok(executed) => executed,
+                Err(error) => {
+                    deepref_postgres::fail_review_attempt(
+                        pool,
+                        run,
+                        attempt_id,
+                        "ai_task_failed",
+                        &bounded_message(&error.to_string(), 4_096),
+                        owner,
+                    )
+                    .await?;
+                    return Err(error.into());
+                }
+            };
+            let model_run_id = executed.model_run_id;
+            let accepted = deepref_postgres::complete_review_attempt(
+                pool,
+                run,
+                deepref_postgres::ReviewAttemptCompletion {
+                    attempt_id,
+                    payload: serde_json::to_value(&executed)?,
+                    media_type: "application/vnd.deepref.executed-review-task+json",
+                    predecessors: &predecessor_inputs,
+                    model_run_id: Some(model_run_id),
+                    worker_id: owner,
+                },
+            )
+            .await?;
+            Ok(GeneratedReviewNode {
+                executed,
+                model_run_id,
+                artifact: AcceptedNodeArtifact {
+                    artifact_id: accepted.artifact_id,
+                    artifact_hash: accepted.artifact_hash,
+                },
+            })
+        }
+    }
+}
+
+fn artifact_input(artifact: &AcceptedNodeArtifact) -> deepref_review::AcceptedArtifactInput {
+    deepref_review::AcceptedArtifactInput {
+        artifact_id: artifact.artifact_id,
+        content_hash: artifact.artifact_hash.clone(),
+    }
+}
+
+async fn latest_accepted_review_attempt(
+    pool: &sqlx::PgPool,
+    project_id: deepref_domain::ProjectId,
+    review_run_id: deepref_review::ReviewRunId,
+) -> anyhow::Result<Uuid> {
+    sqlx::query_scalar(
+        "SELECT id FROM review_step_attempts
+         WHERE project_id=$1 AND automation_run_id=$2 AND accepted_at IS NOT NULL
+         ORDER BY accepted_at DESC,id DESC LIMIT 1",
+    )
+    .bind(project_id.as_uuid())
+    .bind(review_run_id.as_uuid())
+    .fetch_optional(pool)
+    .await?
+    .ok_or_else(|| anyhow::anyhow!("terminal review run has no accepted attempt"))
+}
+
+async fn latest_accepted_attempt_for_artifact(
+    pool: &sqlx::PgPool,
+    project_id: deepref_domain::ProjectId,
+    review_run_id: deepref_review::ReviewRunId,
+    artifact_id: Uuid,
+) -> anyhow::Result<Uuid> {
+    sqlx::query_scalar(
+        "SELECT id FROM review_step_attempts
+         WHERE project_id=$1 AND automation_run_id=$2 AND artifact_id=$3
+           AND accepted_at IS NOT NULL
+         ORDER BY accepted_at DESC,id DESC LIMIT 1",
+    )
+    .bind(project_id.as_uuid())
+    .bind(review_run_id.as_uuid())
+    .bind(artifact_id)
+    .fetch_optional(pool)
+    .await?
+    .ok_or_else(|| anyhow::anyhow!("review artifact has no accepted attempt"))
+}
+
+fn bounded_worker_error(error: &anyhow::Error) -> String {
+    bounded_message(&error.to_string(), 4_096)
+}
+
+fn bounded_message(message: &str, max_bytes: usize) -> String {
+    if message.len() <= max_bytes {
+        return message.to_owned();
+    }
+    let mut end = max_bytes;
+    while !message.is_char_boundary(end) {
+        end -= 1;
+    }
+    message[..end].to_owned()
 }
 
 fn pdf_parse_semaphore() -> Arc<Semaphore> {

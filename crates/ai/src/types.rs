@@ -518,7 +518,7 @@ impl ProposalStatus {
     }
 }
 
-#[derive(Debug, Clone, PartialEq, Serialize)]
+#[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct ProposalDraft {
     pub project_id: ProjectId,
     pub entity_type: String,

@@ -35,8 +35,9 @@ pub use policy::{PolicyDecision, PolicyEngine, PolicyInput, ProjectAiPolicy, Req
 pub use prompts::{PromptDefinition, PromptRegistry, PromptVersion};
 pub use review_assistance::*;
 pub use runner::{
-    AiRunStore, AiTask, AiTaskResult, AiTaskRunner, Clock, EvidenceRetriever, IdProvider,
-    ModelRouter, ProposalStore, SystemClock, UuidProvider, safe_error_metadata,
+    AiExecutionContext, AiRunStore, AiTask, AiTaskResult, AiTaskRunner, Clock, EvidenceRetriever,
+    IdProvider, ModelRouter, ProposalPersistence, ProposalStore, SystemClock, UuidProvider,
+    safe_error_metadata,
 };
 pub use screening::{
     CriterionJudgment, CriterionPrompt, CriterionResult, ScreeningAnalysis, ScreeningEvidence,

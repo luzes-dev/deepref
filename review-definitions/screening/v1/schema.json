@@ -1,0 +1,8 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "deepref.review.screening.v1",
+  "title": "ScreeningAnalysis",
+  "type": "object",
+  "x-deepref-rust-type": "deepref_ai::ScreeningAnalysis",
+  "required": ["report_id", "expected_revision", "stage", "protocol_version_id", "criteria", "suggested_decision", "uncertainties"]
+}

@@ -8,13 +8,6 @@ pub(crate) enum AiScreeningStageInput {
 }
 
 impl AiScreeningStageInput {
-    pub(super) fn domain(self) -> DomainScreeningStage {
-        match self {
-            Self::TitleAbstract => DomainScreeningStage::TitleAbstract,
-            Self::FullText => DomainScreeningStage::FullText,
-        }
-    }
-
     pub(super) fn ai(self) -> ScreeningStage {
         match self {
             Self::TitleAbstract => ScreeningStage::TitleAbstract,
@@ -40,6 +33,31 @@ pub(crate) struct GenerateAppraisalPrefillRequest {
     pub definition_id: String,
     pub definition_version: u32,
 }
+
+#[derive(Debug, Clone, Serialize, ToSchema)]
+pub(crate) struct ReviewRunDto {
+    pub id: Uuid,
+    pub project_id: Uuid,
+    pub definition: String,
+    pub subject: Value,
+    pub origin: Value,
+    pub state: ReviewRunStateDto,
+    pub created_at: DateTime<Utc>,
+    pub started_at: Option<DateTime<Utc>>,
+    pub finished_at: Option<DateTime<Utc>>,
+}
+
+#[derive(Debug, Clone, Serialize, ToSchema)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub(crate) enum ReviewRunStateDto {
+    Queued,
+    Running,
+    Blocked { code: String, message: String },
+    Failed { code: String, message: String },
+    Completed { proposal_id: Uuid },
+}
+
+pub(crate) type AcceptedReviewRun = (axum::http::StatusCode, HeaderMap, Json<ReviewRunDto>);
 
 #[derive(Debug, Deserialize, ToSchema)]
 #[serde(rename_all = "snake_case")]
