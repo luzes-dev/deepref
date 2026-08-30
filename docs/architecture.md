@@ -54,6 +54,14 @@ tool, authority, action, arguments, and project capabilities; scientific work
 always becomes a proposal. Telemetry is fmt-only without an endpoint and uses
 an OTLP batch layer with flush/shutdown when configured.
 
+`deepref-review` compiles consequential review semantics before execution. Its
+closed catalog binds checked-in workflow, prompt, schema, policy, and parser
+assets to typed review subjects, then derives the run manifest and node input
+fingerprints from actual content hashes. HTTP, assistant, and automation callers
+therefore share one interface while `deepref-ai` remains responsible for a
+single provider-neutral structured model call. See
+[ADR 0004](adr/0004-compiled-review-definition-seam.md).
+
 ## Runtime roles and shutdown
 
 `deepref-server serve` runs HTTP only. `deepref-server worker` runs the bounded PostgreSQL job executor. `deepref-server all` runs both roles in one process with coordinated shutdown. Hosted deployments package the same `deepref-server` binary for API and worker targets; local Process Compose supervises the API, worker, and web processes.

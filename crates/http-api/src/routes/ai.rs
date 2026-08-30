@@ -499,7 +499,13 @@ pub(crate) async fn generate_screening_suggestion(
             .then(|| screening_retrieval_query(&target, &criteria)),
         criteria: prompts,
     };
-    let proposal = run_task(&state, &task, ai_input).await?;
+    let proposal = run_task(
+        &state,
+        deepref_review::ReviewDefinitionKey::Screening,
+        task,
+        ai_input,
+    )
+    .await?;
     Ok(Json(proposal_dto(proposal)?))
 }
 
@@ -552,7 +558,13 @@ pub(crate) async fn generate_study_grouping_suggestion(
         grounded_evidence,
     };
     let task = StudyGroupingTask::new(&task_input).map_err(map_ai_error)?;
-    let proposal = run_task(&state, &task, task_input).await?;
+    let proposal = run_task(
+        &state,
+        deepref_review::ReviewDefinitionKey::StudyGrouping,
+        task,
+        task_input,
+    )
+    .await?;
     Ok(Json(proposal_dto(proposal)?))
 }
 
@@ -656,7 +668,13 @@ pub(crate) async fn generate_appraisal_prefill_suggestion(
         grounded_evidence,
     };
     let task = deepref_ai::AppraisalPrefillTask::new(&task_input).map_err(map_ai_error)?;
-    let proposal = run_task(&state, &task, task_input).await?;
+    let proposal = run_task(
+        &state,
+        deepref_review::ReviewDefinitionKey::AppraisalPrefill,
+        task,
+        task_input,
+    )
+    .await?;
     Ok(Json(proposal_dto(proposal)?))
 }
 
@@ -718,7 +736,13 @@ pub(crate) async fn generate_duplicate_suggestion(
         grounded_signals: signals,
         grounded_provenance: provenance,
     };
-    let proposal = run_task(&state, &task, ai_input).await?;
+    let proposal = run_task(
+        &state,
+        deepref_review::ReviewDefinitionKey::DuplicateDetection,
+        task,
+        ai_input,
+    )
+    .await?;
     Ok(Json(proposal_dto(proposal)?))
 }
 
@@ -905,14 +929,20 @@ fn reviewed_payload_to_internal(
     }
 }
 
-async fn run_task<T>(
+pub(super) async fn run_task<T>(
     state: &AppState,
-    task: &T,
+    definition_key: deepref_review::ReviewDefinitionKey,
+    task: T,
     input: T::Input,
 ) -> Result<AiProposalRecord, ApiError>
 where
     T: deepref_ai::AiTask,
 {
+    let definition = deepref_review::ReviewCatalog
+        .compile(definition_key)
+        .map_err(|error| ApiError::Configuration(error.to_string()))?;
+    let task = deepref_review::DefinedAiTask::bind(definition, task)
+        .map_err(|error| ApiError::Configuration(error.to_string()))?;
     let store = deepref_postgres::PostgresAiStore::new(&state.pool);
     let runner = AiTaskRunner::new(
         state.ai_gateway.as_ref(),
@@ -923,7 +953,7 @@ where
         &SystemClock,
         &UuidProvider,
     );
-    let result = runner.run(task, input).await.map_err(map_ai_error)?;
+    let result = runner.run(&task, input).await.map_err(map_ai_error)?;
     let proposal = result
         .proposal
         .ok_or_else(|| ApiError::Internal(anyhow::anyhow!("AI task did not produce a proposal")))?;

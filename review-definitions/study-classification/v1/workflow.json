@@ -1,0 +1,12 @@
+{
+  "id": "deepref.study-classification",
+  "version": 1,
+  "entrypoint": "prepare",
+  "nodes": [
+    { "id": "prepare", "version": 1, "operation": { "kind": "prepare" }, "transitions": [{ "predicate": "always", "to": "generate" }] },
+    { "id": "generate", "version": 1, "operation": { "kind": "generate", "task": "study_design_classification" }, "transitions": [{ "predicate": "always", "to": "validate" }] },
+    { "id": "validate", "version": 1, "operation": { "kind": "validate" }, "transitions": [{ "predicate": "valid", "to": "assemble" }, { "predicate": "invalid", "to": "finalize" }] },
+    { "id": "assemble", "version": 1, "operation": { "kind": "assemble" }, "transitions": [{ "predicate": "always", "to": "finalize" }] },
+    { "id": "finalize", "version": 1, "operation": { "kind": "finalize" } }
+  ]
+}

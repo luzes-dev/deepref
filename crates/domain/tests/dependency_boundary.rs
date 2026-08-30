@@ -90,12 +90,16 @@ fn infrastructure_and_adapter_dependencies_cannot_point_outward() {
             .as_path(),
     );
     let application = dependencies(manifest("application").as_path());
+    let review = dependencies(manifest("review").as_path());
     let postgres = dependencies(manifest("postgres").as_path());
     let http_api = dependencies(manifest("http-api").as_path());
     let providers = dependencies(manifest("providers").as_path());
 
     assert!(http_api.contains("deepref-application"));
     assert!(http_api.contains("deepref-postgres"));
+    assert!(review.contains("deepref-domain"));
+    assert!(review.contains("deepref-application"));
+    assert!(review.contains("deepref-ai"));
     assert!(postgres.contains("sqlx"));
 
     for dependency in [
@@ -115,6 +119,8 @@ fn infrastructure_and_adapter_dependencies_cannot_point_outward() {
         );
     }
     assert!(!postgres.contains("deepref-http-api"));
+    assert!(!review.contains("deepref-postgres"));
+    assert!(!review.contains("deepref-http-api"));
     assert!(providers.contains("deepref-application"));
 
     for dependency in [
@@ -131,6 +137,10 @@ fn infrastructure_and_adapter_dependencies_cannot_point_outward() {
         assert!(
             !application.contains(dependency),
             "application must not depend on infrastructure crate {dependency}"
+        );
+        assert!(
+            !review.contains(dependency),
+            "review must not depend on infrastructure crate {dependency}"
         );
     }
     for dependency in ["biblio", "biblatex", "csv", "reqwest", "sqlx"] {

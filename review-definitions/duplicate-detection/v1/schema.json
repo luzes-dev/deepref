@@ -1,0 +1,8 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "deepref.review.duplicate-detection.v1",
+  "title": "DuplicateAssistance",
+  "type": "object",
+  "x-deepref-rust-type": "deepref_ai::DuplicateAssistance",
+  "required": ["source_record_id", "candidate_report_id", "decision", "confidence", "rationale", "uncertainties"]
+}

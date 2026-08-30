@@ -1,0 +1,16 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "deepref.review.source-manifest.v1",
+  "title": "DeepRef review source manifest",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["source_kind", "content_hash", "parser_version", "complete"],
+  "properties": {
+    "source_kind": { "enum": ["report_metadata", "full_text_blocks"] },
+    "content_hash": { "type": "string", "pattern": "^[0-9a-f]{64}$" },
+    "parser_version": { "type": "string", "minLength": 1 },
+    "complete": { "type": "boolean" },
+    "warnings": { "type": "array", "items": { "type": "string" } },
+    "page_map_hash": { "type": ["string", "null"], "pattern": "^[0-9a-f]{64}$" }
+  }
+}
