@@ -61,6 +61,18 @@ export type ToolMetadata = {
 	reviewDestination: ReviewDestination | null;
 };
 
+type FieldKey = ToolField['key'];
+type ParsedValue = string | number | string[];
+type ParsedToolValues = Partial<Record<FieldKey, ParsedValue>>;
+type RequestBuilder = (
+	projectId: string,
+	values: Readonly<ParsedToolValues>
+) => AssistantToolRequestArgs | null;
+type ToolDefinition = ToolMetadata & {
+	defaults: ToolValues;
+	buildRequest: RequestBuilder;
+};
+
 export type ToolValues = Record<string, string>;
 
 export type ToolValidation =
@@ -144,6 +156,71 @@ const definitionVersion = integer(
 const searchQuery = text('query', 'Search query', 'A nonempty search phrase.', 4_096);
 const searchLimit = integer('limit', 'Result limit', 'How many results to return.', 1, 100);
 
+const stringValue = (values: Readonly<ParsedToolValues>, key: FieldKey): string | undefined => {
+	const value = values[key];
+	return typeof value === 'string' ? value : undefined;
+};
+
+const numberValue = (values: Readonly<ParsedToolValues>, key: FieldKey): number | undefined => {
+	const value = values[key];
+	return typeof value === 'number' ? value : undefined;
+};
+
+const listValue = (values: Readonly<ParsedToolValues>, key: FieldKey): string[] | undefined => {
+	const value = values[key];
+	return Array.isArray(value) && value.every((item) => typeof item === 'string')
+		? value
+		: undefined;
+};
+
+const projectOnly: RequestBuilder = (project_id) => ({ project_id });
+const withReport: RequestBuilder = (project_id, values) => {
+	const report_id = stringValue(values, 'report_id');
+	return report_id ? { project_id, report_id } : null;
+};
+const withStudy: RequestBuilder = (project_id, values) => {
+	const study_id = stringValue(values, 'study_id');
+	return study_id ? { project_id, study_id } : null;
+};
+const withDocumentBlocks: RequestBuilder = (project_id, values) => {
+	const document_id = stringValue(values, 'document_id');
+	const block_ids = listValue(values, 'block_ids');
+	return document_id && block_ids ? { project_id, document_id, block_ids } : null;
+};
+const withDocumentSearch: RequestBuilder = (project_id, values) => {
+	const document_id = stringValue(values, 'document_id');
+	const query = stringValue(values, 'query');
+	const limit = numberValue(values, 'limit');
+	return document_id && query && limit ? { project_id, document_id, query, limit } : null;
+};
+const withProjectSearch: RequestBuilder = (project_id, values) => {
+	const query = stringValue(values, 'query');
+	const limit = numberValue(values, 'limit');
+	return query && limit ? { project_id, query, limit } : null;
+};
+const withAppraisal: RequestBuilder = (project_id, values) => {
+	const report_id = stringValue(values, 'report_id');
+	const definition_id = stringValue(values, 'definition_id');
+	const definition_version = numberValue(values, 'definition_version');
+	return report_id && definition_id && definition_version
+		? { project_id, report_id, definition_id, definition_version }
+		: null;
+};
+const withScreening: RequestBuilder = (project_id, values) => {
+	const report_id = stringValue(values, 'report_id');
+	const stage = stringValue(values, 'stage');
+	return report_id && (stage === 'title_abstract' || stage === 'full_text')
+		? { project_id, report_id, stage }
+		: null;
+};
+const withDuplicate: RequestBuilder = (project_id, values) => {
+	const source_record_id = stringValue(values, 'source_record_id');
+	const candidate_report_id = stringValue(values, 'candidate_report_id');
+	return source_record_id && candidate_report_id
+		? { project_id, source_record_id, candidate_report_id }
+		: null;
+};
+
 export const ASSISTANT_TOOL_METADATA = {
 	get_project_protocol: {
 		name: AssistantToolNameDto.get_project_protocol,
@@ -151,7 +228,9 @@ export const ASSISTANT_TOOL_METADATA = {
 		label: 'Get project protocol',
 		description: 'Read the published protocol for this project.',
 		fields: [],
-		reviewDestination: null
+		reviewDestination: null,
+		defaults: {},
+		buildRequest: projectOnly
 	},
 	get_report: {
 		name: AssistantToolNameDto.get_report,
@@ -159,7 +238,9 @@ export const ASSISTANT_TOOL_METADATA = {
 		label: 'Get report',
 		description: 'Read one report scoped to this project.',
 		fields: [reportId],
-		reviewDestination: null
+		reviewDestination: null,
+		defaults: { report_id: '' },
+		buildRequest: withReport
 	},
 	read_document_blocks: {
 		name: AssistantToolNameDto.read_document_blocks,
@@ -167,7 +248,9 @@ export const ASSISTANT_TOOL_METADATA = {
 		label: 'Read document blocks',
 		description: 'Read selected active blocks from one document.',
 		fields: [documentId, blockList],
-		reviewDestination: null
+		reviewDestination: null,
+		defaults: { document_id: '', block_ids: '' },
+		buildRequest: withDocumentBlocks
 	},
 	search_document: {
 		name: AssistantToolNameDto.search_document,
@@ -175,7 +258,9 @@ export const ASSISTANT_TOOL_METADATA = {
 		label: 'Search document',
 		description: 'Search active blocks in one document.',
 		fields: [documentId, searchQuery, searchLimit],
-		reviewDestination: null
+		reviewDestination: null,
+		defaults: { document_id: '', query: '', limit: '20' },
+		buildRequest: withDocumentSearch
 	},
 	search_project_reports: {
 		name: AssistantToolNameDto.search_project_reports,
@@ -183,7 +268,9 @@ export const ASSISTANT_TOOL_METADATA = {
 		label: 'Search project reports',
 		description: 'Search report metadata within this project.',
 		fields: [searchQuery, searchLimit],
-		reviewDestination: null
+		reviewDestination: null,
+		defaults: { query: '', limit: '20' },
+		buildRequest: withProjectSearch
 	},
 	get_screening_state: {
 		name: AssistantToolNameDto.get_screening_state,
@@ -191,7 +278,9 @@ export const ASSISTANT_TOOL_METADATA = {
 		label: 'Get screening state',
 		description: 'Read screening state for one report.',
 		fields: [reportId],
-		reviewDestination: null
+		reviewDestination: null,
+		defaults: { report_id: '' },
+		buildRequest: withReport
 	},
 	get_study: {
 		name: AssistantToolNameDto.get_study,
@@ -199,7 +288,9 @@ export const ASSISTANT_TOOL_METADATA = {
 		label: 'Get study',
 		description: 'Read one study and its report membership.',
 		fields: [studyId],
-		reviewDestination: null
+		reviewDestination: null,
+		defaults: { study_id: '' },
+		buildRequest: withStudy
 	},
 	get_appraisal: {
 		name: AssistantToolNameDto.get_appraisal,
@@ -207,7 +298,9 @@ export const ASSISTANT_TOOL_METADATA = {
 		label: 'Get appraisal',
 		description: 'Read the latest completed appraisal version.',
 		fields: [reportId, definitionId, definitionVersion],
-		reviewDestination: null
+		reviewDestination: null,
+		defaults: { report_id: '', definition_id: '', definition_version: '1' },
+		buildRequest: withAppraisal
 	},
 	propose_screening_decision: {
 		name: AssistantToolNameDto.propose_screening_decision,
@@ -215,7 +308,9 @@ export const ASSISTANT_TOOL_METADATA = {
 		label: 'Propose screening decision',
 		description: 'Generate a reviewer proposal for a screening decision.',
 		fields: [reportId, stage],
-		reviewDestination: 'screening'
+		reviewDestination: 'screening',
+		defaults: { report_id: '', stage: 'title_abstract' },
+		buildRequest: withScreening
 	},
 	propose_duplicate_merge: {
 		name: AssistantToolNameDto.propose_duplicate_merge,
@@ -226,7 +321,9 @@ export const ASSISTANT_TOOL_METADATA = {
 			uuid('source_record_id', 'Source record ID', 'A UUID for the source record.'),
 			uuid('candidate_report_id', 'Candidate report ID', 'A UUID for the candidate report.')
 		],
-		reviewDestination: 'deduplication'
+		reviewDestination: 'deduplication',
+		defaults: { source_record_id: '', candidate_report_id: '' },
+		buildRequest: withDuplicate
 	},
 	propose_study_grouping: {
 		name: AssistantToolNameDto.propose_study_grouping,
@@ -234,7 +331,9 @@ export const ASSISTANT_TOOL_METADATA = {
 		label: 'Propose study grouping',
 		description: 'Generate a reviewer proposal for report grouping.',
 		fields: [reportId],
-		reviewDestination: 'studies'
+		reviewDestination: 'studies',
+		defaults: { report_id: '' },
+		buildRequest: withReport
 	},
 	propose_classification: {
 		name: AssistantToolNameDto.propose_classification,
@@ -242,7 +341,9 @@ export const ASSISTANT_TOOL_METADATA = {
 		label: 'Propose classification',
 		description: 'Generate a reviewer proposal for study design.',
 		fields: [studyId],
-		reviewDestination: 'studies'
+		reviewDestination: 'studies',
+		defaults: { study_id: '' },
+		buildRequest: withStudy
 	},
 	propose_extraction: {
 		name: AssistantToolNameDto.propose_extraction,
@@ -250,7 +351,9 @@ export const ASSISTANT_TOOL_METADATA = {
 		label: 'Propose extraction',
 		description: 'Generate a reviewer proposal for data extraction.',
 		fields: [studyId],
-		reviewDestination: 'extraction'
+		reviewDestination: 'extraction',
+		defaults: { study_id: '' },
+		buildRequest: withStudy
 	},
 	propose_appraisal_answer: {
 		name: AssistantToolNameDto.propose_appraisal_answer,
@@ -258,9 +361,11 @@ export const ASSISTANT_TOOL_METADATA = {
 		label: 'Propose appraisal answer',
 		description: 'Generate a reviewer proposal for appraisal answers.',
 		fields: [reportId, definitionId, definitionVersion],
-		reviewDestination: 'appraisal'
+		reviewDestination: 'appraisal',
+		defaults: { report_id: '', definition_id: '', definition_version: '1' },
+		buildRequest: withAppraisal
 	}
-} satisfies Record<ToolName, ToolMetadata>;
+} satisfies Record<ToolName, ToolDefinition>;
 
 export function isAssistantToolName(value: unknown): value is ToolName {
 	return typeof value === 'string' && ASSISTANT_TOOL_NAMES.some((name) => name === value);
@@ -288,35 +393,7 @@ export function partitionAssistantCatalog(catalog: readonly AssistantToolDescrip
 }
 
 export function initialToolValues(tool: ToolName): ToolValues {
-	switch (tool) {
-		case AssistantToolNameDto.get_project_protocol:
-			return {};
-		case AssistantToolNameDto.get_report:
-		case AssistantToolNameDto.get_screening_state:
-		case AssistantToolNameDto.propose_study_grouping:
-			return { report_id: '' };
-		case AssistantToolNameDto.read_document_blocks:
-			return { document_id: '', block_ids: '' };
-		case AssistantToolNameDto.search_document:
-			return { document_id: '', query: '', limit: '20' };
-		case AssistantToolNameDto.search_project_reports:
-			return { query: '', limit: '20' };
-		case AssistantToolNameDto.get_study:
-		case AssistantToolNameDto.propose_classification:
-		case AssistantToolNameDto.propose_extraction:
-			return { study_id: '' };
-		case AssistantToolNameDto.get_appraisal:
-		case AssistantToolNameDto.propose_appraisal_answer:
-			return { report_id: '', definition_id: '', definition_version: '1' };
-		case AssistantToolNameDto.propose_screening_decision:
-			return { report_id: '', stage: 'title_abstract' };
-		case AssistantToolNameDto.propose_duplicate_merge:
-			return { source_record_id: '', candidate_report_id: '' };
-		default: {
-			const exhaustive: never = tool;
-			return exhaustive;
-		}
-	}
+	return { ...ASSISTANT_TOOL_METADATA[tool].defaults };
 }
 
 export function serializeToolRequest(
@@ -326,160 +403,59 @@ export function serializeToolRequest(
 ): ToolValidation {
 	const errors: Record<string, string> = {};
 	if (!projectId.trim()) errors.project_id = 'Project scope is missing.';
-
-	const requiredUuid = (key: UuidField['key']): string | undefined => {
-		const value = values[key]?.trim() ?? '';
-		if (!isUuid(value)) {
-			errors[key] = 'Enter a valid UUID.';
-			return undefined;
-		}
-		return value;
-	};
-	const requiredText = (key: TextField['key'], maxLength: number): string | undefined => {
-		const value = values[key]?.trim() ?? '';
-		if (!value) errors[key] = 'This value is required.';
-		else if (value.length > maxLength) errors[key] = `Use at most ${maxLength} characters.`;
-		return value && value.length <= maxLength ? value : undefined;
-	};
-	const requiredInteger = (
-		key: IntegerField['key'],
-		min: number,
-		max: number
-	): number | undefined => {
-		const value = Number(values[key] ?? '');
-		if (!Number.isInteger(value) || value < min || value > max) {
-			errors[key] = `Enter a whole number from ${min} to ${max}.`;
-			return undefined;
-		}
-		return value;
-	};
-	const requiredStage = (): ScreeningStage | undefined => {
-		const value = values.stage;
-		if (value !== 'title_abstract' && value !== 'full_text') {
-			errors.stage = 'Choose a screening stage.';
-			return undefined;
-		}
-		return value;
-	};
-	const requiredBlockIds = (): string[] | undefined => {
-		const blockIds = (values.block_ids ?? '')
-			.split(/\r?\n/)
-			.map((value) => value.trim())
-			.filter((value) => value.length > 0);
-		if (blockIds.length === 0) {
-			errors.block_ids = 'Enter at least one document-block UUID.';
-			return undefined;
-		}
-		if (blockIds.length > 200) {
-			errors.block_ids = 'Enter no more than 200 document-block UUIDs.';
-			return undefined;
-		}
-		if (blockIds.some((value) => !isUuid(value))) {
-			errors.block_ids = 'Every document-block entry must be a valid UUID.';
-			return undefined;
-		}
-		return blockIds;
-	};
-
-	if (Object.keys(errors).length > 0) return { kind: 'invalid', errors };
-
-	switch (tool) {
-		case AssistantToolNameDto.get_project_protocol:
-			return valid(tool, projectId, { project_id: projectId });
-		case AssistantToolNameDto.get_report: {
-			const reportId = requiredUuid('report_id');
-			return reportId
-				? valid(tool, projectId, { project_id: projectId, report_id: reportId })
-				: { kind: 'invalid', errors };
-		}
-		case AssistantToolNameDto.read_document_blocks: {
-			const documentId = requiredUuid('document_id');
-			const blockIds = requiredBlockIds();
-			return documentId && blockIds
-				? valid(tool, projectId, {
-						project_id: projectId,
-						document_id: documentId,
-						block_ids: blockIds
-					})
-				: { kind: 'invalid', errors };
-		}
-		case AssistantToolNameDto.search_document: {
-			const documentId = requiredUuid('document_id');
-			const query = requiredText('query', 4_096);
-			const limit = requiredInteger('limit', 1, 100);
-			return documentId && query && limit
-				? valid(tool, projectId, {
-						project_id: projectId,
-						document_id: documentId,
-						query,
-						limit
-					})
-				: { kind: 'invalid', errors };
-		}
-		case AssistantToolNameDto.search_project_reports: {
-			const query = requiredText('query', 4_096);
-			const limit = requiredInteger('limit', 1, 100);
-			return query && limit
-				? valid(tool, projectId, { project_id: projectId, query, limit })
-				: { kind: 'invalid', errors };
-		}
-		case AssistantToolNameDto.get_screening_state: {
-			const reportId = requiredUuid('report_id');
-			return reportId
-				? valid(tool, projectId, { project_id: projectId, report_id: reportId })
-				: { kind: 'invalid', errors };
-		}
-		case AssistantToolNameDto.get_study:
-		case AssistantToolNameDto.propose_classification:
-		case AssistantToolNameDto.propose_extraction: {
-			const studyId = requiredUuid('study_id');
-			return studyId
-				? valid(tool, projectId, { project_id: projectId, study_id: studyId })
-				: { kind: 'invalid', errors };
-		}
-		case AssistantToolNameDto.get_appraisal:
-		case AssistantToolNameDto.propose_appraisal_answer: {
-			const reportId = requiredUuid('report_id');
-			const definitionId = requiredText('definition_id', 100);
-			const definitionVersion = requiredInteger('definition_version', 1, 2_147_483_647);
-			return reportId && definitionId && definitionVersion
-				? valid(tool, projectId, {
-						project_id: projectId,
-						report_id: reportId,
-						definition_id: definitionId,
-						definition_version: definitionVersion
-					})
-				: { kind: 'invalid', errors };
-		}
-		case AssistantToolNameDto.propose_screening_decision: {
-			const reportId = requiredUuid('report_id');
-			const stage = requiredStage();
-			return reportId && stage
-				? valid(tool, projectId, { project_id: projectId, report_id: reportId, stage })
-				: { kind: 'invalid', errors };
-		}
-		case AssistantToolNameDto.propose_duplicate_merge: {
-			const sourceRecordId = requiredUuid('source_record_id');
-			const candidateReportId = requiredUuid('candidate_report_id');
-			return sourceRecordId && candidateReportId
-				? valid(tool, projectId, {
-						project_id: projectId,
-						source_record_id: sourceRecordId,
-						candidate_report_id: candidateReportId
-					})
-				: { kind: 'invalid', errors };
-		}
-		case AssistantToolNameDto.propose_study_grouping: {
-			const reportId = requiredUuid('report_id');
-			return reportId
-				? valid(tool, projectId, { project_id: projectId, report_id: reportId })
-				: { kind: 'invalid', errors };
-		}
-		default: {
-			const exhaustive: never = tool;
-			return exhaustive;
+	const parsed: ParsedToolValues = {};
+	for (const field of ASSISTANT_TOOL_METADATA[tool].fields) {
+		const raw = values[field.key] ?? '';
+		switch (field.kind) {
+			case 'uuid': {
+				const value = raw.trim();
+				if (isUuid(value)) parsed[field.key] = value;
+				else errors[field.key] = 'Enter a valid UUID.';
+				break;
+			}
+			case 'text': {
+				const value = raw.trim();
+				if (!value) errors[field.key] = 'This value is required.';
+				else if (value.length > field.maxLength)
+					errors[field.key] = `Use at most ${field.maxLength} characters.`;
+				else parsed[field.key] = value;
+				break;
+			}
+			case 'integer': {
+				const value = Number(raw);
+				if (!Number.isInteger(value) || value < field.min || value > field.max)
+					errors[field.key] = `Enter a whole number from ${field.min} to ${field.max}.`;
+				else parsed[field.key] = value;
+				break;
+			}
+			case 'uuid-list': {
+				const value = raw
+					.split(/\r?\n/)
+					.map((item) => item.trim())
+					.filter(Boolean);
+				if (value.length === 0)
+					errors[field.key] = 'Enter at least one document-block UUID.';
+				else if (value.length > 200)
+					errors[field.key] = 'Enter no more than 200 document-block UUIDs.';
+				else if (value.some((item) => !isUuid(item)))
+					errors[field.key] = 'Every document-block entry must be a valid UUID.';
+				else parsed[field.key] = value;
+				break;
+			}
+			case 'stage':
+				if (raw === 'title_abstract' || raw === 'full_text') parsed[field.key] = raw;
+				else errors[field.key] = 'Choose a screening stage.';
+				break;
+			default: {
+				const exhaustive: never = field;
+				return exhaustive;
+			}
 		}
 	}
+	if (Object.keys(errors).length > 0) return { kind: 'invalid', errors };
+	const args = ASSISTANT_TOOL_METADATA[tool].buildRequest(projectId, parsed);
+	if (!args) return { kind: 'invalid', errors: { form: 'Tool form configuration is invalid.' } };
+	return valid(tool, projectId, args);
 }
 
 export function reviewPath(tool: ToolName, projectId: string, values: ToolValues): string | null {
