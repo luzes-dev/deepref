@@ -9,7 +9,7 @@
     { "id": "derive_primary", "version": 1, "operation": { "kind": "derive" }, "transitions": [{ "predicate": "needs_independent_screen", "to": "independent_screen" }, { "predicate": "primary_accepted", "to": "assemble" }] },
     { "id": "independent_screen", "version": 1, "operation": { "kind": "independent_screen" }, "transitions": [{ "predicate": "always", "to": "validate_independent" }] },
     { "id": "validate_independent", "version": 1, "operation": { "kind": "validate" }, "transitions": [{ "predicate": "valid", "to": "reconcile" }, { "predicate": "invalid", "to": "finalize" }] },
-    { "id": "reconcile", "version": 1, "operation": { "kind": "reconcile" }, "transitions": [{ "predicate": "agreement", "to": "assemble" }, { "predicate": "disagreement", "to": "assemble" }] },
+    { "id": "reconcile", "version": 1, "operation": { "kind": "reconcile" }, "transitions": [{ "predicate": "agreement", "to": "assemble" }, { "predicate": "disagreement", "to": "finalize" }] },
     { "id": "assemble", "version": 1, "operation": { "kind": "assemble" }, "transitions": [{ "predicate": "always", "to": "candidate_audit" }] },
     { "id": "candidate_audit", "version": 1, "operation": { "kind": "candidate_audit" }, "transitions": [{ "predicate": "audit_passed", "to": "finalize" }, { "predicate": "audit_repairable", "to": "semantic_repair" }, { "predicate": "invalid", "to": "finalize" }] },
     { "id": "semantic_repair", "version": 1, "operation": { "kind": "semantic_repair", "max_cycles": 2 }, "transitions": [{ "predicate": "repair_ready", "to": "validate_primary" }, { "predicate": "repair_exhausted", "to": "finalize" }] },

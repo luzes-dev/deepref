@@ -340,26 +340,58 @@ impl AutomationTriggerKind {
 #[serde(rename_all = "snake_case")]
 pub enum BuiltInAutomationRecipe {
     ProjectMaintenanceV1,
+    ReviewScreeningV1,
+    ReviewDuplicateDetectionV1,
+    ReviewStudyClassificationV1,
+    ReviewStudyGroupingV1,
+    ReviewAppraisalPrefillV1,
+    ReviewDataExtractionV1,
 }
 
 impl BuiltInAutomationRecipe {
-    pub const ALL: [Self; 1] = [Self::ProjectMaintenanceV1];
+    pub const ALL: [Self; 7] = [
+        Self::ProjectMaintenanceV1,
+        Self::ReviewScreeningV1,
+        Self::ReviewDuplicateDetectionV1,
+        Self::ReviewStudyClassificationV1,
+        Self::ReviewStudyGroupingV1,
+        Self::ReviewAppraisalPrefillV1,
+        Self::ReviewDataExtractionV1,
+    ];
 
     pub const fn id(self) -> &'static str {
         match self {
             Self::ProjectMaintenanceV1 => "project_maintenance",
+            Self::ReviewScreeningV1 => "review_screening",
+            Self::ReviewDuplicateDetectionV1 => "review_duplicate_detection",
+            Self::ReviewStudyClassificationV1 => "review_study_classification",
+            Self::ReviewStudyGroupingV1 => "review_study_grouping",
+            Self::ReviewAppraisalPrefillV1 => "review_appraisal_prefill",
+            Self::ReviewDataExtractionV1 => "review_data_extraction",
         }
     }
 
     pub const fn version(self) -> i32 {
         match self {
-            Self::ProjectMaintenanceV1 => 1,
+            Self::ProjectMaintenanceV1
+            | Self::ReviewScreeningV1
+            | Self::ReviewDuplicateDetectionV1
+            | Self::ReviewStudyClassificationV1
+            | Self::ReviewStudyGroupingV1
+            | Self::ReviewAppraisalPrefillV1
+            | Self::ReviewDataExtractionV1 => 1,
         }
     }
 
     pub const fn as_str(self) -> &'static str {
         match self {
             Self::ProjectMaintenanceV1 => "project_maintenance.v1",
+            Self::ReviewScreeningV1 => "review_screening.v1",
+            Self::ReviewDuplicateDetectionV1 => "review_duplicate_detection.v1",
+            Self::ReviewStudyClassificationV1 => "review_study_classification.v1",
+            Self::ReviewStudyGroupingV1 => "review_study_grouping.v1",
+            Self::ReviewAppraisalPrefillV1 => "review_appraisal_prefill.v1",
+            Self::ReviewDataExtractionV1 => "review_data_extraction.v1",
         }
     }
 
@@ -375,6 +407,16 @@ impl BuiltInAutomationRecipe {
                 ordinal: 0,
                 key: "recompute_project_metrics",
                 kind: AutomationStepKind::DeterministicAction,
+            }],
+            Self::ReviewScreeningV1
+            | Self::ReviewDuplicateDetectionV1
+            | Self::ReviewStudyClassificationV1
+            | Self::ReviewStudyGroupingV1
+            | Self::ReviewAppraisalPrefillV1
+            | Self::ReviewDataExtractionV1 => &[BuiltInAutomationStep {
+                ordinal: 0,
+                key: "execute_compiled_review",
+                kind: AutomationStepKind::AiTask,
             }],
         }
     }

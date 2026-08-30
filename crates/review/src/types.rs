@@ -224,6 +224,33 @@ pub enum ReviewBlockCode {
     RepairBudgetExhausted,
 }
 
+impl ReviewBlockCode {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::SubjectChanged => "subject_changed",
+            Self::SourceIncomplete => "source_incomplete",
+            Self::CalibrationMissing => "calibration_missing",
+            Self::CalibrationFailed => "calibration_failed",
+            Self::CalibrationStale => "calibration_stale",
+            Self::HumanAdjudicationRequired => "human_adjudication_required",
+            Self::RepairBudgetExhausted => "repair_budget_exhausted",
+        }
+    }
+
+    pub fn parse(value: &str) -> Option<Self> {
+        match value {
+            "subject_changed" => Some(Self::SubjectChanged),
+            "source_incomplete" => Some(Self::SourceIncomplete),
+            "calibration_missing" => Some(Self::CalibrationMissing),
+            "calibration_failed" => Some(Self::CalibrationFailed),
+            "calibration_stale" => Some(Self::CalibrationStale),
+            "human_adjudication_required" => Some(Self::HumanAdjudicationRequired),
+            "repair_budget_exhausted" => Some(Self::RepairBudgetExhausted),
+            _ => None,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum ReviewRunState {

@@ -2,6 +2,7 @@ use deepref_ai::{
     AiContext, AiError, AiTask, AiTaskKind, AuthorityTier, GroundedBlock, ModelProfile,
     ProposalDraft,
 };
+use serde_json::Value;
 
 use crate::{CompiledReviewDefinition, ReviewError};
 
@@ -13,6 +14,12 @@ use crate::{CompiledReviewDefinition, ReviewError};
 pub struct DefinedAiTask<T> {
     definition: CompiledReviewDefinition,
     task: T,
+    workflow_node: Option<WorkflowNodeContext>,
+}
+
+struct WorkflowNodeContext {
+    id: String,
+    semantic_context: Option<Value>,
 }
 
 impl<T: AiTask> DefinedAiTask<T> {
@@ -24,7 +31,31 @@ impl<T: AiTask> DefinedAiTask<T> {
                 task.kind().as_str()
             )));
         }
-        Ok(Self { definition, task })
+        Ok(Self {
+            definition,
+            task,
+            workflow_node: None,
+        })
+    }
+
+    #[doc(hidden)]
+    pub fn bind_for_node(
+        definition: CompiledReviewDefinition,
+        task: T,
+        node_id: &str,
+        semantic_context: Option<Value>,
+    ) -> Result<Self, ReviewError> {
+        if definition.node_version(node_id).is_none() {
+            return Err(ReviewError::InvalidWorkflow(format!(
+                "unknown execution node {node_id}"
+            )));
+        }
+        let mut bound = Self::bind(definition, task)?;
+        bound.workflow_node = Some(WorkflowNodeContext {
+            id: node_id.to_owned(),
+            semantic_context,
+        });
+        Ok(bound)
     }
 
     pub const fn definition(&self) -> &CompiledReviewDefinition {
@@ -55,6 +86,24 @@ impl<T: AiTask> AiTask for DefinedAiTask<T> {
     fn build_context(&self, input: &Self::Input) -> Result<AiContext, AiError> {
         let mut context = self.task.build_context(input)?;
         context.system_prompt = self.definition.system_prompt().to_owned();
+        if let Some(node) = &self.workflow_node {
+            context
+                .system_prompt
+                .push_str("\n\nActive compiled workflow node: ");
+            context.system_prompt.push_str(&node.id);
+            context
+                .system_prompt
+                .push_str(". Follow only that node's role from the checked-in prompt bundle.");
+            if let Some(semantic_context) = &node.semantic_context {
+                let source = serde_json::from_str::<Value>(&context.user_prompt)
+                    .unwrap_or_else(|_| Value::String(context.user_prompt.clone()));
+                context.user_prompt = serde_json::to_string(&serde_json::json!({
+                    "source": source,
+                    "node_context": semantic_context,
+                }))
+                .map_err(|_| AiError::InputSerialization("review node context".to_owned()))?;
+            }
+        }
         Ok(context)
     }
 

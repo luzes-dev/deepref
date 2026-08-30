@@ -1,27 +1,16 @@
 use axum::{
     Json,
     extract::{Path, Query, State},
-    http::HeaderMap,
+    http::{HeaderMap, StatusCode, header::LOCATION},
 };
 use chrono::{DateTime, Utc};
-use deepref_ai::{
-    AiError, AiTaskRunner, AppraisalAnswerSchema, AppraisalPrefillDomain, AppraisalPrefillEvidence,
-    AppraisalPrefillInput, AppraisalPrefillQuestion, CriterionPrompt, DedupeInput, DedupeTask,
-    IdentityProvenance, ScreeningEvidence, ScreeningEvidenceField, ScreeningInput, ScreeningStage,
-    ScreeningTask, ScreeningTaskConfig, StudyGroupingCandidate, StudyGroupingEvidence,
-    StudyGroupingField, StudyGroupingInput, StudyGroupingTask, SystemClock, UuidProvider,
-};
-use deepref_application::{DedupeCandidate, FUZZY_PROPOSAL_THRESHOLD, score_candidate};
-use deepref_domain::{
-    CriterionStage, EligibilityCriterion, ScreeningStage as DomainScreeningStage,
-};
+use deepref_ai::{AiError, ScreeningStage};
 use deepref_postgres::{
     AiProposalDecision, AiProposalDecisionRequest, AiProposalError, AiProposalRecord,
     ReviewedAiProposalPayload,
 };
 use serde::{Deserialize, Serialize};
-use serde_json::{Value, json};
-use std::collections::BTreeSet;
+use serde_json::Value;
 use utoipa::ToSchema;
 use uuid::Uuid;
 
@@ -42,13 +31,6 @@ pub(crate) enum AiScreeningStageInput {
 }
 
 impl AiScreeningStageInput {
-    fn domain(self) -> DomainScreeningStage {
-        match self {
-            Self::TitleAbstract => DomainScreeningStage::TitleAbstract,
-            Self::FullText => DomainScreeningStage::FullText,
-        }
-    }
-
     fn ai(self) -> ScreeningStage {
         match self {
             Self::TitleAbstract => ScreeningStage::TitleAbstract,
@@ -74,6 +56,31 @@ pub(crate) struct GenerateAppraisalPrefillRequest {
     pub definition_id: String,
     pub definition_version: u32,
 }
+
+#[derive(Debug, Clone, Serialize, ToSchema)]
+pub(crate) struct ReviewRunDto {
+    pub id: Uuid,
+    pub project_id: Uuid,
+    pub definition: String,
+    pub subject: Value,
+    pub origin: Value,
+    pub state: ReviewRunStateDto,
+    pub created_at: DateTime<Utc>,
+    pub started_at: Option<DateTime<Utc>>,
+    pub finished_at: Option<DateTime<Utc>>,
+}
+
+#[derive(Debug, Clone, Serialize, ToSchema)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub(crate) enum ReviewRunStateDto {
+    Queued,
+    Running,
+    Blocked { code: String, message: String },
+    Failed { code: String, message: String },
+    Completed { proposal_id: Uuid },
+}
+
+pub(super) type AcceptedReviewRun = (StatusCode, HeaderMap, Json<ReviewRunDto>);
 
 #[derive(Debug, Deserialize, ToSchema)]
 #[serde(rename_all = "snake_case")]
@@ -438,7 +445,7 @@ pub(crate) struct AiProposalDecisionDto {
     ),
     request_body = GenerateScreeningRequest,
     responses(
-        (status = 200, description = "AI screening proposal", body = AiProposalDto),
+        (status = 202, description = "Compiled screening review scheduled", body = ReviewRunDto),
         (status = 400, description = "Invalid AI request", body = ErrorResponse),
         (status = 404, description = "Project, report, or protocol not found", body = ErrorResponse),
         (status = 409, description = "A current proposal or revision conflicts", body = ErrorResponse),
@@ -449,64 +456,21 @@ pub(crate) struct AiProposalDecisionDto {
 pub(crate) async fn generate_screening_suggestion(
     State(state): State<AppState>,
     Path((project_id, report_id)): Path<(Uuid, Uuid)>,
+    headers: HeaderMap,
     Json(input): Json<GenerateScreeningRequest>,
-) -> Result<Json<AiProposalDto>, ApiError> {
-    let stage = input.stage.ai();
-    let protocol = deepref_postgres::get_published_protocol(&state.pool, project_id)
-        .await
-        .map_err(map_protocol_error)?;
-    if input
-        .protocol_version_id
-        .is_some_and(|id| id != protocol.id)
-    {
-        return Err(ApiError::Conflict {
-            code: "ai_protocol_changed".to_owned(),
-            message: "the requested protocol is not the current published version".to_owned(),
-            details: json!({"protocolVersionId": protocol.id}),
-        });
-    }
-    let target = deepref_postgres::get_ai_screening_target(&state.pool, project_id, report_id)
-        .await
-        .map_err(map_ai_proposal_error)?;
-    let expected_revision = input.expected_revision.unwrap_or(target.expected_revision);
-    let allowed_reasons =
-        deepref_postgres::list_ai_exclusion_reasons(&state.pool, project_id, input.stage.domain())
-            .await
-            .map_err(map_ai_proposal_error)?;
-    let allowed_evidence = metadata_evidence(report_id, &target);
-    let criteria = protocol.criteria.clone();
-    let task = ScreeningTask::new(ScreeningTaskConfig {
-        project_id: project_id.into(),
-        report_id: report_id.into(),
-        stage,
-        protocol_version_id: protocol.id.into(),
-        expected_revision,
-        criteria: criteria.clone(),
-        allowed_evidence,
-        allowed_exclusion_reasons: allowed_reasons.into_iter().collect(),
-    });
-    let prompts = criteria.iter().map(criterion_prompt).collect::<Vec<_>>();
-    let ai_input = ScreeningInput {
-        project_id: project_id.into(),
-        report_id: report_id.into(),
-        stage,
-        protocol_version_id: protocol.id.into(),
-        expected_revision,
-        title: target.title.clone(),
-        abstract_text: target.abstract_text.clone(),
-        document_hash: None,
-        retrieval_query: (stage == ScreeningStage::FullText)
-            .then(|| screening_retrieval_query(&target, &criteria)),
-        criteria: prompts,
-    };
-    let proposal = run_task(
-        &state,
-        deepref_review::ReviewDefinitionKey::Screening,
-        task,
-        ai_input,
+) -> Result<AcceptedReviewRun, ApiError> {
+    let snapshot = deepref_postgres::schedule_screening_review(
+        &state.pool,
+        project_id,
+        report_id,
+        input.stage.ai(),
+        input.protocol_version_id,
+        input.expected_revision,
+        extract_actor(&headers)?,
     )
-    .await?;
-    Ok(Json(proposal_dto(proposal)?))
+    .await
+    .map_err(map_review_preparation_error)?;
+    accepted_review_run(snapshot)
 }
 
 #[utoipa::path(
@@ -516,7 +480,7 @@ pub(crate) async fn generate_screening_suggestion(
     tag = "ai",
     params(("project_id" = Uuid, Path), ("report_id" = Uuid, Path)),
     responses(
-        (status = 200, body = AiProposalDto),
+        (status = 202, body = ReviewRunDto),
         (status = 400, body = ErrorResponse),
         (status = 404, body = ErrorResponse),
         (status = 409, body = ErrorResponse),
@@ -527,45 +491,17 @@ pub(crate) async fn generate_screening_suggestion(
 pub(crate) async fn generate_study_grouping_suggestion(
     State(state): State<AppState>,
     Path((project_id, report_id)): Path<(Uuid, Uuid)>,
-) -> Result<Json<AiProposalDto>, ApiError> {
-    let target = deepref_postgres::get_ai_study_grouping_target(&state.pool, project_id, report_id)
-        .await
-        .map_err(map_ai_proposal_error)?;
-    let grounded_evidence = grouping_evidence(&target);
-    let task_input = StudyGroupingInput {
-        project_id: project_id.into(),
-        report_id: report_id.into(),
-        report_title: target.report.title.clone(),
-        report_abstract: target.report.abstract_text.clone(),
-        publication_year: target.report.publication_year,
-        first_author: target.report.first_author.clone(),
-        current_study_id: target.current_study_id.map(Into::into),
-        current_study_revision: target.current_study_revision,
-        candidates: target
-            .studies
-            .iter()
-            .map(|study| StudyGroupingCandidate {
-                study_id: study.study_id,
-                title: study.title.clone(),
-                revision: study.revision,
-                report_ids: study
-                    .reports
-                    .iter()
-                    .map(|report| report.report_id)
-                    .collect(),
-            })
-            .collect(),
-        grounded_evidence,
-    };
-    let task = StudyGroupingTask::new(&task_input).map_err(map_ai_error)?;
-    let proposal = run_task(
-        &state,
-        deepref_review::ReviewDefinitionKey::StudyGrouping,
-        task,
-        task_input,
+    headers: HeaderMap,
+) -> Result<AcceptedReviewRun, ApiError> {
+    let snapshot = deepref_postgres::schedule_study_grouping_review(
+        &state.pool,
+        project_id,
+        report_id,
+        extract_actor(&headers)?,
     )
-    .await?;
-    Ok(Json(proposal_dto(proposal)?))
+    .await
+    .map_err(map_review_preparation_error)?;
+    accepted_review_run(snapshot)
 }
 
 #[utoipa::path(
@@ -576,7 +512,7 @@ pub(crate) async fn generate_study_grouping_suggestion(
     params(("project_id" = Uuid, Path), ("report_id" = Uuid, Path)),
     request_body = GenerateAppraisalPrefillRequest,
     responses(
-        (status = 200, body = AiProposalDto),
+        (status = 202, body = ReviewRunDto),
         (status = 400, body = ErrorResponse),
         (status = 404, body = ErrorResponse),
         (status = 409, body = ErrorResponse),
@@ -587,95 +523,20 @@ pub(crate) async fn generate_study_grouping_suggestion(
 pub(crate) async fn generate_appraisal_prefill_suggestion(
     State(state): State<AppState>,
     Path((project_id, report_id)): Path<(Uuid, Uuid)>,
+    headers: HeaderMap,
     Json(input): Json<GenerateAppraisalPrefillRequest>,
-) -> Result<Json<AiProposalDto>, ApiError> {
-    let definition = deepref_application::get_appraisal_definition(
+) -> Result<AcceptedReviewRun, ApiError> {
+    let snapshot = deepref_postgres::schedule_appraisal_prefill_review(
+        &state.pool,
+        project_id,
+        report_id,
         &input.definition_id,
         input.definition_version,
+        extract_actor(&headers)?,
     )
-    .map_err(|error| ApiError::BadRequest(error.to_string()))?;
-    let target = deepref_postgres::get_ai_screening_target(&state.pool, project_id, report_id)
-        .await
-        .map_err(map_ai_proposal_error)?;
-    let query = definition
-        .domains
-        .iter()
-        .flat_map(|domain| {
-            domain.questions.iter().map(|question| {
-                format!(
-                    "{} {}",
-                    question.label,
-                    question.help.as_deref().unwrap_or("")
-                )
-            })
-        })
-        .collect::<Vec<_>>()
-        .join(" ");
-    let blocks =
-        deepref_postgres::list_ai_grounding_blocks(&state.pool, project_id, report_id, &query)
-            .await
-            .map_err(map_ai_proposal_error)?;
-    let questions = definition
-        .domains
-        .iter()
-        .flat_map(|domain| domain.questions.iter())
-        .map(|question| AppraisalPrefillQuestion {
-            id: question.id.clone(),
-            answer_schema: appraisal_answer_schema(&question.answer_schema),
-            required: question.required,
-            requires_evidence: question.requires_evidence,
-        })
-        .collect::<Vec<_>>();
-    let domains = definition
-        .domains
-        .iter()
-        .map(|domain| AppraisalPrefillDomain {
-            id: domain.id.clone(),
-            allowed_judgments: domain
-                .judgment
-                .options
-                .iter()
-                .map(|option| option.value.clone())
-                .collect(),
-            required: domain.judgment.required,
-        })
-        .collect::<Vec<_>>();
-    let grounded_evidence = blocks
-        .iter()
-        .map(|block| AppraisalPrefillEvidence {
-            document_id: block.document_id,
-            document_block_id: block.document_block_id,
-            page: block.page,
-            parser_version: block.parser_version.clone(),
-            content_hash: block.content_hash.clone(),
-        })
-        .collect();
-    let task_input = AppraisalPrefillInput {
-        project_id: project_id.into(),
-        report_id: report_id.into(),
-        definition_id: definition.id.as_str().to_owned(),
-        definition_version: definition.version.get(),
-        questions,
-        domains,
-        overall_allowed_judgments: definition
-            .overall_judgment
-            .options
-            .iter()
-            .map(|option| option.value.clone())
-            .collect(),
-        report_title: target.title,
-        report_abstract: target.abstract_text,
-        grounded_evidence,
-    };
-    let task = deepref_ai::AppraisalPrefillTask::new(&task_input).map_err(map_ai_error)?;
-    let proposal = run_task(
-        &state,
-        deepref_review::ReviewDefinitionKey::AppraisalPrefill,
-        task,
-        task_input,
-    )
-    .await?;
-    Ok(Json(proposal_dto(proposal)?))
+    .await
+    .map_err(map_review_preparation_error)?;
+    accepted_review_run(snapshot)
 }
 
 #[utoipa::path(
@@ -689,7 +550,7 @@ pub(crate) async fn generate_appraisal_prefill_suggestion(
     ),
     request_body = GenerateDuplicateRequest,
     responses(
-        (status = 200, description = "AI duplicate assistance proposal", body = AiProposalDto),
+        (status = 202, description = "Compiled duplicate review scheduled", body = ReviewRunDto),
         (status = 400, description = "Invalid AI request", body = ErrorResponse),
         (status = 404, description = "Record or candidate report not found", body = ErrorResponse),
         (status = 409, description = "A proposal conflicts", body = ErrorResponse),
@@ -700,50 +561,46 @@ pub(crate) async fn generate_appraisal_prefill_suggestion(
 pub(crate) async fn generate_duplicate_suggestion(
     State(state): State<AppState>,
     Path((project_id, record_id)): Path<(Uuid, Uuid)>,
+    headers: HeaderMap,
     Json(input): Json<GenerateDuplicateRequest>,
-) -> Result<Json<AiProposalDto>, ApiError> {
-    let target = deepref_postgres::get_ai_dedupe_target(
+) -> Result<AcceptedReviewRun, ApiError> {
+    let snapshot = deepref_postgres::schedule_duplicate_detection_review(
         &state.pool,
         project_id,
         record_id,
         input.candidate_report_id,
+        extract_actor(&headers)?,
     )
     .await
-    .map_err(map_ai_proposal_error)?;
-    let source_id = record_id;
-    let candidate_id = input.candidate_report_id;
-    let provenance = dedupe_provenance(source_id, candidate_id, &target);
-    let signals = dedupe_signals(candidate_id, &target);
-    let task = DedupeTask::new(
-        project_id.into(),
-        record_id.into(),
-        candidate_id.into(),
-        provenance.clone(),
-        signals.clone(),
-    );
-    let ai_input = DedupeInput {
-        project_id: project_id.into(),
-        source_record_id: record_id.into(),
-        candidate_report_id: candidate_id.into(),
-        source_title: target.source_title.clone(),
-        candidate_title: target.candidate_title.clone(),
-        source_year: target.source_year,
-        candidate_year: target.candidate_year,
-        source_author: target.source_author.clone(),
-        candidate_author: target.candidate_author.clone(),
-        source_title_hash: target.source_title_hash.clone(),
-        candidate_title_hash: target.candidate_title_hash.clone(),
-        grounded_signals: signals,
-        grounded_provenance: provenance,
-    };
-    let proposal = run_task(
-        &state,
-        deepref_review::ReviewDefinitionKey::DuplicateDetection,
-        task,
-        ai_input,
+    .map_err(map_review_preparation_error)?;
+    accepted_review_run(snapshot)
+}
+
+#[utoipa::path(
+    get,
+    path = "/projects/{project_id}/review-runs/{run_id}",
+    operation_id = "getReviewRun",
+    tag = "ai",
+    params(
+        ("project_id" = Uuid, Path, description = "Project identifier"),
+        ("run_id" = Uuid, Path, description = "Review run identifier")
+    ),
+    responses(
+        (status = 200, description = "Compiled review run status and result linkage", body = ReviewRunDto),
+        (status = 404, description = "Review run not found", body = ErrorResponse),
+        (status = 500, description = "Internal server error", body = ErrorResponse)
     )
-    .await?;
-    Ok(Json(proposal_dto(proposal)?))
+)]
+pub(crate) async fn get_review_run(
+    State(state): State<AppState>,
+    Path((project_id, run_id)): Path<(Uuid, Uuid)>,
+) -> Result<Json<ReviewRunDto>, ApiError> {
+    let run_id = deepref_review::ReviewRunId::new(run_id)
+        .map_err(|error| ApiError::BadRequest(error.to_string()))?;
+    let snapshot = deepref_postgres::get_review_run(&state.pool, project_id.into(), run_id)
+        .await
+        .map_err(map_postgres_review_error)?;
+    Ok(Json(review_run_dto(snapshot)?))
 }
 
 #[utoipa::path(
@@ -929,328 +786,56 @@ fn reviewed_payload_to_internal(
     }
 }
 
-pub(super) async fn run_task<T>(
-    state: &AppState,
-    definition_key: deepref_review::ReviewDefinitionKey,
-    task: T,
-    input: T::Input,
-) -> Result<AiProposalRecord, ApiError>
-where
-    T: deepref_ai::AiTask,
-{
-    let definition = deepref_review::ReviewCatalog
-        .compile(definition_key)
-        .map_err(|error| ApiError::Configuration(error.to_string()))?;
-    let task = deepref_review::DefinedAiTask::bind(definition, task)
-        .map_err(|error| ApiError::Configuration(error.to_string()))?;
-    let store = deepref_postgres::PostgresAiStore::new(&state.pool);
-    let runner = AiTaskRunner::new(
-        state.ai_gateway.as_ref(),
-        &store,
-        &store,
-        &store,
-        &store,
-        &SystemClock,
-        &UuidProvider,
+pub(super) fn accepted_review_run(
+    snapshot: deepref_review::ReviewRunSnapshot,
+) -> Result<AcceptedReviewRun, ApiError> {
+    let location = format!(
+        "/projects/{}/review-runs/{}",
+        snapshot.project_id.as_uuid(),
+        snapshot.id.as_uuid()
     );
-    let result = runner.run(&task, input).await.map_err(map_ai_error)?;
-    let proposal = result
-        .proposal
-        .ok_or_else(|| ApiError::Internal(anyhow::anyhow!("AI task did not produce a proposal")))?;
-    deepref_postgres::get_ai_proposal(
-        &state.pool,
-        proposal.draft.project_id.as_uuid(),
-        proposal.id,
-    )
-    .await
-    .map_err(map_ai_proposal_error)
-}
-
-fn metadata_evidence(
-    report_id: Uuid,
-    target: &deepref_postgres::AiScreeningTarget,
-) -> Vec<ScreeningEvidence> {
-    let mut evidence = Vec::new();
-    if let Some(title) = &target.title {
-        evidence.push(ScreeningEvidence::ReportMetadata {
-            report_id,
-            field: ScreeningEvidenceField::Title,
-            content_hash: deepref_ai::sha256_bytes(title.as_bytes()),
-        });
-    }
-    if let Some(abstract_text) = &target.abstract_text {
-        evidence.push(ScreeningEvidence::ReportMetadata {
-            report_id,
-            field: ScreeningEvidenceField::Abstract,
-            content_hash: deepref_ai::sha256_bytes(abstract_text.as_bytes()),
-        });
-    }
-    evidence
-}
-
-fn grouping_evidence(
-    target: &deepref_postgres::AiStudyGroupingTarget,
-) -> Vec<StudyGroupingEvidence> {
-    let mut evidence = Vec::new();
-    let mut add_report = |report: &deepref_postgres::AiGroupingReport| {
-        if let Some(title) = &report.title {
-            evidence.push(StudyGroupingEvidence::ReportMetadata {
-                report_id: report.report_id,
-                field: StudyGroupingField::Title,
-                content_hash: deepref_ai::sha256_bytes(title.as_bytes()),
-            });
-        }
-        if let Some(abstract_text) = &report.abstract_text {
-            evidence.push(StudyGroupingEvidence::ReportMetadata {
-                report_id: report.report_id,
-                field: StudyGroupingField::Abstract,
-                content_hash: deepref_ai::sha256_bytes(abstract_text.as_bytes()),
-            });
-        }
-        if let Some(year) = report.publication_year {
-            evidence.push(StudyGroupingEvidence::ReportMetadata {
-                report_id: report.report_id,
-                field: StudyGroupingField::PublicationYear,
-                content_hash: deepref_ai::sha256_bytes(year.to_string().as_bytes()),
-            });
-        }
-        if let Some(author) = &report.first_author {
-            evidence.push(StudyGroupingEvidence::ReportMetadata {
-                report_id: report.report_id,
-                field: StudyGroupingField::FirstAuthor,
-                content_hash: deepref_ai::sha256_bytes(author.as_bytes()),
-            });
-        }
-    };
-    add_report(&target.report);
-    for study in &target.studies {
-        evidence.push(StudyGroupingEvidence::StudyMetadata {
-            study_id: study.study_id,
-            field: StudyGroupingField::Title,
-            content_hash: deepref_ai::sha256_bytes(study.title.as_bytes()),
-        });
-        for report in &study.reports {
-            if let Some(title) = &report.title {
-                evidence.push(StudyGroupingEvidence::StudyReportMetadata {
-                    study_id: study.study_id,
-                    report_id: report.report_id,
-                    field: StudyGroupingField::Title,
-                    content_hash: deepref_ai::sha256_bytes(title.as_bytes()),
-                });
-            }
-            if let Some(abstract_text) = &report.abstract_text {
-                evidence.push(StudyGroupingEvidence::StudyReportMetadata {
-                    study_id: study.study_id,
-                    report_id: report.report_id,
-                    field: StudyGroupingField::Abstract,
-                    content_hash: deepref_ai::sha256_bytes(abstract_text.as_bytes()),
-                });
-            }
-            if let Some(year) = report.publication_year {
-                evidence.push(StudyGroupingEvidence::StudyReportMetadata {
-                    study_id: study.study_id,
-                    report_id: report.report_id,
-                    field: StudyGroupingField::PublicationYear,
-                    content_hash: deepref_ai::sha256_bytes(year.to_string().as_bytes()),
-                });
-            }
-            if let Some(author) = &report.first_author {
-                evidence.push(StudyGroupingEvidence::StudyReportMetadata {
-                    study_id: study.study_id,
-                    report_id: report.report_id,
-                    field: StudyGroupingField::FirstAuthor,
-                    content_hash: deepref_ai::sha256_bytes(author.as_bytes()),
-                });
-            }
-        }
-    }
-    evidence
-}
-
-fn appraisal_answer_schema(schema: &deepref_application::AnswerSchema) -> AppraisalAnswerSchema {
-    match schema {
-        deepref_application::AnswerSchema::Enum { options } => AppraisalAnswerSchema::Enum {
-            options: options.iter().map(|option| option.value.clone()).collect(),
-        },
-        deepref_application::AnswerSchema::Boolean => AppraisalAnswerSchema::Boolean,
-        deepref_application::AnswerSchema::Scale { min, max, .. } => AppraisalAnswerSchema::Scale {
-            min: *min,
-            max: *max,
-        },
-        deepref_application::AnswerSchema::Text { max_length } => AppraisalAnswerSchema::Text {
-            max_length: *max_length,
-        },
-    }
-}
-
-fn criterion_prompt(criterion: &EligibilityCriterion) -> CriterionPrompt {
-    CriterionPrompt {
-        id: criterion.id,
-        label: criterion.label.clone(),
-        description: criterion.description.clone(),
-        ordinal: criterion.ordinal,
-        kind: match criterion.kind {
-            deepref_domain::CriterionKind::Inclusion => "inclusion".to_owned(),
-            deepref_domain::CriterionKind::Exclusion => "exclusion".to_owned(),
-        },
-        stage: match criterion.stage {
-            CriterionStage::TitleAbstract => "title_abstract",
-            CriterionStage::FullText => "full_text",
-            CriterionStage::Both => "both",
-        }
-        .to_owned(),
-    }
-}
-
-fn screening_retrieval_query(
-    target: &deepref_postgres::AiScreeningTarget,
-    criteria: &[EligibilityCriterion],
-) -> String {
-    const MAX_TERMS: usize = 64;
-    const MAX_TERM_CHARS: usize = 48;
-    let mut terms = Vec::new();
-    let mut seen = BTreeSet::new();
-    let mut add_terms = |text: &str| {
-        let mut token = String::new();
-        let mut flush = |token: &mut String| {
-            if token.is_empty() {
-                return;
-            }
-            let normalized: String = token
-                .chars()
-                .flat_map(char::to_lowercase)
-                .take(MAX_TERM_CHARS)
-                .collect();
-            let char_count = normalized.chars().count();
-            if (char_count >= 3
-                || normalized
-                    .chars()
-                    .all(|character| character.is_ascii_digit()))
-                && seen.insert(normalized.clone())
-                && terms.len() < MAX_TERMS
-            {
-                terms.push(normalized);
-            }
-            token.clear();
-        };
-        for character in text.chars() {
-            if character.is_alphanumeric() {
-                token.push(character);
-            } else {
-                flush(&mut token);
-            }
-        }
-        flush(&mut token);
-    };
-    for criterion in criteria {
-        add_terms(&criterion.label);
-        add_terms(&criterion.description);
-    }
-    if let Some(title) = &target.title {
-        add_terms(title);
-    }
-    if let Some(abstract_text) = &target.abstract_text {
-        add_terms(abstract_text);
-    }
-    if terms.is_empty() {
-        "full-text eligibility evidence".to_owned()
-    } else {
-        terms.into_iter().collect::<Vec<_>>().join(" OR ")
-    }
-}
-
-fn dedupe_provenance(
-    source_record_id: Uuid,
-    candidate_report_id: Uuid,
-    target: &deepref_postgres::AiDedupeTarget,
-) -> Vec<IdentityProvenance> {
-    let mut provenance = Vec::new();
-    let mut push = |entity_type: &str, entity_id: Uuid, field: &str, value: &str| {
-        provenance.push(IdentityProvenance {
-            entity_type: entity_type.to_owned(),
-            entity_id: entity_id.to_string(),
-            field: field.to_owned(),
-            content_hash: deepref_ai::sha256_bytes(value.as_bytes()),
-        });
-    };
-    if let Some(title) = target.source_title.as_deref() {
-        push("record", source_record_id, "title", title);
-    }
-    if let Some(title) = target.candidate_title.as_deref() {
-        push("report", candidate_report_id, "title", title);
-    }
-    if let Some(year) = target.source_year {
-        push(
-            "record",
-            source_record_id,
-            "publication_year",
-            &year.to_string(),
-        );
-    }
-    if let Some(year) = target.candidate_year {
-        push(
-            "report",
-            candidate_report_id,
-            "publication_year",
-            &year.to_string(),
-        );
-    }
-    if let Some(author) = target.source_author.as_deref() {
-        push("record", source_record_id, "first_author", author);
-    }
-    if let Some(author) = target.candidate_author.as_deref() {
-        push("report", candidate_report_id, "first_author", author);
-    }
-    provenance
-}
-
-fn dedupe_signals(
-    candidate_report_id: Uuid,
-    target: &deepref_postgres::AiDedupeTarget,
-) -> Vec<deepref_ai::DuplicateSignal> {
-    let candidate = DedupeCandidate {
-        report_id: candidate_report_id.into(),
-        title: target.candidate_title.clone(),
-        first_author: target.candidate_author.clone(),
-        publication_year: target.candidate_year,
-        exact_identifier_match: false,
-        conflicting_identifier: false,
-    };
-    let score = score_candidate(
-        target.source_title.as_deref(),
-        target.source_author.as_deref(),
-        target.source_year,
-        &candidate,
+    let mut headers = HeaderMap::new();
+    headers.insert(
+        LOCATION,
+        location.parse().map_err(|error| {
+            ApiError::Internal(anyhow::anyhow!("invalid run location: {error}"))
+        })?,
     );
-    let mut signals = Vec::new();
-    if target.source_title.is_some() && target.candidate_title.is_some() {
-        signals.push(deepref_ai::DuplicateSignal::TitleSimilarity {
-            similarity: score.title_similarity,
-            supports_match: score.title_similarity >= FUZZY_PROPOSAL_THRESHOLD,
-        });
-    }
-    if let Some((source_year, candidate_year)) = target.source_year.zip(target.candidate_year) {
-        signals.push(deepref_ai::DuplicateSignal::PublicationYear {
-            source_year,
-            candidate_year,
-            supports_match: score.year_match == Some(true),
-        });
-    }
-    if let Some((source_author, candidate_author)) = target
-        .source_author
-        .as_ref()
-        .zip(target.candidate_author.as_ref())
-    {
-        signals.push(deepref_ai::DuplicateSignal::FirstAuthor {
-            source_author: source_author.clone(),
-            candidate_author: candidate_author.clone(),
-            similarity: score.first_author_similarity.unwrap_or_default(),
-            supports_match: score
-                .first_author_similarity
-                .is_some_and(|similarity| similarity >= FUZZY_PROPOSAL_THRESHOLD),
-        });
-    }
-    signals
+    Ok((
+        StatusCode::ACCEPTED,
+        headers,
+        Json(review_run_dto(snapshot)?),
+    ))
+}
+
+fn review_run_dto(snapshot: deepref_review::ReviewRunSnapshot) -> Result<ReviewRunDto, ApiError> {
+    let state = match snapshot.state {
+        deepref_review::ReviewRunState::Queued => ReviewRunStateDto::Queued,
+        deepref_review::ReviewRunState::Running => ReviewRunStateDto::Running,
+        deepref_review::ReviewRunState::Blocked { code, message } => ReviewRunStateDto::Blocked {
+            code: code.as_str().to_owned(),
+            message,
+        },
+        deepref_review::ReviewRunState::Failed { code, message } => {
+            ReviewRunStateDto::Failed { code, message }
+        }
+        deepref_review::ReviewRunState::Completed { proposal_id } => {
+            ReviewRunStateDto::Completed { proposal_id }
+        }
+    };
+    Ok(ReviewRunDto {
+        id: snapshot.id.as_uuid(),
+        project_id: snapshot.project_id.as_uuid(),
+        definition: snapshot.definition.as_str().to_owned(),
+        subject: serde_json::to_value(snapshot.subject)
+            .map_err(|error| ApiError::Internal(error.into()))?,
+        origin: serde_json::to_value(snapshot.origin)
+            .map_err(|error| ApiError::Internal(error.into()))?,
+        state,
+        created_at: snapshot.created_at,
+        started_at: snapshot.started_at,
+        finished_at: snapshot.finished_at,
+    })
 }
 
 pub(crate) fn proposal_dto(proposal: AiProposalRecord) -> Result<AiProposalDto, ApiError> {
@@ -1332,6 +917,68 @@ fn map_ai_error(error: AiError) -> ApiError {
         AiError::PromptRegistry(message) | AiError::InvalidEmbedding(message) => {
             ApiError::BadRequest(message)
         }
+    }
+}
+
+pub(super) fn map_review_preparation_error(
+    error: deepref_postgres::ReviewPreparationError,
+) -> ApiError {
+    match error {
+        deepref_postgres::ReviewPreparationError::Review(error) => map_postgres_review_error(error),
+        deepref_postgres::ReviewPreparationError::Protocol(error) => map_protocol_error(error),
+        deepref_postgres::ReviewPreparationError::AiProposal(error) => map_ai_proposal_error(error),
+        deepref_postgres::ReviewPreparationError::Extraction(error) => match error {
+            deepref_postgres::ExtractionError::Database(error) => ApiError::Database(error),
+            deepref_postgres::ExtractionError::DefinitionNotFound
+            | deepref_postgres::ExtractionError::StudyNotFound => {
+                ApiError::NotFound(error.to_string())
+            }
+            _ => ApiError::BadRequest(error.to_string()),
+        },
+        deepref_postgres::ReviewPreparationError::InvalidInput(message)
+            if message.contains("changed") =>
+        {
+            ApiError::Conflict {
+                code: "review_subject_changed".to_owned(),
+                message,
+                details: Value::Null,
+            }
+        }
+        deepref_postgres::ReviewPreparationError::InvalidInput(message) => {
+            ApiError::BadRequest(message)
+        }
+    }
+}
+
+fn map_postgres_review_error(error: deepref_postgres::PostgresReviewError) -> ApiError {
+    match error {
+        deepref_postgres::PostgresReviewError::Database(error) => ApiError::Database(error),
+        deepref_postgres::PostgresReviewError::Serialization(error) => {
+            ApiError::Internal(error.into())
+        }
+        deepref_postgres::PostgresReviewError::Review(error) => {
+            ApiError::Configuration(error.to_string())
+        }
+        deepref_postgres::PostgresReviewError::Ai(error) => map_ai_error(error),
+        deepref_postgres::PostgresReviewError::RunNotFound => {
+            ApiError::NotFound("review run not found".to_owned())
+        }
+        deepref_postgres::PostgresReviewError::InvalidState(message) => ApiError::Conflict {
+            code: "review_run_state_conflict".to_owned(),
+            message,
+            details: Value::Null,
+        },
+        deepref_postgres::PostgresReviewError::InvalidStoredValue(message) => {
+            ApiError::Internal(anyhow::anyhow!(message))
+        }
+        deepref_postgres::PostgresReviewError::WorkerOwnership => {
+            ApiError::Internal(anyhow::anyhow!("review worker lease is not owned"))
+        }
+        deepref_postgres::PostgresReviewError::FinalizationConflict => ApiError::Conflict {
+            code: "review_finalization_conflict".to_owned(),
+            message: "review proposal finalization conflicts with persisted state".to_owned(),
+            details: Value::Null,
+        },
     }
 }
 

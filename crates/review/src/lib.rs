@@ -6,6 +6,8 @@
 //! worker adapters live outside this crate.
 
 mod definition;
+#[doc(hidden)]
+pub mod execution;
 mod hash;
 mod manifest;
 mod task;
