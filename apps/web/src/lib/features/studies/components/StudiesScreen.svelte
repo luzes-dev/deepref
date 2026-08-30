@@ -1,22 +1,24 @@
 <script lang="ts">
-	import { page } from '$app/state';
 	import { goto } from '$app/navigation';
 	import { resolve } from '$app/paths';
+	import { page } from '$app/state';
 	import {
 		createDecideAiProposal,
 		createGenerateStudyGroupingSuggestion,
 		createListAiProposals,
 		getListAiProposalsQueryKey
 	} from '$lib/api/generated/ai/ai';
+	import { ApiError } from '$lib/api/custom-fetch';
 	import type {
 		AiProposalDecisionInput,
 		AiProposalDto,
-		AiStudyDesignClassificationProposalPayload,
-		AiStudyDesignEvidenceDto,
-		AiStudyGroupingEvidenceDto,
-		AiStudyGroupingFieldDto,
 		AiStudyGroupingProposalPayload
 	} from '$lib/api/generated/models';
+	import {
+		StudyReportRoleInput,
+		type StudyReportRoleInput as StudyReportRole
+	} from '$lib/api/generated/models/studyReportRoleInput';
+	import { createListProjectReports } from '$lib/api/generated/reports/reports';
 	import {
 		createClassifyProjectStudy,
 		createCreateProjectStudy,
@@ -31,26 +33,16 @@
 		getListProjectStudiesQueryKey,
 		getListProjectStudyHistoryQueryKey
 	} from '$lib/api/generated/studies/studies';
-	import {
-		StudyReportRoleInput,
-		type StudyReportRoleInput as StudyReportRole
-	} from '$lib/api/generated/models/studyReportRoleInput';
-	import { createListProjectReports } from '$lib/api/generated/reports/reports';
-	import { ApiError } from '$lib/api/custom-fetch';
-	import { useQueryClient } from '@tanstack/svelte-query';
-	import * as Alert from '$lib/components/ui/alert';
-	import { Badge } from '$lib/components/ui/badge';
-	import { Button } from '$lib/components/ui/button';
 	import * as Card from '$lib/components/ui/card';
-	import * as Empty from '$lib/components/ui/empty';
-	import { Input } from '$lib/components/ui/input';
-	import * as Select from '$lib/components/ui/select';
 	import { Separator } from '$lib/components/ui/separator';
-	import { Skeleton } from '$lib/components/ui/skeleton';
-	import { Spinner } from '$lib/components/ui/spinner';
-	import { Brain, Check, Info, X } from '@lucide/svelte';
+	import { useQueryClient } from '@tanstack/svelte-query';
 	import { parseStudyLocation, updateStudyLocation } from '../url';
-	import StudyClassificationForm from './StudyClassificationForm.svelte';
+	import StudyClassificationAssistance from './StudyClassificationAssistance.svelte';
+	import StudyDetailsPanel from './StudyDetailsPanel.svelte';
+	import StudyGroupingAssistance from './StudyGroupingAssistance.svelte';
+	import StudyHistoryPanel from './StudyHistoryPanel.svelte';
+	import StudyListPanel from './StudyListPanel.svelte';
+	import StudyMembershipPanel from './StudyMembershipPanel.svelte';
 
 	let { projectId }: { projectId: string } = $props();
 	const queryClient = useQueryClient();
@@ -232,131 +224,8 @@
 		}
 	}
 
-	function groupingFieldLabel(field: AiStudyGroupingFieldDto): string {
-		switch (field) {
-			case 'title':
-				return 'Title';
-			case 'abstract':
-				return 'Abstract';
-			case 'publication_year':
-				return 'Publication year';
-			case 'first_author':
-				return 'First author';
-			default: {
-				const exhaustive: never = field;
-				return exhaustive;
-			}
-		}
-	}
-
 	function studyLabel(studyId: string): string {
 		return studies.find((study) => study.id === studyId)?.title ?? studyId;
-	}
-
-	function groupingEvidenceSubject(evidence: AiStudyGroupingEvidenceDto): string {
-		switch (evidence.kind) {
-			case 'report_metadata':
-				return `Report ${evidence.report_id}`;
-			case 'study_metadata':
-				return `Study ${studyLabel(evidence.study_id)}`;
-			case 'study_report_metadata':
-				return `Study ${studyLabel(evidence.study_id)} · report ${evidence.report_id}`;
-			default: {
-				const exhaustive: never = evidence;
-				return exhaustive;
-			}
-		}
-	}
-
-	function classificationDesignLabel(
-		design: NonNullable<AiStudyDesignClassificationProposalPayload['suggested_design']>
-	): string {
-		switch (design) {
-			case 'rct':
-				return 'Randomized controlled trial';
-			case 'non_randomized_intervention':
-				return 'Non-randomized intervention';
-			case 'cohort':
-				return 'Cohort';
-			case 'case_control':
-				return 'Case-control';
-			case 'cross_sectional':
-				return 'Cross-sectional';
-			case 'diagnostic_accuracy':
-				return 'Diagnostic accuracy';
-			case 'prediction_model':
-				return 'Prediction model';
-			case 'qualitative':
-				return 'Qualitative';
-			case 'systematic_review':
-				return 'Systematic review';
-			case 'case_series':
-				return 'Case series';
-			default: {
-				const exhaustive: never = design;
-				return exhaustive;
-			}
-		}
-	}
-
-	function classificationEvidenceSubject(evidence: AiStudyDesignEvidenceDto): string {
-		switch (evidence.kind) {
-			case 'study_metadata':
-				return `Study ${studyLabel(evidence.study_id)} · ${evidence.study_id}`;
-			case 'report_metadata':
-				return `Report ${evidence.report_id}`;
-			default: {
-				const exhaustive: never = evidence;
-				return exhaustive;
-			}
-		}
-	}
-
-	function classificationEvidenceFieldLabel(evidence: AiStudyDesignEvidenceDto): string {
-		switch (evidence.kind) {
-			case 'study_metadata':
-				return classificationStudyFieldLabel(evidence.field);
-			case 'report_metadata':
-				return classificationReportFieldLabel(evidence.field);
-			default: {
-				const exhaustive: never = evidence;
-				return exhaustive;
-			}
-		}
-	}
-
-	function classificationStudyFieldLabel(
-		field: Extract<AiStudyDesignEvidenceDto, { kind: 'study_metadata' }>['field']
-	): string {
-		switch (field) {
-			case 'title':
-				return 'Title';
-			default: {
-				const exhaustive: never = field;
-				return exhaustive;
-			}
-		}
-	}
-
-	function classificationReportFieldLabel(
-		field: Extract<AiStudyDesignEvidenceDto, { kind: 'report_metadata' }>['field']
-	): string {
-		switch (field) {
-			case 'title':
-				return 'Title';
-			case 'abstract':
-				return 'Abstract';
-			case 'publication_year':
-				return 'Publication year';
-			default: {
-				const exhaustive: never = field;
-				return exhaustive;
-			}
-		}
-	}
-
-	function classificationEvidenceKey(evidence: AiStudyDesignEvidenceDto): string {
-		return `${evidence.kind}:${evidence.kind === 'study_metadata' ? evidence.study_id : evidence.report_id}:${evidence.field}:${evidence.content_hash}`;
 	}
 
 	function affectedStudyIds(payload: AiStudyGroupingProposalPayload): string[] {
@@ -646,631 +515,78 @@
 	{/if}
 
 	<div class="grid gap-6 lg:grid-cols-[20rem_1fr]">
-		<Card.Root>
-			<Card.Header>
-				<Card.Title>Study groups</Card.Title>
-				<Card.Description>{studies.length} groups in this project</Card.Description>
-			</Card.Header>
-			<Card.Content class="flex flex-col gap-4">
-				<form
-					class="flex flex-col gap-2"
-					onsubmit={(event) => {
-						event.preventDefault();
-						void createStudy();
-					}}
-				>
-					<label for="new-study-title" class="text-sm font-medium">New study title</label>
-					<Input
-						id="new-study-title"
-						bind:value={newTitle}
-						placeholder="e.g. AMBIENT-AI Trial"
-						required
-					/>
-					<Button type="submit" disabled={createMutation.isPending}>Create study</Button>
-				</form>
-				<Separator />
-				<div class="flex flex-col gap-2" aria-live="polite">
-					{#if studiesQuery.isPending}
-						<p class="text-sm text-muted-foreground">Loading studies…</p>
-					{:else if studies.length === 0}
-						<p class="text-sm text-muted-foreground">No study groups yet.</p>
-					{:else}
-						{#each studies as study (study.id)}
-							<button
-								type="button"
-								class="flex flex-col gap-1 rounded-md border p-3 text-left transition hover:bg-muted/50 {selectedStudyId ===
-								study.id
-									? 'border-primary bg-muted/50'
-									: ''}"
-								onclick={() => void selectStudy(study.id)}
-							>
-								<span class="font-medium">{study.title}</span>
-								<span class="text-xs text-muted-foreground"
-									>Open to inspect membership · revision {study.revision}</span
-								>
-							</button>
-						{/each}
-					{/if}
-				</div>
-			</Card.Content>
-		</Card.Root>
+		<StudyListPanel
+			{studies}
+			{selectedStudyId}
+			pending={studiesQuery.isPending}
+			creating={createMutation.isPending}
+			bind:title={newTitle}
+			onCreate={() => void createStudy()}
+			onSelect={(studyId) => void selectStudy(studyId)}
+		/>
 
 		{#if selectedStudy}
 			<div class="flex flex-col gap-6">
-				<Card.Root>
-					<Card.Header>
-						<div class="flex flex-wrap items-start justify-between gap-3">
-							<div>
-								<Card.Title>{selectedStudy.title}</Card.Title>
-								<Card.Description
-									>Revision {selectedStudy.revision} · changes are audited and reversible</Card.Description
-								>
-							</div>
-							{#if selectedStudy.design_label}<Badge variant="secondary"
-									>{selectedStudy.design_label}</Badge
-								>{/if}
-						</div>
-					</Card.Header>
-					<Card.Content class="flex flex-col gap-6">
-						<div class="grid gap-4 md:grid-cols-3">
-							<form
-								class="flex flex-col gap-2"
-								onsubmit={(event) => {
-									event.preventDefault();
-									void renameStudy();
-								}}
-							>
-								<label for="rename-study-title" class="text-sm font-medium"
-									>Rename</label
-								>
-								<Input
-									id="rename-study-title"
-									bind:value={renameTitle}
-									placeholder={selectedStudy.title}
-									required
-								/>
-								<Button
-									type="submit"
-									variant="outline"
-									disabled={renameMutation.isPending}>Save title</Button
-								>
-							</form>
-							{#key `${selectedStudy.id}:${selectedStudy.revision}`}
-								<StudyClassificationForm
-									study={selectedStudy}
-									{designs}
-									disabled={classifyMutation.isPending}
-									onSubmit={classify}
-								/>
-							{/key}
-							<div class="rounded-md border bg-muted/20 p-3 text-sm">
-								<p class="font-medium">Suggested tools</p>
-								<p class="mt-1 text-xs text-muted-foreground">
-									Guidance only; never completes an appraisal automatically.
-								</p>
-								<div class="mt-3 flex flex-wrap gap-2">
-									{#each selectedStudy.tool_suggestions as suggestion (suggestion.tool)}<Badge
-											variant="outline"
-											title={suggestion.rationale}>{suggestion.tool}</Badge
-										>{/each}
-								</div>
-							</div>
-						</div>
+				<StudyDetailsPanel
+					study={selectedStudy}
+					{designs}
+					bind:renameTitle
+					renaming={renameMutation.isPending}
+					classifying={classifyMutation.isPending}
+					onRename={() => void renameStudy()}
+					onClassify={classify}
+				>
+					<StudyClassificationAssistance
+						proposal={activeClassificationProposal}
+						pending={classificationProposalsQuery.isPending}
+						errorMessage={classificationErrorMessage}
+						conflict={classificationConflict}
+						providerUnavailable={classificationProviderUnavailable}
+						action={classificationAction}
+						decisionPending={pendingClassificationProposalId !== null}
+						{studyLabel}
+						onDecide={(decision) => void decideClassification(decision)}
+					/>
 
-						<Card.Root data-testid="study-classification-assistance">
-							<Card.Header class="gap-3">
-								<div class="flex flex-wrap items-center justify-between gap-2">
-									<div class="flex items-center gap-2">
-										<Brain aria-hidden="true" class="size-4" />
-										<Card.Title
-											>Study design classification assistance</Card.Title
-										>
-									</div>
-									<Badge variant="outline">Proposal only</Badge>
-								</div>
-								<Card.Description>
-									AI classifications are evidence-linked suggestions. A reviewer
-									must approve or reject the proposal; accepting it records the
-									reviewer decision and study history.
-								</Card.Description>
-							</Card.Header>
-							<Card.Content class="flex flex-col gap-4">
-								{#if classificationErrorMessage}
-									<Alert.Root variant="destructive" role="alert">
-										<Alert.Title>
-											{classificationConflict
-												? 'Study classification changed elsewhere'
-												: classificationProviderUnavailable
-													? 'AI provider unavailable'
-													: 'Study classification suggestion unavailable'}
-										</Alert.Title>
-										<Alert.Description
-											>{classificationErrorMessage}</Alert.Description
-										>
-									</Alert.Root>
-								{/if}
-								{#if classificationProposalsQuery.isPending && !activeClassificationProposal}
-									<div
-										class="flex flex-col gap-3"
-										aria-label="Loading study classification suggestion"
-									>
-										<Skeleton class="h-5 w-2/3" />
-										<Skeleton class="h-20 w-full" />
-									</div>
-								{:else if !activeClassificationProposal}
-									<Empty.Root class="border-0 p-0">
-										<Empty.Media variant="icon"><Info /></Empty.Media>
-										<Empty.Header>
-											<Empty.Title
-												>No pending classification suggestion</Empty.Title
-											>
-											<Empty.Description>
-												The assistant has not created a study-design
-												proposal for this study.
-											</Empty.Description>
-										</Empty.Header>
-									</Empty.Root>
-								{:else}
-									{@const proposal = activeClassificationProposal}
-									{@const payload = proposal.payload}
-									<div class="flex flex-wrap items-center gap-2">
-										<Badge variant="secondary">{proposal.status}</Badge>
-										<span class="text-xs text-muted-foreground">
-											{proposal.provider} / {proposal.model} · prompt {proposal.prompt_version}
-										</span>
-									</div>
+					<Separator />
 
-									<div
-										class="rounded-md border p-4"
-										data-testid="study-classification-suggestion"
-									>
-										<p class="text-sm font-medium">
-											Suggested closed study design
-										</p>
-										{#if payload.suggested_design}
-											<div class="mt-2 flex flex-wrap items-center gap-2">
-												<Badge variant="secondary">
-													{classificationDesignLabel(
-														payload.suggested_design
-													)}
-												</Badge>
-												<code class="text-xs"
-													>{payload.suggested_design}</code
-												>
-											</div>
-										{:else}
-											<Badge class="mt-2" variant="outline">Abstention</Badge>
-											<p class="mt-2 text-sm text-muted-foreground">
-												The evidence does not support a closed study-design
-												label.
-											</p>
-										{/if}
-									</div>
+					<StudyMembershipPanel
+						study={selectedStudy}
+						{reports}
+						{selectedReport}
+						bind:reportId
+						bind:role
+						assigning={membershipMutation.isPending}
+						membershipPending={membershipQuery.isPending || membershipQuery.isFetching}
+						onAssign={() => void assignReport()}
+						onUnassign={(selectedReportId) => void unassignReport(selectedReportId)}
+					/>
 
-									<div class="rounded-md border p-4">
-										<p class="text-sm font-medium">Rationale</p>
-										<p class="mt-1 text-sm text-muted-foreground">
-											{payload.rationale}
-										</p>
-									</div>
+					<StudyGroupingAssistance
+						{reportId}
+						proposal={activeGroupingProposal}
+						payload={activeGroupingPayload}
+						membership={selectedMembership}
+						pending={groupingProposalsQuery.isPending}
+						errorMessage={groupingErrorMessage}
+						conflict={groupingConflict}
+						providerUnavailable={groupingProviderUnavailable}
+						action={groupingAction}
+						decisionPending={pendingGroupingProposalId !== null}
+						{studyLabel}
+						onGenerate={() => void generateGrouping()}
+						onDecide={(decision) => void decideGrouping(decision)}
+					/>
+				</StudyDetailsPanel>
 
-									<div
-										class="rounded-md border p-4"
-										data-testid="study-classification-provenance"
-									>
-										<p class="text-sm font-medium">Evidence identity</p>
-										<p class="mt-1 text-xs break-all text-muted-foreground">
-											Prompt hash: {proposal.prompt_hash}
-										</p>
-										{#if payload.evidence.length}
-											<ul class="mt-2 flex flex-col gap-2 text-xs">
-												{#each payload.evidence as evidence (classificationEvidenceKey(evidence))}
-													<li class="rounded-md bg-muted/40 p-2">
-														<div class="flex flex-wrap gap-x-2 gap-y-1">
-															<span class="font-medium">
-																{classificationEvidenceSubject(
-																	evidence
-																)}
-															</span>
-															<span class="text-muted-foreground">
-																· {classificationEvidenceFieldLabel(
-																	evidence
-																)} ({evidence.field})
-															</span>
-														</div>
-														<code
-															class="mt-1 block break-all text-muted-foreground"
-															>content hash: {evidence.content_hash}</code
-														>
-													</li>
-												{/each}
-											</ul>
-										{:else}
-											<p class="mt-1 text-xs text-muted-foreground">
-												No evidence identity recorded.
-											</p>
-										{/if}
-									</div>
-
-									{#if payload.uncertainties.length}
-										<Alert.Root
-											role="status"
-											data-testid="study-classification-uncertainties"
-										>
-											<Alert.Title>Uncertainties</Alert.Title>
-											<Alert.Description>
-												<ul class="list-disc pl-5">
-													{#each payload.uncertainties as uncertainty (uncertainty)}
-														<li>{uncertainty}</li>
-													{/each}
-												</ul>
-											</Alert.Description>
-										</Alert.Root>
-									{:else}
-										<p
-											class="text-xs text-muted-foreground"
-											data-testid="study-classification-uncertainties"
-										>
-											Uncertainties: none reported.
-										</p>
-									{/if}
-
-									<div class="flex flex-wrap justify-end gap-2 border-t pt-4">
-										<Button
-											variant="outline"
-											disabled={pendingClassificationProposalId !== null}
-											onclick={() => void decideClassification('reject')}
-											data-testid="study-classification-reject"
-										>
-											{#if classificationAction === 'reject'}<Spinner
-													data-icon="inline-start"
-												/>{:else}<X data-icon="inline-start" />{/if}
-											Reject classification
-										</Button>
-										<Button
-											disabled={pendingClassificationProposalId !== null ||
-												!payload.suggested_design}
-											onclick={() => void decideClassification('accept')}
-											data-testid="study-classification-accept"
-										>
-											{#if classificationAction === 'accept'}<Spinner
-													data-icon="inline-start"
-												/>{:else}<Check data-icon="inline-start" />{/if}
-											Accept and apply classification
-										</Button>
-									</div>
-								{/if}
-							</Card.Content>
-						</Card.Root>
-
-						<Separator />
-						<form
-							class="grid gap-3 md:grid-cols-[1fr_12rem_auto]"
-							onsubmit={(event) => {
-								event.preventDefault();
-								void assignReport();
-							}}
-						>
-							<div class="flex flex-col gap-2">
-								<label for="study-report" class="text-sm font-medium"
-									>Assign included report</label
-								><Select.Root type="single" bind:value={reportId}
-									><Select.Trigger id="study-report"
-										>{selectedReport?.title ??
-											(reportId || 'Choose report')}</Select.Trigger
-									><Select.Content
-										><Select.Group
-											>{#each reports as report (report.report_id)}<Select.Item
-													value={report.report_id}
-													label={report.title ?? report.report_id}
-													>{report.title ?? report.report_id}</Select.Item
-												>{/each}</Select.Group
-										></Select.Content
-									></Select.Root
-								>
-							</div>
-							<div class="flex flex-col gap-2">
-								<label for="report-role" class="text-sm font-medium"
-									>Report role</label
-								><Select.Root type="single" bind:value={role}
-									><Select.Trigger id="report-role">{role}</Select.Trigger
-									><Select.Content
-										><Select.Group
-											>{#each ['report_of_study', 'protocol', 'primary_outcome', 'safety_analysis', 'economic_analysis', 'follow_up'] as value (value)}<Select.Item
-													{value}
-													label={value}>{value}</Select.Item
-												>{/each}</Select.Group
-										></Select.Content
-									></Select.Root
-								>
-							</div>
-							<Button
-								type="submit"
-								class="self-end"
-								disabled={!reportId ||
-									membershipMutation.isPending ||
-									membershipQuery.isPending ||
-									membershipQuery.isFetching}>Assign / move</Button
-							>
-						</form>
-
-						<Card.Root data-testid="study-grouping-assistance">
-							<Card.Header class="gap-3">
-								<div class="flex flex-wrap items-center justify-between gap-2">
-									<div class="flex items-center gap-2">
-										<Brain aria-hidden="true" class="size-4" />
-										<Card.Title>Study grouping assistance</Card.Title>
-									</div>
-									<Badge variant="outline">Proposal only</Badge>
-								</div>
-								<Card.Description>
-									AI compares report metadata with existing studies and proposes a
-									reversible grouping. A reviewer must approve it; grouping never
-									changes screening or appraisal decisions.
-								</Card.Description>
-							</Card.Header>
-							<Card.Content class="flex flex-col gap-4">
-								{#if groupingErrorMessage}
-									<Alert.Root variant="destructive" role="alert">
-										<Alert.Title>
-											{groupingConflict
-												? 'Study data changed elsewhere'
-												: groupingProviderUnavailable
-													? 'AI provider unavailable'
-													: 'Study grouping suggestion unavailable'}
-										</Alert.Title>
-										<Alert.Description>{groupingErrorMessage}</Alert.Description
-										>
-									</Alert.Root>
-								{:else if !reportId}
-									<Empty.Root class="border-0 p-0">
-										<Empty.Media variant="icon"><Info /></Empty.Media>
-										<Empty.Header>
-											<Empty.Title>Select a report</Empty.Title>
-											<Empty.Description>
-												Choose a report above to request a grounded study
-												grouping suggestion.
-											</Empty.Description>
-										</Empty.Header>
-									</Empty.Root>
-								{:else if groupingProposalsQuery.isPending}
-									<div
-										class="flex flex-col gap-3"
-										aria-label="Loading study grouping suggestion"
-									>
-										<Skeleton class="h-5 w-2/3" />
-										<Skeleton class="h-20 w-full" />
-									</div>
-								{:else if !activeGroupingProposal || !activeGroupingPayload}
-									<Empty.Root class="border-0 p-0">
-										<Empty.Media variant="icon"><Info /></Empty.Media>
-										<Empty.Header>
-											<Empty.Title>No pending grouping suggestion</Empty.Title
-											>
-											<Empty.Description>
-												Request a suggestion to compare this report with the
-												project’s study groups.
-											</Empty.Description>
-										</Empty.Header>
-									</Empty.Root>
-								{:else}
-									{@const proposal = activeGroupingProposal}
-									{@const payload = activeGroupingPayload}
-									<div class="flex flex-wrap items-center gap-2">
-										<Badge variant="secondary">{proposal.status}</Badge>
-										<span class="text-xs text-muted-foreground">
-											{proposal.provider} / {proposal.model} · prompt {proposal.prompt_version}
-										</span>
-									</div>
-
-									<div
-										class="rounded-md border p-4"
-										data-testid="study-grouping-choice"
-									>
-										<p class="text-sm font-medium">Suggested destination</p>
-										{#if payload.choice.kind === 'existing_study'}
-											<div class="mt-2 flex flex-wrap items-center gap-2">
-												<Badge variant="secondary">Existing study</Badge>
-												<span class="font-medium"
-													>{studyLabel(payload.choice.study_id)}</span
-												>
-												<span class="text-sm text-muted-foreground">
-													study {payload.choice.study_id} · expected revision
-													{payload.choice.expected_revision}
-												</span>
-											</div>
-										{:else}
-											<div class="mt-2 flex flex-wrap items-center gap-2">
-												<Badge variant="secondary">New study</Badge>
-												<span class="font-medium"
-													>{payload.choice.title}</span
-												>
-											</div>
-										{/if}
-										<p class="mt-2 text-xs text-muted-foreground">
-											Accepting applies this proposed membership at the
-											recorded revisions. The change can be reversed from the
-											study membership controls.
-										</p>
-										<div class="mt-3 grid gap-2 text-sm sm:grid-cols-2">
-											<div class="rounded-md bg-muted/40 p-2">
-												<span class="font-medium">Current membership</span>
-												<p class="text-xs text-muted-foreground">
-													{selectedMembership?.study_id
-														? `${studyLabel(selectedMembership.study_id)} · revision ${selectedMembership.study_revision}`
-														: 'Unassigned'}
-												</p>
-											</div>
-											<div class="rounded-md bg-muted/40 p-2">
-												<span class="font-medium"
-													>Proposed previous membership</span
-												>
-												<p class="text-xs text-muted-foreground">
-													{payload.expected_previous_study_id
-														? `${studyLabel(payload.expected_previous_study_id)} · revision ${payload.expected_previous_study_revision ?? 'not provided'}`
-														: 'No previous study'}
-												</p>
-											</div>
-										</div>
-									</div>
-
-									<div class="rounded-md border p-4">
-										<p class="text-sm font-medium">Rationale</p>
-										<p class="mt-1 text-sm text-muted-foreground">
-											{payload.rationale}
-										</p>
-									</div>
-
-									<div
-										class="rounded-md border p-4"
-										data-testid="study-grouping-provenance"
-									>
-										<p class="text-sm font-medium">Typed metadata provenance</p>
-										{#if payload.provenance.length}
-											<ul class="mt-2 flex flex-col gap-2 text-xs">
-												{#each payload.provenance as evidence (evidence.kind + evidence.field + evidence.content_hash)}
-													<li class="rounded-md bg-muted/40 p-2">
-														<div class="flex flex-wrap gap-x-2 gap-y-1">
-															<span class="font-medium"
-																>{groupingEvidenceSubject(
-																	evidence
-																)}</span
-															>
-															<span class="text-muted-foreground"
-																>· {groupingFieldLabel(
-																	evidence.field
-																)}</span
-															>
-														</div>
-														<code
-															class="mt-1 block break-all text-muted-foreground"
-															>content hash: {evidence.content_hash}</code
-														>
-													</li>
-												{/each}
-											</ul>
-										{:else}
-											<p class="mt-1 text-xs text-muted-foreground">
-												No provenance recorded.
-											</p>
-										{/if}
-									</div>
-
-									{#if payload.uncertainties.length}
-										<Alert.Root role="status">
-											<Alert.Title>Uncertainty noted</Alert.Title>
-											<Alert.Description>
-												<ul class="list-disc pl-5">
-													{#each payload.uncertainties as uncertainty (uncertainty)}
-														<li>{uncertainty}</li>
-													{/each}
-												</ul>
-											</Alert.Description>
-										</Alert.Root>
-									{/if}
-								{/if}
-							</Card.Content>
-							<Card.Footer class="flex flex-wrap justify-end gap-2">
-								{#if reportId && !activeGroupingProposal}
-									<Button
-										variant="outline"
-										onclick={() => void generateGrouping()}
-										disabled={groupingAction !== null}
-									>
-										{#if groupingAction === 'generate'}<Spinner
-												data-icon="inline-start"
-											/>{:else}<Brain data-icon="inline-start" />{/if}
-										Suggest study group
-									</Button>
-								{:else if activeGroupingProposal}
-									<Button
-										variant="outline"
-										disabled={pendingGroupingProposalId !== null}
-										onclick={() => void decideGrouping('reject')}
-									>
-										{#if groupingAction === 'reject'}<Spinner
-												data-icon="inline-start"
-											/>{:else}<X data-icon="inline-start" />{/if}
-										Reject
-									</Button>
-									<Button
-										disabled={pendingGroupingProposalId !== null}
-										onclick={() => void decideGrouping('accept')}
-									>
-										{#if groupingAction === 'accept'}<Spinner
-												data-icon="inline-start"
-											/>{:else}<Check data-icon="inline-start" />{/if}
-										Accept and apply
-									</Button>
-								{/if}
-							</Card.Footer>
-						</Card.Root>
-
-						<div>
-							<h2 class="text-lg font-semibold">Reports in this investigation</h2>
-							<div class="mt-3 flex flex-col gap-2">
-								{#each selectedStudy.reports as report (report.report_id)}<div
-										class="flex items-center justify-between gap-3 rounded-md border p-3"
-									>
-										<div>
-											<p class="font-medium">
-												{report.title ?? report.report_id}
-											</p>
-											<p class="text-xs text-muted-foreground">
-												{report.role} · {report.report_id}
-											</p>
-										</div>
-										<Button
-											type="button"
-											variant="ghost"
-											size="sm"
-											onclick={() => void unassignReport(report.report_id)}
-											>Unassign</Button
-										>
-									</div>{:else}<p class="text-sm text-muted-foreground">
-										No reports assigned yet.
-									</p>{/each}
-							</div>
-						</div>
-					</Card.Content>
-				</Card.Root>
-
-				<Card.Root>
-					<Card.Header
-						><Card.Title>Grouping history</Card.Title><Card.Description
-							>Every group, move, unassign, rename, and classification change remains
-							visible.</Card.Description
-						></Card.Header
-					>
-					<Card.Content
-						><ol class="flex flex-col gap-3" aria-live="polite">
-							{#each history as event (event.id)}<li
-									class="rounded-md border p-3 text-sm"
-								>
-									<div class="flex flex-wrap items-center justify-between gap-2">
-										<Badge variant="outline">{event.event_type}</Badge><span
-											class="text-xs text-muted-foreground"
-											>{new Date(event.created_at).toLocaleString()} · {event.actor_id}</span
-										>
-									</div>
-									<p class="mt-2 text-xs text-muted-foreground">
-										revision {event.before_revision} → {event.result_revision}{event.report_id
-											? ` · report ${event.report_id}`
-											: ''}
-									</p>
-								</li>{:else}<li class="text-sm text-muted-foreground">
-									No history yet.
-								</li>{/each}
-						</ol></Card.Content
-					>
-				</Card.Root>
+				<StudyHistoryPanel {history} />
 			</div>
 		{:else}
-			<Card.Root
-				><Card.Content class="p-10 text-center text-muted-foreground"
-					>Select a study group or create one to inspect membership and provenance.</Card.Content
-				></Card.Root
-			>
+			<Card.Root>
+				<Card.Content class="p-10 text-center text-muted-foreground">
+					Select a study group or create one to inspect membership and provenance.
+				</Card.Content>
+			</Card.Root>
 		{/if}
 	</div>
 </main>
