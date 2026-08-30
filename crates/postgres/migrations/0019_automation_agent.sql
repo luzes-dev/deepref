@@ -6,10 +6,35 @@
 
 CREATE EXTENSION IF NOT EXISTS pgcrypto;
 
--- Existing jobs predate project-scoped automations.  Keep legacy rows
--- project-less, while requiring every automation job to carry its project.
+-- Existing jobs predate explicit queue ownership. Backfill every durable job
+-- shape that can still be active, then require all newly queued/running jobs
+-- to carry a project. The NOT VALID constraint deliberately tolerates
+-- terminal historical rows whose payload cannot establish ownership.
 ALTER TABLE jobs
   ADD COLUMN IF NOT EXISTS project_id uuid REFERENCES projects(id) ON DELETE CASCADE;
+
+UPDATE jobs
+SET project_id = CASE kind
+  WHEN 'work_fetch_requested' THEN NULLIF(payload #>> '{payload,project_id}', '')::uuid
+  WHEN 'recompute_metrics' THEN NULLIF(payload #>> '{payload,project_id}', '')::uuid
+  ELSE project_id
+END
+WHERE project_id IS NULL
+  AND kind IN ('work_fetch_requested', 'recompute_metrics');
+
+UPDATE jobs AS job
+SET project_id = document.project_id
+FROM documents AS document
+WHERE job.project_id IS NULL
+  AND job.kind IN ('parse_document', 'retrieve_document')
+  AND document.id = NULLIF(job.payload ->> 'document_id', '')::uuid;
+
+ALTER TABLE jobs
+  DROP CONSTRAINT IF EXISTS jobs_active_project_id_check;
+ALTER TABLE jobs
+  ADD CONSTRAINT jobs_active_project_id_check
+  CHECK (project_id IS NOT NULL OR state IN ('completed', 'failed', 'dead'))
+  NOT VALID;
 
 ALTER TABLE jobs
   DROP CONSTRAINT IF EXISTS jobs_project_id_id_key;

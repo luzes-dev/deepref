@@ -3,9 +3,12 @@ use std::{future::Future, time::Duration};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+use deepref_domain::ProjectId;
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct EnqueueJob {
     pub id: Uuid,
+    pub project_id: ProjectId,
     pub kind: String,
     pub payload: serde_json::Value,
     pub priority: i32,
@@ -16,6 +19,7 @@ pub struct EnqueueJob {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct ClaimedJob {
     pub id: Uuid,
+    pub project_id: ProjectId,
     pub kind: String,
     pub payload: serde_json::Value,
     pub attempts: i32,

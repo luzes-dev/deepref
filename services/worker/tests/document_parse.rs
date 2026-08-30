@@ -162,6 +162,7 @@ async fn retrieve_document_is_durable_idempotent_and_records_terminal_failure() 
         transaction.commit().await.unwrap();
         let job = ClaimedJob {
             id: Uuid::new_v4(),
+            project_id: project_id.into(),
             kind: "retrieve_document".to_owned(),
             payload: serde_json::json!({"document_id": document_id}),
             attempts: 1,
@@ -269,6 +270,7 @@ async fn concurrent_retrieval_completion_cleans_the_losing_object() {
     });
     let job = ClaimedJob {
         id: Uuid::new_v4(),
+        project_id: project_id.into(),
         kind: "retrieve_document".to_owned(),
         payload: serde_json::json!({"document_id": document_id}),
         attempts: 1,
@@ -413,6 +415,7 @@ async fn parse_document_is_streamed_versioned_and_idempotent() {
     tx.commit().await.unwrap();
     let job = ClaimedJob {
         id: Uuid::new_v4(),
+        project_id: project_id.into(),
         kind: "parse_document".to_owned(),
         payload: serde_json::json!({"document_id": document_id, "parser_version": PARSER_VERSION}),
         attempts: 1,

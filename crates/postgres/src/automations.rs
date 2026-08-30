@@ -1,10 +1,10 @@
 use chrono::{DateTime, Utc};
 use deepref_application::{
     AutomationDefinition, AutomationDefinitionId, AutomationDefinitionStatus,
-    AutomationIdempotencyKey, AutomationJobStatus, AutomationJobVisibility, AutomationName,
-    AutomationRun, AutomationRunId, AutomationRunStatus, AutomationStepKind, AutomationStepRun,
-    AutomationStepRunId, AutomationStepRunStatus, AutomationStepSnapshot, AutomationTriggerKind,
-    AutomationTriggerReference, AutomationUsage, AutomationValidationError,
+    AutomationDomainEvent, AutomationIdempotencyKey, AutomationJobStatus, AutomationJobVisibility,
+    AutomationName, AutomationRun, AutomationRunId, AutomationRunStatus, AutomationStepKind,
+    AutomationStepRun, AutomationStepRunId, AutomationStepRunStatus, AutomationStepSnapshot,
+    AutomationTriggerKind, AutomationTriggerReference, AutomationUsage, AutomationValidationError,
     BuiltInAutomationRecipe, ConfigureAutomationDefinition, DispatchAutomationTrigger,
     StartAutomationManually, validate_error, validate_run_list_limit, validate_worker_id,
 };
@@ -121,6 +121,53 @@ pub async fn dispatch_automation_trigger(
         job_id: row.get("job_id"),
         created: row.get("created"),
     })
+}
+
+/// Dispatch a typed scientific transition inside the transaction that made
+/// the transition authoritative. The automation definition snapshot and its
+/// durable worker job therefore commit or roll back with the source command.
+pub async fn dispatch_automation_domain_event(
+    transaction: &mut Transaction<'_, Postgres>,
+    event: &AutomationDomainEvent,
+) -> Result<u64, sqlx::Error> {
+    let project_id = event.project_id();
+    let trigger = event.trigger();
+    let source_identity = event.source_identity();
+    let (source_actor_kind, source_actor_id) = event.actor();
+    let (actor_kind, actor_id) = if source_actor_id.len() <= 200 {
+        (source_actor_kind, source_actor_id)
+    } else {
+        (ActorKind::System, "automation-domain-event")
+    };
+    let definitions = sqlx::query_scalar::<_, Uuid>(
+        "SELECT id
+         FROM automation_definitions
+         WHERE project_id=$1 AND trigger_kind=$2 AND status='active'
+         ORDER BY id
+         FOR SHARE",
+    )
+    .bind(project_id.as_uuid())
+    .bind(trigger.as_str())
+    .fetch_all(&mut **transaction)
+    .await?;
+    let mut created = 0;
+    for definition_id in definitions {
+        let was_created = sqlx::query_scalar::<_, bool>(
+            "SELECT created
+             FROM dispatch_automation_trigger($1,$2,$3,$4,$5,$6,$7)",
+        )
+        .bind(project_id.as_uuid())
+        .bind(definition_id)
+        .bind(trigger.as_str())
+        .bind(&source_identity)
+        .bind(&source_identity)
+        .bind(actor_kind.as_str())
+        .bind(actor_id)
+        .fetch_one(&mut **transaction)
+        .await?;
+        created += u64::from(was_created);
+    }
+    Ok(created)
 }
 
 pub async fn start_automation_manually(

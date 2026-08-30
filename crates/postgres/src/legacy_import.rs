@@ -2,7 +2,8 @@ use std::collections::HashMap;
 
 use anyhow::{Context, anyhow};
 use chrono::{DateTime, Utc};
-use deepref_domain::normalize_doi;
+use deepref_application::AutomationDomainEvent;
+use deepref_domain::{ProjectId, normalize_doi};
 use sqlx::{PgPool, Postgres, Row, Transaction};
 use uuid::Uuid;
 
@@ -487,24 +488,38 @@ async fn upsert_project_report(
     record_id: Uuid,
     counts: &mut LegacyImportCounts,
 ) -> anyhow::Result<()> {
-    let exists: bool = sqlx::query_scalar(
-        "SELECT EXISTS (SELECT 1 FROM project_reports WHERE project_id=$1 AND report_id=$2)",
-    )
-    .bind(project_id)
-    .bind(report_id)
-    .fetch_one(&mut **transaction)
-    .await?;
-    sqlx::query(
-        "INSERT INTO project_reports (project_id,report_id,first_seen_record_id) VALUES ($1,$2,$3) \
-         ON CONFLICT (project_id,report_id) DO UPDATE SET first_seen_record_id=COALESCE(project_reports.first_seen_record_id,EXCLUDED.first_seen_record_id)",
+    let inserted = sqlx::query_scalar::<_, bool>(
+        "INSERT INTO project_reports (project_id,report_id,first_seen_record_id)
+         VALUES ($1,$2,$3)
+         ON CONFLICT (project_id,report_id) DO NOTHING
+         RETURNING true",
     )
     .bind(project_id)
     .bind(report_id)
     .bind(record_id)
-    .execute(&mut **transaction)
+    .fetch_optional(&mut **transaction)
     .await?;
-    if !exists {
+    if inserted.is_some() {
         counts.project_reports_created += 1;
+        crate::dispatch_automation_domain_event(
+            transaction,
+            &AutomationDomainEvent::ReportAdded {
+                project_id: ProjectId::new(project_id),
+                report_id,
+            },
+        )
+        .await?;
+    } else {
+        sqlx::query(
+            "UPDATE project_reports
+             SET first_seen_record_id=COALESCE(first_seen_record_id,$3)
+             WHERE project_id=$1 AND report_id=$2",
+        )
+        .bind(project_id)
+        .bind(report_id)
+        .bind(record_id)
+        .execute(&mut **transaction)
+        .await?;
     }
     Ok(())
 }

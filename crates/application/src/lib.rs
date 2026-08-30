@@ -31,9 +31,9 @@ pub use appraisal::{
 };
 pub use automations::{
     AutomationDefinition, AutomationDefinitionId, AutomationDefinitionStatus,
-    AutomationIdempotencyKey, AutomationJobStatus, AutomationJobVisibility, AutomationName,
-    AutomationRun, AutomationRunId, AutomationRunStatus, AutomationStepKind, AutomationStepRun,
-    AutomationStepRunId, AutomationStepRunStatus, AutomationStepSnapshot,
+    AutomationDomainEvent, AutomationIdempotencyKey, AutomationJobStatus, AutomationJobVisibility,
+    AutomationName, AutomationRun, AutomationRunId, AutomationRunStatus, AutomationStepKind,
+    AutomationStepRun, AutomationStepRunId, AutomationStepRunStatus, AutomationStepSnapshot,
     AutomationTransitionError, AutomationTriggerKind, AutomationTriggerReference, AutomationUsage,
     AutomationValidationError, BuiltInAutomationRecipe, BuiltInAutomationStep,
     ConfigureAutomationDefinition, DispatchAutomationTrigger, StartAutomationManually,

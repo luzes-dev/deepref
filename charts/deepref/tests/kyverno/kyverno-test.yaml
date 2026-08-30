@@ -9,11 +9,13 @@ resources:
 results:
   - policy: deepref-test-immutable-images
     rule: require-digest
-    resource: immutable-pod
+    resources:
+      - immutable-pod
     kind: Pod
     result: pass
   - policy: deepref-test-immutable-images
     rule: require-digest
-    resource: mutable-pod
+    resources:
+      - mutable-pod
     kind: Pod
     result: fail

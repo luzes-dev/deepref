@@ -6,11 +6,10 @@ use deepref_application::{
 };
 use deepref_domain::{Actor, ActorKind, ProjectId};
 use deepref_postgres::{
-    AutomationError, AutomationFinalization, begin_next_automation_step, claim_job,
-    complete_automation_step, configure_automation_definition, dispatch_automation_trigger,
-    fail_automation_step, finalize_automation_run, get_automation_run, list_automation_definitions,
-    list_automation_runs, migrate, recover_expired_jobs, retry_automation_run,
-    start_automation_manually,
+    AutomationError, AutomationFinalization, begin_next_automation_step, complete_automation_step,
+    configure_automation_definition, dispatch_automation_trigger, fail_automation_step,
+    finalize_automation_run, get_automation_run, list_automation_definitions, list_automation_runs,
+    migrate, recover_expired_jobs, retry_automation_run, start_automation_manually,
 };
 use sqlx::{PgPool, Row, postgres::PgPoolOptions};
 use std::time::Duration;
@@ -82,11 +81,28 @@ async fn claim_automation_job(
     job_id: Uuid,
     lease: Duration,
 ) -> Result<deepref_application::jobs::ClaimedJob> {
-    let claimed = claim_job(pool, owner, lease)
-        .await?
-        .ok_or_else(|| anyhow::anyhow!("expected an automation job to be claimable"))?;
-    ensure!(claimed.id == job_id);
-    Ok(claimed)
+    let row = sqlx::query(
+        "UPDATE jobs
+         SET state='running', lease_owner=$2,
+             leased_until=now()+($3 * interval '1 millisecond'),
+             lease_renewed_at=now(), attempts=attempts+1
+         WHERE id=$1 AND state='queued' AND available_at <= now()
+         RETURNING id,project_id,kind,payload,attempts,max_attempts",
+    )
+    .bind(job_id)
+    .bind(owner)
+    .bind(lease.as_millis() as i64)
+    .fetch_optional(pool)
+    .await?
+    .ok_or_else(|| anyhow::anyhow!("expected an automation job to be claimable"))?;
+    Ok(deepref_application::jobs::ClaimedJob {
+        id: row.get("id"),
+        project_id: ProjectId::new(row.get("project_id")),
+        kind: row.get("kind"),
+        payload: row.get("payload"),
+        attempts: row.get("attempts"),
+        max_attempts: row.get("max_attempts"),
+    })
 }
 
 #[tokio::test]

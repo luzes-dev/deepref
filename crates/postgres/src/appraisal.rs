@@ -1,8 +1,8 @@
 use chrono::{DateTime, Utc};
 use deepref_application::{
     AppraisalAssessmentInput, AppraisalCompleted, AppraisalDefinitionError,
-    AppraisalValidationError, EvidenceReferenceInput, get_appraisal_definition,
-    validate_assessment_input,
+    AppraisalValidationError, AutomationDomainEvent, EvidenceReferenceInput,
+    get_appraisal_definition, validate_assessment_input,
 };
 use deepref_domain::{Actor, ProjectId, ReportId};
 use serde_json::{Value, json};
@@ -144,12 +144,13 @@ pub async fn complete_appraisal_in_transaction(
         definition_version: input.definition_version,
         actor: actor.clone(),
     };
+    let appraisal_event_id = Uuid::new_v4();
     sqlx::query(
         "INSERT INTO appraisal_events
           (id,assessment_id,project_id,report_id,event_type,payload,actor_kind,actor_id)
          VALUES ($1,$2,$3,$4,'appraisal_completed',$5,$6,$7)",
     )
-    .bind(Uuid::new_v4())
+    .bind(appraisal_event_id)
     .bind(assessment_id)
     .bind(project_id.as_uuid())
     .bind(report_id.as_uuid())
@@ -160,6 +161,15 @@ pub async fn complete_appraisal_in_transaction(
     .bind(actor.kind().as_str())
     .bind(actor.id())
     .execute(&mut **transaction)
+    .await?;
+    crate::dispatch_automation_domain_event(
+        transaction,
+        &AutomationDomainEvent::AppraisalCompleted {
+            project_id,
+            appraisal_event_id,
+            actor: actor.clone(),
+        },
+    )
     .await?;
     Ok(assessment_id)
 }

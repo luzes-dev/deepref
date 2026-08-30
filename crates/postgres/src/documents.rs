@@ -1,5 +1,7 @@
 use chrono::{DateTime, Utc};
+use deepref_application::AutomationDomainEvent;
 use deepref_documents::{PARSER_VERSION, ParsedDocument};
+use deepref_domain::{Actor, ActorKind, ProjectId};
 use serde_json::Value;
 use sqlx::{PgPool, Postgres, Row, Transaction};
 use uuid::Uuid;
@@ -327,11 +329,26 @@ pub async fn create_document(
     .bind(document.actor_id)
     .fetch_one(&mut **tx)
     .await?;
+    if matches!(document.status, "uploaded" | "available") {
+        let actor_kind = ActorKind::parse(document.actor_kind)
+            .ok_or_else(|| anyhow::anyhow!("document actor kind is invalid"))?;
+        let actor = Actor::new(actor_kind, document.actor_id)?;
+        crate::dispatch_automation_domain_event(
+            tx,
+            &AutomationDomainEvent::FullTextAttached {
+                project_id: ProjectId::new(document.project_id),
+                document_id: document.id,
+                actor,
+            },
+        )
+        .await?;
+    }
     Ok(document_from_row(row))
 }
 
 pub async fn enqueue_parse(
     tx: &mut Transaction<'_, Postgres>,
+    project_id: ProjectId,
     document_id: Uuid,
     _content_hash: &str,
 ) -> anyhow::Result<Uuid> {
@@ -339,37 +356,26 @@ pub async fn enqueue_parse(
     let dedupe = format!("parse_document:{document_id}:{PARSER_VERSION}");
     let payload =
         serde_json::json!({ "document_id": document_id, "parser_version": PARSER_VERSION });
-    Ok(sqlx::query_scalar(
-        "INSERT INTO jobs (id,kind,payload,max_attempts,dedupe_key)
-         VALUES ($1,'parse_document',$2,5,$3)
-         ON CONFLICT (dedupe_key) DO UPDATE SET id=jobs.id
-         RETURNING id",
+    crate::enqueue_job(
+        tx,
+        &crate::job(job_id, project_id, "parse_document", payload, dedupe),
     )
-    .bind(job_id)
-    .bind(payload)
-    .bind(dedupe)
-    .fetch_one(&mut **tx)
-    .await?)
+    .await
 }
 
 pub async fn enqueue_retrieve(
     tx: &mut Transaction<'_, Postgres>,
+    project_id: ProjectId,
     document_id: Uuid,
 ) -> anyhow::Result<Uuid> {
     let job_id = Uuid::new_v4();
     let dedupe = format!("retrieve_document:{document_id}");
     let payload = serde_json::json!({ "document_id": document_id });
-    Ok(sqlx::query_scalar(
-        "INSERT INTO jobs (id,kind,payload,max_attempts,dedupe_key)
-         VALUES ($1,'retrieve_document',$2,5,$3)
-         ON CONFLICT (dedupe_key) DO UPDATE SET id=jobs.id
-         RETURNING id",
+    crate::enqueue_job(
+        tx,
+        &crate::job(job_id, project_id, "retrieve_document", payload, dedupe),
     )
-    .bind(job_id)
-    .bind(payload)
-    .bind(dedupe)
-    .fetch_one(&mut **tx)
-    .await?)
+    .await
 }
 
 pub async fn mark_document_retrieving(pool: &PgPool, document_id: Uuid) -> anyhow::Result<bool> {
@@ -386,6 +392,7 @@ pub async fn mark_document_retrieving(pool: &PgPool, document_id: Uuid) -> anyho
 
 pub async fn complete_document_retrieval(
     tx: &mut Transaction<'_, Postgres>,
+    project_id: ProjectId,
     document_id: Uuid,
     object_key: &str,
     content_hash: &str,
@@ -395,16 +402,29 @@ pub async fn complete_document_retrieval(
         "UPDATE documents SET status='uploaded',object_key=$2,content_hash=$3,byte_size=$4,
              mime_type='application/pdf',content_available_at=now(),failed_at=NULL,
              parser_error=NULL,updated_at=now()
-         WHERE id=$1 AND status='retrieving'",
+         WHERE id=$1 AND status='retrieving'
+         RETURNING actor_kind,actor_id",
     )
     .bind(document_id)
     .bind(object_key)
     .bind(content_hash)
     .bind(byte_size)
-    .execute(&mut **tx)
+    .fetch_optional(&mut **tx)
     .await?;
-    if updated.rows_affected() == 1 {
-        enqueue_parse(tx, document_id, content_hash).await?;
+    if let Some(updated) = updated {
+        enqueue_parse(tx, project_id, document_id, content_hash).await?;
+        let actor_kind = ActorKind::parse(updated.get("actor_kind"))
+            .ok_or_else(|| anyhow::anyhow!("document actor kind is invalid"))?;
+        let actor = Actor::new(actor_kind, updated.get::<String, _>("actor_id"))?;
+        crate::dispatch_automation_domain_event(
+            tx,
+            &AutomationDomainEvent::FullTextAttached {
+                project_id,
+                document_id,
+                actor,
+            },
+        )
+        .await?;
         return Ok(CompleteDocumentRetrievalOutcome::Applied);
     }
 

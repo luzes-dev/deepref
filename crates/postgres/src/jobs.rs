@@ -13,7 +13,7 @@ const CLAIM: &str = r#"
 WITH candidate AS (
   SELECT id
   FROM jobs
-  WHERE state = 'queued' AND available_at <= now()
+  WHERE state = 'queued' AND project_id IS NOT NULL AND available_at <= now()
   ORDER BY priority DESC, available_at ASC, id ASC
   FOR UPDATE SKIP LOCKED
   LIMIT 1
@@ -24,7 +24,7 @@ SET state = 'running', lease_owner = $1,
     lease_renewed_at = now(), attempts = j.attempts + 1
 FROM candidate
 WHERE j.id = candidate.id
-RETURNING j.id, j.kind, j.payload, j.attempts, j.max_attempts
+RETURNING j.id, j.project_id, j.kind, j.payload, j.attempts, j.max_attempts
 "#;
 
 pub async fn enqueue_job(
@@ -32,9 +32,10 @@ pub async fn enqueue_job(
     job: &EnqueueJob,
 ) -> anyhow::Result<Uuid> {
     let id = sqlx::query_scalar::<_, Uuid>(
-        "INSERT INTO jobs (id,kind,payload,priority,max_attempts,dedupe_key) VALUES ($1,$2,$3,$4,$5,$6) ON CONFLICT (dedupe_key) DO UPDATE SET id = jobs.id RETURNING id",
+        "INSERT INTO jobs (id,project_id,kind,payload,priority,max_attempts,dedupe_key) VALUES ($1,$2,$3,$4,$5,$6,$7) ON CONFLICT (dedupe_key) DO UPDATE SET id = jobs.id RETURNING id",
     )
     .bind(job.id)
+    .bind(job.project_id.as_uuid())
     .bind(&job.kind)
     .bind(&job.payload)
     .bind(job.priority)
@@ -76,6 +77,7 @@ pub async fn claim_job(
         .await?;
     Ok(row.map(|row| ClaimedJob {
         id: row.get("id"),
+        project_id: ProjectId::new(row.get("project_id")),
         kind: row.get("kind"),
         payload: row.get("payload"),
         attempts: row.get("attempts"),
@@ -200,12 +202,14 @@ impl JobQueue for PostgresJobQueue {
 
 pub fn job(
     id: Uuid,
+    project_id: ProjectId,
     kind: impl Into<String>,
     payload: Value,
     dedupe_key: impl Into<String>,
 ) -> EnqueueJob {
     EnqueueJob {
         id,
+        project_id,
         kind: kind.into(),
         payload,
         priority: 0,

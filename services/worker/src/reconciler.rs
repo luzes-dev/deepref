@@ -100,6 +100,7 @@ async fn repair_missing_work(pool: &PgPool) -> anyhow::Result<u64> {
             pool,
             &deepref_postgres::job(
                 event_id,
+                deepref_domain::ProjectId::new(project_id),
                 "work_fetch_requested",
                 payload,
                 format!("work_fetch:{event_id}"),

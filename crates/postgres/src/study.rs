@@ -1,6 +1,7 @@
 use chrono::{DateTime, Utc};
 use deepref_application::{
-    AssignReportToStudy, ClassifyStudy, CreateStudy, RemoveReportFromStudy, RenameStudy,
+    AssignReportToStudy, AutomationDomainEvent, ClassifyStudy, CreateStudy, RemoveReportFromStudy,
+    RenameStudy,
 };
 use deepref_domain::{
     AppraisalToolSuggestion, ReportAssignedToStudy, ReportId, ReportRemovedFromStudy,
@@ -207,7 +208,7 @@ pub async fn create_study(
     .bind(command.actor.id())
     .execute(&mut *transaction)
     .await?;
-    insert_study_event(
+    let study_event_id = insert_study_event(
         &mut transaction,
         command.project_id.into(),
         command.study_id.as_uuid(),
@@ -225,6 +226,15 @@ pub async fn create_study(
             actor: command.actor.clone(),
         }))?,
         &command.actor,
+    )
+    .await?;
+    crate::dispatch_automation_domain_event(
+        &mut transaction,
+        &AutomationDomainEvent::StudyCreated {
+            project_id: command.project_id,
+            study_event_id,
+            actor: command.actor.clone(),
+        },
     )
     .await?;
     transaction.commit().await?;
@@ -571,7 +581,7 @@ pub async fn create_study_and_assign_report_in_transaction(
     .bind(command.actor.id())
     .execute(&mut **transaction)
     .await?;
-    insert_study_event(
+    let study_event_id = insert_study_event(
         transaction,
         command.project_id.into(),
         command.study_id.as_uuid(),
@@ -589,6 +599,15 @@ pub async fn create_study_and_assign_report_in_transaction(
             actor: command.actor.clone(),
         }))?,
         &command.actor,
+    )
+    .await?;
+    crate::dispatch_automation_domain_event(
+        transaction,
+        &AutomationDomainEvent::StudyCreated {
+            project_id: command.project_id,
+            study_event_id,
+            actor: command.actor.clone(),
+        },
     )
     .await?;
     assign_report_to_study_in_transaction(
@@ -878,14 +897,15 @@ async fn insert_study_event(
     result_snapshot: Value,
     payload: Value,
     actor: &deepref_domain::Actor,
-) -> Result<(), StudyError> {
+) -> Result<Uuid, StudyError> {
+    let event_id = Uuid::new_v4();
     sqlx::query(
         "INSERT INTO study_events
           (id,project_id,study_id,report_id,event_type,before_study_id,result_study_id,
            before_revision,result_revision,before_snapshot,result_snapshot,payload,actor_kind,actor_id)
          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)",
     )
-    .bind(Uuid::new_v4())
+    .bind(event_id)
     .bind(project_id)
     .bind(study_id)
     .bind(report_id)
@@ -901,7 +921,7 @@ async fn insert_study_event(
     .bind(actor.id())
     .execute(&mut **connection)
     .await?;
-    Ok(())
+    Ok(event_id)
 }
 
 fn study_event_payload(event: StudyEvent) -> Result<Value, StudyError> {

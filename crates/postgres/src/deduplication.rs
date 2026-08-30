@@ -2,10 +2,11 @@ use std::collections::BTreeSet;
 
 use deepref_application::RawAuthor;
 use deepref_application::{
-    DedupeCandidate, DedupeScore, FUZZY_PROPOSAL_THRESHOLD, FUZZY_SHORTLIST_LIMIT,
-    ProposalDecision, ProposalKind, RecordResolutionAction, ResolveRecordCommand, score_candidate,
+    AutomationDomainEvent, DedupeCandidate, DedupeScore, FUZZY_PROPOSAL_THRESHOLD,
+    FUZZY_SHORTLIST_LIMIT, ProposalDecision, ProposalKind, RecordResolutionAction,
+    ResolveRecordCommand, score_candidate,
 };
-use deepref_domain::normalize_bibliography_title;
+use deepref_domain::{ProjectId, normalize_bibliography_title};
 use serde::Serialize;
 use serde_json::{Value, json};
 use sqlx::{PgPool, Postgres, Row, Transaction};
@@ -705,17 +706,38 @@ async fn link_record(
         .bind(link.report_id)
         .execute(&mut **tx)
         .await?;
-    sqlx::query(
+    let added = sqlx::query_scalar::<_, bool>(
         "INSERT INTO project_reports (project_id,report_id,first_seen_record_id)
          VALUES ($1,$2,$3)
-         ON CONFLICT (project_id,report_id) DO UPDATE SET
-           first_seen_record_id=COALESCE(project_reports.first_seen_record_id,EXCLUDED.first_seen_record_id)",
+         ON CONFLICT (project_id,report_id) DO NOTHING
+         RETURNING true",
     )
     .bind(link.project_id)
     .bind(link.report_id)
     .bind(link.record_id)
-    .execute(&mut **tx)
+    .fetch_optional(&mut **tx)
     .await?;
+    if added.is_none() {
+        sqlx::query(
+            "UPDATE project_reports
+             SET first_seen_record_id=COALESCE(first_seen_record_id,$3)
+             WHERE project_id=$1 AND report_id=$2",
+        )
+        .bind(link.project_id)
+        .bind(link.report_id)
+        .bind(link.record_id)
+        .execute(&mut **tx)
+        .await?;
+    } else {
+        crate::dispatch_automation_domain_event(
+            tx,
+            &AutomationDomainEvent::ReportAdded {
+                project_id: ProjectId::new(link.project_id),
+                report_id: link.report_id,
+            },
+        )
+        .await?;
+    }
     insert_resolution_event(
         tx,
         ResolutionEvent {
