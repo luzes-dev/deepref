@@ -4,6 +4,7 @@ use axum::{
     http::StatusCode,
 };
 use chrono::{DateTime, Utc};
+use deepref_domain::ProjectId;
 use deepref_events::{
     DomainPayload, EntityType, EventEnvelope, MetricsRecomputeRequested,
     SUBJECT_METRICS_RECOMPUTE_REQUESTED,
@@ -350,6 +351,7 @@ pub(crate) async fn recompute_metrics(
         &mut tx,
         &deepref_postgres::job(
             event.event_id,
+            ProjectId::new(project_id),
             "recompute_metrics",
             serde_json::to_value(&event)?,
             format!("recompute_metrics:{project_id}:{}", event.event_id),

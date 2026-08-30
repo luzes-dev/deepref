@@ -8,7 +8,7 @@ use axum::{
 use chrono::{DateTime, Utc};
 use deepref_application::{CsvColumnMapping, ImportParser};
 use deepref_core::normalize_doi;
-use deepref_domain::ImportFormat;
+use deepref_domain::{ImportFormat, ProjectId};
 use deepref_events::{EntityType, EventEnvelope, SUBJECT_WORK_FETCH_REQUESTED, WorkFetchRequested};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
@@ -409,6 +409,7 @@ pub(crate) async fn enqueue_seed_jobs(
             tx,
             &deepref_postgres::job(
                 event.event_id,
+                ProjectId::new(project_id),
                 "work_fetch_requested",
                 serde_json::to_value(&event)?,
                 format!("work_fetch:{}", event.event_id),

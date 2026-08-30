@@ -2,6 +2,7 @@ use std::time::Duration;
 
 use anyhow::{Result, ensure};
 use deepref_application::jobs::{EnqueueJob, JobQueue};
+use deepref_domain::ProjectId;
 use deepref_postgres::{PostgresJobQueue, job, migrate};
 use sqlx::{PgPool, Row, postgres::PgPoolOptions};
 use uuid::Uuid;
@@ -23,18 +24,29 @@ async fn database() -> Option<PgPool> {
     Some(pool)
 }
 
-fn fixture_job(id: Uuid, kind: &str, dedupe_key: String) -> EnqueueJob {
+fn fixture_job(project_id: ProjectId, id: Uuid, kind: &str, dedupe_key: String) -> EnqueueJob {
     job(
         id,
+        project_id,
         kind,
         serde_json::json!({"fixture_job_id": id}),
         dedupe_key,
     )
 }
 
-async fn cleanup(pool: &PgPool, ids: &[Uuid]) -> Result<()> {
-    sqlx::query("DELETE FROM jobs WHERE id = ANY($1)")
-        .bind(ids.to_vec())
+async fn fixture_project(pool: &PgPool) -> Result<ProjectId> {
+    let project_id = ProjectId::new(Uuid::new_v4());
+    sqlx::query("INSERT INTO projects (id,name) VALUES ($1,$2)")
+        .bind(project_id.as_uuid())
+        .bind(format!("job queue fixture {}", project_id.as_uuid()))
+        .execute(pool)
+        .await?;
+    Ok(project_id)
+}
+
+async fn cleanup(pool: &PgPool, project_id: ProjectId) -> Result<()> {
+    sqlx::query("DELETE FROM projects WHERE id=$1")
+        .bind(project_id.as_uuid())
         .execute(pool)
         .await?;
     Ok(())
@@ -47,16 +59,16 @@ async fn enqueue_returns_canonical_id_and_concurrent_claims_are_exclusive() -> R
         return Ok(());
     };
     let queue = PostgresJobQueue { pool: pool.clone() };
+    let project_id = fixture_project(&pool).await?;
     let first_id = Uuid::new_v4();
     let duplicate_id = Uuid::new_v4();
     let claim_id = Uuid::new_v4();
     let dedupe_key = format!("jobs-integration-dedupe:{first_id}");
     let claim_dedupe_key = format!("jobs-integration-claim:{claim_id}");
-    let fixture_ids = [first_id, duplicate_id, claim_id];
-
     let result = async {
         let canonical_id = queue
             .enqueue(fixture_job(
+                project_id,
                 first_id,
                 "integration_dedupe",
                 dedupe_key.clone(),
@@ -69,6 +81,7 @@ async fn enqueue_returns_canonical_id_and_concurrent_claims_are_exclusive() -> R
 
         let duplicate_result = queue
             .enqueue(fixture_job(
+                project_id,
                 duplicate_id,
                 "integration_dedupe",
                 dedupe_key.clone(),
@@ -98,7 +111,12 @@ async fn enqueue_returns_canonical_id_and_concurrent_claims_are_exclusive() -> R
             .execute(&pool)
             .await?;
 
-        let mut claim_fixture = fixture_job(claim_id, "integration_claim", claim_dedupe_key);
+        let mut claim_fixture = fixture_job(
+            project_id,
+            claim_id,
+            "integration_claim",
+            claim_dedupe_key,
+        );
         // Other workspace integration tests may leave legitimate queued work
         // in the shared database. Keep this concurrency assertion focused on
         // its fixture without changing production queue semantics.
@@ -139,7 +157,7 @@ async fn enqueue_returns_canonical_id_and_concurrent_claims_are_exclusive() -> R
     }
     .await;
 
-    let cleanup_result = cleanup(&pool, &fixture_ids).await;
+    let cleanup_result = cleanup(&pool, project_id).await;
     cleanup_result?;
     result
 }
@@ -151,12 +169,12 @@ async fn expired_leases_are_fenced_and_retries_reach_dead_at_max_attempts() -> R
         return Ok(());
     };
     let queue = PostgresJobQueue { pool: pool.clone() };
+    let project_id = fixture_project(&pool).await?;
     let lease_job_id = Uuid::new_v4();
     let retry_job_id = Uuid::new_v4();
-    let fixture_ids = [lease_job_id, retry_job_id];
-
     let result = async {
         let mut lease_fixture = fixture_job(
+            project_id,
             lease_job_id,
             "integration_lease",
             format!("jobs-integration-lease:{lease_job_id}"),
@@ -238,6 +256,7 @@ async fn expired_leases_are_fenced_and_retries_reach_dead_at_max_attempts() -> R
         );
 
         let mut retry_job = fixture_job(
+            project_id,
             retry_job_id,
             "integration_retry",
             format!("jobs-integration-retry:{retry_job_id}"),
@@ -314,7 +333,7 @@ async fn expired_leases_are_fenced_and_retries_reach_dead_at_max_attempts() -> R
     }
     .await;
 
-    let cleanup_result = cleanup(&pool, &fixture_ids).await;
+    let cleanup_result = cleanup(&pool, project_id).await;
     cleanup_result?;
     result
 }

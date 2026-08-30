@@ -7,6 +7,7 @@ use axum::{
 };
 use bytes::Bytes;
 use chrono::{DateTime, Utc};
+use deepref_domain::ProjectId;
 use futures::{StreamExt, TryStreamExt, stream};
 use serde::{Deserialize, Serialize};
 use sqlx::Error as SqlxError;
@@ -567,7 +568,14 @@ pub(crate) async fn upload_document(
     .await;
     let document = match result {
         Ok(document) => {
-            match deepref_postgres::enqueue_parse(&mut tx, document.id, &stored.sha256).await {
+            match deepref_postgres::enqueue_parse(
+                &mut tx,
+                ProjectId::new(project_id),
+                document.id,
+                &stored.sha256,
+            )
+            .await
+            {
                 Ok(_) => match tx.commit().await {
                     Ok(()) => document,
                     Err(error) => {
@@ -632,7 +640,13 @@ pub(crate) async fn attach_external_document(
     )
     .await;
     let document = match document {
-        Ok(document) => match deepref_postgres::enqueue_retrieve(&mut tx, document.id).await {
+        Ok(document) => match deepref_postgres::enqueue_retrieve(
+            &mut tx,
+            ProjectId::new(project_id),
+            document.id,
+        )
+        .await
+        {
             Ok(_) => match tx.commit().await {
                 Ok(()) => document,
                 Err(error) => return Err(ApiError::Database(error)),

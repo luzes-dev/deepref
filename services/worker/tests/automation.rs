@@ -6,12 +6,12 @@ use deepref_application::{
 };
 use deepref_domain::{Actor, ActorKind, ProjectId};
 use deepref_postgres::{
-    begin_next_automation_step, claim_job, complete_job, configure_automation_definition,
-    get_automation_run, migrate, recover_expired_jobs, start_automation_manually,
+    begin_next_automation_step, complete_job, configure_automation_definition, get_automation_run,
+    migrate, recover_expired_jobs, start_automation_manually,
 };
 use deepref_worker::{delivery::DeliveryAction, processor::handle_job_with_documents_owned};
 use serde_json::json;
-use sqlx::{PgPool, postgres::PgPoolOptions};
+use sqlx::{PgPool, Row, postgres::PgPoolOptions};
 use std::time::Duration;
 use uuid::Uuid;
 
@@ -86,11 +86,27 @@ async fn claimed_job(
     job_id: Uuid,
     owner: &str,
 ) -> Result<deepref_application::jobs::ClaimedJob> {
-    let job = claim_job(pool, owner, Duration::from_secs(30))
-        .await?
-        .ok_or_else(|| anyhow::anyhow!("expected automation job to be claimable"))?;
-    ensure!(job.id == job_id, "claimed an unexpected job {}", job.id);
-    Ok(job)
+    let row = sqlx::query(
+        "UPDATE jobs
+         SET state='running', lease_owner=$2,
+             leased_until=now()+interval '30 seconds',
+             lease_renewed_at=now(), attempts=attempts+1
+         WHERE id=$1 AND state='queued' AND available_at <= now()
+         RETURNING id,project_id,kind,payload,attempts,max_attempts",
+    )
+    .bind(job_id)
+    .bind(owner)
+    .fetch_optional(pool)
+    .await?
+    .ok_or_else(|| anyhow::anyhow!("expected automation job to be claimable"))?;
+    Ok(deepref_application::jobs::ClaimedJob {
+        id: row.get("id"),
+        project_id: ProjectId::new(row.get("project_id")),
+        kind: row.get("kind"),
+        payload: row.get("payload"),
+        attempts: row.get("attempts"),
+        max_attempts: row.get("max_attempts"),
+    })
 }
 
 #[tokio::test]
@@ -159,32 +175,8 @@ async fn swapped_run_payload_cannot_execute_another_same_owner_job() -> Result<(
         let (run_a, job_a) = started_job(&pool, project_id, "payload-a").await?;
         let (run_b, job_b) = started_job(&pool, project_id, "payload-b").await?;
         let owner = "worker-shared-owner";
-        let first = claim_job(&pool, owner, Duration::from_secs(30))
-            .await?
-            .ok_or_else(|| anyhow::anyhow!("expected first automation job to be claimable"))?;
-        let second = claim_job(&pool, owner, Duration::from_secs(30))
-            .await?
-            .ok_or_else(|| anyhow::anyhow!("expected second automation job to be claimable"))?;
-        let (claimed_a, claimed_b) = if first.id == job_a {
-            ensure!(
-                second.id == job_b,
-                "claimed an unexpected second job {}",
-                second.id
-            );
-            (first, second)
-        } else {
-            ensure!(
-                first.id == job_b,
-                "claimed an unexpected first job {}",
-                first.id
-            );
-            ensure!(
-                second.id == job_a,
-                "claimed an unexpected second job {}",
-                second.id
-            );
-            (second, first)
-        };
+        let claimed_a = claimed_job(&pool, job_a, owner).await?;
+        let claimed_b = claimed_job(&pool, job_b, owner).await?;
 
         let mut corrupted = claimed_a;
         corrupted.payload = json!({"automation_run_id": run_b.as_uuid()});

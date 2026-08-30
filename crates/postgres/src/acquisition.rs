@@ -1,5 +1,5 @@
-use deepref_application::RawRecord;
-use deepref_domain::{ImportFormat, normalize_bibliography_title};
+use deepref_application::{AutomationDomainEvent, RawRecord};
+use deepref_domain::{ImportFormat, ProjectId, normalize_bibliography_title};
 use serde_json::Value;
 use sqlx::{PgPool, Postgres, Row, Transaction};
 use thiserror::Error;
@@ -171,6 +171,14 @@ pub async fn persist_import(
             .await?;
         }
     }
+    crate::dispatch_automation_domain_event(
+        &mut tx,
+        &AutomationDomainEvent::AcquisitionCompleted {
+            project_id: ProjectId::new(request.project_id),
+            acquisition_id: run_id,
+        },
+    )
+    .await?;
     tx.commit().await?;
     Ok(ImportPersistResult {
         run_id,

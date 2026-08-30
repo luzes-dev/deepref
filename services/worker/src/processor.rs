@@ -375,6 +375,7 @@ async fn handle_job_with_document_services_inner(
             let mut transaction = pool.begin().await?;
             let completion = match deepref_postgres::complete_document_retrieval(
                 &mut transaction,
+                deepref_domain::ProjectId::new(document.project_id),
                 document_id,
                 &stored.opaque_id,
                 &stored.sha256,

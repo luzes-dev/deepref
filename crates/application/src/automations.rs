@@ -1,4 +1,4 @@
-use deepref_domain::{Actor, ProjectId};
+use deepref_domain::{Actor, ActorKind, ProjectId};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use uuid::Uuid;
@@ -211,6 +211,101 @@ pub enum AutomationTriggerKind {
     StudyCreated,
     AppraisalCompleted,
     Manual,
+}
+
+/// A scientific workflow transition that may start configured automation.
+///
+/// Construction happens only after the authoritative command has applied the
+/// transition. Keeping source identities in this closed enum prevents storage
+/// adapters from inferring domain behavior from arbitrary row changes.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub enum AutomationDomainEvent {
+    ReportAdded {
+        project_id: ProjectId,
+        report_id: Uuid,
+    },
+    AcquisitionCompleted {
+        project_id: ProjectId,
+        acquisition_id: Uuid,
+    },
+    FullTextAttached {
+        project_id: ProjectId,
+        document_id: Uuid,
+        actor: Actor,
+    },
+    ReportIncluded {
+        project_id: ProjectId,
+        screening_event_id: Uuid,
+        actor: Actor,
+    },
+    StudyCreated {
+        project_id: ProjectId,
+        study_event_id: Uuid,
+        actor: Actor,
+    },
+    AppraisalCompleted {
+        project_id: ProjectId,
+        appraisal_event_id: Uuid,
+        actor: Actor,
+    },
+}
+
+impl AutomationDomainEvent {
+    pub const fn project_id(&self) -> ProjectId {
+        match self {
+            Self::ReportAdded { project_id, .. }
+            | Self::AcquisitionCompleted { project_id, .. }
+            | Self::FullTextAttached { project_id, .. }
+            | Self::ReportIncluded { project_id, .. }
+            | Self::StudyCreated { project_id, .. }
+            | Self::AppraisalCompleted { project_id, .. } => *project_id,
+        }
+    }
+
+    pub const fn trigger(&self) -> AutomationTriggerKind {
+        match self {
+            Self::ReportAdded { .. } => AutomationTriggerKind::ReportAdded,
+            Self::AcquisitionCompleted { .. } => AutomationTriggerKind::AcquisitionCompleted,
+            Self::FullTextAttached { .. } => AutomationTriggerKind::FullTextAttached,
+            Self::ReportIncluded { .. } => AutomationTriggerKind::ReportIncluded,
+            Self::StudyCreated { .. } => AutomationTriggerKind::StudyCreated,
+            Self::AppraisalCompleted { .. } => AutomationTriggerKind::AppraisalCompleted,
+        }
+    }
+
+    pub fn source_identity(&self) -> String {
+        match self {
+            Self::ReportAdded {
+                project_id,
+                report_id,
+            } => format!("project_report:{}:{report_id}", project_id.as_uuid()),
+            Self::AcquisitionCompleted { acquisition_id, .. } => {
+                format!("acquisition_run:{acquisition_id}")
+            }
+            Self::FullTextAttached { document_id, .. } => format!("document:{document_id}"),
+            Self::ReportIncluded {
+                screening_event_id, ..
+            } => format!("screening_event:{screening_event_id}"),
+            Self::StudyCreated { study_event_id, .. } => {
+                format!("study_event:{study_event_id}")
+            }
+            Self::AppraisalCompleted {
+                appraisal_event_id, ..
+            } => format!("appraisal_event:{appraisal_event_id}"),
+        }
+    }
+
+    pub fn actor(&self) -> (ActorKind, &str) {
+        match self {
+            Self::ReportAdded { .. } | Self::AcquisitionCompleted { .. } => {
+                (ActorKind::System, "automation-domain-event")
+            }
+            Self::FullTextAttached { actor, .. }
+            | Self::ReportIncluded { actor, .. }
+            | Self::StudyCreated { actor, .. }
+            | Self::AppraisalCompleted { actor, .. } => (actor.kind(), actor.id()),
+        }
+    }
 }
 
 impl AutomationTriggerKind {

@@ -1,6 +1,8 @@
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use chrono::{DateTime, Utc};
-use deepref_application::{GetScreeningQueueQuery, ScreenReportCommand, UndoScreeningCommand};
+use deepref_application::{
+    AutomationDomainEvent, GetScreeningQueueQuery, ScreenReportCommand, UndoScreeningCommand,
+};
 use deepref_domain::{
     Actor, CurrentScreeningState, ScreeningDecision, ScreeningStage, ScreeningTransition,
 };
@@ -523,6 +525,21 @@ async fn persist_event_and_state(
     .bind(write.actor.id())
     .execute(&mut **tx)
     .await?;
+
+    if write.event_kind == "decision"
+        && write.previous.final_status != "include"
+        && write.result.final_status == "include"
+    {
+        crate::dispatch_automation_domain_event(
+            tx,
+            &AutomationDomainEvent::ReportIncluded {
+                project_id: write.result.project_id.into(),
+                screening_event_id: write.event_id,
+                actor: write.actor.clone(),
+            },
+        )
+        .await?;
+    }
 
     Ok(next)
 }

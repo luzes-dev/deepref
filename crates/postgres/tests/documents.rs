@@ -323,10 +323,10 @@ async fn parse_jobs_dedupe_and_failed_new_version_preserves_active_blocks() {
     )
     .await
     .unwrap();
-    let first_job = enqueue_parse(&mut tx, document_id, DOCUMENT_HASH)
+    let first_job = enqueue_parse(&mut tx, project_id.into(), document_id, DOCUMENT_HASH)
         .await
         .unwrap();
-    let second_job = enqueue_parse(&mut tx, document_id, DOCUMENT_HASH)
+    let second_job = enqueue_parse(&mut tx, project_id.into(), document_id, DOCUMENT_HASH)
         .await
         .unwrap();
     assert_eq!(first_job, second_job);
@@ -547,9 +547,16 @@ async fn retrieval_completion_has_one_winner_and_one_parse_job() {
     let winner_key = format!("documents/{}", Uuid::new_v4());
     let mut winner = pool.begin().await.unwrap();
     assert_eq!(
-        complete_document_retrieval(&mut winner, document_id, &winner_key, DOCUMENT_HASH, 100,)
-            .await
-            .unwrap(),
+        complete_document_retrieval(
+            &mut winner,
+            project_id.into(),
+            document_id,
+            &winner_key,
+            DOCUMENT_HASH,
+            100,
+        )
+        .await
+        .unwrap(),
         CompleteDocumentRetrievalOutcome::Applied
     );
     winner.commit().await.unwrap();
@@ -558,9 +565,16 @@ async fn retrieval_completion_has_one_winner_and_one_parse_job() {
     let loser_hash = "cccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccccc";
     let mut loser = pool.begin().await.unwrap();
     assert_eq!(
-        complete_document_retrieval(&mut loser, document_id, &loser_key, loser_hash, 101)
-            .await
-            .unwrap(),
+        complete_document_retrieval(
+            &mut loser,
+            project_id.into(),
+            document_id,
+            &loser_key,
+            loser_hash,
+            101,
+        )
+        .await
+        .unwrap(),
         CompleteDocumentRetrievalOutcome::AlreadyCompleted
     );
     loser.commit().await.unwrap();

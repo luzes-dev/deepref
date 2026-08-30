@@ -1,5 +1,6 @@
 use std::time::Duration;
 
+use deepref_application::AutomationDomainEvent;
 use deepref_core::{IngestionItemStatus, IngestionStatus, Reference, WorkWithReferences};
 use deepref_events::{
     CitationUpserted, DeadLetterRecord, DomainPayload, EntityType, EventEnvelope,
@@ -674,6 +675,7 @@ async fn enqueue_child(
             tx,
             &deepref_postgres::job(
                 child.event_id,
+                event.payload.project_id.into(),
                 "work_fetch_requested",
                 serde_json::to_value(&child)?,
                 format!("work_fetch:{}", child.event_id),
@@ -748,6 +750,7 @@ async fn emit_metrics_request(
         tx,
         &deepref_postgres::job(
             envelope.event_id,
+            event.payload.project_id.into(),
             "recompute_metrics",
             serde_json::to_value(&envelope)?,
             format!(
@@ -847,7 +850,13 @@ async fn complete_item_and_claim(
         queued_count=(SELECT count(*)::int FROM ingestion_items WHERE ingestion_id=$1 AND status IN ('queued','fetching'))
         WHERE id=$1"#,
     ).bind(event.payload.ingestion_id).execute(&mut **tx).await?;
-    sqlx::query(
+    let previous_acquisition_status = sqlx::query_scalar::<_, String>(
+        "SELECT status FROM acquisition_runs WHERE id=$1 FOR UPDATE",
+    )
+    .bind(event.payload.ingestion_id)
+    .fetch_one(&mut **tx)
+    .await?;
+    let acquisition_status = sqlx::query_scalar::<_, String>(
         r#"UPDATE acquisition_runs SET
         status = CASE WHEN status='cancelled' THEN status
           WHEN NOT EXISTS (SELECT 1 FROM ingestion_items WHERE ingestion_id=$1 AND status IN ('queued','fetching'))
@@ -858,11 +867,22 @@ async fn complete_item_and_claim(
         fetched_count=(SELECT count(*)::int FROM ingestion_items WHERE ingestion_id=$1 AND status='fetched'),
         failed_count=(SELECT count(*)::int FROM ingestion_items WHERE ingestion_id=$1 AND status IN ('failed','not_found')),
         queued_count=(SELECT count(*)::int FROM ingestion_items WHERE ingestion_id=$1 AND status IN ('queued','fetching'))
-        WHERE id=$1"#,
+        WHERE id=$1
+        RETURNING status"#,
     )
     .bind(event.payload.ingestion_id)
-    .execute(&mut **tx)
+    .fetch_one(&mut **tx)
     .await?;
+    if previous_acquisition_status != "completed" && acquisition_status == "completed" {
+        deepref_postgres::dispatch_automation_domain_event(
+            tx,
+            &AutomationDomainEvent::AcquisitionCompleted {
+                project_id: event.payload.project_id.into(),
+                acquisition_id: event.payload.ingestion_id,
+            },
+        )
+        .await?;
+    }
     let completed = sqlx::query(
         "UPDATE processed_events SET completed_at=now(),processed_at=now(),owner_token=NULL,lease_expires_at=NULL,last_error=$3 \
          WHERE event_id=$1 AND owner_token=$2 AND completed_at IS NULL",
