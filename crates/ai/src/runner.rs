@@ -21,7 +21,11 @@ pub trait EvidenceRetriever: Send + Sync {
     -> AiFuture<'a, Vec<GroundedBlock>>;
 }
 pub trait AiRunStore: Send + Sync {
-    fn find_reusable<'a>(&'a self, reuse_hash: &'a str) -> AiFuture<'a, Option<AiRunRecord>>;
+    fn find_reusable<'a>(
+        &'a self,
+        project_id: Option<ProjectId>,
+        reuse_hash: &'a str,
+    ) -> AiFuture<'a, Option<AiRunRecord>>;
     fn save_run<'a>(&'a self, run: AiRunRecord) -> AiFuture<'a, ()>;
 }
 pub trait ProposalStore: Send + Sync {
@@ -86,6 +90,20 @@ pub struct AiTaskResult<T> {
     pub proposal: Option<AiProposal>,
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ProposalPersistence {
+    #[default]
+    Persist,
+    Skip,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Default)]
+pub struct AiExecutionContext {
+    pub parent_automation_run_id: Option<Uuid>,
+    pub node_fingerprint: Option<String>,
+    pub proposal_persistence: ProposalPersistence,
+}
+
 pub struct AiTaskRunner<'a, G: ?Sized, R, E, S, P, C, I> {
     gateway: &'a G,
     router: &'a R,
@@ -134,8 +152,34 @@ where
     where
         T: AiTask,
     {
-        let input_json = serde_json::to_value(&input)
+        self.run_with_context(task, input, AiExecutionContext::default())
+            .await
+    }
+
+    pub async fn run_with_context<T>(
+        &self,
+        task: &T,
+        input: T::Input,
+        execution: AiExecutionContext,
+    ) -> Result<AiTaskResult<T::Output>, AiError>
+    where
+        T: AiTask,
+    {
+        if execution
+            .node_fingerprint
+            .as_deref()
+            .is_some_and(|fingerprint| !crate::is_sha256(fingerprint))
+        {
+            return Err(AiError::InvalidContext(
+                "node fingerprint must be a SHA-256 digest".to_owned(),
+            ));
+        }
+        let task_input_json = serde_json::to_value(&input)
             .map_err(|_| AiError::InputSerialization("task input".to_owned()))?;
+        let input_json = json!({
+            "task_input": task_input_json,
+            "node_fingerprint": execution.node_fingerprint,
+        });
         let input_hash = hash_json(&input_json)?;
         let mut context = task.build_context(&input)?;
         context.validate()?;
@@ -192,16 +236,20 @@ where
             evidence_hash: evidence_hash.clone(),
         })?;
 
-        if let Some(run) = self.store.find_reusable(&reuse_hash).await? {
+        if let Some(run) = self.store.find_reusable(project_id, &reuse_hash).await? {
             run.validate()?;
             let raw = run
                 .output
                 .clone()
                 .ok_or_else(|| AiError::Persistence("completed run has no output".to_owned()))?;
             let output = validate_output(task, raw, &evidence)?;
-            let proposal = self
-                .ensure_proposal(task, &output, &run, project_id)
-                .await?;
+            let proposal = match execution.proposal_persistence {
+                ProposalPersistence::Persist => {
+                    self.ensure_proposal(task, &output, &run, project_id)
+                        .await?
+                }
+                ProposalPersistence::Skip => None,
+            };
             return Ok(AiTaskResult {
                 output,
                 run,
@@ -229,7 +277,7 @@ where
             output: None,
             status: AiRunStatus::Running,
             error: None,
-            parent_automation_run_id: None,
+            parent_automation_run_id: execution.parent_automation_run_id,
             completed_at: None,
             created_at: self.clock.now(),
         };
@@ -277,9 +325,13 @@ where
         run.completed_at = Some(self.clock.now());
         run.validate()?;
         self.store.save_run(run.clone()).await?;
-        let proposal = self
-            .ensure_proposal(task, &output, &run, project_id)
-            .await?;
+        let proposal = match execution.proposal_persistence {
+            ProposalPersistence::Persist => {
+                self.ensure_proposal(task, &output, &run, project_id)
+                    .await?
+            }
+            ProposalPersistence::Skip => None,
+        };
         Ok(AiTaskResult {
             output,
             run,

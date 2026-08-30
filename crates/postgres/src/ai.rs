@@ -10,7 +10,9 @@ use deepref_application::{
     AppraisalAssessmentInput, DefinitionId, DefinitionVersion, EvidenceReferenceInput,
     ResolveRecordCommand, ScreenReportCommand, get_appraisal_definition,
 };
-use deepref_domain::{Actor, ScreeningDecision, ScreeningStage, StudyReportRole, StudyTitle};
+use deepref_domain::{
+    Actor, ProjectId, ScreeningDecision, ScreeningStage, StudyReportRole, StudyTitle,
+};
 use pgvector::Vector;
 use sqlx::{PgPool, Postgres, Row, Transaction};
 use thiserror::Error;
@@ -541,7 +543,11 @@ impl ModelRouter for PostgresAiStore {
 }
 
 impl AiRunStore for PostgresAiStore {
-    fn find_reusable<'a>(&'a self, reuse_hash: &'a str) -> AiFuture<'a, Option<AiRunRecord>> {
+    fn find_reusable<'a>(
+        &'a self,
+        project_id: Option<ProjectId>,
+        reuse_hash: &'a str,
+    ) -> AiFuture<'a, Option<AiRunRecord>> {
         Box::pin(async move {
             let row = sqlx::query(
                 "SELECT id,project_id,task_kind,profile,provider,model,model_version,parameters,
@@ -549,9 +555,12 @@ impl AiRunStore for PostgresAiStore {
                         protocol_hash,document_hash,evidence_hash,evidence_refs,input_tokens,
                         output_tokens,cost_micros,output,status,error_code,error_message,
                         parent_automation_run_id,created_at,completed_at
-                 FROM ai_runs WHERE reuse_hash=$1 AND status='completed'
+                 FROM ai_runs
+                 WHERE project_id IS NOT DISTINCT FROM $1
+                   AND reuse_hash=$2 AND status='completed'
                  ORDER BY completed_at DESC NULLS LAST,created_at DESC,id DESC LIMIT 1",
             )
+            .bind(project_id.map(|id| id.as_uuid()))
             .bind(reuse_hash)
             .fetch_optional(&self.pool)
             .await
