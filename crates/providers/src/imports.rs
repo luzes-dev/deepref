@@ -1,5 +1,6 @@
+use std::collections::BTreeMap;
+
 use biblatex::{Bibliography, ChunksExt};
-use biblio::Record;
 use deepref_application::{
     CsvColumnMapping, ImportError, ImportParser, RawAuthor, RawIdentifier, RawRecord,
 };
@@ -43,8 +44,8 @@ pub fn parse_import(
     })?;
     match format {
         ImportFormat::Doi => parse_doi_list(text),
-        ImportFormat::Ris => parse_biblio(text, format, biblio::ris::parse),
-        ImportFormat::Nbib => parse_biblio(text, format, biblio::nbib::parse),
+        ImportFormat::Ris => parse_tagged_records(text, TaggedFormat::Ris),
+        ImportFormat::Nbib => parse_tagged_records(text, TaggedFormat::Nbib),
         ImportFormat::Bibtex => parse_bibtex(text),
         ImportFormat::Csv => parse_csv(text, csv_mapping),
     }
@@ -89,44 +90,203 @@ fn parse_doi_list(input: &str) -> Result<Vec<RawRecord>, ImportError> {
     Ok(records)
 }
 
-fn parse_biblio(
-    input: &str,
-    format: ImportFormat,
-    parser: impl Fn(&str) -> Result<Vec<Record>, biblio::Error>,
-) -> Result<Vec<RawRecord>, ImportError> {
-    let records = parser(input).map_err(|error| ImportError::Invalid {
-        format: format.as_str().to_owned(),
-        message: error.to_string(),
-    })?;
-    if records.is_empty() {
-        return Err(ImportError::Invalid {
-            format: format.as_str().to_owned(),
-            message: "no records found".to_owned(),
-        });
-    }
-    Ok(records
-        .into_iter()
-        .map(|record| raw_record_from_biblio(format, record))
-        .collect())
-}
-
 fn parse_bibtex(input: &str) -> Result<Vec<RawRecord>, ImportError> {
-    match biblio::bibtex::parse(input) {
-        Ok(records) if !records.is_empty() => Ok(records
-            .into_iter()
-            .map(|record| raw_record_from_biblio(ImportFormat::Bibtex, record))
-            .collect()),
-        Ok(_) => Err(invalid(ImportFormat::Bibtex, "no records found")),
-        Err(primary_error) => parse_biblatex_fallback(input).map_err(|fallback_error| {
-            invalid(
-                ImportFormat::Bibtex,
-                &format!("{primary_error}; fallback: {fallback_error}"),
-            )
-        }),
+    parse_biblatex(input).map_err(|error| invalid(ImportFormat::Bibtex, &error))
+}
+
+#[derive(Debug, Clone, Copy)]
+enum TaggedFormat {
+    Ris,
+    Nbib,
+}
+
+impl TaggedFormat {
+    const fn import_format(self) -> ImportFormat {
+        match self {
+            Self::Ris => ImportFormat::Ris,
+            Self::Nbib => ImportFormat::Nbib,
+        }
+    }
+
+    const fn record_terminator(self) -> Option<&'static str> {
+        match self {
+            Self::Ris => Some("ER"),
+            Self::Nbib => None,
+        }
     }
 }
 
-fn parse_biblatex_fallback(input: &str) -> Result<Vec<RawRecord>, String> {
+#[derive(Debug, Default)]
+struct TaggedRecord {
+    fields: BTreeMap<String, Vec<String>>,
+    last_tag: Option<String>,
+}
+
+impl TaggedRecord {
+    fn push(&mut self, tag: &str, value: &str) {
+        self.fields
+            .entry(tag.to_owned())
+            .or_default()
+            .push(value.trim().to_owned());
+        self.last_tag = Some(tag.to_owned());
+    }
+
+    fn continue_last(&mut self, value: &str) -> bool {
+        let Some(tag) = self.last_tag.as_ref() else {
+            return false;
+        };
+        let Some(field) = self
+            .fields
+            .get_mut(tag)
+            .and_then(|values| values.last_mut())
+        else {
+            return false;
+        };
+        if !field.is_empty() {
+            field.push(' ');
+        }
+        field.push_str(value.trim());
+        true
+    }
+
+    fn is_empty(&self) -> bool {
+        self.fields.is_empty()
+    }
+
+    fn first(&self, tags: &[&str]) -> Option<&str> {
+        tags.iter()
+            .find_map(|tag| self.fields.get(*tag).and_then(|values| values.first()))
+            .map(String::as_str)
+            .filter(|value| !value.trim().is_empty())
+    }
+
+    fn all<'a>(&'a self, tags: &'a [&str]) -> impl Iterator<Item = &'a str> {
+        tags.iter()
+            .filter_map(|tag| self.fields.get(*tag))
+            .flatten()
+            .map(String::as_str)
+            .filter(|value| !value.trim().is_empty())
+    }
+}
+
+fn parse_tagged_records(input: &str, format: TaggedFormat) -> Result<Vec<RawRecord>, ImportError> {
+    let import_format = format.import_format();
+    let mut parsed = Vec::new();
+    let mut current = TaggedRecord::default();
+
+    for (index, raw_line) in input.lines().enumerate() {
+        let line = raw_line.trim_end_matches('\r');
+        if line.trim().is_empty() {
+            if matches!(format, TaggedFormat::Nbib) && !current.is_empty() {
+                parsed.push(raw_record_from_tagged(import_format, current));
+                current = TaggedRecord::default();
+            }
+            continue;
+        }
+        if line.starts_with(char::is_whitespace) {
+            if !current.continue_last(line) {
+                return Err(invalid(
+                    import_format,
+                    &format!("continuation without a field at line {}", index + 1),
+                ));
+            }
+            continue;
+        }
+        let Some((tag, value)) = parse_tagged_line(line, format) else {
+            return Err(invalid(
+                import_format,
+                &format!("invalid tagged field at line {}", index + 1),
+            ));
+        };
+        if format.record_terminator() == Some(tag) {
+            if !current.is_empty() {
+                parsed.push(raw_record_from_tagged(import_format, current));
+                current = TaggedRecord::default();
+            }
+        } else {
+            current.push(tag, value);
+        }
+    }
+    if !current.is_empty() {
+        parsed.push(raw_record_from_tagged(import_format, current));
+    }
+    if parsed.is_empty() {
+        return Err(invalid(import_format, "no records found"));
+    }
+    Ok(parsed)
+}
+
+fn parse_tagged_line(line: &str, format: TaggedFormat) -> Option<(&str, &str)> {
+    match format {
+        TaggedFormat::Ris => {
+            let (tag, value) = line.split_once("  -")?;
+            let tag = tag.trim();
+            (tag.len() == 2).then_some((tag, value.trim_start()))
+        }
+        TaggedFormat::Nbib => {
+            let separator = line.find("- ")?;
+            let tag = line[..separator].trim();
+            (!tag.is_empty() && tag.len() <= 8).then_some((tag, line[separator + 2..].trim_start()))
+        }
+    }
+}
+
+fn raw_record_from_tagged(format: ImportFormat, record: TaggedRecord) -> RawRecord {
+    let (title_tags, abstract_tags, author_tags, year_tags, journal_tags) = match format {
+        ImportFormat::Ris => (
+            ["TI", "T1"].as_slice(),
+            ["AB", "N2"].as_slice(),
+            ["AU", "A1"].as_slice(),
+            ["PY", "Y1"].as_slice(),
+            ["JO", "JF", "JA", "T2"].as_slice(),
+        ),
+        ImportFormat::Nbib => (
+            ["TI"].as_slice(),
+            ["AB"].as_slice(),
+            ["FAU", "AU"].as_slice(),
+            ["DP"].as_slice(),
+            ["JT", "TA"].as_slice(),
+        ),
+        _ => unreachable!("tagged records support only RIS and NBIB"),
+    };
+    let title = record.first(title_tags).map(normalize_text);
+    let abstract_text = record.first(abstract_tags).map(normalize_text);
+    let authors = record
+        .all(author_tags)
+        .map(parse_author)
+        .collect::<Vec<_>>();
+    let publication_year = record.first(year_tags).and_then(parse_year);
+    let journal = record.first(journal_tags).map(normalize_text);
+    let doi = record
+        .all(&["DO", "LID", "AID"])
+        .find_map(|value| value.strip_suffix(" [doi]").or(Some(value)))
+        .and_then(|value| normalized_identifier(IdentifierScheme::Doi, value));
+    let pmid = record
+        .first(&["PMID"])
+        .and_then(|value| normalized_identifier(IdentifierScheme::Pmid, value));
+    let pmcid = record
+        .first(&["PMC", "PMCID"])
+        .and_then(|value| normalized_identifier(IdentifierScheme::Pmcid, value));
+    let source_identifiers = [doi, pmid, pmcid].into_iter().flatten().collect();
+    RawRecord {
+        source_identifiers,
+        title,
+        abstract_text,
+        authors,
+        publication_year,
+        journal,
+        raw: json!({ "format": format.as_str(), "fields": record.fields }),
+    }
+}
+
+fn parse_year(value: &str) -> Option<i32> {
+    value
+        .split(|character: char| !character.is_ascii_digit())
+        .find(|part| part.len() == 4)
+        .and_then(|part| part.parse().ok())
+}
+
+fn parse_biblatex(input: &str) -> Result<Vec<RawRecord>, String> {
     let bibliography = Bibliography::parse(input).map_err(|error| error.to_string())?;
     let mut records = Vec::new();
     for entry in bibliography.iter() {
@@ -167,7 +327,7 @@ fn parse_biblatex_fallback(input: &str) -> Result<Vec<RawRecord>, String> {
             authors,
             publication_year: year,
             journal: journal.map(|value| normalize_text(&value)),
-            raw: json!({ "format": "bibtex", "key": entry.key, "fields": fields, "parser": "biblatex-fallback" }),
+            raw: json!({ "format": "bibtex", "key": entry.key, "fields": fields, "parser": "biblatex" }),
         });
     }
     if records.is_empty() {
@@ -256,53 +416,6 @@ fn parse_csv(
     Ok(records)
 }
 
-fn raw_record_from_biblio(format: ImportFormat, record: Record) -> RawRecord {
-    let title = record.title.clone();
-    let abstract_text = record.abstract_text.clone();
-    let authors = record.authors.clone();
-    let journal = record.journal.clone();
-    let doi = record.doi.clone();
-    let year = record.date.map(|date| date.year);
-    let mut fields = Map::new();
-    for (key, value) in &record.extras {
-        fields.insert(key.clone(), Value::String(value.clone()));
-    }
-    let mut identifiers = Vec::new();
-    if let Some(value) = &doi
-        && let Some(identifier) = normalized_identifier(IdentifierScheme::Doi, value)
-    {
-        identifiers.push(identifier);
-    }
-    for (key, scheme) in [
-        ("PMID", IdentifierScheme::Pmid),
-        ("PMC", IdentifierScheme::Pmcid),
-    ] {
-        if let Some(value) = record.extras.get(key)
-            && let Some(identifier) = normalized_identifier(scheme, value)
-        {
-            identifiers.push(identifier);
-        }
-    }
-    RawRecord {
-        source_identifiers: identifiers,
-        title: nonempty(title.clone()).map(|value| normalize_text(&value)),
-        abstract_text: abstract_text.clone().map(|value| normalize_text(&value)),
-        authors: authors.iter().map(|value| parse_author(value)).collect(),
-        publication_year: year,
-        journal: journal.clone().map(|value| normalize_text(&value)),
-        raw: json!({
-            "format": format.as_str(),
-            "fields": fields,
-            "doi": doi,
-            "title": title,
-            "abstract": abstract_text,
-            "authors": authors,
-            "year": year,
-            "journal": journal,
-        }),
-    }
-}
-
 fn normalized_identifier(scheme: IdentifierScheme, value: &str) -> Option<RawIdentifier> {
     let normalized = match scheme {
         IdentifierScheme::Doi => normalize_doi(value).ok()?,
@@ -357,10 +470,6 @@ fn normalize_text(value: &str) -> String {
         .split_whitespace()
         .collect::<Vec<_>>()
         .join(" ")
-}
-
-fn nonempty(value: String) -> Option<String> {
-    (!value.trim().is_empty()).then_some(value)
 }
 
 fn mapped_columns(mapping: &CsvColumnMapping) -> impl Iterator<Item = &str> {
@@ -507,7 +616,7 @@ mod tests {
             fallback.title.as_deref(),
             Some("Über die Wirkung von Kaffee")
         );
-        assert_eq!(fallback.raw["parser"], "biblatex-fallback");
+        assert_eq!(fallback.raw["parser"], "biblatex");
 
         let nbib = parse_import(
             include_bytes!("../tests/fixtures/sample.nbib"),
@@ -557,5 +666,37 @@ mod tests {
         assert_eq!(ris.authors, bib.authors);
         assert_eq!(ris.publication_year, bib.publication_year);
         assert_eq!(ris.journal, bib.journal);
+    }
+
+    #[test]
+    fn ris_supports_multiple_records_repeated_authors_and_continuations() {
+        let input = b"TY  - JOUR\nTI  - First title\n      continued\nAU  - Doe, Jane\nAU  - Roe, John\nER  -\nTY  - BOOK\nTI  - Second title\nER  -\n";
+        let records = parse_import(input, ImportFormat::Ris, None).unwrap();
+        assert_eq!(records.len(), 2);
+        assert_eq!(records[0].title.as_deref(), Some("First title continued"));
+        assert_eq!(records[0].authors.len(), 2);
+        assert_eq!(records[1].title.as_deref(), Some("Second title"));
+    }
+
+    #[test]
+    fn nbib_supports_multiple_records_and_doi_tag_variants() {
+        let input = b"PMID- 1\nTI  - First\nLID - 10.1000/first [doi]\n\nPMID- 2\nTI  - Second\nAID - 10.1000/second [doi]\n";
+        let records = parse_import(input, ImportFormat::Nbib, None).unwrap();
+        assert_eq!(records.len(), 2);
+        assert_eq!(
+            records[0].source_identifiers[0].normalized_value,
+            "10.1000/first"
+        );
+        assert_eq!(
+            records[1].source_identifiers[0].normalized_value,
+            "10.1000/second"
+        );
+    }
+
+    #[test]
+    fn tagged_formats_reject_empty_and_malformed_input() {
+        assert!(parse_import(b"", ImportFormat::Ris, None).is_err());
+        assert!(parse_import(b"not a tagged field", ImportFormat::Ris, None).is_err());
+        assert!(parse_import(b"   orphan continuation", ImportFormat::Nbib, None).is_err());
     }
 }
