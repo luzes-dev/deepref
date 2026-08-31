@@ -4,6 +4,7 @@ import type {
 	AiAppraisalPrefillEvidenceDto,
 	AiAppraisalPrefillProposalPayload,
 	AiReviewedProposalPayload,
+	AppraisalAnswerSchemaDto,
 	AppraisalDefinitionDto,
 	AppraisalQuestionDto,
 	DocumentBlockDto
@@ -52,30 +53,52 @@ function answerValueForQuestion(
 ): AiAppraisalAnswerValueDto | undefined {
 	switch (question.answer_schema.kind) {
 		case 'enum':
-			return typeof value === 'string' &&
-				question.answer_schema.options.some((option) => option.value === value)
-				? { kind: 'enum', value }
-				: undefined;
+			return enumAnswer(question.answer_schema, value);
 		case 'boolean':
-			return typeof value === 'boolean' ? { kind: 'boolean', value } : undefined;
+			return booleanAnswer(value);
 		case 'scale':
-			return typeof value === 'number' &&
-				Number.isInteger(value) &&
-				value >= question.answer_schema.min &&
-				value <= question.answer_schema.max
-				? { kind: 'scale', value }
-				: undefined;
+			return scaleAnswer(question.answer_schema, value);
 		case 'text':
-			return typeof value === 'string' &&
-				value.trim().length > 0 &&
-				value.length <= question.answer_schema.max_length
-				? { kind: 'text', value }
-				: undefined;
+			return textAnswer(question.answer_schema, value);
 		default: {
 			const exhaustive: never = question.answer_schema;
 			return exhaustive;
 		}
 	}
+}
+
+function enumAnswer(
+	schema: Extract<AppraisalAnswerSchemaDto, { kind: 'enum' }>,
+	value: unknown
+): AiAppraisalAnswerValueDto | undefined {
+	return typeof value === 'string' && schema.options.some((option) => option.value === value)
+		? { kind: 'enum', value }
+		: undefined;
+}
+
+function booleanAnswer(value: unknown): AiAppraisalAnswerValueDto | undefined {
+	return typeof value === 'boolean' ? { kind: 'boolean', value } : undefined;
+}
+
+function scaleAnswer(
+	schema: Extract<AppraisalAnswerSchemaDto, { kind: 'scale' }>,
+	value: unknown
+): AiAppraisalAnswerValueDto | undefined {
+	return typeof value === 'number' &&
+		Number.isInteger(value) &&
+		value >= schema.min &&
+		value <= schema.max
+		? { kind: 'scale', value }
+		: undefined;
+}
+
+function textAnswer(
+	schema: Extract<AppraisalAnswerSchemaDto, { kind: 'text' }>,
+	value: unknown
+): AiAppraisalAnswerValueDto | undefined {
+	return typeof value === 'string' && value.trim().length > 0 && value.length <= schema.max_length
+		? { kind: 'text', value }
+		: undefined;
 }
 
 export function resolveAppraisalEvidence(
