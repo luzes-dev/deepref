@@ -26,6 +26,7 @@
 	import { ApiError } from '$lib/api/custom-fetch';
 	import { useQueryClient } from '@tanstack/svelte-query';
 	import { fullTextUrlString } from '$lib/features/full-text/url';
+	import { ReviewRunObserver } from '$lib/features/ai-assistance/review-run-observer.svelte';
 	import { Badge } from '$lib/components/ui/badge';
 	import { Button } from '$lib/components/ui/button';
 	import * as Card from '$lib/components/ui/card';
@@ -115,6 +116,13 @@
 	);
 	let selectedAiProposalId = $state<string | null>(null);
 	let aiError = $state('');
+	const reviewRun = new ReviewRunObserver(
+		() => projectId,
+		async () => {
+			selectedAiProposalId = null;
+			await proposalsQuery.refetch();
+		}
+	);
 	const activeAiProposal = $derived(
 		pendingAiProposals.find((proposal) => proposal.id === selectedAiProposalId) ??
 			pendingAiProposals[0] ??
@@ -122,10 +130,11 @@
 	);
 	const activeAiPayload = $derived(activeAiProposal?.payload ?? null);
 	const aiRequestPending = $derived(
-		generatePrefillMutation.isPending || decideProposalMutation.isPending
+		generatePrefillMutation.isPending || decideProposalMutation.isPending || reviewRun.isActive
 	);
 	const aiStatus = $derived(
 		aiError ||
+			reviewRun.error ||
 			proposalsQuery.error?.message ||
 			generatePrefillMutation.error?.message ||
 			decideProposalMutation.error?.message ||
@@ -195,7 +204,7 @@
 		}
 		aiError = '';
 		try {
-			await generatePrefillMutation.mutateAsync({
+			const response = await generatePrefillMutation.mutateAsync({
 				projectId,
 				reportId,
 				data: {
@@ -204,7 +213,7 @@
 				}
 			});
 			selectedAiProposalId = null;
-			await proposalsQuery.refetch();
+			await reviewRun.observe(response.data);
 		} catch (error) {
 			aiError = aiDecisionError(error);
 		}
@@ -395,7 +404,7 @@
 									disabled={aiRequestPending}
 									data-testid="generate-ai-prefill"
 								>
-									{#if generatePrefillMutation.isPending}<Spinner
+									{#if generatePrefillMutation.isPending || reviewRun.isActive}<Spinner
 											data-icon="inline-start"
 										/>{/if}
 									Generate pre-fill for {selectedDefinition.id} v{selectedDefinition.version}

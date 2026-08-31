@@ -161,7 +161,7 @@ async function mockExtractionPage(page: Page, decisionMode: DecisionMode): Promi
 							},
 							project_id: 'project-1',
 							prompt_hash: 'prompt-hash',
-							prompt_version: 'pr13-test',
+							prompt_version: 'appraisal-extraction-test',
 							protocol_version_id: null,
 							provider: 'mock-provider',
 							resolution_reason: null,
@@ -183,8 +183,33 @@ async function mockExtractionPage(page: Page, decisionMode: DecisionMode): Promi
 		void route.fulfill({ json: response });
 	});
 	await page.route(`${api}/projects/project-1/studies/study-1/ai/extraction`, async (route) => {
+		await route.fulfill({
+			status: 202,
+			json: {
+				id: 'extraction-run',
+				project_id: 'project-1',
+				definition: 'data_extraction',
+				subject: {},
+				origin: { kind: 'reviewer_requested' },
+				state: { kind: 'queued' },
+				created_at: '2026-01-01T00:00:00Z'
+			}
+		});
+	});
+	await page.route(`${api}/projects/project-1/review-runs/extraction-run`, async (route) => {
 		state.proposalPresent = true;
-		await route.fulfill({ status: 200, json: { id: 'proposal-1' } });
+		await route.fulfill({
+			json: {
+				id: 'extraction-run',
+				project_id: 'project-1',
+				definition: 'data_extraction',
+				subject: {},
+				origin: { kind: 'reviewer_requested' },
+				state: { kind: 'completed', proposal_id: 'proposal-1' },
+				created_at: '2026-01-01T00:00:00Z',
+				finished_at: '2026-01-01T00:00:01Z'
+			}
+		});
 	});
 	await page.route(
 		`${api}/projects/project-1/ai/proposals/proposal-1/decision`,

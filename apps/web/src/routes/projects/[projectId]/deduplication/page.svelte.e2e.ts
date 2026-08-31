@@ -225,8 +225,36 @@ test('reviews a grounded duplicate AI proposal before applying it', async ({ pag
 		async (route) => {
 			expect(route.request().method()).toBe('POST');
 			expect(route.request().postDataJSON()).toEqual({ candidate_report_id: 'report-1' });
+			await route.fulfill({
+				status: 202,
+				json: {
+					id: 'dedupe-review-run',
+					project_id: 'project-1',
+					definition: 'duplicate_detection',
+					subject: {},
+					origin: { kind: 'reviewer_requested' },
+					state: { kind: 'queued' },
+					created_at: '2026-01-01T00:00:00Z'
+				}
+			});
+		}
+	);
+	await page.route(
+		'http://localhost:4173/api/projects/project-1/review-runs/dedupe-review-run',
+		async (route) => {
 			pending = true;
-			await route.fulfill({ status: 200, json: { data: aiProposal } });
+			await route.fulfill({
+				json: {
+					id: 'dedupe-review-run',
+					project_id: 'project-1',
+					definition: 'duplicate_detection',
+					subject: {},
+					origin: { kind: 'reviewer_requested' },
+					state: { kind: 'completed', proposal_id: aiProposal.id },
+					created_at: '2026-01-01T00:00:00Z',
+					finished_at: '2026-01-01T00:00:01Z'
+				}
+			});
 		}
 	);
 	await page.route(

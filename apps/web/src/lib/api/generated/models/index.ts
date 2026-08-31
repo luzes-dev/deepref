@@ -169,6 +169,8 @@ export * from './reportDetailDto.ts';
 export * from './reportDetailDtoRaw.ts';
 export * from './reportDto.ts';
 export * from './resolutionDto.ts';
+export * from './reviewRunDto.ts';
+export * from './reviewRunStateDto.ts';
 export * from './runDeduplicationRequest.ts';
 export * from './saveProtocolRequest.ts';
 export * from './screeningDecisionInput.ts';
