@@ -1,11 +1,16 @@
 import { describe, expect, it } from 'vitest';
-import type { AiExtractedFieldDto, ExtractionFieldDto } from '$lib/api/generated/models';
+import type {
+	AiExtractedFieldDto,
+	AiExtractionEvidenceDto,
+	ExtractionFieldDto
+} from '$lib/api/generated/models';
 import {
 	buildExtractionEvidenceLink,
 	draftFromAiField,
 	serializeExtractionDrafts,
 	validateExtractionDrafts
 } from './helpers';
+import type { ExtractionDraftField } from './helpers';
 
 const fields: ExtractionFieldDto[] = [
 	{
@@ -28,7 +33,7 @@ const fields: ExtractionFieldDto[] = [
 	}
 ];
 
-const evidence = {
+const evidence: AiExtractionEvidenceDto = {
 	report_id: 'report-1',
 	document_id: 'document-1',
 	document_block_id: 'block-7',
@@ -36,6 +41,45 @@ const evidence = {
 	parser_version: 'parser.v2',
 	content_hash: 'hash-7'
 };
+
+type ValueDraft = Extract<ExtractionDraftField, { kind: 'value' }>;
+
+function valueDraft(
+	fieldId: string,
+	fieldVersion: number,
+	value: ValueDraft['value'],
+	rationale = 'A value.'
+): ValueDraft {
+	return {
+		field_id: fieldId,
+		field_version: fieldVersion,
+		kind: 'value',
+		rationale,
+		source: evidence,
+		value
+	};
+}
+
+function insufficientDraft(
+	fieldId: string,
+	fieldVersion: number,
+	rationale = 'Not found.'
+): Extract<ExtractionDraftField, { kind: 'insufficient_evidence' }> {
+	return {
+		field_id: fieldId,
+		field_version: fieldVersion,
+		kind: 'insufficient_evidence',
+		rationale
+	};
+}
+
+function expectValidationError(
+	testFields: ExtractionFieldDto[],
+	drafts: ExtractionDraftField[],
+	message: string
+): void {
+	expect(validateExtractionDrafts(testFields, drafts)).toContain(message);
+}
 
 describe('extraction helpers', () => {
 	it('serializes typed values while preserving exact field identity and provenance', () => {
@@ -83,42 +127,20 @@ describe('extraction helpers', () => {
 		});
 	});
 
-	it('rejects required insufficiency, non-finite numbers, invalid dates, and stale versions', () => {
-		const requiredInsufficient = [
-			{
-				field_id: 'field-number',
-				field_version: 2,
-				kind: 'insufficient_evidence' as const,
-				rationale: 'Not found.'
-			},
-			{
-				field_id: 'field-note',
-				field_version: 1,
-				kind: 'insufficient_evidence' as const,
-				rationale: 'Not found.'
-			}
-		];
-		expect(validateExtractionDrafts(fields, requiredInsufficient)).toContain('Required');
+	it('rejects required insufficiency', () => {
+		expectValidationError(
+			fields,
+			[insufficientDraft('field-number', 2), insufficientDraft('field-note', 1)],
+			'Required'
+		);
+	});
 
-		const numberDraft = {
-			field_id: 'field-number',
-			field_version: 2,
-			kind: 'value' as const,
-			rationale: 'A table value.',
-			source: evidence,
-			value: { kind: 'number' as const, value: 'Infinity' }
-		};
-		const noteDraft = {
-			field_id: 'field-note',
-			field_version: 1,
-			kind: 'value' as const,
-			rationale: 'A note.',
-			source: evidence,
-			value: { kind: 'text' as const, value: 'ok' }
-		};
-		expect(validateExtractionDrafts(fields, [numberDraft, noteDraft])).toContain('finite');
+	it('rejects non-finite numbers and invalid dates', () => {
+		const numberDraft = valueDraft('field-number', 2, { kind: 'number', value: 'Infinity' });
+		const noteDraft = valueDraft('field-note', 1, { kind: 'text', value: 'ok' });
+		expectValidationError(fields, [numberDraft, noteDraft], 'finite');
 
-		numberDraft.value = { kind: 'number', value: '84' };
+		const validNumberDraft = valueDraft('field-number', 2, { kind: 'number', value: '84' });
 		const dateField: ExtractionFieldDto = {
 			id: 'field-date',
 			project_id: 'project-1',
@@ -128,37 +150,90 @@ describe('extraction helpers', () => {
 			required: false,
 			version: 1
 		};
-		const invalidDateDraft = {
-			field_id: dateField.id,
-			field_version: dateField.version,
-			kind: 'value' as const,
-			rationale: 'A date.',
-			source: evidence,
-			value: { kind: 'date' as const, value: '2026-02-30' }
-		};
-		expect(
-			validateExtractionDrafts(
-				[...fields, dateField],
-				[numberDraft, noteDraft, invalidDateDraft]
-			)
-		).toContain('ISO date');
+		const invalidDateDraft = valueDraft(
+			dateField.id,
+			dateField.version,
+			{
+				kind: 'date',
+				value: '2026-02-30'
+			},
+			'A date.'
+		);
+		expectValidationError(
+			[...fields, dateField],
+			[validNumberDraft, noteDraft, invalidDateDraft],
+			'ISO date'
+		);
+	});
 
-		expect(
-			validateExtractionDrafts(fields, [
-				{ ...numberDraft, value: { kind: 'number', value: '   ' } },
-				noteDraft
-			])
-		).toContain('finite');
-		expect(
-			validateExtractionDrafts(fields, [
-				numberDraft,
-				{ ...noteDraft, value: { kind: 'text', value: '   ' } }
-			])
-		).toContain('blank');
+	it('rejects blank values and stale versions', () => {
+		const numberDraft = valueDraft('field-number', 2, { kind: 'number', value: '84' });
+		const noteDraft = valueDraft('field-note', 1, { kind: 'text', value: 'ok' });
+		expectValidationError(
+			fields,
+			[valueDraft('field-number', 2, { kind: 'number', value: '   ' }), noteDraft],
+			'finite'
+		);
+		expectValidationError(
+			fields,
+			[numberDraft, valueDraft('field-note', 1, { kind: 'text', value: '   ' })],
+			'blank'
+		);
+		expectValidationError(
+			fields,
+			[valueDraft('field-number', 1, { kind: 'number', value: '84' }), noteDraft],
+			'changed'
+		);
+	});
 
-		expect(
-			validateExtractionDrafts(fields, [{ ...numberDraft, field_version: 1 }, noteDraft])
-		).toContain('changed');
+	it('preserves identity and validation error ordering', () => {
+		const validNumberDraft = valueDraft('field-number', 2, { kind: 'number', value: '84' });
+		const validNoteDraft = valueDraft('field-note', 1, { kind: 'text', value: 'ok' });
+		expectValidationError(
+			fields,
+			[validNumberDraft, validNumberDraft],
+			'appears more than once'
+		);
+		expectValidationError(
+			fields,
+			[validNumberDraft, valueDraft('field-other', 1, { kind: 'text', value: 'ok' })],
+			'no longer current'
+		);
+		expectValidationError(
+			fields,
+			[validNumberDraft, insufficientDraft('field-note', 1, '')],
+			'Add a rationale'
+		);
+		expectValidationError(
+			fields,
+			[valueDraft('field-number', 2, { kind: 'text', value: '84' }), validNoteDraft],
+			'expects number'
+		);
+		expectValidationError(
+			[...fields, { ...fields[0], id: 'field-unsupported', value_type: 'currency' }],
+			[validNumberDraft, validNoteDraft],
+			'one reviewed value'
+		);
+		expectValidationError(
+			[...fields, { ...fields[0], id: 'field-unsupported', value_type: 'currency' }],
+			[
+				validNumberDraft,
+				validNoteDraft,
+				valueDraft('field-unsupported', 2, { kind: 'number', value: '1' })
+			],
+			'unsupported value type'
+		);
+		expectValidationError(
+			[...fields, { ...fields[0], id: 'field-required', required: true }],
+			[validNumberDraft, validNoteDraft, insufficientDraft('field-required', 2)],
+			'cannot be marked insufficient'
+		);
+		expectValidationError(fields, [validNumberDraft], 'one reviewed value');
+		expectValidationError(
+			fields,
+			[validNumberDraft, insufficientDraft('field-note', 1, '')],
+			'Add a rationale'
+		);
 	});
 
 	it('creates the established full-text report/page/block link', () => {

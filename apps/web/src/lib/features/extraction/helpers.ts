@@ -35,10 +35,10 @@ export type ExtractionSerializationResult =
 	{ ok: true; fields: AiExtractedFieldDto[] } | { ok: false; message: string };
 
 export function isExtractionValueType(value: string): value is ExtractionValueType {
-	return (EXTRACTION_VALUE_TYPES as readonly string[]).includes(value);
+	return EXTRACTION_VALUE_TYPES.some((type) => type === value);
 }
 
-export function isIsoDate(value: string): boolean {
+function isIsoDate(value: string): boolean {
 	if (!/^\d{4}-\d{2}-\d{2}$/.test(value)) return false;
 	const parsed = new Date(`${value}T00:00:00.000Z`);
 	return !Number.isNaN(parsed.valueOf()) && parsed.toISOString().slice(0, 10) === value;
@@ -91,49 +91,94 @@ export function validateExtractionDrafts(
 
 	const seenFieldIds = new Set<string>();
 	for (const draft of drafts) {
-		if (seenFieldIds.has(draft.field_id)) {
-			return `Field ${draft.field_id} appears more than once in the reviewed proposal.`;
-		}
-		seenFieldIds.add(draft.field_id);
+		const duplicateError = markFieldAsSeen(seenFieldIds, draft.field_id);
+		if (duplicateError) return duplicateError;
 
 		const field = fields.find((candidate) => candidate.id === draft.field_id);
 		if (!field) return `Extraction field ${draft.field_id} is no longer current.`;
-		if (field.version !== draft.field_version) {
-			return `${field.label} changed to version ${field.version}. Refresh the proposal before accepting it.`;
-		}
-		if (!isExtractionValueType(field.value_type)) {
-			return `${field.label} has unsupported value type ${field.value_type}.`;
-		}
 
-		if (draft.kind === 'insufficient_evidence') {
-			if (field.required)
-				return `Required field “${field.label}” cannot be marked insufficient.`;
-			if (!draft.rationale.trim())
-				return `Add a rationale for insufficient evidence in “${field.label}”.`;
-			continue;
-		}
-
-		if (!draft.rationale.trim()) return `Add a rationale for “${field.label}”.`;
-		if (draft.value.kind !== field.value_type) {
-			return `${field.label} expects ${field.value_type}, not ${draft.value.kind}.`;
-		}
-		if (draft.value.kind === 'text' && !draft.value.value.trim()) {
-			return `${field.label} cannot be blank.`;
-		}
-		if (
-			draft.value.kind === 'number' &&
-			(!draft.value.value.trim() || !Number.isFinite(Number(draft.value.value)))
-		) {
-			return `${field.label} must be a finite number.`;
-		}
-		if (draft.value.kind === 'date' && !isIsoDate(draft.value.value)) {
-			return `${field.label} must use an ISO date such as 2026-08-27.`;
-		}
+		const validationError = validateDraftForField(field, draft);
+		if (validationError) return validationError;
 	}
 
+	return findMissingFieldError(fields, seenFieldIds);
+}
+
+function markFieldAsSeen(seenFieldIds: Set<string>, fieldId: string): string | undefined {
+	if (seenFieldIds.has(fieldId)) {
+		return `Field ${fieldId} appears more than once in the reviewed proposal.`;
+	}
+	seenFieldIds.add(fieldId);
+	return undefined;
+}
+
+function validateDraftForField(
+	field: ExtractionFieldDto,
+	draft: ExtractionDraftField
+): string | undefined {
+	if (field.version !== draft.field_version) {
+		return `${field.label} changed to version ${field.version}. Refresh the proposal before accepting it.`;
+	}
+	if (!isExtractionValueType(field.value_type)) {
+		return `${field.label} has unsupported value type ${field.value_type}.`;
+	}
+
+	return draft.kind === 'insufficient_evidence'
+		? validateInsufficientEvidence(field, draft)
+		: validateValueDraft(field, draft);
+}
+
+function validateInsufficientEvidence(
+	field: ExtractionFieldDto,
+	draft: Extract<ExtractionDraftField, { kind: 'insufficient_evidence' }>
+): string | undefined {
+	if (field.required) return `Required field “${field.label}” cannot be marked insufficient.`;
+	return draft.rationale.trim()
+		? undefined
+		: `Add a rationale for insufficient evidence in “${field.label}”.`;
+}
+
+function validateValueDraft(
+	field: ExtractionFieldDto,
+	draft: Extract<ExtractionDraftField, { kind: 'value' }>
+): string | undefined {
+	if (!draft.rationale.trim()) return `Add a rationale for “${field.label}”.`;
+	if (draft.value.kind !== field.value_type) {
+		return `${field.label} expects ${field.value_type}, not ${draft.value.kind}.`;
+	}
+
+	return validateTypedValue(field.label, draft.value);
+}
+
+function validateTypedValue(label: string, value: ExtractionDraftTypedValue): string | undefined {
+	switch (value.kind) {
+		case 'text':
+			return value.value.trim() ? undefined : `${label} cannot be blank.`;
+		case 'number':
+			return value.value.trim() && Number.isFinite(Number(value.value))
+				? undefined
+				: `${label} must be a finite number.`;
+		case 'boolean':
+			return undefined;
+		case 'date':
+			return isIsoDate(value.value)
+				? undefined
+				: `${label} must use an ISO date such as 2026-08-27.`;
+		default: {
+			const exhaustive: never = value;
+			return exhaustive;
+		}
+	}
+}
+
+function findMissingFieldError(
+	fields: ExtractionFieldDto[],
+	seenFieldIds: Set<string>
+): string | undefined {
 	for (const field of fields) {
-		if (!seenFieldIds.has(field.id))
+		if (!seenFieldIds.has(field.id)) {
 			return `Field “${field.label}” is missing from the proposal.`;
+		}
 	}
 	return undefined;
 }
