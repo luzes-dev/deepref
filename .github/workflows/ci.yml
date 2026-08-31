@@ -2,7 +2,6 @@ name: CI
 
 on:
   pull_request:
-    branches: [development, staging, main]
   push:
     branches: [development, staging, main]
 
@@ -92,6 +91,28 @@ jobs:
       - run: pnpm run check
       - run: pnpm --filter @deepref/web test:unit -- --run
       - run: pnpm run build
+
+  fallow:
+    name: Fallow
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout trusted source
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - name: Set up pnpm
+        uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v4.1.0
+        with:
+          version: 11.3.0
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24.4.1
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Run TypeScript quality analysis
+        run: pnpm run quality:ts
 
   codegen:
     name: OpenAPI and Orval drift
@@ -194,3 +215,39 @@ jobs:
           fi
 
           docker buildx bake "${bake_args[@]}" api worker web
+
+  rust-required:
+    name: Rust
+    if: always()
+    needs: rust
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - name: Verify Rust checks
+        env:
+          RESULT: ${{ needs.rust.result }}
+        run: test "$RESULT" = "success"
+
+  e2e-required:
+    name: E2E
+    if: always()
+    needs: full-stack
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - name: Verify E2E checks
+        env:
+          RESULT: ${{ needs.full-stack.result }}
+        run: test "$RESULT" = "success"
+
+  docker-required:
+    name: Docker
+    if: always()
+    needs: containers
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - name: Verify container build
+        env:
+          RESULT: ${{ needs.containers.result }}
+        run: test "$RESULT" = "success"
