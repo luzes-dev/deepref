@@ -216,6 +216,26 @@
 	/>
 </svelte:head>
 
+{#snippet toolButtons(entries: readonly SupportedCatalogEntry[])}
+	<div class="grid gap-2">
+		{#each entries as entry (entry.metadata.name)}
+			<Button
+				variant={selectedToolName === entry.metadata.name ? 'secondary' : 'outline'}
+				class="h-auto justify-start px-3 py-2 text-left whitespace-normal"
+				onclick={() => selectTool(entry)}
+				data-testid={`assistant-tool-${entry.metadata.name}`}
+			>
+				<span class="flex min-w-0 flex-col items-start gap-1">
+					<span class="font-medium">{entry.metadata.label}</span>
+					<span class="text-xs font-normal text-muted-foreground">
+						{toolDescription(entry)}
+					</span>
+				</span>
+			</Button>
+		{/each}
+	</div>
+{/snippet}
+
 <main class="mx-auto flex w-full max-w-7xl flex-col gap-6 p-4 md:p-8">
 	<header class="flex flex-col gap-3">
 		<div class="flex flex-wrap items-center gap-2">
@@ -290,29 +310,7 @@
 									No read tools are available.
 								</p>
 							{:else}
-								<div class="grid gap-2">
-									{#each readTools as entry (entry.metadata.name)}
-										<Button
-											variant={selectedToolName === entry.metadata.name
-												? 'secondary'
-												: 'outline'}
-											class="h-auto justify-start px-3 py-2 text-left whitespace-normal"
-											onclick={() => selectTool(entry)}
-											data-testid={`assistant-tool-${entry.metadata.name}`}
-										>
-											<span class="flex min-w-0 flex-col items-start gap-1">
-												<span class="font-medium"
-													>{entry.metadata.label}</span
-												>
-												<span
-													class="text-xs font-normal text-muted-foreground"
-												>
-													{toolDescription(entry)}
-												</span>
-											</span>
-										</Button>
-									{/each}
-								</div>
+								{@render toolButtons(readTools)}
 							{/if}
 						</section>
 
@@ -334,29 +332,7 @@
 									No proposal tools are available.
 								</p>
 							{:else}
-								<div class="grid gap-2">
-									{#each proposalTools as entry (entry.metadata.name)}
-										<Button
-											variant={selectedToolName === entry.metadata.name
-												? 'secondary'
-												: 'outline'}
-											class="h-auto justify-start px-3 py-2 text-left whitespace-normal"
-											onclick={() => selectTool(entry)}
-											data-testid={`assistant-tool-${entry.metadata.name}`}
-										>
-											<span class="flex min-w-0 flex-col items-start gap-1">
-												<span class="font-medium"
-													>{entry.metadata.label}</span
-												>
-												<span
-													class="text-xs font-normal text-muted-foreground"
-												>
-													{toolDescription(entry)}
-												</span>
-											</span>
-										</Button>
-									{/each}
-								</div>
+								{@render toolButtons(proposalTools)}
 							{/if}
 						</section>
 

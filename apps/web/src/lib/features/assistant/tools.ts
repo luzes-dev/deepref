@@ -8,7 +8,6 @@ import type {
 
 export type ToolName = GeneratedToolName;
 export type ToolKind = (typeof AssistantToolKind)[keyof typeof AssistantToolKind];
-export type ScreeningStage = 'title_abstract' | 'full_text';
 export type ReviewDestination =
 	'screening' | 'deduplication' | 'studies' | 'extraction' | 'appraisal';
 
@@ -64,6 +63,7 @@ export type ToolMetadata = {
 type FieldKey = ToolField['key'];
 type ParsedValue = string | number | string[];
 type ParsedToolValues = Partial<Record<FieldKey, ParsedValue>>;
+type FieldValidation = { kind: 'valid'; value: ParsedValue } | { kind: 'invalid'; message: string };
 type RequestBuilder = (
 	projectId: string,
 	values: Readonly<ParsedToolValues>
@@ -403,59 +403,89 @@ export function serializeToolRequest(
 ): ToolValidation {
 	const errors: Record<string, string> = {};
 	if (!projectId.trim()) errors.project_id = 'Project scope is missing.';
-	const parsed: ParsedToolValues = {};
-	for (const field of ASSISTANT_TOOL_METADATA[tool].fields) {
-		const raw = values[field.key] ?? '';
-		switch (field.kind) {
-			case 'uuid': {
-				const value = raw.trim();
-				if (isUuid(value)) parsed[field.key] = value;
-				else errors[field.key] = 'Enter a valid UUID.';
-				break;
-			}
-			case 'text': {
-				const value = raw.trim();
-				if (!value) errors[field.key] = 'This value is required.';
-				else if (value.length > field.maxLength)
-					errors[field.key] = `Use at most ${field.maxLength} characters.`;
-				else parsed[field.key] = value;
-				break;
-			}
-			case 'integer': {
-				const value = Number(raw);
-				if (!Number.isInteger(value) || value < field.min || value > field.max)
-					errors[field.key] = `Enter a whole number from ${field.min} to ${field.max}.`;
-				else parsed[field.key] = value;
-				break;
-			}
-			case 'uuid-list': {
-				const value = raw
-					.split(/\r?\n/)
-					.map((item) => item.trim())
-					.filter(Boolean);
-				if (value.length === 0)
-					errors[field.key] = 'Enter at least one document-block UUID.';
-				else if (value.length > 200)
-					errors[field.key] = 'Enter no more than 200 document-block UUIDs.';
-				else if (value.some((item) => !isUuid(item)))
-					errors[field.key] = 'Every document-block entry must be a valid UUID.';
-				else parsed[field.key] = value;
-				break;
-			}
-			case 'stage':
-				if (raw === 'title_abstract' || raw === 'full_text') parsed[field.key] = raw;
-				else errors[field.key] = 'Choose a screening stage.';
-				break;
-			default: {
-				const exhaustive: never = field;
-				return exhaustive;
-			}
-		}
-	}
+	const parsed = parseToolValues(tool, values, errors);
 	if (Object.keys(errors).length > 0) return { kind: 'invalid', errors };
 	const args = ASSISTANT_TOOL_METADATA[tool].buildRequest(projectId, parsed);
 	if (!args) return { kind: 'invalid', errors: { form: 'Tool form configuration is invalid.' } };
 	return valid(tool, projectId, args);
+}
+
+function parseToolValues(
+	tool: ToolName,
+	values: ToolValues,
+	errors: Record<string, string>
+): ParsedToolValues {
+	const parsed: ParsedToolValues = {};
+	for (const field of ASSISTANT_TOOL_METADATA[tool].fields) {
+		const result = parseFieldValue(field, values[field.key] ?? '');
+		if (result.kind === 'valid') parsed[field.key] = result.value;
+		else errors[field.key] = result.message;
+	}
+	return parsed;
+}
+
+function parseFieldValue(field: ToolField, raw: string): FieldValidation {
+	switch (field.kind) {
+		case 'uuid':
+			return parseUuidField(raw);
+		case 'text':
+			return parseTextField(field, raw);
+		case 'integer':
+			return parseIntegerField(field, raw);
+		case 'uuid-list':
+			return parseUuidListField(raw);
+		case 'stage':
+			return parseStageField(raw);
+		default: {
+			const exhaustive: never = field;
+			return exhaustive;
+		}
+	}
+}
+
+function parseUuidField(raw: string): FieldValidation {
+	const value = raw.trim();
+	return isUuid(value)
+		? { kind: 'valid', value }
+		: { kind: 'invalid', message: 'Enter a valid UUID.' };
+}
+
+function parseTextField(field: TextField, raw: string): FieldValidation {
+	const value = raw.trim();
+	if (!value) return { kind: 'invalid', message: 'This value is required.' };
+	if (value.length > field.maxLength)
+		return { kind: 'invalid', message: `Use at most ${field.maxLength} characters.` };
+	return { kind: 'valid', value };
+}
+
+function parseIntegerField(field: IntegerField, raw: string): FieldValidation {
+	const value = Number(raw);
+	return Number.isInteger(value) && value >= field.min && value <= field.max
+		? { kind: 'valid', value }
+		: {
+				kind: 'invalid',
+				message: `Enter a whole number from ${field.min} to ${field.max}.`
+			};
+}
+
+function parseUuidListField(raw: string): FieldValidation {
+	const value = raw
+		.split(/\r?\n/)
+		.map((item) => item.trim())
+		.filter(Boolean);
+	if (value.length === 0)
+		return { kind: 'invalid', message: 'Enter at least one document-block UUID.' };
+	if (value.length > 200)
+		return { kind: 'invalid', message: 'Enter no more than 200 document-block UUIDs.' };
+	if (value.some((item) => !isUuid(item)))
+		return { kind: 'invalid', message: 'Every document-block entry must be a valid UUID.' };
+	return { kind: 'valid', value };
+}
+
+function parseStageField(raw: string): FieldValidation {
+	return raw === 'title_abstract' || raw === 'full_text'
+		? { kind: 'valid', value: raw }
+		: { kind: 'invalid', message: 'Choose a screening stage.' };
 }
 
 export function reviewPath(tool: ToolName, projectId: string, values: ToolValues): string | null {
