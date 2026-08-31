@@ -14,7 +14,7 @@ permissions:
 
 jobs:
   validate:
-    name: Validate trusted branch ladder
+    name: Validate PR branch ladder
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
