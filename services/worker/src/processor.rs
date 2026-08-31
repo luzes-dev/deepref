@@ -1026,6 +1026,13 @@ async fn finalize_compiled_candidate(
         executed,
         finalize_node,
     } = request;
+    if executed.proposal.operation != definition.final_proposal_type() {
+        anyhow::bail!(
+            "compiled review produced proposal type {} instead of {}",
+            executed.proposal.operation,
+            definition.final_proposal_type()
+        );
+    }
     let predecessor_input = artifact_input(predecessor);
     let final_start = deepref_postgres::begin_review_attempt(
         pool,

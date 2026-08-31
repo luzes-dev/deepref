@@ -92,21 +92,62 @@ impl CompiledReviewDefinition {
         }
     }
 
+    pub fn final_proposal_type(&self) -> &'static str {
+        self.workflow.final_proposal_type.as_str()
+    }
+
     pub(crate) fn accepts_task(&self, task: AiTaskKind) -> bool {
-        match self.key {
-            ReviewDefinitionKey::Screening => matches!(
+        self.workflow.semantic_handler.accepts_task(task)
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum ReviewSemanticHandler {
+    ScreeningAnalysis,
+    DuplicateAnalysis,
+    StudyDesignClassification,
+    StudyGrouping,
+    AppraisalPrefill,
+    DataExtraction,
+}
+
+impl ReviewSemanticHandler {
+    fn accepts_task(self, task: AiTaskKind) -> bool {
+        match self {
+            Self::ScreeningAnalysis => matches!(
                 task,
                 AiTaskKind::TitleAbstractScreening | AiTaskKind::FullTextScreening
             ),
-            ReviewDefinitionKey::DuplicateDetection => {
-                task == AiTaskKind::DuplicateCandidateDetection
-            }
-            ReviewDefinitionKey::StudyClassification => {
-                task == AiTaskKind::StudyDesignClassification
-            }
-            ReviewDefinitionKey::StudyGrouping => task == AiTaskKind::StudyGrouping,
-            ReviewDefinitionKey::AppraisalPrefill => task == AiTaskKind::AppraisalPrefill,
-            ReviewDefinitionKey::DataExtraction => task == AiTaskKind::DataExtraction,
+            Self::DuplicateAnalysis => task == AiTaskKind::DuplicateCandidateDetection,
+            Self::StudyDesignClassification => task == AiTaskKind::StudyDesignClassification,
+            Self::StudyGrouping => task == AiTaskKind::StudyGrouping,
+            Self::AppraisalPrefill => task == AiTaskKind::AppraisalPrefill,
+            Self::DataExtraction => task == AiTaskKind::DataExtraction,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+enum ReviewProposalType {
+    ScreeningSuggestion,
+    DedupeSuggestion,
+    StudyDesignClassificationSuggestion,
+    StudyGroupingSuggestion,
+    AppraisalPrefill,
+    DataExtraction,
+}
+
+impl ReviewProposalType {
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::ScreeningSuggestion => "screening_suggestion",
+            Self::DedupeSuggestion => "dedupe_suggestion",
+            Self::StudyDesignClassificationSuggestion => "study_design_classification_suggestion",
+            Self::StudyGroupingSuggestion => "study_grouping_suggestion",
+            Self::AppraisalPrefill => "appraisal_prefill",
+            Self::DataExtraction => "data_extraction",
         }
     }
 }
@@ -147,6 +188,8 @@ struct DefinitionSource {
 pub(crate) struct ReviewWorkflow {
     id: String,
     version: u32,
+    semantic_handler: ReviewSemanticHandler,
+    final_proposal_type: ReviewProposalType,
     entrypoint: String,
     nodes: Vec<ReviewWorkflowNode>,
 }
@@ -339,6 +382,14 @@ fn validate_workflow(
             "workflow identity does not match its definition".to_owned(),
         ));
     }
+    let (expected_handler, expected_proposal_type) = expected_binding(key);
+    if workflow.semantic_handler != expected_handler
+        || workflow.final_proposal_type != expected_proposal_type
+    {
+        return Err(ReviewError::InvalidWorkflow(
+            "semantic handler or final proposal type does not match the definition".to_owned(),
+        ));
+    }
     if workflow.nodes.is_empty() {
         return Err(ReviewError::InvalidWorkflow(
             "workflow requires nodes".to_owned(),
@@ -439,7 +490,8 @@ fn validate_task_binding(
     key: ReviewDefinitionKey,
     nodes: &[ReviewWorkflowNode],
 ) -> Result<(), ReviewError> {
-    let expected = match key {
+    let (handler, _) = expected_binding(key);
+    match key {
         ReviewDefinitionKey::Screening => {
             let has_primary = nodes
                 .iter()
@@ -455,36 +507,66 @@ fn validate_task_binding(
                     "screening requires primary, independent, and audit nodes".to_owned(),
                 ));
             }
-            return Ok(());
+            Ok(())
         }
-        ReviewDefinitionKey::DuplicateDetection => AiTaskKind::DuplicateCandidateDetection,
-        ReviewDefinitionKey::StudyClassification => AiTaskKind::StudyDesignClassification,
-        ReviewDefinitionKey::StudyGrouping => AiTaskKind::StudyGrouping,
-        ReviewDefinitionKey::AppraisalPrefill => AiTaskKind::AppraisalPrefill,
-        ReviewDefinitionKey::DataExtraction => AiTaskKind::DataExtraction,
-    };
-    let tasks = nodes
-        .iter()
-        .filter_map(|node| match node.operation {
-            ReviewNodeKind::Generate { task } => Some(task),
-            ReviewNodeKind::Prepare
-            | ReviewNodeKind::PrimaryScreen
-            | ReviewNodeKind::Validate
-            | ReviewNodeKind::Derive
-            | ReviewNodeKind::IndependentScreen
-            | ReviewNodeKind::Reconcile
-            | ReviewNodeKind::Assemble
-            | ReviewNodeKind::CandidateAudit
-            | ReviewNodeKind::SemanticRepair { .. }
-            | ReviewNodeKind::Finalize => None,
-        })
-        .collect::<Vec<_>>();
-    if tasks != [expected] {
-        return Err(ReviewError::InvalidWorkflow(
-            "definition must bind exactly one matching AI task".to_owned(),
-        ));
+        ReviewDefinitionKey::DuplicateDetection
+        | ReviewDefinitionKey::StudyClassification
+        | ReviewDefinitionKey::StudyGrouping
+        | ReviewDefinitionKey::AppraisalPrefill
+        | ReviewDefinitionKey::DataExtraction => {
+            let tasks = nodes
+                .iter()
+                .filter_map(|node| match node.operation {
+                    ReviewNodeKind::Generate { task } => Some(task),
+                    ReviewNodeKind::Prepare
+                    | ReviewNodeKind::PrimaryScreen
+                    | ReviewNodeKind::Validate
+                    | ReviewNodeKind::Derive
+                    | ReviewNodeKind::IndependentScreen
+                    | ReviewNodeKind::Reconcile
+                    | ReviewNodeKind::Assemble
+                    | ReviewNodeKind::CandidateAudit
+                    | ReviewNodeKind::SemanticRepair { .. }
+                    | ReviewNodeKind::Finalize => None,
+                })
+                .collect::<Vec<_>>();
+            if tasks.len() != 1 || !handler.accepts_task(tasks[0]) {
+                return Err(ReviewError::InvalidWorkflow(
+                    "definition must bind exactly one matching AI task".to_owned(),
+                ));
+            }
+            Ok(())
+        }
     }
-    Ok(())
+}
+
+const fn expected_binding(key: ReviewDefinitionKey) -> (ReviewSemanticHandler, ReviewProposalType) {
+    match key {
+        ReviewDefinitionKey::Screening => (
+            ReviewSemanticHandler::ScreeningAnalysis,
+            ReviewProposalType::ScreeningSuggestion,
+        ),
+        ReviewDefinitionKey::DuplicateDetection => (
+            ReviewSemanticHandler::DuplicateAnalysis,
+            ReviewProposalType::DedupeSuggestion,
+        ),
+        ReviewDefinitionKey::StudyClassification => (
+            ReviewSemanticHandler::StudyDesignClassification,
+            ReviewProposalType::StudyDesignClassificationSuggestion,
+        ),
+        ReviewDefinitionKey::StudyGrouping => (
+            ReviewSemanticHandler::StudyGrouping,
+            ReviewProposalType::StudyGroupingSuggestion,
+        ),
+        ReviewDefinitionKey::AppraisalPrefill => (
+            ReviewSemanticHandler::AppraisalPrefill,
+            ReviewProposalType::AppraisalPrefill,
+        ),
+        ReviewDefinitionKey::DataExtraction => (
+            ReviewSemanticHandler::DataExtraction,
+            ReviewProposalType::DataExtraction,
+        ),
+    }
 }
 
 const SHARED_POLICY: ReviewAsset = ReviewAsset {
@@ -600,7 +682,23 @@ mod tests {
             let compiled = catalog.compile(key).expect("definition should compile");
             assert_eq!(compiled.key(), key);
             assert!(!compiled.system_prompt().is_empty());
+            assert!(!compiled.final_proposal_type().is_empty());
         }
+    }
+
+    #[test]
+    fn rejects_mismatched_semantic_handler_and_final_proposal_type() {
+        let source = valid_definition();
+        let workflow: ReviewWorkflow =
+            serde_json::from_str(source.workflow.content).expect("fixture workflow");
+
+        let mut wrong_handler = workflow.clone();
+        wrong_handler.semantic_handler = ReviewSemanticHandler::DataExtraction;
+        assert!(validate_workflow(source.key, source.id, source.version, &wrong_handler).is_err());
+
+        let mut wrong_proposal = workflow;
+        wrong_proposal.final_proposal_type = ReviewProposalType::DataExtraction;
+        assert!(validate_workflow(source.key, source.id, source.version, &wrong_proposal).is_err());
     }
 
     #[test]
