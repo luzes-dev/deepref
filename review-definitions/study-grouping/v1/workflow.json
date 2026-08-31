@@ -1,6 +1,8 @@
 {
   "id": "deepref.study-grouping",
   "version": 1,
+  "semantic_handler": "study_grouping",
+  "final_proposal_type": "study_grouping_suggestion",
   "entrypoint": "prepare",
   "nodes": [
     { "id": "prepare", "version": 1, "operation": { "kind": "prepare" }, "transitions": [{ "predicate": "always", "to": "generate" }] },

@@ -1,6 +1,8 @@
 {
   "id": "deepref.data-extraction",
   "version": 1,
+  "semantic_handler": "data_extraction",
+  "final_proposal_type": "data_extraction",
   "entrypoint": "prepare",
   "nodes": [
     { "id": "prepare", "version": 1, "operation": { "kind": "prepare" }, "transitions": [{ "predicate": "always", "to": "generate" }] },
