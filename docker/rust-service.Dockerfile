@@ -12,6 +12,7 @@ WORKDIR /build
 COPY Cargo.toml Cargo.lock ./
 COPY apps ./apps
 COPY crates ./crates
+COPY review-definitions ./review-definitions
 COPY services ./services
 
 # Both Rust service images share the same composition-root binary and select their
