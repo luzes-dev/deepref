@@ -17,15 +17,9 @@ import type {
 } from './types';
 
 export type ArticleSort = 'rank' | 'internal' | 'total' | 'year' | 'title';
-export const GRAPH_OVERLAY_FIELDS = [
-	'metrics',
-	'screening',
-	'study',
-	'appraisal',
-	'provenance'
-] as const;
+const GRAPH_OVERLAY_FIELDS = ['metrics', 'screening', 'study', 'appraisal', 'provenance'] as const;
 export type GraphOverlayField = (typeof GRAPH_OVERLAY_FIELDS)[number];
-export type GraphColorMode = GraphOverlayField;
+type GraphColorMode = GraphOverlayField;
 
 type ProjectWorkspaceDataSources = {
 	projects: Getter<ProjectDto[]>;

@@ -220,6 +220,13 @@
 		return isAuthoritativeState(state) && state.report_id === currentReportId ? state : null;
 	}
 
+	function acceptAuthoritativeState(state: AuthoritativeFullTextState, message: string) {
+		queryClient.setQueryData<FullTextQueueCache>(fullTextQueueKey, (cache) =>
+			applyFullTextState(cache, state)
+		);
+		statusMessage = message;
+	}
+
 	function selectReport(reportId: string, push = true) {
 		return updateUrl({ report: reportId, page: null, block: null }, !push);
 	}
@@ -292,16 +299,7 @@
 				reportId: currentReportId,
 				data
 			});
-			const authoritative = {
-				report_id: result.data.report_id,
-				full_text_status: result.data.full_text_status,
-				full_text_exclusion_reason_id: result.data.full_text_exclusion_reason_id,
-				revision: result.data.revision
-			};
-			queryClient.setQueryData<FullTextQueueCache>(fullTextQueueKey, (cache) =>
-				applyFullTextState(cache, authoritative)
-			);
-			statusMessage = `Full-text ${decision} recorded.`;
+			acceptAuthoritativeState(result.data, `Full-text ${decision} recorded.`);
 			await queryClient.invalidateQueries({ queryKey: fullTextQueueKey });
 			await queryClient.invalidateQueries({ queryKey: missingQuery.queryKey });
 		} catch (error) {
@@ -348,16 +346,7 @@
 					expected_revision: screenRevision
 				}
 			});
-			const authoritative = {
-				report_id: result.data.report_id,
-				full_text_status: result.data.full_text_status,
-				full_text_exclusion_reason_id: result.data.full_text_exclusion_reason_id,
-				revision: result.data.revision
-			};
-			queryClient.setQueryData<FullTextQueueCache>(fullTextQueueKey, (cache) =>
-				applyFullTextState(cache, authoritative)
-			);
-			statusMessage = 'The last full-text decision was undone.';
+			acceptAuthoritativeState(result.data, 'The last full-text decision was undone.');
 			await historyQuery.refetch();
 		} catch (error) {
 			const state = currentStateFromError(error);
