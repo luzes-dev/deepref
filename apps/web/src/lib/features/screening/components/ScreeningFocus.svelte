@@ -235,6 +235,13 @@
 		return isAuthoritativeState(state, reportId) ? state : null;
 	}
 
+	async function invalidateScreeningReport(reportId: string) {
+		await queryClient.invalidateQueries({ queryKey: screeningKeys.queue(projectId) });
+		await queryClient.invalidateQueries({
+			queryKey: screeningKeys.history(projectId, reportId)
+		});
+	}
+
 	async function reconcileConflict(
 		reportId: string,
 		error: unknown,
@@ -263,10 +270,7 @@
 			);
 		}
 		await updateUrl({ mode: 'focus', status: 'all', report: reportId }, true);
-		await queryClient.invalidateQueries({ queryKey: screeningKeys.queue(projectId) });
-		await queryClient.invalidateQueries({
-			queryKey: screeningKeys.history(projectId, reportId)
-		});
+		await invalidateScreeningReport(reportId);
 		decisionMutation.reset();
 		undoMutation.reset();
 		lastAction = null;
@@ -320,10 +324,7 @@
 				priorStatus: priorItem.title_abstract_status,
 				returnedRevision: result.data.revision
 			};
-			await queryClient.invalidateQueries({ queryKey: screeningKeys.queue(projectId) });
-			await queryClient.invalidateQueries({
-				queryKey: screeningKeys.history(projectId, reportId)
-			});
+			await invalidateScreeningReport(reportId);
 		} catch (error) {
 			if (error instanceof ApiError && error.status === 409) {
 				await reconcileConflict(reportId, error, oldCache, priorItem, priorLocation);
@@ -376,10 +377,7 @@
 					priorLocation
 				)
 			);
-			await queryClient.invalidateQueries({ queryKey: screeningKeys.queue(projectId) });
-			await queryClient.invalidateQueries({
-				queryKey: screeningKeys.history(projectId, reportId)
-			});
+			await invalidateScreeningReport(reportId);
 		} catch (error) {
 			if (error instanceof ApiError && error.status === 409) {
 				await reconcileConflict(reportId, error, oldCache, existingItem, priorLocation);

@@ -133,6 +133,13 @@ export function createProjectGraphRenderer(
 		hidden?: boolean;
 		zIndex?: number;
 	};
+	type GraphInstance = ReturnType<
+		SigmaType<GraphNodeAttributes, GraphEdgeAttributes>['getGraph']
+	>;
+	type GraphConstructor = (typeof import('graphology'))['default'];
+	type SigmaConstructor = (typeof import('sigma'))['default'];
+	type ForceAtlas2Module = typeof import('graphology-layout-forceatlas2');
+	type NoverlapModule = typeof import('graphology-layout-noverlap');
 
 	type GraphLabelData = {
 		color?: string;
@@ -238,33 +245,95 @@ export function createProjectGraphRenderer(
 		if (node.report_id === interaction.selectedArticle) return interaction.palette.nodeSelected;
 		const colorBy = model.colorBy;
 		if (!overlayEnabled(colorBy)) return interaction.palette.nodeDefault;
-		if (colorBy === 'screening') {
-			const status = screeningStatus(node);
-			if (status === 'not-loaded') return interaction.palette.nodeDefault;
-			if (status === 'include') return interaction.palette.nodeCited;
-			if (status === 'exclude') return interaction.palette.nodeSelected;
-			return interaction.palette.nodeFocused;
+		switch (colorBy) {
+			case 'screening':
+				return screeningNodeColor(node);
+			case 'study':
+				return studyNodeColor(node);
+			case 'appraisal':
+				return appraisalNodeColor(node);
+			case 'provenance':
+				return provenanceNodeColor(node);
+			case 'metrics':
+				return metricNodeColor(node);
+			default: {
+				const exhaustive: never = colorBy;
+				return exhaustive;
+			}
 		}
-		if (colorBy === 'study') {
-			if (studyStatus(node) === 'not-loaded') return interaction.palette.nodeDefault;
-			return studyStatus(node) === 'grouped'
-				? interaction.palette.nodeFocused
-				: interaction.palette.nodeDimmed;
+	}
+
+	function screeningNodeColor(node: GraphNodeDto): string {
+		const status = screeningStatus(node);
+		if (status === 'include') return interaction.palette.nodeCited;
+		if (status === 'exclude') return interaction.palette.nodeSelected;
+		return status === 'not-loaded'
+			? interaction.palette.nodeDefault
+			: interaction.palette.nodeFocused;
+	}
+
+	function studyNodeColor(node: GraphNodeDto): string {
+		const status = studyStatus(node);
+		if (status === 'not-loaded') return interaction.palette.nodeDefault;
+		return status === 'grouped'
+			? interaction.palette.nodeFocused
+			: interaction.palette.nodeDimmed;
+	}
+
+	function appraisalNodeColor(node: GraphNodeDto): string {
+		return appraisalStatus(node) === 'appraised'
+			? interaction.palette.nodeCited
+			: interaction.palette.nodeDefault;
+	}
+
+	function provenanceNodeColor(node: GraphNodeDto): string {
+		const status = provenanceStatus(node);
+		if (status === 'not-loaded') return interaction.palette.nodeDefault;
+		return status === 'acquired'
+			? interaction.palette.nodeFocused
+			: interaction.palette.nodeDimmed;
+	}
+
+	function metricNodeColor(node: GraphNodeDto): string {
+		return internalCitations(node) > 0
+			? interaction.palette.nodeCited
+			: interaction.palette.nodeDefault;
+	}
+
+	function reducedNodeAppearance(
+		node: string,
+		data: GraphNodeAttributes
+	): Pick<GraphNodeAttributes, 'color' | 'label' | 'highlighted' | 'forceLabel' | 'zIndex'> {
+		const selected = data.report_id === interaction.selectedArticle;
+		const hovered = node === interaction.hoveredNode;
+		const focused = interaction.focusedNodeIds.has(node);
+		const focusActive = Boolean(interaction.hoveredNode || interaction.selectedNode);
+		const base = {
+			color: getBaseNodeColor(data),
+			label: data.label,
+			highlighted: hovered || selected,
+			forceLabel: false,
+			zIndex: selected ? 3 : 0
+		};
+		if (!focusActive) return base;
+		if (hovered) {
+			return { ...base, color: interaction.palette.nodeFocused, forceLabel: true, zIndex: 4 };
 		}
-		if (colorBy === 'appraisal') {
-			if (appraisalStatus(node) === 'not-loaded') return interaction.palette.nodeDefault;
-			return appraisalStatus(node) === 'appraised'
-				? interaction.palette.nodeCited
-				: interaction.palette.nodeDefault;
+		if (focused) {
+			return {
+				...base,
+				color: selected
+					? interaction.palette.nodeSelected
+					: interaction.palette.nodeFocused,
+				forceLabel: true,
+				zIndex: Math.max(base.zIndex, 2)
+			};
 		}
-		if (colorBy === 'provenance') {
-			if (provenanceStatus(node) === 'not-loaded') return interaction.palette.nodeDefault;
-			return provenanceStatus(node) === 'acquired'
-				? interaction.palette.nodeFocused
-				: interaction.palette.nodeDimmed;
-		}
-		if (internalCitations(node) > 0) return interaction.palette.nodeCited;
-		return interaction.palette.nodeDefault;
+		return {
+			...base,
+			color: withAlpha(interaction.palette.nodeDimmed, DIMMED_NODE_ALPHA),
+			label: ''
+		};
 	}
 
 	function createNodeReducer() {
@@ -273,82 +342,59 @@ export function createProjectGraphRenderer(
 				return { ...data, hidden: true };
 			}
 
-			const selected = data.report_id === interaction.selectedArticle;
-			const hovered = node === interaction.hoveredNode;
-			const focused = interaction.focusedNodeIds.has(node);
-			const focusActive = Boolean(interaction.hoveredNode || interaction.selectedNode);
-			let color = getBaseNodeColor(data);
-			let label = data.label;
-			let forceLabel = false;
-			let zIndex = selected ? 3 : 0;
-
-			if (focusActive) {
-				if (hovered) {
-					color = interaction.palette.nodeFocused;
-					forceLabel = true;
-					zIndex = 4;
-				} else if (focused) {
-					color = selected
-						? interaction.palette.nodeSelected
-						: interaction.palette.nodeFocused;
-					forceLabel = true;
-					zIndex = Math.max(zIndex, 2);
-				} else {
-					color = withAlpha(interaction.palette.nodeDimmed, DIMMED_NODE_ALPHA);
-					label = '';
-				}
-			}
-
 			return {
 				...data,
-				color,
-				label,
-				hidden: false,
-				highlighted: hovered || selected,
-				forceLabel,
-				zIndex
+				...reducedNodeAppearance(node, data),
+				hidden: false
 			};
 		};
 	}
 
 	function createEdgeReducer() {
-		return (
-			edge: string,
-			data: GraphEdgeAttributes & { source?: string; target?: string }
-		): GraphEdgeAttributes => {
-			const extremities = graph?.extremities(edge);
-			const source = extremities?.[0] ?? data.source;
-			const target = extremities?.[1] ?? data.target;
-			if (!source || !target) return { ...data, hidden: true };
+		return reduceEdge;
+	}
 
-			if (
-				!interaction.visibleNodeIds.has(source) ||
-				!interaction.visibleNodeIds.has(target)
-			) {
-				return { ...data, hidden: true };
-			}
+	function edgeEndpoints(
+		edge: string,
+		data: GraphEdgeAttributes & { source?: string; target?: string }
+	): [string, string] | undefined {
+		const extremities = graph?.extremities(edge);
+		const source = extremities?.[0] ?? data.source;
+		const target = extremities?.[1] ?? data.target;
+		return source && target ? [source, target] : undefined;
+	}
 
-			if (!interaction.hoveredNode && !interaction.selectedNode) {
-				return {
-					...data,
-					color: interaction.palette.edgeDefault,
-					hidden: false,
-					size: 1,
-					zIndex: 0
-				};
-			}
+	function focusedEdgeAppearance(edge: string): GraphEdgeAttributes {
+		const focused = interaction.focusedEdgeIds.has(edge);
+		return {
+			color: focused
+				? interaction.palette.edgeFocused
+				: withAlpha(interaction.palette.edgeDimmed, DIMMED_EDGE_ALPHA),
+			hidden: false,
+			size: focused ? 2 : 0.5,
+			zIndex: focused ? 2 : 0
+		};
+	}
 
-			const focused = interaction.focusedEdgeIds.has(edge);
+	function reduceEdge(
+		edge: string,
+		data: GraphEdgeAttributes & { source?: string; target?: string }
+	): GraphEdgeAttributes {
+		const endpoints = edgeEndpoints(edge, data);
+		if (!endpoints) return { ...data, hidden: true };
+		if (endpoints.some((node) => !interaction.visibleNodeIds.has(node))) {
+			return { ...data, hidden: true };
+		}
+		if (!interaction.hoveredNode && !interaction.selectedNode) {
 			return {
 				...data,
-				color: focused
-					? interaction.palette.edgeFocused
-					: withAlpha(interaction.palette.edgeDimmed, DIMMED_EDGE_ALPHA),
+				color: interaction.palette.edgeDefault,
 				hidden: false,
-				size: focused ? 2 : 0.5,
-				zIndex: focused ? 2 : 0
+				size: 1,
+				zIndex: 0
 			};
-		};
+		}
+		return { ...data, ...focusedEdgeAppearance(edge) };
 	}
 
 	function buildSigmaSettings(): Partial<Settings<GraphNodeAttributes, GraphEdgeAttributes>> {
@@ -419,37 +465,50 @@ export function createProjectGraphRenderer(
 		let current = '';
 
 		for (const word of words) {
-			const next = current ? `${current} ${word}` : word;
-			if (context.measureText(next).width <= maxWidth) {
-				current = next;
-				continue;
-			}
-
-			if (!current) {
-				lines.push(truncateTextToWidth(context, word, maxWidth));
-				if (lines.length === maxLines) break;
-				continue;
-			}
-
-			if (current) lines.push(current);
-			current = word;
-			if (lines.length === maxLines) break;
+			const appended = appendWrappedWord(context, lines, current, word, maxWidth, maxLines);
+			current = appended.current;
+			if (appended.full) break;
 		}
+		return finishWrappedLines(context, lines, current, text, maxWidth, maxLines);
+	}
 
+	function appendWrappedWord(
+		context: CanvasRenderingContext2D,
+		lines: string[],
+		current: string,
+		word: string,
+		maxWidth: number,
+		maxLines: number
+	): { current: string; full: boolean } {
+		const next = current ? `${current} ${word}` : word;
+		if (context.measureText(next).width <= maxWidth) return { current: next, full: false };
+		if (!current) {
+			lines.push(truncateTextToWidth(context, word, maxWidth));
+			return { current: '', full: lines.length === maxLines };
+		}
+		lines.push(current);
+		return { current: word, full: lines.length === maxLines };
+	}
+
+	function finishWrappedLines(
+		context: CanvasRenderingContext2D,
+		lines: string[],
+		current: string,
+		text: string,
+		maxWidth: number,
+		maxLines: number
+	): string[] {
 		if (lines.length < maxLines && current) lines.push(current);
 		if (lines.length === 0) lines.push(truncateTextToWidth(context, text, maxWidth));
-
-		if (lines.length === maxLines) {
-			const consumed = lines.join(' ');
-			if (consumed.length < text.length) {
-				lines[maxLines - 1] = truncateTextToWidth(
-					context,
-					lines[maxLines - 1] + ' ' + text.slice(consumed.length),
-					maxWidth
-				);
-			}
+		if (lines.length !== maxLines) return lines.slice(0, maxLines);
+		const consumed = lines.join(' ');
+		if (consumed.length < text.length) {
+			lines[maxLines - 1] = truncateTextToWidth(
+				context,
+				lines[maxLines - 1] + ' ' + text.slice(consumed.length),
+				maxWidth
+			);
 		}
-
 		return lines.slice(0, maxLines);
 	}
 
@@ -705,6 +764,91 @@ export function createProjectGraphRenderer(
 		nextRenderer.on('upNode', endNodeDrag);
 	}
 
+	function buildGraph(
+		Graph: GraphConstructor,
+		nodes: GraphNodeDto[],
+		edges: GraphEdgeDto[]
+	): GraphInstance {
+		const nextGraph = new Graph<GraphNodeAttributes, GraphEdgeAttributes>();
+		for (const [index, node] of nodes.entries()) {
+			nextGraph.addNode(node.report_id, {
+				...node,
+				label: reportLabel(node),
+				fullLabel: reportLabel(node),
+				type: 'circle',
+				x: Math.cos(index) * 10,
+				y: Math.sin(index) * 10,
+				size: 4
+			});
+		}
+		for (const edge of edges) addGraphEdge(nextGraph, edge);
+		nextGraph.forEachNode((node) => {
+			const degree = nextGraph.degree(node);
+			nextGraph.setNodeAttribute(node, 'size', getGraphNodeSize(degree, nextGraph.order));
+		});
+		return nextGraph;
+	}
+
+	function addGraphEdge(nextGraph: GraphInstance, edge: GraphEdgeDto): void {
+		if (
+			!nextGraph.hasNode(edge.source) ||
+			!nextGraph.hasNode(edge.target) ||
+			edge.source === edge.target ||
+			nextGraph.hasEdge(edge.source, edge.target)
+		) {
+			return;
+		}
+		nextGraph.addDirectedEdge(edge.source, edge.target, { size: 1 });
+	}
+
+	function arrangeGraph(
+		nextGraph: GraphInstance,
+		forceAtlas2: ForceAtlas2Module,
+		noverlap: NoverlapModule
+	): void {
+		if (nextGraph.order > 2) {
+			const inferredSettings = forceAtlas2.default.inferSettings(nextGraph);
+			forceAtlas2.default.assign(nextGraph, {
+				iterations: getForceAtlasIterations(nextGraph.order),
+				settings: {
+					...inferredSettings,
+					adjustSizes: false,
+					barnesHutOptimize: true,
+					gravity: inferredSettings.gravity ?? 1,
+					scalingRatio: Math.max(inferredSettings.scalingRatio ?? 1, 5),
+					slowDown: inferredSettings.slowDown ?? 1
+				}
+			});
+		}
+		if (nextGraph.order > 1) {
+			noverlap.default.assign(nextGraph, {
+				maxIterations: getNoverlapIterations(nextGraph.order),
+				settings: { margin: 2, ratio: 1, expansion: 1.1, speed: 3 }
+			});
+		}
+	}
+
+	function installGraph(
+		nextGraph: GraphInstance,
+		nextTarget: HTMLDivElement,
+		Sigma: SigmaConstructor
+	): void {
+		interaction.visibleNodeIds = model.visibleNodeIds;
+		interaction.selectedArticle = model.selectedArticle;
+		interaction.palette = readGraphPalette(nextTarget);
+		setupThemeObserver(nextTarget);
+		if (!renderer) {
+			renderer = new Sigma(nextGraph, nextTarget, buildSigmaSettings());
+			graph = renderer.getGraph();
+			registerGraphEvents(renderer);
+			return;
+		}
+		renderer.setGraph(nextGraph);
+		graph = renderer.getGraph();
+		renderer.setSettings(buildSigmaSettings());
+		renderer.scheduleRefresh({ layoutUnchange: true });
+	}
+
 	async function renderGraph(
 		target: HTMLDivElement,
 		nodes: GraphNodeDto[],
@@ -724,74 +868,9 @@ export function createProjectGraphRenderer(
 		await waitForNextFrame();
 		if (run !== renderRun) return;
 
-		const nextGraph = new Graph<GraphNodeAttributes, GraphEdgeAttributes>();
-		for (const [index, node] of nodes.entries()) {
-			nextGraph.addNode(node.report_id, {
-				...node,
-				label: reportLabel(node),
-				fullLabel: reportLabel(node),
-				type: 'circle',
-				x: Math.cos(index) * 10,
-				y: Math.sin(index) * 10,
-				size: 4
-			});
-		}
-		for (const edge of edges) {
-			if (
-				nextGraph.hasNode(edge.source) &&
-				nextGraph.hasNode(edge.target) &&
-				edge.source !== edge.target &&
-				!nextGraph.hasEdge(edge.source, edge.target)
-			) {
-				nextGraph.addDirectedEdge(edge.source, edge.target, {
-					size: 1
-				});
-			}
-		}
-		nextGraph.forEachNode((node) => {
-			const degree = nextGraph.degree(node);
-			nextGraph.setNodeAttribute(node, 'size', getGraphNodeSize(degree, nextGraph.order));
-		});
-		if (nextGraph.order > 2) {
-			const inferredSettings = forceAtlas2.default.inferSettings(nextGraph);
-			forceAtlas2.default.assign(nextGraph, {
-				iterations: getForceAtlasIterations(nextGraph.order),
-				settings: {
-					...inferredSettings,
-					adjustSizes: false,
-					barnesHutOptimize: true,
-					gravity: inferredSettings.gravity ?? 1,
-					scalingRatio: Math.max(inferredSettings.scalingRatio ?? 1, 5),
-					slowDown: inferredSettings.slowDown ?? 1
-				}
-			});
-		}
-		graph = nextGraph;
-		if (nextGraph.order > 1) {
-			noverlap.default.assign(nextGraph, {
-				maxIterations: getNoverlapIterations(nextGraph.order),
-				settings: {
-					margin: 2,
-					ratio: 1,
-					expansion: 1.1,
-					speed: 3
-				}
-			});
-		}
-		interaction.visibleNodeIds = model.visibleNodeIds;
-		interaction.selectedArticle = model.selectedArticle;
-		interaction.palette = readGraphPalette(target);
-		setupThemeObserver(target);
-		if (renderer) {
-			renderer.setGraph(nextGraph);
-			graph = renderer.getGraph();
-			renderer.setSettings(buildSigmaSettings());
-			renderer.scheduleRefresh({ layoutUnchange: true });
-		} else {
-			renderer = new Sigma(nextGraph, target, buildSigmaSettings());
-			graph = renderer.getGraph();
-			registerGraphEvents(renderer);
-		}
+		const nextGraph = buildGraph(Graph, nodes, edges);
+		arrangeGraph(nextGraph, forceAtlas2, noverlap);
+		installGraph(nextGraph, target, Sigma);
 		interaction.selectedNode = getNodeIdByArticle(interaction.selectedArticle);
 		setHoveredNode(undefined);
 		if (options.resetCamera) resetGraphCamera();
