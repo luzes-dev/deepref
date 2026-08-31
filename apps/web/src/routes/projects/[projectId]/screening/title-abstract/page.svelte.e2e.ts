@@ -489,8 +489,36 @@ test('reviews a deterministic title and abstract AI proposal before applying it'
 		new RegExp(`/api/projects/${projectId}/reports/report-1/ai/screening$`),
 		async (route) => {
 			expect(route.request().method()).toBe('POST');
+			await route.fulfill({
+				status: 202,
+				json: {
+					id: 'screening-review-run',
+					project_id: projectId,
+					definition: 'screening',
+					subject: {},
+					origin: { kind: 'reviewer_requested' },
+					state: { kind: 'queued' },
+					created_at: '2026-01-01T00:00:00Z'
+				}
+			});
+		}
+	);
+	await page.route(
+		`${api}/projects/${projectId}/review-runs/screening-review-run`,
+		async (route) => {
 			pending = true;
-			await route.fulfill({ status: 200, json: proposal });
+			await route.fulfill({
+				json: {
+					id: 'screening-review-run',
+					project_id: projectId,
+					definition: 'screening',
+					subject: {},
+					origin: { kind: 'reviewer_requested' },
+					state: { kind: 'completed', proposal_id: proposal.id },
+					created_at: '2026-01-01T00:00:00Z',
+					finished_at: '2026-01-01T00:00:01Z'
+				}
+			});
 		}
 	);
 	await page.route(

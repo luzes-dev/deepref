@@ -38,6 +38,7 @@
 	import { Spinner } from '$lib/components/ui/spinner';
 	import { Textarea } from '$lib/components/ui/textarea';
 	import { Brain, Check, FileSearch, Plus, RefreshCw, X } from '@lucide/svelte';
+	import { ReviewRunObserver } from '$lib/features/ai-assistance/review-run-observer.svelte';
 	import {
 		buildExtractionEvidenceSearch,
 		draftFromAiField,
@@ -84,6 +85,12 @@
 	const createFieldMutation = createCreateExtractionField();
 	const generateMutation = createGenerateDataExtractionSuggestion();
 	const decideMutation = createDecideAiProposal();
+	const reviewRun = new ReviewRunObserver(
+		() => projectId,
+		async () => {
+			await proposalsQuery.refetch();
+		}
+	);
 
 	const studies = $derived(studiesQuery.data?.data.items ?? []);
 	const selectedStudy = $derived(studies.find((study) => study.id === selectedStudyId));
@@ -111,7 +118,10 @@
 			(Boolean(selectedStudyId) && (valuesQuery.isPending || proposalsQuery.isPending))
 	);
 	const canGenerate = $derived(
-		Boolean(selectedStudyId) && fields.length > 0 && !generateMutation.isPending
+		Boolean(selectedStudyId) &&
+			fields.length > 0 &&
+			!generateMutation.isPending &&
+			!reviewRun.isActive
 	);
 	const hasNoStudies = $derived(!studiesQuery.isPending && studies.length === 0);
 
@@ -236,8 +246,11 @@
 		if (!selectedStudyId || !canGenerate) return;
 		resetActionError();
 		try {
-			await generateMutation.mutateAsync({ projectId, studyId: selectedStudyId });
-			await proposalsQuery.refetch();
+			const response = await generateMutation.mutateAsync({
+				projectId,
+				studyId: selectedStudyId
+			});
+			await reviewRun.observe(response.data);
 		} catch (error) {
 			const described = describeError(
 				error,
@@ -461,7 +474,7 @@
 			<Alert.Description>{queryError}</Alert.Description>
 		</Alert.Root>
 	{/if}
-	{#if actionError}
+	{#if actionError || reviewRun.error}
 		<Alert.Root
 			variant={actionStatus === 'validation' ? 'default' : 'destructive'}
 			role="alert"
@@ -473,7 +486,7 @@
 			{:else if actionStatus === 'validation'}<Alert.Title>Review needs attention</Alert.Title
 				>
 			{:else}<Alert.Title>Extraction action failed</Alert.Title>{/if}
-			<Alert.Description>{actionError}</Alert.Description>
+			<Alert.Description>{actionError || reviewRun.error}</Alert.Description>
 		</Alert.Root>
 	{/if}
 
@@ -670,10 +683,12 @@
 						disabled={!canGenerate}
 						onclick={() => void generateProposal()}
 					>
-						{#if generateMutation.isPending}<Spinner
+						{#if generateMutation.isPending || reviewRun.isActive}<Spinner
 								data-icon="inline-start"
 							/>{:else}<RefreshCw data-icon="inline-start" />{/if}
-						{generateMutation.isPending ? 'Generating…' : 'Generate proposal'}
+						{generateMutation.isPending || reviewRun.isActive
+							? 'Generating…'
+							: 'Generate proposal'}
 					</Button>
 				</div>
 				<Card.Description>

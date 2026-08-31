@@ -27,7 +27,8 @@ import type {
 	GenerateDuplicateRequest,
 	GenerateScreeningRequest,
 	ListAiProposalsParams,
-	PaginatedResponseAiProposalDto
+	PaginatedResponseAiProposalDto,
+	ReviewRunDto
 } from '../models';
 
 import { customFetch } from '../../custom-fetch.ts';
@@ -462,9 +463,9 @@ export const createDecideAiProposal = <TError = ErrorType<ApiErrorBody>, TContex
 		queryClient
 	);
 };
-export type generateDuplicateSuggestionResponse200 = {
-	data: AiProposalDto;
-	status: 200;
+export type generateDuplicateSuggestionResponse202 = {
+	data: ReviewRunDto;
+	status: 202;
 };
 
 export type generateDuplicateSuggestionResponse400 = {
@@ -492,7 +493,7 @@ export type generateDuplicateSuggestionResponse503 = {
 	status: 503;
 };
 
-export type generateDuplicateSuggestionResponseSuccess = generateDuplicateSuggestionResponse200 & {
+export type generateDuplicateSuggestionResponseSuccess = generateDuplicateSuggestionResponse202 & {
 	headers: Headers;
 };
 export type generateDuplicateSuggestionResponseError = (
@@ -630,9 +631,9 @@ export const createGenerateDuplicateSuggestion = <
 		queryClient
 	);
 };
-export type generateAppraisalPrefillSuggestionResponse200 = {
-	data: AiProposalDto;
-	status: 200;
+export type generateAppraisalPrefillSuggestionResponse202 = {
+	data: ReviewRunDto;
+	status: 202;
 };
 
 export type generateAppraisalPrefillSuggestionResponse400 = {
@@ -661,7 +662,7 @@ export type generateAppraisalPrefillSuggestionResponse503 = {
 };
 
 export type generateAppraisalPrefillSuggestionResponseSuccess =
-	generateAppraisalPrefillSuggestionResponse200 & {
+	generateAppraisalPrefillSuggestionResponse202 & {
 		headers: Headers;
 	};
 export type generateAppraisalPrefillSuggestionResponseError = (
@@ -776,9 +777,9 @@ export const createGenerateAppraisalPrefillSuggestion = <
 		queryClient
 	);
 };
-export type generateScreeningSuggestionResponse200 = {
-	data: AiProposalDto;
-	status: 200;
+export type generateScreeningSuggestionResponse202 = {
+	data: ReviewRunDto;
+	status: 202;
 };
 
 export type generateScreeningSuggestionResponse400 = {
@@ -806,7 +807,7 @@ export type generateScreeningSuggestionResponse503 = {
 	status: 503;
 };
 
-export type generateScreeningSuggestionResponseSuccess = generateScreeningSuggestionResponse200 & {
+export type generateScreeningSuggestionResponseSuccess = generateScreeningSuggestionResponse202 & {
 	headers: Headers;
 };
 export type generateScreeningSuggestionResponseError = (
@@ -944,9 +945,9 @@ export const createGenerateScreeningSuggestion = <
 		queryClient
 	);
 };
-export type generateStudyGroupingSuggestionResponse200 = {
-	data: AiProposalDto;
-	status: 200;
+export type generateStudyGroupingSuggestionResponse202 = {
+	data: ReviewRunDto;
+	status: 202;
 };
 
 export type generateStudyGroupingSuggestionResponse400 = {
@@ -975,7 +976,7 @@ export type generateStudyGroupingSuggestionResponse503 = {
 };
 
 export type generateStudyGroupingSuggestionResponseSuccess =
-	generateStudyGroupingSuggestionResponse200 & {
+	generateStudyGroupingSuggestionResponse202 & {
 		headers: Headers;
 	};
 export type generateStudyGroupingSuggestionResponseError = (
@@ -1077,9 +1078,127 @@ export const createGenerateStudyGroupingSuggestion = <
 		queryClient
 	);
 };
-export type generateDataExtractionSuggestionResponse200 = {
-	data: AiProposalDto;
+export type getReviewRunResponse200 = {
+	data: ReviewRunDto;
 	status: 200;
+};
+
+export type getReviewRunResponse404 = {
+	data: ApiErrorBody;
+	status: 404;
+};
+
+export type getReviewRunResponse500 = {
+	data: ApiErrorBody;
+	status: 500;
+};
+
+export type getReviewRunResponseSuccess = getReviewRunResponse200 & {
+	headers: Headers;
+};
+export type getReviewRunResponseError = (getReviewRunResponse404 | getReviewRunResponse500) & {
+	headers: Headers;
+};
+
+export const getGetReviewRunUrl = (projectId: string, runId: string) => {
+	return `/api/projects/${projectId}/review-runs/${runId}`;
+};
+
+export const getReviewRun = async (
+	projectId: string,
+	runId: string,
+	options?: Parameters<typeof customFetch>[1]
+): Promise<getReviewRunResponseSuccess> => {
+	return customFetch<getReviewRunResponseSuccess>(getGetReviewRunUrl(projectId, runId), {
+		...options,
+		method: 'GET'
+	});
+};
+
+export const getGetReviewRunQueryKey = (projectId: string, runId: string) => {
+	return [`/api/projects/${projectId}/review-runs/${runId}`] as const;
+};
+
+export const getGetReviewRunQueryOptions = <
+	TData = Awaited<ReturnType<typeof getReviewRun>>,
+	TError = ErrorType<ApiErrorBody>
+>(
+	projectId: string,
+	runId: string,
+	options?: {
+		query?: Partial<
+			CreateQueryOptions<Awaited<ReturnType<typeof getReviewRun>>, TError, TData>
+		>;
+		request?: SecondParameter<typeof customFetch>;
+	}
+) => {
+	const { query: queryOptions, request: requestOptions } = options ?? {};
+
+	const queryKey = queryOptions?.queryKey ?? getGetReviewRunQueryKey(projectId, runId);
+
+	const queryFn: QueryFunction<Awaited<ReturnType<typeof getReviewRun>>> = ({ signal }) =>
+		getReviewRun(projectId, runId, { signal, ...requestOptions });
+
+	return {
+		queryKey,
+		queryFn,
+		enabled:
+			projectId !== null && projectId !== undefined && runId !== null && runId !== undefined,
+		...queryOptions
+	} as CreateQueryOptions<Awaited<ReturnType<typeof getReviewRun>>, TError, TData> & {
+		queryKey: DataTag<QueryKey, TData, TError>;
+	};
+};
+
+export type GetReviewRunQueryResult = NonNullable<Awaited<ReturnType<typeof getReviewRun>>>;
+export type GetReviewRunQueryError = ErrorType<ApiErrorBody>;
+
+export function createGetReviewRun<
+	TData = Awaited<ReturnType<typeof getReviewRun>>,
+	TError = ErrorType<ApiErrorBody>
+>(
+	projectId: () => string,
+	runId: () => string,
+	options?: () => {
+		query?: Partial<
+			CreateQueryOptions<Awaited<ReturnType<typeof getReviewRun>>, TError, TData>
+		>;
+		request?: SecondParameter<typeof customFetch>;
+	},
+	queryClient?: () => QueryClient
+): CreateQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> } {
+	const query = createQuery(
+		() => getGetReviewRunQueryOptions(projectId(), runId(), options?.()),
+		queryClient
+	) as CreateQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> };
+
+	return query;
+}
+
+export const prefetchGetReviewRunQuery = async <
+	TData = Awaited<ReturnType<typeof getReviewRun>>,
+	TError = ErrorType<ApiErrorBody>
+>(
+	queryClient: QueryClient,
+	projectId: string,
+	runId: string,
+	options?: {
+		query?: Partial<
+			CreateQueryOptions<Awaited<ReturnType<typeof getReviewRun>>, TError, TData>
+		>;
+		request?: SecondParameter<typeof customFetch>;
+	}
+): Promise<QueryClient> => {
+	const queryOptions = getGetReviewRunQueryOptions(projectId, runId, options);
+
+	await queryClient.prefetchQuery(queryOptions);
+
+	return queryClient;
+};
+
+export type generateDataExtractionSuggestionResponse202 = {
+	data: ReviewRunDto;
+	status: 202;
 };
 
 export type generateDataExtractionSuggestionResponse400 = {
@@ -1103,7 +1222,7 @@ export type generateDataExtractionSuggestionResponse503 = {
 };
 
 export type generateDataExtractionSuggestionResponseSuccess =
-	generateDataExtractionSuggestionResponse200 & {
+	generateDataExtractionSuggestionResponse202 & {
 		headers: Headers;
 	};
 export type generateDataExtractionSuggestionResponseError = (

@@ -1320,7 +1320,7 @@
         },
         "responses": {
           "200": {
-            "description": "Bounded read result or persisted proposal identifier",
+            "description": "Bounded read result or scheduled review run",
             "content": {
               "application/json": {
                 "schema": {
@@ -2751,12 +2751,12 @@
           "required": true
         },
         "responses": {
-          "200": {
-            "description": "AI duplicate assistance proposal",
+          "202": {
+            "description": "Compiled duplicate review scheduled",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/AiProposalDto"
+                  "$ref": "#/components/schemas/ReviewRunDto"
                 }
               }
             }
@@ -3069,12 +3069,12 @@
           "required": true
         },
         "responses": {
-          "200": {
+          "202": {
             "description": "",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/AiProposalDto"
+                  "$ref": "#/components/schemas/ReviewRunDto"
                 }
               }
             }
@@ -3171,12 +3171,12 @@
           "required": true
         },
         "responses": {
-          "200": {
-            "description": "AI screening proposal",
+          "202": {
+            "description": "Compiled screening review scheduled",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/AiProposalDto"
+                  "$ref": "#/components/schemas/ReviewRunDto"
                 }
               }
             }
@@ -3261,12 +3261,12 @@
           }
         ],
         "responses": {
-          "200": {
+          "202": {
             "description": "",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/AiProposalDto"
+                  "$ref": "#/components/schemas/ReviewRunDto"
                 }
               }
             }
@@ -4397,6 +4397,68 @@
         }
       }
     },
+    "/projects/{project_id}/review-runs/{run_id}": {
+      "get": {
+        "tags": [
+          "ai"
+        ],
+        "operationId": "getReviewRun",
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "path",
+            "description": "Project identifier",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "run_id",
+            "in": "path",
+            "description": "Review run identifier",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Compiled review run status and result linkage",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReviewRunDto"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Review run not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/projects/{project_id}/review/protocol": {
       "get": {
         "tags": [
@@ -5458,12 +5520,12 @@
           }
         ],
         "responses": {
-          "200": {
+          "202": {
             "description": "",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/AiProposalDto"
+                  "$ref": "#/components/schemas/ReviewRunDto"
                 }
               }
             }
@@ -7917,19 +7979,23 @@
           {
             "type": "object",
             "required": [
-              "proposal_id",
+              "review_run_id",
+              "status_path",
               "kind"
             ],
             "properties": {
               "kind": {
                 "type": "string",
                 "enum": [
-                  "proposal"
+                  "review_run"
                 ]
               },
-              "proposal_id": {
+              "review_run_id": {
                 "type": "string",
                 "format": "uuid"
+              },
+              "status_path": {
+                "type": "string"
               }
             }
           }
@@ -11311,6 +11377,149 @@
             "format": "uuid"
           }
         }
+      },
+      "ReviewRunDto": {
+        "type": "object",
+        "required": [
+          "id",
+          "project_id",
+          "definition",
+          "subject",
+          "origin",
+          "state",
+          "created_at"
+        ],
+        "properties": {
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "definition": {
+            "type": "string"
+          },
+          "finished_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "origin": {},
+          "project_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "started_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "state": {
+            "$ref": "#/components/schemas/ReviewRunStateDto"
+          },
+          "subject": {}
+        }
+      },
+      "ReviewRunStateDto": {
+        "oneOf": [
+          {
+            "type": "object",
+            "required": [
+              "kind"
+            ],
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "queued"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "kind"
+            ],
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "running"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "code",
+              "message",
+              "kind"
+            ],
+            "properties": {
+              "code": {
+                "type": "string"
+              },
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "blocked"
+                ]
+              },
+              "message": {
+                "type": "string"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "code",
+              "message",
+              "kind"
+            ],
+            "properties": {
+              "code": {
+                "type": "string"
+              },
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "failed"
+                ]
+              },
+              "message": {
+                "type": "string"
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "proposal_id",
+              "kind"
+            ],
+            "properties": {
+              "kind": {
+                "type": "string",
+                "enum": [
+                  "completed"
+                ]
+              },
+              "proposal_id": {
+                "type": "string",
+                "format": "uuid"
+              }
+            }
+          }
+        ]
       },
       "RunDeduplicationRequest": {
         "type": "object",

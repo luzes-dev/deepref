@@ -22,6 +22,7 @@
 	import { Skeleton } from '$lib/components/ui/skeleton';
 	import { Spinner } from '$lib/components/ui/spinner';
 	import { Brain, Check, FileSearch, Info, X } from '@lucide/svelte';
+	import { ReviewRunObserver } from '../review-run-observer.svelte';
 
 	type ReviewStage = 'title_abstract' | 'full_text' | 'dedupe';
 	type DocumentBlockEvidence = Extract<AiScreeningEvidenceDto, { kind: 'document_block' }>;
@@ -72,6 +73,12 @@
 	const generateScreening = createGenerateScreeningSuggestion();
 	const generateDuplicate = createGenerateDuplicateSuggestion();
 	const decideProposal = createDecideAiProposal();
+	const reviewRun = new ReviewRunObserver(
+		() => projectId,
+		async () => {
+			await proposalsQuery.refetch();
+		}
+	);
 
 	let pendingProposalId = $state<string | null>(null);
 	let localError = $state('');
@@ -80,6 +87,7 @@
 	const activeProposal = $derived(proposals[0] ?? null);
 	const errorMessage = $derived(
 		localError ||
+			reviewRun.error ||
 			proposalsQuery.error?.message ||
 			generateScreening.error?.message ||
 			generateDuplicate.error?.message ||
@@ -219,16 +227,18 @@
 	}
 
 	async function generate() {
-		if (generateScreening.isPending || generateDuplicate.isPending) return;
+		if (generateScreening.isPending || generateDuplicate.isPending || reviewRun.isActive)
+			return;
 		localError = '';
 		try {
 			if (stage === 'dedupe') {
 				if (!recordId || !candidateReportId) return;
-				await generateDuplicate.mutateAsync({
+				const response = await generateDuplicate.mutateAsync({
 					projectId,
 					recordId,
 					data: { candidate_report_id: candidateReportId }
 				});
+				await reviewRun.observe(response.data);
 			} else {
 				if (!reportId) return;
 				const request: {
@@ -240,9 +250,13 @@
 					...(protocolVersionId ? { protocol_version_id: protocolVersionId } : {}),
 					...(expectedRevision !== null ? { expected_revision: expectedRevision } : {})
 				};
-				await generateScreening.mutateAsync({ projectId, reportId, data: request });
+				const response = await generateScreening.mutateAsync({
+					projectId,
+					reportId,
+					data: request
+				});
+				await reviewRun.observe(response.data);
 			}
-			await proposalsQuery.refetch();
 		} catch (error) {
 			localError = error instanceof Error ? error.message : 'AI suggestion failed.';
 		}
@@ -424,11 +438,13 @@
 			<Button
 				variant="outline"
 				onclick={() => void generate()}
-				disabled={generateScreening.isPending || generateDuplicate.isPending}
+				disabled={generateScreening.isPending ||
+					generateDuplicate.isPending ||
+					reviewRun.isActive}
 			>
-				{#if generateScreening.isPending}<Spinner data-icon="inline-start" />{:else}<Brain
+				{#if generateScreening.isPending || generateDuplicate.isPending || reviewRun.isActive}<Spinner
 						data-icon="inline-start"
-					/>{/if}
+					/>{:else}<Brain data-icon="inline-start" />{/if}
 				Request suggestion
 			</Button>
 		{/if}

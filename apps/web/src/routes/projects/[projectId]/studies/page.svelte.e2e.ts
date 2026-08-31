@@ -306,7 +306,36 @@ test('reviews study grouping proposals with typed provenance and refreshes after
 		async (route) => {
 			generationRequests += 1;
 			pendingProposal = groupingProposal(`grouping-${generationRequests}`);
-			await route.fulfill({ json: pendingProposal });
+			await route.fulfill({
+				status: 202,
+				json: {
+					id: `grouping-run-${generationRequests}`,
+					project_id: 'project-1',
+					definition: 'study_grouping',
+					subject: {},
+					origin: { kind: 'reviewer_requested' },
+					state: { kind: 'queued' },
+					created_at: '2026-01-01T00:00:00Z'
+				}
+			});
+		}
+	);
+	await page.route(
+		/\/api\/projects\/project-1\/review-runs\/grouping-run-\d+$/,
+		async (route) => {
+			const runId = route.request().url().split('/').at(-1) ?? 'grouping-run-1';
+			await route.fulfill({
+				json: {
+					id: runId,
+					project_id: 'project-1',
+					definition: 'study_grouping',
+					subject: {},
+					origin: { kind: 'reviewer_requested' },
+					state: { kind: 'completed', proposal_id: pendingProposal?.id ?? 'grouping-1' },
+					created_at: '2026-01-01T00:00:00Z',
+					finished_at: '2026-01-01T00:00:01Z'
+				}
+			});
 		}
 	);
 	await page.route(

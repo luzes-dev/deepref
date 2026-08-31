@@ -431,7 +431,35 @@ test('reviews an edited AI appraisal pre-fill with evidence navigation and decis
 		'http://localhost:4173/api/projects/project-1/reports/report-1/ai/appraisal-prefill',
 		async (route) => {
 			pendingProposal = createProposal();
-			await route.fulfill({ json: pendingProposal });
+			await route.fulfill({
+				status: 202,
+				json: {
+					id: 'appraisal-run',
+					project_id: 'project-1',
+					definition: 'appraisal_prefill',
+					subject: {},
+					origin: { kind: 'reviewer_requested' },
+					state: { kind: 'queued' },
+					created_at: '2026-01-01T00:00:00Z'
+				}
+			});
+		}
+	);
+	await page.route(
+		'http://localhost:4173/api/projects/project-1/review-runs/appraisal-run',
+		async (route) => {
+			await route.fulfill({
+				json: {
+					id: 'appraisal-run',
+					project_id: 'project-1',
+					definition: 'appraisal_prefill',
+					subject: {},
+					origin: { kind: 'reviewer_requested' },
+					state: { kind: 'completed', proposal_id: pendingProposal?.id ?? 'proposal-1' },
+					created_at: '2026-01-01T00:00:00Z',
+					finished_at: '2026-01-01T00:00:01Z'
+				}
+			});
 		}
 	);
 	await page.route(

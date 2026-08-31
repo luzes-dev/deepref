@@ -11,6 +11,7 @@ export type AssistantToolResponse =
 			kind: 'read';
 	  }
 	| {
-			kind: 'proposal';
-			proposal_id: string;
+			kind: 'review_run';
+			review_run_id: string;
+			status_path: string;
 	  };

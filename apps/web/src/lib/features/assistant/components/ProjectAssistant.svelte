@@ -27,6 +27,7 @@
 	import { Spinner } from '$lib/components/ui/spinner';
 	import { Textarea } from '$lib/components/ui/textarea';
 	import * as ToggleGroup from '$lib/components/ui/toggle-group';
+	import { ReviewRunObserver } from '$lib/features/ai-assistance/review-run-observer.svelte';
 	import {
 		ASSISTANT_TOOL_METADATA,
 		initialToolValues,
@@ -55,6 +56,10 @@
 	let selectedToolName = $state<ToolName | null>(null);
 	let values = $state<ToolValues>({});
 	let assistantResult = $state<AssistantToolResponse | null>(null);
+	const reviewRun = new ReviewRunObserver(
+		() => projectId,
+		() => undefined
+	);
 	let lastRequest = $state<Extract<ToolValidation, { kind: 'valid' }>['request'] | null>(null);
 	const EMPTY_ERRORS: Readonly<Record<string, string>> = {};
 
@@ -89,6 +94,7 @@
 		selectedToolName = entry.metadata.name;
 		values = initialToolValues(entry.metadata.name);
 		assistantResult = null;
+		reviewRun.reset();
 		lastRequest = null;
 		executeMutation.reset();
 	}
@@ -98,12 +104,14 @@
 		if (!(target instanceof HTMLInputElement || target instanceof HTMLTextAreaElement)) return;
 		values = { ...values, [key]: target.value };
 		assistantResult = null;
+		reviewRun.reset();
 	}
 
 	function updateStage(value: string | undefined): void {
 		if (value !== 'title_abstract' && value !== 'full_text') return;
 		values = { ...values, stage: value };
 		assistantResult = null;
+		reviewRun.reset();
 	}
 
 	async function execute(event: SubmitEvent): Promise<void> {
@@ -119,6 +127,9 @@
 				data: validation.request
 			});
 			assistantResult = response.data;
+			if (response.data.kind === 'review_run') {
+				await reviewRun.observeId(response.data.review_run_id);
+			}
 		} catch {
 			// The bounded API error is rendered below.
 		}
@@ -133,6 +144,9 @@
 				data: lastRequest
 			});
 			assistantResult = response.data;
+			if (response.data.kind === 'review_run') {
+				await reviewRun.observeId(response.data.review_run_id);
+			}
 		} catch {
 			// The bounded API error is rendered below.
 		}
@@ -603,12 +617,26 @@
 										data-testid="assistant-proposal-receipt"
 									>
 										<ShieldCheckIcon data-icon="inline-start" />
-										<Alert.Title>Proposal created</Alert.Title>
+										<Alert.Title>
+											{reviewRun.state?.kind === 'completed'
+												? 'Proposal ready for review'
+												: 'Review run scheduled'}
+										</Alert.Title>
 										<Alert.Description>
-											Proposal ID: <code>{assistantResult.proposal_id}</code>.
-											Review it before any scientific state changes are made.
+											Run ID: <code>{assistantResult.review_run_id}</code>.
+											{#if reviewRun.state?.kind === 'completed'}
+												Proposal ID: <code
+													>{reviewRun.state.proposal_id}</code
+												>. Review it before any scientific state changes are
+												made.
+											{:else if reviewRun.state?.kind === 'blocked' || reviewRun.state?.kind === 'failed'}
+												{reviewRun.state.message}
+											{:else}
+												The compiled review is {reviewRun.state?.kind ??
+													'queued'}.
+											{/if}
 										</Alert.Description>
-										{#if reviewHref}
+										{#if reviewHref && reviewRun.state?.kind === 'completed'}
 											<Alert.Action>
 												<a
 													href={resolve(reviewHref as Pathname)}

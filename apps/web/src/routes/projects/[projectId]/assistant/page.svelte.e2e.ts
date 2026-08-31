@@ -22,6 +22,20 @@ const studyId = '77777777-7777-4777-8777-777777777777';
 const recordId = '55555555-5555-4555-8555-555555555555';
 const candidateReportId = '66666666-6666-4666-8666-666666666666';
 
+function completedReviewRun(runId: string, proposalId: string) {
+	return {
+		id: runId,
+		project_id: 'project-1',
+		definition: 'duplicate_detection',
+		subject: {},
+		origin: { kind: 'reviewer_requested' },
+		state: { kind: 'completed', proposal_id: proposalId },
+		created_at: '2026-01-01T00:00:00Z',
+		started_at: '2026-01-01T00:00:01Z',
+		finished_at: '2026-01-01T00:00:02Z'
+	};
+}
+
 const catalog = [
 	['get_project_protocol', 'read'],
 	['get_report', 'read'],
@@ -118,8 +132,17 @@ test('executes a proposal once, shows the receipt, and links to human review', a
 	let request: Record<string, unknown> | undefined;
 	await page.route(`${api}/projects/project-1/assistant/tools/execute`, async (route) => {
 		request = route.request().postDataJSON();
-		await route.fulfill({ json: { kind: 'proposal', proposal_id: 'proposal-123' } });
+		await route.fulfill({
+			json: {
+				kind: 'review_run',
+				review_run_id: 'run-123',
+				status_path: '/projects/project-1/review-runs/run-123'
+			}
+		});
 	});
+	await page.route(`${api}/projects/project-1/review-runs/run-123`, (route) =>
+		route.fulfill({ json: completedReviewRun('run-123', 'proposal-123') })
+	);
 
 	await page.getByTestId('assistant-tool-propose_duplicate_merge').click();
 	await page.getByTestId('assistant-field-source_record_id').fill(recordId);
@@ -146,8 +169,17 @@ test('links classification proposals to the selected study review', async ({ pag
 	let request: Record<string, unknown> | undefined;
 	await page.route(`${api}/projects/project-1/assistant/tools/execute`, async (route) => {
 		request = route.request().postDataJSON();
-		await route.fulfill({ json: { kind: 'proposal', proposal_id: 'classification-proposal' } });
+		await route.fulfill({
+			json: {
+				kind: 'review_run',
+				review_run_id: 'classification-run',
+				status_path: '/projects/project-1/review-runs/classification-run'
+			}
+		});
 	});
+	await page.route(`${api}/projects/project-1/review-runs/classification-run`, (route) =>
+		route.fulfill({ json: completedReviewRun('classification-run', 'classification-proposal') })
+	);
 
 	await page.getByTestId('assistant-tool-propose_classification').click();
 	await page.getByTestId('assistant-field-study_id').fill(studyId);
@@ -218,9 +250,18 @@ test('shows API permission and provider errors, with an explicit provider retry'
 				json: { message: 'provider temporarily unavailable' }
 			});
 		} else {
-			await route.fulfill({ json: { kind: 'proposal', proposal_id: 'retried-proposal' } });
+			await route.fulfill({
+				json: {
+					kind: 'review_run',
+					review_run_id: 'retried-run',
+					status_path: '/projects/project-1/review-runs/retried-run'
+				}
+			});
 		}
 	});
+	await page.route(`${api}/projects/project-1/review-runs/retried-run`, (route) =>
+		route.fulfill({ json: completedReviewRun('retried-run', 'retried-proposal') })
+	);
 
 	await page.getByTestId('assistant-tool-propose_screening_decision').click();
 	await page.getByTestId('assistant-field-report_id').fill(reportId);

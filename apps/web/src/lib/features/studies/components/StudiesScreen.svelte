@@ -36,6 +36,7 @@
 	import * as Card from '$lib/components/ui/card';
 	import { Separator } from '$lib/components/ui/separator';
 	import { useQueryClient } from '@tanstack/svelte-query';
+	import { ReviewRunObserver } from '$lib/features/ai-assistance/review-run-observer.svelte';
 	import { parseStudyLocation, updateStudyLocation } from '../url';
 	import StudyClassificationAssistance from './StudyClassificationAssistance.svelte';
 	import StudyDetailsPanel from './StudyDetailsPanel.svelte';
@@ -112,6 +113,12 @@
 	const generateGroupingMutation = createGenerateStudyGroupingSuggestion();
 	const decideGroupingMutation = createDecideAiProposal();
 	const decideClassificationMutation = createDecideAiProposal();
+	const groupingReviewRun = new ReviewRunObserver(
+		() => projectId,
+		async () => {
+			await groupingProposalsQuery.refetch();
+		}
+	);
 
 	const studies = $derived(studiesQuery.data?.data.items ?? []);
 	const reports = $derived(reportsQuery.data?.data.items ?? []);
@@ -137,7 +144,7 @@
 		generateGroupingMutation.error?.message ?? decideGroupingMutation.error?.message ?? ''
 	);
 	const groupingErrorMessage = $derived(
-		groupingError || groupingQueryError || groupingMutationError
+		groupingError || groupingReviewRun.error || groupingQueryError || groupingMutationError
 	);
 	const groupingConflict = $derived(
 		groupingErrorStatus === 409 ||
@@ -259,13 +266,13 @@
 	}
 
 	async function generateGrouping(): Promise<void> {
-		if (!reportId || groupingAction) return;
+		if (!reportId || groupingAction || groupingReviewRun.isActive) return;
 		groupingError = '';
 		groupingErrorStatus = null;
 		groupingAction = 'generate';
 		try {
-			await generateGroupingMutation.mutateAsync({ projectId, reportId });
-			await groupingProposalsQuery.refetch();
+			const response = await generateGroupingMutation.mutateAsync({ projectId, reportId });
+			await groupingReviewRun.observe(response.data);
 		} catch (error) {
 			groupingError =
 				error instanceof Error ? error.message : 'Study grouping suggestion failed.';
@@ -571,7 +578,7 @@
 						errorMessage={groupingErrorMessage}
 						conflict={groupingConflict}
 						providerUnavailable={groupingProviderUnavailable}
-						action={groupingAction}
+						action={groupingAction ?? (groupingReviewRun.isActive ? 'generate' : null)}
 						decisionPending={pendingGroupingProposalId !== null}
 						{studyLabel}
 						onGenerate={() => void generateGrouping()}
