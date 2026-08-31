@@ -1,7 +1,8 @@
 use chrono::Utc;
 use deepref_ai::{
-    AiRunRecord, AiRunStatus, AiRunStore, AiTaskKind, AuthorityTier, DedupeInput, DuplicateSignal,
-    IdentityProvenance, ModelParameters, ModelProfile, ProposalDraft, ResolvedModel, TokenUsage,
+    AiProposal, AiRunRecord, AiRunStatus, AiRunStore, AiTaskKind, AuthorityTier, DedupeInput,
+    DuplicateSignal, IdentityProvenance, ModelParameters, ModelProfile, ProposalDraft,
+    ProposalStatus, ProposalStore, ResolvedModel, TokenUsage,
 };
 use deepref_domain::{Actor, ActorKind, ProjectId};
 use deepref_postgres::{
@@ -13,9 +14,10 @@ use deepref_postgres::{
     schedule_prepared_review_run,
 };
 use deepref_review::{
-    AcceptedArtifactInput, CalibrationBundleId, ReviewCatalog, ReviewDefinitionKey, ReviewHash,
-    ReviewOrigin, ReviewRunState, ReviewScheduler, ScheduleReviewRun,
+    CalibrationBundleId, ReviewDefinitionKey, ReviewOrigin, ReviewRunState, ReviewScheduler,
+    ScheduleReviewRun,
     execution::{ExecutedReviewTask, PreparedReviewTask},
+    internal::{AcceptedArtifactInput, ReviewCatalog, ReviewHash},
 };
 use sqlx::{PgPool, postgres::PgPoolOptions};
 use uuid::Uuid;
@@ -612,6 +614,17 @@ async fn review_attempts_enforce_scope_lease_exact_reuse_lineage_and_immutabilit
                 authority: AuthorityTier::WorkflowSuggestion,
             },
         };
+        let proposal_created_before_finalization = PostgresAiStore::new(&pool)
+            .create(AiProposal {
+                id: Uuid::new_v4(),
+                draft: executed.proposal.clone(),
+                model_run_id,
+                status: ProposalStatus::Pending,
+                resolved_at: None,
+                resolved_by_actor_id: None,
+            })
+            .await
+            .expect("proposal creation survives a crash before finalization linkage");
         let first_finalization =
             finalize_review_proposal(&pool, &run, executed.clone(), owner)
                 .await
@@ -623,6 +636,7 @@ async fn review_attempts_enforce_scope_lease_exact_reuse_lineage_and_immutabilit
             ReviewFinalization::Completed { proposal_id } => proposal_id,
             ReviewFinalization::Blocked => panic!("current subject should complete"),
         };
+        assert_eq!(proposal_id, proposal_created_before_finalization.id);
         assert_eq!(
             second_finalization,
             ReviewFinalization::Completed { proposal_id }

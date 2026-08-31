@@ -305,7 +305,7 @@ async fn blind_screening_disagreement_blocks_without_exposing_primary_output() {
 }
 
 #[tokio::test]
-async fn candidate_audit_cannot_replace_the_validated_screening_candidate() {
+async fn candidate_audit_and_repair_cannot_patch_protected_screening_fields() {
     let _guard = test_lock().lock().await;
     let Some(pool) = database().await else { return };
     let (project_id, report_id, criterion_id, title) = setup(&pool).await;
@@ -326,7 +326,7 @@ async fn candidate_audit_cannot_replace_the_validated_screening_candidate() {
         "field": "title",
         "content_hash": sha256_bytes(title.as_bytes())
     });
-    let output = |rationale: &str| {
+    let output = |rationale: &str, judgment: &str, decision: serde_json::Value| {
         serde_json::json!({
             "report_id": report_id,
             "expected_revision": 0,
@@ -334,21 +334,40 @@ async fn candidate_audit_cannot_replace_the_validated_screening_candidate() {
             "protocol_version_id": protocol_id,
             "criteria": [{
                 "criterion_id": criterion_id,
-                "judgment": "unclear",
+                "judgment": judgment,
                 "rationale": rationale,
                 "evidence": [evidence.clone()]
             }],
-            "suggested_decision": {"kind": "maybe"},
+            "suggested_decision": decision,
             "uncertainties": []
         })
         .to_string()
     };
+    let requests = Arc::new(Mutex::new(Vec::new()));
     let gateway = SequencedGateway {
         outputs: Arc::new(Mutex::new(VecDeque::from([
-            output("PRIMARY-CANDIDATE"),
-            output("AUDIT-MUST-NOT-REPLACE-CANDIDATE"),
+            output(
+                "PRIMARY-CANDIDATE",
+                "unclear",
+                serde_json::json!({"kind":"maybe"}),
+            ),
+            output(
+                "AUDIT-REQUESTS-REPAIR",
+                "does_not_meet",
+                serde_json::json!({"kind":"exclude","exclusion_reason_id":null}),
+            ),
+            output(
+                "REPAIRED-CANDIDATE",
+                "unclear",
+                serde_json::json!({"kind":"maybe"}),
+            ),
+            output(
+                "AUDIT-MUST-NOT-REPLACE-REPAIR",
+                "unclear",
+                serde_json::json!({"kind":"maybe"}),
+            ),
         ]))),
-        requests: Arc::new(Mutex::new(Vec::new())),
+        requests: Arc::clone(&requests),
     };
 
     let response = generate(
@@ -377,10 +396,17 @@ async fn candidate_audit_cannot_replace_the_validated_screening_candidate() {
     .fetch_one(&pool)
     .await
     .expect("screening proposal payload");
-    assert_eq!(payload["criteria"][0]["rationale"], "PRIMARY-CANDIDATE");
+    assert_eq!(payload["criteria"][0]["rationale"], "REPAIRED-CANDIDATE");
     assert_eq!(payload["suggested_decision"]["kind"], "maybe");
     assert_eq!(payload["expected_revision"], 0);
     assert_eq!(payload["protocol_version_id"], protocol_id.to_string());
+    {
+        let requests = requests.lock().expect("review requests");
+        assert_eq!(requests.len(), 4);
+        assert!(requests[1].system_prompt.contains("candidate_audit"));
+        assert!(requests[2].system_prompt.contains("semantic_repair"));
+        assert!(requests[3].system_prompt.contains("candidate_audit"));
+    }
     cleanup_project(&pool, project_id, report_id).await;
 }
 

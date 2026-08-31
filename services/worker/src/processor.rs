@@ -14,6 +14,7 @@ use deepref_documents::{
 };
 use deepref_events::{DeadLetterRecord, EventEnvelope, WorkFetchRequested, deserialize_compatible};
 use deepref_providers::CrossrefProvider;
+use deepref_review::internal::ReviewTransitionSignal;
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
 use sqlx::PgPool;
@@ -640,7 +641,8 @@ async fn execute_compiled_review(
         return Ok(());
     }
     deepref_postgres::mark_review_run_running(pool, project_id, review_run_id, owner).await?;
-    let definition = deepref_review::ReviewCatalog.compile(run.snapshot.definition)?;
+    let definition = deepref_review::internal::ReviewCatalog.compile(run.snapshot.definition)?;
+    let prepare_node = "prepare";
 
     let prepare = persist_review_node(
         pool,
@@ -648,7 +650,7 @@ async fn execute_compiled_review(
         &definition,
         owner,
         ReviewNodeWrite {
-            node_id: "prepare",
+            node_id: prepare_node,
             payload: serde_json::to_value(&run.task)?,
             predecessors: &[],
             model_run_id: None,
@@ -667,23 +669,25 @@ async fn execute_compiled_review(
         )
         .await;
     }
+    let generate_node = definition.transition(prepare_node, ReviewTransitionSignal::Always)?;
     let generated = execute_review_ai_node(
         pool,
         &run,
         &definition,
-        "generate",
+        generate_node,
         std::slice::from_ref(&prepare),
         owner,
         gateway,
     )
     .await?;
+    let validate_node = definition.transition(generate_node, ReviewTransitionSignal::Always)?;
     let validated = persist_review_node(
         pool,
         &run,
         &definition,
         owner,
         ReviewNodeWrite {
-            node_id: "validate",
+            node_id: validate_node,
             payload: serde_json::json!({
                 "model_run_id": generated.model_run_id,
                 "output_hash": deepref_ai::hash_json(&generated.executed.output)?,
@@ -694,26 +698,31 @@ async fn execute_compiled_review(
         },
     )
     .await?;
+    let assemble_node = definition.transition(validate_node, ReviewTransitionSignal::Valid)?;
     let assembled = persist_review_node(
         pool,
         &run,
         &definition,
         owner,
         ReviewNodeWrite {
-            node_id: "assemble",
+            node_id: assemble_node,
             payload: serde_json::to_value(&generated.executed)?,
             predecessors: std::slice::from_ref(&validated),
             model_run_id: Some(generated.model_run_id),
         },
     )
     .await?;
+    let finalize_node = definition.transition(assemble_node, ReviewTransitionSignal::Always)?;
 
     finalize_compiled_candidate(
         pool,
         &run,
         &definition,
-        &assembled,
-        generated.executed,
+        ReviewFinalizationRequest {
+            predecessor: &assembled,
+            executed: generated.executed,
+            finalize_node,
+        },
         automation_step,
         owner,
     )
@@ -723,30 +732,33 @@ async fn execute_compiled_review(
 async fn execute_compiled_screening(
     pool: &sqlx::PgPool,
     run: &deepref_postgres::LeasedReviewRun,
-    definition: &deepref_review::CompiledReviewDefinition,
+    definition: &deepref_review::internal::CompiledReviewDefinition,
     prepare: AcceptedNodeArtifact,
     automation_step: &deepref_application::AutomationStepRun,
     owner: &str,
     gateway: &dyn AiGateway,
 ) -> anyhow::Result<()> {
+    let primary_node = definition.transition("prepare", ReviewTransitionSignal::Always)?;
     let primary = execute_review_ai_node(
         pool,
         run,
         definition,
-        "primary_screen",
+        primary_node,
         std::slice::from_ref(&prepare),
         owner,
         gateway,
     )
     .await?;
     let primary_analysis = screening_analysis(&primary)?;
+    let validate_primary_node =
+        definition.transition(primary_node, ReviewTransitionSignal::Always)?;
     let validated_primary = persist_review_node(
         pool,
         run,
         definition,
         owner,
         ReviewNodeWrite {
-            node_id: "validate_primary",
+            node_id: validate_primary_node,
             payload: serde_json::json!({
                 "model_run_id": primary.model_run_id,
                 "output_hash": deepref_ai::hash_json(&primary.executed.output)?,
@@ -762,13 +774,15 @@ async fn execute_compiled_screening(
             primary_analysis.suggested_decision,
             deepref_ai::SuggestedDecision::Exclude { .. }
         );
+    let derive_primary_node =
+        definition.transition(validate_primary_node, ReviewTransitionSignal::Valid)?;
     let derived = persist_review_node(
         pool,
         run,
         definition,
         owner,
         ReviewNodeWrite {
-            node_id: "derive_primary",
+            node_id: derive_primary_node,
             payload: serde_json::json!({
                 "suggested_decision": primary_analysis.suggested_decision,
                 "needs_independent_screen": needs_independent
@@ -779,27 +793,33 @@ async fn execute_compiled_screening(
     )
     .await?;
 
-    let (mut candidate, reconciliation) = if needs_independent {
+    let (mut candidate, reconciliation, assemble_node) = if needs_independent {
         // The independent task receives only the immutable prepared source. The
         // primary artifact affects its fingerprint and lineage, never its model context.
+        let independent_node = definition.transition(
+            derive_primary_node,
+            ReviewTransitionSignal::NeedsIndependentScreen,
+        )?;
         let independent = execute_review_ai_node(
             pool,
             run,
             definition,
-            "independent_screen",
+            independent_node,
             std::slice::from_ref(&derived),
             owner,
             gateway,
         )
         .await?;
         let independent_analysis = screening_analysis(&independent)?;
+        let validate_independent_node =
+            definition.transition(independent_node, ReviewTransitionSignal::Always)?;
         let validated_independent = persist_review_node(
             pool,
             run,
             definition,
             owner,
             ReviewNodeWrite {
-                node_id: "validate_independent",
+                node_id: validate_independent_node,
                 payload: serde_json::json!({
                     "model_run_id": independent.model_run_id,
                     "output_hash": deepref_ai::hash_json(&independent.executed.output)?,
@@ -812,13 +832,15 @@ async fn execute_compiled_screening(
         .await?;
         let agreement =
             primary_analysis.suggested_decision == independent_analysis.suggested_decision;
+        let reconcile_node =
+            definition.transition(validate_independent_node, ReviewTransitionSignal::Valid)?;
         let reconciliation = persist_review_node(
             pool,
             run,
             definition,
             owner,
             ReviewNodeWrite {
-                node_id: "reconcile",
+                node_id: reconcile_node,
                 payload: serde_json::json!({
                     "agreement": agreement,
                     "primary_decision": primary_analysis.suggested_decision,
@@ -831,10 +853,13 @@ async fn execute_compiled_screening(
         )
         .await?;
         if !agreement {
+            let finalize_node =
+                definition.transition(reconcile_node, ReviewTransitionSignal::Disagreement)?;
             return finalize_blocked_review(
                 pool,
                 run,
                 definition,
+                finalize_node,
                 automation_step,
                 owner,
                 BlockedReview {
@@ -845,21 +870,28 @@ async fn execute_compiled_screening(
             )
             .await;
         }
-        (primary, reconciliation)
+        let assemble_node =
+            definition.transition(reconcile_node, ReviewTransitionSignal::Agreement)?;
+        (primary, reconciliation, assemble_node)
     } else {
-        (primary, derived)
+        let assemble_node =
+            definition.transition(derive_primary_node, ReviewTransitionSignal::PrimaryAccepted)?;
+        (primary, derived, assemble_node)
     };
 
     let protected_decision = screening_analysis(&candidate)?.suggested_decision;
     let mut predecessor = reconciliation;
-    for repair_cycle in 0..=2_u8 {
+    let audit_node = definition.transition(assemble_node, ReviewTransitionSignal::Always)?;
+    let repair_node = definition.transition(audit_node, ReviewTransitionSignal::AuditRepairable)?;
+    let repair_budget = definition.repair_budget(repair_node)?;
+    for repair_cycle in 0..=repair_budget {
         let assembled = persist_review_node(
             pool,
             run,
             definition,
             owner,
             ReviewNodeWrite {
-                node_id: "assemble",
+                node_id: assemble_node,
                 payload: serde_json::to_value(&candidate.executed)?,
                 predecessors: std::slice::from_ref(&predecessor),
                 model_run_id: Some(candidate.model_run_id),
@@ -874,7 +906,7 @@ async fn execute_compiled_screening(
             owner,
             gateway,
             ReviewAiNodeRequest {
-                node_id: "candidate_audit",
+                node_id: audit_node,
                 predecessors: std::slice::from_ref(&assembled),
                 semantic_context: Some(serde_json::json!({
                     "candidate_hash": candidate_hash,
@@ -885,22 +917,30 @@ async fn execute_compiled_screening(
         .await?;
         let audit_decision = screening_analysis(&audit)?.suggested_decision;
         if audit_decision == protected_decision {
+            let finalize_node =
+                definition.transition(audit_node, ReviewTransitionSignal::AuditPassed)?;
             return finalize_compiled_candidate(
                 pool,
                 run,
                 definition,
-                &audit.artifact,
-                candidate.executed,
+                ReviewFinalizationRequest {
+                    predecessor: &audit.artifact,
+                    executed: candidate.executed,
+                    finalize_node,
+                },
                 automation_step,
                 owner,
             )
             .await;
         }
-        if repair_cycle == 2 {
+        if repair_cycle == repair_budget {
+            let finalize_node =
+                definition.transition(repair_node, ReviewTransitionSignal::RepairExhausted)?;
             return finalize_blocked_review(
                 pool,
                 run,
                 definition,
+                finalize_node,
                 automation_step,
                 owner,
                 BlockedReview {
@@ -918,7 +958,7 @@ async fn execute_compiled_screening(
             owner,
             gateway,
             ReviewAiNodeRequest {
-                node_id: "semantic_repair",
+                node_id: repair_node,
                 predecessors: std::slice::from_ref(&audit.artifact),
                 semantic_context: Some(serde_json::json!({
                     "candidate_hash": candidate_hash,
@@ -930,16 +970,19 @@ async fn execute_compiled_screening(
         )
         .await?;
         let repaired = screening_analysis(&repair)?;
+        let protected_decision_unchanged = repaired.suggested_decision == protected_decision;
+        let validate_repair_node =
+            definition.transition(repair_node, ReviewTransitionSignal::RepairReady)?;
         predecessor = persist_review_node(
             pool,
             run,
             definition,
             owner,
             ReviewNodeWrite {
-                node_id: "validate_primary",
+                node_id: validate_repair_node,
                 payload: serde_json::json!({
                     "repair_cycle": repair_cycle + 1,
-                    "protected_decision_unchanged": repaired.suggested_decision == protected_decision,
+                    "protected_decision_unchanged": protected_decision_unchanged,
                     "output_hash": deepref_ai::hash_json(&repair.executed.output)?
                 }),
                 predecessors: std::slice::from_ref(&repair.artifact),
@@ -947,10 +990,19 @@ async fn execute_compiled_screening(
             },
         )
         .await?;
-        if repaired.suggested_decision == protected_decision {
+        if protected_decision_unchanged {
             // Only the semantic judgments, rationales, evidence, and
             // uncertainties come from the repair. Identity and decision stay protected.
             candidate = repair;
+        }
+        let validation_signal = if protected_decision_unchanged {
+            ReviewTransitionSignal::Valid
+        } else {
+            ReviewTransitionSignal::Invalid
+        };
+        let next_assemble = definition.transition(validate_repair_node, validation_signal)?;
+        if next_assemble != assemble_node {
+            anyhow::bail!("compiled screening repair must return to assembly");
         }
     }
     unreachable!("bounded screening repair loop always returns")
@@ -964,18 +1016,22 @@ fn screening_analysis(node: &GeneratedReviewNode) -> anyhow::Result<deepref_ai::
 async fn finalize_compiled_candidate(
     pool: &sqlx::PgPool,
     run: &deepref_postgres::LeasedReviewRun,
-    definition: &deepref_review::CompiledReviewDefinition,
-    predecessor: &AcceptedNodeArtifact,
-    executed: deepref_review::execution::ExecutedReviewTask,
+    definition: &deepref_review::internal::CompiledReviewDefinition,
+    request: ReviewFinalizationRequest<'_>,
     automation_step: &deepref_application::AutomationStepRun,
     owner: &str,
 ) -> anyhow::Result<()> {
+    let ReviewFinalizationRequest {
+        predecessor,
+        executed,
+        finalize_node,
+    } = request;
     let predecessor_input = artifact_input(predecessor);
     let final_start = deepref_postgres::begin_review_attempt(
         pool,
         run,
         definition,
-        "finalize",
+        finalize_node,
         std::slice::from_ref(&predecessor_input),
         owner,
     )
@@ -1013,10 +1069,17 @@ async fn finalize_compiled_candidate(
     complete_review_automation_step(pool, run, automation_step, final_attempt, owner).await
 }
 
+struct ReviewFinalizationRequest<'a> {
+    predecessor: &'a AcceptedNodeArtifact,
+    executed: deepref_review::execution::ExecutedReviewTask,
+    finalize_node: &'a str,
+}
+
 async fn finalize_blocked_review(
     pool: &sqlx::PgPool,
     run: &deepref_postgres::LeasedReviewRun,
-    definition: &deepref_review::CompiledReviewDefinition,
+    definition: &deepref_review::internal::CompiledReviewDefinition,
+    finalize_node: &str,
     automation_step: &deepref_application::AutomationStepRun,
     owner: &str,
     blocked: BlockedReview<'_>,
@@ -1040,7 +1103,7 @@ async fn finalize_blocked_review(
         definition,
         owner,
         ReviewNodeWrite {
-            node_id: "finalize",
+            node_id: finalize_node,
             payload: serde_json::json!({"state":"blocked","code":code.as_str(),"message":message}),
             predecessors: std::slice::from_ref(predecessor),
             model_run_id: None,
@@ -1088,7 +1151,7 @@ async fn complete_review_automation_step(
 #[derive(Clone)]
 struct AcceptedNodeArtifact {
     artifact_id: Uuid,
-    artifact_hash: deepref_review::ReviewHash,
+    artifact_hash: deepref_review::internal::ReviewHash,
 }
 
 #[derive(Clone)]
@@ -1114,7 +1177,7 @@ struct ReviewNodeWrite<'a> {
 async fn persist_review_node(
     pool: &sqlx::PgPool,
     run: &deepref_postgres::LeasedReviewRun,
-    definition: &deepref_review::CompiledReviewDefinition,
+    definition: &deepref_review::internal::CompiledReviewDefinition,
     owner: &str,
     write: ReviewNodeWrite<'_>,
 ) -> anyhow::Result<AcceptedNodeArtifact> {
@@ -1168,7 +1231,7 @@ async fn persist_review_node(
 async fn execute_review_ai_node(
     pool: &sqlx::PgPool,
     run: &deepref_postgres::LeasedReviewRun,
-    definition: &deepref_review::CompiledReviewDefinition,
+    definition: &deepref_review::internal::CompiledReviewDefinition,
     node_id: &str,
     predecessors: &[AcceptedNodeArtifact],
     owner: &str,
@@ -1198,7 +1261,7 @@ struct ReviewAiNodeRequest<'a> {
 async fn execute_review_ai_node_with_context(
     pool: &sqlx::PgPool,
     run: &deepref_postgres::LeasedReviewRun,
-    definition: &deepref_review::CompiledReviewDefinition,
+    definition: &deepref_review::internal::CompiledReviewDefinition,
     owner: &str,
     gateway: &dyn AiGateway,
     request: ReviewAiNodeRequest<'_>,
@@ -1301,8 +1364,10 @@ async fn execute_review_ai_node_with_context(
     }
 }
 
-fn artifact_input(artifact: &AcceptedNodeArtifact) -> deepref_review::AcceptedArtifactInput {
-    deepref_review::AcceptedArtifactInput {
+fn artifact_input(
+    artifact: &AcceptedNodeArtifact,
+) -> deepref_review::internal::AcceptedArtifactInput {
+    deepref_review::internal::AcceptedArtifactInput {
         artifact_id: artifact.artifact_id,
         content_hash: artifact.artifact_hash.clone(),
     }

@@ -3,6 +3,10 @@ ARG DEBIAN_BASE_REPOSITORY="docker.io/library/debian"
 
 FROM ${RUST_BASE_REPOSITORY}@sha256:6258907abe69656e41cd992e0b705cdcfabcbbe3db374f92ed2d47121282d4a1 AS builder
 
+ARG OCI_REVISION="local"
+ARG GIT_TREE_HASH="local"
+ENV DEEPREF_BUILD_SHA="${OCI_REVISION}:${GIT_TREE_HASH}"
+
 WORKDIR /build
 
 COPY Cargo.toml Cargo.lock ./

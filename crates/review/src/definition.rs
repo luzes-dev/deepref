@@ -46,6 +46,52 @@ impl CompiledReviewDefinition {
         self.system_prompt.trim()
     }
 
+    pub fn transition(
+        &self,
+        node_id: &str,
+        signal: ReviewTransitionSignal,
+    ) -> Result<&str, ReviewError> {
+        let node = self
+            .workflow
+            .nodes
+            .iter()
+            .find(|node| node.id == node_id)
+            .ok_or_else(|| ReviewError::InvalidWorkflow(format!("unknown node {node_id}")))?;
+        let predicate = signal.predicate();
+        let mut matches = node
+            .transitions
+            .iter()
+            .filter(|transition| transition.predicate == predicate);
+        let target = matches.next().ok_or_else(|| {
+            ReviewError::InvalidWorkflow(format!(
+                "node {node_id} has no transition for {}",
+                signal.as_str()
+            ))
+        })?;
+        if matches.next().is_some() {
+            return Err(ReviewError::InvalidWorkflow(format!(
+                "node {node_id} has duplicate transitions for {}",
+                signal.as_str()
+            )));
+        }
+        Ok(&target.to)
+    }
+
+    pub fn repair_budget(&self, node_id: &str) -> Result<u8, ReviewError> {
+        let node = self
+            .workflow
+            .nodes
+            .iter()
+            .find(|node| node.id == node_id)
+            .ok_or_else(|| ReviewError::InvalidWorkflow(format!("unknown node {node_id}")))?;
+        match node.operation {
+            ReviewNodeKind::SemanticRepair { max_cycles } => Ok(max_cycles),
+            _ => Err(ReviewError::InvalidWorkflow(format!(
+                "node {node_id} is not semantic repair"
+            ))),
+        }
+    }
+
     pub(crate) fn accepts_task(&self, task: AiTaskKind) -> bool {
         match self.key {
             ReviewDefinitionKey::Screening => matches!(
@@ -138,7 +184,7 @@ struct ReviewTransition {
     to: String,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 enum ReviewTransitionPredicate {
     Always,
@@ -152,6 +198,55 @@ enum ReviewTransitionPredicate {
     AuditRepairable,
     RepairReady,
     RepairExhausted,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReviewTransitionSignal {
+    Always,
+    Valid,
+    Invalid,
+    NeedsIndependentScreen,
+    PrimaryAccepted,
+    Agreement,
+    Disagreement,
+    AuditPassed,
+    AuditRepairable,
+    RepairReady,
+    RepairExhausted,
+}
+
+impl ReviewTransitionSignal {
+    const fn predicate(self) -> ReviewTransitionPredicate {
+        match self {
+            Self::Always => ReviewTransitionPredicate::Always,
+            Self::Valid => ReviewTransitionPredicate::Valid,
+            Self::Invalid => ReviewTransitionPredicate::Invalid,
+            Self::NeedsIndependentScreen => ReviewTransitionPredicate::NeedsIndependentScreen,
+            Self::PrimaryAccepted => ReviewTransitionPredicate::PrimaryAccepted,
+            Self::Agreement => ReviewTransitionPredicate::Agreement,
+            Self::Disagreement => ReviewTransitionPredicate::Disagreement,
+            Self::AuditPassed => ReviewTransitionPredicate::AuditPassed,
+            Self::AuditRepairable => ReviewTransitionPredicate::AuditRepairable,
+            Self::RepairReady => ReviewTransitionPredicate::RepairReady,
+            Self::RepairExhausted => ReviewTransitionPredicate::RepairExhausted,
+        }
+    }
+
+    const fn as_str(self) -> &'static str {
+        match self {
+            Self::Always => "always",
+            Self::Valid => "valid",
+            Self::Invalid => "invalid",
+            Self::NeedsIndependentScreen => "needs_independent_screen",
+            Self::PrimaryAccepted => "primary_accepted",
+            Self::Agreement => "agreement",
+            Self::Disagreement => "disagreement",
+            Self::AuditPassed => "audit_passed",
+            Self::AuditRepairable => "audit_repairable",
+            Self::RepairReady => "repair_ready",
+            Self::RepairExhausted => "repair_exhausted",
+        }
+    }
 }
 
 #[derive(Serialize)]
@@ -295,7 +390,14 @@ fn validate_workflow(
     }
 
     for node in &workflow.nodes {
+        let mut predicates = BTreeSet::new();
         for transition in &node.transitions {
+            if !predicates.insert(transition.predicate) {
+                return Err(ReviewError::InvalidWorkflow(format!(
+                    "node {} has duplicate transition predicates",
+                    node.id
+                )));
+            }
             if !nodes.contains_key(transition.to.as_str()) {
                 return Err(ReviewError::InvalidWorkflow(format!(
                     "node {} targets unknown node {}",
@@ -478,10 +580,11 @@ fn source(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{
-        ReviewManifestInput, ReviewModelIdentity, ReviewOrigin, ReviewRunManifest,
-        ReviewRuntimeIdentity, ReviewSubject, fingerprint_node,
+    use crate::manifest::{
+        ReviewManifestInput, ReviewModelIdentity, ReviewRunManifest, ReviewRuntimeIdentity,
+        fingerprint_node,
     };
+    use crate::{ReviewOrigin, ReviewSubject};
     use deepref_ai::ModelProfile;
     use deepref_domain::{ProjectId, RecordId, ReportId};
     use uuid::Uuid;
@@ -508,6 +611,49 @@ mod tests {
           "nodes":[
             {"id":"prepare","version":1,"operation":{"kind":"prepare"},"transitions":[{"predicate":"invented","to":"prepare"}]},
             {"id":"prepare","version":1,"operation":{"kind":"finalize"}}
+          ]
+        }"#;
+        assert!(matches!(
+            compile_definition(source),
+            Err(ReviewError::InvalidWorkflow(_))
+        ));
+    }
+
+    #[test]
+    fn compiled_transitions_are_typed_and_duplicate_predicates_are_rejected() {
+        let screening = ReviewCatalog
+            .compile(ReviewDefinitionKey::Screening)
+            .expect("screening definition compiles");
+        assert_eq!(
+            screening
+                .transition("prepare", ReviewTransitionSignal::Always)
+                .expect("prepare transition exists"),
+            "primary_screen"
+        );
+        assert_eq!(
+            screening
+                .transition("semantic_repair", ReviewTransitionSignal::RepairReady)
+                .expect("repair transition exists"),
+            "validate_repair"
+        );
+        assert_eq!(
+            screening
+                .repair_budget("semantic_repair")
+                .expect("repair budget exists"),
+            2
+        );
+
+        let mut source = valid_definition();
+        source.workflow.content = r#"{
+          "id":"deepref.duplicate-detection","version":1,"entrypoint":"prepare",
+          "nodes":[
+            {"id":"prepare","version":1,"operation":{"kind":"prepare"},"transitions":[
+              {"predicate":"always","to":"generate"},{"predicate":"always","to":"finalize"}
+            ]},
+            {"id":"generate","version":1,"operation":{"kind":"generate","task":"duplicate_candidate_detection"},"transitions":[{"predicate":"always","to":"validate"}]},
+            {"id":"validate","version":1,"operation":{"kind":"validate"},"transitions":[{"predicate":"valid","to":"assemble"}]},
+            {"id":"assemble","version":1,"operation":{"kind":"assemble"},"transitions":[{"predicate":"always","to":"finalize"}]},
+            {"id":"finalize","version":1,"operation":{"kind":"finalize"}}
           ]
         }"#;
         assert!(matches!(

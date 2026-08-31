@@ -5,12 +5,13 @@ use deepref_ai::{
 use deepref_application::BuiltInAutomationRecipe;
 use deepref_domain::ProjectId;
 use deepref_review::{
-    AcceptedArtifactInput, ReviewBlockCode, ReviewCatalog, ReviewDefinitionKey, ReviewError,
-    ReviewHash, ReviewManifestInput, ReviewModelIdentity, ReviewOrigin, ReviewRunId,
-    ReviewRunManifest, ReviewRunSnapshot, ReviewRunState, ReviewRuntimeIdentity, ReviewSubject,
-    ScheduleReviewRun,
+    ReviewBlockCode, ReviewDefinitionKey, ReviewError, ReviewOrigin, ReviewRunId,
+    ReviewRunSnapshot, ReviewRunState, ReviewSubject, ScheduleReviewRun,
     execution::{ExecutedReviewTask, PreparedReviewTask},
-    fingerprint_node,
+    internal::{
+        AcceptedArtifactInput, ReviewCatalog, ReviewHash, ReviewManifestInput, ReviewModelIdentity,
+        ReviewRunManifest, ReviewRuntimeIdentity, fingerprint_node,
+    },
 };
 use serde_json::Value;
 use sqlx::{PgPool, Postgres, Row, Transaction, postgres::PgRow};
@@ -368,7 +369,7 @@ async fn finish_review_run(
 pub async fn begin_review_attempt(
     pool: &PgPool,
     run: &LeasedReviewRun,
-    definition: &deepref_review::CompiledReviewDefinition,
+    definition: &deepref_review::internal::CompiledReviewDefinition,
     node_id: &str,
     predecessors: &[AcceptedArtifactInput],
     worker_id: &str,
@@ -793,6 +794,11 @@ fn runtime_identity() -> ReviewRuntimeIdentity {
                 include_str!("../../review/src/execution.rs"),
                 include_str!("../../review/src/manifest.rs"),
                 include_str!("../../review/src/task.rs"),
+                include_str!("../../ai/src/runner.rs"),
+                include_str!("../../ai/src/screening.rs"),
+                include_str!("../../ai/src/dedupe.rs"),
+                include_str!("../../ai/src/classification.rs"),
+                include_str!("../../ai/src/review_assistance.rs"),
                 include_str!("../../../services/worker/src/processor.rs"),
             ))
         },
