@@ -305,6 +305,86 @@ async fn blind_screening_disagreement_blocks_without_exposing_primary_output() {
 }
 
 #[tokio::test]
+async fn candidate_audit_cannot_replace_the_validated_screening_candidate() {
+    let _guard = test_lock().lock().await;
+    let Some(pool) = database().await else { return };
+    let (project_id, report_id, criterion_id, title) = setup(&pool).await;
+    let provider = format!("candidate-audit-provider-{}", Uuid::new_v4());
+    deepref_postgres::insert_model_route(&pool, &route(&provider), Utc::now())
+        .await
+        .expect("model route inserts");
+    let protocol_id: Uuid = sqlx::query_scalar(
+        "SELECT id FROM protocol_versions WHERE project_id=$1 AND status='published'",
+    )
+    .bind(project_id)
+    .fetch_one(&pool)
+    .await
+    .expect("protocol id");
+    let evidence = serde_json::json!({
+        "kind": "report_metadata",
+        "report_id": report_id,
+        "field": "title",
+        "content_hash": sha256_bytes(title.as_bytes())
+    });
+    let output = |rationale: &str| {
+        serde_json::json!({
+            "report_id": report_id,
+            "expected_revision": 0,
+            "stage": "title_abstract",
+            "protocol_version_id": protocol_id,
+            "criteria": [{
+                "criterion_id": criterion_id,
+                "judgment": "unclear",
+                "rationale": rationale,
+                "evidence": [evidence.clone()]
+            }],
+            "suggested_decision": {"kind": "maybe"},
+            "uncertainties": []
+        })
+        .to_string()
+    };
+    let gateway = SequencedGateway {
+        outputs: Arc::new(Mutex::new(VecDeque::from([
+            output("PRIMARY-CANDIDATE"),
+            output("AUDIT-MUST-NOT-REPLACE-CANDIDATE"),
+        ]))),
+        requests: Arc::new(Mutex::new(Vec::new())),
+    };
+
+    let response = generate(
+        &pool,
+        project_id,
+        report_id,
+        TestGateway {
+            output: "{}".to_owned(),
+            fail: false,
+            calls: Arc::new(Mutex::new(0)),
+            evidence_block_ids: Arc::new(Mutex::new(Vec::new())),
+            requests: Arc::new(Mutex::new(Vec::new())),
+        },
+    )
+    .await;
+    let body = response_json(response).await;
+    let run_id = body["id"].as_str().expect("run id").parse().expect("UUID");
+    assert_eq!(
+        process_review_run(&pool, run_id, gateway, false).await,
+        DeliveryAction::Ack
+    );
+    let payload: serde_json::Value = sqlx::query_scalar(
+        "SELECT payload FROM ai_proposals WHERE project_id=$1 ORDER BY created_at DESC LIMIT 1",
+    )
+    .bind(project_id)
+    .fetch_one(&pool)
+    .await
+    .expect("screening proposal payload");
+    assert_eq!(payload["criteria"][0]["rationale"], "PRIMARY-CANDIDATE");
+    assert_eq!(payload["suggested_decision"]["kind"], "maybe");
+    assert_eq!(payload["expected_revision"], 0);
+    assert_eq!(payload["protocol_version_id"], protocol_id.to_string());
+    cleanup_project(&pool, project_id, report_id).await;
+}
+
+#[tokio::test]
 async fn changed_screening_revision_blocks_finalization_without_a_proposal() {
     let _guard = test_lock().lock().await;
     let Some(pool) = database().await else { return };

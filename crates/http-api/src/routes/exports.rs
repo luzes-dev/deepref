@@ -854,6 +854,189 @@ async fn audit_csv(state: &AppState, project_id: Uuid) -> Result<String, ApiErro
                  AND a.parent_automation_run_id = r.id
              ) AS ai_usage ON true
              WHERE s.project_id = $1
+             UNION ALL
+             SELECT m.automation_run_id, m.created_at,
+                    'review_run_manifest' AS event_type,
+                    'review_run' AS aggregate_type,
+                    m.automation_run_id AS aggregate_id,
+                    r.actor_kind, r.actor_id, NULL::uuid AS protocol_version_id,
+                    m.definition_key AS stage, NULL::text AS decision,
+                    NULL::uuid AS reason_id, 'immutable_manifest'::text AS event_kind,
+                    NULL::uuid AS supersedes_event_id, NULL::uuid AS undoes_event_id,
+                    '{}'::jsonb AS previous_snapshot,
+                    jsonb_strip_nulls(jsonb_build_object(
+                      'state', m.state,
+                      'state_code', m.state_code,
+                      'state_message', m.state_message,
+                      'candidate_hash', m.candidate_hash,
+                      'proposal_id', m.proposal_id,
+                      'started_at', m.started_at,
+                      'finished_at', m.finished_at
+                    )) AS result_snapshot,
+                    m.state_message AS notes,
+                    jsonb_build_object(
+                      'definition_key', m.definition_key,
+                      'definition_id', m.definition_id,
+                      'definition_version', m.definition_version,
+                      'manifest_hash', m.manifest_hash,
+                      'semantic_bundle_hash', m.semantic_bundle_hash,
+                      'manifest', m.manifest,
+                      'subject', m.subject,
+                      'origin', m.origin
+                    ) AS payload,
+                    jsonb_strip_nulls(jsonb_build_object(
+                      'project_id', m.project_id,
+                      'automation_run_id', m.automation_run_id,
+                      'proposal_id', m.proposal_id,
+                      'calibration_bundle_id', m.origin->>'calibration_bundle_id',
+                      'provenance_kind', 'review_run_manifest'
+                    )) AS provenance
+             FROM review_run_manifests AS m
+             JOIN automation_runs AS r
+               ON r.project_id=m.project_id AND r.id=m.automation_run_id
+             WHERE m.project_id=$1
+             UNION ALL
+             SELECT a.id, a.started_at, 'review_step_attempt' AS event_type,
+                    'review_step_attempt' AS aggregate_type, a.id AS aggregate_id,
+                    NULL::text AS actor_kind, a.worker_id AS actor_id,
+                    NULL::uuid AS protocol_version_id, a.node_id AS stage,
+                    NULL::text AS decision, NULL::uuid AS reason_id,
+                    a.status AS event_kind, NULL::uuid AS supersedes_event_id,
+                    NULL::uuid AS undoes_event_id, '{}'::jsonb AS previous_snapshot,
+                    jsonb_strip_nulls(jsonb_build_object(
+                      'status', a.status,
+                      'artifact_id', a.artifact_id,
+                      'model_run_id', a.model_run_id,
+                      'error_code', a.error_code,
+                      'error_message', a.error_message,
+                      'finished_at', a.finished_at,
+                      'accepted_at', a.accepted_at
+                    )) AS result_snapshot,
+                    a.error_message AS notes,
+                    jsonb_strip_nulls(jsonb_build_object(
+                      'automation_run_id', a.automation_run_id,
+                      'node_id', a.node_id,
+                      'node_version', a.node_version,
+                      'attempt_number', a.attempt_number,
+                      'input_fingerprint', a.input_fingerprint,
+                      'status', a.status,
+                      'worker_id', a.worker_id,
+                      'artifact_id', a.artifact_id,
+                      'model_run_id', a.model_run_id
+                    )) AS payload,
+                    jsonb_strip_nulls(jsonb_build_object(
+                      'project_id', a.project_id,
+                      'automation_run_id', a.automation_run_id,
+                      'attempt_id', a.id,
+                      'artifact_id', a.artifact_id,
+                      'model_run_id', a.model_run_id,
+                      'predecessor_artifact_ids', COALESCE(lineage.predecessors, '[]'::jsonb),
+                      'provenance_kind', 'review_step_attempt'
+                    )) AS provenance
+             FROM review_step_attempts AS a
+             LEFT JOIN LATERAL (
+               SELECT jsonb_agg(l.predecessor_artifact_id ORDER BY l.predecessor_artifact_id)
+                        AS predecessors
+               FROM review_artifact_lineage AS l
+               WHERE l.project_id=a.project_id AND l.artifact_id=a.artifact_id
+             ) AS lineage ON true
+             WHERE a.project_id=$1
+             UNION ALL
+             SELECT artifact.id, artifact.created_at, 'review_artifact' AS event_type,
+                    'review_artifact' AS aggregate_type, artifact.id AS aggregate_id,
+                    NULL::text AS actor_kind, NULL::text AS actor_id,
+                    NULL::uuid AS protocol_version_id, artifact.media_type AS stage,
+                    NULL::text AS decision, NULL::uuid AS reason_id,
+                    'content_addressed'::text AS event_kind,
+                    NULL::uuid AS supersedes_event_id, NULL::uuid AS undoes_event_id,
+                    '{}'::jsonb AS previous_snapshot,
+                    jsonb_build_object(
+                      'content_hash', artifact.content_hash,
+                      'media_type', artifact.media_type
+                    ) AS result_snapshot,
+                    NULL::text AS notes,
+                    jsonb_build_object(
+                      'content_hash', artifact.content_hash,
+                      'media_type', artifact.media_type
+                    ) AS payload,
+                    jsonb_build_object(
+                      'project_id', artifact.project_id,
+                      'artifact_id', artifact.id,
+                      'predecessor_artifact_ids', COALESCE(lineage.predecessors, '[]'::jsonb),
+                      'provenance_kind', 'review_artifact_lineage'
+                    ) AS provenance
+             FROM review_artifacts AS artifact
+             LEFT JOIN LATERAL (
+               SELECT jsonb_agg(l.predecessor_artifact_id ORDER BY l.predecessor_artifact_id)
+                        AS predecessors
+               FROM review_artifact_lineage AS l
+               WHERE l.project_id=artifact.project_id AND l.artifact_id=artifact.id
+             ) AS lineage ON true
+             WHERE artifact.project_id=$1
+             UNION ALL
+             SELECT c.id, c.created_at, 'review_calibration_bundle' AS event_type,
+                    'review_calibration_bundle' AS aggregate_type, c.id AS aggregate_id,
+                    NULL::text AS actor_kind,
+                    c.reviewer_metadata->>'reviewer_id' AS actor_id,
+                    NULL::uuid AS protocol_version_id, c.definition_key AS stage,
+                    c.status AS decision, NULL::uuid AS reason_id,
+                    'immutable_calibration'::text AS event_kind,
+                    NULL::uuid AS supersedes_event_id, NULL::uuid AS undoes_event_id,
+                    '{}'::jsonb AS previous_snapshot,
+                    jsonb_build_object(
+                      'status', c.status,
+                      'metrics', c.metrics,
+                      'evaluated_at', c.evaluated_at
+                    ) AS result_snapshot,
+                    NULL::text AS notes,
+                    jsonb_build_object(
+                      'definition_key', c.definition_key,
+                      'semantic_bundle_hash', c.semantic_bundle_hash,
+                      'evaluation_set_id', c.evaluation_set_id,
+                      'thresholds', c.thresholds,
+                      'metrics', c.metrics,
+                      'reviewer_metadata', c.reviewer_metadata,
+                      'status', c.status,
+                      'evaluated_at', c.evaluated_at
+                    ) AS payload,
+                    jsonb_build_object(
+                      'project_id', c.project_id,
+                      'calibration_bundle_id', c.id,
+                      'semantic_bundle_hash', c.semantic_bundle_hash,
+                      'provenance_kind', 'review_calibration_bundle'
+                    ) AS provenance
+             FROM review_calibration_bundles AS c
+             WHERE c.project_id=$1
+             UNION ALL
+             SELECT p.id, p.resolved_at, 'reviewer_proposal_decision' AS event_type,
+                    'ai_proposal' AS aggregate_type, p.id AS aggregate_id,
+                    p.resolved_by_actor_kind AS actor_kind,
+                    p.resolved_by_actor_id AS actor_id,
+                    p.protocol_version_id, p.task_kind AS stage,
+                    p.status AS decision, NULL::uuid AS reason_id,
+                    'reviewer_decision'::text AS event_kind,
+                    NULL::uuid AS supersedes_event_id, NULL::uuid AS undoes_event_id,
+                    jsonb_build_object('status', 'pending') AS previous_snapshot,
+                    jsonb_build_object(
+                      'status', p.status,
+                      'resolved_at', p.resolved_at
+                    ) AS result_snapshot,
+                    p.resolution_reason AS notes,
+                    jsonb_build_object(
+                      'proposal_id', p.id,
+                      'status', p.status,
+                      'resolution_reason', p.resolution_reason
+                    ) AS payload,
+                    jsonb_build_object(
+                      'project_id', p.project_id,
+                      'proposal_id', p.id,
+                      'model_run_id', p.model_run_id,
+                      'reviewer_actor_kind', p.resolved_by_actor_kind,
+                      'reviewer_actor_id', p.resolved_by_actor_id,
+                      'provenance_kind', 'reviewer_proposal_decision'
+                    ) AS provenance
+             FROM ai_proposals AS p
+             WHERE p.project_id=$1 AND p.resolved_at IS NOT NULL
            ) events
            ORDER BY created_at, id, event_type
            LIMIT $2"#,

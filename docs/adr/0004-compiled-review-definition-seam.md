@@ -26,7 +26,17 @@ workflow graphs, prompt text, or scientific write tools.
 
 The run origin distinguishes reviewer-requested execution from calibrated
 automation. Both origins can create proposals only; calibration does not grant
-scientific authority.
+scientific authority. Automation-triggered consequential runs require an
+immutable, passing calibration bundle whose semantic-bundle hash exactly
+matches the compiled manifest. The small checked-in evaluation set remains a
+CI regression fixture and cannot authorize production automation.
+
+The seam fails closed. Missing assets or invalid workflow transitions prevent
+definition compilation; stale subject or protocol revisions block
+finalization; missing, failed, or stale calibration rejects automated
+scheduling; screening disagreement requires human adjudication; and exhausted
+semantic repair produces a terminal blocked state. Failed or running attempts
+never reserve reuse, and finalization is unique by run and candidate hash.
 
 ## Consequences
 
@@ -38,3 +48,6 @@ scientific authority.
   subject variant rather than route-specific orchestration.
 - The TypeScript workflow project is an architectural reference, not a runtime
   dependency or sidecar.
+- Audit exports include manifests, immutable attempts, content-addressed
+  lineage, calibration evidence, linked AI runs, proposals, and explicit final
+  reviewer decisions while redacting raw model and proposal payloads.

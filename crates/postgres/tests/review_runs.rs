@@ -5,20 +5,28 @@ use deepref_ai::{
 };
 use deepref_domain::{Actor, ActorKind, ProjectId};
 use deepref_postgres::{
-    PostgresAiStore, PostgresReviewError, PreparedReviewRun, ReviewAttemptCompletion,
-    ReviewAttemptStart, ReviewFinalization, begin_review_attempt, complete_review_attempt,
+    PostgresAiStore, PostgresReviewError, PostgresReviewScheduler, PreparedReviewRun,
+    ReviewAttemptCompletion, ReviewAttemptStart, ReviewCalibrationBundleInput,
+    ReviewCalibrationStatus, ReviewFinalization, begin_review_attempt, complete_review_attempt,
     fail_review_attempt, finalize_review_proposal, get_review_run, insert_model_route,
-    load_leased_review_run, mark_review_run_running, migrate, schedule_prepared_review_run,
+    insert_review_calibration_bundle, load_leased_review_run, mark_review_run_running, migrate,
+    schedule_prepared_review_run,
 };
 use deepref_review::{
-    AcceptedArtifactInput, ReviewCatalog, ReviewDefinitionKey, ReviewOrigin, ReviewRunState,
-    ScheduleReviewRun,
+    AcceptedArtifactInput, CalibrationBundleId, ReviewCatalog, ReviewDefinitionKey, ReviewHash,
+    ReviewOrigin, ReviewRunState, ReviewScheduler, ScheduleReviewRun,
     execution::{ExecutedReviewTask, PreparedReviewTask},
 };
 use sqlx::{PgPool, postgres::PgPoolOptions};
 use uuid::Uuid;
 
 static DATABASE_TEST_MUTEX: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+
+#[test]
+fn postgres_adapter_implements_the_public_review_scheduler_port() {
+    fn assert_scheduler<T: ReviewScheduler>() {}
+    assert_scheduler::<PostgresReviewScheduler>();
+}
 
 async fn database() -> Option<PgPool> {
     let url = std::env::var("DATABASE_URL").ok()?;
@@ -31,6 +39,191 @@ async fn database() -> Option<PgPool> {
         .await
         .expect("DATABASE_URL migrations must apply");
     Some(pool)
+}
+
+async fn schedule_with_origin(
+    pool: &PgPool,
+    project_id: ProjectId,
+    origin: ReviewOrigin,
+) -> Result<deepref_review::ReviewRunSnapshot, PostgresReviewError> {
+    let task = prepared_task(project_id);
+    let subject = task.subject();
+    schedule_prepared_review_run(
+        pool,
+        PreparedReviewRun {
+            command: ScheduleReviewRun {
+                project_id,
+                definition: ReviewDefinitionKey::DuplicateDetection,
+                subject,
+                origin,
+                actor: actor(),
+            },
+            task,
+        },
+    )
+    .await
+}
+
+#[tokio::test]
+async fn automation_reviews_require_an_exact_passing_immutable_calibration_bundle() {
+    let _guard = DATABASE_TEST_MUTEX.lock().await;
+    let Some(pool) = database().await else { return };
+    let project_id = ProjectId::new(Uuid::new_v4());
+    sqlx::query("INSERT INTO projects (id,name) VALUES ($1,'calibration admission')")
+        .bind(project_id.as_uuid())
+        .execute(&pool)
+        .await
+        .expect("project inserts");
+    insert_model_route(
+        &pool,
+        &ResolvedModel {
+            profile: ModelProfile::FastClassifier,
+            provider: format!("calibration-test-{}", Uuid::new_v4()),
+            model: "classifier".to_owned(),
+            model_version: "2026-08".to_owned(),
+            parameters: ModelParameters::default(),
+            route_id: None,
+        },
+        Utc::now(),
+    )
+    .await
+    .expect("route inserts");
+
+    let result = async {
+        let reviewer_run = schedule_with_origin(&pool, project_id, ReviewOrigin::ReviewerRequested)
+            .await
+            .expect("reviewer-requested runs do not require calibration");
+        let exact_hash: String = sqlx::query_scalar(
+            "SELECT semantic_bundle_hash FROM review_run_manifests
+             WHERE project_id=$1 AND automation_run_id=$2",
+        )
+        .bind(project_id.as_uuid())
+        .bind(reviewer_run.id.as_uuid())
+        .fetch_one(&pool)
+        .await
+        .expect("semantic bundle hash loads");
+        let exact_hash = ReviewHash::parse(exact_hash).expect("stored semantic hash is valid");
+
+        let missing_id = CalibrationBundleId::new(Uuid::new_v4()).expect("bundle id");
+        assert!(matches!(
+            schedule_with_origin(
+                &pool,
+                project_id,
+                ReviewOrigin::AutomationTriggered {
+                    calibration_bundle_id: missing_id,
+                },
+            )
+            .await,
+            Err(PostgresReviewError::CalibrationMissing)
+        ));
+
+        let failed_id = CalibrationBundleId::new(Uuid::new_v4()).expect("bundle id");
+        insert_review_calibration_bundle(
+            &pool,
+            ReviewCalibrationBundleInput {
+                id: failed_id,
+                project_id: project_id.as_uuid(),
+                definition: ReviewDefinitionKey::DuplicateDetection,
+                semantic_bundle_hash: exact_hash.clone(),
+                evaluation_set_id: "expert-adjudicated-v1".to_owned(),
+                thresholds: serde_json::json!({"precision": 0.99}),
+                metrics: serde_json::json!({"precision": 0.98}),
+                reviewer_metadata: serde_json::json!({"reviewer_ids": ["expert-1"]}),
+                status: ReviewCalibrationStatus::Failed,
+                evaluated_at: Utc::now(),
+            },
+        )
+        .await
+        .expect("failed calibration persists");
+        assert!(matches!(
+            schedule_with_origin(
+                &pool,
+                project_id,
+                ReviewOrigin::AutomationTriggered {
+                    calibration_bundle_id: failed_id,
+                },
+            )
+            .await,
+            Err(PostgresReviewError::CalibrationFailed)
+        ));
+
+        let stale_id = CalibrationBundleId::new(Uuid::new_v4()).expect("bundle id");
+        insert_review_calibration_bundle(
+            &pool,
+            ReviewCalibrationBundleInput {
+                id: stale_id,
+                project_id: project_id.as_uuid(),
+                definition: ReviewDefinitionKey::DuplicateDetection,
+                semantic_bundle_hash: ReviewHash::parse("c".repeat(64)).expect("stale hash"),
+                evaluation_set_id: "expert-adjudicated-v1".to_owned(),
+                thresholds: serde_json::json!({"precision": 0.99}),
+                metrics: serde_json::json!({"precision": 1.0}),
+                reviewer_metadata: serde_json::json!({"reviewer_ids": ["expert-1"]}),
+                status: ReviewCalibrationStatus::Passing,
+                evaluated_at: Utc::now(),
+            },
+        )
+        .await
+        .expect("stale calibration persists");
+        assert!(matches!(
+            schedule_with_origin(
+                &pool,
+                project_id,
+                ReviewOrigin::AutomationTriggered {
+                    calibration_bundle_id: stale_id,
+                },
+            )
+            .await,
+            Err(PostgresReviewError::CalibrationStale)
+        ));
+
+        let passing_id = CalibrationBundleId::new(Uuid::new_v4()).expect("bundle id");
+        insert_review_calibration_bundle(
+            &pool,
+            ReviewCalibrationBundleInput {
+                id: passing_id,
+                project_id: project_id.as_uuid(),
+                definition: ReviewDefinitionKey::DuplicateDetection,
+                semantic_bundle_hash: exact_hash,
+                evaluation_set_id: "expert-adjudicated-v1".to_owned(),
+                thresholds: serde_json::json!({"precision": 0.99}),
+                metrics: serde_json::json!({"precision": 1.0}),
+                reviewer_metadata: serde_json::json!({"reviewer_ids": ["expert-1"]}),
+                status: ReviewCalibrationStatus::Passing,
+                evaluated_at: Utc::now(),
+            },
+        )
+        .await
+        .expect("passing calibration persists");
+        let automated = schedule_with_origin(
+            &pool,
+            project_id,
+            ReviewOrigin::AutomationTriggered {
+                calibration_bundle_id: passing_id,
+            },
+        )
+        .await
+        .expect("exact passing calibration admits automation");
+        assert!(matches!(automated.state, ReviewRunState::Queued));
+
+        let immutable = sqlx::query(
+            "UPDATE review_calibration_bundles SET status='failed'
+             WHERE project_id=$1 AND id=$2",
+        )
+        .bind(project_id.as_uuid())
+        .bind(passing_id.as_uuid())
+        .execute(&pool)
+        .await;
+        assert!(immutable.is_err());
+    }
+    .await;
+
+    sqlx::query("DELETE FROM projects WHERE id=$1")
+        .bind(project_id.as_uuid())
+        .execute(&pool)
+        .await
+        .expect("fixtures clean up");
+    result
 }
 
 fn actor() -> Actor {

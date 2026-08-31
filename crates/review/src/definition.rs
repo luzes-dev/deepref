@@ -478,6 +478,13 @@ fn source(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::{
+        ReviewManifestInput, ReviewModelIdentity, ReviewOrigin, ReviewRunManifest,
+        ReviewRuntimeIdentity, ReviewSubject, fingerprint_node,
+    };
+    use deepref_ai::ModelProfile;
+    use deepref_domain::{ProjectId, RecordId, ReportId};
+    use uuid::Uuid;
 
     fn valid_definition() -> DefinitionSource {
         definition_source(ReviewDefinitionKey::DuplicateDetection)
@@ -526,21 +533,80 @@ mod tests {
         ));
     }
 
+    fn manifest_input() -> ReviewManifestInput {
+        ReviewManifestInput {
+            project_id: ProjectId::new(Uuid::from_u128(1)),
+            subject: ReviewSubject::DuplicateDetection {
+                record_id: RecordId::new(Uuid::from_u128(2)),
+                candidate_report_id: ReportId::new(Uuid::from_u128(3)),
+            },
+            origin: ReviewOrigin::ReviewerRequested,
+            protocol_version_id: None,
+            protocol_hash: ReviewHash::digest_bytes(b"protocol"),
+            source_manifest_hash: ReviewHash::digest_bytes(b"source-manifest"),
+            source_content_hash: ReviewHash::digest_bytes(b"source-content"),
+            resolved_models: vec![ReviewModelIdentity {
+                profile: ModelProfile::FastClassifier,
+                provider: "fixture".to_owned(),
+                model: "classifier".to_owned(),
+                model_version: "v1".to_owned(),
+                parameters_hash: ReviewHash::digest_bytes(b"parameters"),
+            }],
+            runtime: ReviewRuntimeIdentity {
+                build_sha: ReviewHash::digest_bytes(b"build"),
+                rust_version: "1.91".to_owned(),
+                target: "test".to_owned(),
+            },
+        }
+    }
+
+    fn changed_content(content: &'static str) -> &'static str {
+        Box::leak(format!(" {content}").into_boxed_str())
+    }
+
     #[test]
-    fn asset_content_changes_definition_identity() {
+    fn every_definition_asset_change_invalidates_semantics_and_node_reuse() {
         let source = valid_definition();
         let original = compile_definition(source).expect("definition should compile");
-        let mut changed = source;
-        changed.prompt.content = "changed prompt";
-        let changed = compile_definition(changed).expect("changed definition should compile");
-        assert_ne!(
-            original.identity().declared_assets_hash,
-            changed.identity().declared_assets_hash
-        );
-        assert_ne!(
-            original.identity().prompt_bundle_hash,
-            changed.identity().prompt_bundle_hash
-        );
+        let input = manifest_input();
+        let original_manifest = ReviewRunManifest::build(&original, input.clone())
+            .expect("original manifest should build");
+        let original_fingerprint = fingerprint_node(&original, &original_manifest, "generate", &[])
+            .expect("original fingerprint should build");
+
+        for asset in ["workflow", "prompt", "schema", "policy", "parser"] {
+            let mut changed_source = source;
+            match asset {
+                "workflow" => {
+                    changed_source.workflow.content = changed_content(source.workflow.content)
+                }
+                "prompt" => changed_source.prompt.content = changed_content(source.prompt.content),
+                "schema" => changed_source.schema.content = changed_content(source.schema.content),
+                "policy" => changed_source.policy.content = changed_content(source.policy.content),
+                "parser" => changed_source.parser.content = changed_content(source.parser.content),
+                _ => unreachable!(),
+            }
+            let changed = compile_definition(changed_source)
+                .unwrap_or_else(|error| panic!("changed {asset} should compile: {error}"));
+            let changed_manifest = ReviewRunManifest::build(&changed, input.clone())
+                .unwrap_or_else(|error| panic!("changed {asset} manifest should build: {error}"));
+            let changed_fingerprint =
+                fingerprint_node(&changed, &changed_manifest, "generate", &[])
+                    .expect("changed fingerprint should build");
+            assert_ne!(
+                original.identity().declared_assets_hash,
+                changed.identity().declared_assets_hash,
+                "{asset} must invalidate compiled identity"
+            );
+            assert_ne!(
+                original_manifest.semantic_bundle_hash, changed_manifest.semantic_bundle_hash,
+                "{asset} must invalidate semantic bundle"
+            );
+            assert_ne!(
+                original_fingerprint, changed_fingerprint,
+                "{asset} must invalidate node reuse"
+            );
+        }
     }
 
     #[test]

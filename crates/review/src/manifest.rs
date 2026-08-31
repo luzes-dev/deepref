@@ -348,6 +348,27 @@ mod tests {
         .expect("manifest should build")
     }
 
+    fn rebuild(
+        definition: &CompiledReviewDefinition,
+        manifest: ReviewRunManifest,
+    ) -> ReviewRunManifest {
+        ReviewRunManifest::build(
+            definition,
+            ReviewManifestInput {
+                project_id: manifest.project_id,
+                subject: manifest.subject,
+                origin: manifest.origin,
+                protocol_version_id: manifest.protocol_version_id,
+                protocol_hash: manifest.protocol_hash,
+                source_manifest_hash: manifest.source_manifest_hash,
+                source_content_hash: manifest.source_content_hash,
+                resolved_models: manifest.resolved_models,
+                runtime: manifest.runtime,
+            },
+        )
+        .expect("manifest should rebuild")
+    }
+
     #[test]
     fn source_changes_manifest_but_not_semantic_bundle() {
         let definition = ReviewCatalog
@@ -402,6 +423,42 @@ mod tests {
             .expect("fingerprint should build");
         assert_eq!(forward, reverse);
         assert_ne!(forward, other_node);
+    }
+
+    #[test]
+    fn protocol_model_and_runtime_changes_invalidate_semantics_and_node_reuse() {
+        let definition = ReviewCatalog
+            .compile(ReviewDefinitionKey::Screening)
+            .expect("definition should compile");
+        let original = manifest(&definition);
+        let original_fingerprint = fingerprint_node(&definition, &original, "prepare", &[])
+            .expect("fingerprint should build");
+
+        let mut variants = Vec::new();
+        let mut protocol = original.clone();
+        protocol.protocol_hash = hash("changed-protocol");
+        variants.push(("protocol", rebuild(&definition, protocol)));
+
+        let mut model = original.clone();
+        model.resolved_models[0].model_version = "v2".to_owned();
+        variants.push(("resolved model", rebuild(&definition, model)));
+
+        let mut runtime = original.clone();
+        runtime.runtime.build_sha = hash("changed-build");
+        variants.push(("runtime build", rebuild(&definition, runtime)));
+
+        for (identity, changed) in variants {
+            let changed_fingerprint = fingerprint_node(&definition, &changed, "prepare", &[])
+                .expect("changed fingerprint should build");
+            assert_ne!(
+                original.semantic_bundle_hash, changed.semantic_bundle_hash,
+                "{identity} must invalidate the semantic bundle"
+            );
+            assert_ne!(
+                original_fingerprint, changed_fingerprint,
+                "{identity} must invalidate node reuse"
+            );
+        }
     }
 
     #[test]

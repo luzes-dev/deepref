@@ -8,9 +8,8 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 use uuid::Uuid;
 
-use crate::CompiledReviewDefinition;
-
-pub type ReviewFuture<'a, T> = Pin<Box<dyn Future<Output = Result<T, ReviewError>> + Send + 'a>>;
+pub type ReviewFuture<'a, T, E = ReviewError> =
+    Pin<Box<dyn Future<Output = Result<T, E>> + Send + 'a>>;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -292,17 +291,18 @@ pub struct ReviewRunSnapshot {
 }
 
 pub trait ReviewScheduler: Send + Sync {
+    type Error;
+
     fn schedule<'a>(
         &'a self,
-        definition: &'a CompiledReviewDefinition,
         command: ScheduleReviewRun,
-    ) -> ReviewFuture<'a, ReviewRunSnapshot>;
+    ) -> ReviewFuture<'a, ReviewRunSnapshot, Self::Error>;
 
     fn get<'a>(
         &'a self,
         project_id: ProjectId,
         run_id: ReviewRunId,
-    ) -> ReviewFuture<'a, ReviewRunSnapshot>;
+    ) -> ReviewFuture<'a, ReviewRunSnapshot, Self::Error>;
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Error)]

@@ -1,9 +1,16 @@
-# PR13 acceptance note: AI appraisal, extraction, and study grouping
+# AI appraisal, extraction, and study-grouping acceptance
 
-This note records the three PR13 reviewer flows. AI output remains proposal-only: a human
-reviewer must inspect the evidence and explicitly accept or reject before scientific state changes.
-The PR13 validation gate is complete; this note records the evidence below. The wider plan and
-PR14/PR15 remain out of scope here and are not claimed complete.
+These three reviewer flows execute through the compiled `deepref-review` seam. The HTTP and
+assistant adapters schedule a checked-in definition, receive `202 Accepted`, and observe the
+durable review-run resource until it completes, blocks, or fails. AI output remains proposal-only:
+a human reviewer must inspect the evidence and explicitly accept or reject before scientific state
+changes.
+
+The fail-closed cases are part of acceptance: stale subject or protocol revisions block
+finalization; missing, failed, or stale calibration blocks automation-triggered runs; malformed or
+ungrounded model output fails a bounded step attempt; disagreement in screening requires human
+adjudication; and retries must reuse only an exact accepted fingerprint and create no duplicate
+proposal.
 
 ## Study grouping review
 
@@ -43,10 +50,11 @@ PR14/PR15 remain out of scope here and are not claimed complete.
   Accepted values refresh only after audited approval; grouping changes do not rewrite their study
   provenance. Rejection sends no `reviewed_payload`, and conflicts keep the proposal pending.
 
-## Endpoints used by the PR13 UI
+## Endpoints used by the UI
 
 - `GET /api/projects/:projectId/studies?limit=100`
 - `POST /api/projects/:projectId/reports/:reportId/ai/study-grouping`
+- `GET /api/projects/:projectId/review-runs/:runId`
 - `GET /api/projects/:projectId/ai/proposals?status=pending&task_kind=study_grouping&target_report_id=:reportId`
 - `POST /api/projects/:projectId/ai/proposals/:proposalId/decision`
 - `GET /api/projects/:projectId/appraisal-definitions`
@@ -62,14 +70,14 @@ PR14/PR15 remain out of scope here and are not claimed complete.
 
 ## Validation commands
 
-The completed acceptance evidence is:
+The acceptance gate is:
 
 - `pnpm --filter @deepref/web check` — 0 errors and 0 warnings from `svelte-check`.
 - Full Prettier and ESLint pass.
-- Vitest — 22 files and 71 tests passed.
-- Production build passed.
-- OpenAPI/Orval drift check passed.
-- Focused PR13 Playwright tests passed: six total (two Studies, two Appraisal, two Extraction).
+- Vitest passes.
+- The production build passes.
+- The OpenAPI/Orval drift check passes.
+- Focused Studies, Appraisal, and Extraction Playwright tests pass.
 - `git diff --check` passed.
 
 The corresponding commands are:

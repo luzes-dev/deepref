@@ -62,6 +62,14 @@ therefore share one interface while `deepref-ai` remains responsible for a
 single provider-neutral structured model call. See
 [ADR 0004](adr/0004-compiled-review-definition-seam.md).
 
+PostgreSQL stores one immutable compiled manifest per review run, immutable
+step attempts, content-addressed artifacts and predecessor lineage, accepted
+attempt pointers, and expert calibration bundles. Automation-triggered runs
+are admitted only when the selected bundle is passing and exactly matches the
+manifest semantic hash. HTTP and assistant callers receive an asynchronous
+review-run resource; only completed runs link to proposals, and reviewer
+domain commands remain the sole scientific-write authority.
+
 ## Runtime roles and shutdown
 
 `deepref-server serve` runs HTTP only. `deepref-server worker` runs the bounded PostgreSQL job executor. `deepref-server all` runs both roles in one process with coordinated shutdown. Hosted deployments package the same `deepref-server` binary for API and worker targets; local Process Compose supervises the API, worker, and web processes.

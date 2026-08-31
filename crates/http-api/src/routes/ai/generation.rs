@@ -1,4 +1,5 @@
 use super::*;
+use deepref_review::ReviewScheduler as _;
 
 #[utoipa::path(
     post,
@@ -163,9 +164,10 @@ pub(crate) async fn get_review_run(
 ) -> Result<Json<ReviewRunDto>, ApiError> {
     let run_id = deepref_review::ReviewRunId::new(run_id)
         .map_err(|error| ApiError::BadRequest(error.to_string()))?;
-    let snapshot = deepref_postgres::get_review_run(&state.pool, project_id.into(), run_id)
+    let snapshot = deepref_postgres::PostgresReviewScheduler::new(&state.pool)
+        .get(project_id.into(), run_id)
         .await
-        .map_err(map_postgres_review_error)?;
+        .map_err(map_review_preparation_error)?;
     Ok(Json(review_run_dto(snapshot)?))
 }
 
@@ -283,6 +285,21 @@ fn map_postgres_review_error(error: deepref_postgres::PostgresReviewError) -> Ap
         deepref_postgres::PostgresReviewError::FinalizationConflict => ApiError::Conflict {
             code: "review_finalization_conflict".to_owned(),
             message: "review proposal finalization conflicts with persisted state".to_owned(),
+            details: Value::Null,
+        },
+        deepref_postgres::PostgresReviewError::CalibrationMissing => ApiError::Conflict {
+            code: "calibration_missing".to_owned(),
+            message: error.to_string(),
+            details: Value::Null,
+        },
+        deepref_postgres::PostgresReviewError::CalibrationFailed => ApiError::Conflict {
+            code: "calibration_failed".to_owned(),
+            message: error.to_string(),
+            details: Value::Null,
+        },
+        deepref_postgres::PostgresReviewError::CalibrationStale => ApiError::Conflict {
+            code: "calibration_stale".to_owned(),
+            message: error.to_string(),
             details: Value::Null,
         },
     }

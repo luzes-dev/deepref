@@ -93,6 +93,10 @@ async fn postgres_exports_return_every_deterministic_attachment_and_boundary_sta
     let automation_job_id = Uuid::new_v4();
     let automation_run_id = Uuid::new_v4();
     let automation_step_id = Uuid::new_v4();
+    let review_attempt_id = Uuid::new_v4();
+    let review_artifact_id = Uuid::new_v4();
+    let review_predecessor_artifact_id = Uuid::new_v4();
+    let calibration_bundle_id = Uuid::new_v4();
     let other_project_id = Uuid::new_v4();
     let other_ai_run_id = Uuid::new_v4();
     let other_ai_proposal_id = Uuid::new_v4();
@@ -374,6 +378,83 @@ async fn postgres_exports_return_every_deterministic_attachment_and_boundary_sta
     .await
     .expect("AI proposal should insert");
     sqlx::query(
+        "INSERT INTO review_calibration_bundles
+         (id,project_id,definition_key,semantic_bundle_hash,evaluation_set_id,
+          thresholds,metrics,reviewer_metadata,status,evaluated_at)
+         VALUES ($1,$2,'screening',$3,'expert-export-v1',$4,$5,$6,'passing',now())",
+    )
+    .bind(calibration_bundle_id)
+    .bind(project_id)
+    .bind("6".repeat(64))
+    .bind(serde_json::json!({"false_exclusion_rate": 0.01}))
+    .bind(serde_json::json!({"false_exclusion_rate": 0.0}))
+    .bind(serde_json::json!({"reviewer_id": "expert-export-reviewer"}))
+    .execute(&pool)
+    .await
+    .expect("review calibration should insert");
+    sqlx::query(
+        "INSERT INTO review_run_manifests
+         (project_id,automation_run_id,definition_key,definition_id,definition_version,
+          manifest_hash,semantic_bundle_hash,manifest,subject,origin,prepared_task,state,
+          candidate_hash,proposal_id,started_at,finished_at)
+         VALUES ($1,$2,'screening','screening.v1',1,$3,$4,$5,$6,$7,$8,'completed',$9,$10,
+                 now()-interval '2 minutes',now()-interval '1 minute')",
+    )
+    .bind(project_id)
+    .bind(automation_run_id)
+    .bind("7".repeat(64))
+    .bind("6".repeat(64))
+    .bind(serde_json::json!({"manifest_hash": "review-export-manifest"}))
+    .bind(serde_json::json!({"kind": "screening", "report_id": report_id}))
+    .bind(serde_json::json!({"kind": "automation_triggered", "calibration_bundle_id": calibration_bundle_id}))
+    .bind(serde_json::json!({"kind": "screening"}))
+    .bind("8".repeat(64))
+    .bind(ai_proposal_id)
+    .execute(&pool)
+    .await
+    .expect("review manifest should insert");
+    sqlx::query(
+        "INSERT INTO review_artifacts (id,project_id,content_hash,media_type,payload)
+         VALUES ($1,$3,$4,'application/json',$6),
+                ($2,$3,$5,'application/json',$7)",
+    )
+    .bind(review_artifact_id)
+    .bind(review_predecessor_artifact_id)
+    .bind(project_id)
+    .bind("9".repeat(64))
+    .bind("a".repeat(64))
+    .bind(serde_json::json!({"candidate": "review-export"}))
+    .bind(serde_json::json!({"prepared": "review-export"}))
+    .execute(&pool)
+    .await
+    .expect("review artifacts should insert");
+    sqlx::query(
+        "INSERT INTO review_artifact_lineage
+         (project_id,artifact_id,predecessor_artifact_id) VALUES ($1,$2,$3)",
+    )
+    .bind(project_id)
+    .bind(review_artifact_id)
+    .bind(review_predecessor_artifact_id)
+    .execute(&pool)
+    .await
+    .expect("review artifact lineage should insert");
+    sqlx::query(
+        "INSERT INTO review_step_attempts
+         (id,project_id,automation_run_id,node_id,node_version,attempt_number,input_fingerprint,
+          status,worker_id,artifact_id,model_run_id,started_at,finished_at,accepted_at)
+         VALUES ($1,$2,$3,'finalize',1,1,$4,'completed','export-worker',$5,$6,
+                 now()-interval '2 minutes',now()-interval '1 minute',now()-interval '1 minute')",
+    )
+    .bind(review_attempt_id)
+    .bind(project_id)
+    .bind(automation_run_id)
+    .bind("b".repeat(64))
+    .bind(review_artifact_id)
+    .bind(ai_run_id)
+    .execute(&pool)
+    .await
+    .expect("review attempt should insert");
+    sqlx::query(
         "INSERT INTO ai_runs
          (id,project_id,task_kind,provider,model,prompt_version,input_hash,output,status,created_at,completed_at,
           profile,model_version,parameters,schema_version,prompt_hash,schema_hash,reuse_hash,evidence_refs,
@@ -556,6 +637,11 @@ async fn postgres_exports_return_every_deterministic_attachment_and_boundary_sta
                     "automation_run_snapshot",
                     "automation_job_snapshot",
                     "automation_step_snapshot",
+                    "review_run_manifest",
+                    "review_step_attempt",
+                    "review_artifact",
+                    "review_calibration_bundle",
+                    "reviewer_proposal_decision",
                 ] {
                     assert!(
                         body.contains(event_type),
@@ -577,11 +663,15 @@ async fn postgres_exports_return_every_deterministic_attachment_and_boundary_sta
                 for (expected_id, expected_count) in [
                     (ai_run_id, 1),
                     (failed_ai_run_id, 1),
-                    (ai_proposal_id, 1),
+                    (ai_proposal_id, 2),
                     (automation_definition_id, 1),
                     (automation_job_id, 1),
-                    (automation_run_id, 1),
+                    (automation_run_id, 2),
                     (automation_step_id, 1),
+                    (review_attempt_id, 1),
+                    (review_artifact_id, 1),
+                    (review_predecessor_artifact_id, 1),
+                    (calibration_bundle_id, 1),
                     (screening_event_id, 2),
                     (dedupe_event_id, 1),
                 ] {
@@ -611,8 +701,9 @@ async fn postgres_exports_return_every_deterministic_attachment_and_boundary_sta
                         "cross-project identifier {excluded_id} leaked"
                     );
                 }
-                assert_eq!(exported_ids.len(), 10);
-                assert_eq!(exported_ids.iter().collect::<HashSet<_>>().len(), 9);
+                assert_eq!(exported_ids.len(), 16);
+                assert_eq!(exported_ids.iter().collect::<HashSet<_>>().len(), 13);
+                assert!(body.contains(&review_predecessor_artifact_id.to_string()));
                 let ordered_keys: Vec<(DateTime<Utc>, Uuid, String)> = body
                     .lines()
                     .skip(1)

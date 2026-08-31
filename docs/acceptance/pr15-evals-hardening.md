@@ -48,3 +48,14 @@ hashes fail semantic validation, consequential tasks produce scientific
 proposals rather than direct state commands, and arbitrary SQL, final
 exclusion, unknown tools, and cross-project requests do not invoke the
 executor.
+
+## Calibration is production admission, not a CI fixture
+
+The checked-in `reviewed-small-v1.json` set is deliberately too small to grant
+automated scientific authority. It is only a regression oracle. Consequential
+automation remains disabled until an expert-adjudicated calibration bundle is
+persisted for the project and exact compiled semantic-bundle hash. Admission
+rejects a missing bundle, a failed bundle, or any stale hash after a change to
+the definition, workflow, protocol, prompt, schema, policy, parser, model route,
+or runtime build. Reviewer-requested proposal assistance does not require that
+bundle and still cannot write scientific state directly.

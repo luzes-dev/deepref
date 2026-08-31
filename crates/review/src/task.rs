@@ -131,8 +131,10 @@ impl<T: AiTask> AiTask for DefinedAiTask<T> {
 #[cfg(test)]
 mod tests {
     use deepref_ai::{AiContext, AiTask, AuthorityTier, ModelProfile};
+    use deepref_domain::ProjectId;
     use schemars::JsonSchema;
     use serde::{Deserialize, Serialize};
+    use uuid::Uuid;
 
     use super::*;
     use crate::{ReviewCatalog, ReviewDefinitionKey};
@@ -177,6 +179,70 @@ mod tests {
         }
     }
 
+    struct ProposalOracleTask {
+        kind: AiTaskKind,
+        project_id: ProjectId,
+    }
+
+    impl AiTask for ProposalOracleTask {
+        type Input = Value;
+        type Output = Value;
+
+        const KIND: AiTaskKind = AiTaskKind::DuplicateCandidateDetection;
+        const PROMPT_VERSION: &'static str = "migration-oracle.v1";
+        const SCHEMA_VERSION: &'static str = "migration-oracle.v1";
+
+        fn kind(&self) -> AiTaskKind {
+            self.kind
+        }
+
+        fn model_profile(&self) -> ModelProfile {
+            ModelProfile::Reasoning
+        }
+
+        fn build_context(&self, input: &Value) -> Result<AiContext, AiError> {
+            Ok(AiContext {
+                project_id: Some(self.project_id),
+                system_prompt: "legacy task prompt".to_owned(),
+                user_prompt: input.to_string(),
+                retrieval: None,
+                protocol_hash: None,
+                document_hash: None,
+            })
+        }
+
+        fn semantic_validate(&self, _output: &Value) -> Result<(), AiError> {
+            Ok(())
+        }
+
+        fn authority(&self) -> AuthorityTier {
+            AuthorityTier::ScientificConclusion
+        }
+
+        fn proposal(&self, output: &Value) -> Option<ProposalDraft> {
+            Some(ProposalDraft {
+                project_id: self.project_id,
+                entity_type: "fixture".to_owned(),
+                entity_id: Some(Uuid::from_u128(99)),
+                operation: "fixture_suggestion".to_owned(),
+                payload: output.clone(),
+                authority: self.authority(),
+            })
+        }
+    }
+
+    fn with_task_kind(mut proposal: ProposalDraft, kind: AiTaskKind) -> ProposalDraft {
+        proposal
+            .payload
+            .as_object_mut()
+            .expect("oracle payload is an object")
+            .insert(
+                "task_kind".to_owned(),
+                Value::String(kind.as_str().to_owned()),
+            );
+        proposal
+    }
+
     #[test]
     fn checked_in_prompt_replaces_task_inline_prompt() {
         let definition = ReviewCatalog
@@ -195,5 +261,63 @@ mod tests {
             .compile(ReviewDefinitionKey::DataExtraction)
             .expect("definition should compile");
         assert!(DefinedAiTask::bind(definition, FixtureTask).is_err());
+    }
+
+    #[test]
+    fn compiled_seam_preserves_canonical_proposal_payloads_for_every_consequential_task() {
+        let project_id = ProjectId::new(Uuid::from_u128(42));
+        let output = serde_json::json!({"semantic_field":"preserved"});
+        let cases = [
+            (
+                ReviewDefinitionKey::Screening,
+                AiTaskKind::TitleAbstractScreening,
+            ),
+            (
+                ReviewDefinitionKey::Screening,
+                AiTaskKind::FullTextScreening,
+            ),
+            (
+                ReviewDefinitionKey::DuplicateDetection,
+                AiTaskKind::DuplicateCandidateDetection,
+            ),
+            (
+                ReviewDefinitionKey::StudyClassification,
+                AiTaskKind::StudyDesignClassification,
+            ),
+            (
+                ReviewDefinitionKey::StudyGrouping,
+                AiTaskKind::StudyGrouping,
+            ),
+            (
+                ReviewDefinitionKey::AppraisalPrefill,
+                AiTaskKind::AppraisalPrefill,
+            ),
+            (
+                ReviewDefinitionKey::DataExtraction,
+                AiTaskKind::DataExtraction,
+            ),
+        ];
+
+        for (definition_key, task_kind) in cases {
+            let legacy = ProposalOracleTask {
+                kind: task_kind,
+                project_id,
+            };
+            let expected = with_task_kind(
+                legacy.proposal(&output).expect("legacy proposal exists"),
+                task_kind,
+            );
+            let definition = ReviewCatalog
+                .compile(definition_key)
+                .expect("definition compiles");
+            let compiled = DefinedAiTask::bind(definition, legacy).expect("task binds");
+            let actual = with_task_kind(
+                compiled
+                    .proposal(&output)
+                    .expect("compiled proposal exists"),
+                task_kind,
+            );
+            assert_eq!(actual, expected, "{task_kind:?} proposal payload drifted");
+        }
     }
 }

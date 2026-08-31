@@ -890,7 +890,7 @@ async fn execute_compiled_screening(
                 run,
                 definition,
                 &audit.artifact,
-                audit.executed,
+                candidate.executed,
                 automation_step,
                 owner,
             )

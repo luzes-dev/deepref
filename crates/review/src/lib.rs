@@ -10,6 +10,8 @@ mod definition;
 pub mod execution;
 mod hash;
 mod manifest;
+#[doc(hidden)]
+pub mod memory;
 mod task;
 mod types;
 

@@ -36,7 +36,7 @@ async fn database() -> Option<PgPool> {
 
 fn api_config() -> ApiConfig {
     let runtime = deepref_config::RuntimeConfig::from_map(
-        "deepref-api-pr13-test",
+        "deepref-api-appraisal-extraction-test",
         &HashMap::from([("APP_ENV".to_owned(), "local".to_owned())]),
     )
     .expect("local test runtime should parse");
@@ -89,14 +89,14 @@ async fn fixture(pool: &PgPool) -> Fixture {
         report_id: Uuid::new_v4(),
         study_id: Uuid::new_v4(),
     };
-    sqlx::query("INSERT INTO projects (id,name) VALUES ($1,'PR13 HTTP test')")
+    sqlx::query("INSERT INTO projects (id,name) VALUES ($1,'Appraisal extraction HTTP test')")
         .bind(fixture.project_id)
         .execute(pool)
         .await
         .expect("project inserts");
     sqlx::query(
         "INSERT INTO reports (id,title,abstract_text)
-         VALUES ($1,'PR13 HTTP report','A report for PR13 integration tests')",
+         VALUES ($1,'Appraisal extraction HTTP report','A report for appraisal and extraction integration tests')",
     )
     .bind(fixture.report_id)
     .execute(pool)
@@ -111,7 +111,7 @@ async fn fixture(pool: &PgPool) -> Fixture {
     sqlx::query(
         "INSERT INTO studies
          (id,project_id,title,design_context,study_revision,updated_by_actor_kind,updated_by_actor_id)
-         VALUES ($1,$2,'PR13 HTTP study','{}'::jsonb,0,'system','pr13-http-test')",
+         VALUES ($1,$2,'Appraisal extraction HTTP study','{}'::jsonb,0,'system','appraisal-extraction-http-test')",
     )
     .bind(fixture.study_id)
     .bind(fixture.project_id)
@@ -165,8 +165,8 @@ fn route(profile: ModelProfile, provider: &str) -> ResolvedModel {
     ResolvedModel {
         profile,
         provider: provider.to_owned(),
-        model: "pr13-test-model".to_owned(),
-        model_version: "2026-pr13".to_owned(),
+        model: "appraisal-extraction-test-model".to_owned(),
+        model_version: "2026-appraisal-extraction".to_owned(),
         parameters: ModelParameters::default(),
         route_id: Some(Uuid::new_v4()),
     }
@@ -214,7 +214,7 @@ async fn seed_document(pool: &PgPool, fixture: Fixture) -> EvidenceFixture {
          (id,project_id,report_id,object_key,content_hash,mime_type,byte_size,source,status,
           actor_kind,actor_id,active_parser_version,parser_version)
          VALUES ($1,$2,$3,$4,$5,'application/pdf',10,'upload','available',
-                 'system','pr13-test','parser.v2','parser.v2')",
+                 'system','appraisal-extraction-test','parser.v2','parser.v2')",
     )
     .bind(evidence.document_id)
     .bind(fixture.project_id)
@@ -267,7 +267,7 @@ async fn save_run(
             id: run_id,
             project_id: Some(fixture.project_id.into()),
             task_kind,
-            route: route(profile, "pr13-decision-provider"),
+            route: route(profile, "appraisal-extraction-decision-provider"),
             prompt_version: prompt_version.to_owned(),
             prompt_hash: sha256_bytes(format!("prompt:{run_id}").as_bytes()),
             schema_version: format!("{prompt_version}.schema"),
@@ -548,7 +548,7 @@ impl AiGateway for FailingGateway {
     ) -> AiFuture<'a, GatewayCompletion> {
         Box::pin(async {
             Err(AiError::Gateway(
-                "PR13 test provider unavailable".to_owned(),
+                "Appraisal extraction test provider unavailable".to_owned(),
             ))
         })
     }
@@ -564,7 +564,7 @@ async fn insert_grouping_proposal(pool: &PgPool, fixture: Fixture) -> Uuid {
             "kind": "report_metadata",
             "report_id": fixture.report_id,
             "field": "title",
-            "content_hash": sha256_bytes(b"PR13 HTTP report")
+            "content_hash": sha256_bytes(b"Appraisal extraction HTTP report")
         }]),
     );
     insert_grouping_proposal_with_payload(pool, fixture, payload).await
@@ -639,7 +639,7 @@ async fn decision_request(
                 ))
                 .header("content-type", "application/json")
                 .header("x-actor-kind", "user")
-                .header("x-actor-id", "pr13-http-reviewer")
+                .header("x-actor-id", "appraisal-extraction-http-reviewer")
                 .body(Body::from(body.to_string()))
                 .expect("decision request should be valid"),
         )
@@ -660,7 +660,7 @@ async fn membership_request(
                 .uri(format!("/projects/{project_id}/reports/{report_id}/study"))
                 .header("content-type", "application/json")
                 .header("x-actor-kind", "user")
-                .header("x-actor-id", "pr13-http-reviewer")
+                .header("x-actor-id", "appraisal-extraction-http-reviewer")
                 .body(Body::from(body.to_string()))
                 .expect("membership request should be valid"),
         )
@@ -738,7 +738,7 @@ async fn appraisal_reviewed_acceptance_persists_edited_answer_and_audit_without_
     assert_eq!(assessment.get::<String, _>("actor_kind"), "user");
     assert_eq!(
         assessment.get::<String, _>("actor_id"),
-        "pr13-http-reviewer"
+        "appraisal-extraction-http-reviewer"
     );
 
     let appraisal_event: serde_json::Value =
@@ -893,7 +893,10 @@ async fn extraction_reviewed_acceptance_persists_typed_values_provenance_and_aud
     assert_eq!(sample_value["source_parser_version"], "parser.v2");
     assert_eq!(sample_value["source_content_hash"], source_hash());
     assert_eq!(sample_value["approved_by_actor_kind"], "user");
-    assert_eq!(sample_value["approved_by_actor_id"], "pr13-http-reviewer");
+    assert_eq!(
+        sample_value["approved_by_actor_id"],
+        "appraisal-extraction-http-reviewer"
+    );
     assert!(values.iter().any(|value| {
         value["field_definition_id"] == fields.blinded.to_string()
             && value["value"] == serde_json::json!({"kind": "boolean", "value": true})
@@ -931,7 +934,7 @@ async fn extraction_reviewed_acceptance_persists_typed_values_provenance_and_aud
     .await
     .expect("extraction event actor");
     assert_eq!(event_actor_kind, "user");
-    assert_eq!(event_actor_id, "pr13-http-reviewer");
+    assert_eq!(event_actor_id, "appraisal-extraction-http-reviewer");
     let review_event: serde_json::Value = sqlx::query_scalar(
         "SELECT payload FROM review_events
          WHERE project_id=$1 AND aggregate_type='ai_proposal' AND aggregate_id=$2",
@@ -957,7 +960,7 @@ async fn extraction_reviewed_acceptance_persists_typed_values_provenance_and_aud
     sqlx::query(
         "INSERT INTO studies
          (id,project_id,title,design_context,study_revision,updated_by_actor_kind,updated_by_actor_id)
-         VALUES ($1,$2,'PR13 moved extraction study','{}'::jsonb,0,'system','pr13-http-test')",
+         VALUES ($1,$2,'Moved extraction study','{}'::jsonb,0,'system','appraisal-extraction-http-test')",
     )
     .bind(moved_study_id)
     .bind(fixture.project_id)
@@ -1052,11 +1055,13 @@ async fn appraisal_acceptance_rolls_back_on_inactive_or_wrong_project_evidence_a
     assert_eq!(status, "pending");
 
     let wrong_project_id = Uuid::new_v4();
-    sqlx::query("INSERT INTO projects (id,name) VALUES ($1,'PR13 wrong-project evidence')")
-        .bind(wrong_project_id)
-        .execute(&pool)
-        .await
-        .expect("wrong-project evidence project inserts");
+    sqlx::query(
+        "INSERT INTO projects (id,name) VALUES ($1,'Appraisal extraction wrong-project evidence')",
+    )
+    .bind(wrong_project_id)
+    .execute(&pool)
+    .await
+    .expect("wrong-project evidence project inserts");
     sqlx::query("INSERT INTO project_reports (project_id,report_id) VALUES ($1,$2)")
         .bind(wrong_project_id)
         .bind(fixture.report_id)
@@ -1281,12 +1286,12 @@ async fn accepted_study_grouping_creates_membership_and_audited_study_events() {
         fixture,
         fixture.study_id,
         Some(0),
-        serde_json::json!({"kind": "new_study", "title": "Accepted PR13 study"}),
+        serde_json::json!({"kind": "new_study", "title": "Accepted appraisal extraction study"}),
         serde_json::json!([{
             "kind": "report_metadata",
             "report_id": fixture.report_id,
             "field": "title",
-            "content_hash": sha256_bytes(b"PR13 HTTP report")
+            "content_hash": sha256_bytes(b"Appraisal extraction HTTP report")
         }]),
     );
     let proposal_id = insert_grouping_proposal_with_payload(&pool, fixture, payload.clone()).await;
@@ -1372,7 +1377,7 @@ async fn stale_grouping_previous_or_target_revision_rolls_back_and_keeps_proposa
     sqlx::query(
         "INSERT INTO studies
          (id,project_id,title,design_context,study_revision,updated_by_actor_kind,updated_by_actor_id)
-         VALUES ($1,$2,'Stale target study','{}'::jsonb,1,'system','pr13-http-test')",
+         VALUES ($1,$2,'Stale target study','{}'::jsonb,1,'system','appraisal-extraction-http-test')",
     )
     .bind(target_study_id)
     .bind(fixture.project_id)
@@ -1393,7 +1398,7 @@ async fn stale_grouping_previous_or_target_revision_rolls_back_and_keeps_proposa
                 "kind": "report_metadata",
                 "report_id": fixture.report_id,
                 "field": "title",
-                "content_hash": sha256_bytes(b"PR13 HTTP report")
+                "content_hash": sha256_bytes(b"Appraisal extraction HTTP report")
             },
             {
                 "kind": "study_metadata",
@@ -1423,7 +1428,7 @@ async fn stale_grouping_previous_or_target_revision_rolls_back_and_keeps_proposa
             "kind": "report_metadata",
             "report_id": fixture.report_id,
             "field": "title",
-            "content_hash": sha256_bytes(b"PR13 HTTP report")
+            "content_hash": sha256_bytes(b"Appraisal extraction HTTP report")
         }]),
     );
     let previous_proposal =
@@ -1670,7 +1675,10 @@ async fn study_grouping_schedules_a_review_run_without_calling_the_provider_inli
     let _guard = test_lock().lock().await;
     let Some(pool) = database().await else { return };
     let fixture = fixture(&pool).await;
-    let model_route = route(ModelProfile::Reasoning, "pr13-failing-provider");
+    let model_route = route(
+        ModelProfile::Reasoning,
+        "appraisal-extraction-failing-provider",
+    );
     deepref_postgres::insert_model_route(&pool, &model_route, Utc::now())
         .await
         .expect("grouping test model route");

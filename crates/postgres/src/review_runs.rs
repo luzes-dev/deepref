@@ -6,8 +6,9 @@ use deepref_application::BuiltInAutomationRecipe;
 use deepref_domain::ProjectId;
 use deepref_review::{
     AcceptedArtifactInput, ReviewBlockCode, ReviewCatalog, ReviewDefinitionKey, ReviewError,
-    ReviewHash, ReviewManifestInput, ReviewModelIdentity, ReviewRunId, ReviewRunManifest,
-    ReviewRunSnapshot, ReviewRunState, ReviewRuntimeIdentity, ReviewSubject, ScheduleReviewRun,
+    ReviewHash, ReviewManifestInput, ReviewModelIdentity, ReviewOrigin, ReviewRunId,
+    ReviewRunManifest, ReviewRunSnapshot, ReviewRunState, ReviewRuntimeIdentity, ReviewSubject,
+    ScheduleReviewRun,
     execution::{ExecutedReviewTask, PreparedReviewTask},
     fingerprint_node,
 };
@@ -16,7 +17,10 @@ use sqlx::{PgPool, Postgres, Row, Transaction, postgres::PgRow};
 use thiserror::Error;
 use uuid::Uuid;
 
-use crate::PostgresAiStore;
+use crate::{
+    PostgresAiStore,
+    review_calibration::{CalibrationAdmissionError, admit_calibration},
+};
 
 #[derive(Debug, Error)]
 pub enum PostgresReviewError {
@@ -38,6 +42,12 @@ pub enum PostgresReviewError {
     WorkerOwnership,
     #[error("review proposal finalization conflicts with persisted state")]
     FinalizationConflict,
+    #[error("automation-triggered review calibration is missing")]
+    CalibrationMissing,
+    #[error("automation-triggered review calibration did not pass")]
+    CalibrationFailed,
+    #[error("automation-triggered review calibration does not match the semantic bundle")]
+    CalibrationStale,
 }
 
 #[derive(Debug, Clone)]
@@ -131,6 +141,14 @@ pub async fn schedule_prepared_review_run(
 
     let recipe = recipe_for(request.command.definition);
     let mut transaction = pool.begin().await?;
+    if let ReviewOrigin::AutomationTriggered {
+        calibration_bundle_id,
+    } = request.command.origin
+    {
+        admit_calibration(&mut transaction, &manifest, calibration_bundle_id)
+            .await
+            .map_err(map_calibration_admission_error)?;
+    }
     let definition_id = ensure_review_automation_definition(
         &mut transaction,
         request.command.project_id,
@@ -190,6 +208,15 @@ pub async fn schedule_prepared_review_run(
     }
     transaction.commit().await?;
     get_review_run(pool, request.command.project_id, ReviewRunId::new(run_id)?).await
+}
+
+fn map_calibration_admission_error(error: CalibrationAdmissionError) -> PostgresReviewError {
+    match error {
+        CalibrationAdmissionError::Database(error) => PostgresReviewError::Database(error),
+        CalibrationAdmissionError::Missing => PostgresReviewError::CalibrationMissing,
+        CalibrationAdmissionError::Failed => PostgresReviewError::CalibrationFailed,
+        CalibrationAdmissionError::Stale => PostgresReviewError::CalibrationStale,
+    }
 }
 
 pub async fn get_review_run(

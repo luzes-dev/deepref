@@ -11,6 +11,7 @@ mod jobs;
 mod legacy_import;
 mod prisma;
 mod protocol;
+mod review_calibration;
 mod review_preparation;
 mod review_runs;
 mod screening;
@@ -86,10 +87,15 @@ pub use protocol::{
     ProtocolActor, ProtocolDocument, ProtocolError, get_protocol_editor, get_published_protocol,
     publish_protocol, save_protocol_draft,
 };
+pub use review_calibration::{
+    ReviewCalibrationBundleInput, ReviewCalibrationError, ReviewCalibrationStatus,
+    insert_review_calibration_bundle,
+};
 pub use review_preparation::{
-    ReviewPreparationError, schedule_appraisal_prefill_review, schedule_data_extraction_review,
-    schedule_duplicate_detection_review, schedule_screening_review,
-    schedule_study_classification_review, schedule_study_grouping_review,
+    PostgresReviewScheduler, ReviewPreparationError, schedule_appraisal_prefill_review,
+    schedule_data_extraction_review, schedule_duplicate_detection_review,
+    schedule_screening_review, schedule_study_classification_review,
+    schedule_study_grouping_review,
 };
 pub use review_runs::{
     AcceptedReviewAttempt, LeasedReviewRun, PostgresReviewError, PreparedReviewRun,
