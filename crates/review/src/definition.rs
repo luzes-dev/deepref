@@ -3,7 +3,10 @@ use std::collections::{BTreeMap, BTreeSet, VecDeque};
 use deepref_ai::AiTaskKind;
 use serde::{Deserialize, Serialize};
 
-use crate::{ReviewDefinitionKey, ReviewError, ReviewHash};
+use crate::{
+    ReviewDefinitionKey, ReviewError, ReviewHash,
+    worker::{ReviewExecutionPlan, ReviewNode, ScreeningReviewPlan, StandardReviewPlan},
+};
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct CompiledReviewIdentity {
@@ -46,7 +49,7 @@ impl CompiledReviewDefinition {
         self.system_prompt.trim()
     }
 
-    pub fn transition(
+    fn transition(
         &self,
         node_id: &str,
         signal: ReviewTransitionSignal,
@@ -77,7 +80,7 @@ impl CompiledReviewDefinition {
         Ok(&target.to)
     }
 
-    pub fn repair_budget(&self, node_id: &str) -> Result<u8, ReviewError> {
+    fn repair_budget(&self, node_id: &str) -> Result<u8, ReviewError> {
         let node = self
             .workflow
             .nodes
@@ -98,6 +101,300 @@ impl CompiledReviewDefinition {
 
     pub(crate) fn accepts_task(&self, task: AiTaskKind) -> bool {
         self.workflow.semantic_handler.accepts_task(task)
+    }
+
+    pub(crate) fn execution_plan(&self) -> Result<ReviewExecutionPlan, ReviewError> {
+        match self.key {
+            ReviewDefinitionKey::Screening => self
+                .screening_plan()
+                .map(Box::new)
+                .map(ReviewExecutionPlan::Screening),
+            ReviewDefinitionKey::DuplicateDetection
+            | ReviewDefinitionKey::StudyClassification
+            | ReviewDefinitionKey::StudyGrouping
+            | ReviewDefinitionKey::AppraisalPrefill
+            | ReviewDefinitionKey::DataExtraction => {
+                self.standard_plan().map(ReviewExecutionPlan::Standard)
+            }
+        }
+    }
+
+    fn standard_plan(&self) -> Result<StandardReviewPlan, ReviewError> {
+        let prepare = self.expect_entrypoint(ReviewNodeKind::Prepare)?;
+        let generate = self.follow(prepare, ReviewTransitionPredicate::Always, |operation| {
+            matches!(operation, ReviewNodeKind::Generate { .. })
+        })?;
+        let validate = self.follow(generate, ReviewTransitionPredicate::Always, |operation| {
+            matches!(operation, ReviewNodeKind::Validate)
+        })?;
+        let assemble = self.follow(validate, ReviewTransitionPredicate::Valid, |operation| {
+            matches!(operation, ReviewNodeKind::Assemble)
+        })?;
+        let finalize = self.follow(assemble, ReviewTransitionPredicate::Always, |operation| {
+            matches!(operation, ReviewNodeKind::Finalize)
+        })?;
+        self.expect_target(validate, ReviewTransitionPredicate::Invalid, finalize)?;
+        self.expect_exact_predicates(prepare, &[ReviewTransitionPredicate::Always])?;
+        self.expect_exact_predicates(generate, &[ReviewTransitionPredicate::Always])?;
+        self.expect_exact_predicates(
+            validate,
+            &[
+                ReviewTransitionPredicate::Valid,
+                ReviewTransitionPredicate::Invalid,
+            ],
+        )?;
+        self.expect_exact_predicates(assemble, &[ReviewTransitionPredicate::Always])?;
+        self.expect_exact_predicates(finalize, &[])?;
+        Ok(StandardReviewPlan {
+            prepare: review_node(prepare),
+            generate: review_node(generate),
+            validate: review_node(validate),
+            assemble: review_node(assemble),
+            finalize: review_node(finalize),
+        })
+    }
+
+    fn screening_plan(&self) -> Result<ScreeningReviewPlan, ReviewError> {
+        let prepare = self.expect_entrypoint(ReviewNodeKind::Prepare)?;
+        let primary = self.follow(prepare, ReviewTransitionPredicate::Always, |operation| {
+            matches!(operation, ReviewNodeKind::PrimaryScreen)
+        })?;
+        let validate_primary =
+            self.follow(primary, ReviewTransitionPredicate::Always, |operation| {
+                matches!(operation, ReviewNodeKind::Validate)
+            })?;
+        let derive = self.follow(
+            validate_primary,
+            ReviewTransitionPredicate::Valid,
+            |operation| matches!(operation, ReviewNodeKind::Derive),
+        )?;
+        let independent = self.follow(
+            derive,
+            ReviewTransitionPredicate::NeedsIndependentScreen,
+            |operation| matches!(operation, ReviewNodeKind::IndependentScreen),
+        )?;
+        let validate_independent = self.follow(
+            independent,
+            ReviewTransitionPredicate::Always,
+            |operation| matches!(operation, ReviewNodeKind::Validate),
+        )?;
+        let reconcile = self.follow(
+            validate_independent,
+            ReviewTransitionPredicate::Valid,
+            |operation| matches!(operation, ReviewNodeKind::Reconcile),
+        )?;
+        let assemble = self.follow(
+            reconcile,
+            ReviewTransitionPredicate::Agreement,
+            |operation| matches!(operation, ReviewNodeKind::Assemble),
+        )?;
+        self.expect_target(derive, ReviewTransitionPredicate::PrimaryAccepted, assemble)?;
+        let audit = self.follow(assemble, ReviewTransitionPredicate::Always, |operation| {
+            matches!(operation, ReviewNodeKind::CandidateAudit)
+        })?;
+        let repair = self.follow(
+            audit,
+            ReviewTransitionPredicate::AuditRepairable,
+            |operation| matches!(operation, ReviewNodeKind::SemanticRepair { .. }),
+        )?;
+        let validate_repair = self.follow(
+            repair,
+            ReviewTransitionPredicate::RepairReady,
+            |operation| matches!(operation, ReviewNodeKind::Validate),
+        )?;
+        self.expect_target(validate_repair, ReviewTransitionPredicate::Valid, assemble)?;
+        self.expect_target(
+            validate_repair,
+            ReviewTransitionPredicate::Invalid,
+            assemble,
+        )?;
+        let finalize =
+            self.node_for_operation(|operation| matches!(operation, ReviewNodeKind::Finalize))?;
+        for (node, predicate) in [
+            (validate_primary, ReviewTransitionPredicate::Invalid),
+            (validate_independent, ReviewTransitionPredicate::Invalid),
+            (reconcile, ReviewTransitionPredicate::Disagreement),
+            (audit, ReviewTransitionPredicate::AuditPassed),
+            (audit, ReviewTransitionPredicate::Invalid),
+            (repair, ReviewTransitionPredicate::RepairExhausted),
+        ] {
+            self.expect_target(node, predicate, finalize)?;
+        }
+        self.expect_exact_predicates(prepare, &[ReviewTransitionPredicate::Always])?;
+        self.expect_exact_predicates(primary, &[ReviewTransitionPredicate::Always])?;
+        self.expect_exact_predicates(
+            validate_primary,
+            &[
+                ReviewTransitionPredicate::Valid,
+                ReviewTransitionPredicate::Invalid,
+            ],
+        )?;
+        self.expect_exact_predicates(
+            derive,
+            &[
+                ReviewTransitionPredicate::NeedsIndependentScreen,
+                ReviewTransitionPredicate::PrimaryAccepted,
+            ],
+        )?;
+        self.expect_exact_predicates(independent, &[ReviewTransitionPredicate::Always])?;
+        self.expect_exact_predicates(
+            validate_independent,
+            &[
+                ReviewTransitionPredicate::Valid,
+                ReviewTransitionPredicate::Invalid,
+            ],
+        )?;
+        self.expect_exact_predicates(
+            reconcile,
+            &[
+                ReviewTransitionPredicate::Agreement,
+                ReviewTransitionPredicate::Disagreement,
+            ],
+        )?;
+        self.expect_exact_predicates(assemble, &[ReviewTransitionPredicate::Always])?;
+        self.expect_exact_predicates(
+            audit,
+            &[
+                ReviewTransitionPredicate::AuditPassed,
+                ReviewTransitionPredicate::AuditRepairable,
+                ReviewTransitionPredicate::Invalid,
+            ],
+        )?;
+        self.expect_exact_predicates(
+            repair,
+            &[
+                ReviewTransitionPredicate::RepairReady,
+                ReviewTransitionPredicate::RepairExhausted,
+            ],
+        )?;
+        self.expect_exact_predicates(
+            validate_repair,
+            &[
+                ReviewTransitionPredicate::Valid,
+                ReviewTransitionPredicate::Invalid,
+            ],
+        )?;
+        self.expect_exact_predicates(finalize, &[])?;
+        Ok(ScreeningReviewPlan {
+            prepare: review_node(prepare),
+            primary_screen: review_node(primary),
+            validate_primary: review_node(validate_primary),
+            derive_primary: review_node(derive),
+            independent_screen: review_node(independent),
+            validate_independent: review_node(validate_independent),
+            reconcile: review_node(reconcile),
+            assemble: review_node(assemble),
+            candidate_audit: review_node(audit),
+            semantic_repair: review_node(repair),
+            validate_repair: review_node(validate_repair),
+            finalize: review_node(finalize),
+            repair_budget: self.repair_budget(&repair.id)?,
+        })
+    }
+
+    fn expect_entrypoint(
+        &self,
+        expected: ReviewNodeKind,
+    ) -> Result<&ReviewWorkflowNode, ReviewError> {
+        let node = self.node(&self.workflow.entrypoint)?;
+        if node.operation == expected {
+            Ok(node)
+        } else {
+            Err(ReviewError::InvalidWorkflow(
+                "entrypoint operation is invalid".to_owned(),
+            ))
+        }
+    }
+
+    fn node(&self, node_id: &str) -> Result<&ReviewWorkflowNode, ReviewError> {
+        self.workflow
+            .nodes
+            .iter()
+            .find(|node| node.id == node_id)
+            .ok_or_else(|| ReviewError::InvalidWorkflow(format!("unknown node {node_id}")))
+    }
+
+    fn node_for_operation(
+        &self,
+        predicate: impl Fn(ReviewNodeKind) -> bool,
+    ) -> Result<&ReviewWorkflowNode, ReviewError> {
+        let mut matching = self
+            .workflow
+            .nodes
+            .iter()
+            .filter(|node| predicate(node.operation));
+        let node = matching.next().ok_or_else(|| {
+            ReviewError::InvalidWorkflow("required workflow operation is missing".to_owned())
+        })?;
+        if matching.next().is_some() {
+            return Err(ReviewError::InvalidWorkflow(
+                "workflow operation must be unique".to_owned(),
+            ));
+        }
+        Ok(node)
+    }
+
+    fn follow(
+        &self,
+        node: &ReviewWorkflowNode,
+        predicate: ReviewTransitionPredicate,
+        expected: impl Fn(ReviewNodeKind) -> bool,
+    ) -> Result<&ReviewWorkflowNode, ReviewError> {
+        let target = self.transition(&node.id, ReviewTransitionSignal::from(predicate))?;
+        let target = self.node(target)?;
+        if expected(target.operation) {
+            Ok(target)
+        } else {
+            Err(ReviewError::InvalidWorkflow(format!(
+                "node {} has an unsafe transition target",
+                node.id
+            )))
+        }
+    }
+
+    fn expect_target(
+        &self,
+        node: &ReviewWorkflowNode,
+        predicate: ReviewTransitionPredicate,
+        expected: &ReviewWorkflowNode,
+    ) -> Result<(), ReviewError> {
+        let target = self.transition(&node.id, ReviewTransitionSignal::from(predicate))?;
+        if target == expected.id {
+            Ok(())
+        } else {
+            Err(ReviewError::InvalidWorkflow(format!(
+                "node {} has an unsafe transition target",
+                node.id
+            )))
+        }
+    }
+
+    fn expect_exact_predicates(
+        &self,
+        node: &ReviewWorkflowNode,
+        expected: &[ReviewTransitionPredicate],
+    ) -> Result<(), ReviewError> {
+        let actual = node
+            .transitions
+            .iter()
+            .map(|transition| transition.predicate)
+            .collect::<BTreeSet<_>>();
+        let expected = expected.iter().copied().collect::<BTreeSet<_>>();
+        if actual == expected {
+            Ok(())
+        } else {
+            Err(ReviewError::InvalidWorkflow(format!(
+                "node {} has unsafe transition predicates",
+                node.id
+            )))
+        }
+    }
+}
+
+fn review_node(node: &ReviewWorkflowNode) -> ReviewNode {
+    ReviewNode {
+        id: node.id.clone(),
+        version: node.version,
     }
 }
 
@@ -288,6 +585,24 @@ impl ReviewTransitionSignal {
             Self::AuditRepairable => "audit_repairable",
             Self::RepairReady => "repair_ready",
             Self::RepairExhausted => "repair_exhausted",
+        }
+    }
+}
+
+impl From<ReviewTransitionPredicate> for ReviewTransitionSignal {
+    fn from(predicate: ReviewTransitionPredicate) -> Self {
+        match predicate {
+            ReviewTransitionPredicate::Always => Self::Always,
+            ReviewTransitionPredicate::Valid => Self::Valid,
+            ReviewTransitionPredicate::Invalid => Self::Invalid,
+            ReviewTransitionPredicate::NeedsIndependentScreen => Self::NeedsIndependentScreen,
+            ReviewTransitionPredicate::PrimaryAccepted => Self::PrimaryAccepted,
+            ReviewTransitionPredicate::Agreement => Self::Agreement,
+            ReviewTransitionPredicate::Disagreement => Self::Disagreement,
+            ReviewTransitionPredicate::AuditPassed => Self::AuditPassed,
+            ReviewTransitionPredicate::AuditRepairable => Self::AuditRepairable,
+            ReviewTransitionPredicate::RepairReady => Self::RepairReady,
+            ReviewTransitionPredicate::RepairExhausted => Self::RepairExhausted,
         }
     }
 }
@@ -660,213 +975,5 @@ fn source(
 }
 
 #[cfg(test)]
-mod tests {
-    use super::*;
-    use crate::manifest::{
-        ReviewManifestInput, ReviewModelIdentity, ReviewRunManifest, ReviewRuntimeIdentity,
-        fingerprint_node,
-    };
-    use crate::{ReviewOrigin, ReviewSubject};
-    use deepref_ai::ModelProfile;
-    use deepref_domain::{ProjectId, RecordId, ReportId};
-    use uuid::Uuid;
-
-    fn valid_definition() -> DefinitionSource {
-        definition_source(ReviewDefinitionKey::DuplicateDetection)
-    }
-
-    #[test]
-    fn all_checked_in_definitions_compile() {
-        let catalog = ReviewCatalog;
-        for key in ReviewDefinitionKey::ALL {
-            let compiled = catalog.compile(key).expect("definition should compile");
-            assert_eq!(compiled.key(), key);
-            assert!(!compiled.system_prompt().is_empty());
-            assert!(!compiled.final_proposal_type().is_empty());
-        }
-    }
-
-    #[test]
-    fn rejects_mismatched_semantic_handler_and_final_proposal_type() {
-        let source = valid_definition();
-        let workflow: ReviewWorkflow =
-            serde_json::from_str(source.workflow.content).expect("fixture workflow");
-
-        let mut wrong_handler = workflow.clone();
-        wrong_handler.semantic_handler = ReviewSemanticHandler::DataExtraction;
-        assert!(validate_workflow(source.key, source.id, source.version, &wrong_handler).is_err());
-
-        let mut wrong_proposal = workflow;
-        wrong_proposal.final_proposal_type = ReviewProposalType::DataExtraction;
-        assert!(validate_workflow(source.key, source.id, source.version, &wrong_proposal).is_err());
-    }
-
-    #[test]
-    fn rejects_unknown_predicates_and_duplicate_nodes() {
-        let mut source = valid_definition();
-        source.workflow.content = r#"{
-          "id":"deepref.duplicate-detection","version":1,"entrypoint":"prepare",
-          "nodes":[
-            {"id":"prepare","version":1,"operation":{"kind":"prepare"},"transitions":[{"predicate":"invented","to":"prepare"}]},
-            {"id":"prepare","version":1,"operation":{"kind":"finalize"}}
-          ]
-        }"#;
-        assert!(matches!(
-            compile_definition(source),
-            Err(ReviewError::InvalidWorkflow(_))
-        ));
-    }
-
-    #[test]
-    fn compiled_transitions_are_typed_and_duplicate_predicates_are_rejected() {
-        let screening = ReviewCatalog
-            .compile(ReviewDefinitionKey::Screening)
-            .expect("screening definition compiles");
-        assert_eq!(
-            screening
-                .transition("prepare", ReviewTransitionSignal::Always)
-                .expect("prepare transition exists"),
-            "primary_screen"
-        );
-        assert_eq!(
-            screening
-                .transition("semantic_repair", ReviewTransitionSignal::RepairReady)
-                .expect("repair transition exists"),
-            "validate_repair"
-        );
-        assert_eq!(
-            screening
-                .repair_budget("semantic_repair")
-                .expect("repair budget exists"),
-            2
-        );
-
-        let mut source = valid_definition();
-        source.workflow.content = r#"{
-          "id":"deepref.duplicate-detection","version":1,"entrypoint":"prepare",
-          "nodes":[
-            {"id":"prepare","version":1,"operation":{"kind":"prepare"},"transitions":[
-              {"predicate":"always","to":"generate"},{"predicate":"always","to":"finalize"}
-            ]},
-            {"id":"generate","version":1,"operation":{"kind":"generate","task":"duplicate_candidate_detection"},"transitions":[{"predicate":"always","to":"validate"}]},
-            {"id":"validate","version":1,"operation":{"kind":"validate"},"transitions":[{"predicate":"valid","to":"assemble"}]},
-            {"id":"assemble","version":1,"operation":{"kind":"assemble"},"transitions":[{"predicate":"always","to":"finalize"}]},
-            {"id":"finalize","version":1,"operation":{"kind":"finalize"}}
-          ]
-        }"#;
-        assert!(matches!(
-            compile_definition(source),
-            Err(ReviewError::InvalidWorkflow(_))
-        ));
-    }
-
-    #[test]
-    fn rejects_identity_mismatch_and_unreachable_nodes() {
-        let mut source = valid_definition();
-        source.workflow.content = r#"{
-          "id":"wrong","version":1,"entrypoint":"prepare",
-          "nodes":[
-            {"id":"prepare","version":1,"operation":{"kind":"prepare"},"transitions":[{"predicate":"always","to":"finalize"}]},
-            {"id":"orphan","version":1,"operation":{"kind":"validate"}},
-            {"id":"finalize","version":1,"operation":{"kind":"finalize"}}
-          ]
-        }"#;
-        assert!(matches!(
-            compile_definition(source),
-            Err(ReviewError::InvalidWorkflow(_))
-        ));
-    }
-
-    fn manifest_input() -> ReviewManifestInput {
-        ReviewManifestInput {
-            project_id: ProjectId::new(Uuid::from_u128(1)),
-            subject: ReviewSubject::DuplicateDetection {
-                record_id: RecordId::new(Uuid::from_u128(2)),
-                candidate_report_id: ReportId::new(Uuid::from_u128(3)),
-            },
-            origin: ReviewOrigin::ReviewerRequested,
-            protocol_version_id: None,
-            protocol_hash: ReviewHash::digest_bytes(b"protocol"),
-            source_manifest_hash: ReviewHash::digest_bytes(b"source-manifest"),
-            source_content_hash: ReviewHash::digest_bytes(b"source-content"),
-            resolved_models: vec![ReviewModelIdentity {
-                profile: ModelProfile::FastClassifier,
-                provider: "fixture".to_owned(),
-                model: "classifier".to_owned(),
-                model_version: "v1".to_owned(),
-                parameters_hash: ReviewHash::digest_bytes(b"parameters"),
-            }],
-            runtime: ReviewRuntimeIdentity {
-                build_sha: ReviewHash::digest_bytes(b"build"),
-                rust_version: "1.91".to_owned(),
-                target: "test".to_owned(),
-            },
-        }
-    }
-
-    fn changed_content(content: &'static str) -> &'static str {
-        Box::leak(format!(" {content}").into_boxed_str())
-    }
-
-    #[test]
-    fn every_definition_asset_change_invalidates_semantics_and_node_reuse() {
-        let source = valid_definition();
-        let original = compile_definition(source).expect("definition should compile");
-        let input = manifest_input();
-        let original_manifest = ReviewRunManifest::build(&original, input.clone())
-            .expect("original manifest should build");
-        let original_fingerprint = fingerprint_node(&original, &original_manifest, "generate", &[])
-            .expect("original fingerprint should build");
-
-        for asset in ["workflow", "prompt", "schema", "policy", "parser"] {
-            let mut changed_source = source;
-            match asset {
-                "workflow" => {
-                    changed_source.workflow.content = changed_content(source.workflow.content)
-                }
-                "prompt" => changed_source.prompt.content = changed_content(source.prompt.content),
-                "schema" => changed_source.schema.content = changed_content(source.schema.content),
-                "policy" => changed_source.policy.content = changed_content(source.policy.content),
-                "parser" => changed_source.parser.content = changed_content(source.parser.content),
-                _ => unreachable!(),
-            }
-            let changed = compile_definition(changed_source)
-                .unwrap_or_else(|error| panic!("changed {asset} should compile: {error}"));
-            let changed_manifest = ReviewRunManifest::build(&changed, input.clone())
-                .unwrap_or_else(|error| panic!("changed {asset} manifest should build: {error}"));
-            let changed_fingerprint =
-                fingerprint_node(&changed, &changed_manifest, "generate", &[])
-                    .expect("changed fingerprint should build");
-            assert_ne!(
-                original.identity().declared_assets_hash,
-                changed.identity().declared_assets_hash,
-                "{asset} must invalidate compiled identity"
-            );
-            assert_ne!(
-                original_manifest.semantic_bundle_hash, changed_manifest.semantic_bundle_hash,
-                "{asset} must invalidate semantic bundle"
-            );
-            assert_ne!(
-                original_fingerprint, changed_fingerprint,
-                "{asset} must invalidate node reuse"
-            );
-        }
-    }
-
-    #[test]
-    fn rejects_missing_or_malformed_assets() {
-        let mut missing = valid_definition();
-        missing.prompt.content = "   ";
-        assert!(matches!(
-            compile_definition(missing),
-            Err(ReviewError::InvalidDefinition(_))
-        ));
-
-        let mut malformed = valid_definition();
-        malformed.schema.content = "not-json";
-        assert!(matches!(
-            compile_definition(malformed),
-            Err(ReviewError::InvalidDefinition(_))
-        ));
-    }
-}
+#[path = "definition_tests.rs"]
+mod tests;

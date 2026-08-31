@@ -7658,6 +7658,34 @@
           }
         }
       },
+      "AppraisalArgsDto": {
+        "type": "object",
+        "required": [
+          "project_id",
+          "report_id",
+          "definition_id",
+          "definition_version"
+        ],
+        "properties": {
+          "definition_id": {
+            "type": "string"
+          },
+          "definition_version": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "project_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "report_id": {
+            "type": "string",
+            "format": "uuid"
+          }
+        },
+        "additionalProperties": false
+      },
       "AppraisalAssessmentDto": {
         "type": "object",
         "required": [
@@ -7891,6 +7919,13 @@
           }
         }
       },
+      "AssistantScreeningStageDto": {
+        "type": "string",
+        "enum": [
+          "title_abstract",
+          "full_text"
+        ]
+      },
       "AssistantToolDescriptor": {
         "type": "object",
         "required": [
@@ -7921,40 +7956,261 @@
           "proposal"
         ]
       },
-      "AssistantToolNameDto": {
-        "type": "string",
-        "enum": [
-          "get_project_protocol",
-          "get_report",
-          "read_document_blocks",
-          "search_document",
-          "search_project_reports",
-          "get_screening_state",
-          "get_study",
-          "get_appraisal",
-          "propose_screening_decision",
-          "propose_duplicate_merge",
-          "propose_study_grouping",
-          "propose_classification",
-          "propose_extraction",
-          "propose_appraisal_answer"
-        ]
-      },
       "AssistantToolRequest": {
-        "type": "object",
-        "required": [
-          "tool",
-          "args"
-        ],
-        "properties": {
-          "args": {
-            "type": "object"
+        "oneOf": [
+          {
+            "type": "object",
+            "required": [
+              "args",
+              "tool"
+            ],
+            "properties": {
+              "args": {
+                "$ref": "#/components/schemas/ProjectArgsDto"
+              },
+              "tool": {
+                "type": "string",
+                "enum": [
+                  "get_project_protocol"
+                ]
+              }
+            }
           },
-          "tool": {
-            "$ref": "#/components/schemas/AssistantToolNameDto",
-            "description": "The value is parsed by deepref_ai::AgentTool, which owns the closed\nname and typed-argument schema."
+          {
+            "type": "object",
+            "required": [
+              "args",
+              "tool"
+            ],
+            "properties": {
+              "args": {
+                "$ref": "#/components/schemas/ReportArgsDto"
+              },
+              "tool": {
+                "type": "string",
+                "enum": [
+                  "get_report"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "args",
+              "tool"
+            ],
+            "properties": {
+              "args": {
+                "$ref": "#/components/schemas/DocumentBlocksArgsDto"
+              },
+              "tool": {
+                "type": "string",
+                "enum": [
+                  "read_document_blocks"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "args",
+              "tool"
+            ],
+            "properties": {
+              "args": {
+                "$ref": "#/components/schemas/SearchDocumentArgsDto"
+              },
+              "tool": {
+                "type": "string",
+                "enum": [
+                  "search_document"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "args",
+              "tool"
+            ],
+            "properties": {
+              "args": {
+                "$ref": "#/components/schemas/SearchProjectReportsArgsDto"
+              },
+              "tool": {
+                "type": "string",
+                "enum": [
+                  "search_project_reports"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "args",
+              "tool"
+            ],
+            "properties": {
+              "args": {
+                "$ref": "#/components/schemas/ReportArgsDto"
+              },
+              "tool": {
+                "type": "string",
+                "enum": [
+                  "get_screening_state"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "args",
+              "tool"
+            ],
+            "properties": {
+              "args": {
+                "$ref": "#/components/schemas/StudyArgsDto"
+              },
+              "tool": {
+                "type": "string",
+                "enum": [
+                  "get_study"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "args",
+              "tool"
+            ],
+            "properties": {
+              "args": {
+                "$ref": "#/components/schemas/AppraisalArgsDto"
+              },
+              "tool": {
+                "type": "string",
+                "enum": [
+                  "get_appraisal"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "args",
+              "tool"
+            ],
+            "properties": {
+              "args": {
+                "$ref": "#/components/schemas/ScreeningDecisionArgsDto"
+              },
+              "tool": {
+                "type": "string",
+                "enum": [
+                  "propose_screening_decision"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "args",
+              "tool"
+            ],
+            "properties": {
+              "args": {
+                "$ref": "#/components/schemas/DuplicateMergeArgsDto"
+              },
+              "tool": {
+                "type": "string",
+                "enum": [
+                  "propose_duplicate_merge"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "args",
+              "tool"
+            ],
+            "properties": {
+              "args": {
+                "$ref": "#/components/schemas/ReportArgsDto"
+              },
+              "tool": {
+                "type": "string",
+                "enum": [
+                  "propose_study_grouping"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "args",
+              "tool"
+            ],
+            "properties": {
+              "args": {
+                "$ref": "#/components/schemas/StudyArgsDto"
+              },
+              "tool": {
+                "type": "string",
+                "enum": [
+                  "propose_classification"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "args",
+              "tool"
+            ],
+            "properties": {
+              "args": {
+                "$ref": "#/components/schemas/StudyArgsDto"
+              },
+              "tool": {
+                "type": "string",
+                "enum": [
+                  "propose_extraction"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "args",
+              "tool"
+            ],
+            "properties": {
+              "args": {
+                "$ref": "#/components/schemas/AppraisalArgsDto"
+              },
+              "tool": {
+                "type": "string",
+                "enum": [
+                  "propose_appraisal_answer"
+                ]
+              }
+            }
           }
-        }
+        ]
       },
       "AssistantToolResponse": {
         "oneOf": [
@@ -8897,6 +9153,32 @@
           }
         }
       },
+      "DocumentBlocksArgsDto": {
+        "type": "object",
+        "required": [
+          "project_id",
+          "document_id",
+          "block_ids"
+        ],
+        "properties": {
+          "block_ids": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          "document_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "project_id": {
+            "type": "string",
+            "format": "uuid"
+          }
+        },
+        "additionalProperties": false
+      },
       "DocumentDto": {
         "type": "object",
         "required": [
@@ -9003,6 +9285,29 @@
             "format": "double"
           }
         }
+      },
+      "DuplicateMergeArgsDto": {
+        "type": "object",
+        "required": [
+          "project_id",
+          "source_record_id",
+          "candidate_report_id"
+        ],
+        "properties": {
+          "candidate_report_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "project_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "source_record_id": {
+            "type": "string",
+            "format": "uuid"
+          }
+        },
+        "additionalProperties": false
       },
       "EligibilityCriterionDto": {
         "type": "object",
@@ -10720,6 +11025,19 @@
           }
         }
       },
+      "ProjectArgsDto": {
+        "type": "object",
+        "required": [
+          "project_id"
+        ],
+        "properties": {
+          "project_id": {
+            "type": "string",
+            "format": "uuid"
+          }
+        },
+        "additionalProperties": false
+      },
       "ProjectDto": {
         "type": "object",
         "required": [
@@ -11187,6 +11505,24 @@
           }
         }
       },
+      "ReportArgsDto": {
+        "type": "object",
+        "required": [
+          "project_id",
+          "report_id"
+        ],
+        "properties": {
+          "project_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "report_id": {
+            "type": "string",
+            "format": "uuid"
+          }
+        },
+        "additionalProperties": false
+      },
       "ReportDetailDto": {
         "type": "object",
         "required": [
@@ -11626,6 +11962,28 @@
           }
         }
       },
+      "ScreeningDecisionArgsDto": {
+        "type": "object",
+        "required": [
+          "project_id",
+          "report_id",
+          "stage"
+        ],
+        "properties": {
+          "project_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "report_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "stage": {
+            "$ref": "#/components/schemas/AssistantScreeningStageDto"
+          }
+        },
+        "additionalProperties": false
+      },
       "ScreeningDecisionInput": {
         "type": "string",
         "enum": [
@@ -11950,6 +12308,57 @@
           }
         }
       },
+      "SearchDocumentArgsDto": {
+        "type": "object",
+        "required": [
+          "project_id",
+          "document_id",
+          "query",
+          "limit"
+        ],
+        "properties": {
+          "document_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "limit": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "project_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "query": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": false
+      },
+      "SearchProjectReportsArgsDto": {
+        "type": "object",
+        "required": [
+          "project_id",
+          "query",
+          "limit"
+        ],
+        "properties": {
+          "limit": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "project_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "query": {
+            "type": "string"
+          }
+        },
+        "additionalProperties": false
+      },
       "SettingsDto": {
         "type": "object",
         "required": [
@@ -12021,6 +12430,24 @@
             "format": "uuid"
           }
         }
+      },
+      "StudyArgsDto": {
+        "type": "object",
+        "required": [
+          "project_id",
+          "study_id"
+        ],
+        "properties": {
+          "project_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "study_id": {
+            "type": "string",
+            "format": "uuid"
+          }
+        },
+        "additionalProperties": false
       },
       "StudyClassificationRequest": {
         "type": "object",

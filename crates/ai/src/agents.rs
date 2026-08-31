@@ -594,20 +594,23 @@ pub struct AgentProposalReceipt {
     pub review_run_id: Uuid,
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
-#[error("agent tool execution failed")]
-pub struct AgentToolExecutionError;
-
-pub type AgentReadFuture<'a> =
-    Pin<Box<dyn Future<Output = Result<BoundedAgentJson, AgentToolExecutionError>> + Send + 'a>>;
-pub type AgentProposalFuture<'a> = Pin<
-    Box<dyn Future<Output = Result<AgentProposalReceipt, AgentToolExecutionError>> + Send + 'a>,
->;
+pub type AgentReadFuture<'a, E> =
+    Pin<Box<dyn Future<Output = Result<BoundedAgentJson, E>> + Send + 'a>>;
+pub type AgentProposalFuture<'a, E> =
+    Pin<Box<dyn Future<Output = Result<AgentProposalReceipt, E>> + Send + 'a>>;
 
 /// Application-service port used after policy authorization.
 pub trait AgentToolExecutor: Send + Sync {
-    fn execute_read<'a>(&'a self, operation: AgentReadOperation) -> AgentReadFuture<'a>;
-    fn create_proposal<'a>(&'a self, operation: AgentProposalOperation) -> AgentProposalFuture<'a>;
+    type Error: Send;
+
+    fn execute_read<'a>(
+        &'a self,
+        operation: AgentReadOperation,
+    ) -> AgentReadFuture<'a, Self::Error>;
+    fn create_proposal<'a>(
+        &'a self,
+        operation: AgentProposalOperation,
+    ) -> AgentProposalFuture<'a, Self::Error>;
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Error)]
@@ -657,7 +660,7 @@ impl AgentRuntime {
         actor: &Actor,
         tool: AgentTool,
         executor: &'a E,
-    ) -> Result<AgentDispatch<'a>, AgentToolError> {
+    ) -> Result<AgentDispatch<'a, E::Error>, AgentToolError> {
         tool.validate()?;
         if self.project_id.as_uuid().is_nil() {
             return Err(AgentToolError::InvalidProjectScope);
@@ -700,7 +703,7 @@ impl AgentRuntime {
 
 /// The future selected by the policy decision.  No executor call is made for
 /// the error variants returned by [`AgentRuntime::dispatch`].
-pub enum AgentDispatch<'a> {
-    Read(AgentReadFuture<'a>),
-    Proposal(AgentProposalFuture<'a>),
+pub enum AgentDispatch<'a, E> {
+    Read(AgentReadFuture<'a, E>),
+    Proposal(AgentProposalFuture<'a, E>),
 }

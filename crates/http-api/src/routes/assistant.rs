@@ -1,5 +1,3 @@
-use std::sync::{Arc, Mutex};
-
 use axum::{
     Json,
     extract::{Path, State},
@@ -7,10 +5,12 @@ use axum::{
 };
 use deepref_ai::{
     AgentDispatch, AgentProposalOperation, AgentProposalReceipt, AgentReadOperation, AgentRuntime,
-    AgentTool, AgentToolError, AgentToolExecutionError, AgentToolExecutor, AgentToolName,
-    AgentToolParseError, BoundedAgentJson,
+    AgentTool, AgentToolError, AgentToolExecutor, AgentToolName, BoundedAgentJson,
 };
-use deepref_domain::{Actor, ProjectId, ScreeningStage, StudyDesign};
+use deepref_domain::{
+    Actor, DocumentBlockId, DocumentId, ProjectId, RecordId, ReportId, ScreeningStage, StudyDesign,
+    StudyId,
+};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use utoipa::ToSchema;
@@ -41,31 +41,217 @@ pub(crate) struct AssistantToolDescriptor {
 
 #[derive(Debug, Clone, Copy, Deserialize, ToSchema)]
 #[serde(rename_all = "snake_case")]
-pub(crate) enum AssistantToolNameDto {
-    GetProjectProtocol,
-    GetReport,
-    ReadDocumentBlocks,
-    SearchDocument,
-    SearchProjectReports,
-    GetScreeningState,
-    GetStudy,
-    GetAppraisal,
-    ProposeScreeningDecision,
-    ProposeDuplicateMerge,
-    ProposeStudyGrouping,
-    ProposeClassification,
-    ProposeExtraction,
-    ProposeAppraisalAnswer,
+pub(crate) enum AssistantScreeningStageDto {
+    TitleAbstract,
+    FullText,
+}
+
+impl From<AssistantScreeningStageDto> for ScreeningStage {
+    fn from(value: AssistantScreeningStageDto) -> Self {
+        match value {
+            AssistantScreeningStageDto::TitleAbstract => Self::TitleAbstract,
+            AssistantScreeningStageDto::FullText => Self::FullText,
+        }
+    }
 }
 
 #[derive(Debug, Deserialize, ToSchema)]
-#[allow(dead_code)]
-pub(crate) struct AssistantToolRequest {
-    /// The value is parsed by deepref_ai::AgentTool, which owns the closed
-    /// name and typed-argument schema.
-    pub tool: AssistantToolNameDto,
-    #[schema(value_type = Object)]
-    pub args: Value,
+#[serde(deny_unknown_fields)]
+pub(crate) struct ProjectArgsDto {
+    project_id: Uuid,
+}
+
+#[derive(Debug, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct ReportArgsDto {
+    project_id: Uuid,
+    report_id: Uuid,
+}
+
+#[derive(Debug, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct DocumentBlocksArgsDto {
+    project_id: Uuid,
+    document_id: Uuid,
+    block_ids: Vec<Uuid>,
+}
+
+#[derive(Debug, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct SearchDocumentArgsDto {
+    project_id: Uuid,
+    document_id: Uuid,
+    query: String,
+    limit: u16,
+}
+
+#[derive(Debug, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct SearchProjectReportsArgsDto {
+    project_id: Uuid,
+    query: String,
+    limit: u16,
+}
+
+#[derive(Debug, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct StudyArgsDto {
+    project_id: Uuid,
+    study_id: Uuid,
+}
+
+#[derive(Debug, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct AppraisalArgsDto {
+    project_id: Uuid,
+    report_id: Uuid,
+    definition_id: String,
+    definition_version: u32,
+}
+
+#[derive(Debug, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct ScreeningDecisionArgsDto {
+    project_id: Uuid,
+    report_id: Uuid,
+    stage: AssistantScreeningStageDto,
+}
+
+#[derive(Debug, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct DuplicateMergeArgsDto {
+    project_id: Uuid,
+    source_record_id: Uuid,
+    candidate_report_id: Uuid,
+}
+
+#[derive(Debug, Deserialize, ToSchema)]
+#[serde(tag = "tool", content = "args", rename_all = "snake_case")]
+pub(crate) enum AssistantToolRequest {
+    GetProjectProtocol(ProjectArgsDto),
+    GetReport(ReportArgsDto),
+    ReadDocumentBlocks(DocumentBlocksArgsDto),
+    SearchDocument(SearchDocumentArgsDto),
+    SearchProjectReports(SearchProjectReportsArgsDto),
+    GetScreeningState(ReportArgsDto),
+    GetStudy(StudyArgsDto),
+    GetAppraisal(AppraisalArgsDto),
+    ProposeScreeningDecision(ScreeningDecisionArgsDto),
+    ProposeDuplicateMerge(DuplicateMergeArgsDto),
+    ProposeStudyGrouping(ReportArgsDto),
+    ProposeClassification(StudyArgsDto),
+    ProposeExtraction(StudyArgsDto),
+    ProposeAppraisalAnswer(AppraisalArgsDto),
+}
+
+impl AssistantToolRequest {
+    fn into_agent_tool(self) -> AgentTool {
+        match self {
+            Self::GetProjectProtocol(args) => {
+                AgentTool::GetProjectProtocol(deepref_ai::ProjectToolArgs {
+                    project_id: ProjectId::new(args.project_id),
+                })
+            }
+            Self::GetReport(args) => AgentTool::GetReport(report_args(args)),
+            Self::ReadDocumentBlocks(args) => {
+                AgentTool::ReadDocumentBlocks(deepref_ai::DocumentBlocksToolArgs {
+                    project_id: ProjectId::new(args.project_id),
+                    document_id: DocumentId::new(args.document_id),
+                    block_ids: args
+                        .block_ids
+                        .into_iter()
+                        .map(DocumentBlockId::new)
+                        .collect(),
+                })
+            }
+            Self::SearchDocument(args) => {
+                AgentTool::SearchDocument(deepref_ai::SearchDocumentToolArgs {
+                    project_id: ProjectId::new(args.project_id),
+                    document_id: DocumentId::new(args.document_id),
+                    query: args.query,
+                    limit: args.limit,
+                })
+            }
+            Self::SearchProjectReports(args) => {
+                AgentTool::SearchProjectReports(deepref_ai::SearchProjectReportsToolArgs {
+                    project_id: ProjectId::new(args.project_id),
+                    query: args.query,
+                    limit: args.limit,
+                })
+            }
+            Self::GetScreeningState(args) => {
+                AgentTool::GetScreeningState(deepref_ai::ScreeningStateToolArgs {
+                    project_id: ProjectId::new(args.project_id),
+                    report_id: ReportId::new(args.report_id),
+                })
+            }
+            Self::GetStudy(args) => AgentTool::GetStudy(study_args(args)),
+            Self::GetAppraisal(args) => AgentTool::GetAppraisal(appraisal_args(args)),
+            Self::ProposeScreeningDecision(args) => {
+                AgentTool::ProposeScreeningDecision(deepref_ai::ScreeningDecisionProposalArgs {
+                    project_id: ProjectId::new(args.project_id),
+                    report_id: ReportId::new(args.report_id),
+                    stage: args.stage.into(),
+                })
+            }
+            Self::ProposeDuplicateMerge(args) => {
+                AgentTool::ProposeDuplicateMerge(deepref_ai::DuplicateMergeProposalArgs {
+                    project_id: ProjectId::new(args.project_id),
+                    source_record_id: RecordId::new(args.source_record_id),
+                    candidate_report_id: ReportId::new(args.candidate_report_id),
+                })
+            }
+            Self::ProposeStudyGrouping(args) => {
+                AgentTool::ProposeStudyGrouping(deepref_ai::StudyGroupingProposalArgs {
+                    project_id: ProjectId::new(args.project_id),
+                    report_id: ReportId::new(args.report_id),
+                })
+            }
+            Self::ProposeClassification(args) => {
+                AgentTool::ProposeClassification(deepref_ai::ClassificationProposalArgs {
+                    project_id: ProjectId::new(args.project_id),
+                    study_id: StudyId::new(args.study_id),
+                })
+            }
+            Self::ProposeExtraction(args) => {
+                AgentTool::ProposeExtraction(deepref_ai::ExtractionProposalArgs {
+                    project_id: ProjectId::new(args.project_id),
+                    study_id: StudyId::new(args.study_id),
+                })
+            }
+            Self::ProposeAppraisalAnswer(args) => {
+                AgentTool::ProposeAppraisalAnswer(deepref_ai::AppraisalAnswerProposalArgs {
+                    project_id: ProjectId::new(args.project_id),
+                    report_id: ReportId::new(args.report_id),
+                    definition_id: args.definition_id,
+                    definition_version: args.definition_version,
+                })
+            }
+        }
+    }
+}
+
+fn report_args(args: ReportArgsDto) -> deepref_ai::ReportToolArgs {
+    deepref_ai::ReportToolArgs {
+        project_id: ProjectId::new(args.project_id),
+        report_id: ReportId::new(args.report_id),
+    }
+}
+
+fn study_args(args: StudyArgsDto) -> deepref_ai::StudyToolArgs {
+    deepref_ai::StudyToolArgs {
+        project_id: ProjectId::new(args.project_id),
+        study_id: StudyId::new(args.study_id),
+    }
+}
+
+fn appraisal_args(args: AppraisalArgsDto) -> deepref_ai::AppraisalToolArgs {
+    deepref_ai::AppraisalToolArgs {
+        project_id: ProjectId::new(args.project_id),
+        report_id: ReportId::new(args.report_id),
+        definition_id: args.definition_id,
+        definition_version: args.definition_version,
+    }
 }
 
 #[derive(Debug, Serialize, ToSchema)]
@@ -138,9 +324,11 @@ pub(crate) async fn execute_tool(
     if !deepref_postgres::project_exists(&state.pool, project_id).await? {
         return Err(ApiError::NotFound("project not found".to_owned()));
     }
-    let encoded = serde_json::to_string(&body)
-        .map_err(|_| ApiError::BadRequest("tool request is malformed".to_owned()))?;
-    let tool = AgentTool::parse_json(&encoded).map_err(map_parse_error)?;
+    let tool = serde_json::from_value::<AssistantToolRequest>(body)
+        .map_err(|_| {
+            ApiError::BadRequest("tool request is malformed or not in the allowlist".to_owned())
+        })?
+        .into_agent_tool();
     let runtime = AgentRuntime::new(
         ProjectId::new(project_id),
         deepref_ai::ProjectAiPolicy::default(),
@@ -154,14 +342,14 @@ pub(crate) async fn execute_tool(
             Ok(data) => AssistantToolResponse::Read {
                 data: data.into_value(),
             },
-            Err(_) => return Err(executor.take_failure()),
+            Err(error) => return Err(map_assistant_failure(error)),
         },
         AgentDispatch::Proposal(future) => match future.await {
             Ok(AgentProposalReceipt { review_run_id }) => AssistantToolResponse::ReviewRun {
                 review_run_id,
                 status_path: format!("/projects/{project_id}/review-runs/{review_run_id}"),
             },
-            Err(_) => return Err(executor.take_failure()),
+            Err(error) => return Err(map_assistant_failure(error)),
         },
     };
     Ok(Json(response))
@@ -223,81 +411,39 @@ enum AssistantFailure {
 struct ProjectAgentToolExecutor {
     state: AppState,
     actor: Actor,
-    failure: Arc<Mutex<Option<AssistantFailure>>>,
 }
 
 impl ProjectAgentToolExecutor {
     fn new(state: AppState, actor: Actor) -> Self {
-        Self {
-            state,
-            actor,
-            failure: Arc::new(Mutex::new(None)),
-        }
-    }
-
-    fn record_failure(
-        failure: &Mutex<Option<AssistantFailure>>,
-        kind: AssistantFailure,
-    ) -> AgentToolExecutionError {
-        if let Ok(mut recorded) = failure.lock() {
-            *recorded = Some(kind);
-        }
-        AgentToolExecutionError
-    }
-
-    fn take_failure(&self) -> ApiError {
-        let kind = self
-            .failure
-            .lock()
-            .ok()
-            .and_then(|mut failure| failure.take())
-            .unwrap_or(AssistantFailure::Internal);
-        match kind {
-            AssistantFailure::NotFound => {
-                ApiError::NotFound("scoped resource not found".to_owned())
-            }
-            AssistantFailure::Conflict => ApiError::Conflict {
-                code: "assistant_proposal_conflict".to_owned(),
-                message: "proposal conflicts with current state".to_owned(),
-                details: Value::Null,
-            },
-            AssistantFailure::Internal => {
-                ApiError::Internal(anyhow::anyhow!("assistant tool execution failed"))
-            }
-        }
+        Self { state, actor }
     }
 }
 
 impl AgentToolExecutor for ProjectAgentToolExecutor {
+    type Error = AssistantFailure;
+
     fn execute_read<'a>(
         &'a self,
         operation: AgentReadOperation,
-    ) -> deepref_ai::AgentReadFuture<'a> {
+    ) -> deepref_ai::AgentReadFuture<'a, Self::Error> {
         let state = self.state.clone();
-        let failure = Arc::clone(&self.failure);
         Box::pin(async move {
-            match execute_read(&state, operation).await {
-                Ok(value) => BoundedAgentJson::new(value)
-                    .map_err(|_| Self::record_failure(&failure, AssistantFailure::Internal)),
-                Err(kind) => Err(Self::record_failure(&failure, kind)),
-            }
+            let value = execute_read(&state, operation).await?;
+            BoundedAgentJson::new(value).map_err(|_| AssistantFailure::Internal)
         })
     }
 
     fn create_proposal<'a>(
         &'a self,
         operation: AgentProposalOperation,
-    ) -> deepref_ai::AgentProposalFuture<'a> {
+    ) -> deepref_ai::AgentProposalFuture<'a, Self::Error> {
         let state = self.state.clone();
         let actor = self.actor.clone();
-        let failure = Arc::clone(&self.failure);
         Box::pin(async move {
-            match execute_proposal(&state, operation, actor).await {
-                Ok(run) => Ok(AgentProposalReceipt {
-                    review_run_id: run.id.as_uuid(),
-                }),
-                Err(kind) => Err(Self::record_failure(&failure, kind)),
-            }
+            let run = execute_proposal(&state, operation, actor).await?;
+            Ok(AgentProposalReceipt {
+                review_run_id: run.id.as_uuid(),
+            })
         })
     }
 }
@@ -562,10 +708,16 @@ fn bounded_text(value: &str, max_chars: usize) -> String {
     value.chars().take(max_chars).collect()
 }
 
-fn map_parse_error(error: AgentToolParseError) -> ApiError {
+fn map_assistant_failure(error: AssistantFailure) -> ApiError {
     match error {
-        AgentToolParseError::MalformedRequest | AgentToolParseError::UnknownTool => {
-            ApiError::BadRequest("tool request is malformed or not in the allowlist".to_owned())
+        AssistantFailure::NotFound => ApiError::NotFound("scoped resource not found".to_owned()),
+        AssistantFailure::Conflict => ApiError::Conflict {
+            code: "assistant_proposal_conflict".to_owned(),
+            message: "proposal conflicts with current state".to_owned(),
+            details: Value::Null,
+        },
+        AssistantFailure::Internal => {
+            ApiError::Internal(anyhow::anyhow!("assistant tool execution failed"))
         }
     }
 }

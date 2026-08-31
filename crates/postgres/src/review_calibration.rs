@@ -1,7 +1,7 @@
 use chrono::{DateTime, Utc};
 use deepref_review::{
     CalibrationBundleId, ReviewDefinitionKey,
-    internal::{ReviewHash, ReviewRunManifest},
+    worker::{ReviewHash, ReviewRunManifest},
 };
 use serde_json::Value;
 use sqlx::{PgPool, Postgres, Row, Transaction};

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { AssistantToolKind, AssistantToolNameDto } from '$lib/api/generated/models';
+import { AssistantToolKind } from '$lib/api/generated/models';
 import type { AssistantToolDescriptor } from '$lib/api/generated/models';
 import {
 	ASSISTANT_TOOL_METADATA,
@@ -78,14 +78,14 @@ describe('project assistant tool metadata and request serialization', () => {
 		}
 
 		const complexRead = serializeToolRequest(
-			AssistantToolNameDto.read_document_blocks,
+			'read_document_blocks',
 			PROJECT_ID,
 			validValues.read_document_blocks
 		);
 		expect(complexRead).toEqual({
 			kind: 'valid',
 			request: {
-				tool: AssistantToolNameDto.read_document_blocks,
+				tool: 'read_document_blocks',
 				args: {
 					project_id: PROJECT_ID,
 					document_id: DOCUMENT_ID,
@@ -95,55 +95,52 @@ describe('project assistant tool metadata and request serialization', () => {
 		});
 
 		const proposal = serializeToolRequest(
-			AssistantToolNameDto.propose_screening_decision,
+			'propose_screening_decision',
 			PROJECT_ID,
 			validValues.propose_screening_decision
 		);
 		expect(proposal).toEqual({
 			kind: 'valid',
 			request: {
-				tool: AssistantToolNameDto.propose_screening_decision,
+				tool: 'propose_screening_decision',
 				args: { project_id: PROJECT_ID, report_id: REPORT_ID, stage: 'full_text' }
 			}
 		});
 	});
 
 	it('rejects malformed UUIDs, block lists, limits, versions, and text before sending', () => {
-		const invalidUuid = serializeToolRequest(AssistantToolNameDto.get_report, PROJECT_ID, {
+		const invalidUuid = serializeToolRequest('get_report', PROJECT_ID, {
 			report_id: 'not-a-uuid'
 		});
 		expect(invalidUuid.kind).toBe('invalid');
 		if (invalidUuid.kind === 'invalid') expect(invalidUuid.errors.report_id).toBeTruthy();
 
-		const invalidBlocks = serializeToolRequest(
-			AssistantToolNameDto.read_document_blocks,
-			PROJECT_ID,
-			{ document_id: DOCUMENT_ID, block_ids: `${BLOCK_ID}\nnot-a-uuid` }
-		);
+		const invalidBlocks = serializeToolRequest('read_document_blocks', PROJECT_ID, {
+			document_id: DOCUMENT_ID,
+			block_ids: `${BLOCK_ID}\nnot-a-uuid`
+		});
 		expect(invalidBlocks.kind).toBe('invalid');
 		if (invalidBlocks.kind === 'invalid') expect(invalidBlocks.errors.block_ids).toBeTruthy();
 
 		for (const limit of ['0', '101', '1.5', 'nope']) {
-			const invalidLimit = serializeToolRequest(
-				AssistantToolNameDto.search_project_reports,
-				PROJECT_ID,
-				{ query: 'trial', limit }
-			);
+			const invalidLimit = serializeToolRequest('search_project_reports', PROJECT_ID, {
+				query: 'trial',
+				limit
+			});
 			expect(invalidLimit.kind).toBe('invalid');
 		}
 
-		const invalidVersion = serializeToolRequest(
-			AssistantToolNameDto.get_appraisal,
-			PROJECT_ID,
-			{ report_id: REPORT_ID, definition_id: 'rob-2', definition_version: '0' }
-		);
+		const invalidVersion = serializeToolRequest('get_appraisal', PROJECT_ID, {
+			report_id: REPORT_ID,
+			definition_id: 'rob-2',
+			definition_version: '0'
+		});
 		expect(invalidVersion.kind).toBe('invalid');
 
-		const invalidText = serializeToolRequest(
-			AssistantToolNameDto.search_project_reports,
-			PROJECT_ID,
-			{ query: '   ', limit: '10' }
-		);
+		const invalidText = serializeToolRequest('search_project_reports', PROJECT_ID, {
+			query: '   ',
+			limit: '10'
+		});
 		expect(invalidText.kind).toBe('invalid');
 	});
 
@@ -169,33 +166,21 @@ describe('project assistant tool metadata and request serialization', () => {
 	it('links proposal receipts to their human review queues', () => {
 		expect(
 			reviewPath(
-				AssistantToolNameDto.propose_screening_decision,
+				'propose_screening_decision',
 				PROJECT_ID,
 				validValues.propose_screening_decision
 			)
 		).toBe('/projects/project-1/screening/full-text');
 		expect(
-			reviewPath(
-				AssistantToolNameDto.propose_duplicate_merge,
-				PROJECT_ID,
-				validValues.propose_duplicate_merge
-			)
+			reviewPath('propose_duplicate_merge', PROJECT_ID, validValues.propose_duplicate_merge)
 		).toBe('/projects/project-1/discovery/duplicates');
 		expect(
-			reviewPath(
-				AssistantToolNameDto.propose_study_grouping,
-				PROJECT_ID,
-				validValues.propose_study_grouping
-			)
+			reviewPath('propose_study_grouping', PROJECT_ID, validValues.propose_study_grouping)
 		).toBe('/projects/project-1/studies?report=11111111-1111-4111-8111-111111111111');
 		expect(
-			reviewPath(
-				AssistantToolNameDto.propose_classification,
-				PROJECT_ID,
-				validValues.propose_classification
-			)
+			reviewPath('propose_classification', PROJECT_ID, validValues.propose_classification)
 		).toBe('/projects/project-1/studies?study=44444444-4444-4444-8444-444444444444');
-		expect(reviewPath(AssistantToolNameDto.get_report, PROJECT_ID, {})).toBeNull();
+		expect(reviewPath('get_report', PROJECT_ID, {})).toBeNull();
 	});
 
 	it('provides a deterministic form state for each tool', () => {
@@ -205,9 +190,7 @@ describe('project assistant tool metadata and request serialization', () => {
 				ASSISTANT_TOOL_METADATA[tool].fields.map((field) => field.key)
 			);
 		}
-		expect(initialToolValues(AssistantToolNameDto.search_document).limit).toBe('20');
-		expect(initialToolValues(AssistantToolNameDto.propose_screening_decision).stage).toBe(
-			'title_abstract'
-		);
+		expect(initialToolValues('search_document').limit).toBe('20');
+		expect(initialToolValues('propose_screening_decision').stage).toBe('title_abstract');
 	});
 });

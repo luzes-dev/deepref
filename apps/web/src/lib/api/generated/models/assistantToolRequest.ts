@@ -4,14 +4,70 @@
  * DeepRef API
  * OpenAPI spec version: 0.1.0
  */
-import type { AssistantToolNameDto } from './assistantToolNameDto.ts';
-import type { AssistantToolRequestArgs } from './assistantToolRequestArgs.ts';
+import type { AppraisalArgsDto } from './appraisalArgsDto.ts';
+import type { DocumentBlocksArgsDto } from './documentBlocksArgsDto.ts';
+import type { DuplicateMergeArgsDto } from './duplicateMergeArgsDto.ts';
+import type { ProjectArgsDto } from './projectArgsDto.ts';
+import type { ReportArgsDto } from './reportArgsDto.ts';
+import type { ScreeningDecisionArgsDto } from './screeningDecisionArgsDto.ts';
+import type { SearchDocumentArgsDto } from './searchDocumentArgsDto.ts';
+import type { SearchProjectReportsArgsDto } from './searchProjectReportsArgsDto.ts';
+import type { StudyArgsDto } from './studyArgsDto.ts';
 
-export interface AssistantToolRequest {
-	args: AssistantToolRequestArgs;
-	/**
-	 * The value is parsed by deepref_ai::AgentTool, which owns the closed
-	 * name and typed-argument schema.
-	 */
-	tool: AssistantToolNameDto;
-}
+export type AssistantToolRequest =
+	| {
+			args: ProjectArgsDto;
+			tool: 'get_project_protocol';
+	  }
+	| {
+			args: ReportArgsDto;
+			tool: 'get_report';
+	  }
+	| {
+			args: DocumentBlocksArgsDto;
+			tool: 'read_document_blocks';
+	  }
+	| {
+			args: SearchDocumentArgsDto;
+			tool: 'search_document';
+	  }
+	| {
+			args: SearchProjectReportsArgsDto;
+			tool: 'search_project_reports';
+	  }
+	| {
+			args: ReportArgsDto;
+			tool: 'get_screening_state';
+	  }
+	| {
+			args: StudyArgsDto;
+			tool: 'get_study';
+	  }
+	| {
+			args: AppraisalArgsDto;
+			tool: 'get_appraisal';
+	  }
+	| {
+			args: ScreeningDecisionArgsDto;
+			tool: 'propose_screening_decision';
+	  }
+	| {
+			args: DuplicateMergeArgsDto;
+			tool: 'propose_duplicate_merge';
+	  }
+	| {
+			args: ReportArgsDto;
+			tool: 'propose_study_grouping';
+	  }
+	| {
+			args: StudyArgsDto;
+			tool: 'propose_classification';
+	  }
+	| {
+			args: StudyArgsDto;
+			tool: 'propose_extraction';
+	  }
+	| {
+			args: AppraisalArgsDto;
+			tool: 'propose_appraisal_answer';
+	  };

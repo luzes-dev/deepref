@@ -1,16 +1,12 @@
 use chrono::{DateTime, Utc};
-use deepref_ai::{
-    AiProposal, ModelRouter, ProposalStatus, ProposalStore, ResolvedModel, hash_json,
-};
-use deepref_application::BuiltInAutomationRecipe;
+use deepref_ai::{AiProposal, ModelRouter, ProposalStatus, ProposalStore, hash_json};
 use deepref_domain::ProjectId;
 use deepref_review::{
     ReviewBlockCode, ReviewDefinitionKey, ReviewError, ReviewOrigin, ReviewRunId,
     ReviewRunSnapshot, ReviewRunState, ReviewSubject, ScheduleReviewRun,
-    execution::{ExecutedReviewTask, PreparedReviewTask},
-    internal::{
-        AcceptedArtifactInput, ReviewCatalog, ReviewHash, ReviewManifestInput, ReviewModelIdentity,
-        ReviewRunManifest, ReviewRuntimeIdentity, fingerprint_node,
+    worker::{
+        AcceptedArtifactInput, CompiledReview, ExecutedReviewTask, PreparedReviewTask, ReviewHash,
+        ReviewManifestInput, ReviewNode, ReviewRunManifest,
     },
 };
 use serde_json::Value;
@@ -21,6 +17,10 @@ use uuid::Uuid;
 use crate::{
     PostgresAiStore,
     review_calibration::{CalibrationAdmissionError, admit_calibration},
+    review_run_setup::{
+        ensure_review_automation_definition, model_identity, protocol_version_id, recipe_for,
+        runtime_identity,
+    },
 };
 
 #[derive(Debug, Error)]
@@ -120,25 +120,22 @@ pub async fn schedule_prepared_review_run(
         .into());
     }
 
-    let definition = ReviewCatalog.compile(request.command.definition)?;
+    let review = CompiledReview::compile(request.command.definition)?;
     let route = PostgresAiStore::new(pool)
         .resolve(request.task.model_profile())
         .await?;
     let source_content_hash = request.task.source_content_hash()?;
-    let manifest = ReviewRunManifest::build(
-        &definition,
-        ReviewManifestInput {
-            project_id: request.command.project_id,
-            subject: request.command.subject.clone(),
-            origin: request.command.origin,
-            protocol_version_id: protocol_version_id(&request.command.subject),
-            protocol_hash: request.task.protocol_hash()?,
-            source_manifest_hash: source_content_hash.clone(),
-            source_content_hash,
-            resolved_models: vec![model_identity(route)?],
-            runtime: runtime_identity(),
-        },
-    )?;
+    let manifest = review.build_manifest(ReviewManifestInput {
+        project_id: request.command.project_id,
+        subject: request.command.subject.clone(),
+        origin: request.command.origin,
+        protocol_version_id: protocol_version_id(&request.command.subject),
+        protocol_hash: request.task.protocol_hash()?,
+        source_manifest_hash: source_content_hash.clone(),
+        source_content_hash,
+        resolved_models: vec![model_identity(route)?],
+        runtime: runtime_identity(),
+    })?;
 
     let recipe = recipe_for(request.command.definition);
     let mut transaction = pool.begin().await?;
@@ -369,21 +366,23 @@ async fn finish_review_run(
 pub async fn begin_review_attempt(
     pool: &PgPool,
     run: &LeasedReviewRun,
-    definition: &deepref_review::internal::CompiledReviewDefinition,
-    node_id: &str,
+    review: &CompiledReview,
+    node: &ReviewNode,
     predecessors: &[AcceptedArtifactInput],
     worker_id: &str,
 ) -> Result<ReviewAttemptStart, PostgresReviewError> {
-    let fingerprint = fingerprint_node(definition, &run.manifest, node_id, predecessors)?;
-    let node_version = definition
-        .node_version(node_id)
-        .ok_or_else(|| ReviewError::InvalidWorkflow(format!("unknown node {node_id}")))?;
+    let identity = review.attempt_identity(&run.manifest, node, predecessors)?;
     let project_id = run.snapshot.project_id;
     let run_id = run.snapshot.id;
     let mut transaction = pool.begin().await?;
     assert_worker_lease(&mut transaction, project_id, run_id, worker_id).await?;
-    if let Some(row) =
-        find_accepted_attempt(&mut transaction, project_id, node_id, &fingerprint).await?
+    if let Some(row) = find_accepted_attempt(
+        &mut transaction,
+        project_id,
+        &identity.node_id,
+        &identity.input_fingerprint,
+    )
+    .await?
     {
         transaction.commit().await?;
         return accepted_start_from_row(&row);
@@ -395,7 +394,7 @@ pub async fn begin_review_attempt(
     )
     .bind(project_id.as_uuid())
     .bind(run_id.as_uuid())
-    .bind(node_id)
+    .bind(&identity.node_id)
     .fetch_one(&mut *transaction)
     .await?;
     let attempt_id = Uuid::new_v4();
@@ -408,12 +407,12 @@ pub async fn begin_review_attempt(
     .bind(attempt_id)
     .bind(project_id.as_uuid())
     .bind(run_id.as_uuid())
-    .bind(node_id)
-    .bind(i32::try_from(node_version).map_err(|_| {
+    .bind(&identity.node_id)
+    .bind(i32::try_from(identity.node_version).map_err(|_| {
         PostgresReviewError::InvalidStoredValue("node version is too large".to_owned())
     })?)
     .bind(attempt_number)
-    .bind(fingerprint.as_str())
+    .bind(identity.input_fingerprint.as_str())
     .bind(worker_id)
     .execute(&mut *transaction)
     .await?;
@@ -421,7 +420,7 @@ pub async fn begin_review_attempt(
     Ok(ReviewAttemptStart::Started {
         attempt_id,
         attempt_number,
-        input_fingerprint: fingerprint,
+        input_fingerprint: identity.input_fingerprint,
     })
 }
 
@@ -727,90 +726,6 @@ pub async fn finalize_review_proposal(
     }
     transaction.commit().await?;
     Ok(ReviewFinalization::Completed { proposal_id })
-}
-
-async fn ensure_review_automation_definition(
-    transaction: &mut Transaction<'_, Postgres>,
-    project_id: ProjectId,
-    recipe: BuiltInAutomationRecipe,
-    actor: &deepref_domain::Actor,
-) -> Result<Uuid, PostgresReviewError> {
-    let row = sqlx::query(
-        "SELECT id FROM configure_automation_definition($1,$2,'manual',$3,$4,'active',$5,$6)",
-    )
-    .bind(project_id.as_uuid())
-    .bind(format!("Compiled review · {}", recipe.id()))
-    .bind(recipe.id())
-    .bind(recipe.version())
-    .bind(actor.kind().as_str())
-    .bind(actor.id())
-    .fetch_one(&mut **transaction)
-    .await?;
-    Ok(row.get("id"))
-}
-
-const fn recipe_for(key: ReviewDefinitionKey) -> BuiltInAutomationRecipe {
-    match key {
-        ReviewDefinitionKey::Screening => BuiltInAutomationRecipe::ReviewScreeningV1,
-        ReviewDefinitionKey::DuplicateDetection => {
-            BuiltInAutomationRecipe::ReviewDuplicateDetectionV1
-        }
-        ReviewDefinitionKey::StudyClassification => {
-            BuiltInAutomationRecipe::ReviewStudyClassificationV1
-        }
-        ReviewDefinitionKey::StudyGrouping => BuiltInAutomationRecipe::ReviewStudyGroupingV1,
-        ReviewDefinitionKey::AppraisalPrefill => BuiltInAutomationRecipe::ReviewAppraisalPrefillV1,
-        ReviewDefinitionKey::DataExtraction => BuiltInAutomationRecipe::ReviewDataExtractionV1,
-    }
-}
-
-fn protocol_version_id(subject: &ReviewSubject) -> Option<deepref_domain::ProtocolVersionId> {
-    match subject {
-        ReviewSubject::Screening {
-            protocol_version_id,
-            ..
-        } => Some(*protocol_version_id),
-        _ => None,
-    }
-}
-
-fn model_identity(route: ResolvedModel) -> Result<ReviewModelIdentity, PostgresReviewError> {
-    Ok(ReviewModelIdentity {
-        profile: route.profile,
-        provider: route.provider,
-        model: route.model,
-        model_version: route.model_version,
-        parameters_hash: ReviewHash::parse(hash_json(&serde_json::to_value(route.parameters)?)?)?,
-    })
-}
-
-fn runtime_identity() -> ReviewRuntimeIdentity {
-    let build_sha = option_env!("DEEPREF_BUILD_SHA").map_or_else(
-        || {
-            ReviewHash::digest_bytes(concat!(
-                include_str!("review_runs.rs"),
-                include_str!("review_preparation.rs"),
-                include_str!("../../review/src/definition.rs"),
-                include_str!("../../review/src/execution.rs"),
-                include_str!("../../review/src/manifest.rs"),
-                include_str!("../../review/src/task.rs"),
-                include_str!("../../ai/src/runner.rs"),
-                include_str!("../../ai/src/screening.rs"),
-                include_str!("../../ai/src/dedupe.rs"),
-                include_str!("../../ai/src/classification.rs"),
-                include_str!("../../ai/src/review_assistance.rs"),
-                include_str!("../../../services/worker/src/processor.rs"),
-            ))
-        },
-        |build| ReviewHash::digest_bytes(build.as_bytes()),
-    );
-    ReviewRuntimeIdentity {
-        build_sha,
-        rust_version: option_env!("RUSTC_VERSION")
-            .unwrap_or("workspace-toolchain")
-            .to_owned(),
-        target: format!("{}-{}", std::env::consts::ARCH, std::env::consts::OS),
-    }
 }
 
 fn snapshot_from_row(row: &PgRow) -> Result<ReviewRunSnapshot, PostgresReviewError> {

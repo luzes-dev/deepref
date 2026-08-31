@@ -25,16 +25,24 @@ struct RecordingExecutor {
 }
 
 impl AgentToolExecutor for RecordingExecutor {
-    fn execute_read<'a>(&'a self, operation: AgentReadOperation) -> AgentReadFuture<'a> {
+    type Error = AgentToolError;
+
+    fn execute_read<'a>(
+        &'a self,
+        operation: AgentReadOperation,
+    ) -> AgentReadFuture<'a, Self::Error> {
         let reads = Arc::clone(&self.reads);
         Box::pin(async move {
             reads.lock().expect("read lock").push(operation);
             BoundedAgentJson::new(json!({"result": "read"}))
-                .map_err(|_| crate::AgentToolExecutionError)
+                .map_err(|_| AgentToolError::InvalidOutput)
         })
     }
 
-    fn create_proposal<'a>(&'a self, operation: AgentProposalOperation) -> AgentProposalFuture<'a> {
+    fn create_proposal<'a>(
+        &'a self,
+        operation: AgentProposalOperation,
+    ) -> AgentProposalFuture<'a, Self::Error> {
         let proposals = Arc::clone(&self.proposals);
         Box::pin(async move {
             proposals.lock().expect("proposal lock").push(operation);
@@ -68,7 +76,7 @@ fn runtime(project_id: ProjectId) -> AgentRuntime {
 }
 
 fn assert_dispatch_error(
-    result: Result<AgentDispatch<'_>, AgentToolError>,
+    result: Result<AgentDispatch<'_, AgentToolError>, AgentToolError>,
     expected: AgentToolError,
 ) {
     match result {

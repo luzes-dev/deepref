@@ -1,12 +1,7 @@
-import { AssistantToolKind, AssistantToolNameDto } from '$lib/api/generated/models';
-import type {
-	AssistantToolDescriptor,
-	AssistantToolRequest,
-	AssistantToolRequestArgs,
-	AssistantToolNameDto as GeneratedToolName
-} from '$lib/api/generated/models';
+import { AssistantToolKind } from '$lib/api/generated/models';
+import type { AssistantToolDescriptor, AssistantToolRequest } from '$lib/api/generated/models';
 
-export type ToolName = GeneratedToolName;
+export type ToolName = AssistantToolRequest['tool'];
 export type ToolKind = (typeof AssistantToolKind)[keyof typeof AssistantToolKind];
 export type ReviewDestination =
 	'screening' | 'deduplication' | 'studies' | 'extraction' | 'appraisal';
@@ -67,11 +62,15 @@ type FieldValidation = { kind: 'valid'; value: ParsedValue } | { kind: 'invalid'
 type RequestBuilder = (
 	projectId: string,
 	values: Readonly<ParsedToolValues>
-) => AssistantToolRequestArgs | null;
+) => AssistantToolRequest | null;
 type ToolDefinition = ToolMetadata & {
 	defaults: ToolValues;
 	buildRequest: RequestBuilder;
 };
+type ScreeningDecisionArgs = Extract<
+	AssistantToolRequest,
+	{ tool: 'propose_screening_decision' }
+>['args'];
 
 export type ToolValues = Record<string, string>;
 
@@ -85,20 +84,20 @@ export type SupportedCatalogEntry = {
 };
 
 export const ASSISTANT_TOOL_NAMES = [
-	AssistantToolNameDto.get_project_protocol,
-	AssistantToolNameDto.get_report,
-	AssistantToolNameDto.read_document_blocks,
-	AssistantToolNameDto.search_document,
-	AssistantToolNameDto.search_project_reports,
-	AssistantToolNameDto.get_screening_state,
-	AssistantToolNameDto.get_study,
-	AssistantToolNameDto.get_appraisal,
-	AssistantToolNameDto.propose_screening_decision,
-	AssistantToolNameDto.propose_duplicate_merge,
-	AssistantToolNameDto.propose_study_grouping,
-	AssistantToolNameDto.propose_classification,
-	AssistantToolNameDto.propose_extraction,
-	AssistantToolNameDto.propose_appraisal_answer
+	'get_project_protocol',
+	'get_report',
+	'read_document_blocks',
+	'search_document',
+	'search_project_reports',
+	'get_screening_state',
+	'get_study',
+	'get_appraisal',
+	'propose_screening_decision',
+	'propose_duplicate_merge',
+	'propose_study_grouping',
+	'propose_classification',
+	'propose_extraction',
+	'propose_appraisal_answer'
 ] satisfies readonly ToolName[];
 
 const uuid = (key: UuidField['key'], label: string, help: string): UuidField => ({
@@ -173,32 +172,35 @@ const listValue = (values: Readonly<ParsedToolValues>, key: FieldKey): string[] 
 		: undefined;
 };
 
-const projectOnly: RequestBuilder = (project_id) => ({ project_id });
-const withReport: RequestBuilder = (project_id, values) => {
+const projectOnly: RequestBuilder = (project_id) => ({
+	tool: 'get_project_protocol',
+	args: { project_id }
+});
+const withReport = (project_id: string, values: Readonly<ParsedToolValues>) => {
 	const report_id = stringValue(values, 'report_id');
 	return report_id ? { project_id, report_id } : null;
 };
-const withStudy: RequestBuilder = (project_id, values) => {
+const withStudy = (project_id: string, values: Readonly<ParsedToolValues>) => {
 	const study_id = stringValue(values, 'study_id');
 	return study_id ? { project_id, study_id } : null;
 };
-const withDocumentBlocks: RequestBuilder = (project_id, values) => {
+const withDocumentBlocks = (project_id: string, values: Readonly<ParsedToolValues>) => {
 	const document_id = stringValue(values, 'document_id');
 	const block_ids = listValue(values, 'block_ids');
 	return document_id && block_ids ? { project_id, document_id, block_ids } : null;
 };
-const withDocumentSearch: RequestBuilder = (project_id, values) => {
+const withDocumentSearch = (project_id: string, values: Readonly<ParsedToolValues>) => {
 	const document_id = stringValue(values, 'document_id');
 	const query = stringValue(values, 'query');
 	const limit = numberValue(values, 'limit');
 	return document_id && query && limit ? { project_id, document_id, query, limit } : null;
 };
-const withProjectSearch: RequestBuilder = (project_id, values) => {
+const withProjectSearch = (project_id: string, values: Readonly<ParsedToolValues>) => {
 	const query = stringValue(values, 'query');
 	const limit = numberValue(values, 'limit');
 	return query && limit ? { project_id, query, limit } : null;
 };
-const withAppraisal: RequestBuilder = (project_id, values) => {
+const withAppraisal = (project_id: string, values: Readonly<ParsedToolValues>) => {
 	const report_id = stringValue(values, 'report_id');
 	const definition_id = stringValue(values, 'definition_id');
 	const definition_version = numberValue(values, 'definition_version');
@@ -206,14 +208,17 @@ const withAppraisal: RequestBuilder = (project_id, values) => {
 		? { project_id, report_id, definition_id, definition_version }
 		: null;
 };
-const withScreening: RequestBuilder = (project_id, values) => {
+const withScreening = (
+	project_id: string,
+	values: Readonly<ParsedToolValues>
+): ScreeningDecisionArgs | null => {
 	const report_id = stringValue(values, 'report_id');
 	const stage = stringValue(values, 'stage');
 	return report_id && (stage === 'title_abstract' || stage === 'full_text')
 		? { project_id, report_id, stage }
 		: null;
 };
-const withDuplicate: RequestBuilder = (project_id, values) => {
+const withDuplicate = (project_id: string, values: Readonly<ParsedToolValues>) => {
 	const source_record_id = stringValue(values, 'source_record_id');
 	const candidate_report_id = stringValue(values, 'candidate_report_id');
 	return source_record_id && candidate_report_id
@@ -223,7 +228,7 @@ const withDuplicate: RequestBuilder = (project_id, values) => {
 
 export const ASSISTANT_TOOL_METADATA = {
 	get_project_protocol: {
-		name: AssistantToolNameDto.get_project_protocol,
+		name: 'get_project_protocol',
 		kind: AssistantToolKind.read,
 		label: 'Get project protocol',
 		description: 'Read the published protocol for this project.',
@@ -233,87 +238,111 @@ export const ASSISTANT_TOOL_METADATA = {
 		buildRequest: projectOnly
 	},
 	get_report: {
-		name: AssistantToolNameDto.get_report,
+		name: 'get_report',
 		kind: AssistantToolKind.read,
 		label: 'Get report',
 		description: 'Read one report scoped to this project.',
 		fields: [reportId],
 		reviewDestination: null,
 		defaults: { report_id: '' },
-		buildRequest: withReport
+		buildRequest: (projectId, values) => {
+			const args = withReport(projectId, values);
+			return args ? { tool: 'get_report', args } : null;
+		}
 	},
 	read_document_blocks: {
-		name: AssistantToolNameDto.read_document_blocks,
+		name: 'read_document_blocks',
 		kind: AssistantToolKind.read,
 		label: 'Read document blocks',
 		description: 'Read selected active blocks from one document.',
 		fields: [documentId, blockList],
 		reviewDestination: null,
 		defaults: { document_id: '', block_ids: '' },
-		buildRequest: withDocumentBlocks
+		buildRequest: (projectId, values) => {
+			const args = withDocumentBlocks(projectId, values);
+			return args ? { tool: 'read_document_blocks', args } : null;
+		}
 	},
 	search_document: {
-		name: AssistantToolNameDto.search_document,
+		name: 'search_document',
 		kind: AssistantToolKind.read,
 		label: 'Search document',
 		description: 'Search active blocks in one document.',
 		fields: [documentId, searchQuery, searchLimit],
 		reviewDestination: null,
 		defaults: { document_id: '', query: '', limit: '20' },
-		buildRequest: withDocumentSearch
+		buildRequest: (projectId, values) => {
+			const args = withDocumentSearch(projectId, values);
+			return args ? { tool: 'search_document', args } : null;
+		}
 	},
 	search_project_reports: {
-		name: AssistantToolNameDto.search_project_reports,
+		name: 'search_project_reports',
 		kind: AssistantToolKind.read,
 		label: 'Search project reports',
 		description: 'Search report metadata within this project.',
 		fields: [searchQuery, searchLimit],
 		reviewDestination: null,
 		defaults: { query: '', limit: '20' },
-		buildRequest: withProjectSearch
+		buildRequest: (projectId, values) => {
+			const args = withProjectSearch(projectId, values);
+			return args ? { tool: 'search_project_reports', args } : null;
+		}
 	},
 	get_screening_state: {
-		name: AssistantToolNameDto.get_screening_state,
+		name: 'get_screening_state',
 		kind: AssistantToolKind.read,
 		label: 'Get screening state',
 		description: 'Read screening state for one report.',
 		fields: [reportId],
 		reviewDestination: null,
 		defaults: { report_id: '' },
-		buildRequest: withReport
+		buildRequest: (projectId, values) => {
+			const args = withReport(projectId, values);
+			return args ? { tool: 'get_screening_state', args } : null;
+		}
 	},
 	get_study: {
-		name: AssistantToolNameDto.get_study,
+		name: 'get_study',
 		kind: AssistantToolKind.read,
 		label: 'Get study',
 		description: 'Read one study and its report membership.',
 		fields: [studyId],
 		reviewDestination: null,
 		defaults: { study_id: '' },
-		buildRequest: withStudy
+		buildRequest: (projectId, values) => {
+			const args = withStudy(projectId, values);
+			return args ? { tool: 'get_study', args } : null;
+		}
 	},
 	get_appraisal: {
-		name: AssistantToolNameDto.get_appraisal,
+		name: 'get_appraisal',
 		kind: AssistantToolKind.read,
 		label: 'Get appraisal',
 		description: 'Read the latest completed appraisal version.',
 		fields: [reportId, definitionId, definitionVersion],
 		reviewDestination: null,
 		defaults: { report_id: '', definition_id: '', definition_version: '1' },
-		buildRequest: withAppraisal
+		buildRequest: (projectId, values) => {
+			const args = withAppraisal(projectId, values);
+			return args ? { tool: 'get_appraisal', args } : null;
+		}
 	},
 	propose_screening_decision: {
-		name: AssistantToolNameDto.propose_screening_decision,
+		name: 'propose_screening_decision',
 		kind: AssistantToolKind.proposal,
 		label: 'Propose screening decision',
 		description: 'Generate a reviewer proposal for a screening decision.',
 		fields: [reportId, stage],
 		reviewDestination: 'screening',
 		defaults: { report_id: '', stage: 'title_abstract' },
-		buildRequest: withScreening
+		buildRequest: (projectId, values) => {
+			const args = withScreening(projectId, values);
+			return args ? { tool: 'propose_screening_decision', args } : null;
+		}
 	},
 	propose_duplicate_merge: {
-		name: AssistantToolNameDto.propose_duplicate_merge,
+		name: 'propose_duplicate_merge',
 		kind: AssistantToolKind.proposal,
 		label: 'Propose duplicate merge',
 		description: 'Generate a reviewer proposal for a duplicate pair.',
@@ -323,47 +352,62 @@ export const ASSISTANT_TOOL_METADATA = {
 		],
 		reviewDestination: 'deduplication',
 		defaults: { source_record_id: '', candidate_report_id: '' },
-		buildRequest: withDuplicate
+		buildRequest: (projectId, values) => {
+			const args = withDuplicate(projectId, values);
+			return args ? { tool: 'propose_duplicate_merge', args } : null;
+		}
 	},
 	propose_study_grouping: {
-		name: AssistantToolNameDto.propose_study_grouping,
+		name: 'propose_study_grouping',
 		kind: AssistantToolKind.proposal,
 		label: 'Propose study grouping',
 		description: 'Generate a reviewer proposal for report grouping.',
 		fields: [reportId],
 		reviewDestination: 'studies',
 		defaults: { report_id: '' },
-		buildRequest: withReport
+		buildRequest: (projectId, values) => {
+			const args = withReport(projectId, values);
+			return args ? { tool: 'propose_study_grouping', args } : null;
+		}
 	},
 	propose_classification: {
-		name: AssistantToolNameDto.propose_classification,
+		name: 'propose_classification',
 		kind: AssistantToolKind.proposal,
 		label: 'Propose classification',
 		description: 'Generate a reviewer proposal for study design.',
 		fields: [studyId],
 		reviewDestination: 'studies',
 		defaults: { study_id: '' },
-		buildRequest: withStudy
+		buildRequest: (projectId, values) => {
+			const args = withStudy(projectId, values);
+			return args ? { tool: 'propose_classification', args } : null;
+		}
 	},
 	propose_extraction: {
-		name: AssistantToolNameDto.propose_extraction,
+		name: 'propose_extraction',
 		kind: AssistantToolKind.proposal,
 		label: 'Propose extraction',
 		description: 'Generate a reviewer proposal for data extraction.',
 		fields: [studyId],
 		reviewDestination: 'extraction',
 		defaults: { study_id: '' },
-		buildRequest: withStudy
+		buildRequest: (projectId, values) => {
+			const args = withStudy(projectId, values);
+			return args ? { tool: 'propose_extraction', args } : null;
+		}
 	},
 	propose_appraisal_answer: {
-		name: AssistantToolNameDto.propose_appraisal_answer,
+		name: 'propose_appraisal_answer',
 		kind: AssistantToolKind.proposal,
 		label: 'Propose appraisal answer',
 		description: 'Generate a reviewer proposal for appraisal answers.',
 		fields: [reportId, definitionId, definitionVersion],
 		reviewDestination: 'appraisal',
 		defaults: { report_id: '', definition_id: '', definition_version: '1' },
-		buildRequest: withAppraisal
+		buildRequest: (projectId, values) => {
+			const args = withAppraisal(projectId, values);
+			return args ? { tool: 'propose_appraisal_answer', args } : null;
+		}
 	}
 } satisfies Record<ToolName, ToolDefinition>;
 
@@ -407,7 +451,7 @@ export function serializeToolRequest(
 	if (Object.keys(errors).length > 0) return { kind: 'invalid', errors };
 	const args = ASSISTANT_TOOL_METADATA[tool].buildRequest(projectId, parsed);
 	if (!args) return { kind: 'invalid', errors: { form: 'Tool form configuration is invalid.' } };
-	return valid(tool, projectId, args);
+	return { kind: 'valid', request: args };
 }
 
 function parseToolValues(
@@ -498,16 +542,12 @@ export function reviewPath(tool: ToolName, projectId: string, values: ToolValues
 	}
 	if (destination === 'studies') {
 		const query =
-			tool === AssistantToolNameDto.propose_classification
+			tool === 'propose_classification'
 				? `?study=${encodeURIComponent(values.study_id ?? '')}`
 				: `?report=${encodeURIComponent(values.report_id ?? '')}`;
 		return `/projects/${encodeURIComponent(projectId)}/studies${query}`;
 	}
 	return `/projects/${encodeURIComponent(projectId)}/${destination === 'deduplication' ? 'discovery/duplicates' : destination}`;
-}
-
-function valid(tool: ToolName, projectId: string, args: AssistantToolRequestArgs): ToolValidation {
-	return { kind: 'valid', request: { tool, args: { ...args, project_id: projectId } } };
 }
 
 function isUuid(value: string): boolean {

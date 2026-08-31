@@ -57,10 +57,6 @@ impl<T: AiTask> DefinedAiTask<T> {
         });
         Ok(bound)
     }
-
-    pub const fn definition(&self) -> &CompiledReviewDefinition {
-        &self.definition
-    }
 }
 
 impl<T: AiTask> AiTask for DefinedAiTask<T> {

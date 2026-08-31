@@ -6,14 +6,15 @@
 //! worker adapters live outside this crate.
 
 mod definition;
-#[doc(hidden)]
-pub mod execution;
+mod execution;
 mod hash;
 mod manifest;
 #[doc(hidden)]
 pub mod memory;
 mod task;
 mod types;
+#[doc(hidden)]
+pub mod worker;
 
 pub(crate) use definition::{CompiledReviewDefinition, ReviewCatalog};
 pub(crate) use hash::ReviewHash;
@@ -23,18 +24,3 @@ pub use types::{
     ReviewOrigin, ReviewRunId, ReviewRunSnapshot, ReviewRunState, ReviewScheduler, ReviewSubject,
     ScheduleReviewRun,
 };
-
-/// Worker and persistence mechanics. HTTP and assistant callers must use the
-/// typed scheduling interface re-exported at the crate root.
-#[doc(hidden)]
-pub mod internal {
-    pub use crate::definition::{
-        CompiledReviewDefinition, CompiledReviewIdentity, ReviewCatalog, ReviewTransitionSignal,
-    };
-    pub use crate::hash::ReviewHash;
-    pub use crate::manifest::{
-        AcceptedArtifactInput, ReviewManifestInput, ReviewModelIdentity, ReviewRunManifest,
-        ReviewRuntimeIdentity, fingerprint_node,
-    };
-    pub use crate::task::DefinedAiTask;
-}

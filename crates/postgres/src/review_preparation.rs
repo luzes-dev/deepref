@@ -15,7 +15,7 @@ use deepref_application::{
 use deepref_domain::{Actor, CriterionStage, EligibilityCriterion, StudyDesign};
 use deepref_review::{
     ReviewFuture, ReviewOrigin, ReviewRunId, ReviewRunSnapshot, ReviewScheduler, ReviewSubject,
-    ScheduleReviewRun, execution::PreparedReviewTask,
+    ScheduleReviewRun, worker::PreparedReviewTask,
 };
 use thiserror::Error;
 use uuid::Uuid;

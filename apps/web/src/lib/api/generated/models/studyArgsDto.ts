@@ -5,4 +5,7 @@
  * OpenAPI spec version: 0.1.0
  */
 
-export type AssistantToolRequestArgs = { [key: string]: unknown };
+export interface StudyArgsDto {
+	project_id: string;
+	study_id: string;
+}

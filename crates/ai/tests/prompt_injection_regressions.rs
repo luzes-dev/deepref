@@ -8,7 +8,7 @@ use std::{
 
 use deepref_ai::{
     AgentDispatch, AgentProposalFuture, AgentProposalOperation, AgentProposalReceipt,
-    AgentReadFuture, AgentReadOperation, AgentRuntime, AgentTool, AgentToolExecutionError,
+    AgentReadFuture, AgentReadOperation, AgentRuntime, AgentTool, AgentToolError,
     AgentToolExecutor, AiTask, AppraisalAnswerSchema, AppraisalAnswerValue, AppraisalPrefill,
     AppraisalPrefillAnswer, AppraisalPrefillDomain, AppraisalPrefillEvidence,
     AppraisalPrefillInput, AppraisalPrefillQuestion, AppraisalPrefillTask, AuthorityTier,
@@ -41,17 +41,22 @@ struct RecordingExecutor {
 }
 
 impl AgentToolExecutor for RecordingExecutor {
-    fn execute_read<'a>(&'a self, _operation: AgentReadOperation) -> AgentReadFuture<'a> {
+    type Error = AgentToolError;
+
+    fn execute_read<'a>(
+        &'a self,
+        _operation: AgentReadOperation,
+    ) -> AgentReadFuture<'a, Self::Error> {
         self.read_calls.fetch_add(1, Ordering::SeqCst);
         Box::pin(async {
-            BoundedAgentJson::new(json!({"ok": true})).map_err(|_| AgentToolExecutionError)
+            BoundedAgentJson::new(json!({"ok": true})).map_err(|_| AgentToolError::InvalidOutput)
         })
     }
 
     fn create_proposal<'a>(
         &'a self,
         _operation: AgentProposalOperation,
-    ) -> AgentProposalFuture<'a> {
+    ) -> AgentProposalFuture<'a, Self::Error> {
         self.proposal_calls.fetch_add(1, Ordering::SeqCst);
         Box::pin(async {
             Ok(AgentProposalReceipt {

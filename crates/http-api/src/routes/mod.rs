@@ -536,15 +536,22 @@ mod tests {
             .into_iter()
             .map(|name| serde_json::Value::String(name.as_str().to_owned()))
             .collect::<Vec<_>>();
+        let assistant_variants = schemas["AssistantToolRequest"]["oneOf"]
+            .as_array()
+            .expect("assistant request must be a closed typed union");
+        let generated_names = assistant_variants
+            .iter()
+            .map(|variant| variant["properties"]["tool"]["enum"][0].clone())
+            .collect::<Vec<_>>();
         assert_eq!(
-            schemas["AssistantToolNameDto"]["enum"],
-            serde_json::Value::Array(expected_assistant_tool_names),
+            generated_names, expected_assistant_tool_names,
             "HTTP assistant tool names must exactly match the closed AI catalog"
         );
-        assert_eq!(
-            schemas["AssistantToolRequest"]["properties"]["tool"]["$ref"],
-            "#/components/schemas/AssistantToolNameDto"
-        );
+        assert!(assistant_variants.iter().all(|variant| {
+            variant["properties"]["args"]["$ref"]
+                .as_str()
+                .is_some_and(|reference| reference.starts_with("#/components/schemas/"))
+        }));
         assert!(schemas["AssistantToolDescriptor"].is_object());
         assert!(schemas["AssistantToolResponse"].is_object());
     }

@@ -2,6 +2,7 @@ mod acquisition;
 mod agent_tools;
 mod ai;
 mod appraisal;
+mod audit_export;
 mod automations;
 mod deduplication;
 mod documents;
@@ -13,6 +14,7 @@ mod prisma;
 mod protocol;
 mod review_calibration;
 mod review_preparation;
+mod review_run_setup;
 mod review_runs;
 mod screening;
 mod study;
@@ -51,6 +53,7 @@ pub use appraisal::{
     AppraisalAssessmentRecord, AppraisalError, AppraisalEvidenceRecord, complete_appraisal,
     complete_appraisal_in_transaction, get_appraisal, list_appraisals,
 };
+pub use audit_export::{AuditExportRow, load_audit_export_rows};
 pub use automations::{
     AutomationDispatchResult, AutomationError, AutomationFinalization, begin_next_automation_step,
     complete_automation_step, complete_automation_step_with_output,

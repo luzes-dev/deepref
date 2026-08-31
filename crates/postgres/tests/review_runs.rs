@@ -16,8 +16,10 @@ use deepref_postgres::{
 use deepref_review::{
     CalibrationBundleId, ReviewDefinitionKey, ReviewOrigin, ReviewRunState, ReviewScheduler,
     ScheduleReviewRun,
-    execution::{ExecutedReviewTask, PreparedReviewTask},
-    internal::{AcceptedArtifactInput, ReviewCatalog, ReviewHash},
+    worker::{
+        AcceptedArtifactInput, CompiledReview, ExecutedReviewTask, PreparedReviewTask,
+        ReviewExecutionPlan, ReviewHash,
+    },
 };
 use sqlx::{PgPool, postgres::PgPoolOptions};
 use uuid::Uuid;
@@ -356,22 +358,24 @@ async fn review_attempts_enforce_scope_lease_exact_reuse_lineage_and_immutabilit
         mark_review_run_running(&pool, project_id, snapshot.id, owner)
             .await
             .expect("leased run starts");
-        let definition = ReviewCatalog
-            .compile(ReviewDefinitionKey::DuplicateDetection)
+        let review = CompiledReview::compile(ReviewDefinitionKey::DuplicateDetection)
             .expect("definition compiles");
+        let ReviewExecutionPlan::Standard(plan) = review.plan() else {
+            panic!("duplicate detection uses the standard execution plan")
+        };
 
         assert!(matches!(
-            begin_review_attempt(&pool, &run, &definition, "prepare", &[], "wrong-worker").await,
+            begin_review_attempt(&pool, &run, &review, &plan.prepare, &[], "wrong-worker").await,
             Err(PostgresReviewError::WorkerOwnership)
         ));
-        let first = begin_review_attempt(&pool, &run, &definition, "prepare", &[], owner)
+        let first = begin_review_attempt(&pool, &run, &review, &plan.prepare, &[], owner)
             .await
             .expect("first attempt begins");
         let first_id = match first {
             ReviewAttemptStart::Started { attempt_id, .. } => attempt_id,
             ReviewAttemptStart::Reused { .. } => panic!("running attempts cannot reserve reuse"),
         };
-        let second = begin_review_attempt(&pool, &run, &definition, "prepare", &[], owner)
+        let second = begin_review_attempt(&pool, &run, &review, &plan.prepare, &[], owner)
             .await
             .expect("concurrent attempt begins");
         let second_id = match second {
@@ -409,7 +413,7 @@ async fn review_attempts_enforce_scope_lease_exact_reuse_lineage_and_immutabilit
         )
         .await
         .expect("second attempt is accepted");
-        let reused = begin_review_attempt(&pool, &run, &definition, "prepare", &[], owner)
+        let reused = begin_review_attempt(&pool, &run, &review, &plan.prepare, &[], owner)
             .await
             .expect("accepted attempt is reusable");
         assert!(matches!(
@@ -425,8 +429,8 @@ async fn review_attempts_enforce_scope_lease_exact_reuse_lineage_and_immutabilit
         let generated = begin_review_attempt(
             &pool,
             &run,
-            &definition,
-            "generate",
+            &review,
+            &plan.generate,
             std::slice::from_ref(&prepare_input),
             owner,
         )
@@ -457,8 +461,8 @@ async fn review_attempts_enforce_scope_lease_exact_reuse_lineage_and_immutabilit
         let validated = begin_review_attempt(
             &pool,
             &run,
-            &definition,
-            "validate",
+            &review,
+            &plan.validate,
             std::slice::from_ref(&generated_input),
             owner,
         )
@@ -519,8 +523,8 @@ async fn review_attempts_enforce_scope_lease_exact_reuse_lineage_and_immutabilit
             begin_review_attempt(
                 &pool,
                 &run,
-                &definition,
-                "assemble",
+                &review,
+                &plan.assemble,
                 std::slice::from_ref(&generated_input),
                 owner,
             )
