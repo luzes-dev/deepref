@@ -40,6 +40,10 @@ export class ReviewRunObserver {
 		return this.current?.state.kind === 'queued' || this.current?.state.kind === 'running';
 	}
 
+	get state(): ReviewRunStateDto | undefined {
+		return this.current?.state;
+	}
+
 	async observe(run: ReviewRunDto): Promise<void> {
 		this.current = run;
 		this.#runId = run.id;
@@ -47,6 +51,15 @@ export class ReviewRunObserver {
 		this.error = '';
 		await this.#settleOrContinue(run);
 		if (this.isActive) await this.refresh();
+	}
+
+	async observeId(runId: string): Promise<void> {
+		this.current = undefined;
+		this.#runId = runId;
+		this.#settledRunId = undefined;
+		this.error = '';
+		this.#interval.resume();
+		await this.refresh();
 	}
 
 	async refresh(): Promise<void> {
@@ -63,6 +76,14 @@ export class ReviewRunObserver {
 		} finally {
 			this.#refreshing = false;
 		}
+	}
+
+	reset(): void {
+		this.#interval.pause();
+		this.current = undefined;
+		this.#runId = undefined;
+		this.#settledRunId = undefined;
+		this.error = '';
 	}
 
 	async #settleOrContinue(run: ReviewRunDto): Promise<void> {
