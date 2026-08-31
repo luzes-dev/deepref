@@ -68,6 +68,7 @@ pub struct ReviewRunManifest {
     pub definition: ReviewDefinitionKey,
     pub definition_id: String,
     pub definition_version: u32,
+    pub definition_hash: ReviewHash,
     pub subject: ReviewSubject,
     pub origin: ReviewOrigin,
     pub protocol_version_id: Option<ProtocolVersionId>,
@@ -89,7 +90,7 @@ pub struct ReviewRunManifest {
 struct SemanticBundle<'a> {
     definition_id: &'a str,
     definition_version: u32,
-    declared_assets_hash: &'a ReviewHash,
+    definition_hash: &'a ReviewHash,
     workflow_hash: &'a ReviewHash,
     prompt_bundle_hash: &'a ReviewHash,
     schema_bundle_hash: &'a ReviewHash,
@@ -106,6 +107,7 @@ struct ManifestWithoutOwnHash<'a> {
     definition: ReviewDefinitionKey,
     definition_id: &'a str,
     definition_version: u32,
+    definition_hash: &'a ReviewHash,
     subject: &'a ReviewSubject,
     origin: ReviewOrigin,
     protocol_version_id: Option<ProtocolVersionId>,
@@ -163,7 +165,7 @@ impl ReviewRunManifest {
         let semantic_bundle_hash = ReviewHash::digest_json(&SemanticBundle {
             definition_id: &identity.definition_id,
             definition_version: identity.definition_version,
-            declared_assets_hash: &identity.declared_assets_hash,
+            definition_hash: &identity.declared_assets_hash,
             workflow_hash: &identity.workflow_hash,
             prompt_bundle_hash: &identity.prompt_bundle_hash,
             schema_bundle_hash: &identity.schema_bundle_hash,
@@ -178,6 +180,7 @@ impl ReviewRunManifest {
             definition: definition.key(),
             definition_id: &identity.definition_id,
             definition_version: identity.definition_version,
+            definition_hash: &identity.declared_assets_hash,
             subject: &input.subject,
             origin: input.origin,
             protocol_version_id: input.protocol_version_id,
@@ -199,6 +202,7 @@ impl ReviewRunManifest {
             definition: definition.key(),
             definition_id: identity.definition_id.clone(),
             definition_version: identity.definition_version,
+            definition_hash: identity.declared_assets_hash.clone(),
             subject: input.subject,
             origin: input.origin,
             protocol_version_id: input.protocol_version_id,
@@ -290,6 +294,7 @@ impl ReviewCatalogIdentity {
         let identity = definition.identity();
         if manifest.definition_id != identity.definition_id
             || manifest.definition_version != identity.definition_version
+            || manifest.definition_hash != identity.declared_assets_hash
             || manifest.workflow_hash != identity.workflow_hash
             || manifest.prompt_bundle_hash != identity.prompt_bundle_hash
             || manifest.schema_bundle_hash != identity.schema_bundle_hash
@@ -423,6 +428,13 @@ mod tests {
             .expect("fingerprint should build");
         assert_eq!(forward, reverse);
         assert_ne!(forward, other_node);
+
+        let mut tampered = manifest;
+        tampered.definition_hash = hash("different-definition");
+        assert!(matches!(
+            fingerprint_node(&definition, &tampered, "derive_primary", &[]),
+            Err(ReviewError::InvalidDefinition(_))
+        ));
     }
 
     #[test]
