@@ -39,7 +39,7 @@ variable "CADDY_BASE_REPOSITORY" {
 }
 
 group "default" {
-  targets = ["api", "worker", "projector", "web"]
+  targets = ["api", "worker", "web"]
 }
 
 target "release" {
@@ -80,12 +80,6 @@ target "worker" {
   inherits = ["rust-service"]
   target   = "worker"
   tags     = ["${REGISTRY}/${IMAGE_PREFIX}-worker:${GIT_TREE_HASH}"]
-}
-
-target "projector" {
-  inherits = ["rust-service"]
-  target   = "projector"
-  tags     = ["${REGISTRY}/${IMAGE_PREFIX}-projector:${GIT_TREE_HASH}"]
 }
 
 target "web" {

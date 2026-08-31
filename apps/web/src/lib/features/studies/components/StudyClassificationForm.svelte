@@ -1,0 +1,68 @@
+<script lang="ts">
+	import type { StudyDto } from '$lib/api/generated/models';
+	import { Button } from '$lib/components/ui/button';
+	import * as Select from '$lib/components/ui/select';
+
+	type DesignOption = { value: string; label: string };
+	type Props = {
+		study: StudyDto;
+		designs: readonly DesignOption[];
+		disabled: boolean;
+		onSubmit: (request: {
+			design: string;
+			physiotherapy: boolean;
+			exposure: boolean;
+			prediction_or_ai: boolean;
+		}) => Promise<void>;
+	};
+
+	let { study, designs, disabled, onSubmit }: Props = $props();
+	let design = $state((() => study.design ?? '')());
+	let physiotherapy = $state((() => study.design_context.physiotherapy)());
+	let exposure = $state((() => study.design_context.exposure)());
+	let predictionOrAi = $state((() => study.design_context.prediction_or_ai)());
+
+	const selectedDesignLabel = $derived(
+		designs.find((option) => option.value === design)?.label ?? 'Choose a design'
+	);
+
+	async function submit(): Promise<void> {
+		if (!design) return;
+		await onSubmit({
+			design,
+			physiotherapy,
+			exposure,
+			prediction_or_ai: predictionOrAi
+		});
+	}
+</script>
+
+<form
+	class="flex flex-col gap-2"
+	onsubmit={(event) => {
+		event.preventDefault();
+		void submit();
+	}}
+>
+	<label for="study-design" class="text-sm font-medium">Normalized design</label>
+	<Select.Root type="single" bind:value={design}>
+		<Select.Trigger id="study-design">{selectedDesignLabel}</Select.Trigger>
+		<Select.Content>
+			<Select.Group>
+				{#each designs as item (item.value)}
+					<Select.Item value={item.value} label={item.label}>{item.label}</Select.Item>
+				{/each}
+			</Select.Group>
+		</Select.Content>
+	</Select.Root>
+	<label class="flex items-center gap-2 text-xs text-muted-foreground">
+		<input type="checkbox" bind:checked={physiotherapy} /> Physiotherapy context
+	</label>
+	<label class="flex items-center gap-2 text-xs text-muted-foreground">
+		<input type="checkbox" bind:checked={exposure} /> Exposure question
+	</label>
+	<label class="flex items-center gap-2 text-xs text-muted-foreground">
+		<input type="checkbox" bind:checked={predictionOrAi} /> Prediction/AI context
+	</label>
+	<Button type="submit" disabled={disabled || !design}>Save classification</Button>
+</form>

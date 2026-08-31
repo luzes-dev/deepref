@@ -1,19 +1,18 @@
 import type { ColumnDef } from '@tanstack/table-core';
-import type { ArticleDto } from '$lib/api/generated/models';
+import type { ReportDto } from '$lib/api/generated/models';
 import { renderComponent } from '$lib/components/ui/data-table';
 import ArticleDataTableCheckbox from './ArticleDataTableCheckbox.svelte';
 import ArticleDataTableColumnHeader from './ArticleDataTableColumnHeader.svelte';
 import ArticleDataTableRowActions from './ArticleDataTableRowActions.svelte';
 import ArticleTitleCell from './ArticleTitleCell.svelte';
+import { reportLabel, reportSearchText } from '../report-label';
 
-function yearLabel(year: ArticleDto['issued_year']) {
+function yearLabel(year: ReportDto['issued_year']) {
 	return String(year ?? 'No year');
 }
 
-function articleMatchesTerm(article: ArticleDto, term: string) {
-	const title = article.title?.toLowerCase();
-	const doi = article.doi.toLowerCase();
-	return doi.includes(term) || Boolean(title?.includes(term));
+function articleMatchesTerm(article: ReportDto, term: string) {
+	return reportSearchText(article).includes(term);
 }
 
 function hasYearRange(value: unknown): value is unknown[] {
@@ -25,7 +24,7 @@ function isWithinYearRange(year: number, range: unknown[]) {
 	return year >= min && year <= max;
 }
 
-function articleMatchesYearRange(year: ArticleDto['issued_year'], value: unknown) {
+function articleMatchesYearRange(year: ReportDto['issued_year'], value: unknown) {
 	if (!hasYearRange(value)) return true;
 
 	return typeof year === 'number' && isWithinYearRange(year, value);
@@ -35,9 +34,9 @@ export function createArticleColumns({
 	openArticle,
 	selectedArticle
 }: {
-	openArticle: (doiKey: string) => void;
+	openArticle: (reportId: string) => void;
 	selectedArticle?: string;
-}): ColumnDef<ArticleDto>[] {
+}): ColumnDef<ReportDto>[] {
 	return [
 		{
 			id: 'select',
@@ -60,16 +59,16 @@ export function createArticleColumns({
 		},
 		{
 			id: 'title',
-			accessorFn: (article) => article.title ?? article.doi,
+			accessorFn: reportLabel,
 			header: ({ column }) =>
-				renderComponent(ArticleDataTableColumnHeader<ArticleDto, unknown>, {
+				renderComponent(ArticleDataTableColumnHeader<ReportDto, unknown>, {
 					column,
 					title: 'Article'
 				}),
 			cell: ({ row }) =>
 				renderComponent(ArticleTitleCell, {
 					article: row.original,
-					selected: selectedArticle === row.original.doi_key,
+					selected: selectedArticle === row.original.report_id,
 					openArticle
 				}),
 			filterFn: (row, _columnId, value) => {
@@ -85,7 +84,7 @@ export function createArticleColumns({
 			id: 'type',
 			accessorFn: (article) => article.type ?? 'Unknown',
 			header: ({ column }) =>
-				renderComponent(ArticleDataTableColumnHeader<ArticleDto, unknown>, {
+				renderComponent(ArticleDataTableColumnHeader<ReportDto, unknown>, {
 					column,
 					title: 'Type'
 				}),
@@ -96,7 +95,7 @@ export function createArticleColumns({
 			id: 'issued_year',
 			accessorFn: (article) => yearLabel(article.issued_year),
 			header: ({ column }) =>
-				renderComponent(ArticleDataTableColumnHeader<ArticleDto, unknown>, {
+				renderComponent(ArticleDataTableColumnHeader<ReportDto, unknown>, {
 					column,
 					title: 'Year'
 				}),
@@ -108,7 +107,7 @@ export function createArticleColumns({
 		{
 			accessorKey: 'total_citations',
 			header: ({ column }) =>
-				renderComponent(ArticleDataTableColumnHeader<ArticleDto, unknown>, {
+				renderComponent(ArticleDataTableColumnHeader<ReportDto, unknown>, {
 					column,
 					title: 'Total'
 				})
@@ -116,7 +115,7 @@ export function createArticleColumns({
 		{
 			accessorKey: 'internal_citations',
 			header: ({ column }) =>
-				renderComponent(ArticleDataTableColumnHeader<ArticleDto, unknown>, {
+				renderComponent(ArticleDataTableColumnHeader<ReportDto, unknown>, {
 					column,
 					title: 'Internal'
 				}),
@@ -125,7 +124,7 @@ export function createArticleColumns({
 		{
 			accessorKey: 'outbound_internal_references',
 			header: ({ column }) =>
-				renderComponent(ArticleDataTableColumnHeader<ArticleDto, unknown>, {
+				renderComponent(ArticleDataTableColumnHeader<ReportDto, unknown>, {
 					column,
 					title: 'Outbound'
 				})
@@ -133,7 +132,7 @@ export function createArticleColumns({
 		{
 			accessorKey: 'rank_score',
 			header: ({ column }) =>
-				renderComponent(ArticleDataTableColumnHeader<ArticleDto, unknown>, {
+				renderComponent(ArticleDataTableColumnHeader<ReportDto, unknown>, {
 					column,
 					title: 'Rank'
 				}),

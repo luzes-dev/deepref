@@ -53,7 +53,7 @@ jobs:
           set -euo pipefail
           tree_hash="$(git rev-parse 'HEAD^{tree}')"
           created_at="$(git show -s --format=%cI HEAD)"
-          migration_version="$(find services/api/migrations -maxdepth 1 -type f -name '*.sql' -printf '%f\n' | LC_ALL=C sort | tail -n 1 | sed -E 's/^([0-9]+).*/\1/')"
+          migration_version="$(find crates/postgres/migrations -maxdepth 1 -type f -name '*.sql' -printf '%f\n' | LC_ALL=C sort | tail -n 1 | sed -E 's/^([0-9]+).*/\1/')"
           test -n "$migration_version"
           {
             echo "tree_hash=$tree_hash"
@@ -103,11 +103,12 @@ jobs:
         with:
           context: .
           file: docker/rust-service.Dockerfile
+          target: api
           build-args: |
-            PACKAGE=deepref-api
-            BIN=deepref-api
-            SOURCE_COMMIT=${{ env.SOURCE_SHA }}
-            SOURCE_TREE=${{ steps.identity.outputs.tree_hash }}
+            PACKAGE=deepref-server
+            BIN=deepref-server
+            OCI_REVISION=${{ env.SOURCE_SHA }}
+            GIT_TREE_HASH=${{ steps.identity.outputs.tree_hash }}
           push: true
           tags: ${{ env.ECR_REGISTRY }}/${{ env.ECR_REPOSITORY_PREFIX }}/api:tree-${{ steps.identity.outputs.tree_hash }}
           provenance: mode=max
@@ -118,28 +119,14 @@ jobs:
         with:
           context: .
           file: docker/rust-service.Dockerfile
+          target: worker
           build-args: |
-            PACKAGE=deepref-worker
-            BIN=deepref-worker
-            SOURCE_COMMIT=${{ env.SOURCE_SHA }}
-            SOURCE_TREE=${{ steps.identity.outputs.tree_hash }}
+            PACKAGE=deepref-server
+            BIN=deepref-server
+            OCI_REVISION=${{ env.SOURCE_SHA }}
+            GIT_TREE_HASH=${{ steps.identity.outputs.tree_hash }}
           push: true
           tags: ${{ env.ECR_REGISTRY }}/${{ env.ECR_REPOSITORY_PREFIX }}/worker:tree-${{ steps.identity.outputs.tree_hash }}
-          provenance: mode=max
-          sbom: true
-      - name: Build and push projector once
-        id: projector
-        uses: docker/build-push-action@53b7df96c91f9c12dcc8a07bcb9ccacbed38856a # v6.15.0
-        with:
-          context: .
-          file: docker/rust-service.Dockerfile
-          build-args: |
-            PACKAGE=deepref-projector
-            BIN=deepref-projector
-            SOURCE_COMMIT=${{ env.SOURCE_SHA }}
-            SOURCE_TREE=${{ steps.identity.outputs.tree_hash }}
-          push: true
-          tags: ${{ env.ECR_REGISTRY }}/${{ env.ECR_REPOSITORY_PREFIX }}/projector:tree-${{ steps.identity.outputs.tree_hash }}
           provenance: mode=max
           sbom: true
       - name: Build and push web once
@@ -149,8 +136,8 @@ jobs:
           context: .
           file: apps/web/Dockerfile
           build-args: |
-            SOURCE_COMMIT=${{ env.SOURCE_SHA }}
-            SOURCE_TREE=${{ steps.identity.outputs.tree_hash }}
+            OCI_REVISION=${{ env.SOURCE_SHA }}
+            GIT_TREE_HASH=${{ steps.identity.outputs.tree_hash }}
           push: true
           tags: ${{ env.ECR_REGISTRY }}/${{ env.ECR_REPOSITORY_PREFIX }}/web:tree-${{ steps.identity.outputs.tree_hash }}
           provenance: mode=max
@@ -192,15 +179,6 @@ jobs:
           severity: HIGH,CRITICAL
           exit-code: "1"
           ignore-unfixed: true
-      - name: Scan projector release subject
-        uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
-        with:
-          image-ref: ${{ env.ECR_REGISTRY }}/${{ env.ECR_REPOSITORY_PREFIX }}/projector@${{ steps.projector.outputs.digest }}
-          format: cosign-vuln
-          output: projector-vulnerability.json
-          severity: HIGH,CRITICAL
-          exit-code: "1"
-          ignore-unfixed: true
       - name: Scan web release subject
         uses: aquasecurity/trivy-action@ed142fd0673e97e23eac54620cfb913e5ce36c25 # v0.36.0
         with:
@@ -214,7 +192,6 @@ jobs:
         env:
           API_DIGEST: ${{ steps.api.outputs.digest }}
           CHART_DIGEST: ${{ steps.chart.outputs.digest }}
-          PROJECTOR_DIGEST: ${{ steps.projector.outputs.digest }}
           WEB_DIGEST: ${{ steps.web.outputs.digest }}
           WORKER_DIGEST: ${{ steps.worker.outputs.digest }}
         run: |
@@ -222,7 +199,6 @@ jobs:
           for subject in \
             "$ECR_REGISTRY/$ECR_REPOSITORY_PREFIX/api@$API_DIGEST" \
             "$ECR_REGISTRY/$ECR_REPOSITORY_PREFIX/worker@$WORKER_DIGEST" \
-            "$ECR_REGISTRY/$ECR_REPOSITORY_PREFIX/projector@$PROJECTOR_DIGEST" \
             "$ECR_REGISTRY/$ECR_REPOSITORY_PREFIX/web@$WEB_DIGEST" \
             "$ECR_REGISTRY/$ECR_REPOSITORY_PREFIX/deepref@$CHART_DIGEST"; do
             cosign sign --yes "$subject"
@@ -231,15 +207,12 @@ jobs:
             "$ECR_REGISTRY/$ECR_REPOSITORY_PREFIX/api@$API_DIGEST"
           cosign attest --yes --type vuln --predicate worker-vulnerability.json \
             "$ECR_REGISTRY/$ECR_REPOSITORY_PREFIX/worker@$WORKER_DIGEST"
-          cosign attest --yes --type vuln --predicate projector-vulnerability.json \
-            "$ECR_REGISTRY/$ECR_REPOSITORY_PREFIX/projector@$PROJECTOR_DIGEST"
           cosign attest --yes --type vuln --predicate web-vulnerability.json \
             "$ECR_REGISTRY/$ECR_REPOSITORY_PREFIX/web@$WEB_DIGEST"
           certificate_identity="https://github.com/$GITHUB_WORKFLOW_REF"
           for subject in \
             "$ECR_REGISTRY/$ECR_REPOSITORY_PREFIX/api@$API_DIGEST" \
             "$ECR_REGISTRY/$ECR_REPOSITORY_PREFIX/worker@$WORKER_DIGEST" \
-            "$ECR_REGISTRY/$ECR_REPOSITORY_PREFIX/projector@$PROJECTOR_DIGEST" \
             "$ECR_REGISTRY/$ECR_REPOSITORY_PREFIX/web@$WEB_DIGEST" \
             "$ECR_REGISTRY/$ECR_REPOSITORY_PREFIX/deepref@$CHART_DIGEST"; do
             cosign verify \
@@ -250,7 +223,6 @@ jobs:
           for subject in \
             "$ECR_REGISTRY/$ECR_REPOSITORY_PREFIX/api@$API_DIGEST" \
             "$ECR_REGISTRY/$ECR_REPOSITORY_PREFIX/worker@$WORKER_DIGEST" \
-            "$ECR_REGISTRY/$ECR_REPOSITORY_PREFIX/projector@$PROJECTOR_DIGEST" \
             "$ECR_REGISTRY/$ECR_REPOSITORY_PREFIX/web@$WEB_DIGEST"; do
             cosign verify-attestation --type vuln \
               --certificate-identity "$certificate_identity" \
@@ -265,7 +237,6 @@ jobs:
           CHART_VERSION: ${{ steps.chart.outputs.version }}
           CREATED_AT: ${{ steps.identity.outputs.created_at }}
           MIGRATION_VERSION: ${{ steps.identity.outputs.migration_version }}
-          PROJECTOR_DIGEST: ${{ steps.projector.outputs.digest }}
           TREE_HASH: ${{ steps.identity.outputs.tree_hash }}
           WEB_DIGEST: ${{ steps.web.outputs.digest }}
           WORKER_DIGEST: ${{ steps.worker.outputs.digest }}
@@ -275,7 +246,6 @@ jobs:
           export CHART_REPOSITORY="$ECR_REGISTRY/$ECR_REPOSITORY_PREFIX/deepref" CHART_VERSION CHART_DIGEST
           export API_REPOSITORY="$ECR_REGISTRY/$ECR_REPOSITORY_PREFIX/api" API_DIGEST
           export WORKER_REPOSITORY="$ECR_REGISTRY/$ECR_REPOSITORY_PREFIX/worker" WORKER_DIGEST
-          export PROJECTOR_REPOSITORY="$ECR_REGISTRY/$ECR_REPOSITORY_PREFIX/projector" PROJECTOR_DIGEST
           export WEB_REPOSITORY="$ECR_REGISTRY/$ECR_REPOSITORY_PREFIX/web" WEB_DIGEST MIGRATION_VERSION
           referrer_set() {
             regctl artifact list --digest-tags --format '{{json .Manifest}}' "$1" |
@@ -288,9 +258,8 @@ jobs:
           CHART_REFERRERS_JSON="$(referrer_set "$CHART_REPOSITORY@$CHART_DIGEST")"
           API_REFERRERS_JSON="$(referrer_set "$API_REPOSITORY@$API_DIGEST")"
           WORKER_REFERRERS_JSON="$(referrer_set "$WORKER_REPOSITORY@$WORKER_DIGEST")"
-          PROJECTOR_REFERRERS_JSON="$(referrer_set "$PROJECTOR_REPOSITORY@$PROJECTOR_DIGEST")"
           WEB_REFERRERS_JSON="$(referrer_set "$WEB_REPOSITORY@$WEB_DIGEST")"
-          export CHART_REFERRERS_JSON API_REFERRERS_JSON WORKER_REFERRERS_JSON PROJECTOR_REFERRERS_JSON WEB_REFERRERS_JSON
+          export CHART_REFERRERS_JSON API_REFERRERS_JSON WORKER_REFERRERS_JSON WEB_REFERRERS_JSON
           scripts/ci/create-release-manifest.sh release-manifest.json
           jq '. + {environment:"development"}' release-manifest.json > development-release-lock.yaml
           scripts/ci/validate-release-lock.sh --environment development --manifest release-manifest.json development-release-lock.yaml

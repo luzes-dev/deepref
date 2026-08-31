@@ -13,7 +13,7 @@
 		type Updater,
 		type VisibilityState
 	} from '@tanstack/table-core';
-	import type { ArticleDto } from '$lib/api/generated/models';
+	import type { ReportDto } from '$lib/api/generated/models';
 	import { createSvelteTable, FlexRender } from '$lib/components/ui/data-table';
 	import * as Table from '$lib/components/ui/table';
 	import { cn } from '$lib/utils.js';
@@ -22,9 +22,9 @@
 	import { createArticleColumns } from './columns.js';
 
 	type ArticleDataTableProps = {
-		articles: ArticleDto[];
+		articles: ReportDto[];
 		selectedArticle?: string;
-		openArticle: (doiKey: string) => void;
+		openArticle: (reportId: string) => void;
 	};
 
 	let { articles, selectedArticle, openArticle }: ArticleDataTableProps = $props();
@@ -50,7 +50,7 @@
 		get columns() {
 			return columns;
 		},
-		getRowId: (article) => article.doi_key,
+		getRowId: (article) => article.report_id,
 		enableRowSelection: true,
 		state: {
 			get sorting() {
@@ -122,7 +122,9 @@
 				{#each table.getRowModel().rows as row (row.id)}
 					<Table.Row
 						data-state={row.getIsSelected() && 'selected'}
-						data-current={selectedArticle === row.original.doi_key ? 'true' : undefined}
+						data-current={selectedArticle === row.original.report_id
+							? 'true'
+							: undefined}
 						class={cn('data-[current=true]:bg-muted/40')}
 					>
 						{#each row.getVisibleCells() as cell (cell.id)}

@@ -2,7 +2,7 @@
   "$schema": "http://json-schema.org/draft-07/schema#",
   "type": "object",
   "additionalProperties": false,
-  "required": ["global", "namespace", "images", "serviceAccounts", "runtime", "api", "worker", "projector", "web", "migration", "rebuild", "nats", "neo4j", "cloudflared", "adot", "externalSecrets", "networkPolicy", "podDisruptionBudgets", "imageVerification"],
+  "required": ["global", "namespace", "images", "serviceAccounts", "runtime", "documentStorage", "api", "worker", "web", "migration", "cloudflared", "adot", "externalSecrets", "networkPolicy", "podDisruptionBudgets", "imageVerification"],
   "definitions": {
     "digest": {"type": "string", "pattern": "^sha256:[0-9a-f]{64}$"},
     "digestOrEmpty": {"type": "string", "pattern": "^(|sha256:[0-9a-f]{64})$"},
@@ -62,27 +62,25 @@
     },
     "images": {
       "type": "object", "additionalProperties": false,
-      "required": ["api", "worker", "projector", "web", "nats", "natsBox", "neo4j", "cloudflared", "adot"],
+      "required": ["api", "worker", "web", "cloudflared", "adot"],
       "properties": {
         "api": {"$ref": "#/definitions/applicationImage"}, "worker": {"$ref": "#/definitions/applicationImage"},
-        "projector": {"$ref": "#/definitions/applicationImage"}, "web": {"$ref": "#/definitions/applicationImage"},
-        "nats": {"$ref": "#/definitions/image"}, "natsBox": {"$ref": "#/definitions/image"},
-        "neo4j": {"$ref": "#/definitions/image"}, "cloudflared": {"$ref": "#/definitions/image"}, "adot": {"$ref": "#/definitions/image"}
+        "web": {"$ref": "#/definitions/applicationImage"},
+        "cloudflared": {"$ref": "#/definitions/image"}, "adot": {"$ref": "#/definitions/image"}
       }
     },
     "serviceAccounts": {
       "type": "object", "additionalProperties": false,
-      "required": ["api", "worker", "projector", "web", "nats", "natsAdmin", "neo4j", "cloudflared", "adot"],
+      "required": ["api", "worker", "web", "cloudflared", "adot"],
       "properties": {
         "api": {"type": "string", "const": "deepref-api"}, "worker": {"type": "string", "const": "deepref-worker"},
-        "projector": {"type": "string", "const": "deepref-projector"}, "web": {"type": "string", "const": "deepref-web"},
-        "nats": {"type": "string", "const": "deepref-nats"}, "natsAdmin": {"type": "string", "const": "deepref-nats-admin"},
-        "neo4j": {"type": "string", "const": "deepref-neo4j"}, "cloudflared": {"type": "string", "const": "deepref-cloudflared"},
+        "web": {"type": "string", "const": "deepref-web"},
+        "cloudflared": {"type": "string", "const": "deepref-cloudflared"},
         "adot": {"type": "string", "const": "deepref-adot"}
       }
     },
     "runtime": {
-      "type": "object", "additionalProperties": false, "required": ["database", "nats", "neo4j", "shutdownDeadlineSeconds"],
+      "type": "object", "additionalProperties": false, "required": ["database", "shutdownDeadlineSeconds"],
       "properties": {
         "database": {
           "type": "object", "additionalProperties": false,
@@ -93,28 +91,26 @@
             "maxLifetimeSeconds": {"type": "integer", "minimum": 1}
           }
         },
-        "nats": {
-          "type": "object", "additionalProperties": false, "required": ["connectTimeoutSeconds", "requestTimeoutSeconds"],
-          "properties": {"connectTimeoutSeconds": {"type": "integer", "minimum": 1}, "requestTimeoutSeconds": {"type": "integer", "minimum": 1}}
-        },
-        "neo4j": {
-          "type": "object", "additionalProperties": false, "required": ["poolMax", "connectTimeoutSeconds", "queryTimeoutSeconds"],
-          "properties": {"poolMax": {"type": "integer", "minimum": 1}, "connectTimeoutSeconds": {"type": "integer", "minimum": 1}, "queryTimeoutSeconds": {"type": "integer", "minimum": 1}}
-        },
         "shutdownDeadlineSeconds": {"type": "integer", "minimum": 1}
       }
     },
+    "documentStorage": {
+      "type": "object", "additionalProperties": false,
+      "required": ["backend", "root", "maxBytes", "secretName"],
+      "properties": {
+        "backend": {"const": "s3"},
+        "root": {"type": "string"},
+        "maxBytes": {"type": "integer", "minimum": 1, "maximum": 104857600},
+        "secretName": {"type": "string"}
+      }
+    },
     "api": {
-      "type": "object", "additionalProperties": false, "required": ["replicas", "corsOrigins", "graphRetryAfterSeconds", "terminationGracePeriodSeconds", "resources"],
-      "properties": {"replicas": {"type": "integer", "minimum": 2}, "corsOrigins": {"type": "array", "uniqueItems": true, "items": {"type": "string", "format": "uri"}}, "graphRetryAfterSeconds": {"type": "integer", "minimum": 1}, "terminationGracePeriodSeconds": {"type": "integer", "minimum": 1}, "resources": {"$ref": "#/definitions/resources"}}
+      "type": "object", "additionalProperties": false, "required": ["replicas", "corsOrigins", "terminationGracePeriodSeconds", "resources"],
+      "properties": {"replicas": {"type": "integer", "minimum": 2}, "corsOrigins": {"type": "array", "uniqueItems": true, "items": {"type": "string", "format": "uri"}}, "terminationGracePeriodSeconds": {"type": "integer", "minimum": 1}, "resources": {"$ref": "#/definitions/resources"}}
     },
     "worker": {
       "type": "object", "additionalProperties": false, "required": ["replicas", "concurrency", "claimLeaseSeconds", "reconcilerIntervalSeconds", "terminationGracePeriodSeconds", "resources"],
       "properties": {"replicas": {"type": "integer", "minimum": 1}, "concurrency": {"type": "integer", "minimum": 1}, "claimLeaseSeconds": {"type": "integer", "minimum": 1}, "reconcilerIntervalSeconds": {"type": "integer", "minimum": 1}, "terminationGracePeriodSeconds": {"type": "integer", "minimum": 1}, "resources": {"$ref": "#/definitions/resources"}}
-    },
-    "projector": {
-      "type": "object", "additionalProperties": false, "required": ["replicas", "batchSize", "terminationGracePeriodSeconds", "resources"],
-      "properties": {"replicas": {"type": "integer", "minimum": 1}, "batchSize": {"type": "integer", "minimum": 1, "maximum": 10000}, "terminationGracePeriodSeconds": {"type": "integer", "minimum": 1}, "resources": {"$ref": "#/definitions/resources"}}
     },
     "web": {
       "type": "object", "additionalProperties": false, "required": ["replicas", "terminationGracePeriodSeconds", "resources"],
@@ -123,25 +119,6 @@
     "migration": {
       "type": "object", "additionalProperties": false, "required": ["enabled", "activeDeadlineSeconds", "backoffLimit", "resources"],
       "properties": {"enabled": {"type": "boolean"}, "activeDeadlineSeconds": {"type": "integer", "minimum": 1}, "backoffLimit": {"type": "integer", "minimum": 0, "maximum": 1}, "resources": {"$ref": "#/definitions/resources"}}
-    },
-    "rebuild": {
-      "type": "object", "additionalProperties": false, "required": ["enabled", "runId", "activeDeadlineSeconds", "batchSize", "resources"],
-      "properties": {"enabled": {"type": "boolean"}, "runId": {"type": "string"}, "activeDeadlineSeconds": {"type": "integer", "minimum": 1}, "batchSize": {"type": "integer", "minimum": 1, "maximum": 10000}, "resources": {"$ref": "#/definitions/resources"}}
-    },
-    "nats": {
-      "type": "object", "additionalProperties": false, "required": ["replicas", "storage", "maxFileStore", "terminationGracePeriodSeconds", "resources", "bootstrap"],
-      "properties": {
-        "replicas": {"type": "integer", "enum": [1, 3]}, "storage": {"$ref": "#/definitions/storage"}, "maxFileStore": {"type": "string", "pattern": "^[1-9][0-9]*(Mi|Gi|Ti)$"},
-        "terminationGracePeriodSeconds": {"type": "integer", "minimum": 1}, "resources": {"$ref": "#/definitions/resources"},
-        "bootstrap": {
-          "type": "object", "additionalProperties": false, "required": ["activeDeadlineSeconds", "resources"],
-          "properties": {"activeDeadlineSeconds": {"type": "integer", "minimum": 1}, "resources": {"$ref": "#/definitions/resources"}}
-        }
-      }
-    },
-    "neo4j": {
-      "type": "object", "additionalProperties": false, "required": ["storage", "pageCache", "heapInitial", "heapMax", "terminationGracePeriodSeconds", "resources"],
-      "properties": {"storage": {"$ref": "#/definitions/storage"}, "pageCache": {"type": "string", "minLength": 1}, "heapInitial": {"type": "string", "minLength": 1}, "heapMax": {"type": "string", "minLength": 1}, "terminationGracePeriodSeconds": {"type": "integer", "minimum": 1}, "resources": {"$ref": "#/definitions/resources"}}
     },
     "cloudflared": {
       "type": "object", "additionalProperties": false, "required": ["replicas", "terminationGracePeriodSeconds", "resources"],
@@ -157,23 +134,23 @@
         "enabled": {"type": "boolean"}, "refreshInterval": {"type": "string", "pattern": "^[1-9][0-9]*(s|m|h)$"},
         "secretStoreRef": {"type": "object", "additionalProperties": false, "required": ["name", "kind"], "properties": {"name": {"type": "string", "minLength": 1}, "kind": {"enum": ["SecretStore", "ClusterSecretStore"]}}},
         "remote": {
-          "type": "object", "additionalProperties": false, "required": ["database", "neo4j", "nats", "cloudflared"],
+          "type": "object", "additionalProperties": false, "required": ["database", "cloudflared", "documentStorage"],
           "properties": {
             "database": {"type": "object", "additionalProperties": false, "required": ["key", "urlProperty"], "properties": {"key": {"$ref": "#/definitions/remoteProperty"}, "urlProperty": {"$ref": "#/definitions/remoteProperty"}}},
-            "neo4j": {"type": "object", "additionalProperties": false, "required": ["key", "usernameProperty", "passwordProperty", "authProperty"], "properties": {"key": {"$ref": "#/definitions/remoteProperty"}, "usernameProperty": {"$ref": "#/definitions/remoteProperty"}, "passwordProperty": {"$ref": "#/definitions/remoteProperty"}, "authProperty": {"$ref": "#/definitions/remoteProperty"}}},
-            "nats": {"type": "object", "additionalProperties": false, "required": ["accountsKey", "accountsProperty", "tlsKey", "caProperty", "certificateProperty", "privateKeyProperty", "apiCredentialsKey", "workerCredentialsKey", "projectorCredentialsKey", "adminCredentialsKey", "credentialsProperty"], "properties": {"accountsKey": {"$ref": "#/definitions/remoteProperty"}, "accountsProperty": {"$ref": "#/definitions/remoteProperty"}, "tlsKey": {"$ref": "#/definitions/remoteProperty"}, "caProperty": {"$ref": "#/definitions/remoteProperty"}, "certificateProperty": {"$ref": "#/definitions/remoteProperty"}, "privateKeyProperty": {"$ref": "#/definitions/remoteProperty"}, "apiCredentialsKey": {"$ref": "#/definitions/remoteProperty"}, "workerCredentialsKey": {"$ref": "#/definitions/remoteProperty"}, "projectorCredentialsKey": {"$ref": "#/definitions/remoteProperty"}, "adminCredentialsKey": {"$ref": "#/definitions/remoteProperty"}, "credentialsProperty": {"$ref": "#/definitions/remoteProperty"}}},
-            "cloudflared": {"type": "object", "additionalProperties": false, "required": ["key", "tokenProperty"], "properties": {"key": {"$ref": "#/definitions/remoteProperty"}, "tokenProperty": {"$ref": "#/definitions/remoteProperty"}}}
+            "cloudflared": {"type": "object", "additionalProperties": false, "required": ["key", "tokenProperty"], "properties": {"key": {"$ref": "#/definitions/remoteProperty"}, "tokenProperty": {"$ref": "#/definitions/remoteProperty"}}},
+            "documentStorage": {"type": "object", "additionalProperties": false, "required": ["key", "endpointProperty", "bucketProperty", "regionProperty", "accessKeyIdProperty", "secretAccessKeyProperty"], "properties": {"key": {"$ref": "#/definitions/remoteProperty"}, "endpointProperty": {"$ref": "#/definitions/remoteProperty"}, "bucketProperty": {"$ref": "#/definitions/remoteProperty"}, "regionProperty": {"$ref": "#/definitions/remoteProperty"}, "accessKeyIdProperty": {"$ref": "#/definitions/remoteProperty"}, "secretAccessKeyProperty": {"$ref": "#/definitions/remoteProperty"}}}
           }
         }
       }
     },
     "networkPolicy": {
-      "type": "object", "additionalProperties": false, "required": ["enabled", "databaseEgress", "telemetryEgress", "cloudflareEgress"],
+      "type": "object", "additionalProperties": false, "required": ["enabled", "databaseEgress", "telemetryEgress", "cloudflareEgress", "providerEgress"],
       "properties": {
         "enabled": {"type": "boolean"},
         "databaseEgress": {"type": "object", "additionalProperties": false, "required": ["cidrs", "port"], "properties": {"cidrs": {"$ref": "#/definitions/cidrs"}, "port": {"type": "integer", "minimum": 1, "maximum": 65535}}},
         "telemetryEgress": {"type": "object", "additionalProperties": false, "required": ["cidrs", "ports"], "properties": {"cidrs": {"$ref": "#/definitions/cidrs"}, "ports": {"type": "array", "items": {"type": "integer", "minimum": 1, "maximum": 65535}, "uniqueItems": true}}},
-        "cloudflareEgress": {"type": "object", "additionalProperties": false, "required": ["cidrs", "ports"], "properties": {"cidrs": {"$ref": "#/definitions/cidrs"}, "ports": {"type": "array", "items": {"type": "integer", "minimum": 1, "maximum": 65535}, "uniqueItems": true}}}
+        "cloudflareEgress": {"type": "object", "additionalProperties": false, "required": ["cidrs", "ports"], "properties": {"cidrs": {"$ref": "#/definitions/cidrs"}, "ports": {"type": "array", "items": {"type": "integer", "minimum": 1, "maximum": 65535}, "uniqueItems": true}}},
+        "providerEgress": {"type": "object", "additionalProperties": false, "required": ["cidrs", "ports"], "properties": {"cidrs": {"$ref": "#/definitions/cidrs"}, "ports": {"type": "array", "items": {"type": "integer", "minimum": 1, "maximum": 65535}, "uniqueItems": true}}}
       }
     },
     "podDisruptionBudgets": {"type": "object", "additionalProperties": false, "required": ["enabled"], "properties": {"enabled": {"type": "boolean"}}},
@@ -188,12 +165,8 @@
   },
   "allOf": [
     {
-      "if": {"properties": {"rebuild": {"properties": {"enabled": {"const": true}}}}},
-      "then": {"properties": {"rebuild": {"properties": {"runId": {"type": "string", "pattern": "^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$"}}}}}
-    },
-    {
       "if": {"properties": {"global": {"properties": {"environment": {"enum": ["staging", "production"]}}}}},
-      "then": {"properties": {"nats": {"properties": {"replicas": {"const": 3}}}, "cloudflared": {"properties": {"replicas": {"const": 2}}}}}
+      "then": {"properties": {"cloudflared": {"properties": {"replicas": {"const": 2}}}}}
     },
     {
       "if": {"properties": {"global": {"properties": {"environment": {"const": "production"}}}}},
@@ -212,7 +185,8 @@
             "properties": {
               "databaseEgress": {"properties": {"cidrs": {"minItems": 1}}},
               "telemetryEgress": {"properties": {"cidrs": {"minItems": 1}}},
-              "cloudflareEgress": {"properties": {"cidrs": {"minItems": 1}}}
+              "cloudflareEgress": {"properties": {"cidrs": {"minItems": 1}}},
+              "providerEgress": {"properties": {"cidrs": {"minItems": 1}}}
             }
           }
         }

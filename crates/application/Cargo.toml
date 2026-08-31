@@ -1,0 +1,22 @@
+[package]
+name = "deepref-application"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+anyhow.workspace = true
+bytes.workspace = true
+chrono.workspace = true
+deepref-domain.workspace = true
+futures.workspace = true
+jsonschema.workspace = true
+rapidfuzz.workspace = true
+serde = { workspace = true, features = ["derive"] }
+serde_json.workspace = true
+schemars.workspace = true
+thiserror.workspace = true
+uuid.workspace = true
+
+[dev-dependencies]
+proptest = "1.9.0"

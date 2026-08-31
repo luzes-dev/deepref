@@ -2,7 +2,6 @@ name: CI
 
 on:
   pull_request:
-    branches: [development, staging, main]
   push:
     branches: [development, staging, main]
 
@@ -69,6 +68,24 @@ jobs:
             test) cargo test --workspace --all-targets --locked ;;
           esac
 
+  ai-pr15-gates:
+    name: AI PR15 evaluation and security gates
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout trusted source
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+      - name: Install pinned Rust toolchain
+        run: |
+          rustup toolchain install 1.95.0 --profile minimal --component rustfmt,clippy
+          rustup override set 1.95.0
+      - name: Run checked-in gold-set evaluation gate
+        run: cargo test -p deepref-ai --test eval_gate --locked
+      - name: Run prompt-injection and security regressions
+        run: cargo test -p deepref-ai --test prompt_injection_regressions --locked
+
   web:
     name: Web
     runs-on: ubuntu-latest
@@ -92,6 +109,32 @@ jobs:
       - run: pnpm run check
       - run: pnpm --filter @deepref/web test:unit -- --run
       - run: pnpm run build
+
+  fallow:
+    name: Fallow
+    if: github.event_name == 'pull_request'
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: Checkout trusted source with history
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          persist-credentials: false
+          fetch-depth: 0
+      - name: Set up pnpm
+        uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v4.1.0
+        with:
+          version: 11.3.0
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        with:
+          node-version: 24.4.1
+          cache: pnpm
+      - run: pnpm install --frozen-lockfile
+      - name: Gate new TypeScript quality issues
+        env:
+          FALLOW_AUDIT_BASE: ${{ github.event.pull_request.base.sha }}
+        run: pnpm run quality:ts:audit
 
   codegen:
     name: OpenAPI and Orval drift
@@ -181,7 +224,6 @@ jobs:
         shell: bash
         run: |
           docker buildx bake --print
-
           bake_args=(
             --set '*.output=type=cacheonly'
             --set '*.cache-from=type=gha,scope=deepref-containers'
@@ -194,4 +236,40 @@ jobs:
             bake_args+=(--set '*.platform=linux/amd64')
           fi
 
-          docker buildx bake "${bake_args[@]}" api worker projector web
+          docker buildx bake "${bake_args[@]}" api worker web
+
+  rust-required:
+    name: Rust
+    if: always()
+    needs: rust
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - name: Verify Rust checks
+        env:
+          RESULT: ${{ needs.rust.result }}
+        run: test "$RESULT" = "success"
+
+  e2e-required:
+    name: E2E
+    if: always()
+    needs: full-stack
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - name: Verify E2E checks
+        env:
+          RESULT: ${{ needs.full-stack.result }}
+        run: test "$RESULT" = "success"
+
+  docker-required:
+    name: Docker
+    if: always()
+    needs: containers
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - name: Verify container build
+        env:
+          RESULT: ${{ needs.containers.result }}
+        run: test "$RESULT" = "success"

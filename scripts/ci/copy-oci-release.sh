@@ -58,7 +58,7 @@ doc = json.loads(pathlib.Path(sys.argv[1]).read_text())
 repositories = dict(line.split("\t", 1) for line in pathlib.Path(sys.argv[2]).read_text().splitlines())
 doc["environment"] = sys.argv[3]
 doc["chart"]["repository"] = repositories["chart"]
-for name in ("api", "worker", "projector", "web"):
+for name in ("api", "worker", "web"):
     doc["images"][name]["repository"] = repositories[name]
 pathlib.Path(sys.argv[4]).write_text(yaml.safe_dump(doc, sort_keys=False))
 PY

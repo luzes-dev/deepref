@@ -39,22 +39,46 @@ describe('customFetch', () => {
 		).resolves.toMatchObject({ data: undefined, status: 204 });
 	});
 
+	it('returns every attachment as a Blob and preserves download metadata', async () => {
+		const bytes = new Uint8Array([0, 1, 2, 255]);
+		vi.stubGlobal(
+			'fetch',
+			vi.fn().mockResolvedValue(
+				new Response(bytes, {
+					status: 200,
+					headers: {
+						'content-type': 'text/csv; charset=utf-8',
+						'content-disposition': 'attachment; filename="reports.csv"'
+					}
+				})
+			)
+		);
+
+		const response = await customFetch<{ data: Blob; status: 200; headers: Headers }>(
+			'/api/projects/project/exports/reports.csv',
+			{ method: 'GET' }
+		);
+		expect(response.data).toBeInstanceOf(Blob);
+		expect(response.data.type).toMatch(/^text\/csv(?:;|$)/);
+		expect(new Uint8Array(await response.data.arrayBuffer())).toEqual(bytes);
+		expect(response.headers.get('content-disposition')).toContain('reports.csv');
+	});
+
 	it('throws structured API errors', async () => {
 		vi.stubGlobal(
 			'fetch',
 			vi.fn().mockResolvedValue(
 				new Response(
 					JSON.stringify({
-						code: 'GRAPH_UNAVAILABLE',
-						message: 'graph is rebuilding',
+						code: 'INTERNAL_ERROR',
+						message: 'request failed',
 						correlation_id: 'body-correlation'
 					}),
 					{
-						status: 503,
+						status: 500,
 						statusText: 'Service Unavailable',
 						headers: {
 							'content-type': 'application/json',
-							'retry-after': '30',
 							'x-correlation-id': 'response-correlation',
 							'x-request-id': 'request-123'
 						}
@@ -69,16 +93,16 @@ describe('customFetch', () => {
 
 		expect(error).toBeInstanceOf(ApiError);
 		expect(error).toMatchObject({
-			status: 503,
-			code: 'GRAPH_UNAVAILABLE',
-			message: 'graph is rebuilding',
-			retryAfter: '30',
-			retryAfterSeconds: 30,
+			status: 500,
+			code: 'INTERNAL_ERROR',
+			message: 'request failed',
+			retryAfter: undefined,
+			retryAfterSeconds: undefined,
 			correlationId: 'body-correlation',
 			requestId: 'request-123'
 		});
 		expect((error as ApiError).requestHeaders.get('x-correlation-id')).toBeTruthy();
-		expect((error as ApiError).responseHeaders.get('retry-after')).toBe('30');
+		expect((error as ApiError).responseHeaders.get('retry-after')).toBeNull();
 	});
 
 	it('preserves request signals', async () => {

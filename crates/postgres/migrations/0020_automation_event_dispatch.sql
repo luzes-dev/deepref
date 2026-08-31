@@ -1,0 +1,3 @@
+-- Automation dispatch is intentionally initiated by typed application events
+-- in the authoritative source transaction. Database constraints protect the
+-- persisted shape; no trigger infers scientific workflow transitions.

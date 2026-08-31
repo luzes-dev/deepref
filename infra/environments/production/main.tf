@@ -10,8 +10,6 @@ locals {
     application = "Runtime application configuration"
     cloudflare  = "Cloudflare tunnel credentials"
     github_app  = "Deployment GitHub App credentials"
-    nats        = "NATS application credentials"
-    neo4j       = "Neo4j application credentials"
   }
 
   common_tags = merge(var.tags, {
@@ -121,17 +119,16 @@ module "ecr" {
   repositories = {
     api         = { name = "${var.project_name}/api", retain_tagged_images = 200 }
     chart       = { name = "${var.project_name}/charts/platform", retain_tagged_images = 200 }
-    projector   = { name = "${var.project_name}/projector", retain_tagged_images = 200 }
     third_party = { name = "${var.project_name}/third-party", retain_tagged_images = 200 }
     web         = { name = "${var.project_name}/web", retain_tagged_images = 200 }
     worker      = { name = "${var.project_name}/worker", retain_tagged_images = 200 }
   }
   repository_pull_principal_arns   = var.repository_pull_principal_arns
   promotion_trusted_principal_arns = var.promotion_trusted_principal_arns
-  promotion_oidc_provider_arn       = var.promotion_oidc_provider_arn
-  promotion_oidc_subjects           = var.promotion_oidc_subjects
+  promotion_oidc_provider_arn      = var.promotion_oidc_provider_arn
+  promotion_oidc_subjects          = var.promotion_oidc_subjects
   promotion_source_repository_arns = var.promotion_source_repository_arns
-  tags                              = local.common_tags
+  tags                             = local.common_tags
 
   depends_on = [terraform_data.account_guard]
 }
@@ -161,20 +158,20 @@ module "eks" {
 module "rds" {
   source = "../../modules/rds"
 
-  name                           = local.name
-  deployment_tier                = local.environment
-  vpc_id                         = module.network.vpc_id
-  subnet_ids                     = module.network.data_subnet_ids
-  application_security_group_ids = [module.eks.cluster_primary_security_group_id]
-  allowed_cidr_blocks            = var.database_allowed_cidrs
-  instance_class                 = var.database_instance_class
-  allocated_storage_gib          = var.database_allocated_storage_gib
-  max_allocated_storage_gib      = var.database_max_allocated_storage_gib
-  multi_az                       = true
-  deletion_protection            = true
-  backup_retention_days          = 35
-  kms_key_arn                    = module.kms.key_arns["rds"]
-  master_secret_kms_key_arn      = module.kms.key_arns["secrets"]
+  name                                = local.name
+  deployment_tier                     = local.environment
+  vpc_id                              = module.network.vpc_id
+  subnet_ids                          = module.network.data_subnet_ids
+  application_security_group_ids      = [module.eks.cluster_primary_security_group_id]
+  allowed_cidr_blocks                 = var.database_allowed_cidrs
+  instance_class                      = var.database_instance_class
+  allocated_storage_gib               = var.database_allocated_storage_gib
+  max_allocated_storage_gib           = var.database_max_allocated_storage_gib
+  multi_az                            = true
+  deletion_protection                 = true
+  backup_retention_days               = 35
+  kms_key_arn                         = module.kms.key_arns["rds"]
+  master_secret_kms_key_arn           = module.kms.key_arns["secrets"]
   performance_insights_retention_days = 731
   tags                                = local.common_tags
 

@@ -14,11 +14,10 @@ bootstrap:
     pnpm --filter @deepref/web exec playwright install chromium
     {{compose}} pull
 
-# Start disposable dependencies, prepare their schemas, and supervise every app process.
+# Start PostgreSQL, prepare its schema, and supervise every app process.
 dev:
     {{compose}} up -d --wait
-    cargo run -q -p deepref-api -- migrate
-    scripts/bootstrap-local-nats.sh
+    cargo run -q -p deepref-server -- migrate
     exec process-compose -f process-compose.yaml up
 
 # Stop app processes and disposable dependencies while retaining local data.
@@ -34,7 +33,7 @@ dev-reset:
 # Apply all PostgreSQL migrations with the one-shot API command.
 migrate:
     {{compose}} up -d --wait postgres
-    cargo run -q -p deepref-api -- migrate
+    cargo run -q -p deepref-server -- migrate
 
 # Load the deterministic, idempotent local fixture set.
 seed: migrate
@@ -66,8 +65,7 @@ test-unit:
 # Start dependencies and run integration test targets.
 test-integration:
     {{compose}} up -d --wait
-    cargo run -q -p deepref-api -- migrate
-    scripts/bootstrap-local-nats.sh
+    cargo run -q -p deepref-server -- migrate
     cargo test --workspace --tests --locked
 
 # Run browser tests; Playwright builds and starts its own preview server.
@@ -82,9 +80,9 @@ codegen:
 codegen-check:
     pnpm run generate:api:check
 
-# Build the four immutable application image targets locally.
+# Build the three immutable application image targets locally.
 docker-build:
-    docker buildx bake api worker projector web
+    docker buildx bake api worker web
 
 # Lint, render, schema-check, and policy-check the Helm chart.
 helm-check:

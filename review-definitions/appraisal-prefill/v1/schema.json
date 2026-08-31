@@ -1,0 +1,8 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "deepref.review.appraisal-prefill.v1",
+  "title": "AppraisalPrefill",
+  "type": "object",
+  "x-deepref-rust-type": "deepref_ai::AppraisalPrefill",
+  "required": ["report_id", "definition_id", "definition_version", "answers", "domain_judgments", "overall_judgment"]
+}

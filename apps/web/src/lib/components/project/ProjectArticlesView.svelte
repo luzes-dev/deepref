@@ -12,6 +12,7 @@
 	import SearchIcon from '@lucide/svelte/icons/search';
 	import ArticleDataTable from './articles-table/ArticleDataTable.svelte';
 	import { useProjectWorkspaceContext, type ArticleSort } from './context.svelte.js';
+	import { reportLabel, reportSearchText } from './report-label';
 
 	const workspace = useProjectWorkspaceContext();
 
@@ -29,8 +30,7 @@
 				const term = workspace.articleFilters.filter.toLowerCase();
 				return (
 					article.internal_citations >= workspace.articleFilters.minInternal &&
-					(article.doi.toLowerCase().includes(term) ||
-						(article.title ?? '').toLowerCase().includes(term))
+					reportSearchText(article).includes(term)
 				);
 			})
 			.toSorted((a, b) => {
@@ -44,7 +44,7 @@
 					return (b.issued_year ?? 0) - (a.issued_year ?? 0);
 				}
 				if (workspace.articleFilters.sort === 'title') {
-					return (a.title ?? a.doi).localeCompare(b.title ?? b.doi);
+					return reportLabel(a).localeCompare(reportLabel(b));
 				}
 				return b.rank_score - a.rank_score;
 			})
@@ -74,7 +74,7 @@
 	<div class="grid gap-3 md:hidden">
 		<InputGroup.Root>
 			<InputGroup.Input
-				placeholder="Search title or DOI"
+				placeholder="Search title, DOI, or report ID"
 				bind:value={workspace.articleFilters.filter}
 			/>
 			<InputGroup.Addon><SearchIcon /></InputGroup.Addon>
@@ -151,13 +151,15 @@
 			/>
 		</div>
 		<div class="flex min-h-0 flex-1 flex-col gap-3 overflow-auto md:hidden">
-			{#each filtered as article (article.doi)}
+			{#each filtered as article (article.report_id)}
 				<section
 					class="rounded-md border p-3"
-					data-selected={workspace.selectedArticle === article.doi_key}
+					data-selected={workspace.selectedArticle === article.report_id}
 				>
-					<div class="font-medium break-words">{article.title ?? article.doi}</div>
-					<div class="text-xs break-all text-muted-foreground">{article.doi}</div>
+					<div class="font-medium break-words">{reportLabel(article)}</div>
+					{#if article.doi}
+						<div class="text-xs break-all text-muted-foreground">{article.doi}</div>
+					{/if}
 					<div class="mt-3 flex flex-wrap gap-2">
 						<Badge variant="outline">{article.issued_year ?? 'No year'}</Badge>
 						<Badge variant="secondary">Total {article.total_citations}</Badge>
@@ -168,7 +170,7 @@
 						class="mt-3 w-full"
 						variant="outline"
 						size="sm"
-						onclick={() => workspace.openArticle(article.doi_key)}
+						onclick={() => workspace.openArticle(article.report_id)}
 					>
 						Open
 					</Button>

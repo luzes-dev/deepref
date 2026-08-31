@@ -1,5 +1,6 @@
 use std::time::Duration;
 
+use deepref_application::AutomationDomainEvent;
 use deepref_core::{IngestionItemStatus, IngestionStatus, Reference, WorkWithReferences};
 use deepref_events::{
     CitationUpserted, DeadLetterRecord, DomainPayload, EntityType, EventEnvelope,
@@ -224,12 +225,6 @@ pub async fn attach_cached(
     validate_event_ownership(&mut tx, event.event_id, owner).await?;
     attach_project_work(&mut tx, &event.payload, doi).await?;
     sqlx::query(
-        "INSERT INTO citations (project_id, source_doi, target_doi, source, first_seen_ingestion_id) \
-         SELECT $1, source_doi, target_doi, source, $2 FROM fetched_citation_facts WHERE source_doi = $3 \
-         ON CONFLICT DO NOTHING",
-    ).bind(event.payload.project_id).bind(event.payload.ingestion_id).bind(doi)
-        .execute(&mut *tx).await?;
-    sqlx::query(
         "INSERT INTO unresolved_references \
          (id, project_id, source_doi, raw_unstructured, article_title, author, year, volume, first_page) \
          SELECT id, $1, source_doi, raw_unstructured, article_title, author, year, volume, first_page \
@@ -244,6 +239,7 @@ pub async fn attach_cached(
         .await?;
         for target in targets {
             let target = target.get::<String, _>("target_doi");
+            persist_citation(&mut tx, event, doi, &target).await?;
             enqueue_child(&mut tx, event, doi, &target).await?;
         }
     }
@@ -282,7 +278,7 @@ pub async fn finalize_success(
             None => persist_unresolved(&mut tx, event, doi, reference).await?,
         }
     }
-    // Child items and their deterministic outbox work are inserted before the
+    // Child items and their deterministic durable jobs are inserted before the
     // terminal counts are evaluated.
     if event.payload.depth < event.payload.max_depth {
         for target in work
@@ -389,23 +385,12 @@ pub async fn persist_malformed_dead_letter(
     );
     sqlx::query(
         "INSERT INTO dead_letter_records \
-         (identity, source_subject, source_event_id, delivery_count, reason_code, payload_sha256, payload, outbox_event_id) \
+         (identity, source_subject, source_event_id, delivery_count, reason_code, payload_sha256, payload, job_event_id) \
          VALUES ($1,$2,$3,$4,$5,$6,$7,$8) ON CONFLICT (identity) DO UPDATE SET \
          delivery_count = GREATEST(dead_letter_records.delivery_count, EXCLUDED.delivery_count), last_seen_at = now()",
     ).bind(&record.identity).bind(&record.source_subject).bind(record.source_event_id)
         .bind(record.delivery_count as i64).bind(&record.reason_code).bind(&record.payload_sha256)
         .bind(raw).bind(event_id).execute(&mut *tx).await?;
-    let envelope = EventEnvelope::v1(
-        SUBJECT_DLQ,
-        "deepref.worker",
-        EntityType::DeadLetter,
-        record.identity.clone(),
-        record.delivery_count as i64,
-        Uuid::nil(),
-        record.source_event_id,
-        record.clone(),
-    );
-    enqueue(&mut tx, envelope.event_id, SUBJECT_DLQ, &envelope).await?;
     tx.commit().await?;
     Ok(())
 }
@@ -467,6 +452,7 @@ async fn persist_work(
         .bind(work.work.total_citations).bind(work.work.references_count)
         .bind(&work.work.metadata_provider).bind(&work.work.citation_provider).bind(&work.raw)
         .execute(&mut **tx).await?;
+    ensure_v2_report(tx, &work.work.doi).await?;
     Ok(())
 }
 
@@ -474,14 +460,70 @@ async fn attach_project_work(
     tx: &mut Transaction<'_, Postgres>,
     payload: &WorkFetchRequested,
     doi: &str,
-) -> Result<(), sqlx::Error> {
+) -> anyhow::Result<()> {
     sqlx::query(
         "INSERT INTO project_works (project_id,canonical_doi,first_seen_ingestion_id,seed,min_depth) \
          VALUES ($1,$2,$3,$4,$5) ON CONFLICT (project_id,canonical_doi) DO UPDATE SET \
          seed = project_works.seed OR EXCLUDED.seed, min_depth = LEAST(project_works.min_depth,EXCLUDED.min_depth)",
     ).bind(payload.project_id).bind(doi).bind(payload.ingestion_id).bind(payload.depth == 0)
         .bind(payload.depth).execute(&mut **tx).await?;
+    let report_id = ensure_v2_report(tx, doi).await?;
+    let record_id = Uuid::new_v5(
+        &Uuid::NAMESPACE_URL,
+        format!(
+            "deepref:record:{}:{}:{}",
+            payload.project_id, payload.ingestion_id, doi
+        )
+        .as_bytes(),
+    );
+    sqlx::query(
+        "INSERT INTO records (id,project_id,report_id,acquisition_run_id,source,source_key,title,abstract_text,publication_year,raw) SELECT $1,$2,$3,$4,'worker_ingestion',$5,r.title,r.abstract_text,r.publication_year,jsonb_build_object('doi',$5) FROM reports r WHERE r.id=$3 ON CONFLICT (project_id,source,source_key) DO UPDATE SET report_id=EXCLUDED.report_id,acquisition_run_id=EXCLUDED.acquisition_run_id,title=EXCLUDED.title,abstract_text=EXCLUDED.abstract_text,publication_year=EXCLUDED.publication_year",
+    )
+    .bind(record_id)
+    .bind(payload.project_id)
+    .bind(report_id)
+    .bind(payload.ingestion_id)
+    .bind(doi)
+    .execute(&mut **tx)
+    .await?;
+    sqlx::query(
+        "INSERT INTO project_reports (project_id,report_id,first_seen_record_id) VALUES ($1,$2,$3) ON CONFLICT (project_id,report_id) DO UPDATE SET first_seen_record_id=COALESCE(project_reports.first_seen_record_id,EXCLUDED.first_seen_record_id)",
+    )
+    .bind(payload.project_id)
+    .bind(report_id)
+    .bind(record_id)
+    .execute(&mut **tx)
+    .await?;
     Ok(())
+}
+
+async fn ensure_v2_report(tx: &mut Transaction<'_, Postgres>, doi: &str) -> anyhow::Result<Uuid> {
+    let report_id: Uuid = sqlx::query_scalar(
+        "SELECT format('%s-%s-%s-%s-%s',substr(md5('deepref:report:'||$1),1,8),substr(md5('deepref:report:'||$1),9,4),substr(md5('deepref:report:'||$1),13,4),substr(md5('deepref:report:'||$1),17,4),substr(md5('deepref:report:'||$1),21,12))::uuid",
+    )
+    .bind(doi)
+    .fetch_one(&mut **tx)
+    .await?;
+    sqlx::query(
+        "INSERT INTO reports (id,title,abstract_text,publication_year,journal,url,work_type,publisher,container_title,total_citations,references_count,raw) SELECT $1,title,abstract_text,COALESCE(published_year,issued_year),container_title,url,work_type,publisher,container_title,total_citations,references_count,raw FROM works WHERE canonical_doi=$2 ON CONFLICT (id) DO UPDATE SET title=EXCLUDED.title,abstract_text=EXCLUDED.abstract_text,publication_year=EXCLUDED.publication_year,journal=EXCLUDED.journal,url=EXCLUDED.url,work_type=EXCLUDED.work_type,publisher=EXCLUDED.publisher,container_title=EXCLUDED.container_title,total_citations=EXCLUDED.total_citations,references_count=EXCLUDED.references_count,raw=EXCLUDED.raw,updated_at=now()",
+    )
+    .bind(report_id)
+    .bind(doi)
+    .execute(&mut **tx)
+    .await?;
+    let identifier_id = Uuid::new_v5(
+        &Uuid::NAMESPACE_URL,
+        format!("deepref:doi:{doi}").as_bytes(),
+    );
+    sqlx::query(
+        "INSERT INTO report_identifiers (id,report_id,scheme,value,normalized_value) VALUES ($1,$2,'doi',$3,$3) ON CONFLICT (scheme,normalized_value) DO UPDATE SET report_id=EXCLUDED.report_id,value=EXCLUDED.value",
+    )
+    .bind(identifier_id)
+    .bind(report_id)
+    .bind(doi)
+    .execute(&mut **tx)
+    .await?;
+    Ok(report_id)
 }
 
 async fn persist_citation(
@@ -500,9 +542,22 @@ async fn persist_citation(
         "INSERT INTO fetched_citation_facts (source_doi,target_doi) VALUES ($1,$2) ON CONFLICT DO NOTHING",
     ).bind(source).bind(target).execute(&mut **tx).await?;
     sqlx::query(
-        "INSERT INTO citations (project_id,source_doi,target_doi,first_seen_ingestion_id) VALUES ($1,$2,$3,$4) ON CONFLICT DO NOTHING",
+        "INSERT INTO legacy_citations (project_id,source_doi,target_doi,first_seen_ingestion_id) VALUES ($1,$2,$3,$4) ON CONFLICT DO NOTHING",
     ).bind(event.payload.project_id).bind(source).bind(target).bind(event.payload.ingestion_id)
         .execute(&mut **tx).await?;
+    let source_report_id = ensure_v2_report(tx, source).await?;
+    let target_report_id = ensure_v2_report(tx, target).await?;
+    sqlx::query(
+        "INSERT INTO citations (project_id,source_report_id,target_report_id,source,first_seen_ingestion_id,legacy_source_doi,legacy_target_doi) VALUES ($1,$2,$3,'crossref-reference',$4,$5,$6) ON CONFLICT (project_id,source_report_id,target_report_id) DO UPDATE SET first_seen_ingestion_id=COALESCE(citations.first_seen_ingestion_id,EXCLUDED.first_seen_ingestion_id)",
+    )
+    .bind(event.payload.project_id)
+    .bind(source_report_id)
+    .bind(target_report_id)
+    .bind(event.payload.ingestion_id)
+    .bind(source)
+    .bind(target)
+    .execute(&mut **tx)
+    .await?;
     let payload = DomainPayload::CitationUpserted(CitationUpserted {
         project_id: event.payload.project_id,
         source_doi: source.to_owned(),
@@ -616,7 +671,17 @@ async fn enqueue_child(
         .bind(child.event_id)
         .execute(&mut **tx)
         .await?;
-        enqueue(tx, child.event_id, SUBJECT_WORK_FETCH_REQUESTED, &child).await?;
+        deepref_postgres::enqueue_job(
+            tx,
+            &deepref_postgres::job(
+                child.event_id,
+                event.payload.project_id.into(),
+                "work_fetch_requested",
+                serde_json::to_value(&child)?,
+                format!("work_fetch:{}", child.event_id),
+            ),
+        )
+        .await?;
     }
     Ok(())
 }
@@ -639,7 +704,8 @@ async fn emit_work(
             total_citations: work.work.total_citations,
         }),
     )
-    .await
+    .await?;
+    Ok(())
 }
 
 async fn emit_membership(
@@ -660,14 +726,15 @@ async fn emit_membership(
             min_depth: event.payload.depth,
         }),
     )
-    .await
+    .await?;
+    Ok(())
 }
 
 async fn emit_metrics_request(
     tx: &mut Transaction<'_, Postgres>,
     event: &EventEnvelope<WorkFetchRequested>,
 ) -> anyhow::Result<()> {
-    emit_domain(
+    let envelope = emit_domain(
         tx,
         SUBJECT_METRICS_RECOMPUTE_REQUESTED,
         EntityType::Metric,
@@ -678,7 +745,22 @@ async fn emit_metrics_request(
             ingestion_id: Some(event.payload.ingestion_id),
         }),
     )
-    .await
+    .await?;
+    deepref_postgres::enqueue_job(
+        tx,
+        &deepref_postgres::job(
+            envelope.event_id,
+            event.payload.project_id.into(),
+            "recompute_metrics",
+            serde_json::to_value(&envelope)?,
+            format!(
+                "recompute_metrics:{}:{}",
+                event.payload.project_id, envelope.event_id
+            ),
+        ),
+    )
+    .await?;
+    Ok(())
 }
 
 async fn emit_domain(
@@ -688,7 +770,7 @@ async fn emit_domain(
     entity_key: &str,
     cause: &EventEnvelope<WorkFetchRequested>,
     payload: DomainPayload,
-) -> anyhow::Result<()> {
+) -> anyhow::Result<EventEnvelope<DomainPayload>> {
     let revision: i64 = sqlx::query_scalar("SELECT nextval('graph_domain_revision_seq')")
         .fetch_one(&mut **tx)
         .await?;
@@ -709,14 +791,13 @@ async fn emit_domain(
         .bind(envelope.entity_type.as_str()).bind(&envelope.entity_key).bind(envelope.revision)
         .bind(serde_json::to_value(&envelope.payload)?).bind(envelope.correlation_id)
         .bind(envelope.causation_id).bind(envelope.occurred_at).execute(&mut **tx).await?;
-    enqueue(tx, envelope.event_id, subject, &envelope).await?;
-    Ok(())
+    Ok(envelope)
 }
 
 async fn persist_dead_letter(
     tx: &mut Transaction<'_, Postgres>,
     record: &DeadLetterRecord,
-    cause: Option<&EventEnvelope<WorkFetchRequested>>,
+    _cause: Option<&EventEnvelope<WorkFetchRequested>>,
 ) -> anyhow::Result<()> {
     let event_id = deterministic_event_id(
         1,
@@ -727,23 +808,12 @@ async fn persist_dead_letter(
     );
     sqlx::query(
         "INSERT INTO dead_letter_records \
-         (identity,source_subject,source_event_id,delivery_count,reason_code,payload_sha256,outbox_event_id) \
+         (identity,source_subject,source_event_id,delivery_count,reason_code,payload_sha256,job_event_id) \
          VALUES ($1,$2,$3,$4,$5,$6,$7) ON CONFLICT (identity) DO UPDATE SET \
          delivery_count=GREATEST(dead_letter_records.delivery_count,EXCLUDED.delivery_count),last_seen_at=now()",
     ).bind(&record.identity).bind(&record.source_subject).bind(record.source_event_id)
         .bind(record.delivery_count as i64).bind(&record.reason_code).bind(&record.payload_sha256)
         .bind(event_id).execute(&mut **tx).await?;
-    let envelope = EventEnvelope::v1(
-        SUBJECT_DLQ,
-        "deepref.worker",
-        EntityType::DeadLetter,
-        record.identity.clone(),
-        record.delivery_count as i64,
-        cause.map_or(Uuid::nil(), |event| event.correlation_id),
-        record.source_event_id,
-        record.clone(),
-    );
-    enqueue(tx, envelope.event_id, SUBJECT_DLQ, &envelope).await?;
     Ok(())
 }
 
@@ -780,6 +850,39 @@ async fn complete_item_and_claim(
         queued_count=(SELECT count(*)::int FROM ingestion_items WHERE ingestion_id=$1 AND status IN ('queued','fetching'))
         WHERE id=$1"#,
     ).bind(event.payload.ingestion_id).execute(&mut **tx).await?;
+    let previous_acquisition_status = sqlx::query_scalar::<_, String>(
+        "SELECT status FROM acquisition_runs WHERE id=$1 FOR UPDATE",
+    )
+    .bind(event.payload.ingestion_id)
+    .fetch_one(&mut **tx)
+    .await?;
+    let acquisition_status = sqlx::query_scalar::<_, String>(
+        r#"UPDATE acquisition_runs SET
+        status = CASE WHEN status='cancelled' THEN status
+          WHEN NOT EXISTS (SELECT 1 FROM ingestion_items WHERE ingestion_id=$1 AND status IN ('queued','fetching'))
+          THEN CASE WHEN EXISTS (SELECT 1 FROM ingestion_items WHERE ingestion_id=$1 AND status IN ('failed','not_found')) THEN 'failed' ELSE 'completed' END
+          WHEN status='queued' THEN 'running' ELSE status END,
+        started_at=COALESCE(started_at,now()),
+        completed_at=CASE WHEN NOT EXISTS (SELECT 1 FROM ingestion_items WHERE ingestion_id=$1 AND status IN ('queued','fetching')) THEN now() ELSE completed_at END,
+        fetched_count=(SELECT count(*)::int FROM ingestion_items WHERE ingestion_id=$1 AND status='fetched'),
+        failed_count=(SELECT count(*)::int FROM ingestion_items WHERE ingestion_id=$1 AND status IN ('failed','not_found')),
+        queued_count=(SELECT count(*)::int FROM ingestion_items WHERE ingestion_id=$1 AND status IN ('queued','fetching'))
+        WHERE id=$1
+        RETURNING status"#,
+    )
+    .bind(event.payload.ingestion_id)
+    .fetch_one(&mut **tx)
+    .await?;
+    if previous_acquisition_status != "completed" && acquisition_status == "completed" {
+        deepref_postgres::dispatch_automation_domain_event(
+            tx,
+            &AutomationDomainEvent::AcquisitionCompleted {
+                project_id: event.payload.project_id.into(),
+                acquisition_id: event.payload.ingestion_id,
+            },
+        )
+        .await?;
+    }
     let completed = sqlx::query(
         "UPDATE processed_events SET completed_at=now(),processed_at=now(),owner_token=NULL,lease_expires_at=NULL,last_error=$3 \
          WHERE event_id=$1 AND owner_token=$2 AND completed_at IS NULL",
@@ -787,17 +890,5 @@ async fn complete_item_and_claim(
     if completed.rows_affected() != 1 {
         anyhow::bail!("event claim ownership was lost before completion");
     }
-    Ok(())
-}
-
-pub async fn enqueue<T: serde::Serialize>(
-    tx: &mut Transaction<'_, Postgres>,
-    id: Uuid,
-    subject: &str,
-    payload: &T,
-) -> anyhow::Result<()> {
-    sqlx::query(
-        "INSERT INTO event_outbox (id,subject,payload) VALUES ($1,$2,$3) ON CONFLICT (id) DO NOTHING",
-    ).bind(id).bind(subject).bind(serde_json::to_value(payload)?).execute(&mut **tx).await?;
     Ok(())
 }

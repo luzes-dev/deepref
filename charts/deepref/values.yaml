@@ -16,21 +16,9 @@ images:
   worker:
     repository: ""
     digest: ""
-  projector:
-    repository: ""
-    digest: ""
   web:
     repository: ""
     digest: ""
-  nats:
-    repository: docker.io/library/nats
-    digest: sha256:ddb480f4b97d90f183123e96bbc7c96ab2a126883f7a380531cc208fc8ba9ca7
-  natsBox:
-    repository: docker.io/natsio/nats-box
-    digest: sha256:abdc9f9f0120bb8adfbf674eb037d1551db55356eb198b7bd4ffed377f6950a6
-  neo4j:
-    repository: docker.io/library/neo4j
-    digest: sha256:ff5de78d1e953427df7a8e1782aa18a5680ea8127c2d39649298319db2d6ea6a
   cloudflared:
     repository: docker.io/cloudflare/cloudflared
     digest: sha256:6d91c121b803126f7a5344005d17a9324788fc09d305b6e2560ec6040a7ae283
@@ -41,11 +29,7 @@ images:
 serviceAccounts:
   api: deepref-api
   worker: deepref-worker
-  projector: deepref-projector
   web: deepref-web
-  nats: deepref-nats
-  natsAdmin: deepref-nats-admin
-  neo4j: deepref-neo4j
   cloudflared: deepref-cloudflared
   adot: deepref-adot
 
@@ -56,19 +40,17 @@ runtime:
     acquireTimeoutSeconds: 10
     idleTimeoutSeconds: 600
     maxLifetimeSeconds: 1800
-  nats:
-    connectTimeoutSeconds: 5
-    requestTimeoutSeconds: 10
-  neo4j:
-    poolMax: 16
-    connectTimeoutSeconds: 5
-    queryTimeoutSeconds: 15
   shutdownDeadlineSeconds: 30
+
+documentStorage:
+  backend: s3
+  root: ""
+  maxBytes: 26214400
+  secretName: ""
 
 api:
   replicas: 2
   corsOrigins: []
-  graphRetryAfterSeconds: 30
   terminationGracePeriodSeconds: 45
   resources:
     requests: {cpu: 100m, memory: 128Mi}
@@ -79,14 +61,6 @@ worker:
   concurrency: 8
   claimLeaseSeconds: 60
   reconcilerIntervalSeconds: 30
-  terminationGracePeriodSeconds: 60
-  resources:
-    requests: {cpu: 200m, memory: 256Mi}
-    limits: {cpu: "2", memory: 1Gi}
-
-projector:
-  replicas: 2
-  batchSize: 1000
   terminationGracePeriodSeconds: 60
   resources:
     requests: {cpu: 200m, memory: 256Mi}
@@ -106,43 +80,6 @@ migration:
   resources:
     requests: {cpu: 100m, memory: 128Mi}
     limits: {cpu: "1", memory: 512Mi}
-
-rebuild:
-  enabled: false
-  runId: ""
-  activeDeadlineSeconds: 7200
-  batchSize: 1000
-  resources:
-    requests: {cpu: 500m, memory: 1Gi}
-    limits: {cpu: "4", memory: 4Gi}
-
-nats:
-  replicas: 1
-  storage:
-    size: 20Gi
-    storageClassName: gp3-encrypted
-  maxFileStore: 16Gi
-  terminationGracePeriodSeconds: 60
-  resources:
-    requests: {cpu: 250m, memory: 512Mi}
-    limits: {cpu: "2", memory: 2Gi}
-  bootstrap:
-    activeDeadlineSeconds: 600
-    resources:
-      requests: {cpu: 50m, memory: 64Mi}
-      limits: {cpu: 500m, memory: 256Mi}
-
-neo4j:
-  storage:
-    size: 50Gi
-    storageClassName: gp3-encrypted
-  pageCache: 1G
-  heapInitial: 1G
-  heapMax: 2G
-  terminationGracePeriodSeconds: 120
-  resources:
-    requests: {cpu: 500m, memory: 3Gi}
-    limits: {cpu: "4", memory: 6Gi}
 
 cloudflared:
   replicas: 1
@@ -170,26 +107,16 @@ externalSecrets:
     database:
       key: deepref/development/database
       urlProperty: url
-    neo4j:
-      key: deepref/development/neo4j
-      usernameProperty: username
-      passwordProperty: password
-      authProperty: auth
-    nats:
-      accountsKey: deepref/development/nats/accounts
-      accountsProperty: accounts.conf
-      tlsKey: deepref/development/nats/tls
-      caProperty: ca.crt
-      certificateProperty: tls.crt
-      privateKeyProperty: tls.key
-      apiCredentialsKey: deepref/development/nats/api
-      workerCredentialsKey: deepref/development/nats/worker
-      projectorCredentialsKey: deepref/development/nats/projector
-      adminCredentialsKey: deepref/development/nats/admin
-      credentialsProperty: credentials
     cloudflared:
       key: deepref/development/cloudflared
       tokenProperty: token
+    documentStorage:
+      key: deepref/development/document-storage
+      endpointProperty: endpoint
+      bucketProperty: bucket
+      regionProperty: region
+      accessKeyIdProperty: access_key_id
+      secretAccessKeyProperty: secret_access_key
 
 networkPolicy:
   enabled: true
@@ -202,6 +129,11 @@ networkPolicy:
   cloudflareEgress:
     cidrs: []
     ports: [443, 7844]
+  providerEgress:
+    # Crossref and other HTTPS metadata providers are public endpoints. Production
+    # overlays must replace this with reviewed provider CIDRs where possible.
+    cidrs: [0.0.0.0/0]
+    ports: [443]
 
 podDisruptionBudgets:
   enabled: true

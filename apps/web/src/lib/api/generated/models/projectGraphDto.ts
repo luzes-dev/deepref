@@ -4,13 +4,13 @@
  * DeepRef API
  * OpenAPI spec version: 0.1.0
  */
-import type { ArticleDto } from './articleDto.ts';
 import type { GraphEdgeDto } from './graphEdgeDto.ts';
+import type { GraphNodeDto } from './graphNodeDto.ts';
 import type { ProjectionMetadata } from './projectionMetadata.ts';
 
 export interface ProjectGraphDto {
 	edges: GraphEdgeDto[];
-	nodes: ArticleDto[];
+	nodes: GraphNodeDto[];
 	projection: ProjectionMetadata;
 	truncated: boolean;
 }

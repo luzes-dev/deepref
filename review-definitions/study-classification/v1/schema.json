@@ -1,0 +1,8 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "deepref.review.study-classification.v1",
+  "title": "StudyDesignClassification",
+  "type": "object",
+  "x-deepref-rust-type": "deepref_ai::StudyDesignClassification",
+  "required": ["study_id", "expected_revision", "suggested_design", "rationale", "evidence", "uncertainties"]
+}

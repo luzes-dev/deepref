@@ -75,7 +75,10 @@ if rg --quiet 'dynamodb_table' infra/environments infra/bootstrap/global; then
 fi
 
 [[ ! -e infra/neo4j/constraints.cypher ]] || fail 'legacy Neo4j constraints file must be removed'
-[[ -e crates/graph/migrations/0001_constraints.cypher ]] || fail 'versioned graph constraint migration must exist before legacy removal'
+[[ ! -d crates/graph/migrations ]] || fail 'legacy graph migrations must be removed after the PostgreSQL graph cutover'
+[[ -e crates/postgres/migrations/0008_infrastructure_collapse.sql ]] || fail 'PostgreSQL infrastructure collapse migration must exist'
+[[ -e crates/postgres/migrations/0009_acquisition_runs.sql ]] || fail 'PostgreSQL acquisition migration must exist'
+[[ -e crates/postgres/migrations/0010_deduplication.sql ]] || fail 'PostgreSQL deduplication migration must exist'
 
 mapfile -t forbidden_artifacts < <(
   find infra -type f \( -name '*.tfstate' -o -name '*.tfstate.*' -o -name '*.tfplan' -o -name 'terraform.tfvars' \) -print

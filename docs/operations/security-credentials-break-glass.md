@@ -15,12 +15,10 @@ The application deliberately has no login, users, organizations, tenants, owners
 | Cloudflare provider/OAuth secret     | Approved broker; sensitive provider input may enter encrypted global state             | Security owner               |
 | Tunnel token                         | Retrieved out-of-band and written directly to pre-created environment secret container | Platform/security owner      |
 | Database master/runtime credentials  | AWS-managed/Secrets Manager; runtime consumed through External Secrets                 | Data/security owner          |
-| NATS account/TLS/subject credentials | Secrets Manager to External Secrets; admin credential only for bootstrap Job           | Platform/security owner      |
-| Neo4j credential                     | Secrets Manager to External Secrets                                                    | Platform/security owner      |
 | Synthetic Access token               | Protected synthetic store, bounded scope, monitored and rotated                        | Observability/security owner |
 | Argo repository credential           | Read-only, delivered out-of-band when private                                          | Platform/security owner      |
 
-Never commit credentials, real tfvars/backend files, state, saved plans, kubeconfigs, `.env`, tokens, private keys, NATS `.creds`, database URLs, or generated Kubernetes Secrets. Do not pass secrets on command lines when an environment/file/broker path is available; shell history and process listings are evidence surfaces.
+Never commit credentials, real tfvars/backend files, state, saved plans, kubeconfigs, `.env`, tokens, private keys, database URLs, or generated Kubernetes Secrets. Do not pass secrets on command lines when an environment/file/broker path is available; shell history and process listings are evidence surfaces.
 
 ## Rotation policy
 

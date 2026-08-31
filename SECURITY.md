@@ -12,16 +12,15 @@ The supported production version is the latest release deployed from `main`. Sec
 
 Cloudflare Access is the application perimeter for development, staging, and production. Admission is based on membership in the configured GitHub organization. There is no application authentication, user, organization, tenant, ownership, or role model.
 
-Every identity admitted by Cloudflare has equal application privileges, including settings and destructive actions. A Cloudflare application session does not grant AWS, GitHub, Kubernetes, Argo, database, NATS, Neo4j, or observability access. Those systems require separate least-privilege SSO roles and approvals.
+Every identity admitted by Cloudflare has equal application privileges, including settings and destructive actions. A Cloudflare application session does not grant AWS, GitHub, Kubernetes, Argo, database, or observability access. Those systems require separate least-privilege SSO roles and approvals.
 
 The perimeter must remain fail closed: no public AWS application load balancer, origin IP, alternate hostname, disabled origin JWT validation, permissive temporary Access policy, or shared-password bypass is supported. Use the [Cloudflare or IdP outage runbook](docs/operations/runbooks/cloudflare-or-idp-outage.md).
 
 ## Credentials and secrets
 
 - Use AWS IAM Identity Center/SSO and GitHub OIDC for short-lived cloud access. Do not create or distribute static AWS access keys.
-- Keep provider tokens, OAuth secrets, GitHub App private keys, tunnel tokens, Argo repository credentials, database credentials, NATS credentials/TLS keys, Neo4j credentials, synthetic tokens, and kubeconfigs out of Git, tfvars, state outputs, logs, chat, and workflow artifacts.
+- Keep provider tokens, OAuth secrets, GitHub App private keys, tunnel tokens, Argo repository credentials, database credentials, synthetic tokens, and kubeconfigs out of Git, tfvars, state outputs, logs, chat, and workflow artifacts.
 - OpenTofu creates secret containers, not secret values. Runtime values are delivered through the approved broker/Secrets Manager and External Secrets. Do not patch Kubernetes Secrets as the normal path.
-- Application NATS credentials are subject-restricted. The NATS administration credential is limited to the GitOps-owned bootstrap Job.
 - Rotate credentials through the [credential rotation runbook](docs/operations/runbooks/credential-rotation.md). The security owner must approve routine intervals, emergency revocation, and time-bounded exceptions before production.
 
 ## Supply chain and vulnerabilities

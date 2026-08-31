@@ -10,7 +10,7 @@ guide_count=$(find docs/operations -maxdepth 1 -type f -name '*.md' | wc -l)
 [[ $guide_count -eq 8 ]] || fail "expected exactly 8 top-level operations guides, found $guide_count"
 
 runbook_count=$(find docs/operations/runbooks -maxdepth 1 -type f -name '*.md' | wc -l)
-[[ $runbook_count -eq 12 ]] || fail "expected exactly 12 runbooks, found $runbook_count"
+[[ $runbook_count -eq 9 ]] || fail "expected exactly 9 runbooks, found $runbook_count"
 
 expected_runbooks=(
   bootstrap.md
@@ -18,9 +18,6 @@ expected_runbooks=(
   rollback.md
   migration-failure.md
   rds-failover-pitr.md
-  nats-quorum-dlq-recovery.md
-  neo4j-rebuild.md
-  projection-lag.md
   cloudflare-or-idp-outage.md
   credential-rotation.md
   node-az-drain.md
@@ -92,4 +89,4 @@ if rg --line-number 'https://REPLACE_WITH_[A-Z_]*HOST/(health|projects)' docs/op
   fail "hosted same-origin API commands must use the /api prefix"
 fi
 
-printf 'documentation checks passed: 8 guides, 12 runbooks, AC-01..AC-16, links, and obsolete-path scan\n'
+printf 'documentation checks passed: 8 guides, 9 runbooks, AC-01..AC-16, links, and obsolete-path scan\n'

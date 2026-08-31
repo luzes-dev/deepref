@@ -1,14 +1,22 @@
 <script lang="ts">
+	import { resolve } from '$app/paths';
 	import { ScrollArea } from '$lib/components/ui/scroll-area';
 	import * as Tooltip from '$lib/components/ui/tooltip';
 	import { useProjectWorkspaceContext } from './context.svelte.js';
-	import type { ProjectWorkspaceView } from './types';
+	import type { ProjectWorkspaceNavView } from './types';
 	import type { LucideIcon } from '@lucide/svelte';
 	import ArchiveIcon from '@lucide/svelte/icons/archive';
+	import ClipboardCheckIcon from '@lucide/svelte/icons/clipboard-check';
+	import ClipboardListIcon from '@lucide/svelte/icons/clipboard-list';
+	import ClipboardPenLineIcon from '@lucide/svelte/icons/clipboard-pen-line';
 	import FileTextIcon from '@lucide/svelte/icons/file-text';
 	import GitForkIcon from '@lucide/svelte/icons/git-fork';
+	import GitCompareIcon from '@lucide/svelte/icons/git-compare';
 	import HomeIcon from '@lucide/svelte/icons/home';
 	import LightbulbIcon from '@lucide/svelte/icons/lightbulb';
+	import TablePropertiesIcon from '@lucide/svelte/icons/table-properties';
+	import Settings2Icon from '@lucide/svelte/icons/settings-2';
+	import BotIcon from '@lucide/svelte/icons/bot';
 	import ProjectSelector from './ProjectSelector.svelte';
 	import { cn } from '$lib/utils';
 	import { Button, buttonVariants } from '$lib/components/ui/button';
@@ -20,13 +28,35 @@
 	} = $props();
 
 	const workspace = useProjectWorkspaceContext();
+	const projectItems: ReadonlyArray<{
+		label: string;
+		path:
+			| '/projects/[projectId]/studies'
+			| '/projects/[projectId]/appraisal'
+			| '/projects/[projectId]/extraction'
+			| '/projects/[projectId]/automations'
+			| '/projects/[projectId]/assistant';
+		icon: LucideIcon;
+	}> = [
+		{ label: 'Studies', path: '/projects/[projectId]/studies', icon: ClipboardListIcon },
+		{ label: 'Appraisal', path: '/projects/[projectId]/appraisal', icon: ClipboardPenLineIcon },
+		{
+			label: 'Extraction',
+			path: '/projects/[projectId]/extraction',
+			icon: TablePropertiesIcon
+		},
+		{ label: 'Automations', path: '/projects/[projectId]/automations', icon: Settings2Icon },
+		{ label: 'Assistant', path: '/projects/[projectId]/assistant', icon: BotIcon }
+	];
 	const navItems: {
-		view: ProjectWorkspaceView;
+		view: ProjectWorkspaceNavView;
 		label: string;
 		icon: LucideIcon;
 		count?: number;
 	}[] = $derived([
 		{ view: 'overview', label: 'Overview', icon: HomeIcon },
+		{ view: 'protocol', label: 'Protocol', icon: ClipboardListIcon },
+		{ view: 'prisma', label: 'PRISMA', icon: ClipboardCheckIcon },
 		{
 			view: 'articles',
 			label: 'Articles',
@@ -47,6 +77,13 @@
 			count: workspace.counts.ingestions
 		}
 	]);
+	const screeningHref = $derived(
+		workspace.selectedProjectId
+			? resolve('/projects/[projectId]/screening/title-abstract', {
+					projectId: workspace.selectedProjectId
+				})
+			: undefined
+	);
 </script>
 
 <Tooltip.Provider>
@@ -115,6 +152,103 @@
 						</Button>
 					{/if}
 				{/each}
+				{#if screeningHref}
+					{#if collapsed}
+						<a
+							href={resolve('/projects/[projectId]/screening/title-abstract', {
+								projectId: workspace.selectedProjectId
+							})}
+							title="Screening"
+							class={cn(
+								buttonVariants({
+									variant: 'outline',
+									size: 'icon',
+									class: 'size-9'
+								})
+							)}
+						>
+							<ClipboardCheckIcon aria-hidden={true} />
+							<span class="sr-only">Screening</span>
+						</a>
+					{:else}
+						<a
+							href={resolve('/projects/[projectId]/screening/title-abstract', {
+								projectId: workspace.selectedProjectId
+							})}
+							class={cn(
+								buttonVariants({
+									variant: 'outline',
+									size: 'sm',
+									class: 'justify-start'
+								})
+							)}
+						>
+							<ClipboardCheckIcon class="mr-2 size-4" aria-hidden={true} />
+							Screening
+						</a>
+					{/if}
+				{/if}
+				{#if workspace.selectedProjectId}
+					{#each projectItems as projectItem (projectItem.label)}
+						{@const ProjectIcon = projectItem.icon}
+						<a
+							href={resolve(projectItem.path, {
+								projectId: workspace.selectedProjectId
+							})}
+							title={projectItem.label}
+							class={cn(
+								buttonVariants({
+									variant: 'outline',
+									size: collapsed ? 'icon' : 'sm',
+									class: collapsed ? 'size-9' : 'justify-start'
+								})
+							)}
+						>
+							<ProjectIcon
+								class={collapsed ? 'size-4' : 'mr-2 size-4'}
+								aria-hidden={true}
+							/>
+							{#if collapsed}<span class="sr-only">{projectItem.label}</span
+								>{:else}{projectItem.label}{/if}
+						</a>
+					{/each}
+				{/if}
+				{#if workspace.selectedProjectId}
+					{#if collapsed}
+						<a
+							href={resolve('/projects/[projectId]/discovery/duplicates', {
+								projectId: workspace.selectedProjectId
+							})}
+							title="Deduplication"
+							class={cn(
+								buttonVariants({
+									variant: 'outline',
+									size: 'icon',
+									class: 'size-9'
+								})
+							)}
+						>
+							<GitCompareIcon aria-hidden={true} />
+							<span class="sr-only">Deduplication</span>
+						</a>
+					{:else}
+						<a
+							href={resolve('/projects/[projectId]/discovery/duplicates', {
+								projectId: workspace.selectedProjectId
+							})}
+							class={cn(
+								buttonVariants({
+									variant: 'outline',
+									size: 'sm',
+									class: 'justify-start'
+								})
+							)}
+						>
+							<GitCompareIcon class="mr-2 size-4" aria-hidden={true} />
+							Deduplication
+						</a>
+					{/if}
+				{/if}
 			</nav>
 		</ScrollArea>
 	</aside>

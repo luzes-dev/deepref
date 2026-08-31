@@ -4,12 +4,12 @@
  * DeepRef API
  * OpenAPI spec version: 0.1.0
  */
-import type { ArticleDto } from './articleDto.ts';
 import type { ProjectionMetadata } from './projectionMetadata.ts';
+import type { ReportDto } from './reportDto.ts';
 
 export interface RecommendationGroupsDto {
-	core_to_project: ArticleDto[];
-	foundational: ArticleDto[];
+	core_to_project: ReportDto[];
+	foundational: ReportDto[];
 	projection: ProjectionMetadata;
-	underexplored: ArticleDto[];
+	underexplored: ReportDto[];
 }

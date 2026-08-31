@@ -1,0 +1,3 @@
+# DOI seed list
+10.5555/example-unicode
+https://doi.org/10.5555/example-second.

@@ -62,17 +62,9 @@ spec:
     matchExpressions:
       - key: app.kubernetes.io/component
         operator: In
-        values: [api, worker, projector, migration, projector-rebuild]
+        values: [api, worker, migration]
   policyTypes: [Egress]
   egress:
-    - to:
-        - podSelector:
-            matchLabels: {{- include "deepref.selectorLabels" (dict "root" . "component" "nats") | nindent 14 }}
-      ports: [{protocol: TCP, port: 4222}]
-    - to:
-        - podSelector:
-            matchLabels: {{- include "deepref.selectorLabels" (dict "root" . "component" "neo4j") | nindent 14 }}
-      ports: [{protocol: TCP, port: 7687}]
     - to:
         - podSelector:
             matchLabels: {{- include "deepref.selectorLabels" (dict "root" . "component" "adot") | nindent 14 }}
@@ -103,66 +95,21 @@ spec:
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
-  name: {{ include "deepref.componentName" (dict "root" . "component" "nats-bootstrap") }}
+  name: {{ include "deepref.componentName" (dict "root" . "component" "worker-provider-egress") }}
   namespace: {{ include "deepref.namespace" . }}
   labels: {{- include "deepref.labels" . | nindent 4 }}
 spec:
   podSelector:
-    matchLabels: {{- include "deepref.selectorLabels" (dict "root" . "component" "nats-bootstrap") | nindent 6 }}
+    matchLabels: {{- include "deepref.selectorLabels" (dict "root" . "component" "worker") | nindent 6 }}
   policyTypes: [Egress]
   egress:
-    - to:
-        - podSelector:
-            matchLabels: {{- include "deepref.selectorLabels" (dict "root" . "component" "nats") | nindent 14 }}
-      ports: [{protocol: TCP, port: 4222}]
----
-apiVersion: networking.k8s.io/v1
-kind: NetworkPolicy
-metadata:
-  name: {{ include "deepref.componentName" (dict "root" . "component" "nats") }}
-  namespace: {{ include "deepref.namespace" . }}
-  labels: {{- include "deepref.labels" . | nindent 4 }}
-spec:
-  podSelector:
-    matchLabels: {{- include "deepref.selectorLabels" (dict "root" . "component" "nats") | nindent 6 }}
-  policyTypes: [Ingress, Egress]
-  ingress:
-    - from:
-        - podSelector:
-            matchExpressions:
-              - key: app.kubernetes.io/component
-                operator: In
-                values: [api, worker, projector, migration, projector-rebuild, nats-bootstrap, nats]
+    {{- range .Values.networkPolicy.providerEgress.cidrs }}
+    - to: [{ipBlock: {cidr: {{ . | quote }}}}]
       ports:
-        - {protocol: TCP, port: 4222}
-        - {protocol: TCP, port: 6222}
-        - {protocol: TCP, port: 8222}
-  egress:
-    - to:
-        - podSelector:
-            matchLabels: {{- include "deepref.selectorLabels" (dict "root" . "component" "nats") | nindent 14 }}
-      ports: [{protocol: TCP, port: 6222}]
----
-apiVersion: networking.k8s.io/v1
-kind: NetworkPolicy
-metadata:
-  name: {{ include "deepref.componentName" (dict "root" . "component" "neo4j") }}
-  namespace: {{ include "deepref.namespace" . }}
-  labels: {{- include "deepref.labels" . | nindent 4 }}
-spec:
-  podSelector:
-    matchLabels: {{- include "deepref.selectorLabels" (dict "root" . "component" "neo4j") | nindent 6 }}
-  policyTypes: [Ingress]
-  ingress:
-    - from:
-        - podSelector:
-            matchExpressions:
-              - key: app.kubernetes.io/component
-                operator: In
-                values: [api, projector, projector-rebuild]
-      ports:
-        - {protocol: TCP, port: 7687}
-        - {protocol: TCP, port: 7474}
+        {{- range $.Values.networkPolicy.providerEgress.ports }}
+        - {protocol: TCP, port: {{ . }}}
+        {{- end }}
+    {{- end }}
 ---
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
@@ -180,7 +127,7 @@ spec:
             matchExpressions:
               - key: app.kubernetes.io/component
                 operator: In
-                values: [api, worker, projector, migration, projector-rebuild]
+                values: [api, worker, migration]
       ports:
         - {protocol: TCP, port: 4317}
         - {protocol: TCP, port: 4318}

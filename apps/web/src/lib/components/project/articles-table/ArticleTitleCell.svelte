@@ -1,19 +1,20 @@
 <script lang="ts">
-	import type { ArticleDto } from '$lib/api/generated/models';
+	import type { ReportDto } from '$lib/api/generated/models';
 	import { Button } from '$lib/components/ui/button';
 	import { cn } from '$lib/utils.js';
+	import { reportLabel } from '../report-label';
 
 	let {
 		article,
 		selected = false,
 		openArticle
 	}: {
-		article: ArticleDto;
+		article: ReportDto;
 		selected?: boolean;
-		openArticle: (doiKey: string) => void;
+		openArticle: (reportId: string) => void;
 	} = $props();
 
-	const label = $derived(article.title ?? article.doi);
+	const label = $derived(reportLabel(article));
 </script>
 
 <div class="flex max-w-[34rem] flex-col gap-1">
@@ -24,9 +25,11 @@
 			selected && 'font-semibold'
 		)}
 		aria-current={selected ? 'true' : undefined}
-		onclick={() => openArticle(article.doi_key)}
+		onclick={() => openArticle(article.report_id)}
 	>
 		<span class="line-clamp-2">{label}</span>
 	</Button>
-	<div class="truncate text-xs text-muted-foreground">{article.doi}</div>
+	{#if article.doi}
+		<div class="truncate text-xs text-muted-foreground">{article.doi}</div>
+	{/if}
 </div>
