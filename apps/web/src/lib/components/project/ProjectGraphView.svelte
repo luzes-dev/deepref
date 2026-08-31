@@ -1,6 +1,5 @@
 <script lang="ts">
 	import type { GraphNodeDto, ProjectGraphDto } from '$lib/api/generated/models';
-	import { createGetProjectProjection } from '$lib/api/generated/projection/projection';
 	import { createGetProjectGraph } from '$lib/api/generated/reports/reports';
 	import GraphDegradedState from '$lib/components/GraphDegradedState.svelte';
 	import { Badge } from '$lib/components/ui/badge';
@@ -20,6 +19,7 @@
 		createProjectGraphRenderer,
 		type ProjectGraphRenderModel
 	} from './project-graph-renderer';
+	import { activeProjectQuery, createActiveProjectProjection } from './project-queries.svelte';
 	import { reportSearchText } from './report-label';
 
 	const FILTER_UPDATE_DELAY_MS = 150;
@@ -40,11 +40,11 @@
 	const graphQuery = createGetProjectGraph(
 		() => workspace.project.id,
 		() => ({ fields: workspace.graphFilters.fields.join(',') }),
-		() => ({ query: { enabled: Boolean(workspace.project.id && enabled), staleTime: 0 } })
+		() => activeProjectQuery(workspace.project.id, enabled)
 	);
-	const projectionQuery = createGetProjectProjection(
+	const projectionQuery = createActiveProjectProjection(
 		() => workspace.project.id,
-		() => ({ query: { enabled: Boolean(workspace.project.id && enabled), staleTime: 0 } })
+		() => enabled
 	);
 	const graphData = $derived<ProjectGraphDto>(
 		graphQuery.data?.data ?? {

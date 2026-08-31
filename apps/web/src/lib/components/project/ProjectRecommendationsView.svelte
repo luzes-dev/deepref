@@ -4,9 +4,9 @@
 	import { Skeleton } from '$lib/components/ui/skeleton';
 	import GraphDegradedState from '$lib/components/GraphDegradedState.svelte';
 	import { createGetProjectRecommendations } from '$lib/api/generated/reports/reports';
-	import { createGetProjectProjection } from '$lib/api/generated/projection/projection';
 	import type { RecommendationGroupsDto, ReportDto } from '$lib/api/generated/models';
 	import { useProjectWorkspaceContext } from './context.svelte.js';
+	import { activeProjectQuery, createActiveProjectProjection } from './project-queries.svelte';
 	import { reportLabel } from './report-label';
 
 	const workspace = useProjectWorkspaceContext();
@@ -14,11 +14,11 @@
 
 	const recommendations = createGetProjectRecommendations(
 		() => workspace.project.id,
-		() => ({ query: { enabled: Boolean(workspace.project.id && enabled), staleTime: 0 } })
+		() => activeProjectQuery(workspace.project.id, enabled)
 	);
-	const projectionQuery = createGetProjectProjection(
+	const projectionQuery = createActiveProjectProjection(
 		() => workspace.project.id,
-		() => ({ query: { enabled: Boolean(workspace.project.id && enabled), staleTime: 0 } })
+		() => enabled
 	);
 	const groups = $derived<RecommendationGroupsDto>(
 		recommendations.data?.data ?? {

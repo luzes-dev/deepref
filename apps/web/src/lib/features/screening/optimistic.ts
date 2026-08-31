@@ -82,6 +82,58 @@ function totalDelta(fromStatus: string, toStatus: string, filterStatus: string):
 	return Number(after) - Number(before);
 }
 
+type PageUpdate = {
+	action: OptimisticStatusChange;
+	location: QueueLocation | null;
+	nextItem: ScreeningQueueItemDto | undefined;
+	shouldRemain: boolean;
+	shouldHaveBeen: boolean;
+};
+
+function updatePageItems(
+	page: ScreeningQueuePage,
+	pageIndex: number,
+	update: PageUpdate
+): ScreeningQueueItemDto[] {
+	const { action, location, nextItem, shouldRemain, shouldHaveBeen } = update;
+	const itemIndex = page.data.items.findIndex((item) => item.report_id === action.reportId);
+	if (itemIndex >= 0) {
+		if (!shouldRemain || !nextItem) {
+			return page.data.items.filter((item) => item.report_id !== action.reportId);
+		}
+		const items = [...page.data.items];
+		items[itemIndex] = nextItem;
+		return items;
+	}
+	if (shouldHaveBeen || !shouldRemain || !nextItem || location?.pageIndex !== pageIndex) {
+		return page.data.items;
+	}
+	const items = [...page.data.items];
+	items.splice(Math.min(location.itemIndex, items.length), 0, nextItem);
+	return items;
+}
+
+function updateQueuePage(
+	page: ScreeningQueuePage,
+	pageIndex: number,
+	update: PageUpdate
+): ScreeningQueuePage {
+	const { action } = update;
+	const delta = totalDelta(action.fromStatus, action.toStatus, action.filterStatus);
+	return {
+		...page,
+		data: {
+			...page.data,
+			items: updatePageItems(page, pageIndex, update),
+			total: pageIndex === 0 ? Math.max(0, page.data.total + delta) : page.data.total,
+			progress:
+				pageIndex === 0
+					? progressAfter(page.data.progress, action.fromStatus, action.toStatus)
+					: page.data.progress
+		}
+	};
+}
+
 /**
  * Applies only the local projection change. The caller owns rollback and the
  * server mutation; this function never mutates the input cache.
@@ -98,39 +150,8 @@ export function applyOptimisticStatusChange(
 	const nextItem = existing
 		? { ...existing, title_abstract_status: action.toStatus, revision: action.revision }
 		: undefined;
-	const pages = cache.pages.map((page, pageIndex) => {
-		const itemIndex = page.data.items.findIndex((item) => item.report_id === action.reportId);
-		let items = page.data.items;
-		if (itemIndex >= 0) {
-			if (shouldRemain && nextItem) {
-				items = [...items];
-				items[itemIndex] = nextItem;
-			} else {
-				items = items.filter((item) => item.report_id !== action.reportId);
-			}
-		} else if (
-			!shouldHaveBeen &&
-			shouldRemain &&
-			nextItem &&
-			location?.pageIndex === pageIndex
-		) {
-			items = [...items];
-			items.splice(Math.min(location.itemIndex, items.length), 0, nextItem);
-		}
-		const delta = totalDelta(action.fromStatus, action.toStatus, action.filterStatus);
-		return {
-			...page,
-			data: {
-				...page.data,
-				items,
-				total: pageIndex === 0 ? Math.max(0, page.data.total + delta) : page.data.total,
-				progress:
-					pageIndex === 0
-						? progressAfter(page.data.progress, action.fromStatus, action.toStatus)
-						: page.data.progress
-			}
-		};
-	});
+	const update = { action, location, nextItem, shouldRemain, shouldHaveBeen };
+	const pages = cache.pages.map((page, pageIndex) => updateQueuePage(page, pageIndex, update));
 	return { ...cache, pages };
 }
 

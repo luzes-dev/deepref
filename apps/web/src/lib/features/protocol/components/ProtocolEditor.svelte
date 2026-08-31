@@ -123,6 +123,7 @@
 				: undefined;
 		if (reconciling || nextKey === undefined || nextKey === hydratedKey || (dirty && current))
 			return;
+		if (current && current.revision < draft.revision) return;
 		if (current) {
 			draft = fromProtocol(current);
 		} else {
