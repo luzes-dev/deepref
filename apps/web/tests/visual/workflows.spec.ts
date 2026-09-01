@@ -5,10 +5,22 @@ import type { Page } from '@playwright/test';
 const projectId = 'visual-project';
 const basePath = `/projects/${projectId}`;
 
+async function assertThemeContract(page: Page): Promise<void> {
+	const projectName = test.info().project.name;
+	const expected = projectName.includes('-dark-') ? 'dark' : 'light';
+	const theme = await page.evaluate(() => ({
+		darkClass: document.documentElement.classList.contains('dark'),
+		colorScheme: getComputedStyle(document.documentElement).colorScheme
+	}));
+	expect(theme.darkClass).toBe(expected === 'dark');
+	expect(theme.colorScheme).toContain(expected);
+}
+
 async function openWorkflow(page: Page, path: string, heading: string): Promise<void> {
 	await page.goto(`${basePath}${path}`);
 	await settleVisualPage(page);
 	await expect(page.getByRole('heading', { name: heading, exact: true })).toBeVisible();
+	await assertThemeContract(page);
 	const violations = await runSeriousCriticalAxe(page);
 	expect(violations, JSON.stringify(violations, null, 2)).toEqual([]);
 }
