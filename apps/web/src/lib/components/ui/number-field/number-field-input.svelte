@@ -17,6 +17,7 @@
 	data-slot="number-field-input"
 	bind:value={inputState.rootState.opts.value.current}
 	{...inputState.props}
+	aria-label={rest['aria-label'] ?? 'Numeric value'}
 	{...rest}
 />
 
