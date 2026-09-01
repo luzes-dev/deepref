@@ -11,7 +11,7 @@
 		"check": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json",
 		"check:watch": "svelte-kit sync && svelte-check --tsconfig ./tsconfig.json --watch",
 		"generate:client": "orval --config ./orval.config.ts && prettier --write src/lib/api/generated",
-		"lint": "prettier --write src/lib/components/project/ProjectOverview.svelte && git diff -- src/lib/components/project/ProjectOverview.svelte && exit 1",
+		"lint": "prettier --check . && eslint .",
 		"format": "prettier --write .",
 		"test:unit": "vitest",
 		"test": "pnpm run test:unit -- --run",
