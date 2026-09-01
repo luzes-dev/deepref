@@ -12,11 +12,18 @@ that reuses the same visual project definitions:
 
 The fixture intercepts every `**/api/**` request, serves stable project/article/
 ingestion/projection/review data, freezes `Date.now()`, supplies deterministic UUIDs,
-uses UTC/en-US formatting, and disables animation/transition timing. Overview and
-settings retain the existing light/dark smoke baselines; the route-family workflow
-and analysis coverage captures the representative dark desktop/mobile states. All
-screenshots use `expect(page).toHaveScreenshot(...)` through the shared helpers, and
-`snapshotPathTemplate` keeps project-isolated baselines separate.
+uses UTC/en-US formatting, and disables animation/transition timing. Unmodeled API
+requests, including mutations, fail the fixture instead of receiving a permissive
+success response.
+
+Overview and settings retain light/dark screenshot baselines. Route-family workflow
+and analysis coverage retains representative dark desktop/mobile screenshot baselines
+while all four projects still execute their behavioral, overflow, and accessibility
+assertions. This distinction is intentional: light workflow coverage is an interaction
+and axe contract until light workflow PNG goldens are explicitly generated and
+reviewed. All committed screenshots use `expect(page).toHaveScreenshot(...)` through
+the shared helpers, and `snapshotPathTemplate` keeps project-isolated baselines
+separate.
 
 Run discovery with:
 
@@ -24,8 +31,9 @@ Run discovery with:
 pnpm --dir apps/web exec playwright test --config=playwright.visual.config.ts --list
 ```
 
-The axe test is backed by the typed `@axe-core/playwright` dependency and fails
-on any serious or critical violation. The package metadata is already wired:
+The axe coverage is backed by the typed `@axe-core/playwright` dependency and fails
+on any serious or critical violation. Workflow-family routes run this gate in every
+visual project. The package metadata is already wired:
 
 ```sh
 pnpm --dir apps/web test:visual
@@ -35,6 +43,6 @@ pnpm --dir apps/web test:visual
 pnpm --dir apps/web test:visual:update
 ```
 
-`test:visual:update` is the explicit companion for refreshing four project-scoped
-goldens after an intentional UI change. Do not use it in CI; CI runs the regular
-`test:visual` comparison.
+`test:visual:update` is the explicit companion for refreshing project-scoped goldens
+after an intentional UI change. Do not use it in CI. The required full-stack browser
+job runs `test:e2e` and then the regular `test:visual` comparison/accessibility suite.
