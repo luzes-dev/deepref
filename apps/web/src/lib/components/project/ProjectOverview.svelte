@@ -14,7 +14,7 @@
 	} from '$lib/components/layout';
 	import { useProjectWorkspaceContext } from './context.svelte.js';
 
-	type OverviewState = 'dependency-error' | 'error' | 'loading' | 'empty' | 'populated';
+	type OverviewState = 'error' | 'loading' | 'empty' | 'populated';
 
 	const workspace = useProjectWorkspaceContext();
 	const dependenciesQuery = createGetDependencyStatus(() => ({
@@ -39,29 +39,23 @@
 	const loading = $derived(workspace.articlesLoading || workspace.ingestionsLoading);
 	const hasEvidence = $derived(workspace.articles.length > 0 || workspace.ingestions.length > 0);
 	const overviewState = $derived<OverviewState>(
-		dependencyError
-			? 'dependency-error'
-			: dataError
-				? 'error'
-				: loading
-					? 'loading'
-					: hasEvidence
-						? 'populated'
-						: 'empty'
+		dataError && !hasEvidence
+			? 'error'
+			: loading && !hasEvidence
+				? 'loading'
+				: hasEvidence
+					? 'populated'
+					: 'empty'
 	);
-	const errorMessage = $derived(
-		dependencyError ?? dataError ?? 'The evidence data could not be loaded.'
-	);
+	const errorMessage = $derived(dataError ?? 'The evidence data could not be loaded.');
 
 	function formatDate(value: string): string {
 		return new Date(value).toLocaleString();
 	}
 </script>
 
-<!-- svelte-ignore a11y_no_noninteractive_tabindex -->
 <div
 	class="flex h-full min-h-0 flex-col overflow-auto bg-background"
-	tabindex="0"
 	role="region"
 	aria-label="Overview content"
 	data-testid="overview-page"
@@ -87,28 +81,48 @@
 			</div>
 		</PageToolbar>
 
-		{#if overviewState === 'dependency-error'}
-			<div data-testid="overview-dependency-error">
-				<Surface as="section" tone="subtle" class="p-4 sm:p-6">
-					<StatePanel
-						state="error"
-						title="Dependency status unavailable"
-						description={`The last known workspace data is preserved, but service health could not be checked. ${errorMessage}`}
-					>
-						{#snippet action()}
-							<Button
-								variant="outline"
-								size="sm"
-								onclick={() => void dependenciesQuery.refetch()}
-								disabled={dependenciesQuery.isFetching}
-							>
-								Refresh status
-							</Button>
-						{/snippet}
-					</StatePanel>
-				</Surface>
-			</div>
-		{:else if overviewState === 'error'}
+		{#if dependencyError}
+			<Surface
+				as="section"
+				tone="subtle"
+				class="flex flex-wrap items-center justify-between gap-3 p-4"
+				label="Dependency status warning"
+			>
+				<div class="min-w-0" aria-live="polite" data-testid="overview-dependency-warning">
+					<p class="text-sm font-semibold text-foreground">Dependency status unavailable</p>
+					<p class="mt-1 text-sm text-muted-foreground">
+						Workspace evidence remains available, but service health could not be checked.
+						{dependencyError}
+					</p>
+				</div>
+				<Button
+					variant="outline"
+					size="sm"
+					onclick={() => void dependenciesQuery.refetch()}
+					disabled={dependenciesQuery.isFetching}
+				>
+					Refresh status
+				</Button>
+			</Surface>
+		{/if}
+
+		{#if dataError && hasEvidence}
+			<Surface
+				as="section"
+				tone="subtle"
+				class="p-4"
+				label="Partial evidence warning"
+			>
+				<div aria-live="polite" data-testid="overview-partial-data-warning">
+					<p class="text-sm font-semibold text-foreground">Some evidence data is unavailable</p>
+					<p class="mt-1 text-sm text-muted-foreground">
+						Available workspace data is shown below. {dataError}
+					</p>
+				</div>
+			</Surface>
+		{/if}
+
+		{#if overviewState === 'error'}
 			<div data-testid="overview-data-error">
 				<Surface as="section" tone="subtle" class="p-4 sm:p-6">
 					<StatePanel
