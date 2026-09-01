@@ -20,6 +20,18 @@ test.describe('DeepRef workspace visual and accessibility harness', () => {
 		await captureViewport(page, `${project}-overview.png`);
 	});
 
+	test('keeps evidence visible when dependency health is unavailable', async ({ page }) => {
+		await page.route('**/api/health/dependencies', (route) =>
+			route.fulfill({ status: 503, json: { detail: 'health unavailable' } })
+		);
+		await page.reload();
+		await expect(page.getByTestId('overview-dependency-warning')).toBeVisible();
+		await expect(page.getByTestId('overview-populated')).toBeVisible();
+		await expect(
+			page.getByRole('heading', { name: 'Recent ingestion activity' })
+		).toBeVisible();
+	});
+
 	test('keeps project selection keyboard-safe and Escape-closable', async ({ page }) => {
 		const trigger = page.getByRole('combobox', { name: 'Select project' });
 		await trigger.click();
