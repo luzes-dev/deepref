@@ -134,6 +134,7 @@
 					bind:value={workspace.articleFilters.minInternal}
 					max={20}
 					step={1}
+					thumbLabel="Minimum internal citations"
 				/>
 				<Badge variant="outline">Min {workspace.articleFilters.minInternal}</Badge>
 			</div>
