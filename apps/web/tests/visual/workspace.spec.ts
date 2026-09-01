@@ -91,11 +91,17 @@ test.describe('DeepRef workspace visual and accessibility harness', () => {
 		await page.goto('/projects/visual-project/articles');
 		await page.waitForLoadState('networkidle');
 		await expect(page.getByRole('heading', { name: 'Articles' })).toBeVisible();
-		await expect(page.getByRole('region', { name: 'Project articles' })).toBeVisible();
+		const region = page.getByRole('region', { name: 'Project articles' });
+		await expect(region).toBeVisible();
 		await expect(page.getByRole('table')).toBeVisible();
 		await expect(page.getByRole('columnheader').first()).toBeVisible();
 		await expect(await page.getByRole('row').count()).toBeGreaterThan(1);
 		await expect(await page.getByRole('cell').count()).toBeGreaterThan(1);
+		const isScrollable = await region.evaluate(
+			(element) => element.scrollWidth > element.clientWidth + 1
+		);
+		if (isScrollable) await expect(region).toHaveAttribute('tabindex', '0');
+		else await expect(region).not.toHaveAttribute('tabindex');
 	});
 
 	test('has no serious or critical axe violations', async ({ page }) => {
