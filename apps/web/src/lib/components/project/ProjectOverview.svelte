@@ -107,12 +107,7 @@
 		{/if}
 
 		{#if dataError && hasEvidence}
-			<Surface
-				as="section"
-				tone="subtle"
-				class="p-4"
-				label="Partial evidence warning"
-			>
+			<Surface as="section" tone="subtle" class="p-4" label="Partial evidence warning">
 				<div aria-live="polite" data-testid="overview-partial-data-warning">
 					<p class="text-sm font-semibold text-foreground">Some evidence data is unavailable</p>
 					<p class="mt-1 text-sm text-muted-foreground">
