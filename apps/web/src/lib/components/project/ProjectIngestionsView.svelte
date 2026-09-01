@@ -270,7 +270,7 @@
 					</div>
 				{:else}
 					<div class="max-h-full overflow-auto">
-						<Table.Root>
+						<Table.Root containerLabel="Project ingestion runs">
 							<Table.Header>
 								<Table.Row>
 									<Table.Head>Status</Table.Head>

@@ -1,12 +1,14 @@
 import { defineConfig, devices } from '@playwright/test';
 
+const serverURL = 'http://localhost:4173';
+
 const standardProject = {
 	name: 'e2e',
 	testMatch: '**/*.e2e.{ts,js}'
 };
 
 const visualUse = {
-	baseURL: 'http://127.0.0.1:4173',
+	baseURL: serverURL,
 	locale: 'en-US',
 	timezoneId: 'UTC',
 	reducedMotion: 'reduce' as const
@@ -61,6 +63,9 @@ export const deterministicVisualProjects = [
 ];
 
 export default defineConfig({
+	use: {
+		baseURL: serverURL
+	},
 	webServer: {
 		command: 'npm run build && npm run preview -- --host 0.0.0.0',
 		port: 4173,

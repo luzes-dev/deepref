@@ -2,12 +2,17 @@
 	import type { HTMLTableAttributes } from 'svelte/elements';
 	import { cn, type WithElementRef } from '$lib/utils.js';
 
+	type TableProps = WithElementRef<HTMLTableAttributes> & {
+		containerLabel: string;
+	};
+
 	let {
 		ref = $bindable(null),
 		class: className,
+		containerLabel,
 		children,
 		...restProps
-	}: WithElementRef<HTMLTableAttributes> = $props();
+	}: TableProps = $props();
 </script>
 
 <!-- svelte-ignore a11y_no_noninteractive_tabindex -->
@@ -16,7 +21,7 @@
 	class="relative w-full overflow-x-auto"
 	tabindex="0"
 	role="region"
-	aria-label="Scrollable table"
+	aria-label={containerLabel}
 >
 	<table
 		bind:this={ref}

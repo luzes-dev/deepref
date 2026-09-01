@@ -206,7 +206,7 @@
 						</div>
 						<Badge variant="outline">Auditable history</Badge>
 					</div>
-					<Table.Root>
+					<Table.Root containerLabel="Recent ingestion activity">
 						<Table.Header>
 							<Table.Row>
 								<Table.Head>Status</Table.Head>

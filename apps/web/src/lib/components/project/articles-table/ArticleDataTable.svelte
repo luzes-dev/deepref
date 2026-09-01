@@ -98,7 +98,7 @@
 	<div
 		class="min-h-0 flex-1 rounded-md border [&_[data-slot=table-container]]:h-full [&_[data-slot=table-container]]:overflow-auto"
 	>
-		<Table.Root>
+		<Table.Root containerLabel="Project articles">
 			<Table.Header>
 				{#each table.getHeaderGroups() as headerGroup (headerGroup.id)}
 					<Table.Row>

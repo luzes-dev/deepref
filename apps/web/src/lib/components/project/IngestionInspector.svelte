@@ -263,7 +263,7 @@
 							</p>
 						</div>
 						<div class="max-h-96 overflow-auto">
-							<Table.Root>
+							<Table.Root containerLabel="Ingestion articles">
 								<Table.Header>
 									<Table.Row>
 										<Table.Head>DOI</Table.Head>

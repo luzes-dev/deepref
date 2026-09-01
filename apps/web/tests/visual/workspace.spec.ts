@@ -79,6 +79,7 @@ test.describe('DeepRef workspace visual and accessibility harness', () => {
 		await page.goto('/projects/visual-project/articles');
 		await page.waitForLoadState('networkidle');
 		await expect(page.getByRole('heading', { name: 'Articles' })).toBeVisible();
+		await expect(page.getByRole('region', { name: 'Project articles' })).toBeVisible();
 		await expect(page.getByRole('table')).toBeVisible();
 		await expect(page.getByRole('columnheader').first()).toBeVisible();
 		await expect(await page.getByRole('row').count()).toBeGreaterThan(1);
