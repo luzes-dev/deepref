@@ -39,7 +39,7 @@
 	<div class="grid grid-cols-1 gap-2 sm:grid-cols-3">
 		<Button
 			variant="default"
-			class="min-h-11 justify-between bg-success text-background hover:bg-success/90"
+			class="min-h-11 justify-between bg-success text-white hover:bg-success/90"
 			disabled={disabled || pending}
 			onclick={() => onDecision('include')}
 		>
