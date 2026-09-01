@@ -17,11 +17,6 @@
 	const pathname = $derived(page.url.pathname);
 </script>
 
-<svelte:head>
-	<title>{status} · DeepRef</title>
-	<meta name="description" content="DeepRef evidence workspace error." />
-</svelte:head>
-
 <div class="grid min-h-svh place-items-center bg-background px-6 py-16 text-foreground">
 	<section class="w-full max-w-xl text-center" aria-labelledby="error-title">
 		<div
