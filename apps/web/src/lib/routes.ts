@@ -55,7 +55,11 @@ const ROUTE_META: ReadonlyArray<readonly [string, RouteMeta]> = [
 	],
 	[
 		'/discovery/imports',
-		{ title: 'Imports · DeepRef', description: 'Import source records and monitor runs.' }
+		{
+			title: 'Imports · DeepRef',
+			description:
+				'Start evidence imports and monitor provider ingestion runs in a DeepRef workspace.'
+		}
 	],
 	[
 		'/recommendations',
@@ -66,7 +70,11 @@ const ROUTE_META: ReadonlyArray<readonly [string, RouteMeta]> = [
 	],
 	[
 		'/articles',
-		{ title: 'Articles · DeepRef', description: 'Browse the current evidence corpus.' }
+		{
+			title: 'Articles · DeepRef',
+			description:
+				'Browse imported evidence records and inspect article-level provenance in a DeepRef workspace.'
+		}
 	],
 	[
 		'/graph',
@@ -85,7 +93,11 @@ const ROUTE_META: ReadonlyArray<readonly [string, RouteMeta]> = [
 	],
 	[
 		'/overview',
-		{ title: 'Overview · DeepRef', description: 'A working summary of the evidence workspace.' }
+		{
+			title: 'Overview · DeepRef',
+			description:
+				'A working summary of the evidence corpus, citations, and ingestion history.'
+		}
 	],
 	[
 		'/settings',
