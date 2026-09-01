@@ -510,6 +510,7 @@
 			<div
 				class="h-2.5 overflow-hidden rounded-full bg-muted"
 				role="progressbar"
+				aria-label="Screening progress"
 				aria-valuemin="0"
 				aria-valuemax={progress.total}
 				aria-valuenow={progress.screened}
