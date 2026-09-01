@@ -46,4 +46,5 @@ pnpm --dir apps/web test:visual:update
 
 `test:visual:update` is the explicit companion for refreshing project-scoped goldens
 after an intentional UI change. Do not use it in CI. The required full-stack browser
-job runs `test:e2e` and then the regular `test:visual` comparison/accessibility suite.
+job runs `test:e2e` and then the regular `test:visual` comparison, theme-contract,
+and accessibility suite.
