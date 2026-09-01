@@ -89,9 +89,12 @@
 				label="Dependency status warning"
 			>
 				<div class="min-w-0" aria-live="polite" data-testid="overview-dependency-warning">
-					<p class="text-sm font-semibold text-foreground">Dependency status unavailable</p>
+					<p class="text-sm font-semibold text-foreground">
+						Dependency status unavailable
+					</p>
 					<p class="mt-1 text-sm text-muted-foreground">
-						Workspace evidence remains available, but service health could not be checked.
+						Workspace evidence remains available, but service health could not be
+						checked.
 						{dependencyError}
 					</p>
 				</div>
@@ -109,7 +112,9 @@
 		{#if dataError && hasEvidence}
 			<Surface as="section" tone="subtle" class="p-4" label="Partial evidence warning">
 				<div aria-live="polite" data-testid="overview-partial-data-warning">
-					<p class="text-sm font-semibold text-foreground">Some evidence data is unavailable</p>
+					<p class="text-sm font-semibold text-foreground">
+						Some evidence data is unavailable
+					</p>
 					<p class="mt-1 text-sm text-muted-foreground">
 						Available workspace data is shown below. {dataError}
 					</p>
