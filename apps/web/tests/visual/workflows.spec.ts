@@ -1,4 +1,5 @@
 import { expect, test, captureDarkViewport, settleVisualPage } from './fixtures';
+import { runSeriousCriticalAxe } from './axe';
 import type { Page } from '@playwright/test';
 
 const projectId = 'visual-project';
@@ -8,6 +9,8 @@ async function openWorkflow(page: Page, path: string, heading: string): Promise<
 	await page.goto(`${basePath}${path}`);
 	await settleVisualPage(page);
 	await expect(page.getByRole('heading', { name: heading, exact: true })).toBeVisible();
+	const violations = await runSeriousCriticalAxe(page);
+	expect(violations, JSON.stringify(violations, null, 2)).toEqual([]);
 }
 
 test.describe('DeepRef workflow family visual coverage', () => {
