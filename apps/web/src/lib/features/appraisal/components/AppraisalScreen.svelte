@@ -34,7 +34,15 @@
 	import * as Alert from '$lib/components/ui/alert';
 	import { Skeleton } from '$lib/components/ui/skeleton';
 	import { Spinner } from '$lib/components/ui/spinner';
-	import { Brain, FileSearch, Info, X } from '@lucide/svelte';
+	import {
+		Brain,
+		ClipboardCheck,
+		FileCheck,
+		FileSearch,
+		Info,
+		ListChecks,
+		X
+	} from '@lucide/svelte';
 	import {
 		appraisalAnswerValue,
 		appraisalEvidenceLabel,
@@ -293,86 +301,187 @@
 	/>
 </svelte:head>
 
-<main class="mx-auto flex max-w-7xl flex-col gap-6 p-6">
-	<div>
-		<p class="text-sm text-muted-foreground">Structured quality assessment</p>
-		<h1 class="text-3xl font-semibold tracking-tight">Appraisal</h1>
-		<p class="mt-2 max-w-3xl text-muted-foreground">
-			Choose a report and exact definition version. AI pre-fills are editable proposals only
-			and never change screening eligibility.
-		</p>
-	</div>
-
-	{#if error}<p
-			class="rounded-md border border-destructive/50 bg-destructive/10 p-3 text-sm text-destructive"
-			role="alert"
-		>
-			{error}
-		</p>{/if}
-
-	<div class="grid gap-6 lg:grid-cols-[18rem_18rem_1fr]">
-		<Card.Root>
-			<Card.Header
-				><Card.Title>Report</Card.Title><Card.Description
-					>URL selection is refresh-safe.</Card.Description
-				></Card.Header
+<div class="mx-auto flex min-h-full w-full max-w-[1480px] flex-col gap-5 p-4 md:gap-6 md:p-8">
+	<header class="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
+		<div class="flex min-w-0 flex-col gap-2">
+			<div
+				class="flex flex-wrap items-center gap-2 text-xs font-semibold tracking-[0.12em] text-primary uppercase"
 			>
-			<Card.Content>
-				<label for="appraisal-report" class="sr-only">Report to appraise</label>
-				<select
-					id="appraisal-report"
-					class="h-9 w-full rounded-md border bg-transparent px-3 text-sm"
-					value={reportId ?? ''}
-					onchange={(event) => {
-						if (event.currentTarget instanceof HTMLSelectElement)
-							void selectReport(event.currentTarget.value);
-					}}
-				>
-					<option value="">Select a report</option>
-					{#each reports as report (report.report_id)}<option value={report.report_id}
-							>{report.title ?? report.report_id}</option
-						>{/each}
-				</select>
-			</Card.Content>
-		</Card.Root>
+				<FileSearch aria-hidden="true" /> Evidence workspace
+				<span class="text-muted-foreground">/</span> appraisal
+			</div>
+			<h1 class="editorial-title text-4xl leading-none sm:text-5xl">Appraisal</h1>
+			<p class="max-w-3xl text-sm leading-6 text-muted-foreground sm:text-base">
+				Choose a report and exact definition version. AI pre-fills are editable proposals
+				only and never change screening eligibility.
+			</p>
+		</div>
+		<div class="flex flex-wrap items-center gap-2 lg:justify-end">
+			<Badge variant="outline">Schema-driven</Badge>
+			<Badge variant="secondary">Reviewer-led</Badge>
+		</div>
+	</header>
 
-		<Card.Root>
-			<Card.Header
-				><Card.Title>Definition</Card.Title><Card.Description
-					>Generic API-provided schemas.</Card.Description
-				></Card.Header
-			>
-			<Card.Content class="flex flex-col gap-2">
-				{#each definitions as definition (`${definition.id}:${definition.version}`)}
-					<button
-						type="button"
-						class="rounded-md border p-3 text-left {selectedDefinition?.id ===
-							definition.id && selectedDefinition.version === definition.version
-							? 'border-primary bg-muted/50'
-							: ''}"
-						onclick={() => void selectDefinition(definition.id, definition.version)}
+	{#if error}
+		<Alert.Root variant="destructive" role="alert">
+			<Info aria-hidden="true" />
+			<Alert.Title>Appraisal could not be completed</Alert.Title>
+			<Alert.Description>{error}</Alert.Description>
+		</Alert.Root>
+	{/if}
+
+	<div
+		class="grid min-w-0 gap-5 xl:grid-cols-[minmax(15rem,17rem)_minmax(18rem,20rem)_minmax(0,1fr)]"
+	>
+		<Card.Root class="border-primary/15">
+			<Card.Header class="gap-2 border-b border-border/60 pb-4">
+				<div class="flex items-center gap-2">
+					<span
+						class="flex size-8 items-center justify-center rounded-lg bg-primary/10 text-primary"
 					>
-						<span class="block font-medium">{definition.name}</span>
-						<span class="text-xs text-muted-foreground"
-							>v{definition.version} · {definition.domains.length} domains</span
+						<FileSearch aria-hidden="true" />
+					</span>
+					<Card.Title>Report</Card.Title>
+				</div>
+				<Card.Description>URL selection is refresh-safe.</Card.Description>
+			</Card.Header>
+			<Card.Content class="pt-5">
+				{#if reportsQuery.isPending}
+					<div
+						class="flex flex-col gap-3"
+						aria-label="Loading reports"
+						aria-live="polite"
+					>
+						<Skeleton class="h-5 w-2/3" />
+						<Skeleton class="h-10 w-full" />
+					</div>
+				{:else if reportsQuery.error}
+					<Alert.Root variant="destructive" role="alert">
+						<Alert.Title>Reports unavailable</Alert.Title>
+						<Alert.Description>{reportsQuery.error.message}</Alert.Description>
+						<Alert.Action onclick={() => void reportsQuery.refetch()}
+							>Retry</Alert.Action
 						>
-					</button>
-				{:else}<p class="text-sm text-muted-foreground">No definitions available.</p>{/each}
+					</Alert.Root>
+				{:else if reports.length === 0}
+					<Empty.Root class="border-0 p-0">
+						<Empty.Media variant="icon"><FileSearch aria-hidden="true" /></Empty.Media>
+						<Empty.Header>
+							<Empty.Title>No reports available</Empty.Title>
+							<Empty.Description
+								>Add a report before starting an appraisal.</Empty.Description
+							>
+						</Empty.Header>
+					</Empty.Root>
+				{:else}
+					<label for="appraisal-report" class="sr-only">Report to appraise</label>
+					<select
+						id="appraisal-report"
+						class="h-10 w-full rounded-lg border border-border/80 bg-background px-3 text-sm shadow-xs transition outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/30"
+						value={reportId ?? ''}
+						onchange={(event) => {
+							if (event.currentTarget instanceof HTMLSelectElement)
+								void selectReport(event.currentTarget.value);
+						}}
+					>
+						<option value="">Select a report</option>
+						{#each reports as report (report.report_id)}<option value={report.report_id}
+								>{report.title ?? report.report_id}</option
+							>{/each}
+					</select>
+				{/if}
 			</Card.Content>
 		</Card.Root>
 
-		<Card.Root>
-			<Card.Header
-				><Card.Title>Complete appraisal</Card.Title><Card.Description
+		<Card.Root class="border-primary/15">
+			<Card.Header class="gap-2 border-b border-border/60 pb-4">
+				<div class="flex items-center gap-2">
+					<span
+						class="flex size-8 items-center justify-center rounded-lg bg-primary/10 text-primary"
+					>
+						<ListChecks aria-hidden="true" />
+					</span>
+					<Card.Title>Definition</Card.Title>
+				</div>
+				<Card.Description>Generic API-provided schemas.</Card.Description>
+			</Card.Header>
+			<Card.Content class="flex flex-col gap-2 pt-5">
+				{#if definitionsQuery.isPending}
+					<div
+						class="flex flex-col gap-3"
+						aria-label="Loading appraisal definitions"
+						aria-live="polite"
+					>
+						<Skeleton class="h-5 w-2/3" />
+						<Skeleton class="h-16 w-full" />
+					</div>
+				{:else if definitionsQuery.error}
+					<Alert.Root variant="destructive" role="alert">
+						<Alert.Title>Definitions unavailable</Alert.Title>
+						<Alert.Description>{definitionsQuery.error.message}</Alert.Description>
+						<Alert.Action onclick={() => void definitionsQuery.refetch()}
+							>Retry</Alert.Action
+						>
+					</Alert.Root>
+				{:else if definitions.length === 0}
+					<Empty.Root class="border-0 p-0">
+						<Empty.Media variant="icon"><ListChecks aria-hidden="true" /></Empty.Media>
+						<Empty.Header>
+							<Empty.Title>No appraisal definitions</Empty.Title>
+							<Empty.Description
+								>A versioned definition is required to begin.</Empty.Description
+							>
+						</Empty.Header>
+					</Empty.Root>
+				{:else}
+					{#each definitions as definition (`${definition.id}:${definition.version}`)}
+						<button
+							type="button"
+							class="rounded-xl border border-border/70 bg-background p-3 text-left shadow-xs transition outline-none hover:border-primary/40 hover:bg-muted/30 focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/30 {selectedDefinition?.id ===
+								definition.id && selectedDefinition.version === definition.version
+								? 'border-primary bg-primary/5 ring-1 ring-primary/20'
+								: ''}"
+							aria-pressed={selectedDefinition?.id === definition.id &&
+								selectedDefinition.version === definition.version}
+							onclick={() => void selectDefinition(definition.id, definition.version)}
+						>
+							<span class="block font-medium">{definition.name}</span>
+							<span class="text-xs text-muted-foreground"
+								>v{definition.version} · {definition.domains.length} domains</span
+							>
+						</button>
+					{/each}
+				{/if}
+			</Card.Content>
+		</Card.Root>
+
+		<Card.Root class="min-w-0 border-primary/15">
+			<Card.Header class="gap-2 border-b border-border/60 pb-4">
+				<div class="flex items-center gap-2">
+					<span
+						class="flex size-8 items-center justify-center rounded-lg bg-primary/10 text-primary"
+					>
+						<ClipboardCheck aria-hidden="true" />
+					</span>
+					<Card.Title>Complete appraisal</Card.Title>
+				</div>
+				<Card.Description
 					>Evidence selectors use parsed PR8 document blocks from the selected report.</Card.Description
-				></Card.Header
-			>
-			<Card.Content>
-				<Card.Root class="mb-6" data-testid="ai-appraisal-prefill">
-					<Card.Header class="gap-3">
+				>
+			</Card.Header>
+			<Card.Content class="pt-5">
+				<Card.Root
+					class="mb-6 border-primary/15 bg-muted/10"
+					data-testid="ai-appraisal-prefill"
+				>
+					<Card.Header class="gap-3 border-b border-border/60 pb-4">
 						<div class="flex flex-wrap items-center justify-between gap-2">
 							<div class="flex items-center gap-2">
-								<Brain aria-hidden="true" class="size-4" />
+								<span
+									class="flex size-7 items-center justify-center rounded-md bg-primary/10 text-primary"
+								>
+									<Brain aria-hidden="true" />
+								</span>
 								<Card.Title>AI appraisal pre-fill</Card.Title>
 							</div>
 							<Badge variant="outline">Reviewer required</Badge>
@@ -383,7 +492,7 @@
 							eligibility.
 						</Card.Description>
 					</Card.Header>
-					<Card.Content class="flex flex-col gap-4">
+					<Card.Content class="flex flex-col gap-4 pt-5">
 						{#if !reportId || !selectedDefinition}
 							<Empty.Root class="border-0 p-0">
 								<Empty.Media variant="icon"><Info /></Empty.Media>
@@ -475,7 +584,9 @@
 										{/each}
 									</div>
 								{/if}
-								<div class="rounded-md border bg-muted/20 p-3 text-sm">
+								<div
+									class="rounded-xl border border-primary/15 bg-background p-3 text-sm shadow-xs"
+								>
 									<p class="font-medium">Pinned appraisal context</p>
 									<p class="mt-1 text-muted-foreground">
 										Report {activeAiPayload.report_id} · definition {activeAiPayload.definition_id}
@@ -484,7 +595,9 @@
 								</div>
 								<div class="flex flex-col gap-3" data-testid="ai-prefill-proposal">
 									{#each activeAiPayload.answers as answer (answer.question_id)}
-										<div class="rounded-md border p-3">
+										<div
+											class="rounded-xl border border-border/70 bg-background p-3 shadow-xs"
+										>
 											<div
 												class="flex flex-wrap items-center justify-between gap-2"
 											>
@@ -539,7 +652,9 @@
 									{/each}
 								</div>
 								<div class="grid gap-3 md:grid-cols-2">
-									<div class="rounded-md border p-3 text-sm">
+									<div
+										class="rounded-xl border border-border/70 bg-background p-3 text-sm shadow-xs"
+									>
 										<p class="font-medium">Domain judgments</p>
 										<ul class="mt-2 flex flex-col gap-1 text-muted-foreground">
 											{#each Object.entries(activeAiPayload.domain_judgments) as [domainId, judgment] (domainId)}
@@ -547,7 +662,9 @@
 											{/each}
 										</ul>
 									</div>
-									<div class="rounded-md border p-3 text-sm">
+									<div
+										class="rounded-xl border border-border/70 bg-background p-3 text-sm shadow-xs"
+									>
 										<p class="font-medium">Overall judgment</p>
 										<p class="mt-2 text-muted-foreground">
 											{activeAiPayload.overall_judgment}
@@ -612,25 +729,48 @@
 	</div>
 
 	{#if reportId}
-		<Card.Root>
-			<Card.Header
-				><Card.Title>Completed assessments</Card.Title><Card.Description
+		<Card.Root class="border-primary/15">
+			<Card.Header class="gap-2 border-b border-border/60 pb-4">
+				<div class="flex items-center gap-2">
+					<span
+						class="flex size-8 items-center justify-center rounded-lg bg-primary/10 text-primary"
+					>
+						<FileCheck aria-hidden="true" />
+					</span>
+					<Card.Title>Completed assessments</Card.Title>
+				</div>
+				<Card.Description
 					>Immutable completion records with actor and evidence provenance.</Card.Description
-				></Card.Header
-			>
-			<Card.Content>
+				>
+			</Card.Header>
+			<Card.Content class="pt-5">
 				{#if appraisalsQuery.isPending}
-					<p class="text-sm text-muted-foreground">Loading assessment history…</p>
+					<div
+						class="flex flex-col gap-3"
+						aria-label="Loading assessment history"
+						aria-live="polite"
+					>
+						<Skeleton class="h-5 w-1/3" />
+						<Skeleton class="h-14 w-full" />
+					</div>
 				{:else if appraisalsQuery.error}
 					<Alert.Root variant="destructive" role="alert">
 						<Alert.Title>Assessment history unavailable</Alert.Title>
 						<Alert.Description>{appraisalsQuery.error.message}</Alert.Description>
 					</Alert.Root>
-				{:else if appraisals.length === 0}<p class="text-sm text-muted-foreground">
-						No completed assessments for this report.
-					</p>{:else}<div class="flex flex-col gap-2">
+				{:else if appraisals.length === 0}
+					<Empty.Root class="border-0 p-0">
+						<Empty.Media variant="icon"><FileCheck aria-hidden="true" /></Empty.Media>
+						<Empty.Header>
+							<Empty.Title>No completed assessments</Empty.Title>
+							<Empty.Description
+								>No completed assessments for this report.</Empty.Description
+							>
+						</Empty.Header>
+					</Empty.Root>
+				{:else}<div class="flex flex-col gap-3">
 						{#each appraisals as appraisal (appraisal.id)}<div
-								class="rounded-md border p-3 text-sm"
+								class="rounded-xl border border-border/70 bg-background p-4 text-sm shadow-xs"
 							>
 								<div class="flex flex-wrap justify-between gap-2">
 									<span class="font-medium"
@@ -647,4 +787,4 @@
 			</Card.Content>
 		</Card.Root>
 	{/if}
-</main>
+</div>

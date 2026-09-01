@@ -1,8 +1,7 @@
 <script lang="ts">
-	import * as Alert from '$lib/components/ui/alert';
+	import { StatePanel } from '$lib/components/layout';
 	import { Button } from '$lib/components/ui/button';
 	import type { ProjectionMetadata, ProjectionStatusDto } from '$lib/api/generated/models';
-	import CircleAlertIcon from '@lucide/svelte/icons/circle-alert';
 	import RefreshCwIcon from '@lucide/svelte/icons/refresh-cw';
 
 	let {
@@ -16,26 +15,29 @@
 		projection?: ProjectionMetadata | ProjectionStatusDto;
 		onRetry: () => void;
 	} = $props();
+
+	const description = $derived.by(() => {
+		const message =
+			error instanceof Error
+				? error.message
+				: 'An unexpected error prevented this graph request.';
+		const projectionDetails = projection
+			? ` ${feature} metrics revision ${projection.revision}; lag ${projection.lag}.`
+			: '';
+		return `${message}${projectionDetails}`;
+	});
 </script>
 
-<Alert.Root variant="destructive" data-testid="graph-degraded-state">
-	<CircleAlertIcon />
-	<Alert.Title>
-		{feature} request failed
-	</Alert.Title>
-	<Alert.Description>
-		<p>
-			{error instanceof Error
-				? error.message
-				: 'An unexpected error prevented this graph request.'}
-		</p>
-		{#if projection}
-			<p class="mt-2">Graph metrics revision {projection.revision}; lag {projection.lag}.</p>
-		{/if}
-	</Alert.Description>
-	<Alert.Action>
+<StatePanel
+	testId="graph-degraded-state"
+	state="degraded"
+	status="Degraded"
+	title={`${feature} request failed`}
+	{description}
+>
+	{#snippet action()}
 		<Button variant="outline" size="sm" onclick={onRetry}>
 			<RefreshCwIcon data-icon="inline-start" />Retry {feature.toLowerCase()}
 		</Button>
-	</Alert.Action>
-</Alert.Root>
+	{/snippet}
+</StatePanel>

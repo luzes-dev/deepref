@@ -280,3 +280,64 @@ test('shows API permission and provider errors, with an explicit provider retry'
 	await expect(page.getByTestId('assistant-proposal-receipt')).toContainText('retried-proposal');
 	expect(requests).toBe(3);
 });
+
+test('exposes catalog loading, empty, and unavailable states', async ({ page }) => {
+	await mockProjectShell(page);
+	await page.route(`${api}/projects/project-1/assistant/tools`, async (route) => {
+		await new Promise((resolve) => setTimeout(resolve, 750));
+		await route.fulfill({ json: catalog });
+	});
+	await page.goto('/projects/project-1/assistant');
+	await expect(page.getByTestId('assistant-page')).toHaveAttribute(
+		'data-assistant-state',
+		'loading'
+	);
+	await expect(page.getByTestId('assistant-catalog-loading')).toBeVisible();
+
+	await page.unrouteAll({ behavior: 'ignoreErrors' });
+	await mockProjectShell(page);
+	await page.route(`${api}/projects/project-1/assistant/tools`, (route) =>
+		route.fulfill({ json: [] })
+	);
+	await page.goto('/projects/project-1/assistant');
+	await expect(page.getByTestId('assistant-page')).toHaveAttribute(
+		'data-assistant-state',
+		'empty'
+	);
+	await expect(page.getByTestId('assistant-catalog-empty')).toContainText('No assistant tools');
+
+	await page.unrouteAll({ behavior: 'ignoreErrors' });
+	await mockProjectShell(page);
+	await page.route(`${api}/projects/project-1/assistant/tools`, (route) =>
+		route.fulfill({ status: 503, json: { message: 'tool catalog unavailable' } })
+	);
+	await page.goto('/projects/project-1/assistant');
+	await expect(page.getByTestId('assistant-page')).toHaveAttribute(
+		'data-assistant-state',
+		'error'
+	);
+	await expect(page.getByTestId('assistant-catalog-error')).toContainText('unavailable');
+});
+
+test('keeps the assistant workspace within desktop and mobile bounds in dark mode', async ({
+	page
+}) => {
+	await page.emulateMedia({ colorScheme: 'dark', reducedMotion: 'reduce' });
+	for (const viewport of [
+		{ width: 1440, height: 900 },
+		{ width: 390, height: 844 }
+	]) {
+		await page.unrouteAll({ behavior: 'ignoreErrors' });
+		await mockProjectShell(page);
+		await mockAssistantCatalog(page);
+		await page.setViewportSize(viewport);
+		await page.goto('/projects/project-1/assistant');
+		await expect(
+			page.getByRole('heading', { name: 'Project Assistant', exact: true })
+		).toBeVisible();
+		const overflow = await page.evaluate(
+			() => document.documentElement.scrollWidth > document.documentElement.clientWidth
+		);
+		expect(overflow, `unexpected horizontal overflow at ${viewport.width}px`).toBe(false);
+	}
+});

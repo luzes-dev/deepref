@@ -1,255 +1,196 @@
 <script lang="ts">
+	import { page } from '$app/state';
 	import { resolve } from '$app/paths';
+	import { cn } from '$lib/utils';
 	import { ScrollArea } from '$lib/components/ui/scroll-area';
 	import * as Tooltip from '$lib/components/ui/tooltip';
-	import { useProjectWorkspaceContext } from './context.svelte.js';
-	import type { ProjectWorkspaceNavView } from './types';
-	import type { LucideIcon } from '@lucide/svelte';
-	import ArchiveIcon from '@lucide/svelte/icons/archive';
-	import ClipboardCheckIcon from '@lucide/svelte/icons/clipboard-check';
-	import ClipboardListIcon from '@lucide/svelte/icons/clipboard-list';
-	import ClipboardPenLineIcon from '@lucide/svelte/icons/clipboard-pen-line';
-	import FileTextIcon from '@lucide/svelte/icons/file-text';
-	import GitForkIcon from '@lucide/svelte/icons/git-fork';
-	import GitCompareIcon from '@lucide/svelte/icons/git-compare';
-	import HomeIcon from '@lucide/svelte/icons/home';
-	import LightbulbIcon from '@lucide/svelte/icons/lightbulb';
-	import TablePropertiesIcon from '@lucide/svelte/icons/table-properties';
-	import Settings2Icon from '@lucide/svelte/icons/settings-2';
-	import BotIcon from '@lucide/svelte/icons/bot';
-	import ProjectSelector from './ProjectSelector.svelte';
-	import { cn } from '$lib/utils';
 	import { Button, buttonVariants } from '$lib/components/ui/button';
+	import SettingsIcon from '@lucide/svelte/icons/settings-2';
+	import ProjectSelector from './ProjectSelector.svelte';
+	import { useProjectWorkspaceContext } from './context.svelte.js';
+	import {
+		PROJECT_NAVIGATION_GROUPS,
+		isProjectNavigationItemActive,
+		type ProjectNavigationItem
+	} from './navigation';
 
-	let {
-		collapsed = false
-	}: {
-		collapsed?: boolean;
-	} = $props();
+	let { collapsed = false }: { collapsed?: boolean } = $props();
 
 	const workspace = useProjectWorkspaceContext();
-	const projectItems: ReadonlyArray<{
-		label: string;
-		path:
-			| '/projects/[projectId]/studies'
-			| '/projects/[projectId]/appraisal'
-			| '/projects/[projectId]/extraction'
-			| '/projects/[projectId]/automations'
-			| '/projects/[projectId]/assistant';
-		icon: LucideIcon;
-	}> = [
-		{ label: 'Studies', path: '/projects/[projectId]/studies', icon: ClipboardListIcon },
-		{ label: 'Appraisal', path: '/projects/[projectId]/appraisal', icon: ClipboardPenLineIcon },
-		{
-			label: 'Extraction',
-			path: '/projects/[projectId]/extraction',
-			icon: TablePropertiesIcon
-		},
-		{ label: 'Automations', path: '/projects/[projectId]/automations', icon: Settings2Icon },
-		{ label: 'Assistant', path: '/projects/[projectId]/assistant', icon: BotIcon }
-	];
-	const navItems: {
-		view: ProjectWorkspaceNavView;
-		label: string;
-		icon: LucideIcon;
-		count?: number;
-	}[] = $derived([
-		{ view: 'overview', label: 'Overview', icon: HomeIcon },
-		{ view: 'protocol', label: 'Protocol', icon: ClipboardListIcon },
-		{ view: 'prisma', label: 'PRISMA', icon: ClipboardCheckIcon },
-		{
-			view: 'articles',
-			label: 'Articles',
-			icon: FileTextIcon,
-			count: workspace.counts.articles
-		},
-		{ view: 'graph', label: 'Graph', icon: GitForkIcon },
-		{
-			view: 'recommendations',
-			label: 'Recommendations',
-			icon: LightbulbIcon,
-			count: workspace.counts.recommendations
-		},
-		{
-			view: 'ingestions',
-			label: 'Ingestions',
-			icon: ArchiveIcon,
-			count: workspace.counts.ingestions
-		}
-	]);
-	const screeningHref = $derived(
-		workspace.selectedProjectId
-			? resolve('/projects/[projectId]/screening/title-abstract', {
-					projectId: workspace.selectedProjectId
-				})
-			: undefined
-	);
+	const pathname = $derived(page.url.pathname);
+	const projectId = $derived(workspace.selectedProjectId);
+
+	function isActive(item: ProjectNavigationItem): boolean {
+		return Boolean(projectId) && isProjectNavigationItemActive(item, pathname, projectId);
+	}
+
+	function choose(item: ProjectNavigationItem): void {
+		if (item.view) workspace.selectView(item.view);
+	}
 </script>
 
 <Tooltip.Provider>
-	<aside class="flex h-full flex-col border-r bg-background">
-		<div class="flex items-center justify-between gap-2 border-b p-3">
-			<ProjectSelector isCollapsed={collapsed} />
+	<aside
+		class="flex h-full min-h-0 flex-col border-r bg-sidebar text-sidebar-foreground"
+		aria-label="Project navigation"
+		data-testid="project-sidebar"
+	>
+		<div class="flex items-center justify-between gap-2 border-b border-sidebar-border p-3">
+			<div class={cn('min-w-0', collapsed && 'w-full')}>
+				<div class={cn('mb-2 flex items-center gap-2', collapsed && 'justify-center')}>
+					<span
+						class="grid size-7 shrink-0 place-items-center rounded-md bg-primary text-xs font-bold text-primary-foreground"
+						aria-hidden="true">D</span
+					>
+					<span
+						class={cn(
+							'truncate text-xs font-bold tracking-[0.16em] text-sidebar-foreground',
+							collapsed && 'sr-only'
+						)}>DEEPREF</span
+					>
+				</div>
+				<ProjectSelector isCollapsed={collapsed} />
+			</div>
 		</div>
 
 		<ScrollArea
 			data-collapsed={collapsed}
-			class="group flex flex-col gap-4 py-2 data-[collapsed=true]:py-2"
+			class="group min-h-0 flex-1 py-3 data-[collapsed=true]:py-2"
 		>
 			<nav
-				class="grid gap-1 px-2 group-data-[collapsed=true]:justify-center group-data-[collapsed=true]:px-2"
+				class="grid gap-4 px-2 group-data-[collapsed=true]:justify-center group-data-[collapsed=true]:gap-2 group-data-[collapsed=true]:px-2"
+				aria-label="Evidence workflow"
 			>
-				{#each navItems as item (item.view)}
-					{@const Icon = item.icon}
-					{#if collapsed}
-						<Tooltip.Root>
-							<Tooltip.Trigger
-								class={cn(
-									buttonVariants({
-										variant: workspace.view === item.view ? 'default' : 'ghost',
-										size: 'icon',
-										class: 'size-9'
-									}),
-									workspace.view === item.view &&
-										'dark:bg-muted dark:text-muted-foreground dark:hover:bg-muted dark:hover:text-white'
-								)}
-								onclick={() => workspace.selectView(item.view)}
-							>
-								<Icon class="size-4" aria-hidden={true} />
-								<span class="sr-only">{item.label}</span>
-							</Tooltip.Trigger>
-							<Tooltip.Content side="right" class="flex items-center gap-4">
-								{item.label}
-								{#if item.count}
-									<span class="ml-auto text-muted-foreground">
-										{item.count}
-									</span>
+				{#each PROJECT_NAVIGATION_GROUPS as group (group.id)}
+					<section class="grid gap-1" aria-labelledby={`nav-group-${group.id}`}>
+						<h2
+							id={`nav-group-${group.id}`}
+							class={cn(
+								'px-2 text-[0.65rem] font-semibold tracking-[0.16em] text-muted-foreground uppercase',
+								collapsed && 'sr-only'
+							)}
+						>
+							{group.label}
+						</h2>
+						{#each group.items as item (item.id)}
+							{@const Icon = item.icon}
+							{@const active = isActive(item)}
+							{#if item.view}
+								{#if collapsed}
+									<Tooltip.Root>
+										<Tooltip.Trigger
+											class={cn(
+												buttonVariants({
+													variant: active ? 'default' : 'ghost',
+													size: 'icon',
+													class: 'size-9'
+												}),
+												active &&
+													'bg-sidebar-primary text-sidebar-primary-foreground'
+											)}
+											onclick={() => choose(item)}
+											aria-current={active ? 'page' : undefined}
+										>
+											<Icon data-icon aria-hidden="true" />
+											<span class="sr-only">{item.label}</span>
+										</Tooltip.Trigger>
+										<Tooltip.Content side="right">{item.label}</Tooltip.Content>
+									</Tooltip.Root>
+								{:else}
+									<Button
+										variant={active ? 'default' : 'ghost'}
+										size="sm"
+										class={cn(
+											'justify-start text-sidebar-foreground',
+											active &&
+												'bg-sidebar-primary text-sidebar-primary-foreground hover:bg-sidebar-primary/90'
+										)}
+										onclick={() => choose(item)}
+										aria-current={active ? 'page' : undefined}
+									>
+										<Icon data-icon="inline-start" aria-hidden="true" />
+										{item.label}
+										{#if item.id === 'articles'}<span class="ml-auto text-xs"
+												>{workspace.counts.articles ?? 0}</span
+											>{/if}
+										{#if item.id === 'recommendations'}<span
+												class="ml-auto text-xs"
+												>{workspace.counts.recommendations ?? 0}</span
+											>{/if}
+										{#if item.id === 'imports'}<span class="ml-auto text-xs"
+												>{workspace.counts.ingestions ?? 0}</span
+											>{/if}
+									</Button>
 								{/if}
-							</Tooltip.Content>
-						</Tooltip.Root>
-					{:else}
-						<Button
-							variant={workspace.view === item.view ? 'default' : 'ghost'}
-							size="sm"
-							class={cn('justify-start', {
-								'dark:bg-muted dark:text-white dark:hover:bg-muted dark:hover:text-white':
-									workspace.view === item.view
-							})}
-							onclick={() => workspace.selectView(item.view)}
-						>
-							<Icon class="mr-2 size-4" aria-hidden={true} />
-							{item.label}
-							{#if item.count}
-								<span
-									class={cn('ml-auto', {
-										'text-background dark:text-white':
-											workspace.view === item.view
-									})}
-								>
-									{item.count}
-								</span>
+							{:else if projectId}
+								{#if collapsed}
+									<a
+										href={resolve(item.path, { projectId })}
+										title={item.label}
+										class={cn(
+											buttonVariants({
+												variant: active ? 'secondary' : 'ghost',
+												size: 'icon',
+												class: 'size-9'
+											}),
+											active && 'text-sidebar-accent-foreground'
+										)}
+										aria-current={active ? 'page' : undefined}
+									>
+										<Icon data-icon aria-hidden="true" />
+										<span class="sr-only">{item.label}</span>
+									</a>
+								{:else}
+									<a
+										href={resolve(item.path, { projectId })}
+										class={cn(
+											buttonVariants({
+												variant: active ? 'secondary' : 'ghost',
+												size: 'sm',
+												class: 'justify-start'
+											}),
+											active && 'text-sidebar-accent-foreground'
+										)}
+										aria-current={active ? 'page' : undefined}
+									>
+										<Icon data-icon="inline-start" aria-hidden="true" />
+										{item.label}
+									</a>
+								{/if}
 							{/if}
-						</Button>
-					{/if}
+						{/each}
+					</section>
 				{/each}
-				{#if screeningHref}
-					{#if collapsed}
-						<a
-							href={resolve('/projects/[projectId]/screening/title-abstract', {
-								projectId: workspace.selectedProjectId
-							})}
-							title="Screening"
-							class={cn(
-								buttonVariants({
-									variant: 'outline',
-									size: 'icon',
-									class: 'size-9'
-								})
-							)}
-						>
-							<ClipboardCheckIcon aria-hidden={true} />
-							<span class="sr-only">Screening</span>
-						</a>
-					{:else}
-						<a
-							href={resolve('/projects/[projectId]/screening/title-abstract', {
-								projectId: workspace.selectedProjectId
-							})}
-							class={cn(
-								buttonVariants({
-									variant: 'outline',
-									size: 'sm',
-									class: 'justify-start'
-								})
-							)}
-						>
-							<ClipboardCheckIcon class="mr-2 size-4" aria-hidden={true} />
-							Screening
-						</a>
-					{/if}
-				{/if}
-				{#if workspace.selectedProjectId}
-					{#each projectItems as projectItem (projectItem.label)}
-						{@const ProjectIcon = projectItem.icon}
-						<a
-							href={resolve(projectItem.path, {
-								projectId: workspace.selectedProjectId
-							})}
-							title={projectItem.label}
-							class={cn(
-								buttonVariants({
-									variant: 'outline',
-									size: collapsed ? 'icon' : 'sm',
-									class: collapsed ? 'size-9' : 'justify-start'
-								})
-							)}
-						>
-							<ProjectIcon
-								class={collapsed ? 'size-4' : 'mr-2 size-4'}
-								aria-hidden={true}
-							/>
-							{#if collapsed}<span class="sr-only">{projectItem.label}</span
-								>{:else}{projectItem.label}{/if}
-						</a>
-					{/each}
-				{/if}
-				{#if workspace.selectedProjectId}
-					{#if collapsed}
-						<a
-							href={resolve('/projects/[projectId]/discovery/duplicates', {
-								projectId: workspace.selectedProjectId
-							})}
-							title="Deduplication"
-							class={cn(
-								buttonVariants({
-									variant: 'outline',
-									size: 'icon',
-									class: 'size-9'
-								})
-							)}
-						>
-							<GitCompareIcon aria-hidden={true} />
-							<span class="sr-only">Deduplication</span>
-						</a>
-					{:else}
-						<a
-							href={resolve('/projects/[projectId]/discovery/duplicates', {
-								projectId: workspace.selectedProjectId
-							})}
-							class={cn(
-								buttonVariants({
-									variant: 'outline',
-									size: 'sm',
-									class: 'justify-start'
-								})
-							)}
-						>
-							<GitCompareIcon class="mr-2 size-4" aria-hidden={true} />
-							Deduplication
-						</a>
-					{/if}
-				{/if}
 			</nav>
 		</ScrollArea>
+
+		<footer class="border-t border-sidebar-border p-2">
+			{#if collapsed}
+				<a
+					href={resolve('/settings')}
+					title="Settings"
+					class={buttonVariants({
+						variant: 'ghost',
+						size: 'icon',
+						class: 'size-9 w-full'
+					})}
+				>
+					<SettingsIcon data-icon aria-hidden="true" />
+					<span class="sr-only">Settings</span>
+				</a>
+			{:else}
+				<a
+					href={resolve('/settings')}
+					class={buttonVariants({
+						variant: 'ghost',
+						size: 'sm',
+						class: 'w-full justify-start'
+					})}
+				>
+					<SettingsIcon data-icon="inline-start" aria-hidden="true" />
+					Settings
+				</a>
+			{/if}
+		</footer>
 	</aside>
 </Tooltip.Provider>

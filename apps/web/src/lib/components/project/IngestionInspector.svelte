@@ -11,6 +11,7 @@
 		createGetIngestion,
 		createListIngestionItems
 	} from '$lib/api/generated/ingestions/ingestions';
+	import { MetricTile, StatePanel, Surface } from '$lib/components/layout';
 	import CircleAlertIcon from '@lucide/svelte/icons/circle-alert';
 	import PanelRightCloseIcon from '@lucide/svelte/icons/panel-right-close';
 	import PanelRightOpenIcon from '@lucide/svelte/icons/panel-right-open';
@@ -86,7 +87,11 @@
 	}
 </script>
 
-<aside class="flex h-full min-h-0 flex-col border-l bg-background">
+<aside
+	class="flex h-full min-h-0 flex-col border-l bg-background"
+	data-testid="ingestion-inspector"
+	data-selected={workspace.selectedIngestion ? 'true' : 'false'}
+>
 	{#if collapsed}
 		<div class="flex h-full flex-col items-center gap-3 border-b px-2 py-4">
 			<Button
@@ -139,17 +144,23 @@
 
 		<div class="min-h-0 flex-1 overflow-auto p-4">
 			{#if !workspace.selectedIngestion}
-				<div
-					class="flex h-full items-center justify-center text-center text-sm text-muted-foreground"
-				>
-					Select an ingestion run to inspect its progress and items.
-				</div>
+				<StatePanel
+					state="empty"
+					title="No ingestion selected"
+					description="Select a run to inspect its progress, polling state, and fetched items."
+				/>
 			{:else if queryError || cancelIngestion.error}
 				<Alert.Root variant="destructive">
 					<CircleAlertIcon />
 					<Alert.Title>Ingestion unavailable</Alert.Title>
 					<Alert.Description
 						>{cancelIngestion.error?.message ?? queryError?.message}</Alert.Description
+					>
+					<Alert.Action
+						onclick={() => {
+							void ingestionQuery.refetch();
+							void itemsQuery.refetch();
+						}}>Try again</Alert.Action
 					>
 				</Alert.Root>
 			{:else if ingestionQuery.isPending}
@@ -158,7 +169,7 @@
 					<Skeleton class="h-64" />
 				</div>
 			{:else if ingestion && ingestion.project_id !== workspace.project.id}
-				<Alert.Root>
+				<Alert.Root data-testid="ingestion-degraded">
 					<CircleAlertIcon />
 					<Alert.Title>Ingestion belongs to another project</Alert.Title>
 					<Alert.Description
@@ -171,7 +182,24 @@
 				</Alert.Root>
 			{:else if ingestion}
 				<div class="flex flex-col gap-4">
-					<section class="rounded-md border p-4">
+					<div class="grid grid-cols-2 gap-3">
+						<MetricTile
+							label="Fetched"
+							value={ingestion.fetched_count}
+							detail="records resolved"
+							tone="positive"
+							class="[font-variant-numeric:tabular-nums]"
+						/>
+						<MetricTile
+							label="Failed"
+							value={ingestion.failed_count}
+							detail="provider errors"
+							tone={ingestion.failed_count > 0 ? 'critical' : 'default'}
+							class="[font-variant-numeric:tabular-nums]"
+						/>
+					</div>
+
+					<Surface as="section" tone="default" class="p-4">
 						<div class="flex flex-wrap items-center justify-between gap-3">
 							<h3 class="font-medium">
 								Status <Badge variant={statusVariant(ingestion.status)}
@@ -192,9 +220,9 @@
 							queued
 						</p>
 						<div class="mt-3"><Progress value={progress} /></div>
-					</section>
+					</Surface>
 
-					<section class="rounded-md border p-4">
+					<Surface as="section" tone="inset" class="p-4">
 						<div class="flex flex-col gap-3 text-sm">
 							<div class="flex items-center justify-between gap-4">
 								<span class="text-muted-foreground">Polling</span>
@@ -225,9 +253,9 @@
 								<RefreshCwIcon data-icon="inline-start" />Refresh now
 							</Button>
 						</div>
-					</section>
+					</Surface>
 
-					<section class="overflow-hidden rounded-md border">
+					<Surface as="section" tone="default" class="overflow-hidden">
 						<div class="border-b p-4">
 							<h3 class="font-medium">Articles</h3>
 							<p class="text-sm text-muted-foreground">
@@ -269,8 +297,14 @@
 								</Table.Body>
 							</Table.Root>
 						</div>
-					</section>
+					</Surface>
 				</div>
+			{:else}
+				<StatePanel
+					state="error"
+					title="Ingestion details unavailable"
+					description="The selected run did not return a usable record. Refresh or clear the selection."
+				/>
 			{/if}
 		</div>
 	{/if}

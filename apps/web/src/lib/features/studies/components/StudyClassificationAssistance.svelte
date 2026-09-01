@@ -5,14 +5,14 @@
 		AiStudyDesignClassificationProposalPayload,
 		AiStudyDesignEvidenceDto
 	} from '$lib/api/generated/models';
+	import { StatePanel, Surface } from '$lib/components/layout';
 	import * as Alert from '$lib/components/ui/alert';
 	import { Badge } from '$lib/components/ui/badge';
 	import { Button } from '$lib/components/ui/button';
 	import * as Card from '$lib/components/ui/card';
-	import * as Empty from '$lib/components/ui/empty';
 	import { Skeleton } from '$lib/components/ui/skeleton';
 	import { Spinner } from '$lib/components/ui/spinner';
-	import { Brain, Check, Info, X } from '@lucide/svelte';
+	import { Brain, Check, X } from '@lucide/svelte';
 
 	let {
 		proposal,
@@ -115,15 +115,11 @@
 				<Skeleton class="h-20 w-full" />
 			</div>
 		{:else if !proposal || proposal.payload.kind !== 'classification'}
-			<Empty.Root class="border-0 p-0">
-				<Empty.Media variant="icon"><Info /></Empty.Media>
-				<Empty.Header>
-					<Empty.Title>No pending classification suggestion</Empty.Title>
-					<Empty.Description>
-						The assistant has not created a study-design proposal for this study.
-					</Empty.Description>
-				</Empty.Header>
-			</Empty.Root>
+			<StatePanel
+				state="empty"
+				title="No pending classification suggestion"
+				description="The assistant has not created a study-design proposal for this study."
+			/>
 		{:else}
 			{@const payload = proposal.payload}
 			<div class="flex flex-wrap items-center gap-2">
@@ -132,48 +128,63 @@
 					{proposal.provider} / {proposal.model} · prompt {proposal.prompt_version}
 				</span>
 			</div>
-			<div class="rounded-md border p-4" data-testid="study-classification-suggestion">
-				<p class="text-sm font-medium">Suggested closed study design</p>
-				{#if payload.suggested_design}
-					<div class="mt-2 flex flex-wrap items-center gap-2">
-						<Badge variant="secondary">{designLabel(payload.suggested_design)}</Badge>
-						<code class="text-xs">{payload.suggested_design}</code>
-					</div>
-				{:else}
-					<Badge class="mt-2" variant="outline">Abstention</Badge>
-					<p class="mt-2 text-sm text-muted-foreground">
-						The evidence does not support a closed study-design label.
+			<div data-testid="study-classification-suggestion">
+				<Surface
+					as="section"
+					tone="inset"
+					class="p-4"
+					label="Suggested closed study design"
+				>
+					<p class="text-sm font-medium">Suggested closed study design</p>
+					{#if payload.suggested_design}
+						<div class="mt-2 flex flex-wrap items-center gap-2">
+							<Badge variant="secondary"
+								>{designLabel(payload.suggested_design)}</Badge
+							>
+							<code class="text-xs">{payload.suggested_design}</code>
+						</div>
+					{:else}
+						<Badge class="mt-2" variant="outline">Abstention</Badge>
+						<p class="mt-2 text-sm text-muted-foreground">
+							The evidence does not support a closed study-design label.
+						</p>
+					{/if}
+				</Surface>
+			</div>
+			<div>
+				<Surface as="section" tone="inset" class="p-4" label="Classification rationale">
+					<p class="text-sm font-medium">Rationale</p>
+					<p class="mt-1 text-sm text-muted-foreground">{payload.rationale}</p>
+				</Surface>
+			</div>
+			<div data-testid="study-classification-provenance">
+				<Surface as="section" tone="inset" class="p-4" label="Evidence identity">
+					<p class="text-sm font-medium">Evidence identity</p>
+					<p class="mt-1 text-xs break-all text-muted-foreground">
+						Prompt hash: {proposal.prompt_hash}
 					</p>
-				{/if}
-			</div>
-			<div class="rounded-md border p-4">
-				<p class="text-sm font-medium">Rationale</p>
-				<p class="mt-1 text-sm text-muted-foreground">{payload.rationale}</p>
-			</div>
-			<div class="rounded-md border p-4" data-testid="study-classification-provenance">
-				<p class="text-sm font-medium">Evidence identity</p>
-				<p class="mt-1 text-xs break-all text-muted-foreground">
-					Prompt hash: {proposal.prompt_hash}
-				</p>
-				{#if payload.evidence.length}
-					<ul class="mt-2 flex flex-col gap-2 text-xs">
-						{#each payload.evidence as evidence (evidenceKey(evidence))}
-							<li class="rounded-md bg-muted/40 p-2">
-								<div class="flex flex-wrap gap-x-2 gap-y-1">
-									<span class="font-medium">{evidenceSubject(evidence)}</span>
-									<span class="text-muted-foreground">
-										· {evidenceFieldLabel(evidence)} ({evidence.field})
-									</span>
-								</div>
-								<code class="mt-1 block break-all text-muted-foreground">
-									content hash: {evidence.content_hash}
-								</code>
-							</li>
-						{/each}
-					</ul>
-				{:else}
-					<p class="mt-1 text-xs text-muted-foreground">No evidence identity recorded.</p>
-				{/if}
+					{#if payload.evidence.length}
+						<ul class="mt-2 flex flex-col gap-2 text-xs">
+							{#each payload.evidence as evidence (evidenceKey(evidence))}
+								<li class="rounded-md bg-muted/40 p-2">
+									<div class="flex flex-wrap gap-x-2 gap-y-1">
+										<span class="font-medium">{evidenceSubject(evidence)}</span>
+										<span class="text-muted-foreground">
+											· {evidenceFieldLabel(evidence)} ({evidence.field})
+										</span>
+									</div>
+									<code class="mt-1 block break-all text-muted-foreground">
+										content hash: {evidence.content_hash}
+									</code>
+								</li>
+							{/each}
+						</ul>
+					{:else}
+						<p class="mt-1 text-xs text-muted-foreground">
+							No evidence identity recorded.
+						</p>
+					{/if}
+				</Surface>
 			</div>
 			{#if payload.uncertainties.length}
 				<Alert.Root role="status" data-testid="study-classification-uncertainties">

@@ -125,6 +125,9 @@
 						data-current={selectedArticle === row.original.report_id
 							? 'true'
 							: undefined}
+						aria-current={selectedArticle === row.original.report_id
+							? 'true'
+							: undefined}
 						class={cn('data-[current=true]:bg-muted/40')}
 					>
 						{#each row.getVisibleCells() as cell (cell.id)}

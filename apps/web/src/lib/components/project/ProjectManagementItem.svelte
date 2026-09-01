@@ -1,5 +1,7 @@
 <script lang="ts">
 	import * as Field from '$lib/components/ui/field';
+	import * as Alert from '$lib/components/ui/alert';
+	import { Badge } from '$lib/components/ui/badge';
 	import { Button } from '$lib/components/ui/button';
 	import { Input } from '$lib/components/ui/input';
 	import { Spinner } from '$lib/components/ui/spinner';
@@ -7,6 +9,7 @@
 	import { createDeleteProject, createUpdateProject } from '$lib/api/generated/projects/projects';
 	import type { ProjectDto } from '$lib/api/generated/models';
 	import { useProjectWorkspaceContext } from './context.svelte.js';
+	import SaveIcon from '@lucide/svelte/icons/save';
 	import TrashIcon from '@lucide/svelte/icons/trash-2';
 
 	let {
@@ -76,13 +79,21 @@
 	}
 </script>
 
-<Field.FieldSet class="rounded-lg border p-4">
+<Field.FieldSet
+	class="rounded-xl border border-primary/15 bg-muted/10 p-4 sm:p-5"
+	aria-busy={isBusy}
+>
 	<Field.FieldLegend class="flex min-w-0 items-center justify-between gap-3">
 		<span class="truncate">{savedName}</span>
+		{#if isDirty}
+			<Badge variant="outline">Unsaved changes</Badge>
+		{:else}
+			<Badge variant="secondary">Saved</Badge>
+		{/if}
 	</Field.FieldLegend>
 
-	<Field.FieldGroup class="gap-4">
-		<Field.Field>
+	<Field.FieldGroup class="gap-5">
+		<Field.Field data-invalid={!name.trim()}>
 			<Field.FieldLabel for={`management-project-name-${project.id}`}>Name</Field.FieldLabel>
 			<Input
 				id={`management-project-name-${project.id}`}
@@ -91,6 +102,7 @@
 				disabled={isBusy}
 				aria-invalid={!name.trim()}
 			/>
+			<Field.FieldDescription>A short name for this workspace.</Field.FieldDescription>
 		</Field.Field>
 		<Field.Field>
 			<Field.FieldLabel for={`management-project-description-${project.id}`}>
@@ -106,28 +118,48 @@
 	</Field.FieldGroup>
 
 	{#if updateProject.error}
-		<p class="text-sm text-destructive">{updateProject.error.message}</p>
+		<Alert.Root variant="destructive" role="alert">
+			<Alert.Title>Project could not be saved</Alert.Title>
+			<Alert.Description>{updateProject.error.message}</Alert.Description>
+		</Alert.Root>
 	{/if}
 	{#if deleteProject.error}
-		<p class="text-sm text-destructive">{deleteProject.error.message}</p>
+		<Alert.Root variant="destructive" role="alert">
+			<Alert.Title>Project could not be deleted</Alert.Title>
+			<Alert.Description>{deleteProject.error.message}</Alert.Description>
+		</Alert.Root>
 	{/if}
 
 	<div class="flex flex-col-reverse gap-2 sm:flex-row sm:items-center sm:justify-between">
 		{#if deletePending}
-			<div class="flex flex-col-reverse gap-2 sm:flex-row">
-				<Button variant="outline" disabled={isBusy} onclick={() => (deletePending = false)}>
-					Cancel
-				</Button>
-				<Button variant="destructive" disabled={isBusy} onclick={confirmDelete}>
-					{#if deleteProject.isPending}
-						<Spinner data-icon="inline-start" />
-					{/if}
-					Confirm delete
-				</Button>
-			</div>
+			<Alert.Root
+				variant="destructive"
+				class="flex flex-col gap-3 sm:flex-row sm:items-center"
+			>
+				<TrashIcon aria-hidden="true" />
+				<div class="min-w-0 flex-1">
+					<Alert.Title>Delete {savedName}?</Alert.Title>
+					<Alert.Description>This action cannot be undone.</Alert.Description>
+				</div>
+				<div class="flex flex-col-reverse gap-2 sm:flex-row">
+					<Button
+						variant="outline"
+						disabled={isBusy}
+						onclick={() => (deletePending = false)}
+					>
+						Cancel
+					</Button>
+					<Button variant="destructive" disabled={isBusy} onclick={confirmDelete}>
+						{#if deleteProject.isPending}
+							<Spinner data-icon="inline-start" />
+						{/if}
+						Confirm delete
+					</Button>
+				</div>
+			</Alert.Root>
 		{:else}
 			<Button variant="destructive" disabled={isBusy} onclick={() => (deletePending = true)}>
-				<TrashIcon data-icon="inline-start" />
+				<TrashIcon data-icon="inline-start" aria-hidden="true" />
 				Delete
 			</Button>
 		{/if}
@@ -136,6 +168,7 @@
 			{#if updateProject.isPending}
 				<Spinner data-icon="inline-start" />
 			{/if}
+			<SaveIcon data-icon="inline-start" aria-hidden="true" />
 			Save changes
 		</Button>
 	</div>

@@ -90,6 +90,15 @@ type MockState = {
 	lastManualDefinitionId: string | null;
 };
 
+const runningRun: RunFixture = {
+	...run,
+	status: 'running',
+	started_at: '2026-01-02T03:04:02Z',
+	finished_at: '2026-01-02T03:04:30Z',
+	job: { ...run.job, status: 'running' },
+	steps: [{ ...run.steps[0], status: 'running', finished_at: '2026-01-02T03:04:30Z' }]
+};
+
 async function mockProjectShell(page: Page): Promise<void> {
 	await page.route(`${api}/health/dependencies`, (route) =>
 		route.fulfill({ json: dependencies })
@@ -108,7 +117,12 @@ async function mockProjectShell(page: Page): Promise<void> {
 
 async function mockAutomationEndpoints(
 	page: Page,
-	options: { definitions?: DefinitionFixture[]; runs?: RunFixture[]; failReads?: boolean } = {}
+	options: {
+		definitions?: DefinitionFixture[];
+		runs?: RunFixture[];
+		failReads?: boolean;
+		delayReads?: boolean;
+	} = {}
 ): Promise<{ state: MockState }> {
 	const state: MockState = {
 		definitions: options.definitions ?? [definition, manualDefinition, unsupportedDefinition],
@@ -127,6 +141,7 @@ async function mockAutomationEndpoints(
 			await route.fulfill({ status: 500, json: { message: 'definitions unavailable' } });
 			return;
 		}
+		if (options.delayReads) await new Promise((resolve) => setTimeout(resolve, 750));
 		await route.fulfill({ json: state.definitions });
 	});
 	await page.route(
@@ -174,6 +189,7 @@ async function mockAutomationEndpoints(
 				await route.fulfill({ status: 500, json: { message: 'runs unavailable' } });
 				return;
 			}
+			if (options.delayReads) await new Promise((resolve) => setTimeout(resolve, 750));
 			await route.fulfill({ json: state.runs });
 			return;
 		}
@@ -301,4 +317,33 @@ test('reports read failures and retries automation data', async ({ page }) => {
 	await page.getByTestId('automation-query-error').getByRole('button', { name: 'Retry' }).click();
 	await expect(page.getByRole('heading', { name: 'Recent runs' })).toBeVisible();
 	await expect(page.getByTestId('automation-runs')).toBeVisible();
+});
+
+test('exposes loading, active-run, and completed-run presentation responsively', async ({
+	page
+}) => {
+	await mockProjectShell(page);
+	await mockAutomationEndpoints(page, {
+		definitions: [manualDefinition],
+		runs: [runningRun],
+		delayReads: true
+	});
+	await page.emulateMedia({ colorScheme: 'dark', reducedMotion: 'reduce' });
+	await page.setViewportSize({ width: 390, height: 844 });
+	await page.goto('/projects/project-1/automations');
+	await expect(page.getByTestId('automation-page')).toHaveAttribute(
+		'data-automation-state',
+		'loading'
+	);
+	await expect(page.getByTestId('automation-runs-loading')).toBeVisible();
+	await expect(page.getByTestId('automation-page')).toHaveAttribute(
+		'data-automation-state',
+		'ready'
+	);
+	await expect(page.getByTestId('automation-run')).toContainText('Running');
+
+	const overflow = await page.evaluate(
+		() => document.documentElement.scrollWidth > document.documentElement.clientWidth
+	);
+	expect(overflow).toBe(false);
 });

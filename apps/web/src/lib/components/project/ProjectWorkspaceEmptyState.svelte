@@ -3,16 +3,18 @@
 	import * as Empty from '$lib/components/ui/empty';
 	import { Button } from '$lib/components/ui/button';
 	import PlusIcon from '@lucide/svelte/icons/plus';
+	import FolderPlusIcon from '@lucide/svelte/icons/folder-plus';
 	import { useProjectWorkspaceContext } from './context.svelte.js';
 	import ProjectCreateForm from './ProjectCreateForm.svelte';
 
 	const workspace = useProjectWorkspaceContext();
 </script>
 
-<div class="flex h-full items-center justify-center p-4">
-	<Empty.Root>
+<div class="flex h-full items-center justify-center p-4 sm:p-8">
+	<Empty.Root class="max-w-xl border-primary/20 bg-card/60 py-16 shadow-xs">
+		<Empty.Media variant="icon"><FolderPlusIcon aria-hidden="true" /></Empty.Media>
 		<Empty.Header>
-			<Empty.Title>No projects</Empty.Title>
+			<Empty.Title class="editorial-title text-3xl">No projects</Empty.Title>
 			<Empty.Description>
 				Create a project from the workspace sidebar to start ingesting DOIs.
 			</Empty.Description>
