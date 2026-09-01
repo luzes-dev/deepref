@@ -217,7 +217,7 @@ jobs:
           persist-credentials: false
       - name: Set up QEMU for multi-architecture push validation
         if: github.event_name == 'push'
-        uses: docker/setup-qemu-action@96fe6ef7f3350b61c61be40b68a1882f3264fb8 # v4.2.0
+        uses: docker/setup-qemu-action@96fe6ef7f33517b61c61be40b68a1882f3264fb8 # v4.2.0
         with:
           platforms: arm64
       - name: Set up Buildx
