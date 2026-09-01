@@ -400,7 +400,12 @@ const GET_ENDPOINT_RESPONSES: ReadonlyMap<string, EndpointResponse> = new Map([
 ]);
 
 function endpointResponse(pathname: string, method: string): EndpointResponse {
-	if (method !== 'GET') return { body: { ok: true }, status: 200 };
+	if (method !== 'GET') {
+		return {
+			body: { detail: `No visual fixture for ${method} ${pathname}` },
+			status: 404
+		};
+	}
 	return (
 		GET_ENDPOINT_RESPONSES.get(pathname) ?? {
 			body: { detail: `No visual fixture for ${method} ${pathname}` },
