@@ -39,7 +39,7 @@
 	<div class="grid grid-cols-1 gap-2 sm:grid-cols-3">
 		<Button
 			variant="default"
-			class="min-h-11 justify-between bg-success text-white hover:bg-success/90"
+			class="min-h-11 justify-between bg-success text-white hover:bg-success/90 dark:text-background"
 			disabled={disabled || pending}
 			onclick={() => onDecision('include')}
 		>
@@ -49,7 +49,7 @@
 		</Button>
 		<Button
 			variant="destructive"
-			class="min-h-11 justify-between"
+			class="min-h-11 justify-between dark:text-foreground"
 			disabled={disabled || pending}
 			onclick={() => onDecision('exclude')}
 		>
