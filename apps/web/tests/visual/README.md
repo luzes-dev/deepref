@@ -18,12 +18,13 @@ success response.
 
 Overview and settings retain light/dark screenshot baselines. Route-family workflow
 and analysis coverage retains representative dark desktop/mobile screenshot baselines
-while all four projects execute their behavioral, overflow, and accessibility
+while all four projects execute their behavioral, theme, overflow, and accessibility
 assertions. This is intentionally not described as light-mode visual regression:
-light workflow coverage is an interaction and axe contract until light workflow PNG
-goldens are explicitly generated and reviewed. All committed screenshots use
-`expect(page).toHaveScreenshot(...)` through the shared helpers, and
-`snapshotPathTemplate` keeps project-isolated baselines separate.
+light workflow coverage verifies the explicit light theme contract plus interaction
+and axe behavior until light workflow PNG goldens are explicitly generated and
+reviewed. All committed screenshots use `expect(page).toHaveScreenshot(...)` through
+the shared helpers, and `snapshotPathTemplate` keeps project-isolated baselines
+separate.
 
 Run discovery with:
 
