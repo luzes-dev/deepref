@@ -44,6 +44,9 @@ Local endpoints:
 | API             | `http://127.0.0.1:8080` |
 | PostgreSQL      | `127.0.0.1:5432`        |
 
+If port `5432` is already in use, set `POSTGRES_HOST_PORT` and update the
+port in `DATABASE_URL` in `.env` to the same value before starting the stack.
+
 Every published dependency port binds only to `127.0.0.1`.
 
 ## Seed data

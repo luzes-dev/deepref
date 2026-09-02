@@ -2,6 +2,8 @@ set dotenv-load := true
 set shell := ["bash", "-euo", "pipefail", "-c"]
 
 compose := "docker compose -f infra/local/compose.yaml"
+process_compose_port := env_var_or_default("PROCESS_COMPOSE_PORT", "8090")
+process_compose := "process-compose --port " + process_compose_port + " -f process-compose.yaml"
 
 default:
     @just --list
@@ -18,16 +20,16 @@ bootstrap:
 dev:
     {{compose}} up -d --wait
     cargo run -q -p deepref-server -- migrate
-    exec process-compose -f process-compose.yaml up
+    exec {{process_compose}} up
 
 # Stop app processes and disposable dependencies while retaining local data.
 dev-down:
-    process-compose -f process-compose.yaml down >/dev/null 2>&1 || true
+    {{process_compose}} down >/dev/null 2>&1 || true
     {{compose}} down --remove-orphans
 
 # Stop the local stack and permanently delete its disposable named volumes.
 dev-reset:
-    process-compose -f process-compose.yaml down >/dev/null 2>&1 || true
+    {{process_compose}} down >/dev/null 2>&1 || true
     {{compose}} down --volumes --remove-orphans
 
 # Apply all PostgreSQL migrations with the one-shot API command.
