@@ -103,13 +103,11 @@ pub async fn find_missing_ingestion_work(
         .map(|row| {
             let ingestion_id: Uuid = row.get("ingestion_id");
             let canonical_doi: String = row.get("canonical_doi");
-            let work_event_id = row
-                .get::<Option<Uuid>, _>("work_event_id")
-                .ok_or_else(|| {
-                    anyhow::anyhow!(
-                        "queued ingestion item {ingestion_id}|{canonical_doi} has no work_event_id"
-                    )
-                })?;
+            let work_event_id = row.get::<Option<Uuid>, _>("work_event_id").ok_or_else(|| {
+                anyhow::anyhow!(
+                    "queued ingestion item {ingestion_id}|{canonical_doi} has no work_event_id"
+                )
+            })?;
             Ok(MissingIngestionWork {
                 ingestion_id,
                 project_id: row.get("project_id"),
