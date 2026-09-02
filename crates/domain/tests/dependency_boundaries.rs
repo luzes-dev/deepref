@@ -47,9 +47,8 @@ fn declares_dependency(manifest: &str, dependency: &str) -> bool {
                     .next()
                     .is_some_and(|name| name == dependency);
         }
-        line.strip_prefix(dependency).is_some_and(|rest| {
-            rest.starts_with('.') || rest.trim_start().starts_with('=')
-        })
+        line.strip_prefix(dependency)
+            .is_some_and(|rest| rest.starts_with('.') || rest.trim_start().starts_with('='))
     })
 }
 
