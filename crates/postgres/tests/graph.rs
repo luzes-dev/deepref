@@ -265,7 +265,7 @@ async fn seed_and_assert(
     sqlx::query(
         "UPDATE project_reports SET metrics_computed_at=$1 WHERE project_id=$2 AND report_id=$3",
     )
-    .bind(&first_timestamp)
+    .bind(first_timestamp)
     .bind(project_id)
     .bind(report_a)
     .execute(pool)
