@@ -1,0 +1,55 @@
+name: Repair PR 80 generated files
+
+on:
+  push:
+    branches:
+      - refactor/brooks-debt-cleanup
+
+permissions:
+  contents: write
+
+jobs:
+  repair:
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout branch
+        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          ref: refactor/brooks-debt-cleanup
+
+      - name: Install pinned Rust toolchain
+        run: |
+          rustup toolchain install 1.95.0 --profile minimal --component rustfmt
+          rustup override set 1.95.0
+
+      - name: Set up pnpm
+        uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v4.1.0
+        with:
+          version: 11.3.0
+
+      - name: Set up Node.js
+        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v4.4.0
+        with:
+          node-version: 24.4.1
+          cache: pnpm
+
+      - name: Install web dependencies
+        run: pnpm install --frozen-lockfile
+
+      - name: Regenerate and format tracked files
+        run: |
+          cargo metadata --format-version 1 >/dev/null
+          cargo fmt --all
+          pnpm --filter @deepref/web exec prettier --write src/lib/features/protocol/components/ProtocolEditor.svelte
+
+      - name: Commit repair
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add Cargo.lock crates/postgres/src/deduplication.rs apps/web/src/lib/features/protocol/components/ProtocolEditor.svelte
+          if git diff --cached --quiet; then
+            echo "No generated changes needed"
+            exit 0
+          fi
+          git commit -m "fix(ci): refresh generated files and formatting"
+          git push origin HEAD:refactor/brooks-debt-cleanup
