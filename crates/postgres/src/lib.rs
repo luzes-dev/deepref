@@ -18,6 +18,7 @@ mod review_run_setup;
 mod review_runs;
 mod screening;
 mod study;
+mod worker_runtime;
 
 use sqlx::{
     PgPool,
@@ -117,4 +118,8 @@ pub use study::{
     StudyRecord, StudyReportRecord, assign_report_to_study, assign_report_to_study_in_transaction,
     classify_study, create_study, create_study_and_assign_report_in_transaction, get_study,
     get_study_for_report, list_studies, list_study_events, remove_report_from_study, rename_study,
+};
+pub use worker_runtime::{
+    MissingIngestionWork, WorkerLeaseRecovery, find_missing_ingestion_work,
+    recover_expired_worker_state, reserve_provider_permit,
 };

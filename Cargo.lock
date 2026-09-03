@@ -800,17 +800,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "deepref-metrics"
-version = "0.1.0"
-dependencies = [
- "anyhow",
- "deepref-core",
- "deepref-graph",
- "serde",
- "serde_json",
-]
-
-[[package]]
 name = "deepref-postgres"
 version = "0.1.0"
 dependencies = [
