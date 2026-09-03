@@ -200,6 +200,8 @@ jobs:
         run: pnpm --filter @deepref/web exec playwright install --with-deps chromium
       - name: Run browser tests
         run: just test-e2e
+      - name: Run visual and accessibility regression tests
+        run: pnpm --filter @deepref/web test:visual
       - name: Stop disposable dependencies
         if: always()
         run: docker compose -f infra/local/compose.yaml down --volumes

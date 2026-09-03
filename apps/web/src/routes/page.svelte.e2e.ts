@@ -500,7 +500,7 @@ test('loads opaque cursor pages for projects, articles, and ingestions', async (
 		.click();
 	await expect(page.getByRole('button', { name: /Review Article/ })).toBeVisible();
 
-	await page.getByRole('button', { name: 'Ingestions' }).click();
+	await page.getByRole('button', { name: 'Imports' }).click();
 	await page
 		.getByTestId('pagination-load-more')
 		.getByRole('button', { name: 'Load more' })
@@ -571,7 +571,7 @@ test('secondary article views reuse selected article inspector', async ({ page }
 	await page.getByRole('button', { name: 'Recommendations' }).click();
 	await expect(page.getByText('A useful article abstract.')).toBeVisible();
 
-	await page.getByRole('button', { name: 'Ingestions' }).click();
+	await page.getByRole('button', { name: 'Imports' }).click();
 	await expect(page.getByText('1 project runs', { exact: true })).toBeVisible();
 
 	await page.getByRole('button', { name: 'Graph' }).click();
@@ -640,15 +640,18 @@ test('mobile articles keep card open action', async ({ page }) => {
 	await mockWorkspace(page);
 	await page.goto('/');
 
-	await page.getByRole('tab', { name: 'Articles' }).click();
-	await expect(page.getByRole('button', { name: 'Open' }).first()).toBeVisible();
+	await page.getByRole('button', { name: 'Open navigation' }).click();
+	const navigation = page.getByRole('navigation', { name: 'Mobile evidence workflow' });
+	await expect(navigation).toBeVisible();
+	await navigation.getByRole('button', { name: 'Articles' }).click();
+	await expect(page.getByRole('button', { name: 'Open inspector' }).first()).toBeVisible();
 });
 
 test('ingestions are filtered and create uses current project', async ({ page }) => {
 	await mockWorkspace(page);
 	await page.goto('/');
 
-	await page.getByRole('button', { name: 'Ingestions' }).click();
+	await page.getByRole('button', { name: 'Imports' }).click();
 	await expect(page.getByText('1 project runs', { exact: true })).toBeVisible();
 	await expect(page.getByText('other-ingestion')).toHaveCount(0);
 	await page.locator('#dois').fill('10.1/new');
@@ -733,7 +736,7 @@ test('refreshes completed provider runs with stable retry keys', async ({ page }
 	);
 
 	await page.goto('/');
-	await page.getByRole('button', { name: 'Ingestions' }).click();
+	await page.getByRole('button', { name: 'Imports' }).click();
 	const completedRow = page.locator('[data-ingestion-id="project-ingestion"]');
 	const runningRow = page.locator('[data-ingestion-id="running-ingestion"]');
 	await expect(completedRow.getByRole('button', { name: 'Refresh provider' })).toBeVisible();

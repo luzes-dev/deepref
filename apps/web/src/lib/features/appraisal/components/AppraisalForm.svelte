@@ -19,6 +19,10 @@
 	import { appraisalEvidenceLabel, resolveAppraisalEvidence } from '../ai-prefill';
 	import { fullTextUrlString } from '$lib/features/full-text/url';
 	import { responseIsComplete } from '../renderer';
+	import * as Alert from '$lib/components/ui/alert';
+	import { Button } from '$lib/components/ui/button';
+	import { Spinner } from '$lib/components/ui/spinner';
+	import { CheckCircle2, Plus, Trash2 } from '@lucide/svelte';
 
 	type Props = {
 		definition: AppraisalDefinitionDto;
@@ -162,34 +166,44 @@
 </script>
 
 <form
-	class="flex flex-col gap-6"
+	class="flex min-w-0 flex-col gap-6"
 	onsubmit={(event) => {
 		event.preventDefault();
 		void submit();
 	}}
 >
-	<div>
-		<h2 class="text-xl font-semibold">{definition.name} v{definition.version}</h2>
-		<p class="mt-1 text-sm text-muted-foreground">{definition.description}</p>
+	<div class="flex flex-col gap-2">
+		<div class="flex flex-wrap items-center gap-2">
+			<span class="text-xs font-semibold tracking-[0.12em] text-primary uppercase"
+				>Versioned schema</span
+			>
+			<span class="text-xs text-muted-foreground">· v{definition.version}</span>
+		</div>
+		<h2 class="text-xl font-semibold tracking-tight">
+			{definition.name} v{definition.version}
+		</h2>
+		<p class="text-sm leading-6 text-muted-foreground">{definition.description}</p>
 	</div>
 
 	{#if error}
-		<p
-			class="rounded-md border border-destructive/50 bg-destructive/10 p-3 text-sm text-destructive"
-			role="alert"
-		>
-			{error}
-		</p>
+		<Alert.Root variant="destructive" role="alert">
+			<Alert.Title>Appraisal needs attention</Alert.Title>
+			<Alert.Description>{error}</Alert.Description>
+		</Alert.Root>
 	{/if}
 
 	{#each definition.domains as domain (domain.id)}
-		<fieldset class="flex flex-col gap-4 rounded-lg border p-4">
+		<fieldset
+			class="flex min-w-0 flex-col gap-4 rounded-xl border border-primary/15 bg-muted/10 p-4 sm:p-5"
+		>
 			<legend class="px-1 text-base font-semibold">{domain.label}</legend>
-			{#if domain.description}<p class="text-sm text-muted-foreground">
+			{#if domain.description}<p class="text-sm leading-6 text-muted-foreground">
 					{domain.description}
 				</p>{/if}
 			{#each domain.questions as question (question.id)}
-				<div class="flex flex-col gap-2">
+				<div
+					class="flex min-w-0 flex-col gap-2 rounded-lg border border-border/60 bg-background/70 p-3 sm:p-4"
+				>
 					<label for={question.id} class="text-sm font-medium">
 						{question.label}{#if question.required}<span aria-hidden="true">
 								*</span
@@ -204,7 +218,7 @@
 					{#if question.answer_schema.kind === 'enum'}
 						<select
 							id={question.id}
-							class="h-9 rounded-md border bg-transparent px-3 text-sm"
+							class="h-10 w-full rounded-lg border border-border/80 bg-background px-3 text-sm shadow-xs transition outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/30"
 							value={selectedValue(question.id)}
 							onchange={(event) => setResponse(question.id, inputValue(event))}
 							aria-describedby={question.help ? `${question.id}-help` : undefined}
@@ -215,7 +229,9 @@
 								>{/each}
 						</select>
 					{:else if question.answer_schema.kind === 'boolean'}
-						<label class="flex items-center gap-2 text-sm">
+						<label
+							class="flex min-h-10 items-center gap-2 rounded-lg border border-border/80 bg-background px-3 text-sm shadow-xs"
+						>
 							<input
 								id={question.id}
 								type="checkbox"
@@ -236,7 +252,7 @@
 								type="number"
 								min={question.answer_schema.min}
 								max={question.answer_schema.max}
-								class="h-9 w-24 rounded-md border bg-transparent px-3 text-sm"
+								class="h-10 w-24 rounded-lg border border-border/80 bg-background px-3 text-sm shadow-xs transition outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/30"
 								value={typeof formState.responses[question.id] === 'number'
 									? formState.responses[question.id]
 									: ''}
@@ -250,7 +266,7 @@
 					{:else}
 						<textarea
 							id={question.id}
-							class="min-h-24 rounded-md border bg-transparent p-3 text-sm"
+							class="min-h-24 w-full rounded-lg border border-border/80 bg-background p-3 text-sm shadow-xs transition outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/30"
 							maxlength={question.answer_schema.max_length}
 							value={textValue(question.id)}
 							oninput={(event) =>
@@ -263,7 +279,7 @@
 					{/if}
 					{#if originalPrefill && projectId && reportId}
 						<div
-							class="flex flex-col gap-2 rounded-md bg-muted/30 p-3"
+							class="flex flex-col gap-2 rounded-lg border border-primary/15 bg-primary/5 p-3"
 							data-testid={`ai-evidence-${question.id}`}
 						>
 							<span class="text-xs font-medium text-muted-foreground"
@@ -303,18 +319,22 @@
 						</div>
 					{/if}
 					{#if question.requires_evidence}
-						<div class="flex flex-col gap-2">
+						<div
+							class="flex flex-col gap-2 rounded-lg border border-border/60 bg-muted/10 p-3"
+						>
 							<span class="text-xs font-medium text-muted-foreground"
 								>Required evidence blocks</span
 							>
 							{#each formState.evidence[question.id] ?? [] as selection, index (`${question.id}-${index}`)}
-								<div class="flex items-center gap-2">
+								<div
+									class="flex min-w-0 flex-col gap-2 sm:flex-row sm:items-center sm:gap-2"
+								>
 									<label for={`${question.id}-evidence-${index}`} class="sr-only"
 										>Select evidence block {index + 1}</label
 									>
 									<select
 										id={`${question.id}-evidence-${index}`}
-										class="h-9 min-w-0 flex-1 rounded-md border bg-transparent px-3 text-sm"
+										class="h-10 min-w-0 flex-1 rounded-lg border border-border/80 bg-background px-3 text-sm shadow-xs transition outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/30"
 										value={selection.blockId}
 										onchange={(event) =>
 											setEvidence(question.id, index, inputValue(event))}
@@ -327,19 +347,27 @@
 												)}</option
 											>{/each}
 									</select>
-									<button
+									<Button
 										type="button"
-										class="text-xs text-muted-foreground underline"
+										variant="ghost"
+										size="sm"
+										class="self-start text-muted-foreground sm:self-auto"
 										onclick={() => removeEvidence(question.id, index)}
-										>Remove</button
 									>
+										<Trash2 aria-hidden="true" data-icon="inline-start" />Remove
+									</Button>
 								</div>
 							{/each}
-							<button
+							<Button
 								type="button"
-								class="self-start text-xs font-medium text-primary underline"
-								onclick={() => addEvidence(question.id)}>Add evidence block</button
+								variant="outline"
+								size="sm"
+								class="self-start"
+								onclick={() => addEvidence(question.id)}
 							>
+								<Plus aria-hidden="true" data-icon="inline-start" />Add evidence
+								block
+							</Button>
 						</div>
 					{/if}
 				</div>
@@ -351,7 +379,7 @@
 			>
 			<select
 				id={`${domain.id}-judgment`}
-				class="h-9 rounded-md border bg-transparent px-3 text-sm"
+				class="h-10 w-full rounded-lg border border-border/80 bg-background px-3 text-sm shadow-xs transition outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/30"
 				value={domain.judgment.options.some(
 					(option) => option.value === formState.domainJudgments[domain.id]
 				)
@@ -376,7 +404,7 @@
 				>
 				<input
 					id={`${domain.id}-custom-judgment`}
-					class="h-9 rounded-md border bg-transparent px-3 text-sm"
+					class="h-10 w-full rounded-lg border border-border/80 bg-background px-3 text-sm shadow-xs transition outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/30"
 					value={domain.judgment.options.some(
 						(option) => option.value === formState.domainJudgments[domain.id]
 					)
@@ -397,7 +425,9 @@
 		</fieldset>
 	{/each}
 
-	<fieldset class="flex flex-col gap-2 rounded-lg border p-4">
+	<fieldset
+		class="flex min-w-0 flex-col gap-2 rounded-xl border border-primary/15 bg-muted/10 p-4 sm:p-5"
+	>
 		<legend class="px-1 text-base font-semibold">Overall judgment</legend>
 		<label for="overall-judgment" class="text-sm font-medium"
 			>Final judgment{#if definition.overall_judgment.required}<span aria-hidden="true">
@@ -406,7 +436,7 @@
 		>
 		<select
 			id="overall-judgment"
-			class="h-9 rounded-md border bg-transparent px-3 text-sm"
+			class="h-10 w-full rounded-lg border border-border/80 bg-background px-3 text-sm shadow-xs transition outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/30"
 			value={definition.overall_judgment.options.some(
 				(option) => option.value === formState.overallJudgment
 			)
@@ -427,7 +457,7 @@
 			>
 			<input
 				id="overall-custom-judgment"
-				class="h-9 rounded-md border bg-transparent px-3 text-sm"
+				class="h-10 w-full rounded-lg border border-border/80 bg-background px-3 text-sm shadow-xs transition outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/30"
 				value={definition.overall_judgment.options.some(
 					(option) => option.value === formState.overallJudgment
 				)
@@ -443,11 +473,14 @@
 		{/if}
 	</fieldset>
 
-	<button
+	<Button
 		type="submit"
-		class="inline-flex min-h-10 items-center justify-center rounded-md bg-primary px-4 py-2 text-sm font-medium text-primary-foreground hover:bg-primary/90 disabled:pointer-events-none disabled:opacity-50"
-		disabled={submitting || (hasRequiredEvidence && blocks.length === 0)}>{submitLabel}</button
+		class="w-full sm:w-fit"
+		disabled={submitting || (hasRequiredEvidence && blocks.length === 0)}
 	>
+		{#if submitting}<Spinner data-icon="inline-start" />{/if}
+		<CheckCircle2 aria-hidden="true" data-icon="inline-start" />{submitLabel}
+	</Button>
 	{#if hasRequiredEvidence && blocks.length === 0}<p class="text-xs text-muted-foreground">
 			A parsed document block is required before completing an appraisal.
 		</p>{/if}

@@ -41,38 +41,42 @@
 		aria-expanded={workspace.projectSelectorOpen}
 		aria-label="Select project"
 		class={cn(
-			'w-full justify-between gap-2 border-accent',
+			'w-full justify-between gap-2 border border-border/70 bg-background/70 shadow-xs hover:border-primary/40 hover:bg-muted/40',
 			isCollapsed && 'size-9 shrink-0 justify-center p-0'
 		)}
 	>
 		<span class="flex min-w-0 items-center gap-2">
-			<FoldersIcon />
+			<FoldersIcon data-icon="inline-start" aria-hidden="true" />
 			<span class={cn('truncate', isCollapsed && 'sr-only')}>
 				{selectedProject?.name ?? 'Select project'}
 			</span>
 		</span>
-		<ChevronsUpDownIcon class={cn('opacity-50', isCollapsed && 'hidden')} />
+		<ChevronsUpDownIcon
+			data-icon="inline-end"
+			aria-hidden="true"
+			class={cn('opacity-50', isCollapsed && 'hidden')}
+		/>
 	</Button>
 {/snippet}
 
 {#snippet projectCommand()}
-	<Command.Root>
+	<Command.Root class="min-w-0">
 		<Command.Input placeholder="Search projects..." />
 		<Command.List>
-			<Command.Empty>No projects found.</Command.Empty>
-			<Command.Group class="max-h-48 overflow-y-auto pr-1">
+			<Command.Empty class="p-4 text-sm">No projects found.</Command.Empty>
+			<Command.Group class="max-h-48 overflow-y-auto px-1 pb-1">
 				{#each workspace.projects as project (project.id)}
 					<Command.Item
 						value={project.id}
 						onSelect={() => workspace.selectProjectFromSelector(project.id)}
 						data-checked={project.id === workspace.selectedProjectId}
 					>
-						<FoldersIcon />
+						<FoldersIcon aria-hidden="true" />
 						<span class="truncate">{project.name}</span>
 					</Command.Item>
 				{/each}
 			</Command.Group>
-			<div class="border-t p-2">
+			<div class="border-t border-border/70 p-2">
 				<PaginationLoadMore
 					hasNextPage={workspace.projectsHasNextPage}
 					isLoading={workspace.projectsLoadingMore}
@@ -82,16 +86,16 @@
 				/>
 			</div>
 			<Command.Separator />
-			<Command.Group>
+			<Command.Group class="p-1">
 				<Command.Item value="Create project" onSelect={workspace.openCreateFromSelector}>
-					<PlusIcon />
+					<PlusIcon aria-hidden="true" />
 					Create project
 				</Command.Item>
 				<Command.Item
 					value="Manage projects"
 					onSelect={workspace.openManagementFromSelector}
 				>
-					<SettingsIcon />
+					<SettingsIcon aria-hidden="true" />
 					Manage projects
 				</Command.Item>
 			</Command.Group>
@@ -106,14 +110,14 @@
 				{@render trigger(props)}
 			{/snippet}
 		</Drawer.Trigger>
-		<Drawer.Content>
-			<Drawer.Header>
+		<Drawer.Content class="max-h-[88svh] gap-0 p-0">
+			<Drawer.Header class="border-b border-border/70 p-5 text-left">
 				<Drawer.Title>Select project</Drawer.Title>
 				<Drawer.Description
 					>Search existing projects or create a new one.</Drawer.Description
 				>
 			</Drawer.Header>
-			<div class="border-t">
+			<div class="min-h-0 overflow-y-auto">
 				{@render projectCommand()}
 			</div>
 		</Drawer.Content>
@@ -125,15 +129,15 @@
 				{@render trigger(props)}
 			{/snippet}
 		</Popover.Trigger>
-		<Popover.Content class="w-72 p-0" align="start">
+		<Popover.Content class="w-[min(20rem,calc(100vw-2rem))] p-0" align="start">
 			{@render projectCommand()}
 		</Popover.Content>
 	</Popover.Root>
 {/if}
 
 <Dialog.Root bind:open={workspace.projectCreateOpen}>
-	<Dialog.Content>
-		<Dialog.Header>
+	<Dialog.Content class="border-primary/20 sm:max-w-lg">
+		<Dialog.Header class="border-b border-border/70 pb-4">
 			<Dialog.Title>Create project</Dialog.Title>
 			<Dialog.Description>Define a research workspace for DOI ingestion.</Dialog.Description>
 		</Dialog.Header>

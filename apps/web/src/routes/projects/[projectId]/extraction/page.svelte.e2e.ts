@@ -55,7 +55,7 @@ const proposalField = {
 	value: { kind: 'number', value: 42 }
 } satisfies AiExtractedFieldDto;
 
-type DecisionMode = 'accept' | 'conflict';
+type DecisionMode = 'accept' | 'conflict' | 'empty' | 'error' | 'loading';
 type MockState = {
 	fields: Array<typeof field>;
 	values: Array<{
@@ -123,7 +123,9 @@ async function mockExtractionPage(page: Page, decisionMode: DecisionMode): Promi
 		route.fulfill({ json: { items: [], next_cursor: null } })
 	);
 	await page.route(/\/api\/projects\/project-1\/studies(?:\?.*)?$/, (route) =>
-		route.fulfill({ json: { items: [study], next_cursor: null } })
+		route.fulfill({
+			json: { items: decisionMode === 'empty' ? [] : [study], next_cursor: null }
+		})
 	);
 	await page.route(`${api}/projects/project-1/extraction/fields`, async (route) => {
 		if (route.request().method() === 'POST') {
@@ -131,6 +133,13 @@ async function mockExtractionPage(page: Page, decisionMode: DecisionMode): Promi
 			state.fields = [field];
 			await route.fulfill({ status: 201, json: field });
 			return;
+		}
+		if (decisionMode === 'error') {
+			await route.fulfill({ status: 500, json: { message: 'Schema service unavailable.' } });
+			return;
+		}
+		if (decisionMode === 'loading') {
+			await new Promise((resolve) => setTimeout(resolve, 750));
 		}
 		await route.fulfill({ json: state.fields });
 	});
@@ -298,4 +307,61 @@ test('keeps a proposal visible when approval conflicts', async ({ page }) => {
 		reason: 'Human reviewer rejected the data extraction proposal.'
 	});
 	expect(rejectBody).not.toHaveProperty('reviewed_payload');
+});
+
+test('shows deterministic loading and empty states before review begins', async ({ page }) => {
+	await mockExtractionPage(page, 'loading');
+	await page.goto('/projects/project-1/extraction?study=study-1');
+	await expect(page.getByTestId('extraction-page')).toHaveAttribute(
+		'data-extraction-state',
+		'loading'
+	);
+	await expect(page.getByTestId('extraction-fields-loading')).toBeVisible();
+	await expect(page.getByTestId('extraction-review-loading')).toBeVisible();
+
+	await page.unrouteAll({ behavior: 'ignoreErrors' });
+	await mockExtractionPage(page, 'empty');
+	await page.goto('/projects/project-1/extraction');
+	await expect(page.getByTestId('extraction-page')).toHaveAttribute(
+		'data-extraction-state',
+		'empty'
+	);
+	await expect(page.getByTestId('extraction-study-empty')).toContainText('No studies yet');
+});
+
+test('surfaces schema API errors and invalid field input accessibly', async ({ page }) => {
+	await mockExtractionPage(page, 'error');
+	await page.goto('/projects/project-1/extraction?study=study-1');
+	await expect(page.getByTestId('extraction-page')).toHaveAttribute(
+		'data-extraction-state',
+		'error'
+	);
+	await expect(page.getByTestId('extraction-query-error')).toContainText('unavailable');
+
+	await page.unrouteAll({ behavior: 'ignoreErrors' });
+	await mockExtractionPage(page, 'accept');
+	await page.goto('/projects/project-1/extraction?study=study-1');
+	await page.getByRole('button', { name: 'Add field' }).click();
+	await expect(page.getByRole('alert').filter({ hasText: 'required' })).toBeVisible();
+	await expect(page.locator('#extraction-field-key')).toHaveAttribute('aria-invalid', 'true');
+});
+
+test('keeps the review workspace within desktop and mobile bounds in dark mode', async ({
+	page
+}) => {
+	await page.emulateMedia({ colorScheme: 'dark', reducedMotion: 'reduce' });
+	for (const viewport of [
+		{ width: 1440, height: 900 },
+		{ width: 390, height: 844 }
+	]) {
+		await page.setViewportSize(viewport);
+		await mockExtractionPage(page, 'accept');
+		await page.goto('/projects/project-1/extraction?study=study-1');
+		await expect(page.getByRole('heading', { name: 'Extraction', exact: true })).toBeVisible();
+		const overflow = await page.evaluate(
+			() => document.documentElement.scrollWidth > document.documentElement.clientWidth
+		);
+		expect(overflow, `unexpected horizontal overflow at ${viewport.width}px`).toBe(false);
+		await page.unrouteAll({ behavior: 'ignoreErrors' });
+	}
 });

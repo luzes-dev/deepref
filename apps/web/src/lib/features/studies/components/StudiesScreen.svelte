@@ -33,8 +33,10 @@
 		getListProjectStudiesQueryKey,
 		getListProjectStudyHistoryQueryKey
 	} from '$lib/api/generated/studies/studies';
-	import * as Card from '$lib/components/ui/card';
+	import * as Alert from '$lib/components/ui/alert';
+	import { Badge } from '$lib/components/ui/badge';
 	import { Separator } from '$lib/components/ui/separator';
+	import { PageHeader, PageToolbar, StatePanel, Surface } from '$lib/components/layout';
 	import { useQueryClient } from '@tanstack/svelte-query';
 	import { ReviewRunObserver } from '$lib/features/ai-assistance/review-run-observer.svelte';
 	import { parseStudyLocation, updateStudyLocation } from '../url';
@@ -502,98 +504,112 @@
 	/>
 </svelte:head>
 
-<main class="mx-auto flex max-w-7xl flex-col gap-6 p-6">
-	<div>
-		<p class="text-sm text-muted-foreground">Evidence identity</p>
-		<h1 class="text-3xl font-semibold tracking-tight">Studies</h1>
-		<p class="mt-2 max-w-3xl text-muted-foreground">
-			Group reports from one investigation so follow-ups and safety analyses are not counted
-			as independent evidence.
-		</p>
-	</div>
-
-	{#if formError}
-		<p
-			class="rounded-md border border-destructive/50 bg-destructive/10 p-3 text-sm text-destructive"
-			role="alert"
-		>
-			{formError}
-		</p>
-	{/if}
-
-	<div class="grid gap-6 lg:grid-cols-[20rem_1fr]">
-		<StudyListPanel
-			{studies}
-			{selectedStudyId}
-			pending={studiesQuery.isPending}
-			creating={createMutation.isPending}
-			bind:title={newTitle}
-			onCreate={() => void createStudy()}
-			onSelect={(studyId) => void selectStudy(studyId)}
+<div class="flex h-full min-h-0 flex-col overflow-auto bg-background" data-testid="studies-page">
+	<div class="mx-auto flex w-full max-w-[1440px] flex-col gap-5 p-4 sm:gap-6 sm:p-6 lg:p-8">
+		<PageHeader
+			eyebrow="Evidence workspace / Review"
+			title="Studies"
+			description="Group reports from one investigation so follow-ups and safety analyses are not counted as independent evidence."
 		/>
 
-		{#if selectedStudy}
-			<div class="flex flex-col gap-6">
-				<StudyDetailsPanel
-					study={selectedStudy}
-					{designs}
-					bind:renameTitle
-					renaming={renameMutation.isPending}
-					classifying={classifyMutation.isPending}
-					onRename={() => void renameStudy()}
-					onClassify={classify}
+		<PageToolbar label="Study identity workflow status">
+			<div class="flex flex-wrap items-center gap-2">
+				<Badge variant="secondary"
+					>{studies.length} {studies.length === 1 ? 'group' : 'groups'}</Badge
 				>
-					<StudyClassificationAssistance
-						proposal={activeClassificationProposal}
-						pending={classificationProposalsQuery.isPending}
-						errorMessage={classificationErrorMessage}
-						conflict={classificationConflict}
-						providerUnavailable={classificationProviderUnavailable}
-						action={classificationAction}
-						decisionPending={pendingClassificationProposalId !== null}
-						{studyLabel}
-						onDecide={(decision) => void decideClassification(decision)}
-					/>
-
-					<Separator />
-
-					<StudyMembershipPanel
-						study={selectedStudy}
-						{reports}
-						{selectedReport}
-						bind:reportId
-						bind:role
-						assigning={membershipMutation.isPending}
-						membershipPending={membershipQuery.isPending || membershipQuery.isFetching}
-						onAssign={() => void assignReport()}
-						onUnassign={(selectedReportId) => void unassignReport(selectedReportId)}
-					/>
-
-					<StudyGroupingAssistance
-						{reportId}
-						proposal={activeGroupingProposal}
-						payload={activeGroupingPayload}
-						membership={selectedMembership}
-						pending={groupingProposalsQuery.isPending}
-						errorMessage={groupingErrorMessage}
-						conflict={groupingConflict}
-						providerUnavailable={groupingProviderUnavailable}
-						action={groupingAction ?? (groupingReviewRun.isActive ? 'generate' : null)}
-						decisionPending={pendingGroupingProposalId !== null}
-						{studyLabel}
-						onGenerate={() => void generateGrouping()}
-						onDecide={(decision) => void decideGrouping(decision)}
-					/>
-				</StudyDetailsPanel>
-
-				<StudyHistoryPanel {history} />
+				<Badge variant={selectedStudy ? 'default' : 'outline'}>
+					{selectedStudy ? 'Study selected' : 'Select a study'}
+				</Badge>
+				{#if selectedStudy}<Badge variant="outline">Revision {selectedStudy.revision}</Badge
+					>{/if}
 			</div>
-		{:else}
-			<Card.Root>
-				<Card.Content class="p-10 text-center text-muted-foreground">
-					Select a study group or create one to inspect membership and provenance.
-				</Card.Content>
-			</Card.Root>
+		</PageToolbar>
+
+		{#if formError}
+			<Alert.Root variant="destructive" data-testid="studies-form-error">
+				<Alert.Title>Study update unavailable</Alert.Title>
+				<Alert.Description>{formError}</Alert.Description>
+			</Alert.Root>
 		{/if}
+
+		<div class="grid min-h-0 gap-5 lg:grid-cols-[minmax(18rem,22rem)_minmax(0,1fr)]">
+			<StudyListPanel
+				{studies}
+				{selectedStudyId}
+				pending={studiesQuery.isPending}
+				creating={createMutation.isPending}
+				bind:title={newTitle}
+				onCreate={() => void createStudy()}
+				onSelect={(studyId) => void selectStudy(studyId)}
+			/>
+
+			{#if selectedStudy}
+				<div class="flex flex-col gap-6">
+					<StudyDetailsPanel
+						study={selectedStudy}
+						{designs}
+						bind:renameTitle
+						renaming={renameMutation.isPending}
+						classifying={classifyMutation.isPending}
+						onRename={() => void renameStudy()}
+						onClassify={classify}
+					>
+						<StudyClassificationAssistance
+							proposal={activeClassificationProposal}
+							pending={classificationProposalsQuery.isPending}
+							errorMessage={classificationErrorMessage}
+							conflict={classificationConflict}
+							providerUnavailable={classificationProviderUnavailable}
+							action={classificationAction}
+							decisionPending={pendingClassificationProposalId !== null}
+							{studyLabel}
+							onDecide={(decision) => void decideClassification(decision)}
+						/>
+
+						<Separator />
+
+						<StudyMembershipPanel
+							study={selectedStudy}
+							{reports}
+							{selectedReport}
+							bind:reportId
+							bind:role
+							assigning={membershipMutation.isPending}
+							membershipPending={membershipQuery.isPending ||
+								membershipQuery.isFetching}
+							onAssign={() => void assignReport()}
+							onUnassign={(selectedReportId) => void unassignReport(selectedReportId)}
+						/>
+
+						<StudyGroupingAssistance
+							{reportId}
+							proposal={activeGroupingProposal}
+							payload={activeGroupingPayload}
+							membership={selectedMembership}
+							pending={groupingProposalsQuery.isPending}
+							errorMessage={groupingErrorMessage}
+							conflict={groupingConflict}
+							providerUnavailable={groupingProviderUnavailable}
+							action={groupingAction ??
+								(groupingReviewRun.isActive ? 'generate' : null)}
+							decisionPending={pendingGroupingProposalId !== null}
+							{studyLabel}
+							onGenerate={() => void generateGrouping()}
+							onDecide={(decision) => void decideGrouping(decision)}
+						/>
+					</StudyDetailsPanel>
+
+					<StudyHistoryPanel {history} />
+				</div>
+			{:else}
+				<Surface as="section" tone="subtle" class="p-4 sm:p-6">
+					<StatePanel
+						state="empty"
+						title="No study selected"
+						description="Select a study group or create one to inspect membership and provenance."
+					/>
+				</Surface>
+			{/if}
+		</div>
 	</div>
-</main>
+</div>

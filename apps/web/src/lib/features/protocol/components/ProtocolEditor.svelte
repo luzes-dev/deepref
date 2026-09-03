@@ -1,6 +1,7 @@
 <script lang="ts">
 	import * as Alert from '$lib/components/ui/alert';
 	import * as Card from '$lib/components/ui/card';
+	import * as Empty from '$lib/components/ui/empty';
 	import * as Field from '$lib/components/ui/field';
 	import { Badge } from '$lib/components/ui/badge';
 	import { Button } from '$lib/components/ui/button';
@@ -15,6 +16,10 @@
 	import SaveIcon from '@lucide/svelte/icons/save';
 	import ShieldCheckIcon from '@lucide/svelte/icons/shield-check';
 	import Trash2Icon from '@lucide/svelte/icons/trash-2';
+	import BookOpenIcon from '@lucide/svelte/icons/book-open';
+	import CheckCircle2Icon from '@lucide/svelte/icons/circle-check';
+	import LockKeyholeIcon from '@lucide/svelte/icons/lock-keyhole';
+	import ListChecksIcon from '@lucide/svelte/icons/list-checks';
 	import { page } from '$app/state';
 	import { useQueryClient } from '@tanstack/svelte-query';
 	import {
@@ -473,20 +478,24 @@
 	/>
 </svelte:head>
 
-<div class="flex h-full min-h-0 flex-col gap-4 overflow-auto p-4 md:p-6">
-	<header class="flex flex-wrap items-start justify-between gap-4">
-		<div class="flex flex-col gap-2">
-			<div class="flex items-center gap-2 text-sm text-muted-foreground">
-				<ShieldCheckIcon />
-				Evidence workspace / protocol
+<div
+	class="mx-auto flex h-full min-h-0 w-full max-w-[1480px] flex-col gap-5 overflow-auto p-4 md:gap-6 md:p-8"
+>
+	<header class="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
+		<div class="flex min-w-0 flex-col gap-2">
+			<div
+				class="flex flex-wrap items-center gap-2 text-xs font-semibold tracking-[0.12em] text-primary uppercase"
+			>
+				<ShieldCheckIcon aria-hidden="true" /> Evidence workspace
+				<span class="text-muted-foreground">/</span> protocol
 			</div>
-			<h1 class="text-2xl font-semibold">Review protocol</h1>
-			<p class="max-w-3xl text-sm text-muted-foreground">
+			<h1 class="editorial-title text-4xl leading-none sm:text-5xl">Review protocol</h1>
+			<p class="max-w-3xl text-sm leading-6 text-muted-foreground sm:text-base">
 				Define the scientific question and the ordered eligibility rules used by every
 				screening decision.
 			</p>
 		</div>
-		<div class="flex flex-wrap items-center gap-2">
+		<div class="flex flex-wrap items-center gap-2 lg:justify-end">
 			<Badge variant="outline">v{draft.version}</Badge>
 			<Badge variant={draft.status === 'published' ? 'default' : 'secondary'}>
 				{draft.status}
@@ -498,7 +507,7 @@
 	</header>
 
 	{#if errorMessage}
-		<Alert.Root variant="destructive">
+		<Alert.Root variant="destructive" role="alert">
 			<Alert.Title
 				>{conflict ? 'Protocol changed elsewhere' : 'Protocol unavailable'}</Alert.Title
 			>
@@ -510,15 +519,18 @@
 			{/if}
 		</Alert.Root>
 	{:else if protocolQuery.isPending}
-		<Card.Root>
-			<Card.Content class="flex items-center gap-3 py-8">
+		<Card.Root class="border-primary/15">
+			<Card.Content class="flex items-center gap-3 py-10" aria-live="polite">
 				<Spinner /> Loading protocol…
 			</Card.Content>
 		</Card.Root>
 	{:else if !notFound && !protocol}
-		<Card.Root>
-			<Card.Content class="flex flex-col gap-3 py-8">
-				<p class="font-medium">Protocol could not be loaded.</p>
+		<Card.Root class="border-destructive/30">
+			<Card.Content class="flex flex-col gap-3 py-10">
+				<div class="flex items-center gap-2">
+					<BookOpenIcon class="text-destructive" aria-hidden="true" />
+					<p class="font-medium">Protocol could not be loaded.</p>
+				</div>
 				<Button variant="outline" onclick={() => void protocolQuery.refetch()}>
 					<RefreshCwIcon data-icon="inline-start" />Retry
 				</Button>
@@ -527,7 +539,7 @@
 	{:else}
 		{#if isPublished}
 			<Alert.Root>
-				<ShieldCheckIcon />
+				<LockKeyholeIcon />
 				<Alert.Title>Published protocol is immutable</Alert.Title>
 				<Alert.Description>
 					Screening decisions remain tied to this exact version. Choose Amend to create a
@@ -536,7 +548,8 @@
 				<Alert.Action onclick={beginAmendment}>Amend published version</Alert.Action>
 			</Alert.Root>
 		{:else if amending}
-			<Alert.Root>
+			<Alert.Root class="border-primary/20 bg-primary/5">
+				<BookOpenIcon />
 				<Alert.Title>Amendment draft</Alert.Title>
 				<Alert.Description>
 					Saving this draft sends the published version id and revision so the server can
@@ -545,15 +558,21 @@
 			</Alert.Root>
 		{/if}
 
-		<div class="grid gap-4 xl:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
-			<Card.Root>
-				<Card.Header>
-					<Card.Title>Research question</Card.Title>
+		<div class="grid gap-5 xl:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
+			<Card.Root class="border-primary/15">
+				<Card.Header class="gap-2 border-b border-border/60 pb-4">
+					<div class="flex items-center gap-2">
+						<span
+							class="flex size-8 items-center justify-center rounded-lg bg-primary/10 text-primary"
+							><BookOpenIcon aria-hidden="true" /></span
+						>
+						<Card.Title>Research question</Card.Title>
+					</div>
 					<Card.Description
 						>Published text becomes part of the scientific artifact.</Card.Description
 					>
 				</Card.Header>
-				<Card.Content>
+				<Card.Content class="pt-5">
 					<Field.Group>
 						<Field.Field data-invalid={!draft.name.trim()}>
 							<Field.Label for="protocol-name">Name</Field.Label>
@@ -600,14 +619,20 @@
 				</Card.Content>
 			</Card.Root>
 
-			<Card.Root>
-				<Card.Header>
-					<Card.Title>Framework</Card.Title>
+			<Card.Root class="border-primary/15">
+				<Card.Header class="gap-2 border-b border-border/60 pb-4">
+					<div class="flex items-center gap-2">
+						<span
+							class="flex size-8 items-center justify-center rounded-lg bg-primary/10 text-primary"
+							><ListChecksIcon aria-hidden="true" /></span
+						>
+						<Card.Title>Framework</Card.Title>
+					</div>
 					<Card.Description
 						>Choose a structured framework or define your own fields.</Card.Description
 					>
 				</Card.Header>
-				<Card.Content class="flex flex-col gap-4">
+				<Card.Content class="flex flex-col gap-4 pt-5">
 					<Field.Field>
 						<Field.Label>Framework</Field.Label>
 						<Select.Root
@@ -705,23 +730,36 @@
 			</Card.Root>
 		</div>
 
-		<Card.Root>
-			<Card.Header class="flex-row items-start justify-between gap-3">
-				<div>
-					<Card.Title>Eligibility criteria</Card.Title>
-					<Card.Description
-						>Ordered inclusion and exclusion rules for each screening stage.</Card.Description
+		<Card.Root class="border-primary/15">
+			<Card.Header
+				class="flex-row items-start justify-between gap-3 border-b border-border/60 pb-4"
+			>
+				<div class="flex items-start gap-3">
+					<span
+						class="flex size-8 shrink-0 items-center justify-center rounded-lg bg-primary/10 text-primary"
+						><ListChecksIcon aria-hidden="true" /></span
 					>
+					<div>
+						<Card.Title>Eligibility criteria</Card.Title>
+						<Card.Description
+							>Ordered inclusion and exclusion rules for each screening stage.</Card.Description
+						>
+					</div>
 				</div>
 				<Button variant="outline" disabled={!editable} onclick={addCriterion}>
 					<PlusIcon data-icon="inline-start" />Add criterion
 				</Button>
 			</Card.Header>
-			<Card.Content class="flex flex-col gap-4">
+			<Card.Content class="flex flex-col gap-4 pt-5">
 				{#each draft.criteria as criterion, index (criterion.clientId)}
-					<div class="rounded-lg border p-4">
+					<div class="rounded-xl border bg-muted/15 p-4 sm:p-5">
 						<div class="mb-4 flex flex-wrap items-center justify-between gap-2">
-							<Badge variant="outline">Criterion {index + 1}</Badge>
+							<div class="flex items-center gap-2">
+								<span
+									class="flex size-6 items-center justify-center rounded-full border border-primary/30 text-xs font-semibold text-primary"
+									>{index + 1}</span
+								><span class="text-sm font-semibold">Criterion {index + 1}</span>
+							</div>
 							<div class="flex items-center gap-1">
 								<Button
 									variant="ghost"
@@ -865,11 +903,16 @@
 						</Field.Group>
 					</div>
 				{:else}
-					<p
-						class="rounded-lg border border-dashed p-6 text-center text-sm text-muted-foreground"
-					>
-						No eligibility criteria yet. Add the first inclusion or exclusion rule.
-					</p>
+					<Empty.Root class="border-dashed p-8">
+						<Empty.Media variant="icon"><ListChecksIcon /></Empty.Media>
+						<Empty.Header>
+							<Empty.Title>No eligibility criteria yet</Empty.Title>
+							<Empty.Description
+								>Add the first inclusion or exclusion rule to make the protocol
+								actionable.</Empty.Description
+							>
+						</Empty.Header>
+					</Empty.Root>
 				{/each}
 			</Card.Content>
 		</Card.Root>
@@ -881,21 +924,31 @@
 			</Alert.Root>
 		{/if}
 
-		<div class="flex flex-wrap justify-end gap-2 border-t pt-4">
-			{#if isPublished}
-				<Button variant="outline" onclick={beginAmendment}>Amend published version</Button>
-			{:else}
-				<Button variant="outline" disabled={!canSave} onclick={save}>
-					{#if saveProtocol.isPending}<Spinner data-icon="inline-start" />{:else}<SaveIcon
-							data-icon="inline-start"
-						/>{/if}
-					Save draft
-				</Button>
-				<Button disabled={!canPublish} onclick={publish}>
-					{#if publishProtocol.isPending}<Spinner data-icon="inline-start" />{/if}
-					Publish version
-				</Button>
-			{/if}
+		<div
+			class="flex flex-wrap items-center justify-between gap-3 border-t border-border/60 pt-4"
+		>
+			<div class="flex items-center gap-2 text-xs text-muted-foreground">
+				{#if dirty}<span class="size-2 rounded-full bg-warning" aria-hidden="true"></span> Unsaved
+					changes{:else}<CheckCircle2Icon aria-hidden="true" /> Draft is saved{/if}
+			</div>
+			<div class="flex flex-wrap justify-end gap-2">
+				{#if isPublished}
+					<Button variant="outline" onclick={beginAmendment}
+						>Amend published version</Button
+					>
+				{:else}
+					<Button variant="outline" disabled={!canSave} onclick={save}>
+						{#if saveProtocol.isPending}<Spinner
+								data-icon="inline-start"
+							/>{:else}<SaveIcon data-icon="inline-start" />{/if}
+						Save draft
+					</Button>
+					<Button disabled={!canPublish} onclick={publish}>
+						{#if publishProtocol.isPending}<Spinner data-icon="inline-start" />{/if}
+						Publish version
+					</Button>
+				{/if}
+			</div>
 		</div>
 	{/if}
 </div>

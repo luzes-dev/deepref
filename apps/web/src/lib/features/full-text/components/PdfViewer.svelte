@@ -1,6 +1,10 @@
 <script lang="ts">
 	import type { PDFDocumentProxy, PDFPageProxy } from 'pdfjs-dist/types/src/display/api';
 	import type { DocumentBlockDto, DocumentPageDto } from '$lib/api/generated/models';
+	import * as Alert from '$lib/components/ui/alert';
+	import * as Empty from '$lib/components/ui/empty';
+	import { Skeleton } from '$lib/components/ui/skeleton';
+	import { FileWarning } from '@lucide/svelte';
 	import PdfPage from './PdfPage.svelte';
 
 	let {
@@ -80,17 +84,32 @@
 
 <div
 	bind:this={container}
-	class="flex max-h-[55rem] flex-col gap-6 overflow-auto rounded-lg border bg-muted/30 p-4"
+	class="flex max-h-[55rem] min-h-[24rem] flex-col gap-6 overflow-auto rounded-xl border bg-muted/30 p-4 shadow-inner sm:p-6"
 	aria-label="PDF viewer"
+	data-testid="pdf-viewer"
 >
 	{#if loading}
-		<p class="p-8 text-center text-sm text-muted-foreground" role="status">
-			Loading PDF pages…
-		</p>
+		<div class="flex flex-col gap-3 p-8" role="status" aria-label="Loading PDF pages">
+			<Skeleton class="mx-auto h-8 w-40" />
+			<Skeleton class="mx-auto h-[28rem] w-full max-w-2xl" />
+			<p class="text-center text-sm text-muted-foreground">Loading PDF pages…</p>
+		</div>
 	{:else if errorMessage}
-		<p class="p-8 text-center text-sm text-destructive" role="alert">{errorMessage}</p>
+		<Alert.Root variant="destructive" class="m-4">
+			<FileWarning aria-hidden="true" />
+			<Alert.Title>PDF could not be rendered</Alert.Title>
+			<Alert.Description>{errorMessage}</Alert.Description>
+		</Alert.Root>
 	{:else if pages.length === 0}
-		<p class="p-8 text-center text-sm text-muted-foreground">No usable PDF is available yet.</p>
+		<Empty.Root class="min-h-[22rem] border-dashed">
+			<Empty.Media variant="icon"><FileWarning /></Empty.Media>
+			<Empty.Header>
+				<Empty.Title>No usable PDF is available yet</Empty.Title>
+				<Empty.Description
+					>Attach a PDF or wait for parsing to finish before reviewing evidence blocks.</Empty.Description
+				>
+			</Empty.Header>
+		</Empty.Root>
 	{:else}
 		{#each pages as page (page.pageNumber)}
 			<PdfPage {page} {blocks} {pageMetadata} {selectedBlockId} {onBlockSelect} />

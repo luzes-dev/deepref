@@ -83,6 +83,7 @@
 						value={internalFilterValue}
 						max={Math.max(1, maxInternal)}
 						step={1}
+						thumbLabel="Minimum internal citations"
 						onValueChange={(value) =>
 							internalColumn.setFilterValue(value ? Number(value) : undefined)}
 					/>

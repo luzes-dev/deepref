@@ -40,6 +40,7 @@
 		class="absolute rounded-sm border-2 transition-colors focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none {selected
 			? 'border-primary bg-primary/25'
 			: 'border-primary/50 bg-primary/5 hover:bg-primary/20'}"
+		data-selected={selected ? 'true' : undefined}
 		style:left={`${pixels.x}px`}
 		style:top={`${pixels.y}px`}
 		style:width={`${pixels.width}px`}
