@@ -105,12 +105,7 @@ pub fn select_fuzzy_candidate(
     let mut scored = candidates
         .into_iter()
         .map(|candidate| {
-            let score = score_candidate(
-                source_title,
-                source_first_author,
-                source_year,
-                &candidate,
-            );
+            let score = score_candidate(source_title, source_first_author, source_year, &candidate);
             (candidate, score)
         })
         .collect::<Vec<_>>();
