@@ -40,7 +40,8 @@ export function assertAccessDenied(result: DenialResult): void {
   const redirect = [301, 302, 303, 307, 308].includes(result.statusCode);
   if (redirect && result.location) {
     const location = new URL(result.location, "https://invalid.example");
-    if (location.hostname.endsWith("cloudflareaccess.com") || location.pathname.startsWith("/cdn-cgi/access/login")) return;
+    const isCloudflareAccessHost = location.hostname === "cloudflareaccess.com" || location.hostname.endsWith(".cloudflareaccess.com");
+    if (isCloudflareAccessHost || location.pathname.startsWith("/cdn-cgi/access/login")) return;
   }
   const server = Array.isArray(result.headers.server) ? result.headers.server.join(" ") : result.headers.server ?? "";
   const hasCloudflareEvidence = /cloudflare/i.test(server) && Boolean(result.headers["cf-ray"]);
