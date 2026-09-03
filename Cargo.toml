@@ -11,7 +11,6 @@ members = [
     "crates/providers",
     "crates/events",
     "crates/graph",
-    "crates/metrics",
     "crates/telemetry",
     "crates/ai",
     "crates/review",
@@ -37,7 +36,6 @@ deepref-crossref = { path = "crates/crossref" }
 deepref-providers = { path = "crates/providers" }
 deepref-events = { path = "crates/events" }
 deepref-graph = { path = "crates/graph" }
-deepref-metrics = { path = "crates/metrics" }
 deepref-telemetry = { path = "crates/telemetry" }
 deepref-ai = { path = "crates/ai" }
 deepref-review = { path = "crates/review" }
