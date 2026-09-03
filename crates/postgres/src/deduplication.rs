@@ -213,15 +213,9 @@ async fn resolve_one_record(
     let identifiers = lock_record_identifiers(tx, source.id).await?;
     let normalized_title = normalize_record_title(tx, project_id, &source).await?;
 
-    if let Some(result) = resolve_identifier_matches(
-        tx,
-        project_id,
-        &source,
-        &identifiers,
-        actor_kind,
-        actor_id,
-    )
-    .await?
+    if let Some(result) =
+        resolve_identifier_matches(tx, project_id, &source, &identifiers, actor_kind, actor_id)
+            .await?
     {
         return Ok(result);
     }

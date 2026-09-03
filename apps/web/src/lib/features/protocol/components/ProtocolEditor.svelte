@@ -122,7 +122,8 @@
 
 		if (value === 'custom') {
 			const customFields =
-				draft.customFrameworkSnapshot ?? customFieldsFromRecord(draft.frameworkFields, nextClientId);
+				draft.customFrameworkSnapshot ??
+				customFieldsFromRecord(draft.frameworkFields, nextClientId);
 			draft.customFrameworkFields = cloneCustomFields(customFields);
 			draft.frameworkFields = {};
 		} else {
