@@ -76,6 +76,20 @@ pub struct StudyEventRecord {
     pub created_at: DateTime<Utc>,
 }
 
+struct StudyEventInsert<'a> {
+    project_id: Uuid,
+    study_id: Uuid,
+    report_id: Option<Uuid>,
+    event_type: &'a str,
+    before_study_id: Option<Uuid>,
+    result_study_id: Option<Uuid>,
+    before_revision: i64,
+    result_revision: i64,
+    before_snapshot: Value,
+    result_snapshot: Value,
+    payload: Value,
+}
+
 #[derive(Debug, Error)]
 pub enum StudyError {
     #[error("database operation failed")]
@@ -210,21 +224,23 @@ pub async fn create_study(
     .await?;
     let study_event_id = insert_study_event(
         &mut transaction,
-        command.project_id.into(),
-        command.study_id.as_uuid(),
-        None,
-        "study_created",
-        None,
-        Some(command.study_id.as_uuid()),
-        0,
-        0,
-        json!({}),
-        json!({ "title": command.title.as_str(), "revision": 0 }),
-        study_event_payload(StudyEvent::StudyCreated(StudyCreated {
-            study_id: command.study_id,
-            title: command.title.clone(),
-            actor: command.actor.clone(),
-        }))?,
+        StudyEventInsert {
+            project_id: command.project_id.into(),
+            study_id: command.study_id.as_uuid(),
+            report_id: None,
+            event_type: "study_created",
+            before_study_id: None,
+            result_study_id: Some(command.study_id.as_uuid()),
+            before_revision: 0,
+            result_revision: 0,
+            before_snapshot: json!({}),
+            result_snapshot: json!({ "title": command.title.as_str(), "revision": 0 }),
+            payload: study_event_payload(StudyEvent::StudyCreated(StudyCreated {
+                study_id: command.study_id,
+                title: command.title.clone(),
+                actor: command.actor.clone(),
+            }))?,
+        },
         &command.actor,
     )
     .await?;
@@ -280,23 +296,25 @@ pub async fn rename_study(
     .await?;
     insert_study_event(
         &mut transaction,
-        command.project_id.into(),
-        command.study_id.as_uuid(),
-        None,
-        "study_renamed",
-        Some(command.study_id.as_uuid()),
-        Some(command.study_id.as_uuid()),
-        current.revision,
-        result_revision,
-        json!({ "title": current.title, "revision": current.revision }),
-        json!({ "title": command.title.as_str(), "revision": result_revision }),
-        study_event_payload(StudyEvent::StudyRenamed(StudyRenamed {
-            study_id: command.study_id,
-            title: command.title.clone(),
-            before_revision: current.revision as u64,
-            result_revision: result_revision as u64,
-            actor: command.actor.clone(),
-        }))?,
+        StudyEventInsert {
+            project_id: command.project_id.into(),
+            study_id: command.study_id.as_uuid(),
+            report_id: None,
+            event_type: "study_renamed",
+            before_study_id: Some(command.study_id.as_uuid()),
+            result_study_id: Some(command.study_id.as_uuid()),
+            before_revision: current.revision,
+            result_revision,
+            before_snapshot: json!({ "title": current.title, "revision": current.revision }),
+            result_snapshot: json!({ "title": command.title.as_str(), "revision": result_revision }),
+            payload: study_event_payload(StudyEvent::StudyRenamed(StudyRenamed {
+                study_id: command.study_id,
+                title: command.title.clone(),
+                before_revision: current.revision as u64,
+                result_revision: result_revision as u64,
+                actor: command.actor.clone(),
+            }))?,
+        },
         &command.actor,
     )
     .await?;
@@ -364,25 +382,27 @@ pub(crate) async fn apply_classification_in_transaction(
     .await?;
     insert_study_event(
         transaction,
-        command.project_id.into(),
-        command.study_id.as_uuid(),
-        None,
-        "study_classified",
-        Some(command.study_id.as_uuid()),
-        Some(command.study_id.as_uuid()),
-        current.revision,
-        result_revision,
-        json!({ "design": current.design.map(StudyDesign::as_str), "context": current.design_context }),
-        json!({ "design": command.design.as_str(), "context": command.context, "revision": result_revision }),
-        study_event_payload(StudyEvent::StudyClassified(StudyClassified {
-            study_id: command.study_id,
-            previous_design: current.design,
-            design: command.design,
-            context: command.context,
-            before_revision: current.revision as u64,
-            result_revision: result_revision as u64,
-            actor: command.actor.clone(),
-        }))?,
+        StudyEventInsert {
+            project_id: command.project_id.into(),
+            study_id: command.study_id.as_uuid(),
+            report_id: None,
+            event_type: "study_classified",
+            before_study_id: Some(command.study_id.as_uuid()),
+            result_study_id: Some(command.study_id.as_uuid()),
+            before_revision: current.revision,
+            result_revision,
+            before_snapshot: json!({ "design": current.design.map(StudyDesign::as_str), "context": current.design_context }),
+            result_snapshot: json!({ "design": command.design.as_str(), "context": command.context, "revision": result_revision }),
+            payload: study_event_payload(StudyEvent::StudyClassified(StudyClassified {
+                study_id: command.study_id,
+                previous_design: current.design,
+                design: command.design,
+                context: command.context,
+                before_revision: current.revision as u64,
+                result_revision: result_revision as u64,
+                actor: command.actor.clone(),
+            }))?,
+        },
         &command.actor,
     )
     .await?;
@@ -534,25 +554,27 @@ pub async fn assign_report_to_study_in_transaction(
     };
     insert_study_event(
         transaction,
-        command.project_id.into(),
-        command.study_id.as_uuid(),
-        Some(command.report_id.as_uuid()),
-        event_type,
-        previous_study_id,
-        Some(command.study_id.as_uuid()),
-        target.revision,
-        target_revision,
-        json!({ "role": membership.as_ref().map(|row| row.get::<String, _>("relationship")), "source_revision": previous.as_ref().map(|study| study.revision) }),
-        json!({ "role": command.role.as_str(), "target_revision": target_revision }),
-        study_event_payload(StudyEvent::ReportAssignedToStudy(ReportAssignedToStudy {
-            study_id: command.study_id,
-            report_id: command.report_id,
-            previous_study_id: previous_study_id.map(Into::into),
-            role: command.role,
-            before_revision: target.revision as u64,
-            result_revision: target_revision as u64,
-            actor: command.actor.clone(),
-        }))?,
+        StudyEventInsert {
+            project_id: command.project_id.into(),
+            study_id: command.study_id.as_uuid(),
+            report_id: Some(command.report_id.as_uuid()),
+            event_type,
+            before_study_id: previous_study_id,
+            result_study_id: Some(command.study_id.as_uuid()),
+            before_revision: target.revision,
+            result_revision: target_revision,
+            before_snapshot: json!({ "role": membership.as_ref().map(|row| row.get::<String, _>("relationship")), "source_revision": previous.as_ref().map(|study| study.revision) }),
+            result_snapshot: json!({ "role": command.role.as_str(), "target_revision": target_revision }),
+            payload: study_event_payload(StudyEvent::ReportAssignedToStudy(ReportAssignedToStudy {
+                study_id: command.study_id,
+                report_id: command.report_id,
+                previous_study_id: previous_study_id.map(Into::into),
+                role: command.role,
+                before_revision: target.revision as u64,
+                result_revision: target_revision as u64,
+                actor: command.actor.clone(),
+            }))?,
+        },
         &command.actor,
     )
     .await?;
@@ -583,21 +605,23 @@ pub async fn create_study_and_assign_report_in_transaction(
     .await?;
     let study_event_id = insert_study_event(
         transaction,
-        command.project_id.into(),
-        command.study_id.as_uuid(),
-        None,
-        "study_created",
-        None,
-        Some(command.study_id.as_uuid()),
-        0,
-        0,
-        json!({}),
-        json!({ "title": command.title.as_str(), "revision": 0 }),
-        study_event_payload(StudyEvent::StudyCreated(StudyCreated {
-            study_id: command.study_id,
-            title: command.title.clone(),
-            actor: command.actor.clone(),
-        }))?,
+        StudyEventInsert {
+            project_id: command.project_id.into(),
+            study_id: command.study_id.as_uuid(),
+            report_id: None,
+            event_type: "study_created",
+            before_study_id: None,
+            result_study_id: Some(command.study_id.as_uuid()),
+            before_revision: 0,
+            result_revision: 0,
+            before_snapshot: json!({}),
+            result_snapshot: json!({ "title": command.title.as_str(), "revision": 0 }),
+            payload: study_event_payload(StudyEvent::StudyCreated(StudyCreated {
+                study_id: command.study_id,
+                title: command.title.clone(),
+                actor: command.actor.clone(),
+            }))?,
+        },
         &command.actor,
     )
     .await?;
@@ -675,22 +699,24 @@ pub async fn remove_report_from_study(
     .await?;
     insert_study_event(
         &mut transaction,
-        command.project_id.into(),
-        command.study_id.as_uuid(),
-        Some(command.report_id.as_uuid()),
-        "report_unassigned",
-        Some(command.study_id.as_uuid()),
-        None,
-        current.revision,
-        result_revision,
-        json!({ "report_id": command.report_id, "revision": current.revision }),
-        json!({ "report_id": command.report_id, "revision": result_revision }),
-        study_event_payload(StudyEvent::ReportRemovedFromStudy(ReportRemovedFromStudy {
-            study_id: command.study_id,
-            report_id: command.report_id,
-            result_revision: result_revision as u64,
-            actor: command.actor.clone(),
-        }))?,
+        StudyEventInsert {
+            project_id: command.project_id.into(),
+            study_id: command.study_id.as_uuid(),
+            report_id: Some(command.report_id.as_uuid()),
+            event_type: "report_unassigned",
+            before_study_id: Some(command.study_id.as_uuid()),
+            result_study_id: None,
+            before_revision: current.revision,
+            result_revision,
+            before_snapshot: json!({ "report_id": command.report_id, "revision": current.revision }),
+            result_snapshot: json!({ "report_id": command.report_id, "revision": result_revision }),
+            payload: study_event_payload(StudyEvent::ReportRemovedFromStudy(ReportRemovedFromStudy {
+                study_id: command.study_id,
+                report_id: command.report_id,
+                result_revision: result_revision as u64,
+                actor: command.actor.clone(),
+            }))?,
+        },
         &command.actor,
     )
     .await?;
@@ -882,20 +908,9 @@ fn parse_context(value: Value) -> Result<StudyDesignContext, StudyError> {
     serde_json::from_value(value).map_err(|error| StudyError::DataIntegrity(error.to_string()))
 }
 
-#[allow(clippy::too_many_arguments)]
 async fn insert_study_event(
     connection: &mut sqlx::Transaction<'_, sqlx::Postgres>,
-    project_id: Uuid,
-    study_id: Uuid,
-    report_id: Option<Uuid>,
-    event_type: &str,
-    before_study_id: Option<Uuid>,
-    result_study_id: Option<Uuid>,
-    before_revision: i64,
-    result_revision: i64,
-    before_snapshot: Value,
-    result_snapshot: Value,
-    payload: Value,
+    event: StudyEventInsert<'_>,
     actor: &deepref_domain::Actor,
 ) -> Result<Uuid, StudyError> {
     let event_id = Uuid::new_v4();
@@ -906,17 +921,17 @@ async fn insert_study_event(
          VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14)",
     )
     .bind(event_id)
-    .bind(project_id)
-    .bind(study_id)
-    .bind(report_id)
-    .bind(event_type)
-    .bind(before_study_id)
-    .bind(result_study_id)
-    .bind(before_revision)
-    .bind(result_revision)
-    .bind(before_snapshot)
-    .bind(result_snapshot)
-    .bind(payload)
+    .bind(event.project_id)
+    .bind(event.study_id)
+    .bind(event.report_id)
+    .bind(event.event_type)
+    .bind(event.before_study_id)
+    .bind(event.result_study_id)
+    .bind(event.before_revision)
+    .bind(event.result_revision)
+    .bind(event.before_snapshot)
+    .bind(event.result_snapshot)
+    .bind(event.payload)
     .bind(actor.kind().as_str())
     .bind(actor.id())
     .execute(&mut **connection)
