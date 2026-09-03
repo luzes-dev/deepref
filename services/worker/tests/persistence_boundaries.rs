@@ -1,3 +1,9 @@
+fn contains_identifier(source: &str, identifier: &str) -> bool {
+    source
+        .split(|character: char| !(character.is_ascii_alphanumeric() || character == '_'))
+        .any(|token| token == identifier)
+}
+
 #[test]
 fn reconciliation_schema_knowledge_stays_in_postgres_adapter() {
     let persistence = include_str!("../../../crates/postgres/src/worker_runtime.rs");
@@ -11,11 +17,11 @@ fn reconciliation_schema_knowledge_stays_in_postgres_adapter() {
         "jobs",
     ] {
         assert!(
-            persistence.contains(table),
+            contains_identifier(persistence, table),
             "postgres worker runtime must own {table} persistence"
         );
         assert!(
-            !worker.contains(table),
+            !contains_identifier(worker, table),
             "worker reconciler must not encode {table} schema knowledge"
         );
     }
