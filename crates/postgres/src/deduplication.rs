@@ -4,7 +4,7 @@ use deepref_application::RawAuthor;
 use deepref_application::{
     AutomationDomainEvent, DedupeCandidate, DedupeScore, FUZZY_PROPOSAL_THRESHOLD,
     FUZZY_SHORTLIST_LIMIT, ProposalDecision, ProposalKind, RecordResolutionAction,
-    ResolveRecordCommand, score_candidate,
+    ResolveRecordCommand, select_fuzzy_candidate,
 };
 use deepref_domain::{ProjectId, normalize_bibliography_title};
 use serde::Serialize;
@@ -207,145 +207,40 @@ async fn resolve_one_record(
     actor_kind: &str,
     actor_id: &str,
 ) -> Result<OneRecordResult, DedupeError> {
-    let row = sqlx::query(
-        "SELECT id,title,abstract_text,publication_year,journal,authors,source_identifiers,raw
-         FROM records WHERE project_id=$1 AND id=$2 AND report_id IS NULL FOR UPDATE",
-    )
-    .bind(project_id)
-    .bind(record_id)
-    .fetch_optional(&mut **tx)
-    .await?;
-    let Some(row) = row else {
+    let Some(source) = load_unresolved_source_record(tx, project_id, record_id).await? else {
         return Ok(OneRecordResult::default());
     };
-    let source = SourceRecord {
-        id: row.get("id"),
-        title: row.get("title"),
-        abstract_text: row.get("abstract_text"),
-        publication_year: row.get("publication_year"),
-        journal: row.get("journal"),
-        authors: row.get("authors"),
-        source_identifiers: row.get("source_identifiers"),
-        raw: row.get("raw"),
-    };
-
     let identifiers = lock_record_identifiers(tx, source.id).await?;
+    let normalized_title = normalize_record_title(tx, project_id, &source).await?;
 
-    let normalized_title = source
-        .title
-        .as_deref()
-        .map(normalize_bibliography_title)
-        .filter(|title| !title.is_empty());
-    sqlx::query("UPDATE records SET normalized_title=$3 WHERE project_id=$1 AND id=$2")
-        .bind(project_id)
-        .bind(source.id)
-        .bind(&normalized_title)
-        .execute(&mut **tx)
-        .await?;
-
-    let matched_report_ids = matched_report_ids(tx, &identifiers).await?;
-    if matched_report_ids.len() == 1 {
-        attach_record_identifiers(tx, &source, matched_report_ids[0], false).await?;
-        link_record(
-            tx,
-            ResolutionLink {
-                project_id,
-                record_id: source.id,
-                prior_report_id: None,
-                report_id: matched_report_ids[0],
-                action: "auto_link",
-                reason: "matched non-conflicting durable identifiers",
-                actor_kind,
-                actor_id,
-                proposal_id: None,
-            },
-        )
-        .await?;
-        return Ok(OneRecordResult {
-            auto_linked: 1,
-            ..Default::default()
-        });
-    }
-    if matched_report_ids.len() > 1 {
-        let mut result = OneRecordResult::default();
-        for candidate_report_id in &matched_report_ids {
-            insert_proposal(
-                tx,
-                project_id,
-                &source,
-                Some(*candidate_report_id),
-                ProposalKind::Conflict,
-                &DedupeScore {
-                    title_similarity: 0.0,
-                    year_match: None,
-                    first_author_similarity: None,
-                    exact_identifier_match: true,
-                    conflicting_identifier: true,
-                    total: 0.0,
-                },
-                json!({
-                    "reason": "durable identifiers point to different reports",
-                    "matched_report_ids": matched_report_ids,
-                }),
-            )
-            .await?;
-            result.proposals += 1;
-        }
-        result.conflicts = 1;
+    if let Some(result) =
+        resolve_identifier_matches(tx, project_id, &source, &identifiers, actor_kind, actor_id)
+            .await?
+    {
         return Ok(result);
     }
 
-    let Some(normalized_title) = normalized_title.as_deref() else {
-        let report_id = create_report(tx, &source, None).await?;
-        link_record(
+    let Some(normalized_title) = normalized_title else {
+        return create_and_link_report(
             tx,
-            ResolutionLink {
-                project_id,
-                record_id: source.id,
-                prior_report_id: None,
-                report_id,
-                action: "create_report",
-                reason: "no durable identifier or title candidate",
-                actor_kind,
-                actor_id,
-                proposal_id: None,
-            },
+            project_id,
+            &source,
+            None,
+            "no durable identifier or title candidate",
+            actor_kind,
+            actor_id,
         )
-        .await?;
-        return Ok(OneRecordResult {
-            created_report: 1,
-            ..Default::default()
-        });
+        .await;
     };
 
-    let shortlist = shortlist_reports(tx, project_id, normalized_title).await?;
+    let shortlist = shortlist_reports(tx, project_id, &normalized_title).await?;
     let source_first_author = first_author_name(&source.authors);
-    let source_year = source.publication_year;
-    let mut scored = shortlist
-        .into_iter()
-        .map(|candidate| {
-            let score = score_candidate(
-                source.title.as_deref(),
-                source_first_author.as_deref(),
-                source_year,
-                &candidate,
-            );
-            (candidate, score)
-        })
-        .collect::<Vec<_>>();
-    scored.sort_by(|left, right| {
-        right
-            .1
-            .total
-            .partial_cmp(&left.1.total)
-            .unwrap_or(std::cmp::Ordering::Equal)
-            .then_with(|| left.0.report_id.as_uuid().cmp(&right.0.report_id.as_uuid()))
-    });
-
-    if let Some((candidate, score)) = scored
-        .into_iter()
-        .find(|(_, score)| score.total >= FUZZY_PROPOSAL_THRESHOLD && !score.exact_identifier_match)
-    {
+    if let Some((candidate, score)) = select_fuzzy_candidate(
+        source.title.as_deref(),
+        source_first_author.as_deref(),
+        source.publication_year,
+        shortlist,
+    ) {
         insert_proposal(
             tx,
             project_id,
@@ -366,7 +261,138 @@ async fn resolve_one_record(
         });
     }
 
-    let report_id = create_report(tx, &source, Some(normalized_title.to_owned())).await?;
+    create_and_link_report(
+        tx,
+        project_id,
+        &source,
+        Some(normalized_title),
+        "no credible candidate in bounded shortlist",
+        actor_kind,
+        actor_id,
+    )
+    .await
+}
+
+async fn load_unresolved_source_record(
+    tx: &mut Transaction<'_, Postgres>,
+    project_id: Uuid,
+    record_id: Uuid,
+) -> Result<Option<SourceRecord>, DedupeError> {
+    let row = sqlx::query(
+        "SELECT id,title,abstract_text,publication_year,journal,authors,source_identifiers,raw
+         FROM records WHERE project_id=$1 AND id=$2 AND report_id IS NULL FOR UPDATE",
+    )
+    .bind(project_id)
+    .bind(record_id)
+    .fetch_optional(&mut **tx)
+    .await?;
+    Ok(row.map(|row| SourceRecord {
+        id: row.get("id"),
+        title: row.get("title"),
+        abstract_text: row.get("abstract_text"),
+        publication_year: row.get("publication_year"),
+        journal: row.get("journal"),
+        authors: row.get("authors"),
+        source_identifiers: row.get("source_identifiers"),
+        raw: row.get("raw"),
+    }))
+}
+
+async fn normalize_record_title(
+    tx: &mut Transaction<'_, Postgres>,
+    project_id: Uuid,
+    source: &SourceRecord,
+) -> Result<Option<String>, DedupeError> {
+    let normalized_title = source
+        .title
+        .as_deref()
+        .map(normalize_bibliography_title)
+        .filter(|title| !title.is_empty());
+    sqlx::query("UPDATE records SET normalized_title=$3 WHERE project_id=$1 AND id=$2")
+        .bind(project_id)
+        .bind(source.id)
+        .bind(&normalized_title)
+        .execute(&mut **tx)
+        .await?;
+    Ok(normalized_title)
+}
+
+async fn resolve_identifier_matches(
+    tx: &mut Transaction<'_, Postgres>,
+    project_id: Uuid,
+    source: &SourceRecord,
+    identifiers: &[RecordIdentifier],
+    actor_kind: &str,
+    actor_id: &str,
+) -> Result<Option<OneRecordResult>, DedupeError> {
+    let matched_report_ids = matched_report_ids(tx, identifiers).await?;
+    if matched_report_ids.is_empty() {
+        return Ok(None);
+    }
+    if matched_report_ids.len() == 1 {
+        let report_id = matched_report_ids[0];
+        attach_record_identifiers(tx, source, report_id, false).await?;
+        link_record(
+            tx,
+            ResolutionLink {
+                project_id,
+                record_id: source.id,
+                prior_report_id: None,
+                report_id,
+                action: "auto_link",
+                reason: "matched non-conflicting durable identifiers",
+                actor_kind,
+                actor_id,
+                proposal_id: None,
+            },
+        )
+        .await?;
+        return Ok(Some(OneRecordResult {
+            auto_linked: 1,
+            ..Default::default()
+        }));
+    }
+
+    let conflict_score = DedupeScore {
+        title_similarity: 0.0,
+        year_match: None,
+        first_author_similarity: None,
+        exact_identifier_match: true,
+        conflicting_identifier: true,
+        total: 0.0,
+    };
+    for candidate_report_id in &matched_report_ids {
+        insert_proposal(
+            tx,
+            project_id,
+            source,
+            Some(*candidate_report_id),
+            ProposalKind::Conflict,
+            &conflict_score,
+            json!({
+                "reason": "durable identifiers point to different reports",
+                "matched_report_ids": matched_report_ids,
+            }),
+        )
+        .await?;
+    }
+    Ok(Some(OneRecordResult {
+        proposals: matched_report_ids.len() as i64,
+        conflicts: 1,
+        ..Default::default()
+    }))
+}
+
+async fn create_and_link_report(
+    tx: &mut Transaction<'_, Postgres>,
+    project_id: Uuid,
+    source: &SourceRecord,
+    normalized_title: Option<String>,
+    reason: &str,
+    actor_kind: &str,
+    actor_id: &str,
+) -> Result<OneRecordResult, DedupeError> {
+    let report_id = create_report(tx, source, normalized_title).await?;
     link_record(
         tx,
         ResolutionLink {
@@ -375,7 +401,7 @@ async fn resolve_one_record(
             prior_report_id: None,
             report_id,
             action: "create_report",
-            reason: "no credible candidate in bounded shortlist",
+            reason,
             actor_kind,
             actor_id,
             proposal_id: None,
@@ -1293,11 +1319,11 @@ async fn insert_resolution_event(
     .bind(event.resolved_report_id)
     .bind(event.action)
     .bind(event.reason)
-        .bind(event.actor_kind)
-        .bind(event.actor_id)
-        .bind(event.proposal_id)
-        .bind(event.reverted_event_id)
-        .execute(&mut **tx)
+    .bind(event.actor_kind)
+    .bind(event.actor_id)
+    .bind(event.proposal_id)
+    .bind(event.reverted_event_id)
+    .execute(&mut **tx)
     .await?;
     Ok(())
 }

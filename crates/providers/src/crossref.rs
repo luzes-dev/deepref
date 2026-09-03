@@ -2,9 +2,9 @@ use deepref_application::{
     CitationProvider, MetadataProvider, ProviderError, ProviderFuture, RawAuthor, RawIdentifier,
     RawRecord, SearchProvider,
 };
-use deepref_core::{WorkWithReferences, normalize_doi};
+use deepref_core::WorkWithReferences;
 use deepref_crossref::{CrossrefClient, CrossrefError};
-use deepref_domain::IdentifierScheme;
+use deepref_domain::{IdentifierScheme, normalize_doi};
 use serde_json::{Value, json};
 
 #[derive(Debug, Clone)]

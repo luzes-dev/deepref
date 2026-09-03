@@ -50,7 +50,7 @@ impl CrossrefClient {
         &self,
         doi: &str,
     ) -> Result<deepref_core::WorkWithReferences, CrossrefError> {
-        let doi = deepref_core::normalize_doi(doi)?;
+        let doi = deepref_domain::normalize_doi(doi)?;
         let encoded = urlencoding::encode(&doi);
         let url = format!("{}/works/{}?mailto={}", self.base_url, encoded, self.mailto);
 
