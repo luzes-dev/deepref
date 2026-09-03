@@ -50,6 +50,8 @@ export type ProtocolDraft = {
 	amendmentOf?: string | null;
 };
 
+type UnknownRecord = Record<string, unknown>;
+
 export function emptyProtocolDraft(): ProtocolDraft {
 	return {
 		version: 1,
@@ -131,35 +133,56 @@ export function buildSaveProtocolRequest(value: ProtocolDraft): SaveProtocolRequ
 }
 
 export function validateProtocolDraft(value: ProtocolDraft): string[] {
+	return [
+		...requiredProtocolErrors(value),
+		...frameworkValidationErrors(value),
+		...criteriaValidationErrors(value.criteria)
+	];
+}
+
+function requiredProtocolErrors(value: ProtocolDraft): string[] {
 	const errors: string[] = [];
 	if (!value.name.trim()) errors.push('Give the protocol a name.');
 	if (!value.objective.trim()) errors.push('Add the review objective.');
 	if (!value.question.trim()) errors.push('Add the research question.');
+	return errors;
+}
+
+function frameworkValidationErrors(value: ProtocolDraft): string[] {
 	if (value.frameworkKind === 'custom') {
-		const duplicateKeys = duplicateCustomKeys(value.customFrameworkFields);
-		if (duplicateKeys.length > 0) {
-			errors.push(`Custom framework field names must be unique: ${duplicateKeys.join(', ')}.`);
-		}
-		for (const field of value.customFrameworkFields) {
-			if (!field.key.trim() || !field.value.trim()) {
-				errors.push('Complete or remove every custom framework field.');
-				break;
-			}
-		}
-	} else {
-		for (const field of REQUIRED_FRAMEWORK_FIELDS[value.frameworkKind]) {
-			if (!value.frameworkFields[field]?.trim()) {
-				errors.push(`Complete the required ${humanizeKey(field)} framework field.`);
-			}
-		}
+		return customFrameworkErrors(value.customFrameworkFields);
 	}
-	for (const criterion of value.criteria) {
-		if (!criterion.label.trim() || !criterion.description.trim()) {
-			errors.push('Complete every eligibility criterion or remove it.');
-			break;
-		}
+	return knownFrameworkErrors(value.frameworkKind, value.frameworkFields);
+}
+
+function customFrameworkErrors(fields: ReadonlyArray<CustomFrameworkField>): string[] {
+	const errors: string[] = [];
+	const duplicateKeys = duplicateCustomKeys(fields);
+	if (duplicateKeys.length > 0) {
+		errors.push(`Custom framework field names must be unique: ${duplicateKeys.join(', ')}.`);
+	}
+	if (fields.some((field) => !field.key.trim() || !field.value.trim())) {
+		errors.push('Complete or remove every custom framework field.');
 	}
 	return errors;
+}
+
+function knownFrameworkErrors(
+	kind: Exclude<FrameworkKind, 'custom'>,
+	fields: Readonly<Record<string, string>>
+): string[] {
+	return REQUIRED_FRAMEWORK_FIELDS[kind].flatMap((field) =>
+		fields[field]?.trim()
+			? []
+			: [`Complete the required ${humanizeKey(field)} framework field.`]
+	);
+}
+
+function criteriaValidationErrors(criteria: ReadonlyArray<DraftCriterion>): string[] {
+	const hasIncompleteCriterion = criteria.some(
+		(criterion) => !criterion.label.trim() || !criterion.description.trim()
+	);
+	return hasIncompleteCriterion ? ['Complete every eligibility criterion or remove it.'] : [];
 }
 
 function frameworkPayload(value: ProtocolDraft): Record<string, string> {
@@ -175,7 +198,7 @@ function frameworkPayload(value: ProtocolDraft): Record<string, string> {
 }
 
 function stringRecord(value: unknown): Record<string, string> {
-	if (typeof value !== 'object' || value === null || Array.isArray(value)) return {};
+	if (!isRecord(value)) return {};
 	return Object.fromEntries(
 		Object.entries(value).filter(
 			(entry): entry is [string, string] => typeof entry[1] === 'string'
@@ -185,39 +208,53 @@ function stringRecord(value: unknown): Record<string, string> {
 
 function parseCriteria(value: unknown, nextClientId: DraftClientIdFactory): DraftCriterion[] {
 	if (!Array.isArray(value)) return [];
-	return value.flatMap((item): DraftCriterion[] => {
-		if (typeof item !== 'object' || item === null) return [];
-		const id = 'id' in item && typeof item.id === 'string' ? item.id : undefined;
-		const kind =
-			'kind' in item && typeof item.kind === 'string' && isCriterionKind(item.kind)
-				? item.kind
-				: undefined;
-		const stage =
-			'stage' in item && typeof item.stage === 'string' && isCriterionStage(item.stage)
-				? item.stage
-				: undefined;
-		const dimension =
-			'dimension' in item &&
-			typeof item.dimension === 'string' &&
-			isCriterionDimension(item.dimension)
-				? item.dimension
-				: undefined;
-		const label = 'label' in item && typeof item.label === 'string' ? item.label : '';
-		const description =
-			'description' in item && typeof item.description === 'string' ? item.description : '';
-		if (!kind || !stage || !dimension) return [];
-		return [
-			{
-				clientId: id ?? nextClientId('criterion'),
-				id,
-				kind,
-				stage,
-				dimension,
-				label,
-				description
-			}
-		];
-	});
+	const criteria: DraftCriterion[] = [];
+	for (const item of value) {
+		const criterion = parseCriterion(item, nextClientId);
+		if (criterion) criteria.push(criterion);
+	}
+	return criteria;
+}
+
+function parseCriterion(
+	value: unknown,
+	nextClientId: DraftClientIdFactory
+): DraftCriterion | undefined {
+	if (!isRecord(value)) return undefined;
+	const kind = criterionKind(value.kind);
+	const stage = criterionStage(value.stage);
+	const dimension = criterionDimension(value.dimension);
+	if (!kind || !stage || !dimension) return undefined;
+	const id = stringValue(value.id);
+	return {
+		clientId: id ?? nextClientId('criterion'),
+		id,
+		kind,
+		stage,
+		dimension,
+		label: stringValue(value.label) ?? '',
+		description: stringValue(value.description) ?? ''
+	};
+}
+
+function criterionKind(value: unknown): CriterionKind | undefined {
+	return typeof value === 'string' && isCriterionKind(value) ? value : undefined;
+}
+
+function criterionStage(value: unknown): CriterionStage | undefined {
+	return typeof value === 'string' && isCriterionStage(value) ? value : undefined;
+}
+
+function criterionDimension(value: unknown): CriterionDimension | undefined {
+	return typeof value === 'string' && isCriterionDimension(value) ? value : undefined;
+}
+
+function stringValue(value: unknown): string | undefined {
+	return typeof value === 'string' ? value : undefined;
+}
+
+function isRecord(value: unknown): value is UnknownRecord {
+	return typeof value === 'object' && value !== null && !Array.isArray(value);
 }
 
 function normalizeStatus(value: string): ProtocolDraft['status'] {
