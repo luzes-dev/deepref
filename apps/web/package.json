@@ -20,7 +20,7 @@
 	"dependencies": {
 		"@tanstack/svelte-query": "^6.1.45",
 		"@tanstack/svelte-virtual": "^3.13.12",
-		"@tanstack/table-core": "^8.21.3",
+		"@tanstack/table-core": "^9.2.4",
 		"pdfjs-dist": "^6.2.108"
 	},
 	"devDependencies": {
