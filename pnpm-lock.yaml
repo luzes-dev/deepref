@@ -29,8 +29,8 @@ importers:
         specifier: ^3.13.12
         version: 3.13.36(svelte@5.56.9(@typescript-eslint/types@8.68.0))
       '@tanstack/table-core':
-        specifier: ^8.21.3
-        version: 8.21.3
+        specifier: ^9.2.4
+        version: 9.2.4
       pdfjs-dist:
         specifier: ^6.2.108
         version: 6.2.108
@@ -1059,6 +1059,9 @@ packages:
   '@tanstack/query-core@5.102.5':
     resolution: {integrity: sha512-RjCmHf9cPRYcH/dpO0Jagw3rxCM1bLzMKKSGzaDkQJADDKGpv5RFjN54IyHSOIPa822AUA7ASOXDjjy1jfyzIA==}
 
+  '@tanstack/store@0.11.1':
+    resolution: {integrity: sha512-mzTOBhypOuDJAy/D8n2MfUZ1HFkXnmSETviRyhqEC8LUE7/IZQExOTxMANj3KjTofYTkFNpBY67qaVrT41YccA==}
+
   '@tanstack/svelte-query@6.1.45':
     resolution: {integrity: sha512-st2mnkfFWLxG45TO5nzIfcUIpzhJ4dEV8VyxJWBJWYMCGJkfCZy5YqsB/iXfl4iCzzo5ezM6oDBif4xLZoD3WQ==}
     peerDependencies:
@@ -1069,9 +1072,9 @@ packages:
     peerDependencies:
       svelte: ^3.48.0 || ^4.0.0 || ^5.0.0
 
-  '@tanstack/table-core@8.21.3':
-    resolution: {integrity: sha512-ldZXEhOBb8Is7xLs01fR3YEc3DERiz5silj8tnGkFZytt1abEvl/GhUmCE0PMLaMPTa3Jk4HbKmRlHmu+gCftg==}
-    engines: {node: '>=12'}
+  '@tanstack/table-core@9.2.4':
+    resolution: {integrity: sha512-GwdDyGGr6UXAtubF14yAwcXvdaogqfsQgIk89Suebjxob/Rjq2xvfmXsjDF1rQmKmhHsJm9TOY7myxv3i6geJw==}
+    engines: {node: '>=20'}
 
   '@tanstack/virtual-core@3.17.8':
     resolution: {integrity: sha512-BfEvehNpOT75r5Ksc5xW6NZuXujTfb7nlSEyVu4XHG3gdxNg1KqXruWbDewXOUaUYIo4oRbSfkjIajz4MAT8tA==}
@@ -3207,6 +3210,8 @@ snapshots:
 
   '@tanstack/query-core@5.102.5': {}
 
+  '@tanstack/store@0.11.1': {}
+
   '@tanstack/svelte-query@6.1.45(svelte@5.56.9(@typescript-eslint/types@8.68.0))':
     dependencies:
       '@tanstack/query-core': 5.102.5
@@ -3217,7 +3222,9 @@ snapshots:
       '@tanstack/virtual-core': 3.17.8
       svelte: 5.56.9(@typescript-eslint/types@8.68.0)
 
-  '@tanstack/table-core@8.21.3': {}
+  '@tanstack/table-core@9.2.4':
+    dependencies:
+      '@tanstack/store': 0.11.1
 
   '@tanstack/virtual-core@3.17.8': {}
 
