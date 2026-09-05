@@ -43,6 +43,7 @@ seed: migrate
 
 # Run fast repository checks without changing generated files.
 verify:
+    cargo xtask boundaries
     cargo fmt --all -- --check
     cargo clippy --workspace --all-targets --locked -- -D warnings
     pnpm run lint
@@ -107,3 +108,7 @@ infra-plan ENV:
 # Update development with a fast-forward-only pull and create feature/SLUG.
 feature SLUG:
     slug="{{SLUG}}"; [[ "$slug" =~ ^[a-z0-9][a-z0-9._-]*$ ]] || { echo "SLUG must contain lowercase letters, digits, dots, underscores, or hyphens" >&2; exit 2; }; [[ -z "$(git status --porcelain)" ]] || { echo "feature requires a clean worktree" >&2; exit 1; }; git fetch origin development; git switch development; git pull --ff-only origin development; git switch -c "feature/$slug"
+
+# Validate every workspace dependency against the architecture contract.
+architecture:
+    cargo xtask boundaries

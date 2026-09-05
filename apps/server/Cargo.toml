@@ -12,3 +12,6 @@ deepref-worker = { path = "../../services/worker" }
 serde_json.workspace = true
 anyhow.workspace = true
 tokio.workspace = true
+
+[package.metadata.deepref]
+layer = "composition"

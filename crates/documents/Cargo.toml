@@ -19,3 +19,6 @@ uuid.workspace = true
 url.workspace = true
 
 [dev-dependencies]
+
+[package.metadata.deepref]
+layer = "adapter"

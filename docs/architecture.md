@@ -98,3 +98,19 @@ mise exec -- just dev
 ```
 
 This starts loopback-only PostgreSQL, applies migrations, then supervises web, API, and worker. Compose contains no application services and is not a deployment artifact. See [local development](local-development.md).
+
+## Workspace dependency contract
+
+Run `just architecture` (or `cargo xtask boundaries`) to validate all workspace
+members using Cargo metadata. Each manifest declares its existing role through
+`[package.metadata.deepref] layer`. Unclassified packages fail validation.
+The tooling-only `xtask` package cannot be a dependency of production packages.
+
+The checker covers normal, build, dev, optional, renamed, and platform-specific
+dependencies. Domain/application external dependency restrictions and the removed
+NATS guard remain enforced. The HTTP package may use the worker only as a dev
+dependency for existing integration fixtures. SQL-backed HTTP handlers remain
+permitted; persistence cannot depend on worker orchestration or HTTP adapters.
+
+Just remains the public command interface, Mise owns tool versions, and xtask
+owns the repository graph. Ordinary build, test, and service commands stay in Just.

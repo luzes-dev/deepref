@@ -35,3 +35,6 @@ bytes.workspace = true
 deepref-domain.workspace = true
 reqwest.workspace = true
 url.workspace = true
+
+[package.metadata.deepref]
+layer = "worker"

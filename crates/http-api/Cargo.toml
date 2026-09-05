@@ -46,3 +46,6 @@ uuid.workspace = true
 [dev-dependencies]
 deepref-worker = { version = "0.1.0", path = "../../services/worker" }
 tower.workspace = true
+
+[package.metadata.deepref]
+layer = "http"
