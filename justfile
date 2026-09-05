@@ -61,14 +61,15 @@ docs-check:
 
 # Run Rust library/binary tests and web unit tests.
 test-unit:
-    cargo test --workspace --lib --bins --locked
+    cargo nextest run --workspace --lib --bins --locked
+    cargo test --doc --workspace --locked
     pnpm --filter @deepref/web test:unit -- --run
 
 # Start dependencies and run integration test targets.
 test-integration:
     {{compose}} up -d --wait
     cargo run -q -p deepref-server -- migrate
-    cargo test --workspace --tests --locked
+    cargo nextest run --workspace --tests --locked
 
 # Run browser tests; Playwright builds and starts its own preview server.
 test-e2e:
