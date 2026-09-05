@@ -51,7 +51,7 @@ base64 = "0.23.0"
 chrono = { version = "0.4.45", features = ["serde"] }
 csv = "1.4.0"
 futures = "0.3.32"
-garde = { version = "0.22.0", features = ["derive"] }
+garde = { version = "0.23.0", features = ["derive"] }
 jsonschema = "0.49.0"
 rig-core = "0.36.0"
 pgvector = { version = "0.4.0", features = ["sqlx"] }
