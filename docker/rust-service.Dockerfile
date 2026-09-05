@@ -14,6 +14,7 @@ COPY apps ./apps
 COPY crates ./crates
 COPY review-definitions ./review-definitions
 COPY services ./services
+COPY tools ./tools
 
 # Both Rust service images share the same composition-root binary and select their
 # runtime role through the container command.
