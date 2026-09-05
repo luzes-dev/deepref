@@ -55,7 +55,7 @@
 		"shadcn-svelte": "^1.5.0",
 		"sigma": "^3.0.3",
 		"svelte": "^5.56.9",
-		"svelte-check": "^4.6.0",
+		"svelte-check": "^4.7.6",
 		"svelte-sonner": "^1.1.1",
 		"svelte-toolbelt": "^0.10.6",
 		"tailwind-merge": "^3.6.0",
