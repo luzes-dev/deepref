@@ -1,3 +1,9 @@
+#![allow(
+    clippy::expect_used,
+    clippy::panic,
+    clippy::unwrap_used,
+    clippy::string_slice
+)]
 use std::path::{Path, PathBuf};
 
 const FORBIDDEN_INFRASTRUCTURE_DEPENDENCIES: &[&str] = &[

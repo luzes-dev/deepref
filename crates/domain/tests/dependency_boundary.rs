@@ -1,3 +1,9 @@
+#![allow(
+    clippy::expect_used,
+    clippy::panic,
+    clippy::unwrap_used,
+    clippy::string_slice
+)]
 use std::{collections::BTreeSet, fs, path::Path};
 
 fn dependencies(manifest: &Path) -> BTreeSet<String> {

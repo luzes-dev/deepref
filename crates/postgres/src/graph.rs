@@ -266,7 +266,7 @@ pub async fn recompute_project_metrics(pool: &PgPool, project_id: Uuid) -> anyho
     for node in &graph.nodes {
         let metric = metrics
             .get(&node.report_id)
-            .expect("every repository node has computed graph metrics");
+            .ok_or_else(|| anyhow::anyhow!("every repository node has computed graph metrics"))?;
         sqlx::query(
             "UPDATE project_reports
              SET total_citations=$1, references_count=$2,

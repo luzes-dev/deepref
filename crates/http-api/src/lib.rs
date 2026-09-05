@@ -60,11 +60,16 @@ async fn shutdown_signal() {
     #[cfg(unix)]
     {
         let mut terminate =
-            tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())
-                .expect("SIGTERM handler must install");
+            tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate()).ok();
         tokio::select! {
             _ = tokio::signal::ctrl_c() => {},
-            _ = terminate.recv() => {},
+            _ = async {
+                if let Some(stream) = terminate.as_mut() {
+                    stream.recv().await;
+                } else {
+                    std::future::pending::<()>().await;
+                }
+            } => {},
         }
     }
     #[cfg(not(unix))]

@@ -1,3 +1,9 @@
+#![allow(
+    clippy::expect_used,
+    clippy::panic,
+    clippy::unwrap_used,
+    clippy::string_slice
+)]
 use deepref_ai::{DataExtraction, ExtractedField, ExtractionEvidence, TypedExtractionValue};
 use deepref_application::{ExtractionFieldDefinition, ExtractionFieldType};
 use deepref_domain::{Actor, ActorKind, ProjectId};

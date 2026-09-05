@@ -224,9 +224,9 @@ fn parse_tagged_line(line: &str, format: TaggedFormat) -> Option<(&str, &str)> {
             (tag.len() == 2).then_some((tag, value.trim_start()))
         }
         TaggedFormat::Nbib => {
-            let separator = line.find("- ")?;
-            let tag = line[..separator].trim();
-            (!tag.is_empty() && tag.len() <= 8).then_some((tag, line[separator + 2..].trim_start()))
+            let (tag, value) = line.split_once("- ")?;
+            let tag = tag.trim();
+            (!tag.is_empty() && tag.len() <= 8).then_some((tag, value.trim_start()))
         }
     }
 }

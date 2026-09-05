@@ -1,3 +1,9 @@
+#![allow(
+    clippy::expect_used,
+    clippy::panic,
+    clippy::unwrap_used,
+    clippy::string_slice
+)]
 use anyhow::{Result, ensure};
 use deepref_postgres::{import_legacy, migrate};
 use sqlx::{PgPool, Row, postgres::PgPoolOptions};

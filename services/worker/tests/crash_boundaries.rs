@@ -1,3 +1,9 @@
+#![allow(
+    clippy::expect_used,
+    clippy::panic,
+    clippy::unwrap_used,
+    clippy::string_slice
+)]
 #[test]
 fn final_transaction_inserts_children_before_completion() {
     let source = include_str!("../src/store.rs");

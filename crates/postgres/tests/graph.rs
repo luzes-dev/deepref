@@ -1,3 +1,9 @@
+#![allow(
+    clippy::expect_used,
+    clippy::panic,
+    clippy::unwrap_used,
+    clippy::string_slice
+)]
 use anyhow::{Result, ensure};
 use chrono::Utc;
 use deepref_graph::GraphEdge;

@@ -13,3 +13,6 @@ unicode_categories.workspace = true
 
 [dev-dependencies]
 proptest = "1.9.0"
+
+[lints]
+workspace = true

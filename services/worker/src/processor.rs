@@ -1411,7 +1411,7 @@ fn bounded_message(message: &str, max_bytes: usize) -> String {
     while !message.is_char_boundary(end) {
         end -= 1;
     }
-    message[..end].to_owned()
+    message.get(..end).unwrap_or("").to_owned()
 }
 
 fn pdf_parse_semaphore() -> Arc<Semaphore> {

@@ -19,6 +19,25 @@ members = [
 ]
 resolver = "3"
 
+# Keep correctness and panic-safety rules centralized. Clippy's broad
+# `pedantic` group is intentionally deferred until its measured repository
+# baseline is paid down; enabling it as a warning would make the existing
+# `-D warnings` gate unusable.
+[workspace.lints.rust]
+unsafe_code = "forbid"
+
+[workspace.lints.clippy]
+dbg_macro = "deny"
+todo = "deny"
+unimplemented = "deny"
+unwrap_used = "deny"
+expect_used = "deny"
+panic = "deny"
+panic_in_result_fn = "deny"
+unchecked_time_subtraction = "deny"
+string_slice = "deny"
+exit = "deny"
+
 [workspace.package]
 edition = "2024"
 license = "MIT"

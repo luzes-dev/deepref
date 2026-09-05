@@ -639,11 +639,7 @@ pub async fn persist_parsed_document(
         .bind(Vec::<String>::new())
         .bind(i32::try_from(block.ordinal)?)
         .bind(&block.text)
-        .bind(
-            block
-                .bbox
-                .map(|bbox| serde_json::to_value(bbox).expect("bbox is serializable")),
-        )
+        .bind(block.bbox.as_ref().map(serde_json::to_value).transpose()?)
         .bind(&block.content_hash)
         .execute(&mut *transaction)
         .await?;

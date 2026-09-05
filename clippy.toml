@@ -1,0 +1,7 @@
+# Panic-oriented helpers are useful for assertions and fixture setup. Keep
+# them available in tests while the workspace policy rejects them in shipped
+# library, binary, and build-script code.
+allow-unwrap-in-tests = true
+allow-expect-in-tests = true
+allow-panic-in-tests = true
+allow-dbg-in-tests = true

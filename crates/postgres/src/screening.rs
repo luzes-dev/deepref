@@ -348,7 +348,9 @@ pub async fn get_screening_queue(
     let progress = queue_progress(pool, project_id).await?;
     let items: Vec<_> = rows.iter().map(queue_item_from_row).collect();
     let next_cursor = if has_next {
-        rows.last().map(|row| encode_cursor(&query, row))
+        rows.last()
+            .map(|row| encode_cursor(&query, row))
+            .transpose()?
     } else {
         None
     };
@@ -951,7 +953,10 @@ fn history_item_from_row(row: sqlx::postgres::PgRow) -> ScreeningHistoryItem {
     }
 }
 
-fn encode_cursor(query: &GetScreeningQueueQuery, row: &sqlx::postgres::PgRow) -> String {
+fn encode_cursor(
+    query: &GetScreeningQueueQuery,
+    row: &sqlx::postgres::PgRow,
+) -> Result<String, ScreeningError> {
     let value = ScreeningCursor {
         sort: query.sort.as_str().to_owned(),
         report_id: row.get("report_id"),
@@ -964,7 +969,8 @@ fn encode_cursor(query: &GetScreeningQueueQuery, row: &sqlx::postgres::PgRow) ->
             .get::<Option<i32>, _>("publication_year")
             .unwrap_or(i32::MIN),
     };
-    URL_SAFE_NO_PAD.encode(serde_json::to_vec(&value).expect("screening cursor is serializable"))
+    let bytes = serde_json::to_vec(&value).map_err(|_| ScreeningError::InvalidCursor)?;
+    Ok(URL_SAFE_NO_PAD.encode(bytes))
 }
 
 fn decode_cursor(value: &str) -> Result<ScreeningCursor, ScreeningError> {
