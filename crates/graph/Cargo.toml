@@ -16,3 +16,7 @@ uuid.workspace = true
 
 [lints]
 workspace = true
+
+[package.metadata.deepref]
+layer = "graph"
+

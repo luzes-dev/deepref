@@ -66,6 +66,11 @@ jobs:
         run: |
           echo "SCCACHE_GHA_ENABLED=true" >> "$GITHUB_ENV"
           echo "RUSTC_WRAPPER=sccache" >> "$GITHUB_ENV"
+      - name: Validate Cargo workspace architecture
+        if: matrix.command == 'fmt'
+        run: |
+          cargo xtask boundaries
+          cargo test -p xtask --locked
       - name: Restore Cargo cache
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:

@@ -14,7 +14,7 @@ The Rust workspace follows inward dependency direction:
 - `deepref-http-api` owns Axum routes, request/response mapping, and SQL-backed HTTP handlers. It depends inward on application/domain code and on adapter code needed to serve the existing API.
 - `apps/server` is the composition root. Its `serve`, `worker`, `all`, and `migrate` commands preserve the existing runtime wiring.
 
-Domain and application crates must not depend on infrastructure adapters. Adapter crates may depend inward; inward crates must never depend on them. Manifest inspection tests in `crates/domain/tests/dependency_boundaries.rs` enforce the direct dependency rules without adding a TOML parser.
+Domain and application crates must not depend on infrastructure adapters. Adapter crates may depend inward; inward crates must never depend on them. `cargo xtask boundaries` enforces the complete workspace graph through Cargo metadata, including explicit package classifications and external dependency restrictions.
 
 ## Package naming
 

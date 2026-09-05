@@ -22,3 +22,6 @@ url.workspace = true
 workspace = true
 
 [dev-dependencies]
+
+[package.metadata.deepref]
+layer = "adapter"
