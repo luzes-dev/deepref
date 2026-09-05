@@ -48,12 +48,18 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - name: Install pinned Rust toolchain and auditors
+      - name: Install pinned Rust toolchain
         run: |
           rustup toolchain install 1.95.0 --profile minimal
           rustup override set 1.95.0
-          cargo install --locked cargo-audit --version 0.22.0
-          cargo install --locked cargo-deny --version 0.20.2
+      - name: Install pinned prebuilt Rust auditors
+        uses: taiki-e/install-action@7b8d4719ee4aaa279bdf55df38dacb9ebfe12a6c # v2.87.6
+        with:
+          tool: |
+            cargo-audit@0.22.0
+            cargo-deny@0.20.2
+          checksum: true
+          fallback: none
       - run: cargo audit --deny unmaintained --deny unsound
       - run: cargo deny --locked check
       - name: Set up pnpm
