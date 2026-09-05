@@ -49,13 +49,22 @@ jobs:
         run: |
           rustup toolchain install 1.95.0 --profile minimal --component rustfmt,clippy
           rustup override set 1.95.0
+      - name: Set up sccache for compile-heavy checks
+        if: matrix.command != 'fmt'
+        uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba # v0.0.11
+        with:
+          version: v0.17.0
+      - name: Enable sccache compiler wrapper
+        if: matrix.command != 'fmt'
+        run: |
+          echo "SCCACHE_GHA_ENABLED=true" >> "$GITHUB_ENV"
+          echo "RUSTC_WRAPPER=sccache" >> "$GITHUB_ENV"
       - name: Restore Cargo cache
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
             ~/.cargo/registry
             ~/.cargo/git
-            target
           key: cargo-${{ runner.os }}-1.95.0-${{ matrix.command }}-${{ hashFiles('Cargo.lock') }}
           restore-keys: cargo-${{ runner.os }}-1.95.0-${{ matrix.command }}-
       - name: Run check
@@ -67,6 +76,9 @@ jobs:
             clippy) cargo clippy --workspace --all-targets --locked -- -D warnings ;;
             test) cargo test --workspace --all-targets --locked ;;
           esac
+      - name: Show sccache statistics
+        if: always() && matrix.command != 'fmt'
+        run: ${SCCACHE_PATH:-sccache} --show-stats
 
   ai-pr15-gates:
     name: AI PR15 evaluation and security gates
@@ -81,10 +93,21 @@ jobs:
         run: |
           rustup toolchain install 1.95.0 --profile minimal --component rustfmt,clippy
           rustup override set 1.95.0
+      - name: Set up sccache
+        uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba # v0.0.11
+        with:
+          version: v0.17.0
+      - name: Enable sccache compiler wrapper
+        run: |
+          echo "SCCACHE_GHA_ENABLED=true" >> "$GITHUB_ENV"
+          echo "RUSTC_WRAPPER=sccache" >> "$GITHUB_ENV"
       - name: Run checked-in gold-set evaluation gate
         run: cargo test -p deepref-ai --test eval_gate --locked
       - name: Run prompt-injection and security regressions
         run: cargo test -p deepref-ai --test prompt_injection_regressions --locked
+      - name: Show sccache statistics
+        if: always()
+        run: ${SCCACHE_PATH:-sccache} --show-stats
 
   web:
     name: Web
@@ -149,6 +172,14 @@ jobs:
         run: |
           rustup toolchain install 1.95.0 --profile minimal
           rustup override set 1.95.0
+      - name: Set up sccache
+        uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba # v0.0.11
+        with:
+          version: v0.17.0
+      - name: Enable sccache compiler wrapper
+        run: |
+          echo "SCCACHE_GHA_ENABLED=true" >> "$GITHUB_ENV"
+          echo "RUSTC_WRAPPER=sccache" >> "$GITHUB_ENV"
       - name: Set up pnpm
         uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v4.1.0
         with:
@@ -162,6 +193,9 @@ jobs:
       - run: pnpm run generate:api:check
       - name: Prove drift check left the tree clean
         run: git diff --exit-code
+      - name: Show sccache statistics
+        if: always()
+        run: ${SCCACHE_PATH:-sccache} --show-stats
 
   full-stack:
     name: Full-stack integration and E2E
@@ -176,6 +210,14 @@ jobs:
         run: |
           rustup toolchain install 1.95.0 --profile minimal
           rustup override set 1.95.0
+      - name: Set up sccache
+        uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba # v0.0.11
+        with:
+          version: v0.17.0
+      - name: Enable sccache compiler wrapper
+        run: |
+          echo "SCCACHE_GHA_ENABLED=true" >> "$GITHUB_ENV"
+          echo "RUSTC_WRAPPER=sccache" >> "$GITHUB_ENV"
       - name: Set up pnpm
         uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v4.1.0
         with:
@@ -186,16 +228,19 @@ jobs:
           node-version: 24.4.1
           cache: pnpm
       - run: pnpm install --frozen-lockfile
-      - name: Install pinned task runner
-        run: cargo install --locked just --version 1.42.4
       - name: Start disposable dependencies
         run: docker compose -f infra/local/compose.yaml up -d --wait
       - name: Run integration tests
-        run: just test-integration
+        run: |
+          cargo run -q -p deepref-server -- migrate
+          cargo test --workspace --tests --locked
+      - name: Show sccache statistics
+        if: always()
+        run: ${SCCACHE_PATH:-sccache} --show-stats
       - name: Install Chromium
         run: pnpm --filter @deepref/web exec playwright install --with-deps chromium
       - name: Run browser tests
-        run: just test-e2e
+        run: pnpm --filter @deepref/web test:e2e
       - name: Stop disposable dependencies
         if: always()
         run: docker compose -f infra/local/compose.yaml down --volumes
