@@ -49,3 +49,7 @@ tower.workspace = true
 
 [lints]
 workspace = true
+
+[package.metadata.deepref]
+layer = "http"
+
