@@ -52,15 +52,12 @@ jobs:
         run: |
           rustup toolchain install 1.95.0 --profile minimal
           rustup override set 1.95.0
-      - name: Install pinned prebuilt Rust auditors
+      - name: Install pinned prebuilt cargo-deny
         uses: taiki-e/install-action@7b8d4719ee4aaa279bdf55df38dacb9ebfe12a6c # v2.87.6
         with:
-          tool: |
-            cargo-audit@0.22.0
-            cargo-deny@0.20.2
+          tool: cargo-deny@0.20.2
           checksum: true
           fallback: none
-      - run: cargo audit --deny unmaintained --deny unsound
       - run: cargo deny --locked check
       - name: Set up pnpm
         uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v4.1.0
