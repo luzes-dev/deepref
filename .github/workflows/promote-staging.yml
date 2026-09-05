@@ -40,7 +40,7 @@ jobs:
           [[ "$MANIFEST_REFERENCE" =~ @sha256:[0-9a-f]{64}$ ]] || { echo 'manifest_reference must be digest-pinned' >&2; exit 1; }
           [[ "$RELEASE_TREE" =~ ^[0-9a-f]{40}$ ]] || { echo 'release_tree must be a Git tree hash' >&2; exit 1; }
       - name: Checkout trusted source automation
-        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
           ref: development
@@ -135,7 +135,7 @@ jobs:
           permission-contents: write
           permission-pull-requests: write
       - name: Checkout protected GitOps branch
-        uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           path: gitops
           persist-credentials: false
