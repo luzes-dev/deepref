@@ -1,0 +1,18 @@
+# Deepref cargo-nextest configuration
+# See: https://nexte.st/book/configuration.html
+
+[profile.default]
+retries = 0
+slow-timeout = { period = "60s", terminate-after = 2 }
+
+# Integration tests with database requirements can be isolated or concurrency-capped
+[test-groups]
+database = { max-threads = 4 }
+
+[[profile.default.overrides]]
+filter = 'package(deepref-postgres)'
+test-group = 'database'
+
+[profile.ci]
+retries = 1
+slow-timeout = { period = "60s", terminate-after = 2 }
