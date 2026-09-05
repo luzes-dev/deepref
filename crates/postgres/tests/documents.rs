@@ -1,3 +1,9 @@
+#![allow(
+    clippy::expect_used,
+    clippy::panic,
+    clippy::unwrap_used,
+    clippy::string_slice
+)]
 use deepref_documents::{ParsedBlock, ParsedDocument, ParsedPage};
 use deepref_postgres::{
     CompleteDocumentRetrievalOutcome, NewDocument, complete_document_retrieval, create_document,

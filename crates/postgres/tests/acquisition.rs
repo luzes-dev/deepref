@@ -1,3 +1,9 @@
+#![allow(
+    clippy::expect_used,
+    clippy::panic,
+    clippy::unwrap_used,
+    clippy::string_slice
+)]
 use deepref_application::{RawAuthor, RawIdentifier, RawRecord};
 use deepref_domain::{IdentifierScheme, ImportFormat};
 use deepref_postgres::{AcquisitionError, ImportPersistRequest, migrate, persist_import};

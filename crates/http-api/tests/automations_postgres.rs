@@ -1,3 +1,9 @@
+#![allow(
+    clippy::expect_used,
+    clippy::panic,
+    clippy::unwrap_used,
+    clippy::string_slice
+)]
 use axum::{
     body::{Body, to_bytes},
     http::{Request, StatusCode, response::Response},

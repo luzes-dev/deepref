@@ -1,3 +1,9 @@
+#![allow(
+    clippy::expect_used,
+    clippy::panic,
+    clippy::unwrap_used,
+    clippy::string_slice
+)]
 fn contains_identifier(source: &str, identifier: &str) -> bool {
     source
         .split(|character: char| !(character.is_ascii_alphanumeric() || character == '_'))

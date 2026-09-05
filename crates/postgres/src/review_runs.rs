@@ -134,7 +134,7 @@ pub async fn schedule_prepared_review_run(
         source_manifest_hash: source_content_hash.clone(),
         source_content_hash,
         resolved_models: vec![model_identity(route)?],
-        runtime: runtime_identity(),
+        runtime: runtime_identity()?,
     })?;
 
     let recipe = recipe_for(request.command.definition);

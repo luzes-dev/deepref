@@ -1,3 +1,9 @@
+#![allow(
+    clippy::expect_used,
+    clippy::panic,
+    clippy::unwrap_used,
+    clippy::string_slice
+)]
 #[test]
 fn every_collection_operation_exposes_a_bounded_contract() {
     let document = serde_json::to_value(deepref_http_api::routes::openapi_document()).unwrap();

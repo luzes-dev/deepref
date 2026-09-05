@@ -1,3 +1,9 @@
+#![allow(
+    clippy::expect_used,
+    clippy::panic,
+    clippy::unwrap_used,
+    clippy::string_slice
+)]
 use deepref_postgres::{MIGRATOR, migrate};
 use sqlx::{Executor, PgPool, Row, migrate::Migrator, postgres::PgPoolOptions};
 use uuid::Uuid;

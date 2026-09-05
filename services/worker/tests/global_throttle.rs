@@ -1,3 +1,9 @@
+#![allow(
+    clippy::expect_used,
+    clippy::panic,
+    clippy::unwrap_used,
+    clippy::string_slice
+)]
 #[test]
 fn provider_permit_schedule_is_postgresql_backed() {
     let migration =

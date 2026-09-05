@@ -1,3 +1,9 @@
+#![allow(
+    clippy::expect_used,
+    clippy::panic,
+    clippy::unwrap_used,
+    clippy::string_slice
+)]
 use deepref_postgres::{get_prisma_projection, migrate};
 use sqlx::{PgPool, postgres::PgPoolOptions};
 use uuid::Uuid;
