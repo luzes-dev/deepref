@@ -5,6 +5,7 @@ build/
 dist/
 coverage/
 reports/
+.stryker-tmp/
 *.lcov
 .env
 .env.*
