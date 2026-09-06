@@ -146,14 +146,12 @@ pub fn ensure_sqlx_cli() -> Result<()> {
 }
 
 fn run_migrations(root: &Path, database_url: &str) -> Result<()> {
+    let source = root.join("crates/postgres/migrations");
     let status = Command::new("cargo")
-        .args(["run", "-q", "-p", "deepref-server", "--", "migrate"])
+        .args(migration_arguments(&source, database_url))
         .current_dir(root)
-        .env("DATABASE_URL", database_url)
         .status()
-        .context(
-            "failed to run database migrations via 'cargo run -p deepref-server -- migrate'",
-        )?;
+        .context("failed to invoke 'cargo sqlx migrate run'")?;
     if !status.success() {
         bail!(
             "database migration failed with exit code: {:?}",
@@ -161,6 +159,19 @@ fn run_migrations(root: &Path, database_url: &str) -> Result<()> {
         );
     }
     Ok(())
+}
+
+fn migration_arguments(source: &Path, database_url: &str) -> Vec<String> {
+    vec![
+        "sqlx".to_owned(),
+        "migrate".to_owned(),
+        "run".to_owned(),
+        "--source".to_owned(),
+        source.display().to_string(),
+        "--database-url".to_owned(),
+        database_url.to_owned(),
+        "--no-dotenv".to_owned(),
+    ]
 }
 
 #[cfg(test)]
@@ -194,5 +205,26 @@ API_BIND_ADDR=127.0.0.1:8080
 
         let empty = "# only comments\nVAR=123\n";
         assert_eq!(parse_database_url_from_env_str(empty), None);
+    }
+
+    #[test]
+    fn migration_arguments_run_the_shared_migration_set_without_project_compilation() {
+        let args = migration_arguments(
+            Path::new("crates/postgres/migrations"),
+            "postgres://localhost/deepref",
+        );
+        assert_eq!(
+            args,
+            vec![
+                "sqlx",
+                "migrate",
+                "run",
+                "--source",
+                "crates/postgres/migrations",
+                "--database-url",
+                "postgres://localhost/deepref",
+                "--no-dotenv",
+            ]
+        );
     }
 }

@@ -620,22 +620,22 @@ async fn execute_compiled_review(
     let review_run_id = deepref_review::ReviewRunId::new(automation_run_id.as_uuid())?;
     let run =
         deepref_postgres::load_leased_review_run(pool, project_id, review_run_id, owner).await?;
+    let review = CompiledReview::compile(run.snapshot.definition)?;
     if let deepref_review::ReviewRunState::Completed { .. }
     | deepref_review::ReviewRunState::Blocked { .. } = run.snapshot.state
     {
-        let accepted = latest_accepted_review_attempt(pool, project_id, review_run_id).await?;
-        deepref_postgres::bind_review_step_acceptance(
+        let accepted = latest_accepted_review_attempt(
+            pool,
+            project_id,
+            review_run_id,
+            final_review_node(&review).id(),
+        )
+        .await?;
+        deepref_postgres::complete_review_step(
             pool,
             project_id,
             automation_step.id,
             accepted,
-            owner,
-        )
-        .await?;
-        deepref_postgres::complete_automation_step_with_output(
-            pool,
-            project_id,
-            automation_step.id,
             owner,
             Some(serde_json::to_value(&run.snapshot)?),
         )
@@ -643,7 +643,6 @@ async fn execute_compiled_review(
         return Ok(());
     }
     deepref_postgres::mark_review_run_running(pool, project_id, review_run_id, owner).await?;
-    let review = CompiledReview::compile(run.snapshot.definition)?;
 
     let prepare = persist_review_node(
         pool,
@@ -1034,31 +1033,31 @@ async fn finalize_compiled_candidate(
     let final_attempt = match final_start {
         deepref_postgres::ReviewAttemptStart::Reused { attempt_id, .. } => attempt_id,
         deepref_postgres::ReviewAttemptStart::Started { attempt_id, .. } => {
-            let model_run_id = executed.model_run_id;
-            let outcome =
-                deepref_postgres::finalize_review_proposal(pool, run, executed, owner).await?;
-            let payload = match outcome {
-                deepref_postgres::ReviewFinalization::Completed { proposal_id } => {
-                    serde_json::json!({"state":"completed","proposal_id":proposal_id})
-                }
-                deepref_postgres::ReviewFinalization::Blocked => {
-                    serde_json::json!({"state":"blocked","code":"subject_changed"})
-                }
-            };
-            deepref_postgres::complete_review_attempt(
+            let outcome = deepref_postgres::complete_review_outcome(
                 pool,
                 run,
-                deepref_postgres::ReviewAttemptCompletion {
-                    attempt_id,
-                    payload,
-                    media_type: "application/vnd.deepref.review-finalization+json",
+                deepref_postgres::ReviewOutcomeCompletion {
+                    final_attempt_id: attempt_id,
                     predecessors: std::slice::from_ref(&predecessor_input),
-                    model_run_id: Some(model_run_id),
+                    outcome: deepref_postgres::ReviewOutcome::Candidate {
+                        proposal: deepref_ai::AiProposal {
+                            id: Uuid::new_v4(),
+                            draft: executed.proposal,
+                            model_run_id: executed.model_run_id,
+                            status: deepref_ai::ProposalStatus::Pending,
+                            resolved_at: None,
+                            resolved_by_actor_id: None,
+                        },
+                    },
+                    automation_step_id: automation_step.id,
                     worker_id: owner,
                 },
             )
-            .await?
-            .attempt_id
+            .await?;
+            return match outcome {
+                deepref_postgres::ReviewFinalization::Completed { .. }
+                | deepref_postgres::ReviewFinalization::Blocked => Ok(()),
+            };
         }
     };
     complete_review_automation_step(pool, run, automation_step, final_attempt, owner).await
@@ -1084,35 +1083,36 @@ async fn finalize_blocked_review(
         code,
         message,
     } = blocked;
-    deepref_postgres::block_review_run(
-        pool,
-        run.snapshot.project_id,
-        run.snapshot.id,
-        code,
-        message,
-    )
-    .await?;
-    let final_artifact = persist_review_node(
+    let predecessor_input = artifact_input(predecessor);
+    let final_start = deepref_postgres::begin_review_attempt(
         pool,
         run,
         review,
+        finalize_node,
+        std::slice::from_ref(&predecessor_input),
         owner,
-        ReviewNodeWrite {
-            node: finalize_node,
-            payload: serde_json::json!({"state":"blocked","code":code.as_str(),"message":message}),
-            predecessors: std::slice::from_ref(predecessor),
-            model_run_id: None,
-        },
     )
     .await?;
-    let final_attempt = latest_accepted_attempt_for_artifact(
-        pool,
-        run.snapshot.project_id,
-        run.snapshot.id,
-        final_artifact.artifact_id,
-    )
-    .await?;
-    complete_review_automation_step(pool, run, automation_step, final_attempt, owner).await
+    match final_start {
+        deepref_postgres::ReviewAttemptStart::Reused { attempt_id, .. } => {
+            complete_review_automation_step(pool, run, automation_step, attempt_id, owner).await
+        }
+        deepref_postgres::ReviewAttemptStart::Started { attempt_id, .. } => {
+            deepref_postgres::complete_review_outcome(
+                pool,
+                run,
+                deepref_postgres::ReviewOutcomeCompletion {
+                    final_attempt_id: attempt_id,
+                    predecessors: std::slice::from_ref(&predecessor_input),
+                    outcome: deepref_postgres::ReviewOutcome::Blocked { code, message },
+                    automation_step_id: automation_step.id,
+                    worker_id: owner,
+                },
+            )
+            .await?;
+            Ok(())
+        }
+    }
 }
 
 async fn complete_review_automation_step(
@@ -1122,22 +1122,16 @@ async fn complete_review_automation_step(
     final_attempt: Uuid,
     owner: &str,
 ) -> anyhow::Result<()> {
-    deepref_postgres::bind_review_step_acceptance(
+    deepref_postgres::complete_review_step(
         pool,
         run.snapshot.project_id,
         automation_step.id,
         final_attempt,
         owner,
-    )
-    .await?;
-    let snapshot =
-        deepref_postgres::get_review_run(pool, run.snapshot.project_id, run.snapshot.id).await?;
-    deepref_postgres::complete_automation_step_with_output(
-        pool,
-        run.snapshot.project_id,
-        automation_step.id,
-        owner,
-        Some(serde_json::to_value(snapshot)?),
+        Some(serde_json::to_value(
+            &deepref_postgres::get_review_run(pool, run.snapshot.project_id, run.snapshot.id)
+                .await?,
+        )?),
     )
     .await?;
     Ok(())
@@ -1366,37 +1360,27 @@ async fn latest_accepted_review_attempt(
     pool: &sqlx::PgPool,
     project_id: deepref_domain::ProjectId,
     review_run_id: deepref_review::ReviewRunId,
+    final_node_id: &str,
 ) -> anyhow::Result<Uuid> {
     sqlx::query_scalar(
         "SELECT id FROM review_step_attempts
-         WHERE project_id=$1 AND automation_run_id=$2 AND accepted_at IS NOT NULL
-         ORDER BY accepted_at DESC,id DESC LIMIT 1",
-    )
-    .bind(project_id.as_uuid())
-    .bind(review_run_id.as_uuid())
-    .fetch_optional(pool)
-    .await?
-    .ok_or_else(|| anyhow::anyhow!("terminal review run has no accepted attempt"))
-}
-
-async fn latest_accepted_attempt_for_artifact(
-    pool: &sqlx::PgPool,
-    project_id: deepref_domain::ProjectId,
-    review_run_id: deepref_review::ReviewRunId,
-    artifact_id: Uuid,
-) -> anyhow::Result<Uuid> {
-    sqlx::query_scalar(
-        "SELECT id FROM review_step_attempts
-         WHERE project_id=$1 AND automation_run_id=$2 AND artifact_id=$3
+         WHERE project_id=$1 AND automation_run_id=$2 AND node_id=$3
            AND accepted_at IS NOT NULL
          ORDER BY accepted_at DESC,id DESC LIMIT 1",
     )
     .bind(project_id.as_uuid())
     .bind(review_run_id.as_uuid())
-    .bind(artifact_id)
+    .bind(final_node_id)
     .fetch_optional(pool)
     .await?
-    .ok_or_else(|| anyhow::anyhow!("review artifact has no accepted attempt"))
+    .ok_or_else(|| anyhow::anyhow!("terminal review run has no accepted attempt"))
+}
+
+fn final_review_node(review: &CompiledReview) -> &ReviewNode {
+    match review.plan() {
+        ReviewExecutionPlan::Standard(plan) => &plan.finalize,
+        ReviewExecutionPlan::Screening(plan) => &plan.finalize,
+    }
 }
 
 fn bounded_worker_error(error: &anyhow::Error) -> String {
