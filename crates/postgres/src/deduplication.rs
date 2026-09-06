@@ -857,6 +857,44 @@ pub async fn decide_proposal(
     if matches!(request.decision, ProposalDecision::CreateNew) && proposal_kind == "conflict" {
         return Err(DedupeError::ConflictCreateNew);
     }
+    if !matches!(request.decision, ProposalDecision::Reject) {
+        let (action, report_id) = match request.decision {
+            ProposalDecision::Accept => (
+                RecordResolutionAction::Link,
+                Some(
+                    candidate_report_id
+                        .ok_or_else(|| {
+                            DedupeError::InvalidCommand(
+                                "accept requires a candidate report".to_owned(),
+                            )
+                        })?
+                        .into(),
+                ),
+            ),
+            ProposalDecision::CreateNew => (RecordResolutionAction::Create, None),
+            ProposalDecision::Reject => unreachable!("reject handled below"),
+        };
+        let result = resolve_record_in_transaction_with_action(
+            &mut tx,
+            ResolveRecordCommand {
+                project_id: request.project_id.into(),
+                record_id: proposal.get::<Uuid, _>("record_id").into(),
+                action,
+                report_id,
+                proposal_id: Some(request.proposal_id),
+                reason: request.reason.clone(),
+                actor_kind: request.actor_kind.clone(),
+                actor_id: request.actor_id.clone(),
+            },
+            (request.decision == ProposalDecision::Accept).then_some("accept_proposal"),
+        )
+        .await?;
+        tx.commit().await?;
+        return Ok(ResolutionResult {
+            action: request.decision.as_str().to_owned(),
+            ..result
+        });
+    }
     let prior_report_id: Option<Uuid> = sqlx::query_scalar(
         "SELECT report_id FROM records WHERE project_id=$1 AND id=$2 FOR UPDATE",
     )
@@ -866,88 +904,7 @@ pub async fn decide_proposal(
     .await?
     .flatten();
 
-    let source = if matches!(request.decision, ProposalDecision::Reject) {
-        None
-    } else {
-        let source = load_source_record(&mut tx, request.project_id, record_id).await?;
-        lock_record_identifiers(&mut tx, record_id).await?;
-        Some(source)
-    };
-
-    let resolved_report_id = match request.decision {
-        ProposalDecision::Accept => {
-            let report_id = candidate_report_id.ok_or_else(|| {
-                DedupeError::InvalidCommand("accept requires a candidate report".to_owned())
-            })?;
-            ensure_report_membership(&mut tx, request.project_id, report_id).await?;
-            attach_record_identifiers(
-                &mut tx,
-                source.as_ref().ok_or(DedupeError::RecordNotFound)?,
-                report_id,
-                proposal_kind == "conflict",
-            )
-            .await?;
-            link_record(
-                &mut tx,
-                ResolutionLink {
-                    project_id: request.project_id,
-                    record_id,
-                    prior_report_id,
-                    report_id,
-                    action: "accept_proposal",
-                    reason: &request.reason,
-                    actor_kind: &request.actor_kind,
-                    actor_id: &request.actor_id,
-                    proposal_id: Some(request.proposal_id),
-                },
-            )
-            .await?;
-            Some(report_id)
-        }
-        ProposalDecision::CreateNew => {
-            let source = source.as_ref().ok_or(DedupeError::RecordNotFound)?;
-            let identifiers = record_identifiers(&mut tx, record_id).await?;
-            if !matched_report_ids(&mut tx, &identifiers).await?.is_empty() {
-                return Err(DedupeError::IdentifierConflict);
-            }
-            let normalized_title = source.title.as_deref().map(normalize_bibliography_title);
-            let report_id = create_report(&mut tx, source, normalized_title).await?;
-            link_record(
-                &mut tx,
-                ResolutionLink {
-                    project_id: request.project_id,
-                    record_id,
-                    prior_report_id,
-                    report_id,
-                    action: "create_new",
-                    reason: &request.reason,
-                    actor_kind: &request.actor_kind,
-                    actor_id: &request.actor_id,
-                    proposal_id: Some(request.proposal_id),
-                },
-            )
-            .await?;
-            Some(report_id)
-        }
-        ProposalDecision::Reject => None,
-    };
-    if !matches!(request.decision, ProposalDecision::Reject) {
-        supersede_sibling_proposals(
-            &mut tx,
-            request.project_id,
-            record_id,
-            request.proposal_id,
-            &request.reason,
-            &request.actor_kind,
-            &request.actor_id,
-        )
-        .await?;
-    }
-    let action = match request.decision {
-        ProposalDecision::Reject => "reject_proposal",
-        ProposalDecision::Accept => "accept_proposal",
-        ProposalDecision::CreateNew => "create_new",
-    };
+    let action = "reject_proposal";
     sqlx::query(
         "UPDATE dedupe_proposals
          SET status=$3,revision=revision+1,reviewer_kind=$4,reviewer_id=$5,
@@ -956,39 +913,33 @@ pub async fn decide_proposal(
     )
     .bind(request.project_id)
     .bind(request.proposal_id)
-    .bind(if matches!(request.decision, ProposalDecision::Reject) {
-        "rejected"
-    } else {
-        "accepted"
-    })
+    .bind("rejected")
     .bind(&request.actor_kind)
     .bind(&request.actor_id)
     .bind(&request.reason)
     .execute(&mut *tx)
     .await?;
-    if matches!(request.decision, ProposalDecision::Reject) {
-        sqlx::query(
-            "INSERT INTO dedupe_resolution_events
-             (id,project_id,record_id,prior_report_id,resolved_report_id,action,reason,actor_kind,actor_id,proposal_id,reverted_event_id)
-             VALUES ($1,$2,$3,$4,NULL,$5,$6,$7,$8,$9,NULL)",
-        )
-        .bind(Uuid::new_v4())
-        .bind(request.project_id)
-        .bind(record_id)
-        .bind(prior_report_id)
-        .bind(action)
-        .bind(&request.reason)
-        .bind(&request.actor_kind)
-        .bind(&request.actor_id)
-        .bind(request.proposal_id)
-        .execute(&mut *tx)
-        .await?;
-    }
+    sqlx::query(
+        "INSERT INTO dedupe_resolution_events
+         (id,project_id,record_id,prior_report_id,resolved_report_id,action,reason,actor_kind,actor_id,proposal_id,reverted_event_id)
+         VALUES ($1,$2,$3,$4,NULL,$5,$6,$7,$8,$9,NULL)",
+    )
+    .bind(Uuid::new_v4())
+    .bind(request.project_id)
+    .bind(record_id)
+    .bind(prior_report_id)
+    .bind(action)
+    .bind(&request.reason)
+    .bind(&request.actor_kind)
+    .bind(&request.actor_id)
+    .bind(request.proposal_id)
+    .execute(&mut *tx)
+    .await?;
     tx.commit().await?;
     Ok(ResolutionResult {
         record_id,
         prior_report_id,
-        resolved_report_id,
+        resolved_report_id: None,
         action: request.decision.as_str().to_owned(),
     })
 }
@@ -1046,6 +997,14 @@ pub async fn resolve_record(
 pub(crate) async fn resolve_record_in_transaction(
     tx: &mut Transaction<'_, Postgres>,
     request: ResolveRecordCommand,
+) -> Result<ResolutionResult, DedupeError> {
+    resolve_record_in_transaction_with_action(tx, request, None).await
+}
+
+async fn resolve_record_in_transaction_with_action(
+    tx: &mut Transaction<'_, Postgres>,
+    request: ResolveRecordCommand,
+    resolution_event_action: Option<&str>,
 ) -> Result<ResolutionResult, DedupeError> {
     request
         .validate()
@@ -1123,7 +1082,7 @@ pub(crate) async fn resolve_record_in_transaction(
                     record_id,
                     prior_report_id,
                     report_id,
-                    action: "create_new",
+                    action: resolution_event_action.unwrap_or("create_new"),
                     reason: &request.reason,
                     actor_kind: &request.actor_kind,
                     actor_id: &request.actor_id,
@@ -1157,7 +1116,7 @@ pub(crate) async fn resolve_record_in_transaction(
                     record_id,
                     prior_report_id,
                     report_id,
-                    action: request.action.as_str(),
+                    action: resolution_event_action.unwrap_or(request.action.as_str()),
                     reason: &request.reason,
                     actor_kind: &request.actor_kind,
                     actor_id: &request.actor_id,
