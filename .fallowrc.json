@@ -2,6 +2,7 @@
   "$schema": "https://raw.githubusercontent.com/fallow-rs/fallow/main/schema.json",
   "ignoreUnresolvedImports": ["/env.js"],
   "ignorePatterns": [
+    "apps/server/**",
     "apps/web/jsrepo.config.ts",
     "apps/web/static/env.js",
     "apps/web/src/lib/index.ts",
@@ -15,7 +16,115 @@
     "apps/web/src/lib/api/generated/**/**"
   ],
   "duplicates": {
-    "minLines": 15
+    "minLines": 15,
+    "minTokens": 45,
+    "mode": "semantic",
+    "near": true,
+    "minOccurrences": 2
+  },
+  "boundaries": {
+    "zones": [
+      {
+        "name": "utils",
+        "patterns": ["apps/web/src/lib/utils.ts"]
+      },
+      {
+        "name": "api",
+        "patterns": ["apps/web/src/lib/api/**"]
+      },
+      {
+        "name": "components",
+        "patterns": ["apps/web/src/lib/components/**"]
+      },
+      {
+        "name": "features",
+        "patterns": ["apps/web/src/lib/features/**"]
+      },
+      {
+        "name": "routes",
+        "patterns": ["apps/web/src/routes/**"]
+      }
+    ],
+    "rules": [
+      {
+        "from": "utils",
+        "allow": []
+      },
+      {
+        "from": "api",
+        "allow": ["utils"]
+      },
+      {
+        "from": "components",
+        "allow": ["utils", "api", "components"]
+      },
+      {
+        "from": "features",
+        "allow": ["utils", "api", "components", "features"]
+      },
+      {
+        "from": "routes",
+        "allow": ["utils", "api", "components", "features", "routes"]
+      }
+    ],
+    "coverage": {
+      "requireAllFiles": false
+    },
+    "calls": {
+      "forbidden": [
+        {
+          "from": "components",
+          "callee": "fetch"
+        },
+        {
+          "from": "features",
+          "callee": "fetch"
+        },
+        {
+          "from": "routes",
+          "callee": "fetch"
+        }
+      ]
+    }
+  },
+  "rules": {
+    "unused-files": "error",
+    "unused-exports": "error",
+    "unused-types": "error",
+    "unused-dependencies": "error",
+    "unused-dev-dependencies": "warn",
+    "unused-optional-dependencies": "warn",
+    "unused-enum-members": "error",
+    "unused-class-members": "error",
+    "unprovided-injects": "error",
+    "unrendered-components": "warn",
+    "unused-component-props": "warn",
+    "unused-svelte-events": "warn",
+    "unused-load-data-keys": "error",
+    "unresolved-imports": "error",
+    "unlisted-dependencies": "error",
+    "duplicate-exports": "error",
+    "type-only-dependencies": "warn",
+    "test-only-dependencies": "warn",
+    "circular-dependencies": "error",
+    "re-export-cycle": "error",
+    "boundary-violation": "error",
+    "private-type-leaks": "warn",
+    "stale-suppressions": "error",
+    "require-suppression-reason": "error",
+    "security-client-server-leak": "error",
+    "security-sink": "warn"
+  },
+  "security": {
+    "categories": {
+      "include": [
+        "dangerous-html",
+        "open-redirect",
+        "ssrf",
+        "prototype-pollution",
+        "hardcoded-secret"
+      ]
+    }
   },
   "health": {
     "ignore": ["apps/web/src/**/*.svelte"],

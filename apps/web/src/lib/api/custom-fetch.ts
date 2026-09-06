@@ -39,9 +39,9 @@ export class ApiError<T = unknown> extends Error {
 	}
 }
 
-// fallow-ignore-next-line unused-type
+// fallow-ignore-next-line unused-type -- Required by Orval OpenAPI client custom mutator signature
 export type ErrorType<T> = ApiError<T>;
-// fallow-ignore-next-line unused-type
+// fallow-ignore-next-line unused-type -- Required by Orval OpenAPI client custom mutator signature
 export type BodyType<T> = T;
 
 function requestUrl(contextUrl: string): string {
@@ -97,6 +97,7 @@ export async function customFetch<T>(url: string, options: RequestInit): Promise
 		const id = correlationId();
 		if (id) headers.set('x-correlation-id', id);
 	}
+	// fallow-ignore-next-line security-sink -- Central fetch wrapper targets verified API client endpoints
 	const response = await fetch(
 		new Request(requestUrl(url), {
 			...options,
