@@ -106,9 +106,9 @@ new-crate LAYER NAME:
 doctor:
     cargo xtask doctor
 
-# Build the three immutable application image targets locally.
-docker-build:
-    docker buildx bake api worker web
+# Build the application image targets locally (optional TAG, defaults to "latest").
+docker-build TAG="latest":
+    TAG={{TAG}} docker buildx bake api worker web
 
 # Update main with a fast-forward-only pull and create feature/SLUG.
 feature SLUG:

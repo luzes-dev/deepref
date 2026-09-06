@@ -6,6 +6,10 @@ variable "IMAGE_PREFIX" {
   default = "deepref"
 }
 
+variable "TAG" {
+  default = ""
+}
+
 variable "OCI_SOURCE" {
   default = "https://github.com/luzes-dev/deepref"
 }
@@ -43,6 +47,20 @@ variable "DEEPREF_ATTESTATIONS" {
   default = true
 }
 
+function "image_tags" {
+  params = [service]
+  result = TAG == "" ? [
+    "${REGISTRY}/${IMAGE_PREFIX}-${service}:${GIT_TREE_HASH}"
+  ] : (TAG == "latest" ? [
+    "${REGISTRY}/${IMAGE_PREFIX}-${service}:latest",
+    "${REGISTRY}/${IMAGE_PREFIX}-${service}:${GIT_TREE_HASH}"
+  ] : [
+    "${REGISTRY}/${IMAGE_PREFIX}-${service}:${TAG}",
+    "${REGISTRY}/${IMAGE_PREFIX}-${service}:latest",
+    "${REGISTRY}/${IMAGE_PREFIX}-${service}:${GIT_TREE_HASH}"
+  ])
+}
+
 group "default" {
   targets = ["api", "worker", "web"]
 }
@@ -78,20 +96,20 @@ target "rust-service" {
 target "api" {
   inherits = ["rust-service"]
   target   = "api"
-  tags     = ["${REGISTRY}/${IMAGE_PREFIX}-api:${GIT_TREE_HASH}"]
+  tags     = image_tags("api")
 }
 
 target "worker" {
   inherits = ["rust-service"]
   target   = "worker"
-  tags     = ["${REGISTRY}/${IMAGE_PREFIX}-worker:${GIT_TREE_HASH}"]
+  tags     = image_tags("worker")
 }
 
 target "web" {
   inherits   = ["release"]
   dockerfile = "apps/web/Dockerfile"
   target     = "runtime"
-  tags       = ["${REGISTRY}/${IMAGE_PREFIX}-web:${GIT_TREE_HASH}"]
+  tags       = image_tags("web")
   args = {
     OCI_SOURCE            = OCI_SOURCE
     OCI_REVISION          = OCI_REVISION

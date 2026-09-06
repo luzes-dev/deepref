@@ -1,0 +1,93 @@
+name: Publish Docker Images
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: 'Image tag (e.g. 1.0.0 or edge; defaults to git tag or short commit SHA)'
+        required: false
+        default: ''
+
+concurrency:
+  group: publish-images-${{ github.ref }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  packages: write
+
+jobs:
+  publish:
+    name: Build and publish container images
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+          persist-credentials: false
+
+      - name: Resolve publication metadata
+        id: meta
+        shell: bash
+        run: |
+          set -euo pipefail
+
+          tree_hash="$(git rev-parse 'HEAD^{tree}')"
+          short_sha="$(git rev-parse --short HEAD)"
+
+          input_tag="${{ github.event.inputs.tag }}"
+          if [[ -n "$input_tag" ]]; then
+            tag="$input_tag"
+          elif [[ "${{ github.ref }}" =~ ^refs/tags/v(.+) ]]; then
+            tag="${BASH_REMATCH[1]}"
+          else
+            tag="$short_sha"
+          fi
+
+          owner="$(echo "${{ github.repository_owner }}" | tr '[:upper:]' '[:lower:]')"
+
+          {
+            echo "tag=$tag"
+            echo "tree_hash=$tree_hash"
+            echo "registry=ghcr.io/$owner"
+          } >> "$GITHUB_OUTPUT"
+
+          echo "Publishing images with tag: $tag (registry: ghcr.io/$owner, tree: $tree_hash)"
+
+      - name: Set up QEMU
+        uses: docker/setup-qemu-action@49b3bc8e6bdd4480b82837b51a6a157e12ec4e75 # v3.2.0
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.3.0
+
+      - name: Log in to GitHub Container Registry
+        uses: docker/login-action@9780b0c442fbb1117ed29e0efdff1e18412f7567 # v3.3.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Build and push container images
+        uses: docker/bake-action@d3418bd7d0e9324001bca92fa8ba175ea7e6dc9b # v7
+        env:
+          REGISTRY: ${{ steps.meta.outputs.registry }}
+          IMAGE_PREFIX: deepref
+          TAG: ${{ steps.meta.outputs.tag }}
+          OCI_SOURCE: ${{ github.server_url }}/${{ github.repository }}
+          OCI_REVISION: ${{ github.sha }}
+          OCI_VERSION: ${{ steps.meta.outputs.tag }}
+          GIT_TREE_HASH: ${{ steps.meta.outputs.tree_hash }}
+          DEEPREF_ATTESTATIONS: true
+        with:
+          source: .
+          targets: api,worker,web
+          push: true
+          set: |
+            api.cache-from=type=gha,scope=deepref-rust-amd64
+            worker.cache-from=type=gha,scope=deepref-rust-amd64
+            web.cache-from=type=gha,scope=deepref-web-amd64
