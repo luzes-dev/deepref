@@ -5,6 +5,7 @@ onlyBuiltDependencies:
   - esbuild
 allowBuilds:
   esbuild: true
+  msw: true
 
 overrides:
   # Keep security-patched transitive pins aligned with the dependency audit.
