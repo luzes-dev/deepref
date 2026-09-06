@@ -49,6 +49,31 @@ port in `DATABASE_URL` in `.env` to the same value before starting the stack.
 
 Every published dependency port binds only to `127.0.0.1`.
 
+## Fast continuous Rust feedback (Bacon)
+
+Bacon is pinned in `.mise.toml` as an interactive local developer tool (it is not a CI gate). It watches the codebase and runs checks or tests on file changes:
+
+```bash
+# Continuous compilation check (default)
+mise exec -- bacon
+
+# Continuous Clippy linting
+mise exec -- bacon clippy
+
+# Continuous unit test execution with nextest
+mise exec -- bacon nextest
+
+# Continuous AI module test execution
+mise exec -- bacon ai
+```
+
+While running interactively in the terminal, keyboard shortcuts allow instant switching:
+- `c`: switch to `clippy`
+- `n`: switch to `nextest`
+- `a`: switch to `ai`
+- `k`: switch to `check`
+- `d`: generate and browse Rust documentation
+
 ## Seed data
 
 In another terminal, run:

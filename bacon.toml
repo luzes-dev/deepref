@@ -1,0 +1,92 @@
+# Bacon configuration for Deepref
+# Run `bacon` for default check, `bacon clippy`, `bacon nextest`, etc.
+# See https://dystroy.org/bacon for complete documentation.
+
+default_job = "check"
+
+[jobs.check]
+command = ["cargo", "check", "--workspace", "--all-targets", "--locked"]
+need_stdout = false
+env = { SQLX_OFFLINE = "true" }
+
+[jobs.check-all]
+command = ["cargo", "check", "--workspace", "--all-targets", "--all-features", "--locked"]
+need_stdout = false
+env = { SQLX_OFFLINE = "true" }
+
+[jobs.clippy]
+command = [
+    "cargo", "clippy",
+    "--workspace",
+    "--all-targets",
+    "--locked",
+    "--",
+    "-D", "warnings"
+]
+need_stdout = false
+env = { SQLX_OFFLINE = "true" }
+
+[jobs.nextest]
+command = [
+    "cargo", "nextest", "run",
+    "--workspace",
+    "--lib",
+    "--bins",
+    "--locked"
+]
+need_stdout = true
+env = { SQLX_OFFLINE = "true" }
+
+[jobs.nextest-all]
+command = [
+    "cargo", "nextest", "run",
+    "--workspace",
+    "--locked"
+]
+need_stdout = true
+env = { SQLX_OFFLINE = "true" }
+
+[jobs.test]
+command = [
+    "cargo", "test",
+    "--workspace",
+    "--lib",
+    "--bins",
+    "--locked"
+]
+need_stdout = true
+env = { SQLX_OFFLINE = "true" }
+
+[jobs.ai]
+command = [
+    "cargo", "nextest", "run",
+    "-p", "deepref-ai",
+    "--locked"
+]
+need_stdout = true
+env = { SQLX_OFFLINE = "true" }
+
+[jobs.ai-prompt-injection]
+command = [
+    "cargo", "nextest", "run",
+    "-p", "deepref-ai",
+    "--test", "prompt_injection_regressions",
+    "--locked"
+]
+need_stdout = true
+env = { SQLX_OFFLINE = "true" }
+
+[jobs.doc]
+command = ["cargo", "doc", "--workspace", "--no-deps", "--locked"]
+need_stdout = false
+env = { SQLX_OFFLINE = "true" }
+
+# Keybindings to quickly switch jobs in interactive mode
+[keybindings]
+c = "job:clippy"
+n = "job:nextest"
+a = "job:ai"
+p = "job:ai-prompt-injection"
+k = "job:check"
+t = "job:test"
+d = "job:doc"
