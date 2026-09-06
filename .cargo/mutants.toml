@@ -1,0 +1,20 @@
+# Configuration for cargo-mutants (Deepref Rust mutation testing policy).
+# Core algorithmic crates are examined while integration-heavy infrastructure is excluded.
+
+test_tool = "nextest"
+cap_lints = true
+
+# Initial scope per modernization contract: domain, application, review, graph.
+examine_globs = [
+    "crates/domain/src/**/*.rs",
+    "crates/application/src/**/*.rs",
+    "crates/review/src/**/*.rs",
+    "crates/graph/src/**/*.rs",
+]
+
+exclude_globs = [
+    "**/tests/**",
+    "**/benches/**",
+]
+
+additional_cargo_args = ["--locked"]

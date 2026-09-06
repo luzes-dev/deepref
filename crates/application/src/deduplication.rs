@@ -93,21 +93,33 @@ pub fn score_candidate(
     }
 }
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum DedupeDisposition {
-    AutoLink,
-    Proposal,
-    CreateReport,
-}
-
-pub fn disposition(score: &DedupeScore, _has_candidate: bool) -> DedupeDisposition {
-    if score.exact_identifier_match && !score.conflicting_identifier {
-        DedupeDisposition::AutoLink
-    } else if score.conflicting_identifier || score.is_credible_fuzzy_match() {
-        DedupeDisposition::Proposal
-    } else {
-        DedupeDisposition::CreateReport
-    }
+/// Rank a bounded fuzzy shortlist and return the single candidate that should
+/// become a human proposal. Persistence adapters own shortlist retrieval, while
+/// this pure function owns score ordering and the proposal threshold.
+pub fn select_fuzzy_candidate(
+    source_title: Option<&str>,
+    source_first_author: Option<&str>,
+    source_year: Option<i32>,
+    candidates: Vec<DedupeCandidate>,
+) -> Option<(DedupeCandidate, DedupeScore)> {
+    let mut scored = candidates
+        .into_iter()
+        .map(|candidate| {
+            let score = score_candidate(source_title, source_first_author, source_year, &candidate);
+            (candidate, score)
+        })
+        .collect::<Vec<_>>();
+    scored.sort_by(|left, right| {
+        right
+            .1
+            .total
+            .partial_cmp(&left.1.total)
+            .unwrap_or(std::cmp::Ordering::Equal)
+            .then_with(|| left.0.report_id.as_uuid().cmp(&right.0.report_id.as_uuid()))
+    });
+    scored
+        .into_iter()
+        .find(|(_, score)| score.is_credible_fuzzy_match())
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
@@ -252,18 +264,36 @@ mod tests {
     }
 
     #[test]
-    fn exact_identifier_is_the_only_auto_link_signal() {
-        let mut exact = candidate();
-        exact.exact_identifier_match = true;
-        let score = score_candidate(None, None, None, &exact);
-        assert_eq!(disposition(&score, true), DedupeDisposition::AutoLink);
+    fn fuzzy_selection_prefers_the_highest_credible_score() {
+        let strongest = candidate();
+        let strongest_id = strongest.report_id;
+        let mut weaker = candidate();
+        weaker.title = Some("A distant but somewhat similar cancer study".to_owned());
 
-        let mut conflicting = exact;
+        let selected = select_fuzzy_candidate(
+            Some("A study of β-catenin in cancer"),
+            Some("Muller"),
+            Some(2024),
+            vec![weaker, strongest],
+        )
+        .expect("the exact-title fuzzy candidate should be credible");
+
+        assert_eq!(selected.0.report_id, strongest_id);
+        assert!(selected.1.is_credible_fuzzy_match());
+    }
+
+    #[test]
+    fn fuzzy_selection_rejects_identifier_conflicts() {
+        let mut conflicting = candidate();
         conflicting.conflicting_identifier = true;
-        let conflict_score = score_candidate(None, None, None, &conflicting);
-        assert_eq!(
-            disposition(&conflict_score, true),
-            DedupeDisposition::Proposal
+        assert!(
+            select_fuzzy_candidate(
+                Some("A study of β-catenin in cancer"),
+                Some("Muller"),
+                Some(2024),
+                vec![conflicting],
+            )
+            .is_none()
         );
     }
 
@@ -285,5 +315,71 @@ mod tests {
                 RecordResolutionAction::Link
             ))
         );
+    }
+
+    proptest::proptest! {
+        #[test]
+        fn candidate_scores_are_bounded_and_invariants_hold(
+            source_title in proptest::option::of("[a-zA-Z0-9 ]{0,50}"),
+            source_author in proptest::option::of("[a-zA-Z ]{0,30}"),
+            source_year in proptest::option::of(1900..2030i32),
+            cand_title in proptest::option::of("[a-zA-Z0-9 ]{0,50}"),
+            cand_author in proptest::option::of("[a-zA-Z ]{0,30}"),
+            cand_year in proptest::option::of(1900..2030i32),
+            exact_match in proptest::prelude::any::<bool>(),
+            conflicting in proptest::prelude::any::<bool>(),
+        ) {
+            let cand = DedupeCandidate {
+                report_id: Uuid::new_v4().into(),
+                title: cand_title,
+                first_author: cand_author,
+                publication_year: cand_year,
+                exact_identifier_match: exact_match,
+                conflicting_identifier: conflicting,
+            };
+            let score = score_candidate(
+                source_title.as_deref(),
+                source_author.as_deref(),
+                source_year,
+                &cand,
+            );
+            proptest::prop_assert!(score.total >= 0.0 && score.total <= 1.0);
+            if conflicting {
+                proptest::prop_assert_eq!(score.total, 0.0);
+                proptest::prop_assert!(!score.is_credible_fuzzy_match());
+            } else if exact_match {
+                proptest::prop_assert_eq!(score.total, 1.0);
+                proptest::prop_assert!(!score.is_credible_fuzzy_match());
+            } else if score.total >= FUZZY_PROPOSAL_THRESHOLD {
+                proptest::prop_assert!(score.is_credible_fuzzy_match());
+            } else {
+                proptest::prop_assert!(!score.is_credible_fuzzy_match());
+            }
+        }
+
+        #[test]
+        fn fuzzy_candidate_selection_always_returns_credible_match(
+            candidate_count in 0..10usize,
+        ) {
+            let mut candidates = Vec::new();
+            for _ in 0..candidate_count {
+                candidates.push(DedupeCandidate {
+                    report_id: Uuid::new_v4().into(),
+                    title: Some("Sample Title for Candidate".to_owned()),
+                    first_author: Some("Author".to_owned()),
+                    publication_year: Some(2023),
+                    exact_identifier_match: false,
+                    conflicting_identifier: false,
+                });
+            }
+            if let Some((_chosen, score)) = select_fuzzy_candidate(
+                Some("Sample Title for Candidate"),
+                Some("Author"),
+                Some(2023),
+                candidates,
+            ) {
+                proptest::prop_assert!(score.is_credible_fuzzy_match());
+            }
+        }
     }
 }

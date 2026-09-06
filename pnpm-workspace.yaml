@@ -5,6 +5,7 @@ onlyBuiltDependencies:
   - esbuild
 allowBuilds:
   esbuild: true
+  msw: true
 
 overrides:
   # Keep security-patched transitive pins aligned with the dependency audit.
@@ -12,8 +13,8 @@ overrides:
   brace-expansion: 5.0.9
   js-yaml: 4.3.1
   linkify-it: 5.0.2
-  fast-uri: 3.1.5
-  postcss: 8.5.18
+  fast-uri: 3.1.6
+  postcss: 8.5.23
 
 minimumReleaseAgeExclude:
   - '@tanstack/query-core@5.101.1'

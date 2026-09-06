@@ -7,10 +7,22 @@ import { defineConfig, includeIgnoreFile } from 'eslint/config';
 import globals from 'globals';
 import ts from 'typescript-eslint';
 
-const gitignorePath = path.resolve(import.meta.dirname, '../../.gitignore');
+const rootGitignorePath = path.resolve(import.meta.dirname, '../../.gitignore');
+const webGitignorePath = path.resolve(import.meta.dirname, '.gitignore');
 
 export default defineConfig(
-	includeIgnoreFile(gitignorePath),
+	includeIgnoreFile(rootGitignorePath),
+	includeIgnoreFile(webGitignorePath),
+	{
+		ignores: [
+			'.svelte-kit/**',
+			'build/**',
+			'dist/**',
+			'.stryker-tmp/**',
+			'node_modules/**',
+			'src/lib/api/generated/**'
+		]
+	},
 	js.configs.recommended,
 	ts.configs.recommended,
 	svelte.configs.recommended,

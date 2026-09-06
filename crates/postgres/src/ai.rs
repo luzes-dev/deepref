@@ -854,97 +854,12 @@ impl ProposalStore for PostgresAiStore {
     }
     fn create<'a>(&'a self, proposal: AiProposal) -> AiFuture<'a, AiProposal> {
         Box::pin(async move {
-            let candidate = proposal.draft.payload.get("candidate");
-            let target_report_id = payload_uuid(&proposal.draft.payload, "report_id")
-                .or_else(|| candidate.and_then(|value| value_uuid(value, "candidate_report_id")))
-                .or_else(|| {
-                    (proposal.draft.entity_type == "screening_report")
-                        .then_some(proposal.draft.entity_id)
-                        .flatten()
-                });
-            let target_record_id = payload_uuid(&proposal.draft.payload, "source_record_id")
-                .or_else(|| candidate.and_then(|value| value_uuid(value, "source_record_id")))
-                .or_else(|| {
-                    (proposal.draft.entity_type == "dedupe_record")
-                        .then_some(proposal.draft.entity_id)
-                        .flatten()
-                });
-            let target_study_id = payload_uuid(&proposal.draft.payload, "study_id")
-                .or_else(|| {
-                    proposal
-                        .draft
-                        .payload
-                        .get("choice")
-                        .and_then(|choice| value_uuid(choice, "study_id"))
-                })
-                .or_else(|| {
-                    (proposal.draft.entity_type == "extraction_study")
-                        .then_some(proposal.draft.entity_id)
-                        .flatten()
-                });
-            let protocol_version_id = payload_uuid(&proposal.draft.payload, "protocol_version_id");
-            let expected_revision = proposal
-                .draft
-                .payload
-                .get("expected_revision")
-                .and_then(serde_json::Value::as_i64);
-            let operation_task_kind = match proposal.draft.operation.as_str() {
-                "study_grouping_suggestion" => "study_grouping",
-                "study_design_classification_suggestion" => "study_design_classification",
-                operation => operation,
-            };
-            let task_kind = proposal
-                .draft
-                .payload
-                .get("task_kind")
-                .and_then(serde_json::Value::as_str)
-                .unwrap_or(operation_task_kind);
             let mut transaction = self
                 .pool
                 .begin()
                 .await
                 .map_err(|_| AiError::Proposal("proposal transaction failed".to_owned()))?;
-            let inserted = sqlx::query(
-                "INSERT INTO ai_proposals
-                 (id,project_id,ai_run_id,proposal_type,payload,status,entity_type,entity_id,operation,
-                  model_run_id,authority_tier,task_kind,target_report_id,target_record_id,target_study_id,
-                  protocol_version_id,expected_revision)
-                 VALUES ($1,$2,$3,$4,$5,'pending',$6,$7,$8,$3,$9,$10,$11,$12,$13,$14,$15)
-                 ON CONFLICT (model_run_id) DO NOTHING",
-            ).bind(proposal.id).bind(proposal.draft.project_id.as_uuid()).bind(proposal.model_run_id)
-            .bind(&proposal.draft.operation).bind(&proposal.draft.payload).bind(&proposal.draft.entity_type).bind(proposal.draft.entity_id)
-            .bind(&proposal.draft.operation).bind(proposal.draft.authority.as_str()).bind(task_kind)
-            .bind(target_report_id).bind(target_record_id).bind(target_study_id)
-            .bind(protocol_version_id).bind(expected_revision)
-            .execute(&mut *transaction).await.map_err(|_| AiError::Proposal("proposal write failed".to_owned()))?;
-            let existing = sqlx::query(
-                "SELECT id,project_id,entity_type,entity_id,operation,payload,authority_tier,
-                        model_run_id,status,resolved_at,resolved_by_actor_id
-                 FROM ai_proposals WHERE model_run_id=$1 ORDER BY created_at DESC,id DESC LIMIT 1",
-            )
-            .bind(proposal.model_run_id)
-            .fetch_optional(&mut *transaction)
-            .await
-            .map_err(|_| AiError::Proposal("proposal lookup failed".to_owned()))?
-            .map(proposal_from_row)
-            .transpose()?
-            .ok_or_else(|| AiError::Proposal("proposal write was not visible".to_owned()))?;
-            if inserted.rows_affected() == 0
-                && (existing.draft.project_id != proposal.draft.project_id
-                    || existing.draft.entity_type != proposal.draft.entity_type
-                    || existing.draft.entity_id != proposal.draft.entity_id
-                    || existing.draft.operation != proposal.draft.operation
-                    || existing.draft.payload != proposal.draft.payload
-                    || existing.draft.authority != proposal.draft.authority
-                    || existing.model_run_id != proposal.model_run_id)
-            {
-                return Err(AiError::Proposal(
-                    "model run proposal idempotency conflict".to_owned(),
-                ));
-            }
-            if inserted.rows_affected() == 1 {
-                persist_typed_proposal_projection(&mut transaction, &existing).await?;
-            }
+            let existing = create_proposal_in_transaction(&mut transaction, proposal).await?;
             transaction
                 .commit()
                 .await
@@ -952,6 +867,117 @@ impl ProposalStore for PostgresAiStore {
             Ok(existing)
         })
     }
+}
+
+/// Persist a proposal while the caller owns the surrounding transaction.
+///
+/// The normal `ProposalStore` implementation wraps this helper in its own
+/// transaction. Durable review completion uses the helper directly so the
+/// proposal, final attempt, manifest, and automation step commit together.
+pub(crate) async fn create_proposal_in_transaction(
+    transaction: &mut Transaction<'_, Postgres>,
+    proposal: AiProposal,
+) -> Result<AiProposal, AiError> {
+    let candidate = proposal.draft.payload.get("candidate");
+    let target_report_id = payload_uuid(&proposal.draft.payload, "report_id")
+        .or_else(|| candidate.and_then(|value| value_uuid(value, "candidate_report_id")))
+        .or_else(|| {
+            (proposal.draft.entity_type == "screening_report")
+                .then_some(proposal.draft.entity_id)
+                .flatten()
+        });
+    let target_record_id = payload_uuid(&proposal.draft.payload, "source_record_id")
+        .or_else(|| candidate.and_then(|value| value_uuid(value, "source_record_id")))
+        .or_else(|| {
+            (proposal.draft.entity_type == "dedupe_record")
+                .then_some(proposal.draft.entity_id)
+                .flatten()
+        });
+    let target_study_id = payload_uuid(&proposal.draft.payload, "study_id")
+        .or_else(|| {
+            proposal
+                .draft
+                .payload
+                .get("choice")
+                .and_then(|choice| value_uuid(choice, "study_id"))
+        })
+        .or_else(|| {
+            (proposal.draft.entity_type == "extraction_study")
+                .then_some(proposal.draft.entity_id)
+                .flatten()
+        });
+    let protocol_version_id = payload_uuid(&proposal.draft.payload, "protocol_version_id");
+    let expected_revision = proposal
+        .draft
+        .payload
+        .get("expected_revision")
+        .and_then(serde_json::Value::as_i64);
+    let operation_task_kind = match proposal.draft.operation.as_str() {
+        "study_grouping_suggestion" => "study_grouping",
+        "study_design_classification_suggestion" => "study_design_classification",
+        operation => operation,
+    };
+    let task_kind = proposal
+        .draft
+        .payload
+        .get("task_kind")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or(operation_task_kind);
+    let inserted = sqlx::query(
+        "INSERT INTO ai_proposals
+         (id,project_id,ai_run_id,proposal_type,payload,status,entity_type,entity_id,operation,
+          model_run_id,authority_tier,task_kind,target_report_id,target_record_id,target_study_id,
+          protocol_version_id,expected_revision)
+         VALUES ($1,$2,$3,$4,$5,'pending',$6,$7,$8,$3,$9,$10,$11,$12,$13,$14,$15)
+         ON CONFLICT (model_run_id) DO NOTHING",
+    )
+    .bind(proposal.id)
+    .bind(proposal.draft.project_id.as_uuid())
+    .bind(proposal.model_run_id)
+    .bind(&proposal.draft.operation)
+    .bind(&proposal.draft.payload)
+    .bind(&proposal.draft.entity_type)
+    .bind(proposal.draft.entity_id)
+    .bind(&proposal.draft.operation)
+    .bind(proposal.draft.authority.as_str())
+    .bind(task_kind)
+    .bind(target_report_id)
+    .bind(target_record_id)
+    .bind(target_study_id)
+    .bind(protocol_version_id)
+    .bind(expected_revision)
+    .execute(&mut **transaction)
+    .await
+    .map_err(|_| AiError::Proposal("proposal write failed".to_owned()))?;
+    let existing = sqlx::query(
+        "SELECT id,project_id,entity_type,entity_id,operation,payload,authority_tier,
+                model_run_id,status,resolved_at,resolved_by_actor_id
+         FROM ai_proposals WHERE model_run_id=$1 ORDER BY created_at DESC,id DESC LIMIT 1",
+    )
+    .bind(proposal.model_run_id)
+    .fetch_optional(&mut **transaction)
+    .await
+    .map_err(|_| AiError::Proposal("proposal lookup failed".to_owned()))?
+    .map(proposal_from_row)
+    .transpose()?
+    .ok_or_else(|| AiError::Proposal("proposal write was not visible".to_owned()))?;
+    if inserted.rows_affected() == 0
+        && (existing.draft.project_id != proposal.draft.project_id
+            || existing.draft.entity_type != proposal.draft.entity_type
+            || existing.draft.entity_id != proposal.draft.entity_id
+            || existing.draft.operation != proposal.draft.operation
+            || existing.draft.payload != proposal.draft.payload
+            || existing.draft.authority != proposal.draft.authority
+            || existing.model_run_id != proposal.model_run_id)
+    {
+        return Err(AiError::Proposal(
+            "model run proposal idempotency conflict".to_owned(),
+        ));
+    }
+    if inserted.rows_affected() == 1 {
+        persist_typed_proposal_projection(transaction, &existing).await?;
+    }
+    Ok(existing)
 }
 
 fn payload_uuid(payload: &serde_json::Value, field: &str) -> Option<Uuid> {

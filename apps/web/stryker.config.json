@@ -1,0 +1,24 @@
+{
+	"$schema": "https://raw.githubusercontent.com/stryker-mutator/stryker-js/master/packages/api/schema/stryker-core.json",
+	"packageManager": "pnpm",
+	"testRunner": "vitest",
+	"plugins": ["@stryker-mutator/vitest-runner"],
+	"mutate": [
+		"src/lib/features/**/*.ts",
+		"src/lib/api/pagination.ts",
+		"!src/**/*.spec.ts",
+		"!src/**/*.property.spec.ts",
+		"!src/**/*.e2e.ts",
+		"!src/**/generated/**",
+		"!src/**/mocks/**"
+	],
+	"reporters": ["progress", "clear-text", "html", "json"],
+	"htmlReporter": {
+		"fileName": "reports/mutation/mutation.html"
+	},
+	"jsonReporter": {
+		"fileName": "reports/mutation/mutation.json"
+	},
+	"concurrency": 1,
+	"cleanTempDir": true
+}

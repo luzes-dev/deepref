@@ -1,3 +1,9 @@
+#![allow(
+    clippy::expect_used,
+    clippy::panic,
+    clippy::unwrap_used,
+    clippy::string_slice
+)]
 use anyhow::{Result, ensure};
 use chrono::Utc;
 use deepref_graph::GraphEdge;
@@ -261,14 +267,15 @@ async fn seed_and_assert(
         "legacy rank formula changed: {rank_a} != {expected_rank_a}"
     );
 
-    let first_timestamp: chrono::DateTime<Utc> = sqlx::query_scalar(
-        "SELECT metrics_computed_at FROM project_reports WHERE project_id=$1 AND report_id=$2",
+    let first_timestamp = Utc::now() - chrono::Duration::seconds(1);
+    sqlx::query(
+        "UPDATE project_reports SET metrics_computed_at=$1 WHERE project_id=$2 AND report_id=$3",
     )
+    .bind(first_timestamp)
     .bind(project_id)
     .bind(report_a)
-    .fetch_one(pool)
+    .execute(pool)
     .await?;
-    tokio::time::sleep(std::time::Duration::from_millis(2)).await;
     recompute_project_metrics(pool, project_id).await?;
     let second_timestamp: chrono::DateTime<Utc> = sqlx::query_scalar(
         "SELECT metrics_computed_at FROM project_reports WHERE project_id=$1 AND report_id=$2",

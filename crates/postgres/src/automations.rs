@@ -556,10 +556,28 @@ pub async fn complete_automation_step_with_output(
     validate_project(project_id)?;
     validate_worker_id(worker_id)?;
     let mut transaction = pool.begin().await?;
-    let row = lock_step_and_job(&mut transaction, project_id, step_run_id).await?;
+    let changed = complete_automation_step_with_output_in_transaction(
+        &mut transaction,
+        project_id,
+        step_run_id,
+        worker_id,
+        output,
+    )
+    .await?;
+    transaction.commit().await?;
+    Ok(changed)
+}
+
+pub(crate) async fn complete_automation_step_with_output_in_transaction(
+    transaction: &mut Transaction<'_, Postgres>,
+    project_id: ProjectId,
+    step_run_id: AutomationStepRunId,
+    worker_id: &str,
+    output: Option<Value>,
+) -> Result<bool, AutomationError> {
+    let row = lock_step_and_job(transaction, project_id, step_run_id).await?;
     let status = parse_step_run_status(&row.get::<String, _>("status"))?;
     if status == AutomationStepRunStatus::Completed {
-        transaction.commit().await?;
         return Ok(false);
     }
     ensure_step_lease_owner(&row, status, worker_id)?;
@@ -577,12 +595,11 @@ pub async fn complete_automation_step_with_output(
     .bind(worker_id)
     .bind(job_attempts)
     .bind(output)
-    .fetch_optional(&mut *transaction)
+    .fetch_optional(&mut **transaction)
     .await?;
     if updated.is_none() {
         return Err(AutomationError::WorkerOwnership);
     }
-    transaction.commit().await?;
     Ok(true)
 }
 

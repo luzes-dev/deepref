@@ -1,5 +1,14 @@
-export const FRAMEWORK_KINDS = ['pico', 'picos', 'peco', 'peo', 'pcc', 'spider', 'custom'] as const;
-export type FrameworkKind = (typeof FRAMEWORK_KINDS)[number];
+import { CriterionDimensionInput } from '$lib/api/generated/models/criterionDimensionInput';
+import { CriterionKindInput } from '$lib/api/generated/models/criterionKindInput';
+import { CriterionStageInput } from '$lib/api/generated/models/criterionStageInput';
+import { FrameworkKindInput } from '$lib/api/generated/models/frameworkKindInput';
+
+export type FrameworkKind = FrameworkKindInput;
+export type CriterionKind = CriterionKindInput;
+export type CriterionStage = CriterionStageInput;
+export type CriterionDimension = CriterionDimensionInput;
+
+export const FRAMEWORK_KINDS = Object.values(FrameworkKindInput) as readonly FrameworkKind[];
 
 export const FRAMEWORK_FIELDS = {
 	pico: ['population', 'intervention', 'comparator', 'outcome'],
@@ -21,32 +30,11 @@ export const REQUIRED_FRAMEWORK_FIELDS = {
 	custom: []
 } as const satisfies Record<FrameworkKind, readonly string[]>;
 
-export type CriterionKind = 'inclusion' | 'exclusion';
-export type CriterionStage = 'title_abstract' | 'full_text' | 'both';
-export type CriterionDimension =
-	| 'population'
-	| 'intervention'
-	| 'comparator'
-	| 'outcome'
-	| 'design'
-	| 'setting'
-	| 'language'
-	| 'date'
-	| 'other';
-
-export const CRITERION_KINDS = ['inclusion', 'exclusion'] as const;
-export const CRITERION_STAGES = ['title_abstract', 'full_text', 'both'] as const;
-export const CRITERION_DIMENSIONS = [
-	'population',
-	'intervention',
-	'comparator',
-	'outcome',
-	'design',
-	'setting',
-	'language',
-	'date',
-	'other'
-] as const;
+export const CRITERION_KINDS = Object.values(CriterionKindInput) as readonly CriterionKind[];
+export const CRITERION_STAGES = Object.values(CriterionStageInput) as readonly CriterionStage[];
+export const CRITERION_DIMENSIONS = Object.values(
+	CriterionDimensionInput
+) as readonly CriterionDimension[];
 
 export function isFrameworkKind(value: string): value is FrameworkKind {
 	return FRAMEWORK_KINDS.some((kind) => kind === value);

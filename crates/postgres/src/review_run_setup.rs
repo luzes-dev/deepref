@@ -69,13 +69,12 @@ pub(crate) fn model_identity(
     })
 }
 
-pub(crate) fn runtime_identity() -> ReviewRuntimeIdentity {
-    ReviewRuntimeIdentity {
-        build_sha: ReviewHash::parse(env!("DEEPREF_SEMANTIC_BUILD_SHA"))
-            .expect("build script emits a SHA-256 runtime identity"),
+pub(crate) fn runtime_identity() -> Result<ReviewRuntimeIdentity, deepref_review::ReviewError> {
+    Ok(ReviewRuntimeIdentity {
+        build_sha: ReviewHash::parse(env!("DEEPREF_SEMANTIC_BUILD_SHA"))?,
         rust_version: option_env!("RUSTC_VERSION")
             .unwrap_or("workspace-toolchain")
             .to_owned(),
         target: format!("{}-{}", std::env::consts::ARCH, std::env::consts::OS),
-    }
+    })
 }

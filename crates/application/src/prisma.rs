@@ -182,10 +182,8 @@ fn svg_connector(from: &str, to: &str, d: &str, kind: &str) -> String {
 /// Render the canonical projection as a deterministic, accessible SVG.
 /// Ordering and labels are intentionally stable so exports can be diffed and
 /// cached without a layout engine.
-pub fn render_prisma_svg(projection: &PrismaProjection) -> String {
-    let grouped_reports = projection
-        .grouped_reports()
-        .expect("PRISMA SVG requires a validated grouping projection");
+pub fn render_prisma_svg(projection: &PrismaProjection) -> Result<String, PrismaInvariantError> {
+    let grouped_reports = projection.grouped_reports()?;
     let boxes = [
         (
             "identified-records",
@@ -436,7 +434,7 @@ pub fn render_prisma_svg(projection: &PrismaProjection) -> String {
         svg.push_str(&svg_connector(from, to, path, kind));
     }
     svg.push_str("</svg>");
-    svg
+    Ok(svg)
 }
 
 #[cfg(test)]
@@ -500,7 +498,7 @@ mod tests {
 
     #[test]
     fn svg_order_and_accessibility_are_stable() {
-        let svg = render_prisma_svg(&projection());
+        let svg = render_prisma_svg(&projection()).expect("valid SVG");
         assert!(svg.starts_with("<svg xmlns="));
         assert!(svg.contains("role=\"img\""));
         assert!(svg.find("identified-records") < svg.find("included-studies"));

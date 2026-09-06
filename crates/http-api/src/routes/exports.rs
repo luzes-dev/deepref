@@ -170,7 +170,8 @@ pub(crate) async fn export_project_artifact(
         ExportKind::ReportsRis => reports_ris(&state, project_id).await?,
         ExportKind::ReportsBib => reports_bib(&state, project_id).await?,
         ExportKind::PrismaJson => serialize_export(&prisma(&state, project_id).await?)?,
-        ExportKind::PrismaSvg => render_prisma_svg(&prisma(&state, project_id).await?),
+        ExportKind::PrismaSvg => render_prisma_svg(&prisma(&state, project_id).await?)
+            .map_err(|error| ApiError::Internal(anyhow::anyhow!(error)))?,
         ExportKind::AuditCsv => audit_csv(&state, project_id).await?,
         ExportKind::ProtocolJson => serialize_export(&protocol(&state, project_id).await?)?,
     };

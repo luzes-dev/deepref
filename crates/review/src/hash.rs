@@ -28,7 +28,7 @@ impl ReviewHash {
         let digest = Sha256::digest(value.as_ref());
         let mut encoded = String::with_capacity(64);
         for byte in digest {
-            write!(&mut encoded, "{byte:02x}").expect("writing to a string cannot fail");
+            let _ = write!(&mut encoded, "{byte:02x}");
         }
         Self(encoded)
     }

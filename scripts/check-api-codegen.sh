@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
+export SQLX_OFFLINE="${SQLX_OFFLINE:-true}"
 
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 tmp_root="$(mktemp -d)"
@@ -21,7 +22,7 @@ ln -s "$root/apps/web/node_modules" "$tmp_root/apps/web/node_modules"
 
 (
 	cd "$root"
-	cargo run -q -p deepref-server -- --print-openapi > "$tmp_openapi"
+	cargo run -q -p deepref-http-api --bin openapi > "$tmp_openapi"
 )
 
 (

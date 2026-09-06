@@ -348,7 +348,9 @@ pub async fn get_screening_queue(
     let progress = queue_progress(pool, project_id).await?;
     let items: Vec<_> = rows.iter().map(queue_item_from_row).collect();
     let next_cursor = if has_next {
-        rows.last().map(|row| encode_cursor(&query, row))
+        rows.last()
+            .map(|row| encode_cursor(&query, row))
+            .transpose()?
     } else {
         None
     };
@@ -603,19 +605,20 @@ async fn ensure_project_and_report_pool(
     project_id: Uuid,
     report_id: Uuid,
 ) -> Result<(), ScreeningError> {
-    let project_exists: bool =
-        sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM projects WHERE id=$1)")
-            .bind(project_id)
-            .fetch_one(pool)
-            .await?;
+    let project_exists = sqlx::query_scalar!(
+        r#"SELECT EXISTS(SELECT 1 FROM projects WHERE id=$1) as "exists!""#,
+        project_id,
+    )
+    .fetch_one(pool)
+    .await?;
     if !project_exists {
         return Err(ScreeningError::ProjectNotFound);
     }
-    let report_exists: bool = sqlx::query_scalar(
-        "SELECT EXISTS(SELECT 1 FROM project_reports WHERE project_id=$1 AND report_id=$2)",
+    let report_exists = sqlx::query_scalar!(
+        r#"SELECT EXISTS(SELECT 1 FROM project_reports WHERE project_id=$1 AND report_id=$2) as "exists!""#,
+        project_id,
+        report_id,
     )
-    .bind(project_id)
-    .bind(report_id)
     .fetch_one(pool)
     .await?;
     if !report_exists {
@@ -625,10 +628,12 @@ async fn ensure_project_and_report_pool(
 }
 
 async fn ensure_project(pool: &PgPool, project_id: Uuid) -> Result<(), ScreeningError> {
-    let exists: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM projects WHERE id=$1)")
-        .bind(project_id)
-        .fetch_one(pool)
-        .await?;
+    let exists = sqlx::query_scalar!(
+        r#"SELECT EXISTS(SELECT 1 FROM projects WHERE id=$1) as "exists!""#,
+        project_id,
+    )
+    .fetch_one(pool)
+    .await?;
     if exists {
         Ok(())
     } else {
@@ -641,11 +646,11 @@ async fn ensure_published_protocol(
     project_id: Uuid,
     protocol_version_id: Uuid,
 ) -> Result<(), ScreeningError> {
-    let exists: bool = sqlx::query_scalar(
-        "SELECT EXISTS(SELECT 1 FROM protocol_versions WHERE id=$1 AND project_id=$2 AND status='published')",
+    let exists = sqlx::query_scalar!(
+        r#"SELECT EXISTS(SELECT 1 FROM protocol_versions WHERE id=$1 AND project_id=$2 AND status='published') as "exists!""#,
+        protocol_version_id,
+        project_id,
     )
-    .bind(protocol_version_id)
-    .bind(project_id)
     .fetch_one(&mut **tx)
     .await?;
     if exists {
@@ -665,12 +670,13 @@ async fn ensure_exclusion_reason(
         return Ok(());
     };
     let stage_name = stage_name(stage);
-    let reason_stage: Option<String> =
-        sqlx::query_scalar("SELECT stage FROM exclusion_reasons WHERE id=$1 AND project_id=$2")
-            .bind(reason_id)
-            .bind(project_id)
-            .fetch_optional(&mut **tx)
-            .await?;
+    let reason_stage = sqlx::query_scalar!(
+        "SELECT stage FROM exclusion_reasons WHERE id=$1 AND project_id=$2",
+        reason_id,
+        project_id,
+    )
+    .fetch_optional(&mut **tx)
+    .await?;
     match reason_stage {
         None => Err(ScreeningError::ExclusionReasonNotFound),
         Some(value) if value == stage_name => Ok(()),
@@ -951,7 +957,10 @@ fn history_item_from_row(row: sqlx::postgres::PgRow) -> ScreeningHistoryItem {
     }
 }
 
-fn encode_cursor(query: &GetScreeningQueueQuery, row: &sqlx::postgres::PgRow) -> String {
+fn encode_cursor(
+    query: &GetScreeningQueueQuery,
+    row: &sqlx::postgres::PgRow,
+) -> Result<String, ScreeningError> {
     let value = ScreeningCursor {
         sort: query.sort.as_str().to_owned(),
         report_id: row.get("report_id"),
@@ -964,7 +973,8 @@ fn encode_cursor(query: &GetScreeningQueueQuery, row: &sqlx::postgres::PgRow) ->
             .get::<Option<i32>, _>("publication_year")
             .unwrap_or(i32::MIN),
     };
-    URL_SAFE_NO_PAD.encode(serde_json::to_vec(&value).expect("screening cursor is serializable"))
+    let bytes = serde_json::to_vec(&value).map_err(|_| ScreeningError::InvalidCursor)?;
+    Ok(URL_SAFE_NO_PAD.encode(bytes))
 }
 
 fn decode_cursor(value: &str) -> Result<ScreeningCursor, ScreeningError> {

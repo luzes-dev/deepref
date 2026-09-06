@@ -17,15 +17,12 @@ deepref-application.workspace = true
 deepref-documents.workspace = true
 deepref-ai.workspace = true
 deepref-review.workspace = true
-deepref-telemetry.workspace = true
 anyhow.workspace = true
 chrono.workspace = true
-futures.workspace = true
 serde.workspace = true
 serde_json.workspace = true
 sha2.workspace = true
 sqlx.workspace = true
-thiserror.workspace = true
 tokio.workspace = true
 tracing.workspace = true
 uuid.workspace = true
@@ -33,5 +30,11 @@ uuid.workspace = true
 [dev-dependencies]
 bytes.workspace = true
 deepref-domain.workspace = true
-reqwest.workspace = true
+futures.workspace = true
 url.workspace = true
+
+[lints]
+workspace = true
+
+[package.metadata.deepref]
+layer = "worker"

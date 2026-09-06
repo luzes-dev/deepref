@@ -6,10 +6,15 @@ license.workspace = true
 
 [dependencies]
 deepref-core = { version = "0.1.0", path = "../core" }
-deepref-domain.workspace = true
 chrono.workspace = true
 petgraph.workspace = true
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
 sha2.workspace = true
 uuid.workspace = true
+
+[lints]
+workspace = true
+
+[package.metadata.deepref]
+layer = "graph"

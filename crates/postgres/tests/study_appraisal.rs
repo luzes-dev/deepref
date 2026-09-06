@@ -1,3 +1,9 @@
+#![allow(
+    clippy::expect_used,
+    clippy::panic,
+    clippy::unwrap_used,
+    clippy::string_slice
+)]
 use std::collections::BTreeMap;
 
 use deepref_application::{
@@ -201,13 +207,19 @@ async fn study_grouping_is_reversible_and_appraisal_is_immutable_and_scoped() {
             .all(|report| report.report_id != report_a.into())
     );
 
+    sqlx::query(
+        "UPDATE study_events SET created_at = now() - interval '1 second' WHERE project_id=$1",
+    )
+    .bind(project_a)
+    .execute(&pool)
+    .await
+    .expect("fixture events can be backdated deterministically");
     let prisma_before_grouping_removal = get_prisma_projection(&pool, project_a)
         .await
         .expect("PRISMA projection before grouping removal")
         .expect("grouping fixture project exists")
         .as_of
         .expect("grouping event gives PRISMA freshness");
-    tokio::time::sleep(Duration::from_millis(2)).await;
     let unassigned = remove_report_from_study(
         &pool,
         RemoveReportFromStudy {

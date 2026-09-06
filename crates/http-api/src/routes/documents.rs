@@ -212,13 +212,11 @@ pub(crate) async fn list_full_text_queue(
     .await?;
     let has_more = items.len() as i64 > limit;
     items.truncate(limit as usize);
-    let next_cursor = has_more.then(|| {
-        items
-            .last()
-            .expect("a non-empty bounded page")
-            .report_id
-            .to_string()
-    });
+    let next_cursor = if has_more {
+        items.last().map(|item| item.report_id.to_string())
+    } else {
+        None
+    };
     Ok(Json(FullTextQueueDto {
         items: items
             .into_iter()
@@ -539,7 +537,7 @@ pub(crate) async fn upload_document(
     let stored = stored
         .ok_or_else(|| ApiError::BadRequest("multipart field file is required".to_owned()))?;
     let byte_size = i64::try_from(stored.byte_size)
-        .expect("the validated document byte bound is smaller than i64::MAX");
+        .map_err(|_| ApiError::BadRequest("document size exceeds supported limit".to_owned()))?;
     let mut tx = match state.pool.begin().await {
         Ok(transaction) => transaction,
         Err(error) => {

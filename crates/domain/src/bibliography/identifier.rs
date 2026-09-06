@@ -151,4 +151,47 @@ mod tests {
         assert_eq!(identifier.original, " 978-0-00-000000-0 ");
         assert_eq!(identifier.normalized, "978-0-00-000000-0");
     }
+
+    proptest::proptest! {
+        #[test]
+        fn doi_normalization_is_idempotent(input in proptest::prelude::any::<String>()) {
+            if let Ok(normalized) = normalize_doi(&input) {
+                let second = normalize_doi(&normalized).expect("idempotent re-normalization must succeed");
+                proptest::prop_assert_eq!(second, normalized);
+            }
+        }
+
+        #[test]
+        fn doi_normalization_satisfies_invariants(input in proptest::prelude::any::<String>()) {
+            if let Ok(normalized) = normalize_doi(&input) {
+                proptest::prop_assert!(normalized.starts_with("10."));
+                proptest::prop_assert!(normalized.contains("/"));
+                proptest::prop_assert_eq!(normalized.to_lowercase(), normalized.clone());
+                proptest::prop_assert!(!normalized.starts_with(".") && !normalized.ends_with("."));
+                proptest::prop_assert_eq!(normalized.trim(), normalized.as_str());
+            }
+        }
+
+        #[test]
+        fn doi_normalization_handles_arbitrary_valid_doi(
+            prefix_choice in 0..6usize,
+            suffix in "[a-zA-Z0-9._-]{1,30}/[a-zA-Z0-9._-]{1,50}",
+            trailing_dots in 0..4usize,
+        ) {
+            let base = format!("10.{suffix}");
+            let prefixes = [
+                "",
+                "https://doi.org/",
+                "http://doi.org/",
+                "https://dx.doi.org/",
+                "http://dx.doi.org/",
+                "doi:",
+            ];
+            let raw = format!("{}{}{}", prefixes[prefix_choice], base, ".".repeat(trailing_dots));
+            if let Ok(normalized) = normalize_doi(&raw) {
+                proptest::prop_assert_eq!(normalize_doi(&normalized).unwrap(), normalized.clone());
+                proptest::prop_assert!(normalized.starts_with("10."));
+            }
+        }
+    }
 }

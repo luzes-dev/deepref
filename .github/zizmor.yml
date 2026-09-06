@@ -4,6 +4,8 @@ rules:
       # release.yml only consumes successful CI runs from development, verifies the source SHA,
       # fetches the trusted development branch, and proves the source is its ancestor before release work.
       - release.yml:3
+      # rust-risk.yml consumes completed CI runs from development, verifies SHA, and only generates analysis.
+      - rust-risk.yml:3
   github-env:
     ignore:
       # The release workflow appends only GitHub's trusted RUNNER_TEMP directory to GITHUB_PATH.

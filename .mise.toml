@@ -2,22 +2,26 @@
 node = "24.4.1"
 pnpm = "11.3.0"
 rust = "1.95.0"
-opentofu = "1.12.2"
-aws-cli = { version = "2.36.16", symlink_bins = true }
-kubectl = "1.36.3"
-helm = "3.18.4"
-argocd = "3.5.0"
-cosign = "2.5.3"
 
 # Local orchestration and repository validators.
 just = "1.42.4"
 process-compose = "1.120.0"
 actionlint = "1.7.7"
 shellcheck = "0.10.0"
-tflint = "0.59.1"
-kubeconform = "0.7.0"
-conftest = "0.62.0"
-kyverno = "1.15.2"
 taplo = "0.10.0"
 jq = "1.8.1"
-yq = "4.47.1"
+
+# Reads the existing LLVM coverage artifact; does not execute tests.
+"cargo:cargo-crap" = "0.4.3"
+
+# Rust dependency and source hygiene owner.
+"cargo:cargo-shear" = "1.13.4"
+
+# Local developer fast continuous feedback runner (not in CI).
+"cargo:bacon" = "3.25.0"
+
+# Mutation testing owner for Rust algorithmic crates (report-only / manual / scheduled).
+"cargo:cargo-mutants" = "27.1.0"
+
+# Target-specific hostile-input fuzzing runner.
+"cargo:cargo-fuzz" = "0.13.2"

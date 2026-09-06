@@ -18,5 +18,5 @@ pub enum CrossrefError {
     #[error("invalid Crossref response: {0}")]
     Json(#[from] serde_json::Error),
     #[error("invalid DOI: {0}")]
-    InvalidDoi(#[from] deepref_core::DoiError),
+    InvalidDoi(#[from] deepref_domain::DoiError),
 }

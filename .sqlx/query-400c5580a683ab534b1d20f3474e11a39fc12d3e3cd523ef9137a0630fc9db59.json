@@ -1,0 +1,23 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO review_calibration_bundles\n         (id,project_id,definition_key,semantic_bundle_hash,evaluation_set_id,\n          thresholds,metrics,reviewer_metadata,status,evaluated_at)\n         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Text",
+        "Text",
+        "Text",
+        "Jsonb",
+        "Jsonb",
+        "Jsonb",
+        "Text",
+        "Timestamptz"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "400c5580a683ab534b1d20f3474e11a39fc12d3e3cd523ef9137a0630fc9db59"
+}

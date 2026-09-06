@@ -45,7 +45,7 @@ pub enum ApiError {
     #[error("invalid JSON payload")]
     Json(#[from] serde_json::Error),
     #[error("invalid DOI: {0}")]
-    Doi(#[from] deepref_core::DoiError),
+    Doi(#[from] deepref_domain::DoiError),
 }
 
 impl ApiError {}

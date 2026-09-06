@@ -40,10 +40,10 @@ pub use automations::{
     validate_error, validate_run_list_limit, validate_worker_id,
 };
 pub use deduplication::{
-    DecideProposalCommand, DedupeCandidate, DedupeDisposition, DedupeProposalCommand, DedupeScore,
+    DecideProposalCommand, DedupeCandidate, DedupeProposalCommand, DedupeScore,
     FUZZY_PROPOSAL_THRESHOLD, FUZZY_SHORTLIST_LIMIT, ProposalDecision, ProposalKind,
-    RecordResolutionAction, ResolutionCommandError, ResolveRecordCommand, disposition,
-    score_candidate,
+    RecordResolutionAction, ResolutionCommandError, ResolveRecordCommand, score_candidate,
+    select_fuzzy_candidate,
 };
 pub use documents::{
     AttachDocumentCommand, DocumentByteStream, DocumentDetailQuery, DocumentFuture,

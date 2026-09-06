@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE documents SET status='retrieving',parser_error=NULL,failed_at=NULL,updated_at=now()\n         WHERE id=$1 AND source='external_url' AND status IN ('external','failed','retrieving')",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "c8b8eb204e16fb671fc1cb8696c7a45ab5511a3b0e8345dcd757f7057edc1a42"
+}

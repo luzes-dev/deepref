@@ -13,11 +13,13 @@ mod legacy_import;
 mod prisma;
 mod protocol;
 mod review_calibration;
+mod review_completion;
 mod review_preparation;
 mod review_run_setup;
 mod review_runs;
 mod screening;
 mod study;
+mod worker_runtime;
 
 use sqlx::{
     PgPool,
@@ -94,6 +96,10 @@ pub use review_calibration::{
     ReviewCalibrationBundleInput, ReviewCalibrationError, ReviewCalibrationStatus,
     insert_review_calibration_bundle,
 };
+pub use review_completion::{
+    ReviewOutcome, ReviewOutcomeCompletion, bind_review_step_acceptance, complete_review_attempt,
+    complete_review_outcome, complete_review_step,
+};
 pub use review_preparation::{
     PostgresReviewScheduler, ReviewPreparationError, schedule_appraisal_prefill_review,
     schedule_data_extraction_review, schedule_duplicate_detection_review,
@@ -103,9 +109,8 @@ pub use review_preparation::{
 pub use review_runs::{
     AcceptedReviewAttempt, LeasedReviewRun, PostgresReviewError, PreparedReviewRun,
     ReviewAttemptCompletion, ReviewAttemptStart, ReviewFinalization, begin_review_attempt,
-    bind_review_step_acceptance, block_review_run, complete_review_attempt, fail_review_attempt,
-    fail_review_run, finalize_review_proposal, get_review_run, load_leased_review_run,
-    mark_review_run_running, schedule_prepared_review_run,
+    block_review_run, fail_review_attempt, fail_review_run, finalize_review_proposal,
+    get_review_run, load_leased_review_run, mark_review_run_running, schedule_prepared_review_run,
 };
 pub use screening::{
     ScreeningError, ScreeningHistory, ScreeningHistoryItem, ScreeningProgress, ScreeningQueue,
@@ -117,4 +122,8 @@ pub use study::{
     StudyRecord, StudyReportRecord, assign_report_to_study, assign_report_to_study_in_transaction,
     classify_study, create_study, create_study_and_assign_report_in_transaction, get_study,
     get_study_for_report, list_studies, list_study_events, remove_report_from_study, rename_study,
+};
+pub use worker_runtime::{
+    MissingIngestionWork, WorkerLeaseRecovery, find_missing_ingestion_work,
+    recover_expired_worker_state, reserve_provider_permit,
 };

@@ -1,5 +1,6 @@
 use chrono::Utc;
-use deepref_core::{Reference, Work, WorkWithReferences, normalize_doi};
+use deepref_core::{Reference, Work, WorkWithReferences};
+use deepref_domain::normalize_doi;
 use serde::Deserialize;
 
 #[derive(Debug, Deserialize)]

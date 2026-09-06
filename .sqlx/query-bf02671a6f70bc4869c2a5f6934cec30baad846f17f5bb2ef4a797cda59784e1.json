@@ -1,0 +1,18 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE jobs\n           SET state = $3,\n               last_error = $4,\n               available_at = now() + ($5::double precision * interval '1 millisecond'),\n               lease_owner = NULL,\n               leased_until = NULL,\n               lease_renewed_at = NULL\n           WHERE id = $1 AND state = 'running' AND lease_owner = $2 AND leased_until > now()",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Text",
+        "Text",
+        "Text",
+        "Float8"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "bf02671a6f70bc4869c2a5f6934cec30baad846f17f5bb2ef4a797cda59784e1"
+}

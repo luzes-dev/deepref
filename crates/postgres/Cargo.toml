@@ -26,3 +26,10 @@ tokio.workspace = true
 
 [build-dependencies]
 sha2.workspace = true
+
+[lints]
+workspace = true
+
+[package.metadata.deepref]
+layer = "persistence"
+

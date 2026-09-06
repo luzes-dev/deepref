@@ -3,7 +3,7 @@ use std::{
     sync::{Arc, RwLock},
 };
 
-use rig::{
+use rig_core::{
     completion::{AssistantContent, CompletionModel, Message},
     embeddings::EmbeddingModel,
 };
@@ -100,8 +100,6 @@ impl<M> RigGateway<M> {
 impl<M> AiGateway for RigGateway<M>
 where
     M: CompletionModel + Clone + Send + Sync + 'static,
-    M::Response: Send + Sync + 'static,
-    M::StreamingResponse: Send + Sync + 'static,
 {
     fn complete<'a>(&'a self, request: CompletionRequest) -> AiFuture<'a, GatewayCompletion> {
         Box::pin(async move {
@@ -131,8 +129,8 @@ where
                 .send()
                 .await
                 .map_err(|_| AiError::Gateway("provider completion failed".to_owned()))?;
-            let output_json = match response.choice.first_ref() {
-                AssistantContent::Text(text) => text.text.clone(),
+            let output_json = match response.choice.first() {
+                Some(AssistantContent::Text(text)) => text.text.clone(),
                 _ => {
                     return Err(AiError::Gateway(
                         "provider did not return structured text".to_owned(),

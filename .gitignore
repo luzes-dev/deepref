@@ -3,7 +3,17 @@ node_modules/
 .svelte-kit/
 build/
 dist/
+coverage/
+reports/
+.stryker-tmp/
+*.lcov
 .env
 .env.*
 !.env.example
 *.log
+.cache/
+**/.cache/
+.eslintcache
+**/.eslintcache
+.prettiercache
+**/.prettiercache

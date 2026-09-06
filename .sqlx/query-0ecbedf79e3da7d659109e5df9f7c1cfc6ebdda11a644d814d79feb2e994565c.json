@@ -1,0 +1,28 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n        SELECT id\n        FROM protocol_versions\n        WHERE project_id = $1 AND status IN ('draft', 'published')\n        ORDER BY CASE WHEN status = 'draft' THEN 0 ELSE 1 END, version DESC, id DESC\n        LIMIT 1\n        ",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "protocol_versions",
+            "name": "id"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "0ecbedf79e3da7d659109e5df9f7c1cfc6ebdda11a644d814d79feb2e994565c"
+}

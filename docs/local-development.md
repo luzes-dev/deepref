@@ -2,14 +2,10 @@
 
 DeepRef uses mise for pinned tools, Just for the developer command surface, Docker Compose for disposable dependencies, and Process Compose for application processes.
 
-The Compose file is disposable local tooling only. It contains PostgreSQL and no application services; it is not a deployment artifact or a supported deployment path. Production workloads are built and promoted through the ECR, Helm, Argo CD, and OpenTofu workflow.
-
 The local PostgreSQL service uses the pinned `pgvector/pgvector:0.8.0-pg17`
 image. This is required because migration `0016_ai_foundation.sql` installs
 the `vector` extension; use the same pgvector-enabled PostgreSQL 17 image for
-disposable migration/integration fixtures. Production PostgreSQL extension
-availability remains a deployment responsibility and is not inferred from
-this local Compose fixture.
+disposable migration/integration fixtures.
 
 ## Prerequisites
 
@@ -44,7 +40,35 @@ Local endpoints:
 | API             | `http://127.0.0.1:8080` |
 | PostgreSQL      | `127.0.0.1:5432`        |
 
+If port `5432` is already in use, set `POSTGRES_HOST_PORT` and update the
+port in `DATABASE_URL` in `.env` to the same value before starting the stack.
+
 Every published dependency port binds only to `127.0.0.1`.
+
+## Fast continuous Rust feedback (Bacon)
+
+Bacon is pinned in `.mise.toml` as an interactive local developer tool (it is not a CI gate). It watches the codebase and runs checks or tests on file changes:
+
+```bash
+# Continuous compilation check (default)
+mise exec -- bacon
+
+# Continuous Clippy linting
+mise exec -- bacon clippy
+
+# Continuous unit test execution with nextest
+mise exec -- bacon nextest
+
+# Continuous AI module test execution
+mise exec -- bacon ai
+```
+
+While running interactively in the terminal, keyboard shortcuts allow instant switching:
+- `c`: switch to `clippy`
+- `n`: switch to `nextest`
+- `a`: switch to `ai`
+- `k`: switch to `check`
+- `d`: generate and browse Rust documentation
 
 ## Seed data
 
@@ -68,7 +92,7 @@ This stops local processes and containers but retains the PostgreSQL volume. To 
 mise exec -- just dev-reset
 ```
 
-`dev-reset` permanently removes only the named PostgreSQL volume owned by `infra/local/compose.yaml`.
+`dev-reset` permanently removes only the named PostgreSQL volume owned by `compose.yaml`.
 
 ## Common commands
 
@@ -80,11 +104,7 @@ mise exec -- just test-unit
 mise exec -- just test-integration
 mise exec -- just test-e2e
 mise exec -- just codegen-check
-mise exec -- just helm-check
-mise exec -- just infra-validate
 ```
-
-`just codegen-check` generates in an isolated temporary tree and never changes tracked files. Infrastructure planning is explicit, for example `mise exec -- just infra-plan development`; it requires the appropriate reviewed credentials and backend access.
 
 Create a feature branch only from a clean worktree:
 
@@ -92,4 +112,4 @@ Create a feature branch only from a clean worktree:
 mise exec -- just feature my-change
 ```
 
-The recipe fetches and fast-forwards `development` before creating `feature/my-change`.
+The recipe fetches and fast-forwards `main` before creating `feature/my-change`.
