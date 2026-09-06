@@ -64,6 +64,7 @@ jobs:
               - 'crates/**'
               - 'services/**'
               - 'apps/web/**'
+              - '.github/actions/reproducible-container-build/**'
               - '.github/workflows/ci.yml'
 
   docs:
@@ -524,32 +525,29 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - name: Set up QEMU for multi-architecture push validation
-        if: github.event_name == 'push'
-        uses: docker/setup-qemu-action@1f40c72289eff860ee54a304f1438e3cff362e0a # v4.3.0
+      - name: Validate release images on native amd64
+        if: github.event_name == 'push' || needs.changes.outputs.containers == 'true'
+        uses: ./.github/actions/reproducible-container-build
         with:
-          platforms: arm64
-      - name: Set up Buildx
-        if: github.event_name == 'push' || needs.changes.outputs.containers == 'true'
-        uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.3.0
-      - name: Validate and build every release target
-        if: github.event_name == 'push' || needs.changes.outputs.containers == 'true'
-        shell: bash
-        run: |
-          docker buildx bake --print
-          bake_args=(
-            --set '*.output=type=cacheonly'
-            --set '*.cache-from=type=gha,scope=deepref-containers'
-            --set '*.cache-to=type=gha,scope=deepref-containers,mode=max'
-          )
+          platform: linux/amd64
+          cache-arch: amd64
 
-          # Pull requests only need to prove that every image builds on the native
-          # CI architecture. Pushes keep validating the full release platform set.
-          if [[ "${GITHUB_EVENT_NAME}" == "pull_request" ]]; then
-            bake_args+=(--set '*.platform=linux/amd64')
-          fi
-
-          docker buildx bake "${bake_args[@]}" api worker web
+  containers-arm64:
+    name: Reproducible container build / arm64
+    if: github.event_name == 'push'
+    needs: changes
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 35
+    steps:
+      - name: Checkout trusted source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Validate release images on native arm64
+        uses: ./.github/actions/reproducible-container-build
+        with:
+          platform: linux/arm64
+          cache-arch: arm64
 
   rust-required:
     name: Rust
@@ -578,11 +576,14 @@ jobs:
   docker-required:
     name: Docker
     if: always()
-    needs: containers
+    needs: [containers, containers-arm64]
     runs-on: ubuntu-latest
     timeout-minutes: 2
     steps:
-      - name: Verify container build
+      - name: Verify container builds
         env:
-          RESULT: ${{ needs.containers.result }}
-        run: test "$RESULT" = "success"
+          AMD64_RESULT: ${{ needs.containers.result }}
+          ARM64_RESULT: ${{ needs.containers-arm64.result }}
+        run: |
+          test "$AMD64_RESULT" = "success"
+          test "$ARM64_RESULT" = "success" || test "$ARM64_RESULT" = "skipped"
