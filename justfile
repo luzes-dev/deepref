@@ -53,6 +53,10 @@ test-property:
 test-mutants *ARGS:
     SQLX_OFFLINE=true cargo mutants {{ARGS}}
 
+# Run time-bounded cargo-fuzz hostile-input fuzzing on nightly toolchain.
+test-fuzz TARGET DURATION="30":
+    cargo +nightly fuzz run {{TARGET}} -- -max_total_time={{DURATION}}
+
 # Run TypeScript tests with coverage reporting.
 test-coverage-ts:
     pnpm --filter @deepref/web test:unit:coverage

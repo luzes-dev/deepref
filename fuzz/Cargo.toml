@@ -1,0 +1,31 @@
+[package]
+name = "deepref-fuzz"
+version = "0.0.0"
+publish = false
+edition = "2024"
+
+[package.metadata]
+cargo-fuzz = true
+
+[dependencies]
+libfuzzer-sys = "0.4.8"
+deepref-domain = { path = "../crates/domain" }
+deepref-application = { path = "../crates/application" }
+
+[[bin]]
+name = "fuzz_doi_normalization"
+path = "fuzz_targets/fuzz_doi_normalization.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "fuzz_title_normalization"
+path = "fuzz_targets/fuzz_title_normalization.rs"
+test = false
+doc = false
+
+[[bin]]
+name = "fuzz_screening_parser"
+path = "fuzz_targets/fuzz_screening_parser.rs"
+test = false
+doc = false

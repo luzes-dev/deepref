@@ -33,3 +33,6 @@ yq = "4.47.1"
 
 # Mutation testing owner for Rust algorithmic crates (report-only / manual / scheduled).
 "cargo:cargo-mutants" = "27.1.0"
+
+# Target-specific hostile-input fuzzing runner.
+"cargo:cargo-fuzz" = "0.13.2"
