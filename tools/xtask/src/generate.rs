@@ -16,14 +16,14 @@ pub fn run(mode: GenerateMode) -> Result<()> {
 
     match mode {
         GenerateMode::Write => {
-            println!("Generating OpenAPI schema from deepref-server...");
+            println!("Generating OpenAPI schema from deepref-http-api...");
             let sqlx_offline = std::env::var("SQLX_OFFLINE").unwrap_or_else(|_| "true".into());
             let openapi_output = Command::new(cargo_bin())
-                .args(["run", "-q", "-p", "deepref-server", "--", "--print-openapi"])
+                .args(["run", "-q", "-p", "deepref-http-api", "--bin", "openapi"])
                 .current_dir(&root)
                 .env("SQLX_OFFLINE", &sqlx_offline)
                 .output()
-                .context("failed to invoke 'cargo run -p deepref-server -- --print-openapi'")?;
+                .context("failed to invoke 'cargo run -p deepref-http-api --bin openapi'")?;
 
             if !openapi_output.status.success() {
                 let stderr = String::from_utf8_lossy(&openapi_output.stderr);

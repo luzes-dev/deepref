@@ -38,6 +38,11 @@ variable "CADDY_BASE_REPOSITORY" {
   default = "docker.io/library/caddy"
 }
 
+variable "DEEPREF_ATTESTATIONS" {
+  type    = bool
+  default = true
+}
+
 group "default" {
   targets = ["api", "worker", "web"]
 }
@@ -45,10 +50,10 @@ group "default" {
 target "release" {
   context   = "."
   platforms = ["linux/amd64", "linux/arm64"]
-  attest = [
+  attest = DEEPREF_ATTESTATIONS ? [
     "type=provenance,mode=max",
     "type=sbom"
-  ]
+  ] : []
   labels = {
     "org.opencontainers.image.source"   = OCI_SOURCE
     "org.opencontainers.image.revision" = OCI_REVISION
