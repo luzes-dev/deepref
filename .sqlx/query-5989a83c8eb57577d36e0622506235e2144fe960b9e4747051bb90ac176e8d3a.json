@@ -1,0 +1,42 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT semantic_bundle_hash, status\n         FROM review_calibration_bundles\n         WHERE project_id = $1 AND id = $2 AND definition_key = $3",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "semantic_bundle_hash",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "review_calibration_bundles",
+            "name": "semantic_bundle_hash"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "status",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "review_calibration_bundles",
+            "name": "status"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Text"
+      ]
+    },
+    "nullable": [
+      false,
+      false
+    ]
+  },
+  "hash": "5989a83c8eb57577d36e0622506235e2144fe960b9e4747051bb90ac176e8d3a"
+}

@@ -1,0 +1,34 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "INSERT INTO jobs (id,project_id,kind,payload,priority,max_attempts,dedupe_key)\n           VALUES ($1,$2,$3,$4,$5,$6,$7)\n           ON CONFLICT (dedupe_key) DO UPDATE SET id = jobs.id\n           RETURNING id",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "jobs",
+            "name": "id"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Text",
+        "Jsonb",
+        "Int4",
+        "Int4",
+        "Text"
+      ]
+    },
+    "nullable": [
+      false
+    ]
+  },
+  "hash": "1bd397829c5114e4eeb577e4fc952dd84e143463a8e565f095d8fe8439132822"
+}

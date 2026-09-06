@@ -1,0 +1,100 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "SELECT id,criterion_type,stage,dimension,label,description,ordinal FROM eligibility_criteria WHERE protocol_version_id=$1 ORDER BY ordinal,id",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "id",
+        "type_info": "Uuid",
+        "origin": {
+          "Table": {
+            "table": "eligibility_criteria",
+            "name": "id"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "criterion_type",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "eligibility_criteria",
+            "name": "criterion_type"
+          }
+        }
+      },
+      {
+        "ordinal": 2,
+        "name": "stage",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "eligibility_criteria",
+            "name": "stage"
+          }
+        }
+      },
+      {
+        "ordinal": 3,
+        "name": "dimension",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "eligibility_criteria",
+            "name": "dimension"
+          }
+        }
+      },
+      {
+        "ordinal": 4,
+        "name": "label",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "eligibility_criteria",
+            "name": "label"
+          }
+        }
+      },
+      {
+        "ordinal": 5,
+        "name": "description",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "eligibility_criteria",
+            "name": "description"
+          }
+        }
+      },
+      {
+        "ordinal": 6,
+        "name": "ordinal",
+        "type_info": "Int4",
+        "origin": {
+          "Table": {
+            "table": "eligibility_criteria",
+            "name": "ordinal"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": [
+      false,
+      false,
+      false,
+      false,
+      false,
+      false,
+      false
+    ]
+  },
+  "hash": "c514378d9eda4cff4526db91b2880902c3ed0832b41ae57f83c9f6d192327872"
+}

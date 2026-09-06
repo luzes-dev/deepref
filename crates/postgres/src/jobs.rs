@@ -31,16 +31,20 @@ pub async fn enqueue_job(
     tx: &mut Transaction<'_, Postgres>,
     job: &EnqueueJob,
 ) -> anyhow::Result<Uuid> {
-    let id = sqlx::query_scalar::<_, Uuid>(
-        "INSERT INTO jobs (id,project_id,kind,payload,priority,max_attempts,dedupe_key) VALUES ($1,$2,$3,$4,$5,$6,$7) ON CONFLICT (dedupe_key) DO UPDATE SET id = jobs.id RETURNING id",
+    let project_id = job.project_id.as_uuid();
+    let id = sqlx::query_scalar!(
+        r#"INSERT INTO jobs (id,project_id,kind,payload,priority,max_attempts,dedupe_key)
+           VALUES ($1,$2,$3,$4,$5,$6,$7)
+           ON CONFLICT (dedupe_key) DO UPDATE SET id = jobs.id
+           RETURNING id"#,
+        job.id,
+        project_id,
+        job.kind,
+        job.payload,
+        job.priority,
+        job.max_attempts,
+        job.dedupe_key,
     )
-    .bind(job.id)
-    .bind(job.project_id.as_uuid())
-    .bind(&job.kind)
-    .bind(&job.payload)
-    .bind(job.priority)
-    .bind(job.max_attempts)
-    .bind(&job.dedupe_key)
     .fetch_one(&mut **tx)
     .await?;
     Ok(id)
@@ -54,7 +58,7 @@ pub async fn enqueue_job_pool(pool: &PgPool, job: &EnqueueJob) -> anyhow::Result
 }
 
 pub async fn recover_expired_jobs(pool: &PgPool) -> anyhow::Result<u64> {
-    Ok(sqlx::query(
+    Ok(sqlx::query!(
         "UPDATE jobs SET state='queued',lease_owner=NULL,leased_until=NULL,lease_renewed_at=NULL WHERE state='running' AND leased_until < now()",
     )
     .execute(pool)
@@ -94,18 +98,19 @@ pub async fn get_claimed_automation_job_project_id_for_run(
     run_id: AutomationRunId,
     owner: &str,
 ) -> anyhow::Result<Option<ProjectId>> {
-    let project_id = sqlx::query_scalar::<_, Uuid>(
-        "SELECT j.project_id
+    let run_uuid = run_id.as_uuid();
+    let project_id = sqlx::query_scalar!(
+        r#"SELECT j.project_id as "project_id!"
          FROM jobs AS j
          JOIN automation_runs AS r
            ON r.project_id = j.project_id AND r.job_id = j.id
          WHERE j.id=$1 AND j.kind='automation_run' AND j.state='running'
            AND j.lease_owner=$2 AND j.leased_until > now()
-           AND r.id=$3 AND j.project_id IS NOT NULL",
+           AND r.id=$3 AND j.project_id IS NOT NULL"#,
+        job_id,
+        owner,
+        run_uuid,
     )
-    .bind(job_id)
-    .bind(owner)
-    .bind(run_id.as_uuid())
     .fetch_optional(pool)
     .await?;
     Ok(project_id.map(ProjectId::new))
@@ -117,12 +122,16 @@ pub async fn renew_job(
     job_id: Uuid,
     lease: Duration,
 ) -> anyhow::Result<bool> {
-    Ok(sqlx::query(
-        "UPDATE jobs SET leased_until=now()+($3 * interval '1 millisecond'),lease_renewed_at=now() WHERE id=$1 AND state='running' AND lease_owner=$2 AND leased_until > now()",
+    let lease_ms = lease.as_millis() as f64;
+    Ok(sqlx::query!(
+        r#"UPDATE jobs
+           SET leased_until = now() + ($3::double precision * interval '1 millisecond'),
+               lease_renewed_at = now()
+           WHERE id = $1 AND state = 'running' AND lease_owner = $2 AND leased_until > now()"#,
+        job_id,
+        owner,
+        lease_ms,
     )
-    .bind(job_id)
-    .bind(owner)
-    .bind(lease.as_millis() as i64)
     .execute(pool)
     .await?
     .rows_affected()
@@ -130,11 +139,11 @@ pub async fn renew_job(
 }
 
 pub async fn complete_job(pool: &PgPool, owner: &str, job_id: Uuid) -> anyhow::Result<bool> {
-    Ok(sqlx::query(
+    Ok(sqlx::query!(
         "UPDATE jobs SET state='completed',completed_at=now(),lease_owner=NULL,leased_until=NULL,lease_renewed_at=NULL WHERE id=$1 AND state='running' AND lease_owner=$2 AND leased_until > now()",
+        job_id,
+        owner,
     )
-    .bind(job_id)
-    .bind(owner)
     .execute(pool)
     .await?
     .rows_affected()
@@ -153,14 +162,22 @@ pub async fn fail_job(
     } else {
         "queued"
     };
-    Ok(sqlx::query(
-        "UPDATE jobs SET state=$3,last_error=$4,available_at=now()+($5 * interval '1 millisecond'),lease_owner=NULL,leased_until=NULL,lease_renewed_at=NULL WHERE id=$1 AND state='running' AND lease_owner=$2 AND leased_until > now()",
+    let retry_ms = retry_after.as_millis() as f64;
+    Ok(sqlx::query!(
+        r#"UPDATE jobs
+           SET state = $3,
+               last_error = $4,
+               available_at = now() + ($5::double precision * interval '1 millisecond'),
+               lease_owner = NULL,
+               leased_until = NULL,
+               lease_renewed_at = NULL
+           WHERE id = $1 AND state = 'running' AND lease_owner = $2 AND leased_until > now()"#,
+        job.id,
+        owner,
+        next_state,
+        error,
+        retry_ms,
     )
-    .bind(job.id)
-    .bind(owner)
-    .bind(next_state)
-    .bind(error)
-    .bind(retry_after.as_millis() as i64)
     .execute(pool)
     .await?
     .rows_affected()

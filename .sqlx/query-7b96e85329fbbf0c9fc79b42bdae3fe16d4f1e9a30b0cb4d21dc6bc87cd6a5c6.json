@@ -1,0 +1,26 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "\n            INSERT INTO protocol_versions (\n              id, project_id, version, name, status, criteria,\n              framework_kind, framework_fields, objective, question, revision,\n              amendment_of, created_by_kind, created_by_id, updated_by_kind, updated_by_id\n            ) VALUES ($1,$2,$3,$4,'draft',$5,$6,$7,$8,$9,$10,$11,$12,$13,$12,$13)\n            ",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Uuid",
+        "Int4",
+        "Text",
+        "Jsonb",
+        "Text",
+        "Jsonb",
+        "Text",
+        "Text",
+        "Int8",
+        "Uuid",
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "7b96e85329fbbf0c9fc79b42bdae3fe16d4f1e9a30b0cb4d21dc6bc87cd6a5c6"
+}

@@ -4,7 +4,7 @@ use deepref_review::{
     worker::{ReviewHash, ReviewRunManifest},
 };
 use serde_json::Value;
-use sqlx::{PgPool, Postgres, Row, Transaction};
+use sqlx::{PgPool, Postgres, Transaction};
 use thiserror::Error;
 use uuid::Uuid;
 
@@ -50,22 +50,27 @@ pub async fn insert_review_calibration_bundle(
     input: ReviewCalibrationBundleInput,
 ) -> Result<(), ReviewCalibrationError> {
     validate_input(&input)?;
-    sqlx::query(
-        "INSERT INTO review_calibration_bundles
+    let id = input.id.as_uuid();
+    let def = input.definition.as_str();
+    let hash = input.semantic_bundle_hash.as_str();
+    let eval_set = input.evaluation_set_id.trim();
+    let status = input.status.as_str();
+    sqlx::query!(
+        r#"INSERT INTO review_calibration_bundles
          (id,project_id,definition_key,semantic_bundle_hash,evaluation_set_id,
           thresholds,metrics,reviewer_metadata,status,evaluated_at)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)",
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)"#,
+        id,
+        input.project_id,
+        def,
+        hash,
+        eval_set,
+        input.thresholds,
+        input.metrics,
+        input.reviewer_metadata,
+        status,
+        input.evaluated_at,
     )
-    .bind(input.id.as_uuid())
-    .bind(input.project_id)
-    .bind(input.definition.as_str())
-    .bind(input.semantic_bundle_hash.as_str())
-    .bind(input.evaluation_set_id.trim())
-    .bind(input.thresholds)
-    .bind(input.metrics)
-    .bind(input.reviewer_metadata)
-    .bind(input.status.as_str())
-    .bind(input.evaluated_at)
     .execute(pool)
     .await?;
     Ok(())
@@ -105,25 +110,26 @@ pub(crate) async fn admit_calibration(
     manifest: &ReviewRunManifest,
     calibration_bundle_id: CalibrationBundleId,
 ) -> Result<(), CalibrationAdmissionError> {
-    let row = sqlx::query(
-        "SELECT semantic_bundle_hash,status
+    let project_id = manifest.project_id.as_uuid();
+    let cal_id = calibration_bundle_id.as_uuid();
+    let def = manifest.definition.as_str();
+    let row = sqlx::query!(
+        r#"SELECT semantic_bundle_hash, status
          FROM review_calibration_bundles
-         WHERE project_id=$1 AND id=$2 AND definition_key=$3",
+         WHERE project_id = $1 AND id = $2 AND definition_key = $3"#,
+        project_id,
+        cal_id,
+        def,
     )
-    .bind(manifest.project_id.as_uuid())
-    .bind(calibration_bundle_id.as_uuid())
-    .bind(manifest.definition.as_str())
     .fetch_optional(&mut **transaction)
     .await?;
     let Some(row) = row else {
         return Err(CalibrationAdmissionError::Missing);
     };
-    let status: String = row.get("status");
-    if status != "passing" {
+    if row.status != "passing" {
         return Err(CalibrationAdmissionError::Failed);
     }
-    let semantic_bundle_hash: String = row.get("semantic_bundle_hash");
-    if semantic_bundle_hash != manifest.semantic_bundle_hash.as_str() {
+    if row.semantic_bundle_hash != manifest.semantic_bundle_hash.as_str() {
         return Err(CalibrationAdmissionError::Stale);
     }
     Ok(())
