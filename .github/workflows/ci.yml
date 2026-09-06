@@ -135,6 +135,44 @@ jobs:
         if: always()
         run: ${SCCACHE_PATH:-sccache} --show-stats
 
+  coverage:
+    name: Coverage / Rust
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - name: Checkout trusted source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Install pinned Rust toolchain
+        run: |
+          rustup toolchain install 1.95.0 --profile minimal --component llvm-tools-preview
+          rustup override set 1.95.0
+      - name: Install pinned tools
+        uses: taiki-e/install-action@7b8d4719ee4aaa279bdf55df38dacb9ebfe12a6c # v2.87.6
+        with:
+          tool: cargo-llvm-cov@0.9.0,cargo-nextest@0.9.143
+          checksum: true
+          fallback: none
+      - name: Set up sccache
+        uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba # v0.0.11
+        with:
+          version: v0.17.0
+      - name: Enable sccache compiler wrapper
+        run: |
+          echo "SCCACHE_GHA_ENABLED=true" >> "$GITHUB_ENV"
+          echo "RUSTC_WRAPPER=sccache" >> "$GITHUB_ENV"
+      - name: Run Rust test coverage
+        env:
+          SQLX_OFFLINE: "true"
+        run: |
+          mkdir -p target/llvm-cov
+          cargo llvm-cov nextest --lcov --output-path target/llvm-cov/lcov.info --locked
+          cargo llvm-cov report --summary-only
+      - name: Show sccache statistics
+        if: always()
+        run: ${SCCACHE_PATH:-sccache} --show-stats
+
   web:
     name: Web
     runs-on: ubuntu-latest
@@ -156,7 +194,7 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - run: pnpm run lint
       - run: pnpm run check
-      - run: pnpm --filter @deepref/web test:unit -- --run
+      - run: pnpm --filter @deepref/web test:coverage
       - run: pnpm run build
 
   fallow:

@@ -21,6 +21,24 @@ export default defineConfig(({ mode }) => {
 		},
 		test: {
 			expect: { requireAssertions: true },
+			testTimeout: 20000,
+			coverage: {
+				provider: 'v8',
+				reporter: ['text', 'json', 'html', 'lcov'],
+				reportsDirectory: './coverage',
+				include: ['src/**/*.{js,ts,svelte}'],
+				exclude: [
+					'src/**/*.d.ts',
+					'src/**/*.{test,spec}.{js,ts}',
+					'src/**/*.svelte.{test,spec}.{js,ts}',
+					'src/**/*.e2e.ts',
+					'src/lib/api/generated/**',
+					'src/lib/components/ui/**',
+					'**/.svelte-kit/**',
+					'**/build/**',
+					'**/dist/**'
+				]
+			},
 			projects: [
 				{
 					extends: './vite.config.ts',
