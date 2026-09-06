@@ -41,7 +41,7 @@
 			</Empty.Root>
 		{:else}
 			<ScrollArea
-				class="min-h-0 flex-1 overflow-hidden px-4 pb-4 sm:max-h-[min(27.5rem,calc(100svh-14.5rem))] sm:flex-none sm:px-0 sm:pr-3 sm:pb-0"
+				class="min-h-0 flex-1 overflow-hidden px-4 pb-4 sm:max-h-[min(27.25rem,calc(100svh-14.75rem))] sm:flex-none sm:px-0 sm:pr-3 sm:pb-0"
 			>
 				<div class="flex flex-col gap-4">
 					{#each workspace.projects as project (project.id)}
