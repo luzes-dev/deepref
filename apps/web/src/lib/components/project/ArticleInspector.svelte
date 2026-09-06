@@ -1,11 +1,10 @@
 <script lang="ts">
 	import * as Alert from '$lib/components/ui/alert';
-	import * as Card from '$lib/components/ui/card';
-	import { Badge } from '$lib/components/ui/badge';
 	import { Button } from '$lib/components/ui/button';
 	import { CopyButton } from '$lib/components/ui/copy-button';
 	import { Skeleton } from '$lib/components/ui/skeleton';
 	import { createGetProjectReport } from '$lib/api/generated/reports/reports';
+	import { MetricTile, StatePanel, Surface } from '$lib/components/layout';
 	import CircleAlertIcon from '@lucide/svelte/icons/circle-alert';
 	import PanelRightCloseIcon from '@lucide/svelte/icons/panel-right-close';
 	import PanelRightOpenIcon from '@lucide/svelte/icons/panel-right-open';
@@ -36,7 +35,11 @@
 	const article = $derived(articleQuery.data?.data);
 </script>
 
-<aside class="flex h-full min-h-0 flex-col border-l bg-background">
+<aside
+	class="flex h-full min-h-0 flex-col border-l bg-background"
+	data-testid="article-inspector"
+	data-selected={workspace.selectedArticle ? 'true' : 'false'}
+>
 	{#if collapsed}
 		<div class="flex h-full flex-col items-center gap-3 border-b px-2 py-4">
 			<Button
@@ -92,17 +95,26 @@
 
 		<div class="min-h-0 flex-1 overflow-auto p-4">
 			{#if !workspace.selectedArticle}
-				<div
-					class="flex h-full items-center justify-center text-center text-sm text-muted-foreground"
-				>
-					Select an article to inspect its metadata.
-				</div>
+				<StatePanel
+					state="empty"
+					title="No article selected"
+					description="Select an article to inspect its metadata and provenance."
+				/>
 			{:else if articleQuery.error}
 				<Alert.Root variant="destructive">
 					<CircleAlertIcon />
 					<Alert.Title>Article unavailable</Alert.Title>
 					<Alert.Description>{articleQuery.error.message}</Alert.Description>
-					<Alert.Action onclick={workspace.clearArticle}>Clear selection</Alert.Action>
+					<Alert.Action class="flex gap-1">
+						<Button
+							variant="ghost"
+							size="sm"
+							onclick={() => void articleQuery.refetch()}>Try again</Button
+						>
+						<Button variant="ghost" size="sm" onclick={workspace.clearArticle}
+							>Clear selection</Button
+						>
+					</Alert.Action>
 				</Alert.Root>
 			{:else if articleQuery.isPending}
 				<div class="flex flex-col gap-3">
@@ -140,44 +152,49 @@
 					</div>
 
 					<div class="grid grid-cols-2 gap-3">
-						<Card.Root>
-							<Card.Header><Card.Title>Total</Card.Title></Card.Header>
-							<Card.Content class="text-2xl font-semibold"
-								>{article.total_citations}</Card.Content
-							>
-						</Card.Root>
-						<Card.Root>
-							<Card.Header><Card.Title>References</Card.Title></Card.Header>
-							<Card.Content class="text-2xl font-semibold"
-								>{article.references_count}</Card.Content
-							>
-						</Card.Root>
-						<Card.Root>
-							<Card.Header><Card.Title>Year</Card.Title></Card.Header>
-							<Card.Content class="text-2xl font-semibold"
-								>{article.issued_year ?? '-'}</Card.Content
-							>
-						</Card.Root>
-						<Card.Root>
-							<Card.Header><Card.Title>Type</Card.Title></Card.Header>
-							<Card.Content><Badge>{article.type ?? 'unknown'}</Badge></Card.Content>
-						</Card.Root>
+						<MetricTile
+							label="Total citations"
+							value={article.total_citations}
+							tone="warning"
+							class="[font-variant-numeric:tabular-nums]"
+						/>
+						<MetricTile
+							label="References"
+							value={article.references_count}
+							tone="info"
+							class="[font-variant-numeric:tabular-nums]"
+						/>
+						<MetricTile
+							label="Year"
+							value={article.issued_year ?? '-'}
+							tone="default"
+							class="[font-variant-numeric:tabular-nums]"
+						/>
+						<MetricTile label="Type" value={article.type ?? 'unknown'} tone="default" />
 					</div>
 
-					<section class="flex flex-col gap-2">
-						<h4 class="font-medium">Metadata</h4>
-						<p class="text-sm text-muted-foreground">{article.publisher}</p>
-						<p class="text-sm wrap-break-word">
+					<Surface as="section" tone="inset" class="flex flex-col gap-3 p-4">
+						<div>
+							<h4 class="font-medium">Metadata</h4>
+							<p class="mt-1 text-sm text-muted-foreground">{article.publisher}</p>
+						</div>
+						<p class="text-sm leading-relaxed wrap-break-word">
 							{article.abstract ?? 'No abstract available.'}
 						</p>
 						<pre
-							class="max-h-80 overflow-auto rounded-md bg-muted p-3 text-xs">{JSON.stringify(
+							class="max-h-80 overflow-auto rounded-md bg-muted p-3 text-xs [font-variant-numeric:tabular-nums]">{JSON.stringify(
 								article.raw,
 								null,
 								2
 							)}</pre>
-					</section>
+					</Surface>
 				</div>
+			{:else}
+				<StatePanel
+					state="error"
+					title="Article details unavailable"
+					description="The selected article did not return a usable record. Try again or clear the selection."
+				/>
 			{/if}
 		</div>
 	{/if}

@@ -400,7 +400,7 @@ export function createProjectGraphRenderer(
 	function buildSigmaSettings(): Partial<Settings<GraphNodeAttributes, GraphEdgeAttributes>> {
 		return {
 			hideLabelsOnMove: true,
-			labelFont: 'Inter Variable, sans-serif',
+			labelFont: 'IBM Plex Sans Variable, sans-serif',
 			labelSize: 12,
 			labelWeight: '500',
 			labelDensity: 0.45,

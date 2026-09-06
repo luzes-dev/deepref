@@ -1,5 +1,7 @@
 <script lang="ts">
 	import type { StudyDto } from '$lib/api/generated/models';
+	import { Checkbox } from '$lib/components/ui/checkbox';
+	import * as Field from '$lib/components/ui/field';
 	import { Button } from '$lib/components/ui/button';
 	import * as Select from '$lib/components/ui/select';
 
@@ -38,31 +40,40 @@
 </script>
 
 <form
-	class="flex flex-col gap-2"
+	class="flex flex-col gap-3"
 	onsubmit={(event) => {
 		event.preventDefault();
 		void submit();
 	}}
 >
-	<label for="study-design" class="text-sm font-medium">Normalized design</label>
-	<Select.Root type="single" bind:value={design}>
-		<Select.Trigger id="study-design">{selectedDesignLabel}</Select.Trigger>
-		<Select.Content>
-			<Select.Group>
-				{#each designs as item (item.value)}
-					<Select.Item value={item.value} label={item.label}>{item.label}</Select.Item>
-				{/each}
-			</Select.Group>
-		</Select.Content>
-	</Select.Root>
-	<label class="flex items-center gap-2 text-xs text-muted-foreground">
-		<input type="checkbox" bind:checked={physiotherapy} /> Physiotherapy context
-	</label>
-	<label class="flex items-center gap-2 text-xs text-muted-foreground">
-		<input type="checkbox" bind:checked={exposure} /> Exposure question
-	</label>
-	<label class="flex items-center gap-2 text-xs text-muted-foreground">
-		<input type="checkbox" bind:checked={predictionOrAi} /> Prediction/AI context
-	</label>
+	<Field.FieldGroup>
+		<Field.Field>
+			<Field.FieldLabel for="study-design">Normalized design</Field.FieldLabel>
+			<Select.Root type="single" bind:value={design}>
+				<Select.Trigger id="study-design">{selectedDesignLabel}</Select.Trigger>
+				<Select.Content>
+					<Select.Group>
+						{#each designs as item (item.value)}
+							<Select.Item value={item.value} label={item.label}
+								>{item.label}</Select.Item
+							>
+						{/each}
+					</Select.Group>
+				</Select.Content>
+			</Select.Root>
+		</Field.Field>
+		<Field.Field orientation="horizontal">
+			<Checkbox id="study-physiotherapy" bind:checked={physiotherapy} {disabled} />
+			<Field.FieldLabel for="study-physiotherapy">Physiotherapy context</Field.FieldLabel>
+		</Field.Field>
+		<Field.Field orientation="horizontal">
+			<Checkbox id="study-exposure" bind:checked={exposure} {disabled} />
+			<Field.FieldLabel for="study-exposure">Exposure question</Field.FieldLabel>
+		</Field.Field>
+		<Field.Field orientation="horizontal">
+			<Checkbox id="study-prediction-ai" bind:checked={predictionOrAi} {disabled} />
+			<Field.FieldLabel for="study-prediction-ai">Prediction/AI context</Field.FieldLabel>
+		</Field.Field>
+	</Field.FieldGroup>
 	<Button type="submit" disabled={disabled || !design}>Save classification</Button>
 </form>

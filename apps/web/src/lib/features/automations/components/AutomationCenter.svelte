@@ -23,12 +23,11 @@
 	import PlayIcon from '@lucide/svelte/icons/play';
 	import RefreshCwIcon from '@lucide/svelte/icons/refresh-cw';
 	import SaveIcon from '@lucide/svelte/icons/save';
-	import Settings2Icon from '@lucide/svelte/icons/settings-2';
+	import { PageHeader, PageToolbar, StatePanel, Surface } from '$lib/components/layout';
 	import * as Alert from '$lib/components/ui/alert';
 	import { Badge } from '$lib/components/ui/badge';
 	import { Button } from '$lib/components/ui/button';
 	import * as Card from '$lib/components/ui/card';
-	import * as Empty from '$lib/components/ui/empty';
 	import * as Field from '$lib/components/ui/field';
 	import { Input } from '$lib/components/ui/input';
 	import * as Select from '$lib/components/ui/select';
@@ -140,6 +139,16 @@
 	);
 	const selectedRunError = $derived(
 		selectedRunQuery.error ? selectedRunQuery.error.message : null
+	);
+	type AutomationPageState = 'loading' | 'error' | 'empty' | 'ready';
+	const pageState = $derived<AutomationPageState>(
+		queryError
+			? 'error'
+			: definitionsQuery.isPending || runsQuery.isPending
+				? 'loading'
+				: definitions.length === 0 && runs.length === 0
+					? 'empty'
+					: 'ready'
 	);
 
 	function compareDefinitions(
@@ -322,33 +331,40 @@
 	}
 </script>
 
-<div class="mx-auto flex w-full max-w-7xl flex-col gap-6 p-4 md:p-8">
-	<header class="flex flex-col gap-4 md:flex-row md:items-end md:justify-between">
-		<div class="flex flex-col gap-2">
-			<div class="flex items-center gap-2 text-sm text-muted-foreground">
-				<Settings2Icon aria-hidden={true} />
-				Project workspace / automation center
-			</div>
-			<h1 class="text-3xl font-semibold tracking-tight">Automation Center</h1>
-			<p class="max-w-2xl text-muted-foreground">
-				Configure the closed built-in maintenance recipe, launch eligible manual runs, and
-				inspect job, step, and usage visibility.
-			</p>
-		</div>
-		<Button
-			variant="outline"
-			disabled={definitionsQuery.isFetching || runsQuery.isFetching}
-			onclick={() => void refreshAutomationQueries()}
-		>
-			{#if definitionsQuery.isFetching || runsQuery.isFetching}<Spinner
-					data-icon="inline-start"
-				/>{:else}<RefreshCwIcon data-icon="inline-start" />{/if}
-			Refresh
-		</Button>
-	</header>
+<div
+	class="mx-auto flex h-full min-h-0 w-full max-w-[1440px] flex-col gap-5 overflow-auto bg-background p-4 sm:gap-6 sm:p-6 lg:p-8"
+	data-testid="automation-page"
+	data-automation-state={pageState}
+>
+	<PageHeader
+		eyebrow="Evidence operations / Automation"
+		title="Automation Center"
+		description="Configure the closed built-in maintenance recipe, launch eligible manual runs, and inspect auditable job, step, and usage visibility."
+	>
+		{#snippet actions()}
+			<Button
+				variant="outline"
+				disabled={definitionsQuery.isFetching || runsQuery.isFetching}
+				onclick={() => void refreshAutomationQueries()}
+			>
+				{#if definitionsQuery.isFetching || runsQuery.isFetching}<Spinner
+						data-icon="inline-start"
+					/>{:else}<RefreshCwIcon data-icon="inline-start" />{/if}
+				Refresh
+			</Button>
+		{/snippet}
+	</PageHeader>
+
+	<PageToolbar label="Automation status">
+		<Badge variant="secondary">Built-in recipe boundary</Badge>
+		<Badge variant="outline">{runs.length} recent runs</Badge>
+		{#if runs.some((run) => isActiveAutomationRun(run))}
+			<Badge variant="outline">Refreshing active runs</Badge>
+		{/if}
+	</PageToolbar>
 
 	{#if queryError}
-		<Alert.Root variant="destructive" data-testid="automation-query-error">
+		<Alert.Root variant="destructive" data-testid="automation-query-error" role="alert">
 			<CircleAlertIcon />
 			<Alert.Title>Automation data unavailable</Alert.Title>
 			<Alert.Description>{queryErrorMessage(queryError)}</Alert.Description>
@@ -364,8 +380,8 @@
 		</Alert.Root>
 	{/if}
 
-	<div class="grid gap-6 xl:grid-cols-[minmax(0,0.9fr)_minmax(0,1.4fr)]">
-		<Card.Root>
+	<div class="grid min-w-0 gap-6 xl:grid-cols-[minmax(0,0.9fr)_minmax(0,1.4fr)]">
+		<Card.Root class="min-w-0" data-testid="automation-recipe">
 			<Card.Header>
 				<div class="flex items-start justify-between gap-3">
 					<div class="flex flex-col gap-1.5">
@@ -451,9 +467,11 @@
 					</Alert.Root>
 				{/if}
 
-				<div
-					class="rounded-lg border bg-muted/30 p-3 text-sm"
-					data-testid="automation-recipe"
+				<Surface
+					as="section"
+					tone="subtle"
+					class="p-3 text-sm"
+					label="Built-in recipe details"
 				>
 					<div class="flex flex-wrap items-center justify-between gap-2">
 						<span class="font-medium">{AUTOMATION_RECIPE_ROUTE}</span>
@@ -475,7 +493,7 @@
 							</li>
 						{/each}
 					</ol>
-				</div>
+				</Surface>
 
 				<form class="flex flex-col gap-5" onsubmit={saveConfiguration}>
 					<Field.FieldGroup>
@@ -584,7 +602,7 @@
 			</Card.Content>
 		</Card.Root>
 
-		<Card.Root>
+		<Card.Root class="min-w-0">
 			<Card.Header>
 				<div class="flex flex-wrap items-center justify-between gap-3">
 					<div class="flex flex-col gap-1.5">
@@ -607,20 +625,27 @@
 				</div>
 			</Card.Header>
 			<Card.Content class="flex flex-col gap-4">
-				<div class="rounded-lg border p-3 text-sm" data-testid="automation-manual-state">
-					{#if !selectedDefinition && supportedDefinitions.length === 0}
-						Add a definition above before starting a run.
-					{:else if !selectedDefinition}
-						Select an active manual definition above before starting a run.
-					{:else if selectedDefinition.status === 'paused'}
-						This definition is paused. Activate it before starting a manual run.
-					{:else if selectedDefinition.trigger !== 'manual'}
-						This definition listens for <span class="font-medium"
-							>{labelForTrigger(selectedDefinition.trigger)}</span
-						>. Select Manual above to enable the button.
-					{:else}
-						The run request uses a fresh idempotency key for every click.
-					{/if}
+				<div data-testid="automation-manual-state">
+					<Surface
+						as="section"
+						tone="inset"
+						class="p-3 text-sm"
+						label="Manual execution status"
+					>
+						{#if !selectedDefinition && supportedDefinitions.length === 0}
+							Add a definition above before starting a run.
+						{:else if !selectedDefinition}
+							Select an active manual definition above before starting a run.
+						{:else if selectedDefinition.status === 'paused'}
+							This definition is paused. Activate it before starting a manual run.
+						{:else if selectedDefinition.trigger !== 'manual'}
+							This definition listens for <span class="font-medium"
+								>{labelForTrigger(selectedDefinition.trigger)}</span
+							>. Select Manual above to enable the button.
+						{:else}
+							The run request uses a fresh idempotency key for every click.
+						{/if}
+					</Surface>
 				</div>
 				{#if manualError}
 					<Alert.Root variant="destructive" data-testid="automation-manual-error">
@@ -645,48 +670,45 @@
 		</div>
 
 		{#if runsQuery.isPending}
-			<div class="grid gap-4" aria-label="Loading automation runs">
-				{#each [0, 1] as skeleton (skeleton)}
-					<Card.Root>
-						<Card.Header class="gap-3">
-							<Skeleton class="h-5 w-1/3" />
-							<Skeleton class="h-4 w-2/3" />
-						</Card.Header>
-						<Card.Content class="flex flex-col gap-3">
-							<Skeleton class="h-20 w-full" />
-							<Skeleton class="h-16 w-full" />
-						</Card.Content>
-					</Card.Root>
-				{/each}
+			<div data-testid="automation-runs-loading">
+				<Surface tone="subtle" class="p-4 sm:p-6">
+					<StatePanel
+						state="loading"
+						title="Loading run history"
+						description="Checking queued, running, and completed maintenance work."
+					/>
+				</Surface>
 			</div>
 		{:else if runsQuery.error}
-			<Empty.Root data-testid="automation-runs-error">
-				<Empty.Media variant="icon"><CircleAlertIcon /></Empty.Media>
-				<Empty.Header>
-					<Empty.Title>Runs could not be loaded</Empty.Title>
-					<Empty.Description>{queryErrorMessage(runsQuery.error)}</Empty.Description>
-				</Empty.Header>
-				<Empty.Content>
-					<Button variant="outline" onclick={() => void runsQuery.refetch()}
-						>Retry runs</Button
+			<div data-testid="automation-runs-error">
+				<Surface tone="subtle" class="p-4 sm:p-6">
+					<StatePanel
+						state="error"
+						title="Runs could not be loaded"
+						description={queryErrorMessage(runsQuery.error)}
 					>
-				</Empty.Content>
-			</Empty.Root>
+						{#snippet action()}
+							<Button variant="outline" onclick={() => void runsQuery.refetch()}
+								>Retry runs</Button
+							>
+						{/snippet}
+					</StatePanel>
+				</Surface>
+			</div>
 		{:else if runs.length === 0}
-			<Empty.Root data-testid="automation-runs-empty">
-				<Empty.Media variant="icon"><PlayIcon /></Empty.Media>
-				<Empty.Header>
-					<Empty.Title>No automation runs yet</Empty.Title>
-					<Empty.Description>
-						Configure the built-in recipe and start a manual run, or wait for its
-						selected domain trigger.
-					</Empty.Description>
-				</Empty.Header>
-			</Empty.Root>
+			<div data-testid="automation-runs-empty">
+				<Surface tone="subtle" class="p-4 sm:p-6">
+					<StatePanel
+						state="empty"
+						title="No automation runs yet"
+						description="Configure the built-in recipe and start a manual run, or wait for its selected domain trigger."
+					/>
+				</Surface>
+			</div>
 		{:else}
 			<div class="grid gap-4" data-testid="automation-runs">
 				{#each runs as run (run.id)}
-					<Card.Root data-testid="automation-run">
+					<Card.Root class="min-w-0" data-testid="automation-run">
 						<Card.Header class="gap-3">
 							<div class="flex flex-wrap items-center justify-between gap-2">
 								<Card.Title>Run {run.id.slice(0, 8)}</Card.Title>
@@ -699,35 +721,46 @@
 							</Card.Description>
 						</Card.Header>
 						<Card.Content class="flex flex-col gap-4">
-							<dl
-								class="grid gap-3 rounded-lg bg-muted/40 p-3 text-sm sm:grid-cols-2 lg:grid-cols-4"
+							<Surface
+								as="section"
+								tone="subtle"
+								class="p-3"
+								label="Automation run metrics"
 							>
-								<div>
-									<dt class="text-muted-foreground">Created</dt>
-									<dd class="font-medium">{formatTimestamp(run.created_at)}</dd>
-								</div>
-								<div>
-									<dt class="text-muted-foreground">Finished</dt>
-									<dd class="font-medium">{formatTimestamp(run.finished_at)}</dd>
-								</div>
-								<div>
-									<dt class="text-muted-foreground">Input tokens</dt>
-									<dd class="font-medium">
-										{formatInteger(run.usage.input_tokens)}
-									</dd>
-								</div>
-								<div>
-									<dt class="text-muted-foreground">Output tokens</dt>
-									<dd class="font-medium">
-										{formatInteger(run.usage.output_tokens)}
-									</dd>
-								</div>
-							</dl>
+								<dl class="grid gap-3 text-sm sm:grid-cols-2 lg:grid-cols-4">
+									<div>
+										<dt class="text-muted-foreground">Created</dt>
+										<dd class="font-medium">
+											{formatTimestamp(run.created_at)}
+										</dd>
+									</div>
+									<div>
+										<dt class="text-muted-foreground">Finished</dt>
+										<dd class="font-medium">
+											{formatTimestamp(run.finished_at)}
+										</dd>
+									</div>
+									<div>
+										<dt class="text-muted-foreground">Input tokens</dt>
+										<dd class="font-medium">
+											{formatInteger(run.usage.input_tokens)}
+										</dd>
+									</div>
+									<div>
+										<dt class="text-muted-foreground">Output tokens</dt>
+										<dd class="font-medium">
+											{formatInteger(run.usage.output_tokens)}
+										</dd>
+									</div>
+								</dl>
+							</Surface>
 
 							<div class="grid gap-4 lg:grid-cols-2">
-								<section
-									class="flex flex-col gap-2 rounded-lg border p-3"
-									aria-label="Automation job"
+								<Surface
+									as="section"
+									tone="inset"
+									class="flex flex-col gap-2 p-3"
+									label="Automation job"
 								>
 									<div class="flex items-center justify-between gap-2">
 										<h3 class="font-medium">Job</h3>
@@ -746,22 +779,28 @@
 										</div>
 									</dl>
 									{#if run.job.last_error}
-										<p class="text-sm text-destructive">{run.job.last_error}</p>
+										<p class="text-sm text-destructive">
+											{run.job.last_error}
+										</p>
 									{/if}
-								</section>
+								</Surface>
 
-								<section
-									class="flex flex-col gap-2 rounded-lg border p-3"
-									aria-label="Automation usage"
+								<Surface
+									as="section"
+									tone="inset"
+									class="flex flex-col gap-2 p-3"
+									label="Automation usage"
 								>
 									<h3 class="font-medium">Usage</h3>
-									<p class="text-sm">{formatCostMicros(run.usage.cost_micros)}</p>
+									<p class="text-sm">
+										{formatCostMicros(run.usage.cost_micros)}
+									</p>
 									{#if run.error}
 										<p class="text-sm text-destructive">
 											Run error: {run.error}
 										</p>
 									{/if}
-								</section>
+								</Surface>
 							</div>
 
 							<section class="flex flex-col gap-2" aria-label="Automation steps">

@@ -1,8 +1,9 @@
 <script lang="ts">
 	import type { StudyDto } from '$lib/api/generated/models';
+	import { MetricTile, Surface } from '$lib/components/layout';
 	import { Badge } from '$lib/components/ui/badge';
 	import { Button } from '$lib/components/ui/button';
-	import * as Card from '$lib/components/ui/card';
+	import * as Field from '$lib/components/ui/field';
 	import { Input } from '$lib/components/ui/input';
 	import type { Snippet } from 'svelte';
 	import StudyClassificationForm from './StudyClassificationForm.svelte';
@@ -35,22 +36,41 @@
 	} = $props();
 </script>
 
-<Card.Root>
-	<Card.Header>
+<Surface as="section" tone="default" class="flex min-w-0 flex-col" label="Study details">
+	<div class="border-b border-border/70 p-4 sm:p-5">
 		<div class="flex flex-wrap items-start justify-between gap-3">
 			<div>
-				<Card.Title>{study.title}</Card.Title>
-				<Card.Description>
+				<h2 class="text-xl font-semibold tracking-tight">{study.title}</h2>
+				<p class="mt-1 text-sm text-muted-foreground">
 					Revision {study.revision} · changes are audited and reversible
-				</Card.Description>
+				</p>
 			</div>
 			{#if study.design_label}
 				<Badge variant="secondary">{study.design_label}</Badge>
 			{/if}
 		</div>
-	</Card.Header>
-	<Card.Content class="flex flex-col gap-6">
-		<div class="grid gap-4 md:grid-cols-3">
+	</div>
+	<div class="flex flex-col gap-6 p-4 sm:p-5">
+		<div class="grid gap-3 sm:grid-cols-3">
+			<MetricTile
+				label="Reports"
+				value={study.reports.length}
+				detail="in this investigation"
+			/>
+			<MetricTile
+				label="Revision"
+				value={study.revision}
+				detail="audited changes"
+				tone="info"
+			/>
+			<MetricTile
+				label="Design"
+				value={study.design_label ?? 'Unclassified'}
+				detail={study.design ? 'normalized' : 'needs review'}
+				tone={study.design ? 'positive' : 'warning'}
+			/>
+		</div>
+		<div class="grid gap-5 border-t border-border/70 pt-5 lg:grid-cols-3">
 			<form
 				class="flex flex-col gap-2"
 				onsubmit={(event) => {
@@ -58,13 +78,17 @@
 					onRename();
 				}}
 			>
-				<label for="rename-study-title" class="text-sm font-medium">Rename</label>
-				<Input
-					id="rename-study-title"
-					bind:value={renameTitle}
-					placeholder={study.title}
-					required
-				/>
+				<Field.FieldGroup>
+					<Field.Field>
+						<Field.FieldLabel for="rename-study-title">Rename</Field.FieldLabel>
+						<Input
+							id="rename-study-title"
+							bind:value={renameTitle}
+							placeholder={study.title}
+							required
+						/>
+					</Field.Field>
+				</Field.FieldGroup>
 				<Button type="submit" variant="outline" disabled={renaming}>Save title</Button>
 			</form>
 			{#key `${study.id}:${study.revision}`}
@@ -75,7 +99,7 @@
 					onSubmit={onClassify}
 				/>
 			{/key}
-			<div class="rounded-md border bg-muted/20 p-3 text-sm">
+			<Surface as="aside" tone="inset" class="p-4" label="Suggested tools">
 				<p class="font-medium">Suggested tools</p>
 				<p class="mt-1 text-xs text-muted-foreground">
 					Guidance only; never completes an appraisal automatically.
@@ -87,8 +111,8 @@
 						>
 					{/each}
 				</div>
-			</div>
+			</Surface>
 		</div>
 		{@render children()}
-	</Card.Content>
-</Card.Root>
+	</div>
+</Surface>

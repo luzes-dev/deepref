@@ -30,12 +30,14 @@
 	import { resolve } from '$app/paths';
 	import { pushState, replaceState } from '$app/navigation';
 	import { ApiError } from '$lib/api/custom-fetch';
-	import * as Alert from '$lib/components/ui/alert';
 	import { Badge } from '$lib/components/ui/badge';
 	import { Button } from '$lib/components/ui/button';
 	import * as Card from '$lib/components/ui/card';
+	import * as Empty from '$lib/components/ui/empty';
 	import { Input } from '$lib/components/ui/input';
+	import { Skeleton } from '$lib/components/ui/skeleton';
 	import CriteriaPanel from '$lib/features/screening/components/CriteriaPanel.svelte';
+	import ScreeningFeedback from '$lib/features/screening/components/ScreeningFeedback.svelte';
 	import ScreeningHistory from '$lib/features/screening/components/ScreeningHistory.svelte';
 	import { createInfiniteQuery, useQueryClient } from '@tanstack/svelte-query';
 	import { attachExternalPdf, uploadPdf } from '../api';
@@ -44,6 +46,14 @@
 	import FullTextDecisionBar from './FullTextDecisionBar.svelte';
 	import PdfViewer from './PdfViewer.svelte';
 	import { fullTextUrlString, parseFullTextUrl, type FullTextUrlState } from '../url';
+	import {
+		ArrowLeft,
+		ArrowRight,
+		FileText,
+		FileUp,
+		ScanSearch,
+		SlidersHorizontal
+	} from '@lucide/svelte';
 
 	type FullTextItem = FullTextQueueItemDto | MissingFullTextDto;
 	type AuthoritativeFullTextState = Pick<
@@ -179,6 +189,13 @@
 			(item) => item.report_id === currentReportId
 		)
 	);
+	const queueCount = $derived(
+		urlState.filter === 'missing' ? missingItems.length : visibleQueueItems.length
+	);
+
+	function statusLabel(value: string) {
+		return value.replaceAll('_', ' ');
+	}
 
 	function updateUrl(changes: Partial<FullTextUrlState>, replace = true) {
 		const next = { ...urlState, ...changes };
@@ -416,114 +433,165 @@
 	}
 </script>
 
-<div class="mx-auto flex w-full max-w-7xl flex-col gap-6 p-4 md:p-8">
-	<header class="flex flex-col gap-3 lg:flex-row lg:items-end lg:justify-between">
-		<div>
-			<div class="text-sm text-muted-foreground">
-				Evidence workspace / full-text screening
+<div class="mx-auto flex w-full max-w-[1480px] flex-col gap-5 p-4 md:gap-6 md:p-8">
+	<header class="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
+		<div class="flex min-w-0 flex-col gap-2">
+			<div
+				class="flex flex-wrap items-center gap-2 text-xs font-semibold tracking-[0.12em] text-primary uppercase"
+			>
+				<ScanSearch aria-hidden="true" /> Evidence workspace
+				<span class="text-muted-foreground">/</span> full-text screening
 			</div>
-			<h1 class="text-3xl font-semibold tracking-tight">Screen full text</h1>
-			<p class="max-w-2xl text-muted-foreground">
+			<h1 class="editorial-title text-4xl leading-none sm:text-5xl">Screen full text</h1>
+			<p class="max-w-2xl text-sm leading-6 text-muted-foreground sm:text-base">
 				Review protocol criteria beside the source PDF and keep every decision auditable.
 			</p>
 		</div>
 		<div class="flex items-center gap-2">
-			<Button variant="outline" onclick={() => void move('previous')}>Previous</Button><Button
-				variant="outline"
-				onclick={() => void move('next')}>Next</Button
+			<Button variant="outline" onclick={() => void move('previous')}
+				><ArrowLeft data-icon="inline-start" /> Previous</Button
+			>
+			<Button variant="outline" onclick={() => void move('next')}
+				>Next <ArrowRight data-icon="inline-end" /></Button
 			>
 		</div>
 	</header>
 
-	<div
-		class="flex flex-wrap items-center gap-2 rounded-lg border bg-muted/20 p-3 text-sm"
+	<section
+		class="flex flex-col gap-3 rounded-xl border bg-muted/20 p-3 md:p-4"
 		aria-label="Full-text queue filters"
 	>
-		<Button
-			variant={urlState.filter === 'all' ? 'default' : 'outline'}
-			onclick={() => void updateUrl({ filter: 'all', report: null })}>All included</Button
-		>
-		<Button
-			variant={urlState.filter === 'available' ? 'default' : 'outline'}
-			onclick={() => void updateUrl({ filter: 'available', report: null })}>Available</Button
-		>
-		<Button
-			variant={urlState.filter === 'failed' ? 'default' : 'outline'}
-			onclick={() => void updateUrl({ filter: 'failed', report: null })}>Failed</Button
-		>
-		<Button
-			variant={urlState.filter === 'missing' ? 'default' : 'outline'}
-			onclick={() => void updateUrl({ filter: 'missing', report: null })}
-			>Missing / failed ({missingItems.length})</Button
-		>
-		{#if currentIndex >= 0}<Badge variant="secondary"
-				>{currentIndex + 1} of {urlState.filter === 'missing'
-					? missingItems.length
-					: visibleQueueItems.length}
-				loaded</Badge
-			>{:else if urlState.filter === 'missing' && queueCurrent}<Badge variant="secondary"
-				>Attached · left missing queue</Badge
-			>{/if}
-		{#if urlState.filter !== 'missing' && fullQueueQuery.hasNextPage}<Button
-				variant="outline"
-				disabled={fullQueueQuery.isFetchingNextPage}
-				onclick={() => void loadMoreReports()}
-				>{fullQueueQuery.isFetchingNextPage ? 'Loading more…' : 'Load more reports'}</Button
-			>{/if}
-	</div>
+		<div class="flex flex-wrap items-center justify-between gap-2">
+			<div class="flex items-center gap-2 text-sm font-semibold">
+				<SlidersHorizontal aria-hidden="true" /> Queue filters
+			</div>
+			{#if currentIndex >= 0}<Badge variant="secondary"
+					>{currentIndex + 1} of {queueCount} loaded</Badge
+				>{:else if urlState.filter === 'missing' && queueCurrent}<Badge variant="secondary"
+					>Attached · left missing queue</Badge
+				>{/if}
+		</div>
+		<div class="flex flex-wrap items-center gap-2">
+			<Button
+				variant={urlState.filter === 'all' ? 'default' : 'outline'}
+				aria-pressed={urlState.filter === 'all'}
+				onclick={() => void updateUrl({ filter: 'all', report: null })}>All included</Button
+			>
+			<Button
+				variant={urlState.filter === 'available' ? 'default' : 'outline'}
+				aria-pressed={urlState.filter === 'available'}
+				onclick={() => void updateUrl({ filter: 'available', report: null })}
+				>Available</Button
+			>
+			<Button
+				variant={urlState.filter === 'failed' ? 'default' : 'outline'}
+				aria-pressed={urlState.filter === 'failed'}
+				onclick={() => void updateUrl({ filter: 'failed', report: null })}>Failed</Button
+			>
+			<Button
+				variant={urlState.filter === 'missing' ? 'default' : 'outline'}
+				aria-pressed={urlState.filter === 'missing'}
+				onclick={() => void updateUrl({ filter: 'missing', report: null })}
+				>Missing / failed ({missingItems.length})</Button
+			>
+			{#if urlState.filter !== 'missing' && fullQueueQuery.hasNextPage}<Button
+					variant="outline"
+					disabled={fullQueueQuery.isFetchingNextPage}
+					onclick={() => void loadMoreReports()}
+					>{fullQueueQuery.isFetchingNextPage
+						? 'Loading more…'
+						: 'Load more reports'}</Button
+				>{/if}
+		</div>
+	</section>
 
-	{#if errorMessage}<Alert.Root variant="destructive" role="alert"
-			><Alert.Title>Full-text review needs attention</Alert.Title><Alert.Description
-				>{errorMessage}</Alert.Description
-			></Alert.Root
-		>{/if}
-	{#if statusMessage}<div
-			class="rounded-md border border-amber-500/40 bg-amber-500/10 p-3 text-sm"
-			role="status"
-			aria-live="polite"
-		>
-			{statusMessage}
-		</div>{/if}
+	<ScreeningFeedback
+		errorTitle="Full-text review needs attention"
+		{errorMessage}
+		{statusMessage}
+	/>
 
 	{#if !current}
-		<Card.Root
-			><Card.Header><Card.Title>No included reports in this queue</Card.Title></Card.Header
-			><Card.Content class="text-sm text-muted-foreground"
-				>Include a report during title/abstract screening, or choose the missing-full-text
-				filter.</Card.Content
-			></Card.Root
-		>
+		{#if fullQueueQuery.isPending || missingQuery.isPending}
+			<Card.Root class="border-primary/15"
+				><Card.Content class="flex flex-col gap-3 py-10" aria-live="polite"
+					><Skeleton class="h-6 w-2/3" /><Skeleton class="h-32 w-full" />
+					<p class="text-sm text-muted-foreground">
+						Loading full-text queue…
+					</p></Card.Content
+				></Card.Root
+			>
+		{:else}
+			<Empty.Root class="min-h-[18rem] border-dashed">
+				<Empty.Media variant="icon"><FileText /></Empty.Media>
+				<Empty.Header
+					><Empty.Title>No included reports in this queue</Empty.Title><Empty.Description
+						>Include a report during title/abstract screening, or choose the
+						missing-full-text filter.</Empty.Description
+					></Empty.Header
+				>
+			</Empty.Root>
+		{/if}
 	{:else}
 		<div class="grid gap-6 xl:grid-cols-[minmax(0,1fr)_24rem]">
-			<main class="flex min-w-0 flex-col gap-6">
-				<Card.Root>
-					<Card.Header class="flex-row items-start justify-between gap-4"
-						><div>
-							<Card.Title>{current.title ?? 'Untitled report'}</Card.Title
-							><Card.Description
-								>{current.abstract_text ??
-									'No abstract is available.'}</Card.Description
+			<section class="flex min-w-0 flex-col gap-6" aria-label="Full-text review">
+				<Card.Root class="border-primary/15">
+					<Card.Header class="gap-3 border-b border-border/60 pb-4">
+						<div class="flex flex-wrap items-start justify-between gap-3">
+							<div class="flex min-w-0 items-start gap-3">
+								<span
+									class="flex size-8 shrink-0 items-center justify-center rounded-lg bg-primary/10 text-primary"
+									><FileText aria-hidden="true" /></span
+								>
+								<div class="min-w-0">
+									<Card.Title class="text-xl leading-tight sm:text-2xl"
+										>{current.title ?? 'Untitled report'}</Card.Title
+									><Card.Description class="mt-2 line-clamp-3"
+										>{current.abstract_text ??
+											'No abstract is available.'}</Card.Description
+									>
+								</div>
+							</div>
+							<Badge
+								variant={screenStatus === 'exclude'
+									? 'destructive'
+									: screenStatus === 'include'
+										? 'default'
+										: 'secondary'}>{statusLabel(screenStatus)}</Badge
 							>
 						</div>
-						<Badge variant="outline">{screenStatus.replaceAll('_', ' ')}</Badge
-						></Card.Header
-					>
-					<Card.Content class="flex flex-col gap-4">
-						{#if contentUrl && document?.status === 'available'}<PdfViewer
+					</Card.Header>
+					<Card.Content class="flex flex-col gap-4 pt-5">
+						<div
+							class="flex flex-wrap items-center justify-between gap-2 text-xs text-muted-foreground"
+						>
+							<span
+								>Report {currentIndex >= 0
+									? `${currentIndex + 1} of ${queueCount}`
+									: 'selected'}</span
+							><span>Revision {screenRevision}</span>
+						</div>
+						{#if contentUrl && document?.status === 'available'}
+							<PdfViewer
 								{contentUrl}
 								{blocks}
 								pageMetadata={pages}
 								selectedPage={urlState.page}
 								{selectedBlockId}
 								onBlockSelect={handleBlockSelect}
-							/>{:else}<div
-								class="rounded-lg border border-dashed p-8 text-center text-sm text-muted-foreground"
+							/>
+						{:else}
+							<div
+								class="flex min-h-48 flex-col items-center justify-center gap-3 rounded-xl border border-dashed bg-muted/15 p-8 text-center text-sm text-muted-foreground"
 							>
-								{document?.status
-									? `Document status: ${document.status.replaceAll('_', ' ')}`
+								<FileUp aria-hidden="true" />{document?.status
+									? `Document status: ${statusLabel(document.status)}`
 									: 'Attach a PDF to open the document viewer.'}
-							</div>{/if}
-						<div class="flex flex-wrap items-center gap-2">
+							</div>
+						{/if}
+						<div
+							class="grid gap-2 rounded-lg border bg-muted/15 p-3 sm:grid-cols-[auto_minmax(0,1fr)_minmax(0,1fr)_auto] sm:items-center"
+						>
 							<label class="inline-flex cursor-pointer items-center"
 								><span class="sr-only">Upload PDF</span><input
 									class="hidden"
@@ -541,18 +609,24 @@
 												'input'
 											);
 										if (target instanceof HTMLInputElement) target.click();
-									}}>{uploading ? 'Uploading…' : 'Upload PDF'}</Button
+									}}
+									><FileUp data-icon="inline-start" />{uploading
+										? 'Uploading…'
+										: 'Upload PDF'}</Button
 								></label
-							><Input
+							>
+							<Input
 								bind:value={externalUrl}
 								type="url"
 								placeholder="https://…/article.pdf"
 								aria-label="External PDF URL"
-							/><Input
+							/>
+							<Input
 								bind:value={externalFilename}
 								placeholder="Filename (optional)"
 								aria-label="External PDF filename"
-							/><Button
+							/>
+							<Button
 								type="button"
 								variant="outline"
 								disabled={uploading || !externalUrl.trim()}
@@ -562,18 +636,31 @@
 					</Card.Content>
 				</Card.Root>
 
-				<Card.Root
-					><Card.Header
-						><Card.Title>Evidence blocks</Card.Title><Card.Description
+				<Card.Root class="border-primary/15">
+					<Card.Header class="gap-2 border-b border-border/60 pb-4"
+						><div class="flex items-center gap-2">
+							<span
+								class="flex size-8 items-center justify-center rounded-lg bg-primary/10 text-primary"
+								><ScanSearch aria-hidden="true" /></span
+							><Card.Title>Evidence blocks</Card.Title>
+						</div>
+						<Card.Description
 							>Parser {document?.parser_version ?? 'pending'}{document?.ocr_required
 								? ' · OCR required on one or more pages'
 								: ''}</Card.Description
 						></Card.Header
-					><Card.Content
-						>{#if blocks.length === 0}<p class="text-sm text-muted-foreground">
-								Evidence blocks appear after asynchronous parsing.
-							</p>{:else}<ol
-								class="flex max-h-72 flex-col gap-2 overflow-auto"
+					>
+					<Card.Content class="pt-5"
+						>{#if blocks.length === 0}<Empty.Root class="border-dashed p-8"
+								><Empty.Media variant="icon"><ScanSearch /></Empty.Media
+								><Empty.Header
+									><Empty.Title>Evidence blocks are not ready</Empty.Title
+									><Empty.Description
+										>Evidence blocks appear after asynchronous parsing.</Empty.Description
+									></Empty.Header
+								></Empty.Root
+							>{:else}<ol
+								class="flex max-h-80 flex-col gap-2 overflow-auto"
 								aria-label="Parsed evidence blocks"
 							>
 								{#each blocks as block (block.id)}<li>
@@ -584,12 +671,16 @@
 										/>
 									</li>{/each}
 							</ol>{/if}</Card.Content
-					></Card.Root
-				>
+					>
+				</Card.Root>
 
-				<Card.Root
-					><Card.Header><Card.Title>Full-text decision</Card.Title></Card.Header
-					><Card.Content
+				<Card.Root class="border-primary/15">
+					<Card.Header class="gap-2 border-b border-border/60 pb-4"
+						><Card.Title>Full-text decision</Card.Title><Card.Description
+							>Use the parsed PDF and one standardized exclusion reason.</Card.Description
+						></Card.Header
+					>
+					<Card.Content class="pt-5"
 						><FullTextDecisionBar
 							reasons={reasons.filter((reason) => reason.stage === 'full_text')}
 							{selectedReason}
@@ -600,25 +691,23 @@
 							onDecision={(decision, reasonId) => void decide(decision, reasonId)}
 							onUndo={() => void undo()}
 						/></Card.Content
-					></Card.Root
-				>
-			</main>
-			<aside class="flex flex-col gap-6">
+					>
+				</Card.Root>
+			</section>
+			<aside class="flex min-w-0 flex-col gap-6 xl:sticky xl:top-4 xl:self-start">
 				<CriteriaPanel
 					criteria={protocol?.criteria ?? []}
 					protocolVersion={protocol?.version}
 					stage="full_text"
 				/>
-				{#if currentReportId}
-					<AiProposalReview
+				{#if currentReportId}<AiProposalReview
 						{projectId}
 						reportId={currentReportId}
 						stage="full_text"
 						protocolVersionId={protocol?.id}
 						expectedRevision={screenRevision}
 						onEvidenceSelect={handleAiEvidenceSelect}
-					/>
-				{/if}
+					/>{/if}
 				<ScreeningHistory items={historyItems} />
 			</aside>
 		</div>

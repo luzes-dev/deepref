@@ -16,6 +16,7 @@
 	import RefreshCwIcon from '@lucide/svelte/icons/refresh-cw';
 	import SendIcon from '@lucide/svelte/icons/send';
 	import ShieldCheckIcon from '@lucide/svelte/icons/shield-check';
+	import { PageHeader, PageToolbar, StatePanel, Surface } from '$lib/components/layout';
 	import * as Alert from '$lib/components/ui/alert';
 	import { Badge } from '$lib/components/ui/badge';
 	import { Button } from '$lib/components/ui/button';
@@ -23,7 +24,6 @@
 	import * as Empty from '$lib/components/ui/empty';
 	import * as Field from '$lib/components/ui/field';
 	import { Input } from '$lib/components/ui/input';
-	import { Skeleton } from '$lib/components/ui/skeleton';
 	import { Spinner } from '$lib/components/ui/spinner';
 	import { Textarea } from '$lib/components/ui/textarea';
 	import * as ToggleGroup from '$lib/components/ui/toggle-group';
@@ -88,6 +88,16 @@
 		selectedToolName && ASSISTANT_TOOL_METADATA[selectedToolName].reviewDestination
 			? reviewPath(selectedToolName, projectId, values)
 			: null
+	);
+	type AssistantPageState = 'loading' | 'error' | 'empty' | 'ready';
+	const pageState = $derived<AssistantPageState>(
+		catalogQuery.isPending
+			? 'loading'
+			: catalogQuery.error
+				? 'error'
+				: catalog.length === 0
+					? 'empty'
+					: 'ready'
 	);
 
 	function selectTool(entry: SupportedCatalogEntry): void {
@@ -236,30 +246,35 @@
 	</div>
 {/snippet}
 
-<main class="mx-auto flex w-full max-w-7xl flex-col gap-6 p-4 md:p-8">
-	<header class="flex flex-col gap-3">
-		<div class="flex flex-wrap items-center gap-2">
-			<Badge variant="secondary">Guided tools</Badge>
-			<Badge variant="outline">Project scoped</Badge>
-		</div>
-		<div>
-			<h1 class="text-2xl font-semibold tracking-tight">Project Assistant</h1>
-			<p class="mt-1 max-w-3xl text-sm text-muted-foreground">
-				Select one approved read or proposal tool, provide its typed inputs, and run exactly
-				one request. Proposal tools create reviewer work; they never change scientific state
-				directly.
-			</p>
-		</div>
-	</header>
+<div
+	class="mx-auto flex h-full min-h-0 w-full max-w-[1440px] flex-col gap-5 overflow-auto bg-background p-4 sm:gap-6 sm:p-6 lg:p-8"
+	data-testid="assistant-page"
+	data-assistant-state={pageState}
+>
+	<PageHeader
+		eyebrow="Evidence operations / Assistant"
+		title="Project Assistant"
+		description="Select one approved read or proposal tool, provide typed inputs, and run exactly one request. Proposal tools create reviewer work; they never change scientific state directly."
+	/>
+
+	<PageToolbar label="Assistant scope">
+		<Badge variant="secondary">Guided tools</Badge>
+		<Badge variant="outline">Project scoped</Badge>
+		<span class="text-sm text-muted-foreground">{catalog.length} catalog tools</span>
+	</PageToolbar>
 
 	{#if catalogQuery.isPending}
-		<section class="grid gap-4 md:grid-cols-2" aria-label="Loading assistant tools">
-			{#each [0, 1, 2, 3] as index (index)}
-				<Skeleton class="h-24 w-full" />
-			{/each}
-		</section>
+		<div data-testid="assistant-catalog-loading">
+			<Surface tone="subtle" class="p-4 sm:p-6">
+				<StatePanel
+					state="loading"
+					title="Loading assistant catalog"
+					description="Checking the policy-approved tools for this project."
+				/>
+			</Surface>
+		</div>
 	{:else if catalogQuery.error}
-		<Alert.Root variant="destructive" data-testid="assistant-catalog-error">
+		<Alert.Root variant="destructive" data-testid="assistant-catalog-error" role="alert">
 			<AlertCircleIcon data-icon="inline-start" />
 			<Alert.Title>Could not load assistant tools</Alert.Title>
 			<Alert.Description>{catalogErrorMessage(catalogQuery.error)}</Alert.Description>
@@ -276,15 +291,15 @@
 			</Alert.Action>
 		</Alert.Root>
 	{:else if catalog.length === 0}
-		<Empty.Root data-testid="assistant-catalog-empty">
-			<Empty.Header>
-				<Empty.Media variant="icon"><ShieldCheckIcon /></Empty.Media>
-				<Empty.Title>No assistant tools are available</Empty.Title>
-				<Empty.Description>
-					This project did not return any policy-approved assistant tools.
-				</Empty.Description>
-			</Empty.Header>
-		</Empty.Root>
+		<div data-testid="assistant-catalog-empty">
+			<Surface tone="subtle" class="p-4 sm:p-6">
+				<StatePanel
+					state="empty"
+					title="No assistant tools are available"
+					description="This project did not return any policy-approved assistant tools."
+				/>
+			</Surface>
+		</div>
 	{:else}
 		<section class="grid gap-6 lg:grid-cols-[minmax(0,1fr)_minmax(0,1.1fr)]">
 			<div class="flex min-w-0 flex-col gap-4">
@@ -392,7 +407,7 @@
 						</Empty.Header>
 					</Empty.Root>
 				{:else}
-					<Card.Root>
+					<Card.Root class="min-w-0" data-testid="assistant-tool-card">
 						<Card.Header>
 							<div class="flex flex-wrap items-start justify-between gap-3">
 								<div>
@@ -571,22 +586,26 @@
 
 							{#if assistantResult}
 								{#if assistantResult.kind === 'read'}
-									<section
-										class="mt-5 flex flex-col gap-2"
-										data-testid="assistant-read-result"
-									>
-										<div class="flex items-center gap-2">
-											<CheckCircle2Icon
-												class="size-4 text-green-600"
-												aria-hidden={true}
-											/>
-											<h2 class="text-sm font-medium">Read result</h2>
-										</div>
-										<pre
-											class="max-h-[32rem] overflow-auto rounded-md border bg-muted/30 p-4 text-xs leading-relaxed">{readResult(
-												assistantResult.data
-											)}</pre>
-									</section>
+									<div class="mt-5" data-testid="assistant-read-result">
+										<Surface
+											as="section"
+											tone="inset"
+											class="flex flex-col gap-2 p-4"
+											label="Read result"
+										>
+											<div class="flex items-center gap-2">
+												<CheckCircle2Icon
+													class="size-4 text-success"
+													aria-hidden={true}
+												/>
+												<h2 class="text-sm font-medium">Read result</h2>
+											</div>
+											<pre
+												class="max-h-[32rem] overflow-auto rounded-md bg-muted/30 p-4 text-xs leading-relaxed">{readResult(
+													assistantResult.data
+												)}</pre>
+										</Surface>
+									</div>
 								{:else}
 									<Alert.Root
 										class="mt-5"
@@ -632,4 +651,4 @@
 			</div>
 		</section>
 	{/if}
-</main>
+</div>

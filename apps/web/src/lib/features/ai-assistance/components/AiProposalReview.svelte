@@ -289,11 +289,14 @@
 	}
 </script>
 
-<Card.Root data-testid="ai-proposal-review">
-	<Card.Header class="gap-3">
+<Card.Root class="border-primary/15" data-testid="ai-proposal-review">
+	<Card.Header class="gap-3 border-b border-border/60 pb-4">
 		<div class="flex flex-wrap items-center justify-between gap-2">
 			<div class="flex items-center gap-2">
-				<Brain aria-hidden="true" class="size-4" />
+				<span
+					class="flex size-8 items-center justify-center rounded-lg bg-primary/10 text-primary"
+					><Brain aria-hidden="true" /></span
+				>
 				<Card.Title>AI assistance</Card.Title>
 			</div>
 			<Badge variant="outline">Proposal only</Badge>
@@ -303,7 +306,7 @@
 			approve any consequential action.
 		</Card.Description>
 	</Card.Header>
-	<Card.Content class="flex flex-col gap-4">
+	<Card.Content class="flex flex-col gap-4 pt-5">
 		{#if errorMessage}
 			<Alert.Root variant="destructive" role="alert">
 				<Alert.Title>AI assistance needs attention</Alert.Title>
@@ -328,7 +331,7 @@
 			</Empty.Root>
 		{:else}
 			{@const proposal = activeProposal}
-			<div class="flex flex-wrap items-center gap-2">
+			<div class="flex flex-wrap items-center gap-2 rounded-lg border bg-muted/20 p-3">
 				<Badge variant={proposal.status === 'pending' ? 'secondary' : 'outline'}>
 					{proposal.status}
 				</Badge>
@@ -341,10 +344,14 @@
 			{#if stage !== 'dedupe'}
 				<div class="flex flex-col gap-3" aria-label="Criterion judgments">
 					{#each criterionRows(proposal) as criterion (criterion.criterion_id)}
-						<div class="rounded-md border p-3">
+						<div class="rounded-lg border bg-card p-3">
 							<div class="flex flex-wrap items-center justify-between gap-2">
 								<span class="font-medium">{criterion.criterion_label}</span>
-								<Badge variant="secondary">{criterion.judgment}</Badge>
+								<Badge
+									variant={criterion.judgment === 'unclear'
+										? 'outline'
+										: 'secondary'}>{criterion.judgment}</Badge
+								>
 							</div>
 							<p class="mt-2 text-sm text-muted-foreground">{criterion.rationale}</p>
 							{#if criterion.evidence.length}
@@ -360,7 +367,9 @@
 												{evidenceLabel(evidence)}
 											</Button>
 										{:else}
-											<div class="rounded-md bg-muted px-2 py-1 text-xs">
+											<div
+												class="rounded-md border bg-muted/40 px-2 py-1 text-xs"
+											>
 												Report metadata · {metadataLabel(evidence.field)} · hash
 												<span class="font-mono"
 													>{evidence.content_hash.slice(0, 12)}…</span
@@ -374,7 +383,7 @@
 					{/each}
 				</div>
 			{:else}
-				<div class="rounded-md border p-3 text-sm">
+				<div class="rounded-lg border bg-muted/20 p-3 text-sm">
 					<p class="font-medium">Candidate pair</p>
 					<p class="mt-1 text-muted-foreground">
 						Record {proposal.target_record_id ?? 'unknown'} · report {candidateReportLabel(
@@ -383,7 +392,7 @@
 					</p>
 				</div>
 				{#if dedupeRationales(proposal).length}
-					<div class="rounded-md border p-3 text-sm">
+					<div class="rounded-lg border bg-muted/20 p-3 text-sm">
 						<p class="font-medium">Rationale</p>
 						<ul class="mt-1 list-disc pl-5 text-muted-foreground">
 							{#each dedupeRationales(proposal) as rationale (rationale.code)}
@@ -393,7 +402,7 @@
 					</div>
 				{/if}
 				{#if dedupeSignals(proposal).length}
-					<div class="rounded-md border p-3 text-sm">
+					<div class="rounded-lg border bg-muted/20 p-3 text-sm">
 						<p class="font-medium">Signals</p>
 						<ul class="mt-1 list-disc pl-5 text-muted-foreground">
 							{#each dedupeSignals(proposal) as signal (signal.kind)}
@@ -407,7 +416,10 @@
 					</div>
 				{/if}
 				{#if dedupeProvenance(proposal).length}
-					<div class="rounded-md border p-3 text-sm" data-testid="ai-dedupe-provenance">
+					<div
+						class="rounded-lg border bg-muted/20 p-3 text-sm"
+						data-testid="ai-dedupe-provenance"
+					>
 						<p class="font-medium">Evidence provenance</p>
 						<ul class="mt-1 flex flex-col gap-1 text-muted-foreground">
 							{#each dedupeProvenance(proposal) as evidence (evidence.entity_type + evidence.entity_id + evidence.field)}
@@ -419,21 +431,21 @@
 			{/if}
 
 			{#if uncertainties(proposal).length}
-				<div
-					class="rounded-md border border-amber-500/40 bg-amber-500/10 p-3 text-sm"
-					role="status"
-				>
-					<p class="font-medium">Uncertainty / abstention</p>
-					<ul class="mt-1 list-disc pl-5">
-						{#each uncertainties(proposal) as uncertainty (uncertainty)}
-							<li>{uncertainty}</li>
-						{/each}
-					</ul>
-				</div>
+				<Alert.Root class="border-warning/40 bg-warning/10" role="status">
+					<Info aria-hidden="true" />
+					<Alert.Title>Uncertainty / abstention</Alert.Title>
+					<Alert.Description>
+						<ul class="mt-1 list-disc pl-5">
+							{#each uncertainties(proposal) as uncertainty (uncertainty)}
+								<li>{uncertainty}</li>
+							{/each}
+						</ul>
+					</Alert.Description>
+				</Alert.Root>
 			{/if}
 		{/if}
 	</Card.Content>
-	<Card.Footer class="flex flex-wrap justify-end gap-2">
+	<Card.Footer class="flex flex-wrap justify-end gap-2 border-t border-border/60 pt-4">
 		{#if !activeProposal && ((stage === 'dedupe' && recordId && candidateReportId) || stage !== 'dedupe')}
 			<Button
 				variant="outline"

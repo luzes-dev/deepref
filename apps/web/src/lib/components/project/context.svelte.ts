@@ -41,16 +41,21 @@ type ProjectWorkspaceDataSources = {
 	ingestionsError: Getter<string | undefined>;
 };
 
+const VIEW_SUFFIXES = [
+	['/protocol', 'protocol'],
+	['/prisma', 'prisma'],
+	['/articles', 'articles'],
+	['/graph', 'graph'],
+	['/recommendations', 'recommendations'],
+	['/discovery/imports', 'ingestions'],
+	['/discovery/duplicates', 'duplicates'],
+	['/deduplication', 'duplicates'],
+	['/screening/title-abstract', 'screening'],
+	['/screening/full-text', 'screening']
+] as const satisfies ReadonlyArray<readonly [string, ProjectWorkspaceView]>;
+
 function viewForPathname(pathname: string): ProjectWorkspaceView {
-	if (pathname.endsWith('/protocol')) return 'protocol';
-	if (pathname.endsWith('/prisma')) return 'prisma';
-	if (pathname.endsWith('/articles')) return 'articles';
-	if (pathname.endsWith('/graph')) return 'graph';
-	if (pathname.endsWith('/recommendations')) return 'recommendations';
-	if (pathname.endsWith('/discovery/imports')) return 'ingestions';
-	if (pathname.endsWith('/discovery/duplicates')) return 'duplicates';
-	if (pathname.endsWith('/screening/title-abstract')) return 'screening';
-	return 'overview';
+	return VIEW_SUFFIXES.find(([suffix]) => pathname.endsWith(suffix))?.[1] ?? 'overview';
 }
 
 function pathnameForView(projectId: string, view: ProjectWorkspaceNavView): ResolvedPathname {
