@@ -78,6 +78,10 @@ test-coverage-rust:
 # Run both TypeScript and Rust coverage suites and output reports.
 test-coverage: test-coverage-ts test-coverage-rust
 
+# Report uncovered complexity from an existing LCOV file without rerunning tests.
+risk-rust LCOV="target/llvm-cov/lcov.info":
+    cargo crap --workspace --lcov {{quote(LCOV)}} --exclude '**/tests/**' --exclude '**/benches/**' --exclude '**/generated/**' --exclude '**/tools/xtask/**'
+
 # Start dependencies and run integration test targets.
 test-integration:
     {{compose}} up -d --wait

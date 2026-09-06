@@ -1,0 +1,59 @@
+name: Rust uncovered complexity
+
+on:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+    branches: [development]
+
+permissions:
+  contents: read
+  actions: read
+
+jobs:
+  risk:
+    name: Rust risk report
+    if: github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.head_repository.full_name == github.repository
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - name: Checkout the measured source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event.workflow_run.head_sha }}
+          persist-credentials: false
+      - name: Download existing coverage without running tests
+        uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
+        with:
+          name: rust-coverage-${{ github.event.workflow_run.head_sha }}
+          path: coverage/rust/
+          run-id: ${{ github.event.workflow_run.id }}
+          github-token: ${{ github.token }}
+      - name: Verify coverage belongs to checked-out source
+        run: |
+          test "$(cat coverage/rust/revision.txt)" = "$(git rev-parse HEAD)"
+          test -s coverage/rust/lcov.info
+      - name: Install pinned Cargo metadata toolchain
+        run: |
+          rustup toolchain install 1.95.0 --profile minimal
+          rustup override set 1.95.0
+      - name: Install pinned risk analyzer
+        run: |
+          curl --proto '=https' --tlsv1.2 --fail --show-error --location https://github.com/minikin/cargo-crap/releases/download/v0.4.3/cargo-crap-x86_64-unknown-linux-gnu.tar.gz --output "$RUNNER_TEMP/cargo-crap.tar.gz"
+          echo "6caccf4893704edc74d7014dbb1e022d7c64ef7cd293087519ca7bc1d8c02285  $RUNNER_TEMP/cargo-crap.tar.gz" | sha256sum --check
+          mkdir -p "$RUNNER_TEMP/risk-bin"
+          tar --extract --gzip --file "$RUNNER_TEMP/cargo-crap.tar.gz" --directory "$RUNNER_TEMP/risk-bin"
+          echo "$RUNNER_TEMP/risk-bin" >> "$GITHUB_PATH"
+      - name: Analyze uncovered complexity without a legacy threshold gate
+        run: |
+          cargo crap --workspace --lcov coverage/rust/lcov.info --exclude '**/tests/**' --exclude '**/benches/**' --exclude '**/generated/**' --exclude '**/tools/xtask/**' --format json --output coverage/rust/risk.json
+          cargo crap --workspace --lcov coverage/rust/lcov.info --exclude '**/tests/**' --exclude '**/benches/**' --exclude '**/generated/**' --exclude '**/tools/xtask/**' --summary | tee coverage/rust/risk-summary.txt
+      - name: Retain baseline for later comparisons
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        with:
+          name: rust-risk-${{ github.event.workflow_run.head_sha }}
+          path: |
+            coverage/rust/risk.json
+            coverage/rust/risk-summary.txt
+            coverage/rust/revision.txt
+          retention-days: 30

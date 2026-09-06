@@ -21,3 +21,6 @@ kyverno = "1.15.2"
 taplo = "0.10.0"
 jq = "1.8.1"
 yq = "4.47.1"
+
+# Reads the existing LLVM coverage artifact; does not execute tests.
+"cargo:cargo-crap" = "0.4.3"
