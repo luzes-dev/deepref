@@ -18,7 +18,12 @@ schemars.workspace = true
 thiserror.workspace = true
 uuid.workspace = true
 
+[[bench]]
+name = "deduplication"
+harness = false
+
 [dev-dependencies]
+criterion = { workspace = true }
 proptest = "1.9.0"
 
 [lints]

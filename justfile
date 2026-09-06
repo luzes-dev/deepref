@@ -40,6 +40,10 @@ test-unit:
     cargo test --doc --workspace --locked
     pnpm --filter @deepref/web test:unit -- --run
 
+# Run Criterion microbenchmarks across algorithmic workspace crates.
+bench *ARGS:
+    SQLX_OFFLINE=true cargo bench --workspace {{ARGS}}
+
 # Run property tests for Rust and TypeScript with high iteration counts.
 test-property:
     cargo nextest run --workspace --lib --bins --locked -E 'test(/::property_tests::|::tests::.*_property|::tests::.*_invariants)/'
