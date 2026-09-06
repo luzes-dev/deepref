@@ -1,6 +1,8 @@
 set dotenv-load := true
 set shell := ["bash", "-euo", "pipefail", "-c"]
 
+export SQLX_OFFLINE := env_var_or_default("SQLX_OFFLINE", "true")
+
 compose := "docker compose -f infra/local/compose.yaml"
 process_compose_port := env_var_or_default("PROCESS_COMPOSE_PORT", "8090")
 process_compose := "process-compose --port " + process_compose_port + " -f process-compose.yaml"
