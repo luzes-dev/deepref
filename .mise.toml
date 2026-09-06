@@ -27,3 +27,6 @@ yq = "4.47.1"
 
 # Rust dependency and source hygiene owner.
 "cargo:cargo-shear" = "1.13.4"
+
+# Local developer fast continuous feedback runner (not in CI).
+"cargo:bacon" = "3.25.0"
