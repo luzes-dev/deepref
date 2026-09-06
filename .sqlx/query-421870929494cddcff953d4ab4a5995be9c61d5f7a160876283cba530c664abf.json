@@ -1,0 +1,17 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE protocol_versions SET status='published', published_at=now(), published_by_kind=$2, published_by_id=$3, updated_at=now(), updated_by_kind=$2, updated_by_id=$3 WHERE project_id=$1 AND id=$4",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Text",
+        "Text",
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "421870929494cddcff953d4ab4a5995be9c61d5f7a160876283cba530c664abf"
+}

@@ -113,3 +113,11 @@ feature SLUG:
 # Validate every workspace dependency against the architecture contract.
 architecture:
     cargo xtask boundaries
+
+# Regenerate SQLx offline query cache (.sqlx/) against a running database.
+sqlx-prepare:
+    cargo xtask sqlx prepare
+
+# Verify committed SQLx offline metadata matches database and queries.
+sqlx-check:
+    cargo xtask sqlx check

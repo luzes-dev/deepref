@@ -9,7 +9,7 @@ use deepref_domain::{
     ProtocolFramework, ProtocolStatus, ProtocolValidationError, validate_criteria,
 };
 use serde_json::json;
-use sqlx::{PgPool, Postgres, Row, postgres::PgRow};
+use sqlx::{PgPool, Postgres, Transaction};
 use thiserror::Error;
 use uuid::Uuid;
 
@@ -85,7 +85,7 @@ pub async fn get_protocol_editor(
     if !project_exists(pool, project_id).await? {
         return Err(ProtocolError::ProjectNotFound);
     }
-    let row = sqlx::query(
+    let row = sqlx::query!(
         r#"
         SELECT id
         FROM protocol_versions
@@ -93,12 +93,12 @@ pub async fn get_protocol_editor(
         ORDER BY CASE WHEN status = 'draft' THEN 0 ELSE 1 END, version DESC, id DESC
         LIMIT 1
         "#,
+        project_id,
     )
-    .bind(project_id)
     .fetch_optional(pool)
     .await?
     .ok_or(ProtocolError::NotFound)?;
-    load_document(pool, project_id, row.get("id")).await
+    load_document(pool, project_id, row.id).await
 }
 
 pub async fn get_published_protocol(
@@ -108,14 +108,14 @@ pub async fn get_published_protocol(
     if !project_exists(pool, project_id).await? {
         return Err(ProtocolError::ProjectNotFound);
     }
-    let row = sqlx::query(
+    let row = sqlx::query!(
         "SELECT id FROM protocol_versions WHERE project_id=$1 AND status='published' ORDER BY version DESC, id DESC LIMIT 1",
+        project_id,
     )
-    .bind(project_id)
     .fetch_optional(pool)
     .await?
     .ok_or(ProtocolError::NotFound)?;
-    load_document(pool, project_id, row.get("id")).await
+    load_document(pool, project_id, row.id).await
 }
 
 pub async fn save_protocol_draft(
@@ -129,10 +129,13 @@ pub async fn save_protocol_draft(
     validate_actor(actor)?;
 
     let mut tx = pool.begin().await?;
-    sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))")
-        .bind(format!("protocol:{}", command.project_id.as_uuid()))
-        .execute(&mut *tx)
-        .await?;
+    let lock_key = format!("protocol:{}", command.project_id.as_uuid());
+    sqlx::query!(
+        "SELECT pg_advisory_xact_lock(hashtextextended($1, 0))",
+        lock_key,
+    )
+    .execute(&mut *tx)
+    .await?;
     if !project_exists_tx(&mut tx, command.project_id.as_uuid()).await? {
         return Err(ProtocolError::ProjectNotFound);
     }
@@ -207,8 +210,10 @@ pub async fn save_protocol_draft(
     let criteria_json = serde_json::to_value(&criteria)?;
     let framework_fields = serde_json::to_value(&framework.fields)?;
 
+    let proj_uuid = command.project_id.as_uuid();
+    let fw_kind = framework_kind_string(command.framework_kind);
     if is_new {
-        let result = sqlx::query(
+        let result = sqlx::query!(
             r#"
             INSERT INTO protocol_versions (
               id, project_id, version, name, status, criteria,
@@ -216,20 +221,20 @@ pub async fn save_protocol_draft(
               amendment_of, created_by_kind, created_by_id, updated_by_kind, updated_by_id
             ) VALUES ($1,$2,$3,$4,'draft',$5,$6,$7,$8,$9,$10,$11,$12,$13,$12,$13)
             "#,
+            version_id,
+            proj_uuid,
+            version,
+            command.name,
+            criteria_json,
+            fw_kind,
+            framework_fields,
+            command.objective,
+            command.question,
+            revision,
+            amendment_of,
+            actor.kind,
+            actor.id,
         )
-        .bind(version_id)
-        .bind(command.project_id.as_uuid())
-        .bind(version)
-        .bind(&command.name)
-        .bind(criteria_json)
-        .bind(framework_kind_string(command.framework_kind))
-        .bind(framework_fields)
-        .bind(&command.objective)
-        .bind(&command.question)
-        .bind(revision)
-        .bind(amendment_of)
-        .bind(&actor.kind)
-        .bind(&actor.id)
         .execute(&mut *tx)
         .await?;
         if result.rows_affected() != 1 {
@@ -238,7 +243,7 @@ pub async fn save_protocol_draft(
             ));
         }
     } else {
-        let result = sqlx::query(
+        let result = sqlx::query!(
             r#"
             UPDATE protocol_versions
             SET name=$3, criteria=$4, framework_kind=$5, framework_fields=$6,
@@ -246,18 +251,18 @@ pub async fn save_protocol_draft(
                 updated_by_kind=$10, updated_by_id=$11
             WHERE project_id=$1 AND id=$2 AND status='draft'
             "#,
+            proj_uuid,
+            version_id,
+            command.name,
+            criteria_json,
+            fw_kind,
+            framework_fields,
+            command.objective,
+            command.question,
+            revision,
+            actor.kind,
+            actor.id,
         )
-        .bind(command.project_id.as_uuid())
-        .bind(version_id)
-        .bind(&command.name)
-        .bind(criteria_json)
-        .bind(framework_kind_string(command.framework_kind))
-        .bind(framework_fields)
-        .bind(&command.objective)
-        .bind(&command.question)
-        .bind(revision)
-        .bind(&actor.kind)
-        .bind(&actor.id)
         .execute(&mut *tx)
         .await?;
         if result.rows_affected() != 1 {
@@ -281,19 +286,18 @@ pub async fn publish_protocol(
         .map_err(|error| ProtocolError::Invalid(error.to_string()))?;
     validate_actor(actor)?;
     let mut tx = pool.begin().await?;
-    sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1, 0))")
-        .bind(format!("protocol:{}", command.project_id.as_uuid()))
-        .execute(&mut *tx)
-        .await?;
-    if !project_exists_tx(&mut tx, command.project_id.as_uuid()).await? {
+    let lock_key = format!("protocol:{}", command.project_id.as_uuid());
+    sqlx::query!(
+        "SELECT pg_advisory_xact_lock(hashtextextended($1, 0))",
+        lock_key,
+    )
+    .execute(&mut *tx)
+    .await?;
+    let proj_uuid = command.project_id.as_uuid();
+    if !project_exists_tx(&mut tx, proj_uuid).await? {
         return Err(ProtocolError::ProjectNotFound);
     }
-    let Some(draft) = version_by_id_tx(
-        &mut tx,
-        command.project_id.as_uuid(),
-        command.protocol_version_id,
-    )
-    .await?
+    let Some(draft) = version_by_id_tx(&mut tx, proj_uuid, command.protocol_version_id).await?
     else {
         return Err(ProtocolError::NotFound);
     };
@@ -308,21 +312,21 @@ pub async fn publish_protocol(
         });
     }
 
-    sqlx::query(
+    sqlx::query!(
         "UPDATE protocol_versions SET status='superseded', updated_at=now(), updated_by_kind=$2, updated_by_id=$3 WHERE project_id=$1 AND status='published'",
+        proj_uuid,
+        actor.kind,
+        actor.id,
     )
-    .bind(command.project_id.as_uuid())
-    .bind(&actor.kind)
-    .bind(&actor.id)
     .execute(&mut *tx)
     .await?;
-    let publish_result = sqlx::query(
+    let publish_result = sqlx::query!(
         "UPDATE protocol_versions SET status='published', published_at=now(), published_by_kind=$2, published_by_id=$3, updated_at=now(), updated_by_kind=$2, updated_by_id=$3 WHERE project_id=$1 AND id=$4",
+        proj_uuid,
+        actor.kind,
+        actor.id,
+        command.protocol_version_id,
     )
-    .bind(command.project_id.as_uuid())
-    .bind(&actor.kind)
-    .bind(&actor.id)
-    .bind(command.protocol_version_id)
     .execute(&mut *tx)
     .await?;
     if publish_result.rows_affected() != 1 {
@@ -330,96 +334,95 @@ pub async fn publish_protocol(
             "protocol publication did not affect one row".to_owned(),
         ));
     }
-    sqlx::query(
-        "INSERT INTO review_events (id,project_id,event_type,aggregate_type,aggregate_id,payload,actor_kind,actor_id) VALUES ($1,$2,'protocol_published','protocol_version',$3,$4,$5,$6)",
-    )
-    .bind(Uuid::new_v4())
-    .bind(command.project_id.as_uuid())
-    .bind(command.protocol_version_id)
-    .bind(json!({
+    let event_id = Uuid::new_v4();
+    let payload = json!({
         "protocol_version_id": command.protocol_version_id,
         "expected_revision": command.expected_revision,
         "version": draft.version,
         "amendment_of": draft.amendment_of,
-    }))
-    .bind(&actor.kind)
-    .bind(&actor.id)
+    });
+    sqlx::query!(
+        "INSERT INTO review_events (id,project_id,event_type,aggregate_type,aggregate_id,payload,actor_kind,actor_id) VALUES ($1,$2,'protocol_published','protocol_version',$3,$4,$5,$6)",
+        event_id,
+        proj_uuid,
+        command.protocol_version_id,
+        payload,
+        actor.kind,
+        actor.id,
+    )
     .execute(&mut *tx)
     .await?;
     tx.commit().await?;
-    load_document(
-        pool,
-        command.project_id.as_uuid(),
-        command.protocol_version_id,
-    )
-    .await
+    load_document(pool, proj_uuid, command.protocol_version_id).await
 }
 
 async fn project_exists(pool: &PgPool, project_id: Uuid) -> Result<bool, sqlx::Error> {
-    sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM projects WHERE id=$1)")
-        .bind(project_id)
-        .fetch_one(pool)
-        .await
+    let exists = sqlx::query_scalar!(
+        r#"SELECT EXISTS(SELECT 1 FROM projects WHERE id=$1) as "exists!""#,
+        project_id,
+    )
+    .fetch_one(pool)
+    .await?;
+    Ok(exists)
 }
 
 async fn project_exists_tx(
-    tx: &mut sqlx::Transaction<'_, Postgres>,
+    tx: &mut Transaction<'_, Postgres>,
     project_id: Uuid,
 ) -> Result<bool, sqlx::Error> {
-    sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM projects WHERE id=$1)")
-        .bind(project_id)
-        .fetch_one(&mut **tx)
-        .await
+    let exists = sqlx::query_scalar!(
+        r#"SELECT EXISTS(SELECT 1 FROM projects WHERE id=$1) as "exists!""#,
+        project_id,
+    )
+    .fetch_one(&mut **tx)
+    .await?;
+    Ok(exists)
 }
 
 async fn current_version_tx(
-    tx: &mut sqlx::Transaction<'_, Postgres>,
+    tx: &mut Transaction<'_, Postgres>,
     project_id: Uuid,
     status: &str,
 ) -> Result<Option<VersionState>, ProtocolError> {
-    let row = sqlx::query(
+    let row = sqlx::query!(
         "SELECT id,version,status,revision,amendment_of FROM protocol_versions WHERE project_id=$1 AND status=$2 ORDER BY version DESC, id DESC LIMIT 1",
+        project_id,
+        status,
     )
-    .bind(project_id)
-    .bind(status)
     .fetch_optional(&mut **tx)
     .await?;
-    row.map(version_state_from_row).transpose()
+    let Some(row) = row else { return Ok(None) };
+    let status = protocol_status_from_string(row.status)?;
+    Ok(Some(VersionState {
+        id: row.id,
+        version: row.version,
+        status,
+        revision: row.revision,
+        amendment_of: row.amendment_of,
+    }))
 }
 
 async fn version_by_id_tx(
-    tx: &mut sqlx::Transaction<'_, Postgres>,
+    tx: &mut Transaction<'_, Postgres>,
     project_id: Uuid,
     id: Uuid,
 ) -> Result<Option<VersionState>, ProtocolError> {
-    let row = sqlx::query(
+    let row = sqlx::query!(
         "SELECT id,version,status,revision,amendment_of FROM protocol_versions WHERE project_id=$1 AND id=$2 FOR UPDATE",
+        project_id,
+        id,
     )
-    .bind(project_id)
-    .bind(id)
     .fetch_optional(&mut **tx)
     .await?;
-    row.map(version_state_from_row).transpose()
-}
-
-fn version_state_from_row(row: PgRow) -> Result<VersionState, ProtocolError> {
-    let status = match row.get::<String, _>("status").as_str() {
-        "draft" => ProtocolStatus::Draft,
-        "published" => ProtocolStatus::Published,
-        "superseded" => ProtocolStatus::Superseded,
-        status => {
-            return Err(ProtocolError::DataIntegrity(format!(
-                "unknown protocol status {status}"
-            )));
-        }
-    };
-    Ok(VersionState {
-        id: row.get("id"),
-        version: row.get("version"),
+    let Some(row) = row else { return Ok(None) };
+    let status = protocol_status_from_string(row.status)?;
+    Ok(Some(VersionState {
+        id: row.id,
+        version: row.version,
         status,
-        revision: row.get("revision"),
-        amendment_of: row.get("amendment_of"),
-    })
+        revision: row.revision,
+        amendment_of: row.amendment_of,
+    }))
 }
 
 async fn load_document(
@@ -427,7 +430,7 @@ async fn load_document(
     project_id: Uuid,
     id: Uuid,
 ) -> Result<ProtocolDocument, ProtocolError> {
-    let row = sqlx::query(
+    let row = sqlx::query!(
         r#"
         SELECT id, project_id, version, name, status, framework_kind,
                framework_fields, objective, question, revision, amendment_of,
@@ -436,47 +439,58 @@ async fn load_document(
         FROM protocol_versions
         WHERE project_id=$1 AND id=$2
         "#,
+        project_id,
+        id,
     )
-    .bind(project_id)
-    .bind(id)
     .fetch_optional(pool)
     .await?
     .ok_or(ProtocolError::NotFound)?;
-    let criterion_rows = sqlx::query(
+    let criterion_rows = sqlx::query!(
         "SELECT id,criterion_type,stage,dimension,label,description,ordinal FROM eligibility_criteria WHERE protocol_version_id=$1 ORDER BY ordinal,id",
+        id,
     )
-    .bind(id)
     .fetch_all(pool)
     .await?;
     let criteria = criterion_rows
         .into_iter()
-        .map(criterion_from_row)
+        .map(|row| {
+            EligibilityCriterion::new(
+                row.id,
+                criterion_kind_from_string(row.criterion_type)?,
+                criterion_stage_from_string(row.stage)?,
+                criterion_dimension_from_string(row.dimension)?,
+                row.label,
+                row.description,
+                row.ordinal,
+            )
+            .map_err(ProtocolError::from)
+        })
         .collect::<Result<Vec<_>, _>>()?;
-    let kind = framework_kind_from_string(row.get("framework_kind"))?;
-    let fields: BTreeMap<String, String> = serde_json::from_value(row.get("framework_fields"))?;
+    let kind = framework_kind_from_string(row.framework_kind)?;
+    let fields: BTreeMap<String, String> = serde_json::from_value(row.framework_fields)?;
     let framework = ProtocolFramework::new(kind, fields)
         .map_err(|error| ProtocolError::DataIntegrity(error.to_string()))?;
     Ok(ProtocolDocument {
-        id: row.get("id"),
-        project_id: row.get("project_id"),
-        version: row.get("version"),
-        name: row.get("name"),
-        status: protocol_status_from_string(row.get("status"))?,
+        id: row.id,
+        project_id: row.project_id,
+        version: row.version,
+        name: row.name,
+        status: protocol_status_from_string(row.status)?,
         framework,
-        objective: row.get("objective"),
-        question: row.get("question"),
+        objective: row.objective,
+        question: row.question,
         criteria,
-        revision: row.get("revision"),
-        amendment_of: row.get("amendment_of"),
-        published_at: row.get("published_at"),
-        created_at: row.get("created_at"),
-        updated_at: row.get("updated_at"),
-        created_by_kind: row.get("created_by_kind"),
-        created_by_id: row.get("created_by_id"),
-        updated_by_kind: row.get("updated_by_kind"),
-        updated_by_id: row.get("updated_by_id"),
-        published_by_kind: row.get("published_by_kind"),
-        published_by_id: row.get("published_by_id"),
+        revision: row.revision,
+        amendment_of: row.amendment_of,
+        published_at: row.published_at,
+        created_at: row.created_at,
+        updated_at: row.updated_at,
+        created_by_kind: row.created_by_kind,
+        created_by_id: row.created_by_id,
+        updated_by_kind: row.updated_by_kind,
+        updated_by_id: row.updated_by_id,
+        published_by_kind: row.published_by_kind,
+        published_by_id: row.published_by_id,
     })
 }
 
@@ -508,26 +522,31 @@ fn build_criteria(
 }
 
 async fn replace_criteria(
-    tx: &mut sqlx::Transaction<'_, Postgres>,
+    tx: &mut Transaction<'_, Postgres>,
     protocol_version_id: Uuid,
     criteria: &[EligibilityCriterion],
 ) -> Result<(), ProtocolError> {
-    sqlx::query("DELETE FROM eligibility_criteria WHERE protocol_version_id=$1")
-        .bind(protocol_version_id)
-        .execute(&mut **tx)
-        .await?;
+    sqlx::query!(
+        "DELETE FROM eligibility_criteria WHERE protocol_version_id=$1",
+        protocol_version_id,
+    )
+    .execute(&mut **tx)
+    .await?;
     for criterion in criteria {
-        sqlx::query(
+        let crit_kind = criterion_kind_string(criterion.kind);
+        let crit_stage = criterion_stage_string(criterion.stage);
+        let crit_dim = criterion_dimension_string(criterion.dimension);
+        sqlx::query!(
             "INSERT INTO eligibility_criteria (id,protocol_version_id,criterion_type,stage,dimension,label,description,ordinal) VALUES ($1,$2,$3,$4,$5,$6,$7,$8)",
+            criterion.id,
+            protocol_version_id,
+            crit_kind,
+            crit_stage,
+            crit_dim,
+            criterion.label,
+            criterion.description,
+            criterion.ordinal,
         )
-        .bind(criterion.id)
-        .bind(protocol_version_id)
-        .bind(criterion_kind_string(criterion.kind))
-        .bind(criterion_stage_string(criterion.stage))
-        .bind(criterion_dimension_string(criterion.dimension))
-        .bind(&criterion.label)
-        .bind(&criterion.description)
-        .bind(criterion.ordinal)
         .execute(&mut **tx)
         .await?;
     }
@@ -535,7 +554,7 @@ async fn replace_criteria(
 }
 
 async fn ensure_criterion_ids_belong_to_draft(
-    tx: &mut sqlx::Transaction<'_, Postgres>,
+    tx: &mut Transaction<'_, Postgres>,
     protocol_version_id: Uuid,
     criteria: &[EligibilityCriterion],
 ) -> Result<(), ProtocolError> {
@@ -543,11 +562,11 @@ async fn ensure_criterion_ids_belong_to_draft(
     if ids.is_empty() {
         return Ok(());
     }
-    let foreign_id: Option<Uuid> = sqlx::query_scalar(
+    let foreign_id = sqlx::query_scalar!(
         "SELECT id FROM eligibility_criteria WHERE id = ANY($1::uuid[]) AND protocol_version_id <> $2 LIMIT 1",
+        &ids as &[Uuid],
+        protocol_version_id,
     )
-    .bind(&ids)
-    .bind(protocol_version_id)
     .fetch_optional(&mut **tx)
     .await?;
     if foreign_id.is_some() {
@@ -556,19 +575,6 @@ async fn ensure_criterion_ids_belong_to_draft(
         ));
     }
     Ok(())
-}
-
-fn criterion_from_row(row: PgRow) -> Result<EligibilityCriterion, ProtocolError> {
-    EligibilityCriterion::new(
-        row.get("id"),
-        criterion_kind_from_string(row.get("criterion_type"))?,
-        criterion_stage_from_string(row.get("stage"))?,
-        criterion_dimension_from_string(row.get("dimension"))?,
-        row.get("label"),
-        row.get("description"),
-        row.get("ordinal"),
-    )
-    .map_err(ProtocolError::from)
 }
 
 fn validate_actor(actor: &ProtocolActor) -> Result<(), ProtocolError> {

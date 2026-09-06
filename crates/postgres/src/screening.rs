@@ -605,19 +605,20 @@ async fn ensure_project_and_report_pool(
     project_id: Uuid,
     report_id: Uuid,
 ) -> Result<(), ScreeningError> {
-    let project_exists: bool =
-        sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM projects WHERE id=$1)")
-            .bind(project_id)
-            .fetch_one(pool)
-            .await?;
+    let project_exists = sqlx::query_scalar!(
+        r#"SELECT EXISTS(SELECT 1 FROM projects WHERE id=$1) as "exists!""#,
+        project_id,
+    )
+    .fetch_one(pool)
+    .await?;
     if !project_exists {
         return Err(ScreeningError::ProjectNotFound);
     }
-    let report_exists: bool = sqlx::query_scalar(
-        "SELECT EXISTS(SELECT 1 FROM project_reports WHERE project_id=$1 AND report_id=$2)",
+    let report_exists = sqlx::query_scalar!(
+        r#"SELECT EXISTS(SELECT 1 FROM project_reports WHERE project_id=$1 AND report_id=$2) as "exists!""#,
+        project_id,
+        report_id,
     )
-    .bind(project_id)
-    .bind(report_id)
     .fetch_one(pool)
     .await?;
     if !report_exists {
@@ -627,10 +628,12 @@ async fn ensure_project_and_report_pool(
 }
 
 async fn ensure_project(pool: &PgPool, project_id: Uuid) -> Result<(), ScreeningError> {
-    let exists: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM projects WHERE id=$1)")
-        .bind(project_id)
-        .fetch_one(pool)
-        .await?;
+    let exists = sqlx::query_scalar!(
+        r#"SELECT EXISTS(SELECT 1 FROM projects WHERE id=$1) as "exists!""#,
+        project_id,
+    )
+    .fetch_one(pool)
+    .await?;
     if exists {
         Ok(())
     } else {
@@ -643,11 +646,11 @@ async fn ensure_published_protocol(
     project_id: Uuid,
     protocol_version_id: Uuid,
 ) -> Result<(), ScreeningError> {
-    let exists: bool = sqlx::query_scalar(
-        "SELECT EXISTS(SELECT 1 FROM protocol_versions WHERE id=$1 AND project_id=$2 AND status='published')",
+    let exists = sqlx::query_scalar!(
+        r#"SELECT EXISTS(SELECT 1 FROM protocol_versions WHERE id=$1 AND project_id=$2 AND status='published') as "exists!""#,
+        protocol_version_id,
+        project_id,
     )
-    .bind(protocol_version_id)
-    .bind(project_id)
     .fetch_one(&mut **tx)
     .await?;
     if exists {
@@ -667,12 +670,13 @@ async fn ensure_exclusion_reason(
         return Ok(());
     };
     let stage_name = stage_name(stage);
-    let reason_stage: Option<String> =
-        sqlx::query_scalar("SELECT stage FROM exclusion_reasons WHERE id=$1 AND project_id=$2")
-            .bind(reason_id)
-            .bind(project_id)
-            .fetch_optional(&mut **tx)
-            .await?;
+    let reason_stage = sqlx::query_scalar!(
+        "SELECT stage FROM exclusion_reasons WHERE id=$1 AND project_id=$2",
+        reason_id,
+        project_id,
+    )
+    .fetch_optional(&mut **tx)
+    .await?;
     match reason_stage {
         None => Err(ScreeningError::ExclusionReasonNotFound),
         Some(value) if value == stage_name => Ok(()),

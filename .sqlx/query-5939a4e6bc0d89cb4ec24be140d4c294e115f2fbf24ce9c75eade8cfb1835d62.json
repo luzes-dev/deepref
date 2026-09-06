@@ -1,0 +1,43 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE documents SET status='uploaded',object_key=$2,content_hash=$3,byte_size=$4,\n             mime_type='application/pdf',content_available_at=now(),failed_at=NULL,\n             parser_error=NULL,updated_at=now()\n         WHERE id=$1 AND status='retrieving'\n         RETURNING actor_kind, actor_id",
+  "describe": {
+    "columns": [
+      {
+        "ordinal": 0,
+        "name": "actor_kind",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "documents",
+            "name": "actor_kind"
+          }
+        }
+      },
+      {
+        "ordinal": 1,
+        "name": "actor_id",
+        "type_info": "Text",
+        "origin": {
+          "Table": {
+            "table": "documents",
+            "name": "actor_id"
+          }
+        }
+      }
+    ],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Text",
+        "Text",
+        "Int8"
+      ]
+    },
+    "nullable": [
+      false,
+      false
+    ]
+  },
+  "hash": "5939a4e6bc0d89cb4ec24be140d4c294e115f2fbf24ce9c75eade8cfb1835d62"
+}

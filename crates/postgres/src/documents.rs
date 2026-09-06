@@ -379,11 +379,11 @@ pub async fn enqueue_retrieve(
 }
 
 pub async fn mark_document_retrieving(pool: &PgPool, document_id: Uuid) -> anyhow::Result<bool> {
-    Ok(sqlx::query(
+    Ok(sqlx::query!(
         "UPDATE documents SET status='retrieving',parser_error=NULL,failed_at=NULL,updated_at=now()
          WHERE id=$1 AND source='external_url' AND status IN ('external','failed','retrieving')",
+        document_id,
     )
-    .bind(document_id)
     .execute(pool)
     .await?
     .rows_affected()
@@ -398,24 +398,24 @@ pub async fn complete_document_retrieval(
     content_hash: &str,
     byte_size: i64,
 ) -> anyhow::Result<CompleteDocumentRetrievalOutcome> {
-    let updated = sqlx::query(
+    let updated = sqlx::query!(
         "UPDATE documents SET status='uploaded',object_key=$2,content_hash=$3,byte_size=$4,
              mime_type='application/pdf',content_available_at=now(),failed_at=NULL,
              parser_error=NULL,updated_at=now()
          WHERE id=$1 AND status='retrieving'
-         RETURNING actor_kind,actor_id",
+         RETURNING actor_kind, actor_id",
+        document_id,
+        object_key,
+        content_hash,
+        byte_size,
     )
-    .bind(document_id)
-    .bind(object_key)
-    .bind(content_hash)
-    .bind(byte_size)
     .fetch_optional(&mut **tx)
     .await?;
     if let Some(updated) = updated {
         enqueue_parse(tx, project_id, document_id, content_hash).await?;
-        let actor_kind = ActorKind::parse(updated.get("actor_kind"))
+        let actor_kind = ActorKind::parse(&updated.actor_kind)
             .ok_or_else(|| anyhow::anyhow!("document actor kind is invalid"))?;
-        let actor = Actor::new(actor_kind, updated.get::<String, _>("actor_id"))?;
+        let actor = Actor::new(actor_kind, updated.actor_id)?;
         crate::dispatch_automation_domain_event(
             tx,
             &AutomationDomainEvent::FullTextAttached {
@@ -428,11 +428,11 @@ pub async fn complete_document_retrieval(
         return Ok(CompleteDocumentRetrievalOutcome::Applied);
     }
 
-    let already_completed = sqlx::query_scalar::<_, bool>(
-        "SELECT status IN ('uploaded','available') AND object_key IS NOT NULL
-         FROM documents WHERE id=$1",
+    let already_completed = sqlx::query_scalar!(
+        r#"SELECT (status IN ('uploaded','available') AND object_key IS NOT NULL) as "completed!"
+         FROM documents WHERE id=$1"#,
+        document_id,
     )
-    .bind(document_id)
     .fetch_optional(&mut **tx)
     .await?
     .unwrap_or(false);
@@ -448,12 +448,13 @@ pub async fn mark_document_retrieval_failed(
     document_id: Uuid,
     error: &str,
 ) -> anyhow::Result<()> {
-    sqlx::query(
+    let truncated_err = error.chars().take(1000).collect::<String>();
+    sqlx::query!(
         "UPDATE documents SET status='failed',parser_error=$2,failed_at=now(),updated_at=now()
          WHERE id=$1 AND status='retrieving' AND active_parser_version IS NULL",
+        document_id,
+        truncated_err,
     )
-    .bind(document_id)
-    .bind(error.chars().take(1000).collect::<String>())
     .execute(pool)
     .await?;
     Ok(())

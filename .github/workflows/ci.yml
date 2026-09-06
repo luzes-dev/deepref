@@ -82,6 +82,7 @@ jobs:
       - name: Run check
         env:
           COMMAND: ${{ matrix.command }}
+          SQLX_OFFLINE: "true"
         run: |
           case "$COMMAND" in
             fmt) cargo fmt --all -- --check ;;
@@ -123,8 +124,12 @@ jobs:
           echo "SCCACHE_GHA_ENABLED=true" >> "$GITHUB_ENV"
           echo "RUSTC_WRAPPER=sccache" >> "$GITHUB_ENV"
       - name: Run checked-in gold-set evaluation gate
+        env:
+          SQLX_OFFLINE: "true"
         run: cargo nextest run -p deepref-ai --test eval_gate --locked
       - name: Run prompt-injection and security regressions
+        env:
+          SQLX_OFFLINE: "true"
         run: cargo nextest run -p deepref-ai --test prompt_injection_regressions --locked
       - name: Show sccache statistics
         if: always()
@@ -212,6 +217,8 @@ jobs:
           cache: pnpm
       - run: pnpm install --frozen-lockfile
       - run: pnpm run generate:api:check
+        env:
+          SQLX_OFFLINE: "true" 
       - name: Prove drift check left the tree clean
         run: git diff --exit-code
       - name: Show sccache statistics
@@ -237,6 +244,14 @@ jobs:
           tool: cargo-nextest@0.9.143
           checksum: true
           fallback: none
+      - name: Install pinned cargo-binstall
+        uses: taiki-e/install-action@7b8d4719ee4aaa279bdf55df38dacb9ebfe12a6c # v2.87.6
+        with:
+          tool: cargo-binstall@1.22.0
+          checksum: true
+          fallback: none
+      - name: Install pinned sqlx-cli
+        run: cargo binstall --no-confirm sqlx-cli@0.9.0
       - name: Set up sccache
         uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba # v0.0.11
         with:
@@ -257,10 +272,14 @@ jobs:
       - run: pnpm install --frozen-lockfile
       - name: Start disposable dependencies
         run: docker compose -f infra/local/compose.yaml up -d --wait
+      - name: Apply database migrations
+        run: cargo run -q -p deepref-server -- migrate
+      - name: Verify SQLx offline query metadata against live database
+        env:
+          DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/deepref
+        run: cargo xtask sqlx check
       - name: Run integration tests
-        run: |
-          cargo run -q -p deepref-server -- migrate
-          cargo nextest run --workspace --tests --locked
+        run: cargo nextest run --workspace --tests --locked
       - name: Show sccache statistics
         if: always()
         run: ${SCCACHE_PATH:-sccache} --show-stats

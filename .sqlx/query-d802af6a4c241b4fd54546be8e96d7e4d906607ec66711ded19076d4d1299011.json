@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "DELETE FROM eligibility_criteria WHERE protocol_version_id=$1",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "d802af6a4c241b4fd54546be8e96d7e4d906607ec66711ded19076d4d1299011"
+}

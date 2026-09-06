@@ -1,0 +1,16 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "UPDATE protocol_versions SET status='superseded', updated_at=now(), updated_by_kind=$2, updated_by_id=$3 WHERE project_id=$1 AND status='published'",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Uuid",
+        "Text",
+        "Text"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "0408feec163540664c0de2b8657c3a4792c29ab047c3a11e706022be04a2c1da"
+}
