@@ -21,6 +21,7 @@
     "quality:ts": "fallow --workspace apps/web --score --summary",
     "quality:ts:json": "fallow --workspace apps/web --format json --quiet --explain",
     "quality:ts:audit": "fallow audit --workspace apps/web --base ${FALLOW_AUDIT_BASE:-origin/main} --gate new-only",
+    "quality:ts:security": "fallow security --workspace apps/web",
     "quality:rust:duplication": "jscpd",
     "ci": "pnpm lint && pnpm check && pnpm test",
     "docker:build": "docker buildx bake api worker web"
