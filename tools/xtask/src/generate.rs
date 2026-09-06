@@ -19,14 +19,7 @@ pub fn run(mode: GenerateMode) -> Result<()> {
             println!("Generating OpenAPI schema from deepref-http-api...");
             let sqlx_offline = std::env::var("SQLX_OFFLINE").unwrap_or_else(|_| "true".into());
             let openapi_output = Command::new(cargo_bin())
-                .args([
-                    "run",
-                    "-q",
-                    "-p",
-                    "deepref-http-api",
-                    "--bin",
-                    "openapi",
-                ])
+                .args(["run", "-q", "-p", "deepref-http-api", "--bin", "openapi"])
                 .current_dir(&root)
                 .env("SQLX_OFFLINE", &sqlx_offline)
                 .output()
