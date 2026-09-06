@@ -1,5 +1,6 @@
 #!/usr/bin/env bash
 set -euo pipefail
+export SQLX_OFFLINE="${SQLX_OFFLINE:-true}"
 
 root="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 tmp_root="$(mktemp -d)"
