@@ -18,6 +18,54 @@ env:
   RUST_BACKTRACE: "1"
 
 jobs:
+  changes:
+    name: Detect changed paths
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      rust: ${{ steps.filter.outputs.rust }}
+      web: ${{ steps.filter.outputs.web }}
+      containers: ${{ steps.filter.outputs.containers }}
+    steps:
+      - name: Checkout trusted source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Filter paths
+        id: filter
+        uses: dorny/paths-filter@de90cc6fb38fc0963ad72b210f1f284cd68cea36 # v3.0.2
+        with:
+          filters: |
+            rust:
+              - 'crates/**'
+              - 'services/**'
+              - 'tools/**'
+              - 'review-definitions/**'
+              - 'Cargo.toml'
+              - 'Cargo.lock'
+              - 'rust-toolchain.toml'
+              - '.cargo/**'
+              - '.sqlx/**'
+              - 'infra/**'
+              - '.github/workflows/ci.yml'
+            web:
+              - 'apps/web/**'
+              - 'package.json'
+              - 'pnpm-lock.yaml'
+              - 'pnpm-workspace.yaml'
+              - '.github/workflows/ci.yml'
+            containers:
+              - 'docker/**'
+              - 'docker-bake.hcl'
+              - 'apps/web/Dockerfile'
+              - 'apps/web/Caddyfile'
+              - 'Cargo.toml'
+              - 'Cargo.lock'
+              - 'crates/**'
+              - 'services/**'
+              - 'apps/web/**'
+              - '.github/workflows/ci.yml'
+
   docs:
     name: Documentation contracts
     runs-on: ubuntu-latest
@@ -34,6 +82,7 @@ jobs:
 
   rust:
     name: Rust / ${{ matrix.command }}
+    needs: changes
     runs-on: ubuntu-latest
     timeout-minutes: 30
     strategy:
@@ -41,37 +90,43 @@ jobs:
       matrix:
         command: [fmt, clippy, test]
     steps:
+      - name: Skip check (no Rust changes)
+        if: github.event_name != 'push' && needs.changes.outputs.rust != 'true'
+        run: echo "No Rust changes detected in PR; skipping check."
       - name: Checkout trusted source
+        if: github.event_name == 'push' || needs.changes.outputs.rust == 'true'
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
       - name: Install pinned Rust toolchain
+        if: github.event_name == 'push' || needs.changes.outputs.rust == 'true'
         run: |
           rustup toolchain install 1.95.0 --profile minimal --component rustfmt,clippy
           rustup override set 1.95.0
       - name: Install pinned cargo-nextest
-        if: matrix.command == 'test'
+        if: (github.event_name == 'push' || needs.changes.outputs.rust == 'true') && matrix.command == 'test'
         uses: taiki-e/install-action@7b8d4719ee4aaa279bdf55df38dacb9ebfe12a6c # v2.87.6
         with:
           tool: cargo-nextest@0.9.143
           checksum: true
           fallback: none
       - name: Set up sccache for compile-heavy checks
-        if: matrix.command != 'fmt'
+        if: (github.event_name == 'push' || needs.changes.outputs.rust == 'true') && matrix.command != 'fmt'
         uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba # v0.0.11
         with:
           version: v0.17.0
       - name: Enable sccache compiler wrapper
-        if: matrix.command != 'fmt'
+        if: (github.event_name == 'push' || needs.changes.outputs.rust == 'true') && matrix.command != 'fmt'
         run: |
           echo "SCCACHE_GHA_ENABLED=true" >> "$GITHUB_ENV"
           echo "RUSTC_WRAPPER=sccache" >> "$GITHUB_ENV"
       - name: Validate Cargo workspace architecture
-        if: matrix.command == 'fmt'
+        if: (github.event_name == 'push' || needs.changes.outputs.rust == 'true') && matrix.command == 'fmt'
         run: |
           cargo xtask boundaries
           cargo test -p xtask --locked
       - name: Restore Cargo cache
+        if: github.event_name == 'push' || needs.changes.outputs.rust == 'true'
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
@@ -80,6 +135,7 @@ jobs:
           key: cargo-${{ runner.os }}-1.95.0-${{ matrix.command }}-${{ hashFiles('Cargo.lock') }}
           restore-keys: cargo-${{ runner.os }}-1.95.0-${{ matrix.command }}-
       - name: Run check
+        if: github.event_name == 'push' || needs.changes.outputs.rust == 'true'
         env:
           COMMAND: ${{ matrix.command }}
           SQLX_OFFLINE: "true"
@@ -93,76 +149,97 @@ jobs:
               ;;
           esac
       - name: Show sccache statistics
-        if: always() && matrix.command != 'fmt'
+        if: always() && (github.event_name == 'push' || needs.changes.outputs.rust == 'true') && matrix.command != 'fmt'
         run: ${SCCACHE_PATH:-sccache} --show-stats
 
   ai-pr15-gates:
     name: AI PR15 evaluation and security gates
+    needs: changes
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
+      - name: Skip check (no Rust changes)
+        if: github.event_name != 'push' && needs.changes.outputs.rust != 'true'
+        run: echo "No Rust changes detected in PR; skipping check."
       - name: Checkout trusted source
+        if: github.event_name == 'push' || needs.changes.outputs.rust == 'true'
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
       - name: Install pinned Rust toolchain
+        if: github.event_name == 'push' || needs.changes.outputs.rust == 'true'
         run: |
           rustup toolchain install 1.95.0 --profile minimal --component rustfmt,clippy
           rustup override set 1.95.0
       - name: Install pinned cargo-nextest
+        if: github.event_name == 'push' || needs.changes.outputs.rust == 'true'
         uses: taiki-e/install-action@7b8d4719ee4aaa279bdf55df38dacb9ebfe12a6c # v2.87.6
         with:
           tool: cargo-nextest@0.9.143
           checksum: true
           fallback: none
       - name: Set up sccache
+        if: github.event_name == 'push' || needs.changes.outputs.rust == 'true'
         uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba # v0.0.11
         with:
           version: v0.17.0
       - name: Enable sccache compiler wrapper
+        if: github.event_name == 'push' || needs.changes.outputs.rust == 'true'
         run: |
           echo "SCCACHE_GHA_ENABLED=true" >> "$GITHUB_ENV"
           echo "RUSTC_WRAPPER=sccache" >> "$GITHUB_ENV"
       - name: Run checked-in gold-set evaluation gate
+        if: github.event_name == 'push' || needs.changes.outputs.rust == 'true'
         env:
           SQLX_OFFLINE: "true"
         run: cargo nextest run -p deepref-ai --test eval_gate --locked
       - name: Run prompt-injection and security regressions
+        if: github.event_name == 'push' || needs.changes.outputs.rust == 'true'
         env:
           SQLX_OFFLINE: "true"
         run: cargo nextest run -p deepref-ai --test prompt_injection_regressions --locked
       - name: Show sccache statistics
-        if: always()
+        if: always() && (github.event_name == 'push' || needs.changes.outputs.rust == 'true')
         run: ${SCCACHE_PATH:-sccache} --show-stats
 
   coverage:
     name: Coverage / Rust
+    needs: changes
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
+      - name: Skip check (no Rust changes)
+        if: github.event_name != 'push' && needs.changes.outputs.rust != 'true'
+        run: echo "No Rust changes detected in PR; skipping check."
       - name: Checkout trusted source
+        if: github.event_name == 'push' || needs.changes.outputs.rust == 'true'
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
       - name: Install pinned Rust toolchain
+        if: github.event_name == 'push' || needs.changes.outputs.rust == 'true'
         run: |
           rustup toolchain install 1.95.0 --profile minimal --component llvm-tools-preview
           rustup override set 1.95.0
       - name: Install pinned tools
+        if: github.event_name == 'push' || needs.changes.outputs.rust == 'true'
         uses: taiki-e/install-action@7b8d4719ee4aaa279bdf55df38dacb9ebfe12a6c # v2.87.6
         with:
           tool: cargo-llvm-cov@0.9.0,cargo-nextest@0.9.143
           checksum: true
           fallback: none
       - name: Set up sccache
+        if: github.event_name == 'push' || needs.changes.outputs.rust == 'true'
         uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba # v0.0.11
         with:
           version: v0.17.0
       - name: Enable sccache compiler wrapper
+        if: github.event_name == 'push' || needs.changes.outputs.rust == 'true'
         run: |
           echo "SCCACHE_GHA_ENABLED=true" >> "$GITHUB_ENV"
           echo "RUSTC_WRAPPER=sccache" >> "$GITHUB_ENV"
       - name: Run Rust test coverage
+        if: github.event_name == 'push' || needs.changes.outputs.rust == 'true'
         env:
           SQLX_OFFLINE: "true"
         run: |
@@ -183,82 +260,112 @@ jobs:
           path: coverage/rust/
           retention-days: 14
       - name: Show sccache statistics
-        if: always()
+        if: always() && (github.event_name == 'push' || needs.changes.outputs.rust == 'true')
         run: ${SCCACHE_PATH:-sccache} --show-stats
 
   web:
     name: Web
+    needs: changes
     runs-on: ubuntu-latest
     timeout-minutes: 25
     steps:
+      - name: Skip check (no Web changes)
+        if: github.event_name != 'push' && needs.changes.outputs.web != 'true'
+        run: echo "No Web changes detected in PR; skipping check."
       - name: Checkout trusted source
+        if: github.event_name == 'push' || needs.changes.outputs.web == 'true'
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
       - name: Set up pnpm
+        if: github.event_name == 'push' || needs.changes.outputs.web == 'true'
         uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v4.1.0
         with:
           version: 11.3.0
       - name: Set up Node.js
+        if: github.event_name == 'push' || needs.changes.outputs.web == 'true'
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 24.4.1
           cache: pnpm
-      - run: pnpm install --frozen-lockfile
-      - run: pnpm run lint
-      - run: pnpm run check
-      - run: pnpm --filter @deepref/web test:coverage
-      - run: pnpm run build
+      - if: github.event_name == 'push' || needs.changes.outputs.web == 'true'
+        run: pnpm install --frozen-lockfile
+      - if: github.event_name == 'push' || needs.changes.outputs.web == 'true'
+        run: pnpm run lint
+      - if: github.event_name == 'push' || needs.changes.outputs.web == 'true'
+        run: pnpm run check
+      - if: github.event_name == 'push' || needs.changes.outputs.web == 'true'
+        run: pnpm --filter @deepref/web test:coverage
+      - if: github.event_name == 'push' || needs.changes.outputs.web == 'true'
+        run: pnpm run build
 
   fallow:
     name: Fallow
     if: github.event_name == 'pull_request'
+    needs: changes
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
+      - name: Skip check (no Web changes)
+        if: needs.changes.outputs.web != 'true'
+        run: echo "No Web changes detected in PR; skipping check."
       - name: Checkout trusted source with history
+        if: needs.changes.outputs.web == 'true'
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
           fetch-depth: 0
       - name: Set up pnpm
+        if: needs.changes.outputs.web == 'true'
         uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v4.1.0
         with:
           version: 11.3.0
       - name: Set up Node.js
+        if: needs.changes.outputs.web == 'true'
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 24.4.1
           cache: pnpm
-      - run: pnpm install --frozen-lockfile
+      - if: needs.changes.outputs.web == 'true'
+        run: pnpm install --frozen-lockfile
       - name: Gate new TypeScript quality issues
+        if: needs.changes.outputs.web == 'true'
         env:
           FALLOW_AUDIT_BASE: ${{ github.event.pull_request.base.sha }}
         run: pnpm run quality:ts:audit
 
   duplication:
     name: Duplication / Rust
+    needs: changes
     runs-on: ubuntu-latest
     timeout-minutes: 15
     steps:
+      - name: Skip check (no Rust changes)
+        if: github.event_name != 'push' && needs.changes.outputs.rust != 'true'
+        run: echo "No Rust changes detected in PR; skipping check."
       - name: Checkout trusted source
+        if: github.event_name == 'push' || needs.changes.outputs.rust == 'true'
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
       - name: Set up pnpm
+        if: github.event_name == 'push' || needs.changes.outputs.rust == 'true'
         uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v4.1.0
         with:
           version: 11.3.0
       - name: Set up Node.js
+        if: github.event_name == 'push' || needs.changes.outputs.rust == 'true'
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 24.4.1
           cache: pnpm
-      - run: pnpm install --frozen-lockfile
+      - if: github.event_name == 'push' || needs.changes.outputs.rust == 'true'
+        run: pnpm install --frozen-lockfile
       - name: Run Rust duplication analysis
+        if: github.event_name == 'push' || needs.changes.outputs.rust == 'true'
         run: pnpm run quality:rust:duplication
       - name: Upload duplication report
-        if: always()
+        if: always() && (github.event_name == 'push' || needs.changes.outputs.rust == 'true')
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
           name: rust-duplication-report
@@ -266,116 +373,154 @@ jobs:
 
   codegen:
     name: OpenAPI and Orval drift
+    needs: changes
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:
+      - name: Skip check (no Rust or Web changes)
+        if: github.event_name != 'push' && needs.changes.outputs.rust != 'true' && needs.changes.outputs.web != 'true'
+        run: echo "No Rust or Web changes detected in PR; skipping check."
       - name: Checkout trusted source
+        if: github.event_name == 'push' || needs.changes.outputs.rust == 'true' || needs.changes.outputs.web == 'true'
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
       - name: Install pinned Rust toolchain
+        if: github.event_name == 'push' || needs.changes.outputs.rust == 'true' || needs.changes.outputs.web == 'true'
         run: |
           rustup toolchain install 1.95.0 --profile minimal
           rustup override set 1.95.0
       - name: Set up sccache
+        if: github.event_name == 'push' || needs.changes.outputs.rust == 'true' || needs.changes.outputs.web == 'true'
         uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba # v0.0.11
         with:
           version: v0.17.0
       - name: Enable sccache compiler wrapper
+        if: github.event_name == 'push' || needs.changes.outputs.rust == 'true' || needs.changes.outputs.web == 'true'
         run: |
           echo "SCCACHE_GHA_ENABLED=true" >> "$GITHUB_ENV"
           echo "RUSTC_WRAPPER=sccache" >> "$GITHUB_ENV"
       - name: Set up pnpm
+        if: github.event_name == 'push' || needs.changes.outputs.rust == 'true' || needs.changes.outputs.web == 'true'
         uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v4.1.0
         with:
           version: 11.3.0
       - name: Set up Node.js
+        if: github.event_name == 'push' || needs.changes.outputs.rust == 'true' || needs.changes.outputs.web == 'true'
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 24.4.1
           cache: pnpm
-      - run: pnpm install --frozen-lockfile
-      - run: pnpm run generate:api:check
+      - if: github.event_name == 'push' || needs.changes.outputs.rust == 'true' || needs.changes.outputs.web == 'true'
+        run: pnpm install --frozen-lockfile
+      - if: github.event_name == 'push' || needs.changes.outputs.rust == 'true' || needs.changes.outputs.web == 'true'
+        run: pnpm run generate:api:check
         env:
-          SQLX_OFFLINE: "true" 
+          SQLX_OFFLINE: "true"
       - name: Prove drift check left the tree clean
+        if: github.event_name == 'push' || needs.changes.outputs.rust == 'true' || needs.changes.outputs.web == 'true'
         run: git diff --exit-code
       - name: Show sccache statistics
-        if: always()
+        if: always() && (github.event_name == 'push' || needs.changes.outputs.rust == 'true' || needs.changes.outputs.web == 'true')
         run: ${SCCACHE_PATH:-sccache} --show-stats
 
   full-stack:
     name: Full-stack integration and E2E
+    needs: changes
     runs-on: ubuntu-latest
     timeout-minutes: 45
     steps:
+      - name: Skip check (no Rust, Web, or Container changes)
+        if: github.event_name != 'push' && needs.changes.outputs.rust != 'true' && needs.changes.outputs.web != 'true' && needs.changes.outputs.containers != 'true'
+        run: echo "No Rust, Web, or Container changes detected in PR; skipping check."
       - name: Checkout trusted source
+        if: github.event_name == 'push' || needs.changes.outputs.rust == 'true' || needs.changes.outputs.web == 'true' || needs.changes.outputs.containers == 'true'
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
       - name: Install pinned Rust toolchain
+        if: github.event_name == 'push' || needs.changes.outputs.rust == 'true' || needs.changes.outputs.web == 'true' || needs.changes.outputs.containers == 'true'
         run: |
           rustup toolchain install 1.95.0 --profile minimal
           rustup override set 1.95.0
       - name: Install pinned cargo-nextest
+        if: github.event_name == 'push' || needs.changes.outputs.rust == 'true' || needs.changes.outputs.web == 'true' || needs.changes.outputs.containers == 'true'
         uses: taiki-e/install-action@7b8d4719ee4aaa279bdf55df38dacb9ebfe12a6c # v2.87.6
         with:
           tool: cargo-nextest@0.9.143
           checksum: true
           fallback: none
       - name: Install pinned cargo-binstall
+        if: github.event_name == 'push' || needs.changes.outputs.rust == 'true' || needs.changes.outputs.web == 'true' || needs.changes.outputs.containers == 'true'
         uses: taiki-e/install-action@7b8d4719ee4aaa279bdf55df38dacb9ebfe12a6c # v2.87.6
         with:
           tool: cargo-binstall@1.22.0
           checksum: true
           fallback: none
       - name: Install pinned sqlx-cli
+        if: github.event_name == 'push' || needs.changes.outputs.rust == 'true' || needs.changes.outputs.web == 'true' || needs.changes.outputs.containers == 'true'
         run: cargo binstall --no-confirm sqlx-cli@0.9.0
       - name: Set up sccache
+        if: github.event_name == 'push' || needs.changes.outputs.rust == 'true' || needs.changes.outputs.web == 'true' || needs.changes.outputs.containers == 'true'
         uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba # v0.0.11
         with:
           version: v0.17.0
       - name: Enable sccache compiler wrapper
+        if: github.event_name == 'push' || needs.changes.outputs.rust == 'true' || needs.changes.outputs.web == 'true' || needs.changes.outputs.containers == 'true'
         run: |
           echo "SCCACHE_GHA_ENABLED=true" >> "$GITHUB_ENV"
           echo "RUSTC_WRAPPER=sccache" >> "$GITHUB_ENV"
       - name: Set up pnpm
+        if: github.event_name == 'push' || needs.changes.outputs.rust == 'true' || needs.changes.outputs.web == 'true' || needs.changes.outputs.containers == 'true'
         uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v4.1.0
         with:
           version: 11.3.0
       - name: Set up Node.js
+        if: github.event_name == 'push' || needs.changes.outputs.rust == 'true' || needs.changes.outputs.web == 'true' || needs.changes.outputs.containers == 'true'
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
         with:
           node-version: 24.4.1
           cache: pnpm
-      - run: pnpm install --frozen-lockfile
+      - if: github.event_name == 'push' || needs.changes.outputs.rust == 'true' || needs.changes.outputs.web == 'true' || needs.changes.outputs.containers == 'true'
+        run: pnpm install --frozen-lockfile
       - name: Start disposable dependencies
+        if: github.event_name == 'push' || needs.changes.outputs.rust == 'true' || needs.changes.outputs.web == 'true' || needs.changes.outputs.containers == 'true'
         run: docker compose -f infra/local/compose.yaml up -d --wait
       - name: Apply database migrations
+        if: github.event_name == 'push' || needs.changes.outputs.rust == 'true' || needs.changes.outputs.web == 'true' || needs.changes.outputs.containers == 'true'
         run: cargo run -q -p deepref-server -- migrate
       - name: Verify SQLx offline query metadata against live database
+        if: github.event_name == 'push' || needs.changes.outputs.rust == 'true' || needs.changes.outputs.web == 'true' || needs.changes.outputs.containers == 'true'
         env:
           DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/deepref
         run: cargo xtask sqlx check
       - name: Run integration tests
+        if: github.event_name == 'push' || needs.changes.outputs.rust == 'true' || needs.changes.outputs.web == 'true' || needs.changes.outputs.containers == 'true'
         run: cargo nextest run --workspace --tests --locked
       - name: Show sccache statistics
-        if: always()
+        if: always() && (github.event_name == 'push' || needs.changes.outputs.rust == 'true' || needs.changes.outputs.web == 'true' || needs.changes.outputs.containers == 'true')
         run: ${SCCACHE_PATH:-sccache} --show-stats
       - name: Install Chromium
+        if: github.event_name == 'push' || needs.changes.outputs.rust == 'true' || needs.changes.outputs.web == 'true' || needs.changes.outputs.containers == 'true'
         run: pnpm --filter @deepref/web exec playwright install --with-deps chromium
       - name: Run browser tests
+        if: github.event_name == 'push' || needs.changes.outputs.rust == 'true' || needs.changes.outputs.web == 'true' || needs.changes.outputs.containers == 'true'
         run: pnpm --filter @deepref/web test:e2e
       - name: Stop disposable dependencies
-        if: always()
+        if: always() && (github.event_name == 'push' || needs.changes.outputs.rust == 'true' || needs.changes.outputs.web == 'true' || needs.changes.outputs.containers == 'true')
         run: docker compose -f infra/local/compose.yaml down --volumes
 
   containers:
     name: Reproducible container build
+    needs: changes
     runs-on: ubuntu-latest
     timeout-minutes: 35
     steps:
+      - name: Skip check (no container changes)
+        if: github.event_name != 'push' && needs.changes.outputs.containers != 'true'
+        run: echo "No container changes detected in PR; skipping check."
       - name: Checkout trusted source
+        if: github.event_name == 'push' || needs.changes.outputs.containers == 'true'
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
@@ -385,8 +530,10 @@ jobs:
         with:
           platforms: arm64
       - name: Set up Buildx
+        if: github.event_name == 'push' || needs.changes.outputs.containers == 'true'
         uses: docker/setup-buildx-action@37fe631027851001ddb9b187196cc803df7f5f0e # v4.3.0
       - name: Validate and build every release target
+        if: github.event_name == 'push' || needs.changes.outputs.containers == 'true'
         shell: bash
         run: |
           docker buildx bake --print
