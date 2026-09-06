@@ -49,6 +49,10 @@ test-property:
     cargo nextest run --workspace --lib --bins --locked -E 'test(/::property_tests::|::tests::.*_property|::tests::.*_invariants)/'
     pnpm --filter @deepref/web test:unit -- --run --testNamePattern='property'
 
+# Run Rust mutation testing (cargo-mutants) across core domain and algorithmic crates.
+test-mutants *ARGS:
+    SQLX_OFFLINE=true cargo mutants {{ARGS}}
+
 # Run TypeScript tests with coverage reporting.
 test-coverage-ts:
     pnpm --filter @deepref/web test:unit:coverage

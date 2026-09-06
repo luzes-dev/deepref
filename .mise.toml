@@ -30,3 +30,6 @@ yq = "4.47.1"
 
 # Local developer fast continuous feedback runner (not in CI).
 "cargo:bacon" = "3.25.0"
+
+# Mutation testing owner for Rust algorithmic crates (report-only / manual / scheduled).
+"cargo:cargo-mutants" = "27.1.0"
