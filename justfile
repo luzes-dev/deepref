@@ -1,49 +1,24 @@
-set dotenv-load := true
-set shell := ["bash", "-euo", "pipefail", "-c"]
-
-export SQLX_OFFLINE := env_var_or_default("SQLX_OFFLINE", "true")
-
-compose := "docker compose -f infra/local/compose.yaml"
-process_compose_port := env_var_or_default("PROCESS_COMPOSE_PORT", "8090")
-process_compose := "process-compose --port " + process_compose_port + " -f process-compose.yaml"
-
+# Default target: print available recipes.
 default:
-    @just --list
+    just --list
 
-# Install repository dependencies and prefetch disposable dependency images.
-bootstrap:
-    test -f .env || cp .env.example .env
-    pnpm install --frozen-lockfile
-    cargo fetch --locked
-    pnpm --filter @deepref/web exec playwright install chromium
-    {{compose}} pull
+# Tooling versions and common flags.
+compose := "docker compose -f infra/local/compose.yaml"
+dev_env := "set -a; [ -f .env ] && . ./.env; set +a"
 
-# Start PostgreSQL, prepare its schema, and supervise every app process.
-dev:
+# Start the full local environment with process-compose.
+up:
+    process-compose up
+
+# Start background infrastructure dependencies (Postgres, NATS, Neo4j, MinIO).
+infra-up:
     {{compose}} up -d --wait
-    cargo run -q -p deepref-server -- migrate
-    exec {{process_compose}} up
 
-# Stop app processes and disposable dependencies while retaining local data.
-dev-down:
-    {{process_compose}} down >/dev/null 2>&1 || true
-    {{compose}} down --remove-orphans
+# Stop background infrastructure dependencies and remove containers.
+infra-down:
+    {{compose}} down
 
-# Stop the local stack and permanently delete its disposable named volumes.
-dev-reset:
-    {{process_compose}} down >/dev/null 2>&1 || true
-    {{compose}} down --volumes --remove-orphans
-
-# Apply all PostgreSQL migrations with the one-shot API command.
-migrate:
-    {{compose}} up -d --wait postgres
-    cargo run -q -p deepref-server -- migrate
-
-# Load the deterministic, idempotent local fixture set.
-seed: migrate
-    {{compose}} exec -T postgres psql --username postgres --dbname deepref --set ON_ERROR_STOP=1 < scripts/seed.sql
-
-# Run fast repository checks without changing generated files.
+# Run all code quality and architecture verification checks.
 verify:
     cargo xtask boundaries
     cargo fmt --all -- --check
@@ -53,29 +28,30 @@ verify:
     taplo fmt --check .mise.toml
     actionlint
     mapfile -t shell_scripts < <(git ls-files '*.sh'); if ((${#shell_scripts[@]})); then shellcheck "${shell_scripts[@]}"; fi
-    {{compose}} config --quiet
+    docker compose -f infra/local/compose.yaml config --quiet
     process-compose -f process-compose.yaml --dry-run
     bash infra/tests/static-contracts.sh
     bash scripts/check-docs.sh
 
-# Validate operations structure, acceptance IDs, links, and obsolete guidance.
-docs-check:
-    bash scripts/check-docs.sh
-
-# Run Rust library/binary tests and web unit tests.
+# Run the full unit test suite for Rust and TypeScript.
 test-unit:
     cargo nextest run --workspace --lib --bins --locked
     cargo test --doc --workspace --locked
     pnpm --filter @deepref/web test:unit -- --run
 
-# Run TypeScript test coverage with Vitest V8.
-test-coverage-ts:
-    pnpm --filter @deepref/web test:coverage
+# Run property tests for Rust and TypeScript with high iteration counts.
+test-property:
+    cargo nextest run --workspace --lib --bins --locked -E 'test(/::property_tests::|::tests::.*_property|::tests::.*_invariants)/'
+    pnpm --filter @deepref/web test:unit -- --run --testNamePattern='property'
 
-# Run Rust test coverage with cargo-llvm-cov and cargo-nextest.
+# Run TypeScript tests with coverage reporting.
+test-coverage-ts:
+    pnpm --filter @deepref/web test:unit:coverage
+
+# Run Rust tests with source-based coverage and generate LCOV and summary reports.
 test-coverage-rust:
-    mkdir -p target/llvm-cov
-    SQLX_OFFLINE=true cargo llvm-cov nextest --lcov --output-path target/llvm-cov/lcov.info --locked
+    cargo llvm-cov nextest --workspace --lib --bins --locked --lcov --output-path target/llvm-cov/lcov.info
+    cargo llvm-cov report --workspace --summary-only
 
 # Run both TypeScript and Rust coverage suites and output reports.
 test-coverage: test-coverage-ts test-coverage-rust
@@ -96,11 +72,19 @@ test-e2e:
 
 # Regenerate the OpenAPI document and Orval client.
 codegen:
-    pnpm run generate:api
+    cargo xtask generate
 
 # Prove committed generated output is current without modifying the worktree.
 codegen-check:
-    pnpm run generate:api:check
+    cargo xtask generate --check
+
+# Scaffold a new crate with workspace inheritance and architectural layer classification.
+new-crate LAYER NAME:
+    cargo xtask new-crate --layer {{LAYER}} {{NAME}}
+
+# Fast diagnosis of repository setup, metadata, and invariant health.
+doctor:
+    cargo xtask doctor
 
 # Build the three immutable application image targets locally.
 docker-build:
