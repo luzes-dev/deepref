@@ -41,9 +41,8 @@ jobs:
         run: |
           curl --proto '=https' --tlsv1.2 --fail --show-error --location https://github.com/minikin/cargo-crap/releases/download/v0.4.3/cargo-crap-x86_64-unknown-linux-gnu.tar.gz --output "$RUNNER_TEMP/cargo-crap.tar.gz"
           echo "6caccf4893704edc74d7014dbb1e022d7c64ef7cd293087519ca7bc1d8c02285  $RUNNER_TEMP/cargo-crap.tar.gz" | sha256sum --check
-          mkdir -p "$RUNNER_TEMP/risk-bin"
-          tar --extract --gzip --file "$RUNNER_TEMP/cargo-crap.tar.gz" --directory "$RUNNER_TEMP/risk-bin"
-          echo "$RUNNER_TEMP/risk-bin" >> "$GITHUB_PATH"
+          mkdir -p "$HOME/.cargo/bin"
+          tar --extract --gzip --file "$RUNNER_TEMP/cargo-crap.tar.gz" --directory "$HOME/.cargo/bin"
       - name: Analyze uncovered complexity without a legacy threshold gate
         run: |
           cargo crap --workspace --lcov coverage/rust/lcov.info --exclude '**/tests/**' --exclude '**/benches/**' --exclude '**/generated/**' --exclude '**/tools/xtask/**' --format json --output coverage/rust/risk.json
