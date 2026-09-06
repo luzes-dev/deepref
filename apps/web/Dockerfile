@@ -11,10 +11,14 @@ WORKDIR /build
 
 RUN corepack enable pnpm
 
+# pnpm fetch is lockfile-only, so source edits no longer force package downloads.
+# The subsequent filtered install materializes the web workspace from the cached
+# store after the source tree is present (its prepare script runs svelte-kit sync).
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
-COPY apps/web ./apps/web
+RUN pnpm fetch --frozen-lockfile
 
-RUN pnpm install --frozen-lockfile --filter @deepref/web... \
+COPY apps/web ./apps/web
+RUN pnpm install --offline --frozen-lockfile --filter @deepref/web... \
     && pnpm --filter @deepref/web build
 
 FROM ${CADDY_BASE_REPOSITORY}@sha256:4c6e91c6ed0e2fa03efd5b44747b625fec79bc9cd06ac5235a779726618e530d AS runtime
