@@ -3,7 +3,7 @@ name: CI
 on:
   pull_request:
   push:
-    branches: [development, staging, main]
+    branches: [main]
 
 concurrency:
   group: ci-${{ github.event.pull_request.number || github.ref }}
@@ -46,7 +46,7 @@ jobs:
               - 'rust-toolchain.toml'
               - '.cargo/**'
               - '.sqlx/**'
-              - 'infra/**'
+              - 'compose.yaml'
               - '.github/workflows/ci.yml'
             web:
               - 'apps/web/**'
@@ -241,7 +241,7 @@ jobs:
 
   coverage:
     name: Coverage / Rust
-    if: github.event_name == 'push' && github.ref == 'refs/heads/development' && needs.changes.outputs.rust == 'true'
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && needs.changes.outputs.rust == 'true'
     needs: changes
     runs-on: ubuntu-latest
     timeout-minutes: 20
@@ -286,7 +286,7 @@ jobs:
           mkdir -p target/llvm-cov
           cargo llvm-cov nextest --lcov --output-path target/llvm-cov/lcov.info --locked
           cargo llvm-cov report --summary-only
-      - name: Retain coverage artifact for development risk analysis
+      - name: Retain coverage artifact for main risk analysis
         run: |
           mkdir -p coverage/rust
           cp target/llvm-cov/lcov.info coverage/rust/lcov.info
@@ -543,7 +543,7 @@ jobs:
           } >> "$GITHUB_ENV"
       - name: Start disposable dependencies
         if: github.event_name == 'push' || needs.changes.outputs.rust == 'true' || needs.changes.outputs.web == 'true' || needs.changes.outputs.containers == 'true'
-        run: docker compose -f infra/local/compose.yaml up -d --wait
+        run: docker compose -f compose.yaml up -d --wait
       - name: Apply database migrations
         if: github.event_name == 'push' || needs.changes.outputs.rust == 'true' || needs.changes.outputs.web == 'true' || needs.changes.outputs.containers == 'true'
         env:
@@ -566,7 +566,7 @@ jobs:
         run: ${SCCACHE_PATH:-sccache} --show-stats
       - name: Stop disposable dependencies
         if: always() && (github.event_name == 'push' || needs.changes.outputs.rust == 'true' || needs.changes.outputs.web == 'true' || needs.changes.outputs.containers == 'true')
-        run: docker compose -f infra/local/compose.yaml down --volumes
+        run: docker compose -f compose.yaml down --volumes
 
   browser-e2e:
     name: Browser E2E

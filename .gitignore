@@ -11,6 +11,8 @@ reports/
 .env.*
 !.env.example
 *.log
+.cache/
+**/.cache/
 .eslintcache
 **/.eslintcache
 .prettiercache

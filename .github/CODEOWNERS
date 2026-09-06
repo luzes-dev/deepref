@@ -1,12 +1,4 @@
-# Temporary personal fallback. Replace with organization teams before production.
 * @luzes-dev
 
 /.github/workflows/ @luzes-dev
-/charts/ @luzes-dev
-/infra/ @luzes-dev
-/schemas/ @luzes-dev
-/scripts/ci/ @luzes-dev
 /crates/postgres/migrations/ @luzes-dev
-
-# This path exists only on the protected orphan gitops branch.
-/environments/production/release-lock.yaml @luzes-dev

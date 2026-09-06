@@ -3,14 +3,14 @@ default:
     just --list
 
 # Tooling versions and common flags.
-compose := "docker compose -f infra/local/compose.yaml"
+compose := "docker compose -f compose.yaml"
 dev_env := "set -a; [ -f .env ] && . ./.env; set +a"
 
 # Start the full local environment with process-compose.
 up:
     process-compose up
 
-# Start background infrastructure dependencies (Postgres, NATS, Neo4j, MinIO).
+# Start background infrastructure dependencies (Postgres).
 infra-up:
     {{compose}} up -d --wait
 
@@ -22,16 +22,15 @@ infra-down:
 verify:
     cargo xtask boundaries
     cargo fmt --all -- --check
-    cargo clippy --workspace --all-targets --locked -- -D warnings
+    SQLX_OFFLINE=true cargo clippy --workspace --all-targets --locked -- -D warnings
     cargo shear --deny-warnings
     pnpm run lint
     pnpm run check
     taplo fmt --check .mise.toml
     actionlint
     mapfile -t shell_scripts < <(git ls-files '*.sh'); if ((${#shell_scripts[@]})); then shellcheck "${shell_scripts[@]}"; fi
-    docker compose -f infra/local/compose.yaml config --quiet
+    docker compose -f compose.yaml config --quiet
     process-compose -f process-compose.yaml --dry-run
-    bash infra/tests/static-contracts.sh
     bash scripts/check-docs.sh
 
 # Run the full unit test suite for Rust and TypeScript.
@@ -111,27 +110,9 @@ doctor:
 docker-build:
     docker buildx bake api worker web
 
-# Lint, render, schema-check, and policy-check the Helm chart.
-helm-check:
-    bash scripts/helm-check.sh
-
-# Format every OpenTofu root and module.
-infra-fmt:
-    tofu fmt -recursive infra
-
-# Validate formatting, lint, initialization, configuration, and native tests for every root.
-infra-validate:
-    tofu fmt -check -recursive infra
-    tflint --recursive --chdir=infra
-    for kind in bootstrap environments; do for root in development staging production global; do directory="infra/$kind/$root"; tofu -chdir="$directory" init -backend=false -lockfile=readonly; tofu -chdir="$directory" validate; tofu -chdir="$directory" test; done; done
-
-# Create a speculative plan for development, staging, production, or global.
-infra-plan ENV:
-    env_name="{{ENV}}"; case "$env_name" in development|staging|production|global) ;; *) echo "ENV must be development, staging, production, or global" >&2; exit 2 ;; esac; tofu -chdir="infra/environments/$env_name" init -lockfile=readonly; tofu -chdir="infra/environments/$env_name" plan -input=false -lock-timeout=5m -no-color
-
-# Update development with a fast-forward-only pull and create feature/SLUG.
+# Update main with a fast-forward-only pull and create feature/SLUG.
 feature SLUG:
-    slug="{{SLUG}}"; [[ "$slug" =~ ^[a-z0-9][a-z0-9._-]*$ ]] || { echo "SLUG must contain lowercase letters, digits, dots, underscores, or hyphens" >&2; exit 2; }; [[ -z "$(git status --porcelain)" ]] || { echo "feature requires a clean worktree" >&2; exit 1; }; git fetch origin development; git switch development; git pull --ff-only origin development; git switch -c "feature/$slug"
+    slug="{{SLUG}}"; [[ "$slug" =~ ^[a-z0-9][a-z0-9._-]*$ ]] || { echo "SLUG must contain lowercase letters, digits, dots, underscores, or hyphens" >&2; exit 2; }; [[ -z "$(git status --porcelain)" ]] || { echo "feature requires a clean worktree" >&2; exit 1; }; git fetch origin main; git switch main; git pull --ff-only origin main; git switch -c "feature/$slug"
 
 # Validate every workspace dependency against the architecture contract.
 architecture:

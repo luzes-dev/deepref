@@ -1,9 +1,0 @@
-.DS_Store
-.git/
-.github/
-.idea/
-.vscode/
-*.log
-*.swp
-*.tmp
-tests/
