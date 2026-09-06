@@ -42,10 +42,14 @@ runs:
 
     - name: Validate Bake definition
       shell: bash
+      env:
+        DEEPREF_ATTESTATIONS: ${{ github.event_name != 'pull_request' }}
       run: docker buildx bake --print >/dev/null
 
     - name: Build every release target
       uses: docker/bake-action@d3418bd7d0e9324001bca92fa8ba175ea7e6dc9b # v7
+      env:
+        DEEPREF_ATTESTATIONS: ${{ github.event_name != 'pull_request' }}
       with:
         source: .
         builder: ${{ steps.buildx.outputs.name }}
