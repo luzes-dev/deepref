@@ -83,6 +83,10 @@ codegen-check:
 shear:
     cargo shear --deny-warnings
 
+# Run Rust code duplication analysis with jscpd (report-only).
+duplication-rust:
+    pnpm run quality:rust:duplication
+
 # Scaffold a new crate with workspace inheritance and architectural layer classification.
 new-crate LAYER NAME:
     cargo xtask new-crate --layer {{LAYER}} {{NAME}}
