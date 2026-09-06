@@ -3,6 +3,8 @@ node_modules/
 .svelte-kit/
 build/
 dist/
+coverage/
+*.lcov
 .env
 .env.*
 !.env.example

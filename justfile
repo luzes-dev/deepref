@@ -66,6 +66,18 @@ test-unit:
     cargo test --doc --workspace --locked
     pnpm --filter @deepref/web test:unit -- --run
 
+# Run TypeScript test coverage with Vitest V8.
+test-coverage-ts:
+    pnpm --filter @deepref/web test:coverage
+
+# Run Rust test coverage with cargo-llvm-cov and cargo-nextest.
+test-coverage-rust:
+    mkdir -p target/llvm-cov
+    SQLX_OFFLINE=true cargo llvm-cov nextest --lcov --output-path target/llvm-cov/lcov.info --locked
+
+# Run both TypeScript and Rust coverage suites and output reports.
+test-coverage: test-coverage-ts test-coverage-rust
+
 # Start dependencies and run integration test targets.
 test-integration:
     {{compose}} up -d --wait
