@@ -145,13 +145,15 @@ jobs:
         env:
           COMMAND: ${{ matrix.command }}
         run: |
-          echo "SCCACHE_GHA_ENABLED=true" >> "$GITHUB_ENV"
-          echo "RUSTC_WRAPPER=sccache" >> "$GITHUB_ENV"
-          if [[ "$COMMAND" == "test" ]]; then
-            echo "SCCACHE_GHA_RW_MODE=READ_WRITE" >> "$GITHUB_ENV"
-          else
-            echo "SCCACHE_GHA_RW_MODE=READ_ONLY" >> "$GITHUB_ENV"
-          fi
+          {
+            echo "SCCACHE_GHA_ENABLED=true"
+            echo "RUSTC_WRAPPER=sccache"
+            if [[ "$COMMAND" == "test" ]]; then
+              echo "SCCACHE_GHA_RW_MODE=READ_WRITE"
+            else
+              echo "SCCACHE_GHA_RW_MODE=READ_ONLY"
+            fi
+          } >> "$GITHUB_ENV"
       - name: Validate Cargo workspace architecture
         if: (github.event_name == 'push' || needs.changes.outputs.rust == 'true') && matrix.command == 'fmt'
         run: |
@@ -218,9 +220,11 @@ jobs:
       - name: Enable read-only sccache compiler wrapper
         if: github.event_name == 'push' || needs.changes.outputs.rust == 'true'
         run: |
-          echo "SCCACHE_GHA_ENABLED=true" >> "$GITHUB_ENV"
-          echo "SCCACHE_GHA_RW_MODE=READ_ONLY" >> "$GITHUB_ENV"
-          echo "RUSTC_WRAPPER=sccache" >> "$GITHUB_ENV"
+          {
+            echo "SCCACHE_GHA_ENABLED=true"
+            echo "SCCACHE_GHA_RW_MODE=READ_ONLY"
+            echo "RUSTC_WRAPPER=sccache"
+          } >> "$GITHUB_ENV"
       - name: Run checked-in gold-set evaluation gate
         if: github.event_name == 'push' || needs.changes.outputs.rust == 'true'
         env:
@@ -270,9 +274,11 @@ jobs:
           version: v0.17.0
       - name: Enable read-only sccache compiler wrapper
         run: |
-          echo "SCCACHE_GHA_ENABLED=true" >> "$GITHUB_ENV"
-          echo "SCCACHE_GHA_RW_MODE=READ_ONLY" >> "$GITHUB_ENV"
-          echo "RUSTC_WRAPPER=sccache" >> "$GITHUB_ENV"
+          {
+            echo "SCCACHE_GHA_ENABLED=true"
+            echo "SCCACHE_GHA_RW_MODE=READ_ONLY"
+            echo "RUSTC_WRAPPER=sccache"
+          } >> "$GITHUB_ENV"
       - name: Run Rust test coverage
         env:
           SQLX_OFFLINE: "true"
@@ -448,9 +454,11 @@ jobs:
       - name: Enable read-only sccache compiler wrapper
         if: github.event_name == 'push' || needs.changes.outputs.rust == 'true' || needs.changes.outputs.web == 'true'
         run: |
-          echo "SCCACHE_GHA_ENABLED=true" >> "$GITHUB_ENV"
-          echo "SCCACHE_GHA_RW_MODE=READ_ONLY" >> "$GITHUB_ENV"
-          echo "RUSTC_WRAPPER=sccache" >> "$GITHUB_ENV"
+          {
+            echo "SCCACHE_GHA_ENABLED=true"
+            echo "SCCACHE_GHA_RW_MODE=READ_ONLY"
+            echo "RUSTC_WRAPPER=sccache"
+          } >> "$GITHUB_ENV"
       - name: Set up pnpm
         if: github.event_name == 'push' || needs.changes.outputs.rust == 'true' || needs.changes.outputs.web == 'true'
         uses: pnpm/action-setup@0977fd99725f1db4007ccb2928dbb4e90d06cc86 # v4.1.0
@@ -528,9 +536,11 @@ jobs:
       - name: Enable read-only sccache compiler wrapper
         if: github.event_name == 'push' || needs.changes.outputs.rust == 'true' || needs.changes.outputs.web == 'true' || needs.changes.outputs.containers == 'true'
         run: |
-          echo "SCCACHE_GHA_ENABLED=true" >> "$GITHUB_ENV"
-          echo "SCCACHE_GHA_RW_MODE=READ_ONLY" >> "$GITHUB_ENV"
-          echo "RUSTC_WRAPPER=sccache" >> "$GITHUB_ENV"
+          {
+            echo "SCCACHE_GHA_ENABLED=true"
+            echo "SCCACHE_GHA_RW_MODE=READ_ONLY"
+            echo "RUSTC_WRAPPER=sccache"
+          } >> "$GITHUB_ENV"
       - name: Start disposable dependencies
         if: github.event_name == 'push' || needs.changes.outputs.rust == 'true' || needs.changes.outputs.web == 'true' || needs.changes.outputs.containers == 'true'
         run: docker compose -f infra/local/compose.yaml up -d --wait
