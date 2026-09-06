@@ -1,22 +1,43 @@
 ARG RUST_BASE_REPOSITORY="docker.io/library/rust"
 ARG DEBIAN_BASE_REPOSITORY="docker.io/library/debian"
+ARG CARGO_CHEF_VERSION="0.1.78"
 
-FROM ${RUST_BASE_REPOSITORY}@sha256:6258907abe69656e41cd992e0b705cdcfabcbbe3db374f92ed2d47121282d4a1 AS builder
+FROM ${RUST_BASE_REPOSITORY}@sha256:6258907abe69656e41cd992e0b705cdcfabcbbe3db374f92ed2d47121282d4a1 AS chef
+
+WORKDIR /build
+
+# cargo-chef is pinned so the dependency recipe remains reproducible. This
+# layer is independent of application source and is reused by warm BuildKit
+# builds through the existing GHA cache.
+COPY rust-toolchain.toml ./
+ARG CARGO_CHEF_VERSION
+RUN cargo install --locked cargo-chef --version "${CARGO_CHEF_VERSION}"
+
+FROM chef AS planner
+
+# The planner needs all manifests and source layout, including future tooling
+# crates, to produce a complete workspace recipe. .dockerignore keeps caches
+# and local secrets out of this context.
+COPY . .
+RUN cargo chef prepare --recipe-path recipe.json
+
+FROM chef AS builder
 
 ARG OCI_REVISION="local"
 ARG GIT_TREE_HASH="local"
 ENV DEEPREF_BUILD_SHA="${OCI_REVISION}:${GIT_TREE_HASH}"
 ENV SQLX_OFFLINE="true"
 
-WORKDIR /build
+COPY --from=planner /build/recipe.json recipe.json
 
-COPY Cargo.toml Cargo.lock ./
-COPY .sqlx ./.sqlx
-COPY apps ./apps
-COPY crates ./crates
-COPY review-definitions ./review-definitions
-COPY services ./services
-COPY tools ./tools
+# Build third-party dependencies before application source is copied. The
+# recipe layer is invalidated by Cargo manifest/lockfile changes, while normal
+# source edits reuse this compiled dependency layer.
+RUN --mount=type=cache,target=/usr/local/cargo/registry,sharing=locked \
+    --mount=type=cache,target=/usr/local/cargo/git,sharing=locked \
+    cargo chef cook --release --recipe-path recipe.json --locked
+
+COPY . .
 
 # Both Rust service images share the same composition-root binary and select their
 # runtime role through the container command.
