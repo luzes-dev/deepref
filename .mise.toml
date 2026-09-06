@@ -24,3 +24,6 @@ yq = "4.47.1"
 
 # Reads the existing LLVM coverage artifact; does not execute tests.
 "cargo:cargo-crap" = "0.4.3"
+
+# Rust dependency and source hygiene owner.
+"cargo:cargo-shear" = "1.13.4"

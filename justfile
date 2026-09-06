@@ -23,6 +23,7 @@ verify:
     cargo xtask boundaries
     cargo fmt --all -- --check
     cargo clippy --workspace --all-targets --locked -- -D warnings
+    cargo shear --deny-warnings
     pnpm run lint
     pnpm run check
     taplo fmt --check .mise.toml
@@ -77,6 +78,10 @@ codegen:
 # Prove committed generated output is current without modifying the worktree.
 codegen-check:
     cargo xtask generate --check
+
+# Run Rust dependency/source hygiene check with cargo-shear.
+shear:
+    cargo shear --deny-warnings
 
 # Scaffold a new crate with workspace inheritance and architectural layer classification.
 new-crate LAYER NAME:
