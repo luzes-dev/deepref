@@ -1,0 +1,67 @@
+name: Rust mutation testing
+
+on:
+  workflow_dispatch:
+    inputs:
+      package:
+        description: "Specific workspace member to mutate (e.g. deepref-core, deepref-postgres, deepref-deduplication, deepref-ai). Empty runs default workspace."
+        required: false
+        default: "deepref-core"
+        type: string
+  schedule:
+    # Run weekly deep mutation baseline on Sunday at 04:00 UTC
+    - cron: "0 4 * * 0"
+
+permissions:
+  contents: read
+
+jobs:
+  mutants:
+    name: Rust mutants report
+    runs-on: ubuntu-latest
+    timeout-minutes: 60
+    steps:
+      - name: Checkout source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      - name: Install pinned Rust toolchain
+        run: |
+          rustup toolchain install 1.95.0 --profile minimal
+          rustup override set 1.95.0
+
+      - name: Install pinned cargo-nextest
+        uses: taiki-e/install-action@7b8d4719ee4aaa279bdf55df38dacb9ebfe12a6c # v2.87.6
+        with:
+          tool: cargo-nextest@0.9.143
+          checksum: true
+          fallback: none
+
+      - name: Install pinned cargo-mutants
+        run: |
+          curl --proto '=https' --tlsv1.2 --fail --show-error --location \
+            https://github.com/sourcefrog/cargo-mutants/releases/download/v27.1.0/cargo-mutants-x86_64-unknown-linux-gnu.tar.gz \
+            --output "$RUNNER_TEMP/cargo-mutants.tar.gz"
+          echo "dfe6dc37d0342c891d2829b5a695aa57c2d0edecef7e7d0399a30cc6e206411e  $RUNNER_TEMP/cargo-mutants.tar.gz" | sha256sum --check
+          mkdir -p "$HOME/.cargo/bin"
+          tar --extract --gzip --file "$RUNNER_TEMP/cargo-mutants.tar.gz" --directory "$HOME/.cargo/bin"
+
+      - name: Run mutation testing (report-only baseline)
+        id: run_mutants
+        env:
+          MUTANTS_PACKAGE: ${{ inputs.package }}
+        run: |
+          if [ -n "$MUTANTS_PACKAGE" ]; then
+            cargo mutants --package "$MUTANTS_PACKAGE" --output mutants.out --no-times || true
+          else
+            cargo mutants --output mutants.out --no-times || true
+          fi
+
+      - name: Upload mutation report
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        if: always()
+        with:
+          name: rust-mutants-report-${{ github.sha }}
+          path: mutants.out/
+          retention-days: 30
