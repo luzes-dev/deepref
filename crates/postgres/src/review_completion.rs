@@ -418,7 +418,9 @@ pub async fn complete_review_outcome(
         ReviewRunState::Blocked { code, message } => {
             ("blocked", Some(code.as_str()), Some(message.as_str()))
         }
-        _ => unreachable!("terminal completion only produces terminal states"),
+        ReviewRunState::Queued | ReviewRunState::Running | ReviewRunState::Failed { .. } => {
+            unreachable!("terminal completion only produces terminal states")
+        }
     };
     let changed = sqlx::query(
         "UPDATE review_run_manifests

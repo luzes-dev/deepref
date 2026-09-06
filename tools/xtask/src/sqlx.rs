@@ -1,7 +1,9 @@
-use std::path::{Path, PathBuf};
+use std::path::Path;
 use std::process::Command;
 
 use anyhow::{Context, Result, bail};
+
+use crate::workspace::find_root;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SqlxSubcommand {
@@ -10,7 +12,7 @@ pub enum SqlxSubcommand {
 }
 
 pub fn run(subcommand: SqlxSubcommand) -> Result<()> {
-    let root = find_workspace_root()?;
+    let root = find_root()?;
     let migrations_dir = root.join("crates/postgres/migrations");
     if !migrations_dir.is_dir() {
         bail!(
@@ -70,28 +72,6 @@ pub fn run(subcommand: SqlxSubcommand) -> Result<()> {
         }
     }
     Ok(())
-}
-
-pub fn find_workspace_root() -> Result<PathBuf> {
-    let current = std::env::current_dir().context("failed to get current working directory")?;
-    find_workspace_root_from(&current)
-}
-
-pub fn find_workspace_root_from(start: &Path) -> Result<PathBuf> {
-    let mut current = start.to_path_buf();
-    loop {
-        let manifest = current.join("Cargo.toml");
-        if manifest.is_file() {
-            let content = std::fs::read_to_string(&manifest)
-                .with_context(|| format!("failed to read {}", manifest.display()))?;
-            if content.contains("[workspace]") {
-                return Ok(current);
-            }
-        }
-        if !current.pop() {
-            bail!("could not locate workspace root containing Cargo.toml with [workspace]");
-        }
-    }
 }
 
 pub fn resolve_database_url(root: &Path) -> Result<String> {
@@ -180,7 +160,7 @@ mod tests {
 
     #[test]
     fn test_find_workspace_root() {
-        let root = find_workspace_root().expect("should find workspace root");
+        let root = find_root().expect("should find workspace root");
         assert!(root.join("Cargo.toml").is_file());
     }
 

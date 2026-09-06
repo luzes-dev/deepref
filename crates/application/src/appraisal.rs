@@ -329,11 +329,11 @@ pub fn validate_assessment_input(
     let mut evidence_questions = BTreeSet::new();
     let mut evidence_identities = BTreeSet::new();
     for evidence in &input.evidence {
-        let Some(question) = questions.get(evidence.question_id.as_str()) else {
+        if !questions.contains_key(evidence.question_id.as_str()) {
             return Err(AppraisalValidationError::UnknownQuestion(
                 evidence.question_id.clone(),
             ));
-        };
+        }
         evidence_questions.insert(evidence.question_id.clone());
         if !evidence_identities.insert((
             evidence.question_id.clone(),
@@ -343,9 +343,6 @@ pub fn validate_assessment_input(
             return Err(AppraisalValidationError::DuplicateEvidence(
                 evidence.question_id.clone(),
             ));
-        }
-        if !question.requires_evidence {
-            continue;
         }
     }
     for question in questions.values() {

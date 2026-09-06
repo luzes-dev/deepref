@@ -478,7 +478,7 @@ pub(crate) async fn upload_document(
     let actor = super::review::extract_actor(&headers)?;
     let store = state
         .document_store
-        .clone()
+        .as_ref()
         .ok_or_else(|| ApiError::Configuration("document storage is not configured".to_owned()))?;
     let mut stored: Option<deepref_documents::StoredObject> = None;
     let mut original_filename = None;

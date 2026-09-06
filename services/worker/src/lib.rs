@@ -173,9 +173,10 @@ async fn process_claimed_job(
             }
         }
         Ok(delivery::DeliveryAction::Terminate) => {
+            let job_id = job.id;
             let terminal = ClaimedJob {
                 attempts: job.max_attempts,
-                ..job.clone()
+                ..job
             };
             if !fail_job(
                 &pool,
@@ -186,7 +187,7 @@ async fn process_claimed_job(
             )
             .await?
             {
-                tracing::warn!(job_id=%job.id, "terminal job update rejected because the lease is no longer owned");
+                tracing::warn!(job_id=%job_id, "terminal job update rejected because the lease is no longer owned");
             }
         }
         Err(error) => {

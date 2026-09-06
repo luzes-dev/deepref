@@ -214,8 +214,9 @@ impl StudyGroupingTask {
         }
         let mut seen = BTreeSet::new();
         for evidence in &output.provenance {
-            if !self.allowed_evidence.contains(&evidence.key())
-                || !seen.insert(evidence.key())
+            let key = evidence.key();
+            if !self.allowed_evidence.contains(&key)
+                || !seen.insert(key)
                 || !evidence_hash_is_valid(evidence)
             {
                 return Err(AiError::SemanticValidation(
@@ -457,9 +458,10 @@ impl AppraisalPrefillTask {
             }
             let mut seen = BTreeSet::new();
             for evidence in &answer.evidence {
+                let key = evidence.key();
                 if !is_sha256(&evidence.content_hash)
-                    || !self.allowed_evidence.contains_key(&evidence.key())
-                    || !seen.insert(evidence.key())
+                    || !self.allowed_evidence.contains_key(&key)
+                    || !seen.insert(key)
                 {
                     return Err(AiError::SemanticValidation(
                         "appraisal prefill evidence is outside the grounded report".to_owned(),

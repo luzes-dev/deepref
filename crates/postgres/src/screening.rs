@@ -170,7 +170,6 @@ pub(crate) async fn screen_report_in_transaction(
     let current =
         load_state_for_update(tx, command.project_id.into(), command.report_id.into()).await?;
     let current_snapshot = current
-        .clone()
         .unwrap_or_else(|| default_state(command.project_id.into(), command.report_id.into()));
     if current_snapshot.revision != command.expected_revision {
         return Err(ScreeningError::RevisionConflict {
@@ -240,7 +239,6 @@ pub async fn undo_screening(
     let current =
         load_state_for_update(&mut tx, command.project_id.into(), command.report_id.into()).await?;
     let current_snapshot = current
-        .clone()
         .unwrap_or_else(|| default_state(command.project_id.into(), command.report_id.into()));
     if current_snapshot.revision != command.expected_revision {
         return Err(ScreeningError::RevisionConflict {

@@ -51,7 +51,7 @@ pub fn init(config: TelemetryConfig) -> Result<TelemetryHandle, TelemetryError> 
         .as_deref()
         .map(|endpoint| build_otlp_provider(endpoint, &config.service_name))
         .transpose()?;
-    match provider.clone() {
+    match provider.as_ref() {
         Some(provider) => {
             let tracer = provider.tracer("deepref");
             let subscriber = tracing_subscriber::registry()

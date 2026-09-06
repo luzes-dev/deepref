@@ -198,9 +198,7 @@ class ProjectWorkspaceContext {
 		},
 		get colorBy(): GraphColorMode {
 			const value = page.url.searchParams.get('graphColorBy');
-			return GRAPH_OVERLAY_FIELDS.includes(value as GraphColorMode)
-				? (value as GraphColorMode)
-				: 'metrics';
+			return GRAPH_OVERLAY_FIELDS.find((field) => field === value) ?? 'metrics';
 		},
 		set colorBy(value: GraphColorMode) {
 			setSearchParam('graphColorBy', value === 'metrics' ? undefined : value);
