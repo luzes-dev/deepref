@@ -316,4 +316,70 @@ mod tests {
             ))
         );
     }
+
+    proptest::proptest! {
+        #[test]
+        fn candidate_scores_are_bounded_and_invariants_hold(
+            source_title in proptest::option::of("[a-zA-Z0-9 ]{0,50}"),
+            source_author in proptest::option::of("[a-zA-Z ]{0,30}"),
+            source_year in proptest::option::of(1900..2030i32),
+            cand_title in proptest::option::of("[a-zA-Z0-9 ]{0,50}"),
+            cand_author in proptest::option::of("[a-zA-Z ]{0,30}"),
+            cand_year in proptest::option::of(1900..2030i32),
+            exact_match in proptest::prelude::any::<bool>(),
+            conflicting in proptest::prelude::any::<bool>(),
+        ) {
+            let cand = DedupeCandidate {
+                report_id: Uuid::new_v4().into(),
+                title: cand_title,
+                first_author: cand_author,
+                publication_year: cand_year,
+                exact_identifier_match: exact_match,
+                conflicting_identifier: conflicting,
+            };
+            let score = score_candidate(
+                source_title.as_deref(),
+                source_author.as_deref(),
+                source_year,
+                &cand,
+            );
+            proptest::prop_assert!(score.total >= 0.0 && score.total <= 1.0);
+            if conflicting {
+                proptest::prop_assert_eq!(score.total, 0.0);
+                proptest::prop_assert!(!score.is_credible_fuzzy_match());
+            } else if exact_match {
+                proptest::prop_assert_eq!(score.total, 1.0);
+                proptest::prop_assert!(!score.is_credible_fuzzy_match());
+            } else if score.total >= FUZZY_PROPOSAL_THRESHOLD {
+                proptest::prop_assert!(score.is_credible_fuzzy_match());
+            } else {
+                proptest::prop_assert!(!score.is_credible_fuzzy_match());
+            }
+        }
+
+        #[test]
+        fn fuzzy_candidate_selection_always_returns_credible_match(
+            candidate_count in 0..10usize,
+        ) {
+            let mut candidates = Vec::new();
+            for _ in 0..candidate_count {
+                candidates.push(DedupeCandidate {
+                    report_id: Uuid::new_v4().into(),
+                    title: Some("Sample Title for Candidate".to_owned()),
+                    first_author: Some("Author".to_owned()),
+                    publication_year: Some(2023),
+                    exact_identifier_match: false,
+                    conflicting_identifier: false,
+                });
+            }
+            if let Some((_chosen, score)) = select_fuzzy_candidate(
+                Some("Sample Title for Candidate"),
+                Some("Author"),
+                Some(2023),
+                candidates,
+            ) {
+                proptest::prop_assert!(score.is_credible_fuzzy_match());
+            }
+        }
+    }
 }
