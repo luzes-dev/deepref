@@ -30,7 +30,13 @@ Rotation order is producer/provider -> secret broker/Secrets Manager -> External
 
 Report vulnerabilities through the private channel in the root `SECURITY.md`; never require a public proof of concept. Triage must record affected artifact digests/environments, exploitability, data exposure, containment, remediation release, promotion path, and disclosure decision.
 
-Release workflows scan HIGH/CRITICAL findings and produce vulnerability attestations. An exception requires security-owner approval, expiry, compensating controls, and a tracked remediation. Never retag or rebuild only one environment to bypass a finding; fix source and promote one new signed release.
+Release workflows perform built-artifact vulnerability analysis and produce signed attestations:
+- **Artifacts scanned**: Built immutable release OCI container images (`api`, `worker`, `web`) pushed to Amazon ECR by digest.
+- **Vulnerability sources**:
+  - Aqua Trivy: Scans OS base packages and system runtime distributions against official security advisories.
+  - Google OSV Scanner: Analyzes built container dependencies against the distributed Open Source Vulnerabilities (OSV.dev) database, covering Rust (RustSec), Node/npm (GitHub Advisory Database), and ecosystem feeds.
+- **Failure severity policy**: Any unmitigated `HIGH` or `CRITICAL` finding with an available upstream fix blocks release and promotion (`exit-code: 1`).
+- **Exception handling**: An exception requires security-owner approval, expiry date, compensating controls, and a tracked remediation ticket. Never retag or rebuild only one environment to bypass a finding; fix source and promote one new signed release.
 
 ## Break-glass boundary
 
