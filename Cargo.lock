@@ -687,13 +687,10 @@ dependencies = [
 name = "deepref-core"
 version = "0.1.0"
 dependencies = [
- "anyhow",
- "base64 0.23.1",
  "chrono",
  "deepref-domain",
  "serde",
  "serde_json",
- "sha2 0.11.0",
  "uuid",
 ]
 
@@ -747,7 +744,6 @@ name = "deepref-events"
 version = "0.1.0"
 dependencies = [
  "chrono",
- "deepref-core",
  "serde",
  "serde_json",
  "uuid",
@@ -759,7 +755,6 @@ version = "0.1.0"
 dependencies = [
  "chrono",
  "deepref-core",
- "deepref-domain",
  "petgraph",
  "serde",
  "serde_json",
@@ -787,11 +782,9 @@ dependencies = [
  "deepref-postgres",
  "deepref-providers",
  "deepref-review",
- "deepref-telemetry",
  "deepref-worker",
  "futures",
  "garde",
- "reqwest",
  "serde",
  "serde_json",
  "sha2 0.11.0",
@@ -801,8 +794,6 @@ dependencies = [
  "tower",
  "tower-http 0.7.1",
  "tracing",
- "tracing-subscriber",
- "url",
  "utoipa",
  "utoipa-axum",
  "uuid",
@@ -843,7 +834,6 @@ dependencies = [
  "deepref-crossref",
  "deepref-domain",
  "serde_json",
- "thiserror",
  "unicode-normalization",
 ]
 
@@ -910,14 +900,11 @@ dependencies = [
  "deepref-postgres",
  "deepref-providers",
  "deepref-review",
- "deepref-telemetry",
  "futures",
- "reqwest",
  "serde",
  "serde_json",
  "sha2 0.11.0",
  "sqlx",
- "thiserror",
  "tokio",
  "tracing",
  "url",
