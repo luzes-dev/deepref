@@ -139,15 +139,16 @@ impl PdfiumParser {
                 let width = (bounds.width().value / page_width).clamp(0.0, 1.0 - x);
                 let height = (bounds.height().value / page_height).clamp(0.0, 1.0 - y);
                 let bbox = NormalizedBoundingBox::new(x, y, width, height).ok();
+                let content_hash = content_sha256(text.as_bytes());
                 blocks.push(ParsedBlock {
                     page_number: page_number as u32 + 1,
                     page_width,
                     page_height,
                     ordinal: blocks.len() as u32,
                     kind: "text".to_owned(),
-                    text: text.clone(),
+                    text,
                     bbox,
-                    content_hash: content_sha256(text.as_bytes()),
+                    content_hash,
                 });
             }
         }

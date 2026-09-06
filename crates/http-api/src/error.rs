@@ -48,8 +48,6 @@ pub enum ApiError {
     Doi(#[from] deepref_domain::DoiError),
 }
 
-impl ApiError {}
-
 impl IntoResponse for ApiError {
     fn into_response(self) -> Response {
         let (status, code, message, retry_after, details): (
@@ -145,7 +143,7 @@ impl IntoResponse for ApiError {
             ),
         };
         let body = ApiErrorBody {
-            code: code.to_owned(),
+            code,
             message,
             correlation_id: Some(Uuid::new_v4()),
             details,

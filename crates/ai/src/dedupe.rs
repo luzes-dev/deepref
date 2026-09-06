@@ -164,11 +164,12 @@ impl DedupeTask {
         }
         let mut keys = BTreeSet::new();
         for provenance in &output.provenance {
+            let key = provenance_key(provenance);
             if provenance.entity_type.trim().is_empty()
                 || provenance.field.trim().is_empty()
                 || !crate::is_sha256(&provenance.content_hash)
-                || !keys.insert(provenance_key(provenance))
-                || !allowed_provenance.contains(&provenance_key(provenance))
+                || !allowed_provenance.contains(&key)
+                || !keys.insert(key)
             {
                 return Err(AiError::SemanticValidation(
                     "duplicate provenance is invalid or outside the allowed identity context"

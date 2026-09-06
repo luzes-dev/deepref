@@ -274,6 +274,7 @@ impl ScreeningTask {
             let mut evidence_keys = BTreeSet::new();
             for evidence in &judgment.evidence {
                 self.validate_evidence(evidence)?;
+                let key = evidence.key();
                 if matches!(evidence, ScreeningEvidence::DocumentBlock { .. }) {
                     let Some(retrieved_evidence) = retrieved_evidence else {
                         return Err(AiError::SemanticValidation(
@@ -288,7 +289,7 @@ impl ScreeningTask {
                             section_path: block.evidence.section_path.clone(),
                         }
                         .key()
-                            == evidence.key()
+                            == key
                     });
                     if !retrieved {
                         return Err(AiError::SemanticValidation(
@@ -296,7 +297,7 @@ impl ScreeningTask {
                         ));
                     }
                 }
-                if !evidence_keys.insert(evidence.key()) {
+                if !evidence_keys.insert(key) {
                     return Err(AiError::SemanticValidation(
                         "screening evidence must not be duplicated".to_owned(),
                     ));

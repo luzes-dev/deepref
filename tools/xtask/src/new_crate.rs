@@ -89,16 +89,13 @@ layer = "{layer}"
     fs::write(&lib_rs_path, lib_rs_content)
         .with_context(|| format!("failed to write {}", lib_rs_path.display()))?;
 
-    // Register crate in root Cargo.toml workspace members
     register_workspace_member(&root, &relative_path)?;
 
-    // Format manifests and code
     let _ = Command::new(cargo_bin())
         .args(["fmt", "--all"])
         .current_dir(&root)
         .status();
 
-    // Verify architecture boundaries
     println!("Validating architectural boundaries for new crate...");
     crate::boundaries::run().context("new crate failed architecture boundary validation")?;
 

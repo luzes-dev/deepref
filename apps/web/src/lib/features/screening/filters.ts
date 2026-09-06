@@ -29,8 +29,11 @@ export const defaultScreeningUrlState: ScreeningUrlState = {
 	report: null
 };
 
-function oneOf<T extends readonly string[]>(value: string | null, values: T, fallback: T[number]) {
-	return value && (values as readonly string[]).includes(value) ? (value as T[number]) : fallback;
+function oneOf<T extends string>(value: string | null, values: readonly T[], fallback: T): T {
+	for (const candidate of values) {
+		if (candidate === value) return candidate;
+	}
+	return fallback;
 }
 
 export function parseScreeningUrl(searchParams: URLSearchParams): ScreeningUrlState {

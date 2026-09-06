@@ -225,11 +225,12 @@ impl StudyDesignClassificationTask {
         }
         let mut evidence_keys = BTreeSet::new();
         if output.evidence.iter().any(|evidence| {
+            let key = evidence.key();
             !is_sha256(match evidence {
                 StudyDesignEvidence::StudyMetadata { content_hash, .. }
                 | StudyDesignEvidence::ReportMetadata { content_hash, .. } => content_hash,
-            }) || !self.allowed_evidence.contains(&evidence.key())
-                || !evidence_keys.insert(evidence.key())
+            }) || !self.allowed_evidence.contains(&key)
+                || !evidence_keys.insert(key)
         }) {
             return Err(AiError::SemanticValidation(
                 "study classification evidence is not grounded".to_owned(),
