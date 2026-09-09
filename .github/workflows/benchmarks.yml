@@ -40,8 +40,12 @@ jobs:
 
       - name: Enable sccache compiler wrapper
         run: |
-          echo "SCCACHE_GHA_ENABLED=true" >> "$GITHUB_ENV"
-          echo "RUSTC_WRAPPER=sccache" >> "$GITHUB_ENV"
+          {
+            echo "SCCACHE_GHA_ENABLED=true"
+            echo "SCCACHE_GHA_VERSION=rust-1.95.0"
+            echo "SCCACHE_GHA_RW_MODE=READ_ONLY"
+            echo "RUSTC_WRAPPER=sccache"
+          } >> "$GITHUB_ENV"
 
       - name: Restore Cargo cache
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0

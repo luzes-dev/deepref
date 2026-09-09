@@ -147,6 +147,7 @@ jobs:
         run: |
           {
             echo "SCCACHE_GHA_ENABLED=true"
+            echo "SCCACHE_GHA_VERSION=rust-1.95.0"
             echo "RUSTC_WRAPPER=sccache"
             if [[ "$COMMAND" == "test" ]]; then
               echo "SCCACHE_GHA_RW_MODE=READ_WRITE"
@@ -222,6 +223,7 @@ jobs:
         run: |
           {
             echo "SCCACHE_GHA_ENABLED=true"
+            echo "SCCACHE_GHA_VERSION=rust-1.95.0"
             echo "SCCACHE_GHA_RW_MODE=READ_ONLY"
             echo "RUSTC_WRAPPER=sccache"
           } >> "$GITHUB_ENV"
@@ -276,6 +278,7 @@ jobs:
         run: |
           {
             echo "SCCACHE_GHA_ENABLED=true"
+            echo "SCCACHE_GHA_VERSION=rust-1.95.0"
             echo "SCCACHE_GHA_RW_MODE=READ_ONLY"
             echo "RUSTC_WRAPPER=sccache"
           } >> "$GITHUB_ENV"
@@ -474,6 +477,7 @@ jobs:
         run: |
           {
             echo "SCCACHE_GHA_ENABLED=true"
+            echo "SCCACHE_GHA_VERSION=rust-1.95.0"
             echo "SCCACHE_GHA_RW_MODE=READ_ONLY"
             echo "RUSTC_WRAPPER=sccache"
           } >> "$GITHUB_ENV"
@@ -556,6 +560,7 @@ jobs:
         run: |
           {
             echo "SCCACHE_GHA_ENABLED=true"
+            echo "SCCACHE_GHA_VERSION=rust-1.95.0"
             echo "SCCACHE_GHA_RW_MODE=READ_ONLY"
             echo "RUSTC_WRAPPER=sccache"
           } >> "$GITHUB_ENV"

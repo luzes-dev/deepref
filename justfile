@@ -58,7 +58,7 @@ test-fuzz TARGET DURATION="30":
 
 # Run TypeScript tests with coverage reporting.
 test-coverage-ts:
-    pnpm --filter @deepref/web test:unit:coverage
+    pnpm --filter @deepref/web test:coverage
 
 # Run Rust tests with source-based coverage and generate LCOV and summary reports.
 test-coverage-rust:
