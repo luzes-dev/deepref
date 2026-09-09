@@ -1,4 +1,4 @@
-name: Publish Docker Images
+name: Publish container images
 
 on:
   push:
@@ -7,9 +7,9 @@ on:
   workflow_dispatch:
     inputs:
       tag:
-        description: 'Image tag (e.g. 1.0.0 or edge; defaults to git tag or short commit SHA)'
+        description: 'Image tag to publish (default: short commit SHA)'
         required: false
-        default: ''
+        type: string
 
 concurrency:
   group: publish-images-${{ github.ref }}
@@ -17,13 +17,15 @@ concurrency:
 
 permissions:
   contents: read
-  packages: write
 
 jobs:
   publish:
     name: Build and publish container images
     runs-on: ubuntu-latest
     timeout-minutes: 45
+    permissions:
+      contents: read
+      packages: write
     steps:
       - name: Checkout repository
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -34,22 +36,25 @@ jobs:
       - name: Resolve publication metadata
         id: meta
         shell: bash
+        env:
+          INPUT_TAG: ${{ github.event.inputs.tag }}
+          REF_NAME: ${{ github.ref }}
+          REPO_OWNER: ${{ github.repository_owner }}
         run: |
           set -euo pipefail
 
           tree_hash="$(git rev-parse 'HEAD^{tree}')"
           short_sha="$(git rev-parse --short HEAD)"
 
-          input_tag="${{ github.event.inputs.tag }}"
-          if [[ -n "$input_tag" ]]; then
-            tag="$input_tag"
-          elif [[ "${{ github.ref }}" =~ ^refs/tags/v(.+) ]]; then
+          if [[ -n "$INPUT_TAG" ]]; then
+            tag="$INPUT_TAG"
+          elif [[ "$REF_NAME" =~ ^refs/tags/v(.+) ]]; then
             tag="${BASH_REMATCH[1]}"
           else
             tag="$short_sha"
           fi
 
-          owner="$(echo "${{ github.repository_owner }}" | tr '[:upper:]' '[:lower:]')"
+          owner="$(echo "$REPO_OWNER" | tr '[:upper:]' '[:lower:]')"
 
           {
             echo "tag=$tag"

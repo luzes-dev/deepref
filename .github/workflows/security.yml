@@ -16,8 +16,48 @@ permissions:
   contents: read
 
 jobs:
+  changes:
+    name: Detect changed paths
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    outputs:
+      rust: ${{ steps.filter.outputs.rust }}
+      web: ${{ steps.filter.outputs.web }}
+      security-workflow: ${{ steps.filter.outputs.security-workflow }}
+    steps:
+      - name: Checkout trusted source
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Filter paths
+        id: filter
+        uses: dorny/paths-filter@de90cc6fb38fc0963ad72b210f1f284cd68cea36 # v3.0.2
+        with:
+          filters: |
+            rust:
+              - 'crates/**'
+              - 'services/**'
+              - 'tools/**'
+              - 'review-definitions/**'
+              - 'Cargo.toml'
+              - 'Cargo.lock'
+              - 'rust-toolchain.toml'
+              - '.cargo/**'
+              - '.sqlx/**'
+              - 'compose.yaml'
+              - '.github/workflows/security.yml'
+            web:
+              - 'apps/web/**'
+              - 'package.json'
+              - 'pnpm-lock.yaml'
+              - 'pnpm-workspace.yaml'
+              - '.github/workflows/security.yml'
+            security-workflow:
+              - '.github/workflows/security.yml'
+
   codeql:
     name: CodeQL / ${{ matrix.language }}
+    needs: changes
     runs-on: ubuntu-latest
     timeout-minutes: 40
     permissions:
@@ -28,15 +68,39 @@ jobs:
       matrix:
         language: [rust, javascript-typescript]
     steps:
+      - name: Skip check (path filtering)
+        if: >-
+          github.event_name == 'pull_request' &&
+          needs.changes.outputs.security-workflow != 'true' &&
+          ((matrix.language == 'rust' && needs.changes.outputs.rust != 'true') ||
+           (matrix.language == 'javascript-typescript' && needs.changes.outputs.web != 'true'))
+        env:
+          LANGUAGE: ${{ matrix.language }}
+        run: echo "No relevant changes detected for CodeQL ${LANGUAGE}; skipping check."
       - name: Checkout trusted source
+        if: >-
+          github.event_name != 'pull_request' ||
+          needs.changes.outputs.security-workflow == 'true' ||
+          (matrix.language == 'rust' && needs.changes.outputs.rust == 'true') ||
+          (matrix.language == 'javascript-typescript' && needs.changes.outputs.web == 'true')
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
       - name: Initialize CodeQL
+        if: >-
+          github.event_name != 'pull_request' ||
+          needs.changes.outputs.security-workflow == 'true' ||
+          (matrix.language == 'rust' && needs.changes.outputs.rust == 'true') ||
+          (matrix.language == 'javascript-typescript' && needs.changes.outputs.web == 'true')
         uses: github/codeql-action/init@cdf488f595d80d6e07e03d4674febd5ab45fa938 # v4.37.9
         with:
           languages: ${{ matrix.language }}
       - name: Analyze
+        if: >-
+          github.event_name != 'pull_request' ||
+          needs.changes.outputs.security-workflow == 'true' ||
+          (matrix.language == 'rust' && needs.changes.outputs.rust == 'true') ||
+          (matrix.language == 'javascript-typescript' && needs.changes.outputs.web == 'true')
         uses: github/codeql-action/analyze@cdf488f595d80d6e07e03d4674febd5ab45fa938 # v4.37.9
 
   dependencies:
@@ -109,3 +173,26 @@ jobs:
           go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.7
           mapfile -t scripts < <(git ls-files '*.sh')
           if [ "${#scripts[@]}" -gt 0 ]; then shellcheck "${scripts[@]}"; fi
+      - name: Audit workflow security with zizmor
+        run: pipx run --spec zizmor==1.11.0 zizmor --pedantic .github/workflows
+
+  security-required:
+    name: Security
+    if: always()
+    needs: [codeql, dependencies, repository-policy]
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - name: Verify security checks
+        env:
+          CODEQL_RESULT: ${{ needs.codeql.result }}
+          DEPS_RESULT: ${{ needs.dependencies.result }}
+          POLICY_RESULT: ${{ needs.repository-policy.result }}
+        run: |
+          for result in "$CODEQL_RESULT" "$DEPS_RESULT" "$POLICY_RESULT"; do
+            if [ "$result" != "success" ] && [ "$result" != "skipped" ]; then
+              echo "A substantive security check did not succeed (result: $result)"
+              exit 1
+            fi
+          done
+          echo "All substantive security checks passed or were intentionally skipped."
