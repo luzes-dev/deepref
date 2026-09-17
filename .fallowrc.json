@@ -13,7 +13,10 @@
     "apps/web/src/lib/components/LoadingButton.svelte",
     "apps/web/src/lib/typewriter.svelte.ts",
     "apps/web/src/lib/components/ui/**/**",
-    "apps/web/src/lib/api/generated/**/**"
+    "apps/web/src/lib/api/generated/**/**",
+    "apps/web/src/lib/features/workflows/**",
+    "apps/web/src/lib/features/automations/**",
+    "apps/web/src/lib/features/notifications/**"
   ],
   "duplicates": {
     "minLines": 15,
@@ -144,6 +147,14 @@
     "svelte-sonner",
     "svelte-toolbelt",
     "tailwind-variants",
-    "vaul-svelte"
+    "vaul-svelte",
+    "@deepref/ui",
+    "rete",
+    "rete-area-plugin",
+    "rete-connection-plugin",
+    "rete-minimap-plugin",
+    "rete-render-utils",
+    "rete-svelte-plugin",
+    "sass"
   ]
 }
