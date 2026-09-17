@@ -19,15 +19,729 @@ import type {
 
 import type {
 	ApiErrorBody,
+	AssistantChatRequestDto,
+	AssistantConversationDto,
+	AssistantMessageDto,
 	AssistantToolDescriptor,
 	AssistantToolRequest,
-	AssistantToolResponse
+	AssistantToolResponse,
+	CreateAssistantConversationRequestDto
 } from '../models';
 
 import { customFetch } from '../../custom-fetch.ts';
 import type { ErrorType, BodyType } from '../../custom-fetch.ts';
 
 type SecondParameter<T extends (...args: never) => unknown> = Parameters<T>[1];
+
+export type chatWithProjectAssistantResponse200 = {
+	data: string;
+	status: 200;
+};
+
+export type chatWithProjectAssistantResponse400 = {
+	data: ApiErrorBody;
+	status: 400;
+};
+
+export type chatWithProjectAssistantResponse403 = {
+	data: ApiErrorBody;
+	status: 403;
+};
+
+export type chatWithProjectAssistantResponse404 = {
+	data: ApiErrorBody;
+	status: 404;
+};
+
+export type chatWithProjectAssistantResponse500 = {
+	data: ApiErrorBody;
+	status: 500;
+};
+
+export type chatWithProjectAssistantResponseSuccess = chatWithProjectAssistantResponse200 & {
+	headers: Headers;
+};
+export type chatWithProjectAssistantResponseError = (
+	| chatWithProjectAssistantResponse400
+	| chatWithProjectAssistantResponse403
+	| chatWithProjectAssistantResponse404
+	| chatWithProjectAssistantResponse500
+) & {
+	headers: Headers;
+};
+
+export const getChatWithProjectAssistantUrl = (projectId: string) => {
+	return `/api/projects/${projectId}/assistant/chat`;
+};
+
+export const chatWithProjectAssistant = async (
+	projectId: string,
+	assistantChatRequestDto: AssistantChatRequestDto,
+	options?: Parameters<typeof customFetch>[1]
+): Promise<chatWithProjectAssistantResponseSuccess> => {
+	const getHeaders = (
+		h?: NonNullable<RequestInit['headers']>
+	): Record<string, string | readonly string[]> => {
+		if (!h) return {};
+		if (h instanceof Headers) return Object.fromEntries(h.entries());
+		if (Array.isArray(h)) return Object.fromEntries(h);
+		return h;
+	};
+	return customFetch<chatWithProjectAssistantResponseSuccess>(
+		getChatWithProjectAssistantUrl(projectId),
+		{
+			...options,
+			method: 'POST',
+			headers: { 'Content-Type': 'application/json', ...getHeaders(options?.headers) },
+			body: JSON.stringify(assistantChatRequestDto)
+		}
+	);
+};
+
+export const getChatWithProjectAssistantMutationOptions = <
+	TError = ErrorType<ApiErrorBody>,
+	TContext = unknown
+>(options?: {
+	mutation?: CreateMutationOptions<
+		Awaited<ReturnType<typeof chatWithProjectAssistant>>,
+		TError,
+		ChatWithProjectAssistantMutationVariables,
+		TContext
+	>;
+	request?: SecondParameter<typeof customFetch>;
+}): CreateMutationOptions<
+	Awaited<ReturnType<typeof chatWithProjectAssistant>>,
+	TError,
+	ChatWithProjectAssistantMutationVariables,
+	TContext
+> => {
+	const mutationKey = ['chatWithProjectAssistant'];
+	const { mutation: mutationOptions, request: requestOptions } = options
+		? options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey
+			? options
+			: { ...options, mutation: { ...options.mutation, mutationKey } }
+		: { mutation: { mutationKey }, request: undefined };
+
+	const mutationFn: MutationFunction<
+		Awaited<ReturnType<typeof chatWithProjectAssistant>>,
+		ChatWithProjectAssistantMutationVariables
+	> = (props) => {
+		const { projectId, data } = props ?? {};
+
+		return chatWithProjectAssistant(projectId, data, requestOptions);
+	};
+
+	return { mutationFn, ...mutationOptions };
+};
+
+export type ChatWithProjectAssistantMutationResult = NonNullable<
+	Awaited<ReturnType<typeof chatWithProjectAssistant>>
+>;
+export type ChatWithProjectAssistantMutationBody = BodyType<AssistantChatRequestDto>;
+export type ChatWithProjectAssistantMutationError = ErrorType<ApiErrorBody>;
+export type ChatWithProjectAssistantMutationVariables = {
+	projectId: string;
+	data: BodyType<AssistantChatRequestDto>;
+};
+
+export const createChatWithProjectAssistant = <
+	TError = ErrorType<ApiErrorBody>,
+	TContext = unknown
+>(
+	options?: () => {
+		mutation?: CreateMutationOptions<
+			Awaited<ReturnType<typeof chatWithProjectAssistant>>,
+			TError,
+			ChatWithProjectAssistantMutationVariables,
+			TContext
+		>;
+		request?: SecondParameter<typeof customFetch>;
+	},
+	queryClient?: () => QueryClient
+): CreateMutationResult<
+	Awaited<ReturnType<typeof chatWithProjectAssistant>>,
+	TError,
+	ChatWithProjectAssistantMutationVariables,
+	TContext
+> => {
+	return createMutation(
+		() => ({ ...getChatWithProjectAssistantMutationOptions(options?.()) }),
+		queryClient
+	);
+};
+export type listProjectAssistantConversationsResponse200 = {
+	data: AssistantConversationDto[];
+	status: 200;
+};
+
+export type listProjectAssistantConversationsResponse400 = {
+	data: ApiErrorBody;
+	status: 400;
+};
+
+export type listProjectAssistantConversationsResponse404 = {
+	data: ApiErrorBody;
+	status: 404;
+};
+
+export type listProjectAssistantConversationsResponse500 = {
+	data: ApiErrorBody;
+	status: 500;
+};
+
+export type listProjectAssistantConversationsResponseSuccess =
+	listProjectAssistantConversationsResponse200 & {
+		headers: Headers;
+	};
+export type listProjectAssistantConversationsResponseError = (
+	| listProjectAssistantConversationsResponse400
+	| listProjectAssistantConversationsResponse404
+	| listProjectAssistantConversationsResponse500
+) & {
+	headers: Headers;
+};
+
+export const getListProjectAssistantConversationsUrl = (projectId: string) => {
+	return `/api/projects/${projectId}/assistant/conversations`;
+};
+
+export const listProjectAssistantConversations = async (
+	projectId: string,
+	options?: Parameters<typeof customFetch>[1]
+): Promise<listProjectAssistantConversationsResponseSuccess> => {
+	return customFetch<listProjectAssistantConversationsResponseSuccess>(
+		getListProjectAssistantConversationsUrl(projectId),
+		{
+			...options,
+			method: 'GET'
+		}
+	);
+};
+
+export const getListProjectAssistantConversationsQueryKey = (projectId: string) => {
+	return [`/api/projects/${projectId}/assistant/conversations`] as const;
+};
+
+export const getListProjectAssistantConversationsQueryOptions = <
+	TData = Awaited<ReturnType<typeof listProjectAssistantConversations>>,
+	TError = ErrorType<ApiErrorBody>
+>(
+	projectId: string,
+	options?: {
+		query?: Partial<
+			CreateQueryOptions<
+				Awaited<ReturnType<typeof listProjectAssistantConversations>>,
+				TError,
+				TData
+			>
+		>;
+		request?: SecondParameter<typeof customFetch>;
+	}
+) => {
+	const { query: queryOptions, request: requestOptions } = options ?? {};
+
+	const queryKey =
+		queryOptions?.queryKey ?? getListProjectAssistantConversationsQueryKey(projectId);
+
+	const queryFn: QueryFunction<Awaited<ReturnType<typeof listProjectAssistantConversations>>> = ({
+		signal
+	}) => listProjectAssistantConversations(projectId, { signal, ...requestOptions });
+
+	return {
+		queryKey,
+		queryFn,
+		enabled: projectId !== null && projectId !== undefined,
+		...queryOptions
+	} as CreateQueryOptions<
+		Awaited<ReturnType<typeof listProjectAssistantConversations>>,
+		TError,
+		TData
+	> & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type ListProjectAssistantConversationsQueryResult = NonNullable<
+	Awaited<ReturnType<typeof listProjectAssistantConversations>>
+>;
+export type ListProjectAssistantConversationsQueryError = ErrorType<ApiErrorBody>;
+
+export function createListProjectAssistantConversations<
+	TData = Awaited<ReturnType<typeof listProjectAssistantConversations>>,
+	TError = ErrorType<ApiErrorBody>
+>(
+	projectId: () => string,
+	options?: () => {
+		query?: Partial<
+			CreateQueryOptions<
+				Awaited<ReturnType<typeof listProjectAssistantConversations>>,
+				TError,
+				TData
+			>
+		>;
+		request?: SecondParameter<typeof customFetch>;
+	},
+	queryClient?: () => QueryClient
+): CreateQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> } {
+	const query = createQuery(
+		() => getListProjectAssistantConversationsQueryOptions(projectId(), options?.()),
+		queryClient
+	) as CreateQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> };
+
+	return query;
+}
+
+export const prefetchListProjectAssistantConversationsQuery = async <
+	TData = Awaited<ReturnType<typeof listProjectAssistantConversations>>,
+	TError = ErrorType<ApiErrorBody>
+>(
+	queryClient: QueryClient,
+	projectId: string,
+	options?: {
+		query?: Partial<
+			CreateQueryOptions<
+				Awaited<ReturnType<typeof listProjectAssistantConversations>>,
+				TError,
+				TData
+			>
+		>;
+		request?: SecondParameter<typeof customFetch>;
+	}
+): Promise<QueryClient> => {
+	const queryOptions = getListProjectAssistantConversationsQueryOptions(projectId, options);
+
+	await queryClient.prefetchQuery(queryOptions);
+
+	return queryClient;
+};
+
+export type createProjectAssistantConversationResponse201 = {
+	data: AssistantConversationDto;
+	status: 201;
+};
+
+export type createProjectAssistantConversationResponse400 = {
+	data: ApiErrorBody;
+	status: 400;
+};
+
+export type createProjectAssistantConversationResponse404 = {
+	data: ApiErrorBody;
+	status: 404;
+};
+
+export type createProjectAssistantConversationResponse500 = {
+	data: ApiErrorBody;
+	status: 500;
+};
+
+export type createProjectAssistantConversationResponseSuccess =
+	createProjectAssistantConversationResponse201 & {
+		headers: Headers;
+	};
+export type createProjectAssistantConversationResponseError = (
+	| createProjectAssistantConversationResponse400
+	| createProjectAssistantConversationResponse404
+	| createProjectAssistantConversationResponse500
+) & {
+	headers: Headers;
+};
+
+export const getCreateProjectAssistantConversationUrl = (projectId: string) => {
+	return `/api/projects/${projectId}/assistant/conversations`;
+};
+
+export const createProjectAssistantConversation = async (
+	projectId: string,
+	createAssistantConversationRequestDto: CreateAssistantConversationRequestDto,
+	options?: Parameters<typeof customFetch>[1]
+): Promise<createProjectAssistantConversationResponseSuccess> => {
+	const getHeaders = (
+		h?: NonNullable<RequestInit['headers']>
+	): Record<string, string | readonly string[]> => {
+		if (!h) return {};
+		if (h instanceof Headers) return Object.fromEntries(h.entries());
+		if (Array.isArray(h)) return Object.fromEntries(h);
+		return h;
+	};
+	return customFetch<createProjectAssistantConversationResponseSuccess>(
+		getCreateProjectAssistantConversationUrl(projectId),
+		{
+			...options,
+			method: 'POST',
+			headers: { 'Content-Type': 'application/json', ...getHeaders(options?.headers) },
+			body: JSON.stringify(createAssistantConversationRequestDto)
+		}
+	);
+};
+
+export const getCreateProjectAssistantConversationMutationOptions = <
+	TError = ErrorType<ApiErrorBody>,
+	TContext = unknown
+>(options?: {
+	mutation?: CreateMutationOptions<
+		Awaited<ReturnType<typeof createProjectAssistantConversation>>,
+		TError,
+		CreateProjectAssistantConversationMutationVariables,
+		TContext
+	>;
+	request?: SecondParameter<typeof customFetch>;
+}): CreateMutationOptions<
+	Awaited<ReturnType<typeof createProjectAssistantConversation>>,
+	TError,
+	CreateProjectAssistantConversationMutationVariables,
+	TContext
+> => {
+	const mutationKey = ['createProjectAssistantConversation'];
+	const { mutation: mutationOptions, request: requestOptions } = options
+		? options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey
+			? options
+			: { ...options, mutation: { ...options.mutation, mutationKey } }
+		: { mutation: { mutationKey }, request: undefined };
+
+	const mutationFn: MutationFunction<
+		Awaited<ReturnType<typeof createProjectAssistantConversation>>,
+		CreateProjectAssistantConversationMutationVariables
+	> = (props) => {
+		const { projectId, data } = props ?? {};
+
+		return createProjectAssistantConversation(projectId, data, requestOptions);
+	};
+
+	return { mutationFn, ...mutationOptions };
+};
+
+export type CreateProjectAssistantConversationMutationResult = NonNullable<
+	Awaited<ReturnType<typeof createProjectAssistantConversation>>
+>;
+export type CreateProjectAssistantConversationMutationBody =
+	BodyType<CreateAssistantConversationRequestDto>;
+export type CreateProjectAssistantConversationMutationError = ErrorType<ApiErrorBody>;
+export type CreateProjectAssistantConversationMutationVariables = {
+	projectId: string;
+	data: BodyType<CreateAssistantConversationRequestDto>;
+};
+
+export const createCreateProjectAssistantConversation = <
+	TError = ErrorType<ApiErrorBody>,
+	TContext = unknown
+>(
+	options?: () => {
+		mutation?: CreateMutationOptions<
+			Awaited<ReturnType<typeof createProjectAssistantConversation>>,
+			TError,
+			CreateProjectAssistantConversationMutationVariables,
+			TContext
+		>;
+		request?: SecondParameter<typeof customFetch>;
+	},
+	queryClient?: () => QueryClient
+): CreateMutationResult<
+	Awaited<ReturnType<typeof createProjectAssistantConversation>>,
+	TError,
+	CreateProjectAssistantConversationMutationVariables,
+	TContext
+> => {
+	return createMutation(
+		() => ({ ...getCreateProjectAssistantConversationMutationOptions(options?.()) }),
+		queryClient
+	);
+};
+export type deleteProjectAssistantConversationResponse204 = {
+	data: void;
+	status: 204;
+};
+
+export type deleteProjectAssistantConversationResponse400 = {
+	data: ApiErrorBody;
+	status: 400;
+};
+
+export type deleteProjectAssistantConversationResponse404 = {
+	data: ApiErrorBody;
+	status: 404;
+};
+
+export type deleteProjectAssistantConversationResponse500 = {
+	data: ApiErrorBody;
+	status: 500;
+};
+
+export type deleteProjectAssistantConversationResponseSuccess =
+	deleteProjectAssistantConversationResponse204 & {
+		headers: Headers;
+	};
+export type deleteProjectAssistantConversationResponseError = (
+	| deleteProjectAssistantConversationResponse400
+	| deleteProjectAssistantConversationResponse404
+	| deleteProjectAssistantConversationResponse500
+) & {
+	headers: Headers;
+};
+
+export const getDeleteProjectAssistantConversationUrl = (
+	projectId: string,
+	conversationId: string
+) => {
+	return `/api/projects/${projectId}/assistant/conversations/${conversationId}`;
+};
+
+export const deleteProjectAssistantConversation = async (
+	projectId: string,
+	conversationId: string,
+	options?: Parameters<typeof customFetch>[1]
+): Promise<deleteProjectAssistantConversationResponseSuccess> => {
+	return customFetch<deleteProjectAssistantConversationResponseSuccess>(
+		getDeleteProjectAssistantConversationUrl(projectId, conversationId),
+		{
+			...options,
+			method: 'DELETE'
+		}
+	);
+};
+
+export const getDeleteProjectAssistantConversationMutationOptions = <
+	TError = ErrorType<ApiErrorBody>,
+	TContext = unknown
+>(options?: {
+	mutation?: CreateMutationOptions<
+		Awaited<ReturnType<typeof deleteProjectAssistantConversation>>,
+		TError,
+		DeleteProjectAssistantConversationMutationVariables,
+		TContext
+	>;
+	request?: SecondParameter<typeof customFetch>;
+}): CreateMutationOptions<
+	Awaited<ReturnType<typeof deleteProjectAssistantConversation>>,
+	TError,
+	DeleteProjectAssistantConversationMutationVariables,
+	TContext
+> => {
+	const mutationKey = ['deleteProjectAssistantConversation'];
+	const { mutation: mutationOptions, request: requestOptions } = options
+		? options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey
+			? options
+			: { ...options, mutation: { ...options.mutation, mutationKey } }
+		: { mutation: { mutationKey }, request: undefined };
+
+	const mutationFn: MutationFunction<
+		Awaited<ReturnType<typeof deleteProjectAssistantConversation>>,
+		DeleteProjectAssistantConversationMutationVariables
+	> = (props) => {
+		const { projectId, conversationId } = props ?? {};
+
+		return deleteProjectAssistantConversation(projectId, conversationId, requestOptions);
+	};
+
+	return { mutationFn, ...mutationOptions };
+};
+
+export type DeleteProjectAssistantConversationMutationResult = NonNullable<
+	Awaited<ReturnType<typeof deleteProjectAssistantConversation>>
+>;
+
+export type DeleteProjectAssistantConversationMutationError = ErrorType<ApiErrorBody>;
+export type DeleteProjectAssistantConversationMutationVariables = {
+	projectId: string;
+	conversationId: string;
+};
+
+export const createDeleteProjectAssistantConversation = <
+	TError = ErrorType<ApiErrorBody>,
+	TContext = unknown
+>(
+	options?: () => {
+		mutation?: CreateMutationOptions<
+			Awaited<ReturnType<typeof deleteProjectAssistantConversation>>,
+			TError,
+			DeleteProjectAssistantConversationMutationVariables,
+			TContext
+		>;
+		request?: SecondParameter<typeof customFetch>;
+	},
+	queryClient?: () => QueryClient
+): CreateMutationResult<
+	Awaited<ReturnType<typeof deleteProjectAssistantConversation>>,
+	TError,
+	DeleteProjectAssistantConversationMutationVariables,
+	TContext
+> => {
+	return createMutation(
+		() => ({ ...getDeleteProjectAssistantConversationMutationOptions(options?.()) }),
+		queryClient
+	);
+};
+export type listProjectAssistantConversationMessagesResponse200 = {
+	data: AssistantMessageDto[];
+	status: 200;
+};
+
+export type listProjectAssistantConversationMessagesResponse400 = {
+	data: ApiErrorBody;
+	status: 400;
+};
+
+export type listProjectAssistantConversationMessagesResponse404 = {
+	data: ApiErrorBody;
+	status: 404;
+};
+
+export type listProjectAssistantConversationMessagesResponse500 = {
+	data: ApiErrorBody;
+	status: 500;
+};
+
+export type listProjectAssistantConversationMessagesResponseSuccess =
+	listProjectAssistantConversationMessagesResponse200 & {
+		headers: Headers;
+	};
+export type listProjectAssistantConversationMessagesResponseError = (
+	| listProjectAssistantConversationMessagesResponse400
+	| listProjectAssistantConversationMessagesResponse404
+	| listProjectAssistantConversationMessagesResponse500
+) & {
+	headers: Headers;
+};
+
+export const getListProjectAssistantConversationMessagesUrl = (
+	projectId: string,
+	conversationId: string
+) => {
+	return `/api/projects/${projectId}/assistant/conversations/${conversationId}/messages`;
+};
+
+export const listProjectAssistantConversationMessages = async (
+	projectId: string,
+	conversationId: string,
+	options?: Parameters<typeof customFetch>[1]
+): Promise<listProjectAssistantConversationMessagesResponseSuccess> => {
+	return customFetch<listProjectAssistantConversationMessagesResponseSuccess>(
+		getListProjectAssistantConversationMessagesUrl(projectId, conversationId),
+		{
+			...options,
+			method: 'GET'
+		}
+	);
+};
+
+export const getListProjectAssistantConversationMessagesQueryKey = (
+	projectId: string,
+	conversationId: string
+) => {
+	return [
+		`/api/projects/${projectId}/assistant/conversations/${conversationId}/messages`
+	] as const;
+};
+
+export const getListProjectAssistantConversationMessagesQueryOptions = <
+	TData = Awaited<ReturnType<typeof listProjectAssistantConversationMessages>>,
+	TError = ErrorType<ApiErrorBody>
+>(
+	projectId: string,
+	conversationId: string,
+	options?: {
+		query?: Partial<
+			CreateQueryOptions<
+				Awaited<ReturnType<typeof listProjectAssistantConversationMessages>>,
+				TError,
+				TData
+			>
+		>;
+		request?: SecondParameter<typeof customFetch>;
+	}
+) => {
+	const { query: queryOptions, request: requestOptions } = options ?? {};
+
+	const queryKey =
+		queryOptions?.queryKey ??
+		getListProjectAssistantConversationMessagesQueryKey(projectId, conversationId);
+
+	const queryFn: QueryFunction<
+		Awaited<ReturnType<typeof listProjectAssistantConversationMessages>>
+	> = ({ signal }) =>
+		listProjectAssistantConversationMessages(projectId, conversationId, {
+			signal,
+			...requestOptions
+		});
+
+	return {
+		queryKey,
+		queryFn,
+		enabled:
+			projectId !== null &&
+			projectId !== undefined &&
+			conversationId !== null &&
+			conversationId !== undefined,
+		...queryOptions
+	} as CreateQueryOptions<
+		Awaited<ReturnType<typeof listProjectAssistantConversationMessages>>,
+		TError,
+		TData
+	> & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type ListProjectAssistantConversationMessagesQueryResult = NonNullable<
+	Awaited<ReturnType<typeof listProjectAssistantConversationMessages>>
+>;
+export type ListProjectAssistantConversationMessagesQueryError = ErrorType<ApiErrorBody>;
+
+export function createListProjectAssistantConversationMessages<
+	TData = Awaited<ReturnType<typeof listProjectAssistantConversationMessages>>,
+	TError = ErrorType<ApiErrorBody>
+>(
+	projectId: () => string,
+	conversationId: () => string,
+	options?: () => {
+		query?: Partial<
+			CreateQueryOptions<
+				Awaited<ReturnType<typeof listProjectAssistantConversationMessages>>,
+				TError,
+				TData
+			>
+		>;
+		request?: SecondParameter<typeof customFetch>;
+	},
+	queryClient?: () => QueryClient
+): CreateQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> } {
+	const query = createQuery(
+		() =>
+			getListProjectAssistantConversationMessagesQueryOptions(
+				projectId(),
+				conversationId(),
+				options?.()
+			),
+		queryClient
+	) as CreateQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> };
+
+	return query;
+}
+
+export const prefetchListProjectAssistantConversationMessagesQuery = async <
+	TData = Awaited<ReturnType<typeof listProjectAssistantConversationMessages>>,
+	TError = ErrorType<ApiErrorBody>
+>(
+	queryClient: QueryClient,
+	projectId: string,
+	conversationId: string,
+	options?: {
+		query?: Partial<
+			CreateQueryOptions<
+				Awaited<ReturnType<typeof listProjectAssistantConversationMessages>>,
+				TError,
+				TData
+			>
+		>;
+		request?: SecondParameter<typeof customFetch>;
+	}
+): Promise<QueryClient> => {
+	const queryOptions = getListProjectAssistantConversationMessagesQueryOptions(
+		projectId,
+		conversationId,
+		options
+	);
+
+	await queryClient.prefetchQuery(queryOptions);
+
+	return queryClient;
+};
 
 export type listProjectAssistantToolsResponse200 = {
 	data: AssistantToolDescriptor[];

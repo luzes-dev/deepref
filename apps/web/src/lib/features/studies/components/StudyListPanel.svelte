@@ -1,10 +1,10 @@
 <script lang="ts">
 	import type { StudyDto } from '$lib/api/generated/models';
-	import { Button } from '$lib/components/ui/button';
-	import * as Field from '$lib/components/ui/field';
-	import { Input } from '$lib/components/ui/input';
-	import { Separator } from '$lib/components/ui/separator';
-	import { StatePanel, Surface } from '$lib/components/layout';
+	import { Button } from '@deepref/ui/button';
+	import * as Field from '@deepref/ui/field';
+	import { Input } from '@deepref/ui/input';
+	import { Separator } from '@deepref/ui/separator';
+	import { StatePanel, Surface } from '@deepref/ui/layout';
 	import { cn } from '$lib/utils';
 
 	let {
@@ -28,8 +28,8 @@
 
 <Surface
 	as="section"
-	tone="default"
-	class="flex min-h-0 flex-col gap-4 p-4 sm:p-5"
+	tone="plain"
+	class="flex min-h-0 flex-col gap-4 border-b border-border-subtle pb-5 lg:border-r lg:border-b-0 lg:pr-5"
 	label="Study groups"
 >
 	<div class="border-b border-border/70 pb-4">
@@ -40,26 +40,29 @@
 		</p>
 	</div>
 	<div class="flex flex-col gap-4">
-		<form
-			class="flex flex-col gap-2"
-			onsubmit={(event) => {
-				event.preventDefault();
-				onCreate();
-			}}
-		>
-			<Field.FieldGroup>
-				<Field.Field>
-					<Field.FieldLabel for="new-study-title">New study title</Field.FieldLabel>
-					<Input
-						id="new-study-title"
-						bind:value={title}
-						placeholder="e.g. AMBIENT-AI Trial"
-						required
-					/>
-				</Field.Field>
-			</Field.FieldGroup>
-			<Button type="submit" disabled={creating}>Create study</Button>
-		</form>
+		<details class="disclosure" open>
+			<summary>Create a study group</summary>
+			<form
+				class="flex flex-col gap-2"
+				onsubmit={(event) => {
+					event.preventDefault();
+					onCreate();
+				}}
+			>
+				<Field.FieldGroup>
+					<Field.Field>
+						<Field.FieldLabel for="new-study-title">New study title</Field.FieldLabel>
+						<Input
+							id="new-study-title"
+							bind:value={title}
+							placeholder="e.g. AMBIENT-AI Trial"
+							required
+						/>
+					</Field.Field>
+				</Field.FieldGroup>
+				<Button type="submit" disabled={creating}>Create study</Button>
+			</form>
+		</details>
 		<Separator />
 		<div class="flex flex-col gap-2" aria-live="polite">
 			{#if pending}
@@ -89,7 +92,7 @@
 					>
 						<span class="font-medium">{study.title}</span>
 						<span class="text-xs text-muted-foreground">
-							Open to inspect membership · revision {study.revision}
+							View papers and study details
 						</span>
 					</button>
 				{/each}

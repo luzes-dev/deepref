@@ -5,6 +5,20 @@ import AxeBuilder from '@axe-core/playwright';
 const projectId = 'visual-project';
 const reportId = '00000000-0000-4000-8000-000000000001';
 const api = `**/api/projects/${projectId}`;
+const prismaFixtureSvg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 640 360">
+<rect width="640" height="360" fill="#fff"/>
+<defs><marker id="arrow" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 z" fill="#0a6b58"/></marker></defs>
+<g font-family="Arial, sans-serif" fill="#1d302c">
+<text x="24" y="26" font-size="16" font-weight="700">PRISMA 2020 flow · review fixture</text>
+<text x="24" y="48" font-size="11" font-weight="700" fill="#587069">IDENTIFICATION</text>
+<text x="366" y="48" font-size="11" font-weight="700" fill="#587069">SCREENING AND INCLUSION</text>
+<g stroke="#0a6b58" stroke-width="1.5">
+<rect x="24" y="60" width="250" height="48" rx="6" fill="#e7f3ef"/><rect x="24" y="126" width="250" height="48" rx="6" fill="#f4f7f5"/><rect x="24" y="192" width="250" height="48" rx="6" fill="#e7f3ef"/><rect x="24" y="258" width="250" height="48" rx="6" fill="#f4f7f5"/>
+<rect x="366" y="60" width="250" height="48" rx="6" fill="#e7f3ef"/><rect x="366" y="126" width="250" height="48" rx="6" fill="#f4f7f5"/><rect x="366" y="192" width="250" height="48" rx="6" fill="#e7f3ef"/><rect x="366" y="258" width="250" height="48" rx="6" fill="#dcefe9"/>
+</g>
+<g font-size="13" font-weight="700"><text x="38" y="82">Records identified</text><text x="38" y="99" font-size="11" font-weight="400">n = 12</text><text x="38" y="148">After duplicates removed</text><text x="38" y="165" font-size="11" font-weight="400">n = 10 · duplicates n = 2</text><text x="38" y="214">Records screened</text><text x="38" y="231" font-size="11" font-weight="400">n = 10</text><text x="38" y="280">Title/abstract excluded</text><text x="38" y="297" font-size="11" font-weight="400">n = 2</text><text x="380" y="82">Reports sought</text><text x="380" y="99" font-size="11" font-weight="400">n = 8</text><text x="380" y="148">Reports not retrieved</text><text x="380" y="165" font-size="11" font-weight="400">n = 1</text><text x="380" y="214">Full texts assessed</text><text x="380" y="231" font-size="11" font-weight="400">n = 7</text><text x="380" y="280">Included studies</text><text x="380" y="297" font-size="11" font-weight="400">n = 3</text></g>
+<g fill="none" stroke="#0a6b58" stroke-width="2" marker-end="url(#arrow)"><path d="M149 108 V126"/><path d="M149 174 V192"/><path d="M149 240 V258"/><path d="M274 84 H366"/><path d="M491 108 V126"/><path d="M491 174 V192"/><path d="M491 240 V258"/></g>
+</g></svg>`;
 
 async function assertNoHorizontalOverflow(page: Page) {
 	const dimensions = await page.evaluate(() => ({
@@ -59,10 +73,7 @@ async function installPrismaFixture(page: Page) {
 	);
 	await page.route(`${api}/exports/**`, (route) => {
 		const kind = route.request().url().split('/').pop() ?? 'artifact';
-		const body =
-			kind === 'prisma.svg'
-				? '<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 640 360"><text x="20" y="40">Fixture PRISMA</text></svg>'
-				: `${kind} fixture`;
+		const body = kind === 'prisma.svg' ? prismaFixtureSvg : `${kind} fixture`;
 		return route.fulfill({
 			headers: {
 				'content-type': kind === 'prisma.svg' ? 'image/svg+xml' : 'text/plain',
@@ -128,7 +139,18 @@ test.describe('analysis workflow smoke', () => {
 		await page.goto(`/projects/${projectId}/prisma`);
 		await settleVisualPage(page);
 		await expect(page.getByRole('heading', { name: 'PRISMA flow', exact: true })).toBeVisible();
-		await expect(page.getByRole('img', { name: /PRISMA flow diagram/ })).toBeVisible();
+		const diagram = page.getByRole('img', { name: /PRISMA flow diagram/ });
+		await expect(diagram).toBeVisible();
+		await expect
+			.poll(async () =>
+				diagram.evaluate(
+					(element) =>
+						element instanceof HTMLImageElement &&
+						element.complete &&
+						element.naturalWidth > 0
+				)
+			)
+			.toBe(true);
 		await expect(page.getByRole('button', { name: 'PRISMA PNG' })).toBeVisible();
 		await assertNoHorizontalOverflow(page);
 		expect(await runScopedSeriousCriticalAxe(page, '[data-testid="prisma-page"]')).toEqual([]);

@@ -248,9 +248,11 @@ test('creates a field, generates, edits, reviews provenance, and refreshes accep
 	const state = await mockExtractionPage(page, 'accept');
 	await page.goto('/projects/project-1/extraction?study=study-1');
 
-	await expect(page.getByRole('heading', { name: 'Extraction' })).toBeVisible();
+	await expect(page.getByRole('heading', { name: 'Extraction', exact: true })).toBeVisible();
 	await expect(page.getByRole('link', { name: 'Extraction' })).toBeVisible();
-	await expect(page.getByTestId('extraction-proposal-only')).toContainText('Proposal only');
+	await expect(page.getByTestId('extraction-proposal-only')).toContainText(
+		'Review before saving'
+	);
 
 	await page.getByLabel('Field key').fill('sample_size');
 	await page.getByLabel('Label').fill('Sample size');
@@ -264,6 +266,7 @@ test('creates a field, generates, edits, reviews provenance, and refreshes accep
 	await expect(state.createdFieldBody).toContain('"value_type":"number"');
 	await expect(state.createdFieldBody).toContain('"required":true');
 
+	await page.getByRole('tab', { name: 'Review proposals' }).click();
 	await page.getByRole('button', { name: 'Generate proposal' }).click();
 	await expect(page.getByTestId('extraction-proposal-editor')).toBeVisible();
 	await page.getByRole('button', { name: 'Mark insufficient evidence' }).click();
@@ -278,6 +281,7 @@ test('creates a field, generates, edits, reviews provenance, and refreshes accep
 	await expect(page.getByTestId('extraction-proposal-editor')).toContainText('hash-7');
 	await page.getByRole('button', { name: 'Accept reviewed values' }).click();
 
+	await page.getByRole('tab', { name: 'Accepted values' }).click();
 	await expect(page.getByTestId('accepted-extraction-values')).toContainText('84.5');
 	await expect(page.getByTestId('accepted-extraction-values')).toContainText('approved');
 	await expect(state.decisionBody).toContain('"kind":"data_extraction"');
@@ -294,6 +298,7 @@ test('keeps a proposal visible when approval conflicts', async ({ page }) => {
 	await page.getByLabel('Version').fill('2');
 	await page.getByLabel('Required field').click();
 	await page.getByRole('button', { name: 'Add field' }).click();
+	await page.getByRole('tab', { name: 'Review proposals' }).click();
 	await page.getByRole('button', { name: 'Generate proposal' }).click();
 	await expect(page.getByTestId('extraction-proposal-editor')).toBeVisible();
 	await page.getByRole('button', { name: 'Reject proposal' }).click();
@@ -317,6 +322,7 @@ test('shows deterministic loading and empty states before review begins', async 
 		'loading'
 	);
 	await expect(page.getByTestId('extraction-fields-loading')).toBeVisible();
+	await page.getByRole('tab', { name: 'Review proposals' }).click();
 	await expect(page.getByTestId('extraction-review-loading')).toBeVisible();
 
 	await page.unrouteAll({ behavior: 'ignoreErrors' });

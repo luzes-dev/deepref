@@ -1,0 +1,22 @@
+{
+  "compilerOptions": {
+    "moduleResolution": "bundler",
+    "module": "esnext",
+    "target": "esnext",
+    "lib": ["esnext", "dom", "dom.iterable"],
+    "strict": true,
+    "noEmit": true,
+    "esModuleInterop": true,
+    "skipLibCheck": true,
+    "forceConsistentCasingInFileNames": true,
+    "resolveJsonModule": true,
+    "allowJs": true,
+    "checkJs": true,
+    "sourceMap": true,
+    "paths": {
+      "@deepref/ui": ["./src/index.ts"],
+      "@deepref/ui/*": ["./src/*"]
+    }
+  },
+  "include": ["src/**/*", ".storybook/**/*", "stories/**/*"]
+}

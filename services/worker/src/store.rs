@@ -817,6 +817,51 @@ async fn persist_dead_letter(
     Ok(())
 }
 
+fn acquisition_notification(
+    status: &str,
+    project_id: Uuid,
+    acquisition_id: Uuid,
+    fetched_count: i32,
+    failed_count: i32,
+) -> deepref_postgres::NotificationDraft {
+    let plural = |count: i32| if count == 1 { "article" } else { "articles" };
+    let project_id = Some(project_id);
+    let payload = serde_json::json!({
+        "acquisition_id": acquisition_id,
+        "fetched_count": fetched_count,
+        "failed_count": failed_count,
+    });
+    match status {
+        "completed" => {
+            let mut body = format!("{} {} imported.", fetched_count, plural(fetched_count));
+            if failed_count > 0 {
+                body.push_str(&format!(" {} could not be fetched.", failed_count));
+            }
+            deepref_postgres::NotificationDraft::success(
+                "acquisition.completed",
+                project_id,
+                "Import completed",
+                Some(body),
+                payload,
+            )
+        }
+        _ => {
+            let body = format!(
+                "{} {} imported before the run stopped.",
+                fetched_count,
+                plural(fetched_count)
+            );
+            deepref_postgres::NotificationDraft::error(
+                "acquisition.failed",
+                project_id,
+                "Import failed",
+                Some(body),
+                payload,
+            )
+        }
+    }
+}
+
 async fn complete_item_and_claim(
     tx: &mut Transaction<'_, Postgres>,
     event: &EventEnvelope<WorkFetchRequested>,
@@ -856,7 +901,7 @@ async fn complete_item_and_claim(
     .bind(event.payload.ingestion_id)
     .fetch_one(&mut **tx)
     .await?;
-    let acquisition_status = sqlx::query_scalar::<_, String>(
+    let (acquisition_status, fetched_count, failed_count) = sqlx::query_as::<_, (String, i32, i32)>(
         r#"UPDATE acquisition_runs SET
         status = CASE WHEN status='cancelled' THEN status
           WHEN NOT EXISTS (SELECT 1 FROM ingestion_items WHERE ingestion_id=$1 AND status IN ('queued','fetching'))
@@ -868,7 +913,7 @@ async fn complete_item_and_claim(
         failed_count=(SELECT count(*)::int FROM ingestion_items WHERE ingestion_id=$1 AND status IN ('failed','not_found')),
         queued_count=(SELECT count(*)::int FROM ingestion_items WHERE ingestion_id=$1 AND status IN ('queued','fetching'))
         WHERE id=$1
-        RETURNING status"#,
+        RETURNING status, fetched_count, failed_count"#,
     )
     .bind(event.payload.ingestion_id)
     .fetch_one(&mut **tx)
@@ -882,6 +927,18 @@ async fn complete_item_and_claim(
             },
         )
         .await?;
+    }
+    if previous_acquisition_status != acquisition_status
+        && matches!(acquisition_status.as_str(), "completed" | "failed")
+    {
+        let draft = acquisition_notification(
+            &acquisition_status,
+            event.payload.project_id,
+            event.payload.ingestion_id,
+            fetched_count,
+            failed_count,
+        );
+        deepref_postgres::record_notification_in_transaction(tx, &draft).await?;
     }
     let completed = sqlx::query(
         "UPDATE processed_events SET completed_at=now(),processed_at=now(),owner_token=NULL,lease_expires_at=NULL,last_error=$3 \

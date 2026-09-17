@@ -2,6 +2,7 @@ mod acquisition;
 mod agent_tools;
 mod ai;
 mod appraisal;
+mod assistant;
 mod audit_export;
 mod automations;
 mod deduplication;
@@ -10,6 +11,7 @@ mod extraction;
 mod graph;
 mod jobs;
 mod legacy_import;
+mod notifications;
 mod prisma;
 mod protocol;
 mod review_calibration;
@@ -55,6 +57,11 @@ pub use appraisal::{
     AppraisalAssessmentRecord, AppraisalError, AppraisalEvidenceRecord, complete_appraisal,
     complete_appraisal_in_transaction, get_appraisal, list_appraisals,
 };
+pub use assistant::{
+    AppendAssistantMessage, AssistantConversationRecord, AssistantError, AssistantMessageRecord,
+    append_assistant_message, create_assistant_conversation, delete_assistant_conversation,
+    get_assistant_conversation, list_assistant_conversations, list_assistant_messages,
+};
 pub use audit_export::{AuditExportRow, load_audit_export_rows};
 pub use automations::{
     AutomationDispatchResult, AutomationError, AutomationFinalization, begin_next_automation_step,
@@ -87,6 +94,11 @@ pub use jobs::{
     get_claimed_automation_job_project_id_for_run, job, recover_expired_jobs, renew_job,
 };
 pub use legacy_import::{LegacyImportCounts, import_legacy};
+pub use notifications::{
+    MarkNotificationsRead, NotificationDraft, NotificationPage, NotificationRecord,
+    NotificationSeverity, NotificationUnreadSummary, list_notifications, mark_notifications_read,
+    record_notification, record_notification_in_transaction, unread_summary,
+};
 pub use prisma::{PrismaProjectionError, get_prisma_projection};
 pub use protocol::{
     ProtocolActor, ProtocolDocument, ProtocolError, get_protocol_editor, get_published_protocol,

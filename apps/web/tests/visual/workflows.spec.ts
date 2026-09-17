@@ -34,7 +34,7 @@ test.describe('DeepRef workflow family visual coverage', () => {
 
 	test('Collect: imports', async ({ page }) => {
 		await openWorkflow(page, '/discovery/imports', 'Imports');
-		await expect(page.getByRole('heading', { name: 'Start an ingestion' })).toBeVisible();
+		await expect(page.getByRole('heading', { name: 'Import articles' })).toBeVisible();
 		await captureDarkViewport(page, 'collect-imports.png');
 	});
 
@@ -89,21 +89,39 @@ test.describe('DeepRef workflow family visual coverage', () => {
 	test('Review: extraction', async ({ page }) => {
 		await openWorkflow(page, '/extraction', 'Extraction');
 		await expect(page.getByTestId('extraction-study-empty')).toBeVisible();
+		await page.getByRole('tab', { name: 'Review proposals' }).click();
 		await expect(page.getByTestId('extraction-review-empty')).toBeVisible();
+		await page.getByRole('tab', { name: 'Fields', exact: true }).click();
 		await captureDarkViewport(page, 'review-extraction.png');
 	});
 
 	test('Operate: automations', async ({ page }) => {
-		await openWorkflow(page, '/automations', 'Automation Center');
-		await expect(page.getByText('project_maintenance.v1', { exact: true })).toBeVisible();
-		await expect(page.getByRole('heading', { name: 'Recent runs' })).toBeVisible();
+		await openWorkflow(page, '/automations', 'Automations');
+		await expect(page.getByText('Project maintenance', { exact: true })).toBeVisible();
+		await expect(page.getByTestId('automation-add-definition')).toBeVisible();
+		await expect(page.getByTestId('automation-editor')).toHaveCount(0);
 		await captureDarkViewport(page, 'operate-automations.png');
 	});
 
+	test('Operate: automation editor', async ({ page }) => {
+		await openWorkflow(page, '/automations', 'Automations');
+		await page.getByTestId('automation-add-definition').click();
+		await expect(page.getByTestId('automation-editor')).toBeVisible();
+		await expect(page.locator('[data-workflow-node]').first()).toBeVisible();
+		await settleVisualPage(page);
+		const violations = await runSeriousCriticalAxe(page);
+		expect(violations, JSON.stringify(violations, null, 2)).toEqual([]);
+		await captureDarkViewport(page, 'operate-automation-editor.png');
+	});
+
 	test('Operate: assistant', async ({ page }) => {
-		await openWorkflow(page, '/assistant', 'Project Assistant');
+		await openWorkflow(page, '/assistant', 'Assistant');
 		await expect(page.getByTestId('assistant-tool-get_project_protocol')).toBeVisible();
 		await expect(page.getByTestId('assistant-tool-propose_screening_decision')).toBeVisible();
+		await page.getByTestId('assistant-tool-propose_screening_decision').click();
+		await expect(page.locator('[data-workflow-node]')).toHaveCount(3);
+		await expect(page.getByRole('slider', { name: 'Zoom', exact: true })).toBeVisible();
+		await page.getByTestId('workflow-editor').scrollIntoViewIfNeeded();
 		await captureDarkViewport(page, 'operate-assistant.png');
 	});
 });

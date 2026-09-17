@@ -30,12 +30,12 @@
 	import { resolve } from '$app/paths';
 	import { pushState, replaceState } from '$app/navigation';
 	import { ApiError } from '$lib/api/custom-fetch';
-	import { Badge } from '$lib/components/ui/badge';
-	import { Button } from '$lib/components/ui/button';
-	import * as Card from '$lib/components/ui/card';
-	import * as Empty from '$lib/components/ui/empty';
-	import { Input } from '$lib/components/ui/input';
-	import { Skeleton } from '$lib/components/ui/skeleton';
+	import { Badge } from '@deepref/ui/badge';
+	import { Button } from '@deepref/ui/button';
+	import * as Card from '@deepref/ui/card';
+	import * as Empty from '@deepref/ui/empty';
+	import { Input } from '@deepref/ui/input';
+	import { Skeleton } from '@deepref/ui/skeleton';
 	import CriteriaPanel from '$lib/features/screening/components/CriteriaPanel.svelte';
 	import ScreeningFeedback from '$lib/features/screening/components/ScreeningFeedback.svelte';
 	import ScreeningHistory from '$lib/features/screening/components/ScreeningHistory.svelte';
@@ -436,13 +436,7 @@
 <div class="mx-auto flex w-full max-w-[1480px] flex-col gap-5 p-4 md:gap-6 md:p-8">
 	<header class="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
 		<div class="flex min-w-0 flex-col gap-2">
-			<div
-				class="flex flex-wrap items-center gap-2 text-xs font-semibold tracking-[0.12em] text-primary uppercase"
-			>
-				<ScanSearch aria-hidden="true" /> Evidence workspace
-				<span class="text-muted-foreground">/</span> full-text screening
-			</div>
-			<h1 class="editorial-title text-4xl leading-none sm:text-5xl">Screen full text</h1>
+			<h1 class="editorial-title text-2xl leading-tight sm:text-3xl">Screen full text</h1>
 			<p class="max-w-2xl text-sm leading-6 text-muted-foreground sm:text-base">
 				Review protocol criteria beside the source PDF and keep every decision auditable.
 			</p>

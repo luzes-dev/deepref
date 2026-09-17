@@ -3,8 +3,8 @@
 		FullTextExclusionReasonDto,
 		ScreeningDecisionInput
 	} from '$lib/api/generated/models';
-	import { Badge } from '$lib/components/ui/badge';
-	import { Button } from '$lib/components/ui/button';
+	import { Badge } from '@deepref/ui/badge';
+	import { Button } from '@deepref/ui/button';
 	import { Check, CircleHelp, RotateCcw, X } from '@lucide/svelte';
 
 	let {

@@ -14,6 +14,7 @@ use super::review_runs::{
     ReviewFinalization, accepted_attempt_from_row, assert_worker_lease, find_accepted_attempt,
     subject_is_current_in_transaction,
 };
+use crate::notifications::{NotificationDraft, record_notification_in_transaction};
 
 pub enum ReviewOutcome<'a> {
     Candidate {
@@ -332,91 +333,16 @@ pub async fn complete_review_outcome(
             None,
         )
     } else if let Some((code, message)) = blocked {
-        if message.trim().is_empty() || message.len() > 4096 {
-            return Err(PostgresReviewError::InvalidState(
-                "terminal review error metadata is invalid".to_owned(),
-            ));
-        }
-        let state = ReviewRunState::Blocked {
-            code,
-            message: message.to_owned(),
-        };
-        (
-            state,
-            None,
-            serde_json::json!({
-                "state": "blocked",
-                "code": code.as_str(),
-                "message": message
-            }),
-            None,
-        )
+        resolve_blocked_outcome(code, message)?
     } else {
-        let proposal = proposal.ok_or_else(|| {
-            PostgresReviewError::InvalidState("completed review outcome has no proposal".to_owned())
-        })?;
-        let candidate_hash =
-            ReviewHash::parse(hash_json(&serde_json::to_value(&proposal.draft)?)?)?;
-        let proposal_id = if let Some(row) = sqlx::query(
-            "SELECT proposal_id,model_run_id
-             FROM review_proposal_finalizations
-             WHERE project_id=$1 AND automation_run_id=$2 AND candidate_hash=$3
-             FOR UPDATE",
-        )
-        .bind(run.snapshot.project_id.as_uuid())
-        .bind(run.snapshot.id.as_uuid())
-        .bind(candidate_hash.as_str())
-        .fetch_optional(&mut *transaction)
-        .await?
-        {
-            if row.get::<Uuid, _>("model_run_id") != proposal.model_run_id {
-                return Err(PostgresReviewError::FinalizationConflict);
-            }
-            row.get("proposal_id")
-        } else {
-            let persisted =
-                crate::ai::create_proposal_in_transaction(&mut transaction, proposal).await?;
-            sqlx::query(
-                "INSERT INTO review_proposal_finalizations
-                 (project_id,automation_run_id,candidate_hash,proposal_id,model_run_id)
-                 VALUES ($1,$2,$3,$4,$5)
-                 ON CONFLICT (project_id,automation_run_id,candidate_hash) DO NOTHING",
-            )
-            .bind(run.snapshot.project_id.as_uuid())
-            .bind(run.snapshot.id.as_uuid())
-            .bind(candidate_hash.as_str())
-            .bind(persisted.id)
-            .bind(persisted.model_run_id)
-            .execute(&mut *transaction)
-            .await?;
-            let row = sqlx::query(
-                "SELECT proposal_id,model_run_id
-                 FROM review_proposal_finalizations
-                 WHERE project_id=$1 AND automation_run_id=$2 AND candidate_hash=$3
-                 FOR UPDATE",
-            )
-            .bind(run.snapshot.project_id.as_uuid())
-            .bind(run.snapshot.id.as_uuid())
-            .bind(candidate_hash.as_str())
-            .fetch_one(&mut *transaction)
-            .await?;
-            if row.get::<Uuid, _>("model_run_id") != persisted.model_run_id {
-                return Err(PostgresReviewError::FinalizationConflict);
-            }
-            row.get("proposal_id")
-        };
-        (
-            ReviewRunState::Completed { proposal_id },
-            Some(proposal_id),
-            serde_json::json!({"state":"completed","proposal_id":proposal_id}),
-            Some(candidate_hash),
-        )
+        resolve_candidate_proposal(&mut transaction, run, proposal).await?
     };
 
-    let (state_name, state_code, state_message) = match &state {
+    let (state_name, state_code, state_message): (&str, Option<&str>, Option<String>) = match &state
+    {
         ReviewRunState::Completed { .. } => ("completed", None, None),
         ReviewRunState::Blocked { code, message } => {
-            ("blocked", Some(code.as_str()), Some(message.as_str()))
+            ("blocked", Some(code.as_str()), Some(message.clone()))
         }
         ReviewRunState::Queued | ReviewRunState::Running | ReviewRunState::Failed { .. } => {
             unreachable!("terminal completion only produces terminal states")
@@ -432,7 +358,7 @@ pub async fn complete_review_outcome(
     .bind(run.snapshot.id.as_uuid())
     .bind(state_name)
     .bind(state_code)
-    .bind(state_message)
+    .bind(state_message.clone())
     .bind(proposal_id)
     .bind(candidate_hash.as_ref().map(ReviewHash::as_str))
     .execute(&mut *transaction)
@@ -477,9 +403,157 @@ pub async fn complete_review_outcome(
     )
     .await
     .map_err(map_automation_error)?;
+    record_review_outcome_notification_in_transaction(
+        &mut transaction,
+        run,
+        state_name,
+        state_message.as_deref(),
+        proposal_id,
+    )
+    .await?;
     transaction.commit().await?;
     Ok(match proposal_id {
         Some(proposal_id) => ReviewFinalization::Completed { proposal_id },
         None => ReviewFinalization::Blocked,
     })
+}
+
+async fn record_review_outcome_notification_in_transaction(
+    transaction: &mut Transaction<'_, Postgres>,
+    run: &LeasedReviewRun,
+    state_name: &str,
+    state_message: Option<&str>,
+    proposal_id: Option<Uuid>,
+) -> Result<(), sqlx::Error> {
+    let definition_label =
+        super::review_runs::review_definition_label(run.snapshot.definition.as_str());
+    let run_payload = serde_json::json!({
+        "run_id": run.snapshot.id.as_uuid(),
+        "definition_key": run.snapshot.definition.as_str(),
+        "proposal_id": proposal_id,
+    });
+    let draft = match state_name {
+        "completed" => NotificationDraft::success(
+            "review_run.completed",
+            Some(run.snapshot.project_id.as_uuid()),
+            &format!("{definition_label} completed"),
+            Some("A proposal is ready for your review.".to_owned()),
+            run_payload,
+        ),
+        "blocked" => NotificationDraft::warning(
+            "review_run.blocked",
+            Some(run.snapshot.project_id.as_uuid()),
+            &format!("{definition_label} needs attention"),
+            state_message.map(str::to_owned),
+            run_payload,
+        ),
+        _ => return Ok(()),
+    };
+    record_notification_in_transaction(transaction, &draft).await
+}
+
+fn resolve_blocked_outcome(
+    code: ReviewBlockCode,
+    message: &str,
+) -> Result<
+    (
+        ReviewRunState,
+        Option<Uuid>,
+        serde_json::Value,
+        Option<ReviewHash>,
+    ),
+    PostgresReviewError,
+> {
+    if message.trim().is_empty() || message.len() > 4096 {
+        return Err(PostgresReviewError::InvalidState(
+            "terminal review error metadata is invalid".to_owned(),
+        ));
+    }
+    let state = ReviewRunState::Blocked {
+        code,
+        message: message.to_owned(),
+    };
+    Ok((
+        state,
+        None,
+        serde_json::json!({
+            "state": "blocked",
+            "code": code.as_str(),
+            "message": message
+        }),
+        None,
+    ))
+}
+
+async fn resolve_candidate_proposal(
+    transaction: &mut Transaction<'_, Postgres>,
+    run: &LeasedReviewRun,
+    proposal: Option<AiProposal>,
+) -> Result<
+    (
+        ReviewRunState,
+        Option<Uuid>,
+        serde_json::Value,
+        Option<ReviewHash>,
+    ),
+    PostgresReviewError,
+> {
+    let proposal = proposal.ok_or_else(|| {
+        PostgresReviewError::InvalidState("completed review outcome has no proposal".to_owned())
+    })?;
+    let candidate_hash = ReviewHash::parse(hash_json(&serde_json::to_value(&proposal.draft)?)?)?;
+    let proposal_id = if let Some(row) = sqlx::query(
+        "SELECT proposal_id,model_run_id
+         FROM review_proposal_finalizations
+         WHERE project_id=$1 AND automation_run_id=$2 AND candidate_hash=$3
+         FOR UPDATE",
+    )
+    .bind(run.snapshot.project_id.as_uuid())
+    .bind(run.snapshot.id.as_uuid())
+    .bind(candidate_hash.as_str())
+    .fetch_optional(&mut **transaction)
+    .await?
+    {
+        if row.get::<Uuid, _>("model_run_id") != proposal.model_run_id {
+            return Err(PostgresReviewError::FinalizationConflict);
+        }
+        row.get("proposal_id")
+    } else {
+        let persisted =
+            crate::ai::create_proposal_in_transaction(&mut *transaction, proposal).await?;
+        sqlx::query(
+            "INSERT INTO review_proposal_finalizations
+             (project_id,automation_run_id,candidate_hash,proposal_id,model_run_id)
+             VALUES ($1,$2,$3,$4,$5)
+             ON CONFLICT (project_id,automation_run_id,candidate_hash) DO NOTHING",
+        )
+        .bind(run.snapshot.project_id.as_uuid())
+        .bind(run.snapshot.id.as_uuid())
+        .bind(candidate_hash.as_str())
+        .bind(persisted.id)
+        .bind(persisted.model_run_id)
+        .execute(&mut **transaction)
+        .await?;
+        let row = sqlx::query(
+            "SELECT proposal_id,model_run_id
+             FROM review_proposal_finalizations
+             WHERE project_id=$1 AND automation_run_id=$2 AND candidate_hash=$3
+             FOR UPDATE",
+        )
+        .bind(run.snapshot.project_id.as_uuid())
+        .bind(run.snapshot.id.as_uuid())
+        .bind(candidate_hash.as_str())
+        .fetch_one(&mut **transaction)
+        .await?;
+        if row.get::<Uuid, _>("model_run_id") != persisted.model_run_id {
+            return Err(PostgresReviewError::FinalizationConflict);
+        }
+        row.get("proposal_id")
+    };
+    Ok((
+        ReviewRunState::Completed { proposal_id },
+        Some(proposal_id),
+        serde_json::json!({"state":"completed","proposal_id":proposal_id}),
+        Some(candidate_hash),
+    ))
 }

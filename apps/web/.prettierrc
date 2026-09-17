@@ -5,6 +5,7 @@
 	"printWidth": 100,
 	"plugins": ["prettier-plugin-svelte", "prettier-plugin-tailwindcss"],
 	"tailwindStylesheet": "./src/routes/layout.css",
+	"tailwindFunctions": ["clsx", "cn", "cva", "twMerge"],
 	"overrides": [
 		{
 			"files": "*.svelte",

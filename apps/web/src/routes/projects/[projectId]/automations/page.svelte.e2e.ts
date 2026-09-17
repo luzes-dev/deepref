@@ -229,33 +229,64 @@ async function mockAutomationEndpoints(
 	return { state };
 }
 
-test('selects, updates, creates, and runs the explicitly selected definition', async ({ page }) => {
+async function expectAutomationManager(page: Page): Promise<void> {
+	await expect(page.getByTestId('automation-manager')).toBeVisible();
+	await expect(page.getByRole('heading', { name: 'Automations', exact: true })).toBeVisible();
+	await expect(page.getByTestId('automation-editor')).toHaveCount(0);
+}
+
+async function expectAutomationEditor(page: Page): Promise<void> {
+	await expect(page.getByTestId('automation-editor')).toBeVisible();
+	await expect(page.getByTestId('automation-manager')).toHaveCount(0);
+	await expect(page.getByTestId('automation-editor-canvas')).toBeVisible();
+}
+
+test('manages definitions from the list and opens a full-page editor', async ({ page }) => {
 	await mockProjectShell(page);
 	const mocked = await mockAutomationEndpoints(page);
 
 	await page.goto('/projects/project-1/automations');
 	await expect(page).toHaveURL(/\/projects\/project-1\/automations$/);
-	await expect(page.getByRole('heading', { name: 'Automation Center' })).toBeVisible();
+	await expectAutomationManager(page);
 	await expect(page.getByRole('link', { name: 'Automations' })).toHaveAttribute(
 		'href',
 		'/projects/project-1/automations'
+	);
+	await expect(page.getByTestId('automation-definition-card-definition-1')).toContainText(
+		'Event maintenance'
+	);
+	await expect(page.getByTestId('automation-definition-card-definition-1')).toContainText(
+		'Active'
+	);
+	await expect(page.getByTestId('automation-definition-card-definition-2')).toContainText(
+		'Manual maintenance'
 	);
 	await expect(page.getByTestId('automation-unsupported-definitions')).toContainText(
 		'Future recipe'
 	);
 
-	await page.getByTestId('automation-definition-select').click();
-	await expect(page.getByRole('option', { name: /Event maintenance/ })).toBeVisible();
-	await expect(page.getByRole('option', { name: /Manual maintenance/ })).toBeVisible();
-	await expect(page.getByRole('option', { name: /Future recipe/ })).toHaveCount(0);
-	await page.getByRole('option', { name: /Manual maintenance/ }).click();
+	await page.getByTestId('automation-edit-definition-definition-2').click();
+	await expectAutomationEditor(page);
+	await expect(
+		page.getByRole('heading', { name: 'Manual maintenance', exact: true })
+	).toBeVisible();
+	await expect(page.locator('[data-workflow-node]')).toHaveCount(2);
+	await expect(
+		page.locator('[data-workflow-node]').getByText('Manual', { exact: true })
+	).toBeVisible();
+	await expect(
+		page.getByTestId('workflow-editor').getByText('Recompute project metrics', { exact: true })
+	).toBeVisible();
 	await expect(page.getByLabel('Name')).toHaveValue('Manual maintenance');
 	await expect(page.getByLabel('Name')).toHaveAttribute('readonly', '');
 
-	await page.getByTestId('automation-status-paused').click();
-	await page.getByTestId('automation-save-definition').click();
-	await expect(page.getByTestId('automation-success')).toContainText(
-		'Definition settings saved.'
+	await page
+		.getByTestId('automation-editor-inspector')
+		.getByLabel('Status')
+		.selectOption('paused');
+	await page.getByTestId('automation-editor-save-settings').click();
+	await expect(page.getByTestId('automation-editor-feedback')).toContainText(
+		'Automation settings saved.'
 	);
 	await expect(page.getByLabel('Name')).toHaveValue('Manual maintenance');
 	await expect(mocked.state.lastConfigurePath).toBe(
@@ -266,12 +297,51 @@ test('selects, updates, creates, and runs the explicitly selected definition', a
 		status: 'paused'
 	});
 
+	page.once('dialog', async (dialog) => {
+		await dialog.accept();
+	});
+	await page.getByTestId('automation-editor-back').click();
+	await expectAutomationManager(page);
+	await expect(page.getByTestId('automation-definition-card-definition-2')).toContainText(
+		'Paused'
+	);
+});
+
+test('creates an automation, edits its graph, reconnects nodes, and runs it', async ({ page }) => {
+	await mockProjectShell(page);
+	const mocked = await mockAutomationEndpoints(page);
+
+	await page.goto('/projects/project-1/automations');
+	await expectAutomationManager(page);
 	await page.getByTestId('automation-add-definition').click();
+	await expectAutomationEditor(page);
+
 	await expect(page.getByLabel('Name')).not.toHaveAttribute('readonly');
 	await page.getByLabel('Name').fill('Nightly maintenance');
-	await page.getByTestId('automation-save-definition').click();
-	await expect(page.getByTestId('automation-success')).toContainText(
-		'Definition created and selected.'
+
+	const nodes = page.locator('[data-workflow-node]');
+	const edges = page.locator('[data-workflow-connection]');
+	await expect(nodes).toHaveCount(2);
+	await expect(edges).toHaveCount(1);
+	const initialEdgeCount = await edges.count();
+
+	const conditionGalleryItem = page.getByTestId('automation-editor-add-condition');
+	await expect(conditionGalleryItem).toBeVisible();
+	await conditionGalleryItem.click();
+	await expect(nodes).toHaveCount(3);
+
+	const actionNode = nodes.nth(1);
+	const conditionNode = nodes.nth(2);
+	const sourceHandle = actionNode.locator('[data-workflow-port="output"]').first();
+	const targetHandle = conditionNode.locator('[data-workflow-port="input"]').first();
+	await expect(sourceHandle).toBeVisible();
+	await expect(targetHandle).toBeVisible();
+	await sourceHandle.dragTo(targetHandle);
+	await expect(edges).toHaveCount(initialEdgeCount + 1);
+
+	await page.getByTestId('automation-editor-save-settings').click();
+	await expect(page.getByTestId('automation-editor-feedback')).toContainText(
+		'Automation created.'
 	);
 	await expect(page.getByLabel('Name')).toHaveValue('Nightly maintenance');
 	await expect(mocked.state.definitions).toEqual(
@@ -281,15 +351,249 @@ test('selects, updates, creates, and runs the explicitly selected definition', a
 	);
 
 	mocked.state.expectedManualDefinitionId = 'definition-3';
-	await expect(page.getByTestId('automation-run-manually')).toBeEnabled();
-	await page.getByTestId('automation-run-manually').click();
-	await expect(page.getByTestId('automation-success')).toContainText('Automation run queued.');
+	await expect(page.getByTestId('automation-editor-run')).toBeEnabled();
+	await page.getByTestId('automation-editor-run').click();
+	await expect(page.getByTestId('automation-editor-feedback')).toContainText(
+		'Automation run queued.'
+	);
 	await expect(mocked.state.lastManualDefinitionId).toBe('definition-3');
+	// Graph edits are browser-local. The server settings save intentionally does
+	// not clear an unsaved graph, so accept the explicit discard before leaving
+	// this newly-created editor.
+	page.once('dialog', async (dialog) => {
+		await dialog.accept();
+	});
+	await page.getByTestId('automation-editor-back').click();
+	await expectAutomationManager(page);
+	const runHistory = page.getByTestId('automation-run-history');
+	await runHistory.locator('summary').click();
+	await expect(page.getByTestId('automation-runs')).toBeVisible();
 	await expect(page.getByTestId('automation-run')).toContainText('Completed');
-	await expect(page.getByTestId('automation-run')).toContainText('123,456 micros');
-	await expect(page.getByTestId('automation-run')).toContainText('Input tokens');
-	await expect(page.getByTestId('automation-run')).toContainText('recompute_project_metrics');
-	await expect(page.getByTestId('automation-run-details')).toContainText('Completed');
+	await page.getByTestId('automation-run').click();
+	await expectAutomationEditor(page);
+	await expect(page.getByTestId('automation-editor-server-status')).toContainText(/completed/i);
+	await page.getByTestId('automation-editor-back').click();
+	await expectAutomationManager(page);
+});
+
+test('persists the editor graph across reload and guards an unsaved return', async ({ page }) => {
+	await mockProjectShell(page);
+	await mockAutomationEndpoints(page, { definitions: [manualDefinition], runs: [run] });
+
+	await page.goto('/projects/project-1/automations');
+	await expectAutomationManager(page);
+	await page.getByTestId('automation-edit-definition-definition-2').click();
+	await expectAutomationEditor(page);
+
+	const nodes = page.locator('[data-workflow-node]');
+	await expect(nodes).toHaveCount(2);
+	await page.getByTestId('automation-editor-add-condition').click();
+	await expect(nodes).toHaveCount(3);
+	await page.getByTestId('automation-editor-save-graph').click();
+	await expect(page.getByTestId('automation-editor-local-status')).toContainText('saved');
+
+	await page.reload();
+	await expectAutomationManager(page);
+	await page.getByTestId('automation-edit-definition-definition-2').click();
+	await expectAutomationEditor(page);
+	await expect(nodes).toHaveCount(3);
+
+	await page.getByTestId('automation-editor-add-action').click();
+	await expect(nodes).toHaveCount(4);
+	await page.getByRole('button', { name: 'Select Action' }).last().click();
+	await expect(page.getByRole('button', { name: 'Delete selected graph item' })).toBeEnabled();
+	await page.getByRole('button', { name: 'Delete selected graph item' }).click();
+	await expect(nodes).toHaveCount(3);
+	await page.getByTestId('automation-editor-add-action').click();
+	await expect(nodes).toHaveCount(4);
+
+	let dialogType: string | null = null;
+	let dialogMessage: string | null = null;
+	page.once('dialog', async (dialog) => {
+		dialogType = dialog.type();
+		dialogMessage = dialog.message();
+		await dialog.dismiss();
+	});
+	await page.getByTestId('automation-editor-back').click();
+	await expect(page.getByTestId('automation-editor')).toBeVisible();
+	await expect(dialogType).toBe('confirm');
+	await expect(dialogMessage).toMatch(/unsaved|discard/i);
+
+	page.once('dialog', async (dialog) => {
+		await dialog.accept();
+	});
+	await page.getByTestId('automation-editor-back').click();
+	await expectAutomationManager(page);
+});
+
+test('supports reversible graph gestures, typed connection guards, and safe remounts', async ({
+	page
+}) => {
+	await mockProjectShell(page);
+	await mockAutomationEndpoints(page, { definitions: [manualDefinition], runs: [run] });
+
+	const consoleErrors: string[] = [];
+	const pageErrors: string[] = [];
+	page.on('console', (message) => {
+		if (message.type() === 'error') consoleErrors.push(message.text());
+	});
+	page.on('pageerror', (error) => pageErrors.push(error.message));
+
+	await page.goto('/projects/project-1/automations');
+	await expectAutomationManager(page);
+	await page.getByTestId('automation-edit-definition-definition-2').click();
+	await expectAutomationEditor(page);
+
+	const nodes = page.locator('[data-workflow-node]');
+	const edges = page.locator('[data-workflow-connection]');
+	await expect(nodes).toHaveCount(2);
+	await expect(edges).toHaveCount(1);
+
+	// Adding a node selects it after the Rete reconciliation completes, which
+	// enables the inspector actions for keyboard and pointer users.
+	await page.getByTestId('automation-editor-add-condition').click();
+	await expect(nodes).toHaveCount(3);
+	await expect(page.getByRole('button', { name: 'Delete selected graph item' })).toBeEnabled();
+	await page.getByRole('button', { name: 'Fit to view', exact: true }).click();
+
+	// A canvas control must not bubble its pointer gesture into node dragging.
+	const conditionNode = nodes.nth(2);
+	const conditionBefore = await conditionNode.boundingBox();
+	const canvasExpression = page
+		.getByTestId('workflow-editor')
+		.getByRole('textbox', { name: 'expression' });
+	await canvasExpression.fill('confidence >= 0.9');
+	await expect.poll(async () => await canvasExpression.inputValue()).toBe('confidence >= 0.9');
+	const conditionAfter = await conditionNode.boundingBox();
+	if (!conditionBefore || !conditionAfter) throw new Error('Condition bounds are missing');
+	expect(Math.abs(conditionAfter.x - conditionBefore.x)).toBeLessThan(2);
+	expect(Math.abs(conditionAfter.y - conditionBefore.y)).toBeLessThan(2);
+
+	// Drag the node header and confirm the persisted canvas position changes.
+	const actionNode = nodes.nth(1);
+	const actionHeader = actionNode.locator('header');
+	const actionBefore = await actionNode.boundingBox();
+	const actionHeaderBox = await actionHeader.boundingBox();
+	if (!actionBefore || !actionHeaderBox) throw new Error('Action bounds are missing');
+	await page.mouse.move(
+		actionHeaderBox.x + actionHeaderBox.width / 2,
+		actionHeaderBox.y + actionHeaderBox.height / 2
+	);
+	await page.mouse.down();
+	await page.mouse.move(
+		actionHeaderBox.x + actionHeaderBox.width / 2 + 70,
+		actionHeaderBox.y + actionHeaderBox.height / 2 + 32,
+		{ steps: 5 }
+	);
+	await page.mouse.up();
+	await expect
+		.poll(async () => {
+			const current = await actionNode.boundingBox();
+			return current ? current.x - actionBefore.x : 0;
+		})
+		.toBeGreaterThan(20);
+
+	// Drag empty space to pan without changing the graph node count.
+	const canvas = page.locator('[data-workflow-area]');
+	const canvasBox = await canvas.boundingBox();
+	if (!canvasBox) throw new Error('Workflow canvas bounds are missing');
+	const viewport = page.locator('[data-workflow-viewport]');
+	const viewportBefore = await viewport.evaluate(
+		(element) => getComputedStyle(element).transform
+	);
+	await page.mouse.move(canvasBox.x + 18, canvasBox.y + 18);
+	await page.mouse.down();
+	await page.mouse.move(canvasBox.x + 74, canvasBox.y + 58, { steps: 5 });
+	await page.mouse.up();
+	await expect
+		.poll(async () => viewport.evaluate((element) => getComputedStyle(element).transform))
+		.not.toBe(viewportBefore);
+	await expect(nodes).toHaveCount(3);
+
+	// Trigger output -> condition input is rejected by the registry's data types.
+	const sourceSelect = page.getByLabel('Output', { exact: true });
+	const targetSelect = page.getByLabel('Input', { exact: true });
+	const sourceChoices = await sourceSelect
+		.locator('option')
+		.evaluateAll<{ value: string; label: string }[], void, HTMLOptionElement>((options) =>
+			options.map((option) => ({
+				value: option.value,
+				label: option.textContent ?? ''
+			}))
+		);
+	const targetChoices = await targetSelect
+		.locator('option')
+		.evaluateAll<{ value: string; label: string }[], void, HTMLOptionElement>((options) =>
+			options.map((option) => ({
+				value: option.value,
+				label: option.textContent ?? ''
+			}))
+		);
+	const invalidSource = sourceChoices.find(
+		(option) => option.label.includes('Trigger') && option.label.includes('automation.event')
+	);
+	const conditionInput = targetChoices.find(
+		(option) => option.label.includes('Condition') && option.label.includes('automation.result')
+	);
+	if (!invalidSource || !conditionInput) throw new Error('Typed connection choices are missing');
+	await sourceSelect.selectOption(invalidSource.value);
+	await targetSelect.selectOption(conditionInput.value);
+	await page.getByRole('button', { name: 'Connect ports', exact: true }).click();
+	await expect(page.getByTestId('automation-editor-errors')).toContainText(/compatible|type/i);
+	await expect(edges).toHaveCount(1);
+
+	// Duplicate, undo, redo, and delete all use the canonical command history.
+	await page.getByRole('button', { name: 'Select Condition' }).click();
+	await page.getByRole('button', { name: 'Duplicate', exact: true }).click();
+	await expect(nodes).toHaveCount(4);
+	await page.getByTestId('automation-editor-undo').click();
+	await expect(nodes).toHaveCount(3);
+	await page.getByTestId('automation-editor-redo').click();
+	await expect(nodes).toHaveCount(4);
+	await expect(page.getByRole('button', { name: 'Delete selected graph item' })).toBeEnabled();
+	await page.getByRole('button', { name: 'Delete selected graph item' }).click();
+	await expect(nodes).toHaveCount(3);
+
+	await page.getByTestId('automation-editor-save-graph').click();
+	await expect(page.getByTestId('automation-editor-local-status')).toContainText('saved');
+
+	// Close and reopen the same definition to exercise adapter teardown/remount.
+	await page.getByTestId('automation-editor-back').click();
+	await expectAutomationManager(page);
+	await page.getByTestId('automation-edit-definition-definition-2').click();
+	await expectAutomationEditor(page);
+	await expect(nodes).toHaveCount(3);
+	await expect(page.locator('[data-workflow-viewport]')).toHaveCount(1);
+
+	await page.reload();
+	await expectAutomationManager(page);
+	await page.getByTestId('automation-edit-definition-definition-2').click();
+	await expectAutomationEditor(page);
+	await expect(nodes).toHaveCount(3);
+	await expect(page.locator('[data-workflow-viewport]')).toHaveCount(1);
+
+	expect(consoleErrors).toEqual([]);
+	expect(pageErrors).toEqual([]);
+});
+
+test('protects malformed browser drafts from UI overwrite', async ({ page }) => {
+	await mockProjectShell(page);
+	await mockAutomationEndpoints(page, { definitions: [manualDefinition], runs: [run] });
+
+	await page.goto('/projects/project-1/automations');
+	await expectAutomationManager(page);
+	await page.evaluate(() => {
+		localStorage.setItem('deepref:automation-graph:project-1:definition-2', '{');
+	});
+	await page.getByTestId('automation-edit-definition-definition-2').click();
+	await expectAutomationEditor(page);
+	await expect(page.getByTestId('automation-editor-notice')).toContainText(/left untouched/i);
+	await expect(page.getByTestId('automation-editor-save-graph')).toBeDisabled();
+	await expect(
+		await page.evaluate(() =>
+			localStorage.getItem('deepref:automation-graph:project-1:definition-2')
+		)
+	).toBe('{');
 });
 
 test('shows the empty state and keeps manual execution disabled until configured', async ({
@@ -299,11 +603,13 @@ test('shows the empty state and keeps manual execution disabled until configured
 	await mockAutomationEndpoints(page, { definitions: [], runs: [] });
 
 	await page.goto('/projects/project-1/automations');
+	await expectAutomationManager(page);
+	await expect(page.getByTestId('automation-definitions-empty')).toBeVisible();
+	await page.getByTestId('automation-run-history').locator('summary').click();
 	await expect(page.getByTestId('automation-runs-empty')).toBeVisible();
-	await expect(page.getByTestId('automation-manual-state')).toContainText(
-		'Add a definition above'
-	);
-	await expect(page.getByTestId('automation-run-manually')).toBeDisabled();
+	await page.getByTestId('automation-add-definition').click();
+	await expectAutomationEditor(page);
+	await expect(page.getByTestId('automation-editor-run')).toBeDisabled();
 });
 
 test('reports read failures and retries automation data', async ({ page }) => {
@@ -315,7 +621,9 @@ test('reports read failures and retries automation data', async ({ page }) => {
 
 	mocked.state.failReads = false;
 	await page.getByTestId('automation-query-error').getByRole('button', { name: 'Retry' }).click();
-	await expect(page.getByRole('heading', { name: 'Recent runs' })).toBeVisible();
+	await expectAutomationManager(page);
+	await expect(page.getByTestId('automation-definition-card-definition-1')).toBeVisible();
+	await page.getByTestId('automation-run-history').locator('summary').click();
 	await expect(page.getByTestId('automation-runs')).toBeVisible();
 });
 
@@ -335,12 +643,31 @@ test('exposes loading, active-run, and completed-run presentation responsively',
 		'data-automation-state',
 		'loading'
 	);
-	await expect(page.getByTestId('automation-runs-loading')).toBeVisible();
+	await expect(page.getByTestId('automation-list-loading')).toBeVisible();
 	await expect(page.getByTestId('automation-page')).toHaveAttribute(
 		'data-automation-state',
 		'ready'
 	);
+	await expectAutomationManager(page);
+	await page.getByTestId('automation-run-history').locator('summary').click();
 	await expect(page.getByTestId('automation-run')).toContainText('Running');
+	await page.getByTestId('automation-edit-definition-definition-2').click();
+	await expectAutomationEditor(page);
+	await expect(page.getByTestId('automation-editor-canvas')).toBeVisible();
+	await page
+		.getByTestId('automation-editor-inspector')
+		.getByLabel('Status')
+		.selectOption('paused');
+	await page.getByTestId('automation-editor-save-settings').click();
+	await expect(page.getByTestId('automation-editor-feedback')).toContainText(
+		'Automation settings saved.'
+	);
+
+	await page.getByTestId('automation-editor-add-condition').click();
+	await expect(page.locator('[data-workflow-node]')).toHaveCount(3);
+	await page.getByTestId('automation-editor-save-graph').click();
+	await page.getByTestId('automation-editor-back').click();
+	await expectAutomationManager(page);
 
 	const overflow = await page.evaluate(
 		() => document.documentElement.scrollWidth > document.documentElement.clientWidth

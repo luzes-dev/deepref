@@ -123,76 +123,23 @@ pub async fn decide_ai_proposal(
     if request.decision == AiProposalDecision::Accept {
         match proposal.operation.as_str() {
             "screening_suggestion" => {
-                let report_id = proposal.target_report_id.ok_or_else(|| {
-                    AiProposalError::InvalidTarget("screening report is missing".to_owned())
-                })?;
-                let protocol_version_id = proposal.protocol_version_id.ok_or_else(|| {
-                    AiProposalError::InvalidTarget("protocol version is missing".to_owned())
-                })?;
-                let expected_revision = proposal.expected_revision.ok_or_else(|| {
-                    AiProposalError::InvalidTarget("screening revision is missing".to_owned())
-                })?;
-                let stage = parse_screening_stage(
-                    applied_payload
-                        .get("stage")
-                        .and_then(serde_json::Value::as_str),
-                )?;
-                let decision = parse_screening_decision(&applied_payload, stage)?;
-                let reason_id = screening_reason_id(&applied_payload)?;
-                let actor = request.actor.clone();
-                let snapshot = crate::screening::screen_report_in_transaction(
-                    &mut tx,
-                    ScreenReportCommand {
-                        project_id: proposal.project_id.into(),
-                        report_id: report_id.into(),
-                        stage,
-                        decision,
-                        exclusion_reason_id: reason_id.map(Into::into),
-                        protocol_version_id: protocol_version_id.into(),
-                        expected_revision,
-                        notes: Some("Accepted AI screening proposal".to_owned()),
-                        actor,
-                    },
-                )
-                .await?;
-                applied_revision = Some(snapshot.revision);
+                applied_revision = Some(
+                    apply_screening_suggestion(
+                        &mut tx,
+                        &proposal,
+                        &applied_payload,
+                        &request.actor,
+                    )
+                    .await?,
+                );
             }
             "dedupe_suggestion" => {
-                let candidate = applied_payload.get("candidate").ok_or_else(|| {
-                    AiProposalError::InvalidTarget("duplicate candidate is missing".to_owned())
-                })?;
-                let source_record_id =
-                    value_uuid(candidate, "source_record_id").ok_or_else(|| {
-                        AiProposalError::InvalidTarget("source record is missing".to_owned())
-                    })?;
-                let candidate_report_id =
-                    value_uuid(candidate, "candidate_report_id").ok_or_else(|| {
-                        AiProposalError::InvalidTarget("candidate report is missing".to_owned())
-                    })?;
-                let decision = applied_payload
-                    .get("decision")
-                    .and_then(serde_json::Value::as_str)
-                    .ok_or_else(|| {
-                        AiProposalError::InvalidPayload("duplicate decision is missing".to_owned())
-                    })?;
-                if decision != "match" {
-                    return Err(AiProposalError::InvalidPayload(
-                        "only a duplicate match can be accepted; reject abstentions or no-match suggestions"
-                            .to_owned(),
-                    ));
-                }
-                crate::deduplication::resolve_record_in_transaction(
+                apply_dedupe_suggestion(
                     &mut tx,
-                    ResolveRecordCommand {
-                        project_id: proposal.project_id.into(),
-                        record_id: source_record_id.into(),
-                        action: deepref_application::RecordResolutionAction::Link,
-                        report_id: Some(candidate_report_id.into()),
-                        proposal_id: None,
-                        reason: request.reason.clone(),
-                        actor_kind: request.actor.kind().as_str().to_owned(),
-                        actor_id: request.actor.id().to_owned(),
-                    },
+                    &proposal,
+                    &applied_payload,
+                    &request.actor,
+                    &request.reason,
                 )
                 .await?;
             }
@@ -289,4 +236,87 @@ pub async fn decide_ai_proposal(
         target_record_id: proposal.target_record_id,
         applied_revision,
     })
+}
+
+async fn apply_screening_suggestion(
+    tx: &mut Transaction<'_, Postgres>,
+    proposal: &AiProposalRecord,
+    applied_payload: &serde_json::Value,
+    actor: &Actor,
+) -> Result<i64, AiProposalError> {
+    let report_id = proposal
+        .target_report_id
+        .ok_or_else(|| AiProposalError::InvalidTarget("screening report is missing".to_owned()))?;
+    let protocol_version_id = proposal
+        .protocol_version_id
+        .ok_or_else(|| AiProposalError::InvalidTarget("protocol version is missing".to_owned()))?;
+    let expected_revision = proposal.expected_revision.ok_or_else(|| {
+        AiProposalError::InvalidTarget("screening revision is missing".to_owned())
+    })?;
+    let stage = parse_screening_stage(
+        applied_payload
+            .get("stage")
+            .and_then(serde_json::Value::as_str),
+    )?;
+    let decision = parse_screening_decision(applied_payload, stage)?;
+    let reason_id = screening_reason_id(applied_payload)?;
+    let snapshot = crate::screening::screen_report_in_transaction(
+        tx,
+        ScreenReportCommand {
+            project_id: proposal.project_id.into(),
+            report_id: report_id.into(),
+            stage,
+            decision,
+            exclusion_reason_id: reason_id.map(Into::into),
+            protocol_version_id: protocol_version_id.into(),
+            expected_revision,
+            notes: Some("Accepted AI screening proposal".to_owned()),
+            actor: actor.clone(),
+        },
+    )
+    .await?;
+    Ok(snapshot.revision)
+}
+
+async fn apply_dedupe_suggestion(
+    tx: &mut Transaction<'_, Postgres>,
+    proposal: &AiProposalRecord,
+    applied_payload: &serde_json::Value,
+    actor: &Actor,
+    reason: &str,
+) -> Result<(), AiProposalError> {
+    let candidate = applied_payload.get("candidate").ok_or_else(|| {
+        AiProposalError::InvalidTarget("duplicate candidate is missing".to_owned())
+    })?;
+    let source_record_id = value_uuid(candidate, "source_record_id")
+        .ok_or_else(|| AiProposalError::InvalidTarget("source record is missing".to_owned()))?;
+    let candidate_report_id = value_uuid(candidate, "candidate_report_id")
+        .ok_or_else(|| AiProposalError::InvalidTarget("candidate report is missing".to_owned()))?;
+    let decision = applied_payload
+        .get("decision")
+        .and_then(serde_json::Value::as_str)
+        .ok_or_else(|| {
+            AiProposalError::InvalidPayload("duplicate decision is missing".to_owned())
+        })?;
+    if decision != "match" {
+        return Err(AiProposalError::InvalidPayload(
+            "only a duplicate match can be accepted; reject abstentions or no-match suggestions"
+                .to_owned(),
+        ));
+    }
+    crate::deduplication::resolve_record_in_transaction(
+        tx,
+        ResolveRecordCommand {
+            project_id: proposal.project_id.into(),
+            record_id: source_record_id.into(),
+            action: deepref_application::RecordResolutionAction::Link,
+            report_id: Some(candidate_report_id.into()),
+            proposal_id: None,
+            reason: reason.to_owned(),
+            actor_kind: actor.kind().as_str().to_owned(),
+            actor_id: actor.id().to_owned(),
+        },
+    )
+    .await?;
+    Ok(())
 }

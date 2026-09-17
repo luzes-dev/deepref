@@ -1,4 +1,5 @@
 mod acquisitions;
+mod actor;
 mod ai;
 mod articles;
 mod assistant;
@@ -9,6 +10,7 @@ mod exports;
 mod extraction;
 mod health;
 mod ingestions;
+mod notifications;
 mod pagination;
 mod projection;
 mod projects;
@@ -60,6 +62,15 @@ fn openapi_router(document_max_bytes: usize) -> OpenApiRouter<AppState> {
         .routes(routes!(articles::recompute_metrics))
         .routes(routes!(assistant::list_tools))
         .routes(routes!(assistant::execute_tool))
+        .routes(routes!(
+            assistant::list_conversations,
+            assistant::create_conversation
+        ))
+        .routes(routes!(
+            assistant::list_conversation_messages,
+            assistant::delete_conversation
+        ))
+        .routes(routes!(assistant::chat))
         .routes(routes!(automations::list_definitions))
         .routes(routes!(automations::configure_definition))
         .routes(routes!(automations::trigger_manually))
@@ -94,6 +105,9 @@ fn openapi_router(document_max_bytes: usize) -> OpenApiRouter<AppState> {
         .routes(routes!(ingestions::get_ingestion))
         .routes(routes!(ingestions::list_ingestion_items))
         .routes(routes!(ingestions::cancel_ingestion))
+        .routes(routes!(notifications::list_notifications_route))
+        .routes(routes!(notifications::get_unread_notification_count))
+        .routes(routes!(notifications::mark_notifications_read_route))
         .routes(routes!(protocol::get_published_protocol))
         .routes(routes!(
             protocol::get_protocol_editor,
@@ -257,6 +271,10 @@ mod tests {
             "/projects/{project_id}/ai/proposals/{proposal_id}/decision",
             "/projects/{project_id}/assistant/tools",
             "/projects/{project_id}/assistant/tools/execute",
+            "/projects/{project_id}/assistant/conversations",
+            "/projects/{project_id}/assistant/conversations/{conversation_id}",
+            "/projects/{project_id}/assistant/conversations/{conversation_id}/messages",
+            "/projects/{project_id}/assistant/chat",
             "/ingestions",
             "/ingestions/{ingestion_id}",
             "/ingestions/{ingestion_id}/items",

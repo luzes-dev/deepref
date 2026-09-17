@@ -1,0 +1,79 @@
+# Sentrux Architectural Rules & Quality Constraints
+
+[constraints]
+min_quality = 0.60
+max_cycles = 0
+no_god_files = true
+min_acyclicity = 1.0
+max_coupling_score = 0.05
+
+# Layer ordering: lower order = top/entrypoints, higher order = foundational.
+# A file with higher order cannot import a file with lower order.
+
+[[layers]]
+name = "entrypoints"
+paths = [
+  "services/worker/**/*",
+  "crates/http-api/**/*",
+]
+order = 0
+
+[[layers]]
+name = "infrastructure"
+paths = [
+  "crates/postgres/**/*",
+  "crates/documents/**/*",
+  "crates/crossref/**/*",
+  "crates/providers/**/*",
+  "crates/ai/**/*",
+  "crates/review/**/*",
+]
+order = 10
+
+[[layers]]
+name = "application"
+paths = [
+  "crates/application/**/*",
+  "crates/events/**/*",
+  "crates/graph/**/*",
+]
+order = 20
+
+[[layers]]
+name = "domain"
+paths = [
+  "crates/domain/**/*",
+]
+order = 30
+
+[[layers]]
+name = "core"
+paths = [
+  "crates/core/**/*",
+]
+order = 40
+
+[[boundaries]]
+from = "crates/domain/**/*"
+to = "crates/postgres/**/*"
+reason = "domain layer must not depend on persistence adapters"
+
+[[boundaries]]
+from = "crates/domain/**/*"
+to = "crates/http-api/**/*"
+reason = "domain layer must not depend on HTTP transport"
+
+[[boundaries]]
+from = "crates/domain/**/*"
+to = "services/worker/**/*"
+reason = "domain layer must not depend on worker runtime"
+
+[[boundaries]]
+from = "crates/application/**/*"
+to = "crates/postgres/**/*"
+reason = "application layer must depend only on abstractions, not concrete database implementations"
+
+[[boundaries]]
+from = "crates/application/**/*"
+to = "crates/http-api/**/*"
+reason = "application layer must not depend on HTTP transport"

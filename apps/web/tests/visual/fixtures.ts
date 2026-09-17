@@ -526,6 +526,15 @@ export { expect } from '@playwright/test';
 
 export async function captureViewport(page: Page, snapshotName: string): Promise<void> {
 	await settleVisualPage(page);
+	if (process.env.REVIEW_CAPTURE) {
+		await page.screenshot({
+			path: test.info().outputPath(snapshotName),
+			scale: 'css',
+			animations: 'disabled',
+			caret: 'hide'
+		});
+		return;
+	}
 	await expect(page).toHaveScreenshot(snapshotName, {
 		animations: 'disabled',
 		caret: 'hide'
@@ -533,7 +542,7 @@ export async function captureViewport(page: Page, snapshotName: string): Promise
 }
 
 export async function captureDarkViewport(page: Page, snapshotName: string): Promise<void> {
-	if (!test.info().project.name.includes('-dark-')) return;
+	if (!process.env.REVIEW_CAPTURE && !test.info().project.name.includes('-dark-')) return;
 	await captureViewport(page, snapshotName);
 }
 

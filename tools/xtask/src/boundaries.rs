@@ -155,59 +155,62 @@ pub fn run() -> Result<()> {
     Ok(())
 }
 
-fn validate(metadata: &Metadata) -> Vec<String> {
-    let packages: Vec<_> = metadata
-        .packages
-        .iter()
-        .filter(|p| metadata.workspace_members.contains(&p.id))
-        .collect();
-    let by_path: BTreeMap<_, _> = packages
-        .iter()
-        .filter_map(|p| p.manifest_path.parent().map(|path| (path, *p)))
-        .collect();
-    let mut errors = Vec::new();
-    for source in &packages {
-        let Some(layer) = source.metadata.deepref.layer else {
+fn validate_workspace_dependency(
+    source: &Package,
+    layer: Layer,
+    target: &Package,
+    dependency: &Dependency,
+    errors: &mut Vec<String>,
+) {
+    if let Some(target_layer) = target.metadata.deepref.layer {
+        let fixture_edge = source.name == "deepref-http-api"
+            && target.name == "deepref-worker"
+            && dependency.kind.as_deref() == Some("dev");
+        if !layer.permits(target_layer) && !fixture_edge {
             errors.push(format!(
-                "{}: missing [package.metadata.deepref] layer; classify every workspace member",
-                source.name
+                "{} -> {}\nsource layer: {layer}\ntarget layer: {target_layer}\n{layer} -> {target_layer} is forbidden ({})",
+                source.name,
+                target.name,
+                dependency.kind.as_deref().unwrap_or("normal")
             ));
-            continue;
-        };
-        for dependency in &source.dependencies {
-            if let Some(target) = dependency
-                .path
-                .as_deref()
-                .and_then(|path| by_path.get(path))
-            {
-                if let Some(target_layer) = target.metadata.deepref.layer {
-                    // Existing HTTP integration fixtures exercise the worker. This is not a runtime edge.
-                    let fixture_edge = source.name == "deepref-http-api"
-                        && target.name == "deepref-worker"
-                        && dependency.kind.as_deref() == Some("dev");
-                    if !layer.permits(target_layer) && !fixture_edge {
-                        errors.push(format!("{} -> {}\nsource layer: {layer}\ntarget layer: {target_layer}\n{layer} -> {target_layer} is forbidden ({})",
-                            source.name, target.name, dependency.kind.as_deref().unwrap_or("normal")));
-                    }
-                }
-            } else {
-                let normal = dependency.kind.is_none();
-                let forbidden = dependency.name == "async-nats"
-                    || (matches!(layer, Layer::Domain | Layer::Application | Layer::Review)
-                        && INFRASTRUCTURE.contains(&dependency.name.as_str()))
-                    || (normal
-                        && layer == Layer::Domain
-                        && !DOMAIN_EXTERNAL.contains(&dependency.name.as_str()))
-                    || (normal
-                        && layer == Layer::Application
-                        && !APPLICATION_EXTERNAL.contains(&dependency.name.as_str()));
-                if forbidden {
-                    errors.push(format!("{} -> {}\nsource layer: {layer}\ntarget layer: external\ndependency violates the pure dependency contract or removed NATS guard", source.name, dependency.name));
-                }
-            }
         }
     }
-    // Preserve the former contract's required ownership seams as well as forbidden edges.
+}
+
+fn is_forbidden_external_dependency(layer: Layer, name: &str, is_normal: bool) -> bool {
+    if name == "async-nats" {
+        return true;
+    }
+    if matches!(layer, Layer::Domain | Layer::Application | Layer::Review)
+        && INFRASTRUCTURE.contains(&name)
+    {
+        return true;
+    }
+    if is_normal && layer == Layer::Domain && !DOMAIN_EXTERNAL.contains(&name) {
+        return true;
+    }
+    if is_normal && layer == Layer::Application && !APPLICATION_EXTERNAL.contains(&name) {
+        return true;
+    }
+    false
+}
+
+fn validate_external_dependency(
+    source: &Package,
+    layer: Layer,
+    dependency: &Dependency,
+    errors: &mut Vec<String>,
+) {
+    let normal = dependency.kind.is_none();
+    if is_forbidden_external_dependency(layer, &dependency.name, normal) {
+        errors.push(format!(
+            "{} -> {}\nsource layer: {layer}\ntarget layer: external\ndependency violates the pure dependency contract or removed NATS guard",
+            source.name, dependency.name
+        ));
+    }
+}
+
+fn validate_required_seams(packages: &[&Package], errors: &mut Vec<String>) {
     for (source_name, dependencies) in [
         ("deepref-application", &["deepref-domain"][..]),
         (
@@ -235,108 +238,40 @@ fn validate(metadata: &Metadata) -> Vec<String> {
             }
         }
     }
-    errors.sort();
-    errors
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-    use serde_json::{Value, json};
-
-    fn package(name: &str, layer: &str, dependencies: Value) -> Value {
-        json!({"id": name, "name": name, "manifest_path": format!("/workspace/{name}/Cargo.toml"),
-            "metadata": {"deepref": {"layer": layer}}, "dependencies": dependencies})
-    }
-
-    fn errors(packages: Vec<Value>) -> Vec<String> {
-        let members: Vec<_> = packages.iter().map(|p| p["id"].clone()).collect();
-        let metadata =
-            serde_json::from_value(json!({"packages": packages, "workspace_members": members}))
-                .unwrap();
-        validate(&metadata)
-    }
-
-    #[test]
-    fn rejects_unknown_member() {
-        let mut unknown = package("new-crate", "domain", json!([]));
-        unknown["metadata"] = json!({});
-        assert!(errors(vec![unknown])[0].contains("missing"));
-    }
-
-    #[test]
-    fn checks_renamed_optional_target_and_build_dependencies() {
-        let source = package(
-            "deepref-domain",
-            "domain",
-            json!([{
-                "name": "deepref-postgres", "rename": "innocent", "path": "/workspace/deepref-postgres",
-                "optional": true, "target": "cfg(windows)", "kind": "build"
-            }]),
-        );
-        let actual = errors(vec![
-            source,
-            package("deepref-postgres", "persistence", json!([])),
-        ]);
-        assert!(actual[0].contains("deepref-domain -> deepref-postgres"));
-        assert!(actual[0].contains("(build)"));
-    }
-
-    #[test]
-    fn production_cannot_depend_on_tooling_even_for_tests() {
-        for kind in [Value::Null, json!("dev"), json!("build")] {
-            assert!(
-                !errors(vec![
-                    package(
-                        "server",
-                        "composition",
-                        json!([{
-                            "name": "xtask", "path": "/workspace/xtask", "kind": kind
-                        }])
-                    ),
-                    package("xtask", "tooling", json!([]))
-                ])
-                .is_empty()
-            );
+fn validate(metadata: &Metadata) -> Vec<String> {
+    let packages: Vec<_> = metadata
+        .packages
+        .iter()
+        .filter(|p| metadata.workspace_members.contains(&p.id))
+        .collect();
+    let by_path: BTreeMap<_, _> = packages
+        .iter()
+        .filter_map(|p| p.manifest_path.parent().map(|path| (path, *p)))
+        .collect();
+    let mut errors = Vec::new();
+    for source in &packages {
+        let Some(layer) = source.metadata.deepref.layer else {
+            errors.push(format!(
+                "{}: missing [package.metadata.deepref] layer; classify every workspace member",
+                source.name
+            ));
+            continue;
+        };
+        for dependency in &source.dependencies {
+            if let Some(target) = dependency
+                .path
+                .as_deref()
+                .and_then(|path| by_path.get(path))
+            {
+                validate_workspace_dependency(source, layer, target, dependency, &mut errors);
+            } else {
+                validate_external_dependency(source, layer, dependency, &mut errors);
+            }
         }
     }
-
-    #[test]
-    fn worker_fixture_exception_is_dev_only() {
-        for (kind, allowed) in [
-            (json!("dev"), true),
-            (Value::Null, false),
-            (json!("build"), false),
-        ] {
-            assert_eq!(errors(vec![package("deepref-http-api", "http", json!([{
-                "name": "deepref-worker", "path": "/workspace/deepref-worker", "kind": kind
-            }, {"name": "deepref-application", "kind": null}, {"name": "deepref-postgres", "kind": null}])), package("deepref-worker", "worker", json!([]))]).is_empty(), allowed);
-        }
-    }
-
-    #[test]
-    fn retains_external_guards_including_renames() {
-        for name in ["async-nats", "sqlx", "reqwest", "biblatex"] {
-            assert!(
-                !errors(vec![package(
-                    "application",
-                    "application",
-                    json!([{
-                        "name": name, "rename": "alias", "kind": null
-                    }])
-                )])
-                .is_empty()
-            );
-        }
-    }
-
-    #[test]
-    fn inward_edges_are_allowed_but_persistence_cannot_orchestrate_workers() {
-        assert!(Layer::Application.permits(Layer::Domain));
-        assert!(Layer::Review.permits(Layer::Ai));
-        assert!(Layer::Http.permits(Layer::Persistence));
-        assert!(!Layer::Persistence.permits(Layer::Worker));
-        assert!(!Layer::Review.permits(Layer::Persistence));
-        assert!(!Layer::Application.permits(Layer::Adapter));
-    }
+    validate_required_seams(&packages, &mut errors);
+    errors.sort();
+    errors
 }

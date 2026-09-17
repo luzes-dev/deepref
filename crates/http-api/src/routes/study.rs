@@ -21,7 +21,7 @@ use crate::{
     state::AppState,
 };
 
-use super::review::extract_actor;
+use super::actor::extract_actor;
 
 #[derive(Debug, Deserialize, ToSchema)]
 pub(crate) struct StudyListParams {

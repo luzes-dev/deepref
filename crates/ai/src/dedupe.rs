@@ -138,12 +138,7 @@ impl DedupeTask {
         }
     }
 
-    fn validate_output(&self, output: &DuplicateAssistance) -> Result<(), AiError> {
-        let allowed_provenance = self
-            .allowed_provenance
-            .iter()
-            .map(provenance_key)
-            .collect::<BTreeSet<_>>();
+    fn validate_target_pair_and_shape(&self, output: &DuplicateAssistance) -> Result<(), AiError> {
         if output.candidate.source_record_id != self.source_record_id.as_uuid()
             || output.candidate.candidate_report_id != self.candidate_report_id.as_uuid()
             || output.rationale.is_empty()
@@ -154,6 +149,10 @@ impl DedupeTask {
                 "duplicate assistance is incomplete or targets a different pair".to_owned(),
             ));
         }
+        Ok(())
+    }
+
+    fn validate_output_signals(&self, output: &DuplicateAssistance) -> Result<(), AiError> {
         let mut signal_kinds = BTreeSet::new();
         for signal in &output.signals {
             if !self.allowed_signals.contains(signal) || !signal_kinds.insert(signal.kind()) {
@@ -162,12 +161,19 @@ impl DedupeTask {
                 ));
             }
         }
+        Ok(())
+    }
+
+    fn validate_output_provenance_items(
+        provenance: &[IdentityProvenance],
+        allowed_provenance: &BTreeSet<String>,
+    ) -> Result<BTreeSet<String>, AiError> {
         let mut keys = BTreeSet::new();
-        for provenance in &output.provenance {
-            let key = provenance_key(provenance);
-            if provenance.entity_type.trim().is_empty()
-                || provenance.field.trim().is_empty()
-                || !crate::is_sha256(&provenance.content_hash)
+        for item in provenance {
+            let key = provenance_key(item);
+            if item.entity_type.trim().is_empty()
+                || item.field.trim().is_empty()
+                || !crate::is_sha256(&item.content_hash)
                 || !allowed_provenance.contains(&key)
                 || !keys.insert(key)
             {
@@ -177,41 +183,63 @@ impl DedupeTask {
                 ));
             }
         }
+        Ok(keys)
+    }
+
+    fn validate_consequential_decision(
+        &self,
+        output: &DuplicateAssistance,
+        keys: &BTreeSet<String>,
+    ) -> Result<(), AiError> {
+        if output.signals.len() != self.allowed_signals.len()
+            || self
+                .allowed_signals
+                .iter()
+                .any(|signal| !output.signals.contains(signal))
+        {
+            return Err(AiError::SemanticValidation(
+                "a consequential duplicate decision must cite every available signal".to_owned(),
+            ));
+        }
+        if self.allowed_provenance.is_empty()
+            || output.provenance.len() != self.allowed_provenance.len()
+            || self
+                .allowed_provenance
+                .iter()
+                .map(provenance_key)
+                .any(|key| !keys.contains(&key))
+            || !output
+                .provenance
+                .iter()
+                .any(|item| item.entity_type == "record")
+            || !output
+                .provenance
+                .iter()
+                .any(|item| item.entity_type == "report")
+        {
+            return Err(AiError::SemanticValidation(
+                "a consequential duplicate decision must cite both candidate sides".to_owned(),
+            ));
+        }
+        Ok(())
+    }
+
+    fn validate_output(&self, output: &DuplicateAssistance) -> Result<(), AiError> {
+        self.validate_target_pair_and_shape(output)?;
+        self.validate_output_signals(output)?;
+
+        let allowed_provenance = self
+            .allowed_provenance
+            .iter()
+            .map(provenance_key)
+            .collect::<BTreeSet<_>>();
+        let keys = Self::validate_output_provenance_items(&output.provenance, &allowed_provenance)?;
+
         if matches!(
             output.decision,
             DuplicateDecision::Match | DuplicateDecision::NoMatch
         ) {
-            if output.signals.len() != self.allowed_signals.len()
-                || self
-                    .allowed_signals
-                    .iter()
-                    .any(|signal| !output.signals.contains(signal))
-            {
-                return Err(AiError::SemanticValidation(
-                    "a consequential duplicate decision must cite every available signal"
-                        .to_owned(),
-                ));
-            }
-            if self.allowed_provenance.is_empty()
-                || output.provenance.len() != self.allowed_provenance.len()
-                || self
-                    .allowed_provenance
-                    .iter()
-                    .map(provenance_key)
-                    .any(|key| !keys.contains(&key))
-                || !output
-                    .provenance
-                    .iter()
-                    .any(|item| item.entity_type == "record")
-                || !output
-                    .provenance
-                    .iter()
-                    .any(|item| item.entity_type == "report")
-            {
-                return Err(AiError::SemanticValidation(
-                    "a consequential duplicate decision must cite both candidate sides".to_owned(),
-                ));
-            }
+            self.validate_consequential_decision(output, &keys)?;
         } else if !output.provenance.is_empty()
             && output
                 .provenance
@@ -222,6 +250,7 @@ impl DedupeTask {
                 "duplicate abstention cites unavailable provenance".to_owned(),
             ));
         }
+
         if matches!(output.decision, DuplicateDecision::InsufficientEvidence)
             && output.uncertainties.is_empty()
         {

@@ -7,9 +7,7 @@ test.describe('DeepRef workspace visual and accessibility harness', () => {
 		await expect(
 			page.getByRole('heading', { name: 'Evidence synthesis workspace' })
 		).toBeVisible();
-		await expect(
-			page.getByRole('heading', { name: 'Recent ingestion activity' })
-		).toBeVisible();
+		await expect(page.getByText('Recent imports', { exact: true })).toBeVisible();
 		await expect(page.getByRole('combobox', { name: 'Select project' })).toBeVisible();
 		await expect(page).toHaveURL(/\/projects\/visual-project\/overview$/);
 
@@ -27,9 +25,7 @@ test.describe('DeepRef workspace visual and accessibility harness', () => {
 		await page.reload();
 		await expect(page.getByTestId('overview-dependency-warning')).toBeVisible();
 		await expect(page.getByTestId('overview-populated')).toBeVisible();
-		await expect(
-			page.getByRole('heading', { name: 'Recent ingestion activity' })
-		).toBeVisible();
+		await expect(page.getByText('Recent imports', { exact: true })).toBeVisible();
 	});
 
 	test('keeps project selection keyboard-safe and Escape-closable', async ({ page }) => {
