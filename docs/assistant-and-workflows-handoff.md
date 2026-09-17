@@ -34,7 +34,7 @@ The DeepRef project has evolved from two overlapping screens into a decoupled, p
 This section documents the specific UI/UX, styling, accessibility, and component design choices made for the UI specialist agent.
 
 ### 3.1 Design System Alignment & Anti-Slop Principles
-- **No Third-Party Extras Bloat**: Rather than installing monolithic chat component libraries with conflicting Tailwind versions, we built native primitives in [`packages/ui/src/primitives/`](file:///home/luzes/Documents/ambient-scribes/.worktrees/ui-human-touch/packages/ui/src/primitives/) following base `shadcn-svelte` design tokens, Bits UI integration, and Tailwind CSS v4 variables.
+- **No Third-Party Extras Bloat**: Rather than installing monolithic chat component libraries with conflicting Tailwind versions, we built native primitives in [`packages/ui/src/primitives/`](../packages/ui/src/primitives/) following base `shadcn-svelte` design tokens, Bits UI integration, and Tailwind CSS v4 variables.
 - **Svelte 5 Runes Native**: Built completely using Svelte 5 runes (`$props`, `$bindable`, `$derived`, `$state`), `WithElementRef` prop typings, and `data-slot` selectors for scoped styling.
 - **Prose & Density Hierarchy**: Clean editorial styling using Tailwind typography classes with tight leading, subtle muted backgrounds, and zero unnecessary decorative borders.
 
@@ -93,7 +93,7 @@ This section documents the specific UI/UX, styling, accessibility, and component
   - Primary CTA button: **"Review in Queue"** linking directly to the corresponding reviewer interface with pre-filtered query parameters.
 
 ### 3.4 Workflows Hub: Recipe Library UI Decisions (`/automations`)
-- **Tabbed Layout**: Clean toggle between "Custom Workflows" and "Predefined Recipes" in [`AutomationCenter.svelte`](file:///home/luzes/Documents/ambient-scribes/.worktrees/ui-human-touch/apps/web/src/lib/features/automations/components/AutomationCenter.svelte).
+- **Tabbed Layout**: Clean toggle between "Custom Workflows" and "Predefined Recipes" in [`AutomationCenter.svelte`](../apps/web/src/lib/features/automations/components/AutomationCenter.svelte).
 - **Categorization**: Grouped into 4 clinical evidence stages:
   1. *Screening* (Single Report Screening, Eligibility Check)
   2. *Studies & Synthesis* (Study Grouping, Study Classification)
@@ -136,13 +136,13 @@ This section documents the specific UI/UX, styling, accessibility, and component
 ## 4. Work Accomplished in Current Session
 
 ### Phase 1: Base Chat UI Primitives (`@deepref/ui`) — **DONE**
-1. Implemented all primitives in [`packages/ui/src/primitives/`](file:///home/luzes/Documents/ambient-scribes/.worktrees/ui-human-touch/packages/ui/src/primitives/):
+1. Implemented all primitives in [`packages/ui/src/primitives/`](../packages/ui/src/primitives/):
    - `avatar/`: Avatar Root, Image, Fallback wrapping Bits UI.
    - `message/`: Message Root (with `align="start" | "end"`), Avatar, Content, Header, Footer, Group.
    - `bubble/`: Bubble Root (variants: `default`, `muted`, `outline`), Content, Group, Reactions.
    - `marker/`: Marker Root (`role="status"`, animated shimmer), Content.
    - `attachment/`: Attachment Root, Preview, Name.
-2. Implemented domain patterns in [`packages/ui/src/patterns/chat/`](file:///home/luzes/Documents/ambient-scribes/.worktrees/ui-human-touch/packages/ui/src/patterns/chat/):
+2. Implemented domain patterns in [`packages/ui/src/patterns/chat/`](../packages/ui/src/patterns/chat/):
    - `ToolCallCard.svelte`: Collapsible card with status badges, tool name, arguments, and result previews.
    - `ProposalCard.svelte`: Actionable proposal summary with review destination link.
 3. Exported all primitives and patterns in `packages/ui/src/index.ts` and `packages/ui/package.json`.
@@ -152,20 +152,20 @@ This section documents the specific UI/UX, styling, accessibility, and component
    - Total 26 tests in `@deepref/ui` passed with 0 errors.
 
 ### Phase 2: Workflows Predefined Recipes — **CORE DONE**
-1. Created [`apps/web/src/lib/features/automations/recipes.ts`](file:///home/luzes/Documents/ambient-scribes/.worktrees/ui-human-touch/apps/web/src/lib/features/automations/recipes.ts):
+1. Created [`apps/web/src/lib/features/automations/recipes.ts`](../apps/web/src/lib/features/automations/recipes.ts):
    - Ported all 14 assistant tool definitions into structured `PredefinedRecipe` definitions.
    - Configured fields schemas, validation rules, default parameters, categories, and backend recipe routes (`review_screening.v1`, `review_duplicate_detection.v1`, `review_study_classification.v1`, `review_study_grouping.v1`, `review_appraisal_prefill.v1`, `review_data_extraction.v1`, `project_maintenance.v1`).
 
 ### Phase 3: Backend Persistence & Agent Engine — **CORE DONE**
 1. Database Migration:
-   - Created [`crates/postgres/migrations/0023_assistant_chat.sql`](file:///home/luzes/Documents/ambient-scribes/.worktrees/ui-human-touch/crates/postgres/migrations/0023_assistant_chat.sql):
+   - Created [`crates/postgres/migrations/0023_assistant_chat.sql`](../crates/postgres/migrations/0023_assistant_chat.sql):
      - `assistant_conversations` table with project FK and updated_at indexes.
      - `assistant_messages` table with role check, JSONB tool_calls, tool_results, metadata.
-2. PostgreSQL persistence in [`crates/postgres/src/assistant.rs`](file:///home/luzes/Documents/ambient-scribes/.worktrees/ui-human-touch/crates/postgres/src/assistant.rs):
+2. PostgreSQL persistence in [`crates/postgres/src/assistant.rs`](../crates/postgres/src/assistant.rs):
    - `create_assistant_conversation`, `list_assistant_conversations`, `get_assistant_conversation`, `delete_assistant_conversation`.
    - `append_assistant_message`, `list_assistant_messages`.
    - Re-exported in `crates/postgres/src/lib.rs`.
-3. Agent Declarations & Policy in [`crates/ai/src/assistant.rs`](file:///home/luzes/Documents/ambient-scribes/.worktrees/ui-human-touch/crates/ai/src/assistant.rs):
+3. Agent Declarations & Policy in [`crates/ai/src/assistant.rs`](../crates/ai/src/assistant.rs):
    - Multi-turn conversation types (`AssistantChatMessage`, `AssistantRole`, `AssistantToolCall`, `AssistantToolResult`).
    - Function declarations for all 14 tools + `trigger_workflow`.
    - Policy verification via `PolicyEngine` ensuring no tool bypasses project scope or actor authority tiers.
