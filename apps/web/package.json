@@ -24,11 +24,9 @@
 	},
 	"dependencies": {
 		"@deepref/ui": "workspace:*",
-		"@tanstack/svelte-form": "^1.33.5",
 		"@tanstack/svelte-query": "^6.1.45",
 		"@tanstack/svelte-virtual": "^3.13.12",
 		"@tanstack/table-core": "^8.21.3",
-		"@xyflow/svelte": "^1.6.6",
 		"pdfjs-dist": "^6.2.108",
 		"rete": "^2.0.6",
 		"rete-area-plugin": "^2.3.2",

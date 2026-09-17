@@ -28,9 +28,6 @@ importers:
       '@deepref/ui':
         specifier: workspace:*
         version: link:../../packages/ui
-      '@tanstack/svelte-form':
-        specifier: ^1.33.5
-        version: 1.33.5(svelte@5.57.0(@typescript-eslint/types@8.68.0))
       '@tanstack/svelte-query':
         specifier: ^6.1.45
         version: 6.1.45(svelte@5.57.0(@typescript-eslint/types@8.68.0))
@@ -40,9 +37,6 @@ importers:
       '@tanstack/table-core':
         specifier: ^8.21.3
         version: 8.21.3
-      '@xyflow/svelte':
-        specifier: ^1.6.6
-        version: 1.6.6(svelte@5.57.0(@typescript-eslint/types@8.68.0))
       pdfjs-dist:
         specifier: ^6.2.108
         version: 6.2.108
@@ -2155,11 +2149,6 @@ packages:
     peerDependencies:
       vite: ^5.2.0 || ^6 || ^7 || ^8
 
-  '@tanstack/devtools-event-client@0.4.4':
-    resolution: {integrity: sha512-6T5Yop/793YI+H+5J8Hsyj4kCih9sl4t3ElLgKioW5hk3ocn+ZdSJ94tT7vL7uabxSugWYBZlOTMPzEw2puvQw==}
-    engines: {node: '>=18'}
-    hasBin: true
-
   '@tanstack/eslint-plugin-query@5.102.4':
     resolution: {integrity: sha512-d5mJDbMoSbPKv6kOzoCOcc3xvoLhmlscyOSvLsAdXClKVPc9l1sKjg7n3yBYdn6PHan2Ny7psZnRvHe9GRguVg==}
     peerDependencies:
@@ -2169,33 +2158,13 @@ packages:
       typescript:
         optional: true
 
-  '@tanstack/form-core@1.33.5':
-    resolution: {integrity: sha512-3dfx9MBP0aq5sXKteikG629X9oviptrQj0IFRk9YGcb+lB7Kv5x8S17oOSk1wUWgjQZ4xVJEMbKwOAODymocgA==}
-
-  '@tanstack/pacer-lite@0.1.1':
-    resolution: {integrity: sha512-y/xtNPNt/YeyoVxE/JCx+T7yjEzpezmbb+toK8DDD1P4m7Kzs5YR956+7OKexG3f8aXgC3rLZl7b1V+yNUSy5w==}
-    engines: {node: '>=18'}
-
   '@tanstack/query-core@5.102.5':
     resolution: {integrity: sha512-RjCmHf9cPRYcH/dpO0Jagw3rxCM1bLzMKKSGzaDkQJADDKGpv5RFjN54IyHSOIPa822AUA7ASOXDjjy1jfyzIA==}
-
-  '@tanstack/store@0.11.1':
-    resolution: {integrity: sha512-mzTOBhypOuDJAy/D8n2MfUZ1HFkXnmSETviRyhqEC8LUE7/IZQExOTxMANj3KjTofYTkFNpBY67qaVrT41YccA==}
-
-  '@tanstack/svelte-form@1.33.5':
-    resolution: {integrity: sha512-GGlLocQwc4f15EoslfSKSiFwGy1Wz8CPTl6LXcykg4XUEGOmgs8Dg4/RjNyHeN/qrbIMemWuwzbt2wXBq50eXg==}
-    peerDependencies:
-      svelte: ^5.0.0
 
   '@tanstack/svelte-query@6.1.45':
     resolution: {integrity: sha512-st2mnkfFWLxG45TO5nzIfcUIpzhJ4dEV8VyxJWBJWYMCGJkfCZy5YqsB/iXfl4iCzzo5ezM6oDBif4xLZoD3WQ==}
     peerDependencies:
       svelte: ^5.25.0
-
-  '@tanstack/svelte-store@0.12.1':
-    resolution: {integrity: sha512-ZFj8gyIWHZRYLv8RHp5jhnMhvw15g86KinotrUp9RfY7ygjkU3CcaMUytIdMJ4Xzq/9GqVlAphV9gFIGKRXWSw==}
-    peerDependencies:
-      svelte: ^5.0.0
 
   '@tanstack/svelte-virtual@3.13.36':
     resolution: {integrity: sha512-q5z39QWDQriLDc0aAcDY/htR0Sg9mrItQnhXNy/DNtEDQsdkTFTR7ZnMA6idJpLwnUg6PYa8Fb9O3RcCu+H7FQ==}
@@ -6560,8 +6529,6 @@ snapshots:
       tailwindcss: 4.3.3
       vite: 8.0.16(@types/node@24.13.2)(esbuild@0.28.1)(jiti@2.7.0)(sass@1.104.1)(yaml@2.9.0)
 
-  '@tanstack/devtools-event-client@0.4.4': {}
-
   '@tanstack/eslint-plugin-query@5.102.4(eslint@10.9.1(jiti@2.7.0))(typescript@6.0.3)':
     dependencies:
       '@typescript-eslint/utils': 8.68.0(eslint@10.9.1(jiti@2.7.0))(typescript@6.0.3)
@@ -6571,32 +6538,11 @@ snapshots:
     transitivePeerDependencies:
       - supports-color
 
-  '@tanstack/form-core@1.33.5':
-    dependencies:
-      '@tanstack/devtools-event-client': 0.4.4
-      '@tanstack/pacer-lite': 0.1.1
-      '@tanstack/store': 0.11.1
-
-  '@tanstack/pacer-lite@0.1.1': {}
-
   '@tanstack/query-core@5.102.5': {}
-
-  '@tanstack/store@0.11.1': {}
-
-  '@tanstack/svelte-form@1.33.5(svelte@5.57.0(@typescript-eslint/types@8.68.0))':
-    dependencies:
-      '@tanstack/form-core': 1.33.5
-      '@tanstack/svelte-store': 0.12.1(svelte@5.57.0(@typescript-eslint/types@8.68.0))
-      svelte: 5.57.0(@typescript-eslint/types@8.68.0)
 
   '@tanstack/svelte-query@6.1.45(svelte@5.57.0(@typescript-eslint/types@8.68.0))':
     dependencies:
       '@tanstack/query-core': 5.102.5
-      svelte: 5.57.0(@typescript-eslint/types@8.68.0)
-
-  '@tanstack/svelte-store@0.12.1(svelte@5.57.0(@typescript-eslint/types@8.68.0))':
-    dependencies:
-      '@tanstack/store': 0.11.1
       svelte: 5.57.0(@typescript-eslint/types@8.68.0)
 
   '@tanstack/svelte-virtual@3.13.36(svelte@5.57.0(@typescript-eslint/types@8.68.0))':
