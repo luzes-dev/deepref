@@ -438,15 +438,21 @@ where
     let mut tool_calls = Vec::new();
     let mut tool_results = Vec::new();
 
-    if let Some(json_val) = parsed_json_tool {
-        if let Some(tool_name) = json_val.get("tool").and_then(Value::as_str) {
-            let args = json_val.get("args").cloned().unwrap_or_else(|| json!({}));
-            tool_calls.push(AssistantToolCall {
-                id: Uuid::new_v4().to_string(),
-                tool: tool_name.to_owned(),
-                args,
-            });
-        }
+    if let Some(tool_name) = parsed_json_tool
+        .as_ref()
+        .and_then(|json_val| json_val.get("tool"))
+        .and_then(Value::as_str)
+    {
+        let args = parsed_json_tool
+            .as_ref()
+            .and_then(|json_val| json_val.get("args"))
+            .cloned()
+            .unwrap_or_else(|| json!({}));
+        tool_calls.push(AssistantToolCall {
+            id: Uuid::new_v4().to_string(),
+            tool: tool_name.to_owned(),
+            args,
+        });
     }
 
     for call in &tool_calls {

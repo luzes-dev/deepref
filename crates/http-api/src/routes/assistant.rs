@@ -1286,12 +1286,11 @@ pub(crate) async fn chat(
             user_message: &user_message,
         };
         let outcome = run_assistant_react_turn(input, &dispatcher, &event_tx).await;
-        if let Ok(message) = &outcome {
-            if let Err(error) =
+        if let Ok(message) = &outcome
+            && let Err(error) =
                 persist_assistant_turn(&turn_state.pool, body.conversation_id, message).await
-            {
-                tracing::warn!(error = %error, "failed to persist assistant turn");
-            }
+        {
+            tracing::warn!(error = %error, "failed to persist assistant turn");
         }
         drop(event_tx);
         let _ = result_tx.send(outcome.map(|_| ()));
@@ -1324,7 +1323,7 @@ pub(crate) async fn chat(
         None => {
             let outcome = result_rx
                 .await
-                .unwrap_or_else(|_| Err(AgentToolError::ExecutionFailed));
+                .unwrap_or(Err(AgentToolError::ExecutionFailed));
             Err(map_turn_error(
                 outcome.err().unwrap_or(AgentToolError::ExecutionFailed),
             ))

@@ -99,10 +99,10 @@ pub async fn create_assistant_conversation(
     .fetch_one(pool)
     .await
     .map_err(|err| {
-        if let sqlx::Error::Database(ref db_err) = err {
-            if db_err.code().as_deref() == Some("23503") {
-                return AssistantError::ProjectNotFound;
-            }
+        if let sqlx::Error::Database(ref db_err) = err
+            && db_err.code().as_deref() == Some("23503")
+        {
+            return AssistantError::ProjectNotFound;
         }
         AssistantError::Database(err)
     })?;
@@ -215,10 +215,10 @@ pub async fn append_assistant_message(
     .fetch_one(&mut *tx)
     .await
     .map_err(|err| {
-        if let sqlx::Error::Database(ref db_err) = err {
-            if db_err.code().as_deref() == Some("23503") {
-                return AssistantError::ConversationNotFound;
-            }
+        if let sqlx::Error::Database(ref db_err) = err
+            && db_err.code().as_deref() == Some("23503")
+        {
+            return AssistantError::ConversationNotFound;
         }
         AssistantError::Database(err)
     })?;
