@@ -5,9 +5,9 @@
 		"baseColor": "neutral"
 	},
 	"aliases": {
-		"components": "$lib/components",
+		"components": "$lib/shell",
 		"utils": "$lib/utils",
-		"ui": "$lib/components/ui",
+		"ui": "@deepref/ui",
 		"hooks": "$lib/hooks",
 		"lib": "$lib"
 	},

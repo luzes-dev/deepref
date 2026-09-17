@@ -1,5 +1,5 @@
 <script lang="ts">
-	import ProjectArticlesView from '$lib/components/project/ProjectArticlesView.svelte';
+	import ProjectArticlesView from '$lib/features/projects/components/ProjectArticlesView.svelte';
 </script>
 
 <ProjectArticlesView />

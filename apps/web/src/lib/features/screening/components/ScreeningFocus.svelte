@@ -13,22 +13,23 @@
 		ScreeningStateDto
 	} from '$lib/api/generated/models';
 	import { ApiError } from '$lib/api/custom-fetch';
-	import { Badge } from '$lib/components/ui/badge';
-	import { Button } from '$lib/components/ui/button';
-	import * as Card from '$lib/components/ui/card';
-	import * as Empty from '$lib/components/ui/empty';
-	import { Input } from '$lib/components/ui/input';
-	import { Skeleton } from '$lib/components/ui/skeleton';
+	import { Badge } from '@deepref/ui/badge';
+	import { Button } from '@deepref/ui/button';
+	import * as Card from '@deepref/ui/card';
+	import * as Empty from '@deepref/ui/empty';
+	import { Input } from '@deepref/ui/input';
+	import { ScrollArea } from '@deepref/ui/scroll-area';
+	import { Skeleton } from '@deepref/ui/skeleton';
 	import { createInfiniteQuery, useQueryClient } from '@tanstack/svelte-query';
 	import {
 		ArrowLeft,
 		ArrowRight,
 		CheckCircle2,
 		FileText,
+		Inbox,
 		LayoutGrid,
 		List,
 		Search,
-		ShieldCheck,
 		SlidersHorizontal
 	} from '@lucide/svelte';
 	import { goto } from '$app/navigation';
@@ -458,16 +459,10 @@
 
 <svelte:window onkeydown={handleKeydown} />
 
-<div class="mx-auto flex w-full max-w-[1480px] flex-col gap-5 p-4 md:gap-6 md:p-8">
+<div class="mx-auto flex w-full max-w-[1536px] flex-col gap-5 p-4 md:gap-6 md:p-8">
 	<header class="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
 		<div class="flex min-w-0 flex-col gap-2">
-			<div
-				class="flex flex-wrap items-center gap-2 text-xs font-semibold tracking-[0.12em] text-primary uppercase"
-			>
-				<ShieldCheck aria-hidden="true" /> Evidence workspace
-				<span class="text-muted-foreground">/</span> title & abstract
-			</div>
-			<h1 class="editorial-title text-4xl leading-none sm:text-5xl">Screen reports</h1>
+			<h1 class="editorial-title text-2xl leading-tight sm:text-3xl">Screen reports</h1>
 			<p class="max-w-2xl text-sm leading-6 text-muted-foreground sm:text-base">
 				Review one report at a time against the published protocol. Decisions stay
 				reversible and auditable.
@@ -488,63 +483,23 @@
 	</header>
 
 	<section
-		class="grid gap-4 rounded-xl border bg-card p-4 shadow-xs sm:grid-cols-[minmax(0,1fr)_auto] sm:items-center sm:p-5"
+		class="flex flex-wrap items-center gap-x-6 gap-y-2 border-b pb-3 text-sm"
 		aria-label="Screening progress"
 	>
-		<div class="flex min-w-0 flex-col gap-3">
-			<div class="flex flex-wrap items-center justify-between gap-2">
-				<div>
-					<p
-						class="text-xs font-semibold tracking-[0.12em] text-muted-foreground uppercase"
-					>
-						Review progress
-					</p>
-					<p class="mt-1 text-sm font-medium">
-						{progress.screened} of {progress.total} reports screened
-					</p>
-				</div>
-				<span class="text-2xl font-semibold tracking-tight text-primary"
-					>{progressPercent}%</span
-				>
-			</div>
-			<div
-				class="h-2.5 overflow-hidden rounded-full bg-muted"
-				role="progressbar"
-				aria-label="Screening progress"
-				aria-valuemin="0"
-				aria-valuemax={progress.total}
-				aria-valuenow={progress.screened}
-			>
-				<div
-					class="h-full rounded-full bg-primary"
-					style={`width: ${progressPercent}%`}
-				></div>
-			</div>
-		</div>
+		<span class="font-medium">{progress.screened} of {progress.total} reviewed</span>
 		<div
-			class="grid grid-cols-4 divide-x rounded-lg border bg-muted/20 text-center sm:min-w-[24rem]"
+			class="h-1.5 w-32 overflow-hidden rounded-full bg-muted"
+			role="progressbar"
+			aria-label="Screening progress"
+			aria-valuemin="0"
+			aria-valuemax={Math.max(1, progress.total)}
+			aria-valuenow={progress.screened}
 		>
-			<div class="flex flex-col gap-1 px-2 py-2">
-				<span class="text-lg font-semibold">{progress.unscreened}</span><span
-					class="text-[10px] tracking-wide text-muted-foreground uppercase">Pending</span
-				>
-			</div>
-			<div class="flex flex-col gap-1 px-2 py-2">
-				<span class="text-lg font-semibold text-success">{progress.included}</span><span
-					class="text-[10px] tracking-wide text-muted-foreground uppercase">Include</span
-				>
-			</div>
-			<div class="flex flex-col gap-1 px-2 py-2">
-				<span class="text-lg font-semibold text-destructive">{progress.excluded}</span><span
-					class="text-[10px] tracking-wide text-muted-foreground uppercase">Exclude</span
-				>
-			</div>
-			<div class="flex flex-col gap-1 px-2 py-2">
-				<span class="text-lg font-semibold text-warning">{progress.maybe}</span><span
-					class="text-[10px] tracking-wide text-muted-foreground uppercase">Maybe</span
-				>
-			</div>
+			<div class="h-full bg-primary" style:width={`${progressPercent}%`}></div>
 		</div>
+		<span class="text-muted-foreground"
+			>{progress.included} included · {progress.excluded} excluded · {progress.maybe} maybe</span
+		>
 	</section>
 
 	<section
@@ -659,7 +614,88 @@
 			}}
 		/>
 	{:else}
-		<div class="grid gap-6 lg:grid-cols-[minmax(0,1fr)_22rem]">
+		<!-- Mail Pattern Layout: Left Queue Column + Reading Canvas + Aside -->
+		<div
+			class="grid gap-6 lg:grid-cols-[18rem_minmax(0,1fr)] xl:grid-cols-[18rem_minmax(0,1fr)_18rem]"
+		>
+			<!-- Left Queue List (Mail inbox list pattern) -->
+			<aside class="hidden lg:flex lg:flex-col" aria-label="Queue list">
+				<Card.Root
+					class="flex h-[calc(100vh-17rem)] flex-col overflow-hidden border-border/70"
+				>
+					<Card.Header class="border-b bg-muted/20 px-3.5 py-3">
+						<div class="flex items-center justify-between">
+							<div
+								class="flex items-center gap-1.5 text-xs font-semibold text-foreground"
+							>
+								<Inbox class="size-3.5 text-muted-foreground" />
+								<span>Queue ({queueItems.length})</span>
+							</div>
+							<Badge variant="outline" class="text-[10px] capitalize">
+								{urlState.status}
+							</Badge>
+						</div>
+					</Card.Header>
+					<ScrollArea class="flex-1 p-2">
+						{#if queueQuery.isPending}
+							<div class="flex flex-col gap-2 p-1">
+								<Skeleton class="h-14 w-full rounded-md" />
+								<Skeleton class="h-14 w-full rounded-md" />
+								<Skeleton class="h-14 w-full rounded-md" />
+							</div>
+						{:else if queueItems.length === 0}
+							<div
+								class="flex h-32 flex-col items-center justify-center p-3 text-center text-xs text-muted-foreground"
+							>
+								<span>No reports in queue</span>
+							</div>
+						{:else}
+							<div class="flex flex-col gap-1.5">
+								{#each queueItems as item (item.report_id)}
+									<button
+										type="button"
+										class="flex flex-col items-start gap-1 rounded-lg border p-2.5 text-left text-xs transition-colors hover:bg-muted/60 {item.report_id ===
+										current?.report_id
+											? 'border-primary/50 bg-accent font-medium text-accent-foreground shadow-xs'
+											: 'border-transparent bg-transparent text-muted-foreground'}"
+										onclick={() => void selectReport(item.report_id)}
+									>
+										<div class="flex w-full items-center justify-between gap-1">
+											<span
+												class="truncate font-medium text-foreground {item.report_id ===
+												current?.report_id
+													? 'font-semibold text-primary'
+													: ''}"
+											>
+												{item.title ?? 'Untitled'}
+											</span>
+											<span
+												class="shrink-0 text-[10px] text-muted-foreground"
+											>
+												{item.publication_year ?? ''}
+											</span>
+										</div>
+										<div class="flex items-center gap-1.5">
+											<Badge
+												variant={item.title_abstract_status === 'exclude'
+													? 'destructive'
+													: item.title_abstract_status === 'include'
+														? 'default'
+														: 'secondary'}
+												class="px-1.5 py-0 text-[9px]"
+											>
+												{item.title_abstract_status}
+											</Badge>
+										</div>
+									</button>
+								{/each}
+							</div>
+						{/if}
+					</ScrollArea>
+				</Card.Root>
+			</aside>
+
+			<!-- Center Reading Canvas (Mail reading pane pattern) -->
 			<Card.Root class="min-w-0 border-primary/15" data-testid="screening-focus">
 				<Card.Header class="gap-3 border-b border-border/60 pb-4">
 					<div class="flex flex-wrap items-start justify-between gap-3">
@@ -767,19 +803,23 @@
 								onDecision={decide}
 								onUndo={undo}
 							/>
-							<AiProposalReview
-								{projectId}
-								reportId={current.report_id}
-								stage="title_abstract"
-								protocolVersionId={protocol?.id}
-								expectedRevision={current.revision}
-							/>
+							<details class="disclosure">
+								<summary>Get an AI suggestion</summary>
+								<AiProposalReview
+									{projectId}
+									reportId={current.report_id}
+									stage="title_abstract"
+									protocolVersionId={protocol?.id}
+									expectedRevision={current.revision}
+								/>
+							</details>
 						</article>
 					{/if}
 				</Card.Content>
 			</Card.Root>
 
-			<aside class="flex min-w-0 flex-col gap-6 lg:sticky lg:top-4 lg:self-start">
+			<!-- Right Sidebar: Criteria, History, Shortcuts -->
+			<aside class="flex min-w-0 flex-col gap-6 xl:sticky xl:top-4 xl:self-start">
 				<CriteriaPanel
 					criteria={protocol?.criteria ?? []}
 					protocolVersion={protocol?.version}

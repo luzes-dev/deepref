@@ -4,11 +4,11 @@
 		StudyReportRoleInput,
 		type StudyReportRoleInput as StudyReportRole
 	} from '$lib/api/generated/models/studyReportRoleInput';
-	import { Surface } from '$lib/components/layout';
-	import { Badge } from '$lib/components/ui/badge';
-	import { Button } from '$lib/components/ui/button';
-	import * as Field from '$lib/components/ui/field';
-	import * as Select from '$lib/components/ui/select';
+	import { Surface } from '@deepref/ui/layout';
+	import { Badge } from '@deepref/ui/badge';
+	import { Button } from '@deepref/ui/button';
+	import * as Field from '@deepref/ui/field';
+	import * as Select from '@deepref/ui/select';
 
 	let {
 		study,
@@ -35,7 +35,12 @@
 	const roles = Object.values(StudyReportRoleInput);
 </script>
 
-<Surface as="section" tone="subtle" class="flex flex-col gap-5 p-4 sm:p-5" label="Study membership">
+<Surface
+	as="section"
+	tone="plain"
+	class="flex flex-col gap-5 border-t border-border-subtle pt-5"
+	label="Study membership"
+>
 	<div class="border-b border-border/70 pb-4">
 		<div class="flex flex-wrap items-center justify-between gap-2">
 			<h2 class="text-lg font-semibold">Study membership</h2>

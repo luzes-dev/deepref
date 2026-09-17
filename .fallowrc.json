@@ -1,6 +1,8 @@
 {
   "$schema": "https://raw.githubusercontent.com/fallow-rs/fallow/main/schema.json",
-  "ignoreUnresolvedImports": ["/env.js"],
+  "ignoreUnresolvedImports": [
+    "/env.js"
+  ],
   "ignorePatterns": [
     "apps/server/**",
     "apps/web/jsrepo.config.ts",
@@ -10,13 +12,14 @@
     "apps/web/src/**/*.e2e.ts",
     "apps/web/src/routes/demo/**",
     "apps/web/src/lib/actions/typewriter.svelte.ts",
-    "apps/web/src/lib/components/LoadingButton.svelte",
     "apps/web/src/lib/typewriter.svelte.ts",
     "apps/web/src/lib/components/ui/**/**",
     "apps/web/src/lib/api/generated/**/**",
     "apps/web/src/lib/features/workflows/**",
     "apps/web/src/lib/features/automations/**",
-    "apps/web/src/lib/features/notifications/**"
+    "apps/web/src/lib/features/notifications/**",
+    "packages/ui/**",
+    "apps/web/src/lib/features/projects/index.ts"
   ],
   "duplicates": {
     "minLines": 15,
@@ -29,23 +32,33 @@
     "zones": [
       {
         "name": "utils",
-        "patterns": ["apps/web/src/lib/utils.ts"]
+        "patterns": [
+          "apps/web/src/lib/utils.ts"
+        ]
       },
       {
         "name": "api",
-        "patterns": ["apps/web/src/lib/api/**"]
+        "patterns": [
+          "apps/web/src/lib/api/**"
+        ]
       },
       {
-        "name": "components",
-        "patterns": ["apps/web/src/lib/components/**"]
+        "name": "shell",
+        "patterns": [
+          "apps/web/src/lib/shell/**"
+        ]
       },
       {
         "name": "features",
-        "patterns": ["apps/web/src/lib/features/**"]
+        "patterns": [
+          "apps/web/src/lib/features/**"
+        ]
       },
       {
         "name": "routes",
-        "patterns": ["apps/web/src/routes/**"]
+        "patterns": [
+          "apps/web/src/routes/**"
+        ]
       }
     ],
     "rules": [
@@ -55,19 +68,36 @@
       },
       {
         "from": "api",
-        "allow": ["utils"]
+        "allow": [
+          "utils"
+        ]
       },
       {
-        "from": "components",
-        "allow": ["utils", "api", "components"]
+        "from": "shell",
+        "allow": [
+          "utils",
+          "api",
+          "shell"
+        ]
       },
       {
         "from": "features",
-        "allow": ["utils", "api", "components", "features"]
+        "allow": [
+          "utils",
+          "api",
+          "shell",
+          "features"
+        ]
       },
       {
         "from": "routes",
-        "allow": ["utils", "api", "components", "features", "routes"]
+        "allow": [
+          "utils",
+          "api",
+          "shell",
+          "features",
+          "routes"
+        ]
       }
     ],
     "coverage": {
@@ -76,7 +106,7 @@
     "calls": {
       "forbidden": [
         {
-          "from": "components",
+          "from": "shell",
           "callee": "fetch"
         },
         {
@@ -130,12 +160,24 @@
     }
   },
   "health": {
-    "ignore": ["apps/web/src/**/*.svelte"],
+    "ignore": [
+      "apps/web/src/**/*.svelte"
+    ],
     "thresholdOverrides": [
       {
-        "files": ["apps/web/src/lib/api/client.ts"],
+        "files": [
+          "apps/web/src/lib/api/client.ts"
+        ],
         "maxCrap": 50,
         "reason": "Small API wrapper; risk is covered by route type checking and fetch error handling."
+      },
+      {
+        "files": [
+          "apps/web/src/lib/api/assistant-stream.ts"
+        ],
+        "maxCrap": 50,
+        "maxCyclomatic": 15,
+        "reason": "SSE stream normalizer handles multiple SSE event kinds"
       }
     ]
   },
@@ -155,6 +197,12 @@
     "rete-minimap-plugin",
     "rete-render-utils",
     "rete-svelte-plugin",
-    "sass"
+    "sass",
+    "@fontsource-variable/ibm-plex-sans",
+    "@fontsource-variable/source-serif-4",
+    "clsx",
+    "fast-check",
+    "shadcn-svelte",
+    "tailwind-merge"
   ]
 }

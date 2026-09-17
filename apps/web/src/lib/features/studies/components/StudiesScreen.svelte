@@ -33,12 +33,12 @@
 		getListProjectStudiesQueryKey,
 		getListProjectStudyHistoryQueryKey
 	} from '$lib/api/generated/studies/studies';
-	import * as Alert from '$lib/components/ui/alert';
-	import { Badge } from '$lib/components/ui/badge';
-	import { Separator } from '$lib/components/ui/separator';
-	import { PageHeader, PageToolbar, StatePanel, Surface } from '$lib/components/layout';
+	import { Badge } from '@deepref/ui/badge';
+	import { Separator } from '@deepref/ui/separator';
+	import { PageHeader, PageToolbar, StatePanel, Surface } from '@deepref/ui/layout';
 	import { useQueryClient } from '@tanstack/svelte-query';
 	import { ReviewRunObserver } from '$lib/features/ai-assistance/review-run-observer.svelte';
+	import { notifyError, notifyWarning } from '$lib/features/notifications/toast';
 	import { parseStudyLocation, updateStudyLocation } from '../url';
 	import StudyClassificationAssistance from './StudyClassificationAssistance.svelte';
 	import StudyDetailsPanel from './StudyDetailsPanel.svelte';
@@ -55,13 +55,8 @@
 	let renameTitle = $state('');
 	let reportId = $derived(location.reportId ?? '');
 	let role = $state<StudyReportRole>(StudyReportRoleInput.report_of_study);
-	let formError = $state<string | undefined>();
-	let groupingError = $state('');
-	let groupingErrorStatus = $state<number | null>(null);
 	let groupingAction = $state<'generate' | 'accept' | 'reject' | null>(null);
 	let pendingGroupingProposalId = $state<string | null>(null);
-	let classificationError = $state('');
-	let classificationErrorStatus = $state<number | null>(null);
 	let classificationAction = $state<'accept' | 'reject' | null>(null);
 	let pendingClassificationProposalId = $state<string | null>(null);
 
@@ -145,18 +140,14 @@
 	const groupingMutationError = $derived(
 		generateGroupingMutation.error?.message ?? decideGroupingMutation.error?.message ?? ''
 	);
-	const groupingErrorMessage = $derived(
-		groupingError || groupingReviewRun.error || groupingQueryError || groupingMutationError
-	);
+	const groupingErrorMessage = $derived(groupingQueryError || groupingMutationError);
 	const groupingConflict = $derived(
-		groupingErrorStatus === 409 ||
-			isApiErrorWithStatus(groupingProposalsQuery.error, 409) ||
+		isApiErrorWithStatus(groupingProposalsQuery.error, 409) ||
 			isApiErrorWithStatus(generateGroupingMutation.error, 409) ||
 			isApiErrorWithStatus(decideGroupingMutation.error, 409)
 	);
 	const groupingProviderUnavailable = $derived(
-		groupingErrorStatus === 503 ||
-			isApiErrorWithStatus(groupingProposalsQuery.error, 503) ||
+		isApiErrorWithStatus(groupingProposalsQuery.error, 503) ||
 			isApiErrorWithStatus(generateGroupingMutation.error, 503) ||
 			isApiErrorWithStatus(decideGroupingMutation.error, 503)
 	);
@@ -169,15 +160,14 @@
 	const classificationQueryError = $derived(classificationProposalsQuery.error?.message ?? '');
 	const classificationMutationError = $derived(decideClassificationMutation.error?.message ?? '');
 	const classificationErrorMessage = $derived(
-		classificationError || classificationQueryError || classificationMutationError
+		classificationQueryError || classificationMutationError
 	);
 	const classificationConflict = $derived(
-		classificationErrorStatus === 409 ||
-			isApiErrorWithStatus(classificationProposalsQuery.error, 409) ||
+		isApiErrorWithStatus(classificationProposalsQuery.error, 409) ||
 			isApiErrorWithStatus(decideClassificationMutation.error, 409)
 	);
 	const classificationProviderUnavailable = $derived(
-		classificationErrorStatus === 503 ||
+		isApiErrorWithStatus(classificationProposalsQuery.error, 503) ||
 			isApiErrorWithStatus(classificationProposalsQuery.error, 503) ||
 			isApiErrorWithStatus(decideClassificationMutation.error, 503)
 	);
@@ -269,16 +259,12 @@
 
 	async function generateGrouping(): Promise<void> {
 		if (!reportId || groupingAction || groupingReviewRun.isActive) return;
-		groupingError = '';
-		groupingErrorStatus = null;
 		groupingAction = 'generate';
 		try {
 			const response = await generateGroupingMutation.mutateAsync({ projectId, reportId });
 			await groupingReviewRun.observe(response.data);
 		} catch (error) {
-			groupingError =
-				error instanceof Error ? error.message : 'Study grouping suggestion failed.';
-			groupingErrorStatus = error instanceof ApiError ? error.status : null;
+			notifyError('Study grouping suggestion failed', error);
 			await groupingProposalsQuery.refetch();
 		} finally {
 			groupingAction = null;
@@ -290,8 +276,6 @@
 		const proposal = activeGroupingProposal;
 		const payload = activeGroupingPayload;
 		pendingGroupingProposalId = proposal.id;
-		groupingError = '';
-		groupingErrorStatus = null;
 		groupingAction = decision === 'accept' ? 'accept' : 'reject';
 		try {
 			await decideGroupingMutation.mutateAsync({
@@ -304,13 +288,14 @@
 			});
 			await refreshGroupingQueries(payload);
 		} catch (error) {
-			groupingError =
-				error instanceof ApiError && error.status === 409
-					? 'This study or report membership changed elsewhere. The proposal remains pending; refresh and review it again.'
-					: error instanceof Error
-						? error.message
-						: 'The study grouping decision failed.';
-			groupingErrorStatus = error instanceof ApiError ? error.status : null;
+			if (error instanceof ApiError && error.status === 409) {
+				notifyWarning(
+					'Study grouping changed elsewhere',
+					'The proposal remains pending; refresh and review it again.'
+				);
+			} else {
+				notifyError('The study grouping decision failed', error);
+			}
 			await groupingProposalsQuery.refetch();
 		} finally {
 			pendingGroupingProposalId = null;
@@ -330,8 +315,6 @@
 		if (!activeClassificationProposal || pendingClassificationProposalId) return;
 		const proposal = activeClassificationProposal;
 		pendingClassificationProposalId = proposal.id;
-		classificationError = '';
-		classificationErrorStatus = null;
 		classificationAction = decision;
 		try {
 			await decideClassificationMutation.mutateAsync({
@@ -344,15 +327,19 @@
 			});
 			await refreshClassificationQueries();
 		} catch (error) {
-			classificationError =
-				error instanceof ApiError && error.status === 409
-					? 'This study or classification proposal changed elsewhere. Refresh the proposal and review it again.'
-					: error instanceof ApiError && error.status === 503
-						? 'The AI provider is unavailable. The proposal remains unchanged; try again later.'
-						: error instanceof Error
-							? error.message
-							: 'The study classification decision failed.';
-			classificationErrorStatus = error instanceof ApiError ? error.status : null;
+			if (error instanceof ApiError && error.status === 409) {
+				notifyWarning(
+					'Study classification changed elsewhere',
+					'Refresh the proposal and review it again.'
+				);
+			} else if (error instanceof ApiError && error.status === 503) {
+				notifyWarning(
+					'AI provider unavailable',
+					'The proposal remains unchanged; try again later.'
+				);
+			} else {
+				notifyError('The study classification decision failed', error);
+			}
 			await classificationProposalsQuery.refetch();
 		} finally {
 			pendingClassificationProposalId = null;
@@ -368,7 +355,6 @@
 	}
 
 	async function createStudy(): Promise<void> {
-		formError = undefined;
 		try {
 			const response = await createMutation.mutateAsync({
 				projectId,
@@ -380,13 +366,12 @@
 			});
 			await selectStudy(response.data.id);
 		} catch (error) {
-			formError = error instanceof Error ? error.message : 'Study could not be created.';
+			notifyError('Study could not be created', error);
 		}
 	}
 
 	async function renameStudy(): Promise<void> {
 		if (!selectedStudyId || !selectedStudy) return;
-		formError = undefined;
 		try {
 			await renameMutation.mutateAsync({
 				projectId,
@@ -396,7 +381,7 @@
 			renameTitle = '';
 			await refreshStudy();
 		} catch (error) {
-			formError = error instanceof Error ? error.message : 'Study could not be renamed.';
+			notifyError('Study could not be renamed', error);
 		}
 	}
 
@@ -407,7 +392,6 @@
 		prediction_or_ai: boolean;
 	}): Promise<void> {
 		if (!selectedStudyId || !selectedStudy) return;
-		formError = undefined;
 		try {
 			await classifyMutation.mutateAsync({
 				projectId,
@@ -422,13 +406,12 @@
 			});
 			await refreshStudy();
 		} catch (error) {
-			formError = error instanceof Error ? error.message : 'Study classification failed.';
+			notifyError('Study classification failed', error);
 		}
 	}
 
 	async function assignReport(): Promise<void> {
 		if (!selectedStudyId || !selectedStudy || !reportId) return;
-		formError = undefined;
 		const previousStudyId = selectedMembership?.study_id;
 		const expectedPreviousRevision =
 			previousStudyId && previousStudyId !== selectedStudyId
@@ -448,13 +431,12 @@
 			await refreshStudy(previousStudyId);
 			reportId = '';
 		} catch (error) {
-			formError = error instanceof Error ? error.message : 'Report could not be assigned.';
+			notifyError('Report could not be assigned', error);
 		}
 	}
 
 	async function unassignReport(selectedReportId: string): Promise<void> {
 		if (!selectedStudyId || !selectedStudy) return;
-		formError = undefined;
 		try {
 			await membershipMutation.mutateAsync({
 				projectId,
@@ -463,7 +445,7 @@
 			});
 			await refreshStudy(undefined, selectedReportId);
 		} catch (error) {
-			formError = error instanceof Error ? error.message : 'Report could not be unassigned.';
+			notifyError('Report could not be unassigned', error);
 		}
 	}
 
@@ -507,9 +489,8 @@
 <div class="flex h-full min-h-0 flex-col overflow-auto bg-background" data-testid="studies-page">
 	<div class="mx-auto flex w-full max-w-[1440px] flex-col gap-5 p-4 sm:gap-6 sm:p-6 lg:p-8">
 		<PageHeader
-			eyebrow="Evidence workspace / Review"
 			title="Studies"
-			description="Group reports from one investigation so follow-ups and safety analyses are not counted as independent evidence."
+			description="Keep papers from the same investigation together to avoid counting a study twice."
 		/>
 
 		<PageToolbar label="Study identity workflow status">
@@ -524,13 +505,6 @@
 					>{/if}
 			</div>
 		</PageToolbar>
-
-		{#if formError}
-			<Alert.Root variant="destructive" data-testid="studies-form-error">
-				<Alert.Title>Study update unavailable</Alert.Title>
-				<Alert.Description>{formError}</Alert.Description>
-			</Alert.Root>
-		{/if}
 
 		<div class="grid min-h-0 gap-5 lg:grid-cols-[minmax(18rem,22rem)_minmax(0,1fr)]">
 			<StudyListPanel
@@ -602,11 +576,11 @@
 					<StudyHistoryPanel {history} />
 				</div>
 			{:else}
-				<Surface as="section" tone="subtle" class="p-4 sm:p-6">
+				<Surface as="section" tone="plain" class="border-t border-border-subtle pt-5">
 					<StatePanel
 						state="empty"
 						title="No study selected"
-						description="Select a study group or create one to inspect membership and provenance."
+						description="Choose a study on the left to review its papers, or create a new group."
 					/>
 				</Surface>
 			{/if}

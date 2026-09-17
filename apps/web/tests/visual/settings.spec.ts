@@ -1,4 +1,4 @@
-import { expect, test } from './fixtures';
+import { expect, test, captureViewport } from './fixtures';
 import { runSeriousCriticalAxe } from './axe';
 
 test.describe('DeepRef settings pilot', () => {
@@ -17,7 +17,7 @@ test.describe('DeepRef settings pilot', () => {
 		}));
 		expect(dimensions.bodyScrollWidth).toBeLessThanOrEqual(dimensions.viewportWidth);
 		expect(dimensions.documentScrollWidth).toBeLessThanOrEqual(dimensions.viewportWidth);
-		await expect(page).toHaveScreenshot('settings.png');
+		await captureViewport(page, 'settings.png');
 	});
 
 	test('has no serious or critical axe violations', async ({ page }) => {

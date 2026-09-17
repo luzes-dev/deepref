@@ -2,10 +2,10 @@
 	import type { ScreeningQueueItemDto } from '$lib/api/generated/models';
 	import { createVirtualizer } from '@tanstack/svelte-virtual';
 	import { getCoreRowModel, type ColumnDef, type RowData } from '@tanstack/table-core';
-	import { Button } from '$lib/components/ui/button';
-	import * as Card from '$lib/components/ui/card';
-	import { createSvelteTable } from '$lib/components/ui/data-table';
-	import { Badge } from '$lib/components/ui/badge';
+	import { Button } from '@deepref/ui/button';
+	import * as Card from '@deepref/ui/card';
+	import { createSvelteTable } from '@deepref/ui/data-table';
+	import { Badge } from '@deepref/ui/badge';
 	import { get } from 'svelte/store';
 	import { FileText, LoaderCircle } from '@lucide/svelte';
 

@@ -55,6 +55,28 @@ export default defineConfig(
 		}
 	},
 	{
+		files: ['src/**/*.{js,ts,svelte}'],
+		rules: {
+			'no-restricted-imports': [
+				'error',
+				{
+					patterns: [
+						{
+							group: ['@deepref/ui/src/**', '@deepref/ui/src'],
+							message:
+								'Do not import directly from @deepref/ui/src. Use explicit entrypoints like @deepref/ui/button or @deepref/ui/page-header.'
+						},
+						{
+							group: ['$lib/components', '$lib/components/**'],
+							message:
+								'The $lib/components layer has been retired. Use @deepref/ui for presentation, $lib/shell for shell chrome, or $lib/features for feature modules.'
+						}
+					]
+				}
+			]
+		}
+	},
+	{
 		files: ['src/lib/utils.ts'],
 		rules: {
 			'no-restricted-imports': [
@@ -65,17 +87,17 @@ export default defineConfig(
 							group: [
 								'$lib/api',
 								'$lib/api/**',
-								'$lib/components',
-								'$lib/components/**',
+								'$lib/shell',
+								'$lib/shell/**',
 								'$lib/features',
 								'$lib/features/**',
 								'**/api/**',
-								'**/components/**',
+								'**/shell/**',
 								'**/features/**',
 								'**/routes/**'
 							],
 							message:
-								'The utils layer must not depend on api, components, features, or routes.'
+								'The utils layer must not depend on api, shell, features, or routes.'
 						}
 					]
 				}
@@ -91,16 +113,15 @@ export default defineConfig(
 					patterns: [
 						{
 							group: [
-								'$lib/components',
-								'$lib/components/**',
+								'$lib/shell',
+								'$lib/shell/**',
 								'$lib/features',
 								'$lib/features/**',
-								'**/components/**',
+								'**/shell/**',
 								'**/features/**',
 								'**/routes/**'
 							],
-							message:
-								'The api layer must not depend on components, features, or routes.'
+							message: 'The api layer must not depend on shell, features, or routes.'
 						}
 					]
 				}
@@ -108,26 +129,20 @@ export default defineConfig(
 		}
 	},
 	{
-		files: ['src/lib/components/**/*.{js,ts,svelte}'],
+		files: ['src/lib/shell/**/*.{js,ts,svelte}'],
 		rules: {
 			'no-restricted-imports': [
 				'error',
 				{
 					patterns: [
 						{
-							group: [
-								'$lib/features',
-								'$lib/features/**',
-								'**/features/**',
-								'**/routes/**',
-								'../routes/**',
-								'../../routes/**'
-							],
-							message: 'The components layer must not depend on features or routes.'
+							group: ['**/routes/**', '../routes/**', '../../routes/**'],
+							message: 'The shell layer must not depend on routes.'
 						}
 					]
 				}
-			]
+			],
+			'svelte/no-navigation-without-resolve': 'off'
 		}
 	},
 	{
@@ -153,7 +168,7 @@ export default defineConfig(
 	},
 	{
 		files: [
-			'src/lib/components/**/*.{js,ts,svelte}',
+			'src/lib/shell/**/*.{js,ts,svelte}',
 			'src/lib/features/**/*.{js,ts,svelte}',
 			'src/routes/**/*.{js,ts,svelte}'
 		],
@@ -169,9 +184,34 @@ export default defineConfig(
 		}
 	},
 	{
-		files: ['src/lib/components/ui/button/button.svelte'],
+		files: ['src/lib/features/workflows/domain/**/*.ts'],
 		rules: {
-			'svelte/no-navigation-without-resolve': 'off'
+			'no-restricted-imports': [
+				'error',
+				{
+					patterns: [
+						{
+							group: [
+								'rete',
+								'rete-*',
+								'rete-*/**',
+								'svelte',
+								'svelte/**',
+								'@xyflow/**',
+								'@deepref/ui',
+								'@deepref/ui/**',
+								'$app/**',
+								'$lib/api/**',
+								'**/api/**',
+								'**/editor/**',
+								'**/routes/**'
+							],
+							message:
+								'Workflow definitions, validation and commands must remain renderer-neutral and independent of transport/UI modules.'
+						}
+					]
+				}
+			]
 		}
 	}
 );

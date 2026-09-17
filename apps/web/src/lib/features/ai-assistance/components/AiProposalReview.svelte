@@ -14,13 +14,13 @@
 		AiScreeningStageInput
 	} from '$lib/api/generated/models';
 	import { ApiError } from '$lib/api/custom-fetch';
-	import * as Alert from '$lib/components/ui/alert';
-	import { Badge } from '$lib/components/ui/badge';
-	import { Button } from '$lib/components/ui/button';
-	import * as Card from '$lib/components/ui/card';
-	import * as Empty from '$lib/components/ui/empty';
-	import { Skeleton } from '$lib/components/ui/skeleton';
-	import { Spinner } from '$lib/components/ui/spinner';
+	import * as Alert from '@deepref/ui/alert';
+	import { Badge } from '@deepref/ui/badge';
+	import { Button } from '@deepref/ui/button';
+	import * as Card from '@deepref/ui/card';
+	import * as Empty from '@deepref/ui/empty';
+	import { Skeleton } from '@deepref/ui/skeleton';
+	import { Spinner } from '@deepref/ui/spinner';
 	import { Brain, Check, FileSearch, Info, X } from '@lucide/svelte';
 	import { ReviewRunObserver } from '../review-run-observer.svelte';
 

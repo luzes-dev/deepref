@@ -1,12 +1,17 @@
 <script lang="ts">
 	import type { StudyEventDto } from '$lib/api/generated/models';
-	import { Surface, StatePanel } from '$lib/components/layout';
-	import { Badge } from '$lib/components/ui/badge';
+	import { Surface, StatePanel } from '@deepref/ui/layout';
+	import { Badge } from '@deepref/ui/badge';
 
 	let { history }: { history: StudyEventDto[] } = $props();
 </script>
 
-<Surface as="section" tone="inset" class="flex flex-col gap-4 p-4 sm:p-5" label="Grouping history">
+<Surface
+	as="section"
+	tone="plain"
+	class="flex flex-col gap-4 border-t border-border-subtle pt-5"
+	label="Grouping history"
+>
 	<div class="border-b border-border/70 pb-4">
 		<h2 class="text-lg font-semibold">Grouping history</h2>
 		<p class="mt-1 text-sm text-muted-foreground">
