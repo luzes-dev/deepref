@@ -1,0 +1,17 @@
+target
+node_modules
+.svelte-kit
+build
+dist
+dist-storybook
+coverage
+reports
+.stryker-tmp
+*.lcov
+.env
+.env.*
+!.env.example
+*.log
+.cache
+.eslintcache
+.prettiercache

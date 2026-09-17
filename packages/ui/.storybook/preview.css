@@ -1,0 +1,65 @@
+@import "../src/styles/styles.css";
+@source "../src";
+@source "../stories";
+
+html,
+body {
+	font-family:
+		"IBM Plex Sans Variable",
+		system-ui,
+		-apple-system,
+		sans-serif;
+	background-color: var(--background);
+	color: var(--foreground);
+	min-height: 100vh;
+	margin: 0;
+	padding: 0;
+	box-sizing: border-box;
+	-webkit-font-smoothing: antialiased;
+}
+
+#storybook-root {
+	min-height: 100vh;
+	box-sizing: border-box;
+}
+
+/* Ensure canvas layouts fill preview frames properly */
+.sb-full-height {
+	height: calc(100vh - 2rem);
+	min-height: 600px;
+}
+
+.story-sheet {
+	max-width: 64rem;
+	margin-inline: auto;
+	padding: clamp(1rem, 3vw, 2rem);
+	display: flex;
+	flex-direction: column;
+	gap: 1.75rem;
+}
+.story-sheet > header:not([data-page-header]),
+.story-sheet > section:not([data-state-panel]) {
+	display: flex;
+	flex-direction: column;
+	gap: 0.75rem;
+	min-width: 0;
+}
+.story-sheet > header:not([data-page-header]) h1 {
+	font-size: 1.5rem;
+	font-weight: 600;
+	line-height: 1.25;
+	letter-spacing: -0.025em;
+}
+.story-sheet > section:not([data-state-panel]) > h2 {
+	font-size: 0.875rem;
+	font-weight: 600;
+	border-bottom: 1px solid var(--border-subtle);
+	padding-bottom: 0.5rem;
+}
+.story-sheet > header:not([data-page-header]) > :where(p),
+.story-sheet > section:not([data-state-panel]) > :where(p) {
+	max-width: 65ch;
+	font-size: 0.875rem;
+	line-height: 1.6;
+	color: var(--muted-foreground);
+}
