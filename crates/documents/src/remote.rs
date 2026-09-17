@@ -1,4 +1,9 @@
-use std::{future::Future, net::IpAddr, pin::Pin, time::Duration};
+use std::{
+    future::Future,
+    net::{IpAddr, Ipv4Addr, Ipv6Addr},
+    pin::Pin,
+    time::Duration,
+};
 
 use bytes::Bytes;
 use futures::{StreamExt, stream};
@@ -226,38 +231,51 @@ async fn resolve_public_addresses(
     Ok((host, addresses))
 }
 
+fn is_reserved_special_ipv4(octets: [u8; 4]) -> bool {
+    match octets {
+        [0, ..] => true,
+        [100, b, ..] if (64..=127).contains(&b) => true,
+        [192, 0, ..] => true,
+        [198, b, ..] if (18..=19).contains(&b) => true,
+        [198, 51, 100, _] => true,
+        [203, 0, 113, _] => true,
+        [first, ..] if first >= 240 => true,
+        _ => false,
+    }
+}
+
+fn is_forbidden_ipv4(ip: &Ipv4Addr) -> bool {
+    ip.is_private()
+        || ip.is_loopback()
+        || ip.is_link_local()
+        || ip.is_unspecified()
+        || ip.is_broadcast()
+        || ip.is_multicast()
+        || is_reserved_special_ipv4(ip.octets())
+}
+
+fn is_reserved_special_ipv6(segments: [u16; 8]) -> bool {
+    segments[0] & 0xfe00 == 0xfc00
+        || segments[0] & 0xffc0 == 0xfe80
+        || (segments[0] == 0x2001 && matches!(segments[1], 0x0000 | 0x0002 | 0x0db8))
+        || (segments[0] == 0x2001 && segments[1] & 0xfff0 == 0x0010)
+        || segments[0] == 0x3fff
+}
+
+fn is_forbidden_ipv6(ip: &Ipv6Addr) -> bool {
+    ip.is_loopback()
+        || ip.is_unspecified()
+        || ip.is_multicast()
+        || is_reserved_special_ipv6(ip.segments())
+        || ip
+            .to_ipv4_mapped()
+            .is_some_and(|mapped| is_forbidden_ipv4(&mapped))
+}
+
 fn is_forbidden_ip(ip: IpAddr) -> bool {
     match ip {
-        IpAddr::V4(ip) => {
-            let octets = ip.octets();
-            ip.is_private()
-                || ip.is_loopback()
-                || ip.is_link_local()
-                || ip.is_unspecified()
-                || ip.is_broadcast()
-                || ip.is_multicast()
-                || octets[0] == 0
-                || (octets[0] == 100 && (64..=127).contains(&octets[1]))
-                || (octets[0] == 192 && octets[1] == 0)
-                || (octets[0] == 198 && (18..=19).contains(&octets[1]))
-                || (octets[0] == 198 && octets[1] == 51 && octets[2] == 100)
-                || (octets[0] == 203 && octets[1] == 0 && octets[2] == 113)
-                || octets[0] >= 240
-        }
-        IpAddr::V6(ip) => {
-            let segments = ip.segments();
-            ip.is_loopback()
-                || ip.is_unspecified()
-                || ip.is_multicast()
-                || segments[0] & 0xfe00 == 0xfc00
-                || segments[0] & 0xffc0 == 0xfe80
-                || (segments[0] == 0x2001 && matches!(segments[1], 0x0000 | 0x0002 | 0x0db8))
-                || (segments[0] == 0x2001 && segments[1] & 0xfff0 == 0x0010)
-                || segments[0] == 0x3fff
-                || ip
-                    .to_ipv4_mapped()
-                    .is_some_and(|mapped| is_forbidden_ip(IpAddr::V4(mapped)))
-        }
+        IpAddr::V4(ip) => is_forbidden_ipv4(&ip),
+        IpAddr::V6(ip) => is_forbidden_ipv6(&ip),
     }
 }
 

@@ -183,7 +183,10 @@ impl StudyGroupingTask {
         })
     }
 
-    fn validate_output(&self, output: &StudyGroupingProposal) -> Result<(), AiError> {
+    fn validate_output_identity_and_rationale(
+        &self,
+        output: &StudyGroupingProposal,
+    ) -> Result<(), AiError> {
         if output.report_id != self.report_id.as_uuid()
             || output.expected_previous_study_id != self.current_study_id.map(StudyId::as_uuid)
             || output.expected_previous_study_revision != self.current_study_revision
@@ -196,22 +199,38 @@ impl StudyGroupingTask {
                 "study grouping proposal is incomplete or targets another report".to_owned(),
             ));
         }
-        if let StudyGroupingChoice::ExistingStudy {
-            study_id,
-            expected_revision,
-        } = output.choice
-        {
-            let Some(candidate) = self.candidates.get(&study_id) else {
-                return Err(AiError::SemanticValidation(
-                    "study grouping selected a study outside the project".to_owned(),
-                ));
-            };
-            if expected_revision != candidate.revision || expected_revision < 0 {
-                return Err(AiError::SemanticValidation(
-                    "study grouping revision is not the grounded candidate revision".to_owned(),
-                ));
+        Ok(())
+    }
+
+    fn validate_output_choice(&self, output: &StudyGroupingProposal) -> Result<(), AiError> {
+        match &output.choice {
+            StudyGroupingChoice::ExistingStudy {
+                study_id,
+                expected_revision,
+            } => {
+                let Some(candidate) = self.candidates.get(study_id) else {
+                    return Err(AiError::SemanticValidation(
+                        "study grouping selected a study outside the project".to_owned(),
+                    ));
+                };
+                if *expected_revision != candidate.revision || *expected_revision < 0 {
+                    return Err(AiError::SemanticValidation(
+                        "study grouping revision is not the grounded candidate revision".to_owned(),
+                    ));
+                }
+            }
+            StudyGroupingChoice::NewStudy { title } => {
+                if !valid_study_title(title) {
+                    return Err(AiError::SemanticValidation(
+                        "new study title is invalid".to_owned(),
+                    ));
+                }
             }
         }
+        Ok(())
+    }
+
+    fn validate_output_provenance(&self, output: &StudyGroupingProposal) -> Result<(), AiError> {
         let mut seen = BTreeSet::new();
         for evidence in &output.provenance {
             let key = evidence.key();
@@ -224,13 +243,13 @@ impl StudyGroupingTask {
                 ));
             }
         }
-        if let StudyGroupingChoice::NewStudy { title } = &output.choice
-            && !valid_study_title(title)
-        {
-            return Err(AiError::SemanticValidation(
-                "new study title is invalid".to_owned(),
-            ));
-        }
+        Ok(())
+    }
+
+    fn validate_output(&self, output: &StudyGroupingProposal) -> Result<(), AiError> {
+        self.validate_output_identity_and_rationale(output)?;
+        self.validate_output_choice(output)?;
+        self.validate_output_provenance(output)?;
         Ok(())
     }
 }
@@ -432,7 +451,10 @@ impl AppraisalPrefillTask {
         })
     }
 
-    fn validate_output(&self, output: &AppraisalPrefill) -> Result<(), AiError> {
+    fn validate_output_identity_and_overall(
+        &self,
+        output: &AppraisalPrefill,
+    ) -> Result<(), AiError> {
         if output.report_id != self.report_id.as_uuid()
             || output.definition_id != self.definition_id
             || output.definition_version != self.definition_version
@@ -446,6 +468,10 @@ impl AppraisalPrefillTask {
                 "appraisal prefill is incomplete or targets another definition".to_owned(),
             ));
         }
+        Ok(())
+    }
+
+    fn validate_output_answers(&self, output: &AppraisalPrefill) -> Result<(), AiError> {
         for (answer, question) in output.answers.iter().zip(&self.questions) {
             if answer.question_id != question.id
                 || answer.rationale.trim().is_empty()
@@ -475,27 +501,39 @@ impl AppraisalPrefillTask {
                 )));
             }
         }
-        if output.domain_judgments.len() != self.domains.len()
-            || self.domains.iter().any(|domain| {
-                output
-                    .domain_judgments
-                    .get(&domain.id)
-                    .is_none_or(|judgment| !domain.allowed_judgments.contains(judgment))
-                    && domain.required
-            })
-            || output.domain_judgments.iter().any(|(id, value)| {
-                !self.domains.iter().any(|domain| domain.id == *id)
-                    || !self
-                        .domains
-                        .iter()
-                        .find(|domain| domain.id == *id)
-                        .is_some_and(|domain| domain.allowed_judgments.contains(value))
-            })
-        {
+        Ok(())
+    }
+
+    fn validate_output_domain_judgments(&self, output: &AppraisalPrefill) -> Result<(), AiError> {
+        let domain_count_matches = output.domain_judgments.len() == self.domains.len();
+        let required_domains_satisfied = self.domains.iter().all(|domain| {
+            if !domain.required {
+                return true;
+            }
+            output
+                .domain_judgments
+                .get(&domain.id)
+                .is_some_and(|judgment| domain.allowed_judgments.contains(judgment))
+        });
+        let all_judgments_valid = output.domain_judgments.iter().all(|(id, value)| {
+            self.domains
+                .iter()
+                .find(|domain| domain.id == *id)
+                .is_some_and(|domain| domain.allowed_judgments.contains(value))
+        });
+
+        if !domain_count_matches || !required_domains_satisfied || !all_judgments_valid {
             return Err(AiError::SemanticValidation(
                 "appraisal prefill domain judgments are incomplete or invalid".to_owned(),
             ));
         }
+        Ok(())
+    }
+
+    fn validate_output(&self, output: &AppraisalPrefill) -> Result<(), AiError> {
+        self.validate_output_identity_and_overall(output)?;
+        self.validate_output_answers(output)?;
+        self.validate_output_domain_judgments(output)?;
         Ok(())
     }
 }
@@ -708,57 +746,76 @@ impl DataExtractionTask {
         })
     }
 
-    fn validate_output(&self, output: &DataExtraction) -> Result<(), AiError> {
+    fn validate_output_identity(&self, output: &DataExtraction) -> Result<(), AiError> {
         if output.study_id != self.study_id.as_uuid() || output.fields.len() != self.fields.len() {
             return Err(AiError::SemanticValidation(
                 "data extraction is incomplete or targets another study".to_owned(),
             ));
         }
+        Ok(())
+    }
+
+    fn validate_extracted_field(
+        &self,
+        extracted: &ExtractedField,
+        seen: &mut BTreeSet<Uuid>,
+    ) -> Result<(), AiError> {
+        let (field_id, field_version, rationale) = match extracted {
+            ExtractedField::Value {
+                field_id,
+                field_version,
+                rationale,
+                ..
+            }
+            | ExtractedField::InsufficientEvidence {
+                field_id,
+                field_version,
+                rationale,
+            } => (*field_id, *field_version, rationale),
+        };
+        let Some(field) = self.fields.get(&field_id) else {
+            return Err(AiError::SemanticValidation(
+                "data extraction selected an unknown field".to_owned(),
+            ));
+        };
+        if field_version != field.version
+            || rationale.trim().is_empty()
+            || rationale.len() > 4_000
+            || !seen.insert(field_id)
+        {
+            return Err(AiError::SemanticValidation(
+                "data extraction field, value, rationale, or source is invalid".to_owned(),
+            ));
+        }
+        if let ExtractedField::Value { value, source, .. } = extracted
+            && (value.value_type() != field.value_type
+                || !valid_typed_value(value)
+                || !is_sha256(&source.content_hash)
+                || !self.allowed_evidence.contains_key(&source.key()))
+        {
+            return Err(AiError::SemanticValidation(
+                "data extraction typed value or source is invalid".to_owned(),
+            ));
+        }
+        Ok(())
+    }
+
+    fn validate_output_fields(&self, output: &DataExtraction) -> Result<(), AiError> {
         let mut seen = BTreeSet::new();
         for extracted in &output.fields {
-            let (field_id, field_version, rationale) = match extracted {
-                ExtractedField::Value {
-                    field_id,
-                    field_version,
-                    rationale,
-                    ..
-                }
-                | ExtractedField::InsufficientEvidence {
-                    field_id,
-                    field_version,
-                    rationale,
-                } => (*field_id, *field_version, rationale),
-            };
-            let Some(field) = self.fields.get(&field_id) else {
-                return Err(AiError::SemanticValidation(
-                    "data extraction selected an unknown field".to_owned(),
-                ));
-            };
-            if field_version != field.version
-                || rationale.trim().is_empty()
-                || rationale.len() > 4_000
-                || !seen.insert(field_id)
-            {
-                return Err(AiError::SemanticValidation(
-                    "data extraction field, value, rationale, or source is invalid".to_owned(),
-                ));
-            }
-            if let ExtractedField::Value { value, source, .. } = extracted
-                && (value.value_type() != field.value_type
-                    || !valid_typed_value(value)
-                    || !is_sha256(&source.content_hash)
-                    || !self.allowed_evidence.contains_key(&source.key()))
-            {
-                return Err(AiError::SemanticValidation(
-                    "data extraction typed value or source is invalid".to_owned(),
-                ));
-            }
+            self.validate_extracted_field(extracted, &mut seen)?;
         }
         if seen.len() != self.fields.len() {
             return Err(AiError::SemanticValidation(
                 "data extraction must contain every configured field exactly once".to_owned(),
             ));
         }
+        Ok(())
+    }
+
+    fn validate_output(&self, output: &DataExtraction) -> Result<(), AiError> {
+        self.validate_output_identity(output)?;
+        self.validate_output_fields(output)?;
         Ok(())
     }
 }

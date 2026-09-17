@@ -11,8 +11,8 @@ use utoipa::ToSchema;
 use uuid::Uuid;
 
 use super::{
+    actor::extract_actor,
     ai::{AcceptedReviewRun, ReviewRunDto, accepted_review_run},
-    review::extract_actor,
 };
 use crate::{
     error::{ApiError, ErrorResponse},
