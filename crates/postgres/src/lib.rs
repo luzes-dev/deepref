@@ -10,6 +10,7 @@ mod extraction;
 mod graph;
 mod jobs;
 mod legacy_import;
+mod notifications;
 mod prisma;
 mod protocol;
 mod review_calibration;
@@ -87,6 +88,11 @@ pub use jobs::{
     get_claimed_automation_job_project_id_for_run, job, recover_expired_jobs, renew_job,
 };
 pub use legacy_import::{LegacyImportCounts, import_legacy};
+pub use notifications::{
+    MarkNotificationsRead, NotificationDraft, NotificationPage, NotificationRecord,
+    NotificationSeverity, NotificationUnreadSummary, list_notifications, mark_notifications_read,
+    record_notification, record_notification_in_transaction, unread_summary,
+};
 pub use prisma::{PrismaProjectionError, get_prisma_projection};
 pub use protocol::{
     ProtocolActor, ProtocolDocument, ProtocolError, get_protocol_editor, get_published_protocol,
