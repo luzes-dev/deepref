@@ -1,0 +1,53 @@
+/*
+ * The official minimap preset owns the inner `.minimap` markup and its
+ * generated Svelte scope class. Keep the application theme at the adapter
+ * boundary so it applies to the official preset without copying or replacing
+ * that renderer.
+ */
+.workflow-rete-minimap {
+	z-index: 4;
+}
+
+.workflow-rete-minimap .minimap {
+	right: 1rem;
+	bottom: 1rem;
+	width: 11rem !important;
+	height: 11rem !important;
+	padding: 0.625rem;
+	background: var(--card) !important;
+	border: 1px solid var(--border-strong) !important;
+	border-radius: var(--radius-md);
+}
+
+.workflow-rete-minimap .mini-node {
+	background: var(--primary) !important;
+	border-color: var(--primary) !important;
+}
+
+.workflow-rete-minimap .mini-viewport {
+	background: var(--selection) !important;
+	border-color: var(--primary) !important;
+}
+
+/* A small preview canvas has no useful minimap scale. */
+@media (max-width: 719px) {
+	.workflow-rete-minimap {
+		display: none;
+	}
+}
+
+@container (max-width: 42rem) {
+	.workflow-rete-minimap {
+		display: none;
+	}
+}
+
+@container (max-height: 26.25rem) {
+	.workflow-rete-minimap {
+		display: none;
+	}
+}
+
+.workflow-rete-minimap-readonly {
+	display: none;
+}

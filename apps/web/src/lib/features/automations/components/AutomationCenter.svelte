@@ -1,50 +1,37 @@
 <script lang="ts">
+	import { tick } from 'svelte';
 	import {
 		createConfigureAutomationDefinition,
 		createGetAutomationRun,
 		createListAutomationDefinitions,
 		createListAutomationRuns,
-		getGetAutomationRunQueryKey,
 		getListAutomationDefinitionsQueryKey,
 		getListAutomationRunsQueryKey,
 		triggerAutomationManually
 	} from '$lib/api/generated/automations/automations';
 	import type {
 		AutomationDefinitionDto,
-		AutomationRunDto,
-		AutomationStepDto,
 		ListAutomationRunsParams
 	} from '$lib/api/generated/models';
 	import { ApiError } from '$lib/api/custom-fetch';
 	import { useQueryClient } from '@tanstack/svelte-query';
-	import CircleAlertIcon from '@lucide/svelte/icons/circle-alert';
-	import CircleCheckIcon from '@lucide/svelte/icons/circle-check';
-	import EyeIcon from '@lucide/svelte/icons/eye';
-	import PlayIcon from '@lucide/svelte/icons/play';
+	import AlertCircleIcon from '@lucide/svelte/icons/alert-circle';
+	import ChevronRightIcon from '@lucide/svelte/icons/chevron-right';
+	import PencilIcon from '@lucide/svelte/icons/pencil';
+	import PlusIcon from '@lucide/svelte/icons/plus';
 	import RefreshCwIcon from '@lucide/svelte/icons/refresh-cw';
-	import SaveIcon from '@lucide/svelte/icons/save';
-	import { PageHeader, PageToolbar, StatePanel, Surface } from '$lib/components/layout';
-	import * as Alert from '$lib/components/ui/alert';
-	import { Badge } from '$lib/components/ui/badge';
-	import { Button } from '$lib/components/ui/button';
-	import * as Card from '$lib/components/ui/card';
-	import * as Field from '$lib/components/ui/field';
-	import { Input } from '$lib/components/ui/input';
-	import * as Select from '$lib/components/ui/select';
-	import { Skeleton } from '$lib/components/ui/skeleton';
-	import { Spinner } from '$lib/components/ui/spinner';
-	import * as ToggleGroup from '$lib/components/ui/toggle-group';
+	import { StatePanel, Surface } from '@deepref/ui/layout';
+	import * as Alert from '@deepref/ui/alert';
+	import { notifyInfo } from '$lib/features/notifications/toast';
+	import { Badge } from '@deepref/ui/badge';
+	import { Button } from '@deepref/ui/button';
+	import { Spinner } from '@deepref/ui/spinner';
+	import AutomationEditor from './AutomationEditor.svelte';
+	import RecipeLibrary from './RecipeLibrary.svelte';
 	import {
-		AUTOMATION_RECIPE_ID,
 		AUTOMATION_RECIPE_ROUTE,
-		AUTOMATION_RECIPE_VERSION,
-		AUTOMATION_STATUSES,
-		AUTOMATION_TRIGGERS,
 		DEFAULT_AUTOMATION_DRAFT,
 		draftFromDefinition,
-		formatCostMicros,
-		formatInteger,
-		formatTimestamp,
 		isActiveAutomationRun,
 		isProjectMaintenanceDefinition,
 		isAutomationStatus,
@@ -53,6 +40,12 @@
 		labelForTrigger,
 		type AutomationDraft
 	} from '../helpers';
+	import {
+		automationGraphStorageKey,
+		saveAutomationGraphDraft,
+		type AutomationEditorSavePayload
+	} from '../graph';
+	import type { PredefinedRecipe } from '../recipes';
 
 	let { projectId }: { projectId: string } = $props();
 
@@ -61,9 +54,6 @@
 		'x-actor-kind': 'user',
 		'x-actor-id': 'local-user'
 	} satisfies Record<string, string>;
-	const BUILT_IN_STEPS = [
-		{ ordinal: 0, key: 'recompute_project_metrics', kind: 'deterministic_action' }
-	] satisfies AutomationStepDto[];
 
 	const queryClient = useQueryClient();
 	const definitionsQuery = createListAutomationDefinitions(() => projectId);
@@ -85,13 +75,34 @@
 		request: { headers: ACTOR_HEADERS }
 	}));
 
-	let selectedRunId = $state<string | null>(null);
-	let editorMode = $state<'add' | 'edit'>('add');
+	type CenterView = 'list' | 'editor';
+	type EditorMode = 'add' | 'edit';
+	type HubView = 'automations' | 'recipes';
+
+	let view = $state<CenterView>('list');
+	let hubView = $state<HubView>('automations');
+	let editorMode = $state<EditorMode>('add');
 	let selectedDefinitionId = $state<string | null>(null);
-	let localDraft = $state<AutomationDraft | null>(null);
 	let manualPending = $state(false);
-	let feedback = $state<string | null>(null);
+	let savePending = $state(false);
 	let manualError = $state<unknown>(null);
+	let feedback = $state<string | null>(null);
+	let validationError = $state<string | null>(null);
+	let localDraft = $state<AutomationDraft | null>(null);
+	let graphDirty = $state(false);
+	let initialDraft = $state<AutomationDraft>({ ...DEFAULT_AUTOMATION_DRAFT });
+	let selectedRunId = $state<string | null>(null);
+	let runsForceOpen = $state(false);
+
+	type ReturnFocusDescriptor = {
+		target: HTMLElement | null;
+		testId: string | null;
+		runId: string | null;
+	};
+
+	// The list branch is destroyed while the native modal is open. Keep the
+	// opener's identity so focus can move to the replacement button afterward.
+	let returnFocusDescriptor: ReturnFocusDescriptor | null = null;
 
 	const definitions = $derived(definitionsQuery.data?.data ?? []);
 	const supportedDefinitions = $derived(
@@ -109,44 +120,49 @@
 		selectedDefinition ? draftFromDefinition(selectedDefinition) : undefined
 	);
 	const draft = $derived(localDraft ?? serverDraft ?? DEFAULT_AUTOMATION_DRAFT);
-	const trimmedDraftName = $derived(draft.name.trim());
+	const isDirty = $derived(JSON.stringify(draft) !== JSON.stringify(serverDraft ?? initialDraft));
 	const nameAlreadyUsed = $derived(
 		editorMode === 'add' &&
 			supportedDefinitions.some(
 				(definition) =>
 					definition.name.trim().toLocaleLowerCase() ===
-					trimmedDraftName.toLocaleLowerCase()
+					draft.name.trim().toLocaleLowerCase()
 			)
 	);
 	const nameIsValid = $derived(
-		trimmedDraftName.length > 0 && trimmedDraftName.length <= 200 && !nameAlreadyUsed
-	);
-	const manualDefinitionIsReady = $derived(
-		selectedDefinition?.status === 'active' && selectedDefinition.trigger === 'manual'
-	);
-	const selectedRunFromList = $derived(
-		selectedRunId ? runs.find((run) => run.id === selectedRunId) : undefined
+		draft.name.trim().length > 0 && draft.name.trim().length <= 200 && !nameAlreadyUsed
 	);
 	const selectedRunQuery = createGetAutomationRun(
 		() => projectId,
 		() => selectedRunId ?? '',
-		() => ({ query: { enabled: selectedRunId !== null } })
+		() => ({
+			query: {
+				enabled: selectedRunId !== null,
+				refetchInterval: (query) =>
+					query.state.data?.data && isActiveAutomationRun(query.state.data.data)
+						? 2_000
+						: false,
+				refetchIntervalInBackground: false
+			}
+		})
 	);
-	const selectedRun = $derived(selectedRunQuery.data?.data ?? selectedRunFromList);
-	const queryError = $derived(definitionsQuery.error?.message ?? runsQuery.error?.message);
+	const selectedRun = $derived(
+		selectedRunQuery.data?.data ?? runs.find((run) => run.id === selectedRunId)
+	);
+	const manualDefinitionIsReady = $derived(
+		selectedDefinition?.status === 'active' && selectedDefinition.trigger === 'manual'
+	);
 	const configurationError = $derived(
 		configureMutation.error ? configurationErrorMessage(configureMutation.error) : null
 	);
-	const selectedRunError = $derived(
-		selectedRunQuery.error ? selectedRunQuery.error.message : null
-	);
+	const editorError = $derived(configurationError ?? validationError);
 	type AutomationPageState = 'loading' | 'error' | 'empty' | 'ready';
 	const pageState = $derived<AutomationPageState>(
-		queryError
+		definitionsQuery.error
 			? 'error'
-			: definitionsQuery.isPending || runsQuery.isPending
+			: definitionsQuery.isPending
 				? 'loading'
-				: definitions.length === 0 && runs.length === 0
+				: supportedDefinitions.length === 0
 					? 'empty'
 					: 'ready'
 	);
@@ -165,12 +181,7 @@
 			}),
 			queryClient.invalidateQueries({
 				queryKey: getListAutomationRunsQueryKey(projectId, RUN_LIST_PARAMS)
-			}),
-			selectedRunId
-				? queryClient.invalidateQueries({
-						queryKey: getGetAutomationRunQueryKey(projectId, selectedRunId)
-					})
-				: Promise.resolve()
+			})
 		]);
 	}
 
@@ -184,77 +195,178 @@
 		await Promise.all([definitionsQuery.refetch(), runsQuery.refetch()]);
 	}
 
-	function updateName(event: Event): void {
-		if (editorMode !== 'add') return;
-		const target = event.currentTarget;
-		if (!(target instanceof HTMLInputElement)) return;
-		localDraft = { ...draft, name: target.value };
-		feedback = null;
-	}
-
-	function selectDefinition(value: string | undefined): void {
-		if (!value) return;
-		const definition = supportedDefinitions.find((candidate) => candidate.id === value);
+	function openDefinitionEditor(definitionId: string, event?: MouseEvent): void {
+		if (savePending) return;
+		const definition = supportedDefinitions.find((candidate) => candidate.id === definitionId);
 		if (!definition) return;
+		captureEditorOpener(event?.currentTarget);
+		view = 'editor';
 		editorMode = 'edit';
 		selectedDefinitionId = definition.id;
-		localDraft = null;
-		feedback = null;
 		manualError = null;
+		validationError = null;
+		configureMutation.reset();
+		localDraft = null;
+		graphDirty = false;
+		selectedRunId = null;
 	}
 
-	function startAddingDefinition(): void {
+	function startAddingDefinition(event?: MouseEvent, baseName?: string): void {
+		if (savePending) return;
+		captureEditorOpener(event?.currentTarget);
+		view = 'editor';
 		editorMode = 'add';
 		selectedDefinitionId = null;
-		localDraft = { ...DEFAULT_AUTOMATION_DRAFT };
-		feedback = null;
 		manualError = null;
+		validationError = null;
+		configureMutation.reset();
+		let name = baseName ?? 'New automation';
+		let suffix = 2;
+		while (
+			supportedDefinitions.some(
+				(definition) => definition.name.toLocaleLowerCase() === name.toLocaleLowerCase()
+			)
+		) {
+			name = `${baseName ?? 'New automation'} ${suffix++}`;
+		}
+		localDraft = { ...DEFAULT_AUTOMATION_DRAFT, name };
+		initialDraft = { ...localDraft };
+		graphDirty = false;
+		selectedRunId = null;
 	}
 
-	function updateTrigger(value: string | undefined): void {
-		if (!isAutomationTrigger(value)) return;
-		localDraft = { ...draft, trigger: value };
-		feedback = null;
+	function forkRecipe(recipe: PredefinedRecipe): void {
+		startAddingDefinition(undefined, recipe.title);
 	}
 
-	function updateStatus(value: string | undefined): void {
-		if (!isAutomationStatus(value)) return;
-		localDraft = { ...draft, status: value };
-		feedback = null;
+	function captureEditorOpener(eventTarget?: EventTarget | null): void {
+		const target =
+			eventTarget instanceof HTMLElement
+				? eventTarget
+				: typeof document !== 'undefined' && document.activeElement instanceof HTMLElement
+					? document.activeElement
+					: null;
+		returnFocusDescriptor = {
+			target,
+			testId: target?.dataset.testid ?? null,
+			runId: target?.dataset.automationRunId ?? null
+		};
 	}
 
-	async function saveConfiguration(event: SubmitEvent): Promise<void> {
-		event.preventDefault();
+	function restoreEditorFocus(): void {
+		const descriptor = returnFocusDescriptor;
+		returnFocusDescriptor = null;
+		if (!descriptor) return;
+
+		void tick()
+			.then(() => {
+				const restore = () => {
+					let target = descriptor.target?.isConnected ? descriptor.target : null;
+					if (!target && descriptor.testId) {
+						target =
+							Array.from(
+								document.querySelectorAll<HTMLElement>('[data-testid]')
+							).find(
+								(candidate) =>
+									candidate.dataset.testid === descriptor.testId &&
+									(descriptor.runId === null ||
+										candidate.dataset.automationRunId === descriptor.runId)
+							) ?? null;
+					}
+					target?.focus({ preventScroll: true });
+				};
+
+				if (typeof window.requestAnimationFrame === 'function') {
+					window.requestAnimationFrame(restore);
+				} else {
+					restore();
+				}
+			})
+			.catch(() => undefined);
+	}
+
+	async function saveConfiguration(payload?: AutomationEditorSavePayload): Promise<boolean> {
+		const nextDraft = payload?.draft ?? draft;
+		const normalizedName = nextDraft.name.trim();
+		const nameAlreadyUsed = supportedDefinitions.some(
+			(definition) =>
+				editorMode === 'add' &&
+				definition.name.trim().toLocaleLowerCase() === normalizedName.toLocaleLowerCase()
+		);
 		if (
-			!nameIsValid ||
+			normalizedName.length === 0 ||
+			normalizedName.length > 200 ||
+			!isAutomationTrigger(nextDraft.trigger) ||
+			!isAutomationStatus(nextDraft.status)
+		) {
+			validationError = 'Name is required and must be at most 200 characters.';
+			return false;
+		}
+		if (nameAlreadyUsed) {
+			validationError = 'A definition with this name already exists.';
+			return false;
+		}
+		if (
+			savePending ||
 			configureMutation.isPending ||
 			(editorMode === 'edit' && !selectedDefinition)
 		)
-			return;
+			return false;
 
 		const addingDefinition = editorMode === 'add';
-		feedback = null;
+		savePending = true;
 		manualError = null;
+		validationError = null;
 		try {
 			const response = await configureMutation.mutateAsync({
 				projectId,
 				recipe: AUTOMATION_RECIPE_ROUTE,
 				data: {
-					name: trimmedDraftName,
-					trigger: draft.trigger,
-					status: draft.status
+					name: normalizedName,
+					trigger: nextDraft.trigger,
+					status: nextDraft.status
 				}
 			});
 			await refreshAutomationQueries();
+			if (payload) {
+				graphDirty = !saveAutomationGraphDraft(
+					automationGraphStorageKey(projectId, response.data.id),
+					payload.graph
+				);
+			}
 			localDraft = null;
 			editorMode = 'edit';
 			selectedDefinitionId = response.data.id;
-			feedback = addingDefinition
-				? 'Definition created and selected.'
-				: 'Definition settings saved.';
+			feedback = addingDefinition ? 'Automation created.' : 'Automation settings saved.';
+			if (graphDirty) feedback += ' The graph could not be saved in this browser.';
+			notifyInfo('Automations', feedback);
+			return !graphDirty;
 		} catch {
-			// The mutation error is rendered with the form.
+			// The mutation error is rendered in the editor.
+			return false;
+		} finally {
+			savePending = false;
 		}
+	}
+
+	function closeEditor(): void {
+		if (savePending) return;
+		if (
+			(isDirty || graphDirty) &&
+			typeof window !== 'undefined' &&
+			!window.confirm('Discard your unsaved automation changes?')
+		)
+			return;
+
+		view = 'list';
+		editorMode = 'add';
+		selectedDefinitionId = null;
+		manualError = null;
+		validationError = null;
+		configureMutation.reset();
+		localDraft = null;
+		graphDirty = false;
+		selectedRunId = null;
 	}
 
 	async function runManually(): Promise<void> {
@@ -262,7 +374,6 @@
 		if (!definition || !manualDefinitionIsReady || manualPending) return;
 
 		manualPending = true;
-		feedback = null;
 		manualError = null;
 		try {
 			const response = await triggerAutomationManually(
@@ -280,6 +391,7 @@
 			feedback = response.data.created
 				? 'Automation run queued.'
 				: 'That automation run was already queued; the existing run is shown below.';
+			notifyInfo('Automations', feedback);
 		} catch (error: unknown) {
 			manualError = error;
 		} finally {
@@ -287,8 +399,11 @@
 		}
 	}
 
-	function selectRun(runId: string): void {
-		selectedRunId = selectedRunId === runId ? null : runId;
+	async function handleRunQueued(runId: string): Promise<void> {
+		hubView = 'automations';
+		await refreshAutomationQueries();
+		selectedRunId = runId;
+		runsForceOpen = true;
 	}
 
 	function queryErrorMessage(error: unknown): string {
@@ -321,585 +436,362 @@
 		if (status === 'completed' || status === 'active') return 'secondary';
 		return 'outline';
 	}
-
-	function stepError(step: AutomationRunDto['steps'][number]): string {
-		return step.error ?? '—';
-	}
-
-	function stepLabel(step: AutomationRunDto['steps'][number]): string {
-		return `${step.ordinal + 1}. ${step.key}`;
-	}
 </script>
 
 <div
-	class="mx-auto flex h-full min-h-0 w-full max-w-[1440px] flex-col gap-5 overflow-auto bg-background p-4 sm:gap-6 sm:p-6 lg:p-8"
+	class="relative h-full min-h-0 w-full overflow-hidden bg-background"
 	data-testid="automation-page"
 	data-automation-state={pageState}
+	data-automation-view={view}
 >
-	<PageHeader
-		eyebrow="Evidence operations / Automation"
-		title="Automation Center"
-		description="Configure the closed built-in maintenance recipe, launch eligible manual runs, and inspect auditable job, step, and usage visibility."
-	>
-		{#snippet actions()}
-			<Button
-				variant="outline"
-				disabled={definitionsQuery.isFetching || runsQuery.isFetching}
-				onclick={() => void refreshAutomationQueries()}
+	{#if view === 'editor'}
+		<AutomationEditor
+			{projectId}
+			mode={editorMode}
+			definition={selectedDefinition}
+			{draft}
+			isSaving={savePending}
+			{isDirty}
+			{nameIsValid}
+			{nameAlreadyUsed}
+			configurationError={editorError}
+			{feedback}
+			manualReady={manualDefinitionIsReady}
+			{manualPending}
+			manualError={manualError ? manualErrorMessage(manualError) : null}
+			runs={runs.filter((run) => run.definition_id === selectedDefinitionId)}
+			{selectedRun}
+			selectedRunLoading={selectedRunId !== null && selectedRunQuery.isPending}
+			selectedRunError={selectedRunQuery.error?.message ?? null}
+			onDraftChange={(next) => {
+				if (!savePending) localDraft = next;
+			}}
+			onDirtyChange={(dirty) => {
+				graphDirty = dirty;
+			}}
+			onSave={saveConfiguration}
+			onClose={closeEditor}
+			onReturnFocus={restoreEditorFocus}
+			onRunManually={runManually}
+			onRefresh={refreshAutomationQueries}
+			onSelectRun={(id) => {
+				selectedRunId = id;
+			}}
+		/>
+	{:else}
+		<div class="mx-auto flex h-full min-h-0 w-full max-w-4xl flex-col overflow-auto">
+			<header
+				class="flex flex-wrap items-start justify-between gap-4 border-b border-border/70 px-5 py-6 sm:px-8 sm:py-8"
 			>
-				{#if definitionsQuery.isFetching || runsQuery.isFetching}<Spinner
-						data-icon="inline-start"
-					/>{:else}<RefreshCwIcon data-icon="inline-start" />{/if}
-				Refresh
-			</Button>
-		{/snippet}
-	</PageHeader>
-
-	<PageToolbar label="Automation status">
-		<Badge variant="secondary">Built-in recipe boundary</Badge>
-		<Badge variant="outline">{runs.length} recent runs</Badge>
-		{#if runs.some((run) => isActiveAutomationRun(run))}
-			<Badge variant="outline">Refreshing active runs</Badge>
-		{/if}
-	</PageToolbar>
-
-	{#if queryError}
-		<Alert.Root variant="destructive" data-testid="automation-query-error" role="alert">
-			<CircleAlertIcon />
-			<Alert.Title>Automation data unavailable</Alert.Title>
-			<Alert.Description>{queryErrorMessage(queryError)}</Alert.Description>
-			<Button variant="outline" size="sm" onclick={() => void retryQueries()}>Retry</Button>
-		</Alert.Root>
-	{/if}
-
-	{#if feedback}
-		<Alert.Root data-testid="automation-success">
-			<CircleCheckIcon />
-			<Alert.Title>Automation Center updated</Alert.Title>
-			<Alert.Description>{feedback}</Alert.Description>
-		</Alert.Root>
-	{/if}
-
-	<div class="grid min-w-0 gap-6 xl:grid-cols-[minmax(0,0.9fr)_minmax(0,1.4fr)]">
-		<Card.Root class="min-w-0" data-testid="automation-recipe">
-			<Card.Header>
-				<div class="flex items-start justify-between gap-3">
-					<div class="flex flex-col gap-1.5">
-						<Card.Title>Built-in recipe</Card.Title>
-						<Card.Description>
-							Only the supported project maintenance recipe can be configured here.
-						</Card.Description>
-					</div>
-					<Badge variant={supportedDefinitions.length > 0 ? 'secondary' : 'outline'}>
-						{supportedDefinitions.length > 0 ? 'Configured' : 'Not configured'}
-					</Badge>
-				</div>
-			</Card.Header>
-			<Card.Content class="flex flex-col gap-5">
-				<Field.FieldGroup data-testid="automation-definition-editor">
-					<Field.Field>
-						<Field.FieldLabel for="automation-definition">Definition</Field.FieldLabel>
-						<div class="flex flex-col gap-2 sm:flex-row sm:items-center">
-							<Select.Root
-								type="single"
-								value={selectedDefinitionId ?? ''}
-								onValueChange={selectDefinition}
-							>
-								<Select.Trigger
-									id="automation-definition"
-									class="w-full sm:flex-1"
-									data-testid="automation-definition-select"
-								>
-									{selectedDefinition?.name ?? 'Select a definition to edit'}
-								</Select.Trigger>
-								<Select.Content>
-									<Select.Group>
-										<Select.Label>Project maintenance definitions</Select.Label>
-										{#each supportedDefinitions as definition (definition.id)}
-											<Select.Item
-												value={definition.id}
-												label={`${definition.name} · ${labelForStatus(definition.status)} · ${labelForTrigger(definition.trigger)}`}
-											>
-												{definition.name} · {labelForStatus(
-													definition.status
-												)} · {labelForTrigger(definition.trigger)}
-											</Select.Item>
-										{/each}
-									</Select.Group>
-								</Select.Content>
-							</Select.Root>
-							<Button
-								type="button"
-								variant={editorMode === 'add' ? 'default' : 'outline'}
-								onclick={startAddingDefinition}
-								data-testid="automation-add-definition"
-							>
-								Add definition
-							</Button>
-						</div>
-						<Field.FieldDescription>
-							{#if editorMode === 'edit'}
-								Editing the selected definition. Its name is its identity and cannot
-								be renamed.
-							{:else}
-								Add a named definition or select an existing one to edit its trigger
-								and status.
-							{/if}
-						</Field.FieldDescription>
-					</Field.Field>
-				</Field.FieldGroup>
-
-				{#if unsupportedDefinitions.length > 0}
-					<Alert.Root data-testid="automation-unsupported-definitions">
-						<CircleAlertIcon />
-						<Alert.Title>Unsupported definitions ignored</Alert.Title>
-						<Alert.Description>
-							Only project_maintenance v1 definitions can be managed here. The
-							following definitions remain untouched:
-						</Alert.Description>
-						<ul class="flex flex-col gap-1 text-sm">
-							{#each unsupportedDefinitions as definition (definition.id)}
-								<li>
-									{definition.name} · {definition.recipe} v{definition.version}
-								</li>
-							{/each}
-						</ul>
-					</Alert.Root>
-				{/if}
-
-				<Surface
-					as="section"
-					tone="subtle"
-					class="p-3 text-sm"
-					label="Built-in recipe details"
-				>
-					<div class="flex flex-wrap items-center justify-between gap-2">
-						<span class="font-medium">{AUTOMATION_RECIPE_ROUTE}</span>
-						<span class="text-muted-foreground"
-							>Recipe {AUTOMATION_RECIPE_ID} · Version {AUTOMATION_RECIPE_VERSION}</span
-						>
-					</div>
-					<p class="mt-2 text-muted-foreground">
-						Steps are built into this recipe and are not editable from the Automation
-						Center.
+				<div class="min-w-0">
+					<p class="text-xs font-semibold tracking-[0.18em] text-primary uppercase">
+						Evidence operations
 					</p>
-					<ol class="mt-3 flex flex-col gap-2">
-						{#each selectedDefinition?.steps ?? BUILT_IN_STEPS as step (step.key)}
-							<li
-								class="flex items-center justify-between gap-3 rounded-md bg-background px-3 py-2"
-							>
-								<span>{step.ordinal + 1}. {step.key}</span>
-								<Badge variant="outline">{labelForStatus(step.kind)}</Badge>
-							</li>
-						{/each}
-					</ol>
-				</Surface>
-
-				<form class="flex flex-col gap-5" onsubmit={saveConfiguration}>
-					<Field.FieldGroup>
-						<Field.Field data-invalid={!nameIsValid}>
-							<Field.FieldLabel for="automation-name">Name</Field.FieldLabel>
-							<Input
-								id="automation-name"
-								value={draft.name}
-								readonly={editorMode === 'edit'}
-								maxlength={200}
-								oninput={updateName}
-								aria-invalid={!nameIsValid}
-								aria-readonly={editorMode === 'edit'}
-								placeholder="Project maintenance"
-							/>
-							<Field.FieldDescription>
-								{#if editorMode === 'edit'}
-									Definition names are immutable after creation.
-								{:else}
-									Use a concise, unique name for this project's built-in
-									automation.
-								{/if}
-							</Field.FieldDescription>
-							{#if !nameIsValid}
-								<Field.FieldError
-									>{nameAlreadyUsed
-										? 'A definition with this name already exists.'
-										: 'Name is required and must be at most 200 characters.'}</Field.FieldError
-								>
-							{/if}
-						</Field.Field>
-
-						<Field.FieldSet>
-							<Field.FieldLegend>Trigger</Field.FieldLegend>
-							<Field.FieldDescription>
-								Choose one of the supported domain events or a manual trigger.
-							</Field.FieldDescription>
-							<ToggleGroup.Root
-								type="single"
-								value={draft.trigger}
-								variant="outline"
-								class="flex w-full flex-wrap justify-start"
-								onValueChange={updateTrigger}
-								aria-label="Automation trigger"
-							>
-								{#each AUTOMATION_TRIGGERS as trigger (trigger)}
-									<ToggleGroup.Item
-										value={trigger}
-										class="grow sm:grow-0"
-										data-testid={`automation-trigger-${trigger}`}
-									>
-										{labelForTrigger(trigger)}
-									</ToggleGroup.Item>
-								{/each}
-							</ToggleGroup.Root>
-						</Field.FieldSet>
-
-						<Field.FieldSet>
-							<Field.FieldLegend>Status</Field.FieldLegend>
-							<Field.FieldDescription>
-								Paused definitions remain visible but cannot be manually started.
-							</Field.FieldDescription>
-							<ToggleGroup.Root
-								type="single"
-								value={draft.status}
-								variant="outline"
-								onValueChange={updateStatus}
-								aria-label="Automation status"
-							>
-								{#each AUTOMATION_STATUSES as status (status)}
-									<ToggleGroup.Item
-										value={status}
-										data-testid={`automation-status-${status}`}
-									>
-										{labelForStatus(status)}
-									</ToggleGroup.Item>
-								{/each}
-							</ToggleGroup.Root>
-						</Field.FieldSet>
-					</Field.FieldGroup>
-
-					{#if configurationError}
-						<Alert.Root variant="destructive" data-testid="automation-config-error">
-							<Alert.Title>Could not save recipe settings</Alert.Title>
-							<Alert.Description>{configurationError}</Alert.Description>
-						</Alert.Root>
-					{/if}
-
-					<Button
-						type="submit"
-						data-testid="automation-save-definition"
-						disabled={!nameIsValid ||
-							configureMutation.isPending ||
-							(editorMode === 'edit' && !selectedDefinition)}
+					<h1
+						class="editorial-title mt-2 text-3xl leading-tight text-foreground sm:text-4xl"
 					>
-						{#if configureMutation.isPending}<Spinner
-								data-icon="inline-start"
-							/>{:else}<SaveIcon data-icon="inline-start" />{/if}
-						{configureMutation.isPending
-							? 'Saving…'
-							: editorMode === 'add'
-								? 'Add definition'
-								: 'Save definition settings'}
+						Automations
+					</h1>
+					<p class="mt-2 max-w-xl text-sm leading-relaxed text-muted-foreground">
+						Run predefined evidence recipes or keep custom project maintenance
+						automations visible, predictable, and ready to run.
+					</p>
+				</div>
+				<div class="flex shrink-0 items-center gap-2">
+					<Button
+						variant="ghost"
+						size="icon"
+						aria-label="Refresh automations"
+						disabled={definitionsQuery.isFetching || runsQuery.isFetching}
+						onclick={() => void refreshAutomationQueries()}
+						data-testid="automation-refresh"
+					>
+						{#if definitionsQuery.isFetching || runsQuery.isFetching}<Spinner
+							/>{:else}<RefreshCwIcon aria-hidden="true" />{/if}
 					</Button>
-				</form>
-			</Card.Content>
-		</Card.Root>
-
-		<Card.Root class="min-w-0">
-			<Card.Header>
-				<div class="flex flex-wrap items-center justify-between gap-3">
-					<div class="flex flex-col gap-1.5">
-						<Card.Title>Manual execution</Card.Title>
-						<Card.Description>
-							Manual execution is available only when this recipe is active and uses
-							the manual trigger.
-						</Card.Description>
-					</div>
-					<Button
-						disabled={!manualDefinitionIsReady || manualPending}
-						onclick={() => void runManually()}
-						data-testid="automation-run-manually"
-					>
-						{#if manualPending}<Spinner data-icon="inline-start" />{:else}<PlayIcon
-								data-icon="inline-start"
-							/>{/if}
-						{manualPending ? 'Starting…' : 'Run manually'}
+					<Button onclick={startAddingDefinition} data-testid="automation-add-definition">
+						<PlusIcon data-icon="inline-start" aria-hidden="true" />
+						New automation
 					</Button>
 				</div>
-			</Card.Header>
-			<Card.Content class="flex flex-col gap-4">
-				<div data-testid="automation-manual-state">
-					<Surface
-						as="section"
-						tone="inset"
-						class="p-3 text-sm"
-						label="Manual execution status"
+			</header>
+
+			<div class="flex min-h-0 flex-1 flex-col gap-6 px-5 py-6 sm:px-8 sm:py-8">
+				<div
+					class="flex w-fit items-center gap-1 rounded-full border border-border/70 bg-muted/40 p-1"
+					role="group"
+					aria-label="Automations hub view"
+					data-testid="hub-view-toggle"
+				>
+					<button
+						type="button"
+						class="rounded-full px-4 py-1.5 text-sm font-medium transition-colors {hubView ===
+						'automations'
+							? 'bg-background text-foreground shadow-2xs'
+							: 'text-muted-foreground hover:text-foreground'}"
+						aria-pressed={hubView === 'automations'}
+						onclick={() => (hubView = 'automations')}
+						data-testid="hub-view-automations"
 					>
-						{#if !selectedDefinition && supportedDefinitions.length === 0}
-							Add a definition above before starting a run.
-						{:else if !selectedDefinition}
-							Select an active manual definition above before starting a run.
-						{:else if selectedDefinition.status === 'paused'}
-							This definition is paused. Activate it before starting a manual run.
-						{:else if selectedDefinition.trigger !== 'manual'}
-							This definition listens for <span class="font-medium"
-								>{labelForTrigger(selectedDefinition.trigger)}</span
-							>. Select Manual above to enable the button.
-						{:else}
-							The run request uses a fresh idempotency key for every click.
-						{/if}
-					</Surface>
+						Automations
+					</button>
+					<button
+						type="button"
+						class="rounded-full px-4 py-1.5 text-sm font-medium transition-colors {hubView ===
+						'recipes'
+							? 'bg-background text-foreground shadow-2xs'
+							: 'text-muted-foreground hover:text-foreground'}"
+						aria-pressed={hubView === 'recipes'}
+						onclick={() => (hubView = 'recipes')}
+						data-testid="hub-view-recipes"
+					>
+						Recipe Library
+					</button>
 				</div>
-				{#if manualError}
-					<Alert.Root variant="destructive" data-testid="automation-manual-error">
-						<Alert.Title>Could not start automation</Alert.Title>
-						<Alert.Description>{manualErrorMessage(manualError)}</Alert.Description>
-					</Alert.Root>
-				{/if}
-			</Card.Content>
-		</Card.Root>
-	</div>
 
-	<section aria-labelledby="automation-runs-heading" class="flex flex-col gap-4">
-		<div class="flex flex-wrap items-end justify-between gap-2">
-			<div class="flex flex-col gap-1">
-				<h2 id="automation-runs-heading" class="text-xl font-semibold">Recent runs</h2>
-				<p class="text-sm text-muted-foreground">
-					Showing the latest {RUN_LIST_PARAMS.limit} runs. Queued and running runs refresh every
-					two seconds while this page is visible.
-				</p>
-			</div>
-			<Badge variant="secondary">{runs.length} shown</Badge>
-		</div>
-
-		{#if runsQuery.isPending}
-			<div data-testid="automation-runs-loading">
-				<Surface tone="subtle" class="p-4 sm:p-6">
-					<StatePanel
-						state="loading"
-						title="Loading run history"
-						description="Checking queued, running, and completed maintenance work."
+				{#if hubView === 'recipes'}
+					<RecipeLibrary
+						{projectId}
+						{definitions}
+						onFork={forkRecipe}
+						onDefinitionCreated={refreshAutomationQueries}
+						onRunQueued={handleRunQueued}
 					/>
-				</Surface>
-			</div>
-		{:else if runsQuery.error}
-			<div data-testid="automation-runs-error">
-				<Surface tone="subtle" class="p-4 sm:p-6">
-					<StatePanel
-						state="error"
-						title="Runs could not be loaded"
-						description={queryErrorMessage(runsQuery.error)}
+				{:else}
+					<div
+						class="flex min-h-0 flex-1 flex-col gap-6"
+						data-testid="automation-manager"
 					>
-						{#snippet action()}
-							<Button variant="outline" onclick={() => void runsQuery.refetch()}
-								>Retry runs</Button
+						{#if definitionsQuery.error}
+							<Alert.Root
+								variant="destructive"
+								data-testid="automation-query-error"
+								role="alert"
 							>
-						{/snippet}
-					</StatePanel>
-				</Surface>
-			</div>
-		{:else if runs.length === 0}
-			<div data-testid="automation-runs-empty">
-				<Surface tone="subtle" class="p-4 sm:p-6">
-					<StatePanel
-						state="empty"
-						title="No automation runs yet"
-						description="Configure the built-in recipe and start a manual run, or wait for its selected domain trigger."
-					/>
-				</Surface>
-			</div>
-		{:else}
-			<div class="grid gap-4" data-testid="automation-runs">
-				{#each runs as run (run.id)}
-					<Card.Root class="min-w-0" data-testid="automation-run">
-						<Card.Header class="gap-3">
-							<div class="flex flex-wrap items-center justify-between gap-2">
-								<Card.Title>Run {run.id.slice(0, 8)}</Card.Title>
-								<Badge variant={badgeVariant(run.status)}
-									>{labelForStatus(run.status)}</Badge
+								<AlertCircleIcon />
+								<Alert.Title>Automations unavailable</Alert.Title>
+								<Alert.Description
+									>{queryErrorMessage(definitionsQuery.error)}</Alert.Description
 								>
-							</div>
-							<Card.Description>
-								{run.recipe} · v{run.version} · {labelForTrigger(run.trigger)}
-							</Card.Description>
-						</Card.Header>
-						<Card.Content class="flex flex-col gap-4">
-							<Surface
-								as="section"
-								tone="subtle"
-								class="p-3"
-								label="Automation run metrics"
-							>
-								<dl class="grid gap-3 text-sm sm:grid-cols-2 lg:grid-cols-4">
-									<div>
-										<dt class="text-muted-foreground">Created</dt>
-										<dd class="font-medium">
-											{formatTimestamp(run.created_at)}
-										</dd>
-									</div>
-									<div>
-										<dt class="text-muted-foreground">Finished</dt>
-										<dd class="font-medium">
-											{formatTimestamp(run.finished_at)}
-										</dd>
-									</div>
-									<div>
-										<dt class="text-muted-foreground">Input tokens</dt>
-										<dd class="font-medium">
-											{formatInteger(run.usage.input_tokens)}
-										</dd>
-									</div>
-									<div>
-										<dt class="text-muted-foreground">Output tokens</dt>
-										<dd class="font-medium">
-											{formatInteger(run.usage.output_tokens)}
-										</dd>
-									</div>
-								</dl>
-							</Surface>
-
-							<div class="grid gap-4 lg:grid-cols-2">
-								<Surface
-									as="section"
-									tone="inset"
-									class="flex flex-col gap-2 p-3"
-									label="Automation job"
-								>
-									<div class="flex items-center justify-between gap-2">
-										<h3 class="font-medium">Job</h3>
-										<Badge variant={badgeVariant(run.job.status)}
-											>{labelForStatus(run.job.status)}</Badge
-										>
-									</div>
-									<dl class="grid gap-2 text-sm sm:grid-cols-2">
-										<div>
-											<dt class="text-muted-foreground">Attempts</dt>
-											<dd>{run.job.attempts} / {run.job.max_attempts}</dd>
-										</div>
-										<div>
-											<dt class="text-muted-foreground">Available</dt>
-											<dd>{formatTimestamp(run.job.available_at)}</dd>
-										</div>
-									</dl>
-									{#if run.job.last_error}
-										<p class="text-sm text-destructive">
-											{run.job.last_error}
-										</p>
-									{/if}
-								</Surface>
-
-								<Surface
-									as="section"
-									tone="inset"
-									class="flex flex-col gap-2 p-3"
-									label="Automation usage"
-								>
-									<h3 class="font-medium">Usage</h3>
-									<p class="text-sm">
-										{formatCostMicros(run.usage.cost_micros)}
-									</p>
-									{#if run.error}
-										<p class="text-sm text-destructive">
-											Run error: {run.error}
-										</p>
-									{/if}
-								</Surface>
-							</div>
-
-							<section class="flex flex-col gap-2" aria-label="Automation steps">
-								<h3 class="font-medium">Steps</h3>
-								{#if run.steps.length === 0}
-									<p class="text-sm text-muted-foreground">No steps reported.</p>
-								{:else}
-									<ol class="flex flex-col gap-2">
-										{#each run.steps as step (step.id)}
-											<li
-												class="flex flex-col gap-1 rounded-lg border p-3 text-sm sm:flex-row sm:items-center sm:justify-between sm:gap-3"
-												data-testid="automation-step"
-											>
-												<div class="flex min-w-0 flex-col gap-1">
-													<span class="truncate font-medium"
-														>{stepLabel(step)}</span
-													>
-													<span class="text-xs text-muted-foreground"
-														>{labelForStatus(step.kind)}</span
-													>
-												</div>
-												<div class="flex flex-wrap items-center gap-2">
-													<Badge variant={badgeVariant(step.status)}
-														>{labelForStatus(step.status)}</Badge
-													>
-													<span class="text-xs text-muted-foreground"
-														>{step.attempts} attempt{step.attempts === 1
-															? ''
-															: 's'}</span
-													>
-												</div>
-												{#if step.error}
-													<p class="basis-full text-xs text-destructive">
-														{stepError(step)}
-													</p>
-												{/if}
-											</li>
-										{/each}
-									</ol>
-								{/if}
-							</section>
-
-							<div class="flex justify-end">
 								<Button
 									variant="outline"
 									size="sm"
-									aria-expanded={selectedRunId === run.id}
-									onclick={() => selectRun(run.id)}
+									onclick={() => void retryQueries()}>Retry</Button
 								>
-									<EyeIcon data-icon="inline-start" />
-									{selectedRunId === run.id
-										? 'Hide run details'
-										: 'View run details'}
-								</Button>
+							</Alert.Root>
+						{:else if definitionsQuery.isPending}
+							<div data-testid="automation-list-loading">
+								<StatePanel
+									state="loading"
+									title="Loading automations"
+									description="Checking the automations configured for this project."
+								/>
 							</div>
-						</Card.Content>
-					</Card.Root>
-				{/each}
-			</div>
-		{/if}
-	</section>
+						{:else if supportedDefinitions.length === 0}
+							<div data-testid="automation-definitions-empty">
+								<div
+									data-testid="automation-list-empty"
+									data-automation-empty="true"
+								>
+									<StatePanel
+										state="empty"
+										title="No automations yet"
+										description="Create a project maintenance automation to make repeatable work easier to follow."
+									>
+										{#snippet action()}
+											<Button
+												onclick={startAddingDefinition}
+												data-testid="automation-empty-create"
+											>
+												<PlusIcon
+													data-icon="inline-start"
+													aria-hidden="true"
+												/>
+												Create automation
+											</Button>
+										{/snippet}
+									</StatePanel>
+								</div>
+							</div>
+						{:else}
+							<section
+								class="flex flex-col gap-3"
+								aria-labelledby="automation-list-heading"
+							>
+								<div class="flex items-end justify-between gap-3">
+									<div>
+										<h2
+											id="automation-list-heading"
+											class="text-base font-semibold text-foreground"
+										>
+											Your automations
+										</h2>
+										<p class="mt-1 text-sm text-muted-foreground">
+											{supportedDefinitions.length} configured
+											{supportedDefinitions.length === 1
+												? 'automation'
+												: 'automations'}
+										</p>
+									</div>
+									{#if runs.some((run) => isActiveAutomationRun(run))}
+										<Badge variant="outline">Activity in progress</Badge>
+									{/if}
+								</div>
 
-	{#if selectedRunId}
-		<Card.Root data-testid="automation-run-details">
-			<Card.Header>
-				<Card.Title>Run details</Card.Title>
-				<Card.Description>{selectedRunId}</Card.Description>
-			</Card.Header>
-			<Card.Content>
-				{#if selectedRunQuery.isPending}
-					<div class="flex flex-col gap-3" aria-label="Loading automation run details">
-						<Skeleton class="h-5 w-1/3" />
-						<Skeleton class="h-16 w-full" />
-					</div>
-				{:else if selectedRunError}
-					<Alert.Root variant="destructive">
-						<Alert.Title>Run details unavailable</Alert.Title>
-						<Alert.Description>{selectedRunError}</Alert.Description>
-					</Alert.Root>
-				{:else if selectedRun}
-					<div class="flex flex-wrap items-center gap-2 text-sm">
-						<Badge variant={badgeVariant(selectedRun.status)}
-							>{labelForStatus(selectedRun.status)}</Badge
+								<div
+									class="flex flex-col divide-y divide-border/70 rounded-xl border border-border/80 bg-card"
+								>
+									{#each supportedDefinitions as definition (definition.id)}
+										<article
+											class="group flex flex-wrap items-center gap-4 px-4 py-4 transition-colors first:rounded-t-xl last:rounded-b-xl hover:bg-muted/25 sm:px-5"
+											data-testid={`automation-definition-card-${definition.id}`}
+											data-automation-id={definition.id}
+										>
+											<div class="min-w-0 flex-1">
+												<div
+													class="flex min-w-0 flex-wrap items-center gap-2"
+												>
+													<h3
+														class="truncate font-medium text-foreground"
+													>
+														{definition.name}
+													</h3>
+													<Badge
+														variant={badgeVariant(definition.status)}
+													>
+														{labelForStatus(definition.status)}
+													</Badge>
+												</div>
+												<p class="mt-1 text-sm text-muted-foreground">
+													Runs on {labelForTrigger(definition.trigger)}
+												</p>
+											</div>
+											<div class="flex items-center gap-2">
+												<span
+													class="hidden text-xs text-muted-foreground sm:inline"
+												>
+													{definition.steps.length}
+													{definition.steps.length === 1
+														? 'step'
+														: 'steps'}
+												</span>
+												<Button
+													variant="ghost"
+													size="sm"
+													onclick={(event) =>
+														openDefinitionEditor(definition.id, event)}
+													data-testid={`automation-edit-definition-${definition.id}`}
+												>
+													<PencilIcon
+														data-icon="inline-start"
+														aria-hidden="true"
+													/>
+													Edit
+													<ChevronRightIcon
+														data-icon="inline-end"
+														aria-hidden="true"
+													/>
+												</Button>
+											</div>
+										</article>
+									{/each}
+								</div>
+							</section>
+						{/if}
+
+						{#if unsupportedDefinitions.length > 0}
+							<Alert.Root data-testid="automation-unsupported-definitions">
+								<AlertCircleIcon />
+								<Alert.Title>Some automations are unavailable here</Alert.Title>
+								<Alert.Description>
+									These automations use recipes this editor does not support: {unsupportedDefinitions
+										.map((definition) => definition.name)
+										.join(', ')}.
+								</Alert.Description>
+							</Alert.Root>
+						{/if}
+
+						<details
+							class="group"
+							open={runsQuery.isPending || runsForceOpen}
+							data-testid="automation-run-history"
 						>
-						<span class="text-muted-foreground"
-							>{labelForTrigger(selectedRun.trigger)} trigger · created
-							{formatTimestamp(selectedRun.created_at)}</span
-						>
+							<summary
+								class="flex cursor-pointer list-none items-center justify-between gap-3 py-1 text-sm text-muted-foreground marker:hidden"
+							>
+								<span class="font-medium text-foreground">Recent activity</span>
+								<span class="text-xs group-open:hidden">{runs.length} runs</span>
+							</summary>
+							<div class="mt-3 flex flex-col gap-2">
+								{#if runsQuery.error}
+									<Alert.Root
+										variant="destructive"
+										data-testid="automation-runs-error"
+									>
+										<AlertCircleIcon />
+										<Alert.Title>Recent activity unavailable</Alert.Title>
+										<Alert.Description
+											>{queryErrorMessage(runsQuery.error)}</Alert.Description
+										>
+										<Button
+											variant="outline"
+											size="sm"
+											onclick={() => void runsQuery.refetch()}>Retry</Button
+										>
+									</Alert.Root>
+								{:else if runsQuery.isPending}
+									<div data-testid="automation-runs-loading">
+										<Surface tone="subtle" class="p-4">
+											<div
+												class="flex items-center gap-2 text-sm text-muted-foreground"
+											>
+												<Spinner /> Loading recent activity
+											</div>
+										</Surface>
+									</div>
+								{:else if runs.length === 0}
+									<div data-testid="automation-runs-empty">
+										<Surface tone="subtle" class="p-4">
+											<p class="text-sm text-muted-foreground">
+												No automation runs yet.
+											</p>
+										</Surface>
+									</div>
+								{:else}
+									<div
+										class="flex flex-col divide-y divide-border/70 rounded-lg border border-border/80 bg-card"
+										data-testid="automation-runs"
+									>
+										{#each runs.slice(0, 5) as run (run.id)}
+											<button
+												type="button"
+												class="flex items-center justify-between gap-3 px-4 py-3 text-left text-sm hover:bg-muted/25"
+												data-testid="automation-run"
+												data-automation-run-id={run.id}
+												disabled={!supportedDefinitions.some(
+													(definition) =>
+														definition.id === run.definition_id
+												)}
+												onclick={(event) => {
+													openDefinitionEditor(run.definition_id, event);
+													selectedRunId = run.id;
+												}}
+											>
+												<span class="min-w-0 truncate text-muted-foreground"
+													>Run {run.id.slice(0, 8)}</span
+												>
+												<Badge variant={badgeVariant(run.status)}
+													>{labelForStatus(run.status)}</Badge
+												>
+											</button>
+										{/each}
+									</div>
+								{/if}
+							</div>
+						</details>
 					</div>
-				{:else}
-					<p class="text-sm text-muted-foreground">This run is no longer available.</p>
 				{/if}
-			</Card.Content>
-		</Card.Root>
+			</div>
+		</div>
 	{/if}
 </div>
-
-<style>
-	:global([data-testid='automation-run'] dd) {
-		word-break: break-word;
-	}
-</style>

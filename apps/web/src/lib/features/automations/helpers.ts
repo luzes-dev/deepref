@@ -10,6 +10,18 @@ export const AUTOMATION_RECIPE_ID = 'project_maintenance' as const;
 export const AUTOMATION_RECIPE_VERSION = 1 as const;
 export const AUTOMATION_RECIPE_ROUTE = 'project_maintenance.v1' as const;
 
+export const SUPPORTED_RECIPE_IDS = [
+	'project_maintenance',
+	'review_screening',
+	'review_duplicate_detection',
+	'review_study_classification',
+	'review_study_grouping',
+	'review_appraisal_prefill',
+	'review_data_extraction'
+] as const;
+
+export type SupportedRecipeId = (typeof SUPPORTED_RECIPE_IDS)[number];
+
 export const AUTOMATION_TRIGGERS = [
 	AutomationTriggerInput.report_added,
 	AutomationTriggerInput.acquisition_completed,
@@ -80,6 +92,13 @@ export function draftFromDefinition(
 export function isProjectMaintenanceDefinition(definition: AutomationDefinitionDto): boolean {
 	return (
 		definition.recipe === AUTOMATION_RECIPE_ID &&
+		definition.version === AUTOMATION_RECIPE_VERSION
+	);
+}
+
+export function isSupportedAutomationDefinition(definition: AutomationDefinitionDto): boolean {
+	return (
+		SUPPORTED_RECIPE_IDS.includes(definition.recipe as SupportedRecipeId) &&
 		definition.version === AUTOMATION_RECIPE_VERSION
 	);
 }
