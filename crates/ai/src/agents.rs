@@ -365,13 +365,10 @@ impl AgentTool {
         serde_json::from_value(raw).map_err(|_| AgentToolParseError::MalformedRequest)
     }
 
-    pub fn validate(&self) -> Result<(), AgentToolError> {
-        if self.project_id().as_uuid().is_nil() {
-            return Err(AgentToolError::InvalidProjectScope);
-        }
+    fn validate_read_args(&self) -> Result<(), AgentToolError> {
         match self {
-            Self::GetProjectProtocol(_) => {}
-            Self::GetReport(args) => validate_uuid(args.report_id.as_uuid())?,
+            Self::GetProjectProtocol(_) => Ok(()),
+            Self::GetReport(args) => validate_uuid(args.report_id.as_uuid()),
             Self::ReadDocumentBlocks(args) => {
                 validate_uuid(args.document_id.as_uuid())?;
                 if args.block_ids.is_empty() || args.block_ids.len() > MAX_DOCUMENT_BLOCKS {
@@ -380,35 +377,51 @@ impl AgentTool {
                 if args.block_ids.iter().any(|id| id.as_uuid().is_nil()) {
                     return Err(AgentToolError::InvalidArguments);
                 }
+                Ok(())
             }
             Self::SearchDocument(args) => {
                 validate_uuid(args.document_id.as_uuid())?;
-                validate_search(&args.query, args.limit)?;
+                validate_search(&args.query, args.limit)
             }
-            Self::SearchProjectReports(args) => validate_search(&args.query, args.limit)?,
-            Self::GetScreeningState(args) => validate_uuid(args.report_id.as_uuid())?,
-            Self::GetStudy(args) => validate_uuid(args.study_id.as_uuid())?,
+            Self::SearchProjectReports(args) => validate_search(&args.query, args.limit),
+            Self::GetScreeningState(args) => validate_uuid(args.report_id.as_uuid()),
+            Self::GetStudy(args) => validate_uuid(args.study_id.as_uuid()),
             Self::GetAppraisal(args) => {
                 validate_uuid(args.report_id.as_uuid())?;
-                validate_definition(&args.definition_id, args.definition_version)?;
+                validate_definition(&args.definition_id, args.definition_version)
             }
-            Self::ProposeScreeningDecision(args) => validate_uuid(args.report_id.as_uuid())?,
+            _ => Ok(()),
+        }
+    }
+
+    fn validate_proposal_args(&self) -> Result<(), AgentToolError> {
+        match self {
+            Self::ProposeScreeningDecision(args) => validate_uuid(args.report_id.as_uuid()),
             Self::ProposeDuplicateMerge(args) => {
                 validate_uuid(args.source_record_id.as_uuid())?;
-                validate_uuid(args.candidate_report_id.as_uuid())?;
+                validate_uuid(args.candidate_report_id.as_uuid())
             }
-            Self::ProposeStudyGrouping(args) => validate_uuid(args.report_id.as_uuid())?,
-            Self::ProposeClassification(args) => validate_uuid(args.study_id.as_uuid())?,
-            Self::ProposeExtraction(args) => validate_uuid(args.study_id.as_uuid())?,
+            Self::ProposeStudyGrouping(args) => validate_uuid(args.report_id.as_uuid()),
+            Self::ProposeClassification(args) => validate_uuid(args.study_id.as_uuid()),
+            Self::ProposeExtraction(args) => validate_uuid(args.study_id.as_uuid()),
             Self::ProposeAppraisalAnswer(args) => {
                 validate_uuid(args.report_id.as_uuid())?;
-                validate_definition(&args.definition_id, args.definition_version)?;
+                validate_definition(&args.definition_id, args.definition_version)
             }
+            _ => Ok(()),
         }
+    }
+
+    pub fn validate(&self) -> Result<(), AgentToolError> {
+        if self.project_id().as_uuid().is_nil() {
+            return Err(AgentToolError::InvalidProjectScope);
+        }
+        self.validate_read_args()?;
+        self.validate_proposal_args()?;
         Ok(())
     }
 
-    fn from_name_and_args(name: AgentToolName, args: Value) -> Result<Self, &'static str> {
+    pub fn from_name_and_args(name: AgentToolName, args: Value) -> Result<Self, &'static str> {
         fn decode<T: DeserializeOwned>(args: Value) -> Result<T, &'static str> {
             serde_json::from_value(args).map_err(|_| "agent tool arguments are malformed")
         }
@@ -433,7 +446,7 @@ impl AgentTool {
         })
     }
 
-    fn into_read_operation(self) -> Result<AgentReadOperation, AgentToolError> {
+    pub fn into_read_operation(self) -> Result<AgentReadOperation, AgentToolError> {
         match self {
             Self::GetProjectProtocol(args) => Ok(AgentReadOperation::GetProjectProtocol(args)),
             Self::GetReport(args) => Ok(AgentReadOperation::GetReport(args)),
@@ -452,7 +465,7 @@ impl AgentTool {
         }
     }
 
-    fn into_proposal_operation(self) -> Result<AgentProposalOperation, AgentToolError> {
+    pub fn into_proposal_operation(self) -> Result<AgentProposalOperation, AgentToolError> {
         match self {
             Self::ProposeScreeningDecision(args) => {
                 Ok(AgentProposalOperation::ProposeScreeningDecision(args))

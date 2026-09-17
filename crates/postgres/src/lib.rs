@@ -2,6 +2,7 @@ mod acquisition;
 mod agent_tools;
 mod ai;
 mod appraisal;
+mod assistant;
 mod audit_export;
 mod automations;
 mod deduplication;
@@ -54,6 +55,11 @@ pub use ai::{
 pub use appraisal::{
     AppraisalAssessmentRecord, AppraisalError, AppraisalEvidenceRecord, complete_appraisal,
     complete_appraisal_in_transaction, get_appraisal, list_appraisals,
+};
+pub use assistant::{
+    AppendAssistantMessage, AssistantConversationRecord, AssistantError, AssistantMessageRecord,
+    append_assistant_message, create_assistant_conversation, delete_assistant_conversation,
+    get_assistant_conversation, list_assistant_conversations, list_assistant_messages,
 };
 pub use audit_export::{AuditExportRow, load_audit_export_rows};
 pub use automations::{
