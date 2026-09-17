@@ -1,11 +1,17 @@
 use axum::{
     Json,
     extract::{Path, State},
-    http::HeaderMap,
+    http::{HeaderMap, StatusCode},
+    response::sse::{Event, KeepAlive, Sse},
+    response::{IntoResponse, Response},
 };
+use chrono::{DateTime, Utc};
 use deepref_ai::{
     AgentDispatch, AgentProposalOperation, AgentProposalReceipt, AgentReadOperation, AgentRuntime,
-    AgentTool, AgentToolError, AgentToolExecutor, AgentToolName, BoundedAgentJson,
+    AgentTool, AgentToolError, AgentToolExecutor, AgentToolName, AssistantChatMessage,
+    AssistantDispatcher, AssistantRole, AssistantStreamEvent, AssistantToolCall,
+    AssistantToolOutput, AssistantToolResult, AssistantTurnInput, BoundedAgentJson,
+    run_assistant_react_turn,
 };
 use deepref_domain::{
     Actor, DocumentBlockId, DocumentId, ProjectId, RecordId, ReportId, ScreeningStage, StudyDesign,
@@ -13,10 +19,12 @@ use deepref_domain::{
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
+use std::future::Future;
+use std::pin::Pin;
 use utoipa::ToSchema;
 use uuid::Uuid;
 
-use super::review::extract_actor;
+use super::actor::extract_actor;
 use crate::{
     error::{ApiError, ErrorResponse},
     state::AppState,
@@ -774,5 +782,642 @@ fn review_preparation_failure(error: deepref_postgres::ReviewPreparationError) -
         ) => AssistantFailure::NotFound,
         deepref_postgres::ReviewPreparationError::InvalidInput(_) => AssistantFailure::Conflict,
         _ => AssistantFailure::Internal,
+    }
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+pub(crate) struct AssistantConversationDto {
+    pub id: Uuid,
+    pub project_id: Uuid,
+    pub title: String,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+pub(crate) struct AssistantMessageDto {
+    pub id: Uuid,
+    pub conversation_id: Uuid,
+    pub role: String,
+    pub content: String,
+    #[schema(value_type = Object)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tool_calls: Option<Value>,
+    #[schema(value_type = Object)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub tool_results: Option<Value>,
+    #[schema(value_type = Object)]
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub metadata: Option<Value>,
+    pub created_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct CreateAssistantConversationRequestDto {
+    title: String,
+}
+
+#[derive(Debug, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct AssistantChatRequestDto {
+    conversation_id: Uuid,
+    message: String,
+}
+
+fn conversation_dto(
+    record: &deepref_postgres::AssistantConversationRecord,
+) -> AssistantConversationDto {
+    AssistantConversationDto {
+        id: record.id,
+        project_id: record.project_id,
+        title: record.title.clone(),
+        created_at: record.created_at,
+        updated_at: record.updated_at,
+    }
+}
+
+#[allow(clippy::too_many_lines)]
+fn message_dto(record: &deepref_postgres::AssistantMessageRecord) -> AssistantMessageDto {
+    AssistantMessageDto {
+        id: record.id,
+        conversation_id: record.conversation_id,
+        role: record.role.clone(),
+        content: record.content.clone(),
+        tool_calls: record.tool_calls.clone(),
+        tool_results: record.tool_results.clone(),
+        metadata: record.metadata.clone(),
+        created_at: record.created_at,
+    }
+}
+
+fn map_conversation_error(error: deepref_postgres::AssistantError) -> ApiError {
+    match error {
+        deepref_postgres::AssistantError::ConversationNotFound => {
+            ApiError::NotFound("assistant conversation not found".to_owned())
+        }
+        deepref_postgres::AssistantError::ProjectNotFound => {
+            ApiError::NotFound("project not found".to_owned())
+        }
+        deepref_postgres::AssistantError::InvalidInput(message) => ApiError::BadRequest(message),
+        deepref_postgres::AssistantError::Database(error) => {
+            ApiError::Internal(anyhow::anyhow!(error))
+        }
+    }
+}
+
+#[utoipa::path(
+    get,
+    path = "/projects/{project_id}/assistant/conversations",
+    operation_id = "listProjectAssistantConversations",
+    tag = "assistant",
+    params(("project_id" = Uuid, Path, description = "Project identifier")),
+    responses(
+        (status = 200, description = "Assistant conversations ordered by most recent activity", body = Vec<AssistantConversationDto>),
+        (status = 400, description = "Invalid project identifier", body = ErrorResponse),
+        (status = 404, description = "Project not found", body = ErrorResponse),
+        (status = 500, description = "Internal server error", body = ErrorResponse)
+    )
+)]
+pub(crate) async fn list_conversations(
+    State(state): State<AppState>,
+    Path(project_id): Path<Uuid>,
+) -> Result<Json<Vec<AssistantConversationDto>>, ApiError> {
+    validate_project_id(project_id)?;
+    if !deepref_postgres::project_exists(&state.pool, project_id).await? {
+        return Err(ApiError::NotFound("project not found".to_owned()));
+    }
+    let conversations = deepref_postgres::list_assistant_conversations(&state.pool, project_id)
+        .await
+        .map_err(map_conversation_error)?;
+    Ok(Json(conversations.iter().map(conversation_dto).collect()))
+}
+
+#[utoipa::path(
+    post,
+    path = "/projects/{project_id}/assistant/conversations",
+    operation_id = "createProjectAssistantConversation",
+    tag = "assistant",
+    params(("project_id" = Uuid, Path, description = "Project identifier")),
+    request_body = CreateAssistantConversationRequestDto,
+    responses(
+        (status = 201, description = "Conversation created", body = AssistantConversationDto),
+        (status = 400, description = "Invalid conversation title", body = ErrorResponse),
+        (status = 404, description = "Project not found", body = ErrorResponse),
+        (status = 500, description = "Internal server error", body = ErrorResponse)
+    )
+)]
+pub(crate) async fn create_conversation(
+    State(state): State<AppState>,
+    Path(project_id): Path<Uuid>,
+    Json(body): Json<CreateAssistantConversationRequestDto>,
+) -> Result<(StatusCode, Json<AssistantConversationDto>), ApiError> {
+    validate_project_id(project_id)?;
+    if !deepref_postgres::project_exists(&state.pool, project_id).await? {
+        return Err(ApiError::NotFound("project not found".to_owned()));
+    }
+    let conversation =
+        deepref_postgres::create_assistant_conversation(&state.pool, project_id, &body.title)
+            .await
+            .map_err(map_conversation_error)?;
+    Ok((StatusCode::CREATED, Json(conversation_dto(&conversation))))
+}
+
+#[utoipa::path(
+    get,
+    path = "/projects/{project_id}/assistant/conversations/{conversation_id}/messages",
+    operation_id = "listProjectAssistantConversationMessages",
+    tag = "assistant",
+    params(
+        ("project_id" = Uuid, Path, description = "Project identifier"),
+        ("conversation_id" = Uuid, Path, description = "Conversation identifier")
+    ),
+    responses(
+        (status = 200, description = "Conversation messages in chronological order", body = Vec<AssistantMessageDto>),
+        (status = 400, description = "Invalid identifiers", body = ErrorResponse),
+        (status = 404, description = "Project or conversation not found", body = ErrorResponse),
+        (status = 500, description = "Internal server error", body = ErrorResponse)
+    )
+)]
+pub(crate) async fn list_conversation_messages(
+    State(state): State<AppState>,
+    Path((project_id, conversation_id)): Path<(Uuid, Uuid)>,
+) -> Result<Json<Vec<AssistantMessageDto>>, ApiError> {
+    validate_project_id(project_id)?;
+    if !deepref_postgres::project_exists(&state.pool, project_id).await? {
+        return Err(ApiError::NotFound("project not found".to_owned()));
+    }
+    deepref_postgres::get_assistant_conversation(&state.pool, project_id, conversation_id)
+        .await
+        .map_err(map_conversation_error)?;
+    let messages = deepref_postgres::list_assistant_messages(&state.pool, conversation_id)
+        .await
+        .map_err(map_conversation_error)?;
+    Ok(Json(messages.iter().map(message_dto).collect()))
+}
+
+#[utoipa::path(
+    delete,
+    path = "/projects/{project_id}/assistant/conversations/{conversation_id}",
+    operation_id = "deleteProjectAssistantConversation",
+    tag = "assistant",
+    params(
+        ("project_id" = Uuid, Path, description = "Project identifier"),
+        ("conversation_id" = Uuid, Path, description = "Conversation identifier")
+    ),
+    responses(
+        (status = 204, description = "Conversation deleted"),
+        (status = 400, description = "Invalid identifiers", body = ErrorResponse),
+        (status = 404, description = "Project or conversation not found", body = ErrorResponse),
+        (status = 500, description = "Internal server error", body = ErrorResponse)
+    )
+)]
+pub(crate) async fn delete_conversation(
+    State(state): State<AppState>,
+    Path((project_id, conversation_id)): Path<(Uuid, Uuid)>,
+) -> Result<StatusCode, ApiError> {
+    validate_project_id(project_id)?;
+    if !deepref_postgres::project_exists(&state.pool, project_id).await? {
+        return Err(ApiError::NotFound("project not found".to_owned()));
+    }
+    let deleted =
+        deepref_postgres::delete_assistant_conversation(&state.pool, project_id, conversation_id)
+            .await
+            .map_err(map_conversation_error)?;
+    if !deleted {
+        return Err(ApiError::NotFound(
+            "assistant conversation not found".to_owned(),
+        ));
+    }
+    Ok(StatusCode::NO_CONTENT)
+}
+
+struct ConversationAgentDispatcher {
+    project_id: ProjectId,
+    state: AppState,
+    actor: Actor,
+}
+
+impl AssistantDispatcher for ConversationAgentDispatcher {
+    fn execute_tool<'a>(
+        &'a self,
+        tool_name: &'a str,
+        args: Value,
+    ) -> Pin<Box<dyn Future<Output = Result<AssistantToolOutput, AgentToolError>> + Send + 'a>>
+    {
+        let project_id = self.project_id;
+        let state = self.state.clone();
+        let actor = self.actor.clone();
+        Box::pin(async move {
+            dispatch_assistant_tool(project_id, &state, actor, tool_name, args).await
+        })
+    }
+}
+
+async fn dispatch_assistant_tool(
+    project_id: ProjectId,
+    state: &AppState,
+    actor: Actor,
+    tool_name: &str,
+    args: Value,
+) -> Result<AssistantToolOutput, AgentToolError> {
+    if tool_name == "trigger_workflow" {
+        return trigger_workflow(state, project_id, actor, &args).await;
+    }
+    let parsed_name = AgentToolName::parse(tool_name).ok_or(AgentToolError::UnknownTool)?;
+    let tool = AgentTool::from_name_and_args(parsed_name, args)
+        .map_err(|_| AgentToolError::MalformedRequest)?;
+    tool.validate()?;
+    if parsed_name.is_read() {
+        let value = execute_read(state, tool.into_read_operation()?)
+            .await
+            .map_err(assistant_failure_to_tool_error)?;
+        let bounded = BoundedAgentJson::new(value).map_err(|_| AgentToolError::InvalidOutput)?;
+        return Ok(AssistantToolOutput::Read(bounded.into_value()));
+    }
+    let run = execute_proposal(state, tool.into_proposal_operation()?, actor)
+        .await
+        .map_err(assistant_failure_to_tool_error)?;
+    Ok(AssistantToolOutput::Proposal {
+        review_run_id: run.id.as_uuid(),
+        status_path: format!(
+            "/projects/{}/review-runs/{}",
+            project_id.as_uuid(),
+            run.id.as_uuid()
+        ),
+    })
+}
+
+async fn trigger_workflow(
+    state: &AppState,
+    project_id: ProjectId,
+    actor: Actor,
+    args: &Value,
+) -> Result<AssistantToolOutput, AgentToolError> {
+    let definition_id = args
+        .get("definition_id")
+        .and_then(Value::as_str)
+        .and_then(|value| Uuid::parse_str(value).ok())
+        .ok_or(AgentToolError::InvalidArguments)?;
+    let request = deepref_application::automations::StartAutomationManually::new(
+        project_id,
+        definition_id,
+        Uuid::new_v4().to_string(),
+        actor,
+    )
+    .map_err(|_| AgentToolError::InvalidArguments)?;
+    let result = deepref_postgres::start_automation_manually(&state.pool, &request)
+        .await
+        .map_err(|_| AgentToolError::ExecutionFailed)?;
+    Ok(AssistantToolOutput::WorkflowTriggered {
+        run_id: result.run_id.as_uuid(),
+        job_id: result.job_id,
+        created: result.created,
+    })
+}
+
+fn assistant_failure_to_tool_error(error: AssistantFailure) -> AgentToolError {
+    match error {
+        AssistantFailure::NotFound => AgentToolError::InvalidArguments,
+        AssistantFailure::Conflict | AssistantFailure::Internal => AgentToolError::ExecutionFailed,
+    }
+}
+
+fn map_turn_error(error: AgentToolError) -> ApiError {
+    match error {
+        AgentToolError::Forbidden => ApiError::Forbidden("assistant tool is forbidden".to_owned()),
+        AgentToolError::InvalidProjectScope
+        | AgentToolError::InvalidArguments
+        | AgentToolError::InvalidActor
+        | AgentToolError::MalformedRequest
+        | AgentToolError::UnknownTool => {
+            ApiError::BadRequest("assistant turn request is invalid".to_owned())
+        }
+        AgentToolError::InvalidOutput | AgentToolError::ExecutionFailed => {
+            ApiError::Internal(anyhow::anyhow!("assistant turn failed"))
+        }
+    }
+}
+
+fn history_chat_message(
+    record: &deepref_postgres::AssistantMessageRecord,
+) -> Option<AssistantChatMessage> {
+    let role = AssistantRole::parse(&record.role)?;
+    let tool_calls = record
+        .tool_calls
+        .as_ref()
+        .and_then(|value| serde_json::from_value::<Vec<AssistantToolCall>>(value.clone()).ok());
+    let tool_results = record
+        .tool_results
+        .as_ref()
+        .and_then(|value| serde_json::from_value::<Vec<AssistantToolResult>>(value.clone()).ok());
+    Some(AssistantChatMessage {
+        role,
+        content: record.content.clone(),
+        tool_calls,
+        tool_results,
+        metadata: record.metadata.clone(),
+    })
+}
+
+async fn persist_assistant_turn(
+    pool: &sqlx::PgPool,
+    conversation_id: Uuid,
+    message: &AssistantChatMessage,
+) -> Result<(), deepref_postgres::AssistantError> {
+    let record = deepref_postgres::AppendAssistantMessage {
+        id: None,
+        conversation_id,
+        role: message.role.as_str().to_owned(),
+        content: message.content.clone(),
+        tool_calls: message
+            .tool_calls
+            .as_ref()
+            .map(|value| serde_json::to_value(value).unwrap_or(Value::Null)),
+        tool_results: message
+            .tool_results
+            .as_ref()
+            .map(|value| serde_json::to_value(value).unwrap_or(Value::Null)),
+        metadata: message.metadata.clone(),
+    };
+    deepref_postgres::append_assistant_message(pool, &record)
+        .await
+        .map(|_| ())
+}
+
+fn sse_frame(name: &str, payload: &Value) -> Result<Event, std::convert::Infallible> {
+    Ok(Event::default().event(name).data(payload.to_string()))
+}
+
+fn stream_event_parts(event: &AssistantStreamEvent) -> (&'static str, Value) {
+    match event {
+        AssistantStreamEvent::Token { delta } => ("token", json!({ "delta": delta })),
+        AssistantStreamEvent::ToolStart {
+            tool,
+            tool_call_id,
+            args,
+        } => (
+            "tool_start",
+            json!({ "tool": tool, "tool_call_id": tool_call_id, "args": args }),
+        ),
+        AssistantStreamEvent::ToolComplete {
+            tool,
+            tool_call_id,
+            output,
+        } => (
+            "tool_complete",
+            json!({ "tool": tool, "tool_call_id": tool_call_id, "output": output }),
+        ),
+        AssistantStreamEvent::ProposalCreated {
+            tool,
+            review_run_id,
+            status_path,
+        } => (
+            "proposal_created",
+            json!({
+                "tool": tool,
+                "review_run_id": review_run_id,
+                "status_path": status_path,
+            }),
+        ),
+        AssistantStreamEvent::Done {
+            message_id,
+            input_tokens,
+            output_tokens,
+        } => (
+            "done",
+            json!({
+                "message_id": message_id,
+                "input_tokens": input_tokens,
+                "output_tokens": output_tokens,
+            }),
+        ),
+    }
+}
+
+fn stream_event_frame(event: &AssistantStreamEvent) -> Result<Event, std::convert::Infallible> {
+    let (name, payload) = stream_event_parts(event);
+    sse_frame(name, &payload)
+}
+
+fn assistant_error_frame() -> Result<Event, std::convert::Infallible> {
+    sse_frame("error", &json!({ "message": "assistant turn failed" }))
+}
+
+type AssistantSseState = (
+    tokio::sync::mpsc::Receiver<AssistantStreamEvent>,
+    Option<AssistantStreamEvent>,
+    Option<tokio::sync::oneshot::Receiver<Result<(), AgentToolError>>>,
+);
+
+#[utoipa::path(
+    post,
+    path = "/projects/{project_id}/assistant/chat",
+    operation_id = "chatWithProjectAssistant",
+    tag = "assistant",
+    params(("project_id" = Uuid, Path, description = "Project identifier")),
+    request_body = AssistantChatRequestDto,
+    responses(
+        (status = 200, description = "Server-sent assistant stream", content_type = "text/event-stream", body = String),
+        (status = 400, description = "Malformed chat request or tool command", body = ErrorResponse),
+        (status = 403, description = "Tool is forbidden by the project policy", body = ErrorResponse),
+        (status = 404, description = "Project or conversation not found", body = ErrorResponse),
+        (status = 500, description = "Internal server error", body = ErrorResponse)
+    )
+)]
+#[allow(clippy::too_many_lines)]
+pub(crate) async fn chat(
+    State(state): State<AppState>,
+    Path(project_id): Path<Uuid>,
+    headers: HeaderMap,
+    Json(body): Json<AssistantChatRequestDto>,
+) -> Result<Response, ApiError> {
+    validate_project_id(project_id)?;
+    let actor = extract_actor(&headers)?;
+    if !deepref_postgres::project_exists(&state.pool, project_id).await? {
+        return Err(ApiError::NotFound("project not found".to_owned()));
+    }
+    let user_message = body.message.trim().to_owned();
+    if user_message.is_empty() {
+        return Err(ApiError::BadRequest("message must not be blank".to_owned()));
+    }
+    deepref_postgres::get_assistant_conversation(&state.pool, project_id, body.conversation_id)
+        .await
+        .map_err(map_conversation_error)?;
+    let history_records =
+        deepref_postgres::list_assistant_messages(&state.pool, body.conversation_id)
+            .await
+            .map_err(map_conversation_error)?;
+    let history = history_records
+        .iter()
+        .filter_map(history_chat_message)
+        .collect::<Vec<_>>();
+
+    deepref_postgres::append_assistant_message(
+        &state.pool,
+        &deepref_postgres::AppendAssistantMessage {
+            id: None,
+            conversation_id: body.conversation_id,
+            role: "user".to_owned(),
+            content: user_message.clone(),
+            tool_calls: None,
+            tool_results: None,
+            metadata: None,
+        },
+    )
+    .await
+    .map_err(map_conversation_error)?;
+
+    let (event_tx, mut event_rx) = tokio::sync::mpsc::channel::<AssistantStreamEvent>(64);
+    let (result_tx, result_rx) = tokio::sync::oneshot::channel();
+    let turn_project_id = ProjectId::new(project_id);
+    let turn_state = state.clone();
+    tokio::spawn(async move {
+        let dispatcher = ConversationAgentDispatcher {
+            project_id: turn_project_id,
+            state: turn_state.clone(),
+            actor: actor.clone(),
+        };
+        let input = AssistantTurnInput {
+            project_id: turn_project_id,
+            actor,
+            project_policy: deepref_ai::ProjectAiPolicy::default(),
+            history: &history,
+            user_message: &user_message,
+        };
+        let outcome = run_assistant_react_turn(input, &dispatcher, &event_tx).await;
+        if let Ok(message) = &outcome
+            && let Err(error) =
+                persist_assistant_turn(&turn_state.pool, body.conversation_id, message).await
+        {
+            tracing::warn!(error = %error, "failed to persist assistant turn");
+        }
+        drop(event_tx);
+        let _ = result_tx.send(outcome.map(|_| ()));
+    });
+
+    match event_rx.recv().await {
+        Some(first_event) => {
+            let stream = futures::stream::unfold(
+                (event_rx, Some(first_event), Some(result_rx)),
+                |(mut rx, pending, result): AssistantSseState| async move {
+                    if let Some(event) = pending {
+                        return Some((stream_event_frame(&event), (rx, None, result)));
+                    }
+                    match rx.recv().await {
+                        Some(event) => Some((stream_event_frame(&event), (rx, None, result))),
+                        None => match result {
+                            Some(receiver) => match receiver.await {
+                                Ok(Ok(())) | Err(_) => None,
+                                Ok(Err(_)) => Some((assistant_error_frame(), (rx, None, None))),
+                            },
+                            None => None,
+                        },
+                    }
+                },
+            );
+            Ok(Sse::new(stream)
+                .keep_alive(KeepAlive::default())
+                .into_response())
+        }
+        None => {
+            let outcome = result_rx
+                .await
+                .unwrap_or(Err(AgentToolError::ExecutionFailed));
+            Err(map_turn_error(
+                outcome.err().unwrap_or(AgentToolError::ExecutionFailed),
+            ))
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use deepref_ai::AssistantStreamEvent;
+
+    #[test]
+    fn stream_event_frames_use_the_wire_contract() {
+        let frames = [
+            stream_event_parts(&AssistantStreamEvent::Token {
+                delta: "hello ".to_owned(),
+            }),
+            stream_event_parts(&AssistantStreamEvent::ToolStart {
+                tool: "get_report".to_owned(),
+                tool_call_id: "call-1".to_owned(),
+                args: json!({ "project_id": Uuid::nil() }),
+            }),
+            stream_event_parts(&AssistantStreamEvent::ToolComplete {
+                tool: "get_report".to_owned(),
+                tool_call_id: "call-1".to_owned(),
+                output: json!({ "title": "Report" }),
+            }),
+            stream_event_parts(&AssistantStreamEvent::ProposalCreated {
+                tool: "propose_screening_decision".to_owned(),
+                review_run_id: Uuid::nil(),
+                status_path: "/projects/x/review-runs/y".to_owned(),
+            }),
+            stream_event_parts(&AssistantStreamEvent::Done {
+                message_id: Uuid::nil(),
+                input_tokens: 10,
+                output_tokens: 20,
+            }),
+        ];
+
+        assert_eq!(frames[0].0, "token");
+        assert_eq!(frames[0].1, json!({ "delta": "hello " }));
+        assert_eq!(frames[1].0, "tool_start");
+        assert_eq!(frames[1].1["tool"], "get_report");
+        assert_eq!(frames[1].1["tool_call_id"], "call-1");
+        assert_eq!(frames[2].0, "tool_complete");
+        assert_eq!(frames[2].1["output"]["title"], "Report");
+        assert_eq!(frames[3].0, "proposal_created");
+        assert_eq!(frames[3].1["status_path"], "/projects/x/review-runs/y");
+        assert_eq!(frames[4].0, "done");
+        assert_eq!(frames[4].1["input_tokens"], 10);
+        assert_eq!(frames[4].1["output_tokens"], 20);
+    }
+
+    #[test]
+    fn history_records_map_into_chat_messages() {
+        let record = deepref_postgres::AssistantMessageRecord {
+            id: Uuid::nil(),
+            conversation_id: Uuid::nil(),
+            role: "assistant".to_owned(),
+            content: "done".to_owned(),
+            tool_calls: Some(json!([{ "id": "call-1", "tool": "get_report", "args": {} }])),
+            tool_results: Some(json!([{
+                "tool_call_id": "call-1",
+                "tool": "get_report",
+                "output": {}
+            }])),
+            metadata: Some(json!({ "message_id": Uuid::nil() })),
+            created_at: Utc::now(),
+        };
+
+        let mapped = history_chat_message(&record).expect("assistant record must map");
+        assert_eq!(mapped.role, AssistantRole::Assistant);
+        assert_eq!(mapped.tool_calls.expect("tool calls").len(), 1);
+        assert_eq!(mapped.tool_results.expect("tool results").len(), 1);
+    }
+
+    #[test]
+    fn unknown_roles_and_malformed_tool_payloads_are_dropped_from_history() {
+        let mut record = deepref_postgres::AssistantMessageRecord {
+            id: Uuid::nil(),
+            conversation_id: Uuid::nil(),
+            role: "moderator".to_owned(),
+            content: "nope".to_owned(),
+            tool_calls: None,
+            tool_results: None,
+            metadata: None,
+            created_at: Utc::now(),
+        };
+        assert!(history_chat_message(&record).is_none());
+
+        record.role = "assistant".to_owned();
+        record.tool_calls = Some(json!([{ "unexpected": true }]));
+        let mapped = history_chat_message(&record).expect("assistant record must map");
+        assert!(mapped.tool_calls.is_none());
     }
 }

@@ -1,4 +1,5 @@
 mod acquisitions;
+mod actor;
 mod ai;
 mod articles;
 mod assistant;
@@ -61,6 +62,15 @@ fn openapi_router(document_max_bytes: usize) -> OpenApiRouter<AppState> {
         .routes(routes!(articles::recompute_metrics))
         .routes(routes!(assistant::list_tools))
         .routes(routes!(assistant::execute_tool))
+        .routes(routes!(
+            assistant::list_conversations,
+            assistant::create_conversation
+        ))
+        .routes(routes!(
+            assistant::list_conversation_messages,
+            assistant::delete_conversation
+        ))
+        .routes(routes!(assistant::chat))
         .routes(routes!(automations::list_definitions))
         .routes(routes!(automations::configure_definition))
         .routes(routes!(automations::trigger_manually))
@@ -261,6 +271,10 @@ mod tests {
             "/projects/{project_id}/ai/proposals/{proposal_id}/decision",
             "/projects/{project_id}/assistant/tools",
             "/projects/{project_id}/assistant/tools/execute",
+            "/projects/{project_id}/assistant/conversations",
+            "/projects/{project_id}/assistant/conversations/{conversation_id}",
+            "/projects/{project_id}/assistant/conversations/{conversation_id}/messages",
+            "/projects/{project_id}/assistant/chat",
             "/ingestions",
             "/ingestions/{ingestion_id}",
             "/ingestions/{ingestion_id}/items",

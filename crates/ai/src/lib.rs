@@ -5,6 +5,7 @@
 //! SQLx and pgvector stay in `deepref-postgres`.
 
 mod agents;
+mod assistant;
 mod classification;
 mod dedupe;
 mod evals;
@@ -18,6 +19,7 @@ mod screening;
 mod types;
 
 pub use agents::*;
+pub use assistant::*;
 pub use classification::{
     ClassificationReportField, StudyDesignClassification, StudyDesignClassificationInput,
     StudyDesignClassificationTask, StudyDesignEvidence, StudyDesignLabel, StudyDesignReport,
