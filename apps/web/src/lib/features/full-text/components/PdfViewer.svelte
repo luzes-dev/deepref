@@ -1,9 +1,9 @@
 <script lang="ts">
 	import type { PDFDocumentProxy, PDFPageProxy } from 'pdfjs-dist/types/src/display/api';
 	import type { DocumentBlockDto, DocumentPageDto } from '$lib/api/generated/models';
-	import * as Alert from '$lib/components/ui/alert';
-	import * as Empty from '$lib/components/ui/empty';
-	import { Skeleton } from '$lib/components/ui/skeleton';
+	import * as Alert from '@deepref/ui/alert';
+	import * as Empty from '@deepref/ui/empty';
+	import { Skeleton } from '@deepref/ui/skeleton';
 	import { FileWarning } from '@lucide/svelte';
 	import PdfPage from './PdfPage.svelte';
 

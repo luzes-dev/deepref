@@ -4,18 +4,12 @@
 		createExportProjectArtifact,
 		exportProjectArtifact
 	} from '$lib/api/generated/exports/exports';
-	import { Badge } from '$lib/components/ui/badge';
-	import { Button } from '$lib/components/ui/button';
-	import { Skeleton } from '$lib/components/ui/skeleton';
-	import {
-		PageHeader,
-		PageToolbar,
-		StatePanel,
-		Surface,
-		MetricTile
-	} from '$lib/components/layout';
-	import * as Alert from '$lib/components/ui/alert';
-	import { useProjectWorkspaceContext } from '$lib/components/project/context.svelte.js';
+	import { Badge } from '@deepref/ui/badge';
+	import { Button } from '@deepref/ui/button';
+	import { Skeleton } from '@deepref/ui/skeleton';
+	import { PageHeader, PageToolbar, StatePanel, Surface, MetricTile } from '@deepref/ui/layout';
+	import { useProjectWorkspaceContext } from '$lib/features/projects/context.svelte.js';
+	import { notifyError } from '$lib/features/notifications/toast';
 	import DownloadIcon from '@lucide/svelte/icons/download';
 	import ImageIcon from '@lucide/svelte/icons/image';
 	import {
@@ -36,7 +30,6 @@
 		() => ({ query: { enabled: Boolean(workspace.project.id), staleTime: 0 } })
 	);
 	let exporting = $state<string | undefined>(undefined);
-	let exportError = $state<string | undefined>(undefined);
 	let diagramError = $state(false);
 	const projection = $derived(query.data?.data);
 	const svgBlob = $derived(svgQuery.data?.data);
@@ -51,10 +44,6 @@
 		['audit.csv', 'Audit CSV'],
 		['protocol.json', 'Protocol snapshot']
 	] as const;
-
-	function errorMessage(error: unknown): string {
-		return error instanceof Error ? error.message : 'The export could not be downloaded.';
-	}
 
 	function canonicalSvgAttachment(blob: Blob | undefined) {
 		return (element: Element) => {
@@ -101,12 +90,11 @@
 
 	async function downloadArtifact(kind: string, fallback: string): Promise<void> {
 		exporting = kind;
-		exportError = undefined;
 		try {
 			const response = await exportProjectArtifact(workspace.project.id, kind);
 			downloadBlob(response.data, attachmentFilename(response.headers, fallback));
 		} catch (error) {
-			exportError = errorMessage(error);
+			notifyError('Export unavailable', error);
 		} finally {
 			exporting = undefined;
 		}
@@ -114,7 +102,6 @@
 
 	async function downloadPng(): Promise<void> {
 		exporting = 'prisma.png';
-		exportError = undefined;
 		try {
 			const response = await exportProjectArtifact(workspace.project.id, 'prisma.svg');
 			await downloadPrismaPng(
@@ -125,7 +112,7 @@
 				)
 			);
 		} catch (error) {
-			exportError = errorMessage(error);
+			notifyError('Export unavailable', error);
 		} finally {
 			exporting = undefined;
 		}
@@ -140,18 +127,9 @@
 >
 	<div class="mx-auto flex w-full max-w-[1440px] flex-col gap-5 p-4 sm:gap-6 sm:p-6 lg:p-8">
 		<PageHeader
-			eyebrow="Evidence workspace / Analysis"
 			title="PRISMA flow"
-			description="Deterministic screening, retrieval, and inclusion reconciliation for this project."
-			class="[&>div>h1]:!font-serif"
+			description="See how articles move through your review and export the results."
 		/>
-
-		{#if exportError}
-			<Alert.Root variant="destructive" data-testid="prisma-export-error">
-				<Alert.Title>Export unavailable</Alert.Title>
-				<Alert.Description>{exportError}</Alert.Description>
-			</Alert.Root>
-		{/if}
 
 		{#if query.isPending}
 			<Surface as="section" tone="subtle" class="p-4 sm:p-6">
@@ -174,7 +152,7 @@
 				<div class="flex flex-wrap items-center gap-2 text-sm">
 					<Badge variant="secondary"
 						>{projection.as_of
-							? `As of ${projection.as_of}`
+							? `Updated ${new Date(projection.as_of).toLocaleDateString()}`
 							: 'No decisions yet'}</Badge
 					>
 					<Badge variant="outline"
@@ -185,30 +163,6 @@
 					>
 				</div>
 			</PageToolbar>
-
-			<section aria-labelledby="prisma-counts-title">
-				<div class="mb-3 flex items-baseline justify-between gap-3">
-					<h2
-						id="prisma-counts-title"
-						class="text-sm font-semibold tracking-[0.08em] text-muted-foreground uppercase"
-					>
-						Audit-ready flow counts
-					</h2>
-					<span class="text-xs text-muted-foreground">Server projection</span>
-				</div>
-				<div class="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-					{#each flow as [label, value] (label)}
-						<MetricTile {label} {value} class="[font-variant-numeric:tabular-nums]" />
-					{/each}
-					{#if groupedReports !== undefined}
-						<MetricTile
-							label="Grouped reports"
-							value={groupedReports}
-							class="[font-variant-numeric:tabular-nums]"
-						/>
-					{/if}
-				</div>
-			</section>
 
 			<div class="grid gap-5 lg:grid-cols-[minmax(0,1.35fr)_minmax(20rem,0.65fr)]">
 				<Surface
@@ -222,10 +176,10 @@
 					>
 						<div>
 							<h2 id="prisma-diagram-title" class="text-lg font-semibold">
-								Canonical PRISMA diagram
+								Review flow
 							</h2>
 							<p class="mt-1 text-sm text-muted-foreground">
-								Rendered from the same server projection used by these counts.
+								From the first search to the final included studies.
 							</p>
 						</div>
 						{#if svgQuery.isFetching}<Badge variant="outline">Loading diagram…</Badge
@@ -240,7 +194,7 @@
 							<img
 								{@attach canonicalSvgAttachment(svgBlob)}
 								alt="PRISMA flow diagram showing identification, screening, retrieval, assessment, and inclusion counts"
-								class="h-auto w-full"
+								class="h-auto w-full bg-white"
 								onerror={() => (diagramError = true)}
 							/>
 						{:else if diagramError}
@@ -260,7 +214,7 @@
 					<div class="border-b border-border/70 p-4 sm:p-5">
 						<h2 id="export-title" class="text-lg font-semibold">Export evidence</h2>
 						<p class="mt-1 text-sm text-muted-foreground">
-							Download complete, bounded artifacts with deterministic filenames.
+							Download the diagram or review data for your report.
 						</p>
 					</div>
 					<div class="flex flex-wrap gap-2 p-4 sm:p-5">
@@ -282,6 +236,30 @@
 				</Surface>
 			</div>
 
+			<details class="disclosure">
+				<summary>All review counts</summary>
+				<div class="mb-3 flex items-baseline justify-between gap-3">
+					<h2
+						id="prisma-counts-title"
+						class="text-sm font-semibold tracking-[0.08em] text-muted-foreground uppercase"
+					>
+						Audit-ready flow counts
+					</h2>
+					<span class="text-xs text-muted-foreground">Server projection</span>
+				</div>
+				<div class="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+					{#each flow as [label, value] (label)}
+						<MetricTile {label} {value} class="[font-variant-numeric:tabular-nums]" />
+					{/each}
+					{#if groupedReports !== undefined}
+						<MetricTile
+							label="Grouped reports"
+							value={groupedReports}
+							class="[font-variant-numeric:tabular-nums]"
+						/>
+					{/if}
+				</div>
+			</details>
 			<Surface
 				as="section"
 				tone="subtle"

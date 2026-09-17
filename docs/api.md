@@ -54,6 +54,20 @@ The v2 review workflow exposes:
 - GET /projects/{project_id}/graph?fields=... returns bounded citation nodes with compact, explicitly selected overlays.
 - GET /projects/{project_id}/exports/{kind} returns a deterministic report, PRISMA, audit, or protocol export.
 
+## Notifications
+
+Async server-side outcomes (import/acquisition completion and failure, review-run completion,
+blocking, and failure, automation run completion and failure) are recorded as user-facing
+notifications in the same transaction that made the underlying transition authoritative. The
+inbox is bounded by retention pruning (read rows older than 30 days, hard cap on total rows).
+
+- `GET /notifications` lists notifications newest first with bounded cursor pagination.
+- `GET /notifications/unread-count` returns the unread count and the newest revision.
+- `POST /notifications/mark-read` marks notifications read by ids or all.
+
+The web client polls the unread count and list, renders the notification center from the bell
+button in the top navigation bar, and surfaces new notifications as toasts.
+
 - `GET /health/live` reports process liveness.
 - `GET /health/ready` checks PostgreSQL reachability and schema compatibility.
 - `GET /health/dependencies` reports PostgreSQL and durable worker-job state without making graph queries a separate dependency.

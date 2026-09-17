@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { Button } from '$lib/components/ui/button';
+	import { Button } from '@deepref/ui/button';
 	import type { ScreeningDecisionInput } from '$lib/api/generated/models';
 	import { Check, CircleHelp, RotateCcw, X } from '@lucide/svelte';
 

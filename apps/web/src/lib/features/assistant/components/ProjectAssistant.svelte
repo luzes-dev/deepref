@@ -16,17 +16,24 @@
 	import RefreshCwIcon from '@lucide/svelte/icons/refresh-cw';
 	import SendIcon from '@lucide/svelte/icons/send';
 	import ShieldCheckIcon from '@lucide/svelte/icons/shield-check';
-	import { PageHeader, PageToolbar, StatePanel, Surface } from '$lib/components/layout';
-	import * as Alert from '$lib/components/ui/alert';
-	import { Badge } from '$lib/components/ui/badge';
-	import { Button } from '$lib/components/ui/button';
-	import * as Card from '$lib/components/ui/card';
-	import * as Empty from '$lib/components/ui/empty';
-	import * as Field from '$lib/components/ui/field';
-	import { Input } from '$lib/components/ui/input';
-	import { Spinner } from '$lib/components/ui/spinner';
-	import { Textarea } from '$lib/components/ui/textarea';
-	import * as ToggleGroup from '$lib/components/ui/toggle-group';
+	import ChevronRightIcon from '@lucide/svelte/icons/chevron-right';
+	import NetworkIcon from '@lucide/svelte/icons/network';
+	import BotIcon from '@lucide/svelte/icons/bot';
+	import CommandIcon from '@lucide/svelte/icons/command';
+	import { PageHeader, PageToolbar, StatePanel, Surface } from '@deepref/ui/layout';
+	import * as Alert from '@deepref/ui/alert';
+	import { Badge } from '@deepref/ui/badge';
+	import { Button } from '@deepref/ui/button';
+	import * as Card from '@deepref/ui/card';
+	import * as Empty from '@deepref/ui/empty';
+	import * as Field from '@deepref/ui/field';
+	import { Input } from '@deepref/ui/input';
+	import { Spinner } from '@deepref/ui/spinner';
+	import { Textarea } from '@deepref/ui/textarea';
+	import * as ToggleGroup from '@deepref/ui/toggle-group';
+	import WorkflowEditor from '$lib/features/workflows/editor/WorkflowEditor.svelte';
+	import { assistantPreviewRegistry, createAssistantPreview } from '../workflow-preview';
+	import { workflowId, type WorkflowDefinition } from '../../workflows/domain/types';
 	import { ReviewRunObserver } from '$lib/features/ai-assistance/review-run-observer.svelte';
 	import {
 		ASSISTANT_TOOL_METADATA,
@@ -56,6 +63,7 @@
 	let selectedToolName = $state<ToolName | null>(null);
 	let values = $state<ToolValues>({});
 	let assistantResult = $state<AssistantToolResponse | null>(null);
+
 	const reviewRun = new ReviewRunObserver(
 		() => projectId,
 		() => undefined
@@ -98,6 +106,23 @@
 				: catalog.length === 0
 					? 'empty'
 					: 'ready'
+	);
+
+	const preview = $derived<WorkflowDefinition>(
+		selectedEntry
+			? createAssistantPreview({
+					projectId,
+					label: selectedEntry.metadata.label,
+					description: toolDescription(selectedEntry),
+					proposal: selectedEntry.metadata.kind === AssistantToolKind.proposal
+				})
+			: {
+					schemaVersion: 1,
+					id: workflowId('assistant-preview'),
+					name: 'Assistant tool preview',
+					nodes: [],
+					connections: []
+				}
 	);
 
 	function selectTool(entry: SupportedCatalogEntry): void {
@@ -219,45 +244,80 @@
 </script>
 
 <svelte:head>
-	<title>Project Assistant · DeepRef</title>
+	<title>Assistant · DeepRef</title>
 	<meta
 		name="description"
 		content="Run one explicitly selected, policy-governed project assistant tool at a time."
 	/>
 </svelte:head>
 
-{#snippet toolButtons(entries: readonly SupportedCatalogEntry[])}
+{#snippet toolButtons(entries: readonly SupportedCatalogEntry[], isProposalCategory: boolean)}
 	<div class="grid gap-2">
 		{#each entries as entry (entry.metadata.name)}
-			<Button
-				variant={selectedToolName === entry.metadata.name ? 'secondary' : 'outline'}
-				class="h-auto justify-start px-3 py-2 text-left whitespace-normal"
+			{@const isSelected = selectedToolName === entry.metadata.name}
+			<button
+				type="button"
+				class={[
+					'group relative flex w-full cursor-pointer items-center justify-between gap-3 rounded-lg border px-3 py-2.5 text-left transition-all duration-150 select-none',
+					isSelected
+						? 'border-primary bg-selection text-selection-foreground'
+						: 'border-border bg-card text-foreground hover:border-border-strong hover:bg-interactive-hover'
+				]}
 				onclick={() => selectTool(entry)}
 				data-testid={`assistant-tool-${entry.metadata.name}`}
 			>
-				<span class="flex min-w-0 flex-col items-start gap-1">
-					<span class="font-medium">{entry.metadata.label}</span>
-					<span class="text-xs font-normal text-muted-foreground">
-						{toolDescription(entry)}
-					</span>
-				</span>
-			</Button>
+				<div class="flex min-w-0 items-center gap-2.5">
+					<div
+						class={[
+							'flex size-6 shrink-0 items-center justify-center rounded-md text-xs',
+							isProposalCategory
+								? 'bg-warning-surface text-warning'
+								: 'bg-info-surface text-info'
+						]}
+					>
+						{#if isProposalCategory}
+							<FlaskConicalIcon class="size-3.5" />
+						{:else}
+							<BookOpenIcon class="size-3.5" />
+						{/if}
+					</div>
+					<div class="flex min-w-0 flex-col">
+						<span class="truncate text-xs font-semibold tracking-tight">
+							{entry.metadata.label}
+						</span>
+						<span class="truncate text-[10px] text-muted-foreground">
+							{toolDescription(entry)}
+						</span>
+					</div>
+				</div>
+				<div class="flex shrink-0 items-center gap-1">
+					<div
+						class="text-muted-foreground transition-colors group-hover:text-primary/80"
+						title="Select tool"
+					>
+						<ChevronRightIcon class="size-4" />
+					</div>
+				</div>
+			</button>
 		{/each}
 	</div>
 {/snippet}
 
 <div
-	class="mx-auto flex h-full min-h-0 w-full max-w-[1440px] flex-col gap-5 overflow-auto bg-background p-4 sm:gap-6 sm:p-6 lg:p-8"
+	class="mx-auto flex h-full min-h-0 w-full max-w-[1440px] flex-col gap-5 overflow-auto bg-background p-4 select-none sm:gap-6 sm:p-6 lg:p-8"
 	data-testid="assistant-page"
 	data-assistant-state={pageState}
 >
 	<PageHeader
-		eyebrow="Evidence operations / Assistant"
-		title="Project Assistant"
+		title="Assistant"
 		description="Select one approved read or proposal tool, provide typed inputs, and run exactly one request. Proposal tools create reviewer work; they never change scientific state directly."
 	/>
 
 	<PageToolbar label="Assistant scope">
+		<Badge variant="secondary" class="gap-1.5 font-medium">
+			<BotIcon class="size-3 text-primary" />
+			Flow Machine Assistant
+		</Badge>
 		<Badge variant="secondary">Guided tools</Badge>
 		<Badge variant="outline">Project scoped</Badge>
 		<span class="text-sm text-muted-foreground">{catalog.length} catalog tools</span>
@@ -301,108 +361,65 @@
 			</Surface>
 		</div>
 	{:else}
-		<section class="grid gap-6 lg:grid-cols-[minmax(0,1fr)_minmax(0,1.1fr)]">
-			<div class="flex min-w-0 flex-col gap-4">
-				<Card.Root>
-					<Card.Header>
-						<Card.Title>Choose a tool</Card.Title>
-						<Card.Description>
-							The server catalog is intersected with this exact client form catalog.
-							Unknown tools remain visible as unsupported and cannot be executed.
-						</Card.Description>
-					</Card.Header>
-					<Card.Content class="flex flex-col gap-5">
-						<section class="flex flex-col gap-2" aria-labelledby="assistant-read-tools">
-							<div class="flex items-center gap-2">
-								<BookOpenIcon
-									class="size-4 text-muted-foreground"
-									aria-hidden={true}
-								/>
-								<h2 id="assistant-read-tools" class="text-sm font-medium">Reads</h2>
-							</div>
-							{#if readTools.length === 0}
-								<p class="text-sm text-muted-foreground">
-									No read tools are available.
-								</p>
-							{:else}
-								{@render toolButtons(readTools)}
-							{/if}
-						</section>
-
-						<section
-							class="flex flex-col gap-2"
-							aria-labelledby="assistant-proposal-tools"
-						>
-							<div class="flex items-center gap-2">
-								<FlaskConicalIcon
-									class="size-4 text-muted-foreground"
-									aria-hidden={true}
-								/>
-								<h2 id="assistant-proposal-tools" class="text-sm font-medium">
-									Proposals
-								</h2>
-							</div>
-							{#if proposalTools.length === 0}
-								<p class="text-sm text-muted-foreground">
-									No proposal tools are available.
-								</p>
-							{:else}
-								{@render toolButtons(proposalTools)}
-							{/if}
-						</section>
-
-						{#if catalogPartition.unsupported.length > 0}
-							<section
-								class="flex flex-col gap-2"
-								aria-labelledby="assistant-unsupported-tools"
-							>
-								<div class="flex items-center gap-2">
-									<ShieldCheckIcon
-										class="size-4 text-muted-foreground"
-										aria-hidden={true}
-									/>
-									<h2
-										id="assistant-unsupported-tools"
-										class="text-sm font-medium"
-									>
-										Unsupported
-									</h2>
-								</div>
-								<div
-									class="flex flex-col gap-2"
-									data-testid="assistant-unsupported-tools"
-								>
-									{#each catalogPartition.unsupported as descriptor (descriptor.name)}
-										<div class="rounded-md border border-dashed p-3 text-sm">
-											<div class="flex flex-wrap items-center gap-2">
-												<span class="font-medium"
-													>{unsupportedName(descriptor)}</span
-												>
-												<Badge variant="outline"
-													>Not supported by this UI</Badge
-												>
-											</div>
-											<p class="mt-1 text-xs text-muted-foreground">
-												{descriptor.description ||
-													'This server tool has no safe guided form.'}
-											</p>
-										</div>
-									{/each}
-								</div>
-							</section>
-						{/if}
-					</Card.Content>
-				</Card.Root>
+		<!-- Visual Pipeline Canvas (Top) -->
+		<div class="flex min-w-0 flex-col gap-3">
+			<div class="flex flex-wrap items-center justify-between gap-3 px-1">
+				<div class="flex items-center gap-2">
+					<NetworkIcon class="size-4 text-primary" />
+					<span class="text-sm font-semibold tracking-tight text-foreground">
+						Agent Orchestration Graph
+					</span>
+				</div>
+				<div class="flex items-center gap-3 text-xs text-muted-foreground">
+					<span class="inline-flex items-center gap-1.5">
+						<span class="size-2 rounded-full bg-chart-1"></span> Context
+					</span>
+					<span class="inline-flex items-center gap-1.5">
+						<span class="size-2 rounded-full bg-chart-2"></span> Agent Tool
+					</span>
+					<span class="inline-flex items-center gap-1.5">
+						<span class="size-2 rounded-full bg-chart-3"></span> Review Gate
+					</span>
+				</div>
 			</div>
 
-			<div class="min-w-0">
+			<div
+				class="relative h-[360px] w-full overflow-hidden rounded-xl border border-border bg-surface-inset shadow-none"
+			>
+				<WorkflowEditor workflow={preview} registry={assistantPreviewRegistry} readOnly />
+				{#if selectedEntry}
+					<p
+						role="status"
+						class="pointer-events-none absolute top-3 right-3 rounded border border-border bg-card px-2 py-1 text-xs text-muted-foreground"
+					>
+						{executeMutation.isPending
+							? 'Tool running'
+							: assistantResult
+								? 'Result available'
+								: 'Ready to run'}
+					</p>
+				{:else}
+					<p
+						class="pointer-events-none absolute inset-x-6 top-1/2 -translate-y-1/2 text-center text-sm text-muted-foreground"
+					>
+						Choose a tool to preview its review path.
+					</p>
+				{/if}
+			</div>
+		</div>
+
+		<!-- Layout: Left/Center Active Tool Form + RIGHT Tool Node Gallery (Matching user directive) -->
+		<section class="grid min-w-0 gap-6 lg:grid-cols-[minmax(0,1.35fr)_minmax(0,1fr)]">
+			<!-- Column 1: Active Tool Execution Form & Result Cards -->
+			<div class="flex min-w-0 flex-col gap-4">
 				{#if !selectedEntry || !selectedToolName}
 					<Empty.Root class="min-h-64" data-testid="assistant-tool-empty">
 						<Empty.Header>
 							<Empty.Media variant="icon"><FileSearchIcon /></Empty.Media>
 							<Empty.Title>Select a tool to begin</Empty.Title>
 							<Empty.Description>
-								Inputs are shown only after you explicitly choose one catalog entry.
+								Inputs are shown only after you explicitly choose one catalog entry
+								from the gallery on the right.
 							</Empty.Description>
 						</Empty.Header>
 					</Empty.Root>
@@ -648,6 +665,133 @@
 						</Card.Content>
 					</Card.Root>
 				{/if}
+			</div>
+
+			<!-- Column 2: Tool Node Gallery docked on the RIGHT (Matching user instruction) -->
+			<div class="flex min-w-0 flex-col gap-4">
+				<Card.Root class="border-border bg-card text-foreground shadow-none">
+					<Card.Header class="border-b border-border bg-muted pb-3">
+						<div class="flex items-center justify-between">
+							<div class="flex items-center gap-2">
+								<CommandIcon class="size-4 text-primary" />
+								<Card.Title
+									class="text-sm font-semibold tracking-tight text-foreground"
+								>
+									Tool Node Gallery
+								</Card.Title>
+							</div>
+							<Badge
+								variant="outline"
+								class="border-border font-mono text-[10px] text-primary"
+							>
+								{catalogPartition.supported.length} tools
+							</Badge>
+						</div>
+						<Card.Description class="text-xs text-muted-foreground">
+							Choose an approved copilot capability from the library.
+						</Card.Description>
+					</Card.Header>
+					<Card.Content class="flex flex-col gap-5 pt-4">
+						<section class="flex flex-col gap-2" aria-labelledby="assistant-read-tools">
+							<div class="flex flex-wrap items-center justify-between gap-3 px-1">
+								<div class="flex items-center gap-2">
+									<BookOpenIcon class="size-3.5 text-info" aria-hidden={true} />
+									<h2
+										id="assistant-read-tools"
+										class="text-xs font-semibold tracking-wider text-info uppercase"
+									>
+										Explore Evidence
+									</h2>
+								</div>
+								<span class="font-mono text-[10px] text-muted-foreground">
+									{readTools.length}
+								</span>
+							</div>
+							{#if readTools.length === 0}
+								<p class="text-sm text-muted-foreground">
+									No read tools are available.
+								</p>
+							{:else}
+								{@render toolButtons(readTools, false)}
+							{/if}
+						</section>
+
+						<section
+							class="flex flex-col gap-2"
+							aria-labelledby="assistant-proposal-tools"
+						>
+							<div class="flex flex-wrap items-center justify-between gap-3 px-1">
+								<div class="flex items-center gap-2">
+									<FlaskConicalIcon
+										class="size-3.5 text-warning"
+										aria-hidden={true}
+									/>
+									<h2
+										id="assistant-proposal-tools"
+										class="text-xs font-semibold tracking-wider text-warning uppercase"
+									>
+										Proposals & Synthesis
+									</h2>
+								</div>
+								<span class="font-mono text-[10px] text-muted-foreground">
+									{proposalTools.length}
+								</span>
+							</div>
+							{#if proposalTools.length === 0}
+								<p class="text-sm text-muted-foreground">
+									No proposal tools are available.
+								</p>
+							{:else}
+								{@render toolButtons(proposalTools, true)}
+							{/if}
+						</section>
+
+						{#if catalogPartition.unsupported.length > 0}
+							<section
+								class="flex flex-col gap-2 border-t border-border pt-3"
+								aria-labelledby="assistant-unsupported-tools"
+							>
+								<div class="flex items-center gap-2">
+									<ShieldCheckIcon
+										class="size-4 text-muted-foreground"
+										aria-hidden={true}
+									/>
+									<h2
+										id="assistant-unsupported-tools"
+										class="text-xs font-medium text-muted-foreground"
+									>
+										Unsupported
+									</h2>
+								</div>
+								<div
+									class="flex flex-col gap-2"
+									data-testid="assistant-unsupported-tools"
+								>
+									{#each catalogPartition.unsupported as descriptor (descriptor.name)}
+										<div
+											class="rounded-md border border-dashed border-border bg-surface-inset p-3 text-sm"
+										>
+											<div class="flex flex-wrap items-center gap-2">
+												<span class="font-medium text-foreground"
+													>{unsupportedName(descriptor)}</span
+												>
+												<Badge
+													variant="outline"
+													class="border-amber-500/30 text-[10px] text-amber-400"
+													>Not supported by this UI</Badge
+												>
+											</div>
+											<p class="mt-1 text-xs text-muted-foreground">
+												{descriptor.description ||
+													'This server tool has no safe guided form.'}
+											</p>
+										</div>
+									{/each}
+								</div>
+							</section>
+						{/if}
+					</Card.Content>
+				</Card.Root>
 			</div>
 		</section>
 	{/if}

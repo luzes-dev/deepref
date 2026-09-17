@@ -535,6 +535,7 @@ test('reviews a deterministic title and abstract AI proposal before applying it'
 	);
 
 	await page.goto(`/projects/${projectId}/screening/title-abstract`);
+	await page.getByText('Get an AI suggestion', { exact: true }).click();
 	const ai = page.getByTestId('ai-proposal-review');
 	await ai.getByRole('button', { name: 'Request suggestion' }).click();
 	await expect(ai.getByText('Population', { exact: true })).toBeVisible();

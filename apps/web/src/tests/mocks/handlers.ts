@@ -26,6 +26,15 @@ export const handlers = [
 	http.get('/api/settings', () => {
 		return HttpResponse.json({ data: mockSettings, status: 200 });
 	}),
+	http.get('/api/notifications/unread-count', () => {
+		return HttpResponse.json({ count: 0, latest_revision: 0 });
+	}),
+	http.get('/api/notifications', () => {
+		return HttpResponse.json({ items: [], next_cursor: null });
+	}),
+	http.post('/api/notifications/mark-read', () => {
+		return HttpResponse.json({ updated: 0 });
+	}),
 	http.put('/api/settings', async ({ request }) => {
 		const body = (await request.json()) as Partial<SettingsDto>;
 		return HttpResponse.json({

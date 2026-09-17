@@ -517,7 +517,9 @@ test('reviews an edited AI appraisal pre-fill with evidence navigation and decis
 	await page.goto(
 		'/projects/project-1/appraisal?report=report-1&definition=deepref-rct-generic&definition_version=1'
 	);
+	await page.getByRole('tab', { name: 'AI suggestion' }).click();
 	await page.getByTestId('generate-ai-prefill').click();
+	await page.getByRole('tab', { name: 'AI suggestion' }).click();
 	await expect(page.getByTestId('ai-prefill-proposal')).toBeVisible();
 	await expect(page.getByTestId('ai-answer-allocation_description')).toContainText(
 		'Suggested answer: yes'
@@ -534,10 +536,16 @@ test('reviews an edited AI appraisal pre-fill with evidence navigation and decis
 	await page.goto(
 		'/projects/project-1/appraisal?report=report-1&definition=deepref-rct-generic&definition_version=1'
 	);
+	await page.getByRole('tab', { name: 'AI suggestion' }).click();
 	await expect(page.getByTestId('ai-prefill-proposal')).toBeVisible();
 
+	await page.getByRole('tab', { name: 'Assessment', exact: true }).click();
 	await page.locator('#outcome_measure_prespecified').uncheck();
 	await page.locator('#allocation_description-evidence-0').selectOption('block-2');
+	await page.getByRole('tab', { name: 'AI suggestion' }).click();
+	await page.getByRole('tab', { name: 'Assessment', exact: true }).click();
+	await expect(page.locator('#outcome_measure_prespecified')).not.toBeChecked();
+	await expect(page.locator('#allocation_description-evidence-0')).toHaveValue('block-2');
 	await page.getByRole('button', { name: 'Accept reviewed AI pre-fill' }).click();
 	await expect.poll(() => decisions.length).toBe(1);
 	const acceptedBody = decisions[0];
@@ -563,9 +571,12 @@ test('reviews an edited AI appraisal pre-fill with evidence navigation and decis
 	await expect(page.getByText('assessment-ai-1')).toBeVisible();
 	await expect.poll(() => historyReads).toBeGreaterThan(1);
 	expect(completeCalls).toBe(0);
+	await page.getByRole('tab', { name: 'AI suggestion' }).click();
 	await expect(page.getByText('No pending AI pre-fill')).toBeVisible();
 
+	await page.getByRole('tab', { name: 'AI suggestion' }).click();
 	await page.getByTestId('generate-ai-prefill').click();
+	await page.getByRole('tab', { name: 'AI suggestion' }).click();
 	await expect(page.getByTestId('ai-prefill-proposal')).toBeVisible();
 	await page.getByTestId('reject-ai-prefill').click();
 	await expect.poll(() => decisions.length).toBe(2);
@@ -577,7 +588,9 @@ test('reviews an edited AI appraisal pre-fill with evidence navigation and decis
 		expect('reviewed_payload' in decisions[1]).toBe(false);
 	}
 
+	await page.getByRole('tab', { name: 'AI suggestion' }).click();
 	await page.getByTestId('generate-ai-prefill').click();
+	await page.getByRole('tab', { name: 'AI suggestion' }).click();
 	await expect(page.getByTestId('ai-prefill-proposal')).toBeVisible();
 	await page.route(
 		'http://localhost:4173/api/projects/project-1/ai/proposals/proposal-3/decision',
@@ -585,5 +598,6 @@ test('reviews an edited AI appraisal pre-fill with evidence navigation and decis
 	);
 	await page.getByTestId('reject-ai-prefill').click();
 	await expect(page.getByRole('alert')).toContainText('stale');
+	await page.getByRole('tab', { name: 'AI suggestion' }).click();
 	await expect(page.getByTestId('ai-prefill-proposal')).toBeVisible();
 });

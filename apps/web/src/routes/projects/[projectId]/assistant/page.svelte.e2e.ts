@@ -14,49 +14,80 @@ const dependencies = {
 	worker: { state: 'available', lag: 0, backlog: 0, oldest_age_seconds: null }
 };
 
-const reportId = '11111111-1111-4111-8111-111111111111';
-const documentId = '22222222-2222-4222-8222-222222222222';
-const blockId = '33333333-3333-4333-8333-333333333333';
-const secondBlockId = '44444444-4444-4444-8444-444444444444';
-const studyId = '77777777-7777-4777-8777-777777777777';
-const recordId = '55555555-5555-4555-8555-555555555555';
-const candidateReportId = '66666666-6666-4666-8666-666666666666';
+const conversationId = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa1';
+const secondConversationId = 'aaaaaaaa-aaaa-4aaa-8aaa-aaaaaaaaaaa2';
+const messageId = 'bbbbbbbb-bbbb-4bbb-8bbb-bbbbbbbbbbbb1';
+const reviewRunId = 'cccccccc-cccc-4ccc-8ccc-ccccccccccc1';
 
-function completedReviewRun(runId: string, proposalId: string) {
+function conversation(id: string, title: string, updatedAt: string) {
 	return {
-		id: runId,
+		id,
 		project_id: 'project-1',
-		definition: 'duplicate_detection',
-		subject: {},
-		origin: { kind: 'reviewer_requested' },
-		state: { kind: 'completed', proposal_id: proposalId },
+		title,
 		created_at: '2026-01-01T00:00:00Z',
-		started_at: '2026-01-01T00:00:01Z',
-		finished_at: '2026-01-01T00:00:02Z'
+		updated_at: updatedAt
 	};
 }
 
-const catalog = [
-	['get_project_protocol', 'read'],
-	['get_report', 'read'],
-	['read_document_blocks', 'read'],
-	['search_document', 'read'],
-	['search_project_reports', 'read'],
-	['get_screening_state', 'read'],
-	['get_study', 'read'],
-	['get_appraisal', 'read'],
-	['propose_screening_decision', 'proposal'],
-	['propose_duplicate_merge', 'proposal'],
-	['propose_study_grouping', 'proposal'],
-	['propose_classification', 'proposal'],
-	['propose_extraction', 'proposal'],
-	['propose_appraisal_answer', 'proposal']
-].map(([name, kind]) => ({
-	name,
-	kind,
-	authority_tier: kind === 'read' ? 'read_only' : 'scientific_conclusion',
-	description: `${name} server description`
-}));
+function assistantMessage(id: string, createdAt: string) {
+	return {
+		id,
+		conversation_id: conversationId,
+		role: 'assistant',
+		content: 'The protocol targets adults with type 2 diabetes.',
+		tool_calls: [
+			{
+				id: 'call-1',
+				tool: 'get_project_protocol',
+				args: { project_id: 'project-1' }
+			}
+		],
+		tool_results: [
+			{
+				tool_call_id: 'call-1',
+				tool: 'get_project_protocol',
+				output: { id: 'protocol-1', name: 'Protocol v1' },
+				proposal_review_run_id: null
+			},
+			{
+				tool_call_id: 'call-2',
+				tool: 'propose_screening_decision',
+				output: {},
+				proposal_review_run_id: reviewRunId
+			}
+		],
+		metadata: null,
+		created_at: createdAt
+	};
+}
+
+function sseBody(): string {
+	return [
+		'event: token',
+		'data: {"delta":"Reading the protocol"}',
+		'',
+		'event: tool_start',
+		'data: {"tool":"get_project_protocol","tool_call_id":"call-1","args":{"project_id":"project-1"}}',
+		'',
+		'event: tool_complete',
+		'data: {"tool":"get_project_protocol","tool_call_id":"call-1","output":{"id":"protocol-1","name":"Protocol v1"}}',
+		'',
+		'event: token',
+		'data: {"delta":" — inclusion criteria found."}',
+		'',
+		'event: proposal_created',
+		'data: {"tool":"propose_screening_decision","review_run_id":"' +
+			reviewRunId +
+			'","status_path":"/projects/project-1/review-runs/' +
+			reviewRunId +
+			'"}',
+		'',
+		'event: done',
+		'data: {"message_id":"m-1","input_tokens":12,"output_tokens":34}',
+		'',
+		''
+	].join('\n');
+}
 
 async function mockProjectShell(page: Page): Promise<void> {
 	await page.route(`${api}/health/dependencies`, (route) =>
@@ -74,249 +105,136 @@ async function mockProjectShell(page: Page): Promise<void> {
 	);
 }
 
-async function mockAssistantCatalog(page: Page, extraCatalog: Array<Record<string, unknown>> = []) {
-	await page.route(`${api}/projects/project-1/assistant/tools`, async (route) => {
-		expect(route.request().method()).toBe('GET');
-		await route.fulfill({ json: [...catalog, ...extraCatalog] });
-	});
+async function mockConversations(page: Page, items: Array<Record<string, unknown>>): Promise<void> {
+	await page.route(`${api}/projects/project-1/assistant/conversations`, (route) =>
+		route.fulfill({ json: items })
+	);
 }
 
 async function openAssistant(page: Page): Promise<void> {
 	await mockProjectShell(page);
-	await mockAssistantCatalog(page);
+	await mockConversations(page, [
+		conversation(conversationId, 'Protocol questions', '2026-01-02T00:00:00Z'),
+		conversation(secondConversationId, 'Duplicate checks', '2026-01-01T00:00:00Z')
+	]);
+	await page.route(
+		`${api}/projects/project-1/assistant/conversations/${conversationId}/messages`,
+		(route) =>
+			route.fulfill({
+				json: [
+					{
+						id: messageId,
+						conversation_id: conversationId,
+						role: 'user',
+						content: 'What does the protocol say?',
+						tool_calls: null,
+						tool_results: null,
+						metadata: null,
+						created_at: '2026-01-01T00:00:00Z'
+					},
+					assistantMessage(`${messageId.slice(0, -1)}2`, '2026-01-01T00:00:01Z')
+				]
+			})
+	);
 	await page.goto('/projects/project-1/assistant');
-	await expect(page.getByRole('heading', { name: 'Project Assistant' })).toBeVisible();
 }
 
-test('executes typed read arguments with injected project scope and renders bounded JSON', async ({
+test('opens the most recent thread and renders the persisted turn history', async ({ page }) => {
+	await openAssistant(page);
+	await expect(page.getByTestId('assistant-page')).toBeVisible();
+	await expect(page.getByTestId('assistant-thread').first()).toContainText('Protocol questions');
+	await expect(page.getByTestId('assistant-feed')).toContainText('What does the protocol say?');
+	await expect(page.getByTestId('assistant-feed')).toContainText(
+		'The protocol targets adults with type 2 diabetes.'
+	);
+	const toolCard = page.getByTestId('assistant-feed').locator('[data-slot="tool-call-card"]');
+	await expect(toolCard).toContainText('get_project_protocol');
+	await expect(toolCard).toContainText('Completed');
+	const proposalCard = page.getByTestId('assistant-feed').locator('[data-slot="proposal-card"]');
+	await expect(proposalCard).toContainText('Screening Decision');
+	await expect(proposalCard.getByRole('link', { name: 'Review in Queue' })).toHaveAttribute(
+		'href',
+		'/projects/project-1/screening'
+	);
+	await expect(page.getByTestId('assistant-empty-state')).toHaveCount(0);
+});
+
+test('streams a new chat turn with tool progress, proposals, and token totals', async ({
 	page
 }) => {
 	await openAssistant(page);
-	const requests: Array<Record<string, unknown>> = [];
-	await page.route(`${api}/projects/project-1/assistant/tools/execute`, async (route) => {
+	await page.getByTestId('assistant-new-chat').click();
+	await expect(page.getByTestId('assistant-empty-state')).toBeVisible();
+
+	let createdConversation = false;
+	await page.route(`${api}/projects/project-1/assistant/conversations`, async (route) => {
+		if (route.request().method() === 'POST') {
+			createdConversation = true;
+			const body = route.request().postDataJSON() as { title: string };
+			expect(body.title).toBe('What does the protocol say about inclusion criteria?');
+			await route.fulfill({
+				status: 201,
+				json: conversation(conversationId, body.title, '2026-01-03T00:00:00Z')
+			});
+			return;
+		}
+		await route.fulfill({
+			json: [
+				conversation(conversationId, 'What does the protocol say', '2026-01-03T00:00:00Z')
+			]
+		});
+	});
+	await page.route(`${api}/projects/project-1/assistant/chat`, async (route) => {
 		expect(route.request().method()).toBe('POST');
 		expect(route.request().headers()['x-actor-kind']).toBe('user');
 		expect(route.request().headers()['x-actor-id']).toBe('local-user');
-		const body = route.request().postDataJSON();
-		requests.push(body);
-		expect(body).toEqual({
-			tool: 'read_document_blocks',
-			args: {
-				project_id: 'project-1',
-				document_id: documentId,
-				block_ids: [blockId, secondBlockId]
-			}
+		expect(route.request().postDataJSON()).toEqual({
+			conversation_id: conversationId,
+			message: 'What does the protocol say about inclusion criteria?'
 		});
 		await route.fulfill({
-			json: {
-				kind: 'read',
-				data: {
-					document_id: documentId,
-					blocks: [{ id: blockId, text: 'bounded evidence' }]
-				}
-			}
+			status: 200,
+			headers: { 'content-type': 'text/event-stream' },
+			body: sseBody()
 		});
 	});
 
-	await page.getByTestId('assistant-tool-read_document_blocks').click();
-	await page.getByTestId('assistant-field-document_id').fill(documentId);
-	await page.getByTestId('assistant-field-block_ids').fill(`${blockId}\n${secondBlockId}`);
-	await page.getByTestId('assistant-execute').click();
+	await page
+		.getByTestId('assistant-thread-input')
+		.fill('What does the protocol say about inclusion criteria?');
+	await page.getByTestId('assistant-send').click();
 
-	await expect(page.getByTestId('assistant-read-result')).toContainText('bounded evidence');
-	expect(requests).toHaveLength(1);
+	const feed = page.getByTestId('assistant-feed');
+	await expect(feed).toContainText('Reading the protocol — inclusion criteria found.');
+	await expect(feed.locator('[data-slot="tool-call-card"]')).toContainText('Completed');
+	await expect(feed.locator('[data-slot="proposal-card"]')).toContainText('Screening Decision');
+	await expect(feed).toContainText('12 tokens in');
+	await expect(createdConversation).toBe(true);
+	await expect(page.getByTestId('assistant-thread')).toHaveCount(1);
 });
 
-test('executes a proposal once, shows the receipt, and links to human review', async ({ page }) => {
+test('shift+enter keeps a newline and enter submits the draft', async ({ page }) => {
 	await openAssistant(page);
-	let request: Record<string, unknown> | undefined;
-	await page.route(`${api}/projects/project-1/assistant/tools/execute`, async (route) => {
-		request = route.request().postDataJSON();
-		await route.fulfill({
-			json: {
-				kind: 'review_run',
-				review_run_id: 'run-123',
-				status_path: '/projects/project-1/review-runs/run-123'
-			}
-		});
-	});
-	await page.route(`${api}/projects/project-1/review-runs/run-123`, (route) =>
-		route.fulfill({ json: completedReviewRun('run-123', 'proposal-123') })
-	);
-
-	await page.getByTestId('assistant-tool-propose_duplicate_merge').click();
-	await page.getByTestId('assistant-field-source_record_id').fill(recordId);
-	await page.getByTestId('assistant-field-candidate_report_id').fill(candidateReportId);
-	await page.getByTestId('assistant-execute').click();
-
-	await expect(page.getByTestId('assistant-proposal-receipt')).toContainText('proposal-123');
-	await expect(page.getByTestId('assistant-review-link')).toHaveAttribute(
-		'href',
-		'/projects/project-1/discovery/duplicates'
-	);
-	expect(request).toEqual({
-		tool: 'propose_duplicate_merge',
-		args: {
-			project_id: 'project-1',
-			source_record_id: recordId,
-			candidate_report_id: candidateReportId
-		}
-	});
+	await page.getByTestId('assistant-new-chat').click();
+	const composer = page.getByTestId('assistant-thread-input');
+	await composer.fill('first line');
+	await composer.press('Shift+Enter');
+	await expect(composer).toHaveValue('first line\n');
 });
 
-test('links classification proposals to the selected study review', async ({ page }) => {
+test('deletes a conversation after confirmation', async ({ page }) => {
 	await openAssistant(page);
-	let request: Record<string, unknown> | undefined;
-	await page.route(`${api}/projects/project-1/assistant/tools/execute`, async (route) => {
-		request = route.request().postDataJSON();
-		await route.fulfill({
-			json: {
-				kind: 'review_run',
-				review_run_id: 'classification-run',
-				status_path: '/projects/project-1/review-runs/classification-run'
-			}
-		});
-	});
-	await page.route(`${api}/projects/project-1/review-runs/classification-run`, (route) =>
-		route.fulfill({ json: completedReviewRun('classification-run', 'classification-proposal') })
-	);
-
-	await page.getByTestId('assistant-tool-propose_classification').click();
-	await page.getByTestId('assistant-field-study_id').fill(studyId);
-	await page.getByTestId('assistant-execute').click();
-
-	await expect(page.getByTestId('assistant-review-link')).toHaveAttribute(
-		'href',
-		`/projects/project-1/studies?study=${studyId}`
-	);
-	expect(request).toEqual({
-		tool: 'propose_classification',
-		args: { project_id: 'project-1', study_id: studyId }
-	});
-});
-
-test('does not send invalid UUID, block-list, or limit values and ignores unknown server tools', async ({
-	page
-}) => {
-	await mockProjectShell(page);
-	await mockAssistantCatalog(page, [
-		{
-			name: 'future_tool',
-			kind: 'read',
-			authority_tier: 'read_only',
-			description: 'Future server capability'
+	page.once('dialog', (dialog) => dialog.accept());
+	await page.route(
+		`${api}/projects/project-1/assistant/conversations/${conversationId}`,
+		(route) => {
+			expect(route.request().method()).toBe('DELETE');
+			return route.fulfill({ status: 204 });
 		}
-	]);
-	await page.goto('/projects/project-1/assistant');
-	await expect(page.getByTestId('assistant-unsupported-tools')).toContainText('future_tool');
-	await expect(page.getByTestId('assistant-tool-future_tool')).toHaveCount(0);
-
-	let executeCount = 0;
-	await page.route(`${api}/projects/project-1/assistant/tools/execute`, async (route) => {
-		executeCount += 1;
-		await route.fulfill({ json: { kind: 'read', data: {} } });
-	});
-
-	await page.getByTestId('assistant-tool-get_report').click();
-	await page.getByTestId('assistant-field-report_id').fill('bad-uuid');
-	await expect(page.getByTestId('assistant-execute')).toBeDisabled();
-
-	await page.getByTestId('assistant-tool-read_document_blocks').click();
-	await page.getByTestId('assistant-field-document_id').fill(documentId);
-	await page.getByTestId('assistant-field-block_ids').fill(`${blockId}\nnot-a-uuid`);
-	await expect(page.getByTestId('assistant-execute')).toBeDisabled();
-
-	await page.getByTestId('assistant-tool-search_project_reports').click();
-	await page.getByTestId('assistant-field-query').fill('trial');
-	await page.getByTestId('assistant-field-limit').fill('101');
-	await expect(page.getByTestId('assistant-execute')).toBeDisabled();
-	await expect(executeCount).toBe(0);
-});
-
-test('shows API permission and provider errors, with an explicit provider retry', async ({
-	page
-}) => {
-	await openAssistant(page);
-	let mode: 'forbidden' | 'unavailable' | 'success' = 'forbidden';
-	let requests = 0;
-	await page.route(`${api}/projects/project-1/assistant/tools/execute`, async (route) => {
-		requests += 1;
-		if (mode === 'forbidden') {
-			await route.fulfill({ status: 403, json: { message: 'assistant access is disabled' } });
-		} else if (mode === 'unavailable') {
-			mode = 'success';
-			await route.fulfill({
-				status: 503,
-				json: { message: 'provider temporarily unavailable' }
-			});
-		} else {
-			await route.fulfill({
-				json: {
-					kind: 'review_run',
-					review_run_id: 'retried-run',
-					status_path: '/projects/project-1/review-runs/retried-run'
-				}
-			});
-		}
-	});
-	await page.route(`${api}/projects/project-1/review-runs/retried-run`, (route) =>
-		route.fulfill({ json: completedReviewRun('retried-run', 'retried-proposal') })
 	);
-
-	await page.getByTestId('assistant-tool-propose_screening_decision').click();
-	await page.getByTestId('assistant-field-report_id').fill(reportId);
-	await page.getByTestId('assistant-execute').click();
-	await expect(page.getByTestId('assistant-execution-error')).toContainText(
-		'assistant access is disabled'
-	);
-	await expect(page.getByTestId('assistant-execution-retry')).toHaveCount(0);
-
-	mode = 'unavailable';
-	await page.getByTestId('assistant-execute').click();
-	await expect(page.getByTestId('assistant-execution-error')).toContainText(
-		'provider temporarily unavailable'
-	);
-	await page.getByTestId('assistant-execution-retry').click();
-	await expect(page.getByTestId('assistant-proposal-receipt')).toContainText('retried-proposal');
-	expect(requests).toBe(3);
-});
-
-test('exposes catalog loading, empty, and unavailable states', async ({ page }) => {
-	await mockProjectShell(page);
-	await page.route(`${api}/projects/project-1/assistant/tools`, async (route) => {
-		await new Promise((resolve) => setTimeout(resolve, 750));
-		await route.fulfill({ json: catalog });
-	});
-	await page.goto('/projects/project-1/assistant');
-	await expect(page.getByTestId('assistant-page')).toHaveAttribute(
-		'data-assistant-state',
-		'loading'
-	);
-	await expect(page.getByTestId('assistant-catalog-loading')).toBeVisible();
-
-	await page.unrouteAll({ behavior: 'ignoreErrors' });
-	await mockProjectShell(page);
-	await page.route(`${api}/projects/project-1/assistant/tools`, (route) =>
-		route.fulfill({ json: [] })
-	);
-	await page.goto('/projects/project-1/assistant');
-	await expect(page.getByTestId('assistant-page')).toHaveAttribute(
-		'data-assistant-state',
-		'empty'
-	);
-	await expect(page.getByTestId('assistant-catalog-empty')).toContainText('No assistant tools');
-
-	await page.unrouteAll({ behavior: 'ignoreErrors' });
-	await mockProjectShell(page);
-	await page.route(`${api}/projects/project-1/assistant/tools`, (route) =>
-		route.fulfill({ status: 503, json: { message: 'tool catalog unavailable' } })
-	);
-	await page.goto('/projects/project-1/assistant');
-	await expect(page.getByTestId('assistant-page')).toHaveAttribute(
-		'data-assistant-state',
-		'error'
-	);
-	await expect(page.getByTestId('assistant-catalog-error')).toContainText('unavailable');
+	await page.getByTestId('assistant-thread').first().hover();
+	await page.getByRole('button', { name: 'Delete conversation Protocol questions' }).click();
+	await expect(page.getByTestId('assistant-thread')).toHaveCount(1);
 });
 
 test('keeps the assistant workspace within desktop and mobile bounds in dark mode', async ({
@@ -329,12 +247,10 @@ test('keeps the assistant workspace within desktop and mobile bounds in dark mod
 	]) {
 		await page.unrouteAll({ behavior: 'ignoreErrors' });
 		await mockProjectShell(page);
-		await mockAssistantCatalog(page);
+		await mockConversations(page, []);
 		await page.setViewportSize(viewport);
 		await page.goto('/projects/project-1/assistant');
-		await expect(
-			page.getByRole('heading', { name: 'Project Assistant', exact: true })
-		).toBeVisible();
+		await expect(page.getByTestId('assistant-page')).toBeVisible();
 		const overflow = await page.evaluate(
 			() => document.documentElement.scrollWidth > document.documentElement.clientWidth
 		);

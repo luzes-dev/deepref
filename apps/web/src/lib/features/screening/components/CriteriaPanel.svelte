@@ -1,7 +1,7 @@
 <script lang="ts">
 	import type { EligibilityCriterionDto } from '$lib/api/generated/models';
-	import { Badge } from '$lib/components/ui/badge';
-	import * as Card from '$lib/components/ui/card';
+	import { Badge } from '@deepref/ui/badge';
+	import * as Card from '@deepref/ui/card';
 	import { ClipboardCheck, Info } from '@lucide/svelte';
 
 	let {

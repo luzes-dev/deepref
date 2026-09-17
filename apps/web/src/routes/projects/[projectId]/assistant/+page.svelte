@@ -1,8 +1,8 @@
 <script lang="ts">
 	import { page } from '$app/state';
-	import ProjectAssistant from '$lib/features/assistant/components/ProjectAssistant.svelte';
+	import ProjectChatAssistant from '$lib/features/assistant/components/ProjectChatAssistant.svelte';
 
 	const projectId = $derived(page.params.projectId ?? '');
 </script>
 
-<ProjectAssistant {projectId} />
+<ProjectChatAssistant {projectId} />

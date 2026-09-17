@@ -10,10 +10,10 @@
     "apps/web/src/**/*.e2e.ts",
     "apps/web/src/routes/demo/**",
     "apps/web/src/lib/actions/typewriter.svelte.ts",
-    "apps/web/src/lib/components/LoadingButton.svelte",
     "apps/web/src/lib/typewriter.svelte.ts",
-    "apps/web/src/lib/components/ui/**/**",
-    "apps/web/src/lib/api/generated/**/**"
+    "apps/web/src/lib/features/projects/index.ts",
+    "apps/web/src/lib/api/generated/**/**",
+    "packages/ui/**"
   ],
   "duplicates": {
     "minLines": 15,
@@ -33,8 +33,8 @@
         "patterns": ["apps/web/src/lib/api/**"]
       },
       {
-        "name": "components",
-        "patterns": ["apps/web/src/lib/components/**"]
+        "name": "shell",
+        "patterns": ["apps/web/src/lib/shell/**"]
       },
       {
         "name": "features",
@@ -55,16 +55,16 @@
         "allow": ["utils"]
       },
       {
-        "from": "components",
-        "allow": ["utils", "api", "components"]
+        "from": "shell",
+        "allow": ["utils", "api", "shell"]
       },
       {
         "from": "features",
-        "allow": ["utils", "api", "components", "features"]
+        "allow": ["utils", "api", "shell", "features"]
       },
       {
         "from": "routes",
-        "allow": ["utils", "api", "components", "features", "routes"]
+        "allow": ["utils", "api", "shell", "features", "routes"]
       }
     ],
     "coverage": {
@@ -73,7 +73,7 @@
     "calls": {
       "forbidden": [
         {
-          "from": "components",
+          "from": "shell",
           "callee": "fetch"
         },
         {

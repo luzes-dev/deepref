@@ -1,10 +1,10 @@
 <script lang="ts">
 	import type { StudyDto } from '$lib/api/generated/models';
-	import { MetricTile, Surface } from '$lib/components/layout';
-	import { Badge } from '$lib/components/ui/badge';
-	import { Button } from '$lib/components/ui/button';
-	import * as Field from '$lib/components/ui/field';
-	import { Input } from '$lib/components/ui/input';
+	import { Surface } from '@deepref/ui/layout';
+	import { Badge } from '@deepref/ui/badge';
+	import { Button } from '@deepref/ui/button';
+	import * as Field from '@deepref/ui/field';
+	import { Input } from '@deepref/ui/input';
 	import type { Snippet } from 'svelte';
 	import StudyClassificationForm from './StudyClassificationForm.svelte';
 
@@ -36,7 +36,7 @@
 	} = $props();
 </script>
 
-<Surface as="section" tone="default" class="flex min-w-0 flex-col" label="Study details">
+<Surface as="section" tone="plain" class="flex min-w-0 flex-col" label="Study details">
 	<div class="border-b border-border/70 p-4 sm:p-5">
 		<div class="flex flex-wrap items-start justify-between gap-3">
 			<div>
@@ -51,26 +51,16 @@
 		</div>
 	</div>
 	<div class="flex flex-col gap-6 p-4 sm:p-5">
-		<div class="grid gap-3 sm:grid-cols-3">
-			<MetricTile
-				label="Reports"
-				value={study.reports.length}
-				detail="in this investigation"
-			/>
-			<MetricTile
-				label="Revision"
-				value={study.revision}
-				detail="audited changes"
-				tone="info"
-			/>
-			<MetricTile
-				label="Design"
-				value={study.design_label ?? 'Unclassified'}
-				detail={study.design ? 'normalized' : 'needs review'}
-				tone={study.design ? 'positive' : 'warning'}
-			/>
-		</div>
-		<div class="grid gap-5 border-t border-border/70 pt-5 lg:grid-cols-3">
+		<dl
+			class="flex flex-wrap items-baseline gap-x-2 gap-y-1 border-y border-border-subtle py-3"
+		>
+			<dt class="text-xs font-medium tracking-wide text-muted-foreground uppercase">
+				Papers
+			</dt>
+			<dd class="m-0 text-lg font-semibold tabular-nums">{study.reports.length}</dd>
+			<dd class="m-0 text-sm text-muted-foreground">in this investigation</dd>
+		</dl>
+		<div class="grid gap-5 border-t border-border/70 pt-5 lg:grid-cols-2">
 			<form
 				class="flex flex-col gap-2"
 				onsubmit={(event) => {

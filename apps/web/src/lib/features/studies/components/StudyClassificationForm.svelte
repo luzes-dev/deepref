@@ -1,9 +1,9 @@
 <script lang="ts">
 	import type { StudyDto } from '$lib/api/generated/models';
-	import { Checkbox } from '$lib/components/ui/checkbox';
-	import * as Field from '$lib/components/ui/field';
-	import { Button } from '$lib/components/ui/button';
-	import * as Select from '$lib/components/ui/select';
+	import { Checkbox } from '@deepref/ui/checkbox';
+	import * as Field from '@deepref/ui/field';
+	import { Button } from '@deepref/ui/button';
+	import * as Select from '@deepref/ui/select';
 
 	type DesignOption = { value: string; label: string };
 	type Props = {
