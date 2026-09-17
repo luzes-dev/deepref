@@ -9,6 +9,7 @@ mod exports;
 mod extraction;
 mod health;
 mod ingestions;
+mod notifications;
 mod pagination;
 mod projection;
 mod projects;
@@ -94,6 +95,9 @@ fn openapi_router(document_max_bytes: usize) -> OpenApiRouter<AppState> {
         .routes(routes!(ingestions::get_ingestion))
         .routes(routes!(ingestions::list_ingestion_items))
         .routes(routes!(ingestions::cancel_ingestion))
+        .routes(routes!(notifications::list_notifications_route))
+        .routes(routes!(notifications::get_unread_notification_count))
+        .routes(routes!(notifications::mark_notifications_read_route))
         .routes(routes!(protocol::get_published_protocol))
         .routes(routes!(
             protocol::get_protocol_editor,
