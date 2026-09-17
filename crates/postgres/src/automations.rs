@@ -15,6 +15,8 @@ use sqlx::{PgPool, Postgres, Row, Transaction, postgres::PgRow};
 use thiserror::Error;
 use uuid::Uuid;
 
+use crate::notifications::{NotificationDraft, record_notification_in_transaction};
+
 #[derive(Debug, Error)]
 pub enum AutomationError {
     #[error("automation database operation failed")]
@@ -757,8 +759,19 @@ pub async fn finalize_automation_run(
         )
         .bind(project_id.as_uuid())
         .bind(run_id.as_uuid())
-        .bind(error)
+        .bind(&error)
         .execute(&mut *transaction)
+        .await?;
+        record_notification_in_transaction(
+            &mut transaction,
+            &NotificationDraft::error(
+                "automation_run.failed",
+                Some(project_id.as_uuid()),
+                "Automation failed",
+                Some(error),
+                serde_json::json!({ "run_id": run_id.as_uuid() }),
+            ),
+        )
         .await?;
         transaction.commit().await?;
         return Ok(AutomationFinalization::Failed);
@@ -772,6 +785,17 @@ pub async fn finalize_automation_run(
     .bind(project_id.as_uuid())
     .bind(run_id.as_uuid())
     .execute(&mut *transaction)
+    .await?;
+    record_notification_in_transaction(
+        &mut transaction,
+        &NotificationDraft::success(
+            "automation_run.completed",
+            Some(project_id.as_uuid()),
+            "Automation completed",
+            None,
+            serde_json::json!({ "run_id": run_id.as_uuid() }),
+        ),
+    )
     .await?;
     transaction.commit().await?;
     Ok(AutomationFinalization::Completed)

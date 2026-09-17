@@ -97,133 +97,18 @@ async fn load_project_graph_from_connection(
         .map(|(index, node)| (node.report_id, index))
         .collect::<HashMap<_, _>>();
     if fields.screening {
-        for node in &mut nodes {
-            node.screening = Some(GraphScreeningOverlay {
-                title_abstract_status: "unscreened".to_owned(),
-                full_text_status: "not_required".to_owned(),
-                final_status: "unscreened".to_owned(),
-            });
-        }
-        let rows = sqlx::query(
-            "SELECT report_id,title_abstract_status,full_text_status,final_status FROM screening_state WHERE project_id=$1 AND report_id=ANY($2) ORDER BY report_id",
-        )
-        .bind(project_id)
-        .bind(&ids)
-        .fetch_all(&mut *connection)
-        .await?;
-        for row in rows {
-            if let Some(&index) = node_indices.get(&row.get::<Uuid, _>("report_id")) {
-                nodes[index].screening = Some(GraphScreeningOverlay {
-                    title_abstract_status: row.get("title_abstract_status"),
-                    full_text_status: row.get("full_text_status"),
-                    final_status: row.get("final_status"),
-                });
-            }
-        }
+        attach_screening_overlays(connection, project_id, &ids, &node_indices, &mut nodes).await?;
     }
     if fields.study {
-        for node in &mut nodes {
-            node.study = Some(GraphStudyOverlay {
-                study_id: None,
-                title: None,
-            });
-        }
-        let rows = sqlx::query(
-            r#"SELECT DISTINCT ON (sr.report_id) sr.report_id, s.id AS study_id, s.title
-               FROM study_reports sr
-               JOIN studies s ON s.project_id=sr.project_id AND s.id=sr.study_id
-               WHERE sr.project_id=$1 AND sr.report_id=ANY($2)
-               ORDER BY sr.report_id, s.id"#,
-        )
-        .bind(project_id)
-        .bind(&ids)
-        .fetch_all(&mut *connection)
-        .await?;
-        for row in rows {
-            if let Some(&index) = node_indices.get(&row.get::<Uuid, _>("report_id")) {
-                nodes[index].study = Some(GraphStudyOverlay {
-                    study_id: row.get("study_id"),
-                    title: row.get("title"),
-                });
-            }
-        }
+        attach_study_overlays(connection, project_id, &ids, &node_indices, &mut nodes).await?;
     }
     if fields.appraisal {
-        for node in &mut nodes {
-            node.appraisal = Some(GraphAppraisalOverlay {
-                assessment_count: 0,
-                completed_count: 0,
-                latest_completed_at: None,
-            });
-        }
-        let rows = sqlx::query(
-            "SELECT report_id,count(*)::bigint AS assessment_count,count(*)::bigint AS completed_count,max(completed_at) AS latest_completed_at FROM appraisal_assessments WHERE project_id=$1 AND report_id=ANY($2) GROUP BY report_id ORDER BY report_id",
-        )
-        .bind(project_id)
-        .bind(&ids)
-        .fetch_all(&mut *connection)
-        .await?;
-        for row in rows {
-            if let Some(&index) = node_indices.get(&row.get::<Uuid, _>("report_id")) {
-                nodes[index].appraisal = Some(GraphAppraisalOverlay {
-                    assessment_count: row.get("assessment_count"),
-                    completed_count: row.get("completed_count"),
-                    latest_completed_at: row.get("latest_completed_at"),
-                });
-            }
-        }
+        attach_appraisal_overlays(connection, project_id, &ids, &node_indices, &mut nodes).await?;
     }
     if fields.provenance {
-        for node in &mut nodes {
-            node.provenance = Some(GraphProvenanceOverlay {
-                sources: Vec::new(),
-                source_record_count: 0,
-            });
-        }
-        let rows = sqlx::query(
-            "SELECT report_id,array_agg(DISTINCT source ORDER BY source) AS sources,count(*)::bigint AS source_record_count FROM records WHERE project_id=$1 AND report_id=ANY($2) GROUP BY report_id ORDER BY report_id",
-        )
-        .bind(project_id)
-        .bind(&ids)
-        .fetch_all(&mut *connection)
-        .await?;
-        for row in rows {
-            if let Some(&index) = node_indices.get(&row.get::<Uuid, _>("report_id")) {
-                nodes[index].provenance = Some(GraphProvenanceOverlay {
-                    sources: row.get("sources"),
-                    source_record_count: row.get("source_record_count"),
-                });
-            }
-        }
+        attach_provenance_overlays(connection, project_id, &ids, &node_indices, &mut nodes).await?;
     }
-    let edge_rows = if ids.is_empty() {
-        Vec::new()
-    } else {
-        sqlx::query(
-            r#"SELECT source_report_id, target_report_id
-               FROM citations
-               WHERE project_id = $1
-                 AND source_report_id = ANY($2)
-                 AND target_report_id = ANY($2)
-               ORDER BY source_report_id, target_report_id
-               LIMIT $3"#,
-        )
-        .bind(project_id)
-        .bind(&ids)
-        .bind(max_nodes.map(|limit| limit + 1))
-        .fetch_all(&mut *connection)
-        .await?
-    };
-    let edge_limit = max_nodes.map_or(edge_rows.len(), |limit| limit as usize);
-    let edge_truncated = max_nodes.is_some_and(|_| edge_rows.len() > edge_limit);
-    let edges = edge_rows
-        .into_iter()
-        .take(edge_limit)
-        .map(|row| GraphEdge {
-            source: row.get("source_report_id"),
-            target: row.get("target_report_id"),
-        })
-        .collect();
+    let (edges, edge_truncated) = load_graph_edges(connection, project_id, &ids, max_nodes).await?;
 
     Ok(ProjectGraph {
         nodes,
@@ -332,4 +217,173 @@ pub async fn recompute_project_metrics(pool: &PgPool, project_id: Uuid) -> anyho
     }
     transaction.commit().await?;
     Ok(())
+}
+
+async fn attach_screening_overlays(
+    connection: &mut PgConnection,
+    project_id: Uuid,
+    ids: &[Uuid],
+    node_indices: &HashMap<Uuid, usize>,
+    nodes: &mut [GraphNode],
+) -> anyhow::Result<()> {
+    for node in nodes.iter_mut() {
+        node.screening = Some(GraphScreeningOverlay {
+            title_abstract_status: "unscreened".to_owned(),
+            full_text_status: "not_required".to_owned(),
+            final_status: "unscreened".to_owned(),
+        });
+    }
+    let rows = sqlx::query(
+        "SELECT report_id,title_abstract_status,full_text_status,final_status FROM screening_state WHERE project_id=$1 AND report_id=ANY($2) ORDER BY report_id",
+    )
+    .bind(project_id)
+    .bind(ids)
+    .fetch_all(&mut *connection)
+    .await?;
+    for row in rows {
+        if let Some(&index) = node_indices.get(&row.get::<Uuid, _>("report_id")) {
+            nodes[index].screening = Some(GraphScreeningOverlay {
+                title_abstract_status: row.get("title_abstract_status"),
+                full_text_status: row.get("full_text_status"),
+                final_status: row.get("final_status"),
+            });
+        }
+    }
+    Ok(())
+}
+
+async fn attach_study_overlays(
+    connection: &mut PgConnection,
+    project_id: Uuid,
+    ids: &[Uuid],
+    node_indices: &HashMap<Uuid, usize>,
+    nodes: &mut [GraphNode],
+) -> anyhow::Result<()> {
+    for node in nodes.iter_mut() {
+        node.study = Some(GraphStudyOverlay {
+            study_id: None,
+            title: None,
+        });
+    }
+    let rows = sqlx::query(
+        r#"SELECT DISTINCT ON (sr.report_id) sr.report_id, s.id AS study_id, s.title
+           FROM study_reports sr
+           JOIN studies s ON s.project_id=sr.project_id AND s.id=sr.study_id
+           WHERE sr.project_id=$1 AND sr.report_id=ANY($2)
+           ORDER BY sr.report_id, s.id"#,
+    )
+    .bind(project_id)
+    .bind(ids)
+    .fetch_all(&mut *connection)
+    .await?;
+    for row in rows {
+        if let Some(&index) = node_indices.get(&row.get::<Uuid, _>("report_id")) {
+            nodes[index].study = Some(GraphStudyOverlay {
+                study_id: row.get("study_id"),
+                title: row.get("title"),
+            });
+        }
+    }
+    Ok(())
+}
+
+async fn attach_appraisal_overlays(
+    connection: &mut PgConnection,
+    project_id: Uuid,
+    ids: &[Uuid],
+    node_indices: &HashMap<Uuid, usize>,
+    nodes: &mut [GraphNode],
+) -> anyhow::Result<()> {
+    for node in nodes.iter_mut() {
+        node.appraisal = Some(GraphAppraisalOverlay {
+            assessment_count: 0,
+            completed_count: 0,
+            latest_completed_at: None,
+        });
+    }
+    let rows = sqlx::query(
+        "SELECT report_id,count(*)::bigint AS assessment_count,count(*)::bigint AS completed_count,max(completed_at) AS latest_completed_at FROM appraisal_assessments WHERE project_id=$1 AND report_id=ANY($2) GROUP BY report_id ORDER BY report_id",
+    )
+    .bind(project_id)
+    .bind(ids)
+    .fetch_all(&mut *connection)
+    .await?;
+    for row in rows {
+        if let Some(&index) = node_indices.get(&row.get::<Uuid, _>("report_id")) {
+            nodes[index].appraisal = Some(GraphAppraisalOverlay {
+                assessment_count: row.get("assessment_count"),
+                completed_count: row.get("completed_count"),
+                latest_completed_at: row.get("latest_completed_at"),
+            });
+        }
+    }
+    Ok(())
+}
+
+async fn attach_provenance_overlays(
+    connection: &mut PgConnection,
+    project_id: Uuid,
+    ids: &[Uuid],
+    node_indices: &HashMap<Uuid, usize>,
+    nodes: &mut [GraphNode],
+) -> anyhow::Result<()> {
+    for node in nodes.iter_mut() {
+        node.provenance = Some(GraphProvenanceOverlay {
+            sources: Vec::new(),
+            source_record_count: 0,
+        });
+    }
+    let rows = sqlx::query(
+        "SELECT report_id,array_agg(DISTINCT source ORDER BY source) AS sources,count(*)::bigint AS source_record_count FROM records WHERE project_id=$1 AND report_id=ANY($2) GROUP BY report_id ORDER BY report_id",
+    )
+    .bind(project_id)
+    .bind(ids)
+    .fetch_all(&mut *connection)
+    .await?;
+    for row in rows {
+        if let Some(&index) = node_indices.get(&row.get::<Uuid, _>("report_id")) {
+            nodes[index].provenance = Some(GraphProvenanceOverlay {
+                sources: row.get("sources"),
+                source_record_count: row.get("source_record_count"),
+            });
+        }
+    }
+    Ok(())
+}
+
+async fn load_graph_edges(
+    connection: &mut PgConnection,
+    project_id: Uuid,
+    ids: &[Uuid],
+    max_nodes: Option<i64>,
+) -> anyhow::Result<(Vec<GraphEdge>, bool)> {
+    if ids.is_empty() {
+        return Ok((Vec::new(), false));
+    }
+    let edge_rows = sqlx::query(
+        r#"SELECT source_report_id, target_report_id
+           FROM citations
+           WHERE project_id = $1
+             AND source_report_id = ANY($2)
+             AND target_report_id = ANY($2)
+           ORDER BY source_report_id, target_report_id
+           LIMIT $3"#,
+    )
+    .bind(project_id)
+    .bind(ids)
+    .bind(max_nodes.map(|limit| limit + 1))
+    .fetch_all(&mut *connection)
+    .await?;
+
+    let edge_limit = max_nodes.map_or(edge_rows.len(), |limit| limit as usize);
+    let edge_truncated = max_nodes.is_some_and(|_| edge_rows.len() > edge_limit);
+    let edges = edge_rows
+        .into_iter()
+        .take(edge_limit)
+        .map(|row| GraphEdge {
+            source: row.get("source_report_id"),
+            target: row.get("target_report_id"),
+        })
+        .collect();
+    Ok((edges, edge_truncated))
 }

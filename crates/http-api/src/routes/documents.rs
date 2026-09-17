@@ -459,27 +459,39 @@ pub(crate) async fn get_document_content(
     Ok(response)
 }
 
-#[utoipa::path(
-    post,
-    path = "/projects/{project_id}/reports/{report_id}/documents",
-    operation_id = "uploadReportDocument",
-    tag = "documents",
-    params(("project_id" = Uuid, Path), ("report_id" = Uuid, Path)),
-    request_body(content = UploadDocumentForm, content_type = "multipart/form-data", description = "Multipart form with a binary PDF field named file"),
-    responses((status = 201, body = DocumentDto), (status = 400, body = ErrorResponse), (status = 413, body = ErrorResponse), (status = 500, body = ErrorResponse))
-)]
-pub(crate) async fn upload_document(
-    State(state): State<AppState>,
-    Path((project_id, report_id)): Path<(Uuid, Uuid)>,
-    headers: HeaderMap,
+async fn stream_pdf_to_store(
+    mut field: axum::extract::multipart::Field<'_>,
+    store: &deepref_documents::DocumentStore,
+) -> Result<deepref_documents::StoredObject, ApiError> {
+    let mut prefix = Vec::with_capacity(5);
+    let mut buffered = Vec::new();
+    while prefix.len() < 5 {
+        let chunk = field
+            .next()
+            .await
+            .ok_or_else(|| ApiError::BadRequest("PDF body is empty".to_owned()))?
+            .map_err(|error| ApiError::BadRequest(error.to_string()))?;
+        let needed = 5 - prefix.len();
+        prefix.extend_from_slice(&chunk[..chunk.len().min(needed)]);
+        buffered.push(chunk);
+    }
+    if prefix.as_slice() != b"%PDF-" {
+        return Err(ApiError::BadRequest(
+            "document does not have a PDF signature".to_owned(),
+        ));
+    }
+    let upload_stream = stream::iter(buffered.into_iter().map(Ok::<Bytes, String>))
+        .chain(field.map_err(|error| error.to_string()));
+    store
+        .put_stream(upload_stream)
+        .await
+        .map_err(map_store_error)
+}
+
+async fn extract_multipart_pdf(
     mut multipart: Multipart,
-) -> Result<(StatusCode, Json<DocumentDto>), ApiError> {
-    ensure_report_scope(&state.pool, project_id, report_id).await?;
-    let actor = super::review::extract_actor(&headers)?;
-    let store = state
-        .document_store
-        .as_ref()
-        .ok_or_else(|| ApiError::Configuration("document storage is not configured".to_owned()))?;
+    store: &deepref_documents::DocumentStore,
+) -> Result<(deepref_documents::StoredObject, Option<String>), ApiError> {
     let mut stored: Option<deepref_documents::StoredObject> = None;
     let mut original_filename = None;
     loop {
@@ -506,39 +518,34 @@ pub(crate) async fn upload_document(
                 ));
             }
             original_filename = sanitize_filename(field.file_name());
-            let mut field = field;
-            let mut prefix = Vec::with_capacity(5);
-            let mut buffered = Vec::new();
-            while prefix.len() < 5 {
-                let chunk = field
-                    .next()
-                    .await
-                    .ok_or_else(|| ApiError::BadRequest("PDF body is empty".to_owned()))?
-                    .map_err(|error| ApiError::BadRequest(error.to_string()))?;
-                let needed = 5 - prefix.len();
-                prefix.extend_from_slice(&chunk[..chunk.len().min(needed)]);
-                buffered.push(chunk);
+            match stream_pdf_to_store(field, store).await {
+                Ok(obj) => stored = Some(obj),
+                Err(err) => {
+                    if let Some(existing) = stored.take() {
+                        let _ = store.delete(&existing.opaque_id).await;
+                    }
+                    return Err(err);
+                }
             }
-            if prefix.as_slice() != b"%PDF-" {
-                return Err(ApiError::BadRequest(
-                    "document does not have a PDF signature".to_owned(),
-                ));
-            }
-            let upload_stream = stream::iter(buffered.into_iter().map(Ok::<Bytes, String>))
-                .chain(field.map_err(|error| error.to_string()));
-            stored = Some(
-                store
-                    .put_stream(upload_stream)
-                    .await
-                    .map_err(map_store_error)?,
-            );
         }
     }
     let stored = stored
         .ok_or_else(|| ApiError::BadRequest("multipart field file is required".to_owned()))?;
+    Ok((stored, original_filename))
+}
+
+async fn persist_uploaded_document(
+    pool: &sqlx::PgPool,
+    store: &deepref_documents::DocumentStore,
+    project_id: Uuid,
+    report_id: Uuid,
+    stored: &deepref_documents::StoredObject,
+    original_filename: Option<&str>,
+    actor: &super::actor::Actor,
+) -> Result<DocumentDto, ApiError> {
     let byte_size = i64::try_from(stored.byte_size)
         .map_err(|_| ApiError::BadRequest("document size exceeds supported limit".to_owned()))?;
-    let mut tx = match state.pool.begin().await {
+    let mut tx = match pool.begin().await {
         Ok(transaction) => transaction,
         Err(error) => {
             let _ = store.delete(&stored.opaque_id).await;
@@ -553,7 +560,7 @@ pub(crate) async fn upload_document(
             id: Uuid::new_v4(),
             source: "upload",
             status: "uploaded",
-            original_filename: original_filename.as_deref(),
+            original_filename,
             external_url: None,
             mime_type: "application/pdf",
             byte_size,
@@ -594,7 +601,41 @@ pub(crate) async fn upload_document(
             return Err(map_database_document_error(error));
         }
     };
-    Ok((StatusCode::CREATED, Json(document_dto(document))))
+    Ok(document_dto(document))
+}
+#[utoipa::path(
+    post,
+    path = "/projects/{project_id}/reports/{report_id}/documents",
+    operation_id = "uploadReportDocument",
+    tag = "documents",
+    params(("project_id" = Uuid, Path), ("report_id" = Uuid, Path)),
+    request_body(content = UploadDocumentForm, content_type = "multipart/form-data", description = "Multipart form with a binary PDF field named file"),
+    responses((status = 201, body = DocumentDto), (status = 400, body = ErrorResponse), (status = 413, body = ErrorResponse), (status = 500, body = ErrorResponse))
+)]
+pub(crate) async fn upload_document(
+    State(state): State<AppState>,
+    Path((project_id, report_id)): Path<(Uuid, Uuid)>,
+    headers: HeaderMap,
+    multipart: Multipart,
+) -> Result<(StatusCode, Json<DocumentDto>), ApiError> {
+    ensure_report_scope(&state.pool, project_id, report_id).await?;
+    let actor = super::actor::extract_actor(&headers)?;
+    let store = state
+        .document_store
+        .as_ref()
+        .ok_or_else(|| ApiError::Configuration("document storage is not configured".to_owned()))?;
+    let (stored, original_filename) = extract_multipart_pdf(multipart, store).await?;
+    let document = persist_uploaded_document(
+        &state.pool,
+        store,
+        project_id,
+        report_id,
+        &stored,
+        original_filename.as_deref(),
+        &actor,
+    )
+    .await?;
+    Ok((StatusCode::CREATED, Json(document)))
 }
 
 #[utoipa::path(
@@ -613,7 +654,7 @@ pub(crate) async fn attach_external_document(
     Json(input): Json<ExternalDocumentRequest>,
 ) -> Result<(StatusCode, Json<DocumentDto>), ApiError> {
     ensure_report_scope(&state.pool, project_id, report_id).await?;
-    let actor = super::review::extract_actor(&headers)?;
+    let actor = super::actor::extract_actor(&headers)?;
     let url =
         deepref_documents::validate_external_url(&input.url).map_err(map_remote_fetch_error)?;
     let mut tx = state.pool.begin().await?;

@@ -16,6 +16,7 @@ use uuid::Uuid;
 
 use crate::{
     PostgresAiStore,
+    notifications::{NotificationDraft, record_notification},
     review_calibration::{CalibrationAdmissionError, admit_calibration},
     review_run_setup::{
         ensure_review_automation_definition, model_identity, protocol_version_id, recipe_for,
@@ -338,29 +339,58 @@ async fn finish_review_run(
             "terminal review error metadata is invalid".to_owned(),
         ));
     }
-    let changed = sqlx::query(
+    let terminal_row = sqlx::query(
         "UPDATE review_run_manifests
          SET state=$3,started_at=COALESCE(started_at,now()),finished_at=now(),
              state_code=$4,state_message=$5
-         WHERE project_id=$1 AND automation_run_id=$2 AND state IN ('queued','running')",
+         WHERE project_id=$1 AND automation_run_id=$2 AND state IN ('queued','running')
+         RETURNING definition_key",
     )
     .bind(project_id.as_uuid())
     .bind(run_id.as_uuid())
     .bind(state)
     .bind(code)
     .bind(message)
-    .execute(pool)
-    .await?
-    .rows_affected();
-    if changed == 0 {
+    .fetch_optional(pool)
+    .await?;
+    let Some(terminal_row) = terminal_row else {
         let existing = get_review_run(pool, project_id, run_id).await?;
         if !existing.state.terminal() {
             return Err(PostgresReviewError::InvalidState(
                 "review run could not enter a terminal state".to_owned(),
             ));
         }
-    }
+        return Ok(());
+    };
+    let definition_key: String = terminal_row.get("definition_key");
+    record_notification(
+        pool,
+        &NotificationDraft::error(
+            "review_run.failed",
+            Some(project_id.as_uuid()),
+            &format!("{} failed", review_definition_label(&definition_key)),
+            Some(message.to_owned()),
+            serde_json::json!({
+                "run_id": run_id.as_uuid(),
+                "definition_key": definition_key,
+                "code": code,
+            }),
+        ),
+    )
+    .await?;
     Ok(())
+}
+
+pub(crate) fn review_definition_label(key: &str) -> &'static str {
+    match key {
+        "screening" => "Title-abstract screening",
+        "duplicate_detection" => "Duplicate detection",
+        "study_classification" => "Study classification",
+        "study_grouping" => "Study grouping",
+        "appraisal_prefill" => "Appraisal prefill",
+        "data_extraction" => "Data extraction",
+        _ => "Review run",
+    }
 }
 
 pub async fn begin_review_attempt(
