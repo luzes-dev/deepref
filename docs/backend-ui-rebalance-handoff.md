@@ -21,7 +21,7 @@ This handoff specifies the migration of six subsystems from the browser to autho
 5. **Screening Queue Projection**: Rebalance screening state synchronization to rely on server-projected queue windows and lightweight invalidation rather than manual multi-page cache surgery in TanStack Query.
 6. **Publication-Ready PRISMA Export**: Add server-side headless rasterization (PNG/PDF) to `crates/http-api/src/routes/exports.rs` for deterministic publication-grade flowcharts.
 
-*(Note: Assistant chatbot orchestration and LLM conversational streaming are handled separately under [`docs/assistant-and-workflows-handoff.md`](file:///home/luzes/Documents/ambient-scribes/.worktrees/ui-human-touch/docs/assistant-and-workflows-handoff.md).)*
+*(Note: Assistant chatbot orchestration and LLM conversational streaming are handled separately under [`docs/assistant-and-workflows-handoff.md`](./assistant-and-workflows-handoff.md).)*
 
 ---
 
@@ -41,12 +41,12 @@ Every change must uphold the following system invariants:
 
 | Subsystem | Frontend Location | Backend Location |
 | :--- | :--- | :--- |
-| **Articles Catalog** | [`ProjectArticlesView.svelte`](file:///home/luzes/Documents/ambient-scribes/.worktrees/ui-human-touch/apps/web/src/lib/features/projects/components/ProjectArticlesView.svelte)<br>[`ProjectWorkspace.svelte`](file:///home/luzes/Documents/ambient-scribes/.worktrees/ui-human-touch/apps/web/src/lib/features/projects/components/ProjectWorkspace.svelte)<br>[`context.svelte.ts`](file:///home/luzes/Documents/ambient-scribes/.worktrees/ui-human-touch/apps/web/src/lib/features/projects/context.svelte.ts) | [`crates/http-api/src/routes/articles.rs`](file:///home/luzes/Documents/ambient-scribes/.worktrees/ui-human-touch/crates/http-api/src/routes/articles.rs)<br>[`crates/postgres/src/`](file:///home/luzes/Documents/ambient-scribes/.worktrees/ui-human-touch/crates/postgres/src/) |
-| **Citation Graph** | [`project-graph-renderer.ts`](file:///home/luzes/Documents/ambient-scribes/.worktrees/ui-human-touch/apps/web/src/lib/features/projects/project-graph-renderer.ts)<br>[`ProjectGraphView.svelte`](file:///home/luzes/Documents/ambient-scribes/.worktrees/ui-human-touch/apps/web/src/lib/features/projects/components/ProjectGraphView.svelte) | [`crates/graph/src/`](file:///home/luzes/Documents/ambient-scribes/.worktrees/ui-human-touch/crates/graph/src/)<br>[`crates/http-api/src/routes/articles.rs`](file:///home/luzes/Documents/ambient-scribes/.worktrees/ui-human-touch/crates/http-api/src/routes/articles.rs)<br>`services/worker/src/processor.rs` |
-| **Workflow Hub** | [`apps/web/src/lib/features/workflows/`](file:///home/luzes/Documents/ambient-scribes/.worktrees/ui-human-touch/apps/web/src/lib/features/workflows/)<br>[`AutomationCenter.svelte`](file:///home/luzes/Documents/ambient-scribes/.worktrees/ui-human-touch/apps/web/src/lib/features/automations/components/AutomationCenter.svelte)<br>[`AutomationEditor.svelte`](file:///home/luzes/Documents/ambient-scribes/.worktrees/ui-human-touch/apps/web/src/lib/features/automations/components/AutomationEditor.svelte) | [`crates/application/src/automations.rs`](file:///home/luzes/Documents/ambient-scribes/.worktrees/ui-human-touch/crates/application/src/automations.rs)<br>[`crates/postgres/src/automations.rs`](file:///home/luzes/Documents/ambient-scribes/.worktrees/ui-human-touch/crates/postgres/src/automations.rs)<br>[`crates/review/src/definition.rs`](file:///home/luzes/Documents/ambient-scribes/.worktrees/ui-human-touch/crates/review/src/definition.rs)<br>`services/worker/src/processor.rs` |
-| **Document Full-Text** | [`PdfViewer.svelte`](file:///home/luzes/Documents/ambient-scribes/.worktrees/ui-human-touch/apps/web/src/lib/features/full-text/components/PdfViewer.svelte)<br>[`PdfPage.svelte`](file:///home/luzes/Documents/ambient-scribes/.worktrees/ui-human-touch/apps/web/src/lib/features/full-text/components/PdfPage.svelte) | [`crates/documents/src/parser.rs`](file:///home/luzes/Documents/ambient-scribes/.worktrees/ui-human-touch/crates/documents/src/parser.rs)<br>[`crates/http-api/src/routes/documents.rs`](file:///home/luzes/Documents/ambient-scribes/.worktrees/ui-human-touch/crates/http-api/src/routes/documents.rs) |
-| **Screening Queue** | [`optimistic.ts`](file:///home/luzes/Documents/ambient-scribes/.worktrees/ui-human-touch/apps/web/src/lib/features/screening/optimistic.ts)<br>[`ScreeningFocus.svelte`](file:///home/luzes/Documents/ambient-scribes/.worktrees/ui-human-touch/apps/web/src/lib/features/screening/components/ScreeningFocus.svelte) | [`crates/http-api/src/routes/review.rs`](file:///home/luzes/Documents/ambient-scribes/.worktrees/ui-human-touch/crates/http-api/src/routes/review.rs)<br>[`crates/application/src/`](file:///home/luzes/Documents/ambient-scribes/.worktrees/ui-human-touch/crates/application/src/) |
-| **PRISMA Exports** | [`png.ts`](file:///home/luzes/Documents/ambient-scribes/.worktrees/ui-human-touch/apps/web/src/lib/features/prisma/png.ts) | [`crates/application/src/prisma.rs`](file:///home/luzes/Documents/ambient-scribes/.worktrees/ui-human-touch/crates/application/src/prisma.rs)<br>[`crates/http-api/src/routes/exports.rs`](file:///home/luzes/Documents/ambient-scribes/.worktrees/ui-human-touch/crates/http-api/src/routes/exports.rs) |
+| **Articles Catalog** | [`ProjectArticlesView.svelte`](../apps/web/src/lib/features/projects/components/ProjectArticlesView.svelte)<br>[`ProjectWorkspace.svelte`](../apps/web/src/lib/features/projects/components/ProjectWorkspace.svelte)<br>[`context.svelte.ts`](../apps/web/src/lib/features/projects/context.svelte.ts) | [`crates/http-api/src/routes/articles.rs`](../crates/http-api/src/routes/articles.rs)<br>[`crates/postgres/src/`](../crates/postgres/src/) |
+| **Citation Graph** | [`project-graph-renderer.ts`](../apps/web/src/lib/features/projects/project-graph-renderer.ts)<br>[`ProjectGraphView.svelte`](../apps/web/src/lib/features/projects/components/ProjectGraphView.svelte) | [`crates/graph/src/`](../crates/graph/src/)<br>[`crates/http-api/src/routes/articles.rs`](../crates/http-api/src/routes/articles.rs)<br>`services/worker/src/processor.rs` |
+| **Workflow Hub** | [`apps/web/src/lib/features/workflows/`](../apps/web/src/lib/features/workflows/)<br>[`AutomationCenter.svelte`](../apps/web/src/lib/features/automations/components/AutomationCenter.svelte)<br>[`AutomationEditor.svelte`](../apps/web/src/lib/features/automations/components/AutomationEditor.svelte) | [`crates/application/src/automations.rs`](../crates/application/src/automations.rs)<br>[`crates/postgres/src/automations.rs`](../crates/postgres/src/automations.rs)<br>[`crates/review/src/definition.rs`](../crates/review/src/definition.rs)<br>`services/worker/src/processor.rs` |
+| **Document Full-Text** | [`PdfViewer.svelte`](../apps/web/src/lib/features/full-text/components/PdfViewer.svelte)<br>[`PdfPage.svelte`](../apps/web/src/lib/features/full-text/components/PdfPage.svelte) | [`crates/documents/src/parser.rs`](../crates/documents/src/parser.rs)<br>[`crates/http-api/src/routes/documents.rs`](../crates/http-api/src/routes/documents.rs) |
+| **Screening Queue** | [`optimistic.ts`](../apps/web/src/lib/features/screening/optimistic.ts)<br>[`ScreeningFocus.svelte`](../apps/web/src/lib/features/screening/components/ScreeningFocus.svelte) | [`crates/http-api/src/routes/review.rs`](../crates/http-api/src/routes/review.rs)<br>[`crates/application/src/`](../crates/application/src/) |
+| **PRISMA Exports** | [`png.ts`](../apps/web/src/lib/features/prisma/png.ts) | [`crates/application/src/prisma.rs`](../crates/application/src/prisma.rs)<br>[`crates/http-api/src/routes/exports.rs`](../crates/http-api/src/routes/exports.rs) |
 
 ---
 
@@ -55,10 +55,10 @@ Every change must uphold the following system invariants:
 ### 4.1. Articles Catalog: Server-Side Query, Filter, & Keyset Sort
 
 #### The Defect
-In [`ProjectArticlesView.svelte:L28-L52`](file:///home/luzes/Documents/ambient-scribes/.worktrees/ui-human-touch/apps/web/src/lib/features/projects/components/ProjectArticlesView.svelte#L28-L52), `filtered` runs in-memory JavaScript `.filter()` and `.toSorted()` over `workspace.articles`. Because `workspace.articles` is populated via infinite scrolling in 50-item batches, searching or sorting only evaluates loaded items. In a project with 5,000 articles, un-fetched articles matching the search term or sort criteria are completely invisible.
+In [`ProjectArticlesView.svelte:L28-L52`](../apps/web/src/lib/features/projects/components/ProjectArticlesView.svelte#L28-L52), `filtered` runs in-memory JavaScript `.filter()` and `.toSorted()` over `workspace.articles`. Because `workspace.articles` is populated via infinite scrolling in 50-item batches, searching or sorting only evaluates loaded items. In a project with 5,000 articles, un-fetched articles matching the search term or sort criteria are completely invisible.
 
 #### Target Implementation
-1. **Backend Endpoint Updates ([`crates/http-api/src/routes/articles.rs`](file:///home/luzes/Documents/ambient-scribes/.worktrees/ui-human-touch/crates/http-api/src/routes/articles.rs))**:
+1. **Backend Endpoint Updates ([`crates/http-api/src/routes/articles.rs`](../crates/http-api/src/routes/articles.rs))**:
    - Enhance `PaginationParams` or define `ListReportsQuery`:
      ```rust
      #[derive(Debug, Deserialize, IntoParams)]
@@ -76,7 +76,7 @@ In [`ProjectArticlesView.svelte:L28-L52`](file:///home/luzes/Documents/ambient-s
      - Filter `pr.internal_citations >= $min_internal` when specified.
      - Support keyset pagination tuple tailored to the active `sort` direction (e.g. `(pr.rank_score, pr.report_id) < ($1, $2)` vs `(r.publication_year, pr.report_id) < ($1, $2)`).
 2. **Frontend Wiring**:
-   - Update `articlesQuery` in [`ProjectWorkspace.svelte`](file:///home/luzes/Documents/ambient-scribes/.worktrees/ui-human-touch/apps/web/src/lib/features/projects/components/ProjectWorkspace.svelte) to pass `workspace.articleFilters.filter`, `workspace.articleFilters.sort`, and `workspace.articleFilters.minInternal` directly into the query key and API request.
+   - Update `articlesQuery` in [`ProjectWorkspace.svelte`](../apps/web/src/lib/features/projects/components/ProjectWorkspace.svelte) to pass `workspace.articleFilters.filter`, `workspace.articleFilters.sort`, and `workspace.articleFilters.minInternal` directly into the query key and API request.
    - Remove client-side `.filter()` and `.toSorted()` in `ProjectArticlesView.svelte`, rendering `workspace.articles` directly.
 3. **Completion Criteria**:
    - `GET /projects/{id}/reports?search=cardio&sort=year` executes on PostgreSQL and returns true global project results.
@@ -88,17 +88,17 @@ In [`ProjectArticlesView.svelte:L28-L52`](file:///home/luzes/Documents/ambient-s
 ### 4.2. Citation Graph: Precomputed Layout Coordinates in Worker
 
 #### The Defect
-In [`project-graph-renderer.ts:L820-L845`](file:///home/luzes/Documents/ambient-scribes/.worktrees/ui-human-touch/apps/web/src/lib/features/projects/project-graph-renderer.ts#L820-L845), the browser dynamically loads `graphology`, `sigma`, `graphology-layout-forceatlas2`, and `graphology-layout-noverlap`. Every time the user navigates to the graph, the browser runs 120–300 iterations of Barnes-Hut and 150–500 iterations of Noverlap on the main JavaScript thread, locking the UI and yielding non-deterministic coordinates across sessions.
+In [`project-graph-renderer.ts:L820-L845`](../apps/web/src/lib/features/projects/project-graph-renderer.ts#L820-L845), the browser dynamically loads `graphology`, `sigma`, `graphology-layout-forceatlas2`, and `graphology-layout-noverlap`. Every time the user navigates to the graph, the browser runs 120–300 iterations of Barnes-Hut and 150–500 iterations of Noverlap on the main JavaScript thread, locking the UI and yielding non-deterministic coordinates across sessions.
 
 #### Target Implementation
 1. **Schema & Model Updates**:
    - In `crates/postgres/migrations/`, add `graph_layout_x DOUBLE PRECISION` and `graph_layout_y DOUBLE PRECISION` to `project_reports` (or a dedicated `project_graph_layouts` table keyed by `(project_id, report_id, projection_revision)`).
-   - In [`crates/graph/src/model.rs`](file:///home/luzes/Documents/ambient-scribes/.worktrees/ui-human-touch/crates/graph/src/model.rs), update `GraphNode` to include:
+   - In [`crates/graph/src/model.rs`](../crates/graph/src/model.rs), update `GraphNode` to include:
      ```rust
      pub x: Option<f64>,
      pub y: Option<f64>,
      ```
-   - In [`crates/http-api/src/routes/articles.rs`](file:///home/luzes/Documents/ambient-scribes/.worktrees/ui-human-touch/crates/http-api/src/routes/articles.rs), update `GraphNodeDto` to serialize `x` and `y`.
+   - In [`crates/http-api/src/routes/articles.rs`](../crates/http-api/src/routes/articles.rs), update `GraphNodeDto` to serialize `x` and `y`.
 2. **Worker Graph Layout Pass**:
    - In `services/worker/src/processor.rs` (during project graph projection / metrics recomputation):
      - Load `StableDiGraph` from `crates/graph`.
@@ -117,7 +117,7 @@ In [`project-graph-renderer.ts:L820-L845`](file:///home/luzes/Documents/ambient-
 ### 4.3. Workflow Hub: Authoritative PostgreSQL Persistence & Worker Execution
 
 #### The Defect
-In [`AutomationCenter.svelte:L310-L335`](file:///home/luzes/Documents/ambient-scribes/.worktrees/ui-human-touch/apps/web/src/lib/features/automations/components/AutomationCenter.svelte#L310-L335) and [`graph.ts`](file:///home/luzes/Documents/ambient-scribes/.worktrees/ui-human-touch/apps/web/src/lib/features/automations/graph.ts), visual workflow graphs authored in Rete are saved **only to `localStorage`** (`deepref:automation-graph`). The backend API only stores `{ name, trigger, status }` for a hardcoded recipe (`BuiltInAutomationRecipe::ProjectMaintenanceV1`). Custom graphs cannot be executed by the worker and disappear if cache is cleared.
+In [`AutomationCenter.svelte:L310-L335`](../apps/web/src/lib/features/automations/components/AutomationCenter.svelte#L310-L335) and [`graph.ts`](../apps/web/src/lib/features/automations/graph.ts), visual workflow graphs authored in Rete are saved **only to `localStorage`** (`deepref:automation-graph`). The backend API only stores `{ name, trigger, status }` for a hardcoded recipe (`BuiltInAutomationRecipe::ProjectMaintenanceV1`). Custom graphs cannot be executed by the worker and disappear if cache is cleared.
 
 #### Target Implementation
 1. **PostgreSQL Workflow Storage**:
@@ -136,14 +136,14 @@ In [`AutomationCenter.svelte:L310-L335`](file:///home/luzes/Documents/ambient-sc
      CREATE UNIQUE INDEX idx_automation_workflows_project_def ON automation_workflows(project_id, definition_id);
      ```
 2. **Backend Domain & Schema Validation**:
-   - In [`crates/application/src/automations.rs`](file:///home/luzes/Documents/ambient-scribes/.worktrees/ui-human-touch/crates/application/src/automations.rs), define `WorkflowDocument` matching the versioned JSON shape from [`apps/web/src/lib/features/workflows/domain/types.ts`](file:///home/luzes/Documents/ambient-scribes/.worktrees/ui-human-touch/apps/web/src/lib/features/workflows/domain/types.ts).
+   - In [`crates/application/src/automations.rs`](../crates/application/src/automations.rs), define `WorkflowDocument` matching the versioned JSON shape from [`apps/web/src/lib/features/workflows/domain/types.ts`](../apps/web/src/lib/features/workflows/domain/types.ts).
    - Authoritatively validate:
      - Schema version compatibility.
      - Known node kinds and valid node parameters.
      - Connection legality (source port output type matches target port input type).
      - Acyclic graph constraint (topological sort via `petgraph`).
 3. **HTTP API Routes**:
-   - Add routes in [`crates/http-api/src/routes/automations.rs`](file:///home/luzes/Documents/ambient-scribes/.worktrees/ui-human-touch/crates/http-api/src/routes/automations.rs):
+   - Add routes in [`crates/http-api/src/routes/automations.rs`](../crates/http-api/src/routes/automations.rs):
      - `GET /projects/{project_id}/automations/{definition_id}/workflow` -> `WorkflowDto`
      - `PUT /projects/{project_id}/automations/{definition_id}/workflow` -> saves and validates `WorkflowDto`.
 4. **Worker DAG Interpretation**:
@@ -161,11 +161,11 @@ In [`AutomationCenter.svelte:L310-L335`](file:///home/luzes/Documents/ambient-sc
 ### 4.4. Full-Text Document Streaming: Native Pdfium Page Tiles & Bounding Boxes
 
 #### The Defect
-In [`PdfViewer.svelte:L50-L72`](file:///home/luzes/Documents/ambient-scribes/.worktrees/ui-human-touch/apps/web/src/lib/features/full-text/components/PdfViewer.svelte#L50-L72), the frontend bundles `pdfjs-dist` (~2.5MB), downloads the entire PDF file (up to 50MB), and eagerly instantiates an HTML `<canvas>` for all pages at once. For a 40-page paper, this consumes 300MB–500MB of browser RAM. Concurrently, the backend already contains Google's C++ Pdfium library via `pdfium-render` ([`crates/documents/src/parser.rs`](file:///home/luzes/Documents/ambient-scribes/.worktrees/ui-human-touch/crates/documents/src/parser.rs)).
+In [`PdfViewer.svelte:L50-L72`](../apps/web/src/lib/features/full-text/components/PdfViewer.svelte#L50-L72), the frontend bundles `pdfjs-dist` (~2.5MB), downloads the entire PDF file (up to 50MB), and eagerly instantiates an HTML `<canvas>` for all pages at once. For a 40-page paper, this consumes 300MB–500MB of browser RAM. Concurrently, the backend already contains Google's C++ Pdfium library via `pdfium-render` ([`crates/documents/src/parser.rs`](../crates/documents/src/parser.rs)).
 
 #### Target Implementation
 1. **Server-Side Page Rasterization Endpoint**:
-   - In [`crates/http-api/src/routes/documents.rs`](file:///home/luzes/Documents/ambient-scribes/.worktrees/ui-human-touch/crates/http-api/src/routes/documents.rs), add:
+   - In [`crates/http-api/src/routes/documents.rs`](../crates/http-api/src/routes/documents.rs), add:
      ```rust
      GET /projects/{project_id}/documents/{document_id}/pages/{page_number}/tile?scale=2.0
      ```
@@ -190,11 +190,11 @@ In [`PdfViewer.svelte:L50-L72`](file:///home/luzes/Documents/ambient-scribes/.wo
 ### 4.5. Screening Queue: Server-Projected Window & Simplified Client Cache
 
 #### The Defect
-In [`optimistic.ts:L23-L60`](file:///home/luzes/Documents/ambient-scribes/.worktrees/ui-human-touch/apps/web/src/lib/features/screening/optimistic.ts#L23-L60), the frontend performs extensive manual mutation across nested pages in the TanStack Query cache (`findQueueLocation`, `progressAfter`, `updatePageItems`). When rapid keyboard triage occurs or when the server raises `409 screening_revision_conflict`, the client cache desynchronizes, showing duplicate cards or incorrect counter totals.
+In [`optimistic.ts:L23-L60`](../apps/web/src/lib/features/screening/optimistic.ts#L23-L60), the frontend performs extensive manual mutation across nested pages in the TanStack Query cache (`findQueueLocation`, `progressAfter`, `updatePageItems`). When rapid keyboard triage occurs or when the server raises `409 screening_revision_conflict`, the client cache desynchronizes, showing duplicate cards or incorrect counter totals.
 
 #### Target Implementation
 1. **Server Queue Window Projection**:
-   - Verify that [`crates/http-api/src/routes/review.rs`](file:///home/luzes/Documents/ambient-scribes/.worktrees/ui-human-touch/crates/http-api/src/routes/review.rs) (`getScreeningQueue`) returns the current queue slice with authoritative progress counters:
+   - Verify that [`crates/http-api/src/routes/review.rs`](../crates/http-api/src/routes/review.rs) (`getScreeningQueue`) returns the current queue slice with authoritative progress counters:
      ```rust
      pub struct ScreeningQueueResponseDto {
          pub items: Vec<ScreeningQueueItemDto>,
@@ -216,17 +216,17 @@ In [`optimistic.ts:L23-L60`](file:///home/luzes/Documents/ambient-scribes/.workt
 ### 4.6. Publication-Ready PRISMA Export: Headless Server Rasterization
 
 #### The Defect
-In [`png.ts`](file:///home/luzes/Documents/ambient-scribes/.worktrees/ui-human-touch/apps/web/src/lib/features/prisma/png.ts), PRISMA PNG exports rely on loading the SVG into a client-side `HTMLImageElement` and painting to a `<canvas>`. Output quality, DPI, and typography depend on client OS fonts and browser rendering bugs.
+In [`png.ts`](../apps/web/src/lib/features/prisma/png.ts), PRISMA PNG exports rely on loading the SVG into a client-side `HTMLImageElement` and painting to a `<canvas>`. Output quality, DPI, and typography depend on client OS fonts and browser rendering bugs.
 
 #### Target Implementation
 1. **Server Export Endpoint**:
-   - In [`crates/http-api/src/routes/exports.rs`](file:///home/luzes/Documents/ambient-scribes/.worktrees/ui-human-touch/crates/http-api/src/routes/exports.rs), extend `ExportKind` to include `PrismaPng` and `PrismaPdf`:
+   - In [`crates/http-api/src/routes/exports.rs`](../crates/http-api/src/routes/exports.rs), extend `ExportKind` to include `PrismaPng` and `PrismaPdf`:
      ```rust
      "prisma.png" => Self::PrismaPng,
      "prisma.pdf" => Self::PrismaPdf,
      ```
 2. **Deterministic Rendering with Embedded Fonts**:
-   - Use `resvg` in Rust to render the authoritative SVG produced by [`crates/application/src/prisma.rs`](file:///home/luzes/Documents/ambient-scribes/.worktrees/ui-human-touch/crates/application/src/prisma.rs) at 300 DPI with standard bundled fonts (Inter / Helvetica).
+   - Use `resvg` in Rust to render the authoritative SVG produced by [`crates/application/src/prisma.rs`](../crates/application/src/prisma.rs) at 300 DPI with standard bundled fonts (Inter / Helvetica).
    - Return binary `image/png` or `application/pdf` with `Content-Disposition: attachment; filename="prisma-flowchart.png"`.
 3. **Completion Criteria**:
    - Downloading PRISMA PNG from the UI hits `GET /projects/{id}/exports/prisma.png` and returns a crisp, publication-ready 300 DPI image that is identical across any client OS.
