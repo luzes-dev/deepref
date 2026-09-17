@@ -632,13 +632,18 @@
 
 	function redo(): void {
 		if (!editable()) return;
+		const previousNodes = workflow?.nodes ?? [];
 		const result = history?.redo();
 		if (!result || !result.ok) {
 			if (result && !result.ok)
 				editorError = result.issues.map((issue) => issue.message).join(' ');
 			return;
 		}
+		const addedNode = result.workflow.nodes.find(
+			(node) => !previousNodes.some((prev) => prev.id === node.id)
+		);
 		workflow = result.workflow;
+		if (addedNode) selectedNodeId = addedNode.id;
 		workflowRevision += 1;
 		graphDirty = true;
 		onDirtyChange(true);

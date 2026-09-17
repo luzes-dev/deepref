@@ -79,7 +79,7 @@ export function validatePortCompatibility(
 		issues.push(
 			issue(
 				'incompatible_connection',
-				`Cannot connect ${String(sourcePort.dataType)} to ${String(targetPort.dataType)}.`
+				`Cannot connect incompatible types: ${String(sourcePort.dataType)} to ${String(targetPort.dataType)}.`
 			)
 		);
 	}

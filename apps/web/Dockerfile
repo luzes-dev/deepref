@@ -17,6 +17,7 @@ RUN corepack enable pnpm
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
 RUN pnpm fetch --frozen-lockfile
 
+COPY packages/ui ./packages/ui
 COPY apps/web ./apps/web
 RUN pnpm install --offline --frozen-lockfile --filter @deepref/web... \
     && pnpm --filter @deepref/web build
