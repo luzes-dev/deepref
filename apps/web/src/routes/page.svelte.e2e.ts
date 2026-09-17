@@ -394,7 +394,7 @@ async function mockProjectManagementWorkspace(
 }
 
 async function openSourceArticle(page: Page) {
-	await page.getByRole('button', { name: 'Articles' }).click();
+	await page.getByTestId('project-sidebar').getByRole('link', { name: 'Articles' }).click();
 	await page.getByRole('button', { name: /Source Article/ }).click();
 }
 
@@ -419,11 +419,13 @@ test('shows dependency degradation without blocking core workspace views', async
 	});
 	await page.goto('/');
 
-	await expect(page.getByTestId('dependency-banner')).toContainText('worker: degraded');
-	await expect(page.getByTestId('dependency-banner')).toContainText(
+	const toast = page.locator('[data-sonner-toast]');
+	await expect(toast).toContainText('Some features are degraded');
+	await expect(toast).toContainText('worker: degraded · backlog 7');
+	await expect(toast).toContainText(
 		'Projects, articles, and ingestions remain available while durable jobs drain'
 	);
-	await page.getByRole('button', { name: 'Articles' }).click();
+	await page.getByTestId('project-sidebar').getByRole('link', { name: 'Articles' }).click();
 	await expect(page.getByRole('heading', { name: 'Articles' })).toBeVisible();
 });
 
@@ -438,7 +440,7 @@ test('shows stale metric timestamps from the typed article contract', async ({ p
 		}
 	);
 	await page.goto('/');
-	await page.getByRole('button', { name: 'Articles' }).click();
+	await page.getByTestId('project-sidebar').getByRole('link', { name: 'Articles' }).click();
 
 	await expect(page.getByTestId('stale-metrics-banner')).toContainText('Metrics may be stale');
 	await expect(page.getByTestId('stale-metrics-banner')).toContainText('Metrics as of');
@@ -492,7 +494,7 @@ test('loads opaque cursor pages for projects, articles, and ingestions', async (
 	await expect(page.getByText('Secondary Project')).toBeVisible();
 	await page.keyboard.press('Escape');
 
-	await page.getByRole('button', { name: 'Articles' }).click();
+	await page.getByTestId('project-sidebar').getByRole('link', { name: 'Articles' }).click();
 	await page
 		.getByTestId('pagination-load-more')
 		.filter({ visible: true })
@@ -500,7 +502,7 @@ test('loads opaque cursor pages for projects, articles, and ingestions', async (
 		.click();
 	await expect(page.getByRole('button', { name: /Review Article/ })).toBeVisible();
 
-	await page.getByRole('button', { name: 'Imports' }).click();
+	await page.getByRole('link', { name: 'Imports' }).click();
 	await page
 		.getByTestId('pagination-load-more')
 		.getByRole('button', { name: 'Load more' })
@@ -534,7 +536,9 @@ test('sidebar keeps its size and remains collapsible when the inspector appears'
 	};
 
 	await collapseSidebar();
-	await page.getByRole('button', { name: 'Articles' }).click();
+	await page.getByTestId('project-sidebar').getByRole('link', { name: 'Articles' }).click();
+	await expect(page.getByTestId('article-inspector')).toHaveCount(0);
+	await page.getByRole('button', { name: 'Source Article', exact: true }).click();
 	await expect(page.getByRole('heading', { name: 'Article inspector' })).toBeVisible();
 	await expect
 		.poll(async () => (await sidebarPane.boundingBox())?.width ?? Infinity)
@@ -568,13 +572,13 @@ test('secondary article views reuse selected article inspector', async ({ page }
 	await openSourceArticle(page);
 	await expect(page.getByText('A useful article abstract.')).toBeVisible();
 
-	await page.getByRole('button', { name: 'Recommendations' }).click();
+	await page.getByRole('link', { name: 'Recommendations' }).click();
 	await expect(page.getByText('A useful article abstract.')).toBeVisible();
 
-	await page.getByRole('button', { name: 'Imports' }).click();
+	await page.getByRole('link', { name: 'Imports' }).click();
 	await expect(page.getByText('1 project runs', { exact: true })).toBeVisible();
 
-	await page.getByRole('button', { name: 'Graph' }).click();
+	await page.getByRole('link', { name: 'Graph' }).click();
 	await expect(page.getByText('A useful article abstract.')).toBeVisible();
 	await expect(page.getByText('Matches')).toHaveCount(0);
 	await expect(page.getByRole('button', { name: 'Reset graph layout' })).toBeVisible();
@@ -591,7 +595,7 @@ test('project views are deep-linkable and preserve browser history state', async
 	);
 	await expect(page.getByRole('heading', { name: 'Articles' })).toBeVisible();
 
-	await page.getByRole('button', { name: 'Graph' }).click();
+	await page.getByRole('link', { name: 'Graph' }).click();
 	await expect(page).toHaveURL(
 		/\/projects\/test-project\/graph\?filter=review&sort=year&report=00000000-0000-4000-8000-000000000001$/
 	);
@@ -609,10 +613,10 @@ test('article table filters, resets, sorts, and paginates', async ({ page }) => 
 	await mockWorkspace(page);
 	await page.goto('/');
 
-	await page.getByRole('button', { name: 'Articles' }).click();
+	await page.getByTestId('project-sidebar').getByRole('link', { name: 'Articles' }).click();
 	await expect(page.getByText('Page 1 of 2')).toBeVisible();
 
-	await page.getByRole('textbox', { name: 'Search title, DOI, or report ID' }).fill('review');
+	await page.getByRole('textbox', { name: 'Search articles' }).fill('review');
 	await expect(page.getByRole('button', { name: /Review Article/ })).toBeVisible();
 	await expect(page.getByRole('button', { name: /Source Article/ })).toHaveCount(0);
 
@@ -651,11 +655,11 @@ test('ingestions are filtered and create uses current project', async ({ page })
 	await mockWorkspace(page);
 	await page.goto('/');
 
-	await page.getByRole('button', { name: 'Imports' }).click();
+	await page.getByRole('link', { name: 'Imports' }).click();
 	await expect(page.getByText('1 project runs', { exact: true })).toBeVisible();
 	await expect(page.getByText('other-ingestion')).toHaveCount(0);
 	await page.locator('#dois').fill('10.1/new');
-	await page.getByRole('button', { name: 'Start ingestion' }).click();
+	await page.getByRole('button', { name: 'Import articles' }).click();
 	await expect(page.getByText('new-ingestion')).toBeVisible();
 	await expect(page.getByRole('heading', { name: 'Status queued' })).toBeVisible();
 	await expect(page.getByText('queued', { exact: true }).first()).toBeVisible();
@@ -736,7 +740,7 @@ test('refreshes completed provider runs with stable retry keys', async ({ page }
 	);
 
 	await page.goto('/');
-	await page.getByRole('button', { name: 'Imports' }).click();
+	await page.getByRole('link', { name: 'Imports' }).click();
 	const completedRow = page.locator('[data-ingestion-id="project-ingestion"]');
 	const runningRow = page.locator('[data-ingestion-id="running-ingestion"]');
 	await expect(completedRow.getByRole('button', { name: 'Refresh provider' })).toBeVisible();

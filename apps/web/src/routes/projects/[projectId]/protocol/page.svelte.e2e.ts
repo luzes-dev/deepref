@@ -149,20 +149,31 @@ test('deep-links, refreshes, publishes, and amends a protocol version', async ({
 
 	await page.getByLabel('Name').fill(draftProtocol.name);
 	await page.getByLabel('Objective').fill(draftProtocol.objective);
-	await page.getByLabel('Question').fill(draftProtocol.question);
+	await page.getByRole('textbox', { name: 'Question', exact: true }).fill(draftProtocol.question);
+	await page.getByRole('tab', { name: 'Framework', exact: true }).click();
 	await page.getByLabel('Population').fill('Adults');
 	await page.getByLabel('Intervention').fill('Exercise');
 	await page.getByLabel('Comparator').fill('Usual care');
 	await page.getByLabel('Outcome').fill('Sleep quality');
+	await page.getByRole('tab', { name: 'Eligibility criteria' }).click();
 	await page.getByRole('button', { name: 'Add criterion' }).click();
 	await page.getByLabel('Label').last().fill('Adult population');
 	await page.getByLabel('Description').last().fill('Participants are adults.');
+	await page.setViewportSize({ width: 1280, height: 500 });
+	const scroll = page.getByTestId('workspace-scroll');
+	await scroll.evaluate((element) => {
+		element.scrollTop = element.scrollHeight;
+	});
+	await expect.poll(() => scroll.evaluate((element) => element.scrollTop)).toBeGreaterThan(0);
+	await expect(page.getByRole('button', { name: 'Save draft' })).toBeInViewport();
 	await page.getByRole('button', { name: 'Save draft' }).click();
 	await expect(page.getByText('v1')).toBeVisible();
+	await expect(page.getByRole('button', { name: 'Publish version' })).toBeEnabled();
 	await page.getByRole('button', { name: 'Publish version' }).click();
 	await expect(page.getByText('published', { exact: true })).toBeVisible();
 
 	await page.getByRole('button', { name: 'Amend published version' }).first().click();
+	await page.getByRole('tab', { name: 'Research question' }).click();
 	await page.getByLabel('Name').fill('Amended sleep review protocol');
 	await page.getByRole('button', { name: 'Save draft' }).click();
 	await expect.poll(() => saves.length).toBe(2);
@@ -190,9 +201,16 @@ test('preserves PICO values across custom framework switching and validates dupl
 
 	await page.goto('/projects/project-1/protocol');
 	await expect(page.getByRole('heading', { name: 'Review protocol' })).toBeVisible();
+	await page.getByLabel('Name').fill('duplicate');
+	await expect(
+		page.getByText('Choose a protocol name that is unique within this workspace.').first()
+	).toBeVisible();
 	await page.getByLabel('Name').fill('PICO switching protocol');
 	await page.getByLabel('Objective').fill('Test framework switching.');
-	await page.getByLabel('Question').fill('Are framework values preserved?');
+	await page
+		.getByRole('textbox', { name: 'Question', exact: true })
+		.fill('Are framework values preserved?');
+	await page.getByRole('tab', { name: 'Framework', exact: true }).click();
 	await page.getByLabel('Population').fill('Adults');
 	await page.getByLabel('Intervention').fill('Exercise');
 	await page.getByLabel('Comparator').fill('Usual care');

@@ -1,7 +1,10 @@
 <script lang="ts">
+	import * as Tabs from '@deepref/ui/tabs';
+	import * as Alert from '@deepref/ui/alert';
 	import { goto } from '$app/navigation';
 	import { resolve } from '$app/paths';
 	import { page } from '$app/state';
+	import { notifyError } from '$lib/features/notifications/toast';
 	import {
 		createDecideAiProposal,
 		createGenerateAppraisalPrefillSuggestion,
@@ -27,13 +30,11 @@
 	import { useQueryClient } from '@tanstack/svelte-query';
 	import { fullTextUrlString } from '$lib/features/full-text/url';
 	import { ReviewRunObserver } from '$lib/features/ai-assistance/review-run-observer.svelte';
-	import { Badge } from '$lib/components/ui/badge';
-	import { Button } from '$lib/components/ui/button';
-	import * as Card from '$lib/components/ui/card';
-	import * as Empty from '$lib/components/ui/empty';
-	import * as Alert from '$lib/components/ui/alert';
-	import { Skeleton } from '$lib/components/ui/skeleton';
-	import { Spinner } from '$lib/components/ui/spinner';
+	import { Badge } from '@deepref/ui/badge';
+	import { Button } from '@deepref/ui/button';
+	import * as Empty from '@deepref/ui/empty';
+	import { Skeleton } from '@deepref/ui/skeleton';
+	import { Spinner } from '@deepref/ui/spinner';
 	import {
 		Brain,
 		ClipboardCheck,
@@ -55,7 +56,6 @@
 
 	let { projectId }: { projectId: string } = $props();
 	const queryClient = useQueryClient();
-	let error = $state<string | undefined>();
 
 	const location = $derived(parseAppraisalLocation(page.url.searchParams));
 	const reportId = $derived(location.reportId);
@@ -273,7 +273,6 @@
 		state: AppraisalFormState
 	): Promise<void> {
 		if (!reportId) return;
-		error = undefined;
 		if (activeAiProposal) {
 			await decideAiProposal(activeAiProposal, 'accept', state);
 			return;
@@ -284,10 +283,7 @@
 				queryKey: getListReportAppraisalsQueryKey(projectId, reportId)
 			});
 		} catch (submitError) {
-			error =
-				submitError instanceof Error
-					? submitError.message
-					: 'Appraisal could not be completed.';
+			notifyError('Appraisal could not be completed', submitError);
 			throw submitError;
 		}
 	}
@@ -304,48 +300,32 @@
 <div class="mx-auto flex min-h-full w-full max-w-[1480px] flex-col gap-5 p-4 md:gap-6 md:p-8">
 	<header class="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
 		<div class="flex min-w-0 flex-col gap-2">
-			<div
-				class="flex flex-wrap items-center gap-2 text-xs font-semibold tracking-[0.12em] text-primary uppercase"
-			>
-				<FileSearch aria-hidden="true" /> Evidence workspace
-				<span class="text-muted-foreground">/</span> appraisal
-			</div>
-			<h1 class="editorial-title text-4xl leading-none sm:text-5xl">Appraisal</h1>
+			<h1 class="editorial-title text-2xl leading-tight sm:text-3xl">Appraisal</h1>
 			<p class="max-w-3xl text-sm leading-6 text-muted-foreground sm:text-base">
-				Choose a report and exact definition version. AI pre-fills are editable proposals
-				only and never change screening eligibility.
+				Choose an article and an assessment framework to review its quality and risk of
+				bias.
 			</p>
 		</div>
 		<div class="flex flex-wrap items-center gap-2 lg:justify-end">
-			<Badge variant="outline">Schema-driven</Badge>
-			<Badge variant="secondary">Reviewer-led</Badge>
+			<Badge variant="outline">Quality assessment</Badge>
+			<Badge variant="secondary">Your judgment</Badge>
 		</div>
 	</header>
 
-	{#if error}
-		<Alert.Root variant="destructive" role="alert">
-			<Info aria-hidden="true" />
-			<Alert.Title>Appraisal could not be completed</Alert.Title>
-			<Alert.Description>{error}</Alert.Description>
-		</Alert.Root>
-	{/if}
-
-	<div
-		class="grid min-w-0 gap-5 xl:grid-cols-[minmax(15rem,17rem)_minmax(18rem,20rem)_minmax(0,1fr)]"
-	>
-		<Card.Root class="border-primary/15">
-			<Card.Header class="gap-2 border-b border-border/60 pb-4">
+	<div class="grid min-w-0 gap-5 lg:grid-cols-2">
+		<section class="workflow-section border-primary/15">
+			<header class="flex flex-col gap-2 border-b border-border/60 pb-4">
 				<div class="flex items-center gap-2">
 					<span
 						class="flex size-8 items-center justify-center rounded-lg bg-primary/10 text-primary"
 					>
 						<FileSearch aria-hidden="true" />
 					</span>
-					<Card.Title>Report</Card.Title>
+					<h2 class="text-base font-semibold">Report</h2>
 				</div>
-				<Card.Description>URL selection is refresh-safe.</Card.Description>
-			</Card.Header>
-			<Card.Content class="pt-5">
+				<p class="text-sm text-muted-foreground">Choose the article to assess.</p>
+			</header>
+			<div class="min-w-0 pt-5">
 				{#if reportsQuery.isPending}
 					<div
 						class="flex flex-col gap-3"
@@ -390,22 +370,24 @@
 							>{/each}
 					</select>
 				{/if}
-			</Card.Content>
-		</Card.Root>
+			</div>
+		</section>
 
-		<Card.Root class="border-primary/15">
-			<Card.Header class="gap-2 border-b border-border/60 pb-4">
+		<section class="workflow-section border-primary/15">
+			<header class="flex flex-col gap-2 border-b border-border/60 pb-4">
 				<div class="flex items-center gap-2">
 					<span
 						class="flex size-8 items-center justify-center rounded-lg bg-primary/10 text-primary"
 					>
 						<ListChecks aria-hidden="true" />
 					</span>
-					<Card.Title>Definition</Card.Title>
+					<h2 class="text-base font-semibold">Definition</h2>
 				</div>
-				<Card.Description>Generic API-provided schemas.</Card.Description>
-			</Card.Header>
-			<Card.Content class="flex flex-col gap-2 pt-5">
+				<p class="text-sm text-muted-foreground">
+					Choose the framework that fits this study.
+				</p>
+			</header>
+			<div class="flex min-w-0 flex-col gap-2 pt-5">
 				{#if definitionsQuery.isPending}
 					<div
 						class="flex flex-col gap-3"
@@ -452,298 +434,326 @@
 						</button>
 					{/each}
 				{/if}
-			</Card.Content>
-		</Card.Root>
+			</div>
+		</section>
 
-		<Card.Root class="min-w-0 border-primary/15">
-			<Card.Header class="gap-2 border-b border-border/60 pb-4">
+		<section class="workflow-section min-w-0 lg:col-span-2">
+			<header class="flex flex-col gap-2 border-b border-border/60 pb-4">
 				<div class="flex items-center gap-2">
 					<span
 						class="flex size-8 items-center justify-center rounded-lg bg-primary/10 text-primary"
 					>
 						<ClipboardCheck aria-hidden="true" />
 					</span>
-					<Card.Title>Complete appraisal</Card.Title>
+					<h2 class="text-base font-semibold">Complete appraisal</h2>
 				</div>
-				<Card.Description
-					>Evidence selectors use parsed PR8 document blocks from the selected report.</Card.Description
-				>
-			</Card.Header>
-			<Card.Content class="pt-5">
-				<Card.Root
-					class="mb-6 border-primary/15 bg-muted/10"
-					data-testid="ai-appraisal-prefill"
-				>
-					<Card.Header class="gap-3 border-b border-border/60 pb-4">
-						<div class="flex flex-wrap items-center justify-between gap-2">
-							<div class="flex items-center gap-2">
-								<span
-									class="flex size-7 items-center justify-center rounded-md bg-primary/10 text-primary"
-								>
-									<Brain aria-hidden="true" />
-								</span>
-								<Card.Title>AI appraisal pre-fill</Card.Title>
-							</div>
-							<Badge variant="outline">Reviewer required</Badge>
-						</div>
-						<Card.Description>
-							Generate a grounded, version-pinned proposal for this report. Edit it in
-							the form below before accepting. This assistance never changes screening
-							eligibility.
-						</Card.Description>
-					</Card.Header>
-					<Card.Content class="flex flex-col gap-4 pt-5">
-						{#if !reportId || !selectedDefinition}
-							<Empty.Root class="border-0 p-0">
-								<Empty.Media variant="icon"><Info /></Empty.Media>
-								<Empty.Header>
-									<Empty.Title>Select report and definition</Empty.Title>
-									<Empty.Description>
-										An exact report and appraisal definition/version are
-										required before generation.
-									</Empty.Description>
-								</Empty.Header>
-							</Empty.Root>
+				<p class="text-sm text-muted-foreground">
+					Link your assessment to evidence in the article.
+				</p>
+			</header>
+			<div class="min-w-0 pt-5">
+				<Tabs.Root value="assessment" class="gap-5">
+					<Tabs.List variant="line" aria-label="Appraisal sections">
+						<Tabs.Trigger value="assessment">Assessment</Tabs.Trigger>
+						<Tabs.Trigger value="suggestion">AI suggestion</Tabs.Trigger>
+					</Tabs.List>
+					<Tabs.Content value="assessment">
+						{#if !reportId}
+							<p class="text-sm text-muted-foreground">Select a report to begin.</p>
+						{:else if !selectedDefinition}
+							<p class="text-sm text-muted-foreground">
+								Select an appraisal definition to begin.
+							</p>
 						{:else}
-							<div class="flex flex-wrap items-center gap-3">
-								<Button
-									type="button"
-									variant="outline"
-									onclick={() => void generateAiPrefill()}
-									disabled={aiRequestPending}
-									data-testid="generate-ai-prefill"
-								>
-									{#if generatePrefillMutation.isPending || reviewRun.isActive}<Spinner
-											data-icon="inline-start"
-										/>{/if}
-									Generate pre-fill for {selectedDefinition.id} v{selectedDefinition.version}
-								</Button>
-								<span class="text-xs text-muted-foreground">
-									Only pending proposals for this report and exact definition
-									version are shown.
-								</span>
-							</div>
-
-							{#if aiStatusCode === 503}
-								<Alert.Root variant="destructive" role="alert">
-									<Alert.Title>AI provider unavailable</Alert.Title>
-									<Alert.Description>
-										{aiStatus ||
-											'The configured provider is unavailable. Complete the appraisal manually or try again later.'}
-									</Alert.Description>
-								</Alert.Root>
-							{:else if aiStatus}
-								<Alert.Root variant="destructive" role="alert">
-									<Alert.Title>AI appraisal needs attention</Alert.Title>
-									<Alert.Description>{aiStatus}</Alert.Description>
-								</Alert.Root>
-							{/if}
-
-							{#if proposalsQuery.isPending}
-								<div
-									class="flex flex-col gap-3"
-									aria-label="Loading AI appraisal proposal"
-								>
-									<Skeleton class="h-5 w-2/3" />
-									<Skeleton class="h-20 w-full" />
-								</div>
-							{:else if !activeAiProposal}
-								<Empty.Root class="border-0 p-0">
-									<Empty.Media variant="icon"><Info /></Empty.Media>
-									<Empty.Header>
-										<Empty.Title>No pending AI pre-fill</Empty.Title>
-										<Empty.Description>
-											Generate a grounded proposal, then review every answer
-											and evidence reference here.
-										</Empty.Description>
-									</Empty.Header>
-								</Empty.Root>
-							{:else if activeAiPayload?.kind === 'appraisal_prefill'}
-								<div class="flex flex-wrap items-center gap-2">
-									<Badge variant="secondary">Pending review</Badge>
-									<span class="text-xs text-muted-foreground">
-										{activeAiProposal?.provider} / {activeAiProposal?.model} · proposal
-										{activeAiProposal?.id}
-									</span>
-								</div>
-								{#if pendingAiProposals.length > 1}
-									<div
-										class="flex flex-wrap gap-2"
-										aria-label="Pending appraisal proposals"
-									>
-										{#each pendingAiProposals as proposal (proposal.id)}
-											<Button
-												variant={proposal.id === activeAiProposal?.id
-													? 'secondary'
-													: 'outline'}
-												size="sm"
-												onclick={() => (selectedAiProposalId = proposal.id)}
-											>
-												{proposal.id.slice(0, 8)}
-											</Button>
-										{/each}
-									</div>
-								{/if}
-								<div
-									class="rounded-xl border border-primary/15 bg-background p-3 text-sm shadow-xs"
-								>
-									<p class="font-medium">Pinned appraisal context</p>
-									<p class="mt-1 text-muted-foreground">
-										Report {activeAiPayload.report_id} · definition {activeAiPayload.definition_id}
-										v{activeAiPayload.definition_version}
-									</p>
-								</div>
-								<div class="flex flex-col gap-3" data-testid="ai-prefill-proposal">
-									{#each activeAiPayload.answers as answer (answer.question_id)}
-										<div
-											class="rounded-xl border border-border/70 bg-background p-3 shadow-xs"
+							{#key `${reportId}:${selectedDefinition.id}:${selectedDefinition.version}:${activeAiProposal?.id ?? 'manual'}`}
+								<AppraisalForm
+									definition={selectedDefinition}
+									{blocks}
+									{projectId}
+									{reportId}
+									initialState={activeAiPayload?.kind === 'appraisal_prefill'
+										? mapAppraisalPrefillToFormState(activeAiPayload)
+										: undefined}
+									originalPrefill={activeAiPayload?.kind === 'appraisal_prefill'
+										? activeAiPayload
+										: undefined}
+									submitLabel={activeAiPayload?.kind === 'appraisal_prefill'
+										? 'Accept reviewed AI pre-fill'
+										: undefined}
+									onSubmit={submit}
+								/>
+							{/key}
+						{/if}</Tabs.Content
+					>
+					<Tabs.Content value="suggestion"
+						><section
+							class="workflow-section mb-6 border-primary/15 bg-muted/10"
+							data-testid="ai-appraisal-prefill"
+						>
+							<header
+								class="flex flex-col gap-2 gap-3 border-b border-border/60 pb-4"
+							>
+								<div class="flex flex-wrap items-center justify-between gap-2">
+									<div class="flex items-center gap-2">
+										<span
+											class="flex size-7 items-center justify-center rounded-md bg-primary/10 text-primary"
 										>
-											<div
-												class="flex flex-wrap items-center justify-between gap-2"
-											>
-												<span class="font-medium"
-													>{questionLabel(answer.question_id)}</span
-												>
-												<Badge variant="secondary"
-													>{answer.answer.kind}</Badge
-												>
-											</div>
-											<p
-												class="mt-2"
-												data-testid={`ai-answer-${answer.question_id}`}
-											>
-												Suggested answer: {aiAnswerLabel(answer)}
-											</p>
-											<p class="mt-1 text-sm text-muted-foreground">
-												{answer.rationale}
-											</p>
-											{#if answer.evidence.length}
-												<div
-													class="mt-3 flex flex-col gap-1"
-													data-testid={`ai-evidence-list-${answer.question_id}`}
-												>
-													<span
-														class="text-xs font-medium text-muted-foreground"
-														>Grounding evidence</span
-													>
-													{#each answer.evidence as evidence (`${evidence.document_id}:${evidence.document_block_id}`)}
-														<a
-															class="inline-flex items-center gap-1 text-xs text-primary underline underline-offset-2"
-															href={resolve(
-																`/projects/${encodeURIComponent(projectId)}/screening/full-text${fullTextUrlString(
-																	{
-																		filter: 'all',
-																		report: reportId,
-																		page: evidence.page,
-																		block: evidence.document_block_id
-																	}
-																)}`
-															)}
-															data-testid={`ai-evidence-link-${answer.question_id}`}
-														>
-															<FileSearch
-																data-icon="inline-start"
-															/>{appraisalEvidenceLabel(evidence)}
-														</a>
-													{/each}
-												</div>
-											{/if}
+											<Brain aria-hidden="true" />
+										</span>
+										<h2 class="text-base font-semibold">
+											AI appraisal pre-fill
+										</h2>
+									</div>
+									<Badge variant="outline">Reviewer required</Badge>
+								</div>
+								<p class="text-sm text-muted-foreground">
+									Get a suggested assessment, then check and edit it before
+									accepting.
+								</p>
+							</header>
+							<div class="flex min-w-0 flex-col gap-4 pt-5">
+								{#if !reportId || !selectedDefinition}
+									<Empty.Root class="border-0 p-0">
+										<Empty.Media variant="icon"><Info /></Empty.Media>
+										<Empty.Header>
+											<Empty.Title>Select report and definition</Empty.Title>
+											<Empty.Description>
+												An exact report and appraisal definition/version are
+												required before generation.
+											</Empty.Description>
+										</Empty.Header>
+									</Empty.Root>
+								{:else}
+									<div class="flex flex-wrap items-center gap-3">
+										<Button
+											type="button"
+											variant="outline"
+											onclick={() => void generateAiPrefill()}
+											disabled={aiRequestPending}
+											data-testid="generate-ai-prefill"
+										>
+											{#if generatePrefillMutation.isPending || reviewRun.isActive}<Spinner
+													data-icon="inline-start"
+												/>{/if}
+											Generate pre-fill for {selectedDefinition.id} v{selectedDefinition.version}
+										</Button>
+										<span class="text-xs text-muted-foreground">
+											Only pending proposals for this report and exact
+											definition version are shown.
+										</span>
+									</div>
+
+									{#if aiStatusCode === 503}
+										<Alert.Root variant="destructive" role="alert">
+											<Alert.Title>AI provider unavailable</Alert.Title>
+											<Alert.Description>
+												{aiStatus ||
+													'The configured provider is unavailable. Complete the appraisal manually or try again later.'}
+											</Alert.Description>
+										</Alert.Root>
+									{:else if aiStatus}
+										<Alert.Root variant="destructive" role="alert">
+											<Alert.Title>AI appraisal needs attention</Alert.Title>
+											<Alert.Description>{aiStatus}</Alert.Description>
+										</Alert.Root>
+									{/if}
+
+									{#if proposalsQuery.isPending}
+										<div
+											class="flex flex-col gap-3"
+											aria-label="Loading AI appraisal proposal"
+										>
+											<Skeleton class="h-5 w-2/3" />
+											<Skeleton class="h-20 w-full" />
 										</div>
-									{/each}
-								</div>
-								<div class="grid gap-3 md:grid-cols-2">
-									<div
-										class="rounded-xl border border-border/70 bg-background p-3 text-sm shadow-xs"
-									>
-										<p class="font-medium">Domain judgments</p>
-										<ul class="mt-2 flex flex-col gap-1 text-muted-foreground">
-											{#each Object.entries(activeAiPayload.domain_judgments) as [domainId, judgment] (domainId)}
-												<li>{domainId}: {judgment}</li>
+									{:else if !activeAiProposal}
+										<Empty.Root class="border-0 p-0">
+											<Empty.Media variant="icon"><Info /></Empty.Media>
+											<Empty.Header>
+												<Empty.Title>No pending AI pre-fill</Empty.Title>
+												<Empty.Description>
+													Generate a grounded proposal, then review every
+													answer and evidence reference here.
+												</Empty.Description>
+											</Empty.Header>
+										</Empty.Root>
+									{:else if activeAiPayload?.kind === 'appraisal_prefill'}
+										<div class="flex flex-wrap items-center gap-2">
+											<Badge variant="secondary">Pending review</Badge>
+											<span class="text-xs text-muted-foreground">
+												{activeAiProposal?.provider} / {activeAiProposal?.model}
+												· proposal
+												{activeAiProposal?.id}
+											</span>
+										</div>
+										{#if pendingAiProposals.length > 1}
+											<div
+												class="flex flex-wrap gap-2"
+												aria-label="Pending appraisal proposals"
+											>
+												{#each pendingAiProposals as proposal (proposal.id)}
+													<Button
+														variant={proposal.id ===
+														activeAiProposal?.id
+															? 'secondary'
+															: 'outline'}
+														size="sm"
+														onclick={() =>
+															(selectedAiProposalId = proposal.id)}
+													>
+														{proposal.id.slice(0, 8)}
+													</Button>
+												{/each}
+											</div>
+										{/if}
+										<div
+											class="rounded-xl border border-primary/15 bg-background p-3 text-sm shadow-xs"
+										>
+											<p class="font-medium">Pinned appraisal context</p>
+											<p class="mt-1 text-muted-foreground">
+												Report {activeAiPayload.report_id} · definition {activeAiPayload.definition_id}
+												v{activeAiPayload.definition_version}
+											</p>
+										</div>
+										<div
+											class="flex flex-col gap-3"
+											data-testid="ai-prefill-proposal"
+										>
+											{#each activeAiPayload.answers as answer (answer.question_id)}
+												<div
+													class="rounded-xl border border-border/70 bg-background p-3 shadow-xs"
+												>
+													<div
+														class="flex flex-wrap items-center justify-between gap-2"
+													>
+														<span class="font-medium"
+															>{questionLabel(
+																answer.question_id
+															)}</span
+														>
+														<Badge variant="secondary"
+															>{answer.answer.kind}</Badge
+														>
+													</div>
+													<p
+														class="mt-2"
+														data-testid={`ai-answer-${answer.question_id}`}
+													>
+														Suggested answer: {aiAnswerLabel(answer)}
+													</p>
+													<p class="mt-1 text-sm text-muted-foreground">
+														{answer.rationale}
+													</p>
+													{#if answer.evidence.length}
+														<div
+															class="mt-3 flex flex-col gap-1"
+															data-testid={`ai-evidence-list-${answer.question_id}`}
+														>
+															<span
+																class="text-xs font-medium text-muted-foreground"
+																>Grounding evidence</span
+															>
+															{#each answer.evidence as evidence (`${evidence.document_id}:${evidence.document_block_id}`)}
+																<a
+																	class="inline-flex items-center gap-1 text-xs text-primary underline underline-offset-2"
+																	href={resolve(
+																		`/projects/${encodeURIComponent(projectId)}/screening/full-text${fullTextUrlString(
+																			{
+																				filter: 'all',
+																				report: reportId,
+																				page: evidence.page,
+																				block: evidence.document_block_id
+																			}
+																		)}`
+																	)}
+																	data-testid={`ai-evidence-link-${answer.question_id}`}
+																>
+																	<FileSearch
+																		data-icon="inline-start"
+																	/>{appraisalEvidenceLabel(
+																		evidence
+																	)}
+																</a>
+															{/each}
+														</div>
+													{/if}
+												</div>
 											{/each}
-										</ul>
-									</div>
-									<div
-										class="rounded-xl border border-border/70 bg-background p-3 text-sm shadow-xs"
-									>
-										<p class="font-medium">Overall judgment</p>
-										<p class="mt-2 text-muted-foreground">
-											{activeAiPayload.overall_judgment}
-										</p>
-									</div>
-								</div>
-								<div class="flex flex-wrap items-center justify-between gap-3">
-									<p class="text-xs text-muted-foreground">
-										Edit the appraisal form below, then accept the reviewed
-										proposal. Rejecting sends no reviewed payload.
-									</p>
-									<Button
-										type="button"
-										variant="destructive"
-										onclick={() =>
-											void decideAiProposal(
-												activeAiProposal,
-												'reject',
-												undefined
-											)}
-										disabled={aiRequestPending}
-										data-testid="reject-ai-prefill"
-									>
-										{#if decideProposalMutation.isPending}<Spinner
-												data-icon="inline-start"
-											/>{/if}
-										<X data-icon="inline-start" />Reject pre-fill
-									</Button>
-								</div>
-							{/if}
-						{/if}
-					</Card.Content>
-				</Card.Root>
-				{#if !reportId}
-					<p class="text-sm text-muted-foreground">Select a report to begin.</p>
-				{:else if !selectedDefinition}
-					<p class="text-sm text-muted-foreground">
-						Select an appraisal definition to begin.
-					</p>
-				{:else}
-					{#key `${reportId}:${selectedDefinition.id}:${selectedDefinition.version}:${activeAiProposal?.id ?? 'manual'}`}
-						<AppraisalForm
-							definition={selectedDefinition}
-							{blocks}
-							{projectId}
-							{reportId}
-							initialState={activeAiPayload?.kind === 'appraisal_prefill'
-								? mapAppraisalPrefillToFormState(activeAiPayload)
-								: undefined}
-							originalPrefill={activeAiPayload?.kind === 'appraisal_prefill'
-								? activeAiPayload
-								: undefined}
-							submitLabel={activeAiPayload?.kind === 'appraisal_prefill'
-								? 'Accept reviewed AI pre-fill'
-								: undefined}
-							onSubmit={submit}
-						/>
-					{/key}
-				{/if}
-			</Card.Content>
-		</Card.Root>
+										</div>
+										<div class="grid gap-3 md:grid-cols-2">
+											<div
+												class="rounded-xl border border-border/70 bg-background p-3 text-sm shadow-xs"
+											>
+												<p class="font-medium">Domain judgments</p>
+												<ul
+													class="mt-2 flex flex-col gap-1 text-muted-foreground"
+												>
+													{#each Object.entries(activeAiPayload.domain_judgments) as [domainId, judgment] (domainId)}
+														<li>{domainId}: {judgment}</li>
+													{/each}
+												</ul>
+											</div>
+											<div
+												class="rounded-xl border border-border/70 bg-background p-3 text-sm shadow-xs"
+											>
+												<p class="font-medium">Overall judgment</p>
+												<p class="mt-2 text-muted-foreground">
+													{activeAiPayload.overall_judgment}
+												</p>
+											</div>
+										</div>
+										<div
+											class="flex flex-wrap items-center justify-between gap-3"
+										>
+											<p class="text-xs text-muted-foreground">
+												Edit the appraisal form below, then accept the
+												reviewed proposal. Rejecting sends no reviewed
+												payload.
+											</p>
+											<Button
+												type="button"
+												variant="destructive"
+												onclick={() =>
+													void decideAiProposal(
+														activeAiProposal,
+														'reject',
+														undefined
+													)}
+												disabled={aiRequestPending}
+												data-testid="reject-ai-prefill"
+											>
+												{#if decideProposalMutation.isPending}<Spinner
+														data-icon="inline-start"
+													/>{/if}
+												<X data-icon="inline-start" />Reject pre-fill
+											</Button>
+										</div>
+									{/if}
+								{/if}
+							</div>
+						</section></Tabs.Content
+					>
+				</Tabs.Root>
+			</div>
+		</section>
 	</div>
 
 	{#if reportId}
-		<Card.Root class="border-primary/15">
-			<Card.Header class="gap-2 border-b border-border/60 pb-4">
+		<section class="workflow-section border-primary/15">
+			<header class="flex flex-col gap-2 border-b border-border/60 pb-4">
 				<div class="flex items-center gap-2">
 					<span
 						class="flex size-8 items-center justify-center rounded-lg bg-primary/10 text-primary"
 					>
 						<FileCheck aria-hidden="true" />
 					</span>
-					<Card.Title>Completed assessments</Card.Title>
+					<h2 class="text-base font-semibold">Completed assessments</h2>
 				</div>
-				<Card.Description
-					>Immutable completion records with actor and evidence provenance.</Card.Description
-				>
-			</Card.Header>
-			<Card.Content class="pt-5">
+				<p class="text-sm text-muted-foreground">
+					Immutable completion records with actor and evidence provenance.
+				</p>
+			</header>
+			<div class="min-w-0 pt-5">
 				{#if appraisalsQuery.isPending}
 					<div
 						class="flex flex-col gap-3"
@@ -784,7 +794,7 @@
 								</p>
 							</div>{/each}
 					</div>{/if}
-			</Card.Content>
-		</Card.Root>
+			</div>
+		</section>
 	{/if}
 </div>

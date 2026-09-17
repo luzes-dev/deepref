@@ -1,6 +1,6 @@
 <script lang="ts">
 	import type { DocumentBlockDto } from '$lib/api/generated/models';
-	import { Badge } from '$lib/components/ui/badge';
+	import { Badge } from '@deepref/ui/badge';
 	import { FileSearch } from '@lucide/svelte';
 
 	let {

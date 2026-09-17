@@ -104,7 +104,8 @@ test('keeps the draft and explains an API save error', async ({ page }) => {
 	await page.getByLabel('Retry attempts').fill('6');
 	await page.getByTestId('save-settings').click();
 
-	await expect(page.getByTestId('settings-save-error')).toContainText(
+	await expect(page.locator('[data-sonner-toast]')).toContainText('Could not save settings');
+	await expect(page.locator('[data-sonner-toast]')).toContainText(
 		'Settings service is unavailable'
 	);
 	await expect(page.getByTestId('settings-save-status')).toHaveText(/Save failed/);

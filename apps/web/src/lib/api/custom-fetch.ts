@@ -47,8 +47,8 @@ export type BodyType<T> = T;
 function requestUrl(contextUrl: string): string {
 	const generatedUrl = new URL(contextUrl, 'http://localhost');
 	const path = `${generatedUrl.pathname}${generatedUrl.search}`;
-
-	return typeof window === 'undefined' ? new URL(path, 'http://localhost').toString() : path;
+	if (typeof window === 'undefined') return new URL(path, 'http://localhost').toString();
+	return new URL(path, window.location.origin).toString();
 }
 
 async function responseBody(response: Response): Promise<unknown> {

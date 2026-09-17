@@ -5,13 +5,13 @@
 		AiStudyDesignClassificationProposalPayload,
 		AiStudyDesignEvidenceDto
 	} from '$lib/api/generated/models';
-	import { StatePanel, Surface } from '$lib/components/layout';
-	import * as Alert from '$lib/components/ui/alert';
-	import { Badge } from '$lib/components/ui/badge';
-	import { Button } from '$lib/components/ui/button';
-	import * as Card from '$lib/components/ui/card';
-	import { Skeleton } from '$lib/components/ui/skeleton';
-	import { Spinner } from '$lib/components/ui/spinner';
+	import { StatePanel, Surface } from '@deepref/ui/layout';
+	import * as Alert from '@deepref/ui/alert';
+	import { Badge } from '@deepref/ui/badge';
+	import { Button } from '@deepref/ui/button';
+	import * as Card from '@deepref/ui/card';
+	import { Skeleton } from '@deepref/ui/skeleton';
+	import { Spinner } from '@deepref/ui/spinner';
 	import { Brain, Check, X } from '@lucide/svelte';
 
 	let {

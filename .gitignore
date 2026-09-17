@@ -3,6 +3,7 @@ node_modules/
 .svelte-kit/
 build/
 dist/
+dist-storybook/
 coverage/
 reports/
 .stryker-tmp/
@@ -17,3 +18,7 @@ reports/
 **/.eslintcache
 .prettiercache
 **/.prettiercache
+
+# Browser review artifacts; approved baselines live under tests/visual.
+**/test-results/
+**/playwright-report/

@@ -151,6 +151,7 @@ test('graph overlay controls request selected fields and preserve graph-only neu
 	);
 
 	await expect(page.getByRole('heading', { name: 'Graph' })).toBeVisible();
+	await page.getByText('Display options and legend', { exact: true }).click();
 	await expect(page.getByTestId('graph-overlay-legend')).toContainText('include');
 	await expect(page.getByTestId('graph-overlay-legend')).toContainText('exclude');
 	await expect(page.getByText('Screening: include')).toBeVisible();

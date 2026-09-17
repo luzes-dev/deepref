@@ -19,9 +19,9 @@
 	import { appraisalEvidenceLabel, resolveAppraisalEvidence } from '../ai-prefill';
 	import { fullTextUrlString } from '$lib/features/full-text/url';
 	import { responseIsComplete } from '../renderer';
-	import * as Alert from '$lib/components/ui/alert';
-	import { Button } from '$lib/components/ui/button';
-	import { Spinner } from '$lib/components/ui/spinner';
+	import * as Alert from '@deepref/ui/alert';
+	import { Button } from '@deepref/ui/button';
+	import { Spinner } from '@deepref/ui/spinner';
 	import { CheckCircle2, Plus, Trash2 } from '@lucide/svelte';
 
 	type Props = {
@@ -174,9 +174,7 @@
 >
 	<div class="flex flex-col gap-2">
 		<div class="flex flex-wrap items-center gap-2">
-			<span class="text-xs font-semibold tracking-[0.12em] text-primary uppercase"
-				>Versioned schema</span
-			>
+			<span class="text-xs font-medium text-muted-foreground">Versioned schema</span>
 			<span class="text-xs text-muted-foreground">· v{definition.version}</span>
 		</div>
 		<h2 class="text-xl font-semibold tracking-tight">

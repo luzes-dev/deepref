@@ -1,8 +1,8 @@
 <script lang="ts">
 	import type { ScreeningHistoryItemDto } from '$lib/api/generated/models';
-	import { Badge } from '$lib/components/ui/badge';
-	import * as Card from '$lib/components/ui/card';
-	import * as Empty from '$lib/components/ui/empty';
+	import { Badge } from '@deepref/ui/badge';
+	import * as Card from '@deepref/ui/card';
+	import * as Empty from '@deepref/ui/empty';
 	import { cn } from '$lib/utils';
 	import { History, Undo2 } from '@lucide/svelte';
 

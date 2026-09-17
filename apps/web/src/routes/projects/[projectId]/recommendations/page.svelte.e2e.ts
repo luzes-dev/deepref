@@ -70,6 +70,7 @@ test('recommendations preserve projection metadata, category hierarchy, and arti
 	await page.goto(`/projects/${projectId}/recommendations`);
 
 	await expect(page.getByRole('heading', { name: 'Recommendations', exact: true })).toBeVisible();
+	await page.getByText('Recommendation update details', { exact: true }).click();
 	await expect(page.getByText('Projection revision 3', { exact: true })).toBeVisible();
 	await expect(page.getByRole('heading', { name: 'Foundational', exact: true })).toBeVisible();
 	await expect(page.getByText('Foundational evidence report', { exact: true })).toBeVisible();

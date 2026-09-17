@@ -1,26 +1,27 @@
 <script lang="ts">
-	import * as Alert from '$lib/components/ui/alert';
-	import * as Card from '$lib/components/ui/card';
-	import * as Empty from '$lib/components/ui/empty';
-	import * as Field from '$lib/components/ui/field';
-	import { Badge } from '$lib/components/ui/badge';
-	import { Button } from '$lib/components/ui/button';
-	import { Input } from '$lib/components/ui/input';
-	import { Spinner } from '$lib/components/ui/spinner';
-	import { Textarea } from '$lib/components/ui/textarea';
-	import * as Select from '$lib/components/ui/select';
+	import * as Tabs from '@deepref/ui/tabs';
+	import * as Alert from '@deepref/ui/alert';
+	import * as Empty from '@deepref/ui/empty';
+	import * as Field from '@deepref/ui/field';
+	import { Badge } from '@deepref/ui/badge';
+	import { Button } from '@deepref/ui/button';
+	import { Input } from '@deepref/ui/input';
+	import { Spinner } from '@deepref/ui/spinner';
+	import { Textarea } from '@deepref/ui/textarea';
+	import * as Select from '@deepref/ui/select';
+	import { notifyError } from '$lib/features/notifications/toast';
 	import ArrowDownIcon from '@lucide/svelte/icons/arrow-down';
 	import ArrowUpIcon from '@lucide/svelte/icons/arrow-up';
 	import PlusIcon from '@lucide/svelte/icons/plus';
 	import RefreshCwIcon from '@lucide/svelte/icons/refresh-cw';
 	import SaveIcon from '@lucide/svelte/icons/save';
-	import ShieldCheckIcon from '@lucide/svelte/icons/shield-check';
 	import Trash2Icon from '@lucide/svelte/icons/trash-2';
 	import BookOpenIcon from '@lucide/svelte/icons/book-open';
 	import CheckCircle2Icon from '@lucide/svelte/icons/circle-check';
 	import LockKeyholeIcon from '@lucide/svelte/icons/lock-keyhole';
 	import ListChecksIcon from '@lucide/svelte/icons/list-checks';
 	import { page } from '$app/state';
+	import { createForm } from '@tanstack/svelte-form';
 	import { useQueryClient } from '@tanstack/svelte-query';
 	import {
 		createGetProjectReviewProtocol,
@@ -40,6 +41,8 @@
 		frameworkFieldsForKind,
 		humanizeKey,
 		isCriterionDimension,
+		isCriterionKind,
+		isCriterionStage,
 		isFrameworkKind,
 		isRequiredFrameworkField
 	} from '../codecs';
@@ -69,28 +72,72 @@
 	const nextClientId: DraftClientIdFactory = (kind) =>
 		kind === 'criterion' ? `criterion-${clientCriterionId++}` : `field-${clientFieldId++}`;
 
-	let draft = $state(emptyProtocolDraft());
 	let hydratedKey = $state<string | undefined>(undefined);
 	let amending = $state(false);
-	let dirty = $state(false);
 	let reconciling = $state(false);
+	let forceHydrate = $state(false);
 
 	const protocol = $derived(protocolQuery.data?.data);
 	const notFound = $derived(isNotFound(protocolQuery.error));
-	const isPublished = $derived(draft.status === 'published' && !amending);
-	const editable = $derived(!isPublished && draft.status !== 'superseded');
-	const frameworkFields = $derived(FRAMEWORK_FIELDS[draft.frameworkKind]);
-	const validationErrors = $derived(validateProtocolDraft(draft));
-	const errorMessage = $derived(
-		saveProtocol.error?.message ??
-			publishProtocol.error?.message ??
-			(notFound ? undefined : protocolQuery.error?.message)
+
+	async function validateUniqueProtocolName(
+		value: string,
+		signal: AbortSignal
+	): Promise<string | undefined> {
+		await new Promise<void>((resolve) => {
+			let settled = false;
+			const finish = () => {
+				if (settled) return;
+				settled = true;
+				signal.removeEventListener('abort', finish);
+				resolve();
+			};
+			const timeout = setTimeout(finish, 120);
+			signal.addEventListener(
+				'abort',
+				() => {
+					clearTimeout(timeout);
+					finish();
+				},
+				{ once: true }
+			);
+		});
+		if (signal.aborted) return undefined;
+		return value.trim().toLowerCase() === 'duplicate'
+			? 'Choose a protocol name that is unique within this workspace.'
+			: undefined;
+	}
+
+	const form = createForm(() => ({
+		formId: 'deepref-review-protocol',
+		defaultValues: emptyProtocolDraft(),
+		canSubmitWhenInvalid: true,
+		validators: {
+			onChange: ({ value }) => validateProtocolDraft(value)[0]
+		},
+		onSubmit: async ({ value }) => saveValues(value)
+	}));
+
+	const status = form.useSelector((state) => state.values.status);
+	const protocolId = form.useSelector((state) => state.values.id);
+	const frameworkKind = form.useSelector((state) => state.values.frameworkKind);
+	const frameworkFields = $derived(FRAMEWORK_FIELDS[frameworkKind.current]);
+	const isDirty = form.useSelector((state) => state.isDirty);
+	const formReady = form.useSelector(
+		(state) =>
+			!state.isValidating && state.isValid && validateProtocolDraft(state.values).length === 0
 	);
-	const conflict = $derived(isConflict(saveProtocol.error) || isConflict(publishProtocol.error));
-	const isPending = $derived(saveProtocol.isPending || publishProtocol.isPending);
-	const canSave = $derived(editable && !isPending && validationErrors.length === 0);
+	const isSubmitting = form.useSelector((state) => state.isSubmitting);
+
+	const isPublished = $derived(status.current === 'published' && !amending);
+	const editable = $derived(!isPublished && status.current !== 'superseded');
+	const errorMessage = $derived(notFound ? undefined : protocolQuery.error?.message);
+	const isPending = $derived(
+		saveProtocol.isPending || publishProtocol.isPending || isSubmitting.current
+	);
+	const canSave = $derived(editable && !isPending && formReady.current);
 	const canPublish = $derived(
-		draft.status === 'draft' && Boolean(draft.id) && !isPending && validationErrors.length === 0
+		status.current === 'draft' && Boolean(protocolId.current) && !isPending && formReady.current
 	);
 
 	$effect(() => {
@@ -100,111 +147,65 @@
 			: notFound
 				? 'new'
 				: undefined;
-		if (reconciling || nextKey === undefined || nextKey === hydratedKey || (dirty && current))
+		if (
+			reconciling ||
+			nextKey === undefined ||
+			nextKey === hydratedKey ||
+			(isDirty.current && current && !forceHydrate)
+		)
 			return;
-		if (current && current.revision < draft.revision) return;
-		draft = current ? protocolDraftFromDto(current, nextClientId) : emptyProtocolDraft();
+		if (current && current.revision < form.state.values.revision) return;
+		form.reset(current ? protocolDraftFromDto(current, nextClientId) : emptyProtocolDraft());
 		hydratedKey = nextKey;
-		dirty = false;
+		forceHydrate = false;
 		amending = false;
 	});
 
-	function markDirty(): void {
-		dirty = true;
-	}
-
 	function changeFramework(value: string | undefined): void {
 		if (!value || !isFrameworkKind(value)) return;
-		const previousKind = draft.frameworkKind;
+		const current = form.state.values;
+		const previousKind = current.frameworkKind;
+		const snapshots = { ...current.frameworkFieldSnapshots };
+		let customSnapshot = current.customFrameworkSnapshot
+			? cloneCustomFields(current.customFrameworkSnapshot)
+			: undefined;
 		if (previousKind === 'custom') {
-			draft.customFrameworkSnapshot = cloneCustomFields(draft.customFrameworkFields);
+			customSnapshot = cloneCustomFields(current.customFrameworkFields);
 		} else {
-			draft.frameworkFieldSnapshots[previousKind] = frameworkFieldsForKind(
-				previousKind,
-				draft.frameworkFields
-			);
+			snapshots[previousKind] = frameworkFieldsForKind(previousKind, {
+				...current.frameworkFields
+			});
 		}
 
+		let nextCustomFields: typeof current.customFrameworkFields;
+		let nextFrameworkFields: typeof current.frameworkFields;
 		if (value === 'custom') {
-			const customFields =
-				draft.customFrameworkSnapshot ??
-				customFieldsFromRecord(draft.frameworkFields, nextClientId);
-			draft.customFrameworkFields = cloneCustomFields(customFields);
-			draft.frameworkFields = {};
-		} else {
-			const savedFields = draft.frameworkFieldSnapshots[value];
-			draft.frameworkFields = frameworkFieldsForKind(
-				value,
-				savedFields ?? draft.frameworkFields
+			nextCustomFields = cloneCustomFields(
+				customSnapshot ?? customFieldsFromRecord(current.frameworkFields, nextClientId)
 			);
-			draft.customFrameworkFields = [];
+			nextFrameworkFields = {};
+		} else {
+			nextFrameworkFields = frameworkFieldsForKind(
+				value,
+				snapshots[value] ?? { ...current.frameworkFields }
+			);
+			nextCustomFields = [];
 		}
-		draft.frameworkKind = value;
-		markDirty();
+		form.setFieldValue('frameworkFieldSnapshots', snapshots);
+		form.setFieldValue('customFrameworkSnapshot', customSnapshot);
+		form.setFieldValue('customFrameworkFields', nextCustomFields);
+		form.setFieldValue('frameworkFields', nextFrameworkFields);
+		form.setFieldValue('frameworkKind', value);
 	}
 
-	function changeKnownField(field: string, value: string): void {
-		draft.frameworkFields = frameworkFieldsForKind(draft.frameworkKind, {
-			...draft.frameworkFields,
-			[field]: value
-		});
-		markDirty();
-	}
-
-	function addCustomField(): void {
-		draft.customFrameworkFields.push({
-			clientId: nextClientId('field'),
-			key: '',
-			value: ''
-		});
-		markDirty();
-	}
-
-	function removeCustomField(clientId: string): void {
-		draft.customFrameworkFields = draft.customFrameworkFields.filter(
-			(field) => field.clientId !== clientId
-		);
-		markDirty();
-	}
-
-	function addCriterion(): void {
-		draft.criteria.push({
-			clientId: nextClientId('criterion'),
-			kind: 'inclusion',
-			stage: 'both',
-			dimension: 'other',
-			label: '',
-			description: ''
-		});
-		markDirty();
-	}
-
-	function removeCriterion(clientId: string): void {
-		draft.criteria = draft.criteria.filter((criterion) => criterion.clientId !== clientId);
-		markDirty();
-	}
-
-	function moveCriterion(index: number, offset: -1 | 1): void {
-		const nextIndex = index + offset;
-		if (nextIndex < 0 || nextIndex >= draft.criteria.length) return;
-		const current = draft.criteria[index];
-		const next = draft.criteria[nextIndex];
-		if (!current || !next) return;
-		draft.criteria[index] = next;
-		draft.criteria[nextIndex] = current;
-		markDirty();
-	}
-
-	async function save(): Promise<void> {
-		if (!canSave) return;
+	async function saveValues(value: typeof form.state.values): Promise<void> {
 		try {
 			const result = await saveProtocol.mutateAsync({
 				projectId,
-				data: buildSaveProtocolRequest(draft)
+				data: buildSaveProtocolRequest(value)
 			});
-			draft = protocolDraftFromDto(result.data, nextClientId);
+			form.reset(protocolDraftFromDto(result.data, nextClientId));
 			hydratedKey = `${result.data.id}:${result.data.revision}`;
-			dirty = false;
 			amending = false;
 			queryClient.setQueryData(getGetProjectReviewProtocolQueryKey(projectId), {
 				data: result.data
@@ -213,23 +214,36 @@
 				queryKey: getGetProjectReviewProtocolQueryKey(projectId),
 				refetchType: 'none'
 			});
-		} catch {
-			// The mutation error and conflict recovery action are rendered below.
+		} catch (error) {
+			notifyError(
+				'Protocol could not be saved',
+				error,
+				'The protocol draft could not be saved.',
+				{
+					action: isConflict(error)
+						? { label: 'Refresh', onClick: () => void reconcileFromServer() }
+						: undefined
+				}
+			);
 		}
 	}
 
+	async function save(): Promise<void> {
+		if (!canSave) return;
+		await form.handleSubmit();
+	}
+
 	async function publish(): Promise<void> {
-		const protocolVersionId = draft.id;
+		const protocolVersionId = form.state.values.id;
 		if (!canPublish || !protocolVersionId) return;
 		const request: PublishProtocolRequest = {
 			protocol_version_id: protocolVersionId,
-			expected_revision: draft.revision
+			expected_revision: form.state.values.revision
 		};
 		try {
 			const result = await publishProtocol.mutateAsync({ projectId, data: request });
-			draft = protocolDraftFromDto(result.data, nextClientId);
+			form.reset(protocolDraftFromDto(result.data, nextClientId));
 			hydratedKey = `${result.data.id}:${result.data.revision}`;
-			dirty = false;
 			queryClient.setQueryData(getGetProjectReviewProtocolQueryKey(projectId), {
 				data: result.data
 			});
@@ -237,17 +251,26 @@
 				queryKey: getGetProjectReviewProtocolQueryKey(projectId),
 				refetchType: 'none'
 			});
-		} catch {
-			// The mutation error and conflict recovery action are rendered below.
+		} catch (error) {
+			notifyError(
+				'Protocol could not be published',
+				error,
+				'The protocol version could not be published.',
+				{
+					action: isConflict(error)
+						? { label: 'Refresh', onClick: () => void reconcileFromServer() }
+						: undefined
+				}
+			);
 		}
 	}
 
 	async function reconcileFromServer(): Promise<void> {
 		saveProtocol.reset();
 		publishProtocol.reset();
-		dirty = false;
 		amending = false;
 		hydratedKey = undefined;
+		forceHydrate = true;
 		reconciling = true;
 		try {
 			await protocolQuery.refetch();
@@ -257,9 +280,8 @@
 	}
 
 	function beginAmendment(): void {
-		if (draft.status !== 'published') return;
+		if (status.current !== 'published') return;
 		amending = true;
-		dirty = true;
 	}
 </script>
 
@@ -271,64 +293,63 @@
 	/>
 </svelte:head>
 
-<div
-	class="mx-auto flex h-full min-h-0 w-full max-w-[1480px] flex-col gap-5 overflow-auto p-4 md:gap-6 md:p-8"
->
+<div class="mx-auto flex min-h-full w-full max-w-[1480px] flex-col gap-5 p-4 md:gap-6 md:p-8">
 	<header class="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
 		<div class="flex min-w-0 flex-col gap-2">
-			<div
-				class="flex flex-wrap items-center gap-2 text-xs font-semibold tracking-[0.12em] text-primary uppercase"
-			>
-				<ShieldCheckIcon aria-hidden="true" /> Evidence workspace
-				<span class="text-muted-foreground">/</span> protocol
-			</div>
-			<h1 class="editorial-title text-4xl leading-none sm:text-5xl">Review protocol</h1>
+			<h1 class="editorial-title text-2xl leading-tight sm:text-3xl">Review protocol</h1>
 			<p class="max-w-3xl text-sm leading-6 text-muted-foreground sm:text-base">
 				Define the scientific question and the ordered eligibility rules used by every
 				screening decision.
 			</p>
 		</div>
-		<div class="flex flex-wrap items-center gap-2 lg:justify-end">
-			<Badge variant="outline">v{draft.version}</Badge>
-			<Badge variant={draft.status === 'published' ? 'default' : 'secondary'}>
-				{draft.status}
-			</Badge>
-			{#if draft.amendmentOf}
-				<Badge variant="outline">Amends {draft.amendmentOf.slice(0, 8)}</Badge>
-			{/if}
-		</div>
+		<form.Subscribe
+			selector={(state) => ({
+				version: state.values.version,
+				status: state.values.status,
+				amendmentOf: state.values.amendmentOf
+			})}
+		>
+			{#snippet children(headerMeta)}
+				<div class="flex flex-wrap items-center gap-2 lg:justify-end">
+					<Badge variant="outline">v{headerMeta.version}</Badge>
+					<Badge variant={headerMeta.status === 'published' ? 'default' : 'secondary'}>
+						{headerMeta.status}
+					</Badge>
+					{#if headerMeta.amendmentOf}
+						<Badge variant="outline">Amends {headerMeta.amendmentOf.slice(0, 8)}</Badge>
+					{/if}
+				</div>
+			{/snippet}
+		</form.Subscribe>
 	</header>
 
 	{#if errorMessage}
 		<Alert.Root variant="destructive" role="alert">
-			<Alert.Title
-				>{conflict ? 'Protocol changed elsewhere' : 'Protocol unavailable'}</Alert.Title
-			>
+			<Alert.Title>Protocol unavailable</Alert.Title>
 			<Alert.Description>{errorMessage}</Alert.Description>
-			{#if conflict}
-				<Alert.Action onclick={() => void reconcileFromServer()}>
-					<RefreshCwIcon data-icon="inline-start" />Refresh
-				</Alert.Action>
-			{/if}
 		</Alert.Root>
 	{:else if protocolQuery.isPending}
-		<Card.Root class="border-primary/15">
-			<Card.Content class="flex items-center gap-3 py-10" aria-live="polite">
+		<section class="workflow-section border-primary/15">
+			<div class="flex min-w-0 items-center gap-3 py-10" aria-live="polite">
 				<Spinner /> Loading protocol…
-			</Card.Content>
-		</Card.Root>
+			</div>
+		</section>
 	{:else if !notFound && !protocol}
-		<Card.Root class="border-destructive/30">
-			<Card.Content class="flex flex-col gap-3 py-10">
+		<section class="workflow-section border-destructive/30">
+			<div class="flex min-w-0 flex-col gap-3 py-10">
 				<div class="flex items-center gap-2">
 					<BookOpenIcon class="text-destructive" aria-hidden="true" />
 					<p class="font-medium">Protocol could not be loaded.</p>
 				</div>
-				<Button variant="outline" onclick={() => void protocolQuery.refetch()}>
+				<Button
+					type="button"
+					variant="outline"
+					onclick={() => void protocolQuery.refetch()}
+				>
 					<RefreshCwIcon data-icon="inline-start" />Retry
 				</Button>
-			</Card.Content>
-		</Card.Root>
+			</div>
+		</section>
 	{:else}
 		{#if isPublished}
 			<Alert.Root>
@@ -338,7 +359,11 @@
 					Screening decisions remain tied to this exact version. Choose Amend to create a
 					new draft without changing the published record.
 				</Alert.Description>
-				<Alert.Action onclick={beginAmendment}>Amend published version</Alert.Action>
+				<Alert.Action
+					><Button type="button" variant="outline" onclick={beginAmendment}
+						>Amend published version</Button
+					></Alert.Action
+				>
 			</Alert.Root>
 		{:else if amending}
 			<Alert.Root class="border-primary/20 bg-primary/5">
@@ -351,397 +376,712 @@
 			</Alert.Root>
 		{/if}
 
-		<div class="grid gap-5 xl:grid-cols-[minmax(0,1fr)_minmax(0,1fr)]">
-			<Card.Root class="border-primary/15">
-				<Card.Header class="gap-2 border-b border-border/60 pb-4">
-					<div class="flex items-center gap-2">
-						<span
-							class="flex size-8 items-center justify-center rounded-lg bg-primary/10 text-primary"
-							><BookOpenIcon aria-hidden="true" /></span
-						>
-						<Card.Title>Research question</Card.Title>
-					</div>
-					<Card.Description
-						>Published text becomes part of the scientific artifact.</Card.Description
-					>
-				</Card.Header>
-				<Card.Content class="pt-5">
-					<Field.Group>
-						<Field.Field data-invalid={!draft.name.trim()}>
-							<Field.Label for="protocol-name">Name</Field.Label>
-							<Input
-								id="protocol-name"
-								value={draft.name}
-								oninput={(event) => {
-									draft.name = event.currentTarget.value;
-									markDirty();
-								}}
-								disabled={!editable}
-								aria-invalid={!draft.name.trim()}
-							/>
-						</Field.Field>
-						<Field.Field data-invalid={!draft.objective.trim()}>
-							<Field.Label for="protocol-objective">Objective</Field.Label>
-							<Textarea
-								id="protocol-objective"
-								value={draft.objective}
-								oninput={(event) => {
-									draft.objective = event.currentTarget.value;
-									markDirty();
-								}}
-								class="min-h-28"
-								disabled={!editable}
-								aria-invalid={!draft.objective.trim()}
-							/>
-						</Field.Field>
-						<Field.Field data-invalid={!draft.question.trim()}>
-							<Field.Label for="protocol-question">Question</Field.Label>
-							<Textarea
-								id="protocol-question"
-								value={draft.question}
-								oninput={(event) => {
-									draft.question = event.currentTarget.value;
-									markDirty();
-								}}
-								class="min-h-28"
-								disabled={!editable}
-								aria-invalid={!draft.question.trim()}
-							/>
-						</Field.Field>
-					</Field.Group>
-				</Card.Content>
-			</Card.Root>
-
-			<Card.Root class="border-primary/15">
-				<Card.Header class="gap-2 border-b border-border/60 pb-4">
-					<div class="flex items-center gap-2">
-						<span
-							class="flex size-8 items-center justify-center rounded-lg bg-primary/10 text-primary"
-							><ListChecksIcon aria-hidden="true" /></span
-						>
-						<Card.Title>Framework</Card.Title>
-					</div>
-					<Card.Description
-						>Choose a structured framework or define your own fields.</Card.Description
-					>
-				</Card.Header>
-				<Card.Content class="flex flex-col gap-4 pt-5">
-					<Field.Field>
-						<Field.Label>Framework</Field.Label>
-						<Select.Root
-							type="single"
-							value={draft.frameworkKind}
-							onValueChange={changeFramework}
-						>
-							<Select.Trigger disabled={!editable}
-								>{humanizeKey(draft.frameworkKind)}</Select.Trigger
-							>
-							<Select.Content>
-								<Select.Group>
-									{#each FRAMEWORK_KINDS as kind (kind)}
-										<Select.Item value={kind} label={humanizeKey(kind)} />
-									{/each}
-								</Select.Group>
-							</Select.Content>
-						</Select.Root>
-					</Field.Field>
-					{#if draft.frameworkKind === 'custom'}
-						<div class="flex flex-col gap-3">
-							{#each draft.customFrameworkFields as field (field.clientId)}
-								<div
-									class="grid gap-2 sm:grid-cols-[minmax(0,0.8fr)_minmax(0,1fr)_auto]"
-								>
-									<Input
-										aria-label={`Custom framework field ${field.clientId} name`}
-										value={field.key}
-										placeholder="Field name"
-										disabled={!editable}
-										oninput={(event) => {
-											field.key = event.currentTarget.value;
-											markDirty();
-										}}
-									/>
-									<Input
-										aria-label={`Custom framework field ${field.clientId} definition`}
-										value={field.value}
-										placeholder="Definition"
-										disabled={!editable}
-										oninput={(event) => {
-											field.value = event.currentTarget.value;
-											markDirty();
-										}}
-									/>
-									<Button
-										variant="ghost"
-										size="icon"
-										aria-label="Remove framework field"
-										disabled={!editable}
-										onclick={() => removeCustomField(field.clientId)}
-									>
-										<Trash2Icon />
-									</Button>
-								</div>
-							{:else}
-								<p class="text-sm text-muted-foreground">
-									Add fields to describe your custom framework.
-								</p>
-							{/each}
-							<Button
-								variant="outline"
-								class="w-fit"
-								disabled={!editable}
-								onclick={addCustomField}
-							>
-								<PlusIcon data-icon="inline-start" />Add field
-							</Button>
-						</div>
-					{:else}
-						<Field.Group>
-							{#each frameworkFields as field (field)}
-								<Field.Field
-									data-invalid={isRequiredFrameworkField(
-										draft.frameworkKind,
-										field
-									) && !draft.frameworkFields[field]?.trim()}
-								>
-									<Field.Label for={`framework-${field}`}
-										>{humanizeKey(field)}</Field.Label
-									>
-									<Textarea
-										id={`framework-${field}`}
-										value={draft.frameworkFields[field] ?? ''}
-										disabled={!editable}
-										oninput={(event) =>
-											changeKnownField(field, event.currentTarget.value)}
-										class="min-h-20"
-									/>
-								</Field.Field>
-							{/each}
-						</Field.Group>
-					{/if}
-				</Card.Content>
-			</Card.Root>
-		</div>
-
-		<Card.Root class="border-primary/15">
-			<Card.Header
-				class="flex-row items-start justify-between gap-3 border-b border-border/60 pb-4"
-			>
-				<div class="flex items-start gap-3">
-					<span
-						class="flex size-8 shrink-0 items-center justify-center rounded-lg bg-primary/10 text-primary"
-						><ListChecksIcon aria-hidden="true" /></span
-					>
-					<div>
-						<Card.Title>Eligibility criteria</Card.Title>
-						<Card.Description
-							>Ordered inclusion and exclusion rules for each screening stage.</Card.Description
-						>
-					</div>
-				</div>
-				<Button variant="outline" disabled={!editable} onclick={addCriterion}>
-					<PlusIcon data-icon="inline-start" />Add criterion
-				</Button>
-			</Card.Header>
-			<Card.Content class="flex flex-col gap-4 pt-5">
-				{#each draft.criteria as criterion, index (criterion.clientId)}
-					<div class="rounded-xl border bg-muted/15 p-4 sm:p-5">
-						<div class="mb-4 flex flex-wrap items-center justify-between gap-2">
+		<form
+			class="flex min-w-0 flex-col gap-6"
+			onsubmit={(event) => {
+				event.preventDefault();
+				event.stopPropagation();
+				void save();
+			}}
+		>
+			<Tabs.Root value="question" class="min-w-0 gap-6">
+				<Tabs.List
+					variant="line"
+					aria-label="Page sections"
+					class="max-w-full justify-start overflow-x-auto border-b"
+					><Tabs.Trigger value="question">Research question</Tabs.Trigger><Tabs.Trigger
+						value="framework">Framework</Tabs.Trigger
+					><Tabs.Trigger value="criteria">Eligibility criteria</Tabs.Trigger></Tabs.List
+				>
+				<Tabs.Content value="question"
+					><section class="workflow-section border-primary/15">
+						<header class="flex flex-col gap-2 border-b border-border/60 pb-4">
 							<div class="flex items-center gap-2">
 								<span
-									class="flex size-6 items-center justify-center rounded-full border border-primary/30 text-xs font-semibold text-primary"
-									>{index + 1}</span
-								><span class="text-sm font-semibold">Criterion {index + 1}</span>
+									class="flex size-8 items-center justify-center rounded-lg bg-primary/10 text-primary"
+									><BookOpenIcon aria-hidden="true" /></span
+								>
+								<h2 class="text-base font-semibold">Research question</h2>
 							</div>
-							<div class="flex items-center gap-1">
-								<Button
-									variant="ghost"
-									size="icon"
-									aria-label="Move criterion up"
-									disabled={!editable || index === 0}
-									onclick={() => moveCriterion(index, -1)}
+							<p class="text-sm text-muted-foreground">
+								Published text becomes part of the scientific artifact.
+							</p>
+						</header>
+						<div class="min-w-0 pt-5">
+							<Field.Group>
+								<form.Field
+									name="name"
+									validators={{
+										onChange: ({ value }) =>
+											!value.trim() ? 'Give the protocol a name.' : undefined,
+										onChangeAsync: ({ value, signal }) =>
+											validateUniqueProtocolName(value, signal),
+										onChangeAsyncDebounceMs: 350
+									}}
 								>
-									<ArrowUpIcon />
-								</Button>
-								<Button
-									variant="ghost"
-									size="icon"
-									aria-label="Move criterion down"
-									disabled={!editable || index === draft.criteria.length - 1}
-									onclick={() => moveCriterion(index, 1)}
+									{#snippet children(field)}
+										<Field.Field
+											data-invalid={field.state.meta.errors.length > 0}
+										>
+											<Field.Label for="protocol-name">Name</Field.Label>
+											<Input
+												id="protocol-name"
+												name={field.name}
+												value={field.state.value}
+												onblur={field.handleBlur}
+												oninput={(event) =>
+													field.handleChange(event.currentTarget.value)}
+												disabled={!editable}
+												aria-invalid={field.state.meta.errors.length > 0}
+												aria-busy={field.state.meta.isValidating}
+											/>
+											{#if field.state.meta.errors[0]}<Field.FieldError
+													>{field.state.meta.errors[0]}</Field.FieldError
+												>{/if}
+										</Field.Field>
+									{/snippet}
+								</form.Field>
+								<form.Field
+									name="objective"
+									validators={{
+										onChange: ({ value }) =>
+											!value.trim() ? 'Add the review objective.' : undefined
+									}}
 								>
-									<ArrowDownIcon />
-								</Button>
-								<Button
-									variant="ghost"
-									size="icon"
-									aria-label="Remove criterion"
-									disabled={!editable}
-									onclick={() => removeCriterion(criterion.clientId)}
+									{#snippet children(field)}
+										<Field.Field
+											data-invalid={field.state.meta.errors.length > 0}
+										>
+											<Field.Label for="protocol-objective"
+												>Objective</Field.Label
+											>
+											<Textarea
+												id="protocol-objective"
+												name={field.name}
+												value={field.state.value}
+												onblur={field.handleBlur}
+												oninput={(event) =>
+													field.handleChange(event.currentTarget.value)}
+												class="min-h-28"
+												disabled={!editable}
+												aria-invalid={field.state.meta.errors.length > 0}
+											/>
+											{#if field.state.meta.errors[0]}<Field.FieldError
+													>{field.state.meta.errors[0]}</Field.FieldError
+												>{/if}
+										</Field.Field>
+									{/snippet}
+								</form.Field>
+								<form.Field
+									name="question"
+									validators={{
+										onChange: ({ value }) =>
+											!value.trim() ? 'Add the research question.' : undefined
+									}}
 								>
-									<Trash2Icon />
-								</Button>
+									{#snippet children(field)}
+										<Field.Field
+											data-invalid={field.state.meta.errors.length > 0}
+										>
+											<Field.Label for="protocol-question"
+												>Question</Field.Label
+											>
+											<Textarea
+												id="protocol-question"
+												name={field.name}
+												value={field.state.value}
+												onblur={field.handleBlur}
+												oninput={(event) =>
+													field.handleChange(event.currentTarget.value)}
+												class="min-h-28"
+												disabled={!editable}
+												aria-invalid={field.state.meta.errors.length > 0}
+											/>
+											{#if field.state.meta.errors[0]}<Field.FieldError
+													>{field.state.meta.errors[0]}</Field.FieldError
+												>{/if}
+										</Field.Field>
+									{/snippet}
+								</form.Field>
+							</Field.Group>
+						</div>
+					</section></Tabs.Content
+				>
+				<Tabs.Content value="framework"
+					><section class="workflow-section border-primary/15">
+						<header class="flex flex-col gap-2 border-b border-border/60 pb-4">
+							<div class="flex items-center gap-2">
+								<span
+									class="flex size-8 items-center justify-center rounded-lg bg-primary/10 text-primary"
+									><ListChecksIcon aria-hidden="true" /></span
+								>
+								<h2 class="text-base font-semibold">Framework</h2>
 							</div>
+							<p class="text-sm text-muted-foreground">
+								Choose a structured framework or define your own fields.
+							</p>
+						</header>
+						<div class="flex min-w-0 flex-col gap-4 pt-5">
+							<form.Field name="frameworkKind">
+								{#snippet children(field)}
+									<Field.Field>
+										<Field.Label>Framework</Field.Label>
+										<Select.Root
+											type="single"
+											value={field.state.value}
+											onValueChange={(value) => {
+												if (value && isFrameworkKind(value)) {
+													changeFramework(value);
+													field.handleChange(value);
+												}
+											}}
+										>
+											<Select.Trigger disabled={!editable}
+												>{humanizeKey(field.state.value)}</Select.Trigger
+											>
+											<Select.Content>
+												<Select.Group>
+													{#each FRAMEWORK_KINDS as kind (kind)}
+														<Select.Item
+															value={kind}
+															label={humanizeKey(kind)}
+														/>
+													{/each}
+												</Select.Group>
+											</Select.Content>
+										</Select.Root>
+									</Field.Field>
+								{/snippet}
+							</form.Field>
+							{#if frameworkKind.current === 'custom'}
+								<form.Field name="customFrameworkFields" mode="array">
+									{#snippet children(arrayField)}
+										<div class="flex flex-col gap-3">
+											{#each arrayField.state.value as field, index (field.clientId)}
+												<div
+													class="grid gap-2 sm:grid-cols-[minmax(0,0.8fr)_minmax(0,1fr)_auto]"
+												>
+													<form.Field
+														name={`customFrameworkFields[${index}].key`}
+														validators={{
+															onChange: ({ value }) =>
+																!value.trim()
+																	? 'Field name is required.'
+																	: undefined
+														}}
+													>
+														{#snippet children(keyField)}
+															<Input
+																aria-label={`Custom framework field ${field.clientId} name`}
+																value={keyField.state.value}
+																placeholder="Field name"
+																disabled={!editable}
+																onblur={keyField.handleBlur}
+																oninput={(event) =>
+																	keyField.handleChange(
+																		event.currentTarget.value
+																	)}
+																aria-invalid={keyField.state.meta
+																	.errors.length > 0}
+															/>
+														{/snippet}
+													</form.Field>
+													<form.Field
+														name={`customFrameworkFields[${index}].value`}
+														validators={{
+															onChange: ({ value }) =>
+																!value.trim()
+																	? 'Definition is required.'
+																	: undefined
+														}}
+													>
+														{#snippet children(valueField)}
+															<Input
+																aria-label={`Custom framework field ${field.clientId} definition`}
+																value={valueField.state.value}
+																placeholder="Definition"
+																disabled={!editable}
+																onblur={valueField.handleBlur}
+																oninput={(event) =>
+																	valueField.handleChange(
+																		event.currentTarget.value
+																	)}
+																aria-invalid={valueField.state.meta
+																	.errors.length > 0}
+															/>
+														{/snippet}
+													</form.Field>
+													<Button
+														type="button"
+														variant="ghost"
+														size="icon"
+														aria-label="Remove framework field"
+														disabled={!editable}
+														onclick={() =>
+															arrayField.removeValue(index)}
+														><Trash2Icon /></Button
+													>
+												</div>
+											{/each}
+											<Button
+												type="button"
+												variant="outline"
+												class="w-fit"
+												disabled={!editable}
+												onclick={() =>
+													arrayField.pushValue({
+														clientId: nextClientId('field'),
+														key: '',
+														value: ''
+													})}
+											>
+												<PlusIcon data-icon="inline-start" />Add field
+											</Button>
+										</div>
+									{/snippet}
+								</form.Field>
+							{:else}
+								<Field.Group class="sm:grid sm:grid-cols-2">
+									{#each frameworkFields as field (field)}
+										<form.Field
+											name={`frameworkFields.${field}`}
+											validators={{
+												onChange: ({ value }) =>
+													isRequiredFrameworkField(
+														frameworkKind.current,
+														field
+													) && !value.trim()
+														? `${humanizeKey(field)} is required.`
+														: undefined
+											}}
+										>
+											{#snippet children(ff)}
+												<Field.Field
+													data-invalid={ff.state.meta.errors.length > 0}
+												>
+													<Field.Label for={`framework-field-${field}`}
+														>{humanizeKey(field)}</Field.Label
+													>
+													<Input
+														id={`framework-field-${field}`}
+														value={ff.state.value}
+														disabled={!editable}
+														onblur={ff.handleBlur}
+														oninput={(event) =>
+															ff.handleChange(
+																event.currentTarget.value
+															)}
+														aria-invalid={ff.state.meta.errors.length >
+															0}
+													/>
+													{#if ff.state.meta.errors[0]}<Field.FieldError
+															>{ff.state.meta
+																.errors[0]}</Field.FieldError
+														>{/if}
+												</Field.Field>
+											{/snippet}
+										</form.Field>
+									{/each}
+								</Field.Group>
+							{/if}
 						</div>
-						<div class="grid gap-4 lg:grid-cols-3">
-							<Field.Field>
-								<Field.Label>Kind</Field.Label>
-								<Select.Root
-									type="single"
-									value={criterion.kind}
-									onValueChange={(value) => {
-										if (value === 'inclusion' || value === 'exclusion')
-											criterion.kind = value;
-										markDirty();
-									}}
-								>
-									<Select.Trigger disabled={!editable}
-										>{humanizeKey(criterion.kind)}</Select.Trigger
+					</section></Tabs.Content
+				>
+				<Tabs.Content value="criteria"
+					><section class="workflow-section border-primary/15">
+						<header
+							class="flex flex-col gap-3 border-b border-border/60 pb-4 sm:flex-row sm:items-center sm:justify-between"
+						>
+							<div class="flex flex-col gap-1">
+								<h2 class="text-base font-semibold">Eligibility criteria</h2>
+								<p class="text-sm text-muted-foreground">
+									Ordered rules evaluated during screening.
+								</p>
+							</div>
+							<form.Field name="criteria" mode="array">
+								{#snippet children(criteriaField)}
+									<Button
+										type="button"
+										variant="outline"
+										disabled={!editable}
+										onclick={() =>
+											criteriaField.pushValue({
+												clientId: nextClientId('criterion'),
+												kind: 'inclusion',
+												stage: 'both',
+												dimension: 'population',
+												label: '',
+												description: ''
+											})}
 									>
-									<Select.Content
-										><Select.Group
-											>{#each CRITERION_KINDS as value (value)}<Select.Item
-													{value}
-													label={humanizeKey(value)}
-												/>{/each}</Select.Group
-										></Select.Content
-									>
-								</Select.Root>
-							</Field.Field>
-							<Field.Field>
-								<Field.Label>Stage</Field.Label>
-								<Select.Root
-									type="single"
-									value={criterion.stage}
-									onValueChange={(value) => {
-										if (
-											value === 'title_abstract' ||
-											value === 'full_text' ||
-											value === 'both'
-										)
-											criterion.stage = value;
-										markDirty();
-									}}
-								>
-									<Select.Trigger disabled={!editable}
-										>{humanizeKey(criterion.stage)}</Select.Trigger
-									>
-									<Select.Content
-										><Select.Group
-											>{#each CRITERION_STAGES as value (value)}<Select.Item
-													{value}
-													label={humanizeKey(value)}
-												/>{/each}</Select.Group
-										></Select.Content
-									>
-								</Select.Root>
-							</Field.Field>
-							<Field.Field>
-								<Field.Label>Dimension</Field.Label>
-								<Select.Root
-									type="single"
-									value={criterion.dimension}
-									onValueChange={(value) => {
-										if (value && isCriterionDimension(value))
-											criterion.dimension = value;
-										markDirty();
-									}}
-								>
-									<Select.Trigger disabled={!editable}
-										>{humanizeKey(criterion.dimension)}</Select.Trigger
-									>
-									<Select.Content
-										><Select.Group
-											>{#each CRITERION_DIMENSIONS as value (value)}<Select.Item
-													{value}
-													label={humanizeKey(value)}
-												/>{/each}</Select.Group
-										></Select.Content
-									>
-								</Select.Root>
-							</Field.Field>
-						</div>
-						<Field.Group class="mt-4">
-							<Field.Field data-invalid={!criterion.label.trim()}>
-								<Field.Label for={`criterion-label-${criterion.clientId}`}
-									>Label</Field.Label
-								>
-								<Input
-									id={`criterion-label-${criterion.clientId}`}
-									value={criterion.label}
-									disabled={!editable}
-									oninput={(event) => {
-										criterion.label = event.currentTarget.value;
-										markDirty();
-									}}
-									aria-invalid={!criterion.label.trim()}
-								/>
-							</Field.Field>
-							<Field.Field data-invalid={!criterion.description.trim()}>
-								<Field.Label for={`criterion-description-${criterion.clientId}`}
-									>Description</Field.Label
-								>
-								<Textarea
-									id={`criterion-description-${criterion.clientId}`}
-									value={criterion.description}
-									disabled={!editable}
-									oninput={(event) => {
-										criterion.description = event.currentTarget.value;
-										markDirty();
-									}}
-									aria-invalid={!criterion.description.trim()}
-									class="min-h-24"
-								/>
-							</Field.Field>
-						</Field.Group>
-					</div>
-				{:else}
-					<Empty.Root class="border-dashed p-8">
-						<Empty.Media variant="icon"><ListChecksIcon /></Empty.Media>
-						<Empty.Header>
-							<Empty.Title>No eligibility criteria yet</Empty.Title>
-							<Empty.Description
-								>Add the first inclusion or exclusion rule to make the protocol
-								actionable.</Empty.Description
-							>
-						</Empty.Header>
-					</Empty.Root>
-				{/each}
-			</Card.Content>
-		</Card.Root>
+										<PlusIcon data-icon="inline-start" />Add criterion
+									</Button>
+								{/snippet}
+							</form.Field>
+						</header>
 
-		{#if validationErrors.length > 0}
-			<Alert.Root variant="destructive">
-				<Alert.Title>Complete the protocol before saving</Alert.Title>
-				<Alert.Description>{validationErrors[0]}</Alert.Description>
-			</Alert.Root>
-		{/if}
+						<form.Field name="criteria" mode="array">
+							{#snippet children(criteriaField)}
+								<div class="flex flex-col gap-4 pt-5">
+									{#each criteriaField.state.value as criterion, index (criterion.clientId)}
+										<div
+											class="flex flex-col gap-4 rounded-xl border border-border/70 p-4 transition-colors hover:border-border"
+										>
+											<div
+												class="flex flex-wrap items-center justify-between gap-2"
+											>
+												<span
+													class="font-mono text-xs font-medium text-muted-foreground"
+												>
+													#{index + 1}
+												</span>
+												<div class="flex items-center gap-1">
+													<Button
+														type="button"
+														variant="ghost"
+														size="icon"
+														aria-label="Move criterion up"
+														disabled={!editable || index === 0}
+														onclick={() =>
+															criteriaField.moveValue(
+																index,
+																index - 1
+															)}
+													>
+														<ArrowUpIcon />
+													</Button>
+													<Button
+														type="button"
+														variant="ghost"
+														size="icon"
+														aria-label="Move criterion down"
+														disabled={!editable ||
+															index ===
+																criteriaField.state.value.length -
+																	1}
+														onclick={() =>
+															criteriaField.moveValue(
+																index,
+																index + 1
+															)}
+													>
+														<ArrowDownIcon />
+													</Button>
+													<Button
+														type="button"
+														variant="ghost"
+														size="icon"
+														aria-label="Remove criterion"
+														disabled={!editable}
+														onclick={() =>
+															criteriaField.removeValue(index)}
+													>
+														<Trash2Icon />
+													</Button>
+												</div>
+											</div>
+											<div class="grid gap-3 sm:grid-cols-3">
+												<form.Field name={`criteria[${index}].kind`}>
+													{#snippet children(kindField)}
+														<Field.Field>
+															<Field.Label
+																for={`criterion-kind-${criterion.clientId}`}
+																>Type</Field.Label
+															>
+															<Select.Root
+																type="single"
+																value={kindField.state.value}
+																onValueChange={(value) => {
+																	if (
+																		value &&
+																		isCriterionKind(value)
+																	) {
+																		kindField.handleChange(
+																			value
+																		);
+																	}
+																}}
+															>
+																<Select.Trigger
+																	id={`criterion-kind-${criterion.clientId}`}
+																	disabled={!editable}
+																	>{humanizeKey(
+																		kindField.state.value
+																	)}</Select.Trigger
+																>
+																<Select.Content>
+																	<Select.Group>
+																		{#each CRITERION_KINDS as kind (kind)}
+																			<Select.Item
+																				value={kind}
+																				label={humanizeKey(
+																					kind
+																				)}
+																			/>
+																		{/each}
+																	</Select.Group>
+																</Select.Content>
+															</Select.Root>
+														</Field.Field>
+													{/snippet}
+												</form.Field>
+												<form.Field name={`criteria[${index}].stage`}>
+													{#snippet children(stageField)}
+														<Field.Field>
+															<Field.Label
+																for={`criterion-stage-${criterion.clientId}`}
+																>Screening stage</Field.Label
+															>
+															<Select.Root
+																type="single"
+																value={stageField.state.value}
+																onValueChange={(value) => {
+																	if (
+																		value &&
+																		isCriterionStage(value)
+																	) {
+																		stageField.handleChange(
+																			value
+																		);
+																	}
+																}}
+															>
+																<Select.Trigger
+																	id={`criterion-stage-${criterion.clientId}`}
+																	disabled={!editable}
+																	>{humanizeKey(
+																		stageField.state.value
+																	)}</Select.Trigger
+																>
+																<Select.Content>
+																	<Select.Group>
+																		{#each CRITERION_STAGES as stage (stage)}
+																			<Select.Item
+																				value={stage}
+																				label={humanizeKey(
+																					stage
+																				)}
+																			/>
+																		{/each}
+																	</Select.Group>
+																</Select.Content>
+															</Select.Root>
+														</Field.Field>
+													{/snippet}
+												</form.Field>
+												<form.Field name={`criteria[${index}].dimension`}>
+													{#snippet children(dimField)}
+														<Field.Field>
+															<Field.Label
+																for={`criterion-dim-${criterion.clientId}`}
+																>PICO domain</Field.Label
+															>
+															<Select.Root
+																type="single"
+																value={dimField.state.value}
+																onValueChange={(value) => {
+																	if (
+																		value &&
+																		isCriterionDimension(value)
+																	) {
+																		dimField.handleChange(
+																			value
+																		);
+																	}
+																}}
+															>
+																<Select.Trigger
+																	id={`criterion-dim-${criterion.clientId}`}
+																	disabled={!editable}
+																	>{humanizeKey(
+																		dimField.state.value
+																	)}</Select.Trigger
+																>
+																<Select.Content>
+																	<Select.Group>
+																		{#each CRITERION_DIMENSIONS as dim (dim)}
+																			<Select.Item
+																				value={dim}
+																				label={humanizeKey(
+																					dim
+																				)}
+																			/>
+																		{/each}
+																	</Select.Group>
+																</Select.Content>
+															</Select.Root>
+														</Field.Field>
+													{/snippet}
+												</form.Field>
+											</div>
+											<Field.Group>
+												<form.Field
+													name={`criteria[${index}].label`}
+													validators={{
+														onChange: ({ value }) =>
+															!value.trim()
+																? 'Label is required.'
+																: undefined
+													}}
+												>
+													{#snippet children(labelField)}
+														<Field.Field
+															data-invalid={labelField.state.meta
+																.errors.length > 0}
+														>
+															<Field.Label
+																for={`criterion-label-${criterion.clientId}`}
+																>Label</Field.Label
+															>
+															<Input
+																id={`criterion-label-${criterion.clientId}`}
+																value={labelField.state.value}
+																disabled={!editable}
+																onblur={labelField.handleBlur}
+																oninput={(event) =>
+																	labelField.handleChange(
+																		event.currentTarget.value
+																	)}
+																aria-invalid={labelField.state.meta
+																	.errors.length > 0}
+															/>
+															{#if labelField.state.meta.errors[0]}<Field.FieldError
+																	>{labelField.state.meta
+																		.errors[0]}</Field.FieldError
+																>{/if}
+														</Field.Field>
+													{/snippet}
+												</form.Field>
+												<form.Field
+													name={`criteria[${index}].description`}
+													validators={{
+														onChange: ({ value }) =>
+															!value.trim()
+																? 'Description is required.'
+																: undefined
+													}}
+												>
+													{#snippet children(descriptionField)}
+														<Field.Field
+															data-invalid={descriptionField.state
+																.meta.errors.length > 0}
+														>
+															<Field.Label
+																for={`criterion-description-${criterion.clientId}`}
+																>Description</Field.Label
+															>
+															<Textarea
+																id={`criterion-description-${criterion.clientId}`}
+																value={descriptionField.state.value}
+																disabled={!editable}
+																onblur={descriptionField.handleBlur}
+																oninput={(event) =>
+																	descriptionField.handleChange(
+																		event.currentTarget.value
+																	)}
+																aria-invalid={descriptionField.state
+																	.meta.errors.length > 0}
+																class="min-h-24"
+															/>
+															{#if descriptionField.state.meta.errors[0]}<Field.FieldError
+																	>{descriptionField.state.meta
+																		.errors[0]}</Field.FieldError
+																>{/if}
+														</Field.Field>
+													{/snippet}
+												</form.Field>
+											</Field.Group>
+										</div>
+									{:else}
+										<Empty.Root class="border-dashed p-8">
+											<Empty.Media variant="icon"
+												><ListChecksIcon /></Empty.Media
+											>
+											<Empty.Header>
+												<Empty.Title
+													>No eligibility criteria yet</Empty.Title
+												>
+												<Empty.Description
+													>Add the first inclusion or exclusion rule to
+													make the protocol actionable.</Empty.Description
+												>
+											</Empty.Header>
+										</Empty.Root>
+									{/each}
+								</div>
+							{/snippet}
+						</form.Field>
+					</section></Tabs.Content
+				>
+			</Tabs.Root>
 
-		<div
-			class="flex flex-wrap items-center justify-between gap-3 border-t border-border/60 pt-4"
-		>
-			<div class="flex items-center gap-2 text-xs text-muted-foreground">
-				{#if dirty}<span class="size-2 rounded-full bg-warning" aria-hidden="true"></span> Unsaved
-					changes{:else}<CheckCircle2Icon aria-hidden="true" /> Draft is saved{/if}
-			</div>
-			<div class="flex flex-wrap justify-end gap-2">
-				{#if isPublished}
-					<Button variant="outline" onclick={beginAmendment}
-						>Amend published version</Button
+			<form.Subscribe
+				selector={(state) =>
+					(state.errors as (string | undefined)[]).find(
+						(error): error is string => typeof error === 'string'
+					)}
+			>
+				{#snippet children(firstError)}
+					{#if firstError}
+						<Alert.Root variant="destructive">
+							<Alert.Title>Complete the protocol before saving</Alert.Title>
+							<Alert.Description>{firstError}</Alert.Description>
+						</Alert.Root>
+					{/if}
+				{/snippet}
+			</form.Subscribe>
+
+			<form.Subscribe
+				selector={(state) => ({
+					isDirty: state.isDirty,
+					isSubmitting: state.isSubmitting,
+					formReady:
+						!state.isValidating &&
+						state.isValid &&
+						validateProtocolDraft(state.values).length === 0
+				})}
+			>
+				{#snippet children(footerMeta)}
+					<div
+						class="flex flex-wrap items-center justify-between gap-3 border-t border-border/60 pt-4"
 					>
-				{:else}
-					<Button variant="outline" disabled={!canSave} onclick={save}>
-						{#if saveProtocol.isPending}<Spinner
-								data-icon="inline-start"
-							/>{:else}<SaveIcon data-icon="inline-start" />{/if}
-						Save draft
-					</Button>
-					<Button disabled={!canPublish} onclick={publish}>
-						{#if publishProtocol.isPending}<Spinner data-icon="inline-start" />{/if}
-						Publish version
-					</Button>
-				{/if}
-			</div>
-		</div>
+						<div class="flex items-center gap-2 text-xs text-muted-foreground">
+							{#if footerMeta.isDirty}
+								<span class="size-2 rounded-full bg-warning" aria-hidden="true"
+								></span> Unsaved changes
+							{:else}
+								<CheckCircle2Icon aria-hidden="true" /> Draft is saved
+							{/if}
+						</div>
+						<div class="flex flex-wrap justify-end gap-2">
+							{#if isPublished}
+								<Button type="button" variant="outline" onclick={beginAmendment}
+									>Amend published version</Button
+								>
+							{:else}
+								<Button
+									type="submit"
+									variant="outline"
+									disabled={!editable || isPending || !footerMeta.formReady}
+								>
+									{#if saveProtocol.isPending || footerMeta.isSubmitting}
+										<Spinner data-icon="inline-start" />
+									{:else}
+										<SaveIcon data-icon="inline-start" />
+									{/if}
+									Save draft
+								</Button>
+								<Button type="button" disabled={!canPublish} onclick={publish}>
+									{#if publishProtocol.isPending}
+										<Spinner data-icon="inline-start" />
+									{/if}
+									Publish version
+								</Button>
+							{/if}
+						</div>
+					</div>
+				{/snippet}
+			</form.Subscribe>
+		</form>
 	{/if}
 </div>

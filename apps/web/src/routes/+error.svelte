@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { Button } from '$lib/components/ui/button';
+	import { Button } from '@deepref/ui/button';
 	import CircleAlertIcon from '@lucide/svelte/icons/circle-alert';
 	import ArrowLeftIcon from '@lucide/svelte/icons/arrow-left';
 	import { page } from '$app/state';
