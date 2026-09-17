@@ -1,0 +1,14 @@
+<script lang="ts">
+	import { Button } from '../../src/primitives/button';
+	import { Badge } from '../../src/primitives/badge';
+	const surfaces = ['background', 'card', 'muted', 'surface-inset', 'popover'];
+	const charts = [1, 2, 3, 4, 5];
+</script>
+<div class="story-sheet">
+	<header><p class="text-primary">Deepref / Design foundations</p><h1>A workspace for careful reading</h1><p>Quiet paper and charcoal surfaces. Teal marks action and selection. Typography, alignment, and restrained separators organize dense information.</p></header>
+	<section><h2>Surface hierarchy</h2><div class="grid gap-3 sm:grid-cols-5">{#each surfaces as surface (surface)}<div class="flex min-h-24 flex-col justify-between rounded-md border border-border p-3" style:background={`var(--${surface})`}><span class="text-sm font-medium">{surface}</span><span class="text-xs text-muted-foreground">Readable content</span></div>{/each}</div></section>
+	<section><h2>Action, selection, and status</h2><div class="flex flex-wrap items-center gap-2"><Button>Primary action</Button><Button variant="outline">Secondary action</Button><span class="rounded-sm bg-selection px-3 py-2 text-sm text-selection-foreground">Selected record</span><Badge variant="success">Complete</Badge><Badge variant="warning">Needs attention</Badge><Badge variant="destructive">Failed</Badge><Badge variant="info">In progress</Badge></div><p>Tab through the controls to inspect the shared focus outline. Use the toolbar to switch themes.</p></section>
+	<section><h2>Type for work and reading</h2><div class="grid gap-6 sm:grid-cols-2"><div class="flex flex-col gap-2"><h3 class="text-xl font-semibold tracking-tight">Interface heading</h3><p class="text-sm text-text-secondary">IBM Plex Sans keeps labels, controls, and tables compact and legible.</p><p class="text-xs text-muted-foreground">Updated 14 September · 248 records</p><p class="font-mono text-xs">REF-00248 · 1,024.50</p></div><div class="max-w-prose"><h3 class="font-serif text-xl font-medium">A record of the evidence</h3><p class="font-serif text-base leading-relaxed">Clear presentation supports careful judgment. Long passages need a comfortable measure and enough line spacing to follow an argument without losing their place.</p></div></div></section>
+	<section><h2>Data series</h2><p>Series colors identify groups, not success or failure. Pair them with labels and line styles.</p><div class="flex gap-3">{#each charts as chart (chart)}<div class="flex flex-1 flex-col gap-2"><div class="h-12 rounded-sm" style:background={`var(--chart-${chart})`}></div><span class="text-xs text-muted-foreground">Series {chart}</span></div>{/each}</div></section>
+	<section><h2>Rhythm and shape</h2><p>4px spacing foundation · 12px control gap · 16px section gap · 16–32px page inset. Controls use compact corners; content surfaces use 8px corners. Elevation is reserved for overlays.</p></section>
+</div>
