@@ -24,6 +24,7 @@
 	},
 	"dependencies": {
 		"@deepref/ui": "workspace:*",
+		"@tanstack/svelte-form": "^1.33.5",
 		"@tanstack/svelte-query": "^6.1.45",
 		"@tanstack/svelte-virtual": "^3.13.12",
 		"@tanstack/table-core": "^8.21.3",

@@ -17,7 +17,7 @@ export type ProjectGraphRenderModel = {
 	fields: readonly GraphOverlayField[];
 };
 
-type ProjectGraphRendererCallbacks = {
+export type ProjectGraphRendererCallbacks = {
 	onSelect: (reportId: string) => void;
 	onClear: () => void;
 };

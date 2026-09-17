@@ -1,6 +1,8 @@
 {
   "$schema": "https://raw.githubusercontent.com/fallow-rs/fallow/main/schema.json",
-  "ignoreUnresolvedImports": ["/env.js"],
+  "ignoreUnresolvedImports": [
+    "/env.js"
+  ],
   "ignorePatterns": [
     "apps/server/**",
     "apps/web/jsrepo.config.ts",
@@ -16,8 +18,8 @@
     "apps/web/src/lib/features/workflows/**",
     "apps/web/src/lib/features/automations/**",
     "apps/web/src/lib/features/notifications/**",
-    "apps/web/src/lib/features/projects/index.ts",
-    "packages/ui/**"
+    "packages/ui/**",
+    "apps/web/src/lib/features/projects/index.ts"
   ],
   "duplicates": {
     "minLines": 15,
@@ -30,23 +32,33 @@
     "zones": [
       {
         "name": "utils",
-        "patterns": ["apps/web/src/lib/utils.ts"]
+        "patterns": [
+          "apps/web/src/lib/utils.ts"
+        ]
       },
       {
         "name": "api",
-        "patterns": ["apps/web/src/lib/api/**"]
+        "patterns": [
+          "apps/web/src/lib/api/**"
+        ]
       },
       {
         "name": "shell",
-        "patterns": ["apps/web/src/lib/shell/**"]
+        "patterns": [
+          "apps/web/src/lib/shell/**"
+        ]
       },
       {
         "name": "features",
-        "patterns": ["apps/web/src/lib/features/**"]
+        "patterns": [
+          "apps/web/src/lib/features/**"
+        ]
       },
       {
         "name": "routes",
-        "patterns": ["apps/web/src/routes/**"]
+        "patterns": [
+          "apps/web/src/routes/**"
+        ]
       }
     ],
     "rules": [
@@ -56,19 +68,36 @@
       },
       {
         "from": "api",
-        "allow": ["utils"]
+        "allow": [
+          "utils"
+        ]
       },
       {
         "from": "shell",
-        "allow": ["utils", "api", "shell"]
+        "allow": [
+          "utils",
+          "api",
+          "shell"
+        ]
       },
       {
         "from": "features",
-        "allow": ["utils", "api", "shell", "features"]
+        "allow": [
+          "utils",
+          "api",
+          "shell",
+          "features"
+        ]
       },
       {
         "from": "routes",
-        "allow": ["utils", "api", "shell", "features", "routes"]
+        "allow": [
+          "utils",
+          "api",
+          "shell",
+          "features",
+          "routes"
+        ]
       }
     ],
     "coverage": {
@@ -131,12 +160,24 @@
     }
   },
   "health": {
-    "ignore": ["apps/web/src/**/*.svelte"],
+    "ignore": [
+      "apps/web/src/**/*.svelte"
+    ],
     "thresholdOverrides": [
       {
-        "files": ["apps/web/src/lib/api/client.ts"],
+        "files": [
+          "apps/web/src/lib/api/client.ts"
+        ],
         "maxCrap": 50,
         "reason": "Small API wrapper; risk is covered by route type checking and fetch error handling."
+      },
+      {
+        "files": [
+          "apps/web/src/lib/api/assistant-stream.ts"
+        ],
+        "maxCrap": 50,
+        "maxCyclomatic": 15,
+        "reason": "SSE stream normalizer handles multiple SSE event kinds"
       }
     ]
   },
@@ -156,6 +197,12 @@
     "rete-minimap-plugin",
     "rete-render-utils",
     "rete-svelte-plugin",
-    "sass"
+    "sass",
+    "@fontsource-variable/ibm-plex-sans",
+    "@fontsource-variable/source-serif-4",
+    "clsx",
+    "fast-check",
+    "shadcn-svelte",
+    "tailwind-merge"
   ]
 }

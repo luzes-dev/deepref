@@ -129,7 +129,7 @@ function normalizeStreamEvent(
 	}
 }
 
-export async function consumeSseStream(
+async function consumeSseStream(
 	body: ReadableStream<Uint8Array>,
 	onEvent: (event: AssistantChatStreamEvent) => void
 ): Promise<void> {
@@ -157,13 +157,13 @@ export async function consumeSseStream(
 	}
 }
 
-// fallow-ignore-next-line security-sink -- Targets the verified project assistant chat endpoint behind the /api proxy
 export async function streamAssistantChat(
 	projectId: string,
 	body: { conversation_id: string; message: string },
 	onEvent: (event: AssistantChatStreamEvent) => void,
 	signal?: AbortSignal
 ): Promise<void> {
+	// fallow-ignore-next-line security-sink -- Fixed-origin internal API proxy endpoint
 	const response = await fetch(`/api/projects/${projectId}/assistant/chat`, {
 		method: 'POST',
 		headers: {

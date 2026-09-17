@@ -394,10 +394,12 @@ function parseArticleSort(value: string | null): ArticleSort {
 
 const projectWorkspaceContext = new Context<ProjectWorkspaceContext>('project-workspace');
 
+// fallow-ignore-next-line private-type-leak -- Scoped to workspace context provider
 export function setProjectWorkspaceContext(): ProjectWorkspaceContext {
 	return projectWorkspaceContext.set(new ProjectWorkspaceContext());
 }
 
+// fallow-ignore-next-line private-type-leak -- Scoped to workspace context provider
 export function useProjectWorkspaceContext(): ProjectWorkspaceContext {
 	return projectWorkspaceContext.get();
 }
