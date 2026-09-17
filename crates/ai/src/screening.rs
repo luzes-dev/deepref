@@ -225,11 +225,7 @@ impl ScreeningTask {
         Ok(())
     }
 
-    fn validate_analysis(
-        &self,
-        output: &ScreeningAnalysis,
-        retrieved_evidence: Option<&[GroundedBlock]>,
-    ) -> Result<(), AiError> {
+    fn validate_analysis_identity(&self, output: &ScreeningAnalysis) -> Result<(), AiError> {
         if output.report_id != self.report_id.as_uuid()
             || output.expected_revision != self.expected_revision
             || output.stage != self.stage
@@ -239,7 +235,14 @@ impl ScreeningTask {
                 "screening output is for a different stage or protocol version".to_owned(),
             ));
         }
-        let expected = self.expected_criteria();
+        Ok(())
+    }
+
+    fn validate_analysis_criteria_alignment(
+        &self,
+        output: &ScreeningAnalysis,
+        expected: &[&EligibilityCriterion],
+    ) -> Result<(), AiError> {
         if expected.is_empty() {
             return Err(AiError::SemanticValidation(
                 "screening requires at least one applicable criterion".to_owned(),
@@ -256,55 +259,122 @@ impl ScreeningTask {
                 "criterion judgments must be complete, unique, known, and ordered".to_owned(),
             ));
         }
-        for judgment in &output.criteria {
-            if judgment.rationale.trim().is_empty() || judgment.rationale.len() > 4_000 {
+        Ok(())
+    }
+
+    fn validate_judgment_evidence_block(
+        evidence: &ScreeningEvidence,
+        key: &str,
+        retrieved_evidence: Option<&[GroundedBlock]>,
+    ) -> Result<(), AiError> {
+        if matches!(evidence, ScreeningEvidence::DocumentBlock { .. }) {
+            let Some(retrieved_evidence) = retrieved_evidence else {
                 return Err(AiError::SemanticValidation(
-                    "criterion rationale is invalid".to_owned(),
+                    "full-text evidence requires a retrieval context".to_owned(),
                 ));
-            }
-            if !matches!(
-                &output.suggested_decision,
-                SuggestedDecision::InsufficientEvidence
-            ) && judgment.evidence.is_empty()
-            {
+            };
+            let retrieved = retrieved_evidence.iter().any(|block| {
+                ScreeningEvidence::DocumentBlock {
+                    document_block_id: block.evidence.document_block_id.as_uuid(),
+                    page: block.evidence.page,
+                    content_hash: block.evidence.content_hash.clone(),
+                    section_path: block.evidence.section_path.clone(),
+                }
+                .key()
+                    == key
+            });
+            if !retrieved {
                 return Err(AiError::SemanticValidation(
-                    "consequential criterion judgments require evidence".to_owned(),
+                    "full-text evidence is not in the retrieved context".to_owned(),
                 ));
-            }
-            let mut evidence_keys = BTreeSet::new();
-            for evidence in &judgment.evidence {
-                self.validate_evidence(evidence)?;
-                let key = evidence.key();
-                if matches!(evidence, ScreeningEvidence::DocumentBlock { .. }) {
-                    let Some(retrieved_evidence) = retrieved_evidence else {
-                        return Err(AiError::SemanticValidation(
-                            "full-text evidence requires a retrieval context".to_owned(),
-                        ));
-                    };
-                    let retrieved = retrieved_evidence.iter().any(|block| {
-                        ScreeningEvidence::DocumentBlock {
-                            document_block_id: block.evidence.document_block_id.as_uuid(),
-                            page: block.evidence.page,
-                            content_hash: block.evidence.content_hash.clone(),
-                            section_path: block.evidence.section_path.clone(),
-                        }
-                        .key()
-                            == key
-                    });
-                    if !retrieved {
-                        return Err(AiError::SemanticValidation(
-                            "full-text evidence is not in the retrieved context".to_owned(),
-                        ));
-                    }
-                }
-                if !evidence_keys.insert(key) {
-                    return Err(AiError::SemanticValidation(
-                        "screening evidence must not be duplicated".to_owned(),
-                    ));
-                }
             }
         }
+        Ok(())
+    }
 
+    fn validate_judgment(
+        &self,
+        judgment: &CriterionJudgment,
+        is_insufficient_evidence: bool,
+        retrieved_evidence: Option<&[GroundedBlock]>,
+    ) -> Result<(), AiError> {
+        if judgment.rationale.trim().is_empty() || judgment.rationale.len() > 4_000 {
+            return Err(AiError::SemanticValidation(
+                "criterion rationale is invalid".to_owned(),
+            ));
+        }
+        if !is_insufficient_evidence && judgment.evidence.is_empty() {
+            return Err(AiError::SemanticValidation(
+                "consequential criterion judgments require evidence".to_owned(),
+            ));
+        }
+        let mut evidence_keys = BTreeSet::new();
+        for evidence in &judgment.evidence {
+            self.validate_evidence(evidence)?;
+            let key = evidence.key();
+            Self::validate_judgment_evidence_block(evidence, &key, retrieved_evidence)?;
+            if !evidence_keys.insert(key) {
+                return Err(AiError::SemanticValidation(
+                    "screening evidence must not be duplicated".to_owned(),
+                ));
+            }
+        }
+        Ok(())
+    }
+
+    fn validate_analysis_judgments(
+        &self,
+        output: &ScreeningAnalysis,
+        retrieved_evidence: Option<&[GroundedBlock]>,
+    ) -> Result<(), AiError> {
+        let is_insufficient = matches!(
+            &output.suggested_decision,
+            SuggestedDecision::InsufficientEvidence
+        );
+        for judgment in &output.criteria {
+            self.validate_judgment(judgment, is_insufficient, retrieved_evidence)?;
+        }
+        Ok(())
+    }
+
+    fn validate_exclusion_decision(
+        &self,
+        exclusion_reason_id: Option<uuid::Uuid>,
+        supports_exclusion: bool,
+    ) -> Result<(), AiError> {
+        if !supports_exclusion {
+            return Err(AiError::SemanticValidation(
+                "exclude requires an exclusion-supporting criterion judgment".to_owned(),
+            ));
+        }
+        match self.stage {
+            ScreeningStage::TitleAbstract if exclusion_reason_id.is_some() => {
+                Err(AiError::SemanticValidation(
+                    "title/abstract exclusion cannot carry a full-text reason".to_owned(),
+                ))
+            }
+            ScreeningStage::TitleAbstract => Ok(()),
+            ScreeningStage::FullText => {
+                let Some(reason_id) = exclusion_reason_id else {
+                    return Err(AiError::SemanticValidation(
+                        "full-text exclusion requires an exclusion reason".to_owned(),
+                    ));
+                };
+                if !self.allowed_exclusion_reasons.contains(&reason_id) {
+                    return Err(AiError::SemanticValidation(
+                        "exclusion reason is not valid for this project and stage".to_owned(),
+                    ));
+                }
+                Ok(())
+            }
+        }
+    }
+
+    fn validate_analysis_decision(
+        &self,
+        output: &ScreeningAnalysis,
+        expected: &[&EligibilityCriterion],
+    ) -> Result<(), AiError> {
         let mut supports_exclusion = false;
         let mut supports_inclusion = true;
         let mut has_unclear = false;
@@ -329,35 +399,11 @@ impl ScreeningTask {
                     "include requires every criterion to support inclusion".to_owned(),
                 ));
             }
+            SuggestedDecision::Include => {}
             SuggestedDecision::Exclude {
                 exclusion_reason_id,
             } => {
-                if !supports_exclusion {
-                    return Err(AiError::SemanticValidation(
-                        "exclude requires an exclusion-supporting criterion judgment".to_owned(),
-                    ));
-                }
-                match self.stage {
-                    ScreeningStage::TitleAbstract if exclusion_reason_id.is_some() => {
-                        return Err(AiError::SemanticValidation(
-                            "title/abstract exclusion cannot carry a full-text reason".to_owned(),
-                        ));
-                    }
-                    ScreeningStage::TitleAbstract => {}
-                    ScreeningStage::FullText => {
-                        let Some(reason_id) = exclusion_reason_id else {
-                            return Err(AiError::SemanticValidation(
-                                "full-text exclusion requires an exclusion reason".to_owned(),
-                            ));
-                        };
-                        if !self.allowed_exclusion_reasons.contains(reason_id) {
-                            return Err(AiError::SemanticValidation(
-                                "exclusion reason is not valid for this project and stage"
-                                    .to_owned(),
-                            ));
-                        }
-                    }
-                }
+                self.validate_exclusion_decision(*exclusion_reason_id, supports_exclusion)?;
             }
             SuggestedDecision::Maybe => {
                 if supports_exclusion {
@@ -380,7 +426,6 @@ impl ScreeningTask {
                     ));
                 }
             }
-            SuggestedDecision::Include => {}
         }
         if matches!(
             &output.suggested_decision,
@@ -391,6 +436,19 @@ impl ScreeningTask {
                 "insufficient evidence requires an uncertainty".to_owned(),
             ));
         }
+        Ok(())
+    }
+
+    fn validate_analysis(
+        &self,
+        output: &ScreeningAnalysis,
+        retrieved_evidence: Option<&[GroundedBlock]>,
+    ) -> Result<(), AiError> {
+        self.validate_analysis_identity(output)?;
+        let expected = self.expected_criteria();
+        self.validate_analysis_criteria_alignment(output, &expected)?;
+        self.validate_analysis_judgments(output, retrieved_evidence)?;
+        self.validate_analysis_decision(output, &expected)?;
         Ok(())
     }
 }

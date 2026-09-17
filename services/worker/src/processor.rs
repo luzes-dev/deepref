@@ -42,23 +42,207 @@ pub fn validate_pdf_parse_concurrency() -> anyhow::Result<()> {
     Ok(())
 }
 
+async fn parse_work_fetch_event(
+    pool: &PgPool,
+    bytes: &[u8],
+    delivery_count: u64,
+) -> anyhow::Result<Result<EventEnvelope<WorkFetchRequested>, DeliveryAction>> {
+    match deserialize_compatible(bytes) {
+        Ok(event) => Ok(Ok(event)),
+        Err(error) => {
+            let record = dead_letter(bytes, None, delivery_count, "MALFORMED_PAYLOAD");
+            store::persist_malformed_dead_letter(
+                pool,
+                &record,
+                serde_json::json!({
+                    "payload_utf8_lossy": String::from_utf8_lossy(bytes),
+                    "error": error.to_string(),
+                }),
+            )
+            .await?;
+            Ok(Err(action_for(FailureClass::Malformed, delivery_count)))
+        }
+    }
+}
+
+enum PreconditionOutcome {
+    Proceed,
+    Action(DeliveryAction),
+}
+
+async fn check_work_fetch_preconditions(
+    pool: &PgPool,
+    event: &EventEnvelope<WorkFetchRequested>,
+    doi: &str,
+    owner: Uuid,
+) -> anyhow::Result<PreconditionOutcome> {
+    if event.payload.depth > event.payload.max_depth {
+        store::complete_without_doi(
+            pool,
+            event,
+            doi,
+            owner,
+            IngestionItemStatus::Skipped,
+            Some("maximum depth exceeded"),
+            None,
+        )
+        .await?;
+        return Ok(PreconditionOutcome::Action(DeliveryAction::Ack));
+    }
+    if store::ingestion_cancelled(pool, event.payload.ingestion_id).await? {
+        store::complete_without_doi(
+            pool,
+            event,
+            doi,
+            owner,
+            IngestionItemStatus::Skipped,
+            Some("ingestion cancelled"),
+            None,
+        )
+        .await?;
+        return Ok(PreconditionOutcome::Action(DeliveryAction::Ack));
+    }
+    if store::is_cached(pool, doi).await? {
+        store::attach_cached(pool, event, doi, owner).await?;
+        return Ok(PreconditionOutcome::Action(DeliveryAction::Ack));
+    }
+    Ok(PreconditionOutcome::Proceed)
+}
+
+async fn claim_doi_lease(
+    pool: &PgPool,
+    bytes: &[u8],
+    event: &EventEnvelope<WorkFetchRequested>,
+    doi: &str,
+    owner: Uuid,
+    claim_lease: Duration,
+    delivery_count: u64,
+) -> anyhow::Result<Option<DeliveryAction>> {
+    if store::claim_doi(pool, doi, owner, claim_lease).await? != store::ClaimState::Acquired {
+        let action = action_for(FailureClass::Retryable, delivery_count);
+        if action == DeliveryAction::Terminate {
+            let record = dead_letter(
+                bytes,
+                Some(event.event_id),
+                delivery_count,
+                "DOI_LEASE_EXHAUSTED",
+            );
+            store::complete_without_doi(
+                pool,
+                event,
+                doi,
+                owner,
+                IngestionItemStatus::Failed,
+                Some("DOI lease remained busy through the final delivery"),
+                Some(&record),
+            )
+            .await?;
+        } else {
+            store::release_event_claim(pool, event.event_id, owner, "DOI lease is busy").await?;
+        }
+        return Ok(Some(action));
+    }
+    Ok(None)
+}
+
+async fn execute_work_fetch(
+    pool: PgPool,
+    bytes: &[u8],
+    event: &EventEnvelope<WorkFetchRequested>,
+    doi: &str,
+    owner: Uuid,
+    claim_lease: Duration,
+    delivery_count: u64,
+) -> anyhow::Result<DeliveryAction> {
+    let settings = store::load_runtime_settings(&pool).await?;
+    let client = match CrossrefProvider::new(settings.crossref_mailto.clone()) {
+        Ok(client) => client.with_max_attempts(settings.retry_attempts),
+        Err(error) => {
+            store::finalize_terminal_failure(
+                &pool,
+                event,
+                doi,
+                owner,
+                IngestionItemStatus::Failed,
+                &error.to_string(),
+                None,
+            )
+            .await?;
+            return Ok(DeliveryAction::Ack);
+        }
+    };
+    limiter::acquire(&pool, "crossref", settings.rate_limit_per_second).await?;
+    let (cancel_heartbeat, heartbeat_done) = spawn_heartbeat(
+        pool.clone(),
+        event.event_id,
+        doi.to_owned(),
+        owner,
+        claim_lease,
+    );
+    let fetched = client.fetch_work_with_references(doi).await;
+    cancel_heartbeat.send_replace(true);
+    let _ = heartbeat_done.await;
+
+    match fetched {
+        Ok(work) => {
+            store::finalize_success(&pool, event, doi, owner, &work).await?;
+            Ok(DeliveryAction::Ack)
+        }
+        Err(error) if is_retryable_crossref_error(&error) => {
+            let action = action_for(FailureClass::Retryable, delivery_count);
+            if action == DeliveryAction::Terminate {
+                let record = dead_letter(
+                    bytes,
+                    Some(event.event_id),
+                    delivery_count,
+                    "DELIVERY_EXHAUSTED",
+                );
+                store::finalize_terminal_failure(
+                    &pool,
+                    event,
+                    doi,
+                    owner,
+                    IngestionItemStatus::Failed,
+                    &error.to_string(),
+                    Some(&record),
+                )
+                .await?;
+            } else {
+                store::release_retryable(&pool, event.event_id, doi, owner, &error.to_string())
+                    .await?;
+            }
+            Ok(action)
+        }
+        Err(error) => {
+            let status = if matches!(error, CrossrefError::NotFound(_)) {
+                IngestionItemStatus::NotFound
+            } else {
+                IngestionItemStatus::Failed
+            };
+            store::finalize_terminal_failure(
+                &pool,
+                event,
+                doi,
+                owner,
+                status,
+                &error.to_string(),
+                None,
+            )
+            .await?;
+            Ok(DeliveryAction::Ack)
+        }
+    }
+}
+
 pub async fn handle_message(
     pool: PgPool,
     bytes: Vec<u8>,
     delivery_count: u64,
     claim_lease: Duration,
 ) -> anyhow::Result<DeliveryAction> {
-    let event: EventEnvelope<WorkFetchRequested> = match deserialize_compatible(&bytes) {
+    let event = match parse_work_fetch_event(&pool, &bytes, delivery_count).await? {
         Ok(event) => event,
-        Err(error) => {
-            let record = dead_letter(&bytes, None, delivery_count, "MALFORMED_PAYLOAD");
-            store::persist_malformed_dead_letter(
-                &pool,
-                &record,
-                serde_json::json!({ "payload_utf8_lossy": String::from_utf8_lossy(&bytes), "error": error.to_string() }),
-            ).await?;
-            return Ok(action_for(FailureClass::Malformed, delivery_count));
-        }
+        Err(action) => return Ok(action),
     };
     let owner = Uuid::new_v4();
     match store::claim_event(&pool, event.event_id, owner, claim_lease).await? {
@@ -89,139 +273,37 @@ pub async fn handle_message(
         }
     };
     store::mark_fetching(&pool, &event, &doi).await?;
-    if event.payload.depth > event.payload.max_depth {
-        store::complete_without_doi(
-            &pool,
-            &event,
-            &doi,
-            owner,
-            IngestionItemStatus::Skipped,
-            Some("maximum depth exceeded"),
-            None,
-        )
-        .await?;
-        return Ok(DeliveryAction::Ack);
-    }
-    if store::ingestion_cancelled(&pool, event.payload.ingestion_id).await? {
-        store::complete_without_doi(
-            &pool,
-            &event,
-            &doi,
-            owner,
-            IngestionItemStatus::Skipped,
-            Some("ingestion cancelled"),
-            None,
-        )
-        .await?;
-        return Ok(DeliveryAction::Ack);
-    }
-    if store::is_cached(&pool, &doi).await? {
-        store::attach_cached(&pool, &event, &doi, owner).await?;
-        return Ok(DeliveryAction::Ack);
-    }
-    if store::claim_doi(&pool, &doi, owner, claim_lease).await? != store::ClaimState::Acquired {
-        let action = action_for(FailureClass::Retryable, delivery_count);
-        if action == DeliveryAction::Terminate {
-            let record = dead_letter(
-                &bytes,
-                Some(event.event_id),
-                delivery_count,
-                "DOI_LEASE_EXHAUSTED",
-            );
-            store::complete_without_doi(
-                &pool,
-                &event,
-                &doi,
-                owner,
-                IngestionItemStatus::Failed,
-                Some("DOI lease remained busy through the final delivery"),
-                Some(&record),
-            )
-            .await?;
-        } else {
-            store::release_event_claim(&pool, event.event_id, owner, "DOI lease is busy").await?;
-        }
+
+    if let PreconditionOutcome::Action(action) =
+        check_work_fetch_preconditions(&pool, &event, &doi, owner).await?
+    {
         return Ok(action);
     }
 
-    let settings = store::load_runtime_settings(&pool).await?;
-    let client = match CrossrefProvider::new(settings.crossref_mailto.clone()) {
-        Ok(client) => client.with_max_attempts(settings.retry_attempts),
-        Err(error) => {
-            store::finalize_terminal_failure(
-                &pool,
-                &event,
-                &doi,
-                owner,
-                IngestionItemStatus::Failed,
-                &error.to_string(),
-                None,
-            )
-            .await?;
-            return Ok(DeliveryAction::Ack);
-        }
-    };
-    limiter::acquire(&pool, "crossref", settings.rate_limit_per_second).await?;
-    let (cancel_heartbeat, heartbeat_done) = spawn_heartbeat(
-        pool.clone(),
-        event.event_id,
-        doi.clone(),
+    if let Some(action) = claim_doi_lease(
+        &pool,
+        &bytes,
+        &event,
+        &doi,
         owner,
         claim_lease,
-    );
-    let fetched = client.fetch_work_with_references(&doi).await;
-    cancel_heartbeat.send_replace(true);
-    let _ = heartbeat_done.await;
-
-    match fetched {
-        Ok(work) => {
-            store::finalize_success(&pool, &event, &doi, owner, &work).await?;
-            Ok(DeliveryAction::Ack)
-        }
-        Err(error) if is_retryable_crossref_error(&error) => {
-            let action = action_for(FailureClass::Retryable, delivery_count);
-            if action == DeliveryAction::Terminate {
-                let record = dead_letter(
-                    &bytes,
-                    Some(event.event_id),
-                    delivery_count,
-                    "DELIVERY_EXHAUSTED",
-                );
-                store::finalize_terminal_failure(
-                    &pool,
-                    &event,
-                    &doi,
-                    owner,
-                    IngestionItemStatus::Failed,
-                    &error.to_string(),
-                    Some(&record),
-                )
-                .await?;
-            } else {
-                store::release_retryable(&pool, event.event_id, &doi, owner, &error.to_string())
-                    .await?;
-            }
-            Ok(action)
-        }
-        Err(error) => {
-            let status = if matches!(error, CrossrefError::NotFound(_)) {
-                IngestionItemStatus::NotFound
-            } else {
-                IngestionItemStatus::Failed
-            };
-            store::finalize_terminal_failure(
-                &pool,
-                &event,
-                &doi,
-                owner,
-                status,
-                &error.to_string(),
-                None,
-            )
-            .await?;
-            Ok(DeliveryAction::Ack)
-        }
+        delivery_count,
+    )
+    .await?
+    {
+        return Ok(action);
     }
+
+    execute_work_fetch(
+        pool,
+        &bytes,
+        &event,
+        &doi,
+        owner,
+        claim_lease,
+        delivery_count,
+    )
+    .await
 }
 
 pub async fn handle_job(
@@ -329,6 +411,172 @@ struct JobServices<'a> {
     ai_gateway: Option<Arc<dyn AiGateway>>,
 }
 
+async fn handle_retrieve_document_job(
+    pool: &sqlx::PgPool,
+    job: &deepref_application::jobs::ClaimedJob,
+    document_store: Option<Arc<DocumentStore>>,
+    remote_fetcher: Option<Arc<dyn RemoteDocumentFetcher>>,
+) -> anyhow::Result<DeliveryAction> {
+    let document_id = job
+        .payload
+        .get("document_id")
+        .and_then(serde_json::Value::as_str)
+        .ok_or_else(|| anyhow::anyhow!("retrieve_document payload is missing document_id"))?
+        .parse::<Uuid>()?;
+    let document = deepref_postgres::get_document_by_id(pool, document_id).await?;
+    if document.object_key.is_some() && matches!(document.status.as_str(), "uploaded" | "available")
+    {
+        return Ok(DeliveryAction::Ack);
+    }
+    let external_url = document
+        .external_url
+        .as_deref()
+        .ok_or_else(|| anyhow::anyhow!("external document has no source URL"))?;
+    let store = match document_store {
+        Some(store) => store,
+        None => Arc::new(DocumentStore::from_env()?),
+    };
+    if !deepref_postgres::mark_document_retrieving(pool, document_id).await? {
+        return Ok(DeliveryAction::Ack);
+    }
+    let fetcher: Arc<dyn RemoteDocumentFetcher> =
+        remote_fetcher.unwrap_or_else(|| Arc::new(HttpsPdfFetcher::default()));
+    let (stored, _) = match fetcher.fetch(external_url, &store).await {
+        Ok(result) => result,
+        Err(error) => {
+            deepref_postgres::mark_document_retrieval_failed(pool, document_id, &error.to_string())
+                .await?;
+            return Err(error.into());
+        }
+    };
+    let byte_size = match i64::try_from(stored.byte_size) {
+        Ok(value) => value,
+        Err(error) => {
+            let _ = store.delete(&stored.opaque_id).await;
+            deepref_postgres::mark_document_retrieval_failed(
+                pool,
+                document_id,
+                "retrieved document size overflowed persistence bounds",
+            )
+            .await?;
+            return Err(error.into());
+        }
+    };
+    let mut transaction = pool.begin().await?;
+    let completion = match deepref_postgres::complete_document_retrieval(
+        &mut transaction,
+        deepref_domain::ProjectId::new(document.project_id),
+        document_id,
+        &stored.opaque_id,
+        &stored.sha256,
+        byte_size,
+    )
+    .await
+    {
+        Ok(outcome) => outcome,
+        Err(error) => {
+            let _ = transaction.rollback().await;
+            let _ = store.delete(&stored.opaque_id).await;
+            deepref_postgres::mark_document_retrieval_failed(
+                pool,
+                document_id,
+                "retrieved document could not be persisted",
+            )
+            .await?;
+            return Err(error);
+        }
+    };
+    if let Err(error) = transaction.commit().await {
+        let _ = store.delete(&stored.opaque_id).await;
+        if matches!(
+            completion,
+            deepref_postgres::CompleteDocumentRetrievalOutcome::Applied
+        ) {
+            deepref_postgres::mark_document_retrieval_failed(
+                pool,
+                document_id,
+                "retrieved document transaction could not commit",
+            )
+            .await?;
+        }
+        return Err(error.into());
+    }
+    match completion {
+        deepref_postgres::CompleteDocumentRetrievalOutcome::Applied => {}
+        deepref_postgres::CompleteDocumentRetrievalOutcome::AlreadyCompleted => {
+            store.delete(&stored.opaque_id).await?;
+        }
+    }
+    Ok(DeliveryAction::Ack)
+}
+
+async fn handle_parse_document_job(
+    pool: &sqlx::PgPool,
+    job: &deepref_application::jobs::ClaimedJob,
+    document_store: Option<Arc<DocumentStore>>,
+    document_parser: Option<Arc<dyn DocumentParser>>,
+) -> anyhow::Result<DeliveryAction> {
+    let document_id = job
+        .payload
+        .get("document_id")
+        .and_then(serde_json::Value::as_str)
+        .ok_or_else(|| anyhow::anyhow!("parse_document payload is missing document_id"))?
+        .parse::<Uuid>()?;
+    let requested_version = job
+        .payload
+        .get("parser_version")
+        .and_then(serde_json::Value::as_str)
+        .unwrap_or(PARSER_VERSION);
+    if requested_version != PARSER_VERSION {
+        anyhow::bail!("parse_document requested unsupported parser version");
+    }
+    let document = deepref_postgres::get_document_by_id(pool, document_id).await?;
+    if document.active_parser_version.as_deref() == Some(PARSER_VERSION) {
+        return Ok(DeliveryAction::Ack);
+    }
+    let object_key = document
+        .object_key
+        .as_deref()
+        .ok_or_else(|| anyhow::anyhow!("document has no stored object"))?;
+    let store = match document_store {
+        Some(store) => store,
+        None => Arc::new(DocumentStore::from_env()?),
+    };
+    deepref_postgres::mark_document_parsing(pool, document_id).await?;
+    let parse_permit = pdf_parse_semaphore()
+        .acquire_owned()
+        .await
+        .map_err(|error| anyhow::anyhow!("PDF parser concurrency limiter closed: {error}"))?;
+    let parsed =
+        match parse_stored_document(&document, object_key, Arc::clone(&store), document_parser)
+            .await
+        {
+            Ok(parsed) => parsed,
+            Err(error) => {
+                drop(parse_permit);
+                deepref_postgres::mark_document_failed(pool, document_id, &error.to_string())
+                    .await?;
+                return Err(error);
+            }
+        };
+    drop(parse_permit);
+    deepref_postgres::persist_parsed_document(pool, document_id, &parsed, PARSER_VERSION).await?;
+    Ok(DeliveryAction::Ack)
+}
+
+async fn handle_recompute_metrics_job(
+    pool: &sqlx::PgPool,
+    payload: serde_json::Value,
+) -> anyhow::Result<DeliveryAction> {
+    let event: EventEnvelope<deepref_events::DomainPayload> = serde_json::from_value(payload)?;
+    let project_id = match event.payload {
+        deepref_events::DomainPayload::MetricsRecomputeRequested(p) => p.project_id,
+        _ => anyhow::bail!("recompute_metrics job has an unsupported payload"),
+    };
+    deepref_postgres::recompute_project_metrics(pool, project_id).await?;
+    Ok(DeliveryAction::Ack)
+}
+
 async fn handle_job_with_document_services_inner(
     pool: sqlx::PgPool,
     job: &deepref_application::jobs::ClaimedJob,
@@ -347,180 +595,19 @@ async fn handle_job_with_document_services_inner(
             let bytes = serde_json::to_vec(&job.payload)?;
             handle_message(pool, bytes, job.attempts.max(1) as u64, claim_lease).await
         }
-        "recompute_metrics" => {
-            let event: EventEnvelope<deepref_events::DomainPayload> =
-                serde_json::from_value(job.payload.clone())?;
-            let project_id = match event.payload {
-                deepref_events::DomainPayload::MetricsRecomputeRequested(payload) => {
-                    payload.project_id
-                }
-                _ => anyhow::bail!("recompute_metrics job has an unsupported payload"),
-            };
-            deepref_postgres::recompute_project_metrics(&pool, project_id).await?;
-            Ok(DeliveryAction::Ack)
-        }
+        "recompute_metrics" => handle_recompute_metrics_job(&pool, job.payload.clone()).await,
         "automation_run" => {
             let owner = owner.ok_or_else(|| {
                 anyhow::anyhow!("automation job processing requires its lease owner")
             })?;
             handle_automation_run(&pool, job, owner, ai_gateway.as_deref()).await
         }
-        // Pre-PR10 deployments may have queued this obsolete kind. The
-        // canonical PRISMA endpoint reads live tables directly, so acknowledge
-        // the legacy job without recreating a competing snapshot.
         "recompute_prisma" => Ok(DeliveryAction::Ack),
         "retrieve_document" => {
-            let document_id = job
-                .payload
-                .get("document_id")
-                .and_then(serde_json::Value::as_str)
-                .ok_or_else(|| anyhow::anyhow!("retrieve_document payload is missing document_id"))?
-                .parse::<Uuid>()?;
-            let document = deepref_postgres::get_document_by_id(&pool, document_id).await?;
-            if document.object_key.is_some()
-                && matches!(document.status.as_str(), "uploaded" | "available")
-            {
-                return Ok(DeliveryAction::Ack);
-            }
-            let external_url = document
-                .external_url
-                .as_deref()
-                .ok_or_else(|| anyhow::anyhow!("external document has no source URL"))?;
-            let store = match document_store {
-                Some(store) => store,
-                None => Arc::new(DocumentStore::from_env()?),
-            };
-            if !deepref_postgres::mark_document_retrieving(&pool, document_id).await? {
-                return Ok(DeliveryAction::Ack);
-            }
-            let fetcher: Arc<dyn RemoteDocumentFetcher> =
-                remote_fetcher.unwrap_or_else(|| Arc::new(HttpsPdfFetcher::default()));
-            let (stored, _) = match fetcher.fetch(external_url, &store).await {
-                Ok(result) => result,
-                Err(error) => {
-                    deepref_postgres::mark_document_retrieval_failed(
-                        &pool,
-                        document_id,
-                        &error.to_string(),
-                    )
-                    .await?;
-                    return Err(error.into());
-                }
-            };
-            let byte_size = match i64::try_from(stored.byte_size) {
-                Ok(value) => value,
-                Err(error) => {
-                    let _ = store.delete(&stored.opaque_id).await;
-                    deepref_postgres::mark_document_retrieval_failed(
-                        &pool,
-                        document_id,
-                        "retrieved document size overflowed persistence bounds",
-                    )
-                    .await?;
-                    return Err(error.into());
-                }
-            };
-            let mut transaction = pool.begin().await?;
-            let completion = match deepref_postgres::complete_document_retrieval(
-                &mut transaction,
-                deepref_domain::ProjectId::new(document.project_id),
-                document_id,
-                &stored.opaque_id,
-                &stored.sha256,
-                byte_size,
-            )
-            .await
-            {
-                Ok(outcome) => outcome,
-                Err(error) => {
-                    let _ = transaction.rollback().await;
-                    let _ = store.delete(&stored.opaque_id).await;
-                    deepref_postgres::mark_document_retrieval_failed(
-                        &pool,
-                        document_id,
-                        "retrieved document could not be persisted",
-                    )
-                    .await?;
-                    return Err(error);
-                }
-            };
-            if let Err(error) = transaction.commit().await {
-                let _ = store.delete(&stored.opaque_id).await;
-                if matches!(
-                    completion,
-                    deepref_postgres::CompleteDocumentRetrievalOutcome::Applied
-                ) {
-                    deepref_postgres::mark_document_retrieval_failed(
-                        &pool,
-                        document_id,
-                        "retrieved document transaction could not commit",
-                    )
-                    .await?;
-                }
-                return Err(error.into());
-            }
-            match completion {
-                deepref_postgres::CompleteDocumentRetrievalOutcome::Applied => {}
-                deepref_postgres::CompleteDocumentRetrievalOutcome::AlreadyCompleted => {
-                    store.delete(&stored.opaque_id).await?;
-                }
-            }
-            Ok(DeliveryAction::Ack)
+            handle_retrieve_document_job(&pool, job, document_store, remote_fetcher).await
         }
         "parse_document" => {
-            let document_id = job
-                .payload
-                .get("document_id")
-                .and_then(serde_json::Value::as_str)
-                .ok_or_else(|| anyhow::anyhow!("parse_document payload is missing document_id"))?
-                .parse::<Uuid>()?;
-            let requested_version = job
-                .payload
-                .get("parser_version")
-                .and_then(serde_json::Value::as_str)
-                .unwrap_or(PARSER_VERSION);
-            if requested_version != PARSER_VERSION {
-                anyhow::bail!("parse_document requested unsupported parser version");
-            }
-            let document = deepref_postgres::get_document_by_id(&pool, document_id).await?;
-            if document.active_parser_version.as_deref() == Some(PARSER_VERSION) {
-                return Ok(DeliveryAction::Ack);
-            }
-            let object_key = document
-                .object_key
-                .as_deref()
-                .ok_or_else(|| anyhow::anyhow!("document has no stored object"))?;
-            let store = match document_store {
-                Some(store) => store,
-                None => Arc::new(DocumentStore::from_env()?),
-            };
-            deepref_postgres::mark_document_parsing(&pool, document_id).await?;
-            let parse_permit = pdf_parse_semaphore()
-                .acquire_owned()
-                .await
-                .map_err(|error| {
-                    anyhow::anyhow!("PDF parser concurrency limiter closed: {error}")
-                })?;
-            let parsed = match parse_stored_document(
-                &document,
-                object_key,
-                Arc::clone(&store),
-                document_parser,
-            )
-            .await
-            {
-                Ok(parsed) => parsed,
-                Err(error) => {
-                    drop(parse_permit);
-                    deepref_postgres::mark_document_failed(&pool, document_id, &error.to_string())
-                        .await?;
-                    return Err(error);
-                }
-            };
-            drop(parse_permit);
-            deepref_postgres::persist_parsed_document(&pool, document_id, &parsed, PARSER_VERSION)
-                .await?;
-            Ok(DeliveryAction::Ack)
+            handle_parse_document_job(&pool, job, document_store, document_parser).await
         }
         other => anyhow::bail!("unsupported durable job kind: {other}"),
     }

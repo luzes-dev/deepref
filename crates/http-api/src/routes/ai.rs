@@ -15,8 +15,8 @@ use utoipa::ToSchema;
 use uuid::Uuid;
 
 use super::{
+    actor::extract_actor,
     pagination::{PaginatedResponse, PaginationParams, page},
-    review::extract_actor,
 };
 use crate::{
     error::{ApiError, ErrorResponse},

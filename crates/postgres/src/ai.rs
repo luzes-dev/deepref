@@ -732,24 +732,32 @@ async fn persist_run_evidence(
     Ok(())
 }
 
+fn same_model_route(a: &deepref_ai::ResolvedModel, b: &deepref_ai::ResolvedModel) -> bool {
+    a.profile == b.profile
+        && a.provider == b.provider
+        && a.model == b.model
+        && a.model_version == b.model_version
+        && a.parameters == b.parameters
+}
+
+fn same_run_hashes(a: &AiRunRecord, b: &AiRunRecord) -> bool {
+    a.prompt_version == b.prompt_version
+        && a.prompt_hash == b.prompt_hash
+        && a.schema_version == b.schema_version
+        && a.schema_hash == b.schema_hash
+        && a.input_hash == b.input_hash
+        && a.reuse_hash == b.reuse_hash
+        && a.protocol_hash == b.protocol_hash
+        && a.document_hash == b.document_hash
+        && a.evidence_hash == b.evidence_hash
+}
+
 fn same_run_identity(existing: &AiRunRecord, incoming: &AiRunRecord) -> bool {
     existing.id == incoming.id
         && existing.project_id == incoming.project_id
         && existing.task_kind == incoming.task_kind
-        && existing.route.profile == incoming.route.profile
-        && existing.route.provider == incoming.route.provider
-        && existing.route.model == incoming.route.model
-        && existing.route.model_version == incoming.route.model_version
-        && existing.route.parameters == incoming.route.parameters
-        && existing.prompt_version == incoming.prompt_version
-        && existing.prompt_hash == incoming.prompt_hash
-        && existing.schema_version == incoming.schema_version
-        && existing.schema_hash == incoming.schema_hash
-        && existing.input_hash == incoming.input_hash
-        && existing.reuse_hash == incoming.reuse_hash
-        && existing.protocol_hash == incoming.protocol_hash
-        && existing.document_hash == incoming.document_hash
-        && existing.evidence_hash == incoming.evidence_hash
+        && same_model_route(&existing.route, &incoming.route)
+        && same_run_hashes(existing, incoming)
         && existing.evidence_refs == incoming.evidence_refs
         && existing.parent_automation_run_id == incoming.parent_automation_run_id
         && existing.created_at.timestamp_micros() == incoming.created_at.timestamp_micros()

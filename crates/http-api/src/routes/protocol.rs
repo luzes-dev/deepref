@@ -14,7 +14,7 @@ use serde_json::json;
 use utoipa::ToSchema;
 use uuid::Uuid;
 
-use super::review::{Actor, extract_actor};
+use super::actor::{Actor, extract_actor};
 use crate::{
     error::{ApiError, ErrorResponse},
     state::AppState,

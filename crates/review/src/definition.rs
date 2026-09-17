@@ -686,7 +686,7 @@ fn compile_definition(source: DefinitionSource) -> Result<CompiledReviewDefiniti
     })
 }
 
-fn validate_workflow(
+fn validate_workflow_identity(
     key: ReviewDefinitionKey,
     definition_id: &str,
     definition_version: u32,
@@ -710,7 +710,12 @@ fn validate_workflow(
             "workflow requires nodes".to_owned(),
         ));
     }
+    Ok(())
+}
 
+fn build_workflow_node_index(
+    workflow: &ReviewWorkflow,
+) -> Result<BTreeMap<&str, &ReviewWorkflowNode>, ReviewError> {
     let mut nodes = BTreeMap::new();
     for node in &workflow.nodes {
         if node.id.trim().is_empty() || node.version == 0 {
@@ -732,7 +737,13 @@ fn validate_workflow(
             ));
         }
     }
+    Ok(nodes)
+}
 
+fn validate_workflow_endpoints(
+    workflow: &ReviewWorkflow,
+    nodes: &BTreeMap<&str, &ReviewWorkflowNode>,
+) -> Result<(), ReviewError> {
     let Some(entrypoint) = nodes.get(workflow.entrypoint.as_str()) else {
         return Err(ReviewError::InvalidWorkflow(
             "entrypoint does not name a node".to_owned(),
@@ -754,7 +765,13 @@ fn validate_workflow(
             "workflow requires exactly one terminal finalize node".to_owned(),
         ));
     }
+    Ok(())
+}
 
+fn validate_workflow_transitions(
+    workflow: &ReviewWorkflow,
+    nodes: &BTreeMap<&str, &ReviewWorkflowNode>,
+) -> Result<(), ReviewError> {
     for node in &workflow.nodes {
         let mut predicates = BTreeSet::new();
         for transition in &node.transitions {
@@ -777,9 +794,13 @@ fn validate_workflow(
             }
         }
     }
+    Ok(())
+}
 
-    validate_task_binding(key, &workflow.nodes)?;
-
+fn validate_workflow_reachability(
+    workflow: &ReviewWorkflow,
+    nodes: &BTreeMap<&str, &ReviewWorkflowNode>,
+) -> Result<(), ReviewError> {
     let mut reachable = BTreeSet::new();
     let mut queue = VecDeque::from([workflow.entrypoint.as_str()]);
     while let Some(node_id) = queue.pop_front() {
@@ -798,6 +819,21 @@ fn validate_workflow(
             "workflow contains unreachable nodes".to_owned(),
         ));
     }
+    Ok(())
+}
+
+fn validate_workflow(
+    key: ReviewDefinitionKey,
+    definition_id: &str,
+    definition_version: u32,
+    workflow: &ReviewWorkflow,
+) -> Result<(), ReviewError> {
+    validate_workflow_identity(key, definition_id, definition_version, workflow)?;
+    let nodes = build_workflow_node_index(workflow)?;
+    validate_workflow_endpoints(workflow, &nodes)?;
+    validate_workflow_transitions(workflow, &nodes)?;
+    validate_task_binding(key, &workflow.nodes)?;
+    validate_workflow_reachability(workflow, &nodes)?;
     Ok(())
 }
 
