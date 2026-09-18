@@ -360,10 +360,7 @@ const GET_ENDPOINT_RESPONSES: ReadonlyMap<string, EndpointResponse> = new Map([
 	],
 	[`/api/projects/${VISUAL_PROJECT_ID}/automations/runs`, { body: automationRuns, status: 200 }],
 	[`/api/projects/${VISUAL_PROJECT_ID}/assistant/tools`, { body: assistantTools, status: 200 }],
-	[
-		`/api/projects/${VISUAL_PROJECT_ID}/assistant/conversations`,
-		{ body: [], status: 200 }
-	],
+	[`/api/projects/${VISUAL_PROJECT_ID}/assistant/conversations`, { body: [], status: 200 }],
 	[
 		`/api/projects/${VISUAL_PROJECT_ID}/deduplication/proposals`,
 		{ body: pageOf(dedupeProposals), status: 200 }

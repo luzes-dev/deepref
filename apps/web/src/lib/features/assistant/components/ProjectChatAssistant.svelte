@@ -343,7 +343,10 @@
 						: toolCall
 				);
 				assistantTurn.citations = [
-					...new Set([...assistantTurn.citations, ...harvestCitations(event.tool, event.output)])
+					...new Set([
+						...assistantTurn.citations,
+						...harvestCitations(event.tool, event.output)
+					])
 				].slice(0, 8);
 				break;
 			}
@@ -376,7 +379,10 @@
 					projectId,
 					deriveConversationTitle(message)
 				);
-				conversations = [conversation, ...conversations.filter((c) => c.id !== conversation.id)];
+				conversations = [
+					conversation,
+					...conversations.filter((c) => c.id !== conversation.id)
+				];
 				activeConversationId = conversation.id;
 				turns = [];
 			} catch (error: unknown) {

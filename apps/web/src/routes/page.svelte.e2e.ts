@@ -110,13 +110,16 @@ async function mockHealth(page: Page) {
 
 async function mockWorkspace(page: Page, options: WorkspaceMockOptions = {}) {
 	await mockHealth(page);
-	await page.route(/http:\/\/localhost:4173\/api\/notifications(?:\/unread-count)?$/, async (route) => {
-		await route.fulfill({
-			json: route.request().url().includes('unread-count')
-				? { unread_count: 0 }
-				: { items: [], next_cursor: null }
-		});
-	});
+	await page.route(
+		/http:\/\/localhost:4173\/api\/notifications(?:\/unread-count)?$/,
+		async (route) => {
+			await route.fulfill({
+				json: route.request().url().includes('unread-count')
+					? { unread_count: 0 }
+					: { items: [], next_cursor: null }
+			});
+		}
+	);
 	await page.route(/http:\/\/localhost:4173\/api\/projects(?:\?.*)?$/, async (route) => {
 		await route.fulfill({ json: pageOf([project]) });
 	});
@@ -426,7 +429,10 @@ test('shows dependency degradation without blocking core workspace views', async
 	});
 	await page.goto('/');
 
-	const toast = page.locator('[data-sonner-toast]').filter({ hasText: 'Some features are degraded' }).first();
+	const toast = page
+		.locator('[data-sonner-toast]')
+		.filter({ hasText: 'Some features are degraded' })
+		.first();
 	await expect(toast).toBeVisible();
 	await expect(toast).toContainText('worker: degraded · backlog 7');
 	await expect(toast).toContainText(
