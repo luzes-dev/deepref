@@ -113,6 +113,13 @@ async function mockProjectShell(page: Page): Promise<void> {
 	await page.route(/\/api\/ingestions(?:\?.*)?$/, (route) =>
 		route.fulfill({ json: { items: [], next_cursor: null } })
 	);
+	await page.route(/\/api\/notifications(?:\/unread-count)?$/, (route) =>
+		route.fulfill({
+			json: route.request().url().includes('unread-count')
+				? { unread_count: 0 }
+				: { items: [], next_cursor: null }
+		})
+	);
 }
 
 async function mockAutomationEndpoints(

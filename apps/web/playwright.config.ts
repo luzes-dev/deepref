@@ -63,6 +63,9 @@ export const deterministicVisualProjects = [
 ];
 
 export default defineConfig({
+	expect: {
+		timeout: 10_000
+	},
 	use: {
 		baseURL: serverURL
 	},

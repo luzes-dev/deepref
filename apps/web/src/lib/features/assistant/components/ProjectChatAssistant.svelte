@@ -318,42 +318,52 @@
 	}
 
 	function handleStreamEvent(event: AssistantChatStreamEvent, turn: ChatTurn): void {
-		if (turn.kind !== 'assistant') return;
+		const assistantTurn = turns.find((t) => t.id === turn.id);
+		if (!assistantTurn || assistantTurn.kind !== 'assistant') return;
 		switch (event.event) {
 			case 'token':
-				turn.content += event.delta;
+				assistantTurn.content += event.delta;
 				break;
 			case 'tool_start':
-				turn.tools.push({
-					toolCallId: event.tool_call_id,
-					tool: event.tool,
-					args: event.args,
-					status: 'running',
-					output: null
-				});
+				assistantTurn.tools = [
+					...assistantTurn.tools,
+					{
+						toolCallId: event.tool_call_id,
+						tool: event.tool,
+						args: event.args,
+						status: 'running',
+						output: null
+					}
+				];
 				break;
 			case 'tool_complete': {
-				const target = turn.tools.find(
-					(toolCall) => toolCall.toolCallId === event.tool_call_id
+				assistantTurn.tools = assistantTurn.tools.map((toolCall) =>
+					toolCall.toolCallId === event.tool_call_id
+						? { ...toolCall, status: 'completed', output: event.output }
+						: toolCall
 				);
-				if (target) {
-					target.status = 'completed';
-					target.output = event.output;
-					turn.citations.push(...harvestCitations(event.tool, event.output));
-					turn.citations = [...new Set(turn.citations)].slice(0, 8);
-				}
+				assistantTurn.citations = [
+					...new Set([
+						...assistantTurn.citations,
+						...harvestCitations(event.tool, event.output)
+					])
+				].slice(0, 8);
 				break;
 			}
 			case 'proposal_created':
-				turn.proposals.push({ tool: event.tool, reviewRunId: event.review_run_id });
+				assistantTurn.proposals = [
+					...assistantTurn.proposals,
+					{ tool: event.tool, reviewRunId: event.review_run_id }
+				];
 				break;
 			case 'done':
-				turn.tokens = { input: event.input_tokens, output: event.output_tokens };
+				assistantTurn.tokens = { input: event.input_tokens, output: event.output_tokens };
 				break;
 			case 'error':
 				streamError = event.message;
 				break;
 		}
+		turns = [...turns];
 	}
 
 	async function send(): Promise<void> {
@@ -369,7 +379,10 @@
 					projectId,
 					deriveConversationTitle(message)
 				);
-				conversations = [conversation, ...conversations];
+				conversations = [
+					conversation,
+					...conversations.filter((c) => c.id !== conversation.id)
+				];
 				activeConversationId = conversation.id;
 				turns = [];
 			} catch (error: unknown) {
@@ -382,10 +395,14 @@
 		}
 
 		const conversationId = activeConversationId;
-		turns.push({ kind: 'user', id: crypto.randomUUID(), content: message, createdAt: null });
-		turns.push(emptyAssistantTurn());
-		const assistantTurn = turns[turns.length - 1];
-		if (!assistantTurn || assistantTurn.kind !== 'assistant') return;
+		const userTurn: ChatTurn = {
+			kind: 'user',
+			id: crypto.randomUUID(),
+			content: message,
+			createdAt: null
+		};
+		const assistantTurn = emptyAssistantTurn();
+		turns = [...turns, userTurn, assistantTurn];
 		streamingTurnId = assistantTurn.id;
 
 		try {

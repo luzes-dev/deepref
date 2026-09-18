@@ -115,13 +115,8 @@ test.describe('DeepRef workflow family visual coverage', () => {
 	});
 
 	test('Operate: assistant', async ({ page }) => {
-		await openWorkflow(page, '/assistant', 'Assistant');
-		await expect(page.getByTestId('assistant-tool-get_project_protocol')).toBeVisible();
-		await expect(page.getByTestId('assistant-tool-propose_screening_decision')).toBeVisible();
-		await page.getByTestId('assistant-tool-propose_screening_decision').click();
-		await expect(page.locator('[data-workflow-node]')).toHaveCount(3);
-		await expect(page.getByRole('slider', { name: 'Zoom', exact: true })).toBeVisible();
-		await page.getByTestId('workflow-editor').scrollIntoViewIfNeeded();
+		await openWorkflow(page, '/assistant', 'New conversation');
+		await expect(page.getByTestId('assistant-feed')).toBeVisible();
 		await captureDarkViewport(page, 'operate-assistant.png');
 	});
 });

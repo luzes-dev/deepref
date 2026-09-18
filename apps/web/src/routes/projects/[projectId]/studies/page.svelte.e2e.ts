@@ -28,6 +28,16 @@ async function mockProjectShell(page: Page): Promise<void> {
 	await page.route(/http:\/\/localhost:4173\/api\/ingestions(?:\?.*)?$/, async (route) => {
 		await route.fulfill({ json: { items: [], next_cursor: null } });
 	});
+	await page.route(
+		/http:\/\/localhost:4173\/api\/notifications(?:\/unread-count)?$/,
+		async (route) => {
+			if (route.request().url().includes('unread-count')) {
+				await route.fulfill({ json: { count: 0, latest_revision: 0 } });
+			} else {
+				await route.fulfill({ json: { items: [], next_cursor: null } });
+			}
+		}
+	);
 }
 
 const report = {

@@ -216,7 +216,7 @@
 			});
 		} catch (error) {
 			notifyError(
-				'Protocol could not be saved',
+				isConflict(error) ? 'Protocol changed elsewhere' : 'Protocol could not be saved',
 				error,
 				'The protocol draft could not be saved.',
 				{
