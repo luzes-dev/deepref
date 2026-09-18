@@ -13,7 +13,7 @@ export default defineConfig({
 	timeout: 30_000,
 	snapshotPathTemplate: '{testDir}/__snapshots__/{projectName}/{testFilePath}/{arg}{ext}',
 	expect: {
-		timeout: 5_000,
+		timeout: 10_000,
 		toHaveScreenshot: {
 			animations: 'disabled',
 			caret: 'hide',

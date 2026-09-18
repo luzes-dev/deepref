@@ -1,15 +1,6 @@
 import { test, expect } from './fixtures';
 import type { Page } from '@playwright/test';
 
-async function openEditor(page: Page): Promise<void> {
-	await page.goto('/projects/visual-project/automations');
-	await page.getByTestId('automation-add-definition').click();
-	await expect(page.getByTestId('workflow-editor')).toBeVisible();
-	await expect(page.locator('[data-workflow-viewport]')).toHaveCount(1);
-	await expect(page.locator('[data-workflow-node]').first()).toBeVisible();
-	await expect(page.getByRole('slider', { name: 'Zoom', exact: true })).toBeVisible();
-}
-
 async function zoom(page: Page): Promise<number> {
 	return page.locator('[data-workflow-viewport]').evaluate((element) => {
 		const transform = getComputedStyle(element).transform;
@@ -32,6 +23,16 @@ async function expectSynchronizedZoom(page: Page): Promise<void> {
 			});
 		})
 		.toBe(true);
+}
+
+async function openEditor(page: Page): Promise<void> {
+	await page.goto('/projects/visual-project/automations');
+	await page.getByTestId('automation-add-definition').click();
+	await expect(page.getByTestId('workflow-editor')).toBeVisible();
+	await expect(page.locator('[data-workflow-viewport]')).toHaveCount(1);
+	await expect(page.locator('[data-workflow-node]').first()).toBeVisible();
+	await expect(page.getByRole('slider', { name: 'Zoom', exact: true })).toBeVisible();
+	await expectSynchronizedZoom(page);
 }
 
 test('workflow viewport controls follow wheel and trackpad zoom', async ({ page }) => {

@@ -74,6 +74,13 @@ async function mockProjectShell(page: Page): Promise<void> {
 	await page.route(/http:\/\/localhost:4173\/api\/ingestions(?:\?.*)?$/, async (route) => {
 		await route.fulfill({ json: { items: [], next_cursor: null } });
 	});
+	await page.route(/http:\/\/localhost:4173\/api\/notifications(?:\/unread-count)?$/, async (route) => {
+		await route.fulfill({
+			json: route.request().url().includes('unread-count')
+				? { unread_count: 0 }
+				: { items: [], next_cursor: null }
+		});
+	});
 }
 
 test('deep-links, refreshes, publishes, and amends a protocol version', async ({ page }) => {
@@ -97,6 +104,13 @@ test('deep-links, refreshes, publishes, and amends a protocol version', async ({
 	);
 	await page.route(/http:\/\/localhost:4173\/api\/ingestions(?:\?.*)?$/, async (route) => {
 		await route.fulfill({ json: { items: [], next_cursor: null } });
+	});
+	await page.route(/http:\/\/localhost:4173\/api\/notifications(?:\/unread-count)?$/, async (route) => {
+		await route.fulfill({
+			json: route.request().url().includes('unread-count')
+				? { unread_count: 0 }
+				: { items: [], next_cursor: null }
+		});
 	});
 	await page.route(
 		'http://localhost:4173/api/projects/project-1/review/protocol',
@@ -283,7 +297,7 @@ test('reconciles a stale save conflict before saving the refreshed revision', as
 	await page.getByRole('button', { name: 'Save draft' }).click();
 	await expect(page.getByText('Protocol changed elsewhere')).toBeVisible();
 
-	await page.locator('[data-slot="alert-action"]').click();
+	await page.getByRole('button', { name: 'Refresh' }).click();
 	await expect(page.getByLabel('Name')).toHaveValue('Authoritative server protocol');
 	await page.getByLabel('Name').fill('Recovered and saved');
 	await page.getByRole('button', { name: 'Save draft' }).click();

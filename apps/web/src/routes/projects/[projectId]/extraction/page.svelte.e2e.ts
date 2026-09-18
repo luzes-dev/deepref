@@ -119,6 +119,13 @@ async function mockExtractionPage(page: Page, decisionMode: DecisionMode): Promi
 	await page.route(/\/api\/ingestions(?:\?.*)?$/, (route) =>
 		route.fulfill({ json: { items: [], next_cursor: null } })
 	);
+	await page.route(/\/api\/notifications(?:\/unread-count)?$/, (route) =>
+		route.fulfill({
+			json: route.request().url().includes('unread-count')
+				? { unread_count: 0 }
+				: { items: [], next_cursor: null }
+		})
+	);
 	await page.route(/\/api\/projects\/project-1\/reports(?:\?.*)?$/, (route) =>
 		route.fulfill({ json: { items: [], next_cursor: null } })
 	);
@@ -302,9 +309,9 @@ test('keeps a proposal visible when approval conflicts', async ({ page }) => {
 	await page.getByRole('button', { name: 'Generate proposal' }).click();
 	await expect(page.getByTestId('extraction-proposal-editor')).toBeVisible();
 	await page.getByRole('button', { name: 'Reject proposal' }).click();
-	await expect(page.getByRole('alert').filter({ hasText: 'Review conflict' })).toContainText(
-		'Review conflict'
-	);
+	await expect(
+		page.locator('[data-sonner-toast]').filter({ hasText: 'Review conflict' })
+	).toContainText('Review conflict');
 	await expect(page.getByTestId('extraction-proposal-editor')).toBeVisible();
 	const rejectBody: unknown = JSON.parse(state.decisionBody);
 	expect(rejectBody).toEqual({

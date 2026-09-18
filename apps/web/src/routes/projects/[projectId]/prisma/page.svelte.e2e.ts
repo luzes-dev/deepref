@@ -69,6 +69,13 @@ async function mockPrismaWorkspace(page: Page): Promise<void> {
 	await page.route(/\/api\/ingestions(?:\?.*)?$/, (route) =>
 		route.fulfill({ json: { items: [], next_cursor: null } })
 	);
+	await page.route(/\/api\/notifications(?:\/unread-count)?$/, (route) =>
+		route.fulfill({
+			json: route.request().url().includes('unread-count')
+				? { unread_count: 0 }
+				: { items: [], next_cursor: null }
+		})
+	);
 	await page.route(/\/api\/projects\/project-1\/reports(?:\?.*)?$/, (route) =>
 		route.fulfill({ json: { items: [], next_cursor: null } })
 	);
@@ -156,5 +163,7 @@ test('PRISMA page renders canonical reconciliation and deterministic exports', a
 	expect(download.suggestedFilename()).toBe(`deepref-${projectId}-reports.csv`);
 
 	await page.getByRole('button', { name: 'Audit CSV', exact: true }).click();
-	await expect(page.getByRole('alert')).toContainText('audit export failed');
+	await expect(
+		page.locator('[data-sonner-toast]').filter({ hasText: 'audit export failed' })
+	).toBeVisible();
 });
