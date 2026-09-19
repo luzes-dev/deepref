@@ -1,7 +1,12 @@
 # DeepRef
 
-DeepRef maps article citation networks from seed DOIs. It ships a SvelteKit web
-app, a Rust Axum API, a Rust worker, and PostgreSQL state plus graph storage.
+DeepRef is an open-source workspace for systematic reviews built to use AI without giving up traceability.
+
+AI works from the evidence in your review, with the documents, citations, protocol, and review state kept alongside every task. Its output is treated as a proposal, not as scientific truth. You can inspect the evidence behind it, review the result, and decide what becomes part of the review.
+
+Around that model, DeepRef covers the rest of the workflow: importing and deduplicating literature, title and abstract screening, full-text review, study grouping, appraisal, extraction, PRISMA, citation-graph exploration, recommendations, and repeatable automations.
+
+The goal is not to automate researchers out of the process. It is to make more of the review computable while keeping the reasoning and evidence inspectable.
 
 ## Layout
 
