@@ -3,7 +3,6 @@
 	import { createVirtualizer } from '@tanstack/svelte-virtual';
 	import { getCoreRowModel, type ColumnDef, type RowData } from '@tanstack/table-core';
 	import { Button } from '@deepref/ui/button';
-	import * as Card from '@deepref/ui/card';
 	import { createSvelteTable } from '@deepref/ui/data-table';
 	import { Badge } from '@deepref/ui/badge';
 	import { get } from 'svelte/store';
@@ -29,24 +28,34 @@
 		onLoadMore: () => void | Promise<void>;
 	} = $props();
 
-	let scrollElement = $state<HTMLDivElement | null>(null);
 	const columns: ColumnDef<Row>[] = [
-		{ id: 'title', header: 'Title', accessorKey: 'title' },
-		{ id: 'year', header: 'Year', accessorKey: 'publication_year' },
-		{ id: 'status', header: 'Status', accessorKey: 'title_abstract_status' }
+		{
+			accessorKey: 'title',
+			header: 'Report'
+		},
+		{
+			accessorKey: 'publication_year',
+			header: 'Year'
+		},
+		{
+			accessorKey: 'title_abstract_status',
+			header: 'Status'
+		}
 	];
-	const table = createSvelteTable({
+
+	const table = createSvelteTable<Row>({
 		get data() {
 			return items as Row[];
 		},
 		columns,
-		getRowId: (row) => row.report_id,
 		getCoreRowModel: getCoreRowModel()
 	});
-	const virtualizer = createVirtualizer<HTMLDivElement, HTMLDivElement>({
-		count: 0,
+
+	let scrollElement: HTMLDivElement | null = $state(null);
+	const virtualizer = createVirtualizer({
+		count: items.length,
 		getScrollElement: () => scrollElement,
-		estimateSize: () => 72,
+		estimateSize: () => 56,
 		overscan: 8
 	});
 	let virtualCount = 0;
@@ -70,33 +79,31 @@
 	}
 </script>
 
-<Card.Root class="min-h-[28rem]" data-testid="screening-table">
-	<Card.Header class="gap-3 border-b border-border/60 pb-4">
-		<div class="flex flex-wrap items-start justify-between gap-3">
-			<div class="flex items-center gap-2">
-				<span
-					class="flex size-8 items-center justify-center rounded-lg bg-primary/10 text-primary"
-				>
-					<FileText aria-hidden="true" />
-				</span>
-				<div>
-					<Card.Title>Table mode</Card.Title>
-					<Card.Description
-						>Scan the queue and select a report to open focus mode.</Card.Description
-					>
-				</div>
+<div class="flex min-h-[28rem] flex-col gap-4" data-testid="screening-table">
+	<div class="flex flex-wrap items-start justify-between gap-3 border-b border-border/60 pb-3">
+		<div class="flex items-center gap-2">
+			<span
+				class="flex size-8 items-center justify-center rounded-lg bg-primary/10 text-primary"
+			>
+				<FileText aria-hidden="true" />
+			</span>
+			<div>
+				<h2 class="text-base font-semibold">Table mode</h2>
+				<p class="text-xs text-muted-foreground">
+					Scan the queue and select a report to open focus mode.
+				</p>
 			</div>
-			{#if loadingNextPage}
-				<span
-					class="flex items-center gap-1.5 text-xs text-muted-foreground"
-					aria-live="polite"
-				>
-					<LoaderCircle class="animate-spin" aria-hidden="true" /> Loading more…
-				</span>
-			{/if}
 		</div>
-	</Card.Header>
-	<Card.Content class="p-0">
+		{#if loadingNextPage}
+			<span
+				class="flex items-center gap-1.5 text-xs text-muted-foreground"
+				aria-live="polite"
+			>
+				<LoaderCircle class="animate-spin" aria-hidden="true" /> Loading more…
+			</span>
+		{/if}
+	</div>
+	<div class="overflow-hidden rounded-lg border">
 		<div
 			bind:this={scrollElement}
 			onscroll={handleScroll}
@@ -128,34 +135,21 @@
 				</div>
 			{:else}
 				<div style={`height: ${$virtualizer.getTotalSize()}px; position: relative;`}>
-					{#each $virtualizer.getVirtualItems() as virtualRow (virtualRow.key)}
+					{#each $virtualizer.getVirtualItems() as virtualRow (virtualRow.index)}
 						{@const row = table.getRowModel().rows[virtualRow.index]}
 						{#if row}
 							<button
 								type="button"
 								role="row"
-								class="absolute left-0 grid min-h-[4.5rem] w-full grid-cols-[minmax(12rem,1fr)_5rem_7rem] gap-0 border-b border-border/60 px-4 py-3 text-left text-sm transition-colors hover:bg-muted/50 data-[selected=true]:bg-primary/10 data-[selected=true]:shadow-[inset_3px_0_0_var(--primary)]"
-								data-selected={row.original.report_id === selectedReport
-									? 'true'
-									: undefined}
-								style={`transform: translateY(${virtualRow.start}px);`}
+								class="absolute top-0 left-0 grid w-full grid-cols-[minmax(12rem,1fr)_5rem_7rem] items-center border-b px-4 text-left text-xs transition-colors hover:bg-muted/50 {row
+									.original.report_id === selectedReport
+									? 'bg-muted/70 font-medium'
+									: ''}"
+								style={`transform: translateY(${virtualRow.start}px); height: ${virtualRow.size}px;`}
 								onclick={() => onSelect(row.original.report_id)}
 							>
-								<span role="cell" class="flex min-w-0 items-start gap-2 pr-3">
-									<span
-										class="mt-0.5 flex size-6 shrink-0 items-center justify-center rounded-md bg-muted text-muted-foreground"
-									>
-										<FileText aria-hidden="true" />
-									</span>
-									<span class="min-w-0">
-										<span class="block truncate font-medium"
-											>{row.original.title ?? 'Untitled report'}</span
-										>
-										<span
-											class="mt-1 block truncate text-xs text-muted-foreground"
-											>{row.original.doi ?? 'Identifier unavailable'}</span
-										>
-									</span>
+								<span role="cell" class="truncate pr-3 font-medium">
+									{row.original.title ?? 'Untitled'}
 								</span>
 								<span role="cell" class="pt-1 text-muted-foreground"
 									>{row.original.publication_year ?? '—'}</span
@@ -178,7 +172,7 @@
 			{/if}
 		</div>
 		{#if hasNextPage}
-			<div class="flex justify-center p-4">
+			<div class="flex justify-center border-t p-4">
 				<Button
 					variant="outline"
 					disabled={loadingNextPage}
@@ -188,5 +182,5 @@
 				</Button>
 			</div>
 		{/if}
-	</Card.Content>
-</Card.Root>
+	</div>
+</div>

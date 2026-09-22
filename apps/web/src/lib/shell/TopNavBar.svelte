@@ -148,9 +148,9 @@
 				{@render titleSnippet()}
 			</div>
 		{:else}
-			<span class="text-sm font-medium tracking-tight text-foreground select-none">
+			<h1 class="text-sm font-medium tracking-tight text-foreground select-none">
 				{title}
-			</span>
+			</h1>
 		{/if}
 	</div>
 

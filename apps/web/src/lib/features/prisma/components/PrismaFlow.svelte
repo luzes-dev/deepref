@@ -7,7 +7,8 @@
 	import { Badge } from '@deepref/ui/badge';
 	import { Button } from '@deepref/ui/button';
 	import { Skeleton } from '@deepref/ui/skeleton';
-	import { PageHeader, PageToolbar, StatePanel, Surface, MetricTile } from '@deepref/ui/layout';
+	import { PageToolbar, StatePanel, MetricTile } from '@deepref/ui/layout';
+	import PageTemplate from '$lib/shell/PageTemplate.svelte';
 	import { useProjectWorkspaceContext } from '$lib/features/projects/context.svelte.js';
 	import { notifyError } from '$lib/features/notifications/toast';
 	import DownloadIcon from '@lucide/svelte/icons/download';
@@ -119,185 +120,156 @@
 	}
 </script>
 
-<section
-	class="flex h-full min-h-0 flex-col overflow-auto bg-background"
-	aria-label="PRISMA flow"
-	tabindex="-1"
-	data-testid="prisma-page"
->
-	<div class="mx-auto flex w-full max-w-[1440px] flex-col gap-5 p-4 sm:gap-6 sm:p-6 lg:p-8">
-		<PageHeader
-			title="PRISMA flow"
-			description="See how articles move through your review and export the results."
-		/>
-
-		{#if query.isPending}
-			<Surface as="section" tone="subtle" class="p-4 sm:p-6">
-				<StatePanel
-					state="loading"
-					title="Assembling PRISMA projection"
-					description="Reconciling screening, retrieval, and inclusion counts."
-				/>
-			</Surface>
-		{:else if query.error}
-			<Surface as="section" tone="subtle" class="p-4 sm:p-6">
-				<StatePanel
-					state="error"
-					title="PRISMA projection unavailable"
-					description={`Unable to load the PRISMA projection: ${query.error.message}`}
-				/>
-			</Surface>
-		{:else if projection}
-			<PageToolbar label="PRISMA projection status">
-				<div class="flex flex-wrap items-center gap-2 text-sm">
-					<Badge variant="secondary"
-						>{projection.as_of
-							? `Updated ${new Date(projection.as_of).toLocaleDateString()}`
-							: 'No decisions yet'}</Badge
-					>
-					<Badge variant="outline"
-						>{projection.pending_dedupe_proposals} pending dedupe</Badge
-					>
-					<Badge variant="outline"
-						>Max per-report screening revision: {projection.screening_high_watermark}</Badge
-					>
-				</div>
-			</PageToolbar>
-
-			<div class="grid gap-5 lg:grid-cols-[minmax(0,1.35fr)_minmax(20rem,0.65fr)]">
-				<Surface
-					as="section"
-					tone="default"
-					class="min-w-0 overflow-hidden"
-					label="PRISMA diagram"
+<PageTemplate testId="prisma-page" maxWidth="default" aria-label="PRISMA flow" tabindex="-1">
+	{#if query.isPending}
+		<div class="p-4 sm:p-6">
+			<StatePanel
+				state="loading"
+				title="Assembling PRISMA projection"
+				description="Reconciling screening, retrieval, and inclusion counts."
+			/>
+		</div>
+	{:else if query.error}
+		<div class="p-4 sm:p-6">
+			<StatePanel
+				state="error"
+				title="PRISMA projection unavailable"
+				description={`Unable to load the PRISMA projection: ${query.error.message}`}
+			/>
+		</div>
+	{:else if projection}
+		<PageToolbar label="PRISMA projection status">
+			<div class="flex flex-wrap items-center gap-2 text-sm">
+				<Badge variant="secondary"
+					>{projection.as_of
+						? `Updated ${new Date(projection.as_of).toLocaleDateString()}`
+						: 'No decisions yet'}</Badge
 				>
-					<div
-						class="flex flex-wrap items-start justify-between gap-3 border-b border-border/70 p-4 sm:p-5"
-					>
-						<div>
-							<h2 id="prisma-diagram-title" class="text-lg font-semibold">
-								Review flow
-							</h2>
-							<p class="mt-1 text-sm text-muted-foreground">
-								From the first search to the final included studies.
-							</p>
-						</div>
-						{#if svgQuery.isFetching}<Badge variant="outline">Loading diagram…</Badge
-							>{/if}
-					</div>
-					<div class="p-4 sm:p-5">
-						{#if svgQuery.error}
-							<p class="text-sm text-destructive" role="alert">
-								Unable to load the canonical diagram: {svgQuery.error.message}
-							</p>
-						{:else if svgBlob && !diagramError}
-							<img
-								{@attach canonicalSvgAttachment(svgBlob)}
-								alt="PRISMA flow diagram showing identification, screening, retrieval, assessment, and inclusion counts"
-								class="h-auto w-full bg-white"
-								onerror={() => (diagramError = true)}
-							/>
-						{:else if diagramError}
-							<p class="text-sm text-destructive" role="alert">
-								The canonical diagram could not be rendered.
-							</p>
-						{:else}
-							<Skeleton
-								class="h-96 w-full"
-								aria-label="Loading canonical PRISMA diagram"
-							/>
-						{/if}
-					</div>
-				</Surface>
+				<Badge variant="outline">{projection.pending_dedupe_proposals} pending dedupe</Badge
+				>
+				<Badge variant="outline"
+					>Max per-report screening revision: {projection.screening_high_watermark}</Badge
+				>
+			</div>
+		</PageToolbar>
 
-				<Surface as="section" tone="subtle" class="min-w-0" label="Evidence exports">
-					<div class="border-b border-border/70 p-4 sm:p-5">
-						<h2 id="export-title" class="text-lg font-semibold">Export evidence</h2>
+		<div class="grid gap-6 lg:grid-cols-[minmax(0,1.35fr)_minmax(20rem,0.65fr)]">
+			<section class="min-w-0" aria-labelledby="prisma-diagram-title">
+				<div
+					class="flex flex-wrap items-start justify-between gap-3 border-b border-border/70 pb-3"
+				>
+					<div>
+						<h2 id="prisma-diagram-title" class="text-lg font-semibold">Review flow</h2>
 						<p class="mt-1 text-sm text-muted-foreground">
-							Download the diagram or review data for your report.
+							From the first search to the final included studies.
 						</p>
 					</div>
-					<div class="flex flex-wrap gap-2 p-4 sm:p-5">
-						{#each exports as [kind, label] (kind)}
-							<Button
-								variant="outline"
-								disabled={Boolean(exporting)}
-								onclick={() => void downloadArtifact(kind, kind)}
-							>
-								<DownloadIcon data-icon="inline-start" aria-hidden={true} />
-								{label}
-							</Button>
-						{/each}
-						<Button disabled={Boolean(exporting)} onclick={() => void downloadPng()}>
-							<ImageIcon data-icon="inline-start" aria-hidden={true} />
-							PRISMA PNG
-						</Button>
-					</div>
-				</Surface>
-			</div>
-
-			<details class="disclosure">
-				<summary>All review counts</summary>
-				<div class="mb-3 flex items-baseline justify-between gap-3">
-					<h2
-						id="prisma-counts-title"
-						class="text-sm font-semibold tracking-[0.08em] text-muted-foreground uppercase"
-					>
-						Audit-ready flow counts
-					</h2>
-					<span class="text-xs text-muted-foreground">Server projection</span>
+					{#if svgQuery.isFetching}<Badge variant="outline">Loading diagram…</Badge>{/if}
 				</div>
-				<div class="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
-					{#each flow as [label, value] (label)}
-						<MetricTile {label} {value} class="[font-variant-numeric:tabular-nums]" />
-					{/each}
-					{#if groupedReports !== undefined}
-						<MetricTile
-							label="Grouped reports"
-							value={groupedReports}
-							class="[font-variant-numeric:tabular-nums]"
+				<div class="pt-4">
+					{#if svgQuery.error}
+						<p class="text-sm text-destructive" role="alert">
+							Unable to load the canonical diagram: {svgQuery.error.message}
+						</p>
+					{:else if svgBlob && !diagramError}
+						<img
+							{@attach canonicalSvgAttachment(svgBlob)}
+							alt="PRISMA flow diagram showing identification, screening, retrieval, assessment, and inclusion counts"
+							class="h-auto w-full bg-white"
+							onerror={() => (diagramError = true)}
+						/>
+					{:else if diagramError}
+						<p class="text-sm text-destructive" role="alert">
+							The canonical diagram could not be rendered.
+						</p>
+					{:else}
+						<Skeleton
+							class="h-96 w-full"
+							aria-label="Loading canonical PRISMA diagram"
 						/>
 					{/if}
 				</div>
-			</details>
-			<Surface
-				as="section"
-				tone="subtle"
-				class="p-4 sm:p-5"
-				label="Full-text exclusion reasons"
-			>
-				<h2 class="text-lg font-semibold">Full-text exclusion reasons</h2>
-				{#if projection.full_text_exclusions.length === 0}
-					<p class="mt-2 text-sm text-muted-foreground">
-						No full-text exclusions recorded.
+			</section>
+
+			<section class="min-w-0" aria-labelledby="export-title">
+				<div class="border-b border-border/70 pb-3">
+					<h2 id="export-title" class="text-lg font-semibold">Export evidence</h2>
+					<p class="mt-1 text-sm text-muted-foreground">
+						Download the diagram or review data for your report.
 					</p>
-				{:else}
-					<ul
-						class="mt-3 grid gap-2 sm:grid-cols-2"
-						aria-label="Full-text exclusion reasons"
-					>
-						{#each projection.full_text_exclusions as reason (reason.id)}
-							<li
-								class="flex justify-between gap-4 border-b border-border/60 py-2 text-sm last:border-b-0"
-							>
-								<span
-									>{reason.label}
-									<span class="text-muted-foreground">({reason.code})</span></span
-								>
-								<span class="font-medium tabular-nums">{reason.count}</span>
-							</li>
-						{/each}
-					</ul>
+				</div>
+				<div class="flex flex-wrap gap-2 pt-4">
+					{#each exports as [kind, label] (kind)}
+						<Button
+							variant="outline"
+							disabled={Boolean(exporting)}
+							onclick={() => void downloadArtifact(kind, kind)}
+						>
+							<DownloadIcon data-icon="inline-start" aria-hidden={true} />
+							{label}
+						</Button>
+					{/each}
+					<Button disabled={Boolean(exporting)} onclick={() => void downloadPng()}>
+						<ImageIcon data-icon="inline-start" aria-hidden={true} />
+						PRISMA PNG
+					</Button>
+				</div>
+			</section>
+		</div>
+
+		<details class="disclosure">
+			<summary>All review counts</summary>
+			<div class="mb-3 flex items-baseline justify-between gap-3">
+				<h2
+					id="prisma-counts-title"
+					class="text-sm font-semibold tracking-[0.08em] text-muted-foreground uppercase"
+				>
+					Audit-ready flow counts
+				</h2>
+				<span class="text-xs text-muted-foreground">Server projection</span>
+			</div>
+			<div class="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
+				{#each flow as [label, value] (label)}
+					<MetricTile {label} {value} class="[font-variant-numeric:tabular-nums]" />
+				{/each}
+				{#if groupedReports !== undefined}
+					<MetricTile
+						label="Grouped reports"
+						value={groupedReports}
+						class="[font-variant-numeric:tabular-nums]"
+					/>
 				{/if}
-			</Surface>
-		{:else}
-			<Surface as="section" tone="subtle" class="p-4 sm:p-6">
-				<StatePanel
-					state="empty"
-					title="No PRISMA projection"
-					description="A projection will appear after this project has evidence activity."
-				/>
-			</Surface>
-		{/if}
-	</div>
-</section>
+			</div>
+		</details>
+		<section class="pt-2" aria-labelledby="exclusion-reasons-title">
+			<h2 id="exclusion-reasons-title" class="text-lg font-semibold">
+				Full-text exclusion reasons
+			</h2>
+			{#if projection.full_text_exclusions.length === 0}
+				<p class="mt-2 text-sm text-muted-foreground">No full-text exclusions recorded.</p>
+			{:else}
+				<ul class="mt-3 grid gap-2 sm:grid-cols-2" aria-label="Full-text exclusion reasons">
+					{#each projection.full_text_exclusions as reason (reason.id)}
+						<li
+							class="flex justify-between gap-4 border-b border-border/60 py-2 text-sm last:border-b-0"
+						>
+							<span
+								>{reason.label}
+								<span class="text-muted-foreground">({reason.code})</span></span
+							>
+							<span class="font-medium tabular-nums">{reason.count}</span>
+						</li>
+					{/each}
+				</ul>
+			{/if}
+		</section>
+	{:else}
+		<div class="p-4 sm:p-6">
+			<StatePanel
+				state="empty"
+				title="No PRISMA projection"
+				description="A projection will appear after this project has evidence activity."
+			/>
+		</div>
+	{/if}
+</PageTemplate>

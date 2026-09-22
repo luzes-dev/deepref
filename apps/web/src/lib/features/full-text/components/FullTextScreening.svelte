@@ -33,6 +33,7 @@
 	import { Badge } from '@deepref/ui/badge';
 	import { Button } from '@deepref/ui/button';
 	import * as Card from '@deepref/ui/card';
+	import PageTemplate from '$lib/shell/PageTemplate.svelte';
 	import * as Empty from '@deepref/ui/empty';
 	import { Input } from '@deepref/ui/input';
 	import { Skeleton } from '@deepref/ui/skeleton';
@@ -433,24 +434,7 @@
 	}
 </script>
 
-<div class="mx-auto flex w-full max-w-[1480px] flex-col gap-5 p-4 md:gap-6 md:p-8">
-	<header class="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
-		<div class="flex min-w-0 flex-col gap-2">
-			<h1 class="editorial-title text-2xl leading-tight sm:text-3xl">Screen full text</h1>
-			<p class="max-w-2xl text-sm leading-6 text-muted-foreground sm:text-base">
-				Review protocol criteria beside the source PDF and keep every decision auditable.
-			</p>
-		</div>
-		<div class="flex items-center gap-2">
-			<Button variant="outline" onclick={() => void move('previous')}
-				><ArrowLeft data-icon="inline-start" /> Previous</Button
-			>
-			<Button variant="outline" onclick={() => void move('next')}
-				>Next <ArrowRight data-icon="inline-end" /></Button
-			>
-		</div>
-	</header>
-
+<PageTemplate testId="full-text-page" maxWidth="wide">
 	<section
 		class="flex flex-col gap-3 rounded-xl border bg-muted/20 p-3 md:p-4"
 		aria-label="Full-text queue filters"
@@ -459,11 +443,21 @@
 			<div class="flex items-center gap-2 text-sm font-semibold">
 				<SlidersHorizontal aria-hidden="true" /> Queue filters
 			</div>
-			{#if currentIndex >= 0}<Badge variant="secondary"
-					>{currentIndex + 1} of {queueCount} loaded</Badge
-				>{:else if urlState.filter === 'missing' && queueCurrent}<Badge variant="secondary"
-					>Attached · left missing queue</Badge
-				>{/if}
+			<div class="flex items-center gap-2">
+				{#if currentIndex >= 0}<Badge variant="secondary"
+						>{currentIndex + 1} of {queueCount} loaded</Badge
+					>{:else if urlState.filter === 'missing' && queueCurrent}<Badge
+						variant="secondary">Attached · left missing queue</Badge
+					>{/if}
+				<div class="flex items-center gap-1">
+					<Button variant="outline" size="sm" onclick={() => void move('previous')}
+						><ArrowLeft data-icon="inline-start" /> Previous</Button
+					>
+					<Button variant="outline" size="sm" onclick={() => void move('next')}
+						>Next <ArrowRight data-icon="inline-end" /></Button
+					>
+				</div>
+			</div>
 		</div>
 		<div class="flex flex-wrap items-center gap-2">
 			<Button
@@ -529,33 +523,33 @@
 	{:else}
 		<div class="grid gap-6 xl:grid-cols-[minmax(0,1fr)_24rem]">
 			<section class="flex min-w-0 flex-col gap-6" aria-label="Full-text review">
-				<Card.Root class="border-primary/15">
-					<Card.Header class="gap-3 border-b border-border/60 pb-4">
-						<div class="flex flex-wrap items-start justify-between gap-3">
-							<div class="flex min-w-0 items-start gap-3">
-								<span
-									class="flex size-8 shrink-0 items-center justify-center rounded-lg bg-primary/10 text-primary"
-									><FileText aria-hidden="true" /></span
-								>
-								<div class="min-w-0">
-									<Card.Title class="text-xl leading-tight sm:text-2xl"
-										>{current.title ?? 'Untitled report'}</Card.Title
-									><Card.Description class="mt-2 line-clamp-3"
-										>{current.abstract_text ??
-											'No abstract is available.'}</Card.Description
-									>
-								</div>
-							</div>
-							<Badge
-								variant={screenStatus === 'exclude'
-									? 'destructive'
-									: screenStatus === 'include'
-										? 'default'
-										: 'secondary'}>{statusLabel(screenStatus)}</Badge
+				<div class="flex flex-col gap-4">
+					<div
+						class="flex flex-wrap items-start justify-between gap-3 border-b border-border/60 pb-4"
+					>
+						<div class="flex min-w-0 items-start gap-3">
+							<span
+								class="flex size-8 shrink-0 items-center justify-center rounded-lg bg-primary/10 text-primary"
+								><FileText aria-hidden="true" /></span
 							>
+							<div class="min-w-0">
+								<h2 class="text-xl leading-tight font-semibold sm:text-2xl">
+									{current.title ?? 'Untitled report'}
+								</h2>
+								<p class="mt-2 line-clamp-3 text-sm text-muted-foreground">
+									{current.abstract_text ?? 'No abstract is available.'}
+								</p>
+							</div>
 						</div>
-					</Card.Header>
-					<Card.Content class="flex flex-col gap-4 pt-5">
+						<Badge
+							variant={screenStatus === 'exclude'
+								? 'destructive'
+								: screenStatus === 'include'
+									? 'default'
+									: 'secondary'}>{statusLabel(screenStatus)}</Badge
+						>
+					</div>
+					<div class="flex flex-col gap-4">
 						<div
 							class="flex flex-wrap items-center justify-between gap-2 text-xs text-muted-foreground"
 						>
@@ -627,8 +621,8 @@
 								onclick={attachExternal}>Attach URL</Button
 							>
 						</div>
-					</Card.Content>
-				</Card.Root>
+					</div>
+				</div>
 
 				<Card.Root class="border-primary/15">
 					<Card.Header class="gap-2 border-b border-border/60 pb-4"
@@ -706,4 +700,4 @@
 			</aside>
 		</div>
 	{/if}
-</div>
+</PageTemplate>

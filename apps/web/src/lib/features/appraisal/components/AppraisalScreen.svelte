@@ -27,6 +27,7 @@
 		CompleteAppraisalRequest
 	} from '$lib/api/generated/models';
 	import { ApiError } from '$lib/api/custom-fetch';
+	import PageTemplate from '$lib/shell/PageTemplate.svelte';
 	import { useQueryClient } from '@tanstack/svelte-query';
 	import { fullTextUrlString } from '$lib/features/full-text/url';
 	import { ReviewRunObserver } from '$lib/features/ai-assistance/review-run-observer.svelte';
@@ -297,20 +298,11 @@
 	/>
 </svelte:head>
 
-<div class="mx-auto flex min-h-full w-full max-w-[1480px] flex-col gap-5 p-4 md:gap-6 md:p-8">
-	<header class="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
-		<div class="flex min-w-0 flex-col gap-2">
-			<h1 class="editorial-title text-2xl leading-tight sm:text-3xl">Appraisal</h1>
-			<p class="max-w-3xl text-sm leading-6 text-muted-foreground sm:text-base">
-				Choose an article and an assessment framework to review its quality and risk of
-				bias.
-			</p>
-		</div>
-		<div class="flex flex-wrap items-center gap-2 lg:justify-end">
-			<Badge variant="outline">Quality assessment</Badge>
-			<Badge variant="secondary">Your judgment</Badge>
-		</div>
-	</header>
+<PageTemplate testId="appraisal-page" maxWidth="wide">
+	<div class="flex flex-wrap items-center justify-end gap-2 border-b pb-3">
+		<Badge variant="outline">Quality assessment</Badge>
+		<Badge variant="secondary">Your judgment</Badge>
+	</div>
 
 	<div class="grid min-w-0 gap-5 lg:grid-cols-2">
 		<section class="workflow-section border-primary/15">
@@ -797,4 +789,4 @@
 			</div>
 		</section>
 	{/if}
-</div>
+</PageTemplate>

@@ -38,6 +38,7 @@
 	import { page } from '$app/state';
 	import AiProposalReview from '$lib/features/ai-assistance/components/AiProposalReview.svelte';
 	import DecisionBar from './DecisionBar.svelte';
+	import PageTemplate from '$lib/shell/PageTemplate.svelte';
 	import CriteriaPanel from './CriteriaPanel.svelte';
 	import ScreeningFeedback from './ScreeningFeedback.svelte';
 	import ScreeningHistory from './ScreeningHistory.svelte';
@@ -459,16 +460,28 @@
 
 <svelte:window onkeydown={handleKeydown} />
 
-<div class="mx-auto flex w-full max-w-[1536px] flex-col gap-5 p-4 md:gap-6 md:p-8">
-	<header class="flex flex-col gap-4 lg:flex-row lg:items-end lg:justify-between">
-		<div class="flex min-w-0 flex-col gap-2">
-			<h1 class="editorial-title text-2xl leading-tight sm:text-3xl">Screen reports</h1>
-			<p class="max-w-2xl text-sm leading-6 text-muted-foreground sm:text-base">
-				Review one report at a time against the published protocol. Decisions stay
-				reversible and auditable.
-			</p>
+<PageTemplate testId="screening-page" maxWidth="wide">
+	<section
+		class="flex flex-wrap items-center justify-between gap-x-6 gap-y-2 border-b pb-3 text-sm"
+		aria-label="Screening progress"
+	>
+		<div class="flex flex-wrap items-center gap-x-4 gap-y-2">
+			<span class="font-medium">{progress.screened} of {progress.total} reviewed</span>
+			<div
+				class="h-1.5 w-32 overflow-hidden rounded-full bg-muted"
+				role="progressbar"
+				aria-label="Screening progress"
+				aria-valuemin="0"
+				aria-valuemax={Math.max(1, progress.total)}
+				aria-valuenow={progress.screened}
+			>
+				<div class="h-full bg-primary" style:width={`${progressPercent}%`}></div>
+			</div>
+			<span class="text-muted-foreground"
+				>{progress.included} included · {progress.excluded} excluded · {progress.maybe} maybe</span
+			>
 		</div>
-		<div class="flex flex-wrap items-center gap-2 lg:justify-end">
+		<div class="flex flex-wrap items-center gap-2">
 			<Badge variant="secondary"
 				>{progress.screened} screened · {progress.unscreened} pending</Badge
 			>
@@ -480,26 +493,6 @@
 				<Badge variant="outline">Loading protocol…</Badge>
 			{/if}
 		</div>
-	</header>
-
-	<section
-		class="flex flex-wrap items-center gap-x-6 gap-y-2 border-b pb-3 text-sm"
-		aria-label="Screening progress"
-	>
-		<span class="font-medium">{progress.screened} of {progress.total} reviewed</span>
-		<div
-			class="h-1.5 w-32 overflow-hidden rounded-full bg-muted"
-			role="progressbar"
-			aria-label="Screening progress"
-			aria-valuemin="0"
-			aria-valuemax={Math.max(1, progress.total)}
-			aria-valuenow={progress.screened}
-		>
-			<div class="h-full bg-primary" style:width={`${progressPercent}%`}></div>
-		</div>
-		<span class="text-muted-foreground"
-			>{progress.included} included · {progress.excluded} excluded · {progress.maybe} maybe</span
-		>
 	</section>
 
 	<section
@@ -620,22 +613,20 @@
 		>
 			<!-- Left Queue List (Mail inbox list pattern) -->
 			<aside class="hidden lg:flex lg:flex-col" aria-label="Queue list">
-				<Card.Root
-					class="flex h-[calc(100vh-17rem)] flex-col overflow-hidden border-border/70"
+				<div
+					class="flex h-[calc(100vh-17rem)] flex-col overflow-hidden rounded-lg border border-border/70 bg-card"
 				>
-					<Card.Header class="border-b bg-muted/20 px-3.5 py-3">
-						<div class="flex items-center justify-between">
-							<div
-								class="flex items-center gap-1.5 text-xs font-semibold text-foreground"
-							>
-								<Inbox class="size-3.5 text-muted-foreground" />
-								<span>Queue ({queueItems.length})</span>
-							</div>
-							<Badge variant="outline" class="text-[10px] capitalize">
-								{urlState.status}
-							</Badge>
+					<div class="flex items-center justify-between border-b bg-muted/20 px-3.5 py-3">
+						<div
+							class="flex items-center gap-1.5 text-xs font-semibold text-foreground"
+						>
+							<Inbox class="size-3.5 text-muted-foreground" />
+							<span>Queue ({queueItems.length})</span>
 						</div>
-					</Card.Header>
+						<Badge variant="outline" class="text-[10px] capitalize">
+							{urlState.status}
+						</Badge>
+					</div>
 					<ScrollArea class="flex-1 p-2">
 						{#if queueQuery.isPending}
 							<div class="flex flex-col gap-2 p-1">
@@ -692,45 +683,45 @@
 							</div>
 						{/if}
 					</ScrollArea>
-				</Card.Root>
+				</div>
 			</aside>
 
 			<!-- Center Reading Canvas (Mail reading pane pattern) -->
-			<Card.Root class="min-w-0 border-primary/15" data-testid="screening-focus">
-				<Card.Header class="gap-3 border-b border-border/60 pb-4">
-					<div class="flex flex-wrap items-start justify-between gap-3">
-						<div class="flex items-center gap-2">
-							<span
-								class="flex size-8 items-center justify-center rounded-lg bg-primary/10 text-primary"
-								><FileText aria-hidden="true" /></span
-							>
-							<div>
-								<Card.Title>Focus mode</Card.Title>
-								<Card.Description
-									>{#if current}Report {Math.max(currentIndex + 1, 1)} of {queueCount}{:else}Your
-										title/abstract queue{/if}</Card.Description
-								>
-							</div>
-						</div>
-						<div class="flex items-center gap-1">
-							<Button
-								variant="outline"
-								size="icon"
-								aria-label="Previous report (ArrowLeft)"
-								onclick={() => void move('previous')}
-								><ArrowLeft aria-hidden="true" /></Button
-							>
-							<Button
-								variant="outline"
-								size="icon"
-								aria-label="Next report (ArrowRight)"
-								onclick={() => void move('next')}
-								><ArrowRight aria-hidden="true" /></Button
-							>
+			<div class="flex min-w-0 flex-col gap-6" data-testid="screening-focus">
+				<div
+					class="flex flex-wrap items-start justify-between gap-3 border-b border-border/60 pb-4"
+				>
+					<div class="flex items-center gap-2">
+						<span
+							class="flex size-8 items-center justify-center rounded-lg bg-primary/10 text-primary"
+							><FileText aria-hidden="true" /></span
+						>
+						<div>
+							<h2 class="text-base font-semibold">Focus mode</h2>
+							<p class="text-xs text-muted-foreground">
+								{#if current}Report {Math.max(currentIndex + 1, 1)} of {queueCount}{:else}Your
+									title/abstract queue{/if}
+							</p>
 						</div>
 					</div>
-				</Card.Header>
-				<Card.Content class="flex flex-col gap-6 pt-5">
+					<div class="flex items-center gap-1">
+						<Button
+							variant="outline"
+							size="icon"
+							aria-label="Previous report (ArrowLeft)"
+							onclick={() => void move('previous')}
+							><ArrowLeft aria-hidden="true" /></Button
+						>
+						<Button
+							variant="outline"
+							size="icon"
+							aria-label="Next report (ArrowRight)"
+							onclick={() => void move('next')}
+							><ArrowRight aria-hidden="true" /></Button
+						>
+					</div>
+				</div>
+				<div class="flex flex-col gap-6">
 					{#if queueQuery.isPending}
 						<div
 							class="flex flex-col gap-4"
@@ -815,8 +806,8 @@
 							</details>
 						</article>
 					{/if}
-				</Card.Content>
-			</Card.Root>
+				</div>
+			</div>
 
 			<!-- Right Sidebar: Criteria, History, Shortcuts -->
 			<aside class="flex min-w-0 flex-col gap-6 xl:sticky xl:top-4 xl:self-start">
@@ -846,7 +837,7 @@
 			</aside>
 		</div>
 	{/if}
-</div>
+</PageTemplate>
 
 <style>
 	kbd {

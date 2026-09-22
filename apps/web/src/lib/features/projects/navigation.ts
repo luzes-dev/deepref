@@ -37,6 +37,7 @@ export type ProjectRoute =
 export type ProjectNavigationItem = {
 	id: string;
 	label: string;
+	title?: string;
 	description: string;
 	path: ProjectRoute;
 	aliases?: readonly ProjectRoute[];
@@ -68,6 +69,7 @@ export const PROJECT_NAVIGATION_GROUPS: readonly ProjectNavigationGroup[] = [
 			{
 				id: 'protocol',
 				label: 'Protocol',
+				title: 'Review protocol',
 				description: 'Define eligibility, sources, and review rules.',
 				path: '/projects/[projectId]/protocol',
 				icon: ClipboardListIcon,
@@ -99,6 +101,7 @@ export const PROJECT_NAVIGATION_GROUPS: readonly ProjectNavigationGroup[] = [
 			{
 				id: 'deduplication',
 				label: 'Deduplication',
+				title: 'Resolve duplicate records',
 				description: 'Resolve duplicate records with provenance.',
 				path: '/projects/[projectId]/discovery/duplicates',
 				aliases: ['/projects/[projectId]/deduplication'],
@@ -114,6 +117,7 @@ export const PROJECT_NAVIGATION_GROUPS: readonly ProjectNavigationGroup[] = [
 			{
 				id: 'title-abstract-screening',
 				label: 'Title & abstract',
+				title: 'Screen reports',
 				description: 'Screen records against the protocol.',
 				path: '/projects/[projectId]/screening/title-abstract',
 				icon: ClipboardCheckIcon
@@ -121,6 +125,7 @@ export const PROJECT_NAVIGATION_GROUPS: readonly ProjectNavigationGroup[] = [
 			{
 				id: 'full-text-screening',
 				label: 'Full text',
+				title: 'Screen full text',
 				description: 'Review included reports at full text.',
 				path: '/projects/[projectId]/screening/full-text',
 				icon: FileTextIcon
@@ -156,6 +161,7 @@ export const PROJECT_NAVIGATION_GROUPS: readonly ProjectNavigationGroup[] = [
 			{
 				id: 'prisma',
 				label: 'PRISMA',
+				title: 'PRISMA flow',
 				description: 'Trace the flow of records through the review.',
 				path: '/projects/[projectId]/prisma',
 				icon: ClipboardCheckIcon,

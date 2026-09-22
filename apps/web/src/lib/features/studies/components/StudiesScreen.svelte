@@ -35,7 +35,8 @@
 	} from '$lib/api/generated/studies/studies';
 	import { Badge } from '@deepref/ui/badge';
 	import { Separator } from '@deepref/ui/separator';
-	import { PageHeader, PageToolbar, StatePanel, Surface } from '@deepref/ui/layout';
+	import { PageToolbar, StatePanel, Surface } from '@deepref/ui/layout';
+	import PageTemplate from '$lib/shell/PageTemplate.svelte';
 	import { useQueryClient } from '@tanstack/svelte-query';
 	import { ReviewRunObserver } from '$lib/features/ai-assistance/review-run-observer.svelte';
 	import { notifyError, notifyWarning } from '$lib/features/notifications/toast';
@@ -486,104 +487,95 @@
 	/>
 </svelte:head>
 
-<div class="flex h-full min-h-0 flex-col overflow-auto bg-background" data-testid="studies-page">
-	<div class="mx-auto flex w-full max-w-[1440px] flex-col gap-5 p-4 sm:gap-6 sm:p-6 lg:p-8">
-		<PageHeader
-			title="Studies"
-			description="Keep papers from the same investigation together to avoid counting a study twice."
+<PageTemplate testId="studies-page" maxWidth="default">
+	<PageToolbar label="Study identity workflow status">
+		<div class="flex flex-wrap items-center gap-2">
+			<Badge variant="secondary"
+				>{studies.length} {studies.length === 1 ? 'group' : 'groups'}</Badge
+			>
+			<Badge variant={selectedStudy ? 'default' : 'outline'}>
+				{selectedStudy ? 'Study selected' : 'Select a study'}
+			</Badge>
+			{#if selectedStudy}<Badge variant="outline">Revision {selectedStudy.revision}</Badge
+				>{/if}
+		</div>
+	</PageToolbar>
+
+	<div class="grid min-h-0 gap-5 lg:grid-cols-[minmax(18rem,22rem)_minmax(0,1fr)]">
+		<StudyListPanel
+			{studies}
+			{selectedStudyId}
+			pending={studiesQuery.isPending}
+			creating={createMutation.isPending}
+			bind:title={newTitle}
+			onCreate={() => void createStudy()}
+			onSelect={(studyId) => void selectStudy(studyId)}
 		/>
 
-		<PageToolbar label="Study identity workflow status">
-			<div class="flex flex-wrap items-center gap-2">
-				<Badge variant="secondary"
-					>{studies.length} {studies.length === 1 ? 'group' : 'groups'}</Badge
+		{#if selectedStudy}
+			<div class="flex flex-col gap-6">
+				<StudyDetailsPanel
+					study={selectedStudy}
+					{designs}
+					bind:renameTitle
+					renaming={renameMutation.isPending}
+					classifying={classifyMutation.isPending}
+					onRename={() => void renameStudy()}
+					onClassify={classify}
 				>
-				<Badge variant={selectedStudy ? 'default' : 'outline'}>
-					{selectedStudy ? 'Study selected' : 'Select a study'}
-				</Badge>
-				{#if selectedStudy}<Badge variant="outline">Revision {selectedStudy.revision}</Badge
-					>{/if}
-			</div>
-		</PageToolbar>
-
-		<div class="grid min-h-0 gap-5 lg:grid-cols-[minmax(18rem,22rem)_minmax(0,1fr)]">
-			<StudyListPanel
-				{studies}
-				{selectedStudyId}
-				pending={studiesQuery.isPending}
-				creating={createMutation.isPending}
-				bind:title={newTitle}
-				onCreate={() => void createStudy()}
-				onSelect={(studyId) => void selectStudy(studyId)}
-			/>
-
-			{#if selectedStudy}
-				<div class="flex flex-col gap-6">
-					<StudyDetailsPanel
-						study={selectedStudy}
-						{designs}
-						bind:renameTitle
-						renaming={renameMutation.isPending}
-						classifying={classifyMutation.isPending}
-						onRename={() => void renameStudy()}
-						onClassify={classify}
-					>
-						<StudyClassificationAssistance
-							proposal={activeClassificationProposal}
-							pending={classificationProposalsQuery.isPending}
-							errorMessage={classificationErrorMessage}
-							conflict={classificationConflict}
-							providerUnavailable={classificationProviderUnavailable}
-							action={classificationAction}
-							decisionPending={pendingClassificationProposalId !== null}
-							{studyLabel}
-							onDecide={(decision) => void decideClassification(decision)}
-						/>
-
-						<Separator />
-
-						<StudyMembershipPanel
-							study={selectedStudy}
-							{reports}
-							{selectedReport}
-							bind:reportId
-							bind:role
-							assigning={membershipMutation.isPending}
-							membershipPending={membershipQuery.isPending ||
-								membershipQuery.isFetching}
-							onAssign={() => void assignReport()}
-							onUnassign={(selectedReportId) => void unassignReport(selectedReportId)}
-						/>
-
-						<StudyGroupingAssistance
-							{reportId}
-							proposal={activeGroupingProposal}
-							payload={activeGroupingPayload}
-							membership={selectedMembership}
-							pending={groupingProposalsQuery.isPending}
-							errorMessage={groupingErrorMessage}
-							conflict={groupingConflict}
-							providerUnavailable={groupingProviderUnavailable}
-							action={groupingAction ??
-								(groupingReviewRun.isActive ? 'generate' : null)}
-							decisionPending={pendingGroupingProposalId !== null}
-							{studyLabel}
-							onGenerate={() => void generateGrouping()}
-							onDecide={(decision) => void decideGrouping(decision)}
-						/>
-					</StudyDetailsPanel>
-
-					<StudyHistoryPanel {history} />
-				</div>
-			{:else}
-				<Surface as="section" tone="plain" class="border-t border-border-subtle pt-5">
-					<StatePanel
-						state="empty"
-						title="No study selected"
-						description="Choose a study on the left to review its papers, or create a new group."
+					<StudyClassificationAssistance
+						proposal={activeClassificationProposal}
+						pending={classificationProposalsQuery.isPending}
+						errorMessage={classificationErrorMessage}
+						conflict={classificationConflict}
+						providerUnavailable={classificationProviderUnavailable}
+						action={classificationAction}
+						decisionPending={pendingClassificationProposalId !== null}
+						{studyLabel}
+						onDecide={(decision) => void decideClassification(decision)}
 					/>
-				</Surface>
-			{/if}
-		</div>
+
+					<Separator />
+
+					<StudyMembershipPanel
+						study={selectedStudy}
+						{reports}
+						{selectedReport}
+						bind:reportId
+						bind:role
+						assigning={membershipMutation.isPending}
+						membershipPending={membershipQuery.isPending || membershipQuery.isFetching}
+						onAssign={() => void assignReport()}
+						onUnassign={(selectedReportId) => void unassignReport(selectedReportId)}
+					/>
+
+					<StudyGroupingAssistance
+						{reportId}
+						proposal={activeGroupingProposal}
+						payload={activeGroupingPayload}
+						membership={selectedMembership}
+						pending={groupingProposalsQuery.isPending}
+						errorMessage={groupingErrorMessage}
+						conflict={groupingConflict}
+						providerUnavailable={groupingProviderUnavailable}
+						action={groupingAction ?? (groupingReviewRun.isActive ? 'generate' : null)}
+						decisionPending={pendingGroupingProposalId !== null}
+						{studyLabel}
+						onGenerate={() => void generateGrouping()}
+						onDecide={(decision) => void decideGrouping(decision)}
+					/>
+				</StudyDetailsPanel>
+
+				<StudyHistoryPanel {history} />
+			</div>
+		{:else}
+			<Surface as="section" tone="plain" class="border-t border-border-subtle pt-5">
+				<StatePanel
+					state="empty"
+					title="No study selected"
+					description="Choose a study on the left to review its papers, or create a new group."
+				/>
+			</Surface>
+		{/if}
 	</div>
-</div>
+</PageTemplate>
