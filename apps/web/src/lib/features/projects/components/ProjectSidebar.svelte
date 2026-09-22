@@ -6,6 +6,7 @@
 	import * as Tooltip from '@deepref/ui/tooltip';
 	import { buttonVariants } from '@deepref/ui/button';
 	import SettingsIcon from '@lucide/svelte/icons/settings-2';
+	import { openSettingsFromLink } from '$lib/features/settings/navigation';
 	import ProjectSelector from './ProjectSelector.svelte';
 	import { useProjectWorkspaceContext } from '../context.svelte.js';
 	import {
@@ -118,6 +119,7 @@
 			{#if collapsed}
 				<a
 					href={resolve('/settings')}
+					onclick={openSettingsFromLink}
 					title="Settings"
 					class={buttonVariants({
 						variant: 'ghost',
@@ -131,6 +133,7 @@
 			{:else}
 				<a
 					href={resolve('/settings')}
+					onclick={openSettingsFromLink}
 					class={buttonVariants({
 						variant: 'ghost',
 						size: 'sm',
