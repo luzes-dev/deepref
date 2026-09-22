@@ -1,7 +1,8 @@
 <script lang="ts">
 	import * as Tabs from '@deepref/ui/tabs';
 	import { Badge } from '@deepref/ui/badge';
-	import { PageHeader, PageToolbar, StatePanel, Surface } from '@deepref/ui/layout';
+	import { PageToolbar, StatePanel, Surface } from '@deepref/ui/layout';
+	import PageTemplate from '$lib/shell/PageTemplate.svelte';
 	import GraphDegradedState from '$lib/features/projects/components/GraphDegradedState.svelte';
 	import { createGetProjectRecommendations } from '$lib/api/generated/reports/reports';
 	import type { RecommendationGroupsDto, ReportDto } from '$lib/api/generated/models';
@@ -58,18 +59,7 @@
 	const total = $derived(groupEntries.reduce((sum, group) => sum + group.articles.length, 0));
 </script>
 
-<div
-	class="flex h-full min-h-0 flex-col overflow-auto bg-background"
-	tabindex="-1"
-	data-testid="recommendations-page"
->
-	<div
-		class="mx-auto flex w-full max-w-[1440px] flex-1 flex-col gap-5 p-4 sm:gap-6 sm:p-6 lg:p-8"
-	>
-		<PageHeader
-			title="Recommendations"
-			description="Find your next paper to read, grouped by its role in the citation network."
-		/>
+<PageTemplate testId="recommendations-page" maxWidth="default" tabindex="-1">
 
 		<PageToolbar label="Recommendation projection status">
 			<div class="flex flex-wrap items-center gap-2">
@@ -185,5 +175,4 @@
 				</Tabs.Root>
 			</section>
 		{/if}
-	</div>
-</div>
+</PageTemplate>

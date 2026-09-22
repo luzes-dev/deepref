@@ -7,7 +7,8 @@
 	import { Badge } from '@deepref/ui/badge';
 	import { Button } from '@deepref/ui/button';
 	import { Skeleton } from '@deepref/ui/skeleton';
-	import { PageHeader, PageToolbar, StatePanel, Surface, MetricTile } from '@deepref/ui/layout';
+	import { PageToolbar, StatePanel, MetricTile } from '@deepref/ui/layout';
+	import PageTemplate from '$lib/shell/PageTemplate.svelte';
 	import { useProjectWorkspaceContext } from '$lib/features/projects/context.svelte.js';
 	import { notifyError } from '$lib/features/notifications/toast';
 	import DownloadIcon from '@lucide/svelte/icons/download';
@@ -119,34 +120,29 @@
 	}
 </script>
 
-<section
-	class="flex h-full min-h-0 flex-col overflow-auto bg-background"
+<PageTemplate
+	testId="prisma-page"
+	maxWidth="default"
 	aria-label="PRISMA flow"
 	tabindex="-1"
-	data-testid="prisma-page"
 >
-	<div class="mx-auto flex w-full max-w-[1440px] flex-col gap-5 p-4 sm:gap-6 sm:p-6 lg:p-8">
-		<PageHeader
-			title="PRISMA flow"
-			description="See how articles move through your review and export the results."
-		/>
 
 		{#if query.isPending}
-			<Surface as="section" tone="subtle" class="p-4 sm:p-6">
+			<div class="p-4 sm:p-6">
 				<StatePanel
 					state="loading"
 					title="Assembling PRISMA projection"
 					description="Reconciling screening, retrieval, and inclusion counts."
 				/>
-			</Surface>
+			</div>
 		{:else if query.error}
-			<Surface as="section" tone="subtle" class="p-4 sm:p-6">
+			<div class="p-4 sm:p-6">
 				<StatePanel
 					state="error"
 					title="PRISMA projection unavailable"
 					description={`Unable to load the PRISMA projection: ${query.error.message}`}
 				/>
-			</Surface>
+			</div>
 		{:else if projection}
 			<PageToolbar label="PRISMA projection status">
 				<div class="flex flex-wrap items-center gap-2 text-sm">
@@ -164,15 +160,10 @@
 				</div>
 			</PageToolbar>
 
-			<div class="grid gap-5 lg:grid-cols-[minmax(0,1.35fr)_minmax(20rem,0.65fr)]">
-				<Surface
-					as="section"
-					tone="default"
-					class="min-w-0 overflow-hidden"
-					label="PRISMA diagram"
-				>
+			<div class="grid gap-6 lg:grid-cols-[minmax(0,1.35fr)_minmax(20rem,0.65fr)]">
+				<section class="min-w-0" aria-labelledby="prisma-diagram-title">
 					<div
-						class="flex flex-wrap items-start justify-between gap-3 border-b border-border/70 p-4 sm:p-5"
+						class="flex flex-wrap items-start justify-between gap-3 border-b border-border/70 pb-3"
 					>
 						<div>
 							<h2 id="prisma-diagram-title" class="text-lg font-semibold">
@@ -185,7 +176,7 @@
 						{#if svgQuery.isFetching}<Badge variant="outline">Loading diagram…</Badge
 							>{/if}
 					</div>
-					<div class="p-4 sm:p-5">
+					<div class="pt-4">
 						{#if svgQuery.error}
 							<p class="text-sm text-destructive" role="alert">
 								Unable to load the canonical diagram: {svgQuery.error.message}
@@ -208,16 +199,16 @@
 							/>
 						{/if}
 					</div>
-				</Surface>
+				</section>
 
-				<Surface as="section" tone="subtle" class="min-w-0" label="Evidence exports">
-					<div class="border-b border-border/70 p-4 sm:p-5">
+				<section class="min-w-0" aria-labelledby="export-title">
+					<div class="border-b border-border/70 pb-3">
 						<h2 id="export-title" class="text-lg font-semibold">Export evidence</h2>
 						<p class="mt-1 text-sm text-muted-foreground">
 							Download the diagram or review data for your report.
 						</p>
 					</div>
-					<div class="flex flex-wrap gap-2 p-4 sm:p-5">
+					<div class="flex flex-wrap gap-2 pt-4">
 						{#each exports as [kind, label] (kind)}
 							<Button
 								variant="outline"
@@ -233,7 +224,7 @@
 							PRISMA PNG
 						</Button>
 					</div>
-				</Surface>
+				</section>
 			</div>
 
 			<details class="disclosure">
@@ -260,13 +251,8 @@
 					{/if}
 				</div>
 			</details>
-			<Surface
-				as="section"
-				tone="subtle"
-				class="p-4 sm:p-5"
-				label="Full-text exclusion reasons"
-			>
-				<h2 class="text-lg font-semibold">Full-text exclusion reasons</h2>
+			<section class="pt-2" aria-labelledby="exclusion-reasons-title">
+				<h2 id="exclusion-reasons-title" class="text-lg font-semibold">Full-text exclusion reasons</h2>
 				{#if projection.full_text_exclusions.length === 0}
 					<p class="mt-2 text-sm text-muted-foreground">
 						No full-text exclusions recorded.
@@ -289,15 +275,14 @@
 						{/each}
 					</ul>
 				{/if}
-			</Surface>
+			</section>
 		{:else}
-			<Surface as="section" tone="subtle" class="p-4 sm:p-6">
+			<div class="p-4 sm:p-6">
 				<StatePanel
 					state="empty"
 					title="No PRISMA projection"
 					description="A projection will appear after this project has evidence activity."
 				/>
-			</Surface>
+			</div>
 		{/if}
-	</div>
-</section>
+</PageTemplate>

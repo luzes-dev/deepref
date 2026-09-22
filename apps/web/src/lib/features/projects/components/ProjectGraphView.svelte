@@ -8,7 +8,8 @@
 	import * as InputGroup from '@deepref/ui/input-group';
 	import { Slider } from '@deepref/ui/slider';
 	import { Spinner } from '@deepref/ui/spinner';
-	import { PageHeader, PageToolbar, StatePanel, Surface } from '@deepref/ui/layout';
+	import { PageToolbar, StatePanel, Surface } from '@deepref/ui/layout';
+	import PageTemplate from '$lib/shell/PageTemplate.svelte';
 	import RotateCcwIcon from '@lucide/svelte/icons/rotate-ccw';
 	import SearchIcon from '@lucide/svelte/icons/search';
 	import { onCleanup, watch } from 'runed';
@@ -174,18 +175,7 @@
 	onCleanup(() => graphRenderer.destroy());
 </script>
 
-<div
-	class="flex h-full min-h-0 flex-col overflow-auto bg-background"
-	tabindex="-1"
-	data-testid="graph-page"
->
-	<div
-		class="mx-auto flex w-full max-w-[1440px] flex-1 flex-col gap-5 p-4 sm:gap-6 sm:p-6 lg:p-8"
-	>
-		<PageHeader
-			title="Graph"
-			description="Explore how your articles connect. Select a paper to see its details."
-		/>
+<PageTemplate testId="graph-page" maxWidth="default" tabindex="-1">
 
 		<PageToolbar label="Graph controls" class="items-stretch">
 			<div class="grid w-full gap-3 md:grid-cols-[minmax(0,1fr)_minmax(14rem,280px)_auto]">
@@ -453,8 +443,7 @@
 				</div>
 			</div>
 		{/if}
-	</div>
-</div>
+</PageTemplate>
 
 <style>
 	.graph-frame {

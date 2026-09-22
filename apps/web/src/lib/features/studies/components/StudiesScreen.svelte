@@ -35,7 +35,8 @@
 	} from '$lib/api/generated/studies/studies';
 	import { Badge } from '@deepref/ui/badge';
 	import { Separator } from '@deepref/ui/separator';
-	import { PageHeader, PageToolbar, StatePanel, Surface } from '@deepref/ui/layout';
+	import { PageToolbar, StatePanel, Surface } from '@deepref/ui/layout';
+	import PageTemplate from '$lib/shell/PageTemplate.svelte';
 	import { useQueryClient } from '@tanstack/svelte-query';
 	import { ReviewRunObserver } from '$lib/features/ai-assistance/review-run-observer.svelte';
 	import { notifyError, notifyWarning } from '$lib/features/notifications/toast';
@@ -486,12 +487,7 @@
 	/>
 </svelte:head>
 
-<div class="flex h-full min-h-0 flex-col overflow-auto bg-background" data-testid="studies-page">
-	<div class="mx-auto flex w-full max-w-[1440px] flex-col gap-5 p-4 sm:gap-6 sm:p-6 lg:p-8">
-		<PageHeader
-			title="Studies"
-			description="Keep papers from the same investigation together to avoid counting a study twice."
-		/>
+<PageTemplate testId="studies-page" maxWidth="default">
 
 		<PageToolbar label="Study identity workflow status">
 			<div class="flex flex-wrap items-center gap-2">
@@ -585,5 +581,4 @@
 				</Surface>
 			{/if}
 		</div>
-	</div>
-</div>
+</PageTemplate>

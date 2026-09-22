@@ -10,6 +10,7 @@
 	import { Separator } from '@deepref/ui/separator';
 	import { Spinner } from '@deepref/ui/spinner';
 	import ThemeSelector from '@deepref/ui/theme-selector';
+	import PageTemplate from '$lib/shell/PageTemplate.svelte';
 
 	type NumericSettingKey =
 		'default_max_depth' | 'max_concurrency' | 'rate_limit_per_second' | 'retry_attempts';
@@ -190,18 +191,10 @@
 	/>
 </svelte:head>
 
-<div class="flex h-full min-h-0 flex-col overflow-auto bg-background" data-testid="settings-page">
-	<div class="mx-auto flex w-full max-w-5xl flex-col gap-6 p-4 sm:p-6 lg:p-8">
-		<div class="flex items-start justify-between gap-4">
-			<div class="space-y-0.5">
-				<h1 class="text-2xl font-bold tracking-tight">Settings</h1>
-				<p class="text-muted-foreground">
-					Manage your application settings and review ingestion preferences.
-				</p>
-			</div>
-			<ThemeSelector />
-		</div>
-		<Separator />
+<PageTemplate testId="settings-page" maxWidth="default">
+	<div class="flex items-center justify-end border-b pb-3">
+		<ThemeSelector />
+	</div>
 
 		{#if isLoading}
 			<div data-testid="settings-loading">
@@ -567,5 +560,4 @@
 				</div>
 			</div>
 		{/if}
-	</div>
-</div>
+</PageTemplate>

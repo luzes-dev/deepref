@@ -26,7 +26,8 @@
 		ExtractionValueDto
 	} from '$lib/api/generated/models';
 	import { useQueryClient } from '@tanstack/svelte-query';
-	import { PageHeader, StatePanel, Surface } from '@deepref/ui/layout';
+	import { StatePanel, Surface } from '@deepref/ui/layout';
+	import PageTemplate from '$lib/shell/PageTemplate.svelte';
 	import * as Alert from '@deepref/ui/alert';
 	import { Badge } from '@deepref/ui/badge';
 	import { Button } from '@deepref/ui/button';
@@ -476,27 +477,20 @@
 	/>
 </svelte:head>
 
-<div
-	class="flex min-h-full flex-col bg-background"
-	data-testid="extraction-page"
+<PageTemplate
+	testId="extraction-page"
 	data-extraction-state={pageState}
+	maxWidth="wide"
 >
-	<div class="mx-auto flex w-full max-w-[1440px] flex-col gap-5 p-4 sm:gap-6 sm:p-6 lg:p-8">
-		<PageHeader
-			title="Extraction"
-			description="Choose a study, define the data you need, and review values against their sources."
-		>
-			{#snippet actions()}
-				<Badge variant="outline" data-testid="extraction-proposal-only"
-					>Review before saving</Badge
-				>
-			{/snippet}
-		</PageHeader>
-
-		{#if proposalDirty}<span
-				class="text-sm text-muted-foreground"
-				data-testid="extraction-draft-status">Edited locally</span
-			>{/if}
+	<div class="flex flex-wrap items-center justify-between gap-2 border-b pb-3">
+		<div class="flex items-center gap-2">
+			<Badge variant="outline" data-testid="extraction-proposal-only">Review before saving</Badge>
+			{#if proposalDirty}<span
+					class="text-sm text-muted-foreground"
+					data-testid="extraction-draft-status">Edited locally</span
+				>{/if}
+		</div>
+	</div>
 
 		{#if queryError}
 			<Alert.Root
@@ -1152,5 +1146,4 @@
 					</p>{/if}</Tabs.Content
 			>
 		</Tabs.Root>
-	</div>
-</div>
+</PageTemplate>

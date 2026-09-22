@@ -27,6 +27,7 @@
 	import { Button } from '@deepref/ui/button';
 	import { Spinner } from '@deepref/ui/spinner';
 	import AutomationEditor from './AutomationEditor.svelte';
+	import PageTemplate from '$lib/shell/PageTemplate.svelte';
 	import RecipeLibrary from './RecipeLibrary.svelte';
 	import {
 		AUTOMATION_RECIPE_ROUTE,
@@ -479,44 +480,26 @@
 			}}
 		/>
 	{:else}
-		<div class="mx-auto flex h-full min-h-0 w-full max-w-4xl flex-col overflow-auto">
-			<header
-				class="flex flex-wrap items-start justify-between gap-4 border-b border-border/70 px-5 py-6 sm:px-8 sm:py-8"
-			>
-				<div class="min-w-0">
-					<p class="text-xs font-semibold tracking-[0.18em] text-primary uppercase">
-						Evidence operations
-					</p>
-					<h1
-						class="editorial-title mt-2 text-3xl leading-tight text-foreground sm:text-4xl"
-					>
-						Automations
-					</h1>
-					<p class="mt-2 max-w-xl text-sm leading-relaxed text-muted-foreground">
-						Run predefined evidence recipes or keep custom project maintenance
-						automations visible, predictable, and ready to run.
-					</p>
-				</div>
-				<div class="flex shrink-0 items-center gap-2">
-					<Button
-						variant="ghost"
-						size="icon"
-						aria-label="Refresh automations"
-						disabled={definitionsQuery.isFetching || runsQuery.isFetching}
-						onclick={() => void refreshAutomationQueries()}
-						data-testid="automation-refresh"
-					>
-						{#if definitionsQuery.isFetching || runsQuery.isFetching}<Spinner
-							/>{:else}<RefreshCwIcon aria-hidden="true" />{/if}
-					</Button>
-					<Button onclick={startAddingDefinition} data-testid="automation-add-definition">
-						<PlusIcon data-icon="inline-start" aria-hidden="true" />
-						New automation
-					</Button>
-				</div>
-			</header>
+		<PageTemplate testId="automation-manager" maxWidth="narrow" class="h-full">
+			<div class="flex flex-wrap items-center justify-end gap-2 border-b pb-3">
+				<Button
+					variant="ghost"
+					size="icon"
+					aria-label="Refresh automations"
+					disabled={definitionsQuery.isFetching || runsQuery.isFetching}
+					onclick={() => void refreshAutomationQueries()}
+					data-testid="automation-refresh"
+				>
+					{#if definitionsQuery.isFetching || runsQuery.isFetching}<Spinner
+						/>{:else}<RefreshCwIcon aria-hidden="true" />{/if}
+				</Button>
+				<Button onclick={startAddingDefinition} data-testid="automation-add-definition">
+					<PlusIcon data-icon="inline-start" aria-hidden="true" />
+					New automation
+				</Button>
+			</div>
 
-			<div class="flex min-h-0 flex-1 flex-col gap-6 px-5 py-6 sm:px-8 sm:py-8">
+			<div class="flex min-h-0 flex-1 flex-col gap-6 pt-4">
 				<div
 					class="flex w-fit items-center gap-1 rounded-full border border-border/70 bg-muted/40 p-1"
 					role="group"
@@ -792,6 +775,6 @@
 					</div>
 				{/if}
 			</div>
-		</div>
+		</PageTemplate>
 	{/if}
 </div>
