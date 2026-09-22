@@ -109,3 +109,24 @@ jobs:
           go run github.com/rhysd/actionlint/cmd/actionlint@v1.7.7
           mapfile -t scripts < <(git ls-files '*.sh')
           if [ "${#scripts[@]}" -gt 0 ]; then shellcheck "${scripts[@]}"; fi
+
+  security-required:
+    name: Security
+    if: always()
+    needs: [codeql, dependencies, repository-policy]
+    runs-on: ubuntu-latest
+    timeout-minutes: 2
+    steps:
+      - name: Verify security checks
+        env:
+          CODEQL_RESULT: ${{ needs.codeql.result }}
+          DEPS_RESULT: ${{ needs.dependencies.result }}
+          POLICY_RESULT: ${{ needs.repository-policy.result }}
+        run: |
+          for result in "$CODEQL_RESULT" "$DEPS_RESULT" "$POLICY_RESULT"; do
+            if [ "$result" != "success" ] && [ "$result" != "skipped" ]; then
+              echo "A substantive security check did not succeed (result: $result)"
+              exit 1
+            fi
+          done
+          echo "All substantive security checks passed or were intentionally skipped."
