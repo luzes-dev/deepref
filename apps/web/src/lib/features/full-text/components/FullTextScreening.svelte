@@ -435,7 +435,6 @@
 </script>
 
 <PageTemplate testId="full-text-page" maxWidth="wide">
-
 	<section
 		class="flex flex-col gap-3 rounded-xl border bg-muted/20 p-3 md:p-4"
 		aria-label="Full-text queue filters"
@@ -447,8 +446,8 @@
 			<div class="flex items-center gap-2">
 				{#if currentIndex >= 0}<Badge variant="secondary"
 						>{currentIndex + 1} of {queueCount} loaded</Badge
-					>{:else if urlState.filter === 'missing' && queueCurrent}<Badge variant="secondary"
-						>Attached · left missing queue</Badge
+					>{:else if urlState.filter === 'missing' && queueCurrent}<Badge
+						variant="secondary">Attached · left missing queue</Badge
 					>{/if}
 				<div class="flex items-center gap-1">
 					<Button variant="outline" size="sm" onclick={() => void move('previous')}
@@ -525,19 +524,21 @@
 		<div class="grid gap-6 xl:grid-cols-[minmax(0,1fr)_24rem]">
 			<section class="flex min-w-0 flex-col gap-6" aria-label="Full-text review">
 				<div class="flex flex-col gap-4">
-					<div class="flex flex-wrap items-start justify-between gap-3 border-b border-border/60 pb-4">
+					<div
+						class="flex flex-wrap items-start justify-between gap-3 border-b border-border/60 pb-4"
+					>
 						<div class="flex min-w-0 items-start gap-3">
 							<span
 								class="flex size-8 shrink-0 items-center justify-center rounded-lg bg-primary/10 text-primary"
 								><FileText aria-hidden="true" /></span
 							>
 							<div class="min-w-0">
-								<h2 class="text-xl font-semibold leading-tight sm:text-2xl"
-									>{current.title ?? 'Untitled report'}</h2
-								><p class="mt-2 line-clamp-3 text-sm text-muted-foreground"
-									>{current.abstract_text ??
-										'No abstract is available.'}</p
-								>
+								<h2 class="text-xl leading-tight font-semibold sm:text-2xl">
+									{current.title ?? 'Untitled report'}
+								</h2>
+								<p class="mt-2 line-clamp-3 text-sm text-muted-foreground">
+									{current.abstract_text ?? 'No abstract is available.'}
+								</p>
 							</div>
 						</div>
 						<Badge

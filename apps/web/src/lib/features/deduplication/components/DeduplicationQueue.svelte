@@ -138,8 +138,8 @@
 					Pending proposals
 				</h2>
 				<p class="text-sm text-muted-foreground">
-					Fuzzy matches are proposals only; exact non-conflicting identifiers are
-					resolved automatically.
+					Fuzzy matches are proposals only; exact non-conflicting identifiers are resolved
+					automatically.
 				</p>
 			</div>
 			<Badge variant="secondary">{proposals.length} pending</Badge>
@@ -232,9 +232,7 @@
 									</div>
 									<div class="space-y-3 text-sm">
 										<div>
-											<span class="text-xs text-muted-foreground"
-												>Title</span
-											>
+											<span class="text-xs text-muted-foreground">Title</span>
 											<p class="font-medium">
 												{displayDedupeTitle(proposal.source_title)}
 											</p>
@@ -250,8 +248,12 @@
 												<span class="text-muted-foreground"
 													>Identifiers</span
 												>
+												<!-- svelte-ignore a11y_no_noninteractive_tabindex -->
 												<pre
-													class="rounded bg-muted p-1 text-[11px] overflow-x-auto">{formatDedupeJson(
+													tabindex="0"
+													role="region"
+													aria-label="Source identifiers"
+													class="overflow-x-auto rounded bg-muted p-1 text-[11px]">{formatDedupeJson(
 														proposal.source_identifiers
 													)}</pre>
 											</div>
@@ -280,9 +282,7 @@
 									</div>
 									<div class="space-y-3 text-sm">
 										<div>
-											<span class="text-xs text-muted-foreground"
-												>Title</span
-											>
+											<span class="text-xs text-muted-foreground">Title</span>
 											<p class="font-medium">
 												{displayDedupeTitle(proposal.candidate_title)}
 											</p>
@@ -298,8 +298,12 @@
 												<span class="text-muted-foreground"
 													>Identifiers</span
 												>
+												<!-- svelte-ignore a11y_no_noninteractive_tabindex -->
 												<pre
-													class="rounded bg-muted p-1 text-[11px] overflow-x-auto">{formatDedupeJson(
+													tabindex="0"
+													role="region"
+													aria-label="Candidate identifiers"
+													class="overflow-x-auto rounded bg-muted p-1 text-[11px]">{formatDedupeJson(
 														proposal.candidate_identifiers
 													)}</pre>
 											</div>

@@ -140,6 +140,7 @@
 						{#if row}
 							<button
 								type="button"
+								role="row"
 								class="absolute top-0 left-0 grid w-full grid-cols-[minmax(12rem,1fr)_5rem_7rem] items-center border-b px-4 text-left text-xs transition-colors hover:bg-muted/50 {row
 									.original.report_id === selectedReport
 									? 'bg-muted/70 font-medium'

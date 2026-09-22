@@ -161,11 +161,7 @@
 								{workspace.ingestionMaxDepth === 1 ? 'hop' : 'hops'}</span
 							>
 						</div>
-						<NumberField.Root
-							bind:value={workspace.ingestionMaxDepth}
-							min={0}
-							max={4}
-						>
+						<NumberField.Root bind:value={workspace.ingestionMaxDepth} min={0} max={4}>
 							<NumberField.Group>
 								<NumberField.Decrement />
 								<NumberField.Input id="max-depth" />
@@ -178,11 +174,12 @@
 					</Field.Field>
 					<Button
 						onclick={submitIngestion}
-						disabled={createIngestion.isPending}
+						disabled={!workspace.ingestionDraft.dois.trim() ||
+							createIngestion.isPending}
 						class="w-full"
 					>
 						<PlayIcon data-icon="inline-start" />
-						{createIngestion.isPending ? 'Starting ingestion…' : 'Start Ingestion'}
+						{createIngestion.isPending ? 'Starting ingestion…' : 'Import articles'}
 					</Button>
 				</Field.FieldGroup>
 			</div>
@@ -207,10 +204,7 @@
 					/>
 				</div>
 			{:else if workspace.ingestionsLoading}
-				<div
-					class="flex flex-col gap-2 p-4 sm:p-5"
-					aria-label="Loading ingestion history"
-				>
+				<div class="flex flex-col gap-2 p-4 sm:p-5" aria-label="Loading ingestion history">
 					{#each [0, 1, 2, 3, 4, 5] as index (index)}
 						<Skeleton class="h-12" />
 					{/each}
@@ -271,8 +265,7 @@
 												<Button
 													variant="outline"
 													size="sm"
-													onclick={() =>
-														refreshProvider(ingestion.id)}
+													onclick={() => refreshProvider(ingestion.id)}
 													disabled={refreshState?.kind === 'pending'}
 												>
 													<RefreshCwIcon data-icon="inline-start" />

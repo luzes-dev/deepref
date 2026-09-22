@@ -103,12 +103,9 @@
 			label="Dependency status warning"
 		>
 			<div class="min-w-0" aria-live="polite" data-testid="overview-dependency-warning">
-				<p class="text-sm font-semibold text-foreground">
-					Dependency status unavailable
-				</p>
+				<p class="text-sm font-semibold text-foreground">Dependency status unavailable</p>
 				<p class="mt-1 text-sm text-muted-foreground">
-					Workspace evidence remains available, but service health could not be
-					checked.
+					Workspace evidence remains available, but service health could not be checked.
 					{dependencyError}
 				</p>
 			</div>
@@ -193,10 +190,7 @@
 
 			<Tabs.Content value="overview" class="space-y-6">
 				<!-- KPI Metric Cards Grid (Dashboard Pattern) -->
-				<section
-					aria-labelledby="overview-metrics-title"
-					data-testid="overview-populated"
-				>
+				<section aria-labelledby="overview-metrics-title" data-testid="overview-populated">
 					<div class="mb-3 flex items-baseline justify-between gap-3">
 						<h2
 							id="overview-metrics-title"
@@ -208,16 +202,12 @@
 					</div>
 					<div class="grid gap-4 sm:grid-cols-2 lg:grid-cols-4">
 						<Card.Root>
-							<Card.Header
-								class="flex flex-row items-center justify-between pb-2"
-							>
+							<Card.Header class="flex flex-row items-center justify-between pb-2">
 								<Card.Title class="text-sm font-medium">Articles</Card.Title>
 								<FileTextIcon class="size-4 text-muted-foreground" />
 							</Card.Header>
 							<Card.Content>
-								<div
-									class="text-2xl font-bold [font-variant-numeric:tabular-nums]"
-								>
+								<div class="text-2xl font-bold [font-variant-numeric:tabular-nums]">
 									{workspace.articles.length.toLocaleString()}
 								</div>
 								<p class="text-xs text-muted-foreground">articles collected</p>
@@ -225,18 +215,14 @@
 						</Card.Root>
 
 						<Card.Root>
-							<Card.Header
-								class="flex flex-row items-center justify-between pb-2"
-							>
+							<Card.Header class="flex flex-row items-center justify-between pb-2">
 								<Card.Title class="text-sm font-medium"
 									>Internal citations</Card.Title
 								>
 								<GitForkIcon class="size-4 text-muted-foreground" />
 							</Card.Header>
 							<Card.Content>
-								<div
-									class="text-2xl font-bold [font-variant-numeric:tabular-nums]"
-								>
+								<div class="text-2xl font-bold [font-variant-numeric:tabular-nums]">
 									{internalCitations.toLocaleString()}
 								</div>
 								<p class="text-xs text-muted-foreground">
@@ -246,18 +232,12 @@
 						</Card.Root>
 
 						<Card.Root>
-							<Card.Header
-								class="flex flex-row items-center justify-between pb-2"
-							>
-								<Card.Title class="text-sm font-medium"
-									>Total citations</Card.Title
-								>
+							<Card.Header class="flex flex-row items-center justify-between pb-2">
+								<Card.Title class="text-sm font-medium">Total citations</Card.Title>
 								<NetworkIcon class="size-4 text-muted-foreground" />
 							</Card.Header>
 							<Card.Content>
-								<div
-									class="text-2xl font-bold [font-variant-numeric:tabular-nums]"
-								>
+								<div class="text-2xl font-bold [font-variant-numeric:tabular-nums]">
 									{totalCitations.toLocaleString()}
 								</div>
 								<p class="text-xs text-muted-foreground">external + internal</p>
@@ -265,18 +245,12 @@
 						</Card.Root>
 
 						<Card.Root>
-							<Card.Header
-								class="flex flex-row items-center justify-between pb-2"
-							>
-								<Card.Title class="text-sm font-medium"
-									>Import Batches</Card.Title
-								>
+							<Card.Header class="flex flex-row items-center justify-between pb-2">
+								<Card.Title class="text-sm font-medium">Import Batches</Card.Title>
 								<DatabaseIcon class="size-4 text-muted-foreground" />
 							</Card.Header>
 							<Card.Content>
-								<div
-									class="text-2xl font-bold [font-variant-numeric:tabular-nums]"
-								>
+								<div class="text-2xl font-bold [font-variant-numeric:tabular-nums]">
 									{workspace.ingestions.length.toLocaleString()}
 								</div>
 								<p class="text-xs text-muted-foreground">
@@ -304,8 +278,8 @@
 									Review your collected articles
 								</Card.Title>
 								<Card.Description class="text-sm">
-									Review titles and abstracts against your criteria, then read
-									the full text of the papers you keep.
+									Review titles and abstracts against your criteria, then read the
+									full text of the papers you keep.
 								</Card.Description>
 							</Card.Header>
 							<Card.Content class="pt-0">
@@ -342,8 +316,7 @@
 							>
 								<div class="space-y-1">
 									<div class="flex items-center justify-between">
-										<span
-											class="text-sm font-semibold group-hover:text-primary"
+										<span class="text-sm font-semibold group-hover:text-primary"
 											>Add articles</span
 										>
 										<ExternalLinkIcon
@@ -364,8 +337,7 @@
 							>
 								<div class="space-y-1">
 									<div class="flex items-center justify-between">
-										<span
-											class="text-sm font-semibold group-hover:text-primary"
+										<span class="text-sm font-semibold group-hover:text-primary"
 											>Citation Graph</span
 										>
 										<ExternalLinkIcon
@@ -386,8 +358,7 @@
 							>
 								<div class="space-y-1">
 									<div class="flex items-center justify-between">
-										<span
-											class="text-sm font-semibold group-hover:text-primary"
+										<span class="text-sm font-semibold group-hover:text-primary"
 											>PRISMA Flow</span
 										>
 										<ExternalLinkIcon
@@ -439,9 +410,7 @@
 											<Table.Row>
 												<Table.Cell>
 													<Badge
-														variant={statusVariant(
-															ingestion.status
-														)}
+														variant={statusVariant(ingestion.status)}
 													>
 														{ingestion.status}
 													</Badge>
@@ -468,8 +437,8 @@
 													colspan={4}
 													class="h-28 text-center text-xs text-muted-foreground"
 												>
-													No imports yet. Add articles from the
-													Imports page.
+													No imports yet. Add articles from the Imports
+													page.
 												</Table.Cell>
 											</Table.Row>
 										{/each}

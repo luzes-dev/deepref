@@ -466,20 +466,20 @@
 		aria-label="Screening progress"
 	>
 		<div class="flex flex-wrap items-center gap-x-4 gap-y-2">
-		<span class="font-medium">{progress.screened} of {progress.total} reviewed</span>
-		<div
-			class="h-1.5 w-32 overflow-hidden rounded-full bg-muted"
-			role="progressbar"
-			aria-label="Screening progress"
-			aria-valuemin="0"
-			aria-valuemax={Math.max(1, progress.total)}
-			aria-valuenow={progress.screened}
-		>
-			<div class="h-full bg-primary" style:width={`${progressPercent}%`}></div>
-		</div>
-		<span class="text-muted-foreground"
-			>{progress.included} included · {progress.excluded} excluded · {progress.maybe} maybe</span
-		>
+			<span class="font-medium">{progress.screened} of {progress.total} reviewed</span>
+			<div
+				class="h-1.5 w-32 overflow-hidden rounded-full bg-muted"
+				role="progressbar"
+				aria-label="Screening progress"
+				aria-valuemin="0"
+				aria-valuemax={Math.max(1, progress.total)}
+				aria-valuenow={progress.screened}
+			>
+				<div class="h-full bg-primary" style:width={`${progressPercent}%`}></div>
+			</div>
+			<span class="text-muted-foreground"
+				>{progress.included} included · {progress.excluded} excluded · {progress.maybe} maybe</span
+			>
 		</div>
 		<div class="flex flex-wrap items-center gap-2">
 			<Badge variant="secondary"
@@ -617,15 +617,15 @@
 					class="flex h-[calc(100vh-17rem)] flex-col overflow-hidden rounded-lg border border-border/70 bg-card"
 				>
 					<div class="flex items-center justify-between border-b bg-muted/20 px-3.5 py-3">
-							<div
-								class="flex items-center gap-1.5 text-xs font-semibold text-foreground"
-							>
-								<Inbox class="size-3.5 text-muted-foreground" />
-								<span>Queue ({queueItems.length})</span>
-							</div>
-							<Badge variant="outline" class="text-[10px] capitalize">
-								{urlState.status}
-							</Badge>
+						<div
+							class="flex items-center gap-1.5 text-xs font-semibold text-foreground"
+						>
+							<Inbox class="size-3.5 text-muted-foreground" />
+							<span>Queue ({queueItems.length})</span>
+						</div>
+						<Badge variant="outline" class="text-[10px] capitalize">
+							{urlState.status}
+						</Badge>
 					</div>
 					<ScrollArea class="flex-1 p-2">
 						{#if queueQuery.isPending}
@@ -688,7 +688,9 @@
 
 			<!-- Center Reading Canvas (Mail reading pane pattern) -->
 			<div class="flex min-w-0 flex-col gap-6" data-testid="screening-focus">
-				<div class="flex flex-wrap items-start justify-between gap-3 border-b border-border/60 pb-4">
+				<div
+					class="flex flex-wrap items-start justify-between gap-3 border-b border-border/60 pb-4"
+				>
 					<div class="flex items-center gap-2">
 						<span
 							class="flex size-8 items-center justify-center rounded-lg bg-primary/10 text-primary"
@@ -696,29 +698,29 @@
 						>
 						<div>
 							<h2 class="text-base font-semibold">Focus mode</h2>
-							<p class="text-xs text-muted-foreground"
-								>{#if current}Report {Math.max(currentIndex + 1, 1)} of {queueCount}{:else}Your
-								title/abstract queue{/if}</p
-							>
+							<p class="text-xs text-muted-foreground">
+								{#if current}Report {Math.max(currentIndex + 1, 1)} of {queueCount}{:else}Your
+									title/abstract queue{/if}
+							</p>
 						</div>
 					</div>
-						<div class="flex items-center gap-1">
-							<Button
-								variant="outline"
-								size="icon"
-								aria-label="Previous report (ArrowLeft)"
-								onclick={() => void move('previous')}
-								><ArrowLeft aria-hidden="true" /></Button
-							>
-							<Button
-								variant="outline"
-								size="icon"
-								aria-label="Next report (ArrowRight)"
-								onclick={() => void move('next')}
-								><ArrowRight aria-hidden="true" /></Button
-							>
-						</div>
+					<div class="flex items-center gap-1">
+						<Button
+							variant="outline"
+							size="icon"
+							aria-label="Previous report (ArrowLeft)"
+							onclick={() => void move('previous')}
+							><ArrowLeft aria-hidden="true" /></Button
+						>
+						<Button
+							variant="outline"
+							size="icon"
+							aria-label="Next report (ArrowRight)"
+							onclick={() => void move('next')}
+							><ArrowRight aria-hidden="true" /></Button
+						>
 					</div>
+				</div>
 				<div class="flex flex-col gap-6">
 					{#if queueQuery.isPending}
 						<div

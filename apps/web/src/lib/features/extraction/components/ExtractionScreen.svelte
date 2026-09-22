@@ -477,14 +477,12 @@
 	/>
 </svelte:head>
 
-<PageTemplate
-	testId="extraction-page"
-	data-extraction-state={pageState}
-	maxWidth="wide"
->
+<PageTemplate testId="extraction-page" data-extraction-state={pageState} maxWidth="wide">
 	<div class="flex flex-wrap items-center justify-between gap-2 border-b pb-3">
 		<div class="flex items-center gap-2">
-			<Badge variant="outline" data-testid="extraction-proposal-only">Review before saving</Badge>
+			<Badge variant="outline" data-testid="extraction-proposal-only"
+				>Review before saving</Badge
+			>
 			{#if proposalDirty}<span
 					class="text-sm text-muted-foreground"
 					data-testid="extraction-draft-status">Edited locally</span
@@ -492,658 +490,639 @@
 		</div>
 	</div>
 
-		{#if queryError}
-			<Alert.Root
-				variant="destructive"
-				role="alert"
-				data-testid="extraction-query-error"
-				data-extraction-state="error"
-			>
-				<Alert.Title>Extraction data unavailable</Alert.Title>
-				<Alert.Description>{queryError}</Alert.Description>
-			</Alert.Root>
-		{/if}
-		{#if actionStatus === 'validation' && actionError}
-			<Alert.Root
-				role="alert"
-				data-testid="extraction-action-status"
-				data-action-status="validation"
-			>
-				<Alert.Title>Review needs attention</Alert.Title>
-				<Alert.Description>{actionError}</Alert.Description>
-			</Alert.Root>
-		{/if}
+	{#if queryError}
+		<Alert.Root
+			variant="destructive"
+			role="alert"
+			data-testid="extraction-query-error"
+			data-extraction-state="error"
+		>
+			<Alert.Title>Extraction data unavailable</Alert.Title>
+			<Alert.Description>{queryError}</Alert.Description>
+		</Alert.Root>
+	{/if}
+	{#if actionStatus === 'validation' && actionError}
+		<Alert.Root
+			role="alert"
+			data-testid="extraction-action-status"
+			data-action-status="validation"
+		>
+			<Alert.Title>Review needs attention</Alert.Title>
+			<Alert.Description>{actionError}</Alert.Description>
+		</Alert.Root>
+	{/if}
 
-		<section class="workflow-section min-w-0" data-testid="extraction-study-card">
-			<header class="flex flex-col gap-2 pb-4">
-				<h2 class="text-base font-semibold">Study</h2>
-				<p class="text-sm text-muted-foreground">
-					Choose the study you want to extract data from.
-				</p>
-			</header>
-			<div class="min-w-0">
-				{#if studiesQuery.isPending}
-					<div data-testid="extraction-study-loading">
-						<StatePanel
-							state="loading"
-							title="Loading studies"
-							description="Retrieving the studies available for this workspace."
-							class="min-h-0 rounded-md border-0 p-4"
-						/>
-					</div>
-				{:else if hasNoStudies}
-					<div data-testid="extraction-study-empty">
-						<StatePanel
-							state="empty"
-							title="No studies yet"
-							description="Create or group a study before extracting data."
-							class="min-h-0 rounded-md border-0 p-4"
-						/>
-					</div>
-				{:else}
-					<Select.Root
-						type="single"
-						value={selectedStudyId ?? ''}
-						onValueChange={(value) => value && void selectStudy(value)}
+	<section class="workflow-section min-w-0" data-testid="extraction-study-card">
+		<header class="flex flex-col gap-2 pb-4">
+			<h2 class="text-base font-semibold">Study</h2>
+			<p class="text-sm text-muted-foreground">
+				Choose the study you want to extract data from.
+			</p>
+		</header>
+		<div class="min-w-0">
+			{#if studiesQuery.isPending}
+				<div data-testid="extraction-study-loading">
+					<StatePanel
+						state="loading"
+						title="Loading studies"
+						description="Retrieving the studies available for this workspace."
+						class="min-h-0 rounded-md border-0 p-4"
+					/>
+				</div>
+			{:else if hasNoStudies}
+				<div data-testid="extraction-study-empty">
+					<StatePanel
+						state="empty"
+						title="No studies yet"
+						description="Create or group a study before extracting data."
+						class="min-h-0 rounded-md border-0 p-4"
+					/>
+				</div>
+			{:else}
+				<Select.Root
+					type="single"
+					value={selectedStudyId ?? ''}
+					onValueChange={(value) => value && void selectStudy(value)}
+				>
+					<Select.Trigger id="extraction-study" class="w-full max-w-xl"
+						>{selectedStudyLabel}</Select.Trigger
 					>
-						<Select.Trigger id="extraction-study" class="w-full max-w-xl"
-							>{selectedStudyLabel}</Select.Trigger
-						>
-						<Select.Content>
-							<Select.Group>
-								{#each studies as study (study.id)}
-									<Select.Item value={study.id} label={study.title}
-										>{study.title}</Select.Item
-									>
-								{/each}
-							</Select.Group>
-						</Select.Content>
-					</Select.Root>
-				{/if}
-			</div>
-		</section>
+					<Select.Content>
+						<Select.Group>
+							{#each studies as study (study.id)}
+								<Select.Item value={study.id} label={study.title}
+									>{study.title}</Select.Item
+								>
+							{/each}
+						</Select.Group>
+					</Select.Content>
+				</Select.Root>
+			{/if}
+		</div>
+	</section>
 
-		<Tabs.Root value="fields" class="min-w-0 gap-6">
-			<Tabs.List
-				variant="line"
-				aria-label="Page sections"
-				class="max-w-full justify-start overflow-x-auto border-b"
-				><Tabs.Trigger value="fields">Fields</Tabs.Trigger><Tabs.Trigger value="review"
-					>Review proposals</Tabs.Trigger
-				><Tabs.Trigger value="values">Accepted values</Tabs.Trigger></Tabs.List
-			>
-			<Tabs.Content value="fields"
-				><section class="workflow-section min-w-0" data-testid="extraction-schema-card">
-					<header class="flex flex-col gap-2 pb-4">
-						<h2 class="text-base font-semibold">Current extraction fields</h2>
-						<p class="text-sm text-muted-foreground">
-							Choose which information to collect from each study.
-						</p>
-					</header>
-					<div class="flex min-w-0 flex-col gap-4">
-						{#if fieldsQuery.isPending}
-							<div data-testid="extraction-fields-loading">
-								<StatePanel
-									state="loading"
-									title="Loading schema"
-									description="Retrieving the current versioned fields."
-									class="min-h-0 rounded-md border-0 p-4"
+	<Tabs.Root value="fields" class="min-w-0 gap-6">
+		<Tabs.List
+			variant="line"
+			aria-label="Page sections"
+			class="max-w-full justify-start overflow-x-auto border-b"
+			><Tabs.Trigger value="fields">Fields</Tabs.Trigger><Tabs.Trigger value="review"
+				>Review proposals</Tabs.Trigger
+			><Tabs.Trigger value="values">Accepted values</Tabs.Trigger></Tabs.List
+		>
+		<Tabs.Content value="fields"
+			><section class="workflow-section min-w-0" data-testid="extraction-schema-card">
+				<header class="flex flex-col gap-2 pb-4">
+					<h2 class="text-base font-semibold">Current extraction fields</h2>
+					<p class="text-sm text-muted-foreground">
+						Choose which information to collect from each study.
+					</p>
+				</header>
+				<div class="flex min-w-0 flex-col gap-4">
+					{#if fieldsQuery.isPending}
+						<div data-testid="extraction-fields-loading">
+							<StatePanel
+								state="loading"
+								title="Loading schema"
+								description="Retrieving the current versioned fields."
+								class="min-h-0 rounded-md border-0 p-4"
+							/>
+						</div>
+					{:else if fields.length === 0}
+						<div data-testid="extraction-fields-empty">
+							<StatePanel
+								state="empty"
+								title="No fields configured"
+								description="No extraction fields are configured. Add a field to define the study data to extract."
+								class="min-h-0 rounded-md border-0 p-4"
+							/>
+						</div>
+					{:else}
+						<div class="flex flex-col gap-2" data-testid="extraction-fields">
+							{#each fields as field (field.id)}
+								<div data-testid={`extraction-field-${field.field_key}`}>
+									<Surface
+										as="article"
+										tone="inset"
+										class="flex flex-wrap items-center justify-between gap-2 p-3"
+									>
+										<div>
+											<p class="font-medium">{field.label}</p>
+											<p class="text-xs text-muted-foreground">
+												{field.field_key} · {valueTypeLabel(
+													field.value_type
+												)} · v{field.version}
+											</p>
+										</div>
+										{#if field.required}<Badge variant="secondary"
+												>Required</Badge
+											>{:else}<Badge variant="outline">Optional</Badge>{/if}
+									</Surface>
+								</div>
+							{/each}
+						</div>
+					{/if}
+
+					<Separator />
+					<form
+						class="flex flex-col gap-4"
+						aria-label="Add extraction field"
+						onsubmit={(event) => {
+							event.preventDefault();
+							void createField();
+						}}
+					>
+						<div>
+							<h3 class="font-medium">Add current field</h3>
+							<p class="text-xs text-muted-foreground">
+								Use a new version when the schema meaning changes.
+							</p>
+						</div>
+						{#if fieldFormError}<p
+								id="extraction-field-form-error"
+								class="text-sm text-destructive"
+								role="alert"
+							>
+								{fieldFormError}
+							</p>{/if}
+						<Field.FieldGroup>
+							<Field.Field>
+								<Field.FieldLabel for="extraction-field-key"
+									>Field key</Field.FieldLabel
+								>
+								<Input
+									id="extraction-field-key"
+									bind:value={newFieldKey}
+									placeholder="sample_size"
+									aria-describedby={fieldFormError
+										? 'extraction-field-form-error'
+										: undefined}
+									aria-invalid={Boolean(fieldFormError)}
 								/>
+							</Field.Field>
+							<Field.Field>
+								<Field.FieldLabel for="extraction-field-label"
+									>Label</Field.FieldLabel
+								>
+								<Input
+									id="extraction-field-label"
+									bind:value={newFieldLabel}
+									placeholder="Sample size"
+									aria-describedby={fieldFormError
+										? 'extraction-field-form-error'
+										: undefined}
+									aria-invalid={Boolean(fieldFormError)}
+								/>
+							</Field.Field>
+							<div class="grid gap-4 sm:grid-cols-2">
+								<Field.Field>
+									<Field.FieldLabel for="extraction-field-type"
+										>Value type</Field.FieldLabel
+									>
+									<Select.Root
+										type="single"
+										value={newValueType}
+										onValueChange={(value) => {
+											if (value && isExtractionValueType(value))
+												newValueType = value;
+										}}
+									>
+										<Select.Trigger id="extraction-field-type"
+											>{newValueType}</Select.Trigger
+										>
+										<Select.Content>
+											<Select.Group>
+												{#each EXTRACTION_VALUE_TYPES as value (value)}
+													<Select.Item {value} label={value}
+														>{value}</Select.Item
+													>
+												{/each}
+											</Select.Group>
+										</Select.Content>
+									</Select.Root>
+								</Field.Field>
+								<Field.Field>
+									<Field.FieldLabel for="extraction-field-version"
+										>Version</Field.FieldLabel
+									>
+									<Input
+										id="extraction-field-version"
+										type="number"
+										min="1"
+										step="1"
+										bind:value={newFieldVersion}
+										aria-describedby={fieldFormError
+											? 'extraction-field-form-error'
+											: undefined}
+										aria-invalid={Boolean(fieldFormError)}
+									/>
+								</Field.Field>
 							</div>
+							<Field.Field orientation="horizontal">
+								<Checkbox
+									id="extraction-field-required"
+									bind:checked={newFieldRequired}
+								/>
+								<Field.FieldLabel
+									for="extraction-field-required"
+									class="font-normal">Required field</Field.FieldLabel
+								>
+							</Field.Field>
+						</Field.FieldGroup>
+						<Button type="submit" disabled={createFieldMutation.isPending}>
+							{#if createFieldMutation.isPending}<Spinner
+									data-icon="inline-start"
+								/>{:else}<Plus data-icon="inline-start" />{/if}
+							{createFieldMutation.isPending ? 'Adding field…' : 'Add field'}
+						</Button>
+					</form>
+				</div>
+			</section></Tabs.Content
+		>
+		<Tabs.Content value="review"
+			><section class="workflow-section min-w-0" data-testid="extraction-review-card">
+				<header class="flex flex-col gap-2 gap-3 pb-4">
+					<div class="flex flex-wrap items-center justify-between gap-2">
+						<div class="flex items-center gap-2">
+							<Brain aria-hidden="true" />
+							<h2 class="text-base font-semibold">AI extraction proposal</h2>
+						</div>
+						<Button
+							variant="outline"
+							size="sm"
+							disabled={!canGenerate}
+							onclick={() => void generateProposal()}
+						>
+							{#if generateMutation.isPending || reviewRun.isActive}<Spinner
+									data-icon="inline-start"
+								/>{:else}<RefreshCw data-icon="inline-start" />{/if}
+							{generateMutation.isPending || reviewRun.isActive
+								? 'Generating…'
+								: 'Generate proposal'}
+						</Button>
+					</div>
+					<p class="text-sm text-muted-foreground">
+						{#if !selectedStudyId}
+							Select a study to load its pending proposal and accepted values.
 						{:else if fields.length === 0}
-							<div data-testid="extraction-fields-empty">
-								<StatePanel
-									state="empty"
-									title="No fields configured"
-									description="No extraction fields are configured. Add a field to define the study data to extract."
-									class="min-h-0 rounded-md border-0 p-4"
-								/>
-							</div>
+							Create at least one current field before generating a proposal.
 						{:else}
-							<div class="flex flex-col gap-2" data-testid="extraction-fields">
-								{#each fields as field (field.id)}
-									<div data-testid={`extraction-field-${field.field_key}`}>
-										<Surface
-											as="article"
-											tone="inset"
-											class="flex flex-wrap items-center justify-between gap-2 p-3"
+							Suggestions are scoped to {selectedStudyLabel}; accept and reject
+							decisions are audited.
+						{/if}
+					</p>
+				</header>
+				<div class="flex min-w-0 flex-col gap-4">
+					{#if !selectedStudyId}
+						<div data-testid="extraction-review-empty">
+							<StatePanel
+								state="empty"
+								title="Select a study"
+								description="Choose a study above to see its proposed and saved values."
+								class="min-h-0 rounded-md border-0 p-4"
+							/>
+						</div>
+					{:else if loading}
+						<div data-testid="extraction-review-loading">
+							<StatePanel
+								state="loading"
+								title="Loading review"
+								description="Retrieving proposal, accepted values, and provenance."
+								class="min-h-0 rounded-md border-0 p-4"
+							/>
+						</div>
+					{:else if !activeProposal}
+						<div data-testid="extraction-review-empty">
+							<StatePanel
+								state="empty"
+								title="No pending proposal"
+								description="Generate a proposal, then check each suggested value against its source."
+								class="min-h-0 rounded-md border-0 p-4"
+							/>
+						</div>
+					{:else}
+						{@const proposal = activeProposal}
+						<div class="flex flex-wrap items-center gap-2">
+							<Badge variant="secondary">pending</Badge>
+							{#if proposalDirty}<Badge variant="outline">Edited locally</Badge>{/if}
+							<span class="text-xs text-muted-foreground"
+								>{proposal.provider} / {proposal.model} · prompt {proposal.prompt_version}</span
+							>
+						</div>
+						<div class="flex flex-col gap-4" data-testid="extraction-proposal-editor">
+							{#each draftFields as draft (draft.field_id)}
+								{@const original = originalField(draft.field_id)}
+								{@const field = fields.find(
+									(candidate) => candidate.id === draft.field_id
+								)}
+								<div data-testid={`extraction-proposal-field-${draft.field_id}`}>
+									<Surface as="article" tone="inset" class="p-4">
+										<div
+											class="flex flex-wrap items-start justify-between gap-2"
 										>
 											<div>
-												<p class="font-medium">{field.label}</p>
+												<h3 class="font-medium">
+													{field?.label ?? fieldLabel(draft.field_id)}
+												</h3>
 												<p class="text-xs text-muted-foreground">
-													{field.field_key} · {valueTypeLabel(
-														field.value_type
-													)} · v{field.version}
+													Field {draft.field_id} · version {draft.field_version}
 												</p>
 											</div>
-											{#if field.required}<Badge variant="secondary"
-													>Required</Badge
-												>{:else}<Badge variant="outline">Optional</Badge
+											{#if draft.kind === 'insufficient_evidence'}<Badge
+													variant="outline">Insufficient evidence</Badge
+												>{:else}<Badge variant="secondary"
+													>{draft.value.kind}</Badge
 												>{/if}
-										</Surface>
-									</div>
-								{/each}
-							</div>
-						{/if}
-
-						<Separator />
-						<form
-							class="flex flex-col gap-4"
-							aria-label="Add extraction field"
-							onsubmit={(event) => {
-								event.preventDefault();
-								void createField();
-							}}
-						>
-							<div>
-								<h3 class="font-medium">Add current field</h3>
-								<p class="text-xs text-muted-foreground">
-									Use a new version when the schema meaning changes.
-								</p>
-							</div>
-							{#if fieldFormError}<p
-									id="extraction-field-form-error"
-									class="text-sm text-destructive"
-									role="alert"
-								>
-									{fieldFormError}
-								</p>{/if}
-							<Field.FieldGroup>
-								<Field.Field>
-									<Field.FieldLabel for="extraction-field-key"
-										>Field key</Field.FieldLabel
-									>
-									<Input
-										id="extraction-field-key"
-										bind:value={newFieldKey}
-										placeholder="sample_size"
-										aria-describedby={fieldFormError
-											? 'extraction-field-form-error'
-											: undefined}
-										aria-invalid={Boolean(fieldFormError)}
-									/>
-								</Field.Field>
-								<Field.Field>
-									<Field.FieldLabel for="extraction-field-label"
-										>Label</Field.FieldLabel
-									>
-									<Input
-										id="extraction-field-label"
-										bind:value={newFieldLabel}
-										placeholder="Sample size"
-										aria-describedby={fieldFormError
-											? 'extraction-field-form-error'
-											: undefined}
-										aria-invalid={Boolean(fieldFormError)}
-									/>
-								</Field.Field>
-								<div class="grid gap-4 sm:grid-cols-2">
-									<Field.Field>
-										<Field.FieldLabel for="extraction-field-type"
-											>Value type</Field.FieldLabel
-										>
-										<Select.Root
-											type="single"
-											value={newValueType}
-											onValueChange={(value) => {
-												if (value && isExtractionValueType(value))
-													newValueType = value;
-											}}
-										>
-											<Select.Trigger id="extraction-field-type"
-												>{newValueType}</Select.Trigger
-											>
-											<Select.Content>
-												<Select.Group>
-													{#each EXTRACTION_VALUE_TYPES as value (value)}
-														<Select.Item {value} label={value}
-															>{value}</Select.Item
-														>
-													{/each}
-												</Select.Group>
-											</Select.Content>
-										</Select.Root>
-									</Field.Field>
-									<Field.Field>
-										<Field.FieldLabel for="extraction-field-version"
-											>Version</Field.FieldLabel
-										>
-										<Input
-											id="extraction-field-version"
-											type="number"
-											min="1"
-											step="1"
-											bind:value={newFieldVersion}
-											aria-describedby={fieldFormError
-												? 'extraction-field-form-error'
-												: undefined}
-											aria-invalid={Boolean(fieldFormError)}
-										/>
-									</Field.Field>
-								</div>
-								<Field.Field orientation="horizontal">
-									<Checkbox
-										id="extraction-field-required"
-										bind:checked={newFieldRequired}
-									/>
-									<Field.FieldLabel
-										for="extraction-field-required"
-										class="font-normal">Required field</Field.FieldLabel
-									>
-								</Field.Field>
-							</Field.FieldGroup>
-							<Button type="submit" disabled={createFieldMutation.isPending}>
-								{#if createFieldMutation.isPending}<Spinner
-										data-icon="inline-start"
-									/>{:else}<Plus data-icon="inline-start" />{/if}
-								{createFieldMutation.isPending ? 'Adding field…' : 'Add field'}
-							</Button>
-						</form>
-					</div>
-				</section></Tabs.Content
-			>
-			<Tabs.Content value="review"
-				><section class="workflow-section min-w-0" data-testid="extraction-review-card">
-					<header class="flex flex-col gap-2 gap-3 pb-4">
-						<div class="flex flex-wrap items-center justify-between gap-2">
-							<div class="flex items-center gap-2">
-								<Brain aria-hidden="true" />
-								<h2 class="text-base font-semibold">AI extraction proposal</h2>
-							</div>
-							<Button
-								variant="outline"
-								size="sm"
-								disabled={!canGenerate}
-								onclick={() => void generateProposal()}
-							>
-								{#if generateMutation.isPending || reviewRun.isActive}<Spinner
-										data-icon="inline-start"
-									/>{:else}<RefreshCw data-icon="inline-start" />{/if}
-								{generateMutation.isPending || reviewRun.isActive
-									? 'Generating…'
-									: 'Generate proposal'}
-							</Button>
-						</div>
-						<p class="text-sm text-muted-foreground">
-							{#if !selectedStudyId}
-								Select a study to load its pending proposal and accepted values.
-							{:else if fields.length === 0}
-								Create at least one current field before generating a proposal.
-							{:else}
-								Suggestions are scoped to {selectedStudyLabel}; accept and reject
-								decisions are audited.
-							{/if}
-						</p>
-					</header>
-					<div class="flex min-w-0 flex-col gap-4">
-						{#if !selectedStudyId}
-							<div data-testid="extraction-review-empty">
-								<StatePanel
-									state="empty"
-									title="Select a study"
-									description="Choose a study above to see its proposed and saved values."
-									class="min-h-0 rounded-md border-0 p-4"
-								/>
-							</div>
-						{:else if loading}
-							<div data-testid="extraction-review-loading">
-								<StatePanel
-									state="loading"
-									title="Loading review"
-									description="Retrieving proposal, accepted values, and provenance."
-									class="min-h-0 rounded-md border-0 p-4"
-								/>
-							</div>
-						{:else if !activeProposal}
-							<div data-testid="extraction-review-empty">
-								<StatePanel
-									state="empty"
-									title="No pending proposal"
-									description="Generate a proposal, then check each suggested value against its source."
-									class="min-h-0 rounded-md border-0 p-4"
-								/>
-							</div>
-						{:else}
-							{@const proposal = activeProposal}
-							<div class="flex flex-wrap items-center gap-2">
-								<Badge variant="secondary">pending</Badge>
-								{#if proposalDirty}<Badge variant="outline">Edited locally</Badge
-									>{/if}
-								<span class="text-xs text-muted-foreground"
-									>{proposal.provider} / {proposal.model} · prompt {proposal.prompt_version}</span
-								>
-							</div>
-							<div
-								class="flex flex-col gap-4"
-								data-testid="extraction-proposal-editor"
-							>
-								{#each draftFields as draft (draft.field_id)}
-									{@const original = originalField(draft.field_id)}
-									{@const field = fields.find(
-										(candidate) => candidate.id === draft.field_id
-									)}
-									<div
-										data-testid={`extraction-proposal-field-${draft.field_id}`}
-									>
-										<Surface as="article" tone="inset" class="p-4">
-											<div
-												class="flex flex-wrap items-start justify-between gap-2"
-											>
-												<div>
-													<h3 class="font-medium">
-														{field?.label ?? fieldLabel(draft.field_id)}
-													</h3>
-													<p class="text-xs text-muted-foreground">
-														Field {draft.field_id} · version {draft.field_version}
-													</p>
-												</div>
-												{#if draft.kind === 'insufficient_evidence'}<Badge
-														variant="outline"
-														>Insufficient evidence</Badge
-													>{:else}<Badge variant="secondary"
-														>{draft.value.kind}</Badge
-													>{/if}
-											</div>
-											<Field.FieldGroup class="mt-4">
-												<Field.Field>
-													<Field.FieldLabel
-														for={`extraction-rationale-${draft.field_id}`}
-														>Reviewer rationale</Field.FieldLabel
-													>
-													<Textarea
-														id={`extraction-rationale-${draft.field_id}`}
-														rows={2}
-														value={draft.rationale}
-														oninput={(event) =>
-															setDraftRationale(
-																draft.field_id,
-																event
-															)}
-													/>
-												</Field.Field>
-												{#if draft.kind === 'value'}
-													{#if draft.value.kind === 'text'}
-														<Field.Field>
-															<Field.FieldLabel
-																for={`extraction-value-${draft.field_id}`}
-																>Text value</Field.FieldLabel
-															>
-															<Input
-																id={`extraction-value-${draft.field_id}`}
-																value={draft.value.value}
-																oninput={(event) =>
-																	setDraftTextValue(
-																		draft.field_id,
-																		event
-																	)}
-															/>
-														</Field.Field>
-													{:else if draft.value.kind === 'number'}
-														<Field.Field>
-															<Field.FieldLabel
-																for={`extraction-value-${draft.field_id}`}
-																>Number value</Field.FieldLabel
-															>
-															<Input
-																id={`extraction-value-${draft.field_id}`}
-																type="number"
-																step="any"
-																value={draft.value.value}
-																oninput={(event) =>
-																	setDraftNumberValue(
-																		draft.field_id,
-																		event
-																	)}
-															/>
-														</Field.Field>
-													{:else if draft.value.kind === 'boolean'}
-														<Field.Field orientation="horizontal">
-															<Checkbox
-																id={`extraction-value-${draft.field_id}`}
-																checked={draft.value.value}
-																onCheckedChange={(checked) =>
-																	setDraftValue(draft.field_id, {
-																		kind: 'boolean',
-																		value: checked === true
-																	})}
-															/>
-															<Field.FieldLabel
-																for={`extraction-value-${draft.field_id}`}
-																class="font-normal"
-																>Boolean value</Field.FieldLabel
-															>
-														</Field.Field>
-													{:else if draft.value.kind === 'date'}
-														<Field.Field>
-															<Field.FieldLabel
-																for={`extraction-value-${draft.field_id}`}
-																>ISO date value</Field.FieldLabel
-															>
-															<Input
-																id={`extraction-value-${draft.field_id}`}
-																type="date"
-																value={draft.value.value}
-																oninput={(event) =>
-																	setDraftDateValue(
-																		draft.field_id,
-																		event
-																	)}
-															/>
-														</Field.Field>
-													{/if}
-												{:else}
-													<p class="text-sm text-muted-foreground">
-														This field will not write a value unless a
-														reviewer supplies a supported source-backed
-														value.
-													</p>
-													{#if field?.required}
-														<p
-															class="text-sm text-destructive"
-															role="status"
-														>
-															Required field: insufficiency cannot be
-															accepted. Enter a source-backed value or
-															generate a new grounded proposal.
-														</p>
-													{/if}
-												{/if}
-											</Field.FieldGroup>
-
+										</div>
+										<Field.FieldGroup class="mt-4">
+											<Field.Field>
+												<Field.FieldLabel
+													for={`extraction-rationale-${draft.field_id}`}
+													>Reviewer rationale</Field.FieldLabel
+												>
+												<Textarea
+													id={`extraction-rationale-${draft.field_id}`}
+													rows={2}
+													value={draft.rationale}
+													oninput={(event) =>
+														setDraftRationale(draft.field_id, event)}
+												/>
+											</Field.Field>
 											{#if draft.kind === 'value'}
-												<Surface
-													as="aside"
-													tone="subtle"
-													class="mt-4 p-3 text-sm"
-													label="Evidence provenance"
-												>
-													<div
-														class="flex items-center gap-2 font-medium"
-													>
-														<FileSearch aria-hidden="true" />Evidence
-													</div>
-													<a
-														class="mt-2 block text-primary underline underline-offset-4"
-														href={resolve(
-															`/projects/${encodeURIComponent(projectId)}/screening/full-text${buildExtractionEvidenceSearch(draft.source)}`
-														)}
-														data-testid="extraction-evidence-link"
-													>
-														{evidenceLabel(draft.source)}
-													</a>
-													<p
-														class="mt-1 text-xs break-all text-muted-foreground"
-													>
-														document {draft.source.document_id} · parser {draft
-															.source.parser_version} · hash {draft
-															.source.content_hash}
-													</p>
-												</Surface>
-												<Button
-													variant="outline"
-													size="sm"
-													class="mt-3"
-													onclick={() => markInsufficient(draft.field_id)}
-												>
-													<X data-icon="inline-start" />Mark insufficient
-													evidence
-												</Button>
-											{:else if original?.kind === 'value'}
-												<Button
-													variant="outline"
-													size="sm"
-													class="mt-3"
-													onclick={() =>
-														enterReviewedValue(draft.field_id)}
-													data-testid={`enter-reviewed-value-${draft.field_id}`}
-												>
-													<Plus data-icon="inline-start" />Enter reviewed
-													value
-												</Button>
-												<Button
-													variant="outline"
-													size="sm"
-													class="mt-3"
-													onclick={() =>
-														restoreOriginalValue(draft.field_id)}
-												>
-													<RefreshCw data-icon="inline-start" />Restore
-													proposed value
-												</Button>
+												{#if draft.value.kind === 'text'}
+													<Field.Field>
+														<Field.FieldLabel
+															for={`extraction-value-${draft.field_id}`}
+															>Text value</Field.FieldLabel
+														>
+														<Input
+															id={`extraction-value-${draft.field_id}`}
+															value={draft.value.value}
+															oninput={(event) =>
+																setDraftTextValue(
+																	draft.field_id,
+																	event
+																)}
+														/>
+													</Field.Field>
+												{:else if draft.value.kind === 'number'}
+													<Field.Field>
+														<Field.FieldLabel
+															for={`extraction-value-${draft.field_id}`}
+															>Number value</Field.FieldLabel
+														>
+														<Input
+															id={`extraction-value-${draft.field_id}`}
+															type="number"
+															step="any"
+															value={draft.value.value}
+															oninput={(event) =>
+																setDraftNumberValue(
+																	draft.field_id,
+																	event
+																)}
+														/>
+													</Field.Field>
+												{:else if draft.value.kind === 'boolean'}
+													<Field.Field orientation="horizontal">
+														<Checkbox
+															id={`extraction-value-${draft.field_id}`}
+															checked={draft.value.value}
+															onCheckedChange={(checked) =>
+																setDraftValue(draft.field_id, {
+																	kind: 'boolean',
+																	value: checked === true
+																})}
+														/>
+														<Field.FieldLabel
+															for={`extraction-value-${draft.field_id}`}
+															class="font-normal"
+															>Boolean value</Field.FieldLabel
+														>
+													</Field.Field>
+												{:else if draft.value.kind === 'date'}
+													<Field.Field>
+														<Field.FieldLabel
+															for={`extraction-value-${draft.field_id}`}
+															>ISO date value</Field.FieldLabel
+														>
+														<Input
+															id={`extraction-value-${draft.field_id}`}
+															type="date"
+															value={draft.value.value}
+															oninput={(event) =>
+																setDraftDateValue(
+																	draft.field_id,
+																	event
+																)}
+														/>
+													</Field.Field>
+												{/if}
 											{:else}
-												<p
-													class="mt-3 text-sm text-muted-foreground"
-													role="status"
-												>
-													No source block is attached to this
-													insufficient-evidence proposal. Entering a value
-													is unavailable; generate a new grounded proposal
-													before accepting a value.
+												<p class="text-sm text-muted-foreground">
+													This field will not write a value unless a
+													reviewer supplies a supported source-backed
+													value.
 												</p>
+												{#if field?.required}
+													<p
+														class="text-sm text-destructive"
+														role="status"
+													>
+														Required field: insufficiency cannot be
+														accepted. Enter a source-backed value or
+														generate a new grounded proposal.
+													</p>
+												{/if}
 											{/if}
-										</Surface>
-									</div>
-								{/each}
-							</div>
-							<div class="flex flex-wrap gap-2 border-t pt-4">
-								<Button
-									disabled={Boolean(actingProposalId)}
-									onclick={() => void decideProposal(proposal, 'accept')}
-								>
-									{#if actingProposalId === proposal.id}<Spinner
-											data-icon="inline-start"
-										/>{:else}<Check data-icon="inline-start" />{/if}
-									Accept reviewed values
-								</Button>
-								<Button
-									variant="outline"
-									disabled={Boolean(actingProposalId)}
-									onclick={() => void decideProposal(proposal, 'reject')}
-								>
-									<X data-icon="inline-start" />Reject proposal
-								</Button>
-							</div>
-						{/if}
-					</div>
-				</section></Tabs.Content
-			>
-			<Tabs.Content value="values"
-				>{#if selectedStudyId}<section
-						class="workflow-section min-w-0"
-						data-testid="extraction-accepted-card"
-					>
-						<header class="flex flex-col gap-2 pb-4">
-							<h2 class="text-base font-semibold">Accepted values</h2>
-							<p class="text-sm text-muted-foreground">
-								Only audited, approved values appear here. Grouping changes do not
-								rewrite their provenance.
-							</p>
-						</header>
-						<div class="min-w-0">
-							{#if valuesQuery.isPending}
-								<div data-testid="extraction-values-loading">
-									<StatePanel
-										state="loading"
-										title="Loading accepted values"
-										description="Retrieving audited values and their immutable provenance."
-										class="min-h-0 rounded-md border-0 p-4"
-									/>
-								</div>
-							{:else if values.length === 0}
-								<div data-testid="extraction-values-empty">
-									<StatePanel
-										state="empty"
-										title="No accepted values"
-										description="Approved extraction values will be listed with their immutable source details."
-										class="min-h-0 rounded-md border-0 p-4"
-									/>
-								</div>
-							{:else}
-								<div
-									class="flex flex-col gap-3"
-									data-testid="accepted-extraction-values"
-								>
-									{#each values as value (extractionValueKey(value))}
-										<div
-											data-testid={`accepted-extraction-value-${value.field_definition_id}`}
-										>
-											<Surface as="article" tone="inset" class="p-3">
-												<div
-													class="flex flex-wrap items-start justify-between gap-2"
-												>
-													<div>
-														<p class="font-medium">
-															{fieldLabel(value.field_definition_id)}
-														</p>
-														<p class="text-sm">
-															{typedValueLabel(value.value)}
-														</p>
-													</div>
-													<Badge variant="secondary">approved</Badge>
+										</Field.FieldGroup>
+
+										{#if draft.kind === 'value'}
+											<Surface
+												as="aside"
+												tone="subtle"
+												class="mt-4 p-3 text-sm"
+												label="Evidence provenance"
+											>
+												<div class="flex items-center gap-2 font-medium">
+													<FileSearch aria-hidden="true" />Evidence
 												</div>
-												<p class="mt-2 text-xs text-muted-foreground">
-													{value.rationale}
-												</p>
 												<a
-													class="mt-2 block text-sm text-primary underline underline-offset-4"
+													class="mt-2 block text-primary underline underline-offset-4"
 													href={resolve(
-														`/projects/${encodeURIComponent(projectId)}/screening/full-text${buildExtractionEvidenceSearch(
-															{
-																report_id: value.report_id,
-																document_id:
-																	value.source_document_id,
-																document_block_id:
-																	value.source_block_id,
-																page: value.source_page,
-																parser_version:
-																	value.source_parser_version,
-																content_hash:
-																	value.source_content_hash
-															}
-														)}`
+														`/projects/${encodeURIComponent(projectId)}/screening/full-text${buildExtractionEvidenceSearch(draft.source)}`
 													)}
+													data-testid="extraction-evidence-link"
 												>
-													{evidenceLabel({
-														report_id: value.report_id,
-														page: value.source_page,
-														document_block_id: value.source_block_id
-													})}
+													{evidenceLabel(draft.source)}
 												</a>
 												<p
 													class="mt-1 text-xs break-all text-muted-foreground"
 												>
-													document {value.source_document_id} · parser {value.source_parser_version}
-													· hash {value.source_content_hash}
+													document {draft.source.document_id} · parser {draft
+														.source.parser_version} · hash {draft.source
+														.content_hash}
 												</p>
 											</Surface>
-										</div>
-									{/each}
+											<Button
+												variant="outline"
+												size="sm"
+												class="mt-3"
+												onclick={() => markInsufficient(draft.field_id)}
+											>
+												<X data-icon="inline-start" />Mark insufficient
+												evidence
+											</Button>
+										{:else if original?.kind === 'value'}
+											<Button
+												variant="outline"
+												size="sm"
+												class="mt-3"
+												onclick={() => enterReviewedValue(draft.field_id)}
+												data-testid={`enter-reviewed-value-${draft.field_id}`}
+											>
+												<Plus data-icon="inline-start" />Enter reviewed
+												value
+											</Button>
+											<Button
+												variant="outline"
+												size="sm"
+												class="mt-3"
+												onclick={() => restoreOriginalValue(draft.field_id)}
+											>
+												<RefreshCw data-icon="inline-start" />Restore
+												proposed value
+											</Button>
+										{:else}
+											<p
+												class="mt-3 text-sm text-muted-foreground"
+												role="status"
+											>
+												No source block is attached to this
+												insufficient-evidence proposal. Entering a value is
+												unavailable; generate a new grounded proposal before
+												accepting a value.
+											</p>
+										{/if}
+									</Surface>
 								</div>
-							{/if}
+							{/each}
 						</div>
-					</section>{:else}<p class="text-muted-foreground">
-						Choose a study to view its accepted values.
-					</p>{/if}</Tabs.Content
-			>
-		</Tabs.Root>
+						<div class="flex flex-wrap gap-2 border-t pt-4">
+							<Button
+								disabled={Boolean(actingProposalId)}
+								onclick={() => void decideProposal(proposal, 'accept')}
+							>
+								{#if actingProposalId === proposal.id}<Spinner
+										data-icon="inline-start"
+									/>{:else}<Check data-icon="inline-start" />{/if}
+								Accept reviewed values
+							</Button>
+							<Button
+								variant="outline"
+								disabled={Boolean(actingProposalId)}
+								onclick={() => void decideProposal(proposal, 'reject')}
+							>
+								<X data-icon="inline-start" />Reject proposal
+							</Button>
+						</div>
+					{/if}
+				</div>
+			</section></Tabs.Content
+		>
+		<Tabs.Content value="values"
+			>{#if selectedStudyId}<section
+					class="workflow-section min-w-0"
+					data-testid="extraction-accepted-card"
+				>
+					<header class="flex flex-col gap-2 pb-4">
+						<h2 class="text-base font-semibold">Accepted values</h2>
+						<p class="text-sm text-muted-foreground">
+							Only audited, approved values appear here. Grouping changes do not
+							rewrite their provenance.
+						</p>
+					</header>
+					<div class="min-w-0">
+						{#if valuesQuery.isPending}
+							<div data-testid="extraction-values-loading">
+								<StatePanel
+									state="loading"
+									title="Loading accepted values"
+									description="Retrieving audited values and their immutable provenance."
+									class="min-h-0 rounded-md border-0 p-4"
+								/>
+							</div>
+						{:else if values.length === 0}
+							<div data-testid="extraction-values-empty">
+								<StatePanel
+									state="empty"
+									title="No accepted values"
+									description="Approved extraction values will be listed with their immutable source details."
+									class="min-h-0 rounded-md border-0 p-4"
+								/>
+							</div>
+						{:else}
+							<div
+								class="flex flex-col gap-3"
+								data-testid="accepted-extraction-values"
+							>
+								{#each values as value (extractionValueKey(value))}
+									<div
+										data-testid={`accepted-extraction-value-${value.field_definition_id}`}
+									>
+										<Surface as="article" tone="inset" class="p-3">
+											<div
+												class="flex flex-wrap items-start justify-between gap-2"
+											>
+												<div>
+													<p class="font-medium">
+														{fieldLabel(value.field_definition_id)}
+													</p>
+													<p class="text-sm">
+														{typedValueLabel(value.value)}
+													</p>
+												</div>
+												<Badge variant="secondary">approved</Badge>
+											</div>
+											<p class="mt-2 text-xs text-muted-foreground">
+												{value.rationale}
+											</p>
+											<a
+												class="mt-2 block text-sm text-primary underline underline-offset-4"
+												href={resolve(
+													`/projects/${encodeURIComponent(projectId)}/screening/full-text${buildExtractionEvidenceSearch(
+														{
+															report_id: value.report_id,
+															document_id: value.source_document_id,
+															document_block_id:
+																value.source_block_id,
+															page: value.source_page,
+															parser_version:
+																value.source_parser_version,
+															content_hash: value.source_content_hash
+														}
+													)}`
+												)}
+											>
+												{evidenceLabel({
+													report_id: value.report_id,
+													page: value.source_page,
+													document_block_id: value.source_block_id
+												})}
+											</a>
+											<p class="mt-1 text-xs break-all text-muted-foreground">
+												document {value.source_document_id} · parser {value.source_parser_version}
+												· hash {value.source_content_hash}
+											</p>
+										</Surface>
+									</div>
+								{/each}
+							</div>
+						{/if}
+					</div>
+				</section>{:else}<p class="text-muted-foreground">
+					Choose a study to view its accepted values.
+				</p>{/if}</Tabs.Content
+		>
+	</Tabs.Root>
 </PageTemplate>

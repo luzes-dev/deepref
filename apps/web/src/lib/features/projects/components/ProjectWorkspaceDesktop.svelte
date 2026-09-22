@@ -56,7 +56,7 @@
 		return undefined;
 	});
 
-	const viewTitle = $derived(currentRoute?.label ?? 'Overview');
+	const viewTitle = $derived(currentRoute?.title ?? currentRoute?.label ?? 'Overview');
 	const projectList = $derived(workspace.projects.map((p) => ({ id: p.id, name: p.name })));
 	const agentHref = $derived(
 		projectId ? resolve('/projects/[projectId]/assistant', { projectId }) : undefined

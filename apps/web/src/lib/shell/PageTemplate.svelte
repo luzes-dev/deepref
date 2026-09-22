@@ -5,7 +5,7 @@
 	let {
 		testId,
 		maxWidth = 'default',
-		scrollable = true,
+		scrollable,
 		title,
 		description,
 		class: className = '',
@@ -38,8 +38,9 @@
 
 <div
 	class={cn(
-		'flex min-h-0 flex-1 flex-col bg-background text-foreground focus:outline-none',
-		scrollable ? 'h-full overflow-auto' : 'h-full overflow-hidden',
+		'flex min-h-full w-full flex-1 flex-col bg-background text-foreground focus:outline-none',
+		scrollable === true && 'h-full overflow-auto',
+		scrollable === false && 'h-full overflow-hidden',
 		className
 	)}
 	tabindex="-1"

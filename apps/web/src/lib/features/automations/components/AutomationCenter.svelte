@@ -480,7 +480,7 @@
 			}}
 		/>
 	{:else}
-		<PageTemplate testId="automation-manager" maxWidth="narrow" class="h-full">
+		<PageTemplate testId="automation-hub" maxWidth="narrow" class="h-full">
 			<div class="flex flex-wrap items-center justify-end gap-2 border-b pb-3">
 				<Button
 					variant="ghost"

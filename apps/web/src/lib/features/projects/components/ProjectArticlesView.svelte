@@ -107,8 +107,8 @@
 			<CircleAlertIcon />
 			<Alert.Title>Metrics may be stale</Alert.Title>
 			<Alert.Description>
-				{staleMetrics.length} loaded article metrics are awaiting graph projection. Metrics
-				as of {latestMetricsAsOf ?? 'not yet computed'}.
+				{staleMetrics.length} loaded article metrics are awaiting graph projection. Metrics as
+				of {latestMetricsAsOf ?? 'not yet computed'}.
 			</Alert.Description>
 		</Alert.Root>
 	{/if}
@@ -129,9 +129,7 @@
 		<Empty.Root class="min-h-80 border-dashed">
 			<Empty.Header>
 				<Empty.Title>No articles</Empty.Title>
-				<Empty.Description
-					>Start an ingestion to populate this project.</Empty.Description
-				>
+				<Empty.Description>Start an ingestion to populate this project.</Empty.Description>
 			</Empty.Header>
 		</Empty.Root>
 	{:else}

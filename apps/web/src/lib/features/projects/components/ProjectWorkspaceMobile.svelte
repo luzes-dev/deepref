@@ -32,7 +32,7 @@
 		}
 		return undefined;
 	});
-	const mobileViewLabel = $derived(currentRoute?.label ?? 'Overview');
+	const mobileViewLabel = $derived(currentRoute?.title ?? currentRoute?.label ?? 'Overview');
 	const articleSheetOpen = $derived(
 		Boolean(workspace.selectedArticle) &&
 			(workspace.view === 'articles' ||
@@ -65,13 +65,13 @@
 			</Button>
 			<div class="min-w-0 flex-1">
 				<p class="text-xs font-bold tracking-[0.16em] text-primary uppercase">DeepRef</p>
-				<p
+				<h1
 					class="truncate text-sm font-medium text-foreground"
 					data-testid="mobile-current-route"
 					aria-live="polite"
 				>
 					{mobileViewLabel}
-				</p>
+				</h1>
 			</div>
 		</div>
 		<div class="min-w-0">
@@ -149,11 +149,10 @@
 						menuOpen = false;
 						void openSettingsFromLink(event);
 					}}
-					class={buttonVariants({
-						variant: 'ghost',
-						size: 'sm',
-						class: 'w-full justify-start'
-					})}
+					class={cn(
+						buttonVariants({ variant: 'ghost', size: 'sm' }),
+						'w-full justify-start gap-2'
+					)}
 				>
 					<SettingsIcon data-icon="inline-start" aria-hidden="true" />
 					Settings

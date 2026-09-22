@@ -304,14 +304,14 @@
 	>
 		{#snippet children(headerMeta)}
 			<div class="flex flex-wrap items-center justify-end gap-2 border-b pb-3">
-					<Badge variant="outline">v{headerMeta.version}</Badge>
-					<Badge variant={headerMeta.status === 'published' ? 'default' : 'secondary'}>
-						{headerMeta.status}
-					</Badge>
-					{#if headerMeta.amendmentOf}
-						<Badge variant="outline">Amends {headerMeta.amendmentOf.slice(0, 8)}</Badge>
-					{/if}
-				</div>
+				<Badge variant="outline">v{headerMeta.version}</Badge>
+				<Badge variant={headerMeta.status === 'published' ? 'default' : 'secondary'}>
+					{headerMeta.status}
+				</Badge>
+				{#if headerMeta.amendmentOf}
+					<Badge variant="outline">Amends {headerMeta.amendmentOf.slice(0, 8)}</Badge>
+				{/if}
+			</div>
 		{/snippet}
 	</form.Subscribe>
 
