@@ -16,6 +16,7 @@ function pageLocation(url: URL): string {
 }
 
 function navigateNormally(): void {
+	// fallow-ignore-next-line security-sink -- Fallback target is the constant settings route path, never user input
 	void goto(settingsHref).catch(() => window.location.assign(settingsHref));
 }
 
@@ -103,6 +104,7 @@ export function expandSettings(): void {
 	delete nextState.settingsExpansion;
 	nextState.settingsExpansion = { backgroundUrl: overlay.backgroundUrl };
 
+	// fallow-ignore-next-line security-sink -- Fallback target is the constant settings route path, never user input
 	void goto(settingsHref, { state: nextState }).catch(() => window.location.assign(settingsHref));
 }
 
