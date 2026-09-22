@@ -9,6 +9,7 @@
 	import { ModeWatcher } from 'mode-watcher';
 	import { QueryClientProvider } from '@tanstack/svelte-query';
 	import NotificationsWatcher from '$lib/features/notifications/NotificationsWatcher.svelte';
+	import SettingsDialog from '$lib/features/settings/SettingsDialog.svelte';
 
 	let { children } = $props();
 	const queryClient = createAppQueryClient();
@@ -26,6 +27,7 @@
 	<PageFrame>
 		{@render children()}
 	</PageFrame>
+	<SettingsDialog />
 	<NotificationsWatcher />
 	<Toaster position="bottom-right" closeButton />
 </QueryClientProvider>

@@ -7,6 +7,7 @@
 	import * as Sheet from '@deepref/ui/sheet';
 	import MenuIcon from '@lucide/svelte/icons/menu';
 	import SettingsIcon from '@lucide/svelte/icons/settings-2';
+	import { openSettingsFromLink } from '$lib/features/settings/navigation';
 	import ArticleInspector from './ArticleInspector.svelte';
 	import { useProjectWorkspaceContext } from '../context.svelte.js';
 	import IngestionInspector from './IngestionInspector.svelte';
@@ -144,12 +145,15 @@
 			<div class="border-t border-border/70 p-4">
 				<a
 					href={resolve('/settings')}
+					onclick={(event) => {
+						menuOpen = false;
+						void openSettingsFromLink(event);
+					}}
 					class={buttonVariants({
 						variant: 'ghost',
 						size: 'sm',
 						class: 'w-full justify-start'
 					})}
-					onclick={() => (menuOpen = false)}
 				>
 					<SettingsIcon data-icon="inline-start" aria-hidden="true" />
 					Settings
