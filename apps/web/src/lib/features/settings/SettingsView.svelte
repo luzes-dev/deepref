@@ -22,9 +22,8 @@
 	import { enqueueSettingsSave } from './settings-save-queue';
 	import { cn } from '$lib/utils';
 
-	type Presentation = 'page' | 'modal';
 	export type SettingsViewProps = {
-		presentation?: Presentation;
+		presentation?: 'page' | 'modal';
 		onclose?: () => void;
 		onexpand?: () => void;
 		oncollapse?: () => void;
@@ -448,44 +447,15 @@
 				<div
 					class="flex flex-col gap-3 p-2.5 max-[640px]:flex-row max-[640px]:items-center"
 				>
-					<label class="relative block max-[640px]:min-w-0 max-[640px]:flex-1">
-						<span class="sr-only">Search settings</span>
-						<Search
-							class="pointer-events-none absolute top-1/2 left-3 size-3.5 -translate-y-1/2 text-muted-foreground"
-							aria-hidden="true"
-						/>
-						<Input
-							value={searchTerm}
-							oninput={(event) => (searchTerm = event.currentTarget.value)}
-							placeholder="Search settings"
-							aria-label="Search settings"
-							class="h-9 rounded-full pl-9 text-xs"
-						/>
-					</label>
+					{@render searchSettings(
+						'relative block max-[640px]:min-w-0 max-[640px]:flex-1'
+					)}
 				</div>
 
-				<nav
-					class="flex flex-col gap-0.5 px-2 pb-4 max-[640px]:w-full max-[640px]:min-w-0 max-[640px]:flex-row max-[640px]:overflow-x-auto"
-					aria-label="Settings navigation"
-				>
-					{#each visibleSections as section (section.id)}
-						{@const Icon = section.icon}
-						<Button
-							variant={activeTab === section.id ? 'secondary' : 'ghost'}
-							class="h-9 w-full justify-start gap-2 px-2.5 text-left text-sm font-normal max-[640px]:w-auto"
-							aria-current={activeTab === section.id ? 'page' : undefined}
-							onclick={() => (activeTab = section.id)}
-						>
-							<Icon aria-hidden="true" />
-							{section.label}
-						</Button>
-					{/each}
-					{#if visibleSections.length === 0}
-						<p class="px-2.5 py-3 text-xs text-muted-foreground">
-							No matching sections.
-						</p>
-					{/if}
-				</nav>
+				{@render settingsNavigation(
+					'flex flex-col gap-0.5 px-2 pb-4 max-[640px]:w-full max-[640px]:min-w-0 max-[640px]:flex-row max-[640px]:overflow-x-auto',
+					'h-9 w-full justify-start gap-2 px-2.5 text-left text-sm font-normal max-[640px]:w-auto'
+				)}
 			</aside>
 
 			<section class="flex min-h-0 min-w-0 flex-col" aria-labelledby="settings-title">
@@ -530,20 +500,7 @@
 						</div>
 					{:else if loadError}
 						<div data-testid="settings-load-error">
-							<StatePanel
-								state="error"
-								title="Settings unavailable"
-								description={loadError}
-							>
-								{#snippet action()}
-									<Button
-										variant="outline"
-										onclick={() => void settingsQueryResult.refetch()}
-									>
-										Try again
-									</Button>
-								{/snippet}
-							</StatePanel>
+							{@render settingsLoadError()}
 						</div>
 					{:else if baseline}
 						{@render settingsBody()}
@@ -606,25 +563,10 @@
 				</div>
 			{:else if loadError}
 				<div data-testid="settings-load-error">
-					<div
-						class="grid gap-8 lg:grid-cols-[minmax(0,19rem)_minmax(0,52rem)] lg:gap-10"
-					>
+					<div class="grid gap-8 lg:grid-cols-[minmax(0,19rem)_minmax(0,52rem)] lg:gap-8">
 						<div class="min-w-0">
 							<Surface tone="subtle" class="p-6">
-								<StatePanel
-									state="error"
-									title="Settings unavailable"
-									description={loadError}
-								>
-									{#snippet action()}
-										<Button
-											variant="outline"
-											onclick={() => void settingsQueryResult.refetch()}
-										>
-											Try again
-										</Button>
-									{/snippet}
-								</StatePanel>
+								{@render settingsLoadError()}
 							</Surface>
 						</div>
 					</div>
@@ -632,42 +574,11 @@
 			{:else if baseline}
 				<div class="grid gap-8 lg:grid-cols-[minmax(0,19rem)_minmax(0,52rem)] lg:gap-10">
 					<aside>
-						<label class="relative mb-3 block">
-							<span class="sr-only">Search settings</span>
-							<Search
-								class="pointer-events-none absolute top-1/2 left-3 size-3.5 -translate-y-1/2 text-muted-foreground"
-								aria-hidden="true"
-							/>
-							<Input
-								value={searchTerm}
-								oninput={(event) => (searchTerm = event.currentTarget.value)}
-								placeholder="Search settings"
-								aria-label="Search settings"
-								class="h-9 rounded-full pl-9 text-xs"
-							/>
-						</label>
-						<nav
-							class="flex flex-row gap-1 overflow-x-auto lg:flex-col"
-							aria-label="Settings navigation"
-						>
-							{#each visibleSections as section (section.id)}
-								{@const Icon = section.icon}
-								<Button
-									variant={activeTab === section.id ? 'secondary' : 'ghost'}
-									class="justify-start gap-2 text-sm font-medium"
-									aria-current={activeTab === section.id ? 'page' : undefined}
-									onclick={() => (activeTab = section.id)}
-								>
-									<Icon aria-hidden="true" />
-									{section.label}
-								</Button>
-							{/each}
-							{#if visibleSections.length === 0}
-								<p class="px-2 py-3 text-xs text-muted-foreground">
-									No matching sections.
-								</p>
-							{/if}
-						</nav>
+						{@render searchSettings('relative mb-3 block')}
+						{@render settingsNavigation(
+							'flex flex-row gap-1 overflow-x-auto lg:flex-col',
+							'justify-start gap-2 text-sm font-medium'
+						)}
 					</aside>
 					<div class="max-w-3xl min-w-0">
 						{@render settingsBody()}
@@ -677,6 +588,53 @@
 		</div>
 	{/if}
 </div>
+
+{#snippet searchSettings(labelClass: string)}
+	<label class={labelClass}>
+		<span class="sr-only">Search settings</span>
+		<Search
+			class="pointer-events-none absolute top-1/2 left-3 size-3.5 -translate-y-1/2 text-muted-foreground"
+			aria-hidden="true"
+		/>
+		<Input
+			value={searchTerm}
+			oninput={(event) => (searchTerm = event.currentTarget.value)}
+			placeholder="Search settings"
+			aria-label="Search settings"
+			class="h-9 rounded-full pl-9 text-xs"
+		/>
+	</label>
+{/snippet}
+
+{#snippet settingsNavigation(navClass: string, buttonClass: string)}
+	<nav class={navClass} aria-label="Settings navigation">
+		{#each visibleSections as section (section.id)}
+			{@const Icon = section.icon}
+			<Button
+				variant={activeTab === section.id ? 'secondary' : 'ghost'}
+				class={buttonClass}
+				aria-current={activeTab === section.id ? 'page' : undefined}
+				onclick={() => (activeTab = section.id)}
+			>
+				<Icon aria-hidden="true" />
+				{section.label}
+			</Button>
+		{/each}
+		{#if visibleSections.length === 0}
+			<p class="px-2.5 py-3 text-xs text-muted-foreground">No matching sections.</p>
+		{/if}
+	</nav>
+{/snippet}
+
+{#snippet settingsLoadError()}
+	<StatePanel state="error" title="Settings unavailable" description={loadError}>
+		{#snippet action()}
+			<Button variant="outline" onclick={() => void settingsQueryResult.refetch()}>
+				Try again
+			</Button>
+		{/snippet}
+	</StatePanel>
+{/snippet}
 
 {#snippet settingsBody()}
 	<form

@@ -189,6 +189,8 @@ test('keeps the draft and explains an API save error', async ({ page }) => {
 });
 
 test('selects a theme from the Appearance settings control', async ({ page }) => {
+	await routeSettings(page);
+
 	await page.goto('/settings');
 	await page.getByRole('button', { name: 'Appearance', exact: true }).click();
 	await expect(page.getByRole('heading', { name: 'Appearance', exact: true })).toBeVisible();

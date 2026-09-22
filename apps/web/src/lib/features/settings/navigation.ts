@@ -2,7 +2,7 @@ import { goto, preloadData, pushState } from '$app/navigation';
 import { page } from '$app/state';
 import { resolve } from '$app/paths';
 
-export const settingsHref = resolve('/settings');
+const settingsHref = resolve('/settings');
 let settingsTrigger: HTMLElement | null = null;
 type SettingsTransition = 'expand' | 'collapse';
 let pendingSettingsTransition: SettingsTransition | null = null;
@@ -30,7 +30,7 @@ function requestSettingsTransition(transition: SettingsTransition): void {
  * current DOM update with the native View Transition API. The history entry
  * remains the source of truth for restoring the overlay and its origin.
  */
-export function consumeSettingsTransition(): SettingsTransition | null {
+export function consumeSettingsTransition(): 'expand' | 'collapse' | null {
 	const transition = pendingSettingsTransition;
 	pendingSettingsTransition = null;
 	return transition;
