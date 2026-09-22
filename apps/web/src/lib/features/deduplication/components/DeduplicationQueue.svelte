@@ -215,8 +215,9 @@
 							<!-- 2-Column Split: Incoming Record vs Existing Candidate -->
 							<div class="grid gap-6 md:grid-cols-2">
 								<!-- Left Column: Source Record (Incoming) -->
-								<div
+								<section
 									class="flex flex-col rounded-lg border border-border/60 bg-background/50 p-4"
+									aria-label="Source record"
 								>
 									<div
 										class="mb-3 flex items-center justify-between border-b pb-2"
@@ -259,11 +260,12 @@
 											</div>
 										</div>
 									</div>
-								</div>
+								</section>
 
 								<!-- Right Column: Candidate Record (Existing) -->
-								<div
+								<section
 									class="flex flex-col rounded-lg border border-border/60 bg-background/50 p-4"
+									aria-label="Candidate report"
 								>
 									<div
 										class="mb-3 flex items-center justify-between border-b pb-2"
@@ -309,7 +311,7 @@
 											</div>
 										</div>
 									</div>
-								</div>
+								</section>
 							</div>
 
 							<!-- Conflict Banner if any -->
