@@ -115,9 +115,11 @@ class NumberFieldButton {
 	}
 
 	onclick(e: Parameters<NonNullable<ButtonProps["onclick"]>>[0]) {
-		if (!this.rampState.ramping) return;
-
-		this.increment();
+		// Pointer presses already increment on pointerdown (and while held).
+		// Keyboard and assistive-technology activation only dispatch a click.
+		if (e.detail === 0 && this.enabled && !this.opts.disabled.current) {
+			this.increment();
+		}
 
 		this.opts.onclick.current?.(e);
 	}
