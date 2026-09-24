@@ -253,8 +253,8 @@
 
 @media (prefers-reduced-motion: reduce) {
 	*,
-	\n\t*::before,
-	\n\t*::after {
+	*::before,
+	*::after {
 		animation-duration: 0.01ms !important;
 		animation-iteration-count: 1 !important;
 		scroll-behavior: auto !important;
@@ -268,7 +268,66 @@
 	letter-spacing: -0.02em;
 }
 
+.skip-link {
+	position: absolute;
+	top: 0.75rem;
+	left: 0.75rem;
+	z-index: 50;
+	transform: translateY(-200%);
+	border-radius: var(--radius-sm);
+	background: var(--primary);
+	padding: 0.5rem 0.75rem;
+	font-size: 0.875rem;
+	font-weight: 600;
+	color: var(--primary-foreground);
+	box-shadow: var(--elevation-overlay);
+}
+
+.skip-link:focus {
+	transform: translateY(0);
+}
+
+/* Disclosure keeps secondary detail available without competing with the current task. */
 @utility disclosure {
 	border-bottom: 1px solid var(--border);
 	padding-block: 0.75rem;
+}
+
+.disclosure > summary {
+	cursor: pointer;
+	font-size: 0.875rem;
+	font-weight: 500;
+	color: var(--muted-foreground);
+}
+.disclosure > summary::-webkit-details-marker {
+	display: none;
+}
+.disclosure > summary:hover {
+	color: var(--foreground);
+}
+.disclosure > summary:focus-visible {
+	outline: 2px solid var(--ring);
+	outline-offset: 4px;
+	border-radius: 2px;
+}
+.disclosure[open] > summary {
+	margin-bottom: 1rem;
+	color: var(--foreground);
+}
+h1,
+h2,
+h3 {
+	text-wrap: balance;
+}
+
+/* One keyboard-focus language, including links and scrollable regions. */
+@layer base {
+	:focus-visible {
+		outline: 2px solid var(--ring);
+		outline-offset: 2px;
+	}
+	::selection {
+		background: var(--selection);
+		color: var(--selection-foreground);
+	}
 }

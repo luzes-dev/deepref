@@ -2,6 +2,10 @@
 @import '@deepref/ui/styles.css';
 @source '../../../../packages/ui/src';
 
+/*
+ * Custom utilities registered directly in the root web stylesheet so that
+ * @shadcn/lint's Tailwind CSS scanner recognizes them as known classes in apps/web.
+ */
 @utility editorial-title {
 	font-family: var(--font-sans);
 	font-weight: 600;

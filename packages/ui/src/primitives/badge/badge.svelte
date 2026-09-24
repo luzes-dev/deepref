@@ -44,7 +44,7 @@
 		size = 'default',
 		children,
 		...restProps
-	}: WithElementRef<HTMLAnchorAttributes> & {
+	}: WithElementRef<HTMLAnchorAttributes, HTMLAnchorElement | HTMLSpanElement> & {
 		variant?: BadgeVariant;
 		size?: BadgeSize;
 	} = $props();

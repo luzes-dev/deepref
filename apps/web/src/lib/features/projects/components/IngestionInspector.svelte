@@ -274,24 +274,31 @@
 							<Table.Root containerLabel="Ingestion articles">
 								<Table.Header>
 									<Table.Row>
-										<Table.Head>Title</Table.Head>
 										<Table.Head>DOI</Table.Head>
+										<Table.Head>Depth</Table.Head>
 										<Table.Head>Status</Table.Head>
 									</Table.Row>
 								</Table.Header>
 								<Table.Body>
-									{#each items as item (item.id)}
+									{#each items as item (item.doi)}
 										<Table.Row>
-											<Table.Cell class="font-medium">
-												{item.payload.title ?? 'Untitled'}
-											</Table.Cell>
-											<Table.Cell class="text-muted-foreground">
-												{item.payload.doi ?? '—'}
-											</Table.Cell>
-											<Table.Cell>
-												<Badge variant={statusVariant(item.status)}>
-													{item.status}
-												</Badge>
+											<Table.Cell class="max-w-48 truncate"
+												>{item.doi}</Table.Cell
+											>
+											<Table.Cell>{item.depth}</Table.Cell>
+											<Table.Cell
+												><Badge variant={statusVariant(item.status)}
+													>{item.status}</Badge
+												></Table.Cell
+											>
+										</Table.Row>
+									{:else}
+										<Table.Row>
+											<Table.Cell
+												colspan={3}
+												class="h-24 text-center text-muted-foreground"
+											>
+												No ingestion items yet.
 											</Table.Cell>
 										</Table.Row>
 									{/each}
@@ -300,6 +307,12 @@
 						</div>
 					</Surface>
 				</div>
+			{:else}
+				<StatePanel
+					state="error"
+					title="Ingestion details unavailable"
+					description="The selected run did not return a usable record. Refresh or clear the selection."
+				/>
 			{/if}
 		</div>
 	{/if}
