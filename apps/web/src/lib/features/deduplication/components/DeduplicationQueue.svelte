@@ -227,7 +227,7 @@
 										>
 											Incoming Record
 										</span>
-										<Badge variant="outline" class="text-[10px]"
+										<Badge variant="outline" size="xs"
 											>Record {proposal.record_id.slice(0, 8)}</Badge
 										>
 									</div>
@@ -254,7 +254,7 @@
 													tabindex="0"
 													role="region"
 													aria-label="Source identifiers"
-													class="overflow-x-auto rounded bg-muted p-1 text-[11px]">{formatDedupeJson(
+													class="overflow-x-auto rounded bg-muted p-1 text-2xs">{formatDedupeJson(
 														proposal.source_identifiers
 													)}</pre>
 											</div>
@@ -275,7 +275,7 @@
 										>
 											Existing Candidate
 										</span>
-										<Badge variant="secondary" class="text-[10px]"
+										<Badge variant="secondary" size="xs"
 											>Report {proposal.candidate_report_id?.slice(
 												0,
 												8
@@ -305,7 +305,7 @@
 													tabindex="0"
 													role="region"
 													aria-label="Candidate identifiers"
-													class="overflow-x-auto rounded bg-muted p-1 text-[11px]">{formatDedupeJson(
+													class="overflow-x-auto rounded bg-muted p-1 text-2xs">{formatDedupeJson(
 														proposal.candidate_identifiers
 													)}</pre>
 											</div>

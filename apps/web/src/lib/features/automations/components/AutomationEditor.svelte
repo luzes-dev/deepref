@@ -951,7 +951,7 @@
 			<CheckIcon aria-hidden="true" /><span>{feedback}</span>
 		</div>{/if}
 	{#if editorNotice}<div
-			class="editor-notice notice-warning"
+			class="editor-notice"
 			role="status"
 			data-testid="automation-editor-notice"
 		>

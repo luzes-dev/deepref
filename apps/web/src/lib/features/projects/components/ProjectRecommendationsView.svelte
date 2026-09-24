@@ -111,7 +111,7 @@
 			<div class="mb-3 flex items-baseline justify-between gap-3">
 				<h2
 					id="recommendation-groups-title"
-					class="text-sm font-semibold tracking-[0.08em] text-muted-foreground uppercase"
+					class="text-sm font-semibold tracking-snug-caps text-muted-foreground uppercase"
 				>
 					Reading groups
 				</h2>

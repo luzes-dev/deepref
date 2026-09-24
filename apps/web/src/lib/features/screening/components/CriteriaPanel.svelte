@@ -58,7 +58,7 @@
 							<p class="text-sm leading-6 text-muted-foreground">
 								{criterion.description}
 							</p>
-							<span class="text-[11px] tracking-wide text-muted-foreground uppercase"
+							<span class="text-2xs tracking-wide text-muted-foreground uppercase"
 								>{criterion.dimension} · {criterion.stage.replace('_', ' ')}</span
 							>
 						</div>

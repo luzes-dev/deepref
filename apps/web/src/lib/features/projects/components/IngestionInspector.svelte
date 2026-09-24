@@ -106,7 +106,8 @@
 				<div
 					class="flex -rotate-180 items-center gap-3 text-muted-foreground [writing-mode:vertical-rl]"
 				>
-					<span class="text-xs font-medium tracking-[0.2em] uppercase">Inspector</span>
+					<span class="text-xs font-medium tracking-widest-caps uppercase">Inspector</span
+					>
 					<span class="max-h-48 overflow-hidden text-sm font-medium text-ellipsis">
 						{workspace.selectedIngestion ? 'Ingestion' : 'No ingestion'}
 					</span>
@@ -195,14 +196,14 @@
 							value={ingestion.fetched_count}
 							detail="records resolved"
 							tone="positive"
-							class="[font-variant-numeric:tabular-nums]"
+							class="tabular-nums"
 						/>
 						<MetricTile
 							label="Failed"
 							value={ingestion.failed_count}
 							detail="provider errors"
 							tone={ingestion.failed_count > 0 ? 'critical' : 'default'}
-							class="[font-variant-numeric:tabular-nums]"
+							class="tabular-nums"
 						/>
 					</div>
 
@@ -273,31 +274,24 @@
 							<Table.Root containerLabel="Ingestion articles">
 								<Table.Header>
 									<Table.Row>
+										<Table.Head>Title</Table.Head>
 										<Table.Head>DOI</Table.Head>
-										<Table.Head>Depth</Table.Head>
 										<Table.Head>Status</Table.Head>
 									</Table.Row>
 								</Table.Header>
 								<Table.Body>
-									{#each items as item (item.doi)}
+									{#each items as item (item.id)}
 										<Table.Row>
-											<Table.Cell class="max-w-48 truncate"
-												>{item.doi}</Table.Cell
-											>
-											<Table.Cell>{item.depth}</Table.Cell>
-											<Table.Cell
-												><Badge variant={statusVariant(item.status)}
-													>{item.status}</Badge
-												></Table.Cell
-											>
-										</Table.Row>
-									{:else}
-										<Table.Row>
-											<Table.Cell
-												colspan={3}
-												class="h-24 text-center text-muted-foreground"
-											>
-												No ingestion items yet.
+											<Table.Cell class="font-medium">
+												{item.payload.title ?? 'Untitled'}
+											</Table.Cell>
+											<Table.Cell class="text-muted-foreground">
+												{item.payload.doi ?? '—'}
+											</Table.Cell>
+											<Table.Cell>
+												<Badge variant={statusVariant(item.status)}>
+													{item.status}
+												</Badge>
 											</Table.Cell>
 										</Table.Row>
 									{/each}
@@ -306,12 +300,6 @@
 						</div>
 					</Surface>
 				</div>
-			{:else}
-				<StatePanel
-					state="error"
-					title="Ingestion details unavailable"
-					description="The selected run did not return a usable record. Refresh or clear the selection."
-				/>
 			{/if}
 		</div>
 	{/if}

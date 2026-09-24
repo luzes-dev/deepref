@@ -54,7 +54,8 @@
 				<div
 					class="flex -rotate-180 items-center gap-3 text-muted-foreground [writing-mode:vertical-rl]"
 				>
-					<span class="text-xs font-medium tracking-[0.2em] uppercase">Inspector</span>
+					<span class="text-xs font-medium tracking-widest-caps uppercase">Inspector</span
+					>
 					<span class="max-h-48 overflow-hidden text-sm font-medium text-ellipsis">
 						{workspace.selectedArticle ? 'Article' : 'No article'}
 					</span>
@@ -163,19 +164,19 @@
 							label="Total citations"
 							value={article.total_citations}
 							tone="warning"
-							class="[font-variant-numeric:tabular-nums]"
+							class="tabular-nums"
 						/>
 						<MetricTile
 							label="References"
 							value={article.references_count}
 							tone="info"
-							class="[font-variant-numeric:tabular-nums]"
+							class="tabular-nums"
 						/>
 						<MetricTile
 							label="Year"
 							value={article.issued_year ?? '-'}
 							tone="default"
-							class="[font-variant-numeric:tabular-nums]"
+							class="tabular-nums"
 						/>
 						<MetricTile label="Type" value={article.type ?? 'unknown'} tone="default" />
 					</div>
@@ -189,7 +190,7 @@
 							{article.abstract ?? 'No abstract available.'}
 						</p>
 						<pre
-							class="max-h-80 overflow-auto rounded-md bg-muted p-3 text-xs [font-variant-numeric:tabular-nums]">{JSON.stringify(
+							class="max-h-80 overflow-auto rounded-md bg-muted p-3 text-xs tabular-nums">{JSON.stringify(
 								article.raw,
 								null,
 								2

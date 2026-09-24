@@ -55,10 +55,7 @@
 		>
 			<X data-icon="inline-start" />
 			<span>Exclude</span>
-			<kbd
-				aria-hidden="true"
-				class="bg-destructive-foreground/15 rounded px-1.5 py-0.5 text-xs">E</kbd
-			>
+			<kbd aria-hidden="true" class="rounded bg-destructive/15 px-1.5 py-0.5 text-xs">E</kbd>
 		</Button>
 		<Button
 			variant="outline"
@@ -83,7 +80,6 @@
 			Undo latest decision
 			<kbd aria-hidden="true" class="ml-1 rounded bg-muted px-1.5 py-0.5 text-xs">U</kbd>
 		</Button>
-		<span class="text-[11px] text-muted-foreground">Reversible until the next review event</span
-		>
+		<span class="text-2xs text-muted-foreground">Reversible until the next review event</span>
 	</div>
 </section>

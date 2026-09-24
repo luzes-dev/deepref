@@ -2,6 +2,17 @@
 @import '@deepref/ui/styles.css';
 @source '../../../../packages/ui/src';
 
+@utility editorial-title {
+	font-family: var(--font-sans);
+	font-weight: 600;
+	letter-spacing: -0.02em;
+}
+
+@utility disclosure {
+	border-bottom: 1px solid var(--border);
+	padding-block: 0.75rem;
+}
+
 /* Long task pages flow inside the workspace's single scrolling viewport. */
 .workspace-page > :first-child {
 	flex-shrink: 0;

@@ -6,6 +6,7 @@ import svelte from 'eslint-plugin-svelte';
 import { defineConfig, includeIgnoreFile } from 'eslint/config';
 import globals from 'globals';
 import ts from 'typescript-eslint';
+import { plugin as shadcn } from '@shadcn/lint';
 
 const rootGitignorePath = path.resolve(import.meta.dirname, '../../.gitignore');
 const webGitignorePath = path.resolve(import.meta.dirname, '.gitignore');
@@ -29,6 +30,15 @@ export default defineConfig(
 	prettier,
 	svelte.configs.prettier,
 	pluginQuery.configs['flat/recommended-strict'],
+	{
+		plugins: { shadcn },
+		settings: {
+			shadcn: {
+				ui: ['@deepref/ui', '$lib/shell'],
+				note: 'Refer to docs/ui-system-handoff.md and @deepref/ui for tokens and component variants.'
+			}
+		}
+	},
 	{
 		languageOptions: { globals: { ...globals.browser, ...globals.node } },
 		rules: {
@@ -57,6 +67,62 @@ export default defineConfig(
 	{
 		files: ['src/**/*.{js,ts,svelte}'],
 		rules: {
+			'shadcn/no-restyle': [
+				'warn',
+				{
+					allow: ['layout'],
+					contracts: [
+						{
+							pattern:
+								'^(Card|CardHeader|CardContent|CardFooter|Surface|PageFrame|PageHeader|PageToolbar|WorkflowSection|StatePanel|Empty|EmptyTitle|EmptyDescription|Table|TableHeader|TableBody|TableRow|TableHead|TableCell|TableFooter|ScrollArea|Dialog|DialogContent|DialogHeader|DialogFooter|Sheet|SheetContent|SheetHeader|SheetFooter|Drawer|DrawerContent|DrawerHeader|DrawerFooter|Popover|PopoverContent|Command|CommandDialog|Modal|ModalHeader|ModalFooter|FieldGroup|Field|FieldLabel|InputGroup|Avatar|AvatarFallback|AvatarImage|Skeleton)$',
+							allow: ['layout', 'spacing', 'shape', 'color', 'typography']
+						},
+						{
+							pattern: '^(Resizable|Pane|ResizableHandle|ResizablePaneGroup)$',
+							allow: ['layout', 'spacing', 'motion']
+						},
+						{
+							pattern: '^(Tabs|TabsList|TabsTrigger|TabsContent)$',
+							allow: ['layout', 'spacing', 'shape']
+						},
+						{
+							pattern:
+								'^(Button|Badge|Input|Select|Toggle|ToggleGroup|Checkbox|RadioGroup|Bubble|BubbleRoot)$',
+							allow: ['layout'],
+							message: {
+								spacing:
+									'Use a {{component}} size ({{sizes|none defined}}), or margin on this element / gap on the container.',
+								default:
+									'Use a {{component}} variant ({{variants|none defined}}) rather than inline style overrides.'
+							}
+						}
+					]
+				}
+			],
+			'shadcn/no-raw-colors': 'error',
+			'shadcn/no-arbitrary-values': [
+				'error',
+				{
+					allow: ['layout']
+				}
+			],
+			'shadcn/no-inline-styles': [
+				'error',
+				{
+					allow: [
+						'--*',
+						'left',
+						'top',
+						'width',
+						'height',
+						'transform',
+						'position',
+						'view-transition-name'
+					]
+				}
+			],
+			'shadcn/no-unknown-classes': 'error',
+			'shadcn/require-static-classes': 'warn',
 			'no-restricted-imports': [
 				'error',
 				{
@@ -98,6 +164,34 @@ export default defineConfig(
 							],
 							message:
 								'The utils layer must not depend on api, shell, features, or routes.'
+						}
+					]
+				}
+			]
+		}
+	},
+	{
+		files: ['src/lib/contracts/**/*.ts'],
+		rules: {
+			'no-restricted-imports': [
+				'error',
+				{
+					patterns: [
+						{
+							group: [
+								'$lib/api',
+								'$lib/api/**',
+								'$lib/shell',
+								'$lib/shell/**',
+								'$lib/features',
+								'$lib/features/**',
+								'**/api/**',
+								'**/shell/**',
+								'**/features/**',
+								'**/routes/**'
+							],
+							message:
+								'The contracts layer must remain independent of implementations and downstream consumers.'
 						}
 					]
 				}

@@ -395,7 +395,7 @@
 				<div {@attach graphContainerAttachment} class="absolute inset-0"></div>
 				{#if graphRendering}
 					<div
-						class="absolute inset-0 z-20 flex items-center justify-center bg-background/70 backdrop-blur-[1px]"
+						class="absolute inset-0 z-20 flex items-center justify-center bg-background/70 backdrop-blur-xs"
 						role="status"
 					>
 						<div

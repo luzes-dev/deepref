@@ -24,10 +24,10 @@
 		>
 			<CircleAlertIcon aria-hidden="true" />
 		</div>
-		<p class="text-xs font-semibold tracking-[0.18em] text-primary uppercase">
+		<p class="text-xs font-semibold tracking-wide-caps text-primary uppercase">
 			DeepRef / {status}
 		</p>
-		<h1 id="error-title" class="editorial-title mt-3 text-4xl sm:text-5xl">
+		<h1 id="error-title" class="mt-3 editorial-title text-4xl sm:text-5xl">
 			A note went missing.
 		</h1>
 		<p class="mx-auto mt-4 max-w-md text-sm leading-relaxed text-muted-foreground">{message}</p>
