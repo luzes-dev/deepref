@@ -2,6 +2,10 @@
 @import '@deepref/ui/styles.css';
 @source '../../../../packages/ui/src';
 
+@theme {
+	--color-destructive-foreground: var(--destructive-foreground);
+}
+
 /*
  * Custom utilities registered directly in the root web stylesheet so that
  * @shadcn/lint's Tailwind CSS scanner recognizes them as known classes in apps/web.

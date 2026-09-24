@@ -57,7 +57,7 @@
 			<span>Exclude</span>
 			<kbd
 				aria-hidden="true"
-				class="bg-destructive-foreground/15 rounded px-1.5 py-0.5 text-xs">E</kbd
+				class="rounded bg-destructive-foreground/15 px-1.5 py-0.5 text-xs">E</kbd
 			>
 		</Button>
 		<Button
