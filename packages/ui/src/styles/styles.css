@@ -43,6 +43,7 @@
 	--accent: oklch(0.93 0.014 175);
 	--accent-foreground: oklch(0.31 0.04 175);
 	--destructive: oklch(0.5 0.17 31);
+	--destructive-foreground: var(--foundation-white);
 	--border: oklch(0.89 0.006 160);
 	--input: oklch(0.67 0.012 160);
 	--ring: oklch(0.55 0.11 175);
@@ -103,6 +104,7 @@
 	--accent: oklch(0.31 0.025 175);
 	--accent-foreground: var(--foundation-chalk);
 	--destructive: oklch(0.69 0.14 31);
+	--destructive-foreground: var(--foundation-white);
 	--border: oklch(0.9 0.018 88 / 16%);
 	--input: oklch(0.52 0.015 160);
 	--ring: var(--foundation-teal-300);
@@ -148,6 +150,22 @@
 @theme inline {
 	--default-transition-duration: var(--motion-duration-standard);
 	--default-transition-timing-function: var(--motion-ease-standard);
+
+	/* Compact research & metadata typography scale */
+	--text-2xs: 0.6875rem;
+	--text-2xs--line-height: 0.875rem;
+	--text-3xs: 0.625rem;
+	--text-3xs--line-height: 0.75rem;
+	--text-4xs: 0.5625rem;
+	--text-4xs--line-height: 0.75rem;
+
+	/* Micro-label tracking scale */
+	--tracking-snug-caps: 0.08em;
+	--tracking-caps: 0.12em;
+	--tracking-kicker: 0.16em;
+	--tracking-wide-caps: 0.18em;
+	--tracking-widest-caps: 0.2em;
+
 	--color-border-subtle: var(--border-subtle);
 	--color-border-strong: var(--border-strong);
 	--color-text-secondary: var(--text-secondary);
@@ -168,6 +186,7 @@
 	--color-info-surface: var(--info-surface);
 	--color-info-border: var(--info-border);
 	--shadow-overlay: var(--elevation-overlay);
+	--shadow-inset-accent: inset 3px 0 0 var(--primary);
 	--spacing-control-height: var(--control-height);
 	--font-sans: "IBM Plex Sans Variable", sans-serif;
 	--font-serif: "Source Serif 4 Variable", serif;
@@ -194,6 +213,7 @@
 	--color-input: var(--input);
 	--color-border: var(--border);
 	--color-destructive: var(--destructive);
+	--color-destructive-foreground: var(--destructive-foreground);
 	--color-accent-foreground: var(--accent-foreground);
 	--color-accent: var(--accent);
 	--color-muted-foreground: var(--muted-foreground);
@@ -245,7 +265,7 @@
 	}
 }
 
-.editorial-title {
+@utility editorial-title {
 	font-family: var(--font-sans);
 	font-weight: 600;
 	letter-spacing: -0.02em;
@@ -271,15 +291,19 @@
 }
 
 /* Disclosure keeps secondary detail available without competing with the current task. */
-.disclosure {
+@utility disclosure {
 	border-bottom: 1px solid var(--border);
 	padding-block: 0.75rem;
 }
+
 .disclosure > summary {
 	cursor: pointer;
 	font-size: 0.875rem;
 	font-weight: 500;
 	color: var(--muted-foreground);
+}
+.disclosure > summary::-webkit-details-marker {
+	display: none;
 }
 .disclosure > summary:hover {
 	color: var(--foreground);

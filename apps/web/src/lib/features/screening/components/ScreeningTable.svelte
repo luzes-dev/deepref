@@ -112,7 +112,7 @@
 			aria-label="Title and abstract screening queue"
 		>
 			<div
-				class="sticky top-0 z-10 grid grid-cols-[minmax(12rem,1fr)_5rem_7rem] border-b bg-card px-4 py-3 text-[11px] font-semibold tracking-wide text-muted-foreground uppercase"
+				class="sticky top-0 z-10 grid grid-cols-[minmax(12rem,1fr)_5rem_7rem] border-b bg-card px-4 py-3 text-2xs font-semibold tracking-wide text-muted-foreground uppercase"
 			>
 				{#each table.getHeaderGroups()[0]?.headers ?? [] as header (header.id)}
 					<div role="columnheader">{header.column.columnDef.header as string}</div>

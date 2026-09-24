@@ -122,7 +122,7 @@
 							>
 								<Icon class="size-4" />
 							</span>
-							<Badge variant="outline" class="text-[11px]">{recipe.category}</Badge>
+							<Badge variant="outline" size="sm">{recipe.category}</Badge>
 						</div>
 						<div class="min-w-0">
 							<h3 class="font-medium text-foreground">{recipe.title}</h3>

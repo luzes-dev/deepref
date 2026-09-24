@@ -64,7 +64,7 @@
 				<MenuIcon data-icon aria-hidden="true" />
 			</Button>
 			<div class="min-w-0 flex-1">
-				<p class="text-xs font-bold tracking-[0.16em] text-primary uppercase">DeepRef</p>
+				<p class="text-xs font-bold tracking-kicker text-primary uppercase">DeepRef</p>
 				<h1
 					class="truncate text-sm font-medium text-foreground"
 					data-testid="mobile-current-route"
@@ -101,7 +101,7 @@
 						>
 							<h2
 								id={`mobile-nav-group-${group.id}`}
-								class="px-2 text-xs font-semibold tracking-[0.14em] text-muted-foreground uppercase"
+								class="px-2 text-xs font-semibold tracking-kicker text-muted-foreground uppercase"
 							>
 								{group.label}
 							</h2>

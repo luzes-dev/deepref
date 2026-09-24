@@ -623,7 +623,7 @@
 							<Inbox class="size-3.5 text-muted-foreground" />
 							<span>Queue ({queueItems.length})</span>
 						</div>
-						<Badge variant="outline" class="text-[10px] capitalize">
+						<Badge variant="outline" size="xs" class="capitalize">
 							{urlState.status}
 						</Badge>
 					</div>
@@ -660,9 +660,7 @@
 											>
 												{item.title ?? 'Untitled'}
 											</span>
-											<span
-												class="shrink-0 text-[10px] text-muted-foreground"
-											>
+											<span class="shrink-0 text-3xs text-muted-foreground">
 												{item.publication_year ?? ''}
 											</span>
 										</div>
@@ -673,7 +671,7 @@
 													: item.title_abstract_status === 'include'
 														? 'default'
 														: 'secondary'}
-												class="px-1.5 py-0 text-[9px]"
+												size="xs"
 											>
 												{item.title_abstract_status}
 											</Badge>
@@ -776,7 +774,7 @@
 							</div>
 							<div class="rounded-xl border bg-muted/20 p-4 sm:p-6">
 								<div
-									class="mb-3 flex items-center gap-2 text-[11px] font-semibold tracking-[0.12em] text-muted-foreground uppercase"
+									class="mb-3 flex items-center gap-2 text-2xs font-semibold tracking-caps text-muted-foreground uppercase"
 								>
 									<span class="h-px w-5 bg-primary"></span> Abstract
 								</div>

@@ -2,6 +2,25 @@
 @import '@deepref/ui/styles.css';
 @source '../../../../packages/ui/src';
 
+@theme {
+	--color-destructive-foreground: var(--destructive-foreground);
+}
+
+/*
+ * Custom utilities registered directly in the root web stylesheet so that
+ * @shadcn/lint's Tailwind CSS scanner recognizes them as known classes in apps/web.
+ */
+@utility editorial-title {
+	font-family: var(--font-sans);
+	font-weight: 600;
+	letter-spacing: -0.02em;
+}
+
+@utility disclosure {
+	border-bottom: 1px solid var(--border);
+	padding-block: 0.75rem;
+}
+
 /* Long task pages flow inside the workspace's single scrolling viewport. */
 .workspace-page > :first-child {
 	flex-shrink: 0;

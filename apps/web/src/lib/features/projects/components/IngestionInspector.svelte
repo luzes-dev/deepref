@@ -106,7 +106,8 @@
 				<div
 					class="flex -rotate-180 items-center gap-3 text-muted-foreground [writing-mode:vertical-rl]"
 				>
-					<span class="text-xs font-medium tracking-[0.2em] uppercase">Inspector</span>
+					<span class="text-xs font-medium tracking-widest-caps uppercase">Inspector</span
+					>
 					<span class="max-h-48 overflow-hidden text-sm font-medium text-ellipsis">
 						{workspace.selectedIngestion ? 'Ingestion' : 'No ingestion'}
 					</span>
@@ -195,14 +196,14 @@
 							value={ingestion.fetched_count}
 							detail="records resolved"
 							tone="positive"
-							class="[font-variant-numeric:tabular-nums]"
+							class="tabular-nums"
 						/>
 						<MetricTile
 							label="Failed"
 							value={ingestion.failed_count}
 							detail="provider errors"
 							tone={ingestion.failed_count > 0 ? 'critical' : 'default'}
-							class="[font-variant-numeric:tabular-nums]"
+							class="tabular-nums"
 						/>
 					</div>
 

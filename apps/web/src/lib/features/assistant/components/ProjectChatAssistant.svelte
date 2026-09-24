@@ -441,7 +441,7 @@
 		aria-label="Assistant conversations"
 	>
 		<div class="flex items-center justify-between gap-2 border-b border-border/70 px-4 py-4">
-			<p class="text-xs font-semibold tracking-[0.18em] text-muted-foreground uppercase">
+			<p class="text-xs font-semibold tracking-wide-caps text-muted-foreground uppercase">
 				Conversations
 			</p>
 			<Button
@@ -547,7 +547,7 @@
 					{#each turns as turn (turn.id)}
 						{#if turn.kind === 'user'}
 							<Message.Root align="end">
-								<Bubble.Root variant="default" class="max-w-[85%] px-4 py-2.5">
+								<Bubble.Root variant="default" size="compact" class="max-w-[85%]">
 									<p
 										class="text-sm leading-relaxed break-words whitespace-pre-wrap"
 									>
@@ -578,7 +578,7 @@
 									</Message.Header>
 									<Bubble.Group>
 										{#if turn.content}
-											<Bubble.Root variant="muted" class="px-4 py-2.5">
+											<Bubble.Root variant="muted" size="compact">
 												<p
 													class="text-sm leading-relaxed break-words whitespace-pre-wrap"
 												>
@@ -630,7 +630,7 @@
 										</div>
 									{/if}
 									{#if turn.tokens}
-										<Message.Footer class="text-[11px]">
+										<Message.Footer class="text-2xs">
 											<span>{turn.tokens.input} tokens in</span>
 											<span>·</span>
 											<span>{turn.tokens.output} tokens out</span>
@@ -701,7 +701,7 @@
 						{/if}
 					</Button>
 				</InputGroup.Root>
-				<p class="mt-2 text-center text-[11px] text-muted-foreground">
+				<p class="mt-2 text-center text-2xs text-muted-foreground">
 					Enter to send · Shift + Enter for a new line
 				</p>
 			</div>

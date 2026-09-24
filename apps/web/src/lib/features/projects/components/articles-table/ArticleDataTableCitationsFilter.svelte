@@ -36,7 +36,7 @@
 				Citations
 				{#if isFiltered}
 					<Separator orientation="vertical" class="mx-1.5 h-4" />
-					<Badge variant="secondary" class="rounded-sm px-1 font-normal">
+					<Badge variant="secondary" size="xs" class="font-normal">
 						Min {filterValue}
 					</Badge>
 				{/if}

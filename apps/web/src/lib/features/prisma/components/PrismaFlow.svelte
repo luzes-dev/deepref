@@ -222,7 +222,7 @@
 			<div class="mb-3 flex items-baseline justify-between gap-3">
 				<h2
 					id="prisma-counts-title"
-					class="text-sm font-semibold tracking-[0.08em] text-muted-foreground uppercase"
+					class="text-sm font-semibold tracking-snug-caps text-muted-foreground uppercase"
 				>
 					Audit-ready flow counts
 				</h2>
@@ -230,13 +230,13 @@
 			</div>
 			<div class="grid gap-3 sm:grid-cols-2 lg:grid-cols-3">
 				{#each flow as [label, value] (label)}
-					<MetricTile {label} {value} class="[font-variant-numeric:tabular-nums]" />
+					<MetricTile {label} {value} class="tabular-nums" />
 				{/each}
 				{#if groupedReports !== undefined}
 					<MetricTile
 						label="Grouped reports"
 						value={groupedReports}
-						class="[font-variant-numeric:tabular-nums]"
+						class="tabular-nums"
 					/>
 				{/if}
 			</div>

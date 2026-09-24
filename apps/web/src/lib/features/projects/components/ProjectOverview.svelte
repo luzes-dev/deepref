@@ -207,7 +207,7 @@
 								<FileTextIcon class="size-4 text-muted-foreground" />
 							</Card.Header>
 							<Card.Content>
-								<div class="text-2xl font-bold [font-variant-numeric:tabular-nums]">
+								<div class="text-2xl font-bold tabular-nums">
 									{workspace.articles.length.toLocaleString()}
 								</div>
 								<p class="text-xs text-muted-foreground">articles collected</p>
@@ -222,7 +222,7 @@
 								<GitForkIcon class="size-4 text-muted-foreground" />
 							</Card.Header>
 							<Card.Content>
-								<div class="text-2xl font-bold [font-variant-numeric:tabular-nums]">
+								<div class="text-2xl font-bold tabular-nums">
 									{internalCitations.toLocaleString()}
 								</div>
 								<p class="text-xs text-muted-foreground">
@@ -237,7 +237,7 @@
 								<NetworkIcon class="size-4 text-muted-foreground" />
 							</Card.Header>
 							<Card.Content>
-								<div class="text-2xl font-bold [font-variant-numeric:tabular-nums]">
+								<div class="text-2xl font-bold tabular-nums">
 									{totalCitations.toLocaleString()}
 								</div>
 								<p class="text-xs text-muted-foreground">external + internal</p>
@@ -250,7 +250,7 @@
 								<DatabaseIcon class="size-4 text-muted-foreground" />
 							</Card.Header>
 							<Card.Content>
-								<div class="text-2xl font-bold [font-variant-numeric:tabular-nums]">
+								<div class="text-2xl font-bold tabular-nums">
 									{workspace.ingestions.length.toLocaleString()}
 								</div>
 								<p class="text-xs text-muted-foreground">
@@ -415,14 +415,10 @@
 														{ingestion.status}
 													</Badge>
 												</Table.Cell>
-												<Table.Cell
-													class="[font-variant-numeric:tabular-nums]"
-												>
+												<Table.Cell class="tabular-nums">
 													{ingestion.seed_count}
 												</Table.Cell>
-												<Table.Cell
-													class="[font-variant-numeric:tabular-nums]"
-												>
+												<Table.Cell class="tabular-nums">
 													{ingestion.fetched_count}
 												</Table.Cell>
 												<Table.Cell
@@ -489,10 +485,10 @@
 												{ingestion.status}
 											</Badge>
 										</Table.Cell>
-										<Table.Cell class="[font-variant-numeric:tabular-nums]">
+										<Table.Cell class="tabular-nums">
 											{ingestion.seed_count}
 										</Table.Cell>
-										<Table.Cell class="[font-variant-numeric:tabular-nums]">
+										<Table.Cell class="tabular-nums">
 											{ingestion.fetched_count}
 										</Table.Cell>
 										<Table.Cell
