@@ -30,7 +30,8 @@
 			</p>
 		</div>
 		{#if pending}
-			<span class="text-xs font-medium text-primary" aria-live="polite">Saving decision…</span>
+			<span class="text-xs font-medium text-primary" aria-live="polite">Saving decision…</span
+			>
 		{:else}
 			<span class="text-xs text-muted-foreground">I / E / M decide</span>
 		{/if}
@@ -56,7 +57,7 @@
 			<span>Exclude</span>
 			<kbd
 				aria-hidden="true"
-				class="rounded bg-destructive-foreground/15 px-1.5 py-0.5 text-xs">E</kbd
+				class="bg-destructive-foreground/15 rounded px-1.5 py-0.5 text-xs">E</kbd
 			>
 		</Button>
 		<Button
