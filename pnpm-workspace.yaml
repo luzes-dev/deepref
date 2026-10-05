@@ -15,7 +15,7 @@ allowBuilds:
 overrides:
   # Keep security-patched transitive overrides aligned with the dependency audit.
   cookie: ^0.7.2
-  brace-expansion: 5.0.9
+  brace-expansion: ^5.0.11
   js-yaml: 4.3.2
   linkify-it: 5.0.2
   markdown-it: ^14.3.1
@@ -23,7 +23,7 @@ overrides:
   postcss: 8.5.23
   qs: '>=6.16.0'
   uuid: ^11.1.1
-  devalue: '>=5.9.2'
+  devalue: ^5.9.3
 
 minimumReleaseAgeExclude:
   - '@tanstack/query-core@5.101.1'
