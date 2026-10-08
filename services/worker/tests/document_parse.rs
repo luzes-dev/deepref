@@ -183,7 +183,9 @@ async fn retrieve_document_is_durable_idempotent_and_records_terminal_failure() 
             Some(Arc::new(FakeFetcher { fail })),
         )
         .await;
-        assert_eq!(result.is_err(), fail);
+        // A fetched file that is not a valid PDF is a permanent failure: the
+        // document is marked failed once and the job is not retried.
+        assert_eq!(result.unwrap(), DeliveryAction::Ack);
         let document = deepref_postgres::get_document_by_id(&pool, document_id)
             .await
             .unwrap();

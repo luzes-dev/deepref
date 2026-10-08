@@ -29,14 +29,32 @@ pub(crate) struct DocumentDto {
     pub original_filename: Option<String>,
     pub source: String,
     pub status: String,
+    /// The address the PDF is retrieved from, for external documents.
+    pub external_url: Option<String>,
     pub mime_type: String,
     pub byte_size: i64,
     pub content_hash: Option<String>,
     pub parser_version: Option<String>,
     pub parser_error: Option<String>,
     pub ocr_required: bool,
+    /// Whether the PDF's title and DOI agree with the report. `None` until the PDF is parsed.
+    pub identity: Option<DocumentIdentityDto>,
     pub created_at: DateTime<Utc>,
     pub updated_at: DateTime<Utc>,
+}
+
+#[derive(Debug, Clone, Serialize, ToSchema)]
+pub(crate) struct DocumentIdentityDto {
+    /// `match`, `mismatch` or `unknown`.
+    pub verdict: String,
+    /// The title the PDF states about itself.
+    pub detected_title: Option<String>,
+    /// The DOI printed on the PDF.
+    pub detected_doi: Option<String>,
+    /// Share of the report title's words found in the PDF title, from 0 to 1.
+    pub title_overlap: Option<f64>,
+    /// When the researcher chose to keep a PDF flagged as a mismatch.
+    pub acknowledged_at: Option<DateTime<Utc>>,
 }
 
 #[derive(Debug, Clone, Serialize, ToSchema)]
@@ -44,6 +62,8 @@ pub(crate) struct MissingFullTextDto {
     pub report_id: Uuid,
     pub title: Option<String>,
     pub abstract_text: Option<String>,
+    /// The report's DOI, used to look up an open-access copy.
+    pub doi: Option<String>,
     pub status: String,
 }
 
@@ -99,6 +119,32 @@ pub(crate) struct DocumentPageDto {
     pub width: f64,
     pub height: f64,
     pub ocr_required: bool,
+}
+
+#[derive(Debug, Clone, Serialize, ToSchema)]
+pub(crate) struct DocumentReferenceDto {
+    pub id: Uuid,
+    pub ordinal: i32,
+    pub raw: String,
+    pub title: Option<String>,
+    pub authors: Vec<String>,
+    pub year: Option<i32>,
+    pub venue: Option<String>,
+    pub doi: Option<String>,
+    /// `native` or `grobid`.
+    pub source: String,
+}
+
+#[derive(Debug, Clone, Serialize, ToSchema)]
+pub(crate) struct DocumentSectionDto {
+    pub id: Uuid,
+    pub ordinal: i32,
+    pub number: Option<String>,
+    pub title: String,
+    pub depth: i32,
+    pub path: Vec<String>,
+    /// `native` or `grobid`.
+    pub source: String,
 }
 
 #[derive(Debug, Deserialize, ToSchema)]
@@ -404,6 +450,76 @@ pub(crate) async fn list_document_pages(
 
 #[utoipa::path(
     get,
+    path = "/projects/{project_id}/reports/{report_id}/documents/{document_id}/references",
+    operation_id = "listDocumentReferences",
+    tag = "documents",
+    params(("project_id" = Uuid, Path), ("report_id" = Uuid, Path), ("document_id" = Uuid, Path)),
+    responses((status = 200, body = Vec<DocumentReferenceDto>), (status = 404, body = ErrorResponse), (status = 500, body = ErrorResponse))
+)]
+pub(crate) async fn list_document_references(
+    State(state): State<AppState>,
+    Path((project_id, report_id, document_id)): Path<(Uuid, Uuid, Uuid)>,
+) -> Result<Json<Vec<DocumentReferenceDto>>, ApiError> {
+    deepref_postgres::get_document(&state.pool, project_id, report_id, document_id)
+        .await
+        .map_err(map_database_document_error)?;
+    let references =
+        deepref_postgres::list_document_references(&state.pool, project_id, report_id, document_id)
+            .await?;
+    Ok(Json(
+        references
+            .into_iter()
+            .map(|reference| DocumentReferenceDto {
+                id: reference.id,
+                ordinal: reference.ordinal,
+                raw: reference.raw,
+                title: reference.title,
+                authors: reference.authors,
+                year: reference.year,
+                venue: reference.venue,
+                doi: reference.doi,
+                source: reference.source,
+            })
+            .collect(),
+    ))
+}
+
+#[utoipa::path(
+    get,
+    path = "/projects/{project_id}/reports/{report_id}/documents/{document_id}/sections",
+    operation_id = "listDocumentSections",
+    tag = "documents",
+    params(("project_id" = Uuid, Path), ("report_id" = Uuid, Path), ("document_id" = Uuid, Path)),
+    responses((status = 200, body = Vec<DocumentSectionDto>), (status = 404, body = ErrorResponse), (status = 500, body = ErrorResponse))
+)]
+pub(crate) async fn list_document_sections(
+    State(state): State<AppState>,
+    Path((project_id, report_id, document_id)): Path<(Uuid, Uuid, Uuid)>,
+) -> Result<Json<Vec<DocumentSectionDto>>, ApiError> {
+    deepref_postgres::get_document(&state.pool, project_id, report_id, document_id)
+        .await
+        .map_err(map_database_document_error)?;
+    let sections =
+        deepref_postgres::list_document_sections(&state.pool, project_id, report_id, document_id)
+            .await?;
+    Ok(Json(
+        sections
+            .into_iter()
+            .map(|section| DocumentSectionDto {
+                id: section.id,
+                ordinal: section.ordinal,
+                number: section.number,
+                title: section.title,
+                depth: section.depth,
+                path: section.path,
+                source: section.source,
+            })
+            .collect(),
+    ))
+}
+
+#[utoipa::path(
+    get,
     path = "/projects/{project_id}/reports/{report_id}/documents/{document_id}/content",
     operation_id = "streamReportDocumentContent",
     tag = "documents",
@@ -425,10 +541,18 @@ pub(crate) async fn get_document_content(
     let store = state
         .document_store
         .ok_or_else(|| ApiError::Configuration("document storage is not configured".to_owned()))?;
-    let object = store
-        .get(&object_key)
-        .await
-        .map_err(|error| ApiError::Internal(error.into()))?;
+    let object = store.get(&object_key).await.map_err(|error| {
+        if error.is_not_found() {
+            ApiError::Conflict {
+                code: deepref_documents::DOCUMENT_BLOB_MISSING_CODE.to_owned(),
+                message: "The stored PDF file is no longer available. Upload the PDF again."
+                    .to_owned(),
+                details: serde_json::json!({}),
+            }
+        } else {
+            ApiError::Internal(error.into())
+        }
+    })?;
     let mut response = Body::from_stream(object.into_stream()).into_response();
     response.headers_mut().insert(
         header::CONTENT_TYPE,
@@ -625,6 +749,22 @@ pub(crate) async fn upload_document(
         .as_ref()
         .ok_or_else(|| ApiError::Configuration("document storage is not configured".to_owned()))?;
     let (stored, original_filename) = extract_multipart_pdf(multipart, store).await?;
+    // Re-uploading identical content for a document whose processing failed
+    // retries that document instead of colliding with the unique content hash.
+    if let Some(existing) = deepref_postgres::find_failed_document_by_hash(
+        &state.pool,
+        project_id,
+        report_id,
+        &stored.sha256,
+    )
+    .await
+    .map_err(map_database_document_error)?
+    {
+        let _ = store.delete(&stored.opaque_id).await;
+        let document =
+            requeue_document(&state.pool, project_id, report_id, existing, &actor).await?;
+        return Ok((StatusCode::CREATED, Json(document)));
+    }
     let document = persist_uploaded_document(
         &state.pool,
         store,
@@ -636,6 +776,86 @@ pub(crate) async fn upload_document(
     )
     .await?;
     Ok((StatusCode::CREATED, Json(document)))
+}
+
+async fn requeue_document(
+    pool: &sqlx::PgPool,
+    project_id: Uuid,
+    report_id: Uuid,
+    document_id: Uuid,
+    actor: &super::actor::Actor,
+) -> Result<DocumentDto, ApiError> {
+    let mut tx = pool.begin().await?;
+    // Record who asked for the reprocessing without touching the document's
+    // creator (actor_kind / actor_id); rolled back with the transaction when
+    // the document turns out not to be retryable.
+    sqlx::query(
+        "UPDATE documents SET reparsed_by_kind=$4, reparsed_by_id=$5, reparsed_at=now()
+         WHERE id=$1 AND project_id=$2 AND report_id=$3",
+    )
+    .bind(document_id)
+    .bind(project_id)
+    .bind(report_id)
+    .bind(actor.kind().as_str())
+    .bind(actor.id())
+    .execute(&mut *tx)
+    .await?;
+    let document = deepref_postgres::requeue_document_processing(
+        &mut tx,
+        ProjectId::new(project_id),
+        report_id,
+        document_id,
+    )
+    .await
+    .map_err(map_database_document_error)?
+    .ok_or_else(|| ApiError::Conflict {
+        code: "document_not_retryable".to_owned(),
+        message: "this document cannot be reprocessed in its current state".to_owned(),
+        details: serde_json::json!({}),
+    })?;
+    tx.commit().await?;
+    Ok(document_dto(document))
+}
+
+#[utoipa::path(
+    post,
+    path = "/projects/{project_id}/reports/{report_id}/documents/{document_id}/reparse",
+    operation_id = "reparseReportDocument",
+    tag = "documents",
+    params(("project_id" = Uuid, Path), ("report_id" = Uuid, Path), ("document_id" = Uuid, Path)),
+    responses((status = 202, body = DocumentDto), (status = 404, body = ErrorResponse), (status = 409, body = ErrorResponse), (status = 500, body = ErrorResponse))
+)]
+pub(crate) async fn reparse_document(
+    State(state): State<AppState>,
+    Path((project_id, report_id, document_id)): Path<(Uuid, Uuid, Uuid)>,
+    headers: HeaderMap,
+) -> Result<(StatusCode, Json<DocumentDto>), ApiError> {
+    let actor = super::actor::extract_actor(&headers)?;
+    ensure_report_scope(&state.pool, project_id, report_id).await?;
+    let stored = deepref_postgres::get_document(&state.pool, project_id, report_id, document_id)
+        .await
+        .map_err(map_database_document_error)?;
+    // Refuse before queueing: a parse job cannot succeed without the PDF bytes,
+    // and the caller needs a clear "upload it again" answer, not a failed job.
+    if let Some(object_key) = stored.object_key.as_deref() {
+        let store = state.document_store.as_ref().ok_or_else(|| {
+            ApiError::Configuration("document storage is not configured".to_owned())
+        })?;
+        let present = store
+            .exists(object_key)
+            .await
+            .map_err(|error| ApiError::Internal(error.into()))?;
+        if !present {
+            return Err(ApiError::Conflict {
+                code: deepref_documents::DOCUMENT_BLOB_MISSING_CODE.to_owned(),
+                message: "The stored PDF file is no longer available. Upload the PDF again to re-parse it.".to_owned(),
+                details: serde_json::json!({}),
+            });
+        }
+    }
+    let document =
+        requeue_document(&state.pool, project_id, report_id, document_id, &actor).await?;
+    Ok((StatusCode::ACCEPTED, Json(document)))
 }
 
 #[utoipa::path(
@@ -657,8 +877,29 @@ pub(crate) async fn attach_external_document(
     let actor = super::actor::extract_actor(&headers)?;
     let url =
         deepref_documents::validate_external_url(&input.url).map_err(map_remote_fetch_error)?;
-    let mut tx = state.pool.begin().await?;
     let original_filename = sanitize_filename(input.original_filename.as_deref());
+    let document = attach_external_url(
+        &state.pool,
+        project_id,
+        report_id,
+        url.as_str(),
+        original_filename.as_deref(),
+        &actor,
+    )
+    .await?;
+    Ok((StatusCode::CREATED, Json(document_dto(document))))
+}
+
+/// Records an external PDF address on the report and queues its retrieval.
+async fn attach_external_url(
+    pool: &sqlx::PgPool,
+    project_id: Uuid,
+    report_id: Uuid,
+    url: &str,
+    original_filename: Option<&str>,
+    actor: &super::actor::Actor,
+) -> Result<deepref_postgres::DocumentRecord, ApiError> {
+    let mut tx = pool.begin().await?;
     let document = deepref_postgres::create_document(
         &mut tx,
         deepref_postgres::NewDocument {
@@ -667,8 +908,8 @@ pub(crate) async fn attach_external_document(
             id: Uuid::new_v4(),
             source: "external_url",
             status: "external",
-            original_filename: original_filename.as_deref(),
-            external_url: Some(url.as_str()),
+            original_filename,
+            external_url: Some(url),
             mime_type: "application/pdf",
             byte_size: 0,
             content_hash: None,
@@ -678,7 +919,7 @@ pub(crate) async fn attach_external_document(
         },
     )
     .await;
-    let document = match document {
+    match document {
         Ok(document) => match deepref_postgres::enqueue_retrieve(
             &mut tx,
             ProjectId::new(project_id),
@@ -686,21 +927,181 @@ pub(crate) async fn attach_external_document(
         )
         .await
         {
-            Ok(_) => match tx.commit().await {
-                Ok(()) => document,
-                Err(error) => return Err(ApiError::Database(error)),
-            },
+            Ok(_) => {
+                tx.commit().await?;
+                Ok(document)
+            }
             Err(error) => {
                 let _ = tx.rollback().await;
-                return Err(map_database_document_error(error));
+                Err(map_database_document_error(error))
             }
         },
         Err(error) => {
             tx.rollback().await?;
-            return Err(map_database_document_error(error));
+            Err(map_database_document_error(error))
         }
+    }
+}
+
+#[utoipa::path(
+    post,
+    path = "/projects/{project_id}/reports/{report_id}/documents/open-access",
+    operation_id = "attachOpenAccessReportDocument",
+    tag = "documents",
+    params(("project_id" = Uuid, Path), ("report_id" = Uuid, Path)),
+    responses((status = 201, body = DocumentDto), (status = 404, body = ErrorResponse), (status = 409, body = ErrorResponse), (status = 502, body = ErrorResponse), (status = 500, body = ErrorResponse))
+)]
+pub(crate) async fn attach_open_access_document(
+    State(state): State<AppState>,
+    Path((project_id, report_id)): Path<(Uuid, Uuid)>,
+    headers: HeaderMap,
+) -> Result<(StatusCode, Json<DocumentDto>), ApiError> {
+    ensure_report_scope(&state.pool, project_id, report_id).await?;
+    let actor = super::actor::extract_actor(&headers)?;
+    let (_, doi) = deepref_postgres::report_identity(&state.pool, report_id).await?;
+    let doi = doi.ok_or_else(|| ApiError::Conflict {
+        code: "report_doi_missing".to_owned(),
+        message: "This report has no DOI, so an open-access copy cannot be looked up. Upload the PDF or paste a link instead.".to_owned(),
+        details: serde_json::json!({}),
+    })?;
+    // The workspace's contact address identifies us to Unpaywall; a personal address is never used.
+    let contact: String = sqlx::query_scalar("SELECT crossref_mailto FROM settings WHERE id=1")
+        .fetch_optional(&state.pool)
+        .await?
+        .unwrap_or_default();
+    if contact.trim().is_empty() {
+        return Err(missing_contact_email());
+    }
+    let lookup = deepref_crossref::UnpaywallClient::new(contact)
+        .map_err(|error| ApiError::Internal(error.into()))?;
+    let pdf_url = lookup
+        .open_access_pdf_url(&doi)
+        .await
+        .map_err(map_unpaywall_error)?;
+    let Some(pdf_url) = pdf_url else {
+        return Err(ApiError::NotFound(
+            "No open-access PDF is listed for this DOI. Upload the PDF or paste a link instead."
+                .to_owned(),
+        ));
     };
+    let url = deepref_documents::validate_external_url(&pdf_url).map_err(map_remote_fetch_error)?;
+    let document = attach_external_url(
+        &state.pool,
+        project_id,
+        report_id,
+        url.as_str(),
+        None,
+        &actor,
+    )
+    .await?;
     Ok((StatusCode::CREATED, Json(document_dto(document))))
+}
+
+fn missing_contact_email() -> ApiError {
+    ApiError::Conflict {
+        code: "contact_email_missing".to_owned(),
+        message: "Set a contact e-mail in Settings first. Unpaywall asks for one before it looks up open-access PDFs.".to_owned(),
+        details: serde_json::json!({}),
+    }
+}
+
+fn map_unpaywall_error(error: deepref_crossref::UnpaywallError) -> ApiError {
+    use deepref_crossref::UnpaywallError;
+    match error {
+        UnpaywallError::MissingEmail => missing_contact_email(),
+        UnpaywallError::Rejected(status) if status == StatusCode::UNPROCESSABLE_ENTITY => {
+            ApiError::Conflict {
+                code: "contact_email_rejected".to_owned(),
+                message: "Unpaywall did not accept the contact e-mail in Settings. Check that it is a real address.".to_owned(),
+                details: serde_json::json!({}),
+            }
+        }
+        UnpaywallError::InvalidDoi(error) => ApiError::Doi(error),
+        UnpaywallError::Rejected(_)
+        | UnpaywallError::Unavailable(_)
+        | UnpaywallError::Request(_)
+        | UnpaywallError::Json(_) => ApiError::Upstream(
+            "The open-access lookup service did not answer. Try again later.".to_owned(),
+        ),
+    }
+}
+
+#[utoipa::path(
+    post,
+    path = "/projects/{project_id}/reports/{report_id}/documents/{document_id}/identity/acknowledge",
+    operation_id = "acknowledgeReportDocumentIdentity",
+    tag = "documents",
+    params(("project_id" = Uuid, Path), ("report_id" = Uuid, Path), ("document_id" = Uuid, Path)),
+    responses((status = 200, body = DocumentDto), (status = 404, body = ErrorResponse), (status = 409, body = ErrorResponse), (status = 500, body = ErrorResponse))
+)]
+pub(crate) async fn acknowledge_document_identity(
+    State(state): State<AppState>,
+    Path((project_id, report_id, document_id)): Path<(Uuid, Uuid, Uuid)>,
+) -> Result<Json<DocumentDto>, ApiError> {
+    ensure_report_scope(&state.pool, project_id, report_id).await?;
+    let document = deepref_postgres::get_document(&state.pool, project_id, report_id, document_id)
+        .await
+        .map_err(map_database_document_error)?;
+    let flagged = document
+        .identity_check
+        .as_ref()
+        .is_some_and(|check| check.verdict == deepref_documents::IdentityVerdict::Mismatch);
+    if !flagged {
+        return Err(ApiError::Conflict {
+            code: "document_not_flagged".to_owned(),
+            message: "This PDF has no possible-mismatch flag to keep.".to_owned(),
+            details: serde_json::json!({}),
+        });
+    }
+    deepref_postgres::acknowledge_identity_mismatch(
+        &state.pool,
+        project_id,
+        report_id,
+        document_id,
+    )
+    .await?;
+    let document = deepref_postgres::get_document(&state.pool, project_id, report_id, document_id)
+        .await
+        .map_err(map_database_document_error)?;
+    Ok(Json(document_dto(document)))
+}
+
+#[utoipa::path(
+    delete,
+    path = "/projects/{project_id}/reports/{report_id}/documents/{document_id}",
+    operation_id = "deleteReportDocument",
+    tag = "documents",
+    params(("project_id" = Uuid, Path), ("report_id" = Uuid, Path), ("document_id" = Uuid, Path)),
+    responses((status = 204, description = "The document and its stored file were removed"), (status = 404, body = ErrorResponse), (status = 409, body = ErrorResponse), (status = 500, body = ErrorResponse))
+)]
+pub(crate) async fn delete_report_document(
+    State(state): State<AppState>,
+    Path((project_id, report_id, document_id)): Path<(Uuid, Uuid, Uuid)>,
+) -> Result<StatusCode, ApiError> {
+    ensure_report_scope(&state.pool, project_id, report_id).await?;
+    let removed =
+        deepref_postgres::delete_document(&state.pool, project_id, report_id, document_id)
+            .await
+            .map_err(|error| {
+                // AI evidence and extracted values refer to the PDF's blocks and are kept on purpose.
+                if let Some(SqlxError::Database(database)) = error.downcast_ref::<SqlxError>()
+                    && database.code().as_deref() == Some("23503")
+                {
+                    return ApiError::Conflict {
+                        code: "document_in_use".to_owned(),
+                        message: "This PDF supports AI suggestions or extracted values, so it cannot be removed. Remove those first.".to_owned(),
+                        details: serde_json::json!({}),
+                    };
+                }
+                map_database_document_error(error)
+            })?
+            .ok_or_else(|| ApiError::NotFound("document not found".to_owned()))?;
+    if let (Some(object_key), Some(store)) = (removed, state.document_store.as_ref())
+        && let Err(error) = store.delete(&object_key).await
+    {
+        tracing::warn!(%document_id, %error, "removed document row, but its stored file could not be deleted");
+    }
+    Ok(StatusCode::NO_CONTENT)
 }
 
 fn bounded_limit(limit: Option<i64>) -> Result<i64, ApiError> {
@@ -743,18 +1144,32 @@ async fn ensure_report_scope(
 }
 
 fn document_dto(document: deepref_postgres::DocumentRecord) -> DocumentDto {
+    let identity = document.identity_check.map(|check| DocumentIdentityDto {
+        verdict: match check.verdict {
+            deepref_documents::IdentityVerdict::Match => "match",
+            deepref_documents::IdentityVerdict::Mismatch => "mismatch",
+            deepref_documents::IdentityVerdict::Unknown => "unknown",
+        }
+        .to_owned(),
+        detected_title: check.detected_title,
+        detected_doi: check.detected_doi,
+        title_overlap: check.title_overlap,
+        acknowledged_at: document.identity_acknowledged_at,
+    });
     DocumentDto {
         id: document.id,
         report_id: document.report_id,
         original_filename: document.original_filename,
         source: document.source,
         status: document.status,
+        external_url: document.external_url,
         mime_type: document.mime_type,
         byte_size: document.byte_size,
         content_hash: document.content_hash,
         parser_version: document.parser_version,
         parser_error: document.parser_error,
         ocr_required: document.ocr_required,
+        identity,
         created_at: document.created_at,
         updated_at: document.updated_at,
     }
@@ -765,6 +1180,7 @@ fn missing_full_text_dto(item: deepref_postgres::MissingFullTextRecord) -> Missi
         report_id: item.report_id,
         title: item.title,
         abstract_text: item.abstract_text,
+        doi: item.doi,
         status: item.status,
     }
 }

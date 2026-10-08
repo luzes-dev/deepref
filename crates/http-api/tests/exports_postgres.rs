@@ -630,7 +630,7 @@ async fn postgres_exports_return_every_deterministic_attachment_and_boundary_sta
                 assert_eq!(
                     body.lines().next(),
                     Some(
-                        "id,created_at,event_type,aggregate_type,aggregate_id,actor_kind,actor_id,protocol_version_id,stage,decision,reason_id,event_kind,supersedes_event_id,undoes_event_id,previous_snapshot,result_snapshot,notes,payload,provenance"
+                        "id,created_at,event_type,aggregate_type,aggregate_id,actor_kind,actor_id,actor_label,protocol_version_id,stage,decision,reason_id,event_kind,supersedes_event_id,undoes_event_id,notes,previous_snapshot,result_snapshot,payload,provenance"
                     )
                 );
                 assert!(body.contains("dedupe_resolution"));

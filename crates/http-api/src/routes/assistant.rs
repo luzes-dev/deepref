@@ -29,8 +29,15 @@ use crate::{
     error::{ApiError, ErrorResponse},
     state::AppState,
 };
+mod agent;
+mod plans;
+
+pub(crate) use plans::*;
+
 const MAX_BLOCK_TEXT_CHARS: usize = 2_000;
 const MAX_REPORT_ABSTRACT_CHARS: usize = 4_000;
+/// Longest chat message accepted from the user, in characters.
+pub(crate) const MAX_ASSISTANT_MESSAGE_CHARS: usize = 4_000;
 
 #[derive(Debug, Clone, Copy, Serialize, ToSchema)]
 #[serde(rename_all = "snake_case")]
@@ -110,6 +117,15 @@ pub(crate) struct StudyArgsDto {
 
 #[derive(Debug, Deserialize, ToSchema)]
 #[serde(deny_unknown_fields)]
+pub(crate) struct ListStudiesArgsDto {
+    project_id: Uuid,
+    /// 1 to 50; defaults to 25.
+    #[serde(default)]
+    limit: Option<u16>,
+}
+
+#[derive(Debug, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
 pub(crate) struct AppraisalArgsDto {
     project_id: Uuid,
     report_id: Uuid,
@@ -134,7 +150,12 @@ pub(crate) struct DuplicateMergeArgsDto {
 }
 
 #[derive(Debug, Deserialize, ToSchema)]
-#[serde(tag = "tool", content = "args", rename_all = "snake_case")]
+#[serde(
+    tag = "tool",
+    content = "args",
+    rename_all = "snake_case",
+    deny_unknown_fields
+)]
 pub(crate) enum AssistantToolRequest {
     GetProjectProtocol(ProjectArgsDto),
     GetReport(ReportArgsDto),
@@ -143,6 +164,7 @@ pub(crate) enum AssistantToolRequest {
     SearchProjectReports(SearchProjectReportsArgsDto),
     GetScreeningState(ReportArgsDto),
     GetStudy(StudyArgsDto),
+    ListStudies(ListStudiesArgsDto),
     GetAppraisal(AppraisalArgsDto),
     ProposeScreeningDecision(ScreeningDecisionArgsDto),
     ProposeDuplicateMerge(DuplicateMergeArgsDto),
@@ -194,6 +216,10 @@ impl AssistantToolRequest {
                 })
             }
             Self::GetStudy(args) => AgentTool::GetStudy(study_args(args)),
+            Self::ListStudies(args) => AgentTool::ListStudies(deepref_ai::ListStudiesToolArgs {
+                project_id: ProjectId::new(args.project_id),
+                limit: args.limit,
+            }),
             Self::GetAppraisal(args) => AgentTool::GetAppraisal(appraisal_args(args)),
             Self::ProposeScreeningDecision(args) => {
                 AgentTool::ProposeScreeningDecision(deepref_ai::ScreeningDecisionProposalArgs {
@@ -395,6 +421,9 @@ fn tool_description(name: AgentToolName) -> &'static str {
         AgentToolName::SearchProjectReports => "Search project reports by metadata.",
         AgentToolName::GetScreeningState => "Read the screening state for one report.",
         AgentToolName::GetStudy => "Read one study and its report membership.",
+        AgentToolName::ListStudies => {
+            "List the project's studies with their design and report counts."
+        }
         AgentToolName::GetAppraisal => "Read the latest completed appraisal version.",
         AgentToolName::ProposeScreeningDecision => "Generate a reviewer proposal for screening.",
         AgentToolName::ProposeDuplicateMerge => {
@@ -542,6 +571,13 @@ async fn execute_read(
             .map_err(study_failure)?;
             study_value(study)
         }
+        AgentReadOperation::ListStudies(args) => deepref_postgres::list_agent_studies(
+            &state.pool,
+            args.project_id.as_uuid(),
+            i64::from(args.limit.unwrap_or(25)),
+        )
+        .await
+        .map_err(read_failure),
         AgentReadOperation::GetAppraisal(args) => {
             let appraisal = deepref_postgres::get_latest_agent_appraisal(
                 &state.pool,
@@ -651,7 +687,7 @@ fn protocol_value(protocol: deepref_postgres::ProtocolDocument) -> Result<Value,
 }
 
 fn report_value(report: deepref_postgres::AgentReportRecord, abstract_limit: usize) -> Value {
-    json!({
+    let mut value = json!({
         "id": report.id,
         "project_id": report.project_id,
         "title": report.title,
@@ -660,7 +696,16 @@ fn report_value(report: deepref_postgres::AgentReportRecord, abstract_limit: usi
         "journal": report.journal,
         "url": report.url,
         "identifiers": report.identifiers,
-    })
+    });
+    if let Some(documents) = report.documents {
+        // Full text exists only when a document has been parsed (status available).
+        let full_text_available = documents
+            .iter()
+            .any(|document| document.status == "available");
+        value["full_text_available"] = json!(full_text_available);
+        value["documents"] = json!(documents);
+    }
+    value
 }
 
 fn blocks_value(blocks: Vec<deepref_postgres::AgentDocumentBlockRecord>) -> Value {
@@ -690,7 +735,7 @@ fn study_value(study: deepref_postgres::StudyDetailRecord) -> Result<Value, Assi
         .map(|report| {
             json!({
                 "report_id": report.report_id,
-                "title": report.title,
+                "title": report.title.as_deref().map(deepref_postgres::decode_html_entities),
                 "abstract_text": report.abstract_text.as_deref().map(|value| bounded_text(value, MAX_REPORT_ABSTRACT_CHARS)),
                 "publication_year": report.publication_year,
                 "role": report.role.as_str(),
@@ -701,7 +746,7 @@ fn study_value(study: deepref_postgres::StudyDetailRecord) -> Result<Value, Assi
     Ok(json!({
         "id": study.study.id,
         "project_id": study.study.project_id,
-        "title": study.study.title,
+        "title": deepref_postgres::decode_html_entities(&study.study.title),
         "design": study.study.design.map(StudyDesign::as_str),
         "design_context": study.study.design_context,
         "revision": study.study.revision,
@@ -738,10 +783,37 @@ fn map_runtime_error(error: AgentToolError) -> ApiError {
         | AgentToolError::InvalidActor
         | AgentToolError::MalformedRequest
         | AgentToolError::UnknownTool => ApiError::BadRequest("tool request is invalid".to_owned()),
+        AgentToolError::NotConfigured => ApiError::Configuration(
+            "The assistant needs an AI provider, which is not configured for this workspace."
+                .to_owned(),
+        ),
+        AgentToolError::BudgetExceeded => budget_exceeded_error(),
+        AgentToolError::SubscriptionLimit => subscription_limit_error(),
+        AgentToolError::ProviderFailed => provider_failed_error(),
         AgentToolError::InvalidOutput | AgentToolError::ExecutionFailed => {
             ApiError::Internal(anyhow::anyhow!("assistant tool execution failed"))
         }
     }
+}
+
+pub(super) fn budget_exceeded_error() -> ApiError {
+    ApiError::Conflict {
+        code: "ai_budget_exceeded".to_owned(),
+        message: "AI budget for this month reached".to_owned(),
+        details: Value::Null,
+    }
+}
+
+fn subscription_limit_error() -> ApiError {
+    ApiError::Conflict {
+        code: "ai_subscription_limit".to_owned(),
+        message: "AI subscription limit reached; try again later".to_owned(),
+        details: Value::Null,
+    }
+}
+
+fn provider_failed_error() -> ApiError {
+    ApiError::Configuration("The AI provider could not be reached. Try again shortly.".to_owned())
 }
 
 fn read_failure(error: deepref_postgres::AgentReadError) -> AssistantFailure {
@@ -1083,6 +1155,12 @@ fn assistant_failure_to_tool_error(error: AssistantFailure) -> AgentToolError {
     }
 }
 
+fn is_tool_command(message: &str) -> bool {
+    serde_json::from_str::<Value>(message)
+        .ok()
+        .is_some_and(|value| value.get("tool").and_then(Value::as_str).is_some())
+}
+
 fn map_turn_error(error: AgentToolError) -> ApiError {
     match error {
         AgentToolError::Forbidden => ApiError::Forbidden("assistant tool is forbidden".to_owned()),
@@ -1093,6 +1171,13 @@ fn map_turn_error(error: AgentToolError) -> ApiError {
         | AgentToolError::UnknownTool => {
             ApiError::BadRequest("assistant turn request is invalid".to_owned())
         }
+        AgentToolError::NotConfigured => ApiError::Configuration(
+            "The assistant needs an AI provider, which is not configured for this workspace."
+                .to_owned(),
+        ),
+        AgentToolError::BudgetExceeded => budget_exceeded_error(),
+        AgentToolError::SubscriptionLimit => subscription_limit_error(),
+        AgentToolError::ProviderFailed => provider_failed_error(),
         AgentToolError::InvalidOutput | AgentToolError::ExecutionFailed => {
             ApiError::Internal(anyhow::anyhow!("assistant turn failed"))
         }
@@ -1152,6 +1237,7 @@ fn sse_frame(name: &str, payload: &Value) -> Result<Event, std::convert::Infalli
 fn stream_event_parts(event: &AssistantStreamEvent) -> (&'static str, Value) {
     match event {
         AssistantStreamEvent::Token { delta } => ("token", json!({ "delta": delta })),
+        AssistantStreamEvent::Replace { text } => ("replace", json!({ "text": text })),
         AssistantStreamEvent::ToolStart {
             tool,
             tool_call_id,
@@ -1180,6 +1266,8 @@ fn stream_event_parts(event: &AssistantStreamEvent) -> (&'static str, Value) {
                 "status_path": status_path,
             }),
         ),
+        AssistantStreamEvent::Status { message } => ("status", json!({ "message": message })),
+        AssistantStreamEvent::PlanProposed { plan } => ("plan", json!({ "plan": plan })),
         AssistantStreamEvent::Done {
             message_id,
             input_tokens,
@@ -1200,8 +1288,26 @@ fn stream_event_frame(event: &AssistantStreamEvent) -> Result<Event, std::conver
     sse_frame(name, &payload)
 }
 
-fn assistant_error_frame() -> Result<Event, std::convert::Infallible> {
-    sse_frame("error", &json!({ "message": "assistant turn failed" }))
+fn assistant_error_frame(error: AgentToolError) -> Result<Event, std::convert::Infallible> {
+    let (code, message) = match error {
+        AgentToolError::BudgetExceeded => {
+            ("ai_budget_exceeded", "AI budget for this month reached")
+        }
+        AgentToolError::SubscriptionLimit => (
+            "ai_subscription_limit",
+            "AI subscription limit reached; try again later",
+        ),
+        AgentToolError::ProviderFailed => (
+            "ai_provider_failed",
+            "The AI provider could not be reached. Try again shortly.",
+        ),
+        AgentToolError::NotConfigured => (
+            "ai_not_configured",
+            "The assistant needs an AI provider, which is not configured for this workspace.",
+        ),
+        _ => ("assistant_failed", "assistant turn failed"),
+    };
+    sse_frame("error", &json!({ "code": code, "message": message }))
 }
 
 type AssistantSseState = (
@@ -1222,7 +1328,9 @@ type AssistantSseState = (
         (status = 400, description = "Malformed chat request or tool command", body = ErrorResponse),
         (status = 403, description = "Tool is forbidden by the project policy", body = ErrorResponse),
         (status = 404, description = "Project or conversation not found", body = ErrorResponse),
-        (status = 500, description = "Internal server error", body = ErrorResponse)
+        (status = 413, description = "Message is longer than 4000 characters", body = ErrorResponse),
+        (status = 500, description = "Internal server error", body = ErrorResponse),
+        (status = 503, description = "No AI provider is configured for free-form replies", body = ErrorResponse)
     )
 )]
 #[allow(clippy::too_many_lines)]
@@ -1241,9 +1349,20 @@ pub(crate) async fn chat(
     if user_message.is_empty() {
         return Err(ApiError::BadRequest("message must not be blank".to_owned()));
     }
+    if user_message.chars().count() > MAX_ASSISTANT_MESSAGE_CHARS {
+        return Err(ApiError::PayloadTooLarge(format!(
+            "This message is too long. Messages can be up to {MAX_ASSISTANT_MESSAGE_CHARS} characters; shorten it or split it into two messages."
+        )));
+    }
     deepref_postgres::get_assistant_conversation(&state.pool, project_id, body.conversation_id)
         .await
         .map_err(map_conversation_error)?;
+    let free_form = !is_tool_command(&user_message);
+    let agent_setup = if free_form {
+        Some(agent::prepare_agent_turn(&state, project_id).await?)
+    } else {
+        None
+    };
     let history_records =
         deepref_postgres::list_assistant_messages(&state.pool, body.conversation_id)
             .await
@@ -1273,6 +1392,22 @@ pub(crate) async fn chat(
     let turn_project_id = ProjectId::new(project_id);
     let turn_state = state.clone();
     tokio::spawn(async move {
+        if let Some(setup) = agent_setup {
+            let outcome = agent::run_agent_turn(
+                &turn_state,
+                setup,
+                actor,
+                turn_project_id,
+                body.conversation_id,
+                &history_records,
+                &user_message,
+                &event_tx,
+            )
+            .await;
+            drop(event_tx);
+            let _ = result_tx.send(outcome);
+            return;
+        }
         let dispatcher = ConversationAgentDispatcher {
             project_id: turn_project_id,
             state: turn_state.clone(),
@@ -1309,7 +1444,9 @@ pub(crate) async fn chat(
                         None => match result {
                             Some(receiver) => match receiver.await {
                                 Ok(Ok(())) | Err(_) => None,
-                                Ok(Err(_)) => Some((assistant_error_frame(), (rx, None, None))),
+                                Ok(Err(error)) => {
+                                    Some((assistant_error_frame(error), (rx, None, None)))
+                                }
                             },
                             None => None,
                         },

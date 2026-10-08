@@ -5,6 +5,107 @@
     "version": "0.1.0"
   },
   "paths": {
+    "/ai/status": {
+      "get": {
+        "tags": [
+          "ai"
+        ],
+        "operationId": "getAiStatus",
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "query",
+            "description": "When given, the response includes this project's remaining budget.",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Whether AI features are configured for this workspace",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AiStatusDto"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Project not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/automations/catalog": {
+      "get": {
+        "tags": [
+          "automations"
+        ],
+        "operationId": "getAutomationCatalog",
+        "responses": {
+          "200": {
+            "description": "Every block available on the canvas",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/NodeTypeDto"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/automations/templates": {
+      "get": {
+        "tags": [
+          "automations"
+        ],
+        "operationId": "listAutomationTemplates",
+        "responses": {
+          "200": {
+            "description": "Ready-made automations",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/TemplateDto"
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/health": {
       "get": {
         "tags": [
@@ -31,6 +132,21 @@
           "health"
         ],
         "operationId": "getDependencyStatus",
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "query",
+            "description": "Check only this project's background jobs. Omit for the whole workspace.",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "format": "uuid"
+            }
+          }
+        ],
         "responses": {
           "200": {
             "description": "",
@@ -91,6 +207,197 @@
                 }
               }
             }
+          }
+        }
+      }
+    },
+    "/hooks/email/{token}": {
+      "post": {
+        "tags": [
+          "hooks"
+        ],
+        "summary": "Public endpoint for inbound e-mail providers. DOIs and PubMed IDs found in\nthe message are passed to the workflow as trigger data.",
+        "operationId": "receiveInboundEmail",
+        "parameters": [
+          {
+            "name": "token",
+            "in": "path",
+            "description": "The workflow's private e-mail token",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "requestBody": {
+          "description": "Normalized {from, to, subject, text, html, attachments[]}, a Postmark inbound payload, or a Mailgun route (JSON, urlencoded or multipart)",
+          "content": {
+            "application/json": {
+              "schema": {}
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "description": "Accepted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HookAcceptedDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Unreadable message",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Unknown address",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Automation not switched on",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Body larger than 256 KB",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too many calls (60 per minute per address)"
+          }
+        }
+      }
+    },
+    "/hooks/workflows/{token}": {
+      "post": {
+        "tags": [
+          "hooks"
+        ],
+        "summary": "Public endpoint that starts a workflow with the request body as trigger data.",
+        "operationId": "receiveWorkflowWebhook",
+        "parameters": [
+          {
+            "name": "token",
+            "in": "path",
+            "description": "The workflow's private webhook token",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "X-DeepRef-Signature",
+            "in": "header",
+            "description": "sha256=<hex HMAC-SHA256 of the raw body, keyed with the signing secret>. Required unless the workflow accepts unsigned calls.",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "description": "Optional delivery id; repeated deliveries start one run",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {}
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "description": "Accepted",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/HookAcceptedDto"
+                }
+              }
+            }
+          },
+          "403": {
+            "description": "Missing or wrong signature",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Unknown address",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Automation not switched on",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "413": {
+            "description": "Body larger than 256 KB",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "429": {
+            "description": "Too many calls (60 per minute per address)"
           }
         }
       }
@@ -318,6 +625,46 @@
           "notifications"
         ],
         "operationId": "listNotifications",
+        "parameters": [
+          {
+            "name": "cursor",
+            "in": "query",
+            "description": "Opaque cursor returned by the previous page.",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "Page size from 1 through 100.",
+            "required": false,
+            "schema": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "format": "int64"
+            }
+          },
+          {
+            "name": "project_id",
+            "in": "query",
+            "description": "Only this project's notifications. Omit to list every project.",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "format": "uuid"
+            }
+          }
+        ],
         "responses": {
           "200": {
             "description": "Notifications ordered newest first",
@@ -408,6 +755,21 @@
           "notifications"
         ],
         "operationId": "getUnreadNotificationCount",
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "query",
+            "description": "Count only this project's unread notifications. Omit for every project.",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "format": "uuid"
+            }
+          }
+        ],
         "responses": {
           "200": {
             "description": "Unread count and newest notification revision",
@@ -580,7 +942,17 @@
         ],
         "responses": {
           "204": {
-            "description": "Project deleted"
+            "description": "Project and everything that belongs to it deleted"
+          },
+          "404": {
+            "description": "Project not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
           },
           "500": {
             "description": "Internal server error",
@@ -699,6 +1071,15 @@
             "schema": {
               "type": "integer",
               "format": "int64"
+            }
+          },
+          {
+            "name": "strategy",
+            "in": "query",
+            "description": "Only runs with this strategy, for example file_import",
+            "required": false,
+            "schema": {
+              "type": "string"
             }
           }
         ],
@@ -838,6 +1219,159 @@
         }
       }
     },
+    "/projects/{project_id}/acquisitions/{acquisition_id}": {
+      "get": {
+        "tags": [
+          "acquisitions"
+        ],
+        "operationId": "getAcquisition",
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "path",
+            "description": "Project identifier",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "acquisition_id",
+            "in": "path",
+            "description": "Acquisition run identifier",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Acquisition run",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AcquisitionDto"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Acquisition not found in this project",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/projects/{project_id}/acquisitions/{acquisition_id}/items": {
+      "get": {
+        "tags": [
+          "acquisitions"
+        ],
+        "operationId": "listAcquisitionItems",
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "path",
+            "description": "Project identifier",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "acquisition_id",
+            "in": "path",
+            "description": "Acquisition run identifier",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "description": "Opaque pagination cursor",
+            "required": false,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "Page size",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Items of a PubMed ID run, in the order they were given",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PaginatedResponse_AcquisitionItemDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid pagination cursor",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Acquisition not found in this project",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/projects/{project_id}/acquisitions/{acquisition_id}/refresh": {
       "post": {
         "tags": [
@@ -918,6 +1452,559 @@
           },
           "409": {
             "description": "Acquisition cannot be refreshed or key conflicts",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/projects/{project_id}/ai/activity": {
+      "get": {
+        "tags": [
+          "ai"
+        ],
+        "operationId": "listAiActivity",
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "path",
+            "description": "Project identifier",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "format": "int64"
+            }
+          },
+          {
+            "name": "task",
+            "in": "query",
+            "description": "Task key filter, for example `extraction`.",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "actor_type",
+            "in": "query",
+            "description": "`ai`, `automation` or `assistant`.",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "batch_id",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "undone",
+            "in": "query",
+            "description": "True for undone entries only, false for entries still in effect.",
+            "required": false,
+            "schema": {
+              "type": [
+                "boolean",
+                "null"
+              ]
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "What the AI, automations and the assistant did",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/PaginatedResponse_AiActivityDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid pagination",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/projects/{project_id}/ai/activity/batches/{batch_id}/undo": {
+      "post": {
+        "tags": [
+          "ai"
+        ],
+        "operationId": "undoAiActivityBatch",
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "path",
+            "description": "Project identifier",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "batch_id",
+            "in": "path",
+            "description": "Batch identifier",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "How many entries were undone",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BatchUndoDto"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Batch not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Everything in the batch was already undone",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/projects/{project_id}/ai/activity/overview": {
+      "get": {
+        "tags": [
+          "ai"
+        ],
+        "operationId": "getAiActivityOverview",
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "path",
+            "description": "Project identifier",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Counts that need attention",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AiActivityOverviewDto"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/projects/{project_id}/ai/activity/{activity_id}/undo": {
+      "post": {
+        "tags": [
+          "ai"
+        ],
+        "operationId": "undoAiActivity",
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "path",
+            "description": "Project identifier",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "activity_id",
+            "in": "path",
+            "description": "Activity entry identifier",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The entry after it was undone",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AiActivityDto"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Entry not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Already undone or no longer safe to undo",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/projects/{project_id}/ai/autonomy": {
+      "get": {
+        "tags": [
+          "ai"
+        ],
+        "operationId": "getAiAutonomy",
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "path",
+            "description": "Project identifier",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "How far the AI may go per task",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AiAutonomyDto"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Project not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "ai"
+        ],
+        "operationId": "updateAiAutonomy",
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "path",
+            "description": "Project identifier",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateAiAutonomyRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Updated settings",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AiAutonomyDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Unknown, locked or unavailable setting",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Project not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/projects/{project_id}/ai/budget": {
+      "get": {
+        "tags": [
+          "ai"
+        ],
+        "operationId": "getAiBudget",
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "path",
+            "description": "Project identifier",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Monthly AI budget and spend",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AiBudgetDto"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Project not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "ai"
+        ],
+        "operationId": "updateAiBudget",
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "path",
+            "description": "Project identifier",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateAiBudgetRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Updated budget and spend",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AiBudgetDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Budget out of range",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Project not found",
             "content": {
               "application/json": {
                 "schema": {
@@ -1222,6 +2309,235 @@
         }
       }
     },
+    "/projects/{project_id}/ai/reviewer-agreement": {
+      "get": {
+        "tags": [
+          "ai"
+        ],
+        "operationId": "getAiReviewerAgreement",
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "path",
+            "description": "Project identifier",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Human versus AI agreement per stage",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/AiStageAgreementDto"
+                  }
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/projects/{project_id}/ai/reviewer-decisions": {
+      "get": {
+        "tags": [
+          "ai"
+        ],
+        "operationId": "listAiReviewerDecisions",
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "path",
+            "description": "Project identifier",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "stage",
+            "in": "query",
+            "description": "`title_abstract` or `full_text`.",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "status",
+            "in": "query",
+            "description": "`waiting`, `concordant`, `conflict` or `resolved`.",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "Maximum number of rows, 1 through 500.",
+            "required": false,
+            "schema": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "format": "int64"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The AI second reviewer's opinions next to the human decisions",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/AiReviewerDecisionDto"
+                  }
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid filter",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/projects/{project_id}/ai/reviewer-decisions/{decision_id}/resolve": {
+      "post": {
+        "tags": [
+          "ai"
+        ],
+        "operationId": "resolveAiReviewerConflict",
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "path",
+            "description": "Project identifier",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "decision_id",
+            "in": "path",
+            "description": "AI reviewer decision identifier",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/ResolveReviewerConflictRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The settled conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AiReviewerDecisionDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid decision",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Already resolved or the screening state changed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/projects/{project_id}/appraisal-definitions": {
       "get": {
         "tags": [
@@ -1345,6 +2661,85 @@
         }
       }
     },
+    "/projects/{project_id}/appraisal-definitions/{definition_id}/{version}/judgment-suggestion": {
+      "post": {
+        "tags": [
+          "appraisal"
+        ],
+        "operationId": "suggestAppraisalJudgments",
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "definition_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "version",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32",
+              "minimum": 0
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/JudgmentSuggestionRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/JudgmentSuggestionDto"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/projects/{project_id}/assistant/chat": {
       "post": {
         "tags": [
@@ -1414,8 +2809,28 @@
               }
             }
           },
+          "413": {
+            "description": "Message is longer than 4000 characters",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
           "500": {
             "description": "Internal server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "No AI provider is configured for free-form replies",
             "content": {
               "application/json": {
                 "schema": {
@@ -1702,6 +3117,212 @@
         }
       }
     },
+    "/projects/{project_id}/assistant/plans/{plan_id}": {
+      "get": {
+        "tags": [
+          "assistant"
+        ],
+        "operationId": "getAssistantPlan",
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "path",
+            "description": "Project identifier",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "plan_id",
+            "in": "path",
+            "description": "Plan identifier",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The plan and, once resolved, its results",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AssistantPlanDto"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Plan not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/projects/{project_id}/assistant/plans/{plan_id}/confirm": {
+      "post": {
+        "tags": [
+          "assistant"
+        ],
+        "operationId": "confirmAssistantPlan",
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "path",
+            "description": "Project identifier",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "plan_id",
+            "in": "path",
+            "description": "Plan identifier",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The executed plan with a result per action",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AssistantPlanDto"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Plan not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Plan is no longer pending",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/projects/{project_id}/assistant/plans/{plan_id}/reject": {
+      "post": {
+        "tags": [
+          "assistant"
+        ],
+        "operationId": "rejectAssistantPlan",
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "path",
+            "description": "Project identifier",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "plan_id",
+            "in": "path",
+            "description": "Plan identifier",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The cancelled plan; nothing was changed",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AssistantPlanDto"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Plan not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Plan is no longer pending",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/projects/{project_id}/assistant/tools": {
       "get": {
         "tags": [
@@ -1869,6 +3490,68 @@
         }
       }
     },
+    "/projects/{project_id}/automations/block-details": {
+      "post": {
+        "tags": [
+          "automations"
+        ],
+        "summary": "Works out what a block's fields can read from the steps before it, from the\ndraft sent in. Nothing is read from or written to the database.",
+        "operationId": "getBlockDetails",
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/BlockDetailsRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The names each text and rule field of the block can use",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/BlockDetailsDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "The graph is not valid",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "The block is not in the graph",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/projects/{project_id}/automations/definitions": {
       "get": {
         "tags": [
@@ -2004,6 +3687,98 @@
           },
           "409": {
             "description": "Automation configuration conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/projects/{project_id}/automations/recipes/{recipe}/runs": {
+      "post": {
+        "tags": [
+          "automations"
+        ],
+        "summary": "Runs a recipe once without adding it to the project's configured automations.",
+        "description": "The run is backed by a hidden manual definition that the definition list\nomits, so a one-off run never shows up as a persistent automation.",
+        "operationId": "runAutomationRecipeOnce",
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "path",
+            "description": "Project identifier",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "recipe",
+            "in": "path",
+            "description": "Closed built-in recipe identifier",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "description": "Required stable key for replay-safe automation runs",
+            "required": true,
+            "schema": {
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Existing idempotent automation run",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StartAutomationResponse"
+                }
+              }
+            }
+          },
+          "201": {
+            "description": "One-off recipe run queued",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/StartAutomationResponse"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid or unsupported recipe",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Project not found",
             "content": {
               "application/json": {
                 "schema": {
@@ -2263,6 +4038,1323 @@
           },
           "500": {
             "description": "Internal server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/projects/{project_id}/automations/workflow-files/{file_id}": {
+      "get": {
+        "tags": [
+          "automations"
+        ],
+        "operationId": "downloadWorkflowFile",
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "file_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "A file produced by an export block",
+            "content": {
+              "application/octet-stream": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "type": "integer",
+                    "format": "int32",
+                    "minimum": 0
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/projects/{project_id}/automations/workflow-runs": {
+      "get": {
+        "tags": [
+          "automations"
+        ],
+        "operationId": "listProjectWorkflowRuns",
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "format": "int64"
+            }
+          },
+          {
+            "name": "workflow_id",
+            "in": "query",
+            "description": "Only runs of this workflow.",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/WorkflowRunDto"
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/projects/{project_id}/automations/workflow-runs/{run_id}": {
+      "get": {
+        "tags": [
+          "automations"
+        ],
+        "operationId": "getWorkflowRun",
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "run_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The run with the log of every block",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkflowRunDto"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/projects/{project_id}/automations/workflow-runs/{run_id}/cancel": {
+      "post": {
+        "tags": [
+          "automations"
+        ],
+        "operationId": "cancelWorkflowRun",
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "run_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Cancelled"
+          },
+          "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Already finished",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/projects/{project_id}/automations/workflows": {
+      "get": {
+        "tags": [
+          "automations"
+        ],
+        "operationId": "listWorkflows",
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "path",
+            "description": "Project identifier",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The project's automations",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/WorkflowDto"
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Project not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "automations"
+        ],
+        "operationId": "createWorkflow",
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "path",
+            "description": "Project identifier",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/CreateWorkflowRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Automation created as a draft",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkflowDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Name already used",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/projects/{project_id}/automations/workflows/from-template": {
+      "post": {
+        "tags": [
+          "automations"
+        ],
+        "operationId": "createWorkflowFromTemplate",
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "path",
+            "description": "Project identifier",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/FromTemplateRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "Automation created from the template",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkflowDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Unknown template",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Name already used",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/projects/{project_id}/automations/workflows/{workflow_id}": {
+      "get": {
+        "tags": [
+          "automations"
+        ],
+        "operationId": "getWorkflow",
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "workflow_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkflowDto"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "automations"
+        ],
+        "operationId": "updateWorkflow",
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "workflow_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateWorkflowRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Draft saved",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkflowDto"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Edited elsewhere or name already used",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "automations"
+        ],
+        "operationId": "deleteWorkflow",
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "workflow_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "Deleted with its history"
+          },
+          "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/projects/{project_id}/automations/workflows/{workflow_id}/disable": {
+      "post": {
+        "tags": [
+          "automations"
+        ],
+        "operationId": "disableWorkflow",
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "workflow_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkflowDto"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/projects/{project_id}/automations/workflows/{workflow_id}/enable": {
+      "post": {
+        "tags": [
+          "automations"
+        ],
+        "operationId": "enableWorkflow",
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "workflow_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkflowDto"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Not published yet",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/projects/{project_id}/automations/workflows/{workflow_id}/endpoints": {
+      "get": {
+        "tags": [
+          "automations"
+        ],
+        "operationId": "getWorkflowEndpoints",
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "workflow_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EndpointsDto"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        }
+      },
+      "put": {
+        "tags": [
+          "automations"
+        ],
+        "operationId": "updateWorkflowEndpoints",
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "workflow_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/EndpointSettingsRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EndpointsDto"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/projects/{project_id}/automations/workflows/{workflow_id}/endpoints/email/rotate": {
+      "post": {
+        "tags": [
+          "automations"
+        ],
+        "operationId": "rotateWorkflowEmailAddress",
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "workflow_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "New inbound e-mail address token; the old one stops working",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EndpointsDto"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/projects/{project_id}/automations/workflows/{workflow_id}/endpoints/webhook-secret/rotate": {
+      "post": {
+        "tags": [
+          "automations"
+        ],
+        "operationId": "rotateWorkflowWebhookSecret",
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "workflow_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "New signing secret; the address stays the same",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EndpointsDto"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/projects/{project_id}/automations/workflows/{workflow_id}/endpoints/webhook/rotate": {
+      "post": {
+        "tags": [
+          "automations"
+        ],
+        "operationId": "rotateWorkflowWebhook",
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "workflow_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "New webhook address and signing secret; the old ones stop working",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/EndpointsDto"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/projects/{project_id}/automations/workflows/{workflow_id}/publish": {
+      "post": {
+        "tags": [
+          "automations"
+        ],
+        "operationId": "publishWorkflow",
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "workflow_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/PublishRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "201": {
+            "description": "New immutable version",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VersionDto"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The draft has problems; details.issues lists them per block",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/projects/{project_id}/automations/workflows/{workflow_id}/runs": {
+      "get": {
+        "tags": [
+          "automations"
+        ],
+        "operationId": "listWorkflowRuns",
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "workflow_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "limit",
+            "in": "query",
+            "description": "1 to 100, default 25",
+            "required": false,
+            "schema": {
+              "type": "integer",
+              "format": "int64"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/WorkflowRunDto"
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "automations"
+        ],
+        "operationId": "startWorkflowRun",
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "workflow_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "Idempotency-Key",
+            "in": "header",
+            "description": "Optional key making the call replay-safe",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RunRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "Same Idempotency-Key as an earlier run",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RunStartedDto"
+                }
+              }
+            }
+          },
+          "201": {
+            "description": "Run started",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RunStartedDto"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Not published yet",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/projects/{project_id}/automations/workflows/{workflow_id}/test-runs": {
+      "post": {
+        "tags": [
+          "automations"
+        ],
+        "summary": "Runs the current draft with sample information. Blocks that would change\nsomething (project data, messages, web requests) report what they would\nhave done instead of doing it.",
+        "operationId": "startWorkflowTestRun",
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "workflow_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TestRunRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "The test run so far; poll the run until it is finished if it is still running",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WorkflowRunDto"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The draft has problems; details.issues lists them per block",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/projects/{project_id}/automations/workflows/{workflow_id}/validate": {
+      "post": {
+        "tags": [
+          "automations"
+        ],
+        "operationId": "validateWorkflow",
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "workflow_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Problems found in the draft, per block",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ValidationReportDto"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/projects/{project_id}/automations/workflows/{workflow_id}/versions": {
+      "get": {
+        "tags": [
+          "automations"
+        ],
+        "operationId": "listWorkflowVersions",
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "workflow_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/VersionDto"
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/projects/{project_id}/automations/workflows/{workflow_id}/versions/{version}": {
+      "get": {
+        "tags": [
+          "automations"
+        ],
+        "operationId": "getWorkflowVersion",
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "workflow_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "version",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "integer",
+              "format": "int32"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/VersionDto"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "",
             "content": {
               "application/json": {
                 "schema": {
@@ -2548,7 +5640,7 @@
           {
             "name": "export_kind",
             "in": "path",
-            "description": "One of: reports.csv, reports.json, reports.ris, reports.bib, prisma.json, prisma.svg, audit.csv, protocol.json",
+            "description": "One of: reports.csv, reports.json, reports.ris, reports.bib, extraction.csv, appraisal.csv, included_studies.csv, prisma.json, prisma.svg, audit.csv, protocol.json",
             "required": true,
             "schema": {
               "type": "string"
@@ -2724,6 +5816,96 @@
         },
         "responses": {
           "201": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExtractionFieldDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/projects/{project_id}/extraction/fields/{field_id}": {
+      "patch": {
+        "tags": [
+          "extraction"
+        ],
+        "operationId": "updateExtractionField",
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "field_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/UpdateExtractionFieldRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
             "description": "",
             "content": {
               "application/json": {
@@ -3023,7 +6205,7 @@
         ],
         "responses": {
           "200": {
-            "description": "PRISMA projection counts",
+            "description": "PRISMA projection counts; reconciliation_warnings lists any equation that does not hold",
             "content": {
               "application/json": {
                 "schema": {
@@ -4176,6 +7358,86 @@
         }
       }
     },
+    "/projects/{project_id}/reports/{report_id}/documents/open-access": {
+      "post": {
+        "tags": [
+          "documents"
+        ],
+        "operationId": "attachOpenAccessReportDocument",
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "report_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "201": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DocumentDto"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "502": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/projects/{project_id}/reports/{report_id}/documents/{document_id}": {
       "get": {
         "tags": [
@@ -4223,6 +7485,76 @@
             }
           },
           "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "documents"
+        ],
+        "operationId": "deleteReportDocument",
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "report_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "document_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": "The document and its stored file were removed"
+          },
+          "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
             "description": "",
             "content": {
               "application/json": {
@@ -4402,6 +7734,85 @@
         }
       }
     },
+    "/projects/{project_id}/reports/{report_id}/documents/{document_id}/identity/acknowledge": {
+      "post": {
+        "tags": [
+          "documents"
+        ],
+        "operationId": "acknowledgeReportDocumentIdentity",
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "report_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "document_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DocumentDto"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/projects/{project_id}/reports/{report_id}/documents/{document_id}/pages": {
       "get": {
         "tags": [
@@ -4446,6 +7857,229 @@
                   "type": "array",
                   "items": {
                     "$ref": "#/components/schemas/DocumentPageDto"
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/projects/{project_id}/reports/{report_id}/documents/{document_id}/references": {
+      "get": {
+        "tags": [
+          "documents"
+        ],
+        "operationId": "listDocumentReferences",
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "report_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "document_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/DocumentReferenceDto"
+                  }
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/projects/{project_id}/reports/{report_id}/documents/{document_id}/reparse": {
+      "post": {
+        "tags": [
+          "documents"
+        ],
+        "operationId": "reparseReportDocument",
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "report_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "document_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "202": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/DocumentDto"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/projects/{project_id}/reports/{report_id}/documents/{document_id}/sections": {
+      "get": {
+        "tags": [
+          "documents"
+        ],
+        "operationId": "listDocumentSections",
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "report_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "document_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/DocumentSectionDto"
                   }
                 }
               }
@@ -4956,17 +8590,24 @@
         ],
         "responses": {
           "200": {
-            "description": "Current protocol editor aggregate",
+            "description": "Current protocol editor aggregate, or null when the project has no protocol yet",
             "content": {
               "application/json": {
                 "schema": {
-                  "$ref": "#/components/schemas/ProtocolDto"
+                  "oneOf": [
+                    {
+                      "type": "null"
+                    },
+                    {
+                      "$ref": "#/components/schemas/ProtocolDto"
+                    }
+                  ]
                 }
               }
             }
           },
           "404": {
-            "description": "Project or protocol not found",
+            "description": "Project not found",
             "content": {
               "application/json": {
                 "schema": {
@@ -5129,6 +8770,58 @@
           },
           "409": {
             "description": "Protocol revision conflict",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/projects/{project_id}/review/protocol/versions": {
+      "get": {
+        "tags": [
+          "review"
+        ],
+        "operationId": "listProjectReviewProtocolVersions",
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "path",
+            "description": "Project identifier",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "Published and superseded protocol versions, oldest first",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ProtocolVersionsResponse"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Project not found",
             "content": {
               "application/json": {
                 "schema": {
@@ -5822,6 +9515,51 @@
         }
       }
     },
+    "/projects/{project_id}/studies/ungrouped-reports": {
+      "get": {
+        "tags": [
+          "studies"
+        ],
+        "operationId": "listUngroupedIncludedReports",
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "path",
+            "description": "Project identifier",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/UngroupedReportDto"
+                  }
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/projects/{project_id}/studies/{study_id}": {
       "get": {
         "tags": [
@@ -6203,6 +9941,234 @@
         }
       }
     },
+    "/projects/{project_id}/studies/{study_id}/extraction/values/{field_id}": {
+      "put": {
+        "tags": [
+          "extraction"
+        ],
+        "operationId": "recordExtractionValue",
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "study_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "field_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RecordExtractionValueRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExtractionValueDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        }
+      },
+      "delete": {
+        "tags": [
+          "extraction"
+        ],
+        "operationId": "clearExtractionValue",
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "study_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "field_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "204": {
+            "description": ""
+          },
+          "404": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/projects/{project_id}/studies/{study_id}/extraction/values/{value_id}/confirm": {
+      "post": {
+        "tags": [
+          "extraction"
+        ],
+        "operationId": "confirmExtractionValue",
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "study_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "value_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "The confirmed value",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ExtractionValueDto"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Value not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/projects/{project_id}/studies/{study_id}/history": {
       "get": {
         "tags": [
@@ -6428,6 +10394,238 @@
           }
         }
       },
+      "AcquisitionItemDto": {
+        "type": "object",
+        "description": "One PubMed ID of a PubMed ID import run.",
+        "required": [
+          "identifier",
+          "position",
+          "status"
+        ],
+        "properties": {
+          "identifier": {
+            "type": "string",
+            "description": "The PubMed ID, as it was imported."
+          },
+          "last_error": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Why the ID could not be fetched, when it failed."
+          },
+          "position": {
+            "type": "integer",
+            "format": "int32",
+            "description": "The place the ID had in the import. Items are paged in this order."
+          },
+          "processed_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "record_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "description": "The record this import saved for the ID, when one was saved."
+          },
+          "status": {
+            "type": "string",
+            "description": "One of queued, imported, already_in_project, not_found, or failed."
+          },
+          "title": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The article's title, once PubMed has answered for this ID."
+          }
+        }
+      },
+      "ActivityAffectedDto": {
+        "type": "object",
+        "required": [
+          "kind",
+          "label"
+        ],
+        "properties": {
+          "id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          },
+          "kind": {
+            "type": "string",
+            "description": "`report`, `record`, `study` or `extraction_value`."
+          },
+          "label": {
+            "type": "string"
+          }
+        }
+      },
+      "ActivityEvidenceDto": {
+        "type": "object",
+        "required": [
+          "label",
+          "quote"
+        ],
+        "properties": {
+          "label": {
+            "type": "string"
+          },
+          "quote": {
+            "type": "string"
+          }
+        }
+      },
+      "AiActivityDto": {
+        "type": "object",
+        "required": [
+          "id",
+          "actor_type",
+          "actor_label",
+          "task",
+          "task_label",
+          "action",
+          "summary",
+          "affected",
+          "undoable",
+          "evidence",
+          "created_at"
+        ],
+        "properties": {
+          "action": {
+            "type": "string"
+          },
+          "actor_label": {
+            "type": "string"
+          },
+          "actor_type": {
+            "type": "string",
+            "description": "`ai`, `automation` or `assistant`."
+          },
+          "affected": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ActivityAffectedDto"
+            }
+          },
+          "ai_run_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          },
+          "batch_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "evidence": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ActivityEvidenceDto"
+            }
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "model": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "prompt_version": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "proposal_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          },
+          "summary": {
+            "type": "string"
+          },
+          "task": {
+            "type": "string"
+          },
+          "task_label": {
+            "type": "string"
+          },
+          "undoable": {
+            "type": "boolean"
+          },
+          "undone_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "undone_by": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "AiActivityOverviewDto": {
+        "type": "object",
+        "required": [
+          "to_verify",
+          "open_conflicts",
+          "undoable",
+          "second_review_title_abstract",
+          "second_review_full_text"
+        ],
+        "properties": {
+          "open_conflicts": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Disagreements between a person and the AI second reviewer."
+          },
+          "second_review_full_text": {
+            "type": "string",
+            "description": "The same state at full text."
+          },
+          "second_review_title_abstract": {
+            "type": "string",
+            "description": "Automatic AI second review at title/abstract: `not_enabled`, `automatic`,\n`needs_calibration` (no passing calibration yet) or `calibration_stale` (the\npassing calibration was made for an earlier compiled review and is refused)."
+          },
+          "to_verify": {
+            "type": "integer",
+            "format": "int64",
+            "description": "AI-entered extraction values still waiting for a person."
+          },
+          "undoable": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Actions that can still be undone."
+          }
+        }
+      },
       "AiAppraisalAnswerValueDto": {
         "oneOf": [
           {
@@ -6602,6 +10800,113 @@
           "report_id": {
             "type": "string",
             "format": "uuid"
+          }
+        }
+      },
+      "AiAutonomyChange": {
+        "type": "object",
+        "required": [
+          "task",
+          "level"
+        ],
+        "properties": {
+          "level": {
+            "type": "string"
+          },
+          "task": {
+            "type": "string"
+          }
+        }
+      },
+      "AiAutonomyDto": {
+        "type": "object",
+        "required": [
+          "tasks",
+          "locked"
+        ],
+        "properties": {
+          "locked": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AiLockedTaskDto"
+            },
+            "description": "Work that is always a person's decision and cannot be automated."
+          },
+          "tasks": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AiAutonomyTaskDto"
+            }
+          }
+        }
+      },
+      "AiAutonomyTaskDto": {
+        "type": "object",
+        "required": [
+          "task",
+          "label",
+          "description",
+          "level",
+          "default_level",
+          "allowed_levels",
+          "is_default"
+        ],
+        "properties": {
+          "allowed_levels": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Levels that can be chosen for this task."
+          },
+          "default_level": {
+            "type": "string"
+          },
+          "description": {
+            "type": "string"
+          },
+          "is_default": {
+            "type": "boolean"
+          },
+          "label": {
+            "type": "string"
+          },
+          "level": {
+            "type": "string",
+            "description": "`off`, `suggest`, `second_reviewer` or `act`."
+          },
+          "task": {
+            "type": "string",
+            "description": "Stable task key, for example `extraction`."
+          }
+        }
+      },
+      "AiBudgetDto": {
+        "type": "object",
+        "required": [
+          "monthly_budget_usd",
+          "spent_usd",
+          "remaining_usd",
+          "exhausted"
+        ],
+        "properties": {
+          "exhausted": {
+            "type": "boolean",
+            "description": "When true, AI calls for this project are refused until next month or a higher budget."
+          },
+          "monthly_budget_usd": {
+            "type": "number",
+            "format": "double",
+            "description": "Monthly budget in US dollars."
+          },
+          "remaining_usd": {
+            "type": "number",
+            "format": "double"
+          },
+          "spent_usd": {
+            "type": "number",
+            "format": "double",
+            "description": "Estimated spend this calendar month (UTC) in US dollars."
           }
         }
       },
@@ -7003,6 +11308,25 @@
           }
         }
       },
+      "AiLockedTaskDto": {
+        "type": "object",
+        "required": [
+          "task",
+          "label",
+          "description"
+        ],
+        "properties": {
+          "description": {
+            "type": "string"
+          },
+          "label": {
+            "type": "string"
+          },
+          "task": {
+            "type": "string"
+          }
+        }
+      },
       "AiProposalDecisionDto": {
         "type": "object",
         "required": [
@@ -7360,6 +11684,16 @@
               "overall_judgment": {
                 "type": "string"
               },
+              "override_reasons": {
+                "type": "object",
+                "description": "Reasons for judgments that differ from the rule suggestion, keyed by domain or `overall`.",
+                "additionalProperties": {
+                  "type": "string"
+                },
+                "propertyNames": {
+                  "type": "string"
+                }
+              },
               "report_id": {
                 "type": "string",
                 "format": "uuid"
@@ -7393,6 +11727,104 @@
             }
           }
         ]
+      },
+      "AiReviewerDecisionDto": {
+        "type": "object",
+        "required": [
+          "id",
+          "report_id",
+          "stage",
+          "ai_decision",
+          "ai_rationale",
+          "ai_evidence",
+          "status",
+          "created_at"
+        ],
+        "properties": {
+          "abstract_text": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "ai_decision": {
+            "type": "string",
+            "description": "`include`, `exclude` or `maybe`."
+          },
+          "ai_evidence": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ActivityEvidenceDto"
+            }
+          },
+          "ai_model": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "ai_rationale": {
+            "type": "string"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "human_actor": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "human_decision": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "human_notes": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "report_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "resolution": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "`kept_human`, `adopted_ai` or `other`."
+          },
+          "resolved_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "stage": {
+            "type": "string",
+            "description": "`title_abstract` or `full_text`."
+          },
+          "status": {
+            "type": "string",
+            "description": "`waiting`, `concordant`, `conflict` or `resolved`."
+          },
+          "title": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
       },
       "AiScreeningEvidenceDto": {
         "oneOf": [
@@ -7522,6 +11954,81 @@
           "title_abstract",
           "full_text"
         ]
+      },
+      "AiStageAgreementDto": {
+        "type": "object",
+        "required": [
+          "stage",
+          "compared",
+          "agreed"
+        ],
+        "properties": {
+          "agreed": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "compared": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Decisions made by both a person and the AI."
+          },
+          "kappa": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double",
+            "description": "Cohen's kappa; absent until there is enough variation to compute it."
+          },
+          "stage": {
+            "type": "string"
+          }
+        }
+      },
+      "AiStatusDto": {
+        "type": "object",
+        "required": [
+          "suggestions_available",
+          "assistant_available",
+          "configured"
+        ],
+        "properties": {
+          "assistant_available": {
+            "type": "boolean",
+            "description": "The project assistant can answer chat messages."
+          },
+          "budget": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/AiBudgetDto",
+                "description": "Present when `project_id` was passed."
+              }
+            ]
+          },
+          "configured": {
+            "type": "boolean",
+            "description": "A provider is configured (API key present)."
+          },
+          "model": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "provider": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "suggestions_available": {
+            "type": "boolean",
+            "description": "AI suggestions (screening, grouping, appraisal, duplicates) can be requested."
+          }
+        }
       },
       "AiStudyDesignClassificationProposalPayload": {
         "type": "object",
@@ -8135,6 +12642,25 @@
           }
         }
       },
+      "AppraisalAppliesWhenDto": {
+        "type": "object",
+        "description": "Condition under which a question is asked; otherwise its answer is not applicable.",
+        "required": [
+          "match",
+          "clauses"
+        ],
+        "properties": {
+          "clauses": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AppraisalConditionClauseDto"
+            }
+          },
+          "match": {
+            "$ref": "#/components/schemas/AppraisalConditionMatchDto"
+          }
+        }
+      },
       "AppraisalArgsDto": {
         "type": "object",
         "required": [
@@ -8226,6 +12752,31 @@
             "type": "object"
           }
         }
+      },
+      "AppraisalConditionClauseDto": {
+        "type": "object",
+        "required": [
+          "question",
+          "answers"
+        ],
+        "properties": {
+          "answers": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "question": {
+            "type": "string"
+          }
+        }
+      },
+      "AppraisalConditionMatchDto": {
+        "type": "string",
+        "enum": [
+          "all",
+          "any"
+        ]
       },
       "AppraisalDefinitionDto": {
         "type": "object",
@@ -8376,6 +12927,16 @@
           "answer_schema": {
             "$ref": "#/components/schemas/AppraisalAnswerSchemaDto"
           },
+          "applies_when": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/AppraisalAppliesWhenDto"
+              }
+            ]
+          },
           "help": {
             "type": [
               "string",
@@ -8480,6 +13041,196 @@
           },
           "tool_results": {
             "type": "object"
+          }
+        }
+      },
+      "AssistantPlanActionDto": {
+        "type": "object",
+        "required": [
+          "id",
+          "tool",
+          "summary",
+          "rationale",
+          "affected_count",
+          "executable"
+        ],
+        "properties": {
+          "affected_count": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "executable": {
+            "type": "boolean",
+            "description": "False when the assistant is never allowed to run this; see `manual`."
+          },
+          "id": {
+            "type": "string"
+          },
+          "manual": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/AssistantPlanManualStepDto"
+              }
+            ]
+          },
+          "rationale": {
+            "type": "string"
+          },
+          "summary": {
+            "type": "string"
+          },
+          "tool": {
+            "type": "string"
+          }
+        }
+      },
+      "AssistantPlanDto": {
+        "type": "object",
+        "required": [
+          "id",
+          "project_id",
+          "conversation_id",
+          "status",
+          "summary",
+          "actions",
+          "model",
+          "prompt_version",
+          "created_at"
+        ],
+        "properties": {
+          "actions": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AssistantPlanActionDto"
+            }
+          },
+          "conversation_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "error": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "model": {
+            "type": "string"
+          },
+          "project_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "prompt_version": {
+            "type": "string"
+          },
+          "resolved_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "resolved_by": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "results": {
+            "type": [
+              "array",
+              "null"
+            ],
+            "items": {
+              "$ref": "#/components/schemas/AssistantPlanResultDto"
+            }
+          },
+          "status": {
+            "type": "string",
+            "description": "`pending`, `confirmed`, `rejected`, `executed` or `failed`."
+          },
+          "summary": {
+            "type": "string"
+          }
+        }
+      },
+      "AssistantPlanManualStepDto": {
+        "type": "object",
+        "required": [
+          "reason",
+          "link_target"
+        ],
+        "properties": {
+          "link_target": {
+            "type": "string",
+            "description": "`protocol` or `full_text_screening`."
+          },
+          "reason": {
+            "type": "string"
+          }
+        }
+      },
+      "AssistantPlanResultDto": {
+        "type": "object",
+        "required": [
+          "action_id",
+          "status",
+          "message"
+        ],
+        "properties": {
+          "action_id": {
+            "type": "string"
+          },
+          "applied": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "minimum": 0
+          },
+          "failed": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "minimum": 0
+          },
+          "message": {
+            "type": "string"
+          },
+          "review_run_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          },
+          "status": {
+            "type": "string",
+            "description": "`executed`, `queued` (an AI review is running), `completed` (the review\nfinished), `failed`, `skipped` or `manual`."
+          },
+          "unchanged": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "minimum": 0
           }
         }
       },
@@ -8644,6 +13395,24 @@
                 "type": "string",
                 "enum": [
                   "get_study"
+                ]
+              }
+            }
+          },
+          {
+            "type": "object",
+            "required": [
+              "args",
+              "tool"
+            ],
+            "properties": {
+              "args": {
+                "$ref": "#/components/schemas/ListStudiesArgsDto"
+              },
+              "tool": {
+                "type": "string",
+                "enum": [
+                  "list_studies"
                 ]
               }
             }
@@ -9126,9 +13895,82 @@
           }
         }
       },
+      "BatchUndoDto": {
+        "type": "object",
+        "required": [
+          "undone",
+          "failed"
+        ],
+        "properties": {
+          "failed": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/BatchUndoFailureDto"
+            },
+            "description": "Entries that could not be undone safely; they were left as they are."
+          },
+          "undone": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          }
+        }
+      },
+      "BatchUndoFailureDto": {
+        "type": "object",
+        "required": [
+          "activity_id",
+          "message"
+        ],
+        "properties": {
+          "activity_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "message": {
+            "type": "string"
+          }
+        }
+      },
       "BinaryAttachment": {
         "type": "string",
         "format": "binary"
+      },
+      "BlockDetailsDto": {
+        "type": "object",
+        "required": [
+          "fields"
+        ],
+        "properties": {
+          "fields": {
+            "type": "object",
+            "description": "Details for each text and rule field of the block, by field key.",
+            "additionalProperties": {
+              "$ref": "#/components/schemas/FieldDetailsDto"
+            },
+            "propertyNames": {
+              "type": "string"
+            }
+          }
+        }
+      },
+      "BlockDetailsRequest": {
+        "type": "object",
+        "description": "The draft as it is on screen, and the block whose fields are being filled in.",
+        "required": [
+          "graph",
+          "node_id"
+        ],
+        "properties": {
+          "graph": {
+            "$ref": "#/components/schemas/WorkflowGraphDto",
+            "description": "The draft as it is on screen; it need not be saved."
+          },
+          "node_id": {
+            "type": "string",
+            "description": "The block whose fields are being filled in."
+          }
+        }
       },
       "CompleteAppraisalRequest": {
         "type": "object",
@@ -9169,8 +14011,91 @@
               "null"
             ]
           },
+          "override_reasons": {
+            "type": "object",
+            "description": "Reasons for judgments that differ from the rule suggestion, keyed by domain or `overall`.",
+            "additionalProperties": {
+              "type": "string"
+            },
+            "propertyNames": {
+              "type": "string"
+            }
+          },
           "responses": {
             "type": "object"
+          }
+        }
+      },
+      "ConfigFieldDto": {
+        "type": "object",
+        "required": [
+          "key",
+          "label",
+          "kind",
+          "required",
+          "options"
+        ],
+        "properties": {
+          "default": {},
+          "help": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "key": {
+            "type": "string"
+          },
+          "kind": {
+            "type": "string",
+            "description": "`text`, `long_text`, `number`, `select`, `boolean`, `project_field`,\n`secret`, `duration`, `schedule`, `condition`, `publication_query` or `field_list`."
+          },
+          "label": {
+            "type": "string"
+          },
+          "max": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double"
+          },
+          "min": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double"
+          },
+          "options": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ConfigOptionDto"
+            }
+          },
+          "placeholder": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "required": {
+            "type": "boolean"
+          }
+        }
+      },
+      "ConfigOptionDto": {
+        "type": "object",
+        "required": [
+          "value",
+          "label"
+        ],
+        "properties": {
+          "label": {
+            "type": "string"
+          },
+          "value": {
+            "type": "string"
           }
         }
       },
@@ -9343,6 +14268,33 @@
         ],
         "properties": {
           "title": {
+            "type": "string"
+          }
+        }
+      },
+      "CreateWorkflowRequest": {
+        "type": "object",
+        "required": [
+          "name"
+        ],
+        "properties": {
+          "description": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "graph": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/WorkflowGraphDto"
+              }
+            ]
+          },
+          "name": {
             "type": "string"
           }
         }
@@ -9564,12 +14516,19 @@
           "auto_linked",
           "created_reports",
           "proposals_created",
+          "auto_accepted",
           "conflicts"
         ],
         "properties": {
+          "auto_accepted": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Fuzzy proposals merged automatically by the \"act and notify\" setting."
+          },
           "auto_linked": {
             "type": "integer",
-            "format": "int64"
+            "format": "int64",
+            "description": "Exact-identifier records linked to an existing report."
           },
           "conflicts": {
             "type": "integer",
@@ -9589,7 +14548,8 @@
           },
           "proposals_created": {
             "type": "integer",
-            "format": "int64"
+            "format": "int64",
+            "description": "Proposals written by this run, including any that were then merged."
           }
         }
       },
@@ -9627,6 +14587,14 @@
             ],
             "format": "int64"
           },
+          "recent_failed": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Jobs that failed within the recent window (worker only)."
+          },
           "state": {
             "$ref": "#/components/schemas/DependencyState"
           }
@@ -9652,6 +14620,27 @@
           },
           "worker": {
             "$ref": "#/components/schemas/DependencyDetail"
+          }
+        }
+      },
+      "DetailDto": {
+        "type": "object",
+        "required": [
+          "key",
+          "label",
+          "kind"
+        ],
+        "properties": {
+          "key": {
+            "type": "string",
+            "description": "The name to write between braces, for example `title` or `screening.final`."
+          },
+          "kind": {
+            "type": "string",
+            "description": "`text`, `number`, `yes_no`, `list` or `any`."
+          },
+          "label": {
+            "type": "string"
           }
         }
       },
@@ -9783,9 +14772,27 @@
             "type": "string",
             "format": "date-time"
           },
+          "external_url": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The address the PDF is retrieved from, for external documents."
+          },
           "id": {
             "type": "string",
             "format": "uuid"
+          },
+          "identity": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/DocumentIdentityDto",
+                "description": "Whether the PDF's title and DOI agree with the report. `None` until the PDF is parsed."
+              }
+            ]
           },
           "mime_type": {
             "type": "string"
@@ -9827,6 +14834,48 @@
           }
         }
       },
+      "DocumentIdentityDto": {
+        "type": "object",
+        "required": [
+          "verdict"
+        ],
+        "properties": {
+          "acknowledged_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "When the researcher chose to keep a PDF flagged as a mismatch."
+          },
+          "detected_doi": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The DOI printed on the PDF."
+          },
+          "detected_title": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The title the PDF states about itself."
+          },
+          "title_overlap": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double",
+            "description": "Share of the report title's words found in the PDF title, from 0 to 1."
+          },
+          "verdict": {
+            "type": "string",
+            "description": "`match`, `mismatch` or `unknown`."
+          }
+        }
+      },
       "DocumentPageDto": {
         "type": "object",
         "required": [
@@ -9859,6 +14908,132 @@
           "width": {
             "type": "number",
             "format": "double"
+          }
+        }
+      },
+      "DocumentReferenceDto": {
+        "type": "object",
+        "required": [
+          "id",
+          "ordinal",
+          "raw",
+          "authors",
+          "source"
+        ],
+        "properties": {
+          "authors": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "doi": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "ordinal": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "raw": {
+            "type": "string"
+          },
+          "source": {
+            "type": "string",
+            "description": "`native` or `grobid`."
+          },
+          "title": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "venue": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "year": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32"
+          }
+        }
+      },
+      "DocumentSectionDto": {
+        "type": "object",
+        "required": [
+          "id",
+          "ordinal",
+          "title",
+          "depth",
+          "path",
+          "source"
+        ],
+        "properties": {
+          "depth": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "number": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "ordinal": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "path": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "source": {
+            "type": "string",
+            "description": "`native` or `grobid`."
+          },
+          "title": {
+            "type": "string"
+          }
+        }
+      },
+      "DomainJudgmentSuggestionDto": {
+        "type": "object",
+        "required": [
+          "domain_id",
+          "drivers"
+        ],
+        "properties": {
+          "domain_id": {
+            "type": "string"
+          },
+          "drivers": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "judgment": {
+            "type": [
+              "string",
+              "null"
+            ]
           }
         }
       },
@@ -9919,6 +15094,64 @@
           },
           "stage": {
             "$ref": "#/components/schemas/CriterionStageInput"
+          }
+        }
+      },
+      "EndpointDto": {
+        "type": "object",
+        "required": [
+          "node",
+          "port"
+        ],
+        "properties": {
+          "node": {
+            "type": "string"
+          },
+          "port": {
+            "type": "string"
+          }
+        }
+      },
+      "EndpointSettingsRequest": {
+        "type": "object",
+        "required": [
+          "signature_required"
+        ],
+        "properties": {
+          "signature_required": {
+            "type": "boolean",
+            "description": "Turn off to accept unsigned calls. The canvas should warn about this."
+          }
+        }
+      },
+      "EndpointsDto": {
+        "type": "object",
+        "required": [
+          "webhook_path",
+          "webhook_secret",
+          "signature_required",
+          "signature_header",
+          "email_path"
+        ],
+        "properties": {
+          "email_path": {
+            "type": "string",
+            "description": "Path of the inbound e-mail address."
+          },
+          "signature_header": {
+            "type": "string",
+            "description": "Header carrying `sha256=<hex HMAC-SHA256 of the raw body>`."
+          },
+          "signature_required": {
+            "type": "boolean"
+          },
+          "webhook_path": {
+            "type": "string",
+            "description": "Path of the webhook address, to be appended to the server address."
+          },
+          "webhook_secret": {
+            "type": "string",
+            "description": "Shared secret used to sign webhook calls."
           }
         }
       },
@@ -9983,19 +15216,13 @@
         "required": [
           "id",
           "study_id",
-          "report_id",
           "field_definition_id",
           "field_definition_version",
           "value",
-          "rationale",
-          "source_document_id",
-          "source_block_id",
-          "source_page",
-          "source_parser_version",
-          "source_content_hash",
           "approved_by_actor_kind",
           "approved_by_actor_id",
-          "approved_at"
+          "approved_at",
+          "needs_verification"
         ],
         "properties": {
           "approved_at": {
@@ -10020,30 +15247,56 @@
             "type": "string",
             "format": "uuid"
           },
+          "needs_verification": {
+            "type": "boolean",
+            "description": "True while an AI-entered value waits for a person to confirm it."
+          },
           "rationale": {
-            "type": "string"
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "report_id": {
-            "type": "string",
-            "format": "uuid"
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "description": "Absent when a reviewer entered the value without citing evidence."
           },
           "source_block_id": {
-            "type": "string",
+            "type": [
+              "string",
+              "null"
+            ],
             "format": "uuid"
           },
           "source_content_hash": {
-            "type": "string"
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "source_document_id": {
-            "type": "string",
+            "type": [
+              "string",
+              "null"
+            ],
             "format": "uuid"
           },
           "source_page": {
-            "type": "integer",
+            "type": [
+              "integer",
+              "null"
+            ],
             "format": "int32"
           },
           "source_parser_version": {
-            "type": "string"
+            "type": [
+              "string",
+              "null"
+            ]
           },
           "study_id": {
             "type": "string",
@@ -10051,6 +15304,19 @@
           },
           "value": {
             "$ref": "#/components/schemas/ExtractionValueDtoValue"
+          },
+          "verified_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "verified_by": {
+            "type": [
+              "string",
+              "null"
+            ]
           }
         }
       },
@@ -10131,6 +15397,59 @@
           }
         ]
       },
+      "ExtractionValueSourceRequest": {
+        "type": "object",
+        "required": [
+          "document_id",
+          "document_block_id"
+        ],
+        "properties": {
+          "document_block_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "document_id": {
+            "type": "string",
+            "format": "uuid"
+          }
+        }
+      },
+      "FieldDetailsDto": {
+        "type": "object",
+        "required": [
+          "fields",
+          "list",
+          "open",
+          "each_item"
+        ],
+        "properties": {
+          "each_item": {
+            "type": "boolean",
+            "description": "The field is filled in once for each record of a list."
+          },
+          "fields": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/DetailDto"
+            }
+          },
+          "list": {
+            "type": "boolean",
+            "description": "The value is a whole list: only its size (`count`) is available."
+          },
+          "open": {
+            "type": "boolean",
+            "description": "The value has keys nobody can know in advance; the name is typed by hand."
+          },
+          "source": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The block the value comes from, when one is connected."
+          }
+        }
+      },
       "FrameworkKindInput": {
         "type": "string",
         "enum": [
@@ -10142,6 +15461,23 @@
           "spider",
           "custom"
         ]
+      },
+      "FromTemplateRequest": {
+        "type": "object",
+        "required": [
+          "template_id"
+        ],
+        "properties": {
+          "name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "template_id": {
+            "type": "string"
+          }
+        }
       },
       "FullTextExclusionReasonDto": {
         "type": "object",
@@ -10524,6 +15860,23 @@
           }
         }
       },
+      "HookAcceptedDto": {
+        "type": "object",
+        "required": [
+          "run_id",
+          "duplicate"
+        ],
+        "properties": {
+          "duplicate": {
+            "type": "boolean",
+            "description": "True when this delivery had already been received."
+          },
+          "run_id": {
+            "type": "string",
+            "format": "uuid"
+          }
+        }
+      },
       "ImportRecords": {
         "type": "object",
         "required": [
@@ -10542,7 +15895,7 @@
           },
           "format": {
             "type": "string",
-            "description": "One of doi, ris, bibtex, nbib, or csv."
+            "description": "One of doi, ris, bibtex, nbib, csv, or pmid. A pmid import takes one PubMed ID per line."
           }
         }
       },
@@ -10660,6 +16013,90 @@
           }
         }
       },
+      "IssueDto": {
+        "type": "object",
+        "required": [
+          "message"
+        ],
+        "properties": {
+          "message": {
+            "type": "string"
+          },
+          "node_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The block with the problem; absent for problems with the whole workflow."
+          }
+        }
+      },
+      "JudgmentSuggestionDto": {
+        "type": "object",
+        "required": [
+          "available",
+          "domains",
+          "reviewer_notes"
+        ],
+        "properties": {
+          "available": {
+            "type": "boolean",
+            "description": "False when the definition has no suggestion rules."
+          },
+          "domains": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/DomainJudgmentSuggestionDto"
+            }
+          },
+          "overall_judgment": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "reviewer_notes": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Checks the reviewer should make before accepting the overall judgment."
+          }
+        }
+      },
+      "JudgmentSuggestionRequest": {
+        "type": "object",
+        "required": [
+          "responses"
+        ],
+        "properties": {
+          "responses": {
+            "type": "object"
+          }
+        }
+      },
+      "ListStudiesArgsDto": {
+        "type": "object",
+        "required": [
+          "project_id"
+        ],
+        "properties": {
+          "limit": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "1 to 50; defaults to 25.",
+            "minimum": 0
+          },
+          "project_id": {
+            "type": "string",
+            "format": "uuid"
+          }
+        },
+        "additionalProperties": false
+      },
       "LivenessResponse": {
         "type": "object",
         "required": [
@@ -10694,6 +16131,14 @@
               "format": "uuid"
             },
             "description": "Explicit notification ids to mark read. Ignored when `all` is true."
+          },
+          "project_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "description": "With `all`, mark only this project's notifications read."
           }
         }
       },
@@ -10722,6 +16167,13 @@
               "null"
             ]
           },
+          "doi": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The report's DOI, used to look up an open-access copy."
+          },
           "report_id": {
             "type": "string",
             "format": "uuid"
@@ -10734,6 +16186,143 @@
               "string",
               "null"
             ]
+          }
+        }
+      },
+      "NodeRunDto": {
+        "type": "object",
+        "required": [
+          "id",
+          "node_id",
+          "node_type",
+          "iteration",
+          "status",
+          "attempts",
+          "created_at"
+        ],
+        "properties": {
+          "attempts": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "error": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "finished_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "input": {},
+          "input_preview": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Beginning of the data when it was too large to include."
+          },
+          "iteration": {
+            "type": "string",
+            "description": "Which repeat of a loop this belongs to; empty outside loops."
+          },
+          "node_id": {
+            "type": "string"
+          },
+          "node_type": {
+            "type": "string"
+          },
+          "note": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "What the block did, in plain language."
+          },
+          "output": {},
+          "output_preview": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "started_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "status": {
+            "type": "string",
+            "description": "`queued`, `running`, `completed`, `failed`, `skipped` or `cancelled`."
+          }
+        }
+      },
+      "NodeTypeDto": {
+        "type": "object",
+        "required": [
+          "id",
+          "category",
+          "label",
+          "description",
+          "inputs",
+          "outputs",
+          "config",
+          "has_side_effects",
+          "branches"
+        ],
+        "properties": {
+          "branches": {
+            "type": "boolean",
+            "description": "Several outputs of which only one carries data on each run."
+          },
+          "category": {
+            "type": "string",
+            "description": "`trigger`, `data`, `action`, `ai`, `logic` or `integration`."
+          },
+          "config": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ConfigFieldDto"
+            }
+          },
+          "description": {
+            "type": "string"
+          },
+          "has_side_effects": {
+            "type": "boolean",
+            "description": "Test runs never run these for real."
+          },
+          "id": {
+            "type": "string"
+          },
+          "inputs": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PortDto"
+            }
+          },
+          "label": {
+            "type": "string"
+          },
+          "outputs": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/PortDto"
+            }
           }
         }
       },
@@ -10775,6 +16364,13 @@
               "null"
             ],
             "format": "uuid"
+          },
+          "project_name": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Name of the project the notification belongs to, for labelling rows."
           },
           "read_at": {
             "type": [
@@ -10898,6 +16494,199 @@
                 },
                 "strategy": {
                   "type": "string"
+                }
+              }
+            }
+          },
+          "next_cursor": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "PaginatedResponse_AcquisitionItemDto": {
+        "type": "object",
+        "required": [
+          "items"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "description": "One PubMed ID of a PubMed ID import run.",
+              "required": [
+                "identifier",
+                "position",
+                "status"
+              ],
+              "properties": {
+                "identifier": {
+                  "type": "string",
+                  "description": "The PubMed ID, as it was imported."
+                },
+                "last_error": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "description": "Why the ID could not be fetched, when it failed."
+                },
+                "position": {
+                  "type": "integer",
+                  "format": "int32",
+                  "description": "The place the ID had in the import. Items are paged in this order."
+                },
+                "processed_at": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "format": "date-time"
+                },
+                "record_id": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "format": "uuid",
+                  "description": "The record this import saved for the ID, when one was saved."
+                },
+                "status": {
+                  "type": "string",
+                  "description": "One of queued, imported, already_in_project, not_found, or failed."
+                },
+                "title": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "description": "The article's title, once PubMed has answered for this ID."
+                }
+              }
+            }
+          },
+          "next_cursor": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "PaginatedResponse_AiActivityDto": {
+        "type": "object",
+        "required": [
+          "items"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": [
+                "id",
+                "actor_type",
+                "actor_label",
+                "task",
+                "task_label",
+                "action",
+                "summary",
+                "affected",
+                "undoable",
+                "evidence",
+                "created_at"
+              ],
+              "properties": {
+                "action": {
+                  "type": "string"
+                },
+                "actor_label": {
+                  "type": "string"
+                },
+                "actor_type": {
+                  "type": "string",
+                  "description": "`ai`, `automation` or `assistant`."
+                },
+                "affected": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/ActivityAffectedDto"
+                  }
+                },
+                "ai_run_id": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "format": "uuid"
+                },
+                "batch_id": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "format": "uuid"
+                },
+                "created_at": {
+                  "type": "string",
+                  "format": "date-time"
+                },
+                "evidence": {
+                  "type": "array",
+                  "items": {
+                    "$ref": "#/components/schemas/ActivityEvidenceDto"
+                  }
+                },
+                "id": {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                "model": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "prompt_version": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
+                "proposal_id": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "format": "uuid"
+                },
+                "summary": {
+                  "type": "string"
+                },
+                "task": {
+                  "type": "string"
+                },
+                "task_label": {
+                  "type": "string"
+                },
+                "undoable": {
+                  "type": "boolean"
+                },
+                "undone_at": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "format": "date-time"
+                },
+                "undone_by": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
                 }
               }
             }
@@ -11450,6 +17239,13 @@
                   ],
                   "format": "uuid"
                 },
+                "project_name": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "description": "Name of the project the notification belongs to, for labelling rows."
+                },
                 "read_at": {
                   "type": [
                     "string",
@@ -11493,9 +17289,15 @@
                 "name",
                 "default_max_depth",
                 "created_at",
-                "updated_at"
+                "updated_at",
+                "article_count"
               ],
               "properties": {
+                "article_count": {
+                  "type": "integer",
+                  "format": "int64",
+                  "description": "Number of articles (project reports) in the project."
+                },
                 "created_at": {
                   "type": "string",
                   "format": "date-time"
@@ -11617,10 +17419,56 @@
           }
         }
       },
+      "PortDto": {
+        "type": "object",
+        "required": [
+          "id",
+          "label",
+          "type",
+          "required",
+          "multiple"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "label": {
+            "type": "string"
+          },
+          "multiple": {
+            "type": "boolean"
+          },
+          "required": {
+            "type": "boolean"
+          },
+          "type": {
+            "type": "string",
+            "description": "`trigger`, `records`, `record`, `report`, `study`, `document`, `text` or `json`."
+          }
+        }
+      },
+      "PositionDto": {
+        "type": "object",
+        "required": [
+          "x",
+          "y"
+        ],
+        "properties": {
+          "x": {
+            "type": "number",
+            "format": "double"
+          },
+          "y": {
+            "type": "number",
+            "format": "double"
+          }
+        }
+      },
       "PrismaDto": {
         "type": "object",
         "required": [
           "project_id",
+          "reconciliation_warnings",
           "screening_high_watermark",
           "identified_records",
           "linked_records",
@@ -11715,6 +17563,13 @@
             "type": "string",
             "format": "uuid"
           },
+          "reconciliation_warnings": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            },
+            "description": "Equations that do not hold for these counts. Empty when the flow reconciles; the counts\nare still returned so the page can say what is wrong instead of failing."
+          },
           "reports_not_retrieved": {
             "type": "integer",
             "format": "int64",
@@ -11803,9 +17658,15 @@
           "name",
           "default_max_depth",
           "created_at",
-          "updated_at"
+          "updated_at",
+          "article_count"
         ],
         "properties": {
+          "article_count": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Number of articles (project reports) in the project."
+          },
           "created_at": {
             "type": "string",
             "format": "date-time"
@@ -12122,6 +17983,20 @@
           "superseded"
         ]
       },
+      "ProtocolVersionsResponse": {
+        "type": "object",
+        "required": [
+          "items"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/ProtocolDto"
+            }
+          }
+        }
+      },
       "PublishProtocolRequest": {
         "type": "object",
         "required": [
@@ -12136,6 +18011,17 @@
           "protocol_version_id": {
             "type": "string",
             "format": "uuid"
+          }
+        }
+      },
+      "PublishRequest": {
+        "type": "object",
+        "properties": {
+          "note": {
+            "type": [
+              "string",
+              "null"
+            ]
           }
         }
       },
@@ -12210,6 +18096,33 @@
           },
           "status": {
             "type": "string"
+          }
+        }
+      },
+      "RecordExtractionValueRequest": {
+        "type": "object",
+        "required": [
+          "value"
+        ],
+        "properties": {
+          "rationale": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "source": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/ExtractionValueSourceRequest"
+              }
+            ]
+          },
+          "value": {
+            "$ref": "#/components/schemas/ExtractionValueDtoValue"
           }
         }
       },
@@ -12472,6 +18385,58 @@
           }
         }
       },
+      "ResolveReviewerConflictRequest": {
+        "type": "object",
+        "required": [
+          "decision"
+        ],
+        "properties": {
+          "decision": {
+            "type": "string",
+            "description": "The final decision: `include`, `exclude` or `maybe`."
+          },
+          "exclusion_reason_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid",
+            "description": "Required when excluding at full-text stage."
+          },
+          "note": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "ReviewCountsDto": {
+        "type": "object",
+        "description": "AI verdict counts of a run, as the run history shows them.",
+        "required": [
+          "included",
+          "excluded",
+          "unsure"
+        ],
+        "properties": {
+          "excluded": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Records the AI would exclude."
+          },
+          "included": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Records the AI would include."
+          },
+          "unsure": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Records the AI was not sure about."
+          }
+        }
+      },
       "ReviewRunDto": {
         "type": "object",
         "required": [
@@ -12637,6 +18602,31 @@
             ],
             "format": "int64",
             "description": "Number of unresolved source records to process, from 1 through 100."
+          }
+        }
+      },
+      "RunRequest": {
+        "type": "object",
+        "properties": {
+          "trigger_data": {
+            "description": "Information handed to the trigger block, as the trigger would."
+          }
+        }
+      },
+      "RunStartedDto": {
+        "type": "object",
+        "required": [
+          "run_id",
+          "created"
+        ],
+        "properties": {
+          "created": {
+            "type": "boolean",
+            "description": "False when the same trigger event had already started this workflow."
+          },
+          "run_id": {
+            "type": "string",
+            "format": "uuid"
           }
         }
       },
@@ -13555,14 +19545,72 @@
         "type": "object",
         "required": [
           "tool",
-          "rationale"
+          "rationale",
+          "definition_id",
+          "definition_version"
         ],
         "properties": {
+          "definition_id": {
+            "type": "string",
+            "description": "Shipped appraisal definition that implements this tool."
+          },
+          "definition_version": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
           "rationale": {
             "type": "string"
           },
           "tool": {
             "type": "string"
+          }
+        }
+      },
+      "TemplateDto": {
+        "type": "object",
+        "required": [
+          "id",
+          "name",
+          "description",
+          "graph"
+        ],
+        "properties": {
+          "description": {
+            "type": "string"
+          },
+          "graph": {
+            "$ref": "#/components/schemas/WorkflowGraphDto"
+          },
+          "id": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "recipe": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The built-in recipe this template replaces, if any."
+          }
+        }
+      },
+      "TestRunRequest": {
+        "type": "object",
+        "properties": {
+          "trigger_data": {
+            "description": "Sample information for the trigger block."
+          },
+          "wait_ms": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Wait up to this long (at most 20000) for the test to finish before answering.",
+            "minimum": 0
           }
         }
       },
@@ -13590,6 +19638,90 @@
           },
           "stage": {
             "$ref": "#/components/schemas/ScreeningStageInput"
+          }
+        }
+      },
+      "UngroupedReportDto": {
+        "type": "object",
+        "required": [
+          "report_id"
+        ],
+        "properties": {
+          "doi": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "journal": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "publication_year": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32"
+          },
+          "report_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "title": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "UpdateAiAutonomyRequest": {
+        "type": "object",
+        "required": [
+          "changes"
+        ],
+        "properties": {
+          "changes": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AiAutonomyChange"
+            }
+          }
+        }
+      },
+      "UpdateAiBudgetRequest": {
+        "type": "object",
+        "required": [
+          "monthly_budget_usd"
+        ],
+        "properties": {
+          "monthly_budget_usd": {
+            "type": "number",
+            "format": "double",
+            "description": "New monthly budget in US dollars (0 disables AI for the project)."
+          }
+        },
+        "additionalProperties": false
+      },
+      "UpdateExtractionFieldRequest": {
+        "type": "object",
+        "required": [
+          "label",
+          "value_type",
+          "required"
+        ],
+        "properties": {
+          "label": {
+            "type": "string"
+          },
+          "required": {
+            "type": "boolean"
+          },
+          "value_type": {
+            "type": "string"
           }
         }
       },
@@ -13648,6 +19780,41 @@
           }
         }
       },
+      "UpdateWorkflowRequest": {
+        "type": "object",
+        "properties": {
+          "description": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "expected_revision": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "The `draft_revision` the editor started from."
+          },
+          "graph": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/WorkflowGraphDto"
+              }
+            ]
+          },
+          "name": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
       "UploadDocumentForm": {
         "type": "object",
         "required": [
@@ -13657,6 +19824,322 @@
           "file": {
             "type": "string",
             "format": "binary"
+          }
+        }
+      },
+      "ValidationReportDto": {
+        "type": "object",
+        "required": [
+          "ok",
+          "issues"
+        ],
+        "properties": {
+          "issues": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/IssueDto"
+            }
+          },
+          "ok": {
+            "type": "boolean"
+          }
+        }
+      },
+      "VersionDto": {
+        "type": "object",
+        "required": [
+          "id",
+          "version",
+          "trigger",
+          "published_by",
+          "published_at",
+          "graph"
+        ],
+        "properties": {
+          "graph": {
+            "$ref": "#/components/schemas/WorkflowGraphDto"
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "note": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "published_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "published_by": {
+            "type": "string"
+          },
+          "trigger": {
+            "type": "string"
+          },
+          "version": {
+            "type": "integer",
+            "format": "int32"
+          }
+        }
+      },
+      "WorkflowDto": {
+        "type": "object",
+        "required": [
+          "id",
+          "project_id",
+          "name",
+          "description",
+          "status",
+          "graph",
+          "draft_revision",
+          "has_unpublished_changes",
+          "signature_required",
+          "alert_status",
+          "created_at",
+          "updated_at"
+        ],
+        "properties": {
+          "alert_status": {
+            "description": "Publication alerts: when it last looked, what it found, last problem."
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "description": {
+            "type": "string"
+          },
+          "draft_revision": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Send back when saving to detect edits made elsewhere."
+          },
+          "graph": {
+            "$ref": "#/components/schemas/WorkflowGraphDto",
+            "description": "The draft being edited on the canvas."
+          },
+          "has_unpublished_changes": {
+            "type": "boolean"
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "last_run_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "name": {
+            "type": "string"
+          },
+          "next_run_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "project_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "published_version": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32"
+          },
+          "signature_required": {
+            "type": "boolean"
+          },
+          "status": {
+            "type": "string",
+            "description": "`enabled` or `disabled`."
+          },
+          "trigger": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Stable key of the trigger of the published version."
+          },
+          "updated_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      },
+      "WorkflowGraphDto": {
+        "type": "object",
+        "required": [
+          "nodes",
+          "edges"
+        ],
+        "properties": {
+          "edges": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/WorkflowGraphEdgeDto"
+            }
+          },
+          "nodes": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/WorkflowGraphNodeDto"
+            }
+          }
+        }
+      },
+      "WorkflowGraphEdgeDto": {
+        "type": "object",
+        "required": [
+          "from",
+          "to"
+        ],
+        "properties": {
+          "from": {
+            "$ref": "#/components/schemas/EndpointDto"
+          },
+          "id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "to": {
+            "$ref": "#/components/schemas/EndpointDto"
+          }
+        }
+      },
+      "WorkflowGraphNodeDto": {
+        "type": "object",
+        "required": [
+          "id",
+          "type",
+          "position"
+        ],
+        "properties": {
+          "config": {
+            "description": "Values for the block's configuration fields, keyed by field key."
+          },
+          "id": {
+            "type": "string"
+          },
+          "label": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "position": {
+            "$ref": "#/components/schemas/PositionDto"
+          },
+          "type": {
+            "type": "string",
+            "description": "A block id from the catalog, for example `logic.filter`."
+          }
+        }
+      },
+      "WorkflowRunDto": {
+        "type": "object",
+        "required": [
+          "id",
+          "workflow_id",
+          "workflow_name",
+          "trigger",
+          "status",
+          "test_mode",
+          "actor",
+          "created_at",
+          "trigger_data",
+          "graph",
+          "nodes"
+        ],
+        "properties": {
+          "actor": {
+            "type": "string"
+          },
+          "created_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "error": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "finished_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "graph": {
+            "$ref": "#/components/schemas/WorkflowGraphDto",
+            "description": "The graph this run executed."
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "nodes": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/NodeRunDto"
+            },
+            "description": "Per-block log. Empty in lists."
+          },
+          "review_counts": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/ReviewCountsDto",
+                "description": "The AI verdicts of the run's \"Run an AI review\" screening, when it used one."
+              }
+            ]
+          },
+          "started_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "status": {
+            "type": "string",
+            "description": "`queued`, `running`, `completed`, `failed` or `cancelled`."
+          },
+          "test_mode": {
+            "type": "boolean"
+          },
+          "trigger": {
+            "type": "string"
+          },
+          "trigger_data": {},
+          "version": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32"
+          },
+          "workflow_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "workflow_name": {
+            "type": "string"
           }
         }
       }

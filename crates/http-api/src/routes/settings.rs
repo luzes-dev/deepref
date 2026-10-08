@@ -65,14 +65,19 @@ pub(crate) struct UpdateSettings {
 
 impl UpdateSettings {
     fn validate(&self) -> Result<(), ApiError> {
-        if self
-            .crossref_mailto
-            .as_deref()
-            .is_some_and(|mailto| mailto.trim().is_empty())
-        {
-            return Err(ApiError::BadRequest(
-                "crossref_mailto must not be blank".to_owned(),
-            ));
+        if let Some(mailto) = self.crossref_mailto.as_deref() {
+            let mailto = mailto.trim();
+            if mailto.is_empty() {
+                return Err(ApiError::BadRequest(
+                    "crossref_mailto must not be blank".to_owned(),
+                ));
+            }
+            if !is_plausible_email(mailto) {
+                return Err(ApiError::BadRequest(
+                    "crossref_mailto must be an e-mail address such as research@example.org"
+                        .to_owned(),
+                ));
+            }
         }
         reject_negative("default_max_depth", self.default_max_depth)?;
         reject_less_than_one("max_concurrency", self.max_concurrency)?;
@@ -149,9 +154,79 @@ fn reject_less_than_one(name: &str, value: Option<i32>) -> Result<(), ApiError> 
     Ok(())
 }
 
+/// Shape check for the Crossref contact address: one `@`, no whitespace, and a
+/// dotted domain whose top-level label has at least two characters. It is not
+/// an RFC 5322 parser; it only catches values that would clearly fail Crossref's
+/// polite-pool contact check.
+fn is_plausible_email(value: &str) -> bool {
+    if value.len() > 254 || value.chars().any(char::is_whitespace) {
+        return false;
+    }
+    let Some((local, domain)) = value.split_once('@') else {
+        return false;
+    };
+    if local.is_empty() || domain.contains('@') {
+        return false;
+    }
+    let labels: Vec<&str> = domain.split('.').collect();
+    labels.len() >= 2
+        && labels.iter().all(|label| !label.is_empty())
+        && labels.last().is_some_and(|top| top.len() >= 2)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn accepts_plausible_crossref_mailto() {
+        for value in [
+            "research@example.org",
+            "first.last+tag@univ.ac.uk",
+            "  padded@example.org  ",
+        ] {
+            assert!(
+                UpdateSettings {
+                    crossref_mailto: Some(value.to_owned()),
+                    default_max_depth: None,
+                    max_concurrency: None,
+                    rate_limit_per_second: None,
+                    retry_attempts: None,
+                }
+                .validate()
+                .is_ok(),
+                "{value} should be accepted"
+            );
+        }
+    }
+
+    #[test]
+    fn rejects_malformed_crossref_mailto() {
+        for value in [
+            "not-an-email",
+            "a@b",
+            "a@b.",
+            "@example.org",
+            "a b@example.org",
+            "a@@example.org",
+            "a@.example.org",
+            "a@example..org",
+            "a@example.o",
+        ] {
+            let result = UpdateSettings {
+                crossref_mailto: Some(value.to_owned()),
+                default_max_depth: None,
+                max_concurrency: None,
+                rate_limit_per_second: None,
+                retry_attempts: None,
+            }
+            .validate();
+            assert!(
+                matches!(result, Err(ApiError::BadRequest(_))),
+                "{value} should be a 400"
+            );
+        }
+    }
 
     #[test]
     fn rejects_invalid_settings() {

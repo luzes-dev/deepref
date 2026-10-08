@@ -27,6 +27,7 @@ pub async fn run(pool: PgPool, interval: Duration, mut shutdown: watch::Receiver
             Ok(report) => tracing::debug!(?report, "worker lease reconciliation completed"),
             Err(error) => tracing::error!(%error, "worker lease reconciliation failed"),
         }
+        crate::second_review::sweep(&pool).await;
     }
 }
 

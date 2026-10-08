@@ -219,19 +219,50 @@ pub(crate) async fn get_published_protocol(
     tag = "review",
     params(("project_id" = Uuid, Path, description = "Project identifier")),
     responses(
-        (status = 200, description = "Current protocol editor aggregate", body = ProtocolDto),
-        (status = 404, description = "Project or protocol not found", body = ErrorResponse),
+        (status = 200, description = "Current protocol editor aggregate, or null when the project has no protocol yet", body = Option<ProtocolDto>),
+        (status = 404, description = "Project not found", body = ErrorResponse),
         (status = 500, description = "Internal server error", body = ErrorResponse)
     )
 )]
 pub(crate) async fn get_protocol_editor(
     State(state): State<AppState>,
     Path(project_id): Path<Uuid>,
-) -> Result<Json<ProtocolDto>, ApiError> {
-    let protocol = deepref_postgres::get_protocol_editor(&state.pool, project_id)
+) -> Result<Json<Option<ProtocolDto>>, ApiError> {
+    match deepref_postgres::get_protocol_editor(&state.pool, project_id).await {
+        Ok(protocol) => Ok(Json(Some(protocol_dto(protocol)))),
+        // A project without a protocol yet is a normal state, not a missing resource.
+        Err(deepref_postgres::ProtocolError::NotFound) => Ok(Json(None)),
+        Err(error) => Err(map_protocol_error(error)),
+    }
+}
+
+#[derive(Debug, Clone, Serialize, ToSchema)]
+pub(crate) struct ProtocolVersionsResponse {
+    pub items: Vec<ProtocolDto>,
+}
+
+#[utoipa::path(
+    get,
+    path = "/projects/{project_id}/review/protocol/versions",
+    operation_id = "listProjectReviewProtocolVersions",
+    tag = "review",
+    params(("project_id" = Uuid, Path, description = "Project identifier")),
+    responses(
+        (status = 200, description = "Published and superseded protocol versions, oldest first", body = ProtocolVersionsResponse),
+        (status = 404, description = "Project not found", body = ErrorResponse),
+        (status = 500, description = "Internal server error", body = ErrorResponse)
+    )
+)]
+pub(crate) async fn list_protocol_versions(
+    State(state): State<AppState>,
+    Path(project_id): Path<Uuid>,
+) -> Result<Json<ProtocolVersionsResponse>, ApiError> {
+    let versions = deepref_postgres::list_protocol_versions(&state.pool, project_id)
         .await
         .map_err(map_protocol_error)?;
-    Ok(Json(protocol_dto(protocol)))
+    Ok(Json(ProtocolVersionsResponse {
+        items: versions.into_iter().map(protocol_dto).collect(),
+    }))
 }
 
 #[utoipa::path(

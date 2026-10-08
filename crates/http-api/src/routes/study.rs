@@ -96,6 +96,29 @@ pub(crate) struct StudyReportDto {
 pub(crate) struct StudyToolSuggestionDto {
     pub tool: String,
     pub rationale: String,
+    /// Shipped appraisal definition that implements this tool.
+    pub definition_id: String,
+    pub definition_version: u32,
+}
+
+/// Keeps only tools with a shipped appraisal definition, so the Studies page never
+/// suggests a tool that cannot be used.
+fn study_tool_suggestions(
+    suggestions: Vec<deepref_domain::AppraisalToolSuggestion>,
+) -> Vec<StudyToolSuggestionDto> {
+    suggestions
+        .into_iter()
+        .filter_map(|suggestion| {
+            let (definition_id, definition_version) =
+                deepref_application::appraisal_definition_for_tool(&suggestion.tool)?;
+            Some(StudyToolSuggestionDto {
+                tool: suggestion.tool,
+                rationale: suggestion.rationale,
+                definition_id: definition_id.to_owned(),
+                definition_version,
+            })
+        })
+        .collect()
 }
 
 #[derive(Debug, Clone, Copy, Serialize, ToSchema)]
@@ -188,6 +211,27 @@ pub(crate) struct AppraisalJudgmentSchemaDto {
 }
 
 #[derive(Debug, Clone, Serialize, ToSchema)]
+#[serde(rename_all = "snake_case")]
+pub(crate) enum AppraisalConditionMatchDto {
+    All,
+    Any,
+}
+
+#[derive(Debug, Clone, Serialize, ToSchema)]
+pub(crate) struct AppraisalConditionClauseDto {
+    pub question: String,
+    pub answers: Vec<String>,
+}
+
+/// Condition under which a question is asked; otherwise its answer is not applicable.
+#[derive(Debug, Clone, Serialize, ToSchema)]
+pub(crate) struct AppraisalAppliesWhenDto {
+    #[serde(rename = "match")]
+    pub match_mode: AppraisalConditionMatchDto,
+    pub clauses: Vec<AppraisalConditionClauseDto>,
+}
+
+#[derive(Debug, Clone, Serialize, ToSchema)]
 pub(crate) struct AppraisalQuestionDto {
     pub id: String,
     pub label: String,
@@ -195,6 +239,8 @@ pub(crate) struct AppraisalQuestionDto {
     pub answer_schema: AppraisalAnswerSchemaDto,
     pub required: bool,
     pub requires_evidence: bool,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub applies_when: Option<AppraisalAppliesWhenDto>,
 }
 
 #[derive(Debug, Clone, Serialize, ToSchema)]
@@ -239,6 +285,9 @@ pub(crate) struct CompleteAppraisalRequest {
     pub evidence: Vec<AppraisalEvidenceRequest>,
     pub domain_judgments: BTreeMap<String, String>,
     pub overall_judgment: Option<String>,
+    /// Reasons for judgments that differ from the rule suggestion, keyed by domain or `overall`.
+    #[serde(default)]
+    pub override_reasons: BTreeMap<String, String>,
 }
 
 #[derive(Debug, Clone, Serialize, ToSchema)]
@@ -293,14 +342,76 @@ pub(crate) async fn list_project_studies(
     let studies = deepref_postgres::list_studies(&state.pool, project_id, params.cursor, limit)
         .await
         .map_err(map_study_error)?;
+    let study_ids = studies
+        .items
+        .iter()
+        .map(|study| Uuid::from(study.id))
+        .collect::<Vec<_>>();
+    let mut reports =
+        deepref_postgres::list_reports_for_studies(&state.pool, project_id, &study_ids)
+            .await
+            .map_err(map_study_error)?;
     Ok(Json(StudyListDto {
         items: studies
             .items
             .into_iter()
-            .map(study_dto_from_summary)
+            .map(|study| {
+                let member_reports = reports.remove(&Uuid::from(study.id)).unwrap_or_default();
+                let mut dto = study_dto_from_summary(study);
+                dto.reports = member_reports
+                    .into_iter()
+                    .map(|report| StudyReportDto {
+                        report_id: report.report_id.into(),
+                        title: report.title,
+                        abstract_text: report.abstract_text,
+                        publication_year: report.publication_year,
+                        role: report.role.as_str().to_owned(),
+                        assigned_at: report.assigned_at,
+                    })
+                    .collect();
+                dto
+            })
             .collect(),
         next_cursor: studies.next_cursor,
     }))
+}
+
+#[derive(Debug, Clone, Serialize, ToSchema)]
+pub(crate) struct UngroupedReportDto {
+    pub report_id: Uuid,
+    pub title: Option<String>,
+    pub doi: Option<String>,
+    pub publication_year: Option<i32>,
+    pub journal: Option<String>,
+}
+
+#[utoipa::path(
+    get,
+    path = "/projects/{project_id}/studies/ungrouped-reports",
+    operation_id = "listUngroupedIncludedReports",
+    tag = "studies",
+    params(("project_id" = Uuid, Path, description = "Project identifier")),
+    responses((status = 200, body = [UngroupedReportDto]), (status = 500, body = ErrorResponse))
+)]
+pub(crate) async fn list_ungrouped_included_reports(
+    State(state): State<AppState>,
+    Path(project_id): Path<Uuid>,
+) -> Result<Json<Vec<UngroupedReportDto>>, ApiError> {
+    let reports = deepref_postgres::list_ungrouped_included_reports(&state.pool, project_id)
+        .await
+        .map_err(map_study_error)?;
+    Ok(Json(
+        reports
+            .into_iter()
+            .map(|report| UngroupedReportDto {
+                report_id: report.report_id,
+                title: report.title,
+                doi: report.doi,
+                publication_year: report.publication_year,
+                journal: report.journal,
+            })
+            .collect(),
+    ))
 }
 
 #[utoipa::path(
@@ -603,6 +714,71 @@ pub(crate) async fn get_appraisal_definition_route(
     Ok(Json(appraisal_definition_dto(definition)))
 }
 
+#[derive(Debug, Deserialize, ToSchema)]
+pub(crate) struct JudgmentSuggestionRequest {
+    #[schema(value_type = Object)]
+    pub responses: Value,
+}
+
+#[derive(Debug, Clone, Serialize, ToSchema)]
+pub(crate) struct DomainJudgmentSuggestionDto {
+    pub domain_id: String,
+    pub judgment: Option<String>,
+    pub drivers: Vec<String>,
+}
+
+#[derive(Debug, Clone, Serialize, ToSchema)]
+pub(crate) struct JudgmentSuggestionDto {
+    /// False when the definition has no suggestion rules.
+    pub available: bool,
+    pub domains: Vec<DomainJudgmentSuggestionDto>,
+    pub overall_judgment: Option<String>,
+    /// Checks the reviewer should make before accepting the overall judgment.
+    pub reviewer_notes: Vec<String>,
+}
+
+#[utoipa::path(
+    post,
+    path = "/projects/{project_id}/appraisal-definitions/{definition_id}/{version}/judgment-suggestion",
+    operation_id = "suggestAppraisalJudgments",
+    tag = "appraisal",
+    params(("project_id" = Uuid, Path), ("definition_id" = String, Path), ("version" = u32, Path)),
+    request_body = JudgmentSuggestionRequest,
+    responses((status = 200, body = JudgmentSuggestionDto), (status = 404, body = ErrorResponse), (status = 500, body = ErrorResponse))
+)]
+pub(crate) async fn suggest_appraisal_judgments(
+    State(state): State<AppState>,
+    Path((project_id, definition_id, version)): Path<(Uuid, String, u32)>,
+    Json(input): Json<JudgmentSuggestionRequest>,
+) -> Result<Json<JudgmentSuggestionDto>, ApiError> {
+    ensure_project(&state, project_id).await?;
+    let definition = get_appraisal_definition(&definition_id, version)
+        .map_err(|error| ApiError::NotFound(error.to_string()))?;
+    let Some(suggestion) = deepref_application::suggest_judgments(&definition, &input.responses)
+    else {
+        return Ok(Json(JudgmentSuggestionDto {
+            available: false,
+            domains: Vec::new(),
+            overall_judgment: None,
+            reviewer_notes: Vec::new(),
+        }));
+    };
+    Ok(Json(JudgmentSuggestionDto {
+        available: true,
+        domains: suggestion
+            .domains
+            .into_iter()
+            .map(|domain| DomainJudgmentSuggestionDto {
+                domain_id: domain.domain_id,
+                judgment: domain.judgment,
+                drivers: domain.drivers,
+            })
+            .collect(),
+        overall_judgment: suggestion.overall_judgment,
+        reviewer_notes: suggestion.reviewer_notes,
+    }))
+}
+
 #[utoipa::path(
     get,
     path = "/projects/{project_id}/reports/{report_id}/appraisals",
@@ -663,6 +839,7 @@ pub(crate) async fn complete_report_appraisal(
             evidence,
             domain_judgments: input.domain_judgments,
             overall_judgment: input.overall_judgment,
+            override_reasons: input.override_reasons,
         },
         extract_actor(&headers)?,
     )
@@ -724,14 +901,7 @@ fn study_dto_from_record(record: deepref_postgres::StudyDetailRecord) -> StudyDt
                 assigned_at: report.assigned_at,
             })
             .collect(),
-        tool_suggestions: record
-            .tool_suggestions
-            .into_iter()
-            .map(|suggestion| StudyToolSuggestionDto {
-                tool: suggestion.tool,
-                rationale: suggestion.rationale,
-            })
-            .collect(),
+        tool_suggestions: study_tool_suggestions(record.tool_suggestions),
         created_at: study.created_at,
         updated_at: study.updated_at,
         updated_by_actor_kind: study.updated_by_actor_kind,
@@ -766,13 +936,7 @@ fn study_dto_from_summary(study: deepref_postgres::StudyRecord) -> StudyDto {
         },
         revision: study.revision,
         reports: Vec::new(),
-        tool_suggestions: suggestions
-            .into_iter()
-            .map(|suggestion| StudyToolSuggestionDto {
-                tool: suggestion.tool,
-                rationale: suggestion.rationale,
-            })
-            .collect(),
+        tool_suggestions: study_tool_suggestions(suggestions),
         created_at: study.created_at,
         updated_at: study.updated_at,
         updated_by_actor_kind: study.updated_by_actor_kind,
@@ -833,12 +997,30 @@ fn appraisal_definition_dto(
                         answer_schema: answer_schema_dto(question.answer_schema),
                         required: question.required,
                         requires_evidence: question.requires_evidence,
+                        applies_when: question.applies_when.map(applies_when_dto),
                     })
                     .collect(),
                 judgment: judgment_schema_dto(domain.judgment),
             })
             .collect(),
         overall_judgment: judgment_schema_dto(definition.overall_judgment),
+    }
+}
+
+fn applies_when_dto(condition: deepref_application::AppliesWhen) -> AppraisalAppliesWhenDto {
+    AppraisalAppliesWhenDto {
+        match_mode: match condition.match_mode {
+            deepref_application::ConditionMatch::All => AppraisalConditionMatchDto::All,
+            deepref_application::ConditionMatch::Any => AppraisalConditionMatchDto::Any,
+        },
+        clauses: condition
+            .clauses
+            .into_iter()
+            .map(|clause| AppraisalConditionClauseDto {
+                question: clause.question,
+                answers: clause.answers,
+            })
+            .collect(),
     }
 }
 

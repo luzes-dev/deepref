@@ -444,8 +444,24 @@ async fn handle_retrieve_document_job(
     let (stored, _) = match fetcher.fetch(external_url, &store).await {
         Ok(result) => result,
         Err(error) => {
-            deepref_postgres::mark_document_retrieval_failed(pool, document_id, &error.to_string())
-                .await?;
+            // The researcher sees the reason in plain words; the raw error stays in the log.
+            tracing::warn!(
+                %document_id,
+                permanent = error.is_permanent(),
+                error = %error,
+                "external document retrieval failed"
+            );
+            deepref_postgres::mark_document_retrieval_failed(
+                pool,
+                document_id,
+                &error.failure_record(),
+            )
+            .await?;
+            if error.is_permanent() {
+                // Retrying the same link cannot succeed. The reason is recorded on the
+                // document, so the job completes instead of retrying and dead-lettering.
+                return Ok(DeliveryAction::Ack);
+            }
             return Err(error.into());
         }
     };
@@ -530,8 +546,20 @@ async fn handle_parse_document_job(
     if requested_version != PARSER_VERSION {
         anyhow::bail!("parse_document requested unsupported parser version");
     }
+    // A reparse request is forced: it runs even when the active parser version
+    // is already current, so the user gets fresh sections and references.
+    let forced = job
+        .payload
+        .get("force")
+        .and_then(serde_json::Value::as_bool)
+        .unwrap_or(false);
     let document = deepref_postgres::get_document_by_id(pool, document_id).await?;
-    if document.active_parser_version.as_deref() == Some(PARSER_VERSION) {
+    if !forced
+        && document
+            .active_parser_version
+            .as_deref()
+            .is_some_and(|active| active.starts_with(PARSER_VERSION))
+    {
         return Ok(DeliveryAction::Ack);
     }
     let object_key = document
@@ -560,8 +588,130 @@ async fn handle_parse_document_job(
             }
         };
     drop(parse_permit);
-    deepref_postgres::persist_parsed_document(pool, document_id, &parsed, PARSER_VERSION).await?;
+    let (structure, parser_version, header) =
+        grobid_enrichment(document_id, object_key, &store, &parsed).await;
+    let pdf_identity = deepref_documents::PdfIdentity::from_parse(
+        &parsed,
+        header.title.as_deref(),
+        header.doi.as_deref(),
+    );
+    let parsed = parsed.document;
+    deepref_postgres::persist_parsed_document_with_structure(
+        pool,
+        document_id,
+        &parsed,
+        &parser_version,
+        &structure,
+    )
+    .await?;
+    record_identity_check(pool, document_id, document.report_id, &pdf_identity).await;
     Ok(DeliveryAction::Ack)
+}
+
+/// Compares the parsed PDF with its report and stores the verdict. Advisory only: a failure here
+/// is logged and never fails the parse.
+async fn record_identity_check(
+    pool: &sqlx::PgPool,
+    document_id: Uuid,
+    report_id: Uuid,
+    pdf: &deepref_documents::PdfIdentity,
+) {
+    let outcome = async {
+        let (title, doi) = deepref_postgres::report_identity(pool, report_id).await?;
+        let check = deepref_documents::check_identity(
+            pdf,
+            &deepref_documents::ReportIdentity {
+                title: title.as_deref(),
+                doi: doi.as_deref(),
+            },
+        );
+        deepref_postgres::record_identity_check(pool, document_id, &check).await?;
+        anyhow::Ok(check.verdict)
+    }
+    .await;
+    match outcome {
+        Ok(verdict) => {
+            tracing::info!(%document_id, ?verdict, "document identity checked against its report");
+        }
+        Err(error) => {
+            tracing::warn!(%document_id, %error, "document identity check failed");
+        }
+    }
+}
+
+/// What GROBID's header says about the article (empty when GROBID did not run).
+#[derive(Debug, Default)]
+struct GrobidHeader {
+    title: Option<String>,
+    doi: Option<String>,
+}
+
+/// Runs the optional GROBID enrichment. Never fails the job: on any problem it
+/// logs one warning and returns an empty structure under the native version.
+async fn grobid_enrichment(
+    document_id: Uuid,
+    object_key: &str,
+    store: &DocumentStore,
+    structured: &deepref_documents::StructuredDocument,
+) -> (deepref_postgres::DocumentStructure, String, GrobidHeader) {
+    let parsed = &structured.document;
+    let native = (
+        crate::enrichment::native_structure(structured),
+        PARSER_VERSION.to_owned(),
+        GrobidHeader::default(),
+    );
+    let client = match crate::enrichment::grobid_client_from_env() {
+        Ok(Some(client)) => client,
+        Ok(None) => return native,
+        Err(error) => {
+            tracing::warn!(%document_id, %error, "GROBID enrichment skipped: invalid configuration");
+            return native;
+        }
+    };
+    let mut pdf = Vec::new();
+    if let Err(error) = store.read_to_writer(object_key, &mut pdf).await {
+        tracing::warn!(%document_id, %error, "GROBID enrichment skipped: could not re-read the PDF");
+        return native;
+    }
+    let tei = match client.process_fulltext(&pdf).await {
+        Ok(tei) => tei,
+        Err(error) => {
+            tracing::warn!(%document_id, %error, "GROBID enrichment failed; keeping the native parse");
+            return native;
+        }
+    };
+    let header = GrobidHeader {
+        title: tei.title.clone(),
+        doi: tei.doi.clone(),
+    };
+    let views: Vec<crate::enrichment::BlockView<'_>> = parsed
+        .blocks
+        .iter()
+        .enumerate()
+        .map(|(index, block)| crate::enrichment::BlockView {
+            ordinal: block.ordinal,
+            text: &block.text,
+            native_role: structured
+                .block_structure
+                .get(index)
+                .map_or("", |native| native.role.as_str()),
+            native_path: structured
+                .block_structure
+                .get(index)
+                .map_or(&[][..], |native| native.section_path.as_slice()),
+        })
+        .collect();
+    let mut enrichment = crate::enrichment::build_structure(&views, &tei);
+    crate::enrichment::overlay_on_native(&mut enrichment.structure, structured);
+    tracing::info!(
+        %document_id,
+        sections = enrichment.structure.sections.len(),
+        references = enrichment.structure.references.len(),
+        labelled_blocks = enrichment.structure.section_paths.len(),
+        "GROBID enrichment applied"
+    );
+    let version = format!("{PARSER_VERSION}{}", enrichment.parser_suffix);
+    (enrichment.structure, version, header)
 }
 
 async fn handle_recompute_metrics_job(
@@ -574,6 +724,38 @@ async fn handle_recompute_metrics_job(
         _ => anyhow::bail!("recompute_metrics job has an unsupported payload"),
     };
     deepref_postgres::recompute_project_metrics(pool, project_id).await?;
+    Ok(DeliveryAction::Ack)
+}
+
+/// Upper bound on passes for one import, so a huge import cannot pin a worker.
+const IMPORT_DEDUPLICATION_MAX_PASSES: usize = 50;
+
+/// Runs the duplicate check queued after a file import. Each pass resolves at
+/// most 100 records and the loop stops at the first pass that is not full.
+async fn handle_import_deduplication_job(
+    pool: &sqlx::PgPool,
+    payload: serde_json::Value,
+) -> anyhow::Result<DeliveryAction> {
+    #[derive(Deserialize)]
+    struct ImportDeduplicationPayload {
+        project_id: Uuid,
+    }
+    let payload: ImportDeduplicationPayload = serde_json::from_value(payload)?;
+    for _ in 0..IMPORT_DEDUPLICATION_MAX_PASSES {
+        let summary = deepref_postgres::run_deduplication(
+            pool,
+            deepref_postgres::DedupeRunRequest {
+                project_id: payload.project_id,
+                limit: 100,
+                actor_kind: "automation".to_owned(),
+                actor_id: "import-deduplication".to_owned(),
+            },
+        )
+        .await?;
+        if summary.processed < 100 {
+            break;
+        }
+    }
     Ok(DeliveryAction::Ack)
 }
 
@@ -596,12 +778,25 @@ async fn handle_job_with_document_services_inner(
             handle_message(pool, bytes, job.attempts.max(1) as u64, claim_lease).await
         }
         "recompute_metrics" => handle_recompute_metrics_job(&pool, job.payload.clone()).await,
+        deepref_postgres::IMPORT_DEDUPLICATION_JOB_KIND => {
+            handle_import_deduplication_job(&pool, job.payload.clone()).await
+        }
+        deepref_postgres::PMID_IMPORT_JOB_KIND => {
+            crate::pmid_import::handle_job(
+                &pool,
+                job.payload.clone(),
+                job.attempts,
+                job.max_attempts,
+            )
+            .await
+        }
         "automation_run" => {
             let owner = owner.ok_or_else(|| {
                 anyhow::anyhow!("automation job processing requires its lease owner")
             })?;
             handle_automation_run(&pool, job, owner, ai_gateway.as_deref()).await
         }
+        "workflow_step" => crate::workflows::handle_step(&pool, job, ai_gateway.clone()).await,
         "recompute_prisma" => Ok(DeliveryAction::Ack),
         "retrieve_document" => {
             handle_retrieve_document_job(&pool, job, document_store, remote_fetcher).await
@@ -1501,7 +1696,7 @@ async fn parse_stored_document(
     object_key: &str,
     store: Arc<DocumentStore>,
     parser: Option<Arc<dyn DocumentParser>>,
-) -> anyhow::Result<deepref_documents::ParsedDocument> {
+) -> anyhow::Result<deepref_documents::StructuredDocument> {
     let path = std::env::temp_dir().join(format!("deepref-parse-{}.pdf", Uuid::new_v4()));
     let mut file = tokio::fs::OpenOptions::new()
         .write(true)
@@ -1514,6 +1709,12 @@ async fn parse_stored_document(
         Ok(stored) => stored,
         Err(error) => {
             let _ = tokio::fs::remove_file(&path).await;
+            if error.is_not_found() {
+                anyhow::bail!(
+                    "{}: the stored PDF file is no longer available; upload the PDF again",
+                    deepref_documents::DOCUMENT_BLOB_MISSING_CODE
+                );
+            }
             return Err(error.into());
         }
     };
@@ -1525,14 +1726,14 @@ async fn parse_stored_document(
     }
     let parser = match parser {
         Some(parser) => parser,
-        None => Arc::new(PdfiumParser::from_env()?),
+        None => PdfiumParser::shared_from_env()?,
     };
     if parser.version() != PARSER_VERSION {
         let _ = tokio::fs::remove_file(&path).await;
         anyhow::bail!("document parser version does not match the job");
     }
     let parse_path = path.clone();
-    let parsed = tokio::task::spawn_blocking(move || parser.parse_file(&parse_path)).await;
+    let parsed = tokio::task::spawn_blocking(move || parser.parse_structured(&parse_path)).await;
     let _ = tokio::fs::remove_file(&path).await;
     Ok(parsed??)
 }

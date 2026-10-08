@@ -12,11 +12,64 @@ use tokio::{
 
 pub mod config;
 pub mod delivery;
+pub mod enrichment;
 pub mod limiter;
+pub mod pmid_import;
 pub mod processor;
 pub mod reconciler;
+pub mod second_review;
 pub mod shutdown;
 pub mod store;
+pub mod workflows;
+
+/// Metered provider gateway for the configured AI provider (OpenCode Go by
+/// default) when its key is set, otherwise an empty router so AI jobs fail with
+/// a clear "no adapter" error instead of a crash.
+async fn build_ai_gateway(pool: &sqlx::PgPool) -> anyhow::Result<Arc<dyn AiGateway>> {
+    let ai_config = deepref_config::AiProviderConfig::from_env()?;
+    for notice in ai_config.deprecations() {
+        tracing::warn!("{notice}");
+    }
+    let provider = ai_config.provider;
+    let Some(api_key) = ai_config.api_key() else {
+        tracing::warn!(
+            provider = provider.id(),
+            "{} is not set; AI jobs are disabled",
+            provider.api_key_variable()
+        );
+        return Ok(Arc::new(RoutedGateway::default()));
+    };
+    let prices = deepref_ai::PriceBook::new(ai_config.price_overrides.iter().map(|price| {
+        (
+            price.provider.clone(),
+            price.model.clone(),
+            deepref_ai::ModelPrice {
+                input_micros_per_million_tokens: price.input_micros_per_million_tokens,
+                output_micros_per_million_tokens: price.output_micros_per_million_tokens,
+            },
+        )
+    }));
+    let routes = deepref_postgres::ensure_default_model_routes(
+        pool,
+        provider.id(),
+        &ai_config.default_model,
+    )
+    .await?;
+    tracing::info!(
+        provider = provider.id(),
+        routes_created = routes.created,
+        routes_repointed = routes.repointed,
+        "AI provider configured for jobs"
+    );
+    let gateway = deepref_ai::build_metered_provider(
+        provider.id(),
+        &ai_config.base_url,
+        api_key,
+        Arc::new(deepref_postgres::PostgresUsageLedger::new(pool)),
+        prices,
+    )?;
+    Ok(gateway)
+}
 
 pub async fn run(config: config::WorkerConfig) -> anyhow::Result<()> {
     run_with_shutdown(config, shutdown::wait_for_signal()).await
@@ -38,10 +91,18 @@ pub async fn run_with_shutdown(
     let owner = format!("deepref-worker-{}", uuid::Uuid::new_v4());
     processor::validate_pdf_parse_concurrency()?;
     let document_store = Arc::new(DocumentStore::from_env()?);
-    let ai_gateway: Arc<dyn AiGateway> = Arc::new(RoutedGateway::default());
+    let ai_gateway = build_ai_gateway(&pool).await?;
+    // Workflow blocks that change review state follow the project's AI
+    // autonomy settings.
+    workflows::set_autonomy_gate(Arc::new(deepref_postgres::ProjectAutonomyGate::new(&pool)));
     let semaphore = Arc::new(Semaphore::new(config.concurrency));
     let mut active = JoinSet::new();
     let (reconciler_shutdown, reconciler_signal) = watch::channel(false);
+    tokio::spawn(workflows::run_scheduler(
+        pool.clone(),
+        Duration::from_secs(20),
+        reconciler_signal.clone(),
+    ));
     let reconciler_task = tokio::spawn(reconciler::run(
         pool.clone(),
         config.reconciler_interval,

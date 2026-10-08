@@ -1028,6 +1028,39 @@ async fn extraction_reviewed_acceptance_persists_typed_values_provenance_and_aud
 }
 
 #[tokio::test]
+async fn appraisal_acceptance_allows_answers_that_cite_the_same_passage() {
+    let _guard = test_lock().lock().await;
+    let Some(pool) = database().await else { return };
+    let fixture = fixture(&pool).await;
+    let evidence = seed_document(&pool, fixture).await;
+    let mut payload = appraisal_payload(fixture, evidence, "yes", source_hash());
+    payload["answers"][1]["evidence"] =
+        serde_json::json!([appraisal_evidence(evidence, source_hash())]);
+    let proposal_id = insert_appraisal_proposal(&pool, fixture, payload).await;
+
+    let response = decision_request(
+        &pool,
+        fixture.project_id,
+        proposal_id,
+        serde_json::json!({"decision": "accept", "reason": "Both answers rest on the methods."}),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let evidence_rows: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM appraisal_assessment_evidence e
+         JOIN appraisal_assessments a ON a.id=e.assessment_id
+         WHERE a.project_id=$1 AND a.report_id=$2",
+    )
+    .bind(fixture.project_id)
+    .bind(fixture.report_id)
+    .fetch_one(&pool)
+    .await
+    .expect("appraisal evidence count");
+    assert_eq!(evidence_rows, 2);
+    cleanup(&pool, fixture).await;
+}
+
+#[tokio::test]
 async fn appraisal_acceptance_rolls_back_on_inactive_or_wrong_project_evidence_and_keeps_pending() {
     let _guard = test_lock().lock().await;
     let Some(pool) = database().await else { return };
@@ -1716,4 +1749,157 @@ async fn study_grouping_schedules_a_review_run_without_calling_the_provider_inli
             .expect("grouping proposal count");
     assert_eq!(proposals, 0);
     cleanup(&pool, fixture).await;
+}
+
+/// RoB 2 pre-fill with the answers the rule suggestion reads. The outcome-measurement judgment
+/// is the reviewer's override of a high-risk suggestion, so it needs a reason.
+fn rob2_payload(
+    fixture: Fixture,
+    measurement: &str,
+    override_reasons: serde_json::Value,
+) -> serde_json::Value {
+    let answers = [
+        ("sequence_unpredictable", "yes"),
+        ("allocation_concealed", "probably_yes"),
+        ("baseline_comparable", "yes"),
+        ("participants_and_staff_blinded", "no"),
+        ("deviations_unbalanced", "no"),
+        ("analysis_by_assigned_arm", "yes"),
+        ("adherence_analysis_appropriate", "not_applicable"),
+        ("outcome_data_nearly_complete", "yes"),
+        ("missingness_related_to_outcome", "no_information"),
+        ("missing_data_method", "not_applicable"),
+        ("measurement_equivalent", "yes"),
+        ("assessors_unaware", "no"),
+        ("analysis_planned_in_advance", "yes"),
+        ("alternatives_available", "no"),
+        ("selected_by_significance", "no"),
+    ]
+    .map(|(question_id, value)| {
+        serde_json::json!({
+            "question_id": question_id,
+            "answer": {"kind": "enum", "value": value},
+            "rationale": format!("The reviewed report supports {value} for {question_id}."),
+            "evidence": []
+        })
+    });
+    serde_json::json!({
+        "report_id": fixture.report_id,
+        "definition_id": "deepref-rct-rob2",
+        "definition_version": 1,
+        "answers": answers,
+        "domain_judgments": {
+            "randomization_process": "low_risk",
+            "deviations_from_intervention": "some_concerns",
+            "missing_outcome_data": "some_concerns",
+            "outcome_measurement": measurement,
+            "reported_result": "low_risk"
+        },
+        "overall_judgment": "high_risk",
+        "override_reasons": override_reasons
+    })
+}
+
+#[tokio::test]
+async fn rob2_reviewed_acceptance_stores_the_rule_suggestion_and_the_override_reason() {
+    let _guard = test_lock().lock().await;
+    let Some(pool) = database().await else { return };
+    let fixture = fixture(&pool).await;
+    // The model proposed the same high-risk judgment the rules suggest, so no reason is needed.
+    let original = rob2_payload(fixture, "high_risk", serde_json::json!({}));
+    let proposal_id = insert_appraisal_proposal(&pool, fixture, original).await;
+    let reviewed = rob2_payload(
+        fixture,
+        "some_concerns",
+        serde_json::json!({
+            "outcome_measurement": "Step counts come from the device, so assessor knowledge cannot change them."
+        }),
+    );
+
+    let response = decision_request(
+        &pool,
+        fixture.project_id,
+        proposal_id,
+        serde_json::json!({
+            "decision": "accept",
+            "reason": "The reviewer checked the outcome method against the protocol.",
+            "reviewed_payload": with_kind("appraisal_prefill", reviewed)
+        }),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::OK);
+    let body = response_json(response).await;
+    assert_eq!(body["proposal"]["status"], "accepted");
+
+    let (responses, judgments): (serde_json::Value, serde_json::Value) = sqlx::query_as(
+        "SELECT responses,judgments FROM appraisal_assessments
+         WHERE project_id=$1 AND report_id=$2 AND definition_id='deepref-rct-rob2'",
+    )
+    .bind(fixture.project_id)
+    .bind(fixture.report_id)
+    .fetch_one(&pool)
+    .await
+    .expect("accepted rob2 assessment");
+    assert_eq!(responses.as_object().map(serde_json::Map::len), Some(15));
+    assert_eq!(judgments["domains"]["outcome_measurement"], "some_concerns");
+    assert_eq!(judgments["overall"], "high_risk");
+    assert_eq!(
+        judgments["override_reasons"],
+        serde_json::json!({
+            "outcome_measurement": "Step counts come from the device, so assessor knowledge cannot change them."
+        })
+    );
+    assert_eq!(
+        judgments["suggested"]["overall_judgment"], "high_risk",
+        "the suggestion the reviewer saw is stored with the assessment"
+    );
+    assert_eq!(
+        judgments["suggested"]["domains"][4]["judgment"], "low_risk",
+        "reported_result keeps its own suggestion"
+    );
+}
+
+#[tokio::test]
+async fn rob2_acceptance_without_a_reason_for_a_changed_judgment_stays_pending() {
+    let _guard = test_lock().lock().await;
+    let Some(pool) = database().await else { return };
+    let fixture = fixture(&pool).await;
+    let proposal_id = insert_appraisal_proposal(
+        &pool,
+        fixture,
+        rob2_payload(fixture, "high_risk", serde_json::json!({})),
+    )
+    .await;
+    let reviewed = rob2_payload(fixture, "some_concerns", serde_json::json!({}));
+
+    let response = decision_request(
+        &pool,
+        fixture.project_id,
+        proposal_id,
+        serde_json::json!({
+            "decision": "accept",
+            "reason": "The reviewer changed the outcome judgment.",
+            "reviewed_payload": with_kind("appraisal_prefill", reviewed)
+        }),
+    )
+    .await;
+    assert!(
+        !response.status().is_success(),
+        "a changed judgment without a reason must not be accepted"
+    );
+    let status: String = sqlx::query_scalar("SELECT status FROM ai_proposals WHERE id=$1")
+        .bind(proposal_id)
+        .fetch_one(&pool)
+        .await
+        .expect("proposal status");
+    assert_eq!(status, "pending");
+    let assessments: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM appraisal_assessments WHERE project_id=$1 AND report_id=$2",
+    )
+    .bind(fixture.project_id)
+    .bind(fixture.report_id)
+    .fetch_one(&pool)
+    .await
+    .expect("assessment count");
+    assert_eq!(assessments, 0);
 }

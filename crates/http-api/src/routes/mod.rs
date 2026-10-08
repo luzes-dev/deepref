@@ -4,6 +4,7 @@ mod ai;
 mod articles;
 mod assistant;
 mod automations;
+mod autonomy;
 mod deduplication;
 mod documents;
 mod exports;
@@ -18,6 +19,7 @@ mod protocol;
 mod review;
 mod settings;
 mod study;
+mod workflows;
 
 use std::sync::Arc;
 
@@ -71,9 +73,13 @@ fn openapi_router(document_max_bytes: usize) -> OpenApiRouter<AppState> {
             assistant::delete_conversation
         ))
         .routes(routes!(assistant::chat))
+        .routes(routes!(assistant::get_plan))
+        .routes(routes!(assistant::confirm_plan))
+        .routes(routes!(assistant::reject_plan))
         .routes(routes!(automations::list_definitions))
         .routes(routes!(automations::configure_definition))
         .routes(routes!(automations::trigger_manually))
+        .routes(routes!(automations::run_recipe_once))
         .routes(routes!(automations::list_runs))
         .routes(routes!(automations::get_run))
         .routes(routes!(
@@ -81,11 +87,27 @@ fn openapi_router(document_max_bytes: usize) -> OpenApiRouter<AppState> {
             acquisitions::create_acquisition
         ))
         .routes(routes!(acquisitions::refresh_acquisition))
+        .routes(routes!(acquisitions::get_acquisition))
+        .routes(routes!(acquisitions::list_acquisition_items))
         .routes(routes!(acquisitions::import_project_records))
         .routes(routes!(deduplication::run_project_deduplication))
         .routes(routes!(deduplication::list_project_dedupe_proposals))
         .routes(routes!(deduplication::decide_project_dedupe_proposal))
         .routes(routes!(deduplication::resolve_project_record))
+        .routes(routes!(ai::get_ai_status))
+        .routes(routes!(ai::get_ai_budget, ai::update_ai_budget))
+        .routes(routes!(
+            autonomy::get_ai_autonomy,
+            autonomy::update_ai_autonomy
+        ))
+        .routes(routes!(autonomy::list_ai_activity))
+        .routes(routes!(autonomy::get_ai_activity_overview))
+        .routes(routes!(autonomy::undo_ai_activity))
+        .routes(routes!(autonomy::undo_ai_activity_batch))
+        .routes(routes!(autonomy::list_ai_reviewer_decisions))
+        .routes(routes!(autonomy::resolve_ai_reviewer_conflict))
+        .routes(routes!(autonomy::get_ai_reviewer_agreement))
+        .routes(routes!(autonomy::confirm_extraction_value))
         .routes(routes!(ai::generate_screening_suggestion))
         .routes(routes!(ai::generate_study_grouping_suggestion))
         .routes(routes!(ai::generate_appraisal_prefill_suggestion))
@@ -93,7 +115,10 @@ fn openapi_router(document_max_bytes: usize) -> OpenApiRouter<AppState> {
         .routes(routes!(ai::get_review_run))
         .routes(routes!(extraction::list_extraction_fields))
         .routes(routes!(extraction::create_extraction_field))
+        .routes(routes!(extraction::update_extraction_field))
         .routes(routes!(extraction::list_study_extraction_values))
+        .routes(routes!(extraction::record_extraction_value))
+        .routes(routes!(extraction::clear_extraction_value))
         .routes(routes!(extraction::generate_data_extraction_suggestion))
         .routes(routes!(ai::list_ai_proposals))
         .routes(routes!(ai::get_ai_proposal))
@@ -109,6 +134,7 @@ fn openapi_router(document_max_bytes: usize) -> OpenApiRouter<AppState> {
         .routes(routes!(notifications::get_unread_notification_count))
         .routes(routes!(notifications::mark_notifications_read_route))
         .routes(routes!(protocol::get_published_protocol))
+        .routes(routes!(protocol::list_protocol_versions))
         .routes(routes!(
             protocol::get_protocol_editor,
             protocol::save_protocol_draft,
@@ -129,12 +155,19 @@ fn openapi_router(document_max_bytes: usize) -> OpenApiRouter<AppState> {
         .routes(routes!(documents::get_document))
         .routes(routes!(documents::list_document_blocks))
         .routes(routes!(documents::list_document_pages))
+        .routes(routes!(documents::list_document_references))
+        .routes(routes!(documents::list_document_sections))
         .routes(routes!(documents::get_document_content))
         .routes(routes!(documents::attach_external_document))
+        .routes(routes!(documents::attach_open_access_document))
+        .routes(routes!(documents::reparse_document))
+        .routes(routes!(documents::acknowledge_document_identity))
+        .routes(routes!(documents::delete_report_document))
         .routes(routes!(
             study::list_project_studies,
             study::create_project_study
         ))
+        .routes(routes!(study::list_ungrouped_included_reports))
         .routes(routes!(
             study::get_project_study,
             study::rename_project_study
@@ -145,6 +178,7 @@ fn openapi_router(document_max_bytes: usize) -> OpenApiRouter<AppState> {
         .routes(routes!(study::put_report_study_membership))
         .routes(routes!(study::list_appraisal_definitions))
         .routes(routes!(study::get_appraisal_definition_route))
+        .routes(routes!(study::suggest_appraisal_judgments))
         .routes(routes!(
             study::list_report_appraisals,
             study::complete_report_appraisal
@@ -155,7 +189,7 @@ fn openapi_router(document_max_bytes: usize) -> OpenApiRouter<AppState> {
         .layer(DefaultBodyLimit::max(
             document_max_bytes.saturating_add(MULTIPART_OVERHEAD_BYTES),
         ));
-    base.merge(uploads)
+    base.merge(uploads).merge(workflows::router())
 }
 
 pub fn openapi_document() -> OpenApi {
@@ -255,10 +289,13 @@ mod tests {
             "/projects/{project_id}/metrics/recompute",
             "/projects/{project_id}/automations/definitions",
             "/projects/{project_id}/automations/definitions/{recipe}",
+            "/projects/{project_id}/automations/recipes/{recipe}/runs",
             "/projects/{project_id}/automations/runs",
             "/projects/{project_id}/automations/runs/{run_id}",
             "/projects/{project_id}/acquisitions",
+            "/projects/{project_id}/acquisitions/{acquisition_id}",
             "/projects/{project_id}/acquisitions/{acquisition_id}/refresh",
+            "/projects/{project_id}/acquisitions/{acquisition_id}/items",
             "/projects/{project_id}/imports",
             "/projects/{project_id}/deduplication/run",
             "/projects/{project_id}/deduplication/proposals",
@@ -282,6 +319,7 @@ mod tests {
             "/projects/{project_id}/protocol",
             "/projects/{project_id}/review/protocol",
             "/projects/{project_id}/review/protocol/publish",
+            "/projects/{project_id}/review/protocol/versions",
             "/projects/{project_id}/screening",
             "/projects/{project_id}/screening/title-abstract",
             "/projects/{project_id}/screening/next",
@@ -293,11 +331,16 @@ mod tests {
             "/projects/{project_id}/reports/{report_id}/documents/{document_id}",
             "/projects/{project_id}/reports/{report_id}/documents/{document_id}/blocks",
             "/projects/{project_id}/reports/{report_id}/documents/{document_id}/pages",
+            "/projects/{project_id}/reports/{report_id}/documents/{document_id}/references",
+            "/projects/{project_id}/reports/{report_id}/documents/{document_id}/sections",
             "/projects/{project_id}/reports/{report_id}/documents/{document_id}/content",
+            "/projects/{project_id}/reports/{report_id}/documents/{document_id}/reparse",
             "/projects/{project_id}/screening/full-text",
             "/projects/{project_id}/screening/full-text/missing",
             "/projects/{project_id}/screening/full-text/reasons",
             "/projects/{project_id}/reports/{report_id}/documents/external",
+            "/projects/{project_id}/reports/{report_id}/documents/open-access",
+            "/projects/{project_id}/reports/{report_id}/documents/{document_id}/identity/acknowledge",
             "/projects/{project_id}/studies",
             "/projects/{project_id}/studies/{study_id}",
             "/projects/{project_id}/studies/{study_id}/history",
@@ -341,6 +384,13 @@ mod tests {
                 .as_ref()
                 .and_then(|operation| operation.operation_id.as_deref()),
             Some("publishProjectReviewProtocol")
+        );
+        assert_eq!(
+            openapi.paths.paths["/projects/{project_id}/review/protocol/versions"]
+                .get
+                .as_ref()
+                .and_then(|operation| operation.operation_id.as_deref()),
+            Some("listProjectReviewProtocolVersions")
         );
         assert_eq!(
             openapi.paths.paths["/projects/{project_id}/reports"]

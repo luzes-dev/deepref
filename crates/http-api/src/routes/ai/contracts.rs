@@ -85,6 +85,9 @@ pub(crate) enum AiReviewedProposalPayload {
         answers: Vec<AiAppraisalPrefillAnswerDto>,
         domain_judgments: std::collections::BTreeMap<String, String>,
         overall_judgment: String,
+        /// Reasons for judgments that differ from the rule suggestion, keyed by domain or `overall`.
+        #[serde(default)]
+        override_reasons: std::collections::BTreeMap<String, String>,
     },
     DataExtraction {
         study_id: Uuid,
@@ -463,4 +466,42 @@ pub(crate) struct AiProposalDto {
 pub(crate) struct AiProposalDecisionDto {
     pub proposal: AiProposalDto,
     pub applied_revision: Option<i64>,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+pub(crate) struct AiBudgetDto {
+    /// Monthly budget in US dollars.
+    pub monthly_budget_usd: f64,
+    /// Estimated spend this calendar month (UTC) in US dollars.
+    pub spent_usd: f64,
+    pub remaining_usd: f64,
+    /// When true, AI calls for this project are refused until next month or a higher budget.
+    pub exhausted: bool,
+}
+
+#[derive(Debug, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct UpdateAiBudgetRequest {
+    /// New monthly budget in US dollars (0 disables AI for the project).
+    pub monthly_budget_usd: f64,
+}
+
+#[derive(Debug, Deserialize, utoipa::IntoParams)]
+pub(crate) struct AiStatusQuery {
+    /// When given, the response includes this project's remaining budget.
+    pub project_id: Option<Uuid>,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+pub(crate) struct AiStatusDto {
+    /// AI suggestions (screening, grouping, appraisal, duplicates) can be requested.
+    pub suggestions_available: bool,
+    /// The project assistant can answer chat messages.
+    pub assistant_available: bool,
+    /// A provider is configured (API key present).
+    pub configured: bool,
+    pub provider: Option<String>,
+    pub model: Option<String>,
+    /// Present when `project_id` was passed.
+    pub budget: Option<AiBudgetDto>,
 }

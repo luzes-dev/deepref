@@ -20,6 +20,7 @@ deepref-events = { version = "0.1.0", path = "../../crates/events" }
 deepref-graph.workspace = true
 deepref-postgres.workspace = true
 deepref-providers.workspace = true
+deepref-crossref.workspace = true
 anyhow.workspace = true
 axum.workspace = true
 bytes.workspace = true
@@ -38,8 +39,10 @@ tracing.workspace = true
 utoipa.workspace = true
 utoipa-axum.workspace = true
 uuid.workspace = true
+serde_urlencoded = "0.7"
 
 [dev-dependencies]
+csv.workspace = true
 deepref-worker = { version = "0.1.0", path = "../../services/worker" }
 tower.workspace = true
 

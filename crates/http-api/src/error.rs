@@ -40,6 +40,8 @@ pub enum ApiError {
     NotFound(String),
     #[error("{0}")]
     Configuration(String),
+    #[error("{0}")]
+    Upstream(String),
     #[error("screening data integrity failure: {0}")]
     DataIntegrity(String),
     #[error("invalid JSON payload")]
@@ -87,6 +89,13 @@ impl IntoResponse for ApiError {
             Self::BadRequest(message) => (
                 StatusCode::BAD_REQUEST,
                 "INVALID_REQUEST".to_owned(),
+                message,
+                None,
+                None,
+            ),
+            Self::Upstream(message) => (
+                StatusCode::BAD_GATEWAY,
+                "UPSTREAM_UNAVAILABLE".to_owned(),
                 message,
                 None,
                 None,
