@@ -1,0 +1,716 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>AI Screening Calibration Options</title>
+<meta name="description" content="Decision document: how to calibrate the AI second reviewer so the automatic-screening gate can open.">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=IBM+Plex+Sans:wght@400;500;600&family=IBM+Plex+Mono:wght@400;500&family=Source+Serif+4:wght@600&display=swap" rel="stylesheet">
+<style>
+:root {
+  --bg: #f7f6f2;
+  --surface: #ffffff;
+  --surface-2: #efede6;
+  --text: #1d1f23;
+  --muted: #5d636d;
+  --border: #dcd9cf;
+  --accent: #1f5f8b;
+  --accent-soft: #e3eef6;
+  --good: #1d6b43;
+  --good-soft: #e1f1e8;
+  --warn: #8a5a00;
+  --warn-soft: #fbf0d6;
+  --bad: #a1302a;
+  --bad-soft: #f8e3e1;
+  --code-bg: #eceae2;
+  --radius: 10px;
+}
+@media (prefers-color-scheme: dark) {
+  :root:not([data-theme="light"]) {
+    --bg: #14161a;
+    --surface: #1c1f25;
+    --surface-2: #242830;
+    --text: #e8e9ec;
+    --muted: #9aa1ac;
+    --border: #333843;
+    --accent: #7fb6df;
+    --accent-soft: #1b2e3d;
+    --good: #6fcf9a;
+    --good-soft: #17301f;
+    --warn: #e5b94e;
+    --warn-soft: #36290c;
+    --bad: #f08a82;
+    --bad-soft: #3a1b19;
+    --code-bg: #262a32;
+  }
+}
+:root[data-theme="dark"] {
+  --bg: #14161a; --surface: #1c1f25; --surface-2: #242830; --text: #e8e9ec; --muted: #9aa1ac;
+  --border: #333843; --accent: #7fb6df; --accent-soft: #1b2e3d; --good: #6fcf9a; --good-soft: #17301f;
+  --warn: #e5b94e; --warn-soft: #36290c; --bad: #f08a82; --bad-soft: #3a1b19; --code-bg: #262a32;
+}
+* { box-sizing: border-box; }
+html { -webkit-text-size-adjust: 100%; }
+body {
+  margin: 0;
+  background: var(--bg);
+  color: var(--text);
+  font-family: "IBM Plex Sans", system-ui, -apple-system, "Segoe UI", sans-serif;
+  font-size: 16px;
+  line-height: 1.6;
+}
+.wrap { max-width: 920px; margin: 0 auto; padding: 0 16px 80px; }
+header.top { padding: 40px 0 8px; }
+.kicker { font-size: .72rem; letter-spacing: .14em; text-transform: uppercase; color: var(--muted); font-weight: 600; }
+h1 { font-family: "Source Serif 4", Georgia, serif; font-size: clamp(1.7rem, 5vw, 2.4rem); line-height: 1.15; margin: 6px 0 10px; letter-spacing: -.01em; }
+h2 { font-size: 1.35rem; margin: 0 0 6px; letter-spacing: -.01em; }
+h3 { font-size: 1.05rem; margin: 0 0 4px; }
+section { margin-top: 48px; }
+.lede { color: var(--muted); max-width: 66ch; margin: 0 0 18px; }
+p { margin: 0 0 12px; }
+a { color: var(--accent); text-underline-offset: 2px; }
+code, .mono { font-family: "IBM Plex Mono", ui-monospace, Menlo, monospace; font-size: .84em; background: var(--code-bg); padding: 1px 5px; border-radius: 5px; overflow-wrap: anywhere; }
+.meta { font-size: .85rem; color: var(--muted); }
+
+.card { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 16px; }
+.tldr { border-left: 4px solid var(--accent); background: var(--accent-soft); border-radius: var(--radius); padding: 16px 18px; margin-top: 18px; }
+.tldr p:last-child { margin-bottom: 0; }
+.tldr ul { margin: 6px 0 0; padding-left: 20px; }
+
+.chip { display: inline-block; font-size: .72rem; font-weight: 600; padding: 2px 9px; border-radius: 99px; border: 1px solid var(--border); background: var(--surface-2); color: var(--muted); white-space: nowrap; vertical-align: middle; }
+.chip.good { color: var(--good); background: var(--good-soft); border-color: transparent; }
+.chip.warn { color: var(--warn); background: var(--warn-soft); border-color: transparent; }
+.chip.bad { color: var(--bad); background: var(--bad-soft); border-color: transparent; }
+.chip.accent { color: var(--accent); background: var(--accent-soft); border-color: transparent; }
+
+/* gate flow */
+.flow { list-style: none; counter-reset: s; margin: 14px 0 0; padding: 0; display: grid; gap: 10px; }
+.flow li { counter-increment: s; position: relative; background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 12px 14px 12px 52px; }
+.flow li::before { content: counter(s); position: absolute; left: 14px; top: 12px; width: 26px; height: 26px; border-radius: 50%; background: var(--accent-soft); color: var(--accent); font-weight: 600; display: grid; place-items: center; font-size: .85rem; }
+.flow li strong { display: block; }
+.flow li span { color: var(--muted); font-size: .92rem; }
+
+.grid2 { display: grid; gap: 12px; grid-template-columns: 1fr; }
+@media (min-width: 720px) { .grid2 { grid-template-columns: 1fr 1fr; } }
+.finding { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 14px 16px; }
+.finding h3 { display: flex; gap: 8px; align-items: baseline; flex-wrap: wrap; }
+.finding p { font-size: .94rem; margin-bottom: 8px; }
+.finding p:last-child { margin-bottom: 0; }
+.refs { font-size: .82rem; color: var(--muted); }
+
+/* tables */
+.tablewrap { overflow-x: auto; border: 1px solid var(--border); border-radius: var(--radius); background: var(--surface); }
+table { border-collapse: collapse; width: 100%; font-size: .9rem; }
+th, td { text-align: left; padding: 9px 12px; border-bottom: 1px solid var(--border); vertical-align: top; }
+th { background: var(--surface-2); font-size: .74rem; letter-spacing: .06em; text-transform: uppercase; color: var(--muted); font-weight: 600; }
+tr:last-child td { border-bottom: 0; }
+td.num, th.num { text-align: right; font-variant-numeric: tabular-nums; }
+@media (max-width: 640px) {
+  table.stack thead { display: none; }
+  table.stack tr { display: block; border-bottom: 1px solid var(--border); padding: 8px 0; }
+  table.stack tr:last-child { border-bottom: 0; }
+  table.stack td { display: grid; grid-template-columns: 7.5rem 1fr; gap: 8px; border: 0; padding: 3px 12px; }
+  table.stack td::before { content: attr(data-label); color: var(--muted); font-size: .74rem; text-transform: uppercase; letter-spacing: .05em; padding-top: 2px; }
+  table.stack td.num { text-align: left; }
+}
+table.small th, table.small td { padding: 7px 8px; font-size: .84rem; }
+
+/* strategies */
+.strategy { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); margin-top: 14px; overflow: hidden; }
+.strategy.rec { border-color: var(--accent); box-shadow: 0 0 0 1px var(--accent); }
+.strategy > header { padding: 14px 16px; display: flex; gap: 10px; align-items: flex-start; flex-wrap: wrap; border-bottom: 1px solid var(--border); background: var(--surface-2); }
+.strategy .letter { width: 30px; height: 30px; flex: none; border-radius: 8px; background: var(--accent); color: var(--surface); font-weight: 600; display: grid; place-items: center; }
+.strategy header .t { flex: 1; min-width: 180px; }
+.strategy header .t h3 { margin: 0; font-size: 1.1rem; }
+.strategy header .t div { color: var(--muted); font-size: .9rem; }
+.facts { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 1px; background: var(--border); border-bottom: 1px solid var(--border); }
+.facts div { background: var(--surface); padding: 10px 14px; }
+.facts b { display: block; font-size: .7rem; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); font-weight: 600; }
+.facts span { font-size: .93rem; }
+.strategy .body { padding: 14px 16px; display: grid; gap: 14px; }
+@media (min-width: 760px) { .strategy .body { grid-template-columns: 1fr 1fr; } }
+.strategy .body h4 { margin: 0 0 4px; font-size: .78rem; letter-spacing: .08em; text-transform: uppercase; color: var(--muted); }
+.strategy .body p, .strategy .body ul { margin: 0; font-size: .92rem; }
+.strategy .body ul { padding-left: 18px; }
+.strategy .body li { margin-bottom: 3px; }
+.strategy .body .wide { grid-column: 1 / -1; }
+
+.callout { border-radius: var(--radius); padding: 12px 16px; margin: 14px 0; font-size: .94rem; }
+.callout.warn { background: var(--warn-soft); border: 1px solid transparent; }
+.callout.info { background: var(--accent-soft); }
+.callout p:last-child { margin: 0; }
+
+/* decisions */
+.decision { background: var(--surface); border: 1px solid var(--border); border-radius: var(--radius); padding: 14px 16px; margin-top: 12px; }
+.decision h3 { font-size: 1rem; }
+.decision p.q { color: var(--muted); font-size: .9rem; margin-bottom: 10px; }
+.opts { display: flex; flex-wrap: wrap; gap: 8px; }
+.opts label { position: relative; cursor: pointer; }
+.opts input { position: absolute; opacity: 0; inset: 0; width: 100%; height: 100%; cursor: pointer; margin: 0; }
+.opts span { display: inline-block; padding: 7px 12px; border: 1px solid var(--border); border-radius: 99px; background: var(--surface-2); font-size: .88rem; }
+.opts input:checked + span { background: var(--accent); border-color: var(--accent); color: var(--surface); }
+.opts input:focus-visible + span { outline: 2px solid var(--accent); outline-offset: 2px; }
+.opts .rec span { border-style: dashed; border-color: var(--accent); }
+.legend { font-size: .82rem; color: var(--muted); }
+textarea { width: 100%; min-height: 150px; background: var(--surface); color: var(--text); border: 1px solid var(--border); border-radius: var(--radius); padding: 10px; font-family: "IBM Plex Mono", ui-monospace, monospace; font-size: .8rem; }
+button { font: inherit; font-weight: 500; background: var(--accent); color: var(--surface); border: 0; border-radius: 8px; padding: 8px 14px; cursor: pointer; }
+button.ghost { background: var(--surface-2); color: var(--text); border: 1px solid var(--border); }
+.btnrow { display: flex; gap: 8px; flex-wrap: wrap; margin: 12px 0; }
+ol.refs-list { padding-left: 20px; font-size: .9rem; }
+ol.refs-list li { margin-bottom: 8px; }
+footer { margin-top: 48px; padding-top: 16px; border-top: 1px solid var(--border); }
+</style>
+</head>
+<body>
+<div class="wrap">
+
+<header class="top">
+  <div class="kicker">DeepRef &middot; decision document &middot; 2026-10-08</div>
+  <h1>How do we calibrate the AI second reviewer?</h1>
+  <p class="lede">Today the AI screens records on its own only after a passing, hash-matched, expert-adjudicated calibration bundle exists. Nothing in the product can create one, so the screening pages show the &ldquo;AI is paused&rdquo; banner. This document explains the gate, compares five ways to open it, and lists what you need to decide.</p>
+  <div class="tldr">
+    <strong>Short version</strong>
+    <ul>
+      <li>The gate is intentional and well built on the <em>checking</em> side, but there is <strong>no way to create a bundle</strong> in the app, and the hash is so strict that <strong>any Rust source change</strong> invalidates a calibration.</li>
+      <li>Recommended: <strong>shadow-mode warm-up</strong> (the AI silently second-screens the first records the humans decide, metrics accumulate, you approve), plus <strong>continuous monitoring</strong>. No extra human screening.</li>
+      <li>Before any of that, two small code decisions matter more than the statistics: <strong>what the &ldquo;runtime&rdquo; part of the hash covers</strong> and <strong>per-stage bundles</strong>. See section 1.</li>
+    </ul>
+  </div>
+  <p class="meta" style="margin-top:12px">Everything in section 1 comes from reading the code in this worktree; nothing was run. Statistics in section 3 were computed for this document (exact binomial intervals). Time estimates are assumptions and are labelled as such.</p>
+</header>
+
+<!-- ============ 1 ============ -->
+<section id="gate">
+  <h2>1. What the gate requires today, and why</h2>
+  <p class="lede">The AI&rsquo;s autonomy level for title/abstract and full-text screening is &ldquo;second reviewer&rdquo;. Whether it actually runs unprompted depends on one more check.</p>
+
+  <div class="card">
+    <h3>Why it exists</h3>
+    <p>ADR 0004 (<a href="../adr/0004-compiled-review-definition-seam.md"><code>docs/adr/0004-compiled-review-definition-seam.md</code></a>) says automation-triggered consequential runs &ldquo;require an immutable, passing calibration bundle whose semantic-bundle hash exactly matches the compiled manifest&rdquo;, and that the small checked-in evaluation set &ldquo;cannot authorize production automation&rdquo;. The PR15 acceptance note (<a href="../acceptance/pr15-evals-hardening.md"><code>docs/acceptance/pr15-evals-hardening.md</code></a>) repeats it: consequential automation stays disabled until an <em>expert-adjudicated</em> bundle is persisted for the project and exact hash. Reviewer-requested suggestions (the user clicks &ldquo;ask AI&rdquo;) are <strong>not</strong> gated. The AI never writes scientific state either way; it produces proposals and opinions.</p>
+  </div>
+
+  <h3 style="margin-top:20px">How a record reaches the AI automatically</h3>
+  <ol class="flow">
+    <li><strong>Stage is set to &ldquo;second reviewer&rdquo;</strong><span>Autonomy level resolved per project and task (<code>resolve_autonomy_level</code>).</span></li>
+    <li><strong>The worker sweep finds a passing bundle</strong><span>Only projects that have a row in <code>review_calibration_bundles</code> with <code>status='passing'</code> are swept at all (<a href="../../crates/postgres/src/second_review.rs"><code>crates/postgres/src/second_review.rs</code></a>). The newest by <code>evaluated_at</code> is used. Projects without one cost one query and get no work.</span></li>
+    <li><strong>It picks up to 5 waiting records per project per tick</strong><span>Records with no human decision yet and no AI decision; one attempt per record, stage and protocol version (<code>second_review_attempts</code>, migration <a href="../../crates/postgres/migrations/0040_second_review_attempts.sql"><code>0040</code></a>). Stops when the project&rsquo;s AI budget is spent.</span></li>
+    <li><strong>Admission compares hashes</strong><span>The run&rsquo;s freshly built manifest must have the same <code>semantic_bundle_hash</code> as the bundle, and the bundle must be <code>passing</code> (<code>admit_calibration</code> in <a href="../../crates/postgres/src/review_calibration.rs"><code>review_calibration.rs</code></a>, called from <a href="../../crates/postgres/src/review_runs.rs"><code>review_runs.rs</code></a>). Otherwise: <code>calibration_missing</code>, <code>calibration_failed</code> or <code>calibration_stale</code>.</span></li>
+    <li><strong>On refusal the sweep stops and records why</strong><span>A stale refusal is written to <code>second_review_gate</code>; the API reports <code>needs_calibration</code> or <code>calibration_stale</code>; the web banner <code>second-review-paused</code> appears (<a href="../../apps/web/src/lib/features/ai-autonomy/components/ScreeningViewSwitch.svelte"><code>ScreeningViewSwitch.svelte</code></a>).</span></li>
+    <li><strong>Result is an opinion, not a decision</strong><span>Stored in <code>ai_reviewer_decisions</code> (migration <a href="../../crates/postgres/migrations/0029_ai_autonomy_and_activity.sql"><code>0029</code></a>). If it differs from the human, it is a conflict a person resolves.</span></li>
+  </ol>
+
+  <h3 style="margin-top:24px">What &ldquo;hash-matched&rdquo; binds to</h3>
+  <p>The <code>semantic_bundle_hash</code> is a SHA-256 over the items below (<code>SemanticBundle</code> in <a href="../../crates/review/src/manifest.rs"><code>crates/review/src/manifest.rs</code></a>). Change any one and every existing bundle for that project becomes stale.</p>
+  <div class="tablewrap">
+  <table class="stack">
+    <thead><tr><th>Bound input</th><th>What changes it in practice</th></tr></thead>
+    <tbody>
+      <tr><td data-label="Input"><strong>Definition and assets</strong><br><span class="meta">definition id/version, workflow, prompt, schema, policy, parser</span></td><td data-label="Changes when">Editing anything under <code>review-definitions/</code> (for screening: <code>prompt.txt</code>, <code>schema.json</code>, <code>workflow.json</code>, and the shared policy). Prompt label bumps are not what counts; content is hashed.</td></tr>
+      <tr><td data-label="Input"><strong>Protocol</strong></td><td data-label="Changes when">The hash covers the <code>protocol_version_id</code> and the eligibility criteria shown to the model. A protocol amendment or republish makes the bundle stale.</td></tr>
+      <tr><td data-label="Input"><strong>Resolved model identity</strong><br><span class="meta">profile, provider, model, model_version, parameters hash</span></td><td data-label="Changes when">Any edit to the route rows in <code>ai_model_routes</code> (migration <a href="../../crates/postgres/migrations/0016_ai_foundation.sql"><code>0016</code></a>), including temperature or other parameters.</td></tr>
+      <tr><td data-label="Input"><strong>Runtime build</strong></td><td data-label="Changes when">See finding B below. This is the surprising one.</td></tr>
+    </tbody>
+  </table>
+  </div>
+
+  <h3 style="margin-top:24px">Findings you should know before choosing</h3>
+  <div class="grid2">
+    <div class="finding">
+      <h3><span class="chip bad">Blocker</span> A. Nothing can create a bundle</h3>
+      <p><code>insert_review_calibration_bundle</code> exists (<a href="../../crates/postgres/src/review_calibration.rs"><code>review_calibration.rs</code></a>) and is exported, but only tests call it. There is no HTTP route, no CLI, no worker job, no UI. The banner tells users to &ldquo;ask the person who runs this DeepRef deployment&rdquo;, who in practice would need raw SQL.</p>
+      <p class="refs">Rows are immutable (an update trigger rejects changes, migration 0022); correction means inserting a new row.</p>
+    </div>
+    <div class="finding">
+      <h3><span class="chip bad">Design risk</span> B. Any code change invalidates calibration</h3>
+      <p>The &ldquo;runtime&rdquo; input is <code>DEEPREF_SEMANTIC_BUILD_SHA</code>, computed in <a href="../../crates/postgres/build.rs"><code>crates/postgres/build.rs</code></a> by hashing <strong>every file</strong> under <code>crates/</code>, <code>services/</code> and <code>review-definitions/</code>, plus <code>Cargo.toml</code>, <code>Cargo.lock</code> and an optional <code>DEEPREF_BUILD_SHA</code>. A fix to an unrelated HTTP route, a test, or a dependency bump changes the hash. A calibration is therefore valid for exactly one build.</p>
+      <p class="refs">This is safe but unworkable: a calibration that takes weeks to earn would be voided by the next deploy.</p>
+    </div>
+    <div class="finding">
+      <h3><span class="chip warn">Gap</span> C. Pass/fail is a label, not a computation</h3>
+      <p><code>status</code> is set by whoever inserts the row. <code>thresholds</code>, <code>metrics</code> and <code>reviewer_metadata</code> are only required to be JSON objects; nothing checks them, and nothing records who approved. &ldquo;Expert-adjudicated&rdquo; lives in the docs, not the code. The existing metric engine (<a href="../../crates/ai/src/evals.rs"><code>crates/ai/src/evals.rs</code></a>) computes sensitivity, specificity and a 20:1 weighted loss, but needs a baseline-vs-candidate pair plus numeric-extraction and citation cases, and has no confidence intervals. It is not connected to the bundle table.</p>
+    </div>
+    <div class="finding">
+      <h3><span class="chip warn">Gap</span> D. One bundle cannot cover both stages as written</h3>
+      <p>Bundles are keyed by <code>definition_key='screening'</code> for both stages. But title/abstract uses model profile <code>Reasoning</code> and full-text uses <code>LongContextReasoning</code> (<a href="../../crates/review/src/execution.rs"><code>execution.rs</code></a>), and the profile is part of the model identity, so the two stages probably hash differently. The sweep picks the single newest passing bundle regardless of stage. Two bundles would therefore likely knock each other out. I did not execute this; verify with a test before relying on it.</p>
+    </div>
+    <div class="finding">
+      <h3><span class="chip accent">Asset</span> E. Useful building blocks already exist</h3>
+      <p><code>reviewer_agreement</code> in <a href="../../crates/postgres/src/ai_reviewer.rs"><code>ai_reviewer.rs</code></a> already computes human-vs-AI agreement and <strong>Cohen&rsquo;s kappa</strong> per stage using the human&rsquo;s decision <em>before</em> any conflict was settled (<code>human_decision_before</code>). It is exposed through <a href="../../crates/http-api/src/routes/autonomy.rs"><code>autonomy.rs</code></a>. The project also has <code>screening_events</code> with actors, an <code>ai_budget</code>, and the sweep scaffolding to reuse.</p>
+    </div>
+    <div class="finding">
+      <h3><span class="chip warn">UX</span> F. The banner can lag and is a dead end</h3>
+      <p><code>calibration_stale</code> is only reported after the sweep has hit a refusal and written <code>second_review_gate</code>, so right after a deploy the status can still read &ldquo;automatic&rdquo;. The banner names no action and no owner. Whatever strategy you pick should give it a button.</p>
+    </div>
+  </div>
+</section>
+
+<!-- ============ 2 ============ -->
+<section id="strategies">
+  <h2>2. Five ways to calibrate</h2>
+  <p class="lede">Human effort assumes 45 seconds per record per screener (a planning assumption; real screening is commonly 30 to 60 seconds). Sizes are rough: <strong>S</strong> up to 2 days, <strong>M</strong> 1 to 2 weeks, <strong>L</strong> 3 or more weeks of one developer.</p>
+
+  <div class="tablewrap">
+  <table class="stack">
+    <thead><tr><th>Strategy</th><th>Extra human work</th><th>Evidence strength</th><th>Delay before AI runs</th><th>Build size</th><th>Verdict</th></tr></thead>
+    <tbody>
+      <tr><td data-label="Strategy"><strong>A</strong> Project pilot set</td><td data-label="Human work">High: 15 to 75 h</td><td data-label="Evidence">Strongest, project-specific</td><td data-label="Delay">Days to weeks (wait for the pilot)</td><td data-label="Size">L</td><td data-label="Verdict"><span class="chip accent">Option for high stakes</span></td></tr>
+      <tr><td data-label="Strategy"><strong>B</strong> Cross-project benchmark</td><td data-label="Human work">One-time curation</td><td data-label="Evidence">Strong for the machinery, silent on this protocol</td><td data-label="Delay">None per project</td><td data-label="Size">M</td><td data-label="Verdict"><span class="chip">Complement only</span></td></tr>
+      <tr><td data-label="Strategy"><strong>C</strong> Shadow-mode warm-up</td><td data-label="Human work">None extra</td><td data-label="Evidence">Good once enough includes accrue; reference is one human</td><td data-label="Delay">Until about 60 includes are decided</td><td data-label="Size">M</td><td data-label="Verdict"><span class="chip good">Recommended</span></td></tr>
+      <tr><td data-label="Strategy"><strong>D</strong> Owner override</td><td data-label="Human work">None</td><td data-label="Evidence">None up front</td><td data-label="Delay">None</td><td data-label="Size">S to M</td><td data-label="Verdict"><span class="chip warn">Not as default</span></td></tr>
+      <tr><td data-label="Strategy"><strong>E</strong> Continuous monitoring + auto recalibration</td><td data-label="Human work">None</td><td data-label="Evidence">Catches drift; needs C or A to start</td><td data-label="Delay">n/a</td><td data-label="Size">M (after C)</td><td data-label="Verdict"><span class="chip good">Recommended with C</span></td></tr>
+    </tbody>
+  </table>
+  </div>
+
+  <!-- A -->
+  <article class="strategy">
+    <header><div class="letter">A</div><div class="t"><h3>Project pilot set</h3><div>Humans dual-screen N records from this project; the AI is scored against the adjudicated answer.</div></div><span class="chip accent">Option for high stakes</span></header>
+    <div class="facts">
+      <div><b>Records</b><span>300 to 1,200 (to reach 30 to 60 includes)</span></div>
+      <div><b>Human hours</b><span>8 to 30 h across 2 screeners, plus about 2 h adjudication</span></div>
+      <div><b>Recall CI at 60 includes</b><span>95% recall observed gives 86% to 99%</span></div>
+      <div><b>Size</b><span>L</span></div>
+    </div>
+    <div class="body">
+      <div><h4>How it works</h4><p>Draw a random sample from <code>project_reports</code> with a stored seed and freeze it. Two reviewers screen it blind (nobody sees the AI or each other). Disagreements are adjudicated, which gives the gold standard and a human-human kappa. The AI runs on the same records under the exact current hash. If recall clears the threshold, the owner approves and a bundle is written. This is also what Cochrane guidance asks for anyway: pilot the criteria on a sample before full screening, with at least two independent screeners.</p></div>
+      <div><h4>Risks</h4><ul>
+        <li>Includes are rare. At 5% prevalence, 60 includes needs 1,200 records (30 h); at 2% it needs 3,000 (75 h). That cost falls on the people the AI is meant to relieve.</li>
+        <li>Any later hash change (see B above) throws the pilot away.</li>
+        <li>Pilot records are screened twice by humans and then screened again in the normal flow unless excluded from it.</li>
+      </ul></div>
+      <div class="wide"><h4>What it needs in the product</h4><ul>
+        <li><strong>Data:</strong> new tables for a frozen sample, per-reviewer blind labels, and adjudication (not <code>screening_state</code>, which is single-reviewer state and must not be polluted). Reuse <code>project_reports</code>, <code>reports</code>.</li>
+        <li><strong>Runs:</strong> a new <code>ReviewOrigin</code> variant for calibration runs (amends ADR 0004: ungated, writes nothing to <code>ai_reviewer_decisions</code>). Take the hash from the manifest the run built.</li>
+        <li><strong>Metrics:</strong> a screening-only entry point next to <code>crates/ai/src/evals.rs</code>, adding exact binomial intervals, keeping the &ldquo;maybe counts as retained&rdquo; semantics.</li>
+        <li><strong>API/UI:</strong> routes beside <code>routes/autonomy.rs</code> to draw, label, view results and approve; a calibration page; banner button. Approval calls <code>insert_review_calibration_bundle</code> with metrics, CI, reviewer ids and the adjudicator.</li>
+      </ul></div>
+    </div>
+  </article>
+
+  <!-- B -->
+  <article class="strategy">
+    <header><div class="letter">B</div><div class="t"><h3>Reusable cross-project benchmark set</h3><div>A curated, expert-labelled set of screening records, scored whenever the model, prompt or build changes.</div></div><span class="chip">Complement only</span></header>
+    <div class="facts">
+      <div><b>Records</b><span>1,000+ with 200+ includes across several topics</span></div>
+      <div><b>Human hours</b><span>One-time; large if hand-labelled, near zero if using published datasets</span></div>
+      <div><b>Recall CI at 200 includes</b><span>95% recall observed gives 91% to 98%</span></div>
+      <div><b>Size</b><span>M (harness) plus curation</span></div>
+    </div>
+    <div class="body">
+      <div><h4>How it works</h4><p>Store an <code>EvaluationSet</code> (the JSON format already used by <code>reviewed-small-v1.json</code>) with a few hundred real, adjudicated screening cases. Run it against the live route in CI or on a schedule. It proves the model, parser and prompt work well <em>in general</em>, and gives a regression alarm when the provider changes.</p></div>
+      <div><h4>Risks</h4><ul>
+        <li>It cannot say anything about a specific project&rsquo;s criteria. A model that screens well on cardiology reviews can still misread a niche protocol.</li>
+        <li>As built, the gate binds a bundle to <code>project_id</code> and to the protocol in the hash, so a platform-level result would not satisfy it without a design change.</li>
+        <li>Public datasets (for example CLEF TAR, SYNERGY; not reviewed here) have their own labelling noise and may be in the model&rsquo;s training data.</li>
+      </ul></div>
+      <div class="wide"><h4>What it needs in the product</h4><ul>
+        <li>A screening-only evaluation entry point (the current gate also demands numeric-extraction and citation cases, and a baseline model).</li>
+        <li>A platform-level record (project-less bundle table or nullable <code>project_id</code>) and a rule such as &ldquo;the gate needs both a current platform pass and a project-level pass&rdquo;. This turns B into a prerequisite, not a substitute.</li>
+      </ul></div>
+    </div>
+  </article>
+
+  <!-- C -->
+  <article class="strategy rec">
+    <header><div class="letter">C</div><div class="t"><h3>Shadow-mode warm-up</h3><div>The AI runs as a silent second reviewer on records the humans have already decided; metrics accumulate until the threshold is met.</div></div><span class="chip good">Recommended</span></header>
+    <div class="facts">
+      <div><b>Records</b><span>Whatever humans screen anyway; gate checks start at 60 includes</span></div>
+      <div><b>Extra human hours</b><span>0 (AI cost only, within the project AI budget)</span></div>
+      <div><b>Recall CI at 60 includes</b><span>2 misses in 61 includes: 96.7%, one-sided 95% lower bound 90.0%</span></div>
+      <div><b>Size</b><span>M</span></div>
+    </div>
+    <div class="body">
+      <div><h4>How it works</h4><p>Once a human has decided a record, the sweep also runs the AI on it in a new &ldquo;shadow&rdquo; origin. The result goes into an observations table, not into <code>ai_reviewer_decisions</code>, so nobody is anchored and nothing becomes a conflict. For each observation the system stores the hash it ran under. A checkpoint job (every +20 includes after 60) computes sensitivity with an exact interval, specificity, abstention rate, kappa and conflict rate. When it passes, the owner sees &ldquo;AI second review is ready to switch on&rdquo; with the numbers, approves, and a bundle is inserted.</p></div>
+      <div><h4>Risks</h4><ul>
+        <li><strong>The reference is one human.</strong> A single experienced title/abstract screener misses a median of 5% of eligible studies (range 0% to 58%; 13% for less experienced screeners; Waffenschmidt 2019). Where the human missed and the AI found it, the AI is scored as a false positive. Mitigation: also report AI recall on records that <em>ended up included</em> after full-text screening, which is the better reference.</li>
+        <li><strong>Repeated looks</strong> inflate the chance of a lucky pass. Use fixed checkpoints and a minimum of 60 includes; this is not a formal sequential design.</li>
+        <li>Hash changes mid-warm-up reset the count (see B); resolve that first.</li>
+        <li>The gate text says &ldquo;expert-adjudicated&rdquo;; here the adjudication is the owner&rsquo;s approval, which needs an explicit ADR note.</li>
+      </ul></div>
+      <div class="wide"><h4>What it needs in the product</h4><ul>
+        <li><strong>Data:</strong> <code>second_review_observations(project_id, report_id, stage, semantic_bundle_hash, ai_decision, human_decision, final_inclusion, run_id)</code>. Human side comes from <code>screening_state</code> and <code>screening_events</code>.</li>
+        <li><strong>Worker:</strong> a second pass in <code>sweep_second_reviews</code> (same batch cap, <code>ai_budget</code> check and attempt table pattern), picking decided records instead of waiting ones.</li>
+        <li><strong>Metrics:</strong> reuse the kappa code in <code>ai_reviewer.rs</code>; add the interval and the sensitivity query; write the bundle via <code>insert_review_calibration_bundle</code> with <code>reviewer_metadata</code> naming the approver.</li>
+        <li><strong>UI:</strong> a calibration progress card on the screening pages (&ldquo;37 of 60 includes observed&rdquo;) replacing the dead-end banner, plus an approve button for the owner.</li>
+      </ul></div>
+    </div>
+  </article>
+
+  <!-- D -->
+  <article class="strategy">
+    <header><div class="letter">D</div><div class="t"><h3>Explicit owner override, reduced scope</h3><div>The owner acknowledges the AI is unvalidated and opens the gate anyway, with limits.</div></div><span class="chip warn">Not as default</span></header>
+    <div class="facts">
+      <div><b>Records</b><span>0</span></div>
+      <div><b>Human hours</b><span>0</span></div>
+      <div><b>Statistical strength</b><span>None before use; accrues afterwards if combined with E</span></div>
+      <div><b>Size</b><span>S to M</span></div>
+    </div>
+    <div class="body">
+      <div><h4>How it works</h4><p>The owner ticks a logged acknowledgement (&ldquo;this AI reviewer has not been validated on this protocol&rdquo;) and picks a scope: title/abstract only, a daily cap, and every AI opinion labelled &ldquo;unvalidated&rdquo; in the conflict view. The override auto-expires after N days or M records, and ends immediately if monitoring (E) shows poor agreement.</p></div>
+      <div><h4>Risks</h4><ul>
+        <li>Weakest methodologically. The joint Cochrane, Campbell, JBI and CEE statement expects users to show AI use does not compromise rigour, and says synthesists may need to pilot or calibrate a tool within their own synthesis.</li>
+        <li>In second-reviewer mode an AI miss does no direct harm when the human includes, but the human may defer to the AI in conflicts (automation bias), and reviewers will not read &ldquo;unvalidated&rdquo; labels forever.</li>
+        <li>Contradicts the ADR 0004 &ldquo;fail closed&rdquo; stance; needs an ADR amendment.</li>
+      </ul></div>
+      <div class="wide"><h4>What it needs in the product</h4><ul>
+        <li>Do <strong>not</strong> reuse <code>review_calibration_bundles</code> with a fake &ldquo;passing&rdquo; status. Its <code>status</code> check allows only <code>passing</code> and <code>failed</code>, and a faked row would be indistinguishable from real evidence in the audit export (<a href="../../crates/postgres/src/audit_export.rs"><code>audit_export.rs</code></a>). Use a separate <code>review_gate_overrides</code> table (who, when, scope, expiry, text of the acknowledgement) and a distinct admission origin.</li>
+        <li>Include the override in the audit export and in any methods-section text DeepRef generates.</li>
+      </ul></div>
+    </div>
+  </article>
+
+  <!-- E -->
+  <article class="strategy">
+    <header><div class="letter">E</div><div class="t"><h3>Continuous monitoring and automatic recalibration</h3><div>Keep measuring after the gate opens, and start a new calibration whenever the compiled review changes.</div></div><span class="chip good">Recommended with C</span></header>
+    <div class="facts">
+      <div><b>Records</b><span>Rolling window of the last 60 to 100 includes</span></div>
+      <div><b>Human hours</b><span>0 beyond normal conflict resolution</span></div>
+      <div><b>Strength</b><span>Detects drift; not a substitute for the first calibration</span></div>
+      <div><b>Size</b><span>M after C exists</span></div>
+    </div>
+    <div class="body">
+      <div><h4>How it works</h4><p>After approval, every resolved human-vs-AI pair keeps feeding the same metrics (conflicts already store <code>human_decision_before</code>, so the independent human opinion is preserved). If the rolling lower bound on sensitivity falls below a floor, or kappa collapses, the gate closes with a new refusal reason (<code>calibration_degraded</code>) and the banner says why. When the hash changes for any reason, the system flips the project back to shadow mode (C) automatically instead of just showing &ldquo;stale&rdquo;.</p></div>
+      <div><h4>Risks</h4><ul>
+        <li>After the gate opens, humans resolve conflicts with the AI&rsquo;s opinion visible, so later pairs are not independent. Keep measuring on the pre-resolution decision (already stored).</li>
+        <li>Rolling windows on rare includes are noisy; use the same interval math, not raw percentages.</li>
+        <li>Auto-pause can interrupt a team mid-screening; the notice must say what to do.</li>
+      </ul></div>
+      <div class="wide"><h4>What it needs in the product</h4><ul>
+        <li>Extend the <code>second_review_gate.refusal</code> check (migration 0040 allows only <code>calibration_stale</code>) with <code>calibration_degraded</code> and <code>recalibrating</code>.</li>
+        <li>On the stale path in <code>sweep_project</code>, switch the project to shadow collection instead of stopping. Notify the owner through the existing notifications feature.</li>
+      </ul></div>
+    </div>
+  </article>
+</section>
+
+<!-- ============ 3 ============ -->
+<section id="thresholds">
+  <h2>3. Recommended thresholds and sample sizes</h2>
+  <p class="lede">For a second reviewer, the metric that decides whether a record is lost is <strong>sensitivity (recall) on true includes</strong>. A false include only adds a conflict for a human to settle. Specificity therefore affects workload, not safety.</p>
+
+  <div class="callout info"><p><strong>The number that matters is the count of true includes, not total records.</strong> Recall is estimated from includes only, so with 5% prevalence you need 20 records to see one include.</p></div>
+
+  <h3>Precision of the recall estimate</h3>
+  <p class="meta">Exact (Clopper-Pearson) 95% two-sided intervals, computed for this document. &ldquo;Lower bound&rdquo; for 100% observed is the interval&rsquo;s lower end.</p>
+  <div class="tablewrap">
+  <table class="small">
+    <thead><tr><th class="num">True includes</th><th>If observed recall = 95%</th><th class="num">Width</th><th>If observed = 100%</th></tr></thead>
+    <tbody>
+      <tr><td class="num">20</td><td>75.1% to 99.9%</td><td class="num">25 pts</td><td>83.2% to 100%</td></tr>
+      <tr><td class="num">40</td><td>83.1% to 99.4%</td><td class="num">16 pts</td><td>91.2% to 100%</td></tr>
+      <tr><td class="num">60</td><td>86.1% to 99.0%</td><td class="num">13 pts</td><td>94.0% to 100%</td></tr>
+      <tr><td class="num">100</td><td>88.7% to 98.4%</td><td class="num">10 pts</td><td>96.4% to 100%</td></tr>
+      <tr><td class="num">150</td><td>89.8% to 97.7%</td><td class="num">8 pts</td><td>97.6% to 100%</td></tr>
+      <tr><td class="num">200</td><td>91.0% to 97.6%</td><td class="num">7 pts</td><td>98.2% to 100%</td></tr>
+      <tr><td class="num">300</td><td>91.9% to 97.2%</td><td class="num">5 pts</td><td>98.8% to 100%</td></tr>
+    </tbody>
+  </table>
+  </div>
+
+  <h3 style="margin-top:24px">Records you must screen to get that many includes</h3>
+  <p class="meta">Includes divided by include prevalence. Hours assume 45 s per record, one screener; double it for dual screening.</p>
+  <div class="tablewrap">
+  <table class="small">
+    <thead><tr><th class="num">True includes</th><th class="num">2% prevalence</th><th class="num">5%</th><th class="num">10%</th><th class="num">20%</th></tr></thead>
+    <tbody>
+      <tr><td class="num">30</td><td class="num">1,500</td><td class="num">600</td><td class="num">300</td><td class="num">150</td></tr>
+      <tr><td class="num">60</td><td class="num">3,000</td><td class="num">1,200</td><td class="num">600</td><td class="num">300</td></tr>
+      <tr><td class="num">100</td><td class="num">5,000</td><td class="num">2,000</td><td class="num">1,000</td><td class="num">500</td></tr>
+      <tr><td class="num">200</td><td class="num">10,000</td><td class="num">4,000</td><td class="num">2,000</td><td class="num">1,000</td></tr>
+      <tr><td colspan="5" class="meta">Single-screener hours at 60 includes: 37.5 h at 2%, 15 h at 5%, 7.5 h at 10%, 3.8 h at 20%.</td></tr>
+    </tbody>
+  </table>
+  </div>
+
+  <h3 style="margin-top:24px">How many misses can you tolerate</h3>
+  <p class="meta">Smallest number of includes at which the one-sided 95% lower bound on recall reaches the target, for a given number of misses.</p>
+  <div class="tablewrap">
+  <table class="small">
+    <thead><tr><th class="num">Misses allowed</th><th class="num">Lower bound at least 90%</th><th class="num">Lower bound at least 95%</th></tr></thead>
+    <tbody>
+      <tr><td class="num">0</td><td class="num">29 includes</td><td class="num">59 includes</td></tr>
+      <tr><td class="num">1</td><td class="num">46</td><td class="num">93</td></tr>
+      <tr><td class="num">2</td><td class="num">61</td><td class="num">124</td></tr>
+      <tr><td class="num">3</td><td class="num">76</td><td class="num">153</td></tr>
+      <tr><td class="num">5</td><td class="num">103</td><td class="num">208</td></tr>
+    </tbody>
+  </table>
+  </div>
+  <p class="meta" style="margin-top:8px">Proving a 95% lower bound is expensive (about 60 includes with zero misses, 124 with two). A 90% lower bound with a 95% point estimate is affordable and, for a second reviewer, defensible.</p>
+
+  <h3 style="margin-top:24px">Proposed gate rule (for screening, per stage)</h3>
+  <div class="card">
+    <ul style="margin:0; padding-left:20px">
+      <li><strong>Minimum evidence:</strong> at least 60 true includes observed under the current hash, and at least 300 records in total.</li>
+      <li><strong>Sensitivity:</strong> point estimate at least 95% <em>and</em> one-sided 95% lower bound at least 90%. At 61 includes this allows at most 2 misses (3 misses in 60 gives a lower bound of 87.6%, a fail).</li>
+      <li><strong>&ldquo;Maybe&rdquo; handling:</strong> keep the existing semantics (<code>maybe</code> retains the record, counts as abstention, never as a false negative).</li>
+      <li><strong>Specificity:</strong> report, do not gate. Optionally warn below 60%, where conflicts would swamp reviewers. Report the conflict rate directly; it is what users feel.</li>
+      <li><strong>Kappa:</strong> report AI-human kappa and compare to the human-human kappa where a pilot exists. Treat as a soft warning, not a hard gate (see below).</li>
+      <li><strong>Checkpoints:</strong> evaluate at 60, 80, 100 includes and so on, not after every record.</li>
+      <li><strong>Existing gate flags:</strong> <code>max_false_negative_rate</code> of 0.0 in the test fixture is a regression oracle for six toy cases. Do not copy it into production thresholds.</li>
+    </ul>
+  </div>
+
+  <h3 style="margin-top:24px">Kappa: how to read it</h3>
+  <div class="tablewrap">
+  <table class="small">
+    <thead><tr><th>Kappa</th><th>Landis &amp; Koch label</th></tr></thead>
+    <tbody>
+      <tr><td>below 0</td><td>Worse than chance</td></tr>
+      <tr><td>0.00 to 0.20</td><td>Slight</td></tr>
+      <tr><td>0.21 to 0.40</td><td>Fair</td></tr>
+      <tr><td>0.41 to 0.60</td><td>Moderate</td></tr>
+      <tr><td>0.61 to 0.80</td><td>Substantial</td></tr>
+      <tr><td>0.81 to 1.00</td><td>Almost perfect</td></tr>
+    </tbody>
+  </table>
+  </div>
+  <p class="meta" style="margin-top:8px">McHugh (2012) argues these bands are too lenient for health research. Kappa also drops sharply when includes are rare, even with high raw agreement, and an over-inclusive but safe reviewer scores low. That is why it is reported, not gated.</p>
+
+  <div class="callout warn"><p><strong>What the literature says about LLM screeners.</strong> Results vary widely by model, prompt and review. A 2025 meta-analysis reports pooled sensitivity and specificity near 90% across 14 LLM-based tools (Kim et al.); a pre-registered GPT-4 study found performance dropped a lot after correcting for chance agreement and class imbalance, with &ldquo;human-like&rdquo; results only for full-text screening with well-designed prompts (Khraisha et al.); and zero-shot LLM studies show that choosing the decision cutoff to hit a target recall is what makes them usable (Wang et al.). The lesson for DeepRef: <strong>measure per project and per build</strong>, do not inherit a published number.</p></div>
+</section>
+
+<!-- ============ 4 ============ -->
+<section id="redo">
+  <h2>4. When calibration must be redone</h2>
+  <p class="lede">As built, the gate already treats all of the following as stale. The table says whether that matches methodological need.</p>
+  <div class="tablewrap">
+  <table class="stack">
+    <thead><tr><th>Change</th><th>Gate today</th><th>Needs recalibration?</th></tr></thead>
+    <tbody>
+      <tr><td data-label="Change"><strong>Protocol amendment</strong> (criteria edited, new published version)</td><td data-label="Gate today">Stale. Protocol id and criteria are hashed.</td><td data-label="Needed?"><span class="chip bad">Yes</span> The thing being measured changed. Observations under the old protocol cannot be reused.</td></tr>
+      <tr><td data-label="Change"><strong>Prompt, schema, policy, parser or workflow edit</strong></td><td data-label="Gate today">Stale. Content is hashed, not just a version label.</td><td data-label="Needed?"><span class="chip bad">Yes</span> for anything that changes what the model sees or how output is read. A pure comment edit would also invalidate; acceptable.</td></tr>
+      <tr><td data-label="Change"><strong>Model, version or parameters</strong></td><td data-label="Gate today">Stale. Provider, model, model_version and parameters are hashed.</td><td data-label="Needed?"><span class="chip bad">Yes</span></td></tr>
+      <tr><td data-label="Change"><strong>Any Rust source change or dependency bump</strong></td><td data-label="Gate today">Stale (finding B).</td><td data-label="Needed?"><span class="chip warn">Mostly no</span> An HTTP route fix does not change screening. This is the over-strict case. Decide the runtime-identity scope (decision 6).</td></tr>
+      <tr><td data-label="Change"><strong>Provider change: Z.AI to OpenCode Go, same model name glm-5.3-flash</strong></td><td data-label="Gate today">Depends on how the switch is done (below).</td><td data-label="Needed?"><span class="chip bad">Yes, treat it as new</span></td></tr>
+      <tr><td data-label="Change"><strong>Adding a stage or switching a stage's autonomy level</strong></td><td data-label="Gate today">Level does not change the hash; see finding D on stages.</td><td data-label="Needed?"><span class="chip warn">Per stage</span> Title/abstract evidence does not transfer to full-text screening (different model profile, different input).</td></tr>
+    </tbody>
+  </table>
+  </div>
+
+  <h3 style="margin-top:24px">The Z.AI to OpenCode Go switch</h3>
+  <div class="grid2">
+    <div class="finding">
+      <h3>What the code does now</h3>
+      <p>The provider label <code>"zai"</code> is hard-coded in <a href="../../crates/http-api/src/lib.rs"><code>crates/http-api/src/lib.rs</code></a> and <a href="../../services/worker/src/lib.rs"><code>services/worker/src/lib.rs</code></a>, and is written into <code>ai_model_routes.provider</code> by <code>ensure_default_model_routes</code> (<a href="../../crates/postgres/src/ai_usage.rs"><code>ai_usage.rs</code></a>). That function inserts routes only when <em>no</em> enabled route exists for a profile, and sets <code>model_version</code> equal to the model name.</p>
+    </div>
+    <div class="finding">
+      <h3>Does it invalidate calibrations?</h3>
+      <p><strong>Only if the identity changes, and that is the trap.</strong> New route rows labelled <code>opencode-go</code> change the hash: calibrations go stale (correct). But if someone only changes <code>ZAI_BASE_URL</code> and keeps label and model name, the hash is <strong>unchanged</strong> and a calibration made on Z.AI would silently keep admitting runs on a different serving stack.</p>
+      <p>In practice, today no project has a calibration (finding A), and the code change for the switch also changes the build hash (finding B). So nothing real is lost now, but the policy should be fixed before the first calibration exists.</p>
+    </div>
+  </div>
+  <div class="callout info"><p><strong>Recommendation:</strong> treat any provider change as a new model identity, even with the same model name. A host can differ in quantization, context limit, default sampling, safety filtering or rate-limit behaviour, and DeepRef cannot see that. Relabel the provider, disable the old routes, and let the new route start a fresh warm-up. Do the switch <em>before</em> starting calibration (C) so the first evidence is collected on the stack you will keep.</p></div>
+</section>
+
+<!-- ============ 5 ============ -->
+<section id="recommendation">
+  <h2>5. Recommended path</h2>
+  <p class="lede">Shadow-mode warm-up, owner approval, then continuous monitoring. Pilot sets stay available as an opt-in for teams that want proof before their first screened record.</p>
+
+  <div class="card">
+    <ol style="margin:0; padding-left:20px">
+      <li style="margin-bottom:10px"><strong>Phase 0, fix the foundations (S, about 2 days).</strong> (a) Decide and implement what the runtime identity covers (decision 6). (b) Make the bundle lookup stage-aware (finding D) and add a test that two bundles coexist. (c) Settle the provider-label rule and do the OpenCode Go switch first. (d) Replace the banner copy with the actual state and owner action.</li>
+      <li style="margin-bottom:10px"><strong>Phase 1, shadow-mode calibration (C, M).</strong> Observations table, shadow origin, checkpoint metrics with exact intervals, owner approval screen, bundle insert. Title/abstract first; full-text later, because full-text includes arrive later and need their own evidence.</li>
+      <li style="margin-bottom:10px"><strong>Phase 2, monitoring and auto-recalibration (E, M).</strong> Rolling metrics, the <code>calibration_degraded</code> and <code>recalibrating</code> refusals, owner notifications.</li>
+      <li><strong>Later, optional.</strong> The pilot set (A) for projects that want to start earlier, and a benchmark set (B) as a release-time regression alarm for the model and prompt. Skip D unless a deadline forces it, and then only time-boxed and logged.</li>
+    </ol>
+  </div>
+
+  <h3 style="margin-top:20px">Why this order</h3>
+  <ul>
+    <li><strong>No extra human work.</strong> A and B spend expert hours on records that would be screened anyway; C reuses decisions the team makes regardless.</li>
+    <li><strong>Evidence is project- and build-specific.</strong> That is exactly what the hash demands, and what the position statement of Cochrane, Campbell, JBI and CEE implies when it says tools may need to be piloted or calibrated in the synthesis at hand.</li>
+    <li><strong>Safety does not depend on the gate alone.</strong> In second-reviewer mode the AI cannot exclude anything; the human decision stands unless a person resolves a conflict. The gate protects against wasted reviewer attention and automation bias, and keeps the audit story clean.</li>
+    <li><strong>The cost is delay.</strong> At 5% prevalence the AI starts contributing after roughly 1,200 human-decided records. For a 4,000-record search that is 30% of the title/abstract work. If that is too slow, run a small pilot (A) on 300 records alongside, or accept D for a short, logged period.</li>
+  </ul>
+  <p class="meta">Caveat: single-human reference decisions understate how good the AI is where it finds studies the human missed, and overstate it where the human and AI make the same mistake. The full-text-included reference reduces the first problem but not the second.</p>
+</section>
+
+<!-- ============ 6 ============ -->
+<section id="decisions">
+  <h2>6. Decisions needed from you</h2>
+  <p class="lede">Dashed chips mark my recommendation. Your picks are saved in this browser only; use the summary box at the bottom to copy them back to the team.</p>
+
+  <form id="decisions-form" onsubmit="return false">
+    <div class="decision" data-key="strategy">
+      <h3>1. Primary strategy</h3>
+      <p class="q">Which strategy do we build first?</p>
+      <div class="opts">
+        <label class="rec"><input type="radio" name="strategy" value="C shadow-mode warm-up + E monitoring"><span>C + E: shadow warm-up with monitoring</span></label>
+        <label><input type="radio" name="strategy" value="A project pilot set"><span>A: project pilot set</span></label>
+        <label><input type="radio" name="strategy" value="B benchmark set first"><span>B: benchmark first</span></label>
+        <label><input type="radio" name="strategy" value="D owner override"><span>D: owner override</span></label>
+        <label><input type="radio" name="strategy" value="A + C hybrid"><span>A + C hybrid</span></label>
+      </div>
+    </div>
+
+    <div class="decision" data-key="reference">
+      <h3>2. Reference standard for recall</h3>
+      <p class="q">What counts as a true include?</p>
+      <div class="opts">
+        <label class="rec"><input type="radio" name="reference" value="Final inclusion after full text, human title/abstract as early proxy"><span>Final inclusion, with human T/A as early proxy</span></label>
+        <label><input type="radio" name="reference" value="Human title/abstract decision only"><span>Human T/A decision only</span></label>
+        <label><input type="radio" name="reference" value="Dual-adjudicated pilot only"><span>Dual-adjudicated pilot only</span></label>
+      </div>
+    </div>
+
+    <div class="decision" data-key="sens">
+      <h3>3. Sensitivity rule</h3>
+      <p class="q">Threshold to open the gate (one-sided 95% lower bound)</p>
+      <div class="opts">
+        <label class="rec"><input type="radio" name="sens" value="Point >= 95% and lower bound >= 90%"><span>Point 95% and lower bound 90%</span></label>
+        <label><input type="radio" name="sens" value="Point >= 95% and lower bound >= 95%"><span>Point 95% and lower bound 95% (about 2x the data)</span></label>
+        <label><input type="radio" name="sens" value="Point >= 90% only"><span>Point 90% only</span></label>
+      </div>
+    </div>
+
+    <div class="decision" data-key="minincl">
+      <h3>4. Minimum true includes before checking</h3>
+      <div class="opts">
+        <label><input type="radio" name="minincl" value="30 includes"><span>30</span></label>
+        <label class="rec"><input type="radio" name="minincl" value="60 includes"><span>60</span></label>
+        <label><input type="radio" name="minincl" value="100 includes"><span>100</span></label>
+      </div>
+    </div>
+
+    <div class="decision" data-key="spec">
+      <h3>5. Specificity and kappa</h3>
+      <p class="q">Gate on them, or report only?</p>
+      <div class="opts">
+        <label class="rec"><input type="radio" name="spec" value="Report only; warn if specificity < 60%"><span>Report; warn below 60% specificity</span></label>
+        <label><input type="radio" name="spec" value="Hard floor on specificity"><span>Hard floor on specificity</span></label>
+        <label><input type="radio" name="spec" value="Hard floor on kappa"><span>Hard floor on kappa</span></label>
+      </div>
+    </div>
+
+    <div class="decision" data-key="runtime">
+      <h3>6. Runtime identity in the hash</h3>
+      <p class="q">What should invalidate a calibration beyond protocol, prompt and model?</p>
+      <div class="opts">
+        <label><input type="radio" name="runtime" value="Keep: any Rust source change"><span>Keep as is (any source change)</span></label>
+        <label class="rec"><input type="radio" name="runtime" value="Narrow to review engine crates only"><span>Narrow to review/AI crates and review-definitions</span></label>
+        <label><input type="radio" name="runtime" value="Explicit review-engine version string"><span>Explicit, manually bumped engine version</span></label>
+      </div>
+    </div>
+
+    <div class="decision" data-key="provider">
+      <h3>7. Provider switch (Z.AI to OpenCode Go)</h3>
+      <div class="opts">
+        <label class="rec"><input type="radio" name="provider" value="New provider label, invalidates, switch before calibrating"><span>New label, treat as new, switch before calibrating</span></label>
+        <label><input type="radio" name="provider" value="Keep zai label, same model name"><span>Keep label (calibrations survive)</span></label>
+      </div>
+    </div>
+
+    <div class="decision" data-key="approver">
+      <h3>8. Who approves a bundle</h3>
+      <p class="q">The code currently has no approver at all.</p>
+      <div class="opts">
+        <label class="rec"><input type="radio" name="approver" value="Project owner, name recorded in reviewer_metadata"><span>Project owner</span></label>
+        <label><input type="radio" name="approver" value="Owner plus a second named reviewer"><span>Owner plus second reviewer</span></label>
+        <label><input type="radio" name="approver" value="Platform operator only"><span>Platform operator only</span></label>
+      </div>
+    </div>
+
+    <div class="decision" data-key="stages">
+      <h3>9. Stage scope for the first release</h3>
+      <div class="opts">
+        <label class="rec"><input type="radio" name="stages" value="Title/abstract first, full text later"><span>Title/abstract first</span></label>
+        <label><input type="radio" name="stages" value="Both stages together"><span>Both stages together</span></label>
+      </div>
+    </div>
+
+    <div class="decision" data-key="monitor">
+      <h3>10. Auto-pause on degradation</h3>
+      <div class="opts">
+        <label class="rec"><input type="radio" name="monitor" value="Yes: pause and return to shadow mode when rolling lower bound < 85%"><span>Yes, pause below 85% lower bound</span></label>
+        <label><input type="radio" name="monitor" value="Alert only, never pause"><span>Alert only</span></label>
+        <label><input type="radio" name="monitor" value="No monitoring now"><span>Not now</span></label>
+      </div>
+    </div>
+
+    <div class="decision" data-key="override">
+      <h3>11. Owner override (D)</h3>
+      <div class="opts">
+        <label class="rec"><input type="radio" name="override" value="Do not offer"><span>Do not offer</span></label>
+        <label><input type="radio" name="override" value="Offer, time-boxed and logged, title/abstract only"><span>Offer, time-boxed and logged</span></label>
+      </div>
+    </div>
+  </form>
+
+  <div class="btnrow">
+    <button type="button" id="summarize">Build summary</button>
+    <button type="button" class="ghost" id="copy">Copy</button>
+    <button type="button" class="ghost" id="reset">Clear choices</button>
+  </div>
+  <textarea id="summary" readonly aria-label="Summary of decisions" placeholder="Your choices appear here."></textarea>
+</section>
+
+<!-- ============ refs ============ -->
+<section id="sources">
+  <h2>Sources</h2>
+  <p class="lede">Repository paths are relative links from <code>docs/decisions/</code>. External sources were retrieved in this session; where I read only an abstract or search summary, I say so.</p>
+  <ol class="refs-list">
+    <li>Flemyng E, et al. <a href="https://pmc.ncbi.nlm.nih.gov/articles/PMC12594113/">Position statement on artificial intelligence (AI) use in evidence synthesis across Cochrane, the Campbell Collaboration, JBI, and the Collaboration for Environmental Evidence 2025</a>. <em>JBI Evidence Synthesis</em> 2025;23(11):2162-2166. Human oversight, transparent reporting, and possible need to pilot or calibrate a tool within the synthesis.</li>
+    <li>RAISE (Responsible use of AI in evidence SynthEsis): three-part guidance on practice, building/evaluating tools, and selecting/using tools. See the <a href="https://www.cochrane.org/events/recommendations-and-guidance-responsible-ai-evidence-synthesis">Cochrane event page</a>. I read only the description, not the papers, and did not confirm journal publication; no specific RAISE numeric threshold is cited here.</li>
+    <li><a href="https://www.cochrane.org/authors/handbooks-and-manuals/handbook/current/chapter-04">Cochrane Handbook for Systematic Reviews of Interventions, chapter 4</a>: pilot test eligibility criteria on a sample of reports; at least two people independently; single-person initial title/abstract screening described as acceptable; be over-inclusive at that stage. Handbook text read through a page summary; check the wording before quoting.</li>
+    <li>Waffenschmidt S, et al. <a href="https://www.ncbi.nlm.nih.gov/pmc/articles/PMC6599339/">Single screening versus conventional double screening for study selection in systematic reviews: a methodological systematic review</a>. <em>BMC Med Res Methodol</em> 2019. Median 5% of studies missed (range 0% to 58%); 3% for experienced, 13% for less experienced reviewers.</li>
+    <li>Callaghan MW, M&uuml;ller-Hansen F. <a href="https://link.springer.com/doi/10.1186/s13643-020-01521-4">Statistical stopping criteria for automated screening in systematic reviews</a>. <em>Systematic Reviews</em> 2020. Hypergeometric test against a recall target (for prioritised screening; related to, but not the same as, validating a classifier). Read through search summaries.</li>
+    <li>Kim et al. <a href="https://jmai.amegroups.org/article/view/10102/html">Systematic review and meta-analysis of LLM-based screening tools</a>. <em>Journal of Medical Artificial Intelligence</em> 2025. Reported 14 LLM-based models with pooled sensitivity and specificity near 90%. Read through a search summary only.</li>
+    <li>Khraisha Q, et al. <a href="https://arxiv.org/abs/2310.17526">Can large language models replace humans in the systematic review process? Evaluating GPT-4&rsquo;s efficacy in screening and extracting data from peer-reviewed and grey literature in multiple languages</a>. <em>Research Synthesis Methods</em> 2024 (doi 10.1002/jrsm.1715). Caution advised; chance-corrected screening performance lower than raw accuracy.</li>
+    <li>Wang S, et al. <a href="https://arxiv.org/abs/2401.06320">Zero-shot Generative Large Language Models for Systematic Review Screening Automation</a>. ECIR 2024. Eight LLMs; calibrating the cutoff to a target recall. Read through summaries.</li>
+    <li>Han B, Mathrani A, Susnjak T. <a href="https://arxiv.org/abs/2510.16091">Evaluating Prompting Strategies and Large Language Models in Systematic Literature Review Screening</a>. arXiv 2025. Zero-shot prompting maximised recall; abstract only.</li>
+    <li>Landis JR, Koch GG. The measurement of observer agreement for categorical data. <em>Biometrics</em> 1977;33:159-174 (kappa bands; secondary reproductions checked, original not retrieved). McHugh ML. <a href="https://www.biochemia-medica.com/en/journal/22/3/10.11613/BM.2012.031">Interrater reliability: the kappa statistic</a>. <em>Biochemia Medica</em> 2012;22(3):276-282.</li>
+    <li>Confidence intervals and sample-size tables in section 3: exact binomial (Clopper-Pearson), computed for this document with a short script; not taken from a source.</li>
+  </ol>
+  <p class="meta"><strong>Code and docs read:</strong> ADR 0004; <code>docs/acceptance/pr15-evals-hardening.md</code>; <code>crates/postgres/src/{second_review,review_calibration,review_runs,review_run_setup,ai_reviewer,ai_usage}.rs</code>; <code>crates/postgres/build.rs</code>; migrations 0016, 0022, 0029, 0040; <code>crates/review/src/{manifest,execution}.rs</code>; <code>crates/ai/src/evals.rs</code> and the PR15 fixture; <code>crates/http-api/src/{lib.rs,routes/autonomy.rs}</code>; <code>services/worker/src/{lib,second_review}.rs</code>; <code>ScreeningViewSwitch.svelte</code>.</p>
+</section>
+
+</div>
+
+<script>
+(function () {
+  var KEY = "deepref-calibration-decisions-v1";
+  var form = document.getElementById("decisions-form");
+  var box = document.getElementById("summary");
+  function load() {
+    try { return JSON.parse(localStorage.getItem(KEY) || "{}"); } catch (e) { return {}; }
+  }
+  function save(v) { try { localStorage.setItem(KEY, JSON.stringify(v)); } catch (e) {} }
+  function collect() {
+    var out = {};
+    form.querySelectorAll("input[type=radio]:checked").forEach(function (i) { out[i.name] = i.value; });
+    return out;
+  }
+  var saved = load();
+  Object.keys(saved).forEach(function (n) {
+    var el = form.querySelector('input[name="' + n + '"][value="' + saved[n].replace(/"/g, '\\"') + '"]');
+    if (el) el.checked = true;
+  });
+  form.addEventListener("change", function () { save(collect()); });
+  function summarize() {
+    var chosen = collect();
+    var lines = ["Calibration decisions (" + new Date().toISOString().slice(0, 10) + ")"];
+    form.querySelectorAll(".decision").forEach(function (d) {
+      var title = d.querySelector("h3").textContent;
+      var name = d.getAttribute("data-key");
+      lines.push("- " + title + " -> " + (chosen[name] || "(undecided)"));
+    });
+    box.value = lines.join("\n");
+  }
+  document.getElementById("summarize").addEventListener("click", summarize);
+  document.getElementById("copy").addEventListener("click", function () {
+    summarize();
+    box.select();
+    try { if (navigator.clipboard) navigator.clipboard.writeText(box.value); else document.execCommand("copy"); } catch (e) {}
+  });
+  document.getElementById("reset").addEventListener("click", function () {
+    form.querySelectorAll("input[type=radio]").forEach(function (i) { i.checked = false; });
+    save({}); box.value = "";
+  });
+})();
+</script>
+</body>
+</html>

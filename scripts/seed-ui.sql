@@ -2,7 +2,7 @@
 BEGIN;
 INSERT INTO projects (id, name, description, default_max_depth)
 VALUES ('00000000-0000-4000-8000-000000000201', 'Ambient AI in clinical practice',
-'Sample review · How does ambient documentation affect clinician workload and quality of care?', 2)
+'Sample review · How does ambient documentation affect clinician workload and quality of care?', 1)
 ON CONFLICT (id) DO NOTHING;
 
 CREATE TEMP TABLE ui_reports (ordinal integer, title text, year integer, citations integer) ON COMMIT DROP;

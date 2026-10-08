@@ -15,7 +15,7 @@ INSERT INTO settings (
 VALUES (
   1,
   'local@example.invalid',
-  2,
+  1,
   8,
   1,
   5,
@@ -31,7 +31,7 @@ VALUES (
   '00000000-0000-4000-8000-000000000001',
   'Local citation map',
   'Deterministic fixture data loaded by just seed.',
-  2,
+  1,
   '2026-01-01T00:00:00Z',
   '2026-01-01T00:00:00Z'
 )

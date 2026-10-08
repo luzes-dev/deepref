@@ -70,6 +70,41 @@ While running interactively in the terminal, keyboard shortcuts allow instant sw
 - `k`: switch to `check`
 - `d`: generate and browse Rust documentation
 
+## AI provider
+
+DeepRef's AI runs on the **OpenCode Go** subscription through its OpenAI-compatible chat-completions API. The default model is `glm-5.3-flash`.
+
+1. Subscribe in the OpenCode console and copy the API key.
+2. Put it in `.env.local` (gitignored), never in `.env`:
+
+   ```bash
+   OPENCODE_API_KEY=<your key>
+   ```
+
+3. Check the key and the model list. This call does not run inference:
+
+   ```bash
+   curl -s -H "Authorization: Bearer $OPENCODE_API_KEY" https://opencode.ai/zen/go/v1/models | head -c 300
+   ```
+
+4. Restart the API and worker. Settings → AI shows the provider as "OpenCode Go" and the model.
+
+Settings:
+
+| Variable | Default | Meaning |
+| --- | --- | --- |
+| `DEEPREF_AI_PROVIDER` | `opencode-go` | `opencode-go`, or `zai` for the retired legacy provider |
+| `OPENCODE_API_KEY` | none | Required for OpenCode Go. Without it AI features are off |
+| `OPENCODE_BASE_URL` | `https://opencode.ai/zen/go/v1` | Endpoint override |
+| `DEEPREF_AI_DEFAULT_MODEL` | `glm-5.3-flash` | Model for new AI routes |
+| `DEEPREF_AI_MODEL_PRICES` | built-in | Price overrides: `provider/model=input:output`, US$ per million tokens |
+
+**Limits and budget.** OpenCode Go caps each model in dollars: a 5-hour window (20% of the monthly cap), a weekly window (50%) and the monthly cap. When a cap is spent, DeepRef stops that call without retrying and reports "AI subscription limit reached; try again later". The public docs do not give the provider's error text, so DeepRef matches the usual wording for usage, spending, weekly and monthly limits.
+
+**Budget is a soft guard.** A subscription has no per-token bill. Each project's monthly budget is therefore counted in US dollars, at the published per-token rate for each model (the same numbers OpenCode lists for its pay-as-you-go plan). The usage ledger records every call, streamed or not. It is an estimate for guarding spend, not an invoice.
+
+**Legacy Z.AI.** Z.AI is retired. `ZAI_API_KEY` and `ZAI_BASE_URL` are ignored unless `DEEPREF_AI_PROVIDER=zai`, and then DeepRef logs a deprecation warning at startup. Routes created under the old `zai` label are re-pointed to the configured provider when it changes, so model identity and calibration always name the real endpoint. Past runs and ledger rows keep their original label.
+
 ## Seed data
 
 In another terminal, run:
