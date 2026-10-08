@@ -35,6 +35,7 @@ pub enum AgentToolName {
     SearchProjectReports,
     GetScreeningState,
     GetStudy,
+    ListStudies,
     GetAppraisal,
     ProposeScreeningDecision,
     ProposeDuplicateMerge,
@@ -45,7 +46,7 @@ pub enum AgentToolName {
 }
 
 impl AgentToolName {
-    pub const ALL: [Self; 14] = [
+    pub const ALL: [Self; 15] = [
         Self::GetProjectProtocol,
         Self::GetReport,
         Self::ReadDocumentBlocks,
@@ -53,6 +54,7 @@ impl AgentToolName {
         Self::SearchProjectReports,
         Self::GetScreeningState,
         Self::GetStudy,
+        Self::ListStudies,
         Self::GetAppraisal,
         Self::ProposeScreeningDecision,
         Self::ProposeDuplicateMerge,
@@ -71,6 +73,7 @@ impl AgentToolName {
             Self::SearchProjectReports => "search_project_reports",
             Self::GetScreeningState => "get_screening_state",
             Self::GetStudy => "get_study",
+            Self::ListStudies => "list_studies",
             Self::GetAppraisal => "get_appraisal",
             Self::ProposeScreeningDecision => "propose_screening_decision",
             Self::ProposeDuplicateMerge => "propose_duplicate_merge",
@@ -95,6 +98,7 @@ impl AgentToolName {
                 | Self::SearchProjectReports
                 | Self::GetScreeningState
                 | Self::GetStudy
+                | Self::ListStudies
                 | Self::GetAppraisal
         )
     }
@@ -112,6 +116,7 @@ impl AgentToolName {
             | Self::SearchProjectReports
             | Self::GetScreeningState
             | Self::GetStudy
+            | Self::ListStudies
             | Self::GetAppraisal => AgentToolPolicy {
                 action: RequestedAction::Read,
                 authority: AuthorityTier::ReadOnly,
@@ -200,6 +205,15 @@ pub struct StudyToolArgs {
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
+pub struct ListStudiesToolArgs {
+    pub project_id: ProjectId,
+    /// 1 to 50; defaults to 25 when omitted.
+    #[serde(default)]
+    pub limit: Option<u16>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
 pub struct AppraisalToolArgs {
     pub project_id: ProjectId,
     pub report_id: ReportId,
@@ -268,6 +282,7 @@ pub enum AgentTool {
     SearchProjectReports(SearchProjectReportsToolArgs),
     GetScreeningState(ScreeningStateToolArgs),
     GetStudy(StudyToolArgs),
+    ListStudies(ListStudiesToolArgs),
     GetAppraisal(AppraisalToolArgs),
     ProposeScreeningDecision(ScreeningDecisionProposalArgs),
     ProposeDuplicateMerge(DuplicateMergeProposalArgs),
@@ -312,6 +327,7 @@ impl AgentTool {
             Self::SearchProjectReports(_) => AgentToolName::SearchProjectReports,
             Self::GetScreeningState(_) => AgentToolName::GetScreeningState,
             Self::GetStudy(_) => AgentToolName::GetStudy,
+            Self::ListStudies(_) => AgentToolName::ListStudies,
             Self::GetAppraisal(_) => AgentToolName::GetAppraisal,
             Self::ProposeScreeningDecision(_) => AgentToolName::ProposeScreeningDecision,
             Self::ProposeDuplicateMerge(_) => AgentToolName::ProposeDuplicateMerge,
@@ -331,6 +347,7 @@ impl AgentTool {
             Self::SearchProjectReports(args) => args.project_id,
             Self::GetScreeningState(args) => args.project_id,
             Self::GetStudy(args) => args.project_id,
+            Self::ListStudies(args) => args.project_id,
             Self::GetAppraisal(args) => args.project_id,
             Self::ProposeScreeningDecision(args) => args.project_id,
             Self::ProposeDuplicateMerge(args) => args.project_id,
@@ -386,6 +403,10 @@ impl AgentTool {
             Self::SearchProjectReports(args) => validate_search(&args.query, args.limit),
             Self::GetScreeningState(args) => validate_uuid(args.report_id.as_uuid()),
             Self::GetStudy(args) => validate_uuid(args.study_id.as_uuid()),
+            Self::ListStudies(args) => match args.limit {
+                Some(limit) if limit == 0 || limit > 50 => Err(AgentToolError::InvalidArguments),
+                _ => Ok(()),
+            },
             Self::GetAppraisal(args) => {
                 validate_uuid(args.report_id.as_uuid())?;
                 validate_definition(&args.definition_id, args.definition_version)
@@ -434,6 +455,7 @@ impl AgentTool {
             AgentToolName::SearchProjectReports => Self::SearchProjectReports(decode(args)?),
             AgentToolName::GetScreeningState => Self::GetScreeningState(decode(args)?),
             AgentToolName::GetStudy => Self::GetStudy(decode(args)?),
+            AgentToolName::ListStudies => Self::ListStudies(decode(args)?),
             AgentToolName::GetAppraisal => Self::GetAppraisal(decode(args)?),
             AgentToolName::ProposeScreeningDecision => {
                 Self::ProposeScreeningDecision(decode(args)?)
@@ -455,6 +477,7 @@ impl AgentTool {
             Self::SearchProjectReports(args) => Ok(AgentReadOperation::SearchProjectReports(args)),
             Self::GetScreeningState(args) => Ok(AgentReadOperation::GetScreeningState(args)),
             Self::GetStudy(args) => Ok(AgentReadOperation::GetStudy(args)),
+            Self::ListStudies(args) => Ok(AgentReadOperation::ListStudies(args)),
             Self::GetAppraisal(args) => Ok(AgentReadOperation::GetAppraisal(args)),
             Self::ProposeScreeningDecision(_)
             | Self::ProposeDuplicateMerge(_)
@@ -490,6 +513,7 @@ impl AgentTool {
             | Self::SearchProjectReports(_)
             | Self::GetScreeningState(_)
             | Self::GetStudy(_)
+            | Self::ListStudies(_)
             | Self::GetAppraisal(_) => Err(AgentToolError::Forbidden),
         }
     }
@@ -537,6 +561,7 @@ pub enum AgentReadOperation {
     SearchProjectReports(SearchProjectReportsToolArgs),
     GetScreeningState(ScreeningStateToolArgs),
     GetStudy(StudyToolArgs),
+    ListStudies(ListStudiesToolArgs),
     GetAppraisal(AppraisalToolArgs),
 }
 
@@ -550,6 +575,7 @@ impl AgentReadOperation {
             Self::SearchProjectReports(_) => AgentToolName::SearchProjectReports,
             Self::GetScreeningState(_) => AgentToolName::GetScreeningState,
             Self::GetStudy(_) => AgentToolName::GetStudy,
+            Self::ListStudies(_) => AgentToolName::ListStudies,
             Self::GetAppraisal(_) => AgentToolName::GetAppraisal,
         }
     }
@@ -644,6 +670,14 @@ pub enum AgentToolError {
     InvalidOutput,
     #[error("agent tool execution failed")]
     ExecutionFailed,
+    #[error("no AI provider is configured for free-form assistant replies")]
+    NotConfigured,
+    #[error("the project's monthly AI budget is exhausted")]
+    BudgetExceeded,
+    #[error("AI subscription limit reached; try again later")]
+    SubscriptionLimit,
+    #[error("the AI provider failed")]
+    ProviderFailed,
 }
 
 /// Project-scoped dispatcher.  It performs all boundary validation and policy

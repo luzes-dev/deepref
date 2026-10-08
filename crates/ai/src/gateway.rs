@@ -11,7 +11,8 @@ use serde_json::json;
 use tracing::debug;
 
 use crate::{
-    AiError, AiFuture, CompletionRequest, Embedding, GatewayCompletion, GroundingContextBuilder,
+    AiError, AiFuture, ChatCompletion, ChatGateway, ChatRequest, ChatTextSink, CompletionRequest,
+    Embedding, GatewayCompletion, GroundingContextBuilder,
 };
 
 pub trait AiGateway: Send + Sync {
@@ -26,16 +27,37 @@ pub trait EmbeddingGateway: Send + Sync {
     ) -> AiFuture<'a, Embedding>;
 }
 
+/// Model name that matches every model of a provider.
+pub const ANY_MODEL: &str = "*";
+
+type Adapters<T> = RwLock<BTreeMap<(String, String), Arc<T>>>;
+
 pub struct RoutedGateway {
-    adapters: RwLock<BTreeMap<(String, String), Arc<dyn AiGateway>>>,
+    adapters: Adapters<dyn AiGateway>,
+    chat_adapters: Adapters<dyn ChatGateway>,
 }
 
 impl Default for RoutedGateway {
     fn default() -> Self {
         Self {
             adapters: RwLock::new(BTreeMap::new()),
+            chat_adapters: RwLock::new(BTreeMap::new()),
         }
     }
+}
+
+fn lookup<T: ?Sized>(
+    registry: &Adapters<T>,
+    provider: &str,
+    model: &str,
+) -> Result<Option<Arc<T>>, AiError> {
+    let adapters = registry
+        .read()
+        .map_err(|_| AiError::Gateway("gateway registry lock is poisoned".to_owned()))?;
+    Ok(adapters
+        .get(&(provider.to_owned(), model.to_owned()))
+        .or_else(|| adapters.get(&(provider.to_owned(), ANY_MODEL.to_owned())))
+        .cloned())
 }
 
 impl RoutedGateway {
@@ -50,6 +72,31 @@ impl RoutedGateway {
             .map_err(|_| AiError::Gateway("gateway registry lock is poisoned".to_owned()))?
             .insert((provider.into(), model.into()), gateway);
         Ok(())
+    }
+    pub fn register_chat(
+        &self,
+        provider: impl Into<String>,
+        model: impl Into<String>,
+        gateway: Arc<dyn ChatGateway>,
+    ) -> Result<(), AiError> {
+        self.chat_adapters
+            .write()
+            .map_err(|_| AiError::Gateway("gateway registry lock is poisoned".to_owned()))?
+            .insert((provider.into(), model.into()), gateway);
+        Ok(())
+    }
+    /// Registers one provider adapter for both structured completion and chat.
+    pub fn register_provider<G>(
+        &self,
+        provider: impl Into<String> + Clone,
+        model: impl Into<String> + Clone,
+        gateway: Arc<G>,
+    ) -> Result<(), AiError>
+    where
+        G: AiGateway + ChatGateway + 'static,
+    {
+        self.register(provider.clone(), model.clone(), gateway.clone())?;
+        self.register_chat(provider, model, gateway)
     }
     pub fn register_adapter<G>(
         &self,
@@ -66,22 +113,50 @@ impl RoutedGateway {
 
 impl AiGateway for RoutedGateway {
     fn complete<'a>(&'a self, request: CompletionRequest) -> AiFuture<'a, GatewayCompletion> {
-        let key = (request.route.provider.clone(), request.route.model.clone());
-        let adapter = match self.adapters.read() {
-            Ok(adapters) => adapters.get(&key).cloned(),
-            Err(_) => {
-                return Box::pin(async {
-                    Err(AiError::Gateway(
-                        "gateway registry lock is poisoned".to_owned(),
-                    ))
-                });
-            }
-        };
         Box::pin(async move {
-            let adapter = adapter.ok_or_else(|| {
+            let adapter = lookup(
+                &self.adapters,
+                &request.route.provider,
+                &request.route.model,
+            )?
+            .ok_or_else(|| {
                 AiError::Gateway("no adapter is registered for the resolved route".to_owned())
             })?;
             adapter.complete(request).await
+        })
+    }
+}
+
+impl ChatGateway for RoutedGateway {
+    fn chat<'a>(&'a self, request: ChatRequest) -> AiFuture<'a, ChatCompletion> {
+        Box::pin(async move {
+            let adapter = lookup(
+                &self.chat_adapters,
+                &request.route.provider,
+                &request.route.model,
+            )?
+            .ok_or_else(|| {
+                AiError::Gateway("no chat adapter is registered for the resolved route".to_owned())
+            })?;
+            adapter.chat(request).await
+        })
+    }
+
+    fn chat_streaming<'a>(
+        &'a self,
+        request: ChatRequest,
+        on_text: ChatTextSink<'a>,
+    ) -> AiFuture<'a, ChatCompletion> {
+        Box::pin(async move {
+            let adapter = lookup(
+                &self.chat_adapters,
+                &request.route.provider,
+                &request.route.model,
+            )?
+            .ok_or_else(|| {
+                AiError::Gateway("no chat adapter is registered for the resolved route".to_owned())
+            })?;
+            adapter.chat_streaming(request, on_text).await
         })
     }
 }
@@ -178,4 +253,29 @@ where
             Embedding::new(value.vec.into_iter().map(|item| item as f32).collect())
         })
     }
+}
+
+/// Builds the production gateway stack for an OpenAI-compatible provider
+/// (`opencode-go`, or the legacy `zai`): the provider adapter registered for
+/// every model of `provider`, wrapped so the project budget is enforced, every
+/// call is priced with `prices`, and usage is recorded. Routes must carry the
+/// same `provider` label, because the router looks adapters up by it.
+pub fn build_metered_provider(
+    provider: &str,
+    base_url: &str,
+    api_key: &str,
+    ledger: Arc<dyn crate::UsageLedger>,
+    prices: crate::PriceBook,
+) -> Result<Arc<crate::MeteredGateway<RoutedGateway>>, AiError> {
+    let dialect = crate::ProviderDialect::from_id(provider)
+        .ok_or_else(|| AiError::Gateway("AI provider is not supported".to_owned()))?;
+    let routed = RoutedGateway::default();
+    routed.register_provider(
+        provider,
+        ANY_MODEL,
+        Arc::new(crate::OpenAiCompatGateway::new(dialect, base_url, api_key)?),
+    )?;
+    Ok(Arc::new(
+        crate::MeteredGateway::new(routed, ledger).with_prices(prices),
+    ))
 }

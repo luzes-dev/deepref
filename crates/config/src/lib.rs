@@ -1,3 +1,4 @@
+mod ai;
 mod database;
 mod environment;
 mod error;
@@ -5,6 +6,10 @@ mod telemetry;
 
 use std::collections::HashMap;
 
+pub use ai::{
+    AiProviderConfig, AiProviderKind, DEFAULT_AI_MODEL, DEFAULT_OPENCODE_BASE_URL,
+    DEFAULT_ZAI_BASE_URL, ModelPriceOverride, load_dotenv_files,
+};
 pub use database::DatabaseConfig;
 pub use environment::Environment;
 pub use error::ConfigError;

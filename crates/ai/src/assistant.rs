@@ -92,7 +92,7 @@ pub fn assistant_tool_declarations() -> Vec<ToolDeclaration> {
         },
         ToolDeclaration {
             name: "get_report".to_owned(),
-            description: "Retrieve bibliographic metadata and acquisition details for a report."
+            description: "Retrieve bibliographic metadata for a report, its documents (with status; a document with status available has full text) and the parsed section outline. Use the document ids with read_document_blocks or search_document."
                 .to_owned(),
             parameters: json!({
                 "type": "object",
@@ -138,13 +138,13 @@ pub fn assistant_tool_declarations() -> Vec<ToolDeclaration> {
         ToolDeclaration {
             name: "search_project_reports".to_owned(),
             description:
-                "Search bibliographic reports across the project by title, abstract, or authors."
+                "Search bibliographic reports across the project by title, abstract, or authors. Any of the words can match; the best matches come first. Pass the key terms, not a whole sentence."
                     .to_owned(),
             parameters: json!({
                 "type": "object",
                 "properties": {
                     "project_id": { "type": "string", "format": "uuid", "description": "Project identifier" },
-                    "query": { "type": "string", "description": "Search query terms" },
+                    "query": { "type": "string", "description": "Key terms, for example: fitbit steps women" },
                     "limit": { "type": "integer", "minimum": 1, "maximum": 100, "description": "Maximum reports to return" }
                 },
                 "required": ["project_id", "query", "limit"]
@@ -175,6 +175,20 @@ pub fn assistant_tool_declarations() -> Vec<ToolDeclaration> {
                     "study_id": { "type": "string", "format": "uuid", "description": "Study identifier" }
                 },
                 "required": ["project_id", "study_id"]
+            }),
+        },
+        ToolDeclaration {
+            name: "list_studies".to_owned(),
+            description:
+                "List the studies in the project with their design and how many reports each one groups. Use it to find a study id before get_study or a classification."
+                    .to_owned(),
+            parameters: json!({
+                "type": "object",
+                "properties": {
+                    "project_id": { "type": "string", "format": "uuid", "description": "Project identifier" },
+                    "limit": { "type": "integer", "minimum": 1, "maximum": 50, "description": "Maximum studies to return" }
+                },
+                "required": ["project_id"]
             }),
         },
         ToolDeclaration {
@@ -314,6 +328,11 @@ pub enum AssistantStreamEvent {
     Token {
         delta: String,
     },
+    /// Replaces the answer text streamed so far with the stored reply, for the
+    /// rare case where the two differ in more than an appended part.
+    Replace {
+        text: String,
+    },
     ToolStart {
         tool: String,
         tool_call_id: String,
@@ -328,6 +347,14 @@ pub enum AssistantStreamEvent {
         tool: String,
         review_run_id: Uuid,
         status_path: String,
+    },
+    /// Sent as soon as a turn starts so the client can show progress.
+    Status {
+        message: String,
+    },
+    /// The assistant ended the turn with a plan awaiting confirmation.
+    PlanProposed {
+        plan: Value,
     },
     Done {
         message_id: Uuid,
@@ -528,26 +555,24 @@ where
         });
     }
 
-    let final_answer = if !tool_results.is_empty() {
-        if let Some(first_res) = tool_results.first() {
-            if let Some(run_id) = first_res.proposal_review_run_id {
-                format!(
-                    "I have submitted the requested proposal to the review queue for human sign-off (review run {}). Scientific truth remains protected until verified.",
-                    run_id
-                )
-            } else if first_res.tool == "trigger_workflow" {
-                "The background automation workflow has been scheduled successfully.".to_owned()
-            } else {
-                format!(
-                    "Tool execution completed successfully for `{}`.",
-                    first_res.tool
-                )
-            }
-        } else {
-            "Action completed.".to_owned()
-        }
+    // Free-form replies need a language-model provider; without one the turn
+    // must fail explicitly instead of pretending to answer.
+    if tool_results.is_empty() {
+        return Err(AgentToolError::NotConfigured);
+    }
+    let first_res = &tool_results[0];
+    let final_answer = if let Some(run_id) = first_res.proposal_review_run_id {
+        format!(
+            "I have submitted the requested proposal to the review queue for human sign-off (review run {}). Scientific truth remains protected until verified.",
+            run_id
+        )
+    } else if first_res.tool == "trigger_workflow" {
+        "The background automation workflow has been scheduled successfully.".to_owned()
     } else {
-        "Hello! I am DeepRef's AI assistant. I can inspect protocol criteria, read full text document blocks, propose screening/deduplication/appraisal reviews, and trigger background automations. How can I assist your systematic review today?".to_owned()
+        format!(
+            "Tool execution completed successfully for `{}`.",
+            first_res.tool
+        )
     };
 
     for chunk in final_answer.split_inclusive(' ') {
@@ -632,11 +657,12 @@ mod tests {
     }
 
     #[test]
-    fn test_all_15_tool_declarations_present() {
+    fn test_all_16_tool_declarations_present() {
         let decls = assistant_tool_declarations();
-        assert_eq!(decls.len(), 15);
+        assert_eq!(decls.len(), 16);
         let names: Vec<&str> = decls.iter().map(|d| d.name.as_str()).collect();
         assert!(names.contains(&"get_project_protocol"));
+        assert!(names.contains(&"list_studies"));
         assert!(names.contains(&"propose_screening_decision"));
         assert!(names.contains(&"trigger_workflow"));
     }
@@ -733,7 +759,7 @@ mod tests {
             actor,
             project_policy: ProjectAiPolicy::default(),
             history: &[],
-            user_message: "Hello assistant",
+            user_message: r#"{"tool":"get_project_protocol","args":{"project_id":"00000000-0000-0000-0000-000000000001"}}"#,
         };
 
         let response = run_assistant_react_turn(input, &dispatcher, &tx)
@@ -758,5 +784,24 @@ mod tests {
                 .iter()
                 .any(|e| matches!(e, AssistantStreamEvent::Done { .. }))
         );
+    }
+
+    #[tokio::test]
+    async fn free_form_message_without_provider_is_not_configured() {
+        let project_id = ProjectId::new(Uuid::from_u128(1));
+        let actor = Actor::new(ActorKind::User, "test-user").unwrap();
+        let (tx, mut rx) = tokio::sync::mpsc::channel(32);
+        let input = AssistantTurnInput {
+            project_id,
+            actor,
+            project_policy: ProjectAiPolicy::default(),
+            history: &[],
+            user_message: "Which included reports still need a full-text PDF?",
+        };
+        let error = run_assistant_react_turn(input, &MockDispatcher::default(), &tx)
+            .await
+            .unwrap_err();
+        assert_eq!(error, AgentToolError::NotConfigured);
+        assert!(rx.try_recv().is_err());
     }
 }

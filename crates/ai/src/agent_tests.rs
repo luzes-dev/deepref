@@ -13,9 +13,9 @@ use crate::{
     AgentReadFuture, AgentReadOperation, AgentRuntime, AgentTool, AgentToolError,
     AgentToolExecutor, AgentToolName, AgentToolParseError, AppraisalAnswerProposalArgs,
     AppraisalToolArgs, BoundedAgentJson, ClassificationProposalArgs, DocumentBlocksToolArgs,
-    DuplicateMergeProposalArgs, ExtractionProposalArgs, ProjectAiPolicy, ProjectToolArgs,
-    ReportToolArgs, ScreeningDecisionProposalArgs, ScreeningStateToolArgs, SearchDocumentToolArgs,
-    SearchProjectReportsToolArgs, StudyGroupingProposalArgs, StudyToolArgs,
+    DuplicateMergeProposalArgs, ExtractionProposalArgs, ListStudiesToolArgs, ProjectAiPolicy,
+    ProjectToolArgs, ReportToolArgs, ScreeningDecisionProposalArgs, ScreeningStateToolArgs,
+    SearchDocumentToolArgs, SearchProjectReportsToolArgs, StudyGroupingProposalArgs, StudyToolArgs,
 };
 
 #[derive(Clone, Default)]
@@ -117,6 +117,10 @@ fn read_tools(project_id: ProjectId) -> Vec<AgentTool> {
             project_id,
             study_id,
         }),
+        AgentTool::ListStudies(ListStudiesToolArgs {
+            project_id,
+            limit: Some(5),
+        }),
         AgentTool::GetAppraisal(AppraisalToolArgs {
             project_id,
             report_id,
@@ -162,7 +166,7 @@ fn proposal_tools(project_id: ProjectId) -> Vec<AgentTool> {
 
 #[test]
 fn catalog_is_exact_and_policy_metadata_is_fixed() {
-    assert_eq!(AgentToolName::ALL.len(), 14);
+    assert_eq!(AgentToolName::ALL.len(), 15);
     assert_eq!(
         AgentToolName::ALL.map(AgentToolName::as_str),
         [
@@ -173,6 +177,7 @@ fn catalog_is_exact_and_policy_metadata_is_fixed() {
             "search_project_reports",
             "get_screening_state",
             "get_study",
+            "list_studies",
             "get_appraisal",
             "propose_screening_decision",
             "propose_duplicate_merge",
@@ -232,7 +237,7 @@ fn every_read_tool_reaches_only_read_executor() {
         .iter()
         .map(AgentReadOperation::name)
         .collect();
-    assert_eq!(names, AgentToolName::ALL[..8]);
+    assert_eq!(names, AgentToolName::ALL[..9]);
     assert!(executor.proposals.lock().expect("proposal lock").is_empty());
 }
 
@@ -260,7 +265,7 @@ fn every_proposal_tool_can_only_create_a_typed_proposal() {
 
     let proposals = executor.proposals.lock().expect("proposal lock");
     let names: Vec<_> = proposals.iter().map(AgentProposalOperation::name).collect();
-    assert_eq!(names, AgentToolName::ALL[8..]);
+    assert_eq!(names, AgentToolName::ALL[9..]);
     assert!(matches!(
         &proposals[1],
         AgentProposalOperation::ProposeDuplicateMerge(args)

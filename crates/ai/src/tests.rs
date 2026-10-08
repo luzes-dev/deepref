@@ -799,6 +799,7 @@ fn routed_gateway_dispatches_without_reconstructing_the_runner() {
         .register("b", "model", b.clone())
         .expect("register b");
     let request = |provider: &str| CompletionRequest {
+        project_id: None,
         route: ResolvedModel {
             provider: provider.to_owned(),
             ..route(provider)
@@ -910,7 +911,7 @@ fn full_text_screening_rejects_evidence_not_in_retrieved_context() {
             section_path: vec!["Results".to_owned()],
         }],
     );
-    assert_eq!(task.prompt_version(), "screening.full_text.v1");
+    assert_eq!(task.prompt_version(), "screening.full_text.v2");
     let output = ScreeningAnalysis {
         report_id: Uuid::from_u128(101),
         expected_revision: 3,
