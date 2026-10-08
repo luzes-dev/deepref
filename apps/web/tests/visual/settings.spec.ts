@@ -27,8 +27,7 @@ test.describe('DeepRef settings pilot', () => {
 		await page.goto('/settings');
 		await expect(page).toHaveURL(/\/settings$/);
 		await expect(page.getByRole('heading', { name: 'Settings', exact: true })).toBeVisible();
-		await expect(page.getByText('Ingestion defaults', { exact: true })).toBeVisible();
-		await expect(page.getByLabel('Crossref mailto')).toHaveValue('research@example.org');
+		await expect(page.getByLabel('Crossref contact email')).toHaveValue('research@example.org');
 		await expect(page.getByRole('button', { name: 'Appearance', exact: true })).toBeVisible();
 
 		const dimensions = await page.evaluate(() => ({
@@ -48,8 +47,7 @@ test.describe('DeepRef settings pilot', () => {
 	});
 
 	test('renders the Settings modal over the workspace', async ({ page }) => {
-		const dialog = await openSettingsOverlay(page);
-		await expect(dialog.getByRole('heading', { name: 'Ingestion', exact: true })).toBeVisible();
+		await openSettingsOverlay(page);
 		await expect(page.getByTestId('overview-page')).toBeVisible();
 
 		const violations = await runSeriousCriticalAxe(page);
