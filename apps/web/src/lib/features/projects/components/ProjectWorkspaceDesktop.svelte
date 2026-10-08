@@ -1,8 +1,6 @@
 <script lang="ts">
 	import type { Snippet } from 'svelte';
-	import { goto } from '$app/navigation';
 	import { page } from '$app/state';
-	import { resolve } from '$app/paths';
 	import * as Resizable from '@deepref/ui/resizable';
 	import type { PaneAPI } from 'paneforge';
 	import TopNavBar from '$lib/shell/TopNavBar.svelte';
@@ -13,6 +11,7 @@
 	} from '../constants';
 	import { useProjectWorkspaceContext } from '../context.svelte.js';
 	import IngestionInspector from './IngestionInspector.svelte';
+	import AcquisitionInspector from './AcquisitionInspector.svelte';
 	import ProjectSidebar from './ProjectSidebar.svelte';
 	import ProjectWorkspaceViewPanel from './ProjectWorkspaceViewPanel.svelte';
 	import {
@@ -28,7 +27,8 @@
 	const pathname = $derived(page.url.pathname);
 
 	const hasInspector = $derived(
-		(workspace.view === 'ingestions' && Boolean(workspace.selectedIngestion)) ||
+		(workspace.view === 'ingestions' &&
+			Boolean(workspace.selectedIngestion || workspace.selectedAcquisition)) ||
 			(['articles', 'graph', 'recommendations'].includes(workspace.view) &&
 				Boolean(workspace.selectedArticle))
 	);
@@ -57,18 +57,6 @@
 	});
 
 	const viewTitle = $derived(currentRoute?.title ?? currentRoute?.label ?? 'Overview');
-	const projectList = $derived(workspace.projects.map((p) => ({ id: p.id, name: p.name })));
-	const agentHref = $derived(
-		projectId ? resolve('/projects/[projectId]/assistant', { projectId }) : undefined
-	);
-
-	function handleSelectProject(id: string | null) {
-		if (id) {
-			workspace.selectProject(id);
-		} else {
-			void goto(resolve('/'));
-		}
-	}
 </script>
 
 <div class="h-full">
@@ -93,24 +81,17 @@
 		<Resizable.Handle withHandle />
 		<Resizable.Pane order={2} defaultSize={85} minSize={36}>
 			<div class="flex h-full min-w-0 flex-col">
-				<TopNavBar
-					title={viewTitle}
-					projects={projectList}
-					selectedProjectId={workspace.selectedProjectId}
-					onSelectProject={handleSelectProject}
-					onCreateProject={workspace.openProjectCreate}
-					{agentHref}
-				/>
+				<TopNavBar title={viewTitle} {projectId} />
 				<div class="min-h-0 flex-1">
-					{#if hasInspector}
-						<Resizable.PaneGroup
-							direction="horizontal"
-							class="h-full"
-							autoSaveId={PROJECT_WORKSPACE_INSPECTOR_LAYOUT_ID}
-						>
-							<Resizable.Pane order={1} defaultSize={75} minSize={36}>
-								<ProjectWorkspaceViewPanel {children} />
-							</Resizable.Pane>
+					<Resizable.PaneGroup
+						direction="horizontal"
+						class="h-full"
+						autoSaveId={PROJECT_WORKSPACE_INSPECTOR_LAYOUT_ID}
+					>
+						<Resizable.Pane order={1} defaultSize={75} minSize={36}>
+							<ProjectWorkspaceViewPanel {children} />
+						</Resizable.Pane>
+						{#if hasInspector}
 							<Resizable.Handle withHandle />
 							<Resizable.Pane
 								order={2}
@@ -125,10 +106,17 @@
 								class="min-w-12.5 transition-all duration-300 ease-in-out"
 							>
 								{#if workspace.view === 'ingestions'}
-									<IngestionInspector
-										collapsed={workspace.inspectorCollapsed.current}
-										onToggleCollapse={toggleInspector}
-									/>
+									{#if workspace.selectedAcquisition}
+										<AcquisitionInspector
+											collapsed={workspace.inspectorCollapsed.current}
+											onToggleCollapse={toggleInspector}
+										/>
+									{:else}
+										<IngestionInspector
+											collapsed={workspace.inspectorCollapsed.current}
+											onToggleCollapse={toggleInspector}
+										/>
+									{/if}
 								{:else if workspace.view === 'articles' || workspace.view === 'graph' || workspace.view === 'recommendations'}
 									<ArticleInspector
 										collapsed={workspace.inspectorCollapsed.current}
@@ -136,10 +124,8 @@
 									/>
 								{/if}
 							</Resizable.Pane>
-						</Resizable.PaneGroup>
-					{:else}
-						<ProjectWorkspaceViewPanel {children} />
-					{/if}
+						{/if}
+					</Resizable.PaneGroup>
 				</div>
 			</div>
 		</Resizable.Pane>

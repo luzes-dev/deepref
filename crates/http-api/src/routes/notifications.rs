@@ -21,6 +21,8 @@ pub(crate) struct NotificationDto {
     pub kind: String,
     pub severity: String,
     pub project_id: Option<Uuid>,
+    /// Name of the project the notification belongs to, for labelling rows.
+    pub project_name: Option<String>,
     pub title: String,
     pub body: Option<String>,
     #[schema(value_type = Object)]
@@ -43,6 +45,8 @@ pub(crate) struct MarkNotificationsReadRequest {
     /// Mark every notification read.
     #[serde(default)]
     pub all: bool,
+    /// With `all`, mark only this project's notifications read.
+    pub project_id: Option<Uuid>,
 }
 
 #[derive(Debug, Serialize, ToSchema)]
@@ -56,6 +60,14 @@ pub(crate) struct ListNotificationsParams {
     pub cursor: Option<String>,
     /// Page size from 1 through 100.
     pub limit: Option<i64>,
+    /// Only this project's notifications. Omit to list every project.
+    pub project_id: Option<Uuid>,
+}
+
+#[derive(Debug, Deserialize, IntoParams)]
+pub(crate) struct UnreadNotificationParams {
+    /// Count only this project's unread notifications. Omit for every project.
+    pub project_id: Option<Uuid>,
 }
 
 fn dto_from_record(record: deepref_postgres::NotificationRecord) -> NotificationDto {
@@ -65,6 +77,7 @@ fn dto_from_record(record: deepref_postgres::NotificationRecord) -> Notification
         kind: record.kind,
         severity: record.severity,
         project_id: record.project_id,
+        project_name: record.project_name,
         title: record.title,
         body: record.body,
         payload: record.payload,
@@ -78,6 +91,7 @@ fn dto_from_record(record: deepref_postgres::NotificationRecord) -> Notification
     path = "/notifications",
     operation_id = "listNotifications",
     tag = "notifications",
+    params(ListNotificationsParams),
     responses(
         (status = 200, description = "Notifications ordered newest first", body = PaginatedResponse<NotificationDto>),
         (status = 400, description = "Invalid pagination", body = ErrorResponse),
@@ -88,13 +102,14 @@ pub(crate) async fn list_notifications_route(
     State(state): State<AppState>,
     Query(params): Query<ListNotificationsParams>,
 ) -> Result<Json<PaginatedResponse<NotificationDto>>, ApiError> {
+    let project_id = params.project_id;
     let pagination = PaginationParams {
         cursor: params.cursor,
         limit: params.limit,
     };
     let limit = pagination.limit()?;
     let cursor: Option<i64> = pagination.decode()?;
-    let result = list_notifications(&state.pool, cursor, limit).await?;
+    let result = list_notifications(&state.pool, project_id, cursor, limit).await?;
     Ok(Json(page(
         result.items.into_iter().map(dto_from_record).collect(),
         limit as usize,
@@ -107,6 +122,7 @@ pub(crate) async fn list_notifications_route(
     path = "/notifications/unread-count",
     operation_id = "getUnreadNotificationCount",
     tag = "notifications",
+    params(UnreadNotificationParams),
     responses(
         (status = 200, description = "Unread count and newest notification revision", body = NotificationUnreadDto),
         (status = 500, description = "Internal server error", body = ErrorResponse)
@@ -114,8 +130,9 @@ pub(crate) async fn list_notifications_route(
 )]
 pub(crate) async fn get_unread_notification_count(
     State(state): State<AppState>,
+    Query(params): Query<UnreadNotificationParams>,
 ) -> Result<Json<NotificationUnreadDto>, ApiError> {
-    let summary = unread_summary(&state.pool).await?;
+    let summary = unread_summary(&state.pool, params.project_id).await?;
     Ok(Json(NotificationUnreadDto {
         count: summary.count,
         latest_revision: summary.latest_revision,
@@ -143,6 +160,7 @@ pub(crate) async fn mark_notifications_read_route(
         &deepref_postgres::MarkNotificationsRead {
             ids: input.ids,
             all: input.all,
+            project_id: input.project_id,
         },
     )
     .await?;

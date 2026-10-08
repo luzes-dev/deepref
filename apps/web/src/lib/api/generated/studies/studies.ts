@@ -27,6 +27,7 @@ import type {
 	StudyListDto,
 	StudyMembershipDto,
 	StudyMembershipRequest,
+	UngroupedReportDto,
 	UpdateStudyRequest
 } from '../models';
 
@@ -583,6 +584,135 @@ export const createCreateProjectStudy = <TError = ErrorType<ApiErrorBody>, TCont
 		queryClient
 	);
 };
+export type listUngroupedIncludedReportsResponse200 = {
+	data: UngroupedReportDto[];
+	status: 200;
+};
+
+export type listUngroupedIncludedReportsResponse500 = {
+	data: ApiErrorBody;
+	status: 500;
+};
+
+export type listUngroupedIncludedReportsResponseSuccess =
+	listUngroupedIncludedReportsResponse200 & {
+		headers: Headers;
+	};
+export type listUngroupedIncludedReportsResponseError = listUngroupedIncludedReportsResponse500 & {
+	headers: Headers;
+};
+
+export const getListUngroupedIncludedReportsUrl = (projectId: string) => {
+	return `/api/projects/${projectId}/studies/ungrouped-reports`;
+};
+
+export const listUngroupedIncludedReports = async (
+	projectId: string,
+	options?: Parameters<typeof customFetch>[1]
+): Promise<listUngroupedIncludedReportsResponseSuccess> => {
+	return customFetch<listUngroupedIncludedReportsResponseSuccess>(
+		getListUngroupedIncludedReportsUrl(projectId),
+		{
+			...options,
+			method: 'GET'
+		}
+	);
+};
+
+export const getListUngroupedIncludedReportsQueryKey = (projectId: string) => {
+	return [`/api/projects/${projectId}/studies/ungrouped-reports`] as const;
+};
+
+export const getListUngroupedIncludedReportsQueryOptions = <
+	TData = Awaited<ReturnType<typeof listUngroupedIncludedReports>>,
+	TError = ErrorType<ApiErrorBody>
+>(
+	projectId: string,
+	options?: {
+		query?: Partial<
+			CreateQueryOptions<
+				Awaited<ReturnType<typeof listUngroupedIncludedReports>>,
+				TError,
+				TData
+			>
+		>;
+		request?: SecondParameter<typeof customFetch>;
+	}
+) => {
+	const { query: queryOptions, request: requestOptions } = options ?? {};
+
+	const queryKey = queryOptions?.queryKey ?? getListUngroupedIncludedReportsQueryKey(projectId);
+
+	const queryFn: QueryFunction<Awaited<ReturnType<typeof listUngroupedIncludedReports>>> = ({
+		signal
+	}) => listUngroupedIncludedReports(projectId, { signal, ...requestOptions });
+
+	return {
+		queryKey,
+		queryFn,
+		enabled: projectId !== null && projectId !== undefined,
+		...queryOptions
+	} as CreateQueryOptions<
+		Awaited<ReturnType<typeof listUngroupedIncludedReports>>,
+		TError,
+		TData
+	> & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type ListUngroupedIncludedReportsQueryResult = NonNullable<
+	Awaited<ReturnType<typeof listUngroupedIncludedReports>>
+>;
+export type ListUngroupedIncludedReportsQueryError = ErrorType<ApiErrorBody>;
+
+export function createListUngroupedIncludedReports<
+	TData = Awaited<ReturnType<typeof listUngroupedIncludedReports>>,
+	TError = ErrorType<ApiErrorBody>
+>(
+	projectId: () => string,
+	options?: () => {
+		query?: Partial<
+			CreateQueryOptions<
+				Awaited<ReturnType<typeof listUngroupedIncludedReports>>,
+				TError,
+				TData
+			>
+		>;
+		request?: SecondParameter<typeof customFetch>;
+	},
+	queryClient?: () => QueryClient
+): CreateQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> } {
+	const query = createQuery(
+		() => getListUngroupedIncludedReportsQueryOptions(projectId(), options?.()),
+		queryClient
+	) as CreateQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> };
+
+	return query;
+}
+
+export const prefetchListUngroupedIncludedReportsQuery = async <
+	TData = Awaited<ReturnType<typeof listUngroupedIncludedReports>>,
+	TError = ErrorType<ApiErrorBody>
+>(
+	queryClient: QueryClient,
+	projectId: string,
+	options?: {
+		query?: Partial<
+			CreateQueryOptions<
+				Awaited<ReturnType<typeof listUngroupedIncludedReports>>,
+				TError,
+				TData
+			>
+		>;
+		request?: SecondParameter<typeof customFetch>;
+	}
+): Promise<QueryClient> => {
+	const queryOptions = getListUngroupedIncludedReportsQueryOptions(projectId, options);
+
+	await queryClient.prefetchQuery(queryOptions);
+
+	return queryClient;
+};
+
 export type getProjectStudyResponse200 = {
 	data: StudyDto;
 	status: 200;

@@ -33,6 +33,11 @@ export interface PrismaDto {
 	/** @minimum 0 */
 	pending_dedupe_proposals: number;
 	project_id: string;
+	/**
+	 * Equations that do not hold for these counts. Empty when the flow reconciles; the counts
+	 * are still returned so the page can say what is wrong instead of failing.
+	 */
+	reconciliation_warnings: string[];
 	/** @minimum 0 */
 	reports_not_retrieved: number;
 	/** @minimum 0 */

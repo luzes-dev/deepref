@@ -3,7 +3,11 @@
 	import type { Snippet } from 'svelte';
 	import NotificationBell from '$lib/shell/NotificationBell.svelte';
 
-	let { children, client }: { children?: Snippet; client?: QueryClient } = $props();
+	let {
+		children,
+		client,
+		projectId = null
+	}: { children?: Snippet; client?: QueryClient; projectId?: string | null } = $props();
 
 	const queryClient = $derived(
 		client ??
@@ -17,6 +21,6 @@
 </script>
 
 <QueryClientProvider client={queryClient}>
-	<NotificationBell />
+	<NotificationBell {projectId} />
 	{@render children?.()}
 </QueryClientProvider>

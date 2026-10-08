@@ -15,6 +15,8 @@ pub enum AcquisitionError {
     IdempotencyConflict { run_id: Uuid },
     #[error("failed to serialize acquisition metadata")]
     Serialization(#[from] serde_json::Error),
+    #[error("the import could not be queued")]
+    Queue(anyhow::Error),
 }
 
 #[derive(Debug, Clone)]
@@ -127,48 +129,19 @@ pub async fn persist_import(
 
     let mut records_created = 0_i64;
     for (index, record) in records.iter().enumerate() {
-        let record_id = Uuid::new_v4();
         let source_key = format!("{run_id}:{index}");
-        let inserted = sqlx::query(
-            "INSERT INTO records
-             (id,project_id,report_id,acquisition_run_id,source,source_key,title,abstract_text,
-              publication_year,journal,authors,source_identifiers,normalized_title,raw)
-             VALUES ($1,$2,NULL,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
-             ON CONFLICT (project_id,source,source_key) DO NOTHING",
+        if insert_raw_record(
+            &mut tx,
+            request.project_id,
+            run_id,
+            &request.source,
+            &source_key,
+            record,
         )
-        .bind(record_id)
-        .bind(request.project_id)
-        .bind(run_id)
-        .bind(&request.source)
-        .bind(source_key)
-        .bind(&record.title)
-        .bind(&record.abstract_text)
-        .bind(record.publication_year)
-        .bind(&record.journal)
-        .bind(serde_json::to_value(&record.authors)?)
-        .bind(serde_json::to_value(&record.source_identifiers)?)
-        .bind(record.title.as_deref().map(normalize_bibliography_title))
-        .bind(&record.raw)
-        .execute(&mut *tx)
-        .await?;
-        if inserted.rows_affected() == 0 {
-            continue;
-        }
-        records_created += 1;
-        for identifier in &record.source_identifiers {
-            sqlx::query(
-                "INSERT INTO record_identifiers
-                 (id,record_id,scheme,value,normalized_value)
-                 VALUES ($1,$2,$3,$4,$5)
-                 ON CONFLICT (record_id,scheme,normalized_value) DO NOTHING",
-            )
-            .bind(Uuid::new_v4())
-            .bind(record_id)
-            .bind(identifier.scheme.as_str())
-            .bind(&identifier.value)
-            .bind(&identifier.normalized_value)
-            .execute(&mut *tx)
-            .await?;
+        .await?
+        .is_some()
+        {
+            records_created += 1;
         }
     }
     crate::dispatch_automation_domain_event(
@@ -185,6 +158,60 @@ pub async fn persist_import(
         created: true,
         records_created,
     })
+}
+
+/// Saves one record of a run, with its identifiers, through the path every import shares.
+/// Returns the new record's id, or `None` when a record with this source key already exists.
+pub(crate) async fn insert_raw_record(
+    tx: &mut Transaction<'_, Postgres>,
+    project_id: Uuid,
+    run_id: Uuid,
+    source: &str,
+    source_key: &str,
+    record: &RawRecord,
+) -> Result<Option<Uuid>, AcquisitionError> {
+    let record_id = Uuid::new_v4();
+    let inserted = sqlx::query(
+        "INSERT INTO records
+         (id,project_id,report_id,acquisition_run_id,source,source_key,title,abstract_text,
+          publication_year,journal,authors,source_identifiers,normalized_title,raw)
+         VALUES ($1,$2,NULL,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
+         ON CONFLICT (project_id,source,source_key) DO NOTHING",
+    )
+    .bind(record_id)
+    .bind(project_id)
+    .bind(run_id)
+    .bind(source)
+    .bind(source_key)
+    .bind(&record.title)
+    .bind(&record.abstract_text)
+    .bind(record.publication_year)
+    .bind(&record.journal)
+    .bind(serde_json::to_value(&record.authors)?)
+    .bind(serde_json::to_value(&record.source_identifiers)?)
+    .bind(record.title.as_deref().map(normalize_bibliography_title))
+    .bind(&record.raw)
+    .execute(&mut **tx)
+    .await?;
+    if inserted.rows_affected() == 0 {
+        return Ok(None);
+    }
+    for identifier in &record.source_identifiers {
+        sqlx::query(
+            "INSERT INTO record_identifiers
+             (id,record_id,scheme,value,normalized_value)
+             VALUES ($1,$2,$3,$4,$5)
+             ON CONFLICT (record_id,scheme,normalized_value) DO NOTHING",
+        )
+        .bind(Uuid::new_v4())
+        .bind(record_id)
+        .bind(identifier.scheme.as_str())
+        .bind(&identifier.value)
+        .bind(&identifier.normalized_value)
+        .execute(&mut **tx)
+        .await?;
+    }
+    Ok(Some(record_id))
 }
 
 pub async fn ensure_legacy_acquisition_run(

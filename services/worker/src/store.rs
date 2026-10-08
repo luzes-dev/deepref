@@ -817,7 +817,7 @@ async fn persist_dead_letter(
     Ok(())
 }
 
-fn acquisition_notification(
+pub(crate) fn acquisition_notification(
     status: &str,
     project_id: Uuid,
     acquisition_id: Uuid,
@@ -832,34 +832,71 @@ fn acquisition_notification(
         "failed_count": failed_count,
     });
     match status {
-        "completed" => {
-            let mut body = format!("{} {} imported.", fetched_count, plural(fetched_count));
-            if failed_count > 0 {
-                body.push_str(&format!(" {} could not be fetched.", failed_count));
-            }
-            deepref_postgres::NotificationDraft::success(
-                "acquisition.completed",
-                project_id,
-                "Import completed",
-                Some(body),
-                payload,
-            )
-        }
-        _ => {
-            let body = format!(
-                "{} {} imported before the run stopped.",
+        "completed" if failed_count > 0 => deepref_postgres::NotificationDraft::warning(
+            "acquisition.completed",
+            project_id,
+            "Import completed with problems",
+            Some(format!(
+                "{} {} imported. {} {} could not be fetched; open the run to see which and why.",
+                fetched_count,
+                plural(fetched_count),
+                failed_count,
+                plural(failed_count)
+            )),
+            payload,
+        ),
+        "completed" => deepref_postgres::NotificationDraft::success(
+            "acquisition.completed",
+            project_id,
+            "Import completed",
+            Some(format!(
+                "{} {} imported.",
                 fetched_count,
                 plural(fetched_count)
-            );
-            deepref_postgres::NotificationDraft::error(
-                "acquisition.failed",
-                project_id,
-                "Import failed",
-                Some(body),
-                payload,
-            )
-        }
+            )),
+            payload,
+        ),
+        _ => deepref_postgres::NotificationDraft::error(
+            "acquisition.failed",
+            project_id,
+            "Import failed",
+            Some(format!(
+                "None of the {} {} could be fetched; open the run to see why.",
+                failed_count,
+                plural(failed_count)
+            )),
+            payload,
+        ),
     }
+}
+
+/// Terminal status for an import run once no item is queued or fetching.
+///
+/// A run is `failed` only when nothing was fetched and at least one item failed or was not
+/// found. A run that fetched some articles and missed others is `completed`; the UI reports
+/// those misses as "completed with problems".
+pub(crate) fn settled_run_status(fetched: i64, failed: i64) -> &'static str {
+    if fetched == 0 && failed > 0 {
+        "failed"
+    } else {
+        "completed"
+    }
+}
+
+/// Fetched and failed item counts for a run, the inputs to [`settled_run_status`].
+async fn item_outcome_counts(
+    tx: &mut Transaction<'_, Postgres>,
+    ingestion_id: Uuid,
+) -> anyhow::Result<(i64, i64)> {
+    let counts = sqlx::query_as::<_, (i64, i64)>(
+        "SELECT count(*) FILTER (WHERE status='fetched'), \
+         count(*) FILTER (WHERE status IN ('failed','not_found')) \
+         FROM ingestion_items WHERE ingestion_id=$1",
+    )
+    .bind(ingestion_id)
+    .fetch_one(&mut **tx)
+    .await?;
+    Ok(counts)
 }
 
 async fn complete_item_and_claim(
@@ -881,12 +918,15 @@ async fn complete_item_and_claim(
     .bind(error)
     .execute(&mut **tx)
     .await?;
-    // Counts are deliberately updated after all child items have been inserted.
+    // Counts are deliberately updated after all child items have been inserted. `$2` is the
+    // status a run settles on once no item is queued or fetching (see `settled_run_status`).
+    let (fetched, failed) = item_outcome_counts(tx, event.payload.ingestion_id).await?;
+    let settled = settled_run_status(fetched, failed);
     sqlx::query(
         r#"UPDATE ingestions SET
         status = CASE WHEN status='cancelled' THEN status
           WHEN NOT EXISTS (SELECT 1 FROM ingestion_items WHERE ingestion_id=$1 AND status IN ('queued','fetching'))
-          THEN CASE WHEN EXISTS (SELECT 1 FROM ingestion_items WHERE ingestion_id=$1 AND status IN ('failed','not_found')) THEN 'failed' ELSE 'completed' END
+          THEN $2
           WHEN status='queued' THEN 'running' ELSE status END,
         started_at=COALESCE(started_at,now()),
         completed_at=CASE WHEN NOT EXISTS (SELECT 1 FROM ingestion_items WHERE ingestion_id=$1 AND status IN ('queued','fetching')) THEN now() ELSE completed_at END,
@@ -894,7 +934,11 @@ async fn complete_item_and_claim(
         failed_count=(SELECT count(*)::int FROM ingestion_items WHERE ingestion_id=$1 AND status IN ('failed','not_found')),
         queued_count=(SELECT count(*)::int FROM ingestion_items WHERE ingestion_id=$1 AND status IN ('queued','fetching'))
         WHERE id=$1"#,
-    ).bind(event.payload.ingestion_id).execute(&mut **tx).await?;
+    )
+    .bind(event.payload.ingestion_id)
+    .bind(settled)
+    .execute(&mut **tx)
+    .await?;
     let previous_acquisition_status = sqlx::query_scalar::<_, String>(
         "SELECT status FROM acquisition_runs WHERE id=$1 FOR UPDATE",
     )
@@ -905,7 +949,7 @@ async fn complete_item_and_claim(
         r#"UPDATE acquisition_runs SET
         status = CASE WHEN status='cancelled' THEN status
           WHEN NOT EXISTS (SELECT 1 FROM ingestion_items WHERE ingestion_id=$1 AND status IN ('queued','fetching'))
-          THEN CASE WHEN EXISTS (SELECT 1 FROM ingestion_items WHERE ingestion_id=$1 AND status IN ('failed','not_found')) THEN 'failed' ELSE 'completed' END
+          THEN $2
           WHEN status='queued' THEN 'running' ELSE status END,
         started_at=COALESCE(started_at,now()),
         completed_at=CASE WHEN NOT EXISTS (SELECT 1 FROM ingestion_items WHERE ingestion_id=$1 AND status IN ('queued','fetching')) THEN now() ELSE completed_at END,
@@ -916,6 +960,7 @@ async fn complete_item_and_claim(
         RETURNING status, fetched_count, failed_count"#,
     )
     .bind(event.payload.ingestion_id)
+    .bind(settled)
     .fetch_one(&mut **tx)
     .await?;
     if previous_acquisition_status != "completed" && acquisition_status == "completed" {
@@ -948,4 +993,36 @@ async fn complete_item_and_claim(
         anyhow::bail!("event claim ownership was lost before completion");
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{acquisition_notification, settled_run_status};
+    use deepref_postgres::NotificationSeverity;
+    use uuid::Uuid;
+
+    #[test]
+    fn a_run_that_fetched_some_articles_completes_instead_of_failing() {
+        assert_eq!(settled_run_status(2, 1), "completed");
+    }
+
+    #[test]
+    fn a_run_that_fetched_nothing_fails() {
+        assert_eq!(settled_run_status(0, 3), "failed");
+    }
+
+    #[test]
+    fn a_run_without_misses_completes() {
+        assert_eq!(settled_run_status(3, 0), "completed");
+    }
+
+    #[test]
+    fn partial_success_notifies_with_a_warning_that_does_not_say_the_run_stopped() {
+        let draft = acquisition_notification("completed", Uuid::nil(), Uuid::nil(), 2, 1);
+        assert_eq!(draft.severity, NotificationSeverity::Warning);
+        assert_eq!(draft.title, "Import completed with problems");
+        let body = draft.body.unwrap_or_default();
+        assert!(body.contains("2 articles imported"), "{body}");
+        assert!(!body.contains("stopped"), "{body}");
+    }
 }

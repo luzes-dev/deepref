@@ -70,6 +70,16 @@ pub(crate) fn map_ai_error(error: AiError) -> ApiError {
         | AiError::SchemaValidation(message)
         | AiError::MalformedOutput(message)
         | AiError::InputSerialization(message) => ApiError::BadRequest(message),
+        AiError::BudgetExceeded => ApiError::Conflict {
+            code: "ai_budget_exceeded".to_owned(),
+            message: "AI budget for this month reached".to_owned(),
+            details: Value::Null,
+        },
+        AiError::SubscriptionLimit => ApiError::Conflict {
+            code: "ai_subscription_limit".to_owned(),
+            message: "AI subscription limit reached; try again later".to_owned(),
+            details: Value::Null,
+        },
         AiError::Route(message) => ApiError::Configuration(message),
         AiError::Gateway(message) => {
             ApiError::Configuration(format!("AI provider is unavailable: {message}"))

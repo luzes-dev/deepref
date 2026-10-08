@@ -8,8 +8,8 @@ use uuid::Uuid;
 
 use crate::{
     AiContext, AiError, AiFuture, AiGateway, AiProposal, AiRunRecord, AiRunStatus, AiTaskKind,
-    AuthorityTier, CompletionRequest, GroundedBlock, ModelProfile, ResolvedModel, ReuseKeyInput,
-    SafeErrorMetadata, TokenUsage, compute_reuse_hash, hash_json,
+    AuthorityTier, CompletionRequest, GatewayCompletion, GroundedBlock, ModelProfile,
+    ResolvedModel, ReuseKeyInput, SafeErrorMetadata, TokenUsage, compute_reuse_hash, hash_json,
 };
 
 pub trait ModelRouter: Send + Sync {
@@ -74,6 +74,13 @@ pub trait AiTask {
         _evidence: &[GroundedBlock],
     ) -> Result<(), AiError> {
         self.semantic_validate(output)
+    }
+    /// Deterministic repair before schema validation. Implementations may only
+    /// apply unambiguous rewrites and must never invent a judgment.
+    fn normalize_output(&self, _raw: &mut Value, _evidence: &[GroundedBlock]) {}
+    /// Corrective re-asks after a schema, semantic or malformed-output failure.
+    fn repair_attempts(&self) -> u8 {
+        0
     }
     fn authority(&self) -> AuthorityTier {
         AuthorityTier::ReadOnly
@@ -283,43 +290,58 @@ where
         };
         run.validate()?;
         self.store.save_run(run.clone()).await?;
-        let completion = match self
-            .gateway
-            .complete(CompletionRequest {
-                route,
-                system_prompt: context.system_prompt,
-                user_prompt: context.user_prompt,
-                evidence: evidence.clone(),
-                schema,
-            })
-            .instrument(tracing::info_span!(
-                "model.complete",
-                ai.task_kind = task.kind().as_str(),
-                ai.prompt_version = task.prompt_version(),
-                ai.schema_version = T::SCHEMA_VERSION
-            ))
-            .await
-        {
-            Ok(completion) => completion,
-            Err(error) => return Err(self.persist_failure(run, error).await),
-        };
-        let raw: Value = match serde_json::from_str(&completion.output_json) {
-            Ok(raw) => raw,
-            Err(_) => {
-                return Err(self
-                    .persist_failure(run, AiError::MalformedOutput(String::new()))
-                    .await);
+        let system_prompt = context.system_prompt;
+        let base_user_prompt = context.user_prompt;
+        let mut user_prompt = base_user_prompt.clone();
+        let mut repairs_left = task.repair_attempts();
+        // Every provider call is counted on the run, so a repaired run carries
+        // the usage of both calls. The metered gateway records each call in the
+        // usage ledger and checks the budget before it is made.
+        let (raw, output) = loop {
+            let completion = match self
+                .gateway
+                .complete(CompletionRequest {
+                    project_id,
+                    route: route.clone(),
+                    system_prompt: system_prompt.clone(),
+                    user_prompt: user_prompt.clone(),
+                    evidence: evidence.clone(),
+                    schema: schema.clone(),
+                })
+                .instrument(tracing::info_span!(
+                    "model.complete",
+                    ai.task_kind = task.kind().as_str(),
+                    ai.prompt_version = task.prompt_version(),
+                    ai.schema_version = T::SCHEMA_VERSION
+                ))
+                .await
+            {
+                Ok(completion) => completion,
+                Err(error) => return Err(self.persist_failure(run, error).await),
+            };
+            record_usage(&mut run, &completion);
+            let attempt = serde_json::from_str::<Value>(&completion.output_json)
+                .map_err(|_| AiError::MalformedOutput(String::new()))
+                .and_then(|raw| {
+                    validate_output(task, raw.clone(), &evidence).map(move |output| (raw, output))
+                });
+            match attempt {
+                Ok(accepted) => break accepted,
+                Err(error) => match repair_feedback(&error) {
+                    Some(feedback) if repairs_left > 0 => {
+                        repairs_left -= 1;
+                        tracing::info!(
+                            ai.task_kind = task.kind().as_str(),
+                            reason = %feedback,
+                            "repairing AI output after a validation failure"
+                        );
+                        user_prompt =
+                            format!("{base_user_prompt}\n\n{}", repair_message(&feedback));
+                    }
+                    _ => return Err(self.persist_failure(run, error).await),
+                },
             }
         };
-        let output = match validate_output(task, raw.clone(), &evidence) {
-            Ok(output) => output,
-            Err(error) => return Err(self.persist_failure(run, error).await),
-        };
-        run.usage = TokenUsage {
-            input_tokens: completion.input_tokens,
-            output_tokens: completion.output_tokens,
-        };
-        run.cost_micros = completion.cost_micros;
         run.output = Some(raw);
         run.status = AiRunStatus::Completed;
         run.completed_at = Some(self.clock.now());
@@ -423,20 +445,103 @@ fn same_proposal_content(
 
 fn validate_output<T: AiTask>(
     task: &T,
-    raw: Value,
+    mut raw: Value,
     evidence: &[GroundedBlock],
 ) -> Result<T::Output, AiError> {
+    task.normalize_output(&mut raw, evidence);
     let schema = serde_json::to_value(schemars::schema_for!(T::Output))
         .map_err(|_| AiError::InputSerialization("output schema".to_owned()))?;
     jsonschema::validator_for(&schema)
         .map_err(|_| AiError::SchemaValidation(String::new()))?
         .validate(&raw)
-        .map_err(|_| AiError::SchemaValidation(String::new()))?;
+        .map_err(|error| {
+            tracing::warn!(reason = %error, "AI output rejected by JSON Schema validation");
+            AiError::SchemaValidation(schema_reason(
+                &raw,
+                error.instance_path().to_string().as_str(),
+            ))
+        })?;
     let output =
         serde_json::from_value(raw).map_err(|_| AiError::SchemaValidation(String::new()))?;
     task.semantic_validate_with_evidence(&output, evidence)
-        .map_err(|_| AiError::SemanticValidation(String::new()))?;
+        .map_err(|error| {
+            // Validation messages are static strings that never echo model
+            // output; keep them in the log so rejected runs are diagnosable.
+            let reason = match error {
+                AiError::SemanticValidation(reason) => reason,
+                _ => String::new(),
+            };
+            tracing::warn!(reason = %reason, "AI output rejected by semantic validation");
+            AiError::SemanticValidation(reason)
+        })?;
     Ok(output)
+}
+
+/// Describes a schema failure without echoing any value. When the failing
+/// node sits inside a keyed judgment, the reason names that judgment by its
+/// criterion id, which is the same id the model wrote. A list index would
+/// point at a different entry once out-of-stage entries have been removed.
+fn schema_reason(raw: &Value, pointer: &str) -> String {
+    let mut criterion = None;
+    let mut current = Some(raw);
+    for segment in pointer.split('/').filter(|segment| !segment.is_empty()) {
+        current = current.and_then(|value| match value {
+            Value::Object(map) => map.get(segment),
+            Value::Array(items) => segment
+                .parse::<usize>()
+                .ok()
+                .and_then(|index| items.get(index)),
+            _ => None,
+        });
+        if let Some(id) = current
+            .and_then(|value| value.get("criterion_id"))
+            .and_then(Value::as_str)
+            .and_then(|text| Uuid::parse_str(text).ok())
+        {
+            criterion = Some(id);
+        }
+    }
+    match criterion {
+        Some(id) => format!("the judgment for criterion {id} does not match the output schema"),
+        None => "the response does not match the output schema".to_owned(),
+    }
+}
+
+fn record_usage(run: &mut AiRunRecord, completion: &GatewayCompletion) {
+    run.usage.input_tokens = run
+        .usage
+        .input_tokens
+        .saturating_add(completion.input_tokens);
+    run.usage.output_tokens = run
+        .usage
+        .output_tokens
+        .saturating_add(completion.output_tokens);
+    if let Some(cost) = completion.cost_micros {
+        run.cost_micros = Some(run.cost_micros.unwrap_or(0).saturating_add(cost));
+    }
+}
+
+/// The safe reason shown to the model when its answer is rejected. Provider
+/// and budget failures are never repaired.
+fn repair_feedback(error: &AiError) -> Option<String> {
+    match error {
+        AiError::MalformedOutput(_) => Some("the response was not one JSON object".to_owned()),
+        AiError::SchemaValidation(reason) | AiError::SemanticValidation(reason) => {
+            Some(if reason.is_empty() {
+                "the response failed validation".to_owned()
+            } else {
+                reason.clone()
+            })
+        }
+        _ => None,
+    }
+}
+
+fn repair_message(feedback: &str) -> String {
+    format!(
+        "Validation rejected your previous answer: {feedback}. Return one corrected JSON object \
+         that satisfies the output contract exactly. Do not repeat the rejected answer."
+    )
 }
 
 pub fn safe_error_metadata(error: &AiError) -> SafeErrorMetadata {
@@ -452,9 +557,13 @@ pub fn safe_error_metadata(error: &AiError) -> SafeErrorMetadata {
         AiError::Proposal(_) => "proposal",
         AiError::PromptRegistry(_) => "prompt_registry",
         AiError::InvalidEmbedding(_) => "invalid_embedding",
+        AiError::BudgetExceeded => "budget_exceeded",
+        AiError::SubscriptionLimit => "subscription_limit",
     };
     let message = match code {
         "gateway" => "provider request failed",
+        "budget_exceeded" => "monthly AI budget reached",
+        "subscription_limit" => "AI subscription limit reached; try again later",
         "malformed_output" => "provider returned malformed structured output",
         "schema_validation" => "structured output failed schema validation",
         "semantic_validation" => "structured output failed semantic validation",

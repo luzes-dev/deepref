@@ -3,24 +3,43 @@ use deepref_application::{
     RawRecord, SearchProvider,
 };
 use deepref_core::WorkWithReferences;
-use deepref_crossref::{CrossrefClient, CrossrefError};
+use deepref_crossref::{AbstractEnricher, AbstractSource, CrossrefClient, CrossrefError};
 use deepref_domain::{IdentifierScheme, normalize_doi};
 use serde_json::{Value, json};
 
 #[derive(Debug, Clone)]
 pub struct CrossrefProvider {
     client: CrossrefClient,
+    enricher: Option<AbstractEnricher>,
 }
 
 impl CrossrefProvider {
     pub fn new(mailto: impl Into<String>) -> Result<Self, ProviderError> {
-        CrossrefClient::new(mailto.into())
-            .map(|client| Self { client })
+        let mailto = mailto.into();
+        // Set DEEPREF_ABSTRACT_ENRICHMENT=off to skip Europe PMC / OpenAlex lookups.
+        let enrich = !std::env::var("DEEPREF_ABSTRACT_ENRICHMENT")
+            .is_ok_and(|value| matches!(value.trim(), "off" | "0" | "false"));
+        let enricher = if enrich {
+            AbstractEnricher::new(mailto.clone()).ok()
+        } else {
+            None
+        };
+        CrossrefClient::new(mailto)
+            .map(|client| Self { client, enricher })
             .map_err(|error| ProviderError::Request(error.to_string()))
     }
 
     pub fn with_client(client: CrossrefClient) -> Self {
-        Self { client }
+        Self {
+            client,
+            enricher: None,
+        }
+    }
+
+    #[must_use]
+    pub fn with_enricher(mut self, enricher: Option<AbstractEnricher>) -> Self {
+        self.enricher = enricher;
+        self
     }
 
     #[must_use]
@@ -33,7 +52,26 @@ impl CrossrefProvider {
         &self,
         doi: &str,
     ) -> Result<WorkWithReferences, CrossrefError> {
-        self.client.fetch_work(doi).await
+        let work = self.client.fetch_work(doi).await?;
+        Ok(self.enrich_abstract(work).await)
+    }
+
+    /// Fills a missing abstract from Europe PMC / OpenAlex. Never fails.
+    async fn enrich_abstract(&self, mut work: WorkWithReferences) -> WorkWithReferences {
+        let source = if work.work.abstract_text.is_some() {
+            AbstractSource::Crossref
+        } else if let Some(enricher) = &self.enricher
+            && let Some((text, source)) = enricher.lookup(&work.work.doi).await
+        {
+            work.work.abstract_text = Some(text);
+            source
+        } else {
+            return work;
+        };
+        if let Some(raw) = work.raw.as_object_mut() {
+            raw.insert("deepref_abstract_source".to_owned(), json!(source.as_str()));
+        }
+        work
     }
 }
 
@@ -53,8 +91,7 @@ impl MetadataProvider for CrossrefProvider {
                 ));
             }
             let work = self
-                .client
-                .fetch_work(&identifier.normalized_value)
+                .fetch_work_with_references(&identifier.normalized_value)
                 .await
                 .map_err(|error| ProviderError::Request(error.to_string()))?;
             Ok(raw_record_from_crossref_work(work))

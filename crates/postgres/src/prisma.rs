@@ -1,6 +1,4 @@
-use deepref_application::{
-    NonNegativeCount, PrismaInvariantError, PrismaProjection, PrismaReasonCount,
-};
+use deepref_application::{NonNegativeCount, PrismaProjection, PrismaReasonCount};
 use serde_json::Value;
 use sqlx::{PgPool, Row};
 use thiserror::Error;
@@ -14,8 +12,6 @@ pub enum PrismaProjectionError {
     Json(#[from] serde_json::Error),
     #[error("negative PRISMA count in canonical projection: {field}")]
     NegativeCount { field: &'static str },
-    #[error("PRISMA projection invariant violation: {0}")]
-    Invariant(#[from] PrismaInvariantError),
 }
 
 /// Read the PRISMA projection directly from the canonical review tables.
@@ -81,10 +77,13 @@ WITH project_exists AS (
       WHERE title_abstract_status = 'include'
         AND (has_available_document OR has_explicit_full_text_decision)
     )::bigint AS full_text_assessed,
+    -- A title/abstract include keeps full_text_status at 'not_required' until a
+    -- full-text decision is recorded, so 'not_required' here means "decision
+    -- still pending", not "no full text needed".
     count(*) FILTER (
       WHERE title_abstract_status = 'include'
         AND (has_available_document OR has_explicit_full_text_decision)
-        AND full_text_status IN ('unscreened', 'maybe')
+        AND full_text_status IN ('not_required', 'unscreened', 'maybe')
     )::bigint AS full_text_pending,
     count(*) FILTER (
       WHERE title_abstract_status = 'include' AND full_text_status = 'include'
@@ -241,7 +240,8 @@ JOIN project_exists ON true
         )?,
         included_studies: count(row.get("included_studies"), "included_studies")?,
     };
-    projection.validate()?;
+    // Equations that do not hold are reported with the projection (see
+    // `PrismaProjection::reconciliation_failures`) rather than failing the read.
     Ok(Some(projection))
 }
 

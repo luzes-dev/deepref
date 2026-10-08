@@ -21,10 +21,29 @@ import type {
 	ApiErrorBody,
 	AutomationDefinitionDto,
 	AutomationRunDto,
+	BlockDetailsDto,
+	BlockDetailsRequest,
 	ConfigureAutomationRequest,
+	CreateWorkflowRequest,
+	EndpointSettingsRequest,
+	EndpointsDto,
+	FromTemplateRequest,
 	ListAutomationRunsParams,
+	ListProjectWorkflowRunsParams,
+	ListWorkflowRunsParams,
+	NodeTypeDto,
+	PublishRequest,
+	RunRequest,
+	RunStartedDto,
 	StartAutomationRequest,
-	StartAutomationResponse
+	StartAutomationResponse,
+	TemplateDto,
+	TestRunRequest,
+	UpdateWorkflowRequest,
+	ValidationReportDto,
+	VersionDto,
+	WorkflowDto,
+	WorkflowRunDto
 } from '../models';
 
 import { customFetch } from '../../custom-fetch.ts';
@@ -32,6 +51,316 @@ import type { ErrorType, BodyType } from '../../custom-fetch.ts';
 
 type SecondParameter<T extends (...args: never) => unknown> = Parameters<T>[1];
 
+export type getAutomationCatalogResponse200 = {
+	data: NodeTypeDto[];
+	status: 200;
+};
+
+export type getAutomationCatalogResponseSuccess = getAutomationCatalogResponse200 & {
+	headers: Headers;
+};
+export const getGetAutomationCatalogUrl = () => {
+	return `/api/automations/catalog`;
+};
+
+export const getAutomationCatalog = async (
+	options?: Parameters<typeof customFetch>[1]
+): Promise<getAutomationCatalogResponseSuccess> => {
+	return customFetch<getAutomationCatalogResponseSuccess>(getGetAutomationCatalogUrl(), {
+		...options,
+		method: 'GET'
+	});
+};
+
+export const getGetAutomationCatalogQueryKey = () => {
+	return [`/api/automations/catalog`] as const;
+};
+
+export const getGetAutomationCatalogQueryOptions = <
+	TData = Awaited<ReturnType<typeof getAutomationCatalog>>,
+	TError = ErrorType<unknown>
+>(options?: {
+	query?: Partial<
+		CreateQueryOptions<Awaited<ReturnType<typeof getAutomationCatalog>>, TError, TData>
+	>;
+	request?: SecondParameter<typeof customFetch>;
+}) => {
+	const { query: queryOptions, request: requestOptions } = options ?? {};
+
+	const queryKey = queryOptions?.queryKey ?? getGetAutomationCatalogQueryKey();
+
+	const queryFn: QueryFunction<Awaited<ReturnType<typeof getAutomationCatalog>>> = ({ signal }) =>
+		getAutomationCatalog({ signal, ...requestOptions });
+
+	return { queryKey, queryFn, ...queryOptions } as CreateQueryOptions<
+		Awaited<ReturnType<typeof getAutomationCatalog>>,
+		TError,
+		TData
+	> & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type GetAutomationCatalogQueryResult = NonNullable<
+	Awaited<ReturnType<typeof getAutomationCatalog>>
+>;
+export type GetAutomationCatalogQueryError = ErrorType<unknown>;
+
+export function createGetAutomationCatalog<
+	TData = Awaited<ReturnType<typeof getAutomationCatalog>>,
+	TError = ErrorType<unknown>
+>(
+	options?: () => {
+		query?: Partial<
+			CreateQueryOptions<Awaited<ReturnType<typeof getAutomationCatalog>>, TError, TData>
+		>;
+		request?: SecondParameter<typeof customFetch>;
+	},
+	queryClient?: () => QueryClient
+): CreateQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> } {
+	const query = createQuery(
+		() => getGetAutomationCatalogQueryOptions(options?.()),
+		queryClient
+	) as CreateQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> };
+
+	return query;
+}
+
+export const prefetchGetAutomationCatalogQuery = async <
+	TData = Awaited<ReturnType<typeof getAutomationCatalog>>,
+	TError = ErrorType<unknown>
+>(
+	queryClient: QueryClient,
+	options?: {
+		query?: Partial<
+			CreateQueryOptions<Awaited<ReturnType<typeof getAutomationCatalog>>, TError, TData>
+		>;
+		request?: SecondParameter<typeof customFetch>;
+	}
+): Promise<QueryClient> => {
+	const queryOptions = getGetAutomationCatalogQueryOptions(options);
+
+	await queryClient.prefetchQuery(queryOptions);
+
+	return queryClient;
+};
+
+export type listAutomationTemplatesResponse200 = {
+	data: TemplateDto[];
+	status: 200;
+};
+
+export type listAutomationTemplatesResponseSuccess = listAutomationTemplatesResponse200 & {
+	headers: Headers;
+};
+export const getListAutomationTemplatesUrl = () => {
+	return `/api/automations/templates`;
+};
+
+export const listAutomationTemplates = async (
+	options?: Parameters<typeof customFetch>[1]
+): Promise<listAutomationTemplatesResponseSuccess> => {
+	return customFetch<listAutomationTemplatesResponseSuccess>(getListAutomationTemplatesUrl(), {
+		...options,
+		method: 'GET'
+	});
+};
+
+export const getListAutomationTemplatesQueryKey = () => {
+	return [`/api/automations/templates`] as const;
+};
+
+export const getListAutomationTemplatesQueryOptions = <
+	TData = Awaited<ReturnType<typeof listAutomationTemplates>>,
+	TError = ErrorType<unknown>
+>(options?: {
+	query?: Partial<
+		CreateQueryOptions<Awaited<ReturnType<typeof listAutomationTemplates>>, TError, TData>
+	>;
+	request?: SecondParameter<typeof customFetch>;
+}) => {
+	const { query: queryOptions, request: requestOptions } = options ?? {};
+
+	const queryKey = queryOptions?.queryKey ?? getListAutomationTemplatesQueryKey();
+
+	const queryFn: QueryFunction<Awaited<ReturnType<typeof listAutomationTemplates>>> = ({
+		signal
+	}) => listAutomationTemplates({ signal, ...requestOptions });
+
+	return { queryKey, queryFn, ...queryOptions } as CreateQueryOptions<
+		Awaited<ReturnType<typeof listAutomationTemplates>>,
+		TError,
+		TData
+	> & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type ListAutomationTemplatesQueryResult = NonNullable<
+	Awaited<ReturnType<typeof listAutomationTemplates>>
+>;
+export type ListAutomationTemplatesQueryError = ErrorType<unknown>;
+
+export function createListAutomationTemplates<
+	TData = Awaited<ReturnType<typeof listAutomationTemplates>>,
+	TError = ErrorType<unknown>
+>(
+	options?: () => {
+		query?: Partial<
+			CreateQueryOptions<Awaited<ReturnType<typeof listAutomationTemplates>>, TError, TData>
+		>;
+		request?: SecondParameter<typeof customFetch>;
+	},
+	queryClient?: () => QueryClient
+): CreateQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> } {
+	const query = createQuery(
+		() => getListAutomationTemplatesQueryOptions(options?.()),
+		queryClient
+	) as CreateQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> };
+
+	return query;
+}
+
+export const prefetchListAutomationTemplatesQuery = async <
+	TData = Awaited<ReturnType<typeof listAutomationTemplates>>,
+	TError = ErrorType<unknown>
+>(
+	queryClient: QueryClient,
+	options?: {
+		query?: Partial<
+			CreateQueryOptions<Awaited<ReturnType<typeof listAutomationTemplates>>, TError, TData>
+		>;
+		request?: SecondParameter<typeof customFetch>;
+	}
+): Promise<QueryClient> => {
+	const queryOptions = getListAutomationTemplatesQueryOptions(options);
+
+	await queryClient.prefetchQuery(queryOptions);
+
+	return queryClient;
+};
+
+export type getBlockDetailsResponse200 = {
+	data: BlockDetailsDto;
+	status: 200;
+};
+
+export type getBlockDetailsResponse400 = {
+	data: ApiErrorBody;
+	status: 400;
+};
+
+export type getBlockDetailsResponse404 = {
+	data: ApiErrorBody;
+	status: 404;
+};
+
+export type getBlockDetailsResponseSuccess = getBlockDetailsResponse200 & {
+	headers: Headers;
+};
+export type getBlockDetailsResponseError = (
+	getBlockDetailsResponse400 | getBlockDetailsResponse404
+) & {
+	headers: Headers;
+};
+
+export const getGetBlockDetailsUrl = (projectId: string) => {
+	return `/api/projects/${projectId}/automations/block-details`;
+};
+
+/**
+ * @summary Works out what a block's fields can read from the steps before it, from the
+draft sent in. Nothing is read from or written to the database.
+ */
+export const getBlockDetails = async (
+	projectId: string,
+	blockDetailsRequest: BlockDetailsRequest,
+	options?: Parameters<typeof customFetch>[1]
+): Promise<getBlockDetailsResponseSuccess> => {
+	const getHeaders = (
+		h?: NonNullable<RequestInit['headers']>
+	): Record<string, string | readonly string[]> => {
+		if (!h) return {};
+		if (h instanceof Headers) return Object.fromEntries(h.entries());
+		if (Array.isArray(h)) return Object.fromEntries(h);
+		return h;
+	};
+	return customFetch<getBlockDetailsResponseSuccess>(getGetBlockDetailsUrl(projectId), {
+		...options,
+		method: 'POST',
+		headers: { 'Content-Type': 'application/json', ...getHeaders(options?.headers) },
+		body: JSON.stringify(blockDetailsRequest)
+	});
+};
+
+export const getGetBlockDetailsMutationOptions = <
+	TError = ErrorType<ApiErrorBody>,
+	TContext = unknown
+>(options?: {
+	mutation?: CreateMutationOptions<
+		Awaited<ReturnType<typeof getBlockDetails>>,
+		TError,
+		GetBlockDetailsMutationVariables,
+		TContext
+	>;
+	request?: SecondParameter<typeof customFetch>;
+}): CreateMutationOptions<
+	Awaited<ReturnType<typeof getBlockDetails>>,
+	TError,
+	GetBlockDetailsMutationVariables,
+	TContext
+> => {
+	const mutationKey = ['getBlockDetails'];
+	const { mutation: mutationOptions, request: requestOptions } = options
+		? options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey
+			? options
+			: { ...options, mutation: { ...options.mutation, mutationKey } }
+		: { mutation: { mutationKey }, request: undefined };
+
+	const mutationFn: MutationFunction<
+		Awaited<ReturnType<typeof getBlockDetails>>,
+		GetBlockDetailsMutationVariables
+	> = (props) => {
+		const { projectId, data } = props ?? {};
+
+		return getBlockDetails(projectId, data, requestOptions);
+	};
+
+	return { mutationFn, ...mutationOptions };
+};
+
+export type GetBlockDetailsMutationResult = NonNullable<
+	Awaited<ReturnType<typeof getBlockDetails>>
+>;
+export type GetBlockDetailsMutationBody = BodyType<BlockDetailsRequest>;
+export type GetBlockDetailsMutationError = ErrorType<ApiErrorBody>;
+export type GetBlockDetailsMutationVariables = {
+	projectId: string;
+	data: BodyType<BlockDetailsRequest>;
+};
+
+/**
+ * @summary Works out what a block's fields can read from the steps before it, from the
+draft sent in. Nothing is read from or written to the database.
+ */
+export const createGetBlockDetails = <TError = ErrorType<ApiErrorBody>, TContext = unknown>(
+	options?: () => {
+		mutation?: CreateMutationOptions<
+			Awaited<ReturnType<typeof getBlockDetails>>,
+			TError,
+			GetBlockDetailsMutationVariables,
+			TContext
+		>;
+		request?: SecondParameter<typeof customFetch>;
+	},
+	queryClient?: () => QueryClient
+): CreateMutationResult<
+	Awaited<ReturnType<typeof getBlockDetails>>,
+	TError,
+	GetBlockDetailsMutationVariables,
+	TContext
+> => {
+	return createMutation(
+		() => ({ ...getGetBlockDetailsMutationOptions(options?.()) }),
+		queryClient
+	);
+};
 export type listAutomationDefinitionsResponse200 = {
 	data: AutomationDefinitionDto[];
 	status: 200;
@@ -300,6 +629,135 @@ export const createConfigureAutomationDefinition = <
 > => {
 	return createMutation(
 		() => ({ ...getConfigureAutomationDefinitionMutationOptions(options?.()) }),
+		queryClient
+	);
+};
+export type runAutomationRecipeOnceResponse200 = {
+	data: StartAutomationResponse;
+	status: 200;
+};
+
+export type runAutomationRecipeOnceResponse201 = {
+	data: StartAutomationResponse;
+	status: 201;
+};
+
+export type runAutomationRecipeOnceResponse400 = {
+	data: ApiErrorBody;
+	status: 400;
+};
+
+export type runAutomationRecipeOnceResponse404 = {
+	data: ApiErrorBody;
+	status: 404;
+};
+
+export type runAutomationRecipeOnceResponse500 = {
+	data: ApiErrorBody;
+	status: 500;
+};
+
+export type runAutomationRecipeOnceResponseSuccess = (
+	runAutomationRecipeOnceResponse200 | runAutomationRecipeOnceResponse201
+) & {
+	headers: Headers;
+};
+export type runAutomationRecipeOnceResponseError = (
+	| runAutomationRecipeOnceResponse400
+	| runAutomationRecipeOnceResponse404
+	| runAutomationRecipeOnceResponse500
+) & {
+	headers: Headers;
+};
+
+export const getRunAutomationRecipeOnceUrl = (projectId: string, recipe: string) => {
+	return `/api/projects/${projectId}/automations/recipes/${recipe}/runs`;
+};
+
+/**
+ * The run is backed by a hidden manual definition that the definition list
+ * omits, so a one-off run never shows up as a persistent automation.
+ * @summary Runs a recipe once without adding it to the project's configured automations.
+ */
+export const runAutomationRecipeOnce = async (
+	projectId: string,
+	recipe: string,
+	options?: Parameters<typeof customFetch>[1]
+): Promise<runAutomationRecipeOnceResponseSuccess> => {
+	return customFetch<runAutomationRecipeOnceResponseSuccess>(
+		getRunAutomationRecipeOnceUrl(projectId, recipe),
+		{
+			...options,
+			method: 'POST'
+		}
+	);
+};
+
+export const getRunAutomationRecipeOnceMutationOptions = <
+	TError = ErrorType<ApiErrorBody>,
+	TContext = unknown
+>(options?: {
+	mutation?: CreateMutationOptions<
+		Awaited<ReturnType<typeof runAutomationRecipeOnce>>,
+		TError,
+		RunAutomationRecipeOnceMutationVariables,
+		TContext
+	>;
+	request?: SecondParameter<typeof customFetch>;
+}): CreateMutationOptions<
+	Awaited<ReturnType<typeof runAutomationRecipeOnce>>,
+	TError,
+	RunAutomationRecipeOnceMutationVariables,
+	TContext
+> => {
+	const mutationKey = ['runAutomationRecipeOnce'];
+	const { mutation: mutationOptions, request: requestOptions } = options
+		? options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey
+			? options
+			: { ...options, mutation: { ...options.mutation, mutationKey } }
+		: { mutation: { mutationKey }, request: undefined };
+
+	const mutationFn: MutationFunction<
+		Awaited<ReturnType<typeof runAutomationRecipeOnce>>,
+		RunAutomationRecipeOnceMutationVariables
+	> = (props) => {
+		const { projectId, recipe } = props ?? {};
+
+		return runAutomationRecipeOnce(projectId, recipe, requestOptions);
+	};
+
+	return { mutationFn, ...mutationOptions };
+};
+
+export type RunAutomationRecipeOnceMutationResult = NonNullable<
+	Awaited<ReturnType<typeof runAutomationRecipeOnce>>
+>;
+
+export type RunAutomationRecipeOnceMutationError = ErrorType<ApiErrorBody>;
+export type RunAutomationRecipeOnceMutationVariables = { projectId: string; recipe: string };
+
+/**
+ * @summary Runs a recipe once without adding it to the project's configured automations.
+ */
+export const createRunAutomationRecipeOnce = <TError = ErrorType<ApiErrorBody>, TContext = unknown>(
+	options?: () => {
+		mutation?: CreateMutationOptions<
+			Awaited<ReturnType<typeof runAutomationRecipeOnce>>,
+			TError,
+			RunAutomationRecipeOnceMutationVariables,
+			TContext
+		>;
+		request?: SecondParameter<typeof customFetch>;
+	},
+	queryClient?: () => QueryClient
+): CreateMutationResult<
+	Awaited<ReturnType<typeof runAutomationRecipeOnce>>,
+	TError,
+	RunAutomationRecipeOnceMutationVariables,
+	TContext
+> => {
+	return createMutation(
+		() => ({ ...getRunAutomationRecipeOnceMutationOptions(options?.()) }),
 		queryClient
 	);
 };
@@ -709,6 +1167,2739 @@ export const prefetchGetAutomationRunQuery = async <
 	}
 ): Promise<QueryClient> => {
 	const queryOptions = getGetAutomationRunQueryOptions(projectId, runId, options);
+
+	await queryClient.prefetchQuery(queryOptions);
+
+	return queryClient;
+};
+
+export type downloadWorkflowFileResponse200 = {
+	data: Blob;
+	status: 200;
+};
+
+export type downloadWorkflowFileResponse404 = {
+	data: ApiErrorBody;
+	status: 404;
+};
+
+export type downloadWorkflowFileResponseSuccess = downloadWorkflowFileResponse200 & {
+	headers: Headers;
+};
+export type downloadWorkflowFileResponseError = downloadWorkflowFileResponse404 & {
+	headers: Headers;
+};
+
+export const getDownloadWorkflowFileUrl = (projectId: string, fileId: string) => {
+	return `/api/projects/${projectId}/automations/workflow-files/${fileId}`;
+};
+
+export const downloadWorkflowFile = async (
+	projectId: string,
+	fileId: string,
+	options?: Parameters<typeof customFetch>[1]
+): Promise<downloadWorkflowFileResponseSuccess> => {
+	return customFetch<downloadWorkflowFileResponseSuccess>(
+		getDownloadWorkflowFileUrl(projectId, fileId),
+		{
+			...options,
+			method: 'GET'
+		}
+	);
+};
+
+export const getDownloadWorkflowFileQueryKey = (projectId: string, fileId: string) => {
+	return [`/api/projects/${projectId}/automations/workflow-files/${fileId}`] as const;
+};
+
+export const getDownloadWorkflowFileQueryOptions = <
+	TData = Awaited<ReturnType<typeof downloadWorkflowFile>>,
+	TError = ErrorType<ApiErrorBody>
+>(
+	projectId: string,
+	fileId: string,
+	options?: {
+		query?: Partial<
+			CreateQueryOptions<Awaited<ReturnType<typeof downloadWorkflowFile>>, TError, TData>
+		>;
+		request?: SecondParameter<typeof customFetch>;
+	}
+) => {
+	const { query: queryOptions, request: requestOptions } = options ?? {};
+
+	const queryKey = queryOptions?.queryKey ?? getDownloadWorkflowFileQueryKey(projectId, fileId);
+
+	const queryFn: QueryFunction<Awaited<ReturnType<typeof downloadWorkflowFile>>> = ({ signal }) =>
+		downloadWorkflowFile(projectId, fileId, { signal, ...requestOptions });
+
+	return {
+		queryKey,
+		queryFn,
+		enabled:
+			projectId !== null &&
+			projectId !== undefined &&
+			fileId !== null &&
+			fileId !== undefined,
+		...queryOptions
+	} as CreateQueryOptions<Awaited<ReturnType<typeof downloadWorkflowFile>>, TError, TData> & {
+		queryKey: DataTag<QueryKey, TData, TError>;
+	};
+};
+
+export type DownloadWorkflowFileQueryResult = NonNullable<
+	Awaited<ReturnType<typeof downloadWorkflowFile>>
+>;
+export type DownloadWorkflowFileQueryError = ErrorType<ApiErrorBody>;
+
+export function createDownloadWorkflowFile<
+	TData = Awaited<ReturnType<typeof downloadWorkflowFile>>,
+	TError = ErrorType<ApiErrorBody>
+>(
+	projectId: () => string,
+	fileId: () => string,
+	options?: () => {
+		query?: Partial<
+			CreateQueryOptions<Awaited<ReturnType<typeof downloadWorkflowFile>>, TError, TData>
+		>;
+		request?: SecondParameter<typeof customFetch>;
+	},
+	queryClient?: () => QueryClient
+): CreateQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> } {
+	const query = createQuery(
+		() => getDownloadWorkflowFileQueryOptions(projectId(), fileId(), options?.()),
+		queryClient
+	) as CreateQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> };
+
+	return query;
+}
+
+export const prefetchDownloadWorkflowFileQuery = async <
+	TData = Awaited<ReturnType<typeof downloadWorkflowFile>>,
+	TError = ErrorType<ApiErrorBody>
+>(
+	queryClient: QueryClient,
+	projectId: string,
+	fileId: string,
+	options?: {
+		query?: Partial<
+			CreateQueryOptions<Awaited<ReturnType<typeof downloadWorkflowFile>>, TError, TData>
+		>;
+		request?: SecondParameter<typeof customFetch>;
+	}
+): Promise<QueryClient> => {
+	const queryOptions = getDownloadWorkflowFileQueryOptions(projectId, fileId, options);
+
+	await queryClient.prefetchQuery(queryOptions);
+
+	return queryClient;
+};
+
+export type listProjectWorkflowRunsResponse200 = {
+	data: WorkflowRunDto[];
+	status: 200;
+};
+
+export type listProjectWorkflowRunsResponse404 = {
+	data: ApiErrorBody;
+	status: 404;
+};
+
+export type listProjectWorkflowRunsResponseSuccess = listProjectWorkflowRunsResponse200 & {
+	headers: Headers;
+};
+export type listProjectWorkflowRunsResponseError = listProjectWorkflowRunsResponse404 & {
+	headers: Headers;
+};
+
+export const getListProjectWorkflowRunsUrl = (
+	projectId: string,
+	params?: ListProjectWorkflowRunsParams
+) => {
+	const normalizedParams = new URLSearchParams();
+
+	Object.entries(params || {}).forEach(([key, value]) => {
+		if (value !== undefined) {
+			normalizedParams.append(key, value === null ? 'null' : String(value));
+		}
+	});
+
+	const stringifiedParams = normalizedParams.toString();
+
+	return stringifiedParams.length > 0
+		? `/api/projects/${projectId}/automations/workflow-runs?${stringifiedParams}`
+		: `/api/projects/${projectId}/automations/workflow-runs`;
+};
+
+export const listProjectWorkflowRuns = async (
+	projectId: string,
+	params?: ListProjectWorkflowRunsParams,
+	options?: Parameters<typeof customFetch>[1]
+): Promise<listProjectWorkflowRunsResponseSuccess> => {
+	return customFetch<listProjectWorkflowRunsResponseSuccess>(
+		getListProjectWorkflowRunsUrl(projectId, params),
+		{
+			...options,
+			method: 'GET'
+		}
+	);
+};
+
+export const getListProjectWorkflowRunsQueryKey = (
+	projectId: string,
+	params?: ListProjectWorkflowRunsParams
+) => {
+	return [
+		`/api/projects/${projectId}/automations/workflow-runs`,
+		...(params ? [params] : [])
+	] as const;
+};
+
+export const getListProjectWorkflowRunsQueryOptions = <
+	TData = Awaited<ReturnType<typeof listProjectWorkflowRuns>>,
+	TError = ErrorType<ApiErrorBody>
+>(
+	projectId: string,
+	params?: ListProjectWorkflowRunsParams,
+	options?: {
+		query?: Partial<
+			CreateQueryOptions<Awaited<ReturnType<typeof listProjectWorkflowRuns>>, TError, TData>
+		>;
+		request?: SecondParameter<typeof customFetch>;
+	}
+) => {
+	const { query: queryOptions, request: requestOptions } = options ?? {};
+
+	const queryKey =
+		queryOptions?.queryKey ?? getListProjectWorkflowRunsQueryKey(projectId, params);
+
+	const queryFn: QueryFunction<Awaited<ReturnType<typeof listProjectWorkflowRuns>>> = ({
+		signal
+	}) => listProjectWorkflowRuns(projectId, params, { signal, ...requestOptions });
+
+	return {
+		queryKey,
+		queryFn,
+		enabled: projectId !== null && projectId !== undefined,
+		...queryOptions
+	} as CreateQueryOptions<Awaited<ReturnType<typeof listProjectWorkflowRuns>>, TError, TData> & {
+		queryKey: DataTag<QueryKey, TData, TError>;
+	};
+};
+
+export type ListProjectWorkflowRunsQueryResult = NonNullable<
+	Awaited<ReturnType<typeof listProjectWorkflowRuns>>
+>;
+export type ListProjectWorkflowRunsQueryError = ErrorType<ApiErrorBody>;
+
+export function createListProjectWorkflowRuns<
+	TData = Awaited<ReturnType<typeof listProjectWorkflowRuns>>,
+	TError = ErrorType<ApiErrorBody>
+>(
+	projectId: () => string,
+	params?: () => ListProjectWorkflowRunsParams,
+	options?: () => {
+		query?: Partial<
+			CreateQueryOptions<Awaited<ReturnType<typeof listProjectWorkflowRuns>>, TError, TData>
+		>;
+		request?: SecondParameter<typeof customFetch>;
+	},
+	queryClient?: () => QueryClient
+): CreateQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> } {
+	const query = createQuery(
+		() => getListProjectWorkflowRunsQueryOptions(projectId(), params?.(), options?.()),
+		queryClient
+	) as CreateQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> };
+
+	return query;
+}
+
+export const prefetchListProjectWorkflowRunsQuery = async <
+	TData = Awaited<ReturnType<typeof listProjectWorkflowRuns>>,
+	TError = ErrorType<ApiErrorBody>
+>(
+	queryClient: QueryClient,
+	projectId: string,
+	params?: ListProjectWorkflowRunsParams,
+	options?: {
+		query?: Partial<
+			CreateQueryOptions<Awaited<ReturnType<typeof listProjectWorkflowRuns>>, TError, TData>
+		>;
+		request?: SecondParameter<typeof customFetch>;
+	}
+): Promise<QueryClient> => {
+	const queryOptions = getListProjectWorkflowRunsQueryOptions(projectId, params, options);
+
+	await queryClient.prefetchQuery(queryOptions);
+
+	return queryClient;
+};
+
+export type getWorkflowRunResponse200 = {
+	data: WorkflowRunDto;
+	status: 200;
+};
+
+export type getWorkflowRunResponse404 = {
+	data: ApiErrorBody;
+	status: 404;
+};
+
+export type getWorkflowRunResponseSuccess = getWorkflowRunResponse200 & {
+	headers: Headers;
+};
+export type getWorkflowRunResponseError = getWorkflowRunResponse404 & {
+	headers: Headers;
+};
+
+export const getGetWorkflowRunUrl = (projectId: string, runId: string) => {
+	return `/api/projects/${projectId}/automations/workflow-runs/${runId}`;
+};
+
+export const getWorkflowRun = async (
+	projectId: string,
+	runId: string,
+	options?: Parameters<typeof customFetch>[1]
+): Promise<getWorkflowRunResponseSuccess> => {
+	return customFetch<getWorkflowRunResponseSuccess>(getGetWorkflowRunUrl(projectId, runId), {
+		...options,
+		method: 'GET'
+	});
+};
+
+export const getGetWorkflowRunQueryKey = (projectId: string, runId: string) => {
+	return [`/api/projects/${projectId}/automations/workflow-runs/${runId}`] as const;
+};
+
+export const getGetWorkflowRunQueryOptions = <
+	TData = Awaited<ReturnType<typeof getWorkflowRun>>,
+	TError = ErrorType<ApiErrorBody>
+>(
+	projectId: string,
+	runId: string,
+	options?: {
+		query?: Partial<
+			CreateQueryOptions<Awaited<ReturnType<typeof getWorkflowRun>>, TError, TData>
+		>;
+		request?: SecondParameter<typeof customFetch>;
+	}
+) => {
+	const { query: queryOptions, request: requestOptions } = options ?? {};
+
+	const queryKey = queryOptions?.queryKey ?? getGetWorkflowRunQueryKey(projectId, runId);
+
+	const queryFn: QueryFunction<Awaited<ReturnType<typeof getWorkflowRun>>> = ({ signal }) =>
+		getWorkflowRun(projectId, runId, { signal, ...requestOptions });
+
+	return {
+		queryKey,
+		queryFn,
+		enabled:
+			projectId !== null && projectId !== undefined && runId !== null && runId !== undefined,
+		...queryOptions
+	} as CreateQueryOptions<Awaited<ReturnType<typeof getWorkflowRun>>, TError, TData> & {
+		queryKey: DataTag<QueryKey, TData, TError>;
+	};
+};
+
+export type GetWorkflowRunQueryResult = NonNullable<Awaited<ReturnType<typeof getWorkflowRun>>>;
+export type GetWorkflowRunQueryError = ErrorType<ApiErrorBody>;
+
+export function createGetWorkflowRun<
+	TData = Awaited<ReturnType<typeof getWorkflowRun>>,
+	TError = ErrorType<ApiErrorBody>
+>(
+	projectId: () => string,
+	runId: () => string,
+	options?: () => {
+		query?: Partial<
+			CreateQueryOptions<Awaited<ReturnType<typeof getWorkflowRun>>, TError, TData>
+		>;
+		request?: SecondParameter<typeof customFetch>;
+	},
+	queryClient?: () => QueryClient
+): CreateQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> } {
+	const query = createQuery(
+		() => getGetWorkflowRunQueryOptions(projectId(), runId(), options?.()),
+		queryClient
+	) as CreateQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> };
+
+	return query;
+}
+
+export const prefetchGetWorkflowRunQuery = async <
+	TData = Awaited<ReturnType<typeof getWorkflowRun>>,
+	TError = ErrorType<ApiErrorBody>
+>(
+	queryClient: QueryClient,
+	projectId: string,
+	runId: string,
+	options?: {
+		query?: Partial<
+			CreateQueryOptions<Awaited<ReturnType<typeof getWorkflowRun>>, TError, TData>
+		>;
+		request?: SecondParameter<typeof customFetch>;
+	}
+): Promise<QueryClient> => {
+	const queryOptions = getGetWorkflowRunQueryOptions(projectId, runId, options);
+
+	await queryClient.prefetchQuery(queryOptions);
+
+	return queryClient;
+};
+
+export type cancelWorkflowRunResponse204 = {
+	data: void;
+	status: 204;
+};
+
+export type cancelWorkflowRunResponse404 = {
+	data: ApiErrorBody;
+	status: 404;
+};
+
+export type cancelWorkflowRunResponse409 = {
+	data: ApiErrorBody;
+	status: 409;
+};
+
+export type cancelWorkflowRunResponseSuccess = cancelWorkflowRunResponse204 & {
+	headers: Headers;
+};
+export type cancelWorkflowRunResponseError = (
+	cancelWorkflowRunResponse404 | cancelWorkflowRunResponse409
+) & {
+	headers: Headers;
+};
+
+export const getCancelWorkflowRunUrl = (projectId: string, runId: string) => {
+	return `/api/projects/${projectId}/automations/workflow-runs/${runId}/cancel`;
+};
+
+export const cancelWorkflowRun = async (
+	projectId: string,
+	runId: string,
+	options?: Parameters<typeof customFetch>[1]
+): Promise<cancelWorkflowRunResponseSuccess> => {
+	return customFetch<cancelWorkflowRunResponseSuccess>(
+		getCancelWorkflowRunUrl(projectId, runId),
+		{
+			...options,
+			method: 'POST'
+		}
+	);
+};
+
+export const getCancelWorkflowRunMutationOptions = <
+	TError = ErrorType<ApiErrorBody>,
+	TContext = unknown
+>(options?: {
+	mutation?: CreateMutationOptions<
+		Awaited<ReturnType<typeof cancelWorkflowRun>>,
+		TError,
+		CancelWorkflowRunMutationVariables,
+		TContext
+	>;
+	request?: SecondParameter<typeof customFetch>;
+}): CreateMutationOptions<
+	Awaited<ReturnType<typeof cancelWorkflowRun>>,
+	TError,
+	CancelWorkflowRunMutationVariables,
+	TContext
+> => {
+	const mutationKey = ['cancelWorkflowRun'];
+	const { mutation: mutationOptions, request: requestOptions } = options
+		? options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey
+			? options
+			: { ...options, mutation: { ...options.mutation, mutationKey } }
+		: { mutation: { mutationKey }, request: undefined };
+
+	const mutationFn: MutationFunction<
+		Awaited<ReturnType<typeof cancelWorkflowRun>>,
+		CancelWorkflowRunMutationVariables
+	> = (props) => {
+		const { projectId, runId } = props ?? {};
+
+		return cancelWorkflowRun(projectId, runId, requestOptions);
+	};
+
+	return { mutationFn, ...mutationOptions };
+};
+
+export type CancelWorkflowRunMutationResult = NonNullable<
+	Awaited<ReturnType<typeof cancelWorkflowRun>>
+>;
+
+export type CancelWorkflowRunMutationError = ErrorType<ApiErrorBody>;
+export type CancelWorkflowRunMutationVariables = { projectId: string; runId: string };
+
+export const createCancelWorkflowRun = <TError = ErrorType<ApiErrorBody>, TContext = unknown>(
+	options?: () => {
+		mutation?: CreateMutationOptions<
+			Awaited<ReturnType<typeof cancelWorkflowRun>>,
+			TError,
+			CancelWorkflowRunMutationVariables,
+			TContext
+		>;
+		request?: SecondParameter<typeof customFetch>;
+	},
+	queryClient?: () => QueryClient
+): CreateMutationResult<
+	Awaited<ReturnType<typeof cancelWorkflowRun>>,
+	TError,
+	CancelWorkflowRunMutationVariables,
+	TContext
+> => {
+	return createMutation(
+		() => ({ ...getCancelWorkflowRunMutationOptions(options?.()) }),
+		queryClient
+	);
+};
+export type listWorkflowsResponse200 = {
+	data: WorkflowDto[];
+	status: 200;
+};
+
+export type listWorkflowsResponse404 = {
+	data: ApiErrorBody;
+	status: 404;
+};
+
+export type listWorkflowsResponseSuccess = listWorkflowsResponse200 & {
+	headers: Headers;
+};
+export type listWorkflowsResponseError = listWorkflowsResponse404 & {
+	headers: Headers;
+};
+
+export const getListWorkflowsUrl = (projectId: string) => {
+	return `/api/projects/${projectId}/automations/workflows`;
+};
+
+export const listWorkflows = async (
+	projectId: string,
+	options?: Parameters<typeof customFetch>[1]
+): Promise<listWorkflowsResponseSuccess> => {
+	return customFetch<listWorkflowsResponseSuccess>(getListWorkflowsUrl(projectId), {
+		...options,
+		method: 'GET'
+	});
+};
+
+export const getListWorkflowsQueryKey = (projectId: string) => {
+	return [`/api/projects/${projectId}/automations/workflows`] as const;
+};
+
+export const getListWorkflowsQueryOptions = <
+	TData = Awaited<ReturnType<typeof listWorkflows>>,
+	TError = ErrorType<ApiErrorBody>
+>(
+	projectId: string,
+	options?: {
+		query?: Partial<
+			CreateQueryOptions<Awaited<ReturnType<typeof listWorkflows>>, TError, TData>
+		>;
+		request?: SecondParameter<typeof customFetch>;
+	}
+) => {
+	const { query: queryOptions, request: requestOptions } = options ?? {};
+
+	const queryKey = queryOptions?.queryKey ?? getListWorkflowsQueryKey(projectId);
+
+	const queryFn: QueryFunction<Awaited<ReturnType<typeof listWorkflows>>> = ({ signal }) =>
+		listWorkflows(projectId, { signal, ...requestOptions });
+
+	return {
+		queryKey,
+		queryFn,
+		enabled: projectId !== null && projectId !== undefined,
+		...queryOptions
+	} as CreateQueryOptions<Awaited<ReturnType<typeof listWorkflows>>, TError, TData> & {
+		queryKey: DataTag<QueryKey, TData, TError>;
+	};
+};
+
+export type ListWorkflowsQueryResult = NonNullable<Awaited<ReturnType<typeof listWorkflows>>>;
+export type ListWorkflowsQueryError = ErrorType<ApiErrorBody>;
+
+export function createListWorkflows<
+	TData = Awaited<ReturnType<typeof listWorkflows>>,
+	TError = ErrorType<ApiErrorBody>
+>(
+	projectId: () => string,
+	options?: () => {
+		query?: Partial<
+			CreateQueryOptions<Awaited<ReturnType<typeof listWorkflows>>, TError, TData>
+		>;
+		request?: SecondParameter<typeof customFetch>;
+	},
+	queryClient?: () => QueryClient
+): CreateQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> } {
+	const query = createQuery(
+		() => getListWorkflowsQueryOptions(projectId(), options?.()),
+		queryClient
+	) as CreateQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> };
+
+	return query;
+}
+
+export const prefetchListWorkflowsQuery = async <
+	TData = Awaited<ReturnType<typeof listWorkflows>>,
+	TError = ErrorType<ApiErrorBody>
+>(
+	queryClient: QueryClient,
+	projectId: string,
+	options?: {
+		query?: Partial<
+			CreateQueryOptions<Awaited<ReturnType<typeof listWorkflows>>, TError, TData>
+		>;
+		request?: SecondParameter<typeof customFetch>;
+	}
+): Promise<QueryClient> => {
+	const queryOptions = getListWorkflowsQueryOptions(projectId, options);
+
+	await queryClient.prefetchQuery(queryOptions);
+
+	return queryClient;
+};
+
+export type createWorkflowResponse201 = {
+	data: WorkflowDto;
+	status: 201;
+};
+
+export type createWorkflowResponse400 = {
+	data: ApiErrorBody;
+	status: 400;
+};
+
+export type createWorkflowResponse409 = {
+	data: ApiErrorBody;
+	status: 409;
+};
+
+export type createWorkflowResponseSuccess = createWorkflowResponse201 & {
+	headers: Headers;
+};
+export type createWorkflowResponseError = (
+	createWorkflowResponse400 | createWorkflowResponse409
+) & {
+	headers: Headers;
+};
+
+export const getCreateWorkflowUrl = (projectId: string) => {
+	return `/api/projects/${projectId}/automations/workflows`;
+};
+
+export const createWorkflow = async (
+	projectId: string,
+	createWorkflowRequest: CreateWorkflowRequest,
+	options?: Parameters<typeof customFetch>[1]
+): Promise<createWorkflowResponseSuccess> => {
+	const getHeaders = (
+		h?: NonNullable<RequestInit['headers']>
+	): Record<string, string | readonly string[]> => {
+		if (!h) return {};
+		if (h instanceof Headers) return Object.fromEntries(h.entries());
+		if (Array.isArray(h)) return Object.fromEntries(h);
+		return h;
+	};
+	return customFetch<createWorkflowResponseSuccess>(getCreateWorkflowUrl(projectId), {
+		...options,
+		method: 'POST',
+		headers: { 'Content-Type': 'application/json', ...getHeaders(options?.headers) },
+		body: JSON.stringify(createWorkflowRequest)
+	});
+};
+
+export const getCreateWorkflowMutationOptions = <
+	TError = ErrorType<ApiErrorBody>,
+	TContext = unknown
+>(options?: {
+	mutation?: CreateMutationOptions<
+		Awaited<ReturnType<typeof createWorkflow>>,
+		TError,
+		CreateWorkflowMutationVariables,
+		TContext
+	>;
+	request?: SecondParameter<typeof customFetch>;
+}): CreateMutationOptions<
+	Awaited<ReturnType<typeof createWorkflow>>,
+	TError,
+	CreateWorkflowMutationVariables,
+	TContext
+> => {
+	const mutationKey = ['createWorkflow'];
+	const { mutation: mutationOptions, request: requestOptions } = options
+		? options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey
+			? options
+			: { ...options, mutation: { ...options.mutation, mutationKey } }
+		: { mutation: { mutationKey }, request: undefined };
+
+	const mutationFn: MutationFunction<
+		Awaited<ReturnType<typeof createWorkflow>>,
+		CreateWorkflowMutationVariables
+	> = (props) => {
+		const { projectId, data } = props ?? {};
+
+		return createWorkflow(projectId, data, requestOptions);
+	};
+
+	return { mutationFn, ...mutationOptions };
+};
+
+export type CreateWorkflowMutationResult = NonNullable<Awaited<ReturnType<typeof createWorkflow>>>;
+export type CreateWorkflowMutationBody = BodyType<CreateWorkflowRequest>;
+export type CreateWorkflowMutationError = ErrorType<ApiErrorBody>;
+export type CreateWorkflowMutationVariables = {
+	projectId: string;
+	data: BodyType<CreateWorkflowRequest>;
+};
+
+export const createCreateWorkflow = <TError = ErrorType<ApiErrorBody>, TContext = unknown>(
+	options?: () => {
+		mutation?: CreateMutationOptions<
+			Awaited<ReturnType<typeof createWorkflow>>,
+			TError,
+			CreateWorkflowMutationVariables,
+			TContext
+		>;
+		request?: SecondParameter<typeof customFetch>;
+	},
+	queryClient?: () => QueryClient
+): CreateMutationResult<
+	Awaited<ReturnType<typeof createWorkflow>>,
+	TError,
+	CreateWorkflowMutationVariables,
+	TContext
+> => {
+	return createMutation(
+		() => ({ ...getCreateWorkflowMutationOptions(options?.()) }),
+		queryClient
+	);
+};
+export type createWorkflowFromTemplateResponse201 = {
+	data: WorkflowDto;
+	status: 201;
+};
+
+export type createWorkflowFromTemplateResponse400 = {
+	data: ApiErrorBody;
+	status: 400;
+};
+
+export type createWorkflowFromTemplateResponse409 = {
+	data: ApiErrorBody;
+	status: 409;
+};
+
+export type createWorkflowFromTemplateResponseSuccess = createWorkflowFromTemplateResponse201 & {
+	headers: Headers;
+};
+export type createWorkflowFromTemplateResponseError = (
+	createWorkflowFromTemplateResponse400 | createWorkflowFromTemplateResponse409
+) & {
+	headers: Headers;
+};
+
+export const getCreateWorkflowFromTemplateUrl = (projectId: string) => {
+	return `/api/projects/${projectId}/automations/workflows/from-template`;
+};
+
+export const createWorkflowFromTemplate = async (
+	projectId: string,
+	fromTemplateRequest: FromTemplateRequest,
+	options?: Parameters<typeof customFetch>[1]
+): Promise<createWorkflowFromTemplateResponseSuccess> => {
+	const getHeaders = (
+		h?: NonNullable<RequestInit['headers']>
+	): Record<string, string | readonly string[]> => {
+		if (!h) return {};
+		if (h instanceof Headers) return Object.fromEntries(h.entries());
+		if (Array.isArray(h)) return Object.fromEntries(h);
+		return h;
+	};
+	return customFetch<createWorkflowFromTemplateResponseSuccess>(
+		getCreateWorkflowFromTemplateUrl(projectId),
+		{
+			...options,
+			method: 'POST',
+			headers: { 'Content-Type': 'application/json', ...getHeaders(options?.headers) },
+			body: JSON.stringify(fromTemplateRequest)
+		}
+	);
+};
+
+export const getCreateWorkflowFromTemplateMutationOptions = <
+	TError = ErrorType<ApiErrorBody>,
+	TContext = unknown
+>(options?: {
+	mutation?: CreateMutationOptions<
+		Awaited<ReturnType<typeof createWorkflowFromTemplate>>,
+		TError,
+		CreateWorkflowFromTemplateMutationVariables,
+		TContext
+	>;
+	request?: SecondParameter<typeof customFetch>;
+}): CreateMutationOptions<
+	Awaited<ReturnType<typeof createWorkflowFromTemplate>>,
+	TError,
+	CreateWorkflowFromTemplateMutationVariables,
+	TContext
+> => {
+	const mutationKey = ['createWorkflowFromTemplate'];
+	const { mutation: mutationOptions, request: requestOptions } = options
+		? options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey
+			? options
+			: { ...options, mutation: { ...options.mutation, mutationKey } }
+		: { mutation: { mutationKey }, request: undefined };
+
+	const mutationFn: MutationFunction<
+		Awaited<ReturnType<typeof createWorkflowFromTemplate>>,
+		CreateWorkflowFromTemplateMutationVariables
+	> = (props) => {
+		const { projectId, data } = props ?? {};
+
+		return createWorkflowFromTemplate(projectId, data, requestOptions);
+	};
+
+	return { mutationFn, ...mutationOptions };
+};
+
+export type CreateWorkflowFromTemplateMutationResult = NonNullable<
+	Awaited<ReturnType<typeof createWorkflowFromTemplate>>
+>;
+export type CreateWorkflowFromTemplateMutationBody = BodyType<FromTemplateRequest>;
+export type CreateWorkflowFromTemplateMutationError = ErrorType<ApiErrorBody>;
+export type CreateWorkflowFromTemplateMutationVariables = {
+	projectId: string;
+	data: BodyType<FromTemplateRequest>;
+};
+
+export const createCreateWorkflowFromTemplate = <
+	TError = ErrorType<ApiErrorBody>,
+	TContext = unknown
+>(
+	options?: () => {
+		mutation?: CreateMutationOptions<
+			Awaited<ReturnType<typeof createWorkflowFromTemplate>>,
+			TError,
+			CreateWorkflowFromTemplateMutationVariables,
+			TContext
+		>;
+		request?: SecondParameter<typeof customFetch>;
+	},
+	queryClient?: () => QueryClient
+): CreateMutationResult<
+	Awaited<ReturnType<typeof createWorkflowFromTemplate>>,
+	TError,
+	CreateWorkflowFromTemplateMutationVariables,
+	TContext
+> => {
+	return createMutation(
+		() => ({ ...getCreateWorkflowFromTemplateMutationOptions(options?.()) }),
+		queryClient
+	);
+};
+export type getWorkflowResponse200 = {
+	data: WorkflowDto;
+	status: 200;
+};
+
+export type getWorkflowResponse404 = {
+	data: ApiErrorBody;
+	status: 404;
+};
+
+export type getWorkflowResponseSuccess = getWorkflowResponse200 & {
+	headers: Headers;
+};
+export type getWorkflowResponseError = getWorkflowResponse404 & {
+	headers: Headers;
+};
+
+export const getGetWorkflowUrl = (projectId: string, workflowId: string) => {
+	return `/api/projects/${projectId}/automations/workflows/${workflowId}`;
+};
+
+export const getWorkflow = async (
+	projectId: string,
+	workflowId: string,
+	options?: Parameters<typeof customFetch>[1]
+): Promise<getWorkflowResponseSuccess> => {
+	return customFetch<getWorkflowResponseSuccess>(getGetWorkflowUrl(projectId, workflowId), {
+		...options,
+		method: 'GET'
+	});
+};
+
+export const getGetWorkflowQueryKey = (projectId: string, workflowId: string) => {
+	return [`/api/projects/${projectId}/automations/workflows/${workflowId}`] as const;
+};
+
+export const getGetWorkflowQueryOptions = <
+	TData = Awaited<ReturnType<typeof getWorkflow>>,
+	TError = ErrorType<ApiErrorBody>
+>(
+	projectId: string,
+	workflowId: string,
+	options?: {
+		query?: Partial<CreateQueryOptions<Awaited<ReturnType<typeof getWorkflow>>, TError, TData>>;
+		request?: SecondParameter<typeof customFetch>;
+	}
+) => {
+	const { query: queryOptions, request: requestOptions } = options ?? {};
+
+	const queryKey = queryOptions?.queryKey ?? getGetWorkflowQueryKey(projectId, workflowId);
+
+	const queryFn: QueryFunction<Awaited<ReturnType<typeof getWorkflow>>> = ({ signal }) =>
+		getWorkflow(projectId, workflowId, { signal, ...requestOptions });
+
+	return {
+		queryKey,
+		queryFn,
+		enabled:
+			projectId !== null &&
+			projectId !== undefined &&
+			workflowId !== null &&
+			workflowId !== undefined,
+		...queryOptions
+	} as CreateQueryOptions<Awaited<ReturnType<typeof getWorkflow>>, TError, TData> & {
+		queryKey: DataTag<QueryKey, TData, TError>;
+	};
+};
+
+export type GetWorkflowQueryResult = NonNullable<Awaited<ReturnType<typeof getWorkflow>>>;
+export type GetWorkflowQueryError = ErrorType<ApiErrorBody>;
+
+export function createGetWorkflow<
+	TData = Awaited<ReturnType<typeof getWorkflow>>,
+	TError = ErrorType<ApiErrorBody>
+>(
+	projectId: () => string,
+	workflowId: () => string,
+	options?: () => {
+		query?: Partial<CreateQueryOptions<Awaited<ReturnType<typeof getWorkflow>>, TError, TData>>;
+		request?: SecondParameter<typeof customFetch>;
+	},
+	queryClient?: () => QueryClient
+): CreateQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> } {
+	const query = createQuery(
+		() => getGetWorkflowQueryOptions(projectId(), workflowId(), options?.()),
+		queryClient
+	) as CreateQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> };
+
+	return query;
+}
+
+export const prefetchGetWorkflowQuery = async <
+	TData = Awaited<ReturnType<typeof getWorkflow>>,
+	TError = ErrorType<ApiErrorBody>
+>(
+	queryClient: QueryClient,
+	projectId: string,
+	workflowId: string,
+	options?: {
+		query?: Partial<CreateQueryOptions<Awaited<ReturnType<typeof getWorkflow>>, TError, TData>>;
+		request?: SecondParameter<typeof customFetch>;
+	}
+): Promise<QueryClient> => {
+	const queryOptions = getGetWorkflowQueryOptions(projectId, workflowId, options);
+
+	await queryClient.prefetchQuery(queryOptions);
+
+	return queryClient;
+};
+
+export type updateWorkflowResponse200 = {
+	data: WorkflowDto;
+	status: 200;
+};
+
+export type updateWorkflowResponse404 = {
+	data: ApiErrorBody;
+	status: 404;
+};
+
+export type updateWorkflowResponse409 = {
+	data: ApiErrorBody;
+	status: 409;
+};
+
+export type updateWorkflowResponseSuccess = updateWorkflowResponse200 & {
+	headers: Headers;
+};
+export type updateWorkflowResponseError = (
+	updateWorkflowResponse404 | updateWorkflowResponse409
+) & {
+	headers: Headers;
+};
+
+export const getUpdateWorkflowUrl = (projectId: string, workflowId: string) => {
+	return `/api/projects/${projectId}/automations/workflows/${workflowId}`;
+};
+
+export const updateWorkflow = async (
+	projectId: string,
+	workflowId: string,
+	updateWorkflowRequest: UpdateWorkflowRequest,
+	options?: Parameters<typeof customFetch>[1]
+): Promise<updateWorkflowResponseSuccess> => {
+	const getHeaders = (
+		h?: NonNullable<RequestInit['headers']>
+	): Record<string, string | readonly string[]> => {
+		if (!h) return {};
+		if (h instanceof Headers) return Object.fromEntries(h.entries());
+		if (Array.isArray(h)) return Object.fromEntries(h);
+		return h;
+	};
+	return customFetch<updateWorkflowResponseSuccess>(getUpdateWorkflowUrl(projectId, workflowId), {
+		...options,
+		method: 'PUT',
+		headers: { 'Content-Type': 'application/json', ...getHeaders(options?.headers) },
+		body: JSON.stringify(updateWorkflowRequest)
+	});
+};
+
+export const getUpdateWorkflowMutationOptions = <
+	TError = ErrorType<ApiErrorBody>,
+	TContext = unknown
+>(options?: {
+	mutation?: CreateMutationOptions<
+		Awaited<ReturnType<typeof updateWorkflow>>,
+		TError,
+		UpdateWorkflowMutationVariables,
+		TContext
+	>;
+	request?: SecondParameter<typeof customFetch>;
+}): CreateMutationOptions<
+	Awaited<ReturnType<typeof updateWorkflow>>,
+	TError,
+	UpdateWorkflowMutationVariables,
+	TContext
+> => {
+	const mutationKey = ['updateWorkflow'];
+	const { mutation: mutationOptions, request: requestOptions } = options
+		? options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey
+			? options
+			: { ...options, mutation: { ...options.mutation, mutationKey } }
+		: { mutation: { mutationKey }, request: undefined };
+
+	const mutationFn: MutationFunction<
+		Awaited<ReturnType<typeof updateWorkflow>>,
+		UpdateWorkflowMutationVariables
+	> = (props) => {
+		const { projectId, workflowId, data } = props ?? {};
+
+		return updateWorkflow(projectId, workflowId, data, requestOptions);
+	};
+
+	return { mutationFn, ...mutationOptions };
+};
+
+export type UpdateWorkflowMutationResult = NonNullable<Awaited<ReturnType<typeof updateWorkflow>>>;
+export type UpdateWorkflowMutationBody = BodyType<UpdateWorkflowRequest>;
+export type UpdateWorkflowMutationError = ErrorType<ApiErrorBody>;
+export type UpdateWorkflowMutationVariables = {
+	projectId: string;
+	workflowId: string;
+	data: BodyType<UpdateWorkflowRequest>;
+};
+
+export const createUpdateWorkflow = <TError = ErrorType<ApiErrorBody>, TContext = unknown>(
+	options?: () => {
+		mutation?: CreateMutationOptions<
+			Awaited<ReturnType<typeof updateWorkflow>>,
+			TError,
+			UpdateWorkflowMutationVariables,
+			TContext
+		>;
+		request?: SecondParameter<typeof customFetch>;
+	},
+	queryClient?: () => QueryClient
+): CreateMutationResult<
+	Awaited<ReturnType<typeof updateWorkflow>>,
+	TError,
+	UpdateWorkflowMutationVariables,
+	TContext
+> => {
+	return createMutation(
+		() => ({ ...getUpdateWorkflowMutationOptions(options?.()) }),
+		queryClient
+	);
+};
+export type deleteWorkflowResponse204 = {
+	data: void;
+	status: 204;
+};
+
+export type deleteWorkflowResponse404 = {
+	data: ApiErrorBody;
+	status: 404;
+};
+
+export type deleteWorkflowResponseSuccess = deleteWorkflowResponse204 & {
+	headers: Headers;
+};
+export type deleteWorkflowResponseError = deleteWorkflowResponse404 & {
+	headers: Headers;
+};
+
+export const getDeleteWorkflowUrl = (projectId: string, workflowId: string) => {
+	return `/api/projects/${projectId}/automations/workflows/${workflowId}`;
+};
+
+export const deleteWorkflow = async (
+	projectId: string,
+	workflowId: string,
+	options?: Parameters<typeof customFetch>[1]
+): Promise<deleteWorkflowResponseSuccess> => {
+	return customFetch<deleteWorkflowResponseSuccess>(getDeleteWorkflowUrl(projectId, workflowId), {
+		...options,
+		method: 'DELETE'
+	});
+};
+
+export const getDeleteWorkflowMutationOptions = <
+	TError = ErrorType<ApiErrorBody>,
+	TContext = unknown
+>(options?: {
+	mutation?: CreateMutationOptions<
+		Awaited<ReturnType<typeof deleteWorkflow>>,
+		TError,
+		DeleteWorkflowMutationVariables,
+		TContext
+	>;
+	request?: SecondParameter<typeof customFetch>;
+}): CreateMutationOptions<
+	Awaited<ReturnType<typeof deleteWorkflow>>,
+	TError,
+	DeleteWorkflowMutationVariables,
+	TContext
+> => {
+	const mutationKey = ['deleteWorkflow'];
+	const { mutation: mutationOptions, request: requestOptions } = options
+		? options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey
+			? options
+			: { ...options, mutation: { ...options.mutation, mutationKey } }
+		: { mutation: { mutationKey }, request: undefined };
+
+	const mutationFn: MutationFunction<
+		Awaited<ReturnType<typeof deleteWorkflow>>,
+		DeleteWorkflowMutationVariables
+	> = (props) => {
+		const { projectId, workflowId } = props ?? {};
+
+		return deleteWorkflow(projectId, workflowId, requestOptions);
+	};
+
+	return { mutationFn, ...mutationOptions };
+};
+
+export type DeleteWorkflowMutationResult = NonNullable<Awaited<ReturnType<typeof deleteWorkflow>>>;
+
+export type DeleteWorkflowMutationError = ErrorType<ApiErrorBody>;
+export type DeleteWorkflowMutationVariables = { projectId: string; workflowId: string };
+
+export const createDeleteWorkflow = <TError = ErrorType<ApiErrorBody>, TContext = unknown>(
+	options?: () => {
+		mutation?: CreateMutationOptions<
+			Awaited<ReturnType<typeof deleteWorkflow>>,
+			TError,
+			DeleteWorkflowMutationVariables,
+			TContext
+		>;
+		request?: SecondParameter<typeof customFetch>;
+	},
+	queryClient?: () => QueryClient
+): CreateMutationResult<
+	Awaited<ReturnType<typeof deleteWorkflow>>,
+	TError,
+	DeleteWorkflowMutationVariables,
+	TContext
+> => {
+	return createMutation(
+		() => ({ ...getDeleteWorkflowMutationOptions(options?.()) }),
+		queryClient
+	);
+};
+export type disableWorkflowResponse200 = {
+	data: WorkflowDto;
+	status: 200;
+};
+
+export type disableWorkflowResponse404 = {
+	data: ApiErrorBody;
+	status: 404;
+};
+
+export type disableWorkflowResponseSuccess = disableWorkflowResponse200 & {
+	headers: Headers;
+};
+export type disableWorkflowResponseError = disableWorkflowResponse404 & {
+	headers: Headers;
+};
+
+export const getDisableWorkflowUrl = (projectId: string, workflowId: string) => {
+	return `/api/projects/${projectId}/automations/workflows/${workflowId}/disable`;
+};
+
+export const disableWorkflow = async (
+	projectId: string,
+	workflowId: string,
+	options?: Parameters<typeof customFetch>[1]
+): Promise<disableWorkflowResponseSuccess> => {
+	return customFetch<disableWorkflowResponseSuccess>(
+		getDisableWorkflowUrl(projectId, workflowId),
+		{
+			...options,
+			method: 'POST'
+		}
+	);
+};
+
+export const getDisableWorkflowMutationOptions = <
+	TError = ErrorType<ApiErrorBody>,
+	TContext = unknown
+>(options?: {
+	mutation?: CreateMutationOptions<
+		Awaited<ReturnType<typeof disableWorkflow>>,
+		TError,
+		DisableWorkflowMutationVariables,
+		TContext
+	>;
+	request?: SecondParameter<typeof customFetch>;
+}): CreateMutationOptions<
+	Awaited<ReturnType<typeof disableWorkflow>>,
+	TError,
+	DisableWorkflowMutationVariables,
+	TContext
+> => {
+	const mutationKey = ['disableWorkflow'];
+	const { mutation: mutationOptions, request: requestOptions } = options
+		? options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey
+			? options
+			: { ...options, mutation: { ...options.mutation, mutationKey } }
+		: { mutation: { mutationKey }, request: undefined };
+
+	const mutationFn: MutationFunction<
+		Awaited<ReturnType<typeof disableWorkflow>>,
+		DisableWorkflowMutationVariables
+	> = (props) => {
+		const { projectId, workflowId } = props ?? {};
+
+		return disableWorkflow(projectId, workflowId, requestOptions);
+	};
+
+	return { mutationFn, ...mutationOptions };
+};
+
+export type DisableWorkflowMutationResult = NonNullable<
+	Awaited<ReturnType<typeof disableWorkflow>>
+>;
+
+export type DisableWorkflowMutationError = ErrorType<ApiErrorBody>;
+export type DisableWorkflowMutationVariables = { projectId: string; workflowId: string };
+
+export const createDisableWorkflow = <TError = ErrorType<ApiErrorBody>, TContext = unknown>(
+	options?: () => {
+		mutation?: CreateMutationOptions<
+			Awaited<ReturnType<typeof disableWorkflow>>,
+			TError,
+			DisableWorkflowMutationVariables,
+			TContext
+		>;
+		request?: SecondParameter<typeof customFetch>;
+	},
+	queryClient?: () => QueryClient
+): CreateMutationResult<
+	Awaited<ReturnType<typeof disableWorkflow>>,
+	TError,
+	DisableWorkflowMutationVariables,
+	TContext
+> => {
+	return createMutation(
+		() => ({ ...getDisableWorkflowMutationOptions(options?.()) }),
+		queryClient
+	);
+};
+export type enableWorkflowResponse200 = {
+	data: WorkflowDto;
+	status: 200;
+};
+
+export type enableWorkflowResponse409 = {
+	data: ApiErrorBody;
+	status: 409;
+};
+
+export type enableWorkflowResponseSuccess = enableWorkflowResponse200 & {
+	headers: Headers;
+};
+export type enableWorkflowResponseError = enableWorkflowResponse409 & {
+	headers: Headers;
+};
+
+export const getEnableWorkflowUrl = (projectId: string, workflowId: string) => {
+	return `/api/projects/${projectId}/automations/workflows/${workflowId}/enable`;
+};
+
+export const enableWorkflow = async (
+	projectId: string,
+	workflowId: string,
+	options?: Parameters<typeof customFetch>[1]
+): Promise<enableWorkflowResponseSuccess> => {
+	return customFetch<enableWorkflowResponseSuccess>(getEnableWorkflowUrl(projectId, workflowId), {
+		...options,
+		method: 'POST'
+	});
+};
+
+export const getEnableWorkflowMutationOptions = <
+	TError = ErrorType<ApiErrorBody>,
+	TContext = unknown
+>(options?: {
+	mutation?: CreateMutationOptions<
+		Awaited<ReturnType<typeof enableWorkflow>>,
+		TError,
+		EnableWorkflowMutationVariables,
+		TContext
+	>;
+	request?: SecondParameter<typeof customFetch>;
+}): CreateMutationOptions<
+	Awaited<ReturnType<typeof enableWorkflow>>,
+	TError,
+	EnableWorkflowMutationVariables,
+	TContext
+> => {
+	const mutationKey = ['enableWorkflow'];
+	const { mutation: mutationOptions, request: requestOptions } = options
+		? options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey
+			? options
+			: { ...options, mutation: { ...options.mutation, mutationKey } }
+		: { mutation: { mutationKey }, request: undefined };
+
+	const mutationFn: MutationFunction<
+		Awaited<ReturnType<typeof enableWorkflow>>,
+		EnableWorkflowMutationVariables
+	> = (props) => {
+		const { projectId, workflowId } = props ?? {};
+
+		return enableWorkflow(projectId, workflowId, requestOptions);
+	};
+
+	return { mutationFn, ...mutationOptions };
+};
+
+export type EnableWorkflowMutationResult = NonNullable<Awaited<ReturnType<typeof enableWorkflow>>>;
+
+export type EnableWorkflowMutationError = ErrorType<ApiErrorBody>;
+export type EnableWorkflowMutationVariables = { projectId: string; workflowId: string };
+
+export const createEnableWorkflow = <TError = ErrorType<ApiErrorBody>, TContext = unknown>(
+	options?: () => {
+		mutation?: CreateMutationOptions<
+			Awaited<ReturnType<typeof enableWorkflow>>,
+			TError,
+			EnableWorkflowMutationVariables,
+			TContext
+		>;
+		request?: SecondParameter<typeof customFetch>;
+	},
+	queryClient?: () => QueryClient
+): CreateMutationResult<
+	Awaited<ReturnType<typeof enableWorkflow>>,
+	TError,
+	EnableWorkflowMutationVariables,
+	TContext
+> => {
+	return createMutation(
+		() => ({ ...getEnableWorkflowMutationOptions(options?.()) }),
+		queryClient
+	);
+};
+export type getWorkflowEndpointsResponse200 = {
+	data: EndpointsDto;
+	status: 200;
+};
+
+export type getWorkflowEndpointsResponse404 = {
+	data: ApiErrorBody;
+	status: 404;
+};
+
+export type getWorkflowEndpointsResponseSuccess = getWorkflowEndpointsResponse200 & {
+	headers: Headers;
+};
+export type getWorkflowEndpointsResponseError = getWorkflowEndpointsResponse404 & {
+	headers: Headers;
+};
+
+export const getGetWorkflowEndpointsUrl = (projectId: string, workflowId: string) => {
+	return `/api/projects/${projectId}/automations/workflows/${workflowId}/endpoints`;
+};
+
+export const getWorkflowEndpoints = async (
+	projectId: string,
+	workflowId: string,
+	options?: Parameters<typeof customFetch>[1]
+): Promise<getWorkflowEndpointsResponseSuccess> => {
+	return customFetch<getWorkflowEndpointsResponseSuccess>(
+		getGetWorkflowEndpointsUrl(projectId, workflowId),
+		{
+			...options,
+			method: 'GET'
+		}
+	);
+};
+
+export const getGetWorkflowEndpointsQueryKey = (projectId: string, workflowId: string) => {
+	return [`/api/projects/${projectId}/automations/workflows/${workflowId}/endpoints`] as const;
+};
+
+export const getGetWorkflowEndpointsQueryOptions = <
+	TData = Awaited<ReturnType<typeof getWorkflowEndpoints>>,
+	TError = ErrorType<ApiErrorBody>
+>(
+	projectId: string,
+	workflowId: string,
+	options?: {
+		query?: Partial<
+			CreateQueryOptions<Awaited<ReturnType<typeof getWorkflowEndpoints>>, TError, TData>
+		>;
+		request?: SecondParameter<typeof customFetch>;
+	}
+) => {
+	const { query: queryOptions, request: requestOptions } = options ?? {};
+
+	const queryKey =
+		queryOptions?.queryKey ?? getGetWorkflowEndpointsQueryKey(projectId, workflowId);
+
+	const queryFn: QueryFunction<Awaited<ReturnType<typeof getWorkflowEndpoints>>> = ({ signal }) =>
+		getWorkflowEndpoints(projectId, workflowId, { signal, ...requestOptions });
+
+	return {
+		queryKey,
+		queryFn,
+		enabled:
+			projectId !== null &&
+			projectId !== undefined &&
+			workflowId !== null &&
+			workflowId !== undefined,
+		...queryOptions
+	} as CreateQueryOptions<Awaited<ReturnType<typeof getWorkflowEndpoints>>, TError, TData> & {
+		queryKey: DataTag<QueryKey, TData, TError>;
+	};
+};
+
+export type GetWorkflowEndpointsQueryResult = NonNullable<
+	Awaited<ReturnType<typeof getWorkflowEndpoints>>
+>;
+export type GetWorkflowEndpointsQueryError = ErrorType<ApiErrorBody>;
+
+export function createGetWorkflowEndpoints<
+	TData = Awaited<ReturnType<typeof getWorkflowEndpoints>>,
+	TError = ErrorType<ApiErrorBody>
+>(
+	projectId: () => string,
+	workflowId: () => string,
+	options?: () => {
+		query?: Partial<
+			CreateQueryOptions<Awaited<ReturnType<typeof getWorkflowEndpoints>>, TError, TData>
+		>;
+		request?: SecondParameter<typeof customFetch>;
+	},
+	queryClient?: () => QueryClient
+): CreateQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> } {
+	const query = createQuery(
+		() => getGetWorkflowEndpointsQueryOptions(projectId(), workflowId(), options?.()),
+		queryClient
+	) as CreateQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> };
+
+	return query;
+}
+
+export const prefetchGetWorkflowEndpointsQuery = async <
+	TData = Awaited<ReturnType<typeof getWorkflowEndpoints>>,
+	TError = ErrorType<ApiErrorBody>
+>(
+	queryClient: QueryClient,
+	projectId: string,
+	workflowId: string,
+	options?: {
+		query?: Partial<
+			CreateQueryOptions<Awaited<ReturnType<typeof getWorkflowEndpoints>>, TError, TData>
+		>;
+		request?: SecondParameter<typeof customFetch>;
+	}
+): Promise<QueryClient> => {
+	const queryOptions = getGetWorkflowEndpointsQueryOptions(projectId, workflowId, options);
+
+	await queryClient.prefetchQuery(queryOptions);
+
+	return queryClient;
+};
+
+export type updateWorkflowEndpointsResponse200 = {
+	data: EndpointsDto;
+	status: 200;
+};
+
+export type updateWorkflowEndpointsResponse404 = {
+	data: ApiErrorBody;
+	status: 404;
+};
+
+export type updateWorkflowEndpointsResponseSuccess = updateWorkflowEndpointsResponse200 & {
+	headers: Headers;
+};
+export type updateWorkflowEndpointsResponseError = updateWorkflowEndpointsResponse404 & {
+	headers: Headers;
+};
+
+export const getUpdateWorkflowEndpointsUrl = (projectId: string, workflowId: string) => {
+	return `/api/projects/${projectId}/automations/workflows/${workflowId}/endpoints`;
+};
+
+export const updateWorkflowEndpoints = async (
+	projectId: string,
+	workflowId: string,
+	endpointSettingsRequest: EndpointSettingsRequest,
+	options?: Parameters<typeof customFetch>[1]
+): Promise<updateWorkflowEndpointsResponseSuccess> => {
+	const getHeaders = (
+		h?: NonNullable<RequestInit['headers']>
+	): Record<string, string | readonly string[]> => {
+		if (!h) return {};
+		if (h instanceof Headers) return Object.fromEntries(h.entries());
+		if (Array.isArray(h)) return Object.fromEntries(h);
+		return h;
+	};
+	return customFetch<updateWorkflowEndpointsResponseSuccess>(
+		getUpdateWorkflowEndpointsUrl(projectId, workflowId),
+		{
+			...options,
+			method: 'PUT',
+			headers: { 'Content-Type': 'application/json', ...getHeaders(options?.headers) },
+			body: JSON.stringify(endpointSettingsRequest)
+		}
+	);
+};
+
+export const getUpdateWorkflowEndpointsMutationOptions = <
+	TError = ErrorType<ApiErrorBody>,
+	TContext = unknown
+>(options?: {
+	mutation?: CreateMutationOptions<
+		Awaited<ReturnType<typeof updateWorkflowEndpoints>>,
+		TError,
+		UpdateWorkflowEndpointsMutationVariables,
+		TContext
+	>;
+	request?: SecondParameter<typeof customFetch>;
+}): CreateMutationOptions<
+	Awaited<ReturnType<typeof updateWorkflowEndpoints>>,
+	TError,
+	UpdateWorkflowEndpointsMutationVariables,
+	TContext
+> => {
+	const mutationKey = ['updateWorkflowEndpoints'];
+	const { mutation: mutationOptions, request: requestOptions } = options
+		? options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey
+			? options
+			: { ...options, mutation: { ...options.mutation, mutationKey } }
+		: { mutation: { mutationKey }, request: undefined };
+
+	const mutationFn: MutationFunction<
+		Awaited<ReturnType<typeof updateWorkflowEndpoints>>,
+		UpdateWorkflowEndpointsMutationVariables
+	> = (props) => {
+		const { projectId, workflowId, data } = props ?? {};
+
+		return updateWorkflowEndpoints(projectId, workflowId, data, requestOptions);
+	};
+
+	return { mutationFn, ...mutationOptions };
+};
+
+export type UpdateWorkflowEndpointsMutationResult = NonNullable<
+	Awaited<ReturnType<typeof updateWorkflowEndpoints>>
+>;
+export type UpdateWorkflowEndpointsMutationBody = BodyType<EndpointSettingsRequest>;
+export type UpdateWorkflowEndpointsMutationError = ErrorType<ApiErrorBody>;
+export type UpdateWorkflowEndpointsMutationVariables = {
+	projectId: string;
+	workflowId: string;
+	data: BodyType<EndpointSettingsRequest>;
+};
+
+export const createUpdateWorkflowEndpoints = <TError = ErrorType<ApiErrorBody>, TContext = unknown>(
+	options?: () => {
+		mutation?: CreateMutationOptions<
+			Awaited<ReturnType<typeof updateWorkflowEndpoints>>,
+			TError,
+			UpdateWorkflowEndpointsMutationVariables,
+			TContext
+		>;
+		request?: SecondParameter<typeof customFetch>;
+	},
+	queryClient?: () => QueryClient
+): CreateMutationResult<
+	Awaited<ReturnType<typeof updateWorkflowEndpoints>>,
+	TError,
+	UpdateWorkflowEndpointsMutationVariables,
+	TContext
+> => {
+	return createMutation(
+		() => ({ ...getUpdateWorkflowEndpointsMutationOptions(options?.()) }),
+		queryClient
+	);
+};
+export type rotateWorkflowEmailAddressResponse200 = {
+	data: EndpointsDto;
+	status: 200;
+};
+
+export type rotateWorkflowEmailAddressResponseSuccess = rotateWorkflowEmailAddressResponse200 & {
+	headers: Headers;
+};
+export const getRotateWorkflowEmailAddressUrl = (projectId: string, workflowId: string) => {
+	return `/api/projects/${projectId}/automations/workflows/${workflowId}/endpoints/email/rotate`;
+};
+
+export const rotateWorkflowEmailAddress = async (
+	projectId: string,
+	workflowId: string,
+	options?: Parameters<typeof customFetch>[1]
+): Promise<rotateWorkflowEmailAddressResponseSuccess> => {
+	return customFetch<rotateWorkflowEmailAddressResponseSuccess>(
+		getRotateWorkflowEmailAddressUrl(projectId, workflowId),
+		{
+			...options,
+			method: 'POST'
+		}
+	);
+};
+
+export const getRotateWorkflowEmailAddressMutationOptions = <
+	TError = ErrorType<unknown>,
+	TContext = unknown
+>(options?: {
+	mutation?: CreateMutationOptions<
+		Awaited<ReturnType<typeof rotateWorkflowEmailAddress>>,
+		TError,
+		RotateWorkflowEmailAddressMutationVariables,
+		TContext
+	>;
+	request?: SecondParameter<typeof customFetch>;
+}): CreateMutationOptions<
+	Awaited<ReturnType<typeof rotateWorkflowEmailAddress>>,
+	TError,
+	RotateWorkflowEmailAddressMutationVariables,
+	TContext
+> => {
+	const mutationKey = ['rotateWorkflowEmailAddress'];
+	const { mutation: mutationOptions, request: requestOptions } = options
+		? options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey
+			? options
+			: { ...options, mutation: { ...options.mutation, mutationKey } }
+		: { mutation: { mutationKey }, request: undefined };
+
+	const mutationFn: MutationFunction<
+		Awaited<ReturnType<typeof rotateWorkflowEmailAddress>>,
+		RotateWorkflowEmailAddressMutationVariables
+	> = (props) => {
+		const { projectId, workflowId } = props ?? {};
+
+		return rotateWorkflowEmailAddress(projectId, workflowId, requestOptions);
+	};
+
+	return { mutationFn, ...mutationOptions };
+};
+
+export type RotateWorkflowEmailAddressMutationResult = NonNullable<
+	Awaited<ReturnType<typeof rotateWorkflowEmailAddress>>
+>;
+
+export type RotateWorkflowEmailAddressMutationError = ErrorType<unknown>;
+export type RotateWorkflowEmailAddressMutationVariables = { projectId: string; workflowId: string };
+
+export const createRotateWorkflowEmailAddress = <TError = ErrorType<unknown>, TContext = unknown>(
+	options?: () => {
+		mutation?: CreateMutationOptions<
+			Awaited<ReturnType<typeof rotateWorkflowEmailAddress>>,
+			TError,
+			RotateWorkflowEmailAddressMutationVariables,
+			TContext
+		>;
+		request?: SecondParameter<typeof customFetch>;
+	},
+	queryClient?: () => QueryClient
+): CreateMutationResult<
+	Awaited<ReturnType<typeof rotateWorkflowEmailAddress>>,
+	TError,
+	RotateWorkflowEmailAddressMutationVariables,
+	TContext
+> => {
+	return createMutation(
+		() => ({ ...getRotateWorkflowEmailAddressMutationOptions(options?.()) }),
+		queryClient
+	);
+};
+export type rotateWorkflowWebhookSecretResponse200 = {
+	data: EndpointsDto;
+	status: 200;
+};
+
+export type rotateWorkflowWebhookSecretResponseSuccess = rotateWorkflowWebhookSecretResponse200 & {
+	headers: Headers;
+};
+export const getRotateWorkflowWebhookSecretUrl = (projectId: string, workflowId: string) => {
+	return `/api/projects/${projectId}/automations/workflows/${workflowId}/endpoints/webhook-secret/rotate`;
+};
+
+export const rotateWorkflowWebhookSecret = async (
+	projectId: string,
+	workflowId: string,
+	options?: Parameters<typeof customFetch>[1]
+): Promise<rotateWorkflowWebhookSecretResponseSuccess> => {
+	return customFetch<rotateWorkflowWebhookSecretResponseSuccess>(
+		getRotateWorkflowWebhookSecretUrl(projectId, workflowId),
+		{
+			...options,
+			method: 'POST'
+		}
+	);
+};
+
+export const getRotateWorkflowWebhookSecretMutationOptions = <
+	TError = ErrorType<unknown>,
+	TContext = unknown
+>(options?: {
+	mutation?: CreateMutationOptions<
+		Awaited<ReturnType<typeof rotateWorkflowWebhookSecret>>,
+		TError,
+		RotateWorkflowWebhookSecretMutationVariables,
+		TContext
+	>;
+	request?: SecondParameter<typeof customFetch>;
+}): CreateMutationOptions<
+	Awaited<ReturnType<typeof rotateWorkflowWebhookSecret>>,
+	TError,
+	RotateWorkflowWebhookSecretMutationVariables,
+	TContext
+> => {
+	const mutationKey = ['rotateWorkflowWebhookSecret'];
+	const { mutation: mutationOptions, request: requestOptions } = options
+		? options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey
+			? options
+			: { ...options, mutation: { ...options.mutation, mutationKey } }
+		: { mutation: { mutationKey }, request: undefined };
+
+	const mutationFn: MutationFunction<
+		Awaited<ReturnType<typeof rotateWorkflowWebhookSecret>>,
+		RotateWorkflowWebhookSecretMutationVariables
+	> = (props) => {
+		const { projectId, workflowId } = props ?? {};
+
+		return rotateWorkflowWebhookSecret(projectId, workflowId, requestOptions);
+	};
+
+	return { mutationFn, ...mutationOptions };
+};
+
+export type RotateWorkflowWebhookSecretMutationResult = NonNullable<
+	Awaited<ReturnType<typeof rotateWorkflowWebhookSecret>>
+>;
+
+export type RotateWorkflowWebhookSecretMutationError = ErrorType<unknown>;
+export type RotateWorkflowWebhookSecretMutationVariables = {
+	projectId: string;
+	workflowId: string;
+};
+
+export const createRotateWorkflowWebhookSecret = <TError = ErrorType<unknown>, TContext = unknown>(
+	options?: () => {
+		mutation?: CreateMutationOptions<
+			Awaited<ReturnType<typeof rotateWorkflowWebhookSecret>>,
+			TError,
+			RotateWorkflowWebhookSecretMutationVariables,
+			TContext
+		>;
+		request?: SecondParameter<typeof customFetch>;
+	},
+	queryClient?: () => QueryClient
+): CreateMutationResult<
+	Awaited<ReturnType<typeof rotateWorkflowWebhookSecret>>,
+	TError,
+	RotateWorkflowWebhookSecretMutationVariables,
+	TContext
+> => {
+	return createMutation(
+		() => ({ ...getRotateWorkflowWebhookSecretMutationOptions(options?.()) }),
+		queryClient
+	);
+};
+export type rotateWorkflowWebhookResponse200 = {
+	data: EndpointsDto;
+	status: 200;
+};
+
+export type rotateWorkflowWebhookResponseSuccess = rotateWorkflowWebhookResponse200 & {
+	headers: Headers;
+};
+export const getRotateWorkflowWebhookUrl = (projectId: string, workflowId: string) => {
+	return `/api/projects/${projectId}/automations/workflows/${workflowId}/endpoints/webhook/rotate`;
+};
+
+export const rotateWorkflowWebhook = async (
+	projectId: string,
+	workflowId: string,
+	options?: Parameters<typeof customFetch>[1]
+): Promise<rotateWorkflowWebhookResponseSuccess> => {
+	return customFetch<rotateWorkflowWebhookResponseSuccess>(
+		getRotateWorkflowWebhookUrl(projectId, workflowId),
+		{
+			...options,
+			method: 'POST'
+		}
+	);
+};
+
+export const getRotateWorkflowWebhookMutationOptions = <
+	TError = ErrorType<unknown>,
+	TContext = unknown
+>(options?: {
+	mutation?: CreateMutationOptions<
+		Awaited<ReturnType<typeof rotateWorkflowWebhook>>,
+		TError,
+		RotateWorkflowWebhookMutationVariables,
+		TContext
+	>;
+	request?: SecondParameter<typeof customFetch>;
+}): CreateMutationOptions<
+	Awaited<ReturnType<typeof rotateWorkflowWebhook>>,
+	TError,
+	RotateWorkflowWebhookMutationVariables,
+	TContext
+> => {
+	const mutationKey = ['rotateWorkflowWebhook'];
+	const { mutation: mutationOptions, request: requestOptions } = options
+		? options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey
+			? options
+			: { ...options, mutation: { ...options.mutation, mutationKey } }
+		: { mutation: { mutationKey }, request: undefined };
+
+	const mutationFn: MutationFunction<
+		Awaited<ReturnType<typeof rotateWorkflowWebhook>>,
+		RotateWorkflowWebhookMutationVariables
+	> = (props) => {
+		const { projectId, workflowId } = props ?? {};
+
+		return rotateWorkflowWebhook(projectId, workflowId, requestOptions);
+	};
+
+	return { mutationFn, ...mutationOptions };
+};
+
+export type RotateWorkflowWebhookMutationResult = NonNullable<
+	Awaited<ReturnType<typeof rotateWorkflowWebhook>>
+>;
+
+export type RotateWorkflowWebhookMutationError = ErrorType<unknown>;
+export type RotateWorkflowWebhookMutationVariables = { projectId: string; workflowId: string };
+
+export const createRotateWorkflowWebhook = <TError = ErrorType<unknown>, TContext = unknown>(
+	options?: () => {
+		mutation?: CreateMutationOptions<
+			Awaited<ReturnType<typeof rotateWorkflowWebhook>>,
+			TError,
+			RotateWorkflowWebhookMutationVariables,
+			TContext
+		>;
+		request?: SecondParameter<typeof customFetch>;
+	},
+	queryClient?: () => QueryClient
+): CreateMutationResult<
+	Awaited<ReturnType<typeof rotateWorkflowWebhook>>,
+	TError,
+	RotateWorkflowWebhookMutationVariables,
+	TContext
+> => {
+	return createMutation(
+		() => ({ ...getRotateWorkflowWebhookMutationOptions(options?.()) }),
+		queryClient
+	);
+};
+export type publishWorkflowResponse201 = {
+	data: VersionDto;
+	status: 201;
+};
+
+export type publishWorkflowResponse404 = {
+	data: ApiErrorBody;
+	status: 404;
+};
+
+export type publishWorkflowResponse409 = {
+	data: ApiErrorBody;
+	status: 409;
+};
+
+export type publishWorkflowResponseSuccess = publishWorkflowResponse201 & {
+	headers: Headers;
+};
+export type publishWorkflowResponseError = (
+	publishWorkflowResponse404 | publishWorkflowResponse409
+) & {
+	headers: Headers;
+};
+
+export const getPublishWorkflowUrl = (projectId: string, workflowId: string) => {
+	return `/api/projects/${projectId}/automations/workflows/${workflowId}/publish`;
+};
+
+export const publishWorkflow = async (
+	projectId: string,
+	workflowId: string,
+	publishRequest: PublishRequest,
+	options?: Parameters<typeof customFetch>[1]
+): Promise<publishWorkflowResponseSuccess> => {
+	const getHeaders = (
+		h?: NonNullable<RequestInit['headers']>
+	): Record<string, string | readonly string[]> => {
+		if (!h) return {};
+		if (h instanceof Headers) return Object.fromEntries(h.entries());
+		if (Array.isArray(h)) return Object.fromEntries(h);
+		return h;
+	};
+	return customFetch<publishWorkflowResponseSuccess>(
+		getPublishWorkflowUrl(projectId, workflowId),
+		{
+			...options,
+			method: 'POST',
+			headers: { 'Content-Type': 'application/json', ...getHeaders(options?.headers) },
+			body: JSON.stringify(publishRequest)
+		}
+	);
+};
+
+export const getPublishWorkflowMutationOptions = <
+	TError = ErrorType<ApiErrorBody>,
+	TContext = unknown
+>(options?: {
+	mutation?: CreateMutationOptions<
+		Awaited<ReturnType<typeof publishWorkflow>>,
+		TError,
+		PublishWorkflowMutationVariables,
+		TContext
+	>;
+	request?: SecondParameter<typeof customFetch>;
+}): CreateMutationOptions<
+	Awaited<ReturnType<typeof publishWorkflow>>,
+	TError,
+	PublishWorkflowMutationVariables,
+	TContext
+> => {
+	const mutationKey = ['publishWorkflow'];
+	const { mutation: mutationOptions, request: requestOptions } = options
+		? options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey
+			? options
+			: { ...options, mutation: { ...options.mutation, mutationKey } }
+		: { mutation: { mutationKey }, request: undefined };
+
+	const mutationFn: MutationFunction<
+		Awaited<ReturnType<typeof publishWorkflow>>,
+		PublishWorkflowMutationVariables
+	> = (props) => {
+		const { projectId, workflowId, data } = props ?? {};
+
+		return publishWorkflow(projectId, workflowId, data, requestOptions);
+	};
+
+	return { mutationFn, ...mutationOptions };
+};
+
+export type PublishWorkflowMutationResult = NonNullable<
+	Awaited<ReturnType<typeof publishWorkflow>>
+>;
+export type PublishWorkflowMutationBody = BodyType<PublishRequest>;
+export type PublishWorkflowMutationError = ErrorType<ApiErrorBody>;
+export type PublishWorkflowMutationVariables = {
+	projectId: string;
+	workflowId: string;
+	data: BodyType<PublishRequest>;
+};
+
+export const createPublishWorkflow = <TError = ErrorType<ApiErrorBody>, TContext = unknown>(
+	options?: () => {
+		mutation?: CreateMutationOptions<
+			Awaited<ReturnType<typeof publishWorkflow>>,
+			TError,
+			PublishWorkflowMutationVariables,
+			TContext
+		>;
+		request?: SecondParameter<typeof customFetch>;
+	},
+	queryClient?: () => QueryClient
+): CreateMutationResult<
+	Awaited<ReturnType<typeof publishWorkflow>>,
+	TError,
+	PublishWorkflowMutationVariables,
+	TContext
+> => {
+	return createMutation(
+		() => ({ ...getPublishWorkflowMutationOptions(options?.()) }),
+		queryClient
+	);
+};
+export type listWorkflowRunsResponse200 = {
+	data: WorkflowRunDto[];
+	status: 200;
+};
+
+export type listWorkflowRunsResponse404 = {
+	data: ApiErrorBody;
+	status: 404;
+};
+
+export type listWorkflowRunsResponseSuccess = listWorkflowRunsResponse200 & {
+	headers: Headers;
+};
+export type listWorkflowRunsResponseError = listWorkflowRunsResponse404 & {
+	headers: Headers;
+};
+
+export const getListWorkflowRunsUrl = (
+	projectId: string,
+	workflowId: string,
+	params?: ListWorkflowRunsParams
+) => {
+	const normalizedParams = new URLSearchParams();
+
+	Object.entries(params || {}).forEach(([key, value]) => {
+		if (value !== undefined) {
+			normalizedParams.append(key, value === null ? 'null' : String(value));
+		}
+	});
+
+	const stringifiedParams = normalizedParams.toString();
+
+	return stringifiedParams.length > 0
+		? `/api/projects/${projectId}/automations/workflows/${workflowId}/runs?${stringifiedParams}`
+		: `/api/projects/${projectId}/automations/workflows/${workflowId}/runs`;
+};
+
+export const listWorkflowRuns = async (
+	projectId: string,
+	workflowId: string,
+	params?: ListWorkflowRunsParams,
+	options?: Parameters<typeof customFetch>[1]
+): Promise<listWorkflowRunsResponseSuccess> => {
+	return customFetch<listWorkflowRunsResponseSuccess>(
+		getListWorkflowRunsUrl(projectId, workflowId, params),
+		{
+			...options,
+			method: 'GET'
+		}
+	);
+};
+
+export const getListWorkflowRunsQueryKey = (
+	projectId: string,
+	workflowId: string,
+	params?: ListWorkflowRunsParams
+) => {
+	return [
+		`/api/projects/${projectId}/automations/workflows/${workflowId}/runs`,
+		...(params ? [params] : [])
+	] as const;
+};
+
+export const getListWorkflowRunsQueryOptions = <
+	TData = Awaited<ReturnType<typeof listWorkflowRuns>>,
+	TError = ErrorType<ApiErrorBody>
+>(
+	projectId: string,
+	workflowId: string,
+	params?: ListWorkflowRunsParams,
+	options?: {
+		query?: Partial<
+			CreateQueryOptions<Awaited<ReturnType<typeof listWorkflowRuns>>, TError, TData>
+		>;
+		request?: SecondParameter<typeof customFetch>;
+	}
+) => {
+	const { query: queryOptions, request: requestOptions } = options ?? {};
+
+	const queryKey =
+		queryOptions?.queryKey ?? getListWorkflowRunsQueryKey(projectId, workflowId, params);
+
+	const queryFn: QueryFunction<Awaited<ReturnType<typeof listWorkflowRuns>>> = ({ signal }) =>
+		listWorkflowRuns(projectId, workflowId, params, { signal, ...requestOptions });
+
+	return {
+		queryKey,
+		queryFn,
+		enabled:
+			projectId !== null &&
+			projectId !== undefined &&
+			workflowId !== null &&
+			workflowId !== undefined,
+		...queryOptions
+	} as CreateQueryOptions<Awaited<ReturnType<typeof listWorkflowRuns>>, TError, TData> & {
+		queryKey: DataTag<QueryKey, TData, TError>;
+	};
+};
+
+export type ListWorkflowRunsQueryResult = NonNullable<Awaited<ReturnType<typeof listWorkflowRuns>>>;
+export type ListWorkflowRunsQueryError = ErrorType<ApiErrorBody>;
+
+export function createListWorkflowRuns<
+	TData = Awaited<ReturnType<typeof listWorkflowRuns>>,
+	TError = ErrorType<ApiErrorBody>
+>(
+	projectId: () => string,
+	workflowId: () => string,
+	params?: () => ListWorkflowRunsParams,
+	options?: () => {
+		query?: Partial<
+			CreateQueryOptions<Awaited<ReturnType<typeof listWorkflowRuns>>, TError, TData>
+		>;
+		request?: SecondParameter<typeof customFetch>;
+	},
+	queryClient?: () => QueryClient
+): CreateQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> } {
+	const query = createQuery(
+		() => getListWorkflowRunsQueryOptions(projectId(), workflowId(), params?.(), options?.()),
+		queryClient
+	) as CreateQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> };
+
+	return query;
+}
+
+export const prefetchListWorkflowRunsQuery = async <
+	TData = Awaited<ReturnType<typeof listWorkflowRuns>>,
+	TError = ErrorType<ApiErrorBody>
+>(
+	queryClient: QueryClient,
+	projectId: string,
+	workflowId: string,
+	params?: ListWorkflowRunsParams,
+	options?: {
+		query?: Partial<
+			CreateQueryOptions<Awaited<ReturnType<typeof listWorkflowRuns>>, TError, TData>
+		>;
+		request?: SecondParameter<typeof customFetch>;
+	}
+): Promise<QueryClient> => {
+	const queryOptions = getListWorkflowRunsQueryOptions(projectId, workflowId, params, options);
+
+	await queryClient.prefetchQuery(queryOptions);
+
+	return queryClient;
+};
+
+export type startWorkflowRunResponse200 = {
+	data: RunStartedDto;
+	status: 200;
+};
+
+export type startWorkflowRunResponse201 = {
+	data: RunStartedDto;
+	status: 201;
+};
+
+export type startWorkflowRunResponse409 = {
+	data: ApiErrorBody;
+	status: 409;
+};
+
+export type startWorkflowRunResponseSuccess = (
+	startWorkflowRunResponse200 | startWorkflowRunResponse201
+) & {
+	headers: Headers;
+};
+export type startWorkflowRunResponseError = startWorkflowRunResponse409 & {
+	headers: Headers;
+};
+
+export const getStartWorkflowRunUrl = (projectId: string, workflowId: string) => {
+	return `/api/projects/${projectId}/automations/workflows/${workflowId}/runs`;
+};
+
+export const startWorkflowRun = async (
+	projectId: string,
+	workflowId: string,
+	runRequest: RunRequest,
+	options?: Parameters<typeof customFetch>[1]
+): Promise<startWorkflowRunResponseSuccess> => {
+	const getHeaders = (
+		h?: NonNullable<RequestInit['headers']>
+	): Record<string, string | readonly string[]> => {
+		if (!h) return {};
+		if (h instanceof Headers) return Object.fromEntries(h.entries());
+		if (Array.isArray(h)) return Object.fromEntries(h);
+		return h;
+	};
+	return customFetch<startWorkflowRunResponseSuccess>(
+		getStartWorkflowRunUrl(projectId, workflowId),
+		{
+			...options,
+			method: 'POST',
+			headers: { 'Content-Type': 'application/json', ...getHeaders(options?.headers) },
+			body: JSON.stringify(runRequest)
+		}
+	);
+};
+
+export const getStartWorkflowRunMutationOptions = <
+	TError = ErrorType<ApiErrorBody>,
+	TContext = unknown
+>(options?: {
+	mutation?: CreateMutationOptions<
+		Awaited<ReturnType<typeof startWorkflowRun>>,
+		TError,
+		StartWorkflowRunMutationVariables,
+		TContext
+	>;
+	request?: SecondParameter<typeof customFetch>;
+}): CreateMutationOptions<
+	Awaited<ReturnType<typeof startWorkflowRun>>,
+	TError,
+	StartWorkflowRunMutationVariables,
+	TContext
+> => {
+	const mutationKey = ['startWorkflowRun'];
+	const { mutation: mutationOptions, request: requestOptions } = options
+		? options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey
+			? options
+			: { ...options, mutation: { ...options.mutation, mutationKey } }
+		: { mutation: { mutationKey }, request: undefined };
+
+	const mutationFn: MutationFunction<
+		Awaited<ReturnType<typeof startWorkflowRun>>,
+		StartWorkflowRunMutationVariables
+	> = (props) => {
+		const { projectId, workflowId, data } = props ?? {};
+
+		return startWorkflowRun(projectId, workflowId, data, requestOptions);
+	};
+
+	return { mutationFn, ...mutationOptions };
+};
+
+export type StartWorkflowRunMutationResult = NonNullable<
+	Awaited<ReturnType<typeof startWorkflowRun>>
+>;
+export type StartWorkflowRunMutationBody = BodyType<RunRequest>;
+export type StartWorkflowRunMutationError = ErrorType<ApiErrorBody>;
+export type StartWorkflowRunMutationVariables = {
+	projectId: string;
+	workflowId: string;
+	data: BodyType<RunRequest>;
+};
+
+export const createStartWorkflowRun = <TError = ErrorType<ApiErrorBody>, TContext = unknown>(
+	options?: () => {
+		mutation?: CreateMutationOptions<
+			Awaited<ReturnType<typeof startWorkflowRun>>,
+			TError,
+			StartWorkflowRunMutationVariables,
+			TContext
+		>;
+		request?: SecondParameter<typeof customFetch>;
+	},
+	queryClient?: () => QueryClient
+): CreateMutationResult<
+	Awaited<ReturnType<typeof startWorkflowRun>>,
+	TError,
+	StartWorkflowRunMutationVariables,
+	TContext
+> => {
+	return createMutation(
+		() => ({ ...getStartWorkflowRunMutationOptions(options?.()) }),
+		queryClient
+	);
+};
+export type startWorkflowTestRunResponse200 = {
+	data: WorkflowRunDto;
+	status: 200;
+};
+
+export type startWorkflowTestRunResponse409 = {
+	data: ApiErrorBody;
+	status: 409;
+};
+
+export type startWorkflowTestRunResponseSuccess = startWorkflowTestRunResponse200 & {
+	headers: Headers;
+};
+export type startWorkflowTestRunResponseError = startWorkflowTestRunResponse409 & {
+	headers: Headers;
+};
+
+export const getStartWorkflowTestRunUrl = (projectId: string, workflowId: string) => {
+	return `/api/projects/${projectId}/automations/workflows/${workflowId}/test-runs`;
+};
+
+/**
+ * @summary Runs the current draft with sample information. Blocks that would change
+something (project data, messages, web requests) report what they would
+have done instead of doing it.
+ */
+export const startWorkflowTestRun = async (
+	projectId: string,
+	workflowId: string,
+	testRunRequest: TestRunRequest,
+	options?: Parameters<typeof customFetch>[1]
+): Promise<startWorkflowTestRunResponseSuccess> => {
+	const getHeaders = (
+		h?: NonNullable<RequestInit['headers']>
+	): Record<string, string | readonly string[]> => {
+		if (!h) return {};
+		if (h instanceof Headers) return Object.fromEntries(h.entries());
+		if (Array.isArray(h)) return Object.fromEntries(h);
+		return h;
+	};
+	return customFetch<startWorkflowTestRunResponseSuccess>(
+		getStartWorkflowTestRunUrl(projectId, workflowId),
+		{
+			...options,
+			method: 'POST',
+			headers: { 'Content-Type': 'application/json', ...getHeaders(options?.headers) },
+			body: JSON.stringify(testRunRequest)
+		}
+	);
+};
+
+export const getStartWorkflowTestRunMutationOptions = <
+	TError = ErrorType<ApiErrorBody>,
+	TContext = unknown
+>(options?: {
+	mutation?: CreateMutationOptions<
+		Awaited<ReturnType<typeof startWorkflowTestRun>>,
+		TError,
+		StartWorkflowTestRunMutationVariables,
+		TContext
+	>;
+	request?: SecondParameter<typeof customFetch>;
+}): CreateMutationOptions<
+	Awaited<ReturnType<typeof startWorkflowTestRun>>,
+	TError,
+	StartWorkflowTestRunMutationVariables,
+	TContext
+> => {
+	const mutationKey = ['startWorkflowTestRun'];
+	const { mutation: mutationOptions, request: requestOptions } = options
+		? options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey
+			? options
+			: { ...options, mutation: { ...options.mutation, mutationKey } }
+		: { mutation: { mutationKey }, request: undefined };
+
+	const mutationFn: MutationFunction<
+		Awaited<ReturnType<typeof startWorkflowTestRun>>,
+		StartWorkflowTestRunMutationVariables
+	> = (props) => {
+		const { projectId, workflowId, data } = props ?? {};
+
+		return startWorkflowTestRun(projectId, workflowId, data, requestOptions);
+	};
+
+	return { mutationFn, ...mutationOptions };
+};
+
+export type StartWorkflowTestRunMutationResult = NonNullable<
+	Awaited<ReturnType<typeof startWorkflowTestRun>>
+>;
+export type StartWorkflowTestRunMutationBody = BodyType<TestRunRequest>;
+export type StartWorkflowTestRunMutationError = ErrorType<ApiErrorBody>;
+export type StartWorkflowTestRunMutationVariables = {
+	projectId: string;
+	workflowId: string;
+	data: BodyType<TestRunRequest>;
+};
+
+/**
+ * @summary Runs the current draft with sample information. Blocks that would change
+something (project data, messages, web requests) report what they would
+have done instead of doing it.
+ */
+export const createStartWorkflowTestRun = <TError = ErrorType<ApiErrorBody>, TContext = unknown>(
+	options?: () => {
+		mutation?: CreateMutationOptions<
+			Awaited<ReturnType<typeof startWorkflowTestRun>>,
+			TError,
+			StartWorkflowTestRunMutationVariables,
+			TContext
+		>;
+		request?: SecondParameter<typeof customFetch>;
+	},
+	queryClient?: () => QueryClient
+): CreateMutationResult<
+	Awaited<ReturnType<typeof startWorkflowTestRun>>,
+	TError,
+	StartWorkflowTestRunMutationVariables,
+	TContext
+> => {
+	return createMutation(
+		() => ({ ...getStartWorkflowTestRunMutationOptions(options?.()) }),
+		queryClient
+	);
+};
+export type validateWorkflowResponse200 = {
+	data: ValidationReportDto;
+	status: 200;
+};
+
+export type validateWorkflowResponse404 = {
+	data: ApiErrorBody;
+	status: 404;
+};
+
+export type validateWorkflowResponseSuccess = validateWorkflowResponse200 & {
+	headers: Headers;
+};
+export type validateWorkflowResponseError = validateWorkflowResponse404 & {
+	headers: Headers;
+};
+
+export const getValidateWorkflowUrl = (projectId: string, workflowId: string) => {
+	return `/api/projects/${projectId}/automations/workflows/${workflowId}/validate`;
+};
+
+export const validateWorkflow = async (
+	projectId: string,
+	workflowId: string,
+	options?: Parameters<typeof customFetch>[1]
+): Promise<validateWorkflowResponseSuccess> => {
+	return customFetch<validateWorkflowResponseSuccess>(
+		getValidateWorkflowUrl(projectId, workflowId),
+		{
+			...options,
+			method: 'POST'
+		}
+	);
+};
+
+export const getValidateWorkflowMutationOptions = <
+	TError = ErrorType<ApiErrorBody>,
+	TContext = unknown
+>(options?: {
+	mutation?: CreateMutationOptions<
+		Awaited<ReturnType<typeof validateWorkflow>>,
+		TError,
+		ValidateWorkflowMutationVariables,
+		TContext
+	>;
+	request?: SecondParameter<typeof customFetch>;
+}): CreateMutationOptions<
+	Awaited<ReturnType<typeof validateWorkflow>>,
+	TError,
+	ValidateWorkflowMutationVariables,
+	TContext
+> => {
+	const mutationKey = ['validateWorkflow'];
+	const { mutation: mutationOptions, request: requestOptions } = options
+		? options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey
+			? options
+			: { ...options, mutation: { ...options.mutation, mutationKey } }
+		: { mutation: { mutationKey }, request: undefined };
+
+	const mutationFn: MutationFunction<
+		Awaited<ReturnType<typeof validateWorkflow>>,
+		ValidateWorkflowMutationVariables
+	> = (props) => {
+		const { projectId, workflowId } = props ?? {};
+
+		return validateWorkflow(projectId, workflowId, requestOptions);
+	};
+
+	return { mutationFn, ...mutationOptions };
+};
+
+export type ValidateWorkflowMutationResult = NonNullable<
+	Awaited<ReturnType<typeof validateWorkflow>>
+>;
+
+export type ValidateWorkflowMutationError = ErrorType<ApiErrorBody>;
+export type ValidateWorkflowMutationVariables = { projectId: string; workflowId: string };
+
+export const createValidateWorkflow = <TError = ErrorType<ApiErrorBody>, TContext = unknown>(
+	options?: () => {
+		mutation?: CreateMutationOptions<
+			Awaited<ReturnType<typeof validateWorkflow>>,
+			TError,
+			ValidateWorkflowMutationVariables,
+			TContext
+		>;
+		request?: SecondParameter<typeof customFetch>;
+	},
+	queryClient?: () => QueryClient
+): CreateMutationResult<
+	Awaited<ReturnType<typeof validateWorkflow>>,
+	TError,
+	ValidateWorkflowMutationVariables,
+	TContext
+> => {
+	return createMutation(
+		() => ({ ...getValidateWorkflowMutationOptions(options?.()) }),
+		queryClient
+	);
+};
+export type listWorkflowVersionsResponse200 = {
+	data: VersionDto[];
+	status: 200;
+};
+
+export type listWorkflowVersionsResponse404 = {
+	data: ApiErrorBody;
+	status: 404;
+};
+
+export type listWorkflowVersionsResponseSuccess = listWorkflowVersionsResponse200 & {
+	headers: Headers;
+};
+export type listWorkflowVersionsResponseError = listWorkflowVersionsResponse404 & {
+	headers: Headers;
+};
+
+export const getListWorkflowVersionsUrl = (projectId: string, workflowId: string) => {
+	return `/api/projects/${projectId}/automations/workflows/${workflowId}/versions`;
+};
+
+export const listWorkflowVersions = async (
+	projectId: string,
+	workflowId: string,
+	options?: Parameters<typeof customFetch>[1]
+): Promise<listWorkflowVersionsResponseSuccess> => {
+	return customFetch<listWorkflowVersionsResponseSuccess>(
+		getListWorkflowVersionsUrl(projectId, workflowId),
+		{
+			...options,
+			method: 'GET'
+		}
+	);
+};
+
+export const getListWorkflowVersionsQueryKey = (projectId: string, workflowId: string) => {
+	return [`/api/projects/${projectId}/automations/workflows/${workflowId}/versions`] as const;
+};
+
+export const getListWorkflowVersionsQueryOptions = <
+	TData = Awaited<ReturnType<typeof listWorkflowVersions>>,
+	TError = ErrorType<ApiErrorBody>
+>(
+	projectId: string,
+	workflowId: string,
+	options?: {
+		query?: Partial<
+			CreateQueryOptions<Awaited<ReturnType<typeof listWorkflowVersions>>, TError, TData>
+		>;
+		request?: SecondParameter<typeof customFetch>;
+	}
+) => {
+	const { query: queryOptions, request: requestOptions } = options ?? {};
+
+	const queryKey =
+		queryOptions?.queryKey ?? getListWorkflowVersionsQueryKey(projectId, workflowId);
+
+	const queryFn: QueryFunction<Awaited<ReturnType<typeof listWorkflowVersions>>> = ({ signal }) =>
+		listWorkflowVersions(projectId, workflowId, { signal, ...requestOptions });
+
+	return {
+		queryKey,
+		queryFn,
+		enabled:
+			projectId !== null &&
+			projectId !== undefined &&
+			workflowId !== null &&
+			workflowId !== undefined,
+		...queryOptions
+	} as CreateQueryOptions<Awaited<ReturnType<typeof listWorkflowVersions>>, TError, TData> & {
+		queryKey: DataTag<QueryKey, TData, TError>;
+	};
+};
+
+export type ListWorkflowVersionsQueryResult = NonNullable<
+	Awaited<ReturnType<typeof listWorkflowVersions>>
+>;
+export type ListWorkflowVersionsQueryError = ErrorType<ApiErrorBody>;
+
+export function createListWorkflowVersions<
+	TData = Awaited<ReturnType<typeof listWorkflowVersions>>,
+	TError = ErrorType<ApiErrorBody>
+>(
+	projectId: () => string,
+	workflowId: () => string,
+	options?: () => {
+		query?: Partial<
+			CreateQueryOptions<Awaited<ReturnType<typeof listWorkflowVersions>>, TError, TData>
+		>;
+		request?: SecondParameter<typeof customFetch>;
+	},
+	queryClient?: () => QueryClient
+): CreateQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> } {
+	const query = createQuery(
+		() => getListWorkflowVersionsQueryOptions(projectId(), workflowId(), options?.()),
+		queryClient
+	) as CreateQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> };
+
+	return query;
+}
+
+export const prefetchListWorkflowVersionsQuery = async <
+	TData = Awaited<ReturnType<typeof listWorkflowVersions>>,
+	TError = ErrorType<ApiErrorBody>
+>(
+	queryClient: QueryClient,
+	projectId: string,
+	workflowId: string,
+	options?: {
+		query?: Partial<
+			CreateQueryOptions<Awaited<ReturnType<typeof listWorkflowVersions>>, TError, TData>
+		>;
+		request?: SecondParameter<typeof customFetch>;
+	}
+): Promise<QueryClient> => {
+	const queryOptions = getListWorkflowVersionsQueryOptions(projectId, workflowId, options);
+
+	await queryClient.prefetchQuery(queryOptions);
+
+	return queryClient;
+};
+
+export type getWorkflowVersionResponse200 = {
+	data: VersionDto;
+	status: 200;
+};
+
+export type getWorkflowVersionResponse404 = {
+	data: ApiErrorBody;
+	status: 404;
+};
+
+export type getWorkflowVersionResponseSuccess = getWorkflowVersionResponse200 & {
+	headers: Headers;
+};
+export type getWorkflowVersionResponseError = getWorkflowVersionResponse404 & {
+	headers: Headers;
+};
+
+export const getGetWorkflowVersionUrl = (
+	projectId: string,
+	workflowId: string,
+	version: number
+) => {
+	return `/api/projects/${projectId}/automations/workflows/${workflowId}/versions/${version}`;
+};
+
+export const getWorkflowVersion = async (
+	projectId: string,
+	workflowId: string,
+	version: number,
+	options?: Parameters<typeof customFetch>[1]
+): Promise<getWorkflowVersionResponseSuccess> => {
+	return customFetch<getWorkflowVersionResponseSuccess>(
+		getGetWorkflowVersionUrl(projectId, workflowId, version),
+		{
+			...options,
+			method: 'GET'
+		}
+	);
+};
+
+export const getGetWorkflowVersionQueryKey = (
+	projectId: string,
+	workflowId: string,
+	version: number
+) => {
+	return [
+		`/api/projects/${projectId}/automations/workflows/${workflowId}/versions/${version}`
+	] as const;
+};
+
+export const getGetWorkflowVersionQueryOptions = <
+	TData = Awaited<ReturnType<typeof getWorkflowVersion>>,
+	TError = ErrorType<ApiErrorBody>
+>(
+	projectId: string,
+	workflowId: string,
+	version: number,
+	options?: {
+		query?: Partial<
+			CreateQueryOptions<Awaited<ReturnType<typeof getWorkflowVersion>>, TError, TData>
+		>;
+		request?: SecondParameter<typeof customFetch>;
+	}
+) => {
+	const { query: queryOptions, request: requestOptions } = options ?? {};
+
+	const queryKey =
+		queryOptions?.queryKey ?? getGetWorkflowVersionQueryKey(projectId, workflowId, version);
+
+	const queryFn: QueryFunction<Awaited<ReturnType<typeof getWorkflowVersion>>> = ({ signal }) =>
+		getWorkflowVersion(projectId, workflowId, version, { signal, ...requestOptions });
+
+	return {
+		queryKey,
+		queryFn,
+		enabled:
+			projectId !== null &&
+			projectId !== undefined &&
+			workflowId !== null &&
+			workflowId !== undefined &&
+			version !== null &&
+			version !== undefined,
+		...queryOptions
+	} as CreateQueryOptions<Awaited<ReturnType<typeof getWorkflowVersion>>, TError, TData> & {
+		queryKey: DataTag<QueryKey, TData, TError>;
+	};
+};
+
+export type GetWorkflowVersionQueryResult = NonNullable<
+	Awaited<ReturnType<typeof getWorkflowVersion>>
+>;
+export type GetWorkflowVersionQueryError = ErrorType<ApiErrorBody>;
+
+export function createGetWorkflowVersion<
+	TData = Awaited<ReturnType<typeof getWorkflowVersion>>,
+	TError = ErrorType<ApiErrorBody>
+>(
+	projectId: () => string,
+	workflowId: () => string,
+	version: () => number,
+	options?: () => {
+		query?: Partial<
+			CreateQueryOptions<Awaited<ReturnType<typeof getWorkflowVersion>>, TError, TData>
+		>;
+		request?: SecondParameter<typeof customFetch>;
+	},
+	queryClient?: () => QueryClient
+): CreateQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> } {
+	const query = createQuery(
+		() => getGetWorkflowVersionQueryOptions(projectId(), workflowId(), version(), options?.()),
+		queryClient
+	) as CreateQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> };
+
+	return query;
+}
+
+export const prefetchGetWorkflowVersionQuery = async <
+	TData = Awaited<ReturnType<typeof getWorkflowVersion>>,
+	TError = ErrorType<ApiErrorBody>
+>(
+	queryClient: QueryClient,
+	projectId: string,
+	workflowId: string,
+	version: number,
+	options?: {
+		query?: Partial<
+			CreateQueryOptions<Awaited<ReturnType<typeof getWorkflowVersion>>, TError, TData>
+		>;
+		request?: SecondParameter<typeof customFetch>;
+	}
+): Promise<QueryClient> => {
+	const queryOptions = getGetWorkflowVersionQueryOptions(projectId, workflowId, version, options);
 
 	await queryClient.prefetchQuery(queryOptions);
 

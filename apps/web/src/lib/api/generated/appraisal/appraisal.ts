@@ -21,7 +21,9 @@ import type {
 	ApiErrorBody,
 	AppraisalAssessmentDto,
 	AppraisalDefinitionDto,
-	CompleteAppraisalRequest
+	CompleteAppraisalRequest,
+	JudgmentSuggestionDto,
+	JudgmentSuggestionRequest
 } from '../models';
 
 import { customFetch } from '../../custom-fetch.ts';
@@ -306,6 +308,137 @@ export const prefetchGetAppraisalDefinitionQuery = async <
 	return queryClient;
 };
 
+export type suggestAppraisalJudgmentsResponse200 = {
+	data: JudgmentSuggestionDto;
+	status: 200;
+};
+
+export type suggestAppraisalJudgmentsResponse404 = {
+	data: ApiErrorBody;
+	status: 404;
+};
+
+export type suggestAppraisalJudgmentsResponse500 = {
+	data: ApiErrorBody;
+	status: 500;
+};
+
+export type suggestAppraisalJudgmentsResponseSuccess = suggestAppraisalJudgmentsResponse200 & {
+	headers: Headers;
+};
+export type suggestAppraisalJudgmentsResponseError = (
+	suggestAppraisalJudgmentsResponse404 | suggestAppraisalJudgmentsResponse500
+) & {
+	headers: Headers;
+};
+
+export const getSuggestAppraisalJudgmentsUrl = (
+	projectId: string,
+	definitionId: string,
+	version: number
+) => {
+	return `/api/projects/${projectId}/appraisal-definitions/${definitionId}/${version}/judgment-suggestion`;
+};
+
+export const suggestAppraisalJudgments = async (
+	projectId: string,
+	definitionId: string,
+	version: number,
+	judgmentSuggestionRequest: JudgmentSuggestionRequest,
+	options?: Parameters<typeof customFetch>[1]
+): Promise<suggestAppraisalJudgmentsResponseSuccess> => {
+	const getHeaders = (
+		h?: NonNullable<RequestInit['headers']>
+	): Record<string, string | readonly string[]> => {
+		if (!h) return {};
+		if (h instanceof Headers) return Object.fromEntries(h.entries());
+		if (Array.isArray(h)) return Object.fromEntries(h);
+		return h;
+	};
+	return customFetch<suggestAppraisalJudgmentsResponseSuccess>(
+		getSuggestAppraisalJudgmentsUrl(projectId, definitionId, version),
+		{
+			...options,
+			method: 'POST',
+			headers: { 'Content-Type': 'application/json', ...getHeaders(options?.headers) },
+			body: JSON.stringify(judgmentSuggestionRequest)
+		}
+	);
+};
+
+export const getSuggestAppraisalJudgmentsMutationOptions = <
+	TError = ErrorType<ApiErrorBody>,
+	TContext = unknown
+>(options?: {
+	mutation?: CreateMutationOptions<
+		Awaited<ReturnType<typeof suggestAppraisalJudgments>>,
+		TError,
+		SuggestAppraisalJudgmentsMutationVariables,
+		TContext
+	>;
+	request?: SecondParameter<typeof customFetch>;
+}): CreateMutationOptions<
+	Awaited<ReturnType<typeof suggestAppraisalJudgments>>,
+	TError,
+	SuggestAppraisalJudgmentsMutationVariables,
+	TContext
+> => {
+	const mutationKey = ['suggestAppraisalJudgments'];
+	const { mutation: mutationOptions, request: requestOptions } = options
+		? options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey
+			? options
+			: { ...options, mutation: { ...options.mutation, mutationKey } }
+		: { mutation: { mutationKey }, request: undefined };
+
+	const mutationFn: MutationFunction<
+		Awaited<ReturnType<typeof suggestAppraisalJudgments>>,
+		SuggestAppraisalJudgmentsMutationVariables
+	> = (props) => {
+		const { projectId, definitionId, version, data } = props ?? {};
+
+		return suggestAppraisalJudgments(projectId, definitionId, version, data, requestOptions);
+	};
+
+	return { mutationFn, ...mutationOptions };
+};
+
+export type SuggestAppraisalJudgmentsMutationResult = NonNullable<
+	Awaited<ReturnType<typeof suggestAppraisalJudgments>>
+>;
+export type SuggestAppraisalJudgmentsMutationBody = BodyType<JudgmentSuggestionRequest>;
+export type SuggestAppraisalJudgmentsMutationError = ErrorType<ApiErrorBody>;
+export type SuggestAppraisalJudgmentsMutationVariables = {
+	projectId: string;
+	definitionId: string;
+	version: number;
+	data: BodyType<JudgmentSuggestionRequest>;
+};
+
+export const createSuggestAppraisalJudgments = <
+	TError = ErrorType<ApiErrorBody>,
+	TContext = unknown
+>(
+	options?: () => {
+		mutation?: CreateMutationOptions<
+			Awaited<ReturnType<typeof suggestAppraisalJudgments>>,
+			TError,
+			SuggestAppraisalJudgmentsMutationVariables,
+			TContext
+		>;
+		request?: SecondParameter<typeof customFetch>;
+	},
+	queryClient?: () => QueryClient
+): CreateMutationResult<
+	Awaited<ReturnType<typeof suggestAppraisalJudgments>>,
+	TError,
+	SuggestAppraisalJudgmentsMutationVariables,
+	TContext
+> => {
+	return createMutation(
+		() => ({ ...getSuggestAppraisalJudgmentsMutationOptions(options?.()) }),
+		queryClient
+	);
+};
 export type listReportAppraisalsResponse200 = {
 	data: AppraisalAssessmentDto[];
 	status: 200;

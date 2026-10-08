@@ -1,6 +1,7 @@
 import type { LucideIcon } from '@lucide/svelte';
 import { resolve } from '$app/paths';
 import type { ProjectWorkspaceNavView } from './types';
+import ActivityIcon from '@lucide/svelte/icons/activity';
 import ArchiveIcon from '@lucide/svelte/icons/archive';
 import BotIcon from '@lucide/svelte/icons/bot';
 import ClipboardCheckIcon from '@lucide/svelte/icons/clipboard-check';
@@ -32,6 +33,7 @@ export type ProjectRoute =
 	| '/projects/[projectId]/extraction'
 	| '/projects/[projectId]/automations'
 	| '/projects/[projectId]/assistant'
+	| '/projects/[projectId]/activity'
 	| '/projects/[projectId]/deduplication';
 
 export type ProjectNavigationItem = {
@@ -203,6 +205,13 @@ export const PROJECT_NAVIGATION_GROUPS: readonly ProjectNavigationGroup[] = [
 				description: 'Ask questions with linked evidence.',
 				path: '/projects/[projectId]/assistant',
 				icon: BotIcon
+			},
+			{
+				id: 'activity',
+				label: 'AI activity',
+				description: 'What the AI and automations did, with undo.',
+				path: '/projects/[projectId]/activity',
+				icon: ActivityIcon
 			}
 		]
 	}

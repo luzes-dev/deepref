@@ -21,7 +21,9 @@ import type {
 	ApiErrorBody,
 	CreateExtractionFieldRequest,
 	ExtractionFieldDto,
-	ExtractionValueDto
+	ExtractionValueDto,
+	RecordExtractionValueRequest,
+	UpdateExtractionFieldRequest
 } from '../models';
 
 import { customFetch } from '../../custom-fetch.ts';
@@ -279,6 +281,141 @@ export const createCreateExtractionField = <TError = ErrorType<ApiErrorBody>, TC
 		queryClient
 	);
 };
+export type updateExtractionFieldResponse200 = {
+	data: ExtractionFieldDto;
+	status: 200;
+};
+
+export type updateExtractionFieldResponse400 = {
+	data: ApiErrorBody;
+	status: 400;
+};
+
+export type updateExtractionFieldResponse404 = {
+	data: ApiErrorBody;
+	status: 404;
+};
+
+export type updateExtractionFieldResponse409 = {
+	data: ApiErrorBody;
+	status: 409;
+};
+
+export type updateExtractionFieldResponse500 = {
+	data: ApiErrorBody;
+	status: 500;
+};
+
+export type updateExtractionFieldResponseSuccess = updateExtractionFieldResponse200 & {
+	headers: Headers;
+};
+export type updateExtractionFieldResponseError = (
+	| updateExtractionFieldResponse400
+	| updateExtractionFieldResponse404
+	| updateExtractionFieldResponse409
+	| updateExtractionFieldResponse500
+) & {
+	headers: Headers;
+};
+
+export const getUpdateExtractionFieldUrl = (projectId: string, fieldId: string) => {
+	return `/api/projects/${projectId}/extraction/fields/${fieldId}`;
+};
+
+export const updateExtractionField = async (
+	projectId: string,
+	fieldId: string,
+	updateExtractionFieldRequest: UpdateExtractionFieldRequest,
+	options?: Parameters<typeof customFetch>[1]
+): Promise<updateExtractionFieldResponseSuccess> => {
+	const getHeaders = (
+		h?: NonNullable<RequestInit['headers']>
+	): Record<string, string | readonly string[]> => {
+		if (!h) return {};
+		if (h instanceof Headers) return Object.fromEntries(h.entries());
+		if (Array.isArray(h)) return Object.fromEntries(h);
+		return h;
+	};
+	return customFetch<updateExtractionFieldResponseSuccess>(
+		getUpdateExtractionFieldUrl(projectId, fieldId),
+		{
+			...options,
+			method: 'PATCH',
+			headers: { 'Content-Type': 'application/json', ...getHeaders(options?.headers) },
+			body: JSON.stringify(updateExtractionFieldRequest)
+		}
+	);
+};
+
+export const getUpdateExtractionFieldMutationOptions = <
+	TError = ErrorType<ApiErrorBody>,
+	TContext = unknown
+>(options?: {
+	mutation?: CreateMutationOptions<
+		Awaited<ReturnType<typeof updateExtractionField>>,
+		TError,
+		UpdateExtractionFieldMutationVariables,
+		TContext
+	>;
+	request?: SecondParameter<typeof customFetch>;
+}): CreateMutationOptions<
+	Awaited<ReturnType<typeof updateExtractionField>>,
+	TError,
+	UpdateExtractionFieldMutationVariables,
+	TContext
+> => {
+	const mutationKey = ['updateExtractionField'];
+	const { mutation: mutationOptions, request: requestOptions } = options
+		? options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey
+			? options
+			: { ...options, mutation: { ...options.mutation, mutationKey } }
+		: { mutation: { mutationKey }, request: undefined };
+
+	const mutationFn: MutationFunction<
+		Awaited<ReturnType<typeof updateExtractionField>>,
+		UpdateExtractionFieldMutationVariables
+	> = (props) => {
+		const { projectId, fieldId, data } = props ?? {};
+
+		return updateExtractionField(projectId, fieldId, data, requestOptions);
+	};
+
+	return { mutationFn, ...mutationOptions };
+};
+
+export type UpdateExtractionFieldMutationResult = NonNullable<
+	Awaited<ReturnType<typeof updateExtractionField>>
+>;
+export type UpdateExtractionFieldMutationBody = BodyType<UpdateExtractionFieldRequest>;
+export type UpdateExtractionFieldMutationError = ErrorType<ApiErrorBody>;
+export type UpdateExtractionFieldMutationVariables = {
+	projectId: string;
+	fieldId: string;
+	data: BodyType<UpdateExtractionFieldRequest>;
+};
+
+export const createUpdateExtractionField = <TError = ErrorType<ApiErrorBody>, TContext = unknown>(
+	options?: () => {
+		mutation?: CreateMutationOptions<
+			Awaited<ReturnType<typeof updateExtractionField>>,
+			TError,
+			UpdateExtractionFieldMutationVariables,
+			TContext
+		>;
+		request?: SecondParameter<typeof customFetch>;
+	},
+	queryClient?: () => QueryClient
+): CreateMutationResult<
+	Awaited<ReturnType<typeof updateExtractionField>>,
+	TError,
+	UpdateExtractionFieldMutationVariables,
+	TContext
+> => {
+	return createMutation(
+		() => ({ ...getUpdateExtractionFieldMutationOptions(options?.()) }),
+		queryClient
+	);
+};
 export type listStudyExtractionValuesResponse200 = {
 	data: ExtractionValueDto[];
 	status: 200;
@@ -411,4 +548,374 @@ export const prefetchListStudyExtractionValuesQuery = async <
 	await queryClient.prefetchQuery(queryOptions);
 
 	return queryClient;
+};
+
+export type recordExtractionValueResponse200 = {
+	data: ExtractionValueDto;
+	status: 200;
+};
+
+export type recordExtractionValueResponse400 = {
+	data: ApiErrorBody;
+	status: 400;
+};
+
+export type recordExtractionValueResponse404 = {
+	data: ApiErrorBody;
+	status: 404;
+};
+
+export type recordExtractionValueResponse409 = {
+	data: ApiErrorBody;
+	status: 409;
+};
+
+export type recordExtractionValueResponse500 = {
+	data: ApiErrorBody;
+	status: 500;
+};
+
+export type recordExtractionValueResponseSuccess = recordExtractionValueResponse200 & {
+	headers: Headers;
+};
+export type recordExtractionValueResponseError = (
+	| recordExtractionValueResponse400
+	| recordExtractionValueResponse404
+	| recordExtractionValueResponse409
+	| recordExtractionValueResponse500
+) & {
+	headers: Headers;
+};
+
+export const getRecordExtractionValueUrl = (
+	projectId: string,
+	studyId: string,
+	fieldId: string
+) => {
+	return `/api/projects/${projectId}/studies/${studyId}/extraction/values/${fieldId}`;
+};
+
+export const recordExtractionValue = async (
+	projectId: string,
+	studyId: string,
+	fieldId: string,
+	recordExtractionValueRequest: RecordExtractionValueRequest,
+	options?: Parameters<typeof customFetch>[1]
+): Promise<recordExtractionValueResponseSuccess> => {
+	const getHeaders = (
+		h?: NonNullable<RequestInit['headers']>
+	): Record<string, string | readonly string[]> => {
+		if (!h) return {};
+		if (h instanceof Headers) return Object.fromEntries(h.entries());
+		if (Array.isArray(h)) return Object.fromEntries(h);
+		return h;
+	};
+	return customFetch<recordExtractionValueResponseSuccess>(
+		getRecordExtractionValueUrl(projectId, studyId, fieldId),
+		{
+			...options,
+			method: 'PUT',
+			headers: { 'Content-Type': 'application/json', ...getHeaders(options?.headers) },
+			body: JSON.stringify(recordExtractionValueRequest)
+		}
+	);
+};
+
+export const getRecordExtractionValueMutationOptions = <
+	TError = ErrorType<ApiErrorBody>,
+	TContext = unknown
+>(options?: {
+	mutation?: CreateMutationOptions<
+		Awaited<ReturnType<typeof recordExtractionValue>>,
+		TError,
+		RecordExtractionValueMutationVariables,
+		TContext
+	>;
+	request?: SecondParameter<typeof customFetch>;
+}): CreateMutationOptions<
+	Awaited<ReturnType<typeof recordExtractionValue>>,
+	TError,
+	RecordExtractionValueMutationVariables,
+	TContext
+> => {
+	const mutationKey = ['recordExtractionValue'];
+	const { mutation: mutationOptions, request: requestOptions } = options
+		? options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey
+			? options
+			: { ...options, mutation: { ...options.mutation, mutationKey } }
+		: { mutation: { mutationKey }, request: undefined };
+
+	const mutationFn: MutationFunction<
+		Awaited<ReturnType<typeof recordExtractionValue>>,
+		RecordExtractionValueMutationVariables
+	> = (props) => {
+		const { projectId, studyId, fieldId, data } = props ?? {};
+
+		return recordExtractionValue(projectId, studyId, fieldId, data, requestOptions);
+	};
+
+	return { mutationFn, ...mutationOptions };
+};
+
+export type RecordExtractionValueMutationResult = NonNullable<
+	Awaited<ReturnType<typeof recordExtractionValue>>
+>;
+export type RecordExtractionValueMutationBody = BodyType<RecordExtractionValueRequest>;
+export type RecordExtractionValueMutationError = ErrorType<ApiErrorBody>;
+export type RecordExtractionValueMutationVariables = {
+	projectId: string;
+	studyId: string;
+	fieldId: string;
+	data: BodyType<RecordExtractionValueRequest>;
+};
+
+export const createRecordExtractionValue = <TError = ErrorType<ApiErrorBody>, TContext = unknown>(
+	options?: () => {
+		mutation?: CreateMutationOptions<
+			Awaited<ReturnType<typeof recordExtractionValue>>,
+			TError,
+			RecordExtractionValueMutationVariables,
+			TContext
+		>;
+		request?: SecondParameter<typeof customFetch>;
+	},
+	queryClient?: () => QueryClient
+): CreateMutationResult<
+	Awaited<ReturnType<typeof recordExtractionValue>>,
+	TError,
+	RecordExtractionValueMutationVariables,
+	TContext
+> => {
+	return createMutation(
+		() => ({ ...getRecordExtractionValueMutationOptions(options?.()) }),
+		queryClient
+	);
+};
+export type clearExtractionValueResponse204 = {
+	data: void;
+	status: 204;
+};
+
+export type clearExtractionValueResponse404 = {
+	data: ApiErrorBody;
+	status: 404;
+};
+
+export type clearExtractionValueResponse500 = {
+	data: ApiErrorBody;
+	status: 500;
+};
+
+export type clearExtractionValueResponseSuccess = clearExtractionValueResponse204 & {
+	headers: Headers;
+};
+export type clearExtractionValueResponseError = (
+	clearExtractionValueResponse404 | clearExtractionValueResponse500
+) & {
+	headers: Headers;
+};
+
+export const getClearExtractionValueUrl = (projectId: string, studyId: string, fieldId: string) => {
+	return `/api/projects/${projectId}/studies/${studyId}/extraction/values/${fieldId}`;
+};
+
+export const clearExtractionValue = async (
+	projectId: string,
+	studyId: string,
+	fieldId: string,
+	options?: Parameters<typeof customFetch>[1]
+): Promise<clearExtractionValueResponseSuccess> => {
+	return customFetch<clearExtractionValueResponseSuccess>(
+		getClearExtractionValueUrl(projectId, studyId, fieldId),
+		{
+			...options,
+			method: 'DELETE'
+		}
+	);
+};
+
+export const getClearExtractionValueMutationOptions = <
+	TError = ErrorType<ApiErrorBody>,
+	TContext = unknown
+>(options?: {
+	mutation?: CreateMutationOptions<
+		Awaited<ReturnType<typeof clearExtractionValue>>,
+		TError,
+		ClearExtractionValueMutationVariables,
+		TContext
+	>;
+	request?: SecondParameter<typeof customFetch>;
+}): CreateMutationOptions<
+	Awaited<ReturnType<typeof clearExtractionValue>>,
+	TError,
+	ClearExtractionValueMutationVariables,
+	TContext
+> => {
+	const mutationKey = ['clearExtractionValue'];
+	const { mutation: mutationOptions, request: requestOptions } = options
+		? options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey
+			? options
+			: { ...options, mutation: { ...options.mutation, mutationKey } }
+		: { mutation: { mutationKey }, request: undefined };
+
+	const mutationFn: MutationFunction<
+		Awaited<ReturnType<typeof clearExtractionValue>>,
+		ClearExtractionValueMutationVariables
+	> = (props) => {
+		const { projectId, studyId, fieldId } = props ?? {};
+
+		return clearExtractionValue(projectId, studyId, fieldId, requestOptions);
+	};
+
+	return { mutationFn, ...mutationOptions };
+};
+
+export type ClearExtractionValueMutationResult = NonNullable<
+	Awaited<ReturnType<typeof clearExtractionValue>>
+>;
+
+export type ClearExtractionValueMutationError = ErrorType<ApiErrorBody>;
+export type ClearExtractionValueMutationVariables = {
+	projectId: string;
+	studyId: string;
+	fieldId: string;
+};
+
+export const createClearExtractionValue = <TError = ErrorType<ApiErrorBody>, TContext = unknown>(
+	options?: () => {
+		mutation?: CreateMutationOptions<
+			Awaited<ReturnType<typeof clearExtractionValue>>,
+			TError,
+			ClearExtractionValueMutationVariables,
+			TContext
+		>;
+		request?: SecondParameter<typeof customFetch>;
+	},
+	queryClient?: () => QueryClient
+): CreateMutationResult<
+	Awaited<ReturnType<typeof clearExtractionValue>>,
+	TError,
+	ClearExtractionValueMutationVariables,
+	TContext
+> => {
+	return createMutation(
+		() => ({ ...getClearExtractionValueMutationOptions(options?.()) }),
+		queryClient
+	);
+};
+export type confirmExtractionValueResponse200 = {
+	data: ExtractionValueDto;
+	status: 200;
+};
+
+export type confirmExtractionValueResponse404 = {
+	data: ApiErrorBody;
+	status: 404;
+};
+
+export type confirmExtractionValueResponse500 = {
+	data: ApiErrorBody;
+	status: 500;
+};
+
+export type confirmExtractionValueResponseSuccess = confirmExtractionValueResponse200 & {
+	headers: Headers;
+};
+export type confirmExtractionValueResponseError = (
+	confirmExtractionValueResponse404 | confirmExtractionValueResponse500
+) & {
+	headers: Headers;
+};
+
+export const getConfirmExtractionValueUrl = (
+	projectId: string,
+	studyId: string,
+	valueId: string
+) => {
+	return `/api/projects/${projectId}/studies/${studyId}/extraction/values/${valueId}/confirm`;
+};
+
+export const confirmExtractionValue = async (
+	projectId: string,
+	studyId: string,
+	valueId: string,
+	options?: Parameters<typeof customFetch>[1]
+): Promise<confirmExtractionValueResponseSuccess> => {
+	return customFetch<confirmExtractionValueResponseSuccess>(
+		getConfirmExtractionValueUrl(projectId, studyId, valueId),
+		{
+			...options,
+			method: 'POST'
+		}
+	);
+};
+
+export const getConfirmExtractionValueMutationOptions = <
+	TError = ErrorType<ApiErrorBody>,
+	TContext = unknown
+>(options?: {
+	mutation?: CreateMutationOptions<
+		Awaited<ReturnType<typeof confirmExtractionValue>>,
+		TError,
+		ConfirmExtractionValueMutationVariables,
+		TContext
+	>;
+	request?: SecondParameter<typeof customFetch>;
+}): CreateMutationOptions<
+	Awaited<ReturnType<typeof confirmExtractionValue>>,
+	TError,
+	ConfirmExtractionValueMutationVariables,
+	TContext
+> => {
+	const mutationKey = ['confirmExtractionValue'];
+	const { mutation: mutationOptions, request: requestOptions } = options
+		? options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey
+			? options
+			: { ...options, mutation: { ...options.mutation, mutationKey } }
+		: { mutation: { mutationKey }, request: undefined };
+
+	const mutationFn: MutationFunction<
+		Awaited<ReturnType<typeof confirmExtractionValue>>,
+		ConfirmExtractionValueMutationVariables
+	> = (props) => {
+		const { projectId, studyId, valueId } = props ?? {};
+
+		return confirmExtractionValue(projectId, studyId, valueId, requestOptions);
+	};
+
+	return { mutationFn, ...mutationOptions };
+};
+
+export type ConfirmExtractionValueMutationResult = NonNullable<
+	Awaited<ReturnType<typeof confirmExtractionValue>>
+>;
+
+export type ConfirmExtractionValueMutationError = ErrorType<ApiErrorBody>;
+export type ConfirmExtractionValueMutationVariables = {
+	projectId: string;
+	studyId: string;
+	valueId: string;
+};
+
+export const createConfirmExtractionValue = <TError = ErrorType<ApiErrorBody>, TContext = unknown>(
+	options?: () => {
+		mutation?: CreateMutationOptions<
+			Awaited<ReturnType<typeof confirmExtractionValue>>,
+			TError,
+			ConfirmExtractionValueMutationVariables,
+			TContext
+		>;
+		request?: SecondParameter<typeof customFetch>;
+	},
+	queryClient?: () => QueryClient
+): CreateMutationResult<
+	Awaited<ReturnType<typeof confirmExtractionValue>>,
+	TError,
+	ConfirmExtractionValueMutationVariables,
+	TContext
+> => {
+	return createMutation(
+		() => ({ ...getConfirmExtractionValueMutationOptions(options?.()) }),
+		queryClient
+	);
 };

@@ -10,6 +10,6 @@ export interface ImportRecords {
 	content: string;
 	/** @nullable */
 	csv_mapping?: ImportRecordsCsvMapping;
-	/** One of doi, ris, bibtex, nbib, or csv. */
+	/** One of doi, ris, bibtex, nbib, csv, or pmid. A pmid import takes one PubMed ID per line. */
 	format: string;
 }

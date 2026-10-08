@@ -4,10 +4,7 @@ import { runSeriousCriticalAxe } from './axe';
 test.describe('DeepRef workspace visual and accessibility harness', () => {
 	test('renders the deterministic overview shell', async ({ page }) => {
 		await expect(page).toHaveTitle(/DeepRef/i);
-		await expect(
-			page.getByRole('heading', { name: 'Evidence synthesis workspace' })
-		).toBeVisible();
-		await expect(page.getByText('Recent imports', { exact: true })).toBeVisible();
+		await expect(page.getByTestId('overview-populated')).toBeVisible();
 		await expect(page.getByRole('combobox', { name: 'Select project' })).toBeVisible();
 		await expect(page).toHaveURL(/\/projects\/visual-project\/overview$/);
 
@@ -19,13 +16,14 @@ test.describe('DeepRef workspace visual and accessibility harness', () => {
 	});
 
 	test('keeps evidence visible when dependency health is unavailable', async ({ page }) => {
-		await page.route('**/api/health/dependencies', (route) =>
+		// The overview asks for the status of one project's jobs (`?project_id=`), so the
+		// interception matches the path with or without that query.
+		await page.route(/\/api\/health\/dependencies(?:\?.*)?$/, (route) =>
 			route.fulfill({ status: 503, json: { detail: 'health unavailable' } })
 		);
 		await page.reload();
 		await expect(page.getByTestId('overview-dependency-warning')).toBeVisible();
 		await expect(page.getByTestId('overview-populated')).toBeVisible();
-		await expect(page.getByText('Recent imports', { exact: true })).toBeVisible();
 	});
 
 	test('keeps project selection keyboard-safe and Escape-closable', async ({ page }) => {
@@ -45,11 +43,11 @@ test.describe('DeepRef workspace visual and accessibility harness', () => {
 		await page.evaluate(() => {
 			document.documentElement.style.zoom = '2';
 		});
-		await expect(
-			page.getByRole('heading', { name: 'Evidence synthesis workspace' })
-		).toBeVisible();
-		await expect(page.getByRole('combobox', { name: 'Select project' })).toBeVisible();
-		await expect(page.locator('body')).toHaveCSS('overflow-x', /auto|visible/);
+		const trigger = page.getByRole('combobox', { name: 'Select project' });
+		await trigger.click();
+		await expect(page.getByPlaceholder('Search projects...')).toBeVisible();
+		await page.keyboard.press('Escape');
+		await expect(trigger).toBeFocused();
 	});
 
 	test('honours reduced motion and has no undersized touch targets', async ({ page }) => {

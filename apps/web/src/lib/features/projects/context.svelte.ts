@@ -5,11 +5,13 @@ import type { ResolvedPathname } from '$app/types';
 import type { IngestionDto, ProjectDto, ReportDto } from '$lib/api/generated/models';
 import { Context, PersistedState, type Getter } from 'runed';
 import { SvelteURLSearchParams } from 'svelte/reactivity';
+import { PROJECT_INSPECTOR_COLLAPSED_KEY, PROJECT_NAV_COLLAPSED_KEY } from './constants';
 import {
-	DEFAULT_PROJECT_MAX_DEPTH,
-	PROJECT_INSPECTOR_COLLAPSED_KEY,
-	PROJECT_NAV_COLLAPSED_KEY
-} from './constants';
+	afterProjectDeleted,
+	articleView,
+	parseArticleSort,
+	projectToOpen
+} from './workspace-navigation';
 import type {
 	ProjectWorkspaceCounts,
 	ProjectWorkspaceNavView,
@@ -58,27 +60,18 @@ function viewForPathname(pathname: string): ProjectWorkspaceView {
 	return VIEW_SUFFIXES.find(([suffix]) => pathname.endsWith(suffix))?.[1] ?? 'overview';
 }
 
+const VIEW_PATHS: Record<ProjectWorkspaceNavView, (projectId: string) => ResolvedPathname> = {
+	overview: (projectId) => resolve('/projects/[projectId]/overview', { projectId }),
+	protocol: (projectId) => resolve('/projects/[projectId]/protocol', { projectId }),
+	prisma: (projectId) => resolve('/projects/[projectId]/prisma', { projectId }),
+	articles: (projectId) => resolve('/projects/[projectId]/articles', { projectId }),
+	graph: (projectId) => resolve('/projects/[projectId]/graph', { projectId }),
+	recommendations: (projectId) => resolve('/projects/[projectId]/recommendations', { projectId }),
+	ingestions: (projectId) => resolve('/projects/[projectId]/discovery/imports', { projectId })
+};
+
 function pathnameForView(projectId: string, view: ProjectWorkspaceNavView): ResolvedPathname {
-	switch (view) {
-		case 'overview':
-			return resolve('/projects/[projectId]/overview', { projectId });
-		case 'protocol':
-			return resolve('/projects/[projectId]/protocol', { projectId });
-		case 'prisma':
-			return resolve('/projects/[projectId]/prisma', { projectId });
-		case 'articles':
-			return resolve('/projects/[projectId]/articles', { projectId });
-		case 'graph':
-			return resolve('/projects/[projectId]/graph', { projectId });
-		case 'recommendations':
-			return resolve('/projects/[projectId]/recommendations', { projectId });
-		case 'ingestions':
-			return resolve('/projects/[projectId]/discovery/imports', { projectId });
-		default: {
-			const exhaustive: never = view;
-			return exhaustive;
-		}
-	}
+	return VIEW_PATHS[view](projectId);
 }
 
 function appendSearch(pathname: string, params: URLSearchParams): ResolvedPathname {
@@ -140,6 +133,7 @@ class ProjectWorkspaceContext {
 	selectedProjectId = $derived.by(() => page.params.projectId ?? '');
 	selectedArticle = $derived.by(() => page.url.searchParams.get('report') ?? undefined);
 	selectedIngestion = $derived.by(() => page.url.searchParams.get('ingestion') ?? undefined);
+	selectedAcquisition = $derived.by(() => page.url.searchParams.get('acquisition') ?? undefined);
 	view = $derived.by(() => viewForPathname(page.url.pathname));
 	counts = $derived.by<ProjectWorkspaceCounts>(() => ({
 		articles: this.articles.length,
@@ -172,6 +166,18 @@ class ProjectWorkspaceContext {
 		},
 		set sort(value: ArticleSort) {
 			setSearchParam('sort', value === 'rank' ? undefined : value);
+		},
+		update(filter: string, minInternal: number): void {
+			const params = new SvelteURLSearchParams(page.url.searchParams);
+			if (filter) params.set('filter', filter);
+			else params.delete('filter');
+			if (minInternal > 0) params.set('minInternal', String(minInternal));
+			else params.delete('minInternal');
+			navigateTo(appendSearch(page.url.pathname, params), {
+				replaceState: true,
+				keepFocus: true,
+				noScroll: true
+			});
 		}
 	};
 
@@ -216,16 +222,17 @@ class ProjectWorkspaceContext {
 		maxDepth: undefined as number | undefined
 	});
 
-	get ingestionMaxDepth() {
-		const maxDepth =
-			this.#ingestionDraftProjectId === this.selectedProjectId
-				? this.ingestionDraft.maxDepth
-				: undefined;
-
-		return (maxDepth ?? this.project.default_max_depth) || DEFAULT_PROJECT_MAX_DEPTH;
+	/**
+	 * The depth the user chose for the selected project, restored from browser storage on load.
+	 * Undefined means the project follows the workspace Settings default.
+	 */
+	get ingestionDepthChoice(): number | undefined {
+		return this.#ingestionDraftProjectId === this.selectedProjectId
+			? this.ingestionDraft.maxDepth
+			: undefined;
 	}
 
-	set ingestionMaxDepth(value: number | undefined) {
+	set ingestionDepthChoice(value: number | undefined) {
 		this.#ingestionDraftProjectId = this.selectedProjectId;
 		this.ingestionDraft.maxDepth = value;
 	}
@@ -250,13 +257,13 @@ class ProjectWorkspaceContext {
 		loading: boolean,
 		selectedProjectFailed: boolean
 	) => {
-		if (loading || projects.length === 0) return;
-
-		const routeProjectId = page.params.projectId;
-		if (routeProjectId && !selectedProjectFailed) return;
-
-		const firstProjectId = projects[0]?.id;
-		if (firstProjectId) navigateTo(pathnameForView(firstProjectId, 'overview'));
+		const projectId = projectToOpen(
+			projects,
+			loading,
+			page.params.projectId,
+			selectedProjectFailed
+		);
+		if (projectId) navigateTo(pathnameForView(projectId, 'overview'));
 	};
 
 	selectProject = (projectId: string) => {
@@ -274,7 +281,7 @@ class ProjectWorkspaceContext {
 		const params = new SvelteURLSearchParams(page.url.searchParams);
 		params.set('report', reportId);
 		params.delete('ingestion');
-		this.#navigateToView(this.view === 'graph' ? 'graph' : 'articles', params);
+		this.#navigateToView(articleView(this.view), params);
 	};
 
 	clearArticle = () => {
@@ -287,6 +294,17 @@ class ProjectWorkspaceContext {
 		if (!ingestionId || !this.selectedProjectId) return;
 		const params = new SvelteURLSearchParams(page.url.searchParams);
 		params.set('ingestion', ingestionId);
+		params.delete('acquisition');
+		params.delete('report');
+		this.#navigateToView('ingestions', params);
+	};
+
+	/** Opens a PubMed ID run in the run inspector. */
+	openAcquisition = (acquisitionId: string) => {
+		if (!acquisitionId || !this.selectedProjectId) return;
+		const params = new SvelteURLSearchParams(page.url.searchParams);
+		params.set('acquisition', acquisitionId);
+		params.delete('ingestion');
 		params.delete('report');
 		this.#navigateToView('ingestions', params);
 	};
@@ -294,6 +312,7 @@ class ProjectWorkspaceContext {
 	clearIngestion = () => {
 		const params = new SvelteURLSearchParams(page.url.searchParams);
 		params.delete('ingestion');
+		params.delete('acquisition');
 		navigateTo(appendSearch(page.url.pathname, params), { keepFocus: true, noScroll: true });
 	};
 
@@ -355,22 +374,15 @@ class ProjectWorkspaceContext {
 
 	finishProjectDeleted = (projectId: string) => {
 		if (!projectId) return;
-
-		const remainingProjects = this.projects.filter((project) => project.id !== projectId);
 		this.closeProjectManagement();
-
-		if (remainingProjects.length === 0) {
+		const next = afterProjectDeleted(this.projects, projectId, this.selectedProjectId);
+		if (!next) return;
+		if (next.to === 'home') {
 			navigateTo(resolve('/'));
 			return;
 		}
-
-		if (this.selectedProjectId === projectId) {
-			const nextProjectId = remainingProjects[0]?.id;
-			if (nextProjectId) {
-				this.#resetIngestionMaxDepth(nextProjectId);
-				navigateTo(pathnameForView(nextProjectId, 'overview'));
-			}
-		}
+		this.#resetIngestionMaxDepth(next.projectId);
+		navigateTo(pathnameForView(next.projectId, 'overview'));
 	};
 
 	#resetIngestionMaxDepth = (projectId: string) => {
@@ -383,13 +395,6 @@ function parseNonNegativeInt(value: string | null): number {
 	if (!value) return 0;
 	const parsed = Number.parseInt(value, 10);
 	return Number.isFinite(parsed) && parsed >= 0 ? parsed : 0;
-}
-
-function parseArticleSort(value: string | null): ArticleSort {
-	if (value === 'internal' || value === 'total' || value === 'year' || value === 'title') {
-		return value;
-	}
-	return 'rank';
 }
 
 const projectWorkspaceContext = new Context<ProjectWorkspaceContext>('project-workspace');

@@ -7,6 +7,7 @@
 import type { AppraisalArgsDto } from './appraisalArgsDto.ts';
 import type { DocumentBlocksArgsDto } from './documentBlocksArgsDto.ts';
 import type { DuplicateMergeArgsDto } from './duplicateMergeArgsDto.ts';
+import type { ListStudiesArgsDto } from './listStudiesArgsDto.ts';
 import type { ProjectArgsDto } from './projectArgsDto.ts';
 import type { ReportArgsDto } from './reportArgsDto.ts';
 import type { ScreeningDecisionArgsDto } from './screeningDecisionArgsDto.ts';
@@ -42,6 +43,10 @@ export type AssistantToolRequest =
 	| {
 			args: StudyArgsDto;
 			tool: 'get_study';
+	  }
+	| {
+			args: ListStudiesArgsDto;
+			tool: 'list_studies';
 	  }
 	| {
 			args: AppraisalArgsDto;

@@ -869,7 +869,7 @@ async fn injected_gateway_is_called_and_run_provenance_is_persisted() {
     assert_eq!(provider_from_run, provider);
     assert_eq!(model, "screening-model");
     assert_eq!(version, "2026-test");
-    assert_eq!(prompt_version, "screening.title_abstract.v1");
+    assert_eq!(prompt_version, "screening.title_abstract.v3");
 
     cleanup_project(&pool, project_id, report_id).await;
 }
@@ -1018,7 +1018,7 @@ async fn full_text_retrieval_uses_or_terms_and_passes_grounding_to_gateway() {
     .fetch_one(&pool)
     .await
     .expect("full-text prompt provenance");
-    assert_eq!(prompt_version, "screening.full_text.v1");
+    assert_eq!(prompt_version, "screening.full_text.v2");
     let evidence_count: i64 = sqlx::query_scalar(
         "SELECT count(*) FROM ai_run_evidence e JOIN ai_runs r ON r.id=e.ai_run_id WHERE r.project_id=$1",
     )

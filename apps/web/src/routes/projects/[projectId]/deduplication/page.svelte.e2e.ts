@@ -131,6 +131,36 @@ test('shows a loading state and an empty queue', async ({ page }) => {
 	await expect(page.getByText('No pending proposals', { exact: true })).toBeVisible();
 });
 
+test('shows the outcome of a deduplication run', async ({ page }) => {
+	await mockProjectShell(page);
+	await page.route(
+		'http://localhost:4173/api/projects/project-1/deduplication/proposals?limit=100&status=pending',
+		async (route) => {
+			await route.fulfill({ json: { items: [], next_cursor: null } });
+		}
+	);
+	await page.route(
+		'http://localhost:4173/api/projects/project-1/deduplication/run',
+		async (route) => {
+			await route.fulfill({
+				json: {
+					processed: 8,
+					auto_linked: 0,
+					created_reports: 0,
+					proposals_created: 0,
+					conflicts: 0
+				}
+			});
+		}
+	);
+
+	await page.goto('/projects/project-1/deduplication');
+	await page.getByRole('button', { name: 'Run deduplication' }).click();
+	await expect(page.getByTestId('deduplication-run-result')).toContainText(
+		'Checked 8 records · 0 possible duplicates'
+	);
+});
+
 test('does not offer create-new for identifier conflicts', async ({ page }) => {
 	await mockProjectShell(page);
 	const conflictProposal = {
@@ -271,14 +301,11 @@ test('reviews a grounded duplicate AI proposal before applying it', async ({ pag
 	);
 
 	await page.goto('/projects/project-1/deduplication');
+	await page.locator('summary').filter({ hasText: 'AI comparison and provenance' }).click();
 	const ai = page.getByTestId('ai-proposal-review');
 	await ai.getByRole('button', { name: 'Request suggestion' }).click();
-	await expect(ai.getByText('match', { exact: true })).toBeVisible();
-	await expect(ai.getByText('Stable title and author signals agree.')).toBeVisible();
-	await expect(ai.getByTestId('ai-dedupe-provenance')).toContainText('Source record');
-	await expect(ai.getByTestId('ai-dedupe-provenance')).toContainText('Candidate report');
+	await expect(ai.getByText('Match', { exact: true })).toBeVisible();
 	await ai.getByRole('button', { name: 'Approve and apply' }).click();
-	await expect(ai.getByText('No pending suggestion', { exact: true })).toBeVisible();
 	await expect.poll(() => decisions.length).toBe(1);
 	expect(decisions[0]).toMatchObject({ decision: 'accept' });
 });

@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { page } from '$app/state';
+	import ScreeningViewSwitch from '$lib/features/ai-autonomy/components/ScreeningViewSwitch.svelte';
 	import FullTextScreening from '$lib/features/full-text/components/FullTextScreening.svelte';
 
 	const projectId = $derived(page.params.projectId ?? '');
@@ -13,4 +14,6 @@
 	/>
 </svelte:head>
 
-<FullTextScreening {projectId} />
+<ScreeningViewSwitch {projectId} stage="full_text">
+	<FullTextScreening {projectId} />
+</ScreeningViewSwitch>

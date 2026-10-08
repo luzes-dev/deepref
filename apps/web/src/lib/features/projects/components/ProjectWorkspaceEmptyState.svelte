@@ -31,9 +31,7 @@
 				<Dialog.Content>
 					<Dialog.Header>
 						<Dialog.Title>Create project</Dialog.Title>
-						<Dialog.Description
-							>Define a research workspace for DOI ingestion.</Dialog.Description
-						>
+						<Dialog.Description>One project per review.</Dialog.Description>
 					</Dialog.Header>
 					<ProjectCreateForm
 						nameInputId="empty-project-name"

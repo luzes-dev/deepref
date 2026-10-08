@@ -1,0 +1,15 @@
+<?xml version="1.0" ?>
+<!DOCTYPE PubmedArticleSet PUBLIC "-//NLM//DTD PubMedArticle, 1st January 2025//EN" "https://dtd.nlm.nih.gov/ncbi/pubmed/out/pubmed_250101.dtd">
+<PubmedArticleSet>
+<PubmedArticle><MedlineCitation Status="MEDLINE" Owner="NLM"><PMID Version="1">123</PMID>
+<Article><Journal><Title>The Lancet</Title><JournalIssue><PubDate><Year>2024</Year></PubDate></JournalIssue></Journal>
+<ArticleTitle>Statins &amp; hearts</ArticleTitle>
+<Abstract><AbstractText Label="BACKGROUND">Part one.</AbstractText><AbstractText>Part two.</AbstractText></Abstract>
+<AuthorList><Author><LastName>Li</LastName><ForeName>Wei</ForeName></Author><Author><LastName>Souza</LastName><ForeName>Ana</ForeName></Author></AuthorList></Article></MedlineCitation>
+<PubmedData><ArticleIdList><ArticleId IdType="pubmed">123</ArticleId><ArticleId IdType="doi">10.1/ABC</ArticleId></ArticleIdList></PubmedData>
+</PubmedArticle>
+<PubmedArticle><MedlineCitation Status="MEDLINE" Owner="NLM"><PMID Version="1">456</PMID>
+<Article><ArticleTitle>A bare record</ArticleTitle></Article></MedlineCitation>
+<PubmedData><ArticleIdList><ArticleId IdType="pubmed">456</ArticleId></ArticleIdList></PubmedData>
+</PubmedArticle>
+</PubmedArticleSet>

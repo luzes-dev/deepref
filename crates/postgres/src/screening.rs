@@ -526,6 +526,18 @@ async fn persist_event_and_state(
     .execute(&mut **tx)
     .await?;
 
+    if write.event_kind == "decision" {
+        crate::dispatch_automation_domain_event(
+            tx,
+            &AutomationDomainEvent::ScreeningDecisionRecorded {
+                project_id: write.result.project_id.into(),
+                screening_event_id: write.event_id,
+                actor: write.actor.clone(),
+            },
+        )
+        .await?;
+    }
+
     if write.event_kind == "decision"
         && write.previous.final_status != "include"
         && write.result.final_status == "include"

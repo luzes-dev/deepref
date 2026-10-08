@@ -144,6 +144,100 @@ pub async fn list_studies(
     Ok(StudyListRecord { items, next_cursor })
 }
 
+/// An included report that no study groups yet.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct UngroupedReportRecord {
+    pub report_id: Uuid,
+    pub title: Option<String>,
+    pub doi: Option<String>,
+    pub publication_year: Option<i32>,
+    pub journal: Option<String>,
+}
+
+/// Included reports (title/abstract and full text both include) that are not in
+/// any study. This is the set PRISMA reports as `included_reports_not_grouped`.
+pub async fn list_ungrouped_included_reports(
+    pool: &PgPool,
+    project_id: Uuid,
+) -> Result<Vec<UngroupedReportRecord>, StudyError> {
+    let rows = sqlx::query(
+        "SELECT r.id AS report_id, r.title, doi.value AS doi,
+                r.publication_year, r.journal
+         FROM project_reports pr
+         JOIN reports r ON r.id = pr.report_id
+         LEFT JOIN screening_state ss
+           ON ss.project_id = pr.project_id AND ss.report_id = pr.report_id
+         LEFT JOIN LATERAL (
+           SELECT ri.value FROM report_identifiers ri
+           WHERE ri.report_id = r.id AND ri.scheme = 'doi'
+           ORDER BY ri.created_at, ri.value
+           LIMIT 1
+         ) doi ON true
+         WHERE pr.project_id = $1
+           AND coalesce(ss.title_abstract_status, 'unscreened') = 'include'
+           AND coalesce(ss.full_text_status, 'not_required') = 'include'
+           AND NOT EXISTS (
+             SELECT 1 FROM study_reports sr
+             WHERE sr.project_id = pr.project_id AND sr.report_id = pr.report_id
+           )
+         ORDER BY r.title NULLS LAST, r.id
+         LIMIT 500",
+    )
+    .bind(project_id)
+    .fetch_all(pool)
+    .await?;
+    Ok(rows
+        .into_iter()
+        .map(|row| UngroupedReportRecord {
+            report_id: row.get("report_id"),
+            title: row.get("title"),
+            doi: row.get("doi"),
+            publication_year: row.get("publication_year"),
+            journal: row.get("journal"),
+        })
+        .collect())
+}
+
+/// Member reports for several studies in one query, keyed by study id.
+pub async fn list_reports_for_studies(
+    pool: &PgPool,
+    project_id: Uuid,
+    study_ids: &[Uuid],
+) -> Result<std::collections::HashMap<Uuid, Vec<StudyReportRecord>>, StudyError> {
+    let rows = sqlx::query(
+        "SELECT sr.study_id, sr.report_id, r.title, r.abstract_text, r.publication_year,
+                sr.relationship, sr.created_at
+         FROM study_reports sr
+         JOIN reports r ON r.id=sr.report_id
+         WHERE sr.project_id=$1 AND sr.study_id = ANY($2)
+         ORDER BY sr.created_at, sr.report_id",
+    )
+    .bind(project_id)
+    .bind(study_ids)
+    .fetch_all(pool)
+    .await?;
+    let mut by_study: std::collections::HashMap<Uuid, Vec<StudyReportRecord>> =
+        std::collections::HashMap::new();
+    for row in rows {
+        let role_value: String = row.get("relationship");
+        let role = StudyReportRole::parse(&role_value).ok_or_else(|| {
+            StudyError::DataIntegrity("study report has an unknown role".to_owned())
+        })?;
+        by_study
+            .entry(row.get("study_id"))
+            .or_default()
+            .push(StudyReportRecord {
+                report_id: row.get::<Uuid, _>("report_id").into(),
+                title: row.get("title"),
+                abstract_text: row.get("abstract_text"),
+                publication_year: row.get("publication_year"),
+                role,
+                assigned_at: row.get("created_at"),
+            });
+    }
+    Ok(by_study)
+}
+
 pub async fn get_study(
     pool: &PgPool,
     project_id: Uuid,

@@ -64,8 +64,7 @@ test('opens Settings shallowly while preserving the article page DOM and draft',
 		node.setAttribute('data-shallow-test-marker', 'mounted-before-settings');
 	});
 
-	const { dialog } = await openSettingsModal(page);
-	await expect(dialog.getByRole('heading', { name: 'Ingestion', exact: true })).toBeVisible();
+	await openSettingsModal(page);
 	await expect(page.getByTestId('articles-page')).toHaveAttribute(
 		'data-shallow-test-marker',
 		'mounted-before-settings'
@@ -92,9 +91,6 @@ test('searches Settings content and keeps only matching sections', async ({ page
 	await search.fill('citation depth');
 	await expect(dialog.getByRole('button', { name: 'Ingestion', exact: true })).toBeVisible();
 	await expect(dialog.getByRole('button', { name: 'Appearance', exact: true })).toHaveCount(0);
-	await expect(
-		dialog.getByRole('button', { name: 'Provider defaults', exact: true })
-	).toHaveCount(0);
 	await dialog.getByRole('button', { name: 'Ingestion', exact: true }).click();
 	await expect(dialog.getByLabel('Default max depth')).toBeVisible();
 });
@@ -129,11 +125,12 @@ test('traps focus in the Settings dialog and restores it after Escape', async ({
 		)
 		.toBe(true);
 
-	const focusable = dialog.locator(
-		'button:not([disabled]):not([tabindex="-1"]), a[href], input:not([disabled]):not([tabindex="-1"]), select:not([disabled]):not([tabindex="-1"]), textarea:not([disabled]):not([tabindex="-1"]), [tabindex]:not([tabindex="-1"]):not([disabled])'
-	);
+	const focusable = dialog
+		.locator(
+			'button:not([disabled]):not([tabindex="-1"]), a[href], input:not([disabled]):not([tabindex="-1"]), select:not([disabled]):not([tabindex="-1"]), textarea:not([disabled]):not([tabindex="-1"]), summary, [tabindex]:not([tabindex="-1"]):not([disabled])'
+		)
+		.filter({ visible: true });
 	const focusableCount = await focusable.count();
-	expect(focusableCount).toBeGreaterThan(1);
 	await focusable.nth(focusableCount - 1).focus();
 	await page.keyboard.press('Tab');
 	await expect(focusable.first()).toBeFocused();

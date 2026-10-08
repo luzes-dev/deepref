@@ -1,0 +1,18 @@
+[package]
+name = "deepref-grobid"
+version.workspace = true
+edition.workspace = true
+license.workspace = true
+
+[dependencies]
+reqwest = { workspace = true, features = ["multipart"] }
+roxmltree.workspace = true
+serde.workspace = true
+thiserror.workspace = true
+tokio.workspace = true
+
+[lints]
+workspace = true
+
+[package.metadata.deepref]
+layer = "adapter"

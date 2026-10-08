@@ -25,6 +25,7 @@ use crate::{
 
 pub(crate) const MAX_IMPORT_BYTES: usize = 2 * 1024 * 1024;
 pub(crate) const MAX_SEED_DOIS: usize = 1_000;
+pub(crate) const MAX_PMIDS_PER_IMPORT: usize = 1_000;
 pub(crate) const MAX_REQUEST_BODY_BYTES: usize = MAX_IMPORT_BYTES * 6 + 64 * 1024;
 
 #[derive(Debug, Deserialize, ToSchema)]
@@ -37,11 +38,16 @@ pub(crate) struct CreateAcquisition {
 
 #[derive(Debug, Deserialize, ToSchema)]
 pub(crate) struct ImportRecords {
-    /// One of doi, ris, bibtex, nbib, or csv.
+    /// One of doi, ris, bibtex, nbib, csv, or pmid. A pmid import takes one PubMed ID per line.
     pub format: String,
     pub content: String,
     #[schema(value_type = Option<Object>)]
     pub csv_mapping: Option<serde_json::Value>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+pub(crate) struct AcquisitionListFilter {
+    pub strategy: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, ToSchema)]
@@ -109,7 +115,8 @@ struct DoiAcquisitionResult {
     params(
         ("project_id" = Uuid, Path, description = "Project identifier"),
         ("cursor" = Option<String>, Query, description = "Opaque pagination cursor"),
-        ("limit" = Option<i64>, Query, description = "Page size")
+        ("limit" = Option<i64>, Query, description = "Page size"),
+        ("strategy" = Option<String>, Query, description = "Only runs with this strategy, for example file_import")
     ),
     responses(
         (status = 200, description = "Acquisition runs ordered newest first", body = PaginatedResponse<AcquisitionDto>),
@@ -121,20 +128,24 @@ pub(crate) async fn list_acquisitions(
     State(state): State<AppState>,
     Path(project_id): Path<Uuid>,
     Query(pagination): Query<PaginationParams>,
+    Query(filter): Query<AcquisitionListFilter>,
 ) -> Result<Json<PaginatedResponse<AcquisitionDto>>, ApiError> {
     let limit = pagination.limit()?;
     let cursor: Option<(DateTime<Utc>, Uuid)> = pagination.decode()?;
+    let strategy = filter.strategy.filter(|value| !value.is_empty());
     let rows = sqlx::query(
         "SELECT id,project_id,source,strategy,format,status,seed_count,queued_count,fetched_count,
                 failed_count,created_at,started_at,completed_at,config
          FROM acquisition_runs
          WHERE project_id=$1 AND ($2::timestamptz IS NULL OR (created_at,id)<($2,$3))
+           AND ($5::text IS NULL OR strategy=$5)
          ORDER BY created_at DESC,id DESC LIMIT $4",
     )
     .bind(project_id)
     .bind(cursor.as_ref().map(|value| value.0))
     .bind(cursor.as_ref().map(|value| value.1))
     .bind(limit + 1)
+    .bind(strategy)
     .fetch_all(&state.pool)
     .await?;
     let items = rows.into_iter().map(acquisition_from_row).collect();
@@ -411,6 +422,9 @@ pub(crate) async fn import_project_records(
             "import content must not be empty".to_owned(),
         ));
     }
+    if is_pmid_format(&input.format) {
+        return import_pmids(&state, project_id, &headers, &input.content).await;
+    }
     let format = parse_format(&input.format)?;
     let csv_mapping = match input.csv_mapping {
         Some(mapping) => Some(serde_json::from_value::<CsvColumnMapping>(mapping)?),
@@ -451,6 +465,14 @@ pub(crate) async fn import_project_records(
     )
     .await
     .map_err(map_acquisition_error)?;
+    if result.created
+        && let Err(error) =
+            deepref_postgres::enqueue_import_deduplication(&state.pool, project_id, result.run_id)
+                .await
+    {
+        // The import itself succeeded; the records wait for a manual run instead.
+        tracing::warn!(%error, %project_id, "could not queue the duplicate check for an import");
+    }
     let run = sqlx::query(acquisition_select())
         .bind(result.run_id)
         .fetch_one(&state.pool)
@@ -463,6 +485,199 @@ pub(crate) async fn import_project_records(
         },
         Json(acquisition_from_row(run)),
     ))
+}
+
+/// A PubMed ID import. The run is created queued; the worker fetches the articles.
+async fn import_pmids(
+    state: &AppState,
+    project_id: Uuid,
+    headers: &HeaderMap,
+    content: &str,
+) -> Result<(StatusCode, Json<AcquisitionDto>), ApiError> {
+    let pmids = parse_pmid_list(content)?;
+    let idempotency_key = idempotency_key(headers)?;
+    let result = deepref_postgres::create_pmid_import(
+        &state.pool,
+        &deepref_postgres::PmidImportRequest {
+            project_id,
+            idempotency_key,
+            pmids,
+        },
+    )
+    .await
+    .map_err(map_acquisition_error)?;
+    let run = sqlx::query(acquisition_select())
+        .bind(result.run_id)
+        .fetch_one(&state.pool)
+        .await?;
+    Ok((
+        if result.created {
+            StatusCode::CREATED
+        } else {
+            StatusCode::OK
+        },
+        Json(acquisition_from_row(run)),
+    ))
+}
+
+/// Reads a PubMed ID list: one ID per line, with commas also separating them. Labels such as
+/// `PMID:` and pubmed.ncbi.nlm.nih.gov links are accepted. A repeated ID is kept once.
+pub(crate) fn parse_pmid_list(content: &str) -> Result<Vec<String>, ApiError> {
+    let mut pmids = Vec::new();
+    let mut seen = HashSet::new();
+    let mut problems = Vec::new();
+    for (index, line) in content.lines().enumerate() {
+        for token in line
+            .split(',')
+            .map(str::trim)
+            .filter(|token| !token.is_empty())
+        {
+            match deepref_providers::normalize_pmid(token) {
+                Some(pmid) => {
+                    if seen.insert(pmid.clone()) {
+                        pmids.push(pmid);
+                    }
+                }
+                None => problems.push(format!(
+                    "line {}: \"{}\" is not a PubMed ID",
+                    index + 1,
+                    bounded_detail(token, 40)
+                )),
+            }
+        }
+    }
+    if !problems.is_empty() {
+        return Err(ApiError::BadRequest(
+            problems.into_iter().take(5).collect::<Vec<_>>().join("; "),
+        ));
+    }
+    if pmids.is_empty() {
+        return Err(ApiError::BadRequest(
+            "no PubMed IDs were found in the import".to_owned(),
+        ));
+    }
+    if pmids.len() > MAX_PMIDS_PER_IMPORT {
+        return Err(ApiError::BadRequest(format!(
+            "a PubMed import takes at most {MAX_PMIDS_PER_IMPORT} IDs"
+        )));
+    }
+    Ok(pmids)
+}
+
+fn is_pmid_format(value: &str) -> bool {
+    matches!(value.trim().to_lowercase().as_str(), "pmid" | "pmids")
+}
+
+/// One PubMed ID of a PubMed ID import run.
+#[derive(Debug, Clone, Serialize, ToSchema)]
+pub(crate) struct AcquisitionItemDto {
+    /// The PubMed ID, as it was imported.
+    pub identifier: String,
+    /// The place the ID had in the import. Items are paged in this order.
+    pub position: i32,
+    /// One of queued, imported, already_in_project, not_found, or failed.
+    pub status: String,
+    /// The article's title, once PubMed has answered for this ID.
+    pub title: Option<String>,
+    /// The record this import saved for the ID, when one was saved.
+    pub record_id: Option<Uuid>,
+    /// Why the ID could not be fetched, when it failed.
+    pub last_error: Option<String>,
+    pub processed_at: Option<DateTime<Utc>>,
+}
+
+#[utoipa::path(
+    get,
+    path = "/projects/{project_id}/acquisitions/{acquisition_id}/items",
+    operation_id = "listAcquisitionItems",
+    tag = "acquisitions",
+    params(
+        ("project_id" = Uuid, Path, description = "Project identifier"),
+        ("acquisition_id" = Uuid, Path, description = "Acquisition run identifier"),
+        ("cursor" = Option<String>, Query, description = "Opaque pagination cursor"),
+        ("limit" = Option<i64>, Query, description = "Page size")
+    ),
+    responses(
+        (status = 200, description = "Items of a PubMed ID run, in the order they were given", body = PaginatedResponse<AcquisitionItemDto>),
+        (status = 400, description = "Invalid pagination cursor", body = ErrorResponse),
+        (status = 404, description = "Acquisition not found in this project", body = ErrorResponse),
+        (status = 500, description = "Internal server error", body = ErrorResponse)
+    )
+)]
+pub(crate) async fn list_acquisition_items(
+    State(state): State<AppState>,
+    Path((project_id, acquisition_id)): Path<(Uuid, Uuid)>,
+    Query(pagination): Query<PaginationParams>,
+) -> Result<Json<PaginatedResponse<AcquisitionItemDto>>, ApiError> {
+    let limit = pagination.limit()?;
+    let after: Option<i32> = pagination.decode()?;
+    let exists: bool = sqlx::query_scalar(
+        "SELECT EXISTS (SELECT 1 FROM acquisition_runs WHERE id=$1 AND project_id=$2)",
+    )
+    .bind(acquisition_id)
+    .bind(project_id)
+    .fetch_one(&state.pool)
+    .await?;
+    if !exists {
+        return Err(ApiError::NotFound("acquisition not found".to_owned()));
+    }
+    let rows = sqlx::query(
+        "SELECT pmid, position, status, title, record_id, last_error, processed_at
+         FROM pmid_import_items
+         WHERE acquisition_run_id=$1 AND ($2::int IS NULL OR position>$2)
+         ORDER BY position LIMIT $3",
+    )
+    .bind(acquisition_id)
+    .bind(after)
+    .bind(limit + 1)
+    .fetch_all(&state.pool)
+    .await?;
+    let items = rows.into_iter().map(acquisition_item_from_row).collect();
+    Ok(Json(page(items, limit as usize, |item| item.position)?))
+}
+
+#[utoipa::path(
+    get,
+    path = "/projects/{project_id}/acquisitions/{acquisition_id}",
+    operation_id = "getAcquisition",
+    tag = "acquisitions",
+    params(
+        ("project_id" = Uuid, Path, description = "Project identifier"),
+        ("acquisition_id" = Uuid, Path, description = "Acquisition run identifier")
+    ),
+    responses(
+        (status = 200, description = "Acquisition run", body = AcquisitionDto),
+        (status = 404, description = "Acquisition not found in this project", body = ErrorResponse),
+        (status = 500, description = "Internal server error", body = ErrorResponse)
+    )
+)]
+pub(crate) async fn get_acquisition(
+    State(state): State<AppState>,
+    Path((project_id, acquisition_id)): Path<(Uuid, Uuid)>,
+) -> Result<Json<AcquisitionDto>, ApiError> {
+    let row = sqlx::query(
+        "SELECT id,project_id,source,strategy,format,status,seed_count,queued_count,fetched_count,
+                failed_count,created_at,started_at,completed_at,config
+         FROM acquisition_runs WHERE id=$1 AND project_id=$2",
+    )
+    .bind(acquisition_id)
+    .bind(project_id)
+    .fetch_optional(&state.pool)
+    .await?
+    .ok_or_else(|| ApiError::NotFound("acquisition not found".to_owned()))?;
+    Ok(Json(acquisition_from_row(row)))
+}
+
+fn acquisition_item_from_row(row: sqlx::postgres::PgRow) -> AcquisitionItemDto {
+    AcquisitionItemDto {
+        identifier: row.get("pmid"),
+        position: row.get("position"),
+        status: row.get("status"),
+        title: row.get("title"),
+        record_id: row.get("record_id"),
+        last_error: row.get("last_error"),
+        processed_at: row.get("processed_at"),
+    }
 }
 
 async fn persist_doi_acquisition(
@@ -782,6 +997,7 @@ fn map_acquisition_error(error: deepref_postgres::AcquisitionError) -> ApiError 
         deepref_postgres::AcquisitionError::Serialization(error) => {
             ApiError::Internal(error.into())
         }
+        deepref_postgres::AcquisitionError::Queue(error) => ApiError::Internal(error),
     }
 }
 
@@ -810,5 +1026,50 @@ fn acquisition_from_row(row: sqlx::postgres::PgRow) -> AcquisitionDto {
         started_at: row.get("started_at"),
         completed_at: row.get("completed_at"),
         refresh_of,
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn pmid_lists_accept_labels_links_and_commas_and_keep_the_first_repeat() {
+        let pmids = parse_pmid_list(
+            "PMID: 19446324\nhttps://pubmed.ncbi.nlm.nih.gov/123/, 19446324\r\n 456",
+        )
+        .expect("a valid list");
+        assert_eq!(pmids, ["19446324", "123", "456"]);
+    }
+
+    #[test]
+    fn pmid_lists_name_the_first_lines_that_are_not_pubmed_ids() {
+        let error = parse_pmid_list("123\nnot-a-pmid\n10.1000/abc").expect_err("two bad lines");
+        match error {
+            ApiError::BadRequest(message) => {
+                assert!(
+                    message.contains("line 2: \"not-a-pmid\" is not a PubMed ID"),
+                    "{message}"
+                );
+                assert!(message.contains("line 3"), "{message}");
+            }
+            other => panic!("unexpected error: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn empty_and_oversized_pmid_lists_are_rejected() {
+        assert!(parse_pmid_list(" , \n ").is_err());
+        let oversized: String = (1..=MAX_PMIDS_PER_IMPORT + 1)
+            .map(|number| format!("{number}\n"))
+            .collect();
+        assert!(parse_pmid_list(&oversized).is_err());
+    }
+
+    #[test]
+    fn only_the_pmid_format_names_select_the_pubmed_id_import() {
+        assert!(is_pmid_format(" PMID "));
+        assert!(is_pmid_format("pmids"));
+        assert!(!is_pmid_format("pubmed"), "pubmed is the NBIB file format");
     }
 }

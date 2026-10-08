@@ -6,8 +6,10 @@
 	import { Spinner } from '@deepref/ui/spinner';
 	import { createCreateProject } from '$lib/api/generated/projects/projects';
 	import { notifyError } from '$lib/features/notifications/toast';
-	import { DEFAULT_PROJECT_MAX_DEPTH } from '../constants';
+	import { useProjectWorkspaceContext } from '../context.svelte.js';
+	import { formatProjectDate, projectsNamed } from '../project-search';
 	import PlusIcon from '@lucide/svelte/icons/plus';
+	import TriangleAlertIcon from '@lucide/svelte/icons/triangle-alert';
 
 	let {
 		onCreated,
@@ -21,18 +23,31 @@
 		descriptionInputId?: string;
 	} = $props();
 
+	const workspace = useProjectWorkspaceContext();
 	const createProject = createCreateProject();
+	const duplicateHintId = $derived(`${nameInputId}-duplicate`);
 
 	let name = $state('');
 	let description = $state('');
 
+	// A soft hint only: duplicate names are allowed, because two reviews can
+	// legitimately share a working title.
+	const sameName = $derived(projectsNamed(workspace.projects, name));
+	const duplicateHint = $derived(
+		sameName.length === 0
+			? ''
+			: sameName.length === 1
+				? `A project with this name already exists, created ${formatProjectDate(sameName[0].created_at)}. You can still create this one.`
+				: `${sameName.length} projects with this name already exist. You can still create this one.`
+	);
+
 	async function submitProject() {
 		try {
+			// No depth is sent: the server gives the new project the workspace Settings default.
 			const result = await createProject.mutateAsync({
 				data: {
 					name: name.trim(),
-					description: description.trim(),
-					default_max_depth: DEFAULT_PROJECT_MAX_DEPTH
+					description: description.trim()
 				}
 			});
 			name = '';
@@ -59,15 +74,28 @@
 				bind:value={name}
 				required
 				aria-invalid={name.length > 0 && !name.trim()}
+				aria-describedby={duplicateHint ? duplicateHintId : undefined}
+				data-testid="create-project-name"
 			/>
-			<Field.FieldDescription
-				>A short name for this evidence workspace.</Field.FieldDescription
-			>
+			{#if duplicateHint}
+				<p
+					id={duplicateHintId}
+					role="status"
+					class="flex items-start gap-2 text-xs text-warning"
+					data-testid="create-project-duplicate-hint"
+				>
+					<TriangleAlertIcon class="mt-0.5 size-3.5 shrink-0" aria-hidden="true" />
+					<span>{duplicateHint}</span>
+				</p>
+			{/if}
 		</Field.Field>
 		<Field.Field>
 			<Field.FieldLabel for={descriptionInputId}>Description</Field.FieldLabel>
-			<Textarea id={descriptionInputId} bind:value={description} />
-			<Field.FieldDescription>Optional context for collaborators.</Field.FieldDescription>
+			<Textarea
+				id={descriptionInputId}
+				bind:value={description}
+				placeholder="Review question or scope (optional)"
+			/>
 		</Field.Field>
 	</Field.FieldGroup>
 	<div

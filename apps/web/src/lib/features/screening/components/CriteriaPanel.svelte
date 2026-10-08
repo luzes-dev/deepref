@@ -1,8 +1,5 @@
 <script lang="ts">
 	import type { EligibilityCriterionDto } from '$lib/api/generated/models';
-	import { Badge } from '@deepref/ui/badge';
-	import * as Card from '@deepref/ui/card';
-	import { ClipboardCheck, Info } from '@lucide/svelte';
 
 	let {
 		criteria,
@@ -17,61 +14,42 @@
 	const stageCriteria = $derived(
 		criteria.filter((criterion) => criterion.stage === stage || criterion.stage === 'both')
 	);
+	const groups = $derived([
+		['Include when', stageCriteria.filter((criterion) => criterion.kind !== 'exclusion')],
+		['Exclude when', stageCriteria.filter((criterion) => criterion.kind === 'exclusion')]
+	] as const);
 </script>
 
-<Card.Root class="border-primary/15">
-	<Card.Header class="gap-2 border-b border-border/60 pb-4">
-		<div class="flex items-start justify-between gap-3">
-			<div class="flex items-center gap-2">
-				<span
-					class="flex size-8 items-center justify-center rounded-lg bg-primary/10 text-primary"
-				>
-					<ClipboardCheck aria-hidden="true" />
-				</span>
-				<Card.Title>Eligibility criteria</Card.Title>
-			</div>
-			<Badge variant="outline">v{protocolVersion ?? '—'}</Badge>
-		</div>
-		<Card.Description
-			>{stage === 'full_text' ? 'Full-text' : 'Title/abstract'} criteria · Apply the published protocol
-			consistently.</Card.Description
+<section class="flex flex-col gap-4" aria-labelledby="criteria-title-{stage}">
+	<div class="flex items-baseline justify-between gap-3">
+		<h3 id="criteria-title-{stage}" class="text-sm font-semibold">Eligibility criteria</h3>
+		<span class="text-xs text-muted-foreground tabular-nums"
+			>Protocol v{protocolVersion ?? '—'}</span
 		>
-	</Card.Header>
-	<Card.Content class="pt-0">
-		{#if stageCriteria.length > 0}
-			<ol class="flex flex-col divide-y divide-border/60">
-				{#each stageCriteria as criterion (criterion.id)}
-					<li class="flex gap-3 py-4 first:pt-1 last:pb-1">
-						<span
-							class="flex size-6 shrink-0 items-center justify-center rounded-full border border-primary/30 text-xs font-semibold text-primary"
-							>{criterion.ordinal}</span
-						>
-						<div class="flex min-w-0 flex-1 flex-col gap-2">
-							<div class="flex flex-wrap items-center gap-2">
-								<span class="text-sm font-semibold">{criterion.label}</span>
-								<Badge
-									variant={criterion.kind === 'exclusion'
-										? 'destructive'
-										: 'secondary'}>{criterion.kind}</Badge
+	</div>
+	{#if stageCriteria.length > 0}
+		{#each groups as [heading, items] (heading)}
+			{#if items.length > 0}
+				<div class="flex flex-col gap-3">
+					<p class="text-2xs font-semibold tracking-caps text-muted-foreground uppercase">
+						{heading}
+					</p>
+					<ol class="flex flex-col gap-3">
+						{#each items as criterion (criterion.id)}
+							<li class="flex flex-col gap-0.5 text-sm">
+								<span class="font-medium">{criterion.label}</span>
+								<span class="leading-6 text-muted-foreground"
+									>{criterion.description}</span
 								>
-							</div>
-							<p class="text-sm leading-6 text-muted-foreground">
-								{criterion.description}
-							</p>
-							<span class="text-2xs tracking-wide text-muted-foreground uppercase"
-								>{criterion.dimension} · {criterion.stage.replace('_', ' ')}</span
-							>
-						</div>
-					</li>
-				{/each}
-			</ol>
-		{:else}
-			<div
-				class="flex items-start gap-2 rounded-lg border border-dashed p-3 text-sm text-muted-foreground"
-			>
-				<Info aria-hidden="true" />
-				<p>No title/abstract criteria are published.</p>
-			</div>
-		{/if}
-	</Card.Content>
-</Card.Root>
+							</li>
+						{/each}
+					</ol>
+				</div>
+			{/if}
+		{/each}
+	{:else}
+		<p class="text-sm text-muted-foreground">
+			No {stage === 'full_text' ? 'full-text' : 'title/abstract'} criteria are published.
+		</p>
+	{/if}
+</section>

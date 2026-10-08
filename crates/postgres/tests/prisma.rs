@@ -305,3 +305,85 @@ async fn canonical_prisma_fixture_reconciles_external_decisions_and_deduplicates
 
     delete_fixture(&pool, project_id, &report_ids).await;
 }
+
+/// REV-07 data shape: a report included at title/abstract, a PDF attached at full text, and no
+/// full-text decision yet. A newly attached PDF is `uploaded` and a parsed one is `available`;
+/// both make the report assessed but still pending, and neither may break the reconciliation.
+async fn assert_attached_pdf_without_decision_is_pending(pool: &PgPool, document_status: &str) {
+    let project_id = Uuid::new_v4();
+    let report_id = Uuid::new_v4();
+    let document_id = Uuid::new_v4();
+
+    sqlx::query("INSERT INTO projects(id,name) VALUES($1,'attached pdf without decision fixture')")
+        .bind(project_id)
+        .execute(pool)
+        .await
+        .expect("project inserts");
+    sqlx::query("INSERT INTO reports(id,title) VALUES($1,'attached pdf without decision report')")
+        .bind(report_id)
+        .execute(pool)
+        .await
+        .expect("report inserts");
+    sqlx::query("INSERT INTO project_reports(project_id,report_id) VALUES($1,$2)")
+        .bind(project_id)
+        .bind(report_id)
+        .execute(pool)
+        .await
+        .expect("project report inserts");
+    // A title/abstract include keeps full_text_status at 'not_required' until a
+    // full-text decision is recorded.
+    sqlx::query(
+        "INSERT INTO screening_state(
+           project_id,report_id,title_abstract_status,full_text_status,final_status,revision)
+         VALUES($1,$2,'include','not_required','pending_full_text',1)",
+    )
+    .bind(project_id)
+    .bind(report_id)
+    .execute(pool)
+    .await
+    .expect("screening state inserts");
+    sqlx::query(
+        "INSERT INTO documents(
+           id,project_id,report_id,source,status,object_key,content_hash,mime_type,byte_size,
+           active_parser_version)
+         VALUES($1,$2,$3,'upload',$4,$5,$6,'application/pdf',1,'fixture-parser')",
+    )
+    .bind(document_id)
+    .bind(project_id)
+    .bind(report_id)
+    .bind(document_status)
+    .bind(format!("documents/{document_id}"))
+    .bind("b".repeat(64))
+    .execute(pool)
+    .await
+    .expect("attached document inserts");
+
+    let projection = get_prisma_projection(pool, project_id)
+        .await
+        .expect("projection reads")
+        .expect("project exists");
+    assert!(
+        projection.reconciliation_failures().is_empty(),
+        "{document_status}: {:?}",
+        projection.reconciliation_failures()
+    );
+    assert!(projection.validate().is_ok());
+    assert_eq!(projection.reports_sought.get(), 1);
+    assert_eq!(projection.reports_not_retrieved.get(), 0);
+    assert_eq!(projection.full_text_assessed.get(), 1);
+    assert_eq!(projection.full_text_pending.get(), 1);
+    assert_eq!(projection.full_text_included.get(), 0);
+    assert_eq!(projection.full_text_excluded.get(), 0);
+
+    delete_fixture(pool, project_id, &[report_id]).await;
+}
+
+#[tokio::test]
+async fn attached_pdf_without_full_text_decision_is_pending_not_a_reconciliation_break() {
+    let Some(pool) = database().await else {
+        return;
+    };
+    for document_status in ["uploaded", "available"] {
+        assert_attached_pdf_without_decision_is_pending(&pool, document_status).await;
+    }
+}

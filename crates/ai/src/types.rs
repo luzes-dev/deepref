@@ -16,7 +16,7 @@ pub type AiFuture<'a, T> =
 pub enum AiError {
     #[error("AI input could not be serialized")]
     InputSerialization(String),
-    #[error("AI context is invalid")]
+    #[error("AI context is invalid: {0}")]
     InvalidContext(String),
     #[error("AI route could not be resolved")]
     Route(String),
@@ -36,6 +36,12 @@ pub enum AiError {
     PromptRegistry(String),
     #[error("AI embedding is invalid")]
     InvalidEmbedding(String),
+    #[error("the project's monthly AI budget is exhausted")]
+    BudgetExceeded,
+    /// The provider's plan cap (5-hour, weekly or monthly) is spent. Retrying
+    /// does not help until the window resets.
+    #[error("AI subscription limit reached; try again later")]
+    SubscriptionLimit,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]
@@ -345,6 +351,8 @@ impl AiContext {
 
 #[derive(Debug, Clone, PartialEq)]
 pub struct CompletionRequest {
+    /// Project the call is billed to; `None` for workspace-level calls.
+    pub project_id: Option<ProjectId>,
     pub route: ResolvedModel,
     pub system_prompt: String,
     pub user_prompt: String,

@@ -8,6 +8,8 @@ pub struct WorkerConfig {
     pub concurrency: usize,
     pub claim_lease: Duration,
     pub reconciler_interval: Duration,
+    /// Base URL of a GROBID service used to enrich parsed PDFs; unset disables enrichment.
+    pub grobid_url: Option<String>,
 }
 
 impl WorkerConfig {
@@ -24,11 +26,13 @@ impl WorkerConfig {
         if reconciler_interval == 0 {
             anyhow::bail!("worker reconciler interval must be greater than zero");
         }
+        let grobid_url = crate::enrichment::grobid_url_from_env()?;
         Ok(Self {
             runtime: RuntimeConfig::from_env("deepref-worker")?,
             concurrency,
             claim_lease: Duration::from_secs(lease),
             reconciler_interval: Duration::from_secs(reconciler_interval),
+            grobid_url,
         })
     }
 }

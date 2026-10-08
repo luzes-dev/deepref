@@ -4,9 +4,13 @@ import type {
 	AiExtractionEvidenceDto,
 	ExtractionFieldDto
 } from '$lib/api/generated/models';
+import { ApiError } from '$lib/api/custom-fetch';
 import {
 	buildExtractionEvidenceLink,
+	deriveFieldKey,
+	describeFieldEditError,
 	draftFromAiField,
+	FIELD_TYPE_LOCKED_MESSAGE,
 	serializeExtractionDrafts,
 	validateExtractionDrafts
 } from './helpers';
@@ -240,5 +244,47 @@ describe('extraction helpers', () => {
 		expect(buildExtractionEvidenceLink('project-1', evidence)).toBe(
 			'/projects/project-1/screening/full-text?report=report-1&page=4&block=block-7'
 		);
+	});
+});
+
+describe('deriveFieldKey', () => {
+	it('folds accents so accented labels keep their letters', () => {
+		expect(deriveFieldKey('Duração da intervenção')).toBe('duracao_da_intervencao');
+		expect(deriveFieldKey('População (n)')).toBe('populacao_n');
+		expect(deriveFieldKey('Ação ÇÃO Ñandú')).toBe('acao_cao_nandu');
+	});
+
+	it('turns other separators into single underscores and trims the ends', () => {
+		expect(deriveFieldKey('  Tamanho  da amostra: total?  ')).toBe('tamanho_da_amostra_total');
+		expect(deriveFieldKey('P < 0.001 / n=51')).toBe('p_0_001_n_51');
+	});
+
+	it('returns an empty key when the label has no latin letters or digits', () => {
+		expect(deriveFieldKey('中文 ---')).toBe('');
+	});
+
+	it('keeps keys within the 100 character API limit without a trailing underscore', () => {
+		const key = deriveFieldKey(`${'a'.repeat(99)} b`);
+		expect(key.length).toBeLessThanOrEqual(100);
+		expect(key.endsWith('_')).toBe(false);
+		expect(key).toBe('a'.repeat(99));
+	});
+});
+
+describe('describeFieldEditError', () => {
+	it('explains a value-type change refused because the field has values', () => {
+		const error = new ApiError(409, 'the field already has values', {
+			code: 'extraction_field_has_values'
+		});
+		expect(describeFieldEditError(error)).toBe(FIELD_TYPE_LOCKED_MESSAGE);
+		expect(FIELD_TYPE_LOCKED_MESSAGE).toContain('already has values');
+	});
+
+	it('shows other failures with their own message', () => {
+		expect(describeFieldEditError(new Error('Label is too long'))).toBe('Label is too long');
+	});
+
+	it('falls back to a generic message for anything else', () => {
+		expect(describeFieldEditError('network down')).toBe('The field could not be saved.');
 	});
 });

@@ -87,7 +87,10 @@ impl CrossrefWorksResponse {
             work: Work {
                 doi,
                 title: message.title.into_iter().next(),
-                abstract_text: message.abstract_text,
+                abstract_text: message
+                    .abstract_text
+                    .as_deref()
+                    .and_then(crate::clean_abstract),
                 work_type: message.work_type,
                 publisher: message.publisher,
                 container_title: message.container_title.into_iter().next(),

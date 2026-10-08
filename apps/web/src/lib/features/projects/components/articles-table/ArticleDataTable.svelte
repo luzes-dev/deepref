@@ -8,7 +8,6 @@
 		getSortedRowModel,
 		type ColumnFiltersState,
 		type PaginationState,
-		type RowSelectionState,
 		type SortingState,
 		type Updater,
 		type VisibilityState
@@ -20,6 +19,7 @@
 	import ArticleDataTablePagination from './ArticleDataTablePagination.svelte';
 	import ArticleDataTableToolbar from './ArticleDataTableToolbar.svelte';
 	import { createArticleColumns } from './columns.js';
+	import { useProjectWorkspaceContext } from '../../context.svelte.js';
 
 	type ArticleDataTableProps = {
 		articles: ReportDto[];
@@ -28,14 +28,23 @@
 	};
 
 	let { articles, selectedArticle, openArticle }: ArticleDataTableProps = $props();
+	const workspace = useProjectWorkspaceContext();
+	const routeFilter = $derived(workspace.articleFilters.filter);
+	const routeMinInternal = $derived(workspace.articleFilters.minInternal);
 
-	let rowSelection = $state<RowSelectionState>({});
 	let columnVisibility = $state<VisibilityState>({
-		outbound_internal_references: false
+		outbound_internal_references: false,
+		type: false,
+		rank_score: false
 	});
-	let columnFilters = $state<ColumnFiltersState>([]);
+	let localColumnFilters = $state<ColumnFiltersState>([]);
+	const columnFilters = $derived.by<ColumnFiltersState>(() => [
+		...localColumnFilters,
+		...(routeFilter ? [{ id: 'title', value: routeFilter }] : []),
+		...(routeMinInternal > 0 ? [{ id: 'internal_citations', value: routeMinInternal }] : [])
+	]);
 	let sorting = $state<SortingState>([{ id: 'rank_score', desc: true }]);
-	let pagination = $state<PaginationState>({ pageIndex: 0, pageSize: 10 });
+	let pagination = $state<PaginationState>({ pageIndex: 0, pageSize: 25 });
 
 	const columns = $derived(createArticleColumns({ openArticle, selectedArticle }));
 
@@ -51,16 +60,12 @@
 			return columns;
 		},
 		getRowId: (article) => article.report_id,
-		enableRowSelection: true,
 		state: {
 			get sorting() {
 				return sorting;
 			},
 			get columnVisibility() {
 				return columnVisibility;
-			},
-			get rowSelection() {
-				return rowSelection;
 			},
 			get columnFilters() {
 				return columnFilters;
@@ -69,14 +74,20 @@
 				return pagination;
 			}
 		},
-		onRowSelectionChange: (updater) => {
-			rowSelection = updateState(updater, rowSelection);
-		},
 		onSortingChange: (updater) => {
 			sorting = updateState(updater, sorting);
 		},
 		onColumnFiltersChange: (updater) => {
-			columnFilters = updateState(updater, columnFilters);
+			const next = updateState(updater, columnFilters);
+			localColumnFilters = next.filter(
+				({ id }) => id !== 'title' && id !== 'internal_citations'
+			);
+			const title = next.find(({ id }) => id === 'title')?.value;
+			const internal = next.find(({ id }) => id === 'internal_citations')?.value;
+			workspace.articleFilters.update(
+				typeof title === 'string' ? title : '',
+				typeof internal === 'number' ? internal : 0
+			);
 		},
 		onColumnVisibilityChange: (updater) => {
 			columnVisibility = updateState(updater, columnVisibility);
@@ -93,10 +104,10 @@
 	});
 </script>
 
-<div class="flex min-h-0 flex-1 flex-col gap-4">
+<div class="flex min-h-0 flex-1 flex-col gap-3">
 	<ArticleDataTableToolbar {table} {articles} />
 	<div
-		class="min-h-0 flex-1 rounded-md border [&_[data-slot=table-container]]:h-full [&_[data-slot=table-container]]:overflow-auto"
+		class="min-h-0 flex-1 [&_[data-slot=table-container]]:h-full [&_[data-slot=table-container]]:overflow-auto"
 	>
 		<Table.Root containerLabel="Project articles">
 			<Table.Header>
@@ -121,14 +132,15 @@
 			<Table.Body>
 				{#each table.getRowModel().rows as row (row.id)}
 					<Table.Row
-						data-state={row.getIsSelected() && 'selected'}
 						data-current={selectedArticle === row.original.report_id
 							? 'true'
 							: undefined}
 						aria-current={selectedArticle === row.original.report_id
 							? 'true'
 							: undefined}
-						class={cn('data-[current=true]:bg-muted/40')}
+						class={cn(
+							'data-[current=true]:bg-accent data-[current=true]:shadow-inset-accent'
+						)}
 					>
 						{#each row.getVisibleCells() as cell (cell.id)}
 							<Table.Cell>
@@ -152,5 +164,5 @@
 			</Table.Body>
 		</Table.Root>
 	</div>
-	<ArticleDataTablePagination {table} />
+	{#if table.getPageCount() > 1}<ArticleDataTablePagination {table} />{/if}
 </div>

@@ -13,13 +13,29 @@ export interface ExtractionValueDto {
 	field_definition_id: string;
 	field_definition_version: number;
 	id: string;
-	rationale: string;
-	report_id: string;
-	source_block_id: string;
-	source_content_hash: string;
-	source_document_id: string;
-	source_page: number;
-	source_parser_version: string;
+	/** True while an AI-entered value waits for a person to confirm it. */
+	needs_verification: boolean;
+	/** @nullable */
+	rationale?: string | null;
+	/**
+	 * Absent when a reviewer entered the value without citing evidence.
+	 * @nullable
+	 */
+	report_id?: string | null;
+	/** @nullable */
+	source_block_id?: string | null;
+	/** @nullable */
+	source_content_hash?: string | null;
+	/** @nullable */
+	source_document_id?: string | null;
+	/** @nullable */
+	source_page?: number | null;
+	/** @nullable */
+	source_parser_version?: string | null;
 	study_id: string;
 	value: ExtractionValueDtoValue;
+	/** @nullable */
+	verified_at?: string | null;
+	/** @nullable */
+	verified_by?: string | null;
 }

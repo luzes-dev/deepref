@@ -178,6 +178,7 @@ pub async fn decide_ai_proposal(
                     proposal.id,
                     &extraction,
                     &request.actor,
+                    crate::extraction::ExtractionApplyOptions::default(),
                 )
                 .await?;
             }

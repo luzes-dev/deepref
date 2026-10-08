@@ -28,13 +28,8 @@
 		"@tanstack/svelte-query": "^6.1.45",
 		"@tanstack/svelte-virtual": "^3.13.12",
 		"@tanstack/table-core": "^8.21.3",
+		"markdown-it": "14.3.1",
 		"pdfjs-dist": "^6.2.108",
-		"rete": "^2.0.6",
-		"rete-area-plugin": "^2.3.2",
-		"rete-connection-plugin": "^2.0.5",
-		"rete-minimap-plugin": "^2.0.3",
-		"rete-render-utils": "^2.0.3",
-		"rete-svelte-plugin": "^2.1.2",
 		"sass": "^1.104.0"
 	},
 	"devDependencies": {
@@ -56,6 +51,7 @@
 		"@tanstack/eslint-plugin-query": "^5.102.4",
 		"@testing-library/jest-dom": "^7.0.1",
 		"@testing-library/svelte": "^5.4.2",
+		"@types/markdown-it": "14.1.2",
 		"@types/node": "^24.13.2",
 		"@vitest/coverage-v8": "4.1.11",
 		"bits-ui": "^2.19.0",

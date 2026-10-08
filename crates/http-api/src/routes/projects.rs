@@ -30,6 +30,8 @@ pub(crate) struct ProjectDto {
     default_max_depth: i32,
     created_at: DateTime<Utc>,
     updated_at: DateTime<Utc>,
+    /// Number of articles (project reports) in the project.
+    article_count: i64,
 }
 
 #[derive(Debug, Deserialize, ToSchema)]
@@ -71,7 +73,9 @@ pub(crate) async fn list_projects(
     let limit = pagination.limit()?;
     let cursor: Option<(DateTime<Utc>, Uuid)> = pagination.decode()?;
     let rows = sqlx::query(
-        "SELECT id,name,description,default_max_depth,created_at,updated_at FROM projects \
+        "SELECT id,name,description,default_max_depth,created_at,updated_at,\
+         (SELECT count(*) FROM project_reports pr WHERE pr.project_id = projects.id) AS article_count \
+         FROM projects \
          WHERE ($1::timestamptz IS NULL OR (updated_at,id)<($1,$2)) \
          ORDER BY updated_at DESC,id DESC LIMIT $3",
     )
@@ -118,7 +122,8 @@ pub(crate) async fn create_project(
         r#"
         INSERT INTO projects (id, name, description, default_max_depth)
         VALUES ($1, $2, $3, $4)
-        RETURNING id, name, description, default_max_depth, created_at, updated_at
+        RETURNING id, name, description, default_max_depth, created_at, updated_at,
+          0::bigint AS article_count
         "#,
     )
     .bind(id)
@@ -147,7 +152,9 @@ pub(crate) async fn get_project(
     Path(project_id): Path<Uuid>,
 ) -> Result<Json<ProjectDto>, ApiError> {
     let row = sqlx::query(
-        "SELECT id, name, description, default_max_depth, created_at, updated_at FROM projects WHERE id = $1",
+        "SELECT id, name, description, default_max_depth, created_at, updated_at,\
+         (SELECT count(*) FROM project_reports pr WHERE pr.project_id = projects.id) AS article_count \
+         FROM projects WHERE id = $1",
     )
     .bind(project_id)
     .fetch_one(&state.pool)
@@ -180,7 +187,8 @@ pub(crate) async fn update_project(
         UPDATE projects SET name = $2, description = $3,
           default_max_depth = COALESCE($4, default_max_depth), updated_at = now()
         WHERE id = $1
-        RETURNING id, name, description, default_max_depth, created_at, updated_at
+        RETURNING id, name, description, default_max_depth, created_at, updated_at,
+          (SELECT count(*) FROM project_reports pr WHERE pr.project_id = projects.id) AS article_count
         "#,
     )
     .bind(project_id)
@@ -199,7 +207,8 @@ pub(crate) async fn update_project(
     tag = "projects",
     params(("project_id" = Uuid, Path, description = "Project identifier")),
     responses(
-        (status = 204, description = "Project deleted"),
+        (status = 204, description = "Project and everything that belongs to it deleted"),
+        (status = 404, description = "Project not found", body = ErrorResponse),
         (status = 500, description = "Internal server error", body = ErrorResponse)
     )
 )]
@@ -237,11 +246,7 @@ pub(crate) async fn delete_project(
     .bind(event.event_id)
     .execute(&mut *tx)
     .await?;
-    let result = sqlx::query("DELETE FROM projects WHERE id = $1")
-        .bind(project_id)
-        .execute(&mut *tx)
-        .await?;
-    if result.rows_affected() == 0 {
+    if !deepref_postgres::delete_project_in_transaction(&mut tx, project_id).await? {
         return Err(ApiError::NotFound("project not found".into()));
     }
     tx.commit().await?;
@@ -256,6 +261,7 @@ fn project_from_row(row: sqlx::postgres::PgRow) -> ProjectDto {
         default_max_depth: row.get("default_max_depth"),
         created_at: row.get("created_at"),
         updated_at: row.get("updated_at"),
+        article_count: row.get("article_count"),
     }
 }
 

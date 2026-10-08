@@ -22,6 +22,8 @@ import type {
 	DocumentBlockDto,
 	DocumentDto,
 	DocumentPageDto,
+	DocumentReferenceDto,
+	DocumentSectionDto,
 	ExternalDocumentRequest,
 	FullTextExclusionReasonDto,
 	FullTextQueueDto,
@@ -450,6 +452,133 @@ export const createAttachExternalReportDocument = <
 		queryClient
 	);
 };
+export type attachOpenAccessReportDocumentResponse201 = {
+	data: DocumentDto;
+	status: 201;
+};
+
+export type attachOpenAccessReportDocumentResponse404 = {
+	data: ApiErrorBody;
+	status: 404;
+};
+
+export type attachOpenAccessReportDocumentResponse409 = {
+	data: ApiErrorBody;
+	status: 409;
+};
+
+export type attachOpenAccessReportDocumentResponse500 = {
+	data: ApiErrorBody;
+	status: 500;
+};
+
+export type attachOpenAccessReportDocumentResponse502 = {
+	data: ApiErrorBody;
+	status: 502;
+};
+
+export type attachOpenAccessReportDocumentResponseSuccess =
+	attachOpenAccessReportDocumentResponse201 & {
+		headers: Headers;
+	};
+export type attachOpenAccessReportDocumentResponseError = (
+	| attachOpenAccessReportDocumentResponse404
+	| attachOpenAccessReportDocumentResponse409
+	| attachOpenAccessReportDocumentResponse500
+	| attachOpenAccessReportDocumentResponse502
+) & {
+	headers: Headers;
+};
+
+export const getAttachOpenAccessReportDocumentUrl = (projectId: string, reportId: string) => {
+	return `/api/projects/${projectId}/reports/${reportId}/documents/open-access`;
+};
+
+export const attachOpenAccessReportDocument = async (
+	projectId: string,
+	reportId: string,
+	options?: Parameters<typeof customFetch>[1]
+): Promise<attachOpenAccessReportDocumentResponseSuccess> => {
+	return customFetch<attachOpenAccessReportDocumentResponseSuccess>(
+		getAttachOpenAccessReportDocumentUrl(projectId, reportId),
+		{
+			...options,
+			method: 'POST'
+		}
+	);
+};
+
+export const getAttachOpenAccessReportDocumentMutationOptions = <
+	TError = ErrorType<ApiErrorBody>,
+	TContext = unknown
+>(options?: {
+	mutation?: CreateMutationOptions<
+		Awaited<ReturnType<typeof attachOpenAccessReportDocument>>,
+		TError,
+		AttachOpenAccessReportDocumentMutationVariables,
+		TContext
+	>;
+	request?: SecondParameter<typeof customFetch>;
+}): CreateMutationOptions<
+	Awaited<ReturnType<typeof attachOpenAccessReportDocument>>,
+	TError,
+	AttachOpenAccessReportDocumentMutationVariables,
+	TContext
+> => {
+	const mutationKey = ['attachOpenAccessReportDocument'];
+	const { mutation: mutationOptions, request: requestOptions } = options
+		? options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey
+			? options
+			: { ...options, mutation: { ...options.mutation, mutationKey } }
+		: { mutation: { mutationKey }, request: undefined };
+
+	const mutationFn: MutationFunction<
+		Awaited<ReturnType<typeof attachOpenAccessReportDocument>>,
+		AttachOpenAccessReportDocumentMutationVariables
+	> = (props) => {
+		const { projectId, reportId } = props ?? {};
+
+		return attachOpenAccessReportDocument(projectId, reportId, requestOptions);
+	};
+
+	return { mutationFn, ...mutationOptions };
+};
+
+export type AttachOpenAccessReportDocumentMutationResult = NonNullable<
+	Awaited<ReturnType<typeof attachOpenAccessReportDocument>>
+>;
+
+export type AttachOpenAccessReportDocumentMutationError = ErrorType<ApiErrorBody>;
+export type AttachOpenAccessReportDocumentMutationVariables = {
+	projectId: string;
+	reportId: string;
+};
+
+export const createAttachOpenAccessReportDocument = <
+	TError = ErrorType<ApiErrorBody>,
+	TContext = unknown
+>(
+	options?: () => {
+		mutation?: CreateMutationOptions<
+			Awaited<ReturnType<typeof attachOpenAccessReportDocument>>,
+			TError,
+			AttachOpenAccessReportDocumentMutationVariables,
+			TContext
+		>;
+		request?: SecondParameter<typeof customFetch>;
+	},
+	queryClient?: () => QueryClient
+): CreateMutationResult<
+	Awaited<ReturnType<typeof attachOpenAccessReportDocument>>,
+	TError,
+	AttachOpenAccessReportDocumentMutationVariables,
+	TContext
+> => {
+	return createMutation(
+		() => ({ ...getAttachOpenAccessReportDocumentMutationOptions(options?.()) }),
+		queryClient
+	);
+};
 export type getReportDocumentResponse200 = {
 	data: DocumentDto;
 	status: 200;
@@ -593,6 +722,129 @@ export const prefetchGetReportDocumentQuery = async <
 	return queryClient;
 };
 
+export type deleteReportDocumentResponse204 = {
+	data: void;
+	status: 204;
+};
+
+export type deleteReportDocumentResponse404 = {
+	data: ApiErrorBody;
+	status: 404;
+};
+
+export type deleteReportDocumentResponse409 = {
+	data: ApiErrorBody;
+	status: 409;
+};
+
+export type deleteReportDocumentResponse500 = {
+	data: ApiErrorBody;
+	status: 500;
+};
+
+export type deleteReportDocumentResponseSuccess = deleteReportDocumentResponse204 & {
+	headers: Headers;
+};
+export type deleteReportDocumentResponseError = (
+	| deleteReportDocumentResponse404
+	| deleteReportDocumentResponse409
+	| deleteReportDocumentResponse500
+) & {
+	headers: Headers;
+};
+
+export const getDeleteReportDocumentUrl = (
+	projectId: string,
+	reportId: string,
+	documentId: string
+) => {
+	return `/api/projects/${projectId}/reports/${reportId}/documents/${documentId}`;
+};
+
+export const deleteReportDocument = async (
+	projectId: string,
+	reportId: string,
+	documentId: string,
+	options?: Parameters<typeof customFetch>[1]
+): Promise<deleteReportDocumentResponseSuccess> => {
+	return customFetch<deleteReportDocumentResponseSuccess>(
+		getDeleteReportDocumentUrl(projectId, reportId, documentId),
+		{
+			...options,
+			method: 'DELETE'
+		}
+	);
+};
+
+export const getDeleteReportDocumentMutationOptions = <
+	TError = ErrorType<ApiErrorBody>,
+	TContext = unknown
+>(options?: {
+	mutation?: CreateMutationOptions<
+		Awaited<ReturnType<typeof deleteReportDocument>>,
+		TError,
+		DeleteReportDocumentMutationVariables,
+		TContext
+	>;
+	request?: SecondParameter<typeof customFetch>;
+}): CreateMutationOptions<
+	Awaited<ReturnType<typeof deleteReportDocument>>,
+	TError,
+	DeleteReportDocumentMutationVariables,
+	TContext
+> => {
+	const mutationKey = ['deleteReportDocument'];
+	const { mutation: mutationOptions, request: requestOptions } = options
+		? options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey
+			? options
+			: { ...options, mutation: { ...options.mutation, mutationKey } }
+		: { mutation: { mutationKey }, request: undefined };
+
+	const mutationFn: MutationFunction<
+		Awaited<ReturnType<typeof deleteReportDocument>>,
+		DeleteReportDocumentMutationVariables
+	> = (props) => {
+		const { projectId, reportId, documentId } = props ?? {};
+
+		return deleteReportDocument(projectId, reportId, documentId, requestOptions);
+	};
+
+	return { mutationFn, ...mutationOptions };
+};
+
+export type DeleteReportDocumentMutationResult = NonNullable<
+	Awaited<ReturnType<typeof deleteReportDocument>>
+>;
+
+export type DeleteReportDocumentMutationError = ErrorType<ApiErrorBody>;
+export type DeleteReportDocumentMutationVariables = {
+	projectId: string;
+	reportId: string;
+	documentId: string;
+};
+
+export const createDeleteReportDocument = <TError = ErrorType<ApiErrorBody>, TContext = unknown>(
+	options?: () => {
+		mutation?: CreateMutationOptions<
+			Awaited<ReturnType<typeof deleteReportDocument>>,
+			TError,
+			DeleteReportDocumentMutationVariables,
+			TContext
+		>;
+		request?: SecondParameter<typeof customFetch>;
+	},
+	queryClient?: () => QueryClient
+): CreateMutationResult<
+	Awaited<ReturnType<typeof deleteReportDocument>>,
+	TError,
+	DeleteReportDocumentMutationVariables,
+	TContext
+> => {
+	return createMutation(
+		() => ({ ...getDeleteReportDocumentMutationOptions(options?.()) }),
+		queryClient
+	);
+};
 export type listDocumentBlocksResponse200 = {
 	data: DocumentBlockDto[];
 	status: 200;
@@ -944,6 +1196,133 @@ export const prefetchStreamReportDocumentContentQuery = async <
 	return queryClient;
 };
 
+export type acknowledgeReportDocumentIdentityResponse200 = {
+	data: DocumentDto;
+	status: 200;
+};
+
+export type acknowledgeReportDocumentIdentityResponse404 = {
+	data: ApiErrorBody;
+	status: 404;
+};
+
+export type acknowledgeReportDocumentIdentityResponse409 = {
+	data: ApiErrorBody;
+	status: 409;
+};
+
+export type acknowledgeReportDocumentIdentityResponse500 = {
+	data: ApiErrorBody;
+	status: 500;
+};
+
+export type acknowledgeReportDocumentIdentityResponseSuccess =
+	acknowledgeReportDocumentIdentityResponse200 & {
+		headers: Headers;
+	};
+export type acknowledgeReportDocumentIdentityResponseError = (
+	| acknowledgeReportDocumentIdentityResponse404
+	| acknowledgeReportDocumentIdentityResponse409
+	| acknowledgeReportDocumentIdentityResponse500
+) & {
+	headers: Headers;
+};
+
+export const getAcknowledgeReportDocumentIdentityUrl = (
+	projectId: string,
+	reportId: string,
+	documentId: string
+) => {
+	return `/api/projects/${projectId}/reports/${reportId}/documents/${documentId}/identity/acknowledge`;
+};
+
+export const acknowledgeReportDocumentIdentity = async (
+	projectId: string,
+	reportId: string,
+	documentId: string,
+	options?: Parameters<typeof customFetch>[1]
+): Promise<acknowledgeReportDocumentIdentityResponseSuccess> => {
+	return customFetch<acknowledgeReportDocumentIdentityResponseSuccess>(
+		getAcknowledgeReportDocumentIdentityUrl(projectId, reportId, documentId),
+		{
+			...options,
+			method: 'POST'
+		}
+	);
+};
+
+export const getAcknowledgeReportDocumentIdentityMutationOptions = <
+	TError = ErrorType<ApiErrorBody>,
+	TContext = unknown
+>(options?: {
+	mutation?: CreateMutationOptions<
+		Awaited<ReturnType<typeof acknowledgeReportDocumentIdentity>>,
+		TError,
+		AcknowledgeReportDocumentIdentityMutationVariables,
+		TContext
+	>;
+	request?: SecondParameter<typeof customFetch>;
+}): CreateMutationOptions<
+	Awaited<ReturnType<typeof acknowledgeReportDocumentIdentity>>,
+	TError,
+	AcknowledgeReportDocumentIdentityMutationVariables,
+	TContext
+> => {
+	const mutationKey = ['acknowledgeReportDocumentIdentity'];
+	const { mutation: mutationOptions, request: requestOptions } = options
+		? options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey
+			? options
+			: { ...options, mutation: { ...options.mutation, mutationKey } }
+		: { mutation: { mutationKey }, request: undefined };
+
+	const mutationFn: MutationFunction<
+		Awaited<ReturnType<typeof acknowledgeReportDocumentIdentity>>,
+		AcknowledgeReportDocumentIdentityMutationVariables
+	> = (props) => {
+		const { projectId, reportId, documentId } = props ?? {};
+
+		return acknowledgeReportDocumentIdentity(projectId, reportId, documentId, requestOptions);
+	};
+
+	return { mutationFn, ...mutationOptions };
+};
+
+export type AcknowledgeReportDocumentIdentityMutationResult = NonNullable<
+	Awaited<ReturnType<typeof acknowledgeReportDocumentIdentity>>
+>;
+
+export type AcknowledgeReportDocumentIdentityMutationError = ErrorType<ApiErrorBody>;
+export type AcknowledgeReportDocumentIdentityMutationVariables = {
+	projectId: string;
+	reportId: string;
+	documentId: string;
+};
+
+export const createAcknowledgeReportDocumentIdentity = <
+	TError = ErrorType<ApiErrorBody>,
+	TContext = unknown
+>(
+	options?: () => {
+		mutation?: CreateMutationOptions<
+			Awaited<ReturnType<typeof acknowledgeReportDocumentIdentity>>,
+			TError,
+			AcknowledgeReportDocumentIdentityMutationVariables,
+			TContext
+		>;
+		request?: SecondParameter<typeof customFetch>;
+	},
+	queryClient?: () => QueryClient
+): CreateMutationResult<
+	Awaited<ReturnType<typeof acknowledgeReportDocumentIdentity>>,
+	TError,
+	AcknowledgeReportDocumentIdentityMutationVariables,
+	TContext
+> => {
+	return createMutation(
+		() => ({ ...getAcknowledgeReportDocumentIdentityMutationOptions(options?.()) }),
+		queryClient
+	);
+};
 export type listDocumentPagesResponse200 = {
 	data: DocumentPageDto[];
 	status: 200;
@@ -1083,6 +1462,438 @@ export const prefetchListDocumentPagesQuery = async <
 	}
 ): Promise<QueryClient> => {
 	const queryOptions = getListDocumentPagesQueryOptions(projectId, reportId, documentId, options);
+
+	await queryClient.prefetchQuery(queryOptions);
+
+	return queryClient;
+};
+
+export type listDocumentReferencesResponse200 = {
+	data: DocumentReferenceDto[];
+	status: 200;
+};
+
+export type listDocumentReferencesResponse404 = {
+	data: ApiErrorBody;
+	status: 404;
+};
+
+export type listDocumentReferencesResponse500 = {
+	data: ApiErrorBody;
+	status: 500;
+};
+
+export type listDocumentReferencesResponseSuccess = listDocumentReferencesResponse200 & {
+	headers: Headers;
+};
+export type listDocumentReferencesResponseError = (
+	listDocumentReferencesResponse404 | listDocumentReferencesResponse500
+) & {
+	headers: Headers;
+};
+
+export const getListDocumentReferencesUrl = (
+	projectId: string,
+	reportId: string,
+	documentId: string
+) => {
+	return `/api/projects/${projectId}/reports/${reportId}/documents/${documentId}/references`;
+};
+
+export const listDocumentReferences = async (
+	projectId: string,
+	reportId: string,
+	documentId: string,
+	options?: Parameters<typeof customFetch>[1]
+): Promise<listDocumentReferencesResponseSuccess> => {
+	return customFetch<listDocumentReferencesResponseSuccess>(
+		getListDocumentReferencesUrl(projectId, reportId, documentId),
+		{
+			...options,
+			method: 'GET'
+		}
+	);
+};
+
+export const getListDocumentReferencesQueryKey = (
+	projectId: string,
+	reportId: string,
+	documentId: string
+) => {
+	return [
+		`/api/projects/${projectId}/reports/${reportId}/documents/${documentId}/references`
+	] as const;
+};
+
+export const getListDocumentReferencesQueryOptions = <
+	TData = Awaited<ReturnType<typeof listDocumentReferences>>,
+	TError = ErrorType<ApiErrorBody>
+>(
+	projectId: string,
+	reportId: string,
+	documentId: string,
+	options?: {
+		query?: Partial<
+			CreateQueryOptions<Awaited<ReturnType<typeof listDocumentReferences>>, TError, TData>
+		>;
+		request?: SecondParameter<typeof customFetch>;
+	}
+) => {
+	const { query: queryOptions, request: requestOptions } = options ?? {};
+
+	const queryKey =
+		queryOptions?.queryKey ??
+		getListDocumentReferencesQueryKey(projectId, reportId, documentId);
+
+	const queryFn: QueryFunction<Awaited<ReturnType<typeof listDocumentReferences>>> = ({
+		signal
+	}) => listDocumentReferences(projectId, reportId, documentId, { signal, ...requestOptions });
+
+	return {
+		queryKey,
+		queryFn,
+		enabled:
+			projectId !== null &&
+			projectId !== undefined &&
+			reportId !== null &&
+			reportId !== undefined &&
+			documentId !== null &&
+			documentId !== undefined,
+		...queryOptions
+	} as CreateQueryOptions<Awaited<ReturnType<typeof listDocumentReferences>>, TError, TData> & {
+		queryKey: DataTag<QueryKey, TData, TError>;
+	};
+};
+
+export type ListDocumentReferencesQueryResult = NonNullable<
+	Awaited<ReturnType<typeof listDocumentReferences>>
+>;
+export type ListDocumentReferencesQueryError = ErrorType<ApiErrorBody>;
+
+export function createListDocumentReferences<
+	TData = Awaited<ReturnType<typeof listDocumentReferences>>,
+	TError = ErrorType<ApiErrorBody>
+>(
+	projectId: () => string,
+	reportId: () => string,
+	documentId: () => string,
+	options?: () => {
+		query?: Partial<
+			CreateQueryOptions<Awaited<ReturnType<typeof listDocumentReferences>>, TError, TData>
+		>;
+		request?: SecondParameter<typeof customFetch>;
+	},
+	queryClient?: () => QueryClient
+): CreateQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> } {
+	const query = createQuery(
+		() =>
+			getListDocumentReferencesQueryOptions(
+				projectId(),
+				reportId(),
+				documentId(),
+				options?.()
+			),
+		queryClient
+	) as CreateQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> };
+
+	return query;
+}
+
+export const prefetchListDocumentReferencesQuery = async <
+	TData = Awaited<ReturnType<typeof listDocumentReferences>>,
+	TError = ErrorType<ApiErrorBody>
+>(
+	queryClient: QueryClient,
+	projectId: string,
+	reportId: string,
+	documentId: string,
+	options?: {
+		query?: Partial<
+			CreateQueryOptions<Awaited<ReturnType<typeof listDocumentReferences>>, TError, TData>
+		>;
+		request?: SecondParameter<typeof customFetch>;
+	}
+): Promise<QueryClient> => {
+	const queryOptions = getListDocumentReferencesQueryOptions(
+		projectId,
+		reportId,
+		documentId,
+		options
+	);
+
+	await queryClient.prefetchQuery(queryOptions);
+
+	return queryClient;
+};
+
+export type reparseReportDocumentResponse202 = {
+	data: DocumentDto;
+	status: 202;
+};
+
+export type reparseReportDocumentResponse404 = {
+	data: ApiErrorBody;
+	status: 404;
+};
+
+export type reparseReportDocumentResponse409 = {
+	data: ApiErrorBody;
+	status: 409;
+};
+
+export type reparseReportDocumentResponse500 = {
+	data: ApiErrorBody;
+	status: 500;
+};
+
+export type reparseReportDocumentResponseSuccess = reparseReportDocumentResponse202 & {
+	headers: Headers;
+};
+export type reparseReportDocumentResponseError = (
+	| reparseReportDocumentResponse404
+	| reparseReportDocumentResponse409
+	| reparseReportDocumentResponse500
+) & {
+	headers: Headers;
+};
+
+export const getReparseReportDocumentUrl = (
+	projectId: string,
+	reportId: string,
+	documentId: string
+) => {
+	return `/api/projects/${projectId}/reports/${reportId}/documents/${documentId}/reparse`;
+};
+
+export const reparseReportDocument = async (
+	projectId: string,
+	reportId: string,
+	documentId: string,
+	options?: Parameters<typeof customFetch>[1]
+): Promise<reparseReportDocumentResponseSuccess> => {
+	return customFetch<reparseReportDocumentResponseSuccess>(
+		getReparseReportDocumentUrl(projectId, reportId, documentId),
+		{
+			...options,
+			method: 'POST'
+		}
+	);
+};
+
+export const getReparseReportDocumentMutationOptions = <
+	TError = ErrorType<ApiErrorBody>,
+	TContext = unknown
+>(options?: {
+	mutation?: CreateMutationOptions<
+		Awaited<ReturnType<typeof reparseReportDocument>>,
+		TError,
+		ReparseReportDocumentMutationVariables,
+		TContext
+	>;
+	request?: SecondParameter<typeof customFetch>;
+}): CreateMutationOptions<
+	Awaited<ReturnType<typeof reparseReportDocument>>,
+	TError,
+	ReparseReportDocumentMutationVariables,
+	TContext
+> => {
+	const mutationKey = ['reparseReportDocument'];
+	const { mutation: mutationOptions, request: requestOptions } = options
+		? options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey
+			? options
+			: { ...options, mutation: { ...options.mutation, mutationKey } }
+		: { mutation: { mutationKey }, request: undefined };
+
+	const mutationFn: MutationFunction<
+		Awaited<ReturnType<typeof reparseReportDocument>>,
+		ReparseReportDocumentMutationVariables
+	> = (props) => {
+		const { projectId, reportId, documentId } = props ?? {};
+
+		return reparseReportDocument(projectId, reportId, documentId, requestOptions);
+	};
+
+	return { mutationFn, ...mutationOptions };
+};
+
+export type ReparseReportDocumentMutationResult = NonNullable<
+	Awaited<ReturnType<typeof reparseReportDocument>>
+>;
+
+export type ReparseReportDocumentMutationError = ErrorType<ApiErrorBody>;
+export type ReparseReportDocumentMutationVariables = {
+	projectId: string;
+	reportId: string;
+	documentId: string;
+};
+
+export const createReparseReportDocument = <TError = ErrorType<ApiErrorBody>, TContext = unknown>(
+	options?: () => {
+		mutation?: CreateMutationOptions<
+			Awaited<ReturnType<typeof reparseReportDocument>>,
+			TError,
+			ReparseReportDocumentMutationVariables,
+			TContext
+		>;
+		request?: SecondParameter<typeof customFetch>;
+	},
+	queryClient?: () => QueryClient
+): CreateMutationResult<
+	Awaited<ReturnType<typeof reparseReportDocument>>,
+	TError,
+	ReparseReportDocumentMutationVariables,
+	TContext
+> => {
+	return createMutation(
+		() => ({ ...getReparseReportDocumentMutationOptions(options?.()) }),
+		queryClient
+	);
+};
+export type listDocumentSectionsResponse200 = {
+	data: DocumentSectionDto[];
+	status: 200;
+};
+
+export type listDocumentSectionsResponse404 = {
+	data: ApiErrorBody;
+	status: 404;
+};
+
+export type listDocumentSectionsResponse500 = {
+	data: ApiErrorBody;
+	status: 500;
+};
+
+export type listDocumentSectionsResponseSuccess = listDocumentSectionsResponse200 & {
+	headers: Headers;
+};
+export type listDocumentSectionsResponseError = (
+	listDocumentSectionsResponse404 | listDocumentSectionsResponse500
+) & {
+	headers: Headers;
+};
+
+export const getListDocumentSectionsUrl = (
+	projectId: string,
+	reportId: string,
+	documentId: string
+) => {
+	return `/api/projects/${projectId}/reports/${reportId}/documents/${documentId}/sections`;
+};
+
+export const listDocumentSections = async (
+	projectId: string,
+	reportId: string,
+	documentId: string,
+	options?: Parameters<typeof customFetch>[1]
+): Promise<listDocumentSectionsResponseSuccess> => {
+	return customFetch<listDocumentSectionsResponseSuccess>(
+		getListDocumentSectionsUrl(projectId, reportId, documentId),
+		{
+			...options,
+			method: 'GET'
+		}
+	);
+};
+
+export const getListDocumentSectionsQueryKey = (
+	projectId: string,
+	reportId: string,
+	documentId: string
+) => {
+	return [
+		`/api/projects/${projectId}/reports/${reportId}/documents/${documentId}/sections`
+	] as const;
+};
+
+export const getListDocumentSectionsQueryOptions = <
+	TData = Awaited<ReturnType<typeof listDocumentSections>>,
+	TError = ErrorType<ApiErrorBody>
+>(
+	projectId: string,
+	reportId: string,
+	documentId: string,
+	options?: {
+		query?: Partial<
+			CreateQueryOptions<Awaited<ReturnType<typeof listDocumentSections>>, TError, TData>
+		>;
+		request?: SecondParameter<typeof customFetch>;
+	}
+) => {
+	const { query: queryOptions, request: requestOptions } = options ?? {};
+
+	const queryKey =
+		queryOptions?.queryKey ?? getListDocumentSectionsQueryKey(projectId, reportId, documentId);
+
+	const queryFn: QueryFunction<Awaited<ReturnType<typeof listDocumentSections>>> = ({ signal }) =>
+		listDocumentSections(projectId, reportId, documentId, { signal, ...requestOptions });
+
+	return {
+		queryKey,
+		queryFn,
+		enabled:
+			projectId !== null &&
+			projectId !== undefined &&
+			reportId !== null &&
+			reportId !== undefined &&
+			documentId !== null &&
+			documentId !== undefined,
+		...queryOptions
+	} as CreateQueryOptions<Awaited<ReturnType<typeof listDocumentSections>>, TError, TData> & {
+		queryKey: DataTag<QueryKey, TData, TError>;
+	};
+};
+
+export type ListDocumentSectionsQueryResult = NonNullable<
+	Awaited<ReturnType<typeof listDocumentSections>>
+>;
+export type ListDocumentSectionsQueryError = ErrorType<ApiErrorBody>;
+
+export function createListDocumentSections<
+	TData = Awaited<ReturnType<typeof listDocumentSections>>,
+	TError = ErrorType<ApiErrorBody>
+>(
+	projectId: () => string,
+	reportId: () => string,
+	documentId: () => string,
+	options?: () => {
+		query?: Partial<
+			CreateQueryOptions<Awaited<ReturnType<typeof listDocumentSections>>, TError, TData>
+		>;
+		request?: SecondParameter<typeof customFetch>;
+	},
+	queryClient?: () => QueryClient
+): CreateQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> } {
+	const query = createQuery(
+		() =>
+			getListDocumentSectionsQueryOptions(projectId(), reportId(), documentId(), options?.()),
+		queryClient
+	) as CreateQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> };
+
+	return query;
+}
+
+export const prefetchListDocumentSectionsQuery = async <
+	TData = Awaited<ReturnType<typeof listDocumentSections>>,
+	TError = ErrorType<ApiErrorBody>
+>(
+	queryClient: QueryClient,
+	projectId: string,
+	reportId: string,
+	documentId: string,
+	options?: {
+		query?: Partial<
+			CreateQueryOptions<Awaited<ReturnType<typeof listDocumentSections>>, TError, TData>
+		>;
+		request?: SecondParameter<typeof customFetch>;
+	}
+): Promise<QueryClient> => {
+	const queryOptions = getListDocumentSectionsQueryOptions(
+		projectId,
+		reportId,
+		documentId,
+		options
+	);
 
 	await queryClient.prefetchQuery(queryOptions);
 

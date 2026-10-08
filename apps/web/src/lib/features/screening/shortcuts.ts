@@ -43,16 +43,28 @@ export function hasOpenScreeningOverlay(ownerDocument?: Document): boolean {
 	return Boolean(document?.querySelector(openOverlaySelector));
 }
 
+const textEntryTags = ['INPUT', 'TEXTAREA', 'SELECT'];
+
+const insideOverlaySelector =
+	'[role="dialog"], [role="menu"], [role="listbox"], [data-state="open"][data-slot="popover"], [data-state="open"][data-slot="dropdown-menu"], [data-state="open"][data-slot="select-content"]';
+
+/**
+ * Buttons deliberately do not suppress the decision keys. A reviewer who clicks
+ * "Include" or a queue row must still be able to press M or E next; the browser
+ * already gives Enter and Space to the focused button. Keys are held back only
+ * while typing into a field and inside an open menu, listbox or dialog.
+ */
 export function isShortcutSuppressed(target: EventTarget | null, overlayOpen = false): boolean {
 	if (overlayOpen || !target || typeof target !== 'object') return overlayOpen;
 	const element = target as ShortcutTarget;
 	if (element.isContentEditable) return true;
-	if (['INPUT', 'TEXTAREA', 'SELECT', 'BUTTON'].includes(element.tagName?.toUpperCase() ?? '')) {
-		return true;
-	}
-	return Boolean(
-		element.closest?.(
-			'[role="dialog"], [role="menu"], [role="listbox"], [data-state="open"][data-slot="popover"], [data-state="open"][data-slot="dropdown-menu"], [data-state="open"][data-slot="select-content"]'
-		)
-	);
+	if (textEntryTags.includes(element.tagName?.toUpperCase() ?? '')) return true;
+	return Boolean(element.closest?.(insideOverlaySelector));
+}
+
+/** Browser and OS shortcuts (Ctrl+E, Cmd+M, ...) must never record a screening decision. */
+export function hasCommandModifier(
+	event: Partial<Pick<KeyboardEvent, 'altKey' | 'ctrlKey' | 'metaKey' | 'shiftKey'>>
+): boolean {
+	return Boolean(event.altKey || event.ctrlKey || event.metaKey);
 }

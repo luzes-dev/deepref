@@ -318,12 +318,17 @@ fn appraisal_fixture() -> (
         definition_version: 1,
         questions: vec![AppraisalPrefillQuestion {
             id: "allocation".to_owned(),
+            label: "Was allocation concealed?".to_owned(),
+            help: None,
             answer_schema: AppraisalAnswerSchema::Boolean,
             required: true,
             requires_evidence: true,
+            applies_when: None,
         }],
         domains: vec![AppraisalPrefillDomain {
             id: "bias".to_owned(),
+            label: "Bias".to_owned(),
+            description: None,
             allowed_judgments: vec!["low".to_owned(), "high".to_owned()],
             required: true,
         }],
@@ -331,6 +336,7 @@ fn appraisal_fixture() -> (
         report_title: Some(HOSTILE_METADATA.to_owned()),
         report_abstract: Some(HOSTILE_DOCUMENT.to_owned()),
         grounded_evidence: vec![evidence.clone()],
+        passages: Vec::new(),
     };
     let task = AppraisalPrefillTask::new(&input).expect("valid appraisal fixture");
     let output = AppraisalPrefill {
@@ -345,6 +351,7 @@ fn appraisal_fixture() -> (
         }],
         domain_judgments: BTreeMap::from([(String::from("bias"), String::from("low"))]),
         overall_judgment: "low".to_owned(),
+        override_reasons: BTreeMap::new(),
     };
     (task, input, output)
 }
@@ -371,6 +378,7 @@ fn extraction_fixture() -> (DataExtractionTask, DataExtractionInput, DataExtract
         study_id: study_id(),
         fields: vec![field.clone()],
         grounded_evidence: vec![evidence.clone()],
+        passages: Vec::new(),
     };
     let task = DataExtractionTask::new(&input).expect("valid extraction fixture");
     let output = DataExtraction {

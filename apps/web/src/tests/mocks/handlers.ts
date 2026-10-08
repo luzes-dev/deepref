@@ -5,7 +5,7 @@ export const mockSettings: SettingsDto = {
 	citation_provider: 'crossref',
 	metadata_provider: 'crossref',
 	crossref_mailto: 'researcher@example.com',
-	default_max_depth: 2,
+	default_max_depth: 1,
 	max_concurrency: 4,
 	rate_limit_per_second: 10,
 	retry_attempts: 3
@@ -18,7 +18,8 @@ export const mockProjects: ProjectDto[] = [
 		description: 'Literature review of ML methods in medicine',
 		default_max_depth: 2,
 		created_at: '2026-01-01T00:00:00Z',
-		updated_at: '2026-01-02T00:00:00Z'
+		updated_at: '2026-01-02T00:00:00Z',
+		article_count: 0
 	}
 ];
 

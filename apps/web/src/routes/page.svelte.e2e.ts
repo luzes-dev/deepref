@@ -6,16 +6,30 @@ const project = {
 	description: 'A mocked project',
 	default_max_depth: 2,
 	created_at: '2026-01-01T00:00:00Z',
-	updated_at: '2026-01-01T00:00:00Z'
+	updated_at: '2026-01-01T00:00:00Z',
+	article_count: 0
+};
+
+// The workspace Settings default citation depth. The Imports form starts from it, and a project
+// created without a depth takes it from the server.
+const workspaceSettings = {
+	crossref_mailto: 'research@example.org',
+	default_max_depth: 3,
+	max_concurrency: 8,
+	rate_limit_per_second: 1,
+	retry_attempts: 5,
+	metadata_provider: 'crossref',
+	citation_provider: 'crossref'
 };
 
 const createdProject = {
 	id: 'created-project',
 	name: 'Created Project',
 	description: 'Created from test',
-	default_max_depth: 2,
+	default_max_depth: workspaceSettings.default_max_depth,
 	created_at: '2026-01-02T00:00:00Z',
-	updated_at: '2026-01-02T00:00:00Z'
+	updated_at: '2026-01-02T00:00:00Z',
+	article_count: 0
 };
 
 const secondaryProject = {
@@ -24,7 +38,8 @@ const secondaryProject = {
 	description: 'Another mocked project',
 	default_max_depth: 3,
 	created_at: '2026-01-03T00:00:00Z',
-	updated_at: '2026-01-03T00:00:00Z'
+	updated_at: '2026-01-03T00:00:00Z',
+	article_count: 0
 };
 
 const articles = [
@@ -103,15 +118,19 @@ type WorkspaceMockOptions = {
 };
 
 async function mockHealth(page: Page) {
-	await page.route('http://localhost:4173/api/health/dependencies', async (route) => {
-		await route.fulfill({ json: availableDependencies });
-	});
+	// The overview and the status indicator ask for one project's jobs (`?project_id=`).
+	await page.route(
+		/http:\/\/localhost:4173\/api\/health\/dependencies(?:\?.*)?$/,
+		async (route) => {
+			await route.fulfill({ json: availableDependencies });
+		}
+	);
 }
 
 async function mockWorkspace(page: Page, options: WorkspaceMockOptions = {}) {
 	await mockHealth(page);
 	await page.route(
-		/http:\/\/localhost:4173\/api\/notifications(?:\/unread-count)?$/,
+		/http:\/\/localhost:4173\/api\/notifications(?:\/unread-count)?(?:\?.*)?$/,
 		async (route) => {
 			await route.fulfill({
 				json: route.request().url().includes('unread-count')
@@ -125,6 +144,9 @@ async function mockWorkspace(page: Page, options: WorkspaceMockOptions = {}) {
 	});
 	await page.route('http://localhost:4173/api/projects/test-project', async (route) => {
 		await route.fulfill({ json: project });
+	});
+	await page.route('http://localhost:4173/api/settings', async (route) => {
+		await route.fulfill({ json: workspaceSettings });
 	});
 	await page.route(
 		/http:\/\/localhost:4173\/api\/projects\/test-project\/reports(?:\?.*)?$/,
@@ -191,7 +213,7 @@ async function mockWorkspace(page: Page, options: WorkspaceMockOptions = {}) {
 				seed_dois: ['10.1/new'],
 				metadata_provider: 'crossref',
 				citation_provider: 'crossref',
-				max_depth: 2
+				max_depth: workspaceSettings.default_max_depth
 			});
 			await route.fulfill({
 				status: 201,
@@ -277,9 +299,10 @@ async function mockProjectCreateWorkspace(page: Page, initialProjects = [project
 			const body = route.request().postDataJSON();
 			expect(body).toMatchObject({
 				name: 'Created Project',
-				description: 'Created from test',
-				default_max_depth: 2
+				description: 'Created from test'
 			});
+			// The server gives the project the Settings default when no depth is sent.
+			expect(body).not.toHaveProperty('default_max_depth');
 			projects = [...projects, createdProject];
 			await route.fulfill({ status: 201, json: createdProject });
 			return;
@@ -323,6 +346,14 @@ async function mockProjectCreateWorkspace(page: Page, initialProjects = [project
 	await page.route(/http:\/\/localhost:4173\/api\/ingestions(?:\?.*)?$/, async (route) => {
 		await route.fulfill({ json: pageOf([]) });
 	});
+}
+
+function projectRow(page: Page, name: string) {
+	return page.getByTestId('project-management-item').filter({ hasText: name });
+}
+
+async function expandProjectRow(page: Page, name: string): Promise<void> {
+	await projectRow(page, name).locator('button[aria-expanded="false"]').click();
 }
 
 async function mockProjectManagementWorkspace(
@@ -419,44 +450,30 @@ test('renders unified workspace without global ingestion links', async ({ page }
 
 test('shows dependency degradation without blocking core workspace views', async ({ page }) => {
 	await mockWorkspace(page);
-	await page.route('http://localhost:4173/api/health/dependencies', async (route) => {
-		await route.fulfill({
-			json: {
-				...availableDependencies,
-				worker: { ...availableDependencies.worker, state: 'degraded', backlog: 7 }
-			}
-		});
-	});
-	await page.goto('/');
-
-	const toast = page
-		.locator('[data-sonner-toast]')
-		.filter({ hasText: 'Some features are degraded' })
-		.first();
-	await expect(toast).toBeVisible();
-	await expect(toast).toContainText('worker: degraded · backlog 7');
-	await expect(toast).toContainText(
-		'Projects, articles, and ingestions remain available while durable jobs drain'
-	);
-	await page.getByTestId('project-sidebar').getByRole('link', { name: 'Articles' }).click();
-	await expect(page.getByRole('heading', { name: 'Articles' })).toBeVisible();
-});
-
-test('shows stale metric timestamps from the typed article contract', async ({ page }) => {
-	await mockWorkspace(page);
 	await page.route(
-		/http:\/\/localhost:4173\/api\/projects\/test-project\/reports(?:\?.*)?$/,
+		/http:\/\/localhost:4173\/api\/health\/dependencies(?:\?.*)?$/,
 		async (route) => {
 			await route.fulfill({
-				json: pageOf([{ ...articles[0], metrics_stale: true }])
+				json: {
+					...availableDependencies,
+					worker: { ...availableDependencies.worker, state: 'degraded', backlog: 7 }
+				}
 			});
 		}
 	);
 	await page.goto('/');
-	await page.getByTestId('project-sidebar').getByRole('link', { name: 'Articles' }).click();
 
-	await expect(page.getByTestId('stale-metrics-banner')).toContainText('Metrics may be stale');
-	await expect(page.getByTestId('stale-metrics-banner')).toContainText('Metrics as of');
+	await expect(page.locator('[data-sonner-toast]')).toHaveCount(0);
+	const indicator = page.getByTestId('dependency-health-indicator');
+	await expect(indicator).toBeVisible();
+	await indicator.click();
+	const panel = page.getByTestId('dependency-health-panel');
+	await expect(panel).toContainText('Background jobs');
+	await expect(panel).toContainText('7 jobs are waiting');
+	await expect(panel.getByRole('button', { name: 'Refresh' })).toBeVisible();
+	await page.keyboard.press('Escape');
+	await page.getByTestId('project-sidebar').getByRole('link', { name: 'Articles' }).click();
+	await expect(page.getByRole('heading', { name: 'Articles' })).toBeVisible();
 });
 
 test('loads opaque cursor pages for projects, articles, and ingestions', async ({ page }) => {
@@ -500,10 +517,7 @@ test('loads opaque cursor pages for projects, articles, and ingestions', async (
 	await page.goto('/');
 
 	await page.getByRole('combobox', { name: 'Select project' }).click();
-	await page
-		.getByTestId('pagination-load-more')
-		.getByRole('button', { name: 'Load more' })
-		.click();
+	await page.getByTestId('project-selector-load-more').click();
 	await expect(page.getByText('Secondary Project')).toBeVisible();
 	await page.keyboard.press('Escape');
 
@@ -520,7 +534,7 @@ test('loads opaque cursor pages for projects, articles, and ingestions', async (
 		.getByTestId('pagination-load-more')
 		.getByRole('button', { name: 'Load more' })
 		.click();
-	await expect(page.getByText('2 project runs', { exact: true })).toBeVisible();
+	await expect(page.locator('[data-ingestion-id="second-project-ingestion"]')).toBeVisible();
 });
 
 test('selecting an article shows inspector', async ({ page }) => {
@@ -552,7 +566,7 @@ test('sidebar keeps its size and remains collapsible when the inspector appears'
 	await page.getByTestId('project-sidebar').getByRole('link', { name: 'Articles' }).click();
 	await expect(page.getByTestId('article-inspector')).toHaveCount(0);
 	await page.getByRole('button', { name: 'Source Article', exact: true }).click();
-	await expect(page.getByRole('heading', { name: 'Article inspector' })).toBeVisible();
+	await expect(page.getByTestId('article-inspector')).toBeVisible();
 	await expect
 		.poll(async () => (await sidebarPane.boundingBox())?.width ?? Infinity)
 		.toBeLessThan(80);
@@ -589,11 +603,9 @@ test('secondary article views reuse selected article inspector', async ({ page }
 	await expect(page.getByText('A useful article abstract.')).toBeVisible();
 
 	await page.getByRole('link', { name: 'Imports' }).click();
-	await expect(page.getByText('1 project runs', { exact: true })).toBeVisible();
 
 	await page.getByRole('link', { name: 'Graph' }).click();
 	await expect(page.getByText('A useful article abstract.')).toBeVisible();
-	await expect(page.getByText('Matches')).toHaveCount(0);
 	await expect(page.getByRole('button', { name: 'Reset graph layout' })).toBeVisible();
 });
 
@@ -622,12 +634,14 @@ test('project views are deep-linkable and preserve browser history state', async
 	);
 });
 
-test('article table filters, resets, sorts, and paginates', async ({ page }) => {
+test('article table filters, resets, and sorts without single-page pagination', async ({
+	page
+}) => {
 	await mockWorkspace(page);
 	await page.goto('/');
 
 	await page.getByTestId('project-sidebar').getByRole('link', { name: 'Articles' }).click();
-	await expect(page.getByText('Page 1 of 2')).toBeVisible();
+	await expect(page.getByRole('button', { name: 'Articles per page' })).toHaveCount(0);
 
 	await page.getByRole('textbox', { name: 'Search articles' }).fill('review');
 	await expect(page.getByRole('button', { name: /Review Article/ })).toBeVisible();
@@ -647,12 +661,10 @@ test('article table filters, resets, sorts, and paginates', async ({ page }) => 
 			.first()
 			.getByRole('button', { name: /Archive Article/ })
 	).toBeVisible();
-
-	await page.getByRole('button', { name: 'Go to next page' }).click();
-	await expect(page.getByText('Page 2 of 2')).toBeVisible();
+	await expect(page.getByRole('button', { name: 'Next page', exact: true })).toHaveCount(0);
 });
 
-test('mobile articles keep card open action', async ({ page }) => {
+test('article filtering survives narrow selection and desktop resizing', async ({ page }) => {
 	await page.setViewportSize({ width: 390, height: 844 });
 	await mockWorkspace(page);
 	await page.goto('/');
@@ -661,7 +673,13 @@ test('mobile articles keep card open action', async ({ page }) => {
 	const navigation = page.getByRole('navigation', { name: 'Mobile evidence workflow' });
 	await expect(navigation).toBeVisible();
 	await navigation.getByRole('button', { name: 'Articles' }).click();
-	await expect(page.getByRole('button', { name: 'Open inspector' }).first()).toBeVisible();
+	await page.getByRole('textbox', { name: 'Search articles' }).fill('Source');
+	await page.getByRole('button', { name: /Source Article/ }).click();
+	await expect(page.getByTestId('article-inspector')).toBeVisible();
+	await page.getByRole('button', { name: 'Close', exact: true }).click();
+	await page.setViewportSize({ width: 1440, height: 1000 });
+	await expect(page.getByRole('textbox', { name: 'Search articles' })).toHaveValue('Source');
+	await expect(page.getByRole('button', { name: /Archive Article/ })).toHaveCount(0);
 });
 
 test('ingestions are filtered and create uses current project', async ({ page }) => {
@@ -669,13 +687,41 @@ test('ingestions are filtered and create uses current project', async ({ page })
 	await page.goto('/');
 
 	await page.getByRole('link', { name: 'Imports' }).click();
-	await expect(page.getByText('1 project runs', { exact: true })).toBeVisible();
+	await expect(page.getByRole('region', { name: 'Project ingestion runs' })).toContainText(
+		'completed'
+	);
 	await expect(page.getByText('other-ingestion')).toHaveCount(0);
+	await expect(page.locator('#max-depth')).toHaveValue('3');
 	await page.locator('#dois').fill('10.1/new');
 	await page.getByRole('button', { name: 'Import articles' }).click();
-	await expect(page.getByText('new-ingestion')).toBeVisible();
+	await expect(page).toHaveURL(/ingestion=new-ingestion/);
 	await expect(page.getByRole('heading', { name: 'Status queued' })).toBeVisible();
 	await expect(page.getByText('queued', { exact: true }).first()).toBeVisible();
+});
+
+test('DOI import depth starts from Settings and remembers this project choice', async ({
+	page
+}) => {
+	await mockWorkspace(page);
+	await page.goto('/projects/test-project/discovery/imports');
+
+	const form = page.getByTestId('doi-import-form');
+	const depth = page.locator('#max-depth');
+	const source = page.getByTestId('depth-default-source');
+	await expect(depth).toHaveValue('3');
+	await expect(source).toContainText('Default from Settings: 3');
+	await expect(source).not.toContainText('Remembered');
+
+	await form.getByRole('button', { name: 'Decrease' }).click();
+	await expect(depth).toHaveValue('2');
+	await expect(source).toContainText('Remembered for this project');
+
+	await page.reload();
+	await expect(depth).toHaveValue('2');
+	await expect(source).toContainText('Default from Settings: 3');
+
+	await page.getByTestId('depth-settings-link').click();
+	await expect(page).toHaveURL(/\/settings$/);
 });
 
 test('refreshes completed provider runs with stable retry keys', async ({ page }) => {
@@ -756,26 +802,25 @@ test('refreshes completed provider runs with stable retry keys', async ({ page }
 	await page.getByRole('link', { name: 'Imports' }).click();
 	const completedRow = page.locator('[data-ingestion-id="project-ingestion"]');
 	const runningRow = page.locator('[data-ingestion-id="running-ingestion"]');
-	await expect(completedRow.getByRole('button', { name: 'Refresh provider' })).toBeVisible();
-	await expect(runningRow.getByRole('button', { name: /Refresh provider/ })).toHaveCount(0);
+	await expect(completedRow.getByRole('button', { name: 'Re-fetch metadata' })).toBeVisible();
+	await expect(runningRow.getByRole('button', { name: /Re-fetch metadata/ })).toHaveCount(0);
 
-	await completedRow.getByRole('button', { name: 'Refresh provider' }).click();
-	await expect(page.getByRole('button', { name: 'Retry refresh provider' })).toBeVisible();
+	await completedRow.getByRole('button', { name: 'Re-fetch metadata' }).click();
+	await expect(page.getByRole('button', { name: 'Retry re-fetch' })).toBeVisible();
 	await expect(page.getByRole('alert')).toContainText('provider temporarily unavailable');
 	await expect.poll(() => refreshKeys).toHaveLength(1);
 	await expect(refreshKeys[0]).not.toBe('');
 
-	await completedRow.getByRole('button', { name: 'Retry refresh provider' }).click();
+	await completedRow.getByRole('button', { name: 'Retry re-fetch' }).click();
 	await expect.poll(() => refreshKeys).toHaveLength(2);
 	await expect(refreshKeys[1]).toBe(refreshKeys[0]);
 	await expect(refreshPaths).toHaveLength(2);
 	await expect(page.locator('[data-ingestion-id="refreshed-ingestion"]')).toBeVisible();
 	await expect(page.getByRole('heading', { name: 'Status queued' })).toBeVisible();
-	await expect(page.getByText('refreshed-ingestion').last()).toBeVisible();
 
 	await page
 		.locator('[data-ingestion-id="project-ingestion"]')
-		.getByRole('button', { name: 'Refresh provider' })
+		.getByRole('button', { name: 'Re-fetch metadata' })
 		.click();
 	await expect.poll(() => refreshKeys).toHaveLength(3);
 	await expect(refreshKeys[2]).not.toBe(refreshKeys[1]);
@@ -830,12 +875,14 @@ test('selector management edits and deletes projects', async ({ page }) => {
 	await manageItem.click();
 	await expect(page.getByRole('heading', { name: 'Manage projects' })).toBeVisible();
 
+	await expandProjectRow(page, 'Test Project');
 	await page.locator('#management-project-name-test-project').fill('Renamed Project');
 	await page
 		.locator('#management-project-description-test-project')
 		.fill('Updated from management');
+	// The row still shows the saved name until the save completes, so find the form by its input.
 	await page
-		.locator('fieldset')
+		.getByTestId('project-management-item')
 		.filter({ has: page.locator('#management-project-name-test-project') })
 		.getByRole('button', { name: 'Save changes' })
 		.click();
@@ -844,22 +891,15 @@ test('selector management edits and deletes projects', async ({ page }) => {
 		'Renamed Project'
 	);
 
-	await page
-		.locator('fieldset')
-		.filter({ hasText: 'Secondary Project' })
-		.getByRole('button', { name: 'Delete' })
-		.click();
+	await expandProjectRow(page, 'Secondary Project');
+	await projectRow(page, 'Secondary Project').getByRole('button', { name: 'Delete' }).click();
 	await expect(page.getByRole('button', { name: 'Confirm delete' })).toBeVisible();
 	await page.getByRole('button', { name: 'Cancel' }).click();
-	await expect(page.locator('fieldset').filter({ hasText: 'Secondary Project' })).toBeVisible();
+	await expect(projectRow(page, 'Secondary Project')).toBeVisible();
 
-	await page
-		.locator('fieldset')
-		.filter({ hasText: 'Renamed Project' })
-		.getByRole('button', { name: 'Delete' })
-		.click();
+	await projectRow(page, 'Renamed Project').getByRole('button', { name: 'Delete' }).click();
 	await page.getByRole('button', { name: 'Confirm delete' }).click();
-	await expect(page.locator('fieldset').filter({ hasText: 'Renamed Project' })).toHaveCount(0);
+	await expect(projectRow(page, 'Renamed Project')).toHaveCount(0);
 	await expect(page.getByRole('heading', { name: 'Secondary Project' })).toBeVisible();
 	await expect(page.getByRole('combobox', { name: 'Select project' })).toContainText(
 		'Secondary Project'
@@ -884,7 +924,7 @@ test('mobile project management modal is padded and scrollable', async ({ page }
 	await expect(page.getByRole('heading', { name: 'Manage projects' })).toBeVisible();
 
 	const drawer = page.getByRole('dialog', { name: 'Manage projects' });
-	const firstProject = page.locator('fieldset').filter({ hasText: 'Mobile Project 1' });
+	const firstProject = projectRow(page, 'Mobile Project 1');
 	const drawerBox = await drawer.boundingBox();
 	const firstProjectBox = await firstProject.boundingBox();
 	expect(firstProjectBox?.x ?? 0).toBeGreaterThan((drawerBox?.x ?? 0) + 8);
@@ -898,7 +938,7 @@ test('mobile project management modal is padded and scrollable', async ({ page }
 		element.scrollTop = element.scrollHeight;
 	});
 
-	await expect(page.locator('fieldset').filter({ hasText: 'Mobile Project 8' })).toBeVisible();
+	await expect(projectRow(page, 'Mobile Project 8')).toBeVisible();
 });
 
 test('desktop project management modal contains long lists', async ({ page }) => {

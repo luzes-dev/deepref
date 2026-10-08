@@ -4,6 +4,7 @@ import type {
 	AiTypedExtractionValueDto,
 	ExtractionFieldDto
 } from '$lib/api/generated/models';
+import { ApiError } from '$lib/api/custom-fetch';
 
 export const EXTRACTION_VALUE_TYPES = ['text', 'number', 'boolean', 'date'] as const;
 
@@ -36,6 +37,42 @@ export type ExtractionSerializationResult =
 
 export function isExtractionValueType(value: string): value is ExtractionValueType {
 	return EXTRACTION_VALUE_TYPES.some((type) => type === value);
+}
+
+/** Longest field key the API accepts (extraction_field_definitions.field_key). */
+const FIELD_KEY_MAX_LENGTH = 100;
+
+/**
+ * Derives the key for a new extraction field from its label. Accents are
+ * folded first ("Duração" becomes "duracao"), then every other run of
+ * non-alphanumeric characters becomes one underscore. Keys are only derived
+ * when a field is created: existing fields keep their stored key, because
+ * values are recorded against it.
+ */
+export function deriveFieldKey(label: string): string {
+	return label
+		.normalize('NFD')
+		.replace(/\p{M}/gu, '')
+		.toLowerCase()
+		.replace(/[^a-z0-9]+/g, '_')
+		.replace(/^_+|_+$/g, '')
+		.slice(0, FIELD_KEY_MAX_LENGTH)
+		.replace(/_+$/, '');
+}
+
+export const FIELD_TYPE_LOCKED_MESSAGE =
+	'This field already has values, so its value type cannot change. Keep the type, or add a new field.';
+
+/**
+ * Message for a failed field edit. The API refuses a value-type change while the
+ * field has values, with its own error code; other failures show their message.
+ */
+export function describeFieldEditError(error: unknown): string {
+	if (error instanceof ApiError && error.code === 'extraction_field_has_values') {
+		return FIELD_TYPE_LOCKED_MESSAGE;
+	}
+	if (error instanceof Error && error.message) return error.message;
+	return 'The field could not be saved.';
 }
 
 function isIsoDate(value: string): boolean {

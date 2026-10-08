@@ -22,8 +22,10 @@ import type {
 	ApiErrorBody,
 	CreateAcquisition,
 	ImportRecords,
+	ListAcquisitionItemsParams,
 	ListAcquisitionsParams,
-	PaginatedResponseAcquisitionDto
+	PaginatedResponseAcquisitionDto,
+	PaginatedResponseAcquisitionItemDto
 } from '../models';
 
 import { customFetch } from '../../custom-fetch.ts';
@@ -299,6 +301,306 @@ export const createCreateAcquisition = <TError = ErrorType<ApiErrorBody>, TConte
 		queryClient
 	);
 };
+export type getAcquisitionResponse200 = {
+	data: AcquisitionDto;
+	status: 200;
+};
+
+export type getAcquisitionResponse404 = {
+	data: ApiErrorBody;
+	status: 404;
+};
+
+export type getAcquisitionResponse500 = {
+	data: ApiErrorBody;
+	status: 500;
+};
+
+export type getAcquisitionResponseSuccess = getAcquisitionResponse200 & {
+	headers: Headers;
+};
+export type getAcquisitionResponseError = (
+	getAcquisitionResponse404 | getAcquisitionResponse500
+) & {
+	headers: Headers;
+};
+
+export const getGetAcquisitionUrl = (projectId: string, acquisitionId: string) => {
+	return `/api/projects/${projectId}/acquisitions/${acquisitionId}`;
+};
+
+export const getAcquisition = async (
+	projectId: string,
+	acquisitionId: string,
+	options?: Parameters<typeof customFetch>[1]
+): Promise<getAcquisitionResponseSuccess> => {
+	return customFetch<getAcquisitionResponseSuccess>(
+		getGetAcquisitionUrl(projectId, acquisitionId),
+		{
+			...options,
+			method: 'GET'
+		}
+	);
+};
+
+export const getGetAcquisitionQueryKey = (projectId: string, acquisitionId: string) => {
+	return [`/api/projects/${projectId}/acquisitions/${acquisitionId}`] as const;
+};
+
+export const getGetAcquisitionQueryOptions = <
+	TData = Awaited<ReturnType<typeof getAcquisition>>,
+	TError = ErrorType<ApiErrorBody>
+>(
+	projectId: string,
+	acquisitionId: string,
+	options?: {
+		query?: Partial<
+			CreateQueryOptions<Awaited<ReturnType<typeof getAcquisition>>, TError, TData>
+		>;
+		request?: SecondParameter<typeof customFetch>;
+	}
+) => {
+	const { query: queryOptions, request: requestOptions } = options ?? {};
+
+	const queryKey = queryOptions?.queryKey ?? getGetAcquisitionQueryKey(projectId, acquisitionId);
+
+	const queryFn: QueryFunction<Awaited<ReturnType<typeof getAcquisition>>> = ({ signal }) =>
+		getAcquisition(projectId, acquisitionId, { signal, ...requestOptions });
+
+	return {
+		queryKey,
+		queryFn,
+		enabled:
+			projectId !== null &&
+			projectId !== undefined &&
+			acquisitionId !== null &&
+			acquisitionId !== undefined,
+		...queryOptions
+	} as CreateQueryOptions<Awaited<ReturnType<typeof getAcquisition>>, TError, TData> & {
+		queryKey: DataTag<QueryKey, TData, TError>;
+	};
+};
+
+export type GetAcquisitionQueryResult = NonNullable<Awaited<ReturnType<typeof getAcquisition>>>;
+export type GetAcquisitionQueryError = ErrorType<ApiErrorBody>;
+
+export function createGetAcquisition<
+	TData = Awaited<ReturnType<typeof getAcquisition>>,
+	TError = ErrorType<ApiErrorBody>
+>(
+	projectId: () => string,
+	acquisitionId: () => string,
+	options?: () => {
+		query?: Partial<
+			CreateQueryOptions<Awaited<ReturnType<typeof getAcquisition>>, TError, TData>
+		>;
+		request?: SecondParameter<typeof customFetch>;
+	},
+	queryClient?: () => QueryClient
+): CreateQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> } {
+	const query = createQuery(
+		() => getGetAcquisitionQueryOptions(projectId(), acquisitionId(), options?.()),
+		queryClient
+	) as CreateQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> };
+
+	return query;
+}
+
+export const prefetchGetAcquisitionQuery = async <
+	TData = Awaited<ReturnType<typeof getAcquisition>>,
+	TError = ErrorType<ApiErrorBody>
+>(
+	queryClient: QueryClient,
+	projectId: string,
+	acquisitionId: string,
+	options?: {
+		query?: Partial<
+			CreateQueryOptions<Awaited<ReturnType<typeof getAcquisition>>, TError, TData>
+		>;
+		request?: SecondParameter<typeof customFetch>;
+	}
+): Promise<QueryClient> => {
+	const queryOptions = getGetAcquisitionQueryOptions(projectId, acquisitionId, options);
+
+	await queryClient.prefetchQuery(queryOptions);
+
+	return queryClient;
+};
+
+export type listAcquisitionItemsResponse200 = {
+	data: PaginatedResponseAcquisitionItemDto;
+	status: 200;
+};
+
+export type listAcquisitionItemsResponse400 = {
+	data: ApiErrorBody;
+	status: 400;
+};
+
+export type listAcquisitionItemsResponse404 = {
+	data: ApiErrorBody;
+	status: 404;
+};
+
+export type listAcquisitionItemsResponse500 = {
+	data: ApiErrorBody;
+	status: 500;
+};
+
+export type listAcquisitionItemsResponseSuccess = listAcquisitionItemsResponse200 & {
+	headers: Headers;
+};
+export type listAcquisitionItemsResponseError = (
+	| listAcquisitionItemsResponse400
+	| listAcquisitionItemsResponse404
+	| listAcquisitionItemsResponse500
+) & {
+	headers: Headers;
+};
+
+export const getListAcquisitionItemsUrl = (
+	projectId: string,
+	acquisitionId: string,
+	params?: ListAcquisitionItemsParams
+) => {
+	const normalizedParams = new URLSearchParams();
+
+	Object.entries(params || {}).forEach(([key, value]) => {
+		if (value !== undefined) {
+			normalizedParams.append(key, value === null ? 'null' : String(value));
+		}
+	});
+
+	const stringifiedParams = normalizedParams.toString();
+
+	return stringifiedParams.length > 0
+		? `/api/projects/${projectId}/acquisitions/${acquisitionId}/items?${stringifiedParams}`
+		: `/api/projects/${projectId}/acquisitions/${acquisitionId}/items`;
+};
+
+export const listAcquisitionItems = async (
+	projectId: string,
+	acquisitionId: string,
+	params?: ListAcquisitionItemsParams,
+	options?: Parameters<typeof customFetch>[1]
+): Promise<listAcquisitionItemsResponseSuccess> => {
+	return customFetch<listAcquisitionItemsResponseSuccess>(
+		getListAcquisitionItemsUrl(projectId, acquisitionId, params),
+		{
+			...options,
+			method: 'GET'
+		}
+	);
+};
+
+export const getListAcquisitionItemsQueryKey = (
+	projectId: string,
+	acquisitionId: string,
+	params?: ListAcquisitionItemsParams
+) => {
+	return [
+		`/api/projects/${projectId}/acquisitions/${acquisitionId}/items`,
+		...(params ? [params] : [])
+	] as const;
+};
+
+export const getListAcquisitionItemsQueryOptions = <
+	TData = Awaited<ReturnType<typeof listAcquisitionItems>>,
+	TError = ErrorType<ApiErrorBody>
+>(
+	projectId: string,
+	acquisitionId: string,
+	params?: ListAcquisitionItemsParams,
+	options?: {
+		query?: Partial<
+			CreateQueryOptions<Awaited<ReturnType<typeof listAcquisitionItems>>, TError, TData>
+		>;
+		request?: SecondParameter<typeof customFetch>;
+	}
+) => {
+	const { query: queryOptions, request: requestOptions } = options ?? {};
+
+	const queryKey =
+		queryOptions?.queryKey ?? getListAcquisitionItemsQueryKey(projectId, acquisitionId, params);
+
+	const queryFn: QueryFunction<Awaited<ReturnType<typeof listAcquisitionItems>>> = ({ signal }) =>
+		listAcquisitionItems(projectId, acquisitionId, params, { signal, ...requestOptions });
+
+	return {
+		queryKey,
+		queryFn,
+		enabled:
+			projectId !== null &&
+			projectId !== undefined &&
+			acquisitionId !== null &&
+			acquisitionId !== undefined,
+		...queryOptions
+	} as CreateQueryOptions<Awaited<ReturnType<typeof listAcquisitionItems>>, TError, TData> & {
+		queryKey: DataTag<QueryKey, TData, TError>;
+	};
+};
+
+export type ListAcquisitionItemsQueryResult = NonNullable<
+	Awaited<ReturnType<typeof listAcquisitionItems>>
+>;
+export type ListAcquisitionItemsQueryError = ErrorType<ApiErrorBody>;
+
+export function createListAcquisitionItems<
+	TData = Awaited<ReturnType<typeof listAcquisitionItems>>,
+	TError = ErrorType<ApiErrorBody>
+>(
+	projectId: () => string,
+	acquisitionId: () => string,
+	params?: () => ListAcquisitionItemsParams,
+	options?: () => {
+		query?: Partial<
+			CreateQueryOptions<Awaited<ReturnType<typeof listAcquisitionItems>>, TError, TData>
+		>;
+		request?: SecondParameter<typeof customFetch>;
+	},
+	queryClient?: () => QueryClient
+): CreateQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> } {
+	const query = createQuery(
+		() =>
+			getListAcquisitionItemsQueryOptions(
+				projectId(),
+				acquisitionId(),
+				params?.(),
+				options?.()
+			),
+		queryClient
+	) as CreateQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> };
+
+	return query;
+}
+
+export const prefetchListAcquisitionItemsQuery = async <
+	TData = Awaited<ReturnType<typeof listAcquisitionItems>>,
+	TError = ErrorType<ApiErrorBody>
+>(
+	queryClient: QueryClient,
+	projectId: string,
+	acquisitionId: string,
+	params?: ListAcquisitionItemsParams,
+	options?: {
+		query?: Partial<
+			CreateQueryOptions<Awaited<ReturnType<typeof listAcquisitionItems>>, TError, TData>
+		>;
+		request?: SecondParameter<typeof customFetch>;
+	}
+): Promise<QueryClient> => {
+	const queryOptions = getListAcquisitionItemsQueryOptions(
+		projectId,
+		acquisitionId,
+		params,
+		options
+	);
+
+	await queryClient.prefetchQuery(queryOptions);
+
+	return queryClient;
+};
+
 export type refreshAcquisitionResponse200 = {
 	data: AcquisitionDto;
 	status: 200;

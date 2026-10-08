@@ -29,9 +29,13 @@ pub(crate) struct RunDeduplicationRequest {
 pub(crate) struct DedupeRunDto {
     pub project_id: Uuid,
     pub processed: i64,
+    /// Exact-identifier records linked to an existing report.
     pub auto_linked: i64,
     pub created_reports: i64,
+    /// Proposals written by this run, including any that were then merged.
     pub proposals_created: i64,
+    /// Fuzzy proposals merged automatically by the "act and notify" setting.
+    pub auto_accepted: i64,
     pub conflicts: i64,
 }
 
@@ -160,6 +164,7 @@ pub(crate) async fn run_project_deduplication(
         auto_linked: summary.auto_linked,
         created_reports: summary.created_reports,
         proposals_created: summary.proposals_created,
+        auto_accepted: summary.auto_accepted,
         conflicts: summary.conflicts,
     }))
 }

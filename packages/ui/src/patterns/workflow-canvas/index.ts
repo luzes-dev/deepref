@@ -13,3 +13,9 @@ export { default as HumanGateNode } from "./nodes/HumanGateNode.svelte";
 export * from "./types.js";
 
 export { default as WorkflowNodeShell } from "./WorkflowNodeShell.svelte";
+export { default as BuilderCanvas } from "./BuilderCanvas.svelte";
+export type {
+	Node as FlowGraphNode,
+	Edge as FlowGraphEdge,
+	Connection as FlowConnection,
+} from "@xyflow/svelte";

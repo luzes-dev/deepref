@@ -7,6 +7,7 @@ use deepref_application::{
 use deepref_domain::{
     CriterionDimension, CriterionKind, CriterionStage, EligibilityCriterion, FrameworkKind,
     ProtocolFramework, ProtocolStatus, ProtocolValidationError, validate_criteria,
+    validate_publishable_criteria,
 };
 use serde_json::json;
 use sqlx::{PgPool, Postgres, Transaction};
@@ -116,6 +117,27 @@ pub async fn get_published_protocol(
     .await?
     .ok_or(ProtocolError::NotFound)?;
     load_document(pool, project_id, row.id).await
+}
+
+/// Lists every published or superseded version of the project protocol, oldest first.
+pub async fn list_protocol_versions(
+    pool: &PgPool,
+    project_id: Uuid,
+) -> Result<Vec<ProtocolDocument>, ProtocolError> {
+    if !project_exists(pool, project_id).await? {
+        return Err(ProtocolError::ProjectNotFound);
+    }
+    let ids: Vec<Uuid> = sqlx::query_scalar(
+        "SELECT id FROM protocol_versions WHERE project_id=$1 AND status IN ('published','superseded') ORDER BY version ASC, id ASC",
+    )
+    .bind(project_id)
+    .fetch_all(pool)
+    .await?;
+    let mut versions = Vec::with_capacity(ids.len());
+    for id in ids {
+        versions.push(load_document(pool, project_id, id).await?);
+    }
+    Ok(versions)
 }
 
 pub async fn save_protocol_draft(
@@ -311,6 +333,18 @@ pub async fn publish_protocol(
             current_revision: draft.revision,
         });
     }
+    // Publication makes this version immutable, so it must name at least one
+    // inclusion criterion. Saving a draft without criteria stays allowed.
+    let criterion_kinds = sqlx::query_scalar::<_, String>(
+        "SELECT criterion_type FROM eligibility_criteria WHERE protocol_version_id=$1",
+    )
+    .bind(command.protocol_version_id)
+    .fetch_all(&mut *tx)
+    .await?
+    .into_iter()
+    .map(criterion_kind_from_string)
+    .collect::<Result<Vec<_>, _>>()?;
+    validate_publishable_criteria(criterion_kinds).map_err(ProtocolError::from)?;
 
     sqlx::query!(
         "UPDATE protocol_versions SET status='superseded', updated_at=now(), updated_by_kind=$2, updated_by_id=$3 WHERE project_id=$1 AND status='published'",
@@ -352,6 +386,20 @@ pub async fn publish_protocol(
     )
     .execute(&mut *tx)
     .await?;
+    let workflow_actor = deepref_domain::ActorKind::parse(&actor.kind)
+        .and_then(|kind| deepref_domain::Actor::new(kind, actor.id.clone()).ok())
+        .or_else(|| deepref_domain::Actor::new(deepref_domain::ActorKind::System, "protocol").ok());
+    if let Some(workflow_actor) = workflow_actor {
+        crate::dispatch_automation_domain_event(
+            &mut tx,
+            &deepref_application::AutomationDomainEvent::ProtocolPublished {
+                project_id: command.project_id,
+                protocol_version_id: command.protocol_version_id,
+                actor: workflow_actor,
+            },
+        )
+        .await?;
+    }
     tx.commit().await?;
     load_document(pool, proj_uuid, command.protocol_version_id).await
 }

@@ -3,6 +3,7 @@
 > **Authoritative Handoff & Architecture Document**  
 > **Audience:** Autonomous Coding Agent & UI Specialist Reviewer  
 > **Status:** COMPLETE (all 4 phases implemented and verified; see §5 for the final session record)  
+> **Superseded (2026-10):** the Rete.js editor, recipe library and `components/` files described here were replaced by the Svelte Flow automation builder in `apps/web/src/lib/features/automations/`. File names below are historical.  
 > **Scope:** Architecture, UI design decisions, component contracts, backend persistence, agent loop, and handoff execution steps.
 
 ---
@@ -93,7 +94,7 @@ This section documents the specific UI/UX, styling, accessibility, and component
   - Primary CTA button: **"Review in Queue"** linking directly to the corresponding reviewer interface with pre-filtered query parameters.
 
 ### 3.4 Workflows Hub: Recipe Library UI Decisions (`/automations`)
-- **Tabbed Layout**: Clean toggle between "Custom Workflows" and "Predefined Recipes" in [`AutomationCenter.svelte`](../apps/web/src/lib/features/automations/components/AutomationCenter.svelte).
+- **Tabbed Layout**: Clean toggle between "Custom Workflows" and "Predefined Recipes" in `AutomationCenter.svelte`.
 - **Categorization**: Grouped into 4 clinical evidence stages:
   1. *Screening* (Single Report Screening, Eligibility Check)
   2. *Studies & Synthesis* (Study Grouping, Study Classification)
@@ -152,7 +153,7 @@ This section documents the specific UI/UX, styling, accessibility, and component
    - Total 26 tests in `@deepref/ui` passed with 0 errors.
 
 ### Phase 2: Workflows Predefined Recipes — **CORE DONE**
-1. Created [`apps/web/src/lib/features/automations/recipes.ts`](../apps/web/src/lib/features/automations/recipes.ts):
+1. Created `apps/web/src/lib/features/automations/recipes.ts`:
    - Ported all 14 assistant tool definitions into structured `PredefinedRecipe` definitions.
    - Configured fields schemas, validation rules, default parameters, categories, and backend recipe routes (`review_screening.v1`, `review_duplicate_detection.v1`, `review_study_classification.v1`, `review_study_grouping.v1`, `review_appraisal_prefill.v1`, `review_data_extraction.v1`, `project_maintenance.v1`).
 

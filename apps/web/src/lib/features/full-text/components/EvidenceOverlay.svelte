@@ -39,7 +39,7 @@
 		type="button"
 		class="absolute rounded-sm border-2 transition-colors focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none {selected
 			? 'border-primary bg-primary/25'
-			: 'border-primary/50 bg-primary/5 hover:bg-primary/20'}"
+			: 'border-transparent bg-transparent hover:border-primary/50 hover:bg-primary/10 focus-visible:border-primary/50 focus-visible:bg-primary/10'}"
 		data-selected={selected ? 'true' : undefined}
 		style:left={`${pixels.x}px`}
 		style:top={`${pixels.y}px`}

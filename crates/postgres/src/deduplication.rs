@@ -1,12 +1,13 @@
 use std::collections::BTreeSet;
 
 use deepref_application::RawAuthor;
+use deepref_application::workflows::{AutonomyLevel, AutonomyTask};
 use deepref_application::{
     AutomationDomainEvent, DedupeCandidate, DedupeScore, FUZZY_PROPOSAL_THRESHOLD,
     FUZZY_SHORTLIST_LIMIT, ProposalDecision, ProposalKind, RecordResolutionAction,
     ResolveRecordCommand, select_fuzzy_candidate,
 };
-use deepref_domain::{ProjectId, normalize_bibliography_title};
+use deepref_domain::{Actor, ActorKind, ProjectId, normalize_bibliography_title};
 use serde::Serialize;
 use serde_json::{Value, json};
 use sqlx::{PgPool, Postgres, Row, Transaction};
@@ -50,9 +51,13 @@ pub struct DedupeRunRequest {
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct DedupeRunSummary {
     pub processed: i64,
+    /// Exact-identifier records linked to an existing report.
     pub auto_linked: i64,
     pub created_reports: i64,
+    /// Proposals written by this run, including any that were then merged.
     pub proposals_created: i64,
+    /// Fuzzy proposals that "act and notify" merged straight away.
+    pub auto_accepted: i64,
     pub conflicts: i64,
 }
 
@@ -149,9 +154,31 @@ pub async fn run_deduplication(
     // races around globally unique durable identifiers.
     lock_project(&mut tx, request.project_id).await?;
     refresh_project_report_titles(&mut tx, request.project_id).await?;
+    let policy = DedupePolicy {
+        exact: crate::autonomy::resolve_autonomy_level_in_transaction(
+            &mut tx,
+            request.project_id,
+            AutonomyTask::ExactDuplicates,
+        )
+        .await?,
+        fuzzy: crate::autonomy::resolve_autonomy_level_in_transaction(
+            &mut tx,
+            request.project_id,
+            AutonomyTask::FuzzyDuplicates,
+        )
+        .await?,
+        batch_id: Uuid::new_v4(),
+    };
+    // A reverted merge is a "keep separate" decision: automatic runs must not
+    // merge the same record again.
     let record_ids = sqlx::query_scalar::<_, Uuid>(
         "SELECT id FROM records
          WHERE project_id=$1 AND report_id IS NULL
+           AND NOT EXISTS (
+             SELECT 1 FROM dedupe_resolution_events ev
+             WHERE ev.project_id=records.project_id AND ev.record_id=records.id
+               AND ev.action='revert'
+           )
          ORDER BY created_at,id
          LIMIT $2
          FOR UPDATE SKIP LOCKED",
@@ -162,6 +189,7 @@ pub async fn run_deduplication(
     .await?;
 
     let mut summary = DedupeRunSummary::default();
+    let processed_ids = record_ids.clone();
     for record_id in record_ids {
         summary.processed += 1;
         let result = resolve_one_record(
@@ -170,6 +198,7 @@ pub async fn run_deduplication(
             record_id,
             &request.actor_kind,
             &request.actor_id,
+            &policy,
         )
         .await?;
         summary.auto_linked += result.auto_linked;
@@ -177,8 +206,50 @@ pub async fn run_deduplication(
         summary.proposals_created += result.proposals;
         summary.conflicts += result.conflicts;
     }
+    if summary.created_reports + summary.auto_linked > 0 {
+        crate::graph::enqueue_metrics_recompute(&mut tx, request.project_id).await?;
+    }
     tx.commit().await?;
+    if policy.fuzzy == AutonomyLevel::Act && summary.proposals_created > 0 {
+        summary.auto_accepted =
+            auto_accept_fuzzy_proposals(pool, &request, &processed_ids, policy.batch_id).await;
+    }
     Ok(summary)
+}
+
+/// Durable job kind for the duplicate check that follows a file import.
+pub const IMPORT_DEDUPLICATION_JOB_KIND: &str = "run_deduplication";
+
+/// Queues the duplicate check for records a file import just added, so they
+/// reach Articles without a manual run. Exact identifier matches follow the
+/// project's autonomy; fuzzy matches stay proposals for a person to decide.
+pub async fn enqueue_import_deduplication(
+    pool: &PgPool,
+    project_id: Uuid,
+    import_run_id: Uuid,
+) -> anyhow::Result<()> {
+    let mut tx = pool.begin().await?;
+    crate::jobs::enqueue_job(
+        &mut tx,
+        &crate::jobs::job(
+            Uuid::new_v4(),
+            ProjectId::new(project_id),
+            IMPORT_DEDUPLICATION_JOB_KIND,
+            json!({"project_id": project_id, "import_run_id": import_run_id}),
+            format!("run_deduplication:import:{import_run_id}"),
+        ),
+    )
+    .await?;
+    tx.commit().await?;
+    Ok(())
+}
+
+/// The project's duplicate-handling autonomy for one run.
+#[derive(Debug, Clone, Copy)]
+struct DedupePolicy {
+    exact: AutonomyLevel,
+    fuzzy: AutonomyLevel,
+    batch_id: Uuid,
 }
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -206,6 +277,7 @@ async fn resolve_one_record(
     record_id: Uuid,
     actor_kind: &str,
     actor_id: &str,
+    policy: &DedupePolicy,
 ) -> Result<OneRecordResult, DedupeError> {
     let Some(source) = load_unresolved_source_record(tx, project_id, record_id).await? else {
         return Ok(OneRecordResult::default());
@@ -213,9 +285,16 @@ async fn resolve_one_record(
     let identifiers = lock_record_identifiers(tx, source.id).await?;
     let normalized_title = normalize_record_title(tx, project_id, &source).await?;
 
-    if let Some(result) =
-        resolve_identifier_matches(tx, project_id, &source, &identifiers, actor_kind, actor_id)
-            .await?
+    if let Some(result) = resolve_identifier_matches(
+        tx,
+        project_id,
+        &source,
+        &identifiers,
+        actor_kind,
+        actor_id,
+        policy,
+    )
+    .await?
     {
         return Ok(result);
     }
@@ -233,7 +312,11 @@ async fn resolve_one_record(
         .await;
     };
 
-    let shortlist = shortlist_reports(tx, project_id, &normalized_title).await?;
+    let shortlist = if policy.fuzzy == AutonomyLevel::Off {
+        Vec::new()
+    } else {
+        shortlist_reports(tx, project_id, &normalized_title).await?
+    };
     let source_first_author = first_author_name(&source.authors);
     if let Some((candidate, score)) = select_fuzzy_candidate(
         source.title.as_deref(),
@@ -324,10 +407,36 @@ async fn resolve_identifier_matches(
     identifiers: &[RecordIdentifier],
     actor_kind: &str,
     actor_id: &str,
+    policy: &DedupePolicy,
 ) -> Result<Option<OneRecordResult>, DedupeError> {
     let matched_report_ids = matched_report_ids(tx, identifiers).await?;
     if matched_report_ids.is_empty() {
         return Ok(None);
+    }
+    if matched_report_ids.len() == 1 && policy.exact != AutonomyLevel::Act {
+        // The project wants to confirm even exact matches itself.
+        let score = DedupeScore {
+            title_similarity: 1.0,
+            year_match: None,
+            first_author_similarity: None,
+            exact_identifier_match: true,
+            conflicting_identifier: false,
+            total: 1.0,
+        };
+        insert_proposal(
+            tx,
+            project_id,
+            source,
+            Some(matched_report_ids[0]),
+            ProposalKind::Fuzzy,
+            &score,
+            json!({"reason": "durable identifiers match an existing report"}),
+        )
+        .await?;
+        return Ok(Some(OneRecordResult {
+            proposals: 1,
+            ..Default::default()
+        }));
     }
     if matched_report_ids.len() == 1 {
         let report_id = matched_report_ids[0];
@@ -345,6 +454,18 @@ async fn resolve_identifier_matches(
                 actor_id,
                 proposal_id: None,
             },
+        )
+        .await?;
+        record_merge_activity(
+            tx,
+            project_id,
+            source,
+            report_id,
+            actor_kind,
+            actor_id,
+            "exact_duplicates",
+            "A record with the same DOI or PubMed ID was merged into an existing one",
+            policy.batch_id,
         )
         .await?;
         return Ok(Some(OneRecordResult {
@@ -381,6 +502,119 @@ async fn resolve_identifier_matches(
         conflicts: 1,
         ..Default::default()
     }))
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn record_merge_activity(
+    tx: &mut Transaction<'_, Postgres>,
+    project_id: Uuid,
+    source: &SourceRecord,
+    report_id: Uuid,
+    actor_kind: &str,
+    actor_id: &str,
+    task: &str,
+    what: &str,
+    batch_id: Uuid,
+) -> Result<(), DedupeError> {
+    let Some(kind) = ActorKind::parse(actor_kind) else {
+        return Ok(());
+    };
+    let Ok(actor) = Actor::new(kind, actor_id) else {
+        return Ok(());
+    };
+    let title = source
+        .title
+        .clone()
+        .unwrap_or_else(|| "Untitled record".to_owned());
+    let shown: String = title.chars().take(120).collect();
+    let mut entry = crate::activity::NewActivity::new(
+        project_id,
+        "automation",
+        "Duplicate check",
+        actor,
+        task,
+        "duplicate_merged",
+        format!("{what}: “{shown}”."),
+    );
+    entry.affected = json!([
+        {"type": "record", "id": source.id, "label": title},
+        {"type": "report", "id": report_id, "label": "Existing report"},
+    ]);
+    entry.after_state = json!({"record_id": source.id, "report_id": report_id});
+    entry.undo_kind = Some("duplicate_link");
+    entry.batch_id = Some(batch_id);
+    crate::activity::record_activity_in_transaction(tx, &entry).await?;
+    Ok(())
+}
+
+/// Fuzzy matches that are near-certain are merged right away when the project
+/// chose "act and notify"; everything else stays a suggestion. Failures leave
+/// the proposal pending. Returns how many merges were applied.
+async fn auto_accept_fuzzy_proposals(
+    pool: &PgPool,
+    request: &DedupeRunRequest,
+    record_ids: &[Uuid],
+    batch_id: Uuid,
+) -> i64 {
+    let Ok(rows) = sqlx::query(
+        "SELECT p.id,p.record_id,r.title
+         FROM dedupe_proposals p JOIN records r ON r.project_id=p.project_id AND r.id=p.record_id
+         WHERE p.project_id=$1 AND p.status='pending' AND p.proposal_kind='fuzzy'
+           AND p.record_id=ANY($2) AND p.score>=0.95 AND NOT p.conflicting_identifier
+           AND p.candidate_report_id IS NOT NULL",
+    )
+    .bind(request.project_id)
+    .bind(record_ids)
+    .fetch_all(pool)
+    .await
+    else {
+        return 0;
+    };
+    let mut merged = 0;
+    for row in rows {
+        let proposal_id: Uuid = row.get("id");
+        let record_id: Uuid = row.get("record_id");
+        let accepted = decide_proposal(
+            pool,
+            ProposalDecisionRequest {
+                project_id: request.project_id,
+                proposal_id,
+                decision: ProposalDecision::Accept,
+                reason: "Merged automatically: the records are near-identical".to_owned(),
+                actor_kind: request.actor_kind.clone(),
+                actor_id: request.actor_id.clone(),
+            },
+        )
+        .await;
+        if accepted.is_err() {
+            continue;
+        }
+        merged += 1;
+        let Some(kind) = ActorKind::parse(&request.actor_kind) else {
+            continue;
+        };
+        let Ok(actor) = Actor::new(kind, request.actor_id.clone()) else {
+            continue;
+        };
+        let title: Option<String> = row.get("title");
+        let title = title.unwrap_or_else(|| "Untitled record".to_owned());
+        let shown: String = title.chars().take(120).collect();
+        let mut entry = crate::activity::NewActivity::new(
+            request.project_id,
+            "automation",
+            "Duplicate check",
+            actor,
+            "fuzzy_duplicates",
+            "duplicate_merged",
+            format!("A near-identical record was merged into an existing one: “{shown}”."),
+        );
+        entry.affected = json!([{"type": "record", "id": record_id, "label": title}]);
+        entry.after_state = json!({"record_id": record_id});
+        entry.undo_kind = Some("duplicate_link");
+        entry.batch_id = Some(batch_id);
+        let _ = crate::activity::record_activity(pool, &entry).await;
+    }
+    merged
 }
 
 async fn create_and_link_report(
@@ -671,6 +905,16 @@ async fn create_report(
     source: &SourceRecord,
     normalized_title: Option<String>,
 ) -> Result<Uuid, DedupeError> {
+    let report_id = insert_report_row(tx, source, normalized_title).await?;
+    attach_record_identifiers(tx, source, report_id, false).await?;
+    Ok(report_id)
+}
+
+async fn insert_report_row(
+    tx: &mut Transaction<'_, Postgres>,
+    source: &SourceRecord,
+    normalized_title: Option<String>,
+) -> Result<Uuid, DedupeError> {
     let report_id = Uuid::new_v4();
     sqlx::query(
         "INSERT INTO reports
@@ -687,24 +931,6 @@ async fn create_report(
     .bind(&source.raw)
     .execute(&mut **tx)
     .await?;
-
-    let identifiers = record_identifiers(tx, source.id).await?;
-    let source_values =
-        serde_json::from_value::<Vec<Value>>(source.source_identifiers.clone()).unwrap_or_default();
-    for identifier in identifiers {
-        let original = original_identifier_value(&source_values, &identifier);
-        sqlx::query(
-            "INSERT INTO report_identifiers (id,report_id,scheme,value,normalized_value)
-             VALUES ($1,$2,$3,$4,$5)",
-        )
-        .bind(Uuid::new_v4())
-        .bind(report_id)
-        .bind(&identifier.scheme)
-        .bind(original)
-        .bind(&identifier.normalized_value)
-        .execute(&mut **tx)
-        .await?;
-    }
     Ok(report_id)
 }
 
@@ -904,7 +1130,25 @@ pub async fn decide_proposal(
     .await?
     .flatten();
 
-    let action = "reject_proposal";
+    // "Not a duplicate" resolves an unlinked record as its own report, so it
+    // enters Articles, screening and PRISMA. A record that is already linked
+    // keeps its report, and the proposal is only closed.
+    let resolved_report_id = match prior_report_id {
+        Some(_) => None,
+        None => Some(
+            create_own_report_for_rejected_record(
+                &mut tx,
+                request.project_id,
+                record_id,
+                request.proposal_id,
+                &request.reason,
+                &request.actor_kind,
+                &request.actor_id,
+            )
+            .await?,
+        ),
+    };
+
     sqlx::query(
         "UPDATE dedupe_proposals
          SET status=$3,revision=revision+1,reviewer_kind=$4,reviewer_id=$5,
@@ -922,26 +1166,78 @@ pub async fn decide_proposal(
     sqlx::query(
         "INSERT INTO dedupe_resolution_events
          (id,project_id,record_id,prior_report_id,resolved_report_id,action,reason,actor_kind,actor_id,proposal_id,reverted_event_id)
-         VALUES ($1,$2,$3,$4,NULL,$5,$6,$7,$8,$9,NULL)",
+         VALUES ($1,$2,$3,$4,NULL,'reject_proposal',$5,$6,$7,$8,NULL)",
     )
     .bind(Uuid::new_v4())
     .bind(request.project_id)
     .bind(record_id)
     .bind(prior_report_id)
-    .bind(action)
     .bind(&request.reason)
     .bind(&request.actor_kind)
     .bind(&request.actor_id)
     .bind(request.proposal_id)
     .execute(&mut *tx)
     .await?;
+    if resolved_report_id.is_some() {
+        // The record is resolved now, so other suggestions for it are obsolete.
+        supersede_sibling_proposals(
+            &mut tx,
+            request.project_id,
+            record_id,
+            request.proposal_id,
+            &request.reason,
+            &request.actor_kind,
+            &request.actor_id,
+        )
+        .await?;
+    }
     tx.commit().await?;
     Ok(ResolutionResult {
         record_id,
         prior_report_id,
-        resolved_report_id: None,
+        resolved_report_id,
         action: request.decision.as_str().to_owned(),
     })
+}
+
+/// Makes an unlinked record its own project report after a "not a duplicate"
+/// decision. Identifiers that another report already owns stay with that
+/// report, because identifiers are globally unique.
+async fn create_own_report_for_rejected_record(
+    tx: &mut Transaction<'_, Postgres>,
+    project_id: Uuid,
+    record_id: Uuid,
+    proposal_id: Uuid,
+    reason: &str,
+    actor_kind: &str,
+    actor_id: &str,
+) -> Result<Uuid, DedupeError> {
+    let source = load_source_record(tx, project_id, record_id).await?;
+    lock_record_identifiers(tx, record_id).await?;
+    let normalized_title = source
+        .title
+        .as_deref()
+        .map(normalize_bibliography_title)
+        .filter(|title| !title.is_empty());
+    let report_id = insert_report_row(tx, &source, normalized_title).await?;
+    attach_record_identifiers(tx, &source, report_id, true).await?;
+    link_record(
+        tx,
+        ResolutionLink {
+            project_id,
+            record_id,
+            prior_report_id: None,
+            report_id,
+            action: "create_new",
+            reason,
+            actor_kind,
+            actor_id,
+            proposal_id: Some(proposal_id),
+        },
+    )
+    .await?;
+    crate::graph::enqueue_metrics_recompute(tx, project_id).await?;
+    Ok(report_id)
 }
 
 async fn supersede_sibling_proposals(
@@ -975,6 +1271,61 @@ async fn supersede_sibling_proposals(
     .bind(actor_kind)
     .bind(actor_id)
     .bind(reason)
+    .execute(&mut **tx)
+    .await?;
+    Ok(())
+}
+
+/// Undoing a "not a duplicate" decision puts its proposal back in the queue,
+/// together with the suggestions that decision superseded, so a person can
+/// decide again. A proposal whose (record, candidate, kind) is pending again is
+/// left closed, which keeps the pending-uniqueness index intact.
+async fn reopen_rejected_proposal(
+    tx: &mut Transaction<'_, Postgres>,
+    project_id: Uuid,
+    record_id: Uuid,
+    proposal_id: Uuid,
+) -> Result<(), DedupeError> {
+    sqlx::query(
+        "UPDATE dedupe_proposals
+         SET status='pending',revision=revision+1,reviewer_kind=NULL,reviewer_id=NULL,
+             decided_at=NULL,decision_reason=NULL,updated_at=now()
+         WHERE project_id=$1 AND id=$2 AND record_id=$3 AND status='rejected'
+           AND NOT EXISTS (
+             SELECT 1 FROM dedupe_proposals other
+             WHERE other.project_id=dedupe_proposals.project_id
+               AND other.record_id=dedupe_proposals.record_id
+               AND other.status='pending'
+               AND other.proposal_kind=dedupe_proposals.proposal_kind
+               AND coalesce(other.candidate_report_id,'00000000-0000-0000-0000-000000000000'::uuid)
+                   =coalesce(dedupe_proposals.candidate_report_id,'00000000-0000-0000-0000-000000000000'::uuid)
+           )",
+    )
+    .bind(project_id)
+    .bind(proposal_id)
+    .bind(record_id)
+    .execute(&mut **tx)
+    .await?;
+    sqlx::query(
+        "UPDATE dedupe_proposals
+         SET status='pending',revision=revision+1,reviewer_kind=NULL,reviewer_id=NULL,
+             decided_at=NULL,decision_reason=NULL,
+             metadata=metadata-'action'-'superseded_by'-'superseded_reason',updated_at=now()
+         WHERE project_id=$1 AND record_id=$2 AND status='rejected'
+           AND metadata->>'superseded_by'=$3
+           AND NOT EXISTS (
+             SELECT 1 FROM dedupe_proposals other
+             WHERE other.project_id=dedupe_proposals.project_id
+               AND other.record_id=dedupe_proposals.record_id
+               AND other.status='pending'
+               AND other.proposal_kind=dedupe_proposals.proposal_kind
+               AND coalesce(other.candidate_report_id,'00000000-0000-0000-0000-000000000000'::uuid)
+                   =coalesce(dedupe_proposals.candidate_report_id,'00000000-0000-0000-0000-000000000000'::uuid)
+           )",
+    )
+    .bind(project_id)
+    .bind(record_id)
+    .bind(proposal_id.to_string())
     .execute(&mut **tx)
     .await?;
     Ok(())
@@ -1090,6 +1441,7 @@ async fn resolve_record_in_transaction_with_action(
                 },
             )
             .await?;
+            crate::graph::enqueue_metrics_recompute(tx, project_id).await?;
             Some(report_id)
         }
         RecordResolutionAction::Link | RecordResolutionAction::Reassign => {
@@ -1128,7 +1480,7 @@ async fn resolve_record_in_transaction_with_action(
         }
         RecordResolutionAction::Revert => {
             let latest = sqlx::query(
-                "SELECT e.id,e.prior_report_id,e.resolved_report_id
+                "SELECT e.id,e.prior_report_id,e.resolved_report_id,e.proposal_id
                  FROM dedupe_resolution_events e
                  WHERE e.project_id=$1 AND e.record_id=$2
                    AND e.action NOT IN ('revert','reject_proposal')
@@ -1153,6 +1505,7 @@ async fn resolve_record_in_transaction_with_action(
                 return Err(DedupeError::RevertConflict);
             }
             let resolved_report_id: Option<Uuid> = latest.get("prior_report_id");
+            let reverted_proposal_id: Option<Uuid> = latest.get("proposal_id");
             if let Some(report_id) = resolved_report_id {
                 ensure_report_membership(tx, project_id, report_id).await?;
             }
@@ -1162,6 +1515,9 @@ async fn resolve_record_in_transaction_with_action(
                 .bind(resolved_report_id)
                 .execute(&mut **tx)
                 .await?;
+            if let Some(proposal_id) = reverted_proposal_id {
+                reopen_rejected_proposal(tx, project_id, record_id, proposal_id).await?;
+            }
             insert_resolution_event(
                 tx,
                 ResolutionEvent {

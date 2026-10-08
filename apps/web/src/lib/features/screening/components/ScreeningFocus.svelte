@@ -13,30 +13,19 @@
 		ScreeningStateDto
 	} from '$lib/api/generated/models';
 	import { ApiError } from '$lib/api/custom-fetch';
-	import { Badge } from '@deepref/ui/badge';
 	import { Button } from '@deepref/ui/button';
-	import * as Card from '@deepref/ui/card';
-	import * as Empty from '@deepref/ui/empty';
 	import { Input } from '@deepref/ui/input';
-	import { ScrollArea } from '@deepref/ui/scroll-area';
 	import { Skeleton } from '@deepref/ui/skeleton';
+	import * as Resizable from '@deepref/ui/resizable';
 	import { createInfiniteQuery, useQueryClient } from '@tanstack/svelte-query';
-	import {
-		ArrowLeft,
-		ArrowRight,
-		CheckCircle2,
-		FileText,
-		Inbox,
-		LayoutGrid,
-		List,
-		Search,
-		SlidersHorizontal
-	} from '@lucide/svelte';
+	import { ArrowLeft, ArrowRight, CheckCircle2, LayoutGrid, List, Search } from '@lucide/svelte';
+	import { MediaQuery } from 'svelte/reactivity';
 	import { goto } from '$app/navigation';
 	import { resolve } from '$app/paths';
 	import type { ResolvedPathname } from '$app/types';
 	import { page } from '$app/state';
 	import AiProposalReview from '$lib/features/ai-assistance/components/AiProposalReview.svelte';
+	import { createGetAiStatus } from '$lib/api/generated/ai/ai';
 	import DecisionBar from './DecisionBar.svelte';
 	import PageTemplate from '$lib/shell/PageTemplate.svelte';
 	import CriteriaPanel from './CriteriaPanel.svelte';
@@ -59,7 +48,12 @@
 		type QueueLocation,
 		type ScreeningQueueCache
 	} from '../optimistic';
-	import { hasOpenScreeningOverlay, isShortcutSuppressed, shortcutAction } from '../shortcuts';
+	import {
+		hasCommandModifier,
+		hasOpenScreeningOverlay,
+		isShortcutSuppressed,
+		shortcutAction
+	} from '../shortcuts';
 
 	type QueueCache = ScreeningQueueCache;
 
@@ -74,6 +68,12 @@
 		| `/projects/${string}/screening/title-abstract`
 		| `/projects/${string}/screening/title-abstract?${string}`;
 	let { projectId }: { projectId: string } = $props();
+
+	// Optimistic until the workspace says otherwise; the AI suggestion UI is hidden when AI is off.
+	const aiStatusQuery = createGetAiStatus();
+	const aiSuggestionsAvailable = $derived(
+		aiStatusQuery.data?.data.suggestions_available !== false
+	);
 	const queryClient = useQueryClient();
 
 	const urlState = $derived(parseScreeningUrl(page.url.searchParams));
@@ -172,8 +172,17 @@
 	);
 	const queueCount = $derived(firstPage?.total ?? queueItems.length);
 
-	function statusLabel(value: string) {
-		return value.replaceAll('_', ' ');
+	const wide = new MediaQuery('(min-width: 1024px)');
+	const statusOptions = $derived<{ value: ScreeningStatus; label: string; count: number }[]>([
+		{ value: 'unscreened', label: 'To screen', count: progress.unscreened },
+		{ value: 'maybe', label: 'Maybe', count: progress.maybe },
+		{ value: 'include', label: 'Included', count: progress.included },
+		{ value: 'exclude', label: 'Excluded', count: progress.excluded },
+		{ value: 'all', label: 'All', count: progress.total }
+	]);
+
+	function decisionLabel(value: string) {
+		return value === 'include' ? 'Included' : value === 'exclude' ? 'Excluded' : 'Maybe';
 	}
 
 	$effect(() => {
@@ -448,7 +457,12 @@
 
 	function handleKeydown(event: KeyboardEvent) {
 		const overlayOpen = hasOpenScreeningOverlay();
-		if (event.defaultPrevented || isShortcutSuppressed(event.target, overlayOpen)) return;
+		if (
+			event.defaultPrevented ||
+			hasCommandModifier(event) ||
+			isShortcutSuppressed(event.target, overlayOpen)
+		)
+			return;
 		const action = shortcutAction(event.key);
 		if (!action) return;
 		event.preventDefault();
@@ -460,382 +474,382 @@
 
 <svelte:window onkeydown={handleKeydown} />
 
-<PageTemplate testId="screening-page" maxWidth="wide">
-	<section
-		class="flex flex-wrap items-center justify-between gap-x-6 gap-y-2 border-b pb-3 text-sm"
+{#snippet queueControls()}
+	<div class="flex flex-col gap-2">
+		<div class="relative">
+			<Search
+				class="pointer-events-none absolute top-1/2 left-2.5 size-4 -translate-y-1/2 text-muted-foreground"
+				aria-hidden="true"
+			/>
+			<Input
+				id="screening-search"
+				aria-label="Search title or abstract"
+				class="h-8 pl-8"
+				value={urlState.search}
+				placeholder="Search reports"
+				oninput={(event) => scheduleSearch(event.currentTarget.value)}
+			/>
+		</div>
+		<div class="flex flex-wrap gap-1" role="group" aria-label="Queue status">
+			{#each statusOptions as option (option.value)}
+				<button
+					type="button"
+					class={[
+						'inline-flex h-7 shrink-0 items-center gap-1.5 rounded-md px-2 text-xs font-medium whitespace-nowrap transition-colors focus-visible:outline-2 focus-visible:outline-ring',
+						urlState.status === option.value
+							? 'bg-primary text-primary-foreground'
+							: 'text-muted-foreground hover:bg-muted hover:text-foreground'
+					]}
+					aria-pressed={urlState.status === option.value}
+					onclick={() => changeStatus(option.value)}
+					>{option.label}<span class="tabular-nums opacity-70">{option.count}</span
+					></button
+				>
+			{/each}
+		</div>
+	</div>
+{/snippet}
+
+{#snippet queueFooter()}
+	<div class="flex items-center justify-between gap-2 text-xs text-muted-foreground">
+		<label class="flex items-center gap-1.5" for="screening-sort">
+			<span>Sort</span>
+			<select
+				id="screening-sort"
+				class="h-7 rounded-md bg-transparent px-1 text-xs text-foreground outline-none hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring"
+				value={urlState.sort}
+				onchange={(event) =>
+					void updateUrl(
+						{
+							sort: event.currentTarget.value as ScreeningUrlState['sort'],
+							report: null
+						},
+						false
+					)}
+			>
+				<option value="created_asc">Oldest first</option>
+				<option value="created_desc">Newest first</option>
+				<option value="title_asc">Title A–Z</option>
+				<option value="title_desc">Title Z–A</option>
+				<option value="year_asc">Year ascending</option>
+				<option value="year_desc">Year descending</option>
+			</select>
+		</label>
+		<Button
+			variant="ghost"
+			size="xs"
+			aria-pressed={urlState.mode === 'table'}
+			onclick={() => changeMode(urlState.mode === 'table' ? 'focus' : 'table')}
+			>{#if urlState.mode === 'table'}<List data-icon="inline-start" /> Focus{:else}<LayoutGrid
+					data-icon="inline-start"
+				/> Table{/if}</Button
+		>
+	</div>
+{/snippet}
+
+{#snippet queueList()}
+	{#if queueQuery.isPending}
+		<div class="flex flex-col gap-2 p-2">
+			{#each { length: 5 }, index (index)}<Skeleton class="h-12 w-full" />{/each}
+		</div>
+	{:else if queueItems.length === 0}
+		<p class="p-3 text-xs text-muted-foreground">Nothing in this view.</p>
+	{:else}
+		<ol class="flex flex-col p-1.5" aria-label="Queue list">
+			{#each queueItems as item (item.report_id)}
+				{@const selected = item.report_id === current?.report_id}
+				<li>
+					<button
+						type="button"
+						class={[
+							'flex w-full flex-col items-start gap-1 rounded-md px-2.5 py-2 text-left text-sm transition-colors hover:bg-muted focus-visible:outline-2 focus-visible:outline-ring',
+							selected && 'bg-accent shadow-inset-accent'
+						]}
+						aria-current={selected ? 'true' : undefined}
+						onclick={() => void selectReport(item.report_id)}
+					>
+						<span class={['line-clamp-2 leading-snug', selected && 'font-medium']}
+							>{item.title ?? 'Untitled'}</span
+						>
+						<span class="flex items-center gap-2 text-xs text-muted-foreground">
+							<span class="tabular-nums">{item.publication_year ?? '—'}</span>
+							{#if item.title_abstract_status !== 'unscreened'}
+								<span class="flex items-center gap-1">
+									<span
+										class={[
+											'size-1.5 rounded-full',
+											item.title_abstract_status === 'include' &&
+												'bg-success',
+											item.title_abstract_status === 'exclude' &&
+												'bg-destructive',
+											item.title_abstract_status === 'maybe' && 'bg-warning'
+										]}
+										aria-hidden="true"
+									></span>{decisionLabel(item.title_abstract_status)}
+								</span>
+							{/if}
+						</span>
+					</button>
+				</li>
+			{/each}
+			{#if queueQuery.hasNextPage}
+				<li class="p-1">
+					<Button
+						variant="ghost"
+						size="sm"
+						class="w-full"
+						disabled={queueQuery.isFetchingNextPage}
+						onclick={() => void queueQuery.fetchNextPage()}>Load more</Button
+					>
+				</li>
+			{/if}
+		</ol>
+	{/if}
+{/snippet}
+
+{#snippet emptyReader()}
+	<div class="flex flex-col items-start gap-4 py-10" data-testid="screening-empty">
+		{#if (urlState.status === 'unscreened' || urlState.status === 'maybe') && !urlState.search && progress.total > 0 && progress.unscreened === 0}
+			<CheckCircle2 class="size-6 text-success" aria-hidden="true" />
+			<div class="flex flex-col gap-1">
+				<h2 class="editorial-title text-xl">
+					{progress.maybe > 0
+						? `All records screened, ${progress.maybe} still maybe`
+						: `All ${progress.total.toLocaleString()} records screened`}
+				</h2>
+				<p class="text-sm text-muted-foreground">
+					{progress.included} included · {progress.excluded} excluded · {progress.maybe} maybe
+				</p>
+			</div>
+			<div class="flex flex-wrap gap-2">
+				{#if progress.maybe > 0}
+					<Button onclick={() => changeStatus('maybe')}
+						>Resolve {progress.maybe} maybe{progress.maybe === 1 ? '' : 's'}</Button
+					>
+				{/if}
+				<Button
+					variant={progress.maybe > 0 ? 'outline' : 'default'}
+					href={resolve('/projects/[projectId]/screening/full-text', { projectId })}
+					>Continue to full text<ArrowRight data-icon="inline-end" /></Button
+				>
+				{#if canUndo}<Button variant="ghost" onclick={() => void undo()}
+						>Undo last decision</Button
+					>{/if}
+			</div>
+		{:else}
+			<h2 class="editorial-title text-xl">Nothing to show</h2>
+			<p class="text-sm text-muted-foreground">
+				No reports match {urlState.search ? `“${urlState.search}” in ` : ''}this view.
+			</p>
+			<div class="flex flex-wrap gap-2">
+				<Button variant="outline" onclick={() => changeStatus('all')}
+					>Show all reports</Button
+				>
+				{#if canUndo}<Button variant="ghost" onclick={() => void undo()}
+						>Undo last decision</Button
+					>{/if}
+			</div>
+		{/if}
+	</div>
+{/snippet}
+
+{#snippet readerContent()}
+	{#if queueQuery.isPending}
+		<div class="flex flex-col gap-4 py-8" aria-label="Loading reports" aria-live="polite">
+			<Skeleton class="h-4 w-32" /><Skeleton class="h-10 w-4/5" /><Skeleton
+				class="h-40 w-full"
+			/>
+		</div>
+	{:else if !current}
+		{@render emptyReader()}
+	{:else}
+		<article class="flex max-w-3xl flex-col gap-5 py-6" aria-live="polite">
+			<div class="flex flex-col gap-2">
+				<p class="flex flex-wrap gap-x-2 text-xs text-muted-foreground">
+					<span class="tabular-nums">{current.publication_year ?? 'Year unknown'}</span>
+					{#if current.doi}<span aria-hidden="true">·</span><span class="truncate"
+							>{current.doi}</span
+						>{/if}
+				</p>
+				<h2 class="editorial-title text-2xl leading-tight sm:text-3xl">
+					{current.title ?? 'Untitled report'}
+				</h2>
+			</div>
+			<p class="text-base leading-7 whitespace-pre-wrap text-foreground/90">
+				{current.abstract_text ??
+					'No abstract is available. Use Maybe when the available evidence is insufficient.'}
+			</p>
+			{#if aiSuggestionsAvailable}
+				<details class="disclosure">
+					<summary>Get an AI suggestion</summary>
+					<AiProposalReview
+						{projectId}
+						reportId={current.report_id}
+						stage="title_abstract"
+						protocolVersionId={protocol?.id}
+						expectedRevision={current.revision}
+					/>
+				</details>
+			{/if}
+		</article>
+	{/if}
+{/snippet}
+
+{#snippet decisionBar()}
+	{#if current}
+		<DecisionBar
+			disabled={!protocol}
+			pending={decisionMutation.isPending || undoMutation.isPending}
+			current={current.title_abstract_status}
+			{canUndo}
+			onDecision={decide}
+			onUndo={undo}
+		/>
+	{/if}
+{/snippet}
+
+{#snippet position()}
+	<div class="flex items-center gap-1">
+		<span class="mr-1 text-xs text-muted-foreground tabular-nums">
+			{#if current}{Math.max(currentIndex + 1, 1)} of {queueCount}{:else}{queueCount} in view{/if}
+		</span>
+		<Button
+			variant="ghost"
+			size="icon-sm"
+			aria-label="Previous report (ArrowLeft)"
+			disabled={!current}
+			onclick={() => void move('previous')}><ArrowLeft aria-hidden="true" /></Button
+		>
+		<Button
+			variant="ghost"
+			size="icon-sm"
+			aria-label="Next report (ArrowRight)"
+			disabled={!current}
+			onclick={() => void move('next')}><ArrowRight aria-hidden="true" /></Button
+		>
+	</div>
+{/snippet}
+
+{#snippet progressLine()}
+	<div
+		class="flex items-center gap-3 text-xs text-muted-foreground"
 		aria-label="Screening progress"
 	>
-		<div class="flex flex-wrap items-center gap-x-4 gap-y-2">
-			<span class="font-medium">{progress.screened} of {progress.total} reviewed</span>
-			<div
-				class="h-1.5 w-32 overflow-hidden rounded-full bg-muted"
-				role="progressbar"
-				aria-label="Screening progress"
-				aria-valuemin="0"
-				aria-valuemax={Math.max(1, progress.total)}
-				aria-valuenow={progress.screened}
-			>
-				<div class="h-full bg-primary" style:width={`${progressPercent}%`}></div>
-			</div>
-			<span class="text-muted-foreground"
-				>{progress.included} included · {progress.excluded} excluded · {progress.maybe} maybe</span
-			>
-		</div>
-		<div class="flex flex-wrap items-center gap-2">
-			<Badge variant="secondary"
-				>{progress.screened} screened · {progress.unscreened} pending</Badge
-			>
-			{#if protocol}
-				<Badge variant="outline"
-					><CheckCircle2 data-icon="inline-start" /> Protocol v{protocol.version} published</Badge
-				>
-			{:else}
-				<Badge variant="outline">Loading protocol…</Badge>
-			{/if}
-		</div>
-	</section>
-
-	<section
-		class="flex flex-col gap-3 rounded-xl border bg-muted/20 p-3 md:p-4"
-		aria-label="Screening queue filters"
-	>
-		<div class="flex flex-wrap items-center justify-between gap-2">
-			<div class="flex items-center gap-2 text-sm font-semibold">
-				<SlidersHorizontal aria-hidden="true" /> Queue filters
-			</div>
-			<span class="text-xs text-muted-foreground"
-				>{queueCount} {queueCount === 1 ? 'report' : 'reports'} in view</span
-			>
-		</div>
-		<div class="grid gap-3 lg:grid-cols-[minmax(16rem,1fr)_10rem_11rem_auto] lg:items-end">
-			<label
-				class="flex min-w-0 flex-col gap-1.5 text-xs font-semibold"
-				for="screening-search"
-			>
-				<span>Search title or abstract</span>
-				<div class="relative">
-					<Search
-						class="pointer-events-none absolute top-1/2 left-3 -translate-y-1/2 text-muted-foreground"
-						aria-hidden="true"
-					/>
-					<Input
-						id="screening-search"
-						class="pl-9"
-						value={urlState.search}
-						placeholder="Search reports…"
-						oninput={(event) => scheduleSearch(event.currentTarget.value)}
-					/>
-				</div>
-			</label>
-			<label class="flex flex-col gap-1.5 text-xs font-semibold" for="screening-status">
-				<span>Status</span>
-				<select
-					id="screening-status"
-					class="h-9 w-full rounded-md border bg-background px-3 text-sm font-normal outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50"
-					value={urlState.status}
-					onchange={(event) => changeStatus(event.currentTarget.value as ScreeningStatus)}
-				>
-					<option value="unscreened">Unscreened</option>
-					<option value="include">Included</option>
-					<option value="exclude">Excluded</option>
-					<option value="maybe">Maybe</option>
-					<option value="all">All</option>
-				</select>
-			</label>
-			<label class="flex flex-col gap-1.5 text-xs font-semibold" for="screening-sort">
-				<span>Sort by</span>
-				<select
-					id="screening-sort"
-					class="h-9 w-full rounded-md border bg-background px-3 text-sm font-normal outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50"
-					value={urlState.sort}
-					onchange={(event) =>
-						void updateUrl(
-							{
-								sort: event.currentTarget.value as ScreeningUrlState['sort'],
-								report: null
-							},
-							false
-						)}
-				>
-					<option value="created_asc">Oldest first</option>
-					<option value="created_desc">Newest first</option>
-					<option value="title_asc">Title A–Z</option>
-					<option value="title_desc">Title Z–A</option>
-					<option value="year_asc">Year ascending</option>
-					<option value="year_desc">Year descending</option>
-				</select>
-			</label>
-			<div class="flex min-w-0 flex-col gap-1.5 text-xs font-semibold">
-				<span>View</span>
-				<div
-					class="flex rounded-md border bg-background p-0.5"
-					aria-label="Screening view mode"
-				>
-					<Button
-						class="min-h-8 flex-1"
-						size="sm"
-						variant={urlState.mode === 'focus' ? 'default' : 'ghost'}
-						aria-pressed={urlState.mode === 'focus'}
-						onclick={() => changeMode('focus')}
-						><List data-icon="inline-start" /> Focus</Button
-					>
-					<Button
-						class="min-h-8 flex-1"
-						size="sm"
-						variant={urlState.mode === 'table' ? 'default' : 'ghost'}
-						aria-pressed={urlState.mode === 'table'}
-						onclick={() => changeMode('table')}
-						><LayoutGrid data-icon="inline-start" /> Table</Button
-					>
-				</div>
-			</div>
-		</div>
-	</section>
-
-	<ScreeningFeedback errorTitle="Screening could not continue" {errorMessage} {statusMessage} />
-
-	{#if urlState.mode === 'table'}
-		<ScreeningTable
-			items={queueItems}
-			selectedReport={selectedReportId}
-			loading={queueQuery.isPending}
-			hasNextPage={queueQuery.hasNextPage ?? false}
-			loadingNextPage={queueQuery.isFetchingNextPage}
-			onSelect={selectReport}
-			onLoadMore={async () => {
-				await queueQuery.fetchNextPage();
-			}}
-		/>
-	{:else}
-		<!-- Mail Pattern Layout: Left Queue Column + Reading Canvas + Aside -->
 		<div
-			class="grid gap-6 lg:grid-cols-[18rem_minmax(0,1fr)] xl:grid-cols-[18rem_minmax(0,1fr)_18rem]"
+			class="h-1 w-24 overflow-hidden rounded-full bg-muted"
+			role="progressbar"
+			aria-label="Screening progress"
+			aria-valuemin="0"
+			aria-valuemax={Math.max(1, progress.total)}
+			aria-valuenow={progress.screened}
 		>
-			<!-- Left Queue List (Mail inbox list pattern) -->
-			<aside class="hidden lg:flex lg:flex-col" aria-label="Queue list">
-				<div
-					class="flex h-[calc(100vh-17rem)] flex-col overflow-hidden rounded-lg border border-border/70 bg-card"
-				>
-					<div class="flex items-center justify-between border-b bg-muted/20 px-3.5 py-3">
-						<div
-							class="flex items-center gap-1.5 text-xs font-semibold text-foreground"
-						>
-							<Inbox class="size-3.5 text-muted-foreground" />
-							<span>Queue ({queueItems.length})</span>
-						</div>
-						<Badge variant="outline" size="xs" class="capitalize">
-							{urlState.status}
-						</Badge>
-					</div>
-					<ScrollArea class="flex-1 p-2">
-						{#if queueQuery.isPending}
-							<div class="flex flex-col gap-2 p-1">
-								<Skeleton class="h-14 w-full rounded-md" />
-								<Skeleton class="h-14 w-full rounded-md" />
-								<Skeleton class="h-14 w-full rounded-md" />
-							</div>
-						{:else if queueItems.length === 0}
-							<div
-								class="flex h-32 flex-col items-center justify-center p-3 text-center text-xs text-muted-foreground"
-							>
-								<span>No reports in queue</span>
-							</div>
-						{:else}
-							<div class="flex flex-col gap-1.5">
-								{#each queueItems as item (item.report_id)}
-									<button
-										type="button"
-										class="flex flex-col items-start gap-1 rounded-lg border p-2.5 text-left text-xs transition-colors hover:bg-muted/60 {item.report_id ===
-										current?.report_id
-											? 'border-primary/50 bg-accent font-medium text-accent-foreground shadow-xs'
-											: 'border-transparent bg-transparent text-muted-foreground'}"
-										onclick={() => void selectReport(item.report_id)}
-									>
-										<div class="flex w-full items-center justify-between gap-1">
-											<span
-												class="truncate font-medium text-foreground {item.report_id ===
-												current?.report_id
-													? 'font-semibold text-primary'
-													: ''}"
-											>
-												{item.title ?? 'Untitled'}
-											</span>
-											<span class="shrink-0 text-3xs text-muted-foreground">
-												{item.publication_year ?? ''}
-											</span>
-										</div>
-										<div class="flex items-center gap-1.5">
-											<Badge
-												variant={item.title_abstract_status === 'exclude'
-													? 'destructive'
-													: item.title_abstract_status === 'include'
-														? 'default'
-														: 'secondary'}
-												size="xs"
-											>
-												{item.title_abstract_status}
-											</Badge>
-										</div>
-									</button>
-								{/each}
-							</div>
-						{/if}
-					</ScrollArea>
-				</div>
-			</aside>
-
-			<!-- Center Reading Canvas (Mail reading pane pattern) -->
-			<div class="flex min-w-0 flex-col gap-6" data-testid="screening-focus">
-				<div
-					class="flex flex-wrap items-start justify-between gap-3 border-b border-border/60 pb-4"
-				>
-					<div class="flex items-center gap-2">
-						<span
-							class="flex size-8 items-center justify-center rounded-lg bg-primary/10 text-primary"
-							><FileText aria-hidden="true" /></span
-						>
-						<div>
-							<h2 class="text-base font-semibold">Focus mode</h2>
-							<p class="text-xs text-muted-foreground">
-								{#if current}Report {Math.max(currentIndex + 1, 1)} of {queueCount}{:else}Your
-									title/abstract queue{/if}
-							</p>
-						</div>
-					</div>
-					<div class="flex items-center gap-1">
-						<Button
-							variant="outline"
-							size="icon"
-							aria-label="Previous report (ArrowLeft)"
-							onclick={() => void move('previous')}
-							><ArrowLeft aria-hidden="true" /></Button
-						>
-						<Button
-							variant="outline"
-							size="icon"
-							aria-label="Next report (ArrowRight)"
-							onclick={() => void move('next')}
-							><ArrowRight aria-hidden="true" /></Button
-						>
-					</div>
-				</div>
-				<div class="flex flex-col gap-6">
-					{#if queueQuery.isPending}
-						<div
-							class="flex flex-col gap-4"
-							aria-label="Loading reports"
-							aria-live="polite"
-						>
-							<Skeleton class="h-5 w-32" /><Skeleton class="h-12 w-4/5" /><Skeleton
-								class="h-40 w-full"
-							/>
-						</div>
-					{:else if !current}
-						<Empty.Root class="min-h-[24rem] border-dashed">
-							<Empty.Media variant="icon"><FileText /></Empty.Media>
-							<Empty.Header>
-								<Empty.Title>Queue complete</Empty.Title>
-								<Empty.Description
-									>No reports match the current queue filters. Try a different
-									status or search term.</Empty.Description
-								>
-							</Empty.Header>
-						</Empty.Root>
-					{:else}
-						<article class="flex flex-col gap-5" aria-live="polite">
-							<div class="flex flex-col gap-3">
-								<div class="flex flex-wrap items-center justify-between gap-2">
-									<div class="flex flex-wrap items-center gap-2">
-										<Badge variant="outline"
-											>Report {Math.max(currentIndex + 1, 1)}</Badge
-										>
-										<Badge variant="secondary"
-											>{current.publication_year ?? 'Year unknown'}</Badge
-										>
-										{#if current.doi}<span
-												class="max-w-full truncate font-mono text-xs text-muted-foreground"
-												>{current.doi}</span
-											>{/if}
-									</div>
-									<Badge
-										variant={current.title_abstract_status === 'exclude'
-											? 'destructive'
-											: current.title_abstract_status === 'include'
-												? 'default'
-												: 'secondary'}
-										>{statusLabel(current.title_abstract_status)}</Badge
-									>
-								</div>
-								<h2
-									class="max-w-4xl text-2xl leading-tight font-semibold tracking-tight sm:text-3xl"
-								>
-									{current.title ?? 'Untitled report'}
-								</h2>
-							</div>
-							<div class="rounded-xl border bg-muted/20 p-4 sm:p-6">
-								<div
-									class="mb-3 flex items-center gap-2 text-2xs font-semibold tracking-caps text-muted-foreground uppercase"
-								>
-									<span class="h-px w-5 bg-primary"></span> Abstract
-								</div>
-								<p
-									class="text-sm leading-7 whitespace-pre-wrap text-foreground/90 sm:text-base"
-								>
-									{current.abstract_text ??
-										'No abstract is available. Use Maybe when the available evidence is insufficient.'}
-								</p>
-							</div>
-							<DecisionBar
-								disabled={!protocol}
-								pending={decisionMutation.isPending || undoMutation.isPending}
-								{canUndo}
-								onDecision={decide}
-								onUndo={undo}
-							/>
-							<details class="disclosure">
-								<summary>Get an AI suggestion</summary>
-								<AiProposalReview
-									{projectId}
-									reportId={current.report_id}
-									stage="title_abstract"
-									protocolVersionId={protocol?.id}
-									expectedRevision={current.revision}
-								/>
-							</details>
-						</article>
-					{/if}
-				</div>
-			</div>
-
-			<!-- Right Sidebar: Criteria, History, Shortcuts -->
-			<aside class="flex min-w-0 flex-col gap-6 xl:sticky xl:top-4 xl:self-start">
-				<CriteriaPanel
-					criteria={protocol?.criteria ?? []}
-					protocolVersion={protocol?.version}
-				/>
-				{#if current}<ScreeningHistory items={historyItems} />{/if}
-				<Card.Root size="sm" class="border-border/70">
-					<Card.Header class="gap-2"
-						><Card.Title class="text-sm">Keyboard shortcuts</Card.Title
-						><Card.Description>Keep your hands on the queue.</Card.Description
-						></Card.Header
-					>
-					<Card.Content class="flex flex-col gap-2 text-xs text-muted-foreground">
-						<div class="flex items-center justify-between gap-2">
-							<span><kbd>I</kbd> Include · <kbd>E</kbd> Exclude</span><span
-								><kbd>M</kbd> Maybe</span
-							>
-						</div>
-						<div><kbd>←</kbd>/<kbd>→</kbd> Previous / next · <kbd>U</kbd> Undo</div>
-						<p class="border-t pt-2">
-							Shortcuts pause while editing or using controls.
-						</p>
-					</Card.Content>
-				</Card.Root>
-			</aside>
+			<div class="h-full bg-primary" style:width={`${progressPercent}%`}></div>
 		</div>
-	{/if}
-</PageTemplate>
+		<span class="tabular-nums">{progress.screened} of {progress.total} screened</span>
+	</div>
+{/snippet}
+
+{#snippet context()}
+	<CriteriaPanel criteria={protocol?.criteria ?? []} protocolVersion={protocol?.version} />
+	{#if current}<ScreeningHistory items={historyItems} />{/if}
+	<p class="text-xs leading-5 text-muted-foreground">
+		<kbd>I</kbd> include · <kbd>E</kbd> exclude · <kbd>M</kbd> maybe · <kbd>U</kbd> undo ·
+		<kbd>←</kbd>
+		<kbd>→</kbd> move
+	</p>
+{/snippet}
+
+{#if wide.current}
+	<div class="flex min-h-0 flex-1 flex-col" data-testid="screening-page">
+		<ScreeningFeedback
+			errorTitle="Screening could not continue"
+			{errorMessage}
+			{statusMessage}
+		/>
+		<Resizable.PaneGroup
+			direction="horizontal"
+			class="min-h-0 flex-1"
+			autoSaveId="deepref:screening-layout"
+		>
+			<Resizable.Pane order={1} defaultSize={24} minSize={16} maxSize={40}>
+				<aside class="flex h-full min-h-0 flex-col" aria-label="Screening queue">
+					<div class="border-b p-3">{@render queueControls()}</div>
+					<div class="min-h-0 flex-1 overflow-y-auto">{@render queueList()}</div>
+					<div class="border-t px-3 py-1.5">{@render queueFooter()}</div>
+				</aside>
+			</Resizable.Pane>
+			<Resizable.Handle />
+			<Resizable.Pane order={2} defaultSize={52} minSize={34}>
+				{#if urlState.mode === 'table'}
+					<div class="h-full overflow-y-auto p-4">
+						<ScreeningTable
+							items={queueItems}
+							selectedReport={selectedReportId}
+							loading={queueQuery.isPending}
+							hasNextPage={queueQuery.hasNextPage ?? false}
+							loadingNextPage={queueQuery.isFetchingNextPage}
+							onSelect={selectReport}
+							onLoadMore={async () => {
+								await queueQuery.fetchNextPage();
+							}}
+						/>
+					</div>
+				{:else}
+					<section
+						class="flex h-full min-h-0 flex-col"
+						aria-label="Report"
+						data-testid="screening-focus"
+					>
+						<div class="flex items-center justify-between gap-3 border-b px-6 py-1.5">
+							{@render progressLine()}
+							{@render position()}
+						</div>
+						<div class="min-h-0 flex-1 overflow-y-auto px-6">
+							{@render readerContent()}
+						</div>
+						{#if current}<div class="border-t px-6 py-3">
+								{@render decisionBar()}
+							</div>{/if}
+					</section>
+				{/if}
+			</Resizable.Pane>
+			<Resizable.Handle />
+			<Resizable.Pane order={3} defaultSize={24} minSize={16} maxSize={36}>
+				<aside
+					class="flex h-full min-h-0 flex-col gap-8 overflow-y-auto px-5 py-5"
+					aria-label="Criteria and history"
+				>
+					{@render context()}
+				</aside>
+			</Resizable.Pane>
+		</Resizable.PaneGroup>
+	</div>
+{:else}
+	<PageTemplate testId="screening-page" containerClass="gap-4">
+		{@render queueControls()}
+		<ScreeningFeedback
+			errorTitle="Screening could not continue"
+			{errorMessage}
+			{statusMessage}
+		/>
+		<section class="flex flex-col" aria-label="Report" data-testid="screening-focus">
+			<div class="flex items-center justify-between gap-3 border-b pb-2">
+				{@render progressLine()}
+				{@render position()}
+			</div>
+			{@render readerContent()}
+		</section>
+		{#if current}
+			<div class="sticky bottom-0 -mx-4 border-t bg-background px-4 py-3">
+				{@render decisionBar()}
+			</div>
+		{/if}
+		<details class="disclosure">
+			<summary>Eligibility criteria</summary>
+			<div class="flex flex-col gap-6 pt-2">{@render context()}</div>
+		</details>
+	</PageTemplate>
+{/if}
 
 <style>
 	kbd {

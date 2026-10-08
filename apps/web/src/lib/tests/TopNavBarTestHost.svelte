@@ -10,16 +10,6 @@
 		children?: Snippet;
 		title?: string;
 		titleSnippet?: Snippet;
-		scopeLabel?: string;
-		projects?: Array<{ id: string; name: string }>;
-		selectedProjectId?: string | null;
-		onSelectProject?: (projectId: string | null) => void;
-		onCreateProject?: () => void;
-		agentLabel?: string;
-		agentHref?: string;
-		onAgentClick?: () => void;
-		agentSnippet?: Snippet;
-		leftSnippet?: Snippet;
 		rightSnippet?: Snippet;
 		class?: string;
 	} = $props();

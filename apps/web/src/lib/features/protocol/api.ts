@@ -1,20 +1,25 @@
 import {
 	createGetProjectReviewProtocol,
+	createListProjectReviewProtocolVersions,
 	createPublishProjectReviewProtocol,
 	createSaveProjectReviewProtocol,
 	getGetProjectReviewProtocolQueryKey,
+	getListProjectReviewProtocolVersionsQueryKey,
 	getProjectReviewProtocol,
 	publishProjectReviewProtocol,
 	saveProjectReviewProtocol
 } from '$lib/api/generated/review/review';
 import { ApiError } from '$lib/api/custom-fetch';
 
-export type ProtocolDto = Awaited<ReturnType<typeof getProjectReviewProtocol>>['data'];
+/** A protocol document. The editor endpoint answers `null` while a project has no protocol yet. */
+export type ProtocolDto = NonNullable<Awaited<ReturnType<typeof getProjectReviewProtocol>>['data']>;
 export type SaveProtocolRequest = Parameters<typeof saveProjectReviewProtocol>[1];
 export type PublishProtocolRequest = Parameters<typeof publishProjectReviewProtocol>[1];
 
 export {
 	createGetProjectReviewProtocol,
+	createListProjectReviewProtocolVersions,
+	getListProjectReviewProtocolVersionsQueryKey,
 	createPublishProjectReviewProtocol,
 	createSaveProjectReviewProtocol,
 	getGetProjectReviewProtocolQueryKey

@@ -35,13 +35,63 @@ pub async fn serve_with_shutdown(
     let pool = database_pool(&config).await?;
 
     let document_store = deepref_documents::DocumentStore::from_env()?;
-    let state = AppState::new(pool).with_document_store(document_store);
+    let mut state = AppState::new(pool.clone()).with_document_store(document_store);
+    let ai_config = deepref_config::AiProviderConfig::from_env()?;
+    for notice in ai_config.deprecations() {
+        tracing::warn!("{notice}");
+    }
+    let provider = ai_config.provider;
+    match ai_config.api_key() {
+        Some(api_key) => {
+            let gateway = deepref_ai::build_metered_provider(
+                provider.id(),
+                &ai_config.base_url,
+                api_key,
+                std::sync::Arc::new(deepref_postgres::PostgresUsageLedger::new(&pool)),
+                price_book(&ai_config),
+            )?;
+            let routes = deepref_postgres::ensure_default_model_routes(
+                &pool,
+                provider.id(),
+                &ai_config.default_model,
+            )
+            .await?;
+            tracing::info!(
+                provider = provider.id(),
+                model = %ai_config.default_model,
+                routes_created = routes.created,
+                routes_repointed = routes.repointed,
+                "AI provider configured"
+            );
+            state =
+                state.with_ai_provider(gateway, provider.label(), ai_config.default_model.clone());
+        }
+        None => tracing::warn!(
+            provider = provider.id(),
+            "{} is not set; AI features are disabled",
+            provider.api_key_variable()
+        ),
+    }
     let listener = tokio::net::TcpListener::bind(config.bind_addr).await?;
     tracing::info!(address = %config.bind_addr, "API listening");
     axum::serve(listener, routes::router(state, &config))
         .with_graceful_shutdown(shutdown)
         .await?;
     Ok(())
+}
+
+/// The built-in price table plus the `DEEPREF_AI_MODEL_PRICES` overrides.
+fn price_book(config: &deepref_config::AiProviderConfig) -> deepref_ai::PriceBook {
+    deepref_ai::PriceBook::new(config.price_overrides.iter().map(|price| {
+        (
+            price.provider.clone(),
+            price.model.clone(),
+            deepref_ai::ModelPrice {
+                input_micros_per_million_tokens: price.input_micros_per_million_tokens,
+                output_micros_per_million_tokens: price.output_micros_per_million_tokens,
+            },
+        )
+    }))
 }
 
 async fn database_pool(config: &ApiConfig) -> anyhow::Result<PgPool> {

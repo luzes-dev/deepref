@@ -14,8 +14,9 @@ use axum::{
 };
 use chrono::{Duration, Utc};
 use deepref_ai::{
-    AiError, AiFuture, AiGateway, CompletionRequest, GatewayCompletion, ModelParameters,
-    ModelProfile, ResolvedModel, sha256_bytes,
+    AiError, AiFuture, AiGateway, ChatCompletion, ChatGateway, ChatRequest, ChatToolCall,
+    CompletionRequest, GatewayCompletion, ModelParameters, ModelProfile, ResolvedModel,
+    sha256_bytes,
 };
 use deepref_application::jobs::ClaimedJob;
 use deepref_config::RuntimeConfig;
@@ -331,13 +332,13 @@ async fn catalog_and_all_reads_are_project_scoped_and_bounded() {
     assert_eq!(list_response.status(), StatusCode::OK);
     let catalog = response_json(list_response).await;
     let entries = catalog.as_array().expect("catalog should be an array");
-    assert_eq!(entries.len(), 14);
+    assert_eq!(entries.len(), 15);
     assert_eq!(
         entries
             .iter()
             .filter(|entry| entry["kind"] == "read")
             .count(),
-        8
+        9
     );
     assert_eq!(
         entries
@@ -382,6 +383,11 @@ async fn catalog_and_all_reads_are_project_scoped_and_bounded() {
             "get_study",
             json!({"project_id": fixture.project_id, "study_id": fixture.study_id}),
             "id",
+        ),
+        (
+            "list_studies",
+            json!({"project_id": fixture.project_id}),
+            "data",
         ),
         (
             "get_appraisal",
@@ -1109,5 +1115,604 @@ async fn assistant_envelope_and_unsupported_actions_fail_closed() {
         .await
         .expect("assistant request should be handled");
     assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    cleanup(&pool, fixture).await;
+}
+
+struct ScriptedChat {
+    replies: Mutex<Vec<ChatCompletion>>,
+}
+
+impl ChatGateway for ScriptedChat {
+    fn chat<'a>(&'a self, _request: ChatRequest) -> AiFuture<'a, ChatCompletion> {
+        Box::pin(async move {
+            let mut replies = self.replies.lock().expect("script lock");
+            if replies.is_empty() {
+                return Err(AiError::Gateway("script exhausted".to_owned()));
+            }
+            Ok(replies.remove(0))
+        })
+    }
+}
+
+fn chat_reply(content: &str, calls: Vec<ChatToolCall>) -> ChatCompletion {
+    ChatCompletion {
+        content: content.to_owned(),
+        tool_calls: calls,
+        input_tokens: 10,
+        output_tokens: 5,
+        cost_micros: Some(1),
+    }
+}
+
+async fn post_json(state: &AppState, uri: &str, body: Value) -> (StatusCode, String) {
+    let response = router(state.clone(), &api_config())
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(uri)
+                .header("content-type", "application/json")
+                .body(Body::from(body.to_string()))
+                .expect("request"),
+        )
+        .await
+        .expect("handled");
+    let status = response.status();
+    let bytes = to_bytes(response.into_body(), usize::MAX)
+        .await
+        .expect("body");
+    (status, String::from_utf8_lossy(&bytes).into_owned())
+}
+
+#[tokio::test]
+async fn assistant_writes_only_after_plan_confirmation_and_respects_budget() {
+    let _guard = test_lock().lock().await;
+    let Some(pool) = database().await else { return };
+    let fixture = seed(&pool).await;
+    deepref_postgres::insert_model_route(
+        &pool,
+        &model_route(ModelProfile::Reasoning),
+        Utc::now() - Duration::milliseconds(1),
+    )
+    .await
+    .expect("route inserts");
+    let project = fixture.project_id;
+    let chat = ScriptedChat {
+        replies: Mutex::new(vec![
+            chat_reply(
+                "",
+                vec![
+                    ChatToolCall {
+                        id: "c1".to_owned(),
+                        name: "screen_reports".to_owned(),
+                        arguments: json!({
+                            "report_ids": [fixture.report_id],
+                            "decision": "exclude",
+                            "summary": "Exclude 1 off-topic record",
+                            "rationale": "Not about the review question"
+                        }),
+                    },
+                    ChatToolCall {
+                        id: "c2".to_owned(),
+                        name: "request_protocol_publish".to_owned(),
+                        arguments: json!({"summary": "Publish protocol", "rationale": "asked"}),
+                    },
+                ],
+            ),
+            chat_reply("I prepared a plan; nothing has changed yet.", vec![]),
+        ]),
+    };
+    let state = AppState::new(pool.clone()).with_chat_gateway(chat);
+
+    let (status, body) = post_json(
+        &state,
+        &format!("/projects/{project}/assistant/conversations"),
+        json!({"title": "plan test"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{body}");
+    let conversation: Value = serde_json::from_str(&body).expect("conversation json");
+    let (status, stream) = post_json(
+        &state,
+        &format!("/projects/{project}/assistant/chat"),
+        json!({"conversation_id": conversation["id"], "message": "exclude the off-topic one"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{stream}");
+    assert!(stream.contains("event: plan"), "{stream}");
+
+    let plan_id: Uuid = sqlx::query_scalar(
+        "SELECT id FROM assistant_plans WHERE project_id=$1 AND status='pending'",
+    )
+    .bind(project)
+    .fetch_one(&pool)
+    .await
+    .expect("pending plan persisted");
+    let screening = |pool: PgPool| async move {
+        sqlx::query_scalar::<_, String>(
+            "SELECT title_abstract_status FROM screening_state WHERE project_id=$1 AND report_id=$2",
+        )
+        .bind(project)
+        .bind(fixture.report_id)
+        .fetch_one(&pool)
+        .await
+        .expect("screening state")
+    };
+    assert_eq!(
+        screening(pool.clone()).await,
+        "maybe",
+        "nothing runs before confirmation"
+    );
+
+    let confirm_uri = format!("/projects/{project}/assistant/plans/{plan_id}/confirm");
+    let (status, body) = post_json(&state, &confirm_uri, json!({})).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let plan: Value = serde_json::from_str(&body).expect("plan json");
+    assert_eq!(plan["status"], "executed", "{body}");
+    assert_eq!(plan["results"][0]["applied"], 1, "{body}");
+    assert_eq!(plan["results"][1]["status"], "manual", "{body}");
+    assert_eq!(screening(pool.clone()).await, "exclude");
+    let (status, _) = post_json(&state, &confirm_uri, json!({})).await;
+    assert_eq!(status, StatusCode::CONFLICT, "confirm is exactly-once");
+
+    // Once the month's spend reaches the budget, free-form chat is refused.
+    deepref_postgres::set_ai_budget(&pool, project, 1)
+        .await
+        .expect("budget");
+    sqlx::query(
+        "INSERT INTO ai_usage_ledger (project_id,profile,provider,model,purpose,input_tokens,output_tokens,cost_micros)
+         VALUES ($1,'reasoning','opencode-go','glm-5.3-flash','chat',1,1,10)",
+    )
+    .bind(project)
+    .execute(&pool)
+    .await
+    .expect("ledger insert");
+    let (status, body) = post_json(
+        &state,
+        &format!("/projects/{project}/assistant/chat"),
+        json!({"conversation_id": conversation["id"], "message": "anything"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT, "{body}");
+    assert!(body.contains("ai_budget_exceeded"), "{body}");
+    cleanup(&pool, fixture).await;
+}
+
+async fn get_json(state: &AppState, uri: &str) -> (StatusCode, String) {
+    let response = router(state.clone(), &api_config())
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri(uri)
+                .body(Body::empty())
+                .expect("request"),
+        )
+        .await
+        .expect("handled");
+    let status = response.status();
+    let bytes = to_bytes(response.into_body(), usize::MAX)
+        .await
+        .expect("body");
+    (status, String::from_utf8_lossy(&bytes).into_owned())
+}
+
+async fn create_conversation(state: &AppState, project: Uuid, title: &str) -> Uuid {
+    let (status, body) = post_json(
+        state,
+        &format!("/projects/{project}/assistant/conversations"),
+        json!({"title": title}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{body}");
+    let conversation: Value = serde_json::from_str(&body).expect("conversation json");
+    serde_json::from_value(conversation["id"].clone()).expect("conversation id")
+}
+
+/// Two more reports for the fixture project: one whose title carries an HTML
+/// entity and one unrelated record.
+async fn add_search_reports(pool: &PgPool, fixture: Fixture) -> (Uuid, Uuid) {
+    let fitbit = Uuid::new_v4();
+    let unrelated = Uuid::new_v4();
+    sqlx::query(
+        "INSERT INTO reports (id,title,abstract_text,publication_year,journal)
+         VALUES ($1,'Fitbit steps and physical activity in women &amp; children',
+                 'A randomised trial of steps per day with a Fitbit tracker',2024,'Trials'),
+                ($2,'Unrelated pharmacology review','Dose response in rodents.',2019,'Pharmacology')",
+    )
+    .bind(fitbit)
+    .bind(unrelated)
+    .execute(pool)
+    .await
+    .expect("search report inserts");
+    sqlx::query("INSERT INTO project_reports (project_id,report_id) VALUES ($1,$2),($1,$3)")
+        .bind(fixture.project_id)
+        .bind(fitbit)
+        .bind(unrelated)
+        .execute(pool)
+        .await
+        .expect("search report memberships");
+    (fitbit, unrelated)
+}
+
+#[tokio::test]
+async fn assistant_reads_match_several_words_report_documents_and_studies() {
+    let _guard = test_lock().lock().await;
+    let Some(pool) = database().await else { return };
+    let fixture = seed(&pool).await;
+    let (fitbit, unrelated) = add_search_reports(&pool, fixture).await;
+    sqlx::query(
+        "INSERT INTO document_sections
+         (id,document_id,parser_version,ordinal,number,title,depth,path,source)
+         VALUES ($1,$2,'assistant.parser.v1',1,'1','Results',1,ARRAY['Results'],'native')",
+    )
+    .bind(Uuid::new_v4())
+    .bind(fixture.document_id)
+    .execute(&pool)
+    .await
+    .expect("section inserts");
+    sqlx::query(
+        "INSERT INTO screening_state
+         (project_id,report_id,title_abstract_status,full_text_status,final_status,revision)
+         VALUES ($1,$2,'include','unscreened','pending_full_text',1)",
+    )
+    .bind(fixture.project_id)
+    .bind(fitbit)
+    .execute(&pool)
+    .await
+    .expect("screening state inserts");
+
+    // Several words: any of them can match, and the best match comes first.
+    let (status, body) = execute(
+        &pool,
+        fixture.project_id,
+        "search_project_reports",
+        json!({"project_id": fixture.project_id, "query": "fitbit steps per day physical activity women", "limit": 10}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let hits = body["data"].as_array().expect("search returns an array");
+    assert_eq!(hits[0]["id"], json!(fitbit), "{body}");
+    assert_eq!(
+        hits[0]["title"], "Fitbit steps and physical activity in women & children",
+        "titles reach the model decoded: {body}"
+    );
+    assert!(
+        hits.iter().all(|hit| hit["id"] != json!(unrelated)),
+        "{body}"
+    );
+
+    // Stop words alone match nothing rather than everything.
+    let (status, body) = execute(
+        &pool,
+        fixture.project_id,
+        "search_project_reports",
+        json!({"project_id": fixture.project_id, "query": "the of and", "limit": 10}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["data"], json!([]), "{body}");
+
+    // get_report lists documents and whether full text is available.
+    let (status, body) = execute(
+        &pool,
+        fixture.project_id,
+        "get_report",
+        json!({"project_id": fixture.project_id, "report_id": fitbit}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(
+        body["data"]["title"], "Fitbit steps and physical activity in women & children",
+        "{body}"
+    );
+    assert_eq!(body["data"]["documents"], json!([]), "{body}");
+    assert_eq!(body["data"]["full_text_available"], false, "{body}");
+    let (status, body) = execute(
+        &pool,
+        fixture.project_id,
+        "get_report",
+        json!({"project_id": fixture.project_id, "report_id": fixture.report_id}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["data"]["full_text_available"], true, "{body}");
+    let document = &body["data"]["documents"][0];
+    assert_eq!(document["id"], json!(fixture.document_id), "{body}");
+    assert_eq!(document["status"], "available", "{body}");
+    assert_eq!(document["block_count"], 1, "{body}");
+    assert_eq!(document["sections"][0]["title"], "Results", "{body}");
+
+    // A question in other words still finds its passage: "randomised" matches
+    // "randomized", and one matching word is enough to return a block.
+    let methods_block = Uuid::new_v4();
+    sqlx::query(
+        "INSERT INTO document_blocks
+         (id,document_id,parser_version,page_number,kind,section_path,ordinal,text,content_hash,active)
+         VALUES ($1,$2,'assistant.parser.v1',1,'text',ARRAY['Methods'],1,$3,$4,true)",
+    )
+    .bind(methods_block)
+    .bind(fixture.document_id)
+    .bind("Fifty-one women were randomized to the web-based intervention.")
+    .bind("c".repeat(64))
+    .execute(&pool)
+    .await
+    .expect("methods block inserts");
+    let (status, body) = execute(
+        &pool,
+        fixture.project_id,
+        "search_document",
+        json!({"project_id": fixture.project_id, "document_id": fixture.document_id, "query": "how many participants were randomised?", "limit": 5}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["data"][0]["id"], json!(methods_block), "{body}");
+
+    // Studies can be listed, so the model never has to guess a study id.
+    let (status, body) = execute(
+        &pool,
+        fixture.project_id,
+        "list_studies",
+        json!({"project_id": fixture.project_id, "limit": 5}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    assert_eq!(body["data"][0]["title"], "Assistant study", "{body}");
+    assert_eq!(body["data"][0]["report_count"], 1, "{body}");
+    let (status, body) = execute(
+        &pool,
+        fixture.project_id,
+        "list_studies",
+        json!({"project_id": fixture.project_id, "limit": 51}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+
+    // The overview's title/abstract buckets add up to the report total, and the
+    // full-text count is part of `include`, not an extra bucket.
+    let overview = deepref_postgres::get_agent_project_overview(&pool, fixture.project_id)
+        .await
+        .expect("overview");
+    let title_abstract = &overview["title_abstract"];
+    let bucketed: i64 = ["unscreened", "include", "exclude", "maybe"]
+        .iter()
+        .map(|key| title_abstract[*key].as_i64().expect("bucket count"))
+        .sum();
+    assert_eq!(
+        bucketed,
+        overview["reports"].as_i64().expect("report count"),
+        "{overview}"
+    );
+    assert_eq!(title_abstract["unscreened"], 1, "{overview}");
+    assert_eq!(title_abstract["include"], 1, "{overview}");
+    assert_eq!(title_abstract["maybe"], 1, "{overview}");
+    assert_eq!(overview["full_text"]["awaiting_decision"], 1, "{overview}");
+    assert_eq!(
+        overview["full_text"]["awaiting_decision_with_full_text"], 0,
+        "{overview}"
+    );
+    assert_eq!(
+        overview["full_text"]["awaiting_decision_without_full_text"], 1,
+        "{overview}"
+    );
+    cleanup(&pool, fixture).await;
+}
+
+#[tokio::test]
+async fn assistant_claim_without_a_plan_is_corrected_before_the_user_relies_on_it() {
+    let _guard = test_lock().lock().await;
+    let Some(pool) = database().await else { return };
+    let fixture = seed(&pool).await;
+    deepref_postgres::insert_model_route(
+        &pool,
+        &model_route(ModelProfile::Reasoning),
+        Utc::now() - Duration::milliseconds(1),
+    )
+    .await
+    .expect("route inserts");
+    let project = fixture.project_id;
+    let chat = ScriptedChat {
+        replies: Mutex::new(vec![
+            chat_reply(
+                "I've queued a plan to propose the sample size from the full text. Confirm to apply it.",
+                vec![],
+            ),
+            chat_reply(
+                "Nothing has been queued: no change was made to any record.",
+                vec![],
+            ),
+        ]),
+    };
+    let state = AppState::new(pool.clone()).with_chat_gateway(chat);
+    let conversation_id = create_conversation(&state, project, "claim guard").await;
+    let (status, stream) = post_json(
+        &state,
+        &format!("/projects/{project}/assistant/chat"),
+        json!({"conversation_id": conversation_id, "message": "Propose the sample size extraction"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{stream}");
+    assert!(!stream.contains("event: plan"), "{stream}");
+    let messages = deepref_postgres::list_assistant_messages(&pool, conversation_id)
+        .await
+        .expect("messages");
+    let reply = messages.last().expect("assistant reply is stored");
+    assert_eq!(reply.role, "assistant");
+    assert_eq!(
+        reply.content,
+        "Nothing has been queued: no change was made to any record."
+    );
+    let plans: i64 = sqlx::query_scalar("SELECT count(*) FROM assistant_plans WHERE project_id=$1")
+        .bind(project)
+        .fetch_one(&pool)
+        .await
+        .expect("plan count");
+    assert_eq!(plans, 0, "no plan exists, so none may be described");
+    cleanup(&pool, fixture).await;
+}
+
+#[tokio::test]
+async fn assistant_plan_step_follows_its_review_run_to_a_plain_failure() {
+    let _guard = test_lock().lock().await;
+    let Some(pool) = database().await else { return };
+    let fixture = seed(&pool).await;
+    deepref_postgres::insert_model_route(
+        &pool,
+        &model_route(ModelProfile::Reasoning),
+        Utc::now() - Duration::milliseconds(1),
+    )
+    .await
+    .expect("route inserts");
+    let project = fixture.project_id;
+    let chat = ScriptedChat {
+        replies: Mutex::new(vec![
+            chat_reply(
+                "",
+                vec![ChatToolCall {
+                    id: "read-1".to_owned(),
+                    name: "get_report".to_owned(),
+                    arguments: json!({"report_id": fixture.report_id}),
+                }],
+            ),
+            chat_reply(
+                "",
+                vec![ChatToolCall {
+                    id: "propose-1".to_owned(),
+                    name: "propose_screening_decision".to_owned(),
+                    arguments: json!({
+                        "report_id": fixture.report_id,
+                        "stage": "title_abstract",
+                        "summary": "Propose excluding the assistant report",
+                        "rationale": "It is off topic for the protocol"
+                    }),
+                }],
+            ),
+            chat_reply("I prepared a plan; nothing has changed yet.", vec![]),
+        ]),
+    };
+    let state = AppState::new(pool.clone()).with_chat_gateway(chat);
+    let conversation_id = create_conversation(&state, project, "review step").await;
+    let (status, stream) = post_json(
+        &state,
+        &format!("/projects/{project}/assistant/chat"),
+        json!({"conversation_id": conversation_id, "message": "Propose excluding the assistant report"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{stream}");
+    let plan_id: Uuid = sqlx::query_scalar(
+        "SELECT id FROM assistant_plans WHERE project_id=$1 AND status='pending'",
+    )
+    .bind(project)
+    .fetch_one(&pool)
+    .await
+    .expect("pending plan persisted");
+    let (status, body) = post_json(
+        &state,
+        &format!("/projects/{project}/assistant/plans/{plan_id}/confirm"),
+        json!({}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let confirmed: Value = serde_json::from_str(&body).expect("plan json");
+    assert_eq!(confirmed["results"][0]["status"], "queued", "{body}");
+    let run_id: Uuid =
+        serde_json::from_value(confirmed["results"][0]["review_run_id"].clone()).expect("run id");
+
+    // While the review is queued the step says so, and the plan is not "done".
+    let (status, body) = get_json(
+        &state,
+        &format!("/projects/{project}/assistant/plans/{plan_id}"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let plan: Value = serde_json::from_str(&body).expect("plan json");
+    assert_eq!(plan["results"][0]["status"], "queued", "{body}");
+
+    // The review run then fails the way the worker records it.
+    deepref_postgres::fail_review_run(
+        &pool,
+        deepref_domain::ProjectId::new(project),
+        deepref_review::ReviewRunId::new(run_id).expect("review run id"),
+        "review_execution_failed",
+        "review execution failed: AI output failed semantic validation",
+    )
+    .await
+    .expect("review run fails");
+    let (status, body) = get_json(
+        &state,
+        &format!("/projects/{project}/assistant/plans/{plan_id}"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let plan: Value = serde_json::from_str(&body).expect("plan json");
+    assert_eq!(plan["status"], "failed", "{body}");
+    assert_eq!(plan["results"][0]["status"], "failed", "{body}");
+    assert!(
+        plan["results"][0]["message"]
+            .as_str()
+            .unwrap_or_default()
+            .contains("did not pass our checks"),
+        "{body}"
+    );
+    assert!(
+        !body.contains("semantic validation"),
+        "the internal detail stays server-side: {body}"
+    );
+
+    // The change is in the activity feed with its model, reasoning and reads.
+    let activity = deepref_postgres::list_activity(
+        &pool,
+        project,
+        deepref_postgres::ActivityFilters::default(),
+        None,
+        20,
+    )
+    .await
+    .expect("activity");
+    let entry = activity
+        .iter()
+        .find(|entry| entry.action == "ai_review_started")
+        .expect("review activity is recorded");
+    assert_eq!(entry.actor_label, "Assistant");
+    assert_eq!(entry.task, "title_abstract_screening");
+    assert_eq!(entry.model.as_deref(), plan["model"].as_str());
+    assert_eq!(
+        entry.prompt_version.as_deref(),
+        Some(deepref_ai::ASSISTANT_PROMPT_VERSION)
+    );
+    let evidence = entry.evidence.to_string();
+    assert!(
+        evidence.contains("It is off topic for the protocol"),
+        "{evidence}"
+    );
+    assert!(evidence.contains("Read: report details"), "{evidence}");
+    assert!(!entry.summary.contains(".."), "{}", entry.summary);
+    cleanup(&pool, fixture).await;
+}
+
+#[tokio::test]
+async fn assistant_refuses_overlong_messages_before_storing_them() {
+    let _guard = test_lock().lock().await;
+    let Some(pool) = database().await else { return };
+    let fixture = seed(&pool).await;
+    let state = AppState::new(pool.clone()).with_chat_gateway(ScriptedChat {
+        replies: Mutex::new(Vec::new()),
+    });
+    let project = fixture.project_id;
+    let conversation_id = create_conversation(&state, project, "long message").await;
+    let (status, body) = post_json(
+        &state,
+        &format!("/projects/{project}/assistant/chat"),
+        json!({"conversation_id": conversation_id, "message": "x".repeat(4_001)}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::PAYLOAD_TOO_LARGE, "{body}");
+    assert!(body.contains("PAYLOAD_TOO_LARGE"), "{body}");
+    assert!(
+        body.contains("4000 characters"),
+        "the client hint names the limit: {body}"
+    );
+    let stored = deepref_postgres::list_assistant_messages(&pool, conversation_id)
+        .await
+        .expect("messages");
+    assert!(stored.is_empty(), "an overlong message is not stored");
     cleanup(&pool, fixture).await;
 }

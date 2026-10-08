@@ -7,15 +7,32 @@
 	import { Button } from '@deepref/ui/button';
 	import { Skeleton } from '@deepref/ui/skeleton';
 	import { Slider } from '@deepref/ui/slider';
+	import { Spinner } from '@deepref/ui/spinner';
 	import PaginationLoadMore from '@deepref/ui/pagination-load-more';
+	import { useQueryClient } from '@tanstack/svelte-query';
 	import CircleAlertIcon from '@lucide/svelte/icons/circle-alert';
+	import RefreshCwIcon from '@lucide/svelte/icons/refresh-cw';
 	import SearchIcon from '@lucide/svelte/icons/search';
+	import {
+		getListProjectReportsQueryKey,
+		recomputeProjectMetrics
+	} from '$lib/api/generated/reports/reports';
+	import { notifyError } from '$lib/features/notifications/toast';
 	import PageTemplate from '$lib/shell/PageTemplate.svelte';
 	import ArticleDataTable from './articles-table/ArticleDataTable.svelte';
 	import { useProjectWorkspaceContext, type ArticleSort } from '../context.svelte.js';
 	import { reportLabel, reportSearchText } from '../report-label';
 
 	const workspace = useProjectWorkspaceContext();
+	const queryClient = useQueryClient();
+
+	// The worker recomputes citation counts in the background. Progress polls the
+	// article list until counts exist, and gives up after a minute.
+	const REFRESH_POLL_MS = 2_000;
+	const REFRESH_TIMEOUT_MS = 60_000;
+
+	let refreshing = $state(false);
+	let refreshBaselineMs = $state(0);
 
 	const sortLabels: Record<ArticleSort, string> = {
 		rank: 'Rank score',
@@ -51,23 +68,103 @@
 			})
 	);
 	const staleMetrics = $derived(workspace.articles.filter((article) => article.metrics_stale));
-	const latestMetricsAsOf = $derived.by(() => {
+	// An article is pending until its citation counts have been computed once.
+	const pendingMetricsCount = $derived(
+		workspace.articles.filter((article) => !article.metrics_as_of).length
+	);
+	const latestMetricsMs = $derived.by(() => {
 		const values = workspace.articles
 			.map((article) => article.metrics_as_of)
 			.filter((value): value is string => Boolean(value))
 			.map(Date.parse)
 			.filter(Number.isFinite);
-		return values.length > 0 ? new Date(Math.max(...values)).toLocaleString() : undefined;
+		return values.length > 0 ? Math.max(...values) : 0;
+	});
+	const latestMetricsAsOf = $derived(
+		latestMetricsMs > 0 ? new Date(latestMetricsMs).toLocaleString() : undefined
+	);
+	const refreshComplete = $derived(
+		pendingMetricsCount === 0 && latestMetricsMs > refreshBaselineMs
+	);
+	const refreshInProgress = $derived(refreshing && !refreshComplete);
+
+	function refreshArticles(projectId: string) {
+		return queryClient.invalidateQueries({
+			queryKey: getListProjectReportsQueryKey(projectId)
+		});
+	}
+
+	async function refreshMetrics() {
+		const projectId = workspace.selectedProjectId;
+		if (!projectId || refreshing) return;
+		refreshBaselineMs = latestMetricsMs;
+		refreshing = true;
+		try {
+			await recomputeProjectMetrics(projectId);
+			await refreshArticles(projectId);
+		} catch (error) {
+			refreshing = false;
+			notifyError('Citation counts could not be refreshed', error);
+		}
+	}
+
+	$effect(() => {
+		const projectId = workspace.selectedProjectId;
+		if (!refreshInProgress || !projectId) return;
+		const poll = setInterval(() => void refreshArticles(projectId), REFRESH_POLL_MS);
+		const giveUp = setTimeout(() => (refreshing = false), REFRESH_TIMEOUT_MS);
+		return () => {
+			clearInterval(poll);
+			clearTimeout(giveUp);
+		};
 	});
 </script>
 
-<PageTemplate testId="articles-page" maxWidth="default">
-	<div class="flex items-center justify-between gap-3 text-xs text-muted-foreground">
-		<span>{workspace.articles.length.toLocaleString()} project articles</span>
-		{#if latestMetricsAsOf}
-			<span>Metrics as of {latestMetricsAsOf}</span>
+<PageTemplate
+	testId="articles-page"
+	maxWidth="full"
+	scrollable={false}
+	containerClass="min-h-0 gap-3 p-4 sm:p-4 lg:p-4"
+>
+	<p class="flex flex-wrap items-center gap-x-2 gap-y-1 text-xs text-muted-foreground">
+		<span class="tabular-nums"
+			>{workspace.articles.length.toLocaleString()}
+			{workspace.articlesHasNextPage ? 'articles loaded' : 'articles'}</span
+		>
+		{#if latestMetricsAsOf}<span aria-hidden="true">·</span><span
+				>Metrics as of {latestMetricsAsOf}</span
+			>{/if}
+		{#if refreshInProgress}
+			<span aria-hidden="true">·</span>
+			<span
+				class="flex items-center gap-1.5"
+				role="status"
+				data-testid="metrics-refresh-progress"><Spinner />Refreshing citation counts…</span
+			>
+		{:else if pendingMetricsCount > 0}
+			<span aria-hidden="true">·</span>
+			<span class="text-warning" data-testid="metrics-pending-banner"
+				>Citation counts pending for {pendingMetricsCount.toLocaleString()}
+				{pendingMetricsCount === 1 ? 'article' : 'articles'}</span
+			>
 		{/if}
-	</div>
+		{#if pendingMetricsCount > 0 || staleMetrics.length > 0}
+			<Button
+				variant="outline"
+				size="xs"
+				data-testid="metrics-refresh"
+				disabled={refreshing}
+				onclick={() => void refreshMetrics()}
+			>
+				{#if refreshing}
+					<Spinner data-icon="inline-start" />
+				{:else}
+					<RefreshCwIcon data-icon="inline-start" />
+				{/if}
+				{refreshing ? 'Refreshing…' : 'Refresh'}
+			</Button>
+		{/if}
+	</p>
 
 	<div class="grid gap-3 md:hidden" data-testid="article-mobile-filters">
 		<InputGroup.Root>
@@ -78,40 +175,34 @@
 			/>
 			<InputGroup.Addon><SearchIcon /></InputGroup.Addon>
 		</InputGroup.Root>
-		<Select.Root type="single" bind:value={workspace.articleFilters.sort}>
-			<Select.Trigger class="w-full"
-				>{sortLabels[workspace.articleFilters.sort]}</Select.Trigger
-			>
-			<Select.Content>
-				<Select.Group>
-					{#each Object.entries(sortLabels) as [value, label] (value)}
-						<Select.Item {value} {label} />
-					{/each}
-				</Select.Group>
-			</Select.Content>
-		</Select.Root>
-		<div class="flex items-center gap-3">
-			<Slider
-				type="single"
-				bind:value={workspace.articleFilters.minInternal}
-				max={20}
-				step={1}
-				thumbLabel="Minimum internal citations"
-			/>
-			<Badge variant="outline">Min {workspace.articleFilters.minInternal}</Badge>
-		</div>
+		<details>
+			<summary class="cursor-pointer text-xs text-muted-foreground">Sort & filter</summary>
+			<div class="mt-3 flex flex-col gap-3">
+				<Select.Root type="single" bind:value={workspace.articleFilters.sort}>
+					<Select.Trigger class="w-full"
+						>{sortLabels[workspace.articleFilters.sort]}</Select.Trigger
+					>
+					<Select.Content>
+						<Select.Group>
+							{#each Object.entries(sortLabels) as [value, label] (value)}
+								<Select.Item {value} {label} />
+							{/each}
+						</Select.Group>
+					</Select.Content>
+				</Select.Root>
+				<div class="flex items-center gap-3">
+					<Slider
+						type="single"
+						bind:value={workspace.articleFilters.minInternal}
+						max={20}
+						step={1}
+						thumbLabel="Minimum internal citations"
+					/>
+					<Badge variant="outline">Min {workspace.articleFilters.minInternal}</Badge>
+				</div>
+			</div>
+		</details>
 	</div>
-
-	{#if staleMetrics.length > 0}
-		<Alert.Root data-testid="stale-metrics-banner">
-			<CircleAlertIcon />
-			<Alert.Title>Metrics may be stale</Alert.Title>
-			<Alert.Description>
-				{staleMetrics.length} loaded article metrics are awaiting graph projection. Metrics as
-				of {latestMetricsAsOf ?? 'not yet computed'}.
-			</Alert.Description>
-		</Alert.Root>
-	{/if}
 
 	{#if workspace.articlesError}
 		<Alert.Root variant="destructive">
@@ -141,19 +232,22 @@
 					openArticle={workspace.openArticle}
 				/>
 			{/key}
-			<PaginationLoadMore
-				hasNextPage={workspace.articlesHasNextPage}
-				isLoading={workspace.articlesLoadingMore}
-				loadedCount={workspace.articles.length}
-				label="articles"
-				onLoadMore={workspace.loadMoreArticles}
-			/>
+			{#if workspace.articlesHasNextPage}
+				<PaginationLoadMore
+					hasNextPage={workspace.articlesHasNextPage}
+					isLoading={workspace.articlesLoadingMore}
+					loadedCount={workspace.articles.length}
+					label="articles"
+					onLoadMore={workspace.loadMoreArticles}
+				/>
+			{/if}
 		</div>
 		<div class="flex min-h-0 flex-1 flex-col gap-3 overflow-auto md:hidden">
 			{#each filtered as article (article.report_id)}
-				<div
-					class="rounded-lg border bg-card p-4 transition-colors data-[selected=true]:bg-primary/5"
-					data-selected={workspace.selectedArticle === article.report_id}
+				<button
+					class="py-3 text-left transition-colors hover:bg-muted focus-visible:ring-2 focus-visible:ring-ring aria-pressed:bg-muted"
+					onclick={() => workspace.openArticle(article.report_id)}
+					aria-pressed={workspace.selectedArticle === article.report_id}
 				>
 					<div class="flex items-start justify-between gap-3">
 						<div class="min-w-0">
@@ -170,21 +264,11 @@
 							<Badge variant="default">Selected</Badge>
 						{/if}
 					</div>
-					<div class="mt-3 flex flex-wrap gap-2">
-						<Badge variant="outline">{article.issued_year ?? 'No year'}</Badge>
-						<Badge variant="secondary">Total {article.total_citations}</Badge>
-						<Badge variant="outline">Internal {article.internal_citations}</Badge>
-						<Badge>Rank {article.rank_score.toFixed(2)}</Badge>
-					</div>
-					<Button
-						class="mt-3 w-full"
-						variant="outline"
-						size="sm"
-						onclick={() => workspace.openArticle(article.report_id)}
-					>
-						Open inspector
-					</Button>
-				</div>
+					<p class="mt-2 text-xs text-muted-foreground tabular-nums">
+						{article.issued_year ?? 'No year'} · {article.total_citations} citations · {article.internal_citations}
+						internal · Rank {article.rank_score.toFixed(2)}
+					</p>
+				</button>
 			{:else}
 				<Empty.Root class="min-h-32 border-dashed p-6">
 					<Empty.Header>
@@ -192,13 +276,15 @@
 					</Empty.Header>
 				</Empty.Root>
 			{/each}
-			<PaginationLoadMore
-				hasNextPage={workspace.articlesHasNextPage}
-				isLoading={workspace.articlesLoadingMore}
-				loadedCount={workspace.articles.length}
-				label="articles"
-				onLoadMore={workspace.loadMoreArticles}
-			/>
+			{#if workspace.articlesHasNextPage}
+				<PaginationLoadMore
+					hasNextPage={workspace.articlesHasNextPage}
+					isLoading={workspace.articlesLoadingMore}
+					loadedCount={workspace.articles.length}
+					label="articles"
+					onLoadMore={workspace.loadMoreArticles}
+				/>
+			{/if}
 		</div>
 	{/if}
 </PageTemplate>

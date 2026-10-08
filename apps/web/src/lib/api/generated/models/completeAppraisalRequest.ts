@@ -6,6 +6,7 @@
  */
 import type { AppraisalEvidenceRequest } from './appraisalEvidenceRequest.ts';
 import type { CompleteAppraisalRequestDomainJudgments } from './completeAppraisalRequestDomainJudgments.ts';
+import type { CompleteAppraisalRequestOverrideReasons } from './completeAppraisalRequestOverrideReasons.ts';
 import type { CompleteAppraisalRequestResponses } from './completeAppraisalRequestResponses.ts';
 
 export interface CompleteAppraisalRequest {
@@ -16,5 +17,7 @@ export interface CompleteAppraisalRequest {
 	evidence: AppraisalEvidenceRequest[];
 	/** @nullable */
 	overall_judgment?: string | null;
+	/** Reasons for judgments that differ from the rule suggestion, keyed by domain or `overall`. */
+	override_reasons?: CompleteAppraisalRequestOverrideReasons;
 	responses: CompleteAppraisalRequestResponses;
 }

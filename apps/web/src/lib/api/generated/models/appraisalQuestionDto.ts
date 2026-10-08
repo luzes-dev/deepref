@@ -5,9 +5,11 @@
  * OpenAPI spec version: 0.1.0
  */
 import type { AppraisalAnswerSchemaDto } from './appraisalAnswerSchemaDto.ts';
+import type { AppraisalAppliesWhenDto } from './appraisalAppliesWhenDto.ts';
 
 export interface AppraisalQuestionDto {
 	answer_schema: AppraisalAnswerSchemaDto;
+	applies_when?: null | AppraisalAppliesWhenDto;
 	/** @nullable */
 	help?: string | null;
 	id: string;

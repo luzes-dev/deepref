@@ -154,6 +154,7 @@ fn reviewed_payload_to_internal(
             answers,
             domain_judgments,
             overall_judgment,
+            override_reasons,
         } => Ok(ReviewedAiProposalPayload::AppraisalPrefill(
             deepref_ai::AppraisalPrefill {
                 report_id,
@@ -167,6 +168,7 @@ fn reviewed_payload_to_internal(
                 })?,
                 domain_judgments,
                 overall_judgment,
+                override_reasons,
             },
         )),
         AiReviewedProposalPayload::DataExtraction { study_id, fields } => Ok(
@@ -181,4 +183,128 @@ fn reviewed_payload_to_internal(
             }),
         ),
     }
+}
+
+/// True when at least one AI model route is currently enabled.
+pub(crate) async fn ai_routes_enabled(pool: &sqlx::PgPool) -> Result<bool, ApiError> {
+    Ok(sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM ai_model_routes
+         WHERE enabled AND effective_from <= now()
+           AND (effective_until IS NULL OR effective_until > now()))",
+    )
+    .fetch_one(pool)
+    .await?)
+}
+
+fn usd(micros: i64) -> f64 {
+    micros as f64 / 1_000_000.0
+}
+
+fn budget_dto(snapshot: deepref_ai::BudgetSnapshot) -> AiBudgetDto {
+    AiBudgetDto {
+        monthly_budget_usd: usd(snapshot.budget_micros),
+        spent_usd: usd(snapshot.spent_micros),
+        remaining_usd: usd(snapshot.remaining_micros()),
+        exhausted: snapshot.exhausted(),
+    }
+}
+
+fn map_usage_error(error: deepref_postgres::AiUsageError) -> ApiError {
+    match error {
+        deepref_postgres::AiUsageError::ProjectNotFound => {
+            ApiError::NotFound("project not found".to_owned())
+        }
+        deepref_postgres::AiUsageError::InvalidBudget => {
+            ApiError::BadRequest("budget must be between 0 and 100000 USD".to_owned())
+        }
+        deepref_postgres::AiUsageError::Database(error) => ApiError::Database(error),
+    }
+}
+
+#[utoipa::path(
+    get,
+    path = "/ai/status",
+    operation_id = "getAiStatus",
+    tag = "ai",
+    params(AiStatusQuery),
+    responses(
+        (status = 200, description = "Whether AI features are configured for this workspace", body = AiStatusDto),
+        (status = 404, description = "Project not found", body = ErrorResponse),
+        (status = 500, description = "Internal server error", body = ErrorResponse)
+    )
+)]
+pub(crate) async fn get_ai_status(
+    State(state): State<AppState>,
+    Query(query): Query<AiStatusQuery>,
+) -> Result<Json<AiStatusDto>, ApiError> {
+    let available = state.ai_info.configured && ai_routes_enabled(&state.pool).await?;
+    let budget = match query.project_id {
+        Some(project_id) => Some(budget_dto(
+            deepref_postgres::get_ai_budget(&state.pool, project_id)
+                .await
+                .map_err(map_usage_error)?,
+        )),
+        None => None,
+    };
+    Ok(Json(AiStatusDto {
+        suggestions_available: available,
+        assistant_available: available && state.chat_gateway.is_some(),
+        configured: state.ai_info.configured,
+        provider: state.ai_info.provider.clone(),
+        model: state.ai_info.model.clone(),
+        budget,
+    }))
+}
+
+#[utoipa::path(
+    get,
+    path = "/projects/{project_id}/ai/budget",
+    operation_id = "getAiBudget",
+    tag = "ai",
+    params(("project_id" = Uuid, Path, description = "Project identifier")),
+    responses(
+        (status = 200, description = "Monthly AI budget and spend", body = AiBudgetDto),
+        (status = 404, description = "Project not found", body = ErrorResponse),
+        (status = 500, description = "Internal server error", body = ErrorResponse)
+    )
+)]
+pub(crate) async fn get_ai_budget(
+    State(state): State<AppState>,
+    Path(project_id): Path<Uuid>,
+) -> Result<Json<AiBudgetDto>, ApiError> {
+    Ok(Json(budget_dto(
+        deepref_postgres::get_ai_budget(&state.pool, project_id)
+            .await
+            .map_err(map_usage_error)?,
+    )))
+}
+
+#[utoipa::path(
+    put,
+    path = "/projects/{project_id}/ai/budget",
+    operation_id = "updateAiBudget",
+    tag = "ai",
+    params(("project_id" = Uuid, Path, description = "Project identifier")),
+    request_body = UpdateAiBudgetRequest,
+    responses(
+        (status = 200, description = "Updated budget and spend", body = AiBudgetDto),
+        (status = 400, description = "Budget out of range", body = ErrorResponse),
+        (status = 404, description = "Project not found", body = ErrorResponse),
+        (status = 500, description = "Internal server error", body = ErrorResponse)
+    )
+)]
+pub(crate) async fn update_ai_budget(
+    State(state): State<AppState>,
+    Path(project_id): Path<Uuid>,
+    Json(body): Json<UpdateAiBudgetRequest>,
+) -> Result<Json<AiBudgetDto>, ApiError> {
+    if !body.monthly_budget_usd.is_finite() {
+        return Err(ApiError::BadRequest("budget must be a number".to_owned()));
+    }
+    let micros = (body.monthly_budget_usd * 1_000_000.0).round() as i64;
+    Ok(Json(budget_dto(
+        deepref_postgres::set_ai_budget(&state.pool, project_id, micros)
+            .await
+            .map_err(map_usage_error)?,
+    )))
 }

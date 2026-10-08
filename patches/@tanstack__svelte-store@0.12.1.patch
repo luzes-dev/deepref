@@ -1,0 +1,11 @@
+diff --git a/dist/useSelector.svelte.js b/dist/useSelector.svelte.js
+index 628a9cd183b65e8c561dbd2bdb7955f4552b62de..ef506fe8283896fcb6daca41f94cb521c4d92030 100644
+--- a/dist/useSelector.svelte.js
++++ b/dist/useSelector.svelte.js
+@@ -1,5 +1,5 @@
+ function defaultCompare(a, b) {
+-    return a === b;
++    return Object.is(a, b);
+ }
+ /**
+  * Selects a slice of state from an atom or store and exposes it through a

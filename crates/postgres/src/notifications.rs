@@ -124,6 +124,8 @@ pub struct NotificationRecord {
     pub payload: serde_json::Value,
     pub read_at: Option<DateTime<Utc>>,
     pub created_at: DateTime<Utc>,
+    /// Name of the project the notification belongs to, when it has one.
+    pub project_name: Option<String>,
 }
 
 pub struct NotificationPage {
@@ -169,6 +171,36 @@ pub async fn record_notification(
     tx.commit().await
 }
 
+/// Record a notification unless one of the same kind already names `run_id` in
+/// its payload. Returns whether a row was written. Callers hold the run's row
+/// lock, so the check and the insert cannot interleave with another writer.
+pub async fn record_run_notification_once_in_transaction(
+    tx: &mut Transaction<'_, Postgres>,
+    draft: &NotificationDraft,
+    run_id: Uuid,
+) -> Result<bool, sqlx::Error> {
+    let written = sqlx::query(
+        "INSERT INTO notifications (kind,severity,project_id,title,body,payload)
+         SELECT $1::text,$2::text,$3::uuid,$4::text,$5::text,$6::jsonb
+         WHERE NOT EXISTS (
+           SELECT 1 FROM notifications
+           WHERE kind = $1::text AND payload->>'run_id' = $7::text
+         )",
+    )
+    .bind(&draft.kind)
+    .bind(draft.severity.as_str())
+    .bind(draft.project_id)
+    .bind(&draft.title)
+    .bind(draft.body.as_deref().filter(|body| !body.trim().is_empty()))
+    .bind(&draft.payload)
+    .bind(run_id.to_string())
+    .execute(&mut **tx)
+    .await?
+    .rows_affected();
+    prune_in_transaction(tx).await?;
+    Ok(written == 1)
+}
+
 async fn prune_in_transaction(tx: &mut Transaction<'_, Postgres>) -> Result<(), sqlx::Error> {
     sqlx::query(
         "DELETE FROM notifications
@@ -196,19 +228,25 @@ async fn prune_in_transaction(tx: &mut Transaction<'_, Postgres>) -> Result<(), 
     Ok(())
 }
 
-/// Newest-first bounded page keyed by the monotonic `revision` sequence.
+/// Newest-first bounded page keyed by the monotonic `revision` sequence. A
+/// `project_id` limits the page to that project; `None` lists every project.
 pub async fn list_notifications(
     pool: &PgPool,
+    project_id: Option<Uuid>,
     before_revision: Option<i64>,
     limit: i64,
 ) -> Result<NotificationPage, sqlx::Error> {
     let rows = sqlx::query_as::<_, NotificationRecord>(
-        "SELECT id,revision,kind,severity,project_id,title,body,payload,read_at,created_at
-         FROM notifications
-         WHERE ($1::bigint IS NULL OR revision < $1)
-         ORDER BY revision DESC
-         LIMIT $2",
+        "SELECT n.id,n.revision,n.kind,n.severity,n.project_id,n.title,n.body,n.payload,
+                n.read_at,n.created_at,p.name AS project_name
+         FROM notifications n
+         LEFT JOIN projects p ON p.id = n.project_id
+         WHERE ($1::uuid IS NULL OR n.project_id = $1)
+           AND ($2::bigint IS NULL OR n.revision < $2)
+         ORDER BY n.revision DESC
+         LIMIT $3",
     )
+    .bind(project_id)
     .bind(before_revision)
     .bind(limit + 1)
     .fetch_all(pool)
@@ -223,12 +261,21 @@ pub async fn list_notifications(
     Ok(NotificationPage { items, next_cursor })
 }
 
-pub async fn unread_summary(pool: &PgPool) -> Result<NotificationUnreadSummary, sqlx::Error> {
+/// Unread total for one project, or across every project when `project_id` is
+/// `None`. The total is never capped by a page size. `latest_revision` is always
+/// the newest revision in the table, so a poller notices any arrival.
+pub async fn unread_summary(
+    pool: &PgPool,
+    project_id: Option<Uuid>,
+) -> Result<NotificationUnreadSummary, sqlx::Error> {
     let row = sqlx::query(
-        "SELECT count(*) FILTER (WHERE read_at IS NULL)::bigint AS unread,
+        "SELECT count(*) FILTER (
+                  WHERE read_at IS NULL AND ($1::uuid IS NULL OR project_id = $1)
+                )::bigint AS unread,
                 COALESCE(max(revision),0)::bigint AS latest_revision
          FROM notifications",
     )
+    .bind(project_id)
     .fetch_one(pool)
     .await?;
     Ok(NotificationUnreadSummary {
@@ -243,6 +290,8 @@ pub async fn unread_summary(pool: &PgPool) -> Result<NotificationUnreadSummary, 
 pub struct MarkNotificationsRead {
     pub ids: Option<Vec<Uuid>>,
     pub all: bool,
+    /// Limits `all` to one project. Explicit `ids` are always honoured.
+    pub project_id: Option<Uuid>,
 }
 
 pub async fn mark_notifications_read(
@@ -250,9 +299,13 @@ pub async fn mark_notifications_read(
     request: &MarkNotificationsRead,
 ) -> Result<i64, sqlx::Error> {
     let result = if request.all {
-        sqlx::query("UPDATE notifications SET read_at=now() WHERE read_at IS NULL")
-            .execute(pool)
-            .await?
+        sqlx::query(
+            "UPDATE notifications SET read_at=now()
+             WHERE read_at IS NULL AND ($1::uuid IS NULL OR project_id = $1)",
+        )
+        .bind(request.project_id)
+        .execute(pool)
+        .await?
     } else {
         match &request.ids {
             Some(ids) if !ids.is_empty() => {

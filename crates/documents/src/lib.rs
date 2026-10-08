@@ -11,16 +11,23 @@ use thiserror::Error;
 use tokio::io::AsyncWriteExt;
 use uuid::Uuid;
 
+mod chars;
+mod identity;
+mod layout;
 mod parser;
+mod pipeline;
 mod remote;
+mod structure;
 
+pub use identity::{IdentityCheck, IdentityVerdict, PdfIdentity, ReportIdentity, check_identity};
 pub use parser::{DocumentParser, ParserLimits, PdfParserError, PdfiumParser, parse_pdf_file};
 pub use remote::{
     FetchPolicy, HttpsPdfFetcher, RemoteDocumentFetcher, RemoteFetchError, RemoteFetchFuture,
     validate_external_url,
 };
+pub use structure::is_caption as is_caption_text;
 
-pub const PARSER_VERSION: &str = "deepref-pdfium-0.9-v1";
+pub const PARSER_VERSION: &str = "deepref-pdfium-0.9-v4";
 pub const DEFAULT_MAX_DOCUMENT_BYTES: usize = 25 * 1024 * 1024;
 pub const MAX_DOCUMENT_BYTES: usize = 100 * 1024 * 1024;
 
@@ -337,7 +344,23 @@ impl DocumentStore {
             .await
             .map_err(DocumentStoreError::from)
     }
+
+    /// Reports whether the object is still stored. A missing object is
+    /// `Ok(false)`; any other store failure stays an error.
+    pub async fn exists(&self, key: &str) -> Result<bool, DocumentStoreError> {
+        validate_object_key(key)?;
+        match self.inner.head(&Path::from(key)).await {
+            Ok(_) => Ok(true),
+            Err(object_store::Error::NotFound { .. }) => Ok(false),
+            Err(error) => Err(DocumentStoreError::from(error)),
+        }
+    }
 }
+
+/// Stable code for a report whose stored PDF bytes are no longer in document
+/// storage. The API returns it for reparse requests and the worker records it
+/// in `parser_error`, so the UI can ask for the PDF to be uploaded again.
+pub const DOCUMENT_BLOB_MISSING_CODE: &str = "document_blob_missing";
 
 #[derive(Debug, Error)]
 pub enum DocumentStoreError {
@@ -349,6 +372,13 @@ pub enum DocumentStoreError {
     Stream(String),
     #[error("document object key is invalid")]
     InvalidKey,
+}
+
+impl DocumentStoreError {
+    /// True when the store reports that the object itself does not exist.
+    pub fn is_not_found(&self) -> bool {
+        matches!(self, Self::Store(object_store::Error::NotFound { .. }))
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -383,6 +413,52 @@ pub struct ParsedDocument {
     pub pages: Vec<ParsedPage>,
     pub blocks: Vec<ParsedBlock>,
     pub ocr_required: bool,
+}
+
+/// Structure derived for one [`ParsedBlock`] (same index as `ParsedDocument::blocks`).
+#[derive(Debug, Clone, PartialEq, Default)]
+pub struct BlockStructure {
+    /// `text`, `heading`, `caption`, `reference`, `title` or `front_matter` (mirrors `kind`).
+    pub role: String,
+    /// Heading hierarchy the block sits under, e.g. `["Methods", "Participants"]`. A heading
+    /// block's own path ends with its title.
+    pub section_path: Vec<String>,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ParsedReference {
+    pub page_number: u32,
+    pub raw_text: String,
+    /// Lower-cased DOI when one appears in the entry.
+    pub doi: Option<String>,
+    pub year: Option<u16>,
+}
+
+/// A parsed document plus the structure the native pipeline derived from font statistics.
+#[derive(Debug, Clone, PartialEq)]
+pub struct StructuredDocument {
+    pub document: ParsedDocument,
+    /// Parallel to `document.blocks` (index == position == `ordinal`).
+    pub block_structure: Vec<BlockStructure>,
+    pub references: Vec<ParsedReference>,
+}
+
+impl StructuredDocument {
+    pub fn unstructured(document: ParsedDocument) -> Self {
+        let block_structure = document
+            .blocks
+            .iter()
+            .map(|block| BlockStructure {
+                role: block.kind.clone(),
+                section_path: Vec::new(),
+            })
+            .collect();
+        Self {
+            document,
+            block_structure,
+            references: Vec::new(),
+        }
+    }
 }
 
 pub fn content_sha256(bytes: &[u8]) -> String {
@@ -467,6 +543,23 @@ fn port_error(error: DocumentStoreError) -> deepref_application::DocumentPortErr
 mod tests {
     use super::*;
     use futures::stream;
+
+    #[tokio::test]
+    async fn exists_distinguishes_missing_objects_from_stored_ones() {
+        let store = DocumentStore::memory();
+        let key = "documents/00000000-0000-0000-0000-000000000002";
+        assert!(
+            !store
+                .exists(key)
+                .await
+                .expect("a missing object is not a store error")
+        );
+        store
+            .put(key, Bytes::from_static(b"%PDF-test"))
+            .await
+            .expect("put should succeed");
+        assert!(store.exists(key).await.expect("exists should succeed"));
+    }
 
     #[tokio::test]
     async fn memory_store_round_trips_content() {

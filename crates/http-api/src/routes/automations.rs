@@ -22,6 +22,9 @@ use crate::{
 };
 
 const IDEMPOTENCY_KEY_HEADER: &str = "idempotency-key";
+/// Name prefix of the hidden definitions that back one-off recipe runs. They
+/// never appear in the automation list and cannot be created by users.
+const ONE_OFF_DEFINITION_PREFIX: &str = "One-off run · ";
 
 #[derive(Debug, Clone, Copy, Deserialize, ToSchema)]
 #[serde(rename_all = "snake_case")]
@@ -184,7 +187,18 @@ pub(crate) async fn list_definitions(
     let definitions = deepref_postgres::list_automation_definitions(&state.pool, project_id)
         .await
         .map_err(map_automation_error)?;
-    Ok(Json(definitions.into_iter().map(definition_dto).collect()))
+    Ok(Json(
+        definitions
+            .into_iter()
+            .filter(|definition| {
+                !definition
+                    .name
+                    .as_str()
+                    .starts_with(ONE_OFF_DEFINITION_PREFIX)
+            })
+            .map(definition_dto)
+            .collect(),
+    ))
 }
 
 #[utoipa::path(
@@ -216,6 +230,15 @@ pub(crate) async fn configure_definition(
     let recipe = BuiltInAutomationRecipe::parse(&recipe).ok_or_else(|| {
         ApiError::BadRequest("recipe must be a supported built-in automation recipe".to_owned())
     })?;
+    if input
+        .name
+        .trim_start()
+        .starts_with(ONE_OFF_DEFINITION_PREFIX)
+    {
+        return Err(ApiError::BadRequest(
+            "automation name uses a reserved prefix".to_owned(),
+        ));
+    }
     let command = ConfigureAutomationDefinition::new(
         project_id,
         input.name,
@@ -265,6 +288,78 @@ pub(crate) async fn trigger_manually(
         extract_actor(&headers)?,
     )
     .map_err(|error| ApiError::BadRequest(error.to_string()))?;
+    let result = deepref_postgres::start_automation_manually(&state.pool, &request)
+        .await
+        .map_err(map_automation_error)?;
+    let status = if result.created {
+        StatusCode::CREATED
+    } else {
+        StatusCode::OK
+    };
+    Ok((
+        status,
+        Json(StartAutomationResponse {
+            run_id: result.run_id.as_uuid(),
+            job_id: result.job_id,
+            created: result.created,
+        }),
+    ))
+}
+
+#[utoipa::path(
+    post,
+    path = "/projects/{project_id}/automations/recipes/{recipe}/runs",
+    operation_id = "runAutomationRecipeOnce",
+    tag = "automations",
+    params(
+        ("project_id" = Uuid, Path, description = "Project identifier"),
+        ("recipe" = String, Path, description = "Closed built-in recipe identifier"),
+        ("Idempotency-Key" = String, Header, description = "Required stable key for replay-safe automation runs")
+    ),
+    responses(
+        (status = 200, description = "Existing idempotent automation run", body = StartAutomationResponse),
+        (status = 201, description = "One-off recipe run queued", body = StartAutomationResponse),
+        (status = 400, description = "Invalid or unsupported recipe", body = ErrorResponse),
+        (status = 404, description = "Project not found", body = ErrorResponse),
+        (status = 500, description = "Internal server error", body = ErrorResponse)
+    )
+)]
+/// Runs a recipe once without adding it to the project's configured automations.
+///
+/// The run is backed by a hidden manual definition that the definition list
+/// omits, so a one-off run never shows up as a persistent automation.
+pub(crate) async fn run_recipe_once(
+    State(state): State<AppState>,
+    Path((project_id, recipe)): Path<(Uuid, String)>,
+    headers: HeaderMap,
+) -> Result<(StatusCode, Json<StartAutomationResponse>), ApiError> {
+    let project_id = validated_project_id(project_id)?;
+    ensure_project(&state.pool, project_id).await?;
+    let recipe = BuiltInAutomationRecipe::parse(&recipe).ok_or_else(|| {
+        ApiError::BadRequest("recipe must be a supported built-in automation recipe".to_owned())
+    })?;
+    if recipe != BuiltInAutomationRecipe::ProjectMaintenanceV1 {
+        return Err(ApiError::BadRequest(
+            "this recipe needs inputs and cannot be run on its own".to_owned(),
+        ));
+    }
+    let idempotency_key = required_idempotency_key(&headers)?;
+    let actor = extract_actor(&headers)?;
+    let configure = ConfigureAutomationDefinition::new(
+        project_id,
+        format!("{ONE_OFF_DEFINITION_PREFIX}{}", recipe.id()),
+        AutomationTriggerKind::Manual,
+        recipe,
+        AutomationDefinitionStatus::Active,
+        actor.clone(),
+    )
+    .map_err(|error| ApiError::BadRequest(error.to_string()))?;
+    let definition = deepref_postgres::configure_automation_definition(&state.pool, &configure)
+        .await
+        .map_err(map_automation_error)?;
+    let request =
+        StartAutomationManually::new(project_id, definition.id.as_uuid(), idempotency_key, actor)
+            .map_err(|error| ApiError::BadRequest(error.to_string()))?;
     let result = deepref_postgres::start_automation_manually(&state.pool, &request)
         .await
         .map_err(map_automation_error)?;

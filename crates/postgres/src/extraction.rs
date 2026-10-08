@@ -20,19 +20,38 @@ pub struct ExtractionValueRecord {
     pub id: Uuid,
     pub project_id: ProjectId,
     pub study_id: Uuid,
-    pub report_id: Uuid,
+    pub report_id: Option<Uuid>,
     pub field_definition_id: Uuid,
     pub field_definition_version: i32,
     pub value: ExtractionValue,
-    pub rationale: String,
-    pub source_document_id: Uuid,
-    pub source_block_id: Uuid,
-    pub source_page: i32,
-    pub source_parser_version: String,
-    pub source_content_hash: String,
+    pub rationale: Option<String>,
+    pub source_document_id: Option<Uuid>,
+    pub source_block_id: Option<Uuid>,
+    pub source_page: Option<i32>,
+    pub source_parser_version: Option<String>,
+    pub source_content_hash: Option<String>,
     pub approved_by_actor_kind: String,
     pub approved_by_actor_id: String,
     pub approved_at: DateTime<Utc>,
+    /// True while an AI-entered value waits for a person to confirm it.
+    pub needs_verification: bool,
+    pub verified_at: Option<DateTime<Utc>>,
+    pub verified_by: Option<String>,
+}
+
+/// How an extraction proposal is applied.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct ExtractionApplyOptions {
+    /// Flag the stored values as "to verify" until a person confirms them.
+    pub needs_verification: bool,
+    /// Leave fields that already have a current value untouched.
+    pub skip_existing: bool,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct ExtractionApplyOutcome {
+    pub inserted_value_ids: Vec<Uuid>,
+    pub skipped_existing: usize,
 }
 
 #[derive(Debug, Error)]
@@ -57,6 +76,8 @@ pub enum ExtractionError {
     RequiredFieldInsufficient,
     #[error("an approved value already exists for this study field version")]
     ValueAlreadyApproved,
+    #[error("the field already has values, so its value type cannot change; create a new field")]
+    FieldHasValues,
 }
 
 pub async fn list_field_definitions(
@@ -64,11 +85,16 @@ pub async fn list_field_definitions(
     project_id: Uuid,
 ) -> Result<Vec<ExtractionFieldDefinition>, ExtractionError> {
     let rows = sqlx::query(
-        "SELECT DISTINCT ON (field_key)
-                id, project_id, version, field_key, label, value_type, required
-         FROM extraction_field_definitions
-         WHERE project_id=$1
-         ORDER BY field_key, version DESC, id",
+        "SELECT id, project_id, version, field_key, label, value_type, required
+         FROM (
+           SELECT DISTINCT ON (field_key)
+                  id, project_id, version, field_key, label, value_type, required,
+                  min(created_at) OVER (PARTITION BY field_key) AS first_created_at
+           FROM extraction_field_definitions
+           WHERE project_id=$1
+           ORDER BY field_key, version DESC, id
+         ) latest
+         ORDER BY first_created_at, field_key",
     )
     .bind(project_id)
     .fetch_all(pool)
@@ -129,6 +155,108 @@ pub async fn create_field_definition(
     Ok(definition)
 }
 
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ExtractionFieldUpdate {
+    pub label: String,
+    pub value_type: ExtractionFieldType,
+    pub required: bool,
+}
+
+/// Edits the label, value type or `required` flag of a field.
+///
+/// Label and `required` are changed on the latest version in place. Neither
+/// one changes what a stored value means, and current values are unique per
+/// (study, field, version), so bumping the version would split a field's values
+/// across two versions. The value type does change how the typed columns are
+/// read, so it is refused while the field has any value (current or
+/// superseded). Without values, a type change becomes the next version of the
+/// field, with the same id and key. Existing versions are never rewritten.
+pub async fn update_field_definition(
+    pool: &PgPool,
+    project_id: Uuid,
+    field_id: Uuid,
+    update: ExtractionFieldUpdate,
+) -> Result<ExtractionFieldDefinition, ExtractionError> {
+    let mut tx = pool.begin().await?;
+    let current = sqlx::query(
+        "SELECT id, project_id, version, field_key, label, value_type, required
+         FROM extraction_field_definitions
+         WHERE project_id=$1 AND id=$2
+         ORDER BY version DESC
+         LIMIT 1
+         FOR UPDATE",
+    )
+    .bind(project_id)
+    .bind(field_id)
+    .fetch_optional(&mut *tx)
+    .await?
+    .map(field_from_row)
+    .transpose()?
+    .ok_or(ExtractionError::DefinitionNotFound)?;
+    let mut next = ExtractionFieldDefinition {
+        id: current.id,
+        project_id: current.project_id,
+        version: current.version,
+        field_key: current.field_key.clone(),
+        label: update.label,
+        value_type: update.value_type,
+        required: update.required,
+    };
+    next.validate().map_err(extraction_validation_error)?;
+    if next.value_type == current.value_type {
+        if next.label != current.label || next.required != current.required {
+            sqlx::query(
+                "UPDATE extraction_field_definitions SET label=$4, required=$5
+                 WHERE project_id=$1 AND id=$2 AND version=$3",
+            )
+            .bind(project_id)
+            .bind(field_id)
+            .bind(version_column(current.version)?)
+            .bind(&next.label)
+            .bind(next.required)
+            .execute(&mut *tx)
+            .await?;
+        }
+    } else {
+        let has_values: bool = sqlx::query_scalar(
+            "SELECT EXISTS(SELECT 1 FROM extraction_values
+             WHERE project_id=$1 AND field_definition_id=$2)",
+        )
+        .bind(project_id)
+        .bind(field_id)
+        .fetch_one(&mut *tx)
+        .await?;
+        if has_values {
+            return Err(ExtractionError::FieldHasValues);
+        }
+        next.version = current.version.checked_add(1).ok_or_else(|| {
+            ExtractionError::InvalidDefinition("field definition version is too large".to_owned())
+        })?;
+        sqlx::query(
+            "INSERT INTO extraction_field_definitions
+             (id,project_id,version,field_key,label,value_type,required)
+             VALUES ($1,$2,$3,$4,$5,$6,$7)",
+        )
+        .bind(next.id)
+        .bind(project_id)
+        .bind(version_column(next.version)?)
+        .bind(&next.field_key)
+        .bind(&next.label)
+        .bind(next.value_type.as_str())
+        .bind(next.required)
+        .execute(&mut *tx)
+        .await?;
+    }
+    tx.commit().await?;
+    Ok(next)
+}
+
+fn version_column(version: u32) -> Result<i32, ExtractionError> {
+    i32::try_from(version).map_err(|_| {
+        ExtractionError::InvalidDefinition("field definition version is too large".to_owned())
+    })
+}
+
 pub async fn list_values(
     pool: &PgPool,
     project_id: Uuid,
@@ -148,15 +276,238 @@ pub async fn list_values(
                 field_definition_version,value_type,text_value,number_value,boolean_value,
                 date_value,rationale,source_document_id,source_block_id,source_page,
                 source_parser_version,source_content_hash,approved_by_actor_kind,
-                approved_by_actor_id,approved_at
+                approved_by_actor_id,approved_at,needs_verification,verified_at,
+                verified_by_actor_id
          FROM extraction_values
-         WHERE project_id=$1 AND study_id=$2 ORDER BY field_definition_id,field_definition_version,id",
+         WHERE project_id=$1 AND study_id=$2 AND superseded_at IS NULL
+         ORDER BY field_definition_id,field_definition_version,id",
     )
     .bind(project_id)
     .bind(study_id)
     .fetch_all(pool)
     .await?;
     rows.into_iter().map(value_from_row).collect()
+}
+
+/// Block a reviewer cites for a manually entered value.  Report, page, parser
+/// version and content hash are derived from the block itself.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct ManualExtractionEvidence {
+    pub document_id: Uuid,
+    pub document_block_id: Uuid,
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub struct ManualExtractionValue {
+    pub field_id: Uuid,
+    pub value: ExtractionValue,
+    pub rationale: Option<String>,
+    pub evidence: Option<ManualExtractionEvidence>,
+}
+
+/// Records a reviewer-entered value for the latest version of a field.  Any
+/// current value is superseded (kept as history) rather than overwritten.
+pub async fn record_manual_value(
+    pool: &PgPool,
+    project_id: Uuid,
+    study_id: Uuid,
+    input: ManualExtractionValue,
+    actor: &Actor,
+) -> Result<ExtractionValueRecord, ExtractionError> {
+    let ManualExtractionValue {
+        field_id,
+        value,
+        rationale,
+        evidence,
+    } = input;
+    let mut tx = pool.begin().await?;
+    ensure_study(&mut tx, project_id, study_id).await?;
+    let definition_row = sqlx::query(
+        "SELECT id,project_id,version,field_key,label,value_type,required
+         FROM extraction_field_definitions
+         WHERE project_id=$1 AND id=$2
+         ORDER BY version DESC LIMIT 1",
+    )
+    .bind(project_id)
+    .bind(field_id)
+    .fetch_optional(&mut *tx)
+    .await?
+    .ok_or(ExtractionError::DefinitionNotFound)?;
+    let definition = field_from_row(definition_row)?;
+    value
+        .validate_for(&definition)
+        .map_err(|error| ExtractionError::InvalidValue(error.to_string()))?;
+    let (value_type, text_value, number_value, boolean_value, date_value) =
+        database_value_from_domain(&value);
+    let rationale = rationale
+        .map(|text| text.trim().to_owned())
+        .filter(|text| !text.is_empty());
+    if rationale.as_ref().is_some_and(|text| text.len() > 4_000) {
+        return Err(ExtractionError::InvalidValue(
+            "rationale must contain at most 4000 characters".to_owned(),
+        ));
+    }
+    let version = i32::try_from(definition.version).map_err(|_| {
+        ExtractionError::InvalidValue("field definition version is too large".to_owned())
+    })?;
+    let source = match evidence {
+        None => None,
+        Some(evidence) => {
+            let row = sqlx::query(
+                "SELECT d.report_id, b.page_number, b.parser_version, b.content_hash
+                 FROM study_reports sr
+                 JOIN documents d ON d.project_id=sr.project_id AND d.report_id=sr.report_id
+                   AND d.id=$3
+                 JOIN document_blocks b ON b.document_id=d.id AND b.id=$4
+                 JOIN document_pages p ON p.document_id=d.id
+                   AND p.parser_version=b.parser_version
+                   AND p.page_number=b.page_number AND p.active
+                 WHERE sr.project_id=$1 AND sr.study_id=$2
+                   AND d.active_parser_version=b.parser_version AND b.active
+                 LIMIT 1",
+            )
+            .bind(project_id)
+            .bind(study_id)
+            .bind(evidence.document_id)
+            .bind(evidence.document_block_id)
+            .fetch_optional(&mut *tx)
+            .await?
+            .ok_or(ExtractionError::EvidenceNotInStudy)?;
+            Some((
+                row.get::<Uuid, _>("report_id"),
+                row.get::<i32, _>("page_number"),
+                row.get::<String, _>("parser_version"),
+                row.get::<String, _>("content_hash"),
+            ))
+        }
+    };
+    sqlx::query(
+        "UPDATE extraction_values
+         SET superseded_at=now(), superseded_by_actor_kind=$5, superseded_by_actor_id=$6
+         WHERE project_id=$1 AND study_id=$2 AND field_definition_id=$3
+           AND field_definition_version=$4 AND superseded_at IS NULL",
+    )
+    .bind(project_id)
+    .bind(study_id)
+    .bind(definition.id)
+    .bind(version)
+    .bind(actor.kind().as_str())
+    .bind(actor.id())
+    .execute(&mut *tx)
+    .await?;
+    let (report_id, source_page, parser_version, content_hash) = match source {
+        Some((report, page, parser, hash)) => (Some(report), Some(page), Some(parser), Some(hash)),
+        None => (None, None, None, None),
+    };
+    let row = sqlx::query(
+        "INSERT INTO extraction_values
+         (id,project_id,study_id,report_id,field_definition_id,field_definition_version,
+          value_type,text_value,number_value,boolean_value,date_value,rationale,
+          source_document_id,source_block_id,source_page,source_parser_version,
+          source_content_hash,approved_by_actor_kind,approved_by_actor_id)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19)
+         RETURNING id,project_id,study_id,report_id,field_definition_id,
+                   field_definition_version,value_type,text_value,number_value,boolean_value,
+                   date_value,rationale,source_document_id,source_block_id,source_page,
+                   source_parser_version,source_content_hash,approved_by_actor_kind,
+                   approved_by_actor_id,approved_at,needs_verification,verified_at,
+                   verified_by_actor_id",
+    )
+    .bind(Uuid::new_v4())
+    .bind(project_id)
+    .bind(study_id)
+    .bind(report_id)
+    .bind(definition.id)
+    .bind(version)
+    .bind(value_type)
+    .bind(text_value)
+    .bind(number_value)
+    .bind(boolean_value)
+    .bind(date_value)
+    .bind(rationale)
+    .bind(evidence.map(|evidence| evidence.document_id))
+    .bind(evidence.map(|evidence| evidence.document_block_id))
+    .bind(source_page)
+    .bind(parser_version)
+    .bind(content_hash)
+    .bind(actor.kind().as_str())
+    .bind(actor.id())
+    .fetch_one(&mut *tx)
+    .await
+    .map_err(|error| {
+        if is_unique_violation(&error) {
+            ExtractionError::ValueAlreadyApproved
+        } else {
+            ExtractionError::Database(error)
+        }
+    })?;
+    tx.commit().await?;
+    value_from_row(row)
+}
+
+/// Clears the current value of a field; the cleared value stays as history.
+/// Clearing a field that has no value is a no-op.
+pub async fn clear_value(
+    pool: &PgPool,
+    project_id: Uuid,
+    study_id: Uuid,
+    field_id: Uuid,
+    actor: &Actor,
+) -> Result<(), ExtractionError> {
+    let mut tx = pool.begin().await?;
+    ensure_study(&mut tx, project_id, study_id).await?;
+    let defined: bool = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM extraction_field_definitions WHERE project_id=$1 AND id=$2)",
+    )
+    .bind(project_id)
+    .bind(field_id)
+    .fetch_one(&mut *tx)
+    .await?;
+    if !defined {
+        return Err(ExtractionError::DefinitionNotFound);
+    }
+    sqlx::query(
+        "UPDATE extraction_values
+         SET superseded_at=now(), superseded_by_actor_kind=$4, superseded_by_actor_id=$5
+         WHERE project_id=$1 AND study_id=$2 AND field_definition_id=$3
+           AND superseded_at IS NULL",
+    )
+    .bind(project_id)
+    .bind(study_id)
+    .bind(field_id)
+    .bind(actor.kind().as_str())
+    .bind(actor.id())
+    .execute(&mut *tx)
+    .await?;
+    tx.commit().await?;
+    Ok(())
+}
+
+async fn ensure_study(
+    tx: &mut Transaction<'_, Postgres>,
+    project_id: Uuid,
+    study_id: Uuid,
+) -> Result<(), ExtractionError> {
+    let exists: bool =
+        sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM studies WHERE project_id=$1 AND id=$2)")
+            .bind(project_id)
+            .bind(study_id)
+            .fetch_one(&mut **tx)
+            .await?;
+    if exists {
+        Ok(())
+    } else {
+        Err(ExtractionError::StudyNotFound)
+    }
+}
+
+fn database_value_from_domain(value: &ExtractionValue) -> DatabaseValue {
+    match value {
+        ExtractionValue::Text { value } => ("text", Some(value.clone()), None, None, None),
+        ExtractionValue::Number { value } => ("number", None, Some(*value), None, None),
+        ExtractionValue::Boolean { value } => ("boolean", None, None, Some(*value), None),
+        ExtractionValue::Date { value } => ("date", None, None, None, Some(*value)),
+    }
 }
 
 pub async fn apply_data_extraction_in_transaction(
@@ -166,7 +517,9 @@ pub async fn apply_data_extraction_in_transaction(
     proposal_id: Uuid,
     extraction: &deepref_ai::DataExtraction,
     actor: &Actor,
-) -> Result<(), ExtractionError> {
+    options: ExtractionApplyOptions,
+) -> Result<ExtractionApplyOutcome, ExtractionError> {
+    let mut outcome = ExtractionApplyOutcome::default();
     let exists: bool =
         sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM studies WHERE project_id=$1 AND id=$2)")
             .bind(project_id.as_uuid())
@@ -236,11 +589,30 @@ pub async fn apply_data_extraction_in_transaction(
             ..
         } = field
         else {
-            if definition.required {
+            // A person accepting a proposal must fill required fields; an
+            // automatic apply (values flagged "to verify") just leaves them open.
+            if definition.required && !options.needs_verification {
                 return Err(ExtractionError::RequiredFieldInsufficient);
             }
             continue;
         };
+        if options.skip_existing {
+            let has_current: bool = sqlx::query_scalar(
+                "SELECT EXISTS(SELECT 1 FROM extraction_values
+                 WHERE project_id=$1 AND study_id=$2 AND field_definition_id=$3
+                   AND field_definition_version=$4 AND superseded_at IS NULL)",
+            )
+            .bind(project_id.as_uuid())
+            .bind(study_id)
+            .bind(definition.id)
+            .bind(i32::try_from(definition.version).unwrap_or(i32::MAX))
+            .fetch_one(&mut **tx)
+            .await?;
+            if has_current {
+                outcome.skipped_existing += 1;
+                continue;
+            }
+        }
         let (value_type, text_value, number_value, boolean_value, date_value) =
             database_value(value, &definition)?;
         let source_page = i32::try_from(source.page)
@@ -335,15 +707,16 @@ pub async fn apply_data_extraction_in_transaction(
         source_page,
     ) in prepared
     {
+        let value_id = Uuid::new_v4();
         sqlx::query(
             "INSERT INTO extraction_values
              (id,project_id,study_id,report_id,field_definition_id,field_definition_version,
               value_type,text_value,number_value,boolean_value,date_value,rationale,
               source_document_id,source_block_id,source_page,source_parser_version,
-              source_content_hash,approved_by_actor_kind,approved_by_actor_id)
-             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19)",
+              source_content_hash,approved_by_actor_kind,approved_by_actor_id,needs_verification)
+             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20)",
         )
-        .bind(Uuid::new_v4())
+        .bind(value_id)
         .bind(project_id.as_uuid())
         .bind(study_id)
         .bind(source.report_id)
@@ -364,6 +737,7 @@ pub async fn apply_data_extraction_in_transaction(
         .bind(&source.content_hash)
         .bind(actor.kind().as_str())
         .bind(actor.id())
+        .bind(options.needs_verification)
         .execute(&mut **tx)
         .await
         .map_err(|error| {
@@ -373,6 +747,7 @@ pub async fn apply_data_extraction_in_transaction(
                 ExtractionError::Database(error)
             }
         })?;
+        outcome.inserted_value_ids.push(value_id);
     }
     sqlx::query(
         "INSERT INTO extraction_events
@@ -388,7 +763,52 @@ pub async fn apply_data_extraction_in_transaction(
     .bind(actor.id())
     .execute(&mut **tx)
     .await?;
-    Ok(())
+    Ok(outcome)
+}
+
+/// A person confirms an AI-entered value; it stops being "to verify".
+pub async fn confirm_value(
+    pool: &PgPool,
+    project_id: Uuid,
+    study_id: Uuid,
+    value_id: Uuid,
+    actor: &Actor,
+) -> Result<ExtractionValueRecord, ExtractionError> {
+    let updated = sqlx::query(
+        "UPDATE extraction_values
+         SET needs_verification=false,verified_at=now(),
+             verified_by_actor_kind=$4,verified_by_actor_id=$5
+         WHERE project_id=$1 AND study_id=$2 AND id=$3 AND superseded_at IS NULL
+         RETURNING id",
+    )
+    .bind(project_id)
+    .bind(study_id)
+    .bind(value_id)
+    .bind(actor.kind().as_str())
+    .bind(actor.id())
+    .fetch_optional(pool)
+    .await?;
+    if updated.is_none() {
+        return Err(ExtractionError::StudyNotFound);
+    }
+    sqlx::query(
+        "INSERT INTO review_events
+         (id,project_id,event_type,aggregate_type,aggregate_id,payload,actor_kind,actor_id)
+         VALUES ($1,$2,'extraction_value_verified','extraction_value',$3,$4,$5,$6)",
+    )
+    .bind(Uuid::new_v4())
+    .bind(project_id)
+    .bind(value_id)
+    .bind(serde_json::json!({"study_id": study_id}))
+    .bind(actor.kind().as_str())
+    .bind(actor.id())
+    .execute(pool)
+    .await?;
+    list_values(pool, project_id, study_id)
+        .await?
+        .into_iter()
+        .find(|value| value.id == value_id)
+        .ok_or(ExtractionError::StudyNotFound)
 }
 
 fn field_from_row(
@@ -453,6 +873,9 @@ fn value_from_row(row: sqlx::postgres::PgRow) -> Result<ExtractionValueRecord, E
         approved_by_actor_kind: row.get("approved_by_actor_kind"),
         approved_by_actor_id: row.get("approved_by_actor_id"),
         approved_at: row.get("approved_at"),
+        needs_verification: row.get("needs_verification"),
+        verified_at: row.get("verified_at"),
+        verified_by: row.get("verified_by_actor_id"),
     })
 }
 

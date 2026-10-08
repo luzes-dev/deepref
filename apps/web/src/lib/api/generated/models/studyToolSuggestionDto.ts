@@ -6,6 +6,10 @@
  */
 
 export interface StudyToolSuggestionDto {
+	/** Shipped appraisal definition that implements this tool. */
+	definition_id: string;
+	/** @minimum 0 */
+	definition_version: number;
 	rationale: string;
 	tool: string;
 }

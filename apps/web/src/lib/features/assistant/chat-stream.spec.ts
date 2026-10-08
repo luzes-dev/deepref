@@ -95,7 +95,8 @@ describe('parseSseFrame', () => {
 		expect(parseSseFrame('event: token\ndata: {}')).toEqual({ event: 'token', delta: '' });
 		expect(parseSseFrame('event: error\ndata: {"message":"boom"}')).toEqual({
 			event: 'error',
-			message: 'boom'
+			message: 'boom',
+			code: null
 		});
 	});
 });

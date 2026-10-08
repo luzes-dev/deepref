@@ -6,6 +6,8 @@
  */
 
 export type PaginatedResponseProjectDtoItemsItem = {
+	/** Number of articles (project reports) in the project. */
+	article_count: number;
 	created_at: string;
 	default_max_depth: number;
 	/** @nullable */

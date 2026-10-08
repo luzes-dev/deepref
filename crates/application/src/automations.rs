@@ -248,6 +248,28 @@ pub enum AutomationDomainEvent {
         appraisal_event_id: Uuid,
         actor: Actor,
     },
+    /// Any screening decision (include, exclude or maybe) was recorded.
+    ScreeningDecisionRecorded {
+        project_id: ProjectId,
+        screening_event_id: Uuid,
+        actor: Actor,
+    },
+    /// A new protocol version was published.
+    ProtocolPublished {
+        project_id: ProjectId,
+        protocol_version_id: Uuid,
+        actor: Actor,
+    },
+    /// A full-text document finished parsing.
+    DocumentParsed {
+        project_id: ProjectId,
+        document_id: Uuid,
+    },
+    /// An AI proposal was created and waits for review.
+    AiProposalCreated {
+        project_id: ProjectId,
+        proposal_id: Uuid,
+    },
 }
 
 impl AutomationDomainEvent {
@@ -258,18 +280,44 @@ impl AutomationDomainEvent {
             | Self::FullTextAttached { project_id, .. }
             | Self::ReportIncluded { project_id, .. }
             | Self::StudyCreated { project_id, .. }
-            | Self::AppraisalCompleted { project_id, .. } => *project_id,
+            | Self::AppraisalCompleted { project_id, .. }
+            | Self::ScreeningDecisionRecorded { project_id, .. }
+            | Self::ProtocolPublished { project_id, .. }
+            | Self::DocumentParsed { project_id, .. }
+            | Self::AiProposalCreated { project_id, .. } => *project_id,
         }
     }
 
-    pub const fn trigger(&self) -> AutomationTriggerKind {
+    /// The legacy fixed-recipe trigger for this event. Events introduced with
+    /// the visual workflow builder have none and only start workflows.
+    pub const fn trigger(&self) -> Option<AutomationTriggerKind> {
         match self {
-            Self::ReportAdded { .. } => AutomationTriggerKind::ReportAdded,
-            Self::AcquisitionCompleted { .. } => AutomationTriggerKind::AcquisitionCompleted,
-            Self::FullTextAttached { .. } => AutomationTriggerKind::FullTextAttached,
-            Self::ReportIncluded { .. } => AutomationTriggerKind::ReportIncluded,
-            Self::StudyCreated { .. } => AutomationTriggerKind::StudyCreated,
-            Self::AppraisalCompleted { .. } => AutomationTriggerKind::AppraisalCompleted,
+            Self::ReportAdded { .. } => Some(AutomationTriggerKind::ReportAdded),
+            Self::AcquisitionCompleted { .. } => Some(AutomationTriggerKind::AcquisitionCompleted),
+            Self::FullTextAttached { .. } => Some(AutomationTriggerKind::FullTextAttached),
+            Self::ReportIncluded { .. } => Some(AutomationTriggerKind::ReportIncluded),
+            Self::StudyCreated { .. } => Some(AutomationTriggerKind::StudyCreated),
+            Self::AppraisalCompleted { .. } => Some(AutomationTriggerKind::AppraisalCompleted),
+            Self::ScreeningDecisionRecorded { .. }
+            | Self::ProtocolPublished { .. }
+            | Self::DocumentParsed { .. }
+            | Self::AiProposalCreated { .. } => None,
+        }
+    }
+
+    /// Stable key of the workflow trigger this event starts.
+    pub const fn workflow_trigger_key(&self) -> &'static str {
+        match self {
+            Self::ReportAdded { .. } => "report_added",
+            Self::AcquisitionCompleted { .. } => "acquisition_completed",
+            Self::FullTextAttached { .. } => "full_text_attached",
+            Self::ReportIncluded { .. } => "report_included",
+            Self::StudyCreated { .. } => "study_created",
+            Self::AppraisalCompleted { .. } => "appraisal_completed",
+            Self::ScreeningDecisionRecorded { .. } => "screening_decision_recorded",
+            Self::ProtocolPublished { .. } => "protocol_published",
+            Self::DocumentParsed { .. } => "document_parsed",
+            Self::AiProposalCreated { .. } => "ai_proposal_created",
         }
     }
 
@@ -292,18 +340,30 @@ impl AutomationDomainEvent {
             Self::AppraisalCompleted {
                 appraisal_event_id, ..
             } => format!("appraisal_event:{appraisal_event_id}"),
+            Self::ScreeningDecisionRecorded {
+                screening_event_id, ..
+            } => format!("screening_decision:{screening_event_id}"),
+            Self::ProtocolPublished {
+                protocol_version_id,
+                ..
+            } => format!("protocol_version:{protocol_version_id}"),
+            Self::DocumentParsed { document_id, .. } => format!("document_parsed:{document_id}"),
+            Self::AiProposalCreated { proposal_id, .. } => format!("ai_proposal:{proposal_id}"),
         }
     }
 
     pub fn actor(&self) -> (ActorKind, &str) {
         match self {
-            Self::ReportAdded { .. } | Self::AcquisitionCompleted { .. } => {
-                (ActorKind::System, "automation-domain-event")
-            }
+            Self::ReportAdded { .. }
+            | Self::AcquisitionCompleted { .. }
+            | Self::DocumentParsed { .. }
+            | Self::AiProposalCreated { .. } => (ActorKind::System, "automation-domain-event"),
             Self::FullTextAttached { actor, .. }
             | Self::ReportIncluded { actor, .. }
             | Self::StudyCreated { actor, .. }
-            | Self::AppraisalCompleted { actor, .. } => (actor.kind(), actor.id()),
+            | Self::AppraisalCompleted { actor, .. }
+            | Self::ScreeningDecisionRecorded { actor, .. }
+            | Self::ProtocolPublished { actor, .. } => (actor.kind(), actor.id()),
         }
     }
 }

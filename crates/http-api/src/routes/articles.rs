@@ -4,11 +4,6 @@ use axum::{
     http::StatusCode,
 };
 use chrono::{DateTime, Utc};
-use deepref_domain::ProjectId;
-use deepref_events::{
-    DomainPayload, EntityType, EventEnvelope, MetricsRecomputeRequested,
-    SUBJECT_METRICS_RECOMPUTE_REQUESTED,
-};
 use serde::Deserialize;
 use serde::Serialize;
 use sqlx::Row;
@@ -293,20 +288,78 @@ pub(crate) async fn recommendations(
     let graph = deepref_postgres::load_project_graph(
         &state.pool,
         project_id,
-        deepref_graph::GraphFieldSelection::metrics(),
+        deepref_graph::GraphFieldSelection {
+            screening: true,
+            ..deepref_graph::GraphFieldSelection::metrics()
+        },
     )
     .await?;
     let nodes = graph
         .nodes
         .into_iter()
+        .filter(|node| !is_screened_out(node))
         .map(report_from_graph_node)
         .collect::<Result<Vec<_>, _>>()?;
+    let (foundational, core_to_project, underexplored) = recommendation_groups(nodes);
     Ok(Json(RecommendationGroupsDto {
-        foundational: nodes.iter().take(5).cloned().collect(),
-        core_to_project: nodes.iter().skip(5).take(5).cloned().collect(),
-        underexplored: nodes.iter().rev().take(5).cloned().collect(),
+        foundational,
+        core_to_project,
+        underexplored,
         projection,
     }))
+}
+
+const RECOMMENDATION_GROUP_SIZE: usize = 5;
+
+/// Articles already excluded at either screening stage are never suggested.
+fn is_screened_out(node: &deepref_graph::GraphNode) -> bool {
+    node.screening.as_ref().is_some_and(|screening| {
+        screening.final_status == "exclude" || screening.title_abstract_status == "exclude"
+    })
+}
+
+/// Rank the project's own citation network. Articles with no internal links
+/// (for example imports at depth 0, where no references were fetched) carry no
+/// network signal, so a project without any links yields empty groups.
+fn recommendation_groups(
+    nodes: Vec<ReportDto>,
+) -> (Vec<ReportDto>, Vec<ReportDto>, Vec<ReportDto>) {
+    let connected: Vec<ReportDto> = nodes
+        .into_iter()
+        .filter(|node| node.internal_citations > 0 || node.outbound_internal_references > 0)
+        .collect();
+    let top = |mut items: Vec<ReportDto>, key: fn(&ReportDto, &ReportDto) -> std::cmp::Ordering| {
+        items.sort_by(key);
+        items.truncate(RECOMMENDATION_GROUP_SIZE);
+        items
+    };
+    let foundational = top(
+        connected
+            .iter()
+            .filter(|node| node.internal_citations > 0)
+            .cloned()
+            .collect(),
+        |a, b| {
+            b.internal_citations
+                .cmp(&a.internal_citations)
+                .then(b.total_citations.cmp(&a.total_citations))
+        },
+    );
+    let core_to_project = top(connected.clone(), |a, b| {
+        b.rank_score.total_cmp(&a.rank_score)
+    });
+    let underexplored = top(
+        connected
+            .into_iter()
+            .filter(|node| node.internal_citations == 0)
+            .collect(),
+        |a, b| {
+            b.outbound_internal_references
+                .cmp(&a.outbound_internal_references)
+                .then(b.total_citations.cmp(&a.total_citations))
+        },
+    );
+    (foundational, core_to_project, underexplored)
 }
 
 #[utoipa::path(post, path="/projects/{project_id}/metrics/recompute", operation_id="recomputeProjectMetrics", tag="reports",
@@ -316,55 +369,14 @@ pub(crate) async fn recompute_metrics(
     Path(project_id): Path<Uuid>,
 ) -> Result<(StatusCode, Json<RecomputeMetricsDto>), ApiError> {
     let mut tx = state.pool.begin().await?;
-    let revision: i64 = sqlx::query_scalar("SELECT nextval('graph_domain_revision_seq')")
-        .fetch_one(&mut *tx)
-        .await?;
-    let event = EventEnvelope::v1(
-        SUBJECT_METRICS_RECOMPUTE_REQUESTED,
-        "deepref.api",
-        EntityType::Metric,
-        project_id.to_string(),
-        revision,
-        project_id,
-        None,
-        DomainPayload::MetricsRecomputeRequested(MetricsRecomputeRequested {
-            project_id,
-            ingestion_id: None,
-        }),
-    );
-    sqlx::query(
-        "INSERT INTO domain_events (event_id,schema_version,event_type,entity_type,entity_key,revision,payload,correlation_id,causation_id,created_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)",
-    )
-    .bind(event.event_id)
-    .bind(event.schema_version as i16)
-    .bind(&event.event_type)
-    .bind(event.entity_type.as_str())
-    .bind(&event.entity_key)
-    .bind(event.revision)
-    .bind(serde_json::to_value(&event.payload)?)
-    .bind(event.correlation_id)
-    .bind(event.causation_id)
-    .bind(event.occurred_at)
-    .execute(&mut *tx)
-    .await?;
-    deepref_postgres::enqueue_job(
-        &mut tx,
-        &deepref_postgres::job(
-            event.event_id,
-            ProjectId::new(project_id),
-            "recompute_metrics",
-            serde_json::to_value(&event)?,
-            format!("recompute_metrics:{project_id}:{}", event.event_id),
-        ),
-    )
-    .await?;
+    let event_id = deepref_postgres::enqueue_metrics_recompute(&mut tx, project_id).await?;
     tx.commit().await?;
     Ok((
         StatusCode::ACCEPTED,
         Json(RecomputeMetricsDto {
             status: "queued",
             project_id,
-            event_id: event.event_id,
+            event_id,
         }),
     ))
 }
@@ -541,5 +553,71 @@ mod tests {
                 Err(ApiError::BadRequest(_))
             ));
         }
+    }
+
+    fn report(internal: i32, outbound: i32, rank: f64) -> ReportDto {
+        ReportDto {
+            report_id: Uuid::new_v4(),
+            doi: None,
+            title: None,
+            issued_year: None,
+            work_type: None,
+            total_citations: 0,
+            internal_citations: internal,
+            outbound_internal_references: outbound,
+            rank_score: rank,
+            metrics_as_of: None,
+            metrics_stale: false,
+        }
+    }
+
+    fn screened(final_status: &str, title_abstract: &str) -> deepref_graph::GraphNode {
+        deepref_graph::GraphNode {
+            report_id: Uuid::new_v4(),
+            doi: None,
+            title: None,
+            issued_year: None,
+            published_year: None,
+            work_type: None,
+            publisher: None,
+            container_title: None,
+            url: None,
+            metrics: None,
+            screening: Some(deepref_graph::GraphScreeningOverlay {
+                title_abstract_status: title_abstract.to_owned(),
+                full_text_status: "not_required".to_owned(),
+                final_status: final_status.to_owned(),
+            }),
+            study: None,
+            appraisal: None,
+            provenance: None,
+        }
+    }
+
+    #[test]
+    fn screened_out_reports_are_not_recommended() {
+        assert!(is_screened_out(&screened("exclude", "include")));
+        assert!(is_screened_out(&screened("unscreened", "exclude")));
+        assert!(!is_screened_out(&screened("unscreened", "unscreened")));
+        assert!(!is_screened_out(&screened("include", "include")));
+    }
+
+    #[test]
+    fn unlinked_projects_have_no_recommendations() {
+        let (a, b, c) = recommendation_groups(vec![report(0, 0, 0.0), report(0, 0, 0.0)]);
+        assert!(a.is_empty() && b.is_empty() && c.is_empty());
+    }
+
+    #[test]
+    fn groups_rank_the_internal_citation_network() {
+        let hub = report(3, 0, 0.9);
+        let citer = report(0, 2, 0.1);
+        let (foundational, core, underexplored) =
+            recommendation_groups(vec![citer.clone(), hub.clone(), report(0, 0, 0.0)]);
+        assert_eq!(foundational.len(), 1);
+        assert_eq!(foundational[0].report_id, hub.report_id);
+        assert_eq!(core[0].report_id, hub.report_id);
+        assert_eq!(underexplored.len(), 1);
+        assert_eq!(underexplored[0].report_id, citer.report_id);
     }
 }

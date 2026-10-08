@@ -7,9 +7,10 @@
 use deepref_documents::{ParsedBlock, ParsedDocument, ParsedPage};
 use deepref_postgres::{
     CompleteDocumentRetrievalOutcome, NewDocument, complete_document_retrieval, create_document,
-    enqueue_parse, get_document, get_document_by_id, insert_document_blocks, list_documents,
-    list_full_text_queue, list_full_text_reasons, list_missing_full_text, mark_document_retrieving,
-    migrate, persist_parsed_document, search_document_blocks,
+    enqueue_parse, find_failed_document_by_hash, get_document, get_document_by_id,
+    insert_document_blocks, list_documents, list_full_text_queue, list_full_text_reasons,
+    list_missing_full_text, mark_document_failed, mark_document_retrieving, migrate,
+    persist_parsed_document, requeue_document_processing, search_document_blocks,
 };
 use sqlx::{PgPool, Row, postgres::PgPoolOptions};
 use uuid::Uuid;
@@ -597,5 +598,86 @@ async fn retrieval_completion_has_one_winner_and_one_parse_job() {
     .await
     .unwrap();
     assert_eq!(parse_jobs, 1);
+    cleanup(&pool, project_id).await;
+}
+
+#[tokio::test]
+async fn failed_document_can_be_requeued_and_revives_its_parse_job() {
+    let Some(pool) = database().await else { return };
+    let (project_id, report_id) = fixture(&pool).await;
+    let document_id = Uuid::new_v4();
+    let mut tx = pool.begin().await.unwrap();
+    create_document(
+        &mut tx,
+        NewDocument {
+            project_id,
+            report_id,
+            id: document_id,
+            source: "upload",
+            status: "uploaded",
+            original_filename: None,
+            external_url: None,
+            mime_type: "application/pdf",
+            byte_size: 10,
+            content_hash: Some(DOCUMENT_HASH),
+            object_key: Some("documents/77777777-7777-4777-8777-777777777777"),
+            actor_kind: "system",
+            actor_id: "requeue-test",
+        },
+    )
+    .await
+    .unwrap();
+    enqueue_parse(&mut tx, project_id.into(), document_id, DOCUMENT_HASH)
+        .await
+        .unwrap();
+    tx.commit().await.unwrap();
+
+    // A document that is still processing is not retryable.
+    let mut tx = pool.begin().await.unwrap();
+    assert!(
+        requeue_document_processing(&mut tx, project_id.into(), report_id, document_id)
+            .await
+            .unwrap()
+            .is_none()
+    );
+    tx.rollback().await.unwrap();
+    assert!(
+        find_failed_document_by_hash(&pool, project_id, report_id, DOCUMENT_HASH)
+            .await
+            .unwrap()
+            .is_none()
+    );
+
+    mark_document_failed(&pool, document_id, "Pdfium could not be loaded")
+        .await
+        .unwrap();
+    sqlx::query("UPDATE jobs SET state='dead',attempts=5,last_error='boom' WHERE payload->>'document_id'=$1")
+        .bind(document_id.to_string())
+        .execute(&pool)
+        .await
+        .unwrap();
+    assert_eq!(
+        find_failed_document_by_hash(&pool, project_id, report_id, DOCUMENT_HASH)
+            .await
+            .unwrap(),
+        Some(document_id)
+    );
+
+    let mut tx = pool.begin().await.unwrap();
+    let document = requeue_document_processing(&mut tx, project_id.into(), report_id, document_id)
+        .await
+        .unwrap()
+        .expect("failed document is retryable");
+    tx.commit().await.unwrap();
+    assert_eq!(document.status, "uploaded");
+    assert!(document.parser_error.is_none());
+    let (state, attempts, jobs): (String, i32, i64) = sqlx::query_as(
+        "SELECT max(state),max(attempts),count(*) FROM jobs WHERE kind='parse_document' AND payload->>'document_id'=$1",
+    )
+    .bind(document_id.to_string())
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!((state.as_str(), attempts, jobs), ("queued", 0, 1));
     cleanup(&pool, project_id).await;
 }

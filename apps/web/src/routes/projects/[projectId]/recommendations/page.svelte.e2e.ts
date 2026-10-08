@@ -63,19 +63,17 @@ async function mockRecommendationsWorkspace(page: Page): Promise<void> {
 	);
 }
 
-test('recommendations preserve projection metadata, category hierarchy, and article selection', async ({
-	page
-}) => {
+test('recommendation selection retains discovery context', async ({ page }) => {
 	await mockRecommendationsWorkspace(page);
 	await page.goto(`/projects/${projectId}/recommendations`);
 
-	await expect(page.getByRole('heading', { name: 'Recommendations', exact: true })).toBeVisible();
-	await page.getByText('Recommendation update details', { exact: true }).click();
-	await expect(page.getByText('Projection revision 3', { exact: true })).toBeVisible();
-	await expect(page.getByRole('heading', { name: 'Foundational', exact: true })).toBeVisible();
-	await expect(page.getByText('Foundational evidence report', { exact: true })).toBeVisible();
-	await expect(page.getByText('Internal 4', { exact: true })).toBeVisible();
-
+	await page.getByRole('searchbox', { name: 'Search recommendations' }).fill('Foundational');
 	await page.getByRole('button', { name: 'Open Foundational evidence report' }).click();
-	await expect(page).toHaveURL(`/projects/${projectId}/articles?report=${reportId}`);
+	await expect(page).toHaveURL(`/projects/${projectId}/recommendations?report=${reportId}`);
+	await expect(page.getByRole('searchbox', { name: 'Search recommendations' })).toHaveValue(
+		'Foundational'
+	);
+	await expect(
+		page.getByRole('button', { name: 'Open Foundational evidence report' })
+	).toHaveAttribute('aria-pressed', 'true');
 });

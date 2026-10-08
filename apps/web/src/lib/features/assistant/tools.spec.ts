@@ -29,6 +29,7 @@ const validValues = {
 	search_project_reports: { query: 'randomized trial', limit: '10' },
 	get_screening_state: { report_id: REPORT_ID },
 	get_study: { study_id: STUDY_ID },
+	list_studies: {},
 	get_appraisal: {
 		report_id: REPORT_ID,
 		definition_id: 'rob-2',
@@ -50,15 +51,15 @@ const validValues = {
 } satisfies Record<ToolName, ToolValues>;
 
 describe('project assistant tool metadata and request serialization', () => {
-	it('keeps the exact fourteen-tool catalog split into reads and proposals', () => {
-		expect(ASSISTANT_TOOL_NAMES).toHaveLength(14);
-		expect(new Set(ASSISTANT_TOOL_NAMES).size).toBe(14);
-		expect(Object.keys(ASSISTANT_TOOL_METADATA)).toHaveLength(14);
+	it('keeps the exact fifteen-tool catalog split into reads and proposals', () => {
+		expect(ASSISTANT_TOOL_NAMES).toHaveLength(15);
+		expect(new Set(ASSISTANT_TOOL_NAMES).size).toBe(15);
+		expect(Object.keys(ASSISTANT_TOOL_METADATA)).toHaveLength(15);
 		expect(
 			ASSISTANT_TOOL_NAMES.filter(
 				(name) => ASSISTANT_TOOL_METADATA[name].kind === AssistantToolKind.read
 			)
-		).toHaveLength(8);
+		).toHaveLength(9);
 		expect(
 			ASSISTANT_TOOL_NAMES.filter(
 				(name) => ASSISTANT_TOOL_METADATA[name].kind === AssistantToolKind.proposal

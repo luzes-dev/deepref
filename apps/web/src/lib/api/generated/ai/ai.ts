@@ -19,16 +19,31 @@ import type {
 } from '@tanstack/svelte-query';
 
 import type {
+	AiActivityDto,
+	AiActivityOverviewDto,
+	AiAutonomyDto,
+	AiBudgetDto,
 	AiProposalDecisionDto,
 	AiProposalDto,
+	AiReviewerDecisionDto,
+	AiStageAgreementDto,
+	AiStatusDto,
 	ApiErrorBody,
+	BatchUndoDto,
 	DecideAiProposalRequest,
 	GenerateAppraisalPrefillRequest,
 	GenerateDuplicateRequest,
 	GenerateScreeningRequest,
+	GetAiStatusParams,
+	ListAiActivityParams,
 	ListAiProposalsParams,
+	ListAiReviewerDecisionsParams,
+	PaginatedResponseAiActivityDto,
 	PaginatedResponseAiProposalDto,
-	ReviewRunDto
+	ResolveReviewerConflictRequest,
+	ReviewRunDto,
+	UpdateAiAutonomyRequest,
+	UpdateAiBudgetRequest
 } from '../models';
 
 import { customFetch } from '../../custom-fetch.ts';
@@ -36,6 +51,1046 @@ import type { ErrorType, BodyType } from '../../custom-fetch.ts';
 
 type SecondParameter<T extends (...args: never) => unknown> = Parameters<T>[1];
 
+export type getAiStatusResponse200 = {
+	data: AiStatusDto;
+	status: 200;
+};
+
+export type getAiStatusResponse404 = {
+	data: ApiErrorBody;
+	status: 404;
+};
+
+export type getAiStatusResponse500 = {
+	data: ApiErrorBody;
+	status: 500;
+};
+
+export type getAiStatusResponseSuccess = getAiStatusResponse200 & {
+	headers: Headers;
+};
+export type getAiStatusResponseError = (getAiStatusResponse404 | getAiStatusResponse500) & {
+	headers: Headers;
+};
+
+export const getGetAiStatusUrl = (params?: GetAiStatusParams) => {
+	const normalizedParams = new URLSearchParams();
+
+	Object.entries(params || {}).forEach(([key, value]) => {
+		if (value !== undefined) {
+			normalizedParams.append(key, value === null ? 'null' : String(value));
+		}
+	});
+
+	const stringifiedParams = normalizedParams.toString();
+
+	return stringifiedParams.length > 0 ? `/api/ai/status?${stringifiedParams}` : `/api/ai/status`;
+};
+
+export const getAiStatus = async (
+	params?: GetAiStatusParams,
+	options?: Parameters<typeof customFetch>[1]
+): Promise<getAiStatusResponseSuccess> => {
+	return customFetch<getAiStatusResponseSuccess>(getGetAiStatusUrl(params), {
+		...options,
+		method: 'GET'
+	});
+};
+
+export const getGetAiStatusQueryKey = (params?: GetAiStatusParams) => {
+	return [`/api/ai/status`, ...(params ? [params] : [])] as const;
+};
+
+export const getGetAiStatusQueryOptions = <
+	TData = Awaited<ReturnType<typeof getAiStatus>>,
+	TError = ErrorType<ApiErrorBody>
+>(
+	params?: GetAiStatusParams,
+	options?: {
+		query?: Partial<CreateQueryOptions<Awaited<ReturnType<typeof getAiStatus>>, TError, TData>>;
+		request?: SecondParameter<typeof customFetch>;
+	}
+) => {
+	const { query: queryOptions, request: requestOptions } = options ?? {};
+
+	const queryKey = queryOptions?.queryKey ?? getGetAiStatusQueryKey(params);
+
+	const queryFn: QueryFunction<Awaited<ReturnType<typeof getAiStatus>>> = ({ signal }) =>
+		getAiStatus(params, { signal, ...requestOptions });
+
+	return { queryKey, queryFn, ...queryOptions } as CreateQueryOptions<
+		Awaited<ReturnType<typeof getAiStatus>>,
+		TError,
+		TData
+	> & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type GetAiStatusQueryResult = NonNullable<Awaited<ReturnType<typeof getAiStatus>>>;
+export type GetAiStatusQueryError = ErrorType<ApiErrorBody>;
+
+export function createGetAiStatus<
+	TData = Awaited<ReturnType<typeof getAiStatus>>,
+	TError = ErrorType<ApiErrorBody>
+>(
+	params?: () => GetAiStatusParams,
+	options?: () => {
+		query?: Partial<CreateQueryOptions<Awaited<ReturnType<typeof getAiStatus>>, TError, TData>>;
+		request?: SecondParameter<typeof customFetch>;
+	},
+	queryClient?: () => QueryClient
+): CreateQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> } {
+	const query = createQuery(
+		() => getGetAiStatusQueryOptions(params?.(), options?.()),
+		queryClient
+	) as CreateQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> };
+
+	return query;
+}
+
+export const prefetchGetAiStatusQuery = async <
+	TData = Awaited<ReturnType<typeof getAiStatus>>,
+	TError = ErrorType<ApiErrorBody>
+>(
+	queryClient: QueryClient,
+	params?: GetAiStatusParams,
+	options?: {
+		query?: Partial<CreateQueryOptions<Awaited<ReturnType<typeof getAiStatus>>, TError, TData>>;
+		request?: SecondParameter<typeof customFetch>;
+	}
+): Promise<QueryClient> => {
+	const queryOptions = getGetAiStatusQueryOptions(params, options);
+
+	await queryClient.prefetchQuery(queryOptions);
+
+	return queryClient;
+};
+
+export type listAiActivityResponse200 = {
+	data: PaginatedResponseAiActivityDto;
+	status: 200;
+};
+
+export type listAiActivityResponse400 = {
+	data: ApiErrorBody;
+	status: 400;
+};
+
+export type listAiActivityResponse500 = {
+	data: ApiErrorBody;
+	status: 500;
+};
+
+export type listAiActivityResponseSuccess = listAiActivityResponse200 & {
+	headers: Headers;
+};
+export type listAiActivityResponseError = (
+	listAiActivityResponse400 | listAiActivityResponse500
+) & {
+	headers: Headers;
+};
+
+export const getListAiActivityUrl = (projectId: string, params?: ListAiActivityParams) => {
+	const normalizedParams = new URLSearchParams();
+
+	Object.entries(params || {}).forEach(([key, value]) => {
+		if (value !== undefined) {
+			normalizedParams.append(key, value === null ? 'null' : String(value));
+		}
+	});
+
+	const stringifiedParams = normalizedParams.toString();
+
+	return stringifiedParams.length > 0
+		? `/api/projects/${projectId}/ai/activity?${stringifiedParams}`
+		: `/api/projects/${projectId}/ai/activity`;
+};
+
+export const listAiActivity = async (
+	projectId: string,
+	params?: ListAiActivityParams,
+	options?: Parameters<typeof customFetch>[1]
+): Promise<listAiActivityResponseSuccess> => {
+	return customFetch<listAiActivityResponseSuccess>(getListAiActivityUrl(projectId, params), {
+		...options,
+		method: 'GET'
+	});
+};
+
+export const getListAiActivityQueryKey = (projectId: string, params?: ListAiActivityParams) => {
+	return [`/api/projects/${projectId}/ai/activity`, ...(params ? [params] : [])] as const;
+};
+
+export const getListAiActivityQueryOptions = <
+	TData = Awaited<ReturnType<typeof listAiActivity>>,
+	TError = ErrorType<ApiErrorBody>
+>(
+	projectId: string,
+	params?: ListAiActivityParams,
+	options?: {
+		query?: Partial<
+			CreateQueryOptions<Awaited<ReturnType<typeof listAiActivity>>, TError, TData>
+		>;
+		request?: SecondParameter<typeof customFetch>;
+	}
+) => {
+	const { query: queryOptions, request: requestOptions } = options ?? {};
+
+	const queryKey = queryOptions?.queryKey ?? getListAiActivityQueryKey(projectId, params);
+
+	const queryFn: QueryFunction<Awaited<ReturnType<typeof listAiActivity>>> = ({ signal }) =>
+		listAiActivity(projectId, params, { signal, ...requestOptions });
+
+	return {
+		queryKey,
+		queryFn,
+		enabled: projectId !== null && projectId !== undefined,
+		...queryOptions
+	} as CreateQueryOptions<Awaited<ReturnType<typeof listAiActivity>>, TError, TData> & {
+		queryKey: DataTag<QueryKey, TData, TError>;
+	};
+};
+
+export type ListAiActivityQueryResult = NonNullable<Awaited<ReturnType<typeof listAiActivity>>>;
+export type ListAiActivityQueryError = ErrorType<ApiErrorBody>;
+
+export function createListAiActivity<
+	TData = Awaited<ReturnType<typeof listAiActivity>>,
+	TError = ErrorType<ApiErrorBody>
+>(
+	projectId: () => string,
+	params?: () => ListAiActivityParams,
+	options?: () => {
+		query?: Partial<
+			CreateQueryOptions<Awaited<ReturnType<typeof listAiActivity>>, TError, TData>
+		>;
+		request?: SecondParameter<typeof customFetch>;
+	},
+	queryClient?: () => QueryClient
+): CreateQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> } {
+	const query = createQuery(
+		() => getListAiActivityQueryOptions(projectId(), params?.(), options?.()),
+		queryClient
+	) as CreateQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> };
+
+	return query;
+}
+
+export const prefetchListAiActivityQuery = async <
+	TData = Awaited<ReturnType<typeof listAiActivity>>,
+	TError = ErrorType<ApiErrorBody>
+>(
+	queryClient: QueryClient,
+	projectId: string,
+	params?: ListAiActivityParams,
+	options?: {
+		query?: Partial<
+			CreateQueryOptions<Awaited<ReturnType<typeof listAiActivity>>, TError, TData>
+		>;
+		request?: SecondParameter<typeof customFetch>;
+	}
+): Promise<QueryClient> => {
+	const queryOptions = getListAiActivityQueryOptions(projectId, params, options);
+
+	await queryClient.prefetchQuery(queryOptions);
+
+	return queryClient;
+};
+
+export type undoAiActivityBatchResponse200 = {
+	data: BatchUndoDto;
+	status: 200;
+};
+
+export type undoAiActivityBatchResponse404 = {
+	data: ApiErrorBody;
+	status: 404;
+};
+
+export type undoAiActivityBatchResponse409 = {
+	data: ApiErrorBody;
+	status: 409;
+};
+
+export type undoAiActivityBatchResponse500 = {
+	data: ApiErrorBody;
+	status: 500;
+};
+
+export type undoAiActivityBatchResponseSuccess = undoAiActivityBatchResponse200 & {
+	headers: Headers;
+};
+export type undoAiActivityBatchResponseError = (
+	undoAiActivityBatchResponse404 | undoAiActivityBatchResponse409 | undoAiActivityBatchResponse500
+) & {
+	headers: Headers;
+};
+
+export const getUndoAiActivityBatchUrl = (projectId: string, batchId: string) => {
+	return `/api/projects/${projectId}/ai/activity/batches/${batchId}/undo`;
+};
+
+export const undoAiActivityBatch = async (
+	projectId: string,
+	batchId: string,
+	options?: Parameters<typeof customFetch>[1]
+): Promise<undoAiActivityBatchResponseSuccess> => {
+	return customFetch<undoAiActivityBatchResponseSuccess>(
+		getUndoAiActivityBatchUrl(projectId, batchId),
+		{
+			...options,
+			method: 'POST'
+		}
+	);
+};
+
+export const getUndoAiActivityBatchMutationOptions = <
+	TError = ErrorType<ApiErrorBody>,
+	TContext = unknown
+>(options?: {
+	mutation?: CreateMutationOptions<
+		Awaited<ReturnType<typeof undoAiActivityBatch>>,
+		TError,
+		UndoAiActivityBatchMutationVariables,
+		TContext
+	>;
+	request?: SecondParameter<typeof customFetch>;
+}): CreateMutationOptions<
+	Awaited<ReturnType<typeof undoAiActivityBatch>>,
+	TError,
+	UndoAiActivityBatchMutationVariables,
+	TContext
+> => {
+	const mutationKey = ['undoAiActivityBatch'];
+	const { mutation: mutationOptions, request: requestOptions } = options
+		? options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey
+			? options
+			: { ...options, mutation: { ...options.mutation, mutationKey } }
+		: { mutation: { mutationKey }, request: undefined };
+
+	const mutationFn: MutationFunction<
+		Awaited<ReturnType<typeof undoAiActivityBatch>>,
+		UndoAiActivityBatchMutationVariables
+	> = (props) => {
+		const { projectId, batchId } = props ?? {};
+
+		return undoAiActivityBatch(projectId, batchId, requestOptions);
+	};
+
+	return { mutationFn, ...mutationOptions };
+};
+
+export type UndoAiActivityBatchMutationResult = NonNullable<
+	Awaited<ReturnType<typeof undoAiActivityBatch>>
+>;
+
+export type UndoAiActivityBatchMutationError = ErrorType<ApiErrorBody>;
+export type UndoAiActivityBatchMutationVariables = { projectId: string; batchId: string };
+
+export const createUndoAiActivityBatch = <TError = ErrorType<ApiErrorBody>, TContext = unknown>(
+	options?: () => {
+		mutation?: CreateMutationOptions<
+			Awaited<ReturnType<typeof undoAiActivityBatch>>,
+			TError,
+			UndoAiActivityBatchMutationVariables,
+			TContext
+		>;
+		request?: SecondParameter<typeof customFetch>;
+	},
+	queryClient?: () => QueryClient
+): CreateMutationResult<
+	Awaited<ReturnType<typeof undoAiActivityBatch>>,
+	TError,
+	UndoAiActivityBatchMutationVariables,
+	TContext
+> => {
+	return createMutation(
+		() => ({ ...getUndoAiActivityBatchMutationOptions(options?.()) }),
+		queryClient
+	);
+};
+export type getAiActivityOverviewResponse200 = {
+	data: AiActivityOverviewDto;
+	status: 200;
+};
+
+export type getAiActivityOverviewResponse500 = {
+	data: ApiErrorBody;
+	status: 500;
+};
+
+export type getAiActivityOverviewResponseSuccess = getAiActivityOverviewResponse200 & {
+	headers: Headers;
+};
+export type getAiActivityOverviewResponseError = getAiActivityOverviewResponse500 & {
+	headers: Headers;
+};
+
+export const getGetAiActivityOverviewUrl = (projectId: string) => {
+	return `/api/projects/${projectId}/ai/activity/overview`;
+};
+
+export const getAiActivityOverview = async (
+	projectId: string,
+	options?: Parameters<typeof customFetch>[1]
+): Promise<getAiActivityOverviewResponseSuccess> => {
+	return customFetch<getAiActivityOverviewResponseSuccess>(
+		getGetAiActivityOverviewUrl(projectId),
+		{
+			...options,
+			method: 'GET'
+		}
+	);
+};
+
+export const getGetAiActivityOverviewQueryKey = (projectId: string) => {
+	return [`/api/projects/${projectId}/ai/activity/overview`] as const;
+};
+
+export const getGetAiActivityOverviewQueryOptions = <
+	TData = Awaited<ReturnType<typeof getAiActivityOverview>>,
+	TError = ErrorType<ApiErrorBody>
+>(
+	projectId: string,
+	options?: {
+		query?: Partial<
+			CreateQueryOptions<Awaited<ReturnType<typeof getAiActivityOverview>>, TError, TData>
+		>;
+		request?: SecondParameter<typeof customFetch>;
+	}
+) => {
+	const { query: queryOptions, request: requestOptions } = options ?? {};
+
+	const queryKey = queryOptions?.queryKey ?? getGetAiActivityOverviewQueryKey(projectId);
+
+	const queryFn: QueryFunction<Awaited<ReturnType<typeof getAiActivityOverview>>> = ({
+		signal
+	}) => getAiActivityOverview(projectId, { signal, ...requestOptions });
+
+	return {
+		queryKey,
+		queryFn,
+		enabled: projectId !== null && projectId !== undefined,
+		...queryOptions
+	} as CreateQueryOptions<Awaited<ReturnType<typeof getAiActivityOverview>>, TError, TData> & {
+		queryKey: DataTag<QueryKey, TData, TError>;
+	};
+};
+
+export type GetAiActivityOverviewQueryResult = NonNullable<
+	Awaited<ReturnType<typeof getAiActivityOverview>>
+>;
+export type GetAiActivityOverviewQueryError = ErrorType<ApiErrorBody>;
+
+export function createGetAiActivityOverview<
+	TData = Awaited<ReturnType<typeof getAiActivityOverview>>,
+	TError = ErrorType<ApiErrorBody>
+>(
+	projectId: () => string,
+	options?: () => {
+		query?: Partial<
+			CreateQueryOptions<Awaited<ReturnType<typeof getAiActivityOverview>>, TError, TData>
+		>;
+		request?: SecondParameter<typeof customFetch>;
+	},
+	queryClient?: () => QueryClient
+): CreateQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> } {
+	const query = createQuery(
+		() => getGetAiActivityOverviewQueryOptions(projectId(), options?.()),
+		queryClient
+	) as CreateQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> };
+
+	return query;
+}
+
+export const prefetchGetAiActivityOverviewQuery = async <
+	TData = Awaited<ReturnType<typeof getAiActivityOverview>>,
+	TError = ErrorType<ApiErrorBody>
+>(
+	queryClient: QueryClient,
+	projectId: string,
+	options?: {
+		query?: Partial<
+			CreateQueryOptions<Awaited<ReturnType<typeof getAiActivityOverview>>, TError, TData>
+		>;
+		request?: SecondParameter<typeof customFetch>;
+	}
+): Promise<QueryClient> => {
+	const queryOptions = getGetAiActivityOverviewQueryOptions(projectId, options);
+
+	await queryClient.prefetchQuery(queryOptions);
+
+	return queryClient;
+};
+
+export type undoAiActivityResponse200 = {
+	data: AiActivityDto;
+	status: 200;
+};
+
+export type undoAiActivityResponse404 = {
+	data: ApiErrorBody;
+	status: 404;
+};
+
+export type undoAiActivityResponse409 = {
+	data: ApiErrorBody;
+	status: 409;
+};
+
+export type undoAiActivityResponse500 = {
+	data: ApiErrorBody;
+	status: 500;
+};
+
+export type undoAiActivityResponseSuccess = undoAiActivityResponse200 & {
+	headers: Headers;
+};
+export type undoAiActivityResponseError = (
+	undoAiActivityResponse404 | undoAiActivityResponse409 | undoAiActivityResponse500
+) & {
+	headers: Headers;
+};
+
+export const getUndoAiActivityUrl = (projectId: string, activityId: string) => {
+	return `/api/projects/${projectId}/ai/activity/${activityId}/undo`;
+};
+
+export const undoAiActivity = async (
+	projectId: string,
+	activityId: string,
+	options?: Parameters<typeof customFetch>[1]
+): Promise<undoAiActivityResponseSuccess> => {
+	return customFetch<undoAiActivityResponseSuccess>(getUndoAiActivityUrl(projectId, activityId), {
+		...options,
+		method: 'POST'
+	});
+};
+
+export const getUndoAiActivityMutationOptions = <
+	TError = ErrorType<ApiErrorBody>,
+	TContext = unknown
+>(options?: {
+	mutation?: CreateMutationOptions<
+		Awaited<ReturnType<typeof undoAiActivity>>,
+		TError,
+		UndoAiActivityMutationVariables,
+		TContext
+	>;
+	request?: SecondParameter<typeof customFetch>;
+}): CreateMutationOptions<
+	Awaited<ReturnType<typeof undoAiActivity>>,
+	TError,
+	UndoAiActivityMutationVariables,
+	TContext
+> => {
+	const mutationKey = ['undoAiActivity'];
+	const { mutation: mutationOptions, request: requestOptions } = options
+		? options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey
+			? options
+			: { ...options, mutation: { ...options.mutation, mutationKey } }
+		: { mutation: { mutationKey }, request: undefined };
+
+	const mutationFn: MutationFunction<
+		Awaited<ReturnType<typeof undoAiActivity>>,
+		UndoAiActivityMutationVariables
+	> = (props) => {
+		const { projectId, activityId } = props ?? {};
+
+		return undoAiActivity(projectId, activityId, requestOptions);
+	};
+
+	return { mutationFn, ...mutationOptions };
+};
+
+export type UndoAiActivityMutationResult = NonNullable<Awaited<ReturnType<typeof undoAiActivity>>>;
+
+export type UndoAiActivityMutationError = ErrorType<ApiErrorBody>;
+export type UndoAiActivityMutationVariables = { projectId: string; activityId: string };
+
+export const createUndoAiActivity = <TError = ErrorType<ApiErrorBody>, TContext = unknown>(
+	options?: () => {
+		mutation?: CreateMutationOptions<
+			Awaited<ReturnType<typeof undoAiActivity>>,
+			TError,
+			UndoAiActivityMutationVariables,
+			TContext
+		>;
+		request?: SecondParameter<typeof customFetch>;
+	},
+	queryClient?: () => QueryClient
+): CreateMutationResult<
+	Awaited<ReturnType<typeof undoAiActivity>>,
+	TError,
+	UndoAiActivityMutationVariables,
+	TContext
+> => {
+	return createMutation(
+		() => ({ ...getUndoAiActivityMutationOptions(options?.()) }),
+		queryClient
+	);
+};
+export type getAiAutonomyResponse200 = {
+	data: AiAutonomyDto;
+	status: 200;
+};
+
+export type getAiAutonomyResponse404 = {
+	data: ApiErrorBody;
+	status: 404;
+};
+
+export type getAiAutonomyResponse500 = {
+	data: ApiErrorBody;
+	status: 500;
+};
+
+export type getAiAutonomyResponseSuccess = getAiAutonomyResponse200 & {
+	headers: Headers;
+};
+export type getAiAutonomyResponseError = (getAiAutonomyResponse404 | getAiAutonomyResponse500) & {
+	headers: Headers;
+};
+
+export const getGetAiAutonomyUrl = (projectId: string) => {
+	return `/api/projects/${projectId}/ai/autonomy`;
+};
+
+export const getAiAutonomy = async (
+	projectId: string,
+	options?: Parameters<typeof customFetch>[1]
+): Promise<getAiAutonomyResponseSuccess> => {
+	return customFetch<getAiAutonomyResponseSuccess>(getGetAiAutonomyUrl(projectId), {
+		...options,
+		method: 'GET'
+	});
+};
+
+export const getGetAiAutonomyQueryKey = (projectId: string) => {
+	return [`/api/projects/${projectId}/ai/autonomy`] as const;
+};
+
+export const getGetAiAutonomyQueryOptions = <
+	TData = Awaited<ReturnType<typeof getAiAutonomy>>,
+	TError = ErrorType<ApiErrorBody>
+>(
+	projectId: string,
+	options?: {
+		query?: Partial<
+			CreateQueryOptions<Awaited<ReturnType<typeof getAiAutonomy>>, TError, TData>
+		>;
+		request?: SecondParameter<typeof customFetch>;
+	}
+) => {
+	const { query: queryOptions, request: requestOptions } = options ?? {};
+
+	const queryKey = queryOptions?.queryKey ?? getGetAiAutonomyQueryKey(projectId);
+
+	const queryFn: QueryFunction<Awaited<ReturnType<typeof getAiAutonomy>>> = ({ signal }) =>
+		getAiAutonomy(projectId, { signal, ...requestOptions });
+
+	return {
+		queryKey,
+		queryFn,
+		enabled: projectId !== null && projectId !== undefined,
+		...queryOptions
+	} as CreateQueryOptions<Awaited<ReturnType<typeof getAiAutonomy>>, TError, TData> & {
+		queryKey: DataTag<QueryKey, TData, TError>;
+	};
+};
+
+export type GetAiAutonomyQueryResult = NonNullable<Awaited<ReturnType<typeof getAiAutonomy>>>;
+export type GetAiAutonomyQueryError = ErrorType<ApiErrorBody>;
+
+export function createGetAiAutonomy<
+	TData = Awaited<ReturnType<typeof getAiAutonomy>>,
+	TError = ErrorType<ApiErrorBody>
+>(
+	projectId: () => string,
+	options?: () => {
+		query?: Partial<
+			CreateQueryOptions<Awaited<ReturnType<typeof getAiAutonomy>>, TError, TData>
+		>;
+		request?: SecondParameter<typeof customFetch>;
+	},
+	queryClient?: () => QueryClient
+): CreateQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> } {
+	const query = createQuery(
+		() => getGetAiAutonomyQueryOptions(projectId(), options?.()),
+		queryClient
+	) as CreateQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> };
+
+	return query;
+}
+
+export const prefetchGetAiAutonomyQuery = async <
+	TData = Awaited<ReturnType<typeof getAiAutonomy>>,
+	TError = ErrorType<ApiErrorBody>
+>(
+	queryClient: QueryClient,
+	projectId: string,
+	options?: {
+		query?: Partial<
+			CreateQueryOptions<Awaited<ReturnType<typeof getAiAutonomy>>, TError, TData>
+		>;
+		request?: SecondParameter<typeof customFetch>;
+	}
+): Promise<QueryClient> => {
+	const queryOptions = getGetAiAutonomyQueryOptions(projectId, options);
+
+	await queryClient.prefetchQuery(queryOptions);
+
+	return queryClient;
+};
+
+export type updateAiAutonomyResponse200 = {
+	data: AiAutonomyDto;
+	status: 200;
+};
+
+export type updateAiAutonomyResponse400 = {
+	data: ApiErrorBody;
+	status: 400;
+};
+
+export type updateAiAutonomyResponse404 = {
+	data: ApiErrorBody;
+	status: 404;
+};
+
+export type updateAiAutonomyResponse500 = {
+	data: ApiErrorBody;
+	status: 500;
+};
+
+export type updateAiAutonomyResponseSuccess = updateAiAutonomyResponse200 & {
+	headers: Headers;
+};
+export type updateAiAutonomyResponseError = (
+	updateAiAutonomyResponse400 | updateAiAutonomyResponse404 | updateAiAutonomyResponse500
+) & {
+	headers: Headers;
+};
+
+export const getUpdateAiAutonomyUrl = (projectId: string) => {
+	return `/api/projects/${projectId}/ai/autonomy`;
+};
+
+export const updateAiAutonomy = async (
+	projectId: string,
+	updateAiAutonomyRequest: UpdateAiAutonomyRequest,
+	options?: Parameters<typeof customFetch>[1]
+): Promise<updateAiAutonomyResponseSuccess> => {
+	const getHeaders = (
+		h?: NonNullable<RequestInit['headers']>
+	): Record<string, string | readonly string[]> => {
+		if (!h) return {};
+		if (h instanceof Headers) return Object.fromEntries(h.entries());
+		if (Array.isArray(h)) return Object.fromEntries(h);
+		return h;
+	};
+	return customFetch<updateAiAutonomyResponseSuccess>(getUpdateAiAutonomyUrl(projectId), {
+		...options,
+		method: 'PUT',
+		headers: { 'Content-Type': 'application/json', ...getHeaders(options?.headers) },
+		body: JSON.stringify(updateAiAutonomyRequest)
+	});
+};
+
+export const getUpdateAiAutonomyMutationOptions = <
+	TError = ErrorType<ApiErrorBody>,
+	TContext = unknown
+>(options?: {
+	mutation?: CreateMutationOptions<
+		Awaited<ReturnType<typeof updateAiAutonomy>>,
+		TError,
+		UpdateAiAutonomyMutationVariables,
+		TContext
+	>;
+	request?: SecondParameter<typeof customFetch>;
+}): CreateMutationOptions<
+	Awaited<ReturnType<typeof updateAiAutonomy>>,
+	TError,
+	UpdateAiAutonomyMutationVariables,
+	TContext
+> => {
+	const mutationKey = ['updateAiAutonomy'];
+	const { mutation: mutationOptions, request: requestOptions } = options
+		? options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey
+			? options
+			: { ...options, mutation: { ...options.mutation, mutationKey } }
+		: { mutation: { mutationKey }, request: undefined };
+
+	const mutationFn: MutationFunction<
+		Awaited<ReturnType<typeof updateAiAutonomy>>,
+		UpdateAiAutonomyMutationVariables
+	> = (props) => {
+		const { projectId, data } = props ?? {};
+
+		return updateAiAutonomy(projectId, data, requestOptions);
+	};
+
+	return { mutationFn, ...mutationOptions };
+};
+
+export type UpdateAiAutonomyMutationResult = NonNullable<
+	Awaited<ReturnType<typeof updateAiAutonomy>>
+>;
+export type UpdateAiAutonomyMutationBody = BodyType<UpdateAiAutonomyRequest>;
+export type UpdateAiAutonomyMutationError = ErrorType<ApiErrorBody>;
+export type UpdateAiAutonomyMutationVariables = {
+	projectId: string;
+	data: BodyType<UpdateAiAutonomyRequest>;
+};
+
+export const createUpdateAiAutonomy = <TError = ErrorType<ApiErrorBody>, TContext = unknown>(
+	options?: () => {
+		mutation?: CreateMutationOptions<
+			Awaited<ReturnType<typeof updateAiAutonomy>>,
+			TError,
+			UpdateAiAutonomyMutationVariables,
+			TContext
+		>;
+		request?: SecondParameter<typeof customFetch>;
+	},
+	queryClient?: () => QueryClient
+): CreateMutationResult<
+	Awaited<ReturnType<typeof updateAiAutonomy>>,
+	TError,
+	UpdateAiAutonomyMutationVariables,
+	TContext
+> => {
+	return createMutation(
+		() => ({ ...getUpdateAiAutonomyMutationOptions(options?.()) }),
+		queryClient
+	);
+};
+export type getAiBudgetResponse200 = {
+	data: AiBudgetDto;
+	status: 200;
+};
+
+export type getAiBudgetResponse404 = {
+	data: ApiErrorBody;
+	status: 404;
+};
+
+export type getAiBudgetResponse500 = {
+	data: ApiErrorBody;
+	status: 500;
+};
+
+export type getAiBudgetResponseSuccess = getAiBudgetResponse200 & {
+	headers: Headers;
+};
+export type getAiBudgetResponseError = (getAiBudgetResponse404 | getAiBudgetResponse500) & {
+	headers: Headers;
+};
+
+export const getGetAiBudgetUrl = (projectId: string) => {
+	return `/api/projects/${projectId}/ai/budget`;
+};
+
+export const getAiBudget = async (
+	projectId: string,
+	options?: Parameters<typeof customFetch>[1]
+): Promise<getAiBudgetResponseSuccess> => {
+	return customFetch<getAiBudgetResponseSuccess>(getGetAiBudgetUrl(projectId), {
+		...options,
+		method: 'GET'
+	});
+};
+
+export const getGetAiBudgetQueryKey = (projectId: string) => {
+	return [`/api/projects/${projectId}/ai/budget`] as const;
+};
+
+export const getGetAiBudgetQueryOptions = <
+	TData = Awaited<ReturnType<typeof getAiBudget>>,
+	TError = ErrorType<ApiErrorBody>
+>(
+	projectId: string,
+	options?: {
+		query?: Partial<CreateQueryOptions<Awaited<ReturnType<typeof getAiBudget>>, TError, TData>>;
+		request?: SecondParameter<typeof customFetch>;
+	}
+) => {
+	const { query: queryOptions, request: requestOptions } = options ?? {};
+
+	const queryKey = queryOptions?.queryKey ?? getGetAiBudgetQueryKey(projectId);
+
+	const queryFn: QueryFunction<Awaited<ReturnType<typeof getAiBudget>>> = ({ signal }) =>
+		getAiBudget(projectId, { signal, ...requestOptions });
+
+	return {
+		queryKey,
+		queryFn,
+		enabled: projectId !== null && projectId !== undefined,
+		...queryOptions
+	} as CreateQueryOptions<Awaited<ReturnType<typeof getAiBudget>>, TError, TData> & {
+		queryKey: DataTag<QueryKey, TData, TError>;
+	};
+};
+
+export type GetAiBudgetQueryResult = NonNullable<Awaited<ReturnType<typeof getAiBudget>>>;
+export type GetAiBudgetQueryError = ErrorType<ApiErrorBody>;
+
+export function createGetAiBudget<
+	TData = Awaited<ReturnType<typeof getAiBudget>>,
+	TError = ErrorType<ApiErrorBody>
+>(
+	projectId: () => string,
+	options?: () => {
+		query?: Partial<CreateQueryOptions<Awaited<ReturnType<typeof getAiBudget>>, TError, TData>>;
+		request?: SecondParameter<typeof customFetch>;
+	},
+	queryClient?: () => QueryClient
+): CreateQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> } {
+	const query = createQuery(
+		() => getGetAiBudgetQueryOptions(projectId(), options?.()),
+		queryClient
+	) as CreateQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> };
+
+	return query;
+}
+
+export const prefetchGetAiBudgetQuery = async <
+	TData = Awaited<ReturnType<typeof getAiBudget>>,
+	TError = ErrorType<ApiErrorBody>
+>(
+	queryClient: QueryClient,
+	projectId: string,
+	options?: {
+		query?: Partial<CreateQueryOptions<Awaited<ReturnType<typeof getAiBudget>>, TError, TData>>;
+		request?: SecondParameter<typeof customFetch>;
+	}
+): Promise<QueryClient> => {
+	const queryOptions = getGetAiBudgetQueryOptions(projectId, options);
+
+	await queryClient.prefetchQuery(queryOptions);
+
+	return queryClient;
+};
+
+export type updateAiBudgetResponse200 = {
+	data: AiBudgetDto;
+	status: 200;
+};
+
+export type updateAiBudgetResponse400 = {
+	data: ApiErrorBody;
+	status: 400;
+};
+
+export type updateAiBudgetResponse404 = {
+	data: ApiErrorBody;
+	status: 404;
+};
+
+export type updateAiBudgetResponse500 = {
+	data: ApiErrorBody;
+	status: 500;
+};
+
+export type updateAiBudgetResponseSuccess = updateAiBudgetResponse200 & {
+	headers: Headers;
+};
+export type updateAiBudgetResponseError = (
+	updateAiBudgetResponse400 | updateAiBudgetResponse404 | updateAiBudgetResponse500
+) & {
+	headers: Headers;
+};
+
+export const getUpdateAiBudgetUrl = (projectId: string) => {
+	return `/api/projects/${projectId}/ai/budget`;
+};
+
+export const updateAiBudget = async (
+	projectId: string,
+	updateAiBudgetRequest: UpdateAiBudgetRequest,
+	options?: Parameters<typeof customFetch>[1]
+): Promise<updateAiBudgetResponseSuccess> => {
+	const getHeaders = (
+		h?: NonNullable<RequestInit['headers']>
+	): Record<string, string | readonly string[]> => {
+		if (!h) return {};
+		if (h instanceof Headers) return Object.fromEntries(h.entries());
+		if (Array.isArray(h)) return Object.fromEntries(h);
+		return h;
+	};
+	return customFetch<updateAiBudgetResponseSuccess>(getUpdateAiBudgetUrl(projectId), {
+		...options,
+		method: 'PUT',
+		headers: { 'Content-Type': 'application/json', ...getHeaders(options?.headers) },
+		body: JSON.stringify(updateAiBudgetRequest)
+	});
+};
+
+export const getUpdateAiBudgetMutationOptions = <
+	TError = ErrorType<ApiErrorBody>,
+	TContext = unknown
+>(options?: {
+	mutation?: CreateMutationOptions<
+		Awaited<ReturnType<typeof updateAiBudget>>,
+		TError,
+		UpdateAiBudgetMutationVariables,
+		TContext
+	>;
+	request?: SecondParameter<typeof customFetch>;
+}): CreateMutationOptions<
+	Awaited<ReturnType<typeof updateAiBudget>>,
+	TError,
+	UpdateAiBudgetMutationVariables,
+	TContext
+> => {
+	const mutationKey = ['updateAiBudget'];
+	const { mutation: mutationOptions, request: requestOptions } = options
+		? options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey
+			? options
+			: { ...options, mutation: { ...options.mutation, mutationKey } }
+		: { mutation: { mutationKey }, request: undefined };
+
+	const mutationFn: MutationFunction<
+		Awaited<ReturnType<typeof updateAiBudget>>,
+		UpdateAiBudgetMutationVariables
+	> = (props) => {
+		const { projectId, data } = props ?? {};
+
+		return updateAiBudget(projectId, data, requestOptions);
+	};
+
+	return { mutationFn, ...mutationOptions };
+};
+
+export type UpdateAiBudgetMutationResult = NonNullable<Awaited<ReturnType<typeof updateAiBudget>>>;
+export type UpdateAiBudgetMutationBody = BodyType<UpdateAiBudgetRequest>;
+export type UpdateAiBudgetMutationError = ErrorType<ApiErrorBody>;
+export type UpdateAiBudgetMutationVariables = {
+	projectId: string;
+	data: BodyType<UpdateAiBudgetRequest>;
+};
+
+export const createUpdateAiBudget = <TError = ErrorType<ApiErrorBody>, TContext = unknown>(
+	options?: () => {
+		mutation?: CreateMutationOptions<
+			Awaited<ReturnType<typeof updateAiBudget>>,
+			TError,
+			UpdateAiBudgetMutationVariables,
+			TContext
+		>;
+		request?: SecondParameter<typeof customFetch>;
+	},
+	queryClient?: () => QueryClient
+): CreateMutationResult<
+	Awaited<ReturnType<typeof updateAiBudget>>,
+	TError,
+	UpdateAiBudgetMutationVariables,
+	TContext
+> => {
+	return createMutation(
+		() => ({ ...getUpdateAiBudgetMutationOptions(options?.()) }),
+		queryClient
+	);
+};
 export type listAiProposalsResponse200 = {
 	data: PaginatedResponseAiProposalDto;
 	status: 200;
@@ -460,6 +1515,405 @@ export const createDecideAiProposal = <TError = ErrorType<ApiErrorBody>, TContex
 	const backupQueryClient = useQueryClient(queryClient?.());
 	return createMutation(
 		() => ({ ...getDecideAiProposalMutationOptions(backupQueryClient, options?.()) }),
+		queryClient
+	);
+};
+export type getAiReviewerAgreementResponse200 = {
+	data: AiStageAgreementDto[];
+	status: 200;
+};
+
+export type getAiReviewerAgreementResponse500 = {
+	data: ApiErrorBody;
+	status: 500;
+};
+
+export type getAiReviewerAgreementResponseSuccess = getAiReviewerAgreementResponse200 & {
+	headers: Headers;
+};
+export type getAiReviewerAgreementResponseError = getAiReviewerAgreementResponse500 & {
+	headers: Headers;
+};
+
+export const getGetAiReviewerAgreementUrl = (projectId: string) => {
+	return `/api/projects/${projectId}/ai/reviewer-agreement`;
+};
+
+export const getAiReviewerAgreement = async (
+	projectId: string,
+	options?: Parameters<typeof customFetch>[1]
+): Promise<getAiReviewerAgreementResponseSuccess> => {
+	return customFetch<getAiReviewerAgreementResponseSuccess>(
+		getGetAiReviewerAgreementUrl(projectId),
+		{
+			...options,
+			method: 'GET'
+		}
+	);
+};
+
+export const getGetAiReviewerAgreementQueryKey = (projectId: string) => {
+	return [`/api/projects/${projectId}/ai/reviewer-agreement`] as const;
+};
+
+export const getGetAiReviewerAgreementQueryOptions = <
+	TData = Awaited<ReturnType<typeof getAiReviewerAgreement>>,
+	TError = ErrorType<ApiErrorBody>
+>(
+	projectId: string,
+	options?: {
+		query?: Partial<
+			CreateQueryOptions<Awaited<ReturnType<typeof getAiReviewerAgreement>>, TError, TData>
+		>;
+		request?: SecondParameter<typeof customFetch>;
+	}
+) => {
+	const { query: queryOptions, request: requestOptions } = options ?? {};
+
+	const queryKey = queryOptions?.queryKey ?? getGetAiReviewerAgreementQueryKey(projectId);
+
+	const queryFn: QueryFunction<Awaited<ReturnType<typeof getAiReviewerAgreement>>> = ({
+		signal
+	}) => getAiReviewerAgreement(projectId, { signal, ...requestOptions });
+
+	return {
+		queryKey,
+		queryFn,
+		enabled: projectId !== null && projectId !== undefined,
+		...queryOptions
+	} as CreateQueryOptions<Awaited<ReturnType<typeof getAiReviewerAgreement>>, TError, TData> & {
+		queryKey: DataTag<QueryKey, TData, TError>;
+	};
+};
+
+export type GetAiReviewerAgreementQueryResult = NonNullable<
+	Awaited<ReturnType<typeof getAiReviewerAgreement>>
+>;
+export type GetAiReviewerAgreementQueryError = ErrorType<ApiErrorBody>;
+
+export function createGetAiReviewerAgreement<
+	TData = Awaited<ReturnType<typeof getAiReviewerAgreement>>,
+	TError = ErrorType<ApiErrorBody>
+>(
+	projectId: () => string,
+	options?: () => {
+		query?: Partial<
+			CreateQueryOptions<Awaited<ReturnType<typeof getAiReviewerAgreement>>, TError, TData>
+		>;
+		request?: SecondParameter<typeof customFetch>;
+	},
+	queryClient?: () => QueryClient
+): CreateQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> } {
+	const query = createQuery(
+		() => getGetAiReviewerAgreementQueryOptions(projectId(), options?.()),
+		queryClient
+	) as CreateQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> };
+
+	return query;
+}
+
+export const prefetchGetAiReviewerAgreementQuery = async <
+	TData = Awaited<ReturnType<typeof getAiReviewerAgreement>>,
+	TError = ErrorType<ApiErrorBody>
+>(
+	queryClient: QueryClient,
+	projectId: string,
+	options?: {
+		query?: Partial<
+			CreateQueryOptions<Awaited<ReturnType<typeof getAiReviewerAgreement>>, TError, TData>
+		>;
+		request?: SecondParameter<typeof customFetch>;
+	}
+): Promise<QueryClient> => {
+	const queryOptions = getGetAiReviewerAgreementQueryOptions(projectId, options);
+
+	await queryClient.prefetchQuery(queryOptions);
+
+	return queryClient;
+};
+
+export type listAiReviewerDecisionsResponse200 = {
+	data: AiReviewerDecisionDto[];
+	status: 200;
+};
+
+export type listAiReviewerDecisionsResponse400 = {
+	data: ApiErrorBody;
+	status: 400;
+};
+
+export type listAiReviewerDecisionsResponse500 = {
+	data: ApiErrorBody;
+	status: 500;
+};
+
+export type listAiReviewerDecisionsResponseSuccess = listAiReviewerDecisionsResponse200 & {
+	headers: Headers;
+};
+export type listAiReviewerDecisionsResponseError = (
+	listAiReviewerDecisionsResponse400 | listAiReviewerDecisionsResponse500
+) & {
+	headers: Headers;
+};
+
+export const getListAiReviewerDecisionsUrl = (
+	projectId: string,
+	params?: ListAiReviewerDecisionsParams
+) => {
+	const normalizedParams = new URLSearchParams();
+
+	Object.entries(params || {}).forEach(([key, value]) => {
+		if (value !== undefined) {
+			normalizedParams.append(key, value === null ? 'null' : String(value));
+		}
+	});
+
+	const stringifiedParams = normalizedParams.toString();
+
+	return stringifiedParams.length > 0
+		? `/api/projects/${projectId}/ai/reviewer-decisions?${stringifiedParams}`
+		: `/api/projects/${projectId}/ai/reviewer-decisions`;
+};
+
+export const listAiReviewerDecisions = async (
+	projectId: string,
+	params?: ListAiReviewerDecisionsParams,
+	options?: Parameters<typeof customFetch>[1]
+): Promise<listAiReviewerDecisionsResponseSuccess> => {
+	return customFetch<listAiReviewerDecisionsResponseSuccess>(
+		getListAiReviewerDecisionsUrl(projectId, params),
+		{
+			...options,
+			method: 'GET'
+		}
+	);
+};
+
+export const getListAiReviewerDecisionsQueryKey = (
+	projectId: string,
+	params?: ListAiReviewerDecisionsParams
+) => {
+	return [
+		`/api/projects/${projectId}/ai/reviewer-decisions`,
+		...(params ? [params] : [])
+	] as const;
+};
+
+export const getListAiReviewerDecisionsQueryOptions = <
+	TData = Awaited<ReturnType<typeof listAiReviewerDecisions>>,
+	TError = ErrorType<ApiErrorBody>
+>(
+	projectId: string,
+	params?: ListAiReviewerDecisionsParams,
+	options?: {
+		query?: Partial<
+			CreateQueryOptions<Awaited<ReturnType<typeof listAiReviewerDecisions>>, TError, TData>
+		>;
+		request?: SecondParameter<typeof customFetch>;
+	}
+) => {
+	const { query: queryOptions, request: requestOptions } = options ?? {};
+
+	const queryKey =
+		queryOptions?.queryKey ?? getListAiReviewerDecisionsQueryKey(projectId, params);
+
+	const queryFn: QueryFunction<Awaited<ReturnType<typeof listAiReviewerDecisions>>> = ({
+		signal
+	}) => listAiReviewerDecisions(projectId, params, { signal, ...requestOptions });
+
+	return {
+		queryKey,
+		queryFn,
+		enabled: projectId !== null && projectId !== undefined,
+		...queryOptions
+	} as CreateQueryOptions<Awaited<ReturnType<typeof listAiReviewerDecisions>>, TError, TData> & {
+		queryKey: DataTag<QueryKey, TData, TError>;
+	};
+};
+
+export type ListAiReviewerDecisionsQueryResult = NonNullable<
+	Awaited<ReturnType<typeof listAiReviewerDecisions>>
+>;
+export type ListAiReviewerDecisionsQueryError = ErrorType<ApiErrorBody>;
+
+export function createListAiReviewerDecisions<
+	TData = Awaited<ReturnType<typeof listAiReviewerDecisions>>,
+	TError = ErrorType<ApiErrorBody>
+>(
+	projectId: () => string,
+	params?: () => ListAiReviewerDecisionsParams,
+	options?: () => {
+		query?: Partial<
+			CreateQueryOptions<Awaited<ReturnType<typeof listAiReviewerDecisions>>, TError, TData>
+		>;
+		request?: SecondParameter<typeof customFetch>;
+	},
+	queryClient?: () => QueryClient
+): CreateQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> } {
+	const query = createQuery(
+		() => getListAiReviewerDecisionsQueryOptions(projectId(), params?.(), options?.()),
+		queryClient
+	) as CreateQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> };
+
+	return query;
+}
+
+export const prefetchListAiReviewerDecisionsQuery = async <
+	TData = Awaited<ReturnType<typeof listAiReviewerDecisions>>,
+	TError = ErrorType<ApiErrorBody>
+>(
+	queryClient: QueryClient,
+	projectId: string,
+	params?: ListAiReviewerDecisionsParams,
+	options?: {
+		query?: Partial<
+			CreateQueryOptions<Awaited<ReturnType<typeof listAiReviewerDecisions>>, TError, TData>
+		>;
+		request?: SecondParameter<typeof customFetch>;
+	}
+): Promise<QueryClient> => {
+	const queryOptions = getListAiReviewerDecisionsQueryOptions(projectId, params, options);
+
+	await queryClient.prefetchQuery(queryOptions);
+
+	return queryClient;
+};
+
+export type resolveAiReviewerConflictResponse200 = {
+	data: AiReviewerDecisionDto;
+	status: 200;
+};
+
+export type resolveAiReviewerConflictResponse400 = {
+	data: ApiErrorBody;
+	status: 400;
+};
+
+export type resolveAiReviewerConflictResponse404 = {
+	data: ApiErrorBody;
+	status: 404;
+};
+
+export type resolveAiReviewerConflictResponse409 = {
+	data: ApiErrorBody;
+	status: 409;
+};
+
+export type resolveAiReviewerConflictResponse500 = {
+	data: ApiErrorBody;
+	status: 500;
+};
+
+export type resolveAiReviewerConflictResponseSuccess = resolveAiReviewerConflictResponse200 & {
+	headers: Headers;
+};
+export type resolveAiReviewerConflictResponseError = (
+	| resolveAiReviewerConflictResponse400
+	| resolveAiReviewerConflictResponse404
+	| resolveAiReviewerConflictResponse409
+	| resolveAiReviewerConflictResponse500
+) & {
+	headers: Headers;
+};
+
+export const getResolveAiReviewerConflictUrl = (projectId: string, decisionId: string) => {
+	return `/api/projects/${projectId}/ai/reviewer-decisions/${decisionId}/resolve`;
+};
+
+export const resolveAiReviewerConflict = async (
+	projectId: string,
+	decisionId: string,
+	resolveReviewerConflictRequest: ResolveReviewerConflictRequest,
+	options?: Parameters<typeof customFetch>[1]
+): Promise<resolveAiReviewerConflictResponseSuccess> => {
+	const getHeaders = (
+		h?: NonNullable<RequestInit['headers']>
+	): Record<string, string | readonly string[]> => {
+		if (!h) return {};
+		if (h instanceof Headers) return Object.fromEntries(h.entries());
+		if (Array.isArray(h)) return Object.fromEntries(h);
+		return h;
+	};
+	return customFetch<resolveAiReviewerConflictResponseSuccess>(
+		getResolveAiReviewerConflictUrl(projectId, decisionId),
+		{
+			...options,
+			method: 'POST',
+			headers: { 'Content-Type': 'application/json', ...getHeaders(options?.headers) },
+			body: JSON.stringify(resolveReviewerConflictRequest)
+		}
+	);
+};
+
+export const getResolveAiReviewerConflictMutationOptions = <
+	TError = ErrorType<ApiErrorBody>,
+	TContext = unknown
+>(options?: {
+	mutation?: CreateMutationOptions<
+		Awaited<ReturnType<typeof resolveAiReviewerConflict>>,
+		TError,
+		ResolveAiReviewerConflictMutationVariables,
+		TContext
+	>;
+	request?: SecondParameter<typeof customFetch>;
+}): CreateMutationOptions<
+	Awaited<ReturnType<typeof resolveAiReviewerConflict>>,
+	TError,
+	ResolveAiReviewerConflictMutationVariables,
+	TContext
+> => {
+	const mutationKey = ['resolveAiReviewerConflict'];
+	const { mutation: mutationOptions, request: requestOptions } = options
+		? options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey
+			? options
+			: { ...options, mutation: { ...options.mutation, mutationKey } }
+		: { mutation: { mutationKey }, request: undefined };
+
+	const mutationFn: MutationFunction<
+		Awaited<ReturnType<typeof resolveAiReviewerConflict>>,
+		ResolveAiReviewerConflictMutationVariables
+	> = (props) => {
+		const { projectId, decisionId, data } = props ?? {};
+
+		return resolveAiReviewerConflict(projectId, decisionId, data, requestOptions);
+	};
+
+	return { mutationFn, ...mutationOptions };
+};
+
+export type ResolveAiReviewerConflictMutationResult = NonNullable<
+	Awaited<ReturnType<typeof resolveAiReviewerConflict>>
+>;
+export type ResolveAiReviewerConflictMutationBody = BodyType<ResolveReviewerConflictRequest>;
+export type ResolveAiReviewerConflictMutationError = ErrorType<ApiErrorBody>;
+export type ResolveAiReviewerConflictMutationVariables = {
+	projectId: string;
+	decisionId: string;
+	data: BodyType<ResolveReviewerConflictRequest>;
+};
+
+export const createResolveAiReviewerConflict = <
+	TError = ErrorType<ApiErrorBody>,
+	TContext = unknown
+>(
+	options?: () => {
+		mutation?: CreateMutationOptions<
+			Awaited<ReturnType<typeof resolveAiReviewerConflict>>,
+			TError,
+			ResolveAiReviewerConflictMutationVariables,
+			TContext
+		>;
+		request?: SecondParameter<typeof customFetch>;
+	},
+	queryClient?: () => QueryClient
+): CreateMutationResult<
+	Awaited<ReturnType<typeof resolveAiReviewerConflict>>,
+	TError,
+	ResolveAiReviewerConflictMutationVariables,
+	TContext
+> => {
+	return createMutation(
+		() => ({ ...getResolveAiReviewerConflictMutationOptions(options?.()) }),
 		queryClient
 	);
 };

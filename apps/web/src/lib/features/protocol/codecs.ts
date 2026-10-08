@@ -83,3 +83,54 @@ export function humanizeKey(value: string): string {
 		.map((part) => part.charAt(0).toUpperCase() + part.slice(1))
 		.join(' ');
 }
+
+const FRAMEWORK_LABELS = {
+	pico: 'PICO',
+	picos: 'PICOS',
+	peco: 'PECO',
+	peo: 'PEO',
+	pcc: 'PCC',
+	spider: 'SPIDER',
+	custom: 'Custom'
+} as const satisfies Record<FrameworkKind, string>;
+
+const CRITERION_KIND_LABELS = {
+	inclusion: 'Inclusion',
+	exclusion: 'Exclusion'
+} as const satisfies Record<CriterionKind, string>;
+
+const CRITERION_STAGE_LABELS = {
+	title_abstract: 'Title & abstract',
+	full_text: 'Full text',
+	both: 'Both stages'
+} as const satisfies Record<CriterionStage, string>;
+
+const CRITERION_DIMENSION_LABELS = {
+	population: 'Population',
+	intervention: 'Intervention',
+	comparator: 'Comparator',
+	outcome: 'Outcome',
+	design: 'Design',
+	setting: 'Setting',
+	language: 'Language',
+	date: 'Date',
+	other: 'Other'
+} as const satisfies Record<CriterionDimension, string>;
+
+export function frameworkLabel(kind: string): string {
+	return isFrameworkKind(kind) ? FRAMEWORK_LABELS[kind] : humanizeKey(kind);
+}
+
+export function criterionKindLabel(kind: string): string {
+	return isCriterionKind(kind) ? CRITERION_KIND_LABELS[kind] : humanizeKey(kind);
+}
+
+export function criterionStageLabel(stage: string): string {
+	return isCriterionStage(stage) ? CRITERION_STAGE_LABELS[stage] : humanizeKey(stage);
+}
+
+export function criterionDimensionLabel(dimension: string): string {
+	return isCriterionDimension(dimension)
+		? CRITERION_DIMENSION_LABELS[dimension]
+		: humanizeKey(dimension);
+}

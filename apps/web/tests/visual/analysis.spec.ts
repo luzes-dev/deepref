@@ -1,11 +1,14 @@
-import { captureDarkViewport, expect, settleVisualPage, test } from './fixtures';
+import { captureDarkViewport, expect, isMobileViewport, settleVisualPage, test } from './fixtures';
 import type { Page } from '@playwright/test';
 import AxeBuilder from '@axe-core/playwright';
+import type { PrismaDto } from '../../src/lib/api/generated/models';
 
 const projectId = 'visual-project';
 const reportId = '00000000-0000-4000-8000-000000000001';
 const api = `**/api/projects/${projectId}`;
-const prismaFixtureSvg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 640 360">
+const prismaFixtureSvg = `<svg id="prisma-flow" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="prisma-title prisma-description" viewBox="0 0 640 360">
+<title id="prisma-title">PRISMA 2020 flow diagram</title>
+<desc id="prisma-description">Records identified, duplicate records removed, records screened and excluded, reports sought and not retrieved, reports assessed and excluded with reasons, and studies included.</desc>
 <rect width="640" height="360" fill="#fff"/>
 <defs><marker id="arrow" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 z" fill="#0a6b58"/></marker></defs>
 <g font-family="Arial, sans-serif" fill="#1d302c">
@@ -41,36 +44,36 @@ async function runScopedSeriousCriticalAxe(page: Page, selector: string) {
 }
 
 async function installPrismaFixture(page: Page) {
-	await page.route(`${api}/prisma`, (route) =>
-		route.fulfill({
-			json: {
-				project_id: projectId,
-				as_of: '2026-01-15T12:00:00Z',
-				identified_records: 12,
-				linked_records: 10,
-				duplicates_removed: 2,
-				unresolved_records: 1,
-				pending_dedupe_proposals: 0,
-				source_canonical_reports: 8,
-				manually_created_reports: 2,
-				screened_records: 10,
-				title_abstract_excluded: 2,
-				title_abstract_pending: 0,
-				reports_sought: 8,
-				reports_not_retrieved: 1,
-				full_text_assessed: 7,
-				full_text_pending: 0,
-				full_text_included: 5,
-				full_text_excluded: 2,
-				included_reports_not_grouped: 1,
-				included_studies: 3,
-				screening_high_watermark: 4,
-				full_text_exclusions: [
-					{ id: 'reason-1', code: 'wrong-design', label: 'Wrong design', count: 2 }
-				]
-			}
-		})
-	);
+	const prisma: PrismaDto = {
+		project_id: projectId,
+		as_of: '2026-01-15T12:00:00Z',
+		// Identified = duplicates removed + awaiting duplicate check + screened, so the page's
+		// reconciliation sentence agrees with the canonical diagram's boxes.
+		identified_records: 12,
+		linked_records: 10,
+		duplicates_removed: 2,
+		unresolved_records: 0,
+		pending_dedupe_proposals: 0,
+		source_canonical_reports: 8,
+		manually_created_reports: 0,
+		screened_records: 10,
+		screening_high_watermark: 4,
+		title_abstract_excluded: 2,
+		title_abstract_pending: 0,
+		reports_sought: 8,
+		reports_not_retrieved: 1,
+		full_text_assessed: 7,
+		full_text_pending: 0,
+		full_text_excluded: 2,
+		full_text_included: 5,
+		full_text_exclusions: [
+			{ id: 'reason-1', code: 'wrong-design', label: 'Wrong design', count: 2 }
+		],
+		included_reports_not_grouped: 1,
+		included_studies: 3,
+		reconciliation_warnings: []
+	};
+	await page.route(`${api}/prisma`, (route) => route.fulfill({ json: prisma }));
 	await page.route(`${api}/exports/**`, (route) => {
 		const kind = route.request().url().split('/').pop() ?? 'artifact';
 		const body = kind === 'prisma.svg' ? prismaFixtureSvg : `${kind} fixture`;
@@ -139,19 +142,23 @@ test.describe('analysis workflow smoke', () => {
 		await page.goto(`/projects/${projectId}/prisma`);
 		await settleVisualPage(page);
 		await expect(page.getByRole('heading', { name: 'PRISMA flow', exact: true })).toBeVisible();
-		const diagram = page.getByRole('img', { name: /PRISMA flow diagram/ });
+		// The server's SVG names itself through its <title>, so the diagram is an image with
+		// that accessible name once the page has inlined it (it is not an <img> that loads).
+		const diagram = page.getByRole('img', { name: /PRISMA 2020 flow diagram/ });
 		await expect(diagram).toBeVisible();
 		await expect
 			.poll(async () =>
 				diagram.evaluate(
 					(element) =>
-						element instanceof HTMLImageElement &&
-						element.complete &&
-						element.naturalWidth > 0
+						element instanceof SVGSVGElement &&
+						element.getBoundingClientRect().width > 0 &&
+						element.querySelector('rect, text') !== null
 				)
 			)
 			.toBe(true);
+		await page.getByRole('tab', { name: 'Export', exact: true }).click();
 		await expect(page.getByRole('button', { name: 'PRISMA PNG' })).toBeVisible();
+		await page.getByRole('tab', { name: 'Review flow', exact: true }).click();
 		await assertNoHorizontalOverflow(page);
 		expect(await runScopedSeriousCriticalAxe(page, '[data-testid="prisma-page"]')).toEqual([]);
 		await captureDarkViewport(page, 'analyze-prisma.png');
@@ -166,8 +173,13 @@ test.describe('analysis workflow smoke', () => {
 		);
 		await settleVisualPage(page);
 		await expect(page.getByRole('heading', { name: 'Graph', exact: true })).toBeVisible();
-		await expect(page.getByTestId('graph-overlay-legend')).toContainText('include');
 		await expect(page.getByText('Screening: include')).toBeVisible();
+		if (await isMobileViewport(page)) {
+			await page.keyboard.press('Escape');
+			await expect(page.getByRole('dialog', { name: 'Article inspector' })).toBeHidden();
+		}
+		await page.getByRole('button', { name: 'Layers & filters', exact: true }).click();
+		await expect(page.getByTestId('graph-overlay-legend')).toContainText('include');
 		await expect(page.getByLabel('Color graph by')).toHaveValue('screening');
 		await assertNoHorizontalOverflow(page);
 		await captureDarkViewport(page, 'analyze-graph.png');
@@ -182,9 +194,6 @@ test.describe('analysis workflow smoke', () => {
 		await settleVisualPage(page);
 		await expect(
 			page.getByRole('heading', { name: 'Recommendations', exact: true })
-		).toBeVisible();
-		await expect(
-			page.getByRole('heading', { name: 'Foundational', exact: true })
 		).toBeVisible();
 		await expect(
 			page.getByRole('button', { name: 'Open Foundational fixture report' })

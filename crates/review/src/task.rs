@@ -115,6 +115,14 @@ impl<T: AiTask> AiTask for DefinedAiTask<T> {
         self.task.semantic_validate_with_evidence(output, evidence)
     }
 
+    fn normalize_output(&self, raw: &mut Value, evidence: &[GroundedBlock]) {
+        self.task.normalize_output(raw, evidence);
+    }
+
+    fn repair_attempts(&self) -> u8 {
+        self.task.repair_attempts()
+    }
+
     fn authority(&self) -> AuthorityTier {
         self.task.authority()
     }

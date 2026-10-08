@@ -84,7 +84,30 @@ test('groups, unassigns, and preserves study history', async ({ page }) => {
 	await page.route(
 		/http:\/\/localhost:4173\/api\/projects\/project-1\/reports(?:\?.*)?$/,
 		async (route) => {
-			await route.fulfill({ json: { items: [report], next_cursor: null } });
+			await route.fulfill({
+				json: {
+					items: [report, { ...report, report_id: 'report-2', title: 'Excluded paper' }],
+					next_cursor: null
+				}
+			});
+		}
+	);
+	await page.route(
+		/http:\/\/localhost:4173\/api\/projects\/project-1\/screening\/full-text(?:\?.*)?$/,
+		async (route) => {
+			const item = (reportId: string, status: string) => ({
+				report_id: reportId,
+				title: reportId,
+				full_text_status: status,
+				revision: 1
+			});
+			await route.fulfill({
+				json: {
+					items: [item('report-1', 'include'), item('report-2', 'exclude')],
+					next_cursor: null,
+					progress: {}
+				}
+			});
 		}
 	);
 	await page.route(
@@ -165,16 +188,23 @@ test('groups, unassigns, and preserves study history', async ({ page }) => {
 	);
 
 	await page.goto('/projects/project-1/studies?study=study-1');
-	await expect(page.getByRole('heading', { name: 'Studies' })).toBeVisible();
+	await expect(page.getByRole('heading', { name: 'Studies', exact: true })).toBeVisible();
 	await page.locator('#study-report').click();
+	await expect(page.getByRole('option', { name: 'Primary trial report' })).toBeVisible();
+	await expect(page.getByRole('option', { name: 'Excluded paper' })).toHaveCount(0);
+	await page.keyboard.press('Escape');
+	await page.getByRole('button', { name: 'Show all reports' }).click();
+	await page.locator('#study-report').click();
+	await expect(page.getByRole('option', { name: 'Excluded paper' })).toBeVisible();
 	await page.getByRole('option', { name: 'Primary trial report' }).click();
 	await expect.poll(() => membershipReads).toBeGreaterThan(0);
-	await expect(page.getByRole('button', { name: 'Assign / move' })).toBeEnabled();
-	await page.getByRole('button', { name: 'Assign / move' }).click();
+	await expect(page.getByRole('button', { name: 'Move here' })).toBeEnabled();
+	await page.getByRole('button', { name: 'Move here' }).click();
 	await expect.poll(() => movePayload?.expected_previous_study_revision).toBe(1);
 	await expect(page.getByText('Primary trial report', { exact: true })).toBeVisible();
 	await page.getByRole('button', { name: 'Unassign' }).click();
 	await expect(page.getByText('No reports assigned yet.', { exact: true })).toBeVisible();
+	await page.getByRole('tab', { name: 'History', exact: true }).click();
 	await expect(page.getByText('report_unassigned', { exact: true })).toBeVisible();
 });
 
@@ -373,15 +403,19 @@ test('reviews study grouping proposals with typed provenance and refreshes after
 
 	await page.goto('/projects/project-1/studies?study=study-1&report=report-1');
 	await expect.poll(() => reportsReady).toBe(true);
+	await page.getByRole('tab', { name: 'AI assistance', exact: true }).click();
 	await expect(page.getByRole('button', { name: 'Suggest study group' })).toBeVisible();
 	await page.getByRole('button', { name: 'Suggest study group' }).click();
 	await expect(page.getByTestId('study-grouping-choice')).toContainText('Existing study');
-	await expect(page.getByTestId('study-grouping-provenance')).toContainText(
-		'report-title-hash-fully-visible'
-	);
-	await expect(page.getByTestId('study-grouping-provenance')).toContainText(
-		'study-title-hash-fully-visible'
-	);
+	const groupingProvenance = page.getByTestId('study-grouping-provenance');
+	await expect(groupingProvenance).toContainText('Report');
+	await expect(groupingProvenance).toContainText('Study “One investigation”');
+	await expect(
+		groupingProvenance.getByTitle(/content hash report-title-hash-fully-visible/)
+	).toBeVisible();
+	await expect(
+		groupingProvenance.getByTitle(/content hash study-title-hash-fully-visible/)
+	).toBeVisible();
 
 	const listRequestsBeforeAccept = proposalListRequests;
 	await page.getByRole('button', { name: 'Accept and apply' }).click();
@@ -392,7 +426,6 @@ test('reviews study grouping proposals with typed provenance and refreshes after
 		reason: 'Human reviewer accepted study grouping suggestion.'
 	});
 	await expect(page.getByText('No pending grouping suggestion', { exact: true })).toBeVisible();
-	await expect(page.getByText('Revision 3 · changes are audited and reversible')).toBeVisible();
 
 	await page.getByRole('button', { name: 'Suggest study group' }).click();
 	await expect(page.getByTestId('study-grouping-choice')).toBeVisible();
@@ -563,23 +596,21 @@ test('reviews study classification proposals without calling manual classificati
 	);
 
 	await page.goto('/projects/project-1/studies?study=study-1');
+	await page.getByRole('tab', { name: 'AI assistance', exact: true }).click();
 	await expect.poll(() => proposalQueryRequests).toBeGreaterThan(0);
 	await expect(page.getByTestId('study-classification-suggestion')).toContainText(
 		'Randomized controlled trial'
 	);
 	await expect(page.getByTestId('study-classification-suggestion')).toContainText('rct');
-	await expect(page.getByTestId('study-classification-provenance')).toContainText(
-		'Study One investigation · study-1'
-	);
-	await expect(page.getByTestId('study-classification-provenance')).toContainText(
-		'Report report-1'
-	);
-	await expect(page.getByTestId('study-classification-provenance')).toContainText(
-		'content hash: aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa'
-	);
-	await expect(page.getByTestId('study-classification-provenance')).toContainText(
-		'content hash: bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb'
-	);
+	const classificationProvenance = page.getByTestId('study-classification-provenance');
+	await expect(classificationProvenance).toContainText('Study “One investigation”');
+	await expect(classificationProvenance).toContainText('Abstract');
+	await expect(
+		classificationProvenance.getByTitle(/^study study-1 · content hash a{64}$/)
+	).toBeVisible();
+	await expect(
+		classificationProvenance.getByTitle(/^report report-1 · content hash b{64}$/)
+	).toBeVisible();
 	await expect(page.getByTestId('study-classification-uncertainties')).toContainText(
 		'allocation wording'
 	);
@@ -587,10 +618,8 @@ test('reviews study classification proposals without calling manual classificati
 	await page.getByTestId('study-classification-accept').click();
 	await expect.poll(() => decisionBodies.length).toBe(1);
 	await expect.poll(() => proposalQueryRequests).toBeGreaterThan(1);
-	await expect(
-		page.getByText('No pending classification suggestion', { exact: true })
-	).toBeVisible();
-	await expect(page.getByText('Revision 3 · changes are audited and reversible')).toBeVisible();
+	await expect(page.getByText('No study design suggestion yet', { exact: true })).toBeVisible();
+	await page.getByRole('tab', { name: 'History', exact: true }).click();
 	await expect(page.getByText('study_classified', { exact: true })).toBeVisible();
 	await expect.poll(() => manualClassifyRequests).toBe(0);
 });
@@ -711,13 +740,12 @@ test('rejects abstention classification proposals while keeping accept disabled'
 	);
 
 	await page.goto('/projects/project-1/studies?study=study-1');
+	await page.getByRole('tab', { name: 'AI assistance', exact: true }).click();
 	await expect(page.getByTestId('study-classification-suggestion')).toContainText('Abstention');
 	await expect(page.getByTestId('study-classification-accept')).toBeDisabled();
 	await expect(page.getByTestId('study-classification-reject')).toBeEnabled();
 	await page.getByTestId('study-classification-reject').click();
 	await expect.poll(() => rejectCount).toBe(1);
-	await expect(
-		page.getByText('No pending classification suggestion', { exact: true })
-	).toBeVisible();
+	await expect(page.getByText('No study design suggestion yet', { exact: true })).toBeVisible();
 	await expect.poll(() => manualClassifyRequests).toBe(0);
 });

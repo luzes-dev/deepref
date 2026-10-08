@@ -13,6 +13,8 @@
 	import { Skeleton } from '@deepref/ui/skeleton';
 	import { Spinner } from '@deepref/ui/spinner';
 	import { Brain, Check, X } from '@lucide/svelte';
+	import EvidenceLabel from '$lib/features/evidence/EvidenceLabel.svelte';
+	import { page } from '$app/state';
 
 	let {
 		proposal,
@@ -57,10 +59,16 @@
 	function evidenceSubject(evidence: AiStudyDesignEvidenceDto): string {
 		switch (evidence.kind) {
 			case 'study_metadata':
-				return `Study ${studyLabel(evidence.study_id)} · ${evidence.study_id}`;
+				return `Study “${studyLabel(evidence.study_id)}”`;
 			case 'report_metadata':
-				return `Report ${evidence.report_id}`;
+				return 'Report';
 		}
+	}
+
+	/** Ids and hashes for the tooltip only. */
+	function evidenceTechnical(evidence: AiStudyDesignEvidenceDto): string {
+		const id = evidence.kind === 'study_metadata' ? evidence.study_id : evidence.report_id;
+		return `${evidence.kind === 'study_metadata' ? 'study' : 'report'} ${id} · content hash ${evidence.content_hash}`;
 	}
 
 	function evidenceFieldLabel(evidence: AiStudyDesignEvidenceDto): string {
@@ -89,7 +97,6 @@
 				<Brain aria-hidden="true" class="size-4" />
 				<Card.Title>Study design classification assistance</Card.Title>
 			</div>
-			<Badge variant="outline">Proposal only</Badge>
 		</div>
 		<Card.Description>
 			AI classifications are evidence-linked suggestions. A reviewer must approve or reject
@@ -117,9 +124,18 @@
 		{:else if !proposal || proposal.payload.kind !== 'classification'}
 			<StatePanel
 				state="empty"
-				title="No pending classification suggestion"
-				description="The assistant has not created a study-design proposal for this study."
+				title="No study design suggestion yet"
+				description="Suggestions come from the study classification automation. Run it on the Automations page and the proposal for this study appears here for review. You can also set the design yourself with the classification form."
 			/>
+			<div>
+				<Button
+					variant="outline"
+					size="sm"
+					href={`/projects/${page.params.projectId}/automations`}
+				>
+					Open automations
+				</Button>
+			</div>
 		{:else}
 			{@const payload = proposal.payload}
 			<div class="flex flex-wrap items-center gap-2">
@@ -166,16 +182,17 @@
 					{#if payload.evidence.length}
 						<ul class="mt-2 flex flex-col gap-2 text-xs">
 							{#each payload.evidence as evidence (evidenceKey(evidence))}
-								<li class="rounded-md bg-muted/40 p-2">
-									<div class="flex flex-wrap gap-x-2 gap-y-1">
-										<span class="font-medium">{evidenceSubject(evidence)}</span>
+								<li class="min-w-0 rounded-md bg-muted/40 p-2">
+									<div class="flex min-w-0 flex-wrap gap-x-2 gap-y-1">
+										<EvidenceLabel
+											label={evidenceSubject(evidence)}
+											technical={evidenceTechnical(evidence)}
+											class="font-medium"
+										/>
 										<span class="text-muted-foreground">
-											· {evidenceFieldLabel(evidence)} ({evidence.field})
+											· {evidenceFieldLabel(evidence)}
 										</span>
 									</div>
-									<code class="mt-1 block break-all text-muted-foreground">
-										content hash: {evidence.content_hash}
-									</code>
 								</li>
 							{/each}
 						</ul>

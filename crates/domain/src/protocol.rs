@@ -238,6 +238,22 @@ pub fn validate_criteria(
         .collect()
 }
 
+/// Publishing makes a protocol immutable and screening decisions are judged
+/// against its criteria, so a published protocol needs at least one inclusion
+/// criterion. Drafts may be saved without criteria; only publication checks this.
+pub fn validate_publishable_criteria(
+    kinds: impl IntoIterator<Item = CriterionKind>,
+) -> Result<(), ProtocolValidationError> {
+    if kinds
+        .into_iter()
+        .any(|kind| kind == CriterionKind::Inclusion)
+    {
+        Ok(())
+    } else {
+        Err(ProtocolValidationError::NoInclusionCriterion)
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
 pub enum ProtocolValidationError {
     #[error("protocol framework has too many fields")]
@@ -266,6 +282,8 @@ pub enum ProtocolValidationError {
     BlankCriterionDescription,
     #[error("eligibility criterion description is too long")]
     CriterionDescriptionTooLong,
+    #[error("add at least one inclusion criterion before publishing the protocol")]
+    NoInclusionCriterion,
 }
 
 #[cfg(test)]
@@ -337,5 +355,21 @@ mod tests {
         .unwrap();
         assert_eq!(result[0].ordinal, 0);
         assert_eq!(result[1].ordinal, 1);
+    }
+
+    #[test]
+    fn publication_requires_an_inclusion_criterion() {
+        assert_eq!(
+            validate_publishable_criteria(Vec::<CriterionKind>::new()),
+            Err(ProtocolValidationError::NoInclusionCriterion)
+        );
+        assert_eq!(
+            validate_publishable_criteria([CriterionKind::Exclusion]),
+            Err(ProtocolValidationError::NoInclusionCriterion)
+        );
+        assert!(
+            validate_publishable_criteria([CriterionKind::Exclusion, CriterionKind::Inclusion])
+                .is_ok()
+        );
     }
 }

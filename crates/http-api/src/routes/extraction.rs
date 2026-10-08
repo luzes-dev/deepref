@@ -44,22 +44,40 @@ pub(crate) struct CreateExtractionFieldRequest {
 pub(crate) struct ExtractionValueDto {
     pub id: Uuid,
     pub study_id: Uuid,
-    pub report_id: Uuid,
+    /// Absent when a reviewer entered the value without citing evidence.
+    pub report_id: Option<Uuid>,
     pub field_definition_id: Uuid,
     pub field_definition_version: i32,
     pub value: ExtractionValueDtoValue,
-    pub rationale: String,
-    pub source_document_id: Uuid,
-    pub source_block_id: Uuid,
-    pub source_page: i32,
-    pub source_parser_version: String,
-    pub source_content_hash: String,
+    pub rationale: Option<String>,
+    pub source_document_id: Option<Uuid>,
+    pub source_block_id: Option<Uuid>,
+    pub source_page: Option<i32>,
+    pub source_parser_version: Option<String>,
+    pub source_content_hash: Option<String>,
     pub approved_by_actor_kind: String,
     pub approved_by_actor_id: String,
     pub approved_at: chrono::DateTime<chrono::Utc>,
+    /// True while an AI-entered value waits for a person to confirm it.
+    pub needs_verification: bool,
+    pub verified_at: Option<chrono::DateTime<chrono::Utc>>,
+    pub verified_by: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, ToSchema)]
+#[derive(Debug, Deserialize, ToSchema)]
+pub(crate) struct RecordExtractionValueRequest {
+    pub value: ExtractionValueDtoValue,
+    pub rationale: Option<String>,
+    pub source: Option<ExtractionValueSourceRequest>,
+}
+
+#[derive(Debug, Deserialize, ToSchema)]
+pub(crate) struct ExtractionValueSourceRequest {
+    pub document_id: Uuid,
+    pub document_block_id: Uuid,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, ToSchema)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub(crate) enum ExtractionValueDtoValue {
     Text { value: String },
@@ -117,6 +135,44 @@ pub(crate) async fn create_extraction_field(
     Ok((axum::http::StatusCode::CREATED, Json(field_dto(definition))))
 }
 
+#[derive(Debug, Clone, Deserialize, ToSchema)]
+pub(crate) struct UpdateExtractionFieldRequest {
+    pub label: String,
+    pub value_type: String,
+    pub required: bool,
+}
+
+#[utoipa::path(
+    patch,
+    path = "/projects/{project_id}/extraction/fields/{field_id}",
+    operation_id = "updateExtractionField",
+    tag = "extraction",
+    params(("project_id" = Uuid, Path), ("field_id" = Uuid, Path)),
+    request_body = UpdateExtractionFieldRequest,
+    responses((status = 200, body = ExtractionFieldDto), (status = 400, body = ErrorResponse), (status = 404, body = ErrorResponse), (status = 409, body = ErrorResponse), (status = 500, body = ErrorResponse))
+)]
+pub(crate) async fn update_extraction_field(
+    State(state): State<AppState>,
+    Path((project_id, field_id)): Path<(Uuid, Uuid)>,
+    Json(input): Json<UpdateExtractionFieldRequest>,
+) -> Result<Json<ExtractionFieldDto>, ApiError> {
+    let value_type = ExtractionFieldType::parse(&input.value_type)
+        .ok_or_else(|| ApiError::BadRequest("value_type is invalid".to_owned()))?;
+    let definition = deepref_postgres::update_field_definition(
+        &state.pool,
+        project_id,
+        field_id,
+        deepref_postgres::ExtractionFieldUpdate {
+            label: input.label,
+            value_type,
+            required: input.required,
+        },
+    )
+    .await
+    .map_err(map_extraction_error)?;
+    Ok(Json(field_dto(definition)))
+}
+
 #[utoipa::path(
     get,
     path = "/projects/{project_id}/studies/{study_id}/extraction",
@@ -133,6 +189,77 @@ pub(crate) async fn list_study_extraction_values(
         .await
         .map_err(map_extraction_error)?;
     Ok(Json(values.into_iter().map(value_dto).collect()))
+}
+
+#[utoipa::path(
+    put,
+    path = "/projects/{project_id}/studies/{study_id}/extraction/values/{field_id}",
+    operation_id = "recordExtractionValue",
+    tag = "extraction",
+    params(("project_id" = Uuid, Path), ("study_id" = Uuid, Path), ("field_id" = Uuid, Path)),
+    request_body = RecordExtractionValueRequest,
+    responses((status = 200, body = ExtractionValueDto), (status = 400, body = ErrorResponse), (status = 404, body = ErrorResponse), (status = 409, body = ErrorResponse), (status = 500, body = ErrorResponse))
+)]
+pub(crate) async fn record_extraction_value(
+    State(state): State<AppState>,
+    Path((project_id, study_id, field_id)): Path<(Uuid, Uuid, Uuid)>,
+    headers: HeaderMap,
+    Json(input): Json<RecordExtractionValueRequest>,
+) -> Result<Json<ExtractionValueDto>, ApiError> {
+    let value = match input.value {
+        ExtractionValueDtoValue::Text { value } => ExtractionValue::Text { value },
+        ExtractionValueDtoValue::Number { value } => ExtractionValue::Number { value },
+        ExtractionValueDtoValue::Boolean { value } => ExtractionValue::Boolean { value },
+        ExtractionValueDtoValue::Date { value } => ExtractionValue::Date {
+            value: chrono::NaiveDate::parse_from_str(&value, "%Y-%m-%d")
+                .map_err(|_| ApiError::BadRequest("date value must be YYYY-MM-DD".to_owned()))?,
+        },
+    };
+    let record = deepref_postgres::record_manual_value(
+        &state.pool,
+        project_id,
+        study_id,
+        deepref_postgres::ManualExtractionValue {
+            field_id,
+            value,
+            rationale: input.rationale,
+            evidence: input
+                .source
+                .map(|source| deepref_postgres::ManualExtractionEvidence {
+                    document_id: source.document_id,
+                    document_block_id: source.document_block_id,
+                }),
+        },
+        &extract_actor(&headers)?,
+    )
+    .await
+    .map_err(map_extraction_error)?;
+    Ok(Json(value_dto(record)))
+}
+
+#[utoipa::path(
+    delete,
+    path = "/projects/{project_id}/studies/{study_id}/extraction/values/{field_id}",
+    operation_id = "clearExtractionValue",
+    tag = "extraction",
+    params(("project_id" = Uuid, Path), ("study_id" = Uuid, Path), ("field_id" = Uuid, Path)),
+    responses((status = 204), (status = 404, body = ErrorResponse), (status = 500, body = ErrorResponse))
+)]
+pub(crate) async fn clear_extraction_value(
+    State(state): State<AppState>,
+    Path((project_id, study_id, field_id)): Path<(Uuid, Uuid, Uuid)>,
+    headers: HeaderMap,
+) -> Result<axum::http::StatusCode, ApiError> {
+    deepref_postgres::clear_value(
+        &state.pool,
+        project_id,
+        study_id,
+        field_id,
+        &extract_actor(&headers)?,
+    )
+    .await
+    .map_err(map_extraction_error)?;
+    Ok(axum::http::StatusCode::NO_CONTENT)
 }
 
 #[utoipa::path(
@@ -171,7 +298,7 @@ fn field_dto(definition: ExtractionFieldDefinition) -> ExtractionFieldDto {
     }
 }
 
-fn value_dto(value: deepref_postgres::ExtractionValueRecord) -> ExtractionValueDto {
+pub(crate) fn value_dto(value: deepref_postgres::ExtractionValueRecord) -> ExtractionValueDto {
     let typed_value = match value.value {
         ExtractionValue::Text { value } => ExtractionValueDtoValue::Text { value },
         ExtractionValue::Number { value } => ExtractionValueDtoValue::Number { value },
@@ -196,10 +323,13 @@ fn value_dto(value: deepref_postgres::ExtractionValueRecord) -> ExtractionValueD
         approved_by_actor_kind: value.approved_by_actor_kind,
         approved_by_actor_id: value.approved_by_actor_id,
         approved_at: value.approved_at,
+        needs_verification: value.needs_verification,
+        verified_at: value.verified_at,
+        verified_by: value.verified_by,
     }
 }
 
-fn map_extraction_error(error: deepref_postgres::ExtractionError) -> ApiError {
+pub(crate) fn map_extraction_error(error: deepref_postgres::ExtractionError) -> ApiError {
     match error {
         deepref_postgres::ExtractionError::Database(error) => ApiError::Database(error),
         deepref_postgres::ExtractionError::ImmutableDefinition
@@ -210,6 +340,11 @@ fn map_extraction_error(error: deepref_postgres::ExtractionError) -> ApiError {
         },
         deepref_postgres::ExtractionError::DefinitionNotFound
         | deepref_postgres::ExtractionError::StudyNotFound => ApiError::NotFound(error.to_string()),
+        deepref_postgres::ExtractionError::FieldHasValues => ApiError::Conflict {
+            code: "extraction_field_has_values".to_owned(),
+            message: error.to_string(),
+            details: Value::Null,
+        },
         deepref_postgres::ExtractionError::StaleDefinitionVersion => ApiError::Conflict {
             code: "extraction_definition_changed".to_owned(),
             message: error.to_string(),

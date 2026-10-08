@@ -258,25 +258,47 @@ pub async fn list_ai_extraction_evidence(
         kind: None,
         limit: 32,
     };
-    retrieve_grounding_blocks(pool, request).await
+    let blocks = retrieve_grounding_blocks(pool, request.clone()).await?;
+    if !blocks.is_empty() {
+        return Ok(blocks);
+    }
+    // Field names are often written in another language than the paper, so
+    // nothing matches them. Fall back to the passages where study design,
+    // sample, intervention and results are normally reported.
+    let fallback = RetrievalRequest {
+        query: "participants or patients or subjects or sample or enrolled or randomized or \
+                intervention or device or weeks or months or mean or outcome or results or \
+                methods"
+            .to_owned(),
+        ..request
+    };
+    retrieve_grounding_blocks(pool, fallback).await
 }
 
+/// Turns free text into a websearch query that matches blocks containing ANY of
+/// the terms (ranked by how many match); requiring every term of a long query
+/// to co-occur in one block would find nothing.
 fn sanitized_retrieval_query(raw: &str) -> String {
+    let mut seen = std::collections::HashSet::new();
+    let raw = raw.replace('_', " ");
     let terms = raw
         .split_whitespace()
-        .take(32)
         .filter_map(|term| {
             let sanitized = term
                 .chars()
                 .filter(|character| character.is_alphanumeric() || *character == '-')
-                .collect::<String>();
-            (!sanitized.is_empty()).then_some(sanitized)
+                .collect::<String>()
+                .trim_start_matches('-')
+                .to_owned();
+            (sanitized.chars().count() >= 3 && seen.insert(sanitized.to_lowercase()))
+                .then_some(sanitized)
         })
+        .take(32)
         .collect::<Vec<_>>();
     if terms.is_empty() {
         "evidence".to_owned()
     } else {
-        terms.join(" ")
+        terms.join(" or ")
     }
 }
 
@@ -415,12 +437,41 @@ fn first_author(authors: serde_json::Value) -> Option<String> {
         .as_array()
         .and_then(|items| items.first())
         .and_then(|item| {
-            item.get("literal")
-                .or_else(|| item.get("family"))
-                .or_else(|| item.get("name"))
-                .and_then(serde_json::Value::as_str)
+            // RIS and BibTeX authors carry `"literal": null`. A null key must not
+            // hide the fallbacks behind it, so take the first non-empty string.
+            ["literal", "family", "name"]
+                .into_iter()
+                .filter_map(|key| item.get(key).and_then(serde_json::Value::as_str))
+                .find(|value| !value.trim().is_empty())
                 .map(str::to_owned)
         })
+}
+
+#[cfg(test)]
+mod first_author_tests {
+    use super::first_author;
+    use serde_json::json;
+
+    #[test]
+    fn null_literal_falls_back_to_the_family_name() {
+        assert_eq!(
+            first_author(json!([{"given": "Yee Sien", "family": "Ng", "literal": null}])),
+            Some("Ng".to_owned())
+        );
+    }
+
+    #[test]
+    fn a_literal_name_wins_and_empty_authors_stay_empty() {
+        assert_eq!(
+            first_author(json!([{"literal": "Acme Consortium", "family": "Ignored"}])),
+            Some("Acme Consortium".to_owned())
+        );
+        assert_eq!(
+            first_author(json!([{"literal": " ", "given": "Only"}])),
+            None
+        );
+        assert_eq!(first_author(json!([])), None);
+    }
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -984,6 +1035,15 @@ pub(crate) async fn create_proposal_in_transaction(
     }
     if inserted.rows_affected() == 1 {
         persist_typed_proposal_projection(transaction, &existing).await?;
+        crate::dispatch_automation_domain_event(
+            transaction,
+            &deepref_application::AutomationDomainEvent::AiProposalCreated {
+                project_id: proposal.draft.project_id,
+                proposal_id: existing.id,
+            },
+        )
+        .await
+        .map_err(|_| AiError::Proposal("proposal event dispatch failed".to_owned()))?;
     }
     Ok(existing)
 }

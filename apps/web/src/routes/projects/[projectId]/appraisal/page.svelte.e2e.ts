@@ -264,15 +264,9 @@ test('renders and submits both generic appraisal shapes with required evidence',
 			exact: true
 		})
 	).toBeVisible();
-	await expect(
-		page.getByRole('button', { name: /DeepRef generic intervention appraisal v1/ })
-	).toBeVisible();
-	await expect(
-		page.getByRole('button', { name: /DeepRef generic intervention appraisal revision/ })
-	).toBeVisible();
 	await page
-		.getByRole('button', { name: /DeepRef generic intervention appraisal revision/ })
-		.click();
+		.locator('#appraisal-definition')
+		.selectOption({ label: 'DeepRef generic intervention appraisal revision v2' });
 	await expect(page).toHaveURL(/definition=deepref-rct-generic&definition_version=2/);
 	await expect(
 		page.getByRole('heading', {
@@ -280,7 +274,9 @@ test('renders and submits both generic appraisal shapes with required evidence',
 			exact: true
 		})
 	).toBeVisible();
-	await page.getByRole('button', { name: /DeepRef generic intervention appraisal v1/ }).click();
+	await page
+		.locator('#appraisal-definition')
+		.selectOption({ label: 'DeepRef generic intervention appraisal v1' });
 	await expect(page).toHaveURL(/definition=deepref-rct-generic&definition_version=1/);
 	await expect(
 		page.getByRole('heading', {
@@ -289,12 +285,19 @@ test('renders and submits both generic appraisal shapes with required evidence',
 		})
 	).toBeVisible();
 	await page.locator('#allocation_description').selectOption('yes');
+	await page.getByRole('button', { name: 'Complete appraisal' }).click();
+	await expect(page.getByRole('alert')).toContainText('required response and evidence');
+	expect(payloads).toHaveLength(0);
 	await page.getByRole('button', { name: 'Add evidence block' }).first().click();
-	await page.locator('#allocation_description-evidence-0').selectOption('block-1');
+	await page.getByTestId('allocation_description-evidence-option').first().click();
 	await page.getByRole('button', { name: 'Add evidence block' }).first().click();
-	await page.locator('#allocation_description-evidence-1').selectOption('block-2');
+	await page.getByTestId('allocation_description-evidence-option').first().click();
 	await page.locator('#outcome_measure_prespecified').check();
+	await expect(page.locator('#allocation-custom-judgment')).toHaveCount(0);
+	await page.locator('#allocation-judgment').selectOption({ label: 'Other…' });
+	await expect(page.locator('#allocation-custom-judgment')).toBeVisible();
 	await page.locator('#allocation-judgment').selectOption('low_concern');
+	await expect(page.locator('#allocation-custom-judgment')).toHaveCount(0);
 	await page.locator('#outcome_reporting-judgment').selectOption('low_concern');
 	await page.locator('#overall-judgment').selectOption('low_concern');
 	await page.getByRole('button', { name: 'Complete appraisal' }).click();
@@ -319,13 +322,20 @@ test('renders and submits both generic appraisal shapes with required evidence',
 		])
 	);
 	expect(payloads[0]?.evidence).toHaveLength(2);
-	await page.getByRole('button', { name: 'DeepRef generic qualitative appraisal' }).click();
+	const summary = page.getByTestId('appraisal-summary');
+	await expect(summary).toContainText('Completed');
+	await expect(page.getByRole('button', { name: 'Complete appraisal' })).toHaveCount(0);
+	await summary.getByRole('button', { name: 'Start a new assessment' }).click();
+	await expect(page.getByRole('button', { name: 'Complete appraisal' })).toBeVisible();
+	await page
+		.locator('#appraisal-definition')
+		.selectOption({ label: 'DeepRef generic qualitative appraisal v1' });
 	await expect(page.locator('#transparency_score')).toBeVisible();
 	await expect(page.locator('#reflexivity_note')).toBeVisible();
 	await page.locator('#transparency_score').fill('2');
 	await page.locator('#reflexivity_note').fill('The methods are clearly described.');
-	await page.getByRole('button', { name: 'Add evidence block' }).click();
-	await page.locator('#transparency_score-evidence-0').selectOption('block-1');
+	await page.getByRole('button', { name: 'Add evidence block' }).first().click();
+	await page.getByTestId('transparency_score-evidence-option').first().click();
 	await page.locator('#methodological_transparency-judgment').selectOption('adequate');
 	await page.locator('#overall-judgment').selectOption('adequate');
 	await page.getByRole('button', { name: 'Complete appraisal' }).click();
@@ -517,9 +527,8 @@ test('reviews an edited AI appraisal pre-fill with evidence navigation and decis
 	await page.goto(
 		'/projects/project-1/appraisal?report=report-1&definition=deepref-rct-generic&definition_version=1'
 	);
-	await page.getByRole('tab', { name: 'AI suggestion' }).click();
 	await page.getByTestId('generate-ai-prefill').click();
-	await page.getByRole('tab', { name: 'AI suggestion' }).click();
+	await page.getByText(/^Rationale and evidence/).click();
 	await expect(page.getByTestId('ai-prefill-proposal')).toBeVisible();
 	await expect(page.getByTestId('ai-answer-allocation_description')).toContainText(
 		'Suggested answer: yes'
@@ -536,16 +545,15 @@ test('reviews an edited AI appraisal pre-fill with evidence navigation and decis
 	await page.goto(
 		'/projects/project-1/appraisal?report=report-1&definition=deepref-rct-generic&definition_version=1'
 	);
-	await page.getByRole('tab', { name: 'AI suggestion' }).click();
+	await page.getByText(/^Rationale and evidence/).click();
 	await expect(page.getByTestId('ai-prefill-proposal')).toBeVisible();
 
-	await page.getByRole('tab', { name: 'Assessment', exact: true }).click();
 	await page.locator('#outcome_measure_prespecified').uncheck();
-	await page.locator('#allocation_description-evidence-0').selectOption('block-2');
-	await page.getByRole('tab', { name: 'AI suggestion' }).click();
-	await page.getByRole('tab', { name: 'Assessment', exact: true }).click();
+	await page.getByRole('button', { name: 'Remove evidence block 1' }).first().click();
+	await page.getByRole('button', { name: 'Add evidence block' }).first().click();
+	await page.getByTestId('allocation_description-evidence-option').nth(1).click();
 	await expect(page.locator('#outcome_measure_prespecified')).not.toBeChecked();
-	await expect(page.locator('#allocation_description-evidence-0')).toHaveValue('block-2');
+	await expect(page.getByRole('button', { name: 'Remove evidence block 1' })).toHaveCount(1);
 	await page.getByRole('button', { name: 'Accept reviewed AI pre-fill' }).click();
 	await expect.poll(() => decisions.length).toBe(1);
 	const acceptedBody = decisions[0];
@@ -568,15 +576,16 @@ test('reviews an edited AI appraisal pre-fill with evidence navigation and decis
 			]
 		}
 	});
-	await expect(page.getByText('assessment-ai-1')).toBeVisible();
+	await page.getByRole('button', { name: /completed assessment/ }).click();
+	await expect(page.getByText(/assessment-ai-1/)).toBeVisible();
 	await expect.poll(() => historyReads).toBeGreaterThan(1);
 	expect(completeCalls).toBe(0);
-	await page.getByRole('tab', { name: 'AI suggestion' }).click();
-	await expect(page.getByText('No pending AI pre-fill')).toBeVisible();
+	await expect(page.getByTestId('appraisal-summary')).toBeVisible();
+	await page.getByRole('button', { name: 'Start a new assessment' }).click();
+	await expect(page.getByTestId('generate-ai-prefill')).toBeVisible();
 
-	await page.getByRole('tab', { name: 'AI suggestion' }).click();
 	await page.getByTestId('generate-ai-prefill').click();
-	await page.getByRole('tab', { name: 'AI suggestion' }).click();
+	await page.getByText(/^Rationale and evidence/).click();
 	await expect(page.getByTestId('ai-prefill-proposal')).toBeVisible();
 	await page.getByTestId('reject-ai-prefill').click();
 	await expect.poll(() => decisions.length).toBe(2);
@@ -588,9 +597,8 @@ test('reviews an edited AI appraisal pre-fill with evidence navigation and decis
 		expect('reviewed_payload' in decisions[1]).toBe(false);
 	}
 
-	await page.getByRole('tab', { name: 'AI suggestion' }).click();
 	await page.getByTestId('generate-ai-prefill').click();
-	await page.getByRole('tab', { name: 'AI suggestion' }).click();
+	await page.getByText(/^Rationale and evidence/).click();
 	await expect(page.getByTestId('ai-prefill-proposal')).toBeVisible();
 	await page.route(
 		'http://localhost:4173/api/projects/project-1/ai/proposals/proposal-3/decision',
@@ -598,6 +606,5 @@ test('reviews an edited AI appraisal pre-fill with evidence navigation and decis
 	);
 	await page.getByTestId('reject-ai-prefill').click();
 	await expect(page.getByRole('alert')).toContainText('stale');
-	await page.getByRole('tab', { name: 'AI suggestion' }).click();
-	await expect(page.getByTestId('ai-prefill-proposal')).toBeVisible();
+	await expect(page.getByTestId('reject-ai-prefill')).toBeVisible();
 });

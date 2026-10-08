@@ -23,6 +23,7 @@ pub use documents::{
 pub use protocol::{
     CriterionDimension, CriterionKind, CriterionStage, EligibilityCriterion, FrameworkKind,
     ProtocolFramework, ProtocolStatus, ProtocolValidationError, validate_criteria,
+    validate_publishable_criteria,
 };
 
 macro_rules! typed_id {

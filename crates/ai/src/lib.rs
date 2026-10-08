@@ -4,22 +4,30 @@
 //! gateways, prompt definitions, grounding, policy, and task orchestration.
 //! SQLx and pgvector stay in `deepref-postgres`.
 
+mod agent_loop;
 mod agents;
 mod assistant;
+mod chat;
 mod classification;
 mod dedupe;
 mod evals;
 mod gateway;
 mod grounding;
+mod openai_compat;
 mod policy;
+mod pricing;
 mod prompts;
 mod review_assistance;
 mod runner;
 mod screening;
+mod structured;
 mod types;
+mod usage;
 
+pub use agent_loop::*;
 pub use agents::*;
 pub use assistant::*;
+pub use chat::*;
 pub use classification::{
     ClassificationReportField, StudyDesignClassification, StudyDesignClassificationInput,
     StudyDesignClassificationTask, StudyDesignEvidence, StudyDesignLabel, StudyDesignReport,
@@ -31,9 +39,17 @@ pub use dedupe::{
 };
 pub use deepref_domain::{Actor, ActorKind};
 pub use evals::*;
-pub use gateway::{AiGateway, EmbeddingGateway, RigEmbeddingGateway, RigGateway, RoutedGateway};
+pub use gateway::{
+    ANY_MODEL, AiGateway, EmbeddingGateway, RigEmbeddingGateway, RigGateway, RoutedGateway,
+    build_metered_provider,
+};
 pub use grounding::GroundingContextBuilder;
+pub use openai_compat::{OpenAiCompatGateway, ProviderDialect};
 pub use policy::{PolicyDecision, PolicyEngine, PolicyInput, ProjectAiPolicy, RequestedAction};
+pub use pricing::{
+    GLM_5_3_FLASH_PRICE, ModelPrice, PriceBook, UNKNOWN_MODEL_PRICE, estimate_cost_micros,
+    price_for_model,
+};
 pub use prompts::{PromptDefinition, PromptRegistry, PromptVersion};
 pub use review_assistance::*;
 pub use runner::{
@@ -44,9 +60,10 @@ pub use runner::{
 pub use screening::{
     CriterionJudgment, CriterionPrompt, CriterionResult, ScreeningAnalysis, ScreeningEvidence,
     ScreeningEvidenceField, ScreeningInput, ScreeningStage, ScreeningTask, ScreeningTaskConfig,
-    SuggestedDecision,
+    SuggestedDecision, criteria_for_stage,
 };
 pub use types::*;
+pub use usage::{BudgetSnapshot, MeteredGateway, UsageEntry, UsageLedger};
 
 #[cfg(test)]
 mod tests;

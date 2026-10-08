@@ -167,6 +167,9 @@ pub(crate) struct ScreeningHistoryItemDto {
 #[derive(Debug, Clone, Serialize, ToSchema)]
 pub(crate) struct PrismaDto {
     pub project_id: Uuid,
+    /// Equations that do not hold for these counts. Empty when the flow reconciles; the counts
+    /// are still returned so the page can say what is wrong instead of failing.
+    pub reconciliation_warnings: Vec<String>,
     pub screening_high_watermark: u64,
     pub as_of: Option<DateTime<Utc>>,
     pub identified_records: u64,
@@ -407,7 +410,7 @@ pub(crate) async fn get_screening_history(
     tag = "review",
     params(("project_id" = Uuid, Path, description = "Project identifier")),
     responses(
-        (status = 200, description = "PRISMA projection counts", body = PrismaDto),
+        (status = 200, description = "PRISMA projection counts; reconciliation_warnings lists any equation that does not hold", body = PrismaDto),
         (status = 404, description = "Project not found", body = ErrorResponse),
         (status = 500, description = "Internal server error", body = ErrorResponse)
     )
@@ -419,9 +422,6 @@ pub(crate) async fn get_prisma(
     let projection = deepref_postgres::get_prisma_projection(&state.pool, project_id)
         .await
         .map_err(|error| match error {
-            deepref_postgres::PrismaProjectionError::Invariant(error) => {
-                ApiError::DataIntegrity(error.to_string())
-            }
             deepref_postgres::PrismaProjectionError::NegativeCount { .. } => {
                 ApiError::DataIntegrity(error.to_string())
             }
@@ -435,8 +435,21 @@ pub(crate) async fn get_prisma(
 }
 
 fn prisma_dto(projection: PrismaProjection) -> PrismaDto {
+    let reconciliation_warnings: Vec<String> = projection
+        .reconciliation_failures()
+        .iter()
+        .map(ToString::to_string)
+        .collect();
+    if !reconciliation_warnings.is_empty() {
+        tracing::warn!(
+            project_id = %projection.project_id,
+            failures = ?reconciliation_warnings,
+            "PRISMA counts do not reconcile"
+        );
+    }
     PrismaDto {
         project_id: projection.project_id,
+        reconciliation_warnings,
         screening_high_watermark: projection.screening_high_watermark.get(),
         as_of: projection.as_of,
         identified_records: projection.identified_records.get(),

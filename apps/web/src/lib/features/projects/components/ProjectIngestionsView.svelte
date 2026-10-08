@@ -1,30 +1,42 @@
 <script lang="ts">
-	import * as Field from '@deepref/ui/field';
-	import * as InputGroup from '@deepref/ui/input-group';
 	import * as Table from '@deepref/ui/table';
 	import { Badge } from '@deepref/ui/badge';
 	import { Button } from '@deepref/ui/button';
-	import * as NumberField from '@deepref/ui/number-field';
 	import { Skeleton } from '@deepref/ui/skeleton';
+	import * as ToggleGroup from '@deepref/ui/toggle-group';
 	import PaginationLoadMore from '@deepref/ui/pagination-load-more';
-	import { PageToolbar, StatePanel } from '@deepref/ui/layout';
-	import { statusVariant } from '$lib/api/helpers';
+	import { StatePanel } from '@deepref/ui/layout';
 	import { ApiError } from '$lib/api/custom-fetch';
+	import { shouldPollIngestion } from '$lib/api/helpers';
 	import {
-		createCreateIngestion,
-		getListIngestionsQueryKey
-	} from '$lib/api/generated/ingestions/ingestions';
-	import { refreshAcquisition } from '$lib/api/generated/acquisitions/acquisitions';
-	import { useQueryClient } from '@tanstack/svelte-query';
-	import PlayIcon from '@lucide/svelte/icons/play';
+		getListAcquisitionsQueryKey,
+		listAcquisitions,
+		refreshAcquisition
+	} from '$lib/api/generated/acquisitions/acquisitions';
+	import type { AcquisitionDto, IngestionDto } from '$lib/api/generated/models';
+	import { getListIngestionsQueryKey } from '$lib/api/generated/ingestions/ingestions';
+	import { createGetProjectPrisma } from '$lib/api/generated/review/review';
+	import { resolve } from '$app/paths';
+	import { createInfiniteQuery, useQueryClient } from '@tanstack/svelte-query';
 	import RefreshCwIcon from '@lucide/svelte/icons/refresh-cw';
 	import PageTemplate from '$lib/shell/PageTemplate.svelte';
 	import { useProjectWorkspaceContext } from '../context.svelte.js';
-	import { notifyError } from '$lib/features/notifications/toast';
+	import { importRunFormatLabel, runStatusDisplay } from '../imports';
+	import ImportDoiForm from './ImportDoiForm.svelte';
+	import ImportFileForm from './ImportFileForm.svelte';
+	import ImportPmidForm from './ImportPmidForm.svelte';
+
+	type ImportSource = 'dois' | 'file' | 'pmids';
+
+	const SOURCE_DESCRIPTION: Record<ImportSource, string> = {
+		dois: "Paste DOIs. DeepRef fetches each article and follows its citations to build the review's corpus.",
+		file: 'Upload a reference-manager export. Its records are added as they are, then checked for duplicates.',
+		pmids: 'Paste PubMed IDs. DeepRef looks each one up in PubMed, adds the articles it finds, and checks them for duplicates.'
+	};
 
 	const workspace = useProjectWorkspaceContext();
-	const createIngestion = createCreateIngestion();
 	const queryClient = useQueryClient();
+	const projectId = $derived(workspace.project.id);
 
 	type RefreshState =
 		| { kind: 'pending'; idempotencyKey: string }
@@ -32,9 +44,113 @@
 		| { kind: 'key-unavailable'; message: string };
 
 	let refreshStates = $state<Record<string, RefreshState>>({});
+	let source = $state<ImportSource>('dois');
+	let doiNotice = $state<string | undefined>();
 
 	const sortedIngestions = $derived(
 		workspace.ingestions.toSorted((a, b) => Date.parse(b.created_at) - Date.parse(a.created_at))
+	);
+
+	// File-import runs live in the acquisitions list, which DOI runs share; filter on the server.
+	const fileRunsQuery = createInfiniteQuery(() => ({
+		queryKey: getListAcquisitionsQueryKey(projectId, { strategy: 'file_import' }),
+		queryFn: ({ pageParam, signal }) =>
+			listAcquisitions(
+				projectId,
+				{ strategy: 'file_import', cursor: pageParam || undefined, limit: 50 },
+				{ signal }
+			),
+		initialPageParam: '',
+		getNextPageParam: (lastPage) => lastPage.data.next_cursor ?? undefined,
+		enabled: Boolean(projectId),
+		staleTime: 0
+	}));
+	const fileRuns = $derived(fileRunsQuery.data?.pages.flatMap((page) => page.data.items) ?? []);
+
+	// PubMed ID runs are acquisition runs too, so the server filters them the same way.
+	const pmidRunsQuery = createInfiniteQuery(() => ({
+		queryKey: getListAcquisitionsQueryKey(projectId, { strategy: 'pmid_import' }),
+		queryFn: ({ pageParam, signal }) =>
+			listAcquisitions(
+				projectId,
+				{ strategy: 'pmid_import', cursor: pageParam || undefined, limit: 50 },
+				{ signal }
+			),
+		initialPageParam: '',
+		getNextPageParam: (lastPage) => lastPage.data.next_cursor ?? undefined,
+		enabled: Boolean(projectId),
+		// A PubMed run that is still queued or running is re-read, so its row settles on its own.
+		refetchInterval: (query) =>
+			(query.state.data?.pages ?? []).some((page) =>
+				page.data.items.some((run) => shouldPollIngestion(run.status) !== false)
+			)
+				? 2_000
+				: false,
+		staleTime: 0
+	}));
+	const pmidRuns = $derived(pmidRunsQuery.data?.pages.flatMap((page) => page.data.items) ?? []);
+
+	const prismaQuery = createGetProjectPrisma(
+		() => projectId,
+		() => ({
+			query: { enabled: Boolean(projectId), staleTime: 0, refetchOnWindowFocus: 'always' }
+		})
+	);
+	const unresolvedRecords = $derived(prismaQuery.data?.data.unresolved_records ?? 0);
+
+	type RunRow = {
+		key: string;
+		createdAt: string;
+		status: string;
+		failedCount: number;
+		fetchedCount: number | undefined;
+		records: number;
+		source: string;
+		ingestion?: IngestionDto;
+		acquisition?: AcquisitionDto;
+	};
+
+	const runRows = $derived.by<RunRow[]>(() => {
+		const doiRuns: RunRow[] = sortedIngestions.map((ingestion) => ({
+			key: `doi:${ingestion.id}`,
+			createdAt: ingestion.created_at,
+			status: ingestion.status,
+			failedCount: ingestion.failed_count,
+			fetchedCount: ingestion.fetched_count,
+			records: ingestion.seed_count,
+			source: `DOIs · depth ${ingestion.max_depth}`,
+			ingestion
+		}));
+		const fileImports: RunRow[] = fileRuns.map((run: AcquisitionDto) => ({
+			key: `file:${run.id}`,
+			createdAt: run.created_at,
+			status: run.status,
+			failedCount: run.failed_count,
+			fetchedCount: undefined,
+			records: run.queued_count,
+			source: importRunFormatLabel(run.format)
+		}));
+		const pmidImports: RunRow[] = pmidRuns.map((run: AcquisitionDto) => ({
+			key: `pmid:${run.id}`,
+			createdAt: run.created_at,
+			status: run.status,
+			failedCount: run.failed_count,
+			fetchedCount: run.fetched_count,
+			records: run.seed_count,
+			source: importRunFormatLabel(run.format),
+			acquisition: run
+		}));
+		return [...doiRuns, ...fileImports, ...pmidImports].sort(
+			(a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt)
+		);
+	});
+
+	const runsLoading = $derived(workspace.ingestionsLoading);
+	const runsError = $derived(workspace.ingestionsError);
+	const importRunsError = $derived(
+		fileRunsQuery.isError || pmidRunsQuery.isError
+			? 'Some imports could not be loaded.'
+			: undefined
 	);
 
 	function refreshErrorMessage(error: unknown): string {
@@ -92,225 +208,242 @@
 		}
 	}
 
-	async function submitIngestion() {
-		const seed_dois = workspace.ingestionDraft.dois
-			.split(/[\n,]+/)
-			.map((doi) => doi.trim())
-			.filter(Boolean);
-		try {
-			const result = await createIngestion.mutateAsync({
-				data: {
-					project_id: workspace.project.id,
-					seed_dois,
-					max_depth: workspace.ingestionMaxDepth,
-					metadata_provider: 'crossref',
-					citation_provider: 'crossref'
-				}
-			});
-			workspace.ingestionDraft.dois = '';
-			workspace.openIngestion(result.data.id);
-		} catch (error) {
-			notifyError('Ingestion could not be started', error);
-		}
+	function loadDoiFile(text: string, fileName: string) {
+		const existing = workspace.ingestionDraft.dois.trim();
+		workspace.ingestionDraft.dois = [existing, text.trim()].filter(Boolean).join('\n');
+		source = 'dois';
+		doiNotice = `Loaded ${fileName} into the DOI list. Check it, then import.`;
 	}
 </script>
 
-<PageTemplate testId="imports-page" maxWidth="default">
-	<PageToolbar label="Import workflow status">
-		<div class="flex flex-wrap items-center gap-2">
-			<Badge variant="secondary">{sortedIngestions.length} runs</Badge>
-			<Badge variant={workspace.ingestionsLoading ? 'outline' : 'default'}>
-				{workspace.ingestionsLoading ? 'Refreshing' : 'Live history'}
-			</Badge>
-			<span class="text-xs text-muted-foreground">Project: {workspace.project.name}</span>
-		</div>
-	</PageToolbar>
+<PageTemplate testId="imports-page" maxWidth="full">
+	<div class="flex flex-col gap-6">
+		<header class="flex flex-col gap-1">
+			<h2 class="editorial-title text-xl">Import articles</h2>
+			<p class="text-sm text-muted-foreground">{SOURCE_DESCRIPTION[source]}</p>
+		</header>
 
-	<div class="grid min-h-0 gap-5 lg:grid-cols-[minmax(18rem,24rem)_minmax(0,1fr)]">
-		<section class="flex min-h-0 flex-col overflow-hidden rounded-lg border bg-card">
-			<div class="border-b border-border/70 p-4 sm:p-5">
-				<h2 class="text-lg font-semibold">Import articles</h2>
-				<p class="mt-1 text-sm text-muted-foreground">
-					Paste one DOI per line, or separate them with commas.
+		{#if unresolvedRecords > 0}
+			<div
+				class="flex max-w-3xl flex-wrap items-center justify-between gap-3 rounded-lg border border-info-border bg-info-surface px-4 py-3 text-sm"
+				role="status"
+				data-testid="duplicate-check-hint"
+			>
+				<p class="text-info">
+					<span class="font-semibold tabular-nums">{unresolvedRecords}</span>
+					{unresolvedRecords === 1 ? 'record is' : 'records are'} waiting for the duplicate
+					check
 				</p>
+				<Button
+					variant="outline"
+					size="sm"
+					href={resolve('/projects/[projectId]/discovery/duplicates', { projectId })}
+				>
+					Open deduplication
+				</Button>
 			</div>
-			<div class="p-4 sm:p-5">
-				<Field.FieldGroup>
-					<Field.Field>
-						<Field.FieldLabel>Project</Field.FieldLabel>
-						<div class="rounded-md border bg-muted px-3 py-2 text-sm">
-							{workspace.project.name}
-						</div>
-					</Field.Field>
-					<Field.Field>
-						<Field.FieldLabel for="dois">Article DOIs</Field.FieldLabel>
-						<InputGroup.Root>
-							<InputGroup.Textarea
-								id="dois"
-								rows={4}
-								placeholder="10.1000/182&#10;10.1056/nejmoa2001017"
-								bind:value={workspace.ingestionDraft.dois}
-							/>
-						</InputGroup.Root>
-					</Field.Field>
-					<Field.Field>
-						<div class="flex items-center justify-between gap-3">
-							<Field.FieldLabel for="max-depth">Maximum Depth</Field.FieldLabel>
-							<span class="text-xs text-muted-foreground"
-								>{workspace.ingestionMaxDepth}
-								{workspace.ingestionMaxDepth === 1 ? 'hop' : 'hops'}</span
-							>
-						</div>
-						<NumberField.Root bind:value={workspace.ingestionMaxDepth} min={0} max={4}>
-							<NumberField.Group>
-								<NumberField.Decrement />
-								<NumberField.Input id="max-depth" />
-								<NumberField.Increment />
-							</NumberField.Group>
-						</NumberField.Root>
-						<Field.FieldDescription>
-							0 = seed only; 1 = direct citations/references; up to 4 hops.
-						</Field.FieldDescription>
-					</Field.Field>
-					<Button
-						onclick={submitIngestion}
-						disabled={!workspace.ingestionDraft.dois.trim() ||
-							createIngestion.isPending}
-						class="w-full"
-					>
-						<PlayIcon data-icon="inline-start" />
-						{createIngestion.isPending ? 'Starting ingestion…' : 'Import articles'}
-					</Button>
-				</Field.FieldGroup>
-			</div>
-		</section>
+		{/if}
 
-		<section class="flex min-h-0 flex-col overflow-hidden rounded-lg border bg-card">
-			<div class="flex items-center justify-between border-b p-4 sm:p-5">
-				<div>
-					<h2 class="font-medium">Run history</h2>
-					<p class="text-sm text-muted-foreground">
-						{sortedIngestions.length} project runs
-					</p>
-				</div>
-				<Badge variant="secondary">{sortedIngestions.length}</Badge>
-			</div>
-			{#if workspace.ingestionsError}
-				<div class="p-4 sm:p-5">
-					<StatePanel
-						state="error"
-						title="Ingestion history unavailable"
-						description={workspace.ingestionsError}
-					/>
-				</div>
-			{:else if workspace.ingestionsLoading}
-				<div class="flex flex-col gap-2 p-4 sm:p-5" aria-label="Loading ingestion history">
-					{#each [0, 1, 2, 3, 4, 5] as index (index)}
-						<Skeleton class="h-12" />
-					{/each}
-				</div>
-			{:else if sortedIngestions.length === 0}
-				<div class="p-4 sm:p-5">
-					<StatePanel
-						state="empty"
-						title="No ingestions"
-						description="Import articles to create this project's first run."
-					/>
-				</div>
-			{:else}
-				<div class="max-h-full overflow-auto">
-					<Table.Root containerLabel="Project ingestion runs">
-						<Table.Header>
-							<Table.Row>
-								<Table.Head>Status</Table.Head>
-								<Table.Head>Seeds</Table.Head>
-								<Table.Head>Fetched</Table.Head>
-								<Table.Head>Failed</Table.Head>
-								<Table.Head>Created</Table.Head>
-								<Table.Head class="text-right">Action</Table.Head>
-							</Table.Row>
-						</Table.Header>
-						<Table.Body>
-							{#each sortedIngestions as ingestion (ingestion.id)}
-								{@const refreshState = refreshStates[ingestion.id]}
-								<Table.Row
-									data-selected={workspace.selectedIngestion === ingestion.id}
-									data-ingestion-id={ingestion.id}
-									data-refresh-pending={refreshState?.kind === 'pending'}
-								>
-									<Table.Cell>
-										<Badge variant={statusVariant(ingestion.status)}
-											>{ingestion.status}</Badge
-										>
-									</Table.Cell>
-									<Table.Cell>{ingestion.seed_count}</Table.Cell>
-									<Table.Cell>{ingestion.fetched_count}</Table.Cell>
-									<Table.Cell>{ingestion.failed_count}</Table.Cell>
-									<Table.Cell
-										>{new Date(
-											ingestion.created_at
-										).toLocaleString()}</Table.Cell
+		<ToggleGroup.Root
+			type="single"
+			variant="outline"
+			size="sm"
+			value={source}
+			aria-label="Import source"
+			data-testid="import-source"
+			onValueChange={(value) => {
+				if (value === 'dois' || value === 'file' || value === 'pmids') source = value;
+			}}
+		>
+			<ToggleGroup.Item value="dois">DOIs</ToggleGroup.Item>
+			<ToggleGroup.Item value="file">File</ToggleGroup.Item>
+			<ToggleGroup.Item value="pmids">PMIDs</ToggleGroup.Item>
+		</ToggleGroup.Root>
+
+		{#if doiNotice && source === 'dois'}
+			<p class="max-w-3xl text-sm text-muted-foreground" role="status">{doiNotice}</p>
+		{/if}
+
+		{#if source === 'dois'}
+			<ImportDoiForm />
+		{:else if source === 'file'}
+			<ImportFileForm onDoiList={loadDoiFile} />
+		{:else}
+			<ImportPmidForm />
+		{/if}
+
+		{#if runRows.length > 0 || runsLoading || runsError || importRunsError}
+			<section aria-label="Run history" class="flex min-h-0 flex-1 flex-col gap-3">
+				<h3 class="text-sm font-semibold" role="status">
+					Runs <span class="font-normal text-muted-foreground tabular-nums"
+						>{runRows.length}{runsLoading ? ' · refreshing' : ''}</span
+					>
+				</h3>
+				{#if runsError}
+					<div class="p-4 sm:p-5">
+						<StatePanel
+							state="error"
+							title="Import history unavailable"
+							description={runsError}
+						/>
+					</div>
+				{:else if runsLoading}
+					<div class="flex flex-col gap-2 p-4 sm:p-5" aria-label="Loading import history">
+						{#each [0, 1, 2, 3, 4, 5] as index (index)}
+							<Skeleton class="h-12" />
+						{/each}
+					</div>
+				{:else}
+					{#if importRunsError}
+						<p class="px-4 pt-4 text-sm text-destructive sm:px-5" role="alert">
+							{importRunsError}
+						</p>
+					{/if}
+					<div class="max-h-full overflow-auto">
+						<Table.Root containerLabel="Project ingestion runs">
+							<Table.Header>
+								<Table.Row>
+									<Table.Head>Status</Table.Head>
+									<Table.Head>Source</Table.Head>
+									<Table.Head>Records</Table.Head>
+									<Table.Head>Fetched</Table.Head>
+									<Table.Head>Not fetched</Table.Head>
+									<Table.Head>Created</Table.Head>
+									<Table.Head class="text-right">Action</Table.Head>
+								</Table.Row>
+							</Table.Header>
+							<Table.Body>
+								{#each runRows as run (run.key)}
+									{@const display = runStatusDisplay(run.status, run.failedCount)}
+									{@const refreshState = run.ingestion
+										? refreshStates[run.ingestion.id]
+										: undefined}
+									<Table.Row
+										data-selected={(run.ingestion !== undefined &&
+											workspace.selectedIngestion === run.ingestion.id) ||
+											(run.acquisition !== undefined &&
+												workspace.selectedAcquisition ===
+													run.acquisition.id)}
+										data-ingestion-id={run.ingestion?.id}
+										data-run-kind={run.ingestion
+											? 'doi'
+											: run.acquisition
+												? 'pmid'
+												: 'file'}
+										data-refresh-pending={refreshState?.kind === 'pending'}
 									>
-									<Table.Cell class="text-right">
-										<div class="flex flex-wrap justify-end gap-2">
-											<Button
-												variant="outline"
-												size="sm"
-												onclick={() =>
-													workspace.openIngestion(ingestion.id)}
+										<Table.Cell>
+											<Badge
+												variant={display.variant}
+												class="whitespace-nowrap">{display.label}</Badge
 											>
-												Open
-											</Button>
-											{#if ingestion.status === 'completed'}
+										</Table.Cell>
+										<Table.Cell class="whitespace-nowrap"
+											>{run.source}</Table.Cell
+										>
+										<Table.Cell class="tabular-nums">{run.records}</Table.Cell>
+										<Table.Cell class="tabular-nums"
+											>{run.fetchedCount ?? '—'}</Table.Cell
+										>
+										<Table.Cell class="tabular-nums"
+											>{run.ingestion || run.acquisition
+												? run.failedCount
+												: '—'}</Table.Cell
+										>
+										<Table.Cell
+											>{new Date(run.createdAt).toLocaleString()}</Table.Cell
+										>
+										<Table.Cell class="text-right">
+											{#if run.acquisition}
+												{@const acquisition = run.acquisition}
 												<Button
 													variant="outline"
 													size="sm"
-													onclick={() => refreshProvider(ingestion.id)}
-													disabled={refreshState?.kind === 'pending'}
+													onclick={() =>
+														workspace.openAcquisition(acquisition.id)}
 												>
-													<RefreshCwIcon data-icon="inline-start" />
-													{refreshState?.kind === 'pending'
-														? 'Refreshing provider…'
-														: refreshState?.kind === 'failed' &&
-															  refreshState.retriable
-															? 'Retry refresh provider'
-															: 'Refresh provider'}
+													Open
 												</Button>
+											{:else if run.ingestion}
+												{@const ingestion = run.ingestion}
+												<div class="flex flex-wrap justify-end gap-2">
+													<Button
+														variant="outline"
+														size="sm"
+														onclick={() =>
+															workspace.openIngestion(ingestion.id)}
+													>
+														Open
+													</Button>
+													{#if ingestion.status === 'completed'}
+														<Button
+															variant="outline"
+															size="sm"
+															title="Fetch the latest metadata and citations again for this run"
+															onclick={() =>
+																refreshProvider(ingestion.id)}
+															disabled={refreshState?.kind ===
+																'pending'}
+														>
+															<RefreshCwIcon
+																data-icon="inline-start"
+															/>
+															{refreshState?.kind === 'pending'
+																? 'Re-fetching…'
+																: refreshState?.kind === 'failed' &&
+																	  refreshState.retriable
+																	? 'Retry re-fetch'
+																	: 'Re-fetch metadata'}
+														</Button>
+													{/if}
+												</div>
+												{#if refreshState?.kind === 'pending'}
+													<p
+														class="mt-2 text-xs text-muted-foreground"
+														role="status"
+													>
+														Re-fetching metadata…
+													</p>
+												{:else if refreshState?.kind === 'failed' || refreshState?.kind === 'key-unavailable'}
+													<div
+														class="mt-2 flex flex-wrap items-center justify-end gap-2"
+														role="alert"
+													>
+														<span
+															class="max-w-64 text-xs text-destructive"
+															>{refreshState.message}</span
+														>
+													</div>
+												{/if}
 											{/if}
-										</div>
-										{#if refreshState?.kind === 'pending'}
-											<p
-												class="mt-2 text-xs text-muted-foreground"
-												role="status"
-											>
-												Provider refresh is in progress.
-											</p>
-										{:else if refreshState?.kind === 'failed' || refreshState?.kind === 'key-unavailable'}
-											<div
-												class="mt-2 flex flex-wrap items-center justify-end gap-2"
-												role="alert"
-											>
-												<span class="max-w-64 text-xs text-destructive"
-													>{refreshState.message}</span
-												>
-											</div>
-										{/if}
-									</Table.Cell>
-								</Table.Row>
-							{/each}
-						</Table.Body>
-					</Table.Root>
-					<div class="border-t p-4">
-						<PaginationLoadMore
-							hasNextPage={workspace.ingestionsHasNextPage}
-							isLoading={workspace.ingestionsLoadingMore}
-							loadedCount={workspace.ingestions.length}
-							label="project runs"
-							onLoadMore={workspace.loadMoreIngestions}
-						/>
+										</Table.Cell>
+									</Table.Row>
+								{/each}
+							</Table.Body>
+						</Table.Root>
+						{#if workspace.ingestionsHasNextPage || fileRunsQuery.hasNextPage || pmidRunsQuery.hasNextPage}
+							<div class="border-t p-4">
+								<PaginationLoadMore
+									hasNextPage={workspace.ingestionsHasNextPage ||
+										fileRunsQuery.hasNextPage ||
+										pmidRunsQuery.hasNextPage}
+									isLoading={workspace.ingestionsLoadingMore ||
+										fileRunsQuery.isFetchingNextPage ||
+										pmidRunsQuery.isFetchingNextPage}
+									onLoadMore={() => {
+										if (workspace.ingestionsHasNextPage)
+											workspace.loadMoreIngestions();
+										if (fileRunsQuery.hasNextPage)
+											void fileRunsQuery.fetchNextPage();
+										if (pmidRunsQuery.hasNextPage)
+											void pmidRunsQuery.fetchNextPage();
+									}}
+								/>
+							</div>
+						{/if}
 					</div>
-				</div>
-			{/if}
-		</section>
+				{/if}
+			</section>
+		{/if}
 	</div>
 </PageTemplate>

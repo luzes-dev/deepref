@@ -42,7 +42,7 @@ pub enum RemoteFetchError {
     #[error("external document returned HTTP {0}")]
     Http(StatusCode),
     #[error("external document has an unsupported content type")]
-    InvalidContentType,
+    InvalidContentType(Option<String>),
     #[error("external document is too large")]
     TooLarge,
     #[error("external document does not have a PDF signature")]
@@ -51,6 +51,78 @@ pub enum RemoteFetchError {
     Request(String),
     #[error(transparent)]
     Store(#[from] DocumentStoreError),
+}
+
+/// Stable code stored at the start of a document's `parser_error` for a failed link, so the
+/// UI can tell "the link is wrong, do not retry" from "try again later".
+pub const LINK_REJECTED_CODE: &str = "document_link_rejected";
+pub const LINK_UNAVAILABLE_CODE: &str = "document_link_unavailable";
+
+impl RemoteFetchError {
+    /// True when trying the same link again cannot change the outcome: the address is malformed,
+    /// the server refused or lost the file (a 4xx other than 408 and 429), or the answer is not a
+    /// PDF. Network trouble, server errors and rate limits stay retryable.
+    pub fn is_permanent(&self) -> bool {
+        match self {
+            Self::Http(status) => status.is_client_error() && !matches!(status.as_u16(), 408 | 429),
+            Self::InvalidUrl
+            | Self::ForbiddenAddress
+            | Self::RedirectLimit
+            | Self::InvalidRedirect
+            | Self::InvalidContentType(_)
+            | Self::InvalidSignature
+            | Self::TooLarge
+            | Self::Store(DocumentStoreError::TooLarge { .. }) => true,
+            Self::Resolution | Self::Request(_) | Self::Store(_) => false,
+        }
+    }
+
+    /// The reason a researcher sees, in plain words rather than HTTP or library errors.
+    pub fn researcher_message(&self) -> String {
+        match self {
+            Self::Http(status) => {
+                let reason = status
+                    .canonical_reason()
+                    .unwrap_or("unexpected response")
+                    .to_lowercase();
+                format!("The link returned {} \u{2013} {reason}", status.as_u16())
+            }
+            Self::InvalidContentType(Some(mime)) if mime == "text/html" => {
+                "The link is a web page, not a PDF".to_owned()
+            }
+            Self::InvalidContentType(Some(mime)) => {
+                format!("The link is not a PDF (it was served as {mime})")
+            }
+            Self::InvalidContentType(None) => {
+                "The link did not say that it serves a PDF".to_owned()
+            }
+            Self::InvalidSignature => "The link did not return a PDF file".to_owned(),
+            Self::TooLarge | Self::Store(DocumentStoreError::TooLarge { .. }) => {
+                "The PDF is larger than the size limit".to_owned()
+            }
+            Self::InvalidUrl => "The link is not a valid https address".to_owned(),
+            Self::ForbiddenAddress => {
+                "The link points to a private network address, which is not allowed".to_owned()
+            }
+            Self::Resolution => "The link's host could not be found".to_owned(),
+            Self::RedirectLimit => "The link redirects too many times".to_owned(),
+            Self::InvalidRedirect => {
+                "The link redirects to an address that cannot be used".to_owned()
+            }
+            Self::Request(_) => "The link could not be reached".to_owned(),
+            Self::Store(_) => "The PDF could not be saved on the server".to_owned(),
+        }
+    }
+
+    /// The `parser_error` text for a failed retrieval: a stable code, then the researcher message.
+    pub fn failure_record(&self) -> String {
+        let code = if self.is_permanent() {
+            LINK_REJECTED_CODE
+        } else {
+            LINK_UNAVAILABLE_CODE
+        };
+        format!("{code}: {}", self.researcher_message())
+    }
 }
 
 #[derive(Debug, Clone, Copy, Default)]
@@ -199,11 +271,18 @@ fn validate_content_type(value: Option<&str>) -> Result<(), RemoteFetchError> {
         .unwrap_or_default()
         .split(';')
         .next()
-        .unwrap_or_default();
-    if matches!(mime, "application/pdf" | "application/octet-stream") {
+        .unwrap_or_default()
+        .trim()
+        .to_ascii_lowercase();
+    if matches!(
+        mime.as_str(),
+        "application/pdf" | "application/octet-stream"
+    ) {
         Ok(())
     } else {
-        Err(RemoteFetchError::InvalidContentType)
+        Err(RemoteFetchError::InvalidContentType(
+            (!mime.is_empty()).then_some(mime),
+        ))
     }
 }
 
@@ -347,5 +426,41 @@ mod tests {
         ));
         let public = next_redirect(&current, "https://1.1.1.1/public.pdf", 0, 3).unwrap();
         assert!(resolve_public_addresses(&public).await.is_ok());
+    }
+
+    #[test]
+    fn only_faults_of_the_link_itself_are_permanent() {
+        let not_found = RemoteFetchError::Http(StatusCode::NOT_FOUND);
+        assert!(not_found.is_permanent());
+        assert_eq!(
+            not_found.researcher_message(),
+            "The link returned 404 \u{2013} not found"
+        );
+        assert!(
+            not_found
+                .failure_record()
+                .starts_with("document_link_rejected: ")
+        );
+        let web_page = RemoteFetchError::InvalidContentType(Some("text/html".to_owned()));
+        assert!(web_page.is_permanent());
+        assert_eq!(
+            web_page.researcher_message(),
+            "The link is a web page, not a PDF"
+        );
+        for status in [
+            StatusCode::REQUEST_TIMEOUT,
+            StatusCode::TOO_MANY_REQUESTS,
+            StatusCode::BAD_GATEWAY,
+            StatusCode::SERVICE_UNAVAILABLE,
+        ] {
+            let retryable = RemoteFetchError::Http(status);
+            assert!(!retryable.is_permanent(), "{status} must stay retryable");
+            assert!(
+                retryable
+                    .failure_record()
+                    .starts_with("document_link_unavailable: ")
+            );
+        }
+        assert!(!RemoteFetchError::Request("timed out".to_owned()).is_permanent());
     }
 }

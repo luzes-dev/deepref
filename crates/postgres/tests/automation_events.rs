@@ -169,7 +169,10 @@ async fn all_typed_domain_events_dispatch_once_to_active_definitions() -> Result
             let identity = event.source_identity();
             let row = rows
                 .iter()
-                .find(|row| row.get::<String, _>("trigger_kind") == event.trigger().as_str())
+                .find(|row| {
+                    Some(row.get::<String, _>("trigger_kind").as_str())
+                        == event.trigger().map(AutomationTriggerKind::as_str)
+                })
                 .expect("every typed event creates its matching run");
             ensure!(row.get::<String, _>("trigger_reference") == identity);
             ensure!(row.get::<String, _>("idempotency_key") == identity);

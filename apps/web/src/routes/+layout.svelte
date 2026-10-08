@@ -29,5 +29,6 @@
 	</PageFrame>
 	<SettingsDialog />
 	<NotificationsWatcher />
-	<Toaster position="bottom-right" closeButton />
+	<!-- Top placement keeps confirmations off the sticky decision bars at the bottom. -->
+	<Toaster position="top-center" offset={56} closeButton />
 </QueryClientProvider>

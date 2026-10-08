@@ -9,6 +9,7 @@
 		pageMetadata,
 		selectedBlockId,
 		onBlockSelect,
+		width,
 		onPageSize
 	}: {
 		page: PDFPageProxy;
@@ -16,6 +17,8 @@
 		pageMetadata: DocumentPageDto[];
 		selectedBlockId: string | null;
 		onBlockSelect: (block: DocumentBlockDto) => void;
+		/** Rendered CSS width of the page in pixels. */
+		width: number;
 		onPageSize?: (width: number, height: number) => void;
 	} = $props();
 
@@ -25,16 +28,24 @@
 	const pageInfo = $derived(pageMetadata.find((item) => item.page_number === page.pageNumber));
 
 	$effect(() => {
-		if (!canvas) return;
-		const viewport = page.getViewport({ scale: 1.35 });
+		if (!canvas || width <= 0) return;
+		const base = page.getViewport({ scale: 1 });
+		const scale = width / base.width;
+		const viewport = page.getViewport({ scale });
 		viewportSize = { width: viewport.width, height: viewport.height };
 		onPageSize?.(viewport.width, viewport.height);
-		canvas.width = viewport.width;
-		canvas.height = viewport.height;
-		canvas.style.aspectRatio = `${viewport.width} / ${viewport.height}`;
+		const ratio = window.devicePixelRatio || 1;
+		const renderViewport = page.getViewport({ scale: scale * ratio });
+		canvas.width = Math.floor(renderViewport.width);
+		canvas.height = Math.floor(renderViewport.height);
 		const context = canvas.getContext('2d');
 		if (!context) return;
-		const renderTask = page.render({ canvas, canvasContext: context, viewport });
+		const renderTask = page.render({
+			canvas,
+			canvasContext: context,
+			viewport: renderViewport
+		});
+		renderTask.promise.catch(() => undefined);
 		return () => renderTask.cancel();
 	});
 </script>
@@ -46,7 +57,8 @@
 	data-page-number={page.pageNumber}
 	data-ocr-required={pageInfo?.ocr_required ? 'true' : 'false'}
 >
-	<canvas bind:this={canvas} class="block" aria-label={`PDF page ${page.pageNumber}`}></canvas>
+	<canvas bind:this={canvas} class="block size-full" aria-label={`PDF page ${page.pageNumber}`}
+	></canvas>
 	{#each pageBlocks as block (block.id)}
 		<EvidenceOverlay
 			{block}

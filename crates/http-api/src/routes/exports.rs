@@ -21,6 +21,10 @@ use crate::{
     state::AppState,
 };
 
+mod bibliography;
+mod csv_output;
+mod review_tables;
+
 const MAX_EXPORT_ROWS: usize = 100_000;
 
 struct BinaryAttachment;
@@ -43,6 +47,9 @@ enum ExportKind {
     ReportsJson,
     ReportsRis,
     ReportsBib,
+    ExtractionCsv,
+    AppraisalCsv,
+    IncludedStudiesCsv,
     PrismaJson,
     PrismaSvg,
     AuditCsv,
@@ -56,6 +63,9 @@ impl ExportKind {
             "reports.json" => Self::ReportsJson,
             "reports.ris" => Self::ReportsRis,
             "reports.bib" => Self::ReportsBib,
+            "extraction.csv" => Self::ExtractionCsv,
+            "appraisal.csv" => Self::AppraisalCsv,
+            "included_studies.csv" => Self::IncludedStudiesCsv,
             "prisma.json" => Self::PrismaJson,
             "prisma.svg" => Self::PrismaSvg,
             "audit.csv" => Self::AuditCsv,
@@ -70,6 +80,9 @@ impl ExportKind {
             Self::ReportsJson => "reports.json",
             Self::ReportsRis => "reports.ris",
             Self::ReportsBib => "reports.bib",
+            Self::ExtractionCsv => "extraction.csv",
+            Self::AppraisalCsv => "appraisal.csv",
+            Self::IncludedStudiesCsv => "included_studies.csv",
             Self::PrismaJson => "prisma.json",
             Self::PrismaSvg => "prisma.svg",
             Self::AuditCsv => "audit.csv",
@@ -79,7 +92,11 @@ impl ExportKind {
 
     const fn content_type(self) -> &'static str {
         match self {
-            Self::ReportsCsv | Self::AuditCsv => "text/csv; charset=utf-8",
+            Self::ReportsCsv
+            | Self::ExtractionCsv
+            | Self::AppraisalCsv
+            | Self::IncludedStudiesCsv
+            | Self::AuditCsv => "text/csv; charset=utf-8",
             Self::ReportsJson | Self::PrismaJson | Self::ProtocolJson => {
                 "application/json; charset=utf-8"
             }
@@ -102,7 +119,15 @@ struct ReportExport {
     url: Option<String>,
     work_type: Option<String>,
     authors: Vec<ExportAuthor>,
+    abstract_text: Option<String>,
+    volume: Option<String>,
+    issue: Option<String>,
+    pages: Option<String>,
     screening_status: String,
+    title_abstract_decision: String,
+    full_text_decision: String,
+    exclusion_reason_code: Option<String>,
+    exclusion_reason_label: Option<String>,
     study_id: Option<Uuid>,
     study_title: Option<String>,
     appraisal_completed: bool,
@@ -113,6 +138,24 @@ struct ExportAuthor {
     given: Option<String>,
     family: Option<String>,
     literal: Option<String>,
+}
+
+impl ExportAuthor {
+    /// `Family, Given`, or the literal name when the source only has that.
+    fn display_name(&self) -> Option<String> {
+        if let Some(literal) = present(self.literal.as_deref()) {
+            return Some(collapse_whitespace(literal));
+        }
+        match (
+            present(self.family.as_deref()),
+            present(self.given.as_deref()),
+        ) {
+            (Some(family), Some(given)) => Some(collapse_whitespace(&format!("{family}, {given}"))),
+            (Some(family), None) => Some(collapse_whitespace(family)),
+            (None, Some(given)) => Some(collapse_whitespace(given)),
+            (None, None) => None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -138,7 +181,7 @@ struct ProtocolExport {
     tag = "exports",
     params(
         ("project_id" = Uuid, Path, description = "Project identifier"),
-        ("export_kind" = String, Path, description = "One of: reports.csv, reports.json, reports.ris, reports.bib, prisma.json, prisma.svg, audit.csv, protocol.json")
+        ("export_kind" = String, Path, description = "One of: reports.csv, reports.json, reports.ris, reports.bib, extraction.csv, appraisal.csv, included_studies.csv, prisma.json, prisma.svg, audit.csv, protocol.json")
     ),
     responses(
         (status = 200, description = "Deterministic project-scoped binary attachment", content(
@@ -167,11 +210,19 @@ pub(crate) async fn export_project_artifact(
     let body = match kind {
         ExportKind::ReportsCsv => reports_csv(&state, project_id).await?,
         ExportKind::ReportsJson => serialize_export(&reports(&state, project_id).await?)?,
-        ExportKind::ReportsRis => reports_ris(&state, project_id).await?,
-        ExportKind::ReportsBib => reports_bib(&state, project_id).await?,
+        ExportKind::ReportsRis => {
+            bibliography::render_reports_ris(&reports(&state, project_id).await?)
+        }
+        ExportKind::ReportsBib => {
+            bibliography::render_reports_bib(&reports(&state, project_id).await?)
+        }
+        ExportKind::ExtractionCsv => review_tables::extraction_csv(&state, project_id).await?,
+        ExportKind::AppraisalCsv => review_tables::appraisal_csv(&state, project_id).await?,
+        ExportKind::IncludedStudiesCsv => {
+            review_tables::included_studies_csv(&state, project_id).await?
+        }
         ExportKind::PrismaJson => serialize_export(&prisma(&state, project_id).await?)?,
-        ExportKind::PrismaSvg => render_prisma_svg(&prisma(&state, project_id).await?)
-            .map_err(|error| ApiError::Internal(anyhow::anyhow!(error)))?,
+        ExportKind::PrismaSvg => render_prisma_svg(&prisma(&state, project_id).await?),
         ExportKind::AuditCsv => audit_csv(&state, project_id).await?,
         ExportKind::ProtocolJson => serialize_export(&protocol(&state, project_id).await?)?,
     };
@@ -219,8 +270,15 @@ async fn reports(state: &AppState, project_id: Uuid) -> Result<Vec<ReportExport>
     let rows = sqlx::query(
         r#"SELECT r.id AS report_id, doi.value AS doi, r.title, r.publication_year,
                   r.journal, r.container_title, r.publisher, r.url,
-                  r.work_type, r.authors,
+                  r.work_type, r.authors, r.abstract_text,
+                  COALESCE(NULLIF(r.raw->>'volume', ''), NULLIF(r.raw->'fields'->'VL'->>0, '')) AS volume,
+                  COALESCE(NULLIF(r.raw->>'issue', ''), NULLIF(r.raw->'fields'->'IS'->>0, '')) AS issue,
+                  COALESCE(NULLIF(r.raw->>'page', ''),
+                           NULLIF(concat_ws('-', r.raw->'fields'->'SP'->>0, r.raw->'fields'->'EP'->>0), '')) AS pages,
                   COALESCE(ss.final_status, 'unscreened') AS screening_status,
+                  COALESCE(ss.title_abstract_status, 'unscreened') AS title_abstract_decision,
+                  COALESCE(ss.full_text_status, 'not_required') AS full_text_decision,
+                  er.code AS exclusion_reason_code, er.label AS exclusion_reason_label,
                   study.id AS study_id, study.title AS study_title,
                   EXISTS (SELECT 1 FROM appraisal_assessments aa
                           WHERE aa.project_id = pr.project_id AND aa.report_id = pr.report_id) AS appraisal_completed
@@ -233,6 +291,8 @@ async fn reports(state: &AppState, project_id: Uuid) -> Result<Vec<ReportExport>
            ) doi ON true
            LEFT JOIN screening_state ss
              ON ss.project_id = pr.project_id AND ss.report_id = pr.report_id
+           LEFT JOIN exclusion_reasons er
+             ON er.project_id = pr.project_id AND er.id = ss.full_text_exclusion_reason_id
            LEFT JOIN LATERAL (
              SELECT s.id, s.title
              FROM study_reports sr JOIN studies s ON s.project_id = sr.project_id AND s.id = sr.study_id
@@ -263,7 +323,15 @@ async fn reports(state: &AppState, project_id: Uuid) -> Result<Vec<ReportExport>
                 url: row.get("url"),
                 work_type: row.get("work_type"),
                 authors,
+                abstract_text: row.get("abstract_text"),
+                volume: row.get("volume"),
+                issue: row.get("issue"),
+                pages: row.get("pages"),
                 screening_status: row.get("screening_status"),
+                title_abstract_decision: row.get("title_abstract_decision"),
+                full_text_decision: row.get("full_text_decision"),
+                exclusion_reason_code: row.get("exclusion_reason_code"),
+                exclusion_reason_label: row.get("exclusion_reason_label"),
                 study_id: row.get("study_id"),
                 study_title: row.get("study_title"),
                 appraisal_completed: row.get("appraisal_completed"),
@@ -272,150 +340,98 @@ async fn reports(state: &AppState, project_id: Uuid) -> Result<Vec<ReportExport>
         .collect::<Result<Vec<_>, ApiError>>()
 }
 
+const REPORTS_CSV_COLUMNS: &[&str] = &[
+    "report_id",
+    "doi",
+    "title",
+    "publication_year",
+    "journal",
+    "container_title",
+    "publisher",
+    "url",
+    "work_type",
+    "authors",
+    "screening_status",
+    "study_id",
+    "study_title",
+    "appraisal_completed",
+    "title_abstract_decision",
+    "full_text_decision",
+    "exclusion_reason_code",
+    "exclusion_reason_label",
+    "abstract",
+    "volume",
+    "issue",
+    "pages",
+];
+
 async fn reports_csv(state: &AppState, project_id: Uuid) -> Result<String, ApiError> {
     let reports = reports(state, project_id).await?;
-    let mut csv = String::from(
-        "report_id,doi,title,publication_year,journal,container_title,publisher,url,work_type,authors,screening_status,study_id,study_title,appraisal_completed\n",
-    );
-    for report in reports {
-        let values = [
-            report.report_id.to_string(),
-            report.doi.unwrap_or_default(),
-            report.title.unwrap_or_default(),
-            report
-                .publication_year
-                .map_or_else(String::new, |value| value.to_string()),
-            report.journal.unwrap_or_default(),
-            report.container_title.unwrap_or_default(),
-            report.publisher.unwrap_or_default(),
-            report.url.unwrap_or_default(),
-            report.work_type.unwrap_or_default(),
-            serde_json::to_string(&report.authors)
-                .map_err(|error| ApiError::Internal(anyhow::anyhow!(error)))?,
-            report.screening_status,
-            report
-                .study_id
-                .map_or_else(String::new, |value| value.to_string()),
-            report.study_title.unwrap_or_default(),
-            report.appraisal_completed.to_string(),
-        ];
-        csv.push_str(&values.map(|value| csv_field(&value)).join(","));
-        csv.push('\n');
+    let mut csv = csv_output::header(REPORTS_CSV_COLUMNS);
+    for report in &reports {
+        csv.push_str(&csv_output::record(&report_csv_fields(report)));
     }
     Ok(csv)
 }
 
-async fn reports_ris(state: &AppState, project_id: Uuid) -> Result<String, ApiError> {
-    Ok(render_reports_ris(&reports(state, project_id).await?))
+fn report_csv_fields(report: &ReportExport) -> Vec<String> {
+    vec![
+        report.report_id.to_string(),
+        optional(report.doi.clone()),
+        optional(report.title.clone()),
+        optional(report.publication_year.map(|year| year.to_string())),
+        optional(report.journal.clone()),
+        optional(report.container_title.clone()),
+        optional(report.publisher.clone()),
+        optional(report.url.clone()),
+        optional(report.work_type.clone()),
+        authors_display(&report.authors),
+        report.screening_status.clone(),
+        optional(report.study_id.map(|id| id.to_string())),
+        optional(report.study_title.clone()),
+        report.appraisal_completed.to_string(),
+        report.title_abstract_decision.clone(),
+        report.full_text_decision.clone(),
+        optional(report.exclusion_reason_code.clone()),
+        optional(report.exclusion_reason_label.clone()),
+        optional(report.abstract_text.clone()),
+        optional(report.volume.clone()),
+        optional(report.issue.clone()),
+        optional(report.pages.clone()),
+    ]
 }
 
-fn render_reports_ris(reports: &[ReportExport]) -> String {
-    let mut output = String::new();
-    for report in reports {
-        output.push_str(&format!(
-            "TY  - {}\n",
-            ris_type(report.work_type.as_deref())
-        ));
-        output.push_str(&format!("ID  - {}\n", report.report_id));
-        for author in &report.authors {
-            if let Some(author) = ris_author(author) {
-                output.push_str(&format!("AU  - {author}\n"));
-            }
-        }
-        if let Some(title) = &report.title {
-            output.push_str(&format!("TI  - {}\n", ris_value(title)));
-        }
-        if let Some(doi) = &report.doi {
-            output.push_str(&format!("DO  - {}\n", ris_value(doi)));
-        }
-        if let Some(year) = report.publication_year {
-            output.push_str(&format!("PY  - {year}\n"));
-        }
-        if ris_journal_tag(report.work_type.as_deref())
-            && let Some(journal) = &report.journal
-        {
-            output.push_str(&format!("JO  - {}\n", ris_value(journal)));
-        }
-        if let Some(container_title) = &report.container_title {
-            output.push_str(&format!("T2  - {}\n", ris_value(container_title)));
-        }
-        if let Some(publisher) = &report.publisher {
-            output.push_str(&format!("PB  - {}\n", ris_value(publisher)));
-        }
-        if let Some(url) = &report.url {
-            output.push_str(&format!("UR  - {}\n", ris_value(url)));
-        }
-        output.push_str("ER  -\n\n");
-    }
-    output
+/// Authors as `Family, Given; Family, Given`.
+fn authors_display(authors: &[ExportAuthor]) -> String {
+    authors
+        .iter()
+        .filter_map(ExportAuthor::display_name)
+        .collect::<Vec<_>>()
+        .join("; ")
 }
 
-async fn reports_bib(state: &AppState, project_id: Uuid) -> Result<String, ApiError> {
-    Ok(render_reports_bib(&reports(state, project_id).await?))
-}
-
-fn render_reports_bib(reports: &[ReportExport]) -> String {
-    let mut output = String::new();
-    for report in reports {
-        output.push_str(&format!(
-            "@{}{{report-{},\n",
-            bib_type(report.work_type.as_deref()),
-            report.report_id
-        ));
-        if let Some(title) = &report.title {
-            output.push_str(&format!("  title = {{{}}},\n", bib_value(title)));
-        }
-        if let Some(doi) = &report.doi {
-            output.push_str(&format!("  doi = {{{}}},\n", bib_value(doi)));
-        }
-        if let Some(year) = report.publication_year {
-            output.push_str(&format!("  year = {{{year}}},\n"));
-        }
-        if !report.authors.is_empty() {
-            let authors = report
-                .authors
-                .iter()
-                .filter_map(bib_author)
-                .collect::<Vec<_>>()
-                .join(" and ");
-            if !authors.is_empty() {
-                output.push_str(&format!("  author = {{{authors}}},\n"));
-            }
-        }
-        match bib_type(report.work_type.as_deref()) {
-            "article" => {
-                if let Some(journal) = &report.journal {
-                    output.push_str(&format!("  journal = {{{}}},\n", bib_value(journal)));
-                }
-            }
-            "incollection" | "inproceedings" => {
-                if let Some(container_title) = &report.container_title {
-                    output.push_str(&format!(
-                        "  booktitle = {{{}}},\n",
-                        bib_value(container_title)
-                    ));
-                }
-            }
-            "misc" => {
-                if let Some(container_title) = &report.container_title {
-                    output.push_str(&format!(
-                        "  container = {{{}}},\n",
-                        bib_value(container_title)
-                    ));
-                }
-            }
-            _ => {}
-        }
-        if let Some(publisher) = &report.publisher {
-            output.push_str(&format!("  publisher = {{{}}},\n", bib_value(publisher)));
-        }
-        if let Some(url) = &report.url {
-            output.push_str(&format!("  url = {{{}}},\n", bib_value(url)));
-        }
-        output.push_str("}\n\n");
-    }
-    output
-}
+const AUDIT_CSV_COLUMNS: &[&str] = &[
+    "id",
+    "created_at",
+    "event_type",
+    "aggregate_type",
+    "aggregate_id",
+    "actor_kind",
+    "actor_id",
+    "actor_label",
+    "protocol_version_id",
+    "stage",
+    "decision",
+    "reason_id",
+    "event_kind",
+    "supersedes_event_id",
+    "undoes_event_id",
+    "notes",
+    "previous_snapshot",
+    "result_snapshot",
+    "payload",
+    "provenance",
+];
 
 async fn audit_csv(state: &AppState, project_id: Uuid) -> Result<String, ApiError> {
     let rows = deepref_postgres::load_audit_export_rows(
@@ -425,40 +441,66 @@ async fn audit_csv(state: &AppState, project_id: Uuid) -> Result<String, ApiErro
     )
     .await?;
     enforce_export_cap("audit", rows.len())?;
-    let mut csv = String::from(
-        "id,created_at,event_type,aggregate_type,aggregate_id,actor_kind,actor_id,protocol_version_id,stage,decision,reason_id,event_kind,supersedes_event_id,undoes_event_id,previous_snapshot,result_snapshot,notes,payload,provenance\n",
-    );
+    let mut csv = csv_output::header(AUDIT_CSV_COLUMNS);
     for row in rows {
+        let label = actor_label(row.actor_kind.as_deref(), row.actor_id.as_deref());
+        // The JSON snapshots stay unchanged, in the last four columns.
         let values = [
             row.id.to_string(),
             row.created_at.to_rfc3339(),
             row.event_type,
             row.aggregate_type,
             row.aggregate_id.to_string(),
-            row.actor_kind.unwrap_or_default(),
-            row.actor_id.unwrap_or_default(),
-            row.protocol_version_id
-                .map_or_else(String::new, |value| value.to_string()),
-            row.stage.unwrap_or_default(),
-            row.decision.unwrap_or_default(),
-            row.reason_id
-                .map_or_else(String::new, |value| value.to_string()),
+            optional(row.actor_kind),
+            optional(row.actor_id),
+            label,
+            optional(row.protocol_version_id.map(|value| value.to_string())),
+            optional(row.stage),
+            optional(row.decision),
+            optional(row.reason_id.map(|value| value.to_string())),
             row.event_kind,
-            row.supersedes_event_id
-                .map_or_else(String::new, |value| value.to_string()),
-            row.undoes_event_id
-                .map_or_else(String::new, |value| value.to_string()),
+            optional(row.supersedes_event_id.map(|value| value.to_string())),
+            optional(row.undoes_event_id.map(|value| value.to_string())),
+            optional(row.notes),
             row.previous_snapshot.to_string(),
             row.result_snapshot.to_string(),
-            row.notes.unwrap_or_default(),
             row.payload.to_string(),
             row.provenance.to_string(),
         ];
-        csv.push_str(&values.map(|value| csv_field(&value)).join(","));
-        csv.push('\n');
+        csv.push_str(&csv_output::record(&values));
     }
     Ok(csv)
 }
+
+/// A readable name for an actor, such as `Local user`, `AI model glm-5.3-flash` or
+/// `Worker <id>`. Some audit rows carry an id without a kind, and some carry only a kind; both
+/// still get a label. Shapes that are not known are shown as they are stored.
+fn actor_label(kind: Option<&str>, id: Option<&str>) -> String {
+    let Some(id) = id.map(str::trim).filter(|id| !id.is_empty()) else {
+        return match kind {
+            Some("user") => "User".to_owned(),
+            Some("automation") => "Automation".to_owned(),
+            Some("system") => "System".to_owned(),
+            _ => String::new(),
+        };
+    };
+    if let Some(worker) = id.strip_prefix("deepref-worker-") {
+        return format!("Worker {worker}");
+    }
+    match kind {
+        Some("user") if id == "local-user" => "Local user".to_owned(),
+        Some("user") => format!("User {id}"),
+        Some("automation") => match (id.strip_prefix("ai:"), id.strip_prefix("workflow:")) {
+            (Some(model), _) => format!("AI model {model}"),
+            (None, Some(workflow)) => format!("Workflow {workflow}"),
+            (None, None) => format!("Automation {id}"),
+        },
+        Some("system") => format!("System {id}"),
+        Some(other) => format!("{other} {id}"),
+        None => id.to_owned(),
+    }
+}
+
 async fn protocol(state: &AppState, project_id: Uuid) -> Result<ProtocolExport, ApiError> {
     let document = deepref_postgres::get_published_protocol(&state.pool, project_id)
         .await
@@ -505,164 +547,65 @@ fn enforce_export_cap(kind: &str, row_count: usize) -> Result<(), ApiError> {
     Ok(())
 }
 
-fn csv_field(value: &str) -> String {
-    format!("\"{}\"", value.replace('"', "\"\""))
+/// Trimmed text, or `None` when the value is absent or blank.
+fn present(value: Option<&str>) -> Option<&str> {
+    value.map(str::trim).filter(|value| !value.is_empty())
 }
 
-fn ris_value(value: &str) -> String {
-    value.replace(['\r', '\n'], " ")
+fn collapse_whitespace(value: &str) -> String {
+    value.split_whitespace().collect::<Vec<_>>().join(" ")
 }
 
-fn ris_type(work_type: Option<&str>) -> &'static str {
-    match work_type.map(str::to_ascii_lowercase).as_deref() {
-        Some("article") | Some("journal-article") | Some("journal_article") => "JOUR",
-        Some("book") => "BOOK",
-        Some("book-chapter") | Some("book_chapter") => "CHAP",
-        Some("conference-paper") | Some("conference_paper") | Some("proceedings-article") => "CONF",
-        Some("dataset") => "DATA",
-        Some("report") => "RPRT",
-        Some("dissertation") | Some("thesis") => "THES",
-        _ => "GEN",
+fn optional(value: Option<String>) -> String {
+    value.unwrap_or_default()
+}
+
+/// A report with every field the exports read, including characters that need escaping.
+#[cfg(test)]
+fn sample_report(work_type: Option<&str>) -> ReportExport {
+    ReportExport {
+        report_id: Uuid::from_u128(0x0123_4567_89ab_cdef_0123_4567_89ab_cdef),
+        doi: Some("10.1000/deepref.export-7".to_owned()),
+        title: Some("A {multiline}\ntitle & more: Müller's café".to_owned()),
+        publication_year: Some(2026),
+        journal: Some("Journal & Name".to_owned()),
+        container_title: Some("Proceedings {Container}".to_owned()),
+        publisher: Some("Publisher & Sons".to_owned()),
+        url: Some("https://example.test/a?x=1&y=2".to_owned()),
+        work_type: work_type.map(str::to_owned),
+        authors: vec![
+            ExportAuthor {
+                given: Some("Ana\nMaria".to_owned()),
+                family: Some("O'Neil & Co.".to_owned()),
+                literal: None,
+            },
+            ExportAuthor {
+                given: Some("J".to_owned()),
+                family: Some("Smith".to_owned()),
+                literal: None,
+            },
+        ],
+        abstract_text: Some(
+            "Background {x} & y.\nResults: 50% of 2213 participants; _p_ = .01 #1 ~ $5 ^2 \\ end."
+                .to_owned(),
+        ),
+        volume: Some("49".to_owned()),
+        issue: Some("3".to_owned()),
+        pages: Some("414-418".to_owned()),
+        screening_status: "exclude".to_owned(),
+        title_abstract_decision: "include".to_owned(),
+        full_text_decision: "exclude".to_owned(),
+        exclusion_reason_code: Some("wrong-population".to_owned()),
+        exclusion_reason_label: Some("Wrong population, adults only".to_owned()),
+        study_id: None,
+        study_title: None,
+        appraisal_completed: false,
     }
-}
-
-fn ris_journal_tag(work_type: Option<&str>) -> bool {
-    !matches!(
-        ris_type(work_type),
-        "BOOK" | "CHAP" | "CONF" | "DATA" | "RPRT" | "THES"
-    )
-}
-
-fn bib_type(work_type: Option<&str>) -> &'static str {
-    match work_type.map(str::to_ascii_lowercase).as_deref() {
-        Some("article") | Some("journal-article") | Some("journal_article") => "article",
-        Some("book") => "book",
-        Some("book-chapter") | Some("book_chapter") => "incollection",
-        Some("conference-paper") | Some("conference_paper") | Some("proceedings-article") => {
-            "inproceedings"
-        }
-        Some("dataset") => "dataset",
-        Some("report") => "techreport",
-        Some("dissertation") | Some("thesis") => "thesis",
-        _ => "misc",
-    }
-}
-
-fn ris_author(author: &ExportAuthor) -> Option<String> {
-    author
-        .literal
-        .as_deref()
-        .or(author.family.as_deref())
-        .map(|family| {
-            author.literal.as_deref().map_or_else(
-                || {
-                    author
-                        .given
-                        .as_deref()
-                        .map_or_else(|| family.to_owned(), |given| format!("{family}, {given}"))
-                },
-                str::to_owned,
-            )
-        })
-        .map(|value| ris_value(&value))
-}
-
-fn bib_author(author: &ExportAuthor) -> Option<String> {
-    ris_author(author).map(|value| bib_value(&value))
-}
-
-fn bib_value(value: &str) -> String {
-    let mut escaped = String::with_capacity(value.len());
-    for character in value.replace(['\r', '\n'], " ").chars() {
-        match character {
-            '\\' => escaped.push_str("\\textbackslash{}"),
-            '{' => escaped.push_str("\\{"),
-            '}' => escaped.push_str("\\}"),
-            '&' => escaped.push_str("\\&"),
-            '%' => escaped.push_str("\\%"),
-            '#' => escaped.push_str("\\#"),
-            '_' => escaped.push_str("\\_"),
-            '$' => escaped.push_str("\\$"),
-            '^' => escaped.push_str("\\textasciicircum{}"),
-            '~' => escaped.push_str("\\textasciitilde{}"),
-            character => escaped.push(character),
-        }
-    }
-    escaped
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
-
-    fn fixture(work_type: Option<&str>) -> ReportExport {
-        ReportExport {
-            report_id: Uuid::new_v4(),
-            doi: Some("10.5555/a&b".to_owned()),
-            title: Some("A {multiline}\ntitle & more".to_owned()),
-            publication_year: Some(2026),
-            journal: Some("Journal & Name".to_owned()),
-            container_title: Some("Proceedings {Container}".to_owned()),
-            publisher: Some("Publisher & Sons".to_owned()),
-            url: Some("https://example.test/a?x=1&y=2".to_owned()),
-            work_type: work_type.map(str::to_owned),
-            authors: vec![ExportAuthor {
-                given: Some("Ana\nMaria".to_owned()),
-                family: Some("O'Neil & Co.".to_owned()),
-                literal: None,
-            }],
-            screening_status: "include".to_owned(),
-            study_id: None,
-            study_title: None,
-            appraisal_completed: false,
-        }
-    }
-
-    #[test]
-    fn bibliography_maps_article_book_chapter_conference_and_unknown_types() {
-        assert_eq!(bib_type(Some("article")), "article");
-        assert_eq!(bib_type(Some("book")), "book");
-        assert_eq!(bib_type(Some("book-chapter")), "incollection");
-        assert_eq!(bib_type(Some("conference-paper")), "inproceedings");
-        assert_eq!(bib_type(Some("something-new")), "misc");
-
-        let article = render_reports_bib(&[fixture(Some("article"))]);
-        assert!(article.starts_with("@article{"));
-        assert!(article.contains("journal = {Journal \\& Name}"));
-        assert!(!article.contains("booktitle ="));
-
-        let conference = render_reports_bib(&[fixture(Some("conference-paper"))]);
-        assert!(conference.starts_with("@inproceedings{"));
-        assert!(conference.contains("booktitle = {Proceedings \\{Container\\}}"));
-        assert!(!conference.contains("journal ="));
-
-        let unknown = render_reports_bib(&[fixture(Some("something-new"))]);
-        assert!(unknown.starts_with("@misc{"));
-        assert!(unknown.contains("container = {Proceedings \\{Container\\}}"));
-        assert!(unknown.contains("publisher = {Publisher \\& Sons}"));
-        assert!(unknown.contains("title = {A \\{multiline\\} title \\& more}"));
-        assert!(unknown.contains("author = {O'Neil \\& Co., Ana Maria}"));
-    }
-
-    #[test]
-    fn ris_preserves_container_and_publisher_without_fabricating_journal_tags() {
-        let article = render_reports_ris(&[fixture(Some("article"))]);
-        assert!(article.contains("TY  - JOUR"));
-        assert!(article.contains("JO  - Journal & Name"));
-        assert!(article.contains("T2  - Proceedings {Container}"));
-        assert!(article.contains("PB  - Publisher & Sons"));
-        assert!(article.contains("TI  - A {multiline} title & more"));
-        assert!(article.contains("AU  - O'Neil & Co., Ana Maria"));
-
-        let book = render_reports_ris(&[fixture(Some("book"))]);
-        assert!(book.contains("TY  - BOOK"));
-        assert!(!book.contains("JO  -"));
-        assert!(book.contains("T2  - Proceedings {Container}"));
-
-        let unknown = render_reports_ris(&[fixture(None)]);
-        assert!(unknown.contains("TY  - GEN"));
-        assert!(unknown.contains("PB  - Publisher & Sons"));
-    }
 
     #[test]
     fn export_row_cap_rejects_only_the_maximum_plus_one_boundary() {
@@ -670,5 +613,130 @@ mod tests {
         let error = enforce_export_cap("audit", MAX_EXPORT_ROWS + 1)
             .expect_err("the sentinel row must make an export fail");
         assert!(matches!(error, ApiError::PayloadTooLarge(message) if message.contains("100000")));
+    }
+
+    #[test]
+    fn export_kinds_map_names_to_their_files_and_media_types() {
+        for (name, content_type) in [
+            ("reports.csv", "text/csv; charset=utf-8"),
+            ("extraction.csv", "text/csv; charset=utf-8"),
+            ("appraisal.csv", "text/csv; charset=utf-8"),
+            ("included_studies.csv", "text/csv; charset=utf-8"),
+            ("audit.csv", "text/csv; charset=utf-8"),
+            (
+                "reports.ris",
+                "application/x-research-info-systems; charset=utf-8",
+            ),
+            ("reports.bib", "application/x-bibtex; charset=utf-8"),
+        ] {
+            let kind = ExportKind::parse(name);
+            assert_eq!(kind.map(ExportKind::filename), Some(name), "{name}");
+            assert_eq!(
+                kind.map(ExportKind::content_type),
+                Some(content_type),
+                "{name}"
+            );
+        }
+        assert_eq!(ExportKind::parse("extraction.json"), None);
+    }
+
+    #[test]
+    fn report_csv_header_matches_every_row_and_flattens_authors() {
+        let report = sample_report(Some("article"));
+        let fields = report_csv_fields(&report);
+        assert_eq!(fields.len(), REPORTS_CSV_COLUMNS.len());
+        let header = csv_output::header(REPORTS_CSV_COLUMNS);
+        assert!(header.starts_with("report_id,doi,title,publication_year,journal,"));
+        assert!(header.ends_with("abstract,volume,issue,pages\r\n"));
+        let column = |name: &str| {
+            REPORTS_CSV_COLUMNS
+                .iter()
+                .position(|candidate| *candidate == name)
+                .and_then(|index| fields.get(index))
+                .cloned()
+                .unwrap_or_default()
+        };
+        assert_eq!(column("authors"), "O'Neil & Co., Ana Maria; Smith, J");
+        assert_eq!(column("title_abstract_decision"), "include");
+        assert_eq!(column("full_text_decision"), "exclude");
+        assert_eq!(column("exclusion_reason_code"), "wrong-population");
+        assert_eq!(
+            column("exclusion_reason_label"),
+            "Wrong population, adults only"
+        );
+        assert_eq!(
+            column("abstract"),
+            "Background {x} & y.\nResults: 50% of 2213 participants; _p_ = .01 #1 ~ $5 ^2 \\ end."
+        );
+        assert_eq!(column("volume"), "49");
+        assert_eq!(column("issue"), "3");
+        assert_eq!(column("pages"), "414-418");
+    }
+
+    #[test]
+    fn author_names_fall_back_to_literal_and_partial_names() {
+        let literal = ExportAuthor {
+            given: None,
+            family: None,
+            literal: Some("  World   Health Organization  ".to_owned()),
+        };
+        assert_eq!(
+            literal.display_name().as_deref(),
+            Some("World Health Organization")
+        );
+        let family_only = ExportAuthor {
+            given: None,
+            family: Some("Ng".to_owned()),
+            literal: None,
+        };
+        assert_eq!(family_only.display_name().as_deref(), Some("Ng"));
+        let nameless = ExportAuthor {
+            given: Some(" ".to_owned()),
+            family: None,
+            literal: None,
+        };
+        assert_eq!(nameless.display_name(), None);
+    }
+
+    #[test]
+    fn audit_labels_readable_actors_and_keeps_snapshots_last() {
+        assert_eq!(actor_label(Some("user"), Some("local-user")), "Local user");
+        assert_eq!(
+            actor_label(Some("user"), Some("reviewer-1")),
+            "User reviewer-1"
+        );
+        assert_eq!(
+            actor_label(Some("automation"), Some("ai:glm-5.3-flash")),
+            "AI model glm-5.3-flash"
+        );
+        assert_eq!(
+            actor_label(Some("automation"), Some("workflow:ae77")),
+            "Workflow ae77"
+        );
+        assert_eq!(
+            actor_label(Some("system"), Some("dedupe-test")),
+            "System dedupe-test"
+        );
+        assert_eq!(actor_label(None, None), "");
+        assert_eq!(
+            actor_label(None, Some("deepref-worker-abc")),
+            "Worker abc",
+            "worker rows carry an id without a kind"
+        );
+        assert_eq!(actor_label(Some("user"), None), "User");
+        assert_eq!(actor_label(Some("system"), Some("  ")), "System");
+        assert_eq!(actor_label(None, Some("raw-id")), "raw-id");
+        let tail = &AUDIT_CSV_COLUMNS[AUDIT_CSV_COLUMNS.len() - 4..];
+        assert_eq!(
+            tail,
+            [
+                "previous_snapshot",
+                "result_snapshot",
+                "payload",
+                "provenance"
+            ]
+        );
+        assert_eq!(&AUDIT_CSV_COLUMNS[..3], ["id", "created_at", "event_type"]);
+        assert_eq!(AUDIT_CSV_COLUMNS[7], "actor_label");
     }
 }

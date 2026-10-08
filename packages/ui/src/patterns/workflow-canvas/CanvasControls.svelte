@@ -17,18 +17,26 @@
 		onRunWorkflow,
 		onShowHistory,
 		onAutoLayout,
+		minZoom = WORKFLOW_ZOOM_LIMITS.minZoom,
+		maxZoom = WORKFLOW_ZOOM_LIMITS.maxZoom,
+		fitOptions = WORKFLOW_FIT_VIEW_OPTIONS,
 	}: {
 		onRunWorkflow?: () => void;
 		onShowHistory?: () => void;
 		onAutoLayout?: () => void;
+		/** Zoom range of the slider; keep it equal to the canvas limits. */
+		minZoom?: number;
+		maxZoom?: number;
+		/** Options for the fit-to-view buttons. */
+		fitOptions?: { padding?: number; minZoom?: number; maxZoom?: number };
 	} = $props();
 
 	const { zoomIn, zoomOut, fitView, setZoom } = useSvelteFlow();
 	const viewport = useViewport();
 
 	const currentZoom = $derived(Math.round(viewport.current.zoom * 100));
-	const sliderMin = Math.round(WORKFLOW_ZOOM_LIMITS.minZoom * 100);
-	const sliderMax = Math.round(WORKFLOW_ZOOM_LIMITS.maxZoom * 100);
+	const sliderMin = $derived(Math.round(minZoom * 100));
+	const sliderMax = $derived(Math.round(maxZoom * 100));
 	const sliderZoom = $derived(
 		Math.min(sliderMax, Math.max(sliderMin, currentZoom)),
 	);
@@ -46,7 +54,7 @@
 	}
 
 	function handleFitView(): void {
-		void fitView({ ...WORKFLOW_FIT_VIEW_OPTIONS, duration: fitDuration });
+		void fitView({ ...fitOptions, duration: fitDuration });
 	}
 
 	function handleSliderChange(event: Event): void {
@@ -72,7 +80,7 @@
 		</button>
 
 		<!-- Compact zoom slider -->
-		<div class="relative flex w-24 items-center sm:w-32">
+		<div class="relative hidden w-24 items-center sm:flex sm:w-32">
 			<input
 				type="range"
 				aria-label="Zoom"

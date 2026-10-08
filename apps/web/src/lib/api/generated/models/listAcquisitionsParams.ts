@@ -14,4 +14,8 @@ export type ListAcquisitionsParams = {
 	 * Page size
 	 */
 	limit?: number;
+	/**
+	 * Only runs with this strategy, for example file_import
+	 */
+	strategy?: string;
 };

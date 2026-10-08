@@ -13,12 +13,14 @@ deepref-graph.workspace = true
 chrono.workspace = true
 deepref-domain.workspace = true
 deepref-documents.workspace = true
+deepref-events.workspace = true
 deepref-review.workspace = true
 pgvector.workspace = true
 serde_json.workspace = true
 serde.workspace = true
 sqlx.workspace = true
 thiserror.workspace = true
+tracing.workspace = true
 uuid.workspace = true
 
 [dev-dependencies]
