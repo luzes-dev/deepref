@@ -412,6 +412,19 @@ pub async fn complete_review_outcome(
     )
     .await?;
     transaction.commit().await?;
+    if let Some(proposal_id) = proposal_id {
+        // The proposal is durable. Applying the project's autonomy setting is
+        // best effort: on failure the proposal simply stays a suggestion.
+        if let Err(error) = crate::ai_autonomy_apply::apply_autonomy_for_proposal(
+            pool,
+            run.snapshot.project_id.as_uuid(),
+            proposal_id,
+        )
+        .await
+        {
+            tracing::warn!(%error, %proposal_id, "could not apply AI autonomy to the proposal");
+        }
+    }
     Ok(match proposal_id {
         Some(proposal_id) => ReviewFinalization::Completed { proposal_id },
         None => ReviewFinalization::Blocked,

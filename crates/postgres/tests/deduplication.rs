@@ -13,7 +13,7 @@ use deepref_postgres::{
     DedupeError, DedupeRunRequest, ProposalDecisionRequest, decide_proposal, get_prisma_projection,
     list_proposals, migrate, persist_import, resolve_record, run_deduplication,
 };
-use serde_json::json;
+use serde_json::{Value, json};
 use sqlx::{PgPool, Row, postgres::PgPoolOptions};
 use uuid::Uuid;
 
@@ -1228,7 +1228,7 @@ async fn manual_resolution_is_project_isolated_and_append_only() {
         .into_iter()
         .find(|item| item.record_id == reject_record_id)
         .unwrap();
-    decide_proposal(
+    let rejected = decide_proposal(
         &pool,
         ProposalDecisionRequest {
             project_id,
@@ -1241,7 +1241,11 @@ async fn manual_resolution_is_project_isolated_and_append_only() {
     )
     .await
     .unwrap();
-    assert!(records_for_run(&pool, reject_run).await[0].1.is_none());
+    assert!(rejected.resolved_report_id.is_some());
+    assert_eq!(
+        records_for_run(&pool, reject_run).await[0].1,
+        rejected.resolved_report_id
+    );
 
     let events: i64 = sqlx::query_scalar(
         "SELECT count(*) FROM dedupe_resolution_events WHERE project_id=$1 AND record_id=$2",
@@ -1373,4 +1377,505 @@ async fn manual_resolution_is_project_isolated_and_append_only() {
         .execute(&pool)
         .await
         .unwrap();
+}
+
+#[tokio::test]
+async fn undone_exact_merge_is_not_merged_again_by_the_next_run() {
+    let Some(pool) = database().await else { return };
+    let project_id = project(&pool, "undo keeps separate").await;
+    import(
+        &pool,
+        project_id,
+        "undo-first",
+        record("Undo exact first", Some("10.5555/undo"), Some(2024), None),
+    )
+    .await;
+    let second_run = import(
+        &pool,
+        project_id,
+        "undo-second",
+        record("Undo exact second", Some("10.5555/undo"), Some(2024), None),
+    )
+    .await;
+    let summary = run_deduplication(&pool, run_request(project_id, 100))
+        .await
+        .unwrap();
+    assert_eq!(summary.auto_linked, 1);
+    let record_id = records_for_run(&pool, second_run).await[0].0;
+    resolve_record(
+        &pool,
+        ResolveRecordCommand {
+            project_id: project_id.into(),
+            record_id: record_id.into(),
+            action: RecordResolutionAction::Revert,
+            report_id: None,
+            proposal_id: None,
+            reason: "undo automatic merge".to_owned(),
+            actor_kind: "user".to_owned(),
+            actor_id: "tester".to_owned(),
+        },
+    )
+    .await
+    .unwrap();
+    let again = run_deduplication(&pool, run_request(project_id, 100))
+        .await
+        .unwrap();
+    assert_eq!(again.processed, 0);
+    assert_eq!(again.auto_linked, 0);
+    assert_eq!(records_for_run(&pool, second_run).await[0].1, None);
+    sqlx::query("DELETE FROM projects WHERE id=$1")
+        .bind(project_id)
+        .execute(&pool)
+        .await
+        .unwrap();
+}
+
+async fn record_report(pool: &PgPool, project_id: Uuid, record_id: Uuid) -> Option<Uuid> {
+    sqlx::query_scalar::<_, Option<Uuid>>(
+        "SELECT report_id FROM records WHERE project_id=$1 AND id=$2",
+    )
+    .bind(project_id)
+    .bind(record_id)
+    .fetch_one(pool)
+    .await
+    .unwrap()
+}
+
+async fn pending_proposals_for_record(
+    pool: &PgPool,
+    project_id: Uuid,
+    record_id: Uuid,
+) -> Vec<Uuid> {
+    list_proposals(pool, project_id, "pending", None, 100)
+        .await
+        .unwrap()
+        .into_iter()
+        .filter(|item| item.record_id == record_id)
+        .map(|item| item.id)
+        .collect()
+}
+
+async fn project_report_count(pool: &PgPool, project_id: Uuid) -> i64 {
+    sqlx::query_scalar("SELECT count(*) FROM project_reports WHERE project_id=$1")
+        .bind(project_id)
+        .fetch_one(pool)
+        .await
+        .unwrap()
+}
+
+async fn recompute_job_count(pool: &PgPool, project_id: Uuid) -> i64 {
+    sqlx::query_scalar("SELECT count(*) FROM jobs WHERE project_id=$1 AND kind='recompute_metrics'")
+        .bind(project_id)
+        .fetch_one(pool)
+        .await
+        .unwrap()
+}
+
+async fn delete_project(pool: &PgPool, project_id: Uuid) {
+    sqlx::query("DELETE FROM projects WHERE id=$1")
+        .bind(project_id)
+        .execute(pool)
+        .await
+        .unwrap();
+}
+
+/// A linked base report plus a near-duplicate record that the next run
+/// proposes as a fuzzy match. Returns (record, proposal, candidate report).
+async fn near_duplicate_proposal(pool: &PgPool, project_id: Uuid, key: &str) -> (Uuid, Uuid, Uuid) {
+    import(
+        pool,
+        project_id,
+        &format!("{key}-base"),
+        record(
+            "Effects of exercise on sleep quality in adults",
+            None,
+            Some(2024),
+            Some("Smith"),
+        ),
+    )
+    .await;
+    run_deduplication(pool, run_request(project_id, 100))
+        .await
+        .unwrap();
+    let near_run = import(
+        pool,
+        project_id,
+        key,
+        record(
+            "Effects of exercise on sleep quality in adult",
+            None,
+            Some(2024),
+            Some("Smith"),
+        ),
+    )
+    .await;
+    let summary = run_deduplication(pool, run_request(project_id, 100))
+        .await
+        .unwrap();
+    assert_eq!(summary.proposals_created, 1);
+    let record_id = records_for_run(pool, near_run).await[0].0;
+    let proposal = list_proposals(pool, project_id, "pending", None, 100)
+        .await
+        .unwrap()
+        .into_iter()
+        .find(|item| item.record_id == record_id)
+        .unwrap();
+    (
+        record_id,
+        proposal.id,
+        proposal.candidate_report_id.unwrap(),
+    )
+}
+
+fn reject_request(project_id: Uuid, proposal_id: Uuid) -> ProposalDecisionRequest {
+    ProposalDecisionRequest {
+        project_id,
+        proposal_id,
+        decision: ProposalDecision::Reject,
+        reason: "Not a duplicate: a different article".to_owned(),
+        actor_kind: "user".to_owned(),
+        actor_id: "tester".to_owned(),
+    }
+}
+
+#[tokio::test]
+async fn rejected_proposal_makes_the_record_its_own_report_and_is_not_reproposed() {
+    let Some(pool) = database().await else { return };
+    let project_id = project(&pool, "reject resolves record").await;
+    let (record_id, proposal_id, _candidate) =
+        near_duplicate_proposal(&pool, project_id, "reject-near").await;
+    let reports_before = project_report_count(&pool, project_id).await;
+
+    let rejected = decide_proposal(&pool, reject_request(project_id, proposal_id))
+        .await
+        .unwrap();
+    let own_report = rejected
+        .resolved_report_id
+        .expect("a rejection makes the record its own report");
+    assert_eq!(rejected.prior_report_id, None);
+    assert_eq!(
+        record_report(&pool, project_id, record_id).await,
+        Some(own_report)
+    );
+    assert_eq!(
+        project_report_count(&pool, project_id).await,
+        reports_before + 1
+    );
+    assert!(
+        pending_proposals_for_record(&pool, project_id, record_id)
+            .await
+            .is_empty()
+    );
+
+    let rerun = run_deduplication(&pool, run_request(project_id, 100))
+        .await
+        .unwrap();
+    assert_eq!(rerun.processed, 0);
+    assert_eq!(rerun.proposals_created, 0);
+    assert!(
+        pending_proposals_for_record(&pool, project_id, record_id)
+            .await
+            .is_empty()
+    );
+    assert_eq!(
+        record_report(&pool, project_id, record_id).await,
+        Some(own_report)
+    );
+    delete_project(&pool, project_id).await;
+}
+
+#[tokio::test]
+async fn undoing_a_rejection_reopens_its_proposal_and_runs_leave_the_record_alone() {
+    let Some(pool) = database().await else { return };
+    let project_id = project(&pool, "undo reject").await;
+    let (record_id, proposal_id, candidate) =
+        near_duplicate_proposal(&pool, project_id, "undo-reject-near").await;
+    decide_proposal(&pool, reject_request(project_id, proposal_id))
+        .await
+        .unwrap();
+
+    let undone = resolve_record(
+        &pool,
+        ResolveRecordCommand {
+            project_id: project_id.into(),
+            record_id: record_id.into(),
+            action: RecordResolutionAction::Revert,
+            report_id: None,
+            proposal_id: None,
+            reason: "undo the rejection".to_owned(),
+            actor_kind: "user".to_owned(),
+            actor_id: "tester".to_owned(),
+        },
+    )
+    .await
+    .unwrap();
+    assert_eq!(undone.resolved_report_id, None);
+    assert_eq!(record_report(&pool, project_id, record_id).await, None);
+    assert_eq!(
+        pending_proposals_for_record(&pool, project_id, record_id).await,
+        vec![proposal_id]
+    );
+
+    // The undo keeps the record separate from automatic runs; the reopened
+    // proposal waits for a person.
+    let rerun = run_deduplication(&pool, run_request(project_id, 100))
+        .await
+        .unwrap();
+    assert_eq!(rerun.processed, 0);
+    assert_eq!(
+        pending_proposals_for_record(&pool, project_id, record_id).await,
+        vec![proposal_id]
+    );
+
+    decide_proposal(
+        &pool,
+        ProposalDecisionRequest {
+            project_id,
+            proposal_id,
+            decision: ProposalDecision::Accept,
+            reason: "reviewed again after undo".to_owned(),
+            actor_kind: "user".to_owned(),
+            actor_id: "tester".to_owned(),
+        },
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        record_report(&pool, project_id, record_id).await,
+        Some(candidate)
+    );
+    delete_project(&pool, project_id).await;
+}
+
+#[tokio::test]
+async fn rejecting_an_identifier_conflict_keeps_each_identifier_with_its_owner() {
+    let Some(pool) = database().await else { return };
+    let project_id = project(&pool, "reject identifier conflict").await;
+    let first_run = import(
+        &pool,
+        project_id,
+        "reject-conflict-a",
+        record(
+            "Conflict owner A",
+            Some("10.5555/reject-conflict-a"),
+            Some(2020),
+            None,
+        ),
+    )
+    .await;
+    let second_run = import(
+        &pool,
+        project_id,
+        "reject-conflict-b",
+        record(
+            "Conflict owner B",
+            Some("10.5555/reject-conflict-b"),
+            Some(2021),
+            None,
+        ),
+    )
+    .await;
+    run_deduplication(&pool, run_request(project_id, 100))
+        .await
+        .unwrap();
+    let owner_a = records_for_run(&pool, first_run).await[0].1.unwrap();
+    let owner_b = records_for_run(&pool, second_run).await[0].1.unwrap();
+
+    let conflict_run = import(
+        &pool,
+        project_id,
+        "reject-conflict-input",
+        RawRecord {
+            source_identifiers: vec![
+                RawIdentifier {
+                    scheme: IdentifierScheme::Doi,
+                    value: "10.5555/reject-conflict-a".to_owned(),
+                    normalized_value: "10.5555/reject-conflict-a".to_owned(),
+                },
+                RawIdentifier {
+                    scheme: IdentifierScheme::Doi,
+                    value: "10.5555/reject-conflict-b".to_owned(),
+                    normalized_value: "10.5555/reject-conflict-b".to_owned(),
+                },
+            ],
+            title: Some("A record carrying two owners' identifiers".to_owned()),
+            abstract_text: None,
+            authors: Vec::new(),
+            publication_year: Some(2022),
+            journal: None,
+            raw: json!({"conflict": "reject"}),
+        },
+    )
+    .await;
+    let summary = run_deduplication(&pool, run_request(project_id, 100))
+        .await
+        .unwrap();
+    assert_eq!(summary.conflicts, 1);
+    let record_id = records_for_run(&pool, conflict_run).await[0].0;
+    let pending = pending_proposals_for_record(&pool, project_id, record_id).await;
+    assert_eq!(pending.len(), 2);
+
+    let rejected = decide_proposal(&pool, reject_request(project_id, pending[0]))
+        .await
+        .unwrap();
+    let own_report = rejected.resolved_report_id.unwrap();
+    assert_eq!(
+        record_report(&pool, project_id, record_id).await,
+        Some(own_report)
+    );
+    let identifier_owner = |value: &'static str| {
+        let pool = pool.clone();
+        async move {
+            sqlx::query_scalar::<_, Uuid>(
+                "SELECT report_id FROM report_identifiers WHERE scheme='doi' AND normalized_value=$1",
+            )
+            .bind(value)
+            .fetch_one(&pool)
+            .await
+            .unwrap()
+        }
+    };
+    assert_eq!(identifier_owner("10.5555/reject-conflict-a").await, owner_a);
+    assert_eq!(identifier_owner("10.5555/reject-conflict-b").await, owner_b);
+    let own_identifiers: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM report_identifiers WHERE report_id=$1")
+            .bind(own_report)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(own_identifiers, 0);
+    assert!(
+        pending_proposals_for_record(&pool, project_id, record_id)
+            .await
+            .is_empty(),
+        "the sibling conflict is superseded by the decision"
+    );
+    delete_project(&pool, project_id).await;
+}
+
+#[tokio::test]
+async fn rejecting_a_proposal_for_an_already_linked_record_does_not_create_a_report() {
+    let Some(pool) = database().await else { return };
+    let project_id = project(&pool, "reject linked record").await;
+    let (record_id, proposal_id, candidate) =
+        near_duplicate_proposal(&pool, project_id, "reject-linked-near").await;
+    resolve_record(
+        &pool,
+        ResolveRecordCommand {
+            project_id: project_id.into(),
+            record_id: record_id.into(),
+            action: RecordResolutionAction::Link,
+            report_id: Some(candidate.into()),
+            proposal_id: None,
+            reason: "linked by a reviewer before the proposal was decided".to_owned(),
+            actor_kind: "user".to_owned(),
+            actor_id: "tester".to_owned(),
+        },
+    )
+    .await
+    .unwrap();
+    let reports_before = project_report_count(&pool, project_id).await;
+
+    let rejected = decide_proposal(&pool, reject_request(project_id, proposal_id))
+        .await
+        .unwrap();
+    assert_eq!(rejected.resolved_report_id, None);
+    assert_eq!(rejected.prior_report_id, Some(candidate));
+    assert_eq!(
+        record_report(&pool, project_id, record_id).await,
+        Some(candidate)
+    );
+    assert_eq!(
+        project_report_count(&pool, project_id).await,
+        reports_before
+    );
+    delete_project(&pool, project_id).await;
+}
+
+#[tokio::test]
+async fn dedupe_run_that_creates_reports_queues_one_metrics_recompute() {
+    let Some(pool) = database().await else { return };
+    let project_id = project(&pool, "dedupe metrics job").await;
+    import(
+        &pool,
+        project_id,
+        "metrics-one",
+        record("Metrics job first title", None, Some(2021), None),
+    )
+    .await;
+    import(
+        &pool,
+        project_id,
+        "metrics-two",
+        record("An unrelated second title", None, Some(2019), None),
+    )
+    .await;
+    let summary = run_deduplication(&pool, run_request(project_id, 100))
+        .await
+        .unwrap();
+    assert_eq!(summary.created_reports, 2);
+    assert_eq!(recompute_job_count(&pool, project_id).await, 1);
+
+    let payload: Value = sqlx::query_scalar(
+        "SELECT payload FROM jobs WHERE project_id=$1 AND kind='recompute_metrics'",
+    )
+    .bind(project_id)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    let envelope: deepref_events::EventEnvelope<deepref_events::DomainPayload> =
+        serde_json::from_value(payload).unwrap();
+    assert!(matches!(
+        envelope.payload,
+        deepref_events::DomainPayload::MetricsRecomputeRequested(ref request)
+            if request.project_id == project_id
+    ));
+
+    // Nothing was created or linked by this run, so no further recompute is queued.
+    run_deduplication(&pool, run_request(project_id, 100))
+        .await
+        .unwrap();
+    assert_eq!(recompute_job_count(&pool, project_id).await, 1);
+    delete_project(&pool, project_id).await;
+}
+
+#[tokio::test]
+async fn file_import_queues_one_duplicate_check_per_run() {
+    let Some(pool) = database().await else { return };
+    let project_id = project(&pool, "import duplicate check").await;
+    let run = import(
+        &pool,
+        project_id,
+        "import-check-one",
+        record(
+            "A record awaiting the duplicate check",
+            None,
+            Some(2023),
+            None,
+        ),
+    )
+    .await;
+    deepref_postgres::enqueue_import_deduplication(&pool, project_id, run)
+        .await
+        .unwrap();
+    // Replaying the enqueue for the same import must not queue a second pass.
+    deepref_postgres::enqueue_import_deduplication(&pool, project_id, run)
+        .await
+        .unwrap();
+    let queued: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM jobs WHERE project_id=$1 AND kind=$2")
+            .bind(project_id)
+            .bind(deepref_postgres::IMPORT_DEDUPLICATION_JOB_KIND)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(queued, 1);
+
+    // The pass the worker runs resolves the imported record into a report.
+    let summary = run_deduplication(&pool, run_request(project_id, 100))
+        .await
+        .unwrap();
+    assert_eq!(summary.created_reports, 1);
+    assert!(records_for_run(&pool, run).await[0].1.is_some());
+    delete_project(&pool, project_id).await;
 }

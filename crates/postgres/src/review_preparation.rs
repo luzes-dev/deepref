@@ -3,11 +3,11 @@ use std::collections::BTreeSet;
 use deepref_ai::{
     AppraisalAnswerSchema, AppraisalPrefillDomain, AppraisalPrefillEvidence, AppraisalPrefillInput,
     AppraisalPrefillQuestion, ClassificationReportField, CriterionPrompt, DataExtractionInput,
-    DedupeInput, ExtractionEvidence, ExtractionField, ExtractionValueType, IdentityProvenance,
-    ScreeningEvidence, ScreeningEvidenceField, ScreeningInput, ScreeningStage,
+    DedupeInput, ExtractionEvidence, ExtractionField, ExtractionPassage, ExtractionValueType,
+    IdentityProvenance, ScreeningEvidence, ScreeningEvidenceField, ScreeningInput, ScreeningStage,
     StudyDesignClassificationInput, StudyDesignEvidence, StudyDesignLabel, StudyDesignReport,
     StudyGroupingCandidate, StudyGroupingEvidence, StudyGroupingField, StudyGroupingInput,
-    StudyMetadataField, sha256_bytes,
+    StudyMetadataField, criteria_for_stage, sha256_bytes,
 };
 use deepref_application::{
     AnswerSchema, DedupeCandidate, ExtractionFieldType, FUZZY_PROPOSAL_THRESHOLD, score_candidate,
@@ -19,6 +19,26 @@ use deepref_review::{
 };
 use thiserror::Error;
 use uuid::Uuid;
+
+use deepref_application::workflows::{AutonomyLevel, AutonomyTask};
+
+/// AI work for a task the project switched off is refused up front, with a
+/// message a reviewer can act on.
+async fn ensure_ai_task_enabled(
+    pool: &sqlx::PgPool,
+    project_id: Uuid,
+    task: AutonomyTask,
+) -> Result<(), ReviewPreparationError> {
+    let level = crate::autonomy::resolve_autonomy_level(pool, project_id, task)
+        .await
+        .map_err(|error| ReviewPreparationError::InvalidInput(error.to_string()))?;
+    if level == AutonomyLevel::Off {
+        return Err(ReviewPreparationError::InvalidInput(
+            "AI help for this kind of work is turned off in this project's AI settings.".to_owned(),
+        ));
+    }
+    Ok(())
+}
 
 use crate::{
     AiDedupeTarget, AiGroupingReport, AiProposalError, AiScreeningTarget, AiStudyGroupingTarget,
@@ -101,6 +121,16 @@ async fn schedule_screening_review_with_origin(
     requested_revision: Option<i64>,
     context: ReviewScheduleContext,
 ) -> Result<ReviewRunSnapshot, ReviewPreparationError> {
+    ensure_ai_task_enabled(
+        pool,
+        project_id,
+        if matches!(stage, ScreeningStage::FullText) {
+            AutonomyTask::FullTextScreening
+        } else {
+            AutonomyTask::TitleAbstractScreening
+        },
+    )
+    .await?;
     let protocol = get_published_protocol(pool, project_id).await?;
     if requested_protocol_version_id.is_some_and(|id| id != protocol.id) {
         return Err(ReviewPreparationError::InvalidInput(format!(
@@ -125,7 +155,12 @@ async fn schedule_screening_review_with_origin(
         .into_iter()
         .collect();
     let criteria = protocol.criteria.clone();
-    let allowed_evidence = metadata_evidence(report_id, &target);
+    // Report metadata is citable only at title/abstract. Full-text citations come
+    // from the retrieved passages, so no metadata is offered at full text.
+    let allowed_evidence = match stage {
+        ScreeningStage::TitleAbstract => metadata_evidence(report_id, &target),
+        ScreeningStage::FullText => Vec::new(),
+    };
     let input = ScreeningInput {
         project_id: project_id.into(),
         report_id: report_id.into(),
@@ -137,7 +172,12 @@ async fn schedule_screening_review_with_origin(
         document_hash: None,
         retrieval_query: (stage == ScreeningStage::FullText)
             .then(|| screening_retrieval_query(&target, &criteria)),
-        criteria: criteria.iter().map(criterion_prompt).collect(),
+        // Only the criteria this stage judges reach the model, in the order the
+        // validator requires. The full protocol stays on the task for validation.
+        criteria: criteria_for_stage(&criteria, stage)
+            .into_iter()
+            .map(criterion_prompt)
+            .collect(),
     };
     schedule(
         pool,
@@ -176,6 +216,7 @@ async fn schedule_duplicate_detection_review_with_origin(
     candidate_report_id: Uuid,
     context: ReviewScheduleContext,
 ) -> Result<ReviewRunSnapshot, ReviewPreparationError> {
+    ensure_ai_task_enabled(pool, project_id, AutonomyTask::FuzzyDuplicates).await?;
     let target = get_ai_dedupe_target(pool, project_id, record_id, candidate_report_id).await?;
     let grounded_provenance = dedupe_provenance(record_id, candidate_report_id, &target);
     let grounded_signals = dedupe_signals(candidate_report_id, &target);
@@ -223,6 +264,7 @@ async fn schedule_study_grouping_review_with_origin(
     report_id: Uuid,
     context: ReviewScheduleContext,
 ) -> Result<ReviewRunSnapshot, ReviewPreparationError> {
+    ensure_ai_task_enabled(pool, project_id, AutonomyTask::StudyGrouping).await?;
     let target = get_ai_study_grouping_target(pool, project_id, report_id).await?;
     let input = StudyGroupingInput {
         project_id: project_id.into(),
@@ -367,6 +409,7 @@ async fn schedule_appraisal_prefill_review_with_origin(
     definition_version: u32,
     context: ReviewScheduleContext,
 ) -> Result<ReviewRunSnapshot, ReviewPreparationError> {
+    ensure_ai_task_enabled(pool, project_id, AutonomyTask::Appraisal).await?;
     let definition =
         deepref_application::get_appraisal_definition(definition_id, definition_version)
             .map_err(|error| ReviewPreparationError::InvalidInput(error.to_string()))?;
@@ -385,28 +428,45 @@ async fn schedule_appraisal_prefill_review_with_origin(
         })
         .collect::<Vec<_>>()
         .join(" ");
-    let blocks = list_ai_grounding_blocks(pool, project_id, report_id, &query).await?;
+    let mut blocks = list_ai_grounding_blocks(pool, project_id, report_id, &query).await?;
+    if blocks.is_empty() {
+        // Question wording rarely matches the paper's own words; fall back to
+        // the passages where risk-of-bias evidence is normally reported.
+        blocks = list_ai_grounding_blocks(
+            pool,
+            project_id,
+            report_id,
+            "randomized randomisation allocation concealment blinded blinding masked \
+             dropout attrition missing withdrawn protocol registered outcome analysis \
+             intention-to-treat methods participants",
+        )
+        .await?;
+    }
+    if blocks.is_empty()
+        && definition
+            .domains
+            .iter()
+            .flat_map(|domain| domain.questions.iter())
+            .any(|question| question.requires_evidence)
+    {
+        // No cited answer is possible without parsed passages: refuse before any model call.
+        return Err(ReviewPreparationError::InvalidInput(
+            "No parsed full text for this report: attach a PDF first.".to_owned(),
+        ));
+    }
     let input = AppraisalPrefillInput {
         project_id: project_id.into(),
         report_id: report_id.into(),
         definition_id: definition.id.as_str().to_owned(),
         definition_version: definition.version.get(),
-        questions: definition
-            .domains
-            .iter()
-            .flat_map(|domain| domain.questions.iter())
-            .map(|question| AppraisalPrefillQuestion {
-                id: question.id.clone(),
-                answer_schema: appraisal_answer_schema(&question.answer_schema),
-                required: question.required,
-                requires_evidence: question.requires_evidence,
-            })
-            .collect(),
+        questions: appraisal_prefill_questions(&definition),
         domains: definition
             .domains
             .iter()
             .map(|domain| AppraisalPrefillDomain {
                 id: domain.id.clone(),
+                label: domain.label.clone(),
+                description: domain.description.clone(),
                 allowed_judgments: domain
                     .judgment
                     .options
@@ -425,13 +485,21 @@ async fn schedule_appraisal_prefill_review_with_origin(
         report_title: target.title,
         report_abstract: target.abstract_text,
         grounded_evidence: blocks
-            .into_iter()
+            .iter()
             .map(|block| AppraisalPrefillEvidence {
                 document_id: block.document_id,
                 document_block_id: block.document_block_id,
                 page: block.page,
-                parser_version: block.parser_version,
-                content_hash: block.content_hash,
+                parser_version: block.parser_version.clone(),
+                content_hash: block.content_hash.clone(),
+            })
+            .collect(),
+        passages: blocks
+            .into_iter()
+            .map(|block| ExtractionPassage {
+                document_block_id: block.document_block_id,
+                section_path: block.section_path,
+                text: block.text,
             })
             .collect(),
     };
@@ -464,6 +532,7 @@ async fn schedule_data_extraction_review_with_origin(
     study_id: Uuid,
     context: ReviewScheduleContext,
 ) -> Result<ReviewRunSnapshot, ReviewPreparationError> {
+    ensure_ai_task_enabled(pool, project_id, AutonomyTask::Extraction).await?;
     let definitions = list_field_definitions(pool, project_id).await?;
     if definitions.is_empty() {
         return Err(ReviewPreparationError::InvalidInput(
@@ -491,14 +560,22 @@ async fn schedule_data_extraction_review_with_origin(
             })
             .collect(),
         grounded_evidence: blocks
-            .into_iter()
+            .iter()
             .map(|block| ExtractionEvidence {
                 report_id: block.report_id,
                 document_id: block.document_id,
                 document_block_id: block.document_block_id,
                 page: block.page,
-                parser_version: block.parser_version,
-                content_hash: block.content_hash,
+                parser_version: block.parser_version.clone(),
+                content_hash: block.content_hash.clone(),
+            })
+            .collect(),
+        passages: blocks
+            .into_iter()
+            .map(|block| ExtractionPassage {
+                document_block_id: block.document_block_id,
+                section_path: block.section_path,
+                text: block.text,
             })
             .collect(),
     };
@@ -860,6 +937,49 @@ fn add_grouping_report_evidence(
     }
 }
 
+/// Questions the model answers, with the official wording, help and conditions from the definition.
+pub(crate) fn appraisal_prefill_questions(
+    definition: &deepref_application::AppraisalDefinition,
+) -> Vec<AppraisalPrefillQuestion> {
+    definition
+        .domains
+        .iter()
+        .flat_map(|domain| domain.questions.iter())
+        .map(|question| AppraisalPrefillQuestion {
+            id: question.id.clone(),
+            label: question.label.clone(),
+            help: question.help.clone(),
+            answer_schema: appraisal_answer_schema(&question.answer_schema),
+            required: question.required,
+            requires_evidence: question.requires_evidence,
+            applies_when: question
+                .applies_when
+                .as_ref()
+                .map(appraisal_prefill_condition),
+        })
+        .collect()
+}
+
+/// Maps a definition's condition to the prefill condition the model is checked against.
+pub(crate) fn appraisal_prefill_condition(
+    condition: &deepref_application::AppliesWhen,
+) -> deepref_ai::AppraisalPrefillCondition {
+    deepref_ai::AppraisalPrefillCondition {
+        match_mode: match condition.match_mode {
+            deepref_application::ConditionMatch::All => deepref_ai::AppraisalConditionMatch::All,
+            deepref_application::ConditionMatch::Any => deepref_ai::AppraisalConditionMatch::Any,
+        },
+        clauses: condition
+            .clauses
+            .iter()
+            .map(|clause| deepref_ai::AppraisalPrefillClause {
+                question_id: clause.question.clone(),
+                answers: clause.answers.clone(),
+            })
+            .collect(),
+    }
+}
+
 fn appraisal_answer_schema(schema: &AnswerSchema) -> AppraisalAnswerSchema {
     match schema {
         AnswerSchema::Enum { options } => AppraisalAnswerSchema::Enum {
@@ -995,5 +1115,43 @@ const fn study_design_label(design: StudyDesign) -> StudyDesignLabel {
         StudyDesign::Qualitative => StudyDesignLabel::Qualitative,
         StudyDesign::SystematicReview => StudyDesignLabel::SystematicReview,
         StudyDesign::CaseSeries => StudyDesignLabel::CaseSeries,
+    }
+}
+
+#[cfg(test)]
+mod appraisal_prefill_tests {
+    use super::*;
+
+    #[test]
+    fn prefill_questions_carry_official_wording_help_and_conditions() {
+        let definition =
+            deepref_application::get_appraisal_definition("deepref-rct-rob2", 2).unwrap();
+        let questions = appraisal_prefill_questions(&definition);
+        assert_eq!(questions.len(), 22);
+        let context = questions
+            .iter()
+            .find(|question| question.id == "trial_context_deviations")
+            .unwrap();
+        assert_eq!(
+            context.label,
+            "2.3 If Y/PY/NI to 2.1 or 2.2: Were there deviations from the intended intervention that arose because of the trial context?"
+        );
+        assert!(
+            context
+                .help
+                .as_deref()
+                .is_some_and(|help| help.starts_with("Asked only when 2.1 or 2.2"))
+        );
+        let condition = context.applies_when.as_ref().unwrap();
+        assert_eq!(
+            condition.match_mode,
+            deepref_ai::AppraisalConditionMatch::Any
+        );
+        assert_eq!(condition.clauses.len(), 2);
+        let first = questions
+            .iter()
+            .find(|question| question.id == "sequence_random")
+            .unwrap();
+        assert!(first.applies_when.is_none());
     }
 }

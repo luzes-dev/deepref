@@ -141,6 +141,10 @@ pub async fn dispatch_automation_domain_event(
     } else {
         (ActorKind::System, "automation-domain-event")
     };
+    let mut created = crate::workflows::dispatch_workflow_event(transaction, event).await?;
+    let Some(trigger) = trigger else {
+        return Ok(created);
+    };
     let definitions = sqlx::query_scalar::<_, Uuid>(
         "SELECT id
          FROM automation_definitions
@@ -152,7 +156,6 @@ pub async fn dispatch_automation_domain_event(
     .bind(trigger.as_str())
     .fetch_all(&mut **transaction)
     .await?;
-    let mut created = 0;
     for definition_id in definitions {
         let was_created = sqlx::query_scalar::<_, bool>(
             "SELECT created
@@ -762,17 +765,33 @@ pub async fn finalize_automation_run(
         .bind(&error)
         .execute(&mut *transaction)
         .await?;
-        record_notification_in_transaction(
-            &mut transaction,
-            &NotificationDraft::error(
-                "automation_run.failed",
-                Some(project_id.as_uuid()),
-                "Automation failed",
-                Some(error),
-                serde_json::json!({ "run_id": run_id.as_uuid() }),
-            ),
+        // A review run that failed or was blocked has already notified once,
+        // with the review's own name and reason (see `review_runs`). A second
+        // "Automation failed" for the same run only duplicates that entry.
+        let review_already_reported: bool = sqlx::query_scalar(
+            "SELECT EXISTS (
+               SELECT 1 FROM review_run_manifests
+               WHERE project_id=$1 AND automation_run_id=$2
+                 AND state IN ('failed','blocked')
+             )",
         )
+        .bind(project_id.as_uuid())
+        .bind(run_id.as_uuid())
+        .fetch_one(&mut *transaction)
         .await?;
+        if !review_already_reported {
+            record_notification_in_transaction(
+                &mut transaction,
+                &NotificationDraft::error(
+                    "automation_run.failed",
+                    Some(project_id.as_uuid()),
+                    "Automation failed",
+                    Some(error),
+                    serde_json::json!({ "run_id": run_id.as_uuid() }),
+                ),
+            )
+            .await?;
+        }
         transaction.commit().await?;
         return Ok(AutomationFinalization::Failed);
     }

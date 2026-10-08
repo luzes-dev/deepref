@@ -2,7 +2,7 @@ use chrono::{DateTime, Utc};
 use deepref_application::{
     AppraisalAssessmentInput, AppraisalCompleted, AppraisalDefinitionError,
     AppraisalValidationError, AutomationDomainEvent, EvidenceReferenceInput,
-    get_appraisal_definition, validate_assessment_input,
+    get_appraisal_definition, suggest_judgments, validate_assessment_input,
 };
 use deepref_domain::{Actor, ProjectId, ReportId};
 use serde_json::{Value, json};
@@ -110,9 +110,12 @@ pub async fn complete_appraisal_in_transaction(
     }
 
     let assessment_id = Uuid::new_v4();
+    // Keep the rule suggestion that the reviewer saw, so overrides can be audited later.
     let judgments = json!({
         "domains": input.domain_judgments,
         "overall": input.overall_judgment,
+        "suggested": suggest_judgments(&definition, &input.responses),
+        "override_reasons": input.override_reasons,
     });
     sqlx::query(
         "INSERT INTO appraisal_assessments

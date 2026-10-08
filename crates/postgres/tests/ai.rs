@@ -12,8 +12,8 @@ use deepref_ai::{
 };
 use deepref_domain::{DocumentBlockId, DocumentId, ProjectId};
 use deepref_postgres::{
-    PostgresAiStore, get_ai_study_grouping_target, insert_model_route, migrate,
-    persist_document_block_embedding, resolve_ai_proposal,
+    PostgresAiStore, ensure_default_model_routes, get_ai_study_grouping_target, insert_model_route,
+    migrate, persist_document_block_embedding, resolve_ai_proposal,
 };
 use sqlx::{PgPool, postgres::PgPoolOptions};
 use uuid::Uuid;
@@ -1119,4 +1119,62 @@ async fn embedding_generations_are_versioned_and_evidence_is_project_scoped_with
     assert!(store.save_run(cross_project).await.is_err());
     cleanup(&pool, project_a).await;
     cleanup(&pool, project_b).await;
+}
+
+async fn provider_of(pool: &PgPool, route_id: Uuid) -> String {
+    sqlx::query_scalar("SELECT provider FROM ai_model_routes WHERE id=$1")
+        .bind(route_id)
+        .fetch_one(pool)
+        .await
+        .expect("route exists")
+}
+
+#[tokio::test]
+async fn default_routes_follow_the_configured_provider_and_leave_history_alone() {
+    let Some(pool) = database().await else {
+        return;
+    };
+    // A model name unique to this test keeps the assertions independent of
+    // the routes other tests leave behind.
+    let model = format!("alignment-{}", Uuid::new_v4());
+    let profile = ModelProfile::Reasoning.as_str();
+    let live_legacy = Uuid::new_v4();
+    let disabled_legacy = Uuid::new_v4();
+    let custom = Uuid::new_v4();
+    for (id, provider, enabled, days_ago) in [
+        (live_legacy, "zai", true, 1_i32),
+        (disabled_legacy, "zai", false, 2),
+        (custom, "custom-gateway", true, 3),
+    ] {
+        sqlx::query(
+            r#"INSERT INTO ai_model_routes
+                 (id, profile, provider, model, model_version, parameters, enabled, effective_from)
+               VALUES ($1, $2, $3, $4, $4, '{"temperature":0.0}'::jsonb, $5,
+                       now() - make_interval(days => $6))"#,
+        )
+        .bind(id)
+        .bind(profile)
+        .bind(provider)
+        .bind(&model)
+        .bind(enabled)
+        .bind(days_ago)
+        .execute(&pool)
+        .await
+        .expect("route inserts");
+    }
+
+    let first = ensure_default_model_routes(&pool, "opencode-go", &model)
+        .await
+        .expect("routes align");
+    assert!(first.repointed >= 1, "the live legacy route is re-pointed");
+    assert_eq!(provider_of(&pool, live_legacy).await, "opencode-go");
+    // History and other providers' routes keep their labels.
+    assert_eq!(provider_of(&pool, disabled_legacy).await, "zai");
+    assert_eq!(provider_of(&pool, custom).await, "custom-gateway");
+
+    let second = ensure_default_model_routes(&pool, "opencode-go", &model)
+        .await
+        .expect("routes stay aligned");
+    assert_eq!(second.repointed, 0, "a second run changes nothing");
+    assert_eq!(provider_of(&pool, live_legacy).await, "opencode-go");
 }

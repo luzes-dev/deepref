@@ -594,42 +594,14 @@ pub(super) async fn apply_appraisal_prefill(
         })?;
     let definition = get_appraisal_definition(definition_id.as_str(), definition_version.get())
         .map_err(|error| AiProposalError::InvalidPayload(error.to_string()))?;
-    let questions = definition
-        .domains
-        .iter()
-        .flat_map(|domain| domain.questions.iter())
-        .map(|question| deepref_ai::AppraisalPrefillQuestion {
-            id: question.id.clone(),
-            answer_schema: match &question.answer_schema {
-                deepref_application::AnswerSchema::Enum { options } => {
-                    deepref_ai::AppraisalAnswerSchema::Enum {
-                        options: options.iter().map(|option| option.value.clone()).collect(),
-                    }
-                }
-                deepref_application::AnswerSchema::Boolean => {
-                    deepref_ai::AppraisalAnswerSchema::Boolean
-                }
-                deepref_application::AnswerSchema::Scale { min, max, .. } => {
-                    deepref_ai::AppraisalAnswerSchema::Scale {
-                        min: *min,
-                        max: *max,
-                    }
-                }
-                deepref_application::AnswerSchema::Text { max_length } => {
-                    deepref_ai::AppraisalAnswerSchema::Text {
-                        max_length: *max_length,
-                    }
-                }
-            },
-            required: question.required,
-            requires_evidence: question.requires_evidence,
-        })
-        .collect::<Vec<_>>();
+    let questions = crate::review_preparation::appraisal_prefill_questions(&definition);
     let domains = definition
         .domains
         .iter()
         .map(|domain| deepref_ai::AppraisalPrefillDomain {
             id: domain.id.clone(),
+            label: domain.label.clone(),
+            description: domain.description.clone(),
             allowed_judgments: domain
                 .judgment
                 .options
@@ -645,11 +617,14 @@ pub(super) async fn apply_appraisal_prefill(
         .iter()
         .map(|option| option.value.clone())
         .collect::<Vec<_>>();
-    let grounded_evidence = prefill
-        .answers
-        .iter()
-        .flat_map(|answer| answer.evidence.iter().cloned())
-        .collect::<Vec<_>>();
+    // Several answers may cite the same passage; the task's grounding list
+    // must hold each one once.
+    let mut grounded_evidence = Vec::new();
+    for source in prefill.answers.iter().flat_map(|answer| &answer.evidence) {
+        if !grounded_evidence.contains(source) {
+            grounded_evidence.push(source.clone());
+        }
+    }
     let task_input = deepref_ai::AppraisalPrefillInput {
         project_id: proposal.project_id.into(),
         report_id: report_id.into(),
@@ -661,6 +636,7 @@ pub(super) async fn apply_appraisal_prefill(
         report_title: None,
         report_abstract: None,
         grounded_evidence,
+        passages: Vec::new(),
     };
     let task = deepref_ai::AppraisalPrefillTask::new(&task_input)
         .map_err(|error| AiProposalError::InvalidPayload(error.to_string()))?;
@@ -713,6 +689,7 @@ pub(super) async fn apply_appraisal_prefill(
         evidence,
         domain_judgments: prefill.domain_judgments,
         overall_judgment: Some(prefill.overall_judgment),
+        override_reasons: prefill.override_reasons,
     };
     crate::appraisal::complete_appraisal_in_transaction(
         tx,

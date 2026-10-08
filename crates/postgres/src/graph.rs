@@ -1,9 +1,14 @@
 use chrono::{DateTime, Utc};
+use deepref_domain::ProjectId;
+use deepref_events::{
+    DomainPayload, EntityType, EventEnvelope, MetricsRecomputeRequested,
+    SUBJECT_METRICS_RECOMPUTE_REQUESTED,
+};
 use deepref_graph::{
     GraphAppraisalOverlay, GraphEdge, GraphFieldSelection, GraphMetricsOverlay, GraphNode,
     GraphProvenanceOverlay, GraphScreeningOverlay, GraphStudyOverlay, ProjectGraph,
 };
-use sqlx::{PgConnection, PgPool, Row};
+use sqlx::{PgConnection, PgPool, Postgres, Row, Transaction};
 use std::collections::HashMap;
 use uuid::Uuid;
 
@@ -115,6 +120,62 @@ async fn load_project_graph_from_connection(
         edges,
         truncated: truncated || edge_truncated,
     })
+}
+
+/// Queues a full-project metrics recomputation in the caller's transaction, so
+/// it commits or rolls back with the change that made citation counts stale.
+/// The worker recomputes every report in the project, so one request per
+/// committed change is enough.
+pub async fn enqueue_metrics_recompute(
+    transaction: &mut Transaction<'_, Postgres>,
+    project_id: Uuid,
+) -> Result<Uuid, sqlx::Error> {
+    let revision: i64 = sqlx::query_scalar("SELECT nextval('graph_domain_revision_seq')")
+        .fetch_one(&mut **transaction)
+        .await?;
+    let event = EventEnvelope::v1(
+        SUBJECT_METRICS_RECOMPUTE_REQUESTED,
+        "deepref.api",
+        EntityType::Metric,
+        project_id.to_string(),
+        revision,
+        project_id,
+        None,
+        DomainPayload::MetricsRecomputeRequested(MetricsRecomputeRequested {
+            project_id,
+            ingestion_id: None,
+        }),
+    );
+    sqlx::query(
+        "INSERT INTO domain_events (event_id,schema_version,event_type,entity_type,entity_key,revision,payload,correlation_id,causation_id,created_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) ON CONFLICT (event_id) DO NOTHING",
+    )
+    .bind(event.event_id)
+    .bind(event.schema_version as i16)
+    .bind(&event.event_type)
+    .bind(event.entity_type.as_str())
+    .bind(&event.entity_key)
+    .bind(event.revision)
+    .bind(serde_json::to_value(&event.payload).map_err(|error| sqlx::Error::Encode(Box::new(error)))?)
+    .bind(event.correlation_id)
+    .bind(event.causation_id)
+    .bind(event.occurred_at)
+    .execute(&mut **transaction)
+    .await?;
+    let payload =
+        serde_json::to_value(&event).map_err(|error| sqlx::Error::Encode(Box::new(error)))?;
+    crate::jobs::enqueue_job(
+        transaction,
+        &crate::jobs::job(
+            event.event_id,
+            ProjectId::new(project_id),
+            "recompute_metrics",
+            payload,
+            format!("recompute_metrics:{project_id}:{}", event.event_id),
+        ),
+    )
+    .await
+    .map_err(|error| sqlx::Error::Protocol(error.to_string()))?;
+    Ok(event.event_id)
 }
 
 pub async fn recompute_project_metrics(pool: &PgPool, project_id: Uuid) -> anyhow::Result<()> {

@@ -504,3 +504,60 @@ async fn migration_backfills_legacy_json_criteria_deterministically() {
         .await
         .expect("test schema should be removed");
 }
+
+#[tokio::test]
+async fn publishing_requires_an_inclusion_criterion_but_drafts_can_be_saved_without_one() {
+    let Some(pool) = database().await else { return };
+    let project_id = project(&pool, "protocol inclusion criterion").await;
+
+    // A draft without any criteria is a normal work-in-progress state.
+    let mut empty = command(project_id, 0);
+    empty.criteria = Vec::new();
+    let draft = save_protocol_draft(&pool, &empty, &actor())
+        .await
+        .expect("draft without criteria should save");
+    assert!(draft.criteria.is_empty());
+
+    let publish_of = |id: Uuid, revision: i64| PublishProtocolCommand {
+        project_id: ProjectId::from(project_id),
+        protocol_version_id: id,
+        expected_revision: revision,
+    };
+    let error = publish_protocol(&pool, &publish_of(draft.id, draft.revision), &actor())
+        .await
+        .expect_err("publication without an inclusion criterion must fail");
+    assert!(
+        matches!(error, ProtocolError::Invalid(ref message) if message.contains("inclusion criterion")),
+        "unexpected error: {error:?}"
+    );
+    let still_draft = get_protocol_editor(&pool, project_id).await.unwrap();
+    assert_eq!(still_draft.status, deepref_domain::ProtocolStatus::Draft);
+    assert!(get_published_protocol(&pool, project_id).await.is_err());
+
+    // Exclusion-only criteria are not enough to publish either.
+    let mut exclusion_only = command(project_id, draft.revision);
+    exclusion_only.protocol_version_id = Some(draft.id);
+    exclusion_only.criteria = vec![criteria().remove(1)];
+    let saved = save_protocol_draft(&pool, &exclusion_only, &actor())
+        .await
+        .expect("exclusion-only draft should save");
+    let error = publish_protocol(&pool, &publish_of(saved.id, saved.revision), &actor())
+        .await
+        .expect_err("exclusion-only protocol must not publish");
+    assert!(matches!(error, ProtocolError::Invalid(_)));
+
+    // Adding an inclusion criterion makes the same draft publishable.
+    let mut complete = command(project_id, saved.revision);
+    complete.protocol_version_id = Some(saved.id);
+    let complete_draft = save_protocol_draft(&pool, &complete, &actor())
+        .await
+        .expect("complete draft should save");
+    let published = publish_protocol(
+        &pool,
+        &publish_of(complete_draft.id, complete_draft.revision),
+        &actor(),
+    )
+    .await
+    .expect("protocol with an inclusion criterion should publish");
+    assert_eq!(published.status, deepref_domain::ProtocolStatus::Published);
+}

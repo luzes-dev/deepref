@@ -10,7 +10,12 @@ use deepref_ai::{
     DuplicateSignal, IdentityProvenance, ModelParameters, ModelProfile, ProposalDraft,
     ProposalStatus, ProposalStore, ResolvedModel, TokenUsage,
 };
+use deepref_application::AutomationRunId;
 use deepref_domain::{Actor, ActorKind, ProjectId};
+use deepref_postgres::{
+    AutomationFinalization, begin_next_automation_step, fail_automation_step, fail_review_run,
+    finalize_automation_run,
+};
 use deepref_postgres::{
     PostgresAiStore, PostgresReviewError, PostgresReviewScheduler, PreparedReviewRun,
     ReviewAttemptCompletion, ReviewAttemptStart, ReviewCalibrationBundleInput,
@@ -297,6 +302,69 @@ async fn schedule(pool: &PgPool, project_id: ProjectId) -> deepref_review::Revie
     )
     .await
     .expect("review schedules")
+}
+
+/// A review that fails is announced once. The automation run that carries it
+/// must not add a second "Automation failed" entry for the same failure.
+#[tokio::test]
+async fn a_failed_review_run_is_announced_once() {
+    let _guard = DATABASE_TEST_MUTEX.lock().await;
+    let Some(pool) = database().await else { return };
+    let project_id = ProjectId::new(Uuid::new_v4());
+    sqlx::query("INSERT INTO projects (id,name) VALUES ($1,'review failure notice')")
+        .bind(project_id.as_uuid())
+        .execute(&pool)
+        .await
+        .expect("projects insert");
+    let route = ResolvedModel {
+        profile: ModelProfile::FastClassifier,
+        provider: format!("review-notice-{}", Uuid::new_v4()),
+        model: "classifier".to_owned(),
+        model_version: "2026-08".to_owned(),
+        parameters: ModelParameters::default(),
+        route_id: None,
+    };
+    insert_model_route(&pool, &route, Utc::now())
+        .await
+        .expect("route inserts");
+
+    let snapshot = schedule(&pool, project_id).await;
+    let run_id = AutomationRunId::new(snapshot.id.as_uuid()).expect("automation run id");
+    let owner = "review-notice-worker";
+    claim_run(&pool, snapshot.id.as_uuid(), owner).await;
+    let message = "review execution failed: AI output failed semantic validation";
+
+    // The worker's order for a failed review: the review fails, its step
+    // fails, then the automation run is finalised.
+    fail_review_run(
+        &pool,
+        project_id,
+        snapshot.id,
+        "review_execution_failed",
+        message,
+    )
+    .await
+    .expect("review fails");
+    let step = begin_next_automation_step(&pool, project_id, run_id, owner)
+        .await
+        .expect("step starts")
+        .expect("the review step is queued");
+    fail_automation_step(&pool, project_id, step.id, owner, message)
+        .await
+        .expect("step fails");
+    let finalization = finalize_automation_run(&pool, project_id, run_id)
+        .await
+        .expect("run finalises");
+    assert_eq!(finalization, AutomationFinalization::Failed);
+
+    let kinds: Vec<String> = sqlx::query_scalar(
+        "SELECT kind FROM notifications WHERE payload->>'run_id'=$1 ORDER BY revision",
+    )
+    .bind(snapshot.id.as_uuid().to_string())
+    .fetch_all(&pool)
+    .await
+    .expect("notification kinds");
+    assert_eq!(kinds, vec!["review_run.failed".to_owned()]);
 }
 
 async fn claim_run(pool: &PgPool, run_id: Uuid, owner: &str) {

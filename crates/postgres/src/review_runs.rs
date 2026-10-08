@@ -237,6 +237,26 @@ pub async fn get_review_run(
     snapshot_from_row(&row)
 }
 
+/// The current state of several review runs of one project. Runs that do not
+/// exist are left out of the result.
+pub async fn get_review_runs(
+    pool: &PgPool,
+    project_id: ProjectId,
+    run_ids: &[Uuid],
+) -> Result<Vec<ReviewRunSnapshot>, PostgresReviewError> {
+    let rows = sqlx::query(
+        "SELECT automation_run_id,project_id,definition_key,subject,origin,state,
+                state_code,state_message,proposal_id,created_at,started_at,finished_at
+         FROM review_run_manifests
+         WHERE project_id=$1 AND automation_run_id = ANY($2)",
+    )
+    .bind(project_id.as_uuid())
+    .bind(run_ids)
+    .fetch_all(pool)
+    .await?;
+    rows.iter().map(snapshot_from_row).collect()
+}
+
 pub async fn load_leased_review_run(
     pool: &PgPool,
     project_id: ProjectId,

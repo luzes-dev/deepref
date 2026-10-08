@@ -360,6 +360,7 @@ async fn study_grouping_is_reversible_and_appraisal_is_immutable_and_scoped() {
                 ("outcome_reporting".to_owned(), "low_concern".to_owned()),
             ]),
             overall_judgment: Some("low_concern".to_owned()),
+            override_reasons: BTreeMap::new(),
         },
         actor.clone(),
     )
@@ -392,6 +393,7 @@ async fn study_grouping_is_reversible_and_appraisal_is_immutable_and_scoped() {
                 "adequate".to_owned(),
             )]),
             overall_judgment: Some("adequate".to_owned()),
+            override_reasons: BTreeMap::new(),
         },
         actor.clone(),
     )
@@ -425,6 +427,7 @@ async fn study_grouping_is_reversible_and_appraisal_is_immutable_and_scoped() {
                 ("outcome_reporting".to_owned(), "low_concern".to_owned()),
             ]),
             overall_judgment: Some("low_concern".to_owned()),
+            override_reasons: BTreeMap::new(),
         },
         actor,
     )
