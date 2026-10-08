@@ -84,7 +84,7 @@ export function humanizeKey(value: string): string {
 		.join(' ');
 }
 
-export const FRAMEWORK_LABELS = {
+const FRAMEWORK_LABELS = {
 	pico: 'PICO',
 	picos: 'PICOS',
 	peco: 'PECO',
@@ -94,18 +94,18 @@ export const FRAMEWORK_LABELS = {
 	custom: 'Custom'
 } as const satisfies Record<FrameworkKind, string>;
 
-export const CRITERION_KIND_LABELS = {
+const CRITERION_KIND_LABELS = {
 	inclusion: 'Inclusion',
 	exclusion: 'Exclusion'
 } as const satisfies Record<CriterionKind, string>;
 
-export const CRITERION_STAGE_LABELS = {
+const CRITERION_STAGE_LABELS = {
 	title_abstract: 'Title & abstract',
 	full_text: 'Full text',
 	both: 'Both stages'
 } as const satisfies Record<CriterionStage, string>;
 
-export const CRITERION_DIMENSION_LABELS = {
+const CRITERION_DIMENSION_LABELS = {
 	population: 'Population',
 	intervention: 'Intervention',
 	comparator: 'Comparator',

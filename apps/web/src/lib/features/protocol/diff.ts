@@ -33,17 +33,19 @@ function frameworkKeys(protocol: ProtocolDto): string[] {
 	return [...new Set([...order, ...Object.keys(protocol.framework_fields ?? {})])];
 }
 
-/** Field-level differences between two versions of the same protocol. */
-export function diffProtocols(previous: ProtocolDto, next: ProtocolDto): ProtocolChange[] {
-	const changes: ProtocolChange[] = [];
+function textChanges(previous: ProtocolDto, next: ProtocolDto): ProtocolChange[] {
 	const text = [
 		['Name', previous.name, next.name],
 		['Question', previous.question, next.question],
 		['Objective', previous.objective, next.objective]
 	] as const;
-	for (const [subject, before, after] of text) {
-		if (before.trim() !== after.trim()) changes.push({ kind: 'changed', subject });
-	}
+	return text
+		.filter(([, before, after]) => before.trim() !== after.trim())
+		.map(([subject]) => ({ kind: 'changed' as const, subject }));
+}
+
+function frameworkChanges(previous: ProtocolDto, next: ProtocolDto): ProtocolChange[] {
+	const changes: ProtocolChange[] = [];
 	if (previous.framework_kind !== next.framework_kind) {
 		changes.push({
 			kind: 'changed',
@@ -57,35 +59,48 @@ export function diffProtocols(previous: ProtocolDto, next: ProtocolDto): Protoco
 		const before = beforeFields[key]?.trim();
 		const after = afterFields[key]?.trim();
 		if (before === after) continue;
-		const subject = humanizeKey(key);
-		if (!before) changes.push({ kind: 'added', subject });
-		else if (!after) changes.push({ kind: 'removed', subject });
-		else changes.push({ kind: 'changed', subject });
+		const kind = !before ? 'added' : !after ? 'removed' : 'changed';
+		changes.push({ kind, subject: humanizeKey(key) });
 	}
+	return changes;
+}
+
+/** What differs between two versions of one criterion, or `undefined` when nothing does. */
+function criterionDetail(before: Criterion, after: Criterion): string | undefined {
+	const parts: string[] = [];
+	if (before.stage !== after.stage) parts.push(`stage: ${criterionStageLabel(after.stage)}`);
+	if (before.dimension !== after.dimension)
+		parts.push(`dimension: ${criterionDimensionLabel(after.dimension)}`);
+	if (before.description.trim() !== after.description.trim()) parts.push('description');
+	return parts.length > 0 ? parts.join(', ') : undefined;
+}
+
+function criteriaChanges(previous: ProtocolDto, next: ProtocolDto): ProtocolChange[] {
+	const changes: ProtocolChange[] = [];
 	const beforeCriteria = new Map(previous.criteria.map((c) => [criterionKey(c), c]));
 	const afterCriteria = new Map(next.criteria.map((c) => [criterionKey(c), c]));
 	for (const [key, criterion] of afterCriteria) {
 		const before = beforeCriteria.get(key);
+		const subject = criterionSubject(criterion);
 		if (!before) {
-			changes.push({ kind: 'added', subject: criterionSubject(criterion) });
+			changes.push({ kind: 'added', subject });
 			continue;
 		}
-		const parts: string[] = [];
-		if (before.stage !== criterion.stage)
-			parts.push(`stage: ${criterionStageLabel(criterion.stage)}`);
-		if (before.dimension !== criterion.dimension)
-			parts.push(`dimension: ${criterionDimensionLabel(criterion.dimension)}`);
-		if (before.description.trim() !== criterion.description.trim()) parts.push('description');
-		if (parts.length > 0)
-			changes.push({
-				kind: 'changed',
-				subject: criterionSubject(criterion),
-				detail: parts.join(', ')
-			});
+		const detail = criterionDetail(before, criterion);
+		if (detail) changes.push({ kind: 'changed', subject, detail });
 	}
 	for (const [key, criterion] of beforeCriteria) {
 		if (!afterCriteria.has(key))
 			changes.push({ kind: 'removed', subject: criterionSubject(criterion) });
 	}
 	return changes;
+}
+
+/** Field-level differences between two versions of the same protocol. */
+export function diffProtocols(previous: ProtocolDto, next: ProtocolDto): ProtocolChange[] {
+	return [
+		...textChanges(previous, next),
+		...frameworkChanges(previous, next),
+		...criteriaChanges(previous, next)
+	];
 }

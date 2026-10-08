@@ -28,28 +28,29 @@ export interface DependencyHealthOptions {
 	scope?: 'project' | 'workspace';
 }
 
-function issueMessage(
-	name: string,
-	detail: { state: string; backlog?: number | null; recentFailed?: number | null },
-	scope: 'project' | 'workspace'
-): string {
+type IssueDetail = { state: string; backlog?: number | null; recentFailed?: number | null };
+
+function workerMessage(detail: IssueDetail, scope: 'project' | 'workspace'): string {
+	if (detail.state === 'unavailable') return 'Background jobs cannot be checked right now.';
+	const queued = detail.backlog ? ` ${detail.backlog} jobs are waiting.` : '';
+	const failed = detail.recentFailed ?? 0;
+	if (failed <= 0) {
+		return `Imports and automations are running behind.${queued} Projects and articles stay available.`;
+	}
+	const where = scope === 'project' ? 'in this project' : 'in the workspace';
+	const noun = failed === 1 ? 'job' : 'jobs';
+	return `${failed} background ${noun} failed in the last 30 minutes ${where}.${queued} Imports and automations may be incomplete.`;
+}
+
+function issueMessage(name: string, detail: IssueDetail, scope: 'project' | 'workspace'): string {
+	const unavailable = detail.state === 'unavailable';
+	if (name === 'worker') return workerMessage(detail, scope);
 	if (name === 'postgresql') {
-		return detail.state === 'unavailable'
+		return unavailable
 			? 'The database is not responding. Changes may not be saved.'
 			: 'The database is responding slowly.';
 	}
-	if (name === 'worker') {
-		if (detail.state === 'unavailable') return 'Background jobs cannot be checked right now.';
-		const queued = detail.backlog ? ` ${detail.backlog} jobs are waiting.` : '';
-		if (detail.recentFailed && detail.recentFailed > 0) {
-			const count = detail.recentFailed;
-			const where = scope === 'project' ? 'in this project' : 'in the workspace';
-			const noun = count === 1 ? 'job' : 'jobs';
-			return `${count} background ${noun} failed in the last 30 minutes ${where}.${queued} Imports and automations may be incomplete.`;
-		}
-		return `Imports and automations are running behind.${queued} Projects and articles stay available.`;
-	}
-	return detail.state === 'unavailable' ? 'Not responding.' : 'Running with reduced capacity.';
+	return unavailable ? 'Not responding.' : 'Running with reduced capacity.';
 }
 
 /**

@@ -39,7 +39,7 @@ function verb(decision: string | null | undefined) {
 	return 'Decision recorded';
 }
 
-export function formatHistoryTime(value: string) {
+function formatHistoryTime(value: string) {
 	return new Intl.DateTimeFormat('en-US', {
 		month: 'short',
 		day: 'numeric',

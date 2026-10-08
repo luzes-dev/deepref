@@ -261,7 +261,7 @@ export function harvestCitations(tool: string, output: unknown, projectId: strin
 	return [...found.values()].slice(0, CITATIONS_PER_TOOL);
 }
 
-export function mergeCitations(existing: CitationView[], incoming: CitationView[]): CitationView[] {
+function mergeCitations(existing: CitationView[], incoming: CitationView[]): CitationView[] {
 	const merged = new Map<string, CitationView>();
 	for (const citation of [...existing, ...incoming]) {
 		if (!merged.has(citation.key)) merged.set(citation.key, citation);

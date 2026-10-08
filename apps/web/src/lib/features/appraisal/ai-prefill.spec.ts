@@ -166,4 +166,45 @@ describe('AI appraisal prefill transforms', () => {
 			})
 		).toBe('/projects/project-1/screening/full-text?report=report-1&page=4&block=block-1');
 	});
+
+	it.each([
+		['a scale answer inside the range', 'scale', 3, { kind: 'scale', value: 3 }],
+		['a scale answer below the range', 'scale', 0, undefined],
+		['a scale answer above the range', 'scale', 6, undefined],
+		['a fractional scale answer', 'scale', 2.5, undefined],
+		['a scale answer that is not a number', 'scale', '3', undefined],
+		[
+			'a text answer',
+			'text',
+			'Reported in the methods.',
+			{ kind: 'text', value: 'Reported in the methods.' }
+		],
+		['a blank text answer', 'text', '   ', undefined],
+		['a text answer that is too long', 'text', 'x'.repeat(41), undefined]
+	] as const)('serializes %s only when it is valid', (_, kind, value, expected) => {
+		const question = {
+			id: 'answer-3',
+			label: 'How well was it reported?',
+			help: null,
+			answer_schema:
+				kind === 'scale'
+					? { kind: 'scale' as const, min: 1, max: 5, labels: {} }
+					: { kind: 'text' as const, max_length: 40 },
+			required: true,
+			requires_evidence: false
+		};
+		const withQuestion = {
+			...definition,
+			domains: [{ ...definition.domains[0], questions: [question] }]
+		} as AppraisalDefinitionDto;
+		const state = mapAppraisalPrefillToFormState(original);
+		state.responses['answer-3'] = value;
+		const serialize = () =>
+			serializeAppraisalPrefillReview(withQuestion, 'report-1', state, original, [block]);
+		if (expected) {
+			expect(serialize().answers[0]?.answer).toEqual(expected);
+		} else {
+			expect(serialize).toThrow('Complete a valid answer');
+		}
+	});
 });

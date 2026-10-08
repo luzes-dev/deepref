@@ -51,7 +51,7 @@ export function definitionRequiresEvidence(definition: AppraisalDefinitionDto): 
 }
 
 /** Answer for a conditional question that the answers so far do not ask. */
-export const NOT_APPLICABLE = 'not_applicable';
+const NOT_APPLICABLE = 'not_applicable';
 
 /** Whether the question is asked for these answers. Questions without a condition are always asked. */
 export function questionIsAsked(

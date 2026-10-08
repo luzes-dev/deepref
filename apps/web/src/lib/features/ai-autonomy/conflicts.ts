@@ -7,7 +7,7 @@ export const CONFLICT_STATUS_LABEL: Record<ConflictStatus, string> = {
 	resolved: 'Settled'
 };
 
-export const DECISION_LABEL: Record<string, string> = {
+const DECISION_LABEL: Record<string, string> = {
 	include: 'Include',
 	exclude: 'Exclude',
 	maybe: 'Maybe'

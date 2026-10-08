@@ -47,6 +47,191 @@ function share(done: number, total: number): number | undefined {
 	return total > 0 ? Math.min(1, Math.max(0, done / total)) : undefined;
 }
 
+function protocolStage(protocol: ProtocolSummary): ReviewStage {
+	if (protocol?.status === 'published') {
+		const date = protocol.publishedAt
+			? ` ${new Date(protocol.publishedAt).toLocaleDateString(undefined, { dateStyle: 'medium' })}`
+			: '';
+		return {
+			id: 'protocol',
+			label: 'Protocol',
+			state: 'done',
+			summary: `Version ${protocol.version} published${date}`
+		};
+	}
+	return {
+		id: 'protocol',
+		label: 'Protocol',
+		state: 'active',
+		summary: protocol ? `Version ${protocol.version} is a draft` : 'Not written yet',
+		todo: { label: protocol ? 'Publish the protocol' : 'Write the protocol' }
+	};
+}
+
+function collectStage(prisma: PrismaDto): ReviewStage {
+	if (prisma.identified_records === 0) {
+		return {
+			id: 'imports',
+			label: 'Records',
+			state: 'active',
+			summary: 'No records imported',
+			todo: { label: 'Import articles' }
+		};
+	}
+	const identified = `${plural(prisma.identified_records, 'record')} identified · ${plural(prisma.duplicates_removed, 'duplicate')} removed`;
+	const waitingForCheck = prisma.unresolved_records;
+	if (waitingForCheck > 0) {
+		// Records that are not yet reports are not in Articles, so they must not read as done.
+		return {
+			id: 'deduplication',
+			label: 'Records',
+			state: 'active',
+			summary: `${plural(waitingForCheck, 'record')} waiting for the duplicate check`,
+			todo: { label: `Run deduplication (${plural(waitingForCheck, 'new record')})` }
+		};
+	}
+	if (prisma.pending_dedupe_proposals > 0) {
+		return {
+			id: 'deduplication',
+			label: 'Records',
+			state: 'active',
+			summary: identified,
+			todo: {
+				label: `Resolve ${plural(prisma.pending_dedupe_proposals, 'possible duplicate')}`
+			}
+		};
+	}
+	return { id: 'imports', label: 'Records', state: 'done', summary: identified };
+}
+
+function titleAbstractStage(prisma: PrismaDto, screening?: ScreeningSplit): ReviewStage {
+	// `screened_records` counts every record that entered screening; `title_abstract_pending`
+	// is the undecided share of those (unscreened plus maybe).
+	const records = prisma.screened_records;
+	const open = prisma.title_abstract_pending;
+	const maybes = screening ? Math.min(screening.maybe, open) : 0;
+	const unscreened = open - maybes;
+	const stage: ReviewStage = {
+		id: 'title-abstract',
+		label: 'Title & abstract',
+		state: open > 0 ? 'active' : 'done',
+		summary: `${plural(prisma.reports_sought, 'record')} passed · ${plural(prisma.title_abstract_excluded, 'exclusion')}`,
+		progress: share(records - open, records)
+	};
+	if (records === 0) {
+		return { ...stage, state: 'waiting', summary: 'Waiting for records' };
+	}
+	if (unscreened > 0) {
+		return { ...stage, todo: { label: `Screen ${plural(unscreened, 'record')}` } };
+	}
+	if (maybes > 0) {
+		return {
+			...stage,
+			todo: {
+				label: `Decide ${plural(maybes, 'maybe', 'maybes')}`,
+				search: { status: 'maybe' }
+			}
+		};
+	}
+	return stage;
+}
+
+function fullTextTodo(prisma: PrismaDto, ready: number): ReviewStage['todo'] {
+	if (ready > 0) {
+		return { label: `Assess ${plural(ready, 'report')}` };
+	}
+	if (prisma.reports_not_retrieved > 0) {
+		return {
+			label: `Attach ${plural(prisma.reports_not_retrieved, 'missing PDF')}`,
+			search: { filter: 'missing' }
+		};
+	}
+	if (prisma.full_text_pending > 0) {
+		return { label: `Decide ${plural(prisma.full_text_pending, 'maybe', 'maybes')}` };
+	}
+	return undefined;
+}
+
+function fullTextStage(prisma: PrismaDto): ReviewStage {
+	const sought = prisma.reports_sought;
+	const progress = share(prisma.full_text_assessed, sought);
+	if (sought === 0) {
+		return {
+			id: 'full-text',
+			label: 'Full text',
+			state: 'waiting',
+			summary: 'Waiting for title & abstract inclusions',
+			progress
+		};
+	}
+	const ready = Math.max(
+		0,
+		sought - prisma.full_text_assessed - prisma.reports_not_retrieved - prisma.full_text_pending
+	);
+	const todo = fullTextTodo(prisma, ready);
+	return {
+		id: 'full-text',
+		label: 'Full text',
+		state: todo ? 'active' : 'done',
+		summary: `${prisma.full_text_assessed.toLocaleString()} of ${plural(sought, 'report')} assessed · ${plural(prisma.full_text_excluded, 'exclusion')}`,
+		progress,
+		todo
+	};
+}
+
+function studiesStage(prisma: PrismaDto): ReviewStage {
+	const included = prisma.full_text_included;
+	const ungrouped = prisma.included_reports_not_grouped;
+	const progress = share(included - ungrouped, included);
+	if (included === 0) {
+		return {
+			id: 'studies',
+			label: 'Studies',
+			state: 'waiting',
+			summary: 'Waiting for full-text inclusions',
+			progress
+		};
+	}
+	return {
+		id: 'studies',
+		label: 'Studies',
+		state: ungrouped > 0 ? 'active' : 'done',
+		summary: `${plural(included, 'included report')} in ${plural(prisma.included_studies, 'study', 'studies')}`,
+		progress,
+		todo: ungrouped > 0 ? { label: `Group ${plural(ungrouped, 'report')}` } : undefined
+	};
+}
+
+function synthesisStage(
+	studyCount: number,
+	id: 'appraisal' | 'extraction',
+	label: string,
+	verb: string,
+	participle: string,
+	done: number | undefined
+): ReviewStage {
+	if (studyCount === 0) {
+		return { id, label, state: 'waiting', summary: 'Waiting for included studies' };
+	}
+	if (done === undefined) {
+		return {
+			id,
+			label,
+			state: 'active',
+			summary: `${plural(studyCount, 'study', 'studies')} to work through`
+		};
+	}
+	const left = Math.max(0, studyCount - done);
+	return {
+		id,
+		label,
+		state: left === 0 ? 'done' : 'active',
+		summary: `${Math.min(done, studyCount).toLocaleString()} of ${studyCount.toLocaleString()} ${participle}`,
+		progress: share(done, studyCount),
+		todo: left > 0 ? { label: `${verb} ${plural(left, 'study', 'studies')}` } : undefined
+	};
+}
+
 /**
  * Derives the review pipeline from the PRISMA projection, so the overview can say what is left
  * at every stage and decide the next step itself instead of asking the reviewer to work it out.
@@ -57,185 +242,29 @@ export function reviewStages(
 	screening?: ScreeningSplit,
 	synthesis?: SynthesisProgress
 ): ReviewStage[] {
-	const published = protocol?.status === 'published';
-	// `screened_records` counts every record that entered screening; `title_abstract_pending`
-	// is the undecided share of those (unscreened plus maybe).
-	const records = prisma.screened_records;
-	const titleAbstractOpen = prisma.title_abstract_pending;
-	const maybes = screening ? Math.min(screening.maybe, titleAbstractOpen) : 0;
-	const unscreened = titleAbstractOpen - maybes;
-	const sought = prisma.reports_sought;
-	const readyForFullText = Math.max(
-		0,
-		sought - prisma.full_text_assessed - prisma.reports_not_retrieved - prisma.full_text_pending
-	);
-
-	const protocolStage: ReviewStage = published
-		? {
-				id: 'protocol',
-				label: 'Protocol',
-				state: 'done',
-				summary: `Version ${protocol.version} published${
-					protocol.publishedAt
-						? ` ${new Date(protocol.publishedAt).toLocaleDateString(undefined, { dateStyle: 'medium' })}`
-						: ''
-				}`
-			}
-		: {
-				id: 'protocol',
-				label: 'Protocol',
-				state: 'active',
-				summary: protocol ? `Version ${protocol.version} is a draft` : 'Not written yet',
-				todo: { label: protocol ? 'Publish the protocol' : 'Write the protocol' }
-			};
-
-	const waitingForCheck = prisma.unresolved_records;
-	const collectStage: ReviewStage =
-		prisma.identified_records === 0
-			? {
-					id: 'imports',
-					label: 'Records',
-					state: 'active',
-					summary: 'No records imported',
-					todo: { label: 'Import articles' }
-				}
-			: prisma.pending_dedupe_proposals > 0 || waitingForCheck > 0
-				? {
-						id: 'deduplication',
-						label: 'Records',
-						state: 'active',
-						// Records that are not yet reports are not in Articles, so they must not read as done.
-						summary:
-							waitingForCheck > 0
-								? `${plural(waitingForCheck, 'record')} waiting for the duplicate check`
-								: `${plural(prisma.identified_records, 'record')} identified · ${plural(prisma.duplicates_removed, 'duplicate')} removed`,
-						todo:
-							waitingForCheck > 0
-								? {
-										label: `Run deduplication (${plural(waitingForCheck, 'new record')})`
-									}
-								: {
-										label: `Resolve ${plural(prisma.pending_dedupe_proposals, 'possible duplicate')}`
-									}
-					}
-				: {
-						id: 'imports',
-						label: 'Records',
-						state: 'done',
-						summary: `${plural(prisma.identified_records, 'record')} identified · ${plural(prisma.duplicates_removed, 'duplicate')} removed`
-					};
-
-	const titleAbstractStage: ReviewStage = {
-		id: 'title-abstract',
-		label: 'Title & abstract',
-		state: records === 0 ? 'waiting' : titleAbstractOpen > 0 ? 'active' : 'done',
-		summary:
-			records === 0
-				? 'Waiting for records'
-				: `${plural(sought, 'record')} passed · ${plural(prisma.title_abstract_excluded, 'exclusion')}`,
-		progress: share(records - titleAbstractOpen, records),
-		todo:
-			unscreened > 0
-				? { label: `Screen ${plural(unscreened, 'record')}` }
-				: maybes > 0
-					? {
-							label: `Decide ${plural(maybes, 'maybe', 'maybes')}`,
-							search: { status: 'maybe' }
-						}
-					: undefined
-	};
-
-	const fullTextStage: ReviewStage = {
-		id: 'full-text',
-		label: 'Full text',
-		state:
-			sought === 0
-				? 'waiting'
-				: readyForFullText + prisma.reports_not_retrieved + prisma.full_text_pending > 0
-					? 'active'
-					: 'done',
-		summary:
-			sought === 0
-				? 'Waiting for title & abstract inclusions'
-				: `${prisma.full_text_assessed.toLocaleString()} of ${plural(sought, 'report')} assessed · ${plural(prisma.full_text_excluded, 'exclusion')}`,
-		progress: share(prisma.full_text_assessed, sought),
-		todo:
-			readyForFullText > 0
-				? { label: `Assess ${plural(readyForFullText, 'report')}` }
-				: prisma.reports_not_retrieved > 0
-					? {
-							label: `Attach ${plural(prisma.reports_not_retrieved, 'missing PDF')}`,
-							search: { filter: 'missing' }
-						}
-					: prisma.full_text_pending > 0
-						? {
-								label: `Decide ${plural(prisma.full_text_pending, 'maybe', 'maybes')}`
-							}
-						: undefined
-	};
-
-	const studiesStage: ReviewStage = {
-		id: 'studies',
-		label: 'Studies',
-		state:
-			prisma.full_text_included === 0
-				? 'waiting'
-				: prisma.included_reports_not_grouped > 0
-					? 'active'
-					: 'done',
-		summary:
-			prisma.full_text_included === 0
-				? 'Waiting for full-text inclusions'
-				: `${plural(prisma.full_text_included, 'included report')} in ${plural(prisma.included_studies, 'study', 'studies')}`,
-		progress: share(
-			prisma.full_text_included - prisma.included_reports_not_grouped,
-			prisma.full_text_included
-		),
-		todo:
-			prisma.included_reports_not_grouped > 0
-				? { label: `Group ${plural(prisma.included_reports_not_grouped, 'report')}` }
-				: undefined
-	};
-
-	const studyCount = prisma.included_studies;
-	const todoStudies = (done: number) => Math.max(0, studyCount - done);
-	const synthesisStage = (
-		id: 'appraisal' | 'extraction',
-		label: string,
-		verb: string,
-		participle: string,
-		done: number | undefined
-	): ReviewStage => {
-		if (studyCount === 0) {
-			return { id, label, state: 'waiting', summary: 'Waiting for included studies' };
-		}
-		if (done === undefined) {
-			return {
-				id,
-				label,
-				state: 'active',
-				summary: `${plural(studyCount, 'study', 'studies')} to work through`
-			};
-		}
-		const left = todoStudies(done);
-		return {
-			id,
-			label,
-			state: left === 0 ? 'done' : 'active',
-			summary: `${Math.min(done, studyCount).toLocaleString()} of ${studyCount.toLocaleString()} ${participle}`,
-			progress: share(done, studyCount),
-			todo: left > 0 ? { label: `${verb} ${plural(left, 'study', 'studies')}` } : undefined
-		};
-	};
-
+	const studies = prisma.included_studies;
 	return [
-		protocolStage,
-		collectStage,
-		titleAbstractStage,
-		fullTextStage,
-		studiesStage,
-		synthesisStage('appraisal', 'Appraisal', 'Appraise', 'appraised', synthesis?.appraised),
-		synthesisStage('extraction', 'Extraction', 'Extract', 'extracted', synthesis?.extracted)
+		protocolStage(protocol),
+		collectStage(prisma),
+		titleAbstractStage(prisma, screening),
+		fullTextStage(prisma),
+		studiesStage(prisma),
+		synthesisStage(
+			studies,
+			'appraisal',
+			'Appraisal',
+			'Appraise',
+			'appraised',
+			synthesis?.appraised
+		),
+		synthesisStage(
+			studies,
+			'extraction',
+			'Extraction',
+			'Extract',
+			'extracted',
+			synthesis?.extracted
+		)
 	];
 }
 

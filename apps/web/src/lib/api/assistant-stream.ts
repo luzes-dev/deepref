@@ -73,7 +73,7 @@ export function parseSseFrame(frame: string): AssistantChatStreamEvent | null {
 	const payload = safeJsonParse(dataLine);
 	if (payload === null || typeof payload !== 'object') return null;
 
-	return normalizeStreamEvent(eventName, payload as Record<string, unknown>);
+	return normalizeStreamEvent(eventName, payload as Payload);
 }
 
 function safeJsonParse(raw: string): unknown {
@@ -84,66 +84,64 @@ function safeJsonParse(raw: string): unknown {
 	}
 }
 
+type Payload = Record<string, unknown>;
+
+function str(payload: Payload, key: string): string {
+	const value = payload[key];
+	return typeof value === 'string' ? value : '';
+}
+
+function num(payload: Payload, key: string): number {
+	const value = payload[key];
+	return typeof value === 'number' ? value : 0;
+}
+
+function objectOrNull(value: unknown): object | null {
+	return typeof value === 'object' && value !== null ? value : null;
+}
+
+const STREAM_EVENTS: Record<string, (payload: Payload) => AssistantChatStreamEvent | null> = {
+	token: (p) => ({ event: 'token', delta: str(p, 'delta') }),
+	replace: (p) => ({ event: 'replace', text: str(p, 'text') }),
+	tool_start: (p) => ({
+		event: 'tool_start',
+		tool: str(p, 'tool'),
+		tool_call_id: str(p, 'tool_call_id'),
+		args: (objectOrNull(p['args']) ?? {}) as Record<string, unknown>
+	}),
+	tool_complete: (p) => ({
+		event: 'tool_complete',
+		tool: str(p, 'tool'),
+		tool_call_id: str(p, 'tool_call_id'),
+		output: p['output'] ?? null
+	}),
+	proposal_created: (p) => ({
+		event: 'proposal_created',
+		tool: str(p, 'tool'),
+		review_run_id: str(p, 'review_run_id'),
+		status_path: str(p, 'status_path')
+	}),
+	done: (p) => ({
+		event: 'done',
+		message_id: str(p, 'message_id'),
+		input_tokens: num(p, 'input_tokens'),
+		output_tokens: num(p, 'output_tokens')
+	}),
+	status: (p) => ({ event: 'status', message: str(p, 'message') }),
+	plan: (p) => (objectOrNull(p['plan']) ? { event: 'plan', plan: p['plan'] } : null),
+	error: (p) => ({
+		event: 'error',
+		message: str(p, 'message') || 'assistant turn failed',
+		code: str(p, 'code') || null
+	})
+};
+
 function normalizeStreamEvent(
 	eventName: string,
-	payload: Record<string, unknown>
+	payload: Payload
 ): AssistantChatStreamEvent | null {
-	const str = (key: string): string =>
-		typeof payload[key] === 'string' ? (payload[key] as string) : '';
-	const num = (key: string): number =>
-		typeof payload[key] === 'number' ? (payload[key] as number) : 0;
-
-	switch (eventName) {
-		case 'token':
-			return { event: 'token', delta: str('delta') };
-		case 'replace':
-			return { event: 'replace', text: str('text') };
-		case 'tool_start':
-			return {
-				event: 'tool_start',
-				tool: str('tool'),
-				tool_call_id: str('tool_call_id'),
-				args:
-					typeof payload['args'] === 'object' && payload['args'] !== null
-						? (payload['args'] as Record<string, unknown>)
-						: {}
-			};
-		case 'tool_complete':
-			return {
-				event: 'tool_complete',
-				tool: str('tool'),
-				tool_call_id: str('tool_call_id'),
-				output: payload['output'] ?? null
-			};
-		case 'proposal_created':
-			return {
-				event: 'proposal_created',
-				tool: str('tool'),
-				review_run_id: str('review_run_id'),
-				status_path: str('status_path')
-			};
-		case 'done':
-			return {
-				event: 'done',
-				message_id: str('message_id'),
-				input_tokens: num('input_tokens'),
-				output_tokens: num('output_tokens')
-			};
-		case 'status':
-			return { event: 'status', message: str('message') };
-		case 'plan':
-			return payload['plan'] && typeof payload['plan'] === 'object'
-				? { event: 'plan', plan: payload['plan'] }
-				: null;
-		case 'error':
-			return {
-				event: 'error',
-				message: str('message') || 'assistant turn failed',
-				code: str('code') || null
-			};
-		default:
-			return null;
-	}
+	const build = Object.hasOwn(STREAM_EVENTS, eventName) ? STREAM_EVENTS[eventName] : undefined;
+	return build ? build(payload) : null;
 }
 
 async function consumeSseStream(
@@ -194,8 +192,13 @@ export async function streamAssistantChat(
 
 	if (!response.ok) {
 		const detail = await response.text().catch(() => '');
-		const message = extractErrorMessage(detail) ?? response.statusText ?? 'chat request failed';
-		throw new AssistantStreamError(response.status, message, extractErrorCode(detail));
+		const message =
+			errorField(detail, 'message') ?? response.statusText ?? 'chat request failed';
+		throw new AssistantStreamError(
+			response.status,
+			message,
+			errorField(detail, 'code') ?? null
+		);
 	}
 
 	if (!response.body) {
@@ -205,21 +208,9 @@ export async function streamAssistantChat(
 	await consumeSseStream(response.body, onEvent);
 }
 
-function extractErrorCode(raw: string): string | null {
-	const parsed = safeJsonParse(raw);
-	if (typeof parsed === 'object' && parsed !== null && 'code' in parsed) {
-		const code = (parsed as Record<string, unknown>)['code'];
-		if (typeof code === 'string' && code.length > 0) return code;
-	}
-	return null;
-}
-
-function extractErrorMessage(raw: string): string | undefined {
-	if (!raw.trim()) return undefined;
-	const parsed = safeJsonParse(raw);
-	if (typeof parsed === 'object' && parsed !== null && 'message' in parsed) {
-		const message = (parsed as Record<string, unknown>)['message'];
-		if (typeof message === 'string' && message.length > 0) return message;
-	}
-	return undefined;
+/** A non-empty string field of a JSON error body, if the body is JSON and has one. */
+function errorField(raw: string, key: 'code' | 'message'): string | undefined {
+	const parsed = objectOrNull(safeJsonParse(raw)) as Payload | null;
+	const value = parsed ? str(parsed, key) : '';
+	return value.length > 0 ? value : undefined;
 }

@@ -6,6 +6,12 @@ import type { IngestionDto, ProjectDto, ReportDto } from '$lib/api/generated/mod
 import { Context, PersistedState, type Getter } from 'runed';
 import { SvelteURLSearchParams } from 'svelte/reactivity';
 import { PROJECT_INSPECTOR_COLLAPSED_KEY, PROJECT_NAV_COLLAPSED_KEY } from './constants';
+import {
+	afterProjectDeleted,
+	articleView,
+	parseArticleSort,
+	projectToOpen
+} from './workspace-navigation';
 import type {
 	ProjectWorkspaceCounts,
 	ProjectWorkspaceNavView,
@@ -54,27 +60,18 @@ function viewForPathname(pathname: string): ProjectWorkspaceView {
 	return VIEW_SUFFIXES.find(([suffix]) => pathname.endsWith(suffix))?.[1] ?? 'overview';
 }
 
+const VIEW_PATHS: Record<ProjectWorkspaceNavView, (projectId: string) => ResolvedPathname> = {
+	overview: (projectId) => resolve('/projects/[projectId]/overview', { projectId }),
+	protocol: (projectId) => resolve('/projects/[projectId]/protocol', { projectId }),
+	prisma: (projectId) => resolve('/projects/[projectId]/prisma', { projectId }),
+	articles: (projectId) => resolve('/projects/[projectId]/articles', { projectId }),
+	graph: (projectId) => resolve('/projects/[projectId]/graph', { projectId }),
+	recommendations: (projectId) => resolve('/projects/[projectId]/recommendations', { projectId }),
+	ingestions: (projectId) => resolve('/projects/[projectId]/discovery/imports', { projectId })
+};
+
 function pathnameForView(projectId: string, view: ProjectWorkspaceNavView): ResolvedPathname {
-	switch (view) {
-		case 'overview':
-			return resolve('/projects/[projectId]/overview', { projectId });
-		case 'protocol':
-			return resolve('/projects/[projectId]/protocol', { projectId });
-		case 'prisma':
-			return resolve('/projects/[projectId]/prisma', { projectId });
-		case 'articles':
-			return resolve('/projects/[projectId]/articles', { projectId });
-		case 'graph':
-			return resolve('/projects/[projectId]/graph', { projectId });
-		case 'recommendations':
-			return resolve('/projects/[projectId]/recommendations', { projectId });
-		case 'ingestions':
-			return resolve('/projects/[projectId]/discovery/imports', { projectId });
-		default: {
-			const exhaustive: never = view;
-			return exhaustive;
-		}
-	}
+	return VIEW_PATHS[view](projectId);
 }
 
 function appendSearch(pathname: string, params: URLSearchParams): ResolvedPathname {
@@ -260,13 +257,13 @@ class ProjectWorkspaceContext {
 		loading: boolean,
 		selectedProjectFailed: boolean
 	) => {
-		if (loading || projects.length === 0) return;
-
-		const routeProjectId = page.params.projectId;
-		if (routeProjectId && !selectedProjectFailed) return;
-
-		const firstProjectId = projects[0]?.id;
-		if (firstProjectId) navigateTo(pathnameForView(firstProjectId, 'overview'));
+		const projectId = projectToOpen(
+			projects,
+			loading,
+			page.params.projectId,
+			selectedProjectFailed
+		);
+		if (projectId) navigateTo(pathnameForView(projectId, 'overview'));
 	};
 
 	selectProject = (projectId: string) => {
@@ -284,10 +281,7 @@ class ProjectWorkspaceContext {
 		const params = new SvelteURLSearchParams(page.url.searchParams);
 		params.set('report', reportId);
 		params.delete('ingestion');
-		this.#navigateToView(
-			this.view === 'graph' || this.view === 'recommendations' ? this.view : 'articles',
-			params
-		);
+		this.#navigateToView(articleView(this.view), params);
 	};
 
 	clearArticle = () => {
@@ -380,22 +374,15 @@ class ProjectWorkspaceContext {
 
 	finishProjectDeleted = (projectId: string) => {
 		if (!projectId) return;
-
-		const remainingProjects = this.projects.filter((project) => project.id !== projectId);
 		this.closeProjectManagement();
-
-		if (remainingProjects.length === 0) {
+		const next = afterProjectDeleted(this.projects, projectId, this.selectedProjectId);
+		if (!next) return;
+		if (next.to === 'home') {
 			navigateTo(resolve('/'));
 			return;
 		}
-
-		if (this.selectedProjectId === projectId) {
-			const nextProjectId = remainingProjects[0]?.id;
-			if (nextProjectId) {
-				this.#resetIngestionMaxDepth(nextProjectId);
-				navigateTo(pathnameForView(nextProjectId, 'overview'));
-			}
-		}
+		this.#resetIngestionMaxDepth(next.projectId);
+		navigateTo(pathnameForView(next.projectId, 'overview'));
 	};
 
 	#resetIngestionMaxDepth = (projectId: string) => {
@@ -408,13 +395,6 @@ function parseNonNegativeInt(value: string | null): number {
 	if (!value) return 0;
 	const parsed = Number.parseInt(value, 10);
 	return Number.isFinite(parsed) && parsed >= 0 ? parsed : 0;
-}
-
-function parseArticleSort(value: string | null): ArticleSort {
-	if (value === 'internal' || value === 'total' || value === 'year' || value === 'title') {
-		return value;
-	}
-	return 'rank';
 }
 
 const projectWorkspaceContext = new Context<ProjectWorkspaceContext>('project-workspace');

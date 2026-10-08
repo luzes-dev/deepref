@@ -1,4 +1,4 @@
-export const MAX_MONTHLY_BUDGET_USD = 100000;
+const MAX_MONTHLY_BUDGET_USD = 100000;
 
 export type BudgetInput = { ok: true; amount: number } | { ok: false; message: string };
 
