@@ -5,19 +5,25 @@
 	import { Button } from '@deepref/ui/button';
 	import { Progress } from '@deepref/ui/progress';
 	import { Skeleton } from '@deepref/ui/skeleton';
-	import { statusVariant, shouldPollIngestion } from '$lib/api/helpers';
+	import { shouldPollIngestion } from '$lib/api/helpers';
 	import {
 		createCancelIngestion,
 		createGetIngestion,
 		createListIngestionItems
 	} from '$lib/api/generated/ingestions/ingestions';
-	import { MetricTile, StatePanel, Surface } from '@deepref/ui/layout';
+	import { StatePanel } from '@deepref/ui/layout';
 	import CircleAlertIcon from '@lucide/svelte/icons/circle-alert';
 	import PanelRightCloseIcon from '@lucide/svelte/icons/panel-right-close';
 	import PanelRightOpenIcon from '@lucide/svelte/icons/panel-right-open';
 	import RefreshCwIcon from '@lucide/svelte/icons/refresh-cw';
 	import XIcon from '@lucide/svelte/icons/x';
 	import { useProjectWorkspaceContext } from '../context.svelte.js';
+	import {
+		ingestionItemStatusLabel,
+		ingestionItemStatusVariant,
+		pluralize,
+		runStatusDisplay
+	} from '../imports';
 
 	let {
 		collapsed = false,
@@ -48,7 +54,15 @@
 			query: {
 				enabled: Boolean(workspace.selectedIngestion),
 				staleTime: 0,
-				refetchInterval: shouldPollIngestion(ingestion?.status),
+				// Keep polling while an article is still in flight, even after the run status has
+				// settled: the item list can lag the run status by one poll.
+				refetchInterval: (query) =>
+					shouldPollIngestion(ingestion?.status) !== false ||
+					(query.state.data?.data.items ?? []).some(
+						(item) => item.status === 'queued' || item.status === 'fetching'
+					)
+						? 2_000
+						: false,
 				refetchIntervalInBackground: false,
 				refetchOnWindowFocus: 'always'
 			}
@@ -56,7 +70,18 @@
 	);
 	const cancelIngestion = createCancelIngestion();
 	const items = $derived(itemsQuery.data?.data.items ?? []);
+	// The items endpoint only returns DOIs, so titles come from the workspace articles.
+	const titleByDoi = $derived(
+		new Map(
+			workspace.articles.flatMap((article) =>
+				article.doi && article.title ? [[article.doi.toLowerCase(), article.title]] : []
+			)
+		)
+	);
 	const polling = $derived(shouldPollIngestion(ingestion?.status) !== false);
+	const display = $derived(
+		ingestion ? runStatusDisplay(ingestion.status, ingestion.failed_count) : undefined
+	);
 	const isFetching = $derived(ingestionQuery.isFetching || itemsQuery.isFetching);
 	const dataUpdatedAt = $derived(
 		Math.max(ingestionQuery.dataUpdatedAt, itemsQuery.dataUpdatedAt)
@@ -102,25 +127,12 @@
 			>
 				<PanelRightOpenIcon data-icon />
 			</Button>
-			<div class="flex min-h-0 flex-1 items-center justify-center">
-				<div
-					class="flex -rotate-180 items-center gap-3 text-muted-foreground [writing-mode:vertical-rl]"
-				>
-					<span class="text-xs font-medium tracking-widest-caps uppercase">Inspector</span
-					>
-					<span class="max-h-48 overflow-hidden text-sm font-medium text-ellipsis">
-						{workspace.selectedIngestion ? 'Ingestion' : 'No ingestion'}
-					</span>
-				</div>
-			</div>
+			<span class="text-2xs text-muted-foreground">Run</span>
 		</div>
 	{:else}
 		<div class="flex items-center justify-between gap-2 border-b p-4">
 			<div class="min-w-0">
-				<h2 class="truncate font-medium">Ingestion inspector</h2>
-				<p class="truncate text-xs text-muted-foreground">
-					{workspace.selectedIngestion ?? 'No ingestion selected'}
-				</p>
+				<h2 class="truncate text-sm font-medium">Import run</h2>
 			</div>
 			<div class="flex items-center gap-1">
 				<Button
@@ -135,6 +147,7 @@
 				<Button
 					variant="ghost"
 					size="icon"
+					class="hidden md:inline-flex"
 					onclick={workspace.clearIngestion}
 					aria-label="Clear ingestion"
 				>
@@ -190,112 +203,87 @@
 				</Alert.Root>
 			{:else if ingestion}
 				<div class="flex flex-col gap-4">
-					<div class="grid grid-cols-2 gap-3">
-						<MetricTile
-							label="Fetched"
-							value={ingestion.fetched_count}
-							detail="records resolved"
-							tone="positive"
-							class="tabular-nums"
-						/>
-						<MetricTile
-							label="Failed"
-							value={ingestion.failed_count}
-							detail="provider errors"
-							tone={ingestion.failed_count > 0 ? 'critical' : 'default'}
-							class="tabular-nums"
-						/>
-					</div>
-
-					<Surface as="section" tone="default" class="p-4">
+					<section aria-label="Run progress" class="flex flex-col gap-3">
 						<div class="flex flex-wrap items-center justify-between gap-3">
-							<h3 class="font-medium">
-								Status <Badge variant={statusVariant(ingestion.status)}
-									>{ingestion.status}</Badge
-								>
+							<h3 class="text-sm font-medium">
+								Status {#if display}<Badge
+										variant={display.variant}
+										class="whitespace-nowrap"
+										data-testid="run-status">{display.label}</Badge
+									>{/if}
 							</h3>
 							<Button
 								variant="outline"
 								size="sm"
 								onclick={cancel}
-								disabled={cancelIngestion.isPending || !polling}
+								disabled={cancelIngestion.isPending || !polling}>Cancel</Button
 							>
-								Cancel
-							</Button>
 						</div>
-						<p class="mt-2 text-sm text-muted-foreground">
-							{ingestion.fetched_count} fetched, {ingestion.failed_count} failed, {ingestion.queued_count}
-							queued
-						</p>
-						<div class="mt-3"><Progress value={progress} /></div>
-					</Surface>
-
-					<Surface as="section" tone="inset" class="p-4">
-						<div class="flex flex-col gap-3 text-sm">
-							<div class="flex items-center justify-between gap-4">
-								<span class="text-muted-foreground">Polling</span>
-								<Badge variant={polling ? 'secondary' : 'outline'}
-									>{polling ? 'Every 2 seconds' : 'Stopped'}</Badge
-								>
-							</div>
-							<div class="flex items-center justify-between gap-4">
-								<span class="text-muted-foreground">Request</span>
-								<span>{isFetching ? 'Refreshing' : 'Idle'}</span>
-							</div>
-							<div class="flex items-center justify-between gap-4">
-								<span class="text-muted-foreground">Last updated</span>
-								<span
-									>{dataUpdatedAt
-										? new Date(dataUpdatedAt).toLocaleTimeString()
-										: 'Never'}</span
-								>
-							</div>
-							<Button
-								variant="outline"
-								onclick={() => {
-									ingestionQuery.refetch();
-									itemsQuery.refetch();
-								}}
-								disabled={isFetching}
-							>
-								<RefreshCwIcon data-icon="inline-start" />Refresh now
-							</Button>
-						</div>
-					</Surface>
-
-					<Surface as="section" tone="default" class="overflow-hidden">
-						<div class="border-b p-4">
-							<h3 class="font-medium">Articles</h3>
-							<p class="text-sm text-muted-foreground">
-								{items.length} queued or fetched items
+						<Progress value={progress} />
+						{#if polling}
+							<p class="text-xs text-muted-foreground tabular-nums">
+								{ingestion.fetched_count} fetched · {ingestion.queued_count} queued{ingestion.failed_count >
+								0
+									? ` · ${ingestion.failed_count} not fetched`
+									: ''}
 							</p>
-						</div>
+						{/if}
+					</section>
+					<section aria-label="Run articles" class="flex flex-col gap-2">
+						<h3 class="text-sm font-semibold">
+							Articles <span class="font-normal text-muted-foreground"
+								>({items.length})</span
+							>
+						</h3>
+						{#if !polling && ingestion.failed_count > 0}
+							<p class="text-xs text-muted-foreground" data-testid="run-misses">
+								{pluralize(ingestion.failed_count, 'article')} could not be fetched. Check
+								the DOIs, then use Re-fetch metadata in the runs table to try them again.
+							</p>
+						{/if}
 						<div class="max-h-96 overflow-auto">
 							<Table.Root containerLabel="Ingestion articles">
 								<Table.Header>
 									<Table.Row>
-										<Table.Head>DOI</Table.Head>
-										<Table.Head>Depth</Table.Head>
-										<Table.Head>Status</Table.Head>
+										<Table.Head>Article and status</Table.Head>
 									</Table.Row>
 								</Table.Header>
 								<Table.Body>
 									{#each items as item (item.doi)}
+										{@const title = titleByDoi.get(item.doi.toLowerCase())}
 										<Table.Row>
-											<Table.Cell class="max-w-48 truncate"
-												>{item.doi}</Table.Cell
-											>
-											<Table.Cell>{item.depth}</Table.Cell>
-											<Table.Cell
-												><Badge variant={statusVariant(item.status)}
-													>{item.status}</Badge
-												></Table.Cell
-											>
+											<Table.Cell class="max-w-full whitespace-normal">
+												{#if title}
+													<p class="line-clamp-2 text-sm">{title}</p>
+												{/if}
+												<Badge
+													variant={ingestionItemStatusVariant(
+														item.status
+													)}
+													class="my-1 whitespace-nowrap"
+													>{ingestionItemStatusLabel(item.status)}</Badge
+												>
+												<p
+													class="truncate text-xs text-muted-foreground"
+													title={item.doi}
+												>
+													{item.doi}{item.depth > 0
+														? ` · cited, depth ${item.depth}`
+														: ''}
+												</p>
+												{#if item.status === 'failed' && item.last_error}
+													<p
+														class="line-clamp-2 text-xs text-muted-foreground"
+														title={item.last_error}
+													>
+														Reason: {item.last_error}
+													</p>
+												{/if}
+											</Table.Cell>
 										</Table.Row>
 									{:else}
 										<Table.Row>
 											<Table.Cell
-												colspan={3}
 												class="h-24 text-center text-muted-foreground"
 											>
 												No ingestion items yet.
@@ -305,7 +293,33 @@
 								</Table.Body>
 							</Table.Root>
 						</div>
-					</Surface>
+					</section>
+					<details class="text-xs text-muted-foreground">
+						<summary class="cursor-pointer">Run & refresh details</summary>
+						<div class="mt-3 flex flex-col gap-3">
+							<p class="break-all">Run {ingestion.id}</p>
+							<p>
+								{polling ? 'Refreshes every 2 seconds' : 'Polling stopped'} · {isFetching
+									? 'Refreshing'
+									: 'Idle'}
+							</p>
+							<p>
+								Last updated {dataUpdatedAt
+									? new Date(dataUpdatedAt).toLocaleTimeString()
+									: 'Never'}
+							</p>
+							<Button
+								variant="outline"
+								size="sm"
+								onclick={() => {
+									void ingestionQuery.refetch();
+									void itemsQuery.refetch();
+								}}
+								disabled={isFetching}
+								><RefreshCwIcon data-icon="inline-start" />Refresh now</Button
+							>
+						</div>
+					</details>
 				</div>
 			{:else}
 				<StatePanel

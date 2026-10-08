@@ -5,11 +5,7 @@ import type { ResolvedPathname } from '$app/types';
 import type { IngestionDto, ProjectDto, ReportDto } from '$lib/api/generated/models';
 import { Context, PersistedState, type Getter } from 'runed';
 import { SvelteURLSearchParams } from 'svelte/reactivity';
-import {
-	DEFAULT_PROJECT_MAX_DEPTH,
-	PROJECT_INSPECTOR_COLLAPSED_KEY,
-	PROJECT_NAV_COLLAPSED_KEY
-} from './constants';
+import { PROJECT_INSPECTOR_COLLAPSED_KEY, PROJECT_NAV_COLLAPSED_KEY } from './constants';
 import type {
 	ProjectWorkspaceCounts,
 	ProjectWorkspaceNavView,
@@ -140,6 +136,7 @@ class ProjectWorkspaceContext {
 	selectedProjectId = $derived.by(() => page.params.projectId ?? '');
 	selectedArticle = $derived.by(() => page.url.searchParams.get('report') ?? undefined);
 	selectedIngestion = $derived.by(() => page.url.searchParams.get('ingestion') ?? undefined);
+	selectedAcquisition = $derived.by(() => page.url.searchParams.get('acquisition') ?? undefined);
 	view = $derived.by(() => viewForPathname(page.url.pathname));
 	counts = $derived.by<ProjectWorkspaceCounts>(() => ({
 		articles: this.articles.length,
@@ -172,6 +169,18 @@ class ProjectWorkspaceContext {
 		},
 		set sort(value: ArticleSort) {
 			setSearchParam('sort', value === 'rank' ? undefined : value);
+		},
+		update(filter: string, minInternal: number): void {
+			const params = new SvelteURLSearchParams(page.url.searchParams);
+			if (filter) params.set('filter', filter);
+			else params.delete('filter');
+			if (minInternal > 0) params.set('minInternal', String(minInternal));
+			else params.delete('minInternal');
+			navigateTo(appendSearch(page.url.pathname, params), {
+				replaceState: true,
+				keepFocus: true,
+				noScroll: true
+			});
 		}
 	};
 
@@ -216,16 +225,17 @@ class ProjectWorkspaceContext {
 		maxDepth: undefined as number | undefined
 	});
 
-	get ingestionMaxDepth() {
-		const maxDepth =
-			this.#ingestionDraftProjectId === this.selectedProjectId
-				? this.ingestionDraft.maxDepth
-				: undefined;
-
-		return (maxDepth ?? this.project.default_max_depth) || DEFAULT_PROJECT_MAX_DEPTH;
+	/**
+	 * The depth the user chose for the selected project, restored from browser storage on load.
+	 * Undefined means the project follows the workspace Settings default.
+	 */
+	get ingestionDepthChoice(): number | undefined {
+		return this.#ingestionDraftProjectId === this.selectedProjectId
+			? this.ingestionDraft.maxDepth
+			: undefined;
 	}
 
-	set ingestionMaxDepth(value: number | undefined) {
+	set ingestionDepthChoice(value: number | undefined) {
 		this.#ingestionDraftProjectId = this.selectedProjectId;
 		this.ingestionDraft.maxDepth = value;
 	}
@@ -274,7 +284,10 @@ class ProjectWorkspaceContext {
 		const params = new SvelteURLSearchParams(page.url.searchParams);
 		params.set('report', reportId);
 		params.delete('ingestion');
-		this.#navigateToView(this.view === 'graph' ? 'graph' : 'articles', params);
+		this.#navigateToView(
+			this.view === 'graph' || this.view === 'recommendations' ? this.view : 'articles',
+			params
+		);
 	};
 
 	clearArticle = () => {
@@ -287,6 +300,17 @@ class ProjectWorkspaceContext {
 		if (!ingestionId || !this.selectedProjectId) return;
 		const params = new SvelteURLSearchParams(page.url.searchParams);
 		params.set('ingestion', ingestionId);
+		params.delete('acquisition');
+		params.delete('report');
+		this.#navigateToView('ingestions', params);
+	};
+
+	/** Opens a PubMed ID run in the run inspector. */
+	openAcquisition = (acquisitionId: string) => {
+		if (!acquisitionId || !this.selectedProjectId) return;
+		const params = new SvelteURLSearchParams(page.url.searchParams);
+		params.set('acquisition', acquisitionId);
+		params.delete('ingestion');
 		params.delete('report');
 		this.#navigateToView('ingestions', params);
 	};
@@ -294,6 +318,7 @@ class ProjectWorkspaceContext {
 	clearIngestion = () => {
 		const params = new SvelteURLSearchParams(page.url.searchParams);
 		params.delete('ingestion');
+		params.delete('acquisition');
 		navigateTo(appendSearch(page.url.pathname, params), { keepFocus: true, noScroll: true });
 	};
 

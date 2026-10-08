@@ -1,4 +1,8 @@
 <script lang="ts">
+	import { goto } from '$app/navigation';
+	import { resolve } from '$app/paths';
+	import type { ResolvedPathname } from '$app/types';
+	import { page } from '$app/state';
 	import type { GraphNodeDto, ProjectGraphDto } from '$lib/api/generated/models';
 	import { createGetProjectGraph } from '$lib/api/generated/reports/reports';
 	import GraphDegradedState from '$lib/features/projects/components/GraphDegradedState.svelte';
@@ -6,6 +10,7 @@
 	import { Button } from '@deepref/ui/button';
 	import { Checkbox } from '@deepref/ui/checkbox';
 	import * as InputGroup from '@deepref/ui/input-group';
+	import * as Popover from '@deepref/ui/popover';
 	import { Slider } from '@deepref/ui/slider';
 	import { Spinner } from '@deepref/ui/spinner';
 	import { PageToolbar, StatePanel, Surface } from '@deepref/ui/layout';
@@ -125,6 +130,16 @@
 		}
 	}
 
+	function clearFilters() {
+		const url = new URL(page.url);
+		url.searchParams.delete('graphSearch');
+		url.searchParams.delete('graphMinInternal');
+		const destination = `${resolve('/projects/[projectId]/graph', {
+			projectId: workspace.selectedProjectId
+		})}${url.search}` as ResolvedPathname;
+		void goto(destination, { noScroll: true, keepFocus: true });
+	}
+
 	function resetLayout() {
 		if (container && enabled && visibleNodes.length > 0) {
 			void renderCurrentGraph({ resetCamera: true });
@@ -175,9 +190,37 @@
 	onCleanup(() => graphRenderer.destroy());
 </script>
 
-<PageTemplate testId="graph-page" maxWidth="default" tabindex="-1">
-	<PageToolbar label="Graph controls" class="items-stretch">
-		<div class="grid w-full gap-3 md:grid-cols-[minmax(0,1fr)_minmax(14rem,280px)_auto]">
+{#snippet citationFilter()}
+	<div class="flex flex-col gap-3">
+		<label for="graph-citations" class="text-sm font-medium"
+			>Minimum internal citations: {workspace.graphFilters.minInternal}</label
+		>
+		<Slider
+			id="graph-citations"
+			type="single"
+			bind:value={workspace.graphFilters.minInternal}
+			max={20}
+			step={1}
+			disabled={!overlayEnabled('metrics')}
+			thumbLabel="Minimum internal citations"
+		/>
+		{#if !overlayEnabled('metrics')}<p class="text-xs text-muted-foreground">
+				Load metrics to filter by internal citations.
+			</p>{/if}
+	</div>
+{/snippet}
+
+<PageTemplate
+	testId="graph-page"
+	maxWidth="full"
+	scrollable={false}
+	containerClass="relative min-h-0 gap-0 p-0 sm:p-0 lg:p-0"
+	tabindex="-1"
+>
+	<div
+		class="pointer-events-none absolute inset-x-0 top-0 z-10 flex flex-wrap items-start gap-2 p-3"
+	>
+		<div class="pointer-events-auto w-56">
 			<InputGroup.Root>
 				<InputGroup.Input
 					placeholder="Search articles"
@@ -186,174 +229,232 @@
 				/>
 				<InputGroup.Addon><SearchIcon data-icon /></InputGroup.Addon>
 			</InputGroup.Root>
-			<div class="flex items-center gap-3">
-				<Slider
-					type="single"
-					bind:value={workspace.graphFilters.minInternal}
-					max={20}
-					step={1}
-					disabled={!overlayEnabled('metrics')}
-					thumbLabel="Minimum internal citations"
-				/>
-				<Badge variant="outline" class="shrink-0">
-					{overlayEnabled('metrics')
-						? `Internal ${workspace.graphFilters.minInternal}+`
-						: 'Internal filter unavailable'}
-				</Badge>
-			</div>
-			<Badge variant="secondary" class="w-fit self-center">
-				{graphData.nodes.length} articles · {graphData.edges.length} citation links
-			</Badge>
 		</div>
-	</PageToolbar>
-
-	<details class="disclosure">
-		<summary>Display options and legend</summary>
-		<fieldset
-			class="rounded-lg bg-card p-4 ring-1 ring-foreground/10"
-			data-testid="graph-overlay-filters"
-		>
-			<legend class="px-1 text-sm font-semibold">Visual overlays</legend>
-			<div class="mt-2 flex flex-wrap items-center gap-x-4 gap-y-2">
-				{#each overlayLabels as { field, label } (field)}
-					<label class="flex min-h-9 items-center gap-2 text-sm text-muted-foreground">
-						<Checkbox
-							checked={overlayEnabled(field)}
-							onCheckedChange={(checked) =>
-								workspace.graphFilters.setField(field, checked === true)}
-							aria-label={`Load ${label.toLowerCase()} overlay`}
-							data-testid={`graph-overlay-${field}`}
-						/>
-						{label}
-					</label>
-				{/each}
-				<label class="flex min-h-9 items-center gap-2 text-sm md:ml-auto">
-					<span class="text-muted-foreground">Color by</span>
-					<select
-						aria-label="Color graph by"
-						class="h-9 min-w-40 rounded-md border border-input bg-background px-3 text-sm shadow-xs outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50"
-						value={workspace.graphFilters.colorBy}
-						onchange={setColorBy}
+		<Popover.Root>
+			<Popover.Trigger>
+				{#snippet child({ props })}
+					<Button {...props} variant="outline" class="pointer-events-auto"
+						>Layers & filters</Button
 					>
-						{#each overlayLabels as { field, label } (field)}
-							<option value={field} disabled={!overlayEnabled(field)}>{label}</option>
-						{/each}
-					</select>
-				</label>
-			</div>
-		</fieldset>
+				{/snippet}
+			</Popover.Trigger>
+			<Popover.Content align="start" class="max-h-96 w-80 overflow-y-auto">
+				<div class="flex flex-col gap-4">
+					{@render citationFilter()}
 
-		<div class="grid gap-4 md:grid-cols-2" data-testid="graph-overlay-legend">
-			{#if !overlayEnabled(workspace.graphFilters.colorBy)}
-				<Surface as="section" tone="subtle" class="p-4 text-sm text-muted-foreground">
-					Color-by overlay is not loaded. Select it above or enable its field.
-				</Surface>
-			{:else if workspace.graphFilters.colorBy === 'screening'}
-				<Surface
-					as="section"
-					tone="subtle"
-					class="p-4 text-sm"
-					label="Screening overlay legend"
-				>
-					<h2 class="font-semibold">Screening overlay</h2>
-					<div class="mt-3 flex flex-wrap gap-x-4 gap-y-2 text-sm text-muted-foreground">
-						<span class="legend-item"
-							><span class="legend-swatch screening-include" aria-hidden="true"
-							></span>include</span
-						>
-						<span class="legend-item"
-							><span class="legend-swatch screening-exclude" aria-hidden="true"
-							></span>exclude</span
-						>
-						<span class="legend-item"
-							><span class="legend-swatch screening-pending" aria-hidden="true"
-							></span>pending / unscreened</span
-						>
-					</div>
-				</Surface>
-			{:else if workspace.graphFilters.colorBy === 'metrics'}
-				<Surface
-					as="section"
-					tone="subtle"
-					class="p-4 text-sm"
-					label="Metrics overlay legend"
-				>
-					<h2 class="font-semibold">Metrics overlay</h2>
-					<div class="mt-3 flex flex-wrap gap-x-4 gap-y-2 text-sm text-muted-foreground">
-						<span class="legend-item"
-							><span class="legend-swatch metrics-cited" aria-hidden="true"
-							></span>internally cited</span
-						>
-						<span class="legend-item"
-							><span class="legend-swatch metrics-uncited" aria-hidden="true"
-							></span>no internal citations</span
-						>
-					</div>
-					<p class="mt-2 text-xs text-muted-foreground">
-						Rank and citation counts are available when a node is selected.
-					</p>
-				</Surface>
-			{:else}
-				<Surface
-					as="section"
-					tone="subtle"
-					class="p-4 text-sm"
-					label="Evidence overlay legend"
-				>
-					<h2 class="font-semibold">Evidence overlays</h2>
-					<div class="mt-3 flex flex-wrap gap-x-4 gap-y-2 text-sm text-muted-foreground">
-						{#if workspace.graphFilters.colorBy === 'study'}<span class="legend-item"
-								><span class="legend-swatch evidence-grouped" aria-hidden="true"
-								></span>grouped</span
-							><span class="legend-item"
-								><span class="legend-swatch evidence-ungrouped" aria-hidden="true"
-								></span>ungrouped</span
-							>{/if}
-						{#if workspace.graphFilters.colorBy === 'appraisal'}<span
-								class="legend-item"
-								><span class="legend-swatch evidence-appraised" aria-hidden="true"
-								></span>appraised</span
-							><span class="legend-item"
-								><span
-									class="legend-swatch evidence-not-appraised"
-									aria-hidden="true"
-								></span>not appraised</span
-							>{/if}
-						{#if workspace.graphFilters.colorBy === 'provenance'}<span
-								class="legend-item"
-								><span class="legend-swatch evidence-acquired" aria-hidden="true"
-								></span>acquired</span
-							><span class="legend-item"
-								><span class="legend-swatch evidence-no-source" aria-hidden="true"
-								></span>no source</span
-							>{/if}
-					</div>
-				</Surface>
-			{/if}
-		</div>
-
-		{#if graphQuery.data}
-			<PageToolbar label="Graph projection status">
-				<div class="flex flex-wrap items-center gap-2" data-testid="projection-metadata">
-					<Badge variant="secondary"
-						>Projection revision {graphData.projection.revision}</Badge
+					<h2 class="text-sm font-semibold">Display options and legend</h2>
+					<fieldset
+						class="rounded-lg bg-card p-4 ring-1 ring-foreground/10"
+						data-testid="graph-overlay-filters"
 					>
-					<Badge variant="outline">Lag {graphData.projection.lag}</Badge>
-					{#if graphData.projection.last_success_at}
-						<Badge variant="outline">
-							Projected {new Date(
-								graphData.projection.last_success_at
-							).toLocaleString()}
-						</Badge>
+						<legend class="px-1 text-sm font-semibold">Visual overlays</legend>
+						<div class="mt-2 flex flex-wrap items-center gap-x-4 gap-y-2">
+							{#each overlayLabels as { field, label } (field)}
+								<label
+									class="flex min-h-9 items-center gap-2 text-sm text-muted-foreground"
+								>
+									<Checkbox
+										checked={overlayEnabled(field)}
+										onCheckedChange={(checked) =>
+											workspace.graphFilters.setField(
+												field,
+												checked === true
+											)}
+										aria-label={`Load ${label.toLowerCase()} overlay`}
+										data-testid={`graph-overlay-${field}`}
+									/>
+									{label}
+								</label>
+							{/each}
+							<label class="flex min-h-9 items-center gap-2 text-sm md:ml-auto">
+								<span class="text-muted-foreground">Color by</span>
+								<select
+									aria-label="Color graph by"
+									class="h-9 min-w-40 rounded-md border border-input bg-background px-3 text-sm shadow-xs outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50"
+									value={workspace.graphFilters.colorBy}
+									onchange={setColorBy}
+								>
+									{#each overlayLabels as { field, label } (field)}
+										<option value={field} disabled={!overlayEnabled(field)}
+											>{label}</option
+										>
+									{/each}
+								</select>
+							</label>
+						</div>
+					</fieldset>
+
+					<div data-testid="graph-overlay-legend">
+						{#if !overlayEnabled(workspace.graphFilters.colorBy)}
+							<Surface
+								as="section"
+								tone="subtle"
+								class="p-4 text-sm text-muted-foreground"
+							>
+								Color-by overlay is not loaded. Select it above or enable its field.
+							</Surface>
+						{:else if workspace.graphFilters.colorBy === 'screening'}
+							<Surface
+								as="section"
+								tone="subtle"
+								class="p-4 text-sm"
+								label="Screening overlay legend"
+							>
+								<h2 class="font-semibold">Screening overlay</h2>
+								<div
+									class="mt-3 flex flex-wrap gap-x-4 gap-y-2 text-sm text-muted-foreground"
+								>
+									<span class="legend-item"
+										><span
+											class="legend-swatch screening-include"
+											aria-hidden="true"
+										></span>include</span
+									>
+									<span class="legend-item"
+										><span
+											class="legend-swatch screening-exclude"
+											aria-hidden="true"
+										></span>exclude</span
+									>
+									<span class="legend-item"
+										><span
+											class="legend-swatch screening-pending"
+											aria-hidden="true"
+										></span>pending / unscreened</span
+									>
+								</div>
+							</Surface>
+						{:else if workspace.graphFilters.colorBy === 'metrics'}
+							<Surface
+								as="section"
+								tone="subtle"
+								class="p-4 text-sm"
+								label="Metrics overlay legend"
+							>
+								<h2 class="font-semibold">Metrics overlay</h2>
+								<div
+									class="mt-3 flex flex-wrap gap-x-4 gap-y-2 text-sm text-muted-foreground"
+								>
+									<span class="legend-item"
+										><span
+											class="legend-swatch metrics-cited"
+											aria-hidden="true"
+										></span>internally cited</span
+									>
+									<span class="legend-item"
+										><span
+											class="legend-swatch metrics-uncited"
+											aria-hidden="true"
+										></span>no internal citations</span
+									>
+								</div>
+								<p class="mt-2 text-xs text-muted-foreground">
+									Rank and citation counts are available when a node is selected.
+								</p>
+							</Surface>
+						{:else}
+							<Surface
+								as="section"
+								tone="subtle"
+								class="p-4 text-sm"
+								label="Evidence overlay legend"
+							>
+								<h2 class="font-semibold">Evidence overlays</h2>
+								<div
+									class="mt-3 flex flex-wrap gap-x-4 gap-y-2 text-sm text-muted-foreground"
+								>
+									{#if workspace.graphFilters.colorBy === 'study'}<span
+											class="legend-item"
+											><span
+												class="legend-swatch evidence-grouped"
+												aria-hidden="true"
+											></span>grouped</span
+										><span class="legend-item"
+											><span
+												class="legend-swatch evidence-ungrouped"
+												aria-hidden="true"
+											></span>ungrouped</span
+										>{/if}
+									{#if workspace.graphFilters.colorBy === 'appraisal'}<span
+											class="legend-item"
+											><span
+												class="legend-swatch evidence-appraised"
+												aria-hidden="true"
+											></span>appraised</span
+										><span class="legend-item"
+											><span
+												class="legend-swatch evidence-not-appraised"
+												aria-hidden="true"
+											></span>not appraised</span
+										>{/if}
+									{#if workspace.graphFilters.colorBy === 'provenance'}<span
+											class="legend-item"
+											><span
+												class="legend-swatch evidence-acquired"
+												aria-hidden="true"
+											></span>acquired</span
+										><span class="legend-item"
+											><span
+												class="legend-swatch evidence-no-source"
+												aria-hidden="true"
+											></span>no source</span
+										>{/if}
+								</div>
+							</Surface>
+						{/if}
+					</div>
+
+					{#if graphQuery.data}
+						<PageToolbar label="Graph projection status">
+							<div
+								class="flex flex-wrap items-center gap-2"
+								data-testid="projection-metadata"
+							>
+								<Badge variant="secondary"
+									>Projection revision {graphData.projection.revision}</Badge
+								>
+								<Badge variant="outline">Lag {graphData.projection.lag}</Badge>
+								{#if graphData.projection.last_success_at}
+									<Badge variant="outline">
+										Projected {new Date(
+											graphData.projection.last_success_at
+										).toLocaleString()}
+									</Badge>
+								{/if}
+								{#if graphData.truncated}<Badge variant="secondary"
+										>Bounded result</Badge
+									>{/if}
+							</div>
+						</PageToolbar>
 					{/if}
-					{#if graphData.truncated}<Badge variant="secondary">Bounded result</Badge>{/if}
 				</div>
-			</PageToolbar>
-		{/if}
-	</details>
+			</Popover.Content>
+		</Popover.Root>
+		<div class="ml-auto flex items-center gap-2">
+			<Badge variant="secondary"
+				>{visibleNodes.length} / {graphData.nodes.length} articles · {graphData.edges
+					.length} links</Badge
+			>
+			<Button
+				variant="outline"
+				size="icon"
+				class="pointer-events-auto"
+				onclick={resetLayout}
+				disabled={graphRendering}
+				aria-label="Reset graph layout"
+			>
+				<RotateCcwIcon data-icon aria-hidden="true" />
+			</Button>
+		</div>
+	</div>
 
 	{#if selectedGraphNode}
-		<Surface as="aside" tone="inset" class="p-4" label="Selected node overlay summary">
+		<Surface
+			as="aside"
+			tone="inset"
+			class="pointer-events-none absolute inset-x-3 bottom-3 z-10 p-3"
+			label="Selected node overlay summary"
+		>
 			<h2 class="text-sm font-semibold">Selected node overlays</h2>
 			<div class="mt-2 grid gap-1 text-sm text-muted-foreground sm:grid-cols-2">
 				{#each overlaySummary(selectedGraphNode, workspace.graphFilters.fields) as summary (summary)}
@@ -364,13 +465,19 @@
 	{/if}
 
 	{#if graphQuery.error}
-		<GraphDegradedState
-			error={graphQuery.error}
-			projection={projectionQuery.data?.data}
-			onRetry={() => void graphQuery.refetch()}
-		/>
+		<div class="flex flex-1 items-center justify-center p-4 pt-28">
+			<GraphDegradedState
+				error={graphQuery.error}
+				projection={projectionQuery.data?.data}
+				onRetry={() => void graphQuery.refetch()}
+			/>
+		</div>
 	{:else if graphQuery.isPending && enabled}
-		<Surface as="section" tone="subtle" class="p-4 sm:p-6">
+		<Surface
+			as="section"
+			tone="subtle"
+			class="flex flex-1 items-center justify-center p-4 pt-28"
+		>
 			<StatePanel
 				state="loading"
 				title="Preparing network"
@@ -378,17 +485,25 @@
 			/>
 		</Surface>
 	{:else if graphData.nodes.length === 0 || visibleNodes.length === 0}
-		<Surface as="section" tone="subtle" class="p-4 sm:p-6">
+		<Surface
+			as="section"
+			tone="subtle"
+			class="flex flex-1 flex-col items-center justify-center gap-4 p-4 pt-28"
+		>
 			<StatePanel
 				state="empty"
 				title="Empty graph"
 				description="No graph nodes match this project and filter set."
 			/>
+			{#if graphData.nodes.length > 0}
+				<Button variant="outline" onclick={clearFilters}>Clear filters</Button>
+			{/if}
 		</Surface>
 	{:else}
 		<div class="min-h-0 min-w-0 flex-1">
 			<div
-				class="graph-frame relative h-full min-h-[520px] overflow-hidden rounded-lg ring-1 ring-foreground/10"
+				class="graph-frame relative h-full min-h-96 overflow-hidden"
+				role="region"
 				aria-label="Graph canvas"
 				aria-busy={graphRendering}
 			>
@@ -406,16 +521,6 @@
 						</div>
 					</div>
 				{/if}
-				<Button
-					variant="ghost"
-					size="icon"
-					class="absolute top-3 right-3 z-10 bg-background/80"
-					onclick={resetLayout}
-					disabled={graphRendering}
-					aria-label="Reset graph layout"
-				>
-					<RotateCcwIcon data-icon aria-hidden="true" />
-				</Button>
 			</div>
 		</div>
 	{/if}

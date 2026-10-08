@@ -1,5 +1,8 @@
 export type AssistantChatStreamEvent =
 	| { event: 'token'; delta: string }
+	| { event: 'replace'; text: string }
+	| { event: 'status'; message: string }
+	| { event: 'plan'; plan: unknown }
 	| {
 			event: 'tool_start';
 			tool: string;
@@ -24,15 +27,17 @@ export type AssistantChatStreamEvent =
 			input_tokens: number;
 			output_tokens: number;
 	  }
-	| { event: 'error'; message: string };
+	| { event: 'error'; message: string; code: string | null };
 
 export class AssistantStreamError extends Error {
 	readonly status: number;
+	readonly code: string | null;
 
-	constructor(status: number, message: string) {
+	constructor(status: number, message: string, code: string | null = null) {
 		super(message);
 		this.name = 'AssistantStreamError';
 		this.status = status;
+		this.code = code;
 	}
 }
 
@@ -91,6 +96,8 @@ function normalizeStreamEvent(
 	switch (eventName) {
 		case 'token':
 			return { event: 'token', delta: str('delta') };
+		case 'replace':
+			return { event: 'replace', text: str('text') };
 		case 'tool_start':
 			return {
 				event: 'tool_start',
@@ -122,8 +129,18 @@ function normalizeStreamEvent(
 				input_tokens: num('input_tokens'),
 				output_tokens: num('output_tokens')
 			};
+		case 'status':
+			return { event: 'status', message: str('message') };
+		case 'plan':
+			return payload['plan'] && typeof payload['plan'] === 'object'
+				? { event: 'plan', plan: payload['plan'] }
+				: null;
 		case 'error':
-			return { event: 'error', message: str('message') || 'assistant turn failed' };
+			return {
+				event: 'error',
+				message: str('message') || 'assistant turn failed',
+				code: str('code') || null
+			};
 		default:
 			return null;
 	}
@@ -178,7 +195,7 @@ export async function streamAssistantChat(
 	if (!response.ok) {
 		const detail = await response.text().catch(() => '');
 		const message = extractErrorMessage(detail) ?? response.statusText ?? 'chat request failed';
-		throw new AssistantStreamError(response.status, message);
+		throw new AssistantStreamError(response.status, message, extractErrorCode(detail));
 	}
 
 	if (!response.body) {
@@ -186,6 +203,15 @@ export async function streamAssistantChat(
 	}
 
 	await consumeSseStream(response.body, onEvent);
+}
+
+function extractErrorCode(raw: string): string | null {
+	const parsed = safeJsonParse(raw);
+	if (typeof parsed === 'object' && parsed !== null && 'code' in parsed) {
+		const code = (parsed as Record<string, unknown>)['code'];
+		if (typeof code === 'string' && code.length > 0) return code;
+	}
+	return null;
 }
 
 function extractErrorMessage(raw: string): string | undefined {

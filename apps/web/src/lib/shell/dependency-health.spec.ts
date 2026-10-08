@@ -1,11 +1,5 @@
-import { describe, it, expect, vi } from 'vitest';
-import {
-	dependencyDetailSummary,
-	dependencyLabel,
-	observeDependencyHealth,
-	type DependencyHealthCallbacks,
-	type DependencyHealthObservation
-} from './dependency-health';
+import { describe, it, expect } from 'vitest';
+import { dependencyLabel, summarizeDependencyHealth } from './dependency-health';
 import type { DependencyStatus } from '$lib/api/generated/models';
 
 const allAvailable: DependencyStatus = {
@@ -13,117 +7,83 @@ const allAvailable: DependencyStatus = {
 	worker: { state: 'available' }
 };
 
-function degradedWorker(): DependencyStatus {
-	return {
-		postgresql: { state: 'available' },
-		worker: { state: 'degraded', backlog: 7 }
-	};
-}
-
-function callbacks() {
-	const onDegraded = vi.fn<DependencyHealthCallbacks['onDegraded']>();
-	const onRecovered = vi.fn<DependencyHealthCallbacks['onRecovered']>();
-	const onStatusError = vi.fn<DependencyHealthCallbacks['onStatusError']>();
-	return { onDegraded, onRecovered, onStatusError };
-}
-
-const baseline: DependencyHealthObservation = { error: false, states: null };
-
 describe('dependencyLabel', () => {
-	it('capitalizes the dependency name', () => {
+	it('uses researcher-facing names', () => {
 		expect.hasAssertions();
-		expect(dependencyLabel('worker')).toBe('Worker');
+		expect(dependencyLabel('worker')).toBe('Background jobs');
+		expect(dependencyLabel('postgresql')).toBe('Database');
+		expect(dependencyLabel('cache')).toBe('Cache');
 	});
 });
 
-describe('dependencyDetailSummary', () => {
-	it('appends lag and backlog to the state', () => {
+describe('summarizeDependencyHealth', () => {
+	it('is silent while everything is available or nothing has loaded yet', () => {
 		expect.hasAssertions();
-		expect(dependencyDetailSummary({ state: 'degraded', backlog: 7 })).toBe(
-			'degraded · backlog 7'
+		expect(summarizeDependencyHealth(allAvailable, null)).toEqual({ level: 'ok', issues: [] });
+		expect(summarizeDependencyHealth(undefined, null).level).toBe('ok');
+	});
+
+	it('reports a degraded worker with its backlog', () => {
+		expect.hasAssertions();
+		const summary = summarizeDependencyHealth(
+			{ ...allAvailable, worker: { state: 'degraded', backlog: 7 } },
+			null
 		);
-		expect(dependencyDetailSummary({ state: 'available' })).toBe('available');
-	});
-});
-
-describe('observeDependencyHealth', () => {
-	it('announces degradation on first observation and stays quiet on repeat polls', () => {
-		expect.hasAssertions();
-		const spies = callbacks();
-
-		const first = observeDependencyHealth(baseline, degradedWorker(), null, spies);
-		expect(spies.onDegraded).toHaveBeenCalledTimes(1);
-		expect(spies.onDegraded).toHaveBeenCalledWith('worker', 'degraded · backlog 7', false);
-		expect(first.states).toEqual({ postgresql: 'available', worker: 'degraded' });
-
-		const second = observeDependencyHealth(first, degradedWorker(), null, spies);
-		expect(spies.onDegraded).toHaveBeenCalledTimes(1);
-		expect(second.states).toEqual(first.states);
+		expect(summary.level).toBe('degraded');
+		expect(summary.issues).toHaveLength(1);
+		expect(summary.issues[0]).toMatchObject({ name: 'worker', label: 'Background jobs' });
+		expect(summary.issues[0].message).toContain('7 jobs are waiting');
 	});
 
-	it('announces recovery once every dependency is available again', () => {
+	it('escalates to unavailable when the database is down', () => {
 		expect.hasAssertions();
-		const spies = callbacks();
-		const previous: DependencyHealthObservation = {
-			error: false,
-			states: { postgresql: 'available', worker: 'degraded' }
-		};
-
-		const next = observeDependencyHealth(previous, allAvailable, null, spies);
-		expect(spies.onRecovered).toHaveBeenCalledTimes(1);
-		expect(spies.onRecovered).toHaveBeenCalledWith();
-		expect(next.states).toEqual({ postgresql: 'available', worker: 'available' });
+		const summary = summarizeDependencyHealth(
+			{ postgresql: { state: 'unavailable' }, worker: { state: 'degraded' } },
+			null
+		);
+		expect(summary.level).toBe('unavailable');
+		expect(summary.issues).toHaveLength(2);
 	});
 
-	it('does not announce recovery on the very first observation', () => {
+	it('reports an unreachable status endpoint and clears once it answers again', () => {
 		expect.hasAssertions();
-		const spies = callbacks();
-
-		observeDependencyHealth(baseline, allAvailable, null, spies);
-		expect(spies.onRecovered).not.toHaveBeenCalled();
-		expect(spies.onDegraded).not.toHaveBeenCalled();
+		const failed = summarizeDependencyHealth(undefined, new Error('boom'));
+		expect(failed.level).toBe('unavailable');
+		expect(failed.issues[0].name).toBe('status');
+		expect(summarizeDependencyHealth(allAvailable, null).level).toBe('ok');
 	});
 
-	it('announces core interruption only when postgresql is unavailable', () => {
+	it('says how many jobs failed in this project when the probe is project-scoped', () => {
 		expect.hasAssertions();
-		const spies = callbacks();
-		const status: DependencyStatus = {
-			postgresql: { state: 'unavailable' },
-			worker: { state: 'available' }
-		};
-
-		observeDependencyHealth(baseline, status, null, spies);
-		expect(spies.onDegraded).toHaveBeenCalledWith('postgresql', 'unavailable', true);
+		const summary = summarizeDependencyHealth(
+			{ ...allAvailable, worker: { state: 'degraded', backlog: 0, recent_failed: 2 } },
+			null,
+			{ scope: 'project' }
+		);
+		expect(summary.level).toBe('degraded');
+		expect(summary.issues[0].message).toBe(
+			'2 background jobs failed in the last 30 minutes in this project. Imports and automations may be incomplete.'
+		);
 	});
 
-	it('announces fetch failures once and keeps the last known states', () => {
+	it('uses singular wording for one failed job and names the workspace for an unscoped probe', () => {
 		expect.hasAssertions();
-		const spies = callbacks();
-		const previous: DependencyHealthObservation = {
-			error: false,
-			states: { postgresql: 'available', worker: 'degraded' }
-		};
-		const failure = new Error('health endpoint unreachable');
-
-		const errored = observeDependencyHealth(previous, undefined, failure, spies);
-		expect(spies.onStatusError).toHaveBeenCalledTimes(1);
-		expect(spies.onStatusError).toHaveBeenCalledWith('health endpoint unreachable');
-		expect(errored.states).toEqual(previous.states);
-
-		observeDependencyHealth(errored, undefined, failure, spies);
-		expect(spies.onStatusError).toHaveBeenCalledTimes(1);
+		const summary = summarizeDependencyHealth(
+			{ ...allAvailable, worker: { state: 'degraded', backlog: null, recent_failed: 1 } },
+			null
+		);
+		expect(summary.issues[0].message).toContain(
+			'1 background job failed in the last 30 minutes in the workspace.'
+		);
 	});
 
-	it('announces recovery of a stale degradation after errors resolve', () => {
+	it('stays silent for a clean project even when the workspace has failures elsewhere', () => {
 		expect.hasAssertions();
-		const spies = callbacks();
-		const errored: DependencyHealthObservation = {
-			error: true,
-			states: { postgresql: 'available', worker: 'degraded' }
-		};
-
-		const next = observeDependencyHealth(errored, allAvailable, null, spies);
-		expect(spies.onRecovered).toHaveBeenCalledTimes(1);
-		expect(next.error).toBe(false);
+		const summary = summarizeDependencyHealth(
+			{ ...allAvailable, worker: { state: 'available', backlog: 0, recent_failed: 0 } },
+			null,
+			{ scope: 'project' }
+		);
+		expect(summary).toEqual({ level: 'ok', issues: [] });
 	});
 });

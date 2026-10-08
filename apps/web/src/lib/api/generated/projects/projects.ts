@@ -366,6 +366,11 @@ export type deleteProjectResponse204 = {
 	status: 204;
 };
 
+export type deleteProjectResponse404 = {
+	data: ApiErrorBody;
+	status: 404;
+};
+
 export type deleteProjectResponse500 = {
 	data: ApiErrorBody;
 	status: 500;
@@ -374,7 +379,7 @@ export type deleteProjectResponse500 = {
 export type deleteProjectResponseSuccess = deleteProjectResponse204 & {
 	headers: Headers;
 };
-export type deleteProjectResponseError = deleteProjectResponse500 & {
+export type deleteProjectResponseError = (deleteProjectResponse404 | deleteProjectResponse500) & {
 	headers: Headers;
 };
 

@@ -28,3 +28,6 @@ overrides:
 minimumReleaseAgeExclude:
   - '@tanstack/query-core@5.101.1'
   - '@tanstack/svelte-query@6.1.35'
+
+patchedDependencies:
+  '@tanstack/svelte-store@0.12.1': patches/@tanstack__svelte-store@0.12.1.patch

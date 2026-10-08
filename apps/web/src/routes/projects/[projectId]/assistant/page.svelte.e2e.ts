@@ -142,12 +142,19 @@ async function openAssistant(page: Page): Promise<void> {
 test('opens the most recent thread and renders the persisted turn history', async ({ page }) => {
 	await openAssistant(page);
 	await expect(page.getByTestId('assistant-page')).toBeVisible();
-	await expect(page.getByTestId('assistant-thread').first()).toContainText('Protocol questions');
+	await expect(
+		page.getByRole('heading', { name: 'Protocol questions', exact: true })
+	).toBeVisible();
 	await expect(page.getByTestId('assistant-feed')).toContainText('What does the protocol say?');
 	await expect(page.getByTestId('assistant-feed')).toContainText(
 		'The protocol targets adults with type 2 diabetes.'
 	);
 	const toolCard = page.getByTestId('assistant-feed').locator('[data-slot="tool-call-card"]');
+	await page
+		.getByTestId('assistant-feed')
+		.locator('summary')
+		.filter({ hasText: 'Evidence & tools' })
+		.click();
 	await expect(toolCard).toContainText('get_project_protocol');
 	await expect(toolCard).toContainText('Completed');
 	const proposalCard = page.getByTestId('assistant-feed').locator('[data-slot="proposal-card"]');
@@ -163,7 +170,7 @@ test('streams a new chat turn with tool progress, proposals, and token totals', 
 	page
 }) => {
 	await openAssistant(page);
-	await page.getByTestId('assistant-new-chat').click();
+	await page.getByRole('button', { name: 'New chat', exact: true }).click();
 	await expect(page.getByTestId('assistant-empty-state')).toBeVisible();
 
 	let createdConversation = false;
@@ -205,21 +212,44 @@ test('streams a new chat turn with tool progress, proposals, and token totals', 
 	await page.getByTestId('assistant-send').click();
 
 	const feed = page.getByTestId('assistant-feed');
-	await expect(feed).toContainText('Reading the protocol — inclusion criteria found.');
+	// The answer restarts when a tool starts (as the server stores it), so only the text streamed
+	// after the tool call remains in the bubble.
+	await expect(feed).toContainText('inclusion criteria found.');
+	await expect(feed).not.toContainText('Reading the protocol');
+	await feed.locator('summary').filter({ hasText: 'Evidence & tools' }).click();
 	await expect(feed.locator('[data-slot="tool-call-card"]')).toContainText('Completed');
 	await expect(feed.locator('[data-slot="proposal-card"]')).toContainText('Screening Decision');
-	await expect(feed).toContainText('12 tokens in');
+	await expect(feed).not.toContainText('tokens in');
 	await expect(createdConversation).toBe(true);
+	await page.getByTestId('assistant-sessions-toggle').click();
 	await expect(page.getByTestId('assistant-thread')).toHaveCount(1);
 });
 
 test('shift+enter keeps a newline and enter submits the draft', async ({ page }) => {
 	await openAssistant(page);
-	await page.getByTestId('assistant-new-chat').click();
+	await page.getByRole('button', { name: 'New chat', exact: true }).click();
 	const composer = page.getByTestId('assistant-thread-input');
 	await composer.fill('first line');
 	await composer.press('Shift+Enter');
 	await expect(composer).toHaveValue('first line\n');
+	await page.route(`${api}/projects/project-1/assistant/conversations`, (route) =>
+		route.fulfill({
+			status: 201,
+			json: conversation(conversationId, 'first line', '2026-01-03T00:00:00Z')
+		})
+	);
+	let submittedMessage: string | null = null;
+	await page.route(`${api}/projects/project-1/assistant/chat`, async (route) => {
+		submittedMessage = route.request().postDataJSON().message;
+		await route.fulfill({
+			headers: { 'content-type': 'text/event-stream' },
+			body: sseBody()
+		});
+	});
+	await composer.press('Enter');
+	await expect(page.getByTestId('assistant-feed')).toContainText('inclusion criteria found.');
+	expect(submittedMessage).toBe('first line');
+	await expect(composer).toHaveValue('');
 });
 
 test('deletes a conversation after confirmation', async ({ page }) => {
@@ -232,6 +262,7 @@ test('deletes a conversation after confirmation', async ({ page }) => {
 			return route.fulfill({ status: 204 });
 		}
 	);
+	await page.getByTestId('assistant-sessions-toggle').click();
 	await page.getByTestId('assistant-thread').first().hover();
 	await page.getByRole('button', { name: 'Delete conversation Protocol questions' }).click();
 	await expect(page.getByTestId('assistant-thread')).toHaveCount(1);

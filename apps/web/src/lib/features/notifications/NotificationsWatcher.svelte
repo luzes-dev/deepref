@@ -3,7 +3,9 @@
 	import { isNotificationPanelOpen, observeNotifications } from './state.svelte';
 	import { notifyNotification } from './toast';
 
-	const listQuery = createListNotifications(() => ({
+	// Toasts announce arrivals in every project, so this watcher reads the
+	// unscoped feed; the bell's own panel is scoped separately.
+	const listQuery = createListNotifications(undefined, () => ({
 		query: {
 			refetchInterval: 10_000,
 			refetchIntervalInBackground: false,

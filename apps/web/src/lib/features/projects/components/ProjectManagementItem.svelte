@@ -9,7 +9,9 @@
 	import { createDeleteProject, createUpdateProject } from '$lib/api/generated/projects/projects';
 	import type { ProjectDto } from '$lib/api/generated/models';
 	import { useProjectWorkspaceContext } from '../context.svelte.js';
+	import { projectSubtitle } from '../project-search';
 	import { notifyError } from '$lib/features/notifications/toast';
+	import ChevronDownIcon from '@lucide/svelte/icons/chevron-down';
 	import SaveIcon from '@lucide/svelte/icons/save';
 	import TrashIcon from '@lucide/svelte/icons/trash-2';
 
@@ -23,12 +25,15 @@
 	const updateProject = createUpdateProject();
 	const deleteProject = createDeleteProject();
 
+	// Rows start collapsed so a long list stays scannable; the form opens on click.
+	let expanded = $state(false);
 	let nameDraft = $state<string | undefined>(undefined);
 	let descriptionDraft = $state<string | undefined>(undefined);
 	let savedNameOverride = $state<string | undefined>(undefined);
 	let savedDescriptionOverride = $state<string | undefined>(undefined);
 	let deletePending = $state(false);
 
+	const panelId = $derived(`project-panel-${project.id}`);
 	const isBusy = $derived(updateProject.isPending || deleteProject.isPending);
 	const savedName = $derived(savedNameOverride ?? project.name);
 	const savedDescription = $derived(savedDescriptionOverride ?? project.description ?? '');
@@ -80,84 +85,111 @@
 	}
 </script>
 
-<Field.FieldSet
-	class="rounded-xl border border-primary/15 bg-muted/10 p-4 sm:p-5"
+<div
+	class="rounded-xl border border-primary/15 bg-muted/10"
 	aria-busy={isBusy}
+	data-testid="project-management-item"
+	data-expanded={expanded}
 >
-	<Field.FieldLegend class="flex min-w-0 items-center justify-between gap-3">
-		<span class="truncate">{savedName}</span>
-		{#if isDirty}
-			<Badge variant="outline">Unsaved changes</Badge>
-		{:else}
-			<Badge variant="secondary">Saved</Badge>
-		{/if}
-	</Field.FieldLegend>
-
-	<Field.FieldGroup class="gap-5">
-		<Field.Field data-invalid={!name.trim()}>
-			<Field.FieldLabel for={`management-project-name-${project.id}`}>Name</Field.FieldLabel>
-			<Input
-				id={`management-project-name-${project.id}`}
-				value={name}
-				oninput={updateName}
-				disabled={isBusy}
-				aria-invalid={!name.trim()}
-			/>
-			<Field.FieldDescription>A short name for this workspace.</Field.FieldDescription>
-		</Field.Field>
-		<Field.Field>
-			<Field.FieldLabel for={`management-project-description-${project.id}`}>
-				Description
-			</Field.FieldLabel>
-			<Textarea
-				id={`management-project-description-${project.id}`}
-				value={description}
-				oninput={updateDescription}
-				disabled={isBusy}
-			/>
-		</Field.Field>
-	</Field.FieldGroup>
-
-	<div class="flex flex-col-reverse gap-2 sm:flex-row sm:items-center sm:justify-between">
-		{#if deletePending}
-			<Alert.Root
-				variant="destructive"
-				class="flex flex-col gap-3 sm:flex-row sm:items-center"
+	<button
+		type="button"
+		class="flex w-full min-w-0 items-center gap-3 rounded-xl px-4 py-3 text-left transition-colors hover:bg-muted/40 focus-visible:ring-2 focus-visible:ring-ring focus-visible:outline-none sm:px-5"
+		aria-expanded={expanded}
+		aria-controls={panelId}
+		onclick={() => (expanded = !expanded)}
+	>
+		<span class="min-w-0 flex-1">
+			<span class="flex min-w-0 items-center gap-2">
+				<span class="truncate text-sm font-medium">{savedName}</span>
+				{#if isDirty}<Badge variant="outline" size="sm">Unsaved changes</Badge>{/if}
+			</span>
+			<span class="mt-0.5 block truncate text-xs text-muted-foreground tabular-nums"
+				>{projectSubtitle(project)}</span
 			>
-				<TrashIcon aria-hidden="true" />
-				<div class="min-w-0 flex-1">
-					<Alert.Title>Delete {savedName}?</Alert.Title>
-					<Alert.Description>This action cannot be undone.</Alert.Description>
-				</div>
-				<div class="flex flex-col-reverse gap-2 sm:flex-row">
-					<Button
-						variant="outline"
-						disabled={isBusy}
-						onclick={() => (deletePending = false)}
-					>
-						Cancel
-					</Button>
-					<Button variant="destructive" disabled={isBusy} onclick={confirmDelete}>
-						{#if deleteProject.isPending}
-							<Spinner data-icon="inline-start" />
-						{/if}
-						Confirm delete
-					</Button>
-				</div>
-			</Alert.Root>
-		{:else}
-			<Button variant="destructive" disabled={isBusy} onclick={() => (deletePending = true)}>
-				<TrashIcon data-icon="inline-start" aria-hidden="true" />
-				Delete
-			</Button>
-		{/if}
+		</span>
+		<ChevronDownIcon
+			class={`size-4 shrink-0 text-muted-foreground transition-transform ${expanded ? 'rotate-180' : ''}`}
+			aria-hidden="true"
+		/>
+	</button>
 
-		<Button disabled={!canSave} onclick={saveProject}>
-			{#if updateProject.isPending}
-				<Spinner data-icon="inline-start" />
-			{/if}
-			<SaveIcon data-icon="inline-start" aria-hidden="true" />
-			Save changes
-		</Button>
-	</div>
-</Field.FieldSet>
+	{#if expanded}
+		<div
+			id={panelId}
+			class="flex flex-col gap-5 border-t border-border/70 px-4 pt-4 pb-4 sm:px-5 sm:pb-5"
+		>
+			<Field.FieldGroup class="gap-5">
+				<Field.Field data-invalid={!name.trim()}>
+					<Field.FieldLabel for={`management-project-name-${project.id}`}
+						>Name</Field.FieldLabel
+					>
+					<Input
+						id={`management-project-name-${project.id}`}
+						value={name}
+						oninput={updateName}
+						disabled={isBusy}
+						aria-invalid={!name.trim()}
+					/>
+				</Field.Field>
+				<Field.Field>
+					<Field.FieldLabel for={`management-project-description-${project.id}`}>
+						Description
+					</Field.FieldLabel>
+					<Textarea
+						id={`management-project-description-${project.id}`}
+						value={description}
+						oninput={updateDescription}
+						disabled={isBusy}
+					/>
+				</Field.Field>
+			</Field.FieldGroup>
+
+			<div class="flex flex-col-reverse gap-2 sm:flex-row sm:items-center sm:justify-between">
+				{#if deletePending}
+					<Alert.Root
+						variant="destructive"
+						class="flex flex-col gap-3 sm:flex-row sm:items-center"
+					>
+						<TrashIcon aria-hidden="true" />
+						<div class="min-w-0 flex-1">
+							<Alert.Title>Delete {savedName}?</Alert.Title>
+							<Alert.Description>This action cannot be undone.</Alert.Description>
+						</div>
+						<div class="flex flex-col-reverse gap-2 sm:flex-row">
+							<Button
+								variant="outline"
+								disabled={isBusy}
+								onclick={() => (deletePending = false)}
+							>
+								Cancel
+							</Button>
+							<Button variant="destructive" disabled={isBusy} onclick={confirmDelete}>
+								{#if deleteProject.isPending}
+									<Spinner data-icon="inline-start" />
+								{/if}
+								Confirm delete
+							</Button>
+						</div>
+					</Alert.Root>
+				{:else}
+					<Button
+						variant="destructive"
+						disabled={isBusy}
+						onclick={() => (deletePending = true)}
+					>
+						<TrashIcon data-icon="inline-start" aria-hidden="true" />
+						Delete
+					</Button>
+				{/if}
+
+				<Button disabled={!canSave} onclick={saveProject}>
+					{#if updateProject.isPending}
+						<Spinner data-icon="inline-start" />
+					{/if}
+					<SaveIcon data-icon="inline-start" aria-hidden="true" />
+					Save changes
+				</Button>
+			</div>
+		</div>
+	{/if}
+</div>

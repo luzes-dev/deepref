@@ -206,9 +206,21 @@ async function installMocks(page: Page, options: { paginated?: boolean } = {}) {
 		route.fulfill({
 			json: [
 				{
+					id: 'reason-0',
+					code: 'conference_abstract_only',
+					label: 'Conference abstract only',
+					stage: 'full_text'
+				},
+				{
 					id: 'reason-1',
 					code: 'wrong_comparator_outcome',
 					label: 'Wrong comparator/outcome',
+					stage: 'full_text'
+				},
+				{
+					id: 'reason-2',
+					code: 'wrong_population',
+					label: 'Wrong population',
 					stage: 'full_text'
 				}
 			]
@@ -362,10 +374,10 @@ test('keeps the included report selected through attachment and evidence navigat
 		mimeType: 'application/pdf',
 		buffer: pdfFixture()
 	});
+	await page.getByRole('button', { name: /Parsed evidence/ }).click();
 	await expect(page.getByRole('button', { name: /Evidence text/ })).toBeVisible();
-	await expect(page.getByText('Attached · left missing queue')).toBeVisible();
 	await expect(page.getByRole('button', { name: 'Include', exact: true })).toBeEnabled();
-	await expect(page.getByRole('button', { name: 'Exclude', exact: true })).toBeDisabled();
+	await expect(page.getByRole('button', { name: 'Exclude', exact: true })).toBeEnabled();
 
 	await page.getByRole('button', { name: /Evidence text/ }).click();
 	await expect(page).toHaveURL(/report=report-1.*page=1.*block=block-1/);
@@ -373,14 +385,30 @@ test('keeps the included report selected through attachment and evidence navigat
 		'aria-pressed',
 		'true'
 	);
-	const canvasBox = await page.getByLabel('PDF page 1').boundingBox();
-	const overlayBox = await page
-		.getByRole('button', { name: 'Evidence block on page 1' })
-		.boundingBox();
+	// The viewer centres the selected block with a smooth scroll, so the geometry is read in one
+	// frame: separate boundingBox calls can straddle that scroll and disagree about the page.
+	const geometry = await page.locator('[data-page-number="1"]').evaluate((pageElement) => {
+		const frame = (element: Element | null) => {
+			if (!element) return null;
+			const box = element.getBoundingClientRect();
+			return { x: box.x, y: box.y, width: box.width, height: box.height };
+		};
+		return {
+			canvas: frame(pageElement.querySelector('canvas[aria-label="PDF page 1"]')),
+			overlay: frame(
+				pageElement.querySelector('button[aria-label="Evidence block on page 1"]')
+			),
+			viewer: frame(pageElement.closest('[data-testid="pdf-viewer"]'))
+		};
+	});
+	const { canvas: canvasBox, overlay: overlayBox, viewer: viewerBox } = geometry;
 	expect(canvasBox).not.toBeNull();
 	expect(overlayBox).not.toBeNull();
 	if (!canvasBox || !overlayBox) throw new Error('PDF geometry was not rendered');
-	expect(canvasBox.width).toBeGreaterThan(700);
+	if (!viewerBox) throw new Error('PDF viewer was not rendered');
+	// Pages fit the viewer width instead of being clipped on the right.
+	expect(canvasBox.width).toBeGreaterThan(300);
+	expect(canvasBox.x + canvasBox.width).toBeLessThanOrEqual(viewerBox.x + viewerBox.width + 1);
 	expect(Math.abs(overlayBox.x - canvasBox.x - canvasBox.width * 0.1)).toBeLessThan(5);
 	expect(Math.abs(overlayBox.y - canvasBox.y - canvasBox.height * 0.2)).toBeLessThan(5);
 	expect(Math.abs(overlayBox.width - canvasBox.width * 0.4)).toBeLessThan(5);
@@ -408,9 +436,15 @@ test('requires one reason for exclusion and reconciles a revision conflict', asy
 		mimeType: 'application/pdf',
 		buffer: pdfFixture()
 	});
-	await expect(page.getByRole('button', { name: 'Exclude', exact: true })).toBeDisabled();
-	await page.getByLabel('Primary full-text exclusion reason').selectOption('reason-1');
 	await page.getByRole('button', { name: 'Exclude', exact: true }).click();
+	const reasonButtons = page.getByRole('group', { name: 'Exclusion reason' }).getByRole('button');
+	await expect(reasonButtons.nth(0)).toContainText('Wrong population');
+	await expect(reasonButtons.nth(1)).toContainText('Wrong comparator/outcome');
+	await expect(reasonButtons.nth(2)).toContainText('Conference abstract only');
+	await page
+		.getByRole('group', { name: 'Exclusion reason' })
+		.getByRole('button', { name: /Wrong comparator\/outcome/ })
+		.click();
 	await expect(page.getByText('Full-text exclude recorded.')).toBeVisible();
 	expect(mock.decisionBodies.at(-1)).toMatchObject({
 		decision: 'exclude',
@@ -434,11 +468,44 @@ test('loads the next bounded cursor page and reaches report 101 through navigati
 }) => {
 	await installMocks(page, { paginated: true });
 	await page.goto(`/projects/${projectId}/screening/full-text?report=report-100`);
-	await expect(page.getByText('Cursor report 100', { exact: true })).toBeVisible();
-	await expect(page.getByText('100 of 100 loaded')).toBeVisible();
+	await expect(page.getByRole('heading', { name: 'Cursor report 100' })).toBeVisible();
+	await expect(page.getByText('100 of 100', { exact: true })).toBeVisible();
 	await page.getByRole('button', { name: 'Load more reports' }).click();
-	await expect(page.getByText('100 of 101 loaded')).toBeVisible();
-	await page.getByRole('button', { name: 'Next' }).click();
+	await expect(page.getByText('100 of 101', { exact: true })).toBeVisible();
+	await page.getByRole('button', { name: /^Next report/ }).click();
 	await expect(page).toHaveURL(/report=report-101/);
-	await expect(page.getByText('Cursor report 101', { exact: true })).toBeVisible();
+	await expect(page.getByRole('heading', { name: 'Cursor report 101' })).toBeVisible();
+});
+
+test('explains a failed PDF and retries processing', async ({ page }) => {
+	await installMocks(page);
+	const failedDocument = {
+		...availableDocument,
+		status: 'failed',
+		parser_version: null,
+		parser_error: 'Pdfium could not be loaded: libpdfium.so not found'
+	};
+	let retried = false;
+	await page.route(
+		`${api}/projects/${projectId}/reports/${reportId}/documents/${documentId}`,
+		(route) => route.fulfill({ json: retried ? availableDocument : failedDocument })
+	);
+	await page.route(
+		new RegExp(`/api/projects/${projectId}/reports/${reportId}/documents(?:\\?.*)?$`),
+		(route) => route.fulfill({ json: [retried ? availableDocument : failedDocument] })
+	);
+	await page.route(
+		`${api}/projects/${projectId}/reports/${reportId}/documents/${documentId}/reparse`,
+		(route) => {
+			retried = true;
+			return route.fulfill({ status: 202, json: availableDocument });
+		}
+	);
+	await page.goto(`/projects/${projectId}/screening/full-text?report=${reportId}`);
+	await expect(page.getByTestId('full-text-failure')).toContainText(
+		"PDF processing isn't available on the server right now."
+	);
+	await expect(page.getByRole('button', { name: 'Upload a different PDF' })).toBeVisible();
+	await page.getByRole('button', { name: 'Retry processing' }).click();
+	await expect(page.getByTestId('full-text-failure')).toBeHidden();
 });

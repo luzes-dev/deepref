@@ -91,6 +91,7 @@ export const ASSISTANT_TOOL_NAMES = [
 	'search_project_reports',
 	'get_screening_state',
 	'get_study',
+	'list_studies',
 	'get_appraisal',
 	'propose_screening_decision',
 	'propose_duplicate_merge',
@@ -314,6 +315,16 @@ export const ASSISTANT_TOOL_METADATA = {
 			const args = withStudy(projectId, values);
 			return args ? { tool: 'get_study', args } : null;
 		}
+	},
+	list_studies: {
+		name: 'list_studies',
+		kind: AssistantToolKind.read,
+		label: 'List studies',
+		description: 'List the studies in this project with their design and report counts.',
+		fields: [],
+		reviewDestination: null,
+		defaults: {},
+		buildRequest: (projectId) => ({ tool: 'list_studies', args: { project_id: projectId } })
 	},
 	get_appraisal: {
 		name: 'get_appraisal',

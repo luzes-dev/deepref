@@ -3,7 +3,6 @@
 	import * as Alert from '@deepref/ui/alert';
 	import { Skeleton } from '@deepref/ui/skeleton';
 	import { Spinner } from '@deepref/ui/spinner';
-	import DependencyHealthWatcher from '$lib/shell/DependencyHealthWatcher.svelte';
 	import { shouldPollIngestion } from '$lib/api/helpers';
 	import {
 		getListProjectReportsQueryKey,
@@ -117,7 +116,6 @@
 </script>
 
 <div class="flex h-svh flex-col overflow-hidden bg-background">
-	<DependencyHealthWatcher />
 	<div class="min-h-0 flex-1">
 		{#if projectsQuery.error}
 			<div class="p-4">

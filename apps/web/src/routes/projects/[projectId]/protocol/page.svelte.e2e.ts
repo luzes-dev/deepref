@@ -123,7 +123,12 @@ test('deep-links, refreshes, publishes, and amends a protocol version', async ({
 		async (route) => {
 			if (route.request().method() === 'GET') {
 				if (!protocol) {
-					await route.fulfill({ status: 404, json: { message: 'protocol not found' } });
+					// A project without a protocol yet answers 200 with null, not a 404.
+					await route.fulfill({
+						status: 200,
+						contentType: 'application/json',
+						body: 'null'
+					});
 					return;
 				}
 				await route.fulfill({ json: protocol });
@@ -162,10 +167,36 @@ test('deep-links, refreshes, publishes, and amends a protocol version', async ({
 		}
 	);
 
+	await page.route(
+		'http://localhost:4173/api/projects/project-1/review/protocol/versions',
+		async (route) => {
+			if (!protocol) {
+				await route.fulfill({ json: { items: [] } });
+				return;
+			}
+			const published = { ...protocol, published_at: '2026-01-02T00:00:00Z' };
+			await route.fulfill({
+				json: {
+					items: [
+						{
+							...published,
+							id: 'protocol-v1',
+							version: 1,
+							question: 'Earlier question?'
+						},
+						{ ...published, version: 2 }
+					]
+				}
+			});
+		}
+	);
+
 	await page.goto('/projects/project-1/protocol');
 	await expect(page).toHaveURL(/\/projects\/project-1\/protocol$/);
 	await page.reload();
 	await expect(page.getByRole('heading', { name: 'Review protocol' })).toBeVisible();
+	await expect(page.getByText('Not saved yet')).toBeVisible();
+	await expect(page.getByText('Saved', { exact: true })).toHaveCount(0);
 
 	await page.getByLabel('Name').fill(draftProtocol.name);
 	await page.getByLabel('Objective').fill(draftProtocol.objective);
@@ -177,20 +208,20 @@ test('deep-links, refreshes, publishes, and amends a protocol version', async ({
 	await page.getByLabel('Outcome').fill('Sleep quality');
 	await page.getByRole('tab', { name: 'Eligibility criteria' }).click();
 	await page.getByRole('button', { name: 'Add criterion' }).click();
+	await expect(page.getByText('Complete the protocol before saving')).toHaveCount(0);
+	await expect(page.getByTestId('protocol-issues')).toContainText('1 criterion without label');
 	await page.getByLabel('Label').last().fill('Adult population');
 	await page.getByLabel('Description').last().fill('Participants are adults.');
 	await page.setViewportSize({ width: 1280, height: 500 });
-	const scroll = page.getByTestId('workspace-scroll');
-	await scroll.evaluate((element) => {
-		element.scrollTop = element.scrollHeight;
-	});
-	await expect.poll(() => scroll.evaluate((element) => element.scrollTop)).toBeGreaterThan(0);
+	await page.getByRole('button', { name: 'Save draft' }).scrollIntoViewIfNeeded();
 	await expect(page.getByRole('button', { name: 'Save draft' })).toBeInViewport();
 	await page.getByRole('button', { name: 'Save draft' }).click();
-	await expect(page.getByText('v1')).toBeVisible();
+	await expect(page.getByText('Draft · version 1')).toBeVisible();
 	await expect(page.getByRole('button', { name: 'Publish version' })).toBeEnabled();
 	await page.getByRole('button', { name: 'Publish version' }).click();
-	await expect(page.getByText('published', { exact: true })).toBeVisible();
+	await expect(page.getByTestId('protocol-document')).toBeVisible();
+	await page.getByTestId('protocol-versions').getByText('Versions (2)').click();
+	await expect(page.getByTestId('protocol-versions')).toContainText('Changed Question');
 
 	await page.getByRole('button', { name: 'Amend published version' }).first().click();
 	await page.getByRole('tab', { name: 'Research question' }).click();
@@ -212,7 +243,8 @@ test('preserves PICO values across custom framework switching and validates dupl
 		'http://localhost:4173/api/projects/project-1/review/protocol',
 		async (route) => {
 			if (route.request().method() === 'GET') {
-				await route.fulfill({ status: 404, json: { message: 'protocol not found' } });
+				// A project without a protocol yet answers 200 with null, not a 404.
+				await route.fulfill({ status: 200, contentType: 'application/json', body: 'null' });
 				return;
 			}
 			throw new Error('The duplicate-key scenario should not submit.');
@@ -236,7 +268,7 @@ test('preserves PICO values across custom framework switching and validates dupl
 	await page.getByLabel('Comparator').fill('Usual care');
 	await page.getByLabel('Outcome').fill('Sleep quality');
 
-	await page.getByRole('button', { name: 'Pico' }).click();
+	await page.getByRole('button', { name: 'PICO' }).click();
 	await page.getByRole('option', { name: 'Custom' }).click();
 	const customNames = page.getByPlaceholder('Field name');
 	const customDefinitions = page.getByPlaceholder('Definition');
@@ -249,14 +281,16 @@ test('preserves PICO values across custom framework switching and validates dupl
 	await expect(
 		page.getByText('Custom framework field names must be unique: scope.')
 	).toBeVisible();
-	await expect(page.getByRole('button', { name: 'Save draft' })).toBeDisabled();
+	await expect(page.getByTestId('protocol-issues')).toContainText(
+		'Duplicate framework field names'
+	);
 
 	await customNames.nth(1).fill('intervention');
 	await page.getByRole('button', { name: 'Custom' }).click();
-	await page.getByRole('option', { name: 'Pico', exact: true }).click();
+	await page.getByRole('option', { name: 'PICO', exact: true }).click();
 	await expect(page.getByLabel('Population')).toHaveValue('Adults');
 	await expect(page.getByLabel('Intervention')).toHaveValue('Exercise');
-	await page.getByRole('button', { name: 'Pico' }).click();
+	await page.getByRole('button', { name: 'PICO' }).click();
 	await page.getByRole('option', { name: 'Custom' }).click();
 	await expect(customNames.nth(0)).toHaveValue('scope');
 	await expect(customNames.nth(1)).toHaveValue('intervention');
@@ -310,4 +344,94 @@ test('reconciles a stale save conflict before saving the refreshed revision', as
 	await expect.poll(() => saveCount).toBe(2);
 	expect(savedBodies[1]).toMatchObject({ expected_revision: 2 });
 	await expect(page.getByLabel('Name')).toHaveValue('Recovered and saved');
+});
+
+test('autosaves a complete draft and restores an incomplete one after reload', async ({ page }) => {
+	await mockProjectShell(page);
+	const saves: Array<Record<string, unknown>> = [];
+	await page.route(
+		'http://localhost:4173/api/projects/project-1/review/protocol',
+		async (route) => {
+			if (route.request().method() === 'GET') {
+				// A project without a protocol yet answers 200 with null, not a 404.
+				await route.fulfill({ status: 200, contentType: 'application/json', body: 'null' });
+				return;
+			}
+			const body = route.request().postDataJSON();
+			saves.push(body);
+			await route.fulfill({
+				json: {
+					...draftProtocol,
+					...body,
+					framework_kind: body.framework.kind,
+					framework_fields: body.framework.fields,
+					criteria: [],
+					revision: 1
+				}
+			});
+		}
+	);
+	page.on('dialog', (dialog) => void dialog.accept());
+
+	await page.goto('/projects/project-1/protocol');
+	await page.getByLabel('Name').fill('Autosaved protocol');
+	await page.getByLabel('Objective').fill('Objective text');
+	await page.getByRole('textbox', { name: 'Question', exact: true }).fill('Question text?');
+	await expect(page.getByText('Unsaved changes')).toBeVisible();
+
+	// Incomplete framework: nothing reaches the server, but the form survives a reload.
+	await page.reload();
+	await expect(page.getByText('Restored unsaved changes')).toBeVisible();
+	await expect(page.getByLabel('Name')).toHaveValue('Autosaved protocol');
+	expect(saves).toHaveLength(0);
+
+	await page.getByRole('tab', { name: 'Framework', exact: true }).click();
+	await page.getByLabel('Population').fill('Adults');
+	await page.getByLabel('Intervention').fill('Exercise');
+	await page.getByLabel('Outcome').fill('Sleep quality');
+	await expect.poll(() => saves.length, { timeout: 6000 }).toBe(1);
+	await expect(page.getByText('Saved', { exact: true })).toBeVisible();
+	expect(saves[0]).toMatchObject({ name: 'Autosaved protocol', expected_revision: 0 });
+});
+
+test('keeps an amendment on this device until it is saved explicitly', async ({ page }) => {
+	await mockProjectShell(page);
+	const published = {
+		...draftProtocol,
+		id: 'protocol-published',
+		status: 'published',
+		published_at: '2026-01-02T00:00:00Z'
+	};
+	const writes: string[] = [];
+	await page.route(
+		/http:\/\/localhost:4173\/api\/projects\/project-1\/review\/protocol(\/.*)?$/,
+		async (route) => {
+			const request = route.request();
+			if (request.method() !== 'GET') {
+				writes.push(`${request.method()} ${new URL(request.url()).pathname}`);
+				await route.fulfill({ status: 500, json: { message: 'unexpected write' } });
+				return;
+			}
+			if (request.url().endsWith('/versions')) {
+				await route.fulfill({ json: { items: [published] } });
+				return;
+			}
+			await route.fulfill({ json: published });
+		}
+	);
+	page.on('dialog', (dialog) => void dialog.accept());
+
+	await page.goto('/projects/project-1/protocol');
+	await page.getByRole('button', { name: 'Amend published version' }).click();
+	await page.getByLabel('Objective').fill('An amended objective');
+	await expect(page.getByText('Kept on this device until you save')).toBeVisible();
+	// Longer than the autosave delay: an amendment must not create a server version.
+	await page.waitForTimeout(2500);
+	expect(writes).toEqual([]);
+
+	await page.reload();
+	await expect(page.getByLabel('Objective')).toHaveValue('An amended objective');
+	await page.getByRole('button', { name: 'Discard amendment' }).click();
+	await expect(page.getByRole('button', { name: 'Amend published version' })).toBeVisible();
+	expect(writes).toEqual([]);
 });

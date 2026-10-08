@@ -6,10 +6,14 @@
  */
 
 export interface DedupeRunDto {
+	/** Fuzzy proposals merged automatically by the "act and notify" setting. */
+	auto_accepted: number;
+	/** Exact-identifier records linked to an existing report. */
 	auto_linked: number;
 	conflicts: number;
 	created_reports: number;
 	processed: number;
 	project_id: string;
+	/** Proposals written by this run, including any that were then merged. */
 	proposals_created: number;
 }

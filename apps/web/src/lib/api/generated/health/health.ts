@@ -17,6 +17,7 @@ import type {
 import type {
 	ApiErrorBody,
 	DependencyStatus,
+	GetDependencyStatusParams,
 	LivenessResponse,
 	ReadinessResponse
 } from '../models';
@@ -126,38 +127,54 @@ export type getDependencyStatusResponse200 = {
 export type getDependencyStatusResponseSuccess = getDependencyStatusResponse200 & {
 	headers: Headers;
 };
-export const getGetDependencyStatusUrl = () => {
-	return `/api/health/dependencies`;
+export const getGetDependencyStatusUrl = (params?: GetDependencyStatusParams) => {
+	const normalizedParams = new URLSearchParams();
+
+	Object.entries(params || {}).forEach(([key, value]) => {
+		if (value !== undefined) {
+			normalizedParams.append(key, value === null ? 'null' : String(value));
+		}
+	});
+
+	const stringifiedParams = normalizedParams.toString();
+
+	return stringifiedParams.length > 0
+		? `/api/health/dependencies?${stringifiedParams}`
+		: `/api/health/dependencies`;
 };
 
 export const getDependencyStatus = async (
+	params?: GetDependencyStatusParams,
 	options?: Parameters<typeof customFetch>[1]
 ): Promise<getDependencyStatusResponseSuccess> => {
-	return customFetch<getDependencyStatusResponseSuccess>(getGetDependencyStatusUrl(), {
+	return customFetch<getDependencyStatusResponseSuccess>(getGetDependencyStatusUrl(params), {
 		...options,
 		method: 'GET'
 	});
 };
 
-export const getGetDependencyStatusQueryKey = () => {
-	return [`/api/health/dependencies`] as const;
+export const getGetDependencyStatusQueryKey = (params?: GetDependencyStatusParams) => {
+	return [`/api/health/dependencies`, ...(params ? [params] : [])] as const;
 };
 
 export const getGetDependencyStatusQueryOptions = <
 	TData = Awaited<ReturnType<typeof getDependencyStatus>>,
 	TError = ErrorType<unknown>
->(options?: {
-	query?: Partial<
-		CreateQueryOptions<Awaited<ReturnType<typeof getDependencyStatus>>, TError, TData>
-	>;
-	request?: SecondParameter<typeof customFetch>;
-}) => {
+>(
+	params?: GetDependencyStatusParams,
+	options?: {
+		query?: Partial<
+			CreateQueryOptions<Awaited<ReturnType<typeof getDependencyStatus>>, TError, TData>
+		>;
+		request?: SecondParameter<typeof customFetch>;
+	}
+) => {
 	const { query: queryOptions, request: requestOptions } = options ?? {};
 
-	const queryKey = queryOptions?.queryKey ?? getGetDependencyStatusQueryKey();
+	const queryKey = queryOptions?.queryKey ?? getGetDependencyStatusQueryKey(params);
 
 	const queryFn: QueryFunction<Awaited<ReturnType<typeof getDependencyStatus>>> = ({ signal }) =>
-		getDependencyStatus({ signal, ...requestOptions });
+		getDependencyStatus(params, { signal, ...requestOptions });
 
 	return { queryKey, queryFn, ...queryOptions } as CreateQueryOptions<
 		Awaited<ReturnType<typeof getDependencyStatus>>,
@@ -175,6 +192,7 @@ export function createGetDependencyStatus<
 	TData = Awaited<ReturnType<typeof getDependencyStatus>>,
 	TError = ErrorType<unknown>
 >(
+	params?: () => GetDependencyStatusParams,
 	options?: () => {
 		query?: Partial<
 			CreateQueryOptions<Awaited<ReturnType<typeof getDependencyStatus>>, TError, TData>
@@ -184,7 +202,7 @@ export function createGetDependencyStatus<
 	queryClient?: () => QueryClient
 ): CreateQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> } {
 	const query = createQuery(
-		() => getGetDependencyStatusQueryOptions(options?.()),
+		() => getGetDependencyStatusQueryOptions(params?.(), options?.()),
 		queryClient
 	) as CreateQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> };
 
@@ -196,6 +214,7 @@ export const prefetchGetDependencyStatusQuery = async <
 	TError = ErrorType<unknown>
 >(
 	queryClient: QueryClient,
+	params?: GetDependencyStatusParams,
 	options?: {
 		query?: Partial<
 			CreateQueryOptions<Awaited<ReturnType<typeof getDependencyStatus>>, TError, TData>
@@ -203,7 +222,7 @@ export const prefetchGetDependencyStatusQuery = async <
 		request?: SecondParameter<typeof customFetch>;
 	}
 ): Promise<QueryClient> => {
-	const queryOptions = getGetDependencyStatusQueryOptions(options);
+	const queryOptions = getGetDependencyStatusQueryOptions(params, options);
 
 	await queryClient.prefetchQuery(queryOptions);
 

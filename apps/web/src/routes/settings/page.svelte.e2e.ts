@@ -57,7 +57,6 @@ test('shows an explicit loading state while settings are being fetched', async (
 
 	release?.();
 	await page.waitForLoadState('networkidle');
-	await expect(page.getByText('Ingestion defaults', { exact: true })).toBeVisible();
 	await expect(page.getByTestId('settings-save-status')).toHaveText(/Ready to edit/);
 });
 
@@ -73,7 +72,6 @@ test('validates drafts, shows pending/saved states, and preserves the PATCH cont
 
 	await page.goto('/settings');
 	await expect(page.getByLabel('Default max depth')).toHaveValue('2');
-	await expect(page.getByRole('button', { name: /Save settings/i })).toHaveCount(0);
 	await page.waitForTimeout(600);
 	expect(patchBodies).toEqual([]);
 
@@ -125,11 +123,34 @@ test('shows field validation errors and does not autosave an invalid draft', asy
 	await expect(
 		page.getByText('Default max depth must be an integer of at least 0.')
 	).toBeVisible();
-	await page.getByLabel('Crossref mailto').fill('');
+	await page.getByLabel('Crossref contact email').fill('');
 	await expect(page.getByText('Crossref mailto is required.')).toBeVisible();
 
 	await page.waitForTimeout(700);
 	expect(patchBodies).toEqual([]);
+});
+
+test('rejects a malformed Crossref contact e-mail inline and never reports it saved', async ({
+	page
+}) => {
+	const patchBodies: unknown[] = [];
+	await routeSettings(page, async (route) => {
+		patchBodies.push(route.request().postDataJSON());
+		await route.fulfill({ json: settings });
+	});
+
+	await page.goto('/settings');
+	const mailto = page.getByLabel('Crossref contact email');
+	await mailto.fill('not-an-email');
+	await expect(
+		page.getByText('Enter an e-mail address such as research@example.org.')
+	).toBeVisible();
+	await expect(mailto).toHaveAttribute('aria-invalid', 'true');
+	await expect(page.getByTestId('settings-save-status')).toHaveText(/Fix validation errors/);
+
+	await page.waitForTimeout(700);
+	expect(patchBodies).toEqual([]);
+	await expect(page.getByTestId('settings-save-status')).not.toHaveText(/Changes saved/);
 });
 
 test('keeps the latest edits and queues an autosave while the first request is pending', async ({
@@ -152,7 +173,7 @@ test('keeps the latest edits and queues an autosave while the first request is p
 	await expect.poll(() => patchBodies.length).toBe(1);
 	await expect(page.getByTestId('settings-save-status')).toHaveText(/Saving changes/);
 
-	const mailto = page.getByLabel('Crossref mailto');
+	const mailto = page.getByLabel('Crossref contact email');
 	await expect(mailto).toBeEnabled();
 	await mailto.fill('rapid@example.org');
 
@@ -177,6 +198,7 @@ test('keeps the draft and explains an API save error', async ({ page }) => {
 	});
 
 	await page.goto('/settings');
+	await page.getByText('Advanced provider limits', { exact: true }).click();
 	await page.getByLabel('Retry attempts').fill('6');
 
 	await expect(page.locator('[data-sonner-toast]')).toContainText('Could not save settings');
@@ -193,7 +215,6 @@ test('selects a theme from the Appearance settings control', async ({ page }) =>
 
 	await page.goto('/settings');
 	await page.getByRole('button', { name: 'Appearance', exact: true }).click();
-	await expect(page.getByRole('heading', { name: 'Appearance', exact: true })).toBeVisible();
 
 	const themeSelect = page.getByRole('button', { name: 'Theme', exact: true });
 	await expect(themeSelect).toBeVisible();

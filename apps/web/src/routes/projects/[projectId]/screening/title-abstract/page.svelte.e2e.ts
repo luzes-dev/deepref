@@ -340,7 +340,7 @@ test('decides A, advances to B, then U restores A immediately and persists histo
 	await page.goto(`/projects/${projectId}/screening/title-abstract`);
 	await expect(page.getByRole('heading', { name: 'Screening report 01' })).toBeVisible();
 
-	await page.getByRole('button', { name: /Include/ }).click();
+	await page.getByRole('button', { name: 'Include', exact: true }).click();
 	await expect(page.getByRole('heading', { name: 'Screening report 02' })).toBeVisible();
 	await page.evaluate(() => {
 		document.body.tabIndex = -1;
@@ -349,8 +349,9 @@ test('decides A, advances to B, then U restores A immediately and persists histo
 	await page.keyboard.press('u');
 	await expect(page.getByRole('heading', { name: 'Screening report 01' })).toBeVisible();
 	await expect.poll(() => mock.undoCompleted).toBe(true);
-	await expect(page.getByText('Undo', { exact: true })).toBeVisible();
-	await expect(page.getByText(/Undoes/)).toBeVisible();
+	const history = page.getByRole('list', { name: 'Auditable screening history' });
+	await expect(history.getByText('Undid the title & abstract decision')).toBeVisible();
+	await expect(history.getByText('Included at title & abstract')).toBeVisible();
 	expect(mock.reports[0].title_abstract_status).toBe('unscreened');
 	expect(mock.reports[0].revision).toBe(2);
 
@@ -361,20 +362,36 @@ test('decides A, advances to B, then U restores A immediately and persists histo
 test('guards shortcuts in controls and an actually open overlay', async ({ page }) => {
 	const mock = await setup(page);
 	await page.goto(`/projects/${projectId}/screening/title-abstract`);
-	await page.getByLabel('Search title or abstract').focus();
+	const search = page.getByLabel('Search title or abstract');
+	await expect(search).toBeVisible();
+	await search.focus();
+	await expect(search).toBeFocused();
 	await page.keyboard.press('i');
-	expect(mock.reports[0].revision).toBe(0);
+	await expect(search).toHaveValue('i');
+	await expect
+		.poll(() => mock.queueRequests.some((request) => request.includes('search=i')))
+		.toBe(true);
+	expect(mock.reports.every((report) => report.revision === 0)).toBe(true);
 
 	await page.evaluate(() => {
-		const overlay = document.createElement('div');
+		const overlay = document.createElement('dialog');
+		overlay.id = 'shortcut-test-dialog';
 		overlay.setAttribute('role', 'dialog');
-		overlay.dataset.state = 'open';
+		overlay.textContent = 'Shortcut guard overlay';
 		document.body.append(overlay);
+		overlay.show();
 		document.body.tabIndex = -1;
 		document.body.focus();
 	});
+	await expect(page.getByRole('dialog')).toBeVisible();
 	await page.keyboard.press('i');
-	expect(mock.reports[0].revision).toBe(0);
+	expect(mock.reports.every((report) => report.revision === 0)).toBe(true);
+	await page.evaluate(() => document.getElementById('shortcut-test-dialog')?.remove());
+	await page.keyboard.press('i');
+	await expect.poll(() => mock.decisionExpectedRevisions).toEqual([0]);
+	await expect(page.getByRole('heading', { name: 'Screening report 02' })).toBeVisible();
+	expect(mock.reports[0].revision).toBe(1);
+	expect(mock.reports.slice(1).every((report) => report.revision === 0)).toBe(true);
 });
 
 test('renders virtual rows and fetches the second cursor page', async ({ page }) => {
@@ -399,27 +416,30 @@ test('preserves mode, status, sort, and report through refresh and history navig
 	await setup(page, { count: 8 });
 	const url = `/projects/${projectId}/screening/title-abstract?mode=table&status=all&sort=title_desc&report=report-2`;
 	await page.goto(url);
-	await expect(page.getByText('Table mode')).toBeVisible();
+	await expect(page.getByTestId('screening-table')).toBeVisible();
 	await page.reload();
 	await expect(page).toHaveURL(/mode=table.*status=all.*sort=title_desc.*report=report-2/);
 	await page.getByRole('button', { name: /Focus/ }).click();
 	await expect(page).toHaveURL(/status=all.*sort=title_desc.*report=report-2/);
-	await expect(page.getByText('Focus mode')).toBeVisible();
+	await expect(page.getByTestId('screening-table')).toHaveCount(0);
 	await page.goBack();
 	await expect(page).toHaveURL(/mode=table.*status=all.*sort=title_desc.*report=report-2/);
+	await expect(page.getByTestId('screening-table')).toBeVisible();
 	await page.goForward();
 	await expect(page).toHaveURL(/status=all.*sort=title_desc.*report=report-2/);
-	await expect(page.getByText('Focus mode')).toBeVisible();
+	await expect(page.getByTestId('screening-table')).toHaveCount(0);
 });
 
 test('reconciles a 409 with authoritative state and sends its revision next', async ({ page }) => {
 	const mock = await setup(page, { conflict: true });
 	await page.goto(`/projects/${projectId}/screening/title-abstract`);
-	await page.getByRole('button', { name: /Include/ }).click();
+	await page.getByRole('button', { name: 'Include', exact: true }).click();
 	await expect(page.getByRole('status')).toContainText('authoritative server state');
-	await expect(page.locator('#screening-status')).toHaveValue('all');
+	await expect(
+		page.getByRole('group', { name: 'Queue status' }).getByRole('button', { name: /^All/ })
+	).toHaveAttribute('aria-pressed', 'true');
 	await expect(page.getByRole('heading', { name: 'Screening report 01' })).toBeVisible();
-	await page.getByRole('button', { name: /Maybe/ }).click();
+	await page.getByRole('button', { name: 'Maybe', exact: true }).click();
 	await expect.poll(() => mock.decisionExpectedRevisions.at(-1)).toBe(1);
 	await expect(page.getByRole('heading', { name: 'Screening report 02' })).toBeVisible();
 });
@@ -539,8 +559,8 @@ test('reviews a deterministic title and abstract AI proposal before applying it'
 	const ai = page.getByTestId('ai-proposal-review');
 	await ai.getByRole('button', { name: 'Request suggestion' }).click();
 	await expect(ai.getByText('Population', { exact: true })).toBeVisible();
-	await expect(ai.getByText('maybe', { exact: true })).toBeVisible();
-	await expect(ai.getByText(/Report metadata.*hash a{12}/)).toBeVisible();
+	await expect(ai.getByText('Maybe', { exact: true })).toBeVisible();
+	await expect(ai.getByTitle(/Report metadata.*hash a{12}/)).toBeVisible();
 	await expect(ai.getByText('Abstract does not identify the target population.')).toBeVisible();
 	await ai.getByRole('button', { name: 'Approve and apply' }).click();
 	await expect(ai.getByText('No pending suggestion', { exact: true })).toBeVisible();

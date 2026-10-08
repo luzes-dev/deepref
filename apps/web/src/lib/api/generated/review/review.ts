@@ -24,6 +24,7 @@ import type {
 	ListTitleAbstractScreeningQueueParams,
 	PrismaDto,
 	ProtocolDto,
+	ProtocolVersionsResponse,
 	PublishProtocolRequest,
 	SaveProtocolRequest,
 	ScreenReportRequest,
@@ -654,7 +655,7 @@ export const createUndoScreening = <TError = ErrorType<ApiErrorBody>, TContext =
 	return createMutation(() => ({ ...getUndoScreeningMutationOptions(options?.()) }), queryClient);
 };
 export type getProjectReviewProtocolResponse200 = {
-	data: ProtocolDto;
+	data: null | ProtocolDto;
 	status: 200;
 };
 
@@ -1047,6 +1048,143 @@ export const createPublishProjectReviewProtocol = <
 		queryClient
 	);
 };
+export type listProjectReviewProtocolVersionsResponse200 = {
+	data: ProtocolVersionsResponse;
+	status: 200;
+};
+
+export type listProjectReviewProtocolVersionsResponse404 = {
+	data: ApiErrorBody;
+	status: 404;
+};
+
+export type listProjectReviewProtocolVersionsResponse500 = {
+	data: ApiErrorBody;
+	status: 500;
+};
+
+export type listProjectReviewProtocolVersionsResponseSuccess =
+	listProjectReviewProtocolVersionsResponse200 & {
+		headers: Headers;
+	};
+export type listProjectReviewProtocolVersionsResponseError = (
+	listProjectReviewProtocolVersionsResponse404 | listProjectReviewProtocolVersionsResponse500
+) & {
+	headers: Headers;
+};
+
+export const getListProjectReviewProtocolVersionsUrl = (projectId: string) => {
+	return `/api/projects/${projectId}/review/protocol/versions`;
+};
+
+export const listProjectReviewProtocolVersions = async (
+	projectId: string,
+	options?: Parameters<typeof customFetch>[1]
+): Promise<listProjectReviewProtocolVersionsResponseSuccess> => {
+	return customFetch<listProjectReviewProtocolVersionsResponseSuccess>(
+		getListProjectReviewProtocolVersionsUrl(projectId),
+		{
+			...options,
+			method: 'GET'
+		}
+	);
+};
+
+export const getListProjectReviewProtocolVersionsQueryKey = (projectId: string) => {
+	return [`/api/projects/${projectId}/review/protocol/versions`] as const;
+};
+
+export const getListProjectReviewProtocolVersionsQueryOptions = <
+	TData = Awaited<ReturnType<typeof listProjectReviewProtocolVersions>>,
+	TError = ErrorType<ApiErrorBody>
+>(
+	projectId: string,
+	options?: {
+		query?: Partial<
+			CreateQueryOptions<
+				Awaited<ReturnType<typeof listProjectReviewProtocolVersions>>,
+				TError,
+				TData
+			>
+		>;
+		request?: SecondParameter<typeof customFetch>;
+	}
+) => {
+	const { query: queryOptions, request: requestOptions } = options ?? {};
+
+	const queryKey =
+		queryOptions?.queryKey ?? getListProjectReviewProtocolVersionsQueryKey(projectId);
+
+	const queryFn: QueryFunction<Awaited<ReturnType<typeof listProjectReviewProtocolVersions>>> = ({
+		signal
+	}) => listProjectReviewProtocolVersions(projectId, { signal, ...requestOptions });
+
+	return {
+		queryKey,
+		queryFn,
+		enabled: projectId !== null && projectId !== undefined,
+		...queryOptions
+	} as CreateQueryOptions<
+		Awaited<ReturnType<typeof listProjectReviewProtocolVersions>>,
+		TError,
+		TData
+	> & { queryKey: DataTag<QueryKey, TData, TError> };
+};
+
+export type ListProjectReviewProtocolVersionsQueryResult = NonNullable<
+	Awaited<ReturnType<typeof listProjectReviewProtocolVersions>>
+>;
+export type ListProjectReviewProtocolVersionsQueryError = ErrorType<ApiErrorBody>;
+
+export function createListProjectReviewProtocolVersions<
+	TData = Awaited<ReturnType<typeof listProjectReviewProtocolVersions>>,
+	TError = ErrorType<ApiErrorBody>
+>(
+	projectId: () => string,
+	options?: () => {
+		query?: Partial<
+			CreateQueryOptions<
+				Awaited<ReturnType<typeof listProjectReviewProtocolVersions>>,
+				TError,
+				TData
+			>
+		>;
+		request?: SecondParameter<typeof customFetch>;
+	},
+	queryClient?: () => QueryClient
+): CreateQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> } {
+	const query = createQuery(
+		() => getListProjectReviewProtocolVersionsQueryOptions(projectId(), options?.()),
+		queryClient
+	) as CreateQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> };
+
+	return query;
+}
+
+export const prefetchListProjectReviewProtocolVersionsQuery = async <
+	TData = Awaited<ReturnType<typeof listProjectReviewProtocolVersions>>,
+	TError = ErrorType<ApiErrorBody>
+>(
+	queryClient: QueryClient,
+	projectId: string,
+	options?: {
+		query?: Partial<
+			CreateQueryOptions<
+				Awaited<ReturnType<typeof listProjectReviewProtocolVersions>>,
+				TError,
+				TData
+			>
+		>;
+		request?: SecondParameter<typeof customFetch>;
+	}
+): Promise<QueryClient> => {
+	const queryOptions = getListProjectReviewProtocolVersionsQueryOptions(projectId, options);
+
+	await queryClient.prefetchQuery(queryOptions);
+
+	return queryClient;
+};
+
 export type getScreeningQueueResponse200 = {
 	data: ScreeningQueueDto;
 	status: 200;

@@ -8,6 +8,11 @@
 export interface MissingFullTextDto {
 	/** @nullable */
 	abstract_text?: string | null;
+	/**
+	 * The report's DOI, used to look up an open-access copy.
+	 * @nullable
+	 */
+	doi?: string | null;
 	report_id: string;
 	status: string;
 	/** @nullable */

@@ -1,4 +1,5 @@
 import { toast } from 'svelte-sonner';
+import { plainNotificationText } from './notification-copy';
 
 export type NotifyVariant = 'success' | 'error' | 'warning' | 'info';
 
@@ -40,15 +41,17 @@ export function notifyNotification(notification: {
 	title: string;
 	body?: string | null;
 }): string | number {
-	const description = notification.body?.trim() ? notification.body : undefined;
+	// Same plain-language copy as the bell: decoded titles, translated failures.
+	const copy = plainNotificationText(notification);
+	const description = copy.body ?? undefined;
 	switch (notification.severity) {
 		case 'success':
-			return notifySuccess(notification.title, description);
+			return notifySuccess(copy.title, description);
 		case 'warning':
-			return notifyWarning(notification.title, description);
+			return notifyWarning(copy.title, description);
 		case 'error':
-			return toast.error(notification.title, { description });
+			return toast.error(copy.title, { description });
 		default:
-			return notifyInfo(notification.title, description);
+			return notifyInfo(copy.title, description);
 	}
 }

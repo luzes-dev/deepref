@@ -13,4 +13,9 @@ export interface MarkNotificationsReadRequest {
 	 * @nullable
 	 */
 	ids?: string[] | null;
+	/**
+	 * With `all`, mark only this project's notifications read.
+	 * @nullable
+	 */
+	project_id?: string | null;
 }

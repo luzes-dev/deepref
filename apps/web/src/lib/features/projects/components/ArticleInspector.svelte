@@ -4,7 +4,7 @@
 	import { CopyButton } from '@deepref/ui/copy-button';
 	import { Skeleton } from '@deepref/ui/skeleton';
 	import { createGetProjectReport } from '$lib/api/generated/reports/reports';
-	import { MetricTile, StatePanel, Surface } from '@deepref/ui/layout';
+	import { StatePanel } from '@deepref/ui/layout';
 	import CircleAlertIcon from '@lucide/svelte/icons/circle-alert';
 	import PanelRightCloseIcon from '@lucide/svelte/icons/panel-right-close';
 	import PanelRightOpenIcon from '@lucide/svelte/icons/panel-right-open';
@@ -50,25 +50,12 @@
 			>
 				<PanelRightOpenIcon data-icon />
 			</Button>
-			<div class="flex min-h-0 flex-1 items-center justify-center">
-				<div
-					class="flex -rotate-180 items-center gap-3 text-muted-foreground [writing-mode:vertical-rl]"
-				>
-					<span class="text-xs font-medium tracking-widest-caps uppercase">Inspector</span
-					>
-					<span class="max-h-48 overflow-hidden text-sm font-medium text-ellipsis">
-						{workspace.selectedArticle ? 'Article' : 'No article'}
-					</span>
-				</div>
-			</div>
+			<span class="text-2xs text-muted-foreground">Details</span>
 		</div>
 	{:else}
 		<div class="flex items-center justify-between gap-2 border-b p-4">
 			<div class="min-w-0">
-				<h2 class="truncate font-medium">Article inspector</h2>
-				<p class="truncate text-xs text-muted-foreground">
-					{workspace.selectedArticle ?? 'No article selected'}
-				</p>
+				<h2 class="truncate text-sm font-medium">Article details</h2>
 			</div>
 			<div class="flex items-center gap-1">
 				<Button
@@ -132,21 +119,12 @@
 				</div>
 			{:else if article}
 				<div class="flex flex-col gap-4">
-					{#if article.metrics_stale}
-						<Alert.Root data-testid="article-stale-metrics">
-							<CircleAlertIcon />
-							<Alert.Title>Metrics are stale</Alert.Title>
-							<Alert.Description>
-								Last computed {article.metrics_as_of
-									? new Date(article.metrics_as_of).toLocaleString()
-									: 'not yet'}.
-							</Alert.Description>
-						</Alert.Root>
-					{:else if article.metrics_as_of}
-						<p class="text-sm text-muted-foreground">
-							Metrics as of {new Date(article.metrics_as_of).toLocaleString()}
-						</p>
-					{/if}
+					<div class="text-xs text-muted-foreground">
+						{article.issued_year ?? 'Year unavailable'} · {article.type ??
+							'Type unavailable'}
+						{#if article.publisher}<span class="mt-1 block">{article.publisher}</span
+							>{/if}
+					</div>
 					<div class="flex items-start justify-between gap-3">
 						<div class="min-w-0">
 							<h3 class="text-lg font-semibold wrap-break-word">
@@ -159,43 +137,51 @@
 						{#if article.doi}<CopyButton text={article.doi} />{/if}
 					</div>
 
-					<div class="grid grid-cols-2 gap-3">
-						<MetricTile
-							label="Total citations"
-							value={article.total_citations}
-							tone="warning"
-							class="tabular-nums"
-						/>
-						<MetricTile
-							label="References"
-							value={article.references_count}
-							tone="info"
-							class="tabular-nums"
-						/>
-						<MetricTile
-							label="Year"
-							value={article.issued_year ?? '-'}
-							tone="default"
-							class="tabular-nums"
-						/>
-						<MetricTile label="Type" value={article.type ?? 'unknown'} tone="default" />
-					</div>
-
-					<Surface as="section" tone="inset" class="flex flex-col gap-3 p-4">
+					<dl class="flex flex-wrap gap-x-6 gap-y-2 text-xs">
 						<div>
-							<h4 class="font-medium">Metadata</h4>
-							<p class="mt-1 text-sm text-muted-foreground">{article.publisher}</p>
+							<dt class="text-muted-foreground">Citations</dt>
+							<dd class="mt-1 text-base font-semibold tabular-nums">
+								{article.total_citations}
+							</dd>
 						</div>
+						<div>
+							<dt class="text-muted-foreground">References</dt>
+							<dd class="mt-1 text-base font-semibold tabular-nums">
+								{article.references_count}
+							</dd>
+						</div>
+					</dl>
+					{#if article.metrics_stale}
+						<p
+							class="text-xs text-muted-foreground"
+							data-testid="article-stale-metrics"
+						>
+							Metrics are stale · Last computed {article.metrics_as_of
+								? new Date(article.metrics_as_of).toLocaleString()
+								: 'not yet'}.
+						</p>
+					{:else if article.metrics_as_of}
+						<p class="text-xs text-muted-foreground">
+							Metrics as of {new Date(article.metrics_as_of).toLocaleString()}
+						</p>
+					{/if}
+					<section aria-label="Abstract" class="flex flex-col gap-2">
+						<h4 class="text-sm font-semibold">Abstract</h4>
 						<p class="text-sm leading-relaxed wrap-break-word">
 							{article.abstract ?? 'No abstract available.'}
 						</p>
+					</section>
+					<details>
+						<summary class="cursor-pointer text-xs text-muted-foreground"
+							>Source metadata</summary
+						>
 						<pre
-							class="max-h-80 overflow-auto rounded-md bg-muted p-3 text-xs tabular-nums">{JSON.stringify(
+							class="mt-3 max-h-80 overflow-auto bg-muted p-3 text-xs">{JSON.stringify(
 								article.raw,
 								null,
 								2
 							)}</pre>
-					</Surface>
+					</details>
 				</div>
 			{:else}
 				<StatePanel

@@ -1,63 +1,102 @@
 import type { DependencyStatus } from '$lib/api/generated/models';
 
-export interface DependencyHealthObservation {
-	error: boolean;
-	states: Record<string, string> | null;
+export type DependencyHealthLevel = 'ok' | 'degraded' | 'unavailable';
+
+export interface DependencyHealthIssue {
+	name: string;
+	label: string;
+	state: 'degraded' | 'unavailable';
+	message: string;
 }
 
-export interface DependencyHealthCallbacks {
-	onDegraded: (name: string, summary: string, coreUnavailable: boolean) => void;
-	onRecovered: () => void;
-	onStatusError: (message: string) => void;
+export interface DependencyHealthSummary {
+	level: DependencyHealthLevel;
+	issues: DependencyHealthIssue[];
 }
+
+const LABELS: Record<string, string> = {
+	postgresql: 'Database',
+	worker: 'Background jobs'
+};
 
 export function dependencyLabel(name: string): string {
-	return name.charAt(0).toUpperCase() + name.slice(1);
+	return LABELS[name] ?? name.charAt(0).toUpperCase() + name.slice(1);
 }
 
-export function dependencyDetailSummary(detail: {
-	state: string;
-	lag?: number | null;
-	backlog?: number | null;
-}): string {
-	let summary = detail.state;
-	if (detail.lag) summary += ` · lag ${detail.lag}`;
-	if (detail.backlog) summary += ` · backlog ${detail.backlog}`;
-	return summary;
+export interface DependencyHealthOptions {
+	/** Whether the probe covered this project's jobs or the whole workspace. */
+	scope?: 'project' | 'workspace';
 }
 
-export function observeDependencyHealth(
-	previous: DependencyHealthObservation,
+function issueMessage(
+	name: string,
+	detail: { state: string; backlog?: number | null; recentFailed?: number | null },
+	scope: 'project' | 'workspace'
+): string {
+	if (name === 'postgresql') {
+		return detail.state === 'unavailable'
+			? 'The database is not responding. Changes may not be saved.'
+			: 'The database is responding slowly.';
+	}
+	if (name === 'worker') {
+		if (detail.state === 'unavailable') return 'Background jobs cannot be checked right now.';
+		const queued = detail.backlog ? ` ${detail.backlog} jobs are waiting.` : '';
+		if (detail.recentFailed && detail.recentFailed > 0) {
+			const count = detail.recentFailed;
+			const where = scope === 'project' ? 'in this project' : 'in the workspace';
+			const noun = count === 1 ? 'job' : 'jobs';
+			return `${count} background ${noun} failed in the last 30 minutes ${where}.${queued} Imports and automations may be incomplete.`;
+		}
+		return `Imports and automations are running behind.${queued} Projects and articles stay available.`;
+	}
+	return detail.state === 'unavailable' ? 'Not responding.' : 'Running with reduced capacity.';
+}
+
+/**
+ * Reduce the dependency probe to what a researcher needs to know. Only
+ * non-available dependencies (or an unreachable status endpoint) surface;
+ * recovery simply returns an empty summary.
+ */
+export function summarizeDependencyHealth(
 	status: DependencyStatus | undefined,
 	error: Error | null | undefined,
-	callbacks: DependencyHealthCallbacks
-): DependencyHealthObservation {
+	options: DependencyHealthOptions = {}
+): DependencyHealthSummary {
+	const scope = options.scope ?? 'workspace';
 	if (error) {
-		if (!previous.error) callbacks.onStatusError(error.message);
-		return { error: true, states: previous.states };
+		return {
+			level: 'unavailable',
+			issues: [
+				{
+					name: 'status',
+					label: 'Server',
+					state: 'unavailable',
+					message: 'Cannot reach the server to check system status.'
+				}
+			]
+		};
 	}
-	if (!status) return previous;
+	if (!status) return { level: 'ok', issues: [] };
 
-	const states: Record<string, string> = {};
-	for (const [name, detail] of Object.entries(status)) states[name] = detail.state;
-
-	let hasDegraded = false;
+	const issues: DependencyHealthIssue[] = [];
 	for (const [name, detail] of Object.entries(status)) {
 		if (detail.state === 'available') continue;
-		hasDegraded = true;
-		if (previous.states === null || previous.states[name] === 'available') {
-			callbacks.onDegraded(
+		const state = detail.state === 'unavailable' ? 'unavailable' : 'degraded';
+		issues.push({
+			name,
+			label: dependencyLabel(name),
+			state,
+			message: issueMessage(
 				name,
-				dependencyDetailSummary(detail),
-				name === 'postgresql' && detail.state === 'unavailable'
-			);
-		}
+				{ state, backlog: detail.backlog, recentFailed: detail.recent_failed },
+				scope
+			)
+		});
 	}
-
-	const previouslyDegraded =
-		previous.states !== null &&
-		Object.values(previous.states).some((state) => state !== 'available');
-	if (previouslyDegraded && !hasDegraded) callbacks.onRecovered();
-
-	return { error: false, states };
+	const level = issues.some((issue) => issue.state === 'unavailable')
+		? 'unavailable'
+		: issues.length > 0
+			? 'degraded'
+			: 'ok';
+	return { level, issues };
 }

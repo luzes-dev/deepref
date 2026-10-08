@@ -6,29 +6,51 @@
 		AiAppraisalPrefillProposalPayload,
 		AppraisalDefinitionDto,
 		CompleteAppraisalRequest,
-		DocumentBlockDto
+		DocumentBlockDto,
+		JudgmentSuggestionDto
 	} from '$lib/api/generated/models';
+	import { suggestAppraisalJudgments } from '$lib/api/generated/appraisal/appraisal';
 	import {
 		buildAppraisalPayload,
 		createInitialFormState,
 		definitionRequiresEvidence,
 		judgmentIsComplete,
 		questionHasRequiredEvidence,
+		questionIsAsked,
+		reconcileConditionalResponses,
 		type AppraisalFormState
 	} from '../form';
-	import { appraisalEvidenceLabel, resolveAppraisalEvidence } from '../ai-prefill';
+	import {
+		appraisalEvidenceLabel,
+		appraisalEvidenceTechnical,
+		resolveAppraisalEvidence
+	} from '../ai-prefill';
+	import EvidenceLabel from '$lib/features/evidence/EvidenceLabel.svelte';
 	import { fullTextUrlString } from '$lib/features/full-text/url';
 	import { responseIsComplete } from '../renderer';
+	import { blockSnippet } from '../evidence-search';
+	import {
+		driverLabels,
+		judgmentLabel,
+		OVERALL_TARGET,
+		suggestionForDomain,
+		targetsMissingReason,
+		type JudgmentTarget
+	} from '../suggestion';
+	import EvidenceBlockPicker from './EvidenceBlockPicker.svelte';
+	import JudgmentSuggestionPanel from './JudgmentSuggestionPanel.svelte';
 	import * as Alert from '@deepref/ui/alert';
 	import { Button } from '@deepref/ui/button';
 	import { Spinner } from '@deepref/ui/spinner';
-	import { CheckCircle2, Plus, Trash2 } from '@lucide/svelte';
+	import { CheckCircle2, Trash2 } from '@lucide/svelte';
 
 	type Props = {
 		definition: AppraisalDefinitionDto;
 		blocks: DocumentBlockDto[];
 		onSubmit: (request: CompleteAppraisalRequest, state: AppraisalFormState) => Promise<void>;
 		initialState?: AppraisalFormState;
+		/** Called with a snapshot whenever the answers change, so a parent can keep a draft. */
+		onStateChange?: (state: AppraisalFormState) => void;
 		projectId?: string;
 		reportId?: string;
 		originalPrefill?: AiAppraisalPrefillProposalPayload;
@@ -40,6 +62,7 @@
 		blocks,
 		onSubmit,
 		initialState,
+		onStateChange,
 		projectId = '',
 		reportId = '',
 		originalPrefill,
@@ -56,45 +79,135 @@
 				])
 			),
 			domainJudgments: { ...source.domainJudgments },
-			overallJudgment: source.overallJudgment
+			overallJudgment: source.overallJudgment,
+			overrideReasons: { ...source.overrideReasons }
 		};
 	}
 
 	let formState = $state<AppraisalFormState>(
 		untrack(() => (initialState ? copyFormState(initialState) : createInitialFormState()))
 	);
+	$effect(() => {
+		const snapshot = $state.snapshot(formState);
+		untrack(() => onStateChange?.(snapshot));
+	});
 	let error = $state<string | undefined>();
 	let submitting = $state(false);
+	const blockById = $derived(new Map(blocks.map((block) => [block.id, block])));
+
+	// The rule suggestion follows the answers. Requests are debounced, and only the latest
+	// reply is kept, so a slow response never replaces a newer suggestion.
+	let suggestion = $state<JudgmentSuggestionDto | undefined>();
+	let suggestionFailed = $state(false);
+	let suggestionRequest = 0;
+	const suggestionStatus = $derived<'pending' | 'unavailable' | 'ready'>(
+		suggestionFailed ? 'unavailable' : suggestion === undefined ? 'pending' : 'ready'
+	);
+	$effect(() => {
+		const responses = { ...formState.responses };
+		if (!projectId) return;
+		const request = ++suggestionRequest;
+		const timer = setTimeout(() => {
+			void suggestAppraisalJudgments(projectId, definition.id, definition.version, {
+				responses
+			})
+				.then((result) => {
+					if (request !== suggestionRequest) return;
+					suggestion = result.data;
+					suggestionFailed = false;
+				})
+				.catch(() => {
+					if (request !== suggestionRequest) return;
+					suggestionFailed = true;
+				});
+		}, 200);
+		return () => clearTimeout(timer);
+	});
+
+	// Judgments that differ from their suggestion must carry a reason before completion.
+	const judgmentTargets = $derived<JudgmentTarget[]>([
+		...definition.domains.map((domain) => ({
+			key: domain.id,
+			label: domain.label,
+			suggested: suggestionForDomain(suggestion, domain.id)?.judgment,
+			chosen: formState.domainJudgments[domain.id] || undefined
+		})),
+		{
+			key: OVERALL_TARGET,
+			label: 'Overall judgment',
+			suggested: suggestion?.overall_judgment,
+			chosen: formState.overallJudgment || undefined
+		}
+	]);
+
+	function setOverrideReason(target: string, value: string): void {
+		formState.overrideReasons = { ...formState.overrideReasons, [target]: value };
+	}
+
+	function applySuggestion(target: string, value: string | null | undefined): void {
+		if (!value) return;
+		customOpen = { ...customOpen, [target]: false };
+		if (target === OVERALL_TARGET) {
+			formState.overallJudgment = value;
+		} else {
+			formState.domainJudgments = { ...formState.domainJudgments, [target]: value };
+		}
+	}
+
+	const OTHER = '__other__';
+	// Custom judgments live behind an "Other…" option so the common path stays a single select.
+	let customOpen = $state<Record<string, boolean>>({});
+
+	function isCustomJudgment(
+		key: string,
+		options: { value: string }[],
+		value: string | undefined
+	): boolean {
+		return (
+			customOpen[key] === true ||
+			(value !== undefined && value !== '' && !options.some((o) => o.value === value))
+		);
+	}
+
+	function judgmentSelectValue(
+		key: string,
+		options: { value: string }[],
+		value: string | undefined
+	): string {
+		return isCustomJudgment(key, options, value) ? OTHER : (value ?? '');
+	}
+
+	/** Applies a judgment select change; returns the judgment value to store. */
+	function chooseJudgment(
+		key: string,
+		options: { value: string }[],
+		current: string | undefined,
+		selected: string
+	): string {
+		if (selected === OTHER) {
+			customOpen = { ...customOpen, [key]: true };
+			return options.some((o) => o.value === current) ? '' : (current ?? '');
+		}
+		customOpen = { ...customOpen, [key]: false };
+		return selected;
+	}
 
 	const questions = $derived(definition.domains.flatMap((domain) => domain.questions));
 	const hasRequiredEvidence = $derived(definitionRequiresEvidence(definition));
 
 	function setResponse(questionId: string, value: unknown): void {
-		formState.responses = { ...formState.responses, [questionId]: value };
+		formState.responses = reconcileConditionalResponses(definition, {
+			...formState.responses,
+			[questionId]: value
+		});
 	}
 
-	function addEvidence(questionId: string): void {
+	function addEvidenceBlock(questionId: string, block: DocumentBlockDto): void {
+		const current = formState.evidence[questionId] ?? [];
+		if (current.some((selection) => selection.blockId === block.id)) return;
 		formState.evidence = {
 			...formState.evidence,
-			[questionId]: [
-				...(formState.evidence[questionId] ?? []),
-				{ documentId: '', blockId: '' }
-			]
-		};
-	}
-
-	function setEvidence(questionId: string, index: number, value: string): void {
-		const block = blocks.find((candidate) => candidate.id === value);
-		const selections = [...(formState.evidence[questionId] ?? [])];
-		if (!block) {
-			selections.splice(index, 1);
-			formState.evidence = { ...formState.evidence, [questionId]: selections };
-			return;
-		}
-		selections[index] = { documentId: block.document_id, blockId: block.id };
-		formState.evidence = {
-			...formState.evidence,
-			[questionId]: selections
+			[questionId]: [...current, { documentId: block.document_id, blockId: block.id }]
 		};
 	}
 
@@ -151,6 +264,11 @@
 			error = `Complete the judgment for “${missingDomain.label}”.`;
 			return;
 		}
+		const missingReason = targetsMissingReason(judgmentTargets, formState.overrideReasons)[0];
+		if (missingReason) {
+			error = `Explain why the judgment for “${missingReason.label}” differs from the rule suggestion.`;
+			return;
+		}
 		submitting = true;
 		try {
 			await onSubmit(buildAppraisalPayload(definition, formState), formState);
@@ -172,16 +290,15 @@
 		void submit();
 	}}
 >
-	<div class="flex flex-col gap-2">
-		<div class="flex flex-wrap items-center gap-2">
-			<span class="text-xs font-medium text-muted-foreground">Versioned schema</span>
-			<span class="text-xs text-muted-foreground">· v{definition.version}</span>
-		</div>
-		<h2 class="text-xl font-semibold tracking-tight">
-			{definition.name} v{definition.version}
-		</h2>
-		<p class="text-sm leading-6 text-muted-foreground">{definition.description}</p>
+	<div class="sr-only">
+		<h2>{definition.name} v{definition.version}</h2>
 	</div>
+	{#if definition.description}<p class="text-sm leading-6 text-muted-foreground">
+			{definition.description}
+		</p>{/if}
+	{#if definition.applicability.note}<p class="text-xs leading-5 text-muted-foreground">
+			{definition.applicability.note}
+		</p>{/if}
 
 	{#if error}
 		<Alert.Root variant="destructive" role="alert">
@@ -191,17 +308,13 @@
 	{/if}
 
 	{#each definition.domains as domain (domain.id)}
-		<fieldset
-			class="flex min-w-0 flex-col gap-4 rounded-xl border border-primary/15 bg-muted/10 p-4 sm:p-5"
-		>
+		<fieldset class="flex min-w-0 flex-col gap-4 border-t py-5">
 			<legend class="px-1 text-base font-semibold">{domain.label}</legend>
 			{#if domain.description}<p class="text-sm leading-6 text-muted-foreground">
 					{domain.description}
 				</p>{/if}
 			{#each domain.questions as question (question.id)}
-				<div
-					class="flex min-w-0 flex-col gap-2 rounded-lg border border-border/60 bg-background/70 p-3 sm:p-4"
-				>
+				<div class="flex min-w-0 flex-col gap-2 border-b pb-4">
 					<label for={question.id} class="text-sm font-medium">
 						{question.label}{#if question.required}<span aria-hidden="true">
 								*</span
@@ -213,11 +326,18 @@
 						>
 							{question.help}
 						</p>{/if}
+					{#if !questionIsAsked(question, formState.responses)}<p
+							class="text-xs font-medium text-muted-foreground"
+							data-testid={`not-asked-${question.id}`}
+						>
+							Not asked for these answers, so it is recorded as not applicable.
+						</p>{/if}
 					{#if question.answer_schema.kind === 'enum'}
 						<select
 							id={question.id}
 							class="h-10 w-full rounded-lg border border-border/80 bg-background px-3 text-sm shadow-xs transition outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/30"
 							value={selectedValue(question.id)}
+							disabled={!questionIsAsked(question, formState.responses)}
 							onchange={(event) => setResponse(question.id, inputValue(event))}
 							aria-describedby={question.help ? `${question.id}-help` : undefined}
 						>
@@ -291,7 +411,7 @@
 								)}
 								{#if evidence}
 									<a
-										class="text-xs text-primary underline underline-offset-2"
+										class="block max-w-full min-w-0 text-xs text-primary underline underline-offset-2"
 										href={resolve(
 											`/projects/${encodeURIComponent(projectId)}/screening/full-text${fullTextUrlString(
 												{
@@ -304,7 +424,16 @@
 										)}
 										data-testid={`ai-evidence-link-${question.id}-${index}`}
 									>
-										{appraisalEvidenceLabel(evidence)}
+										<EvidenceLabel
+											label={appraisalEvidenceLabel(
+												evidence,
+												blocks.find(
+													(block) =>
+														block.id === evidence.document_block_id
+												)?.text
+											)}
+											technical={appraisalEvidenceTechnical(evidence)}
+										/>
 									</a>
 								{:else}
 									<p class="text-xs text-destructive">
@@ -316,58 +445,53 @@
 							{/each}
 						</div>
 					{/if}
-					{#if question.requires_evidence}
-						<div
-							class="flex flex-col gap-2 rounded-lg border border-border/60 bg-muted/10 p-3"
+					<div
+						class="flex min-w-0 flex-col gap-2 rounded-lg border border-border/60 bg-muted/10 p-3"
+					>
+						<span class="text-xs font-medium text-muted-foreground"
+							>{question.requires_evidence
+								? 'Required evidence blocks'
+								: 'Supporting evidence (optional)'}</span
 						>
-							<span class="text-xs font-medium text-muted-foreground"
-								>Required evidence blocks</span
+						{#each formState.evidence[question.id] ?? [] as selection, index (`${question.id}-${index}`)}
+							<div
+								class="flex min-w-0 items-start justify-between gap-2 rounded-md border border-border/60 bg-background p-2 text-xs"
 							>
-							{#each formState.evidence[question.id] ?? [] as selection, index (`${question.id}-${index}`)}
-								<div
-									class="flex min-w-0 flex-col gap-2 sm:flex-row sm:items-center sm:gap-2"
+								<span class="min-w-0 break-words">
+									{#if blockById.get(selection.blockId)}
+										<span class="font-medium text-muted-foreground"
+											>p. {blockById.get(selection.blockId)
+												?.page_number}</span
+										>
+										{blockSnippet(blockById.get(selection.blockId)?.text ?? '')}
+									{:else}
+										Evidence block no longer available
+									{/if}
+								</span>
+								<Button
+									type="button"
+									variant="ghost"
+									size="sm"
+									class="shrink-0"
+									aria-label={`Remove evidence block ${index + 1}`}
+									onclick={() => removeEvidence(question.id, index)}
 								>
-									<label for={`${question.id}-evidence-${index}`} class="sr-only"
-										>Select evidence block {index + 1}</label
-									>
-									<select
-										id={`${question.id}-evidence-${index}`}
-										class="h-10 min-w-0 flex-1 rounded-lg border border-border/80 bg-background px-3 text-sm shadow-xs transition outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/30"
-										value={selection.blockId}
-										onchange={(event) =>
-											setEvidence(question.id, index, inputValue(event))}
-									>
-										<option value="">Select a document block</option>
-										{#each blocks as block (block.id)}<option value={block.id}
-												>p. {block.page_number} · {block.text.slice(
-													0,
-													100
-												)}</option
-											>{/each}
-									</select>
-									<Button
-										type="button"
-										variant="ghost"
-										size="sm"
-										class="self-start text-muted-foreground sm:self-auto"
-										onclick={() => removeEvidence(question.id, index)}
-									>
-										<Trash2 aria-hidden="true" data-icon="inline-start" />Remove
-									</Button>
-								</div>
-							{/each}
-							<Button
-								type="button"
-								variant="outline"
-								size="sm"
-								class="self-start"
-								onclick={() => addEvidence(question.id)}
-							>
-								<Plus aria-hidden="true" data-icon="inline-start" />Add evidence
-								block
-							</Button>
-						</div>
-					{/if}
+									<Trash2 aria-hidden="true" data-icon="inline-start" />Remove
+								</Button>
+							</div>
+						{:else}
+							<p class="text-xs text-muted-foreground">No evidence block selected.</p>
+						{/each}
+						<EvidenceBlockPicker
+							idPrefix={`${question.id}-evidence`}
+							questionLabel={question.label}
+							{blocks}
+							excludeIds={(formState.evidence[question.id] ?? []).map(
+								(selection) => selection.blockId
+							)}
+							onSelect={(block) => addEvidenceBlock(question.id, block)}
+						/>
+					</div>
 				</div>
 			{/each}
 			<label for={`${domain.id}-judgment`} class="text-sm font-medium"
@@ -378,16 +502,20 @@
 			<select
 				id={`${domain.id}-judgment`}
 				class="h-10 w-full rounded-lg border border-border/80 bg-background px-3 text-sm shadow-xs transition outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/30"
-				value={domain.judgment.options.some(
-					(option) => option.value === formState.domainJudgments[domain.id]
-				)
-					? (formState.domainJudgments[domain.id] ?? '')
-					: ''}
+				value={judgmentSelectValue(
+					domain.id,
+					domain.judgment.options,
+					formState.domainJudgments[domain.id]
+				)}
 				onchange={(event) => {
-					const value = inputValue(event);
 					formState.domainJudgments = {
 						...formState.domainJudgments,
-						[domain.id]: value
+						[domain.id]: chooseJudgment(
+							domain.id,
+							domain.judgment.options,
+							formState.domainJudgments[domain.id],
+							inputValue(event)
+						)
 					};
 				}}
 			>
@@ -395,29 +523,49 @@
 				{#each domain.judgment.options as option (option.value)}<option value={option.value}
 						>{option.label}</option
 					>{/each}
+				{#if domain.judgment.allow_custom}<option value={OTHER}>Other…</option>{/if}
 			</select>
-			{#if domain.judgment.allow_custom}
+			{#if domain.judgment.allow_custom && isCustomJudgment(domain.id, domain.judgment.options, formState.domainJudgments[domain.id])}
 				<label for={`${domain.id}-custom-judgment`} class="text-xs text-muted-foreground"
 					>Custom judgment</label
 				>
 				<input
 					id={`${domain.id}-custom-judgment`}
 					class="h-10 w-full rounded-lg border border-border/80 bg-background px-3 text-sm shadow-xs transition outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/30"
-					value={domain.judgment.options.some(
-						(option) => option.value === formState.domainJudgments[domain.id]
-					)
-						? ''
-						: (formState.domainJudgments[domain.id] ?? '')}
+					value={formState.domainJudgments[domain.id] ?? ''}
 					oninput={(event) => {
-						const value =
-							event.currentTarget instanceof HTMLInputElement
-								? event.currentTarget.value
-								: '';
 						formState.domainJudgments = {
 							...formState.domainJudgments,
-							[domain.id]: value
+							[domain.id]: inputValue(event)
 						};
 					}}
+				/>
+			{/if}
+			{#if suggestion?.available !== false}
+				<JudgmentSuggestionPanel
+					idPrefix={domain.id}
+					status={suggestionStatus}
+					suggested={suggestionForDomain(suggestion, domain.id)?.judgment}
+					suggestedLabel={judgmentLabel(
+						domain.judgment,
+						suggestionForDomain(suggestion, domain.id)?.judgment ?? undefined
+					)}
+					drivers={driverLabels(
+						definition,
+						suggestionForDomain(suggestion, domain.id)?.drivers ?? []
+					)}
+					chosen={formState.domainJudgments[domain.id] || undefined}
+					chosenLabel={judgmentLabel(
+						domain.judgment,
+						formState.domainJudgments[domain.id]
+					)}
+					reason={formState.overrideReasons[domain.id] ?? ''}
+					onApply={() =>
+						applySuggestion(
+							domain.id,
+							suggestionForDomain(suggestion, domain.id)?.judgment
+						)}
+					onReasonChange={(value) => setOverrideReason(domain.id, value)}
 				/>
 			{/if}
 		</fieldset>
@@ -435,38 +583,55 @@
 		<select
 			id="overall-judgment"
 			class="h-10 w-full rounded-lg border border-border/80 bg-background px-3 text-sm shadow-xs transition outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/30"
-			value={definition.overall_judgment.options.some(
-				(option) => option.value === formState.overallJudgment
-			)
-				? formState.overallJudgment
-				: ''}
+			value={judgmentSelectValue(
+				'overall',
+				definition.overall_judgment.options,
+				formState.overallJudgment
+			)}
 			onchange={(event) => {
-				formState.overallJudgment = inputValue(event);
+				formState.overallJudgment = chooseJudgment(
+					'overall',
+					definition.overall_judgment.options,
+					formState.overallJudgment,
+					inputValue(event)
+				);
 			}}
 		>
 			<option value="">Select a judgment</option>
 			{#each definition.overall_judgment.options as option (option.value)}<option
 					value={option.value}>{option.label}</option
 				>{/each}
+			{#if definition.overall_judgment.allow_custom}<option value={OTHER}>Other…</option>{/if}
 		</select>
-		{#if definition.overall_judgment.allow_custom}
+		{#if definition.overall_judgment.allow_custom && isCustomJudgment('overall', definition.overall_judgment.options, formState.overallJudgment)}
 			<label for="overall-custom-judgment" class="text-xs text-muted-foreground"
 				>Custom judgment</label
 			>
 			<input
 				id="overall-custom-judgment"
 				class="h-10 w-full rounded-lg border border-border/80 bg-background px-3 text-sm shadow-xs transition outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/30"
-				value={definition.overall_judgment.options.some(
-					(option) => option.value === formState.overallJudgment
-				)
-					? ''
-					: formState.overallJudgment}
+				value={formState.overallJudgment}
 				oninput={(event) => {
-					formState.overallJudgment =
-						event.currentTarget instanceof HTMLInputElement
-							? event.currentTarget.value
-							: '';
+					formState.overallJudgment = inputValue(event);
 				}}
+			/>
+		{/if}
+		{#if suggestion?.available !== false}
+			<JudgmentSuggestionPanel
+				idPrefix={OVERALL_TARGET}
+				status={suggestionStatus}
+				suggested={suggestion?.overall_judgment}
+				suggestedLabel={judgmentLabel(
+					definition.overall_judgment,
+					suggestion?.overall_judgment ?? undefined
+				)}
+				drivers={[]}
+				notes={suggestion?.reviewer_notes ?? []}
+				chosen={formState.overallJudgment || undefined}
+				chosenLabel={judgmentLabel(definition.overall_judgment, formState.overallJudgment)}
+				reason={formState.overrideReasons[OVERALL_TARGET] ?? ''}
+				onApply={() => applySuggestion(OVERALL_TARGET, suggestion?.overall_judgment)}
+				onReasonChange={(value) => setOverrideReason(OVERALL_TARGET, value)}
 			/>
 		{/if}
 	</fieldset>

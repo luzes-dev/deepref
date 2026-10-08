@@ -19,6 +19,8 @@ import type {
 
 import type {
 	ApiErrorBody,
+	GetUnreadNotificationCountParams,
+	ListNotificationsParams,
 	MarkNotificationsReadRequest,
 	MarkNotificationsReadResponse,
 	NotificationUnreadDto,
@@ -54,38 +56,54 @@ export type listNotificationsResponseError = (
 	headers: Headers;
 };
 
-export const getListNotificationsUrl = () => {
-	return `/api/notifications`;
+export const getListNotificationsUrl = (params?: ListNotificationsParams) => {
+	const normalizedParams = new URLSearchParams();
+
+	Object.entries(params || {}).forEach(([key, value]) => {
+		if (value !== undefined) {
+			normalizedParams.append(key, value === null ? 'null' : String(value));
+		}
+	});
+
+	const stringifiedParams = normalizedParams.toString();
+
+	return stringifiedParams.length > 0
+		? `/api/notifications?${stringifiedParams}`
+		: `/api/notifications`;
 };
 
 export const listNotifications = async (
+	params?: ListNotificationsParams,
 	options?: Parameters<typeof customFetch>[1]
 ): Promise<listNotificationsResponseSuccess> => {
-	return customFetch<listNotificationsResponseSuccess>(getListNotificationsUrl(), {
+	return customFetch<listNotificationsResponseSuccess>(getListNotificationsUrl(params), {
 		...options,
 		method: 'GET'
 	});
 };
 
-export const getListNotificationsQueryKey = () => {
-	return [`/api/notifications`] as const;
+export const getListNotificationsQueryKey = (params?: ListNotificationsParams) => {
+	return [`/api/notifications`, ...(params ? [params] : [])] as const;
 };
 
 export const getListNotificationsQueryOptions = <
 	TData = Awaited<ReturnType<typeof listNotifications>>,
 	TError = ErrorType<ApiErrorBody>
->(options?: {
-	query?: Partial<
-		CreateQueryOptions<Awaited<ReturnType<typeof listNotifications>>, TError, TData>
-	>;
-	request?: SecondParameter<typeof customFetch>;
-}) => {
+>(
+	params?: ListNotificationsParams,
+	options?: {
+		query?: Partial<
+			CreateQueryOptions<Awaited<ReturnType<typeof listNotifications>>, TError, TData>
+		>;
+		request?: SecondParameter<typeof customFetch>;
+	}
+) => {
 	const { query: queryOptions, request: requestOptions } = options ?? {};
 
-	const queryKey = queryOptions?.queryKey ?? getListNotificationsQueryKey();
+	const queryKey = queryOptions?.queryKey ?? getListNotificationsQueryKey(params);
 
 	const queryFn: QueryFunction<Awaited<ReturnType<typeof listNotifications>>> = ({ signal }) =>
-		listNotifications({ signal, ...requestOptions });
+		listNotifications(params, { signal, ...requestOptions });
 
 	return { queryKey, queryFn, ...queryOptions } as CreateQueryOptions<
 		Awaited<ReturnType<typeof listNotifications>>,
@@ -103,6 +121,7 @@ export function createListNotifications<
 	TData = Awaited<ReturnType<typeof listNotifications>>,
 	TError = ErrorType<ApiErrorBody>
 >(
+	params?: () => ListNotificationsParams,
 	options?: () => {
 		query?: Partial<
 			CreateQueryOptions<Awaited<ReturnType<typeof listNotifications>>, TError, TData>
@@ -112,7 +131,7 @@ export function createListNotifications<
 	queryClient?: () => QueryClient
 ): CreateQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> } {
 	const query = createQuery(
-		() => getListNotificationsQueryOptions(options?.()),
+		() => getListNotificationsQueryOptions(params?.(), options?.()),
 		queryClient
 	) as CreateQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> };
 
@@ -124,6 +143,7 @@ export const prefetchListNotificationsQuery = async <
 	TError = ErrorType<ApiErrorBody>
 >(
 	queryClient: QueryClient,
+	params?: ListNotificationsParams,
 	options?: {
 		query?: Partial<
 			CreateQueryOptions<Awaited<ReturnType<typeof listNotifications>>, TError, TData>
@@ -131,7 +151,7 @@ export const prefetchListNotificationsQuery = async <
 		request?: SecondParameter<typeof customFetch>;
 	}
 ): Promise<QueryClient> => {
-	const queryOptions = getListNotificationsQueryOptions(options);
+	const queryOptions = getListNotificationsQueryOptions(params, options);
 
 	await queryClient.prefetchQuery(queryOptions);
 
@@ -270,15 +290,28 @@ export type getUnreadNotificationCountResponseError = getUnreadNotificationCount
 	headers: Headers;
 };
 
-export const getGetUnreadNotificationCountUrl = () => {
-	return `/api/notifications/unread-count`;
+export const getGetUnreadNotificationCountUrl = (params?: GetUnreadNotificationCountParams) => {
+	const normalizedParams = new URLSearchParams();
+
+	Object.entries(params || {}).forEach(([key, value]) => {
+		if (value !== undefined) {
+			normalizedParams.append(key, value === null ? 'null' : String(value));
+		}
+	});
+
+	const stringifiedParams = normalizedParams.toString();
+
+	return stringifiedParams.length > 0
+		? `/api/notifications/unread-count?${stringifiedParams}`
+		: `/api/notifications/unread-count`;
 };
 
 export const getUnreadNotificationCount = async (
+	params?: GetUnreadNotificationCountParams,
 	options?: Parameters<typeof customFetch>[1]
 ): Promise<getUnreadNotificationCountResponseSuccess> => {
 	return customFetch<getUnreadNotificationCountResponseSuccess>(
-		getGetUnreadNotificationCountUrl(),
+		getGetUnreadNotificationCountUrl(params),
 		{
 			...options,
 			method: 'GET'
@@ -286,26 +319,35 @@ export const getUnreadNotificationCount = async (
 	);
 };
 
-export const getGetUnreadNotificationCountQueryKey = () => {
-	return [`/api/notifications/unread-count`] as const;
+export const getGetUnreadNotificationCountQueryKey = (
+	params?: GetUnreadNotificationCountParams
+) => {
+	return [`/api/notifications/unread-count`, ...(params ? [params] : [])] as const;
 };
 
 export const getGetUnreadNotificationCountQueryOptions = <
 	TData = Awaited<ReturnType<typeof getUnreadNotificationCount>>,
 	TError = ErrorType<ApiErrorBody>
->(options?: {
-	query?: Partial<
-		CreateQueryOptions<Awaited<ReturnType<typeof getUnreadNotificationCount>>, TError, TData>
-	>;
-	request?: SecondParameter<typeof customFetch>;
-}) => {
+>(
+	params?: GetUnreadNotificationCountParams,
+	options?: {
+		query?: Partial<
+			CreateQueryOptions<
+				Awaited<ReturnType<typeof getUnreadNotificationCount>>,
+				TError,
+				TData
+			>
+		>;
+		request?: SecondParameter<typeof customFetch>;
+	}
+) => {
 	const { query: queryOptions, request: requestOptions } = options ?? {};
 
-	const queryKey = queryOptions?.queryKey ?? getGetUnreadNotificationCountQueryKey();
+	const queryKey = queryOptions?.queryKey ?? getGetUnreadNotificationCountQueryKey(params);
 
 	const queryFn: QueryFunction<Awaited<ReturnType<typeof getUnreadNotificationCount>>> = ({
 		signal
-	}) => getUnreadNotificationCount({ signal, ...requestOptions });
+	}) => getUnreadNotificationCount(params, { signal, ...requestOptions });
 
 	return { queryKey, queryFn, ...queryOptions } as CreateQueryOptions<
 		Awaited<ReturnType<typeof getUnreadNotificationCount>>,
@@ -323,6 +365,7 @@ export function createGetUnreadNotificationCount<
 	TData = Awaited<ReturnType<typeof getUnreadNotificationCount>>,
 	TError = ErrorType<ApiErrorBody>
 >(
+	params?: () => GetUnreadNotificationCountParams,
 	options?: () => {
 		query?: Partial<
 			CreateQueryOptions<
@@ -336,7 +379,7 @@ export function createGetUnreadNotificationCount<
 	queryClient?: () => QueryClient
 ): CreateQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> } {
 	const query = createQuery(
-		() => getGetUnreadNotificationCountQueryOptions(options?.()),
+		() => getGetUnreadNotificationCountQueryOptions(params?.(), options?.()),
 		queryClient
 	) as CreateQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> };
 
@@ -348,6 +391,7 @@ export const prefetchGetUnreadNotificationCountQuery = async <
 	TError = ErrorType<ApiErrorBody>
 >(
 	queryClient: QueryClient,
+	params?: GetUnreadNotificationCountParams,
 	options?: {
 		query?: Partial<
 			CreateQueryOptions<
@@ -359,7 +403,7 @@ export const prefetchGetUnreadNotificationCountQuery = async <
 		request?: SecondParameter<typeof customFetch>;
 	}
 ): Promise<QueryClient> => {
-	const queryOptions = getGetUnreadNotificationCountQueryOptions(options);
+	const queryOptions = getGetUnreadNotificationCountQueryOptions(params, options);
 
 	await queryClient.prefetchQuery(queryOptions);
 

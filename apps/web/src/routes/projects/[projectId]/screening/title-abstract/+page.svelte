@@ -1,5 +1,6 @@
 <script lang="ts">
 	import { page } from '$app/state';
+	import ScreeningViewSwitch from '$lib/features/ai-autonomy/components/ScreeningViewSwitch.svelte';
 	import ScreeningFocus from '$lib/features/screening/components/ScreeningFocus.svelte';
 
 	const projectId = $derived(page.params.projectId ?? '');
@@ -13,4 +14,6 @@
 	/>
 </svelte:head>
 
-<ScreeningFocus {projectId} />
+<ScreeningViewSwitch {projectId} stage="title_abstract">
+	<ScreeningFocus {projectId} />
+</ScreeningViewSwitch>

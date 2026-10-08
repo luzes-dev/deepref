@@ -10,7 +10,9 @@ import type {
 	DocumentBlockDto
 } from '$lib/api/generated/models';
 import { fullTextUrlString } from '$lib/features/full-text/url';
+import { citationLabel } from '$lib/features/evidence/labels';
 import { createInitialFormState, type AppraisalFormState, type EvidenceSelection } from './form';
+import { presentOverrideReasons } from './suggestion';
 
 export type AppraisalPrefillPayload = Extract<
 	AiReviewedProposalPayload,
@@ -172,7 +174,8 @@ export function serializeAppraisalPrefillReview(
 		definition_version: definition.version,
 		answers,
 		domain_judgments: domainJudgments,
-		overall_judgment: state.overallJudgment
+		overall_judgment: state.overallJudgment,
+		override_reasons: presentOverrideReasons(state.overrideReasons)
 	};
 	return payload;
 }
@@ -193,6 +196,21 @@ export function appraisalEvidenceHref(
 	);
 }
 
-export function appraisalEvidenceLabel(evidence: AiAppraisalPrefillEvidenceDto): string {
-	return `Document ${evidence.document_id} · block ${evidence.document_block_id} · page ${evidence.page} · ${evidence.parser_version} · hash ${evidence.content_hash}`;
+/** Readable citation: the page plus the cited passage (or the report title when the passage is not loaded). */
+export function appraisalEvidenceLabel(
+	evidence: AiAppraisalPrefillEvidenceDto,
+	passage?: string | null,
+	reportTitle?: string | null
+): string {
+	return citationLabel({
+		page: evidence.page,
+		quote: passage,
+		title: reportTitle,
+		fallback: 'Cited passage'
+	});
+}
+
+/** Identifiers for the tooltip only; never shown as label text. */
+export function appraisalEvidenceTechnical(evidence: AiAppraisalPrefillEvidenceDto): string {
+	return `Document ${evidence.document_id} · block ${evidence.document_block_id} · ${evidence.parser_version} · hash ${evidence.content_hash}`;
 }

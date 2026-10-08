@@ -16,6 +16,8 @@ export type AiReviewedProposalPayload =
 			domain_judgments: { [key: string]: string };
 			kind: 'appraisal_prefill';
 			overall_judgment: string;
+			/** Reasons for judgments that differ from the rule suggestion, keyed by domain or `overall`. */
+			override_reasons?: { [key: string]: string };
 			report_id: string;
 	  }
 	| {

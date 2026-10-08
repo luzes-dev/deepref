@@ -22,6 +22,7 @@ import type {
 	AssistantChatRequestDto,
 	AssistantConversationDto,
 	AssistantMessageDto,
+	AssistantPlanDto,
 	AssistantToolDescriptor,
 	AssistantToolRequest,
 	AssistantToolResponse,
@@ -53,9 +54,19 @@ export type chatWithProjectAssistantResponse404 = {
 	status: 404;
 };
 
+export type chatWithProjectAssistantResponse413 = {
+	data: ApiErrorBody;
+	status: 413;
+};
+
 export type chatWithProjectAssistantResponse500 = {
 	data: ApiErrorBody;
 	status: 500;
+};
+
+export type chatWithProjectAssistantResponse503 = {
+	data: ApiErrorBody;
+	status: 503;
 };
 
 export type chatWithProjectAssistantResponseSuccess = chatWithProjectAssistantResponse200 & {
@@ -65,7 +76,9 @@ export type chatWithProjectAssistantResponseError = (
 	| chatWithProjectAssistantResponse400
 	| chatWithProjectAssistantResponse403
 	| chatWithProjectAssistantResponse404
+	| chatWithProjectAssistantResponse413
 	| chatWithProjectAssistantResponse500
+	| chatWithProjectAssistantResponse503
 ) & {
 	headers: Headers;
 };
@@ -743,6 +756,355 @@ export const prefetchListProjectAssistantConversationMessagesQuery = async <
 	return queryClient;
 };
 
+export type getAssistantPlanResponse200 = {
+	data: AssistantPlanDto;
+	status: 200;
+};
+
+export type getAssistantPlanResponse404 = {
+	data: ApiErrorBody;
+	status: 404;
+};
+
+export type getAssistantPlanResponse500 = {
+	data: ApiErrorBody;
+	status: 500;
+};
+
+export type getAssistantPlanResponseSuccess = getAssistantPlanResponse200 & {
+	headers: Headers;
+};
+export type getAssistantPlanResponseError = (
+	getAssistantPlanResponse404 | getAssistantPlanResponse500
+) & {
+	headers: Headers;
+};
+
+export const getGetAssistantPlanUrl = (projectId: string, planId: string) => {
+	return `/api/projects/${projectId}/assistant/plans/${planId}`;
+};
+
+export const getAssistantPlan = async (
+	projectId: string,
+	planId: string,
+	options?: Parameters<typeof customFetch>[1]
+): Promise<getAssistantPlanResponseSuccess> => {
+	return customFetch<getAssistantPlanResponseSuccess>(getGetAssistantPlanUrl(projectId, planId), {
+		...options,
+		method: 'GET'
+	});
+};
+
+export const getGetAssistantPlanQueryKey = (projectId: string, planId: string) => {
+	return [`/api/projects/${projectId}/assistant/plans/${planId}`] as const;
+};
+
+export const getGetAssistantPlanQueryOptions = <
+	TData = Awaited<ReturnType<typeof getAssistantPlan>>,
+	TError = ErrorType<ApiErrorBody>
+>(
+	projectId: string,
+	planId: string,
+	options?: {
+		query?: Partial<
+			CreateQueryOptions<Awaited<ReturnType<typeof getAssistantPlan>>, TError, TData>
+		>;
+		request?: SecondParameter<typeof customFetch>;
+	}
+) => {
+	const { query: queryOptions, request: requestOptions } = options ?? {};
+
+	const queryKey = queryOptions?.queryKey ?? getGetAssistantPlanQueryKey(projectId, planId);
+
+	const queryFn: QueryFunction<Awaited<ReturnType<typeof getAssistantPlan>>> = ({ signal }) =>
+		getAssistantPlan(projectId, planId, { signal, ...requestOptions });
+
+	return {
+		queryKey,
+		queryFn,
+		enabled:
+			projectId !== null &&
+			projectId !== undefined &&
+			planId !== null &&
+			planId !== undefined,
+		...queryOptions
+	} as CreateQueryOptions<Awaited<ReturnType<typeof getAssistantPlan>>, TError, TData> & {
+		queryKey: DataTag<QueryKey, TData, TError>;
+	};
+};
+
+export type GetAssistantPlanQueryResult = NonNullable<Awaited<ReturnType<typeof getAssistantPlan>>>;
+export type GetAssistantPlanQueryError = ErrorType<ApiErrorBody>;
+
+export function createGetAssistantPlan<
+	TData = Awaited<ReturnType<typeof getAssistantPlan>>,
+	TError = ErrorType<ApiErrorBody>
+>(
+	projectId: () => string,
+	planId: () => string,
+	options?: () => {
+		query?: Partial<
+			CreateQueryOptions<Awaited<ReturnType<typeof getAssistantPlan>>, TError, TData>
+		>;
+		request?: SecondParameter<typeof customFetch>;
+	},
+	queryClient?: () => QueryClient
+): CreateQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> } {
+	const query = createQuery(
+		() => getGetAssistantPlanQueryOptions(projectId(), planId(), options?.()),
+		queryClient
+	) as CreateQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> };
+
+	return query;
+}
+
+export const prefetchGetAssistantPlanQuery = async <
+	TData = Awaited<ReturnType<typeof getAssistantPlan>>,
+	TError = ErrorType<ApiErrorBody>
+>(
+	queryClient: QueryClient,
+	projectId: string,
+	planId: string,
+	options?: {
+		query?: Partial<
+			CreateQueryOptions<Awaited<ReturnType<typeof getAssistantPlan>>, TError, TData>
+		>;
+		request?: SecondParameter<typeof customFetch>;
+	}
+): Promise<QueryClient> => {
+	const queryOptions = getGetAssistantPlanQueryOptions(projectId, planId, options);
+
+	await queryClient.prefetchQuery(queryOptions);
+
+	return queryClient;
+};
+
+export type confirmAssistantPlanResponse200 = {
+	data: AssistantPlanDto;
+	status: 200;
+};
+
+export type confirmAssistantPlanResponse404 = {
+	data: ApiErrorBody;
+	status: 404;
+};
+
+export type confirmAssistantPlanResponse409 = {
+	data: ApiErrorBody;
+	status: 409;
+};
+
+export type confirmAssistantPlanResponse500 = {
+	data: ApiErrorBody;
+	status: 500;
+};
+
+export type confirmAssistantPlanResponseSuccess = confirmAssistantPlanResponse200 & {
+	headers: Headers;
+};
+export type confirmAssistantPlanResponseError = (
+	| confirmAssistantPlanResponse404
+	| confirmAssistantPlanResponse409
+	| confirmAssistantPlanResponse500
+) & {
+	headers: Headers;
+};
+
+export const getConfirmAssistantPlanUrl = (projectId: string, planId: string) => {
+	return `/api/projects/${projectId}/assistant/plans/${planId}/confirm`;
+};
+
+export const confirmAssistantPlan = async (
+	projectId: string,
+	planId: string,
+	options?: Parameters<typeof customFetch>[1]
+): Promise<confirmAssistantPlanResponseSuccess> => {
+	return customFetch<confirmAssistantPlanResponseSuccess>(
+		getConfirmAssistantPlanUrl(projectId, planId),
+		{
+			...options,
+			method: 'POST'
+		}
+	);
+};
+
+export const getConfirmAssistantPlanMutationOptions = <
+	TError = ErrorType<ApiErrorBody>,
+	TContext = unknown
+>(options?: {
+	mutation?: CreateMutationOptions<
+		Awaited<ReturnType<typeof confirmAssistantPlan>>,
+		TError,
+		ConfirmAssistantPlanMutationVariables,
+		TContext
+	>;
+	request?: SecondParameter<typeof customFetch>;
+}): CreateMutationOptions<
+	Awaited<ReturnType<typeof confirmAssistantPlan>>,
+	TError,
+	ConfirmAssistantPlanMutationVariables,
+	TContext
+> => {
+	const mutationKey = ['confirmAssistantPlan'];
+	const { mutation: mutationOptions, request: requestOptions } = options
+		? options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey
+			? options
+			: { ...options, mutation: { ...options.mutation, mutationKey } }
+		: { mutation: { mutationKey }, request: undefined };
+
+	const mutationFn: MutationFunction<
+		Awaited<ReturnType<typeof confirmAssistantPlan>>,
+		ConfirmAssistantPlanMutationVariables
+	> = (props) => {
+		const { projectId, planId } = props ?? {};
+
+		return confirmAssistantPlan(projectId, planId, requestOptions);
+	};
+
+	return { mutationFn, ...mutationOptions };
+};
+
+export type ConfirmAssistantPlanMutationResult = NonNullable<
+	Awaited<ReturnType<typeof confirmAssistantPlan>>
+>;
+
+export type ConfirmAssistantPlanMutationError = ErrorType<ApiErrorBody>;
+export type ConfirmAssistantPlanMutationVariables = { projectId: string; planId: string };
+
+export const createConfirmAssistantPlan = <TError = ErrorType<ApiErrorBody>, TContext = unknown>(
+	options?: () => {
+		mutation?: CreateMutationOptions<
+			Awaited<ReturnType<typeof confirmAssistantPlan>>,
+			TError,
+			ConfirmAssistantPlanMutationVariables,
+			TContext
+		>;
+		request?: SecondParameter<typeof customFetch>;
+	},
+	queryClient?: () => QueryClient
+): CreateMutationResult<
+	Awaited<ReturnType<typeof confirmAssistantPlan>>,
+	TError,
+	ConfirmAssistantPlanMutationVariables,
+	TContext
+> => {
+	return createMutation(
+		() => ({ ...getConfirmAssistantPlanMutationOptions(options?.()) }),
+		queryClient
+	);
+};
+export type rejectAssistantPlanResponse200 = {
+	data: AssistantPlanDto;
+	status: 200;
+};
+
+export type rejectAssistantPlanResponse404 = {
+	data: ApiErrorBody;
+	status: 404;
+};
+
+export type rejectAssistantPlanResponse409 = {
+	data: ApiErrorBody;
+	status: 409;
+};
+
+export type rejectAssistantPlanResponse500 = {
+	data: ApiErrorBody;
+	status: 500;
+};
+
+export type rejectAssistantPlanResponseSuccess = rejectAssistantPlanResponse200 & {
+	headers: Headers;
+};
+export type rejectAssistantPlanResponseError = (
+	rejectAssistantPlanResponse404 | rejectAssistantPlanResponse409 | rejectAssistantPlanResponse500
+) & {
+	headers: Headers;
+};
+
+export const getRejectAssistantPlanUrl = (projectId: string, planId: string) => {
+	return `/api/projects/${projectId}/assistant/plans/${planId}/reject`;
+};
+
+export const rejectAssistantPlan = async (
+	projectId: string,
+	planId: string,
+	options?: Parameters<typeof customFetch>[1]
+): Promise<rejectAssistantPlanResponseSuccess> => {
+	return customFetch<rejectAssistantPlanResponseSuccess>(
+		getRejectAssistantPlanUrl(projectId, planId),
+		{
+			...options,
+			method: 'POST'
+		}
+	);
+};
+
+export const getRejectAssistantPlanMutationOptions = <
+	TError = ErrorType<ApiErrorBody>,
+	TContext = unknown
+>(options?: {
+	mutation?: CreateMutationOptions<
+		Awaited<ReturnType<typeof rejectAssistantPlan>>,
+		TError,
+		RejectAssistantPlanMutationVariables,
+		TContext
+	>;
+	request?: SecondParameter<typeof customFetch>;
+}): CreateMutationOptions<
+	Awaited<ReturnType<typeof rejectAssistantPlan>>,
+	TError,
+	RejectAssistantPlanMutationVariables,
+	TContext
+> => {
+	const mutationKey = ['rejectAssistantPlan'];
+	const { mutation: mutationOptions, request: requestOptions } = options
+		? options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey
+			? options
+			: { ...options, mutation: { ...options.mutation, mutationKey } }
+		: { mutation: { mutationKey }, request: undefined };
+
+	const mutationFn: MutationFunction<
+		Awaited<ReturnType<typeof rejectAssistantPlan>>,
+		RejectAssistantPlanMutationVariables
+	> = (props) => {
+		const { projectId, planId } = props ?? {};
+
+		return rejectAssistantPlan(projectId, planId, requestOptions);
+	};
+
+	return { mutationFn, ...mutationOptions };
+};
+
+export type RejectAssistantPlanMutationResult = NonNullable<
+	Awaited<ReturnType<typeof rejectAssistantPlan>>
+>;
+
+export type RejectAssistantPlanMutationError = ErrorType<ApiErrorBody>;
+export type RejectAssistantPlanMutationVariables = { projectId: string; planId: string };
+
+export const createRejectAssistantPlan = <TError = ErrorType<ApiErrorBody>, TContext = unknown>(
+	options?: () => {
+		mutation?: CreateMutationOptions<
+			Awaited<ReturnType<typeof rejectAssistantPlan>>,
+			TError,
+			RejectAssistantPlanMutationVariables,
+			TContext
+		>;
+		request?: SecondParameter<typeof customFetch>;
+	},
+	queryClient?: () => QueryClient
+): CreateMutationResult<
+	Awaited<ReturnType<typeof rejectAssistantPlan>>,
+	TError,
+	RejectAssistantPlanMutationVariables,
+	TContext
+> => {
+	return createMutation(
+		() => ({ ...getRejectAssistantPlanMutationOptions(options?.()) }),
+		queryClient
+	);
+};
 export type listProjectAssistantToolsResponse200 = {
 	data: AssistantToolDescriptor[];
 	status: 200;

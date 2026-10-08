@@ -7,10 +7,13 @@
 	import * as Sheet from '@deepref/ui/sheet';
 	import MenuIcon from '@lucide/svelte/icons/menu';
 	import SettingsIcon from '@lucide/svelte/icons/settings-2';
+	import DependencyHealthIndicator from '$lib/shell/DependencyHealthIndicator.svelte';
+	import NotificationBell from '$lib/shell/NotificationBell.svelte';
 	import { openSettingsFromLink } from '$lib/features/settings/navigation';
 	import ArticleInspector from './ArticleInspector.svelte';
 	import { useProjectWorkspaceContext } from '../context.svelte.js';
 	import IngestionInspector from './IngestionInspector.svelte';
+	import AcquisitionInspector from './AcquisitionInspector.svelte';
 	import ProjectSelector from './ProjectSelector.svelte';
 	import ProjectWorkspaceViewPanel from './ProjectWorkspaceViewPanel.svelte';
 	import {
@@ -39,7 +42,9 @@
 				workspace.view === 'graph' ||
 				workspace.view === 'recommendations')
 	);
-	const ingestionSheetOpen = $derived(Boolean(workspace.selectedIngestion));
+	const ingestionSheetOpen = $derived(
+		Boolean(workspace.selectedIngestion || workspace.selectedAcquisition)
+	);
 
 	function isActive(item: ProjectNavigationItem): boolean {
 		return Boolean(projectId) && isProjectNavigationItemActive(item, pathname, projectId);
@@ -52,31 +57,26 @@
 </script>
 
 <div class="flex h-full flex-col">
-	<div class="flex flex-col gap-3 border-b border-border/70 p-3">
-		<div class="flex items-center gap-2">
-			<Button
-				variant="ghost"
-				size="icon"
-				aria-label="Open navigation"
-				data-testid="mobile-navigation-trigger"
-				onclick={() => (menuOpen = true)}
-			>
-				<MenuIcon data-icon aria-hidden="true" />
-			</Button>
-			<div class="min-w-0 flex-1">
-				<p class="text-xs font-bold tracking-kicker text-primary uppercase">DeepRef</p>
-				<h1
-					class="truncate text-sm font-medium text-foreground"
-					data-testid="mobile-current-route"
-					aria-live="polite"
-				>
-					{mobileViewLabel}
-				</h1>
-			</div>
-		</div>
-		<div class="min-w-0">
-			<ProjectSelector />
-		</div>
+	<div class="flex items-center gap-2 border-b border-border/70 px-2 py-1.5">
+		<Button
+			variant="ghost"
+			size="icon"
+			aria-label="Open navigation"
+			data-testid="mobile-navigation-trigger"
+			onclick={() => (menuOpen = true)}
+		>
+			<MenuIcon data-icon aria-hidden="true" />
+		</Button>
+		<h1
+			class="min-w-0 flex-1 truncate text-sm font-medium text-foreground"
+			data-testid="mobile-current-route"
+			aria-live="polite"
+		>
+			{mobileViewLabel}
+		</h1>
+		<DependencyHealthIndicator {projectId} />
+		<NotificationBell {projectId} />
+		<ProjectSelector compact />
 	</div>
 	<div class="min-h-0 flex-1 overflow-hidden">
 		<ProjectWorkspaceViewPanel {children} />
@@ -177,7 +177,11 @@
 			<Sheet.Header class="sr-only">
 				<Sheet.Title>Ingestion inspector</Sheet.Title>
 			</Sheet.Header>
-			<IngestionInspector />
+			{#if workspace.selectedAcquisition}
+				<AcquisitionInspector />
+			{:else}
+				<IngestionInspector />
+			{/if}
 		</Sheet.Content>
 	</Sheet.Root>
 </div>

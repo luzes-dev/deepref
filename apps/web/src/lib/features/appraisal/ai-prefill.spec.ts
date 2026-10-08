@@ -127,6 +127,7 @@ describe('AI appraisal prefill transforms', () => {
 
 		expect(payload).toEqual({
 			kind: 'appraisal_prefill',
+			override_reasons: {},
 			report_id: 'report-1',
 			definition_id: 'definition-1',
 			definition_version: 3,

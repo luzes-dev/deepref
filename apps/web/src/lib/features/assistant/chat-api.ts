@@ -117,3 +117,121 @@ export function deriveConversationTitle(message: string): string {
 	const cut = boundary > 20 ? trimmed.slice(0, boundary) : trimmed.slice(0, 60);
 	return `${cut.trimEnd()}…`;
 }
+
+export interface AssistantPlanManualStep {
+	reason: string;
+	link_target: string;
+}
+
+export interface AssistantPlanAction {
+	id: string;
+	tool: string;
+	summary: string;
+	rationale: string;
+	affected_count: number;
+	executable: boolean;
+	manual: AssistantPlanManualStep | null;
+}
+
+export interface AssistantPlanResult {
+	action_id: string;
+	status: 'executed' | 'queued' | 'completed' | 'failed' | 'skipped' | 'manual';
+	message: string;
+	review_run_id: string | null;
+	applied: number | null;
+	unchanged: number | null;
+	failed: number | null;
+}
+
+export type AssistantPlanStatus = 'pending' | 'confirmed' | 'rejected' | 'executed' | 'failed';
+
+export interface AssistantPlan {
+	id: string;
+	project_id: string;
+	conversation_id: string;
+	status: AssistantPlanStatus;
+	summary: string;
+	actions: AssistantPlanAction[];
+	results: AssistantPlanResult[] | null;
+	error: string | null;
+	model: string;
+	prompt_version: string;
+	created_at: string;
+	resolved_by: string | null;
+	resolved_at: string | null;
+}
+
+export function isAssistantPlan(value: unknown): value is AssistantPlan {
+	if (typeof value !== 'object' || value === null) return false;
+	const candidate = value as Record<string, unknown>;
+	return (
+		typeof candidate['id'] === 'string' &&
+		typeof candidate['status'] === 'string' &&
+		Array.isArray(candidate['actions'])
+	);
+}
+
+export function manualStepPath(projectId: string, linkTarget: string): string {
+	return linkTarget === 'protocol'
+		? `/projects/${projectId}/protocol`
+		: `/projects/${projectId}/screening/full-text`;
+}
+
+export function budgetReachedMessage(error: unknown): string | null {
+	if (typeof error !== 'object' || error === null) return null;
+	const record = error as { code?: unknown; status?: unknown };
+	return record.code === 'ai_budget_exceeded' ? 'AI budget for this month reached' : null;
+}
+
+export async function getAssistantPlan(projectId: string, planId: string): Promise<AssistantPlan> {
+	const response = await customFetch<CustomFetchEnvelope<AssistantPlan>>(
+		`/api/projects/${projectId}/assistant/plans/${planId}`,
+		{ method: 'GET', headers: { ...ACTOR_HEADERS } }
+	);
+	return response.data;
+}
+
+export async function confirmAssistantPlan(
+	projectId: string,
+	planId: string
+): Promise<AssistantPlan> {
+	const response = await customFetch<CustomFetchEnvelope<AssistantPlan>>(
+		`/api/projects/${projectId}/assistant/plans/${planId}/confirm`,
+		{ method: 'POST', headers: { ...ACTOR_HEADERS } }
+	);
+	return response.data;
+}
+
+export async function rejectAssistantPlan(
+	projectId: string,
+	planId: string
+): Promise<AssistantPlan> {
+	const response = await customFetch<CustomFetchEnvelope<AssistantPlan>>(
+		`/api/projects/${projectId}/assistant/plans/${planId}/reject`,
+		{ method: 'POST', headers: { ...ACTOR_HEADERS } }
+	);
+	return response.data;
+}
+
+export interface AiBudget {
+	monthly_budget_usd: number;
+	spent_usd: number;
+	remaining_usd: number;
+	exhausted: boolean;
+}
+
+export async function fetchAiBudget(projectId: string): Promise<AiBudget> {
+	const response = await customFetch<CustomFetchEnvelope<AiBudget>>(
+		`/api/projects/${projectId}/ai/budget`,
+		{ method: 'GET', headers: { ...ACTOR_HEADERS } }
+	);
+	return response.data;
+}
+
+export function formatUsd(value: number): string {
+	return new Intl.NumberFormat(undefined, {
+		style: 'currency',
+		currency: 'USD',
+		minimumFractionDigits: 2
+	}).format(value);
+}

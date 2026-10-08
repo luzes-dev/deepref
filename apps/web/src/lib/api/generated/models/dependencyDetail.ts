@@ -15,5 +15,10 @@ export interface DependencyDetail {
 	last_success_at?: string | null;
 	/** @nullable */
 	oldest_age_seconds?: number | null;
+	/**
+	 * Jobs that failed within the recent window (worker only).
+	 * @nullable
+	 */
+	recent_failed?: number | null;
 	state: DependencyState;
 }

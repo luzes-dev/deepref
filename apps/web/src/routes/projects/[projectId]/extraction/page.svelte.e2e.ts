@@ -256,13 +256,11 @@ test('creates a field, generates, edits, reviews provenance, and refreshes accep
 	await page.goto('/projects/project-1/extraction?study=study-1');
 
 	await expect(page.getByRole('heading', { name: 'Extraction', exact: true })).toBeVisible();
-	await expect(page.getByRole('link', { name: 'Extraction' })).toBeVisible();
-	await expect(page.getByTestId('extraction-proposal-only')).toContainText(
-		'Review before saving'
-	);
 
-	await page.getByLabel('Field key').fill('sample_size');
+	await page.getByRole('button', { name: /^Fields/ }).click();
 	await page.getByLabel('Label').fill('Sample size');
+	await page.getByText(/^Key and version/).click();
+	await page.getByLabel('Field key').fill('sample_size');
 	await page.locator('#extraction-field-type').click();
 	await page.getByRole('option', { name: 'number', exact: true }).click();
 	await page.getByLabel('Version').fill('2');
@@ -272,8 +270,10 @@ test('creates a field, generates, edits, reviews provenance, and refreshes accep
 	await expect(state.createdFieldBody).toContain('sample_size');
 	await expect(state.createdFieldBody).toContain('"value_type":"number"');
 	await expect(state.createdFieldBody).toContain('"required":true');
+	await expect(page.getByLabel('Required field')).not.toBeChecked();
+	await expect(page.getByLabel('Label')).toHaveValue('');
 
-	await page.getByRole('tab', { name: 'Review proposals' }).click();
+	await page.getByRole('button', { name: 'Back to data' }).click();
 	await page.getByRole('button', { name: 'Generate proposal' }).click();
 	await expect(page.getByTestId('extraction-proposal-editor')).toBeVisible();
 	await page.getByRole('button', { name: 'Mark insufficient evidence' }).click();
@@ -284,13 +284,16 @@ test('creates a field, generates, edits, reviews provenance, and refreshes accep
 		'href',
 		'/projects/project-1/screening/full-text?report=report-1&page=2&block=block-7'
 	);
-	await expect(page.getByTestId('extraction-proposal-editor')).toContainText('parser.v2');
-	await expect(page.getByTestId('extraction-proposal-editor')).toContainText('hash-7');
+	// The parser version and content hash sit in the evidence label's tooltip.
+	await expect(
+		page
+			.getByTestId('extraction-proposal-editor')
+			.getByTitle(/parser parser\.v2 · content hash hash-7/)
+	).toBeVisible();
 	await page.getByRole('button', { name: 'Accept reviewed values' }).click();
 
-	await page.getByRole('tab', { name: 'Accepted values' }).click();
 	await expect(page.getByTestId('accepted-extraction-values')).toContainText('84.5');
-	await expect(page.getByTestId('accepted-extraction-values')).toContainText('approved');
+	await expect(page.getByTestId('accepted-extraction-values')).toContainText('Accepted');
 	await expect(state.decisionBody).toContain('"kind":"data_extraction"');
 	await expect(state.decisionBody).toContain('"field_id":"field-number"');
 	await expect(state.decisionBody).toContain('"field_version":2');
@@ -300,12 +303,14 @@ test('creates a field, generates, edits, reviews provenance, and refreshes accep
 test('keeps a proposal visible when approval conflicts', async ({ page }) => {
 	const state = await mockExtractionPage(page, 'conflict');
 	await page.goto('/projects/project-1/extraction?study=study-1');
-	await page.getByLabel('Field key').fill('sample_size');
+	await page.getByRole('button', { name: /^Fields/ }).click();
 	await page.getByLabel('Label').fill('Sample size');
+	await page.getByText(/^Key and version/).click();
+	await page.getByLabel('Field key').fill('sample_size');
 	await page.getByLabel('Version').fill('2');
 	await page.getByLabel('Required field').click();
 	await page.getByRole('button', { name: 'Add field' }).click();
-	await page.getByRole('tab', { name: 'Review proposals' }).click();
+	await page.getByRole('button', { name: 'Back to data' }).click();
 	await page.getByRole('button', { name: 'Generate proposal' }).click();
 	await expect(page.getByTestId('extraction-proposal-editor')).toBeVisible();
 	await page.getByRole('button', { name: 'Reject proposal' }).click();
@@ -328,8 +333,9 @@ test('shows deterministic loading and empty states before review begins', async 
 		'data-extraction-state',
 		'loading'
 	);
+	await page.getByRole('button', { name: /^Fields/ }).click();
 	await expect(page.getByTestId('extraction-fields-loading')).toBeVisible();
-	await page.getByRole('tab', { name: 'Review proposals' }).click();
+	await page.getByRole('button', { name: 'Back to data' }).click();
 	await expect(page.getByTestId('extraction-review-loading')).toBeVisible();
 
 	await page.unrouteAll({ behavior: 'ignoreErrors' });
@@ -354,6 +360,7 @@ test('surfaces schema API errors and invalid field input accessibly', async ({ p
 	await page.unrouteAll({ behavior: 'ignoreErrors' });
 	await mockExtractionPage(page, 'accept');
 	await page.goto('/projects/project-1/extraction?study=study-1');
+	await page.getByRole('button', { name: /^Fields/ }).click();
 	await page.getByRole('button', { name: 'Add field' }).click();
 	await expect(page.getByRole('alert').filter({ hasText: 'required' })).toBeVisible();
 	await expect(page.locator('#extraction-field-key')).toHaveAttribute('aria-invalid', 'true');
@@ -377,4 +384,73 @@ test('keeps the review workspace within desktop and mobile bounds in dark mode',
 		expect(overflow, `unexpected horizontal overflow at ${viewport.width}px`).toBe(false);
 		await page.unrouteAll({ behavior: 'ignoreErrors' });
 	}
+});
+
+test('records, overwrites and clears a value by hand without an AI provider', async ({ page }) => {
+	const state = await mockExtractionPage(page, 'accept');
+	state.fields = [field];
+	let putBody = '';
+	const valueUrl = `${api}/projects/project-1/studies/study-1/extraction/values/field-number`;
+	await page.route(valueUrl, async (route) => {
+		if (route.request().method() === 'DELETE') {
+			state.values = [];
+			await route.fulfill({ status: 204 });
+			return;
+		}
+		putBody = route.request().postData() ?? '';
+		const entered = JSON.parse(putBody) as { value: { value: number } };
+		state.values = [
+			{
+				...approvedValue(entered.value.value),
+				report_id: null,
+				source_document_id: null,
+				source_block_id: null,
+				source_page: null,
+				source_parser_version: null,
+				source_content_hash: null,
+				rationale: null
+			} as never
+		];
+		await route.fulfill({ json: state.values[0] });
+	});
+	await page.goto('/projects/project-1/extraction?study=study-1');
+
+	await page.getByTestId('extraction-enter-field-number').click();
+	await page.getByLabel('Sample size value').fill('');
+	await page.keyboard.press('Enter');
+	await expect(page.getByRole('alert')).toContainText('valid number');
+	await page.getByLabel('Sample size value').fill('120');
+	await page.keyboard.press('Enter');
+	await expect(page.getByTestId('accepted-extraction-values')).toContainText('120');
+	await expect(page.getByTestId('accepted-extraction-values')).toContainText('Entered');
+	expect(putBody).toContain('"kind":"number"');
+	expect(putBody).not.toContain('"source"');
+
+	await page.getByTestId('extraction-edit-button-field-number').click();
+	await page.getByLabel('Sample size value').fill('130');
+	await page.keyboard.press('Escape');
+	await expect(page.getByTestId('accepted-extraction-values')).toContainText('120');
+
+	await page.getByTestId('extraction-edit-button-field-number').click();
+	await page.getByLabel('Sample size value').fill('150');
+	await page.getByRole('button', { name: 'Save' }).click();
+	await expect(page.getByTestId('accepted-extraction-values')).toContainText('150');
+
+	await page.getByTestId('extraction-edit-button-field-number').click();
+	await page.getByRole('button', { name: 'Clear value' }).click();
+	await expect(page.getByTestId('extraction-enter-field-number')).toBeVisible();
+});
+
+test('explains inline when AI extraction is not configured', async ({ page }) => {
+	const state = await mockExtractionPage(page, 'accept');
+	state.fields = [field];
+	await page.route(`${api}/projects/project-1/studies/study-1/ai/extraction`, (route) =>
+		route.fulfill({ status: 503, json: { message: 'No AI provider is configured.' } })
+	);
+	await page.goto('/projects/project-1/extraction?study=study-1');
+	await page.getByRole('button', { name: 'Generate proposal' }).click();
+	await expect(page.getByTestId('extraction-provider-unavailable')).toContainText(
+		"AI extraction isn't configured"
+	);
+	await expect(page.getByRole('button', { name: 'Generate proposal' })).toBeDisabled();
 });

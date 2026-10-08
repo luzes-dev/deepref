@@ -1,6 +1,7 @@
 <script lang="ts">
 	import {
 		createDecideAiProposal,
+		createGetAiStatus,
 		createGenerateDuplicateSuggestion,
 		createGenerateScreeningSuggestion,
 		createListAiProposals
@@ -23,6 +24,9 @@
 	import { Spinner } from '@deepref/ui/spinner';
 	import { Brain, Check, FileSearch, Info, X } from '@lucide/svelte';
 	import { ReviewRunObserver } from '../review-run-observer.svelte';
+	import EvidenceLabel from '$lib/features/evidence/EvidenceLabel.svelte';
+	import { humanizeCode } from '$lib/features/evidence/labels';
+	import { plainText } from '$lib/features/notifications/notification-copy';
 
 	type ReviewStage = 'title_abstract' | 'full_text' | 'dedupe';
 	type DocumentBlockEvidence = Extract<AiScreeningEvidenceDto, { kind: 'document_block' }>;
@@ -70,6 +74,25 @@
 					: {})
 		})
 	);
+	// A reviewer's request on a project with an AI second reviewer is recorded as
+	// that independent opinion instead of a suggestion. Looking it up here lets
+	// the panel say what happened rather than "No pending suggestion".
+	const secondReviewerOutcome = "Recorded as the AI second reviewer's independent opinion";
+	const divertedQuery = createListAiProposals(
+		() => projectId,
+		() => ({
+			status: 'expired',
+			task_kind: taskKind,
+			limit: 5,
+			target_report_id: reportId ?? undefined
+		}),
+		() => ({ query: { enabled: stage !== 'dedupe' && Boolean(reportId) } })
+	);
+	const divertedOpinion = $derived(
+		(divertedQuery.data?.data.items ?? []).find(
+			(item) => item.resolution_reason === secondReviewerOutcome
+		) ?? null
+	);
 	const generateScreening = createGenerateScreeningSuggestion();
 	const generateDuplicate = createGenerateDuplicateSuggestion();
 	const decideProposal = createDecideAiProposal();
@@ -93,6 +116,15 @@
 			generateDuplicate.error?.message ||
 			decideProposal.error?.message ||
 			''
+	);
+
+	// Optimistic until the workspace says otherwise: a failed status lookup must not hide AI.
+	const aiStatusQuery = createGetAiStatus();
+	let providerMissing = $state(false);
+	const aiUnavailable = $derived(
+		providerMissing ||
+			/no enabled route/i.test(errorMessage) ||
+			aiStatusQuery.data?.data.suggestions_available === false
 	);
 
 	function criterionRows(proposal: AiProposalDto) {
@@ -184,8 +216,12 @@
 				? 'Source record'
 				: provenance.entity_type === 'report'
 					? 'Candidate report'
-					: provenance.entity_type;
-		return `${entity} ${provenance.entity_id.slice(0, 8)} · ${provenance.field} · hash ${provenance.content_hash.slice(0, 12)}…`;
+					: humanizeCode(provenance.entity_type);
+		return `${entity} · ${humanizeCode(provenance.field)}`;
+	}
+
+	function provenanceTechnical(provenance: AiIdentityProvenanceDto): string {
+		return `${provenance.entity_type} ${provenance.entity_id} · ${provenance.field} · content hash ${provenance.content_hash}`;
 	}
 
 	function uncertainties(proposal: AiProposalDto): string[] {
@@ -220,6 +256,13 @@
 
 	function metadataLabel(field: 'title' | 'abstract'): string {
 		return field === 'title' ? 'Title' : 'Abstract';
+	}
+
+	function isProviderMissing(error: unknown): boolean {
+		return (
+			(error instanceof ApiError && error.status === 503) ||
+			(error instanceof Error && /no enabled route/i.test(error.message))
+		);
 	}
 
 	function isConflict(error: unknown): boolean {
@@ -258,6 +301,10 @@
 				await reviewRun.observe(response.data);
 			}
 		} catch (error) {
+			if (isProviderMissing(error)) {
+				providerMissing = true;
+				return;
+			}
 			localError = error instanceof Error ? error.message : 'AI suggestion failed.';
 		}
 	}
@@ -289,9 +336,13 @@
 	}
 </script>
 
-<Card.Root class="border-primary/15" data-testid="ai-proposal-review">
-	<Card.Header class="gap-3 border-b border-border/60 pb-4">
-		<div class="flex flex-wrap items-center justify-between gap-2">
+{#if aiUnavailable}
+	<p class="text-sm text-muted-foreground" data-testid="ai-proposal-review">
+		AI suggestions aren't set up for this workspace.
+	</p>
+{:else}
+	<Card.Root class="border-primary/15" data-testid="ai-proposal-review">
+		<Card.Header class="gap-1 border-b border-border/60 pb-4">
 			<div class="flex items-center gap-2">
 				<span
 					class="flex size-8 items-center justify-center rounded-lg bg-primary/10 text-primary"
@@ -299,188 +350,218 @@
 				>
 				<Card.Title>AI assistance</Card.Title>
 			</div>
-			<Badge variant="outline">Proposal only</Badge>
-		</div>
-		<Card.Description>
-			AI suggestions are grounded in the recorded protocol and evidence. A reviewer must
-			approve any consequential action.
-		</Card.Description>
-	</Card.Header>
-	<Card.Content class="flex flex-col gap-4 pt-5">
-		{#if errorMessage}
-			<Alert.Root variant="destructive" role="alert">
-				<Alert.Title>AI assistance needs attention</Alert.Title>
-				<Alert.Description>{errorMessage}</Alert.Description>
-			</Alert.Root>
-		{:else if proposalsQuery.isPending}
-			<div class="flex flex-col gap-3" aria-label="Loading AI assistance">
-				<Skeleton class="h-5 w-2/3" />
-				<Skeleton class="h-16 w-full" />
-			</div>
-		{:else if !activeProposal}
-			<Empty.Root class="border-0 p-0">
-				<Empty.Media variant="icon"><Info /></Empty.Media>
-				<Empty.Header>
-					<Empty.Title>No pending suggestion</Empty.Title>
-					<Empty.Description>
-						{stage === 'dedupe'
-							? 'Generate a candidate assessment, then review it here.'
-							: 'Request a grounded suggestion for this report when you are ready.'}
-					</Empty.Description>
-				</Empty.Header>
-			</Empty.Root>
-		{:else}
-			{@const proposal = activeProposal}
-			<div class="flex flex-wrap items-center gap-2 rounded-lg border bg-muted/20 p-3">
-				<Badge variant={proposal.status === 'pending' ? 'secondary' : 'outline'}>
-					{proposal.status}
-				</Badge>
-				<Badge variant="outline">{suggestedDecision(proposal)}</Badge>
-				<span class="text-xs text-muted-foreground">
-					{proposal.provider} / {proposal.model} · prompt {proposal.prompt_version}
-				</span>
-			</div>
-
-			{#if stage !== 'dedupe'}
-				<div class="flex flex-col gap-3" aria-label="Criterion judgments">
-					{#each criterionRows(proposal) as criterion (criterion.criterion_id)}
-						<div class="rounded-lg border bg-card p-3">
-							<div class="flex flex-wrap items-center justify-between gap-2">
-								<span class="font-medium">{criterion.criterion_label}</span>
-								<Badge
-									variant={criterion.judgment === 'unclear'
-										? 'outline'
-										: 'secondary'}>{criterion.judgment}</Badge
-								>
-							</div>
-							<p class="mt-2 text-sm text-muted-foreground">{criterion.rationale}</p>
-							{#if criterion.evidence.length}
-								<div class="mt-2 flex flex-wrap gap-2">
-									{#each criterion.evidence as evidence (evidence.kind === 'document_block' ? evidence.document_block_id + evidence.page : evidence.report_id + evidence.field)}
-										{#if evidence.kind === 'document_block'}
-											<Button
-												variant="outline"
-												size="sm"
-												onclick={() => onEvidenceSelect(evidence)}
-											>
-												<FileSearch data-icon="inline-start" />
-												{evidenceLabel(evidence)}
-											</Button>
-										{:else}
-											<div
-												class="rounded-md border bg-muted/40 px-2 py-1 text-xs"
-											>
-												Report metadata · {metadataLabel(evidence.field)} · hash
-												<span class="font-mono"
-													>{evidence.content_hash.slice(0, 12)}…</span
-												>
-											</div>
-										{/if}
-									{/each}
-								</div>
-							{/if}
-						</div>
-					{/each}
-				</div>
-			{:else}
-				<div class="rounded-lg border bg-muted/20 p-3 text-sm">
-					<p class="font-medium">Candidate pair</p>
-					<p class="mt-1 text-muted-foreground">
-						Record {proposal.target_record_id ?? 'unknown'} · report {candidateReportLabel(
-							proposal
-						)}
-					</p>
-				</div>
-				{#if dedupeRationales(proposal).length}
-					<div class="rounded-lg border bg-muted/20 p-3 text-sm">
-						<p class="font-medium">Rationale</p>
-						<ul class="mt-1 list-disc pl-5 text-muted-foreground">
-							{#each dedupeRationales(proposal) as rationale (rationale.code)}
-								<li>{rationale.code}: {rationale.explanation}</li>
-							{/each}
-						</ul>
-					</div>
-				{/if}
-				{#if dedupeSignals(proposal).length}
-					<div class="rounded-lg border bg-muted/20 p-3 text-sm">
-						<p class="font-medium">Signals</p>
-						<ul class="mt-1 list-disc pl-5 text-muted-foreground">
-							{#each dedupeSignals(proposal) as signal (signal.kind)}
-								<li>
-									{dedupeSignalLabel(signal)} · {signal.supports_match
-										? 'supports match'
-										: 'does not support match'}
-								</li>
-							{/each}
-						</ul>
-					</div>
-				{/if}
-				{#if dedupeProvenance(proposal).length}
-					<div
-						class="rounded-lg border bg-muted/20 p-3 text-sm"
-						data-testid="ai-dedupe-provenance"
-					>
-						<p class="font-medium">Evidence provenance</p>
-						<ul class="mt-1 flex flex-col gap-1 text-muted-foreground">
-							{#each dedupeProvenance(proposal) as evidence (evidence.entity_type + evidence.entity_id + evidence.field)}
-								<li>{provenanceLabel(evidence)}</li>
-							{/each}
-						</ul>
-					</div>
-				{/if}
-			{/if}
-
-			{#if uncertainties(proposal).length}
-				<Alert.Root class="border-warning/40 bg-warning/10" role="status">
-					<Info aria-hidden="true" />
-					<Alert.Title>Uncertainty / abstention</Alert.Title>
+			<Card.Description>Suggestions only take effect after you approve them.</Card.Description
+			>
+		</Card.Header>
+		<Card.Content class="flex flex-col gap-4 pt-5">
+			{#if errorMessage}
+				{@const reason = plainText(errorMessage)}
+				<Alert.Root variant="destructive" role="alert">
+					<Alert.Title>AI assistance needs attention</Alert.Title>
 					<Alert.Description>
-						<ul class="mt-1 list-disc pl-5">
-							{#each uncertainties(proposal) as uncertainty (uncertainty)}
-								<li>{uncertainty}</li>
-							{/each}
-						</ul>
+						<p>{reason.text}</p>
+						{#if reason.technical}
+							<details class="mt-1 text-xs">
+								<summary class="cursor-pointer select-none"
+									>Technical details</summary
+								>
+								<p class="mt-1 font-mono text-2xs break-words">
+									{reason.technical}
+								</p>
+							</details>
+						{/if}
 					</Alert.Description>
 				</Alert.Root>
+			{:else if proposalsQuery.isPending}
+				<div class="flex flex-col gap-3" aria-label="Loading AI assistance">
+					<Skeleton class="h-5 w-2/3" />
+					<Skeleton class="h-16 w-full" />
+				</div>
+			{:else if !activeProposal}
+				{#if divertedOpinion}
+					<Alert.Root data-testid="ai-second-reviewer-recorded">
+						<Alert.Title>Recorded as the AI's independent opinion</Alert.Title>
+						<Alert.Description>
+							With an AI second reviewer, your request is kept as the AI's own
+							opinion. It stays hidden until you decide this record, then it appears
+							under Conflicts next to your decision.
+						</Alert.Description>
+					</Alert.Root>
+				{/if}
+				<Empty.Root class="border-0 p-0">
+					<Empty.Media variant="icon"><Info /></Empty.Media>
+					<Empty.Header>
+						<Empty.Title>No pending suggestion</Empty.Title>
+						<Empty.Description>
+							{stage === 'dedupe'
+								? 'Generate a candidate assessment, then review it here.'
+								: 'Request a grounded suggestion for this report when you are ready.'}
+						</Empty.Description>
+					</Empty.Header>
+				</Empty.Root>
+			{:else}
+				{@const proposal = activeProposal}
+				<div class="flex flex-wrap items-center gap-2 rounded-lg border bg-muted/20 p-3">
+					<Badge variant={proposal.status === 'pending' ? 'secondary' : 'outline'}>
+						{humanizeCode(proposal.status)}
+					</Badge>
+					<Badge variant="outline">{humanizeCode(suggestedDecision(proposal))}</Badge>
+					<span class="text-xs text-muted-foreground">
+						{proposal.provider} / {proposal.model} · prompt {proposal.prompt_version}
+					</span>
+				</div>
+
+				{#if stage !== 'dedupe'}
+					<div class="flex flex-col gap-3" aria-label="Criterion judgments">
+						{#each criterionRows(proposal) as criterion (criterion.criterion_id)}
+							<div class="rounded-lg border bg-card p-3">
+								<div class="flex flex-wrap items-center justify-between gap-2">
+									<span class="font-medium">{criterion.criterion_label}</span>
+									<Badge
+										variant={criterion.judgment === 'unclear'
+											? 'outline'
+											: 'secondary'}>{humanizeCode(criterion.judgment)}</Badge
+									>
+								</div>
+								<p class="mt-2 text-sm text-muted-foreground">
+									{criterion.rationale}
+								</p>
+								{#if criterion.evidence.length}
+									<div class="mt-2 flex flex-wrap gap-2">
+										{#each criterion.evidence as evidence (evidence.kind === 'document_block' ? evidence.document_block_id + evidence.page : evidence.report_id + evidence.field)}
+											{#if evidence.kind === 'document_block'}
+												<Button
+													variant="outline"
+													size="sm"
+													onclick={() => onEvidenceSelect(evidence)}
+												>
+													<FileSearch data-icon="inline-start" />
+													<EvidenceLabel
+														label={evidenceLabel(evidence)}
+														technical={`Document block ${evidence.document_block_id}`}
+													/>
+												</Button>
+											{:else}
+												<div
+													class="max-w-full rounded-md border bg-muted/40 px-2 py-1 text-xs"
+												>
+													<EvidenceLabel
+														label={`${metadataLabel(evidence.field)} of this report`}
+														technical={`Report metadata · content hash ${evidence.content_hash}`}
+													/>
+												</div>
+											{/if}
+										{/each}
+									</div>
+								{/if}
+							</div>
+						{/each}
+					</div>
+				{:else}
+					<div class="rounded-lg border bg-muted/20 p-3 text-sm">
+						<p class="font-medium">Candidate pair</p>
+						<p class="mt-1 text-muted-foreground">
+							Record {proposal.target_record_id ?? 'unknown'} · report {candidateReportLabel(
+								proposal
+							)}
+						</p>
+					</div>
+					{#if dedupeRationales(proposal).length}
+						<div class="rounded-lg border bg-muted/20 p-3 text-sm">
+							<p class="font-medium">Rationale</p>
+							<ul class="mt-1 list-disc pl-5 text-muted-foreground">
+								{#each dedupeRationales(proposal) as rationale (rationale.code)}
+									<li>{rationale.code}: {rationale.explanation}</li>
+								{/each}
+							</ul>
+						</div>
+					{/if}
+					{#if dedupeSignals(proposal).length}
+						<div class="rounded-lg border bg-muted/20 p-3 text-sm">
+							<p class="font-medium">Signals</p>
+							<ul class="mt-1 list-disc pl-5 text-muted-foreground">
+								{#each dedupeSignals(proposal) as signal (signal.kind)}
+									<li>
+										{dedupeSignalLabel(signal)} · {signal.supports_match
+											? 'supports match'
+											: 'does not support match'}
+									</li>
+								{/each}
+							</ul>
+						</div>
+					{/if}
+					{#if dedupeProvenance(proposal).length}
+						<div
+							class="rounded-lg border bg-muted/20 p-3 text-sm"
+							data-testid="ai-dedupe-provenance"
+						>
+							<p class="font-medium">Evidence provenance</p>
+							<ul class="mt-1 flex flex-col gap-1 text-muted-foreground">
+								{#each dedupeProvenance(proposal) as evidence (evidence.entity_type + evidence.entity_id + evidence.field)}
+									<li>
+										<EvidenceLabel
+											label={provenanceLabel(evidence)}
+											technical={provenanceTechnical(evidence)}
+										/>
+									</li>
+								{/each}
+							</ul>
+						</div>
+					{/if}
+				{/if}
+
+				{#if uncertainties(proposal).length}
+					<Alert.Root class="border-warning/40 bg-warning/10" role="status">
+						<Info aria-hidden="true" />
+						<Alert.Title>Uncertainty / abstention</Alert.Title>
+						<Alert.Description>
+							<ul class="mt-1 list-disc pl-5">
+								{#each uncertainties(proposal) as uncertainty (uncertainty)}
+									<li>{uncertainty}</li>
+								{/each}
+							</ul>
+						</Alert.Description>
+					</Alert.Root>
+				{/if}
 			{/if}
-		{/if}
-	</Card.Content>
-	<Card.Footer class="flex flex-wrap justify-end gap-2 border-t border-border/60 pt-4">
-		{#if !activeProposal && ((stage === 'dedupe' && recordId && candidateReportId) || stage !== 'dedupe')}
-			<Button
-				variant="outline"
-				onclick={() => void generate()}
-				disabled={generateScreening.isPending ||
-					generateDuplicate.isPending ||
-					reviewRun.isActive}
-			>
-				{#if generateScreening.isPending || generateDuplicate.isPending || reviewRun.isActive}<Spinner
-						data-icon="inline-start"
-					/>{:else}<Brain data-icon="inline-start" />{/if}
-				Request suggestion
-			</Button>
-		{/if}
-		{#if activeProposal}
-			{@const proposal = activeProposal}
-			<Button
-				variant="outline"
-				disabled={pendingProposalId !== null}
-				onclick={() => void decide(proposal, 'reject')}
-			>
-				{#if pendingProposalId === proposal.id}<Spinner data-icon="inline-start" />{:else}<X
-						data-icon="inline-start"
-					/>{/if}
-				Reject
-			</Button>
-			<Button
-				disabled={pendingProposalId !== null || !canApprove(proposal)}
-				onclick={() => void decide(proposal, 'accept')}
-			>
-				{#if pendingProposalId === proposal.id}<Spinner
-						data-icon="inline-start"
-					/>{:else}<Check data-icon="inline-start" />{/if}
-				Approve and apply
-			</Button>
-		{/if}
-	</Card.Footer>
-</Card.Root>
+		</Card.Content>
+		<Card.Footer class="flex flex-wrap justify-end gap-2 border-t border-border/60 pt-4">
+			{#if !activeProposal && ((stage === 'dedupe' && recordId && candidateReportId) || stage !== 'dedupe')}
+				<Button
+					variant="outline"
+					onclick={() => void generate()}
+					disabled={generateScreening.isPending ||
+						generateDuplicate.isPending ||
+						reviewRun.isActive}
+				>
+					{#if generateScreening.isPending || generateDuplicate.isPending || reviewRun.isActive}<Spinner
+							data-icon="inline-start"
+						/>{:else}<Brain data-icon="inline-start" />{/if}
+					Request suggestion
+				</Button>
+			{/if}
+			{#if activeProposal}
+				{@const proposal = activeProposal}
+				<Button
+					variant="outline"
+					disabled={pendingProposalId !== null}
+					onclick={() => void decide(proposal, 'reject')}
+				>
+					{#if pendingProposalId === proposal.id}<Spinner
+							data-icon="inline-start"
+						/>{:else}<X data-icon="inline-start" />{/if}
+					Reject
+				</Button>
+				<Button
+					disabled={pendingProposalId !== null || !canApprove(proposal)}
+					onclick={() => void decide(proposal, 'accept')}
+				>
+					{#if pendingProposalId === proposal.id}<Spinner
+							data-icon="inline-start"
+						/>{:else}<Check data-icon="inline-start" />{/if}
+					Approve and apply
+				</Button>
+			{/if}
+		</Card.Footer>
+	</Card.Root>
+{/if}

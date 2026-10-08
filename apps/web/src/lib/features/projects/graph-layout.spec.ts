@@ -1,9 +1,11 @@
 import { describe, expect, it } from 'vitest';
 import {
+	fitBBoxWithLabels,
 	getGraphNodeSize,
 	getGraphNodeSizeRange,
 	getMinimumNodeDistance,
-	getNodeSpacingGap
+	getNodeSpacingGap,
+	layoutIsolatedNodes
 } from './graph-layout';
 
 describe('graph layout math', () => {
@@ -60,5 +62,65 @@ describe('graph layout math', () => {
 		const gridSize = Math.ceil(getMinimumNodeDistance(maxNodeSize, maxNodeSize));
 
 		expect(gridSize).toBeGreaterThanOrEqual(getMinimumNodeDistance(maxNodeSize, maxNodeSize));
+	});
+});
+
+describe('graph framing', () => {
+	it('stacks isolated nodes in a column below the connected cluster', () => {
+		const connected = [
+			{ x: 0, y: 0 },
+			{ x: 20, y: 10 }
+		];
+		const placed = layoutIsolatedNodes(connected, 3);
+		expect(placed).toHaveLength(3);
+		expect(new Set(placed.map((point) => point.x))).toEqual(new Set([0]));
+		// Below the cluster on screen: sigma's y axis points up.
+		expect(placed[0].y).toBeLessThan(0);
+		expect(placed[1].y).toBeLessThan(placed[0].y);
+	});
+
+	it('places an all-isolated graph at a finite origin-based column', () => {
+		const placed = layoutIsolatedNodes([], 14);
+		expect(placed.every((point) => Number.isFinite(point.x) && Number.isFinite(point.y))).toBe(
+			true
+		);
+		expect(placed[12].x).toBeGreaterThan(placed[0].x);
+	});
+
+	it('reserves label room on the right of the fitted bounding box', () => {
+		const bbox = fitBBoxWithLabels(
+			[
+				{ x: 0, y: 0 },
+				{ x: 100, y: 50 }
+			],
+			{ width: 800, height: 600 },
+			{ stagePadding: 24, labelWidth: 180, nodePadding: 16 }
+		);
+		expect(bbox).toBeDefined();
+		expect(bbox!.x[0]).toBeLessThan(0);
+		expect(bbox!.x[1] - 100).toBeGreaterThan(0 - bbox!.x[0]);
+	});
+
+	it('reserves room at the top for floating canvas controls', () => {
+		const nodes = [
+			{ x: 0, y: 0 },
+			{ x: 100, y: 100 }
+		];
+		const base = { stagePadding: 24, labelWidth: 120, nodePadding: 16 };
+		const plain = fitBBoxWithLabels(nodes, { width: 800, height: 600 }, base);
+		const inset = fitBBoxWithLabels(
+			nodes,
+			{ width: 800, height: 600 },
+			{ ...base, topInset: 56 }
+		);
+		expect(inset!.y[1] - inset!.y[0]).toBeGreaterThan(plain!.y[1] - plain!.y[0]);
+	});
+
+	it('returns nothing for an empty graph or an unusably small viewport', () => {
+		const options = { stagePadding: 24, labelWidth: 180, nodePadding: 16 };
+		expect(fitBBoxWithLabels([], { width: 800, height: 600 }, options)).toBeUndefined();
+		expect(
+			fitBBoxWithLabels([{ x: 0, y: 0 }], { width: 100, height: 600 }, options)
+		).toBeUndefined();
 	});
 });

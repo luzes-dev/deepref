@@ -15,6 +15,11 @@ export interface NotificationDto {
 	payload: NotificationDtoPayload;
 	/** @nullable */
 	project_id?: string | null;
+	/**
+	 * Name of the project the notification belongs to, for labelling rows.
+	 * @nullable
+	 */
+	project_name?: string | null;
 	/** @nullable */
 	read_at?: string | null;
 	revision: number;

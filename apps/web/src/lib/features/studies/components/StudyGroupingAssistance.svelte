@@ -15,6 +15,7 @@
 	import { Skeleton } from '@deepref/ui/skeleton';
 	import { Spinner } from '@deepref/ui/spinner';
 	import { Brain, Check, X } from '@lucide/svelte';
+	import EvidenceLabel from '$lib/features/evidence/EvidenceLabel.svelte';
 
 	let {
 		reportId,
@@ -59,12 +60,21 @@
 	function evidenceSubject(evidence: AiStudyGroupingEvidenceDto): string {
 		switch (evidence.kind) {
 			case 'report_metadata':
-				return `Report ${evidence.report_id}`;
+				return 'Report';
 			case 'study_metadata':
-				return `Study ${studyLabel(evidence.study_id)}`;
+				return `Study “${studyLabel(evidence.study_id)}”`;
 			case 'study_report_metadata':
-				return `Study ${studyLabel(evidence.study_id)} · report ${evidence.report_id}`;
+				return `Report in study “${studyLabel(evidence.study_id)}”`;
 		}
+	}
+
+	/** Ids and hashes for the tooltip only. */
+	function evidenceTechnical(evidence: AiStudyGroupingEvidenceDto): string {
+		const ids = [
+			'report_id' in evidence ? `report ${evidence.report_id}` : null,
+			'study_id' in evidence ? `study ${evidence.study_id}` : null
+		].filter((part): part is string => Boolean(part));
+		return [...ids, `content hash ${evidence.content_hash}`].join(' · ');
 	}
 </script>
 
@@ -75,7 +85,6 @@
 				<Brain aria-hidden="true" class="size-4" />
 				<Card.Title>Study grouping assistance</Card.Title>
 			</div>
-			<Badge variant="outline">Proposal only</Badge>
 		</div>
 		<Card.Description>
 			AI compares report metadata with existing studies and proposes a reversible grouping. A
@@ -125,10 +134,6 @@
 						<div class="mt-2 flex flex-wrap items-center gap-2">
 							<Badge variant="secondary">Existing study</Badge>
 							<span class="font-medium">{studyLabel(payload.choice.study_id)}</span>
-							<span class="text-sm text-muted-foreground">
-								study {payload.choice.study_id} · expected revision {payload.choice
-									.expected_revision}
-							</span>
 						</div>
 					{:else}
 						<div class="mt-2 flex flex-wrap items-center gap-2">
@@ -172,16 +177,17 @@
 					{#if payload.provenance.length}
 						<ul class="mt-2 flex flex-col gap-2 text-xs">
 							{#each payload.provenance as evidence (evidence.kind + evidence.field + evidence.content_hash)}
-								<li class="rounded-md bg-muted/40 p-2">
-									<div class="flex flex-wrap gap-x-2 gap-y-1">
-										<span class="font-medium">{evidenceSubject(evidence)}</span>
+								<li class="min-w-0 rounded-md bg-muted/40 p-2">
+									<div class="flex min-w-0 flex-wrap gap-x-2 gap-y-1">
+										<EvidenceLabel
+											label={evidenceSubject(evidence)}
+											technical={evidenceTechnical(evidence)}
+											class="font-medium"
+										/>
 										<span class="text-muted-foreground"
 											>· {fieldLabel(evidence.field)}</span
 										>
 									</div>
-									<code class="mt-1 block break-all text-muted-foreground">
-										content hash: {evidence.content_hash}
-									</code>
 								</li>
 							{/each}
 						</ul>

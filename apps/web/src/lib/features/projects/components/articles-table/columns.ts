@@ -1,7 +1,6 @@
 import type { ColumnDef } from '@tanstack/table-core';
 import type { ReportDto } from '$lib/api/generated/models';
 import { renderComponent } from '@deepref/ui/data-table';
-import ArticleDataTableCheckbox from './ArticleDataTableCheckbox.svelte';
 import ArticleDataTableColumnHeader from './ArticleDataTableColumnHeader.svelte';
 import ArticleDataTableRowActions from './ArticleDataTableRowActions.svelte';
 import ArticleTitleCell from './ArticleTitleCell.svelte';
@@ -38,25 +37,6 @@ export function createArticleColumns({
 	selectedArticle?: string;
 }): ColumnDef<ReportDto>[] {
 	return [
-		{
-			id: 'select',
-			header: ({ table }) =>
-				renderComponent(ArticleDataTableCheckbox, {
-					checked: table.getIsAllPageRowsSelected(),
-					indeterminate:
-						table.getIsSomePageRowsSelected() && !table.getIsAllPageRowsSelected(),
-					onCheckedChange: (value) => table.toggleAllPageRowsSelected(Boolean(value)),
-					'aria-label': 'Select all'
-				}),
-			cell: ({ row }) =>
-				renderComponent(ArticleDataTableCheckbox, {
-					checked: row.getIsSelected(),
-					onCheckedChange: (value) => row.toggleSelected(Boolean(value)),
-					'aria-label': 'Select row'
-				}),
-			enableSorting: false,
-			enableHiding: false
-		},
 		{
 			id: 'title',
 			accessorFn: reportLabel,

@@ -18,7 +18,9 @@
 		StudyReportRoleInput,
 		type StudyReportRoleInput as StudyReportRole
 	} from '$lib/api/generated/models/studyReportRoleInput';
+	import { createListFullTextScreeningQueue } from '$lib/api/generated/documents/documents';
 	import { createListProjectReports } from '$lib/api/generated/reports/reports';
+	import type { UngroupedReportDto } from '$lib/api/generated/models';
 	import {
 		createClassifyProjectStudy,
 		createCreateProjectStudy,
@@ -26,16 +28,19 @@
 		createGetReportStudyMembership,
 		createListProjectStudies,
 		createListProjectStudyHistory,
+		createListUngroupedIncludedReports,
 		createPutReportStudyMembership,
 		createRenameProjectStudy,
 		getGetProjectStudyQueryKey,
 		getGetReportStudyMembershipQueryKey,
 		getListProjectStudiesQueryKey,
+		getListUngroupedIncludedReportsQueryKey,
 		getListProjectStudyHistoryQueryKey
 	} from '$lib/api/generated/studies/studies';
-	import { Badge } from '@deepref/ui/badge';
-	import { Separator } from '@deepref/ui/separator';
-	import { PageToolbar, StatePanel, Surface } from '@deepref/ui/layout';
+	import { Skeleton } from '@deepref/ui/skeleton';
+	import * as Tabs from '@deepref/ui/tabs';
+	import * as Resizable from '@deepref/ui/resizable';
+	import { MediaQuery } from 'svelte/reactivity';
 	import PageTemplate from '$lib/shell/PageTemplate.svelte';
 	import { useQueryClient } from '@tanstack/svelte-query';
 	import { ReviewRunObserver } from '$lib/features/ai-assistance/review-run-observer.svelte';
@@ -50,6 +55,7 @@
 
 	let { projectId }: { projectId: string } = $props();
 	const queryClient = useQueryClient();
+	const wide = new MediaQuery('(min-width: 1024px)');
 	const location = $derived(parseStudyLocation(page.url.searchParams));
 	const selectedStudyId = $derived(location.studyId);
 	let newTitle = $state('');
@@ -65,7 +71,12 @@
 		() => projectId,
 		() => ({ limit: 100 })
 	);
+	const ungroupedQuery = createListUngroupedIncludedReports(() => projectId);
 	const reportsQuery = createListProjectReports(
+		() => projectId,
+		() => ({ limit: 100 })
+	);
+	const fullTextQuery = createListFullTextScreeningQueue(
 		() => projectId,
 		() => ({ limit: 100 })
 	);
@@ -120,6 +131,16 @@
 
 	const studies = $derived(studiesQuery.data?.data.items ?? []);
 	const reports = $derived(reportsQuery.data?.data.items ?? []);
+	const ungrouped = $derived(ungroupedQuery.data?.data ?? []);
+	const includedReportIds = $derived(
+		fullTextQuery.data
+			? new Set(
+					fullTextQuery.data.data.items
+						.filter((item) => item.full_text_status === 'include')
+						.map((item) => item.report_id)
+				)
+			: undefined
+	);
 	const selectedReport = $derived(reports.find((report) => report.report_id === reportId));
 	const selectedStudy = $derived(studyQuery.data?.data);
 	const selectedMembership = $derived(
@@ -348,12 +369,18 @@
 		}
 	}
 
-	async function selectStudy(studyId: string): Promise<void> {
+	async function selectStudy(studyId: string, replaceState = false): Promise<void> {
 		const search = updateStudyLocation(page.url.searchParams, { studyId, reportId: '' });
 		let href: string = resolve('/projects/[projectId]/studies', { projectId });
 		href += `?${search.toString()}`;
-		await goto(href, { keepFocus: true, noScroll: true });
+		await goto(href, { keepFocus: true, noScroll: true, replaceState });
 	}
+
+	// Opening Studies always shows a study; an empty detail pane only asks for a click.
+	$effect(() => {
+		const first = studies[0];
+		if (!selectedStudyId && first) void selectStudy(first.id, true);
+	});
 
 	async function createStudy(): Promise<void> {
 		try {
@@ -368,6 +395,40 @@
 			await selectStudy(response.data.id);
 		} catch (error) {
 			notifyError('Study could not be created', error);
+		}
+	}
+
+	let groupingReportId = $state<string | null>(null);
+
+	async function createStudyFromReport(report: UngroupedReportDto): Promise<void> {
+		groupingReportId = report.report_id;
+		try {
+			const created = await createMutation.mutateAsync({
+				projectId,
+				data: { title: (report.title?.trim() || 'Untitled study').slice(0, 200) }
+			});
+			await membershipMutation.mutateAsync({
+				projectId,
+				reportId: report.report_id,
+				data: {
+					study_id: created.data.id,
+					role: StudyReportRoleInput.report_of_study,
+					expected_revision: created.data.revision
+				}
+			});
+			await Promise.all([
+				queryClient.invalidateQueries({
+					queryKey: getListProjectStudiesQueryKey(projectId)
+				}),
+				queryClient.invalidateQueries({
+					queryKey: getListUngroupedIncludedReportsQueryKey(projectId)
+				})
+			]);
+			await selectStudy(created.data.id);
+		} catch (error) {
+			notifyError('Report could not be grouped', error);
+		} finally {
+			groupingReportId = null;
 		}
 	}
 
@@ -487,42 +548,47 @@
 	/>
 </svelte:head>
 
-<PageTemplate testId="studies-page" maxWidth="default">
-	<PageToolbar label="Study identity workflow status">
-		<div class="flex flex-wrap items-center gap-2">
-			<Badge variant="secondary"
-				>{studies.length} {studies.length === 1 ? 'group' : 'groups'}</Badge
-			>
-			<Badge variant={selectedStudy ? 'default' : 'outline'}>
-				{selectedStudy ? 'Study selected' : 'Select a study'}
-			</Badge>
-			{#if selectedStudy}<Badge variant="outline">Revision {selectedStudy.revision}</Badge
-				>{/if}
-		</div>
-	</PageToolbar>
+{#snippet detail()}
+	{#if selectedStudy}
+		<StudyDetailsPanel
+			study={selectedStudy}
+			{designs}
+			bind:renameTitle
+			renaming={renameMutation.isPending}
+			classifying={classifyMutation.isPending}
+			onRename={() => void renameStudy()}
+			onClassify={classify}
+		>
+			<Tabs.Root value="reports">
+				<Tabs.List variant="line" aria-label="Study workspace views">
+					<Tabs.Trigger value="reports"
+						>Reports <span class="text-muted-foreground tabular-nums"
+							>{selectedStudy.reports.length}</span
+						></Tabs.Trigger
+					>
+					<Tabs.Trigger value="assistance">AI assistance</Tabs.Trigger>
+					<Tabs.Trigger value="history">History</Tabs.Trigger>
+				</Tabs.List>
 
-	<div class="grid min-h-0 gap-5 lg:grid-cols-[minmax(18rem,22rem)_minmax(0,1fr)]">
-		<StudyListPanel
-			{studies}
-			{selectedStudyId}
-			pending={studiesQuery.isPending}
-			creating={createMutation.isPending}
-			bind:title={newTitle}
-			onCreate={() => void createStudy()}
-			onSelect={(studyId) => void selectStudy(studyId)}
-		/>
-
-		{#if selectedStudy}
-			<div class="flex flex-col gap-6">
-				<StudyDetailsPanel
-					study={selectedStudy}
-					{designs}
-					bind:renameTitle
-					renaming={renameMutation.isPending}
-					classifying={classifyMutation.isPending}
-					onRename={() => void renameStudy()}
-					onClassify={classify}
-				>
+				<Tabs.Content value="reports" class="pt-2">
+					<StudyMembershipPanel
+						study={selectedStudy}
+						{reports}
+						{selectedReport}
+						{includedReportIds}
+						bind:reportId
+						bind:role
+						assigning={membershipMutation.isPending}
+						membershipPending={membershipQuery.isPending || membershipQuery.isFetching}
+						currentStudyLabel={selectedMembership &&
+						selectedMembership.study_id !== selectedStudy.id
+							? studyLabel(selectedMembership.study_id)
+							: undefined}
+						onAssign={() => void assignReport()}
+						onUnassign={(selectedReportId) => void unassignReport(selectedReportId)}
+					/>
+				</Tabs.Content>
+				<Tabs.Content value="assistance" class="flex flex-col gap-6 pt-2">
 					<StudyClassificationAssistance
 						proposal={activeClassificationProposal}
 						pending={classificationProposalsQuery.isPending}
@@ -534,21 +600,6 @@
 						{studyLabel}
 						onDecide={(decision) => void decideClassification(decision)}
 					/>
-
-					<Separator />
-
-					<StudyMembershipPanel
-						study={selectedStudy}
-						{reports}
-						{selectedReport}
-						bind:reportId
-						bind:role
-						assigning={membershipMutation.isPending}
-						membershipPending={membershipQuery.isPending || membershipQuery.isFetching}
-						onAssign={() => void assignReport()}
-						onUnassign={(selectedReportId) => void unassignReport(selectedReportId)}
-					/>
-
 					<StudyGroupingAssistance
 						{reportId}
 						proposal={activeGroupingProposal}
@@ -564,18 +615,76 @@
 						onGenerate={() => void generateGrouping()}
 						onDecide={(decision) => void decideGrouping(decision)}
 					/>
-				</StudyDetailsPanel>
+				</Tabs.Content>
+				<Tabs.Content value="history" class="pt-2"
+					><StudyHistoryPanel {history} /></Tabs.Content
+				>
+			</Tabs.Root>
+		</StudyDetailsPanel>
+	{:else if selectedStudyId && studyQuery.isPending}
+		<div class="flex flex-col gap-3" aria-label="Loading study">
+			<Skeleton class="h-7 w-1/2" /><Skeleton class="h-4 w-1/3" /><Skeleton
+				class="h-40 w-full"
+			/>
+		</div>
+	{:else if !studiesQuery.isPending && studies.length === 0}
+		<div class="flex max-w-md flex-col gap-2">
+			<h2 class="editorial-title text-xl">Group included reports into studies</h2>
+			<p class="text-sm text-muted-foreground">
+				Several reports often describe one investigation. Create a study, then add its
+				reports so appraisal and extraction count it once.
+			</p>
+		</div>
+	{/if}
+{/snippet}
 
-				<StudyHistoryPanel {history} />
-			</div>
-		{:else}
-			<Surface as="section" tone="plain" class="border-t border-border-subtle pt-5">
-				<StatePanel
-					state="empty"
-					title="No study selected"
-					description="Choose a study on the left to review its papers, or create a new group."
+{#if wide.current}
+	<div class="h-full min-h-0" data-testid="studies-page">
+		<Resizable.PaneGroup
+			direction="horizontal"
+			class="h-full"
+			autoSaveId="deepref:studies-layout"
+		>
+			<Resizable.Pane order={1} defaultSize={26} minSize={16} maxSize={40}>
+				<StudyListPanel
+					{studies}
+					{selectedStudyId}
+					pending={studiesQuery.isPending}
+					creating={createMutation.isPending}
+					bind:title={newTitle}
+					onCreate={() => void createStudy()}
+					onSelect={(studyId) => void selectStudy(studyId)}
+					{ungrouped}
+					ungroupedPending={ungroupedQuery.isPending}
+					{groupingReportId}
+					onCreateFromReport={(report) => void createStudyFromReport(report)}
 				/>
-			</Surface>
-		{/if}
+			</Resizable.Pane>
+			<Resizable.Handle />
+			<Resizable.Pane order={2} defaultSize={74} minSize={40}>
+				<div class="h-full overflow-y-auto px-8 py-6">
+					<div class="max-w-4xl">{@render detail()}</div>
+				</div>
+			</Resizable.Pane>
+		</Resizable.PaneGroup>
 	</div>
-</PageTemplate>
+{:else}
+	<PageTemplate testId="studies-page" containerClass="gap-6">
+		<div class="-mx-4 border-b">
+			<StudyListPanel
+				{studies}
+				{selectedStudyId}
+				pending={studiesQuery.isPending}
+				creating={createMutation.isPending}
+				bind:title={newTitle}
+				onCreate={() => void createStudy()}
+				onSelect={(studyId) => void selectStudy(studyId)}
+				{ungrouped}
+				ungroupedPending={ungroupedQuery.isPending}
+				{groupingReportId}
+				onCreateFromReport={(report) => void createStudyFromReport(report)}
+			/>
+		</div>
+		{@render detail()}
+	</PageTemplate>
+{/if}

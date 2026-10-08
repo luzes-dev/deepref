@@ -1,4 +1,5 @@
 import { expect, test, type Page } from '@playwright/test';
+import type { PrismaDto } from '../../../../lib/api/generated/models';
 
 const projectId = 'project-1';
 const api = 'http://localhost:4173/api';
@@ -16,7 +17,7 @@ const dependencies = {
 	worker: { state: 'available', lag: 0, backlog: 0, oldest_age_seconds: null }
 };
 
-const projection = {
+const projection: PrismaDto = {
 	project_id: projectId,
 	as_of: '2026-01-01T00:00:00Z',
 	identified_records: 8,
@@ -40,10 +41,13 @@ const projection = {
 	screening_high_watermark: 3,
 	full_text_exclusions: [
 		{ id: 'reason-1', code: 'wrong-design', label: 'Wrong design', count: 1 }
-	]
+	],
+	reconciliation_warnings: []
 };
 
-const canonicalSvg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 640 360">
+const canonicalSvg = `<svg id="prisma-flow" xmlns="http://www.w3.org/2000/svg" role="img" aria-labelledby="prisma-title prisma-description" viewBox="0 0 640 360">
+<title id="prisma-title">PRISMA 2020 flow diagram</title>
+<desc id="prisma-description">Records identified, duplicate records removed, records screened and excluded, reports sought and not retrieved, reports assessed and excluded with reasons, and studies included.</desc>
 <rect width="640" height="360" fill="#fff"/>
 <defs><marker id="arrow" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0,0 L8,4 L0,8 z" fill="#0a6b58"/></marker></defs>
 <g font-family="Arial, sans-serif" fill="#1d302c">
@@ -59,7 +63,7 @@ const canonicalSvg = `<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 640 3
 </g></svg>`;
 
 async function mockPrismaWorkspace(page: Page): Promise<void> {
-	await page.route(`${api}/health/dependencies`, (route) =>
+	await page.route(/\/api\/health\/dependencies(?:\?.*)?$/, (route) =>
 		route.fulfill({ json: dependencies })
 	);
 	await page.route(/\/api\/projects(?:\?.*)?$/, (route) =>
@@ -69,10 +73,10 @@ async function mockPrismaWorkspace(page: Page): Promise<void> {
 	await page.route(/\/api\/ingestions(?:\?.*)?$/, (route) =>
 		route.fulfill({ json: { items: [], next_cursor: null } })
 	);
-	await page.route(/\/api\/notifications(?:\/unread-count)?$/, (route) =>
+	await page.route(/\/api\/notifications(?:\/unread-count)?(?:\?.*)?$/, (route) =>
 		route.fulfill({
 			json: route.request().url().includes('unread-count')
-				? { unread_count: 0 }
+				? { count: 0, latest_revision: 0 }
 				: { items: [], next_cursor: null }
 		})
 	);
@@ -123,6 +127,9 @@ test('PRISMA page renders canonical reconciliation and deterministic exports', a
 	await page.goto(`/projects/${projectId}/prisma`);
 
 	await expect(page.getByRole('heading', { name: 'PRISMA flow' })).toBeVisible();
+	await expect(page.getByRole('img', { name: /PRISMA 2020 flow diagram/ })).toBeVisible();
+	await page.getByRole('tab', { name: 'Counts & sources' }).click();
+	const counts = page.locator('dl');
 	for (const [label, value] of [
 		['Screened records', '6'],
 		['Title/abstract excluded', '1'],
@@ -135,13 +142,13 @@ test('PRISMA page renders canonical reconciliation and deterministic exports', a
 		['Full-text excluded', '1'],
 		['Grouped reports', '0']
 	] as const) {
-		await expect(page.getByText(label, { exact: true }).locator('..')).toContainText(value);
+		// The inlined diagram repeats these labels as SVG text, so read them from the counts list.
+		await expect(counts.getByText(label, { exact: true }).locator('..')).toContainText(value);
 	}
-	await page.getByText('All review counts', { exact: true }).click();
 	await expect(page.getByText('Source-canonical reports', { exact: true })).toBeVisible();
 	await expect(page.getByText('Manually created reports', { exact: true })).toBeVisible();
 	await expect(page.getByRole('listitem')).toContainText('Wrong design (wrong-design)');
-	await expect(page.getByRole('img', { name: /PRISMA flow diagram/ })).toBeVisible();
+	await page.getByRole('tab', { name: 'Export', exact: true }).click();
 
 	for (const label of [
 		'Reports CSV',

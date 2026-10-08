@@ -1,7 +1,7 @@
 import type { GraphEdgeDto, GraphNodeDto } from '$lib/api/generated/models';
 import type { GraphOverlayField } from './context.svelte.js';
 import { appraisalStatus, provenanceStatus, screeningStatus, studyStatus } from './graph-overlays';
-import { getGraphNodeSize } from './graph-layout';
+import { fitBBoxWithLabels, getGraphNodeSize, layoutIsolatedNodes } from './graph-layout';
 import { reportLabel } from './report-label';
 import type SigmaType from 'sigma';
 import type { NodeHoverDrawingFunction, NodeLabelDrawingFunction } from 'sigma/rendering';
@@ -41,6 +41,7 @@ export function createProjectGraphRenderer(
 	let graph:
 		ReturnType<SigmaType<GraphNodeAttributes, GraphEdgeAttributes>['getGraph']> | undefined;
 	let themeObserver: MutationObserver | undefined;
+	let resizeObserver: ResizeObserver | undefined;
 	let renderRun = 0;
 	let lastDragEndedAt = 0;
 	let model: ProjectGraphRenderModel = {
@@ -87,7 +88,12 @@ export function createProjectGraphRenderer(
 
 	const DIMMED_NODE_ALPHA = 0.22;
 	const DIMMED_EDGE_ALPHA = 0.24;
-	const NORMAL_LABEL_MAX_WIDTH = 220;
+	const NORMAL_LABEL_MAX_WIDTH = 180;
+	const STAGE_PADDING = 24;
+	const NODE_FIT_PADDING = 16;
+	// Height of the search/layers toolbar floating over the canvas.
+	const TOOLBAR_INSET = 56;
+	const LABEL_ALL_NODE_COUNT = 150;
 	const HOVER_LABEL_MAX_WIDTH = 360;
 	const SMALL_GRAPH_NODE_COUNT = 100;
 	const LARGE_GRAPH_NODE_COUNT = 500;
@@ -324,7 +330,7 @@ export function createProjectGraphRenderer(
 			color: getBaseNodeColor(data),
 			label: data.label,
 			highlighted: hovered || selected,
-			forceLabel: false,
+			forceLabel: graph ? graph.order <= LABEL_ALL_NODE_COUNT : false,
 			zIndex: selected ? 3 : 0
 		};
 		if (!focusActive) return base;
@@ -415,9 +421,10 @@ export function createProjectGraphRenderer(
 			labelFont: 'IBM Plex Sans Variable, sans-serif',
 			labelSize: 12,
 			labelWeight: '500',
-			labelDensity: 0.45,
+			labelDensity: graph && graph.order <= LABEL_ALL_NODE_COUNT ? 4 : 0.45,
 			labelGridCellSize: 160,
-			labelRenderedSizeThreshold: 8,
+			labelRenderedSizeThreshold: graph && graph.order <= LABEL_ALL_NODE_COUNT ? 0 : 8,
+			stagePadding: STAGE_PADDING,
 			labelColor: { color: interaction.palette.label },
 			defaultDrawNodeLabel: drawTruncatedNodeLabel,
 			defaultDrawNodeHover: drawNodeHoverLabel,
@@ -427,7 +434,35 @@ export function createProjectGraphRenderer(
 		};
 	}
 
+	function fitGraphToView() {
+		if (!renderer || !graph) return;
+		const { width, height } = renderer.getDimensions();
+		const points: { x: number; y: number }[] = [];
+		graph.forEachNode((_, attributes) => points.push({ x: attributes.x, y: attributes.y }));
+		const bbox = fitBBoxWithLabels(
+			points,
+			{ width, height },
+			{
+				stagePadding: STAGE_PADDING,
+				labelWidth: Math.min(NORMAL_LABEL_MAX_WIDTH, Math.max(0, width * 0.35)),
+				nodePadding: NODE_FIT_PADDING,
+				topInset: TOOLBAR_INSET
+			}
+		);
+		if (bbox) renderer.setCustomBBox(bbox);
+	}
+
+	function setupResizeObserver(nextTarget: HTMLDivElement) {
+		if (resizeObserver || typeof ResizeObserver === 'undefined') return;
+		resizeObserver = new ResizeObserver(() => {
+			renderer?.resize();
+			fitGraphToView();
+		});
+		resizeObserver.observe(nextTarget);
+	}
+
 	function resetGraphCamera() {
+		fitGraphToView();
 		renderer?.getCamera().setState({ x: 0.5, y: 0.5, ratio: 1, angle: 0 });
 		renderer?.scheduleRefresh({ layoutUnchange: true });
 	}
@@ -838,6 +873,22 @@ export function createProjectGraphRenderer(
 				settings: { margin: 2, ratio: 1, expansion: 1.1, speed: 3 }
 			});
 		}
+		placeIsolatedNodes(nextGraph);
+	}
+
+	function placeIsolatedNodes(nextGraph: GraphInstance): void {
+		const isolated: string[] = [];
+		const connected: { x: number; y: number }[] = [];
+		nextGraph.forEachNode((node, attributes) => {
+			if (nextGraph.degree(node) === 0) isolated.push(node);
+			else connected.push({ x: attributes.x, y: attributes.y });
+		});
+		if (isolated.length === 0) return;
+		const positions = layoutIsolatedNodes(connected, isolated.length);
+		isolated.forEach((node, index) => {
+			nextGraph.setNodeAttribute(node, 'x', positions[index].x);
+			nextGraph.setNodeAttribute(node, 'y', positions[index].y);
+		});
 	}
 
 	function installGraph(
@@ -853,11 +904,14 @@ export function createProjectGraphRenderer(
 			renderer = new Sigma(nextGraph, nextTarget, buildSigmaSettings());
 			graph = renderer.getGraph();
 			registerGraphEvents(renderer);
+			setupResizeObserver(nextTarget);
+			fitGraphToView();
 			return;
 		}
 		renderer.setGraph(nextGraph);
 		graph = renderer.getGraph();
 		renderer.setSettings(buildSigmaSettings());
+		fitGraphToView();
 		renderer.scheduleRefresh({ layoutUnchange: true });
 	}
 
@@ -895,6 +949,8 @@ export function createProjectGraphRenderer(
 		setHoveredNode(undefined);
 		themeObserver?.disconnect();
 		themeObserver = undefined;
+		resizeObserver?.disconnect();
+		resizeObserver = undefined;
 		renderer?.setSetting('enableCameraPanning', true);
 		renderer?.kill();
 		renderer = undefined;

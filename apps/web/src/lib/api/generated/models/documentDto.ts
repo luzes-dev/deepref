@@ -4,13 +4,20 @@
  * DeepRef API
  * OpenAPI spec version: 0.1.0
  */
+import type { DocumentIdentityDto } from './documentIdentityDto.ts';
 
 export interface DocumentDto {
 	byte_size: number;
 	/** @nullable */
 	content_hash?: string | null;
 	created_at: string;
+	/**
+	 * The address the PDF is retrieved from, for external documents.
+	 * @nullable
+	 */
+	external_url?: string | null;
 	id: string;
+	identity?: null | DocumentIdentityDto;
 	mime_type: string;
 	ocr_required: boolean;
 	/** @nullable */

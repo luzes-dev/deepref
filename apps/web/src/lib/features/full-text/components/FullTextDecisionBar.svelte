@@ -3,121 +3,134 @@
 		FullTextExclusionReasonDto,
 		ScreeningDecisionInput
 	} from '$lib/api/generated/models';
-	import { Badge } from '@deepref/ui/badge';
 	import { Button } from '@deepref/ui/button';
 	import { Check, CircleHelp, RotateCcw, X } from '@lucide/svelte';
+	import DecisionChoice from '$lib/features/screening/components/DecisionChoice.svelte';
 
 	let {
 		reasons,
-		selectedReason,
+		current,
 		pending = false,
 		canUndo = false,
 		available = false,
-		onReasonChange,
+		statusMessage = '',
+		choosingReason = $bindable(false),
 		onDecision,
 		onUndo
 	}: {
 		reasons: FullTextExclusionReasonDto[];
-		selectedReason: string;
+		/** The report's recorded full-text decision; the matching button shows as selected. */
+		current?: string;
 		pending?: boolean;
 		canUndo?: boolean;
 		available?: boolean;
-		onReasonChange: (reasonId: string) => void;
+		/** Subtle confirmation shown under the buttons (announced politely). */
+		statusMessage?: string;
+		/** Exclusion needs exactly one reason, so Exclude opens the reasons and a reason commits. */
+		choosingReason?: boolean;
 		onDecision: (decision: ScreeningDecisionInput, reasonId: string | null) => void;
 		onUndo: () => void;
 	} = $props();
 
-	const canExclude = $derived(available && selectedReason.length > 0);
+	const options = [
+		{ value: 'include', label: 'Include', key: 'I', icon: Check },
+		{ value: 'exclude', label: 'Exclude', key: 'E', icon: X },
+		{ value: 'maybe', label: 'Maybe', key: 'M', icon: CircleHelp }
+	] as const;
 </script>
 
 <section
-	class="flex flex-col gap-4 rounded-xl border border-primary/20 bg-primary/5 p-4"
+	class="flex flex-col gap-2"
 	aria-label="Full-text decision controls"
+	data-testid="full-text-decision"
 >
-	<div class="flex flex-wrap items-center justify-between gap-2">
-		<div>
-			<p class="text-sm font-semibold tracking-tight">Record full-text decision</p>
-			<p class="text-xs text-muted-foreground">
-				Choose one outcome after reviewing the parsed evidence.
-			</p>
-		</div>
-		{#if pending}<span class="text-xs font-medium text-primary" aria-live="polite"
-				>Saving decision…</span
-			>{/if}
-	</div>
-	<div class="grid gap-2 sm:grid-cols-3">
-		<Button
-			class="min-h-11 justify-between bg-success text-background hover:bg-success/90"
-			disabled={!available || pending}
-			onclick={() => onDecision('include', null)}
-		>
-			<Check data-icon="inline-start" /> <span>Include</span> <kbd aria-hidden="true">I</kbd>
-		</Button>
-		<Button
-			variant="destructive"
-			class="min-h-11 justify-between"
-			disabled={!canExclude || pending}
-			onclick={() => onDecision('exclude', selectedReason)}
-		>
-			<X data-icon="inline-start" /> <span>Exclude</span> <kbd aria-hidden="true">E</kbd>
-		</Button>
-		<Button
-			variant="outline"
-			class="min-h-11 justify-between border-warning/50 bg-warning/10 text-foreground hover:bg-warning/20"
-			disabled={!available || pending}
-			onclick={() => onDecision('maybe', null)}
-			><CircleHelp data-icon="inline-start" /> <span>Maybe</span>
-			<kbd aria-hidden="true">M</kbd></Button
-		>
-	</div>
-	<div class="flex flex-col gap-2 border-t border-primary/15 pt-3">
-		<label class="flex max-w-md flex-col gap-2 text-sm" for="full-text-reason">
-			<span class="font-medium">Primary full-text exclusion reason</span>
-			<select
-				id="full-text-reason"
-				class="h-9 rounded-md border bg-background px-3 outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/50"
-				value={selectedReason}
-				onchange={(event) => onReasonChange(event.currentTarget.value)}
-				aria-describedby="full-text-reason-help"
-			>
-				<option value="">Choose only for Exclude…</option>
-				{#each reasons as reason (reason.id)}
-					<option value={reason.id}>{reason.label}</option>
-				{/each}
-			</select>
-			<span id="full-text-reason-help" class="text-xs text-muted-foreground">
-				Exclude requires exactly one project full-text reason. Include and Maybe send no
-				reason.
-			</span>
-		</label>
-		<div class="flex flex-wrap items-center justify-between gap-2">
+	{#if choosingReason}
+		<div class="flex flex-wrap items-center gap-2" role="group" aria-label="Exclusion reason">
+			<span class="text-sm font-medium">Exclude because</span>
+			{#each reasons as reason, index (reason.id)}
+				<Button
+					variant="outline"
+					size="sm"
+					disabled={pending}
+					onclick={() => {
+						choosingReason = false;
+						onDecision('exclude', reason.id);
+					}}
+					>{reason.label}{#if index < 9}<kbd aria-hidden="true">{index + 1}</kbd
+						>{/if}</Button
+				>
+			{:else}
+				<span class="text-sm text-muted-foreground"
+					>No full-text exclusion reasons are configured for this project.</span
+				>
+			{/each}
 			<Button
 				variant="ghost"
-				class="min-h-10 px-0 text-muted-foreground hover:bg-transparent hover:text-foreground"
-				disabled={!canUndo || pending}
-				onclick={onUndo}
+				size="sm"
+				class="ml-auto"
+				onclick={() => (choosingReason = false)}>Cancel</Button
 			>
-				<RotateCcw data-icon="inline-start" /> Undo latest decision
-				<kbd aria-hidden="true">U</kbd>
-			</Button>
-			{#if !available}<Badge variant="secondary"
-					>Decisions unlock when parsed full text is available</Badge
-				>{/if}
 		</div>
-	</div>
+	{:else}
+		<div class="flex items-center gap-2">
+			{#each options as option (option.value)}
+				<DecisionChoice
+					decision={option.value}
+					label={option.label}
+					shortcut={option.key}
+					icon={option.icon}
+					selected={current === option.value}
+					disabled={!available || pending}
+					onclick={() =>
+						option.value === 'exclude'
+							? (choosingReason = true)
+							: onDecision(option.value, null)}
+				/>
+			{/each}
+			<div class="ml-auto flex items-center gap-1 sm:gap-3">
+				{#if pending}<span class="text-xs font-medium text-primary" aria-live="polite"
+						>Saving…</span
+					>{/if}
+				<Button
+					variant="ghost"
+					size="sm"
+					disabled={!canUndo || pending}
+					aria-label="Undo latest full-text decision"
+					onclick={onUndo}
+				>
+					<RotateCcw data-icon="inline-start" /><span class="max-sm:sr-only">Undo</span
+					><kbd aria-hidden="true">U</kbd>
+				</Button>
+			</div>
+		</div>
+		{#if statusMessage}
+			<p class="text-xs text-muted-foreground" role="status" aria-live="polite">
+				{statusMessage}
+			</p>
+		{/if}
+		{#if !available}
+			<p class="text-xs text-muted-foreground">
+				Decisions unlock once a PDF is attached and parsed.
+			</p>
+		{/if}
+	{/if}
 </section>
 
 <style>
 	kbd {
-		display: inline-flex;
-		min-width: 1.5rem;
-		align-items: center;
+		display: none;
+		min-width: 1.25rem;
 		justify-content: center;
-		border: 1px solid color-mix(in oklab, var(--border) 80%, transparent);
-		border-radius: 0.3rem;
-		background: var(--muted);
-		padding: 0.1rem 0.35rem;
+		border-radius: 0.25rem;
+		background: color-mix(in oklab, currentColor 12%, transparent);
+		padding: 0 0.3rem;
+		font-family: var(--font-sans);
 		font-size: 0.6875rem;
 		font-weight: 600;
+	}
+	@media (min-width: 40rem) {
+		kbd {
+			display: inline-flex;
+		}
 	}
 </style>
