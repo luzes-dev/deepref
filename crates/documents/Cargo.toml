@@ -12,9 +12,11 @@ object_store.workspace = true
 pdfium-render.workspace = true
 reqwest.workspace = true
 sha2.workspace = true
+serde.workspace = true
 futures.workspace = true
 tokio.workspace = true
 thiserror.workspace = true
+unicode-normalization.workspace = true
 uuid.workspace = true
 url.workspace = true
 

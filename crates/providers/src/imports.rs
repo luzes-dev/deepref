@@ -287,7 +287,16 @@ fn parse_year(value: &str) -> Option<i32> {
 }
 
 fn parse_biblatex(input: &str) -> Result<Vec<RawRecord>, String> {
-    let bibliography = Bibliography::parse(input).map_err(|error| error.to_string())?;
+    let bibliography = Bibliography::parse(input).map_err(|error| {
+        // The parser reports a byte span; count the newlines before it to name the line.
+        let offset = error.span.start.min(input.len());
+        let line = input.as_bytes()[..offset]
+            .iter()
+            .filter(|byte| **byte == b'\n')
+            .count()
+            + 1;
+        format!("{} at line {line}", error.kind)
+    })?;
     let mut records = Vec::new();
     for entry in bibliography.iter() {
         let title = entry
@@ -698,5 +707,30 @@ mod tests {
         assert!(parse_import(b"", ImportFormat::Ris, None).is_err());
         assert!(parse_import(b"not a tagged field", ImportFormat::Ris, None).is_err());
         assert!(parse_import(b"   orphan continuation", ImportFormat::Nbib, None).is_err());
+    }
+
+    #[test]
+    fn import_errors_name_the_offending_line() {
+        let ris = parse_import(
+            b"TY  - JOUR\nTI  - Good\nER  -\n\nTY  - JOUR\nnot a tagged field\nER  -\n",
+            ImportFormat::Ris,
+            None,
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(ris.contains("at line 6"), "{ris}");
+
+        let bibtex = parse_import(
+            b"@article{a,\n  title = {Ok}\n}\n@article{b,\n  title = {Unclosed\n",
+            ImportFormat::Bibtex,
+            None,
+        )
+        .unwrap_err()
+        .to_string();
+        assert!(bibtex.contains("at line "), "{bibtex}");
+        assert!(
+            !bibtex.contains("-"),
+            "the byte span should not leak into the message: {bibtex}"
+        );
     }
 }

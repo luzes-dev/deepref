@@ -11,6 +11,8 @@ deepref-application.workspace = true
 deepref-core.workspace = true
 deepref-crossref.workspace = true
 deepref-domain.workspace = true
+quick-xml = "0.41"
+reqwest.workspace = true
 serde_json.workspace = true
 unicode-normalization.workspace = true
 
