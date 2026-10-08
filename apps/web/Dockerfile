@@ -15,6 +15,7 @@ RUN corepack enable pnpm
 # The subsequent filtered install materializes the web workspace from the cached
 # store after the source tree is present (its prepare script runs svelte-kit sync).
 COPY package.json pnpm-lock.yaml pnpm-workspace.yaml ./
+COPY patches ./patches
 RUN pnpm fetch --frozen-lockfile
 
 COPY packages/ui ./packages/ui

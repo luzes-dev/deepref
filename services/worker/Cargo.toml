@@ -21,7 +21,6 @@ deepref-review.workspace = true
 anyhow.workspace = true
 chrono.workspace = true
 lettre = { version = "0.11", default-features = false, features = ["smtp-transport", "tokio1", "tokio1-rustls", "rustls", "aws-lc-rs", "webpki-roots", "builder"] }
-quick-xml = "0.41"
 reqwest.workspace = true
 serde.workspace = true
 serde_json.workspace = true

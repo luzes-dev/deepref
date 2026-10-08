@@ -118,14 +118,21 @@ const APPLICATION_EXTERNAL: &[&str] = &[
     "anyhow",
     "bytes",
     "chrono",
+    // Pure computation, no I/O: workflow schedules, webhook signing and
+    // address checks.
+    "chrono-tz",
     "futures",
+    "hmac",
     "jsonschema",
+    "regex",
     "serde",
     "serde_json",
     "schemars",
+    "sha2",
     "thiserror",
     "time",
     "rapidfuzz",
+    "url",
     "uuid",
 ];
 

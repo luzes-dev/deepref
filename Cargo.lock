@@ -902,7 +902,6 @@ dependencies = [
  "serde",
  "thiserror",
  "tokio",
- "tracing",
 ]
 
 [[package]]
@@ -1053,7 +1052,6 @@ dependencies = [
  "deepref-review",
  "futures",
  "lettre",
- "quick-xml",
  "reqwest",
  "serde",
  "serde_json",
