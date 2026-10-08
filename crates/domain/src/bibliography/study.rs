@@ -157,7 +157,10 @@ pub fn suggest_appraisal_tools(
     context: StudyDesignContext,
 ) -> Vec<AppraisalToolSuggestion> {
     let mut suggestions = match design {
-        StudyDesign::Rct => vec![suggestion("RoB 2", "randomized intervention bias")],
+        StudyDesign::Rct => vec![suggestion(
+            "RoB 2 (Cochrane risk-of-bias tool for randomized trials)",
+            "randomized intervention bias",
+        )],
         StudyDesign::NonRandomizedIntervention => {
             vec![suggestion("ROBINS-I", "non-randomized intervention bias")]
         }
@@ -392,7 +395,7 @@ mod tests {
                 .iter()
                 .map(|item| item.tool.as_str())
                 .collect::<Vec<_>>(),
-            ["RoB 2"]
+            ["RoB 2 (Cochrane risk-of-bias tool for randomized trials)"]
         );
         let physiotherapy = suggest_appraisal_tools(
             StudyDesign::Rct,
@@ -406,7 +409,10 @@ mod tests {
                 .iter()
                 .map(|item| item.tool.as_str())
                 .collect::<Vec<_>>(),
-            ["RoB 2", "PEDro"]
+            [
+                "RoB 2 (Cochrane risk-of-bias tool for randomized trials)",
+                "PEDro"
+            ]
         );
     }
 

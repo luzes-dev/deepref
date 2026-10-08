@@ -15,6 +15,7 @@ pub mod jobs;
 pub mod prisma;
 pub mod protocol;
 pub mod study;
+pub mod workflows;
 
 pub use acquisition::{
     CitationProvider, CsvColumnMapping, FullTextResolver, ImportError, ImportParser,
@@ -22,10 +23,12 @@ pub use acquisition::{
     SearchProvider,
 };
 pub use appraisal::{
-    AnswerSchema, AppraisalAssessmentInput, AppraisalCompleted, AppraisalDefinition,
+    AnswerSchema, AppliesWhen, AppraisalAssessmentInput, AppraisalCompleted, AppraisalDefinition,
     AppraisalDefinitionError, AppraisalDomain, AppraisalQuestion, AppraisalValidationError,
-    DefinitionId, DefinitionVersion, EvidenceReferenceInput, JudgmentSchema,
-    all_appraisal_definitions, get_appraisal_definition, parse_appraisal_definition_resource,
+    ConditionClause, ConditionMatch, DefinitionId, DefinitionVersion, DomainJudgmentSuggestion,
+    EvidenceReferenceInput, JudgmentSchema, JudgmentSuggestion, OVERALL_JUDGMENT_TARGET,
+    OVERRIDE_REASON_MAX_CHARS, all_appraisal_definitions, appraisal_definition_for_tool,
+    get_appraisal_definition, parse_appraisal_definition_resource, suggest_judgments,
     validate_assessment_input, validate_definition_resource,
     validate_shipped_appraisal_definitions,
 };

@@ -17,6 +17,11 @@ serde_json.workspace = true
 schemars.workspace = true
 thiserror.workspace = true
 uuid.workspace = true
+chrono-tz = "0.10.4"
+hmac = "0.13"
+regex = "1.13.1"
+sha2.workspace = true
+url.workspace = true
 
 [[bench]]
 name = "deduplication"

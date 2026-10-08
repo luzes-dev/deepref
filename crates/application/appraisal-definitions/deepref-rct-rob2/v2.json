@@ -1,0 +1,546 @@
+{
+  "id": "deepref-rct-rob2",
+  "version": 2,
+  "name": "RoB 2 (Cochrane risk-of-bias tool for randomized trials)",
+  "description": "Records reviewer answers to the official RoB 2 signalling questions for a parallel-group randomized trial. The algorithm suggests a judgment for each domain and overall; the reviewer confirms it and explains any change.",
+  "applicability": {
+    "designs": ["rct"],
+    "note": "Sterne JAC, et al. RoB 2: a revised tool for assessing risk of bias in randomised trials. BMJ 2019;366:l4898. riskofbias.info"
+  },
+  "domains": [
+    {
+      "id": "randomization_process",
+      "label": "Bias arising from the randomization process",
+      "description": "Signalling questions 1.1 to 1.3.",
+      "questions": [
+        {
+          "id": "sequence_random",
+          "label": "1.1 Was the allocation sequence random?",
+          "help": "Yes if a random component was used, such as computer-generated random numbers, a random number table, coin tossing or shuffled envelopes; minimization counts as random. No if no random element was used or the sequence is predictable, such as alternation, dates, record numbers, or allocation by clinicians or participants. No information if the only information is that the study is randomized.",
+          "answer_schema": {
+            "kind": "enum",
+            "options": [
+              {"value": "yes", "label": "Yes"},
+              {"value": "probably_yes", "label": "Probably yes"},
+              {"value": "probably_no", "label": "Probably no"},
+              {"value": "no", "label": "No"},
+              {"value": "no_information", "label": "No information"}
+            ]
+          },
+          "required": true,
+          "requires_evidence": false
+        },
+        {
+          "id": "allocation_concealed",
+          "label": "1.2 Was the allocation sequence concealed until participants were enrolled and assigned to interventions?",
+          "help": "Yes for remote or centrally administered allocation (independent pharmacy, telephone or internet service), or properly used opaque, sequentially numbered, sealed envelopes or identical numbered containers. No if there is reason to suspect that the enrolling investigator or the participant knew the forthcoming allocation.",
+          "answer_schema": {
+            "kind": "enum",
+            "options": [
+              {"value": "yes", "label": "Yes"},
+              {"value": "probably_yes", "label": "Probably yes"},
+              {"value": "probably_no", "label": "Probably no"},
+              {"value": "no", "label": "No"},
+              {"value": "no_information", "label": "No information"}
+            ]
+          },
+          "required": true,
+          "requires_evidence": false
+        },
+        {
+          "id": "baseline_imbalance",
+          "label": "1.3 Did baseline differences between intervention groups suggest a problem with the randomization process?",
+          "help": "Differences compatible with chance do not count. Yes if group sizes differ substantially from the intended allocation ratio, there is a clear excess of significant baseline differences, a key prognostic imbalance is unlikely to be chance, or baseline characteristics are suspiciously similar. No information if there is no useful baseline information.",
+          "answer_schema": {
+            "kind": "enum",
+            "options": [
+              {"value": "yes", "label": "Yes"},
+              {"value": "probably_yes", "label": "Probably yes"},
+              {"value": "probably_no", "label": "Probably no"},
+              {"value": "no", "label": "No"},
+              {"value": "no_information", "label": "No information"}
+            ]
+          },
+          "required": true,
+          "requires_evidence": false
+        }
+      ],
+      "judgment": {
+        "options": [
+          {"value": "low_risk", "label": "Low risk"},
+          {"value": "some_concerns", "label": "Some concerns"},
+          {"value": "high_risk", "label": "High risk"}
+        ],
+        "allow_custom": false,
+        "required": true
+      }
+    },
+    {
+      "id": "deviations_from_intervention",
+      "label": "Bias due to deviations from intended interventions",
+      "description": "Assignment-to-intervention variant (effect of assignment), signalling questions 2.1 to 2.7. The adherence-to-intervention variant is not included in this version.",
+      "questions": [
+        {
+          "id": "participants_aware",
+          "label": "2.1 Were participants aware of their assigned intervention during the trial?",
+          "help": "Awareness can change health-related behaviour between the groups; placebo or sham blinding usually prevents this. Yes if participants knew of side effects specific to one intervention.",
+          "answer_schema": {
+            "kind": "enum",
+            "options": [
+              {"value": "yes", "label": "Yes"},
+              {"value": "probably_yes", "label": "Probably yes"},
+              {"value": "probably_no", "label": "Probably no"},
+              {"value": "no", "label": "No"},
+              {"value": "no_information", "label": "No information"}
+            ]
+          },
+          "required": true,
+          "requires_evidence": false
+        },
+        {
+          "id": "personnel_aware",
+          "label": "2.2 Were carers and people delivering the interventions aware of participants' assigned intervention during the trial?",
+          "help": "Awareness can change how the intervention is delivered or which non-protocol interventions are given. If allocation was not concealed, carers were probably aware.",
+          "answer_schema": {
+            "kind": "enum",
+            "options": [
+              {"value": "yes", "label": "Yes"},
+              {"value": "probably_yes", "label": "Probably yes"},
+              {"value": "probably_no", "label": "Probably no"},
+              {"value": "no", "label": "No"},
+              {"value": "no_information", "label": "No information"}
+            ]
+          },
+          "required": true,
+          "requires_evidence": false
+        },
+        {
+          "id": "trial_context_deviations",
+          "label": "2.3 If Y/PY/NI to 2.1 or 2.2: Were there deviations from the intended intervention that arose because of the trial context?",
+          "help": "Asked only when 2.1 or 2.2 is Yes, Probably yes or No information. Answer Yes only with evidence, or strong reason to believe, that the trial context led to failure to implement the protocol interventions or to interventions the protocol did not allow. Changes that would also happen outside a trial, such as non-adherence, are No.",
+          "answer_schema": {
+            "kind": "enum",
+            "options": [
+              {"value": "yes", "label": "Yes"},
+              {"value": "probably_yes", "label": "Probably yes"},
+              {"value": "probably_no", "label": "Probably no"},
+              {"value": "no", "label": "No"},
+              {"value": "no_information", "label": "No information"},
+              {"value": "not_applicable", "label": "Not applicable"}
+            ]
+          },
+          "applies_when": {
+            "match": "any",
+            "clauses": [
+              {"question": "participants_aware", "answers": ["yes", "probably_yes", "no_information"]},
+              {"question": "personnel_aware", "answers": ["yes", "probably_yes", "no_information"]}
+            ]
+          },
+          "required": true,
+          "requires_evidence": false
+        },
+        {
+          "id": "deviations_affected_outcome",
+          "label": "2.4 If Y/PY to 2.3: Were these deviations likely to have affected the outcome?",
+          "help": "Asked only when 2.3 is Yes or Probably yes. Deviations change the estimate only if they affect the outcome.",
+          "answer_schema": {
+            "kind": "enum",
+            "options": [
+              {"value": "yes", "label": "Yes"},
+              {"value": "probably_yes", "label": "Probably yes"},
+              {"value": "probably_no", "label": "Probably no"},
+              {"value": "no", "label": "No"},
+              {"value": "no_information", "label": "No information"},
+              {"value": "not_applicable", "label": "Not applicable"}
+            ]
+          },
+          "applies_when": {
+            "match": "all",
+            "clauses": [
+              {"question": "trial_context_deviations", "answers": ["yes", "probably_yes"]}
+            ]
+          },
+          "required": true,
+          "requires_evidence": false
+        },
+        {
+          "id": "deviations_balanced",
+          "label": "2.5 If Y/PY/NI to 2.4: Were these deviations from intended intervention balanced between groups?",
+          "help": "Asked only when 2.4 is Yes, Probably yes or No information. Deviations that are not balanced between the groups are more likely to bias the estimate.",
+          "answer_schema": {
+            "kind": "enum",
+            "options": [
+              {"value": "yes", "label": "Yes"},
+              {"value": "probably_yes", "label": "Probably yes"},
+              {"value": "probably_no", "label": "Probably no"},
+              {"value": "no", "label": "No"},
+              {"value": "no_information", "label": "No information"},
+              {"value": "not_applicable", "label": "Not applicable"}
+            ]
+          },
+          "applies_when": {
+            "match": "all",
+            "clauses": [
+              {"question": "deviations_affected_outcome", "answers": ["yes", "probably_yes", "no_information"]}
+            ]
+          },
+          "required": true,
+          "requires_evidence": false
+        },
+        {
+          "id": "analysis_appropriate",
+          "label": "2.6 Was an appropriate analysis used to estimate the effect of assignment to intervention?",
+          "help": "Intention-to-treat analyses, and modified intention-to-treat analyses that exclude participants with missing outcome data, are appropriate. Per-protocol and as-treated analyses are not.",
+          "answer_schema": {
+            "kind": "enum",
+            "options": [
+              {"value": "yes", "label": "Yes"},
+              {"value": "probably_yes", "label": "Probably yes"},
+              {"value": "probably_no", "label": "Probably no"},
+              {"value": "no", "label": "No"},
+              {"value": "no_information", "label": "No information"}
+            ]
+          },
+          "required": true,
+          "requires_evidence": false
+        },
+        {
+          "id": "switching_substantial_impact",
+          "label": "2.7 If N/PN/NI to 2.6: Was there potential for a substantial impact (on the result) of the failure to analyse participants in the group to which they were randomized?",
+          "help": "Asked only when 2.6 is No, Probably no or No information. Consider how many participants were analysed in the wrong group or excluded; a rare outcome, or exclusions linked to prognosis, can matter even when few participants are affected.",
+          "answer_schema": {
+            "kind": "enum",
+            "options": [
+              {"value": "yes", "label": "Yes"},
+              {"value": "probably_yes", "label": "Probably yes"},
+              {"value": "probably_no", "label": "Probably no"},
+              {"value": "no", "label": "No"},
+              {"value": "no_information", "label": "No information"},
+              {"value": "not_applicable", "label": "Not applicable"}
+            ]
+          },
+          "applies_when": {
+            "match": "all",
+            "clauses": [
+              {"question": "analysis_appropriate", "answers": ["probably_no", "no", "no_information"]}
+            ]
+          },
+          "required": true,
+          "requires_evidence": false
+        }
+      ],
+      "judgment": {
+        "options": [
+          {"value": "low_risk", "label": "Low risk"},
+          {"value": "some_concerns", "label": "Some concerns"},
+          {"value": "high_risk", "label": "High risk"}
+        ],
+        "allow_custom": false,
+        "required": true
+      }
+    },
+    {
+      "id": "missing_outcome_data",
+      "label": "Bias due to missing outcome data",
+      "description": "Signalling questions 3.1 to 3.4.",
+      "questions": [
+        {
+          "id": "outcome_data_complete",
+          "label": "3.1 Were data for this outcome available for all, or nearly all, participants randomized?",
+          "help": "For continuous outcomes, data from about 95% of participants is often enough. Imputed values count as missing. No information only if the report gives no information about missing outcome data.",
+          "answer_schema": {
+            "kind": "enum",
+            "options": [
+              {"value": "yes", "label": "Yes"},
+              {"value": "probably_yes", "label": "Probably yes"},
+              {"value": "probably_no", "label": "Probably no"},
+              {"value": "no", "label": "No"},
+              {"value": "no_information", "label": "No information"}
+            ]
+          },
+          "required": true,
+          "requires_evidence": false
+        },
+        {
+          "id": "missing_data_not_biased",
+          "label": "3.2 If N/PN/NI to 3.1: Is there evidence that the result was not biased by missing outcome data?",
+          "help": "Asked only when 3.1 is No, Probably no or No information. Evidence can come from analyses that correct for bias, or from sensitivity analyses showing little change under plausible assumptions. Imputation based only on intervention group does not count.",
+          "answer_schema": {
+            "kind": "enum",
+            "options": [
+              {"value": "yes", "label": "Yes"},
+              {"value": "probably_yes", "label": "Probably yes"},
+              {"value": "probably_no", "label": "Probably no"},
+              {"value": "no", "label": "No"},
+              {"value": "not_applicable", "label": "Not applicable"}
+            ]
+          },
+          "applies_when": {
+            "match": "all",
+            "clauses": [
+              {"question": "outcome_data_complete", "answers": ["probably_no", "no", "no_information"]}
+            ]
+          },
+          "required": true,
+          "requires_evidence": false
+        },
+        {
+          "id": "missingness_could_depend",
+          "label": "3.3 If N/PN to 3.2: Could missingness in the outcome depend on its true value?",
+          "help": "Asked only when 3.2 is No or Probably no. Missingness could depend on the outcome if loss to follow-up or withdrawal could relate to health status. If all missing data had documented reasons unrelated to the outcome, the answer is No.",
+          "answer_schema": {
+            "kind": "enum",
+            "options": [
+              {"value": "yes", "label": "Yes"},
+              {"value": "probably_yes", "label": "Probably yes"},
+              {"value": "probably_no", "label": "Probably no"},
+              {"value": "no", "label": "No"},
+              {"value": "no_information", "label": "No information"},
+              {"value": "not_applicable", "label": "Not applicable"}
+            ]
+          },
+          "applies_when": {
+            "match": "all",
+            "clauses": [
+              {"question": "missing_data_not_biased", "answers": ["probably_no", "no"]}
+            ]
+          },
+          "required": true,
+          "requires_evidence": false
+        },
+        {
+          "id": "missingness_likely_depends",
+          "label": "3.4 If Y/PY/NI to 3.3: Is it likely that missingness in the outcome depended on its true value?",
+          "help": "Asked only when 3.3 is Yes, Probably yes or No information. Answer Yes when, for example, dropout or reasons for missing data differ between the groups, or the circumstances make outcome-related dropout likely.",
+          "answer_schema": {
+            "kind": "enum",
+            "options": [
+              {"value": "yes", "label": "Yes"},
+              {"value": "probably_yes", "label": "Probably yes"},
+              {"value": "probably_no", "label": "Probably no"},
+              {"value": "no", "label": "No"},
+              {"value": "no_information", "label": "No information"},
+              {"value": "not_applicable", "label": "Not applicable"}
+            ]
+          },
+          "applies_when": {
+            "match": "all",
+            "clauses": [
+              {"question": "missingness_could_depend", "answers": ["yes", "probably_yes", "no_information"]}
+            ]
+          },
+          "required": true,
+          "requires_evidence": false
+        }
+      ],
+      "judgment": {
+        "options": [
+          {"value": "low_risk", "label": "Low risk"},
+          {"value": "some_concerns", "label": "Some concerns"},
+          {"value": "high_risk", "label": "High risk"}
+        ],
+        "allow_custom": false,
+        "required": true
+      }
+    },
+    {
+      "id": "outcome_measurement",
+      "label": "Bias in measurement of the outcome",
+      "description": "Signalling questions 4.1 to 4.5.",
+      "questions": [
+        {
+          "id": "measurement_inappropriate",
+          "label": "4.1 Was the method of measuring the outcome inappropriate?",
+          "help": "Yes if the method is unlikely to be sensitive to plausible intervention effects, for example because important values fall outside the measurable range, or if the instrument has shown poor validity. For prespecified outcomes the answer is usually No.",
+          "answer_schema": {
+            "kind": "enum",
+            "options": [
+              {"value": "yes", "label": "Yes"},
+              {"value": "probably_yes", "label": "Probably yes"},
+              {"value": "probably_no", "label": "Probably no"},
+              {"value": "no", "label": "No"},
+              {"value": "no_information", "label": "No information"}
+            ]
+          },
+          "required": true,
+          "requires_evidence": false
+        },
+        {
+          "id": "measurement_differed",
+          "label": "4.2 Could measurement or ascertainment of the outcome have differed between intervention groups?",
+          "help": "Differences can arise from different measurement methods, thresholds or time points, or from diagnostic detection bias when outcomes are collected passively or extra visits are scheduled in one group.",
+          "answer_schema": {
+            "kind": "enum",
+            "options": [
+              {"value": "yes", "label": "Yes"},
+              {"value": "probably_yes", "label": "Probably yes"},
+              {"value": "probably_no", "label": "Probably no"},
+              {"value": "no", "label": "No"},
+              {"value": "no_information", "label": "No information"}
+            ]
+          },
+          "required": true,
+          "requires_evidence": false
+        },
+        {
+          "id": "assessors_aware",
+          "label": "4.3 If N/PN/NI to 4.1 and 4.2: Were outcome assessors aware of the intervention received by study participants?",
+          "help": "Asked only when 4.1 and 4.2 are both No, Probably no or No information. Answer No if the assessors were blinded. For participant-reported outcomes, the participant is the assessor.",
+          "answer_schema": {
+            "kind": "enum",
+            "options": [
+              {"value": "yes", "label": "Yes"},
+              {"value": "probably_yes", "label": "Probably yes"},
+              {"value": "probably_no", "label": "Probably no"},
+              {"value": "no", "label": "No"},
+              {"value": "no_information", "label": "No information"},
+              {"value": "not_applicable", "label": "Not applicable"}
+            ]
+          },
+          "applies_when": {
+            "match": "all",
+            "clauses": [
+              {"question": "measurement_inappropriate", "answers": ["probably_no", "no", "no_information"]},
+              {"question": "measurement_differed", "answers": ["probably_no", "no", "no_information"]}
+            ]
+          },
+          "required": true,
+          "requires_evidence": false
+        },
+        {
+          "id": "assessment_could_be_influenced",
+          "label": "4.4 If Y/PY/NI to 4.3: Could assessment of the outcome have been influenced by knowledge of intervention received?",
+          "help": "Asked only when 4.3 is Yes, Probably yes or No information. Knowledge can influence participant-reported outcomes, observer-reported outcomes that involve judgement, and provider decisions. It is unlikely to influence objective outcomes such as all-cause mortality.",
+          "answer_schema": {
+            "kind": "enum",
+            "options": [
+              {"value": "yes", "label": "Yes"},
+              {"value": "probably_yes", "label": "Probably yes"},
+              {"value": "probably_no", "label": "Probably no"},
+              {"value": "no", "label": "No"},
+              {"value": "no_information", "label": "No information"},
+              {"value": "not_applicable", "label": "Not applicable"}
+            ]
+          },
+          "applies_when": {
+            "match": "all",
+            "clauses": [
+              {"question": "assessors_aware", "answers": ["yes", "probably_yes", "no_information"]}
+            ]
+          },
+          "required": true,
+          "requires_evidence": false
+        },
+        {
+          "id": "assessment_likely_influenced",
+          "label": "4.5 If Y/PY/NI to 4.4: Is it likely that assessment of the outcome was influenced by knowledge of intervention received?",
+          "help": "Asked only when 4.4 is Yes, Probably yes or No information. Likely when there are strong beliefs in beneficial or harmful effects of the intervention, for example patient-reported symptoms in trials of homeopathy, or recovery of function assessed by a physiotherapist who delivered the intervention.",
+          "answer_schema": {
+            "kind": "enum",
+            "options": [
+              {"value": "yes", "label": "Yes"},
+              {"value": "probably_yes", "label": "Probably yes"},
+              {"value": "probably_no", "label": "Probably no"},
+              {"value": "no", "label": "No"},
+              {"value": "no_information", "label": "No information"},
+              {"value": "not_applicable", "label": "Not applicable"}
+            ]
+          },
+          "applies_when": {
+            "match": "all",
+            "clauses": [
+              {"question": "assessment_could_be_influenced", "answers": ["yes", "probably_yes", "no_information"]}
+            ]
+          },
+          "required": true,
+          "requires_evidence": false
+        }
+      ],
+      "judgment": {
+        "options": [
+          {"value": "low_risk", "label": "Low risk"},
+          {"value": "some_concerns", "label": "Some concerns"},
+          {"value": "high_risk", "label": "High risk"}
+        ],
+        "allow_custom": false,
+        "required": true
+      }
+    },
+    {
+      "id": "reported_result",
+      "label": "Bias in selection of the reported result",
+      "description": "Signalling questions 5.1 to 5.3.",
+      "questions": [
+        {
+          "id": "analysis_prespecified",
+          "label": "5.1 Were the data that produced this result analysed in accordance with a pre-specified analysis plan that was finalized before unblinded outcome data were available for analysis?",
+          "help": "Changes made before unblinded outcome data were available, or clearly unrelated to the results, do not raise concerns. No information if no analysis plan is available.",
+          "answer_schema": {
+            "kind": "enum",
+            "options": [
+              {"value": "yes", "label": "Yes"},
+              {"value": "probably_yes", "label": "Probably yes"},
+              {"value": "probably_no", "label": "Probably no"},
+              {"value": "no", "label": "No"},
+              {"value": "no_information", "label": "No information"}
+            ]
+          },
+          "required": true,
+          "requires_evidence": false
+        },
+        {
+          "id": "outcome_measurement_selected",
+          "label": "5.2 Is the numerical result being assessed likely to have been selected, on the basis of the results, from multiple eligible outcome measurements (e.g. scales, definitions, time points) within the outcome domain?",
+          "help": "Yes if there is clear evidence, usually from a protocol or statistical analysis plan, that the domain was measured in several eligible ways and only some were fully reported, probably because of the results. No information if plans are not available and there is more than one way to measure the domain.",
+          "answer_schema": {
+            "kind": "enum",
+            "options": [
+              {"value": "yes", "label": "Yes"},
+              {"value": "probably_yes", "label": "Probably yes"},
+              {"value": "probably_no", "label": "Probably no"},
+              {"value": "no", "label": "No"},
+              {"value": "no_information", "label": "No information"}
+            ]
+          },
+          "required": true,
+          "requires_evidence": false
+        },
+        {
+          "id": "analysis_selected",
+          "label": "5.3 Is the numerical result being assessed likely to have been selected, on the basis of the results, from multiple eligible analyses of the data?",
+          "help": "Eligible analyses differ in, for example, adjustment, change from baseline versus final values, transformations, cut-points, covariates or missing-data strategies. Answer as for 5.2.",
+          "answer_schema": {
+            "kind": "enum",
+            "options": [
+              {"value": "yes", "label": "Yes"},
+              {"value": "probably_yes", "label": "Probably yes"},
+              {"value": "probably_no", "label": "Probably no"},
+              {"value": "no", "label": "No"},
+              {"value": "no_information", "label": "No information"}
+            ]
+          },
+          "required": true,
+          "requires_evidence": false
+        }
+      ],
+      "judgment": {
+        "options": [
+          {"value": "low_risk", "label": "Low risk"},
+          {"value": "some_concerns", "label": "Some concerns"},
+          {"value": "high_risk", "label": "High risk"}
+        ],
+        "allow_custom": false,
+        "required": true
+      }
+    }
+  ],
+  "overall_judgment": {
+    "options": [
+      {"value": "low_risk", "label": "Low risk"},
+      {"value": "some_concerns", "label": "Some concerns"},
+      {"value": "high_risk", "label": "High risk"}
+    ],
+    "allow_custom": false,
+    "required": true
+  }
+}
