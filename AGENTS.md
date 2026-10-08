@@ -44,7 +44,7 @@ Components own their internal presentation and provide formal variant/size contr
   - Sizes: `default` (p-3 rounded-lg), `compact` (px-2.5 py-1.5 rounded-md).
 - **Button** ([`packages/ui/src/primitives/button`](file:///home/luzes/.t3/worktrees/ambient-scribes/t3code-729f9577/packages/ui/src/primitives/button/button.svelte)):
   - Variants: `default`, `outline`, `secondary`, `ghost`, `destructive`, `link`.
-  - Sizes: `default`, `xs`, `sm`, `lg`, `icon`, `icon-xs`, `icon-sm`, `icon-lg`.
+  - Sizes: `default`, `xs`, `sm`, `lg`, `multiline` (height grows with wrapped labels, for list items), `icon`, `icon-xs`, `icon-sm`, `icon-lg`.
 
 ---
 

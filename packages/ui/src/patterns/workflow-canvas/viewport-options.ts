@@ -18,3 +18,19 @@ export const WORKFLOW_ZOOM_LIMITS = {
 	minZoom: 0.5,
 	maxZoom: 2,
 } as const;
+
+/**
+ * Builder canvas. A phone-sized screen has to show a whole automation on open,
+ * so the fit may go much further out than the workflow overview does. A block
+ * is never fitted larger than 100%.
+ */
+export const BUILDER_FIT_VIEW_OPTIONS = {
+	padding: 0.12,
+	minZoom: 0.2,
+	maxZoom: 1,
+} as const;
+
+export const BUILDER_ZOOM_LIMITS = {
+	minZoom: 0.2,
+	maxZoom: 2,
+} as const;
