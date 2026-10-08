@@ -191,8 +191,7 @@ async fn check_reads_the_stored_slack_address_and_flags_a_wrong_one() {
         report.issues.iter().any(|issue| issue
             .message
             .contains("does not look like a Slack webhook address")),
-        "{:?}",
-        report.issues
+        "expected the non-Slack address to be rejected"
     );
 
     let good = create_workflow(
@@ -208,7 +207,7 @@ async fn check_reads_the_stored_slack_address_and_flags_a_wrong_one() {
     let report = validate_workflow_draft(&pool, project, good.id)
         .await
         .expect("check");
-    assert!(report.is_ok(), "{:?}", report.issues);
+    assert!(report.is_ok(), "expected the Slack webhook to pass");
     remove_project(&pool, project).await;
 }
 

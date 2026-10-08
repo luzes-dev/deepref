@@ -686,7 +686,9 @@ footer { margin-top: 48px; padding-top: 16px; border-top: 1px solid var(--border
   }
   var saved = load();
   Object.keys(saved).forEach(function (n) {
-    var el = form.querySelector('input[name="' + n + '"][value="' + saved[n].replace(/"/g, '\\"') + '"]');
+    var el = Array.prototype.find.call(form.querySelectorAll("input[type=radio]"), function (i) {
+      return i.name === n && i.value === saved[n];
+    });
     if (el) el.checked = true;
   });
   form.addEventListener("change", function () { save(collect()); });

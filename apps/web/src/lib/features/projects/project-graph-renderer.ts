@@ -901,6 +901,8 @@ export function createProjectGraphRenderer(
 		interaction.palette = readGraphPalette(nextTarget);
 		setupThemeObserver(nextTarget);
 		if (!renderer) {
+			// The label settings depend on the graph size, so the graph must be set first.
+			graph = nextGraph;
 			renderer = new Sigma(nextGraph, nextTarget, buildSigmaSettings());
 			graph = renderer.getGraph();
 			registerGraphEvents(renderer);

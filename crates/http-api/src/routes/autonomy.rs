@@ -220,7 +220,7 @@ pub(crate) async fn update_ai_autonomy(
     Json(body): Json<UpdateAiAutonomyRequest>,
 ) -> Result<Json<AiAutonomyDto>, ApiError> {
     let actor = extract_actor(&headers)?;
-    let mut parsed = Vec::with_capacity(body.changes.len());
+    let mut parsed = Vec::new();
     for change in &body.changes {
         if LOCKED_TASKS.contains(&change.task.as_str()) {
             return Err(ApiError::BadRequest(
