@@ -1,5 +1,5 @@
 import MarkdownIt from 'markdown-it';
-import type Token from 'markdown-it/lib/token.mjs';
+import type { Token } from 'markdown-it';
 
 /**
  * Assistant answers, parsed into a small tree of whitelisted elements.
@@ -118,7 +118,8 @@ interface Frame {
 
 function frameFor(token: Token): Frame {
 	if (token.type === 'link_open') {
-		const link = safeLink(token.attrGet('href'));
+		const href = token.attrGet('href');
+		const link = safeLink(typeof href === 'string' ? href : undefined);
 		return link
 			? { tag: 'a', href: link.href, external: link.external, children: [] }
 			: { tag: null, children: [] };
