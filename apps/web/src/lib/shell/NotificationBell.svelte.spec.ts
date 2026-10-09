@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@testing-library/svelte';
-import { http, HttpResponse } from 'msw';
+import { http, HttpResponse } from 'msw/http';
 import { server } from '../../tests/mocks/server';
 import NotificationBellTestHost from '$lib/tests/NotificationBellTestHost.svelte';
 
