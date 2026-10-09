@@ -13,19 +13,34 @@ use deepref_domain::{
 use deepref_postgres::{
     NewReviewerDecision, ProtocolActor, ReviewCalibrationBundleInput, ReviewCalibrationStatus,
     SecondReviewStatus, insert_model_route, insert_review_calibration_bundle,
-    insert_reviewer_decision_in_transaction, list_reviewer_decisions, migrate, publish_protocol,
-    save_protocol_draft, schedule_screening_review, second_review_status, set_autonomy_level,
-    sweep_second_reviews,
+    insert_reviewer_decision_in_transaction, list_reviewer_decisions, migrate,
+    preview_screening_identity, publish_protocol, save_protocol_draft, schedule_screening_review,
+    second_review_status, set_autonomy_level, sweep_second_reviews,
 };
-use deepref_review::{CalibrationBundleId, ReviewDefinitionKey, worker::ReviewHash};
+use deepref_review::{
+    CalibrationBundleId, IdentityComponent, ReviewDefinitionKey, SemanticIdentity,
+    worker::ReviewHash,
+};
 use serde_json::json;
-use sqlx::{PgPool, postgres::PgPoolOptions};
-use tokio::sync::Mutex;
+use sqlx::{PgPool, Postgres, Transaction, postgres::PgPoolOptions};
 use uuid::Uuid;
 
-/// A sweep looks at every calibrated project in the database, so the tests that
-/// run one take turns. Each still asserts only on the attempts of its own project.
-static SWEEP_TURN: Mutex<()> = Mutex::const_new(());
+/// Arbitrary key for the database-wide lock that serializes route fixtures.
+const ROUTE_FIXTURE_LOCK: i64 = 0x5245_5649_4557_0002;
+
+/// A sweep looks at every calibrated project and route resolution is global per
+/// profile, so the tests that insert routes or sweep take turns. nextest runs each
+/// test in its own process, so the turn is taken in the database. The lock is
+/// transaction-scoped and released when the returned transaction ends.
+async fn sweep_turn(pool: &PgPool) -> Transaction<'static, Postgres> {
+    let mut transaction = pool.begin().await.expect("sweep turn transaction begins");
+    sqlx::query("SELECT pg_advisory_xact_lock($1)")
+        .bind(ROUTE_FIXTURE_LOCK)
+        .execute(&mut *transaction)
+        .await
+        .expect("sweep turn is acquired");
+    transaction
+}
 
 async fn database() -> Option<PgPool> {
     let url = std::env::var("DATABASE_URL").ok()?;
@@ -120,21 +135,24 @@ async fn publish_protocol_for(pool: &PgPool, project_id: Uuid) {
     .expect("protocol publishes");
 }
 
-async fn screening_route(pool: &PgPool) {
-    insert_model_route(
-        pool,
-        &ResolvedModel {
-            profile: ModelProfile::Reasoning,
-            provider: format!("second-review-test-{}", Uuid::new_v4()),
-            model: "reasoner".to_owned(),
-            model_version: "2026-08".to_owned(),
-            parameters: ModelParameters::default(),
-            route_id: None,
-        },
-        Utc::now(),
-    )
-    .await
-    .expect("route inserts");
+/// Routes are resolved by profile, newest first, so each test adds its own.
+async fn screening_routes(pool: &PgPool) {
+    for profile in [ModelProfile::Reasoning, ModelProfile::LongContextReasoning] {
+        insert_model_route(
+            pool,
+            &ResolvedModel {
+                profile,
+                provider: format!("second-review-test-{}", Uuid::new_v4()),
+                model: "reasoner".to_owned(),
+                model_version: "2026-08".to_owned(),
+                parameters: ModelParameters::default(),
+                route_id: None,
+            },
+            Utc::now(),
+        )
+        .await
+        .expect("route inserts");
+    }
 }
 
 async fn waiting_record(pool: &PgPool, project_id: Uuid, title: &str) -> Uuid {
@@ -156,7 +174,19 @@ async fn waiting_record(pool: &PgPool, project_id: Uuid, title: &str) -> Uuid {
     report_id
 }
 
-/// The compiled review hash of this project, read from a run that was actually scheduled.
+/// The identity a screening review of this report at this stage compiles to now.
+async fn identity(
+    pool: &PgPool,
+    project_id: Uuid,
+    report_id: Uuid,
+    stage: ScreeningStage,
+) -> SemanticIdentity {
+    preview_screening_identity(pool, project_id, report_id, stage)
+        .await
+        .expect("screening identity previews")
+}
+
+/// The semantic bundle hash of the last compiled review of this project.
 async fn compiled_hash(pool: &PgPool, project_id: Uuid) -> String {
     sqlx::query_scalar(
         "SELECT semantic_bundle_hash FROM review_run_manifests
@@ -168,14 +198,15 @@ async fn compiled_hash(pool: &PgPool, project_id: Uuid) -> String {
     .expect("a compiled manifest")
 }
 
-async fn approve_calibration(pool: &PgPool, project_id: Uuid, hash: String) {
+/// An approved calibration for exactly this identity, at one stage.
+async fn approve_calibration(pool: &PgPool, project_id: Uuid, identity: SemanticIdentity) {
     insert_review_calibration_bundle(
         pool,
         ReviewCalibrationBundleInput {
             id: CalibrationBundleId::new(Uuid::new_v4()).expect("bundle id"),
             project_id,
             definition: ReviewDefinitionKey::Screening,
-            semantic_bundle_hash: ReviewHash::parse(hash).expect("hash"),
+            identity,
             evaluation_set_id: "second-review-test-fixture".to_owned(),
             thresholds: json!({}),
             metrics: json!({}),
@@ -216,10 +247,10 @@ async fn ai_opinion_on_file(pool: &PgPool, project_id: Uuid, report_id: Uuid) {
 #[tokio::test]
 async fn automatic_second_review_needs_an_approved_calibration_and_says_so() {
     let Some(pool) = database().await else { return };
-    let _turn = SWEEP_TURN.lock().await;
+    let _turn = sweep_turn(&pool).await;
+    screening_routes(&pool).await;
     let project_id = project(&pool).await;
     publish_protocol_for(&pool, project_id).await;
-    screening_route(&pool).await;
     let report_id = waiting_record(&pool, project_id, "Waiting without calibration").await;
 
     // Second reviewer is the default for both screening stages, but nothing
@@ -240,8 +271,9 @@ async fn automatic_second_review_needs_an_approved_calibration_and_says_so() {
     assert_eq!(attempts(&pool, project_id).await, 0);
     assert_eq!(automatic_runs(&pool, project_id).await, 0);
 
-    // A reviewer-requested run fixes the compiled hash; an approved calibration for
-    // exactly that review then turns the status automatic.
+    // A reviewer-requested run compiles the review. The identity previewed for the
+    // stage is that same compiled review, and an approved calibration for exactly
+    // it turns title/abstract automatic.
     schedule_screening_review(
         &pool,
         project_id,
@@ -253,25 +285,38 @@ async fn automatic_second_review_needs_an_approved_calibration_and_says_so() {
     )
     .await
     .expect("reviewer-requested run");
-    approve_calibration(&pool, project_id, compiled_hash(&pool, project_id).await).await;
+    let title = identity(&pool, project_id, report_id, ScreeningStage::TitleAbstract).await;
+    assert_eq!(
+        title.aggregate_hash().expect("hash").as_str(),
+        compiled_hash(&pool, project_id).await,
+        "the previewed identity matches the compiled review"
+    );
+    approve_calibration(&pool, project_id, title).await;
     assert_eq!(
         second_review_status(&pool, project_id, AutonomyTask::TitleAbstractScreening)
             .await
             .expect("status"),
         SecondReviewStatus::Automatic
     );
+    assert_eq!(
+        second_review_status(&pool, project_id, AutonomyTask::FullTextScreening)
+            .await
+            .expect("status"),
+        SecondReviewStatus::NeedsCalibration,
+        "a title/abstract calibration never admits full text"
+    );
 }
 
 #[tokio::test]
 async fn the_sweep_schedules_a_bounded_batch_and_never_repeats_an_attempt() {
     let Some(pool) = database().await else { return };
-    let _turn = SWEEP_TURN.lock().await;
+    let _turn = sweep_turn(&pool).await;
+    screening_routes(&pool).await;
     let project_id = project(&pool).await;
     publish_protocol_for(&pool, project_id).await;
-    screening_route(&pool).await;
     let person = Actor::new(ActorKind::User, "second-review-test").expect("actor");
 
-    // A probe record gets a reviewer-requested run, which fixes the compiled hash that
+    // A probe record gets a reviewer-requested run, which fixes the compiled review that
     // this project's calibration must match. It already has an AI opinion on file, so
     // the sweep must leave it alone.
     let probe = waiting_record(&pool, project_id, "Probe record").await;
@@ -286,7 +331,12 @@ async fn the_sweep_schedules_a_bounded_batch_and_never_repeats_an_attempt() {
     )
     .await
     .expect("reviewer-requested run");
-    approve_calibration(&pool, project_id, compiled_hash(&pool, project_id).await).await;
+    approve_calibration(
+        &pool,
+        project_id,
+        identity(&pool, project_id, probe, ScreeningStage::TitleAbstract).await,
+    )
+    .await;
     ai_opinion_on_file(&pool, project_id, probe).await;
     for index in 0..7 {
         waiting_record(&pool, project_id, &format!("Waiting record {index}")).await;
@@ -320,12 +370,19 @@ async fn the_sweep_schedules_a_bounded_batch_and_never_repeats_an_attempt() {
 #[tokio::test]
 async fn a_calibration_for_a_different_review_releases_the_attempt_and_stops() {
     let Some(pool) = database().await else { return };
-    let _turn = SWEEP_TURN.lock().await;
+    let _turn = sweep_turn(&pool).await;
+    screening_routes(&pool).await;
     let project_id = project(&pool).await;
     publish_protocol_for(&pool, project_id).await;
-    screening_route(&pool).await;
-    waiting_record(&pool, project_id, "Waiting under a stale calibration").await;
-    approve_calibration(&pool, project_id, "b".repeat(64)).await;
+    let report_id = waiting_record(&pool, project_id, "Waiting under a stale calibration").await;
+
+    // The calibration was made under an earlier protocol: only that component differs.
+    let mut earlier = identity(&pool, project_id, report_id, ScreeningStage::TitleAbstract).await;
+    earlier.components.insert(
+        IdentityComponent::Protocol,
+        ReviewHash::digest_bytes("an earlier protocol"),
+    );
+    approve_calibration(&pool, project_id, earlier).await;
 
     sweep_second_reviews(&pool).await.expect("sweep");
     assert_eq!(
@@ -344,6 +401,27 @@ async fn a_calibration_for_a_different_review_releases_the_attempt_and_stops() {
             .expect("status"),
         SecondReviewStatus::CalibrationStale,
         "the status must not read automatic while the gate refuses the calibration"
+    );
+    let (refusal, reasons): (String, Vec<String>) = sqlx::query_as(
+        "SELECT refusal, reasons FROM second_review_gate
+         WHERE project_id=$1 AND stage='title_abstract'",
+    )
+    .bind(project_id)
+    .fetch_one(&pool)
+    .await
+    .expect("the refusal is recorded for the stage");
+    assert_eq!(refusal, "calibration_stale");
+    assert_eq!(
+        reasons,
+        vec!["protocol".to_owned()],
+        "the gate names the component that changed"
+    );
+    assert_eq!(
+        second_review_status(&pool, project_id, AutonomyTask::FullTextScreening)
+            .await
+            .expect("status"),
+        SecondReviewStatus::NeedsCalibration,
+        "a refusal is recorded per stage, and full text has no calibration at all"
     );
 }
 

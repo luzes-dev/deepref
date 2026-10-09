@@ -12,10 +12,10 @@ use deepref_ai::{
 use deepref_application::{
     AnswerSchema, DedupeCandidate, ExtractionFieldType, FUZZY_PROPOSAL_THRESHOLD, score_candidate,
 };
-use deepref_domain::{Actor, CriterionStage, EligibilityCriterion, StudyDesign};
+use deepref_domain::{Actor, ActorKind, CriterionStage, EligibilityCriterion, StudyDesign};
 use deepref_review::{
     ReviewFuture, ReviewOrigin, ReviewRunId, ReviewRunSnapshot, ReviewScheduler, ReviewSubject,
-    ScheduleReviewRun, worker::PreparedReviewTask,
+    ScheduleReviewRun, SemanticIdentity, worker::PreparedReviewTask,
 };
 use thiserror::Error;
 use uuid::Uuid;
@@ -45,7 +45,8 @@ use crate::{
     ExtractionError, PostgresReviewError, PreparedReviewRun, ProtocolError, StudyError,
     get_ai_dedupe_target, get_ai_screening_target, get_ai_study_grouping_target,
     get_published_protocol, get_study, list_ai_exclusion_reasons, list_ai_extraction_evidence,
-    list_ai_grounding_blocks, list_field_definitions, schedule_prepared_review_run,
+    list_ai_grounding_blocks, list_field_definitions, preview_review_identity,
+    schedule_prepared_review_run,
 };
 
 #[derive(Debug, Error)]
@@ -112,6 +113,31 @@ pub async fn schedule_screening_review(
     .await
 }
 
+/// The identity a screening review of this report would be compiled with right
+/// now. Nothing is scheduled. Calibration for a stage is recorded against exactly
+/// this identity, and automation for that stage is admitted only while it holds.
+pub async fn preview_screening_identity(
+    pool: &sqlx::PgPool,
+    project_id: Uuid,
+    report_id: Uuid,
+    stage: ScreeningStage,
+) -> Result<SemanticIdentity, ReviewPreparationError> {
+    let task = screening_task(pool, project_id, report_id, stage, None, None).await?;
+    let actor = Actor::new(ActorKind::System, "identity-preview")
+        .map_err(|error| ReviewPreparationError::InvalidInput(error.to_string()))?;
+    let request = PreparedReviewRun {
+        command: ScheduleReviewRun {
+            project_id: task.project_id(),
+            definition: task.definition_key(),
+            subject: task.subject(),
+            origin: ReviewOrigin::ReviewerRequested,
+            actor,
+        },
+        task,
+    };
+    Ok(preview_review_identity(pool, &request).await?)
+}
+
 async fn schedule_screening_review_with_origin(
     pool: &sqlx::PgPool,
     project_id: Uuid,
@@ -131,6 +157,28 @@ async fn schedule_screening_review_with_origin(
         },
     )
     .await?;
+    let task = screening_task(
+        pool,
+        project_id,
+        report_id,
+        stage,
+        requested_protocol_version_id,
+        requested_revision,
+    )
+    .await?;
+    schedule(pool, task, context).await
+}
+
+/// The screening task for one report and stage, checked against the published
+/// protocol and the revision the reviewer saw.
+async fn screening_task(
+    pool: &sqlx::PgPool,
+    project_id: Uuid,
+    report_id: Uuid,
+    stage: ScreeningStage,
+    requested_protocol_version_id: Option<Uuid>,
+    requested_revision: Option<i64>,
+) -> Result<PreparedReviewTask, ReviewPreparationError> {
     let protocol = get_published_protocol(pool, project_id).await?;
     if requested_protocol_version_id.is_some_and(|id| id != protocol.id) {
         return Err(ReviewPreparationError::InvalidInput(format!(
@@ -179,17 +227,12 @@ async fn schedule_screening_review_with_origin(
             .map(criterion_prompt)
             .collect(),
     };
-    schedule(
-        pool,
-        PreparedReviewTask::Screening {
-            input,
-            criteria,
-            allowed_evidence,
-            allowed_exclusion_reasons,
-        },
-        context,
-    )
-    .await
+    Ok(PreparedReviewTask::Screening {
+        input,
+        criteria,
+        allowed_evidence,
+        allowed_exclusion_reasons,
+    })
 }
 
 pub async fn schedule_duplicate_detection_review(

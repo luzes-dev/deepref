@@ -287,20 +287,21 @@ fn map_postgres_review_error(error: deepref_postgres::PostgresReviewError) -> Ap
             message: "review proposal finalization conflicts with persisted state".to_owned(),
             details: Value::Null,
         },
-        deepref_postgres::PostgresReviewError::CalibrationMissing => ApiError::Conflict {
-            code: "calibration_missing".to_owned(),
-            message: error.to_string(),
-            details: Value::Null,
-        },
-        deepref_postgres::PostgresReviewError::CalibrationFailed => ApiError::Conflict {
-            code: "calibration_failed".to_owned(),
-            message: error.to_string(),
-            details: Value::Null,
-        },
-        deepref_postgres::PostgresReviewError::CalibrationStale => ApiError::Conflict {
-            code: "calibration_stale".to_owned(),
-            message: error.to_string(),
-            details: Value::Null,
-        },
+        deepref_postgres::PostgresReviewError::CalibrationRefused(refusal) => {
+            let details = match &refusal {
+                deepref_postgres::CalibrationRefusal::Stale { components } => serde_json::json!({
+                    "components": components
+                        .iter()
+                        .map(|component| component.as_str())
+                        .collect::<Vec<_>>(),
+                }),
+                _ => Value::Null,
+            };
+            ApiError::Conflict {
+                code: refusal.code().to_owned(),
+                message: refusal.to_string(),
+                details,
+            }
+        }
     }
 }

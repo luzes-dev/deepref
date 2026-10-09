@@ -3,7 +3,7 @@ use deepref_ai::{AiProposal, ModelRouter, ProposalStatus, ProposalStore, hash_js
 use deepref_domain::ProjectId;
 use deepref_review::{
     ReviewBlockCode, ReviewDefinitionKey, ReviewError, ReviewOrigin, ReviewRunId,
-    ReviewRunSnapshot, ReviewRunState, ReviewSubject, ScheduleReviewRun,
+    ReviewRunSnapshot, ReviewRunState, ReviewSubject, ScheduleReviewRun, SemanticIdentity,
     worker::{
         AcceptedArtifactInput, CompiledReview, ExecutedReviewTask, PreparedReviewTask, ReviewHash,
         ReviewManifestInput, ReviewNode, ReviewRunManifest,
@@ -17,7 +17,7 @@ use uuid::Uuid;
 use crate::{
     PostgresAiStore,
     notifications::{NotificationDraft, record_notification},
-    review_calibration::{CalibrationAdmissionError, admit_calibration},
+    review_calibration::{CalibrationRefusal, admit_calibration},
     review_run_setup::{
         ensure_review_automation_definition, model_identity, protocol_version_id, recipe_for,
         runtime_identity,
@@ -44,12 +44,8 @@ pub enum PostgresReviewError {
     WorkerOwnership,
     #[error("review proposal finalization conflicts with persisted state")]
     FinalizationConflict,
-    #[error("automation-triggered review calibration is missing")]
-    CalibrationMissing,
-    #[error("automation-triggered review calibration did not pass")]
-    CalibrationFailed,
-    #[error("automation-triggered review calibration does not match the semantic bundle")]
-    CalibrationStale,
+    #[error(transparent)]
+    CalibrationRefused(#[from] CalibrationRefusal),
 }
 
 #[derive(Debug, Clone)]
@@ -108,35 +104,7 @@ pub async fn schedule_prepared_review_run(
     pool: &PgPool,
     request: PreparedReviewRun,
 ) -> Result<ReviewRunSnapshot, PostgresReviewError> {
-    request.command.validate()?;
-    request.task.validate()?;
-    let task_subject = request.task.subject();
-    if request.command.project_id != request.task.project_id()
-        || request.command.definition != request.task.definition_key()
-        || request.command.subject != task_subject
-    {
-        return Err(ReviewError::InvalidDefinition(
-            "scheduled command and prepared review task disagree".to_owned(),
-        )
-        .into());
-    }
-
-    let review = CompiledReview::compile(request.command.definition)?;
-    let route = PostgresAiStore::new(pool)
-        .resolve(request.task.model_profile())
-        .await?;
-    let source_content_hash = request.task.source_content_hash()?;
-    let manifest = review.build_manifest(ReviewManifestInput {
-        project_id: request.command.project_id,
-        subject: request.command.subject.clone(),
-        origin: request.command.origin,
-        protocol_version_id: protocol_version_id(&request.command.subject),
-        protocol_hash: request.task.protocol_hash()?,
-        source_manifest_hash: source_content_hash.clone(),
-        source_content_hash,
-        resolved_models: vec![model_identity(route)?],
-        runtime: runtime_identity()?,
-    })?;
+    let manifest = build_prepared_manifest(pool, &request).await?;
 
     let recipe = recipe_for(request.command.definition);
     let mut transaction = pool.begin().await?;
@@ -144,9 +112,7 @@ pub async fn schedule_prepared_review_run(
         calibration_bundle_id,
     } = request.command.origin
     {
-        admit_calibration(&mut transaction, &manifest, calibration_bundle_id)
-            .await
-            .map_err(map_calibration_admission_error)?;
+        admit_calibration(&mut transaction, &manifest, calibration_bundle_id).await?;
     }
     let definition_id = ensure_review_automation_definition(
         &mut transaction,
@@ -209,13 +175,56 @@ pub async fn schedule_prepared_review_run(
     get_review_run(pool, request.command.project_id, ReviewRunId::new(run_id)?).await
 }
 
-fn map_calibration_admission_error(error: CalibrationAdmissionError) -> PostgresReviewError {
-    match error {
-        CalibrationAdmissionError::Database(error) => PostgresReviewError::Database(error),
-        CalibrationAdmissionError::Missing => PostgresReviewError::CalibrationMissing,
-        CalibrationAdmissionError::Failed => PostgresReviewError::CalibrationFailed,
-        CalibrationAdmissionError::Stale => PostgresReviewError::CalibrationStale,
+/// The semantic identity a run for `request` would be compiled with right now.
+/// Nothing is scheduled. A calibration bundle recorded for this identity admits
+/// automation for the same review.
+pub async fn preview_review_identity(
+    pool: &PgPool,
+    request: &PreparedReviewRun,
+) -> Result<SemanticIdentity, PostgresReviewError> {
+    let manifest = build_prepared_manifest(pool, request).await?;
+    manifest.semantic_identity.ok_or_else(|| {
+        PostgresReviewError::InvalidStoredValue(
+            "compiled review manifest has no semantic identity".to_owned(),
+        )
+    })
+}
+
+/// Compiles the run manifest for a prepared review: the one place that decides
+/// what a scheduled run and a previewed identity are built from.
+async fn build_prepared_manifest(
+    pool: &PgPool,
+    request: &PreparedReviewRun,
+) -> Result<ReviewRunManifest, PostgresReviewError> {
+    request.command.validate()?;
+    request.task.validate()?;
+    let task_subject = request.task.subject();
+    if request.command.project_id != request.task.project_id()
+        || request.command.definition != request.task.definition_key()
+        || request.command.subject != task_subject
+    {
+        return Err(ReviewError::InvalidDefinition(
+            "scheduled command and prepared review task disagree".to_owned(),
+        )
+        .into());
     }
+
+    let review = CompiledReview::compile(request.command.definition)?;
+    let route = PostgresAiStore::new(pool)
+        .resolve(request.task.model_profile())
+        .await?;
+    let source_content_hash = request.task.source_content_hash()?;
+    Ok(review.build_manifest(ReviewManifestInput {
+        project_id: request.command.project_id,
+        subject: request.command.subject.clone(),
+        origin: request.command.origin,
+        protocol_version_id: protocol_version_id(&request.command.subject),
+        protocol_hash: request.task.protocol_hash()?,
+        source_manifest_hash: source_content_hash.clone(),
+        source_content_hash,
+        resolved_models: vec![model_identity(route)?],
+        runtime: runtime_identity()?,
+    })?)
 }
 
 pub async fn get_review_run(

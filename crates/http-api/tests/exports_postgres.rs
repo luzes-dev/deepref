@@ -385,12 +385,29 @@ async fn postgres_exports_return_every_deterministic_attachment_and_boundary_sta
     .expect("AI proposal should insert");
     sqlx::query(
         "INSERT INTO review_calibration_bundles
-         (id,project_id,definition_key,semantic_bundle_hash,evaluation_set_id,
-          thresholds,metrics,reviewer_metadata,status,evaluated_at)
-         VALUES ($1,$2,'screening',$3,'expert-export-v1',$4,$5,$6,'passing',now())",
+         (id,project_id,definition_key,stage,identity_scheme,identity_snapshot,
+          semantic_bundle_hash,evaluation_set_id,thresholds,metrics,reviewer_metadata,
+          status,evaluated_at)
+         VALUES ($1,$2,'screening','title_abstract',2,$3,$4,'expert-export-v1',$5,$6,$7,
+                 'passing',now())",
     )
     .bind(calibration_bundle_id)
     .bind(project_id)
+    .bind(serde_json::json!({
+        "scheme": 2,
+        "definition": "screening",
+        "stage": "title_abstract",
+        "components": {
+            "definition": "1".repeat(64),
+            "prompt": "2".repeat(64),
+            "schema": "3".repeat(64),
+            "policy": "4".repeat(64),
+            "parser": "5".repeat(64),
+            "protocol": "7".repeat(64),
+            "models": "8".repeat(64),
+            "implementation": "9".repeat(64),
+        },
+    }))
     .bind("6".repeat(64))
     .bind(serde_json::json!({"false_exclusion_rate": 0.01}))
     .bind(serde_json::json!({"false_exclusion_rate": 0.0}))
@@ -690,6 +707,16 @@ async fn postgres_exports_return_every_deterministic_attachment_and_boundary_sta
                         "expected {expected_count} audit rows for {expected_id}"
                     );
                 }
+                let calibration_row = body
+                    .lines()
+                    .find(|line| {
+                        line.trim_start_matches('"')
+                            .starts_with(&calibration_bundle_id.to_string())
+                    })
+                    .expect("calibration evidence is exported");
+                assert!(calibration_row.contains("title_abstract"));
+                assert!(calibration_row.contains("identity_scheme"));
+                assert!(calibration_row.contains("identity_snapshot"));
                 for excluded_id in [
                     other_ai_run_id,
                     other_ai_proposal_id,

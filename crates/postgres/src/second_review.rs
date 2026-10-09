@@ -3,9 +3,10 @@
 //! When a stage is set to an AI second reviewer, the reviewer should screen the
 //! records a person has not decided yet, without being asked. Automation-triggered
 //! runs are admitted only against a passing, expert-adjudicated calibration bundle
-//! whose semantic hash matches the compiled review (ADR 0004). That gate is kept
-//! on purpose: this module schedules only the work the gate admits, and says
-//! plainly when it cannot run.
+//! for that screening stage, whose identity matches the compiled review (ADR 0004).
+//! Title/abstract and full text are calibrated separately: a bundle for one stage
+//! never admits the other. That gate is kept on purpose: this module schedules
+//! only the work the gate admits, and says plainly when it cannot run.
 //!
 //! The sweep is bounded. It schedules at most [`SECOND_REVIEW_BATCH`] records per
 //! project per tick, makes one automatic attempt per record, stage and protocol
@@ -21,8 +22,9 @@ use sqlx::PgPool;
 use uuid::Uuid;
 
 use crate::{
-    PostgresReviewError, PostgresReviewScheduler, ReviewPreparationError, get_ai_budget,
-    get_ai_screening_target, get_published_protocol, resolve_autonomy_level,
+    CalibrationRefusal, PostgresReviewError, PostgresReviewScheduler, ReviewPreparationError,
+    get_ai_budget, get_ai_screening_target, get_published_protocol, resolve_autonomy_level,
+    review_calibration::stage_key,
 };
 
 /// Most records one project may send to the reviewer in one sweep.
@@ -53,6 +55,10 @@ impl SecondReviewStatus {
     }
 }
 
+/// The gate kind written for a stale calibration; the other refusal kinds map to
+/// `NeedsCalibration`. Matches `CalibrationRefusal::Stale` and the gate's CHECK.
+const GATE_STALE: &str = "calibration_stale";
+
 /// Counts from one sweep across every calibrated project.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub struct SecondReviewSweep {
@@ -60,13 +66,6 @@ pub struct SecondReviewSweep {
     pub scheduled: u64,
     /// Attempts released because the calibration gate or the AI route refused.
     pub released: u64,
-}
-
-fn stage_key(stage: ScreeningStage) -> &'static str {
-    match stage {
-        ScreeningStage::TitleAbstract => "title_abstract",
-        ScreeningStage::FullText => "full_text",
-    }
 }
 
 fn stage_of(task: AutonomyTask) -> Option<ScreeningStage> {
@@ -87,17 +86,24 @@ async fn autonomy_level(
         .map_err(|error| anyhow::anyhow!(error.to_string()))
 }
 
-/// The newest passing calibration bundle for the screening definition, if any.
-/// Admission still checks that its semantic hash matches the compiled review.
-async fn passing_calibration(pool: &PgPool, project_id: Uuid) -> anyhow::Result<Option<Uuid>> {
+/// The newest passing calibration bundle for one screening stage, if any. Legacy
+/// bundles (identity scheme 1) carry no stage and are never evidence for a stage.
+/// Admission still checks that the bundle matches the compiled review.
+async fn passing_calibration(
+    pool: &PgPool,
+    project_id: Uuid,
+    stage: ScreeningStage,
+) -> anyhow::Result<Option<Uuid>> {
     Ok(sqlx::query_scalar::<_, Uuid>(
         "SELECT id FROM review_calibration_bundles
-         WHERE project_id=$1 AND definition_key=$2 AND status='passing'
+         WHERE project_id=$1 AND definition_key=$2 AND stage=$3
+           AND identity_scheme>=2 AND status='passing'
          ORDER BY evaluated_at DESC, id DESC
          LIMIT 1",
     )
     .bind(project_id)
     .bind(ReviewDefinitionKey::Screening.as_str())
+    .bind(stage_key(stage))
     .fetch_optional(pool)
     .await?)
 }
@@ -114,16 +120,22 @@ pub async fn second_review_status(
     if autonomy_level(pool, project_id, task).await? != AutonomyLevel::SecondReviewer {
         return Ok(SecondReviewStatus::NotEnabled);
     }
-    if passing_calibration(pool, project_id).await?.is_none() {
+    if passing_calibration(pool, project_id, stage)
+        .await?
+        .is_none()
+    {
         return Ok(SecondReviewStatus::NeedsCalibration);
     }
-    if gate_refusal(pool, project_id, stage).await?.is_some() {
-        return Ok(SecondReviewStatus::CalibrationStale);
+    match gate_refusal(pool, project_id, stage).await? {
+        None => Ok(SecondReviewStatus::Automatic),
+        Some(kind) if kind == GATE_STALE => Ok(SecondReviewStatus::CalibrationStale),
+        // A stage or identity mismatch means no passing bundle admits this stage as
+        // it stands, so it needs calibrating again, as it does when none exists.
+        Some(_) => Ok(SecondReviewStatus::NeedsCalibration),
     }
-    Ok(SecondReviewStatus::Automatic)
 }
 
-/// The refusal the sweep last met for this stage, if it is still in force.
+/// The refusal kind the sweep last met for this stage, if it is still in force.
 async fn gate_refusal(
     pool: &PgPool,
     project_id: Uuid,
@@ -138,25 +150,35 @@ async fn gate_refusal(
     .await?)
 }
 
-/// Keeps the gate record in step with the last sweep: a stale calibration is written,
-/// and a stage that schedules again (or has no bundle to refuse) is cleared.
+/// Keeps the gate record in step with the last sweep. A refusal is written with
+/// its kind and, for a stale calibration, the names of the changed components.
+/// A stage that schedules again, or has no bundle to refuse, is cleared.
 async fn record_gate(
     pool: &PgPool,
     project_id: Uuid,
     stage: ScreeningStage,
-    refusal: Option<&str>,
+    refusal: Option<&CalibrationRefusal>,
 ) -> anyhow::Result<()> {
     match refusal {
         Some(refusal) => {
+            let reasons = match refusal {
+                CalibrationRefusal::Stale { components } => components
+                    .iter()
+                    .map(|component| component.as_str().to_owned())
+                    .collect::<Vec<_>>(),
+                _ => Vec::new(),
+            };
             sqlx::query(
-                "INSERT INTO second_review_gate (project_id, stage, refusal)
-                 VALUES ($1,$2,$3)
+                "INSERT INTO second_review_gate (project_id, stage, refusal, reasons)
+                 VALUES ($1,$2,$3,$4)
                  ON CONFLICT (project_id, stage)
-                 DO UPDATE SET refusal=EXCLUDED.refusal, observed_at=now()",
+                 DO UPDATE SET refusal=EXCLUDED.refusal, reasons=EXCLUDED.reasons,
+                               observed_at=now()",
             )
             .bind(project_id)
             .bind(stage_key(stage))
-            .bind(refusal)
+            .bind(refusal.code())
+            .bind(reasons)
             .execute(pool)
             .await?;
         }
@@ -171,12 +193,14 @@ async fn record_gate(
     Ok(())
 }
 
-/// One bounded pass over every project that has a passing screening calibration.
-/// Projects without one cost a single query and are never sent any work.
+/// One bounded pass over every project that has a passing calibration for a
+/// screening stage. Projects without one cost a single query and are never sent
+/// any work.
 pub async fn sweep_second_reviews(pool: &PgPool) -> anyhow::Result<SecondReviewSweep> {
     let projects = sqlx::query_scalar::<_, Uuid>(
         "SELECT DISTINCT project_id FROM review_calibration_bundles
          WHERE definition_key=$1 AND status='passing'
+           AND identity_scheme>=2 AND stage IS NOT NULL
          ORDER BY project_id",
     )
     .bind(ReviewDefinitionKey::Screening.as_str())
@@ -203,10 +227,6 @@ async fn sweep_project(pool: &PgPool, project_id: Uuid) -> anyhow::Result<Second
     if budget.spent_micros >= budget.budget_micros {
         return Ok(sweep);
     }
-    let Some(bundle) = passing_calibration(pool, project_id).await? else {
-        return Ok(sweep);
-    };
-    let protocol = get_published_protocol(pool, project_id).await?;
     for task in [
         AutonomyTask::TitleAbstractScreening,
         AutonomyTask::FullTextScreening,
@@ -217,6 +237,12 @@ async fn sweep_project(pool: &PgPool, project_id: Uuid) -> anyhow::Result<Second
         if autonomy_level(pool, project_id, task).await? != AutonomyLevel::SecondReviewer {
             continue;
         }
+        // A stage without its own passing calibration has no work. Each stage is
+        // gated on its own calibration, so a refusal for one never stops the other.
+        let Some(bundle) = passing_calibration(pool, project_id, stage).await? else {
+            continue;
+        };
+        let protocol = get_published_protocol(pool, project_id).await?;
         let remaining = SECOND_REVIEW_BATCH - sweep.scheduled as i64;
         if remaining <= 0 {
             break;
@@ -258,18 +284,25 @@ async fn sweep_project(pool: &PgPool, project_id: Uuid) -> anyhow::Result<Second
                     sweep.scheduled += 1;
                 }
                 Err(error) if is_environmental(&error) => {
-                    // The gate or the AI route refuses every record the same way, so
-                    // release this attempt and stop. The next tick retries once the
-                    // project is calibrated or the route is configured.
+                    // The gate or the AI route refuses every record of this stage the
+                    // same way, so release this attempt and move on to the next stage.
+                    // The next tick retries once the stage is calibrated or the route
+                    // is configured.
                     release_attempt(pool, project_id, report_id, stage, protocol.id).await?;
-                    if is_stale(&error) {
-                        record_gate(pool, project_id, stage, Some("calibration_stale")).await?;
-                    } else if is_calibration_refusal(&error) {
-                        record_gate(pool, project_id, stage, None).await?;
+                    match calibration_refusal(&error) {
+                        Some(
+                            refusal @ (CalibrationRefusal::Stale { .. }
+                            | CalibrationRefusal::StageMismatch { .. }
+                            | CalibrationRefusal::IncompatibleIdentityScheme { .. }),
+                        ) => record_gate(pool, project_id, stage, Some(refusal)).await?,
+                        Some(CalibrationRefusal::Missing | CalibrationRefusal::Failed) => {
+                            record_gate(pool, project_id, stage, None).await?;
+                        }
+                        None => {}
                     }
                     sweep.released += 1;
-                    tracing::info!(%project_id, reason = %error, "automatic second review is paused");
-                    return Ok(sweep);
+                    tracing::info!(%project_id, ?stage, reason = %error, "automatic second review is paused for this stage");
+                    break;
                 }
                 Err(error) => {
                     // A record-specific refusal keeps its attempt, so it cannot block
@@ -345,32 +378,23 @@ async fn release_attempt(
     Ok(())
 }
 
-/// Refusals that apply to every record: the calibration gate, or no AI route.
+/// Refusals that apply to every record of a stage: the calibration gate, or no AI route.
 fn is_environmental(error: &ReviewPreparationError) -> bool {
-    if is_calibration_refusal(error) {
+    if calibration_refusal(error).is_some() {
         return true;
     }
     let message = error.to_string().to_ascii_lowercase();
     message.contains("no enabled route") || message.contains("turned off")
 }
 
-fn is_calibration_refusal(error: &ReviewPreparationError) -> bool {
-    matches!(
-        error,
-        ReviewPreparationError::Review(
-            PostgresReviewError::CalibrationMissing
-                | PostgresReviewError::CalibrationFailed
-                | PostgresReviewError::CalibrationStale
-        )
-    )
-}
-
-/// The calibration exists and passes, but it was made for another compiled review.
-fn is_stale(error: &ReviewPreparationError) -> bool {
-    matches!(
-        error,
-        ReviewPreparationError::Review(PostgresReviewError::CalibrationStale)
-    )
+/// The calibration refusal behind a scheduling error, if the error is one.
+fn calibration_refusal(error: &ReviewPreparationError) -> Option<&CalibrationRefusal> {
+    match error {
+        ReviewPreparationError::Review(PostgresReviewError::CalibrationRefused(refusal)) => {
+            Some(refusal)
+        }
+        _ => None,
+    }
 }
 
 #[cfg(test)]
