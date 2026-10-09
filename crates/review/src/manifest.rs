@@ -6,6 +6,7 @@ use uuid::Uuid;
 use crate::{
     CompiledReviewDefinition, ReviewDefinitionKey, ReviewError, ReviewHash, ReviewOrigin,
     ReviewSubject,
+    identity::{IdentityComponent, SemanticIdentity},
 };
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -82,23 +83,29 @@ pub struct ReviewRunManifest {
     pub parser_bundle_hash: ReviewHash,
     pub resolved_models: Vec<ReviewModelIdentity>,
     pub runtime: ReviewRuntimeIdentity,
+    /// Named components of `semantic_bundle_hash`. Manifests persisted before
+    /// identity scheme 2 have none and can never match current evidence.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub semantic_identity: Option<SemanticIdentity>,
     pub semantic_bundle_hash: ReviewHash,
     pub manifest_hash: ReviewHash,
 }
 
+impl ReviewRunManifest {
+    /// The identity recipe this manifest was built with; 1 for legacy manifests.
+    pub fn identity_scheme(&self) -> u32 {
+        self.semantic_identity
+            .as_ref()
+            .map_or(1, |identity| identity.scheme)
+    }
+}
+
 #[derive(Serialize)]
-struct SemanticBundle<'a> {
+struct DefinitionComponent<'a> {
     definition_id: &'a str,
     definition_version: u32,
     definition_hash: &'a ReviewHash,
     workflow_hash: &'a ReviewHash,
-    prompt_bundle_hash: &'a ReviewHash,
-    schema_bundle_hash: &'a ReviewHash,
-    policy_hash: &'a ReviewHash,
-    parser_bundle_hash: &'a ReviewHash,
-    protocol_hash: &'a ReviewHash,
-    resolved_models: &'a [ReviewModelIdentity],
-    runtime: &'a ReviewRuntimeIdentity,
 }
 
 #[derive(Serialize)]
@@ -121,6 +128,7 @@ struct ManifestWithoutOwnHash<'a> {
     parser_bundle_hash: &'a ReviewHash,
     resolved_models: &'a [ReviewModelIdentity],
     runtime: &'a ReviewRuntimeIdentity,
+    semantic_identity: &'a SemanticIdentity,
     semantic_bundle_hash: &'a ReviewHash,
 }
 
@@ -162,19 +170,9 @@ impl ReviewRunManifest {
         }
 
         let identity = definition.identity();
-        let semantic_bundle_hash = ReviewHash::digest_json(&SemanticBundle {
-            definition_id: &identity.definition_id,
-            definition_version: identity.definition_version,
-            definition_hash: &identity.declared_assets_hash,
-            workflow_hash: &identity.workflow_hash,
-            prompt_bundle_hash: &identity.prompt_bundle_hash,
-            schema_bundle_hash: &identity.schema_bundle_hash,
-            policy_hash: &identity.policy_hash,
-            parser_bundle_hash: &identity.parser_bundle_hash,
-            protocol_hash: &input.protocol_hash,
-            resolved_models: &input.resolved_models,
-            runtime: &input.runtime,
-        })?;
+        let semantic_identity = semantic_identity(definition, &input)?;
+        semantic_identity.validate()?;
+        let semantic_bundle_hash = semantic_identity.aggregate_hash()?;
         let manifest_hash = ReviewHash::digest_json(&ManifestWithoutOwnHash {
             project_id: input.project_id,
             definition: definition.key(),
@@ -194,6 +192,7 @@ impl ReviewRunManifest {
             parser_bundle_hash: &identity.parser_bundle_hash,
             resolved_models: &input.resolved_models,
             runtime: &input.runtime,
+            semantic_identity: &semantic_identity,
             semantic_bundle_hash: &semantic_bundle_hash,
         })?;
 
@@ -216,10 +215,61 @@ impl ReviewRunManifest {
             parser_bundle_hash: identity.parser_bundle_hash.clone(),
             resolved_models: input.resolved_models,
             runtime: input.runtime,
+            semantic_identity: Some(semantic_identity),
             semantic_bundle_hash,
             manifest_hash,
         })
     }
+}
+
+/// Builds the scheme-2 identity of one compiled review for one subject.
+///
+/// Runtime provenance is deliberately absent: only `Implementation` speaks for
+/// the code, and it is computed from the semantic boundary rather than from
+/// the deployment.
+fn semantic_identity(
+    definition: &CompiledReviewDefinition,
+    input: &ReviewManifestInput,
+) -> Result<SemanticIdentity, ReviewError> {
+    let identity = definition.identity();
+    let stage = match &input.subject {
+        ReviewSubject::Screening { stage, .. } => Some(*stage),
+        _ => None,
+    };
+    Ok(SemanticIdentity::new(definition.key(), stage)
+        .with(
+            IdentityComponent::Definition,
+            ReviewHash::digest_json(&DefinitionComponent {
+                definition_id: &identity.definition_id,
+                definition_version: identity.definition_version,
+                definition_hash: &identity.declared_assets_hash,
+                workflow_hash: &identity.workflow_hash,
+            })?,
+        )
+        .with(
+            IdentityComponent::Prompt,
+            identity.prompt_bundle_hash.clone(),
+        )
+        .with(
+            IdentityComponent::Schema,
+            identity.schema_bundle_hash.clone(),
+        )
+        .with(IdentityComponent::Policy, identity.policy_hash.clone())
+        .with(
+            IdentityComponent::Parser,
+            identity.parser_bundle_hash.clone(),
+        )
+        .with(IdentityComponent::Protocol, input.protocol_hash.clone())
+        .with(
+            IdentityComponent::Models,
+            ReviewHash::digest_json(&input.resolved_models)?,
+        )
+        // Interim: the broad build hash keeps the coverage it had before the
+        // identity was decomposed, until the narrow semantic boundary replaces it.
+        .with(
+            IdentityComponent::Implementation,
+            input.runtime.build_sha.clone(),
+        ))
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]

@@ -8,6 +8,7 @@
 mod definition;
 mod execution;
 mod hash;
+mod identity;
 mod manifest;
 #[doc(hidden)]
 pub mod memory;
@@ -18,6 +19,9 @@ pub mod worker;
 
 pub(crate) use definition::{CompiledReviewDefinition, ReviewCatalog};
 pub(crate) use hash::ReviewHash;
+pub use identity::{
+    IdentityComparison, IdentityComponent, SEMANTIC_IDENTITY_SCHEME, SemanticIdentity,
+};
 pub(crate) use task::DefinedAiTask;
 pub use types::{
     CalibrationBundleId, ReviewBlockCode, ReviewDefinitionKey, ReviewError, ReviewFuture,
