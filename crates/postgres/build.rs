@@ -22,6 +22,19 @@ use std::{
 use sha2::{Digest, Sha256};
 
 fn main() -> Result<(), Box<dyn Error>> {
+    let compiler = env::var_os("RUSTC").ok_or("RUSTC must be set")?;
+    let version = std::process::Command::new(compiler)
+        .arg("--version")
+        .output()?;
+    if !version.status.success() {
+        return Err("could not record compiler version".into());
+    }
+    let version = String::from_utf8(version.stdout)?;
+    println!("cargo:rustc-env=DEEPREF_RUSTC_VERSION={}", version.trim());
+    println!(
+        "cargo:rustc-env=DEEPREF_BUILD_TARGET={}",
+        env::var("TARGET")?
+    );
     let manifest_dir =
         PathBuf::from(env::var_os("CARGO_MANIFEST_DIR").ok_or("CARGO_MANIFEST_DIR must be set")?);
     let workspace = manifest_dir

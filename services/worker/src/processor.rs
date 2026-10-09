@@ -990,18 +990,16 @@ fn registered_provider_endpoint(provider: &str) -> Option<ProviderEndpoint> {
 }
 
 /// The first resolved route whose recorded endpoint is not the endpoint `worker_endpoint` gives
-/// for its provider. Routes with no recorded endpoint are not compared: those manifests predate
-/// the recording, or their scheduler had no endpoint to record.
+/// for its provider. A configured worker also refuses a route whose scheduler
+/// did not record an endpoint; it cannot establish which endpoint was calibrated.
+/// Two absent endpoints are permitted for unconfigured/in-process fixture gateways.
 fn provider_endpoint_mismatch(
     routes: &[ReviewModelIdentity],
     worker_endpoint: impl Fn(&str) -> Option<ProviderEndpoint>,
 ) -> Option<&ReviewModelIdentity> {
-    routes.iter().find(|route| {
-        route
-            .endpoint
-            .as_ref()
-            .is_some_and(|recorded| worker_endpoint(&route.provider).as_ref() != Some(recorded))
-    })
+    routes
+        .iter()
+        .find(|route| worker_endpoint(&route.provider).as_ref() != route.endpoint.as_ref())
 }
 
 struct CompiledReviewExecution<'a> {
@@ -1893,10 +1891,11 @@ mod tests {
     }
 
     #[test]
-    fn routes_without_a_recorded_endpoint_are_not_compared() {
+    fn a_configured_worker_refuses_an_unpinned_scheduler_endpoint() {
         let routes = [route("opencode-go", None)];
         let configured = |_: &str| Some(endpoint("https://backup.example/zen/go/v1"));
-        assert!(provider_endpoint_mismatch(&routes, configured).is_none());
+        assert!(provider_endpoint_mismatch(&routes, configured).is_some());
+        assert!(provider_endpoint_mismatch(&routes, |_| None).is_none());
     }
 
     #[test]

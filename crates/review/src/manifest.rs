@@ -21,7 +21,7 @@ pub struct ReviewModelIdentity {
     pub parameters_hash: ReviewHash,
     /// The normalized endpoint this route is sent to, as the scheduling process was configured.
     /// Absent when that process had no endpoint for the provider, and in manifests persisted
-    /// before the endpoint was recorded; those routes are not compared at execution.
+    /// before the endpoint was recorded; a configured worker refuses such an unpinned route.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub endpoint: Option<ProviderEndpoint>,
 }
@@ -772,6 +772,7 @@ mod tests {
                     model: "classifier".to_owned(),
                     model_version: "v1".to_owned(),
                     parameters_hash: hash("parameters"),
+                    endpoint: None,
                 }],
                 runtime: ReviewRuntimeIdentity {
                     build_sha: hash("build"),

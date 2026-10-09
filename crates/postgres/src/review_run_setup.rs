@@ -82,10 +82,8 @@ pub(crate) fn model_identity(
 pub(crate) fn runtime_identity() -> Result<ReviewRuntimeIdentity, deepref_review::ReviewError> {
     Ok(ReviewRuntimeIdentity {
         build_sha: ReviewHash::parse(env!("DEEPREF_SOURCE_TREE_SHA"))?,
-        rust_version: option_env!("RUSTC_VERSION")
-            .unwrap_or("workspace-toolchain")
-            .to_owned(),
-        target: format!("{}-{}", std::env::consts::ARCH, std::env::consts::OS),
+        rust_version: env!("DEEPREF_RUSTC_VERSION").to_owned(),
+        target: env!("DEEPREF_BUILD_TARGET").to_owned(),
         deployment_build_id: option_env!("DEEPREF_BUILD_SHA")
             .map(str::trim)
             .filter(|id| !id.is_empty())

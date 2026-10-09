@@ -303,7 +303,7 @@ pub(crate) fn check_admission(
         stored: stored_scheme,
         current: current_scheme,
     };
-    if stored_scheme < 2 || current_scheme < 2 {
+    if stored_scheme != current_scheme || stored_scheme < 2 {
         return Err(incompatible());
     }
     let Some(current) = manifest.semantic_identity.as_ref() else {
@@ -399,6 +399,7 @@ mod tests {
                     model: "reasoner".to_owned(),
                     model_version: model_version.to_owned(),
                     parameters_hash: hash("parameters"),
+                    endpoint: None,
                 }],
                 runtime: ReviewRuntimeIdentity {
                     build_sha: hash("build"),
@@ -440,6 +441,21 @@ mod tests {
         let manifest = screening_manifest(ScreeningStage::TitleAbstract, "v1");
         let identity = manifest.semantic_identity.clone().expect("identity");
         assert_eq!(check_admission(&stored_for(&identity), &manifest), Ok(()));
+    }
+
+    #[test]
+    fn an_unknown_scheme_cannot_use_the_matching_hash_fast_path() {
+        let manifest = screening_manifest(ScreeningStage::TitleAbstract, "v1");
+        let identity = manifest.semantic_identity.clone().expect("identity");
+        let mut stored = stored_for(&identity);
+        stored.identity_scheme = 3;
+        assert_eq!(
+            check_admission(&stored, &manifest),
+            Err(CalibrationRefusal::IncompatibleIdentityScheme {
+                stored: 3,
+                current: 2
+            }),
+        );
     }
 
     #[test]

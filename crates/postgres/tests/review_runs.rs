@@ -63,7 +63,6 @@ async fn route_fixture_lock(pool: &PgPool) -> Transaction<'static, Postgres> {
     transaction
 }
 
-
 #[test]
 fn postgres_adapter_implements_the_public_review_scheduler_port() {
     fn assert_scheduler<T: ReviewScheduler>() {}
@@ -372,7 +371,10 @@ async fn automation_reviews_require_an_exact_passing_immutable_calibration_bundl
         );
         // The persisted scheme 2 identity carries the narrow implementation and
         // dependency components the calibration gate compares.
-        for component in [IdentityComponent::Implementation, IdentityComponent::Dependencies] {
+        for component in [
+            IdentityComponent::Implementation,
+            IdentityComponent::Dependencies,
+        ] {
             assert!(
                 identity.components.contains_key(&component),
                 "missing {component:?}"
@@ -1280,8 +1282,8 @@ async fn review_attempts_enforce_scope_lease_exact_reuse_lineage_and_immutabilit
 
 #[tokio::test]
 async fn scheduled_reviews_store_the_normalized_endpoint_of_their_route() {
-    let _lock = route_fixture_lock(&pool).await;
     let Some(pool) = database().await else { return };
+    let _lock = route_fixture_lock(&pool).await;
     let project_id = ProjectId::new(Uuid::new_v4());
     sqlx::query("INSERT INTO projects (id,name) VALUES ($1,'endpoint identity')")
         .bind(project_id.as_uuid())
