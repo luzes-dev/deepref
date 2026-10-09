@@ -1,4 +1,5 @@
 import { expect, test, type Page } from '@playwright/test';
+import type { AiStatusDto } from '$lib/api/generated/models';
 
 const api = 'http://localhost:4173/api';
 const projectId = 'project-1';
@@ -15,6 +16,14 @@ const project = {
 const dependencies = {
 	postgresql: { state: 'available', lag: null, backlog: null, oldest_age_seconds: null },
 	worker: { state: 'available', lag: 0, backlog: 0, oldest_age_seconds: null }
+};
+
+const aiAvailableStatus: AiStatusDto = {
+	assistant_available: false,
+	configured: true,
+	model: 'fixture-model',
+	provider: 'deterministic-fixture',
+	suggestions_available: true
 };
 
 type Report = {
@@ -448,6 +457,7 @@ test('reviews a deterministic title and abstract AI proposal before applying it'
 	page
 }) => {
 	await setup(page, { count: 1 });
+	await page.route(`${api}/ai/status`, (route) => route.fulfill({ json: aiAvailableStatus }));
 	const proposal = {
 		id: 'ai-proposal-1',
 		project_id: projectId,

@@ -35,13 +35,11 @@ for (const workflow of workflows) {
 				status: 200,
 				contentType: 'application/json',
 				body: JSON.stringify({
-					data: {
-						assistant_available: false,
-						configured: false,
-						model: null,
-						provider: null,
-						suggestions_available: false
-					}
+					assistant_available: false,
+					configured: false,
+					model: null,
+					provider: null,
+					suggestions_available: false
 				})
 			});
 		});
