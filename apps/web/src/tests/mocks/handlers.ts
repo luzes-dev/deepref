@@ -1,4 +1,5 @@
-import { http, HttpResponse, delay } from 'msw';
+import { http, HttpResponse } from 'msw/http';
+import { delay } from 'msw/utils/delay';
 import type { SettingsDto, ProjectDto } from '$lib/api/generated/models';
 
 export const mockSettings: SettingsDto = {
