@@ -69,7 +69,7 @@ pub(crate) async fn list_ai_proposals(
     ),
     responses(
         (status = 200, description = "AI proposal", body = AiProposalDto),
-        (status = 404, description = "AI proposal not found", body = ErrorResponse),
+        (status = 404, description = "AI proposal not found, or withheld until you decide the record", body = ErrorResponse),
         (status = 500, description = "Internal server error", body = ErrorResponse)
     )
 )]
@@ -78,7 +78,7 @@ pub(crate) async fn get_ai_proposal(
     Path((project_id, proposal_id)): Path<(Uuid, Uuid)>,
 ) -> Result<Json<AiProposalDto>, ApiError> {
     Ok(Json(proposal_dto(
-        deepref_postgres::get_ai_proposal(&state.pool, project_id, proposal_id)
+        deepref_postgres::get_visible_ai_proposal(&state.pool, project_id, proposal_id)
             .await
             .map_err(map_ai_proposal_error)?,
     )?))
@@ -134,7 +134,7 @@ pub(crate) async fn decide_ai_proposal(
     )
     .await
     .map_err(map_ai_proposal_error)?;
-    let proposal = deepref_postgres::get_ai_proposal(&state.pool, project_id, proposal_id)
+    let proposal = deepref_postgres::get_visible_ai_proposal(&state.pool, project_id, proposal_id)
         .await
         .map_err(map_ai_proposal_error)?;
     Ok(Json(AiProposalDecisionDto {

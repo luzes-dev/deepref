@@ -20,8 +20,9 @@ use deepref_domain::{
     ScreeningStage,
 };
 use deepref_postgres::{
-    AiProposalError, NodeExecution, NodeOutcome, PostgresAiStore, RecordFilter, get_ai_budget,
-    get_ai_proposal, get_review_runs, get_workflow_secret,
+    AiProposalError, ExposureSource, NewExposure, NodeExecution, NodeOutcome, PostgresAiStore,
+    RecordFilter, get_ai_budget, get_ai_proposal, get_review_runs, get_workflow_secret,
+    record_exposures, review_run_proposals,
 };
 use deepref_review::ReviewRunState;
 use serde_json::{Map, Value, json};
@@ -725,8 +726,14 @@ async fn record_decision(context: &Context<'_>) -> NodeResult {
         // person still makes the actual screening decision.
         let actor = automation_actor(context)?;
         let mut recorded = 0usize;
+        let mut exposures = Vec::new();
+        let exposed_stage = if stage == "full_text" {
+            "full_text"
+        } else {
+            "title_abstract"
+        };
         for report_id in report_ids(&items) {
-            if deepref_postgres::record_workflow_reviewer_decision(
+            if let Ok(decision_id) = deepref_postgres::record_workflow_reviewer_decision(
                 context.pool,
                 execution.project_id,
                 report_id,
@@ -737,11 +744,28 @@ async fn record_decision(context: &Context<'_>) -> NodeResult {
                 Some(execution.run_id),
             )
             .await
-            .is_ok()
             {
                 recorded += 1;
+                // The run output names the decision for each record, so the
+                // opinion is visible to anyone who opens this run.
+                let mut exposure = NewExposure::new(
+                    execution.project_id,
+                    report_id,
+                    exposed_stage,
+                    ExposureSource::WorkflowRunOutput,
+                );
+                exposure.ai_reviewer_decision_id = Some(decision_id);
+                exposure.workflow_run_id = Some(execution.run_id);
+                exposures.push(exposure);
             }
         }
+        record_exposures(context.pool, &exposures)
+            .await
+            .map_err(|_| {
+                NodeError::retryable(
+                    "The second opinions could not be recorded. This will be tried again.",
+                )
+            })?;
         return ok(
             "records",
             Value::Array(items.clone()),
@@ -1469,7 +1493,7 @@ async fn screening_review(context: &Context<'_>, stage: &str) -> NodeResult {
                     verdict: Some(Verdict::stopped(BUDGET_USED_UP)),
                 })
                 .collect();
-            return finish_screening(&items, &reviews, 0);
+            return complete_screening(context, stage, &items, &reviews, 0).await;
         }
         start_screening_reviews(context, &items, full_text).await?
     };
@@ -1486,7 +1510,7 @@ async fn screening_review(context: &Context<'_>, stage: &str) -> NodeResult {
             })?,
         });
     }
-    finish_screening(&items, &wait.reviews, wait.open())
+    complete_screening(context, stage, &items, &wait.reviews, wait.open()).await
 }
 
 const BUDGET_USED_UP: &str = "The AI budget for this project is used up for this month, so the AI did not review this record.";
@@ -1627,6 +1651,86 @@ async fn settle_screening_reviews(
             }
         };
     }
+    Ok(())
+}
+
+/// Finishes a screening step. The AI verdicts are recorded as exposed before the
+/// routed output is returned, so an output is never visible without its record.
+async fn complete_screening(
+    context: &Context<'_>,
+    stage: &str,
+    items: &[Value],
+    reviews: &[ReviewSlot],
+    timed_out: usize,
+) -> NodeResult {
+    let outcome = finish_screening(items, reviews, timed_out)?;
+    if let NodeOutcome::Completed { outputs, .. } = &outcome {
+        let routed = items_of(outputs.get("records"));
+        record_screening_exposures(context, stage, &routed, reviews).await?;
+    }
+    Ok(outcome)
+}
+
+/// Records that each routed record now carries an AI verdict. The verdict was
+/// made available to whoever reads the run output, so the exposure is kept with
+/// the proposal and AI run that produced it, when there is one.
+async fn record_screening_exposures(
+    context: &Context<'_>,
+    stage: &str,
+    routed: &[Value],
+    reviews: &[ReviewSlot],
+) -> Result<(), NodeError> {
+    let execution = context.execution;
+    let stage = if stage == "full_text" {
+        "full_text"
+    } else {
+        "title_abstract"
+    };
+    let judged: Vec<(Uuid, Option<Uuid>)> = routed
+        .iter()
+        .filter(|record| record.get("ai_decision").is_some())
+        .filter_map(|record| {
+            let report_id = record
+                .get("report_id")
+                .and_then(Value::as_str)
+                .and_then(|id| Uuid::parse_str(id).ok())?;
+            let run_id = reviews
+                .iter()
+                .find(|slot| slot.report_id == report_id)
+                .and_then(|slot| slot.run_id);
+            Some((report_id, run_id))
+        })
+        .collect();
+    if judged.is_empty() {
+        return Ok(());
+    }
+    let run_ids: Vec<Uuid> = judged.iter().filter_map(|(_, run)| *run).collect();
+    let links = review_run_proposals(context.pool, execution.project_id, &run_ids)
+        .await
+        .map_err(|_| {
+            NodeError::retryable("The AI reviews could not be read. This will be tried again.")
+        })?;
+    let exposures: Vec<NewExposure> = judged
+        .iter()
+        .map(|(report_id, run_id)| {
+            let link = run_id.and_then(|run| links.iter().find(|link| link.run_id == run));
+            let mut exposure = NewExposure::new(
+                execution.project_id,
+                *report_id,
+                stage,
+                ExposureSource::WorkflowRunOutput,
+            );
+            exposure.proposal_id = link.map(|link| link.proposal_id);
+            exposure.ai_run_id = link.map(|link| link.ai_run_id);
+            exposure.workflow_run_id = Some(execution.run_id);
+            exposure
+        })
+        .collect();
+    record_exposures(context.pool, &exposures)
+        .await
+        .map_err(|_| {
+            NodeError::retryable("The AI verdicts could not be recorded. This will be tried again.")
+        })?;
     Ok(())
 }
 

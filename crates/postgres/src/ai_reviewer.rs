@@ -10,12 +10,16 @@ use sqlx::{PgPool, Postgres, Row, Transaction};
 use thiserror::Error;
 use uuid::Uuid;
 
+use crate::ai_exposure::{independent_reviewer_pairs, record_reveals};
+
 #[derive(Debug, Error)]
 pub enum ReviewerError {
     #[error("the AI reviewer decision was not found")]
     NotFound,
     #[error("this conflict was already resolved")]
     AlreadyResolved,
+    #[error("record your own decision before the AI opinion can be shown")]
+    NotDecided,
     #[error("a published protocol is required before screening")]
     NoProtocol,
     #[error(transparent)]
@@ -173,7 +177,8 @@ fn record_from_row(row: &sqlx::postgres::PgRow) -> ReviewerDecisionRecord {
     }
 }
 
-pub async fn list_reviewer_decisions(
+/// The opinions as the person may see them, without recording anything.
+async fn fetch_reviewer_records(
     pool: &PgPool,
     project_id: Uuid,
     stage: Option<&str>,
@@ -194,12 +199,33 @@ pub async fn list_reviewer_decisions(
         .collect())
 }
 
+/// Lists the opinions. Each opinion returned unblinded is recorded as revealed,
+/// because a person who sees it can no longer decide independently. A waiting
+/// opinion is withheld and records nothing.
+pub async fn list_reviewer_decisions(
+    pool: &PgPool,
+    project_id: Uuid,
+    stage: Option<&str>,
+    status: Option<&str>,
+    limit: i64,
+) -> Result<Vec<ReviewerDecisionRecord>, sqlx::Error> {
+    let records = fetch_reviewer_records(pool, project_id, stage, status, limit).await?;
+    let revealed: Vec<Uuid> = records
+        .iter()
+        .filter(|record| record.status != "waiting")
+        .map(|record| record.id)
+        .collect();
+    record_reveals(pool, &revealed).await?;
+    Ok(records)
+}
+
+/// Counts open conflicts. It returns counts only, so it reveals nothing.
 pub(crate) async fn count_open_conflicts(
     pool: &PgPool,
     project_id: Uuid,
 ) -> Result<i64, sqlx::Error> {
     Ok(
-        list_reviewer_decisions(pool, project_id, None, Some("conflict"), 100_000)
+        fetch_reviewer_records(pool, project_id, None, Some("conflict"), 100_000)
             .await?
             .len() as i64,
     )
@@ -229,18 +255,24 @@ pub async fn resolve_reviewer_conflict(
     input: ResolveConflict,
     actor: &Actor,
 ) -> Result<ReviewerDecisionRecord, ReviewerError> {
+    let mut tx = pool.begin().await?;
     let row = sqlx::query(
         "SELECT d.report_id,d.stage,d.decision,d.resolved_at,
                 CASE d.stage WHEN 'title_abstract' THEN s.title_abstract_status
                              ELSE s.full_text_status END AS human_status,
-                COALESCE(s.revision,0) AS revision
+                COALESCE(s.revision,0) AS revision,
+                (SELECT CASE WHEN e.actor_kind='user' AND e.event_kind='decision'
+                                   THEN e.created_at END FROM screening_events e
+                 WHERE e.project_id=d.project_id AND e.report_id=d.report_id
+                   AND e.stage=d.stage
+                 ORDER BY e.created_at DESC,e.id DESC LIMIT 1) AS human_decided_at
          FROM ai_reviewer_decisions d
          LEFT JOIN screening_state s ON s.project_id=d.project_id AND s.report_id=d.report_id
-         WHERE d.project_id=$1 AND d.id=$2 AND d.voided_at IS NULL",
+         WHERE d.project_id=$1 AND d.id=$2 AND d.voided_at IS NULL FOR UPDATE OF d",
     )
     .bind(project_id)
     .bind(decision_id)
-    .fetch_optional(pool)
+    .fetch_optional(&mut *tx)
     .await?
     .ok_or(ReviewerError::NotFound)?;
     if row.get::<Option<DateTime<Utc>>, _>("resolved_at").is_some() {
@@ -252,6 +284,14 @@ pub async fn resolve_reviewer_conflict(
     let human_before: Option<String> = row
         .get::<Option<String>, _>("human_status")
         .filter(|status| !matches!(status.as_str(), "unscreened" | "not_required"));
+    // The AI opinion is shown only once the person has decided. Settling a
+    // conflict before that would reveal it to a person who decided blind.
+    if human_before.is_none() {
+        return Err(ReviewerError::NotDecided);
+    }
+    // The time of the decision being replaced. The independence check reads it
+    // later, so it is stored with the resolution rather than inferred.
+    let human_decided_at: Option<DateTime<Utc>> = row.get("human_decided_at");
     let stage = if stage_name == "full_text" {
         ScreeningStage::FullText
     } else {
@@ -271,8 +311,8 @@ pub async fn resolve_reviewer_conflict(
             None => "Resolved a disagreement with the AI reviewer".to_owned(),
         },
     );
-    let result = crate::screening::screen_report(
-        pool,
+    let result = crate::screening::screen_report_in_transaction(
+        &mut tx,
         ScreenReportCommand {
             project_id: project_id.into(),
             report_id: report_id.into(),
@@ -301,7 +341,7 @@ pub async fn resolve_reviewer_conflict(
     sqlx::query(
         "UPDATE ai_reviewer_decisions
          SET resolved_at=now(),resolved_by_kind=$3,resolved_by_id=$4,resolution=$5,
-             resolution_note=$6,human_decision_before=$7
+             resolution_note=$6,human_decision_before=$7,human_decision_before_at=$8
          WHERE project_id=$1 AND id=$2 AND resolved_at IS NULL",
     )
     .bind(project_id)
@@ -311,8 +351,18 @@ pub async fn resolve_reviewer_conflict(
     .bind(resolution)
     .bind(&input.note)
     .bind(&human_before)
-    .execute(pool)
+    .bind(human_decided_at)
+    .execute(&mut *tx)
     .await?;
+    // The response below carries the AI opinion, so the person has now seen it.
+    let mut exposure = crate::ai_exposure::NewExposure::new(
+        project_id,
+        report_id,
+        &stage_name,
+        crate::ai_exposure::ExposureSource::ReviewerOpinionReveal,
+    );
+    exposure.ai_reviewer_decision_id = Some(decision_id);
+    crate::ai_exposure::record_exposure_in_transaction(&mut tx, &exposure).await?;
     sqlx::query(
         "INSERT INTO review_events
          (id,project_id,event_type,aggregate_type,aggregate_id,payload,actor_kind,actor_id)
@@ -327,16 +377,18 @@ pub async fn resolve_reviewer_conflict(
     }))
     .bind(actor.kind().as_str())
     .bind(actor.id())
-    .execute(pool)
+    .execute(&mut *tx)
     .await?;
     let query = format!("{STATUS_VIEW} AND d.id=$3");
     let row = sqlx::query(sqlx::AssertSqlSafe(query))
         .bind(project_id)
         .bind(Option::<String>::None)
         .bind(decision_id)
-        .fetch_one(pool)
+        .fetch_one(&mut *tx)
         .await?;
-    Ok(record_from_row(&row))
+    let record = record_from_row(&row);
+    tx.commit().await?;
+    Ok(record)
 }
 
 #[derive(Debug, Clone, Copy, PartialEq)]
@@ -344,6 +396,9 @@ pub struct StageAgreement {
     pub compared: i64,
     pub agreed: i64,
     pub kappa: Option<f64>,
+    /// Pairs left out because the AI opinion was available before the human
+    /// decision, or because when the human decided is not on record.
+    pub excluded_exposed: i64,
 }
 
 /// Cohen's kappa over include / exclude / maybe for matching decisions.
@@ -379,51 +434,33 @@ fn category(value: &str) -> Option<usize> {
     }
 }
 
-/// Human-versus-AI agreement per stage, using each person's independent
-/// decision (before any conflict was settled).
+/// Human-versus-AI agreement per stage. Only independent pairs count: those
+/// where the person decided before the AI opinion was visible to them. Pairs
+/// left out are reported in `excluded_exposed`.
 pub async fn reviewer_agreement(
     pool: &PgPool,
     project_id: Uuid,
 ) -> Result<Vec<(String, StageAgreement)>, sqlx::Error> {
-    let rows = list_reviewer_decisions(pool, project_id, None, None, 100_000).await?;
     let mut result = Vec::new();
     for stage in ["title_abstract", "full_text"] {
-        let pairs: Vec<(usize, usize)> = rows
+        let pairs = independent_reviewer_pairs(pool, project_id, Some(stage)).await?;
+        let all: Vec<(usize, usize)> = pairs
+            .independent
             .iter()
-            .filter(|row| row.stage == stage && row.status != "waiting")
-            .filter_map(|row| {
-                let human = match row.status.as_str() {
-                    "resolved" => None,
-                    _ => row.human_decision.as_deref(),
-                };
-                Some((category(human?)?, category(&row.ai_decision)?))
+            .filter_map(|pair| {
+                Some((
+                    category(&pair.human_decision)?,
+                    category(&pair.ai_decision)?,
+                ))
             })
             .collect();
-        // Resolved rows use the stored pre-resolution human decision.
-        let resolved: Vec<(usize, usize)> = sqlx::query(
-            "SELECT human_decision_before,decision FROM ai_reviewer_decisions
-             WHERE project_id=$1 AND stage=$2 AND voided_at IS NULL
-               AND resolved_at IS NOT NULL AND human_decision_before IS NOT NULL",
-        )
-        .bind(project_id)
-        .bind(stage)
-        .fetch_all(pool)
-        .await?
-        .iter()
-        .filter_map(|row| {
-            Some((
-                category(&row.get::<String, _>("human_decision_before"))?,
-                category(&row.get::<String, _>("decision"))?,
-            ))
-        })
-        .collect();
-        let all: Vec<(usize, usize)> = pairs.into_iter().chain(resolved).collect();
         result.push((
             stage.to_owned(),
             StageAgreement {
                 compared: all.len() as i64,
                 agreed: all.iter().filter(|(a, b)| a == b).count() as i64,
                 kappa: cohens_kappa(&all),
+                excluded_exposed: pairs.exposed_excluded + pairs.unverifiable_excluded,
             },
         ));
     }

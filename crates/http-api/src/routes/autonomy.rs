@@ -689,7 +689,7 @@ pub(crate) struct ResolveReviewerConflictRequest {
         (status = 200, description = "The settled conflict", body = AiReviewerDecisionDto),
         (status = 400, description = "Invalid decision", body = ErrorResponse),
         (status = 404, description = "Not found", body = ErrorResponse),
-        (status = 409, description = "Already resolved or the screening state changed", body = ErrorResponse),
+        (status = 409, description = "Already resolved, not yet decided by you, or the screening state changed", body = ErrorResponse),
         (status = 500, description = "Internal server error", body = ErrorResponse)
     )
 )]
@@ -731,6 +731,12 @@ pub(crate) async fn resolve_ai_reviewer_conflict(
             message: "This conflict was already resolved.".to_owned(),
             details: Value::Null,
         },
+        deepref_postgres::ReviewerError::NotDecided => ApiError::Conflict {
+            code: "human_decision_required".to_owned(),
+            message: "Record your own decision for this record before the AI opinion can be shown."
+                .to_owned(),
+            details: Value::Null,
+        },
         deepref_postgres::ReviewerError::NoProtocol => ApiError::Conflict {
             code: "protocol_not_published".to_owned(),
             message: "Publish the protocol before screening.".to_owned(),
@@ -759,6 +765,9 @@ pub(crate) struct AiStageAgreementDto {
     pub agreed: i64,
     /// Cohen's kappa; absent until there is enough variation to compute it.
     pub kappa: Option<f64>,
+    /// Pairs left out because the AI opinion was available before the human
+    /// decision, or because when the human decided is not on record.
+    pub excluded_exposed: i64,
 }
 
 #[utoipa::path(
@@ -785,6 +794,7 @@ pub(crate) async fn get_ai_reviewer_agreement(
                 compared: agreement.compared,
                 agreed: agreement.agreed,
                 kappa: agreement.kappa,
+                excluded_exposed: agreement.excluded_exposed,
             })
             .collect(),
     ))

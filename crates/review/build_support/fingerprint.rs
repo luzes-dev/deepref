@@ -217,6 +217,24 @@ pub(crate) const IMPLEMENTATION_BOUNDARY: &[BoundaryEntry] = &[
         reason: "resolves the project autonomy level that gates each AI verdict",
     },
     BoundaryEntry {
+        path: "crates/postgres/src/ai_exposure.rs",
+        kind: Kind::File,
+        presence: Presence::Required,
+        reason: "availability provenance and independent human/AI evidence selection",
+    },
+    BoundaryEntry {
+        path: "crates/postgres/src/activity.rs",
+        kind: Kind::File,
+        presence: Presence::Required,
+        reason: "second-reviewer activity blinding and exposure recording",
+    },
+    BoundaryEntry {
+        path: "crates/postgres/migrations/0052_ai_opinion_availability.sql",
+        kind: Kind::File,
+        presence: Presence::Required,
+        reason: "database availability policy and waiting-proposal blinding",
+    },
+    BoundaryEntry {
         path: "crates/postgres/src/ai_reviewer.rs",
         kind: Kind::File,
         presence: Presence::Required,

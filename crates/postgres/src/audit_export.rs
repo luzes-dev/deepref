@@ -588,6 +588,28 @@ pub async fn load_audit_export_rows(
              ) AS lineage ON true
              WHERE artifact.project_id=$1
              UNION ALL
+             SELECT o.id, o.exposure_possible_at, 'ai_opinion_exposure' AS event_type,
+                    'ai_opinion_exposure' AS aggregate_type, o.id AS aggregate_id,
+                    o.audience_actor_kind, o.audience_actor_id, NULL::uuid AS protocol_version_id,
+                    o.stage, NULL::text AS decision, NULL::uuid AS reason_id,
+                    'availability'::text AS event_kind,
+                    NULL::uuid AS supersedes_event_id, NULL::uuid AS undoes_event_id,
+                    '{}'::jsonb AS previous_snapshot, '{}'::jsonb AS result_snapshot,
+                    NULL::text AS notes,
+                    jsonb_build_object(
+                      'report_id', o.report_id, 'stage', o.stage,
+                      'exposure_source', o.exposure_source,
+                      'exposure_possible_at', o.exposure_possible_at,
+                      'audience_actor_kind', o.audience_actor_kind,
+                      'audience_actor_id', o.audience_actor_id,
+                      'ai_reviewer_decision_id', o.ai_reviewer_decision_id,
+                      'proposal_id', o.proposal_id, 'ai_run_id', o.ai_run_id,
+                      'workflow_run_id', o.workflow_run_id
+                    ) AS payload,
+                    jsonb_build_object('project_id', o.project_id,
+                                       'provenance_kind', 'ai_opinion_exposure') AS provenance
+             FROM ai_opinion_exposures o WHERE o.project_id=$1
+             UNION ALL
              SELECT c.id, c.created_at, 'review_calibration_bundle' AS event_type,
                     'review_calibration_bundle' AS aggregate_type, c.id AS aggregate_id,
                     NULL::text AS actor_kind,

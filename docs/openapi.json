@@ -2195,7 +2195,7 @@
             }
           },
           "404": {
-            "description": "AI proposal not found",
+            "description": "AI proposal not found, or withheld until you decide the record",
             "content": {
               "application/json": {
                 "schema": {
@@ -2516,7 +2516,7 @@
             }
           },
           "409": {
-            "description": "Already resolved or the screening state changed",
+            "description": "Already resolved, not yet decided by you, or the screening state changed",
             "content": {
               "application/json": {
                 "schema": {
@@ -11960,7 +11960,8 @@
         "required": [
           "stage",
           "compared",
-          "agreed"
+          "agreed",
+          "excluded_exposed"
         ],
         "properties": {
           "agreed": {
@@ -11971,6 +11972,11 @@
             "type": "integer",
             "format": "int64",
             "description": "Decisions made by both a person and the AI."
+          },
+          "excluded_exposed": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Pairs left out because the AI opinion was available before the human\ndecision, or because when the human decided is not on record."
           },
           "kappa": {
             "type": [

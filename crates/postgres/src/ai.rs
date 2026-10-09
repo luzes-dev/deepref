@@ -1251,5 +1251,6 @@ use acceptance::*;
 use persistence::{ai_run_from_row, proposal_from_row};
 pub use persistence::{insert_model_route, persist_document_block_embedding, resolve_ai_proposal};
 pub use proposals::{
-    AiProposalCursor, AiProposalFilters, decide_ai_proposal, get_ai_proposal, list_ai_proposals,
+    AiProposalCursor, AiProposalFilters, decide_ai_proposal, get_ai_proposal,
+    get_visible_ai_proposal, list_ai_proposals,
 };

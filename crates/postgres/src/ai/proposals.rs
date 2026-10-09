@@ -1,4 +1,5 @@
 use super::*;
+use crate::ai_exposure::{PROPOSAL_WITHHELD_SQL, record_suggestion_exposures};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AiProposalCursor {
@@ -26,6 +27,10 @@ const AI_PROPOSAL_SELECT: &str =
      FROM ai_proposals p JOIN ai_runs r ON r.id=p.model_run_id
      WHERE p.project_id=$1";
 
+/// The proposal as stored, with no blinding and nothing recorded. Only the
+/// workflow and autonomy paths use it, because they act on the verdict by design.
+/// Anything that returns a proposal to a person must use
+/// [`get_visible_ai_proposal`].
 pub async fn get_ai_proposal(
     pool: &PgPool,
     project_id: Uuid,
@@ -41,6 +46,28 @@ pub async fn get_ai_proposal(
     proposal_record_from_row(row).map_err(AiProposalError::InvalidPayload)
 }
 
+/// A proposal as a person may see it now. An AI second-reviewer opinion that the
+/// person has not decided against yet is "not found", as if it did not exist.
+/// A screening suggestion that is returned is recorded as an exposure.
+pub async fn get_visible_ai_proposal(
+    pool: &PgPool,
+    project_id: Uuid,
+    proposal_id: Uuid,
+) -> Result<AiProposalRecord, AiProposalError> {
+    let query = format!("{AI_PROPOSAL_SELECT} AND p.id=$2 AND NOT {PROPOSAL_WITHHELD_SQL}");
+    let row = sqlx::query(sqlx::AssertSqlSafe(query))
+        .bind(project_id)
+        .bind(proposal_id)
+        .fetch_optional(pool)
+        .await?
+        .ok_or(AiProposalError::NotFound)?;
+    let proposal = proposal_record_from_row(row).map_err(AiProposalError::InvalidPayload)?;
+    record_suggestion_exposures(pool, project_id, &[proposal.id]).await?;
+    Ok(proposal)
+}
+
+/// Lists proposals a person may see now. See [`get_visible_ai_proposal`]. Only
+/// the page returned is recorded as exposed, not the look-ahead row.
 pub async fn list_ai_proposals(
     pool: &PgPool,
     project_id: Uuid,
@@ -63,6 +90,7 @@ pub async fn list_ai_proposals(
                                    AND p.target_report_id=$6))
          AND ($7::uuid IS NULL OR p.target_study_id=$7)
          AND ($8::timestamptz IS NULL OR (p.created_at,p.id)<($8,$9))
+         AND NOT {PROPOSAL_WITHHELD_SQL}
          ORDER BY p.created_at DESC,p.id DESC LIMIT $10"
     );
     let rows = sqlx::query(sqlx::AssertSqlSafe(query))
@@ -78,6 +106,12 @@ pub async fn list_ai_proposals(
         .bind(limit + 1)
         .fetch_all(pool)
         .await?;
+    let shown: Vec<Uuid> = rows
+        .iter()
+        .take(usize::try_from(limit).unwrap_or(0))
+        .map(|row| row.get("id"))
+        .collect();
+    record_suggestion_exposures(pool, project_id, &shown).await?;
     rows.into_iter()
         .map(proposal_record_from_row)
         .map(|result| result.map_err(AiProposalError::InvalidPayload))
@@ -97,7 +131,8 @@ pub async fn decide_ai_proposal(
         return Err(AiProposalError::InvalidActor);
     }
     let mut tx = pool.begin().await?;
-    let query = format!("{AI_PROPOSAL_SELECT} AND p.id=$2 FOR UPDATE");
+    let query =
+        format!("{AI_PROPOSAL_SELECT} AND p.id=$2 AND NOT {PROPOSAL_WITHHELD_SQL} FOR UPDATE");
     let row = sqlx::query(sqlx::AssertSqlSafe(query))
         .bind(request.project_id)
         .bind(request.proposal_id)

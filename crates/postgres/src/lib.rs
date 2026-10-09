@@ -3,6 +3,7 @@ mod activity;
 mod agent_tools;
 mod ai;
 mod ai_autonomy_apply;
+mod ai_exposure;
 mod ai_reviewer;
 mod ai_usage;
 mod appraisal;
@@ -65,11 +66,17 @@ pub use ai::{
     AiProposalDecision, AiProposalDecisionRequest, AiProposalError, AiProposalFilters,
     AiProposalRecord, AiProposalResolution, AiScreeningTarget, AiStudyGroupingTarget,
     PostgresAiStore, ReviewedAiProposalPayload, decide_ai_proposal, get_ai_dedupe_target,
-    get_ai_proposal, get_ai_screening_target, get_ai_study_grouping_target, insert_model_route,
-    list_ai_exclusion_reasons, list_ai_extraction_evidence, list_ai_grounding_blocks,
-    list_ai_proposals, persist_document_block_embedding, resolve_ai_proposal,
+    get_ai_proposal, get_ai_screening_target, get_ai_study_grouping_target,
+    get_visible_ai_proposal, insert_model_route, list_ai_exclusion_reasons,
+    list_ai_extraction_evidence, list_ai_grounding_blocks, list_ai_proposals,
+    persist_document_block_embedding, resolve_ai_proposal,
 };
 pub use ai_autonomy_apply::{AutonomyOutcome, apply_autonomy_for_proposal};
+pub use ai_exposure::{
+    ExposureSource, NewExposure, ReviewRunProposal, ReviewerPair, ReviewerPairs,
+    independent_reviewer_pairs, record_exposure, record_exposure_in_transaction, record_exposures,
+    record_exposures_in_transaction, review_run_proposals,
+};
 pub use ai_reviewer::{
     NewReviewerDecision, ResolveConflict, ReviewerDecisionRecord, ReviewerError, StageAgreement,
     cohens_kappa, insert_reviewer_decision_in_transaction, list_reviewer_decisions,

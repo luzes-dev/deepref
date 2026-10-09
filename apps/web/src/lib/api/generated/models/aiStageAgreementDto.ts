@@ -10,6 +10,11 @@ export interface AiStageAgreementDto {
 	/** Decisions made by both a person and the AI. */
 	compared: number;
 	/**
+	 * Pairs left out because the AI opinion was available before the human
+	 * decision, or because when the human decided is not on record.
+	 */
+	excluded_exposed: number;
+	/**
 	 * Cohen's kappa; absent until there is enough variation to compute it.
 	 * @nullable
 	 */
