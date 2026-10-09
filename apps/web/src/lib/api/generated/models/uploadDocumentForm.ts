@@ -6,5 +6,5 @@
  */
 
 export interface UploadDocumentForm {
-	file: Blob;
+	file: Blob | File;
 }

@@ -126,7 +126,7 @@ export const prefetchGetProjectProjectionQuery = async <
 ): Promise<QueryClient> => {
 	const queryOptions = getGetProjectProjectionQueryOptions(projectId, options);
 
-	await queryClient.prefetchQuery(queryOptions);
+	await queryClient.query(queryOptions).catch(() => {});
 
 	return queryClient;
 };

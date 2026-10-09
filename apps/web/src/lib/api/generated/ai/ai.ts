@@ -4,7 +4,7 @@
  * DeepRef API
  * OpenAPI spec version: 0.1.0
  */
-import { createMutation, createQuery, useQueryClient } from '@tanstack/svelte-query';
+import { createMutation, createQuery, matchQuery, useQueryClient } from '@tanstack/svelte-query';
 import type {
 	CreateMutationOptions,
 	CreateMutationResult,
@@ -160,7 +160,7 @@ export const prefetchGetAiStatusQuery = async <
 ): Promise<QueryClient> => {
 	const queryOptions = getGetAiStatusQueryOptions(params, options);
 
-	await queryClient.prefetchQuery(queryOptions);
+	await queryClient.query(queryOptions).catch(() => {});
 
 	return queryClient;
 };
@@ -291,7 +291,7 @@ export const prefetchListAiActivityQuery = async <
 ): Promise<QueryClient> => {
 	const queryOptions = getListAiActivityQueryOptions(projectId, params, options);
 
-	await queryClient.prefetchQuery(queryOptions);
+	await queryClient.query(queryOptions).catch(() => {});
 
 	return queryClient;
 };
@@ -343,6 +343,8 @@ export const undoAiActivityBatch = async (
 	);
 };
 
+export const getUndoAiActivityBatchMutationKey = () => ['undoAiActivityBatch'] as const;
+
 export const getUndoAiActivityBatchMutationOptions = <
 	TError = ErrorType<ApiErrorBody>,
 	TContext = unknown
@@ -360,7 +362,7 @@ export const getUndoAiActivityBatchMutationOptions = <
 	UndoAiActivityBatchMutationVariables,
 	TContext
 > => {
-	const mutationKey = ['undoAiActivityBatch'];
+	const mutationKey = getUndoAiActivityBatchMutationKey();
 	const { mutation: mutationOptions, request: requestOptions } = options
 		? options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey
 			? options
@@ -517,7 +519,7 @@ export const prefetchGetAiActivityOverviewQuery = async <
 ): Promise<QueryClient> => {
 	const queryOptions = getGetAiActivityOverviewQueryOptions(projectId, options);
 
-	await queryClient.prefetchQuery(queryOptions);
+	await queryClient.query(queryOptions).catch(() => {});
 
 	return queryClient;
 };
@@ -566,6 +568,8 @@ export const undoAiActivity = async (
 	});
 };
 
+export const getUndoAiActivityMutationKey = () => ['undoAiActivity'] as const;
+
 export const getUndoAiActivityMutationOptions = <
 	TError = ErrorType<ApiErrorBody>,
 	TContext = unknown
@@ -583,7 +587,7 @@ export const getUndoAiActivityMutationOptions = <
 	UndoAiActivityMutationVariables,
 	TContext
 > => {
-	const mutationKey = ['undoAiActivity'];
+	const mutationKey = getUndoAiActivityMutationKey();
 	const { mutation: mutationOptions, request: requestOptions } = options
 		? options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey
 			? options
@@ -737,7 +741,7 @@ export const prefetchGetAiAutonomyQuery = async <
 ): Promise<QueryClient> => {
 	const queryOptions = getGetAiAutonomyQueryOptions(projectId, options);
 
-	await queryClient.prefetchQuery(queryOptions);
+	await queryClient.query(queryOptions).catch(() => {});
 
 	return queryClient;
 };
@@ -785,8 +789,19 @@ export const updateAiAutonomy = async (
 	): Record<string, string | readonly string[]> => {
 		if (!h) return {};
 		if (h instanceof Headers) return Object.fromEntries(h.entries());
-		if (Array.isArray(h)) return Object.fromEntries(h);
-		return h;
+		if (Symbol.iterator in h) {
+			return Object.fromEntries(
+				Array.from(
+					h as Iterable<Iterable<string>>,
+					(entry) => Array.from(entry) as [string, string]
+				)
+			);
+		}
+		const headers: Record<string, string | readonly string[]> = {};
+		for (const [name, value] of Object.entries<string | readonly string[] | undefined>(h)) {
+			if (value !== undefined) headers[name] = value;
+		}
+		return headers;
 	};
 	return customFetch<updateAiAutonomyResponseSuccess>(getUpdateAiAutonomyUrl(projectId), {
 		...options,
@@ -795,6 +810,8 @@ export const updateAiAutonomy = async (
 		body: JSON.stringify(updateAiAutonomyRequest)
 	});
 };
+
+export const getUpdateAiAutonomyMutationKey = () => ['updateAiAutonomy'] as const;
 
 export const getUpdateAiAutonomyMutationOptions = <
 	TError = ErrorType<ApiErrorBody>,
@@ -813,7 +830,7 @@ export const getUpdateAiAutonomyMutationOptions = <
 	UpdateAiAutonomyMutationVariables,
 	TContext
 > => {
-	const mutationKey = ['updateAiAutonomy'];
+	const mutationKey = getUpdateAiAutonomyMutationKey();
 	const { mutation: mutationOptions, request: requestOptions } = options
 		? options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey
 			? options
@@ -966,7 +983,7 @@ export const prefetchGetAiBudgetQuery = async <
 ): Promise<QueryClient> => {
 	const queryOptions = getGetAiBudgetQueryOptions(projectId, options);
 
-	await queryClient.prefetchQuery(queryOptions);
+	await queryClient.query(queryOptions).catch(() => {});
 
 	return queryClient;
 };
@@ -1014,8 +1031,19 @@ export const updateAiBudget = async (
 	): Record<string, string | readonly string[]> => {
 		if (!h) return {};
 		if (h instanceof Headers) return Object.fromEntries(h.entries());
-		if (Array.isArray(h)) return Object.fromEntries(h);
-		return h;
+		if (Symbol.iterator in h) {
+			return Object.fromEntries(
+				Array.from(
+					h as Iterable<Iterable<string>>,
+					(entry) => Array.from(entry) as [string, string]
+				)
+			);
+		}
+		const headers: Record<string, string | readonly string[]> = {};
+		for (const [name, value] of Object.entries<string | readonly string[] | undefined>(h)) {
+			if (value !== undefined) headers[name] = value;
+		}
+		return headers;
 	};
 	return customFetch<updateAiBudgetResponseSuccess>(getUpdateAiBudgetUrl(projectId), {
 		...options,
@@ -1024,6 +1052,8 @@ export const updateAiBudget = async (
 		body: JSON.stringify(updateAiBudgetRequest)
 	});
 };
+
+export const getUpdateAiBudgetMutationKey = () => ['updateAiBudget'] as const;
 
 export const getUpdateAiBudgetMutationOptions = <
 	TError = ErrorType<ApiErrorBody>,
@@ -1042,7 +1072,7 @@ export const getUpdateAiBudgetMutationOptions = <
 	UpdateAiBudgetMutationVariables,
 	TContext
 > => {
-	const mutationKey = ['updateAiBudget'];
+	const mutationKey = getUpdateAiBudgetMutationKey();
 	const { mutation: mutationOptions, request: requestOptions } = options
 		? options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey
 			? options
@@ -1217,7 +1247,7 @@ export const prefetchListAiProposalsQuery = async <
 ): Promise<QueryClient> => {
 	const queryOptions = getListAiProposalsQueryOptions(projectId, params, options);
 
-	await queryClient.prefetchQuery(queryOptions);
+	await queryClient.query(queryOptions).catch(() => {});
 
 	return queryClient;
 };
@@ -1338,7 +1368,7 @@ export const prefetchGetAiProposalQuery = async <
 ): Promise<QueryClient> => {
 	const queryOptions = getGetAiProposalQueryOptions(projectId, proposalId, options);
 
-	await queryClient.prefetchQuery(queryOptions);
+	await queryClient.query(queryOptions).catch(() => {});
 
 	return queryClient;
 };
@@ -1395,8 +1425,19 @@ export const decideAiProposal = async (
 	): Record<string, string | readonly string[]> => {
 		if (!h) return {};
 		if (h instanceof Headers) return Object.fromEntries(h.entries());
-		if (Array.isArray(h)) return Object.fromEntries(h);
-		return h;
+		if (Symbol.iterator in h) {
+			return Object.fromEntries(
+				Array.from(
+					h as Iterable<Iterable<string>>,
+					(entry) => Array.from(entry) as [string, string]
+				)
+			);
+		}
+		const headers: Record<string, string | readonly string[]> = {};
+		for (const [name, value] of Object.entries<string | readonly string[] | undefined>(h)) {
+			if (value !== undefined) headers[name] = value;
+		}
+		return headers;
 	};
 	return customFetch<decideAiProposalResponseSuccess>(
 		getDecideAiProposalUrl(projectId, proposalId),
@@ -1408,6 +1449,8 @@ export const decideAiProposal = async (
 		}
 	);
 };
+
+export const getDecideAiProposalMutationKey = () => ['decideAiProposal'] as const;
 
 export const getDecideAiProposalMutationOptions = <
 	TError = ErrorType<ApiErrorBody>,
@@ -1430,7 +1473,7 @@ export const getDecideAiProposalMutationOptions = <
 	DecideAiProposalMutationVariables,
 	TContext
 > => {
-	const mutationKey = ['decideAiProposal'];
+	const mutationKey = getDecideAiProposalMutationKey();
 	const { mutation: mutationOptions, request: requestOptions } = options
 		? options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey
 			? options
@@ -1455,26 +1498,17 @@ export const getDecideAiProposalMutationOptions = <
 		if (!options?.skipInvalidation) {
 			queryClient.invalidateQueries({
 				predicate: (query) =>
-					typeof query.queryKey[0] === 'string' &&
-					query.queryKey[0].startsWith('/api/projects/')
-			});
-			queryClient.invalidateQueries({
-				queryKey: getGetAiProposalQueryKey(variables.projectId, variables.proposalId)
-			});
-			queryClient.invalidateQueries({
-				predicate: (query) =>
-					typeof query.queryKey[0] === 'string' &&
-					query.queryKey[0].startsWith('/api/projects/')
-			});
-			queryClient.invalidateQueries({
-				predicate: (query) =>
-					typeof query.queryKey[0] === 'string' &&
-					query.queryKey[0].startsWith('/api/projects/')
-			});
-			queryClient.invalidateQueries({
-				predicate: (query) =>
-					typeof query.queryKey[0] === 'string' &&
-					query.queryKey[0].startsWith('/api/projects/')
+					[getGetAiProposalQueryKey(variables.projectId, variables.proposalId)].some(
+						(queryKey) => matchQuery({ queryKey }, query)
+					) ||
+					(typeof query.queryKey[0] === 'string' &&
+						query.queryKey[0].startsWith('/api/projects/')) ||
+					(typeof query.queryKey[0] === 'string' &&
+						query.queryKey[0].startsWith('/api/projects/')) ||
+					(typeof query.queryKey[0] === 'string' &&
+						query.queryKey[0].startsWith('/api/projects/')) ||
+					(typeof query.queryKey[0] === 'string' &&
+						query.queryKey[0].startsWith('/api/projects/'))
 			});
 		}
 		mutationOptions?.onSuccess?.(data, variables, onMutateResult, context);
@@ -1627,7 +1661,7 @@ export const prefetchGetAiReviewerAgreementQuery = async <
 ): Promise<QueryClient> => {
 	const queryOptions = getGetAiReviewerAgreementQueryOptions(projectId, options);
 
-	await queryClient.prefetchQuery(queryOptions);
+	await queryClient.query(queryOptions).catch(() => {});
 
 	return queryClient;
 };
@@ -1774,7 +1808,7 @@ export const prefetchListAiReviewerDecisionsQuery = async <
 ): Promise<QueryClient> => {
 	const queryOptions = getListAiReviewerDecisionsQueryOptions(projectId, params, options);
 
-	await queryClient.prefetchQuery(queryOptions);
+	await queryClient.query(queryOptions).catch(() => {});
 
 	return queryClient;
 };
@@ -1831,8 +1865,19 @@ export const resolveAiReviewerConflict = async (
 	): Record<string, string | readonly string[]> => {
 		if (!h) return {};
 		if (h instanceof Headers) return Object.fromEntries(h.entries());
-		if (Array.isArray(h)) return Object.fromEntries(h);
-		return h;
+		if (Symbol.iterator in h) {
+			return Object.fromEntries(
+				Array.from(
+					h as Iterable<Iterable<string>>,
+					(entry) => Array.from(entry) as [string, string]
+				)
+			);
+		}
+		const headers: Record<string, string | readonly string[]> = {};
+		for (const [name, value] of Object.entries<string | readonly string[] | undefined>(h)) {
+			if (value !== undefined) headers[name] = value;
+		}
+		return headers;
 	};
 	return customFetch<resolveAiReviewerConflictResponseSuccess>(
 		getResolveAiReviewerConflictUrl(projectId, decisionId),
@@ -1844,6 +1889,8 @@ export const resolveAiReviewerConflict = async (
 		}
 	);
 };
+
+export const getResolveAiReviewerConflictMutationKey = () => ['resolveAiReviewerConflict'] as const;
 
 export const getResolveAiReviewerConflictMutationOptions = <
 	TError = ErrorType<ApiErrorBody>,
@@ -1862,7 +1909,7 @@ export const getResolveAiReviewerConflictMutationOptions = <
 	ResolveAiReviewerConflictMutationVariables,
 	TContext
 > => {
-	const mutationKey = ['resolveAiReviewerConflict'];
+	const mutationKey = getResolveAiReviewerConflictMutationKey();
 	const { mutation: mutationOptions, request: requestOptions } = options
 		? options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey
 			? options
@@ -1975,8 +2022,19 @@ export const generateDuplicateSuggestion = async (
 	): Record<string, string | readonly string[]> => {
 		if (!h) return {};
 		if (h instanceof Headers) return Object.fromEntries(h.entries());
-		if (Array.isArray(h)) return Object.fromEntries(h);
-		return h;
+		if (Symbol.iterator in h) {
+			return Object.fromEntries(
+				Array.from(
+					h as Iterable<Iterable<string>>,
+					(entry) => Array.from(entry) as [string, string]
+				)
+			);
+		}
+		const headers: Record<string, string | readonly string[]> = {};
+		for (const [name, value] of Object.entries<string | readonly string[] | undefined>(h)) {
+			if (value !== undefined) headers[name] = value;
+		}
+		return headers;
 	};
 	return customFetch<generateDuplicateSuggestionResponseSuccess>(
 		getGenerateDuplicateSuggestionUrl(projectId, recordId),
@@ -1988,6 +2046,9 @@ export const generateDuplicateSuggestion = async (
 		}
 	);
 };
+
+export const getGenerateDuplicateSuggestionMutationKey = () =>
+	['generateDuplicateSuggestion'] as const;
 
 export const getGenerateDuplicateSuggestionMutationOptions = <
 	TError = ErrorType<ApiErrorBody>,
@@ -2010,7 +2071,7 @@ export const getGenerateDuplicateSuggestionMutationOptions = <
 	GenerateDuplicateSuggestionMutationVariables,
 	TContext
 > => {
-	const mutationKey = ['generateDuplicateSuggestion'];
+	const mutationKey = getGenerateDuplicateSuggestionMutationKey();
 	const { mutation: mutationOptions, request: requestOptions } = options
 		? options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey
 			? options
@@ -2144,8 +2205,19 @@ export const generateAppraisalPrefillSuggestion = async (
 	): Record<string, string | readonly string[]> => {
 		if (!h) return {};
 		if (h instanceof Headers) return Object.fromEntries(h.entries());
-		if (Array.isArray(h)) return Object.fromEntries(h);
-		return h;
+		if (Symbol.iterator in h) {
+			return Object.fromEntries(
+				Array.from(
+					h as Iterable<Iterable<string>>,
+					(entry) => Array.from(entry) as [string, string]
+				)
+			);
+		}
+		const headers: Record<string, string | readonly string[]> = {};
+		for (const [name, value] of Object.entries<string | readonly string[] | undefined>(h)) {
+			if (value !== undefined) headers[name] = value;
+		}
+		return headers;
 	};
 	return customFetch<generateAppraisalPrefillSuggestionResponseSuccess>(
 		getGenerateAppraisalPrefillSuggestionUrl(projectId, reportId),
@@ -2157,6 +2229,9 @@ export const generateAppraisalPrefillSuggestion = async (
 		}
 	);
 };
+
+export const getGenerateAppraisalPrefillSuggestionMutationKey = () =>
+	['generateAppraisalPrefillSuggestion'] as const;
 
 export const getGenerateAppraisalPrefillSuggestionMutationOptions = <
 	TError = ErrorType<ApiErrorBody>,
@@ -2175,7 +2250,7 @@ export const getGenerateAppraisalPrefillSuggestionMutationOptions = <
 	GenerateAppraisalPrefillSuggestionMutationVariables,
 	TContext
 > => {
-	const mutationKey = ['generateAppraisalPrefillSuggestion'];
+	const mutationKey = getGenerateAppraisalPrefillSuggestionMutationKey();
 	const { mutation: mutationOptions, request: requestOptions } = options
 		? options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey
 			? options
@@ -2289,8 +2364,19 @@ export const generateScreeningSuggestion = async (
 	): Record<string, string | readonly string[]> => {
 		if (!h) return {};
 		if (h instanceof Headers) return Object.fromEntries(h.entries());
-		if (Array.isArray(h)) return Object.fromEntries(h);
-		return h;
+		if (Symbol.iterator in h) {
+			return Object.fromEntries(
+				Array.from(
+					h as Iterable<Iterable<string>>,
+					(entry) => Array.from(entry) as [string, string]
+				)
+			);
+		}
+		const headers: Record<string, string | readonly string[]> = {};
+		for (const [name, value] of Object.entries<string | readonly string[] | undefined>(h)) {
+			if (value !== undefined) headers[name] = value;
+		}
+		return headers;
 	};
 	return customFetch<generateScreeningSuggestionResponseSuccess>(
 		getGenerateScreeningSuggestionUrl(projectId, reportId),
@@ -2302,6 +2388,9 @@ export const generateScreeningSuggestion = async (
 		}
 	);
 };
+
+export const getGenerateScreeningSuggestionMutationKey = () =>
+	['generateScreeningSuggestion'] as const;
 
 export const getGenerateScreeningSuggestionMutationOptions = <
 	TError = ErrorType<ApiErrorBody>,
@@ -2324,7 +2413,7 @@ export const getGenerateScreeningSuggestionMutationOptions = <
 	GenerateScreeningSuggestionMutationVariables,
 	TContext
 > => {
-	const mutationKey = ['generateScreeningSuggestion'];
+	const mutationKey = getGenerateScreeningSuggestionMutationKey();
 	const { mutation: mutationOptions, request: requestOptions } = options
 		? options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey
 			? options
@@ -2461,6 +2550,9 @@ export const generateStudyGroupingSuggestion = async (
 	);
 };
 
+export const getGenerateStudyGroupingSuggestionMutationKey = () =>
+	['generateStudyGroupingSuggestion'] as const;
+
 export const getGenerateStudyGroupingSuggestionMutationOptions = <
 	TError = ErrorType<ApiErrorBody>,
 	TContext = unknown
@@ -2478,7 +2570,7 @@ export const getGenerateStudyGroupingSuggestionMutationOptions = <
 	GenerateStudyGroupingSuggestionMutationVariables,
 	TContext
 > => {
-	const mutationKey = ['generateStudyGroupingSuggestion'];
+	const mutationKey = getGenerateStudyGroupingSuggestionMutationKey();
 	const { mutation: mutationOptions, request: requestOptions } = options
 		? options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey
 			? options
@@ -2645,7 +2737,7 @@ export const prefetchGetReviewRunQuery = async <
 ): Promise<QueryClient> => {
 	const queryOptions = getGetReviewRunQueryOptions(projectId, runId, options);
 
-	await queryClient.prefetchQuery(queryOptions);
+	await queryClient.query(queryOptions).catch(() => {});
 
 	return queryClient;
 };
@@ -2706,6 +2798,9 @@ export const generateDataExtractionSuggestion = async (
 	);
 };
 
+export const getGenerateDataExtractionSuggestionMutationKey = () =>
+	['generateDataExtractionSuggestion'] as const;
+
 export const getGenerateDataExtractionSuggestionMutationOptions = <
 	TError = ErrorType<ApiErrorBody>,
 	TContext = unknown
@@ -2723,7 +2818,7 @@ export const getGenerateDataExtractionSuggestionMutationOptions = <
 	GenerateDataExtractionSuggestionMutationVariables,
 	TContext
 > => {
-	const mutationKey = ['generateDataExtractionSuggestion'];
+	const mutationKey = getGenerateDataExtractionSuggestionMutationKey();
 	const { mutation: mutationOptions, request: requestOptions } = options
 		? options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey
 			? options

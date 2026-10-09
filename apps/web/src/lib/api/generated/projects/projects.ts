@@ -4,7 +4,7 @@
  * DeepRef API
  * OpenAPI spec version: 0.1.0
  */
-import { createMutation, createQuery, useQueryClient } from '@tanstack/svelte-query';
+import { createMutation, createQuery, matchQuery, useQueryClient } from '@tanstack/svelte-query';
 import type {
 	CreateMutationOptions,
 	CreateMutationResult,
@@ -122,7 +122,7 @@ export const prefetchListProjectsQuery = async <
 ): Promise<QueryClient> => {
 	const queryOptions = getListProjectsQueryOptions(options);
 
-	await queryClient.prefetchQuery(queryOptions);
+	await queryClient.query(queryOptions).catch(() => {});
 
 	return queryClient;
 };
@@ -162,8 +162,19 @@ export const createProject = async (
 	): Record<string, string | readonly string[]> => {
 		if (!h) return {};
 		if (h instanceof Headers) return Object.fromEntries(h.entries());
-		if (Array.isArray(h)) return Object.fromEntries(h);
-		return h;
+		if (Symbol.iterator in h) {
+			return Object.fromEntries(
+				Array.from(
+					h as Iterable<Iterable<string>>,
+					(entry) => Array.from(entry) as [string, string]
+				)
+			);
+		}
+		const headers: Record<string, string | readonly string[]> = {};
+		for (const [name, value] of Object.entries<string | readonly string[] | undefined>(h)) {
+			if (value !== undefined) headers[name] = value;
+		}
+		return headers;
 	};
 	return customFetch<createProjectResponseSuccess>(getCreateProjectUrl(), {
 		...options,
@@ -172,6 +183,8 @@ export const createProject = async (
 		body: JSON.stringify(createProjectBody)
 	});
 };
+
+export const getCreateProjectMutationKey = () => ['createProject'] as const;
 
 export const getCreateProjectMutationOptions = <
 	TError = ErrorType<ApiErrorBody>,
@@ -194,7 +207,7 @@ export const getCreateProjectMutationOptions = <
 	CreateProjectMutationVariables,
 	TContext
 > => {
-	const mutationKey = ['createProject'];
+	const mutationKey = getCreateProjectMutationKey();
 	const { mutation: mutationOptions, request: requestOptions } = options
 		? options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey
 			? options
@@ -356,7 +369,7 @@ export const prefetchGetProjectQuery = async <
 ): Promise<QueryClient> => {
 	const queryOptions = getGetProjectQueryOptions(projectId, options);
 
-	await queryClient.prefetchQuery(queryOptions);
+	await queryClient.query(queryOptions).catch(() => {});
 
 	return queryClient;
 };
@@ -397,6 +410,8 @@ export const deleteProject = async (
 	});
 };
 
+export const getDeleteProjectMutationKey = () => ['deleteProject'] as const;
+
 export const getDeleteProjectMutationOptions = <
 	TError = ErrorType<ApiErrorBody>,
 	TContext = unknown
@@ -418,7 +433,7 @@ export const getDeleteProjectMutationOptions = <
 	DeleteProjectMutationVariables,
 	TContext
 > => {
-	const mutationKey = ['deleteProject'];
+	const mutationKey = getDeleteProjectMutationKey();
 	const { mutation: mutationOptions, request: requestOptions } = options
 		? options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey
 			? options
@@ -521,8 +536,19 @@ export const updateProject = async (
 	): Record<string, string | readonly string[]> => {
 		if (!h) return {};
 		if (h instanceof Headers) return Object.fromEntries(h.entries());
-		if (Array.isArray(h)) return Object.fromEntries(h);
-		return h;
+		if (Symbol.iterator in h) {
+			return Object.fromEntries(
+				Array.from(
+					h as Iterable<Iterable<string>>,
+					(entry) => Array.from(entry) as [string, string]
+				)
+			);
+		}
+		const headers: Record<string, string | readonly string[]> = {};
+		for (const [name, value] of Object.entries<string | readonly string[] | undefined>(h)) {
+			if (value !== undefined) headers[name] = value;
+		}
+		return headers;
 	};
 	return customFetch<updateProjectResponseSuccess>(getUpdateProjectUrl(projectId), {
 		...options,
@@ -531,6 +557,8 @@ export const updateProject = async (
 		body: JSON.stringify(createProject)
 	});
 };
+
+export const getUpdateProjectMutationKey = () => ['updateProject'] as const;
 
 export const getUpdateProjectMutationOptions = <
 	TError = ErrorType<ApiErrorBody>,
@@ -553,7 +581,7 @@ export const getUpdateProjectMutationOptions = <
 	UpdateProjectMutationVariables,
 	TContext
 > => {
-	const mutationKey = ['updateProject'];
+	const mutationKey = getUpdateProjectMutationKey();
 	const { mutation: mutationOptions, request: requestOptions } = options
 		? options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey
 			? options
@@ -576,8 +604,12 @@ export const getUpdateProjectMutationOptions = <
 		context: MutationFunctionContext
 	) => {
 		if (!options?.skipInvalidation) {
-			queryClient.invalidateQueries({ queryKey: getListProjectsQueryKey() });
-			queryClient.invalidateQueries({ queryKey: getGetProjectQueryKey(variables.projectId) });
+			queryClient.invalidateQueries({
+				predicate: (query) =>
+					[getListProjectsQueryKey(), getGetProjectQueryKey(variables.projectId)].some(
+						(queryKey) => matchQuery({ queryKey }, query)
+					)
+			});
 		}
 		mutationOptions?.onSuccess?.(data, variables, onMutateResult, context);
 	};

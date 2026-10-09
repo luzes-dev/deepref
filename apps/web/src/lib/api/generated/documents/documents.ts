@@ -191,7 +191,7 @@ export const prefetchListReportDocumentsQuery = async <
 ): Promise<QueryClient> => {
 	const queryOptions = getListReportDocumentsQueryOptions(projectId, reportId, params, options);
 
-	await queryClient.prefetchQuery(queryOptions);
+	await queryClient.query(queryOptions).catch(() => {});
 
 	return queryClient;
 };
@@ -250,6 +250,8 @@ export const uploadReportDocument = async (
 	);
 };
 
+export const getUploadReportDocumentMutationKey = () => ['uploadReportDocument'] as const;
+
 export const getUploadReportDocumentMutationOptions = <
 	TError = ErrorType<ApiErrorBody>,
 	TContext = unknown
@@ -267,7 +269,7 @@ export const getUploadReportDocumentMutationOptions = <
 	UploadReportDocumentMutationVariables,
 	TContext
 > => {
-	const mutationKey = ['uploadReportDocument'];
+	const mutationKey = getUploadReportDocumentMutationKey();
 	const { mutation: mutationOptions, request: requestOptions } = options
 		? options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey
 			? options
@@ -366,8 +368,19 @@ export const attachExternalReportDocument = async (
 	): Record<string, string | readonly string[]> => {
 		if (!h) return {};
 		if (h instanceof Headers) return Object.fromEntries(h.entries());
-		if (Array.isArray(h)) return Object.fromEntries(h);
-		return h;
+		if (Symbol.iterator in h) {
+			return Object.fromEntries(
+				Array.from(
+					h as Iterable<Iterable<string>>,
+					(entry) => Array.from(entry) as [string, string]
+				)
+			);
+		}
+		const headers: Record<string, string | readonly string[]> = {};
+		for (const [name, value] of Object.entries<string | readonly string[] | undefined>(h)) {
+			if (value !== undefined) headers[name] = value;
+		}
+		return headers;
 	};
 	return customFetch<attachExternalReportDocumentResponseSuccess>(
 		getAttachExternalReportDocumentUrl(projectId, reportId),
@@ -379,6 +392,9 @@ export const attachExternalReportDocument = async (
 		}
 	);
 };
+
+export const getAttachExternalReportDocumentMutationKey = () =>
+	['attachExternalReportDocument'] as const;
 
 export const getAttachExternalReportDocumentMutationOptions = <
 	TError = ErrorType<ApiErrorBody>,
@@ -397,7 +413,7 @@ export const getAttachExternalReportDocumentMutationOptions = <
 	AttachExternalReportDocumentMutationVariables,
 	TContext
 > => {
-	const mutationKey = ['attachExternalReportDocument'];
+	const mutationKey = getAttachExternalReportDocumentMutationKey();
 	const { mutation: mutationOptions, request: requestOptions } = options
 		? options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey
 			? options
@@ -508,6 +524,9 @@ export const attachOpenAccessReportDocument = async (
 	);
 };
 
+export const getAttachOpenAccessReportDocumentMutationKey = () =>
+	['attachOpenAccessReportDocument'] as const;
+
 export const getAttachOpenAccessReportDocumentMutationOptions = <
 	TError = ErrorType<ApiErrorBody>,
 	TContext = unknown
@@ -525,7 +544,7 @@ export const getAttachOpenAccessReportDocumentMutationOptions = <
 	AttachOpenAccessReportDocumentMutationVariables,
 	TContext
 > => {
-	const mutationKey = ['attachOpenAccessReportDocument'];
+	const mutationKey = getAttachOpenAccessReportDocumentMutationKey();
 	const { mutation: mutationOptions, request: requestOptions } = options
 		? options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey
 			? options
@@ -717,7 +736,7 @@ export const prefetchGetReportDocumentQuery = async <
 ): Promise<QueryClient> => {
 	const queryOptions = getGetReportDocumentQueryOptions(projectId, reportId, documentId, options);
 
-	await queryClient.prefetchQuery(queryOptions);
+	await queryClient.query(queryOptions).catch(() => {});
 
 	return queryClient;
 };
@@ -776,6 +795,8 @@ export const deleteReportDocument = async (
 	);
 };
 
+export const getDeleteReportDocumentMutationKey = () => ['deleteReportDocument'] as const;
+
 export const getDeleteReportDocumentMutationOptions = <
 	TError = ErrorType<ApiErrorBody>,
 	TContext = unknown
@@ -793,7 +814,7 @@ export const getDeleteReportDocumentMutationOptions = <
 	DeleteReportDocumentMutationVariables,
 	TContext
 > => {
-	const mutationKey = ['deleteReportDocument'];
+	const mutationKey = getDeleteReportDocumentMutationKey();
 	const { mutation: mutationOptions, request: requestOptions } = options
 		? options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey
 			? options
@@ -1018,7 +1039,7 @@ export const prefetchListDocumentBlocksQuery = async <
 		options
 	);
 
-	await queryClient.prefetchQuery(queryOptions);
+	await queryClient.query(queryOptions).catch(() => {});
 
 	return queryClient;
 };
@@ -1191,7 +1212,7 @@ export const prefetchStreamReportDocumentContentQuery = async <
 		options
 	);
 
-	await queryClient.prefetchQuery(queryOptions);
+	await queryClient.query(queryOptions).catch(() => {});
 
 	return queryClient;
 };
@@ -1251,6 +1272,9 @@ export const acknowledgeReportDocumentIdentity = async (
 	);
 };
 
+export const getAcknowledgeReportDocumentIdentityMutationKey = () =>
+	['acknowledgeReportDocumentIdentity'] as const;
+
 export const getAcknowledgeReportDocumentIdentityMutationOptions = <
 	TError = ErrorType<ApiErrorBody>,
 	TContext = unknown
@@ -1268,7 +1292,7 @@ export const getAcknowledgeReportDocumentIdentityMutationOptions = <
 	AcknowledgeReportDocumentIdentityMutationVariables,
 	TContext
 > => {
-	const mutationKey = ['acknowledgeReportDocumentIdentity'];
+	const mutationKey = getAcknowledgeReportDocumentIdentityMutationKey();
 	const { mutation: mutationOptions, request: requestOptions } = options
 		? options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey
 			? options
@@ -1463,7 +1487,7 @@ export const prefetchListDocumentPagesQuery = async <
 ): Promise<QueryClient> => {
 	const queryOptions = getListDocumentPagesQueryOptions(projectId, reportId, documentId, options);
 
-	await queryClient.prefetchQuery(queryOptions);
+	await queryClient.query(queryOptions).catch(() => {});
 
 	return queryClient;
 };
@@ -1621,7 +1645,7 @@ export const prefetchListDocumentReferencesQuery = async <
 		options
 	);
 
-	await queryClient.prefetchQuery(queryOptions);
+	await queryClient.query(queryOptions).catch(() => {});
 
 	return queryClient;
 };
@@ -1680,6 +1704,8 @@ export const reparseReportDocument = async (
 	);
 };
 
+export const getReparseReportDocumentMutationKey = () => ['reparseReportDocument'] as const;
+
 export const getReparseReportDocumentMutationOptions = <
 	TError = ErrorType<ApiErrorBody>,
 	TContext = unknown
@@ -1697,7 +1723,7 @@ export const getReparseReportDocumentMutationOptions = <
 	ReparseReportDocumentMutationVariables,
 	TContext
 > => {
-	const mutationKey = ['reparseReportDocument'];
+	const mutationKey = getReparseReportDocumentMutationKey();
 	const { mutation: mutationOptions, request: requestOptions } = options
 		? options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey
 			? options
@@ -1895,7 +1921,7 @@ export const prefetchListDocumentSectionsQuery = async <
 		options
 	);
 
-	await queryClient.prefetchQuery(queryOptions);
+	await queryClient.query(queryOptions).catch(() => {});
 
 	return queryClient;
 };
@@ -2062,7 +2088,7 @@ export const prefetchListFullTextScreeningQueueQuery = async <
 ): Promise<QueryClient> => {
 	const queryOptions = getListFullTextScreeningQueueQueryOptions(projectId, params, options);
 
-	await queryClient.prefetchQuery(queryOptions);
+	await queryClient.query(queryOptions).catch(() => {});
 
 	return queryClient;
 };
@@ -2200,7 +2226,7 @@ export const prefetchListMissingFullTextQuery = async <
 ): Promise<QueryClient> => {
 	const queryOptions = getListMissingFullTextQueryOptions(projectId, params, options);
 
-	await queryClient.prefetchQuery(queryOptions);
+	await queryClient.query(queryOptions).catch(() => {});
 
 	return queryClient;
 };
@@ -2329,7 +2355,7 @@ export const prefetchListFullTextExclusionReasonsQuery = async <
 ): Promise<QueryClient> => {
 	const queryOptions = getListFullTextExclusionReasonsQueryOptions(projectId, options);
 
-	await queryClient.prefetchQuery(queryOptions);
+	await queryClient.query(queryOptions).catch(() => {});
 
 	return queryClient;
 };

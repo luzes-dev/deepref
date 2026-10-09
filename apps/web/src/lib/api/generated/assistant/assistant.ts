@@ -97,8 +97,19 @@ export const chatWithProjectAssistant = async (
 	): Record<string, string | readonly string[]> => {
 		if (!h) return {};
 		if (h instanceof Headers) return Object.fromEntries(h.entries());
-		if (Array.isArray(h)) return Object.fromEntries(h);
-		return h;
+		if (Symbol.iterator in h) {
+			return Object.fromEntries(
+				Array.from(
+					h as Iterable<Iterable<string>>,
+					(entry) => Array.from(entry) as [string, string]
+				)
+			);
+		}
+		const headers: Record<string, string | readonly string[]> = {};
+		for (const [name, value] of Object.entries<string | readonly string[] | undefined>(h)) {
+			if (value !== undefined) headers[name] = value;
+		}
+		return headers;
 	};
 	return customFetch<chatWithProjectAssistantResponseSuccess>(
 		getChatWithProjectAssistantUrl(projectId),
@@ -110,6 +121,8 @@ export const chatWithProjectAssistant = async (
 		}
 	);
 };
+
+export const getChatWithProjectAssistantMutationKey = () => ['chatWithProjectAssistant'] as const;
 
 export const getChatWithProjectAssistantMutationOptions = <
 	TError = ErrorType<ApiErrorBody>,
@@ -128,7 +141,7 @@ export const getChatWithProjectAssistantMutationOptions = <
 	ChatWithProjectAssistantMutationVariables,
 	TContext
 > => {
-	const mutationKey = ['chatWithProjectAssistant'];
+	const mutationKey = getChatWithProjectAssistantMutationKey();
 	const { mutation: mutationOptions, request: requestOptions } = options
 		? options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey
 			? options
@@ -321,7 +334,7 @@ export const prefetchListProjectAssistantConversationsQuery = async <
 ): Promise<QueryClient> => {
 	const queryOptions = getListProjectAssistantConversationsQueryOptions(projectId, options);
 
-	await queryClient.prefetchQuery(queryOptions);
+	await queryClient.query(queryOptions).catch(() => {});
 
 	return queryClient;
 };
@@ -372,8 +385,19 @@ export const createProjectAssistantConversation = async (
 	): Record<string, string | readonly string[]> => {
 		if (!h) return {};
 		if (h instanceof Headers) return Object.fromEntries(h.entries());
-		if (Array.isArray(h)) return Object.fromEntries(h);
-		return h;
+		if (Symbol.iterator in h) {
+			return Object.fromEntries(
+				Array.from(
+					h as Iterable<Iterable<string>>,
+					(entry) => Array.from(entry) as [string, string]
+				)
+			);
+		}
+		const headers: Record<string, string | readonly string[]> = {};
+		for (const [name, value] of Object.entries<string | readonly string[] | undefined>(h)) {
+			if (value !== undefined) headers[name] = value;
+		}
+		return headers;
 	};
 	return customFetch<createProjectAssistantConversationResponseSuccess>(
 		getCreateProjectAssistantConversationUrl(projectId),
@@ -385,6 +409,9 @@ export const createProjectAssistantConversation = async (
 		}
 	);
 };
+
+export const getCreateProjectAssistantConversationMutationKey = () =>
+	['createProjectAssistantConversation'] as const;
 
 export const getCreateProjectAssistantConversationMutationOptions = <
 	TError = ErrorType<ApiErrorBody>,
@@ -403,7 +430,7 @@ export const getCreateProjectAssistantConversationMutationOptions = <
 	CreateProjectAssistantConversationMutationVariables,
 	TContext
 > => {
-	const mutationKey = ['createProjectAssistantConversation'];
+	const mutationKey = getCreateProjectAssistantConversationMutationKey();
 	const { mutation: mutationOptions, request: requestOptions } = options
 		? options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey
 			? options
@@ -511,6 +538,9 @@ export const deleteProjectAssistantConversation = async (
 	);
 };
 
+export const getDeleteProjectAssistantConversationMutationKey = () =>
+	['deleteProjectAssistantConversation'] as const;
+
 export const getDeleteProjectAssistantConversationMutationOptions = <
 	TError = ErrorType<ApiErrorBody>,
 	TContext = unknown
@@ -528,7 +558,7 @@ export const getDeleteProjectAssistantConversationMutationOptions = <
 	DeleteProjectAssistantConversationMutationVariables,
 	TContext
 > => {
-	const mutationKey = ['deleteProjectAssistantConversation'];
+	const mutationKey = getDeleteProjectAssistantConversationMutationKey();
 	const { mutation: mutationOptions, request: requestOptions } = options
 		? options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey
 			? options
@@ -751,7 +781,7 @@ export const prefetchListProjectAssistantConversationMessagesQuery = async <
 		options
 	);
 
-	await queryClient.prefetchQuery(queryOptions);
+	await queryClient.query(queryOptions).catch(() => {});
 
 	return queryClient;
 };
@@ -874,7 +904,7 @@ export const prefetchGetAssistantPlanQuery = async <
 ): Promise<QueryClient> => {
 	const queryOptions = getGetAssistantPlanQueryOptions(projectId, planId, options);
 
-	await queryClient.prefetchQuery(queryOptions);
+	await queryClient.query(queryOptions).catch(() => {});
 
 	return queryClient;
 };
@@ -928,6 +958,8 @@ export const confirmAssistantPlan = async (
 	);
 };
 
+export const getConfirmAssistantPlanMutationKey = () => ['confirmAssistantPlan'] as const;
+
 export const getConfirmAssistantPlanMutationOptions = <
 	TError = ErrorType<ApiErrorBody>,
 	TContext = unknown
@@ -945,7 +977,7 @@ export const getConfirmAssistantPlanMutationOptions = <
 	ConfirmAssistantPlanMutationVariables,
 	TContext
 > => {
-	const mutationKey = ['confirmAssistantPlan'];
+	const mutationKey = getConfirmAssistantPlanMutationKey();
 	const { mutation: mutationOptions, request: requestOptions } = options
 		? options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey
 			? options
@@ -1040,6 +1072,8 @@ export const rejectAssistantPlan = async (
 	);
 };
 
+export const getRejectAssistantPlanMutationKey = () => ['rejectAssistantPlan'] as const;
+
 export const getRejectAssistantPlanMutationOptions = <
 	TError = ErrorType<ApiErrorBody>,
 	TContext = unknown
@@ -1057,7 +1091,7 @@ export const getRejectAssistantPlanMutationOptions = <
 	RejectAssistantPlanMutationVariables,
 	TContext
 > => {
-	const mutationKey = ['rejectAssistantPlan'];
+	const mutationKey = getRejectAssistantPlanMutationKey();
 	const { mutation: mutationOptions, request: requestOptions } = options
 		? options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey
 			? options
@@ -1232,7 +1266,7 @@ export const prefetchListProjectAssistantToolsQuery = async <
 ): Promise<QueryClient> => {
 	const queryOptions = getListProjectAssistantToolsQueryOptions(projectId, options);
 
-	await queryClient.prefetchQuery(queryOptions);
+	await queryClient.query(queryOptions).catch(() => {});
 
 	return queryClient;
 };
@@ -1300,8 +1334,19 @@ export const executeProjectAssistantTool = async (
 	): Record<string, string | readonly string[]> => {
 		if (!h) return {};
 		if (h instanceof Headers) return Object.fromEntries(h.entries());
-		if (Array.isArray(h)) return Object.fromEntries(h);
-		return h;
+		if (Symbol.iterator in h) {
+			return Object.fromEntries(
+				Array.from(
+					h as Iterable<Iterable<string>>,
+					(entry) => Array.from(entry) as [string, string]
+				)
+			);
+		}
+		const headers: Record<string, string | readonly string[]> = {};
+		for (const [name, value] of Object.entries<string | readonly string[] | undefined>(h)) {
+			if (value !== undefined) headers[name] = value;
+		}
+		return headers;
 	};
 	return customFetch<executeProjectAssistantToolResponseSuccess>(
 		getExecuteProjectAssistantToolUrl(projectId),
@@ -1313,6 +1358,9 @@ export const executeProjectAssistantTool = async (
 		}
 	);
 };
+
+export const getExecuteProjectAssistantToolMutationKey = () =>
+	['executeProjectAssistantTool'] as const;
 
 export const getExecuteProjectAssistantToolMutationOptions = <
 	TError = ErrorType<ApiErrorBody>,
@@ -1331,7 +1379,7 @@ export const getExecuteProjectAssistantToolMutationOptions = <
 	ExecuteProjectAssistantToolMutationVariables,
 	TContext
 > => {
-	const mutationKey = ['executeProjectAssistantTool'];
+	const mutationKey = getExecuteProjectAssistantToolMutationKey();
 	const { mutation: mutationOptions, request: requestOptions } = options
 		? options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey
 			? options

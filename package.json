@@ -32,6 +32,6 @@
   },
   "devDependencies": {
     "fallow": "2.101.0",
-    "jscpd": "5.1.2"
+    "jscpd": "5.4.0"
   }
 }

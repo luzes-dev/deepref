@@ -138,7 +138,7 @@ export const prefetchGetAutomationCatalogQuery = async <
 ): Promise<QueryClient> => {
 	const queryOptions = getGetAutomationCatalogQueryOptions(options);
 
-	await queryClient.prefetchQuery(queryOptions);
+	await queryClient.query(queryOptions).catch(() => {});
 
 	return queryClient;
 };
@@ -231,7 +231,7 @@ export const prefetchListAutomationTemplatesQuery = async <
 ): Promise<QueryClient> => {
 	const queryOptions = getListAutomationTemplatesQueryOptions(options);
 
-	await queryClient.prefetchQuery(queryOptions);
+	await queryClient.query(queryOptions).catch(() => {});
 
 	return queryClient;
 };
@@ -278,8 +278,19 @@ export const getBlockDetails = async (
 	): Record<string, string | readonly string[]> => {
 		if (!h) return {};
 		if (h instanceof Headers) return Object.fromEntries(h.entries());
-		if (Array.isArray(h)) return Object.fromEntries(h);
-		return h;
+		if (Symbol.iterator in h) {
+			return Object.fromEntries(
+				Array.from(
+					h as Iterable<Iterable<string>>,
+					(entry) => Array.from(entry) as [string, string]
+				)
+			);
+		}
+		const headers: Record<string, string | readonly string[]> = {};
+		for (const [name, value] of Object.entries<string | readonly string[] | undefined>(h)) {
+			if (value !== undefined) headers[name] = value;
+		}
+		return headers;
 	};
 	return customFetch<getBlockDetailsResponseSuccess>(getGetBlockDetailsUrl(projectId), {
 		...options,
@@ -288,6 +299,8 @@ export const getBlockDetails = async (
 		body: JSON.stringify(blockDetailsRequest)
 	});
 };
+
+export const getGetBlockDetailsMutationKey = () => ['getBlockDetails'] as const;
 
 export const getGetBlockDetailsMutationOptions = <
 	TError = ErrorType<ApiErrorBody>,
@@ -306,7 +319,7 @@ export const getGetBlockDetailsMutationOptions = <
 	GetBlockDetailsMutationVariables,
 	TContext
 > => {
-	const mutationKey = ['getBlockDetails'];
+	const mutationKey = getGetBlockDetailsMutationKey();
 	const { mutation: mutationOptions, request: requestOptions } = options
 		? options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey
 			? options
@@ -488,7 +501,7 @@ export const prefetchListAutomationDefinitionsQuery = async <
 ): Promise<QueryClient> => {
 	const queryOptions = getListAutomationDefinitionsQueryOptions(projectId, options);
 
-	await queryClient.prefetchQuery(queryOptions);
+	await queryClient.query(queryOptions).catch(() => {});
 
 	return queryClient;
 };
@@ -546,8 +559,19 @@ export const configureAutomationDefinition = async (
 	): Record<string, string | readonly string[]> => {
 		if (!h) return {};
 		if (h instanceof Headers) return Object.fromEntries(h.entries());
-		if (Array.isArray(h)) return Object.fromEntries(h);
-		return h;
+		if (Symbol.iterator in h) {
+			return Object.fromEntries(
+				Array.from(
+					h as Iterable<Iterable<string>>,
+					(entry) => Array.from(entry) as [string, string]
+				)
+			);
+		}
+		const headers: Record<string, string | readonly string[]> = {};
+		for (const [name, value] of Object.entries<string | readonly string[] | undefined>(h)) {
+			if (value !== undefined) headers[name] = value;
+		}
+		return headers;
 	};
 	return customFetch<configureAutomationDefinitionResponseSuccess>(
 		getConfigureAutomationDefinitionUrl(projectId, recipe),
@@ -559,6 +583,9 @@ export const configureAutomationDefinition = async (
 		}
 	);
 };
+
+export const getConfigureAutomationDefinitionMutationKey = () =>
+	['configureAutomationDefinition'] as const;
 
 export const getConfigureAutomationDefinitionMutationOptions = <
 	TError = ErrorType<ApiErrorBody>,
@@ -577,7 +604,7 @@ export const getConfigureAutomationDefinitionMutationOptions = <
 	ConfigureAutomationDefinitionMutationVariables,
 	TContext
 > => {
-	const mutationKey = ['configureAutomationDefinition'];
+	const mutationKey = getConfigureAutomationDefinitionMutationKey();
 	const { mutation: mutationOptions, request: requestOptions } = options
 		? options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey
 			? options
@@ -693,6 +720,8 @@ export const runAutomationRecipeOnce = async (
 	);
 };
 
+export const getRunAutomationRecipeOnceMutationKey = () => ['runAutomationRecipeOnce'] as const;
+
 export const getRunAutomationRecipeOnceMutationOptions = <
 	TError = ErrorType<ApiErrorBody>,
 	TContext = unknown
@@ -710,7 +739,7 @@ export const getRunAutomationRecipeOnceMutationOptions = <
 	RunAutomationRecipeOnceMutationVariables,
 	TContext
 > => {
-	const mutationKey = ['runAutomationRecipeOnce'];
+	const mutationKey = getRunAutomationRecipeOnceMutationKey();
 	const { mutation: mutationOptions, request: requestOptions } = options
 		? options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey
 			? options
@@ -900,7 +929,7 @@ export const prefetchListAutomationRunsQuery = async <
 ): Promise<QueryClient> => {
 	const queryOptions = getListAutomationRunsQueryOptions(projectId, params, options);
 
-	await queryClient.prefetchQuery(queryOptions);
+	await queryClient.query(queryOptions).catch(() => {});
 
 	return queryClient;
 };
@@ -963,8 +992,19 @@ export const triggerAutomationManually = async (
 	): Record<string, string | readonly string[]> => {
 		if (!h) return {};
 		if (h instanceof Headers) return Object.fromEntries(h.entries());
-		if (Array.isArray(h)) return Object.fromEntries(h);
-		return h;
+		if (Symbol.iterator in h) {
+			return Object.fromEntries(
+				Array.from(
+					h as Iterable<Iterable<string>>,
+					(entry) => Array.from(entry) as [string, string]
+				)
+			);
+		}
+		const headers: Record<string, string | readonly string[]> = {};
+		for (const [name, value] of Object.entries<string | readonly string[] | undefined>(h)) {
+			if (value !== undefined) headers[name] = value;
+		}
+		return headers;
 	};
 	return customFetch<triggerAutomationManuallyResponseSuccess>(
 		getTriggerAutomationManuallyUrl(projectId),
@@ -976,6 +1016,8 @@ export const triggerAutomationManually = async (
 		}
 	);
 };
+
+export const getTriggerAutomationManuallyMutationKey = () => ['triggerAutomationManually'] as const;
 
 export const getTriggerAutomationManuallyMutationOptions = <
 	TError = ErrorType<ApiErrorBody>,
@@ -994,7 +1036,7 @@ export const getTriggerAutomationManuallyMutationOptions = <
 	TriggerAutomationManuallyMutationVariables,
 	TContext
 > => {
-	const mutationKey = ['triggerAutomationManually'];
+	const mutationKey = getTriggerAutomationManuallyMutationKey();
 	const { mutation: mutationOptions, request: requestOptions } = options
 		? options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey
 			? options
@@ -1168,7 +1210,7 @@ export const prefetchGetAutomationRunQuery = async <
 ): Promise<QueryClient> => {
 	const queryOptions = getGetAutomationRunQueryOptions(projectId, runId, options);
 
-	await queryClient.prefetchQuery(queryOptions);
+	await queryClient.query(queryOptions).catch(() => {});
 
 	return queryClient;
 };
@@ -1289,7 +1331,7 @@ export const prefetchDownloadWorkflowFileQuery = async <
 ): Promise<QueryClient> => {
 	const queryOptions = getDownloadWorkflowFileQueryOptions(projectId, fileId, options);
 
-	await queryClient.prefetchQuery(queryOptions);
+	await queryClient.query(queryOptions).catch(() => {});
 
 	return queryClient;
 };
@@ -1429,7 +1471,7 @@ export const prefetchListProjectWorkflowRunsQuery = async <
 ): Promise<QueryClient> => {
 	const queryOptions = getListProjectWorkflowRunsQueryOptions(projectId, params, options);
 
-	await queryClient.prefetchQuery(queryOptions);
+	await queryClient.query(queryOptions).catch(() => {});
 
 	return queryClient;
 };
@@ -1542,7 +1584,7 @@ export const prefetchGetWorkflowRunQuery = async <
 ): Promise<QueryClient> => {
 	const queryOptions = getGetWorkflowRunQueryOptions(projectId, runId, options);
 
-	await queryClient.prefetchQuery(queryOptions);
+	await queryClient.query(queryOptions).catch(() => {});
 
 	return queryClient;
 };
@@ -1589,6 +1631,8 @@ export const cancelWorkflowRun = async (
 	);
 };
 
+export const getCancelWorkflowRunMutationKey = () => ['cancelWorkflowRun'] as const;
+
 export const getCancelWorkflowRunMutationOptions = <
 	TError = ErrorType<ApiErrorBody>,
 	TContext = unknown
@@ -1606,7 +1650,7 @@ export const getCancelWorkflowRunMutationOptions = <
 	CancelWorkflowRunMutationVariables,
 	TContext
 > => {
-	const mutationKey = ['cancelWorkflowRun'];
+	const mutationKey = getCancelWorkflowRunMutationKey();
 	const { mutation: mutationOptions, request: requestOptions } = options
 		? options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey
 			? options
@@ -1757,7 +1801,7 @@ export const prefetchListWorkflowsQuery = async <
 ): Promise<QueryClient> => {
 	const queryOptions = getListWorkflowsQueryOptions(projectId, options);
 
-	await queryClient.prefetchQuery(queryOptions);
+	await queryClient.query(queryOptions).catch(() => {});
 
 	return queryClient;
 };
@@ -1800,8 +1844,19 @@ export const createWorkflow = async (
 	): Record<string, string | readonly string[]> => {
 		if (!h) return {};
 		if (h instanceof Headers) return Object.fromEntries(h.entries());
-		if (Array.isArray(h)) return Object.fromEntries(h);
-		return h;
+		if (Symbol.iterator in h) {
+			return Object.fromEntries(
+				Array.from(
+					h as Iterable<Iterable<string>>,
+					(entry) => Array.from(entry) as [string, string]
+				)
+			);
+		}
+		const headers: Record<string, string | readonly string[]> = {};
+		for (const [name, value] of Object.entries<string | readonly string[] | undefined>(h)) {
+			if (value !== undefined) headers[name] = value;
+		}
+		return headers;
 	};
 	return customFetch<createWorkflowResponseSuccess>(getCreateWorkflowUrl(projectId), {
 		...options,
@@ -1810,6 +1865,8 @@ export const createWorkflow = async (
 		body: JSON.stringify(createWorkflowRequest)
 	});
 };
+
+export const getCreateWorkflowMutationKey = () => ['createWorkflow'] as const;
 
 export const getCreateWorkflowMutationOptions = <
 	TError = ErrorType<ApiErrorBody>,
@@ -1828,7 +1885,7 @@ export const getCreateWorkflowMutationOptions = <
 	CreateWorkflowMutationVariables,
 	TContext
 > => {
-	const mutationKey = ['createWorkflow'];
+	const mutationKey = getCreateWorkflowMutationKey();
 	const { mutation: mutationOptions, request: requestOptions } = options
 		? options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey
 			? options
@@ -1915,8 +1972,19 @@ export const createWorkflowFromTemplate = async (
 	): Record<string, string | readonly string[]> => {
 		if (!h) return {};
 		if (h instanceof Headers) return Object.fromEntries(h.entries());
-		if (Array.isArray(h)) return Object.fromEntries(h);
-		return h;
+		if (Symbol.iterator in h) {
+			return Object.fromEntries(
+				Array.from(
+					h as Iterable<Iterable<string>>,
+					(entry) => Array.from(entry) as [string, string]
+				)
+			);
+		}
+		const headers: Record<string, string | readonly string[]> = {};
+		for (const [name, value] of Object.entries<string | readonly string[] | undefined>(h)) {
+			if (value !== undefined) headers[name] = value;
+		}
+		return headers;
 	};
 	return customFetch<createWorkflowFromTemplateResponseSuccess>(
 		getCreateWorkflowFromTemplateUrl(projectId),
@@ -1928,6 +1996,9 @@ export const createWorkflowFromTemplate = async (
 		}
 	);
 };
+
+export const getCreateWorkflowFromTemplateMutationKey = () =>
+	['createWorkflowFromTemplate'] as const;
 
 export const getCreateWorkflowFromTemplateMutationOptions = <
 	TError = ErrorType<ApiErrorBody>,
@@ -1946,7 +2017,7 @@ export const getCreateWorkflowFromTemplateMutationOptions = <
 	CreateWorkflowFromTemplateMutationVariables,
 	TContext
 > => {
-	const mutationKey = ['createWorkflowFromTemplate'];
+	const mutationKey = getCreateWorkflowFromTemplateMutationKey();
 	const { mutation: mutationOptions, request: requestOptions } = options
 		? options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey
 			? options
@@ -2105,7 +2176,7 @@ export const prefetchGetWorkflowQuery = async <
 ): Promise<QueryClient> => {
 	const queryOptions = getGetWorkflowQueryOptions(projectId, workflowId, options);
 
-	await queryClient.prefetchQuery(queryOptions);
+	await queryClient.query(queryOptions).catch(() => {});
 
 	return queryClient;
 };
@@ -2149,8 +2220,19 @@ export const updateWorkflow = async (
 	): Record<string, string | readonly string[]> => {
 		if (!h) return {};
 		if (h instanceof Headers) return Object.fromEntries(h.entries());
-		if (Array.isArray(h)) return Object.fromEntries(h);
-		return h;
+		if (Symbol.iterator in h) {
+			return Object.fromEntries(
+				Array.from(
+					h as Iterable<Iterable<string>>,
+					(entry) => Array.from(entry) as [string, string]
+				)
+			);
+		}
+		const headers: Record<string, string | readonly string[]> = {};
+		for (const [name, value] of Object.entries<string | readonly string[] | undefined>(h)) {
+			if (value !== undefined) headers[name] = value;
+		}
+		return headers;
 	};
 	return customFetch<updateWorkflowResponseSuccess>(getUpdateWorkflowUrl(projectId, workflowId), {
 		...options,
@@ -2159,6 +2241,8 @@ export const updateWorkflow = async (
 		body: JSON.stringify(updateWorkflowRequest)
 	});
 };
+
+export const getUpdateWorkflowMutationKey = () => ['updateWorkflow'] as const;
 
 export const getUpdateWorkflowMutationOptions = <
 	TError = ErrorType<ApiErrorBody>,
@@ -2177,7 +2261,7 @@ export const getUpdateWorkflowMutationOptions = <
 	UpdateWorkflowMutationVariables,
 	TContext
 > => {
-	const mutationKey = ['updateWorkflow'];
+	const mutationKey = getUpdateWorkflowMutationKey();
 	const { mutation: mutationOptions, request: requestOptions } = options
 		? options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey
 			? options
@@ -2259,6 +2343,8 @@ export const deleteWorkflow = async (
 	});
 };
 
+export const getDeleteWorkflowMutationKey = () => ['deleteWorkflow'] as const;
+
 export const getDeleteWorkflowMutationOptions = <
 	TError = ErrorType<ApiErrorBody>,
 	TContext = unknown
@@ -2276,7 +2362,7 @@ export const getDeleteWorkflowMutationOptions = <
 	DeleteWorkflowMutationVariables,
 	TContext
 > => {
-	const mutationKey = ['deleteWorkflow'];
+	const mutationKey = getDeleteWorkflowMutationKey();
 	const { mutation: mutationOptions, request: requestOptions } = options
 		? options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey
 			? options
@@ -2357,6 +2443,8 @@ export const disableWorkflow = async (
 	);
 };
 
+export const getDisableWorkflowMutationKey = () => ['disableWorkflow'] as const;
+
 export const getDisableWorkflowMutationOptions = <
 	TError = ErrorType<ApiErrorBody>,
 	TContext = unknown
@@ -2374,7 +2462,7 @@ export const getDisableWorkflowMutationOptions = <
 	DisableWorkflowMutationVariables,
 	TContext
 > => {
-	const mutationKey = ['disableWorkflow'];
+	const mutationKey = getDisableWorkflowMutationKey();
 	const { mutation: mutationOptions, request: requestOptions } = options
 		? options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey
 			? options
@@ -2454,6 +2542,8 @@ export const enableWorkflow = async (
 	});
 };
 
+export const getEnableWorkflowMutationKey = () => ['enableWorkflow'] as const;
+
 export const getEnableWorkflowMutationOptions = <
 	TError = ErrorType<ApiErrorBody>,
 	TContext = unknown
@@ -2471,7 +2561,7 @@ export const getEnableWorkflowMutationOptions = <
 	EnableWorkflowMutationVariables,
 	TContext
 > => {
-	const mutationKey = ['enableWorkflow'];
+	const mutationKey = getEnableWorkflowMutationKey();
 	const { mutation: mutationOptions, request: requestOptions } = options
 		? options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey
 			? options
@@ -2634,7 +2724,7 @@ export const prefetchGetWorkflowEndpointsQuery = async <
 ): Promise<QueryClient> => {
 	const queryOptions = getGetWorkflowEndpointsQueryOptions(projectId, workflowId, options);
 
-	await queryClient.prefetchQuery(queryOptions);
+	await queryClient.query(queryOptions).catch(() => {});
 
 	return queryClient;
 };
@@ -2671,8 +2761,19 @@ export const updateWorkflowEndpoints = async (
 	): Record<string, string | readonly string[]> => {
 		if (!h) return {};
 		if (h instanceof Headers) return Object.fromEntries(h.entries());
-		if (Array.isArray(h)) return Object.fromEntries(h);
-		return h;
+		if (Symbol.iterator in h) {
+			return Object.fromEntries(
+				Array.from(
+					h as Iterable<Iterable<string>>,
+					(entry) => Array.from(entry) as [string, string]
+				)
+			);
+		}
+		const headers: Record<string, string | readonly string[]> = {};
+		for (const [name, value] of Object.entries<string | readonly string[] | undefined>(h)) {
+			if (value !== undefined) headers[name] = value;
+		}
+		return headers;
 	};
 	return customFetch<updateWorkflowEndpointsResponseSuccess>(
 		getUpdateWorkflowEndpointsUrl(projectId, workflowId),
@@ -2684,6 +2785,8 @@ export const updateWorkflowEndpoints = async (
 		}
 	);
 };
+
+export const getUpdateWorkflowEndpointsMutationKey = () => ['updateWorkflowEndpoints'] as const;
 
 export const getUpdateWorkflowEndpointsMutationOptions = <
 	TError = ErrorType<ApiErrorBody>,
@@ -2702,7 +2805,7 @@ export const getUpdateWorkflowEndpointsMutationOptions = <
 	UpdateWorkflowEndpointsMutationVariables,
 	TContext
 > => {
-	const mutationKey = ['updateWorkflowEndpoints'];
+	const mutationKey = getUpdateWorkflowEndpointsMutationKey();
 	const { mutation: mutationOptions, request: requestOptions } = options
 		? options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey
 			? options
@@ -2780,6 +2883,9 @@ export const rotateWorkflowEmailAddress = async (
 	);
 };
 
+export const getRotateWorkflowEmailAddressMutationKey = () =>
+	['rotateWorkflowEmailAddress'] as const;
+
 export const getRotateWorkflowEmailAddressMutationOptions = <
 	TError = ErrorType<unknown>,
 	TContext = unknown
@@ -2797,7 +2903,7 @@ export const getRotateWorkflowEmailAddressMutationOptions = <
 	RotateWorkflowEmailAddressMutationVariables,
 	TContext
 > => {
-	const mutationKey = ['rotateWorkflowEmailAddress'];
+	const mutationKey = getRotateWorkflowEmailAddressMutationKey();
 	const { mutation: mutationOptions, request: requestOptions } = options
 		? options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey
 			? options
@@ -2871,6 +2977,9 @@ export const rotateWorkflowWebhookSecret = async (
 	);
 };
 
+export const getRotateWorkflowWebhookSecretMutationKey = () =>
+	['rotateWorkflowWebhookSecret'] as const;
+
 export const getRotateWorkflowWebhookSecretMutationOptions = <
 	TError = ErrorType<unknown>,
 	TContext = unknown
@@ -2888,7 +2997,7 @@ export const getRotateWorkflowWebhookSecretMutationOptions = <
 	RotateWorkflowWebhookSecretMutationVariables,
 	TContext
 > => {
-	const mutationKey = ['rotateWorkflowWebhookSecret'];
+	const mutationKey = getRotateWorkflowWebhookSecretMutationKey();
 	const { mutation: mutationOptions, request: requestOptions } = options
 		? options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey
 			? options
@@ -2965,6 +3074,8 @@ export const rotateWorkflowWebhook = async (
 	);
 };
 
+export const getRotateWorkflowWebhookMutationKey = () => ['rotateWorkflowWebhook'] as const;
+
 export const getRotateWorkflowWebhookMutationOptions = <
 	TError = ErrorType<unknown>,
 	TContext = unknown
@@ -2982,7 +3093,7 @@ export const getRotateWorkflowWebhookMutationOptions = <
 	RotateWorkflowWebhookMutationVariables,
 	TContext
 > => {
-	const mutationKey = ['rotateWorkflowWebhook'];
+	const mutationKey = getRotateWorkflowWebhookMutationKey();
 	const { mutation: mutationOptions, request: requestOptions } = options
 		? options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey
 			? options
@@ -3069,8 +3180,19 @@ export const publishWorkflow = async (
 	): Record<string, string | readonly string[]> => {
 		if (!h) return {};
 		if (h instanceof Headers) return Object.fromEntries(h.entries());
-		if (Array.isArray(h)) return Object.fromEntries(h);
-		return h;
+		if (Symbol.iterator in h) {
+			return Object.fromEntries(
+				Array.from(
+					h as Iterable<Iterable<string>>,
+					(entry) => Array.from(entry) as [string, string]
+				)
+			);
+		}
+		const headers: Record<string, string | readonly string[]> = {};
+		for (const [name, value] of Object.entries<string | readonly string[] | undefined>(h)) {
+			if (value !== undefined) headers[name] = value;
+		}
+		return headers;
 	};
 	return customFetch<publishWorkflowResponseSuccess>(
 		getPublishWorkflowUrl(projectId, workflowId),
@@ -3082,6 +3204,8 @@ export const publishWorkflow = async (
 		}
 	);
 };
+
+export const getPublishWorkflowMutationKey = () => ['publishWorkflow'] as const;
 
 export const getPublishWorkflowMutationOptions = <
 	TError = ErrorType<ApiErrorBody>,
@@ -3100,7 +3224,7 @@ export const getPublishWorkflowMutationOptions = <
 	PublishWorkflowMutationVariables,
 	TContext
 > => {
-	const mutationKey = ['publishWorkflow'];
+	const mutationKey = getPublishWorkflowMutationKey();
 	const { mutation: mutationOptions, request: requestOptions } = options
 		? options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey
 			? options
@@ -3294,7 +3418,7 @@ export const prefetchListWorkflowRunsQuery = async <
 ): Promise<QueryClient> => {
 	const queryOptions = getListWorkflowRunsQueryOptions(projectId, workflowId, params, options);
 
-	await queryClient.prefetchQuery(queryOptions);
+	await queryClient.query(queryOptions).catch(() => {});
 
 	return queryClient;
 };
@@ -3338,8 +3462,19 @@ export const startWorkflowRun = async (
 	): Record<string, string | readonly string[]> => {
 		if (!h) return {};
 		if (h instanceof Headers) return Object.fromEntries(h.entries());
-		if (Array.isArray(h)) return Object.fromEntries(h);
-		return h;
+		if (Symbol.iterator in h) {
+			return Object.fromEntries(
+				Array.from(
+					h as Iterable<Iterable<string>>,
+					(entry) => Array.from(entry) as [string, string]
+				)
+			);
+		}
+		const headers: Record<string, string | readonly string[]> = {};
+		for (const [name, value] of Object.entries<string | readonly string[] | undefined>(h)) {
+			if (value !== undefined) headers[name] = value;
+		}
+		return headers;
 	};
 	return customFetch<startWorkflowRunResponseSuccess>(
 		getStartWorkflowRunUrl(projectId, workflowId),
@@ -3351,6 +3486,8 @@ export const startWorkflowRun = async (
 		}
 	);
 };
+
+export const getStartWorkflowRunMutationKey = () => ['startWorkflowRun'] as const;
 
 export const getStartWorkflowRunMutationOptions = <
 	TError = ErrorType<ApiErrorBody>,
@@ -3369,7 +3506,7 @@ export const getStartWorkflowRunMutationOptions = <
 	StartWorkflowRunMutationVariables,
 	TContext
 > => {
-	const mutationKey = ['startWorkflowRun'];
+	const mutationKey = getStartWorkflowRunMutationKey();
 	const { mutation: mutationOptions, request: requestOptions } = options
 		? options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey
 			? options
@@ -3458,8 +3595,19 @@ export const startWorkflowTestRun = async (
 	): Record<string, string | readonly string[]> => {
 		if (!h) return {};
 		if (h instanceof Headers) return Object.fromEntries(h.entries());
-		if (Array.isArray(h)) return Object.fromEntries(h);
-		return h;
+		if (Symbol.iterator in h) {
+			return Object.fromEntries(
+				Array.from(
+					h as Iterable<Iterable<string>>,
+					(entry) => Array.from(entry) as [string, string]
+				)
+			);
+		}
+		const headers: Record<string, string | readonly string[]> = {};
+		for (const [name, value] of Object.entries<string | readonly string[] | undefined>(h)) {
+			if (value !== undefined) headers[name] = value;
+		}
+		return headers;
 	};
 	return customFetch<startWorkflowTestRunResponseSuccess>(
 		getStartWorkflowTestRunUrl(projectId, workflowId),
@@ -3471,6 +3619,8 @@ export const startWorkflowTestRun = async (
 		}
 	);
 };
+
+export const getStartWorkflowTestRunMutationKey = () => ['startWorkflowTestRun'] as const;
 
 export const getStartWorkflowTestRunMutationOptions = <
 	TError = ErrorType<ApiErrorBody>,
@@ -3489,7 +3639,7 @@ export const getStartWorkflowTestRunMutationOptions = <
 	StartWorkflowTestRunMutationVariables,
 	TContext
 > => {
-	const mutationKey = ['startWorkflowTestRun'];
+	const mutationKey = getStartWorkflowTestRunMutationKey();
 	const { mutation: mutationOptions, request: requestOptions } = options
 		? options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey
 			? options
@@ -3581,6 +3731,8 @@ export const validateWorkflow = async (
 	);
 };
 
+export const getValidateWorkflowMutationKey = () => ['validateWorkflow'] as const;
+
 export const getValidateWorkflowMutationOptions = <
 	TError = ErrorType<ApiErrorBody>,
 	TContext = unknown
@@ -3598,7 +3750,7 @@ export const getValidateWorkflowMutationOptions = <
 	ValidateWorkflowMutationVariables,
 	TContext
 > => {
-	const mutationKey = ['validateWorkflow'];
+	const mutationKey = getValidateWorkflowMutationKey();
 	const { mutation: mutationOptions, request: requestOptions } = options
 		? options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey
 			? options
@@ -3763,7 +3915,7 @@ export const prefetchListWorkflowVersionsQuery = async <
 ): Promise<QueryClient> => {
 	const queryOptions = getListWorkflowVersionsQueryOptions(projectId, workflowId, options);
 
-	await queryClient.prefetchQuery(queryOptions);
+	await queryClient.query(queryOptions).catch(() => {});
 
 	return queryClient;
 };
@@ -3901,7 +4053,7 @@ export const prefetchGetWorkflowVersionQuery = async <
 ): Promise<QueryClient> => {
 	const queryOptions = getGetWorkflowVersionQueryOptions(projectId, workflowId, version, options);
 
-	await queryClient.prefetchQuery(queryOptions);
+	await queryClient.query(queryOptions).catch(() => {});
 
 	return queryClient;
 };
