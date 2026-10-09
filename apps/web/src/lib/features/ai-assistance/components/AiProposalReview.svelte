@@ -27,6 +27,7 @@
 	import EvidenceLabel from '$lib/features/evidence/EvidenceLabel.svelte';
 	import { humanizeCode } from '$lib/features/evidence/labels';
 	import { plainText } from '$lib/features/notifications/notification-copy';
+	import { canRequestAiSuggestions } from '../availability';
 
 	type ReviewStage = 'title_abstract' | 'full_text' | 'dedupe';
 	type DocumentBlockEvidence = Extract<AiScreeningEvidenceDto, { kind: 'document_block' }>;
@@ -58,6 +59,8 @@
 				? 'full_text_screening'
 				: 'duplicate_candidate_detection'
 	);
+	const aiStatusQuery = createGetAiStatus();
+	const aiSuggestionsEnabled = $derived(canRequestAiSuggestions(aiStatusQuery));
 	const proposalsQuery = createListAiProposals(
 		() => projectId,
 		() => ({
@@ -72,7 +75,8 @@
 				: reportId
 					? { target_report_id: reportId }
 					: {})
-		})
+		}),
+		() => ({ query: { enabled: aiSuggestionsEnabled } })
 	);
 	// A reviewer's request on a project with an AI second reviewer is recorded as
 	// that independent opinion instead of a suggestion. Looking it up here lets
@@ -86,7 +90,11 @@
 			limit: 5,
 			target_report_id: reportId ?? undefined
 		}),
-		() => ({ query: { enabled: stage !== 'dedupe' && Boolean(reportId) } })
+		() => ({
+			query: {
+				enabled: aiSuggestionsEnabled && stage !== 'dedupe' && Boolean(reportId)
+			}
+		})
 	);
 	const divertedOpinion = $derived(
 		(divertedQuery.data?.data.items ?? []).find(
@@ -118,8 +126,6 @@
 			''
 	);
 
-	// Optimistic until the workspace says otherwise: a failed status lookup must not hide AI.
-	const aiStatusQuery = createGetAiStatus();
 	let providerMissing = $state(false);
 	const aiUnavailable = $derived(
 		providerMissing ||

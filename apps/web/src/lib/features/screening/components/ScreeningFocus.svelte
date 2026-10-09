@@ -25,6 +25,7 @@
 	import type { ResolvedPathname } from '$app/types';
 	import { page } from '$app/state';
 	import AiProposalReview from '$lib/features/ai-assistance/components/AiProposalReview.svelte';
+	import { canRequestAiSuggestions } from '$lib/features/ai-assistance/availability';
 	import { createGetAiStatus } from '$lib/api/generated/ai/ai';
 	import DecisionBar from './DecisionBar.svelte';
 	import PageTemplate from '$lib/shell/PageTemplate.svelte';
@@ -69,11 +70,9 @@
 		| `/projects/${string}/screening/title-abstract?${string}`;
 	let { projectId }: { projectId: string } = $props();
 
-	// Optimistic until the workspace says otherwise; the AI suggestion UI is hidden when AI is off.
+	// Wait for status before showing suggestions, while failing open if status cannot load.
 	const aiStatusQuery = createGetAiStatus();
-	const aiSuggestionsAvailable = $derived(
-		aiStatusQuery.data?.data.suggestions_available !== false
-	);
+	const aiSuggestionsAvailable = $derived(canRequestAiSuggestions(aiStatusQuery));
 	const queryClient = useQueryClient();
 
 	const urlState = $derived(parseScreeningUrl(page.url.searchParams));
