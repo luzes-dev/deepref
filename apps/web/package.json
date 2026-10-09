@@ -28,7 +28,7 @@
 		"@tanstack/svelte-query": "^6.3.1",
 		"@tanstack/svelte-virtual": "^3.13.39",
 		"@tanstack/table-core": "^8.21.3",
-		"markdown-it": "^14.3.2",
+		"markdown-it": "^15.0.2",
 		"pdfjs-dist": "^6.4.299",
 		"sass": "^1.105.1"
 	},
@@ -51,7 +51,6 @@
 		"@tanstack/eslint-plugin-query": "^5.104.1",
 		"@testing-library/jest-dom": "^7.0.1",
 		"@testing-library/svelte": "^5.4.2",
-		"@types/markdown-it": "14.2.0",
 		"@types/node": "^24.19.1",
 		"@vitest/coverage-v8": "4.1.11",
 		"bits-ui": "^2.19.5",
