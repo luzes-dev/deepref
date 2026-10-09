@@ -464,3 +464,90 @@ async fn an_undecided_record_never_returns_the_ai_opinion() {
     assert_eq!(waiting[0].ai_model, None);
     assert!(waiting[0].ai_evidence.as_array().is_some_and(Vec::is_empty));
 }
+
+/// The subject mapping decides which exclusion reasons a stage may cite. A
+/// full-text run stores only the full-text reasons, whatever else the project
+/// defines.
+#[tokio::test]
+async fn a_full_text_run_stores_only_the_full_text_exclusion_reasons() {
+    let Some(pool) = database().await else { return };
+    let project_id = project(&pool).await;
+    publish_protocol_for(&pool, project_id).await;
+    insert_model_route(
+        &pool,
+        &ResolvedModel {
+            profile: ModelProfile::LongContextReasoning,
+            provider: format!("second-review-test-{}", Uuid::new_v4()),
+            model: "long-reasoner".to_owned(),
+            model_version: "2026-08".to_owned(),
+            parameters: ModelParameters::default(),
+            route_id: None,
+        },
+        Utc::now(),
+    )
+    .await
+    .expect("route inserts");
+    // Every new project is seeded with full-text reasons, so the expected set is
+    // read back from the database rather than assumed. The two reasons added here
+    // use codes the seed does not use.
+    let title_abstract_reason = Uuid::new_v4();
+    let extra_full_text_reason = Uuid::new_v4();
+    for (id, code, stage) in [
+        (
+            title_abstract_reason,
+            "title_abstract_only",
+            "title_abstract",
+        ),
+        (extra_full_text_reason, "extra_full_text_only", "full_text"),
+    ] {
+        sqlx::query(
+            "INSERT INTO exclusion_reasons (id,project_id,code,label,stage) VALUES ($1,$2,$3,$3,$4)",
+        )
+        .bind(id)
+        .bind(project_id)
+        .bind(code)
+        .bind(stage)
+        .execute(&pool)
+        .await
+        .expect("exclusion reason");
+    }
+    let mut expected: Vec<String> = sqlx::query_scalar(
+        "SELECT id::text FROM exclusion_reasons WHERE project_id=$1 AND stage='full_text'",
+    )
+    .bind(project_id)
+    .fetch_all(&pool)
+    .await
+    .expect("full-text reasons");
+    assert!(expected.contains(&extra_full_text_reason.to_string()));
+    expected.sort();
+    let report = waiting_record(&pool, project_id, "Full text report").await;
+    schedule_screening_review(
+        &pool,
+        project_id,
+        report,
+        ScreeningStage::FullText,
+        None,
+        None,
+        Actor::new(ActorKind::User, "second-review-test").expect("actor"),
+    )
+    .await
+    .expect("full-text run");
+
+    let stored: serde_json::Value = sqlx::query_scalar(
+        "SELECT prepared_task FROM review_run_manifests
+         WHERE project_id=$1 ORDER BY created_at DESC LIMIT 1",
+    )
+    .bind(project_id)
+    .fetch_one(&pool)
+    .await
+    .expect("stored task");
+    let mut allowed = stored["allowed_exclusion_reasons"]
+        .as_array()
+        .expect("reasons are a list")
+        .iter()
+        .map(|value| value.as_str().expect("reason id").to_owned())
+        .collect::<Vec<_>>();
+    allowed.sort();
+    assert_eq!(allowed, expected);
+    assert!(!allowed.contains(&title_abstract_reason.to_string()));
+}

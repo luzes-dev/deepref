@@ -10,8 +10,8 @@ use serde_json::{Value, json};
 
 use crate::{
     AiError, AiFuture, AiGateway, ChatCompletion, ChatGateway, ChatMessage, ChatRequest,
-    ChatTextSink, ChatToolCall, CompletionRequest, GatewayCompletion, GroundingContextBuilder,
-    ToolDeclaration, estimate_tokens,
+    ChatTextSink, ChatToolCall, CompletionRequest, GatewayCompletion, GroundedBlock,
+    GroundingContextBuilder, ToolDeclaration, estimate_tokens,
 };
 
 const MAX_ATTEMPTS: usize = 3;
@@ -289,8 +289,9 @@ fn usage(response: &Value) -> (u64, u64) {
     (read("prompt_tokens"), read("completion_tokens"))
 }
 
-/// Models sometimes wrap JSON in a Markdown fence even in JSON mode.
-fn strip_code_fence(text: &str) -> &str {
+/// Models sometimes wrap JSON in a Markdown fence even in JSON mode. The
+/// gateway removes that envelope; the runner only ever sees the JSON inside.
+pub fn strip_code_fence(text: &str) -> &str {
     let trimmed = text.trim();
     let Some(rest) = trimmed.strip_prefix("```") else {
         return trimmed;
@@ -617,30 +618,52 @@ fn stream_completion(
     }
 }
 
+/// The chat-completions body for one structured call: the system prompt with
+/// the output schema, the user prompt with its grounding evidence appended, and
+/// JSON-object response format. Pure, so the golden fixtures in `deepref-review`
+/// can render exactly what [`OpenAiCompatGateway`] sends.
+pub fn structured_request_body(
+    dialect: ProviderDialect,
+    route: &crate::ResolvedModel,
+    system_prompt: &str,
+    user_prompt: &str,
+    evidence: &[GroundedBlock],
+    schema: &Value,
+) -> Value {
+    let mut user = user_prompt.to_owned();
+    if !evidence.is_empty() {
+        user.push_str("\n\n");
+        user.push_str(&GroundingContextBuilder::render(evidence));
+    }
+    let system = format!(
+        "{system_prompt}\n\nRespond with a single JSON object and nothing else (no Markdown, no prose). \
+         It must validate against this JSON Schema:\n{schema}"
+    );
+    let mut body = base_body(
+        dialect,
+        route,
+        vec![
+            json!({"role": "system", "content": system}),
+            json!({"role": "user", "content": user}),
+        ],
+        None,
+    );
+    body["response_format"] = json!({"type": "json_object"});
+    body
+}
+
 impl AiGateway for OpenAiCompatGateway {
     fn complete<'a>(&'a self, request: CompletionRequest) -> AiFuture<'a, GatewayCompletion> {
         Box::pin(async move {
             request.route.validate()?;
-            let mut user = request.user_prompt;
-            if !request.evidence.is_empty() {
-                user.push_str("\n\n");
-                user.push_str(&GroundingContextBuilder::render(&request.evidence));
-            }
-            let system = format!(
-                "{}\n\nRespond with a single JSON object and nothing else (no Markdown, no prose). \
-                 It must validate against this JSON Schema:\n{}",
-                request.system_prompt, request.schema
-            );
-            let mut body = base_body(
+            let body = structured_request_body(
                 self.dialect,
                 &request.route,
-                vec![
-                    json!({"role": "system", "content": system}),
-                    json!({"role": "user", "content": user}),
-                ],
-                None,
+                &request.system_prompt,
+                &request.user_prompt,
+                &request.evidence,
+                &request.schema,
             );
-            body["response_format"] = json!({"type": "json_object"});
             let session = session_id(request.project_id);
             let response = self.post(&body, session.as_deref()).await?;
             let content = response

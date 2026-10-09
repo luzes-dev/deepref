@@ -249,7 +249,10 @@ impl SemanticIdentity {
 }
 
 /// Components only screening has: its golden fixtures are screening-specific.
-const SCREENING_ONLY_COMPONENTS: [IdentityComponent; 0] = [];
+const SCREENING_ONLY_COMPONENTS: [IdentityComponent; 2] = [
+    IdentityComponent::GoldenRender,
+    IdentityComponent::GoldenParse,
+];
 
 /// Components every definition has under the current scheme in addition to the
 /// declarative ones.

@@ -1072,11 +1072,7 @@ async fn execute_compiled_screening(
         },
     )
     .await?;
-    let needs_independent = matches!(primary_analysis.stage, deepref_ai::ScreeningStage::FullText)
-        || matches!(
-            primary_analysis.suggested_decision,
-            deepref_ai::SuggestedDecision::Exclude { .. }
-        );
+    let needs_independent = deepref_review::worker::needs_independent_screen(&primary_analysis);
     let derived = persist_review_node(
         pool,
         run,

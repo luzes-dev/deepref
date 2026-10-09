@@ -404,6 +404,7 @@ mod tests {
                     build_sha: hash("build"),
                     rust_version: "1.95".to_owned(),
                     target: "test".to_owned(),
+                    deployment_build_id: None,
                 },
             })
             .expect("screening manifest builds")

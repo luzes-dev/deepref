@@ -221,8 +221,7 @@ where
         };
         let route = self.router.resolve(task.model_profile()).await?;
         route.validate()?;
-        let schema = serde_json::to_value(schema_for!(T::Output))
-            .map_err(|_| AiError::InputSerialization("output schema".to_owned()))?;
+        let schema = structured_output_schema::<T>()?;
         let schema_hash = hash_json(&schema)?;
         let prompt_hash =
             hash_json(&json!({"system": context.system_prompt, "user": context.user_prompt}))?;
@@ -320,11 +319,7 @@ where
                 Err(error) => return Err(self.persist_failure(run, error).await),
             };
             record_usage(&mut run, &completion);
-            let attempt = serde_json::from_str::<Value>(&completion.output_json)
-                .map_err(|_| AiError::MalformedOutput(String::new()))
-                .and_then(|raw| {
-                    validate_output(task, raw.clone(), &evidence).map(move |output| (raw, output))
-                });
+            let attempt = interpret_structured_response(task, &completion.output_json, &evidence);
             match attempt {
                 Ok(accepted) => break accepted,
                 Err(error) => match repair_feedback(&error) {
@@ -443,14 +438,37 @@ fn same_proposal_content(
         && existing.draft.authority == expected.authority
 }
 
+/// The JSON Schema that a task's output must satisfy, as the provider receives it.
+pub fn structured_output_schema<T: AiTask>() -> Result<Value, AiError> {
+    serde_json::to_value(schema_for!(T::Output))
+        .map_err(|_| AiError::InputSerialization("output schema".to_owned()))
+}
+
+/// Interprets one provider answer for a task: parses the JSON, applies the
+/// task's deterministic normalization, then validates it against the output
+/// schema and the task's semantic rules.
+///
+/// Returns the JSON as the provider sent it, which the run records, with the
+/// validated output. The gateway has already removed any code-fence envelope,
+/// so `output_json` is the JSON text. The repair loop stays in the runner.
+pub fn interpret_structured_response<T: AiTask>(
+    task: &T,
+    output_json: &str,
+    evidence: &[GroundedBlock],
+) -> Result<(Value, T::Output), AiError> {
+    let raw = serde_json::from_str::<Value>(output_json)
+        .map_err(|_| AiError::MalformedOutput(String::new()))?;
+    let output = validate_output(task, raw.clone(), evidence)?;
+    Ok((raw, output))
+}
+
 fn validate_output<T: AiTask>(
     task: &T,
     mut raw: Value,
     evidence: &[GroundedBlock],
 ) -> Result<T::Output, AiError> {
     task.normalize_output(&mut raw, evidence);
-    let schema = serde_json::to_value(schemars::schema_for!(T::Output))
-        .map_err(|_| AiError::InputSerialization("output schema".to_owned()))?;
+    let schema = structured_output_schema::<T>()?;
     jsonschema::validator_for(&schema)
         .map_err(|_| AiError::SchemaValidation(String::new()))?
         .validate(&raw)

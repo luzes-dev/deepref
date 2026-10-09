@@ -1,0 +1,266 @@
+{
+  "golden_render": "b4a8c7134fb2c7ffee1a351d9605645e4545e6df79681255f4415d74a4936855",
+  "golden_parse": "499390717894934b0e65be2638cad6e5a13ea70d3451145cecce5c286162ec07",
+  "render": [
+    {
+      "fixture": "ta_full",
+      "subject": "e4e1c53dee9efe7be684bf763200d19b51a033618d73b50a2e6d26bbfca9de14",
+      "protocol": "718fba1597ee1ea686833a1875bff6b2411c4e39752e55367275d3323fdfd75e",
+      "requests": {
+        "candidate_audit": "15ddc6da5047f3d698087b963e6ed5401632db71116d78ab175863313a3a2276",
+        "independent_screen": "b44fd7c7ae21ae02354f1a70cd8db0bc0d76730c695a6bab336d841e73bb0400",
+        "primary_screen": "c16351c18799224209c7aa762ec27fbe53fe1c7d18d02954fba6b509a76f1e0a",
+        "semantic_repair": "911a8a5e1b000bb272f27b1031f11fd0fa4087aaffff7d925322db12324b0850"
+      }
+    },
+    {
+      "fixture": "ta_missing_abstract",
+      "subject": "4b5f4fe0b20de24bc244da15d80670d1c85feeeb5576c1c7f224112a2d5e26b3",
+      "protocol": "718fba1597ee1ea686833a1875bff6b2411c4e39752e55367275d3323fdfd75e",
+      "requests": {
+        "candidate_audit": "cbe621bc53cb5351f5f56023ff4becff025fe79c64d8ae14828eb3514e257a27",
+        "independent_screen": "743bfd2c666d13392741a491f80d76d1d282329b7059b97fdce6c16185c818f6",
+        "primary_screen": "4aa93d727b5473bc876c4bdf45afbe0aad588fa8756bb9c1d5d269171ced8c18",
+        "semantic_repair": "72d357c5cbedf39f5c8ca0a0b639760139bff54dbae616cecf1abd9266ce4b78"
+      }
+    },
+    {
+      "fixture": "ta_unicode_long",
+      "subject": "7039b9e38e89b4cd224e4efe3413ffdece1533e23beec19f917fda1faa51222c",
+      "protocol": "5712c98ef1d96586ac349e52436117f073e6308ede7ac21e7cb648e87d12a271",
+      "requests": {
+        "candidate_audit": "79b16e5198fd5d3afeb5035ef3a14d134ec89fdc128db9509a6a83c8708c7b1c",
+        "independent_screen": "ffaacb49e9857031103d1aa8d6c033c75a4ff6aa6e9a492fbf3a18121888cfac",
+        "primary_screen": "cb21f224628e5db6785642cb559935aa202141af9fb5a15b7385a49399e6f574",
+        "semantic_repair": "1d978e7b8f5457131eb00a7e903c2cef449ef817c6810f4d087fec0a295e696c"
+      }
+    },
+    {
+      "fixture": "ta_shuffled_criteria",
+      "subject": "9801be4098db7cf3d31d79fb1469929f6e4f7f4c5f11201843cf6d44d881284b",
+      "protocol": "718fba1597ee1ea686833a1875bff6b2411c4e39752e55367275d3323fdfd75e",
+      "requests": {
+        "candidate_audit": "15ddc6da5047f3d698087b963e6ed5401632db71116d78ab175863313a3a2276",
+        "independent_screen": "b44fd7c7ae21ae02354f1a70cd8db0bc0d76730c695a6bab336d841e73bb0400",
+        "primary_screen": "c16351c18799224209c7aa762ec27fbe53fe1c7d18d02954fba6b509a76f1e0a",
+        "semantic_repair": "911a8a5e1b000bb272f27b1031f11fd0fa4087aaffff7d925322db12324b0850"
+      }
+    },
+    {
+      "fixture": "ft_all_stages",
+      "subject": "ab045c1d75d14513662150ab2b29646387a7d8c283670a9eebb9a13d14fba2f3",
+      "protocol": "b4a306bd789ff386057f2647a4a2f5eb2e052233532b02757b9e78e88ba79444",
+      "requests": {
+        "candidate_audit": "d7b94948bdcc679596ff4e0952846601e13315d6a96ad7d5308e31fc5cb4bd1b",
+        "independent_screen": "35f3d36d3730c9ee117b185797285e56be0ffcdc3ab9ecea91e560a1a749f5de",
+        "primary_screen": "0be9eebc0ff8bbda5eb2393e1b660bbb51703cb2a7f00ae5b14d24e518a19878",
+        "semantic_repair": "7735932960ebe100f27b50f87ecc13ecd6277e0fc4fd5ada968c8e2c344f64bc"
+      }
+    },
+    {
+      "fixture": "ft_no_reasons_no_title",
+      "subject": "a8f2c48939620b0461fe589403173a998e872539a3bdd01f50ed9ddffafc6717",
+      "protocol": "899c924eef78a276d9f7169111539846f504c6a146427bded76be343a7ba2119",
+      "requests": {
+        "candidate_audit": "5b0bd58175769d10fdae394b23f7828ccec75244b1ba5d04dcbd57d3b051f7cb",
+        "independent_screen": "ceec264ab6072d96cf06e9250fd1664df0a64a471e2b5e4c9a592e61f319359a",
+        "primary_screen": "53345160a35b9e8e0b4ae46aa311f16d4baf66658e72d65696d5077e26cd35f5",
+        "semantic_repair": "3f99bf1703a1551d00cd8cea1b3087127429c7fa9df4367487a837c997f1c67c"
+      }
+    }
+  ],
+  "parse": [
+    {
+      "name": "ta_valid_include",
+      "fixture": "ta_full",
+      "description": "accepted decision=include reason=null judgments=[meets,meets,does_not_meet] independent=false second_reviewer=include verdict=include",
+      "hash": "02e514e3c365bf79339f85729017cc575523b8e8d9ab1be00ae83e9380ba9704"
+    },
+    {
+      "name": "ta_valid_exclude_null_reason",
+      "fixture": "ta_full",
+      "description": "accepted decision=exclude reason=null judgments=[meets,meets,meets] independent=true second_reviewer=exclude verdict=exclude",
+      "hash": "584da873c05c85d157d041473a88c746c631338ededb05d86bf5e5146a7e83aa"
+    },
+    {
+      "name": "ta_exclude_reason_normalised_to_null",
+      "fixture": "ta_full",
+      "description": "accepted decision=exclude reason=null judgments=[meets,meets,meets] independent=true second_reviewer=exclude verdict=exclude",
+      "hash": "584da873c05c85d157d041473a88c746c631338ededb05d86bf5e5146a7e83aa"
+    },
+    {
+      "name": "ta_maybe",
+      "fixture": "ta_full",
+      "description": "accepted decision=maybe reason=null judgments=[meets,unclear,does_not_meet] independent=false second_reviewer=maybe verdict=unsure",
+      "hash": "a1f67b8796ded99c3e60f86dc53adc954a6479210fcf139cc170687b49433b2c"
+    },
+    {
+      "name": "ta_insufficient_with_uncertainty",
+      "fixture": "ta_full",
+      "description": "accepted decision=insufficient_evidence reason=null judgments=[unclear,unclear,unclear] independent=false second_reviewer=none verdict=unsure",
+      "hash": "8c2d485d0b0d5ff49da1fff05f232baffcc0fc62cecf2e9f3cc19bd0695cfe9d"
+    },
+    {
+      "name": "ta_insufficient_without_uncertainty",
+      "fixture": "ta_full",
+      "description": "rejected SemanticValidation(\"insufficient evidence requires an uncertainty\")",
+      "hash": "ec144afa6d1ae1b55695369bb5fc046d2fc91749159d80bf33ee64f344dc70ee"
+    },
+    {
+      "name": "ta_aliases_and_typo",
+      "fixture": "ta_full",
+      "description": "accepted decision=maybe reason=null judgments=[meets,unclear,does_not_meet] independent=false second_reviewer=maybe verdict=unsure",
+      "hash": "69b66cd076f511e05ea5b652edc88b37a19138f231f31a450adbcdf5f1f5cb24"
+    },
+    {
+      "name": "ta_not_applicable_marker",
+      "fixture": "ta_full",
+      "description": "accepted decision=maybe reason=null judgments=[meets,unclear,does_not_meet] independent=false second_reviewer=maybe verdict=unsure",
+      "hash": "50504fdb2e2bce79fae23cb60adfbf31536cd381b1c5826648198cc949b4fe80"
+    },
+    {
+      "name": "ta_unknown_judgment_value",
+      "fixture": "ta_full",
+      "description": "rejected SchemaValidation(\"the judgment for criterion 00000000-0000-4000-8000-000000000102 does not match the output schema\")",
+      "hash": "685e1a266077506db4fed5634981d380b1990d274196a80d7fa017ea5da70a82"
+    },
+    {
+      "name": "ta_duplicate_identical",
+      "fixture": "ta_full",
+      "description": "accepted decision=include reason=null judgments=[meets,meets,does_not_meet] independent=false second_reviewer=include verdict=include",
+      "hash": "02e514e3c365bf79339f85729017cc575523b8e8d9ab1be00ae83e9380ba9704"
+    },
+    {
+      "name": "ta_duplicate_conflicting",
+      "fixture": "ta_full",
+      "description": "rejected SemanticValidation(\"criterion judgments must be complete, unique, known, and ordered\")",
+      "hash": "887ee33eac07cb377c468ce3953dad286a8840fee08b9e94f33c864d4c68e56a"
+    },
+    {
+      "name": "ta_missing_judgment",
+      "fixture": "ta_full",
+      "description": "rejected SemanticValidation(\"criterion judgments must be complete, unique, known, and ordered\")",
+      "hash": "887ee33eac07cb377c468ce3953dad286a8840fee08b9e94f33c864d4c68e56a"
+    },
+    {
+      "name": "ta_wrong_order",
+      "fixture": "ta_full",
+      "description": "accepted decision=include reason=null judgments=[meets,meets,does_not_meet] independent=false second_reviewer=include verdict=include",
+      "hash": "02e514e3c365bf79339f85729017cc575523b8e8d9ab1be00ae83e9380ba9704"
+    },
+    {
+      "name": "ta_extra_full_text_criterion",
+      "fixture": "ta_full",
+      "description": "accepted decision=include reason=null judgments=[meets,meets,does_not_meet] independent=false second_reviewer=include verdict=include",
+      "hash": "02e514e3c365bf79339f85729017cc575523b8e8d9ab1be00ae83e9380ba9704"
+    },
+    {
+      "name": "ta_wrong_stage",
+      "fixture": "ta_full",
+      "description": "rejected SemanticValidation(\"screening output is for a different stage or protocol version\")",
+      "hash": "37c55dd52c20cde133df4c20c9250539c4426711c6092cad07f77464cb82b6fa"
+    },
+    {
+      "name": "ta_wrong_report",
+      "fixture": "ta_full",
+      "description": "rejected SemanticValidation(\"screening output is for a different stage or protocol version\")",
+      "hash": "37c55dd52c20cde133df4c20c9250539c4426711c6092cad07f77464cb82b6fa"
+    },
+    {
+      "name": "ta_wrong_revision",
+      "fixture": "ta_full",
+      "description": "rejected SemanticValidation(\"screening output is for a different stage or protocol version\")",
+      "hash": "37c55dd52c20cde133df4c20c9250539c4426711c6092cad07f77464cb82b6fa"
+    },
+    {
+      "name": "ta_metadata_hash_not_allowed",
+      "fixture": "ta_full",
+      "description": "rejected SemanticValidation(\"evidence is not in the allowed grounding context\")",
+      "hash": "9aed44982a2b919433941d72cd78bb84366257d8c127b7d1c6396c46466a679e"
+    },
+    {
+      "name": "ta_include_with_exclusion_support",
+      "fixture": "ta_full",
+      "description": "rejected SemanticValidation(\"include requires every criterion to support inclusion\")",
+      "hash": "0b07b4691802c9d74096c7e40b404c692708d585bf8e1b3424f848df775585d1"
+    },
+    {
+      "name": "ta_maybe_all_criteria_satisfied",
+      "fixture": "ta_full",
+      "description": "accepted decision=maybe reason=null judgments=[meets,meets,does_not_meet] independent=false second_reviewer=maybe verdict=unsure",
+      "hash": "a0dcf6685cf95ad2a4c9f4c044a4b213f55ca11107637cffa0d9d5c504991b7d"
+    },
+    {
+      "name": "ta_code_fenced_json",
+      "fixture": "ta_full",
+      "description": "accepted decision=include reason=null judgments=[meets,meets,does_not_meet] independent=false second_reviewer=include verdict=include",
+      "hash": "02e514e3c365bf79339f85729017cc575523b8e8d9ab1be00ae83e9380ba9704"
+    },
+    {
+      "name": "ta_non_json_text",
+      "fixture": "ta_full",
+      "description": "rejected MalformedOutput(\"\")",
+      "hash": "1e792c1a9bef1fde6e9d081cdecffe535a7409ebbbeac01260db5ff0a6f9fc0d"
+    },
+    {
+      "name": "ta_decision_kind_odd_casing",
+      "fixture": "ta_full",
+      "description": "accepted decision=include reason=null judgments=[meets,meets,does_not_meet] independent=false second_reviewer=include verdict=include",
+      "hash": "02e514e3c365bf79339f85729017cc575523b8e8d9ab1be00ae83e9380ba9704"
+    },
+    {
+      "name": "ta_unknown_decision_kind",
+      "fixture": "ta_full",
+      "description": "rejected SchemaValidation(\"the response does not match the output schema\")",
+      "hash": "9a236368768b2253e9bd55ee9168c01fe7753308c9c9e5bc8105c2ad4104c0ce"
+    },
+    {
+      "name": "ta_unknown_top_level_field",
+      "fixture": "ta_full",
+      "description": "accepted decision=include reason=null judgments=[meets,meets,does_not_meet] independent=false second_reviewer=include verdict=include",
+      "hash": "02e514e3c365bf79339f85729017cc575523b8e8d9ab1be00ae83e9380ba9704"
+    },
+    {
+      "name": "ft_valid_exclude_allowed_reason",
+      "fixture": "ft_all_stages",
+      "description": "accepted decision=exclude reason=\"00000000-0000-4000-8000-000000000202\" judgments=[meets,meets,meets,does_not_meet] independent=true second_reviewer=exclude verdict=exclude",
+      "hash": "fb2b29aa7009f0d26077bb73f201029dfa902c9242caf5d5dd60cd844a6bc666"
+    },
+    {
+      "name": "ft_exclude_reason_wrong_stage",
+      "fixture": "ft_all_stages",
+      "description": "rejected SemanticValidation(\"exclusion reason is not valid for this project and stage\")",
+      "hash": "613a82e264e5148a6b18b3ade291b936774412e8f32ae376accd71f948675140"
+    },
+    {
+      "name": "ft_exclude_without_reason",
+      "fixture": "ft_all_stages",
+      "description": "rejected SemanticValidation(\"full-text exclusion requires an exclusion reason\")",
+      "hash": "66171dff9fd1c6784ba47ace1fd20b01d4df197472b9da30f5b20baeb6adfaf5"
+    },
+    {
+      "name": "ft_include_block_hash_filled",
+      "fixture": "ft_all_stages",
+      "description": "accepted decision=include reason=null judgments=[meets,does_not_meet,meets,does_not_meet] independent=true second_reviewer=include verdict=include",
+      "hash": "efe1abd6c4e9029b87fecf89af30174f8b9e129f6b412c48329f01b2f7587252"
+    },
+    {
+      "name": "ft_metadata_evidence_at_full_text",
+      "fixture": "ft_all_stages",
+      "description": "rejected SemanticValidation(\"metadata evidence is outside the title/abstract context\")",
+      "hash": "b0fc622f6c7c3d5021c5064949c6da9d58b8bc76464668d15c79133ceb4e1b7f"
+    },
+    {
+      "name": "ft_document_block_not_retrieved",
+      "fixture": "ft_all_stages",
+      "description": "rejected SemanticValidation(\"full-text evidence is not in the retrieved context\")",
+      "hash": "f88fdb76c49d5f9660b5adbf4bd236eb05800185919fc556e2f0ea0ae2b13e54"
+    },
+    {
+      "name": "ft_document_block_wrong_hash",
+      "fixture": "ft_all_stages",
+      "description": "rejected SemanticValidation(\"full-text evidence is not in the retrieved context\")",
+      "hash": "f88fdb76c49d5f9660b5adbf4bd236eb05800185919fc556e2f0ea0ae2b13e54"
+    }
+  ]
+}

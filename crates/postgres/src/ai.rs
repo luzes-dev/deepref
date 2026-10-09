@@ -376,22 +376,28 @@ async fn retrieve_grounding_blocks(
         .collect()
 }
 
+/// Every exclusion reason the project defines, with the screening stage it
+/// applies to. Which reasons a screen may cite is decided by the review subject,
+/// so the stage filter is not applied here.
 pub async fn list_ai_exclusion_reasons(
     pool: &PgPool,
     project_id: Uuid,
-    stage: ScreeningStage,
-) -> Result<Vec<Uuid>, AiProposalError> {
-    let stage = match stage {
-        ScreeningStage::TitleAbstract => "title_abstract",
-        ScreeningStage::FullText => "full_text",
-    };
-    Ok(sqlx::query_scalar(
-        "SELECT id FROM exclusion_reasons WHERE project_id=$1 AND stage=$2 ORDER BY code,id",
+) -> Result<Vec<(Uuid, ScreeningStage)>, AiProposalError> {
+    let rows: Vec<(Uuid, String)> = sqlx::query_as(
+        "SELECT id, stage FROM exclusion_reasons WHERE project_id=$1 ORDER BY code,id",
     )
     .bind(project_id)
-    .bind(stage)
     .fetch_all(pool)
-    .await?)
+    .await?;
+    rows.into_iter()
+        .map(|(id, stage)| match stage.as_str() {
+            "title_abstract" => Ok((id, ScreeningStage::TitleAbstract)),
+            "full_text" => Ok((id, ScreeningStage::FullText)),
+            _ => Err(AiProposalError::InvalidPayload(
+                "exclusion reason has an unknown stage".to_owned(),
+            )),
+        })
+        .collect()
 }
 
 pub async fn get_ai_dedupe_target(

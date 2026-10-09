@@ -1,0 +1,346 @@
+{
+  "fixtures": [
+    {
+      "name": "ta_full",
+      "project_id": "00000000-0000-4000-8000-000000000001",
+      "report_id": "00000000-0000-4000-8000-000000000003",
+      "protocol_version_id": "00000000-0000-4000-8000-000000000002",
+      "stage": "title_abstract",
+      "expected_revision": 3,
+      "title": "Efficacy of drug X in adults with hypertension",
+      "abstract": "We randomised 200 adults with hypertension to drug X or placebo for 12 weeks.",
+      "criteria": [
+        {
+          "id": "00000000-0000-4000-8000-000000000101",
+          "kind": "inclusion",
+          "stage": "both",
+          "dimension": "population",
+          "label": "Adult population",
+          "description": "Adults aged 18 years or older with hypertension.",
+          "ordinal": 1
+        },
+        {
+          "id": "00000000-0000-4000-8000-000000000102",
+          "kind": "inclusion",
+          "stage": "title_abstract",
+          "dimension": "design",
+          "label": "Randomised design",
+          "description": "Randomised allocation to the intervention or a comparator.",
+          "ordinal": 2
+        },
+        {
+          "id": "00000000-0000-4000-8000-000000000103",
+          "kind": "exclusion",
+          "stage": "both",
+          "dimension": "other",
+          "label": "Conference abstract only",
+          "description": "Only a conference abstract is available.",
+          "ordinal": 3
+        },
+        {
+          "id": "00000000-0000-4000-8000-000000000104",
+          "kind": "inclusion",
+          "stage": "full_text",
+          "dimension": "outcome",
+          "label": "Blood pressure outcome",
+          "description": "Reports change in blood pressure at follow-up.",
+          "ordinal": 4
+        }
+      ],
+      "exclusion_reasons": [
+        {
+          "id": "00000000-0000-4000-8000-000000000201",
+          "stage": "title_abstract"
+        },
+        {
+          "id": "00000000-0000-4000-8000-000000000202",
+          "stage": "full_text"
+        }
+      ],
+      "retrieved": []
+    },
+    {
+      "name": "ta_missing_abstract",
+      "project_id": "00000000-0000-4000-8000-000000000001",
+      "report_id": "00000000-0000-4000-8000-000000000003",
+      "protocol_version_id": "00000000-0000-4000-8000-000000000002",
+      "stage": "title_abstract",
+      "expected_revision": 3,
+      "title": "Short title",
+      "abstract": null,
+      "criteria": [
+        {
+          "id": "00000000-0000-4000-8000-000000000101",
+          "kind": "inclusion",
+          "stage": "both",
+          "dimension": "population",
+          "label": "Adult population",
+          "description": "Adults aged 18 years or older with hypertension.",
+          "ordinal": 1
+        },
+        {
+          "id": "00000000-0000-4000-8000-000000000102",
+          "kind": "inclusion",
+          "stage": "title_abstract",
+          "dimension": "design",
+          "label": "Randomised design",
+          "description": "Randomised allocation to the intervention or a comparator.",
+          "ordinal": 2
+        },
+        {
+          "id": "00000000-0000-4000-8000-000000000103",
+          "kind": "exclusion",
+          "stage": "both",
+          "dimension": "other",
+          "label": "Conference abstract only",
+          "description": "Only a conference abstract is available.",
+          "ordinal": 3
+        },
+        {
+          "id": "00000000-0000-4000-8000-000000000104",
+          "kind": "inclusion",
+          "stage": "full_text",
+          "dimension": "outcome",
+          "label": "Blood pressure outcome",
+          "description": "Reports change in blood pressure at follow-up.",
+          "ordinal": 4
+        }
+      ],
+      "exclusion_reasons": [
+        {
+          "id": "00000000-0000-4000-8000-000000000201",
+          "stage": "title_abstract"
+        }
+      ],
+      "retrieved": []
+    },
+    {
+      "name": "ta_unicode_long",
+      "project_id": "00000000-0000-4000-8000-000000000001",
+      "report_id": "00000000-0000-4000-8000-000000000003",
+      "protocol_version_id": "00000000-0000-4000-8000-000000000002",
+      "stage": "title_abstract",
+      "expected_revision": 5,
+      "title": "Efeitos de intervenções — 研究 ✓\tTab",
+      "abstract": "Resultados: intervenção — 研究 ✓ com café, naïve e tabulação\tfim.\nResultados: intervenção — 研究 ✓ com café, naïve e tabulação\tfim.\nResultados: intervenção — 研究 ✓ com café, naïve e tabulação\tfim.\nResultados: intervenção — 研究 ✓ com café, naïve e tabulação\tfim.\nResultados: intervenção — 研究 ✓ com café, naïve e tabulação\tfim.\nResultados: intervenção — 研究 ✓ com café, naïve e tabulação\tfim.\nResultados: intervenção — 研究 ✓ com café, naïve e tabulação\tfim.\nResultados: intervenção — 研究 ✓ com café, naïve e tabulação\tfim.\nResultados: intervenção — 研究 ✓ com café, naïve e tabulação\tfim.\nResultados: intervenção — 研究 ✓ com café, naïve e tabulação\tfim.\nResultados: intervenção — 研究 ✓ com café, naïve e tabulação\tfim.\nResultados: intervenção — 研究 ✓ com café, naïve e tabulação\tfim.\nResultados: intervenção — 研究 ✓ com café, naïve e tabulação\tfim.\nResultados: intervenção — 研究 ✓ com café, naïve e tabulação\tfim.\nResultados: intervenção — 研究 ✓ com café, naïve e tabulação\tfim.\nResultados: intervenção — 研究 ✓ com café, naïve e tabulação\tfim.\nResultados: intervenção — 研究 ✓ com café, naïve e tabulação\tfim.\nResultados: intervenção — 研究 ✓ com café, naïve e tabulação\tfim.\nResultados: intervenção — 研究 ✓ com café, naïve e tabulação\tfim.\nResultados: intervenção — 研究 ✓ com café, naïve e tabulação\tfim.\nResultados: intervenção — 研究 ✓ com café, naïve e tabulação\tfim.\nResultados: intervenção — 研究 ✓ com café, naïve e tabulação\tfim.\nResultados: intervenção — 研究 ✓ com café, naïve e tabulação\tfim.\nResultados: intervenção — 研究 ✓ com café, naïve e tabulação\tfim.\nResultados: intervenção — 研究 ✓ com café, naïve e tabulação\tfim.\nResultados: intervenção — 研究 ✓ com café, naïve e tabulação\tfim.\nResultados: intervenção — 研究 ✓ com café, naïve e tabulação\tfim.\nResultados: intervenção — 研究 ✓ com café, naïve e tabulação\tfim.\nResultados: intervenção — 研究 ✓ com café, naïve e tabulação\tfim.\nResultados: intervenção — 研究 ✓ com café, naïve e tabulação\tfim.\nResultados: intervenção — 研究 ✓ com café, naïve e tabulação\tfim.\nResultados: intervenção — 研究 ✓ com café, naïve e tabulação\tfim.\nResultados: intervenção — 研究 ✓ com café, naïve e tabulação\tfim.\nResultados: intervenção — 研究 ✓ com café, naïve e tabulação\tfim.\nResultados: intervenção — 研究 ✓ com café, naïve e tabulação\tfim.\nResultados: intervenção — 研究 ✓ com café, naïve e tabulação\tfim.\nResultados: intervenção — 研究 ✓ com café, naïve e tabulação\tfim.\nResultados: intervenção — 研究 ✓ com café, naïve e tabulação\tfim.\nResultados: intervenção — 研究 ✓ com café, naïve e tabulação\tfim.\nResultados: intervenção — 研究 ✓ com café, naïve e tabulação\tfim.\nResultados: intervenção — 研究 ✓ com café, naïve e tabulação\tfim.\nResultados: intervenção — 研究 ✓ com café, naïve e tabulação\tfim.\nResultados: intervenção — 研究 ✓ com café, naïve e tabulação\tfim.\nResultados: intervenção — 研究 ✓ com café, naïve e tabulação\tfim.\nResultados: intervenção — 研究 ✓ com café, naïve e tabulação\tfim.\nResultados: intervenção — 研究 ✓ com café, naïve e tabulação\tfim.\nResultados: intervenção — 研究 ✓ com café, naïve e tabulação\tfim.\nResultados: intervenção — 研究 ✓ com café, naïve e tabulação\tfim.\nResultados: intervenção — 研究 ✓ com café, naïve e tabulação\tfim.\nResultados: intervenção — 研究 ✓ com café, naïve e tabulação\tfim.\nResultados: intervenção — 研究 ✓ com café, naïve e tabulação\tfim.\nResultados: intervenção — 研究 ✓ com café, naïve e tabulação\tfim.\nResultados: intervenção — 研究 ✓ com café, naïve e tabulação\tfim.\nResultados: intervenção — 研究 ✓ com café, naïve e tabulação\tfim.\nResultados: intervenção — 研究 ✓ com café, naïve e tabulação\tfim.\nResultados: intervenção — 研究 ✓ com café, naïve e tabulação\tfim.\nResultados: intervenção — 研究 ✓ com café, naïve e tabulação\tfim.\nResultados: intervenção — 研究 ✓ com café, naïve e tabulação\tfim.\nResultados: intervenção — 研究 ✓ com café, naïve e tabulação\tfim.\nResultados: intervenção — 研究 ✓ com café, naïve e tabulação\tfim.\n",
+      "criteria": [
+        {
+          "id": "00000000-0000-4000-8000-000000000104",
+          "kind": "inclusion",
+          "stage": "full_text",
+          "dimension": "outcome",
+          "label": "Blood pressure outcome",
+          "description": "Reports change in blood pressure at follow-up.",
+          "ordinal": 4
+        },
+        {
+          "id": "00000000-0000-4000-8000-000000000102",
+          "kind": "inclusion",
+          "stage": "title_abstract",
+          "dimension": "design",
+          "label": "Randomised design",
+          "description": "Randomised allocation to the intervention or a comparator.",
+          "ordinal": 2
+        },
+        {
+          "id": "00000000-0000-4000-8000-000000000101",
+          "kind": "inclusion",
+          "stage": "both",
+          "dimension": "population",
+          "label": "Adult population",
+          "description": "Adults aged 18 years or older with hypertension.",
+          "ordinal": 1
+        }
+      ],
+      "exclusion_reasons": [],
+      "retrieved": []
+    },
+    {
+      "name": "ta_shuffled_criteria",
+      "project_id": "00000000-0000-4000-8000-000000000001",
+      "report_id": "00000000-0000-4000-8000-000000000003",
+      "protocol_version_id": "00000000-0000-4000-8000-000000000002",
+      "stage": "title_abstract",
+      "expected_revision": 3,
+      "title": "Efficacy of drug X in adults with hypertension",
+      "abstract": "We randomised 200 adults with hypertension to drug X or placebo for 12 weeks.",
+      "criteria": [
+        {
+          "id": "00000000-0000-4000-8000-000000000104",
+          "kind": "inclusion",
+          "stage": "full_text",
+          "dimension": "outcome",
+          "label": "Blood pressure outcome",
+          "description": "Reports change in blood pressure at follow-up.",
+          "ordinal": 4
+        },
+        {
+          "id": "00000000-0000-4000-8000-000000000102",
+          "kind": "inclusion",
+          "stage": "title_abstract",
+          "dimension": "design",
+          "label": "Randomised design",
+          "description": "Randomised allocation to the intervention or a comparator.",
+          "ordinal": 2
+        },
+        {
+          "id": "00000000-0000-4000-8000-000000000103",
+          "kind": "exclusion",
+          "stage": "both",
+          "dimension": "other",
+          "label": "Conference abstract only",
+          "description": "Only a conference abstract is available.",
+          "ordinal": 3
+        },
+        {
+          "id": "00000000-0000-4000-8000-000000000101",
+          "kind": "inclusion",
+          "stage": "both",
+          "dimension": "population",
+          "label": "Adult population",
+          "description": "Adults aged 18 years or older with hypertension.",
+          "ordinal": 1
+        }
+      ],
+      "exclusion_reasons": [],
+      "retrieved": []
+    },
+    {
+      "name": "ft_all_stages",
+      "project_id": "00000000-0000-4000-8000-000000000001",
+      "report_id": "00000000-0000-4000-8000-000000000003",
+      "protocol_version_id": "00000000-0000-4000-8000-000000000002",
+      "stage": "full_text",
+      "expected_revision": 7,
+      "title": "Efficacy of drug X in adults with hypertension",
+      "abstract": "We randomised 200 adults with hypertension to drug X or placebo for 12 weeks.",
+      "criteria": [
+        {
+          "id": "00000000-0000-4000-8000-000000000111",
+          "kind": "inclusion",
+          "stage": "both",
+          "dimension": "population",
+          "label": "Adult population",
+          "description": "Adults aged 18 years or older with hypertension.",
+          "ordinal": 1
+        },
+        {
+          "id": "00000000-0000-4000-8000-000000000112",
+          "kind": "inclusion",
+          "stage": "title_abstract",
+          "dimension": "design",
+          "label": "Randomised design",
+          "description": "Randomised allocation to the intervention or a comparator.",
+          "ordinal": 2
+        },
+        {
+          "id": "00000000-0000-4000-8000-000000000113",
+          "kind": "exclusion",
+          "stage": "full_text",
+          "dimension": "outcome",
+          "label": "Surrogate outcome only",
+          "description": "Reports only a surrogate endpoint.",
+          "ordinal": 3
+        },
+        {
+          "id": "00000000-0000-4000-8000-000000000114",
+          "kind": "inclusion",
+          "stage": "full_text",
+          "dimension": "outcome",
+          "label": "Blood pressure outcome",
+          "description": "Reports change in blood pressure at follow-up.",
+          "ordinal": 4
+        },
+        {
+          "id": "00000000-0000-4000-8000-000000000115",
+          "kind": "exclusion",
+          "stage": "both",
+          "dimension": "other",
+          "label": "Conference abstract only",
+          "description": "Only a conference abstract is available.",
+          "ordinal": 5
+        }
+      ],
+      "exclusion_reasons": [
+        {
+          "id": "00000000-0000-4000-8000-000000000201",
+          "stage": "title_abstract"
+        },
+        {
+          "id": "00000000-0000-4000-8000-000000000202",
+          "stage": "full_text"
+        },
+        {
+          "id": "00000000-0000-4000-8000-000000000203",
+          "stage": "full_text"
+        }
+      ],
+      "retrieved": [
+        {
+          "document_block_id": "00000000-0000-4000-8000-000000000301",
+          "page": 2,
+          "section_path": [
+            "Results"
+          ],
+          "text": "Mean systolic blood pressure fell by 12 mmHg in the drug X arm (p < 0.01).",
+          "content_hash": "29387df96ee9029f8b87cc3b267a8b5254a1370d103a78d80f96c3c4a4962bbc",
+          "rank": 1,
+          "score": 0.92
+        },
+        {
+          "document_block_id": "00000000-0000-4000-8000-000000000302",
+          "page": 4,
+          "section_path": [
+            "Methods",
+            "Participants"
+          ],
+          "text": "Adults aged 18 years or older with hypertension were eligible.",
+          "content_hash": "94428a15f5c7f13b6670a3bff7057cd8072044e50c1c6d6b9b21c8d392f0b3ca",
+          "rank": 2,
+          "score": 0.88
+        }
+      ]
+    },
+    {
+      "name": "ft_no_reasons_no_title",
+      "project_id": "00000000-0000-4000-8000-000000000001",
+      "report_id": "00000000-0000-4000-8000-000000000003",
+      "protocol_version_id": "00000000-0000-4000-8000-000000000002",
+      "stage": "full_text",
+      "expected_revision": 2,
+      "title": null,
+      "abstract": "Short abstract about hypertension.",
+      "criteria": [
+        {
+          "id": "00000000-0000-4000-8000-000000000114",
+          "kind": "inclusion",
+          "stage": "full_text",
+          "dimension": "outcome",
+          "label": "Blood pressure outcome",
+          "description": "Reports change in blood pressure at follow-up.",
+          "ordinal": 4
+        },
+        {
+          "id": "00000000-0000-4000-8000-000000000111",
+          "kind": "inclusion",
+          "stage": "both",
+          "dimension": "population",
+          "label": "Adult population",
+          "description": "Adults aged 18 years or older with hypertension.",
+          "ordinal": 1
+        },
+        {
+          "id": "00000000-0000-4000-8000-000000000113",
+          "kind": "exclusion",
+          "stage": "full_text",
+          "dimension": "outcome",
+          "label": "Surrogate outcome only",
+          "description": "Reports only a surrogate endpoint.",
+          "ordinal": 3
+        }
+      ],
+      "exclusion_reasons": [],
+      "retrieved": []
+    }
+  ]
+}

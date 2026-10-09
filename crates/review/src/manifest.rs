@@ -9,6 +9,7 @@ use crate::{
     identity::{
         IdentityComponent, SemanticIdentity, dependency_fingerprint, implementation_fingerprint,
     },
+    screening_golden_fingerprints,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -253,7 +254,7 @@ fn semantic_identity(
         ReviewSubject::Screening { stage, .. } => Some(*stage),
         _ => None,
     };
-    Ok(SemanticIdentity::new(definition.key(), stage)
+    let mut semantic = SemanticIdentity::new(definition.key(), stage)
         .with(
             IdentityComponent::Definition,
             ReviewHash::digest_json(&DefinitionComponent {
@@ -285,7 +286,15 @@ fn semantic_identity(
             IdentityComponent::Implementation,
             implementation_component(definition.key(), input)?,
         )
-        .with(IdentityComponent::Dependencies, dependency_fingerprint()?))
+        .with(IdentityComponent::Dependencies, dependency_fingerprint()?);
+    if definition.key() == ReviewDefinitionKey::Screening {
+        // Behavioural fingerprints of screening; a failure here fails the manifest.
+        let (golden_render, golden_parse) = screening_golden_fingerprints()?;
+        semantic = semantic
+            .with(IdentityComponent::GoldenRender, golden_render)
+            .with(IdentityComponent::GoldenParse, golden_parse);
+    }
+    Ok(semantic)
 }
 
 /// The `Implementation` value of a definition.

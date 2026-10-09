@@ -7,11 +7,13 @@
 
 mod definition;
 mod execution;
+mod golden;
 mod hash;
 mod identity;
 mod manifest;
 #[doc(hidden)]
 pub mod memory;
+mod screening_subject;
 mod task;
 mod types;
 #[doc(hidden)]
@@ -24,6 +26,7 @@ pub mod worker;
 mod build_support;
 
 pub(crate) use definition::{CompiledReviewDefinition, ReviewCatalog};
+pub use golden::screening_golden_fingerprints;
 pub(crate) use hash::ReviewHash;
 #[doc(hidden)]
 pub use identity::SEMANTIC_DEPENDENCIES;

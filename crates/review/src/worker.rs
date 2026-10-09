@@ -15,6 +15,20 @@ pub use crate::manifest::{
     AcceptedArtifactInput, ReviewManifestInput, ReviewModelIdentity, ReviewRunManifest,
     ReviewRuntimeIdentity,
 };
+pub use crate::screening_subject::{
+    ScreeningExclusionReason, ScreeningSubjectSource, prepare_screening_task,
+};
+
+/// Whether a primary screen must be confirmed by an independent screen before
+/// its result can stand: every full-text screen does, and so does every
+/// screen that proposes an exclusion.
+pub fn needs_independent_screen(analysis: &deepref_ai::ScreeningAnalysis) -> bool {
+    analysis.stage == deepref_ai::ScreeningStage::FullText
+        || matches!(
+            analysis.suggested_decision,
+            deepref_ai::SuggestedDecision::Exclude { .. }
+        )
+}
 
 #[derive(Debug, Clone)]
 pub struct CompiledReview {
