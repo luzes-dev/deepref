@@ -6,7 +6,9 @@ use uuid::Uuid;
 use crate::{
     CompiledReviewDefinition, ReviewDefinitionKey, ReviewError, ReviewHash, ReviewOrigin,
     ReviewSubject,
-    identity::{IdentityComponent, SemanticIdentity},
+    identity::{
+        IdentityComponent, SemanticIdentity, dependency_fingerprint, implementation_fingerprint,
+    },
 };
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -32,16 +34,31 @@ impl ReviewModelIdentity {
     }
 }
 
+/// Where and how a manifest was built, recorded for audit. `rust_version`,
+/// `target` and `deployment_build_id` never enter a semantic identity. See the
+/// scheme 2 recipe in `identity`.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ReviewRuntimeIdentity {
+    /// Source-tree hash (`DEEPREF_SOURCE_TREE_SHA`). Audit only, except that it
+    /// is the implementation component of definitions without a narrow boundary.
     pub build_sha: ReviewHash,
     pub rust_version: String,
     pub target: String,
+    /// Deployment build id from `DEEPREF_BUILD_SHA`, when the build set one.
+    /// Audit only. Absent in manifests persisted before it existed.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub deployment_build_id: Option<String>,
 }
 
 impl ReviewRuntimeIdentity {
     fn validate(&self) -> Result<(), ReviewError> {
-        if self.rust_version.trim().is_empty() || self.target.trim().is_empty() {
+        if self.rust_version.trim().is_empty()
+            || self.target.trim().is_empty()
+            || self
+                .deployment_build_id
+                .as_deref()
+                .is_some_and(|id| id.trim().is_empty())
+        {
             return Err(ReviewError::InvalidDefinition(
                 "runtime identity is incomplete".to_owned(),
             ));
@@ -264,12 +281,29 @@ fn semantic_identity(
             IdentityComponent::Models,
             ReviewHash::digest_json(&input.resolved_models)?,
         )
-        // Interim: the broad build hash keeps the coverage it had before the
-        // identity was decomposed, until the narrow semantic boundary replaces it.
         .with(
             IdentityComponent::Implementation,
-            input.runtime.build_sha.clone(),
-        ))
+            implementation_component(definition.key(), input)?,
+        )
+        .with(IdentityComponent::Dependencies, dependency_fingerprint()?))
+}
+
+/// The `Implementation` value of a definition.
+///
+/// Screening uses the narrow boundary computed at build time. Every other
+/// definition keeps the broad source-tree hash that was recorded before the
+/// identity was decomposed, because its task code is outside the narrow
+/// boundary and a narrow value there would stop catching changes to that code.
+/// For those definitions `build_sha` is the one runtime field that enters the
+/// semantic identity. `rust_version`, `target` and the deployment id never do.
+fn implementation_component(
+    definition: ReviewDefinitionKey,
+    input: &ReviewManifestInput,
+) -> Result<ReviewHash, ReviewError> {
+    match definition {
+        ReviewDefinitionKey::Screening => implementation_fingerprint(),
+        _ => Ok(input.runtime.build_sha.clone()),
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -397,6 +431,7 @@ mod tests {
                     build_sha: hash("build"),
                     rust_version: "1.91".to_owned(),
                     target: "test".to_owned(),
+                    deployment_build_id: None,
                 },
             },
         )
@@ -488,7 +523,7 @@ mod tests {
     }
 
     #[test]
-    fn protocol_model_and_runtime_changes_invalidate_semantics_and_node_reuse() {
+    fn protocol_and_model_changes_invalidate_semantics_and_node_reuse() {
         let definition = ReviewCatalog
             .compile(ReviewDefinitionKey::Screening)
             .expect("definition should compile");
@@ -496,20 +531,15 @@ mod tests {
         let original_fingerprint = fingerprint_node(&definition, &original, "prepare", &[])
             .expect("fingerprint should build");
 
-        let mut variants = Vec::new();
         let mut protocol = original.clone();
         protocol.protocol_hash = hash("changed-protocol");
-        variants.push(("protocol", rebuild(&definition, protocol)));
-
         let mut model = original.clone();
         model.resolved_models[0].model_version = "v2".to_owned();
-        variants.push(("resolved model", rebuild(&definition, model)));
 
-        let mut runtime = original.clone();
-        runtime.runtime.build_sha = hash("changed-build");
-        variants.push(("runtime build", rebuild(&definition, runtime)));
-
-        for (identity, changed) in variants {
+        for (identity, changed) in [
+            ("protocol", rebuild(&definition, protocol)),
+            ("resolved model", rebuild(&definition, model)),
+        ] {
             let changed_fingerprint = fingerprint_node(&definition, &changed, "prepare", &[])
                 .expect("changed fingerprint should build");
             assert_ne!(
@@ -521,6 +551,149 @@ mod tests {
                 "{identity} must invalidate node reuse"
             );
         }
+    }
+
+    #[test]
+    fn runtime_provenance_never_changes_the_screening_semantic_identity() {
+        let definition = ReviewCatalog
+            .compile(ReviewDefinitionKey::Screening)
+            .expect("definition should compile");
+        let original = manifest(&definition);
+        let original_fingerprint = fingerprint_node(&definition, &original, "prepare", &[])
+            .expect("fingerprint should build");
+
+        let mut build = original.clone();
+        build.runtime.build_sha = hash("changed-source-tree");
+        let mut rust = original.clone();
+        rust.runtime.rust_version = "1.96".to_owned();
+        let mut target = original.clone();
+        target.runtime.target = "aarch64-macos".to_owned();
+        let mut deployment = original.clone();
+        deployment.runtime.deployment_build_id = Some("rev:tree".to_owned());
+
+        for (field, changed) in [
+            ("build_sha", rebuild(&definition, build)),
+            ("rust_version", rebuild(&definition, rust)),
+            ("target", rebuild(&definition, target)),
+            ("deployment_build_id", rebuild(&definition, deployment)),
+        ] {
+            assert_eq!(
+                original.semantic_bundle_hash, changed.semantic_bundle_hash,
+                "{field} is audit only and must not change calibration"
+            );
+            assert_eq!(
+                original.semantic_identity, changed.semantic_identity,
+                "{field} must not change any identity component"
+            );
+            // Documented, not desired: the runtime stays in the manifest hash, so
+            // the manifest and its node fingerprints still move. The AI reuse key
+            // includes the node fingerprint, so a changed runtime re-issues calls.
+            // Excluding the runtime from the manifest hash is a separate change.
+            assert_ne!(
+                original.manifest_hash, changed.manifest_hash,
+                "{field} is still recorded in the manifest hash"
+            );
+            assert_ne!(
+                original_fingerprint,
+                fingerprint_node(&definition, &changed, "prepare", &[])
+                    .expect("changed fingerprint should build"),
+                "{field} still moves node fingerprints"
+            );
+        }
+    }
+
+    #[test]
+    fn identity_components_are_the_build_time_fingerprints() {
+        let definition = ReviewCatalog
+            .compile(ReviewDefinitionKey::Screening)
+            .expect("definition should compile");
+        let manifest = manifest(&definition);
+        let identity = manifest
+            .semantic_identity
+            .as_ref()
+            .expect("a scheme 2 identity is recorded");
+        identity
+            .validate()
+            .expect("the identity matches the recipe");
+        assert_eq!(
+            identity.components.get(&IdentityComponent::Implementation),
+            Some(&ReviewHash::parse(env!("DEEPREF_SEMANTIC_IMPLEMENTATION_SHA")).expect("hash")),
+        );
+        assert_eq!(
+            identity.components.get(&IdentityComponent::Dependencies),
+            Some(&ReviewHash::parse(env!("DEEPREF_SEMANTIC_DEPENDENCY_SHA")).expect("hash")),
+        );
+        assert_eq!(
+            identity.components.get(&IdentityComponent::Implementation),
+            Some(&crate::identity::implementation_fingerprint().expect("hash")),
+        );
+    }
+
+    #[test]
+    fn non_screening_definitions_keep_the_broad_source_hash_until_their_boundary_is_declared() {
+        let definition = ReviewCatalog
+            .compile(ReviewDefinitionKey::DuplicateDetection)
+            .expect("definition should compile");
+        let original = ReviewRunManifest::build(
+            &definition,
+            ReviewManifestInput {
+                project_id: ProjectId::new(Uuid::new_v4()),
+                subject: ReviewSubject::DuplicateDetection {
+                    record_id: deepref_domain::RecordId::new(Uuid::new_v4()),
+                    candidate_report_id: ReportId::new(Uuid::new_v4()),
+                },
+                origin: ReviewOrigin::ReviewerRequested,
+                protocol_version_id: None,
+                protocol_hash: hash("protocol"),
+                source_manifest_hash: hash("manifest"),
+                source_content_hash: hash("source"),
+                resolved_models: vec![ReviewModelIdentity {
+                    profile: ModelProfile::FastClassifier,
+                    provider: "fixture".to_owned(),
+                    model: "classifier".to_owned(),
+                    model_version: "v1".to_owned(),
+                    parameters_hash: hash("parameters"),
+                }],
+                runtime: ReviewRuntimeIdentity {
+                    build_sha: hash("build"),
+                    rust_version: "1.91".to_owned(),
+                    target: "test".to_owned(),
+                    deployment_build_id: None,
+                },
+            },
+        )
+        .expect("manifest should build");
+        let identity = original
+            .semantic_identity
+            .as_ref()
+            .expect("a scheme 2 identity is recorded");
+        assert_eq!(
+            identity.components.get(&IdentityComponent::Implementation),
+            Some(&hash("build")),
+            "the broad source hash stands in for definitions without a narrow boundary"
+        );
+
+        let mut changed = original.clone();
+        changed.runtime.build_sha = hash("changed-source-tree");
+        let rebuilt = rebuild(&definition, changed);
+        assert_ne!(original.semantic_bundle_hash, rebuilt.semantic_bundle_hash);
+    }
+
+    #[test]
+    fn runtime_identity_from_a_manifest_without_a_deployment_id_still_deserializes() {
+        let legacy = serde_json::json!({
+            "build_sha": hash("legacy-build"),
+            "rust_version": "1.95",
+            "target": "x86_64-linux",
+        });
+        let runtime: ReviewRuntimeIdentity =
+            serde_json::from_value(legacy).expect("legacy runtime identity deserializes");
+        assert_eq!(runtime.deployment_build_id, None);
+        let serialized = serde_json::to_value(&runtime).expect("serializes");
+        assert!(
+            serialized.get("deployment_build_id").is_none(),
+            "an absent deployment id is not written, so older hashes stay stable"
+        );
     }
 
     #[test]

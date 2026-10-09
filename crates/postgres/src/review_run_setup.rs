@@ -69,12 +69,22 @@ pub(crate) fn model_identity(
     })
 }
 
+/// The provenance of the running build, recorded in every manifest for audit.
+///
+/// None of these values is a semantic identity input. The source-tree hash is
+/// `DEEPREF_SOURCE_TREE_SHA`. The deployment id comes from `DEEPREF_BUILD_SHA`,
+/// which the container build sets before it compiles, so `option_env!` sees it.
+/// Cargo rebuilds this crate when that value changes.
 pub(crate) fn runtime_identity() -> Result<ReviewRuntimeIdentity, deepref_review::ReviewError> {
     Ok(ReviewRuntimeIdentity {
-        build_sha: ReviewHash::parse(env!("DEEPREF_SEMANTIC_BUILD_SHA"))?,
+        build_sha: ReviewHash::parse(env!("DEEPREF_SOURCE_TREE_SHA"))?,
         rust_version: option_env!("RUSTC_VERSION")
             .unwrap_or("workspace-toolchain")
             .to_owned(),
         target: format!("{}-{}", std::env::consts::ARCH, std::env::consts::OS),
+        deployment_build_id: option_env!("DEEPREF_BUILD_SHA")
+            .map(str::trim)
+            .filter(|id| !id.is_empty())
+            .map(str::to_owned),
     })
 }

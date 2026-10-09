@@ -368,6 +368,14 @@ async fn automation_reviews_require_an_exact_passing_immutable_calibration_bundl
             identity.aggregate_hash().expect("identity hashes"),
             "the previewed identity is the one a run is compiled with"
         );
+        // The persisted scheme 2 identity carries the narrow implementation and
+        // dependency components the calibration gate compares.
+        for component in [IdentityComponent::Implementation, IdentityComponent::Dependencies] {
+            assert!(
+                identity.components.contains_key(&component),
+                "missing {component:?}"
+            );
+        }
 
         let missing_id = CalibrationBundleId::new(Uuid::new_v4()).expect("bundle id");
         assert_eq!(

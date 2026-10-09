@@ -159,6 +159,7 @@ fn manifest_input() -> ReviewManifestInput {
             build_sha: ReviewHash::digest_bytes(b"build"),
             rust_version: "1.91".to_owned(),
             target: "test".to_owned(),
+            deployment_build_id: None,
         },
     }
 }

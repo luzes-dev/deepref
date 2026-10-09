@@ -17,8 +17,16 @@ mod types;
 #[doc(hidden)]
 pub mod worker;
 
+/// The fingerprint logic that `build.rs` runs, compiled here only so that its
+/// unit tests run with the crate's test harness.
+#[cfg(test)]
+#[path = "../build_support/fingerprint.rs"]
+mod build_support;
+
 pub(crate) use definition::{CompiledReviewDefinition, ReviewCatalog};
 pub(crate) use hash::ReviewHash;
+#[doc(hidden)]
+pub use identity::SEMANTIC_DEPENDENCIES;
 pub use identity::{
     IdentityComparison, IdentityComponent, SEMANTIC_IDENTITY_SCHEME, SemanticIdentity,
 };

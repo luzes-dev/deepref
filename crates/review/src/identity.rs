@@ -6,9 +6,35 @@
 //! beside each calibration bundle and compared component by component when the
 //! aggregate differs.
 //!
-//! Runtime provenance (toolchain, target, deployment build id) is recorded in
-//! the manifest for audit, but it is not a component: changing the compiler or
-//! deployment does not, by itself, change screening semantics.
+//! Runtime provenance (toolchain, target, deployment build id) is recorded in the
+//! manifest for audit and is never a component: changing the compiler or the
+//! deployment does not, by itself, change screening semantics. The source-tree
+//! hash is also recorded for audit. It is the implementation component of the
+//! definitions that have no narrow boundary yet, as described below.
+//!
+//! # Scheme 2 recipe
+//!
+//! The aggregate `semantic_bundle_hash` is the SHA-256 of the canonical JSON of a
+//! [`SemanticIdentity`], whose components are:
+//!
+//! | component | value |
+//! |---|---|
+//! | `definition`, `prompt`, `schema`, `policy`, `parser` | the compiled definition: id, version, declared assets and workflow graph, and the checked-in bundles under `review-definitions/` |
+//! | `protocol` | the protocol criteria hash of the subject's task |
+//! | `models` | the resolved model routes: profile, provider, model, version and parameters |
+//! | `implementation` | screening: `DEEPREF_SEMANTIC_IMPLEMENTATION_SHA`, the narrow boundary of screening code. Other definitions: the broad source-tree hash, until their own boundary is declared |
+//! | `dependencies` | `DEEPREF_SEMANTIC_DEPENDENCY_SHA`, the closure of the semantic third-party crates from `Cargo.lock`, with the manifest lines that declare them |
+//!
+//! The boundary table, its exclusions and the dependency roots are in
+//! `crates/review/build_support/fingerprint.rs`, which `build.rs` runs. The
+//! `implementation` and `dependencies` values are fixed when the crate is built,
+//! so a manifest records the code that produced it.
+//!
+//! The `Implementation` value for the other definitions is the broad hash on
+//! purpose. Their task code (`dedupe.rs`, `classification.rs`,
+//! `review_assistance.rs`, appraisal application code) is not in the screening
+//! boundary yet. A narrow value there would silently stop catching changes to
+//! that code.
 
 use std::collections::{BTreeMap, BTreeSet};
 
@@ -21,6 +47,23 @@ use crate::{ReviewDefinitionKey, ReviewError, ReviewHash};
 /// built by the same recipe; hashes from another scheme are never treated as
 /// equivalent, even when some component values happen to match.
 pub const SEMANTIC_IDENTITY_SCHEME: u32 = 2;
+
+/// The semantic dependency closure that `build.rs` computed, as an audit
+/// listing: roots, excluded third-party crates, every closure package with its
+/// source and checksum, and the manifest lines that declare a root.
+#[doc(hidden)]
+pub const SEMANTIC_DEPENDENCIES: &str =
+    include_str!(concat!(env!("OUT_DIR"), "/semantic_dependencies.txt"));
+
+/// The narrow screening implementation fingerprint computed by `build.rs`.
+pub(crate) fn implementation_fingerprint() -> Result<ReviewHash, ReviewError> {
+    ReviewHash::parse(env!("DEEPREF_SEMANTIC_IMPLEMENTATION_SHA"))
+}
+
+/// The semantic third-party dependency fingerprint computed by `build.rs`.
+pub(crate) fn dependency_fingerprint() -> Result<ReviewHash, ReviewError> {
+    ReviewHash::parse(env!("DEEPREF_SEMANTIC_DEPENDENCY_SHA"))
+}
 
 /// One named input to the aggregate semantic identity.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
@@ -46,9 +89,10 @@ pub enum IdentityComponent {
     GoldenRender,
     /// Interpreted outcomes of deterministic model-response fixtures.
     GoldenParse,
-    /// Source of the semantic implementation boundary.
+    /// Source of the semantic implementation: the narrow screening boundary, or
+    /// the broad source-tree hash for definitions without a declared boundary.
     Implementation,
-    /// Resolved third-party dependencies that can change semantic behaviour.
+    /// The semantic third-party dependency closure and its declared features.
     Dependencies,
 }
 
@@ -209,7 +253,7 @@ const SCREENING_ONLY_COMPONENTS: [IdentityComponent; 0] = [];
 
 /// Components every definition has under the current scheme in addition to the
 /// declarative ones.
-const SCHEME_COMPONENTS: [IdentityComponent; 0] = [];
+const SCHEME_COMPONENTS: [IdentityComponent; 1] = [IdentityComponent::Dependencies];
 
 #[cfg(test)]
 mod tests {
