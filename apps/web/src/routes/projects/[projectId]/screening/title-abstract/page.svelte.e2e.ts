@@ -26,6 +26,14 @@ const aiAvailableStatus: AiStatusDto = {
 	suggestions_available: true
 };
 
+const aiUnavailableStatus: AiStatusDto = {
+	assistant_available: false,
+	configured: false,
+	model: null,
+	provider: null,
+	suggestions_available: false
+};
+
 type Report = {
 	report_id: string;
 	title: string;
@@ -66,7 +74,6 @@ type ScreeningMock = {
 	conflict: boolean;
 	decisionExpectedRevisions: number[];
 	queueRequests: string[];
-	undoDelayMs: number;
 	undoCompleted: boolean;
 };
 
@@ -164,6 +171,7 @@ async function installMocks(page: Page, mock: ScreeningMock) {
 	await page.route(`${api}/health/dependencies`, (route) =>
 		route.fulfill({ json: dependencies })
 	);
+	await page.route(`${api}/ai/status`, (route) => route.fulfill({ json: aiUnavailableStatus }));
 	await page.route(/\/api\/projects(?:\?.*)?$/, (route) =>
 		route.fulfill({ json: { items: [project], next_cursor: null } })
 	);
@@ -317,25 +325,19 @@ async function installMocks(page: Page, mock: ScreeningMock) {
 					latest.id
 				)
 			);
-			if (mock.undoDelayMs)
-				await new Promise((resolve) => setTimeout(resolve, mock.undoDelayMs));
 			mock.undoCompleted = true;
 			await route.fulfill({ json: stateFor(report) });
 		}
 	);
 }
 
-async function setup(
-	page: Page,
-	options: { count?: number; conflict?: boolean; undoDelayMs?: number } = {}
-) {
+async function setup(page: Page, options: { count?: number; conflict?: boolean } = {}) {
 	const mock: ScreeningMock = {
 		reports: makeReports(options.count ?? 4),
 		history: new Map(),
 		conflict: options.conflict ?? false,
 		decisionExpectedRevisions: [],
 		queueRequests: [],
-		undoDelayMs: options.undoDelayMs ?? 0,
 		undoCompleted: false
 	};
 	await installMocks(page, mock);
@@ -345,18 +347,63 @@ async function setup(
 test('decides A, advances to B, then U restores A immediately and persists history', async ({
 	page
 }) => {
-	const mock = await setup(page, { undoDelayMs: 500 });
+	const mock = await setup(page);
+	let releaseDecisionResponse!: () => void;
+	let notifyDecisionStarted!: () => void;
+	let releaseUndoResponse!: () => void;
+	let notifyUndoStarted!: () => void;
+	const decisionResponseGate = new Promise<void>((resolve) => {
+		releaseDecisionResponse = resolve;
+	});
+	const decisionStarted = new Promise<void>((resolve) => {
+		notifyDecisionStarted = resolve;
+	});
+	const undoResponseGate = new Promise<void>((resolve) => {
+		releaseUndoResponse = resolve;
+	});
+	const undoStarted = new Promise<void>((resolve) => {
+		notifyUndoStarted = resolve;
+	});
+	await page.route('**/api/projects/project-1/reports/*/screening', async (route) => {
+		if (route.request().method() === 'POST') {
+			notifyDecisionStarted();
+			await decisionResponseGate;
+		}
+		await route.fallback();
+	});
+	await page.route('**/api/projects/project-1/reports/*/screening/undo', async (route) => {
+		notifyUndoStarted();
+		await undoResponseGate;
+		await route.fallback();
+	});
 	await page.goto(`/projects/${projectId}/screening/title-abstract`);
 	await expect(page.getByRole('heading', { name: 'Screening report 01' })).toBeVisible();
 
 	await page.getByRole('button', { name: 'Include', exact: true }).click();
 	await expect(page.getByRole('heading', { name: 'Screening report 02' })).toBeVisible();
-	await page.evaluate(() => {
+	await decisionStarted;
+	const undoButton = page.getByRole('button', { name: 'Undo latest screening decision' });
+	await expect(page.getByTestId('screening-decision')).toContainText('Saving…');
+	await expect(undoButton).toBeDisabled();
+	releaseDecisionResponse();
+	await expect(undoButton).toBeEnabled();
+	const shortcutTarget = await page.evaluate(() => {
 		document.body.tabIndex = -1;
 		document.body.focus();
+		return {
+			tagName: document.activeElement?.tagName,
+			isContentEditable:
+				document.activeElement instanceof HTMLElement &&
+				document.activeElement.isContentEditable
+		};
 	});
+	expect(shortcutTarget).toEqual({ tagName: 'BODY', isContentEditable: false });
+	await expect(page.getByRole('dialog')).toHaveCount(0);
 	await page.keyboard.press('u');
+	await undoStarted;
 	await expect(page.getByRole('heading', { name: 'Screening report 01' })).toBeVisible();
+	expect(mock.undoCompleted).toBe(false);
+	releaseUndoResponse();
 	await expect.poll(() => mock.undoCompleted).toBe(true);
 	const history = page.getByRole('list', { name: 'Auditable screening history' });
 	await expect(history.getByText('Undid the title & abstract decision')).toBeVisible();
