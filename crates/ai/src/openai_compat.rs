@@ -11,7 +11,7 @@ use serde_json::{Value, json};
 use crate::{
     AiError, AiFuture, AiGateway, ChatCompletion, ChatGateway, ChatMessage, ChatRequest,
     ChatTextSink, ChatToolCall, CompletionRequest, GatewayCompletion, GroundedBlock,
-    GroundingContextBuilder, ToolDeclaration, estimate_tokens,
+    GroundingContextBuilder, ProviderEndpoint, ToolDeclaration, estimate_tokens,
 };
 
 const MAX_ATTEMPTS: usize = 3;
@@ -79,10 +79,13 @@ pub struct OpenAiCompatGateway {
 
 impl std::fmt::Debug for OpenAiCompatGateway {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        // The configured URL may carry credentials, so only its normalized endpoint is printed.
+        let endpoint = ProviderEndpoint::from_configured_url(&self.base_url)
+            .map_or_else(|_| "<invalid>".to_owned(), |endpoint| endpoint.to_string());
         formatter
             .debug_struct("OpenAiCompatGateway")
             .field("provider", &self.dialect.id())
-            .field("base_url", &self.base_url)
+            .field("endpoint", &endpoint)
             .field("api_key", &"<redacted>")
             .finish()
     }
@@ -289,8 +292,32 @@ fn usage(response: &Value) -> (u64, u64) {
     (read("prompt_tokens"), read("completion_tokens"))
 }
 
-/// Models sometimes wrap JSON in a Markdown fence even in JSON mode. The
-/// gateway removes that envelope; the runner only ever sees the JSON inside.
+/// The longest provider revision label kept. Model names and fingerprints are far shorter.
+const MAX_REVISION_LABEL_BYTES: usize = 128;
+
+/// What the provider says served a call: the response `model` and `system_fingerprint`.
+///
+/// This is audit data only. It is known only after the call, so it cannot be part of the
+/// semantic identity fixed before the call. Providers may expose only a mutable alias, and
+/// a silent upstream change behind the same alias cannot be ruled out from the identity alone;
+/// continuous monitoring of the answers is the fallback. A label that is empty, too long or
+/// contains control characters is dropped rather than stored.
+fn provider_revision(response: &Value) -> (Option<String>, Option<String>) {
+    (
+        revision_label(response.get("model")),
+        revision_label(response.get("system_fingerprint")),
+    )
+}
+
+fn revision_label(value: Option<&Value>) -> Option<String> {
+    let text = value?.as_str()?.trim();
+    let usable = !text.is_empty()
+        && text.len() <= MAX_REVISION_LABEL_BYTES
+        && !text.chars().any(char::is_control);
+    usable.then(|| text.to_owned())
+}
+
+/// Models sometimes wrap JSON in a Markdown fence even in JSON mode.
 pub fn strip_code_fence(text: &str) -> &str {
     let trimmed = text.trim();
     let Some(rest) = trimmed.strip_prefix("```") else {
@@ -675,12 +702,15 @@ impl AiGateway for OpenAiCompatGateway {
                     AiError::Gateway("provider returned no structured text".to_owned())
                 })?;
             let (input_tokens, output_tokens) = usage(&response);
+            let (served_model, system_fingerprint) = provider_revision(&response);
             tracing::debug!(ai.provider = %request.route.provider, ai.model = %request.route.model, "structured completion finished");
             Ok(GatewayCompletion {
                 output_json: strip_code_fence(content).to_owned(),
                 input_tokens,
                 output_tokens,
                 cost_micros: None,
+                served_model,
+                system_fingerprint,
             })
         })
     }
@@ -1325,5 +1355,78 @@ mod tests {
         assert_eq!(completion.output_json, "{\"ok\":true}");
         assert_eq!((completion.input_tokens, completion.output_tokens), (3, 4));
         assert_eq!(completion.cost_micros, None);
+    }
+
+    #[test]
+    fn the_provider_revision_is_read_from_the_response_and_never_invented() {
+        let response: Value = serde_json::from_str(
+            r#"{"model":"glm-5.3-flash-2026-09","system_fingerprint":"fp_44709d6fcb","choices":[]}"#,
+        )
+        .unwrap_or_else(|_| unreachable!());
+        assert_eq!(
+            provider_revision(&response),
+            (
+                Some("glm-5.3-flash-2026-09".to_owned()),
+                Some("fp_44709d6fcb".to_owned())
+            )
+        );
+        let bare: Value =
+            serde_json::from_str(r#"{"choices":[]}"#).unwrap_or_else(|_| unreachable!());
+        assert_eq!(provider_revision(&bare), (None, None));
+        let hostile: Value = serde_json::from_value(json!({
+            "model": "  ",
+            "system_fingerprint": format!("fp{}", "x".repeat(MAX_REVISION_LABEL_BYTES)),
+        }))
+        .unwrap_or_else(|_| unreachable!());
+        assert_eq!(provider_revision(&hostile), (None, None));
+        let control: Value = serde_json::from_value(json!({"model": "glm\n<script>"}))
+            .unwrap_or_else(|_| unreachable!());
+        assert_eq!(provider_revision(&control), (None, None));
+    }
+
+    #[tokio::test]
+    async fn a_structured_completion_keeps_the_provider_reported_revision() {
+        let body = r#"{"model":"glm-5.3-flash-2026-09","system_fingerprint":"fp_44709d6fcb","choices":[{"message":{"content":"{\"ok\":true}"},"finish_reason":"stop"}],"usage":{"prompt_tokens":5,"completion_tokens":6}}"#;
+        let (base_url, _) = canned_provider(http_response("200 OK", body)).await;
+        let gateway = OpenAiCompatGateway::new(ProviderDialect::OpenCodeGo, base_url, "test-key")
+            .unwrap_or_else(|_| unreachable!());
+        let request = CompletionRequest {
+            project_id: None,
+            route: streaming_route(),
+            system_prompt: "system".to_owned(),
+            user_prompt: "user".to_owned(),
+            evidence: Vec::new(),
+            schema: json!({"type": "object"}),
+        };
+        let completion = gateway
+            .complete(request)
+            .await
+            .unwrap_or_else(|_| unreachable!());
+        assert_eq!(completion.output_json, "{\"ok\":true}");
+        assert_eq!(
+            completion.served_model.as_deref(),
+            Some("glm-5.3-flash-2026-09")
+        );
+        assert_eq!(
+            completion.system_fingerprint.as_deref(),
+            Some("fp_44709d6fcb")
+        );
+    }
+
+    #[test]
+    fn the_debug_output_prints_the_normalized_endpoint_and_no_credentials() {
+        let gateway = OpenAiCompatGateway::new(
+            ProviderDialect::OpenCodeGo,
+            "https://user:secret@Proxy.Example:443/zen/go/v1/?key=abc",
+            "sk-secret",
+        )
+        .unwrap_or_else(|_| unreachable!());
+        let rendered = format!("{gateway:?}");
+        assert!(
+            rendered.contains("https://proxy.example/zen/go/v1"),
+            "{rendered}"
+        );
+        assert!(!rendered.contains("secret"), "{rendered}");
+        assert!(!rendered.contains("abc"), "{rendered}");
     }
 }

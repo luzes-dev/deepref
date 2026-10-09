@@ -12,7 +12,8 @@ use tracing::debug;
 
 use crate::{
     AiError, AiFuture, ChatCompletion, ChatGateway, ChatRequest, ChatTextSink, CompletionRequest,
-    Embedding, GatewayCompletion, GroundingContextBuilder,
+    Embedding, GatewayCompletion, GroundingContextBuilder, ProviderEndpoint,
+    register_provider_endpoint,
 };
 
 pub trait AiGateway: Send + Sync {
@@ -218,6 +219,9 @@ where
                 input_tokens: response.usage.input_tokens,
                 output_tokens: response.usage.output_tokens,
                 cost_micros: None,
+                // Rig does not expose the provider's served model or fingerprint.
+                served_model: None,
+                system_fingerprint: None,
             })
         })
     }
@@ -260,6 +264,10 @@ where
 /// every model of `provider`, wrapped so the project budget is enforced, every
 /// call is priced with `prices`, and usage is recorded. Routes must carry the
 /// same `provider` label, because the router looks adapters up by it.
+///
+/// This is also the one place where the provider id and its base URL meet, so
+/// the normalized endpoint of the adapter is registered here for review
+/// identity (see [`register_provider_endpoint`]).
 pub fn build_metered_provider(
     provider: &str,
     base_url: &str,
@@ -269,12 +277,17 @@ pub fn build_metered_provider(
 ) -> Result<Arc<crate::MeteredGateway<RoutedGateway>>, AiError> {
     let dialect = crate::ProviderDialect::from_id(provider)
         .ok_or_else(|| AiError::Gateway("AI provider is not supported".to_owned()))?;
+    let endpoint = ProviderEndpoint::from_configured_url(base_url)
+        .map_err(|_| AiError::Gateway("AI provider base URL is invalid".to_owned()))?;
     let routed = RoutedGateway::default();
     routed.register_provider(
         provider,
         ANY_MODEL,
         Arc::new(crate::OpenAiCompatGateway::new(dialect, base_url, api_key)?),
     )?;
+    // Registered last: the endpoint is only recorded once the adapter that
+    // calls it exists.
+    register_provider_endpoint(provider, endpoint)?;
     Ok(Arc::new(
         crate::MeteredGateway::new(routed, ledger).with_prices(prices),
     ))

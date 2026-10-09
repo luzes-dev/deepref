@@ -4,7 +4,8 @@ use std::{
 };
 
 use deepref_ai::{
-    AiExecutionContext, AiGateway, AiTaskRunner, ProposalPersistence, SystemClock, UuidProvider,
+    AiExecutionContext, AiGateway, AiTaskRunner, ProposalPersistence, ProviderEndpoint,
+    SystemClock, UuidProvider,
 };
 use deepref_core::{IngestionItemStatus, normalize_doi};
 use deepref_crossref::CrossrefError;
@@ -15,7 +16,8 @@ use deepref_documents::{
 use deepref_events::{DeadLetterRecord, EventEnvelope, WorkFetchRequested, deserialize_compatible};
 use deepref_providers::CrossrefProvider;
 use deepref_review::worker::{
-    CompiledReview, ReviewExecutionPlan, ReviewNode, ScreeningReviewPlan, StandardReviewPlan,
+    CompiledReview, ReviewExecutionPlan, ReviewModelIdentity, ReviewNode, ScreeningReviewPlan,
+    StandardReviewPlan,
 };
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
@@ -939,6 +941,30 @@ async fn execute_compiled_review(
         },
     )
     .await?;
+    // Checked before any model call: the scheduler and this worker may have different
+    // configuration, and the review identity names the endpoint it was scheduled against.
+    if let Some(route) =
+        provider_endpoint_mismatch(&run.manifest.resolved_models, registered_provider_endpoint)
+    {
+        tracing::warn!(
+            profile = route.profile.as_str(),
+            "review provider endpoint differs from the endpoint it was scheduled against; the model was not called"
+        );
+        return finalize_blocked_review(
+            pool,
+            &run,
+            &review,
+            final_review_node(&review),
+            automation_step,
+            owner,
+            BlockedReview {
+                predecessor: &prepare,
+                code: deepref_review::ReviewBlockCode::ProviderEndpointMismatch,
+                message: "the AI provider endpoint differs from the endpoint this review was scheduled against, so the model was not called",
+            },
+        )
+        .await;
+    }
     let execution = CompiledReviewExecution {
         pool,
         run: &run,
@@ -955,6 +981,27 @@ async fn execute_compiled_review(
             execute_compiled_standard(&execution, plan, prepare).await
         }
     }
+}
+
+/// The endpoint this worker calls for `provider`. A registry that cannot be read reports no
+/// endpoint, so the comparison fails closed.
+fn registered_provider_endpoint(provider: &str) -> Option<ProviderEndpoint> {
+    deepref_ai::provider_endpoint(provider).ok().flatten()
+}
+
+/// The first resolved route whose recorded endpoint is not the endpoint `worker_endpoint` gives
+/// for its provider. Routes with no recorded endpoint are not compared: those manifests predate
+/// the recording, or their scheduler had no endpoint to record.
+fn provider_endpoint_mismatch(
+    routes: &[ReviewModelIdentity],
+    worker_endpoint: impl Fn(&str) -> Option<ProviderEndpoint>,
+) -> Option<&ReviewModelIdentity> {
+    routes.iter().find(|route| {
+        route
+            .endpoint
+            .as_ref()
+            .is_some_and(|recorded| worker_endpoint(&route.provider).as_ref() != Some(recorded))
+    })
 }
 
 struct CompiledReviewExecution<'a> {
@@ -1792,12 +1839,80 @@ fn is_retryable_crossref_error(error: &CrossrefError) -> bool {
 
 #[cfg(test)]
 mod tests {
+    use deepref_ai::ModelProfile;
+    use deepref_review::worker::ReviewHash;
+
     use super::*;
+
     #[test]
     fn malformed_identity_is_stable() {
         assert_eq!(
             dead_letter(b"bad", None, 1, "bad").identity,
             dead_letter(b"bad", None, 5, "other").identity
         );
+    }
+
+    fn endpoint(raw: &str) -> ProviderEndpoint {
+        ProviderEndpoint::from_configured_url(raw).unwrap()
+    }
+
+    fn route(provider: &str, endpoint: Option<ProviderEndpoint>) -> ReviewModelIdentity {
+        ReviewModelIdentity {
+            profile: ModelProfile::Reasoning,
+            provider: provider.to_owned(),
+            model: "glm-test".to_owned(),
+            model_version: "glm-test".to_owned(),
+            parameters_hash: ReviewHash::digest_bytes(b"parameters"),
+            endpoint,
+        }
+    }
+
+    #[test]
+    fn a_worker_on_the_scheduled_endpoint_may_execute_the_review() {
+        let scheduled = endpoint("https://opencode.ai/zen/go/v1");
+        let routes = [route("opencode-go", Some(scheduled.clone()))];
+        let worker = |provider: &str| {
+            (provider == "opencode-go").then(|| endpoint("https://opencode.ai/zen/go/v1/"))
+        };
+        assert!(provider_endpoint_mismatch(&routes, worker).is_none());
+    }
+
+    #[test]
+    fn a_different_or_missing_worker_endpoint_blocks_the_review() {
+        let routes = [route(
+            "opencode-go",
+            Some(endpoint("https://opencode.ai/zen/go/v1")),
+        )];
+        let other_host = |_: &str| Some(endpoint("https://backup.example/zen/go/v1"));
+        assert_eq!(
+            provider_endpoint_mismatch(&routes, other_host).map(|route| route.provider.as_str()),
+            Some("opencode-go")
+        );
+        let unconfigured = |_: &str| None;
+        assert!(provider_endpoint_mismatch(&routes, unconfigured).is_some());
+    }
+
+    #[test]
+    fn routes_without_a_recorded_endpoint_are_not_compared() {
+        let routes = [route("opencode-go", None)];
+        let configured = |_: &str| Some(endpoint("https://backup.example/zen/go/v1"));
+        assert!(provider_endpoint_mismatch(&routes, configured).is_none());
+    }
+
+    #[test]
+    fn the_first_mismatching_route_is_reported() {
+        let routes = [
+            route(
+                "opencode-go",
+                Some(endpoint("https://opencode.ai/zen/go/v1")),
+            ),
+            route("zai", Some(endpoint("https://api.z.ai/api/paas/v4"))),
+        ];
+        let worker = |provider: &str| match provider {
+            "opencode-go" => Some(endpoint("https://opencode.ai/zen/go/v1")),
+            _ => Some(endpoint("https://elsewhere.example/v4")),
+        };
+        let mismatch = provider_endpoint_mismatch(&routes, worker);
+        assert_eq!(mismatch.map(|route| route.provider.as_str()), Some("zai"));
     }
 }

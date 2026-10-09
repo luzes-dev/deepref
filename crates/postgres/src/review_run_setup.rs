@@ -1,4 +1,4 @@
-use deepref_ai::{ResolvedModel, hash_json};
+use deepref_ai::{ResolvedModel, hash_json, provider_endpoint};
 use deepref_application::BuiltInAutomationRecipe;
 use deepref_domain::ProjectId;
 use deepref_review::{
@@ -57,15 +57,19 @@ pub(crate) fn protocol_version_id(
     }
 }
 
+/// The identity of one resolved route. The endpoint is the one this process calls for the
+/// route's provider, so a manifest records the endpoint of the process that scheduled it.
 pub(crate) fn model_identity(
     route: ResolvedModel,
 ) -> Result<ReviewModelIdentity, PostgresReviewError> {
+    let endpoint = provider_endpoint(&route.provider)?;
     Ok(ReviewModelIdentity {
         profile: route.profile,
         provider: route.provider,
         model: route.model,
         model_version: route.model_version,
         parameters_hash: ReviewHash::parse(hash_json(&serde_json::to_value(route.parameters)?)?)?,
+        endpoint,
     })
 }
 
@@ -87,4 +91,36 @@ pub(crate) fn runtime_identity() -> Result<ReviewRuntimeIdentity, deepref_review
             .filter(|id| !id.is_empty())
             .map(str::to_owned),
     })
+}
+
+#[cfg(test)]
+mod tests {
+    use deepref_ai::{ModelParameters, ModelProfile, ProviderEndpoint, register_provider_endpoint};
+
+    use super::*;
+
+    fn route(provider: &str) -> ResolvedModel {
+        ResolvedModel {
+            profile: ModelProfile::Reasoning,
+            provider: provider.to_owned(),
+            model: "glm-test".to_owned(),
+            model_version: "glm-test".to_owned(),
+            parameters: ModelParameters::default(),
+            route_id: None,
+        }
+    }
+
+    #[test]
+    fn a_route_records_the_endpoint_this_process_calls_for_its_provider() {
+        let unconfigured = model_identity(route("review-setup-unconfigured")).unwrap();
+        assert_eq!(unconfigured.endpoint, None);
+
+        let endpoint =
+            ProviderEndpoint::from_configured_url("https://proxy.example/zen/go/v1/?key=q")
+                .unwrap();
+        register_provider_endpoint("review-setup-configured", endpoint.clone()).unwrap();
+        let identity = model_identity(route("review-setup-configured")).unwrap();
+        assert_eq!(identity.endpoint, Some(endpoint));
+        assert_eq!(identity.provider, "review-setup-configured");
+    }
 }

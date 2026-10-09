@@ -477,6 +477,8 @@ impl AiGateway for ProposalGateway {
                 input_tokens: 1,
                 output_tokens: 1,
                 cost_micros: Some(1),
+                served_model: None,
+                system_fingerprint: None,
             })
         })
     }

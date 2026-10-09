@@ -1,4 +1,4 @@
-use deepref_ai::ModelProfile;
+use deepref_ai::{ModelProfile, ProviderEndpoint};
 use deepref_domain::{ProjectId, ProtocolVersionId};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
@@ -19,6 +19,11 @@ pub struct ReviewModelIdentity {
     pub model: String,
     pub model_version: String,
     pub parameters_hash: ReviewHash,
+    /// The normalized endpoint this route is sent to, as the scheduling process was configured.
+    /// Absent when that process had no endpoint for the provider, and in manifests persisted
+    /// before the endpoint was recorded; those routes are not compared at execution.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub endpoint: Option<ProviderEndpoint>,
 }
 
 impl ReviewModelIdentity {
@@ -280,7 +285,11 @@ fn semantic_identity(
         .with(IdentityComponent::Protocol, input.protocol_hash.clone())
         .with(
             IdentityComponent::Models,
-            ReviewHash::digest_json(&input.resolved_models)?,
+            ReviewHash::digest_json(&routes_without_endpoints(&input.resolved_models))?,
+        )
+        .with(
+            IdentityComponent::ProviderEndpoint,
+            ReviewHash::digest_json(&provider_endpoints(&input.resolved_models))?,
         )
         .with(
             IdentityComponent::Implementation,
@@ -313,6 +322,30 @@ fn implementation_component(
         ReviewDefinitionKey::Screening => implementation_fingerprint(),
         _ => Ok(input.runtime.build_sha.clone()),
     }
+}
+
+/// The resolved routes without their endpoints. The endpoint is its own component, so an
+/// endpoint change is reported as `ProviderEndpoint` alone, and the `Models` hash stays what it
+/// was before endpoints were recorded.
+fn routes_without_endpoints(models: &[ReviewModelIdentity]) -> Vec<ReviewModelIdentity> {
+    models
+        .iter()
+        .map(|model| ReviewModelIdentity {
+            endpoint: None,
+            ..model.clone()
+        })
+        .collect()
+}
+
+/// The endpoint each profile is sent to, in the sorted model order. `null` where the endpoint
+/// is unknown.
+fn provider_endpoints(
+    models: &[ReviewModelIdentity],
+) -> Vec<(ModelProfile, Option<&ProviderEndpoint>)> {
+    models
+        .iter()
+        .map(|model| (model.profile, model.endpoint.as_ref()))
+        .collect()
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -404,8 +437,10 @@ impl ReviewCatalogIdentity {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeSet;
+
     use super::*;
-    use crate::{ReviewCatalog, ReviewDefinitionKey};
+    use crate::{IdentityComparison, ReviewCatalog, ReviewDefinitionKey};
     use deepref_domain::{Actor, ActorKind, ReportId, ScreeningStage};
 
     fn hash(value: &str) -> ReviewHash {
@@ -435,6 +470,7 @@ mod tests {
                     model: "reasoning".to_owned(),
                     model_version: "v1".to_owned(),
                     parameters_hash: hash("parameters"),
+                    endpoint: None,
                 }],
                 runtime: ReviewRuntimeIdentity {
                     build_sha: hash("build"),
@@ -560,6 +596,80 @@ mod tests {
                 "{identity} must invalidate node reuse"
             );
         }
+    }
+
+    fn endpoint(raw: &str) -> ProviderEndpoint {
+        ProviderEndpoint::from_configured_url(raw).unwrap_or_else(|_| unreachable!())
+    }
+
+    #[test]
+    fn an_endpoint_change_is_reported_as_provider_endpoint_alone() {
+        let definition = ReviewCatalog
+            .compile(ReviewDefinitionKey::Screening)
+            .expect("definition should compile");
+        let original = manifest(&definition);
+        let mut moved = original.clone();
+        moved.resolved_models[0].endpoint = Some(endpoint("https://opencode.ai/zen/go/v1"));
+        let moved = rebuild(&definition, moved);
+        assert_ne!(original.semantic_bundle_hash, moved.semantic_bundle_hash);
+        let mut other = moved.clone();
+        other.resolved_models[0].endpoint = Some(endpoint("https://backup.example/zen/go/v1"));
+        let other = rebuild(&definition, other);
+        let stored = original.semantic_identity.as_ref().expect("identity");
+        assert_eq!(
+            stored.compare(moved.semantic_identity.as_ref().expect("identity")),
+            IdentityComparison::Stale(BTreeSet::from([IdentityComponent::ProviderEndpoint]))
+        );
+        assert_eq!(
+            moved
+                .semantic_identity
+                .as_ref()
+                .expect("identity")
+                .compare(other.semantic_identity.as_ref().expect("identity")),
+            IdentityComparison::Stale(BTreeSet::from([IdentityComponent::ProviderEndpoint]))
+        );
+    }
+
+    #[test]
+    fn a_model_change_is_reported_as_models_alone() {
+        let definition = ReviewCatalog
+            .compile(ReviewDefinitionKey::Screening)
+            .expect("definition should compile");
+        let original = manifest(&definition);
+        let mut changed = original.clone();
+        changed.resolved_models[0].model = "reasoning-next".to_owned();
+        let changed = rebuild(&definition, changed);
+        assert_eq!(
+            original
+                .semantic_identity
+                .as_ref()
+                .expect("identity")
+                .compare(changed.semantic_identity.as_ref().expect("identity")),
+            IdentityComparison::Stale(BTreeSet::from([IdentityComponent::Models]))
+        );
+    }
+
+    #[test]
+    fn the_manifest_records_only_the_normalized_endpoint() {
+        let definition = ReviewCatalog
+            .compile(ReviewDefinitionKey::Screening)
+            .expect("definition should compile");
+        let mut routed = manifest(&definition);
+        routed.resolved_models[0].endpoint = Some(endpoint(
+            "https://alice:s3cr3t-pass@Proxy.Example:443/zen/go/v1/?api_key=q-leaked-token#frag",
+        ));
+        let routed = rebuild(&definition, routed);
+        let json = serde_json::to_string(&routed).expect("manifest serializes");
+        assert!(
+            json.contains(r#""endpoint":"https://proxy.example/zen/go/v1""#),
+            "{json}"
+        );
+        assert!(!json.contains("s3cr3t-pass"), "{json}");
+        assert!(!json.contains("q-leaked-token"), "{json}");
+        assert!(!json.contains("alice"), "{json}");
+        let restored: ReviewRunManifest =
+            serde_json::from_str(&json).expect("manifest deserializes");
+        assert_eq!(restored, routed);
     }
 
     #[test]

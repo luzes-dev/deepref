@@ -280,6 +280,8 @@ where
             evidence_refs,
             usage: TokenUsage::default(),
             cost_micros: None,
+            provider_served_model: None,
+            provider_system_fingerprint: None,
             output: None,
             status: AiRunStatus::Running,
             error: None,
@@ -318,7 +320,7 @@ where
                 Ok(completion) => completion,
                 Err(error) => return Err(self.persist_failure(run, error).await),
             };
-            record_usage(&mut run, &completion);
+            record_completion(&mut run, &completion);
             let attempt = interpret_structured_response(task, &completion.output_json, &evidence);
             match attempt {
                 Ok(accepted) => break accepted,
@@ -525,7 +527,7 @@ fn schema_reason(raw: &Value, pointer: &str) -> String {
     }
 }
 
-fn record_usage(run: &mut AiRunRecord, completion: &GatewayCompletion) {
+fn record_completion(run: &mut AiRunRecord, completion: &GatewayCompletion) {
     run.usage.input_tokens = run
         .usage
         .input_tokens
@@ -537,6 +539,10 @@ fn record_usage(run: &mut AiRunRecord, completion: &GatewayCompletion) {
     if let Some(cost) = completion.cost_micros {
         run.cost_micros = Some(run.cost_micros.unwrap_or(0).saturating_add(cost));
     }
+    // The run keeps the provider's report for its most recent call, which is the call whose
+    // output it accepted. A repaired run therefore shows the repair's report.
+    run.provider_served_model = completion.served_model.clone();
+    run.provider_system_fingerprint = completion.system_fingerprint.clone();
 }
 
 /// The safe reason shown to the model when its answer is rejected. Provider

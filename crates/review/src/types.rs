@@ -221,6 +221,9 @@ pub enum ReviewBlockCode {
     CalibrationStale,
     HumanAdjudicationRequired,
     RepairBudgetExhausted,
+    /// The provider endpoint recorded when the review was scheduled is not the endpoint this
+    /// worker calls, so the model was not called.
+    ProviderEndpointMismatch,
 }
 
 impl ReviewBlockCode {
@@ -233,6 +236,7 @@ impl ReviewBlockCode {
             Self::CalibrationStale => "calibration_stale",
             Self::HumanAdjudicationRequired => "human_adjudication_required",
             Self::RepairBudgetExhausted => "repair_budget_exhausted",
+            Self::ProviderEndpointMismatch => "provider_endpoint_mismatch",
         }
     }
 
@@ -245,6 +249,7 @@ impl ReviewBlockCode {
             "calibration_stale" => Some(Self::CalibrationStale),
             "human_adjudication_required" => Some(Self::HumanAdjudicationRequired),
             "repair_budget_exhausted" => Some(Self::RepairBudgetExhausted),
+            "provider_endpoint_mismatch" => Some(Self::ProviderEndpointMismatch),
             _ => None,
         }
     }

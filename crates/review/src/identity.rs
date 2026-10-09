@@ -256,7 +256,10 @@ const SCREENING_ONLY_COMPONENTS: [IdentityComponent; 2] = [
 
 /// Components every definition has under the current scheme in addition to the
 /// declarative ones.
-const SCHEME_COMPONENTS: [IdentityComponent; 1] = [IdentityComponent::Dependencies];
+const SCHEME_COMPONENTS: [IdentityComponent; 2] = [
+    IdentityComponent::Dependencies,
+    IdentityComponent::ProviderEndpoint,
+];
 
 #[cfg(test)]
 mod tests {

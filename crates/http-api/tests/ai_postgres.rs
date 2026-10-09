@@ -67,6 +67,8 @@ impl AiGateway for TestGateway {
                 input_tokens: 7,
                 output_tokens: 11,
                 cost_micros: Some(13),
+                served_model: None,
+                system_fingerprint: None,
             })
         })
     }
@@ -97,6 +99,8 @@ impl AiGateway for SequencedGateway {
                 input_tokens: 1,
                 output_tokens: 1,
                 cost_micros: None,
+                served_model: None,
+                system_fingerprint: None,
             })
         })
     }
@@ -130,6 +134,8 @@ impl AiGateway for DedupeEchoGateway {
                 input_tokens: 1,
                 output_tokens: 1,
                 cost_micros: None,
+                served_model: None,
+                system_fingerprint: None,
             })
         })
     }

@@ -10,6 +10,7 @@ mod assistant;
 mod chat;
 mod classification;
 mod dedupe;
+mod endpoint;
 mod evals;
 mod gateway;
 mod grounding;
@@ -38,6 +39,9 @@ pub use dedupe::{
     DuplicateRationale, DuplicateSignal, DuplicateSignalKind, IdentityProvenance,
 };
 pub use deepref_domain::{Actor, ActorKind};
+pub use endpoint::{
+    ProviderEndpoint, ProviderEndpointError, provider_endpoint, register_provider_endpoint,
+};
 pub use evals::*;
 pub use gateway::{
     ANY_MODEL, AiGateway, EmbeddingGateway, RigEmbeddingGateway, RigGateway, RoutedGateway,

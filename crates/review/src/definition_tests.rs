@@ -154,6 +154,7 @@ fn manifest_input() -> ReviewManifestInput {
             model: "classifier".to_owned(),
             model_version: "v1".to_owned(),
             parameters_hash: ReviewHash::digest_bytes(b"parameters"),
+            endpoint: None,
         }],
         runtime: ReviewRuntimeIdentity {
             build_sha: ReviewHash::digest_bytes(b"build"),

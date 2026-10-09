@@ -335,6 +335,8 @@ mod tests {
                     input_tokens: 1_000_000,
                     output_tokens: 0,
                     cost_micros: None,
+                    served_model: None,
+                    system_fingerprint: None,
                 })
             })
         }

@@ -10,7 +10,8 @@ use chrono::Utc;
 use deepref_ai::{
     AiProposal, AiRunRecord, AiRunStatus, AiRunStore, AiTaskKind, AuthorityTier, DedupeInput,
     DuplicateSignal, IdentityProvenance, ModelParameters, ModelProfile, ProposalDraft,
-    ProposalStatus, ProposalStore, ResolvedModel, ScreeningStage as AiScreeningStage, TokenUsage,
+    ProposalStatus, ProposalStore, ProviderEndpoint, ResolvedModel,
+    ScreeningStage as AiScreeningStage, TokenUsage, register_provider_endpoint,
 };
 use deepref_application::{
     AutomationRunId, ProtocolCriterionCommand, PublishProtocolCommand, SaveProtocolDraftCommand,
@@ -38,7 +39,7 @@ use deepref_review::{
     ReviewRunState, ReviewScheduler, ReviewSubject, ScheduleReviewRun, SemanticIdentity,
     worker::{
         AcceptedArtifactInput, CompiledReview, ExecutedReviewTask, PreparedReviewTask,
-        ReviewExecutionPlan, ReviewHash,
+        ReviewExecutionPlan, ReviewHash, ReviewRunManifest,
     },
 };
 use serde_json::json;
@@ -61,6 +62,7 @@ async fn route_fixture_lock(pool: &PgPool) -> Transaction<'static, Postgres> {
         .expect("route fixture lock is acquired");
     transaction
 }
+
 
 #[test]
 fn postgres_adapter_implements_the_public_review_scheduler_port() {
@@ -1200,6 +1202,8 @@ async fn review_attempts_enforce_scope_lease_exact_reuse_lineage_and_immutabilit
                     output_tokens: 1,
                 },
                 cost_micros: None,
+                provider_served_model: None,
+                provider_system_fingerprint: None,
                 output: Some(serde_json::json!({"decision":"match"})),
                 status: AiRunStatus::Completed,
                 error: None,
@@ -1272,4 +1276,63 @@ async fn review_attempts_enforce_scope_lease_exact_reuse_lineage_and_immutabilit
         .await
         .expect("fixtures clean up");
     result
+}
+
+#[tokio::test]
+async fn scheduled_reviews_store_the_normalized_endpoint_of_their_route() {
+    let _lock = route_fixture_lock(&pool).await;
+    let Some(pool) = database().await else { return };
+    let project_id = ProjectId::new(Uuid::new_v4());
+    sqlx::query("INSERT INTO projects (id,name) VALUES ($1,'endpoint identity')")
+        .bind(project_id.as_uuid())
+        .execute(&pool)
+        .await
+        .expect("project inserts");
+    // A provider id used by this test only, so the process-wide endpoint registry is not shared.
+    let provider = format!("endpoint-identity-{}", Uuid::new_v4());
+    let endpoint = ProviderEndpoint::from_configured_url(
+        "https://proxy.example/zen/go/v1/?api_key=query-token-must-not-persist",
+    )
+    .expect("endpoint normalizes");
+    register_provider_endpoint(&provider, endpoint.clone()).expect("endpoint registers");
+    insert_model_route(
+        &pool,
+        &ResolvedModel {
+            profile: ModelProfile::FastClassifier,
+            provider,
+            model: "classifier".to_owned(),
+            model_version: "2026-08".to_owned(),
+            parameters: ModelParameters::default(),
+            route_id: None,
+        },
+        Utc::now(),
+    )
+    .await
+    .expect("route inserts");
+
+    let snapshot = schedule_with_origin(&pool, project_id, ReviewOrigin::ReviewerRequested)
+        .await
+        .expect("review schedules");
+    let stored: serde_json::Value = sqlx::query_scalar(
+        "SELECT manifest FROM review_run_manifests
+         WHERE project_id=$1 AND automation_run_id=$2",
+    )
+    .bind(project_id.as_uuid())
+    .bind(snapshot.id.as_uuid())
+    .fetch_one(&pool)
+    .await
+    .expect("manifest loads");
+    let rendered = stored.to_string();
+    assert!(
+        rendered.contains("\"endpoint\":\"https://proxy.example/zen/go/v1\""),
+        "{rendered}"
+    );
+    assert!(
+        !rendered.contains("query-token-must-not-persist"),
+        "{rendered}"
+    );
+    let manifest: ReviewRunManifest =
+        serde_json::from_value(stored).expect("stored manifest deserializes");
+    assert_eq!(manifest.resolved_models.len(), 1);
+    assert_eq!(manifest.resolved_models[0].endpoint, Some(endpoint));
 }
