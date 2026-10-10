@@ -9,7 +9,9 @@ mod ai_reviewer;
 mod ai_usage;
 mod appraisal;
 mod assistant;
+mod assistant_host;
 mod assistant_plans;
+mod assistant_runs;
 mod audit_export;
 mod automations;
 mod autonomy;
@@ -96,9 +98,17 @@ pub use assistant::{
     append_assistant_message, create_assistant_conversation, delete_assistant_conversation,
     get_assistant_conversation, list_assistant_conversations, list_assistant_messages,
 };
+pub use assistant_host::PostgresAssistantToolHost;
 pub use assistant_plans::{
     AssistantPlanRecord, NewAssistantPlan, claim_assistant_plan, create_assistant_plan,
     finish_assistant_plan, get_assistant_plan, update_assistant_plan_results,
+};
+pub use assistant_runs::{
+    ASSISTANT_AGENT_RUN_JOB_KIND, AssistantAgentRunRecord, AssistantAgentRunStatus,
+    AssistantRunEventRecord, ClaimedAssistantAgentRun, CompletedAssistantAgentRun,
+    NewAssistantAgentRun, append_assistant_run_event, begin_assistant_agent_run,
+    complete_assistant_agent_run, create_assistant_agent_run, fail_assistant_agent_run,
+    get_assistant_agent_run, list_assistant_run_events, submit_assistant_agent_run,
 };
 pub use audit_export::{AuditExportRow, load_audit_export_rows};
 pub use automations::{

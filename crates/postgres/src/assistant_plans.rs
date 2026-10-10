@@ -1,7 +1,7 @@
 use chrono::{DateTime, Utc};
 use serde::Serialize;
 use serde_json::Value;
-use sqlx::{PgPool, Row, postgres::PgRow};
+use sqlx::{PgPool, Postgres, Row, Transaction, postgres::PgRow};
 use uuid::Uuid;
 
 use crate::AssistantError;
@@ -75,6 +75,16 @@ pub async fn create_assistant_plan(
     pool: &PgPool,
     plan: &NewAssistantPlan,
 ) -> Result<AssistantPlanRecord, AssistantError> {
+    let mut tx = pool.begin().await?;
+    let record = create_assistant_plan_tx(&mut tx, plan).await?;
+    tx.commit().await?;
+    Ok(record)
+}
+
+pub(crate) async fn create_assistant_plan_tx(
+    tx: &mut Transaction<'_, Postgres>,
+    plan: &NewAssistantPlan,
+) -> Result<AssistantPlanRecord, AssistantError> {
     let row = sqlx::query(concat!(
         "INSERT INTO assistant_plans
            (id, project_id, conversation_id, summary, actions, created_by_kind, created_by_id,
@@ -93,7 +103,7 @@ pub async fn create_assistant_plan(
     .bind(&plan.model)
     .bind(&plan.prompt_version)
     .bind(&plan.evidence)
-    .fetch_one(pool)
+    .fetch_one(&mut **tx)
     .await?;
     Ok(plan_from_row(&row))
 }

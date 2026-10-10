@@ -21,6 +21,7 @@ deepref-review.workspace = true
 anyhow.workspace = true
 chrono.workspace = true
 lettre = { version = "0.11", default-features = false, features = ["smtp-transport", "tokio1", "tokio1-rustls", "rustls", "aws-lc-rs", "webpki-roots", "builder"] }
+rig-cassette.workspace = true
 reqwest.workspace = true
 serde.workspace = true
 serde_json.workspace = true
@@ -34,6 +35,7 @@ uuid.workspace = true
 bytes.workspace = true
 deepref-domain.workspace = true
 futures.workspace = true
+rig-core = { workspace = true, features = ["test-utils"] }
 url.workspace = true
 
 [lints]

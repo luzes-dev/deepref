@@ -1,6 +1,6 @@
 use axum::{
     Json,
-    extract::{Path, State},
+    extract::{Path, Query, State},
     http::{HeaderMap, StatusCode},
     response::sse::{Event, KeepAlive, Sse},
     response::{IntoResponse, Response},
@@ -10,7 +10,7 @@ use deepref_ai::{
     AgentDispatch, AgentProposalOperation, AgentProposalReceipt, AgentReadOperation, AgentRuntime,
     AgentTool, AgentToolError, AgentToolExecutor, AgentToolName, AssistantChatMessage,
     AssistantDispatcher, AssistantRole, AssistantStreamEvent, AssistantToolCall,
-    AssistantToolOutput, AssistantToolResult, AssistantTurnInput, BoundedAgentJson,
+    AssistantToolOutput, AssistantToolResult, AssistantTurnInput, BoundedAgentJson, ModelRouter,
     run_assistant_react_turn,
 };
 use deepref_domain::{
@@ -29,7 +29,6 @@ use crate::{
     error::{ApiError, ErrorResponse},
     state::AppState,
 };
-mod agent;
 mod plans;
 
 pub(crate) use plans::*;
@@ -38,6 +37,8 @@ const MAX_BLOCK_TEXT_CHARS: usize = 2_000;
 const MAX_REPORT_ABSTRACT_CHARS: usize = 4_000;
 /// Longest chat message accepted from the user, in characters.
 pub(crate) const MAX_ASSISTANT_MESSAGE_CHARS: usize = 4_000;
+/// Assistant sampling temperature, shared by HTTP submission and the worker.
+const ASSISTANT_TEMPERATURE: f32 = 0.2;
 
 #[derive(Debug, Clone, Copy, Serialize, ToSchema)]
 #[serde(rename_all = "snake_case")]
@@ -897,6 +898,38 @@ pub(crate) struct AssistantChatRequestDto {
     message: String,
 }
 
+#[derive(Debug, Serialize, ToSchema)]
+pub(crate) struct AssistantRunDto {
+    pub id: Uuid,
+    pub conversation_id: Uuid,
+    pub project_id: Uuid,
+    pub trigger_message_id: Uuid,
+    pub status: String,
+    pub answer_message_id: Option<Uuid>,
+    pub plan_id: Option<Uuid>,
+    #[schema(value_type = Object)]
+    pub error: Option<Value>,
+    pub created_at: DateTime<Utc>,
+    pub updated_at: DateTime<Utc>,
+    pub completed_at: Option<DateTime<Utc>>,
+}
+
+fn run_dto(record: &deepref_postgres::AssistantAgentRunRecord) -> AssistantRunDto {
+    AssistantRunDto {
+        id: record.id,
+        conversation_id: record.conversation_id,
+        project_id: record.project_id,
+        trigger_message_id: record.trigger_message_id,
+        status: record.status.as_str().to_owned(),
+        answer_message_id: record.answer_message_id,
+        plan_id: record.plan_id,
+        error: record.error.clone(),
+        created_at: record.created_at,
+        updated_at: record.updated_at,
+        completed_at: record.completed_at,
+    }
+}
+
 fn conversation_dto(
     record: &deepref_postgres::AssistantConversationRecord,
 ) -> AssistantConversationDto {
@@ -1358,11 +1391,11 @@ pub(crate) async fn chat(
         .await
         .map_err(map_conversation_error)?;
     let free_form = !is_tool_command(&user_message);
-    let agent_setup = if free_form {
-        Some(agent::prepare_agent_turn(&state, project_id).await?)
-    } else {
-        None
-    };
+    if free_form {
+        return chat_durable(state, project_id, actor, body.conversation_id, user_message)
+            .await
+            .map(|dto| (StatusCode::ACCEPTED, Json(dto)).into_response());
+    }
     let history_records =
         deepref_postgres::list_assistant_messages(&state.pool, body.conversation_id)
             .await
@@ -1391,23 +1424,9 @@ pub(crate) async fn chat(
     let (result_tx, result_rx) = tokio::sync::oneshot::channel();
     let turn_project_id = ProjectId::new(project_id);
     let turn_state = state.clone();
+    // Only deterministic tool commands reach this synchronous path now;
+    // free-form turns run durably in the worker (see chat_durable).
     tokio::spawn(async move {
-        if let Some(setup) = agent_setup {
-            let outcome = agent::run_agent_turn(
-                &turn_state,
-                setup,
-                actor,
-                turn_project_id,
-                body.conversation_id,
-                &history_records,
-                &user_message,
-                &event_tx,
-            )
-            .await;
-            drop(event_tx);
-            let _ = result_tx.send(outcome);
-            return;
-        }
         let dispatcher = ConversationAgentDispatcher {
             project_id: turn_project_id,
             state: turn_state.clone(),
@@ -1466,6 +1485,275 @@ pub(crate) async fn chat(
             ))
         }
     }
+}
+
+/// Durable free-form turn: persist the user message, the queued run and the
+/// durable job in one transaction, then return the run identity. Execution
+/// belongs to the worker; a browser disconnect cannot cancel it.
+async fn chat_durable(
+    state: AppState,
+    project_id: Uuid,
+    actor: Actor,
+    conversation_id: Uuid,
+    user_message: String,
+) -> Result<AssistantRunDto, ApiError> {
+    if !state.ai_info.configured {
+        return Err(ApiError::Configuration(
+            "The assistant needs an AI provider, which is not configured for this workspace."
+                .to_owned(),
+        ));
+    }
+    let mut route = deepref_postgres::PostgresAiStore::new(&state.pool)
+        .resolve(deepref_ai::ModelProfile::Reasoning)
+        .await
+        .map_err(|_| {
+            ApiError::Configuration("No AI model is configured for the assistant.".to_owned())
+        })?;
+    route.parameters.temperature = Some(ASSISTANT_TEMPERATURE);
+    let budget = deepref_postgres::get_ai_budget(&state.pool, project_id)
+        .await
+        .map_err(|error| match error {
+            deepref_postgres::AiUsageError::ProjectNotFound => {
+                ApiError::NotFound("project not found".to_owned())
+            }
+            _ => ApiError::Internal(anyhow::anyhow!("AI budget lookup failed")),
+        })?;
+    if budget.exhausted() {
+        return Err(budget_exceeded_error());
+    }
+    let model_route = serde_json::to_value(&route)
+        .map_err(|_| ApiError::Internal(anyhow::anyhow!("assistant route is not serializable")))?;
+    let run = deepref_postgres::submit_assistant_agent_run(
+        &state.pool,
+        project_id,
+        conversation_id,
+        &user_message,
+        actor.kind().as_str(),
+        actor.id(),
+        &model_route,
+        deepref_ai::ASSISTANT_PROMPT_VERSION,
+    )
+    .await
+    .map_err(map_conversation_error)?;
+    Ok(run_dto(&run))
+}
+
+#[derive(Debug, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct AssistantRunEventsQuery {
+    after_seq: Option<i64>,
+}
+
+#[utoipa::path(
+    get,
+    path = "/projects/{project_id}/assistant/runs/{run_id}",
+    operation_id = "getAssistantRun",
+    tag = "assistant",
+    params(("project_id" = Uuid, Path), ("run_id" = Uuid, Path)),
+    responses(
+        (status = 200, description = "Assistant run", body = AssistantRunDto),
+        (status = 404, description = "Run not found", body = ErrorResponse),
+    )
+)]
+pub(crate) async fn get_run(
+    State(state): State<AppState>,
+    Path((project_id, run_id)): Path<(Uuid, Uuid)>,
+) -> Result<Json<AssistantRunDto>, ApiError> {
+    validate_project_id(project_id)?;
+    let record = deepref_postgres::get_assistant_agent_run(&state.pool, run_id)
+        .await
+        .map_err(|error| ApiError::Internal(anyhow::anyhow!(error)))?;
+    match record.filter(|record| record.project_id == project_id) {
+        Some(record) => Ok(Json(run_dto(&record))),
+        None => Err(ApiError::NotFound("assistant run not found".to_owned())),
+    }
+}
+
+/// Observes a durable run over persisted events. The browser reconnects with
+/// `after_seq` and replays what it missed; the worker owns execution, so a
+/// disconnect never cancels the run.
+#[utoipa::path(
+    get,
+    path = "/projects/{project_id}/assistant/runs/{run_id}/events",
+    operation_id = "streamAssistantRunEvents",
+    tag = "assistant",
+    params(("project_id" = Uuid, Path), ("run_id" = Uuid, Path)),
+    responses(
+        (status = 200, description = "Server-sent run events", content_type = "text/event-stream", body = String),
+        (status = 404, description = "Run not found", body = ErrorResponse),
+    )
+)]
+pub(crate) async fn stream_run_events(
+    State(state): State<AppState>,
+    Path((project_id, run_id)): Path<(Uuid, Uuid)>,
+    Query(query): Query<AssistantRunEventsQuery>,
+) -> Result<Response, ApiError> {
+    validate_project_id(project_id)?;
+    let record = deepref_postgres::get_assistant_agent_run(&state.pool, run_id)
+        .await
+        .map_err(|error| ApiError::Internal(anyhow::anyhow!(error)))?;
+    let record = match record.filter(|record| record.project_id == project_id) {
+        Some(record) => record,
+        None => return Err(ApiError::NotFound("assistant run not found".to_owned())),
+    };
+    let terminal = record.status.terminal();
+    let stream = futures::stream::unfold(
+        RunEventPoll {
+            state,
+            project_id,
+            run_id,
+            after_seq: query.after_seq.unwrap_or(-1),
+            terminal,
+            buffer: std::collections::VecDeque::new(),
+        },
+        |mut poll: RunEventPoll| async move {
+            loop {
+                if let Some(frame) = poll.buffer.pop_front() {
+                    return Some((frame, poll));
+                }
+                let events = deepref_postgres::list_assistant_run_events(
+                    &poll.state.pool,
+                    poll.run_id,
+                    poll.after_seq,
+                    200,
+                )
+                .await
+                .unwrap_or_default();
+                for event in &events {
+                    poll.after_seq = poll.after_seq.max(event.seq);
+                    if let Some(frame) =
+                        run_event_frame(&poll.state.pool, poll.project_id, event).await
+                    {
+                        if event.kind == "done" || event.kind == "error" {
+                            poll.terminal = true;
+                        }
+                        poll.buffer.push_back(frame);
+                    }
+                }
+                if poll.buffer.is_empty() && poll.terminal {
+                    return None;
+                }
+                if poll.buffer.is_empty() {
+                    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+                }
+            }
+        },
+    );
+    Ok(Sse::new(stream)
+        .keep_alive(KeepAlive::default())
+        .into_response())
+}
+
+struct RunEventPoll {
+    state: AppState,
+    project_id: Uuid,
+    run_id: Uuid,
+    after_seq: i64,
+    terminal: bool,
+    buffer: std::collections::VecDeque<Result<Event, std::convert::Infallible>>,
+}
+
+/// Maps one persisted run event onto the assistant wire contract. The `plan`
+/// row carries only the plan id; the full plan is fetched for the frame.
+async fn run_event_frame(
+    pool: &sqlx::PgPool,
+    project_id: Uuid,
+    event: &deepref_postgres::AssistantRunEventRecord,
+) -> Option<Result<Event, std::convert::Infallible>> {
+    let payload = &event.payload;
+    let frame = match event.kind.as_str() {
+        "status" => stream_event_frame(&AssistantStreamEvent::Status {
+            message: payload
+                .get("message")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_owned(),
+        }),
+        "text" => stream_event_frame(&AssistantStreamEvent::Token {
+            delta: payload
+                .get("delta")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_owned(),
+        }),
+        "replace" => stream_event_frame(&AssistantStreamEvent::Replace {
+            text: payload
+                .get("text")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_owned(),
+        }),
+        "tool_start" => stream_event_frame(&AssistantStreamEvent::ToolStart {
+            tool: payload
+                .get("tool")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_owned(),
+            tool_call_id: payload
+                .get("tool_call_id")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_owned(),
+            args: payload.get("args").cloned().unwrap_or(Value::Null),
+        }),
+        "tool_complete" => stream_event_frame(&AssistantStreamEvent::ToolComplete {
+            tool: payload
+                .get("tool")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_owned(),
+            tool_call_id: payload
+                .get("tool_call_id")
+                .and_then(Value::as_str)
+                .unwrap_or_default()
+                .to_owned(),
+            output: payload.get("output").cloned().unwrap_or(Value::Null),
+        }),
+        "plan" => {
+            let plan_id = payload
+                .get("plan_id")
+                .and_then(Value::as_str)
+                .and_then(|id| Uuid::parse_str(id).ok());
+            let mut plan_value = None;
+            if let Some(plan_id) = plan_id
+                && let Ok(Some(plan)) =
+                    deepref_postgres::get_assistant_plan(pool, project_id, plan_id).await
+            {
+                plan_value = serde_json::to_value(plans::plan_dto(&plan)).ok();
+            }
+            stream_event_frame(&AssistantStreamEvent::PlanProposed {
+                plan: plan_value.unwrap_or(Value::Null),
+            })
+        }
+        "done" => stream_event_frame(&AssistantStreamEvent::Done {
+            message_id: payload
+                .get("message_id")
+                .and_then(Value::as_str)
+                .and_then(|id| Uuid::parse_str(id).ok())
+                .unwrap_or_default(),
+            input_tokens: payload
+                .get("input_tokens")
+                .and_then(Value::as_u64)
+                .unwrap_or(0),
+            output_tokens: payload
+                .get("output_tokens")
+                .and_then(Value::as_u64)
+                .unwrap_or(0),
+        }),
+        "error" => {
+            let code = payload
+                .get("code")
+                .and_then(Value::as_str)
+                .unwrap_or_default();
+            let message = payload
+                .get("message")
+                .and_then(Value::as_str)
+                .unwrap_or("assistant turn failed");
+            sse_frame("error", &json!({ "code": code, "message": message }))
+        }
+        _ => return None,
+    };
+    Some(frame)
 }
 
 #[cfg(test)]

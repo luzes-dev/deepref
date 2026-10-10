@@ -1192,3 +1192,35 @@ async fn cassette_replays_rejected_tool_arguments() {
     let (replayed, _) = replay_cassette(&cassette, FakeHost::default(), "exclude it").await;
     assert_same_outcome(&recorded, &replayed);
 }
+
+#[tokio::test]
+async fn dropping_observation_does_not_cancel_the_run() {
+    // The channel split: execution proceeds even when nobody observes.
+    let context = test_context();
+    let model = MockCompletionModel::from_stream_turns(vec![
+        stream_call("c1", "get_project_overview", json!({})),
+        text_turn("Done."),
+    ]);
+    let factory = Arc::new(StaticModelFactory::new(model.erase()));
+    let host = FakeHost::default().with_read("get_project_overview", json!({"reports": 1}));
+    let (future, events) = run_rig_turn_channel(RigTurn {
+        factory,
+        run_id: Uuid::new_v4(),
+        semantic_contract_id: None,
+        build_provenance: None,
+        context,
+        history: Vec::new(),
+        user_message: "go".to_owned(),
+        host: Arc::new(host),
+        ledger: Arc::new(FakeLedger::default()),
+        prices: PriceBook::default(),
+        config: test_config(),
+        recorder: None,
+        progress: None,
+    })
+    .expect("channel splits");
+    drop(events);
+    let outcome = future.await.expect("unobserved run still completes");
+    assert_eq!(outcome.reply, "Done.");
+    assert_eq!(outcome.trace.len(), 1);
+}

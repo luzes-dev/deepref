@@ -74,6 +74,8 @@ fn openapi_router(document_max_bytes: usize) -> OpenApiRouter<AppState> {
             assistant::delete_conversation
         ))
         .routes(routes!(assistant::chat))
+        .routes(routes!(assistant::get_run))
+        .routes(routes!(assistant::stream_run_events))
         .routes(routes!(assistant::get_plan))
         .routes(routes!(assistant::confirm_plan))
         .routes(routes!(assistant::reject_plan))
@@ -372,6 +374,8 @@ mod tests {
             "/projects/{project_id}/assistant/conversations/{conversation_id}",
             "/projects/{project_id}/assistant/conversations/{conversation_id}/messages",
             "/projects/{project_id}/assistant/chat",
+            "/projects/{project_id}/assistant/runs/{run_id}",
+            "/projects/{project_id}/assistant/runs/{run_id}/events",
             "/ingestions",
             "/ingestions/{ingestion_id}",
             "/ingestions/{ingestion_id}/items",
@@ -531,6 +535,16 @@ mod tests {
                 "/projects/{project_id}/assistant/tools/execute",
                 "post",
                 "executeProjectAssistantTool",
+            ),
+            (
+                "/projects/{project_id}/assistant/runs/{run_id}",
+                "get",
+                "getAssistantRun",
+            ),
+            (
+                "/projects/{project_id}/assistant/runs/{run_id}/events",
+                "get",
+                "streamAssistantRunEvents",
             ),
         ] {
             let operation = match method {

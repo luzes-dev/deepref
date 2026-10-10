@@ -44,6 +44,7 @@ serde_urlencoded = "0.7"
 [dev-dependencies]
 csv.workspace = true
 deepref-worker = { version = "0.1.0", path = "../../services/worker" }
+rig-core = { workspace = true, features = ["test-utils"] }
 tower.workspace = true
 
 [lints]

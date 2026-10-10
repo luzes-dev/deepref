@@ -10,6 +10,7 @@ use tokio::{
     task::JoinSet,
 };
 
+pub mod assistant;
 pub mod config;
 pub mod delivery;
 pub mod enrichment;
