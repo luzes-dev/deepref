@@ -6,6 +6,12 @@
 //! * budget: checked before the run and before every model call; exhaustion
 //!   stops the run with [`BUDGET_STOP_REASON`], which the turn driver maps
 //!   to [`AiError::BudgetExceeded`].
+//! * token cap: checked before every model call AND after every model turn.
+//!   The pre-call check stops the next call; the post-turn check stops a run
+//!   whose latest turn just spent past `max_total_tokens`, so a tool-free
+//!   turn cannot buy one more call (not even the plan-consistency re-prompt).
+//!   Tool-bearing turns still continue so their already-requested tools run;
+//!   stopping there would drop committed work the trace must keep.
 //! * usage: every model turn's reported tokens are priced with DeepRef's
 //!   price book and recorded in the usage ledger (bookkeeping never fails
 //!   the turn, mirroring `MeteredGateway`).
@@ -210,6 +216,24 @@ impl AgentHook for DeepRefHooks {
                 has_tool_calls = has_calls,
                 "assistant model turn finished"
             );
+            // Token cap first: the pre-call hook can only refuse the *next*
+            // call, so a turn that just spent past the cap must stop here —
+            // otherwise the consistency re-prompt below would issue one more
+            // model call while already over budget. Tool-bearing turns are
+            // exempt: their tools were already requested and must still run
+            // (the pre-call hook stops the run before the following call).
+            // Token cap first: the pre-call hook can only refuse the *next*
+            // call, so a turn that just spent past the cap must stop here —
+            // otherwise the consistency re-prompt below would issue one more
+            // model call while already over budget. Tool-bearing turns are
+            // exempt: their tools were already requested and must still run
+            // (the pre-call hook stops the run before the following call).
+            if !has_calls {
+                let spent = hooks.usage();
+                if spent.input_tokens + spent.output_tokens >= hooks.config.max_total_tokens {
+                    return ModelTurnAction::Stop(TOKEN_STOP_REASON.to_owned());
+                }
+            }
             // Plan consistency: a tool-free reply claiming a queued change
             // with no plan action gets one corrective re-prompt; a surviving
             // claim is annotated by the turn driver afterwards.

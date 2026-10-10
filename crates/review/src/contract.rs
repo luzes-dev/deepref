@@ -408,6 +408,14 @@ impl ReviewSemanticContract {
     /// map ordering cannot affect it. Used for database indexes, dedupe,
     /// comparisons and compact logs; compatibility decisions compare the
     /// structured contract, not this string.
+    ///
+    /// Deliberately explicit, not macro-generated (see also [`compare`]):
+    /// every consequential field must visibly appear here AND in `compare`.
+    /// A field table or derive macro could silently drop a field on refactor —
+    /// changing calibration identity without a compile error — while this
+    /// repetition forces the author to touch both lists together. Auditors
+    /// diff these two lists to prove id coverage matches comparison coverage;
+    /// keep them in sync by hand, on purpose.
     pub fn id(&self) -> SemanticContractId {
         let mut hasher = SemanticHasher::new("deepref-review-contract-v1");
         hasher
@@ -435,6 +443,11 @@ impl ReviewSemanticContract {
     /// naming every consequential change. A scheme mismatch is not
     /// comparable: it reports an empty change set, and admission treats that
     /// as an incompatible recipe rather than a known change.
+    ///
+    /// Deliberately explicit, not macro-generated (see also [`id`]): each arm
+    /// names its [`SemanticChange`] so a new consequential field cannot be
+    /// added to the struct without a visible decision here about which change
+    /// it reports. Keep this list in sync with `id` by hand, on purpose.
     pub fn compare(&self, current: &Self) -> CalibrationCompatibility {
         if self.scheme != current.scheme {
             return CalibrationCompatibility::Incompatible {

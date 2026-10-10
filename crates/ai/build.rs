@@ -1,6 +1,12 @@
 //! Emits the exact Rig versions this crate builds against, for cassette
 //! provenance (`DEEPREF_RIG_VERSIONS`, e.g. `rig-agent 0.44.0, rig-core
 //! 0.44.0, rig-cassette 0.44.0`).
+//!
+//! Lockfile semantic (shared with `crates/review/build.rs`): several
+//! resolved copies of one crate are joined with `+` rather than hidden or
+//! fatal. Provenance must record ambiguity, never break the build over it;
+//! a single resolved copy — the current tree — emits the bare version,
+//! exactly as before.
 
 use std::{env, error::Error, fs, path::PathBuf};
 
@@ -27,8 +33,9 @@ fn main() -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
-/// The exact `Cargo.lock` version of one crate. Fails the build when several
-/// copies resolve, instead of recording an ambiguous version.
+/// The exact `Cargo.lock` version(s) of one crate, for provenance.
+/// Several resolved copies are joined with `+` rather than hidden: the same
+/// semantic as `crates/review/build.rs::lockfile_version`.
 fn lock_version(lock: &str, name: &str) -> Result<String, Box<dyn Error>> {
     let mut versions = Vec::new();
     let mut lines = lock.lines().peekable();
@@ -57,9 +64,8 @@ fn lock_version(lock: &str, name: &str) -> Result<String, Box<dyn Error>> {
     }
     versions.sort();
     versions.dedup();
-    if versions.len() == 1 {
-        Ok(versions.into_iter().next().unwrap_or_default())
-    } else {
-        Err(format!("Cargo.lock has {} copies of `{name}`", versions.len()).into())
+    if versions.is_empty() {
+        return Err(format!("Cargo.lock has no package `{name}`").into());
     }
+    Ok(versions.join("+"))
 }

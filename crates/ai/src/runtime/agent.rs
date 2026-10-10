@@ -24,22 +24,23 @@ use rig_core::{
     message::AssistantContent,
     operation::Completion,
     streaming::{Item, StreamEvent},
-    tool::ToolContext,
 };
 use serde_json::Value;
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
 
 use uuid::Uuid;
 
+pub use super::builder::DEEPREF_ASSISTANT_OWNER;
+use super::builder::{assistant_runner, configure_assistant_builder, history_to_messages};
 use crate::{
     AgentLoopConfig, AiError, AssistantStreamEvent, ChatMessage, ChatToolCall, PlanAction,
-    PriceBook, ToolTraceEntry, UsageLedger, assistant_system_prompt, claims_pending_change,
+    PriceBook, ToolTraceEntry, UsageLedger, claims_pending_change,
     runtime::{
         cassette::AssistantCassette,
         context::{AssistantToolHost, DeepRefAgentContext},
         hooks::{BUDGET_STOP_REASON, DeepRefHooks, TOKEN_STOP_REASON},
         model::AgentModelFactory,
-        tools::{PlanCollector, ToolHostScope, deepref_dynamic_tools},
+        tools::{PlanCollector, ToolHostScope},
     },
 };
 
@@ -101,6 +102,12 @@ pub struct RigTurnOutcome {
 
 /// Runs the turn to completion, driving observation inline. For separate
 /// execution/observation lifetimes use [`run_rig_turn_channel`].
+///
+/// This is a thin drain over [`run_rig_turn_channel`]: the channel is the
+/// single observation path and the [`Driver`] below owns the only tool-call
+/// pairing set. Inline progress is a pure sink over channel events — it keeps
+/// no pairing state — and `on_tool` replays the settled trace the driver
+/// already paired, so observers see exactly the persisted entries.
 pub async fn run_rig_turn(
     mut turn: RigTurn<'_>,
     mut on_tool: impl FnMut(&ToolTraceEntry) + Send,
@@ -108,8 +115,7 @@ pub async fn run_rig_turn(
     let progress = turn.progress.take();
     let (future, mut events) = run_rig_turn_channel(turn)?;
     tokio::pin!(future);
-    let mut pending_progress = progress;
-    let mut pending_calls: Vec<ChatToolCall> = Vec::new();
+    let mut sink = ProgressSink::new(progress);
     let result = loop {
         tokio::select! {
             settled = &mut future => break settled,
@@ -117,7 +123,7 @@ pub async fn run_rig_turn(
                 // A closed receiver without settlement just means observation
                 // ended early; the run still settles. Never break here.
                 if let Some(event) = event {
-                    forward_event(event, &mut pending_progress, &mut pending_calls, &mut on_tool);
+                    sink.push(event);
                 }
             }
         }
@@ -125,14 +131,19 @@ pub async fn run_rig_turn(
     // The relay drains the same way: events queued behind the settlement
     // still reach the observer.
     while let Ok(event) = events.try_recv() {
-        forward_event(
-            event,
-            &mut pending_progress,
-            &mut pending_calls,
-            &mut on_tool,
-        );
+        sink.push(event);
     }
-    result
+    // Single pairing point: the driver's trace. Live `ToolComplete` events
+    // carry no arguments, so pairing them here would need a second
+    // pending-set duplicating the driver's; replaying the settled trace
+    // instead reports exactly the persisted entries, in commit order. (The
+    // removed `forward_event` additionally fabricated null-argument entries
+    // for unpaired completes — entries the persisted trace never had.)
+    let outcome = result?;
+    for entry in &outcome.trace {
+        on_tool(entry);
+    }
+    Ok(outcome)
 }
 
 /// Builds the agent and splits execution from observation. The future drives
@@ -154,70 +165,53 @@ pub fn run_rig_turn_channel(
     Ok((future, progress_rx))
 }
 
-/// Forwards one driver-emitted event to inline progress observation,
-/// tracking tool calls so completed entries keep their arguments.
-fn forward_event(
-    event: AssistantStreamEvent,
-    progress: &mut Option<&mut (dyn AgentProgress + Send)>,
-    pending_calls: &mut Vec<ChatToolCall>,
-    on_tool: &mut (impl FnMut(&ToolTraceEntry) + Send),
-) {
-    match event {
-        AssistantStreamEvent::Token { delta } => {
-            if let Some(progress) = progress.as_mut() {
-                progress.text_delta(&delta);
-            }
-        }
-        AssistantStreamEvent::Replace { .. } => {
-            if let Some(progress) = progress.as_mut() {
-                progress.text_discarded();
-            }
-        }
-        AssistantStreamEvent::ToolStart {
-            tool,
-            tool_call_id,
-            args,
-        } => {
-            let call = ChatToolCall {
-                id: tool_call_id,
-                name: tool,
-                arguments: args,
-            };
-            if let Some(progress) = progress.as_mut() {
-                progress.tool_started(&call);
-            }
-            pending_calls.push(call);
-        }
-        AssistantStreamEvent::ToolComplete {
-            tool,
-            tool_call_id,
-            output,
-        } => {
-            if let Some(index) = pending_calls
-                .iter()
-                .position(|call| call.id == tool_call_id)
-            {
-                let call = pending_calls.remove(index);
-                on_tool(&ToolTraceEntry { call, output });
-            } else {
-                on_tool(&ToolTraceEntry {
-                    call: ChatToolCall {
-                        id: tool_call_id,
-                        name: tool,
-                        arguments: Value::Null,
-                    },
-                    output,
-                });
-            }
-        }
-        _ => {}
-    }
+/// Inline progress over the single channel path. Maps channel events onto
+/// [`AgentProgress`] without any tool-call pairing state: `AgentProgress` is
+/// a display sink, not a second observer — the [`Driver`] owns the only
+/// pending-set, and `on_tool` replays its settled trace.
+///
+/// The trait itself is kept (rather than deleted) because [`RigTurn::progress`]
+/// is constructed by the durable worker (`services/worker`, owned by another
+/// agent): removing the field would break that crate. The channel stays the
+/// observed path; this sink only adapts it.
+struct ProgressSink<'a> {
+    progress: Option<&'a mut (dyn AgentProgress + Send)>,
 }
 
-/// Stable owner naming this assistant's bus keys (`<owner>/model:…`,
-/// `<owner>/tool:…`). Replay requires the same owner at record and replay
-/// time; a process-local counter would break cross-process compatibility.
-pub const DEEPREF_ASSISTANT_OWNER: &str = "deepref-assistant";
+impl<'a> ProgressSink<'a> {
+    fn new(progress: Option<&'a mut (dyn AgentProgress + Send)>) -> Self {
+        Self { progress }
+    }
+
+    fn push(&mut self, event: AssistantStreamEvent) {
+        match event {
+            AssistantStreamEvent::Token { delta } => {
+                if let Some(progress) = self.progress.as_mut() {
+                    progress.text_delta(&delta);
+                }
+            }
+            AssistantStreamEvent::Replace { .. } => {
+                if let Some(progress) = self.progress.as_mut() {
+                    progress.text_discarded();
+                }
+            }
+            AssistantStreamEvent::ToolStart {
+                tool,
+                tool_call_id,
+                args,
+            } => {
+                if let Some(progress) = self.progress.as_mut() {
+                    progress.tool_started(&ChatToolCall {
+                        id: tool_call_id,
+                        name: tool,
+                        arguments: args,
+                    });
+                }
+            }
+            _ => {}
+        }
+    }
+}
 
 struct BuiltTurn {
     agent: Agent,
@@ -240,15 +234,7 @@ fn build_turn(turn: RigTurn<'_>) -> Result<BuiltTurn, AiError> {
     let plans = PlanCollector::new();
     let scope = ToolHostScope::new(turn.context.clone(), turn.host.clone(), plans);
     let hooks = DeepRefHooks::new(scope.clone(), turn.ledger.clone(), turn.prices, turn.config);
-    let history = turn
-        .history
-        .iter()
-        .filter_map(|message| match message {
-            ChatMessage::User(text) => Some(Message::user(text.clone())),
-            ChatMessage::Assistant { content, .. } => Some(Message::assistant(content.clone())),
-            ChatMessage::System(_) | ChatMessage::Tool { .. } => None,
-        })
-        .collect();
+    let history = history_to_messages(&turn.history);
     let agent = build_live_agent(
         model,
         &turn.context,
@@ -272,9 +258,9 @@ fn build_turn(turn: RigTurn<'_>) -> Result<BuiltTurn, AiError> {
     })
 }
 
-/// Assembles the live assistant agent: preamble, model parameters, the
-/// DeepRef tool catalog, DeepRef hooks, a stable owner and optional
-/// cassette recording.
+/// Assembles the live assistant agent through the shared builder: the same
+/// preamble, tool catalog, hooks and parameters the replay agent gets. Only
+/// the bus (own, with optional recording) differs.
 fn build_live_agent(
     model: DynModel<Completion>,
     context: &DeepRefAgentContext,
@@ -283,29 +269,8 @@ fn build_live_agent(
     config: AgentLoopConfig,
     recorder: Option<rig_cassette::effect_log::EffectLogRecorder>,
 ) -> Agent {
-    let mut builder = AgentBuilder::new(model)
-        .owner(DEEPREF_ASSISTANT_OWNER)
-        .preamble(assistant_system_prompt(context.project_id))
-        .max_tokens(u64::from(config.max_output_tokens_per_call))
-        .dynamic_tools(deepref_dynamic_tools(scope))
-        .add_hook(hooks);
-    if let Some(temperature) = context.route.parameters.temperature {
-        builder = builder.temperature(f64::from(temperature));
-    }
-    if let Some(top_p) = context.route.parameters.top_p {
-        builder = builder.top_p(f64::from(top_p));
-    }
-    if !context.route.parameters.additional.is_empty() {
-        builder = builder.additional_params(Value::Object(
-            context
-                .route
-                .parameters
-                .additional
-                .clone()
-                .into_iter()
-                .collect(),
-        ));
-    }
+    let builder =
+        configure_assistant_builder(AgentBuilder::new(model), context, scope, hooks, config);
     match recorder {
         Some(recorder) => builder.record_to(recorder).build(),
         None => builder.build(),
@@ -329,15 +294,13 @@ async fn drive_turn(
     built: BuiltTurn,
     progress_tx: UnboundedSender<AssistantStreamEvent>,
 ) -> Result<RigTurnOutcome, AiError> {
-    let tool_scope: Arc<dyn std::any::Any + Send + Sync> = Arc::new(built.scope.clone());
-    let runner = built
-        .agent
-        .prompt(Message::user(built.user_message.clone()))
-        .history(built.history.clone())
-        .max_turns(built.config.max_steps)
-        .tool_context(ToolContext::new().with_scope(tool_scope))
-        .tool_concurrency(1)
-        .max_invalid_tool_call_retries(built.config.max_steps);
+    let runner = assistant_runner(
+        &built.agent,
+        built.user_message.clone(),
+        built.history.clone(),
+        &built.scope,
+        built.config,
+    );
     let mut outcome = run_assistant_runner(
         built.scope.clone(),
         built.hooks.clone(),
