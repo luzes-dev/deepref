@@ -1,6 +1,6 @@
 <script lang="ts">
 	import type { PDFPageProxy } from 'pdfjs-dist/types/src/display/api';
-	import type { DocumentBlockDto, DocumentPageDto } from '$lib/api/generated/models';
+	import type { DocumentBlockDto, DocumentPageDto } from '#lib/api/generated/models/index.js';
 	import EvidenceOverlay from './EvidenceOverlay.svelte';
 
 	let {

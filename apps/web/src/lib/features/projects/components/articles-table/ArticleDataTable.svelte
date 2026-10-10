@@ -12,10 +12,10 @@
 		type Updater,
 		type VisibilityState
 	} from '@tanstack/table-core';
-	import type { ReportDto } from '$lib/api/generated/models';
+	import type { ReportDto } from '#lib/api/generated/models/index.js';
 	import { createSvelteTable, FlexRender } from '@deepref/ui/data-table';
 	import * as Table from '@deepref/ui/table';
-	import { cn } from '$lib/utils.js';
+	import { cn } from '#lib/utils.js';
 	import ArticleDataTablePagination from './ArticleDataTablePagination.svelte';
 	import ArticleDataTableToolbar from './ArticleDataTableToolbar.svelte';
 	import { createArticleColumns } from './columns.js';

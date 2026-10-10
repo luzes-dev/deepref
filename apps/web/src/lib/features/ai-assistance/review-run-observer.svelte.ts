@@ -1,5 +1,5 @@
-import { getReviewRun } from '$lib/api/generated/ai/ai';
-import type { ReviewRunDto, ReviewRunStateDto } from '$lib/api/generated/models';
+import { getReviewRun } from '#lib/api/generated/ai/ai.js';
+import type { ReviewRunDto, ReviewRunStateDto } from '#lib/api/generated/models/index.js';
 import { useInterval } from 'runed';
 
 type TerminalCallback = (proposalId: string) => void | Promise<void>;

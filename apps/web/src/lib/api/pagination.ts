@@ -1,7 +1,7 @@
-import type { listIngestionsResponseSuccess } from '$lib/api/generated/ingestions/ingestions';
-import { getListIngestionsUrl } from '$lib/api/generated/ingestions/ingestions';
-import { getListProjectsUrl } from '$lib/api/generated/projects/projects';
-import type { listProjectsResponseSuccess } from '$lib/api/generated/projects/projects';
+import type { listIngestionsResponseSuccess } from '#lib/api/generated/ingestions/ingestions.js';
+import { getListIngestionsUrl } from '#lib/api/generated/ingestions/ingestions.js';
+import { getListProjectsUrl } from '#lib/api/generated/projects/projects.js';
+import type { listProjectsResponseSuccess } from '#lib/api/generated/projects/projects.js';
 import { customFetch } from './custom-fetch';
 
 export const API_PAGE_LIMIT = 50;

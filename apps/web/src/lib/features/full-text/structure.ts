@@ -1,4 +1,4 @@
-import type { DocumentBlockDto, DocumentSectionDto } from '$lib/api/generated/models';
+import type { DocumentBlockDto, DocumentSectionDto } from '#lib/api/generated/models/index.js';
 
 /**
  * The first evidence block that belongs to a parsed section, in reading order.

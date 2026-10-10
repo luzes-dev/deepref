@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { AppraisalDefinitionDto } from '$lib/api/generated/models';
+import type { AppraisalDefinitionDto } from '#lib/api/generated/models/index.js';
 import { applicabilityStatus, designLabel } from './applicability';
 
 function definition(designs: string[]): AppraisalDefinitionDto {

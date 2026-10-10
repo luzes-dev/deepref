@@ -15,10 +15,10 @@
 		getListProjectWorkflowRunsQueryKey,
 		getListWorkflowsQueryKey,
 		startWorkflowRun
-	} from '$lib/api/generated/automations/automations';
-	import type { WorkflowDto } from '$lib/api/generated/models';
-	import { notifyError, notifySuccess } from '$lib/features/notifications/toast';
-	import PageTemplate from '$lib/shell/PageTemplate.svelte';
+	} from '#lib/api/generated/automations/automations.js';
+	import type { WorkflowDto } from '#lib/api/generated/models/index.js';
+	import { notifyError, notifySuccess } from '#lib/features/notifications/toast.js';
+	import PageTemplate from '#lib/shell/PageTemplate.svelte';
 	import * as Dialog from '@deepref/ui/dialog';
 	import { Badge } from '@deepref/ui/badge';
 	import { Button } from '@deepref/ui/button';

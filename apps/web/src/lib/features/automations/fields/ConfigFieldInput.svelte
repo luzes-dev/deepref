@@ -6,7 +6,7 @@
 	import { Label } from '@deepref/ui/label';
 	import { Switch } from '@deepref/ui/switch';
 	import { Textarea } from '@deepref/ui/textarea';
-	import type { ConfigFieldDto, FieldDetailsDto } from '$lib/api/generated/models';
+	import type { ConfigFieldDto, FieldDetailsDto } from '#lib/api/generated/models/index.js';
 	import { detailToken, insertDetail } from '../model';
 	import ConditionField from './ConditionField.svelte';
 	import FieldListField from './FieldListField.svelte';

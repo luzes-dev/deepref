@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { Button } from '@deepref/ui/button';
-	import type { ScreeningDecisionInput } from '$lib/api/generated/models';
+	import type { ScreeningDecisionInput } from '#lib/api/generated/models/index.js';
 	import { Check, CircleHelp, RotateCcw, X } from '@lucide/svelte';
 	import DecisionChoice from './DecisionChoice.svelte';
 

@@ -1,8 +1,8 @@
 import { goto } from '$app/navigation';
-import { page } from '$app/state';
+import { navigating, page } from '$app/state';
 import { resolve } from '$app/paths';
 import type { ResolvedPathname } from '$app/types';
-import type { IngestionDto, ProjectDto, ReportDto } from '$lib/api/generated/models';
+import type { IngestionDto, ProjectDto, ReportDto } from '#lib/api/generated/models/index.js';
 import { Context, PersistedState, type Getter } from 'runed';
 import { SvelteURLSearchParams } from 'svelte/reactivity';
 import { PROJECT_INSPECTOR_COLLAPSED_KEY, PROJECT_NAV_COLLAPSED_KEY } from './constants';
@@ -10,6 +10,7 @@ import {
 	afterProjectDeleted,
 	articleView,
 	parseArticleSort,
+	projectRouteSelection,
 	projectToOpen
 } from './workspace-navigation';
 import type {
@@ -84,13 +85,12 @@ function navigateTo(url: ResolvedPathname, options?: Parameters<typeof goto>[1])
 }
 
 function setSearchParam(name: string, value: string | undefined): void {
-	const params = new SvelteURLSearchParams(page.url.searchParams);
+	const params = new SvelteURLSearchParams(page.url.searchParams.toString());
 	if (value === undefined) params.delete(name);
 	else params.set(name, value);
 	navigateTo(appendSearch(page.url.pathname, params), {
-		replaceState: true,
-		keepFocus: true,
-		noScroll: true
+		replace: true,
+		reset: false
 	});
 }
 
@@ -168,15 +168,14 @@ class ProjectWorkspaceContext {
 			setSearchParam('sort', value === 'rank' ? undefined : value);
 		},
 		update(filter: string, minInternal: number): void {
-			const params = new SvelteURLSearchParams(page.url.searchParams);
+			const params = new SvelteURLSearchParams(page.url.searchParams.toString());
 			if (filter) params.set('filter', filter);
 			else params.delete('filter');
 			if (minInternal > 0) params.set('minInternal', String(minInternal));
 			else params.delete('minInternal');
 			navigateTo(appendSearch(page.url.pathname, params), {
-				replaceState: true,
-				keepFocus: true,
-				noScroll: true
+				replace: true,
+				reset: false
 			});
 		}
 	};
@@ -239,7 +238,7 @@ class ProjectWorkspaceContext {
 
 	#navigateToView = (view: ProjectWorkspaceNavView, search?: URLSearchParams) => {
 		if (!this.selectedProjectId) return;
-		const params = search ?? new SvelteURLSearchParams(page.url.searchParams);
+		const params = search ?? new SvelteURLSearchParams(page.url.searchParams.toString());
 		if (view !== 'ingestions') params.delete('ingestion');
 		navigateTo(appendSearch(pathnameForView(this.selectedProjectId, view), params));
 	};
@@ -257,11 +256,17 @@ class ProjectWorkspaceContext {
 		loading: boolean,
 		selectedProjectFailed: boolean
 	) => {
+		const route = projectRouteSelection(
+			page.params.projectId,
+			navigating.to?.params?.projectId,
+			page.url.pathname
+		);
 		const projectId = projectToOpen(
 			projects,
 			loading,
-			page.params.projectId,
-			selectedProjectFailed
+			route.projectId,
+			selectedProjectFailed,
+			route.resolvingProject
 		);
 		if (projectId) navigateTo(pathnameForView(projectId, 'overview'));
 	};
@@ -278,21 +283,21 @@ class ProjectWorkspaceContext {
 
 	openArticle = (reportId: string) => {
 		if (!reportId || !this.selectedProjectId) return;
-		const params = new SvelteURLSearchParams(page.url.searchParams);
+		const params = new SvelteURLSearchParams(page.url.searchParams.toString());
 		params.set('report', reportId);
 		params.delete('ingestion');
 		this.#navigateToView(articleView(this.view), params);
 	};
 
 	clearArticle = () => {
-		const params = new SvelteURLSearchParams(page.url.searchParams);
+		const params = new SvelteURLSearchParams(page.url.searchParams.toString());
 		params.delete('report');
-		navigateTo(appendSearch(page.url.pathname, params), { keepFocus: true, noScroll: true });
+		navigateTo(appendSearch(page.url.pathname, params), { reset: false });
 	};
 
 	openIngestion = (ingestionId: string) => {
 		if (!ingestionId || !this.selectedProjectId) return;
-		const params = new SvelteURLSearchParams(page.url.searchParams);
+		const params = new SvelteURLSearchParams(page.url.searchParams.toString());
 		params.set('ingestion', ingestionId);
 		params.delete('acquisition');
 		params.delete('report');
@@ -302,7 +307,7 @@ class ProjectWorkspaceContext {
 	/** Opens a PubMed ID run in the run inspector. */
 	openAcquisition = (acquisitionId: string) => {
 		if (!acquisitionId || !this.selectedProjectId) return;
-		const params = new SvelteURLSearchParams(page.url.searchParams);
+		const params = new SvelteURLSearchParams(page.url.searchParams.toString());
 		params.set('acquisition', acquisitionId);
 		params.delete('ingestion');
 		params.delete('report');
@@ -310,10 +315,10 @@ class ProjectWorkspaceContext {
 	};
 
 	clearIngestion = () => {
-		const params = new SvelteURLSearchParams(page.url.searchParams);
+		const params = new SvelteURLSearchParams(page.url.searchParams.toString());
 		params.delete('ingestion');
 		params.delete('acquisition');
-		navigateTo(appendSearch(page.url.pathname, params), { keepFocus: true, noScroll: true });
+		navigateTo(appendSearch(page.url.pathname, params), { reset: false });
 	};
 
 	projectCreated = (projectId: string) => {

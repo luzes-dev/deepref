@@ -2,7 +2,7 @@
 	import SearchIcon from '@lucide/svelte/icons/search';
 	import XIcon from '@lucide/svelte/icons/x';
 	import type { Table } from '@tanstack/table-core';
-	import type { ReportDto } from '$lib/api/generated/models';
+	import type { ReportDto } from '#lib/api/generated/models/index.js';
 	import { Button } from '@deepref/ui/button';
 	import * as InputGroup from '@deepref/ui/input-group';
 	import ArticleDataTableCitationsFilter from './ArticleDataTableCitationsFilter.svelte';

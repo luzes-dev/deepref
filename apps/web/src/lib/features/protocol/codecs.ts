@@ -1,7 +1,7 @@
-import { CriterionDimensionInput } from '$lib/api/generated/models/criterionDimensionInput';
-import { CriterionKindInput } from '$lib/api/generated/models/criterionKindInput';
-import { CriterionStageInput } from '$lib/api/generated/models/criterionStageInput';
-import { FrameworkKindInput } from '$lib/api/generated/models/frameworkKindInput';
+import { CriterionDimensionInput } from '#lib/api/generated/models/criterionDimensionInput.js';
+import { CriterionKindInput } from '#lib/api/generated/models/criterionKindInput.js';
+import { CriterionStageInput } from '#lib/api/generated/models/criterionStageInput.js';
+import { FrameworkKindInput } from '#lib/api/generated/models/frameworkKindInput.js';
 
 export type FrameworkKind = FrameworkKindInput;
 export type CriterionKind = CriterionKindInput;

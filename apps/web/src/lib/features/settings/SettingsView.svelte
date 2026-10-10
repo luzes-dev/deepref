@@ -2,15 +2,15 @@
 	import { Database, Maximize2, Minimize2, Palette, Search, Sparkles, X } from '@lucide/svelte';
 	import type { LucideIcon } from '@lucide/svelte';
 	import { useQueryClient } from '@tanstack/svelte-query';
-	import type { SettingsDto, UpdateSettings } from '$lib/api/generated/models';
+	import type { SettingsDto, UpdateSettings } from '#lib/api/generated/models/index.js';
 	import {
 		createGetSettings,
 		createUpdateSettings,
 		getGetSettingsQueryKey
-	} from '$lib/api/generated/settings/settings';
+	} from '#lib/api/generated/settings/settings.js';
 	import { StatePanel } from '@deepref/ui/layout';
 	import * as NumberField from '@deepref/ui/number-field';
-	import { notifyError } from '$lib/features/notifications/toast';
+	import { notifyError } from '#lib/features/notifications/toast.js';
 	import { Button } from '@deepref/ui/button';
 	import * as Field from '@deepref/ui/field';
 	import { Input } from '@deepref/ui/input';
@@ -18,7 +18,7 @@
 	import * as Select from '@deepref/ui/select';
 	import { setMode, userPrefersMode } from 'mode-watcher';
 	import { page } from '$app/state';
-	import AutonomySettings from '$lib/features/ai-autonomy/components/AutonomySettings.svelte';
+	import AutonomySettings from '#lib/features/ai-autonomy/components/AutonomySettings.svelte';
 	import { Debounced, onCleanup, watch } from 'runed';
 	import { enqueueSettingsSave } from './settings-save-queue';
 	import { crossrefMailtoError } from './crossref-mailto';

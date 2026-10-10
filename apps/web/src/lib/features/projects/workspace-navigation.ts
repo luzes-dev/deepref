@@ -11,11 +11,26 @@ export function projectToOpen(
 	projects: readonly { id: string }[],
 	loading: boolean,
 	routeProjectId: string | undefined,
-	routeProjectFailed: boolean
+	routeProjectFailed: boolean,
+	routeIsResolvingProject: boolean = false
 ): string | undefined {
-	if (loading) return undefined;
+	if (loading || (routeIsResolvingProject && !routeProjectId)) return undefined;
 	if (routeProjectId && !routeProjectFailed) return undefined;
-	return projects[0]?.id;
+	const fallbackProjectId = projects[0]?.id;
+	if (!fallbackProjectId || routeProjectId === fallbackProjectId) return undefined;
+	return fallbackProjectId;
+}
+
+/** Resolves the project ID while a SvelteKit navigation is in flight. */
+export function projectRouteSelection(
+	pageProjectId: string | undefined,
+	targetProjectId: string | undefined,
+	pathname: string
+): { projectId: string | undefined; resolvingProject: boolean } {
+	return {
+		projectId: targetProjectId ?? pageProjectId,
+		resolvingProject: Boolean(targetProjectId) || /\/projects\/[^/]+(?:\/|$)/.test(pathname)
+	};
 }
 
 /**

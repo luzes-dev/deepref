@@ -1,5 +1,5 @@
 import type { ColumnDef } from '@tanstack/table-core';
-import type { ReportDto } from '$lib/api/generated/models';
+import type { ReportDto } from '#lib/api/generated/models/index.js';
 import { renderComponent } from '@deepref/ui/data-table';
 import ArticleDataTableColumnHeader from './ArticleDataTableColumnHeader.svelte';
 import ArticleDataTableRowActions from './ArticleDataTableRowActions.svelte';

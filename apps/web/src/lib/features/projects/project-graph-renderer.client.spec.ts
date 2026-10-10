@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest';
-import type { GraphEdgeDto, GraphNodeDto } from '$lib/api/generated/models';
+import type { GraphEdgeDto, GraphNodeDto } from '#lib/api/generated/models/index.js';
 import type { GraphOverlayField } from './context.svelte.js';
 import { createProjectGraphRenderer, type ProjectGraphRenderModel } from './project-graph-renderer';
 

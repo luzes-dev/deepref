@@ -6,11 +6,14 @@
 	import { Input } from '@deepref/ui/input';
 	import { Spinner } from '@deepref/ui/spinner';
 	import { Textarea } from '@deepref/ui/textarea';
-	import { createDeleteProject, createUpdateProject } from '$lib/api/generated/projects/projects';
-	import type { ProjectDto } from '$lib/api/generated/models';
+	import {
+		createDeleteProject,
+		createUpdateProject
+	} from '#lib/api/generated/projects/projects.js';
+	import type { ProjectDto } from '#lib/api/generated/models/index.js';
 	import { useProjectWorkspaceContext } from '../context.svelte.js';
 	import { projectSubtitle } from '../project-search';
-	import { notifyError } from '$lib/features/notifications/toast';
+	import { notifyError } from '#lib/features/notifications/toast.js';
 	import ChevronDownIcon from '@lucide/svelte/icons/chevron-down';
 	import SaveIcon from '@lucide/svelte/icons/save';
 	import TrashIcon from '@lucide/svelte/icons/trash-2';

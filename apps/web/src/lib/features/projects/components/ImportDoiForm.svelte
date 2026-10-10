@@ -4,10 +4,10 @@
 	import * as InputGroup from '@deepref/ui/input-group';
 	import * as NumberField from '@deepref/ui/number-field';
 	import { Button } from '@deepref/ui/button';
-	import { createCreateIngestion } from '$lib/api/generated/ingestions/ingestions';
-	import { createGetSettings } from '$lib/api/generated/settings/settings';
-	import { notifyError } from '$lib/features/notifications/toast';
-	import { openSettingsFromLink } from '$lib/features/settings/navigation';
+	import { createCreateIngestion } from '#lib/api/generated/ingestions/ingestions.js';
+	import { createGetSettings } from '#lib/api/generated/settings/settings.js';
+	import { notifyError } from '#lib/features/notifications/toast.js';
+	import { openSettingsFromLink } from '#lib/features/settings/navigation.js';
 	import { resolve } from '$app/paths';
 	import PlayIcon from '@lucide/svelte/icons/play';
 	import TriangleAlertIcon from '@lucide/svelte/icons/triangle-alert';

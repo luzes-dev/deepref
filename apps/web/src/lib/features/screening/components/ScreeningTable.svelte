@@ -1,5 +1,5 @@
 <script lang="ts">
-	import type { ScreeningQueueItemDto } from '$lib/api/generated/models';
+	import type { ScreeningQueueItemDto } from '#lib/api/generated/models/index.js';
 	import { createVirtualizer } from '@tanstack/svelte-virtual';
 	import { getCoreRowModel, type ColumnDef, type RowData } from '@tanstack/table-core';
 	import { Button } from '@deepref/ui/button';

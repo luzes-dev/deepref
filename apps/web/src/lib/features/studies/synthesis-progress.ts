@@ -1,11 +1,11 @@
-import { listReportAppraisals } from '$lib/api/generated/appraisal/appraisal';
-import { listFullTextScreeningQueue } from '$lib/api/generated/documents/documents';
+import { listReportAppraisals } from '#lib/api/generated/appraisal/appraisal.js';
+import { listFullTextScreeningQueue } from '#lib/api/generated/documents/documents.js';
 import {
 	listExtractionFields,
 	listStudyExtractionValues
-} from '$lib/api/generated/extraction/extraction';
-import { listProjectStudies } from '$lib/api/generated/studies/studies';
-import type { ExtractionFieldDto, ExtractionValueDto } from '$lib/api/generated/models';
+} from '#lib/api/generated/extraction/extraction.js';
+import { listProjectStudies } from '#lib/api/generated/studies/studies.js';
+import type { ExtractionFieldDto, ExtractionValueDto } from '#lib/api/generated/models/index.js';
 import type { SynthesisProgress } from '../projects/review-progress';
 
 /** Upper bound on per-item requests; larger projects report progress on the first items only. */

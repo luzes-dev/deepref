@@ -5,13 +5,13 @@
 	import { Input } from '@deepref/ui/input';
 	import * as Select from '@deepref/ui/select';
 	import * as Table from '@deepref/ui/table';
-	import { ApiError } from '$lib/api/custom-fetch';
+	import { ApiError } from '#lib/api/custom-fetch.js';
 	import {
 		getListAcquisitionsQueryKey,
 		importProjectRecords
-	} from '$lib/api/generated/acquisitions/acquisitions';
-	import { getGetProjectPrismaQueryKey } from '$lib/api/generated/review/review';
-	import type { ImportRecords } from '$lib/api/generated/models';
+	} from '#lib/api/generated/acquisitions/acquisitions.js';
+	import { getGetProjectPrismaQueryKey } from '#lib/api/generated/review/review.js';
+	import type { ImportRecords } from '#lib/api/generated/models/index.js';
 	import { useQueryClient } from '@tanstack/svelte-query';
 	import CircleAlertIcon from '@lucide/svelte/icons/circle-alert';
 	import CircleCheckIcon from '@lucide/svelte/icons/circle-check';

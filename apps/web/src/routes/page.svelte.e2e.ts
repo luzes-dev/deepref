@@ -293,6 +293,19 @@ async function mockWorkspace(page: Page, options: WorkspaceMockOptions = {}) {
 async function mockProjectCreateWorkspace(page: Page, initialProjects = [project]) {
 	let projects = [...initialProjects];
 	await mockHealth(page);
+	await page.route(
+		/http:\/\/localhost:4173\/api\/notifications(?:\/unread-count)?(?:\?.*)?$/,
+		async (route) => {
+			await route.fulfill({
+				json: route.request().url().includes('unread-count')
+					? { unread_count: 0 }
+					: { items: [], next_cursor: null }
+			});
+		}
+	);
+	await page.route('http://localhost:4173/api/settings', async (route) => {
+		await route.fulfill({ json: workspaceSettings });
+	});
 
 	await page.route(/http:\/\/localhost:4173\/api\/projects(?:\?.*)?$/, async (route) => {
 		if (route.request().method() === 'POST') {
@@ -348,6 +361,18 @@ async function mockProjectCreateWorkspace(page: Page, initialProjects = [project
 	});
 }
 
+async function openDefaultProject(page: Page): Promise<void> {
+	await page.goto('/');
+	await expect(page).toHaveURL(/\/projects\/[^/]+\/overview$/);
+	await expect(page.getByTestId('overview-populated')).toBeVisible();
+}
+
+async function openProjectOverview(page: Page, projectId: string): Promise<void> {
+	await page.goto('/');
+	await expect(page).toHaveURL(new RegExp(`/projects/${projectId}/overview$`));
+	await expect(page.getByRole('combobox', { name: 'Select project' })).toBeVisible();
+}
+
 function projectRow(page: Page, name: string) {
 	return page.getByTestId('project-management-item').filter({ hasText: name });
 }
@@ -362,6 +387,19 @@ async function mockProjectManagementWorkspace(
 ) {
 	let projects = [...initialProjects];
 	await mockHealth(page);
+	await page.route(
+		/http:\/\/localhost:4173\/api\/notifications(?:\/unread-count)?(?:\?.*)?$/,
+		async (route) => {
+			await route.fulfill({
+				json: route.request().url().includes('unread-count')
+					? { unread_count: 0 }
+					: { items: [], next_cursor: null }
+			});
+		}
+	);
+	await page.route('http://localhost:4173/api/settings', async (route) => {
+		await route.fulfill({ json: workspaceSettings });
+	});
 
 	await page.route(/http:\/\/localhost:4173\/api\/projects(?:\?.*)?$/, async (route) => {
 		await route.fulfill({ json: pageOf(projects) });
@@ -395,7 +433,14 @@ async function mockProjectManagementWorkspace(
 			return;
 		}
 
-		if (request.method() === 'PATCH') {
+		if (resource === 'projection') {
+			await route.fulfill({
+				json: { project_id: projectId, state: 'ready', watermark: 42, ...projection }
+			});
+			return;
+		}
+
+		if (!resource && request.method() === 'PATCH') {
 			const body = request.postDataJSON();
 			expect(body).toMatchObject({
 				name: 'Renamed Project',
@@ -420,13 +465,18 @@ async function mockProjectManagementWorkspace(
 			return;
 		}
 
-		if (request.method() === 'DELETE') {
+		if (!resource && request.method() === 'DELETE') {
 			projects = projects.filter((candidate) => candidate.id !== projectId);
 			await route.fulfill({ status: 204, body: '' });
 			return;
 		}
 
-		await route.fulfill({ json: mockedProject });
+		if (!resource) {
+			await route.fulfill({ json: mockedProject });
+			return;
+		}
+
+		await route.fulfill({ status: 404, json: { message: 'Project resource not mocked' } });
 	});
 
 	await page.route(/http:\/\/localhost:4173\/api\/ingestions(?:\?.*)?$/, async (route) => {
@@ -845,7 +895,7 @@ test('empty workspace creates a first project', async ({ page }) => {
 
 test('selector create path creates and selects a project', async ({ page }) => {
 	await mockProjectCreateWorkspace(page);
-	await page.goto('/');
+	await openDefaultProject(page);
 
 	await page.getByRole('combobox', { name: 'Select project' }).click();
 	await page.getByText('Create project').click();
@@ -861,7 +911,7 @@ test('selector create path creates and selects a project', async ({ page }) => {
 
 test('selector management edits and deletes projects', async ({ page }) => {
 	await mockProjectManagementWorkspace(page);
-	await page.goto('/');
+	await openProjectOverview(page, project.id);
 
 	await page.getByRole('combobox', { name: 'Select project' }).click();
 	const createItem = page.getByText('Create project', { exact: true });
@@ -917,7 +967,7 @@ test('mobile project management modal is padded and scrollable', async ({ page }
 		updated_at: `2026-01-${String(index + 1).padStart(2, '0')}T00:00:00Z`
 	}));
 	await mockProjectManagementWorkspace(page, manyProjects);
-	await page.goto('/');
+	await openProjectOverview(page, manyProjects[0].id);
 
 	await page.getByRole('combobox', { name: 'Select project' }).click();
 	await page.getByText('Manage projects', { exact: true }).click();
@@ -951,7 +1001,7 @@ test('desktop project management modal contains long lists', async ({ page }) =>
 		updated_at: `2026-02-${String(index + 1).padStart(2, '0')}T00:00:00Z`
 	}));
 	await mockProjectManagementWorkspace(page, manyProjects);
-	await page.goto('/');
+	await openProjectOverview(page, manyProjects[0].id);
 
 	await page.getByRole('combobox', { name: 'Select project' }).click();
 	await page.getByText('Manage projects', { exact: true }).click();

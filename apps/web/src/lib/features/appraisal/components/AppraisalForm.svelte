@@ -8,8 +8,8 @@
 		CompleteAppraisalRequest,
 		DocumentBlockDto,
 		JudgmentSuggestionDto
-	} from '$lib/api/generated/models';
-	import { suggestAppraisalJudgments } from '$lib/api/generated/appraisal/appraisal';
+	} from '#lib/api/generated/models/index.js';
+	import { suggestAppraisalJudgments } from '#lib/api/generated/appraisal/appraisal.js';
 	import {
 		buildAppraisalPayload,
 		createInitialFormState,
@@ -25,8 +25,8 @@
 		appraisalEvidenceTechnical,
 		resolveAppraisalEvidence
 	} from '../ai-prefill';
-	import EvidenceLabel from '$lib/features/evidence/EvidenceLabel.svelte';
-	import { fullTextUrlString } from '$lib/features/full-text/url';
+	import EvidenceLabel from '#lib/features/evidence/EvidenceLabel.svelte';
+	import { fullTextUrlString } from '#lib/features/full-text/url.js';
 	import { responseIsComplete } from '../renderer';
 	import { blockSnippet } from '../evidence-search';
 	import {
@@ -290,15 +290,15 @@
 		void submit();
 	}}
 >
-	<div class="sr-only">
-		<h2>{definition.name} v{definition.version}</h2>
-	</div>
-	{#if definition.description}<p class="text-sm leading-6 text-muted-foreground">
-			{definition.description}
-		</p>{/if}
-	{#if definition.applicability.note}<p class="text-xs leading-5 text-muted-foreground">
-			{definition.applicability.note}
-		</p>{/if}
+	<div class="sr-only"><h2>{definition.name} v{definition.version}</h2></div>
+
+	{#if definition.description}
+		<p class="text-sm leading-6 text-muted-foreground">{definition.description}</p>
+	{/if}
+
+	{#if definition.applicability.note}
+		<p class="text-xs leading-5 text-muted-foreground">{definition.applicability.note}</p>
+	{/if}
 
 	{#if error}
 		<Alert.Root variant="destructive" role="alert">
@@ -413,7 +413,7 @@
 									<a
 										class="block max-w-full min-w-0 text-xs text-primary underline underline-offset-2"
 										href={resolve(
-											`/projects/${encodeURIComponent(projectId)}/screening/full-text${fullTextUrlString(
+											`projects/${encodeURIComponent(projectId)}/screening/full-text${fullTextUrlString(
 												{
 													filter: 'all',
 													report: reportId,
@@ -494,11 +494,13 @@
 					</div>
 				</div>
 			{/each}
-			<label for={`${domain.id}-judgment`} class="text-sm font-medium"
-				>Domain judgment{#if domain.judgment.required}<span aria-hidden="true">
-						*</span
-					>{/if}</label
-			>
+
+			<label for={`${domain.id}-judgment`} class="text-sm font-medium">
+				Domain judgment{#if domain.judgment.required}
+					<span aria-hidden="true">*</span>
+				{/if}
+			</label>
+
 			<select
 				id={`${domain.id}-judgment`}
 				class="h-10 w-full rounded-lg border border-border/80 bg-background px-3 text-sm shadow-xs transition outline-none focus-visible:border-ring focus-visible:ring-3 focus-visible:ring-ring/30"

@@ -8,17 +8,17 @@
 		createUndoAiActivity,
 		createUndoAiActivityBatch,
 		listAiActivity
-	} from '$lib/api/generated/ai/ai';
-	import type { AiActivityDto } from '$lib/api/generated/models';
+	} from '#lib/api/generated/ai/ai.js';
+	import type { AiActivityDto } from '#lib/api/generated/models/index.js';
 	import { Badge } from '@deepref/ui/badge';
 	import { Button } from '@deepref/ui/button';
 	import { Skeleton } from '@deepref/ui/skeleton';
 	import * as Select from '@deepref/ui/select';
 	import { Switch } from '@deepref/ui/switch';
 	import { StatePanel } from '@deepref/ui/layout';
-	import { notifyError, notifyInfo, notifySuccess } from '$lib/features/notifications/toast';
-	import { relativeTime } from '$lib/features/notifications/state.svelte';
-	import PageTemplate from '$lib/shell/PageTemplate.svelte';
+	import { notifyError, notifyInfo, notifySuccess } from '#lib/features/notifications/toast.js';
+	import { relativeTime } from '#lib/features/notifications/state.svelte.js';
+	import PageTemplate from '#lib/shell/PageTemplate.svelte';
 	import { ACTOR_LABEL, activityKeys, groupActivity, undoableCount } from '../activity';
 
 	let { projectId }: { projectId: string } = $props();
@@ -144,7 +144,7 @@
 			<a
 				class="hover:text-primary"
 				href={resolve(
-					`/projects/${encodeURIComponent(projectId)}/screening/title-abstract?view=conflicts`
+					`projects/${encodeURIComponent(projectId)}/screening/title-abstract?view=conflicts`
 				)}
 			>
 				<span class="font-semibold tabular-nums">{overview.open_conflicts}</span>

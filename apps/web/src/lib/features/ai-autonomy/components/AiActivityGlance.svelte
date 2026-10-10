@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { resolve } from '$app/paths';
-	import { createGetAiActivityOverview, createListAiActivity } from '$lib/api/generated/ai/ai';
-	import { relativeTime } from '$lib/features/notifications/state.svelte';
+	import { createGetAiActivityOverview, createListAiActivity } from '#lib/api/generated/ai/ai.js';
+	import { relativeTime } from '#lib/features/notifications/state.svelte.js';
 
 	let { projectId }: { projectId: string } = $props();
 

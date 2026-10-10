@@ -8,8 +8,8 @@ import {
 	getProjectReviewProtocol,
 	publishProjectReviewProtocol,
 	saveProjectReviewProtocol
-} from '$lib/api/generated/review/review';
-import { ApiError } from '$lib/api/custom-fetch';
+} from '#lib/api/generated/review/review.js';
+import { ApiError } from '#lib/api/custom-fetch.js';
 
 /** A protocol document. The editor endpoint answers `null` while a project has no protocol yet. */
 export type ProtocolDto = NonNullable<Awaited<ReturnType<typeof getProjectReviewProtocol>>['data']>;

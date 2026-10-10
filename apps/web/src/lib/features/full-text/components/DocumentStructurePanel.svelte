@@ -3,7 +3,7 @@
 		DocumentBlockDto,
 		DocumentReferenceDto,
 		DocumentSectionDto
-	} from '$lib/api/generated/models';
+	} from '#lib/api/generated/models/index.js';
 	import * as Alert from '@deepref/ui/alert';
 	import { Skeleton } from '@deepref/ui/skeleton';
 	import { ExternalLink } from '@lucide/svelte';

@@ -1,4 +1,4 @@
-import type { AiStatusDto } from '$lib/api/generated/models';
+import type { AiStatusDto } from '#lib/api/generated/models/index.js';
 
 type AiStatusQueryState = {
 	data: { data: Pick<AiStatusDto, 'suggestions_available'> } | undefined;

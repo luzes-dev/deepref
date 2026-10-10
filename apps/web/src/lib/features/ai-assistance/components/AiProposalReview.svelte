@@ -5,7 +5,7 @@
 		createGenerateDuplicateSuggestion,
 		createGenerateScreeningSuggestion,
 		createListAiProposals
-	} from '$lib/api/generated/ai/ai';
+	} from '#lib/api/generated/ai/ai.js';
 	import type {
 		AiDuplicateSignalDto,
 		AiIdentityProvenanceDto,
@@ -13,8 +13,8 @@
 		AiProposalDto,
 		AiScreeningEvidenceDto,
 		AiScreeningStageInput
-	} from '$lib/api/generated/models';
-	import { ApiError } from '$lib/api/custom-fetch';
+	} from '#lib/api/generated/models/index.js';
+	import { ApiError } from '#lib/api/custom-fetch.js';
 	import * as Alert from '@deepref/ui/alert';
 	import { Badge } from '@deepref/ui/badge';
 	import { Button } from '@deepref/ui/button';
@@ -24,9 +24,9 @@
 	import { Spinner } from '@deepref/ui/spinner';
 	import { Brain, Check, FileSearch, Info, X } from '@lucide/svelte';
 	import { ReviewRunObserver } from '../review-run-observer.svelte';
-	import EvidenceLabel from '$lib/features/evidence/EvidenceLabel.svelte';
-	import { humanizeCode } from '$lib/features/evidence/labels';
-	import { plainText } from '$lib/features/notifications/notification-copy';
+	import EvidenceLabel from '#lib/features/evidence/EvidenceLabel.svelte';
+	import { humanizeCode } from '#lib/features/evidence/labels.js';
+	import { plainText } from '#lib/features/notifications/notification-copy.js';
 	import { canRequestAiSuggestions } from '../availability';
 
 	type ReviewStage = 'title_abstract' | 'full_text' | 'dedupe';

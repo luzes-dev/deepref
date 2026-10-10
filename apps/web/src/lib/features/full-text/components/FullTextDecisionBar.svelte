@@ -2,10 +2,10 @@
 	import type {
 		FullTextExclusionReasonDto,
 		ScreeningDecisionInput
-	} from '$lib/api/generated/models';
+	} from '#lib/api/generated/models/index.js';
 	import { Button } from '@deepref/ui/button';
 	import { Check, CircleHelp, RotateCcw, X } from '@lucide/svelte';
-	import DecisionChoice from '$lib/features/screening/components/DecisionChoice.svelte';
+	import DecisionChoice from '#lib/features/screening/components/DecisionChoice.svelte';
 
 	let {
 		reasons,

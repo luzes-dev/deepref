@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { AssistantChatStreamEvent } from '$lib/api/assistant-stream';
+import type { AssistantChatStreamEvent } from '#lib/api/assistant-stream.js';
 import type { AssistantMessageRecord } from './chat-api';
 import {
 	STOPPED_NOTE,

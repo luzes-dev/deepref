@@ -7,9 +7,9 @@
 		rotateWorkflowWebhook,
 		rotateWorkflowWebhookSecret,
 		updateWorkflowEndpoints
-	} from '$lib/api/generated/automations/automations';
-	import type { EndpointsDto } from '$lib/api/generated/models';
-	import { notifyError, notifySuccess } from '$lib/features/notifications/toast';
+	} from '#lib/api/generated/automations/automations.js';
+	import type { EndpointsDto } from '#lib/api/generated/models/index.js';
+	import { notifyError, notifySuccess } from '#lib/features/notifications/toast.js';
 	import { Button } from '@deepref/ui/button';
 	import { CopyButton } from '@deepref/ui/copy-button';
 	import { Input } from '@deepref/ui/input';

@@ -1,12 +1,12 @@
 <script lang="ts">
 	import { page } from '$app/state';
 	import { resolve } from '$app/paths';
-	import { cn } from '$lib/utils';
+	import { cn } from '#lib/utils.js';
 	import { ScrollArea } from '@deepref/ui/scroll-area';
 	import * as Tooltip from '@deepref/ui/tooltip';
 	import { buttonVariants } from '@deepref/ui/button';
 	import SettingsIcon from '@lucide/svelte/icons/settings-2';
-	import { openSettingsFromLink } from '$lib/features/settings/navigation';
+	import { openSettingsFromLink } from '#lib/features/settings/navigation.js';
 	import ProjectSelector from './ProjectSelector.svelte';
 	import { useProjectWorkspaceContext } from '../context.svelte.js';
 	import {

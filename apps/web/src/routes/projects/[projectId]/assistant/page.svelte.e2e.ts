@@ -137,6 +137,11 @@ async function openAssistant(page: Page): Promise<void> {
 			})
 	);
 	await page.goto('/projects/project-1/assistant');
+	await expect(page.getByTestId('assistant-page')).toBeVisible();
+	await expect(
+		page.getByRole('heading', { name: 'Protocol questions', exact: true })
+	).toBeVisible();
+	await expect(page.getByTestId('assistant-thread-input')).toBeVisible();
 }
 
 test('opens the most recent thread and renders the persisted turn history', async ({ page }) => {
@@ -232,12 +237,18 @@ test('shift+enter keeps a newline and enter submits the draft', async ({ page })
 	await composer.fill('first line');
 	await composer.press('Shift+Enter');
 	await expect(composer).toHaveValue('first line\n');
-	await page.route(`${api}/projects/project-1/assistant/conversations`, (route) =>
-		route.fulfill({
-			status: 201,
-			json: conversation(conversationId, 'first line', '2026-01-03T00:00:00Z')
-		})
-	);
+	await page.route(`${api}/projects/project-1/assistant/conversations`, async (route) => {
+		if (route.request().method() === 'POST') {
+			await route.fulfill({
+				status: 201,
+				json: conversation(conversationId, 'first line', '2026-01-03T00:00:00Z')
+			});
+			return;
+		}
+		await route.fulfill({
+			json: [conversation(conversationId, 'first line', '2026-01-03T00:00:00Z')]
+		});
+	});
 	let submittedMessage: string | null = null;
 	await page.route(`${api}/projects/project-1/assistant/chat`, async (route) => {
 		submittedMessage = route.request().postDataJSON().message;

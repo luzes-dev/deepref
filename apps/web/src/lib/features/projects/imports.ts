@@ -1,4 +1,4 @@
-import { statusVariant } from '$lib/api/helpers';
+import { statusVariant } from '#lib/api/helpers.js';
 
 /** File formats the file import accepts; mirrors `parse_format` in the acquisitions route. */
 export type ImportFileFormat = 'ris' | 'nbib' | 'bibtex' | 'csv';

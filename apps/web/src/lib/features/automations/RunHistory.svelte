@@ -1,6 +1,6 @@
 <script lang="ts">
-	import { createListWorkflowRuns } from '$lib/api/generated/automations/automations';
-	import type { WorkflowRunDto } from '$lib/api/generated/models';
+	import { createListWorkflowRuns } from '#lib/api/generated/automations/automations.js';
+	import type { WorkflowRunDto } from '#lib/api/generated/models/index.js';
 	import { Badge } from '@deepref/ui/badge';
 	import { Button } from '@deepref/ui/button';
 	import { Spinner } from '@deepref/ui/spinner';

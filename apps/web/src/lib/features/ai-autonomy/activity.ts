@@ -1,4 +1,4 @@
-import type { AiActivityDto } from '$lib/api/generated/models';
+import type { AiActivityDto } from '#lib/api/generated/models/index.js';
 
 export type ActivityGroup =
 	| { kind: 'single'; key: string; entry: AiActivityDto }

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { DocumentBlockDto } from '$lib/api/generated/models';
+import type { DocumentBlockDto } from '#lib/api/generated/models/index.js';
 import { blockSnippet, normalizeSearchText, searchEvidenceBlocks } from './evidence-search';
 
 function block(id: string, pageNumber: number, text: string): DocumentBlockDto {
