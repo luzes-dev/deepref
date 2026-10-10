@@ -27,7 +27,3 @@ workspace = true
 
 [package.metadata.deepref]
 layer = "review"
-
-[package.metadata.cargo-shear]
-# Required by workspace architecture boundary contract (tools/xtask/src/boundaries.rs)
-ignored = ["deepref-application"]
