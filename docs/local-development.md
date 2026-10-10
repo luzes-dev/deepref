@@ -2,7 +2,7 @@
 
 DeepRef uses mise for pinned tools, Just for the developer command surface, Docker Compose for disposable dependencies, and Process Compose for application processes.
 
-The local PostgreSQL service uses the pinned `pgvector/pgvector:0.8.0-pg17`
+The local PostgreSQL service uses the pinned `pgvector/pgvector:0.8.7-pg17-bookworm`
 image. This is required because migration `0016_ai_foundation.sql` installs
 the `vector` extension; use the same pgvector-enabled PostgreSQL 17 image for
 disposable migration/integration fixtures.
