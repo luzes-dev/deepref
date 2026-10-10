@@ -3,18 +3,25 @@
 	type TValue = unknown;
 </script>
 
-<script lang="ts" generics="TData, TValue">
-	import ArrowDownIcon from '@lucide/svelte/icons/arrow-down';
-	import ArrowUpIcon from '@lucide/svelte/icons/arrow-up';
-	import ChevronsUpDownIcon from '@lucide/svelte/icons/chevrons-up-down';
-	import EyeOffIcon from '@lucide/svelte/icons/eye-off';
-	import type { Column } from '@tanstack/table-core';
-	import { Button } from '../button/index.js';
-	import * as DropdownMenu from '../dropdown-menu/index.js';
-	import { cn } from '../../internal/utils.js';
+<script lang="ts" generics="TData extends RowData, TValue">
+	import ArrowDownIcon from "@lucide/svelte/icons/arrow-down";
+	import ArrowUpIcon from "@lucide/svelte/icons/arrow-up";
+	import ChevronsUpDownIcon from "@lucide/svelte/icons/chevrons-up-down";
+	import EyeOffIcon from "@lucide/svelte/icons/eye-off";
+	import type { Column, RowData } from "@tanstack/svelte-table";
+	import { Button } from "../button/index.js";
+	import * as DropdownMenu from "../dropdown-menu/index.js";
+	import { cn } from "../../internal/utils.js";
 
 	type Props = {
-		column: Column<TData, TValue>;
+		column: Pick<
+			Column<any, TData, TValue>,
+			| "getCanSort"
+			| "getIsSorted"
+			| "toggleSorting"
+			| "getCanHide"
+			| "toggleVisibility"
+		>;
 		title: string;
 		class?: string;
 	};
@@ -25,7 +32,7 @@
 {#if !column.getCanSort()}
 	<div class={className}>{title}</div>
 {:else}
-	<div class={cn('flex items-center', className)}>
+	<div class={cn("flex items-center", className)}>
 		<DropdownMenu.Root>
 			<DropdownMenu.Trigger>
 				{#snippet child({ props })}
@@ -36,9 +43,9 @@
 						class="-ml-3 h-8 data-[state=open]:bg-accent"
 					>
 						<span>{title}</span>
-						{#if column.getIsSorted() === 'desc'}
+						{#if column.getIsSorted() === "desc"}
 							<ArrowDownIcon data-icon="inline-end" />
-						{:else if column.getIsSorted() === 'asc'}
+						{:else if column.getIsSorted() === "asc"}
 							<ArrowUpIcon data-icon="inline-end" />
 						{:else}
 							<ChevronsUpDownIcon data-icon="inline-end" />
@@ -48,17 +55,23 @@
 			</DropdownMenu.Trigger>
 			<DropdownMenu.Content align="start">
 				<DropdownMenu.Group>
-					<DropdownMenu.Item onclick={() => column.toggleSorting(false)}>
+					<DropdownMenu.Item
+						onclick={() => column.toggleSorting(false)}
+					>
 						<ArrowUpIcon />
 						Asc
 					</DropdownMenu.Item>
-					<DropdownMenu.Item onclick={() => column.toggleSorting(true)}>
+					<DropdownMenu.Item
+						onclick={() => column.toggleSorting(true)}
+					>
 						<ArrowDownIcon />
 						Desc
 					</DropdownMenu.Item>
 					{#if column.getCanHide()}
 						<DropdownMenu.Separator />
-						<DropdownMenu.Item onclick={() => column.toggleVisibility(false)}>
+						<DropdownMenu.Item
+							onclick={() => column.toggleVisibility(false)}
+						>
 							<EyeOffIcon />
 							Hide
 						</DropdownMenu.Item>

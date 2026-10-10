@@ -27,7 +27,7 @@
 		"@tanstack/svelte-form": "^1.33.5",
 		"@tanstack/svelte-query": "^6.3.1",
 		"@tanstack/svelte-virtual": "^3.13.39",
-		"@tanstack/table-core": "^8.21.3",
+		"@tanstack/svelte-table": "^9.2.8",
 		"markdown-it": "^14.3.2",
 		"pdfjs-dist": "^6.4.299",
 		"sass": "^1.105.1"

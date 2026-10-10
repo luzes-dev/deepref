@@ -1,10 +1,13 @@
-<script lang="ts" generics="TData">
-	import type { Table } from '@tanstack/table-core';
+<script lang="ts">
+	import type { Table } from '@tanstack/svelte-table';
+	import type { ReportDto } from '#lib/api/generated/models/index.js';
+	import type { ArticleTableFeatures } from './table-features.js';
 	import { Button } from '@deepref/ui/button';
 	import * as Select from '@deepref/ui/select';
 	import ChevronLeftIcon from '@lucide/svelte/icons/chevron-left';
 	import ChevronRightIcon from '@lucide/svelte/icons/chevron-right';
-	let { table }: { table: Table<TData> } = $props();
+	let { table }: { table: Table<ArticleTableFeatures, ReportDto> } = $props();
+	const pagination = $derived(table.atoms.pagination.get());
 </script>
 
 <div class="flex flex-wrap items-center justify-between gap-3 text-xs text-muted-foreground">
@@ -12,13 +15,13 @@
 	<div class="flex items-center gap-3">
 		<Select.Root
 			type="single"
-			value={String(table.getState().pagination.pageSize)}
+			value={String(pagination.pageSize)}
 			onValueChange={(value) => {
 				if (value) table.setPageSize(Number(value));
 			}}
 		>
 			<Select.Trigger aria-label="Articles per page" class="w-28"
-				>{table.getState().pagination.pageSize} per page</Select.Trigger
+				>{pagination.pageSize} per page</Select.Trigger
 			>
 			<Select.Content
 				><Select.Group
@@ -30,7 +33,7 @@
 			>
 		</Select.Root>
 		<span class="tabular-nums"
-			>{table.getState().pagination.pageIndex + 1} / {Math.max(1, table.getPageCount())}</span
+			>{pagination.pageIndex + 1} / {Math.max(1, table.getPageCount())}</span
 		>
 		<Button
 			variant="ghost"
