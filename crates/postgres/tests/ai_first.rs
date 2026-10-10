@@ -14,9 +14,47 @@ use deepref_postgres::*;
 use deepref_review::{
     ReviewDefinitionKey, ReviewOrigin, ReviewScheduler, ReviewSubject, ScheduleReviewRun,
 };
-use sqlx::{PgPool, postgres::PgPoolOptions};
+use sqlx::{PgPool, Postgres, Transaction, postgres::PgPoolOptions};
 use std::collections::BTreeMap;
 use uuid::Uuid;
+
+/// Same database-wide key as `review_runs.rs` so route inserts serialize even
+/// when both binaries share a database. Transaction-scoped: released when the
+/// returned transaction commits or rolls back.
+const ROUTE_FIXTURE_LOCK: i64 = 0x5245_5649_4557_0001;
+
+async fn route_fixture_lock(pool: &PgPool) -> Transaction<'static, Postgres> {
+    let mut transaction = pool.begin().await.expect("route lock transaction begins");
+    sqlx::query("SELECT pg_advisory_xact_lock($1)")
+        .bind(ROUTE_FIXTURE_LOCK)
+        .execute(&mut *transaction)
+        .await
+        .expect("route fixture lock is acquired");
+    transaction
+}
+
+/// Every test inserts the identical global route, so concurrent inserts collide
+/// on the profile/provider/model/version unique key. Serialize just the insert;
+/// the routes are identical, so the resolved identity is stable afterwards and
+/// the rest of the fixture can run in parallel.
+async fn insert_fixture_route(pool: &PgPool) {
+    let lock = route_fixture_lock(pool).await;
+    insert_model_route(
+        pool,
+        &ResolvedModel {
+            profile: ModelProfile::Reasoning,
+            provider: "ai-first-fixture".into(),
+            model: "test-model".into(),
+            model_version: "immutable-test-v1".into(),
+            parameters: ModelParameters::default(),
+            route_id: None,
+        },
+        Utc::now(),
+    )
+    .await
+    .unwrap();
+    lock.commit().await.unwrap();
+}
 
 fn actor(id: &str) -> Actor {
     Actor::new(ActorKind::User, id).unwrap()
@@ -47,20 +85,7 @@ impl Fixture {
             .execute(&pool)
             .await
             .unwrap();
-        insert_model_route(
-            &pool,
-            &ResolvedModel {
-                profile: ModelProfile::Reasoning,
-                provider: "ai-first-fixture".into(),
-                model: "test-model".into(),
-                model_version: "immutable-test-v1".into(),
-                parameters: ModelParameters::default(),
-                route_id: None,
-            },
-            Utc::now(),
-        )
-        .await
-        .unwrap();
+        insert_fixture_route(&pool).await;
         let protocol = Self::publish(&pool, project).await;
         let mut x = Vec::new();
         let mut human = Vec::new();
