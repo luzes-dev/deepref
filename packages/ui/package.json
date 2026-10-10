@@ -375,7 +375,7 @@
     "@storybook/addon-interactions": "^8.6.0",
     "@storybook/addon-themes": "^8.6.0",
     "@storybook/svelte": "^8.6.0",
-    "@storybook/svelte-vite": "^8.6.0",
+    "@storybook/svelte-vite": "^10.6.1",
     "@storybook/test": "^8.6.0",
     "@sveltejs/vite-plugin-svelte": "^7.3.0",
     "@tailwindcss/vite": "^4.3.3",
