@@ -11,16 +11,16 @@ import type { GraphScreeningDto } from './graphScreeningDto.ts';
 import type { GraphStudyDto } from './graphStudyDto.ts';
 
 export interface GraphNodeDto {
-	appraisal?: null | GraphAppraisalDto;
+	appraisal?: GraphAppraisalDto | null;
 	/** @nullable */
 	doi?: string | null;
 	/** @nullable */
 	issued_year?: number | null;
-	metrics?: null | GraphMetricsDto;
-	provenance?: null | GraphProvenanceDto;
+	metrics?: GraphMetricsDto | null;
+	provenance?: GraphProvenanceDto | null;
 	report_id: string;
-	screening?: null | GraphScreeningDto;
-	study?: null | GraphStudyDto;
+	screening?: GraphScreeningDto | null;
+	study?: GraphStudyDto | null;
 	/** @nullable */
 	title?: string | null;
 	/** @nullable */

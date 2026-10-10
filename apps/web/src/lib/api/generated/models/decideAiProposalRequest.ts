@@ -10,5 +10,5 @@ import type { AiReviewedProposalPayload } from './aiReviewedProposalPayload.ts';
 export interface DecideAiProposalRequest {
 	decision: AiProposalDecisionInput;
 	reason: string;
-	reviewed_payload?: null | AiReviewedProposalPayload;
+	reviewed_payload?: AiReviewedProposalPayload | null;
 }

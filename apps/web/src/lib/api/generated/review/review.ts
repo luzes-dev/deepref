@@ -681,7 +681,7 @@ export const createUndoScreening = <TError = ErrorType<ApiErrorBody>, TContext =
 	return createMutation(() => ({ ...getUndoScreeningMutationOptions(options?.()) }), queryClient);
 };
 export type getProjectReviewProtocolResponse200 = {
-	data: null | ProtocolDto;
+	data: ProtocolDto | null;
 	status: 200;
 };
 

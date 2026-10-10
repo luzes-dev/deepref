@@ -14,7 +14,7 @@ export interface UpdateWorkflowRequest {
 	 * @nullable
 	 */
 	expected_revision?: number | null;
-	graph?: null | WorkflowGraphDto;
+	graph?: WorkflowGraphDto | null;
 	/** @nullable */
 	name?: string | null;
 }

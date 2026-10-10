@@ -9,7 +9,7 @@ import type { AppraisalAppliesWhenDto } from './appraisalAppliesWhenDto.ts';
 
 export interface AppraisalQuestionDto {
 	answer_schema: AppraisalAnswerSchemaDto;
-	applies_when?: null | AppraisalAppliesWhenDto;
+	applies_when?: AppraisalAppliesWhenDto | null;
 	/** @nullable */
 	help?: string | null;
 	id: string;

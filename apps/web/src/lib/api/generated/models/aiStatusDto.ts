@@ -9,7 +9,7 @@ import type { AiBudgetDto } from './aiBudgetDto.ts';
 export interface AiStatusDto {
 	/** The project assistant can answer chat messages. */
 	assistant_available: boolean;
-	budget?: null | AiBudgetDto;
+	budget?: AiBudgetDto | null;
 	/** A provider is configured (API key present). */
 	configured: boolean;
 	/** @nullable */

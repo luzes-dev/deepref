@@ -17,7 +17,7 @@ export interface DocumentDto {
 	 */
 	external_url?: string | null;
 	id: string;
-	identity?: null | DocumentIdentityDto;
+	identity?: DocumentIdentityDto | null;
 	mime_type: string;
 	ocr_required: boolean;
 	/** @nullable */

@@ -9,7 +9,7 @@ import type { DocumentDto } from './documentDto.ts';
 export interface FullTextQueueItemDto {
 	/** @nullable */
 	abstract_text?: string | null;
-	document?: null | DocumentDto;
+	document?: DocumentDto | null;
 	/** @nullable */
 	doi?: string | null;
 	full_text_status: string;

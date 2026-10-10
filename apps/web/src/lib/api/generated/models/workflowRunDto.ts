@@ -20,7 +20,7 @@ export interface WorkflowRunDto {
 	id: string;
 	/** Per-block log. Empty in lists. */
 	nodes: NodeRunDto[];
-	review_counts?: null | ReviewCountsDto;
+	review_counts?: ReviewCountsDto | null;
 	/** @nullable */
 	started_at?: string | null;
 	/** `queued`, `running`, `completed`, `failed` or `cancelled`. */
