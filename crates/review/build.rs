@@ -63,8 +63,11 @@ fn main() -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
-/// The exact `Cargo.lock` version of one third-party crate, for provenance.
-/// Several copies of a crate would be joined rather than hidden.
+/// The exact `Cargo.lock` version(s) of one third-party crate, for provenance.
+/// Several copies of a crate are joined with `+` rather than hidden: the same
+/// semantic as `crates/ai/build.rs::lock_version`. Provenance must record
+/// ambiguity, never break the build over it; a single resolved copy — the
+/// current tree — emits the bare version, exactly as before.
 fn lockfile_version(workspace: &Path, name: &str) -> Result<String, Box<dyn Error>> {
     let text = fs::read_to_string(workspace.join("Cargo.lock"))?;
     let lock = fingerprint::parse_lockfile(&text)?;

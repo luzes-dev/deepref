@@ -49,13 +49,14 @@ use serde_json::Value;
 use uuid::Uuid;
 
 use crate::{
-    AgentLoopConfig, AiError, ChatMessage, PriceBook, UsageLedger, assistant_system_prompt,
+    AgentLoopConfig, AiError, ChatMessage, PriceBook, UsageLedger,
     runtime::{
         agent::RigTurnOutcome,
         agent::run_assistant_runner,
+        builder::{assistant_runner, configure_assistant_builder, history_to_messages},
         context::{AssistantToolHost, DeepRefAgentContext},
         hooks::DeepRefHooks,
-        tools::{PlanCollector, ToolHostScope, deepref_dynamic_tools},
+        tools::{PlanCollector, ToolHostScope},
     },
 };
 
@@ -137,9 +138,6 @@ pub async fn replay_rig_turn(
     replay: ReplayTurn,
     cassette: &AssistantCassette,
 ) -> Result<RigTurnOutcome, AiError> {
-    use rig_core::completion::Message;
-    use rig_core::tool::ToolContext;
-
     let plans = PlanCollector::new();
     let scope = ToolHostScope::new(replay.context.clone(), replay.host.clone(), plans);
     let hooks = DeepRefHooks::new(
@@ -148,8 +146,9 @@ pub async fn replay_rig_turn(
         replay.prices,
         replay.config,
     );
-    // The replay agent must be configured exactly like the recording agent;
-    // check_replayable below fails closed on any drift.
+    // The replay agent must be configured exactly like the recording agent:
+    // both go through the shared builder, and check_replayable below fails
+    // closed on any drift.
     let model_key = completion_key(cassette)?;
     let (dispatcher, registrar, mut bus_driver) = Bus::channel();
     register_model_replayers(cassette, &mut bus_driver)?;
@@ -164,23 +163,14 @@ pub async fn replay_rig_turn(
     );
     cassette.check_compatible(&agent)?;
     let bus_handle = tokio::spawn(bus_driver);
-    let history: Vec<rig_core::completion::Message> = replay
-        .history
-        .iter()
-        .filter_map(|message| match message {
-            ChatMessage::User(text) => Some(Message::user(text.clone())),
-            ChatMessage::Assistant { content, .. } => Some(Message::assistant(content.clone())),
-            ChatMessage::System(_) | ChatMessage::Tool { .. } => None,
-        })
-        .collect();
-    let tool_scope: Arc<dyn std::any::Any + Send + Sync> = Arc::new(scope.clone());
-    let runner = agent
-        .prompt(Message::user(replay.user_message.clone()))
-        .history(history)
-        .max_turns(replay.config.max_steps)
-        .tool_context(ToolContext::new().with_scope(tool_scope))
-        .tool_concurrency(1)
-        .max_invalid_tool_call_retries(replay.config.max_steps);
+    let history = history_to_messages(&replay.history);
+    let runner = assistant_runner(
+        &agent,
+        replay.user_message.clone(),
+        history,
+        &scope,
+        replay.config,
+    );
     let (progress_tx, progress_rx) = tokio::sync::mpsc::unbounded_channel();
     drop(progress_rx);
     let outcome = run_assistant_runner(
@@ -235,9 +225,9 @@ fn register_model_replayers(
     Ok(())
 }
 
-/// Builds the replay agent over the host bus. Configuration must mirror the
-/// live agent exactly; [`AgentReplayExt::check_replayable`] fails closed on
-/// drift.
+/// Builds the replay agent over the host bus through the shared builder, so
+/// its configuration cannot drift from the live agent's.
+/// [`AgentReplayExt::check_replayable`] fails closed on any residual drift.
 fn build_replay_agent(
     dispatcher: Dispatcher,
     registrar: Registrar,
@@ -247,33 +237,11 @@ fn build_replay_agent(
     hooks: DeepRefHooks,
     config: AgentLoopConfig,
 ) -> rig_agent::agent::Agent {
-    use serde_json::Value;
-    let mut builder = AgentBuilder::over_bus(
+    let builder = AgentBuilder::over_bus(
         dispatcher,
         registrar,
         crate::runtime::agent::DEEPREF_ASSISTANT_OWNER,
         model_key,
-    )
-    .preamble(assistant_system_prompt(context.project_id))
-    .max_tokens(u64::from(config.max_output_tokens_per_call))
-    .dynamic_tools(deepref_dynamic_tools(scope))
-    .add_hook(hooks);
-    if let Some(temperature) = context.route.parameters.temperature {
-        builder = builder.temperature(f64::from(temperature));
-    }
-    if let Some(top_p) = context.route.parameters.top_p {
-        builder = builder.top_p(f64::from(top_p));
-    }
-    if !context.route.parameters.additional.is_empty() {
-        builder = builder.additional_params(Value::Object(
-            context
-                .route
-                .parameters
-                .additional
-                .clone()
-                .into_iter()
-                .collect(),
-        ));
-    }
-    builder.build()
+    );
+    configure_assistant_builder(builder, context, scope, hooks, config).build()
 }

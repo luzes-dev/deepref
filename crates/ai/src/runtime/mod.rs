@@ -15,8 +15,11 @@
 //! * [`agent`] — the turn driver mapping Rig events onto DeepRef's assistant
 //!   contract. Cassette recording attaches through [`RigTurn`][agent::RigTurn]'s
 //!   recorder; replay fixtures arrive with the cassette module (PR4).
+//! * [`builder`] — the single shared agent construction (preamble, tools,
+//!   hooks, history, runner limits) for live runs and cassette replays.
 
 mod agent;
+mod builder;
 mod cassette;
 mod context;
 mod hooks;
@@ -25,7 +28,11 @@ mod plan;
 mod tools;
 
 #[cfg(test)]
-mod tests;
+mod test_fixtures;
+#[cfg(test)]
+mod tests_cassette;
+#[cfg(test)]
+mod tests_live;
 
 pub use agent::{AgentProgress, RigTurn, RigTurnOutcome, run_rig_turn, run_rig_turn_channel};
 pub use cassette::{AssistantCassette, ReplayTurn, replay_rig_turn};
@@ -37,7 +44,7 @@ pub use plan::{
     ManualStep, PlanAction, TOOL_FINAL_EXCLUSION, TOOL_LIST_REPORTS, TOOL_PROJECT_OVERVIEW,
     TOOL_PUBLISH_PROTOCOL, TOOL_SCREEN_REPORTS, ToolTraceEntry, agent_tool_declarations,
     assistant_system_prompt, claims_pending_change, is_read_tool, no_plan_notice,
-    plan_action_is_executable, validate_screen_reports,
+    plan_action_is_executable, truncate_chars, validate_screen_reports,
 };
 pub use tools::{
     PlanCollector, RecordedToolOutput, ToolHostScope, TraceCollector, deepref_dynamic_tools,

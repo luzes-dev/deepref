@@ -12,8 +12,10 @@
 //! never reach this host; they become `PlanAction` data in the turn.
 
 use deepref_ai::{
-    AgentReadOperation, AgentToolName, AiError, AiFuture, BoundedAgentJson, TOOL_LIST_REPORTS,
-    TOOL_PROJECT_OVERVIEW, runtime::AssistantToolHost,
+    AgentReadOperation, AgentToolName, AiError, AiFuture, AppraisalToolArgs, BoundedAgentJson,
+    DocumentBlocksToolArgs, ListStudiesToolArgs, ProjectToolArgs, ReportToolArgs,
+    ScreeningStateToolArgs, SearchDocumentToolArgs, SearchProjectReportsToolArgs, StudyToolArgs,
+    TOOL_LIST_REPORTS, TOOL_PROJECT_OVERVIEW, runtime::AssistantToolHost, truncate_chars,
 };
 use deepref_domain::{ProjectId, StudyDesign};
 use serde_json::{Value, json};
@@ -103,6 +105,13 @@ fn require_scope(host: ProjectId, declared: Uuid) -> Result<(), AiError> {
     Ok(())
 }
 
+/// The single [`AgentReadError`] → [`AiError`] mapping for this host. Every
+/// read below reports `AgentReadError` (native protocol/study errors are
+/// folded into it first) and converts once at the boundary.
+///
+/// This free function — not `impl From<AgentReadError> for AiError` — is the
+/// orphan-rule-compliant spelling: both the `From` trait and `AiError` are
+/// foreign to this crate, so that impl cannot live here.
 fn read_error(error: crate::AgentReadError) -> AiError {
     match error {
         crate::AgentReadError::NotFound => {
@@ -115,128 +124,180 @@ fn read_error(error: crate::AgentReadError) -> AiError {
     }
 }
 
+/// Folds native protocol errors into the shared read error. Not-found stays
+/// not-found; database failures stay database failures (previously they were
+/// downgraded to a model-visible "the tool failed", unlike every other read
+/// arm — now they surface as retryable persistence errors like the rest);
+/// any other domain failure is model-visible invalid data.
+fn protocol_read_error(error: crate::ProtocolError) -> crate::AgentReadError {
+    match error {
+        crate::ProtocolError::ProjectNotFound | crate::ProtocolError::NotFound => {
+            crate::AgentReadError::NotFound
+        }
+        crate::ProtocolError::Database(error) => crate::AgentReadError::Database(error),
+        _ => crate::AgentReadError::InvalidData,
+    }
+}
+
+/// Folds native study errors into the shared read error, with the same
+/// not-found / database / invalid-data split as
+/// [`protocol_read_error`].
+fn study_read_error(error: crate::StudyError) -> crate::AgentReadError {
+    match error {
+        crate::StudyError::ProjectNotFound
+        | crate::StudyError::StudyNotFound
+        | crate::StudyError::ReportNotInProject => crate::AgentReadError::NotFound,
+        crate::StudyError::Database(error) => crate::AgentReadError::Database(error),
+        _ => crate::AgentReadError::InvalidData,
+    }
+}
+
 async fn execute_read_operation(
     pool: &PgPool,
     operation: AgentReadOperation,
 ) -> Result<Value, AiError> {
+    dispatch_read(pool, operation).await.map_err(read_error)
+}
+
+/// Dispatcher table for catalog reads: one thin arm per operation, each a
+/// single handler call. Every handler reports [`crate::AgentReadError`] so
+/// the single [`read_error`] conversion above serves all arms, including the
+/// protocol/study arms whose native errors are folded in first.
+async fn dispatch_read(
+    pool: &PgPool,
+    operation: AgentReadOperation,
+) -> Result<Value, crate::AgentReadError> {
     match operation {
-        AgentReadOperation::GetProjectProtocol(args) => {
-            let protocol = crate::get_published_protocol(pool, args.project_id.as_uuid())
-                .await
-                .map_err(|error| match error {
-                    crate::ProtocolError::ProjectNotFound | crate::ProtocolError::NotFound => {
-                        AiError::InvalidContext(
-                            "that item was not found in this project".to_owned(),
-                        )
-                    }
-                    _ => AiError::InvalidContext("the tool failed".to_owned()),
-                })?;
-            protocol_value(protocol)
-        }
-        AgentReadOperation::GetReport(args) => {
-            let report =
-                crate::get_agent_report(pool, args.project_id.as_uuid(), args.report_id.as_uuid())
-                    .await
-                    .map_err(read_error)?;
-            Ok(report_value(report, MAX_REPORT_ABSTRACT_CHARS))
-        }
-        AgentReadOperation::ReadDocumentBlocks(args) => {
-            let block_ids = args
-                .block_ids
-                .iter()
-                .map(|block_id| block_id.as_uuid())
-                .collect::<Vec<_>>();
-            let blocks = crate::read_agent_document_blocks(
-                pool,
-                args.project_id.as_uuid(),
-                args.document_id.as_uuid(),
-                &block_ids,
-            )
-            .await
-            .map_err(read_error)?;
-            Ok(blocks_value(blocks))
-        }
-        AgentReadOperation::SearchDocument(args) => {
-            let blocks = crate::search_agent_document(
-                pool,
-                args.project_id.as_uuid(),
-                args.document_id.as_uuid(),
-                &args.query,
-                i64::from(args.limit),
-            )
-            .await
-            .map_err(read_error)?;
-            Ok(blocks_value(blocks))
-        }
-        AgentReadOperation::SearchProjectReports(args) => {
-            let reports = crate::search_agent_reports(
-                pool,
-                args.project_id.as_uuid(),
-                &args.query,
-                i64::from(args.limit),
-            )
-            .await
-            .map_err(read_error)?;
-            Ok(Value::Array(
-                reports
-                    .into_iter()
-                    .map(|report| report_value(report, MAX_REPORT_ABSTRACT_CHARS))
-                    .collect(),
-            ))
-        }
-        AgentReadOperation::GetScreeningState(args) => {
-            let screening = crate::get_agent_screening_state(
-                pool,
-                args.project_id.as_uuid(),
-                args.report_id.as_uuid(),
-            )
-            .await
-            .map_err(read_error)?;
-            serde_json::to_value(screening)
-                .map_err(|_| AiError::InvalidContext("the tool failed".to_owned()))
-        }
-        AgentReadOperation::GetStudy(args) => {
-            let study = crate::get_study(pool, args.project_id.as_uuid(), args.study_id.as_uuid())
-                .await
-                .map_err(|error| match error {
-                    crate::StudyError::ProjectNotFound
-                    | crate::StudyError::StudyNotFound
-                    | crate::StudyError::ReportNotInProject => AiError::InvalidContext(
-                        "that item was not found in this project".to_owned(),
-                    ),
-                    _ => AiError::InvalidContext("the tool failed".to_owned()),
-                })?;
-            study_value(study)
-        }
-        AgentReadOperation::ListStudies(args) => crate::list_agent_studies(
-            pool,
-            args.project_id.as_uuid(),
-            i64::from(args.limit.unwrap_or(25)),
-        )
-        .await
-        .map_err(read_error),
-        AgentReadOperation::GetAppraisal(args) => {
-            let appraisal = crate::get_latest_agent_appraisal(
-                pool,
-                args.project_id.as_uuid(),
-                args.report_id.as_uuid(),
-                &args.definition_id,
-                i32::try_from(args.definition_version)
-                    .map_err(|_| AiError::InvalidContext("the tool failed".to_owned()))?,
-            )
-            .await
-            .map_err(read_error)?;
-            serde_json::to_value(appraisal)
-                .map_err(|_| AiError::InvalidContext("the tool failed".to_owned()))
-        }
+        AgentReadOperation::GetProjectProtocol(args) => read_project_protocol(pool, args).await,
+        AgentReadOperation::GetReport(args) => read_report(pool, args).await,
+        AgentReadOperation::ReadDocumentBlocks(args) => read_document_blocks(pool, args).await,
+        AgentReadOperation::SearchDocument(args) => search_document(pool, args).await,
+        AgentReadOperation::SearchProjectReports(args) => search_project_reports(pool, args).await,
+        AgentReadOperation::GetScreeningState(args) => read_screening_state(pool, args).await,
+        AgentReadOperation::GetStudy(args) => read_study(pool, args).await,
+        AgentReadOperation::ListStudies(args) => list_studies(pool, args).await,
+        AgentReadOperation::GetAppraisal(args) => read_appraisal(pool, args).await,
     }
 }
 
-fn protocol_value(protocol: crate::ProtocolDocument) -> Result<Value, AiError> {
-    let framework = serde_json::to_value(protocol.framework)
-        .map_err(|_| AiError::InvalidContext("the tool failed".to_owned()))?;
-    let criteria = serde_json::to_value(protocol.criteria)
-        .map_err(|_| AiError::InvalidContext("the tool failed".to_owned()))?;
+async fn read_project_protocol(
+    pool: &PgPool,
+    args: ProjectToolArgs,
+) -> Result<Value, crate::AgentReadError> {
+    let protocol = crate::get_published_protocol(pool, args.project_id.as_uuid())
+        .await
+        .map_err(protocol_read_error)?;
+    protocol_value(protocol)
+}
+
+async fn read_report(pool: &PgPool, args: ReportToolArgs) -> Result<Value, crate::AgentReadError> {
+    let report =
+        crate::get_agent_report(pool, args.project_id.as_uuid(), args.report_id.as_uuid()).await?;
+    Ok(report_value(report, MAX_REPORT_ABSTRACT_CHARS))
+}
+
+async fn read_document_blocks(
+    pool: &PgPool,
+    args: DocumentBlocksToolArgs,
+) -> Result<Value, crate::AgentReadError> {
+    let block_ids = args
+        .block_ids
+        .iter()
+        .map(|block_id| block_id.as_uuid())
+        .collect::<Vec<_>>();
+    let blocks = crate::read_agent_document_blocks(
+        pool,
+        args.project_id.as_uuid(),
+        args.document_id.as_uuid(),
+        &block_ids,
+    )
+    .await?;
+    Ok(blocks_value(blocks))
+}
+
+async fn search_document(
+    pool: &PgPool,
+    args: SearchDocumentToolArgs,
+) -> Result<Value, crate::AgentReadError> {
+    let blocks = crate::search_agent_document(
+        pool,
+        args.project_id.as_uuid(),
+        args.document_id.as_uuid(),
+        &args.query,
+        i64::from(args.limit),
+    )
+    .await?;
+    Ok(blocks_value(blocks))
+}
+
+async fn search_project_reports(
+    pool: &PgPool,
+    args: SearchProjectReportsToolArgs,
+) -> Result<Value, crate::AgentReadError> {
+    let reports = crate::search_agent_reports(
+        pool,
+        args.project_id.as_uuid(),
+        &args.query,
+        i64::from(args.limit),
+    )
+    .await?;
+    Ok(Value::Array(
+        reports
+            .into_iter()
+            .map(|report| report_value(report, MAX_REPORT_ABSTRACT_CHARS))
+            .collect(),
+    ))
+}
+
+async fn read_screening_state(
+    pool: &PgPool,
+    args: ScreeningStateToolArgs,
+) -> Result<Value, crate::AgentReadError> {
+    let screening =
+        crate::get_agent_screening_state(pool, args.project_id.as_uuid(), args.report_id.as_uuid())
+            .await?;
+    serde_json::to_value(screening).map_err(|_| crate::AgentReadError::InvalidData)
+}
+
+async fn read_study(pool: &PgPool, args: StudyToolArgs) -> Result<Value, crate::AgentReadError> {
+    let study = crate::get_study(pool, args.project_id.as_uuid(), args.study_id.as_uuid())
+        .await
+        .map_err(study_read_error)?;
+    Ok(study_value(study))
+}
+
+async fn list_studies(
+    pool: &PgPool,
+    args: ListStudiesToolArgs,
+) -> Result<Value, crate::AgentReadError> {
+    crate::list_agent_studies(
+        pool,
+        args.project_id.as_uuid(),
+        i64::from(args.limit.unwrap_or(25)),
+    )
+    .await
+}
+
+async fn read_appraisal(
+    pool: &PgPool,
+    args: AppraisalToolArgs,
+) -> Result<Value, crate::AgentReadError> {
+    let appraisal = crate::get_latest_agent_appraisal(
+        pool,
+        args.project_id.as_uuid(),
+        args.report_id.as_uuid(),
+        &args.definition_id,
+        i32::try_from(args.definition_version).map_err(|_| crate::AgentReadError::InvalidData)?,
+    )
+    .await?;
+    serde_json::to_value(appraisal).map_err(|_| crate::AgentReadError::InvalidData)
+}
+
+fn protocol_value(protocol: crate::ProtocolDocument) -> Result<Value, crate::AgentReadError> {
+    let framework =
+        serde_json::to_value(protocol.framework).map_err(|_| crate::AgentReadError::InvalidData)?;
+    let criteria =
+        serde_json::to_value(protocol.criteria).map_err(|_| crate::AgentReadError::InvalidData)?;
     Ok(json!({
         "id": protocol.id,
         "project_id": protocol.project_id,
@@ -257,7 +318,7 @@ fn report_value(report: crate::AgentReportRecord, abstract_limit: usize) -> Valu
         "id": report.id,
         "project_id": report.project_id,
         "title": report.title,
-        "abstract_text": report.abstract_text.as_deref().map(|value| bounded_text(value, abstract_limit)),
+        "abstract_text": report.abstract_text.as_deref().map(|value| truncate_chars(value, abstract_limit)),
         "publication_year": report.publication_year,
         "journal": report.journal,
         "url": report.url,
@@ -286,7 +347,7 @@ fn blocks_value(blocks: Vec<crate::AgentDocumentBlockRecord>) -> Value {
                     "kind": block.kind,
                     "section_path": block.section_path,
                     "ordinal": block.ordinal,
-                    "text": bounded_text(&block.text, MAX_BLOCK_TEXT_CHARS),
+                    "text": truncate_chars(&block.text, MAX_BLOCK_TEXT_CHARS),
                     "content_hash": block.content_hash,
                 })
             })
@@ -294,7 +355,7 @@ fn blocks_value(blocks: Vec<crate::AgentDocumentBlockRecord>) -> Value {
     )
 }
 
-fn study_value(study: crate::StudyDetailRecord) -> Result<Value, AiError> {
+fn study_value(study: crate::StudyDetailRecord) -> Value {
     let reports = study
         .reports
         .into_iter()
@@ -302,14 +363,14 @@ fn study_value(study: crate::StudyDetailRecord) -> Result<Value, AiError> {
             json!({
                 "report_id": report.report_id,
                 "title": report.title.as_deref().map(crate::decode_html_entities),
-                "abstract_text": report.abstract_text.as_deref().map(|value| bounded_text(value, MAX_REPORT_ABSTRACT_CHARS)),
+                "abstract_text": report.abstract_text.as_deref().map(|value| truncate_chars(value, MAX_REPORT_ABSTRACT_CHARS)),
                 "publication_year": report.publication_year,
                 "role": report.role.as_str(),
                 "assigned_at": report.assigned_at,
             })
         })
         .collect::<Vec<_>>();
-    Ok(json!({
+    json!({
         "id": study.study.id,
         "project_id": study.study.project_id,
         "title": crate::decode_html_entities(&study.study.title),
@@ -320,9 +381,5 @@ fn study_value(study: crate::StudyDetailRecord) -> Result<Value, AiError> {
         "updated_at": study.study.updated_at,
         "reports": reports,
         "tool_suggestions": study.tool_suggestions,
-    }))
-}
-
-fn bounded_text(value: &str, max_chars: usize) -> String {
-    value.chars().take(max_chars).collect()
+    })
 }
