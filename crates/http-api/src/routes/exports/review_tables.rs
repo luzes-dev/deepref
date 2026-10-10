@@ -170,17 +170,20 @@ LIMIT $2
 "#;
 
 /// The latest completed appraisal per report, with the report title and screening decision.
+/// An appraisal only exists downstream of an inclusion decision, so a report hidden by an
+/// active blind audit is withheld together with its assessment rather than merely masked.
 const LATEST_ASSESSMENTS_SQL: &str = r#"
 WITH latest AS (
   SELECT DISTINCT ON (a.report_id)
          a.id, a.report_id, a.definition_id, a.definition_version, a.responses, a.judgments,
          a.actor_kind, a.actor_id, a.completed_at
   FROM appraisal_assessments a
-  WHERE a.project_id = $1
+  WHERE a.project_id = $1 AND NOT ai_first_audit_masked(a.project_id, a.report_id)
   ORDER BY a.report_id, a.completed_at DESC, a.created_at DESC, a.id DESC
 )
 SELECT latest.report_id, COALESCE(r.title, '') AS report_title,
-       COALESCE(ss.final_status, 'unscreened') AS screening_status,
+       CASE WHEN ai_first_audit_masked($1, latest.report_id)
+            THEN 'unscreened' ELSE COALESCE(ss.final_status, 'unscreened') END AS screening_status,
        latest.id AS assessment_id, latest.definition_id, latest.definition_version,
        latest.responses, latest.judgments, latest.completed_at,
        latest.actor_kind, latest.actor_id
@@ -201,7 +204,8 @@ ORDER BY e.assessment_id, e.question_id, b.page_number NULLS LAST, b.ordinal NUL
 
 /// Included studies: every linked report of an included study, then the included reports that
 /// are not yet grouped into a study. Included means title/abstract and full text both include,
-/// which is the same rule the PRISMA counts use.
+/// which is the same rule the PRISMA counts use. Every column is derived from a screening
+/// decision, so a report hidden by an active blind audit is withheld from the whole table.
 const INCLUDED_SQL: &str = r#"
 WITH included AS (
   SELECT pr.report_id
@@ -210,6 +214,7 @@ WITH included AS (
   WHERE pr.project_id = $1
     AND ss.title_abstract_status = 'include'
     AND ss.full_text_status = 'include'
+    AND NOT ai_first_audit_masked(pr.project_id, pr.report_id)
 ), dois AS (
   SELECT DISTINCT ON (report_id) report_id, value
   FROM report_identifiers
@@ -235,6 +240,7 @@ SELECT * FROM (
   JOIN reports r ON r.id = sr.report_id
   LEFT JOIN dois ON dois.report_id = r.id
   LEFT JOIN screening_state ss ON ss.project_id = $1 AND ss.report_id = r.id
+  WHERE NOT ai_first_audit_masked($1, r.id)
   UNION ALL
   SELECT FALSE AS grouped,
          NULL::uuid, NULL::text, NULL::text, NULL::text,

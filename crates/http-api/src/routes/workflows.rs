@@ -1255,6 +1255,17 @@ pub(crate) async fn start_test_run(
     let record = deepref_postgres::get_workflow(&state.pool, project, workflow)
         .await
         .map_err(map_error)?;
+    // A test run answers with the run snapshot, and a blind audit withholds run
+    // inspection entirely. Refuse instead of producing a snapshot nobody may read.
+    if deepref_postgres::workflow_run_inspection_withheld(&state.pool, project)
+        .await
+        .map_err(map_error)?
+    {
+        return Err(map_error(WorkflowError::Conflict(
+            "Run inspection is withheld while a blind audit is active. Complete or recover the audit first."
+                .to_owned(),
+        )));
+    }
     let ctx = deepref_postgres::validation_context(&state.pool, workflow, &record.draft_graph)
         .await
         .map_err(map_error)?;
