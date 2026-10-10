@@ -8,10 +8,10 @@
 		evaluateAiFirstAudit,
 		finalizeAiFirstCohort,
 		recoverAiFirstCohort
-	} from '$lib/api/generated/ai/ai';
-	import type { AiFirstForecastDto } from '$lib/api/generated/models';
-	import { currentReviewerId, saveReviewerId } from '$lib/api/reviewer';
-	import { notifyError } from '$lib/features/notifications/toast';
+	} from '#lib/api/generated/ai/ai.js';
+	import type { AiFirstForecastDto } from '#lib/api/generated/models/index.js';
+	import { currentReviewerId, saveReviewerId } from '#lib/api/reviewer.js';
+	import { notifyError } from '#lib/features/notifications/toast.js';
 	import * as Alert from '@deepref/ui/alert';
 	import * as Card from '@deepref/ui/card';
 	import * as Field from '@deepref/ui/field';

@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { QueryClient, QueryClientProvider } from '@tanstack/svelte-query';
-	import AiFirstPanel from '$lib/features/ai-autonomy/components/AiFirstPanel.svelte';
+	import AiFirstPanel from '#lib/features/ai-autonomy/components/AiFirstPanel.svelte';
 
 	let { projectId }: { projectId: string } = $props();
 	const client = new QueryClient({

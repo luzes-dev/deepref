@@ -2,8 +2,8 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@testing-library/svelte';
 import { http, HttpResponse } from 'msw';
 import { server } from '../../../../tests/mocks/server';
-import AiFirstPanelTestHost from '$lib/tests/AiFirstPanelTestHost.svelte';
-import type { AiFirstCohortDto, AiFirstOverviewDto } from '$lib/api/generated/models';
+import AiFirstPanelTestHost from '#lib/tests/AiFirstPanelTestHost.svelte';
+import type { AiFirstCohortDto, AiFirstOverviewDto } from '#lib/api/generated/models/index.js';
 
 const projectId = '33438758-42f0-4da2-9c3d-22a2c51f1109';
 const cohortId = '33438758-42f0-4da2-9c3d-22a2c51f1108';
