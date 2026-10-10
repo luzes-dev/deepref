@@ -203,8 +203,13 @@ fn every_definition_asset_change_invalidates_semantics_and_node_reuse() {
             "{asset} must invalidate compiled identity"
         );
         assert_ne!(
-            original_manifest.semantic_bundle_hash, changed_manifest.semantic_bundle_hash,
-            "{asset} must invalidate semantic bundle"
+            original_manifest
+                .semantic_contract_id()
+                .expect("contract id"),
+            changed_manifest
+                .semantic_contract_id()
+                .expect("contract id"),
+            "{asset} must invalidate the semantic contract"
         );
         assert_ne!(
             original_fingerprint, changed_fingerprint,

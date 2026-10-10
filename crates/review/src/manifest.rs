@@ -6,10 +6,6 @@ use uuid::Uuid;
 use crate::{
     BuildProvenance, CompiledReviewDefinition, ReviewDefinitionKey, ReviewError, ReviewHash,
     ReviewOrigin, ReviewSemanticContract, ReviewSubject,
-    identity::{
-        IdentityComponent, SemanticIdentity, dependency_fingerprint, implementation_fingerprint,
-    },
-    screening_golden_fingerprints,
 };
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -40,13 +36,11 @@ impl ReviewModelIdentity {
     }
 }
 
-/// Where and how a manifest was built, recorded for audit. `rust_version`,
-/// `target` and `deployment_build_id` never enter a semantic identity. See the
-/// scheme 2 recipe in `identity`.
+/// Where and how a manifest was built, recorded for audit. None of these
+/// values enters the semantic contract; they feed [`BuildProvenance`].
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct ReviewRuntimeIdentity {
-    /// Source-tree hash (`DEEPREF_SOURCE_TREE_SHA`). Audit only, except that it
-    /// is the implementation component of definitions without a narrow boundary.
+    /// Source-tree hash (`DEEPREF_SOURCE_TREE_SHA`). Audit only.
     pub build_sha: ReviewHash,
     pub rust_version: String,
     pub target: String,
@@ -106,13 +100,6 @@ pub struct ReviewRunManifest {
     pub parser_bundle_hash: ReviewHash,
     pub resolved_models: Vec<ReviewModelIdentity>,
     pub runtime: ReviewRuntimeIdentity,
-    /// Named components of `semantic_bundle_hash`. Manifests persisted before
-    /// identity scheme 2 have none and can never match current evidence.
-    /// Kept in parallel while calibration migrates to [`ReviewSemanticContract`];
-    /// scheme 2 is no longer admitted for new calibration.
-    #[serde(default, skip_serializing_if = "Option::is_none")]
-    pub semantic_identity: Option<SemanticIdentity>,
-    pub semantic_bundle_hash: ReviewHash,
     /// The structured semantic contract: the only identity that gates
     /// calibration compatibility. Absent in manifests persisted before the
     /// contract migration; those manifests can never admit new calibration.
@@ -125,13 +112,6 @@ pub struct ReviewRunManifest {
 }
 
 impl ReviewRunManifest {
-    /// The identity recipe this manifest was built with; 1 for legacy manifests.
-    pub fn identity_scheme(&self) -> u32 {
-        self.semantic_identity
-            .as_ref()
-            .map_or(1, |identity| identity.scheme)
-    }
-
     /// The structured semantic contract id of this run: what
     /// `review_run_manifests.semantic_bundle_hash` and calibration bundles
     /// store. Absent in manifests persisted before the contract migration.
@@ -145,14 +125,6 @@ impl ReviewRunManifest {
                 )
             })
     }
-}
-
-#[derive(Serialize)]
-struct DefinitionComponent<'a> {
-    definition_id: &'a str,
-    definition_version: u32,
-    definition_hash: &'a ReviewHash,
-    workflow_hash: &'a ReviewHash,
 }
 
 #[derive(Serialize)]
@@ -175,8 +147,6 @@ struct ManifestWithoutOwnHash<'a> {
     parser_bundle_hash: &'a ReviewHash,
     resolved_models: &'a [ReviewModelIdentity],
     runtime: &'a ReviewRuntimeIdentity,
-    semantic_identity: &'a SemanticIdentity,
-    semantic_bundle_hash: &'a ReviewHash,
 }
 
 impl ReviewRunManifest {
@@ -217,9 +187,6 @@ impl ReviewRunManifest {
         }
 
         let identity = definition.identity();
-        let semantic_identity = semantic_identity(definition, &input)?;
-        semantic_identity.validate()?;
-        let semantic_bundle_hash = semantic_identity.aggregate_hash()?;
         let semantic_contract = ReviewSemanticContract::for_review(
             definition,
             subject_stage(&input.subject),
@@ -228,7 +195,7 @@ impl ReviewRunManifest {
         )?;
         let provenance =
             BuildProvenance::for_manifest(definition.key(), &input.runtime, &input.resolved_models);
-        let manifest_hash = ReviewHash::digest_json(&ManifestWithoutOwnHash {
+        let manifest_hash = ReviewHash::digest_input(&ManifestWithoutOwnHash {
             project_id: input.project_id,
             definition: definition.key(),
             definition_id: &identity.definition_id,
@@ -247,8 +214,6 @@ impl ReviewRunManifest {
             parser_bundle_hash: &identity.parser_bundle_hash,
             resolved_models: &input.resolved_models,
             runtime: &input.runtime,
-            semantic_identity: &semantic_identity,
-            semantic_bundle_hash: &semantic_bundle_hash,
         })?;
 
         Ok(Self {
@@ -270,8 +235,6 @@ impl ReviewRunManifest {
             parser_bundle_hash: identity.parser_bundle_hash.clone(),
             resolved_models: input.resolved_models,
             runtime: input.runtime,
-            semantic_identity: Some(semantic_identity),
-            semantic_bundle_hash,
             semantic_contract: Some(semantic_contract),
             provenance,
             manifest_hash,
@@ -279,123 +242,12 @@ impl ReviewRunManifest {
     }
 }
 
-/// The screening stage of a subject, if it is a screening subject. Shared by
-/// the legacy identity and the semantic contract so they can never disagree.
+/// The screening stage of a subject, if it is a screening subject.
 fn subject_stage(subject: &ReviewSubject) -> Option<ScreeningStage> {
     match subject {
         ReviewSubject::Screening { stage, .. } => Some(*stage),
         _ => None,
     }
-}
-
-/// Builds the scheme-2 identity of one compiled review for one subject.
-///
-/// Runtime provenance is deliberately absent: only `Implementation` speaks for
-/// the code, and it is computed from the semantic boundary rather than from
-/// the deployment.
-fn semantic_identity(
-    definition: &CompiledReviewDefinition,
-    input: &ReviewManifestInput,
-) -> Result<SemanticIdentity, ReviewError> {
-    let identity = definition.identity();
-    let stage = subject_stage(&input.subject);
-    let mut semantic = SemanticIdentity::new(definition.key(), stage)
-        .with(
-            IdentityComponent::Definition,
-            ReviewHash::digest_json(&DefinitionComponent {
-                definition_id: &identity.definition_id,
-                definition_version: identity.definition_version,
-                definition_hash: &identity.declared_assets_hash,
-                workflow_hash: &identity.workflow_hash,
-            })?,
-        )
-        .with(
-            IdentityComponent::Prompt,
-            identity.prompt_bundle_hash.clone(),
-        )
-        .with(
-            IdentityComponent::Schema,
-            identity.schema_bundle_hash.clone(),
-        )
-        .with(
-            IdentityComponent::Policy,
-            if stage.is_some() {
-                ReviewHash::digest_json(&(
-                    identity.policy_hash.clone(),
-                    crate::AI_FIRST_POLICY_VERSION,
-                ))?
-            } else {
-                identity.policy_hash.clone()
-            },
-        )
-        .with(
-            IdentityComponent::Parser,
-            identity.parser_bundle_hash.clone(),
-        )
-        .with(IdentityComponent::Protocol, input.protocol_hash.clone())
-        .with(
-            IdentityComponent::Models,
-            ReviewHash::digest_json(&routes_without_endpoints(&input.resolved_models))?,
-        )
-        .with(
-            IdentityComponent::ProviderEndpoint,
-            ReviewHash::digest_json(&provider_endpoints(&input.resolved_models))?,
-        )
-        .with(
-            IdentityComponent::Implementation,
-            implementation_component(definition.key(), input)?,
-        )
-        .with(IdentityComponent::Dependencies, dependency_fingerprint()?);
-    if definition.key() == ReviewDefinitionKey::Screening {
-        // Behavioural fingerprints of screening; a failure here fails the manifest.
-        let (golden_render, golden_parse) = screening_golden_fingerprints()?;
-        semantic = semantic
-            .with(IdentityComponent::GoldenRender, golden_render)
-            .with(IdentityComponent::GoldenParse, golden_parse);
-    }
-    Ok(semantic)
-}
-
-/// The `Implementation` value of a definition.
-///
-/// Screening uses the narrow boundary computed at build time. Every other
-/// definition keeps the broad source-tree hash that was recorded before the
-/// identity was decomposed, because its task code is outside the narrow
-/// boundary and a narrow value there would stop catching changes to that code.
-/// For those definitions `build_sha` is the one runtime field that enters the
-/// semantic identity. `rust_version`, `target` and the deployment id never do.
-fn implementation_component(
-    definition: ReviewDefinitionKey,
-    input: &ReviewManifestInput,
-) -> Result<ReviewHash, ReviewError> {
-    match definition {
-        ReviewDefinitionKey::Screening => implementation_fingerprint(),
-        _ => Ok(input.runtime.build_sha.clone()),
-    }
-}
-
-/// The resolved routes without their endpoints. The endpoint is its own component, so an
-/// endpoint change is reported as `ProviderEndpoint` alone, and the `Models` hash stays what it
-/// was before endpoints were recorded.
-fn routes_without_endpoints(models: &[ReviewModelIdentity]) -> Vec<ReviewModelIdentity> {
-    models
-        .iter()
-        .map(|model| ReviewModelIdentity {
-            endpoint: None,
-            ..model.clone()
-        })
-        .collect()
-}
-
-/// The endpoint each profile is sent to, in the sorted model order. `null` where the endpoint
-/// is unknown.
-fn provider_endpoints(
-    models: &[ReviewModelIdentity],
-) -> Vec<(ModelProfile, Option<&ProviderEndpoint>)> {
-    models
-        .iter()
-        .map(|model| (model.profile, model.endpoint.as_ref()))
-        .collect()
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -452,7 +304,7 @@ pub fn fingerprint_node(
             content_hash: &artifact.content_hash,
         })
         .collect::<Vec<_>>();
-    ReviewHash::digest_json(&FingerprintInput {
+    ReviewHash::digest_input(&FingerprintInput {
         manifest_hash: &manifest.manifest_hash,
         node_id,
         node_version,
@@ -490,10 +342,7 @@ mod tests {
     use std::collections::BTreeSet;
 
     use super::*;
-    use crate::{
-        CalibrationCompatibility, IdentityComparison, ReviewCatalog, ReviewDefinitionKey,
-        SemanticChange,
-    };
+    use crate::{CalibrationCompatibility, ReviewCatalog, ReviewDefinitionKey, SemanticChange};
     use deepref_domain::{Actor, ActorKind, ReportId, ScreeningStage};
 
     fn hash(value: &str) -> ReviewHash {
@@ -558,7 +407,7 @@ mod tests {
     }
 
     #[test]
-    fn source_changes_manifest_but_not_semantic_bundle() {
+    fn source_changes_manifest_but_not_the_contract() {
         let definition = ReviewCatalog
             .compile(ReviewDefinitionKey::Screening)
             .expect("definition should compile");
@@ -580,7 +429,7 @@ mod tests {
             },
         )
         .expect("manifest should rebuild");
-        assert_eq!(first.semantic_bundle_hash, rebuilt.semantic_bundle_hash);
+        assert_eq!(contract_of(&first).id(), contract_of(&rebuilt).id());
         assert_ne!(first.manifest_hash, rebuilt.manifest_hash);
     }
 
@@ -621,7 +470,7 @@ mod tests {
     }
 
     #[test]
-    fn protocol_and_model_changes_invalidate_semantics_and_node_reuse() {
+    fn protocol_and_model_changes_invalidate_the_contract_and_node_reuse() {
         let definition = ReviewCatalog
             .compile(ReviewDefinitionKey::Screening)
             .expect("definition should compile");
@@ -641,8 +490,9 @@ mod tests {
             let changed_fingerprint = fingerprint_node(&definition, &changed, "prepare", &[])
                 .expect("changed fingerprint should build");
             assert_ne!(
-                original.semantic_bundle_hash, changed.semantic_bundle_hash,
-                "{identity} must invalidate the semantic bundle"
+                contract_of(&original).id(),
+                contract_of(&changed).id(),
+                "{identity} must invalidate the semantic contract"
             );
             assert_ne!(
                 original_fingerprint, changed_fingerprint,
@@ -653,53 +503,6 @@ mod tests {
 
     fn endpoint(raw: &str) -> ProviderEndpoint {
         ProviderEndpoint::from_configured_url(raw).unwrap_or_else(|_| unreachable!())
-    }
-
-    #[test]
-    fn an_endpoint_change_is_reported_as_provider_endpoint_alone() {
-        let definition = ReviewCatalog
-            .compile(ReviewDefinitionKey::Screening)
-            .expect("definition should compile");
-        let original = manifest(&definition);
-        let mut moved = original.clone();
-        moved.resolved_models[0].endpoint = Some(endpoint("https://opencode.ai/zen/go/v1"));
-        let moved = rebuild(&definition, moved);
-        assert_ne!(original.semantic_bundle_hash, moved.semantic_bundle_hash);
-        let mut other = moved.clone();
-        other.resolved_models[0].endpoint = Some(endpoint("https://backup.example/zen/go/v1"));
-        let other = rebuild(&definition, other);
-        let stored = original.semantic_identity.as_ref().expect("identity");
-        assert_eq!(
-            stored.compare(moved.semantic_identity.as_ref().expect("identity")),
-            IdentityComparison::Stale(BTreeSet::from([IdentityComponent::ProviderEndpoint]))
-        );
-        assert_eq!(
-            moved
-                .semantic_identity
-                .as_ref()
-                .expect("identity")
-                .compare(other.semantic_identity.as_ref().expect("identity")),
-            IdentityComparison::Stale(BTreeSet::from([IdentityComponent::ProviderEndpoint]))
-        );
-    }
-
-    #[test]
-    fn a_model_change_is_reported_as_models_alone() {
-        let definition = ReviewCatalog
-            .compile(ReviewDefinitionKey::Screening)
-            .expect("definition should compile");
-        let original = manifest(&definition);
-        let mut changed = original.clone();
-        changed.resolved_models[0].model = "reasoning-next".to_owned();
-        let changed = rebuild(&definition, changed);
-        assert_eq!(
-            original
-                .semantic_identity
-                .as_ref()
-                .expect("identity")
-                .compare(changed.semantic_identity.as_ref().expect("identity")),
-            IdentityComparison::Stale(BTreeSet::from([IdentityComponent::Models]))
-        );
     }
 
     #[test]
@@ -726,83 +529,7 @@ mod tests {
     }
 
     #[test]
-    fn runtime_provenance_never_changes_the_screening_semantic_identity() {
-        let definition = ReviewCatalog
-            .compile(ReviewDefinitionKey::Screening)
-            .expect("definition should compile");
-        let original = manifest(&definition);
-        let original_fingerprint = fingerprint_node(&definition, &original, "prepare", &[])
-            .expect("fingerprint should build");
-
-        let mut build = original.clone();
-        build.runtime.build_sha = hash("changed-source-tree");
-        let mut rust = original.clone();
-        rust.runtime.rust_version = "1.96".to_owned();
-        let mut target = original.clone();
-        target.runtime.target = "aarch64-macos".to_owned();
-        let mut deployment = original.clone();
-        deployment.runtime.deployment_build_id = Some("rev:tree".to_owned());
-
-        for (field, changed) in [
-            ("build_sha", rebuild(&definition, build)),
-            ("rust_version", rebuild(&definition, rust)),
-            ("target", rebuild(&definition, target)),
-            ("deployment_build_id", rebuild(&definition, deployment)),
-        ] {
-            assert_eq!(
-                original.semantic_bundle_hash, changed.semantic_bundle_hash,
-                "{field} is audit only and must not change calibration"
-            );
-            assert_eq!(
-                original.semantic_identity, changed.semantic_identity,
-                "{field} must not change any identity component"
-            );
-            // Documented, not desired: the runtime stays in the manifest hash, so
-            // the manifest and its node fingerprints still move. The AI reuse key
-            // includes the node fingerprint, so a changed runtime re-issues calls.
-            // Excluding the runtime from the manifest hash is a separate change.
-            assert_ne!(
-                original.manifest_hash, changed.manifest_hash,
-                "{field} is still recorded in the manifest hash"
-            );
-            assert_ne!(
-                original_fingerprint,
-                fingerprint_node(&definition, &changed, "prepare", &[])
-                    .expect("changed fingerprint should build"),
-                "{field} still moves node fingerprints"
-            );
-        }
-    }
-
-    #[test]
-    fn identity_components_are_the_build_time_fingerprints() {
-        let definition = ReviewCatalog
-            .compile(ReviewDefinitionKey::Screening)
-            .expect("definition should compile");
-        let manifest = manifest(&definition);
-        let identity = manifest
-            .semantic_identity
-            .as_ref()
-            .expect("a scheme 2 identity is recorded");
-        identity
-            .validate()
-            .expect("the identity matches the recipe");
-        assert_eq!(
-            identity.components.get(&IdentityComponent::Implementation),
-            Some(&ReviewHash::parse(env!("DEEPREF_SEMANTIC_IMPLEMENTATION_SHA")).expect("hash")),
-        );
-        assert_eq!(
-            identity.components.get(&IdentityComponent::Dependencies),
-            Some(&ReviewHash::parse(env!("DEEPREF_SEMANTIC_DEPENDENCY_SHA")).expect("hash")),
-        );
-        assert_eq!(
-            identity.components.get(&IdentityComponent::Implementation),
-            Some(&crate::identity::implementation_fingerprint().expect("hash")),
-        );
-    }
-
-    #[test]
-    fn non_screening_definitions_keep_the_broad_source_hash_until_their_boundary_is_declared() {
+    fn non_screening_definitions_carry_explicit_versions_and_ignore_build_provenance() {
         let definition = ReviewCatalog
             .compile(ReviewDefinitionKey::DuplicateDetection)
             .expect("definition should compile");
@@ -836,20 +563,51 @@ mod tests {
             },
         )
         .expect("manifest should build");
-        let identity = original
-            .semantic_identity
-            .as_ref()
-            .expect("a scheme 2 identity is recorded");
+        let contract = contract_of(&original);
         assert_eq!(
-            identity.components.get(&IdentityComponent::Implementation),
-            Some(&hash("build")),
-            "the broad source hash stands in for definitions without a narrow boundary"
+            contract.semantic_version,
+            crate::DUPLICATE_DETECTION_SEMANTIC_VERSION
         );
+        assert_eq!(contract.stage, None);
 
+        // A source-tree change without a behavior change keeps the contract
+        // but moves provenance: calibration stays valid, audit still sees it.
         let mut changed = original.clone();
         changed.runtime.build_sha = hash("changed-source-tree");
         let rebuilt = rebuild(&definition, changed);
-        assert_ne!(original.semantic_bundle_hash, rebuilt.semantic_bundle_hash);
+        assert_eq!(
+            contract.compare(&contract_of(&rebuilt)),
+            CalibrationCompatibility::Compatible
+        );
+        assert_ne!(original.provenance, rebuilt.provenance);
+    }
+
+    #[test]
+    fn provenance_records_the_build_time_digests_for_audit() {
+        let definition = ReviewCatalog
+            .compile(ReviewDefinitionKey::Screening)
+            .expect("definition should compile");
+        let manifest = manifest(&definition);
+        let provenance = &manifest.provenance;
+        assert!(!provenance.deepref_version.is_empty());
+        assert_eq!(
+            provenance
+                .source_tree_digest
+                .as_ref()
+                .map(|digest| digest.as_str()),
+            Some(manifest.runtime.build_sha.as_str()),
+            "the broad source-tree digest is preserved as provenance"
+        );
+        assert!(
+            provenance.cargo_lock_digest.is_some(),
+            "the dependency closure digest is preserved as provenance"
+        );
+        assert!(
+            provenance.implementation_digest.is_some(),
+            "screening keeps its narrow boundary digest as provenance"
+        );
+        assert!(provenance.rig_version.is_some());
+        assert!(provenance.serde_json_version.is_some());
     }
 
     #[test]
@@ -1011,17 +769,24 @@ mod tests {
             .expect("definition should compile");
         let manifest = manifest(&definition);
         let mut json = serde_json::to_value(&manifest).expect("manifest serializes");
+        let object = json.as_object_mut().expect("manifest is an object");
         for key in ["semantic_contract", "provenance"] {
-            json.as_object_mut()
-                .expect("manifest is an object")
-                .remove(key);
+            object.remove(key);
         }
+        // Rows persisted under older recipes carry unknown identity keys;
+        // serde ignores them, and the missing contract fails admission closed.
+        object.insert(
+            "semantic_identity".to_owned(),
+            serde_json::json!({"scheme": 2}),
+        );
+        object.insert(
+            "semantic_bundle_hash".to_owned(),
+            serde_json::json!("a".repeat(64)),
+        );
         let restored: ReviewRunManifest =
             serde_json::from_value(json).expect("legacy manifest deserializes");
         assert_eq!(restored.semantic_contract, None);
-        assert_eq!(
-            restored.semantic_identity, manifest.semantic_identity,
-            "legacy identity fields are untouched"
-        );
+        assert!(restored.semantic_contract_id().is_err());
+        assert_eq!(restored.manifest_hash, manifest.manifest_hash);
     }
 }

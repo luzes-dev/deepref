@@ -1,17 +1,17 @@
-//! Emits the two semantic fingerprints that identify screening calibration.
+//! Emits build provenance for [`BuildProvenance`][crate::BuildProvenance].
 //!
-//! * `DEEPREF_SEMANTIC_IMPLEMENTATION_SHA`: the narrow implementation boundary.
-//! * `DEEPREF_SEMANTIC_DEPENDENCY_SHA`: the closure of the semantic third-party
+//! * `DEEPREF_PROVENANCE_IMPLEMENTATION_SHA`: the audited implementation boundary.
+//! * `DEEPREF_PROVENANCE_DEPENDENCY_SHA`: the closure of the audited third-party
 //!   dependencies, with the manifest lines that declare them.
+//! * `DEEPREF_RIG_VERSION`, `DEEPREF_SERDE_JSON_VERSION`: exact lockfile versions.
 //!
-//! It also emits `DEEPREF_RIG_VERSION` and `DEEPREF_SERDE_JSON_VERSION`, the
-//! exact lockfile versions recorded in [`BuildProvenance`][crate::BuildProvenance]
-//! for audit. Neither version gates calibration.
+//! These digests are forensic audit evidence ("what exact software produced
+//! this run"). They never gate calibration compatibility: no production
+//! calibration decision depends on repository path hashing.
 //!
 //! The logic, the boundary table and its rules live in
 //! `build_support/fingerprint.rs`, which is also unit-tested under `cfg(test)`.
-//! The audit listings are written to `OUT_DIR` and the dependency listing is
-//! exposed as `SEMANTIC_DEPENDENCIES`.
+//! The audit listings are written to `OUT_DIR` for forensic inspection.
 
 use std::{
     env,
@@ -45,11 +45,11 @@ fn main() -> Result<(), Box<dyn Error>> {
         &fingerprints.dependency_report,
     )?;
     println!(
-        "cargo:rustc-env=DEEPREF_SEMANTIC_IMPLEMENTATION_SHA={}",
+        "cargo:rustc-env=DEEPREF_PROVENANCE_IMPLEMENTATION_SHA={}",
         fingerprints.implementation_sha
     );
     println!(
-        "cargo:rustc-env=DEEPREF_SEMANTIC_DEPENDENCY_SHA={}",
+        "cargo:rustc-env=DEEPREF_PROVENANCE_DEPENDENCY_SHA={}",
         fingerprints.dependency_sha
     );
     println!(

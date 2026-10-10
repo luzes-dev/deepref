@@ -31,11 +31,20 @@ use sha2::{Digest, Sha256};
 
 use crate::{
     AI_FIRST_POLICY_VERSION, CompiledReviewDefinition, ReviewDefinitionKey, ReviewError,
-    ReviewHash,
-    identity::{dependency_fingerprint, implementation_fingerprint},
-    manifest::ReviewModelIdentity,
-    manifest::ReviewRuntimeIdentity,
+    ReviewHash, manifest::ReviewModelIdentity, manifest::ReviewRuntimeIdentity,
 };
+
+/// The audited implementation-boundary digest computed by `build.rs`.
+/// Provenance only: it never gates calibration.
+pub(crate) fn implementation_fingerprint() -> Result<ReviewHash, ReviewError> {
+    ReviewHash::parse(env!("DEEPREF_PROVENANCE_IMPLEMENTATION_SHA"))
+}
+
+/// The audited third-party dependency digest computed by `build.rs`.
+/// Provenance only: it never gates calibration.
+pub(crate) fn dependency_fingerprint() -> Result<ReviewHash, ReviewError> {
+    ReviewHash::parse(env!("DEEPREF_PROVENANCE_DEPENDENCY_SHA"))
+}
 
 /// The contract recipe version. Stored calibration snapshots carry this
 /// scheme; a snapshot from another recipe is never treated as comparable.

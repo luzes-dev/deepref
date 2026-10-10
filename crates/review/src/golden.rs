@@ -1,25 +1,24 @@
-//! Behavioural fingerprints for AI screening.
+//! CI regression evidence for AI screening.
 //!
 //! Declarative asset hashes (the prompt, schema, parser and policy files) cannot
 //! see a change in the Rust code that turns a screening subject into a model
-//! request or a model answer into an outcome. Two fingerprints close that gap by
-//! running the production code on deterministic fixtures:
+//! request or a model answer into an outcome. Two fixture sections close that
+//! gap by running the production code on deterministic fixtures:
 //!
-//! * `GoldenRender` hashes the canonical model requests built from the persisted
+//! * `render` holds the canonical model requests built from the persisted
 //!   screening subjects in `golden/screening-render-fixtures.json`, for every
 //!   model-calling node of the screening workflow. It covers the subject
 //!   mapping, the prompts, the output schema, the grounding evidence and the
 //!   request body.
-//! * `GoldenParse` hashes the canonical interpreted outcome of every raw model
+//! * `parse` holds the canonical interpreted outcome of every raw model
 //!   answer in `golden/screening-parse-responses.txt`: the normalized analysis,
 //!   the proposal payload, the independent-screen rule, the second-reviewer
 //!   opinion, the workflow verdict, or the rejection.
 //!
-//! The runtime value is the source of truth. [`screening_golden_fingerprints`]
-//! computes both values once per process, and every run manifest stores them as
-//! identity components, so calibration evidence goes stale when screening
-//! behaviour changes and only then. Manifest build fails closed if they cannot be
-//! computed.
+//! These fixtures are CI regression evidence and development diagnostics only:
+//! they never enter production calibration identity. A compact digest of each
+//! section is stored in the snapshot for quick comparison, but reviewers read
+//! the sections themselves.
 //!
 //! The committed snapshot `golden/screening-fingerprints.json` is the code-review
 //! mechanism. The `golden_snapshot_is_current` test fails when the computed report
@@ -37,10 +36,7 @@
 //! JSON and text, so the data is reviewable on its own; expected acceptance and
 //! rejection of each response is asserted by the tests.
 
-use std::{
-    collections::{BTreeMap, BTreeSet},
-    sync::OnceLock,
-};
+use std::collections::{BTreeMap, BTreeSet};
 
 use deepref_ai::{
     AiError, AiTask, CriterionJudgment, CriterionResult, EvidenceRef, GroundedBlock,
@@ -78,21 +74,11 @@ const SNAPSHOT_PATH: &str = concat!(
     "/golden/screening-fingerprints.json"
 );
 
-/// Runtime source of truth: `(GoldenRender, GoldenParse)` for screening.
-///
-/// Computed once per process. Errors are cached too, so a broken fixture fails
-/// every manifest build rather than only the first.
-pub fn screening_golden_fingerprints() -> Result<(ReviewHash, ReviewHash), ReviewError> {
-    let report = golden_report()?;
-    Ok((report.golden_render.clone(), report.golden_parse.clone()))
-}
-
-fn golden_report() -> Result<&'static GoldenReport, ReviewError> {
-    static REPORT: OnceLock<Result<GoldenReport, ReviewError>> = OnceLock::new();
-    REPORT
-        .get_or_init(build_report)
-        .as_ref()
-        .map_err(Clone::clone)
+/// Builds the full golden result for the test harness. CI-only: production
+/// calibration identity never reads this.
+#[cfg(test)]
+fn golden_report() -> Result<GoldenReport, ReviewError> {
+    build_report()
 }
 
 /// The full golden result. The two fingerprints are digests of its `render` and
@@ -131,7 +117,7 @@ fn build_report() -> Result<GoldenReport, ReviewError> {
     for fixture in &fixtures {
         render.push(RenderReport {
             fixture: fixture.name.clone(),
-            subject: ReviewHash::digest_json(&fixture.prepared)?,
+            subject: ReviewHash::digest_input(&fixture.prepared)?,
             protocol: fixture.prepared.protocol_hash()?,
             requests: node_requests(&definition, fixture)?,
         });
@@ -142,8 +128,8 @@ fn build_report() -> Result<GoldenReport, ReviewError> {
     }
     Ok(GoldenReport {
         semantic_version: crate::SCREENING_SEMANTIC_VERSION,
-        golden_render: ReviewHash::digest_json(&render)?,
-        golden_parse: ReviewHash::digest_json(&parse)?,
+        golden_render: ReviewHash::digest_input(&render)?,
+        golden_parse: ReviewHash::digest_input(&parse)?,
         render,
         parse,
     })
@@ -511,7 +497,7 @@ fn parse_report(
         name: response.name.clone(),
         fixture: response.fixture.clone(),
         description: outcome.description,
-        hash: ReviewHash::digest_json(&outcome.value)?,
+        hash: ReviewHash::digest_input(&outcome.value)?,
     })
 }
 
@@ -713,7 +699,7 @@ mod tests {
     #[test]
     fn golden_snapshot_is_current() {
         let report = golden_report().expect("golden fixtures compute");
-        let text = snapshot_text(report).expect("snapshot serializes");
+        let text = snapshot_text(&report).expect("snapshot serializes");
         if std::env::var("DEEPREF_BLESS_GOLDEN").as_deref() == Ok("1") {
             std::fs::write(SNAPSHOT_PATH, &text).expect("golden snapshot is writable");
             return;
@@ -733,7 +719,7 @@ mod tests {
                  \n\
                  {}\n\
                  (first snapshot line difference at line {})",
-                describe_golden_diff(report),
+                describe_golden_diff(&report),
                 text.lines()
                     .zip(SNAPSHOT.lines())
                     .position(|(computed, committed)| computed != committed)
@@ -873,17 +859,14 @@ mod tests {
     }
 
     #[test]
-    fn runtime_fingerprints_are_the_report_digests() {
+    fn section_digests_match_the_report_sections() {
         let report = golden_report().expect("golden fixtures compute");
-        let (render, parse) = screening_golden_fingerprints().expect("fingerprints compute");
-        assert_eq!(render, report.golden_render);
-        assert_eq!(parse, report.golden_parse);
         assert_eq!(
-            ReviewHash::digest_json(&report.render).expect("render digests"),
+            ReviewHash::digest_input(&report.render).expect("render digests"),
             report.golden_render
         );
         assert_eq!(
-            ReviewHash::digest_json(&report.parse).expect("parse digests"),
+            ReviewHash::digest_input(&report.parse).expect("parse digests"),
             report.golden_parse
         );
     }

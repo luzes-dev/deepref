@@ -1237,8 +1237,13 @@ by the advisory change.
 
 ## Appendix A: semantic identity scheme 2 and the component snapshot format
 
+> Superseded: scheme 2 was replaced by the scheme-3 semantic contract
+> (`crates/review/src/contract.rs`) in PR0/PR1. The recipe below is kept as
+> the historical record; for the live implementation see
+> [`contract.rs`](../../crates/review/src/contract.rs).
+
 The actual recipe is implemented in
-[`identity.rs`](../../crates/review/src/identity.rs),
+[`contract.rs`](../../crates/review/src/contract.rs),
 [`manifest.rs`](../../crates/review/src/manifest.rs),
 [`golden.rs`](../../crates/review/src/golden.rs), and
 [`build_support/fingerprint.rs`](../../crates/review/build_support/fingerprint.rs).
