@@ -13,7 +13,7 @@ export const LEVEL_EXPLANATION: Record<AutonomyLevel, string> = {
 	off: 'The AI does nothing for this.',
 	suggest: 'The AI prepares suggestions. Nothing changes until you accept one.',
 	second_reviewer:
-		'The AI decides on its own, kept separate from you. Where you disagree, the record goes to a Conflicts list for you to settle.',
+		'An AI opinion is available from the first record and stays hidden until your decision. You settle disagreements and keep all screening authority.',
 	act: 'The AI does it for you and tells you in the activity feed. You can undo it at any time.'
 };
 

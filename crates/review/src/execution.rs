@@ -4,9 +4,9 @@ use deepref_ai::{
     AiError, AiExecutionContext, AiGateway, AiRunStore, AiTask, AiTaskRunner,
     AppraisalPrefillInput, AppraisalPrefillTask, Clock, DataExtractionInput, DataExtractionTask,
     DedupeInput, DedupeTask, EvidenceRetriever, IdProvider, ModelProfile, ModelRouter,
-    ProposalDraft, ProposalStore, ScreeningEvidence, ScreeningInput, ScreeningTask,
-    ScreeningTaskConfig, StudyDesignClassificationInput, StudyDesignClassificationTask,
-    StudyGroupingInput, StudyGroupingTask,
+    ProposalDraft, ProposalStore, ScreeningEvidence, ScreeningInput,
+    StudyDesignClassificationInput, StudyDesignClassificationTask, StudyGroupingInput,
+    StudyGroupingTask,
 };
 use deepref_domain::{EligibilityCriterion, ScreeningStage};
 use serde::{Deserialize, Serialize};
@@ -15,6 +15,7 @@ use uuid::Uuid;
 
 use crate::{
     DefinedAiTask, ReviewCatalog, ReviewDefinitionKey, ReviewError, ReviewHash, ReviewSubject,
+    screening_subject::screening_task_for,
 };
 
 /// Canonical, serializable task input persisted with a durable review run.
@@ -148,19 +149,10 @@ impl PreparedReviewTask {
                 allowed_evidence,
                 allowed_exclusion_reasons,
             } => {
-                ScreeningTask::new(ScreeningTaskConfig {
-                    project_id: input.project_id,
-                    report_id: input.report_id,
-                    stage: input.stage,
-                    protocol_version_id: input.protocol_version_id,
-                    expected_revision: input.expected_revision,
-                    criteria: criteria.clone(),
-                    allowed_evidence: allowed_evidence.clone(),
-                    allowed_exclusion_reasons: allowed_exclusion_reasons.clone(),
-                })
-                .build_context(input)
-                .map_err(review_ai_error)?
-                .protocol_hash
+                screening_task_for(input, criteria, allowed_evidence, allowed_exclusion_reasons)
+                    .build_context(input)
+                    .map_err(review_ai_error)?
+                    .protocol_hash
             }
             Self::AppraisalPrefill { input } => {
                 AppraisalPrefillTask::new(input)
@@ -196,18 +188,9 @@ impl PreparedReviewTask {
                 criteria,
                 allowed_evidence,
                 allowed_exclusion_reasons,
-            } => ScreeningTask::new(ScreeningTaskConfig {
-                project_id: input.project_id,
-                report_id: input.report_id,
-                stage: input.stage,
-                protocol_version_id: input.protocol_version_id,
-                expected_revision: input.expected_revision,
-                criteria: criteria.clone(),
-                allowed_evidence: allowed_evidence.clone(),
-                allowed_exclusion_reasons: allowed_exclusion_reasons.clone(),
-            })
-            .build_context(input)
-            .map(|_| ()),
+            } => screening_task_for(input, criteria, allowed_evidence, allowed_exclusion_reasons)
+                .build_context(input)
+                .map(|_| ()),
             Self::DuplicateDetection { input } => DedupeTask::new(
                 input.project_id,
                 input.source_record_id,
@@ -287,16 +270,12 @@ impl PreparedReviewTask {
                 allowed_evidence,
                 allowed_exclusion_reasons,
             } => {
-                let task = ScreeningTask::new(ScreeningTaskConfig {
-                    project_id: input.project_id,
-                    report_id: input.report_id,
-                    stage: input.stage,
-                    protocol_version_id: input.protocol_version_id,
-                    expected_revision: input.expected_revision,
-                    criteria: criteria.clone(),
-                    allowed_evidence: allowed_evidence.clone(),
-                    allowed_exclusion_reasons: allowed_exclusion_reasons.clone(),
-                });
+                let task = screening_task_for(
+                    input,
+                    criteria,
+                    allowed_evidence,
+                    allowed_exclusion_reasons,
+                );
                 execute_task(
                     runner,
                     definition,

@@ -3,6 +3,8 @@ mod activity;
 mod agent_tools;
 mod ai;
 mod ai_autonomy_apply;
+mod ai_exposure;
+mod ai_first;
 mod ai_reviewer;
 mod ai_usage;
 mod appraisal;
@@ -65,11 +67,17 @@ pub use ai::{
     AiProposalDecision, AiProposalDecisionRequest, AiProposalError, AiProposalFilters,
     AiProposalRecord, AiProposalResolution, AiScreeningTarget, AiStudyGroupingTarget,
     PostgresAiStore, ReviewedAiProposalPayload, decide_ai_proposal, get_ai_dedupe_target,
-    get_ai_proposal, get_ai_screening_target, get_ai_study_grouping_target, insert_model_route,
-    list_ai_exclusion_reasons, list_ai_extraction_evidence, list_ai_grounding_blocks,
-    list_ai_proposals, persist_document_block_embedding, resolve_ai_proposal,
+    get_ai_proposal, get_ai_screening_target, get_ai_study_grouping_target,
+    get_visible_ai_proposal, insert_model_route, list_ai_exclusion_reasons,
+    list_ai_extraction_evidence, list_ai_grounding_blocks, list_ai_proposals,
+    persist_document_block_embedding, resolve_ai_proposal,
 };
 pub use ai_autonomy_apply::{AutonomyOutcome, apply_autonomy_for_proposal};
+pub use ai_exposure::{
+    ExposureSource, NewExposure, ReviewRunProposal, ReviewerPair, ReviewerPairs,
+    independent_reviewer_pairs, record_exposure, record_exposure_in_transaction, record_exposures,
+    record_exposures_in_transaction, review_run_proposals,
+};
 pub use ai_reviewer::{
     NewReviewerDecision, ResolveConflict, ReviewerDecisionRecord, ReviewerError, StageAgreement,
     cohens_kappa, insert_reviewer_decision_in_transaction, list_reviewer_decisions,
@@ -155,25 +163,25 @@ pub use protocol::{
     list_protocol_versions, publish_protocol, save_protocol_draft,
 };
 pub use review_calibration::{
-    ReviewCalibrationBundleInput, ReviewCalibrationError, ReviewCalibrationStatus,
-    insert_review_calibration_bundle,
+    CalibrationRefusal, ReviewCalibrationBundleInput, ReviewCalibrationError,
+    ReviewCalibrationStatus, insert_review_calibration_bundle,
 };
 pub use review_completion::{
     ReviewOutcome, ReviewOutcomeCompletion, bind_review_step_acceptance, complete_review_attempt,
     complete_review_outcome, complete_review_step,
 };
 pub use review_preparation::{
-    PostgresReviewScheduler, ReviewPreparationError, schedule_appraisal_prefill_review,
-    schedule_data_extraction_review, schedule_duplicate_detection_review,
-    schedule_screening_review, schedule_study_classification_review,
-    schedule_study_grouping_review,
+    PostgresReviewScheduler, ReviewPreparationError, preview_screening_identity,
+    schedule_appraisal_prefill_review, schedule_data_extraction_review,
+    schedule_duplicate_detection_review, schedule_screening_review,
+    schedule_study_classification_review, schedule_study_grouping_review,
 };
 pub use review_runs::{
     AcceptedReviewAttempt, LeasedReviewRun, PostgresReviewError, PreparedReviewRun,
     ReviewAttemptCompletion, ReviewAttemptStart, ReviewFinalization, begin_review_attempt,
     block_review_run, fail_review_attempt, fail_review_run, finalize_review_proposal,
     get_review_run, get_review_runs, load_leased_review_run, mark_review_run_running,
-    schedule_prepared_review_run,
+    preview_review_identity, schedule_prepared_review_run,
 };
 pub use screening::{
     ScreeningError, ScreeningHistory, ScreeningHistoryItem, ScreeningProgress, ScreeningQueue,
@@ -197,3 +205,9 @@ pub use worker_runtime::{
     recover_expired_worker_state, reserve_provider_permit,
 };
 pub use workflows::*;
+
+pub use ai_first::{
+    AiFirstCohort, AiFirstError, AiFirstOverview, close_ai_first_cohort, draw_ai_first_audit,
+    evaluate_ai_first_audit, finalize_ai_first_cohort, get_ai_first_overview,
+    recover_ai_first_cohort, route_ai_first_result, start_ai_first_cohort, sweep_ai_first,
+};

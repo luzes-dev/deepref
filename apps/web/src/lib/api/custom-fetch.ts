@@ -1,3 +1,5 @@
+import { currentReviewerId } from './reviewer';
+
 export class ApiError<T = unknown> extends Error {
 	readonly status: number;
 	readonly info: T;
@@ -93,6 +95,8 @@ function correlationId(): string | undefined {
 
 export async function customFetch<T>(url: string, options: RequestInit): Promise<T> {
 	const headers = new Headers(options.headers);
+	if (!headers.has('x-actor-id')) headers.set('x-actor-id', currentReviewerId());
+	if (!headers.has('x-actor-kind')) headers.set('x-actor-kind', 'user');
 	if (!headers.has('x-correlation-id')) {
 		const id = correlationId();
 		if (id) headers.set('x-correlation-id', id);

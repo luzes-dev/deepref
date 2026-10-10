@@ -7,6 +7,7 @@
 	import { Badge } from '@deepref/ui/badge';
 	import * as Alert from '@deepref/ui/alert';
 	import ConflictsPanel from './ConflictsPanel.svelte';
+	import AiFirstPanel from './AiFirstPanel.svelte';
 
 	let {
 		projectId,
@@ -19,6 +20,9 @@
 	} = $props();
 
 	const overviewQuery = createGetAiActivityOverview(() => projectId);
+	const aiFirstView = $derived(
+		stage === 'title_abstract' && page.url.searchParams.get('view') === 'ai-first'
+	);
 	const conflictsView = $derived(page.url.searchParams.get('view') === 'conflicts');
 	const open = $derived(overviewQuery.data?.data.open_conflicts ?? 0);
 	// The server knows whether the AI second reviewer can run on its own here.
@@ -28,9 +32,9 @@
 			: overviewQuery.data?.data.second_review_title_abstract
 	);
 
-	async function show(view: 'queue' | 'conflicts'): Promise<void> {
+	async function show(view: 'queue' | 'conflicts' | 'ai-first'): Promise<void> {
 		const url = new URL(page.url.href);
-		if (view === 'conflicts') url.searchParams.set('view', 'conflicts');
+		if (view !== 'queue') url.searchParams.set('view', view);
 		else url.searchParams.delete('view');
 		await goto(url, { replace: true, reset: false });
 	}
@@ -49,8 +53,8 @@
 	>
 		<Button
 			size="sm"
-			variant={conflictsView ? 'ghost' : 'secondary'}
-			aria-current={conflictsView ? undefined : 'page'}
+			variant={conflictsView || aiFirstView ? 'ghost' : 'secondary'}
+			aria-current={conflictsView || aiFirstView ? undefined : 'page'}
 			onclick={() => void show('queue')}>Screening</Button
 		>
 		<Button
@@ -63,30 +67,31 @@
 			Conflicts
 			{#if open > 0}<Badge variant="warning" size="sm">{open}</Badge>{/if}
 		</Button>
+		{#if stage === 'title_abstract'}
+			<Button
+				size="sm"
+				variant={aiFirstView ? 'secondary' : 'ghost'}
+				aria-current={aiFirstView ? 'page' : undefined}
+				onclick={() => void show('ai-first')}>AI-first</Button
+			>
+		{/if}
 	</nav>
-	{#if secondReview === 'needs_calibration' || secondReview === 'calibration_stale'}
+	{#if secondReview === 'automatic'}
 		<div class="mx-auto w-full max-w-[1440px] shrink-0 px-4 pt-3 sm:px-6 lg:px-8">
-			<Alert.Root data-testid="second-review-paused">
-				<Alert.Title>Automatic AI second review is paused</Alert.Title>
-				<Alert.Description>
-					{#if secondReview === 'calibration_stale'}
-						The approved AI calibration was made for an earlier version of this protocol
-						or of the AI reviewer, so it no longer covers the current review. The AI
-						answers only when you ask for a suggestion until an expert approves a new
-						calibration for this protocol. Ask the person who runs this DeepRef
-						deployment.
-					{:else}
-						This stage is set to an AI second reviewer, but this protocol has no
-						approved AI calibration yet, so the AI answers only when you ask for a
-						suggestion. An expert must approve a calibration for this protocol before
-						the AI screens records on its own. Ask the person who runs this DeepRef
-						deployment.
-					{/if}
-				</Alert.Description>
+			<Alert.Root data-testid="second-review-advisory">
+				<Alert.Title>AI second opinions are advisory</Alert.Title>
+				<Alert.Description
+					>Available from the first record. Each opinion stays hidden until your decision;
+					you settle disagreements and retain all screening authority.</Alert.Description
+				>
 			</Alert.Root>
 		</div>
 	{/if}
-	{#if conflictsView}
+	{#if aiFirstView}
+		<div class="mx-auto min-h-0 w-full max-w-[1440px] flex-1 overflow-y-auto p-4 sm:p-6 lg:p-8">
+			<AiFirstPanel {projectId} />
+		</div>
+	{:else if conflictsView}
 		<div class="mx-auto min-h-0 w-full max-w-[1440px] flex-1 overflow-y-auto p-4 sm:p-6 lg:p-8">
 			<ConflictsPanel {projectId} {stage} />
 		</div>

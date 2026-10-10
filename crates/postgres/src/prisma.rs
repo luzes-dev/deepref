@@ -166,6 +166,11 @@ WITH project_exists AS (
       AS duplicates_removed,
     pending_dedupe.pending_dedupe_proposals,
     flow_counts.title_abstract_excluded,
+    (SELECT count(*) FROM ai_screening_dispositions d JOIN screening_state s
+      ON s.project_id=d.project_id AND s.report_id=d.report_id
+      WHERE d.project_id=$1 AND d.finalized_event_id=s.last_event_id AND s.title_abstract_status='exclude')::bigint AS automation_excluded,
+    (SELECT count(*) FROM ai_screening_dispositions d
+      WHERE d.project_id=$1 AND d.voided_at IS NULL AND d.finalized_at IS NULL)::bigint AS ai_quarantined,
     flow_counts.title_abstract_pending,
     flow_counts.reports_sought,
     flow_counts.reports_not_retrieved,
@@ -222,6 +227,8 @@ JOIN project_exists ON true
         )?,
         manually_created_reports: count(manually_created_reports, "manually_created_reports")?,
         screened_records: count(row.get("screened_records"), "screened_records")?,
+        automation_excluded: count(row.get("automation_excluded"), "automation_excluded")?,
+        ai_quarantined: count(row.get("ai_quarantined"), "ai_quarantined")?,
         title_abstract_excluded: count(
             row.get("title_abstract_excluded"),
             "title_abstract_excluded",

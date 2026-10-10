@@ -466,11 +466,11 @@ pub async fn get_agent_screening_state(
     report_id: Uuid,
 ) -> Result<crate::screening::ScreeningStateSnapshot, AgentReadError> {
     let row = sqlx::query(
-        "SELECT pr.project_id,pr.report_id,coalesce(ss.title_abstract_status,'unscreened') AS title_abstract_status,
-                coalesce(ss.full_text_status,'not_required') AS full_text_status,
-                ss.full_text_exclusion_reason_id,
-                coalesce(ss.final_status,'unscreened') AS final_status,
-                coalesce(ss.revision,0)::bigint AS revision,ss.last_event_id,ss.updated_at
+        "SELECT pr.project_id,pr.report_id,CASE WHEN ai_first_audit_masked(pr.project_id,pr.report_id) THEN 'unscreened' ELSE coalesce(ss.title_abstract_status,'unscreened') END AS title_abstract_status,
+                CASE WHEN ai_first_audit_masked(pr.project_id,pr.report_id) THEN 'not_required' ELSE coalesce(ss.full_text_status,'not_required') END AS full_text_status,
+                CASE WHEN ai_first_audit_masked(pr.project_id,pr.report_id) THEN NULL ELSE ss.full_text_exclusion_reason_id END AS full_text_exclusion_reason_id,
+                CASE WHEN ai_first_audit_masked(pr.project_id,pr.report_id) THEN 'unscreened' ELSE coalesce(ss.final_status,'unscreened') END AS final_status,
+                CASE WHEN ai_first_audit_masked(pr.project_id,pr.report_id) THEN 0 ELSE coalesce(ss.revision,0) END::bigint AS revision, CASE WHEN ai_first_audit_masked(pr.project_id,pr.report_id) THEN NULL ELSE ss.last_event_id END AS last_event_id, CASE WHEN ai_first_audit_masked(pr.project_id,pr.report_id) THEN NULL ELSE ss.updated_at END AS updated_at
          FROM project_reports pr
          LEFT JOIN screening_state ss ON ss.project_id=pr.project_id AND ss.report_id=pr.report_id
          WHERE pr.project_id=$1 AND pr.report_id=$2",
@@ -553,16 +553,19 @@ pub async fn get_agent_project_overview(
         return Err(AgentReadError::NotFound);
     }
     // Every report is counted once in the title/abstract buckets, which add up
-    // to the report total. Full-text counts are a subset of `include`.
+    // to the report total. Full-text counts are a subset of `include`. A report
+    // hidden by an active blind audit is counted through the same masked status
+    // the queue and reader show, so one projection drives every bucket and a
+    // masked record can never land in two of them.
     let row = sqlx::query(
         "SELECT
            count(*) AS reports,
-           count(*) FILTER (WHERE COALESCE(s.title_abstract_status,'unscreened')='unscreened') AS unscreened,
-           count(*) FILTER (WHERE s.title_abstract_status='include') AS ta_include,
-           count(*) FILTER (WHERE s.title_abstract_status='exclude') AS ta_exclude,
-           count(*) FILTER (WHERE s.title_abstract_status='maybe') AS ta_maybe,
-           count(*) FILTER (WHERE s.final_status='pending_full_text') AS awaiting_full_text,
-           count(*) FILTER (WHERE s.final_status='pending_full_text' AND EXISTS (
+           count(*) FILTER (WHERE m.title_abstract_status='unscreened') AS unscreened,
+           count(*) FILTER (WHERE m.title_abstract_status='include') AS ta_include,
+           count(*) FILTER (WHERE m.title_abstract_status='exclude') AS ta_exclude,
+           count(*) FILTER (WHERE m.title_abstract_status='maybe') AS ta_maybe,
+           count(*) FILTER (WHERE m.final_status='pending_full_text') AS awaiting_full_text,
+           count(*) FILTER (WHERE m.final_status='pending_full_text' AND EXISTS (
              SELECT 1 FROM documents d
              WHERE d.project_id=pr.project_id AND d.report_id=pr.report_id AND d.status='available'
            )) AS awaiting_with_full_text,
@@ -570,6 +573,12 @@ pub async fn get_agent_project_overview(
            EXISTS(SELECT 1 FROM protocol_versions WHERE project_id=$1 AND status='published') AS protocol_published
          FROM project_reports pr
          LEFT JOIN screening_state s ON s.project_id=pr.project_id AND s.report_id=pr.report_id
+         LEFT JOIN LATERAL (
+           SELECT CASE WHEN ai_first_audit_masked(pr.project_id,pr.report_id)
+                       THEN 'unscreened' ELSE COALESCE(s.title_abstract_status,'unscreened') END AS title_abstract_status,
+                  CASE WHEN ai_first_audit_masked(pr.project_id,pr.report_id)
+                       THEN 'unscreened' ELSE COALESCE(s.final_status,'unscreened') END AS final_status
+         ) m ON true
          WHERE pr.project_id=$1",
     )
     .bind(project_id)
@@ -646,13 +655,13 @@ pub async fn list_agent_reports_by_screening(
     }
     let rows = sqlx::query(
         "SELECT r.id, r.title, r.publication_year, r.journal,
-                COALESCE(s.title_abstract_status,'unscreened') AS status,
-                COALESCE(s.final_status,'unscreened') AS final_status
+                CASE WHEN ai_first_audit_masked(pr.project_id,pr.report_id) THEN 'unscreened' ELSE COALESCE(s.title_abstract_status,'unscreened') END AS status,
+                CASE WHEN ai_first_audit_masked(pr.project_id,pr.report_id) THEN 'unscreened' ELSE COALESCE(s.final_status,'unscreened') END AS final_status
          FROM project_reports pr
          JOIN reports r ON r.id=pr.report_id
          LEFT JOIN screening_state s ON s.project_id=pr.project_id AND s.report_id=pr.report_id
          WHERE pr.project_id=$1
-           AND ($2::text IS NULL OR COALESCE(s.title_abstract_status,'unscreened')=$2)
+           AND ($2::text IS NULL OR CASE WHEN ai_first_audit_masked(pr.project_id,pr.report_id) THEN 'unscreened' ELSE COALESCE(s.title_abstract_status,'unscreened') END=$2)
          ORDER BY pr.created_at, r.id LIMIT $3",
     )
     .bind(project_id)

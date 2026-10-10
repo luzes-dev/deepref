@@ -162,6 +162,16 @@ pub(crate) async fn get_review_run(
     State(state): State<AppState>,
     Path((project_id, run_id)): Path<(Uuid, Uuid)>,
 ) -> Result<Json<ReviewRunDto>, ApiError> {
+    let visible: bool = sqlx::query_scalar("SELECT ai_first_run_visible($1,$2)")
+        .bind(project_id)
+        .bind(run_id)
+        .fetch_one(&state.pool)
+        .await?;
+    if !visible {
+        return Err(ApiError::NotFound(
+            "review run is withheld while independent screening is in progress".into(),
+        ));
+    }
     let run_id = deepref_review::ReviewRunId::new(run_id)
         .map_err(|error| ApiError::BadRequest(error.to_string()))?;
     let snapshot = deepref_postgres::PostgresReviewScheduler::new(&state.pool)
@@ -287,20 +297,21 @@ fn map_postgres_review_error(error: deepref_postgres::PostgresReviewError) -> Ap
             message: "review proposal finalization conflicts with persisted state".to_owned(),
             details: Value::Null,
         },
-        deepref_postgres::PostgresReviewError::CalibrationMissing => ApiError::Conflict {
-            code: "calibration_missing".to_owned(),
-            message: error.to_string(),
-            details: Value::Null,
-        },
-        deepref_postgres::PostgresReviewError::CalibrationFailed => ApiError::Conflict {
-            code: "calibration_failed".to_owned(),
-            message: error.to_string(),
-            details: Value::Null,
-        },
-        deepref_postgres::PostgresReviewError::CalibrationStale => ApiError::Conflict {
-            code: "calibration_stale".to_owned(),
-            message: error.to_string(),
-            details: Value::Null,
-        },
+        deepref_postgres::PostgresReviewError::CalibrationRefused(refusal) => {
+            let details = match &refusal {
+                deepref_postgres::CalibrationRefusal::Stale { components } => serde_json::json!({
+                    "components": components
+                        .iter()
+                        .map(|component| component.as_str())
+                        .collect::<Vec<_>>(),
+                }),
+                _ => Value::Null,
+            };
+            ApiError::Conflict {
+                code: refusal.code().to_owned(),
+                message: refusal.to_string(),
+                details,
+            }
+        }
     }
 }

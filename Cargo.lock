@@ -780,6 +780,7 @@ dependencies = [
  "thiserror",
  "tokio",
  "tracing",
+ "url",
  "uuid",
 ]
 
@@ -796,6 +797,7 @@ dependencies = [
  "futures",
  "hmac",
  "jsonschema",
+ "num-bigint",
  "proptest",
  "rapidfuzz",
  "regex",

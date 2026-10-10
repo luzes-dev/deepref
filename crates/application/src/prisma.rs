@@ -46,6 +46,10 @@ pub struct PrismaProjection {
     pub manually_created_reports: NonNegativeCount,
     pub screened_records: NonNegativeCount,
     pub title_abstract_excluded: NonNegativeCount,
+    /// Subset of title_abstract_excluded, counted only while the approved event is canonical.
+    pub automation_excluded: NonNegativeCount,
+    /// Still scientifically unscreened; never an exclusion count.
+    pub ai_quarantined: NonNegativeCount,
     pub title_abstract_pending: NonNegativeCount,
     pub reports_sought: NonNegativeCount,
     pub reports_not_retrieved: NonNegativeCount,
@@ -584,6 +588,8 @@ mod tests {
 
     fn projection() -> PrismaProjection {
         PrismaProjection {
+            automation_excluded: NonNegativeCount::new(0),
+            ai_quarantined: NonNegativeCount::new(0),
             project_id: Uuid::nil(),
             screening_high_watermark: NonNegativeCount::new(3),
             as_of: None,

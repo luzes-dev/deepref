@@ -376,22 +376,28 @@ async fn retrieve_grounding_blocks(
         .collect()
 }
 
+/// Every exclusion reason the project defines, with the screening stage it
+/// applies to. Which reasons a screen may cite is decided by the review subject,
+/// so the stage filter is not applied here.
 pub async fn list_ai_exclusion_reasons(
     pool: &PgPool,
     project_id: Uuid,
-    stage: ScreeningStage,
-) -> Result<Vec<Uuid>, AiProposalError> {
-    let stage = match stage {
-        ScreeningStage::TitleAbstract => "title_abstract",
-        ScreeningStage::FullText => "full_text",
-    };
-    Ok(sqlx::query_scalar(
-        "SELECT id FROM exclusion_reasons WHERE project_id=$1 AND stage=$2 ORDER BY code,id",
+) -> Result<Vec<(Uuid, ScreeningStage)>, AiProposalError> {
+    let rows: Vec<(Uuid, String)> = sqlx::query_as(
+        "SELECT id, stage FROM exclusion_reasons WHERE project_id=$1 ORDER BY code,id",
     )
     .bind(project_id)
-    .bind(stage)
     .fetch_all(pool)
-    .await?)
+    .await?;
+    rows.into_iter()
+        .map(|(id, stage)| match stage.as_str() {
+            "title_abstract" => Ok((id, ScreeningStage::TitleAbstract)),
+            "full_text" => Ok((id, ScreeningStage::FullText)),
+            _ => Err(AiProposalError::InvalidPayload(
+                "exclusion reason has an unknown stage".to_owned(),
+            )),
+        })
+        .collect()
 }
 
 pub async fn get_ai_dedupe_target(
@@ -607,7 +613,7 @@ impl AiRunStore for PostgresAiStore {
                         prompt_version,prompt_hash,schema_version,schema_hash,input_hash,reuse_hash,
                         protocol_hash,document_hash,evidence_hash,evidence_refs,input_tokens,
                         output_tokens,cost_micros,output,status,error_code,error_message,
-                        parent_automation_run_id,created_at,completed_at
+                        parent_automation_run_id,created_at,completed_at,provider_served_model,provider_system_fingerprint
                  FROM ai_runs
                  WHERE project_id IS NOT DISTINCT FROM $1
                    AND reuse_hash=$2 AND status='completed'
@@ -640,8 +646,9 @@ impl AiRunStore for PostgresAiStore {
                  (id,project_id,task_kind,profile,provider,model,model_version,parameters,
                   prompt_version,prompt_hash,schema_version,schema_hash,input_hash,reuse_hash,
                   protocol_hash,document_hash,evidence_hash,evidence_refs,input_tokens,output_tokens,
-                  cost_micros,output,status,error_code,error_message,parent_automation_run_id,created_at,completed_at)
-                 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28)
+                  cost_micros,output,status,error_code,error_message,parent_automation_run_id,created_at,completed_at,
+                  provider_served_model,provider_system_fingerprint)
+                 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22,$23,$24,$25,$26,$27,$28,$29,$30)
                  ON CONFLICT (id) DO NOTHING",
             )
             .bind(run.id).bind(run.project_id.map(|id| id.as_uuid())).bind(run.task_kind.as_str())
@@ -653,6 +660,7 @@ impl AiRunStore for PostgresAiStore {
             .bind(run.cost_micros).bind(run.output.clone()).bind(run.status.as_str())
             .bind(run.error.as_ref().map(|error| error.code.clone())).bind(run.error.as_ref().map(|error| error.message.clone()))
             .bind(run.parent_automation_run_id).bind(run.created_at).bind(run.completed_at)
+            .bind(&run.provider_served_model).bind(&run.provider_system_fingerprint)
             .execute(&mut *transaction).await.map_err(|_| AiError::Persistence("AI run write failed".to_owned()))?;
 
             if inserted.rows_affected() == 1 {
@@ -663,7 +671,7 @@ impl AiRunStore for PostgresAiStore {
                             prompt_version,prompt_hash,schema_version,schema_hash,input_hash,reuse_hash,
                             protocol_hash,document_hash,evidence_hash,evidence_refs,input_tokens,
                             output_tokens,cost_micros,output,status,error_code,error_message,
-                            parent_automation_run_id,created_at,completed_at
+                            parent_automation_run_id,created_at,completed_at,provider_served_model,provider_system_fingerprint
                      FROM ai_runs WHERE id=$1 FOR UPDATE",
                 )
                 .bind(run.id)
@@ -692,7 +700,8 @@ impl AiRunStore for PostgresAiStore {
                         let updated = sqlx::query(
                             "UPDATE ai_runs
                              SET input_tokens=$2,output_tokens=$3,cost_micros=$4,output=$5,
-                                 status=$6,error_code=$7,error_message=$8,completed_at=$9
+                                 status=$6,error_code=$7,error_message=$8,completed_at=$9,
+                                 provider_served_model=$10,provider_system_fingerprint=$11
                              WHERE id=$1 AND status='running'",
                         )
                         .bind(run.id)
@@ -708,6 +717,8 @@ impl AiRunStore for PostgresAiStore {
                         .bind(run.error.as_ref().map(|error| error.code.clone()))
                         .bind(run.error.as_ref().map(|error| error.message.clone()))
                         .bind(run.completed_at)
+                        .bind(&run.provider_served_model)
+                        .bind(&run.provider_system_fingerprint)
                         .execute(&mut *transaction)
                         .await
                         .map_err(|_| {
@@ -819,6 +830,8 @@ fn same_run_state(existing: &AiRunRecord, incoming: &AiRunRecord) -> bool {
         && existing.status == incoming.status
         && existing.usage == incoming.usage
         && existing.cost_micros == incoming.cost_micros
+        && existing.provider_served_model == incoming.provider_served_model
+        && existing.provider_system_fingerprint == incoming.provider_system_fingerprint
         && existing.output == incoming.output
         && existing.error == incoming.error
         && existing.completed_at.map(|value| value.timestamp_micros())
@@ -1238,5 +1251,6 @@ use acceptance::*;
 use persistence::{ai_run_from_row, proposal_from_row};
 pub use persistence::{insert_model_route, persist_document_block_embedding, resolve_ai_proposal};
 pub use proposals::{
-    AiProposalCursor, AiProposalFilters, decide_ai_proposal, get_ai_proposal, list_ai_proposals,
+    AiProposalCursor, AiProposalFilters, decide_ai_proposal, get_ai_proposal,
+    get_visible_ai_proposal, list_ai_proposals,
 };

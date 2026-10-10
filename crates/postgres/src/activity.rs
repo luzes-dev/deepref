@@ -102,30 +102,89 @@ pub struct ActivityRecord {
 
 const ACTIVITY_COLUMNS: &str = "id,project_id,actor_type,actor_label,task,action,summary,affected,
     undo_kind,batch_id,ai_run_id,proposal_id,model,prompt_version,evidence,created_at,
-    undone_at,undone_by_id";
+    undone_at,undone_by_id,blinded,decision_id";
+
+/// The activity rows with a `blinded` flag and the second opinion's decision id.
+/// A second opinion is blinded while the person has not decided its record and
+/// stage, and the decision it stands for is still open: not resolved, and the
+/// human status is unscreened or not required. A missing or voided decision row
+/// counts as open. Blinding hides the verdict's text, its evidence and the links
+/// to the proposal and AI run. It never changes pagination, which is keyed on
+/// created_at and id. A shown opinion is recorded as revealed, by its decision id.
+const ACTIVITY_FROM: &str = "FROM (
+    SELECT a.*, d.id AS decision_id,
+      (a.action='second_reviewer_opinion' AND d.resolved_at IS NULL
+       AND COALESCE(CASE WHEN COALESCE(d.stage,
+                             CASE WHEN a.task='full_text_screening' THEN 'full_text'
+                                  ELSE 'title_abstract' END)='full_text'
+                         THEN s.full_text_status ELSE s.title_abstract_status END,
+                    'unscreened') IN ('unscreened', 'not_required')
+       OR (d.stage='title_abstract' AND ai_first_blinded(a.project_id,d.report_id))) AS blinded
+    FROM ai_activity a
+    LEFT JOIN ai_reviewer_decisions d ON d.project_id=a.project_id
+      AND d.id = CASE WHEN a.action='second_reviewer_opinion'
+                      THEN NULLIF(a.after_state->>'decision_id', '')::uuid END
+    LEFT JOIN screening_state s ON s.project_id=a.project_id AND s.report_id=d.report_id
+    WHERE a.project_id=$1 AND NOT EXISTS(SELECT 1 FROM ai_screening_cohorts c WHERE c.project_id=a.project_id AND c.status='auditing')";
+
+/// What the feed says about a second opinion the person has not decided against
+/// yet. It names the record, never the verdict.
+fn withheld_summary(actor_type: &str, affected: &Value) -> String {
+    let label = affected
+        .get(0)
+        .and_then(|item| item.get("label"))
+        .and_then(Value::as_str);
+    let subject = label.map_or_else(|| "this record".to_owned(), |label| format!("“{label}”"));
+    let who = if actor_type == "automation" {
+        "An automation"
+    } else {
+        "The AI"
+    };
+    format!(
+        "{who} recorded an independent second opinion on {subject}. It stays hidden until you record your own decision."
+    )
+}
 
 fn activity_from_row(row: &sqlx::postgres::PgRow) -> ActivityRecord {
     let undone_at: Option<DateTime<Utc>> = row.get("undone_at");
+    let actor_type: String = row.get("actor_type");
+    let affected: Value = row.get("affected");
+    let blinded: bool = row.get("blinded");
+    let (summary, evidence, proposal_id, ai_run_id) = if blinded {
+        (
+            withheld_summary(&actor_type, &affected),
+            json!([]),
+            None,
+            None,
+        )
+    } else {
+        (
+            row.get("summary"),
+            row.get("evidence"),
+            row.get("proposal_id"),
+            row.get("ai_run_id"),
+        )
+    };
     ActivityRecord {
         id: row.get("id"),
         project_id: row.get("project_id"),
-        actor_type: row.get("actor_type"),
         actor_label: row.get("actor_label"),
         task: row.get("task"),
         action: row.get("action"),
-        summary: row.get("summary"),
-        affected: row.get("affected"),
+        summary,
+        affected,
         // An undone entry cannot be undone again.
         undoable: row.get::<Option<String>, _>("undo_kind").is_some() && undone_at.is_none(),
         batch_id: row.get("batch_id"),
-        ai_run_id: row.get("ai_run_id"),
-        proposal_id: row.get("proposal_id"),
+        ai_run_id,
+        proposal_id,
         model: row.get("model"),
         prompt_version: row.get("prompt_version"),
-        evidence: row.get("evidence"),
+        evidence,
         created_at: row.get("created_at"),
         undone_at,
         undone_by: row.get("undone_by_id"),
+        actor_type,
     }
 }
 
@@ -188,13 +247,13 @@ pub async fn list_activity(
     limit: i64,
 ) -> Result<Vec<ActivityRecord>, ActivityError> {
     let query = format!(
-        "SELECT {ACTIVITY_COLUMNS} FROM ai_activity
-         WHERE project_id=$1
-           AND ($2::text IS NULL OR task=$2)
-           AND ($3::text IS NULL OR actor_type=$3)
-           AND ($4::uuid IS NULL OR batch_id=$4)
-           AND ($5::boolean IS NULL OR (undone_at IS NOT NULL)=$5)
-           AND ($6::timestamptz IS NULL OR (created_at,id)<($6,$7))
+        "SELECT {ACTIVITY_COLUMNS} {ACTIVITY_FROM}
+           AND ($2::text IS NULL OR a.task=$2)
+           AND ($3::text IS NULL OR a.actor_type=$3)
+           AND ($4::uuid IS NULL OR a.batch_id=$4)
+           AND ($5::boolean IS NULL OR (a.undone_at IS NOT NULL)=$5)
+           AND ($6::timestamptz IS NULL OR (a.created_at,a.id)<($6,$7))
+         ) activity
          ORDER BY created_at DESC,id DESC LIMIT $8"
     );
     let rows = sqlx::query(sqlx::AssertSqlSafe(query))
@@ -208,6 +267,14 @@ pub async fn list_activity(
         .bind(limit + 1)
         .fetch_all(pool)
         .await?;
+    // Only the entries this page returns count as shown; the look-ahead row does not.
+    let shown: Vec<Uuid> = rows
+        .iter()
+        .take(usize::try_from(limit).unwrap_or(0))
+        .filter(|row| !row.get::<bool, _>("blinded"))
+        .filter_map(|row| row.get::<Option<Uuid>, _>("decision_id"))
+        .collect();
+    crate::ai_exposure::record_reveals(pool, &shown).await?;
     Ok(rows.iter().map(activity_from_row).collect())
 }
 
@@ -259,7 +326,7 @@ async fn claim_undo(
     let mut tx = pool.begin().await?;
     let row = sqlx::query(
         "SELECT id,undo_kind,after_state,undone_at FROM ai_activity
-         WHERE project_id=$1 AND id=$2 FOR UPDATE",
+         WHERE project_id=$1 AND id=$2 AND NOT EXISTS(SELECT 1 FROM ai_screening_cohorts c WHERE c.project_id=$1 AND c.status='auditing') FOR UPDATE",
     )
     .bind(project_id)
     .bind(activity_id)
@@ -465,13 +532,18 @@ pub async fn get_activity(
     project_id: Uuid,
     activity_id: Uuid,
 ) -> Result<ActivityRecord, ActivityError> {
-    let query = format!("SELECT {ACTIVITY_COLUMNS} FROM ai_activity WHERE project_id=$1 AND id=$2");
+    let query = format!("SELECT {ACTIVITY_COLUMNS} {ACTIVITY_FROM} AND a.id=$2) activity");
     let row = sqlx::query(sqlx::AssertSqlSafe(query))
         .bind(project_id)
         .bind(activity_id)
         .fetch_optional(pool)
         .await?
         .ok_or(ActivityError::NotFound)?;
+    if !row.get::<bool, _>("blinded")
+        && let Some(decision_id) = row.get::<Option<Uuid>, _>("decision_id")
+    {
+        crate::ai_exposure::record_reveals(pool, &[decision_id]).await?;
+    }
     Ok(activity_from_row(&row))
 }
 

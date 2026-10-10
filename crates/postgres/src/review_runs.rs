@@ -3,7 +3,7 @@ use deepref_ai::{AiProposal, ModelRouter, ProposalStatus, ProposalStore, hash_js
 use deepref_domain::ProjectId;
 use deepref_review::{
     ReviewBlockCode, ReviewDefinitionKey, ReviewError, ReviewOrigin, ReviewRunId,
-    ReviewRunSnapshot, ReviewRunState, ReviewSubject, ScheduleReviewRun,
+    ReviewRunSnapshot, ReviewRunState, ReviewSubject, ScheduleReviewRun, SemanticIdentity,
     worker::{
         AcceptedArtifactInput, CompiledReview, ExecutedReviewTask, PreparedReviewTask, ReviewHash,
         ReviewManifestInput, ReviewNode, ReviewRunManifest,
@@ -17,7 +17,7 @@ use uuid::Uuid;
 use crate::{
     PostgresAiStore,
     notifications::{NotificationDraft, record_notification},
-    review_calibration::{CalibrationAdmissionError, admit_calibration},
+    review_calibration::{CalibrationRefusal, admit_calibration},
     review_run_setup::{
         ensure_review_automation_definition, model_identity, protocol_version_id, recipe_for,
         runtime_identity,
@@ -44,12 +44,8 @@ pub enum PostgresReviewError {
     WorkerOwnership,
     #[error("review proposal finalization conflicts with persisted state")]
     FinalizationConflict,
-    #[error("automation-triggered review calibration is missing")]
-    CalibrationMissing,
-    #[error("automation-triggered review calibration did not pass")]
-    CalibrationFailed,
-    #[error("automation-triggered review calibration does not match the semantic bundle")]
-    CalibrationStale,
+    #[error(transparent)]
+    CalibrationRefused(#[from] CalibrationRefusal),
 }
 
 #[derive(Debug, Clone)]
@@ -108,45 +104,70 @@ pub async fn schedule_prepared_review_run(
     pool: &PgPool,
     request: PreparedReviewRun,
 ) -> Result<ReviewRunSnapshot, PostgresReviewError> {
-    request.command.validate()?;
-    request.task.validate()?;
-    let task_subject = request.task.subject();
-    if request.command.project_id != request.task.project_id()
-        || request.command.definition != request.task.definition_key()
-        || request.command.subject != task_subject
-    {
-        return Err(ReviewError::InvalidDefinition(
-            "scheduled command and prepared review task disagree".to_owned(),
-        )
-        .into());
-    }
-
-    let review = CompiledReview::compile(request.command.definition)?;
-    let route = PostgresAiStore::new(pool)
-        .resolve(request.task.model_profile())
-        .await?;
-    let source_content_hash = request.task.source_content_hash()?;
-    let manifest = review.build_manifest(ReviewManifestInput {
-        project_id: request.command.project_id,
-        subject: request.command.subject.clone(),
-        origin: request.command.origin,
-        protocol_version_id: protocol_version_id(&request.command.subject),
-        protocol_hash: request.task.protocol_hash()?,
-        source_manifest_hash: source_content_hash.clone(),
-        source_content_hash,
-        resolved_models: vec![model_identity(route)?],
-        runtime: runtime_identity()?,
-    })?;
+    let manifest = build_prepared_manifest(pool, &request).await?;
 
     let recipe = recipe_for(request.command.definition);
     let mut transaction = pool.begin().await?;
+    if matches!(
+        request.command.origin,
+        ReviewOrigin::AdvisoryTriggered | ReviewOrigin::AiFirstTriggered { .. }
+    ) {
+        sqlx::query("SELECT id FROM projects WHERE id=$1 FOR UPDATE")
+            .bind(request.command.project_id.as_uuid())
+            .fetch_one(&mut *transaction)
+            .await?;
+        if request.command.actor.kind() != deepref_domain::ActorKind::Automation {
+            return Err(PostgresReviewError::InvalidState(
+                "automatic advisory/routing origin requires an automation actor".into(),
+            ));
+        }
+        match request.command.origin {
+            ReviewOrigin::AiFirstTriggered { cohort_id } => {
+                crate::ai_first::admit_ai_first(
+                    &mut transaction,
+                    &request,
+                    manifest.semantic_bundle_hash.as_str(),
+                    cohort_id,
+                )
+                .await?
+            }
+            ReviewOrigin::AdvisoryTriggered => {
+                let ReviewSubject::Screening { stage, .. } = request.command.subject else {
+                    return Err(PostgresReviewError::InvalidState(
+                        "advisory origin only admits screening".into(),
+                    ));
+                };
+                let task = match stage {
+                    deepref_domain::ScreeningStage::TitleAbstract => {
+                        deepref_application::workflows::AutonomyTask::TitleAbstractScreening
+                    }
+                    deepref_domain::ScreeningStage::FullText => {
+                        deepref_application::workflows::AutonomyTask::FullTextScreening
+                    }
+                };
+                if crate::autonomy::resolve_autonomy_level_in_transaction(
+                    &mut transaction,
+                    request.command.project_id.as_uuid(),
+                    task,
+                )
+                .await?
+                    != deepref_application::workflows::AutonomyLevel::SecondReviewer
+                {
+                    return Err(PostgresReviewError::InvalidState(
+                        "advisory owner ceiling is not enabled".into(),
+                    ));
+                }
+            }
+            ReviewOrigin::ReviewerRequested | ReviewOrigin::AutomationTriggered { .. } => {
+                unreachable!("origin checked above")
+            }
+        }
+    }
     if let ReviewOrigin::AutomationTriggered {
         calibration_bundle_id,
     } = request.command.origin
     {
-        admit_calibration(&mut transaction, &manifest, calibration_bundle_id)
-            .await
-            .map_err(map_calibration_admission_error)?;
+        admit_calibration(&mut transaction, &manifest, calibration_bundle_id).await?;
     }
     let definition_id = ensure_review_automation_definition(
         &mut transaction,
@@ -205,17 +226,66 @@ pub async fn schedule_prepared_review_run(
     if stored_hash != manifest.manifest_hash.as_str() {
         return Err(PostgresReviewError::FinalizationConflict);
     }
+    if let ReviewOrigin::AiFirstTriggered { cohort_id } = request.command.origin
+        && let ReviewSubject::Screening { report_id, .. } = request.command.subject
+    {
+        sqlx::query("UPDATE ai_screening_cohort_members SET review_run_id=$3 WHERE cohort_id=$1 AND report_id=$2 AND review_run_id IS NULL")
+                .bind(cohort_id).bind(report_id.as_uuid()).bind(run_id).execute(&mut *transaction).await?;
+    }
     transaction.commit().await?;
     get_review_run(pool, request.command.project_id, ReviewRunId::new(run_id)?).await
 }
 
-fn map_calibration_admission_error(error: CalibrationAdmissionError) -> PostgresReviewError {
-    match error {
-        CalibrationAdmissionError::Database(error) => PostgresReviewError::Database(error),
-        CalibrationAdmissionError::Missing => PostgresReviewError::CalibrationMissing,
-        CalibrationAdmissionError::Failed => PostgresReviewError::CalibrationFailed,
-        CalibrationAdmissionError::Stale => PostgresReviewError::CalibrationStale,
+/// The semantic identity a run for `request` would be compiled with right now.
+/// Nothing is scheduled. A calibration bundle recorded for this identity admits
+/// automation for the same review.
+pub async fn preview_review_identity(
+    pool: &PgPool,
+    request: &PreparedReviewRun,
+) -> Result<SemanticIdentity, PostgresReviewError> {
+    let manifest = build_prepared_manifest(pool, request).await?;
+    manifest.semantic_identity.ok_or_else(|| {
+        PostgresReviewError::InvalidStoredValue(
+            "compiled review manifest has no semantic identity".to_owned(),
+        )
+    })
+}
+
+/// Compiles the run manifest for a prepared review: the one place that decides
+/// what a scheduled run and a previewed identity are built from.
+async fn build_prepared_manifest(
+    pool: &PgPool,
+    request: &PreparedReviewRun,
+) -> Result<ReviewRunManifest, PostgresReviewError> {
+    request.command.validate()?;
+    request.task.validate()?;
+    let task_subject = request.task.subject();
+    if request.command.project_id != request.task.project_id()
+        || request.command.definition != request.task.definition_key()
+        || request.command.subject != task_subject
+    {
+        return Err(ReviewError::InvalidDefinition(
+            "scheduled command and prepared review task disagree".to_owned(),
+        )
+        .into());
     }
+
+    let review = CompiledReview::compile(request.command.definition)?;
+    let route = PostgresAiStore::new(pool)
+        .resolve(request.task.model_profile())
+        .await?;
+    let source_content_hash = request.task.source_content_hash()?;
+    Ok(review.build_manifest(ReviewManifestInput {
+        project_id: request.command.project_id,
+        subject: request.command.subject.clone(),
+        origin: request.command.origin,
+        protocol_version_id: protocol_version_id(&request.command.subject),
+        protocol_hash: request.task.protocol_hash()?,
+        source_manifest_hash: source_content_hash.clone(),
+        source_content_hash,
+        resolved_models: vec![model_identity(route)?],
+        runtime: runtime_identity()?,
+    })?)
 }
 
 pub async fn get_review_run(

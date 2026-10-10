@@ -275,13 +275,23 @@ async fn reports(state: &AppState, project_id: Uuid) -> Result<Vec<ReportExport>
                   COALESCE(NULLIF(r.raw->>'issue', ''), NULLIF(r.raw->'fields'->'IS'->>0, '')) AS issue,
                   COALESCE(NULLIF(r.raw->>'page', ''),
                            NULLIF(concat_ws('-', r.raw->'fields'->'SP'->>0, r.raw->'fields'->'EP'->>0), '')) AS pages,
-                  COALESCE(ss.final_status, 'unscreened') AS screening_status,
-                  COALESCE(ss.title_abstract_status, 'unscreened') AS title_abstract_decision,
-                  COALESCE(ss.full_text_status, 'not_required') AS full_text_decision,
-                  er.code AS exclusion_reason_code, er.label AS exclusion_reason_label,
-                  study.id AS study_id, study.title AS study_title,
-                  EXISTS (SELECT 1 FROM appraisal_assessments aa
-                          WHERE aa.project_id = pr.project_id AND aa.report_id = pr.report_id) AS appraisal_completed
+                  CASE WHEN ai_first_audit_masked(pr.project_id, pr.report_id)
+                       THEN 'unscreened' ELSE COALESCE(ss.final_status, 'unscreened') END AS screening_status,
+                  CASE WHEN ai_first_audit_masked(pr.project_id, pr.report_id)
+                       THEN 'unscreened' ELSE COALESCE(ss.title_abstract_status, 'unscreened') END AS title_abstract_decision,
+                  CASE WHEN ai_first_audit_masked(pr.project_id, pr.report_id)
+                       THEN 'not_required' ELSE COALESCE(ss.full_text_status, 'not_required') END AS full_text_decision,
+                  CASE WHEN ai_first_audit_masked(pr.project_id, pr.report_id)
+                       THEN NULL ELSE er.code END AS exclusion_reason_code,
+                  CASE WHEN ai_first_audit_masked(pr.project_id, pr.report_id)
+                       THEN NULL ELSE er.label END AS exclusion_reason_label,
+                  CASE WHEN ai_first_audit_masked(pr.project_id, pr.report_id)
+                       THEN NULL ELSE study.id END AS study_id,
+                  CASE WHEN ai_first_audit_masked(pr.project_id, pr.report_id)
+                       THEN NULL ELSE study.title END AS study_title,
+                  CASE WHEN ai_first_audit_masked(pr.project_id, pr.report_id)
+                       THEN false ELSE EXISTS (SELECT 1 FROM appraisal_assessments aa
+                          WHERE aa.project_id = pr.project_id AND aa.report_id = pr.report_id) END AS appraisal_completed
            FROM project_reports pr
            JOIN reports r ON r.id = pr.report_id
            LEFT JOIN LATERAL (

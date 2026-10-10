@@ -667,3 +667,208 @@ async fn review_exports_carry_decisions_values_judgments_and_included_studies() 
             .expect("test report should clean up");
     }
 }
+
+/// A report hidden by an active blind audit must not reach a decision-bearing export with
+/// its earlier judgments. A fresh auditor who downloads the file would otherwise identify
+/// the controls, read their previous labels and still be allowed to label the cohort.
+#[tokio::test]
+async fn blind_audit_redacts_cohort_judgments_from_decision_bearing_exports() {
+    let _guard = test_lock().lock().await;
+    let Some(pool) = database().await else {
+        return;
+    };
+
+    let project = Uuid::new_v4();
+    // Cohort member that a person already included, then appraised and grouped.
+    let control = Uuid::new_v4();
+    // Cohort member that a person already excluded at full text, with a reason.
+    let sample = Uuid::new_v4();
+    // A report outside the cohort keeps its ordinary export rows.
+    let outside = Uuid::new_v4();
+    let reason_adults = Uuid::new_v4();
+    let protocol = Uuid::new_v4();
+    let cohort = Uuid::new_v4();
+    let study = Uuid::new_v4();
+    let assessment = Uuid::new_v4();
+
+    sqlx::query("INSERT INTO projects (id,name) VALUES ($1,'blind export project')")
+        .bind(project)
+        .execute(&pool)
+        .await
+        .expect("project should insert");
+    for (id, title) in [
+        (control, "Control record with an earlier include"),
+        (sample, "Sample record with an earlier exclude"),
+        (outside, "Record outside the blind cohort"),
+    ] {
+        insert_report(&pool, id, title, None, None, None, json!([]), json!({})).await;
+        sqlx::query("INSERT INTO project_reports (project_id,report_id) VALUES ($1,$2)")
+            .bind(project)
+            .bind(id)
+            .execute(&pool)
+            .await
+            .expect("project report should insert");
+    }
+    sqlx::query(
+        "INSERT INTO exclusion_reasons (id,project_id,code,label,stage)
+         VALUES ($1,$2,'wrong-population','Wrong population, adults only','full_text')",
+    )
+    .bind(reason_adults)
+    .bind(project)
+    .execute(&pool)
+    .await
+    .expect("exclusion reason should insert");
+    for (report, title_abstract, full_text, reason, final_status) in [
+        (control, "include", "include", None, "include"),
+        (sample, "include", "exclude", Some(reason_adults), "exclude"),
+        (outside, "maybe", "not_required", None, "unscreened"),
+    ] {
+        sqlx::query(
+            "INSERT INTO screening_state
+             (project_id,report_id,title_abstract_status,full_text_status,full_text_exclusion_reason_id,final_status,revision)
+             VALUES ($1,$2,$3,$4,$5,$6,1)",
+        )
+        .bind(project)
+        .bind(report)
+        .bind(title_abstract)
+        .bind(full_text)
+        .bind(reason)
+        .bind(final_status)
+        .execute(&pool)
+        .await
+        .expect("screening state should insert");
+    }
+
+    sqlx::query(
+        "INSERT INTO studies (id,project_id,title,design) VALUES ($1,$2,'Grouped study','rct')",
+    )
+    .bind(study)
+    .bind(project)
+    .execute(&pool)
+    .await
+    .expect("study should insert");
+    sqlx::query(
+        "INSERT INTO study_reports (study_id,report_id,project_id,relationship) VALUES ($1,$2,$3,'report_of_study')",
+    )
+    .bind(study)
+    .bind(control)
+    .bind(project)
+    .execute(&pool)
+    .await
+    .expect("study report link should insert");
+    sqlx::query(
+        "INSERT INTO appraisal_assessments (id,project_id,report_id,definition_id,definition_version,responses,judgments,actor_kind,actor_id)
+         VALUES ($1,$2,$3,'deepref-generic-intervention',1,'{}','{}','user','reviewer-1')",
+    )
+    .bind(assessment)
+    .bind(project)
+    .bind(control)
+    .execute(&pool)
+    .await
+    .expect("appraisal assessment should insert");
+
+    // An active blind audit over the control and the sample.
+    sqlx::query(
+        "INSERT INTO protocol_versions (id,project_id,version,name,status)
+         VALUES ($1,$2,1,'Blind export protocol','published')",
+    )
+    .bind(protocol)
+    .bind(project)
+    .execute(&pool)
+    .await
+    .expect("protocol version should insert");
+    sqlx::query(
+        "INSERT INTO ai_screening_cohorts
+           (id,project_id,protocol_version_id,semantic_bundle_hash,semantic_identity,policy_version,status,target_percent,approved_by)
+         VALUES ($1,$2,$3,$4,'{}',1,'auditing',95,'owner')",
+    )
+    .bind(cohort)
+    .bind(project)
+    .bind(protocol)
+    .bind("d".repeat(64))
+    .execute(&pool)
+    .await
+    .expect("cohort should insert");
+    for report in [control, sample] {
+        sqlx::query(
+            "INSERT INTO ai_screening_cohort_members (project_id,cohort_id,report_id,evaluated_revision)
+             VALUES ($1,$2,$3,0)",
+        )
+        .bind(project)
+        .bind(cohort)
+        .bind(report)
+        .execute(&pool)
+        .await
+        .expect("cohort member should insert");
+    }
+
+    // reports.csv and reports.json keep the bibliography but drop every judgment.
+    let rows = table(&export_text(&pool, project, "reports.csv").await);
+    assert_eq!(rows.len(), 3);
+    for masked in [control, sample] {
+        let row = find(&rows, "report_id", &masked.to_string());
+        assert_eq!(cell(row, "screening_status"), "unscreened", "{masked}");
+        assert_eq!(
+            cell(row, "title_abstract_decision"),
+            "unscreened",
+            "{masked}"
+        );
+        assert_eq!(cell(row, "full_text_decision"), "not_required", "{masked}");
+        assert_eq!(cell(row, "exclusion_reason_code"), "", "{masked}");
+        assert_eq!(cell(row, "exclusion_reason_label"), "", "{masked}");
+        assert_eq!(cell(row, "study_id"), "", "{masked}");
+        assert_eq!(cell(row, "appraisal_completed"), "false", "{masked}");
+    }
+    let kept = find(&rows, "report_id", &outside.to_string());
+    assert_eq!(cell(kept, "title_abstract_decision"), "maybe");
+    assert_eq!(cell(kept, "screening_status"), "unscreened");
+
+    let reports: Value =
+        serde_json::from_str(&export_text(&pool, project, "reports.json").await).expect("json");
+    for masked in [control, sample] {
+        let row = reports
+            .as_array()
+            .expect("reports array")
+            .iter()
+            .find(|row| row["report_id"] == Value::String(masked.to_string()))
+            .unwrap_or_else(|| panic!("no reports.json row for {masked}"));
+        assert_eq!(row["title_abstract_decision"], "unscreened", "{masked}");
+        assert_eq!(row["full_text_decision"], "not_required", "{masked}");
+        assert_eq!(row["exclusion_reason_code"], Value::Null, "{masked}");
+        assert_eq!(row["appraisal_completed"], Value::Bool(false), "{masked}");
+        assert_eq!(row["study_id"], Value::Null, "{masked}");
+    }
+
+    // An appraisal exists only downstream of an inclusion decision, so it is withheld
+    // with its record rather than merely masked.
+    let appraisal = table(&export_text(&pool, project, "appraisal.csv").await);
+    assert!(
+        appraisal
+            .iter()
+            .all(|row| cell(row, "report_id") != control.to_string()),
+        "the cohort member's appraisal must not be exported"
+    );
+
+    // Included studies is derived from screening decisions, so cohort members are withheld.
+    let included = table(&export_text(&pool, project, "included_studies.csv").await);
+    assert!(
+        included
+            .iter()
+            .all(|row| cell(row, "report_id") != control.to_string()
+                && cell(row, "report_id") != sample.to_string()),
+        "cohort members must not appear in the included studies export"
+    );
+
+    sqlx::query("DELETE FROM projects WHERE id=$1")
+        .bind(project)
+        .execute(&pool)
+        .await
+        .expect("test project should clean up");
+    for report in [control, sample, outside] {
+        sqlx::query("DELETE FROM reports WHERE id=$1")
+            .bind(report)
+            .execute(&pool)
+            .await
+            .expect("test report should clean up");
+    }
+}

@@ -240,6 +240,8 @@ fn run(project_id: ProjectId, route: ResolvedModel, id: Uuid, hash: &str) -> AiR
         evidence_refs: Vec::new(),
         usage: Default::default(),
         cost_micros: Some(10),
+        provider_served_model: None,
+        provider_system_fingerprint: None,
         output: Some(serde_json::json!({"label":"rct"})),
         status: AiRunStatus::Completed,
         error: None,
@@ -1177,4 +1179,71 @@ async fn default_routes_follow_the_configured_provider_and_leave_history_alone()
         .expect("routes stay aligned");
     assert_eq!(second.repointed, 0, "a second run changes nothing");
     assert_eq!(provider_of(&pool, live_legacy).await, "opencode-go");
+}
+
+#[tokio::test]
+async fn ai_run_rows_keep_the_provider_revision_reported_with_the_answer() {
+    let Some(pool) = database().await else { return };
+    let store = PostgresAiStore::new(&pool);
+    let (project_id, _document_id, _block_id) = fixture(&pool).await;
+    let run_id = Uuid::new_v4();
+    let reuse_hash = "9".repeat(64);
+    let mut running = run(project_id, route("revision-provider"), run_id, &reuse_hash);
+    running.status = AiRunStatus::Running;
+    running.completed_at = None;
+    running.output = None;
+    store.save_run(running.clone()).await.expect("running run");
+
+    // The provider reports what served the call only with its answer, so the report is written
+    // on the terminal transition.
+    let mut completed = running.clone();
+    completed.status = AiRunStatus::Completed;
+    completed.completed_at = Some(Utc::now());
+    completed.output = Some(serde_json::json!({"label":"rct"}));
+    completed.provider_served_model = Some("glm-5.3-flash-2026-09".to_owned());
+    completed.provider_system_fingerprint = Some("fp_44709d6fcb".to_owned());
+    store
+        .save_run(completed.clone())
+        .await
+        .expect("running to completed with the provider report");
+    store
+        .save_run(completed.clone())
+        .await
+        .expect("exact terminal replay");
+
+    let mut rewritten = completed.clone();
+    rewritten.provider_served_model = Some("some-other-model".to_owned());
+    assert!(matches!(
+        store.save_run(rewritten).await,
+        Err(AiError::Persistence(message)) if message.contains("immutable")
+    ));
+
+    let reused = store
+        .find_reusable(Some(project_id), &reuse_hash)
+        .await
+        .expect("reuse lookup")
+        .expect("the completed run is reusable");
+    assert_eq!(
+        reused.provider_served_model.as_deref(),
+        Some("glm-5.3-flash-2026-09")
+    );
+    assert_eq!(
+        reused.provider_system_fingerprint.as_deref(),
+        Some("fp_44709d6fcb")
+    );
+
+    // The database bounds the stored report independently of the adapter that writes it.
+    let oversized = sqlx::query("UPDATE ai_runs SET provider_served_model=$2 WHERE id=$1")
+        .bind(run_id)
+        .bind("m".repeat(200))
+        .execute(&pool)
+        .await
+        .expect_err("an oversized provider report is refused");
+    assert!(
+        oversized
+            .to_string()
+            .contains("ai_runs_provider_served_model_check"),
+        "{oversized}"
+    );
+    cleanup(&pool, project_id).await;
 }

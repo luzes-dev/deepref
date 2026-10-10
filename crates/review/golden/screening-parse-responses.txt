@@ -1,0 +1,1825 @@
+@@ ta_valid_include ta_full
+{
+  "report_id": "00000000-0000-4000-8000-000000000003",
+  "protocol_version_id": "00000000-0000-4000-8000-000000000002",
+  "stage": "title_abstract",
+  "expected_revision": 3,
+  "criteria": [
+    {
+      "criterion_id": "00000000-0000-4000-8000-000000000101",
+      "judgment": "meets",
+      "rationale": "The abstract describes adults with hypertension.",
+      "evidence": [
+        {
+          "kind": "report_metadata",
+          "report_id": "00000000-0000-4000-8000-000000000003",
+          "field": "abstract",
+          "content_hash": "bd6cb5ce987f67e2024c572fa8aef249c068b5ce65952a0d24eba9ac93d72279"
+        }
+      ]
+    },
+    {
+      "criterion_id": "00000000-0000-4000-8000-000000000102",
+      "judgment": "meets",
+      "rationale": "The abstract reports a randomised comparison.",
+      "evidence": [
+        {
+          "kind": "report_metadata",
+          "report_id": "00000000-0000-4000-8000-000000000003",
+          "field": "abstract",
+          "content_hash": "bd6cb5ce987f67e2024c572fa8aef249c068b5ce65952a0d24eba9ac93d72279"
+        }
+      ]
+    },
+    {
+      "criterion_id": "00000000-0000-4000-8000-000000000103",
+      "judgment": "does_not_meet",
+      "rationale": "The record is a full report, not a conference abstract.",
+      "evidence": [
+        {
+          "kind": "report_metadata",
+          "report_id": "00000000-0000-4000-8000-000000000003",
+          "field": "title",
+          "content_hash": "b7ca5d270bda3398935fedf12ba8a745c650249c78329673ec24ac4c59fae297"
+        }
+      ]
+    }
+  ],
+  "suggested_decision": {
+    "kind": "include"
+  },
+  "uncertainties": []
+}
+
+@@ ta_valid_exclude_null_reason ta_full
+{
+  "report_id": "00000000-0000-4000-8000-000000000003",
+  "protocol_version_id": "00000000-0000-4000-8000-000000000002",
+  "stage": "title_abstract",
+  "expected_revision": 3,
+  "criteria": [
+    {
+      "criterion_id": "00000000-0000-4000-8000-000000000101",
+      "judgment": "meets",
+      "rationale": "The abstract describes adults with hypertension.",
+      "evidence": [
+        {
+          "kind": "report_metadata",
+          "report_id": "00000000-0000-4000-8000-000000000003",
+          "field": "abstract",
+          "content_hash": "bd6cb5ce987f67e2024c572fa8aef249c068b5ce65952a0d24eba9ac93d72279"
+        }
+      ]
+    },
+    {
+      "criterion_id": "00000000-0000-4000-8000-000000000102",
+      "judgment": "meets",
+      "rationale": "The abstract reports a randomised comparison.",
+      "evidence": [
+        {
+          "kind": "report_metadata",
+          "report_id": "00000000-0000-4000-8000-000000000003",
+          "field": "abstract",
+          "content_hash": "bd6cb5ce987f67e2024c572fa8aef249c068b5ce65952a0d24eba9ac93d72279"
+        }
+      ]
+    },
+    {
+      "criterion_id": "00000000-0000-4000-8000-000000000103",
+      "judgment": "meets",
+      "rationale": "The record is a full report, not a conference abstract.",
+      "evidence": [
+        {
+          "kind": "report_metadata",
+          "report_id": "00000000-0000-4000-8000-000000000003",
+          "field": "title",
+          "content_hash": "b7ca5d270bda3398935fedf12ba8a745c650249c78329673ec24ac4c59fae297"
+        }
+      ]
+    }
+  ],
+  "suggested_decision": {
+    "kind": "exclude",
+    "exclusion_reason_id": null
+  },
+  "uncertainties": []
+}
+
+@@ ta_exclude_reason_normalised_to_null ta_full
+{
+  "report_id": "00000000-0000-4000-8000-000000000003",
+  "protocol_version_id": "00000000-0000-4000-8000-000000000002",
+  "stage": "title_abstract",
+  "expected_revision": 3,
+  "criteria": [
+    {
+      "criterion_id": "00000000-0000-4000-8000-000000000101",
+      "judgment": "meets",
+      "rationale": "The abstract describes adults with hypertension.",
+      "evidence": [
+        {
+          "kind": "report_metadata",
+          "report_id": "00000000-0000-4000-8000-000000000003",
+          "field": "abstract",
+          "content_hash": "bd6cb5ce987f67e2024c572fa8aef249c068b5ce65952a0d24eba9ac93d72279"
+        }
+      ]
+    },
+    {
+      "criterion_id": "00000000-0000-4000-8000-000000000102",
+      "judgment": "meets",
+      "rationale": "The abstract reports a randomised comparison.",
+      "evidence": [
+        {
+          "kind": "report_metadata",
+          "report_id": "00000000-0000-4000-8000-000000000003",
+          "field": "abstract",
+          "content_hash": "bd6cb5ce987f67e2024c572fa8aef249c068b5ce65952a0d24eba9ac93d72279"
+        }
+      ]
+    },
+    {
+      "criterion_id": "00000000-0000-4000-8000-000000000103",
+      "judgment": "meets",
+      "rationale": "The record is a full report, not a conference abstract.",
+      "evidence": [
+        {
+          "kind": "report_metadata",
+          "report_id": "00000000-0000-4000-8000-000000000003",
+          "field": "title",
+          "content_hash": "b7ca5d270bda3398935fedf12ba8a745c650249c78329673ec24ac4c59fae297"
+        }
+      ]
+    }
+  ],
+  "suggested_decision": {
+    "kind": "exclude",
+    "exclusion_reason_id": "00000000-0000-4000-8000-000000000201"
+  },
+  "uncertainties": []
+}
+
+@@ ta_maybe ta_full
+{
+  "report_id": "00000000-0000-4000-8000-000000000003",
+  "protocol_version_id": "00000000-0000-4000-8000-000000000002",
+  "stage": "title_abstract",
+  "expected_revision": 3,
+  "criteria": [
+    {
+      "criterion_id": "00000000-0000-4000-8000-000000000101",
+      "judgment": "meets",
+      "rationale": "The abstract describes adults with hypertension.",
+      "evidence": [
+        {
+          "kind": "report_metadata",
+          "report_id": "00000000-0000-4000-8000-000000000003",
+          "field": "abstract",
+          "content_hash": "bd6cb5ce987f67e2024c572fa8aef249c068b5ce65952a0d24eba9ac93d72279"
+        }
+      ]
+    },
+    {
+      "criterion_id": "00000000-0000-4000-8000-000000000102",
+      "judgment": "unclear",
+      "rationale": "The abstract reports a randomised comparison.",
+      "evidence": [
+        {
+          "kind": "report_metadata",
+          "report_id": "00000000-0000-4000-8000-000000000003",
+          "field": "abstract",
+          "content_hash": "bd6cb5ce987f67e2024c572fa8aef249c068b5ce65952a0d24eba9ac93d72279"
+        }
+      ]
+    },
+    {
+      "criterion_id": "00000000-0000-4000-8000-000000000103",
+      "judgment": "does_not_meet",
+      "rationale": "The record is a full report, not a conference abstract.",
+      "evidence": [
+        {
+          "kind": "report_metadata",
+          "report_id": "00000000-0000-4000-8000-000000000003",
+          "field": "title",
+          "content_hash": "b7ca5d270bda3398935fedf12ba8a745c650249c78329673ec24ac4c59fae297"
+        }
+      ]
+    }
+  ],
+  "suggested_decision": {
+    "kind": "maybe"
+  },
+  "uncertainties": []
+}
+
+@@ ta_insufficient_with_uncertainty ta_full
+{
+  "report_id": "00000000-0000-4000-8000-000000000003",
+  "protocol_version_id": "00000000-0000-4000-8000-000000000002",
+  "stage": "title_abstract",
+  "expected_revision": 3,
+  "criteria": [
+    {
+      "criterion_id": "00000000-0000-4000-8000-000000000101",
+      "judgment": "unclear",
+      "rationale": "The abstract does not say enough about this criterion.",
+      "evidence": []
+    },
+    {
+      "criterion_id": "00000000-0000-4000-8000-000000000102",
+      "judgment": "unclear",
+      "rationale": "The abstract does not say enough about this criterion.",
+      "evidence": []
+    },
+    {
+      "criterion_id": "00000000-0000-4000-8000-000000000103",
+      "judgment": "unclear",
+      "rationale": "The abstract does not say enough about this criterion.",
+      "evidence": []
+    }
+  ],
+  "suggested_decision": {
+    "kind": "insufficient_evidence"
+  },
+  "uncertainties": [
+    "The abstract does not describe the design or the population in enough detail."
+  ]
+}
+
+@@ ta_insufficient_without_uncertainty ta_full
+{
+  "report_id": "00000000-0000-4000-8000-000000000003",
+  "protocol_version_id": "00000000-0000-4000-8000-000000000002",
+  "stage": "title_abstract",
+  "expected_revision": 3,
+  "criteria": [
+    {
+      "criterion_id": "00000000-0000-4000-8000-000000000101",
+      "judgment": "unclear",
+      "rationale": "The abstract does not say enough about this criterion.",
+      "evidence": []
+    },
+    {
+      "criterion_id": "00000000-0000-4000-8000-000000000102",
+      "judgment": "unclear",
+      "rationale": "The abstract does not say enough about this criterion.",
+      "evidence": []
+    },
+    {
+      "criterion_id": "00000000-0000-4000-8000-000000000103",
+      "judgment": "unclear",
+      "rationale": "The abstract does not say enough about this criterion.",
+      "evidence": []
+    }
+  ],
+  "suggested_decision": {
+    "kind": "insufficient_evidence"
+  },
+  "uncertainties": []
+}
+
+@@ ta_aliases_and_typo ta_full
+{
+  "report_id": "00000000-0000-4000-8000-000000000003",
+  "protocol_version_id": "00000000-0000-4000-8000-000000000002",
+  "stage": "title_abstract",
+  "expected_revision": 3,
+  "criteria": [
+    {
+      "criterion_id": "00000000-0000-4000-8000-000000000101",
+      "judgment": "met",
+      "rationale": "The abstract describes adults with hypertension.",
+      "evidence": [
+        {
+          "kind": "report_metadata",
+          "report_id": "00000000-0000-4000-8000-000000000003",
+          "field": "abstract",
+          "content_hash": "bd6cb5ce987f67e2024c572fa8aef249c068b5ce65952a0d24eba9ac93d72279"
+        }
+      ]
+    },
+    {
+      "criterion_id": "00000000-0000-4000-8000-000000000102",
+      "judgment": "uncertain",
+      "rationale": "The abstract does not state the allocation.",
+      "evidence": [
+        {
+          "kind": "report_metadata",
+          "report_id": "00000000-0000-4000-8000-000000000003",
+          "field": "abstract",
+          "content_hash": "bd6cb5ce987f67e2024c572fa8aef249c068b5ce65952a0d24eba9ac93d72279"
+        }
+      ]
+    },
+    {
+      "criterion_id": "00000000-0000-4000-8000-000000000103",
+      "judgment": "does_not_meat",
+      "rationale": "The record is a full report, not a conference abstract.",
+      "evidence": [
+        {
+          "kind": "report_metadata",
+          "report_id": "00000000-0000-4000-8000-000000000003",
+          "field": "title",
+          "content_hash": "b7ca5d270bda3398935fedf12ba8a745c650249c78329673ec24ac4c59fae297"
+        }
+      ]
+    }
+  ],
+  "suggested_decision": {
+    "kind": "maybe"
+  },
+  "uncertainties": []
+}
+
+@@ ta_not_applicable_marker ta_full
+{
+  "report_id": "00000000-0000-4000-8000-000000000003",
+  "protocol_version_id": "00000000-0000-4000-8000-000000000002",
+  "stage": "title_abstract",
+  "expected_revision": 3,
+  "criteria": [
+    {
+      "criterion_id": "00000000-0000-4000-8000-000000000101",
+      "judgment": "meets",
+      "rationale": "The abstract describes adults with hypertension.",
+      "evidence": [
+        {
+          "kind": "report_metadata",
+          "report_id": "00000000-0000-4000-8000-000000000003",
+          "field": "abstract",
+          "content_hash": "bd6cb5ce987f67e2024c572fa8aef249c068b5ce65952a0d24eba9ac93d72279"
+        }
+      ]
+    },
+    {
+      "criterion_id": "00000000-0000-4000-8000-000000000102",
+      "judgment": "not applicable",
+      "rationale": "Allocation is not reported.",
+      "evidence": [
+        {
+          "kind": "report_metadata",
+          "report_id": "00000000-0000-4000-8000-000000000003",
+          "field": "abstract",
+          "content_hash": "bd6cb5ce987f67e2024c572fa8aef249c068b5ce65952a0d24eba9ac93d72279"
+        }
+      ]
+    },
+    {
+      "criterion_id": "00000000-0000-4000-8000-000000000103",
+      "judgment": "does_not_meet",
+      "rationale": "The record is a full report.",
+      "evidence": [
+        {
+          "kind": "report_metadata",
+          "report_id": "00000000-0000-4000-8000-000000000003",
+          "field": "title",
+          "content_hash": "b7ca5d270bda3398935fedf12ba8a745c650249c78329673ec24ac4c59fae297"
+        }
+      ]
+    }
+  ],
+  "suggested_decision": {
+    "kind": "maybe"
+  },
+  "uncertainties": []
+}
+
+@@ ta_unknown_judgment_value ta_full
+{
+  "report_id": "00000000-0000-4000-8000-000000000003",
+  "protocol_version_id": "00000000-0000-4000-8000-000000000002",
+  "stage": "title_abstract",
+  "expected_revision": 3,
+  "criteria": [
+    {
+      "criterion_id": "00000000-0000-4000-8000-000000000101",
+      "judgment": "meets",
+      "rationale": "The abstract describes adults with hypertension.",
+      "evidence": [
+        {
+          "kind": "report_metadata",
+          "report_id": "00000000-0000-4000-8000-000000000003",
+          "field": "abstract",
+          "content_hash": "bd6cb5ce987f67e2024c572fa8aef249c068b5ce65952a0d24eba9ac93d72279"
+        }
+      ]
+    },
+    {
+      "criterion_id": "00000000-0000-4000-8000-000000000102",
+      "judgment": "probably",
+      "rationale": "The abstract suggests a comparison.",
+      "evidence": [
+        {
+          "kind": "report_metadata",
+          "report_id": "00000000-0000-4000-8000-000000000003",
+          "field": "abstract",
+          "content_hash": "bd6cb5ce987f67e2024c572fa8aef249c068b5ce65952a0d24eba9ac93d72279"
+        }
+      ]
+    },
+    {
+      "criterion_id": "00000000-0000-4000-8000-000000000103",
+      "judgment": "does_not_meet",
+      "rationale": "The record is a full report.",
+      "evidence": [
+        {
+          "kind": "report_metadata",
+          "report_id": "00000000-0000-4000-8000-000000000003",
+          "field": "title",
+          "content_hash": "b7ca5d270bda3398935fedf12ba8a745c650249c78329673ec24ac4c59fae297"
+        }
+      ]
+    }
+  ],
+  "suggested_decision": {
+    "kind": "maybe"
+  },
+  "uncertainties": []
+}
+
+@@ ta_duplicate_identical ta_full
+{
+  "report_id": "00000000-0000-4000-8000-000000000003",
+  "protocol_version_id": "00000000-0000-4000-8000-000000000002",
+  "stage": "title_abstract",
+  "expected_revision": 3,
+  "criteria": [
+    {
+      "criterion_id": "00000000-0000-4000-8000-000000000101",
+      "judgment": "meets",
+      "rationale": "The abstract describes adults with hypertension.",
+      "evidence": [
+        {
+          "kind": "report_metadata",
+          "report_id": "00000000-0000-4000-8000-000000000003",
+          "field": "abstract",
+          "content_hash": "bd6cb5ce987f67e2024c572fa8aef249c068b5ce65952a0d24eba9ac93d72279"
+        }
+      ]
+    },
+    {
+      "criterion_id": "00000000-0000-4000-8000-000000000101",
+      "judgment": "meets",
+      "rationale": "The abstract describes adults with hypertension.",
+      "evidence": [
+        {
+          "kind": "report_metadata",
+          "report_id": "00000000-0000-4000-8000-000000000003",
+          "field": "abstract",
+          "content_hash": "bd6cb5ce987f67e2024c572fa8aef249c068b5ce65952a0d24eba9ac93d72279"
+        }
+      ]
+    },
+    {
+      "criterion_id": "00000000-0000-4000-8000-000000000102",
+      "judgment": "meets",
+      "rationale": "The abstract reports a randomised comparison.",
+      "evidence": [
+        {
+          "kind": "report_metadata",
+          "report_id": "00000000-0000-4000-8000-000000000003",
+          "field": "abstract",
+          "content_hash": "bd6cb5ce987f67e2024c572fa8aef249c068b5ce65952a0d24eba9ac93d72279"
+        }
+      ]
+    },
+    {
+      "criterion_id": "00000000-0000-4000-8000-000000000103",
+      "judgment": "does_not_meet",
+      "rationale": "The record is a full report, not a conference abstract.",
+      "evidence": [
+        {
+          "kind": "report_metadata",
+          "report_id": "00000000-0000-4000-8000-000000000003",
+          "field": "title",
+          "content_hash": "b7ca5d270bda3398935fedf12ba8a745c650249c78329673ec24ac4c59fae297"
+        }
+      ]
+    }
+  ],
+  "suggested_decision": {
+    "kind": "include"
+  },
+  "uncertainties": []
+}
+
+@@ ta_duplicate_conflicting ta_full
+{
+  "report_id": "00000000-0000-4000-8000-000000000003",
+  "protocol_version_id": "00000000-0000-4000-8000-000000000002",
+  "stage": "title_abstract",
+  "expected_revision": 3,
+  "criteria": [
+    {
+      "criterion_id": "00000000-0000-4000-8000-000000000101",
+      "judgment": "meets",
+      "rationale": "The abstract describes adults with hypertension.",
+      "evidence": [
+        {
+          "kind": "report_metadata",
+          "report_id": "00000000-0000-4000-8000-000000000003",
+          "field": "abstract",
+          "content_hash": "bd6cb5ce987f67e2024c572fa8aef249c068b5ce65952a0d24eba9ac93d72279"
+        }
+      ]
+    },
+    {
+      "criterion_id": "00000000-0000-4000-8000-000000000102",
+      "judgment": "meets",
+      "rationale": "The abstract reports a randomised comparison.",
+      "evidence": [
+        {
+          "kind": "report_metadata",
+          "report_id": "00000000-0000-4000-8000-000000000003",
+          "field": "abstract",
+          "content_hash": "bd6cb5ce987f67e2024c572fa8aef249c068b5ce65952a0d24eba9ac93d72279"
+        }
+      ]
+    },
+    {
+      "criterion_id": "00000000-0000-4000-8000-000000000103",
+      "judgment": "does_not_meet",
+      "rationale": "The record is a full report, not a conference abstract.",
+      "evidence": [
+        {
+          "kind": "report_metadata",
+          "report_id": "00000000-0000-4000-8000-000000000003",
+          "field": "title",
+          "content_hash": "b7ca5d270bda3398935fedf12ba8a745c650249c78329673ec24ac4c59fae297"
+        }
+      ]
+    },
+    {
+      "criterion_id": "00000000-0000-4000-8000-000000000101",
+      "judgment": "does_not_meet",
+      "rationale": "A conflicting second reading.",
+      "evidence": [
+        {
+          "kind": "report_metadata",
+          "report_id": "00000000-0000-4000-8000-000000000003",
+          "field": "abstract",
+          "content_hash": "bd6cb5ce987f67e2024c572fa8aef249c068b5ce65952a0d24eba9ac93d72279"
+        }
+      ]
+    }
+  ],
+  "suggested_decision": {
+    "kind": "include"
+  },
+  "uncertainties": []
+}
+
+@@ ta_missing_judgment ta_full
+{
+  "report_id": "00000000-0000-4000-8000-000000000003",
+  "protocol_version_id": "00000000-0000-4000-8000-000000000002",
+  "stage": "title_abstract",
+  "expected_revision": 3,
+  "criteria": [
+    {
+      "criterion_id": "00000000-0000-4000-8000-000000000101",
+      "judgment": "meets",
+      "rationale": "The abstract describes adults with hypertension.",
+      "evidence": [
+        {
+          "kind": "report_metadata",
+          "report_id": "00000000-0000-4000-8000-000000000003",
+          "field": "abstract",
+          "content_hash": "bd6cb5ce987f67e2024c572fa8aef249c068b5ce65952a0d24eba9ac93d72279"
+        }
+      ]
+    },
+    {
+      "criterion_id": "00000000-0000-4000-8000-000000000102",
+      "judgment": "meets",
+      "rationale": "The abstract reports a randomised comparison.",
+      "evidence": [
+        {
+          "kind": "report_metadata",
+          "report_id": "00000000-0000-4000-8000-000000000003",
+          "field": "abstract",
+          "content_hash": "bd6cb5ce987f67e2024c572fa8aef249c068b5ce65952a0d24eba9ac93d72279"
+        }
+      ]
+    }
+  ],
+  "suggested_decision": {
+    "kind": "include"
+  },
+  "uncertainties": []
+}
+
+@@ ta_wrong_order ta_full
+{
+  "report_id": "00000000-0000-4000-8000-000000000003",
+  "protocol_version_id": "00000000-0000-4000-8000-000000000002",
+  "stage": "title_abstract",
+  "expected_revision": 3,
+  "criteria": [
+    {
+      "criterion_id": "00000000-0000-4000-8000-000000000103",
+      "judgment": "does_not_meet",
+      "rationale": "The record is a full report, not a conference abstract.",
+      "evidence": [
+        {
+          "kind": "report_metadata",
+          "report_id": "00000000-0000-4000-8000-000000000003",
+          "field": "title",
+          "content_hash": "b7ca5d270bda3398935fedf12ba8a745c650249c78329673ec24ac4c59fae297"
+        }
+      ]
+    },
+    {
+      "criterion_id": "00000000-0000-4000-8000-000000000101",
+      "judgment": "meets",
+      "rationale": "The abstract describes adults with hypertension.",
+      "evidence": [
+        {
+          "kind": "report_metadata",
+          "report_id": "00000000-0000-4000-8000-000000000003",
+          "field": "abstract",
+          "content_hash": "bd6cb5ce987f67e2024c572fa8aef249c068b5ce65952a0d24eba9ac93d72279"
+        }
+      ]
+    },
+    {
+      "criterion_id": "00000000-0000-4000-8000-000000000102",
+      "judgment": "meets",
+      "rationale": "The abstract reports a randomised comparison.",
+      "evidence": [
+        {
+          "kind": "report_metadata",
+          "report_id": "00000000-0000-4000-8000-000000000003",
+          "field": "abstract",
+          "content_hash": "bd6cb5ce987f67e2024c572fa8aef249c068b5ce65952a0d24eba9ac93d72279"
+        }
+      ]
+    }
+  ],
+  "suggested_decision": {
+    "kind": "include"
+  },
+  "uncertainties": []
+}
+
+@@ ta_extra_full_text_criterion ta_full
+{
+  "report_id": "00000000-0000-4000-8000-000000000003",
+  "protocol_version_id": "00000000-0000-4000-8000-000000000002",
+  "stage": "title_abstract",
+  "expected_revision": 3,
+  "criteria": [
+    {
+      "criterion_id": "00000000-0000-4000-8000-000000000101",
+      "judgment": "meets",
+      "rationale": "The abstract describes adults with hypertension.",
+      "evidence": [
+        {
+          "kind": "report_metadata",
+          "report_id": "00000000-0000-4000-8000-000000000003",
+          "field": "abstract",
+          "content_hash": "bd6cb5ce987f67e2024c572fa8aef249c068b5ce65952a0d24eba9ac93d72279"
+        }
+      ]
+    },
+    {
+      "criterion_id": "00000000-0000-4000-8000-000000000102",
+      "judgment": "meets",
+      "rationale": "The abstract reports a randomised comparison.",
+      "evidence": [
+        {
+          "kind": "report_metadata",
+          "report_id": "00000000-0000-4000-8000-000000000003",
+          "field": "abstract",
+          "content_hash": "bd6cb5ce987f67e2024c572fa8aef249c068b5ce65952a0d24eba9ac93d72279"
+        }
+      ]
+    },
+    {
+      "criterion_id": "00000000-0000-4000-8000-000000000103",
+      "judgment": "does_not_meet",
+      "rationale": "The record is a full report, not a conference abstract.",
+      "evidence": [
+        {
+          "kind": "report_metadata",
+          "report_id": "00000000-0000-4000-8000-000000000003",
+          "field": "title",
+          "content_hash": "b7ca5d270bda3398935fedf12ba8a745c650249c78329673ec24ac4c59fae297"
+        }
+      ]
+    },
+    {
+      "criterion_id": "00000000-0000-4000-8000-000000000104",
+      "judgment": "meets",
+      "rationale": "Blood pressure is reported at follow-up.",
+      "evidence": [
+        {
+          "kind": "document_block",
+          "document_block_id": "00000000-0000-4000-8000-000000000301",
+          "page": 2,
+          "content_hash": "29387df96ee9029f8b87cc3b267a8b5254a1370d103a78d80f96c3c4a4962bbc",
+          "section_path": [
+            "Results"
+          ]
+        }
+      ]
+    }
+  ],
+  "suggested_decision": {
+    "kind": "include"
+  },
+  "uncertainties": []
+}
+
+@@ ta_wrong_stage ta_full
+{
+  "report_id": "00000000-0000-4000-8000-000000000003",
+  "protocol_version_id": "00000000-0000-4000-8000-000000000002",
+  "stage": "full_text",
+  "expected_revision": 3,
+  "criteria": [
+    {
+      "criterion_id": "00000000-0000-4000-8000-000000000101",
+      "judgment": "meets",
+      "rationale": "The abstract describes adults with hypertension.",
+      "evidence": [
+        {
+          "kind": "report_metadata",
+          "report_id": "00000000-0000-4000-8000-000000000003",
+          "field": "abstract",
+          "content_hash": "bd6cb5ce987f67e2024c572fa8aef249c068b5ce65952a0d24eba9ac93d72279"
+        }
+      ]
+    },
+    {
+      "criterion_id": "00000000-0000-4000-8000-000000000102",
+      "judgment": "meets",
+      "rationale": "The abstract reports a randomised comparison.",
+      "evidence": [
+        {
+          "kind": "report_metadata",
+          "report_id": "00000000-0000-4000-8000-000000000003",
+          "field": "abstract",
+          "content_hash": "bd6cb5ce987f67e2024c572fa8aef249c068b5ce65952a0d24eba9ac93d72279"
+        }
+      ]
+    },
+    {
+      "criterion_id": "00000000-0000-4000-8000-000000000103",
+      "judgment": "does_not_meet",
+      "rationale": "The record is a full report, not a conference abstract.",
+      "evidence": [
+        {
+          "kind": "report_metadata",
+          "report_id": "00000000-0000-4000-8000-000000000003",
+          "field": "title",
+          "content_hash": "b7ca5d270bda3398935fedf12ba8a745c650249c78329673ec24ac4c59fae297"
+        }
+      ]
+    }
+  ],
+  "suggested_decision": {
+    "kind": "include"
+  },
+  "uncertainties": []
+}
+
+@@ ta_wrong_report ta_full
+{
+  "report_id": "00000000-0000-4000-8000-000000000004",
+  "protocol_version_id": "00000000-0000-4000-8000-000000000002",
+  "stage": "title_abstract",
+  "expected_revision": 3,
+  "criteria": [
+    {
+      "criterion_id": "00000000-0000-4000-8000-000000000101",
+      "judgment": "meets",
+      "rationale": "The abstract describes adults with hypertension.",
+      "evidence": [
+        {
+          "kind": "report_metadata",
+          "report_id": "00000000-0000-4000-8000-000000000003",
+          "field": "abstract",
+          "content_hash": "bd6cb5ce987f67e2024c572fa8aef249c068b5ce65952a0d24eba9ac93d72279"
+        }
+      ]
+    },
+    {
+      "criterion_id": "00000000-0000-4000-8000-000000000102",
+      "judgment": "meets",
+      "rationale": "The abstract reports a randomised comparison.",
+      "evidence": [
+        {
+          "kind": "report_metadata",
+          "report_id": "00000000-0000-4000-8000-000000000003",
+          "field": "abstract",
+          "content_hash": "bd6cb5ce987f67e2024c572fa8aef249c068b5ce65952a0d24eba9ac93d72279"
+        }
+      ]
+    },
+    {
+      "criterion_id": "00000000-0000-4000-8000-000000000103",
+      "judgment": "does_not_meet",
+      "rationale": "The record is a full report, not a conference abstract.",
+      "evidence": [
+        {
+          "kind": "report_metadata",
+          "report_id": "00000000-0000-4000-8000-000000000003",
+          "field": "title",
+          "content_hash": "b7ca5d270bda3398935fedf12ba8a745c650249c78329673ec24ac4c59fae297"
+        }
+      ]
+    }
+  ],
+  "suggested_decision": {
+    "kind": "include"
+  },
+  "uncertainties": []
+}
+
+@@ ta_wrong_revision ta_full
+{
+  "report_id": "00000000-0000-4000-8000-000000000003",
+  "protocol_version_id": "00000000-0000-4000-8000-000000000002",
+  "stage": "title_abstract",
+  "expected_revision": 4,
+  "criteria": [
+    {
+      "criterion_id": "00000000-0000-4000-8000-000000000101",
+      "judgment": "meets",
+      "rationale": "The abstract describes adults with hypertension.",
+      "evidence": [
+        {
+          "kind": "report_metadata",
+          "report_id": "00000000-0000-4000-8000-000000000003",
+          "field": "abstract",
+          "content_hash": "bd6cb5ce987f67e2024c572fa8aef249c068b5ce65952a0d24eba9ac93d72279"
+        }
+      ]
+    },
+    {
+      "criterion_id": "00000000-0000-4000-8000-000000000102",
+      "judgment": "meets",
+      "rationale": "The abstract reports a randomised comparison.",
+      "evidence": [
+        {
+          "kind": "report_metadata",
+          "report_id": "00000000-0000-4000-8000-000000000003",
+          "field": "abstract",
+          "content_hash": "bd6cb5ce987f67e2024c572fa8aef249c068b5ce65952a0d24eba9ac93d72279"
+        }
+      ]
+    },
+    {
+      "criterion_id": "00000000-0000-4000-8000-000000000103",
+      "judgment": "does_not_meet",
+      "rationale": "The record is a full report, not a conference abstract.",
+      "evidence": [
+        {
+          "kind": "report_metadata",
+          "report_id": "00000000-0000-4000-8000-000000000003",
+          "field": "title",
+          "content_hash": "b7ca5d270bda3398935fedf12ba8a745c650249c78329673ec24ac4c59fae297"
+        }
+      ]
+    }
+  ],
+  "suggested_decision": {
+    "kind": "include"
+  },
+  "uncertainties": []
+}
+
+@@ ta_metadata_hash_not_allowed ta_full
+{
+  "report_id": "00000000-0000-4000-8000-000000000003",
+  "protocol_version_id": "00000000-0000-4000-8000-000000000002",
+  "stage": "title_abstract",
+  "expected_revision": 3,
+  "criteria": [
+    {
+      "criterion_id": "00000000-0000-4000-8000-000000000101",
+      "judgment": "meets",
+      "rationale": "The abstract describes adults with hypertension.",
+      "evidence": [
+        {
+          "kind": "report_metadata",
+          "report_id": "00000000-0000-4000-8000-000000000003",
+          "field": "abstract",
+          "content_hash": "92990488e933eafcd4843b6687b6c0c36948a3942b2f33f9bf0e4e8b1f547dd5"
+        }
+      ]
+    },
+    {
+      "criterion_id": "00000000-0000-4000-8000-000000000102",
+      "judgment": "meets",
+      "rationale": "The abstract reports a randomised comparison.",
+      "evidence": [
+        {
+          "kind": "report_metadata",
+          "report_id": "00000000-0000-4000-8000-000000000003",
+          "field": "abstract",
+          "content_hash": "bd6cb5ce987f67e2024c572fa8aef249c068b5ce65952a0d24eba9ac93d72279"
+        }
+      ]
+    },
+    {
+      "criterion_id": "00000000-0000-4000-8000-000000000103",
+      "judgment": "does_not_meet",
+      "rationale": "The record is a full report, not a conference abstract.",
+      "evidence": [
+        {
+          "kind": "report_metadata",
+          "report_id": "00000000-0000-4000-8000-000000000003",
+          "field": "title",
+          "content_hash": "b7ca5d270bda3398935fedf12ba8a745c650249c78329673ec24ac4c59fae297"
+        }
+      ]
+    }
+  ],
+  "suggested_decision": {
+    "kind": "include"
+  },
+  "uncertainties": []
+}
+
+@@ ta_include_with_exclusion_support ta_full
+{
+  "report_id": "00000000-0000-4000-8000-000000000003",
+  "protocol_version_id": "00000000-0000-4000-8000-000000000002",
+  "stage": "title_abstract",
+  "expected_revision": 3,
+  "criteria": [
+    {
+      "criterion_id": "00000000-0000-4000-8000-000000000101",
+      "judgment": "meets",
+      "rationale": "The abstract describes adults with hypertension.",
+      "evidence": [
+        {
+          "kind": "report_metadata",
+          "report_id": "00000000-0000-4000-8000-000000000003",
+          "field": "abstract",
+          "content_hash": "bd6cb5ce987f67e2024c572fa8aef249c068b5ce65952a0d24eba9ac93d72279"
+        }
+      ]
+    },
+    {
+      "criterion_id": "00000000-0000-4000-8000-000000000102",
+      "judgment": "meets",
+      "rationale": "The abstract reports a randomised comparison.",
+      "evidence": [
+        {
+          "kind": "report_metadata",
+          "report_id": "00000000-0000-4000-8000-000000000003",
+          "field": "abstract",
+          "content_hash": "bd6cb5ce987f67e2024c572fa8aef249c068b5ce65952a0d24eba9ac93d72279"
+        }
+      ]
+    },
+    {
+      "criterion_id": "00000000-0000-4000-8000-000000000103",
+      "judgment": "meets",
+      "rationale": "The record is a full report, not a conference abstract.",
+      "evidence": [
+        {
+          "kind": "report_metadata",
+          "report_id": "00000000-0000-4000-8000-000000000003",
+          "field": "title",
+          "content_hash": "b7ca5d270bda3398935fedf12ba8a745c650249c78329673ec24ac4c59fae297"
+        }
+      ]
+    }
+  ],
+  "suggested_decision": {
+    "kind": "include"
+  },
+  "uncertainties": []
+}
+
+@@ ta_maybe_all_criteria_satisfied ta_full
+{
+  "report_id": "00000000-0000-4000-8000-000000000003",
+  "protocol_version_id": "00000000-0000-4000-8000-000000000002",
+  "stage": "title_abstract",
+  "expected_revision": 3,
+  "criteria": [
+    {
+      "criterion_id": "00000000-0000-4000-8000-000000000101",
+      "judgment": "meets",
+      "rationale": "The abstract describes adults with hypertension.",
+      "evidence": [
+        {
+          "kind": "report_metadata",
+          "report_id": "00000000-0000-4000-8000-000000000003",
+          "field": "abstract",
+          "content_hash": "bd6cb5ce987f67e2024c572fa8aef249c068b5ce65952a0d24eba9ac93d72279"
+        }
+      ]
+    },
+    {
+      "criterion_id": "00000000-0000-4000-8000-000000000102",
+      "judgment": "meets",
+      "rationale": "The abstract reports a randomised comparison.",
+      "evidence": [
+        {
+          "kind": "report_metadata",
+          "report_id": "00000000-0000-4000-8000-000000000003",
+          "field": "abstract",
+          "content_hash": "bd6cb5ce987f67e2024c572fa8aef249c068b5ce65952a0d24eba9ac93d72279"
+        }
+      ]
+    },
+    {
+      "criterion_id": "00000000-0000-4000-8000-000000000103",
+      "judgment": "does_not_meet",
+      "rationale": "The record is a full report, not a conference abstract.",
+      "evidence": [
+        {
+          "kind": "report_metadata",
+          "report_id": "00000000-0000-4000-8000-000000000003",
+          "field": "title",
+          "content_hash": "b7ca5d270bda3398935fedf12ba8a745c650249c78329673ec24ac4c59fae297"
+        }
+      ]
+    }
+  ],
+  "suggested_decision": {
+    "kind": "maybe"
+  },
+  "uncertainties": []
+}
+
+@@ ta_code_fenced_json ta_full
+```json
+{
+  "report_id": "00000000-0000-4000-8000-000000000003",
+  "protocol_version_id": "00000000-0000-4000-8000-000000000002",
+  "stage": "title_abstract",
+  "expected_revision": 3,
+  "criteria": [
+    {
+      "criterion_id": "00000000-0000-4000-8000-000000000101",
+      "judgment": "meets",
+      "rationale": "The abstract describes adults with hypertension.",
+      "evidence": [
+        {
+          "kind": "report_metadata",
+          "report_id": "00000000-0000-4000-8000-000000000003",
+          "field": "abstract",
+          "content_hash": "bd6cb5ce987f67e2024c572fa8aef249c068b5ce65952a0d24eba9ac93d72279"
+        }
+      ]
+    },
+    {
+      "criterion_id": "00000000-0000-4000-8000-000000000102",
+      "judgment": "meets",
+      "rationale": "The abstract reports a randomised comparison.",
+      "evidence": [
+        {
+          "kind": "report_metadata",
+          "report_id": "00000000-0000-4000-8000-000000000003",
+          "field": "abstract",
+          "content_hash": "bd6cb5ce987f67e2024c572fa8aef249c068b5ce65952a0d24eba9ac93d72279"
+        }
+      ]
+    },
+    {
+      "criterion_id": "00000000-0000-4000-8000-000000000103",
+      "judgment": "does_not_meet",
+      "rationale": "The record is a full report, not a conference abstract.",
+      "evidence": [
+        {
+          "kind": "report_metadata",
+          "report_id": "00000000-0000-4000-8000-000000000003",
+          "field": "title",
+          "content_hash": "b7ca5d270bda3398935fedf12ba8a745c650249c78329673ec24ac4c59fae297"
+        }
+      ]
+    }
+  ],
+  "suggested_decision": {
+    "kind": "include"
+  },
+  "uncertainties": []
+}
+```
+
+@@ ta_non_json_text ta_full
+I think this record should be included because it is a randomised trial.
+
+@@ ta_decision_kind_odd_casing ta_full
+{
+  "report_id": "00000000-0000-4000-8000-000000000003",
+  "protocol_version_id": "00000000-0000-4000-8000-000000000002",
+  "stage": "title_abstract",
+  "expected_revision": 3,
+  "criteria": [
+    {
+      "criterion_id": "00000000-0000-4000-8000-000000000101",
+      "judgment": "meets",
+      "rationale": "The abstract describes adults with hypertension.",
+      "evidence": [
+        {
+          "kind": "report_metadata",
+          "report_id": "00000000-0000-4000-8000-000000000003",
+          "field": "abstract",
+          "content_hash": "bd6cb5ce987f67e2024c572fa8aef249c068b5ce65952a0d24eba9ac93d72279"
+        }
+      ]
+    },
+    {
+      "criterion_id": "00000000-0000-4000-8000-000000000102",
+      "judgment": "meets",
+      "rationale": "The abstract reports a randomised comparison.",
+      "evidence": [
+        {
+          "kind": "report_metadata",
+          "report_id": "00000000-0000-4000-8000-000000000003",
+          "field": "abstract",
+          "content_hash": "bd6cb5ce987f67e2024c572fa8aef249c068b5ce65952a0d24eba9ac93d72279"
+        }
+      ]
+    },
+    {
+      "criterion_id": "00000000-0000-4000-8000-000000000103",
+      "judgment": "does_not_meet",
+      "rationale": "The record is a full report, not a conference abstract.",
+      "evidence": [
+        {
+          "kind": "report_metadata",
+          "report_id": "00000000-0000-4000-8000-000000000003",
+          "field": "title",
+          "content_hash": "b7ca5d270bda3398935fedf12ba8a745c650249c78329673ec24ac4c59fae297"
+        }
+      ]
+    }
+  ],
+  "suggested_decision": {
+    "kind": "Include"
+  },
+  "uncertainties": []
+}
+
+@@ ta_unknown_decision_kind ta_full
+{
+  "report_id": "00000000-0000-4000-8000-000000000003",
+  "protocol_version_id": "00000000-0000-4000-8000-000000000002",
+  "stage": "title_abstract",
+  "expected_revision": 3,
+  "criteria": [
+    {
+      "criterion_id": "00000000-0000-4000-8000-000000000101",
+      "judgment": "meets",
+      "rationale": "The abstract describes adults with hypertension.",
+      "evidence": [
+        {
+          "kind": "report_metadata",
+          "report_id": "00000000-0000-4000-8000-000000000003",
+          "field": "abstract",
+          "content_hash": "bd6cb5ce987f67e2024c572fa8aef249c068b5ce65952a0d24eba9ac93d72279"
+        }
+      ]
+    },
+    {
+      "criterion_id": "00000000-0000-4000-8000-000000000102",
+      "judgment": "meets",
+      "rationale": "The abstract reports a randomised comparison.",
+      "evidence": [
+        {
+          "kind": "report_metadata",
+          "report_id": "00000000-0000-4000-8000-000000000003",
+          "field": "abstract",
+          "content_hash": "bd6cb5ce987f67e2024c572fa8aef249c068b5ce65952a0d24eba9ac93d72279"
+        }
+      ]
+    },
+    {
+      "criterion_id": "00000000-0000-4000-8000-000000000103",
+      "judgment": "does_not_meet",
+      "rationale": "The record is a full report, not a conference abstract.",
+      "evidence": [
+        {
+          "kind": "report_metadata",
+          "report_id": "00000000-0000-4000-8000-000000000003",
+          "field": "title",
+          "content_hash": "b7ca5d270bda3398935fedf12ba8a745c650249c78329673ec24ac4c59fae297"
+        }
+      ]
+    }
+  ],
+  "suggested_decision": {
+    "kind": "accept"
+  },
+  "uncertainties": []
+}
+
+@@ ta_unknown_top_level_field ta_full
+{
+  "report_id": "00000000-0000-4000-8000-000000000003",
+  "protocol_version_id": "00000000-0000-4000-8000-000000000002",
+  "stage": "title_abstract",
+  "expected_revision": 3,
+  "criteria": [
+    {
+      "criterion_id": "00000000-0000-4000-8000-000000000101",
+      "judgment": "meets",
+      "rationale": "The abstract describes adults with hypertension.",
+      "evidence": [
+        {
+          "kind": "report_metadata",
+          "report_id": "00000000-0000-4000-8000-000000000003",
+          "field": "abstract",
+          "content_hash": "bd6cb5ce987f67e2024c572fa8aef249c068b5ce65952a0d24eba9ac93d72279"
+        }
+      ]
+    },
+    {
+      "criterion_id": "00000000-0000-4000-8000-000000000102",
+      "judgment": "meets",
+      "rationale": "The abstract reports a randomised comparison.",
+      "evidence": [
+        {
+          "kind": "report_metadata",
+          "report_id": "00000000-0000-4000-8000-000000000003",
+          "field": "abstract",
+          "content_hash": "bd6cb5ce987f67e2024c572fa8aef249c068b5ce65952a0d24eba9ac93d72279"
+        }
+      ]
+    },
+    {
+      "criterion_id": "00000000-0000-4000-8000-000000000103",
+      "judgment": "does_not_meet",
+      "rationale": "The record is a full report, not a conference abstract.",
+      "evidence": [
+        {
+          "kind": "report_metadata",
+          "report_id": "00000000-0000-4000-8000-000000000003",
+          "field": "title",
+          "content_hash": "b7ca5d270bda3398935fedf12ba8a745c650249c78329673ec24ac4c59fae297"
+        }
+      ]
+    }
+  ],
+  "suggested_decision": {
+    "kind": "include"
+  },
+  "uncertainties": [],
+  "notes": "The model added a field the schema does not name."
+}
+
+@@ ft_valid_exclude_allowed_reason ft_all_stages
+{
+  "report_id": "00000000-0000-4000-8000-000000000003",
+  "protocol_version_id": "00000000-0000-4000-8000-000000000002",
+  "stage": "full_text",
+  "expected_revision": 7,
+  "criteria": [
+    {
+      "criterion_id": "00000000-0000-4000-8000-000000000111",
+      "judgment": "meets",
+      "rationale": "Adults with hypertension were eligible.",
+      "evidence": [
+        {
+          "kind": "document_block",
+          "document_block_id": "00000000-0000-4000-8000-000000000302",
+          "page": 4,
+          "content_hash": "94428a15f5c7f13b6670a3bff7057cd8072044e50c1c6d6b9b21c8d392f0b3ca",
+          "section_path": [
+            "Methods",
+            "Participants"
+          ]
+        }
+      ]
+    },
+    {
+      "criterion_id": "00000000-0000-4000-8000-000000000113",
+      "judgment": "meets",
+      "rationale": "The report gives a clinical endpoint.",
+      "evidence": [
+        {
+          "kind": "document_block",
+          "document_block_id": "00000000-0000-4000-8000-000000000301",
+          "page": 2,
+          "content_hash": "29387df96ee9029f8b87cc3b267a8b5254a1370d103a78d80f96c3c4a4962bbc",
+          "section_path": [
+            "Results"
+          ]
+        }
+      ]
+    },
+    {
+      "criterion_id": "00000000-0000-4000-8000-000000000114",
+      "judgment": "meets",
+      "rationale": "Systolic blood pressure is reported.",
+      "evidence": [
+        {
+          "kind": "document_block",
+          "document_block_id": "00000000-0000-4000-8000-000000000301",
+          "page": 2,
+          "content_hash": "29387df96ee9029f8b87cc3b267a8b5254a1370d103a78d80f96c3c4a4962bbc",
+          "section_path": [
+            "Results"
+          ]
+        }
+      ]
+    },
+    {
+      "criterion_id": "00000000-0000-4000-8000-000000000115",
+      "judgment": "does_not_meet",
+      "rationale": "The report is a full article.",
+      "evidence": [
+        {
+          "kind": "document_block",
+          "document_block_id": "00000000-0000-4000-8000-000000000302",
+          "page": 4,
+          "content_hash": "94428a15f5c7f13b6670a3bff7057cd8072044e50c1c6d6b9b21c8d392f0b3ca",
+          "section_path": [
+            "Methods",
+            "Participants"
+          ]
+        }
+      ]
+    }
+  ],
+  "suggested_decision": {
+    "kind": "exclude",
+    "exclusion_reason_id": "00000000-0000-4000-8000-000000000202"
+  },
+  "uncertainties": []
+}
+
+@@ ft_exclude_reason_wrong_stage ft_all_stages
+{
+  "report_id": "00000000-0000-4000-8000-000000000003",
+  "protocol_version_id": "00000000-0000-4000-8000-000000000002",
+  "stage": "full_text",
+  "expected_revision": 7,
+  "criteria": [
+    {
+      "criterion_id": "00000000-0000-4000-8000-000000000111",
+      "judgment": "meets",
+      "rationale": "Adults with hypertension were eligible.",
+      "evidence": [
+        {
+          "kind": "document_block",
+          "document_block_id": "00000000-0000-4000-8000-000000000302",
+          "page": 4,
+          "content_hash": "94428a15f5c7f13b6670a3bff7057cd8072044e50c1c6d6b9b21c8d392f0b3ca",
+          "section_path": [
+            "Methods",
+            "Participants"
+          ]
+        }
+      ]
+    },
+    {
+      "criterion_id": "00000000-0000-4000-8000-000000000113",
+      "judgment": "meets",
+      "rationale": "The report gives a clinical endpoint.",
+      "evidence": [
+        {
+          "kind": "document_block",
+          "document_block_id": "00000000-0000-4000-8000-000000000301",
+          "page": 2,
+          "content_hash": "29387df96ee9029f8b87cc3b267a8b5254a1370d103a78d80f96c3c4a4962bbc",
+          "section_path": [
+            "Results"
+          ]
+        }
+      ]
+    },
+    {
+      "criterion_id": "00000000-0000-4000-8000-000000000114",
+      "judgment": "meets",
+      "rationale": "Systolic blood pressure is reported.",
+      "evidence": [
+        {
+          "kind": "document_block",
+          "document_block_id": "00000000-0000-4000-8000-000000000301",
+          "page": 2,
+          "content_hash": "29387df96ee9029f8b87cc3b267a8b5254a1370d103a78d80f96c3c4a4962bbc",
+          "section_path": [
+            "Results"
+          ]
+        }
+      ]
+    },
+    {
+      "criterion_id": "00000000-0000-4000-8000-000000000115",
+      "judgment": "does_not_meet",
+      "rationale": "The report is a full article.",
+      "evidence": [
+        {
+          "kind": "document_block",
+          "document_block_id": "00000000-0000-4000-8000-000000000302",
+          "page": 4,
+          "content_hash": "94428a15f5c7f13b6670a3bff7057cd8072044e50c1c6d6b9b21c8d392f0b3ca",
+          "section_path": [
+            "Methods",
+            "Participants"
+          ]
+        }
+      ]
+    }
+  ],
+  "suggested_decision": {
+    "kind": "exclude",
+    "exclusion_reason_id": "00000000-0000-4000-8000-000000000201"
+  },
+  "uncertainties": []
+}
+
+@@ ft_exclude_without_reason ft_all_stages
+{
+  "report_id": "00000000-0000-4000-8000-000000000003",
+  "protocol_version_id": "00000000-0000-4000-8000-000000000002",
+  "stage": "full_text",
+  "expected_revision": 7,
+  "criteria": [
+    {
+      "criterion_id": "00000000-0000-4000-8000-000000000111",
+      "judgment": "meets",
+      "rationale": "Adults with hypertension were eligible.",
+      "evidence": [
+        {
+          "kind": "document_block",
+          "document_block_id": "00000000-0000-4000-8000-000000000302",
+          "page": 4,
+          "content_hash": "94428a15f5c7f13b6670a3bff7057cd8072044e50c1c6d6b9b21c8d392f0b3ca",
+          "section_path": [
+            "Methods",
+            "Participants"
+          ]
+        }
+      ]
+    },
+    {
+      "criterion_id": "00000000-0000-4000-8000-000000000113",
+      "judgment": "meets",
+      "rationale": "The report gives a clinical endpoint.",
+      "evidence": [
+        {
+          "kind": "document_block",
+          "document_block_id": "00000000-0000-4000-8000-000000000301",
+          "page": 2,
+          "content_hash": "29387df96ee9029f8b87cc3b267a8b5254a1370d103a78d80f96c3c4a4962bbc",
+          "section_path": [
+            "Results"
+          ]
+        }
+      ]
+    },
+    {
+      "criterion_id": "00000000-0000-4000-8000-000000000114",
+      "judgment": "meets",
+      "rationale": "Systolic blood pressure is reported.",
+      "evidence": [
+        {
+          "kind": "document_block",
+          "document_block_id": "00000000-0000-4000-8000-000000000301",
+          "page": 2,
+          "content_hash": "29387df96ee9029f8b87cc3b267a8b5254a1370d103a78d80f96c3c4a4962bbc",
+          "section_path": [
+            "Results"
+          ]
+        }
+      ]
+    },
+    {
+      "criterion_id": "00000000-0000-4000-8000-000000000115",
+      "judgment": "does_not_meet",
+      "rationale": "The report is a full article.",
+      "evidence": [
+        {
+          "kind": "document_block",
+          "document_block_id": "00000000-0000-4000-8000-000000000302",
+          "page": 4,
+          "content_hash": "94428a15f5c7f13b6670a3bff7057cd8072044e50c1c6d6b9b21c8d392f0b3ca",
+          "section_path": [
+            "Methods",
+            "Participants"
+          ]
+        }
+      ]
+    }
+  ],
+  "suggested_decision": {
+    "kind": "exclude",
+    "exclusion_reason_id": null
+  },
+  "uncertainties": []
+}
+
+@@ ft_include_block_hash_filled ft_all_stages
+{
+  "report_id": "00000000-0000-4000-8000-000000000003",
+  "protocol_version_id": "00000000-0000-4000-8000-000000000002",
+  "stage": "full_text",
+  "expected_revision": 7,
+  "criteria": [
+    {
+      "criterion_id": "00000000-0000-4000-8000-000000000111",
+      "judgment": "meets",
+      "rationale": "Adults with hypertension were eligible.",
+      "evidence": [
+        {
+          "kind": "document_block",
+          "document_block_id": "00000000-0000-4000-8000-000000000302",
+          "page": 4,
+          "section_path": [
+            "Methods",
+            "Participants"
+          ]
+        }
+      ]
+    },
+    {
+      "criterion_id": "00000000-0000-4000-8000-000000000113",
+      "judgment": "does_not_meet",
+      "rationale": "The report gives a clinical endpoint.",
+      "evidence": [
+        {
+          "kind": "document_block",
+          "document_block_id": "00000000-0000-4000-8000-000000000301",
+          "page": 2,
+          "content_hash": "29387df96ee9029f8b87cc3b267a8b5254a1370d103a78d80f96c3c4a4962bbc",
+          "section_path": [
+            "Results"
+          ]
+        }
+      ]
+    },
+    {
+      "criterion_id": "00000000-0000-4000-8000-000000000114",
+      "judgment": "meets",
+      "rationale": "Systolic blood pressure is reported.",
+      "evidence": [
+        {
+          "kind": "document_block",
+          "document_block_id": "00000000-0000-4000-8000-000000000301",
+          "page": 2,
+          "content_hash": "29387df96ee9029f8b87cc3b267a8b5254a1370d103a78d80f96c3c4a4962bbc",
+          "section_path": [
+            "Results"
+          ]
+        }
+      ]
+    },
+    {
+      "criterion_id": "00000000-0000-4000-8000-000000000115",
+      "judgment": "does_not_meet",
+      "rationale": "The report is a full article.",
+      "evidence": [
+        {
+          "kind": "document_block",
+          "document_block_id": "00000000-0000-4000-8000-000000000302",
+          "page": 4,
+          "section_path": [
+            "Methods",
+            "Participants"
+          ]
+        }
+      ]
+    }
+  ],
+  "suggested_decision": {
+    "kind": "include"
+  },
+  "uncertainties": []
+}
+
+@@ ft_metadata_evidence_at_full_text ft_all_stages
+{
+  "report_id": "00000000-0000-4000-8000-000000000003",
+  "protocol_version_id": "00000000-0000-4000-8000-000000000002",
+  "stage": "full_text",
+  "expected_revision": 7,
+  "criteria": [
+    {
+      "criterion_id": "00000000-0000-4000-8000-000000000111",
+      "judgment": "meets",
+      "rationale": "Adults with hypertension were eligible.",
+      "evidence": [
+        {
+          "kind": "report_metadata",
+          "report_id": "00000000-0000-4000-8000-000000000003",
+          "field": "abstract",
+          "content_hash": "bd6cb5ce987f67e2024c572fa8aef249c068b5ce65952a0d24eba9ac93d72279"
+        }
+      ]
+    },
+    {
+      "criterion_id": "00000000-0000-4000-8000-000000000113",
+      "judgment": "does_not_meet",
+      "rationale": "The report gives a clinical endpoint.",
+      "evidence": [
+        {
+          "kind": "document_block",
+          "document_block_id": "00000000-0000-4000-8000-000000000301",
+          "page": 2,
+          "content_hash": "29387df96ee9029f8b87cc3b267a8b5254a1370d103a78d80f96c3c4a4962bbc",
+          "section_path": [
+            "Results"
+          ]
+        }
+      ]
+    },
+    {
+      "criterion_id": "00000000-0000-4000-8000-000000000114",
+      "judgment": "meets",
+      "rationale": "Systolic blood pressure is reported.",
+      "evidence": [
+        {
+          "kind": "document_block",
+          "document_block_id": "00000000-0000-4000-8000-000000000301",
+          "page": 2,
+          "content_hash": "29387df96ee9029f8b87cc3b267a8b5254a1370d103a78d80f96c3c4a4962bbc",
+          "section_path": [
+            "Results"
+          ]
+        }
+      ]
+    },
+    {
+      "criterion_id": "00000000-0000-4000-8000-000000000115",
+      "judgment": "does_not_meet",
+      "rationale": "The report is a full article.",
+      "evidence": [
+        {
+          "kind": "document_block",
+          "document_block_id": "00000000-0000-4000-8000-000000000302",
+          "page": 4,
+          "content_hash": "94428a15f5c7f13b6670a3bff7057cd8072044e50c1c6d6b9b21c8d392f0b3ca",
+          "section_path": [
+            "Methods",
+            "Participants"
+          ]
+        }
+      ]
+    }
+  ],
+  "suggested_decision": {
+    "kind": "include"
+  },
+  "uncertainties": []
+}
+
+@@ ft_document_block_not_retrieved ft_all_stages
+{
+  "report_id": "00000000-0000-4000-8000-000000000003",
+  "protocol_version_id": "00000000-0000-4000-8000-000000000002",
+  "stage": "full_text",
+  "expected_revision": 7,
+  "criteria": [
+    {
+      "criterion_id": "00000000-0000-4000-8000-000000000111",
+      "judgment": "meets",
+      "rationale": "Adults with hypertension were eligible.",
+      "evidence": [
+        {
+          "kind": "document_block",
+          "document_block_id": "00000000-0000-4000-8000-000000000399",
+          "page": 4,
+          "content_hash": "94428a15f5c7f13b6670a3bff7057cd8072044e50c1c6d6b9b21c8d392f0b3ca",
+          "section_path": [
+            "Methods"
+          ]
+        }
+      ]
+    },
+    {
+      "criterion_id": "00000000-0000-4000-8000-000000000113",
+      "judgment": "does_not_meet",
+      "rationale": "The report gives a clinical endpoint.",
+      "evidence": [
+        {
+          "kind": "document_block",
+          "document_block_id": "00000000-0000-4000-8000-000000000301",
+          "page": 2,
+          "content_hash": "29387df96ee9029f8b87cc3b267a8b5254a1370d103a78d80f96c3c4a4962bbc",
+          "section_path": [
+            "Results"
+          ]
+        }
+      ]
+    },
+    {
+      "criterion_id": "00000000-0000-4000-8000-000000000114",
+      "judgment": "meets",
+      "rationale": "Systolic blood pressure is reported.",
+      "evidence": [
+        {
+          "kind": "document_block",
+          "document_block_id": "00000000-0000-4000-8000-000000000301",
+          "page": 2,
+          "content_hash": "29387df96ee9029f8b87cc3b267a8b5254a1370d103a78d80f96c3c4a4962bbc",
+          "section_path": [
+            "Results"
+          ]
+        }
+      ]
+    },
+    {
+      "criterion_id": "00000000-0000-4000-8000-000000000115",
+      "judgment": "does_not_meet",
+      "rationale": "The report is a full article.",
+      "evidence": [
+        {
+          "kind": "document_block",
+          "document_block_id": "00000000-0000-4000-8000-000000000302",
+          "page": 4,
+          "content_hash": "94428a15f5c7f13b6670a3bff7057cd8072044e50c1c6d6b9b21c8d392f0b3ca",
+          "section_path": [
+            "Methods",
+            "Participants"
+          ]
+        }
+      ]
+    }
+  ],
+  "suggested_decision": {
+    "kind": "include"
+  },
+  "uncertainties": []
+}
+
+@@ ft_document_block_wrong_hash ft_all_stages
+{
+  "report_id": "00000000-0000-4000-8000-000000000003",
+  "protocol_version_id": "00000000-0000-4000-8000-000000000002",
+  "stage": "full_text",
+  "expected_revision": 7,
+  "criteria": [
+    {
+      "criterion_id": "00000000-0000-4000-8000-000000000111",
+      "judgment": "meets",
+      "rationale": "Adults with hypertension were eligible.",
+      "evidence": [
+        {
+          "kind": "document_block",
+          "document_block_id": "00000000-0000-4000-8000-000000000302",
+          "page": 4,
+          "content_hash": "94428a15f5c7f13b6670a3bff7057cd8072044e50c1c6d6b9b21c8d392f0b3ca",
+          "section_path": [
+            "Methods",
+            "Participants"
+          ]
+        }
+      ]
+    },
+    {
+      "criterion_id": "00000000-0000-4000-8000-000000000113",
+      "judgment": "does_not_meet",
+      "rationale": "The report gives a clinical endpoint.",
+      "evidence": [
+        {
+          "kind": "document_block",
+          "document_block_id": "00000000-0000-4000-8000-000000000301",
+          "page": 2,
+          "content_hash": "94428a15f5c7f13b6670a3bff7057cd8072044e50c1c6d6b9b21c8d392f0b3ca",
+          "section_path": [
+            "Results"
+          ]
+        }
+      ]
+    },
+    {
+      "criterion_id": "00000000-0000-4000-8000-000000000114",
+      "judgment": "meets",
+      "rationale": "Systolic blood pressure is reported.",
+      "evidence": [
+        {
+          "kind": "document_block",
+          "document_block_id": "00000000-0000-4000-8000-000000000301",
+          "page": 2,
+          "content_hash": "29387df96ee9029f8b87cc3b267a8b5254a1370d103a78d80f96c3c4a4962bbc",
+          "section_path": [
+            "Results"
+          ]
+        }
+      ]
+    },
+    {
+      "criterion_id": "00000000-0000-4000-8000-000000000115",
+      "judgment": "does_not_meet",
+      "rationale": "The report is a full article.",
+      "evidence": [
+        {
+          "kind": "document_block",
+          "document_block_id": "00000000-0000-4000-8000-000000000302",
+          "page": 4,
+          "content_hash": "94428a15f5c7f13b6670a3bff7057cd8072044e50c1c6d6b9b21c8d392f0b3ca",
+          "section_path": [
+            "Methods",
+            "Participants"
+          ]
+        }
+      ]
+    }
+  ],
+  "suggested_decision": {
+    "kind": "exclude",
+    "exclusion_reason_id": "00000000-0000-4000-8000-000000000202"
+  },
+  "uncertainties": []
+}

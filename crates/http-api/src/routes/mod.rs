@@ -1,6 +1,7 @@
 mod acquisitions;
 mod actor;
 mod ai;
+mod ai_first;
 mod articles;
 mod assistant;
 mod automations;
@@ -95,6 +96,12 @@ fn openapi_router(document_max_bytes: usize) -> OpenApiRouter<AppState> {
         .routes(routes!(deduplication::decide_project_dedupe_proposal))
         .routes(routes!(deduplication::resolve_project_record))
         .routes(routes!(ai::get_ai_status))
+        .routes(routes!(ai_first::get_overview, ai_first::start))
+        .routes(routes!(ai_first::close))
+        .routes(routes!(ai_first::draw))
+        .routes(routes!(ai_first::evaluate))
+        .routes(routes!(ai_first::finalize))
+        .routes(routes!(ai_first::recover))
         .routes(routes!(ai::get_ai_budget, ai::update_ai_budget))
         .routes(routes!(
             autonomy::get_ai_autonomy,

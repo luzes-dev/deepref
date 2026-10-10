@@ -221,8 +221,7 @@ where
         };
         let route = self.router.resolve(task.model_profile()).await?;
         route.validate()?;
-        let schema = serde_json::to_value(schema_for!(T::Output))
-            .map_err(|_| AiError::InputSerialization("output schema".to_owned()))?;
+        let schema = structured_output_schema::<T>()?;
         let schema_hash = hash_json(&schema)?;
         let prompt_hash =
             hash_json(&json!({"system": context.system_prompt, "user": context.user_prompt}))?;
@@ -281,6 +280,8 @@ where
             evidence_refs,
             usage: TokenUsage::default(),
             cost_micros: None,
+            provider_served_model: None,
+            provider_system_fingerprint: None,
             output: None,
             status: AiRunStatus::Running,
             error: None,
@@ -319,12 +320,8 @@ where
                 Ok(completion) => completion,
                 Err(error) => return Err(self.persist_failure(run, error).await),
             };
-            record_usage(&mut run, &completion);
-            let attempt = serde_json::from_str::<Value>(&completion.output_json)
-                .map_err(|_| AiError::MalformedOutput(String::new()))
-                .and_then(|raw| {
-                    validate_output(task, raw.clone(), &evidence).map(move |output| (raw, output))
-                });
+            record_completion(&mut run, &completion);
+            let attempt = interpret_structured_response(task, &completion.output_json, &evidence);
             match attempt {
                 Ok(accepted) => break accepted,
                 Err(error) => match repair_feedback(&error) {
@@ -443,14 +440,37 @@ fn same_proposal_content(
         && existing.draft.authority == expected.authority
 }
 
+/// The JSON Schema that a task's output must satisfy, as the provider receives it.
+pub fn structured_output_schema<T: AiTask>() -> Result<Value, AiError> {
+    serde_json::to_value(schema_for!(T::Output))
+        .map_err(|_| AiError::InputSerialization("output schema".to_owned()))
+}
+
+/// Interprets one provider answer for a task: parses the JSON, applies the
+/// task's deterministic normalization, then validates it against the output
+/// schema and the task's semantic rules.
+///
+/// Returns the JSON as the provider sent it, which the run records, with the
+/// validated output. The gateway has already removed any code-fence envelope,
+/// so `output_json` is the JSON text. The repair loop stays in the runner.
+pub fn interpret_structured_response<T: AiTask>(
+    task: &T,
+    output_json: &str,
+    evidence: &[GroundedBlock],
+) -> Result<(Value, T::Output), AiError> {
+    let raw = serde_json::from_str::<Value>(output_json)
+        .map_err(|_| AiError::MalformedOutput(String::new()))?;
+    let output = validate_output(task, raw.clone(), evidence)?;
+    Ok((raw, output))
+}
+
 fn validate_output<T: AiTask>(
     task: &T,
     mut raw: Value,
     evidence: &[GroundedBlock],
 ) -> Result<T::Output, AiError> {
     task.normalize_output(&mut raw, evidence);
-    let schema = serde_json::to_value(schemars::schema_for!(T::Output))
-        .map_err(|_| AiError::InputSerialization("output schema".to_owned()))?;
+    let schema = structured_output_schema::<T>()?;
     jsonschema::validator_for(&schema)
         .map_err(|_| AiError::SchemaValidation(String::new()))?
         .validate(&raw)
@@ -507,7 +527,7 @@ fn schema_reason(raw: &Value, pointer: &str) -> String {
     }
 }
 
-fn record_usage(run: &mut AiRunRecord, completion: &GatewayCompletion) {
+fn record_completion(run: &mut AiRunRecord, completion: &GatewayCompletion) {
     run.usage.input_tokens = run
         .usage
         .input_tokens
@@ -519,6 +539,10 @@ fn record_usage(run: &mut AiRunRecord, completion: &GatewayCompletion) {
     if let Some(cost) = completion.cost_micros {
         run.cost_micros = Some(run.cost_micros.unwrap_or(0).saturating_add(cost));
     }
+    // The run keeps the provider's report for its most recent call, which is the call whose
+    // output it accepted. A repaired run therefore shows the repair's report.
+    run.provider_served_model = completion.served_model.clone();
+    run.provider_system_fingerprint = completion.system_fingerprint.clone();
 }
 
 /// The safe reason shown to the model when its answer is rejected. Provider

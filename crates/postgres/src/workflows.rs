@@ -1198,8 +1198,11 @@ pub async fn list_workflow_runs(
             "The limit must be between 1 and {MAX_WORKFLOW_RUN_LIST_LIMIT}."
         )));
     }
+    // Run snapshots carry raw node input and output, including screening judgments
+    // written by `data.find_records`, so a blind audit withholds them project-wide.
     let rows = sqlx::query(sqlx::AssertSqlSafe(format!(
         "{RUN_SELECT} WHERE r.project_id=$1 AND ($2::uuid IS NULL OR r.workflow_id=$2)
+         AND ai_first_run_visible(r.project_id, r.id)
          ORDER BY r.created_at DESC, r.id DESC LIMIT $3"
     )))
     .bind(project_uuid(project_id))
@@ -1264,8 +1267,10 @@ pub async fn get_workflow_run(
     project_id: ProjectId,
     run_id: Uuid,
 ) -> Result<WorkflowRunRecord, WorkflowError> {
+    // The node log repeats raw node input and output. Withholding the run while a
+    // blind audit is active keeps those judgments out of an auditor's reach.
     let row = sqlx::query(sqlx::AssertSqlSafe(format!(
-        "{RUN_SELECT} WHERE r.project_id=$1 AND r.id=$2"
+        "{RUN_SELECT} WHERE r.project_id=$1 AND r.id=$2 AND ai_first_run_visible(r.project_id, r.id)"
     )))
     .bind(project_uuid(project_id))
     .bind(run_id)
@@ -1280,6 +1285,21 @@ pub async fn get_workflow_run(
     .fetch_all(pool)
     .await?;
     run_from_row(&row, nodes.iter().map(node_run_from_row).collect())
+}
+
+/// Whether an active blind audit withholds this project's run inspection. Starting a
+/// test run would produce a snapshot nobody may read, so callers refuse before writing.
+pub async fn workflow_run_inspection_withheld(
+    pool: &PgPool,
+    project_id: ProjectId,
+) -> Result<bool, WorkflowError> {
+    let withheld: bool = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM ai_screening_cohorts WHERE project_id=$1 AND status='auditing')",
+    )
+    .bind(project_uuid(project_id))
+    .fetch_one(pool)
+    .await?;
+    Ok(withheld)
 }
 
 // ---------------------------------------------------------------------------

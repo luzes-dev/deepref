@@ -416,6 +416,8 @@ const aiActivityOverview: AiActivityOverviewDto = {
 };
 
 const prisma: PrismaDto = {
+	ai_quarantined: 0,
+	automation_excluded: 0,
 	project_id: VISUAL_PROJECT_ID,
 	as_of: null,
 	identified_records: 3,

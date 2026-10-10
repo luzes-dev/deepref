@@ -126,6 +126,18 @@ impl AutonomyTask {
     }
 }
 
+/// The opinion an automation records as its second-reviewer opinion for a
+/// screening suggestion of this kind. `insufficient_evidence` is not an
+/// opinion, so it has none and stays a suggestion.
+pub fn second_reviewer_opinion(kind: &str) -> Option<&'static str> {
+    match kind {
+        "include" => Some("include"),
+        "exclude" => Some("exclude"),
+        "maybe" => Some("maybe"),
+        _ => None,
+    }
+}
+
 /// Work that is never automatic and therefore has no configurable level.
 pub const LOCKED_TASKS: [&str; 2] = ["protocol_publishing", "final_exclusion"];
 

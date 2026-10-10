@@ -267,10 +267,11 @@ async fn record_second_reviewer(
         .get("suggested_decision")
         .and_then(|value| value.get("kind"))
         .and_then(Value::as_str)
+        .and_then(deepref_application::workflows::autonomy::second_reviewer_opinion)
     {
-        Some(kind @ ("include" | "exclude" | "maybe")) => kind.to_owned(),
+        Some(opinion) => opinion.to_owned(),
         // "Not enough evidence" is not an opinion; keep it as a suggestion.
-        _ => return Ok(AutonomyOutcome::LeftAsSuggestion),
+        None => return Ok(AutonomyOutcome::LeftAsSuggestion),
     };
     let stage = if task == AutonomyTask::FullTextScreening {
         "full_text"

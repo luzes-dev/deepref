@@ -88,6 +88,8 @@ impl AiGateway for FakeGateway {
                 input_tokens: 1,
                 output_tokens: 1,
                 cost_micros: None,
+                served_model: None,
+                system_fingerprint: None,
             })
         })
     }
@@ -121,6 +123,8 @@ impl AiGateway for DedupeEchoGateway {
                 input_tokens: 1,
                 output_tokens: 1,
                 cost_micros: None,
+                served_model: None,
+                system_fingerprint: None,
             })
         })
     }

@@ -1,3 +1,16 @@
+//! Source-tree provenance, for audit and runtime records only.
+//!
+//! Hashes every file under `review-definitions/`, `crates/` and `services/`,
+//! plus `Cargo.lock` and `Cargo.toml`, into `DEEPREF_SOURCE_TREE_SHA`. The
+//! value changes with any edit anywhere in the monorepo, so it says which
+//! source tree produced a run. It is NOT a semantic identity input: screening
+//! calibration uses the narrow implementation and dependency fingerprints that
+//! `deepref-review` computes in `crates/review/build.rs`.
+//!
+//! The deployment id (`DEEPREF_BUILD_SHA`) is deliberately not mixed in here.
+//! The runtime identity records it separately, so the source-tree hash stays a
+//! pure function of the tree.
+
 use std::{
     env,
     error::Error,
@@ -9,6 +22,19 @@ use std::{
 use sha2::{Digest, Sha256};
 
 fn main() -> Result<(), Box<dyn Error>> {
+    let compiler = env::var_os("RUSTC").ok_or("RUSTC must be set")?;
+    let version = std::process::Command::new(compiler)
+        .arg("--version")
+        .output()?;
+    if !version.status.success() {
+        return Err("could not record compiler version".into());
+    }
+    let version = String::from_utf8(version.stdout)?;
+    println!("cargo:rustc-env=DEEPREF_RUSTC_VERSION={}", version.trim());
+    println!(
+        "cargo:rustc-env=DEEPREF_BUILD_TARGET={}",
+        env::var("TARGET")?
+    );
     let manifest_dir =
         PathBuf::from(env::var_os("CARGO_MANIFEST_DIR").ok_or("CARGO_MANIFEST_DIR must be set")?);
     let workspace = manifest_dir
@@ -45,17 +71,12 @@ fn main() -> Result<(), Box<dyn Error>> {
         );
         digest.update([0]);
     }
-    if let Some(build_id) = env::var_os("DEEPREF_BUILD_SHA") {
-        println!("cargo:rerun-if-env-changed=DEEPREF_BUILD_SHA");
-        digest.update(b"build-id\0");
-        digest.update(build_id.as_encoded_bytes());
-    }
     let mut encoded = String::with_capacity(64);
     for byte in digest.finalize() {
         write!(&mut encoded, "{byte:02x}")
             .map_err(|error| format!("writing to a string cannot fail: {error}"))?;
     }
-    println!("cargo:rustc-env=DEEPREF_SEMANTIC_BUILD_SHA={encoded}");
+    println!("cargo:rustc-env=DEEPREF_SOURCE_TREE_SHA={encoded}");
     Ok(())
 }
 

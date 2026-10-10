@@ -18,6 +18,8 @@ const dependencies = {
 };
 
 const projection: PrismaDto = {
+	ai_quarantined: 0,
+	automation_excluded: 0,
 	project_id: projectId,
 	as_of: '2026-01-01T00:00:00Z',
 	identified_records: 8,

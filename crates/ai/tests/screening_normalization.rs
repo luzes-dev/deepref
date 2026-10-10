@@ -826,6 +826,8 @@ impl AiGateway for Script {
                 input_tokens: 100,
                 output_tokens: 50,
                 cost_micros: None,
+                served_model: None,
+                system_fingerprint: None,
             })
         })
     }

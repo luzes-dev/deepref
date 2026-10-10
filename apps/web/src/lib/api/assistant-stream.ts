@@ -1,3 +1,5 @@
+import { currentReviewerId } from './reviewer';
+
 export type AssistantChatStreamEvent =
 	| { event: 'token'; delta: string }
 	| { event: 'replace'; text: string }
@@ -184,7 +186,7 @@ export async function streamAssistantChat(
 		headers: {
 			'Content-Type': 'application/json',
 			'x-actor-kind': 'user',
-			'x-actor-id': 'local-user'
+			'x-actor-id': currentReviewerId()
 		},
 		body: JSON.stringify(body),
 		signal

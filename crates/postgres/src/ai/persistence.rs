@@ -143,6 +143,8 @@ pub(super) fn ai_run_from_row(row: sqlx::postgres::PgRow) -> Result<AiRunRecord,
                 .map_err(|_| AiError::Persistence("output tokens are invalid".to_owned()))?,
         },
         cost_micros: row.get("cost_micros"),
+        provider_served_model: row.get("provider_served_model"),
+        provider_system_fingerprint: row.get("provider_system_fingerprint"),
         output: row.get("output"),
         status,
         error: row

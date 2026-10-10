@@ -151,6 +151,10 @@ pub async fn save_protocol_draft(
     validate_actor(actor)?;
 
     let mut tx = pool.begin().await?;
+    sqlx::query("SELECT id FROM projects WHERE id=$1 FOR UPDATE")
+        .bind(command.project_id.as_uuid())
+        .fetch_optional(&mut *tx)
+        .await?;
     let lock_key = format!("protocol:{}", command.project_id.as_uuid());
     sqlx::query!(
         "SELECT pg_advisory_xact_lock(hashtextextended($1, 0))",
@@ -308,6 +312,10 @@ pub async fn publish_protocol(
         .map_err(|error| ProtocolError::Invalid(error.to_string()))?;
     validate_actor(actor)?;
     let mut tx = pool.begin().await?;
+    sqlx::query("SELECT id FROM projects WHERE id=$1 FOR UPDATE")
+        .bind(command.project_id.as_uuid())
+        .fetch_optional(&mut *tx)
+        .await?;
     let lock_key = format!("protocol:{}", command.project_id.as_uuid());
     sqlx::query!(
         "SELECT pg_advisory_xact_lock(hashtextextended($1, 0))",
@@ -400,6 +408,9 @@ pub async fn publish_protocol(
         )
         .await?;
     }
+    crate::ai_first::cohorts::protocol_amended(&mut tx, proj_uuid)
+        .await
+        .map_err(|e| ProtocolError::Invalid(e.to_string()))?;
     tx.commit().await?;
     load_document(pool, proj_uuid, command.protocol_version_id).await
 }

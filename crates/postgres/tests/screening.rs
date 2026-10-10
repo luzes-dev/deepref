@@ -200,6 +200,7 @@ async fn queue_cursor_pages_are_total_ordered_for_every_sort_family() {
             let page = get_screening_queue(
                 &pool,
                 GetScreeningQueueQuery {
+                    reviewer_id: None,
                     project_id: project_id.into(),
                     status: ScreeningQueueStatus::All,
                     search: None,
@@ -233,6 +234,7 @@ async fn queue_cursor_pages_are_total_ordered_for_every_sort_family() {
     let first_page = get_screening_queue(
         &pool,
         GetScreeningQueueQuery {
+            reviewer_id: None,
             project_id: project_id.into(),
             status: ScreeningQueueStatus::All,
             search: None,
@@ -249,6 +251,7 @@ async fn queue_cursor_pages_are_total_ordered_for_every_sort_family() {
     let foreign_sort = get_screening_queue(
         &pool,
         GetScreeningQueueQuery {
+            reviewer_id: None,
             project_id: project_id.into(),
             status: ScreeningQueueStatus::All,
             search: None,
@@ -272,6 +275,7 @@ async fn queue_cursor_pages_are_total_ordered_for_every_sort_family() {
     let tampered_result = get_screening_queue(
         &pool,
         GetScreeningQueueQuery {
+            reviewer_id: None,
             project_id: project_id.into(),
             status: ScreeningQueueStatus::All,
             search: None,
@@ -426,6 +430,7 @@ async fn queue_page_is_bounded_and_required_indexes_exist_for_large_fixture() {
     let page = get_screening_queue(
         &pool,
         GetScreeningQueueQuery {
+            reviewer_id: None,
             project_id: project_id.into(),
             status: ScreeningQueueStatus::Unscreened,
             search: Some("searchable".to_owned()),

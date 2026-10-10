@@ -146,6 +146,12 @@ impl ReviewSubject {
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum ReviewOrigin {
     ReviewerRequested,
+    /// Automatic advisory work has no scientific screening authority.
+    AdvisoryTriggered,
+    /// Reversible routing pinned to an owner-approved cohort.
+    AiFirstTriggered {
+        cohort_id: Uuid,
+    },
     AutomationTriggered {
         calibration_bundle_id: CalibrationBundleId,
     },
@@ -221,6 +227,9 @@ pub enum ReviewBlockCode {
     CalibrationStale,
     HumanAdjudicationRequired,
     RepairBudgetExhausted,
+    /// The provider endpoint recorded when the review was scheduled is not the endpoint this
+    /// worker calls, so the model was not called.
+    ProviderEndpointMismatch,
 }
 
 impl ReviewBlockCode {
@@ -233,6 +242,7 @@ impl ReviewBlockCode {
             Self::CalibrationStale => "calibration_stale",
             Self::HumanAdjudicationRequired => "human_adjudication_required",
             Self::RepairBudgetExhausted => "repair_budget_exhausted",
+            Self::ProviderEndpointMismatch => "provider_endpoint_mismatch",
         }
     }
 
@@ -245,6 +255,7 @@ impl ReviewBlockCode {
             "calibration_stale" => Some(Self::CalibrationStale),
             "human_adjudication_required" => Some(Self::HumanAdjudicationRequired),
             "repair_budget_exhausted" => Some(Self::RepairBudgetExhausted),
+            "provider_endpoint_mismatch" => Some(Self::ProviderEndpointMismatch),
             _ => None,
         }
     }

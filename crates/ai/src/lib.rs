@@ -10,6 +10,7 @@ mod assistant;
 mod chat;
 mod classification;
 mod dedupe;
+mod endpoint;
 mod evals;
 mod gateway;
 mod grounding;
@@ -38,13 +39,18 @@ pub use dedupe::{
     DuplicateRationale, DuplicateSignal, DuplicateSignalKind, IdentityProvenance,
 };
 pub use deepref_domain::{Actor, ActorKind};
+pub use endpoint::{
+    ProviderEndpoint, ProviderEndpointError, provider_endpoint, register_provider_endpoint,
+};
 pub use evals::*;
 pub use gateway::{
     ANY_MODEL, AiGateway, EmbeddingGateway, RigEmbeddingGateway, RigGateway, RoutedGateway,
     build_metered_provider,
 };
 pub use grounding::GroundingContextBuilder;
-pub use openai_compat::{OpenAiCompatGateway, ProviderDialect};
+pub use openai_compat::{
+    OpenAiCompatGateway, ProviderDialect, strip_code_fence, structured_request_body,
+};
 pub use policy::{PolicyDecision, PolicyEngine, PolicyInput, ProjectAiPolicy, RequestedAction};
 pub use pricing::{
     GLM_5_3_FLASH_PRICE, ModelPrice, PriceBook, UNKNOWN_MODEL_PRICE, estimate_cost_micros,
@@ -55,7 +61,7 @@ pub use review_assistance::*;
 pub use runner::{
     AiExecutionContext, AiRunStore, AiTask, AiTaskResult, AiTaskRunner, Clock, EvidenceRetriever,
     IdProvider, ModelRouter, ProposalPersistence, ProposalStore, SystemClock, UuidProvider,
-    safe_error_metadata,
+    interpret_structured_response, safe_error_metadata, structured_output_schema,
 };
 pub use screening::{
     CriterionJudgment, CriterionPrompt, CriterionResult, ScreeningAnalysis, ScreeningEvidence,

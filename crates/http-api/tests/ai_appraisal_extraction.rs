@@ -286,6 +286,8 @@ async fn save_run(
             evidence_refs: Vec::new(),
             usage: Default::default(),
             cost_micros: Some(1),
+            provider_served_model: None,
+            provider_system_fingerprint: None,
             output: Some(serde_json::json!({"status":"completed"})),
             status: AiRunStatus::Completed,
             error: None,

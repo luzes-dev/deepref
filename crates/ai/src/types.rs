@@ -366,6 +366,11 @@ pub struct GatewayCompletion {
     pub input_tokens: u64,
     pub output_tokens: u64,
     pub cost_micros: Option<i64>,
+    /// The model the provider reports it served (the response `model`). Audit only, see
+    /// [`AiRunRecord::provider_served_model`].
+    pub served_model: Option<String>,
+    /// The provider's `system_fingerprint` for the call. Audit only.
+    pub system_fingerprint: Option<String>,
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize, JsonSchema)]
@@ -441,6 +446,13 @@ pub struct AiRunRecord {
     pub evidence_refs: Vec<EvidenceRef>,
     pub usage: TokenUsage,
     pub cost_micros: Option<i64>,
+    /// The model the provider reported serving the run's last call, when it reports one.
+    /// Audit data only: it is known only after the call, so it is never part of the semantic
+    /// identity. A provider may expose only a mutable alias, so this is what the provider
+    /// said, not a pinned revision.
+    pub provider_served_model: Option<String>,
+    /// The provider's `system_fingerprint` for the same call. Audit data only.
+    pub provider_system_fingerprint: Option<String>,
     pub output: Option<Value>,
     pub status: AiRunStatus,
     pub error: Option<SafeErrorMetadata>,

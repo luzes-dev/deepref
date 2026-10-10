@@ -1,21 +1,22 @@
-use std::collections::BTreeSet;
-
 use deepref_ai::{
     AppraisalAnswerSchema, AppraisalPrefillDomain, AppraisalPrefillEvidence, AppraisalPrefillInput,
-    AppraisalPrefillQuestion, ClassificationReportField, CriterionPrompt, DataExtractionInput,
-    DedupeInput, ExtractionEvidence, ExtractionField, ExtractionPassage, ExtractionValueType,
-    IdentityProvenance, ScreeningEvidence, ScreeningEvidenceField, ScreeningInput, ScreeningStage,
-    StudyDesignClassificationInput, StudyDesignEvidence, StudyDesignLabel, StudyDesignReport,
-    StudyGroupingCandidate, StudyGroupingEvidence, StudyGroupingField, StudyGroupingInput,
-    StudyMetadataField, criteria_for_stage, sha256_bytes,
+    AppraisalPrefillQuestion, ClassificationReportField, DataExtractionInput, DedupeInput,
+    ExtractionEvidence, ExtractionField, ExtractionPassage, ExtractionValueType,
+    IdentityProvenance, ScreeningStage, StudyDesignClassificationInput, StudyDesignEvidence,
+    StudyDesignLabel, StudyDesignReport, StudyGroupingCandidate, StudyGroupingEvidence,
+    StudyGroupingField, StudyGroupingInput, StudyMetadataField, sha256_bytes,
 };
 use deepref_application::{
     AnswerSchema, DedupeCandidate, ExtractionFieldType, FUZZY_PROPOSAL_THRESHOLD, score_candidate,
 };
-use deepref_domain::{Actor, CriterionStage, EligibilityCriterion, StudyDesign};
+use deepref_domain::{Actor, ActorKind, StudyDesign};
 use deepref_review::{
     ReviewFuture, ReviewOrigin, ReviewRunId, ReviewRunSnapshot, ReviewScheduler, ReviewSubject,
-    ScheduleReviewRun, worker::PreparedReviewTask,
+    ScheduleReviewRun, SemanticIdentity,
+    worker::{
+        PreparedReviewTask, ScreeningExclusionReason, ScreeningSubjectSource,
+        prepare_screening_task,
+    },
 };
 use thiserror::Error;
 use uuid::Uuid;
@@ -32,7 +33,13 @@ async fn ensure_ai_task_enabled(
     let level = crate::autonomy::resolve_autonomy_level(pool, project_id, task)
         .await
         .map_err(|error| ReviewPreparationError::InvalidInput(error.to_string()))?;
-    if level == AutonomyLevel::Off {
+    let ai_first = if task == AutonomyTask::TitleAbstractScreening {
+        sqlx::query_scalar::<_, bool>("SELECT EXISTS(SELECT 1 FROM project_ai_screening_authority WHERE project_id=$1 AND ceiling<>'off' AND suspended_reason IS NULL)")
+            .bind(project_id).fetch_one(pool).await.map_err(|e|ReviewPreparationError::InvalidInput(e.to_string()))?
+    } else {
+        false
+    };
+    if level == AutonomyLevel::Off && !ai_first {
         return Err(ReviewPreparationError::InvalidInput(
             "AI help for this kind of work is turned off in this project's AI settings.".to_owned(),
         ));
@@ -41,11 +48,11 @@ async fn ensure_ai_task_enabled(
 }
 
 use crate::{
-    AiDedupeTarget, AiGroupingReport, AiProposalError, AiScreeningTarget, AiStudyGroupingTarget,
-    ExtractionError, PostgresReviewError, PreparedReviewRun, ProtocolError, StudyError,
-    get_ai_dedupe_target, get_ai_screening_target, get_ai_study_grouping_target,
-    get_published_protocol, get_study, list_ai_exclusion_reasons, list_ai_extraction_evidence,
-    list_ai_grounding_blocks, list_field_definitions, schedule_prepared_review_run,
+    AiDedupeTarget, AiGroupingReport, AiProposalError, AiStudyGroupingTarget, ExtractionError,
+    PostgresReviewError, PreparedReviewRun, ProtocolError, StudyError, get_ai_dedupe_target,
+    get_ai_screening_target, get_ai_study_grouping_target, get_published_protocol, get_study,
+    list_ai_exclusion_reasons, list_ai_extraction_evidence, list_ai_grounding_blocks,
+    list_field_definitions, preview_review_identity, schedule_prepared_review_run,
 };
 
 #[derive(Debug, Error)]
@@ -112,6 +119,31 @@ pub async fn schedule_screening_review(
     .await
 }
 
+/// The identity a screening review of this report would be compiled with right
+/// now. Nothing is scheduled. Calibration for a stage is recorded against exactly
+/// this identity, and automation for that stage is admitted only while it holds.
+pub async fn preview_screening_identity(
+    pool: &sqlx::PgPool,
+    project_id: Uuid,
+    report_id: Uuid,
+    stage: ScreeningStage,
+) -> Result<SemanticIdentity, ReviewPreparationError> {
+    let task = screening_task(pool, project_id, report_id, stage, None, None).await?;
+    let actor = Actor::new(ActorKind::System, "identity-preview")
+        .map_err(|error| ReviewPreparationError::InvalidInput(error.to_string()))?;
+    let request = PreparedReviewRun {
+        command: ScheduleReviewRun {
+            project_id: task.project_id(),
+            definition: task.definition_key(),
+            subject: task.subject(),
+            origin: ReviewOrigin::ReviewerRequested,
+            actor,
+        },
+        task,
+    };
+    Ok(preview_review_identity(pool, &request).await?)
+}
+
 async fn schedule_screening_review_with_origin(
     pool: &sqlx::PgPool,
     project_id: Uuid,
@@ -131,6 +163,28 @@ async fn schedule_screening_review_with_origin(
         },
     )
     .await?;
+    let task = screening_task(
+        pool,
+        project_id,
+        report_id,
+        stage,
+        requested_protocol_version_id,
+        requested_revision,
+    )
+    .await?;
+    schedule(pool, task, context).await
+}
+
+/// The screening task for one report and stage, checked against the published
+/// protocol and the revision the reviewer saw.
+async fn screening_task(
+    pool: &sqlx::PgPool,
+    project_id: Uuid,
+    report_id: Uuid,
+    stage: ScreeningStage,
+    requested_protocol_version_id: Option<Uuid>,
+    requested_revision: Option<i64>,
+) -> Result<PreparedReviewTask, ReviewPreparationError> {
     let protocol = get_published_protocol(pool, project_id).await?;
     if requested_protocol_version_id.is_some_and(|id| id != protocol.id) {
         return Err(ReviewPreparationError::InvalidInput(format!(
@@ -150,46 +204,24 @@ async fn schedule_screening_review_with_origin(
         ScreeningStage::TitleAbstract => deepref_domain::ScreeningStage::TitleAbstract,
         ScreeningStage::FullText => deepref_domain::ScreeningStage::FullText,
     };
-    let allowed_exclusion_reasons = list_ai_exclusion_reasons(pool, project_id, domain_stage)
+    let exclusion_reasons = list_ai_exclusion_reasons(pool, project_id)
         .await?
         .into_iter()
+        .map(|(id, stage)| ScreeningExclusionReason { id, stage })
         .collect();
-    let criteria = protocol.criteria.clone();
-    // Report metadata is citable only at title/abstract. Full-text citations come
-    // from the retrieved passages, so no metadata is offered at full text.
-    let allowed_evidence = match stage {
-        ScreeningStage::TitleAbstract => metadata_evidence(report_id, &target),
-        ScreeningStage::FullText => Vec::new(),
-    };
-    let input = ScreeningInput {
+    let task = prepare_screening_task(ScreeningSubjectSource {
         project_id: project_id.into(),
         report_id: report_id.into(),
-        stage,
+        stage: domain_stage,
         protocol_version_id: protocol.id.into(),
         expected_revision,
-        title: target.title.clone(),
-        abstract_text: target.abstract_text.clone(),
-        document_hash: None,
-        retrieval_query: (stage == ScreeningStage::FullText)
-            .then(|| screening_retrieval_query(&target, &criteria)),
-        // Only the criteria this stage judges reach the model, in the order the
-        // validator requires. The full protocol stays on the task for validation.
-        criteria: criteria_for_stage(&criteria, stage)
-            .into_iter()
-            .map(criterion_prompt)
-            .collect(),
-    };
-    schedule(
-        pool,
-        PreparedReviewTask::Screening {
-            input,
-            criteria,
-            allowed_evidence,
-            allowed_exclusion_reasons,
-        },
-        context,
-    )
-    .await
+        criteria: protocol.criteria,
+        title: target.title,
+        abstract_text: target.abstract_text,
+        exclusion_reasons,
+    })
+    .map_err(PostgresReviewError::from)?;
+    Ok(task)
 }
 
 pub async fn schedule_duplicate_detection_review(
@@ -758,101 +790,6 @@ impl ReviewScheduler for PostgresReviewScheduler {
                 .await
                 .map_err(ReviewPreparationError::from)
         })
-    }
-}
-
-fn metadata_evidence(report_id: Uuid, target: &AiScreeningTarget) -> Vec<ScreeningEvidence> {
-    let mut evidence = Vec::new();
-    if let Some(title) = &target.title {
-        evidence.push(ScreeningEvidence::ReportMetadata {
-            report_id,
-            field: ScreeningEvidenceField::Title,
-            content_hash: sha256_bytes(title.as_bytes()),
-        });
-    }
-    if let Some(abstract_text) = &target.abstract_text {
-        evidence.push(ScreeningEvidence::ReportMetadata {
-            report_id,
-            field: ScreeningEvidenceField::Abstract,
-            content_hash: sha256_bytes(abstract_text.as_bytes()),
-        });
-    }
-    evidence
-}
-
-fn criterion_prompt(criterion: &EligibilityCriterion) -> CriterionPrompt {
-    CriterionPrompt {
-        id: criterion.id,
-        label: criterion.label.clone(),
-        description: criterion.description.clone(),
-        ordinal: criterion.ordinal,
-        kind: match criterion.kind {
-            deepref_domain::CriterionKind::Inclusion => "inclusion",
-            deepref_domain::CriterionKind::Exclusion => "exclusion",
-        }
-        .to_owned(),
-        stage: match criterion.stage {
-            CriterionStage::TitleAbstract => "title_abstract",
-            CriterionStage::FullText => "full_text",
-            CriterionStage::Both => "both",
-        }
-        .to_owned(),
-    }
-}
-
-fn screening_retrieval_query(
-    target: &AiScreeningTarget,
-    criteria: &[EligibilityCriterion],
-) -> String {
-    const MAX_TERMS: usize = 64;
-    const MAX_TERM_CHARS: usize = 48;
-    let mut terms = Vec::new();
-    let mut seen = BTreeSet::new();
-    let mut add_terms = |text: &str| {
-        let mut token = String::new();
-        let mut flush = |token: &mut String| {
-            if token.is_empty() {
-                return;
-            }
-            let normalized: String = token
-                .chars()
-                .flat_map(char::to_lowercase)
-                .take(MAX_TERM_CHARS)
-                .collect();
-            if (normalized.chars().count() >= 3
-                || normalized
-                    .chars()
-                    .all(|character| character.is_ascii_digit()))
-                && seen.insert(normalized.clone())
-                && terms.len() < MAX_TERMS
-            {
-                terms.push(normalized);
-            }
-            token.clear();
-        };
-        for character in text.chars() {
-            if character.is_alphanumeric() {
-                token.push(character);
-            } else {
-                flush(&mut token);
-            }
-        }
-        flush(&mut token);
-    };
-    for criterion in criteria {
-        add_terms(&criterion.label);
-        add_terms(&criterion.description);
-    }
-    if let Some(title) = &target.title {
-        add_terms(title);
-    }
-    if let Some(abstract_text) = &target.abstract_text {
-        add_terms(abstract_text);
-    }
-    if terms.is_empty() {
-        "full-text eligibility evidence".to_owned()
-    } else {
-        terms.join(" OR ")
     }
 }
 

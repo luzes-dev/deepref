@@ -45,6 +45,8 @@ async function runScopedSeriousCriticalAxe(page: Page, selector: string) {
 
 async function installPrismaFixture(page: Page) {
 	const prisma: PrismaDto = {
+		ai_quarantined: 0,
+		automation_excluded: 0,
 		project_id: projectId,
 		as_of: '2026-01-15T12:00:00Z',
 		// Identified = duplicates removed + awaiting duplicate check + screened, so the page's

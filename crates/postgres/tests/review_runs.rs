@@ -4,38 +4,64 @@
     clippy::unwrap_used,
     clippy::string_slice
 )]
+use std::collections::BTreeSet;
+
 use chrono::Utc;
 use deepref_ai::{
     AiProposal, AiRunRecord, AiRunStatus, AiRunStore, AiTaskKind, AuthorityTier, DedupeInput,
     DuplicateSignal, IdentityProvenance, ModelParameters, ModelProfile, ProposalDraft,
-    ProposalStatus, ProposalStore, ResolvedModel, TokenUsage,
+    ProposalStatus, ProposalStore, ProviderEndpoint, ResolvedModel,
+    ScreeningStage as AiScreeningStage, TokenUsage, register_provider_endpoint,
 };
-use deepref_application::AutomationRunId;
-use deepref_domain::{Actor, ActorKind, ProjectId};
-use deepref_postgres::{
-    AutomationFinalization, begin_next_automation_step, fail_automation_step, fail_review_run,
-    finalize_automation_run,
+use deepref_application::{
+    AutomationRunId, ProtocolCriterionCommand, PublishProtocolCommand, SaveProtocolDraftCommand,
+};
+use deepref_domain::{
+    Actor, ActorKind, CriterionDimension, CriterionKind, CriterionStage, FrameworkKind, ProjectId,
+    ProtocolVersionId, ReportId, ScreeningStage,
 };
 use deepref_postgres::{
-    PostgresAiStore, PostgresReviewError, PostgresReviewScheduler, PreparedReviewRun,
-    ReviewAttemptCompletion, ReviewAttemptStart, ReviewCalibrationBundleInput,
-    ReviewCalibrationStatus, ReviewFinalization, begin_review_attempt, complete_review_attempt,
-    fail_review_attempt, finalize_review_proposal, get_review_run, insert_model_route,
-    insert_review_calibration_bundle, load_leased_review_run, mark_review_run_running, migrate,
+    AutomationFinalization, ProtocolActor, begin_next_automation_step, fail_automation_step,
+    fail_review_run, finalize_automation_run, get_ai_screening_target, get_published_protocol,
+    publish_protocol, save_protocol_draft,
+};
+use deepref_postgres::{
+    CalibrationRefusal, PostgresAiStore, PostgresReviewError, PostgresReviewScheduler,
+    PreparedReviewRun, ReviewAttemptCompletion, ReviewAttemptStart, ReviewCalibrationBundleInput,
+    ReviewCalibrationStatus, ReviewFinalization, ReviewPreparationError, begin_review_attempt,
+    complete_review_attempt, fail_review_attempt, finalize_review_proposal, get_review_run,
+    insert_model_route, insert_review_calibration_bundle, load_leased_review_run,
+    mark_review_run_running, migrate, preview_review_identity, preview_screening_identity,
     schedule_prepared_review_run,
 };
 use deepref_review::{
-    CalibrationBundleId, ReviewDefinitionKey, ReviewOrigin, ReviewRunState, ReviewScheduler,
-    ScheduleReviewRun,
+    CalibrationBundleId, IdentityComponent, ReviewDefinitionKey, ReviewOrigin, ReviewRunSnapshot,
+    ReviewRunState, ReviewScheduler, ReviewSubject, ScheduleReviewRun, SemanticIdentity,
     worker::{
         AcceptedArtifactInput, CompiledReview, ExecutedReviewTask, PreparedReviewTask,
-        ReviewExecutionPlan, ReviewHash,
+        ReviewExecutionPlan, ReviewHash, ReviewRunManifest,
     },
 };
-use sqlx::{PgPool, postgres::PgPoolOptions};
+use serde_json::json;
+use sqlx::{PgPool, Postgres, Transaction, postgres::PgPoolOptions};
 use uuid::Uuid;
 
-static DATABASE_TEST_MUTEX: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+/// Arbitrary key for the database-wide lock that serializes route fixtures.
+const ROUTE_FIXTURE_LOCK: i64 = 0x5245_5649_4557_0001;
+
+/// Route resolution is global per profile and every test inserts its own routes,
+/// so a compiled identity is stable only while no other test is inserting routes.
+/// nextest runs each test in its own process, so the lock lives in the database.
+/// It is transaction-scoped: it is released when the returned transaction ends.
+async fn route_fixture_lock(pool: &PgPool) -> Transaction<'static, Postgres> {
+    let mut transaction = pool.begin().await.expect("route lock transaction begins");
+    sqlx::query("SELECT pg_advisory_xact_lock($1)")
+        .bind(ROUTE_FIXTURE_LOCK)
+        .execute(&mut *transaction)
+        .await
+        .expect("route fixture lock is acquired");
+    transaction
+}
 
 #[test]
 fn postgres_adapter_implements_the_public_review_scheduler_port() {
@@ -79,23 +105,22 @@ async fn schedule_with_origin(
     .await
 }
 
-#[tokio::test]
-async fn automation_reviews_require_an_exact_passing_immutable_calibration_bundle() {
-    let _guard = DATABASE_TEST_MUTEX.lock().await;
-    let Some(pool) = database().await else { return };
-    let project_id = ProjectId::new(Uuid::new_v4());
-    sqlx::query("INSERT INTO projects (id,name) VALUES ($1,'calibration admission')")
-        .bind(project_id.as_uuid())
-        .execute(&pool)
-        .await
-        .expect("project inserts");
+/// The stage as the AI crate names it, for previewing a screening identity.
+fn ai_stage(stage: ScreeningStage) -> AiScreeningStage {
+    match stage {
+        ScreeningStage::TitleAbstract => AiScreeningStage::TitleAbstract,
+        ScreeningStage::FullText => AiScreeningStage::FullText,
+    }
+}
+
+async fn insert_route(pool: &PgPool, profile: ModelProfile, model_version: &str) {
     insert_model_route(
-        &pool,
+        pool,
         &ResolvedModel {
-            profile: ModelProfile::FastClassifier,
+            profile,
             provider: format!("calibration-test-{}", Uuid::new_v4()),
-            model: "classifier".to_owned(),
-            model_version: "2026-08".to_owned(),
+            model: "reasoner".to_owned(),
+            model_version: model_version.to_owned(),
             parameters: ModelParameters::default(),
             route_id: None,
         },
@@ -103,113 +128,325 @@ async fn automation_reviews_require_an_exact_passing_immutable_calibration_bundl
     )
     .await
     .expect("route inserts");
+}
+
+/// Publishes the screening protocol. Publishing again creates a new version, which
+/// changes the protocol component of every screening identity.
+async fn publish_screening_protocol(pool: &PgPool, project_id: ProjectId, population: &str) {
+    let actor = ProtocolActor {
+        kind: "user".to_owned(),
+        id: "review-run-test-user".to_owned(),
+    };
+    let expected_revision = get_published_protocol(pool, project_id.as_uuid())
+        .await
+        .map_or(0, |protocol| protocol.revision);
+    let draft = save_protocol_draft(
+        pool,
+        &SaveProtocolDraftCommand {
+            project_id,
+            protocol_version_id: None,
+            name: "Calibrated screening".to_owned(),
+            objective: "Stage-scoped calibration".to_owned(),
+            question: "Does each stage admit only its own calibration?".to_owned(),
+            framework_kind: FrameworkKind::Pico,
+            framework_fields: std::collections::BTreeMap::from([
+                ("population".to_owned(), population.to_owned()),
+                ("intervention".to_owned(), "Intervention Y".to_owned()),
+                ("outcome".to_owned(), "Outcome Z".to_owned()),
+            ]),
+            criteria: vec![ProtocolCriterionCommand {
+                id: None,
+                kind: CriterionKind::Inclusion,
+                stage: CriterionStage::Both,
+                dimension: CriterionDimension::Population,
+                label: "Population".to_owned(),
+                description: population.to_owned(),
+            }],
+            expected_revision,
+        },
+        &actor,
+    )
+    .await
+    .expect("protocol draft saves");
+    publish_protocol(
+        pool,
+        &PublishProtocolCommand {
+            project_id,
+            protocol_version_id: draft.id,
+            expected_revision: draft.revision,
+        },
+        &actor,
+    )
+    .await
+    .expect("protocol publishes");
+}
+
+/// A project with a published screening protocol and one report to screen.
+async fn screening_project(pool: &PgPool, name: &str) -> (ProjectId, Uuid) {
+    let project_id = ProjectId::new(Uuid::new_v4());
+    sqlx::query("INSERT INTO projects (id,name) VALUES ($1,$2)")
+        .bind(project_id.as_uuid())
+        .bind(name)
+        .execute(pool)
+        .await
+        .expect("project inserts");
+    publish_screening_protocol(pool, project_id, "Adults with condition X").await;
+    let report_id = Uuid::new_v4();
+    sqlx::query(
+        "INSERT INTO reports (id,title,abstract_text) VALUES ($1,$2,'Adults with condition X.')",
+    )
+    .bind(report_id)
+    .bind(name)
+    .execute(pool)
+    .await
+    .expect("report inserts");
+    sqlx::query("INSERT INTO project_reports (project_id,report_id) VALUES ($1,$2)")
+        .bind(project_id.as_uuid())
+        .bind(report_id)
+        .execute(pool)
+        .await
+        .expect("project membership inserts");
+    (project_id, report_id)
+}
+
+/// The identity a screening review of this report at this stage compiles to now.
+async fn screening_identity(
+    pool: &PgPool,
+    project_id: ProjectId,
+    report_id: Uuid,
+    stage: ScreeningStage,
+) -> SemanticIdentity {
+    preview_screening_identity(pool, project_id.as_uuid(), report_id, ai_stage(stage))
+        .await
+        .expect("screening identity previews")
+}
+
+/// The identity a duplicate-detection review compiles to now.
+async fn duplicate_identity(pool: &PgPool, project_id: ProjectId) -> SemanticIdentity {
+    let task = prepared_task(project_id);
+    let command = ScheduleReviewRun {
+        project_id,
+        definition: ReviewDefinitionKey::DuplicateDetection,
+        subject: task.subject(),
+        origin: ReviewOrigin::ReviewerRequested,
+        actor: actor(),
+    };
+    preview_review_identity(pool, &PreparedReviewRun { command, task })
+        .await
+        .expect("duplicate detection identity previews")
+}
+
+async fn calibrate(
+    pool: &PgPool,
+    project_id: ProjectId,
+    identity: SemanticIdentity,
+    status: ReviewCalibrationStatus,
+) -> CalibrationBundleId {
+    let id = CalibrationBundleId::new(Uuid::new_v4()).expect("bundle id");
+    insert_review_calibration_bundle(
+        pool,
+        ReviewCalibrationBundleInput {
+            id,
+            project_id: project_id.as_uuid(),
+            definition: identity.definition,
+            identity,
+            evaluation_set_id: "expert-adjudicated-v1".to_owned(),
+            thresholds: json!({"precision": 0.99}),
+            metrics: json!({"precision": 1.0}),
+            reviewer_metadata: json!({"reviewer_ids": ["expert-1"]}),
+            status,
+            evaluated_at: Utc::now(),
+        },
+    )
+    .await
+    .expect("calibration bundle persists");
+    id
+}
+
+/// Schedules an automation-triggered screening review of this report at this stage,
+/// admitted (or refused) by `bundle`.
+async fn screening_run(
+    pool: &PgPool,
+    project_id: ProjectId,
+    report_id: Uuid,
+    stage: ScreeningStage,
+    bundle: CalibrationBundleId,
+) -> Result<ReviewRunSnapshot, ReviewPreparationError> {
+    let protocol = get_published_protocol(pool, project_id.as_uuid())
+        .await
+        .expect("published protocol");
+    let target = get_ai_screening_target(pool, project_id.as_uuid(), report_id)
+        .await
+        .expect("screening target");
+    PostgresReviewScheduler::new(pool)
+        .schedule(ScheduleReviewRun {
+            project_id,
+            definition: ReviewDefinitionKey::Screening,
+            subject: ReviewSubject::Screening {
+                report_id: ReportId::new(report_id),
+                stage,
+                protocol_version_id: ProtocolVersionId::new(protocol.id),
+                expected_revision: target.expected_revision,
+            },
+            origin: ReviewOrigin::AutomationTriggered {
+                calibration_bundle_id: bundle,
+            },
+            actor: actor(),
+        })
+        .await
+}
+
+/// The refusal an admission returned. A run that was scheduled instead fails the test.
+fn refusal_of(result: Result<ReviewRunSnapshot, ReviewPreparationError>) -> CalibrationRefusal {
+    match result {
+        Err(ReviewPreparationError::Review(PostgresReviewError::CalibrationRefused(refusal))) => {
+            refusal
+        }
+        Err(other) => panic!("expected a calibration refusal, got: {other}"),
+        Ok(_) => panic!("expected a calibration refusal, but a run was scheduled"),
+    }
+}
+
+async fn automation_run_count(pool: &PgPool, project_id: ProjectId) -> i64 {
+    sqlx::query_scalar(
+        "SELECT count(*) FROM review_run_manifests
+         WHERE project_id=$1 AND origin->>'kind'='automation_triggered'",
+    )
+    .bind(project_id.as_uuid())
+    .fetch_one(pool)
+    .await
+    .expect("automation run count")
+}
+
+/// The semantic bundle hash a scheduled run was compiled with, as stored.
+async fn stored_identity_hash(
+    pool: &PgPool,
+    project_id: ProjectId,
+    run: &ReviewRunSnapshot,
+) -> ReviewHash {
+    let hash: String = sqlx::query_scalar(
+        "SELECT semantic_bundle_hash FROM review_run_manifests
+         WHERE project_id=$1 AND automation_run_id=$2",
+    )
+    .bind(project_id.as_uuid())
+    .bind(run.id.as_uuid())
+    .fetch_one(pool)
+    .await
+    .expect("stored semantic hash loads");
+    ReviewHash::parse(hash).expect("stored semantic hash is valid")
+}
+
+async fn delete_project(pool: &PgPool, project_id: ProjectId) {
+    sqlx::query("DELETE FROM projects WHERE id=$1")
+        .bind(project_id.as_uuid())
+        .execute(pool)
+        .await
+        .expect("fixtures clean up");
+}
+
+#[tokio::test]
+async fn automation_reviews_require_an_exact_passing_immutable_calibration_bundle() {
+    let Some(pool) = database().await else { return };
+    let _lock = route_fixture_lock(&pool).await;
+    let project_id = ProjectId::new(Uuid::new_v4());
+    sqlx::query("INSERT INTO projects (id,name) VALUES ($1,'calibration admission')")
+        .bind(project_id.as_uuid())
+        .execute(&pool)
+        .await
+        .expect("project inserts");
+    insert_route(&pool, ModelProfile::FastClassifier, "2026-08").await;
 
     let result = async {
+        let identity = duplicate_identity(&pool, project_id).await;
         let reviewer_run = schedule_with_origin(&pool, project_id, ReviewOrigin::ReviewerRequested)
             .await
             .expect("reviewer-requested runs do not require calibration");
-        let exact_hash: String = sqlx::query_scalar(
-            "SELECT semantic_bundle_hash FROM review_run_manifests
-             WHERE project_id=$1 AND automation_run_id=$2",
-        )
-        .bind(project_id.as_uuid())
-        .bind(reviewer_run.id.as_uuid())
-        .fetch_one(&pool)
-        .await
-        .expect("semantic bundle hash loads");
-        let exact_hash = ReviewHash::parse(exact_hash).expect("stored semantic hash is valid");
+        assert_eq!(
+            stored_identity_hash(&pool, project_id, &reviewer_run).await,
+            identity.aggregate_hash().expect("identity hashes"),
+            "the previewed identity is the one a run is compiled with"
+        );
+        // The persisted scheme 2 identity carries the narrow implementation and
+        // dependency components the calibration gate compares.
+        for component in [
+            IdentityComponent::Implementation,
+            IdentityComponent::Dependencies,
+        ] {
+            assert!(
+                identity.components.contains_key(&component),
+                "missing {component:?}"
+            );
+        }
 
         let missing_id = CalibrationBundleId::new(Uuid::new_v4()).expect("bundle id");
-        assert!(matches!(
-            schedule_with_origin(
-                &pool,
-                project_id,
-                ReviewOrigin::AutomationTriggered {
-                    calibration_bundle_id: missing_id,
-                },
-            )
-            .await,
-            Err(PostgresReviewError::CalibrationMissing)
-        ));
+        assert_eq!(
+            refusal_of(
+                schedule_with_origin(
+                    &pool,
+                    project_id,
+                    ReviewOrigin::AutomationTriggered {
+                        calibration_bundle_id: missing_id,
+                    },
+                )
+                .await
+                .map_err(ReviewPreparationError::from)
+            ),
+            CalibrationRefusal::Missing
+        );
 
-        let failed_id = CalibrationBundleId::new(Uuid::new_v4()).expect("bundle id");
-        insert_review_calibration_bundle(
+        let failed_id = calibrate(
             &pool,
-            ReviewCalibrationBundleInput {
-                id: failed_id,
-                project_id: project_id.as_uuid(),
-                definition: ReviewDefinitionKey::DuplicateDetection,
-                semantic_bundle_hash: exact_hash.clone(),
-                evaluation_set_id: "expert-adjudicated-v1".to_owned(),
-                thresholds: serde_json::json!({"precision": 0.99}),
-                metrics: serde_json::json!({"precision": 0.98}),
-                reviewer_metadata: serde_json::json!({"reviewer_ids": ["expert-1"]}),
-                status: ReviewCalibrationStatus::Failed,
-                evaluated_at: Utc::now(),
-            },
+            project_id,
+            identity.clone(),
+            ReviewCalibrationStatus::Failed,
         )
-        .await
-        .expect("failed calibration persists");
-        assert!(matches!(
-            schedule_with_origin(
-                &pool,
-                project_id,
-                ReviewOrigin::AutomationTriggered {
-                    calibration_bundle_id: failed_id,
-                },
-            )
-            .await,
-            Err(PostgresReviewError::CalibrationFailed)
-        ));
+        .await;
+        assert_eq!(
+            refusal_of(
+                schedule_with_origin(
+                    &pool,
+                    project_id,
+                    ReviewOrigin::AutomationTriggered {
+                        calibration_bundle_id: failed_id,
+                    },
+                )
+                .await
+                .map_err(ReviewPreparationError::from)
+            ),
+            CalibrationRefusal::Failed
+        );
 
-        let stale_id = CalibrationBundleId::new(Uuid::new_v4()).expect("bundle id");
-        insert_review_calibration_bundle(
-            &pool,
-            ReviewCalibrationBundleInput {
-                id: stale_id,
-                project_id: project_id.as_uuid(),
-                definition: ReviewDefinitionKey::DuplicateDetection,
-                semantic_bundle_hash: ReviewHash::parse("c".repeat(64)).expect("stale hash"),
-                evaluation_set_id: "expert-adjudicated-v1".to_owned(),
-                thresholds: serde_json::json!({"precision": 0.99}),
-                metrics: serde_json::json!({"precision": 1.0}),
-                reviewer_metadata: serde_json::json!({"reviewer_ids": ["expert-1"]}),
-                status: ReviewCalibrationStatus::Passing,
-                evaluated_at: Utc::now(),
-            },
-        )
-        .await
-        .expect("stale calibration persists");
-        assert!(matches!(
-            schedule_with_origin(
-                &pool,
-                project_id,
-                ReviewOrigin::AutomationTriggered {
-                    calibration_bundle_id: stale_id,
-                },
-            )
-            .await,
-            Err(PostgresReviewError::CalibrationStale)
-        ));
+        let mut earlier = identity.clone();
+        earlier.components.insert(
+            IdentityComponent::Models,
+            ReviewHash::digest_bytes("earlier model route"),
+        );
+        let stale_id =
+            calibrate(&pool, project_id, earlier, ReviewCalibrationStatus::Passing).await;
+        assert_eq!(
+            refusal_of(
+                schedule_with_origin(
+                    &pool,
+                    project_id,
+                    ReviewOrigin::AutomationTriggered {
+                        calibration_bundle_id: stale_id,
+                    },
+                )
+                .await
+                .map_err(ReviewPreparationError::from)
+            ),
+            CalibrationRefusal::Stale {
+                components: BTreeSet::from([IdentityComponent::Models]),
+            }
+        );
 
-        let passing_id = CalibrationBundleId::new(Uuid::new_v4()).expect("bundle id");
-        insert_review_calibration_bundle(
+        let passing_id = calibrate(
             &pool,
-            ReviewCalibrationBundleInput {
-                id: passing_id,
-                project_id: project_id.as_uuid(),
-                definition: ReviewDefinitionKey::DuplicateDetection,
-                semantic_bundle_hash: exact_hash,
-                evaluation_set_id: "expert-adjudicated-v1".to_owned(),
-                thresholds: serde_json::json!({"precision": 0.99}),
-                metrics: serde_json::json!({"precision": 1.0}),
-                reviewer_metadata: serde_json::json!({"reviewer_ids": ["expert-1"]}),
-                status: ReviewCalibrationStatus::Passing,
-                evaluated_at: Utc::now(),
-            },
+            project_id,
+            identity,
+            ReviewCalibrationStatus::Passing,
         )
-        .await
-        .expect("passing calibration persists");
+        .await;
         let automated = schedule_with_origin(
             &pool,
             project_id,
@@ -233,12 +470,311 @@ async fn automation_reviews_require_an_exact_passing_immutable_calibration_bundl
     }
     .await;
 
-    sqlx::query("DELETE FROM projects WHERE id=$1")
-        .bind(project_id.as_uuid())
-        .execute(&pool)
-        .await
-        .expect("fixtures clean up");
+    delete_project(&pool, project_id).await;
     result
+}
+
+/// A title/abstract bundle and a full-text bundle coexist for one project. Each
+/// admits only its own stage, and a refused run is not scheduled.
+#[tokio::test]
+async fn calibration_admission_is_stage_scoped_and_fails_closed() {
+    let Some(pool) = database().await else { return };
+    let _lock = route_fixture_lock(&pool).await;
+    insert_route(&pool, ModelProfile::Reasoning, "v1").await;
+    insert_route(&pool, ModelProfile::LongContextReasoning, "v1").await;
+    let (project_id, report_id) = screening_project(&pool, "stage scoped calibration").await;
+    let (other_project_id, other_report_id) =
+        screening_project(&pool, "full text calibration only").await;
+
+    let title =
+        screening_identity(&pool, project_id, report_id, ScreeningStage::TitleAbstract).await;
+    let full = screening_identity(&pool, project_id, report_id, ScreeningStage::FullText).await;
+    assert_ne!(
+        title.aggregate_hash().expect("identity hashes"),
+        full.aggregate_hash().expect("identity hashes"),
+        "the stage is part of the identity"
+    );
+
+    let title_bundle = calibrate(
+        &pool,
+        project_id,
+        title.clone(),
+        ReviewCalibrationStatus::Passing,
+    )
+    .await;
+    let full_bundle = calibrate(&pool, project_id, full, ReviewCalibrationStatus::Passing).await;
+
+    let title_run = screening_run(
+        &pool,
+        project_id,
+        report_id,
+        ScreeningStage::TitleAbstract,
+        title_bundle,
+    )
+    .await
+    .expect("title/abstract admits its own bundle");
+    assert_eq!(
+        stored_identity_hash(&pool, project_id, &title_run).await,
+        title.aggregate_hash().expect("identity hashes"),
+        "the admitted run carries the identity that was previewed"
+    );
+    screening_run(
+        &pool,
+        project_id,
+        report_id,
+        ScreeningStage::FullText,
+        full_bundle,
+    )
+    .await
+    .expect("full text admits its own bundle");
+
+    let runs_before = automation_run_count(&pool, project_id).await;
+    assert_eq!(
+        refusal_of(
+            screening_run(
+                &pool,
+                project_id,
+                report_id,
+                ScreeningStage::TitleAbstract,
+                full_bundle,
+            )
+            .await
+        ),
+        CalibrationRefusal::StageMismatch {
+            bundle: Some(ScreeningStage::FullText),
+            requested: Some(ScreeningStage::TitleAbstract),
+        }
+    );
+    assert_eq!(
+        refusal_of(
+            screening_run(
+                &pool,
+                project_id,
+                report_id,
+                ScreeningStage::FullText,
+                title_bundle,
+            )
+            .await
+        ),
+        CalibrationRefusal::StageMismatch {
+            bundle: Some(ScreeningStage::TitleAbstract),
+            requested: Some(ScreeningStage::FullText),
+        }
+    );
+    assert_eq!(
+        automation_run_count(&pool, project_id).await,
+        runs_before,
+        "a refused stage schedules nothing"
+    );
+
+    // A project whose only bundle is for full text refuses title/abstract the same way.
+    let full_only = calibrate(
+        &pool,
+        other_project_id,
+        screening_identity(
+            &pool,
+            other_project_id,
+            other_report_id,
+            ScreeningStage::FullText,
+        )
+        .await,
+        ReviewCalibrationStatus::Passing,
+    )
+    .await;
+    assert_eq!(
+        refusal_of(
+            screening_run(
+                &pool,
+                other_project_id,
+                other_report_id,
+                ScreeningStage::TitleAbstract,
+                full_only,
+            )
+            .await
+        ),
+        CalibrationRefusal::StageMismatch {
+            bundle: Some(ScreeningStage::FullText),
+            requested: Some(ScreeningStage::TitleAbstract),
+        }
+    );
+    assert_eq!(automation_run_count(&pool, other_project_id).await, 0);
+
+    delete_project(&pool, project_id).await;
+    delete_project(&pool, other_project_id).await;
+}
+
+/// A changed route stales only the stage that resolves that route.
+#[tokio::test]
+async fn a_route_change_stales_only_the_stage_that_uses_it() {
+    let Some(pool) = database().await else { return };
+    let _lock = route_fixture_lock(&pool).await;
+    insert_route(&pool, ModelProfile::Reasoning, "v1").await;
+    insert_route(&pool, ModelProfile::LongContextReasoning, "v1").await;
+    let (project_id, report_id) = screening_project(&pool, "route change calibration").await;
+    let title_bundle = calibrate(
+        &pool,
+        project_id,
+        screening_identity(&pool, project_id, report_id, ScreeningStage::TitleAbstract).await,
+        ReviewCalibrationStatus::Passing,
+    )
+    .await;
+    let full_bundle = calibrate(
+        &pool,
+        project_id,
+        screening_identity(&pool, project_id, report_id, ScreeningStage::FullText).await,
+        ReviewCalibrationStatus::Passing,
+    )
+    .await;
+
+    // Replacing the full-text route changes the full-text identity only.
+    insert_route(&pool, ModelProfile::LongContextReasoning, "v2").await;
+    assert_eq!(
+        refusal_of(
+            screening_run(
+                &pool,
+                project_id,
+                report_id,
+                ScreeningStage::FullText,
+                full_bundle,
+            )
+            .await
+        ),
+        CalibrationRefusal::Stale {
+            components: BTreeSet::from([IdentityComponent::Models]),
+        }
+    );
+    screening_run(
+        &pool,
+        project_id,
+        report_id,
+        ScreeningStage::TitleAbstract,
+        title_bundle,
+    )
+    .await
+    .expect("title/abstract still admits under its unchanged route");
+
+    // Calibrating full text against the new route admits it again.
+    let full_bundle_v2 = calibrate(
+        &pool,
+        project_id,
+        screening_identity(&pool, project_id, report_id, ScreeningStage::FullText).await,
+        ReviewCalibrationStatus::Passing,
+    )
+    .await;
+    screening_run(
+        &pool,
+        project_id,
+        report_id,
+        ScreeningStage::FullText,
+        full_bundle_v2,
+    )
+    .await
+    .expect("recalibrated full text admits");
+
+    // Replacing the title/abstract route changes that identity only.
+    insert_route(&pool, ModelProfile::Reasoning, "v2").await;
+    assert_eq!(
+        refusal_of(
+            screening_run(
+                &pool,
+                project_id,
+                report_id,
+                ScreeningStage::TitleAbstract,
+                title_bundle,
+            )
+            .await
+        ),
+        CalibrationRefusal::Stale {
+            components: BTreeSet::from([IdentityComponent::Models]),
+        }
+    );
+    screening_run(
+        &pool,
+        project_id,
+        report_id,
+        ScreeningStage::FullText,
+        full_bundle_v2,
+    )
+    .await
+    .expect("full text is unaffected by the title/abstract route");
+
+    delete_project(&pool, project_id).await;
+}
+
+/// Republishing the protocol is a shared semantic change: both stages go stale, and
+/// the protocol is the component that changed.
+#[tokio::test]
+async fn republishing_the_protocol_stales_both_stages_on_protocol() {
+    let Some(pool) = database().await else { return };
+    let _lock = route_fixture_lock(&pool).await;
+    insert_route(&pool, ModelProfile::Reasoning, "v1").await;
+    insert_route(&pool, ModelProfile::LongContextReasoning, "v1").await;
+    let (project_id, report_id) = screening_project(&pool, "protocol republish calibration").await;
+    let title_bundle = calibrate(
+        &pool,
+        project_id,
+        screening_identity(&pool, project_id, report_id, ScreeningStage::TitleAbstract).await,
+        ReviewCalibrationStatus::Passing,
+    )
+    .await;
+    let full_bundle = calibrate(
+        &pool,
+        project_id,
+        screening_identity(&pool, project_id, report_id, ScreeningStage::FullText).await,
+        ReviewCalibrationStatus::Passing,
+    )
+    .await;
+
+    publish_screening_protocol(&pool, project_id, "Adolescents with condition X").await;
+
+    let protocol_only = CalibrationRefusal::Stale {
+        components: BTreeSet::from([IdentityComponent::Protocol]),
+    };
+    assert_eq!(
+        refusal_of(
+            screening_run(
+                &pool,
+                project_id,
+                report_id,
+                ScreeningStage::TitleAbstract,
+                title_bundle,
+            )
+            .await
+        ),
+        protocol_only
+    );
+    assert_eq!(
+        refusal_of(
+            screening_run(
+                &pool,
+                project_id,
+                report_id,
+                ScreeningStage::FullText,
+                full_bundle,
+            )
+            .await
+        ),
+        protocol_only
+    );
+
+    let title_v2 = calibrate(
+        &pool,
+        project_id,
+        screening_identity(&pool, project_id, report_id, ScreeningStage::TitleAbstract).await,
+        ReviewCalibrationStatus::Passing,
+    )
+    .await;
+    screening_run(
+        &pool,
+        project_id,
+        report_id,
+        ScreeningStage::TitleAbstract,
+        title_v2,
+    )
+    .await
+    .expect("a calibration for the republished protocol admits");
+
+    delete_project(&pool, project_id).await;
 }
 
 fn actor() -> Actor {
@@ -308,8 +844,8 @@ async fn schedule(pool: &PgPool, project_id: ProjectId) -> deepref_review::Revie
 /// must not add a second "Automation failed" entry for the same failure.
 #[tokio::test]
 async fn a_failed_review_run_is_announced_once() {
-    let _guard = DATABASE_TEST_MUTEX.lock().await;
     let Some(pool) = database().await else { return };
+    let _lock = route_fixture_lock(&pool).await;
     let project_id = ProjectId::new(Uuid::new_v4());
     sqlx::query("INSERT INTO projects (id,name) VALUES ($1,'review failure notice')")
         .bind(project_id.as_uuid())
@@ -390,8 +926,8 @@ async fn claim_run(pool: &PgPool, run_id: Uuid, owner: &str) {
 
 #[tokio::test]
 async fn review_attempts_enforce_scope_lease_exact_reuse_lineage_and_immutability() {
-    let _guard = DATABASE_TEST_MUTEX.lock().await;
     let Some(pool) = database().await else { return };
+    let _lock = route_fixture_lock(&pool).await;
     let project_id = ProjectId::new(Uuid::new_v4());
     let other_project_id = ProjectId::new(Uuid::new_v4());
     sqlx::query("INSERT INTO projects (id,name) VALUES ($1,'review run'),($2,'other project')")
@@ -665,6 +1201,8 @@ async fn review_attempts_enforce_scope_lease_exact_reuse_lineage_and_immutabilit
                     output_tokens: 1,
                 },
                 cost_micros: None,
+                provider_served_model: None,
+                provider_system_fingerprint: None,
                 output: Some(serde_json::json!({"decision":"match"})),
                 status: AiRunStatus::Completed,
                 error: None,
@@ -737,4 +1275,63 @@ async fn review_attempts_enforce_scope_lease_exact_reuse_lineage_and_immutabilit
         .await
         .expect("fixtures clean up");
     result
+}
+
+#[tokio::test]
+async fn scheduled_reviews_store_the_normalized_endpoint_of_their_route() {
+    let Some(pool) = database().await else { return };
+    let _lock = route_fixture_lock(&pool).await;
+    let project_id = ProjectId::new(Uuid::new_v4());
+    sqlx::query("INSERT INTO projects (id,name) VALUES ($1,'endpoint identity')")
+        .bind(project_id.as_uuid())
+        .execute(&pool)
+        .await
+        .expect("project inserts");
+    // A provider id used by this test only, so the process-wide endpoint registry is not shared.
+    let provider = format!("endpoint-identity-{}", Uuid::new_v4());
+    let endpoint = ProviderEndpoint::from_configured_url(
+        "https://proxy.example/zen/go/v1/?api_key=query-token-must-not-persist",
+    )
+    .expect("endpoint normalizes");
+    register_provider_endpoint(&provider, endpoint.clone()).expect("endpoint registers");
+    insert_model_route(
+        &pool,
+        &ResolvedModel {
+            profile: ModelProfile::FastClassifier,
+            provider,
+            model: "classifier".to_owned(),
+            model_version: "2026-08".to_owned(),
+            parameters: ModelParameters::default(),
+            route_id: None,
+        },
+        Utc::now(),
+    )
+    .await
+    .expect("route inserts");
+
+    let snapshot = schedule_with_origin(&pool, project_id, ReviewOrigin::ReviewerRequested)
+        .await
+        .expect("review schedules");
+    let stored: serde_json::Value = sqlx::query_scalar(
+        "SELECT manifest FROM review_run_manifests
+         WHERE project_id=$1 AND automation_run_id=$2",
+    )
+    .bind(project_id.as_uuid())
+    .bind(snapshot.id.as_uuid())
+    .fetch_one(&pool)
+    .await
+    .expect("manifest loads");
+    let rendered = stored.to_string();
+    assert!(
+        rendered.contains("\"endpoint\":\"https://proxy.example/zen/go/v1\""),
+        "{rendered}"
+    );
+    assert!(
+        !rendered.contains("query-token-must-not-persist"),
+        "{rendered}"
+    );
+    let manifest: ReviewRunManifest =
+        serde_json::from_value(stored).expect("stored manifest deserializes");
+    assert_eq!(manifest.resolved_models.len(), 1);
+    assert_eq!(manifest.resolved_models[0].endpoint, Some(endpoint));
 }

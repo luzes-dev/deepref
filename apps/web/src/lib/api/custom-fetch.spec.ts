@@ -29,6 +29,27 @@ describe('customFetch', () => {
 		expect(request.url).toBe('http://localhost/api/health?source=generated');
 	});
 
+	it('attributes API calls to the current reviewer without replacing explicit headers', async () => {
+		vi.stubGlobal('window', {
+			location: { origin: 'http://localhost' },
+			sessionStorage: { getItem: () => 'reviewer-a' }
+		});
+		const requests: Request[] = [];
+		vi.stubGlobal('fetch', async (request: Request) => {
+			requests.push(request);
+			return new Response(null, { status: 204 });
+		});
+		await customFetch('/api/projects/test/screening', { method: 'GET' });
+		await customFetch('/api/projects/test/screening', {
+			method: 'GET',
+			headers: { 'x-actor-id': 'override', 'x-actor-kind': 'system' }
+		});
+		expect(requests[0]?.headers.get('x-actor-id')).toBe('reviewer-a');
+		expect(requests[0]?.headers.get('x-actor-kind')).toBe('user');
+		expect(requests[1]?.headers.get('x-actor-id')).toBe('override');
+		expect(requests[1]?.headers.get('x-actor-kind')).toBe('system');
+	});
+
 	it('returns undefined data for no-content responses', async () => {
 		vi.stubGlobal('fetch', vi.fn().mockResolvedValue(new Response(null, { status: 204 })));
 

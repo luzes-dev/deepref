@@ -295,7 +295,7 @@ async fn attach_screening_overlays(
         });
     }
     let rows = sqlx::query(
-        "SELECT report_id,title_abstract_status,full_text_status,final_status FROM screening_state WHERE project_id=$1 AND report_id=ANY($2) ORDER BY report_id",
+        "SELECT report_id,title_abstract_status,full_text_status,final_status FROM screening_state WHERE project_id=$1 AND report_id=ANY($2) AND NOT ai_first_audit_masked(project_id,report_id) ORDER BY report_id",
     )
     .bind(project_id)
     .bind(ids)
