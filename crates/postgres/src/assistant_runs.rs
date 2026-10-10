@@ -6,13 +6,14 @@
 //! agent, persists batched events, the effect log, the final answer and the
 //! plan, then marks the run terminal.
 //!
-//! Retry safety: a recovered lease re-drives a `running` run from scratch,
-//! but terminal runs are never re-executed, and the final message and plan
-//! are written idempotently under their fixed ids. One run always yields at
-//! most one final answer and one plan.
+//! Retry safety: a recovered lease re-drives a `running` run by continuing
+//! its append-only event log, but terminal runs are never re-executed, and
+//! the final message and plan are written idempotently under their fixed
+//! ids. One run always yields at most one final answer and one plan.
+//! Terminal redeliveries settle nothing and append nothing.
 
 use chrono::{DateTime, Utc};
-use serde_json::Value;
+use serde_json::{Value, json};
 use sqlx::{PgPool, Postgres, Row, Transaction, postgres::PgRow};
 use uuid::Uuid;
 
@@ -25,7 +26,6 @@ pub const ASSISTANT_AGENT_RUN_JOB_KIND: &str = "assistant_agent_run";
 pub enum AssistantAgentRunStatus {
     Queued,
     Running,
-    Suspended,
     Completed,
     Failed,
     Cancelled,
@@ -36,7 +36,6 @@ impl AssistantAgentRunStatus {
         match self {
             Self::Queued => "queued",
             Self::Running => "running",
-            Self::Suspended => "suspended",
             Self::Completed => "completed",
             Self::Failed => "failed",
             Self::Cancelled => "cancelled",
@@ -47,7 +46,6 @@ impl AssistantAgentRunStatus {
         match value {
             "queued" => Some(Self::Queued),
             "running" => Some(Self::Running),
-            "suspended" => Some(Self::Suspended),
             "completed" => Some(Self::Completed),
             "failed" => Some(Self::Failed),
             "cancelled" => Some(Self::Cancelled),
@@ -134,9 +132,50 @@ pub async fn create_assistant_agent_run(
     input: &NewAssistantAgentRun,
 ) -> Result<AssistantAgentRunRecord, AssistantError> {
     let mut tx = pool.begin().await?;
-    let record = create_assistant_agent_run_tx(&mut tx, input).await?;
-    tx.commit().await?;
-    Ok(record)
+    let record = create_assistant_agent_run_tx(&mut tx, input).await;
+    match record {
+        Ok(record) => {
+            tx.commit().await?;
+            Ok(record)
+        }
+        Err(error) => {
+            drop(tx);
+            Err(
+                clarify_run_reference_error(pool, input.project_id, input.conversation_id, error)
+                    .await,
+            )
+        }
+    }
+}
+
+/// The run insert names its missing reference only as a foreign-key
+/// violation. When the conversation or project vanished between validation
+/// and insert (a delete racing submit), report which one so callers answer
+/// 404 instead of 400. Anything else (notably a bogus trigger message id
+/// passed straight to [`create_assistant_agent_run`]) keeps its error.
+async fn clarify_run_reference_error(
+    pool: &PgPool,
+    project_id: Uuid,
+    conversation_id: Uuid,
+    error: AssistantError,
+) -> AssistantError {
+    let AssistantError::InvalidInput(ref message) = error else {
+        return error;
+    };
+    if message != RUN_REFERENCE_MISSING {
+        return error;
+    }
+    if !crate::project_exists(pool, project_id)
+        .await
+        .unwrap_or(true)
+    {
+        return AssistantError::ProjectNotFound;
+    }
+    match crate::get_assistant_conversation(pool, project_id, conversation_id).await {
+        Ok(_) => error,
+        Err(AssistantError::ConversationNotFound) => AssistantError::ConversationNotFound,
+        Err(other) => other,
+    }
 }
 
 /// Persists the user message, the queued run and the durable job in one
@@ -186,7 +225,16 @@ pub async fn submit_assistant_agent_run(
             plan_id: Uuid::new_v4(),
         },
     )
-    .await?;
+    .await;
+    let record = match record {
+        Ok(record) => record,
+        Err(error) => {
+            drop(tx);
+            return Err(
+                clarify_run_reference_error(pool, project_id, conversation_id, error).await,
+            );
+        }
+    };
     crate::jobs::enqueue_job(
         &mut tx,
         &crate::jobs::job(
@@ -204,6 +252,13 @@ pub async fn submit_assistant_agent_run(
     tx.commit().await?;
     Ok(record)
 }
+
+/// Foreign-key signal for a run insert whose conversation, project or
+/// trigger message is missing. [`clarify_run_reference_error`] refines this
+/// into a 404-grade error when a racing delete removed the conversation or
+/// project.
+const RUN_REFERENCE_MISSING: &str =
+    "assistant run references a missing conversation, project or message";
 
 pub(crate) async fn create_assistant_agent_run_tx(
     tx: &mut Transaction<'_, Postgres>,
@@ -251,9 +306,7 @@ pub(crate) async fn create_assistant_agent_run_tx(
         if let sqlx::Error::Database(ref db_err) = err
             && db_err.code().as_deref() == Some("23503")
         {
-            return AssistantError::InvalidInput(
-                "assistant run references a missing conversation, project or message".to_owned(),
-            );
+            return AssistantError::InvalidInput(RUN_REFERENCE_MISSING.to_owned());
         }
         AssistantError::Database(err)
     })?;
@@ -297,6 +350,12 @@ pub struct ClaimedAssistantAgentRun {
 /// Takes a queued run (or takes over a running one after lease recovery)
 /// for execution. Terminal runs are never re-executed: the caller must ack
 /// the job without work.
+///
+/// Recovery never deletes events. The log is append-only per run with
+/// gap-free monotonic seqs starting at 0, so live SSE observers holding an
+/// `after_seq` stay valid across a redrive. When prior events exist, one
+/// `status` boundary row scopes the new attempt: everything after it belongs
+/// to the latest drive.
 pub async fn begin_assistant_agent_run(
     pool: &PgPool,
     run_id: Uuid,
@@ -321,19 +380,16 @@ pub async fn begin_assistant_agent_run(
     sqlx::query(
         "UPDATE assistant_agent_runs
          SET status='running', updated_at=now()
-         WHERE id=$1 AND status IN ('queued','running','suspended')",
+         WHERE id=$1 AND status IN ('queued','running')",
     )
     .bind(run_id)
     .execute(&mut *tx)
     .await?;
-    // Each attempt starts with a clean event log: a recovered lease
-    // re-drives the run from scratch, and retried observers must not see
-    // two attempts' tool events interleaved. Final answers and plans stay
-    // idempotent under their fixed ids.
-    sqlx::query("DELETE FROM assistant_run_events WHERE run_id=$1")
-        .bind(run_id)
-        .execute(&mut *tx)
-        .await?;
+    let next_seq: Option<i64> =
+        sqlx::query_scalar("SELECT MAX(seq) FROM assistant_run_events WHERE run_id=$1")
+            .bind(run_id)
+            .fetch_one(&mut *tx)
+            .await?;
     let history = sqlx::query(
         "SELECT id, conversation_id, role, content, tool_calls, tool_results, metadata, created_at
          FROM assistant_messages
@@ -364,6 +420,20 @@ pub async fn begin_assistant_agent_run(
         .ok_or_else(|| {
             AssistantError::InvalidInput("assistant run trigger message is missing".to_owned())
         })?;
+    if let Some(seq) = next_seq {
+        // A redrive continues the same monotonic log: mark where the new
+        // attempt starts so observers never mistake two attempts' tool
+        // events for one. Fresh runs (no prior events) need no marker.
+        sqlx::query(
+            "INSERT INTO assistant_run_events (run_id, seq, kind, payload)
+             VALUES ($1,$2,'status',$3)",
+        )
+        .bind(run_id)
+        .bind(seq + 1)
+        .bind(json!({"message": "Retrying after interruption"}))
+        .execute(&mut *tx)
+        .await?;
+    }
     tx.commit().await?;
     Ok(Some(ClaimedAssistantAgentRun {
         record,
@@ -449,25 +519,51 @@ async fn ensure_plan(
     Ok(())
 }
 
-/// Marks a running run failed with a machine-readable error. Terminal runs
-/// are left alone. No assistant message is appended on failure, matching the
-/// synchronous turn behavior.
+/// Marks a running run failed with a machine-readable error and records the
+/// matching `error` event in the same transaction. Runs that already settled
+/// (or are missing) are left alone and nothing is appended: a duplicate
+/// delivery after settlement must never add a bogus error event. No
+/// assistant message is appended on failure, matching the synchronous turn
+/// behavior.
 pub async fn fail_assistant_agent_run(
     pool: &PgPool,
     run_id: Uuid,
     error: &Value,
 ) -> Result<bool, AssistantError> {
-    let changed = sqlx::query(
+    let mut tx = pool.begin().await?;
+    let status: Option<String> =
+        sqlx::query_scalar("SELECT status FROM assistant_agent_runs WHERE id=$1 FOR UPDATE")
+            .bind(run_id)
+            .fetch_optional(&mut *tx)
+            .await?;
+    if status.as_deref() != Some("running") {
+        return Ok(false);
+    }
+    let seq: Option<i64> =
+        sqlx::query_scalar("SELECT MAX(seq) FROM assistant_run_events WHERE run_id=$1")
+            .bind(run_id)
+            .fetch_one(&mut *tx)
+            .await?;
+    sqlx::query(
+        "INSERT INTO assistant_run_events (run_id, seq, kind, payload)
+         VALUES ($1,$2,'error',$3)",
+    )
+    .bind(run_id)
+    .bind(seq.unwrap_or(-1) + 1)
+    .bind(error)
+    .execute(&mut *tx)
+    .await?;
+    sqlx::query(
         "UPDATE assistant_agent_runs
          SET status='failed', error=$2, updated_at=now(), completed_at=now()
-         WHERE id=$1 AND status='running'",
+         WHERE id=$1",
     )
     .bind(run_id)
     .bind(error)
-    .execute(pool)
-    .await?
-    .rows_affected();
-    Ok(changed > 0)
+    .execute(&mut *tx)
+    .await?;
+    tx.commit().await?;
+    Ok(true)
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -479,8 +575,14 @@ pub struct AssistantRunEventRecord {
     pub created_at: chrono::DateTime<chrono::Utc>,
 }
 
-/// Appends one run event with the next sequence number. The worker owns the
-/// job lease while appending, so it is the run's only writer.
+/// Appends one run event with the next sequence number.
+///
+/// Concurrency invariant: the claimed job lease serializes drivers, so at
+/// most one worker appends to a run at a time. `MAX(seq)+1` is allocated
+/// inside the insert transaction and `PRIMARY KEY (run_id, seq)` (migration
+/// 0057) rejects any concurrent duplicate: a raced append fails loudly and
+/// its driver stands down instead of interleaving seqs silently, while the
+/// surviving driver continues the same monotonic log.
 pub async fn append_assistant_run_event(
     pool: &PgPool,
     run_id: Uuid,

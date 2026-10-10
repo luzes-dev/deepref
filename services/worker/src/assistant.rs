@@ -7,8 +7,9 @@
 //!
 //! Retry safety: terminal runs are never re-executed, the final message and
 //! plan are written idempotently under fixed ids, and a recovered lease
-//! re-drives a `running` run from a clean event log. Provider failures
-//! requeue; budget exhaustion and malformed runs fail closed.
+//! re-drives a `running` run by continuing its append-only event log.
+//! Provider failures requeue; budget exhaustion and malformed runs fail
+//! closed.
 
 use std::{sync::Arc, time::Duration};
 
@@ -92,6 +93,14 @@ pub async fn handle_assistant_agent_run_with(
     {
         return Ok(DeliveryAction::Terminate);
     }
+    // Terminal check first: a duplicate delivery after settlement acks
+    // without appending anything. The attempts-exhausted fail runs after it
+    // so a terminal redelivery never gains a bogus error event, and so the
+    // run is already `running` when the fail flip applies (failing a merely
+    // queued run would append an event while stranding its status).
+    let Some(claimed) = begin_assistant_agent_run(pool, payload.assistant_run_id).await? else {
+        return Ok(DeliveryAction::Ack);
+    };
     // Attempts exhausted: fail the run closed instead of retrying forever.
     if job.attempts >= job.max_attempts {
         fail_run(
@@ -103,10 +112,6 @@ pub async fn handle_assistant_agent_run_with(
         .await?;
         return Ok(DeliveryAction::Terminate);
     }
-    let Some(claimed) = begin_assistant_agent_run(pool, payload.assistant_run_id).await? else {
-        // Already terminal (a duplicate delivery after completion): ack.
-        return Ok(DeliveryAction::Ack);
-    };
     let outcome = drive_assistant_run(pool, job, &claimed, services).await;
     match outcome {
         Ok(()) => Ok(DeliveryAction::Ack),
@@ -276,20 +281,15 @@ fn retryable(error: &AiError) -> bool {
 }
 
 async fn fail_run(pool: &PgPool, run_id: Uuid, code: &str, message: &str) -> anyhow::Result<()> {
-    persist_event_row(
-        pool,
-        run_id,
-        "error",
-        &json!({"code": code, "message": message}),
-    )
-    .await
-    .map_err(|error| anyhow::anyhow!("assistant failure bookkeeping failed: {error:?}"))?;
+    // One atomic transaction appends the `error` event and flips the run to
+    // failed, or appends nothing when the run already settled.
     deepref_postgres::fail_assistant_agent_run(
         pool,
         run_id,
         &json!({"code": code, "message": message}),
     )
-    .await?;
+    .await
+    .map_err(|error| anyhow::anyhow!("assistant failure bookkeeping failed: {error:?}"))?;
     Ok(())
 }
 
@@ -483,6 +483,12 @@ fn plan_record(
 
 /// Emits the plan observation event. The completion transaction performs
 /// the idempotent message and plan inserts afterwards.
+///
+/// The event deliberately precedes the commit: the `done` event must exist
+/// before the run flips terminal or observers can see a terminal status with
+/// no `done` row and end the stream early. The HTTP `plan` frame therefore
+/// retries its plan lookup briefly until that commit lands instead of
+/// resolving to Null on first delivery.
 async fn emit_plan_event(
     pool: &PgPool,
     run_id: Uuid,

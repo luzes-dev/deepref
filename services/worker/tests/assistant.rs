@@ -11,7 +11,10 @@ use std::{sync::Arc, time::Duration};
 
 use deepref_ai::{ModelParameters, ModelProfile, ResolvedModel, runtime::StaticModelFactory};
 use deepref_application::jobs::ClaimedJob;
-use deepref_postgres::{claim_job, migrate, submit_assistant_agent_run};
+use deepref_postgres::{
+    append_assistant_run_event, begin_assistant_agent_run, claim_job, get_assistant_plan,
+    list_assistant_run_events, migrate, submit_assistant_agent_run,
+};
 use deepref_worker::{
     assistant::{AssistantWorkerServices, handle_assistant_agent_run_with},
     delivery::DeliveryAction,
@@ -217,10 +220,24 @@ async fn duplicate_delivery_keeps_one_answer_and_one_plan() {
     let run_id = submit(&pool, project_id, conversation_id).await;
     let job = claim(&pool).await;
 
-    for _ in 0..2 {
-        let action = handle_assistant_agent_run_with(&pool, &job, &services(model.clone())).await;
-        assert!(matches!(action, Ok(DeliveryAction::Ack)), "{action:?}");
-    }
+    let action = handle_assistant_agent_run_with(&pool, &job, &services(model.clone())).await;
+    assert!(matches!(action, Ok(DeliveryAction::Ack)), "{action:?}");
+    let events: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM assistant_run_events WHERE run_id=$1")
+            .bind(run_id)
+            .fetch_one(&pool)
+            .await
+            .expect("event count");
+    // Terminal redelivery settles nothing and appends nothing.
+    let action = handle_assistant_agent_run_with(&pool, &job, &services(model)).await;
+    assert!(matches!(action, Ok(DeliveryAction::Ack)), "{action:?}");
+    let replayed: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM assistant_run_events WHERE run_id=$1")
+            .bind(run_id)
+            .fetch_one(&pool)
+            .await
+            .expect("event count");
+    assert_eq!(replayed, events, "terminal redelivery appends nothing");
 
     let messages: i64 = sqlx::query_scalar(
         "SELECT count(*) FROM assistant_messages WHERE conversation_id=$1 AND role='assistant'",
@@ -368,7 +385,7 @@ async fn recovered_lease_redrives_to_a_single_completion() {
     let action = handle_assistant_agent_run_with(&pool, &job, &services(failing)).await;
     assert!(matches!(action, Ok(DeliveryAction::Nak(_))), "{action:?}");
 
-    // Recovery re-drives the still-running run from a clean event log.
+    // Recovery re-drives the still-running run by continuing its event log.
     let action = handle_assistant_agent_run_with(&pool, &job, &services(model)).await;
     assert!(matches!(action, Ok(DeliveryAction::Ack)), "{action:?}");
 
@@ -385,6 +402,188 @@ async fn recovered_lease_redrives_to_a_single_completion() {
     .await
     .expect("message count");
     assert_eq!(messages, 1);
+
+    sqlx::query("DELETE FROM projects WHERE id=$1")
+        .bind(project_id)
+        .execute(&pool)
+        .await
+        .expect("cleanup");
+}
+
+#[tokio::test]
+async fn exhausted_redelivery_of_a_terminal_run_acks_without_an_error_event() {
+    let _guard = DATABASE_TEST_MUTEX.lock().await;
+    let Some(pool) = database().await else { return };
+    let (project_id, conversation_id) = project(&pool).await;
+    let model = MockCompletionModel::from_stream_turns(vec![stream_text("Done.")]);
+    let run_id = submit(&pool, project_id, conversation_id).await;
+    let job = claim(&pool).await;
+
+    let action = handle_assistant_agent_run_with(&pool, &job, &services(model.clone())).await;
+    assert!(matches!(action, Ok(DeliveryAction::Ack)), "{action:?}");
+    let events: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM assistant_run_events WHERE run_id=$1")
+            .bind(run_id)
+            .fetch_one(&pool)
+            .await
+            .expect("event count");
+
+    // The terminal check precedes the attempts-exhausted check: this acks
+    // (it does not terminate with a bogus `error` event).
+    let exhausted = ClaimedJob {
+        attempts: job.max_attempts,
+        ..job
+    };
+    let action = handle_assistant_agent_run_with(&pool, &exhausted, &services(model)).await;
+    assert!(
+        matches!(action, Ok(DeliveryAction::Ack)),
+        "terminal redelivery acks even when attempts are exhausted, got {action:?}"
+    );
+    let kinds: Vec<String> =
+        sqlx::query_scalar("SELECT kind FROM assistant_run_events WHERE run_id=$1 ORDER BY seq")
+            .bind(run_id)
+            .fetch_all(&pool)
+            .await
+            .expect("events load");
+    assert_eq!(kinds.len() as i64, events);
+    assert!(
+        !kinds.contains(&"error".to_owned()),
+        "terminal redelivery appends no error event, got {kinds:?}"
+    );
+    let run = run_record(&pool, run_id).await;
+    assert_eq!(
+        run.status,
+        deepref_postgres::AssistantAgentRunStatus::Completed
+    );
+
+    sqlx::query("DELETE FROM projects WHERE id=$1")
+        .bind(project_id)
+        .execute(&pool)
+        .await
+        .expect("cleanup");
+}
+
+#[tokio::test]
+async fn recovered_lease_preserves_prior_events_with_monotonic_seqs() {
+    let _guard = DATABASE_TEST_MUTEX.lock().await;
+    let Some(pool) = database().await else { return };
+    let (project_id, conversation_id) = project(&pool).await;
+    let run_id = submit(&pool, project_id, conversation_id).await;
+    let job = claim(&pool).await;
+
+    // Simulate a crashed first attempt's partial progress.
+    begin_assistant_agent_run(&pool, run_id)
+        .await
+        .expect("begin works")
+        .expect("run claimed");
+    append_assistant_run_event(&pool, run_id, "text", &json!({"delta": "partial "}))
+        .await
+        .expect("event appends");
+    append_assistant_run_event(
+        &pool,
+        run_id,
+        "tool_start",
+        &json!({"tool": "get_report", "tool_call_id": "c1", "args": {}}),
+    )
+    .await
+    .expect("event appends");
+
+    // Recovery continues the log and still completes exactly once.
+    let model = MockCompletionModel::from_stream_turns(vec![stream_text("Done.")]);
+    let action = handle_assistant_agent_run_with(&pool, &job, &services(model)).await;
+    assert!(matches!(action, Ok(DeliveryAction::Ack)), "{action:?}");
+
+    let events = list_assistant_run_events(&pool, run_id, -1, 100)
+        .await
+        .expect("events list");
+    assert_eq!(
+        events.iter().map(|event| event.seq).collect::<Vec<_>>(),
+        (0..events.len() as i64).collect::<Vec<_>>(),
+        "seqs stay gap-free monotonic across the redrive"
+    );
+    let kinds = events
+        .iter()
+        .map(|event| event.kind.as_str())
+        .collect::<Vec<_>>();
+    assert_eq!(kinds[0], "text", "first attempt's events are preserved");
+    assert_eq!(kinds[1], "tool_start");
+    assert_eq!(kinds[2], "status", "one boundary scopes the new attempt");
+    assert_eq!(
+        events[2].payload,
+        json!({"message": "Retrying after interruption"})
+    );
+    assert_eq!(kinds[kinds.len() - 1], "done");
+    let run = run_record(&pool, run_id).await;
+    assert_eq!(
+        run.status,
+        deepref_postgres::AssistantAgentRunStatus::Completed
+    );
+    let messages: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM assistant_messages WHERE conversation_id=$1 AND role='assistant'",
+    )
+    .bind(conversation_id)
+    .fetch_one(&pool)
+    .await
+    .expect("message count");
+    assert_eq!(messages, 1, "recovery still yields one answer");
+
+    sqlx::query("DELETE FROM projects WHERE id=$1")
+        .bind(project_id)
+        .execute(&pool)
+        .await
+        .expect("cleanup");
+}
+
+#[tokio::test]
+async fn plan_event_resolves_to_the_stored_plan() {
+    let _guard = DATABASE_TEST_MUTEX.lock().await;
+    let Some(pool) = database().await else { return };
+    let (project_id, conversation_id) = project(&pool).await;
+    let report_id = Uuid::new_v4();
+    let model = MockCompletionModel::from_stream_turns(vec![
+        stream_call(
+            "c1",
+            "screen_reports",
+            json!({
+                "report_ids": [report_id],
+                "decision": "exclude",
+                "summary": "Exclude 1 off-topic record",
+                "rationale": "Not about the review question",
+            }),
+        ),
+        stream_call(
+            "c2",
+            "request_protocol_publish",
+            json!({"summary": "Publish protocol", "rationale": "asked"}),
+        ),
+        stream_text("I prepared a plan; nothing has changed yet."),
+    ]);
+    let run_id = submit(&pool, project_id, conversation_id).await;
+    let job = claim(&pool).await;
+
+    let action = handle_assistant_agent_run_with(&pool, &job, &services(model)).await;
+    assert!(matches!(action, Ok(DeliveryAction::Ack)), "{action:?}");
+
+    // A plan-bearing run's `plan` event resolves to the committed plan row
+    // on first delivery (no Null plan frame).
+    let events = list_assistant_run_events(&pool, run_id, -1, 100)
+        .await
+        .expect("events list");
+    let plan_event = events
+        .iter()
+        .find(|event| event.kind == "plan")
+        .expect("run emits a plan event");
+    let plan_id: Uuid = plan_event
+        .payload
+        .get("plan_id")
+        .and_then(Value::as_str)
+        .and_then(|id| Uuid::parse_str(id).ok())
+        .expect("plan event carries a plan id");
+    let plan = get_assistant_plan(&pool, project_id, plan_id)
+        .await
+        .expect("plan loads")
+        .expect("plan row is present with the event");
+    assert_eq!(plan.actions.as_array().map(Vec::len), Some(2));
 
     sqlx::query("DELETE FROM projects WHERE id=$1")
         .bind(project_id)
