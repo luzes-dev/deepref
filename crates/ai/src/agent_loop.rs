@@ -30,7 +30,7 @@ pub const TOOL_PROJECT_OVERVIEW: &str = "get_project_overview";
 pub const TOOL_LIST_REPORTS: &str = "list_reports_by_screening_status";
 
 const MAX_TOOL_OUTPUT_CHARS: usize = 12_000;
-const MAX_ACTIONS_PER_PLAN: usize = 25;
+pub(crate) const MAX_ACTIONS_PER_PLAN: usize = 25;
 pub const MAX_REPORTS_PER_ACTION: usize = 200;
 
 /// Positive phrases that tell the user something was queued, planned or is
@@ -82,7 +82,7 @@ const NEGATIONS: &[&str] = &[
     "nothing", " not ", "n't", " no ", "never", "none", "nada", "n\u{e3}o", "nenhum",
 ];
 
-const NO_PLAN_CORRECTION: &str = "[System correction] Your last reply says something was queued, planned or is waiting for confirmation, but no change tool was called in this turn, so nothing is in a plan. Do not say that anything was queued. If the user wants a change, call the right change tool now. Otherwise reply again in the user's language and say plainly that nothing has been changed.";
+pub(crate) const NO_PLAN_CORRECTION: &str = "[System correction] Your last reply says something was queued, planned or is waiting for confirmation, but no change tool was called in this turn, so nothing is in a plan. Do not say that anything was queued. If the user wants a change, call the right change tool now. Otherwise reply again in the user's language and say plainly that nothing has been changed.";
 
 #[derive(Debug, Clone, Copy)]
 pub struct AgentLoopConfig {
@@ -153,7 +153,7 @@ pub fn is_read_tool(name: &str) -> bool {
         || AgentToolName::parse(name).is_some_and(AgentToolName::is_read)
 }
 
-fn is_write_tool(name: &str) -> bool {
+pub(crate) fn is_write_tool(name: &str) -> bool {
     name == TOOL_SCREEN_REPORTS
         || name == TOOL_FINAL_EXCLUSION
         || name == TOOL_PUBLISH_PROTOCOL
@@ -345,7 +345,7 @@ fn looks_portuguese(text: &str) -> bool {
     score(PORTUGUESE) > score(ENGLISH)
 }
 
-fn truncate_for_model(value: &Value) -> String {
+pub(crate) fn truncate_for_model(value: &Value) -> String {
     let text = value.to_string();
     if text.chars().count() <= MAX_TOOL_OUTPUT_CHARS {
         return text;
@@ -409,7 +409,7 @@ pub fn plan_action_is_executable(
 
 /// Validates and policy-checks one write tool call. Returns the action to add
 /// to the plan, or a message for the model when the call is rejected.
-fn plan_write_call(
+pub(crate) fn plan_write_call(
     project_id: ProjectId,
     actor: &Actor,
     call: &ChatToolCall,

@@ -10,7 +10,9 @@ deepref-domain.workspace = true
 futures.workspace = true
 jsonschema.workspace = true
 reqwest.workspace = true
-rig-core.workspace = true
+rig-agent.workspace = true
+rig-cassette.workspace = true
+rig-core = { workspace = true, features = ["reqwest"] }
 schemars.workspace = true
 serde = { workspace = true, features = ["derive"] }
 serde_json.workspace = true
@@ -23,6 +25,9 @@ uuid.workspace = true
 
 [lints]
 workspace = true
+
+[dev-dependencies]
+rig-core = { workspace = true, features = ["test-utils"] }
 
 [package.metadata.deepref]
 layer = "ai"
