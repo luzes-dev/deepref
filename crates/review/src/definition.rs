@@ -658,7 +658,7 @@ fn compile_definition(source: DefinitionSource) -> Result<CompiledReviewDefiniti
     let schema_asset = asset_identity(source.schema)?;
     let policy_asset = asset_identity(source.policy)?;
     let parser_asset = asset_identity(source.parser)?;
-    let declared_assets_hash = ReviewHash::digest_json(&DeclaredIdentity {
+    let declared_assets_hash = ReviewHash::digest_input(&DeclaredIdentity {
         definition_id: source.id,
         definition_version: source.version,
         key: source.key,

@@ -1,7 +1,7 @@
-//! Pure logic behind the two semantic fingerprints of `deepref-review`.
+//! Pure logic behind the two build-provenance digests of `deepref-review`.
 //!
 //! `crates/review/build.rs` includes this file to emit
-//! `DEEPREF_SEMANTIC_IMPLEMENTATION_SHA` and `DEEPREF_SEMANTIC_DEPENDENCY_SHA`.
+//! `DEEPREF_PROVENANCE_IMPLEMENTATION_SHA` and `DEEPREF_PROVENANCE_DEPENDENCY_SHA`.
 //! `crates/review/src/lib.rs` includes the same file under `#[cfg(test)]`, so
 //! the logic is unit-tested with the crate's own harness.
 //!
@@ -11,9 +11,15 @@
 //! give identical digests on any machine, at any checkout path, whatever order
 //! the filesystem lists directories in.
 //!
+//! These digests are forensic audit evidence: they record what exact software
+//! produced a run (`BuildProvenance`). They never gate calibration
+//! compatibility. No production calibration decision depends on repository
+//! path hashing; consequential behavior changes are tracked by explicit
+//! per-review semantic versions, with CI fixtures detecting a forgotten bump.
+//!
 //! # Implementation boundary
 //!
-//! `DEEPREF_SEMANTIC_IMPLEMENTATION_SHA` covers the checked-in assets and the
+//! `DEEPREF_PROVENANCE_IMPLEMENTATION_SHA` covers the checked-in assets and the
 //! Rust code that decides what a screening request contains, how the answer is
 //! read, and how a verdict is routed. [`IMPLEMENTATION_BOUNDARY`] is the list.
 //! [`EXCLUDED_PATHS`] and [`OUTSIDE_BOUNDARY`] say what is left out and why.
@@ -28,7 +34,7 @@
 //!   covered directory changes the digest. Files and directories listed as
 //!   excluded are never hashed.
 //! * Rust files have their `#[cfg(test)]` items removed before hashing, so
-//!   adding a unit test does not invalidate calibration. The removal is
+//!   adding a unit test does not change provenance. The removal is
 //!   conservative: when the item boundaries are not clear, the text is kept.
 //!
 //! Coupling the table cannot express, recorded for reviewers:
@@ -39,12 +45,12 @@
 //!   change is therefore safe only when it bumps the document parser version
 //!   that retrieval filters on (`active_parser_version`).
 //! * `processor.rs` and `nodes.rs` are included whole, so unrelated edits in
-//!   those files also change the digest. That over-invalidates, by design.
+//!   those files also change the digest.
 //!
 //! # Dependency boundary
 //!
-//! `DEEPREF_SEMANTIC_DEPENDENCY_SHA` covers the third-party crates that the
-//! boundary uses for semantics ([`SEMANTIC_DEPENDENCY_ROOTS`]), their transitive
+//! `DEEPREF_PROVENANCE_DEPENDENCY_SHA` covers the third-party crates that the
+//! boundary uses ([`SEMANTIC_DEPENDENCY_ROOTS`]), their transitive
 //! closure from `Cargo.lock` with transport, runtime and macro crates pruned
 //! ([`EXCLUDED_THIRD_PARTY`]), and the manifest lines that declare the roots.
 //! The lockfile does not record features, and some features change behaviour
@@ -98,7 +104,7 @@ pub(crate) enum Presence {
     Optional,
 }
 
-/// One entry of the semantic implementation boundary.
+/// One entry of the audited implementation boundary.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub(crate) struct BoundaryEntry {
     /// Workspace-relative path with `/` separators and no trailing slash.
@@ -118,7 +124,7 @@ pub(crate) struct Exclusion {
     pub(crate) reason: &'static str,
 }
 
-/// The semantic implementation boundary. Each entry says why it is included.
+/// The audited implementation boundary. Each entry says why it is included.
 pub(crate) const IMPLEMENTATION_BOUNDARY: &[BoundaryEntry] = &[
     BoundaryEntry {
         path: "review-definitions",
@@ -542,9 +548,9 @@ pub(crate) const BOUNDARY_PACKAGES: &[&str] = &[
 /// Both digests and the audit listings that build.rs writes to `OUT_DIR`.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) struct Fingerprints {
-    /// Hex SHA-256 for `DEEPREF_SEMANTIC_IMPLEMENTATION_SHA`.
+    /// Hex SHA-256 for `DEEPREF_PROVENANCE_IMPLEMENTATION_SHA`.
     pub(crate) implementation_sha: String,
-    /// Hex SHA-256 for `DEEPREF_SEMANTIC_DEPENDENCY_SHA`.
+    /// Hex SHA-256 for `DEEPREF_PROVENANCE_DEPENDENCY_SHA`.
     pub(crate) dependency_sha: String,
     /// Audit listing of the implementation boundary.
     pub(crate) implementation_report: String,
@@ -629,7 +635,7 @@ fn absent_or_fail(
 ) -> Result<()> {
     match entry.presence {
         Presence::Required => Err(FingerprintError::new(format!(
-            "semantic boundary path `{}` is missing. The build fails so the boundary table \
+            "provenance boundary path `{}` is missing. The build fails so the boundary table \
              cannot drift silently. Restore the path, or update IMPLEMENTATION_BOUNDARY in \
              crates/review/build_support/fingerprint.rs. Purpose: {}",
             entry.path, entry.reason
@@ -671,7 +677,7 @@ fn collect_directory(
         })?;
         if file_type.is_symlink() {
             return Err(FingerprintError::new(format!(
-                "symbolic link `{relative}/{name}` is not allowed inside the semantic boundary"
+                "symbolic link `{relative}/{name}` is not allowed inside the provenance boundary"
             )));
         }
         names.push((name, file_type.is_dir()));
@@ -740,14 +746,14 @@ fn implementation_report(
     absent: &[&str],
 ) -> String {
     let mut report = String::new();
-    let _ = writeln!(report, "# DeepRef semantic implementation boundary.");
+    let _ = writeln!(report, "# DeepRef implementation provenance boundary.");
     let _ = writeln!(
         report,
         "# Generated by crates/review/build.rs; boundary table: crates/review/build_support/fingerprint.rs."
     );
     let _ = writeln!(
         report,
-        "# DEEPREF_SEMANTIC_IMPLEMENTATION_SHA = SHA-256 over `path NUL contents NUL` for each file below, in path order."
+        "# DEEPREF_PROVENANCE_IMPLEMENTATION_SHA = SHA-256 over `path NUL contents NUL` for each file below, in path order."
     );
     let _ = writeln!(
         report,
@@ -869,14 +875,14 @@ fn dependency_report(
     declarations: &[String],
 ) -> String {
     let mut report = String::new();
-    let _ = writeln!(report, "# DeepRef semantic dependency closure.");
+    let _ = writeln!(report, "# DeepRef dependency provenance closure.");
     let _ = writeln!(
         report,
         "# Generated by crates/review/build.rs; roots and rules: crates/review/build_support/fingerprint.rs."
     );
     let _ = writeln!(
         report,
-        "# DEEPREF_SEMANTIC_DEPENDENCY_SHA covers the [closure] lines, then the [declarations] lines, each sorted."
+        "# DEEPREF_PROVENANCE_DEPENDENCY_SHA covers the [closure] lines, then the [declarations] lines, each sorted."
     );
     let _ = writeln!(report, "digest {sha}");
     let _ = writeln!(report, "[roots]");
@@ -1145,7 +1151,7 @@ pub(crate) fn parse_lockfile(text: &str) -> Result<Lockfile> {
         format.ok_or_else(|| FingerprintError::new("Cargo.lock has no top-level version line"))?;
     if format != 3 && format != 4 {
         return Err(FingerprintError::new(format!(
-            "Cargo.lock version {format} is not supported by the semantic dependency fingerprint \
+            "Cargo.lock version {format} is not supported by the dependency provenance digest \
              (versions 3 and 4 are). Update fingerprint.rs before relying on it."
         )));
     }
@@ -1350,7 +1356,7 @@ pub(crate) fn root_packages(
     for (name, _) in roots {
         if !declared.contains(name) {
             return Err(FingerprintError::new(format!(
-                "semantic dependency root `{name}` is not a direct dependency of any boundary \
+                "provenance dependency root `{name}` is not a direct dependency of any boundary \
                  crate. Remove it from SEMANTIC_DEPENDENCY_ROOTS or restore the dependency."
             )));
         }

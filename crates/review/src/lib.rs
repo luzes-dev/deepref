@@ -9,9 +9,12 @@ mod ai_first;
 mod contract;
 mod definition;
 mod execution;
+/// CI regression evidence: deterministic semantic fixtures with readable
+/// snapshots. Test-only on purpose — production calibration identity never
+/// reads golden fixtures.
+#[cfg(test)]
 mod golden;
 mod hash;
-mod identity;
 mod manifest;
 #[doc(hidden)]
 pub mod memory;
@@ -37,13 +40,7 @@ pub use contract::{
     SemanticHasher, WorkflowDigest, semantic_version_for,
 };
 pub(crate) use definition::{CompiledReviewDefinition, ReviewCatalog};
-pub use golden::screening_golden_fingerprints;
 pub(crate) use hash::ReviewHash;
-#[doc(hidden)]
-pub use identity::SEMANTIC_DEPENDENCIES;
-pub use identity::{
-    IdentityComparison, IdentityComponent, SEMANTIC_IDENTITY_SCHEME, SemanticIdentity,
-};
 pub(crate) use task::DefinedAiTask;
 pub use types::{
     CalibrationBundleId, ReviewBlockCode, ReviewDefinitionKey, ReviewError, ReviewFuture,

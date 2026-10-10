@@ -5,6 +5,17 @@ use sha2::{Digest, Sha256};
 
 use crate::ReviewError;
 
+/// Exact content and input identity: a persisted artifact, a manifest input, a
+/// node fingerprint, a run-dedupe key.
+///
+/// One byte changed means the digest changed, which is correct for
+/// content-addressing and reuse keys. This is never scientific identity:
+/// calibration compatibility is decided by [`crate::ReviewSemanticContract`],
+/// whose aggregate id does not use JSON at all. The serialization here is
+/// byte-stable (structs in declaration order, maps sorted by key), so Cargo
+/// features such as `serde_json/preserve_order` cannot change these digests;
+/// even if they did, the failure mode would be a cache miss, never a
+/// calibration invalidation.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(transparent)]
 pub struct ReviewHash(String);
@@ -33,7 +44,7 @@ impl ReviewHash {
         Self(encoded)
     }
 
-    pub(crate) fn digest_json<T: Serialize>(value: &T) -> Result<Self, ReviewError> {
+    pub(crate) fn digest_input<T: Serialize>(value: &T) -> Result<Self, ReviewError> {
         let bytes = serde_json::to_vec(value)
             .map_err(|error| ReviewError::InvalidHash(error.to_string()))?;
         Ok(Self::digest_bytes(bytes))

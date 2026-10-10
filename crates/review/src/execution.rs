@@ -138,7 +138,7 @@ impl PreparedReviewTask {
     }
 
     pub fn source_content_hash(&self) -> Result<ReviewHash, ReviewError> {
-        ReviewHash::digest_json(self)
+        ReviewHash::digest_input(self)
     }
 
     pub fn protocol_hash(&self) -> Result<ReviewHash, ReviewError> {
