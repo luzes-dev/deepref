@@ -76,6 +76,8 @@ dotenvy = "0.15.7"
 futures = "0.3.32"
 garde = { version = "0.23.0", features = ["derive"] }
 jsonschema = "0.58.6"
+rig-agent = "0.44.0"
+rig-cassette = { version = "0.44.0", features = ["agent"] }
 rig-core = "0.44.0"
 pgvector = { version = "0.4.0", features = ["sqlx"] }
 petgraph = "0.8.2"
