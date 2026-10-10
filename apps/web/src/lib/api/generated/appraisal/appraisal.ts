@@ -147,7 +147,7 @@ export const prefetchListAppraisalDefinitionsQuery = async <
 ): Promise<QueryClient> => {
 	const queryOptions = getListAppraisalDefinitionsQueryOptions(projectId, options);
 
-	await queryClient.prefetchQuery(queryOptions);
+	await queryClient.query(queryOptions).catch(() => {});
 
 	return queryClient;
 };
@@ -303,7 +303,7 @@ export const prefetchGetAppraisalDefinitionQuery = async <
 		options
 	);
 
-	await queryClient.prefetchQuery(queryOptions);
+	await queryClient.query(queryOptions).catch(() => {});
 
 	return queryClient;
 };
@@ -352,8 +352,19 @@ export const suggestAppraisalJudgments = async (
 	): Record<string, string | readonly string[]> => {
 		if (!h) return {};
 		if (h instanceof Headers) return Object.fromEntries(h.entries());
-		if (Array.isArray(h)) return Object.fromEntries(h);
-		return h;
+		if (Symbol.iterator in h) {
+			return Object.fromEntries(
+				Array.from(
+					h as Iterable<Iterable<string>>,
+					(entry) => Array.from(entry) as [string, string]
+				)
+			);
+		}
+		const headers: Record<string, string | readonly string[]> = {};
+		for (const [name, value] of Object.entries<string | readonly string[] | undefined>(h)) {
+			if (value !== undefined) headers[name] = value;
+		}
+		return headers;
 	};
 	return customFetch<suggestAppraisalJudgmentsResponseSuccess>(
 		getSuggestAppraisalJudgmentsUrl(projectId, definitionId, version),
@@ -365,6 +376,8 @@ export const suggestAppraisalJudgments = async (
 		}
 	);
 };
+
+export const getSuggestAppraisalJudgmentsMutationKey = () => ['suggestAppraisalJudgments'] as const;
 
 export const getSuggestAppraisalJudgmentsMutationOptions = <
 	TError = ErrorType<ApiErrorBody>,
@@ -383,7 +396,7 @@ export const getSuggestAppraisalJudgmentsMutationOptions = <
 	SuggestAppraisalJudgmentsMutationVariables,
 	TContext
 > => {
-	const mutationKey = ['suggestAppraisalJudgments'];
+	const mutationKey = getSuggestAppraisalJudgmentsMutationKey();
 	const { mutation: mutationOptions, request: requestOptions } = options
 		? options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey
 			? options
@@ -562,7 +575,7 @@ export const prefetchListReportAppraisalsQuery = async <
 ): Promise<QueryClient> => {
 	const queryOptions = getListReportAppraisalsQueryOptions(projectId, reportId, options);
 
-	await queryClient.prefetchQuery(queryOptions);
+	await queryClient.query(queryOptions).catch(() => {});
 
 	return queryClient;
 };
@@ -613,8 +626,19 @@ export const completeReportAppraisal = async (
 	): Record<string, string | readonly string[]> => {
 		if (!h) return {};
 		if (h instanceof Headers) return Object.fromEntries(h.entries());
-		if (Array.isArray(h)) return Object.fromEntries(h);
-		return h;
+		if (Symbol.iterator in h) {
+			return Object.fromEntries(
+				Array.from(
+					h as Iterable<Iterable<string>>,
+					(entry) => Array.from(entry) as [string, string]
+				)
+			);
+		}
+		const headers: Record<string, string | readonly string[]> = {};
+		for (const [name, value] of Object.entries<string | readonly string[] | undefined>(h)) {
+			if (value !== undefined) headers[name] = value;
+		}
+		return headers;
 	};
 	return customFetch<completeReportAppraisalResponseSuccess>(
 		getCompleteReportAppraisalUrl(projectId, reportId),
@@ -626,6 +650,8 @@ export const completeReportAppraisal = async (
 		}
 	);
 };
+
+export const getCompleteReportAppraisalMutationKey = () => ['completeReportAppraisal'] as const;
 
 export const getCompleteReportAppraisalMutationOptions = <
 	TError = ErrorType<ApiErrorBody>,
@@ -644,7 +670,7 @@ export const getCompleteReportAppraisalMutationOptions = <
 	CompleteReportAppraisalMutationVariables,
 	TContext
 > => {
-	const mutationKey = ['completeReportAppraisal'];
+	const mutationKey = getCompleteReportAppraisalMutationKey();
 	const { mutation: mutationOptions, request: requestOptions } = options
 		? options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey
 			? options

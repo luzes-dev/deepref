@@ -3,7 +3,7 @@
 	import { Button } from '@deepref/ui/button';
 	import { CopyButton } from '@deepref/ui/copy-button';
 	import { Skeleton } from '@deepref/ui/skeleton';
-	import { createGetProjectReport } from '$lib/api/generated/reports/reports';
+	import { createGetProjectReport } from '#lib/api/generated/reports/reports.js';
 	import { StatePanel } from '@deepref/ui/layout';
 	import CircleAlertIcon from '@lucide/svelte/icons/circle-alert';
 	import PanelRightCloseIcon from '@lucide/svelte/icons/panel-right-close';

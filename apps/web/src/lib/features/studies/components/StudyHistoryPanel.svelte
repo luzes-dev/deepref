@@ -1,5 +1,5 @@
 <script lang="ts">
-	import type { StudyEventDto } from '$lib/api/generated/models';
+	import type { StudyEventDto } from '#lib/api/generated/models/index.js';
 	import { Surface, StatePanel } from '@deepref/ui/layout';
 	import { Badge } from '@deepref/ui/badge';
 

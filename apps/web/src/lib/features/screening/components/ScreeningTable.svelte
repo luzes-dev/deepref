@@ -1,14 +1,19 @@
 <script lang="ts">
-	import type { ScreeningQueueItemDto } from '$lib/api/generated/models';
+	import type { ScreeningQueueItemDto } from '#lib/api/generated/models/index.js';
 	import { createVirtualizer } from '@tanstack/svelte-virtual';
-	import { getCoreRowModel, type ColumnDef, type RowData } from '@tanstack/table-core';
+	import {
+		createTable,
+		tableFeatures,
+		type ColumnDef,
+		type RowData
+	} from '@tanstack/svelte-table';
 	import { Button } from '@deepref/ui/button';
-	import { createSvelteTable } from '@deepref/ui/data-table';
 	import { Badge } from '@deepref/ui/badge';
 	import { get } from 'svelte/store';
 	import { FileText, LoaderCircle } from '@lucide/svelte';
 
 	type Row = ScreeningQueueItemDto & RowData;
+	const screeningTableFeatures = tableFeatures({});
 
 	let {
 		items,
@@ -28,7 +33,7 @@
 		onLoadMore: () => void | Promise<void>;
 	} = $props();
 
-	const columns: ColumnDef<Row>[] = [
+	const columns: ColumnDef<typeof screeningTableFeatures, Row>[] = [
 		{
 			accessorKey: 'title',
 			header: 'Report'
@@ -43,17 +48,17 @@
 		}
 	];
 
-	const table = createSvelteTable<Row>({
+	const table = createTable({
+		features: screeningTableFeatures,
 		get data() {
 			return items as Row[];
 		},
-		columns,
-		getCoreRowModel: getCoreRowModel()
+		columns
 	});
 
 	let scrollElement: HTMLDivElement | null = $state(null);
 	const virtualizer = createVirtualizer({
-		count: items.length,
+		count: 0,
 		getScrollElement: () => scrollElement,
 		estimateSize: () => 56,
 		overscan: 8

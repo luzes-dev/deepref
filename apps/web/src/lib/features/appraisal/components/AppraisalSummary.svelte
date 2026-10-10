@@ -1,5 +1,8 @@
 <script lang="ts">
-	import type { AppraisalAssessmentDto, AppraisalDefinitionDto } from '$lib/api/generated/models';
+	import type {
+		AppraisalAssessmentDto,
+		AppraisalDefinitionDto
+	} from '#lib/api/generated/models/index.js';
 	import { Button } from '@deepref/ui/button';
 	import { CheckCircle2 } from '@lucide/svelte';
 	import { responseLabel } from '../renderer';

@@ -1,15 +1,15 @@
 <script lang="ts">
 	import './layout.css';
-	import favicon from '$lib/assets/favicon.svg';
+	import favicon from '#lib/assets/favicon.svg';
 	import { Toaster } from '@deepref/ui/sonner';
-	import { createAppQueryClient } from '$lib/api/query-client';
+	import { createAppQueryClient } from '#lib/api/query-client.js';
 	import { PageFrame } from '@deepref/ui/layout';
-	import { routeMetaForPathname } from '$lib/routes';
+	import { routeMetaForPathname } from '#lib/routes.js';
 	import { page } from '$app/state';
 	import { ModeWatcher } from 'mode-watcher';
 	import { QueryClientProvider } from '@tanstack/svelte-query';
-	import NotificationsWatcher from '$lib/features/notifications/NotificationsWatcher.svelte';
-	import SettingsDialog from '$lib/features/settings/SettingsDialog.svelte';
+	import NotificationsWatcher from '#lib/features/notifications/NotificationsWatcher.svelte';
+	import SettingsDialog from '#lib/features/settings/SettingsDialog.svelte';
 
 	let { children } = $props();
 	const queryClient = createAppQueryClient();

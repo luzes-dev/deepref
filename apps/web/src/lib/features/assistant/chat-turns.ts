@@ -1,4 +1,4 @@
-import type { AssistantChatStreamEvent } from '$lib/api/assistant-stream';
+import type { AssistantChatStreamEvent } from '#lib/api/assistant-stream.js';
 import { isAssistantPlan, type AssistantMessageRecord, type AssistantPlan } from './chat-api';
 
 /** The sentence the server stores after a stopped answer. Keep the two in step. */

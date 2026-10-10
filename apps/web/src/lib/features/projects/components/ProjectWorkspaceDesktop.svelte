@@ -3,7 +3,7 @@
 	import { page } from '$app/state';
 	import * as Resizable from '@deepref/ui/resizable';
 	import type { PaneAPI } from 'paneforge';
-	import TopNavBar from '$lib/shell/TopNavBar.svelte';
+	import TopNavBar from '#lib/shell/TopNavBar.svelte';
 	import ArticleInspector from './ArticleInspector.svelte';
 	import {
 		PROJECT_WORKSPACE_INSPECTOR_LAYOUT_ID,

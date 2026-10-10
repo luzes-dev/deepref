@@ -3,7 +3,7 @@ import type {
 	AppraisalJudgmentSchemaDto,
 	DomainJudgmentSuggestionDto,
 	JudgmentSuggestionDto
-} from '$lib/api/generated/models';
+} from '#lib/api/generated/models/index.js';
 
 /** Key used for the overall judgment in override reasons. Matches the API. */
 export const OVERALL_TARGET = 'overall';

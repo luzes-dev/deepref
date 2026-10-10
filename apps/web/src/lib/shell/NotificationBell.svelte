@@ -10,21 +10,21 @@
 	import { Button } from '@deepref/ui/button';
 	import { Spinner } from '@deepref/ui/spinner';
 	import { cn } from '@deepref/ui/utils';
-	import type { NotificationDto } from '$lib/api/generated/models';
+	import type { NotificationDto } from '#lib/api/generated/models/index.js';
 	import {
 		createGetUnreadNotificationCount,
 		createMarkNotificationsRead,
 		getGetUnreadNotificationCountQueryKey,
 		listNotifications
-	} from '$lib/api/generated/notifications/notifications';
+	} from '#lib/api/generated/notifications/notifications.js';
 	import {
 		notificationHref,
 		plainNotificationText
-	} from '$lib/features/notifications/notification-copy';
+	} from '#lib/features/notifications/notification-copy.js';
 	import {
 		relativeTime,
 		setNotificationPanelOpen
-	} from '$lib/features/notifications/state.svelte';
+	} from '#lib/features/notifications/state.svelte.js';
 
 	let { projectId = null }: { projectId?: string | null } = $props();
 

@@ -6,20 +6,20 @@
 	import * as ToggleGroup from '@deepref/ui/toggle-group';
 	import PaginationLoadMore from '@deepref/ui/pagination-load-more';
 	import { StatePanel } from '@deepref/ui/layout';
-	import { ApiError } from '$lib/api/custom-fetch';
-	import { shouldPollIngestion } from '$lib/api/helpers';
+	import { ApiError } from '#lib/api/custom-fetch.js';
+	import { shouldPollIngestion } from '#lib/api/helpers.js';
 	import {
 		getListAcquisitionsQueryKey,
 		listAcquisitions,
 		refreshAcquisition
-	} from '$lib/api/generated/acquisitions/acquisitions';
-	import type { AcquisitionDto, IngestionDto } from '$lib/api/generated/models';
-	import { getListIngestionsQueryKey } from '$lib/api/generated/ingestions/ingestions';
-	import { createGetProjectPrisma } from '$lib/api/generated/review/review';
+	} from '#lib/api/generated/acquisitions/acquisitions.js';
+	import type { AcquisitionDto, IngestionDto } from '#lib/api/generated/models/index.js';
+	import { getListIngestionsQueryKey } from '#lib/api/generated/ingestions/ingestions.js';
+	import { createGetProjectPrisma } from '#lib/api/generated/review/review.js';
 	import { resolve } from '$app/paths';
 	import { createInfiniteQuery, useQueryClient } from '@tanstack/svelte-query';
 	import RefreshCwIcon from '@lucide/svelte/icons/refresh-cw';
-	import PageTemplate from '$lib/shell/PageTemplate.svelte';
+	import PageTemplate from '#lib/shell/PageTemplate.svelte';
 	import { useProjectWorkspaceContext } from '../context.svelte.js';
 	import { importRunFormatLabel, runStatusDisplay } from '../imports';
 	import ImportDoiForm from './ImportDoiForm.svelte';

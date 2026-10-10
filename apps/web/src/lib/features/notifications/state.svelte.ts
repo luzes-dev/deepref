@@ -1,4 +1,4 @@
-import type { NotificationDto } from '$lib/api/generated/models';
+import type { NotificationDto } from '#lib/api/generated/models/index.js';
 
 const STORAGE_KEY = 'deepref:notifications:last-seen-revision';
 const ARRIVAL_WINDOW_MS = 10 * 60 * 1000;

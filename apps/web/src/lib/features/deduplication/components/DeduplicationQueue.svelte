@@ -4,15 +4,15 @@
 		createListProjectDedupeProposals,
 		createRunProjectDeduplication,
 		getListProjectDedupeProposalsQueryKey
-	} from '$lib/api/generated/deduplication/deduplication';
-	import { getGetProjectPrismaQueryKey } from '$lib/api/generated/review/review';
-	import { getListProjectReportsQueryKey } from '$lib/api/generated/reports/reports';
+	} from '#lib/api/generated/deduplication/deduplication.js';
+	import { getGetProjectPrismaQueryKey } from '#lib/api/generated/review/review.js';
+	import { getListProjectReportsQueryKey } from '#lib/api/generated/reports/reports.js';
 	import type {
 		DedupeProposalDto,
 		DedupeRunDto,
 		ProposalDecisionInput,
 		RunDeduplicationRequest
-	} from '$lib/api/generated/models';
+	} from '#lib/api/generated/models/index.js';
 	import * as Alert from '@deepref/ui/alert';
 	import { Badge } from '@deepref/ui/badge';
 	import { Button } from '@deepref/ui/button';
@@ -25,15 +25,15 @@
 		formatDedupeRunSummary,
 		formatDedupeScore,
 		formatDedupeYear
-	} from '$lib/features/deduplication/formatters';
+	} from '#lib/features/deduplication/formatters.js';
 	import { useQueryClient } from '@tanstack/svelte-query';
-	import AiProposalReview from '$lib/features/ai-assistance/components/AiProposalReview.svelte';
-	import { notifyError, notifySuccess } from '$lib/features/notifications/toast';
+	import AiProposalReview from '#lib/features/ai-assistance/components/AiProposalReview.svelte';
+	import { notifyError, notifySuccess } from '#lib/features/notifications/toast.js';
 	import CheckIcon from '@lucide/svelte/icons/check';
 	import PlusIcon from '@lucide/svelte/icons/plus';
 	import RefreshCwIcon from '@lucide/svelte/icons/refresh-cw';
 	import XIcon from '@lucide/svelte/icons/x';
-	import PageTemplate from '$lib/shell/PageTemplate.svelte';
+	import PageTemplate from '#lib/shell/PageTemplate.svelte';
 
 	function identifierLabels(identifiers: unknown): string[] {
 		if (!Array.isArray(identifiers)) return [];

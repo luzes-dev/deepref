@@ -4,9 +4,9 @@
 	import {
 		createListDocumentBlocks,
 		createListReportDocuments
-	} from '$lib/api/generated/documents/documents';
-	import { fullTextUrlString } from '$lib/features/full-text/url';
-	import EvidenceLabel from '$lib/features/evidence/EvidenceLabel.svelte';
+	} from '#lib/api/generated/documents/documents.js';
+	import { fullTextUrlString } from '#lib/features/full-text/url.js';
+	import EvidenceLabel from '#lib/features/evidence/EvidenceLabel.svelte';
 	import CitationLabel from './CitationLabel.svelte';
 	import { goto } from '$app/navigation';
 	import { resolve } from '$app/paths';
@@ -16,7 +16,7 @@
 		createGenerateDataExtractionSuggestion,
 		createGetAiStatus,
 		createListAiProposals
-	} from '$lib/api/generated/ai/ai';
+	} from '#lib/api/generated/ai/ai.js';
 	import {
 		createClearExtractionValue,
 		createConfirmExtractionValue,
@@ -27,28 +27,32 @@
 		createListStudyExtractionValues,
 		getListExtractionFieldsQueryKey,
 		getListStudyExtractionValuesQueryKey
-	} from '$lib/api/generated/extraction/extraction';
-	import { ApiError } from '$lib/api/custom-fetch';
-	import { notifyError, notifySuccess, notifyWarning } from '$lib/features/notifications/toast';
+	} from '#lib/api/generated/extraction/extraction.js';
+	import { ApiError } from '#lib/api/custom-fetch.js';
+	import {
+		notifyError,
+		notifySuccess,
+		notifyWarning
+	} from '#lib/features/notifications/toast.js';
 	import {
 		createGetProjectStudy,
 		createListProjectStudies
-	} from '$lib/api/generated/studies/studies';
+	} from '#lib/api/generated/studies/studies.js';
 	import type {
 		AiExtractedFieldDto,
 		AiProposalDto,
 		AiReviewedProposalPayload,
 		CreateExtractionFieldRequest,
 		ExtractionValueDto
-	} from '$lib/api/generated/models';
+	} from '#lib/api/generated/models/index.js';
 	import { useQueryClient } from '@tanstack/svelte-query';
 	import { StatePanel, Surface } from '@deepref/ui/layout';
-	import PageTemplate from '$lib/shell/PageTemplate.svelte';
+	import PageTemplate from '#lib/shell/PageTemplate.svelte';
 	import * as Alert from '@deepref/ui/alert';
 	import { Badge } from '@deepref/ui/badge';
 	import { Button } from '@deepref/ui/button';
 	import { Checkbox } from '@deepref/ui/checkbox';
-	import type { ExtractionFieldDto } from '$lib/api/generated/models';
+	import type { ExtractionFieldDto } from '#lib/api/generated/models/index.js';
 	import * as Field from '@deepref/ui/field';
 	import { Input } from '@deepref/ui/input';
 	import * as Select from '@deepref/ui/select';
@@ -66,7 +70,7 @@
 		X
 	} from '@lucide/svelte';
 	import { Skeleton } from '@deepref/ui/skeleton';
-	import { ReviewRunObserver } from '$lib/features/ai-assistance/review-run-observer.svelte';
+	import { ReviewRunObserver } from '#lib/features/ai-assistance/review-run-observer.svelte.js';
 	import {
 		buildExtractionEvidenceSearch,
 		deriveFieldKey,
@@ -89,7 +93,9 @@
 
 	let { projectId }: { projectId: string } = $props();
 	const queryClient = useQueryClient();
-	const location = $derived(parseExtractionLocation(page.url.searchParams));
+	const location = $derived(
+		parseExtractionLocation(new URLSearchParams(page.url.searchParams.toString()))
+	);
 	const selectedStudyId = $derived(location.studyId);
 
 	const studiesQuery = createListProjectStudies(
@@ -245,10 +251,13 @@
 	}
 
 	async function selectStudy(studyId: string, replaceState = false): Promise<void> {
-		const search = updateExtractionLocation(page.url.searchParams, { studyId });
+		const search = updateExtractionLocation(
+			new URLSearchParams(page.url.searchParams.toString()),
+			{ studyId }
+		);
 		let href: string = resolve('/projects/[projectId]/extraction', { projectId });
 		href += search.toString() ? `?${search.toString()}` : '';
-		await goto(href, { keepFocus: true, noScroll: true, replaceState });
+		await goto(href, { reset: false, replace: replaceState });
 	}
 
 	let view = $state<'data' | 'fields'>('data');
@@ -589,6 +598,7 @@
 				return /^\d{4}-\d{2}-\d{2}$/.test(text)
 					? { kind: 'date', value: text }
 					: 'Enter a valid date.';
+
 			default:
 				return 'This field type cannot be edited here.';
 		}
@@ -870,12 +880,15 @@
 				size="sm"
 				aria-pressed={view === 'fields'}
 				onclick={() => (view = view === 'fields' ? 'data' : 'fields')}
-				>{#if view === 'fields'}<ArrowLeft data-icon="inline-start" />Back to data{:else}<Settings2
-						data-icon="inline-start"
-					/>Fields
-					<span class="text-muted-foreground tabular-nums">{fields.length}</span
-					>{/if}</Button
 			>
+				{#if view === 'fields'}
+					<ArrowLeft data-icon="inline-start" />Back to data
+				{:else}
+					<Settings2 data-icon="inline-start" />
+					Fields
+					<span class="text-muted-foreground tabular-nums">{fields.length}</span>
+				{/if}
+			</Button>
 		</div>
 		{#if providerUnavailable && view === 'data'}
 			<p
@@ -981,10 +994,8 @@
 										type="button"
 										variant="ghost"
 										size="sm"
-										onclick={() => (editingDefinitionId = null)}
+										onclick={() => (editingDefinitionId = null)}>Cancel</Button
 									>
-										Cancel
-									</Button>
 								</div>
 							</form>
 						{:else}
@@ -1299,7 +1310,7 @@
 										<a
 											class="text-xs text-primary underline underline-offset-4"
 											href={resolve(
-												`/projects/${encodeURIComponent(projectId)}/screening/full-text${buildExtractionEvidenceSearch(
+												`projects/${encodeURIComponent(projectId)}/screening/full-text${buildExtractionEvidenceSearch(
 													{
 														report_id: value.report_id,
 														document_id: value.source_document_id,
@@ -1545,7 +1556,7 @@
 												class="mt-2 block text-primary underline underline-offset-4"
 												data-testid="extraction-evidence-link"
 												href={resolve(
-													`/projects/${encodeURIComponent(projectId)}/screening/full-text${buildExtractionEvidenceSearch(draft.source)}`
+													`projects/${encodeURIComponent(projectId)}/screening/full-text${buildExtractionEvidenceSearch(draft.source)}`
 												)}
 											>
 												<CitationLabel
@@ -1696,9 +1707,17 @@
 						<a
 							class="text-xs text-primary underline"
 							href={resolve(
-								`/projects/${encodeURIComponent(projectId)}/screening/full-text${fullTextUrlString({ filter: 'all', report: sourceReportId, block: block.id, page: block.page_number })}`
+								`projects/${encodeURIComponent(projectId)}/screening/full-text${fullTextUrlString(
+									{
+										filter: 'all',
+										report: sourceReportId,
+										block: block.id,
+										page: block.page_number
+									}
+								)}`
 							)}>Page {block.page_number}</a
 						>
+
 						{#if editingFieldId}
 							<button
 								type="button"

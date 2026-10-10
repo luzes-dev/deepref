@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { QueryClient, QueryClientProvider } from '@tanstack/svelte-query';
 	import type { Snippet } from 'svelte';
-	import NotificationBell from '$lib/shell/NotificationBell.svelte';
+	import NotificationBell from '#lib/shell/NotificationBell.svelte';
 
 	let {
 		children,

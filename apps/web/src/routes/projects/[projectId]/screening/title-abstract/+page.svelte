@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { page } from '$app/state';
-	import ScreeningViewSwitch from '$lib/features/ai-autonomy/components/ScreeningViewSwitch.svelte';
-	import ScreeningFocus from '$lib/features/screening/components/ScreeningFocus.svelte';
+	import ScreeningViewSwitch from '#lib/features/ai-autonomy/components/ScreeningViewSwitch.svelte';
+	import ScreeningFocus from '#lib/features/screening/components/ScreeningFocus.svelte';
 
 	const projectId = $derived(page.params.projectId ?? '');
 </script>

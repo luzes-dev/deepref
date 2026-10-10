@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { PrismaDto } from '$lib/api/generated/models';
+import type { PrismaDto } from '#lib/api/generated/models/index.js';
 import { nextStage, reviewStages } from './review-progress';
 
 function prisma(overrides: Partial<PrismaDto> = {}): PrismaDto {

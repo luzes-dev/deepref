@@ -143,7 +143,7 @@ export const prefetchListExtractionFieldsQuery = async <
 ): Promise<QueryClient> => {
 	const queryOptions = getListExtractionFieldsQueryOptions(projectId, options);
 
-	await queryClient.prefetchQuery(queryOptions);
+	await queryClient.query(queryOptions).catch(() => {});
 
 	return queryClient;
 };
@@ -199,8 +199,19 @@ export const createExtractionField = async (
 	): Record<string, string | readonly string[]> => {
 		if (!h) return {};
 		if (h instanceof Headers) return Object.fromEntries(h.entries());
-		if (Array.isArray(h)) return Object.fromEntries(h);
-		return h;
+		if (Symbol.iterator in h) {
+			return Object.fromEntries(
+				Array.from(
+					h as Iterable<Iterable<string>>,
+					(entry) => Array.from(entry) as [string, string]
+				)
+			);
+		}
+		const headers: Record<string, string | readonly string[]> = {};
+		for (const [name, value] of Object.entries<string | readonly string[] | undefined>(h)) {
+			if (value !== undefined) headers[name] = value;
+		}
+		return headers;
 	};
 	return customFetch<createExtractionFieldResponseSuccess>(
 		getCreateExtractionFieldUrl(projectId),
@@ -212,6 +223,8 @@ export const createExtractionField = async (
 		}
 	);
 };
+
+export const getCreateExtractionFieldMutationKey = () => ['createExtractionField'] as const;
 
 export const getCreateExtractionFieldMutationOptions = <
 	TError = ErrorType<ApiErrorBody>,
@@ -230,7 +243,7 @@ export const getCreateExtractionFieldMutationOptions = <
 	CreateExtractionFieldMutationVariables,
 	TContext
 > => {
-	const mutationKey = ['createExtractionField'];
+	const mutationKey = getCreateExtractionFieldMutationKey();
 	const { mutation: mutationOptions, request: requestOptions } = options
 		? options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey
 			? options
@@ -333,8 +346,19 @@ export const updateExtractionField = async (
 	): Record<string, string | readonly string[]> => {
 		if (!h) return {};
 		if (h instanceof Headers) return Object.fromEntries(h.entries());
-		if (Array.isArray(h)) return Object.fromEntries(h);
-		return h;
+		if (Symbol.iterator in h) {
+			return Object.fromEntries(
+				Array.from(
+					h as Iterable<Iterable<string>>,
+					(entry) => Array.from(entry) as [string, string]
+				)
+			);
+		}
+		const headers: Record<string, string | readonly string[]> = {};
+		for (const [name, value] of Object.entries<string | readonly string[] | undefined>(h)) {
+			if (value !== undefined) headers[name] = value;
+		}
+		return headers;
 	};
 	return customFetch<updateExtractionFieldResponseSuccess>(
 		getUpdateExtractionFieldUrl(projectId, fieldId),
@@ -346,6 +370,8 @@ export const updateExtractionField = async (
 		}
 	);
 };
+
+export const getUpdateExtractionFieldMutationKey = () => ['updateExtractionField'] as const;
 
 export const getUpdateExtractionFieldMutationOptions = <
 	TError = ErrorType<ApiErrorBody>,
@@ -364,7 +390,7 @@ export const getUpdateExtractionFieldMutationOptions = <
 	UpdateExtractionFieldMutationVariables,
 	TContext
 > => {
-	const mutationKey = ['updateExtractionField'];
+	const mutationKey = getUpdateExtractionFieldMutationKey();
 	const { mutation: mutationOptions, request: requestOptions } = options
 		? options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey
 			? options
@@ -545,7 +571,7 @@ export const prefetchListStudyExtractionValuesQuery = async <
 ): Promise<QueryClient> => {
 	const queryOptions = getListStudyExtractionValuesQueryOptions(projectId, studyId, options);
 
-	await queryClient.prefetchQuery(queryOptions);
+	await queryClient.query(queryOptions).catch(() => {});
 
 	return queryClient;
 };
@@ -607,8 +633,19 @@ export const recordExtractionValue = async (
 	): Record<string, string | readonly string[]> => {
 		if (!h) return {};
 		if (h instanceof Headers) return Object.fromEntries(h.entries());
-		if (Array.isArray(h)) return Object.fromEntries(h);
-		return h;
+		if (Symbol.iterator in h) {
+			return Object.fromEntries(
+				Array.from(
+					h as Iterable<Iterable<string>>,
+					(entry) => Array.from(entry) as [string, string]
+				)
+			);
+		}
+		const headers: Record<string, string | readonly string[]> = {};
+		for (const [name, value] of Object.entries<string | readonly string[] | undefined>(h)) {
+			if (value !== undefined) headers[name] = value;
+		}
+		return headers;
 	};
 	return customFetch<recordExtractionValueResponseSuccess>(
 		getRecordExtractionValueUrl(projectId, studyId, fieldId),
@@ -620,6 +657,8 @@ export const recordExtractionValue = async (
 		}
 	);
 };
+
+export const getRecordExtractionValueMutationKey = () => ['recordExtractionValue'] as const;
 
 export const getRecordExtractionValueMutationOptions = <
 	TError = ErrorType<ApiErrorBody>,
@@ -638,7 +677,7 @@ export const getRecordExtractionValueMutationOptions = <
 	RecordExtractionValueMutationVariables,
 	TContext
 > => {
-	const mutationKey = ['recordExtractionValue'];
+	const mutationKey = getRecordExtractionValueMutationKey();
 	const { mutation: mutationOptions, request: requestOptions } = options
 		? options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey
 			? options
@@ -734,6 +773,8 @@ export const clearExtractionValue = async (
 	);
 };
 
+export const getClearExtractionValueMutationKey = () => ['clearExtractionValue'] as const;
+
 export const getClearExtractionValueMutationOptions = <
 	TError = ErrorType<ApiErrorBody>,
 	TContext = unknown
@@ -751,7 +792,7 @@ export const getClearExtractionValueMutationOptions = <
 	ClearExtractionValueMutationVariables,
 	TContext
 > => {
-	const mutationKey = ['clearExtractionValue'];
+	const mutationKey = getClearExtractionValueMutationKey();
 	const { mutation: mutationOptions, request: requestOptions } = options
 		? options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey
 			? options
@@ -850,6 +891,8 @@ export const confirmExtractionValue = async (
 	);
 };
 
+export const getConfirmExtractionValueMutationKey = () => ['confirmExtractionValue'] as const;
+
 export const getConfirmExtractionValueMutationOptions = <
 	TError = ErrorType<ApiErrorBody>,
 	TContext = unknown
@@ -867,7 +910,7 @@ export const getConfirmExtractionValueMutationOptions = <
 	ConfirmExtractionValueMutationVariables,
 	TContext
 > => {
-	const mutationKey = ['confirmExtractionValue'];
+	const mutationKey = getConfirmExtractionValueMutationKey();
 	const { mutation: mutationOptions, request: requestOptions } = options
 		? options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey
 			? options

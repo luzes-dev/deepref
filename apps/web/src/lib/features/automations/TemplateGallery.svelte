@@ -7,10 +7,10 @@
 		createWorkflowFromTemplate,
 		createListAutomationTemplates,
 		listWorkflows
-	} from '$lib/api/generated/automations/automations';
+	} from '#lib/api/generated/automations/automations.js';
 	import * as Dialog from '@deepref/ui/dialog';
 	import { Spinner } from '@deepref/ui/spinner';
-	import { notifyError } from '$lib/features/notifications/toast';
+	import { notifyError } from '#lib/features/notifications/toast.js';
 	import { describeTrigger, uniqueName, type WfGraph } from './model';
 	import { graphOf } from './api';
 

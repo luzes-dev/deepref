@@ -9,7 +9,7 @@
 		createUpdateAiBudget,
 		getGetAiAutonomyQueryKey,
 		getGetAiBudgetQueryKey
-	} from '$lib/api/generated/ai/ai';
+	} from '#lib/api/generated/ai/ai.js';
 	import * as Alert from '@deepref/ui/alert';
 	import { Badge } from '@deepref/ui/badge';
 	import * as Field from '@deepref/ui/field';
@@ -18,7 +18,7 @@
 	import { Skeleton } from '@deepref/ui/skeleton';
 	import * as ToggleGroup from '@deepref/ui/toggle-group';
 	import { StatePanel } from '@deepref/ui/layout';
-	import { notifyError } from '$lib/features/notifications/toast';
+	import { notifyError } from '#lib/features/notifications/toast.js';
 	import { isAiPaused, parseBudgetInput } from '../budget';
 	import {
 		FUZZY_AUTO_MERGE_SCORE,

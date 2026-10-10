@@ -198,7 +198,7 @@ export const prefetchListProjectDedupeProposalsQuery = async <
 ): Promise<QueryClient> => {
 	const queryOptions = getListProjectDedupeProposalsQueryOptions(projectId, params, options);
 
-	await queryClient.prefetchQuery(queryOptions);
+	await queryClient.query(queryOptions).catch(() => {});
 
 	return queryClient;
 };
@@ -255,8 +255,19 @@ export const decideProjectDedupeProposal = async (
 	): Record<string, string | readonly string[]> => {
 		if (!h) return {};
 		if (h instanceof Headers) return Object.fromEntries(h.entries());
-		if (Array.isArray(h)) return Object.fromEntries(h);
-		return h;
+		if (Symbol.iterator in h) {
+			return Object.fromEntries(
+				Array.from(
+					h as Iterable<Iterable<string>>,
+					(entry) => Array.from(entry) as [string, string]
+				)
+			);
+		}
+		const headers: Record<string, string | readonly string[]> = {};
+		for (const [name, value] of Object.entries<string | readonly string[] | undefined>(h)) {
+			if (value !== undefined) headers[name] = value;
+		}
+		return headers;
 	};
 	return customFetch<decideProjectDedupeProposalResponseSuccess>(
 		getDecideProjectDedupeProposalUrl(projectId, proposalId),
@@ -268,6 +279,9 @@ export const decideProjectDedupeProposal = async (
 		}
 	);
 };
+
+export const getDecideProjectDedupeProposalMutationKey = () =>
+	['decideProjectDedupeProposal'] as const;
 
 export const getDecideProjectDedupeProposalMutationOptions = <
 	TError = ErrorType<ApiErrorBody>,
@@ -286,7 +300,7 @@ export const getDecideProjectDedupeProposalMutationOptions = <
 	DecideProjectDedupeProposalMutationVariables,
 	TContext
 > => {
-	const mutationKey = ['decideProjectDedupeProposal'];
+	const mutationKey = getDecideProjectDedupeProposalMutationKey();
 	const { mutation: mutationOptions, request: requestOptions } = options
 		? options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey
 			? options
@@ -386,8 +400,19 @@ export const runProjectDeduplication = async (
 	): Record<string, string | readonly string[]> => {
 		if (!h) return {};
 		if (h instanceof Headers) return Object.fromEntries(h.entries());
-		if (Array.isArray(h)) return Object.fromEntries(h);
-		return h;
+		if (Symbol.iterator in h) {
+			return Object.fromEntries(
+				Array.from(
+					h as Iterable<Iterable<string>>,
+					(entry) => Array.from(entry) as [string, string]
+				)
+			);
+		}
+		const headers: Record<string, string | readonly string[]> = {};
+		for (const [name, value] of Object.entries<string | readonly string[] | undefined>(h)) {
+			if (value !== undefined) headers[name] = value;
+		}
+		return headers;
 	};
 	return customFetch<runProjectDeduplicationResponseSuccess>(
 		getRunProjectDeduplicationUrl(projectId),
@@ -399,6 +424,8 @@ export const runProjectDeduplication = async (
 		}
 	);
 };
+
+export const getRunProjectDeduplicationMutationKey = () => ['runProjectDeduplication'] as const;
 
 export const getRunProjectDeduplicationMutationOptions = <
 	TError = ErrorType<ApiErrorBody>,
@@ -417,7 +444,7 @@ export const getRunProjectDeduplicationMutationOptions = <
 	RunProjectDeduplicationMutationVariables,
 	TContext
 > => {
-	const mutationKey = ['runProjectDeduplication'];
+	const mutationKey = getRunProjectDeduplicationMutationKey();
 	const { mutation: mutationOptions, request: requestOptions } = options
 		? options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey
 			? options
@@ -520,8 +547,19 @@ export const resolveProjectRecord = async (
 	): Record<string, string | readonly string[]> => {
 		if (!h) return {};
 		if (h instanceof Headers) return Object.fromEntries(h.entries());
-		if (Array.isArray(h)) return Object.fromEntries(h);
-		return h;
+		if (Symbol.iterator in h) {
+			return Object.fromEntries(
+				Array.from(
+					h as Iterable<Iterable<string>>,
+					(entry) => Array.from(entry) as [string, string]
+				)
+			);
+		}
+		const headers: Record<string, string | readonly string[]> = {};
+		for (const [name, value] of Object.entries<string | readonly string[] | undefined>(h)) {
+			if (value !== undefined) headers[name] = value;
+		}
+		return headers;
 	};
 	return customFetch<resolveProjectRecordResponseSuccess>(
 		getResolveProjectRecordUrl(projectId, recordId),
@@ -533,6 +571,8 @@ export const resolveProjectRecord = async (
 		}
 	);
 };
+
+export const getResolveProjectRecordMutationKey = () => ['resolveProjectRecord'] as const;
 
 export const getResolveProjectRecordMutationOptions = <
 	TError = ErrorType<ApiErrorBody>,
@@ -551,7 +591,7 @@ export const getResolveProjectRecordMutationOptions = <
 	ResolveProjectRecordMutationVariables,
 	TContext
 > => {
-	const mutationKey = ['resolveProjectRecord'];
+	const mutationKey = getResolveProjectRecordMutationKey();
 	const { mutation: mutationOptions, request: requestOptions } = options
 		? options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey
 			? options

@@ -3,8 +3,8 @@ import type {
 	AiExtractionEvidenceDto,
 	AiTypedExtractionValueDto,
 	ExtractionFieldDto
-} from '$lib/api/generated/models';
-import { ApiError } from '$lib/api/custom-fetch';
+} from '#lib/api/generated/models/index.js';
+import { ApiError } from '#lib/api/custom-fetch.js';
 
 export const EXTRACTION_VALUE_TYPES = ['text', 'number', 'boolean', 'date'] as const;
 

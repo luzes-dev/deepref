@@ -1,7 +1,7 @@
 import {
 	getGetProjectProtocolQueryKey,
 	getGetScreeningHistoryQueryKey
-} from '$lib/api/generated/review/review';
+} from '#lib/api/generated/review/review.js';
 
 export const screeningKeys = {
 	protocol: (projectId: string) => getGetProjectProtocolQueryKey(projectId),

@@ -25,7 +25,9 @@
 	// Let SvelteKit finish the real route update inside the browser's native
 	// view transition. This keeps the old modal painted until the full page is
 	// ready, with no artificial timeout or blank intermediate state.
-	onNavigate(({ complete }) => {
+	onNavigate(({ complete, shallow, type }) => {
+		if (shallow && type === 'goto') return;
+
 		if (consumeSettingsTransition() === null || !shouldAnimateSettingsNavigation()) {
 			return;
 		}

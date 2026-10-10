@@ -1,7 +1,10 @@
 <script lang="ts">
 	import { StatePanel } from '@deepref/ui/layout';
 	import { Button } from '@deepref/ui/button';
-	import type { ProjectionMetadata, ProjectionStatusDto } from '$lib/api/generated/models';
+	import type {
+		ProjectionMetadata,
+		ProjectionStatusDto
+	} from '#lib/api/generated/models/index.js';
 	import RefreshCwIcon from '@lucide/svelte/icons/refresh-cw';
 
 	let {

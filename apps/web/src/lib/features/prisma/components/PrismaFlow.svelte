@@ -1,10 +1,10 @@
 <script lang="ts">
 	import { resolve } from '$app/paths';
-	import { createGetProjectPrisma } from '$lib/api/generated/review/review';
+	import { createGetProjectPrisma } from '#lib/api/generated/review/review.js';
 	import {
 		createExportProjectArtifact,
 		exportProjectArtifact
-	} from '$lib/api/generated/exports/exports';
+	} from '#lib/api/generated/exports/exports.js';
 	import * as Alert from '@deepref/ui/alert';
 	import * as Dialog from '@deepref/ui/dialog';
 	import { Badge } from '@deepref/ui/badge';
@@ -12,9 +12,9 @@
 	import { Skeleton } from '@deepref/ui/skeleton';
 	import { PageToolbar, StatePanel } from '@deepref/ui/layout';
 	import * as Tabs from '@deepref/ui/tabs';
-	import PageTemplate from '$lib/shell/PageTemplate.svelte';
-	import { useProjectWorkspaceContext } from '$lib/features/projects/context.svelte.js';
-	import { notifyError } from '$lib/features/notifications/toast';
+	import PageTemplate from '#lib/shell/PageTemplate.svelte';
+	import { useProjectWorkspaceContext } from '#lib/features/projects/context.svelte.js';
+	import { notifyError } from '#lib/features/notifications/toast.js';
 	import DownloadIcon from '@lucide/svelte/icons/download';
 	import ImageIcon from '@lucide/svelte/icons/image';
 	import TriangleAlertIcon from '@lucide/svelte/icons/triangle-alert';

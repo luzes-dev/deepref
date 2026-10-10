@@ -1,1 +1,1 @@
-export { typewriter } from '$lib/typewriter.svelte';
+export { typewriter } from '#lib/typewriter.svelte.js';

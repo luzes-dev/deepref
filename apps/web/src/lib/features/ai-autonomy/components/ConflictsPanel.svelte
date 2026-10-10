@@ -5,9 +5,9 @@
 		createListAiReviewerDecisions,
 		createResolveAiReviewerConflict,
 		getGetAiActivityOverviewQueryKey
-	} from '$lib/api/generated/ai/ai';
-	import { createListFullTextExclusionReasons } from '$lib/api/generated/documents/documents';
-	import type { AiReviewerDecisionDto } from '$lib/api/generated/models';
+	} from '#lib/api/generated/ai/ai.js';
+	import { createListFullTextExclusionReasons } from '#lib/api/generated/documents/documents.js';
+	import type { AiReviewerDecisionDto } from '#lib/api/generated/models/index.js';
 	import { Badge } from '@deepref/ui/badge';
 	import { Button } from '@deepref/ui/button';
 	import { Input } from '@deepref/ui/input';
@@ -16,9 +16,9 @@
 	import * as ToggleGroup from '@deepref/ui/toggle-group';
 	import { StatePanel } from '@deepref/ui/layout';
 	import { resolve } from '$app/paths';
-	import { notifyError, notifySuccess } from '$lib/features/notifications/toast';
-	import { screeningKeys } from '$lib/features/screening/api';
-	import { fullTextUrlString } from '$lib/features/full-text/url';
+	import { notifyError, notifySuccess } from '#lib/features/notifications/toast.js';
+	import { screeningKeys } from '#lib/features/screening/api.js';
+	import { fullTextUrlString } from '#lib/features/full-text/url.js';
 	import {
 		CONFLICT_STATUS_LABEL,
 		agreementSummary,

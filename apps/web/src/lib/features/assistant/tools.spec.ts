@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest';
-import { AssistantToolKind } from '$lib/api/generated/models';
-import type { AssistantToolDescriptor } from '$lib/api/generated/models';
+import { AssistantToolKind } from '#lib/api/generated/models/index.js';
+import type { AssistantToolDescriptor } from '#lib/api/generated/models/index.js';
 import {
 	ASSISTANT_TOOL_METADATA,
 	ASSISTANT_TOOL_NAMES,

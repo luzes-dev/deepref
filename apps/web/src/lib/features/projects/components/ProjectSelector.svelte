@@ -5,8 +5,8 @@
 	import * as Popover from '@deepref/ui/popover';
 	import { Button } from '@deepref/ui/button';
 	import { Spinner } from '@deepref/ui/spinner';
-	import { IsMobile } from '$lib/hooks/is-mobile.svelte';
-	import { cn } from '$lib/utils';
+	import { IsMobile } from '#lib/hooks/is-mobile.svelte.js';
+	import { cn } from '#lib/utils.js';
 	import { untrack } from 'svelte';
 	import type { ComponentProps } from 'svelte';
 	import ChevronsUpDownIcon from '@lucide/svelte/icons/chevrons-up-down';

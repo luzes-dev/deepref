@@ -5,8 +5,8 @@ import {
 	attachOpenAccessReportDocument,
 	acknowledgeReportDocumentIdentity,
 	deleteReportDocument
-} from '$lib/api/generated/documents/documents';
-import type { ExternalDocumentRequest } from '$lib/api/generated/models';
+} from '#lib/api/generated/documents/documents.js';
+import type { ExternalDocumentRequest } from '#lib/api/generated/models/index.js';
 
 export async function uploadPdf(projectId: string, reportId: string, file: File) {
 	return uploadReportDocument(projectId, reportId, { file });

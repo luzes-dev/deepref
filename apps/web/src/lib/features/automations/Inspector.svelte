@@ -6,7 +6,11 @@
 	import { Button } from '@deepref/ui/button';
 	import { Input } from '@deepref/ui/input';
 	import { Label } from '@deepref/ui/label';
-	import type { FieldDetailsDto, NodeRunDto, NodeTypeDto } from '$lib/api/generated/models';
+	import type {
+		FieldDetailsDto,
+		NodeRunDto,
+		NodeTypeDto
+	} from '#lib/api/generated/models/index.js';
 	import ConnectionPanel from './ConnectionPanel.svelte';
 	import DataView from './DataView.svelte';
 	import ConfigFieldInput from './fields/ConfigFieldInput.svelte';

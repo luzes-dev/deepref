@@ -1,21 +1,16 @@
 <script lang="ts">
 	import {
-		getCoreRowModel,
-		getFacetedRowModel,
-		getFacetedUniqueValues,
-		getFilteredRowModel,
-		getPaginationRowModel,
-		getSortedRowModel,
 		type ColumnFiltersState,
 		type PaginationState,
 		type SortingState,
 		type Updater,
-		type VisibilityState
-	} from '@tanstack/table-core';
-	import type { ReportDto } from '$lib/api/generated/models';
-	import { createSvelteTable, FlexRender } from '@deepref/ui/data-table';
+		type ColumnVisibilityState
+	} from '@tanstack/svelte-table';
+	import type { ReportDto } from '#lib/api/generated/models/index.js';
+	import { createTable, FlexRender } from '@deepref/ui/data-table';
+	import { articleTableFeatures } from './table-features.js';
 	import * as Table from '@deepref/ui/table';
-	import { cn } from '$lib/utils.js';
+	import { cn } from '#lib/utils.js';
 	import ArticleDataTablePagination from './ArticleDataTablePagination.svelte';
 	import ArticleDataTableToolbar from './ArticleDataTableToolbar.svelte';
 	import { createArticleColumns } from './columns.js';
@@ -32,7 +27,7 @@
 	const routeFilter = $derived(workspace.articleFilters.filter);
 	const routeMinInternal = $derived(workspace.articleFilters.minInternal);
 
-	let columnVisibility = $state<VisibilityState>({
+	let columnVisibility = $state<ColumnVisibilityState>({
 		outbound_internal_references: false,
 		type: false,
 		rank_score: false
@@ -52,7 +47,8 @@
 		return typeof updater === 'function' ? (updater as (value: T) => T)(current) : updater;
 	}
 
-	const table = createSvelteTable({
+	const table = createTable({
+		features: articleTableFeatures,
 		get data() {
 			return articles;
 		},
@@ -94,13 +90,7 @@
 		},
 		onPaginationChange: (updater) => {
 			pagination = updateState(updater, pagination);
-		},
-		getCoreRowModel: getCoreRowModel(),
-		getFilteredRowModel: getFilteredRowModel(),
-		getPaginationRowModel: getPaginationRowModel(),
-		getSortedRowModel: getSortedRowModel(),
-		getFacetedRowModel: getFacetedRowModel(),
-		getFacetedUniqueValues: getFacetedUniqueValues()
+		}
 	});
 </script>
 
@@ -119,10 +109,7 @@
 								class="sticky top-0 z-10 bg-background"
 							>
 								{#if !header.isPlaceholder}
-									<FlexRender
-										content={header.column.columnDef.header}
-										context={header.getContext()}
-									/>
+									<FlexRender {header} />
 								{/if}
 							</Table.Head>
 						{/each}
@@ -144,10 +131,7 @@
 					>
 						{#each row.getVisibleCells() as cell (cell.id)}
 							<Table.Cell>
-								<FlexRender
-									content={cell.column.columnDef.cell}
-									context={cell.getContext()}
-								/>
+								<FlexRender {cell} />
 							</Table.Cell>
 						{/each}
 					</Table.Row>

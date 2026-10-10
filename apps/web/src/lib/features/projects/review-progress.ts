@@ -1,4 +1,4 @@
-import type { PrismaDto, ProtocolStatusDto } from '$lib/api/generated/models';
+import type { PrismaDto, ProtocolStatusDto } from '#lib/api/generated/models/index.js';
 
 export type StageState = 'done' | 'active' | 'waiting';
 

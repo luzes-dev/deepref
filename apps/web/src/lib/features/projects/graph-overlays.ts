@@ -1,4 +1,4 @@
-import type { GraphNodeDto } from '$lib/api/generated/models';
+import type { GraphNodeDto } from '#lib/api/generated/models/index.js';
 import type { GraphOverlayField } from './context.svelte.js';
 
 export type OverlayStatus =

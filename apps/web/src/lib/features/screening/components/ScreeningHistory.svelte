@@ -1,6 +1,6 @@
 <script lang="ts">
-	import type { ScreeningHistoryItemDto } from '$lib/api/generated/models';
-	import { cn } from '$lib/utils';
+	import type { ScreeningHistoryItemDto } from '#lib/api/generated/models/index.js';
+	import { cn } from '#lib/utils.js';
 	import { Undo2 } from '@lucide/svelte';
 	import { describeHistoryItem } from '../history';
 

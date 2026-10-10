@@ -1,5 +1,5 @@
-import { ApiError } from '$lib/api/custom-fetch';
-import type { WorkflowDto, WorkflowRunDto } from '$lib/api/generated/models';
+import { ApiError } from '#lib/api/custom-fetch.js';
+import type { WorkflowDto, WorkflowRunDto } from '#lib/api/generated/models/index.js';
 import type { WfGraph } from './model';
 
 export interface Issue {

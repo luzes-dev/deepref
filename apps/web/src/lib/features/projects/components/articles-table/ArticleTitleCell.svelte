@@ -1,7 +1,7 @@
 <script lang="ts">
-	import type { ReportDto } from '$lib/api/generated/models';
+	import type { ReportDto } from '#lib/api/generated/models/index.js';
 	import { Button } from '@deepref/ui/button';
-	import { cn } from '$lib/utils.js';
+	import { cn } from '#lib/utils.js';
 	import { reportLabel } from '../../report-label';
 
 	let {

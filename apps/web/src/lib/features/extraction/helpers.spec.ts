@@ -3,8 +3,8 @@ import type {
 	AiExtractedFieldDto,
 	AiExtractionEvidenceDto,
 	ExtractionFieldDto
-} from '$lib/api/generated/models';
-import { ApiError } from '$lib/api/custom-fetch';
+} from '#lib/api/generated/models/index.js';
+import { ApiError } from '#lib/api/custom-fetch.js';
 import {
 	buildExtractionEvidenceLink,
 	deriveFieldKey,

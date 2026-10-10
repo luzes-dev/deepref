@@ -1,5 +1,5 @@
 import { http, HttpResponse, delay } from 'msw';
-import type { SettingsDto, ProjectDto } from '$lib/api/generated/models';
+import type { SettingsDto, ProjectDto } from '#lib/api/generated/models/index.js';
 
 export const mockSettings: SettingsDto = {
 	citation_provider: 'crossref',

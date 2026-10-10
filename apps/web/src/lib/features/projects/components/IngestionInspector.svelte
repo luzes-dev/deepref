@@ -5,12 +5,12 @@
 	import { Button } from '@deepref/ui/button';
 	import { Progress } from '@deepref/ui/progress';
 	import { Skeleton } from '@deepref/ui/skeleton';
-	import { shouldPollIngestion } from '$lib/api/helpers';
+	import { shouldPollIngestion } from '#lib/api/helpers.js';
 	import {
 		createCancelIngestion,
 		createGetIngestion,
 		createListIngestionItems
-	} from '$lib/api/generated/ingestions/ingestions';
+	} from '#lib/api/generated/ingestions/ingestions.js';
 	import { StatePanel } from '@deepref/ui/layout';
 	import CircleAlertIcon from '@lucide/svelte/icons/circle-alert';
 	import PanelRightCloseIcon from '@lucide/svelte/icons/panel-right-close';

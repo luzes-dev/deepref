@@ -16,9 +16,9 @@
 	import {
 		getListProjectReportsQueryKey,
 		recomputeProjectMetrics
-	} from '$lib/api/generated/reports/reports';
-	import { notifyError } from '$lib/features/notifications/toast';
-	import PageTemplate from '$lib/shell/PageTemplate.svelte';
+	} from '#lib/api/generated/reports/reports.js';
+	import { notifyError } from '#lib/features/notifications/toast.js';
+	import PageTemplate from '#lib/shell/PageTemplate.svelte';
 	import ArticleDataTable from './articles-table/ArticleDataTable.svelte';
 	import { useProjectWorkspaceContext, type ArticleSort } from '../context.svelte.js';
 	import { reportLabel, reportSearchText } from '../report-label';

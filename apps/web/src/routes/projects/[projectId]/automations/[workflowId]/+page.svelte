@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { page } from '$app/state';
-	import AutomationBuilder from '$lib/features/automations/AutomationBuilder.svelte';
+	import AutomationBuilder from '#lib/features/automations/AutomationBuilder.svelte';
 
 	const projectId = $derived(page.params.projectId ?? '');
 	const workflowId = $derived(page.params.workflowId ?? '');

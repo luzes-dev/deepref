@@ -40,15 +40,15 @@
 		startWorkflowTestRun,
 		updateWorkflow,
 		validateWorkflow
-	} from '$lib/api/generated/automations/automations';
-	import { listExtractionFields } from '$lib/api/generated/extraction/extraction';
+	} from '#lib/api/generated/automations/automations.js';
+	import { listExtractionFields } from '#lib/api/generated/extraction/extraction.js';
 	import type {
 		FieldDetailsDto,
 		NodeTypeDto,
 		WorkflowDto,
 		WorkflowRunDto
-	} from '$lib/api/generated/models';
-	import { notifyError, notifyInfo, notifySuccess } from '$lib/features/notifications/toast';
+	} from '#lib/api/generated/models/index.js';
+	import { notifyError, notifyInfo, notifySuccess } from '#lib/features/notifications/toast.js';
 	import { graphOf, isActiveRun, isConflict, issuesFromError, type Issue } from './api';
 	import { freeSpot, headerHelp, unavailableReason, type BuilderAction } from './builder-view';
 	import CanvasMenu, { type MenuEntry } from './CanvasMenu.svelte';

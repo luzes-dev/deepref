@@ -1,6 +1,6 @@
 import { QueryClient } from '@tanstack/svelte-query';
 import type { MutationFunctionContext } from '@tanstack/svelte-query';
-import { describe, expect, it, vi } from 'vitest';
+import { describe, expect, it } from 'vitest';
 import {
 	getCancelIngestionMutationOptions,
 	getGetIngestionQueryKey,
@@ -34,9 +34,27 @@ describe('ingestion polling', () => {
 
 describe('generated mutation invalidation', () => {
 	it('invalidates ingestion list, detail, and items after cancellation', async () => {
-		const queryClient = new QueryClient();
-		const invalidate = vi.spyOn(queryClient, 'invalidateQueries').mockResolvedValue(undefined);
+		const queryClient = new QueryClient({
+			defaultOptions: { queries: { staleTime: Infinity } }
+		});
+		const targetedKeys = [
+			getListIngestionsQueryKey(),
+			getGetIngestionQueryKey('ingestion-1'),
+			getListIngestionItemsQueryKey('ingestion-1')
+		];
+		const unaffectedKeys = [
+			['/api/ingestions/ingestion-2'],
+			['/api/ingestions/ingestion-2/items']
+		];
+		for (const queryKey of [...targetedKeys, ...unaffectedKeys]) {
+			queryClient.setQueryData(queryKey, {});
+		}
+		const isStale = (queryKey: readonly unknown[]) =>
+			queryClient.getQueryCache().find({ queryKey, exact: true })?.isStale() ?? false;
 		const options = getCancelIngestionMutationOptions(queryClient);
+
+		for (const queryKey of targetedKeys) expect(isStale(queryKey)).toBe(false);
+		for (const queryKey of unaffectedKeys) expect(isStale(queryKey)).toBe(false);
 
 		await options.onSuccess?.(
 			{ data: undefined, status: 202, headers: new Headers() },
@@ -45,12 +63,7 @@ describe('generated mutation invalidation', () => {
 			{} as MutationFunctionContext
 		);
 
-		expect(invalidate).toHaveBeenCalledWith({ queryKey: getListIngestionsQueryKey() });
-		expect(invalidate).toHaveBeenCalledWith({
-			queryKey: getGetIngestionQueryKey('ingestion-1')
-		});
-		expect(invalidate).toHaveBeenCalledWith({
-			queryKey: getListIngestionItemsQueryKey('ingestion-1')
-		});
+		for (const queryKey of targetedKeys) expect(isStale(queryKey)).toBe(true);
+		for (const queryKey of unaffectedKeys) expect(isStale(queryKey)).toBe(false);
 	});
 });

@@ -1,5 +1,5 @@
 <script lang="ts">
-	import type { DocumentBlockDto } from '$lib/api/generated/models';
+	import type { DocumentBlockDto } from '#lib/api/generated/models/index.js';
 	import { Button } from '@deepref/ui/button';
 	import { Input } from '@deepref/ui/input';
 	import { Plus } from '@lucide/svelte';

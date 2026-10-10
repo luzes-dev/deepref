@@ -80,8 +80,19 @@ export const receiveInboundEmail = async (
 	): Record<string, string | readonly string[]> => {
 		if (!h) return {};
 		if (h instanceof Headers) return Object.fromEntries(h.entries());
-		if (Array.isArray(h)) return Object.fromEntries(h);
-		return h;
+		if (Symbol.iterator in h) {
+			return Object.fromEntries(
+				Array.from(
+					h as Iterable<Iterable<string>>,
+					(entry) => Array.from(entry) as [string, string]
+				)
+			);
+		}
+		const headers: Record<string, string | readonly string[]> = {};
+		for (const [name, value] of Object.entries<string | readonly string[] | undefined>(h)) {
+			if (value !== undefined) headers[name] = value;
+		}
+		return headers;
 	};
 	return customFetch<receiveInboundEmailResponseSuccess>(getReceiveInboundEmailUrl(token), {
 		...options,
@@ -90,6 +101,8 @@ export const receiveInboundEmail = async (
 		body: JSON.stringify(receiveInboundEmailBody)
 	});
 };
+
+export const getReceiveInboundEmailMutationKey = () => ['receiveInboundEmail'] as const;
 
 export const getReceiveInboundEmailMutationOptions = <
 	TError = ErrorType<ApiErrorBody | void>,
@@ -108,7 +121,7 @@ export const getReceiveInboundEmailMutationOptions = <
 	ReceiveInboundEmailMutationVariables,
 	TContext
 > => {
-	const mutationKey = ['receiveInboundEmail'];
+	const mutationKey = getReceiveInboundEmailMutationKey();
 	const { mutation: mutationOptions, request: requestOptions } = options
 		? options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey
 			? options
@@ -223,8 +236,19 @@ export const receiveWorkflowWebhook = async (
 	): Record<string, string | readonly string[]> => {
 		if (!h) return {};
 		if (h instanceof Headers) return Object.fromEntries(h.entries());
-		if (Array.isArray(h)) return Object.fromEntries(h);
-		return h;
+		if (Symbol.iterator in h) {
+			return Object.fromEntries(
+				Array.from(
+					h as Iterable<Iterable<string>>,
+					(entry) => Array.from(entry) as [string, string]
+				)
+			);
+		}
+		const headers: Record<string, string | readonly string[]> = {};
+		for (const [name, value] of Object.entries<string | readonly string[] | undefined>(h)) {
+			if (value !== undefined) headers[name] = value;
+		}
+		return headers;
 	};
 	return customFetch<receiveWorkflowWebhookResponseSuccess>(getReceiveWorkflowWebhookUrl(token), {
 		...options,
@@ -233,6 +257,8 @@ export const receiveWorkflowWebhook = async (
 		body: JSON.stringify(receiveWorkflowWebhookBody)
 	});
 };
+
+export const getReceiveWorkflowWebhookMutationKey = () => ['receiveWorkflowWebhook'] as const;
 
 export const getReceiveWorkflowWebhookMutationOptions = <
 	TError = ErrorType<ApiErrorBody | void>,
@@ -251,7 +277,7 @@ export const getReceiveWorkflowWebhookMutationOptions = <
 	ReceiveWorkflowWebhookMutationVariables,
 	TContext
 > => {
-	const mutationKey = ['receiveWorkflowWebhook'];
+	const mutationKey = getReceiveWorkflowWebhookMutationKey();
 	const { mutation: mutationOptions, request: requestOptions } = options
 		? options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey
 			? options
