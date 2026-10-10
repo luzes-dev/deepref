@@ -8,9 +8,9 @@ import type {
 	AppraisalDefinitionDto,
 	AppraisalQuestionDto,
 	DocumentBlockDto
-} from '$lib/api/generated/models';
-import { fullTextUrlString } from '$lib/features/full-text/url';
-import { citationLabel } from '$lib/features/evidence/labels';
+} from '#lib/api/generated/models/index.js';
+import { fullTextUrlString } from '#lib/features/full-text/url.js';
+import { citationLabel } from '#lib/features/evidence/labels.js';
 import { createInitialFormState, type AppraisalFormState, type EvidenceSelection } from './form';
 import { presentOverrideReasons } from './suggestion';
 

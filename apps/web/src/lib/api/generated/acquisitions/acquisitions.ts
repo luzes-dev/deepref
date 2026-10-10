@@ -159,7 +159,7 @@ export const prefetchListAcquisitionsQuery = async <
 ): Promise<QueryClient> => {
 	const queryOptions = getListAcquisitionsQueryOptions(projectId, params, options);
 
-	await queryClient.prefetchQuery(queryOptions);
+	await queryClient.query(queryOptions).catch(() => {});
 
 	return queryClient;
 };
@@ -222,8 +222,19 @@ export const createAcquisition = async (
 	): Record<string, string | readonly string[]> => {
 		if (!h) return {};
 		if (h instanceof Headers) return Object.fromEntries(h.entries());
-		if (Array.isArray(h)) return Object.fromEntries(h);
-		return h;
+		if (Symbol.iterator in h) {
+			return Object.fromEntries(
+				Array.from(
+					h as Iterable<Iterable<string>>,
+					(entry) => Array.from(entry) as [string, string]
+				)
+			);
+		}
+		const headers: Record<string, string | readonly string[]> = {};
+		for (const [name, value] of Object.entries<string | readonly string[] | undefined>(h)) {
+			if (value !== undefined) headers[name] = value;
+		}
+		return headers;
 	};
 	return customFetch<createAcquisitionResponseSuccess>(getCreateAcquisitionUrl(projectId), {
 		...options,
@@ -232,6 +243,8 @@ export const createAcquisition = async (
 		body: JSON.stringify(createAcquisitionBody)
 	});
 };
+
+export const getCreateAcquisitionMutationKey = () => ['createAcquisition'] as const;
 
 export const getCreateAcquisitionMutationOptions = <
 	TError = ErrorType<ApiErrorBody>,
@@ -250,7 +263,7 @@ export const getCreateAcquisitionMutationOptions = <
 	CreateAcquisitionMutationVariables,
 	TContext
 > => {
-	const mutationKey = ['createAcquisition'];
+	const mutationKey = getCreateAcquisitionMutationKey();
 	const { mutation: mutationOptions, request: requestOptions } = options
 		? options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey
 			? options
@@ -422,7 +435,7 @@ export const prefetchGetAcquisitionQuery = async <
 ): Promise<QueryClient> => {
 	const queryOptions = getGetAcquisitionQueryOptions(projectId, acquisitionId, options);
 
-	await queryClient.prefetchQuery(queryOptions);
+	await queryClient.query(queryOptions).catch(() => {});
 
 	return queryClient;
 };
@@ -596,7 +609,7 @@ export const prefetchListAcquisitionItemsQuery = async <
 		options
 	);
 
-	await queryClient.prefetchQuery(queryOptions);
+	await queryClient.query(queryOptions).catch(() => {});
 
 	return queryClient;
 };
@@ -663,6 +676,8 @@ export const refreshAcquisition = async (
 	);
 };
 
+export const getRefreshAcquisitionMutationKey = () => ['refreshAcquisition'] as const;
+
 export const getRefreshAcquisitionMutationOptions = <
 	TError = ErrorType<ApiErrorBody>,
 	TContext = unknown
@@ -680,7 +695,7 @@ export const getRefreshAcquisitionMutationOptions = <
 	RefreshAcquisitionMutationVariables,
 	TContext
 > => {
-	const mutationKey = ['refreshAcquisition'];
+	const mutationKey = getRefreshAcquisitionMutationKey();
 	const { mutation: mutationOptions, request: requestOptions } = options
 		? options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey
 			? options
@@ -792,8 +807,19 @@ export const importProjectRecords = async (
 	): Record<string, string | readonly string[]> => {
 		if (!h) return {};
 		if (h instanceof Headers) return Object.fromEntries(h.entries());
-		if (Array.isArray(h)) return Object.fromEntries(h);
-		return h;
+		if (Symbol.iterator in h) {
+			return Object.fromEntries(
+				Array.from(
+					h as Iterable<Iterable<string>>,
+					(entry) => Array.from(entry) as [string, string]
+				)
+			);
+		}
+		const headers: Record<string, string | readonly string[]> = {};
+		for (const [name, value] of Object.entries<string | readonly string[] | undefined>(h)) {
+			if (value !== undefined) headers[name] = value;
+		}
+		return headers;
 	};
 	return customFetch<importProjectRecordsResponseSuccess>(getImportProjectRecordsUrl(projectId), {
 		...options,
@@ -802,6 +828,8 @@ export const importProjectRecords = async (
 		body: JSON.stringify(importRecords)
 	});
 };
+
+export const getImportProjectRecordsMutationKey = () => ['importProjectRecords'] as const;
 
 export const getImportProjectRecordsMutationOptions = <
 	TError = ErrorType<ApiErrorBody>,
@@ -820,7 +848,7 @@ export const getImportProjectRecordsMutationOptions = <
 	ImportProjectRecordsMutationVariables,
 	TContext
 > => {
-	const mutationKey = ['importProjectRecords'];
+	const mutationKey = getImportProjectRecordsMutationKey();
 	const { mutation: mutationOptions, request: requestOptions } = options
 		? options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey
 			? options

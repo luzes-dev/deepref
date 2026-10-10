@@ -2,35 +2,53 @@
 	type TData = unknown;
 </script>
 
-<script lang="ts" generics="TData">
-	import ChevronLeftIcon from '@lucide/svelte/icons/chevron-left';
-	import ChevronRightIcon from '@lucide/svelte/icons/chevron-right';
-	import ChevronsLeftIcon from '@lucide/svelte/icons/chevrons-left';
-	import ChevronsRightIcon from '@lucide/svelte/icons/chevrons-right';
-	import type { Table } from '@tanstack/table-core';
-	import { Button } from '../button/index.js';
-	import * as Select from '../select/index.js';
+<script lang="ts" generics="TData extends RowData">
+	import ChevronLeftIcon from "@lucide/svelte/icons/chevron-left";
+	import ChevronRightIcon from "@lucide/svelte/icons/chevron-right";
+	import ChevronsLeftIcon from "@lucide/svelte/icons/chevrons-left";
+	import ChevronsRightIcon from "@lucide/svelte/icons/chevrons-right";
+	import type { RowData, Table } from "@tanstack/svelte-table";
+	import { Button } from "../button/index.js";
+	import * as Select from "../select/index.js";
 
-	let { table }: { table: Table<TData> } = $props();
+	type PaginationTable = Pick<
+		Table<any, TData>,
+		| "getPageCount"
+		| "getFilteredSelectedRowModel"
+		| "getFilteredRowModel"
+		| "setPageSize"
+		| "setPageIndex"
+		| "getCanPreviousPage"
+		| "previousPage"
+		| "getCanNextPage"
+		| "nextPage"
+	> & { atoms: Pick<Table<any, TData>["atoms"], "pagination"> };
+
+	let { table }: { table: PaginationTable } = $props();
+	const pagination = $derived(table.atoms.pagination.get());
 	const pageCount = $derived(Math.max(1, table.getPageCount()));
 </script>
 
-<div class="flex flex-col gap-3 px-2 lg:flex-row lg:items-center lg:justify-between">
+<div
+	class="flex flex-col gap-3 px-2 lg:flex-row lg:items-center lg:justify-between"
+>
 	<div class="text-sm text-muted-foreground">
 		{table.getFilteredSelectedRowModel().rows.length} of
 		{table.getFilteredRowModel().rows.length} row(s) selected.
 	</div>
-	<div class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-end lg:gap-8">
+	<div
+		class="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-end lg:gap-8"
+	>
 		<div class="flex items-center gap-2">
 			<p class="text-sm font-medium">Rows per page</p>
 			<Select.Root
 				allowDeselect={false}
 				type="single"
-				value={`${table.getState().pagination.pageSize}`}
+				value={`${pagination.pageSize}`}
 				onValueChange={(value) => table.setPageSize(Number(value))}
 			>
 				<Select.Trigger aria-label="Rows per page" class="h-8 w-[70px]">
-					{String(table.getState().pagination.pageSize)}
+					{String(pagination.pageSize)}
 				</Select.Trigger>
 				<Select.Content side="top">
 					<Select.Group>
@@ -44,8 +62,10 @@
 			</Select.Root>
 		</div>
 		<div class="flex items-center gap-2">
-			<div class="flex w-24 items-center justify-center text-sm font-medium">
-				Page {table.getState().pagination.pageIndex + 1} of {pageCount}
+			<div
+				class="flex w-24 items-center justify-center text-sm font-medium"
+			>
+				Page {pagination.pageIndex + 1} of {pageCount}
 			</div>
 			<div class="flex items-center gap-2">
 				<Button

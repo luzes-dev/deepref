@@ -4,7 +4,7 @@
  * DeepRef API
  * OpenAPI spec version: 0.1.0
  */
-import { createMutation, createQuery, useQueryClient } from '@tanstack/svelte-query';
+import { createMutation, createQuery, matchQuery, useQueryClient } from '@tanstack/svelte-query';
 import type {
 	CreateMutationOptions,
 	CreateMutationResult,
@@ -165,7 +165,7 @@ export const prefetchGetProjectGraphQuery = async <
 ): Promise<QueryClient> => {
 	const queryOptions = getGetProjectGraphQueryOptions(projectId, params, options);
 
-	await queryClient.prefetchQuery(queryOptions);
+	await queryClient.query(queryOptions).catch(() => {});
 
 	return queryClient;
 };
@@ -204,6 +204,8 @@ export const recomputeProjectMetrics = async (
 	);
 };
 
+export const getRecomputeProjectMetricsMutationKey = () => ['recomputeProjectMetrics'] as const;
+
 export const getRecomputeProjectMetricsMutationOptions = <
 	TError = ErrorType<ApiErrorBody>,
 	TContext = unknown
@@ -225,7 +227,7 @@ export const getRecomputeProjectMetricsMutationOptions = <
 	RecomputeProjectMetricsMutationVariables,
 	TContext
 > => {
-	const mutationKey = ['recomputeProjectMetrics'];
+	const mutationKey = getRecomputeProjectMetricsMutationKey();
 	const { mutation: mutationOptions, request: requestOptions } = options
 		? options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey
 			? options
@@ -249,13 +251,12 @@ export const getRecomputeProjectMetricsMutationOptions = <
 	) => {
 		if (!options?.skipInvalidation) {
 			queryClient.invalidateQueries({
-				queryKey: getListProjectReportsQueryKey(variables.projectId)
-			});
-			queryClient.invalidateQueries({
-				queryKey: getGetProjectGraphQueryKey(variables.projectId)
-			});
-			queryClient.invalidateQueries({
-				queryKey: getGetProjectRecommendationsQueryKey(variables.projectId)
+				predicate: (query) =>
+					[
+						getListProjectReportsQueryKey(variables.projectId),
+						getGetProjectGraphQueryKey(variables.projectId),
+						getGetProjectRecommendationsQueryKey(variables.projectId)
+					].some((queryKey) => matchQuery({ queryKey }, query))
 			});
 		}
 		mutationOptions?.onSuccess?.(data, variables, onMutateResult, context);
@@ -408,7 +409,7 @@ export const prefetchGetProjectRecommendationsQuery = async <
 ): Promise<QueryClient> => {
 	const queryOptions = getGetProjectRecommendationsQueryOptions(projectId, options);
 
-	await queryClient.prefetchQuery(queryOptions);
+	await queryClient.query(queryOptions).catch(() => {});
 
 	return queryClient;
 };
@@ -540,7 +541,7 @@ export const prefetchListProjectReportsQuery = async <
 ): Promise<QueryClient> => {
 	const queryOptions = getListProjectReportsQueryOptions(projectId, params, options);
 
-	await queryClient.prefetchQuery(queryOptions);
+	await queryClient.query(queryOptions).catch(() => {});
 
 	return queryClient;
 };
@@ -666,7 +667,7 @@ export const prefetchGetProjectReportQuery = async <
 ): Promise<QueryClient> => {
 	const queryOptions = getGetProjectReportQueryOptions(projectId, reportId, options);
 
-	await queryClient.prefetchQuery(queryOptions);
+	await queryClient.query(queryOptions).catch(() => {});
 
 	return queryClient;
 };

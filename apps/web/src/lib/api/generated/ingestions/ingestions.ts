@@ -4,7 +4,7 @@
  * DeepRef API
  * OpenAPI spec version: 0.1.0
  */
-import { createMutation, createQuery, useQueryClient } from '@tanstack/svelte-query';
+import { createMutation, createQuery, matchQuery, useQueryClient } from '@tanstack/svelte-query';
 import type {
 	CreateMutationOptions,
 	CreateMutationResult,
@@ -123,7 +123,7 @@ export const prefetchListIngestionsQuery = async <
 ): Promise<QueryClient> => {
 	const queryOptions = getListIngestionsQueryOptions(options);
 
-	await queryClient.prefetchQuery(queryOptions);
+	await queryClient.query(queryOptions).catch(() => {});
 
 	return queryClient;
 };
@@ -170,8 +170,19 @@ export const createIngestion = async (
 	): Record<string, string | readonly string[]> => {
 		if (!h) return {};
 		if (h instanceof Headers) return Object.fromEntries(h.entries());
-		if (Array.isArray(h)) return Object.fromEntries(h);
-		return h;
+		if (Symbol.iterator in h) {
+			return Object.fromEntries(
+				Array.from(
+					h as Iterable<Iterable<string>>,
+					(entry) => Array.from(entry) as [string, string]
+				)
+			);
+		}
+		const headers: Record<string, string | readonly string[]> = {};
+		for (const [name, value] of Object.entries<string | readonly string[] | undefined>(h)) {
+			if (value !== undefined) headers[name] = value;
+		}
+		return headers;
 	};
 	return customFetch<createIngestionResponseSuccess>(getCreateIngestionUrl(), {
 		...options,
@@ -180,6 +191,8 @@ export const createIngestion = async (
 		body: JSON.stringify(createIngestionBody)
 	});
 };
+
+export const getCreateIngestionMutationKey = () => ['createIngestion'] as const;
 
 export const getCreateIngestionMutationOptions = <
 	TError = ErrorType<ApiErrorBody>,
@@ -202,7 +215,7 @@ export const getCreateIngestionMutationOptions = <
 	CreateIngestionMutationVariables,
 	TContext
 > => {
-	const mutationKey = ['createIngestion'];
+	const mutationKey = getCreateIngestionMutationKey();
 	const { mutation: mutationOptions, request: requestOptions } = options
 		? options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey
 			? options
@@ -372,7 +385,7 @@ export const prefetchGetIngestionQuery = async <
 ): Promise<QueryClient> => {
 	const queryOptions = getGetIngestionQueryOptions(ingestionId, options);
 
-	await queryClient.prefetchQuery(queryOptions);
+	await queryClient.query(queryOptions).catch(() => {});
 
 	return queryClient;
 };
@@ -408,6 +421,8 @@ export const cancelIngestion = async (
 	});
 };
 
+export const getCancelIngestionMutationKey = () => ['cancelIngestion'] as const;
+
 export const getCancelIngestionMutationOptions = <
 	TError = ErrorType<ApiErrorBody>,
 	TContext = unknown
@@ -429,7 +444,7 @@ export const getCancelIngestionMutationOptions = <
 	CancelIngestionMutationVariables,
 	TContext
 > => {
-	const mutationKey = ['cancelIngestion'];
+	const mutationKey = getCancelIngestionMutationKey();
 	const { mutation: mutationOptions, request: requestOptions } = options
 		? options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey
 			? options
@@ -452,12 +467,13 @@ export const getCancelIngestionMutationOptions = <
 		context: MutationFunctionContext
 	) => {
 		if (!options?.skipInvalidation) {
-			queryClient.invalidateQueries({ queryKey: getListIngestionsQueryKey() });
 			queryClient.invalidateQueries({
-				queryKey: getGetIngestionQueryKey(variables.ingestionId)
-			});
-			queryClient.invalidateQueries({
-				queryKey: getListIngestionItemsQueryKey(variables.ingestionId)
+				predicate: (query) =>
+					[
+						getListIngestionsQueryKey(),
+						getGetIngestionQueryKey(variables.ingestionId),
+						getListIngestionItemsQueryKey(variables.ingestionId)
+					].some((queryKey) => matchQuery({ queryKey }, query))
 			});
 		}
 		mutationOptions?.onSuccess?.(data, variables, onMutateResult, context);
@@ -602,7 +618,7 @@ export const prefetchListIngestionItemsQuery = async <
 ): Promise<QueryClient> => {
 	const queryOptions = getListIngestionItemsQueryOptions(ingestionId, options);
 
-	await queryClient.prefetchQuery(queryOptions);
+	await queryClient.query(queryOptions).catch(() => {});
 
 	return queryClient;
 };

@@ -168,7 +168,7 @@ export const prefetchGetReportStudyMembershipQuery = async <
 ): Promise<QueryClient> => {
 	const queryOptions = getGetReportStudyMembershipQueryOptions(projectId, reportId, options);
 
-	await queryClient.prefetchQuery(queryOptions);
+	await queryClient.query(queryOptions).catch(() => {});
 
 	return queryClient;
 };
@@ -232,8 +232,19 @@ export const putReportStudyMembership = async (
 	): Record<string, string | readonly string[]> => {
 		if (!h) return {};
 		if (h instanceof Headers) return Object.fromEntries(h.entries());
-		if (Array.isArray(h)) return Object.fromEntries(h);
-		return h;
+		if (Symbol.iterator in h) {
+			return Object.fromEntries(
+				Array.from(
+					h as Iterable<Iterable<string>>,
+					(entry) => Array.from(entry) as [string, string]
+				)
+			);
+		}
+		const headers: Record<string, string | readonly string[]> = {};
+		for (const [name, value] of Object.entries<string | readonly string[] | undefined>(h)) {
+			if (value !== undefined) headers[name] = value;
+		}
+		return headers;
 	};
 	return customFetch<putReportStudyMembershipResponseSuccess>(
 		getPutReportStudyMembershipUrl(projectId, reportId),
@@ -245,6 +256,8 @@ export const putReportStudyMembership = async (
 		}
 	);
 };
+
+export const getPutReportStudyMembershipMutationKey = () => ['putReportStudyMembership'] as const;
 
 export const getPutReportStudyMembershipMutationOptions = <
 	TError = ErrorType<ApiErrorBody>,
@@ -263,7 +276,7 @@ export const getPutReportStudyMembershipMutationOptions = <
 	PutReportStudyMembershipMutationVariables,
 	TContext
 > => {
-	const mutationKey = ['putReportStudyMembership'];
+	const mutationKey = getPutReportStudyMembershipMutationKey();
 	const { mutation: mutationOptions, request: requestOptions } = options
 		? options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey
 			? options
@@ -457,7 +470,7 @@ export const prefetchListProjectStudiesQuery = async <
 ): Promise<QueryClient> => {
 	const queryOptions = getListProjectStudiesQueryOptions(projectId, params, options);
 
-	await queryClient.prefetchQuery(queryOptions);
+	await queryClient.query(queryOptions).catch(() => {});
 
 	return queryClient;
 };
@@ -505,8 +518,19 @@ export const createProjectStudy = async (
 	): Record<string, string | readonly string[]> => {
 		if (!h) return {};
 		if (h instanceof Headers) return Object.fromEntries(h.entries());
-		if (Array.isArray(h)) return Object.fromEntries(h);
-		return h;
+		if (Symbol.iterator in h) {
+			return Object.fromEntries(
+				Array.from(
+					h as Iterable<Iterable<string>>,
+					(entry) => Array.from(entry) as [string, string]
+				)
+			);
+		}
+		const headers: Record<string, string | readonly string[]> = {};
+		for (const [name, value] of Object.entries<string | readonly string[] | undefined>(h)) {
+			if (value !== undefined) headers[name] = value;
+		}
+		return headers;
 	};
 	return customFetch<createProjectStudyResponseSuccess>(getCreateProjectStudyUrl(projectId), {
 		...options,
@@ -515,6 +539,8 @@ export const createProjectStudy = async (
 		body: JSON.stringify(createStudyRequest)
 	});
 };
+
+export const getCreateProjectStudyMutationKey = () => ['createProjectStudy'] as const;
 
 export const getCreateProjectStudyMutationOptions = <
 	TError = ErrorType<ApiErrorBody>,
@@ -533,7 +559,7 @@ export const getCreateProjectStudyMutationOptions = <
 	CreateProjectStudyMutationVariables,
 	TContext
 > => {
-	const mutationKey = ['createProjectStudy'];
+	const mutationKey = getCreateProjectStudyMutationKey();
 	const { mutation: mutationOptions, request: requestOptions } = options
 		? options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey
 			? options
@@ -708,7 +734,7 @@ export const prefetchListUngroupedIncludedReportsQuery = async <
 ): Promise<QueryClient> => {
 	const queryOptions = getListUngroupedIncludedReportsQueryOptions(projectId, options);
 
-	await queryClient.prefetchQuery(queryOptions);
+	await queryClient.query(queryOptions).catch(() => {});
 
 	return queryClient;
 };
@@ -831,7 +857,7 @@ export const prefetchGetProjectStudyQuery = async <
 ): Promise<QueryClient> => {
 	const queryOptions = getGetProjectStudyQueryOptions(projectId, studyId, options);
 
-	await queryClient.prefetchQuery(queryOptions);
+	await queryClient.query(queryOptions).catch(() => {});
 
 	return queryClient;
 };
@@ -888,8 +914,19 @@ export const renameProjectStudy = async (
 	): Record<string, string | readonly string[]> => {
 		if (!h) return {};
 		if (h instanceof Headers) return Object.fromEntries(h.entries());
-		if (Array.isArray(h)) return Object.fromEntries(h);
-		return h;
+		if (Symbol.iterator in h) {
+			return Object.fromEntries(
+				Array.from(
+					h as Iterable<Iterable<string>>,
+					(entry) => Array.from(entry) as [string, string]
+				)
+			);
+		}
+		const headers: Record<string, string | readonly string[]> = {};
+		for (const [name, value] of Object.entries<string | readonly string[] | undefined>(h)) {
+			if (value !== undefined) headers[name] = value;
+		}
+		return headers;
 	};
 	return customFetch<renameProjectStudyResponseSuccess>(
 		getRenameProjectStudyUrl(projectId, studyId),
@@ -901,6 +938,8 @@ export const renameProjectStudy = async (
 		}
 	);
 };
+
+export const getRenameProjectStudyMutationKey = () => ['renameProjectStudy'] as const;
 
 export const getRenameProjectStudyMutationOptions = <
 	TError = ErrorType<ApiErrorBody>,
@@ -919,7 +958,7 @@ export const getRenameProjectStudyMutationOptions = <
 	RenameProjectStudyMutationVariables,
 	TContext
 > => {
-	const mutationKey = ['renameProjectStudy'];
+	const mutationKey = getRenameProjectStudyMutationKey();
 	const { mutation: mutationOptions, request: requestOptions } = options
 		? options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey
 			? options
@@ -1023,8 +1062,19 @@ export const classifyProjectStudy = async (
 	): Record<string, string | readonly string[]> => {
 		if (!h) return {};
 		if (h instanceof Headers) return Object.fromEntries(h.entries());
-		if (Array.isArray(h)) return Object.fromEntries(h);
-		return h;
+		if (Symbol.iterator in h) {
+			return Object.fromEntries(
+				Array.from(
+					h as Iterable<Iterable<string>>,
+					(entry) => Array.from(entry) as [string, string]
+				)
+			);
+		}
+		const headers: Record<string, string | readonly string[]> = {};
+		for (const [name, value] of Object.entries<string | readonly string[] | undefined>(h)) {
+			if (value !== undefined) headers[name] = value;
+		}
+		return headers;
 	};
 	return customFetch<classifyProjectStudyResponseSuccess>(
 		getClassifyProjectStudyUrl(projectId, studyId),
@@ -1036,6 +1086,8 @@ export const classifyProjectStudy = async (
 		}
 	);
 };
+
+export const getClassifyProjectStudyMutationKey = () => ['classifyProjectStudy'] as const;
 
 export const getClassifyProjectStudyMutationOptions = <
 	TError = ErrorType<ApiErrorBody>,
@@ -1054,7 +1106,7 @@ export const getClassifyProjectStudyMutationOptions = <
 	ClassifyProjectStudyMutationVariables,
 	TContext
 > => {
-	const mutationKey = ['classifyProjectStudy'];
+	const mutationKey = getClassifyProjectStudyMutationKey();
 	const { mutation: mutationOptions, request: requestOptions } = options
 		? options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey
 			? options
@@ -1231,7 +1283,7 @@ export const prefetchListProjectStudyHistoryQuery = async <
 ): Promise<QueryClient> => {
 	const queryOptions = getListProjectStudyHistoryQueryOptions(projectId, studyId, options);
 
-	await queryClient.prefetchQuery(queryOptions);
+	await queryClient.query(queryOptions).catch(() => {});
 
 	return queryClient;
 };

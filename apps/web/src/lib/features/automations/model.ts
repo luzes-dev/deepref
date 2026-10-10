@@ -11,7 +11,7 @@ import type {
 	WorkflowGraphDto,
 	WorkflowGraphEdgeDto,
 	WorkflowGraphNodeDto
-} from '$lib/api/generated/models';
+} from '#lib/api/generated/models/index.js';
 import type { FlowGraphEdge as Edge, FlowGraphNode as Node } from '@deepref/ui/flow';
 
 export type WfNode = WorkflowGraphNodeDto;

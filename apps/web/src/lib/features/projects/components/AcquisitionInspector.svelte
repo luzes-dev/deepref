@@ -8,12 +8,12 @@
 	import PaginationLoadMore from '@deepref/ui/pagination-load-more';
 	import { StatePanel } from '@deepref/ui/layout';
 	import { createInfiniteQuery } from '@tanstack/svelte-query';
-	import { shouldPollIngestion } from '$lib/api/helpers';
+	import { shouldPollIngestion } from '#lib/api/helpers.js';
 	import {
 		createGetAcquisition,
 		getListAcquisitionItemsQueryKey,
 		listAcquisitionItems
-	} from '$lib/api/generated/acquisitions/acquisitions';
+	} from '#lib/api/generated/acquisitions/acquisitions.js';
 	import CircleAlertIcon from '@lucide/svelte/icons/circle-alert';
 	import PanelRightCloseIcon from '@lucide/svelte/icons/panel-right-close';
 	import PanelRightOpenIcon from '@lucide/svelte/icons/panel-right-open';

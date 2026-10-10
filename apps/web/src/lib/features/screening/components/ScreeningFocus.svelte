@@ -6,13 +6,13 @@
 		createUndoScreening,
 		getGetScreeningHistoryQueryOptions,
 		getScreeningQueue
-	} from '$lib/api/generated/review/review';
+	} from '#lib/api/generated/review/review.js';
 	import type {
 		ApiErrorBody,
 		ScreeningQueueItemDto,
 		ScreeningStateDto
-	} from '$lib/api/generated/models';
-	import { ApiError } from '$lib/api/custom-fetch';
+	} from '#lib/api/generated/models/index.js';
+	import { ApiError } from '#lib/api/custom-fetch.js';
 	import { Button } from '@deepref/ui/button';
 	import { Input } from '@deepref/ui/input';
 	import { Skeleton } from '@deepref/ui/skeleton';
@@ -24,11 +24,11 @@
 	import { resolve } from '$app/paths';
 	import type { ResolvedPathname } from '$app/types';
 	import { page } from '$app/state';
-	import AiProposalReview from '$lib/features/ai-assistance/components/AiProposalReview.svelte';
-	import { canRequestAiSuggestions } from '$lib/features/ai-assistance/availability';
-	import { createGetAiStatus } from '$lib/api/generated/ai/ai';
+	import AiProposalReview from '#lib/features/ai-assistance/components/AiProposalReview.svelte';
+	import { canRequestAiSuggestions } from '#lib/features/ai-assistance/availability.js';
+	import { createGetAiStatus } from '#lib/api/generated/ai/ai.js';
 	import DecisionBar from './DecisionBar.svelte';
-	import PageTemplate from '$lib/shell/PageTemplate.svelte';
+	import PageTemplate from '#lib/shell/PageTemplate.svelte';
 	import CriteriaPanel from './CriteriaPanel.svelte';
 	import ScreeningFeedback from './ScreeningFeedback.svelte';
 	import ScreeningHistory from './ScreeningHistory.svelte';
@@ -75,7 +75,9 @@
 	const aiSuggestionsAvailable = $derived(canRequestAiSuggestions(aiStatusQuery));
 	const queryClient = useQueryClient();
 
-	const urlState = $derived(parseScreeningUrl(page.url.searchParams));
+	const urlState = $derived(
+		parseScreeningUrl(new URLSearchParams(page.url.searchParams.toString()))
+	);
 	const queueKey = $derived([
 		'screening-queue',
 		projectId,
@@ -221,7 +223,7 @@
 	}
 
 	function navigateTo(url: ScreeningPath, options: Parameters<typeof goto>[1]) {
-		return goto(resolve(url), options);
+		return goto(url as ResolvedPathname, options);
 	}
 
 	async function updateUrl(changes: Partial<ScreeningUrlState>, replaceState = true) {
@@ -231,9 +233,8 @@
 				screeningUrlString(nextUrlState(changes))
 			),
 			{
-				replaceState,
-				keepFocus: true,
-				noScroll: true
+				replace: replaceState,
+				reset: false
 			}
 		);
 	}

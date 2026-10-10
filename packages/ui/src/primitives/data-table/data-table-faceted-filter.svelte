@@ -8,51 +8,70 @@
 	};
 </script>
 
-<script lang="ts" generics="TData, TValue">
-	import CheckIcon from '@lucide/svelte/icons/check';
-	import CirclePlusIcon from '@lucide/svelte/icons/circle-plus';
-	import type { Column } from '@tanstack/table-core';
-	import { SvelteSet } from 'svelte/reactivity';
-	import { Badge } from '../badge/index.js';
-	import { Button } from '../button/index.js';
-	import * as Command from '../command/index.js';
-	import * as Popover from '../popover/index.js';
-	import { Separator } from '../separator/index.js';
-	import { cn } from '../../internal/utils.js';
+<script lang="ts" generics="TData extends RowData, TValue">
+	import CheckIcon from "@lucide/svelte/icons/check";
+	import CirclePlusIcon from "@lucide/svelte/icons/circle-plus";
+	import type { Column, RowData } from "@tanstack/svelte-table";
+	import { SvelteSet } from "svelte/reactivity";
+	import { Badge } from "../badge/index.js";
+	import { Button } from "../button/index.js";
+	import * as Command from "../command/index.js";
+	import * as Popover from "../popover/index.js";
+	import { Separator } from "../separator/index.js";
+	import { cn } from "../../internal/utils.js";
 
 	let {
 		column,
 		title,
-		options
+		options,
 	}: {
-		column: Column<TData, TValue>;
+		column: Pick<
+			Column<any, TData, TValue>,
+			"getFacetedUniqueValues" | "getFilterValue" | "setFilterValue"
+		>;
 		title: string;
 		options: FilterOption[];
 	} = $props();
 
 	const facets = $derived(column.getFacetedUniqueValues());
-	const selectedValues = $derived(new SvelteSet((column.getFilterValue() as string[]) ?? []));
+	const selectedValues = $derived(
+		new SvelteSet((column.getFilterValue() as string[]) ?? []),
+	);
 </script>
 
 <Popover.Root>
 	<Popover.Trigger>
 		{#snippet child({ props })}
-			<Button {...props} variant="outline" size="sm" class="h-8 border-dashed">
+			<Button
+				{...props}
+				variant="outline"
+				size="sm"
+				class="h-8 border-dashed"
+			>
 				<CirclePlusIcon data-icon="inline-start" />
 				{title}
 				{#if selectedValues.size > 0}
 					<Separator orientation="vertical" class="mx-1.5 h-4" />
-					<Badge variant="secondary" class="rounded-sm px-1 font-normal lg:hidden">
+					<Badge
+						variant="secondary"
+						class="rounded-sm px-1 font-normal lg:hidden"
+					>
 						{selectedValues.size}
 					</Badge>
 					<div class="hidden items-center gap-1 lg:flex">
 						{#if selectedValues.size > 2}
-							<Badge variant="secondary" class="rounded-sm px-1 font-normal">
+							<Badge
+								variant="secondary"
+								class="rounded-sm px-1 font-normal"
+							>
 								{selectedValues.size} selected
 							</Badge>
 						{:else}
 							{#each options.filter( (option) => selectedValues.has(option.value) ) as option (option.value)}
-								<Badge variant="secondary" class="rounded-sm px-1 font-normal">
+								<Badge
+									variant="secondary"
+									class="rounded-sm px-1 font-normal"
+								>
 									{option.label}
 								</Badge>
 							{/each}
@@ -81,16 +100,18 @@
 
 								const filterValues = Array.from(selectedValues);
 								column.setFilterValue(
-									filterValues.length ? filterValues : undefined
+									filterValues.length
+										? filterValues
+										: undefined,
 								);
 							}}
 						>
 							<div
 								class={cn(
-									'flex size-4 items-center justify-center rounded-sm border border-primary',
+									"flex size-4 items-center justify-center rounded-sm border border-primary",
 									isSelected
-										? 'bg-primary text-primary-foreground'
-										: 'opacity-50 [&_svg]:invisible'
+										? "bg-primary text-primary-foreground"
+										: "opacity-50 [&_svg]:invisible",
 								)}
 							>
 								<CheckIcon />

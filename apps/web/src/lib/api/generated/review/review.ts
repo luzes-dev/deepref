@@ -150,7 +150,7 @@ export const prefetchGetProjectPrismaQuery = async <
 ): Promise<QueryClient> => {
 	const queryOptions = getGetProjectPrismaQueryOptions(projectId, options);
 
-	await queryClient.prefetchQuery(queryOptions);
+	await queryClient.query(queryOptions).catch(() => {});
 
 	return queryClient;
 };
@@ -267,7 +267,7 @@ export const prefetchGetProjectProtocolQuery = async <
 ): Promise<QueryClient> => {
 	const queryOptions = getGetProjectProtocolQueryOptions(projectId, options);
 
-	await queryClient.prefetchQuery(queryOptions);
+	await queryClient.query(queryOptions).catch(() => {});
 
 	return queryClient;
 };
@@ -324,8 +324,19 @@ export const screenReport = async (
 	): Record<string, string | readonly string[]> => {
 		if (!h) return {};
 		if (h instanceof Headers) return Object.fromEntries(h.entries());
-		if (Array.isArray(h)) return Object.fromEntries(h);
-		return h;
+		if (Symbol.iterator in h) {
+			return Object.fromEntries(
+				Array.from(
+					h as Iterable<Iterable<string>>,
+					(entry) => Array.from(entry) as [string, string]
+				)
+			);
+		}
+		const headers: Record<string, string | readonly string[]> = {};
+		for (const [name, value] of Object.entries<string | readonly string[] | undefined>(h)) {
+			if (value !== undefined) headers[name] = value;
+		}
+		return headers;
 	};
 	return customFetch<screenReportResponseSuccess>(getScreenReportUrl(projectId, reportId), {
 		...options,
@@ -334,6 +345,8 @@ export const screenReport = async (
 		body: JSON.stringify(screenReportRequest)
 	});
 };
+
+export const getScreenReportMutationKey = () => ['screenReport'] as const;
 
 export const getScreenReportMutationOptions = <
 	TError = ErrorType<ApiErrorBody>,
@@ -352,7 +365,7 @@ export const getScreenReportMutationOptions = <
 	ScreenReportMutationVariables,
 	TContext
 > => {
-	const mutationKey = ['screenReport'];
+	const mutationKey = getScreenReportMutationKey();
 	const { mutation: mutationOptions, request: requestOptions } = options
 		? options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey
 			? options
@@ -522,7 +535,7 @@ export const prefetchGetScreeningHistoryQuery = async <
 ): Promise<QueryClient> => {
 	const queryOptions = getGetScreeningHistoryQueryOptions(projectId, reportId, options);
 
-	await queryClient.prefetchQuery(queryOptions);
+	await queryClient.query(queryOptions).catch(() => {});
 
 	return queryClient;
 };
@@ -579,8 +592,19 @@ export const undoScreening = async (
 	): Record<string, string | readonly string[]> => {
 		if (!h) return {};
 		if (h instanceof Headers) return Object.fromEntries(h.entries());
-		if (Array.isArray(h)) return Object.fromEntries(h);
-		return h;
+		if (Symbol.iterator in h) {
+			return Object.fromEntries(
+				Array.from(
+					h as Iterable<Iterable<string>>,
+					(entry) => Array.from(entry) as [string, string]
+				)
+			);
+		}
+		const headers: Record<string, string | readonly string[]> = {};
+		for (const [name, value] of Object.entries<string | readonly string[] | undefined>(h)) {
+			if (value !== undefined) headers[name] = value;
+		}
+		return headers;
 	};
 	return customFetch<undoScreeningResponseSuccess>(getUndoScreeningUrl(projectId, reportId), {
 		...options,
@@ -589,6 +613,8 @@ export const undoScreening = async (
 		body: JSON.stringify(undoScreeningRequest)
 	});
 };
+
+export const getUndoScreeningMutationKey = () => ['undoScreening'] as const;
 
 export const getUndoScreeningMutationOptions = <
 	TError = ErrorType<ApiErrorBody>,
@@ -607,7 +633,7 @@ export const getUndoScreeningMutationOptions = <
 	UndoScreeningMutationVariables,
 	TContext
 > => {
-	const mutationKey = ['undoScreening'];
+	const mutationKey = getUndoScreeningMutationKey();
 	const { mutation: mutationOptions, request: requestOptions } = options
 		? options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey
 			? options
@@ -770,7 +796,7 @@ export const prefetchGetProjectReviewProtocolQuery = async <
 ): Promise<QueryClient> => {
 	const queryOptions = getGetProjectReviewProtocolQueryOptions(projectId, options);
 
-	await queryClient.prefetchQuery(queryOptions);
+	await queryClient.query(queryOptions).catch(() => {});
 
 	return queryClient;
 };
@@ -826,8 +852,19 @@ export const saveProjectReviewProtocol = async (
 	): Record<string, string | readonly string[]> => {
 		if (!h) return {};
 		if (h instanceof Headers) return Object.fromEntries(h.entries());
-		if (Array.isArray(h)) return Object.fromEntries(h);
-		return h;
+		if (Symbol.iterator in h) {
+			return Object.fromEntries(
+				Array.from(
+					h as Iterable<Iterable<string>>,
+					(entry) => Array.from(entry) as [string, string]
+				)
+			);
+		}
+		const headers: Record<string, string | readonly string[]> = {};
+		for (const [name, value] of Object.entries<string | readonly string[] | undefined>(h)) {
+			if (value !== undefined) headers[name] = value;
+		}
+		return headers;
 	};
 	return customFetch<saveProjectReviewProtocolResponseSuccess>(
 		getSaveProjectReviewProtocolUrl(projectId),
@@ -839,6 +876,8 @@ export const saveProjectReviewProtocol = async (
 		}
 	);
 };
+
+export const getSaveProjectReviewProtocolMutationKey = () => ['saveProjectReviewProtocol'] as const;
 
 export const getSaveProjectReviewProtocolMutationOptions = <
 	TError = ErrorType<ApiErrorBody>,
@@ -857,7 +896,7 @@ export const getSaveProjectReviewProtocolMutationOptions = <
 	SaveProjectReviewProtocolMutationVariables,
 	TContext
 > => {
-	const mutationKey = ['saveProjectReviewProtocol'];
+	const mutationKey = getSaveProjectReviewProtocolMutationKey();
 	const { mutation: mutationOptions, request: requestOptions } = options
 		? options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey
 			? options
@@ -963,8 +1002,19 @@ export const publishProjectReviewProtocol = async (
 	): Record<string, string | readonly string[]> => {
 		if (!h) return {};
 		if (h instanceof Headers) return Object.fromEntries(h.entries());
-		if (Array.isArray(h)) return Object.fromEntries(h);
-		return h;
+		if (Symbol.iterator in h) {
+			return Object.fromEntries(
+				Array.from(
+					h as Iterable<Iterable<string>>,
+					(entry) => Array.from(entry) as [string, string]
+				)
+			);
+		}
+		const headers: Record<string, string | readonly string[]> = {};
+		for (const [name, value] of Object.entries<string | readonly string[] | undefined>(h)) {
+			if (value !== undefined) headers[name] = value;
+		}
+		return headers;
 	};
 	return customFetch<publishProjectReviewProtocolResponseSuccess>(
 		getPublishProjectReviewProtocolUrl(projectId),
@@ -976,6 +1026,9 @@ export const publishProjectReviewProtocol = async (
 		}
 	);
 };
+
+export const getPublishProjectReviewProtocolMutationKey = () =>
+	['publishProjectReviewProtocol'] as const;
 
 export const getPublishProjectReviewProtocolMutationOptions = <
 	TError = ErrorType<ApiErrorBody>,
@@ -994,7 +1047,7 @@ export const getPublishProjectReviewProtocolMutationOptions = <
 	PublishProjectReviewProtocolMutationVariables,
 	TContext
 > => {
-	const mutationKey = ['publishProjectReviewProtocol'];
+	const mutationKey = getPublishProjectReviewProtocolMutationKey();
 	const { mutation: mutationOptions, request: requestOptions } = options
 		? options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey
 			? options
@@ -1180,7 +1233,7 @@ export const prefetchListProjectReviewProtocolVersionsQuery = async <
 ): Promise<QueryClient> => {
 	const queryOptions = getListProjectReviewProtocolVersionsQueryOptions(projectId, options);
 
-	await queryClient.prefetchQuery(queryOptions);
+	await queryClient.query(queryOptions).catch(() => {});
 
 	return queryClient;
 };
@@ -1324,7 +1377,7 @@ export const prefetchGetScreeningQueueQuery = async <
 ): Promise<QueryClient> => {
 	const queryOptions = getGetScreeningQueueQueryOptions(projectId, params, options);
 
-	await queryClient.prefetchQuery(queryOptions);
+	await queryClient.query(queryOptions).catch(() => {});
 
 	return queryClient;
 };
@@ -1473,7 +1526,7 @@ export const prefetchGetNextScreeningItemQuery = async <
 ): Promise<QueryClient> => {
 	const queryOptions = getGetNextScreeningItemQueryOptions(projectId, params, options);
 
-	await queryClient.prefetchQuery(queryOptions);
+	await queryClient.query(queryOptions).catch(() => {});
 
 	return queryClient;
 };
@@ -1642,7 +1695,7 @@ export const prefetchListTitleAbstractScreeningQueueQuery = async <
 ): Promise<QueryClient> => {
 	const queryOptions = getListTitleAbstractScreeningQueueQueryOptions(projectId, params, options);
 
-	await queryClient.prefetchQuery(queryOptions);
+	await queryClient.query(queryOptions).catch(() => {});
 
 	return queryClient;
 };

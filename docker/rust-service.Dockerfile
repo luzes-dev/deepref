@@ -117,7 +117,8 @@ RUN set -eux; \
     grep --fixed-strings --line-regexp "BUILD=${PDFIUM_VERSION}" "/opt/pdfium/${PDFIUM_VERSION}/VERSION"; \
     rm -f /tmp/pdfium.tgz
 
-FROM ${DEBIAN_BASE_REPOSITORY}@sha256:7b140f374b289a7c2befc338f42ebe6441b7ea838a042bbd5acbfca6ec875818 AS runtime
+# Base: debian:bookworm-20261005-slim, pinned by multi-platform index digest.
+FROM ${DEBIAN_BASE_REPOSITORY}@sha256:7c7b2c966bc9ee8cedfeef67e0e279108992c77681fa595db4a9d65c06ccc587 AS runtime
 
 ARG PDFIUM_VERSION="7881"
 COPY --from=pdfium "/opt/pdfium/${PDFIUM_VERSION}/lib/libpdfium.so" /usr/local/lib/libpdfium.so

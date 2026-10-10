@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { AiActivityDto } from '$lib/api/generated/models';
+import type { AiActivityDto } from '#lib/api/generated/models/index.js';
 import { groupActivity, undoableCount } from './activity';
 
 function entry(id: string, batch: string | null, undoable = true, undone = false): AiActivityDto {

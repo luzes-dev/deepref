@@ -1,4 +1,4 @@
-import { goto, preloadData, pushState } from '$app/navigation';
+import { goto, preloadData } from '$app/navigation';
 import { page } from '$app/state';
 import { resolve } from '$app/paths';
 
@@ -11,7 +11,7 @@ function isModifiedClick(event: MouseEvent): boolean {
 	return event.button !== 0 || event.metaKey || event.ctrlKey || event.shiftKey || event.altKey;
 }
 
-function pageLocation(url: URL): string {
+function pageLocation(url: { pathname: string; search: string; hash: string }): string {
 	return `${url.pathname}${url.search}${url.hash}`;
 }
 
@@ -63,10 +63,15 @@ export async function openSettingsFromLink(event: MouseEvent): Promise<void> {
 		// belongs to the captured background page. Let that navigation stand.
 		if (pageLocation(page.url) !== backgroundUrl || page.state.settingsOverlay) return;
 
-		if (result.type === 'loaded' && result.status === 200) {
-			pushState(settingsHref, {
-				...page.state,
-				settingsOverlay: { backgroundUrl }
+		if (result.type === 'error' || result.type === 'redirect') {
+			navigateNormally();
+			return;
+		}
+
+		if (result.status === 200) {
+			goto(settingsHref, {
+				shallow: true,
+				state: { ...page.state, settingsOverlay: { backgroundUrl } }
 			});
 			return;
 		}

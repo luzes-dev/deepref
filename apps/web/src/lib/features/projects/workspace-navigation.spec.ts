@@ -3,6 +3,7 @@ import {
 	afterProjectDeleted,
 	articleView,
 	parseArticleSort,
+	projectRouteSelection,
 	projectToOpen
 } from './workspace-navigation';
 
@@ -21,7 +22,24 @@ describe('workspace navigation', () => {
 		expect(projectToOpen([], false, undefined, false)).toBeUndefined();
 		expect(projectToOpen(projects, false, 'p2', false)).toBeUndefined();
 		expect(projectToOpen(projects, false, 'p2', true)).toBe('p1');
+		expect(projectToOpen(projects, false, 'p1', true)).toBeUndefined();
 		expect(projectToOpen(projects, false, undefined, false)).toBe('p1');
+		expect(projectToOpen(projects, false, undefined, false, true)).toBeUndefined();
+	});
+
+	it('keeps the target project while a project navigation is pending', () => {
+		expect(projectRouteSelection(undefined, 'p2', '/')).toEqual({
+			projectId: 'p2',
+			resolvingProject: true
+		});
+		expect(projectRouteSelection('p1', undefined, '/projects/p1/overview')).toEqual({
+			projectId: 'p1',
+			resolvingProject: true
+		});
+		expect(projectRouteSelection(undefined, undefined, '/')).toEqual({
+			projectId: undefined,
+			resolvingProject: false
+		});
 	});
 
 	it('decides where to go after a project is deleted', () => {

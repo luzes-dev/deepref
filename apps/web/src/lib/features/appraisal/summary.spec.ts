@@ -1,5 +1,8 @@
 import { describe, expect, it } from 'vitest';
-import type { AppraisalAssessmentDto, AppraisalDefinitionDto } from '$lib/api/generated/models';
+import type {
+	AppraisalAssessmentDto,
+	AppraisalDefinitionDto
+} from '#lib/api/generated/models/index.js';
 import { responseLabel } from './renderer';
 import { summarizeAssessment } from './summary';
 

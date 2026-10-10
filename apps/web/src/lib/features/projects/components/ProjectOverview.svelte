@@ -1,13 +1,13 @@
 <script lang="ts">
 	import { resolve } from '$app/paths';
 	import type { ResolvedPathname } from '$app/types';
-	import { createGetDependencyStatus } from '$lib/api/generated/health/health';
+	import { createGetDependencyStatus } from '#lib/api/generated/health/health.js';
 	import {
 		createGetProjectPrisma,
 		createGetScreeningQueue
-	} from '$lib/api/generated/review/review';
-	import { statusVariant } from '$lib/api/helpers';
-	import { createGetProjectReviewProtocol, isNotFound } from '$lib/features/protocol/api';
+	} from '#lib/api/generated/review/review.js';
+	import { statusVariant } from '#lib/api/helpers.js';
+	import { createGetProjectReviewProtocol, isNotFound } from '#lib/features/protocol/api.js';
 	import { Badge } from '@deepref/ui/badge';
 	import { Button } from '@deepref/ui/button';
 	import { Skeleton } from '@deepref/ui/skeleton';
@@ -15,9 +15,9 @@
 	import ArrowRightIcon from '@lucide/svelte/icons/arrow-right';
 	import CheckIcon from '@lucide/svelte/icons/check';
 	import { createQuery } from '@tanstack/svelte-query';
-	import { loadSynthesisProgress } from '$lib/features/studies/synthesis-progress';
-	import PageTemplate from '$lib/shell/PageTemplate.svelte';
-	import AiActivityGlance from '$lib/features/ai-autonomy/components/AiActivityGlance.svelte';
+	import { loadSynthesisProgress } from '#lib/features/studies/synthesis-progress.js';
+	import PageTemplate from '#lib/shell/PageTemplate.svelte';
+	import AiActivityGlance from '#lib/features/ai-autonomy/components/AiActivityGlance.svelte';
 	import { useProjectWorkspaceContext } from '../context.svelte.js';
 	import { reportLabel } from '../report-label';
 	import {

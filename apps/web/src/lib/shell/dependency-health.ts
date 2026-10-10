@@ -1,4 +1,4 @@
-import type { DependencyStatus } from '$lib/api/generated/models';
+import type { DependencyStatus } from '#lib/api/generated/models/index.js';
 
 export type DependencyHealthLevel = 'ok' | 'degraded' | 'unavailable';
 

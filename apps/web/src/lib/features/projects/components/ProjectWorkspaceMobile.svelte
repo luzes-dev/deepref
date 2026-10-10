@@ -2,14 +2,14 @@
 	import type { Snippet } from 'svelte';
 	import { page } from '$app/state';
 	import { resolve } from '$app/paths';
-	import { cn } from '$lib/utils';
+	import { cn } from '#lib/utils.js';
 	import { Button, buttonVariants } from '@deepref/ui/button';
 	import * as Sheet from '@deepref/ui/sheet';
 	import MenuIcon from '@lucide/svelte/icons/menu';
 	import SettingsIcon from '@lucide/svelte/icons/settings-2';
-	import DependencyHealthIndicator from '$lib/shell/DependencyHealthIndicator.svelte';
-	import NotificationBell from '$lib/shell/NotificationBell.svelte';
-	import { openSettingsFromLink } from '$lib/features/settings/navigation';
+	import DependencyHealthIndicator from '#lib/shell/DependencyHealthIndicator.svelte';
+	import NotificationBell from '#lib/shell/NotificationBell.svelte';
+	import { openSettingsFromLink } from '#lib/features/settings/navigation.js';
 	import ArticleInspector from './ArticleInspector.svelte';
 	import { useProjectWorkspaceContext } from '../context.svelte.js';
 	import IngestionInspector from './IngestionInspector.svelte';
@@ -63,10 +63,9 @@
 			size="icon"
 			aria-label="Open navigation"
 			data-testid="mobile-navigation-trigger"
-			onclick={() => (menuOpen = true)}
+			onclick={() => (menuOpen = true)}><MenuIcon data-icon aria-hidden="true" /></Button
 		>
-			<MenuIcon data-icon aria-hidden="true" />
-		</Button>
+
 		<h1
 			class="min-w-0 flex-1 truncate text-sm font-medium text-foreground"
 			data-testid="mobile-current-route"
@@ -74,13 +73,13 @@
 		>
 			{mobileViewLabel}
 		</h1>
+
 		<DependencyHealthIndicator {projectId} />
 		<NotificationBell {projectId} />
 		<ProjectSelector compact />
 	</div>
-	<div class="min-h-0 flex-1 overflow-hidden">
-		<ProjectWorkspaceViewPanel {children} />
-	</div>
+
+	<div class="min-h-0 flex-1 overflow-hidden"><ProjectWorkspaceViewPanel {children} /></div>
 
 	<Sheet.Root bind:open={menuOpen}>
 		<Sheet.Content

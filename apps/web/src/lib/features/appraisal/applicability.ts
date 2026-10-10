@@ -1,4 +1,4 @@
-import type { AppraisalDefinitionDto } from '$lib/api/generated/models';
+import type { AppraisalDefinitionDto } from '#lib/api/generated/models/index.js';
 
 /** Study design values (as the API sends them) with reader-facing labels. */
 const DESIGN_LABELS: Record<string, string> = {

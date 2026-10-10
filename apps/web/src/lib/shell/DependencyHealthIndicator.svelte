@@ -3,7 +3,7 @@
 	import { Button } from '@deepref/ui/button';
 	import { Spinner } from '@deepref/ui/spinner';
 	import { cn } from '@deepref/ui/utils';
-	import { createGetDependencyStatus } from '$lib/api/generated/health/health';
+	import { createGetDependencyStatus } from '#lib/api/generated/health/health.js';
 	import { summarizeDependencyHealth } from './dependency-health';
 
 	// Scoped to the project in view, so one project's failures do not colour

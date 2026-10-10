@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { dependencyLabel, summarizeDependencyHealth } from './dependency-health';
-import type { DependencyStatus } from '$lib/api/generated/models';
+import type { DependencyStatus } from '#lib/api/generated/models/index.js';
 
 const allAvailable: DependencyStatus = {
 	postgresql: { state: 'available' },

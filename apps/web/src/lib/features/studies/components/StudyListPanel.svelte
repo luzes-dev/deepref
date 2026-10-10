@@ -1,5 +1,5 @@
 <script lang="ts">
-	import type { StudyDto, UngroupedReportDto } from '$lib/api/generated/models';
+	import type { StudyDto, UngroupedReportDto } from '#lib/api/generated/models/index.js';
 	import { Button } from '@deepref/ui/button';
 	import { Input } from '@deepref/ui/input';
 	import { Skeleton } from '@deepref/ui/skeleton';

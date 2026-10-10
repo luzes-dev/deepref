@@ -1,7 +1,7 @@
 <script lang="ts">
-	import { createListDocumentBlocks } from '$lib/api/generated/documents/documents';
-	import EvidenceLabel from '$lib/features/evidence/EvidenceLabel.svelte';
-	import { citationLabel } from '$lib/features/evidence/labels';
+	import { createListDocumentBlocks } from '#lib/api/generated/documents/documents.js';
+	import EvidenceLabel from '#lib/features/evidence/EvidenceLabel.svelte';
+	import { citationLabel } from '#lib/features/evidence/labels.js';
 
 	/**
 	 * The text of a citation link. It quotes the cited passage, loaded from the

@@ -1,9 +1,9 @@
 <script lang="ts">
-	import type { ReportDto, StudyDto } from '$lib/api/generated/models';
+	import type { ReportDto, StudyDto } from '#lib/api/generated/models/index.js';
 	import {
 		StudyReportRoleInput,
 		type StudyReportRoleInput as StudyReportRole
-	} from '$lib/api/generated/models/studyReportRoleInput';
+	} from '#lib/api/generated/models/studyReportRoleInput.js';
 	import { Button } from '@deepref/ui/button';
 	import * as Select from '@deepref/ui/select';
 

@@ -1,5 +1,8 @@
 import { describe, expect, it } from 'vitest';
-import type { AppraisalDefinitionDto, AppraisalQuestionDto } from '$lib/api/generated/models';
+import type {
+	AppraisalDefinitionDto,
+	AppraisalQuestionDto
+} from '#lib/api/generated/models/index.js';
 import {
 	buildAppraisalPayload,
 	createInitialFormState,

@@ -1,8 +1,8 @@
 import { describe, it, expect } from 'vitest';
 import { render, screen, fireEvent, waitFor } from '@testing-library/svelte';
-import { http, HttpResponse } from 'msw';
+import { http, HttpResponse } from 'msw/http';
 import { server } from '../../tests/mocks/server';
-import NotificationBellTestHost from '$lib/tests/NotificationBellTestHost.svelte';
+import NotificationBellTestHost from '#lib/tests/NotificationBellTestHost.svelte';
 
 const PROJECT_ID = '33438758-42f0-4da2-9c3d-22a2c51f1109';
 const WORKFLOW_ID = '0c1d2e3f-0000-4000-8000-000000000001';

@@ -3,19 +3,19 @@
 	import * as Alert from '@deepref/ui/alert';
 	import { Skeleton } from '@deepref/ui/skeleton';
 	import { Spinner } from '@deepref/ui/spinner';
-	import { shouldPollIngestion } from '$lib/api/helpers';
+	import { shouldPollIngestion } from '#lib/api/helpers.js';
 	import {
 		getListProjectReportsQueryKey,
 		listProjectReports
-	} from '$lib/api/generated/reports/reports';
-	import { getListIngestionsQueryKey } from '$lib/api/generated/ingestions/ingestions';
+	} from '#lib/api/generated/reports/reports.js';
+	import { getListIngestionsQueryKey } from '#lib/api/generated/ingestions/ingestions.js';
 	import {
 		createGetProject,
 		getListProjectsQueryKey
-	} from '$lib/api/generated/projects/projects';
-	import { fetchIngestionsPage, fetchProjectsPage } from '$lib/api/pagination';
+	} from '#lib/api/generated/projects/projects.js';
+	import { fetchIngestionsPage, fetchProjectsPage } from '#lib/api/pagination.js';
 	import { createInfiniteQuery } from '@tanstack/svelte-query';
-	import { IsMobile } from '$lib/hooks/is-mobile.svelte';
+	import { IsMobile } from '#lib/hooks/is-mobile.svelte.js';
 	import { setProjectWorkspaceContext } from '../context.svelte.js';
 	import CircleAlertIcon from '@lucide/svelte/icons/circle-alert';
 	import ProjectWorkspaceDesktop from './ProjectWorkspaceDesktop.svelte';

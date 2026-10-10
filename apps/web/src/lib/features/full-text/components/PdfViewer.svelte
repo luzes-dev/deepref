@@ -1,6 +1,6 @@
 <script lang="ts">
 	import type { PDFDocumentProxy, PDFPageProxy } from 'pdfjs-dist/types/src/display/api';
-	import type { DocumentBlockDto, DocumentPageDto } from '$lib/api/generated/models';
+	import type { DocumentBlockDto, DocumentPageDto } from '#lib/api/generated/models/index.js';
 	import * as Alert from '@deepref/ui/alert';
 	import * as Empty from '@deepref/ui/empty';
 	import { Skeleton } from '@deepref/ui/skeleton';

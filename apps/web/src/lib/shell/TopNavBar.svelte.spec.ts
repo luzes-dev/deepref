@@ -1,6 +1,6 @@
 import { describe, it, expect } from 'vitest';
 import { render, screen } from '@testing-library/svelte';
-import TopNavBarTestHost from '$lib/tests/TopNavBarTestHost.svelte';
+import TopNavBarTestHost from '#lib/tests/TopNavBarTestHost.svelte';
 
 function renderTopNavBar(props: Record<string, unknown> = {}) {
 	return render(TopNavBarTestHost, { props });

@@ -1,5 +1,5 @@
 import { expect, test, type Page } from '@playwright/test';
-import type { AiStatusDto } from '$lib/api/generated/models';
+import type { AiStatusDto } from '#lib/api/generated/models/index.js';
 
 const api = 'http://localhost:4173/api';
 const projectId = 'project-1';

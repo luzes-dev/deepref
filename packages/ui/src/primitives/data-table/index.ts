@@ -1,6 +1,9 @@
-export { default as FlexRender } from "./flex-render.svelte";
-export { createSvelteTable } from "./data-table.svelte.js";
-export { renderComponent, renderSnippet } from "./render-helpers.js";
+export {
+	createTable,
+	FlexRender,
+	renderComponent,
+	renderSnippet,
+} from "@tanstack/svelte-table";
 export { default as DataTableColumnHeader } from "./data-table-column-header.svelte";
 export { default as DataTablePagination } from "./data-table-pagination.svelte";
 export { default as DataTableCheckbox } from "./data-table-checkbox.svelte";

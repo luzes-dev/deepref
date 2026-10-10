@@ -7,20 +7,20 @@
 		createGenerateStudyGroupingSuggestion,
 		createListAiProposals,
 		getListAiProposalsQueryKey
-	} from '$lib/api/generated/ai/ai';
-	import { ApiError } from '$lib/api/custom-fetch';
+	} from '#lib/api/generated/ai/ai.js';
+	import { ApiError } from '#lib/api/custom-fetch.js';
 	import type {
 		AiProposalDecisionInput,
 		AiProposalDto,
 		AiStudyGroupingProposalPayload
-	} from '$lib/api/generated/models';
+	} from '#lib/api/generated/models/index.js';
 	import {
 		StudyReportRoleInput,
 		type StudyReportRoleInput as StudyReportRole
-	} from '$lib/api/generated/models/studyReportRoleInput';
-	import { createListFullTextScreeningQueue } from '$lib/api/generated/documents/documents';
-	import { createListProjectReports } from '$lib/api/generated/reports/reports';
-	import type { UngroupedReportDto } from '$lib/api/generated/models';
+	} from '#lib/api/generated/models/studyReportRoleInput.js';
+	import { createListFullTextScreeningQueue } from '#lib/api/generated/documents/documents.js';
+	import { createListProjectReports } from '#lib/api/generated/reports/reports.js';
+	import type { UngroupedReportDto } from '#lib/api/generated/models/index.js';
 	import {
 		createClassifyProjectStudy,
 		createCreateProjectStudy,
@@ -36,15 +36,15 @@
 		getListProjectStudiesQueryKey,
 		getListUngroupedIncludedReportsQueryKey,
 		getListProjectStudyHistoryQueryKey
-	} from '$lib/api/generated/studies/studies';
+	} from '#lib/api/generated/studies/studies.js';
 	import { Skeleton } from '@deepref/ui/skeleton';
 	import * as Tabs from '@deepref/ui/tabs';
 	import * as Resizable from '@deepref/ui/resizable';
 	import { MediaQuery } from 'svelte/reactivity';
-	import PageTemplate from '$lib/shell/PageTemplate.svelte';
+	import PageTemplate from '#lib/shell/PageTemplate.svelte';
 	import { useQueryClient } from '@tanstack/svelte-query';
-	import { ReviewRunObserver } from '$lib/features/ai-assistance/review-run-observer.svelte';
-	import { notifyError, notifyWarning } from '$lib/features/notifications/toast';
+	import { ReviewRunObserver } from '#lib/features/ai-assistance/review-run-observer.svelte.js';
+	import { notifyError, notifyWarning } from '#lib/features/notifications/toast.js';
 	import { parseStudyLocation, updateStudyLocation } from '../url';
 	import StudyClassificationAssistance from './StudyClassificationAssistance.svelte';
 	import StudyDetailsPanel from './StudyDetailsPanel.svelte';
@@ -56,7 +56,9 @@
 	let { projectId }: { projectId: string } = $props();
 	const queryClient = useQueryClient();
 	const wide = new MediaQuery('(min-width: 1024px)');
-	const location = $derived(parseStudyLocation(page.url.searchParams));
+	const location = $derived(
+		parseStudyLocation(new URLSearchParams(page.url.searchParams.toString()))
+	);
 	const selectedStudyId = $derived(location.studyId);
 	let newTitle = $state('');
 	let renameTitle = $state('');
@@ -370,10 +372,13 @@
 	}
 
 	async function selectStudy(studyId: string, replaceState = false): Promise<void> {
-		const search = updateStudyLocation(page.url.searchParams, { studyId, reportId: '' });
+		const search = updateStudyLocation(new URLSearchParams(page.url.searchParams.toString()), {
+			studyId,
+			reportId: ''
+		});
 		let href: string = resolve('/projects/[projectId]/studies', { projectId });
 		href += `?${search.toString()}`;
-		await goto(href, { keepFocus: true, noScroll: true, replaceState });
+		await goto(href, { reset: false, replace: replaceState });
 	}
 
 	// Opening Studies always shows a study; an empty detail pane only asks for a click.

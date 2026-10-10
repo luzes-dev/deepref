@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { ScreeningQueueItemDto } from '$lib/api/generated/models';
+import type { ScreeningQueueItemDto } from '#lib/api/generated/models/index.js';
 import {
 	applyOptimisticStatusChange,
 	findQueueLocation,

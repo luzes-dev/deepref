@@ -29,8 +29,8 @@
 		AssistantStreamError,
 		streamAssistantChat,
 		type AssistantChatStreamEvent
-	} from '$lib/api/assistant-stream';
-	import { createGetAiStatus } from '$lib/api/generated/ai/ai';
+	} from '#lib/api/assistant-stream.js';
+	import { createGetAiStatus } from '#lib/api/generated/ai/ai.js';
 	import * as Alert from '@deepref/ui/alert';
 	import { Root as AvatarRoot, Fallback as AvatarFallback } from '@deepref/ui/avatar';
 	import * as Attachment from '@deepref/ui/attachment';

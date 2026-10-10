@@ -3,10 +3,10 @@
 	import { Input } from '@deepref/ui/input';
 	import { Button } from '@deepref/ui/button';
 	import { StatePanel } from '@deepref/ui/layout';
-	import PageTemplate from '$lib/shell/PageTemplate.svelte';
+	import PageTemplate from '#lib/shell/PageTemplate.svelte';
 	import GraphDegradedState from './GraphDegradedState.svelte';
-	import { createGetProjectRecommendations } from '$lib/api/generated/reports/reports';
-	import type { RecommendationGroupsDto } from '$lib/api/generated/models';
+	import { createGetProjectRecommendations } from '#lib/api/generated/reports/reports.js';
+	import type { RecommendationGroupsDto } from '#lib/api/generated/models/index.js';
 	import { useProjectWorkspaceContext } from '../context.svelte.js';
 	import { activeProjectQuery, createActiveProjectProjection } from '../project-queries.svelte';
 	import { reportLabel, reportSearchText } from '../report-label';

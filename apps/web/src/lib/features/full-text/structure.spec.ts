@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { DocumentBlockDto } from '$lib/api/generated/models';
+import type { DocumentBlockDto } from '#lib/api/generated/models/index.js';
 import { doiHref, firstBlockOfSection, outlineIndentClass } from './structure';
 
 function block(overrides: Partial<DocumentBlockDto>): DocumentBlockDto {

@@ -4,7 +4,7 @@
 		createGetScreeningHistory,
 		createScreenReport,
 		createUndoScreening
-	} from '$lib/api/generated/review/review';
+	} from '#lib/api/generated/review/review.js';
 	import {
 		createGetReportDocument,
 		createListDocumentPages,
@@ -17,7 +17,7 @@
 		getListFullTextScreeningQueueQueryKey,
 		getStreamReportDocumentContentUrl,
 		listFullTextScreeningQueue
-	} from '$lib/api/generated/documents/documents';
+	} from '#lib/api/generated/documents/documents.js';
 	import type {
 		ApiErrorBody,
 		DocumentBlockDto,
@@ -26,23 +26,24 @@
 		MissingFullTextDto,
 		ScreeningDecisionInput,
 		ScreeningStateDto
-	} from '$lib/api/generated/models';
+	} from '#lib/api/generated/models/index.js';
 	import { page } from '$app/state';
-	import AiProposalReview from '$lib/features/ai-assistance/components/AiProposalReview.svelte';
-	import { canRequestAiSuggestions } from '$lib/features/ai-assistance/availability';
-	import { createGetAiStatus } from '$lib/api/generated/ai/ai';
+	import AiProposalReview from '#lib/features/ai-assistance/components/AiProposalReview.svelte';
+	import { canRequestAiSuggestions } from '#lib/features/ai-assistance/availability.js';
+	import { createGetAiStatus } from '#lib/api/generated/ai/ai.js';
 	import { resolve } from '$app/paths';
-	import { pushState, replaceState } from '$app/navigation';
-	import { ApiError } from '$lib/api/custom-fetch';
+	import type { ResolvedPathname } from '$app/types';
+	import { goto } from '$app/navigation';
+	import { ApiError } from '#lib/api/custom-fetch.js';
 	import * as Alert from '@deepref/ui/alert';
 	import { Button } from '@deepref/ui/button';
 	import * as Resizable from '@deepref/ui/resizable';
-	import PageTemplate from '$lib/shell/PageTemplate.svelte';
+	import PageTemplate from '#lib/shell/PageTemplate.svelte';
 	import { Input } from '@deepref/ui/input';
 	import { Skeleton } from '@deepref/ui/skeleton';
-	import CriteriaPanel from '$lib/features/screening/components/CriteriaPanel.svelte';
-	import ScreeningFeedback from '$lib/features/screening/components/ScreeningFeedback.svelte';
-	import ScreeningHistory from '$lib/features/screening/components/ScreeningHistory.svelte';
+	import CriteriaPanel from '#lib/features/screening/components/CriteriaPanel.svelte';
+	import ScreeningFeedback from '#lib/features/screening/components/ScreeningFeedback.svelte';
+	import ScreeningHistory from '#lib/features/screening/components/ScreeningHistory.svelte';
 	import { createInfiniteQuery, useQueryClient } from '@tanstack/svelte-query';
 	import {
 		attachExternalPdf,
@@ -67,7 +68,7 @@
 		hasOpenScreeningOverlay,
 		isShortcutSuppressed,
 		shortcutAction
-	} from '$lib/features/screening/shortcuts';
+	} from '#lib/features/screening/shortcuts.js';
 	import { MediaQuery } from 'svelte/reactivity';
 	import {
 		ArrowLeft,
@@ -173,31 +174,42 @@
 			}
 		})
 	);
+
 	const blocksQuery = createListDocumentBlocks(
 		() => projectId,
 		() => currentReportId ?? '',
 		() => effectiveDocumentId,
 		() => ({ limit: 100 }),
-		() => ({ query: { enabled: Boolean(currentReportId && effectiveDocumentId) } })
+		() => ({
+			query: { enabled: Boolean(currentReportId && effectiveDocumentId) }
+		})
 	);
+
 	const pagesQuery = createListDocumentPages(
 		() => projectId,
 		() => currentReportId ?? '',
 		() => effectiveDocumentId,
-		() => ({ query: { enabled: Boolean(currentReportId && effectiveDocumentId) } })
+		() => ({
+			query: { enabled: Boolean(currentReportId && effectiveDocumentId) }
+		})
 	);
 
 	const sectionsQuery = createListDocumentSections(
 		() => projectId,
 		() => currentReportId ?? '',
 		() => effectiveDocumentId,
-		() => ({ query: { enabled: Boolean(currentReportId && effectiveDocumentId) } })
+		() => ({
+			query: { enabled: Boolean(currentReportId && effectiveDocumentId) }
+		})
 	);
+
 	const referencesQuery = createListDocumentReferences(
 		() => projectId,
 		() => currentReportId ?? '',
 		() => effectiveDocumentId,
-		() => ({ query: { enabled: Boolean(currentReportId && effectiveDocumentId) } })
+		() => ({
+			query: { enabled: Boolean(currentReportId && effectiveDocumentId) }
+		})
 	);
 
 	let choosingReason = $state(false);
@@ -257,6 +269,7 @@
 			? getStreamReportDocumentContentUrl(projectId, currentReportId, effectiveDocumentId)
 			: ''
 	);
+
 	const currentIndex = $derived(
 		(urlState.filter === 'missing' ? missingItems : visibleQueueItems).findIndex(
 			(item) => item.report_id === currentReportId
@@ -265,7 +278,6 @@
 	const queueCount = $derived(
 		urlState.filter === 'missing' ? missingItems.length : visibleQueueItems.length
 	);
-
 	const wide = new MediaQuery('(min-width: 1024px)');
 	const listedItems = $derived<FullTextItem[]>(
 		urlState.filter === 'missing' ? missingItems : visibleQueueItems
@@ -355,18 +367,18 @@
 
 	function updateUrl(changes: Partial<FullTextUrlState>, replace = true) {
 		const next = { ...urlState, ...changes };
+
 		const destination = (resolve('/projects/[projectId]/screening/full-text', { projectId }) +
-			fullTextUrlString(next)) as
-			| `/projects/${string}/screening/full-text`
-			| `/projects/${string}/screening/full-text?${string}`;
+			fullTextUrlString(next)) as ResolvedPathname;
+
 		const navigationState: FullTextNavigationState = {
 			...page.state,
 			deeprefFullTextSearch: fullTextUrlString(next)
 		};
 		if (replace) {
-			replaceState(resolve(destination), navigationState);
+			goto(destination, { shallow: true, replace: true, state: navigationState });
 		} else {
-			pushState(resolve(destination), navigationState);
+			goto(destination, { shallow: true, state: navigationState });
 		}
 	}
 
@@ -375,6 +387,7 @@
 		if (!('report_id' in value) || !('full_text_status' in value) || !('revision' in value))
 			return false;
 		const state = value as Record<string, unknown>;
+
 		return (
 			typeof state.report_id === 'string' &&
 			typeof state.full_text_status === 'string' &&
@@ -699,8 +712,10 @@
 				]}
 				aria-pressed={urlState.filter === option.value}
 				onclick={() => void updateUrl({ filter: option.value, report: null })}
-				>{option.label}<span class="tabular-nums opacity-70">{option.count}</span></button
 			>
+				{option.label}
+				<span class="tabular-nums opacity-70">{option.count}</span>
+			</button>
 		{/each}
 	</div>
 {/snippet}
@@ -736,6 +751,7 @@
 						<span class={['line-clamp-2 leading-snug', selected && 'font-medium']}
 							>{item.title ?? 'Untitled'}</span
 						>
+
 						<span class="flex items-center gap-2 text-xs text-muted-foreground">
 							<span class={[state !== 'ready' && 'text-warning']}>{label}</span>
 							{#if decision}
@@ -816,11 +832,10 @@
 		</div>
 		{#if document?.status === 'failed' && !isStoredPdfMissing(document.parser_error) && describeDocumentFailure(document.parser_error).retryable}
 			<div class="flex flex-wrap gap-2">
-				<Button type="button" disabled={retrying || uploading} onclick={retry}
-					><RefreshCw data-icon="inline-start" />{retrying
-						? 'Retrying…'
-						: 'Retry processing'}</Button
-				>
+				<Button type="button" disabled={retrying || uploading} onclick={retry}>
+					<RefreshCw data-icon="inline-start" />
+					{retrying ? 'Retrying…' : 'Retry processing'}
+				</Button>
 			</div>
 		{/if}
 		<label class="inline-flex cursor-pointer items-center self-start"
@@ -853,10 +868,11 @@
 					class="self-start"
 					disabled={finding || uploading}
 					onclick={findOpenAccess}
-					><BookOpen data-icon="inline-start" />{finding
-						? 'Looking up…'
-						: 'Find open-access PDF'}</Button
 				>
+					<BookOpen data-icon="inline-start" />
+					{finding ? 'Looking up…' : 'Find open-access PDF'}
+				</Button>
+
 				<p class="text-xs text-muted-foreground">
 					Looks up a free copy by this report's DOI, through Unpaywall.
 				</p>
@@ -905,10 +921,10 @@
 						size="sm"
 						disabled={keeping || removing}
 						onclick={removeFlaggedPdf}
-						><Trash2 data-icon="inline-start" />{removing
-							? 'Removing…'
-							: 'Remove'}</Button
 					>
+						<Trash2 data-icon="inline-start" />
+						{removing ? 'Removing…' : 'Remove'}
+					</Button>
 				</div>
 			</Alert.Description>
 		</Alert.Root>
@@ -986,13 +1002,14 @@
 					{current.title ?? 'Untitled report'}
 				</h2>
 				<div class="flex shrink-0 items-center gap-1">
-					<span class="mr-1 text-xs text-muted-foreground tabular-nums"
-						>{currentIndex >= 0
+					<span class="mr-1 text-xs text-muted-foreground tabular-nums">
+						{currentIndex >= 0
 							? `${currentIndex + 1} of ${queueCount}`
 							: urlState.filter === 'missing' && queueCurrent
 								? 'Attached · left this view'
-								: ''}</span
-					>
+								: ''}
+					</span>
+
 					<Button
 						variant="ghost"
 						size="icon-sm"
@@ -1041,6 +1058,7 @@
 							onclick={() => (documentView = 'outline')}
 							>Outline{sectionsQuery.data ? ` (${sections.length})` : ''}</button
 						>
+
 						<span aria-hidden="true">·</span>
 						<button
 							type="button"
@@ -1054,6 +1072,7 @@
 								? ` (${references.length})`
 								: ''}</button
 						>
+
 						<span aria-hidden="true">·</span>
 						<button
 							type="button"
@@ -1124,7 +1143,9 @@
 	{#if aiSuggestionsAvailable}
 		<details class="disclosure">
 			<summary>Get an AI suggestion</summary>
-			{#if currentReportId}<AiProposalReview
+
+			{#if currentReportId}
+				<AiProposalReview
 					{projectId}
 					reportId={currentReportId}
 					stage="full_text"
@@ -1226,7 +1247,9 @@
 {:else}
 	<PageTemplate testId="full-text-page" containerClass="gap-4">
 		{@render queuePane()}
+
 		<ScreeningFeedback errorTitle="Full-text review needs attention" {errorMessage} />
+
 		<section class="flex flex-col gap-4" aria-label="Full-text review">
 			{#if current}
 				{@render header()}

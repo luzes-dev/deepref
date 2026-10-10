@@ -1,5 +1,5 @@
 import type { Meta, StoryObj } from "@storybook/svelte";
-import { expect, userEvent, within } from "@storybook/test";
+import { expect, userEvent, within } from "storybook/test";
 import NavigationShowcase from "./components/NavigationShowcase.svelte";
 const meta = {
 	title: "Primitives/Navigation",

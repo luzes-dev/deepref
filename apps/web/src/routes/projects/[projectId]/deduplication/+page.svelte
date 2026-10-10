@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { page } from '$app/state';
-	import DeduplicationQueue from '$lib/features/deduplication/components/DeduplicationQueue.svelte';
+	import DeduplicationQueue from '#lib/features/deduplication/components/DeduplicationQueue.svelte';
 
 	const projectId = $derived(page.params.projectId ?? '');
 </script>

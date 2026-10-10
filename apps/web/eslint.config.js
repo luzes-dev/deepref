@@ -34,7 +34,7 @@ export default defineConfig(
 		plugins: { shadcn },
 		settings: {
 			shadcn: {
-				ui: ['@deepref/ui', '$lib/shell'],
+				ui: ['@deepref/ui', '#lib/shell'],
 				note: 'Refer to docs/ui-system-handoff.md and @deepref/ui for tokens and component variants.'
 			}
 		}
@@ -133,9 +133,9 @@ export default defineConfig(
 								'Do not import directly from @deepref/ui/src. Use explicit entrypoints like @deepref/ui/button or @deepref/ui/page-header.'
 						},
 						{
-							group: ['$lib/components', '$lib/components/**'],
+							group: ['#lib/components', '#lib/components/**'],
 							message:
-								'The $lib/components layer has been retired. Use @deepref/ui for presentation, $lib/shell for shell chrome, or $lib/features for feature modules.'
+								'The #lib/components layer has been retired. Use @deepref/ui for presentation, #lib/shell for shell chrome, or #lib/features for feature modules.'
 						}
 					]
 				}
@@ -151,12 +151,12 @@ export default defineConfig(
 					patterns: [
 						{
 							group: [
-								'$lib/api',
-								'$lib/api/**',
-								'$lib/shell',
-								'$lib/shell/**',
-								'$lib/features',
-								'$lib/features/**',
+								'#lib/api',
+								'#lib/api/**',
+								'#lib/shell',
+								'#lib/shell/**',
+								'#lib/features',
+								'#lib/features/**',
 								'**/api/**',
 								'**/shell/**',
 								'**/features/**',
@@ -179,12 +179,12 @@ export default defineConfig(
 					patterns: [
 						{
 							group: [
-								'$lib/api',
-								'$lib/api/**',
-								'$lib/shell',
-								'$lib/shell/**',
-								'$lib/features',
-								'$lib/features/**',
+								'#lib/api',
+								'#lib/api/**',
+								'#lib/shell',
+								'#lib/shell/**',
+								'#lib/features',
+								'#lib/features/**',
 								'**/api/**',
 								'**/shell/**',
 								'**/features/**',
@@ -207,10 +207,10 @@ export default defineConfig(
 					patterns: [
 						{
 							group: [
-								'$lib/shell',
-								'$lib/shell/**',
-								'$lib/features',
-								'$lib/features/**',
+								'#lib/shell',
+								'#lib/shell/**',
+								'#lib/features',
+								'#lib/features/**',
 								'**/shell/**',
 								'**/features/**',
 								'**/routes/**'
@@ -272,7 +272,7 @@ export default defineConfig(
 				{
 					name: 'fetch',
 					message:
-						'Direct call to global fetch() is forbidden in UI layers. Use customFetch or API client queries from $lib/api instead.'
+						'Direct call to global fetch() is forbidden in UI layers. Use customFetch or API client queries from #lib/api instead.'
 				}
 			]
 		}
@@ -295,7 +295,7 @@ export default defineConfig(
 								'@deepref/ui',
 								'@deepref/ui/**',
 								'$app/**',
-								'$lib/api/**',
+								'#lib/api/**',
 								'**/api/**',
 								'**/editor/**',
 								'**/routes/**'

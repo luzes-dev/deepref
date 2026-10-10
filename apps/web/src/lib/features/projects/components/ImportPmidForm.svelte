@@ -7,8 +7,8 @@
 	import {
 		getListAcquisitionsQueryKey,
 		importProjectRecords
-	} from '$lib/api/generated/acquisitions/acquisitions';
-	import { notifyError } from '$lib/features/notifications/toast';
+	} from '#lib/api/generated/acquisitions/acquisitions.js';
+	import { notifyError } from '#lib/features/notifications/toast.js';
 	import { useProjectWorkspaceContext } from '../context.svelte.js';
 	import { parsePmidList, pluralize } from '../imports';
 

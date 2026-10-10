@@ -1,4 +1,4 @@
-import type { ScreeningHistoryItemDto } from '$lib/api/generated/models';
+import type { ScreeningHistoryItemDto } from '#lib/api/generated/models/index.js';
 
 type HistoryItem = Pick<
 	ScreeningHistoryItemDto,

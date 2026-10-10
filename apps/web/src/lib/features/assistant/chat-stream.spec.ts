@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { parseSseFrame, splitSseFrames, AssistantStreamError } from '$lib/api/assistant-stream';
+import { parseSseFrame, splitSseFrames, AssistantStreamError } from '#lib/api/assistant-stream.js';
 import {
 	reviewDestinationForTool,
 	reviewQueuePathForTool,

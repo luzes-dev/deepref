@@ -1,5 +1,5 @@
 <script lang="ts">
-	import type { DocumentBlockDto } from '$lib/api/generated/models';
+	import type { DocumentBlockDto } from '#lib/api/generated/models/index.js';
 	import { Badge } from '@deepref/ui/badge';
 	import { FileSearch } from '@lucide/svelte';
 

@@ -1,4 +1,4 @@
-import { createGetProjectProjection } from '$lib/api/generated/projection/projection';
+import { createGetProjectProjection } from '#lib/api/generated/projection/projection.js';
 
 function activeProjectQueryOptions(projectId: string, enabled: boolean) {
 	return { query: { enabled: Boolean(projectId && enabled), staleTime: 0 } };

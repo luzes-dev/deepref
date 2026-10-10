@@ -3,7 +3,7 @@ import type {
 	ScreeningQueueItemDto,
 	ScreeningProgressDto,
 	ScreeningStateDto
-} from '$lib/api/generated/models';
+} from '#lib/api/generated/models/index.js';
 
 export type ScreeningQueuePage = { data: ScreeningQueueDto };
 

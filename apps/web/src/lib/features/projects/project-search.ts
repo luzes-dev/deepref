@@ -1,4 +1,4 @@
-import type { ProjectDto } from '$lib/api/generated/models';
+import type { ProjectDto } from '#lib/api/generated/models/index.js';
 
 type ProjectSummary = Pick<ProjectDto, 'created_at' | 'article_count'>;
 

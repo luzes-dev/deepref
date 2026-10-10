@@ -185,7 +185,7 @@ export const prefetchExportProjectArtifactQuery = async <
 ): Promise<QueryClient> => {
 	const queryOptions = getExportProjectArtifactQueryOptions(projectId, exportKind, options);
 
-	await queryClient.prefetchQuery(queryOptions);
+	await queryClient.query(queryOptions).catch(() => {});
 
 	return queryClient;
 };

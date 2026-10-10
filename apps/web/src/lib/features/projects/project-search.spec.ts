@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { ProjectDto } from '$lib/api/generated/models';
+import type { ProjectDto } from '#lib/api/generated/models/index.js';
 import {
 	filterProjects,
 	formatArticleCount,

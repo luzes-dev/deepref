@@ -114,7 +114,7 @@ export const prefetchGetDeprecatedHealthQuery = async <
 ): Promise<QueryClient> => {
 	const queryOptions = getGetDeprecatedHealthQueryOptions(options);
 
-	await queryClient.prefetchQuery(queryOptions);
+	await queryClient.query(queryOptions).catch(() => {});
 
 	return queryClient;
 };
@@ -224,7 +224,7 @@ export const prefetchGetDependencyStatusQuery = async <
 ): Promise<QueryClient> => {
 	const queryOptions = getGetDependencyStatusQueryOptions(params, options);
 
-	await queryClient.prefetchQuery(queryOptions);
+	await queryClient.query(queryOptions).catch(() => {});
 
 	return queryClient;
 };
@@ -308,7 +308,7 @@ export const prefetchGetLivenessQuery = async <
 ): Promise<QueryClient> => {
 	const queryOptions = getGetLivenessQueryOptions(options);
 
-	await queryClient.prefetchQuery(queryOptions);
+	await queryClient.query(queryOptions).catch(() => {});
 
 	return queryClient;
 };
@@ -405,7 +405,7 @@ export const prefetchGetReadinessQuery = async <
 ): Promise<QueryClient> => {
 	const queryOptions = getGetReadinessQueryOptions(options);
 
-	await queryClient.prefetchQuery(queryOptions);
+	await queryClient.query(queryOptions).catch(() => {});
 
 	return queryClient;
 };
