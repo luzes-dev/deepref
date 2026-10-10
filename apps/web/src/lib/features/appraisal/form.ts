@@ -7,7 +7,7 @@ import type {
 	CompleteAppraisalRequest,
 	CompleteAppraisalRequestDomainJudgments,
 	CompleteAppraisalRequestResponses
-} from '$lib/api/generated/models';
+} from '#lib/api/generated/models/index.js';
 import { presentOverrideReasons } from './suggestion';
 
 export type EvidenceSelection = {

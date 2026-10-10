@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { NodeTypeDto } from '$lib/api/generated/models';
+import type { NodeTypeDto } from '#lib/api/generated/models/index.js';
 import {
 	autoArrange,
 	catalogIndex,

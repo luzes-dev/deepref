@@ -2,7 +2,7 @@ import type {
 	AppraisalAnswerSchemaDto,
 	AppraisalQuestionDto,
 	CompleteAppraisalRequestResponses
-} from '$lib/api/generated/models';
+} from '#lib/api/generated/models/index.js';
 
 export type ResponseValue = string | boolean | number;
 

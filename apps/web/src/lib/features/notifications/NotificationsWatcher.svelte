@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { createListNotifications } from '$lib/api/generated/notifications/notifications';
+	import { createListNotifications } from '#lib/api/generated/notifications/notifications.js';
 	import { isNotificationPanelOpen, observeNotifications } from './state.svelte';
 	import { notifyNotification } from './toast';
 

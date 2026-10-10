@@ -3,7 +3,6 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 
 const navigation = vi.hoisted(() => ({
 	preloadData: vi.fn<() => Promise<{ type: string; status: number }>>(),
-	pushState: vi.fn(),
 	goto: vi.fn<() => Promise<void>>()
 }));
 const current = vi.hoisted(() => {
@@ -45,22 +44,19 @@ describe('Settings link enhancement', () => {
 			await done;
 			expect(event.defaultPrevented).toBe(false);
 			expect(navigation.preloadData).not.toHaveBeenCalled();
-			expect(navigation.pushState).not.toHaveBeenCalled();
 		}
 	);
 
 	it('falls back to real navigation when preload returns an error', async () => {
-		navigation.preloadData.mockResolvedValue({ type: 'loaded', status: 500 });
+		navigation.preloadData.mockResolvedValue({ type: 'error', status: 500 });
 		await clickSettings().done;
 		expect(navigation.goto).toHaveBeenCalledWith('/settings');
-		expect(navigation.pushState).not.toHaveBeenCalled();
 	});
 
 	it('falls back to real navigation when preload throws', async () => {
 		navigation.preloadData.mockRejectedValue(new Error('Chunk unavailable'));
 		await clickSettings().done;
 		expect(navigation.goto).toHaveBeenCalledWith('/settings');
-		expect(navigation.pushState).not.toHaveBeenCalled();
 	});
 
 	it('does not reopen Settings after the user leaves while preloading', async () => {
@@ -70,7 +66,6 @@ describe('Settings link enhancement', () => {
 		current.page.url = new URL('http://localhost/projects/example/overview');
 		preload.resolve({ type: 'loaded', status: 200 });
 		await done;
-		expect(navigation.pushState).not.toHaveBeenCalled();
 		expect(navigation.goto).not.toHaveBeenCalled();
 	});
 
@@ -82,11 +77,14 @@ describe('Settings link enhancement', () => {
 		const second = clickSettings();
 		preload.resolve({ type: 'loaded', status: 200 });
 		await Promise.all([first.done, second.done]);
-		expect(navigation.pushState).toHaveBeenCalledTimes(1);
-		expect(navigation.pushState).toHaveBeenCalledWith(
-			'/settings',
-			expect.objectContaining({ deeprefFullTextSearch: '?queue=missing' })
-		);
+		expect(navigation.goto).toHaveBeenCalledTimes(1);
+		expect(navigation.goto).toHaveBeenCalledWith('/settings', {
+			shallow: true,
+			state: expect.objectContaining({
+				deeprefFullTextSearch: '?queue=missing',
+				settingsOverlay: { backgroundUrl: '/projects/example/articles?filter=review' }
+			})
+		});
 	});
 
 	it('expands the overlay into the standalone Settings route without carrying overlay state', () => {

@@ -5,36 +5,36 @@
 	import { goto } from '$app/navigation';
 	import { resolve } from '$app/paths';
 	import { page } from '$app/state';
-	import { notifyError } from '$lib/features/notifications/toast';
+	import { notifyError } from '#lib/features/notifications/toast.js';
 	import {
 		createDecideAiProposal,
 		createGenerateAppraisalPrefillSuggestion,
 		createListAiProposals
-	} from '$lib/api/generated/ai/ai';
+	} from '#lib/api/generated/ai/ai.js';
 	import {
 		createCompleteReportAppraisal,
 		createListAppraisalDefinitions,
 		createListReportAppraisals,
 		getListReportAppraisalsQueryKey
-	} from '$lib/api/generated/appraisal/appraisal';
+	} from '#lib/api/generated/appraisal/appraisal.js';
 	import {
 		createListDocumentBlocks,
 		createListFullTextScreeningQueue,
 		createListReportDocuments
-	} from '$lib/api/generated/documents/documents';
-	import { createListProjectReports } from '$lib/api/generated/reports/reports';
-	import { createGetReportStudyMembership } from '$lib/api/generated/studies/studies';
+	} from '#lib/api/generated/documents/documents.js';
+	import { createListProjectReports } from '#lib/api/generated/reports/reports.js';
+	import { createGetReportStudyMembership } from '#lib/api/generated/studies/studies.js';
 	import type {
 		AiAppraisalPrefillProposalPayload,
 		AiProposalDto,
 		AppraisalAssessmentDto,
 		CompleteAppraisalRequest
-	} from '$lib/api/generated/models';
-	import { ApiError } from '$lib/api/custom-fetch';
-	import PageTemplate from '$lib/shell/PageTemplate.svelte';
+	} from '#lib/api/generated/models/index.js';
+	import { ApiError } from '#lib/api/custom-fetch.js';
+	import PageTemplate from '#lib/shell/PageTemplate.svelte';
 	import { useQueryClient } from '@tanstack/svelte-query';
-	import { fullTextUrlString } from '$lib/features/full-text/url';
-	import { ReviewRunObserver } from '$lib/features/ai-assistance/review-run-observer.svelte';
+	import { fullTextUrlString } from '#lib/features/full-text/url.js';
+	import { ReviewRunObserver } from '#lib/features/ai-assistance/review-run-observer.svelte.js';
 	import { Button } from '@deepref/ui/button';
 	import { Skeleton } from '@deepref/ui/skeleton';
 	import { Spinner } from '@deepref/ui/spinner';
@@ -47,8 +47,8 @@
 		serializeAppraisalPrefillReview
 	} from '../ai-prefill';
 	import type { AppraisalFormState } from '../form';
-	import EvidenceLabel from '$lib/features/evidence/EvidenceLabel.svelte';
-	import { humanizeCode } from '$lib/features/evidence/labels';
+	import EvidenceLabel from '#lib/features/evidence/EvidenceLabel.svelte';
+	import { humanizeCode } from '#lib/features/evidence/labels.js';
 	import { parseAppraisalLocation, updateAppraisalLocation } from '../url';
 	import AppraisalForm from './AppraisalForm.svelte';
 	import AppraisalSummary from './AppraisalSummary.svelte';
@@ -65,7 +65,9 @@
 		for (const key of Object.keys(drafts)) if (key.startsWith(`${report}:`)) delete drafts[key];
 	}
 
-	const location = $derived(parseAppraisalLocation(page.url.searchParams));
+	const location = $derived(
+		parseAppraisalLocation(new URLSearchParams(page.url.searchParams.toString()))
+	);
 	const reportId = $derived(location.reportId);
 	const membershipQuery = createGetReportStudyMembership(
 		() => projectId,
@@ -150,6 +152,7 @@
 	);
 	const completedAssessment = $derived.by((): AppraisalAssessmentDto | undefined => {
 		if (!selectedDefinition) return undefined;
+
 		return [...appraisals, ...(justCompleted ? [justCompleted] : [])]
 			.filter(
 				(item) =>
@@ -190,10 +193,13 @@
 	);
 
 	async function selectReport(nextReportId: string, replaceState = false): Promise<void> {
-		const search = updateAppraisalLocation(page.url.searchParams, { reportId: nextReportId });
+		const search = updateAppraisalLocation(
+			new URLSearchParams(page.url.searchParams.toString()),
+			{ reportId: nextReportId }
+		);
 		let href: string = resolve('/projects/[projectId]/appraisal', { projectId });
 		href += `?${search.toString()}`;
-		await goto(href, { keepFocus: true, noScroll: true, replaceState });
+		await goto(href, { reset: false, replace: replaceState });
 	}
 
 	// Appraisal is for reports that survived full-text screening; the full list stays one click away.
@@ -224,13 +230,16 @@
 	});
 
 	async function selectDefinition(definitionId: string, version: number): Promise<void> {
-		const search = updateAppraisalLocation(page.url.searchParams, {
-			definitionId,
-			definitionVersion: version
-		});
+		const search = updateAppraisalLocation(
+			new URLSearchParams(page.url.searchParams.toString()),
+			{
+				definitionId,
+				definitionVersion: version
+			}
+		);
 		let href: string = resolve('/projects/[projectId]/appraisal', { projectId });
 		href += `?${search.toString()}`;
-		await goto(href, { keepFocus: true, noScroll: true });
+		await goto(href, { reset: false });
 	}
 
 	function questionLabel(questionId: string): string {
@@ -381,6 +390,7 @@
 			{showAllReports ? 'All reports' : 'Included at full text'}
 			<span class="font-normal text-muted-foreground tabular-nums">{candidates.length}</span>
 		</h2>
+
 		<Button variant="ghost" size="xs" onclick={() => (showAllReports = !showAllReports)}
 			>{showAllReports ? 'Included only' : 'Show all'}</Button
 		>
@@ -498,7 +508,8 @@
 					class="hover:text-foreground"
 					aria-expanded={showHistory}
 					onclick={() => (showHistory = !showHistory)}
-					>{appraisalsQuery.isPending
+				>
+					{appraisalsQuery.isPending
 						? 'Loading assessments…'
 						: appraisals.length === 0
 							? 'Not yet appraised'
@@ -613,9 +624,8 @@
 									: 'ghost'}
 								size="xs"
 								onclick={() => (selectedAiProposalId = proposal.id)}
+								>{proposal.id.slice(0, 8)}</Button
 							>
-								{proposal.id.slice(0, 8)}
-							</Button>
 						{/each}
 					</div>
 				{/if}
@@ -624,6 +634,7 @@
 						>Rationale and evidence for {activeAiPayload.answers.length} answers · overall
 						{activeAiPayload.overall_judgment}</summary
 					>
+
 					<ol class="flex flex-col gap-4 pt-3" data-testid="ai-prefill-proposal">
 						{#each activeAiPayload.answers as answer (answer.question_id)}
 							<li class="flex flex-col gap-1">
@@ -641,7 +652,7 @@
 											<a
 												class="inline-flex max-w-full min-w-0 items-start gap-1 text-xs text-primary underline underline-offset-2"
 												href={resolve(
-													`/projects/${encodeURIComponent(projectId)}/screening/full-text${fullTextUrlString(
+													`projects/${encodeURIComponent(projectId)}/screening/full-text${fullTextUrlString(
 														{
 															filter: 'all',
 															report: reportId ?? null,
@@ -767,9 +778,17 @@
 					<a
 						class="text-xs text-primary underline"
 						href={resolve(
-							`/projects/${encodeURIComponent(projectId)}/screening/full-text${fullTextUrlString({ filter: 'all', report: reportId, page: block.page_number, block: block.id })}`
+							`projects/${encodeURIComponent(projectId)}/screening/full-text${fullTextUrlString(
+								{
+									filter: 'all',
+									report: reportId,
+									page: block.page_number,
+									block: block.id
+								}
+							)}`
 						)}>Page {block.page_number}</a
 					>
+
 					<p class="text-sm leading-6 whitespace-pre-wrap">{block.text}</p>
 				</article>
 			{:else}
@@ -782,7 +801,7 @@
 						variant="outline"
 						size="sm"
 						href={resolve(
-							`/projects/${encodeURIComponent(projectId)}/screening/full-text${fullTextUrlString({ filter: 'all', report: reportId, page: null, block: null })}`
+							`projects/${encodeURIComponent(projectId)}/screening/full-text${fullTextUrlString({ filter: 'all', report: reportId, page: null, block: null })}`
 						)}>Open in full text</Button
 					>
 				</div>

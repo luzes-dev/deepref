@@ -1,5 +1,8 @@
-import { AssistantToolKind } from '$lib/api/generated/models';
-import type { AssistantToolDescriptor, AssistantToolRequest } from '$lib/api/generated/models';
+import { AssistantToolKind } from '#lib/api/generated/models/index.js';
+import type {
+	AssistantToolDescriptor,
+	AssistantToolRequest
+} from '#lib/api/generated/models/index.js';
 
 export type ToolName = AssistantToolRequest['tool'];
 export type ToolKind = (typeof AssistantToolKind)[keyof typeof AssistantToolKind];

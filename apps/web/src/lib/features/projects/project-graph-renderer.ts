@@ -1,4 +1,4 @@
-import type { GraphEdgeDto, GraphNodeDto } from '$lib/api/generated/models';
+import type { GraphEdgeDto, GraphNodeDto } from '#lib/api/generated/models/index.js';
 import type { GraphOverlayField } from './context.svelte.js';
 import { appraisalStatus, provenanceStatus, screeningStatus, studyStatus } from './graph-overlays';
 import { fitBBoxWithLabels, getGraphNodeSize, layoutIsolatedNodes } from './graph-layout';

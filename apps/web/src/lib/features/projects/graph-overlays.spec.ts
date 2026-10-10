@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import type { GraphNodeDto } from '$lib/api/generated/models';
+import type { GraphNodeDto } from '#lib/api/generated/models/index.js';
 import {
 	appraisalStatus,
 	overlaySummary,

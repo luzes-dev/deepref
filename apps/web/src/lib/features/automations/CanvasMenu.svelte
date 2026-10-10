@@ -22,7 +22,7 @@
 	import ChevronRightIcon from '@lucide/svelte/icons/chevron-right';
 	import SearchIcon from '@lucide/svelte/icons/search';
 	import XIcon from '@lucide/svelte/icons/x';
-	import type { NodeTypeDto } from '$lib/api/generated/models';
+	import type { NodeTypeDto } from '#lib/api/generated/models/index.js';
 	import { iconForNode } from './icons';
 	import {
 		BLOCK_ALIASES,

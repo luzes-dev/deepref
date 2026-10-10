@@ -1,6 +1,6 @@
 <script lang="ts">
 	import { page } from '$app/state';
-	import ActivityFeed from '$lib/features/ai-autonomy/components/ActivityFeed.svelte';
+	import ActivityFeed from '#lib/features/ai-autonomy/components/ActivityFeed.svelte';
 
 	const projectId = $derived(page.params.projectId ?? '');
 </script>

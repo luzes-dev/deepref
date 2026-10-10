@@ -1,4 +1,4 @@
-import { customFetch } from '$lib/api/custom-fetch';
+import { customFetch } from '#lib/api/custom-fetch.js';
 
 export interface AssistantConversation {
 	id: string;

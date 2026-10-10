@@ -1,5 +1,5 @@
 <script lang="ts">
-	import type { EligibilityCriterionDto } from '$lib/api/generated/models';
+	import type { EligibilityCriterionDto } from '#lib/api/generated/models/index.js';
 
 	let {
 		criteria,

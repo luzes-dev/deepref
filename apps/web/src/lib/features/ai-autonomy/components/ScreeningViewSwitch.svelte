@@ -2,7 +2,7 @@
 	import type { Snippet } from 'svelte';
 	import { goto } from '$app/navigation';
 	import { page } from '$app/state';
-	import { createGetAiActivityOverview } from '$lib/api/generated/ai/ai';
+	import { createGetAiActivityOverview } from '#lib/api/generated/ai/ai.js';
 	import { Button } from '@deepref/ui/button';
 	import { Badge } from '@deepref/ui/badge';
 	import * as Alert from '@deepref/ui/alert';
@@ -29,11 +29,10 @@
 	);
 
 	async function show(view: 'queue' | 'conflicts'): Promise<void> {
-		const url = new URL(page.url);
+		const url = new URL(page.url.href);
 		if (view === 'conflicts') url.searchParams.set('view', 'conflicts');
 		else url.searchParams.delete('view');
-		// eslint-disable-next-line svelte/no-navigation-without-resolve -- same-page query change
-		await goto(url, { replaceState: true, keepFocus: true, noScroll: true });
+		await goto(url, { replace: true, reset: false });
 	}
 </script>
 

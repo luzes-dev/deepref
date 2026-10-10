@@ -1,5 +1,5 @@
 <script lang="ts">
-	import type { StudyDto, StudyToolSuggestionDto } from '$lib/api/generated/models';
+	import type { StudyDto, StudyToolSuggestionDto } from '#lib/api/generated/models/index.js';
 	import { resolve } from '$app/paths';
 	import { Badge } from '@deepref/ui/badge';
 	import { Button } from '@deepref/ui/button';
@@ -70,7 +70,9 @@
 					placeholder={study.title}
 					required
 				/>
+
 				<Button type="submit" disabled={renaming || !renameTitle.trim()}>Save</Button>
+
 				<Button type="button" variant="ghost" onclick={() => (editingTitle = false)}
 					>Cancel</Button
 				>
@@ -98,6 +100,7 @@
 				onclick={() => (classifyingOpen = !classifyingOpen)}
 				>{study.design_label ? 'Change' : 'Classify'}</Button
 			>
+
 			{#if study.tool_suggestions.length > 0}
 				<span aria-hidden="true">·</span>
 				<Tooltip.Provider>
@@ -108,7 +111,7 @@
 									<a
 										{...props}
 										href={resolve(
-											`/projects/${encodeURIComponent(study.project_id)}/appraisal?${toolSearch(suggestion)}`
+											`projects/${encodeURIComponent(study.project_id)}/appraisal?${toolSearch(suggestion)}`
 										)}
 										class="rounded-md outline-none focus-visible:ring-3 focus-visible:ring-ring/30"
 										data-testid="suggested-tool-link"

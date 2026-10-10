@@ -4,7 +4,7 @@
 		AiProposalDto,
 		AiStudyDesignClassificationProposalPayload,
 		AiStudyDesignEvidenceDto
-	} from '$lib/api/generated/models';
+	} from '#lib/api/generated/models/index.js';
 	import { StatePanel, Surface } from '@deepref/ui/layout';
 	import * as Alert from '@deepref/ui/alert';
 	import { Badge } from '@deepref/ui/badge';
@@ -13,7 +13,7 @@
 	import { Skeleton } from '@deepref/ui/skeleton';
 	import { Spinner } from '@deepref/ui/spinner';
 	import { Brain, Check, X } from '@lucide/svelte';
-	import EvidenceLabel from '$lib/features/evidence/EvidenceLabel.svelte';
+	import EvidenceLabel from '#lib/features/evidence/EvidenceLabel.svelte';
 	import { page } from '$app/state';
 
 	let {

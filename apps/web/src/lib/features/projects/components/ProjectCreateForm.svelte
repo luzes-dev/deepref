@@ -4,8 +4,8 @@
 	import { Input } from '@deepref/ui/input';
 	import { Textarea } from '@deepref/ui/textarea';
 	import { Spinner } from '@deepref/ui/spinner';
-	import { createCreateProject } from '$lib/api/generated/projects/projects';
-	import { notifyError } from '$lib/features/notifications/toast';
+	import { createCreateProject } from '#lib/api/generated/projects/projects.js';
+	import { notifyError } from '#lib/features/notifications/toast.js';
 	import { useProjectWorkspaceContext } from '../context.svelte.js';
 	import { formatProjectDate, projectsNamed } from '../project-search';
 	import PlusIcon from '@lucide/svelte/icons/plus';

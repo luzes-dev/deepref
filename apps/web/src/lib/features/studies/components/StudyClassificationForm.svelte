@@ -1,5 +1,5 @@
 <script lang="ts">
-	import type { StudyDto } from '$lib/api/generated/models';
+	import type { StudyDto } from '#lib/api/generated/models/index.js';
 	import { Checkbox } from '@deepref/ui/checkbox';
 	import * as Field from '@deepref/ui/field';
 	import { Button } from '@deepref/ui/button';

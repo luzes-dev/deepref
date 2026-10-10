@@ -3,7 +3,7 @@
 	import XIcon from '@lucide/svelte/icons/x';
 	import { Button } from '@deepref/ui/button';
 	import { Input } from '@deepref/ui/input';
-	import type { FieldDetailsDto } from '$lib/api/generated/models';
+	import type { FieldDetailsDto } from '#lib/api/generated/models/index.js';
 	import { OPERATORS, type ConditionValue } from '../model';
 	import OptionSelect from './OptionSelect.svelte';
 

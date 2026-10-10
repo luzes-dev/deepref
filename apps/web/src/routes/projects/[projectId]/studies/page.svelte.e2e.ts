@@ -1,5 +1,5 @@
 import { expect, test, type Page } from '@playwright/test';
-import type { AiProposalDto } from '$lib/api/generated/models';
+import type { AiProposalDto } from '#lib/api/generated/models/index.js';
 
 const project = {
 	id: 'project-1',

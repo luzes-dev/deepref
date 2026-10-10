@@ -1,4 +1,4 @@
-import type { PrismaDto } from '$lib/api/generated/models';
+import type { PrismaDto } from '#lib/api/generated/models/index.js';
 
 type FlowCounts = Pick<
 	PrismaDto,

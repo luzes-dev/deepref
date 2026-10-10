@@ -3,7 +3,7 @@ import type {
 	AiAppraisalPrefillProposalPayload,
 	AppraisalDefinitionDto,
 	DocumentBlockDto
-} from '$lib/api/generated/models';
+} from '#lib/api/generated/models/index.js';
 import {
 	appraisalAnswerValue,
 	appraisalEvidenceHref,

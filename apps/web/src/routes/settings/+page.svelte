@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { page } from '$app/state';
-	import SettingsView from '$lib/features/settings/SettingsView.svelte';
-	import { collapseSettings } from '$lib/features/settings/navigation';
+	import SettingsView from '#lib/features/settings/SettingsView.svelte';
+	import { collapseSettings } from '#lib/features/settings/navigation.js';
 
 	const canCollapseToModal = $derived(Boolean(page.state.settingsExpansion));
 </script>

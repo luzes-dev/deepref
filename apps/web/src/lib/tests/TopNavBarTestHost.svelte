@@ -1,7 +1,7 @@
 <script lang="ts">
 	import { QueryClient, QueryClientProvider } from '@tanstack/svelte-query';
 	import type { Snippet } from 'svelte';
-	import TopNavBar from '$lib/shell/TopNavBar.svelte';
+	import TopNavBar from '#lib/shell/TopNavBar.svelte';
 
 	let {
 		children,

@@ -1,7 +1,7 @@
 <script lang="ts">
-	import type { ApiErrorBody, DocumentDto } from '$lib/api/generated/models';
-	import { createReparseReportDocument } from '$lib/api/generated/documents/documents';
-	import { ApiError } from '$lib/api/custom-fetch';
+	import type { ApiErrorBody, DocumentDto } from '#lib/api/generated/models/index.js';
+	import { createReparseReportDocument } from '#lib/api/generated/documents/documents.js';
+	import { ApiError } from '#lib/api/custom-fetch.js';
 	import { Button } from '@deepref/ui/button';
 	import { RefreshCw } from '@lucide/svelte';
 	import { describeDocumentFailure } from '../document-failure';

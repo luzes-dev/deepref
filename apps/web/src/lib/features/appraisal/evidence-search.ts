@@ -1,4 +1,4 @@
-import type { DocumentBlockDto } from '$lib/api/generated/models';
+import type { DocumentBlockDto } from '#lib/api/generated/models/index.js';
 
 /** Lower-cases and strips diacritics so "Randomised" matches "randomised" and "randomisé". */
 export function normalizeSearchText(value: string): string {

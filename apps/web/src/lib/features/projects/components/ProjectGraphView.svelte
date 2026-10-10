@@ -3,9 +3,9 @@
 	import { resolve } from '$app/paths';
 	import type { ResolvedPathname } from '$app/types';
 	import { page } from '$app/state';
-	import type { GraphNodeDto, ProjectGraphDto } from '$lib/api/generated/models';
-	import { createGetProjectGraph } from '$lib/api/generated/reports/reports';
-	import GraphDegradedState from '$lib/features/projects/components/GraphDegradedState.svelte';
+	import type { GraphNodeDto, ProjectGraphDto } from '#lib/api/generated/models/index.js';
+	import { createGetProjectGraph } from '#lib/api/generated/reports/reports.js';
+	import GraphDegradedState from '#lib/features/projects/components/GraphDegradedState.svelte';
 	import { Badge } from '@deepref/ui/badge';
 	import { Button } from '@deepref/ui/button';
 	import { Checkbox } from '@deepref/ui/checkbox';
@@ -14,7 +14,7 @@
 	import { Slider } from '@deepref/ui/slider';
 	import { Spinner } from '@deepref/ui/spinner';
 	import { PageToolbar, StatePanel, Surface } from '@deepref/ui/layout';
-	import PageTemplate from '$lib/shell/PageTemplate.svelte';
+	import PageTemplate from '#lib/shell/PageTemplate.svelte';
 	import RotateCcwIcon from '@lucide/svelte/icons/rotate-ccw';
 	import SearchIcon from '@lucide/svelte/icons/search';
 	import { onCleanup, watch } from 'runed';
@@ -131,13 +131,13 @@
 	}
 
 	function clearFilters() {
-		const url = new URL(page.url);
+		const url = new URL(page.url.href);
 		url.searchParams.delete('graphSearch');
 		url.searchParams.delete('graphMinInternal');
 		const destination = `${resolve('/projects/[projectId]/graph', {
 			projectId: workspace.selectedProjectId
 		})}${url.search}` as ResolvedPathname;
-		void goto(destination, { noScroll: true, keepFocus: true });
+		void goto(destination, { reset: false });
 	}
 
 	function resetLayout() {

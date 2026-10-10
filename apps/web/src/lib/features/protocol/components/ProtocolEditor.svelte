@@ -1,7 +1,7 @@
 <script lang="ts">
 	import * as Tabs from '@deepref/ui/tabs';
 	import * as Alert from '@deepref/ui/alert';
-	import PageTemplate from '$lib/shell/PageTemplate.svelte';
+	import PageTemplate from '#lib/shell/PageTemplate.svelte';
 	import ProtocolDocument from './ProtocolDocument.svelte';
 	import * as Empty from '@deepref/ui/empty';
 	import * as Field from '@deepref/ui/field';
@@ -10,8 +10,8 @@
 	import { Spinner } from '@deepref/ui/spinner';
 	import { Textarea } from '@deepref/ui/textarea';
 	import * as Select from '@deepref/ui/select';
-	import { notifyError } from '$lib/features/notifications/toast';
-	import { useProjectWorkspaceContext } from '$lib/features/projects/context.svelte.js';
+	import { notifyError } from '#lib/features/notifications/toast.js';
+	import { useProjectWorkspaceContext } from '#lib/features/projects/context.svelte.js';
 	import ArrowDownIcon from '@lucide/svelte/icons/arrow-down';
 	import ArrowUpIcon from '@lucide/svelte/icons/arrow-up';
 	import PlusIcon from '@lucide/svelte/icons/plus';
@@ -191,6 +191,7 @@
 			: current === null
 				? `new:${projectId}:${projectDetails ? 'project' : 'loading'}`
 				: undefined;
+
 		if (
 			reconciling ||
 			nextKey === undefined ||
@@ -288,6 +289,7 @@
 	}
 
 	beforeNavigate((navigation) => {
+		if (navigation.shallow && navigation.type === 'goto') return;
 		if (!isDirty.current || !editable) return;
 		flushAutosave();
 		if (navigation.type === 'leave') {

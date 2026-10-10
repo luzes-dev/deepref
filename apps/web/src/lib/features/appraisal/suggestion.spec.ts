@@ -1,5 +1,8 @@
 import { describe, expect, it } from 'vitest';
-import type { AppraisalDefinitionDto, JudgmentSuggestionDto } from '$lib/api/generated/models';
+import type {
+	AppraisalDefinitionDto,
+	JudgmentSuggestionDto
+} from '#lib/api/generated/models/index.js';
 import {
 	differsFromSuggestion,
 	driverLabels,

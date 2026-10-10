@@ -2,17 +2,22 @@
 	type TData = unknown;
 </script>
 
-<script lang="ts" generics="TData">
-	import Settings2Icon from '@lucide/svelte/icons/settings-2';
-	import type { Table } from '@tanstack/table-core';
-	import { Button } from '../button/index.js';
-	import * as DropdownMenu from '../dropdown-menu/index.js';
+<script lang="ts" generics="TData extends RowData">
+	import Settings2Icon from "@lucide/svelte/icons/settings-2";
+	import type { Column, RowData } from "@tanstack/svelte-table";
+	import { Button } from "../button/index.js";
+	import * as DropdownMenu from "../dropdown-menu/index.js";
+
+	type HideableColumn = Pick<
+		Column<any, TData, unknown>,
+		"id" | "accessorFn" | "getCanHide" | "getIsVisible" | "toggleVisibility"
+	>;
 
 	let {
 		table,
-		columnLabels = {}
+		columnLabels = {},
 	}: {
-		table: Table<TData>;
+		table: { getAllColumns: () => HideableColumn[] };
 		columnLabels?: Record<string, string>;
 	} = $props();
 </script>
@@ -20,7 +25,12 @@
 <DropdownMenu.Root>
 	<DropdownMenu.Trigger>
 		{#snippet child({ props })}
-			<Button {...props} variant="outline" size="sm" class="ml-auto hidden h-8 lg:flex">
+			<Button
+				{...props}
+				variant="outline"
+				size="sm"
+				class="ml-auto hidden h-8 lg:flex"
+			>
 				<Settings2Icon data-icon="inline-start" />
 				View
 			</Button>
@@ -28,11 +38,12 @@
 	</DropdownMenu.Trigger>
 	<DropdownMenu.Content align="end">
 		<DropdownMenu.Group>
-			<DropdownMenu.GroupHeading>Toggle columns</DropdownMenu.GroupHeading>
+			<DropdownMenu.GroupHeading>Toggle columns</DropdownMenu.GroupHeading
+			>
 			<DropdownMenu.Separator />
 			{#each table
 				.getAllColumns()
-				.filter((column) => typeof column.accessorFn !== 'undefined' && column.getCanHide()) as column (column.id)}
+				.filter((column) => typeof column.accessorFn !== "undefined" && column.getCanHide()) as column (column.id)}
 				<DropdownMenu.CheckboxItem
 					bind:checked={
 						() => column.getIsVisible(),
