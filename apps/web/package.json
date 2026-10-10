@@ -64,7 +64,7 @@
 		"graphology": "^0.26.0",
 		"graphology-layout-forceatlas2": "^0.10.1",
 		"graphology-layout-noverlap": "^0.4.2",
-		"jsdom": "^30.0.1",
+		"jsdom": "^30.1.2",
 		"jsrepo": "^3.8.1",
 		"mode-watcher": "^1.1.0",
 		"msw": "^2.15.0",
