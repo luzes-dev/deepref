@@ -7,7 +7,7 @@
 //! Durable assistant agent runs: lifecycle, idempotency and event ordering.
 
 use deepref_postgres::{
-    AppendAssistantMessage, AssistantAgentRunStatus, CompletedAssistantAgentRun,
+    AppendAssistantMessage, AssistantAgentRunStatus, AssistantError, CompletedAssistantAgentRun,
     NewAssistantAgentRun, NewAssistantPlan, append_assistant_run_event, begin_assistant_agent_run,
     complete_assistant_agent_run, create_assistant_agent_run, get_assistant_agent_run,
     list_assistant_run_events, migrate, submit_assistant_agent_run,
@@ -124,7 +124,9 @@ async fn run_lifecycle_is_idempotent_under_retry() {
         .expect("run creates");
     assert_eq!(created.status, AssistantAgentRunStatus::Queued);
 
-    // Begin takes queued -> running and clears the event log.
+    // Begin takes queued -> running and preserves the event log: recovery
+    // continues the monotonic seqs with a `status` boundary, so live
+    // observers holding an after_seq stay valid across the redrive.
     append_assistant_run_event(&pool, created.id, "text", &json!({"delta": "stale"}))
         .await
         .expect("event appends");
@@ -133,14 +135,16 @@ async fn run_lifecycle_is_idempotent_under_retry() {
         .expect("begin works")
         .expect("run claimed");
     assert_eq!(claimed.record.status, AssistantAgentRunStatus::Queued);
+    let events = list_assistant_run_events(&pool, created.id, -1, 10)
+        .await
+        .expect("events list");
     assert_eq!(
-        list_assistant_run_events(&pool, created.id, -1, 10)
-            .await
-            .expect("events list")
-            .len(),
-        0,
-        "takeover starts from a clean event log"
+        events.iter().map(|event| event.seq).collect::<Vec<_>>(),
+        vec![0, 1],
+        "takeover continues the log instead of wiping it"
     );
+    assert_eq!(events[0].kind, "text");
+    assert_eq!(events[1].kind, "status");
 
     // Complete writes the answer and plan idempotently.
     let answer = AppendAssistantMessage {
@@ -235,12 +239,18 @@ async fn failed_runs_record_errors_without_answers() {
             .await
             .expect("fail works")
     );
-    // Failing twice is a no-op.
+    // Failing twice is a no-op that appends nothing.
     assert!(
         !deepref_postgres::fail_assistant_agent_run(&pool, created.id, &json!({"code": "x"}))
             .await
             .expect("re-fail works")
     );
+    // The failure records exactly one `error` event.
+    let events = list_assistant_run_events(&pool, created.id, -1, 10)
+        .await
+        .expect("events list");
+    assert_eq!(events.len(), 1);
+    assert_eq!(events[0].kind, "error");
     let stored = get_assistant_agent_run(&pool, created.id)
         .await
         .expect("run loads")
@@ -295,4 +305,167 @@ async fn run_events_keep_sequence_order() {
         .execute(&pool)
         .await
         .expect("cleanup");
+}
+
+#[tokio::test]
+async fn redrive_preserves_events_with_monotonic_seqs() {
+    let Some(pool) = database().await else { return };
+    let (project_id, conversation_id) = project(&pool).await;
+    let trigger = user_message(&pool, conversation_id).await;
+    let created = create_assistant_agent_run(&pool, &new_run(project_id, conversation_id, trigger))
+        .await
+        .expect("run creates");
+    // First drive: a fresh run starts with no boundary marker.
+    begin_assistant_agent_run(&pool, created.id)
+        .await
+        .expect("begin works")
+        .expect("run claimed");
+    for delta in ["a", "b", "c"] {
+        append_assistant_run_event(&pool, created.id, "text", &json!({"delta": delta}))
+            .await
+            .expect("event appends");
+    }
+    // Recovery continues the same log: prior events stay, one `status`
+    // boundary scopes the new attempt, seqs never restart at 0.
+    begin_assistant_agent_run(&pool, created.id)
+        .await
+        .expect("begin works")
+        .expect("run claimed");
+    for delta in ["d", "e"] {
+        append_assistant_run_event(&pool, created.id, "text", &json!({"delta": delta}))
+            .await
+            .expect("event appends");
+    }
+    let events = list_assistant_run_events(&pool, created.id, -1, 20)
+        .await
+        .expect("events list");
+    assert_eq!(
+        events.iter().map(|event| event.seq).collect::<Vec<_>>(),
+        vec![0, 1, 2, 3, 4, 5],
+        "seqs stay gap-free monotonic across the redrive"
+    );
+    assert_eq!(
+        events
+            .iter()
+            .map(|event| event.kind.as_str())
+            .collect::<Vec<_>>(),
+        vec!["text", "text", "text", "status", "text", "text"]
+    );
+    assert_eq!(
+        events[3].payload,
+        json!({"message": "Retrying after interruption"})
+    );
+    // Observers holding an after_seq stay valid: resuming mid-log replays
+    // only the tail, including the boundary and the new attempt.
+    let tail = list_assistant_run_events(&pool, created.id, 2, 20)
+        .await
+        .expect("tail lists");
+    assert_eq!(
+        tail.iter().map(|event| event.seq).collect::<Vec<_>>(),
+        vec![3, 4, 5]
+    );
+    sqlx::query("DELETE FROM projects WHERE id=$1")
+        .bind(project_id)
+        .execute(&pool)
+        .await
+        .expect("cleanup");
+}
+
+#[tokio::test]
+async fn terminal_redelivery_appends_nothing() {
+    let Some(pool) = database().await else { return };
+    let (project_id, conversation_id) = project(&pool).await;
+    let trigger = user_message(&pool, conversation_id).await;
+    let created = create_assistant_agent_run(&pool, &new_run(project_id, conversation_id, trigger))
+        .await
+        .expect("run creates");
+    let claimed = begin_assistant_agent_run(&pool, created.id)
+        .await
+        .expect("begin works")
+        .expect("run claimed");
+    append_assistant_run_event(&pool, created.id, "text", &json!({"delta": "hi"}))
+        .await
+        .expect("event appends");
+    let completed = CompletedAssistantAgentRun {
+        answer: AppendAssistantMessage {
+            id: claimed.record.answer_message_id,
+            conversation_id,
+            role: "assistant".to_owned(),
+            content: "done".to_owned(),
+            tool_calls: None,
+            tool_results: None,
+            metadata: None,
+        },
+        plan: None,
+        effect_log: None,
+        run_spec_hash: None,
+    };
+    assert!(
+        complete_assistant_agent_run(&pool, created.id, &completed)
+            .await
+            .expect("complete works")
+    );
+    let before = list_assistant_run_events(&pool, created.id, -1, 20)
+        .await
+        .expect("events list");
+    // A terminal redelivery neither re-executes nor appends: no new events,
+    // and in particular no bogus `error` event from an attempts-exhausted
+    // fail.
+    assert!(
+        begin_assistant_agent_run(&pool, created.id)
+            .await
+            .expect("begin works")
+            .is_none()
+    );
+    assert!(
+        !deepref_postgres::fail_assistant_agent_run(&pool, created.id, &json!({"code": "x"}))
+            .await
+            .expect("fail works")
+    );
+    let after = list_assistant_run_events(&pool, created.id, -1, 20)
+        .await
+        .expect("events list");
+    assert_eq!(after.len(), before.len());
+    assert!(after.iter().all(|event| event.kind != "error"));
+    let stored = get_assistant_agent_run(&pool, created.id)
+        .await
+        .expect("run loads")
+        .expect("run exists");
+    assert_eq!(stored.status, AssistantAgentRunStatus::Completed);
+    sqlx::query("DELETE FROM projects WHERE id=$1")
+        .bind(project_id)
+        .execute(&pool)
+        .await
+        .expect("cleanup");
+}
+
+#[tokio::test]
+async fn run_insert_after_delete_reports_not_found() {
+    let Some(pool) = database().await else { return };
+    let (project_id, conversation_id) = project(&pool).await;
+    let trigger = user_message(&pool, conversation_id).await;
+    // Conversation deleted between validation and insert: 404-grade, not 400.
+    let missing_conversation = Uuid::new_v4();
+    let error =
+        create_assistant_agent_run(&pool, &new_run(project_id, missing_conversation, trigger))
+            .await
+            .expect_err("insert must fail");
+    assert!(
+        matches!(error, AssistantError::ConversationNotFound),
+        "conversation race must be 404-grade, got {error:?}"
+    );
+    // Project deleted: the project variant instead.
+    sqlx::query("DELETE FROM projects WHERE id=$1")
+        .bind(project_id)
+        .execute(&pool)
+        .await
+        .expect("cleanup");
+    let error =
+        create_assistant_agent_run(&pool, &new_run(project_id, missing_conversation, trigger))
+            .await
+            .expect_err("insert must fail");
+    assert!(
+        matches!(error, AssistantError::ProjectNotFound),
+        "project race must be 404-grade, got {error:?}"
+    );
 }
