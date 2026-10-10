@@ -248,7 +248,7 @@ pub(crate) async fn get_ai_status(
     };
     Ok(Json(AiStatusDto {
         suggestions_available: available,
-        assistant_available: available && state.chat_gateway.is_some(),
+        assistant_available: available,
         configured: state.ai_info.configured,
         provider: state.ai_info.provider.clone(),
         model: state.ai_info.model.clone(),

@@ -16,10 +16,10 @@ use uuid::Uuid;
 
 use super::*;
 use crate::{
-    Actor, ActorKind, AgentLoopConfig, AgentProgress, AgentTool, AgentToolName, AiError, AiFuture,
-    BudgetSnapshot, ChatMessage, ChatToolCall, ModelParameters, ModelProfile, PriceBook,
-    ResolvedModel, UsageEntry, UsageLedger, agent_tool_declarations,
-    runtime::{context::DeepRefAgentContext, model::StaticModelFactory},
+    Actor, ActorKind, AgentLoopConfig, AgentTool, AgentToolName, AiError, AiFuture, BudgetSnapshot,
+    ChatMessage, ChatToolCall, ModelParameters, ModelProfile, PriceBook, ResolvedModel, UsageEntry,
+    UsageLedger, agent_tool_declarations,
+    runtime::{AgentProgress, context::DeepRefAgentContext, model::StaticModelFactory},
 };
 use deepref_domain::ProjectId;
 

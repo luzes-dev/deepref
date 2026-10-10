@@ -4,10 +4,8 @@
 //! gateways, prompt definitions, grounding, policy, and task orchestration.
 //! SQLx and pgvector stay in `deepref-postgres`.
 
-mod agent_loop;
 mod agents;
 mod assistant;
-mod chat;
 mod classification;
 mod dedupe;
 mod endpoint;
@@ -26,10 +24,8 @@ mod structured;
 mod types;
 mod usage;
 
-pub use agent_loop::*;
 pub use agents::*;
 pub use assistant::*;
-pub use chat::*;
 pub use classification::{
     ClassificationReportField, StudyDesignClassification, StudyDesignClassificationInput,
     StudyDesignClassificationTask, StudyDesignEvidence, StudyDesignLabel, StudyDesignReport,
@@ -63,6 +59,13 @@ pub use runner::{
     AiExecutionContext, AiRunStore, AiTask, AiTaskResult, AiTaskRunner, Clock, EvidenceRetriever,
     IdProvider, ModelRouter, ProposalPersistence, ProposalStore, SystemClock, UuidProvider,
     interpret_structured_response, safe_error_metadata, structured_output_schema,
+};
+pub use runtime::{
+    ASSISTANT_PROMPT_VERSION, AgentLoopConfig, ChatMessage, ChatToolCall, MAX_REPORTS_PER_ACTION,
+    ManualStep, PlanAction, TOOL_FINAL_EXCLUSION, TOOL_LIST_REPORTS, TOOL_PROJECT_OVERVIEW,
+    TOOL_PUBLISH_PROTOCOL, TOOL_SCREEN_REPORTS, ToolTraceEntry, agent_tool_declarations,
+    assistant_system_prompt, claims_pending_change, is_read_tool, no_plan_notice,
+    plan_action_is_executable, validate_screen_reports,
 };
 pub use screening::{
     CriterionJudgment, CriterionPrompt, CriterionResult, ScreeningAnalysis, ScreeningEvidence,

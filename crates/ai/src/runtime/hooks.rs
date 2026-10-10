@@ -219,7 +219,7 @@ impl AgentHook for DeepRefHooks {
                 && !hooks.consistency_retried.swap(true, Ordering::SeqCst)
             {
                 return ModelTurnAction::Retry(RetryRequest::Feedback(
-                    crate::agent_loop::NO_PLAN_CORRECTION.to_owned(),
+                    super::plan::NO_PLAN_CORRECTION.to_owned(),
                 ));
             }
             ModelTurnAction::Continue

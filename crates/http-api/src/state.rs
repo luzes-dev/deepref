@@ -1,7 +1,7 @@
 use std::sync::Arc;
 use std::time::Instant;
 
-use deepref_ai::{AiGateway, ChatGateway, RoutedGateway};
+use deepref_ai::{AiGateway, RoutedGateway};
 use deepref_documents::DocumentStore;
 use sqlx::PgPool;
 
@@ -20,8 +20,6 @@ pub struct AppState {
     pub started_at: Instant,
     pub document_store: Option<DocumentStore>,
     pub ai_gateway: Arc<dyn AiGateway>,
-    /// Tool-calling chat for the assistant; `None` when no provider is set.
-    pub chat_gateway: Option<Arc<dyn ChatGateway>>,
     pub ai_info: AiRuntimeInfo,
 }
 
@@ -32,7 +30,6 @@ impl AppState {
             started_at: Instant::now(),
             document_store: None,
             ai_gateway: Arc::new(RoutedGateway::default()),
-            chat_gateway: None,
             ai_info: AiRuntimeInfo::default(),
         }
     }
@@ -51,17 +48,8 @@ impl AppState {
         self
     }
 
-    pub fn with_chat_gateway<G>(mut self, gateway: G) -> Self
-    where
-        G: ChatGateway + 'static,
-    {
-        self.chat_gateway = Some(Arc::new(gateway));
-        self.ai_info.configured = true;
-        self
-    }
-
-    /// Installs one provider stack that serves both structured completions
-    /// and assistant chat.
+    /// Installs the structured-completion provider stack. Assistant turns run
+    /// durably in the worker; nothing serves chat gateways anymore.
     pub fn with_ai_provider<G>(
         mut self,
         gateway: Arc<G>,
@@ -69,10 +57,9 @@ impl AppState {
         model: impl Into<String>,
     ) -> Self
     where
-        G: AiGateway + ChatGateway + 'static,
+        G: AiGateway + 'static,
     {
-        self.ai_gateway = gateway.clone();
-        self.chat_gateway = Some(gateway);
+        self.ai_gateway = gateway;
         self.ai_info = AiRuntimeInfo {
             configured: true,
             provider: Some(provider.into()),

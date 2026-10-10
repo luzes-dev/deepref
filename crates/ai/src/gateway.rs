@@ -12,9 +12,8 @@ use serde_json::json;
 use tracing::debug;
 
 use crate::{
-    AiError, AiFuture, ChatCompletion, ChatGateway, ChatRequest, ChatTextSink, CompletionRequest,
-    Embedding, GatewayCompletion, GroundingContextBuilder, ProviderEndpoint,
-    register_provider_endpoint,
+    AiError, AiFuture, CompletionRequest, Embedding, GatewayCompletion, GroundingContextBuilder,
+    ProviderEndpoint, register_provider_endpoint,
 };
 
 pub trait AiGateway: Send + Sync {
@@ -36,14 +35,12 @@ type Adapters<T> = RwLock<BTreeMap<(String, String), Arc<T>>>;
 
 pub struct RoutedGateway {
     adapters: Adapters<dyn AiGateway>,
-    chat_adapters: Adapters<dyn ChatGateway>,
 }
 
 impl Default for RoutedGateway {
     fn default() -> Self {
         Self {
             adapters: RwLock::new(BTreeMap::new()),
-            chat_adapters: RwLock::new(BTreeMap::new()),
         }
     }
 }
@@ -75,30 +72,16 @@ impl RoutedGateway {
             .insert((provider.into(), model.into()), gateway);
         Ok(())
     }
-    pub fn register_chat(
+    pub fn register_provider<G>(
         &self,
         provider: impl Into<String>,
         model: impl Into<String>,
-        gateway: Arc<dyn ChatGateway>,
-    ) -> Result<(), AiError> {
-        self.chat_adapters
-            .write()
-            .map_err(|_| AiError::Gateway("gateway registry lock is poisoned".to_owned()))?
-            .insert((provider.into(), model.into()), gateway);
-        Ok(())
-    }
-    /// Registers one provider adapter for both structured completion and chat.
-    pub fn register_provider<G>(
-        &self,
-        provider: impl Into<String> + Clone,
-        model: impl Into<String> + Clone,
         gateway: Arc<G>,
     ) -> Result<(), AiError>
     where
-        G: AiGateway + ChatGateway + 'static,
+        G: AiGateway + 'static,
     {
-        self.register(provider.clone(), model.clone(), gateway.clone())?;
-        self.register_chat(provider, model, gateway)
+        self.register(provider, model, gateway)
     }
     pub fn register_adapter<G>(
         &self,
@@ -125,40 +108,6 @@ impl AiGateway for RoutedGateway {
                 AiError::Gateway("no adapter is registered for the resolved route".to_owned())
             })?;
             adapter.complete(request).await
-        })
-    }
-}
-
-impl ChatGateway for RoutedGateway {
-    fn chat<'a>(&'a self, request: ChatRequest) -> AiFuture<'a, ChatCompletion> {
-        Box::pin(async move {
-            let adapter = lookup(
-                &self.chat_adapters,
-                &request.route.provider,
-                &request.route.model,
-            )?
-            .ok_or_else(|| {
-                AiError::Gateway("no chat adapter is registered for the resolved route".to_owned())
-            })?;
-            adapter.chat(request).await
-        })
-    }
-
-    fn chat_streaming<'a>(
-        &'a self,
-        request: ChatRequest,
-        on_text: ChatTextSink<'a>,
-    ) -> AiFuture<'a, ChatCompletion> {
-        Box::pin(async move {
-            let adapter = lookup(
-                &self.chat_adapters,
-                &request.route.provider,
-                &request.route.model,
-            )?
-            .ok_or_else(|| {
-                AiError::Gateway("no chat adapter is registered for the resolved route".to_owned())
-            })?;
-            adapter.chat_streaming(request, on_text).await
         })
     }
 }

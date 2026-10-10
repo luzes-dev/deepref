@@ -6,10 +6,7 @@ use std::sync::Arc;
 use deepref_domain::ProjectId;
 use uuid::Uuid;
 
-use crate::{
-    AiError, AiFuture, AiGateway, ChatCompletion, ChatGateway, ChatRequest, ChatTextSink,
-    CompletionRequest, GatewayCompletion, PriceBook, ResolvedModel, estimate_tokens,
-};
+use crate::{AiError, AiFuture, AiGateway, CompletionRequest, GatewayCompletion, PriceBook};
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct UsageEntry {
@@ -122,166 +119,6 @@ impl<G: AiGateway> AiGateway for MeteredGateway<G> {
     }
 }
 
-impl<G: ChatGateway> MeteredGateway<G> {
-    /// Records a completed chat call. The provider call already happened, so a
-    /// bookkeeping failure must not discard its result.
-    async fn record_chat(
-        &self,
-        project_id: Option<ProjectId>,
-        route: &ResolvedModel,
-        completion: &mut ChatCompletion,
-    ) {
-        let cost = completion.cost_micros.unwrap_or_else(|| {
-            self.prices.estimate_cost_micros(
-                &route.provider,
-                &route.model,
-                completion.input_tokens,
-                completion.output_tokens,
-            )
-        });
-        completion.cost_micros = Some(cost);
-        let entry = chat_usage_entry(
-            project_id,
-            route,
-            completion.input_tokens,
-            completion.output_tokens,
-            cost,
-        );
-        if let Err(error) = self.ledger.record(entry).await {
-            tracing::warn!(?error, "failed to record AI usage");
-        }
-    }
-}
-
-fn chat_usage_entry(
-    project_id: Option<ProjectId>,
-    route: &ResolvedModel,
-    input_tokens: u64,
-    output_tokens: u64,
-    cost_micros: i64,
-) -> UsageEntry {
-    UsageEntry {
-        project_id: project_id.map(|id| id.as_uuid()),
-        profile: route.profile.as_str().to_owned(),
-        provider: route.provider.clone(),
-        model: route.model.clone(),
-        purpose: "chat",
-        input_tokens,
-        output_tokens,
-        cost_micros,
-    }
-}
-
-/// Bills a streamed chat call that is dropped before it finishes, for example
-/// when the user presses Stop. The provider generated text up to that point,
-/// so the ledger gets an estimate (input from the request, output from the
-/// characters already emitted) instead of nothing. Calls that finish, or fail,
-/// are settled with [`AbandonedStreamUsage::settle`] and never estimated here.
-struct AbandonedStreamUsage {
-    ledger: Arc<dyn UsageLedger>,
-    prices: Arc<PriceBook>,
-    entry: Option<UsageEntry>,
-    emitted_chars: usize,
-}
-
-impl AbandonedStreamUsage {
-    fn new(ledger: Arc<dyn UsageLedger>, prices: Arc<PriceBook>, entry: UsageEntry) -> Self {
-        Self {
-            ledger,
-            prices,
-            entry: Some(entry),
-            emitted_chars: 0,
-        }
-    }
-
-    fn emitted(&mut self, text: &str) {
-        self.emitted_chars += text.chars().count();
-    }
-
-    fn settle(mut self) {
-        self.entry = None;
-    }
-}
-
-impl Drop for AbandonedStreamUsage {
-    fn drop(&mut self) {
-        let Some(mut entry) = self.entry.take() else {
-            return;
-        };
-        entry.output_tokens = estimate_tokens(self.emitted_chars);
-        entry.cost_micros = self.prices.estimate_cost_micros(
-            &entry.provider,
-            &entry.model,
-            entry.input_tokens,
-            entry.output_tokens,
-        );
-        // The ledger row has no estimate flag, so the log is where it is marked.
-        tracing::info!(
-            ai.model = %entry.model,
-            input_tokens = entry.input_tokens,
-            output_tokens = entry.output_tokens,
-            "abandoned AI call recorded as an estimate"
-        );
-        let ledger = Arc::clone(&self.ledger);
-        match tokio::runtime::Handle::try_current() {
-            Ok(handle) => {
-                handle.spawn(async move {
-                    if let Err(error) = ledger.record(entry).await {
-                        tracing::warn!(?error, "failed to record abandoned AI usage");
-                    }
-                });
-            }
-            Err(_) => tracing::warn!("abandoned AI usage was not recorded: no async runtime"),
-        }
-    }
-}
-
-impl<G: ChatGateway> ChatGateway for MeteredGateway<G> {
-    fn chat<'a>(&'a self, request: ChatRequest) -> AiFuture<'a, ChatCompletion> {
-        Box::pin(async move {
-            self.ensure_budget(request.project_id).await?;
-            let project_id = request.project_id;
-            let route = request.route.clone();
-            let mut completion = self.inner.chat(request).await?;
-            self.record_chat(project_id, &route, &mut completion).await;
-            Ok(completion)
-        })
-    }
-
-    fn chat_streaming<'a>(
-        &'a self,
-        request: ChatRequest,
-        on_text: ChatTextSink<'a>,
-    ) -> AiFuture<'a, ChatCompletion> {
-        Box::pin(async move {
-            self.ensure_budget(request.project_id).await?;
-            let project_id = request.project_id;
-            let route = request.route.clone();
-            let estimated_input = request.approximate_input_tokens();
-            let mut abandoned = AbandonedStreamUsage::new(
-                Arc::clone(&self.ledger),
-                Arc::clone(&self.prices),
-                chat_usage_entry(project_id, &route, estimated_input, 0, 0),
-            );
-            let mut sink = |text: &str| {
-                abandoned.emitted(text);
-                on_text(text);
-            };
-            let result = self.inner.chat_streaming(request, &mut sink).await;
-            let mut completion = match result {
-                Ok(completion) => completion,
-                Err(error) => {
-                    abandoned.settle();
-                    return Err(error);
-                }
-            };
-            abandoned.settle();
-            self.record_chat(project_id, &route, &mut completion).await;
-            Ok(completion)
-        })
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use std::sync::{
@@ -290,7 +127,7 @@ mod tests {
     };
 
     use super::*;
-    use crate::{ModelParameters, ModelPrice, ModelProfile, ResolvedModel, estimate_cost_micros};
+    use crate::{ModelParameters, ModelPrice, ModelProfile, ResolvedModel};
 
     struct Ledger {
         spent: Mutex<i64>,
@@ -395,146 +232,16 @@ mod tests {
             .unwrap_or_else(|_| unreachable!());
     }
 
-    fn chat_route() -> ResolvedModel {
-        ResolvedModel {
-            profile: ModelProfile::Reasoning,
-            provider: "opencode-go".to_owned(),
-            model: "glm-5.3-flash".to_owned(),
-            model_version: "glm-5.3-flash".to_owned(),
-            parameters: ModelParameters::default(),
-            route_id: None,
-        }
-    }
-
-    fn chat_request(project: Option<ProjectId>, prompt: &str) -> ChatRequest {
-        ChatRequest {
-            project_id: project,
-            route: chat_route(),
-            messages: vec![crate::ChatMessage::User(prompt.to_owned())],
-            tools: Vec::new(),
-            max_output_tokens: None,
-        }
-    }
-
-    fn empty_ledger() -> Arc<Ledger> {
-        Arc::new(Ledger {
-            spent: Mutex::new(0),
-            budget: 5_000_000,
-            recorded: Mutex::new(Vec::new()),
-        })
-    }
-
-    /// Streams a little text, then never finishes, like a provider that is
-    /// still generating when the user presses Stop.
-    struct Stalled;
-    impl ChatGateway for Stalled {
-        fn chat<'a>(&'a self, _request: ChatRequest) -> AiFuture<'a, ChatCompletion> {
-            Box::pin(async { Err(AiError::Gateway("not streaming".to_owned())) })
-        }
-        fn chat_streaming<'a>(
-            &'a self,
-            _request: ChatRequest,
-            on_text: ChatTextSink<'a>,
-        ) -> AiFuture<'a, ChatCompletion> {
-            Box::pin(async move {
-                on_text("Hello there, this is a partial answer");
-                std::future::pending::<Result<ChatCompletion, AiError>>().await
-            })
-        }
-    }
-
-    struct Finishing;
-    impl ChatGateway for Finishing {
-        fn chat<'a>(&'a self, _request: ChatRequest) -> AiFuture<'a, ChatCompletion> {
-            Box::pin(async { Err(AiError::Gateway("not streaming".to_owned())) })
-        }
-        fn chat_streaming<'a>(
-            &'a self,
-            _request: ChatRequest,
-            on_text: ChatTextSink<'a>,
-        ) -> AiFuture<'a, ChatCompletion> {
-            Box::pin(async move {
-                on_text("Done.");
-                Ok(ChatCompletion {
-                    content: "Done.".to_owned(),
-                    tool_calls: Vec::new(),
-                    input_tokens: 7,
-                    output_tokens: 2,
-                    cost_micros: None,
-                })
-            })
-        }
-    }
-
-    #[tokio::test]
-    async fn a_stopped_stream_is_billed_once_as_an_estimate() {
-        let ledger = empty_ledger();
-        let gateway = MeteredGateway::new(Stalled, ledger.clone());
-        let project = Some(ProjectId::new(Uuid::from_u128(2)));
-        let mut sink = |_: &str| {};
-        let prompt = "x".repeat(400);
-        let stopped = tokio::time::timeout(
-            std::time::Duration::from_millis(50),
-            gateway.chat_streaming(chat_request(project, &prompt), &mut sink),
-        )
-        .await;
-        assert!(
-            stopped.is_err(),
-            "the stream must still be running when stopped"
-        );
-        // The entry is written by a task spawned from the drop; give it a moment.
-        for _ in 0..200 {
-            if !ledger
-                .recorded
-                .lock()
-                .unwrap_or_else(|_| unreachable!())
-                .is_empty()
-            {
-                break;
-            }
-            tokio::time::sleep(std::time::Duration::from_millis(5)).await;
-        }
-        let recorded = ledger
-            .recorded
-            .lock()
-            .unwrap_or_else(|_| unreachable!())
-            .clone();
-        assert_eq!(recorded.len(), 1, "one estimate for the abandoned call");
-        // 400 prompt characters and 37 emitted characters, about four per token.
-        assert_eq!(recorded[0].purpose, "chat");
-        assert_eq!(recorded[0].input_tokens, 100);
-        assert_eq!(recorded[0].output_tokens, 10);
-        assert_eq!(
-            recorded[0].cost_micros,
-            estimate_cost_micros("glm-5.3-flash", 100, 10)
-        );
-    }
-
-    #[tokio::test]
-    async fn a_finished_stream_is_recorded_once_with_its_own_usage() {
-        let ledger = empty_ledger();
-        let gateway = MeteredGateway::new(Finishing, ledger.clone());
-        let mut sink = |_: &str| {};
-        let completion = gateway
-            .chat_streaming(chat_request(None, "hi"), &mut sink)
-            .await
-            .unwrap_or_else(|_| unreachable!());
-        assert_eq!(completion.content, "Done.");
-        tokio::time::sleep(std::time::Duration::from_millis(20)).await;
-        let recorded = ledger
-            .recorded
-            .lock()
-            .unwrap_or_else(|_| unreachable!())
-            .clone();
-        assert_eq!(recorded.len(), 1, "a settled call is never estimated again");
-        assert_eq!(
-            (recorded[0].input_tokens, recorded[0].output_tokens),
-            (7, 2)
-        );
-    }
-
     #[tokio::test]
     async fn configured_prices_price_each_provider_and_model_on_the_ledger() {
+        fn empty_ledger() -> Arc<Ledger> {
+            Arc::new(Ledger {
+                spent: Mutex::new(0),
+                budget: 5_000_000,
+                recorded: Mutex::new(Vec::new()),
+            })
+        }
+
         let ledger = empty_ledger();
         let prices = PriceBook::new([(
             "opencode-go".to_owned(),

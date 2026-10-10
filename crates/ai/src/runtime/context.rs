@@ -61,6 +61,6 @@ pub trait AssistantToolHost: Send + Sync {
         call: &crate::ChatToolCall,
         index: usize,
     ) -> Result<crate::PlanAction, String> {
-        crate::agent_loop::plan_write_call(context.project_id, &context.actor, call, index)
+        super::plan::plan_write_call(context.project_id, &context.actor, call, index)
     }
 }

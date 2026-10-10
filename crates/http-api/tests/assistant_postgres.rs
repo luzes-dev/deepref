@@ -14,9 +14,8 @@ use axum::{
 };
 use chrono::{Duration, Utc};
 use deepref_ai::{
-    AiError, AiFuture, AiGateway, ChatCompletion, ChatGateway, ChatRequest, CompletionRequest,
-    GatewayCompletion, ModelParameters, ModelProfile, ResolvedModel, runtime::StaticModelFactory,
-    sha256_bytes,
+    AiError, AiFuture, AiGateway, CompletionRequest, GatewayCompletion, ModelParameters,
+    ModelProfile, ResolvedModel, runtime::StaticModelFactory, sha256_bytes,
 };
 use deepref_application::jobs::ClaimedJob;
 use deepref_config::RuntimeConfig;
@@ -1121,22 +1120,6 @@ async fn assistant_envelope_and_unsupported_actions_fail_closed() {
     cleanup(&pool, fixture).await;
 }
 
-struct ScriptedChat {
-    replies: Mutex<Vec<ChatCompletion>>,
-}
-
-impl ChatGateway for ScriptedChat {
-    fn chat<'a>(&'a self, _request: ChatRequest) -> AiFuture<'a, ChatCompletion> {
-        Box::pin(async move {
-            let mut replies = self.replies.lock().expect("script lock");
-            if replies.is_empty() {
-                return Err(AiError::Gateway("script exhausted".to_owned()));
-            }
-            Ok(replies.remove(0))
-        })
-    }
-}
-
 /// Scripted Rig stream turns for the durable assistant flow.
 fn rig_text(text: &str) -> Vec<MockStreamEvent> {
     vec![
@@ -1234,9 +1217,8 @@ async fn assistant_writes_only_after_plan_confirmation_and_respects_budget() {
         ),
         rig_text("I prepared a plan; nothing has changed yet."),
     ]);
-    let state = AppState::new(pool.clone()).with_chat_gateway(ScriptedChat {
-        replies: Mutex::new(Vec::new()),
-    });
+    let mut state = AppState::new(pool.clone());
+    state.ai_info.configured = true;
 
     let (status, body) = post_json(
         &state,
@@ -1566,9 +1548,8 @@ async fn assistant_claim_without_a_plan_is_corrected_before_the_user_relies_on_i
         ),
         rig_text("Nothing has been queued: no change was made to any record."),
     ]);
-    let state = AppState::new(pool.clone()).with_chat_gateway(ScriptedChat {
-        replies: Mutex::new(Vec::new()),
-    });
+    let mut state = AppState::new(pool.clone());
+    state.ai_info.configured = true;
     let conversation_id = create_conversation(&state, project, "claim guard").await;
     let (status, body) = post_json(
         &state,
@@ -1638,9 +1619,8 @@ async fn assistant_plan_step_follows_its_review_run_to_a_plain_failure() {
         ),
         rig_text("I prepared a plan; nothing has changed yet."),
     ]);
-    let state = AppState::new(pool.clone()).with_chat_gateway(ScriptedChat {
-        replies: Mutex::new(Vec::new()),
-    });
+    let mut state = AppState::new(pool.clone());
+    state.ai_info.configured = true;
     let conversation_id = create_conversation(&state, project, "review step").await;
     let (status, body) = post_json(
         &state,
@@ -1750,9 +1730,8 @@ async fn assistant_refuses_overlong_messages_before_storing_them() {
     let _guard = test_lock().lock().await;
     let Some(pool) = database().await else { return };
     let fixture = seed(&pool).await;
-    let state = AppState::new(pool.clone()).with_chat_gateway(ScriptedChat {
-        replies: Mutex::new(Vec::new()),
-    });
+    let mut state = AppState::new(pool.clone());
+    state.ai_info.configured = true;
     let project = fixture.project_id;
     let conversation_id = create_conversation(&state, project, "long message").await;
     let (status, body) = post_json(

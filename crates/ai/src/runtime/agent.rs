@@ -32,9 +32,8 @@ use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
 use uuid::Uuid;
 
 use crate::{
-    AgentLoopConfig, AgentProgress, AiError, AssistantStreamEvent, ChatMessage, ChatToolCall,
-    PlanAction, PriceBook, ToolTraceEntry, UsageLedger, assistant_system_prompt,
-    claims_pending_change,
+    AgentLoopConfig, AiError, AssistantStreamEvent, ChatMessage, ChatToolCall, PlanAction,
+    PriceBook, ToolTraceEntry, UsageLedger, assistant_system_prompt, claims_pending_change,
     runtime::{
         cassette::AssistantCassette,
         context::{AssistantToolHost, DeepRefAgentContext},
@@ -44,8 +43,22 @@ use crate::{
     },
 };
 
-/// Inputs for one Rig-driven assistant turn. Mirrors [`AgentTurn`][crate::AgentTurn];
-/// the custom loop stays available for parity tests.
+/// Live progress of one turn, for a transport that shows it while the turn
+/// runs. Every method defaults to doing nothing, so an observer implements only
+/// what it shows.
+pub trait AgentProgress: Send {
+    /// Answer text as the model generates it. Text of a step that ends in tool
+    /// calls is reported as well, so the transport must clear it when a tool
+    /// starts; the final answer is the text after the last clear.
+    fn text_delta(&mut self, _delta: &str) {}
+    /// The text reported so far is not part of the answer: the loop discarded
+    /// that step and is asking the model again.
+    fn text_discarded(&mut self) {}
+    /// A tool call is about to run, before it has any effect.
+    fn tool_started(&mut self, _call: &ChatToolCall) {}
+}
+
+/// Inputs for one Rig-driven assistant turn.
 pub struct RigTurn<'a> {
     pub factory: Arc<dyn AgentModelFactory>,
     pub context: DeepRefAgentContext,
@@ -69,9 +82,8 @@ pub struct RigTurn<'a> {
     pub progress: Option<&'a mut (dyn AgentProgress + Send)>,
 }
 
-/// Outcome of one Rig-driven turn. Field-for-field compatible with
-/// [`AgentTurnOutcome`][crate::AgentTurnOutcome] so transports treat both
-/// runtimes identically.
+/// Outcome of one Rig-driven turn: reply, plan actions, tool trace, token
+/// accounting, step count and truncation.
 #[derive(Debug, Clone)]
 pub struct RigTurnOutcome {
     pub reply: String,
@@ -519,7 +531,7 @@ fn success_outcome(driver: &mut Driver, response: &PromptResponse) -> RigTurnOut
         reply = format!(
             "{}\n\n{}",
             reply.trim_end(),
-            crate::agent_loop::no_plan_notice(&driver.user_message)
+            super::plan::no_plan_notice(&driver.user_message)
         );
     }
     outcome.reply = reply;
