@@ -94,8 +94,8 @@ tower-http = { version = "0.7.0", features = ["cors", "trace"] }
 tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter", "json"] }
 tracing-opentelemetry = "0.33.0"
-utoipa = { version = "5.5.0", features = ["axum_extras", "chrono", "uuid"] }
-utoipa-axum = "0.2.0"
+utoipa = { version = "6.0.0", features = ["axum_extras", "chrono", "uuid"] }
+utoipa-axum = "0.3.0"
 roxmltree = "0.20.0"
 url = "2.5.8"
 urlencoding = "2.1.3"

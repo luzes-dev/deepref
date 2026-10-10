@@ -12,7 +12,7 @@ export interface AssistantPlanActionDto {
 	/** False when the assistant is never allowed to run this; see `manual`. */
 	executable: boolean;
 	id: string;
-	manual?: null | AssistantPlanManualStepDto;
+	manual?: AssistantPlanManualStepDto | null;
 	rationale: string;
 	summary: string;
 	tool: string;

@@ -10,6 +10,6 @@ import type { ExtractionValueSourceRequest } from './extractionValueSourceReques
 export interface RecordExtractionValueRequest {
 	/** @nullable */
 	rationale?: string | null;
-	source?: null | ExtractionValueSourceRequest;
+	source?: ExtractionValueSourceRequest | null;
 	value: ExtractionValueDtoValue;
 }

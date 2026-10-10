@@ -598,6 +598,131 @@ export const createAttachOpenAccessReportDocument = <
 		queryClient
 	);
 };
+export type deleteReportDocumentResponse204 = {
+	data: void;
+	status: 204;
+};
+
+export type deleteReportDocumentResponse404 = {
+	data: ApiErrorBody;
+	status: 404;
+};
+
+export type deleteReportDocumentResponse409 = {
+	data: ApiErrorBody;
+	status: 409;
+};
+
+export type deleteReportDocumentResponse500 = {
+	data: ApiErrorBody;
+	status: 500;
+};
+
+export type deleteReportDocumentResponseSuccess = deleteReportDocumentResponse204 & {
+	headers: Headers;
+};
+export type deleteReportDocumentResponseError = (
+	| deleteReportDocumentResponse404
+	| deleteReportDocumentResponse409
+	| deleteReportDocumentResponse500
+) & {
+	headers: Headers;
+};
+
+export const getDeleteReportDocumentUrl = (
+	projectId: string,
+	reportId: string,
+	documentId: string
+) => {
+	return `/api/projects/${projectId}/reports/${reportId}/documents/${documentId}`;
+};
+
+export const deleteReportDocument = async (
+	projectId: string,
+	reportId: string,
+	documentId: string,
+	options?: Parameters<typeof customFetch>[1]
+): Promise<deleteReportDocumentResponseSuccess> => {
+	return customFetch<deleteReportDocumentResponseSuccess>(
+		getDeleteReportDocumentUrl(projectId, reportId, documentId),
+		{
+			...options,
+			method: 'DELETE'
+		}
+	);
+};
+
+export const getDeleteReportDocumentMutationKey = () => ['deleteReportDocument'] as const;
+
+export const getDeleteReportDocumentMutationOptions = <
+	TError = ErrorType<ApiErrorBody>,
+	TContext = unknown
+>(options?: {
+	mutation?: CreateMutationOptions<
+		Awaited<ReturnType<typeof deleteReportDocument>>,
+		TError,
+		DeleteReportDocumentMutationVariables,
+		TContext
+	>;
+	request?: SecondParameter<typeof customFetch>;
+}): CreateMutationOptions<
+	Awaited<ReturnType<typeof deleteReportDocument>>,
+	TError,
+	DeleteReportDocumentMutationVariables,
+	TContext
+> => {
+	const mutationKey = getDeleteReportDocumentMutationKey();
+	const { mutation: mutationOptions, request: requestOptions } = options
+		? options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey
+			? options
+			: { ...options, mutation: { ...options.mutation, mutationKey } }
+		: { mutation: { mutationKey }, request: undefined };
+
+	const mutationFn: MutationFunction<
+		Awaited<ReturnType<typeof deleteReportDocument>>,
+		DeleteReportDocumentMutationVariables
+	> = (props) => {
+		const { projectId, reportId, documentId } = props ?? {};
+
+		return deleteReportDocument(projectId, reportId, documentId, requestOptions);
+	};
+
+	return { mutationFn, ...mutationOptions };
+};
+
+export type DeleteReportDocumentMutationResult = NonNullable<
+	Awaited<ReturnType<typeof deleteReportDocument>>
+>;
+
+export type DeleteReportDocumentMutationError = ErrorType<ApiErrorBody>;
+export type DeleteReportDocumentMutationVariables = {
+	projectId: string;
+	reportId: string;
+	documentId: string;
+};
+
+export const createDeleteReportDocument = <TError = ErrorType<ApiErrorBody>, TContext = unknown>(
+	options?: () => {
+		mutation?: CreateMutationOptions<
+			Awaited<ReturnType<typeof deleteReportDocument>>,
+			TError,
+			DeleteReportDocumentMutationVariables,
+			TContext
+		>;
+		request?: SecondParameter<typeof customFetch>;
+	},
+	queryClient?: () => QueryClient
+): CreateMutationResult<
+	Awaited<ReturnType<typeof deleteReportDocument>>,
+	TError,
+	DeleteReportDocumentMutationVariables,
+	TContext
+> => {
+	return createMutation(
+		() => ({ ...getDeleteReportDocumentMutationOptions(options?.()) }),
+		queryClient
+	);
+};
 export type getReportDocumentResponse200 = {
 	data: DocumentDto;
 	status: 200;
@@ -741,131 +866,6 @@ export const prefetchGetReportDocumentQuery = async <
 	return queryClient;
 };
 
-export type deleteReportDocumentResponse204 = {
-	data: void;
-	status: 204;
-};
-
-export type deleteReportDocumentResponse404 = {
-	data: ApiErrorBody;
-	status: 404;
-};
-
-export type deleteReportDocumentResponse409 = {
-	data: ApiErrorBody;
-	status: 409;
-};
-
-export type deleteReportDocumentResponse500 = {
-	data: ApiErrorBody;
-	status: 500;
-};
-
-export type deleteReportDocumentResponseSuccess = deleteReportDocumentResponse204 & {
-	headers: Headers;
-};
-export type deleteReportDocumentResponseError = (
-	| deleteReportDocumentResponse404
-	| deleteReportDocumentResponse409
-	| deleteReportDocumentResponse500
-) & {
-	headers: Headers;
-};
-
-export const getDeleteReportDocumentUrl = (
-	projectId: string,
-	reportId: string,
-	documentId: string
-) => {
-	return `/api/projects/${projectId}/reports/${reportId}/documents/${documentId}`;
-};
-
-export const deleteReportDocument = async (
-	projectId: string,
-	reportId: string,
-	documentId: string,
-	options?: Parameters<typeof customFetch>[1]
-): Promise<deleteReportDocumentResponseSuccess> => {
-	return customFetch<deleteReportDocumentResponseSuccess>(
-		getDeleteReportDocumentUrl(projectId, reportId, documentId),
-		{
-			...options,
-			method: 'DELETE'
-		}
-	);
-};
-
-export const getDeleteReportDocumentMutationKey = () => ['deleteReportDocument'] as const;
-
-export const getDeleteReportDocumentMutationOptions = <
-	TError = ErrorType<ApiErrorBody>,
-	TContext = unknown
->(options?: {
-	mutation?: CreateMutationOptions<
-		Awaited<ReturnType<typeof deleteReportDocument>>,
-		TError,
-		DeleteReportDocumentMutationVariables,
-		TContext
-	>;
-	request?: SecondParameter<typeof customFetch>;
-}): CreateMutationOptions<
-	Awaited<ReturnType<typeof deleteReportDocument>>,
-	TError,
-	DeleteReportDocumentMutationVariables,
-	TContext
-> => {
-	const mutationKey = getDeleteReportDocumentMutationKey();
-	const { mutation: mutationOptions, request: requestOptions } = options
-		? options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey
-			? options
-			: { ...options, mutation: { ...options.mutation, mutationKey } }
-		: { mutation: { mutationKey }, request: undefined };
-
-	const mutationFn: MutationFunction<
-		Awaited<ReturnType<typeof deleteReportDocument>>,
-		DeleteReportDocumentMutationVariables
-	> = (props) => {
-		const { projectId, reportId, documentId } = props ?? {};
-
-		return deleteReportDocument(projectId, reportId, documentId, requestOptions);
-	};
-
-	return { mutationFn, ...mutationOptions };
-};
-
-export type DeleteReportDocumentMutationResult = NonNullable<
-	Awaited<ReturnType<typeof deleteReportDocument>>
->;
-
-export type DeleteReportDocumentMutationError = ErrorType<ApiErrorBody>;
-export type DeleteReportDocumentMutationVariables = {
-	projectId: string;
-	reportId: string;
-	documentId: string;
-};
-
-export const createDeleteReportDocument = <TError = ErrorType<ApiErrorBody>, TContext = unknown>(
-	options?: () => {
-		mutation?: CreateMutationOptions<
-			Awaited<ReturnType<typeof deleteReportDocument>>,
-			TError,
-			DeleteReportDocumentMutationVariables,
-			TContext
-		>;
-		request?: SecondParameter<typeof customFetch>;
-	},
-	queryClient?: () => QueryClient
-): CreateMutationResult<
-	Awaited<ReturnType<typeof deleteReportDocument>>,
-	TError,
-	DeleteReportDocumentMutationVariables,
-	TContext
-> => {
-	return createMutation(
-		() => ({ ...getDeleteReportDocumentMutationOptions(options?.()) }),
-		queryClient
-	);
-};
 export type listDocumentBlocksResponse200 = {
 	data: DocumentBlockDto[];
 	status: 200;

@@ -37,7 +37,7 @@ use tower_http::{cors::CorsLayer, trace::TraceLayer};
 use utoipa::openapi::{Info, OpenApi};
 use utoipa_axum::{router::OpenApiRouter, routes};
 
-use crate::{config::ApiConfig, state::AppState};
+use crate::{config::ApiConfig, error::ApiError, state::AppState};
 
 const MULTIPART_OVERHEAD_BYTES: usize = 1024 * 1024;
 
@@ -203,6 +203,54 @@ pub fn openapi_document() -> OpenApi {
     openapi_router(deepref_documents::DEFAULT_MAX_DOCUMENT_BYTES).into_openapi()
 }
 
+/// The OpenAPI document as JSON, with every response carrying its required `description`.
+///
+/// OpenAPI makes `description` mandatory on a response object, but utoipa 6 omits the field
+/// whenever a `#[utoipa::path]` macro names none: it skips serialising an empty string. The
+/// document that leaves the generator is then schema-invalid and the client generator
+/// refuses it. Restoring the field keeps the emitted document valid without inventing prose
+/// for responses the macros never described.
+pub fn openapi_document_json() -> Result<serde_json::Value, serde_json::Error> {
+    let mut document = serde_json::to_value(openapi_document())?;
+    fill_response_descriptions(&mut document);
+    Ok(document)
+}
+
+fn fill_response_descriptions(document: &mut serde_json::Value) {
+    let Some(paths) = document
+        .get_mut("paths")
+        .and_then(serde_json::Value::as_object_mut)
+    else {
+        return;
+    };
+    for item in paths.values_mut() {
+        let Some(item) = item.as_object_mut() else {
+            continue;
+        };
+        for (method, operation) in item.iter_mut() {
+            if !matches!(
+                method.as_str(),
+                "get" | "put" | "post" | "delete" | "options" | "head" | "patch" | "trace"
+            ) {
+                continue;
+            }
+            let Some(responses) = operation
+                .get_mut("responses")
+                .and_then(serde_json::Value::as_object_mut)
+            else {
+                continue;
+            };
+            for response in responses.values_mut() {
+                if let Some(response) = response.as_object_mut() {
+                    response
+                        .entry("description")
+                        .or_insert_with(|| serde_json::Value::String(String::new()));
+                }
+            }
+        }
+    }
+}
+
 pub fn router(state: AppState, config: &ApiConfig) -> Router {
     let cors = CorsLayer::new()
         .allow_origin(if config.cors_allow_any {
@@ -238,7 +286,12 @@ pub fn router(state: AppState, config: &ApiConfig) -> Router {
             let openapi = Arc::clone(&openapi);
             get(move || {
                 let openapi = Arc::clone(&openapi);
-                async move { Json((*openapi).clone()) }
+                async move {
+                    let mut document = serde_json::to_value((*openapi).clone())
+                        .map_err(|error| ApiError::Internal(anyhow::anyhow!(error)))?;
+                    fill_response_descriptions(&mut document);
+                    Ok::<_, ApiError>(Json(document))
+                }
             })
         })
         .layer(cors)
@@ -761,8 +814,28 @@ mod tests {
             .expect("response body must be readable");
         let served: serde_json::Value =
             serde_json::from_slice(&body).expect("response must contain valid OpenAPI JSON");
-        let exported =
-            serde_json::to_value(openapi_document()).expect("OpenAPI document must serialize");
+        let exported = openapi_document_json().expect("OpenAPI document must serialize");
         assert_eq!(served, exported);
+        // OpenAPI requires `description` on every response object. utoipa 6 omits an empty
+        // one, so the exported document has to put the field back before it leaves.
+        for (path, item) in served["paths"].as_object().expect("document has paths") {
+            for (method, operation) in item.as_object().expect("path item is an object") {
+                if !matches!(
+                    method.as_str(),
+                    "get" | "put" | "post" | "delete" | "options" | "head" | "patch" | "trace"
+                ) {
+                    continue;
+                }
+                let responses = operation["responses"]
+                    .as_object()
+                    .unwrap_or_else(|| panic!("{method} {path} has no responses"));
+                for (status, response) in responses {
+                    assert!(
+                        response.get("description").is_some(),
+                        "{method} {path} {status} is missing its required description"
+                    );
+                }
+            }
+        }
     }
 }

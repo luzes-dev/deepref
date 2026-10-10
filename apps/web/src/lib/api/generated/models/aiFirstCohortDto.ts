@@ -12,7 +12,7 @@ export interface AiFirstCohortDto {
 	alpha_billionths?: number | null;
 	controls: number;
 	evaluated: number;
-	forecast?: null | AiFirstForecastDto;
+	forecast?: AiFirstForecastDto | null;
 	id: string;
 	/** @nullable */
 	invalidation_reason?: string | null;
@@ -21,7 +21,7 @@ export interface AiFirstCohortDto {
 	quarantined: number;
 	/** @nullable */
 	reference_relevant?: number | null;
-	result?: null | AuditResultDto;
+	result?: AuditResultDto | null;
 	sampled: number;
 	status: string;
 	target_percent: number;

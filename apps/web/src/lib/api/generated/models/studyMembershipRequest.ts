@@ -12,7 +12,7 @@ export interface StudyMembershipRequest {
 	/** @nullable */
 	expected_previous_study_revision?: number | null;
 	expected_revision: number;
-	role?: null | StudyReportRoleInput;
+	role?: StudyReportRoleInput | null;
 	/** @nullable */
 	study_id?: string | null;
 }

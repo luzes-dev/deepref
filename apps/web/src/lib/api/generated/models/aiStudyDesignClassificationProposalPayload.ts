@@ -11,6 +11,6 @@ export interface AiStudyDesignClassificationProposalPayload {
 	evidence: AiStudyDesignEvidenceDto[];
 	rationale: string;
 	study_id: string;
-	suggested_design?: null | AiStudyDesignLabelDto;
+	suggested_design?: AiStudyDesignLabelDto | null;
 	uncertainties: string[];
 }

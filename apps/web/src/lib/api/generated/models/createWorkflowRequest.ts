@@ -9,6 +9,6 @@ import type { WorkflowGraphDto } from './workflowGraphDto.ts';
 export interface CreateWorkflowRequest {
 	/** @nullable */
 	description?: string | null;
-	graph?: null | WorkflowGraphDto;
+	graph?: WorkflowGraphDto | null;
 	name: string;
 }
