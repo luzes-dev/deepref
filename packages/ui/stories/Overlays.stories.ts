@@ -1,5 +1,5 @@
 import type { Meta, StoryObj } from "@storybook/svelte";
-import { expect, userEvent, within, waitFor } from "@storybook/test";
+import { expect, userEvent, within, waitFor } from "storybook/test";
 import OverlaysShowcase from "./components/OverlaysShowcase.svelte";
 const meta = {
 	title: "Primitives/Overlays",

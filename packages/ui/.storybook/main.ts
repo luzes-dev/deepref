@@ -4,12 +4,7 @@ import path from "path";
 
 const config: StorybookConfig = {
 	stories: ["../stories/**/*.stories.@(js|ts|svelte)"],
-	addons: [
-		"@storybook/addon-essentials",
-		"@storybook/addon-a11y",
-		"@storybook/addon-themes",
-		"@storybook/addon-interactions",
-	],
+	addons: ["@storybook/addon-a11y", "@storybook/addon-themes"],
 	framework: {
 		name: "@storybook/svelte-vite",
 		options: {},
@@ -21,7 +16,7 @@ const config: StorybookConfig = {
 		config.resolve = config.resolve || {};
 		config.resolve.alias = {
 			...config.resolve.alias,
-			"@deepref/ui": path.resolve(__dirname, "../src"),
+			"@deepref/ui": path.resolve(import.meta.dirname, "../src"),
 		};
 
 		return config;
