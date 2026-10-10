@@ -21,16 +21,24 @@ mod cassette;
 mod context;
 mod hooks;
 mod model;
+mod plan;
 mod tools;
 
 #[cfg(test)]
 mod tests;
 
-pub use agent::{RigTurn, RigTurnOutcome, run_rig_turn, run_rig_turn_channel};
+pub use agent::{AgentProgress, RigTurn, RigTurnOutcome, run_rig_turn, run_rig_turn_channel};
 pub use cassette::{AssistantCassette, ReplayTurn, replay_rig_turn};
 pub use context::{AssistantToolHost, DeepRefAgentContext};
 pub use hooks::{BUDGET_STOP_REASON, DeepRefHooks, TOKEN_STOP_REASON};
 pub use model::{AgentModelFactory, OpenAiCompatModelFactory, StaticModelFactory};
+pub use plan::{
+    ASSISTANT_PROMPT_VERSION, AgentLoopConfig, ChatMessage, ChatToolCall, MAX_REPORTS_PER_ACTION,
+    ManualStep, PlanAction, TOOL_FINAL_EXCLUSION, TOOL_LIST_REPORTS, TOOL_PROJECT_OVERVIEW,
+    TOOL_PUBLISH_PROTOCOL, TOOL_SCREEN_REPORTS, ToolTraceEntry, agent_tool_declarations,
+    assistant_system_prompt, claims_pending_change, is_read_tool, no_plan_notice,
+    plan_action_is_executable, validate_screen_reports,
+};
 pub use tools::{
     PlanCollector, RecordedToolOutput, ToolHostScope, TraceCollector, deepref_dynamic_tools,
 };

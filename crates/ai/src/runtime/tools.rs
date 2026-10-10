@@ -199,7 +199,7 @@ async fn execute_tool_call(
 ) -> Result<ToolOutput, ToolExecutionError> {
     if is_read_tool(name) {
         execute_read_tool(scope, name, args).await
-    } else if crate::agent_loop::is_write_tool(name) {
+    } else if super::plan::is_write_tool(name) {
         execute_write_tool(scope, name, args)
     } else {
         Ok(ToolOutput::json(error_output("unknown tool")))
@@ -235,9 +235,7 @@ async fn execute_read_tool(
             });
             // The model sees truncated text, exactly like the custom loop;
             // the full value stays in the trace for persistence and evidence.
-            Ok(ToolOutput::text(crate::agent_loop::truncate_for_model(
-                &value,
-            )))
+            Ok(ToolOutput::text(super::plan::truncate_for_model(&value)))
         }
         Err(AiError::BudgetExceeded) => {
             scope
@@ -271,7 +269,7 @@ fn execute_write_tool(
     name: &str,
     args: Value,
 ) -> Result<ToolOutput, ToolExecutionError> {
-    if scope.plans.len() >= crate::agent_loop::MAX_ACTIONS_PER_PLAN {
+    if scope.plans.len() >= super::plan::MAX_ACTIONS_PER_PLAN {
         return Ok(ToolOutput::json(error_output(
             "the plan is full; ask the user to confirm it before adding more",
         )));
@@ -284,7 +282,7 @@ fn execute_write_tool(
         name: name.to_owned(),
         arguments: args.clone(),
     };
-    match crate::agent_loop::plan_write_call(
+    match super::plan::plan_write_call(
         scope.context.project_id,
         &scope.context.actor,
         &call,
