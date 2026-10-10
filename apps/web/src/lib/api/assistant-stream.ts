@@ -1,3 +1,4 @@
+import type { AssistantRunDto } from './generated/models/index.js';
 import { currentReviewerId } from './reviewer';
 
 export type AssistantChatStreamEvent =
@@ -174,12 +175,171 @@ async function consumeSseStream(
 	}
 }
 
+const TERMINAL_RUN_STATUSES = new Set(['completed', 'failed', 'cancelled']);
+
+function isTerminalRunStatus(status: unknown): boolean {
+	return typeof status === 'string' && TERMINAL_RUN_STATUSES.has(status);
+}
+
+function runEventsUrl(projectId: string, runId: string, afterSeq: number): string {
+	return `/api/projects/${projectId}/assistant/runs/${runId}/events?after_seq=${afterSeq}`;
+}
+
+function runUrl(projectId: string, runId: string): string {
+	return `/api/projects/${projectId}/assistant/runs/${runId}`;
+}
+
+function actorHeaders(): Record<string, string> {
+	return {
+		'x-actor-kind': 'user',
+		'x-actor-id': currentReviewerId()
+	};
+}
+
+async function throwForRunResponse(response: Response): Promise<never> {
+	const detail = await response.text().catch(() => '');
+	const message =
+		errorField(detail, 'message') ?? response.statusText ?? 'assistant run request failed';
+	throw new AssistantStreamError(response.status, message, errorField(detail, 'code') ?? null);
+}
+
+async function readAssistantRun(response: Response): Promise<AssistantRunDto> {
+	let body: unknown;
+	try {
+		body = (await response.json()) as unknown;
+	} catch {
+		throw new AssistantStreamError(response.status, 'assistant run response was not JSON');
+	}
+	if (typeof body !== 'object' || body === null) {
+		throw new AssistantStreamError(response.status, 'assistant run response was malformed');
+	}
+	const run = body as Record<string, unknown>;
+	if (typeof run['id'] !== 'string') {
+		throw new AssistantStreamError(response.status, 'assistant run response was malformed');
+	}
+	return body as AssistantRunDto;
+}
+
+/** Reflects a terminal failed/cancelled run as the error frame the UI already renders. */
+function runFailureEvent(run: AssistantRunDto): AssistantChatStreamEvent {
+	const error =
+		typeof run.error === 'object' && run.error !== null
+			? (run.error as Record<string, unknown>)
+			: {};
+	const message =
+		typeof error['message'] === 'string' && error['message'].length > 0
+			? error['message']
+			: 'assistant turn failed';
+	const code =
+		typeof error['code'] === 'string' && error['code'].length > 0 ? error['code'] : null;
+	return { event: 'error', message, code };
+}
+
+export interface AssistantRunEventsProgress {
+	/** Frames delivered to onEvent by this stream. */
+	frames: number;
+	/** The after_seq value that resumes right after the last frame seen. */
+	nextAfterSeq: number;
+	/** Whether a done or error frame arrived on this stream. */
+	terminal: boolean;
+}
+
+/**
+ * Observes one durable run over its persisted events. Frame rendering is the
+ * same SSE parser the synchronous tool-command path uses. Pass the returned
+ * nextAfterSeq back as afterSeq to resume after a disconnect; the worker owns
+ * execution, so observing again never restarts the turn.
+ */
+export async function streamAssistantRunEvents(
+	projectId: string,
+	runId: string,
+	onEvent: (event: AssistantChatStreamEvent) => void,
+	options?: { afterSeq?: number; signal?: AbortSignal }
+): Promise<AssistantRunEventsProgress> {
+	const afterSeq = options?.afterSeq ?? -1;
+	// fallow-ignore-next-line security-sink -- Fixed-origin internal API proxy endpoint
+	const response = await fetch(runEventsUrl(projectId, runId, afterSeq), {
+		headers: actorHeaders(),
+		signal: options?.signal
+	});
+
+	if (!response.ok) {
+		await throwForRunResponse(response);
+	}
+
+	if (!response.body) {
+		throw new AssistantStreamError(response.status, 'assistant run events are unavailable');
+	}
+
+	let frames = 0;
+	let terminal = false;
+	await consumeSseStream(response.body, (event) => {
+		frames += 1;
+		if (event.event === 'done' || event.event === 'error') terminal = true;
+		onEvent(event);
+	});
+	return { frames, nextAfterSeq: afterSeq + frames, terminal };
+}
+
+/** Reads the durable run identity the 202 chat response carries. */
+export async function getAssistantRun(
+	projectId: string,
+	runId: string,
+	signal?: AbortSignal
+): Promise<AssistantRunDto> {
+	// fallow-ignore-next-line security-sink -- Fixed-origin internal API proxy endpoint
+	const response = await fetch(runUrl(projectId, runId), {
+		headers: actorHeaders(),
+		signal
+	});
+
+	if (!response.ok) {
+		await throwForRunResponse(response);
+	}
+
+	return readAssistantRun(response);
+}
+
+/**
+ * Follows a 202 run to settlement: streams persisted events through the
+ * existing frame renderer, then reflects the run record for its terminal
+ * status, plan link and errors. When the events stream closes while the run
+ * is still active (a transient disconnect), it resumes with after_seq.
+ */
+async function followAssistantRun(
+	projectId: string,
+	initialRun: AssistantRunDto,
+	onEvent: (event: AssistantChatStreamEvent) => void,
+	signal?: AbortSignal
+): Promise<AssistantRunDto> {
+	let run = initialRun;
+	let afterSeq = -1;
+	let sawTerminalFrame = false;
+
+	for (;;) {
+		const progress = await streamAssistantRunEvents(projectId, run.id, onEvent, {
+			afterSeq,
+			signal
+		});
+		afterSeq = progress.nextAfterSeq;
+		sawTerminalFrame = sawTerminalFrame || progress.terminal;
+
+		run = await getAssistantRun(projectId, run.id, signal);
+		if (isTerminalRunStatus(run.status)) {
+			if ((run.status === 'failed' || run.status === 'cancelled') && !sawTerminalFrame) {
+				onEvent(runFailureEvent(run));
+			}
+			return run;
+		}
+	}
+}
+
 export async function streamAssistantChat(
 	projectId: string,
 	body: { conversation_id: string; message: string },
 	onEvent: (event: AssistantChatStreamEvent) => void,
 	signal?: AbortSignal
-): Promise<void> {
+): Promise<AssistantRunDto | null> {
 	// fallow-ignore-next-line security-sink -- Fixed-origin internal API proxy endpoint
 	const response = await fetch(`/api/projects/${projectId}/assistant/chat`, {
 		method: 'POST',
@@ -203,11 +363,17 @@ export async function streamAssistantChat(
 		);
 	}
 
+	if (response.status === 202) {
+		const run = await readAssistantRun(response);
+		return followAssistantRun(projectId, run, onEvent, signal);
+	}
+
 	if (!response.body) {
 		throw new AssistantStreamError(response.status, 'assistant stream is unavailable');
 	}
 
 	await consumeSseStream(response.body, onEvent);
+	return null;
 }
 
 /** A non-empty string field of a JSON error body, if the body is JSON and has one. */

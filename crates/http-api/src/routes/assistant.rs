@@ -1357,7 +1357,8 @@ type AssistantSseState = (
     params(("project_id" = Uuid, Path, description = "Project identifier")),
     request_body = AssistantChatRequestDto,
     responses(
-        (status = 200, description = "Server-sent assistant stream", content_type = "text/event-stream", body = String),
+        (status = 200, description = "Server-sent assistant stream for deterministic tool commands", content_type = "text/event-stream", body = String),
+        (status = 202, description = "Free-form turn accepted for durable execution", body = AssistantRunDto),
         (status = 400, description = "Malformed chat request or tool command", body = ErrorResponse),
         (status = 403, description = "Tool is forbidden by the project policy", body = ErrorResponse),
         (status = 404, description = "Project or conversation not found", body = ErrorResponse),
@@ -1634,6 +1635,21 @@ pub(crate) async fn stream_run_events(
                     return None;
                 }
                 if poll.buffer.is_empty() {
+                    // Re-read terminal status on empty rounds: a client that
+                    // resumes past the done/error row in the milliseconds
+                    // before the status flip would otherwise long-poll until
+                    // it gives up. A deleted run ends the stream as well.
+                    let status =
+                        deepref_postgres::get_assistant_agent_run(&poll.state.pool, poll.run_id)
+                            .await
+                            .ok()
+                            .flatten()
+                            .map(|record| record.status);
+                    match status {
+                        None => return None,
+                        Some(status) if status.terminal() => return None,
+                        _ => {}
+                    }
                     tokio::time::sleep(std::time::Duration::from_millis(500)).await;
                 }
             }

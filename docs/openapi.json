@@ -3160,11 +3160,21 @@
         },
         "responses": {
           "200": {
-            "description": "Server-sent assistant stream",
+            "description": "Server-sent assistant stream for deterministic tool commands",
             "content": {
               "text/event-stream": {
                 "schema": {
                   "type": "string"
+                }
+              }
+            }
+          },
+          "202": {
+            "description": "Free-form turn accepted for durable execution",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AssistantRunDto"
                 }
               }
             }
