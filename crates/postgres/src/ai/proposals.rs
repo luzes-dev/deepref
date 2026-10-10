@@ -131,6 +131,10 @@ pub async fn decide_ai_proposal(
         return Err(AiProposalError::InvalidActor);
     }
     let mut tx = pool.begin().await?;
+    sqlx::query("SELECT id FROM projects WHERE id=$1 FOR UPDATE")
+        .bind(request.project_id)
+        .fetch_optional(&mut *tx)
+        .await?;
     let query =
         format!("{AI_PROPOSAL_SELECT} AND p.id=$2 AND NOT {PROPOSAL_WITHHELD_SQL} FOR UPDATE");
     let row = sqlx::query(sqlx::AssertSqlSafe(query))

@@ -625,7 +625,7 @@ pub async fn list_full_text_queue(
            WHERE candidate.project_id=pr.project_id AND candidate.report_id=pr.report_id
            ORDER BY (candidate.status='available') DESC,candidate.updated_at DESC,candidate.id DESC LIMIT 1
          ) d ON true
-         WHERE pr.project_id=$1 AND ss.title_abstract_status='include'
+         WHERE pr.project_id=$1 AND NOT ai_first_audit_masked(pr.project_id,pr.report_id) AND ss.title_abstract_status='include'
            AND ($2::text IS NULL OR ss.full_text_status=$2)
            AND ($3::text IS NULL OR lower(coalesce(r.title,'') || ' ' || coalesce(r.abstract_text,'')) LIKE '%' || lower($3) || '%')
            AND ($4::uuid IS NULL OR pr.report_id > $4)
@@ -695,7 +695,7 @@ pub async fn list_missing_full_text(
          ) d ON true
          LEFT JOIN screening_state ss
            ON ss.project_id=pr.project_id AND ss.report_id=pr.report_id
-         WHERE pr.project_id=$1 AND ss.title_abstract_status='include'
+         WHERE pr.project_id=$1 AND NOT ai_first_audit_masked(pr.project_id,pr.report_id) AND ss.title_abstract_status='include'
            AND (d.status IS NULL OR d.status IN ('missing','failed'))
          ORDER BY r.created_at,pr.report_id LIMIT $2",
     )

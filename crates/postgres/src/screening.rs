@@ -151,6 +151,25 @@ pub(crate) async fn screen_report_in_transaction(
     tx: &mut Transaction<'_, Postgres>,
     command: ScreenReportCommand,
 ) -> Result<ScreeningStateSnapshot, ScreeningError> {
+    apply_screen_report(tx, command, false).await
+}
+
+pub(crate) async fn write_audit_reference(
+    tx: &mut Transaction<'_, Postgres>,
+    command: ScreenReportCommand,
+) -> Result<ScreeningStateSnapshot, ScreeningError> {
+    apply_screen_report(tx, command, true).await
+}
+
+async fn apply_screen_report(
+    tx: &mut Transaction<'_, Postgres>,
+    command: ScreenReportCommand,
+    audit_reference: bool,
+) -> Result<ScreeningStateSnapshot, ScreeningError> {
+    sqlx::query("SELECT id FROM projects WHERE id=$1 FOR UPDATE")
+        .bind(command.project_id.as_uuid())
+        .fetch_optional(&mut **tx)
+        .await?;
     ensure_project_and_report(tx, command.project_id.into(), command.report_id.into()).await?;
     lock_screening_target(tx, command.project_id.into(), command.report_id.into()).await?;
     ensure_published_protocol(
@@ -171,6 +190,30 @@ pub(crate) async fn screen_report_in_transaction(
         load_state_for_update(tx, command.project_id.into(), command.report_id.into()).await?;
     let current_snapshot = current
         .unwrap_or_else(|| default_state(command.project_id.into(), command.report_id.into()));
+    if !audit_reference {
+        let masked: bool = sqlx::query_scalar("SELECT ai_first_audit_masked($1,$2)")
+            .bind(command.project_id.as_uuid())
+            .bind(command.report_id.as_uuid())
+            .fetch_one(&mut **tx)
+            .await?;
+        if masked && command.stage != ScreeningStage::TitleAbstract {
+            return Err(ScreeningError::InvalidTransition(
+                "complete or recover the blind audit before editing full text".into(),
+            ));
+        }
+        match crate::ai_first::record_audit_label(tx, &command)
+            .await
+            .map_err(|e| ScreeningError::InvalidTransition(e.to_string()))?
+        {
+            crate::ai_first::audit::AuditLabelOutcome::NotAudit => {}
+            crate::ai_first::audit::AuditLabelOutcome::Pending => {
+                return Ok(default_state(
+                    command.project_id.into(),
+                    command.report_id.into(),
+                ));
+            }
+        }
+    }
     if current_snapshot.revision != command.expected_revision {
         return Err(ScreeningError::RevisionConflict {
             current: Box::new(current_snapshot),
@@ -196,6 +239,7 @@ pub(crate) async fn screen_report_in_transaction(
         }
     };
     let event_id = Uuid::new_v4();
+    let actor_for_invalidation = command.actor.clone();
     let next_snapshot = persist_event_and_state(
         tx,
         &EventWrite {
@@ -220,6 +264,17 @@ pub(crate) async fn screen_report_in_transaction(
         },
     )
     .await?;
+    if !audit_reference && command.stage == ScreeningStage::TitleAbstract {
+        crate::ai_first::cohorts::human_state_changed(
+            tx,
+            next_snapshot.project_id,
+            next_snapshot.report_id,
+            &actor_for_invalidation,
+            false,
+        )
+        .await
+        .map_err(|e| ScreeningError::InvalidTransition(e.to_string()))?;
+    }
     Ok(next_snapshot)
 }
 
@@ -228,16 +283,52 @@ pub async fn undo_screening(
     command: UndoScreeningCommand,
 ) -> Result<ScreeningStateSnapshot, ScreeningError> {
     let mut tx = pool.begin().await?;
-    ensure_project_and_report(&mut tx, command.project_id.into(), command.report_id.into()).await?;
-    lock_screening_target(&mut tx, command.project_id.into(), command.report_id.into()).await?;
+    sqlx::query("SELECT id FROM projects WHERE id=$1 FOR UPDATE")
+        .bind(command.project_id.as_uuid())
+        .fetch_optional(&mut *tx)
+        .await?;
+    let masked: bool = sqlx::query_scalar("SELECT ai_first_audit_masked($1,$2)")
+        .bind(command.project_id.as_uuid())
+        .bind(command.report_id.as_uuid())
+        .fetch_one(&mut *tx)
+        .await?;
+    if masked {
+        return Err(ScreeningError::InvalidTransition(
+            "recover the blind audit before undoing decisions".into(),
+        ));
+    }
+    let actor = command.actor.clone();
+    let stage = command.stage;
+    let next = undo_screening_in_transaction(&mut tx, command).await?;
+    if stage == ScreeningStage::TitleAbstract {
+        crate::ai_first::cohorts::human_state_changed(
+            &mut tx,
+            next.project_id,
+            next.report_id,
+            &actor,
+            true,
+        )
+        .await
+        .map_err(|e| ScreeningError::InvalidTransition(e.to_string()))?;
+    }
+    tx.commit().await?;
+    Ok(next)
+}
+
+pub(crate) async fn undo_screening_in_transaction(
+    tx: &mut Transaction<'_, Postgres>,
+    command: UndoScreeningCommand,
+) -> Result<ScreeningStateSnapshot, ScreeningError> {
+    ensure_project_and_report(tx, command.project_id.into(), command.report_id.into()).await?;
+    lock_screening_target(tx, command.project_id.into(), command.report_id.into()).await?;
     ensure_published_protocol(
-        &mut tx,
+        tx,
         command.project_id.into(),
         command.protocol_version_id.into(),
     )
     .await?;
     let current =
-        load_state_for_update(&mut tx, command.project_id.into(), command.report_id.into()).await?;
+        load_state_for_update(tx, command.project_id.into(), command.report_id.into()).await?;
     let current_snapshot = current
         .unwrap_or_else(|| default_state(command.project_id.into(), command.report_id.into()));
     if current_snapshot.revision != command.expected_revision {
@@ -254,7 +345,7 @@ pub async fn undo_screening(
     .bind(last_event_id)
     .bind(Uuid::from(command.project_id))
     .bind(Uuid::from(command.report_id))
-    .fetch_optional(&mut *tx)
+    .fetch_optional(&mut **tx)
     .await?
     .ok_or(ScreeningError::NoHistory)?;
     if event.get::<String, _>("stage") != stage_name(command.stage) {
@@ -296,7 +387,7 @@ pub async fn undo_screening(
         next_domain,
     );
     let next_snapshot = persist_event_and_state(
-        &mut tx,
+        tx,
         &EventWrite {
             event_id,
             event_kind: "undo",
@@ -313,7 +404,6 @@ pub async fn undo_screening(
         },
     )
     .await?;
-    tx.commit().await?;
     Ok(next_snapshot)
 }
 
@@ -342,7 +432,14 @@ pub async fn get_screening_queue(
     if has_next {
         rows.truncate(limit as usize);
     }
-    let total = queue_total(pool, project_id, status, search).await?;
+    let total = queue_total(
+        pool,
+        project_id,
+        status,
+        search,
+        query.reviewer_id.as_deref(),
+    )
+    .await?;
     let progress = queue_progress(pool, project_id).await?;
     let items: Vec<_> = rows.iter().map(queue_item_from_row).collect();
     let next_cursor = if has_next {
@@ -390,7 +487,7 @@ pub async fn get_screening_history(
                result_title_abstract_status,result_full_text_status,
                result_full_text_exclusion_reason_id,result_final_status
         FROM screening_events
-        WHERE project_id=$1 AND report_id=$2
+        WHERE project_id=$1 AND report_id=$2 AND NOT ai_first_audit_masked(project_id,report_id)
         ORDER BY created_at ASC, id ASC
         "#,
     )
@@ -726,11 +823,11 @@ async fn queue_rows(
         r#"
         SELECT r.id AS report_id, r.title, r.abstract_text, r.publication_year,
           doi.value AS doi,
-          coalesce(ss.title_abstract_status,'unscreened') AS title_abstract_status,
-          coalesce(ss.full_text_status,'not_required') AS full_text_status,
-          coalesce(ss.final_status,'unscreened') AS final_status,
-          coalesce(ss.revision,0)::bigint AS revision,
-          pr.created_at AS queue_created_at
+          CASE WHEN ai_first_audit_masked(pr.project_id,pr.report_id) THEN 'unscreened' ELSE coalesce(ss.title_abstract_status,'unscreened') END AS title_abstract_status,
+          CASE WHEN ai_first_audit_masked(pr.project_id,pr.report_id) THEN 'not_required' ELSE coalesce(ss.full_text_status,'not_required') END AS full_text_status,
+          CASE WHEN ai_first_audit_masked(pr.project_id,pr.report_id) THEN 'unscreened' ELSE coalesce(ss.final_status,'unscreened') END AS final_status,
+          CASE WHEN ai_first_audit_masked(pr.project_id,pr.report_id) THEN 0 ELSE coalesce(ss.revision,0) END::bigint AS revision,
+          ai_first_queue_time(pr.project_id,pr.report_id,pr.created_at) AS queue_created_at
         FROM project_reports pr
         JOIN reports r ON r.id=pr.report_id
         LEFT JOIN LATERAL (
@@ -741,13 +838,13 @@ async fn queue_rows(
         ) doi ON true
         LEFT JOIN screening_state ss ON ss.project_id=pr.project_id AND ss.report_id=pr.report_id
         WHERE pr.project_id=$1
-          AND ($2='all' OR coalesce(ss.title_abstract_status,'unscreened')=$2)
+          AND ($2='all' OR (CASE WHEN ai_first_audit_masked(pr.project_id,pr.report_id) THEN 'unscreened' ELSE coalesce(ss.title_abstract_status,'unscreened') END=$2 AND ai_first_queue_visible(pr.project_id,pr.report_id,COALESCE($11,'local-user')))) AND (NOT ai_first_audit_masked(pr.project_id,pr.report_id) OR ai_first_queue_visible(pr.project_id,pr.report_id,COALESCE($11,'local-user')))
           AND ($3::text IS NULL OR lower(coalesce(r.title,'') || ' ' || coalesce(r.abstract_text,'')) LIKE '%' || lower($3) || '%')
           AND (
             NOT $4::boolean
             OR CASE $5
-              WHEN 'created_asc' THEN (pr.created_at, r.id) > ($6::timestamptz, $7::uuid)
-              WHEN 'created_desc' THEN (pr.created_at, r.id) < ($6::timestamptz, $7::uuid)
+              WHEN 'created_asc' THEN (ai_first_queue_time(pr.project_id,pr.report_id,pr.created_at), r.id) > ($6::timestamptz, $7::uuid)
+              WHEN 'created_desc' THEN (ai_first_queue_time(pr.project_id,pr.report_id,pr.created_at), r.id) < ($6::timestamptz, $7::uuid)
               WHEN 'title_asc' THEN (lower(coalesce(r.title,'')), r.id) > (lower(coalesce($8,'')), $7::uuid)
               WHEN 'title_desc' THEN (lower(coalesce(r.title,'')), r.id) < (lower(coalesce($8,'')), $7::uuid)
               WHEN 'year_asc' THEN (coalesce(r.publication_year,-2147483648), r.id) > (coalesce($9::int,-2147483648), $7::uuid)
@@ -756,8 +853,8 @@ async fn queue_rows(
             END
           )
         ORDER BY
-          CASE WHEN $5='created_asc' THEN pr.created_at END ASC,
-          CASE WHEN $5='created_desc' THEN pr.created_at END DESC,
+          CASE WHEN $5='created_asc' THEN ai_first_queue_time(pr.project_id,pr.report_id,pr.created_at) END ASC,
+          CASE WHEN $5='created_desc' THEN ai_first_queue_time(pr.project_id,pr.report_id,pr.created_at) END DESC,
           CASE WHEN $5='title_asc' THEN lower(coalesce(r.title,'')) END ASC,
           CASE WHEN $5='title_desc' THEN lower(coalesce(r.title,'')) END DESC,
           CASE WHEN $5='year_asc' THEN coalesce(r.publication_year,-2147483648) END ASC,
@@ -777,6 +874,7 @@ async fn queue_rows(
     .bind(cursor_title)
     .bind(cursor_year)
     .bind(limit)
+    .bind(query.reviewer_id.as_deref())
     .fetch_all(pool)
     .await?;
     Ok(rows)
@@ -791,14 +889,14 @@ async fn validate_cursor(
 ) -> Result<(), ScreeningError> {
     let row = sqlx::query(
         r#"
-        SELECT pr.created_at AS queue_created_at,
+        SELECT ai_first_queue_time(pr.project_id,pr.report_id,pr.created_at) AS queue_created_at,
                lower(coalesce(r.title, '')) AS normalized_title,
                coalesce(r.publication_year, -2147483648) AS normalized_year
         FROM project_reports pr
         JOIN reports r ON r.id = pr.report_id
         LEFT JOIN screening_state ss ON ss.project_id = pr.project_id AND ss.report_id = pr.report_id
         WHERE pr.project_id = $1 AND pr.report_id = $2
-          AND ($3 = 'all' OR coalesce(ss.title_abstract_status, 'unscreened') = $3)
+          AND ($3='all' OR (CASE WHEN ai_first_audit_masked(pr.project_id,pr.report_id) THEN 'unscreened' ELSE coalesce(ss.title_abstract_status,'unscreened') END=$3 AND ai_first_queue_visible(pr.project_id,pr.report_id,COALESCE($5,'local-user')))) AND (NOT ai_first_audit_masked(pr.project_id,pr.report_id) OR ai_first_queue_visible(pr.project_id,pr.report_id,COALESCE($5,'local-user')))
           AND ($4::text IS NULL OR lower(coalesce(r.title, '') || ' ' || coalesce(r.abstract_text, '')) LIKE '%' || lower($4) || '%')
         "#,
     )
@@ -806,6 +904,7 @@ async fn validate_cursor(
     .bind(cursor.report_id)
     .bind(status)
     .bind(search)
+    .bind(query.reviewer_id.as_deref())
     .fetch_optional(pool)
     .await?
     .ok_or(ScreeningError::InvalidCursor)?;
@@ -824,13 +923,15 @@ async fn queue_total(
     project_id: Uuid,
     status: &str,
     search: Option<&str>,
+    reviewer: Option<&str>,
 ) -> Result<i64, ScreeningError> {
     Ok(sqlx::query_scalar(
-        "SELECT count(*)::bigint FROM project_reports pr JOIN reports r ON r.id=pr.report_id LEFT JOIN screening_state ss ON ss.project_id=pr.project_id AND ss.report_id=pr.report_id WHERE pr.project_id=$1 AND ($2='all' OR coalesce(ss.title_abstract_status,'unscreened')=$2) AND ($3::text IS NULL OR lower(coalesce(r.title,'') || ' ' || coalesce(r.abstract_text,'')) LIKE '%' || lower($3) || '%')",
+        "SELECT count(*)::bigint FROM project_reports pr JOIN reports r ON r.id=pr.report_id LEFT JOIN screening_state ss ON ss.project_id=pr.project_id AND ss.report_id=pr.report_id WHERE pr.project_id=$1 AND ($2='all' OR (CASE WHEN ai_first_audit_masked(pr.project_id,pr.report_id) THEN 'unscreened' ELSE coalesce(ss.title_abstract_status,'unscreened') END=$2 AND ai_first_queue_visible(pr.project_id,pr.report_id,COALESCE($4,'local-user')))) AND (NOT ai_first_audit_masked(pr.project_id,pr.report_id) OR ai_first_queue_visible(pr.project_id,pr.report_id,COALESCE($4,'local-user'))) AND ($3::text IS NULL OR lower(coalesce(r.title,'') || ' ' || coalesce(r.abstract_text,'')) LIKE '%' || lower($3) || '%')",
     )
     .bind(project_id)
     .bind(status)
     .bind(search)
+    .bind(reviewer)
     .fetch_one(pool)
     .await?)
 }
@@ -840,7 +941,7 @@ async fn queue_progress(
     project_id: Uuid,
 ) -> Result<ScreeningProgress, ScreeningError> {
     let row = sqlx::query(
-        "SELECT count(*)::bigint AS total, count(*) FILTER (WHERE coalesce(ss.title_abstract_status,'unscreened') <> 'unscreened')::bigint AS screened, count(*) FILTER (WHERE coalesce(ss.title_abstract_status,'unscreened')='unscreened')::bigint AS unscreened, count(*) FILTER (WHERE ss.title_abstract_status='include')::bigint AS included, count(*) FILTER (WHERE ss.title_abstract_status='exclude')::bigint AS excluded, count(*) FILTER (WHERE ss.title_abstract_status='maybe')::bigint AS maybe FROM project_reports pr LEFT JOIN screening_state ss ON ss.project_id=pr.project_id AND ss.report_id=pr.report_id WHERE pr.project_id=$1",
+        "SELECT count(*)::bigint AS total, count(*) FILTER (WHERE coalesce(ss.title_abstract_status,'unscreened') <> 'unscreened')::bigint AS screened, count(*) FILTER (WHERE coalesce(ss.title_abstract_status,'unscreened')='unscreened')::bigint AS unscreened, count(*) FILTER (WHERE ss.title_abstract_status='include')::bigint AS included, count(*) FILTER (WHERE ss.title_abstract_status='exclude')::bigint AS excluded, count(*) FILTER (WHERE ss.title_abstract_status='maybe')::bigint AS maybe FROM project_reports pr LEFT JOIN screening_state raw ON raw.project_id=pr.project_id AND raw.report_id=pr.report_id LEFT JOIN LATERAL (SELECT CASE WHEN ai_first_audit_masked(pr.project_id,pr.report_id) THEN 'unscreened' ELSE raw.title_abstract_status END AS title_abstract_status) ss ON true WHERE pr.project_id=$1",
     )
     .bind(project_id)
     .fetch_one(pool)
@@ -1043,6 +1144,7 @@ mod tests {
     #[test]
     fn cursor_round_trip_uses_an_opaque_url_safe_value() {
         let query = GetScreeningQueueQuery {
+            reviewer_id: None,
             project_id: Uuid::new_v4().into(),
             status: ScreeningQueueStatus::Unscreened,
             search: None,

@@ -65,6 +65,8 @@
 					['Manually created reports', projection.manually_created_reports],
 					['Screened records', projection.screened_records],
 					['Title/abstract excluded', projection.title_abstract_excluded],
+					['Of these: approved automated exclusions', projection.automation_excluded],
+					['AI quarantine (included in pending)', projection.ai_quarantined],
 					['Title/abstract pending', projection.title_abstract_pending],
 					['Reports sought', projection.reports_sought],
 					['Reports not retrieved', projection.reports_not_retrieved],
@@ -299,6 +301,17 @@
 						</a>
 					</Alert.Description>
 				</Alert.Root>
+			{/if}
+			{#if projection.automation_excluded > 0 || projection.ai_quarantined > 0}
+				<p
+					class="text-sm text-muted-foreground tabular-nums"
+					data-testid="prisma-ai-first-accounting"
+				>
+					{projection.automation_excluded} approved automated exclusions are included in title/abstract
+					exclusions.
+					{projection.ai_quarantined} quarantined records remain pending and have no exclusion
+					decision.
+				</p>
 			{/if}
 			<Tabs.Content value="flow" class="min-w-0">
 				<section class="min-w-0" aria-labelledby="prisma-diagram-title">

@@ -124,6 +124,8 @@ const APPLICATION_EXTERNAL: &[&str] = &[
     "futures",
     "hmac",
     "jsonschema",
+    // Pure integer arithmetic for exact finite-population audit authorization.
+    "num-bigint",
     "regex",
     "serde",
     "serde_json",

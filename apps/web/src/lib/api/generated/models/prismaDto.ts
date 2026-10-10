@@ -7,8 +7,12 @@
 import type { PrismaReasonDto } from './prismaReasonDto.ts';
 
 export interface PrismaDto {
+	/** @minimum 0 */
+	ai_quarantined: number;
 	/** @nullable */
 	as_of?: string | null;
+	/** @minimum 0 */
+	automation_excluded: number;
 	/** @minimum 0 */
 	duplicates_removed: number;
 	/** @minimum 0 */

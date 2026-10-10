@@ -162,6 +162,16 @@ pub(crate) async fn get_review_run(
     State(state): State<AppState>,
     Path((project_id, run_id)): Path<(Uuid, Uuid)>,
 ) -> Result<Json<ReviewRunDto>, ApiError> {
+    let visible: bool = sqlx::query_scalar("SELECT ai_first_run_visible($1,$2)")
+        .bind(project_id)
+        .bind(run_id)
+        .fetch_one(&state.pool)
+        .await?;
+    if !visible {
+        return Err(ApiError::NotFound(
+            "review run is withheld while independent screening is in progress".into(),
+        ));
+    }
     let run_id = deepref_review::ReviewRunId::new(run_id)
         .map_err(|error| ApiError::BadRequest(error.to_string()))?;
     let snapshot = deepref_postgres::PostgresReviewScheduler::new(&state.pool)

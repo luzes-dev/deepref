@@ -61,7 +61,7 @@ pub async fn load_audit_export_rows(
                     ) AS payload,
                     jsonb_build_object('actor_kind', actor_kind, 'actor_id', actor_id,
                                        'protocol_version_id', protocol_version_id) AS provenance
-             FROM screening_events WHERE project_id = $1
+             FROM screening_events WHERE project_id = $1 AND NOT ai_first_audit_masked(project_id,report_id)
              UNION ALL
              SELECT id, created_at, event_type, 'study' AS aggregate_type,
                     study_id AS aggregate_id, actor_kind, actor_id, NULL::uuid,
@@ -187,7 +187,7 @@ pub async fn load_audit_export_rows(
                       'provenance_kind', 'ai_run_record'
                     )) AS provenance
              FROM ai_runs AS a
-             WHERE a.project_id = $1
+             WHERE a.project_id = $1 AND ai_first_run_visible(a.project_id,a.parent_automation_run_id)
              UNION ALL
              SELECT p.id, p.created_at, 'ai_proposal_snapshot' AS event_type,
                     'ai_proposal' AS aggregate_type, p.id AS aggregate_id,
@@ -259,7 +259,7 @@ pub async fn load_audit_export_rows(
              FROM ai_proposals AS p
              JOIN ai_runs AS a
                ON a.project_id = p.project_id AND a.id = p.model_run_id
-             WHERE p.project_id = $1
+             WHERE p.project_id = $1 AND ai_first_run_visible(p.project_id,a.parent_automation_run_id)
              UNION ALL
              SELECT d.id, d.created_at, 'automation_definition_snapshot' AS event_type,
                     'automation_definition' AS aggregate_type, d.id AS aggregate_id,
@@ -372,7 +372,7 @@ pub async fn load_audit_export_rows(
                WHERE a.project_id = r.project_id
                  AND a.parent_automation_run_id = r.id
              ) AS ai_usage ON true
-             WHERE r.project_id = $1
+             WHERE r.project_id = $1 AND ai_first_run_visible(r.project_id,r.id)
              UNION ALL
              SELECT j.id, j.created_at, 'automation_job_snapshot' AS event_type,
                     'automation_job' AS aggregate_type, j.id AS aggregate_id,
@@ -405,7 +405,7 @@ pub async fn load_audit_export_rows(
                       'provenance_kind', 'automation_job_record'
                     ) AS provenance
              FROM jobs AS j
-             WHERE j.project_id = $1 AND j.kind = 'automation_run'
+             WHERE j.project_id = $1 AND j.kind = 'automation_run' AND NOT EXISTS(SELECT 1 FROM automation_runs r WHERE r.project_id=j.project_id AND r.job_id=j.id AND NOT ai_first_run_visible(r.project_id,r.id))
              UNION ALL
              SELECT s.id, r.created_at, 'automation_step_snapshot' AS event_type,
                     'automation_step_run' AS aggregate_type, s.id AS aggregate_id,
@@ -467,7 +467,7 @@ pub async fn load_audit_export_rows(
                WHERE a.project_id = r.project_id
                  AND a.parent_automation_run_id = r.id
              ) AS ai_usage ON true
-             WHERE s.project_id = $1
+             WHERE s.project_id = $1 AND ai_first_run_visible(s.project_id,s.automation_run_id)
              UNION ALL
              SELECT m.automation_run_id, m.created_at,
                     'review_run_manifest' AS event_type,
@@ -508,7 +508,7 @@ pub async fn load_audit_export_rows(
              FROM review_run_manifests AS m
              JOIN automation_runs AS r
                ON r.project_id=m.project_id AND r.id=m.automation_run_id
-             WHERE m.project_id=$1
+             WHERE m.project_id=$1 AND ai_first_run_visible(m.project_id,m.automation_run_id)
              UNION ALL
              SELECT a.id, a.started_at, 'review_step_attempt' AS event_type,
                     'review_step_attempt' AS aggregate_type, a.id AS aggregate_id,
@@ -554,7 +554,7 @@ pub async fn load_audit_export_rows(
                FROM review_artifact_lineage AS l
                WHERE l.project_id=a.project_id AND l.artifact_id=a.artifact_id
              ) AS lineage ON true
-             WHERE a.project_id=$1
+             WHERE a.project_id=$1 AND ai_first_run_visible(a.project_id,a.automation_run_id)
              UNION ALL
              SELECT artifact.id, artifact.created_at, 'review_artifact' AS event_type,
                     'review_artifact' AS aggregate_type, artifact.id AS aggregate_id,
@@ -586,7 +586,7 @@ pub async fn load_audit_export_rows(
                FROM review_artifact_lineage AS l
                WHERE l.project_id=artifact.project_id AND l.artifact_id=artifact.id
              ) AS lineage ON true
-             WHERE artifact.project_id=$1
+             WHERE artifact.project_id=$1 AND NOT EXISTS(SELECT 1 FROM ai_screening_cohorts c WHERE c.project_id=$1 AND c.status IN ('open','closed','auditing','passed'))
              UNION ALL
              SELECT o.id, o.exposure_possible_at, 'ai_opinion_exposure' AS event_type,
                     'ai_opinion_exposure' AS aggregate_type, o.id AS aggregate_id,
@@ -609,6 +609,30 @@ pub async fn load_audit_export_rows(
                     jsonb_build_object('project_id', o.project_id,
                                        'provenance_kind', 'ai_opinion_exposure') AS provenance
              FROM ai_opinion_exposures o WHERE o.project_id=$1
+             UNION ALL
+             SELECT c.id,c.created_at,'ai_first_cohort','ai_first_cohort',c.id,'user',c.approved_by,
+                c.protocol_version_id,c.stage,c.status,NULL::uuid,'immutable_audit_design',NULL::uuid,NULL::uuid,
+                '{}'::jsonb,'{}'::jsonb,NULL::text,to_jsonb(c),
+                jsonb_build_object('reference_claim','conditional_reference_retention_only','actor_identity','self_asserted')
+             FROM ai_screening_cohorts c WHERE c.project_id=$1 AND c.status NOT IN ('open','closed','auditing','passed')
+             UNION ALL
+             SELECT d.id,d.created_at,'ai_first_disposition','report',d.report_id,'automation','ai-first-routing',
+                d.protocol_version_id,d.stage,d.kind,NULL::uuid,'reversible_disposition',NULL::uuid,NULL::uuid,
+                '{}'::jsonb,'{}'::jsonb,NULL::text,to_jsonb(d),jsonb_build_object('cohort_id',d.cohort_id)
+             FROM ai_screening_dispositions d JOIN ai_screening_cohorts c ON c.id=d.cohort_id
+             WHERE d.project_id=$1 AND c.status NOT IN ('open','closed','auditing','passed')
+             UNION ALL
+             SELECT l.id,l.created_at,'ai_first_reference_label','report',l.report_id,'user',l.actor_id,
+                c.protocol_version_id,c.stage,l.decision,NULL::uuid,'immutable_blinded_reference',NULL::uuid,NULL::uuid,
+                '{}'::jsonb,'{}'::jsonb,NULL::text,to_jsonb(l),jsonb_build_object('cohort_id',l.cohort_id,'reference_rule','dual_or')
+             FROM ai_screening_audit_labels l JOIN ai_screening_cohorts c ON c.id=l.cohort_id
+             WHERE l.project_id=$1 AND c.status NOT IN ('open','closed','auditing','passed')
+             UNION ALL
+             SELECT m.report_id,c.created_at,'ai_first_frame_member','ai_screening_cohort',c.id,NULL::text,NULL::text,
+                c.protocol_version_id,c.stage,NULL::text,NULL::uuid,'frozen_frame',NULL::uuid,NULL::uuid,
+                '{}'::jsonb,'{}'::jsonb,NULL::text,to_jsonb(m),jsonb_build_object('cohort_id',c.id)
+             FROM ai_screening_cohort_members m JOIN ai_screening_cohorts c ON c.id=m.cohort_id
+             WHERE m.project_id=$1 AND c.status NOT IN ('open','closed','auditing','passed')
              UNION ALL
              SELECT c.id, c.created_at, 'review_calibration_bundle' AS event_type,
                     'review_calibration_bundle' AS aggregate_type, c.id AS aggregate_id,
@@ -676,8 +700,9 @@ pub async fn load_audit_export_rows(
                       'provenance_kind', 'reviewer_proposal_decision'
                     ) AS provenance
              FROM ai_proposals AS p
-             WHERE p.project_id=$1 AND p.resolved_at IS NOT NULL
+             WHERE p.project_id=$1 AND p.resolved_at IS NOT NULL AND NOT ai_first_audit_masked(p.project_id,p.target_report_id)
            ) events
+           WHERE NOT EXISTS(SELECT 1 FROM ai_screening_cohorts c WHERE c.project_id=$1 AND c.status='auditing')
            ORDER BY created_at, id, event_type
            LIMIT $2"#,
     )

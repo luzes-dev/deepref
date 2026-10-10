@@ -74,7 +74,7 @@ async fn attempts(pool: &PgPool, project_id: Uuid) -> i64 {
 async fn automatic_runs(pool: &PgPool, project_id: Uuid) -> i64 {
     sqlx::query_scalar(
         "SELECT count(*) FROM review_run_manifests
-         WHERE project_id=$1 AND origin->>'kind'='automation_triggered'",
+         WHERE project_id=$1 AND origin->>'kind'='advisory_triggered'",
     )
     .bind(project_id)
     .fetch_one(pool)
@@ -186,19 +186,7 @@ async fn identity(
         .expect("screening identity previews")
 }
 
-/// The semantic bundle hash of the last compiled review of this project.
-async fn compiled_hash(pool: &PgPool, project_id: Uuid) -> String {
-    sqlx::query_scalar(
-        "SELECT semantic_bundle_hash FROM review_run_manifests
-         WHERE project_id=$1 ORDER BY created_at DESC LIMIT 1",
-    )
-    .bind(project_id)
-    .fetch_one(pool)
-    .await
-    .expect("a compiled manifest")
-}
-
-/// An approved calibration for exactly this identity, at one stage.
+/// Legacy consequential calibration remains separate from advisory admission.
 async fn approve_calibration(pool: &PgPool, project_id: Uuid, identity: SemanticIdentity) {
     insert_review_calibration_bundle(
         pool,
@@ -245,65 +233,37 @@ async fn ai_opinion_on_file(pool: &PgPool, project_id: Uuid, report_id: Uuid) {
 }
 
 #[tokio::test]
-async fn automatic_second_review_needs_an_approved_calibration_and_says_so() {
+async fn advisory_second_review_contributes_from_record_one_without_calibration() {
     let Some(pool) = database().await else { return };
     let _turn = sweep_turn(&pool).await;
     screening_routes(&pool).await;
     let project_id = project(&pool).await;
     publish_protocol_for(&pool, project_id).await;
-    let report_id = waiting_record(&pool, project_id, "Waiting without calibration").await;
-
-    // Second reviewer is the default for both screening stages, but nothing
-    // calibrated admits it yet, so the status says why it does not run.
+    waiting_record(&pool, project_id, "Advisory from first record").await;
     assert_eq!(
         second_review_status(&pool, project_id, AutonomyTask::TitleAbstractScreening)
             .await
-            .expect("status"),
-        SecondReviewStatus::NeedsCalibration
-    );
-    assert_eq!(
-        second_review_status(&pool, project_id, AutonomyTask::FullTextScreening)
-            .await
-            .expect("status"),
-        SecondReviewStatus::NeedsCalibration
-    );
-    sweep_second_reviews(&pool).await.expect("sweep");
-    assert_eq!(attempts(&pool, project_id).await, 0);
-    assert_eq!(automatic_runs(&pool, project_id).await, 0);
-
-    // A reviewer-requested run compiles the review. The identity previewed for the
-    // stage is that same compiled review, and an approved calibration for exactly
-    // it turns title/abstract automatic.
-    schedule_screening_review(
-        &pool,
-        project_id,
-        report_id,
-        ScreeningStage::TitleAbstract,
-        None,
-        None,
-        Actor::new(ActorKind::User, "second-review-test").expect("actor"),
-    )
-    .await
-    .expect("reviewer-requested run");
-    let title = identity(&pool, project_id, report_id, ScreeningStage::TitleAbstract).await;
-    assert_eq!(
-        title.aggregate_hash().expect("hash").as_str(),
-        compiled_hash(&pool, project_id).await,
-        "the previewed identity matches the compiled review"
-    );
-    approve_calibration(&pool, project_id, title).await;
-    assert_eq!(
-        second_review_status(&pool, project_id, AutonomyTask::TitleAbstractScreening)
-            .await
-            .expect("status"),
+            .unwrap(),
         SecondReviewStatus::Automatic
     );
     assert_eq!(
         second_review_status(&pool, project_id, AutonomyTask::FullTextScreening)
             .await
-            .expect("status"),
-        SecondReviewStatus::NeedsCalibration,
-        "a title/abstract calibration never admits full text"
+            .unwrap(),
+        SecondReviewStatus::Automatic
+    );
+    sweep_second_reviews(&pool).await.unwrap();
+    assert_eq!(attempts(&pool, project_id).await, 1);
+    assert_eq!(automatic_runs(&pool, project_id).await, 1);
+    let decisions: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM screening_events WHERE project_id=$1")
+            .bind(project_id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(
+        decisions, 0,
+        "advisory admission cannot write scientific state"
     );
 }
 
@@ -368,61 +328,35 @@ async fn the_sweep_schedules_a_bounded_batch_and_never_repeats_an_attempt() {
 }
 
 #[tokio::test]
-async fn a_calibration_for_a_different_review_releases_the_attempt_and_stops() {
+async fn stale_calibration_does_not_block_advisory_or_grant_scientific_authority() {
     let Some(pool) = database().await else { return };
     let _turn = sweep_turn(&pool).await;
     screening_routes(&pool).await;
     let project_id = project(&pool).await;
     publish_protocol_for(&pool, project_id).await;
-    let report_id = waiting_record(&pool, project_id, "Waiting under a stale calibration").await;
-
-    // The calibration was made under an earlier protocol: only that component differs.
-    let mut earlier = identity(&pool, project_id, report_id, ScreeningStage::TitleAbstract).await;
-    earlier.components.insert(
+    let report = waiting_record(&pool, project_id, "Stale evidence advisory").await;
+    let mut stale = identity(&pool, project_id, report, ScreeningStage::TitleAbstract).await;
+    stale.components.insert(
         IdentityComponent::Protocol,
-        ReviewHash::digest_bytes("an earlier protocol"),
+        ReviewHash::digest_bytes("old protocol"),
     );
-    approve_calibration(&pool, project_id, earlier).await;
-
-    sweep_second_reviews(&pool).await.expect("sweep");
-    assert_eq!(
-        attempts(&pool, project_id).await,
-        0,
-        "the claim is released for a later tick"
-    );
-    assert_eq!(
-        automatic_runs(&pool, project_id).await,
-        0,
-        "nothing was admitted"
-    );
+    approve_calibration(&pool, project_id, stale).await;
+    sweep_second_reviews(&pool).await.unwrap();
+    assert_eq!(attempts(&pool, project_id).await, 1);
+    assert_eq!(automatic_runs(&pool, project_id).await, 1);
     assert_eq!(
         second_review_status(&pool, project_id, AutonomyTask::TitleAbstractScreening)
             .await
-            .expect("status"),
-        SecondReviewStatus::CalibrationStale,
-        "the status must not read automatic while the gate refuses the calibration"
+            .unwrap(),
+        SecondReviewStatus::Automatic
     );
-    let (refusal, reasons): (String, Vec<String>) = sqlx::query_as(
-        "SELECT refusal, reasons FROM second_review_gate
-         WHERE project_id=$1 AND stage='title_abstract'",
-    )
-    .bind(project_id)
-    .fetch_one(&pool)
-    .await
-    .expect("the refusal is recorded for the stage");
-    assert_eq!(refusal, "calibration_stale");
-    assert_eq!(
-        reasons,
-        vec!["protocol".to_owned()],
-        "the gate names the component that changed"
-    );
-    assert_eq!(
-        second_review_status(&pool, project_id, AutonomyTask::FullTextScreening)
+    let events: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM screening_events WHERE project_id=$1")
+            .bind(project_id)
+            .fetch_one(&pool)
             .await
-            .expect("status"),
-        SecondReviewStatus::NeedsCalibration,
-        "a refusal is recorded per stage, and full text has no calibration at all"
-    );
+            .unwrap();
+    assert_eq!(events, 0);
 }
 
 #[tokio::test]

@@ -108,17 +108,19 @@ pub struct ReviewerDecisionRecord {
 
 const STATUS_VIEW: &str = "
     SELECT d.id,d.report_id,d.stage,d.decision AS ai_decision,d.rationale,d.evidence,d.model,
-           d.source,d.created_at,d.resolved_at,d.resolution,d.human_decision_before,
+           d.source,d.created_at,CASE WHEN ai_first_blinded(d.project_id,d.report_id) THEN NULL ELSE d.resolved_at END AS resolved_at,
+           CASE WHEN ai_first_blinded(d.project_id,d.report_id) THEN NULL ELSE d.resolution END AS resolution,d.human_decision_before,
            r.title,r.abstract_text,
-           CASE d.stage WHEN 'title_abstract' THEN s.title_abstract_status
+           CASE WHEN ai_first_blinded(d.project_id,d.report_id) THEN 'unscreened'
+                WHEN d.stage='title_abstract' THEN s.title_abstract_status
                         ELSE s.full_text_status END AS human_status,
-           e.notes AS human_notes,
-           CASE WHEN e.event_kind='decision' THEN e.actor_id END AS human_actor
+           CASE WHEN ai_first_blinded(d.project_id,d.report_id) THEN NULL ELSE e.notes END AS human_notes,
+           CASE WHEN e.event_kind='decision' AND e.actor_kind='user' AND NOT ai_first_blinded(d.project_id,d.report_id) THEN e.actor_id END AS human_actor
     FROM ai_reviewer_decisions d
     JOIN reports r ON r.id=d.report_id
     LEFT JOIN screening_state s ON s.project_id=d.project_id AND s.report_id=d.report_id
     LEFT JOIN screening_events e ON e.id=s.last_event_id
-    WHERE d.project_id=$1 AND d.voided_at IS NULL AND ($2::text IS NULL OR d.stage=$2)";
+    WHERE d.project_id=$1 AND d.voided_at IS NULL AND NOT ai_first_audit_masked(d.project_id,d.report_id) AND ($2::text IS NULL OR d.stage=$2)";
 
 fn status_of(
     resolved_at: Option<DateTime<Utc>>,
@@ -256,9 +258,14 @@ pub async fn resolve_reviewer_conflict(
     actor: &Actor,
 ) -> Result<ReviewerDecisionRecord, ReviewerError> {
     let mut tx = pool.begin().await?;
+    sqlx::query("SELECT id FROM projects WHERE id=$1 FOR UPDATE")
+        .bind(project_id)
+        .fetch_optional(&mut *tx)
+        .await?;
     let row = sqlx::query(
         "SELECT d.report_id,d.stage,d.decision,d.resolved_at,
-                CASE d.stage WHEN 'title_abstract' THEN s.title_abstract_status
+                CASE WHEN ai_first_blinded(d.project_id,d.report_id) THEN 'unscreened'
+                WHEN d.stage='title_abstract' THEN s.title_abstract_status
                              ELSE s.full_text_status END AS human_status,
                 COALESCE(s.revision,0) AS revision,
                 (SELECT CASE WHEN e.actor_kind='user' AND e.event_kind='decision'

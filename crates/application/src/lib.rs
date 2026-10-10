@@ -6,6 +6,7 @@ use deepref_domain::{
 };
 
 pub mod acquisition;
+pub mod ai_first;
 pub mod appraisal;
 pub mod automations;
 pub mod deduplication;
@@ -136,6 +137,7 @@ impl ScreeningQueueSort {
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct GetScreeningQueueQuery {
+    pub reviewer_id: Option<String>,
     pub project_id: ProjectId,
     pub status: ScreeningQueueStatus,
     pub search: Option<String>,

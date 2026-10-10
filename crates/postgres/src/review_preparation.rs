@@ -33,7 +33,13 @@ async fn ensure_ai_task_enabled(
     let level = crate::autonomy::resolve_autonomy_level(pool, project_id, task)
         .await
         .map_err(|error| ReviewPreparationError::InvalidInput(error.to_string()))?;
-    if level == AutonomyLevel::Off {
+    let ai_first = if task == AutonomyTask::TitleAbstractScreening {
+        sqlx::query_scalar::<_, bool>("SELECT EXISTS(SELECT 1 FROM project_ai_screening_authority WHERE project_id=$1 AND ceiling<>'off' AND suspended_reason IS NULL)")
+            .bind(project_id).fetch_one(pool).await.map_err(|e|ReviewPreparationError::InvalidInput(e.to_string()))?
+    } else {
+        false
+    };
+    if level == AutonomyLevel::Off && !ai_first {
         return Err(ReviewPreparationError::InvalidInput(
             "AI help for this kind of work is turned off in this project's AI settings.".to_owned(),
         ));

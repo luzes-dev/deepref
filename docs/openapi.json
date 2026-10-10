@@ -2026,6 +2026,396 @@
         }
       }
     },
+    "/projects/{project_id}/ai/first": {
+      "get": {
+        "tags": [
+          "ai"
+        ],
+        "operationId": "getAiFirstOverview",
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AiFirstOverviewDto"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        }
+      },
+      "post": {
+        "tags": [
+          "ai"
+        ],
+        "operationId": "startAiFirstCohort",
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StartAiFirstRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AiFirstActionDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/projects/{project_id}/ai/first/{cohort_id}/close": {
+      "post": {
+        "tags": [
+          "ai"
+        ],
+        "operationId": "closeAiFirstCohort",
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "cohort_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AiFirstActionDto"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/projects/{project_id}/ai/first/{cohort_id}/draw": {
+      "post": {
+        "tags": [
+          "ai"
+        ],
+        "operationId": "drawAiFirstAudit",
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "cohort_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DrawAiFirstRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AiFirstActionDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/projects/{project_id}/ai/first/{cohort_id}/evaluate": {
+      "post": {
+        "tags": [
+          "ai"
+        ],
+        "operationId": "evaluateAiFirstAudit",
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "cohort_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AiFirstActionDto"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/projects/{project_id}/ai/first/{cohort_id}/finalize": {
+      "post": {
+        "tags": [
+          "ai"
+        ],
+        "operationId": "finalizeAiFirstCohort",
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "cohort_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/FinalizeAiFirstRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AiFirstActionDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/projects/{project_id}/ai/first/{cohort_id}/recover": {
+      "post": {
+        "tags": [
+          "ai"
+        ],
+        "operationId": "recoverAiFirstCohort",
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "cohort_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AiFirstActionDto"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/projects/{project_id}/ai/proposals": {
       "get": {
         "tags": [
@@ -11285,6 +11675,185 @@
           }
         }
       },
+      "AiFirstActionDto": {
+        "type": "object",
+        "required": [
+          "cohort_id",
+          "count"
+        ],
+        "properties": {
+          "cohort_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "count": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          }
+        }
+      },
+      "AiFirstCohortDto": {
+        "type": "object",
+        "required": [
+          "id",
+          "status",
+          "target_percent",
+          "members",
+          "evaluated",
+          "quarantined",
+          "sampled",
+          "controls",
+          "labels"
+        ],
+        "properties": {
+          "alpha_billionths": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32"
+          },
+          "controls": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "evaluated": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "forecast": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/AiFirstForecastDto"
+              }
+            ]
+          },
+          "id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "invalidation_reason": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "labels": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "members": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "quarantined": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "reference_relevant": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32"
+          },
+          "result": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "$ref": "#/components/schemas/AuditResultDto"
+              }
+            ]
+          },
+          "sampled": {
+            "type": "integer",
+            "format": "int64"
+          },
+          "status": {
+            "type": "string"
+          },
+          "target_percent": {
+            "type": "integer",
+            "format": "int32"
+          }
+        }
+      },
+      "AiFirstForecastDto": {
+        "type": "object",
+        "required": [
+          "human_records_remaining",
+          "minimum_sample",
+          "minimum_controls",
+          "human_judgments_if_passed",
+          "human_judgments_if_failed",
+          "savings_vs_single",
+          "recommended"
+        ],
+        "properties": {
+          "human_judgments_if_failed": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "human_judgments_if_passed": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "human_records_remaining": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
+          "minimum_controls": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "minimum_sample": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "recommended": {
+            "type": "boolean"
+          },
+          "savings_vs_single": {
+            "type": "integer",
+            "format": "int64"
+          }
+        }
+      },
+      "AiFirstOverviewDto": {
+        "type": "object",
+        "required": [
+          "ceiling",
+          "cohorts"
+        ],
+        "properties": {
+          "ceiling": {
+            "type": "string"
+          },
+          "cohorts": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AiFirstCohortDto"
+            }
+          },
+          "suspended_reason": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
       "AiIdentityProvenanceDto": {
         "type": "object",
         "required": [
@@ -13596,6 +14165,41 @@
           }
         ]
       },
+      "AuditResultDto": {
+        "type": "object",
+        "required": [
+          "observed_relevant",
+          "first_unsafe_total",
+          "p_value",
+          "passed"
+        ],
+        "properties": {
+          "first_unsafe_total": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "observed_relevant": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          },
+          "p_value": {
+            "type": "number",
+            "format": "double"
+          },
+          "passed": {
+            "type": "boolean"
+          },
+          "reference_retention": {
+            "type": [
+              "number",
+              "null"
+            ],
+            "format": "double"
+          }
+        }
+      },
       "AutomationDefinitionDto": {
         "type": "object",
         "required": [
@@ -15043,6 +15647,20 @@
           }
         }
       },
+      "DrawAiFirstRequest": {
+        "type": "object",
+        "properties": {
+          "sample_size": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "minimum": 0
+          }
+        },
+        "additionalProperties": false
+      },
       "DuplicateMergeArgsDto": {
         "type": "object",
         "required": [
@@ -15455,6 +16073,18 @@
             "description": "The block the value comes from, when one is connected."
           }
         }
+      },
+      "FinalizeAiFirstRequest": {
+        "type": "object",
+        "required": [
+          "acknowledge_reference_limits"
+        ],
+        "properties": {
+          "acknowledge_reference_limits": {
+            "type": "boolean"
+          }
+        },
+        "additionalProperties": false
       },
       "FrameworkKindInput": {
         "type": "string",
@@ -17485,6 +18115,8 @@
           "manually_created_reports",
           "screened_records",
           "title_abstract_excluded",
+          "automation_excluded",
+          "ai_quarantined",
           "title_abstract_pending",
           "reports_sought",
           "reports_not_retrieved",
@@ -17497,12 +18129,22 @@
           "included_studies"
         ],
         "properties": {
+          "ai_quarantined": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
+          },
           "as_of": {
             "type": [
               "string",
               "null"
             ],
             "format": "date-time"
+          },
+          "automation_excluded": {
+            "type": "integer",
+            "format": "int64",
+            "minimum": 0
           },
           "duplicates_removed": {
             "type": "integer",
@@ -19151,6 +19793,24 @@
             "format": "int32"
           }
         }
+      },
+      "StartAiFirstRequest": {
+        "type": "object",
+        "required": [
+          "target_percent",
+          "allow_finalization"
+        ],
+        "properties": {
+          "allow_finalization": {
+            "type": "boolean"
+          },
+          "target_percent": {
+            "type": "integer",
+            "format": "int32",
+            "minimum": 0
+          }
+        },
+        "additionalProperties": false
       },
       "StartAutomationRequest": {
         "type": "object",

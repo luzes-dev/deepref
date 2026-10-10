@@ -4,6 +4,7 @@ mod agent_tools;
 mod ai;
 mod ai_autonomy_apply;
 mod ai_exposure;
+mod ai_first;
 mod ai_reviewer;
 mod ai_usage;
 mod appraisal;
@@ -204,3 +205,9 @@ pub use worker_runtime::{
     recover_expired_worker_state, reserve_provider_permit,
 };
 pub use workflows::*;
+
+pub use ai_first::{
+    AiFirstCohort, AiFirstError, AiFirstOverview, close_ai_first_cohort, draw_ai_first_audit,
+    evaluate_ai_first_audit, finalize_ai_first_cohort, get_ai_first_overview,
+    recover_ai_first_cohort, route_ai_first_result, start_ai_first_cohort, sweep_ai_first,
+};

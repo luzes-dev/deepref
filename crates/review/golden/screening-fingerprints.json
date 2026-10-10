@@ -1,6 +1,6 @@
 {
   "golden_render": "b4a8c7134fb2c7ffee1a351d9605645e4545e6df79681255f4415d74a4936855",
-  "golden_parse": "499390717894934b0e65be2638cad6e5a13ea70d3451145cecce5c286162ec07",
+  "golden_parse": "7e6297439aaf634c85550d8907c56def1b2ff4ecacc54c140fedf61c395c55f8",
   "render": [
     {
       "fixture": "ta_full",
@@ -74,31 +74,31 @@
       "name": "ta_valid_include",
       "fixture": "ta_full",
       "description": "accepted decision=include reason=null judgments=[meets,meets,does_not_meet] independent=false second_reviewer=include verdict=include",
-      "hash": "02e514e3c365bf79339f85729017cc575523b8e8d9ab1be00ae83e9380ba9704"
+      "hash": "6875170cf5acb2e5d301bb25376f8a200f310f908f583a0ba9b9dad9d18347fa"
     },
     {
       "name": "ta_valid_exclude_null_reason",
       "fixture": "ta_full",
       "description": "accepted decision=exclude reason=null judgments=[meets,meets,meets] independent=true second_reviewer=exclude verdict=exclude",
-      "hash": "584da873c05c85d157d041473a88c746c631338ededb05d86bf5e5146a7e83aa"
+      "hash": "d43749fec7d7ee727e13a3bfb9204b8c337407230252a8822fc182e0db710b2a"
     },
     {
       "name": "ta_exclude_reason_normalised_to_null",
       "fixture": "ta_full",
       "description": "accepted decision=exclude reason=null judgments=[meets,meets,meets] independent=true second_reviewer=exclude verdict=exclude",
-      "hash": "584da873c05c85d157d041473a88c746c631338ededb05d86bf5e5146a7e83aa"
+      "hash": "d43749fec7d7ee727e13a3bfb9204b8c337407230252a8822fc182e0db710b2a"
     },
     {
       "name": "ta_maybe",
       "fixture": "ta_full",
       "description": "accepted decision=maybe reason=null judgments=[meets,unclear,does_not_meet] independent=false second_reviewer=maybe verdict=unsure",
-      "hash": "a1f67b8796ded99c3e60f86dc53adc954a6479210fcf139cc170687b49433b2c"
+      "hash": "7ff08bfeb0aaf686042cef7c9ffe5c9b8772b435e8fd7242b3d18414e899c710"
     },
     {
       "name": "ta_insufficient_with_uncertainty",
       "fixture": "ta_full",
       "description": "accepted decision=insufficient_evidence reason=null judgments=[unclear,unclear,unclear] independent=false second_reviewer=none verdict=unsure",
-      "hash": "8c2d485d0b0d5ff49da1fff05f232baffcc0fc62cecf2e9f3cc19bd0695cfe9d"
+      "hash": "a7b73d36b255bfcfeaa42407f0848bb0e9c9e6463d878ece6e431803d76ae7a1"
     },
     {
       "name": "ta_insufficient_without_uncertainty",
@@ -110,13 +110,13 @@
       "name": "ta_aliases_and_typo",
       "fixture": "ta_full",
       "description": "accepted decision=maybe reason=null judgments=[meets,unclear,does_not_meet] independent=false second_reviewer=maybe verdict=unsure",
-      "hash": "69b66cd076f511e05ea5b652edc88b37a19138f231f31a450adbcdf5f1f5cb24"
+      "hash": "5ef43fb331cad63972bde558818b195992bb491d11974fd71e8b4c1ade524c60"
     },
     {
       "name": "ta_not_applicable_marker",
       "fixture": "ta_full",
       "description": "accepted decision=maybe reason=null judgments=[meets,unclear,does_not_meet] independent=false second_reviewer=maybe verdict=unsure",
-      "hash": "50504fdb2e2bce79fae23cb60adfbf31536cd381b1c5826648198cc949b4fe80"
+      "hash": "5fb86dc22a2e934125b0f0afccb01bcfa63f1a592a45d7450c684940358df33a"
     },
     {
       "name": "ta_unknown_judgment_value",
@@ -128,7 +128,7 @@
       "name": "ta_duplicate_identical",
       "fixture": "ta_full",
       "description": "accepted decision=include reason=null judgments=[meets,meets,does_not_meet] independent=false second_reviewer=include verdict=include",
-      "hash": "02e514e3c365bf79339f85729017cc575523b8e8d9ab1be00ae83e9380ba9704"
+      "hash": "6875170cf5acb2e5d301bb25376f8a200f310f908f583a0ba9b9dad9d18347fa"
     },
     {
       "name": "ta_duplicate_conflicting",
@@ -146,13 +146,13 @@
       "name": "ta_wrong_order",
       "fixture": "ta_full",
       "description": "accepted decision=include reason=null judgments=[meets,meets,does_not_meet] independent=false second_reviewer=include verdict=include",
-      "hash": "02e514e3c365bf79339f85729017cc575523b8e8d9ab1be00ae83e9380ba9704"
+      "hash": "6875170cf5acb2e5d301bb25376f8a200f310f908f583a0ba9b9dad9d18347fa"
     },
     {
       "name": "ta_extra_full_text_criterion",
       "fixture": "ta_full",
       "description": "accepted decision=include reason=null judgments=[meets,meets,does_not_meet] independent=false second_reviewer=include verdict=include",
-      "hash": "02e514e3c365bf79339f85729017cc575523b8e8d9ab1be00ae83e9380ba9704"
+      "hash": "6875170cf5acb2e5d301bb25376f8a200f310f908f583a0ba9b9dad9d18347fa"
     },
     {
       "name": "ta_wrong_stage",
@@ -188,13 +188,13 @@
       "name": "ta_maybe_all_criteria_satisfied",
       "fixture": "ta_full",
       "description": "accepted decision=maybe reason=null judgments=[meets,meets,does_not_meet] independent=false second_reviewer=maybe verdict=unsure",
-      "hash": "a0dcf6685cf95ad2a4c9f4c044a4b213f55ca11107637cffa0d9d5c504991b7d"
+      "hash": "d86a1a1b42871a4ce90c6c04092fb0c930bbeebc6baad9af54c06fbcc49eb2fe"
     },
     {
       "name": "ta_code_fenced_json",
       "fixture": "ta_full",
       "description": "accepted decision=include reason=null judgments=[meets,meets,does_not_meet] independent=false second_reviewer=include verdict=include",
-      "hash": "02e514e3c365bf79339f85729017cc575523b8e8d9ab1be00ae83e9380ba9704"
+      "hash": "6875170cf5acb2e5d301bb25376f8a200f310f908f583a0ba9b9dad9d18347fa"
     },
     {
       "name": "ta_non_json_text",
@@ -206,7 +206,7 @@
       "name": "ta_decision_kind_odd_casing",
       "fixture": "ta_full",
       "description": "accepted decision=include reason=null judgments=[meets,meets,does_not_meet] independent=false second_reviewer=include verdict=include",
-      "hash": "02e514e3c365bf79339f85729017cc575523b8e8d9ab1be00ae83e9380ba9704"
+      "hash": "6875170cf5acb2e5d301bb25376f8a200f310f908f583a0ba9b9dad9d18347fa"
     },
     {
       "name": "ta_unknown_decision_kind",
@@ -218,13 +218,13 @@
       "name": "ta_unknown_top_level_field",
       "fixture": "ta_full",
       "description": "accepted decision=include reason=null judgments=[meets,meets,does_not_meet] independent=false second_reviewer=include verdict=include",
-      "hash": "02e514e3c365bf79339f85729017cc575523b8e8d9ab1be00ae83e9380ba9704"
+      "hash": "6875170cf5acb2e5d301bb25376f8a200f310f908f583a0ba9b9dad9d18347fa"
     },
     {
       "name": "ft_valid_exclude_allowed_reason",
       "fixture": "ft_all_stages",
       "description": "accepted decision=exclude reason=\"00000000-0000-4000-8000-000000000202\" judgments=[meets,meets,meets,does_not_meet] independent=true second_reviewer=exclude verdict=exclude",
-      "hash": "fb2b29aa7009f0d26077bb73f201029dfa902c9242caf5d5dd60cd844a6bc666"
+      "hash": "d95e150b94830a28de61e921924a1e17daadab3b5742a9051178517d7300b0af"
     },
     {
       "name": "ft_exclude_reason_wrong_stage",
@@ -242,7 +242,7 @@
       "name": "ft_include_block_hash_filled",
       "fixture": "ft_all_stages",
       "description": "accepted decision=include reason=null judgments=[meets,does_not_meet,meets,does_not_meet] independent=true second_reviewer=include verdict=include",
-      "hash": "efe1abd6c4e9029b87fecf89af30174f8b9e129f6b412c48329f01b2f7587252"
+      "hash": "e90c189e4f4636d34db694133a782ac9dd5dd114fe7c045aade4482682f0bab6"
     },
     {
       "name": "ft_metadata_evidence_at_full_text",

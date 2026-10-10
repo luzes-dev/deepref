@@ -5,6 +5,7 @@
 //! node fingerprints. Provider calls remain in `deepref-ai`; PostgreSQL and
 //! worker adapters live outside this crate.
 
+mod ai_first;
 mod definition;
 mod execution;
 mod golden;
@@ -25,6 +26,7 @@ pub mod worker;
 #[path = "../build_support/fingerprint.rs"]
 mod build_support;
 
+pub use ai_first::{AI_FIRST_POLICY_VERSION, automation_eligible_exclusion};
 pub(crate) use definition::{CompiledReviewDefinition, ReviewCatalog};
 pub use golden::screening_golden_fingerprints;
 pub(crate) use hash::ReviewHash;

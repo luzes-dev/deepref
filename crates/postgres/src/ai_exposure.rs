@@ -246,9 +246,9 @@ pub(crate) async fn record_suggestion_exposures(
 /// True for a screening proposal that is the AI second reviewer's opinion, while
 /// the person has not decided that record and stage. It is the SQL condition
 /// over `p`, an `ai_proposals` row, and it withholds the proposal from every
-/// reader except the internal workflow and autonomy paths.
-pub(crate) const PROPOSAL_WITHHELD_SQL: &str =
-    "ai_screening_proposal_withheld(p.project_id, p.id, p.target_report_id, p.payload->>'stage')";
+/// reader except the internal workflow and autonomy paths. During a blind audit,
+/// all stages are withheld so a prior full-text opinion cannot identify controls.
+pub(crate) const PROPOSAL_WITHHELD_SQL: &str = "(ai_first_audit_masked(p.project_id, p.target_report_id) OR ai_screening_proposal_withheld(p.project_id, p.id, p.target_report_id, p.payload->>'stage'))";
 
 /// A human decision and the AI second reviewer's opinion on the same record and
 /// stage. The pair stands as long as the person's decision is still the one it
@@ -303,7 +303,7 @@ pub async fn independent_reviewer_pairs(
            SELECT p.id AS decision_id, p.project_id, p.report_id, p.stage,
                   p.decision AS ai_decision, p.human_decision,
                   CASE WHEN h.actor_kind='user' AND h.event_kind='decision'
-                              AND h.decision=p.human_decision
+                              AND h.decision=p.human_decision AND NOT h.audit_reference
                        THEN CASE WHEN p.resolved_at IS NOT NULL THEN p.human_decision_before_at
                                  ELSE h.created_at END END AS human_at,
                   h.actor_kind, h.actor_id
@@ -319,7 +319,8 @@ pub async fn independent_reviewer_pairs(
              WHERE d.project_id=$1 AND d.voided_at IS NULL AND ($2::text IS NULL OR d.stage=$2)
            ) p
            LEFT JOIN LATERAL (
-             SELECT e.created_at, e.actor_kind, e.actor_id, e.event_kind, e.decision
+             SELECT e.created_at, e.actor_kind, e.actor_id, e.event_kind, e.decision,
+               (e.notes LIKE '%dual_or%' AND e.notes LIKE '%ai_first_cohort%') IS TRUE AS audit_reference
              FROM screening_events e
              WHERE e.project_id=p.project_id AND e.report_id=p.report_id AND e.stage=p.stage
                AND (p.resolved_at IS NULL OR e.created_at=p.human_decision_before_at)

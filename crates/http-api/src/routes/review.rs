@@ -181,6 +181,8 @@ pub(crate) struct PrismaDto {
     pub manually_created_reports: u64,
     pub screened_records: u64,
     pub title_abstract_excluded: u64,
+    pub automation_excluded: u64,
+    pub ai_quarantined: u64,
     pub title_abstract_pending: u64,
     pub reports_sought: u64,
     pub reports_not_retrieved: u64,
@@ -225,8 +227,10 @@ pub(crate) async fn get_screening_queue(
     State(state): State<AppState>,
     Path(project_id): Path<Uuid>,
     Query(params): Query<ScreeningQueueParams>,
+    headers: axum::http::HeaderMap,
 ) -> Result<Json<ScreeningQueueDto>, ApiError> {
-    let query = queue_query(project_id, params)?;
+    let mut query = queue_query(project_id, params)?;
+    query.reviewer_id = Some(extract_actor(&headers)?.id().to_owned());
     let queue = deepref_postgres::get_screening_queue(&state.pool, query)
         .await
         .map_err(map_screening_error)?;
@@ -257,8 +261,10 @@ pub(crate) async fn list_title_abstract_queue(
     State(state): State<AppState>,
     Path(project_id): Path<Uuid>,
     Query(params): Query<ScreeningQueueParams>,
+    headers: axum::http::HeaderMap,
 ) -> Result<Json<ScreeningQueueDto>, ApiError> {
-    let query = queue_query(project_id, params)?;
+    let mut query = queue_query(project_id, params)?;
+    query.reviewer_id = Some(extract_actor(&headers)?.id().to_owned());
     let queue = deepref_postgres::get_screening_queue(&state.pool, query)
         .await
         .map_err(map_screening_error)?;
@@ -288,8 +294,10 @@ pub(crate) async fn get_next_screening_item(
     State(state): State<AppState>,
     Path(project_id): Path<Uuid>,
     Query(params): Query<ScreeningQueueParams>,
+    headers: axum::http::HeaderMap,
 ) -> Result<Json<ScreeningQueueItemDto>, ApiError> {
-    let query = queue_query(project_id, params)?;
+    let mut query = queue_query(project_id, params)?;
+    query.reviewer_id = Some(extract_actor(&headers)?.id().to_owned());
     let item = deepref_postgres::get_next_screening_item(&state.pool, query)
         .await
         .map_err(map_screening_error)?;
@@ -461,6 +469,8 @@ fn prisma_dto(projection: PrismaProjection) -> PrismaDto {
         manually_created_reports: projection.manually_created_reports.get(),
         screened_records: projection.screened_records.get(),
         title_abstract_excluded: projection.title_abstract_excluded.get(),
+        automation_excluded: projection.automation_excluded.get(),
+        ai_quarantined: projection.ai_quarantined.get(),
         title_abstract_pending: projection.title_abstract_pending.get(),
         reports_sought: projection.reports_sought.get(),
         reports_not_retrieved: projection.reports_not_retrieved.get(),
@@ -513,6 +523,7 @@ fn queue_query(
         ));
     }
     Ok(GetScreeningQueueQuery {
+        reviewer_id: None,
         project_id: project_id.into(),
         status,
         search: search.filter(|value| !value.is_empty()),

@@ -146,6 +146,12 @@ impl ReviewSubject {
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum ReviewOrigin {
     ReviewerRequested,
+    /// Automatic advisory work has no scientific screening authority.
+    AdvisoryTriggered,
+    /// Reversible routing pinned to an owner-approved cohort.
+    AiFirstTriggered {
+        cohort_id: Uuid,
+    },
     AutomationTriggered {
         calibration_bundle_id: CalibrationBundleId,
     },

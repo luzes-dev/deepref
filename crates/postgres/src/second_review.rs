@@ -1,22 +1,12 @@
-//! Automatic AI second review for records that are waiting for a person.
-//!
-//! When a stage is set to an AI second reviewer, the reviewer should screen the
-//! records a person has not decided yet, without being asked. Automation-triggered
-//! runs are admitted only against a passing, expert-adjudicated calibration bundle
-//! for that screening stage, whose identity matches the compiled review (ADR 0004).
-//! Title/abstract and full text are calibrated separately: a bundle for one stage
-//! never admits the other. That gate is kept on purpose: this module schedules
-//! only the work the gate admits, and says plainly when it cannot run.
-//!
-//! The sweep is bounded. It schedules at most [`SECOND_REVIEW_BATCH`] records per
-//! project per tick, makes one automatic attempt per record, stage and protocol
-//! version, and does nothing once the project's AI budget is spent.
+//! Bounded automatic advisory screening from record one. A human makes every
+//! scientific decision. Current compiled identity, owner ceiling, budget and
+//! end-to-end blinding apply; calibration does not grant advisory authority.
+//! Human replacement is deliberately unavailable (ADR 0005).
 
 use deepref_application::workflows::{AutonomyLevel, AutonomyTask};
 use deepref_domain::{Actor, ActorKind, ProjectId, ProtocolVersionId, ReportId, ScreeningStage};
 use deepref_review::{
-    CalibrationBundleId, ReviewDefinitionKey, ReviewOrigin, ReviewScheduler, ReviewSubject,
-    ScheduleReviewRun,
+    ReviewDefinitionKey, ReviewOrigin, ReviewScheduler, ReviewSubject, ScheduleReviewRun,
 };
 use sqlx::PgPool;
 use uuid::Uuid;
@@ -35,12 +25,11 @@ pub const SECOND_REVIEW_BATCH: i64 = 5;
 pub enum SecondReviewStatus {
     /// The stage is not set to an AI second reviewer.
     NotEnabled,
-    /// The stage is an AI second reviewer and a passing calibration admits it.
+    /// The owner permits automatic advisory review; no calibration is required.
     Automatic,
-    /// The stage is an AI second reviewer, but no passing calibration exists yet.
+    /// Legacy status retained for compatibility; advisory no longer returns it.
     NeedsCalibration,
-    /// The stage is an AI second reviewer, but the passing calibration was made for an
-    /// earlier compiled review (another protocol, prompt or model), so it is refused.
+    /// Legacy status retained for compatibility; advisory no longer returns it.
     CalibrationStale,
 }
 
@@ -55,16 +44,12 @@ impl SecondReviewStatus {
     }
 }
 
-/// The gate kind written for a stale calibration; the other refusal kinds map to
-/// `NeedsCalibration`. Matches `CalibrationRefusal::Stale` and the gate's CHECK.
-const GATE_STALE: &str = "calibration_stale";
-
-/// Counts from one sweep across every calibrated project.
+/// Counts from one bounded advisory sweep across every project.
 #[derive(Debug, Default, Clone, Copy, PartialEq, Eq)]
 pub struct SecondReviewSweep {
     /// Review runs scheduled for records that were waiting for a person.
     pub scheduled: u64,
-    /// Attempts released because the calibration gate or the AI route refused.
+    /// Attempts released because admission or the AI route refused.
     pub released: u64,
 }
 
@@ -86,68 +71,19 @@ async fn autonomy_level(
         .map_err(|error| anyhow::anyhow!(error.to_string()))
 }
 
-/// The newest passing calibration bundle for one screening stage, if any. Legacy
-/// bundles (identity scheme 1) carry no stage and are never evidence for a stage.
-/// Admission still checks that the bundle matches the compiled review.
-async fn passing_calibration(
-    pool: &PgPool,
-    project_id: Uuid,
-    stage: ScreeningStage,
-) -> anyhow::Result<Option<Uuid>> {
-    Ok(sqlx::query_scalar::<_, Uuid>(
-        "SELECT id FROM review_calibration_bundles
-         WHERE project_id=$1 AND definition_key=$2 AND stage=$3
-           AND identity_scheme>=2 AND status='passing'
-         ORDER BY evaluated_at DESC, id DESC
-         LIMIT 1",
-    )
-    .bind(project_id)
-    .bind(ReviewDefinitionKey::Screening.as_str())
-    .bind(stage_key(stage))
-    .fetch_optional(pool)
-    .await?)
-}
-
 /// Says whether automatic second review runs for one stage, and why not if it does not.
 pub async fn second_review_status(
     pool: &PgPool,
     project_id: Uuid,
     task: AutonomyTask,
 ) -> anyhow::Result<SecondReviewStatus> {
-    let Some(stage) = stage_of(task) else {
+    let Some(_stage) = stage_of(task) else {
         return Ok(SecondReviewStatus::NotEnabled);
     };
     if autonomy_level(pool, project_id, task).await? != AutonomyLevel::SecondReviewer {
         return Ok(SecondReviewStatus::NotEnabled);
     }
-    if passing_calibration(pool, project_id, stage)
-        .await?
-        .is_none()
-    {
-        return Ok(SecondReviewStatus::NeedsCalibration);
-    }
-    match gate_refusal(pool, project_id, stage).await? {
-        None => Ok(SecondReviewStatus::Automatic),
-        Some(kind) if kind == GATE_STALE => Ok(SecondReviewStatus::CalibrationStale),
-        // A stage or identity mismatch means no passing bundle admits this stage as
-        // it stands, so it needs calibrating again, as it does when none exists.
-        Some(_) => Ok(SecondReviewStatus::NeedsCalibration),
-    }
-}
-
-/// The refusal kind the sweep last met for this stage, if it is still in force.
-async fn gate_refusal(
-    pool: &PgPool,
-    project_id: Uuid,
-    stage: ScreeningStage,
-) -> anyhow::Result<Option<String>> {
-    Ok(sqlx::query_scalar::<_, String>(
-        "SELECT refusal FROM second_review_gate WHERE project_id=$1 AND stage=$2",
-    )
-    .bind(project_id)
-    .bind(stage_key(stage))
-    .fetch_optional(pool)
-    .await?)
+    Ok(SecondReviewStatus::Automatic)
 }
 
 /// Keeps the gate record in step with the last sweep. A refusal is written with
@@ -193,19 +129,11 @@ async fn record_gate(
     Ok(())
 }
 
-/// One bounded pass over every project that has a passing calibration for a
-/// screening stage. Projects without one cost a single query and are never sent
-/// any work.
+/// One bounded pass over projects whose owner permits advisory screening.
 pub async fn sweep_second_reviews(pool: &PgPool) -> anyhow::Result<SecondReviewSweep> {
-    let projects = sqlx::query_scalar::<_, Uuid>(
-        "SELECT DISTINCT project_id FROM review_calibration_bundles
-         WHERE definition_key=$1 AND status='passing'
-           AND identity_scheme>=2 AND stage IS NOT NULL
-         ORDER BY project_id",
-    )
-    .bind(ReviewDefinitionKey::Screening.as_str())
-    .fetch_all(pool)
-    .await?;
+    let projects = sqlx::query_scalar::<_, Uuid>("SELECT id FROM projects ORDER BY id")
+        .fetch_all(pool)
+        .await?;
     let mut total = SecondReviewSweep::default();
     for project_id in projects {
         match sweep_project(pool, project_id).await {
@@ -237,11 +165,6 @@ async fn sweep_project(pool: &PgPool, project_id: Uuid) -> anyhow::Result<Second
         if autonomy_level(pool, project_id, task).await? != AutonomyLevel::SecondReviewer {
             continue;
         }
-        // A stage without its own passing calibration has no work. Each stage is
-        // gated on its own calibration, so a refusal for one never stops the other.
-        let Some(bundle) = passing_calibration(pool, project_id, stage).await? else {
-            continue;
-        };
         let protocol = get_published_protocol(pool, project_id).await?;
         let remaining = SECOND_REVIEW_BATCH - sweep.scheduled as i64;
         if remaining <= 0 {
@@ -273,9 +196,7 @@ async fn sweep_project(pool: &PgPool, project_id: Uuid) -> anyhow::Result<Second
                     protocol_version_id: ProtocolVersionId::new(protocol.id),
                     expected_revision: target.expected_revision,
                 },
-                origin: ReviewOrigin::AutomationTriggered {
-                    calibration_bundle_id: CalibrationBundleId::new(bundle)?,
-                },
+                origin: ReviewOrigin::AdvisoryTriggered,
                 actor: Actor::new(ActorKind::Automation, "second-reviewer")?,
             };
             match PostgresReviewScheduler::new(pool).schedule(command).await {
@@ -339,6 +260,8 @@ async fn waiting_reports(
                              WHERE d.project_id=pr.project_id AND d.report_id=pr.report_id
                                AND d.status='available'))
            )
+           AND NOT EXISTS (SELECT 1 FROM ai_screening_cohort_members m JOIN ai_screening_cohorts c ON c.id=m.cohort_id
+             WHERE m.project_id=pr.project_id AND m.report_id=pr.report_id AND $2='title_abstract' AND c.status IN ('open','closed','auditing','passed'))
            AND NOT EXISTS (
              SELECT 1 FROM second_review_attempts a
              WHERE a.project_id=pr.project_id AND a.report_id=pr.report_id

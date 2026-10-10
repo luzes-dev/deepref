@@ -12,9 +12,7 @@ use std::collections::BTreeMap;
 use chrono::Utc;
 use deepref_ai::{ModelParameters, ModelProfile, ResolvedModel};
 use deepref_application::workflows::AutonomyTask;
-use deepref_application::{
-    ProtocolCriterionCommand, PublishProtocolCommand, SaveProtocolDraftCommand,
-};
+use deepref_application::{ProtocolCriterionCommand, SaveProtocolDraftCommand};
 use deepref_domain::{
     Actor, ActorKind, CriterionDimension, CriterionKind, CriterionStage, FrameworkKind, ProjectId,
     ProtocolVersionId, ReportId, ScreeningStage,
@@ -22,8 +20,7 @@ use deepref_domain::{
 use deepref_postgres::{
     CalibrationRefusal, MIGRATOR, PostgresReviewError, PostgresReviewScheduler, ProtocolActor,
     ReviewPreparationError, SecondReviewStatus, get_ai_screening_target, get_published_protocol,
-    insert_model_route, migrate, publish_protocol, save_protocol_draft, second_review_status,
-    sweep_second_reviews,
+    insert_model_route, migrate, save_protocol_draft, second_review_status, sweep_second_reviews,
 };
 use deepref_review::{
     CalibrationBundleId, ReviewDefinitionKey, ReviewOrigin, ReviewRunSnapshot, ReviewScheduler,
@@ -100,17 +97,10 @@ async fn publish_protocol_for(pool: &PgPool, project_id: ProjectId) {
     )
     .await
     .expect("draft saves");
-    publish_protocol(
-        pool,
-        &PublishProtocolCommand {
-            project_id,
-            protocol_version_id: draft.id,
-            expected_revision: draft.revision,
-        },
-        &actor,
-    )
-    .await
-    .expect("protocol publishes");
+    // Historical schema fixtures cannot call current publication hooks that
+    // require later tables. Seed the already validated draft's published state.
+    sqlx::query("UPDATE protocol_versions SET status='published',published_at=now(),published_by_kind='user',published_by_id='migration-test' WHERE id=$1")
+        .bind(draft.id).execute(pool).await.expect("historical protocol publishes");
 }
 
 /// A project with a published protocol, one report to screen, and a Reasoning route.
@@ -346,8 +336,8 @@ async fn upgrade_legacy_database(legacy_url: &str) {
         Ok(run) => panic!("a legacy bundle admitted run {}", run.id.as_uuid()),
     }
 
-    // The sweep never selects a legacy bundle, so nothing is scheduled and the status
-    // says that the stage needs calibrating.
+    // The legacy bundle still cannot admit consequential automation. Advisory
+    // screening is independently available without calibration under V1.
     sweep_second_reviews(&legacy).await.expect("sweep");
     let runs: i64 =
         sqlx::query_scalar("SELECT count(*) FROM review_run_manifests WHERE project_id=$1")
@@ -355,7 +345,17 @@ async fn upgrade_legacy_database(legacy_url: &str) {
             .fetch_one(&legacy)
             .await
             .expect("run count");
-    assert_eq!(runs, 0, "the sweep schedules nothing from a legacy bundle");
+    assert_eq!(
+        runs, 1,
+        "the sweep admits advisory work independently of legacy calibration"
+    );
+    let origin: String =
+        sqlx::query_scalar("SELECT origin->>'kind' FROM review_run_manifests WHERE project_id=$1")
+            .bind(project_id.as_uuid())
+            .fetch_one(&legacy)
+            .await
+            .expect("advisory origin");
+    assert_eq!(origin, "advisory_triggered");
     assert_eq!(
         second_review_status(
             &legacy,
@@ -364,7 +364,7 @@ async fn upgrade_legacy_database(legacy_url: &str) {
         )
         .await
         .expect("status"),
-        SecondReviewStatus::NeedsCalibration
+        SecondReviewStatus::Automatic
     );
 
     // The legacy shape cannot be written again.

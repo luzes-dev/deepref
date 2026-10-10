@@ -174,7 +174,7 @@ pub async fn list_ungrouped_included_reports(
            LIMIT 1
          ) doi ON true
          WHERE pr.project_id = $1
-           AND coalesce(ss.title_abstract_status, 'unscreened') = 'include'
+           AND NOT ai_first_audit_masked(pr.project_id,pr.report_id) AND coalesce(ss.title_abstract_status, 'unscreened') = 'include'
            AND coalesce(ss.full_text_status, 'not_required') = 'include'
            AND NOT EXISTS (
              SELECT 1 FROM study_reports sr

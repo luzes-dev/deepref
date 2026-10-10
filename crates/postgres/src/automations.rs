@@ -205,13 +205,14 @@ pub async fn list_automation_runs(
 ) -> Result<Vec<AutomationRun>, AutomationError> {
     validate_project(project_id)?;
     validate_run_list_limit(limit)?;
-    let rows = sqlx::query("SELECT * FROM list_automation_runs($1,$2)")
-        .bind(project_id.as_uuid())
-        .bind(i32::try_from(limit).map_err(|_| {
-            AutomationError::InvalidInput(AutomationValidationError::InvalidRunListLimit)
-        })?)
-        .fetch_all(pool)
-        .await?;
+    let rows =
+        sqlx::query("SELECT * FROM automation_run_details WHERE project_id=$1 AND ai_first_run_visible($1,run_id) ORDER BY created_at DESC,run_id DESC LIMIT $2")
+            .bind(project_id.as_uuid())
+            .bind(i32::try_from(limit).map_err(|_| {
+                AutomationError::InvalidInput(AutomationValidationError::InvalidRunListLimit)
+            })?)
+            .fetch_all(pool)
+            .await?;
     rows.iter().map(run_from_row).collect()
 }
 
@@ -221,12 +222,13 @@ pub async fn get_automation_run(
     run_id: AutomationRunId,
 ) -> Result<AutomationRun, AutomationError> {
     validate_project(project_id)?;
-    let row = sqlx::query("SELECT * FROM get_automation_run($1,$2)")
-        .bind(project_id.as_uuid())
-        .bind(run_id.as_uuid())
-        .fetch_optional(pool)
-        .await?
-        .ok_or(AutomationError::RunNotFound)?;
+    let row =
+        sqlx::query("SELECT * FROM get_automation_run($1,$2) WHERE ai_first_run_visible($1,$2)")
+            .bind(project_id.as_uuid())
+            .bind(run_id.as_uuid())
+            .fetch_optional(pool)
+            .await?
+            .ok_or(AutomationError::RunNotFound)?;
     run_from_row(&row)
 }
 

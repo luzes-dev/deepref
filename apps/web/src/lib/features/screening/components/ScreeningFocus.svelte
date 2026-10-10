@@ -341,19 +341,22 @@
 					expected_revision: expectedRevision
 				}
 			});
-			lastAction = {
-				reportId,
-				postDecisionItem: {
-					...priorItem,
-					title_abstract_status: decision,
-					full_text_status: result.data.full_text_status,
-					final_status: result.data.final_status,
-					revision: result.data.revision
-				},
-				location: priorLocation,
-				priorStatus: priorItem.title_abstract_status,
-				returnedRevision: result.data.revision
-			};
+			lastAction =
+				result.data.revision > expectedRevision
+					? {
+							reportId,
+							postDecisionItem: {
+								...priorItem,
+								title_abstract_status: result.data.title_abstract_status,
+								full_text_status: result.data.full_text_status,
+								final_status: result.data.final_status,
+								revision: result.data.revision
+							},
+							location: priorLocation,
+							priorStatus: priorItem.title_abstract_status,
+							returnedRevision: result.data.revision
+						}
+					: null;
 			await invalidateScreeningReport(reportId);
 		} catch (error) {
 			if (error instanceof ApiError && error.status === 409) {

@@ -485,7 +485,18 @@ fn parse_report(
         strip_code_fence(&response.raw),
         &fixture.blocks,
     ) {
-        Ok((_, output)) => accepted_outcome(&task, output)?,
+        Ok((_, output)) => {
+            let eligible = match &fixture.prepared {
+                PreparedReviewTask::Screening {
+                    input, criteria, ..
+                } => crate::automation_eligible_exclusion(input, criteria, &output, &output),
+                _ => false,
+            };
+            let mut outcome = accepted_outcome(&task, output)?;
+            outcome.value["automation_eligible_exclusion"] = Value::Bool(eligible);
+            outcome.value["automation_policy_version"] = json!(crate::AI_FIRST_POLICY_VERSION);
+            outcome
+        }
         Err(error) => rejected_outcome(&error),
     };
     Ok(ParseReport {
@@ -629,6 +640,55 @@ mod tests {
             .find(|response| response.name == name)
             .expect("response exists")
             .raw
+    }
+
+    #[test]
+    fn ai_first_requires_complete_grounded_agreement() {
+        let fixtures = load_render_fixtures().expect("fixtures load");
+        let fixture = fixture_named(&fixtures, "ta_full");
+        let parts = subject_parts(&fixture.prepared).expect("screening parts");
+        let mut analysis = golden_analysis(
+            fixture,
+            SuggestedDecision::Exclude {
+                exclusion_reason_id: None,
+            },
+            vec![],
+        )
+        .expect("analysis");
+        for judgment in &mut analysis.criteria {
+            judgment.judgment = CriterionResult::DoesNotMeet;
+        }
+        let eligible = |input: &ScreeningInput, a: &ScreeningAnalysis, b: &ScreeningAnalysis| {
+            crate::automation_eligible_exclusion(input, parts.criteria, a, b)
+        };
+        assert!(eligible(parts.input, &analysis, &analysis));
+        let mut changed = analysis.clone();
+        changed.criteria[1].evidence.clear();
+        assert!(
+            !eligible(parts.input, &changed, &analysis),
+            "every decisive judgment needs evidence"
+        );
+        changed = analysis.clone();
+        changed.uncertainties.push("Unclear population".into());
+        assert!(!eligible(parts.input, &analysis, &changed));
+        changed = analysis.clone();
+        changed.suggested_decision = SuggestedDecision::Include;
+        assert!(!eligible(parts.input, &analysis, &changed));
+        let mut input = parts.input.clone();
+        input.abstract_text = None;
+        assert!(!eligible(&input, &analysis, &analysis));
+        input.abstract_text = Some("Short abstract".into());
+        assert!(!eligible(&input, &analysis, &analysis));
+        input = parts.input.clone();
+        input.stage = ScreeningStage::FullText;
+        assert!(!eligible(&input, &analysis, &analysis));
+        changed = analysis.clone();
+        changed.criteria[0].evidence = vec![ScreeningEvidence::ReportMetadata {
+            report_id: Uuid::new_v4(),
+            field: deepref_ai::ScreeningEvidenceField::Title,
+            content_hash: "unrelated".into(),
+        }];
+        assert!(!eligible(parts.input, &changed, &analysis));
     }
 
     #[test]

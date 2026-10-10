@@ -217,10 +217,70 @@ pub(crate) const IMPLEMENTATION_BOUNDARY: &[BoundaryEntry] = &[
         reason: "resolves the project autonomy level that gates each AI verdict",
     },
     BoundaryEntry {
+        path: "crates/postgres/src/ai_first",
+        kind: Kind::Directory,
+        presence: Presence::Required,
+        reason: "AI-first eligibility, authority, inference and blinded routing policy",
+    },
+    BoundaryEntry {
+        path: "crates/application/src/ai_first.rs",
+        kind: Kind::File,
+        presence: Presence::Required,
+        reason: "AI-first eligibility, authority, inference and blinded routing policy",
+    },
+    BoundaryEntry {
+        path: "crates/postgres/migrations/0054_ai_first_cohorts.sql",
+        kind: Kind::File,
+        presence: Presence::Required,
+        reason: "AI-first eligibility, authority, inference and blinded routing policy",
+    },
+    BoundaryEntry {
+        path: "crates/postgres/migrations/0055_ai_first_blind_controls.sql",
+        kind: Kind::File,
+        presence: Presence::Required,
+        reason: "AI-first blind audit read boundary",
+    },
+    BoundaryEntry {
+        path: "crates/postgres/src/graph.rs",
+        kind: Kind::File,
+        presence: Presence::Required,
+        reason: "AI-first blind audit read boundary",
+    },
+    BoundaryEntry {
+        path: "crates/postgres/src/agent_tools.rs",
+        kind: Kind::File,
+        presence: Presence::Required,
+        reason: "AI-first blind audit read boundary",
+    },
+    BoundaryEntry {
+        path: "crates/postgres/src/documents.rs",
+        kind: Kind::File,
+        presence: Presence::Required,
+        reason: "AI-first blind audit read boundary",
+    },
+    BoundaryEntry {
+        path: "crates/postgres/src/study.rs",
+        kind: Kind::File,
+        presence: Presence::Required,
+        reason: "AI-first blind audit read boundary",
+    },
+    BoundaryEntry {
         path: "crates/postgres/src/ai_exposure.rs",
         kind: Kind::File,
         presence: Presence::Required,
         reason: "availability provenance and independent human/AI evidence selection",
+    },
+    BoundaryEntry {
+        path: "crates/postgres/src/audit_export.rs",
+        kind: Kind::File,
+        presence: Presence::Required,
+        reason: "audit export blinding prevents conditional workflow topology from revealing exclusions",
+    },
+    BoundaryEntry {
+        path: "crates/postgres/src/automations.rs",
+        kind: Kind::File,
+        presence: Presence::Required,
+        reason: "public automation inspection withholds active AI-first topology",
     },
     BoundaryEntry {
         path: "crates/postgres/src/activity.rs",
@@ -384,6 +444,7 @@ pub(crate) const OUTSIDE_BOUNDARY: &[(&str, &str)] = &[
 /// direct dependency of at least one boundary crate, and each is resolved to the
 /// exact lockfile version that crate uses.
 pub(crate) const SEMANTIC_DEPENDENCY_ROOTS: &[(&str, &str)] = &[
+    ("num-bigint", "exact fixed-cohort authority test arithmetic"),
     (
         "serde",
         "derives (de)serialisation of every boundary type, including manifests and identity snapshots",
@@ -1934,6 +1995,14 @@ workspace = true
                     workspace.write(entry.path, &format!("// placeholder for {}\n", entry.path));
                 }
             }
+            for entry in IMPLEMENTATION_BOUNDARY {
+                if entry.presence == Presence::Required && entry.kind == Kind::Directory {
+                    workspace.write(
+                        &format!("{}/placeholder.rs", entry.path),
+                        "pub fn placeholder() {}\n",
+                    );
+                }
+            }
             workspace.write("review-definitions/screening/v1/prompt.txt", "prompt\n");
             workspace.write("crates/review/src/lib.rs", "pub fn lib() {}\n");
             workspace.write("crates/review/src/memory.rs", "pub fn memory() {}\n");
@@ -2043,6 +2112,14 @@ workspace = true
         for entry in IMPLEMENTATION_BOUNDARY.iter().rev() {
             if entry.presence == Presence::Required && entry.kind == Kind::File {
                 second.write(entry.path, &format!("// placeholder for {}\n", entry.path));
+            }
+        }
+        for entry in IMPLEMENTATION_BOUNDARY.iter().rev() {
+            if entry.presence == Presence::Required && entry.kind == Kind::Directory {
+                second.write(
+                    &format!("{}/placeholder.rs", entry.path),
+                    "pub fn placeholder() {}\n",
+                );
             }
         }
         second.write("crates/domain/src/lib.rs", "pub fn domain() {}\n");

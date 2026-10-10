@@ -118,13 +118,14 @@ const ACTIVITY_FROM: &str = "FROM (
                              CASE WHEN a.task='full_text_screening' THEN 'full_text'
                                   ELSE 'title_abstract' END)='full_text'
                          THEN s.full_text_status ELSE s.title_abstract_status END,
-                    'unscreened') IN ('unscreened', 'not_required')) AS blinded
+                    'unscreened') IN ('unscreened', 'not_required')
+       OR (d.stage='title_abstract' AND ai_first_blinded(a.project_id,d.report_id))) AS blinded
     FROM ai_activity a
     LEFT JOIN ai_reviewer_decisions d ON d.project_id=a.project_id
       AND d.id = CASE WHEN a.action='second_reviewer_opinion'
                       THEN NULLIF(a.after_state->>'decision_id', '')::uuid END
     LEFT JOIN screening_state s ON s.project_id=a.project_id AND s.report_id=d.report_id
-    WHERE a.project_id=$1";
+    WHERE a.project_id=$1 AND NOT EXISTS(SELECT 1 FROM ai_screening_cohorts c WHERE c.project_id=a.project_id AND c.status='auditing')";
 
 /// What the feed says about a second opinion the person has not decided against
 /// yet. It names the record, never the verdict.
@@ -325,7 +326,7 @@ async fn claim_undo(
     let mut tx = pool.begin().await?;
     let row = sqlx::query(
         "SELECT id,undo_kind,after_state,undone_at FROM ai_activity
-         WHERE project_id=$1 AND id=$2 FOR UPDATE",
+         WHERE project_id=$1 AND id=$2 AND NOT EXISTS(SELECT 1 FROM ai_screening_cohorts c WHERE c.project_id=$1 AND c.status='auditing') FOR UPDATE",
     )
     .bind(project_id)
     .bind(activity_id)

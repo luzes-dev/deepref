@@ -277,7 +277,17 @@ fn semantic_identity(
             IdentityComponent::Schema,
             identity.schema_bundle_hash.clone(),
         )
-        .with(IdentityComponent::Policy, identity.policy_hash.clone())
+        .with(
+            IdentityComponent::Policy,
+            if stage.is_some() {
+                ReviewHash::digest_json(&(
+                    identity.policy_hash.clone(),
+                    crate::AI_FIRST_POLICY_VERSION,
+                ))?
+            } else {
+                identity.policy_hash.clone()
+            },
+        )
         .with(
             IdentityComponent::Parser,
             identity.parser_bundle_hash.clone(),

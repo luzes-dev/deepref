@@ -23,6 +23,8 @@ import type {
 	AiActivityOverviewDto,
 	AiAutonomyDto,
 	AiBudgetDto,
+	AiFirstActionDto,
+	AiFirstOverviewDto,
 	AiProposalDecisionDto,
 	AiProposalDto,
 	AiReviewerDecisionDto,
@@ -31,6 +33,8 @@ import type {
 	ApiErrorBody,
 	BatchUndoDto,
 	DecideAiProposalRequest,
+	DrawAiFirstRequest,
+	FinalizeAiFirstRequest,
 	GenerateAppraisalPrefillRequest,
 	GenerateDuplicateRequest,
 	GenerateScreeningRequest,
@@ -42,6 +46,7 @@ import type {
 	PaginatedResponseAiProposalDto,
 	ResolveReviewerConflictRequest,
 	ReviewRunDto,
+	StartAiFirstRequest,
 	UpdateAiAutonomyRequest,
 	UpdateAiBudgetRequest
 } from '../models';
@@ -1118,6 +1123,777 @@ export const createUpdateAiBudget = <TError = ErrorType<ApiErrorBody>, TContext 
 > => {
 	return createMutation(
 		() => ({ ...getUpdateAiBudgetMutationOptions(options?.()) }),
+		queryClient
+	);
+};
+export type getAiFirstOverviewResponse200 = {
+	data: AiFirstOverviewDto;
+	status: 200;
+};
+
+export type getAiFirstOverviewResponse500 = {
+	data: ApiErrorBody;
+	status: 500;
+};
+
+export type getAiFirstOverviewResponseSuccess = getAiFirstOverviewResponse200 & {
+	headers: Headers;
+};
+export type getAiFirstOverviewResponseError = getAiFirstOverviewResponse500 & {
+	headers: Headers;
+};
+
+export const getGetAiFirstOverviewUrl = (projectId: string) => {
+	return `/api/projects/${projectId}/ai/first`;
+};
+
+export const getAiFirstOverview = async (
+	projectId: string,
+	options?: Parameters<typeof customFetch>[1]
+): Promise<getAiFirstOverviewResponseSuccess> => {
+	return customFetch<getAiFirstOverviewResponseSuccess>(getGetAiFirstOverviewUrl(projectId), {
+		...options,
+		method: 'GET'
+	});
+};
+
+export const getGetAiFirstOverviewQueryKey = (projectId: string) => {
+	return [`/api/projects/${projectId}/ai/first`] as const;
+};
+
+export const getGetAiFirstOverviewQueryOptions = <
+	TData = Awaited<ReturnType<typeof getAiFirstOverview>>,
+	TError = ErrorType<ApiErrorBody>
+>(
+	projectId: string,
+	options?: {
+		query?: Partial<
+			CreateQueryOptions<Awaited<ReturnType<typeof getAiFirstOverview>>, TError, TData>
+		>;
+		request?: SecondParameter<typeof customFetch>;
+	}
+) => {
+	const { query: queryOptions, request: requestOptions } = options ?? {};
+
+	const queryKey = queryOptions?.queryKey ?? getGetAiFirstOverviewQueryKey(projectId);
+
+	const queryFn: QueryFunction<Awaited<ReturnType<typeof getAiFirstOverview>>> = ({ signal }) =>
+		getAiFirstOverview(projectId, { signal, ...requestOptions });
+
+	return {
+		queryKey,
+		queryFn,
+		enabled: projectId !== null && projectId !== undefined,
+		...queryOptions
+	} as CreateQueryOptions<Awaited<ReturnType<typeof getAiFirstOverview>>, TError, TData> & {
+		queryKey: DataTag<QueryKey, TData, TError>;
+	};
+};
+
+export type GetAiFirstOverviewQueryResult = NonNullable<
+	Awaited<ReturnType<typeof getAiFirstOverview>>
+>;
+export type GetAiFirstOverviewQueryError = ErrorType<ApiErrorBody>;
+
+export function createGetAiFirstOverview<
+	TData = Awaited<ReturnType<typeof getAiFirstOverview>>,
+	TError = ErrorType<ApiErrorBody>
+>(
+	projectId: () => string,
+	options?: () => {
+		query?: Partial<
+			CreateQueryOptions<Awaited<ReturnType<typeof getAiFirstOverview>>, TError, TData>
+		>;
+		request?: SecondParameter<typeof customFetch>;
+	},
+	queryClient?: () => QueryClient
+): CreateQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> } {
+	const query = createQuery(
+		() => getGetAiFirstOverviewQueryOptions(projectId(), options?.()),
+		queryClient
+	) as CreateQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> };
+
+	return query;
+}
+
+export const prefetchGetAiFirstOverviewQuery = async <
+	TData = Awaited<ReturnType<typeof getAiFirstOverview>>,
+	TError = ErrorType<ApiErrorBody>
+>(
+	queryClient: QueryClient,
+	projectId: string,
+	options?: {
+		query?: Partial<
+			CreateQueryOptions<Awaited<ReturnType<typeof getAiFirstOverview>>, TError, TData>
+		>;
+		request?: SecondParameter<typeof customFetch>;
+	}
+): Promise<QueryClient> => {
+	const queryOptions = getGetAiFirstOverviewQueryOptions(projectId, options);
+
+	await queryClient.prefetchQuery(queryOptions);
+
+	return queryClient;
+};
+
+export type startAiFirstCohortResponse200 = {
+	data: AiFirstActionDto;
+	status: 200;
+};
+
+export type startAiFirstCohortResponse400 = {
+	data: ApiErrorBody;
+	status: 400;
+};
+
+export type startAiFirstCohortResponse409 = {
+	data: ApiErrorBody;
+	status: 409;
+};
+
+export type startAiFirstCohortResponseSuccess = startAiFirstCohortResponse200 & {
+	headers: Headers;
+};
+export type startAiFirstCohortResponseError = (
+	startAiFirstCohortResponse400 | startAiFirstCohortResponse409
+) & {
+	headers: Headers;
+};
+
+export const getStartAiFirstCohortUrl = (projectId: string) => {
+	return `/api/projects/${projectId}/ai/first`;
+};
+
+export const startAiFirstCohort = async (
+	projectId: string,
+	startAiFirstRequest: StartAiFirstRequest,
+	options?: Parameters<typeof customFetch>[1]
+): Promise<startAiFirstCohortResponseSuccess> => {
+	const getHeaders = (
+		h?: NonNullable<RequestInit['headers']>
+	): Record<string, string | readonly string[]> => {
+		if (!h) return {};
+		if (h instanceof Headers) return Object.fromEntries(h.entries());
+		if (Array.isArray(h)) return Object.fromEntries(h);
+		return h;
+	};
+	return customFetch<startAiFirstCohortResponseSuccess>(getStartAiFirstCohortUrl(projectId), {
+		...options,
+		method: 'POST',
+		headers: { 'Content-Type': 'application/json', ...getHeaders(options?.headers) },
+		body: JSON.stringify(startAiFirstRequest)
+	});
+};
+
+export const getStartAiFirstCohortMutationOptions = <
+	TError = ErrorType<ApiErrorBody>,
+	TContext = unknown
+>(options?: {
+	mutation?: CreateMutationOptions<
+		Awaited<ReturnType<typeof startAiFirstCohort>>,
+		TError,
+		StartAiFirstCohortMutationVariables,
+		TContext
+	>;
+	request?: SecondParameter<typeof customFetch>;
+}): CreateMutationOptions<
+	Awaited<ReturnType<typeof startAiFirstCohort>>,
+	TError,
+	StartAiFirstCohortMutationVariables,
+	TContext
+> => {
+	const mutationKey = ['startAiFirstCohort'];
+	const { mutation: mutationOptions, request: requestOptions } = options
+		? options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey
+			? options
+			: { ...options, mutation: { ...options.mutation, mutationKey } }
+		: { mutation: { mutationKey }, request: undefined };
+
+	const mutationFn: MutationFunction<
+		Awaited<ReturnType<typeof startAiFirstCohort>>,
+		StartAiFirstCohortMutationVariables
+	> = (props) => {
+		const { projectId, data } = props ?? {};
+
+		return startAiFirstCohort(projectId, data, requestOptions);
+	};
+
+	return { mutationFn, ...mutationOptions };
+};
+
+export type StartAiFirstCohortMutationResult = NonNullable<
+	Awaited<ReturnType<typeof startAiFirstCohort>>
+>;
+export type StartAiFirstCohortMutationBody = BodyType<StartAiFirstRequest>;
+export type StartAiFirstCohortMutationError = ErrorType<ApiErrorBody>;
+export type StartAiFirstCohortMutationVariables = {
+	projectId: string;
+	data: BodyType<StartAiFirstRequest>;
+};
+
+export const createStartAiFirstCohort = <TError = ErrorType<ApiErrorBody>, TContext = unknown>(
+	options?: () => {
+		mutation?: CreateMutationOptions<
+			Awaited<ReturnType<typeof startAiFirstCohort>>,
+			TError,
+			StartAiFirstCohortMutationVariables,
+			TContext
+		>;
+		request?: SecondParameter<typeof customFetch>;
+	},
+	queryClient?: () => QueryClient
+): CreateMutationResult<
+	Awaited<ReturnType<typeof startAiFirstCohort>>,
+	TError,
+	StartAiFirstCohortMutationVariables,
+	TContext
+> => {
+	return createMutation(
+		() => ({ ...getStartAiFirstCohortMutationOptions(options?.()) }),
+		queryClient
+	);
+};
+export type closeAiFirstCohortResponse200 = {
+	data: AiFirstActionDto;
+	status: 200;
+};
+
+export type closeAiFirstCohortResponse409 = {
+	data: ApiErrorBody;
+	status: 409;
+};
+
+export type closeAiFirstCohortResponseSuccess = closeAiFirstCohortResponse200 & {
+	headers: Headers;
+};
+export type closeAiFirstCohortResponseError = closeAiFirstCohortResponse409 & {
+	headers: Headers;
+};
+
+export const getCloseAiFirstCohortUrl = (projectId: string, cohortId: string) => {
+	return `/api/projects/${projectId}/ai/first/${cohortId}/close`;
+};
+
+export const closeAiFirstCohort = async (
+	projectId: string,
+	cohortId: string,
+	options?: Parameters<typeof customFetch>[1]
+): Promise<closeAiFirstCohortResponseSuccess> => {
+	return customFetch<closeAiFirstCohortResponseSuccess>(
+		getCloseAiFirstCohortUrl(projectId, cohortId),
+		{
+			...options,
+			method: 'POST'
+		}
+	);
+};
+
+export const getCloseAiFirstCohortMutationOptions = <
+	TError = ErrorType<ApiErrorBody>,
+	TContext = unknown
+>(options?: {
+	mutation?: CreateMutationOptions<
+		Awaited<ReturnType<typeof closeAiFirstCohort>>,
+		TError,
+		CloseAiFirstCohortMutationVariables,
+		TContext
+	>;
+	request?: SecondParameter<typeof customFetch>;
+}): CreateMutationOptions<
+	Awaited<ReturnType<typeof closeAiFirstCohort>>,
+	TError,
+	CloseAiFirstCohortMutationVariables,
+	TContext
+> => {
+	const mutationKey = ['closeAiFirstCohort'];
+	const { mutation: mutationOptions, request: requestOptions } = options
+		? options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey
+			? options
+			: { ...options, mutation: { ...options.mutation, mutationKey } }
+		: { mutation: { mutationKey }, request: undefined };
+
+	const mutationFn: MutationFunction<
+		Awaited<ReturnType<typeof closeAiFirstCohort>>,
+		CloseAiFirstCohortMutationVariables
+	> = (props) => {
+		const { projectId, cohortId } = props ?? {};
+
+		return closeAiFirstCohort(projectId, cohortId, requestOptions);
+	};
+
+	return { mutationFn, ...mutationOptions };
+};
+
+export type CloseAiFirstCohortMutationResult = NonNullable<
+	Awaited<ReturnType<typeof closeAiFirstCohort>>
+>;
+
+export type CloseAiFirstCohortMutationError = ErrorType<ApiErrorBody>;
+export type CloseAiFirstCohortMutationVariables = { projectId: string; cohortId: string };
+
+export const createCloseAiFirstCohort = <TError = ErrorType<ApiErrorBody>, TContext = unknown>(
+	options?: () => {
+		mutation?: CreateMutationOptions<
+			Awaited<ReturnType<typeof closeAiFirstCohort>>,
+			TError,
+			CloseAiFirstCohortMutationVariables,
+			TContext
+		>;
+		request?: SecondParameter<typeof customFetch>;
+	},
+	queryClient?: () => QueryClient
+): CreateMutationResult<
+	Awaited<ReturnType<typeof closeAiFirstCohort>>,
+	TError,
+	CloseAiFirstCohortMutationVariables,
+	TContext
+> => {
+	return createMutation(
+		() => ({ ...getCloseAiFirstCohortMutationOptions(options?.()) }),
+		queryClient
+	);
+};
+export type drawAiFirstAuditResponse200 = {
+	data: AiFirstActionDto;
+	status: 200;
+};
+
+export type drawAiFirstAuditResponse400 = {
+	data: ApiErrorBody;
+	status: 400;
+};
+
+export type drawAiFirstAuditResponse409 = {
+	data: ApiErrorBody;
+	status: 409;
+};
+
+export type drawAiFirstAuditResponseSuccess = drawAiFirstAuditResponse200 & {
+	headers: Headers;
+};
+export type drawAiFirstAuditResponseError = (
+	drawAiFirstAuditResponse400 | drawAiFirstAuditResponse409
+) & {
+	headers: Headers;
+};
+
+export const getDrawAiFirstAuditUrl = (projectId: string, cohortId: string) => {
+	return `/api/projects/${projectId}/ai/first/${cohortId}/draw`;
+};
+
+export const drawAiFirstAudit = async (
+	projectId: string,
+	cohortId: string,
+	drawAiFirstRequest: DrawAiFirstRequest,
+	options?: Parameters<typeof customFetch>[1]
+): Promise<drawAiFirstAuditResponseSuccess> => {
+	const getHeaders = (
+		h?: NonNullable<RequestInit['headers']>
+	): Record<string, string | readonly string[]> => {
+		if (!h) return {};
+		if (h instanceof Headers) return Object.fromEntries(h.entries());
+		if (Array.isArray(h)) return Object.fromEntries(h);
+		return h;
+	};
+	return customFetch<drawAiFirstAuditResponseSuccess>(
+		getDrawAiFirstAuditUrl(projectId, cohortId),
+		{
+			...options,
+			method: 'POST',
+			headers: { 'Content-Type': 'application/json', ...getHeaders(options?.headers) },
+			body: JSON.stringify(drawAiFirstRequest)
+		}
+	);
+};
+
+export const getDrawAiFirstAuditMutationOptions = <
+	TError = ErrorType<ApiErrorBody>,
+	TContext = unknown
+>(options?: {
+	mutation?: CreateMutationOptions<
+		Awaited<ReturnType<typeof drawAiFirstAudit>>,
+		TError,
+		DrawAiFirstAuditMutationVariables,
+		TContext
+	>;
+	request?: SecondParameter<typeof customFetch>;
+}): CreateMutationOptions<
+	Awaited<ReturnType<typeof drawAiFirstAudit>>,
+	TError,
+	DrawAiFirstAuditMutationVariables,
+	TContext
+> => {
+	const mutationKey = ['drawAiFirstAudit'];
+	const { mutation: mutationOptions, request: requestOptions } = options
+		? options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey
+			? options
+			: { ...options, mutation: { ...options.mutation, mutationKey } }
+		: { mutation: { mutationKey }, request: undefined };
+
+	const mutationFn: MutationFunction<
+		Awaited<ReturnType<typeof drawAiFirstAudit>>,
+		DrawAiFirstAuditMutationVariables
+	> = (props) => {
+		const { projectId, cohortId, data } = props ?? {};
+
+		return drawAiFirstAudit(projectId, cohortId, data, requestOptions);
+	};
+
+	return { mutationFn, ...mutationOptions };
+};
+
+export type DrawAiFirstAuditMutationResult = NonNullable<
+	Awaited<ReturnType<typeof drawAiFirstAudit>>
+>;
+export type DrawAiFirstAuditMutationBody = BodyType<DrawAiFirstRequest>;
+export type DrawAiFirstAuditMutationError = ErrorType<ApiErrorBody>;
+export type DrawAiFirstAuditMutationVariables = {
+	projectId: string;
+	cohortId: string;
+	data: BodyType<DrawAiFirstRequest>;
+};
+
+export const createDrawAiFirstAudit = <TError = ErrorType<ApiErrorBody>, TContext = unknown>(
+	options?: () => {
+		mutation?: CreateMutationOptions<
+			Awaited<ReturnType<typeof drawAiFirstAudit>>,
+			TError,
+			DrawAiFirstAuditMutationVariables,
+			TContext
+		>;
+		request?: SecondParameter<typeof customFetch>;
+	},
+	queryClient?: () => QueryClient
+): CreateMutationResult<
+	Awaited<ReturnType<typeof drawAiFirstAudit>>,
+	TError,
+	DrawAiFirstAuditMutationVariables,
+	TContext
+> => {
+	return createMutation(
+		() => ({ ...getDrawAiFirstAuditMutationOptions(options?.()) }),
+		queryClient
+	);
+};
+export type evaluateAiFirstAuditResponse200 = {
+	data: AiFirstActionDto;
+	status: 200;
+};
+
+export type evaluateAiFirstAuditResponse409 = {
+	data: ApiErrorBody;
+	status: 409;
+};
+
+export type evaluateAiFirstAuditResponseSuccess = evaluateAiFirstAuditResponse200 & {
+	headers: Headers;
+};
+export type evaluateAiFirstAuditResponseError = evaluateAiFirstAuditResponse409 & {
+	headers: Headers;
+};
+
+export const getEvaluateAiFirstAuditUrl = (projectId: string, cohortId: string) => {
+	return `/api/projects/${projectId}/ai/first/${cohortId}/evaluate`;
+};
+
+export const evaluateAiFirstAudit = async (
+	projectId: string,
+	cohortId: string,
+	options?: Parameters<typeof customFetch>[1]
+): Promise<evaluateAiFirstAuditResponseSuccess> => {
+	return customFetch<evaluateAiFirstAuditResponseSuccess>(
+		getEvaluateAiFirstAuditUrl(projectId, cohortId),
+		{
+			...options,
+			method: 'POST'
+		}
+	);
+};
+
+export const getEvaluateAiFirstAuditMutationOptions = <
+	TError = ErrorType<ApiErrorBody>,
+	TContext = unknown
+>(options?: {
+	mutation?: CreateMutationOptions<
+		Awaited<ReturnType<typeof evaluateAiFirstAudit>>,
+		TError,
+		EvaluateAiFirstAuditMutationVariables,
+		TContext
+	>;
+	request?: SecondParameter<typeof customFetch>;
+}): CreateMutationOptions<
+	Awaited<ReturnType<typeof evaluateAiFirstAudit>>,
+	TError,
+	EvaluateAiFirstAuditMutationVariables,
+	TContext
+> => {
+	const mutationKey = ['evaluateAiFirstAudit'];
+	const { mutation: mutationOptions, request: requestOptions } = options
+		? options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey
+			? options
+			: { ...options, mutation: { ...options.mutation, mutationKey } }
+		: { mutation: { mutationKey }, request: undefined };
+
+	const mutationFn: MutationFunction<
+		Awaited<ReturnType<typeof evaluateAiFirstAudit>>,
+		EvaluateAiFirstAuditMutationVariables
+	> = (props) => {
+		const { projectId, cohortId } = props ?? {};
+
+		return evaluateAiFirstAudit(projectId, cohortId, requestOptions);
+	};
+
+	return { mutationFn, ...mutationOptions };
+};
+
+export type EvaluateAiFirstAuditMutationResult = NonNullable<
+	Awaited<ReturnType<typeof evaluateAiFirstAudit>>
+>;
+
+export type EvaluateAiFirstAuditMutationError = ErrorType<ApiErrorBody>;
+export type EvaluateAiFirstAuditMutationVariables = { projectId: string; cohortId: string };
+
+export const createEvaluateAiFirstAudit = <TError = ErrorType<ApiErrorBody>, TContext = unknown>(
+	options?: () => {
+		mutation?: CreateMutationOptions<
+			Awaited<ReturnType<typeof evaluateAiFirstAudit>>,
+			TError,
+			EvaluateAiFirstAuditMutationVariables,
+			TContext
+		>;
+		request?: SecondParameter<typeof customFetch>;
+	},
+	queryClient?: () => QueryClient
+): CreateMutationResult<
+	Awaited<ReturnType<typeof evaluateAiFirstAudit>>,
+	TError,
+	EvaluateAiFirstAuditMutationVariables,
+	TContext
+> => {
+	return createMutation(
+		() => ({ ...getEvaluateAiFirstAuditMutationOptions(options?.()) }),
+		queryClient
+	);
+};
+export type finalizeAiFirstCohortResponse200 = {
+	data: AiFirstActionDto;
+	status: 200;
+};
+
+export type finalizeAiFirstCohortResponse400 = {
+	data: ApiErrorBody;
+	status: 400;
+};
+
+export type finalizeAiFirstCohortResponse409 = {
+	data: ApiErrorBody;
+	status: 409;
+};
+
+export type finalizeAiFirstCohortResponseSuccess = finalizeAiFirstCohortResponse200 & {
+	headers: Headers;
+};
+export type finalizeAiFirstCohortResponseError = (
+	finalizeAiFirstCohortResponse400 | finalizeAiFirstCohortResponse409
+) & {
+	headers: Headers;
+};
+
+export const getFinalizeAiFirstCohortUrl = (projectId: string, cohortId: string) => {
+	return `/api/projects/${projectId}/ai/first/${cohortId}/finalize`;
+};
+
+export const finalizeAiFirstCohort = async (
+	projectId: string,
+	cohortId: string,
+	finalizeAiFirstRequest: FinalizeAiFirstRequest,
+	options?: Parameters<typeof customFetch>[1]
+): Promise<finalizeAiFirstCohortResponseSuccess> => {
+	const getHeaders = (
+		h?: NonNullable<RequestInit['headers']>
+	): Record<string, string | readonly string[]> => {
+		if (!h) return {};
+		if (h instanceof Headers) return Object.fromEntries(h.entries());
+		if (Array.isArray(h)) return Object.fromEntries(h);
+		return h;
+	};
+	return customFetch<finalizeAiFirstCohortResponseSuccess>(
+		getFinalizeAiFirstCohortUrl(projectId, cohortId),
+		{
+			...options,
+			method: 'POST',
+			headers: { 'Content-Type': 'application/json', ...getHeaders(options?.headers) },
+			body: JSON.stringify(finalizeAiFirstRequest)
+		}
+	);
+};
+
+export const getFinalizeAiFirstCohortMutationOptions = <
+	TError = ErrorType<ApiErrorBody>,
+	TContext = unknown
+>(options?: {
+	mutation?: CreateMutationOptions<
+		Awaited<ReturnType<typeof finalizeAiFirstCohort>>,
+		TError,
+		FinalizeAiFirstCohortMutationVariables,
+		TContext
+	>;
+	request?: SecondParameter<typeof customFetch>;
+}): CreateMutationOptions<
+	Awaited<ReturnType<typeof finalizeAiFirstCohort>>,
+	TError,
+	FinalizeAiFirstCohortMutationVariables,
+	TContext
+> => {
+	const mutationKey = ['finalizeAiFirstCohort'];
+	const { mutation: mutationOptions, request: requestOptions } = options
+		? options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey
+			? options
+			: { ...options, mutation: { ...options.mutation, mutationKey } }
+		: { mutation: { mutationKey }, request: undefined };
+
+	const mutationFn: MutationFunction<
+		Awaited<ReturnType<typeof finalizeAiFirstCohort>>,
+		FinalizeAiFirstCohortMutationVariables
+	> = (props) => {
+		const { projectId, cohortId, data } = props ?? {};
+
+		return finalizeAiFirstCohort(projectId, cohortId, data, requestOptions);
+	};
+
+	return { mutationFn, ...mutationOptions };
+};
+
+export type FinalizeAiFirstCohortMutationResult = NonNullable<
+	Awaited<ReturnType<typeof finalizeAiFirstCohort>>
+>;
+export type FinalizeAiFirstCohortMutationBody = BodyType<FinalizeAiFirstRequest>;
+export type FinalizeAiFirstCohortMutationError = ErrorType<ApiErrorBody>;
+export type FinalizeAiFirstCohortMutationVariables = {
+	projectId: string;
+	cohortId: string;
+	data: BodyType<FinalizeAiFirstRequest>;
+};
+
+export const createFinalizeAiFirstCohort = <TError = ErrorType<ApiErrorBody>, TContext = unknown>(
+	options?: () => {
+		mutation?: CreateMutationOptions<
+			Awaited<ReturnType<typeof finalizeAiFirstCohort>>,
+			TError,
+			FinalizeAiFirstCohortMutationVariables,
+			TContext
+		>;
+		request?: SecondParameter<typeof customFetch>;
+	},
+	queryClient?: () => QueryClient
+): CreateMutationResult<
+	Awaited<ReturnType<typeof finalizeAiFirstCohort>>,
+	TError,
+	FinalizeAiFirstCohortMutationVariables,
+	TContext
+> => {
+	return createMutation(
+		() => ({ ...getFinalizeAiFirstCohortMutationOptions(options?.()) }),
+		queryClient
+	);
+};
+export type recoverAiFirstCohortResponse200 = {
+	data: AiFirstActionDto;
+	status: 200;
+};
+
+export type recoverAiFirstCohortResponse409 = {
+	data: ApiErrorBody;
+	status: 409;
+};
+
+export type recoverAiFirstCohortResponseSuccess = recoverAiFirstCohortResponse200 & {
+	headers: Headers;
+};
+export type recoverAiFirstCohortResponseError = recoverAiFirstCohortResponse409 & {
+	headers: Headers;
+};
+
+export const getRecoverAiFirstCohortUrl = (projectId: string, cohortId: string) => {
+	return `/api/projects/${projectId}/ai/first/${cohortId}/recover`;
+};
+
+export const recoverAiFirstCohort = async (
+	projectId: string,
+	cohortId: string,
+	options?: Parameters<typeof customFetch>[1]
+): Promise<recoverAiFirstCohortResponseSuccess> => {
+	return customFetch<recoverAiFirstCohortResponseSuccess>(
+		getRecoverAiFirstCohortUrl(projectId, cohortId),
+		{
+			...options,
+			method: 'POST'
+		}
+	);
+};
+
+export const getRecoverAiFirstCohortMutationOptions = <
+	TError = ErrorType<ApiErrorBody>,
+	TContext = unknown
+>(options?: {
+	mutation?: CreateMutationOptions<
+		Awaited<ReturnType<typeof recoverAiFirstCohort>>,
+		TError,
+		RecoverAiFirstCohortMutationVariables,
+		TContext
+	>;
+	request?: SecondParameter<typeof customFetch>;
+}): CreateMutationOptions<
+	Awaited<ReturnType<typeof recoverAiFirstCohort>>,
+	TError,
+	RecoverAiFirstCohortMutationVariables,
+	TContext
+> => {
+	const mutationKey = ['recoverAiFirstCohort'];
+	const { mutation: mutationOptions, request: requestOptions } = options
+		? options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey
+			? options
+			: { ...options, mutation: { ...options.mutation, mutationKey } }
+		: { mutation: { mutationKey }, request: undefined };
+
+	const mutationFn: MutationFunction<
+		Awaited<ReturnType<typeof recoverAiFirstCohort>>,
+		RecoverAiFirstCohortMutationVariables
+	> = (props) => {
+		const { projectId, cohortId } = props ?? {};
+
+		return recoverAiFirstCohort(projectId, cohortId, requestOptions);
+	};
+
+	return { mutationFn, ...mutationOptions };
+};
+
+export type RecoverAiFirstCohortMutationResult = NonNullable<
+	Awaited<ReturnType<typeof recoverAiFirstCohort>>
+>;
+
+export type RecoverAiFirstCohortMutationError = ErrorType<ApiErrorBody>;
+export type RecoverAiFirstCohortMutationVariables = { projectId: string; cohortId: string };
+
+export const createRecoverAiFirstCohort = <TError = ErrorType<ApiErrorBody>, TContext = unknown>(
+	options?: () => {
+		mutation?: CreateMutationOptions<
+			Awaited<ReturnType<typeof recoverAiFirstCohort>>,
+			TError,
+			RecoverAiFirstCohortMutationVariables,
+			TContext
+		>;
+		request?: SecondParameter<typeof customFetch>;
+	},
+	queryClient?: () => QueryClient
+): CreateMutationResult<
+	Awaited<ReturnType<typeof recoverAiFirstCohort>>,
+	TError,
+	RecoverAiFirstCohortMutationVariables,
+	TContext
+> => {
+	return createMutation(
+		() => ({ ...getRecoverAiFirstCohortMutationOptions(options?.()) }),
 		queryClient
 	);
 };

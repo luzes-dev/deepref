@@ -108,6 +108,61 @@ pub async fn schedule_prepared_review_run(
 
     let recipe = recipe_for(request.command.definition);
     let mut transaction = pool.begin().await?;
+    if matches!(
+        request.command.origin,
+        ReviewOrigin::AdvisoryTriggered | ReviewOrigin::AiFirstTriggered { .. }
+    ) {
+        sqlx::query("SELECT id FROM projects WHERE id=$1 FOR UPDATE")
+            .bind(request.command.project_id.as_uuid())
+            .fetch_one(&mut *transaction)
+            .await?;
+        if request.command.actor.kind() != deepref_domain::ActorKind::Automation {
+            return Err(PostgresReviewError::InvalidState(
+                "automatic advisory/routing origin requires an automation actor".into(),
+            ));
+        }
+        match request.command.origin {
+            ReviewOrigin::AiFirstTriggered { cohort_id } => {
+                crate::ai_first::admit_ai_first(
+                    &mut transaction,
+                    &request,
+                    manifest.semantic_bundle_hash.as_str(),
+                    cohort_id,
+                )
+                .await?
+            }
+            ReviewOrigin::AdvisoryTriggered => {
+                let ReviewSubject::Screening { stage, .. } = request.command.subject else {
+                    return Err(PostgresReviewError::InvalidState(
+                        "advisory origin only admits screening".into(),
+                    ));
+                };
+                let task = match stage {
+                    deepref_domain::ScreeningStage::TitleAbstract => {
+                        deepref_application::workflows::AutonomyTask::TitleAbstractScreening
+                    }
+                    deepref_domain::ScreeningStage::FullText => {
+                        deepref_application::workflows::AutonomyTask::FullTextScreening
+                    }
+                };
+                if crate::autonomy::resolve_autonomy_level_in_transaction(
+                    &mut transaction,
+                    request.command.project_id.as_uuid(),
+                    task,
+                )
+                .await?
+                    != deepref_application::workflows::AutonomyLevel::SecondReviewer
+                {
+                    return Err(PostgresReviewError::InvalidState(
+                        "advisory owner ceiling is not enabled".into(),
+                    ));
+                }
+            }
+            ReviewOrigin::ReviewerRequested | ReviewOrigin::AutomationTriggered { .. } => {
+                unreachable!("origin checked above")
+            }
+        }
+    }
     if let ReviewOrigin::AutomationTriggered {
         calibration_bundle_id,
     } = request.command.origin
@@ -170,6 +225,12 @@ pub async fn schedule_prepared_review_run(
     .await?;
     if stored_hash != manifest.manifest_hash.as_str() {
         return Err(PostgresReviewError::FinalizationConflict);
+    }
+    if let ReviewOrigin::AiFirstTriggered { cohort_id } = request.command.origin
+        && let ReviewSubject::Screening { report_id, .. } = request.command.subject
+    {
+        sqlx::query("UPDATE ai_screening_cohort_members SET review_run_id=$3 WHERE cohort_id=$1 AND report_id=$2 AND review_run_id IS NULL")
+                .bind(cohort_id).bind(report_id.as_uuid()).bind(run_id).execute(&mut *transaction).await?;
     }
     transaction.commit().await?;
     get_review_run(pool, request.command.project_id, ReviewRunId::new(run_id)?).await
