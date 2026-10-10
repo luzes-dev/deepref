@@ -8,8 +8,9 @@ import {
 	type AssistantChatStreamEvent
 } from './assistant-stream';
 
-function frame(event: string, data: unknown): string {
-	return `event: ${event}\ndata: ${JSON.stringify(data)}`;
+function frame(event: string, data: unknown, seq?: number): string {
+	const head = seq === undefined ? '' : `id: ${seq}\n`;
+	return `${head}event: ${event}\ndata: ${JSON.stringify(data)}`;
 }
 
 function sseBody(chunks: string[]): ReadableStream<Uint8Array> {
@@ -92,6 +93,13 @@ describe('parseSseFrame', () => {
 		expect(parseSseFrame('data: {"delta":"a"}')).toBeNull();
 		expect(parseSseFrame('event: token\ndata: not json')).toBeNull();
 		expect(parseSseFrame('event: token\ndata: 3')).toBeNull();
+	});
+
+	it('ignores the server seq id when normalizing events', () => {
+		expect(parseSseFrame(`id: 7\n${frame('token', { delta: 'a' })}`)).toEqual({
+			event: 'token',
+			delta: 'a'
+		});
 	});
 });
 
@@ -301,6 +309,124 @@ describe('durable assistant runs', () => {
 		]);
 	});
 
+	it('resumes from the server seq cursor when rows yield no frame', async () => {
+		const requested = routeFetch({
+			chat: jsonResponse(runJson({ status: 'queued' }), 202),
+			events: [
+				// Seq 2 belongs to a row the server advances past without
+				// emitting a frame (an unmapped kind). A frame count would
+				// resume at after_seq=2 and replay seq 3; the server cursor
+				// resumes past it.
+				eventsResponse([
+					frame('token', { delta: 'Hel' }, 0),
+					frame('token', { delta: 'l' }, 1),
+					frame('token', { delta: 'o' }, 3)
+				]),
+				eventsResponse([
+					frame('done', { message_id: 'm1', input_tokens: 1, output_tokens: 2 }, 4)
+				])
+			],
+			runs: [runJson({ status: 'running' }), runJson({ status: 'completed' })]
+		});
+
+		const { events, run } = await streamDurable();
+
+		expect(events.map((event) => event.event)).toEqual(['token', 'token', 'token', 'done']);
+		expect(run).toMatchObject({ status: 'completed' });
+		expect(requested).toEqual([
+			'/api/projects/project-1/assistant/chat',
+			`/api/projects/project-1/assistant/runs/${runId}/events?after_seq=-1`,
+			`/api/projects/project-1/assistant/runs/${runId}`,
+			`/api/projects/project-1/assistant/runs/${runId}/events?after_seq=3`,
+			`/api/projects/project-1/assistant/runs/${runId}`
+		]);
+	});
+
+	it('returns the run plan_id when the plan frame arrives Null', async () => {
+		const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+		try {
+			routeFetch({
+				chat: jsonResponse(runJson({ status: 'queued' }), 202),
+				events: [
+					eventsResponse([
+						frame('token', { delta: 'Hi' }),
+						frame('plan', { plan: null }),
+						frame('done', { message_id: 'm1', input_tokens: 1, output_tokens: 2 })
+					])
+				],
+				runs: [runJson({ status: 'completed', plan_id: 'plan-1' })]
+			});
+
+			const { events, run } = await streamDurable();
+
+			expect(events.map((event) => event.event)).toEqual(['token', 'done']);
+			// The UI falls back to this id to fetch and render the plan.
+			expect(run).toMatchObject({ status: 'completed', plan_id: 'plan-1' });
+			expect(warn).toHaveBeenCalled();
+		} finally {
+			warn.mockRestore();
+		}
+	});
+
+	it('surfaces a stalled run instead of following it forever', async () => {
+		const requested = routeFetch({
+			chat: jsonResponse(runJson({ status: 'running' }), 202),
+			events: [eventsResponse([]), eventsResponse([]), eventsResponse([])],
+			runs: [
+				runJson({ status: 'running' }),
+				runJson({ status: 'running' }),
+				runJson({ status: 'running' })
+			]
+		});
+
+		const events: AssistantChatStreamEvent[] = [];
+		const failure = await streamAssistantChat(
+			'project-1',
+			{ conversation_id: 'c1', message: 'hi' },
+			(event) => events.push(event),
+			undefined,
+			{ maxStuckResumes: 3, sleep: async () => {} }
+		).catch((caught: unknown) => caught);
+
+		expect(failure).toBeInstanceOf(AssistantStreamError);
+		expect(failure).toMatchObject({ status: 504, code: 'assistant_observe_stalled' });
+		// A stall is only known as a rejection: no error frame is synthesized.
+		expect(events).toEqual([]);
+		expect(requested.filter((url) => url.includes('/events'))).toHaveLength(3);
+	});
+
+	it('times out a run that never settles without synthesizing an error frame', async () => {
+		routeFetch({
+			chat: jsonResponse(runJson({ status: 'queued' }), 202),
+			events: [eventsResponse([]), eventsResponse([]), eventsResponse([])],
+			runs: [
+				runJson({ status: 'running' }),
+				runJson({ status: 'running' }),
+				runJson({ status: 'running' })
+			]
+		});
+
+		let now = 0;
+		const events: AssistantChatStreamEvent[] = [];
+		const failure = await streamAssistantChat(
+			'project-1',
+			{ conversation_id: 'c1', message: 'hi' },
+			(event) => events.push(event),
+			undefined,
+			{
+				timeoutMs: 1000,
+				now: () => now,
+				sleep: async () => {
+					now += 600;
+				}
+			}
+		).catch((caught: unknown) => caught);
+
+		expect(failure).toBeInstanceOf(AssistantStreamError);
+		expect(failure).toMatchObject({ status: 504, code: 'assistant_observe_timeout' });
+		expect(events).toEqual([]);
+	});
+
 	it('reflects a failed run as an error event when no error frame arrived', async () => {
 		routeFetch({
 			chat: jsonResponse(runJson({ status: 'queued' }), 202),
@@ -402,6 +528,45 @@ describe('durable assistant runs', () => {
 		expect(fetchMock.mock.calls[0][0]).toBe(
 			`/api/projects/project-1/assistant/runs/${runId}/events?after_seq=4`
 		);
+	});
+
+	it('honors a payload-embedded seq cursor without an SSE id', async () => {
+		vi.stubGlobal(
+			'fetch',
+			vi.fn().mockResolvedValue(eventsResponse([frame('token', { delta: 'Hi', seq: 7 })]))
+		);
+
+		const events: AssistantChatStreamEvent[] = [];
+		const progress = await streamAssistantRunEvents('project-1', runId, (event) =>
+			events.push(event)
+		);
+
+		expect(events).toEqual([{ event: 'token', delta: 'Hi' }]);
+		expect(progress).toEqual({ frames: 1, nextAfterSeq: 7, terminal: false });
+	});
+
+	it('warns loudly in dev when frames are dropped', async () => {
+		const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
+		try {
+			vi.stubGlobal(
+				'fetch',
+				vi
+					.fn()
+					.mockResolvedValue(
+						eventsResponse([frame('mystery', { x: 1 }), 'event: token\ndata: not json'])
+					)
+			);
+
+			const events: AssistantChatStreamEvent[] = [];
+			await streamAssistantRunEvents('project-1', runId, (event) => events.push(event));
+
+			expect(events).toEqual([]);
+			const warned = warn.mock.calls.map((call) => String(call[1]));
+			expect(warned.some((payload) => payload.includes('mystery'))).toBe(true);
+			expect(warned.some((payload) => payload.includes('not json'))).toBe(true);
+		} finally {
+			warn.mockRestore();
+		}
 	});
 
 	it('raises run lookup failures as stream errors', async () => {
