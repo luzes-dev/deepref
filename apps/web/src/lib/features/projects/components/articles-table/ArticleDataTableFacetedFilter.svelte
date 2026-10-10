@@ -1,14 +1,13 @@
 <script lang="ts" module>
-	type TData = unknown;
-	type TValue = unknown;
 	export { type FilterOption } from '@deepref/ui';
 </script>
 
-<script lang="ts" generics="TData, TValue">
+<script lang="ts">
 	import { DataTableFacetedFilter } from '@deepref/ui';
 	import type { ComponentProps } from 'svelte';
+	import type { ReportDto } from '#lib/api/generated/models/index.js';
 
-	let { ...props }: ComponentProps<typeof DataTableFacetedFilter<TData, TValue>> = $props();
+	let { ...props }: ComponentProps<typeof DataTableFacetedFilter<ReportDto, unknown>> = $props();
 </script>
 
 <DataTableFacetedFilter {...props} />
