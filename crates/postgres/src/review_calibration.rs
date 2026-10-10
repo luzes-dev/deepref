@@ -12,8 +12,8 @@ use std::fmt;
 use chrono::{DateTime, Utc};
 use deepref_domain::ScreeningStage;
 use deepref_review::{
-    CalibrationBundleId, IdentityComparison, IdentityComponent, ReviewDefinitionKey,
-    SemanticIdentity, worker::ReviewRunManifest,
+    CalibrationBundleId, CalibrationCompatibility, ReviewDefinitionKey, ReviewSemanticContract,
+    SEMANTIC_CONTRACT_SCHEME, SemanticChange, worker::ReviewRunManifest,
 };
 use serde_json::Value;
 use sqlx::{PgPool, Postgres, Row, Transaction};
@@ -45,7 +45,7 @@ pub struct ReviewCalibrationBundleInput {
     pub id: CalibrationBundleId,
     pub project_id: Uuid,
     pub definition: ReviewDefinitionKey,
-    pub identity: SemanticIdentity,
+    pub identity: ReviewSemanticContract,
     pub evaluation_set_id: String,
     pub thresholds: Value,
     pub metrics: Value,
@@ -80,11 +80,10 @@ pub enum CalibrationRefusal {
         bundle: Option<ScreeningStage>,
         requested: Option<ScreeningStage>,
     },
-    /// The bundle is for this review's stage, but these identity components have
-    /// changed since it was made.
-    Stale {
-        components: BTreeSet<IdentityComponent>,
-    },
+    /// The bundle is for this review's stage, but the semantic contract has
+    /// changed since it was made. Only consequential behavior is named here:
+    /// build provenance, endpoints and CI fixtures never appear.
+    Stale { changes: BTreeSet<SemanticChange> },
 }
 
 impl CalibrationRefusal {
@@ -113,6 +112,10 @@ impl fmt::Display for CalibrationRefusal {
                 "the review calibration predates stage-scoped identities (scheme 1) and \
                  cannot admit automation; calibrate again",
             ),
+            Self::IncompatibleIdentityScheme { stored: 2, .. } => formatter.write_str(
+                "the review calibration predates structured semantic contracts (scheme 2) \
+                  and cannot admit automation; calibrate again",
+            ),
             Self::IncompatibleIdentityScheme { stored, current } if stored == current => {
                 write!(
                     formatter,
@@ -131,13 +134,13 @@ impl fmt::Display for CalibrationRefusal {
                 describe_stage(*bundle),
                 describe_stage(*requested)
             ),
-            Self::Stale { components } if components.is_empty() => formatter.write_str(
+            Self::Stale { changes } if changes.is_empty() => formatter.write_str(
                 "the review calibration no longer matches the compiled review; calibrate again",
             ),
-            Self::Stale { components } => {
-                let changed = components
+            Self::Stale { changes } => {
+                let changed = changes
                     .iter()
-                    .map(|component| component.as_str())
+                    .map(|change| change.as_str())
                     .collect::<Vec<_>>()
                     .join(", ");
                 write!(
@@ -191,10 +194,9 @@ pub async fn insert_review_calibration_bundle(
     input: ReviewCalibrationBundleInput,
 ) -> Result<(), ReviewCalibrationError> {
     validate_input(&input)?;
-    let semantic_bundle_hash = input
-        .identity
-        .aggregate_hash()
-        .map_err(|error| ReviewCalibrationError::InvalidInput(error.to_string()))?;
+    // `semantic_bundle_hash` stores the semantic contract id: the column
+    // predates the contract, but its 64-hex shape is unchanged.
+    let semantic_bundle_hash = input.identity.id();
     let identity_scheme = i32::try_from(input.identity.scheme).map_err(|_| {
         ReviewCalibrationError::InvalidInput("identity scheme is out of range".to_owned())
     })?;
@@ -240,8 +242,9 @@ fn validate_input(input: &ReviewCalibrationBundleInput) -> Result<(), ReviewCali
                 .to_owned(),
         ));
     }
-    // `validate` also requires a stage exactly for screening and the full
-    // component set of the current recipe.
+    // `validate` requires the current scheme, a stage exactly for screening,
+    // and at least one model. Older semantic versions stay insertable: version
+    // drift is reported as stale, not as unreadable.
     input
         .identity
         .validate()
@@ -286,10 +289,12 @@ pub(crate) async fn admit_calibration(
 
 /// Decides admission from a stored calibration row and the compiled manifest.
 ///
-/// A specific refusal is given only when the stored snapshot supports it. A
-/// snapshot that is missing, unreadable, or does not reproduce the stored hash
-/// is reported as an incompatible identity, because nothing about what changed
-/// can be trusted.
+/// Only the structured semantic contract gates compatibility: source-tree
+/// hashes, dependency closures, provider endpoints and golden fixtures never
+/// appear here. A specific refusal is given only when the stored snapshot
+/// supports it. A snapshot that is missing, unreadable, or does not reproduce
+/// the stored contract id is reported as an incompatible identity, because
+/// nothing about what changed can be trusted.
 pub(crate) fn check_admission(
     stored: &StoredCalibration,
     manifest: &ReviewRunManifest,
@@ -297,16 +302,14 @@ pub(crate) fn check_admission(
     if stored.status != ReviewCalibrationStatus::Passing.as_str() {
         return Err(CalibrationRefusal::Failed);
     }
-    let current_scheme = manifest.identity_scheme();
-    let stored_scheme = u32::try_from(stored.identity_scheme).unwrap_or(0);
     let incompatible = || CalibrationRefusal::IncompatibleIdentityScheme {
-        stored: stored_scheme,
-        current: current_scheme,
+        stored: u32::try_from(stored.identity_scheme).unwrap_or(0),
+        current: SEMANTIC_CONTRACT_SCHEME,
     };
-    if stored_scheme != current_scheme || stored_scheme < 2 {
+    if u32::try_from(stored.identity_scheme).unwrap_or(0) != SEMANTIC_CONTRACT_SCHEME {
         return Err(incompatible());
     }
-    let Some(current) = manifest.semantic_identity.as_ref() else {
+    let Some(current) = manifest.semantic_contract.as_ref() else {
         return Err(incompatible());
     };
     let stored_stage = match stored.stage.as_deref() {
@@ -319,37 +322,23 @@ pub(crate) fn check_admission(
             requested: current.stage,
         });
     }
-    if stored.semantic_bundle_hash.as_str() == manifest.semantic_bundle_hash.as_str() {
+    if stored.semantic_bundle_hash.as_str() == current.id().as_str() {
         return Ok(());
     }
     let snapshot = stored
         .identity_snapshot
         .clone()
-        .and_then(|value| serde_json::from_value::<SemanticIdentity>(value).ok())
+        .and_then(|value| serde_json::from_value::<ReviewSemanticContract>(value).ok())
         .ok_or_else(incompatible)?;
-    let reproduces_stored_hash = snapshot
-        .aggregate_hash()
-        .is_ok_and(|hash| hash.as_str() == stored.semantic_bundle_hash.as_str());
-    if !reproduces_stored_hash {
+    if snapshot.id().as_str() != stored.semantic_bundle_hash.as_str() {
         return Err(incompatible());
     }
     match snapshot.compare(current) {
-        IdentityComparison::Stale(components) => Err(CalibrationRefusal::Stale { components }),
-        IdentityComparison::StageMismatch {
-            stored: bundle,
-            current: requested,
-        } => Err(CalibrationRefusal::StageMismatch { bundle, requested }),
-        IdentityComparison::IncompatibleScheme {
-            stored: stored_identity_scheme,
-            current: current_identity_scheme,
-        } => Err(CalibrationRefusal::IncompatibleIdentityScheme {
-            stored: stored_identity_scheme,
-            current: current_identity_scheme,
-        }),
-        // Same components with a different aggregate, or another definition, is
-        // inconsistent evidence rather than a known change.
-        IdentityComparison::Same | IdentityComparison::DefinitionMismatch { .. } => {
-            Err(incompatible())
+        // Same contract with a different id is inconsistent evidence rather
+        // than a known change.
+        CalibrationCompatibility::Compatible => Err(incompatible()),
+        CalibrationCompatibility::Incompatible { changes } => {
+            Err(CalibrationRefusal::Stale { changes })
         }
     }
 }
@@ -359,7 +348,7 @@ mod tests {
     use deepref_ai::ModelProfile;
     use deepref_domain::{ProjectId, ProtocolVersionId, ReportId};
     use deepref_review::{
-        ReviewOrigin, ReviewSubject,
+        ReviewOrigin, ReviewSubject, SemanticChange,
         worker::{
             CompiledReview, ReviewHash, ReviewManifestInput, ReviewModelIdentity,
             ReviewRuntimeIdentity,
@@ -411,49 +400,58 @@ mod tests {
             .expect("screening manifest builds")
     }
 
-    /// The row a bundle recorded for `identity` would hold.
-    fn stored_for(identity: &SemanticIdentity) -> StoredCalibration {
+    fn contract_of(manifest: &ReviewRunManifest) -> ReviewSemanticContract {
+        manifest
+            .semantic_contract
+            .clone()
+            .expect("a semantic contract is recorded")
+    }
+
+    /// The row a bundle recorded for `contract` would hold.
+    fn stored_for(contract: &ReviewSemanticContract) -> StoredCalibration {
         StoredCalibration {
             status: ReviewCalibrationStatus::Passing.as_str().to_owned(),
-            stage: identity.stage.map(|stage| stage_key(stage).to_owned()),
-            identity_scheme: i32::try_from(identity.scheme).expect("scheme fits"),
-            semantic_bundle_hash: identity
-                .aggregate_hash()
-                .expect("identity hashes")
-                .as_str()
-                .to_owned(),
-            identity_snapshot: Some(serde_json::to_value(identity).expect("identity serializes")),
+            stage: contract.stage.map(|stage| stage_key(stage).to_owned()),
+            identity_scheme: i32::try_from(contract.scheme).expect("scheme fits"),
+            semantic_bundle_hash: contract.id().as_str().to_owned(),
+            identity_snapshot: Some(serde_json::to_value(contract).expect("contract serializes")),
         }
     }
 
-    fn with_component(
-        identity: &SemanticIdentity,
-        component: IdentityComponent,
-        value: &str,
-    ) -> SemanticIdentity {
-        let mut changed = identity.clone();
-        changed.components.insert(component, hash(value));
-        changed
+    fn rebuild(manifest: ReviewRunManifest) -> ReviewRunManifest {
+        CompiledReview::compile(ReviewDefinitionKey::Screening)
+            .expect("screening definition compiles")
+            .build_manifest(ReviewManifestInput {
+                project_id: manifest.project_id,
+                subject: manifest.subject,
+                origin: manifest.origin,
+                protocol_version_id: manifest.protocol_version_id,
+                protocol_hash: manifest.protocol_hash,
+                source_manifest_hash: manifest.source_manifest_hash,
+                source_content_hash: manifest.source_content_hash,
+                resolved_models: manifest.resolved_models,
+                runtime: manifest.runtime,
+            })
+            .expect("screening manifest rebuilds")
     }
 
     #[test]
-    fn an_exact_identity_admits_through_the_fast_path() {
+    fn an_exact_contract_admits_through_the_fast_path() {
         let manifest = screening_manifest(ScreeningStage::TitleAbstract, "v1");
-        let identity = manifest.semantic_identity.clone().expect("identity");
-        assert_eq!(check_admission(&stored_for(&identity), &manifest), Ok(()));
+        let stored = stored_for(&contract_of(&manifest));
+        assert_eq!(check_admission(&stored, &manifest), Ok(()));
     }
 
     #[test]
     fn an_unknown_scheme_cannot_use_the_matching_hash_fast_path() {
         let manifest = screening_manifest(ScreeningStage::TitleAbstract, "v1");
-        let identity = manifest.semantic_identity.clone().expect("identity");
-        let mut stored = stored_for(&identity);
-        stored.identity_scheme = 3;
+        let mut stored = stored_for(&contract_of(&manifest));
+        stored.identity_scheme = 4;
         assert_eq!(
             check_admission(&stored, &manifest),
             Err(CalibrationRefusal::IncompatibleIdentityScheme {
-                stored: 3,
-                current: 2
+                stored: 4,
+                current: SEMANTIC_CONTRACT_SCHEME,
             }),
         );
     }
@@ -461,8 +459,7 @@ mod tests {
     #[test]
     fn a_failed_calibration_is_refused_before_its_identity_is_read() {
         let manifest = screening_manifest(ScreeningStage::TitleAbstract, "v1");
-        let identity = manifest.semantic_identity.clone().expect("identity");
-        let mut stored = stored_for(&identity);
+        let mut stored = stored_for(&contract_of(&manifest));
         stored.status = ReviewCalibrationStatus::Failed.as_str().to_owned();
         stored.identity_scheme = 1;
         assert_eq!(
@@ -472,18 +469,17 @@ mod tests {
     }
 
     #[test]
-    fn a_legacy_scheme_one_bundle_never_admits_even_with_a_matching_hash() {
+    fn a_legacy_scheme_two_bundle_never_admits_even_with_a_matching_hash() {
         let manifest = screening_manifest(ScreeningStage::TitleAbstract, "v1");
-        let identity = manifest.semantic_identity.clone().expect("identity");
-        let mut stored = stored_for(&identity);
-        stored.identity_scheme = 1;
+        let mut stored = stored_for(&contract_of(&manifest));
+        stored.identity_scheme = 2;
         stored.stage = None;
         stored.identity_snapshot = None;
         assert_eq!(
             check_admission(&stored, &manifest),
             Err(CalibrationRefusal::IncompatibleIdentityScheme {
-                stored: 1,
-                current: 2,
+                stored: 2,
+                current: SEMANTIC_CONTRACT_SCHEME,
             })
         );
     }
@@ -492,7 +488,7 @@ mod tests {
     fn a_bundle_for_the_other_stage_is_a_stage_mismatch() {
         let title = screening_manifest(ScreeningStage::TitleAbstract, "v1");
         let full = screening_manifest(ScreeningStage::FullText, "v1");
-        let stored = stored_for(&full.semantic_identity.clone().expect("identity"));
+        let stored = stored_for(&contract_of(&full));
         assert_eq!(
             check_admission(&stored, &title),
             Err(CalibrationRefusal::StageMismatch {
@@ -503,39 +499,49 @@ mod tests {
     }
 
     #[test]
-    fn a_changed_component_is_named_as_stale() {
+    fn a_changed_model_is_named_as_stale() {
         let manifest = screening_manifest(ScreeningStage::FullText, "v1");
-        let identity = manifest.semantic_identity.clone().expect("identity");
-        let older = with_component(&identity, IdentityComponent::Models, "older route");
+        let mut older = manifest.clone();
+        older.resolved_models[0].model_version = "older route".to_owned();
+        let stored = stored_for(&contract_of(&rebuild(older)));
         assert_eq!(
-            check_admission(&stored_for(&older), &manifest),
+            check_admission(&stored, &manifest),
             Err(CalibrationRefusal::Stale {
-                components: BTreeSet::from([IdentityComponent::Models]),
+                changes: BTreeSet::from([SemanticChange::Model]),
             })
         );
     }
 
     #[test]
-    fn a_component_set_change_is_incompatible_not_stale() {
-        let manifest = screening_manifest(ScreeningStage::TitleAbstract, "v1");
-        let identity = manifest.semantic_identity.clone().expect("identity");
-        let mut narrower = identity.clone();
-        narrower.components.remove(&IdentityComponent::Policy);
-        assert!(matches!(
-            check_admission(&stored_for(&narrower), &manifest),
-            Err(CalibrationRefusal::IncompatibleIdentityScheme { .. })
-        ));
+    fn a_changed_protocol_is_named_as_stale() {
+        let manifest = screening_manifest(ScreeningStage::FullText, "v1");
+        let mut older = manifest.clone();
+        older.protocol_hash = hash("older protocol");
+        let stored = stored_for(&contract_of(&rebuild(older)));
+        assert_eq!(
+            check_admission(&stored, &manifest),
+            Err(CalibrationRefusal::Stale {
+                changes: BTreeSet::from([SemanticChange::Protocol]),
+            })
+        );
     }
 
     #[test]
-    fn a_snapshot_that_does_not_reproduce_its_hash_is_incompatible() {
+    fn provenance_changes_do_not_invalidate_calibration() {
         let manifest = screening_manifest(ScreeningStage::TitleAbstract, "v1");
-        let identity = manifest.semantic_identity.clone().expect("identity");
-        let mut stored = stored_for(&with_component(
-            &identity,
-            IdentityComponent::Models,
-            "older",
-        ));
+        let stored = stored_for(&contract_of(&manifest));
+        let mut moved = manifest.clone();
+        moved.runtime.build_sha = hash("changed-source-tree");
+        moved.runtime.rust_version = "1.96".to_owned();
+        moved.runtime.deployment_build_id = Some("rev:tree".to_owned());
+        let moved = rebuild(moved);
+        assert_eq!(check_admission(&stored, &moved), Ok(()));
+    }
+
+    #[test]
+    fn a_contract_that_does_not_reproduce_its_id_is_incompatible() {
+        let manifest = screening_manifest(ScreeningStage::TitleAbstract, "v1");
+        let mut stored = stored_for(&contract_of(&manifest));
         stored.semantic_bundle_hash = "c".repeat(64);
         assert!(matches!(
             check_admission(&stored, &manifest),
@@ -544,16 +550,15 @@ mod tests {
     }
 
     #[test]
-    fn an_identical_snapshot_with_another_hash_is_inconsistent_not_stale() {
+    fn an_identical_contract_with_another_id_is_inconsistent_not_stale() {
         let manifest = screening_manifest(ScreeningStage::TitleAbstract, "v1");
-        let identity = manifest.semantic_identity.clone().expect("identity");
-        let mut stored = stored_for(&identity);
+        let mut stored = stored_for(&contract_of(&manifest));
         stored.semantic_bundle_hash = "d".repeat(64);
         assert!(matches!(
             check_admission(&stored, &manifest),
             Err(CalibrationRefusal::IncompatibleIdentityScheme {
-                stored: 2,
-                current: 2
+                stored: SEMANTIC_CONTRACT_SCHEME,
+                current: SEMANTIC_CONTRACT_SCHEME,
             })
         ));
     }
@@ -561,13 +566,10 @@ mod tests {
     #[test]
     fn an_unreadable_snapshot_is_incompatible() {
         let manifest = screening_manifest(ScreeningStage::TitleAbstract, "v1");
-        let identity = manifest.semantic_identity.clone().expect("identity");
-        let mut stored = stored_for(&with_component(
-            &identity,
-            IdentityComponent::Models,
-            "older",
-        ));
-        stored.identity_snapshot = Some(serde_json::json!({"scheme": 2}));
+        let mut older = manifest.clone();
+        older.resolved_models[0].model_version = "older route".to_owned();
+        let mut stored = stored_for(&contract_of(&rebuild(older)));
+        stored.identity_snapshot = Some(serde_json::json!({"scheme": SEMANTIC_CONTRACT_SCHEME}));
         assert!(matches!(
             check_admission(&stored, &manifest),
             Err(CalibrationRefusal::IncompatibleIdentityScheme { .. })
@@ -575,15 +577,15 @@ mod tests {
     }
 
     #[test]
-    fn refusals_name_the_stage_and_the_changed_components() {
+    fn refusals_name_the_stage_and_the_changed_contract_fields() {
         let stale = CalibrationRefusal::Stale {
-            components: BTreeSet::from([IdentityComponent::Protocol, IdentityComponent::Models]),
+            changes: BTreeSet::from([SemanticChange::Protocol, SemanticChange::Model]),
         };
         assert_eq!(stale.code(), "calibration_stale");
         assert_eq!(
             stale.to_string(),
-            "the review calibration no longer matches the compiled review (changed: protocol, \
-             models); calibrate again"
+            "the review calibration no longer matches the compiled review (changed: model, \
+             protocol); calibrate again"
         );
         let mismatch = CalibrationRefusal::StageMismatch {
             bundle: Some(ScreeningStage::FullText),

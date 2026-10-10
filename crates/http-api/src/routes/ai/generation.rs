@@ -299,10 +299,10 @@ fn map_postgres_review_error(error: deepref_postgres::PostgresReviewError) -> Ap
         },
         deepref_postgres::PostgresReviewError::CalibrationRefused(refusal) => {
             let details = match &refusal {
-                deepref_postgres::CalibrationRefusal::Stale { components } => serde_json::json!({
-                    "components": components
+                deepref_postgres::CalibrationRefusal::Stale { changes } => serde_json::json!({
+                    "changes": changes
                         .iter()
-                        .map(|component| component.as_str())
+                        .map(|change| change.as_str())
                         .collect::<Vec<_>>(),
                 }),
                 _ => Value::Null,

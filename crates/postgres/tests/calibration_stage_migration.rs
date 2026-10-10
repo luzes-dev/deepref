@@ -328,7 +328,7 @@ async fn upgrade_legacy_database(legacy_url: &str) {
                 refusal,
                 CalibrationRefusal::IncompatibleIdentityScheme {
                     stored: 1,
-                    current: 2,
+                    current: 3,
                 }
             );
         }

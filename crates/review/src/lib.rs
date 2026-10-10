@@ -6,6 +6,7 @@
 //! worker adapters live outside this crate.
 
 mod ai_first;
+mod contract;
 mod definition;
 mod execution;
 mod golden;
@@ -27,6 +28,14 @@ pub mod worker;
 mod build_support;
 
 pub use ai_first::{AI_FIRST_POLICY_VERSION, automation_eligible_exclusion};
+pub use contract::{
+    APPRAISAL_PREFILL_SEMANTIC_VERSION, BuildProvenance, CalibrationCompatibility, ContentDigest,
+    DATA_EXTRACTION_SEMANTIC_VERSION, DUPLICATE_DETECTION_SEMANTIC_VERSION, ModelContract,
+    ParserDigest, PolicyDigest, PromptDigest, ProtocolDigest, ReviewSemanticContract,
+    SCREENING_SEMANTIC_VERSION, SEMANTIC_CONTRACT_SCHEME, STUDY_CLASSIFICATION_SEMANTIC_VERSION,
+    STUDY_GROUPING_SEMANTIC_VERSION, SchemaDigest, SemanticChange, SemanticContractId,
+    SemanticHasher, WorkflowDigest, semantic_version_for,
+};
 pub(crate) use definition::{CompiledReviewDefinition, ReviewCatalog};
 pub use golden::screening_golden_fingerprints;
 pub(crate) use hash::ReviewHash;

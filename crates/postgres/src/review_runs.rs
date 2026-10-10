@@ -3,7 +3,7 @@ use deepref_ai::{AiProposal, ModelRouter, ProposalStatus, ProposalStore, hash_js
 use deepref_domain::ProjectId;
 use deepref_review::{
     ReviewBlockCode, ReviewDefinitionKey, ReviewError, ReviewOrigin, ReviewRunId,
-    ReviewRunSnapshot, ReviewRunState, ReviewSubject, ScheduleReviewRun, SemanticIdentity,
+    ReviewRunSnapshot, ReviewRunState, ReviewSemanticContract, ReviewSubject, ScheduleReviewRun,
     worker::{
         AcceptedArtifactInput, CompiledReview, ExecutedReviewTask, PreparedReviewTask, ReviewHash,
         ReviewManifestInput, ReviewNode, ReviewRunManifest,
@@ -105,6 +105,9 @@ pub async fn schedule_prepared_review_run(
     request: PreparedReviewRun,
 ) -> Result<ReviewRunSnapshot, PostgresReviewError> {
     let manifest = build_prepared_manifest(pool, &request).await?;
+    // Runs, cohorts and calibration bundles all key semantic identity by the
+    // structured contract id; the legacy aggregate is no longer admitted.
+    let semantic_contract_id = manifest.semantic_contract_id()?;
 
     let recipe = recipe_for(request.command.definition);
     let mut transaction = pool.begin().await?;
@@ -126,7 +129,7 @@ pub async fn schedule_prepared_review_run(
                 crate::ai_first::admit_ai_first(
                     &mut transaction,
                     &request,
-                    manifest.semantic_bundle_hash.as_str(),
+                    semantic_contract_id.as_str(),
                     cohort_id,
                 )
                 .await?
@@ -208,7 +211,7 @@ pub async fn schedule_prepared_review_run(
         PostgresReviewError::InvalidStoredValue("definition version is too large".to_owned())
     })?)
     .bind(manifest.manifest_hash.as_str())
-    .bind(manifest.semantic_bundle_hash.as_str())
+    .bind(semantic_contract_id.as_str())
     .bind(manifest_json)
     .bind(subject_json)
     .bind(origin_json)
@@ -242,11 +245,11 @@ pub async fn schedule_prepared_review_run(
 pub async fn preview_review_identity(
     pool: &PgPool,
     request: &PreparedReviewRun,
-) -> Result<SemanticIdentity, PostgresReviewError> {
+) -> Result<ReviewSemanticContract, PostgresReviewError> {
     let manifest = build_prepared_manifest(pool, request).await?;
-    manifest.semantic_identity.ok_or_else(|| {
+    manifest.semantic_contract.ok_or_else(|| {
         PostgresReviewError::InvalidStoredValue(
-            "compiled review manifest has no semantic identity".to_owned(),
+            "compiled review manifest has no semantic contract".to_owned(),
         )
     })
 }
