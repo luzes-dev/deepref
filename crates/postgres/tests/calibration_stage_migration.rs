@@ -333,7 +333,7 @@ async fn upgrade_legacy_database(legacy_url: &str) {
             );
         }
         Err(other) => panic!("expected an incompatible identity, got: {other}"),
-        Ok(run) => panic!("a legacy bundle admitted run {}", run.id.as_uuid()),
+        Ok(_) => panic!("a legacy bundle admitted a run"),
     }
 
     // The legacy bundle still cannot admit consequential automation. Advisory

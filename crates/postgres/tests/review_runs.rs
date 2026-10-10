@@ -303,10 +303,7 @@ fn refusal_of(result: Result<ReviewRunSnapshot, ReviewPreparationError>) -> Cali
             refusal
         }
         Err(other) => panic!("expected a calibration refusal, got: {other}"),
-        Ok(snapshot) => panic!(
-            "expected a calibration refusal, but run {} was scheduled",
-            snapshot.id.as_uuid()
-        ),
+        Ok(_) => panic!("expected a calibration refusal, but a run was scheduled"),
     }
 }
 
