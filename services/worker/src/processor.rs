@@ -798,6 +798,12 @@ async fn handle_job_with_document_services_inner(
             })?;
             handle_automation_run(&pool, job, owner, ai_gateway.as_deref()).await
         }
+        deepref_postgres::ASSISTANT_AGENT_RUN_JOB_KIND => {
+            let owner = owner.ok_or_else(|| {
+                anyhow::anyhow!("assistant job processing requires its lease owner")
+            })?;
+            crate::assistant::handle_assistant_agent_run(&pool, job, owner).await
+        }
         "workflow_step" => crate::workflows::handle_step(&pool, job, ai_gateway.clone()).await,
         "recompute_prisma" => Ok(DeliveryAction::Ack),
         "retrieve_document" => {

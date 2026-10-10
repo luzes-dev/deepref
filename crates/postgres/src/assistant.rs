@@ -1,7 +1,7 @@
 use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
-use sqlx::{PgPool, Row, postgres::PgRow};
+use sqlx::{PgPool, Postgres, Row, Transaction, postgres::PgRow};
 use thiserror::Error;
 use uuid::Uuid;
 
@@ -182,6 +182,16 @@ pub async fn append_assistant_message(
     pool: &PgPool,
     message: &AppendAssistantMessage,
 ) -> Result<AssistantMessageRecord, AssistantError> {
+    let mut tx = pool.begin().await?;
+    let record = append_assistant_message_tx(&mut tx, message).await?;
+    tx.commit().await?;
+    Ok(record)
+}
+
+pub(crate) async fn append_assistant_message_tx(
+    tx: &mut Transaction<'_, Postgres>,
+    message: &AppendAssistantMessage,
+) -> Result<AssistantMessageRecord, AssistantError> {
     if message.conversation_id.is_nil() {
         return Err(AssistantError::InvalidInput(
             "conversation_id must not be nil".to_owned(),
@@ -195,8 +205,6 @@ pub async fn append_assistant_message(
             "role must be user, assistant, system, or tool".to_owned(),
         ));
     }
-
-    let mut tx = pool.begin().await?;
 
     let message_id = message.id.unwrap_or_else(Uuid::new_v4);
 
@@ -212,7 +220,7 @@ pub async fn append_assistant_message(
     .bind(&message.tool_calls)
     .bind(&message.tool_results)
     .bind(&message.metadata)
-    .fetch_one(&mut *tx)
+    .fetch_one(&mut **tx)
     .await
     .map_err(|err| {
         if let sqlx::Error::Database(ref db_err) = err
@@ -229,10 +237,8 @@ pub async fn append_assistant_message(
          WHERE id = $1",
     )
     .bind(message.conversation_id)
-    .execute(&mut *tx)
+    .execute(&mut **tx)
     .await?;
-
-    tx.commit().await?;
 
     Ok(message_from_row(&row))
 }

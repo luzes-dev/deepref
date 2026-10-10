@@ -87,6 +87,8 @@ export * from './assistantPlanActionDto.ts';
 export * from './assistantPlanDto.ts';
 export * from './assistantPlanManualStepDto.ts';
 export * from './assistantPlanResultDto.ts';
+export * from './assistantRunDto.ts';
+export * from './assistantRunDtoError.ts';
 export * from './assistantScreeningStageDto.ts';
 export * from './assistantToolDescriptor.ts';
 export * from './assistantToolKind.ts';

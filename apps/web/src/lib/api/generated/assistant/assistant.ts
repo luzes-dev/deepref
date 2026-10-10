@@ -23,6 +23,7 @@ import type {
 	AssistantConversationDto,
 	AssistantMessageDto,
 	AssistantPlanDto,
+	AssistantRunDto,
 	AssistantToolDescriptor,
 	AssistantToolRequest,
 	AssistantToolResponse,
@@ -1139,6 +1140,255 @@ export const createRejectAssistantPlan = <TError = ErrorType<ApiErrorBody>, TCon
 		queryClient
 	);
 };
+export type getAssistantRunResponse200 = {
+	data: AssistantRunDto;
+	status: 200;
+};
+
+export type getAssistantRunResponse404 = {
+	data: ApiErrorBody;
+	status: 404;
+};
+
+export type getAssistantRunResponseSuccess = getAssistantRunResponse200 & {
+	headers: Headers;
+};
+export type getAssistantRunResponseError = getAssistantRunResponse404 & {
+	headers: Headers;
+};
+
+export const getGetAssistantRunUrl = (projectId: string, runId: string) => {
+	return `/api/projects/${projectId}/assistant/runs/${runId}`;
+};
+
+export const getAssistantRun = async (
+	projectId: string,
+	runId: string,
+	options?: Parameters<typeof customFetch>[1]
+): Promise<getAssistantRunResponseSuccess> => {
+	return customFetch<getAssistantRunResponseSuccess>(getGetAssistantRunUrl(projectId, runId), {
+		...options,
+		method: 'GET'
+	});
+};
+
+export const getGetAssistantRunQueryKey = (projectId: string, runId: string) => {
+	return [`/api/projects/${projectId}/assistant/runs/${runId}`] as const;
+};
+
+export const getGetAssistantRunQueryOptions = <
+	TData = Awaited<ReturnType<typeof getAssistantRun>>,
+	TError = ErrorType<ApiErrorBody>
+>(
+	projectId: string,
+	runId: string,
+	options?: {
+		query?: Partial<
+			CreateQueryOptions<Awaited<ReturnType<typeof getAssistantRun>>, TError, TData>
+		>;
+		request?: SecondParameter<typeof customFetch>;
+	}
+) => {
+	const { query: queryOptions, request: requestOptions } = options ?? {};
+
+	const queryKey = queryOptions?.queryKey ?? getGetAssistantRunQueryKey(projectId, runId);
+
+	const queryFn: QueryFunction<Awaited<ReturnType<typeof getAssistantRun>>> = ({ signal }) =>
+		getAssistantRun(projectId, runId, { signal, ...requestOptions });
+
+	return {
+		queryKey,
+		queryFn,
+		enabled:
+			projectId !== null && projectId !== undefined && runId !== null && runId !== undefined,
+		...queryOptions
+	} as CreateQueryOptions<Awaited<ReturnType<typeof getAssistantRun>>, TError, TData> & {
+		queryKey: DataTag<QueryKey, TData, TError>;
+	};
+};
+
+export type GetAssistantRunQueryResult = NonNullable<Awaited<ReturnType<typeof getAssistantRun>>>;
+export type GetAssistantRunQueryError = ErrorType<ApiErrorBody>;
+
+export function createGetAssistantRun<
+	TData = Awaited<ReturnType<typeof getAssistantRun>>,
+	TError = ErrorType<ApiErrorBody>
+>(
+	projectId: () => string,
+	runId: () => string,
+	options?: () => {
+		query?: Partial<
+			CreateQueryOptions<Awaited<ReturnType<typeof getAssistantRun>>, TError, TData>
+		>;
+		request?: SecondParameter<typeof customFetch>;
+	},
+	queryClient?: () => QueryClient
+): CreateQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> } {
+	const query = createQuery(
+		() => getGetAssistantRunQueryOptions(projectId(), runId(), options?.()),
+		queryClient
+	) as CreateQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> };
+
+	return query;
+}
+
+export const prefetchGetAssistantRunQuery = async <
+	TData = Awaited<ReturnType<typeof getAssistantRun>>,
+	TError = ErrorType<ApiErrorBody>
+>(
+	queryClient: QueryClient,
+	projectId: string,
+	runId: string,
+	options?: {
+		query?: Partial<
+			CreateQueryOptions<Awaited<ReturnType<typeof getAssistantRun>>, TError, TData>
+		>;
+		request?: SecondParameter<typeof customFetch>;
+	}
+): Promise<QueryClient> => {
+	const queryOptions = getGetAssistantRunQueryOptions(projectId, runId, options);
+
+	await queryClient.query(queryOptions).catch(() => {});
+
+	return queryClient;
+};
+
+export type streamAssistantRunEventsResponse200 = {
+	data: string;
+	status: 200;
+};
+
+export type streamAssistantRunEventsResponse404 = {
+	data: ApiErrorBody;
+	status: 404;
+};
+
+export type streamAssistantRunEventsResponseSuccess = streamAssistantRunEventsResponse200 & {
+	headers: Headers;
+};
+export type streamAssistantRunEventsResponseError = streamAssistantRunEventsResponse404 & {
+	headers: Headers;
+};
+
+export const getStreamAssistantRunEventsUrl = (projectId: string, runId: string) => {
+	return `/api/projects/${projectId}/assistant/runs/${runId}/events`;
+};
+
+/**
+ * @summary Observes a durable run over persisted events. The browser reconnects with
+`after_seq` and replays what it missed; the worker owns execution, so a
+disconnect never cancels the run.
+ */
+export const streamAssistantRunEvents = async (
+	projectId: string,
+	runId: string,
+	options?: Parameters<typeof customFetch>[1]
+): Promise<streamAssistantRunEventsResponseSuccess> => {
+	return customFetch<streamAssistantRunEventsResponseSuccess>(
+		getStreamAssistantRunEventsUrl(projectId, runId),
+		{
+			...options,
+			method: 'GET'
+		}
+	);
+};
+
+export const getStreamAssistantRunEventsQueryKey = (projectId: string, runId: string) => {
+	return [`/api/projects/${projectId}/assistant/runs/${runId}/events`] as const;
+};
+
+export const getStreamAssistantRunEventsQueryOptions = <
+	TData = Awaited<ReturnType<typeof streamAssistantRunEvents>>,
+	TError = ErrorType<ApiErrorBody>
+>(
+	projectId: string,
+	runId: string,
+	options?: {
+		query?: Partial<
+			CreateQueryOptions<Awaited<ReturnType<typeof streamAssistantRunEvents>>, TError, TData>
+		>;
+		request?: SecondParameter<typeof customFetch>;
+	}
+) => {
+	const { query: queryOptions, request: requestOptions } = options ?? {};
+
+	const queryKey =
+		queryOptions?.queryKey ?? getStreamAssistantRunEventsQueryKey(projectId, runId);
+
+	const queryFn: QueryFunction<Awaited<ReturnType<typeof streamAssistantRunEvents>>> = ({
+		signal
+	}) => streamAssistantRunEvents(projectId, runId, { signal, ...requestOptions });
+
+	return {
+		queryKey,
+		queryFn,
+		enabled:
+			projectId !== null && projectId !== undefined && runId !== null && runId !== undefined,
+		...queryOptions
+	} as CreateQueryOptions<Awaited<ReturnType<typeof streamAssistantRunEvents>>, TError, TData> & {
+		queryKey: DataTag<QueryKey, TData, TError>;
+	};
+};
+
+export type StreamAssistantRunEventsQueryResult = NonNullable<
+	Awaited<ReturnType<typeof streamAssistantRunEvents>>
+>;
+export type StreamAssistantRunEventsQueryError = ErrorType<ApiErrorBody>;
+
+/**
+ * @summary Observes a durable run over persisted events. The browser reconnects with
+`after_seq` and replays what it missed; the worker owns execution, so a
+disconnect never cancels the run.
+ */
+
+export function createStreamAssistantRunEvents<
+	TData = Awaited<ReturnType<typeof streamAssistantRunEvents>>,
+	TError = ErrorType<ApiErrorBody>
+>(
+	projectId: () => string,
+	runId: () => string,
+	options?: () => {
+		query?: Partial<
+			CreateQueryOptions<Awaited<ReturnType<typeof streamAssistantRunEvents>>, TError, TData>
+		>;
+		request?: SecondParameter<typeof customFetch>;
+	},
+	queryClient?: () => QueryClient
+): CreateQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> } {
+	const query = createQuery(
+		() => getStreamAssistantRunEventsQueryOptions(projectId(), runId(), options?.()),
+		queryClient
+	) as CreateQueryResult<TData, TError> & { queryKey: DataTag<QueryKey, TData, TError> };
+
+	return query;
+}
+
+/**
+ * @summary Observes a durable run over persisted events. The browser reconnects with
+`after_seq` and replays what it missed; the worker owns execution, so a
+disconnect never cancels the run.
+ */
+export const prefetchStreamAssistantRunEventsQuery = async <
+	TData = Awaited<ReturnType<typeof streamAssistantRunEvents>>,
+	TError = ErrorType<ApiErrorBody>
+>(
+	queryClient: QueryClient,
+	projectId: string,
+	runId: string,
+	options?: {
+		query?: Partial<
+			CreateQueryOptions<Awaited<ReturnType<typeof streamAssistantRunEvents>>, TError, TData>
+		>;
+		request?: SecondParameter<typeof customFetch>;
+	}
+): Promise<QueryClient> => {
+	const queryOptions = getStreamAssistantRunEventsQueryOptions(projectId, runId, options);
+
+	await queryClient.query(queryOptions).catch(() => {});
+
+	return queryClient;
+};
+
 export type listProjectAssistantToolsResponse200 = {
 	data: AssistantToolDescriptor[];
 	status: 200;

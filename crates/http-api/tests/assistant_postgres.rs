@@ -14,14 +14,15 @@ use axum::{
 };
 use chrono::{Duration, Utc};
 use deepref_ai::{
-    AiError, AiFuture, AiGateway, ChatCompletion, ChatGateway, ChatRequest, ChatToolCall,
-    CompletionRequest, GatewayCompletion, ModelParameters, ModelProfile, ResolvedModel,
+    AiError, AiFuture, AiGateway, ChatCompletion, ChatGateway, ChatRequest, CompletionRequest,
+    GatewayCompletion, ModelParameters, ModelProfile, ResolvedModel, runtime::StaticModelFactory,
     sha256_bytes,
 };
 use deepref_application::jobs::ClaimedJob;
 use deepref_config::RuntimeConfig;
 use deepref_http_api::{config::ApiConfig, routes::router, state::AppState};
 use deepref_worker::{delivery::DeliveryAction, processor::handle_job_with_documents_owned_and_ai};
+use rig_core::test_utils::{MockCompletionModel, MockStreamEvent};
 use serde_json::{Value, json};
 use sqlx::{PgPool, Row, postgres::PgPoolOptions};
 use tower::ServiceExt;
@@ -1136,14 +1137,51 @@ impl ChatGateway for ScriptedChat {
     }
 }
 
-fn chat_reply(content: &str, calls: Vec<ChatToolCall>) -> ChatCompletion {
-    ChatCompletion {
-        content: content.to_owned(),
-        tool_calls: calls,
-        input_tokens: 10,
-        output_tokens: 5,
-        cost_micros: Some(1),
-    }
+/// Scripted Rig stream turns for the durable assistant flow.
+fn rig_text(text: &str) -> Vec<MockStreamEvent> {
+    vec![
+        MockStreamEvent::text(text.to_owned()),
+        MockStreamEvent::final_response_with_total_tokens(4),
+    ]
+}
+
+fn rig_call(id: &str, name: &str, args: Value) -> Vec<MockStreamEvent> {
+    vec![
+        MockStreamEvent::tool_call(id.to_owned(), name.to_owned(), args)
+            .with_call_id(id.to_owned()),
+        MockStreamEvent::final_response_with_total_tokens(4),
+    ]
+}
+
+/// Drives the next queued assistant job with a scripted Rig model, the way
+/// the worker would. Returns when the job acked.
+async fn drive_assistant_job(pool: &PgPool, model: MockCompletionModel) {
+    let job = deepref_postgres::claim_job(pool, "http-test-worker", StdDuration::from_secs(30))
+        .await
+        .expect("claim works")
+        .expect("an assistant job is queued");
+    assert_eq!(job.kind, "assistant_agent_run");
+    let services = deepref_worker::assistant::AssistantWorkerServices {
+        model_factory: Arc::new(StaticModelFactory::new(model.erase())),
+        prices: deepref_ai::PriceBook::default(),
+    };
+    let action = deepref_worker::assistant::handle_assistant_agent_run_with(pool, &job, &services)
+        .await
+        .expect("worker drives the run");
+    assert!(
+        matches!(action, deepref_worker::delivery::DeliveryAction::Ack),
+        "{action:?}"
+    );
+}
+
+async fn get_run(state: &AppState, project: Uuid, run_id: Uuid) -> Value {
+    let (status, body) = get_json(
+        state,
+        &format!("/projects/{project}/assistant/runs/{run_id}"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    serde_json::from_str(&body).expect("run json")
 }
 
 async fn post_json(state: &AppState, uri: &str, body: Value) -> (StatusCode, String) {
@@ -1178,32 +1216,27 @@ async fn assistant_writes_only_after_plan_confirmation_and_respects_budget() {
     .await
     .expect("route inserts");
     let project = fixture.project_id;
-    let chat = ScriptedChat {
-        replies: Mutex::new(vec![
-            chat_reply(
-                "",
-                vec![
-                    ChatToolCall {
-                        id: "c1".to_owned(),
-                        name: "screen_reports".to_owned(),
-                        arguments: json!({
-                            "report_ids": [fixture.report_id],
-                            "decision": "exclude",
-                            "summary": "Exclude 1 off-topic record",
-                            "rationale": "Not about the review question"
-                        }),
-                    },
-                    ChatToolCall {
-                        id: "c2".to_owned(),
-                        name: "request_protocol_publish".to_owned(),
-                        arguments: json!({"summary": "Publish protocol", "rationale": "asked"}),
-                    },
-                ],
-            ),
-            chat_reply("I prepared a plan; nothing has changed yet.", vec![]),
-        ]),
-    };
-    let state = AppState::new(pool.clone()).with_chat_gateway(chat);
+    let model = MockCompletionModel::from_stream_turns(vec![
+        rig_call(
+            "c1",
+            "screen_reports",
+            json!({
+                "report_ids": [fixture.report_id],
+                "decision": "exclude",
+                "summary": "Exclude 1 off-topic record",
+                "rationale": "Not about the review question"
+            }),
+        ),
+        rig_call(
+            "c2",
+            "request_protocol_publish",
+            json!({"summary": "Publish protocol", "rationale": "asked"}),
+        ),
+        rig_text("I prepared a plan; nothing has changed yet."),
+    ]);
+    let state = AppState::new(pool.clone()).with_chat_gateway(ScriptedChat {
+        replies: Mutex::new(Vec::new()),
+    });
 
     let (status, body) = post_json(
         &state,
@@ -1213,14 +1246,30 @@ async fn assistant_writes_only_after_plan_confirmation_and_respects_budget() {
     .await;
     assert_eq!(status, StatusCode::CREATED, "{body}");
     let conversation: Value = serde_json::from_str(&body).expect("conversation json");
-    let (status, stream) = post_json(
+    // Free-form chat is durable now: the POST only enqueues the run.
+    let (status, body) = post_json(
         &state,
         &format!("/projects/{project}/assistant/chat"),
         json!({"conversation_id": conversation["id"], "message": "exclude the off-topic one"}),
     )
     .await;
+    assert_eq!(status, StatusCode::ACCEPTED, "{body}");
+    let run: Value = serde_json::from_str(&body).expect("run json");
+    assert_eq!(run["status"], "queued");
+    let run_id: Uuid = serde_json::from_value(run["id"].clone()).expect("run id");
+
+    // Browser disconnects do not matter here: the worker owns execution.
+    drive_assistant_job(&pool, model).await;
+    let run = get_run(&state, project, run_id).await;
+    assert_eq!(run["status"], "completed", "{run}");
+    let (status, stream) = get_json(
+        &state,
+        &format!("/projects/{project}/assistant/runs/{run_id}/events"),
+    )
+    .await;
     assert_eq!(status, StatusCode::OK, "{stream}");
     assert!(stream.contains("event: plan"), "{stream}");
+    assert!(stream.contains("event: done"), "{stream}");
 
     let plan_id: Uuid = sqlx::query_scalar(
         "SELECT id FROM assistant_plans WHERE project_id=$1 AND status='pending'",
@@ -1511,24 +1560,31 @@ async fn assistant_claim_without_a_plan_is_corrected_before_the_user_relies_on_i
     .await
     .expect("route inserts");
     let project = fixture.project_id;
-    let chat = ScriptedChat {
-        replies: Mutex::new(vec![
-            chat_reply(
-                "I've queued a plan to propose the sample size from the full text. Confirm to apply it.",
-                vec![],
-            ),
-            chat_reply(
-                "Nothing has been queued: no change was made to any record.",
-                vec![],
-            ),
-        ]),
-    };
-    let state = AppState::new(pool.clone()).with_chat_gateway(chat);
+    let model = MockCompletionModel::from_stream_turns(vec![
+        rig_text(
+            "I've queued a plan to propose the sample size from the full text. Confirm to apply it.",
+        ),
+        rig_text("Nothing has been queued: no change was made to any record."),
+    ]);
+    let state = AppState::new(pool.clone()).with_chat_gateway(ScriptedChat {
+        replies: Mutex::new(Vec::new()),
+    });
     let conversation_id = create_conversation(&state, project, "claim guard").await;
-    let (status, stream) = post_json(
+    let (status, body) = post_json(
         &state,
         &format!("/projects/{project}/assistant/chat"),
         json!({"conversation_id": conversation_id, "message": "Propose the sample size extraction"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::ACCEPTED, "{body}");
+    let run: Value = serde_json::from_str(&body).expect("run json");
+    let run_id: Uuid = serde_json::from_value(run["id"].clone()).expect("run id");
+    drive_assistant_job(&pool, model).await;
+    let run = get_run(&state, project, run_id).await;
+    assert_eq!(run["status"], "completed", "{run}");
+    let (status, stream) = get_json(
+        &state,
+        &format!("/projects/{project}/assistant/runs/{run_id}/events"),
     )
     .await;
     assert_eq!(status, StatusCode::OK, "{stream}");
@@ -1564,41 +1620,40 @@ async fn assistant_plan_step_follows_its_review_run_to_a_plain_failure() {
     .await
     .expect("route inserts");
     let project = fixture.project_id;
-    let chat = ScriptedChat {
-        replies: Mutex::new(vec![
-            chat_reply(
-                "",
-                vec![ChatToolCall {
-                    id: "read-1".to_owned(),
-                    name: "get_report".to_owned(),
-                    arguments: json!({"report_id": fixture.report_id}),
-                }],
-            ),
-            chat_reply(
-                "",
-                vec![ChatToolCall {
-                    id: "propose-1".to_owned(),
-                    name: "propose_screening_decision".to_owned(),
-                    arguments: json!({
-                        "report_id": fixture.report_id,
-                        "stage": "title_abstract",
-                        "summary": "Propose excluding the assistant report",
-                        "rationale": "It is off topic for the protocol"
-                    }),
-                }],
-            ),
-            chat_reply("I prepared a plan; nothing has changed yet.", vec![]),
-        ]),
-    };
-    let state = AppState::new(pool.clone()).with_chat_gateway(chat);
+    let model = MockCompletionModel::from_stream_turns(vec![
+        rig_call(
+            "read-1",
+            "get_report",
+            json!({"report_id": fixture.report_id}),
+        ),
+        rig_call(
+            "propose-1",
+            "propose_screening_decision",
+            json!({
+                "report_id": fixture.report_id,
+                "stage": "title_abstract",
+                "summary": "Propose excluding the assistant report",
+                "rationale": "It is off topic for the protocol"
+            }),
+        ),
+        rig_text("I prepared a plan; nothing has changed yet."),
+    ]);
+    let state = AppState::new(pool.clone()).with_chat_gateway(ScriptedChat {
+        replies: Mutex::new(Vec::new()),
+    });
     let conversation_id = create_conversation(&state, project, "review step").await;
-    let (status, stream) = post_json(
+    let (status, body) = post_json(
         &state,
         &format!("/projects/{project}/assistant/chat"),
         json!({"conversation_id": conversation_id, "message": "Propose excluding the assistant report"}),
     )
     .await;
-    assert_eq!(status, StatusCode::OK, "{stream}");
+    assert_eq!(status, StatusCode::ACCEPTED, "{body}");
+    let run: Value = serde_json::from_str(&body).expect("run json");
+    let run_id: Uuid = serde_json::from_value(run["id"].clone()).expect("run id");
+    drive_assistant_job(&pool, model).await;
+    let run = get_run(&state, project, run_id).await;
+    assert_eq!(run["status"], "completed", "{run}");
     let plan_id: Uuid = sqlx::query_scalar(
         "SELECT id FROM assistant_plans WHERE project_id=$1 AND status='pending'",
     )
