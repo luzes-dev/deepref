@@ -31,7 +31,7 @@ resolution. Hybrid retrieval combines PostgreSQL FTS and cosine similarity with
 deterministic section/kind filters and tie-breaking. Article text is untrusted
 evidence and is fenced as data before it reaches a model context.
 
-The default local fixture is the pinned `pgvector/pgvector:0.8.0-pg17` image.
+The default local fixture is the pinned `pgvector/pgvector:0.8.7-pg17-bookworm` image.
 This is disposable migration/integration tooling. The local acceptance evidence is
 tracked in [AI foundation acceptance](acceptance/ai-foundation.md).
 
