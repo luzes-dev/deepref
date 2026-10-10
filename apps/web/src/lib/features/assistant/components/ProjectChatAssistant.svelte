@@ -14,11 +14,11 @@
 		reviewQueuePathForTool,
 		type AiBudget,
 		type AssistantConversation,
+		type AssistantMessageRecord,
 		type AssistantPlan
 	} from '../chat-api';
 	import {
 		emptyAssistantTurn,
-		markStopped,
 		recordToTurn,
 		reduceAssistantTurn,
 		type ChatTurn
@@ -88,6 +88,12 @@
 	let conversationsError = $state<string | null>(null);
 	let threadError = $state<string | null>(null);
 	let streamError = $state<string | null>(null);
+	/**
+	 * Set when live observation disconnects (user pressed Disconnect, or the
+	 * events stream dropped) while the worker keeps running. The persisted
+	 * answer converges into the thread via convergeAfterDisconnect.
+	 */
+	let disconnectNotice = $state<string | null>(null);
 	let streamingTurnId = $state<string | null>(null);
 	let sidebarOpen = $state(false);
 	let feedViewport: HTMLElement | null = $state(null);
@@ -202,6 +208,7 @@
 		sidebarOpen = false;
 		threadError = null;
 		streamError = null;
+		disconnectNotice = null;
 		try {
 			const records = await listAssistantMessages(projectId, conversationId);
 			turns = records
@@ -289,6 +296,7 @@
 		turns = [];
 		threadError = null;
 		streamError = null;
+		disconnectNotice = null;
 		sidebarOpen = false;
 		void tick().then(() => composerRef?.focus());
 	}
@@ -328,11 +336,69 @@
 		);
 	}
 
-	/** Stop was pressed: keep what was shown and say so, as the server stores it. */
-	function markTurnStopped(turnId: string): void {
-		turns = turns.map((turn) =>
-			turn.kind === 'assistant' && turn.id === turnId ? markStopped(turn) : turn
+	/**
+	 * The plan frame can arrive Null (the run emits the plan event before the
+	 * completion transaction inserts the plan row). The settled run carries
+	 * plan_id, so fetch and render the plan when the stream did not deliver it.
+	 */
+	async function attachRunPlanIfMissing(
+		turnId: string,
+		planId: string | null | undefined
+	): Promise<void> {
+		if (!planId) return;
+		const turn = turns.find(
+			(candidate) => candidate.kind === 'assistant' && candidate.id === turnId
 		);
+		if (!turn || turn.kind !== 'assistant' || turn.plan) return;
+		turn.planId = planId;
+		try {
+			turn.plan = await getAssistantPlan(projectId, planId);
+		} catch {
+			turn.planError = 'This plan could not be loaded.';
+		}
+		turns = [...turns];
+	}
+
+	/**
+	 * After live observation disconnects, the worker keeps running and
+	 * persists its answer. Poll the conversation until the persisted answer
+	 * lands, then adopt the server state (with its plan) so the thread
+	 * converges without reopening. Bounded and purely observational: it
+	 * stops when the user navigates, sends again, or the poll budget runs out.
+	 */
+	async function convergeAfterDisconnect(
+		conversationId: string,
+		partialLength: number
+	): Promise<void> {
+		const maxAttempts = 24;
+		const delayMs = 5_000;
+		for (let attempt = 0; attempt < maxAttempts; attempt++) {
+			if (attempt > 0) await new Promise((resolve) => setTimeout(resolve, delayMs));
+			if (activeConversationId !== conversationId || isStreaming) return;
+			let records: AssistantMessageRecord[];
+			try {
+				records = await listAssistantMessages(projectId, conversationId);
+			} catch {
+				continue;
+			}
+			if (activeConversationId !== conversationId || isStreaming) return;
+			const serverTurns = records
+				.map((record) => recordToTurn(record, projectId))
+				.filter((turn): turn is ChatTurn => turn !== null);
+			const latest = serverTurns.length > 0 ? serverTurns[serverTurns.length - 1] : null;
+			const settled =
+				latest &&
+				latest.kind === 'assistant' &&
+				((latest.content.length > 0 && latest.content.length >= partialLength) ||
+					latest.planId !== null);
+			if (settled) {
+				turns = serverTurns;
+				await loadPlans();
+				if (activeConversationId !== conversationId || isStreaming) return;
+				disconnectNotice = null;
+				return;
+			}
+		}
 	}
 
 	function stopStreaming(): void {
@@ -344,6 +410,7 @@
 		if (!message || isStreaming || assistantUnavailable || budgetExhausted) return;
 
 		streamError = null;
+		disconnectNotice = null;
 		draft = '';
 
 		if (activeConversationId === null) {
@@ -381,15 +448,24 @@
 		const controller = new AbortController();
 		stopController = controller;
 		try {
-			await streamAssistantChat(
+			const run = await streamAssistantChat(
 				projectId,
 				{ conversation_id: conversationId, message },
 				(event) => applyStreamEvent(assistantTurn.id, event),
 				controller.signal
 			);
+			await attachRunPlanIfMissing(assistantTurn.id, run?.plan_id ?? null);
 		} catch (error: unknown) {
 			if (controller.signal.aborted) {
-				markTurnStopped(assistantTurn.id);
+				// Disconnect stops live observation only: the worker keeps the
+				// run and persists its answer, which converges below.
+				const partial = turns.find(
+					(turn) => turn.kind === 'assistant' && turn.id === assistantTurn.id
+				);
+				const partialLength =
+					partial && partial.kind === 'assistant' ? partial.content.length : 0;
+				disconnectNotice = 'The assistant keeps working. Its answer will appear here.';
+				void convergeAfterDisconnect(conversationId, partialLength);
 			} else if (error instanceof AssistantStreamError && error.status === 503) {
 				providerMissing = true;
 				turns = turns.filter((t) => t.id !== userTurn.id && t.id !== assistantTurn.id);
@@ -741,6 +817,16 @@
 						<Alert.Title>The assistant turn failed</Alert.Title>
 						<Alert.Description>{streamError}</Alert.Description>
 					</Alert.Root>
+				{:else if disconnectNotice}
+					<Alert.Root
+						variant="info"
+						role="status"
+						class="mb-3"
+						data-testid="assistant-disconnected"
+					>
+						<Alert.Title>Disconnected from live updates</Alert.Title>
+						<Alert.Description>{disconnectNotice}</Alert.Description>
+					</Alert.Root>
 				{/if}
 				<InputGroup.Root
 					class="items-end gap-2 rounded-xl border border-border/80 bg-card p-2"
@@ -760,7 +846,8 @@
 							size="icon"
 							variant="outline"
 							class="size-9 shrink-0"
-							aria-label="Stop generating"
+							aria-label="Disconnect — the assistant keeps working"
+							title="Disconnect — the assistant keeps working"
 							onclick={stopStreaming}
 							data-testid="assistant-stop"
 						>
@@ -783,7 +870,11 @@
 					{/if}
 				</InputGroup.Root>
 				<p class="mt-2 text-center text-2xs text-muted-foreground">
-					Enter to send · Shift + Enter for a new line
+					{#if isStreaming}
+						Disconnect stops live updates — the assistant keeps working.
+					{:else}
+						Enter to send · Shift + Enter for a new line
+					{/if}
 				</p>
 			</div>
 		</div>
