@@ -354,7 +354,7 @@
     "@fontsource-variable/source-serif-4": "^5.3.0",
     "@internationalized/date": "^3.12.4",
     "@lucide/svelte": "^1.52.0",
-    "@tanstack/table-core": "^8.21.3",
+    "@tanstack/svelte-table": "^9.2.8",
     "@xyflow/svelte": "^1.7.0",
     "bits-ui": "^2.19.5",
     "clsx": "^2.1.1",

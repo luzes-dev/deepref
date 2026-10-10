@@ -1,11 +1,8 @@
-<script lang="ts" module>
-	type TData = unknown;
-	type TValue = unknown;
-</script>
-
-<script lang="ts" generics="TData, TValue">
+<script lang="ts">
 	import CirclePlusIcon from '@lucide/svelte/icons/circle-plus';
-	import type { Column } from '@tanstack/table-core';
+	import type { Column } from '@tanstack/svelte-table';
+	import type { ReportDto } from '#lib/api/generated/models/index.js';
+	import type { ArticleTableFeatures } from './table-features.js';
 	import { Badge } from '@deepref/ui/badge';
 	import { Button } from '@deepref/ui/button';
 	import * as Popover from '@deepref/ui/popover';
@@ -19,7 +16,7 @@
 		minYear,
 		maxYear
 	}: {
-		column: Column<TData, TValue>;
+		column: Column<ArticleTableFeatures, ReportDto, unknown>;
 		minYear: number;
 		maxYear: number;
 	} = $props();

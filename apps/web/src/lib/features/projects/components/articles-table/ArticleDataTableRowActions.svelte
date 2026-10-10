@@ -1,8 +1,9 @@
 <script lang="ts">
 	import EllipsisIcon from '@lucide/svelte/icons/ellipsis';
 	import ExternalLinkIcon from '@lucide/svelte/icons/external-link';
-	import type { Row } from '@tanstack/table-core';
+	import type { Row } from '@tanstack/svelte-table';
 	import type { ReportDto } from '#lib/api/generated/models/index.js';
+	import type { ArticleTableFeatures } from './table-features.js';
 	import { Button } from '@deepref/ui/button';
 	import { CopyButton } from '@deepref/ui/copy-button';
 	import * as DropdownMenu from '@deepref/ui/dropdown-menu';
@@ -11,7 +12,7 @@
 		row,
 		openArticle
 	}: {
-		row: Row<ReportDto>;
+		row: Row<ArticleTableFeatures, ReportDto>;
 		openArticle: (reportId: string) => void;
 	} = $props();
 

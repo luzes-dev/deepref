@@ -1,8 +1,9 @@
 <script lang="ts">
 	import SearchIcon from '@lucide/svelte/icons/search';
 	import XIcon from '@lucide/svelte/icons/x';
-	import type { Table } from '@tanstack/table-core';
+	import type { Table } from '@tanstack/svelte-table';
 	import type { ReportDto } from '#lib/api/generated/models/index.js';
+	import type { ArticleTableFeatures } from './table-features.js';
 	import { Button } from '@deepref/ui/button';
 	import * as InputGroup from '@deepref/ui/input-group';
 	import ArticleDataTableCitationsFilter from './ArticleDataTableCitationsFilter.svelte';
@@ -15,9 +16,13 @@
 		value: string;
 	};
 
-	let { table, articles }: { table: Table<ReportDto>; articles: ReportDto[] } = $props();
+	let {
+		table,
+		articles
+	}: { table: Table<ArticleTableFeatures, ReportDto>; articles: ReportDto[] } = $props();
 
-	const isFiltered = $derived(table.getState().columnFilters.length > 0);
+	const columnFilters = $derived(table.atoms.columnFilters.get());
+	const isFiltered = $derived(columnFilters.length > 0);
 	const titleColumn = $derived(table.getColumn('title'));
 	const typeColumn = $derived(table.getColumn('type'));
 	const yearColumn = $derived(table.getColumn('issued_year'));

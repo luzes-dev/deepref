@@ -3,7 +3,7 @@ name: deepref-local
 services:
   postgres:
     # Migration 0016 installs vector, so the disposable runtime must provide it.
-    image: pgvector/pgvector:0.8.0-pg17
+    image: pgvector/pgvector:0.8.7-pg17-bookworm
     environment:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: postgres
@@ -23,7 +23,7 @@ services:
     # Optional enrichment for parsed PDFs (sections + references). Start with:
     #   docker compose --profile enrichment up -d grobid
     # then set GROBID_URL=http://127.0.0.1:8070 for the worker.
-    image: grobid/grobid:0.8.2-crf
+    image: grobid/grobid:0.9.1-crf
     profiles: ["enrichment"]
     init: true
     ulimits:
