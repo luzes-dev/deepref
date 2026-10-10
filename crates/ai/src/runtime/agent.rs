@@ -15,7 +15,7 @@ use std::sync::Arc;
 
 use futures::StreamExt;
 use rig_agent::agent::{
-    AgentBuilder, MultiTurnStreamItem,
+    Agent, AgentBuilder, AgentRunner, MultiTurnStreamItem,
     run::response::{PromptError, PromptResponse},
 };
 use rig_core::{
@@ -29,11 +29,14 @@ use rig_core::{
 use serde_json::Value;
 use tokio::sync::mpsc::{UnboundedReceiver, UnboundedSender, unbounded_channel};
 
+use uuid::Uuid;
+
 use crate::{
     AgentLoopConfig, AgentProgress, AiError, AssistantStreamEvent, ChatMessage, ChatToolCall,
     PlanAction, PriceBook, ToolTraceEntry, UsageLedger, assistant_system_prompt,
     claims_pending_change,
     runtime::{
+        cassette::AssistantCassette,
         context::{AssistantToolHost, DeepRefAgentContext},
         hooks::{BUDGET_STOP_REASON, DeepRefHooks, TOKEN_STOP_REASON},
         model::AgentModelFactory,
@@ -52,6 +55,12 @@ pub struct RigTurn<'a> {
     pub ledger: Arc<dyn UsageLedger>,
     pub prices: PriceBook,
     pub config: AgentLoopConfig,
+    /// Identity of the durable assistant run this turn executes for.
+    pub run_id: Uuid,
+    /// Calibration contract this run executes under, for cassette provenance.
+    pub semantic_contract_id: Option<String>,
+    /// Build provenance for cassette provenance, where the caller tracks it.
+    pub build_provenance: Option<Value>,
     /// Records every served dispatch for cassette replay. `None` runs bare.
     pub recorder: Option<rig_cassette::effect_log::EffectLogRecorder>,
     /// Receives progress as the turn runs. `None` keeps the turn silent.
@@ -63,7 +72,7 @@ pub struct RigTurn<'a> {
 /// Outcome of one Rig-driven turn. Field-for-field compatible with
 /// [`AgentTurnOutcome`][crate::AgentTurnOutcome] so transports treat both
 /// runtimes identically.
-#[derive(Debug, Clone, PartialEq)]
+#[derive(Debug, Clone)]
 pub struct RigTurnOutcome {
     pub reply: String,
     pub actions: Vec<PlanAction>,
@@ -73,6 +82,9 @@ pub struct RigTurnOutcome {
     pub steps: usize,
     /// The loop stopped on a step or token cap rather than a final answer.
     pub truncated: bool,
+    /// The recorded cassette: effect log plus run association. Present only
+    /// when the turn ran with a recorder.
+    pub cassette: Option<AssistantCassette>,
 }
 
 /// Runs the turn to completion, driving observation inline. For separate
@@ -190,14 +202,22 @@ fn forward_event(
     }
 }
 
+/// Stable owner naming this assistant's bus keys (`<owner>/model:…`,
+/// `<owner>/tool:…`). Replay requires the same owner at record and replay
+/// time; a process-local counter would break cross-process compatibility.
+pub const DEEPREF_ASSISTANT_OWNER: &str = "deepref-assistant";
+
 struct BuiltTurn {
-    model: DynModel<Completion>,
+    agent: Agent,
     context: DeepRefAgentContext,
     history: Vec<Message>,
     user_message: String,
     scope: ToolHostScope,
     hooks: DeepRefHooks,
     config: AgentLoopConfig,
+    run_id: Uuid,
+    semantic_contract_id: Option<String>,
+    build_provenance: Option<Value>,
     recorder: Option<rig_cassette::effect_log::EffectLogRecorder>,
 }
 
@@ -217,16 +237,67 @@ fn build_turn(turn: RigTurn<'_>) -> Result<BuiltTurn, AiError> {
             ChatMessage::System(_) | ChatMessage::Tool { .. } => None,
         })
         .collect();
-    Ok(BuiltTurn {
+    let agent = build_live_agent(
         model,
+        &turn.context,
+        &scope,
+        hooks.clone(),
+        turn.config,
+        turn.recorder.clone(),
+    );
+    Ok(BuiltTurn {
+        agent,
         context: turn.context,
         history,
         user_message: turn.user_message,
         scope,
         hooks,
         config: turn.config,
+        run_id: turn.run_id,
+        semantic_contract_id: turn.semantic_contract_id,
+        build_provenance: turn.build_provenance,
         recorder: turn.recorder,
     })
+}
+
+/// Assembles the live assistant agent: preamble, model parameters, the
+/// DeepRef tool catalog, DeepRef hooks, a stable owner and optional
+/// cassette recording.
+fn build_live_agent(
+    model: DynModel<Completion>,
+    context: &DeepRefAgentContext,
+    scope: &ToolHostScope,
+    hooks: DeepRefHooks,
+    config: AgentLoopConfig,
+    recorder: Option<rig_cassette::effect_log::EffectLogRecorder>,
+) -> Agent {
+    let mut builder = AgentBuilder::new(model)
+        .owner(DEEPREF_ASSISTANT_OWNER)
+        .preamble(assistant_system_prompt(context.project_id))
+        .max_tokens(u64::from(config.max_output_tokens_per_call))
+        .dynamic_tools(deepref_dynamic_tools(scope))
+        .add_hook(hooks);
+    if let Some(temperature) = context.route.parameters.temperature {
+        builder = builder.temperature(f64::from(temperature));
+    }
+    if let Some(top_p) = context.route.parameters.top_p {
+        builder = builder.top_p(f64::from(top_p));
+    }
+    if !context.route.parameters.additional.is_empty() {
+        builder = builder.additional_params(Value::Object(
+            context
+                .route
+                .parameters
+                .additional
+                .clone()
+                .into_iter()
+                .collect(),
+        ));
+    }
+    match recorder {
+        Some(recorder) => builder.record_to(recorder).build(),
+        None => builder.build(),
+    }
 }
 
 struct Driver {
@@ -246,50 +317,45 @@ async fn drive_turn(
     built: BuiltTurn,
     progress_tx: UnboundedSender<AssistantStreamEvent>,
 ) -> Result<RigTurnOutcome, AiError> {
-    let BuiltTurn {
-        model,
-        context,
-        history,
-        user_message,
-        scope,
-        hooks,
-        config,
-        recorder,
-    } = built;
-    let mut builder = AgentBuilder::new(model)
-        .preamble(assistant_system_prompt(context.project_id))
-        .max_tokens(u64::from(config.max_output_tokens_per_call))
-        .dynamic_tools(deepref_dynamic_tools(&scope))
-        .add_hook(hooks.clone());
-    if let Some(temperature) = context.route.parameters.temperature {
-        builder = builder.temperature(f64::from(temperature));
-    }
-    if let Some(top_p) = context.route.parameters.top_p {
-        builder = builder.top_p(f64::from(top_p));
-    }
-    if !context.route.parameters.additional.is_empty() {
-        builder = builder.additional_params(Value::Object(
-            context
-                .route
-                .parameters
-                .additional
-                .clone()
-                .into_iter()
-                .collect(),
-        ));
-    }
-    if let Some(recorder) = recorder {
-        builder = builder.record_to(recorder);
-    }
-    let agent = builder.build();
-    let tool_scope: Arc<dyn std::any::Any + Send + Sync> = Arc::new(scope.clone());
-    let runner = agent
-        .prompt(Message::user(user_message.clone()))
-        .history(history)
-        .max_turns(config.max_steps)
+    let tool_scope: Arc<dyn std::any::Any + Send + Sync> = Arc::new(built.scope.clone());
+    let runner = built
+        .agent
+        .prompt(Message::user(built.user_message.clone()))
+        .history(built.history.clone())
+        .max_turns(built.config.max_steps)
         .tool_context(ToolContext::new().with_scope(tool_scope))
         .tool_concurrency(1)
-        .max_invalid_tool_call_retries(config.max_steps);
+        .max_invalid_tool_call_retries(built.config.max_steps);
+    let mut outcome = run_assistant_runner(
+        built.scope.clone(),
+        built.hooks.clone(),
+        built.user_message.clone(),
+        runner,
+        progress_tx,
+    )
+    .await?;
+    if let Some(recorder) = &built.recorder {
+        outcome.cassette = Some(AssistantCassette::assemble(
+            &built.agent,
+            recorder,
+            &built.context,
+            built.run_id,
+            built.semantic_contract_id.clone(),
+            built.build_provenance.clone(),
+        ));
+    }
+    Ok(outcome)
+}
+
+/// Drives one runner to settlement, sharing the select/drain/finish loop
+/// between live runs and cassette replays.
+pub(crate) async fn run_assistant_runner(
+    scope: ToolHostScope,
+    hooks: DeepRefHooks,
+    user_message: String,
+    runner: AgentRunner,
+    progress_tx: UnboundedSender<AssistantStreamEvent>,
+) -> Result<RigTurnOutcome, AiError> {
     let (run_future, mut run_events) = runner.run_channel();
     tokio::pin!(run_future);
     let mut driver = Driver {
@@ -438,6 +504,7 @@ fn success_outcome(driver: &mut Driver, response: &PromptResponse) -> RigTurnOut
         output_tokens: usage.output_tokens,
         steps: driver.steps,
         truncated: false,
+        cassette: None,
     };
     if reply.trim().is_empty() {
         reply = if outcome.actions.is_empty() {
@@ -519,5 +586,6 @@ fn truncated_outcome(driver: &mut Driver) -> RigTurnOutcome {
         output_tokens: usage.output_tokens,
         steps: driver.steps,
         truncated: true,
+        cassette: None,
     }
 }
