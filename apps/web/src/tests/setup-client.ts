@@ -8,7 +8,7 @@ import { beforeAll, afterEach, afterAll } from 'vitest';
 expect.extend(matchers);
 
 beforeAll(() => {
-	server.listen({ onUnhandledRequest: 'error' });
+	server.listen({ onUnhandledFrame: 'error' });
 });
 
 afterEach(() => {

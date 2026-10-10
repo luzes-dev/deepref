@@ -16,6 +16,7 @@ overrides:
   # Keep security-patched transitive overrides aligned with the dependency audit.
   cookie: ^0.7.2
   '@sveltejs/kit>cookie': ^2.0.1
+  'msw>cookie': ^2.0.1
   brace-expansion: ^5.0.11
   js-yaml: 4.3.2
   linkify-it: ^6.1.0
