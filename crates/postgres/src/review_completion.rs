@@ -18,7 +18,9 @@ use crate::notifications::{NotificationDraft, record_notification_in_transaction
 
 pub enum ReviewOutcome<'a> {
     Candidate {
-        proposal: AiProposal,
+        /// Boxed: the proposal carries the full draft payload, and the
+        /// `Blocked` variant must stay small. Layout only, never semantics.
+        proposal: Box<AiProposal>,
     },
     Blocked {
         code: ReviewBlockCode,
@@ -294,7 +296,7 @@ pub async fn complete_review_outcome(
     let (proposal, blocked, model_run_id) = match outcome {
         ReviewOutcome::Candidate { proposal } => {
             let model_run_id = Some(proposal.model_run_id);
-            (Some(proposal), None, model_run_id)
+            (Some(*proposal), None, model_run_id)
         }
         ReviewOutcome::Blocked { code, message } => (None, Some((code, message)), None),
     };

@@ -93,11 +93,12 @@ impl<T: AiTask> AiTask for DefinedAiTask<T> {
             if let Some(semantic_context) = &node.semantic_context {
                 let source = serde_json::from_str::<Value>(&context.user_prompt)
                     .unwrap_or_else(|_| Value::String(context.user_prompt.clone()));
-                context.user_prompt = serde_json::to_string(&serde_json::json!({
+                // Canonical JSON text: prompt bytes must not depend on the
+                // serde_json map backend.
+                context.user_prompt = deepref_ai::canonical_json(&serde_json::json!({
                     "source": source,
                     "node_context": semantic_context,
-                }))
-                .map_err(|_| AiError::InputSerialization("review node context".to_owned()))?;
+                }));
             }
         }
         Ok(context)

@@ -707,12 +707,13 @@ impl AiTask for ScreeningTask {
         Ok(AiContext {
             project_id: Some(self.project_id),
             system_prompt: SYSTEM_PROMPT.to_owned(),
-            user_prompt: serde_json::to_string(&json!({
+            // Canonical JSON text: prompt bytes must not depend on the
+            // serde_json map backend.
+            user_prompt: crate::canonical_json(&json!({
                 "input": input_json,
                 "allowed_evidence": self.allowed_evidence,
                 "output_contract": self.output_contract(&expected),
-            }))
-            .map_err(|_| AiError::InputSerialization("screening input".to_owned()))?,
+            })),
             retrieval,
             protocol_hash: Some(protocol_hash),
             document_hash: input.document_hash.clone(),

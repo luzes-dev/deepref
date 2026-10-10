@@ -21,12 +21,12 @@ import type { ErrorType } from '../../custom-fetch.ts';
 
 type SecondParameter<T extends (...args: never) => unknown> = Parameters<T>[1];
 
-export type exportProjectArtifactResponse200ApplicationJson = {
+export type exportProjectArtifactResponse200TextCsv = {
 	data: BinaryAttachment;
 	status: 200;
 };
 
-export type exportProjectArtifactResponse200ApplicationXBibtex = {
+export type exportProjectArtifactResponse200ApplicationJson = {
 	data: BinaryAttachment;
 	status: 200;
 };
@@ -36,13 +36,13 @@ export type exportProjectArtifactResponse200ApplicationXResearchInfoSystems = {
 	status: 200;
 };
 
-export type exportProjectArtifactResponse200ImageSvgXml = {
-	data: Blob;
+export type exportProjectArtifactResponse200ApplicationXBibtex = {
+	data: BinaryAttachment;
 	status: 200;
 };
 
-export type exportProjectArtifactResponse200TextCsv = {
-	data: BinaryAttachment;
+export type exportProjectArtifactResponse200ImageSvgXml = {
+	data: Blob;
 	status: 200;
 };
 
@@ -67,11 +67,11 @@ export type exportProjectArtifactResponse500 = {
 };
 
 export type exportProjectArtifactResponseSuccess = (
-	| exportProjectArtifactResponse200ApplicationJson
-	| exportProjectArtifactResponse200ApplicationXBibtex
-	| exportProjectArtifactResponse200ApplicationXResearchInfoSystems
-	| exportProjectArtifactResponse200ImageSvgXml
 	| exportProjectArtifactResponse200TextCsv
+	| exportProjectArtifactResponse200ApplicationJson
+	| exportProjectArtifactResponse200ApplicationXResearchInfoSystems
+	| exportProjectArtifactResponse200ApplicationXBibtex
+	| exportProjectArtifactResponse200ImageSvgXml
 ) & {
 	headers: Headers;
 };

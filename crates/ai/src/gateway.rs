@@ -4,8 +4,9 @@ use std::{
 };
 
 use rig_core::{
-    completion::{AssistantContent, CompletionModel, Message},
-    embeddings::EmbeddingModel,
+    DynModel,
+    completion::{CompletionRequest as RigCompletionRequest, Message},
+    operation::{Completion, Embedding as RigEmbeddingOperation},
 };
 use serde_json::json;
 use tracing::debug;
@@ -162,21 +163,24 @@ impl ChatGateway for RoutedGateway {
     }
 }
 
-/// Rig adapter. The DeepRef route identity selects the model per request and
-/// every supported parameter is forwarded into Rig's request builder.
-pub struct RigGateway<M> {
-    model: M,
+/// Rig adapter over an erased 0.44 completion model. The DeepRef route
+/// identity selects the model per request and every supported parameter is
+/// forwarded into Rig's request builder. Construct the model with PR3's
+/// `AgentModelFactory` (or any `impl Into<DynModel<Completion>>`); this
+/// adapter only translates DeepRef requests into Rig calls.
+pub struct RigGateway {
+    model: DynModel<Completion>,
 }
-impl<M> RigGateway<M> {
-    pub const fn new(model: M) -> Self {
-        Self { model }
+
+impl RigGateway {
+    pub fn new(model: impl Into<DynModel<Completion>>) -> Self {
+        Self {
+            model: model.into(),
+        }
     }
 }
 
-impl<M> AiGateway for RigGateway<M>
-where
-    M: CompletionModel + Clone + Send + Sync + 'static,
-{
+impl AiGateway for RigGateway {
     fn complete<'a>(&'a self, request: CompletionRequest) -> AiFuture<'a, GatewayCompletion> {
         Box::pin(async move {
             request.route.validate()?;
@@ -193,52 +197,45 @@ where
             if let Some(top_p) = request.route.parameters.top_p {
                 additional.insert("top_p".to_owned(), json!(top_p));
             }
-            let response = self
-                .model
-                .completion_request(Message::user(prompt))
+            let rig_request = RigCompletionRequest::new(Message::user(prompt))
                 .model(request.route.model.clone())
                 .preamble(request.system_prompt)
-                .temperature_opt(request.route.parameters.temperature.map(f64::from))
-                .max_tokens_opt(request.route.parameters.max_tokens.map(u64::from))
-                .additional_params_opt((!additional.is_empty()).then(|| json!(additional)))
-                .output_schema(schema)
-                .send()
+                .temperature(request.route.parameters.temperature.map(f64::from))
+                .max_tokens(request.route.parameters.max_tokens.map(u64::from))
+                .additional_params((!additional.is_empty()).then(|| json!(additional)))
+                .output_schema(schema);
+            let response = self
+                .model
+                .call(rig_request)
                 .await
                 .map_err(|_| AiError::Gateway("provider completion failed".to_owned()))?;
-            let output_json = match response.choice.first() {
-                Some(AssistantContent::Text(text)) => text.text.clone(),
-                _ => {
-                    return Err(AiError::Gateway(
-                        "provider did not return structured text".to_owned(),
-                    ));
-                }
-            };
             debug!(ai.provider = %request.route.provider, ai.model = %request.route.model, "structured completion finished");
             Ok(GatewayCompletion {
-                output_json,
-                input_tokens: response.usage.input_tokens,
-                output_tokens: response.usage.output_tokens,
+                output_json: response.text(),
+                input_tokens: response.usage.input_tokens.unwrap_or(0),
+                output_tokens: response.usage.output_tokens.unwrap_or(0),
                 cost_micros: None,
-                // Rig does not expose the provider's served model or fingerprint.
-                served_model: None,
+                served_model: response.model().map(str::to_owned),
                 system_fingerprint: None,
             })
         })
     }
 }
 
-pub struct RigEmbeddingGateway<M> {
-    model: M,
+/// Rig adapter over an erased 0.44 embedding model.
+pub struct RigEmbeddingGateway {
+    model: DynModel<RigEmbeddingOperation>,
 }
-impl<M> RigEmbeddingGateway<M> {
-    pub const fn new(model: M) -> Self {
-        Self { model }
+
+impl RigEmbeddingGateway {
+    pub fn new(model: impl Into<DynModel<RigEmbeddingOperation>>) -> Self {
+        Self {
+            model: model.into(),
+        }
     }
 }
-impl<M> EmbeddingGateway for RigEmbeddingGateway<M>
-where
-    M: EmbeddingModel + Send + Sync + 'static,
-{
+
+impl EmbeddingGateway for RigEmbeddingGateway {
     fn embed<'a>(
         &'a self,
         model: &'a crate::ResolvedModel,
@@ -246,14 +243,11 @@ where
     ) -> AiFuture<'a, Embedding> {
         Box::pin(async move {
             model.validate()?;
-            let mut values = self
+            let value = self
                 .model
-                .embed_texts(vec![text.to_owned()])
+                .embed_text(text)
                 .await
                 .map_err(|_| AiError::Gateway("embedding provider failed".to_owned()))?;
-            let value = values.pop().ok_or_else(|| {
-                AiError::Gateway("embedding provider returned no value".to_owned())
-            })?;
             Embedding::new(value.vec.into_iter().map(|item| item as f32).collect())
         })
     }
