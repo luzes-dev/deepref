@@ -40,6 +40,11 @@ export type chatWithProjectAssistantResponse200 = {
 	status: 200;
 };
 
+export type chatWithProjectAssistantResponse202 = {
+	data: AssistantRunDto;
+	status: 202;
+};
+
 export type chatWithProjectAssistantResponse400 = {
 	data: ApiErrorBody;
 	status: 400;
@@ -70,7 +75,9 @@ export type chatWithProjectAssistantResponse503 = {
 	status: 503;
 };
 
-export type chatWithProjectAssistantResponseSuccess = chatWithProjectAssistantResponse200 & {
+export type chatWithProjectAssistantResponseSuccess = (
+	chatWithProjectAssistantResponse200 | chatWithProjectAssistantResponse202
+) & {
 	headers: Headers;
 };
 export type chatWithProjectAssistantResponseError = (

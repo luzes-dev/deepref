@@ -1,8 +1,10 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 import {
 	AssistantStreamError,
+	getAssistantRun,
 	parseSseFrame,
 	streamAssistantChat,
+	streamAssistantRunEvents,
 	type AssistantChatStreamEvent
 } from './assistant-stream';
 
@@ -150,5 +152,267 @@ describe('streamAssistantChat', () => {
 		await expect(collect(new Response(null, { status: 200 }))).rejects.toThrow(
 			'assistant stream is unavailable'
 		);
+	});
+});
+
+describe('durable assistant runs', () => {
+	const runId = 'run-1';
+
+	function runJson(overrides: Record<string, unknown> = {}): Record<string, unknown> {
+		return {
+			id: runId,
+			conversation_id: 'c1',
+			project_id: 'project-1',
+			trigger_message_id: 'trigger-1',
+			status: 'completed',
+			answer_message_id: 'answer-1',
+			plan_id: null,
+			error: {},
+			created_at: '2026-01-01T00:00:00Z',
+			updated_at: '2026-01-01T00:00:01Z',
+			completed_at: '2026-01-01T00:00:02Z',
+			...overrides
+		};
+	}
+
+	function jsonResponse(body: unknown, status: number): Response {
+		return new Response(JSON.stringify(body), {
+			status,
+			headers: { 'Content-Type': 'application/json' }
+		});
+	}
+
+	function eventsResponse(frames: string[]): Response {
+		return new Response(sseBody(frames.map((entry) => `${entry}\n\n`)), {
+			status: 200,
+			headers: { 'Content-Type': 'text/event-stream' }
+		});
+	}
+
+	function routeFetch(scenario: {
+		chat: Response;
+		events: Response[];
+		runs: Array<Record<string, unknown>>;
+	}): string[] {
+		const requested: string[] = [];
+		const pendingEvents = [...scenario.events];
+		const pendingRuns = [...scenario.runs];
+		vi.stubGlobal(
+			'fetch',
+			vi.fn(async (input: unknown) => {
+				const url = String(input);
+				requested.push(url);
+				if (url.endsWith('/assistant/chat')) return scenario.chat;
+				if (url.includes('/events')) {
+					const next = pendingEvents.shift();
+					if (!next) throw new Error(`unexpected events request: ${url}`);
+					return next;
+				}
+				if (url.includes(`/runs/${runId}`)) {
+					const next = pendingRuns.shift();
+					if (!next) throw new Error(`unexpected run request: ${url}`);
+					return jsonResponse(next, 200);
+				}
+				throw new Error(`unexpected request: ${url}`);
+			})
+		);
+		return requested;
+	}
+
+	async function streamDurable(
+		onEvent: (event: AssistantChatStreamEvent) => void = () => {}
+	): Promise<{ events: AssistantChatStreamEvent[]; run: unknown }> {
+		const events: AssistantChatStreamEvent[] = [];
+		const run = await streamAssistantChat(
+			'project-1',
+			{ conversation_id: 'c1', message: 'hi' },
+			(event) => {
+				events.push(event);
+				onEvent(event);
+			}
+		);
+		return { events, run };
+	}
+
+	it('streams a durable run through the existing frame renderer and returns it', async () => {
+		const requested = routeFetch({
+			chat: jsonResponse(runJson({ status: 'queued' }), 202),
+			events: [
+				eventsResponse([
+					frame('token', { delta: 'Hi' }),
+					frame('tool_start', { tool: 'get_report', tool_call_id: 't1', args: {} }),
+					frame('tool_complete', {
+						tool: 'get_report',
+						tool_call_id: 't1',
+						output: { title: 'T' }
+					}),
+					frame('plan', { plan: { id: 'p1', status: 'pending', actions: [] } }),
+					frame('done', { message_id: 'm1', input_tokens: 3, output_tokens: 5 })
+				])
+			],
+			runs: [runJson({ status: 'completed', plan_id: 'p1' })]
+		});
+
+		const { events, run } = await streamDurable();
+
+		expect(events).toEqual([
+			{ event: 'token', delta: 'Hi' },
+			{ event: 'tool_start', tool: 'get_report', tool_call_id: 't1', args: {} },
+			{
+				event: 'tool_complete',
+				tool: 'get_report',
+				tool_call_id: 't1',
+				output: { title: 'T' }
+			},
+			{ event: 'plan', plan: { id: 'p1', status: 'pending', actions: [] } },
+			{ event: 'done', message_id: 'm1', input_tokens: 3, output_tokens: 5 }
+		]);
+		expect(run).toMatchObject({ id: runId, status: 'completed', plan_id: 'p1' });
+		expect(requested).toEqual([
+			'/api/projects/project-1/assistant/chat',
+			`/api/projects/project-1/assistant/runs/${runId}/events?after_seq=-1`,
+			`/api/projects/project-1/assistant/runs/${runId}`
+		]);
+	});
+
+	it('resumes the events stream with after_seq while the run is still active', async () => {
+		const requested = routeFetch({
+			chat: jsonResponse(runJson({ status: 'queued' }), 202),
+			events: [
+				eventsResponse([frame('token', { delta: 'Hel' })]),
+				eventsResponse([
+					frame('token', { delta: 'lo' }),
+					frame('done', { message_id: 'm1', input_tokens: 1, output_tokens: 2 })
+				])
+			],
+			runs: [runJson({ status: 'running' }), runJson({ status: 'completed' })]
+		});
+
+		const { events, run } = await streamDurable();
+
+		expect(events.map((event) => event.event)).toEqual(['token', 'token', 'done']);
+		expect(run).toMatchObject({ status: 'completed' });
+		expect(requested).toEqual([
+			'/api/projects/project-1/assistant/chat',
+			`/api/projects/project-1/assistant/runs/${runId}/events?after_seq=-1`,
+			`/api/projects/project-1/assistant/runs/${runId}`,
+			`/api/projects/project-1/assistant/runs/${runId}/events?after_seq=0`,
+			`/api/projects/project-1/assistant/runs/${runId}`
+		]);
+	});
+
+	it('reflects a failed run as an error event when no error frame arrived', async () => {
+		routeFetch({
+			chat: jsonResponse(runJson({ status: 'queued' }), 202),
+			events: [eventsResponse([frame('token', { delta: 'Hi' })])],
+			runs: [
+				runJson({
+					status: 'failed',
+					completed_at: '2026-01-01T00:00:03Z',
+					error: {
+						code: 'ai_budget_exceeded',
+						message: 'AI budget for this month reached'
+					}
+				})
+			]
+		});
+
+		const { events, run } = await streamDurable();
+
+		expect(events).toEqual([
+			{ event: 'token', delta: 'Hi' },
+			{
+				event: 'error',
+				message: 'AI budget for this month reached',
+				code: 'ai_budget_exceeded'
+			}
+		]);
+		expect(run).toMatchObject({ status: 'failed' });
+	});
+
+	it('keeps the streamed error frame instead of duplicating the run error', async () => {
+		routeFetch({
+			chat: jsonResponse(runJson({ status: 'queued' }), 202),
+			events: [eventsResponse([frame('error', { message: 'boom', code: 'x' })])],
+			runs: [runJson({ status: 'failed', error: { code: 'x', message: 'boom' } })]
+		});
+
+		const { events } = await streamDurable();
+
+		expect(events).toEqual([{ event: 'error', message: 'boom', code: 'x' }]);
+	});
+
+	it('rejects a 202 response without a run identity', async () => {
+		vi.stubGlobal('fetch', vi.fn().mockResolvedValue(jsonResponse({ nope: true }, 202)));
+		await expect(
+			streamAssistantChat('project-1', { conversation_id: 'c1', message: 'hi' }, () => {})
+		).rejects.toMatchObject({ status: 202 });
+	});
+
+	it('keeps the synchronous tool-command stream on a 200 response', async () => {
+		const fetchMock = vi
+			.fn()
+			.mockResolvedValue(
+				new Response(
+					sseBody([
+						`${frame('token', { delta: 'ok' })}\n\n`,
+						`${frame('done', { message_id: 'm1', input_tokens: 1, output_tokens: 2 })}\n\n`
+					])
+				)
+			);
+		vi.stubGlobal('fetch', fetchMock);
+
+		const events: AssistantChatStreamEvent[] = [];
+		const run = await streamAssistantChat(
+			'project-1',
+			{ conversation_id: 'c1', message: '{"tool":"get_report"}' },
+			(event) => events.push(event)
+		);
+
+		expect(events).toEqual([
+			{ event: 'token', delta: 'ok' },
+			{ event: 'done', message_id: 'm1', input_tokens: 1, output_tokens: 2 }
+		]);
+		expect(run).toBeNull();
+		expect(fetchMock).toHaveBeenCalledTimes(1);
+		expect(fetchMock.mock.calls[0][0]).toBe('/api/projects/project-1/assistant/chat');
+	});
+
+	it('reports resume progress from the run events stream', async () => {
+		const fetchMock = vi
+			.fn()
+			.mockResolvedValue(
+				eventsResponse([
+					frame('token', { delta: 'Hi' }),
+					frame('done', { message_id: 'm1', input_tokens: 1, output_tokens: 2 })
+				])
+			);
+		vi.stubGlobal('fetch', fetchMock);
+
+		const events: AssistantChatStreamEvent[] = [];
+		const progress = await streamAssistantRunEvents(
+			'project-1',
+			runId,
+			(event) => events.push(event),
+			{ afterSeq: 4 }
+		);
+
+		expect(events.map((event) => event.event)).toEqual(['token', 'done']);
+		expect(progress).toEqual({ frames: 2, nextAfterSeq: 6, terminal: true });
+		expect(fetchMock.mock.calls[0][0]).toBe(
+			`/api/projects/project-1/assistant/runs/${runId}/events?after_seq=4`
+		);
+	});
+
+	it('raises run lookup failures as stream errors', async () => {
+		vi.stubGlobal(
+			'fetch',
+			vi
+				.fn()
+				.mockResolvedValue(jsonResponse({ message: 'Run gone', code: 'run_missing' }, 404))
+		);
+		const error = await getAssistantRun('project-1', runId).catch((caught: unknown) => caught);
+		expect(error).toBeInstanceOf(AssistantStreamError);
+		expect(error).toMatchObject({ status: 404, message: 'Run gone', code: 'run_missing' });
 	});
 });
