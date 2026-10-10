@@ -324,7 +324,7 @@ jobs:
         if: github.event_name == 'push' || needs.changes.outputs.web == 'true'
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: 24.4.1
+          node-version: 24.21.0
           cache: pnpm
       - if: github.event_name == 'push' || needs.changes.outputs.web == 'true'
         run: pnpm install --frozen-lockfile
@@ -378,7 +378,7 @@ jobs:
         if: needs.changes.outputs.web == 'true'
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: 24.4.1
+          node-version: 24.21.0
           cache: pnpm
       - if: needs.changes.outputs.web == 'true'
         run: pnpm install --frozen-lockfile
@@ -422,7 +422,7 @@ jobs:
         if: github.event_name == 'push' || needs.changes.outputs.rust == 'true'
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: 24.4.1
+          node-version: 24.21.0
           cache: pnpm
       - if: github.event_name == 'push' || needs.changes.outputs.rust == 'true'
         run: pnpm install --frozen-lockfile
@@ -486,7 +486,7 @@ jobs:
         if: github.event_name == 'push' || needs.changes.outputs.rust == 'true' || needs.changes.outputs.web == 'true'
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: 24.4.1
+          node-version: 24.21.0
           cache: pnpm
       - if: github.event_name == 'push' || needs.changes.outputs.rust == 'true' || needs.changes.outputs.web == 'true'
         run: pnpm install --frozen-lockfile
@@ -609,7 +609,7 @@ jobs:
         if: github.event_name == 'push' || needs.changes.outputs.rust == 'true' || needs.changes.outputs.web == 'true' || needs.changes.outputs.containers == 'true'
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
-          node-version: 24.4.1
+          node-version: 24.21.0
           cache: pnpm
       - if: github.event_name == 'push' || needs.changes.outputs.rust == 'true' || needs.changes.outputs.web == 'true' || needs.changes.outputs.containers == 'true'
         run: pnpm install --frozen-lockfile
