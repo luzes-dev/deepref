@@ -1231,7 +1231,7 @@ export const prefetchGetAiFirstOverviewQuery = async <
 ): Promise<QueryClient> => {
 	const queryOptions = getGetAiFirstOverviewQueryOptions(projectId, options);
 
-	await queryClient.prefetchQuery(queryOptions);
+	await queryClient.query(queryOptions).catch(() => {});
 
 	return queryClient;
 };
@@ -1274,8 +1274,19 @@ export const startAiFirstCohort = async (
 	): Record<string, string | readonly string[]> => {
 		if (!h) return {};
 		if (h instanceof Headers) return Object.fromEntries(h.entries());
-		if (Array.isArray(h)) return Object.fromEntries(h);
-		return h;
+		if (Symbol.iterator in h) {
+			return Object.fromEntries(
+				Array.from(
+					h as Iterable<Iterable<string>>,
+					(entry) => Array.from(entry) as [string, string]
+				)
+			);
+		}
+		const headers: Record<string, string | readonly string[]> = {};
+		for (const [name, value] of Object.entries<string | readonly string[] | undefined>(h)) {
+			if (value !== undefined) headers[name] = value;
+		}
+		return headers;
 	};
 	return customFetch<startAiFirstCohortResponseSuccess>(getStartAiFirstCohortUrl(projectId), {
 		...options,
@@ -1284,6 +1295,8 @@ export const startAiFirstCohort = async (
 		body: JSON.stringify(startAiFirstRequest)
 	});
 };
+
+export const getStartAiFirstCohortMutationKey = () => ['startAiFirstCohort'] as const;
 
 export const getStartAiFirstCohortMutationOptions = <
 	TError = ErrorType<ApiErrorBody>,
@@ -1302,7 +1315,7 @@ export const getStartAiFirstCohortMutationOptions = <
 	StartAiFirstCohortMutationVariables,
 	TContext
 > => {
-	const mutationKey = ['startAiFirstCohort'];
+	const mutationKey = getStartAiFirstCohortMutationKey();
 	const { mutation: mutationOptions, request: requestOptions } = options
 		? options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey
 			? options
@@ -1388,6 +1401,8 @@ export const closeAiFirstCohort = async (
 	);
 };
 
+export const getCloseAiFirstCohortMutationKey = () => ['closeAiFirstCohort'] as const;
+
 export const getCloseAiFirstCohortMutationOptions = <
 	TError = ErrorType<ApiErrorBody>,
 	TContext = unknown
@@ -1405,7 +1420,7 @@ export const getCloseAiFirstCohortMutationOptions = <
 	CloseAiFirstCohortMutationVariables,
 	TContext
 > => {
-	const mutationKey = ['closeAiFirstCohort'];
+	const mutationKey = getCloseAiFirstCohortMutationKey();
 	const { mutation: mutationOptions, request: requestOptions } = options
 		? options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey
 			? options
@@ -1492,8 +1507,19 @@ export const drawAiFirstAudit = async (
 	): Record<string, string | readonly string[]> => {
 		if (!h) return {};
 		if (h instanceof Headers) return Object.fromEntries(h.entries());
-		if (Array.isArray(h)) return Object.fromEntries(h);
-		return h;
+		if (Symbol.iterator in h) {
+			return Object.fromEntries(
+				Array.from(
+					h as Iterable<Iterable<string>>,
+					(entry) => Array.from(entry) as [string, string]
+				)
+			);
+		}
+		const headers: Record<string, string | readonly string[]> = {};
+		for (const [name, value] of Object.entries<string | readonly string[] | undefined>(h)) {
+			if (value !== undefined) headers[name] = value;
+		}
+		return headers;
 	};
 	return customFetch<drawAiFirstAuditResponseSuccess>(
 		getDrawAiFirstAuditUrl(projectId, cohortId),
@@ -1505,6 +1531,8 @@ export const drawAiFirstAudit = async (
 		}
 	);
 };
+
+export const getDrawAiFirstAuditMutationKey = () => ['drawAiFirstAudit'] as const;
 
 export const getDrawAiFirstAuditMutationOptions = <
 	TError = ErrorType<ApiErrorBody>,
@@ -1523,7 +1551,7 @@ export const getDrawAiFirstAuditMutationOptions = <
 	DrawAiFirstAuditMutationVariables,
 	TContext
 > => {
-	const mutationKey = ['drawAiFirstAudit'];
+	const mutationKey = getDrawAiFirstAuditMutationKey();
 	const { mutation: mutationOptions, request: requestOptions } = options
 		? options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey
 			? options
@@ -1610,6 +1638,8 @@ export const evaluateAiFirstAudit = async (
 	);
 };
 
+export const getEvaluateAiFirstAuditMutationKey = () => ['evaluateAiFirstAudit'] as const;
+
 export const getEvaluateAiFirstAuditMutationOptions = <
 	TError = ErrorType<ApiErrorBody>,
 	TContext = unknown
@@ -1627,7 +1657,7 @@ export const getEvaluateAiFirstAuditMutationOptions = <
 	EvaluateAiFirstAuditMutationVariables,
 	TContext
 > => {
-	const mutationKey = ['evaluateAiFirstAudit'];
+	const mutationKey = getEvaluateAiFirstAuditMutationKey();
 	const { mutation: mutationOptions, request: requestOptions } = options
 		? options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey
 			? options
@@ -1714,8 +1744,19 @@ export const finalizeAiFirstCohort = async (
 	): Record<string, string | readonly string[]> => {
 		if (!h) return {};
 		if (h instanceof Headers) return Object.fromEntries(h.entries());
-		if (Array.isArray(h)) return Object.fromEntries(h);
-		return h;
+		if (Symbol.iterator in h) {
+			return Object.fromEntries(
+				Array.from(
+					h as Iterable<Iterable<string>>,
+					(entry) => Array.from(entry) as [string, string]
+				)
+			);
+		}
+		const headers: Record<string, string | readonly string[]> = {};
+		for (const [name, value] of Object.entries<string | readonly string[] | undefined>(h)) {
+			if (value !== undefined) headers[name] = value;
+		}
+		return headers;
 	};
 	return customFetch<finalizeAiFirstCohortResponseSuccess>(
 		getFinalizeAiFirstCohortUrl(projectId, cohortId),
@@ -1727,6 +1768,8 @@ export const finalizeAiFirstCohort = async (
 		}
 	);
 };
+
+export const getFinalizeAiFirstCohortMutationKey = () => ['finalizeAiFirstCohort'] as const;
 
 export const getFinalizeAiFirstCohortMutationOptions = <
 	TError = ErrorType<ApiErrorBody>,
@@ -1745,7 +1788,7 @@ export const getFinalizeAiFirstCohortMutationOptions = <
 	FinalizeAiFirstCohortMutationVariables,
 	TContext
 > => {
-	const mutationKey = ['finalizeAiFirstCohort'];
+	const mutationKey = getFinalizeAiFirstCohortMutationKey();
 	const { mutation: mutationOptions, request: requestOptions } = options
 		? options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey
 			? options
@@ -1832,6 +1875,8 @@ export const recoverAiFirstCohort = async (
 	);
 };
 
+export const getRecoverAiFirstCohortMutationKey = () => ['recoverAiFirstCohort'] as const;
+
 export const getRecoverAiFirstCohortMutationOptions = <
 	TError = ErrorType<ApiErrorBody>,
 	TContext = unknown
@@ -1849,7 +1894,7 @@ export const getRecoverAiFirstCohortMutationOptions = <
 	RecoverAiFirstCohortMutationVariables,
 	TContext
 > => {
-	const mutationKey = ['recoverAiFirstCohort'];
+	const mutationKey = getRecoverAiFirstCohortMutationKey();
 	const { mutation: mutationOptions, request: requestOptions } = options
 		? options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey
 			? options
