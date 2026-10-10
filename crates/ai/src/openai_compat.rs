@@ -11,7 +11,7 @@ use serde_json::{Value, json};
 use crate::{
     AiError, AiFuture, AiGateway, ChatCompletion, ChatGateway, ChatMessage, ChatRequest,
     ChatTextSink, ChatToolCall, CompletionRequest, GatewayCompletion, GroundedBlock,
-    GroundingContextBuilder, ProviderEndpoint, ToolDeclaration, estimate_tokens,
+    GroundingContextBuilder, ProviderEndpoint, ToolDeclaration, canonical_json, estimate_tokens,
 };
 
 const MAX_ATTEMPTS: usize = 3;
@@ -664,7 +664,8 @@ pub fn structured_request_body(
     }
     let system = format!(
         "{system_prompt}\n\nRespond with a single JSON object and nothing else (no Markdown, no prose). \
-         It must validate against this JSON Schema:\n{schema}"
+         It must validate against this JSON Schema:\n{}",
+        canonical_json(schema)
     );
     let mut body = base_body(
         dialect,

@@ -2071,103 +2071,6 @@ export const createCreateWorkflowFromTemplate = <
 		queryClient
 	);
 };
-export type deleteWorkflowResponse204 = {
-	data: void;
-	status: 204;
-};
-
-export type deleteWorkflowResponse404 = {
-	data: ApiErrorBody;
-	status: 404;
-};
-
-export type deleteWorkflowResponseSuccess = deleteWorkflowResponse204 & {
-	headers: Headers;
-};
-export type deleteWorkflowResponseError = deleteWorkflowResponse404 & {
-	headers: Headers;
-};
-
-export const getDeleteWorkflowUrl = (projectId: string, workflowId: string) => {
-	return `/api/projects/${projectId}/automations/workflows/${workflowId}`;
-};
-
-export const deleteWorkflow = async (
-	projectId: string,
-	workflowId: string,
-	options?: Parameters<typeof customFetch>[1]
-): Promise<deleteWorkflowResponseSuccess> => {
-	return customFetch<deleteWorkflowResponseSuccess>(getDeleteWorkflowUrl(projectId, workflowId), {
-		...options,
-		method: 'DELETE'
-	});
-};
-
-export const getDeleteWorkflowMutationKey = () => ['deleteWorkflow'] as const;
-
-export const getDeleteWorkflowMutationOptions = <
-	TError = ErrorType<ApiErrorBody>,
-	TContext = unknown
->(options?: {
-	mutation?: CreateMutationOptions<
-		Awaited<ReturnType<typeof deleteWorkflow>>,
-		TError,
-		DeleteWorkflowMutationVariables,
-		TContext
-	>;
-	request?: SecondParameter<typeof customFetch>;
-}): CreateMutationOptions<
-	Awaited<ReturnType<typeof deleteWorkflow>>,
-	TError,
-	DeleteWorkflowMutationVariables,
-	TContext
-> => {
-	const mutationKey = getDeleteWorkflowMutationKey();
-	const { mutation: mutationOptions, request: requestOptions } = options
-		? options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey
-			? options
-			: { ...options, mutation: { ...options.mutation, mutationKey } }
-		: { mutation: { mutationKey }, request: undefined };
-
-	const mutationFn: MutationFunction<
-		Awaited<ReturnType<typeof deleteWorkflow>>,
-		DeleteWorkflowMutationVariables
-	> = (props) => {
-		const { projectId, workflowId } = props ?? {};
-
-		return deleteWorkflow(projectId, workflowId, requestOptions);
-	};
-
-	return { mutationFn, ...mutationOptions };
-};
-
-export type DeleteWorkflowMutationResult = NonNullable<Awaited<ReturnType<typeof deleteWorkflow>>>;
-
-export type DeleteWorkflowMutationError = ErrorType<ApiErrorBody>;
-export type DeleteWorkflowMutationVariables = { projectId: string; workflowId: string };
-
-export const createDeleteWorkflow = <TError = ErrorType<ApiErrorBody>, TContext = unknown>(
-	options?: () => {
-		mutation?: CreateMutationOptions<
-			Awaited<ReturnType<typeof deleteWorkflow>>,
-			TError,
-			DeleteWorkflowMutationVariables,
-			TContext
-		>;
-		request?: SecondParameter<typeof customFetch>;
-	},
-	queryClient?: () => QueryClient
-): CreateMutationResult<
-	Awaited<ReturnType<typeof deleteWorkflow>>,
-	TError,
-	DeleteWorkflowMutationVariables,
-	TContext
-> => {
-	return createMutation(
-		() => ({ ...getDeleteWorkflowMutationOptions(options?.()) }),
-		queryClient
-	);
-};
 export type getWorkflowResponse200 = {
 	data: WorkflowDto;
 	status: 200;
@@ -2405,6 +2308,103 @@ export const createUpdateWorkflow = <TError = ErrorType<ApiErrorBody>, TContext 
 > => {
 	return createMutation(
 		() => ({ ...getUpdateWorkflowMutationOptions(options?.()) }),
+		queryClient
+	);
+};
+export type deleteWorkflowResponse204 = {
+	data: void;
+	status: 204;
+};
+
+export type deleteWorkflowResponse404 = {
+	data: ApiErrorBody;
+	status: 404;
+};
+
+export type deleteWorkflowResponseSuccess = deleteWorkflowResponse204 & {
+	headers: Headers;
+};
+export type deleteWorkflowResponseError = deleteWorkflowResponse404 & {
+	headers: Headers;
+};
+
+export const getDeleteWorkflowUrl = (projectId: string, workflowId: string) => {
+	return `/api/projects/${projectId}/automations/workflows/${workflowId}`;
+};
+
+export const deleteWorkflow = async (
+	projectId: string,
+	workflowId: string,
+	options?: Parameters<typeof customFetch>[1]
+): Promise<deleteWorkflowResponseSuccess> => {
+	return customFetch<deleteWorkflowResponseSuccess>(getDeleteWorkflowUrl(projectId, workflowId), {
+		...options,
+		method: 'DELETE'
+	});
+};
+
+export const getDeleteWorkflowMutationKey = () => ['deleteWorkflow'] as const;
+
+export const getDeleteWorkflowMutationOptions = <
+	TError = ErrorType<ApiErrorBody>,
+	TContext = unknown
+>(options?: {
+	mutation?: CreateMutationOptions<
+		Awaited<ReturnType<typeof deleteWorkflow>>,
+		TError,
+		DeleteWorkflowMutationVariables,
+		TContext
+	>;
+	request?: SecondParameter<typeof customFetch>;
+}): CreateMutationOptions<
+	Awaited<ReturnType<typeof deleteWorkflow>>,
+	TError,
+	DeleteWorkflowMutationVariables,
+	TContext
+> => {
+	const mutationKey = getDeleteWorkflowMutationKey();
+	const { mutation: mutationOptions, request: requestOptions } = options
+		? options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey
+			? options
+			: { ...options, mutation: { ...options.mutation, mutationKey } }
+		: { mutation: { mutationKey }, request: undefined };
+
+	const mutationFn: MutationFunction<
+		Awaited<ReturnType<typeof deleteWorkflow>>,
+		DeleteWorkflowMutationVariables
+	> = (props) => {
+		const { projectId, workflowId } = props ?? {};
+
+		return deleteWorkflow(projectId, workflowId, requestOptions);
+	};
+
+	return { mutationFn, ...mutationOptions };
+};
+
+export type DeleteWorkflowMutationResult = NonNullable<Awaited<ReturnType<typeof deleteWorkflow>>>;
+
+export type DeleteWorkflowMutationError = ErrorType<ApiErrorBody>;
+export type DeleteWorkflowMutationVariables = { projectId: string; workflowId: string };
+
+export const createDeleteWorkflow = <TError = ErrorType<ApiErrorBody>, TContext = unknown>(
+	options?: () => {
+		mutation?: CreateMutationOptions<
+			Awaited<ReturnType<typeof deleteWorkflow>>,
+			TError,
+			DeleteWorkflowMutationVariables,
+			TContext
+		>;
+		request?: SecondParameter<typeof customFetch>;
+	},
+	queryClient?: () => QueryClient
+): CreateMutationResult<
+	Awaited<ReturnType<typeof deleteWorkflow>>,
+	TError,
+	DeleteWorkflowMutationVariables,
+	TContext
+> => {
+	return createMutation(
+		() => ({ ...getDeleteWorkflowMutationOptions(options?.()) }),
 		queryClient
 	);
 };

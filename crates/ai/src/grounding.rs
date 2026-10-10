@@ -1,4 +1,4 @@
-use crate::GroundedBlock;
+use crate::{GroundedBlock, canonical_json};
 
 pub struct GroundingContextBuilder;
 impl GroundingContextBuilder {
@@ -18,8 +18,9 @@ impl GroundingContextBuilder {
                 "content_hash": block.evidence.content_hash,
                 "text": block.text,
             });
-            let encoded = data
-                .to_string()
+            // Canonical JSON text: the prompt bytes must not depend on the
+            // serde_json map backend, so evidence embedding is byte-stable.
+            let encoded = canonical_json(&data)
                 .replace('<', "\\u003c")
                 .replace('>', "\\u003e")
                 .replace('&', "\\u0026");

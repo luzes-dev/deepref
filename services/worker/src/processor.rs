@@ -1363,14 +1363,14 @@ async fn finalize_compiled_candidate(
                     final_attempt_id: attempt_id,
                     predecessors: std::slice::from_ref(&predecessor_input),
                     outcome: deepref_postgres::ReviewOutcome::Candidate {
-                        proposal: deepref_ai::AiProposal {
+                        proposal: Box::new(deepref_ai::AiProposal {
                             id: Uuid::new_v4(),
                             draft: executed.proposal,
                             model_run_id: executed.model_run_id,
                             status: deepref_ai::ProposalStatus::Pending,
                             resolved_at: None,
                             resolved_by_actor_id: None,
-                        },
+                        }),
                     },
                     automation_step_id: automation_step.id,
                     worker_id: owner,

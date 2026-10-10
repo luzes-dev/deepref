@@ -11,11 +11,15 @@ use crate::ReviewError;
 /// One byte changed means the digest changed, which is correct for
 /// content-addressing and reuse keys. This is never scientific identity:
 /// calibration compatibility is decided by [`crate::ReviewSemanticContract`],
-/// whose aggregate id does not use JSON at all. The serialization here is
-/// byte-stable (structs in declaration order, maps sorted by key), so Cargo
-/// features such as `serde_json/preserve_order` cannot change these digests;
-/// even if they did, the failure mode would be a cache miss, never a
-/// calibration invalidation.
+/// whose aggregate id does not use JSON at all.
+///
+/// Ordering rules, so `serde_json` Cargo features cannot silently move these
+/// digests: structs serialize in declaration order in every map backend, and
+/// `Value` inputs must be canonicalized (recursively sorted keys) before they
+/// reach this function — see `deepref_ai::canonical_json_value`. A `Value`
+/// hashed here in insertion order would move under `preserve_order`; even
+/// then the failure mode would be a cache miss, never a calibration
+/// invalidation.
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord, Hash, Serialize, Deserialize)]
 #[serde(transparent)]
 pub struct ReviewHash(String);

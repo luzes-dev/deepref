@@ -609,9 +609,24 @@ impl fmt::Display for RequestKey {
 }
 
 pub fn hash_json(value: &Value) -> Result<String, AiError> {
-    let bytes = serde_json::to_vec(&canonicalize(value))
+    let bytes = serde_json::to_vec(&canonical_json_value(value))
         .map_err(|_| AiError::InputSerialization("canonical JSON".to_owned()))?;
     Ok(sha256_bytes(&bytes))
+}
+
+/// Canonical form of a JSON value: objects with recursively sorted keys,
+/// arrays in order. Hashing or printing this form is immune to the
+/// `serde_json` map backend (`preserve_order` or not), so use it whenever a
+/// `Value` feeds a digest or is embedded into prompt text.
+pub fn canonical_json_value(value: &Value) -> Value {
+    canonicalize(value)
+}
+
+/// Canonical JSON text of a value, for embedding JSON inside prompts or wire
+/// text deterministically. Falls back to compact display on the practically
+/// impossible serialization failure, so prompt rendering stays infallible.
+pub fn canonical_json(value: &Value) -> String {
+    serde_json::to_string(&canonical_json_value(value)).unwrap_or_else(|_| value.to_string())
 }
 
 pub fn sha256_bytes(bytes: &[u8]) -> String {

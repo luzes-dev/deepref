@@ -497,7 +497,9 @@ fn parse_report(
         name: response.name.clone(),
         fixture: response.fixture.clone(),
         description: outcome.description,
-        hash: ReviewHash::digest_input(&outcome.value)?,
+        // Canonicalized: the outcome is assembled key by key, and only its
+        // semantic content identifies behavior, never map insertion order.
+        hash: ReviewHash::digest_input(&deepref_ai::canonical_json_value(&outcome.value))?,
     })
 }
 
