@@ -87,6 +87,9 @@ pub(crate) fn map_ai_error(error: AiError) -> ApiError {
         AiError::Persistence(message) | AiError::Proposal(message) => {
             ApiError::Internal(anyhow::anyhow!(message))
         }
+        AiError::Cassette(message) => {
+            ApiError::Internal(anyhow::anyhow!("cassette replay refused: {message}"))
+        }
         AiError::PromptRegistry(message) | AiError::InvalidEmbedding(message) => {
             ApiError::BadRequest(message)
         }

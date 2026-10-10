@@ -42,6 +42,11 @@ pub enum AiError {
     /// does not help until the window resets.
     #[error("AI subscription limit reached; try again later")]
     SubscriptionLimit,
+    /// A cassette replay was refused: the log is incompatible with this
+    /// agent, or a replayed dispatch diverged from the recording. Fails
+    /// closed; never silently continues.
+    #[error("cassette replay refused: {0}")]
+    Cassette(String),
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize, JsonSchema)]

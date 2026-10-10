@@ -17,6 +17,7 @@
 //!   recorder; replay fixtures arrive with the cassette module (PR4).
 
 mod agent;
+mod cassette;
 mod context;
 mod hooks;
 mod model;
@@ -26,6 +27,7 @@ mod tools;
 mod tests;
 
 pub use agent::{RigTurn, RigTurnOutcome, run_rig_turn, run_rig_turn_channel};
+pub use cassette::{AssistantCassette, ReplayTurn, replay_rig_turn};
 pub use context::{AssistantToolHost, DeepRefAgentContext};
 pub use hooks::{BUDGET_STOP_REASON, DeepRefHooks, TOKEN_STOP_REASON};
 pub use model::{AgentModelFactory, OpenAiCompatModelFactory, StaticModelFactory};

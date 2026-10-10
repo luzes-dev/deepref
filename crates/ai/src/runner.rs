@@ -584,6 +584,7 @@ pub fn safe_error_metadata(error: &AiError) -> SafeErrorMetadata {
         AiError::InvalidEmbedding(_) => "invalid_embedding",
         AiError::BudgetExceeded => "budget_exceeded",
         AiError::SubscriptionLimit => "subscription_limit",
+        AiError::Cassette(_) => "cassette_replay_refused",
     };
     let message = match code {
         "gateway" => "provider request failed",
