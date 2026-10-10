@@ -1,4 +1,5 @@
 {
+  "semantic_version": 1,
   "golden_render": "b4a8c7134fb2c7ffee1a351d9605645e4545e6df79681255f4415d74a4936855",
   "golden_parse": "7e6297439aaf634c85550d8907c56def1b2ff4ecacc54c140fedf61c395c55f8",
   "render": [

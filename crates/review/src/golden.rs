@@ -23,15 +23,19 @@
 //!
 //! The committed snapshot `golden/screening-fingerprints.json` is the code-review
 //! mechanism. The `golden_snapshot_is_current` test fails when the computed report
-//! differs from it. When the change is intended, review the diff and re-bless:
+//! differs from it, with a readable diff of the changed fixtures. When the change
+//! is intended, bump `SCREENING_SEMANTIC_VERSION`, review the diff and re-bless:
 //!
 //! ```text
 //! DEEPREF_BLESS_GOLDEN=1 cargo test -p deepref-review golden
 //! ```
 //!
-//! No version number is bumped by hand. The fixtures are JSON and text, so the
-//! data is reviewable on its own; expected acceptance and rejection of each
-//! response is asserted by the tests.
+//! The snapshot records the semantic version it was blessed at, and
+//! `golden_snapshot_version_matches_the_screening_semantic_version` fails when
+//! the constant and the snapshot disagree, so re-blessing without a version
+//! bump fails CI. No other manual step updates the snapshot: the fixtures are
+//! JSON and text, so the data is reviewable on its own; expected acceptance and
+//! rejection of each response is asserted by the tests.
 
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -93,8 +97,11 @@ fn golden_report() -> Result<&'static GoldenReport, ReviewError> {
 
 /// The full golden result. The two fingerprints are digests of its `render` and
 /// `parse` sections, which are also the reviewable content of the snapshot.
+/// `semantic_version` records the screening semantic version the snapshot was
+/// blessed at: CI requires a bump before a changed snapshot can be re-blessed.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 struct GoldenReport {
+    semantic_version: u32,
     golden_render: ReviewHash,
     golden_parse: ReviewHash,
     render: Vec<RenderReport>,
@@ -134,6 +141,7 @@ fn build_report() -> Result<GoldenReport, ReviewError> {
         parse.push(parse_report(&definition, &fixtures, &response)?);
     }
     Ok(GoldenReport {
+        semantic_version: crate::SCREENING_SEMANTIC_VERSION,
         golden_render: ReviewHash::digest_json(&render)?,
         golden_parse: ReviewHash::digest_json(&parse)?,
         render,
@@ -692,6 +700,17 @@ mod tests {
     }
 
     #[test]
+    fn golden_snapshot_version_matches_the_screening_semantic_version() {
+        let snapshot: Value = serde_json::from_str(SNAPSHOT).expect("committed snapshot parses");
+        assert_eq!(
+            snapshot.get("semantic_version").and_then(Value::as_u64),
+            Some(u64::from(crate::SCREENING_SEMANTIC_VERSION)),
+            "re-blessing a changed snapshot without bumping \
+             SCREENING_SEMANTIC_VERSION fails here"
+        );
+    }
+
+    #[test]
     fn golden_snapshot_is_current() {
         let report = golden_report().expect("golden fixtures compute");
         let text = snapshot_text(report).expect("snapshot serializes");
@@ -700,15 +719,157 @@ mod tests {
             return;
         }
         if text != SNAPSHOT {
-            let line = text
-                .lines()
-                .zip(SNAPSHOT.lines())
-                .position(|(computed, committed)| computed != committed)
-                .map_or(0, |index| index + 1);
             panic!(
-                "screening semantics changed; review the diff and re-bless with DEEPREF_BLESS_GOLDEN=1 cargo test -p deepref-review golden (first difference at snapshot line {line})"
+                "Review behavior changed.\n\
+                 \n\
+                 If this is intentional:\n\
+                 1. inspect the semantic diff below,\n\
+                 2. bump SCREENING_SEMANTIC_VERSION in crates/review/src/contract.rs,\n\
+                 3. update the reviewed semantic snapshot with \
+                 DEEPREF_BLESS_GOLDEN=1 cargo test -p deepref-review golden.\n\
+                 \n\
+                 If this is unintended:\n\
+                 restore the previous behavior.\n\
+                 \n\
+                 {}\n\
+                 (first snapshot line difference at line {})",
+                describe_golden_diff(report),
+                text.lines()
+                    .zip(SNAPSHOT.lines())
+                    .position(|(computed, committed)| computed != committed)
+                    .map_or(0, |index| index + 1),
             );
         }
+    }
+
+    /// A readable summary of what changed between the computed report and the
+    /// committed snapshot: fixture names and outcome descriptions, not hashes.
+    fn describe_golden_diff(report: &GoldenReport) -> String {
+        const MAX_LINES: usize = 40;
+        let mut lines = Vec::new();
+        let committed: Value = match serde_json::from_str(SNAPSHOT) {
+            Ok(value) => value,
+            Err(_) => return "the committed snapshot is not valid JSON".to_owned(),
+        };
+        let computed = serde_json::to_value(report).unwrap_or(Value::Null);
+        let committed_version = committed.get("semantic_version");
+        let computed_version = computed.get("semantic_version");
+        if committed_version != computed_version {
+            lines.push(format!(
+                "semantic_version: {committed_version:?} -> {computed_version:?}"
+            ));
+        }
+        if committed.get("golden_render") != computed.get("golden_render") {
+            diff_sections(
+                &committed,
+                &computed,
+                "render",
+                "fixture",
+                &mut lines,
+                render_entry_diff,
+            );
+        }
+        if committed.get("golden_parse") != computed.get("golden_parse") {
+            diff_sections(
+                &committed,
+                &computed,
+                "parse",
+                "name",
+                &mut lines,
+                parse_entry_diff,
+            );
+        }
+        if lines.is_empty() {
+            lines.push("the snapshot text changed without a semantic change".to_owned());
+        }
+        lines.truncate(MAX_LINES);
+        if lines.len() == MAX_LINES {
+            lines.push("... truncated".to_owned());
+        }
+        lines.join("\n")
+    }
+
+    /// Diffs one snapshot section (`render` or `parse`) entry by entry, keyed
+    /// by `key` (`fixture` or `name`), describing each change with `describe`.
+    fn diff_sections(
+        committed: &Value,
+        computed: &Value,
+        section: &str,
+        key: &str,
+        lines: &mut Vec<String>,
+        describe: impl Fn(&str, &Value, &Value, &mut Vec<String>),
+    ) {
+        fn by_key<'v>(section: &'v Value, key: &str) -> BTreeMap<String, &'v Value> {
+            section
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter_map(|entry| {
+                    entry
+                        .get(key)
+                        .and_then(Value::as_str)
+                        .map(|name| (name.to_owned(), entry))
+                })
+                .collect()
+        }
+        let before = by_key(&committed[section], key);
+        let after = by_key(&computed[section], key);
+        for name in before.keys().chain(after.keys()).collect::<BTreeSet<_>>() {
+            match (before.get(name), after.get(name)) {
+                (Some(old), Some(new)) if old != new => describe(name, old, new, lines),
+                (None, _) => lines.push(format!("{section} entry added: {name}")),
+                (_, None) => lines.push(format!("{section} entry removed: {name}")),
+                _ => {}
+            }
+        }
+    }
+
+    /// Names the nodes whose rendered request changed for one render fixture.
+    fn render_entry_diff(name: &str, old: &Value, new: &Value, lines: &mut Vec<String>) {
+        if old.get("subject") != new.get("subject") || old.get("protocol") != new.get("protocol") {
+            lines.push(format!(
+                "render fixture {name}: subject or protocol changed"
+            ));
+        }
+        let requests = |entry: &Value| {
+            entry
+                .get("requests")
+                .and_then(Value::as_object)
+                .map(|object| {
+                    object
+                        .iter()
+                        .map(|(node, hash)| (node.clone(), hash.clone()))
+                        .collect::<BTreeMap<_, _>>()
+                })
+                .unwrap_or_default()
+        };
+        let (before, after) = (requests(old), requests(new));
+        for node in before.keys().chain(after.keys()).collect::<BTreeSet<_>>() {
+            if before.get(node) != after.get(node) {
+                lines.push(format!(
+                    "render fixture {name}: node {node} request changed"
+                ));
+            }
+        }
+    }
+
+    /// Shows the before/after outcome description of one changed parse response.
+    fn parse_entry_diff(name: &str, old: &Value, new: &Value, lines: &mut Vec<String>) {
+        let description = |entry: &Value| {
+            entry
+                .get("description")
+                .and_then(Value::as_str)
+                .unwrap_or("(no description)")
+                .to_owned()
+        };
+        lines.push(format!(
+            "parse response {name} (fixture {}):\n  - {}\n  + {}",
+            new.get("fixture")
+                .and_then(Value::as_str)
+                .unwrap_or("(unknown fixture)"),
+            description(old),
+            description(new),
+        ));
     }
 
     #[test]
@@ -924,14 +1085,17 @@ mod tests {
     }
 
     #[test]
-    fn request_and_outcome_canonicalization_assumes_sorted_json_objects() {
-        // Object keys are sorted by serde_json's default map. The fingerprints
-        // rely on it, so enabling `preserve_order` anywhere in the workspace
-        // must fail here, with a clear reason, before it changes the snapshot.
-        assert_eq!(
-            json!({"b": 1, "a": 2}).to_string(),
-            r#"{"a":2,"b":1}"#,
-            "serde_json object keys must be sorted for the golden fingerprints"
-        );
+    fn request_and_outcome_hashes_ignore_json_object_order() {
+        // hash_json canonicalizes objects through sorted keys, so key order in
+        // a Value — and the serde_json map backend selected by Cargo features
+        // such as preserve_order — cannot change reuse or fingerprint hashes.
+        // Arrays stay ordered: evidence and criteria order is semantic.
+        let inserted = json!({"b": 1, "a": 2, "nested": {"y": true, "x": [3, 2, 1]}});
+        let sorted = json!({"a": 2, "b": 1, "nested": {"x": [3, 2, 1], "y": true}});
+        assert_eq!(hash_json(&inserted), hash_json(&sorted));
+        let reordered = json!({"nested": {"x": [3, 2, 1], "y": true}, "a": 2, "b": 1});
+        assert_eq!(hash_json(&reordered), hash_json(&sorted));
+        let different_order = json!({"a": 2, "b": 1, "nested": {"x": [2, 3, 1], "y": true}});
+        assert_ne!(hash_json(&different_order), hash_json(&sorted));
     }
 }

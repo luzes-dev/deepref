@@ -35,11 +35,11 @@ use deepref_postgres::{
     schedule_prepared_review_run,
 };
 use deepref_review::{
-    CalibrationBundleId, IdentityComponent, ReviewDefinitionKey, ReviewOrigin, ReviewRunSnapshot,
-    ReviewRunState, ReviewScheduler, ReviewSubject, ScheduleReviewRun, SemanticIdentity,
+    CalibrationBundleId, ReviewDefinitionKey, ReviewOrigin, ReviewRunSnapshot, ReviewRunState,
+    ReviewScheduler, ReviewSemanticContract, ReviewSubject, ScheduleReviewRun, SemanticChange,
     worker::{
         AcceptedArtifactInput, CompiledReview, ExecutedReviewTask, PreparedReviewTask,
-        ReviewExecutionPlan, ReviewHash, ReviewRunManifest,
+        ReviewExecutionPlan, ReviewRunManifest,
     },
 };
 use serde_json::json;
@@ -215,14 +215,14 @@ async fn screening_identity(
     project_id: ProjectId,
     report_id: Uuid,
     stage: ScreeningStage,
-) -> SemanticIdentity {
+) -> ReviewSemanticContract {
     preview_screening_identity(pool, project_id.as_uuid(), report_id, ai_stage(stage))
         .await
         .expect("screening identity previews")
 }
 
 /// The identity a duplicate-detection review compiles to now.
-async fn duplicate_identity(pool: &PgPool, project_id: ProjectId) -> SemanticIdentity {
+async fn duplicate_identity(pool: &PgPool, project_id: ProjectId) -> ReviewSemanticContract {
     let task = prepared_task(project_id);
     let command = ScheduleReviewRun {
         project_id,
@@ -239,7 +239,7 @@ async fn duplicate_identity(pool: &PgPool, project_id: ProjectId) -> SemanticIde
 async fn calibrate(
     pool: &PgPool,
     project_id: ProjectId,
-    identity: SemanticIdentity,
+    identity: ReviewSemanticContract,
     status: ReviewCalibrationStatus,
 ) -> CalibrationBundleId {
     let id = CalibrationBundleId::new(Uuid::new_v4()).expect("bundle id");
@@ -323,8 +323,8 @@ async fn stored_identity_hash(
     pool: &PgPool,
     project_id: ProjectId,
     run: &ReviewRunSnapshot,
-) -> ReviewHash {
-    let hash: String = sqlx::query_scalar(
+) -> String {
+    sqlx::query_scalar(
         "SELECT semantic_bundle_hash FROM review_run_manifests
          WHERE project_id=$1 AND automation_run_id=$2",
     )
@@ -332,8 +332,7 @@ async fn stored_identity_hash(
     .bind(run.id.as_uuid())
     .fetch_one(pool)
     .await
-    .expect("stored semantic hash loads");
-    ReviewHash::parse(hash).expect("stored semantic hash is valid")
+    .expect("stored semantic hash loads")
 }
 
 async fn delete_project(pool: &PgPool, project_id: ProjectId) {
@@ -363,20 +362,18 @@ async fn automation_reviews_require_an_exact_passing_immutable_calibration_bundl
             .expect("reviewer-requested runs do not require calibration");
         assert_eq!(
             stored_identity_hash(&pool, project_id, &reviewer_run).await,
-            identity.aggregate_hash().expect("identity hashes"),
+            identity.id().as_str(),
             "the previewed identity is the one a run is compiled with"
         );
-        // The persisted scheme 2 identity carries the narrow implementation and
-        // dependency components the calibration gate compares.
-        for component in [
-            IdentityComponent::Implementation,
-            IdentityComponent::Dependencies,
-        ] {
-            assert!(
-                identity.components.contains_key(&component),
-                "missing {component:?}"
-            );
-        }
+        // The persisted scheme 3 contract carries the explicit semantic
+        // version the calibration gate compares; source-tree and dependency
+        // hashes live in provenance, never in this identity.
+        assert_eq!(identity.scheme, deepref_review::SEMANTIC_CONTRACT_SCHEME);
+        assert_eq!(
+            identity.semantic_version,
+            deepref_review::DUPLICATE_DETECTION_SEMANTIC_VERSION
+        );
+        assert_eq!(identity.models.len(), 1);
 
         let missing_id = CalibrationBundleId::new(Uuid::new_v4()).expect("bundle id");
         assert_eq!(
@@ -417,10 +414,7 @@ async fn automation_reviews_require_an_exact_passing_immutable_calibration_bundl
         );
 
         let mut earlier = identity.clone();
-        earlier.components.insert(
-            IdentityComponent::Models,
-            ReviewHash::digest_bytes("earlier model route"),
-        );
+        earlier.models[0].model_version = "earlier model route".to_owned();
         let stale_id =
             calibrate(&pool, project_id, earlier, ReviewCalibrationStatus::Passing).await;
         assert_eq!(
@@ -436,7 +430,7 @@ async fn automation_reviews_require_an_exact_passing_immutable_calibration_bundl
                 .map_err(ReviewPreparationError::from)
             ),
             CalibrationRefusal::Stale {
-                components: BTreeSet::from([IdentityComponent::Models]),
+                changes: BTreeSet::from([SemanticChange::Model]),
             }
         );
 
@@ -489,11 +483,7 @@ async fn calibration_admission_is_stage_scoped_and_fails_closed() {
     let title =
         screening_identity(&pool, project_id, report_id, ScreeningStage::TitleAbstract).await;
     let full = screening_identity(&pool, project_id, report_id, ScreeningStage::FullText).await;
-    assert_ne!(
-        title.aggregate_hash().expect("identity hashes"),
-        full.aggregate_hash().expect("identity hashes"),
-        "the stage is part of the identity"
-    );
+    assert_ne!(title.id(), full.id(), "the stage is part of the identity");
 
     let title_bundle = calibrate(
         &pool,
@@ -515,7 +505,7 @@ async fn calibration_admission_is_stage_scoped_and_fails_closed() {
     .expect("title/abstract admits its own bundle");
     assert_eq!(
         stored_identity_hash(&pool, project_id, &title_run).await,
-        title.aggregate_hash().expect("identity hashes"),
+        title.id().as_str(),
         "the admitted run carries the identity that was previewed"
     );
     screening_run(
@@ -640,7 +630,7 @@ async fn a_route_change_stales_only_the_stage_that_uses_it() {
             .await
         ),
         CalibrationRefusal::Stale {
-            components: BTreeSet::from([IdentityComponent::Models]),
+            changes: BTreeSet::from([SemanticChange::Model]),
         }
     );
     screening_run(
@@ -685,7 +675,7 @@ async fn a_route_change_stales_only_the_stage_that_uses_it() {
             .await
         ),
         CalibrationRefusal::Stale {
-            components: BTreeSet::from([IdentityComponent::Models]),
+            changes: BTreeSet::from([SemanticChange::Model]),
         }
     );
     screening_run(
@@ -728,7 +718,7 @@ async fn republishing_the_protocol_stales_both_stages_on_protocol() {
     publish_screening_protocol(&pool, project_id, "Adolescents with condition X").await;
 
     let protocol_only = CalibrationRefusal::Stale {
-        components: BTreeSet::from([IdentityComponent::Protocol]),
+        changes: BTreeSet::from([SemanticChange::Protocol]),
     };
     assert_eq!(
         refusal_of(

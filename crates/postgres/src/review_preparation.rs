@@ -11,8 +11,8 @@ use deepref_application::{
 };
 use deepref_domain::{Actor, ActorKind, StudyDesign};
 use deepref_review::{
-    ReviewFuture, ReviewOrigin, ReviewRunId, ReviewRunSnapshot, ReviewScheduler, ReviewSubject,
-    ScheduleReviewRun, SemanticIdentity,
+    ReviewFuture, ReviewOrigin, ReviewRunId, ReviewRunSnapshot, ReviewScheduler,
+    ReviewSemanticContract, ReviewSubject, ScheduleReviewRun,
     worker::{
         PreparedReviewTask, ScreeningExclusionReason, ScreeningSubjectSource,
         prepare_screening_task,
@@ -127,7 +127,7 @@ pub async fn preview_screening_identity(
     project_id: Uuid,
     report_id: Uuid,
     stage: ScreeningStage,
-) -> Result<SemanticIdentity, ReviewPreparationError> {
+) -> Result<ReviewSemanticContract, ReviewPreparationError> {
     let task = screening_task(pool, project_id, report_id, stage, None, None).await?;
     let actor = Actor::new(ActorKind::System, "identity-preview")
         .map_err(|error| ReviewPreparationError::InvalidInput(error.to_string()))?;

@@ -40,8 +40,9 @@ pub(crate) async fn ensure_current(
         )
         .await
         .ok()
-        .and_then(|i| i.aggregate_hash().ok())
-        .is_some_and(|h| h.as_str() == c.get::<String, _>("semantic_bundle_hash"))
+        .is_some_and(|contract| {
+            contract.id().as_str() == c.get::<String, _>("semantic_bundle_hash")
+        })
     } else {
         false
     };

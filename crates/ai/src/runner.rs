@@ -8,8 +8,8 @@ use uuid::Uuid;
 
 use crate::{
     AiContext, AiError, AiFuture, AiGateway, AiProposal, AiRunRecord, AiRunStatus, AiTaskKind,
-    AuthorityTier, CompletionRequest, GatewayCompletion, GroundedBlock, ModelProfile,
-    ResolvedModel, ReuseKeyInput, SafeErrorMetadata, TokenUsage, compute_reuse_hash, hash_json,
+    AuthorityTier, CompletionRequest, GatewayCompletion, GroundedBlock, ModelProfile, RequestKey,
+    ResolvedModel, ReuseKeyInput, SafeErrorMetadata, TokenUsage, hash_json,
 };
 
 pub trait ModelRouter: Send + Sync {
@@ -225,7 +225,7 @@ where
         let schema_hash = hash_json(&schema)?;
         let prompt_hash =
             hash_json(&json!({"system": context.system_prompt, "user": context.user_prompt}))?;
-        let reuse_hash = compute_reuse_hash(&ReuseKeyInput {
+        let request_key = RequestKey::from_reuse_input(&ReuseKeyInput {
             task_kind: task.kind().as_str().to_owned(),
             provider: route.provider.clone(),
             model: route.model.clone(),
@@ -241,6 +241,7 @@ where
             document_hash: context.document_hash.clone(),
             evidence_hash: evidence_hash.clone(),
         })?;
+        let reuse_hash = request_key.as_str().to_owned();
 
         if let Some(run) = self.store.find_reusable(project_id, &reuse_hash).await? {
             run.validate()?;

@@ -582,6 +582,32 @@ pub fn compute_reuse_hash(input: &ReuseKeyInput) -> Result<String, AiError> {
     )
 }
 
+/// Cache/reuse identity for one model call: can this exact or equivalent
+/// result be reused instead of making another provider request?
+///
+/// This is deliberately separate from calibration identity. If this encoding
+/// ever changes by accident, the failure mode is a cache miss (one extra
+/// model call), never a calibration invalidation. The hash canonicalizes
+/// objects through sorted keys, so `serde_json` map ordering cannot affect it.
+#[derive(Debug, Clone, PartialEq, Eq, Hash)]
+pub struct RequestKey(String);
+
+impl RequestKey {
+    pub fn from_reuse_input(input: &ReuseKeyInput) -> Result<Self, AiError> {
+        compute_reuse_hash(input).map(Self)
+    }
+
+    pub fn as_str(&self) -> &str {
+        &self.0
+    }
+}
+
+impl fmt::Display for RequestKey {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter.write_str(self.as_str())
+    }
+}
+
 pub fn hash_json(value: &Value) -> Result<String, AiError> {
     let bytes = serde_json::to_vec(&canonicalize(value))
         .map_err(|_| AiError::InputSerialization("canonical JSON".to_owned()))?;

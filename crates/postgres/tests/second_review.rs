@@ -18,8 +18,7 @@ use deepref_postgres::{
     second_review_status, set_autonomy_level, sweep_second_reviews,
 };
 use deepref_review::{
-    CalibrationBundleId, IdentityComponent, ReviewDefinitionKey, SemanticIdentity,
-    worker::ReviewHash,
+    CalibrationBundleId, ContentDigest, ProtocolDigest, ReviewDefinitionKey, ReviewSemanticContract,
 };
 use serde_json::json;
 use sqlx::{PgPool, Postgres, Transaction, postgres::PgPoolOptions};
@@ -180,14 +179,14 @@ async fn identity(
     project_id: Uuid,
     report_id: Uuid,
     stage: ScreeningStage,
-) -> SemanticIdentity {
+) -> ReviewSemanticContract {
     preview_screening_identity(pool, project_id, report_id, stage)
         .await
         .expect("screening identity previews")
 }
 
 /// Legacy consequential calibration remains separate from advisory admission.
-async fn approve_calibration(pool: &PgPool, project_id: Uuid, identity: SemanticIdentity) {
+async fn approve_calibration(pool: &PgPool, project_id: Uuid, identity: ReviewSemanticContract) {
     insert_review_calibration_bundle(
         pool,
         ReviewCalibrationBundleInput {
@@ -336,10 +335,7 @@ async fn stale_calibration_does_not_block_advisory_or_grant_scientific_authority
     publish_protocol_for(&pool, project_id).await;
     let report = waiting_record(&pool, project_id, "Stale evidence advisory").await;
     let mut stale = identity(&pool, project_id, report, ScreeningStage::TitleAbstract).await;
-    stale.components.insert(
-        IdentityComponent::Protocol,
-        ReviewHash::digest_bytes("old protocol"),
-    );
+    stale.protocol = ProtocolDigest::from_content(ContentDigest::of_bytes("old protocol"));
     approve_calibration(&pool, project_id, stale).await;
     sweep_second_reviews(&pool).await.unwrap();
     assert_eq!(attempts(&pool, project_id).await, 1);

@@ -190,9 +190,7 @@ pub async fn start_ai_first_cohort(
         deepref_ai::ScreeningStage::TitleAbstract,
     )
     .await?;
-    let hash = identity
-        .aggregate_hash()
-        .map_err(|e| AiFirstError::Invalid(e.to_string()))?;
+    let contract_id = identity.id();
     let protocol = crate::get_published_protocol(pool, project)
         .await
         .map_err(|e| AiFirstError::Refused(e.to_string()))?;
@@ -223,7 +221,7 @@ pub async fn start_ai_first_cohort(
     let id = Uuid::new_v4();
     sqlx::query("INSERT INTO ai_screening_cohorts(id,project_id,protocol_version_id,semantic_bundle_hash,semantic_identity,policy_version,target_percent,approved_by)
       VALUES($1,$2,$3,$4,$5,1,$6,$7)")
-        .bind(id).bind(project).bind(protocol.id).bind(hash.as_str()).bind(serde_json::to_value(&identity)?)
+        .bind(id).bind(project).bind(protocol.id).bind(contract_id.as_str()).bind(serde_json::to_value(&identity)?)
         .bind(target as i32).bind(actor.id()).execute(&mut *tx).await?;
     let members = sqlx::query(
         "INSERT INTO ai_screening_cohort_members(project_id,cohort_id,report_id,evaluated_revision)

@@ -98,9 +98,9 @@ async fn record_gate(
     match refusal {
         Some(refusal) => {
             let reasons = match refusal {
-                CalibrationRefusal::Stale { components } => components
+                CalibrationRefusal::Stale { changes } => changes
                     .iter()
-                    .map(|component| component.as_str().to_owned())
+                    .map(|change| change.as_str().to_owned())
                     .collect::<Vec<_>>(),
                 _ => Vec::new(),
             };

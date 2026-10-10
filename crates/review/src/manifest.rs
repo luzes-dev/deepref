@@ -1,11 +1,11 @@
 use deepref_ai::{ModelProfile, ProviderEndpoint};
-use deepref_domain::{ProjectId, ProtocolVersionId};
+use deepref_domain::{ProjectId, ProtocolVersionId, ScreeningStage};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
 use crate::{
-    CompiledReviewDefinition, ReviewDefinitionKey, ReviewError, ReviewHash, ReviewOrigin,
-    ReviewSubject,
+    BuildProvenance, CompiledReviewDefinition, ReviewDefinitionKey, ReviewError, ReviewHash,
+    ReviewOrigin, ReviewSemanticContract, ReviewSubject,
     identity::{
         IdentityComponent, SemanticIdentity, dependency_fingerprint, implementation_fingerprint,
     },
@@ -108,9 +108,19 @@ pub struct ReviewRunManifest {
     pub runtime: ReviewRuntimeIdentity,
     /// Named components of `semantic_bundle_hash`. Manifests persisted before
     /// identity scheme 2 have none and can never match current evidence.
+    /// Kept in parallel while calibration migrates to [`ReviewSemanticContract`];
+    /// scheme 2 is no longer admitted for new calibration.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub semantic_identity: Option<SemanticIdentity>,
     pub semantic_bundle_hash: ReviewHash,
+    /// The structured semantic contract: the only identity that gates
+    /// calibration compatibility. Absent in manifests persisted before the
+    /// contract migration; those manifests can never admit new calibration.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub semantic_contract: Option<ReviewSemanticContract>,
+    /// What exact software produced this run: audit only, never calibration.
+    #[serde(default)]
+    pub provenance: BuildProvenance,
     pub manifest_hash: ReviewHash,
 }
 
@@ -120,6 +130,20 @@ impl ReviewRunManifest {
         self.semantic_identity
             .as_ref()
             .map_or(1, |identity| identity.scheme)
+    }
+
+    /// The structured semantic contract id of this run: what
+    /// `review_run_manifests.semantic_bundle_hash` and calibration bundles
+    /// store. Absent in manifests persisted before the contract migration.
+    pub fn semantic_contract_id(&self) -> Result<crate::SemanticContractId, ReviewError> {
+        self.semantic_contract
+            .as_ref()
+            .map(|contract| contract.id())
+            .ok_or_else(|| {
+                ReviewError::InvalidDefinition(
+                    "compiled review manifest has no semantic contract".to_owned(),
+                )
+            })
     }
 }
 
@@ -196,6 +220,14 @@ impl ReviewRunManifest {
         let semantic_identity = semantic_identity(definition, &input)?;
         semantic_identity.validate()?;
         let semantic_bundle_hash = semantic_identity.aggregate_hash()?;
+        let semantic_contract = ReviewSemanticContract::for_review(
+            definition,
+            subject_stage(&input.subject),
+            &input.protocol_hash,
+            &input.resolved_models,
+        )?;
+        let provenance =
+            BuildProvenance::for_manifest(definition.key(), &input.runtime, &input.resolved_models);
         let manifest_hash = ReviewHash::digest_json(&ManifestWithoutOwnHash {
             project_id: input.project_id,
             definition: definition.key(),
@@ -240,8 +272,19 @@ impl ReviewRunManifest {
             runtime: input.runtime,
             semantic_identity: Some(semantic_identity),
             semantic_bundle_hash,
+            semantic_contract: Some(semantic_contract),
+            provenance,
             manifest_hash,
         })
+    }
+}
+
+/// The screening stage of a subject, if it is a screening subject. Shared by
+/// the legacy identity and the semantic contract so they can never disagree.
+fn subject_stage(subject: &ReviewSubject) -> Option<ScreeningStage> {
+    match subject {
+        ReviewSubject::Screening { stage, .. } => Some(*stage),
+        _ => None,
     }
 }
 
@@ -255,10 +298,7 @@ fn semantic_identity(
     input: &ReviewManifestInput,
 ) -> Result<SemanticIdentity, ReviewError> {
     let identity = definition.identity();
-    let stage = match &input.subject {
-        ReviewSubject::Screening { stage, .. } => Some(*stage),
-        _ => None,
-    };
+    let stage = subject_stage(&input.subject);
     let mut semantic = SemanticIdentity::new(definition.key(), stage)
         .with(
             IdentityComponent::Definition,
@@ -450,7 +490,10 @@ mod tests {
     use std::collections::BTreeSet;
 
     use super::*;
-    use crate::{IdentityComparison, ReviewCatalog, ReviewDefinitionKey};
+    use crate::{
+        CalibrationCompatibility, IdentityComparison, ReviewCatalog, ReviewDefinitionKey,
+        SemanticChange,
+    };
     use deepref_domain::{Actor, ActorKind, ReportId, ScreeningStage};
 
     fn hash(value: &str) -> ReviewHash {
@@ -844,5 +887,141 @@ mod tests {
             command.validate(),
             Err(ReviewError::SubjectDefinitionMismatch { .. })
         ));
+    }
+
+    fn contract_of(manifest: &ReviewRunManifest) -> crate::ReviewSemanticContract {
+        manifest
+            .semantic_contract
+            .clone()
+            .expect("a semantic contract is recorded")
+    }
+
+    #[test]
+    fn the_manifest_records_a_valid_semantic_contract() {
+        let definition = ReviewCatalog
+            .compile(ReviewDefinitionKey::Screening)
+            .expect("definition should compile");
+        let manifest = manifest(&definition);
+        let contract = contract_of(&manifest);
+        contract.validate().expect("contract is valid");
+        assert_eq!(contract.definition, ReviewDefinitionKey::Screening);
+        assert_eq!(contract.stage, Some(ScreeningStage::TitleAbstract));
+        assert_eq!(contract.semantic_version, crate::SCREENING_SEMANTIC_VERSION);
+        assert_eq!(contract.models.len(), 1);
+    }
+
+    #[test]
+    fn identical_manifests_have_compatible_contracts_with_equal_ids() {
+        let definition = ReviewCatalog
+            .compile(ReviewDefinitionKey::Screening)
+            .expect("definition should compile");
+        let first = manifest(&definition);
+        let second = rebuild(&definition, first.clone());
+        let (stored, current) = (contract_of(&first), contract_of(&second));
+        assert_eq!(
+            stored.compare(&current),
+            CalibrationCompatibility::Compatible
+        );
+        assert_eq!(stored.id(), current.id());
+    }
+
+    #[test]
+    fn protocol_and_model_changes_change_the_contract_id_with_named_changes() {
+        let definition = ReviewCatalog
+            .compile(ReviewDefinitionKey::Screening)
+            .expect("definition should compile");
+        let baseline = manifest(&definition);
+        let original = contract_of(&baseline);
+        let mut protocol = baseline.clone();
+        protocol.protocol_hash = hash("changed-protocol");
+        let mut model = baseline;
+        model.resolved_models[0].model_version = "v2".to_owned();
+        for (changed, expected) in [
+            (
+                rebuild(&definition, protocol),
+                BTreeSet::from([SemanticChange::Protocol]),
+            ),
+            (
+                rebuild(&definition, model),
+                BTreeSet::from([SemanticChange::Model]),
+            ),
+        ] {
+            let current = contract_of(&changed);
+            assert_eq!(
+                original.compare(&current),
+                CalibrationCompatibility::Incompatible { changes: expected }
+            );
+            assert_ne!(original.id(), current.id());
+        }
+    }
+
+    #[test]
+    fn build_provenance_never_changes_the_semantic_contract() {
+        let definition = ReviewCatalog
+            .compile(ReviewDefinitionKey::Screening)
+            .expect("definition should compile");
+        let original = manifest(&definition);
+        let stored = contract_of(&original);
+        let stored_id = stored.id();
+
+        let mut build = original.clone();
+        build.runtime.build_sha = hash("changed-source-tree");
+        let mut rust = original.clone();
+        rust.runtime.rust_version = "1.96".to_owned();
+        let mut target = original.clone();
+        target.runtime.target = "aarch64-macos".to_owned();
+        let mut deployment = original.clone();
+        deployment.runtime.deployment_build_id = Some("rev:tree".to_owned());
+        let mut endpoint = original.clone();
+        endpoint.resolved_models[0].endpoint = Some(
+            ProviderEndpoint::from_configured_url("https://moved.example/v1")
+                .expect("endpoint parses"),
+        );
+
+        for (field, changed) in [
+            ("build_sha", rebuild(&definition, build)),
+            ("rust_version", rebuild(&definition, rust)),
+            ("target", rebuild(&definition, target)),
+            ("deployment_build_id", rebuild(&definition, deployment)),
+            ("provider endpoint", rebuild(&definition, endpoint)),
+        ] {
+            let current = contract_of(&changed);
+            assert_eq!(
+                stored.compare(&current),
+                CalibrationCompatibility::Compatible,
+                "{field} is provenance and must not change calibration"
+            );
+            assert_eq!(
+                stored_id,
+                current.id(),
+                "{field} must not change the contract id"
+            );
+            // ... but it is still recorded for audit.
+            assert_ne!(
+                original.provenance, changed.provenance,
+                "{field} must be recorded in provenance"
+            );
+        }
+    }
+
+    #[test]
+    fn manifests_persisted_before_the_contract_still_deserialize() {
+        let definition = ReviewCatalog
+            .compile(ReviewDefinitionKey::Screening)
+            .expect("definition should compile");
+        let manifest = manifest(&definition);
+        let mut json = serde_json::to_value(&manifest).expect("manifest serializes");
+        for key in ["semantic_contract", "provenance"] {
+            json.as_object_mut()
+                .expect("manifest is an object")
+                .remove(key);
+        }
+        let restored: ReviewRunManifest =
+            serde_json::from_value(json).expect("legacy manifest deserializes");
+        assert_eq!(restored.semantic_contract, None);
+        assert_eq!(
+            restored.semantic_identity, manifest.semantic_identity,
+            "legacy identity fields are untouched"
+        );
     }
 }
