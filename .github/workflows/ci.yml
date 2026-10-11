@@ -50,6 +50,7 @@ jobs:
               - '.github/workflows/ci.yml'
             web:
               - 'apps/web/**'
+              - 'packages/**'
               - 'package.json'
               - 'pnpm-lock.yaml'
               - 'pnpm-workspace.yaml'
@@ -64,6 +65,7 @@ jobs:
               - 'crates/**'
               - 'services/**'
               - 'apps/web/**'
+              - 'packages/**'
               - '.github/actions/reproducible-container-build/**'
               - '.github/workflows/ci.yml'
 
@@ -343,6 +345,9 @@ jobs:
         run: pnpm run check
       - if: github.event_name == 'push' || needs.changes.outputs.web == 'true'
         run: pnpm --filter @deepref/web test:coverage
+      - name: Run UI package tests
+        if: github.event_name == 'push' || needs.changes.outputs.web == 'true'
+        run: pnpm --filter @deepref/ui test
       - name: Upload web coverage artifact
         if: github.event_name == 'push' || needs.changes.outputs.web == 'true'
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
