@@ -176,12 +176,30 @@ async fn janitor(maintenance: &PgPool) {
 
 async fn create_test_db(maintenance: &PgPool, base_url: &str) -> String {
     let name = new_test_db_name();
-    sqlx::query(sqlx::AssertSqlSafe(format!(
-        "CREATE DATABASE \"{name}\" TEMPLATE \"{TEMPLATE_DB}\""
-    )))
-    .execute(maintenance)
-    .await
-    .unwrap_or_else(|error| panic!("test database {name} cannot be cloned: {error}"));
+    // Another test process may be inside template setup (holding the template
+    // open) at this instant; Postgres refuses the clone with 55006
+    // (object_in_use) then. Back off and retry instead of failing the test.
+    let mut attempt = 0;
+    loop {
+        let cloned = sqlx::query(sqlx::AssertSqlSafe(format!(
+            "CREATE DATABASE \"{name}\" TEMPLATE \"{TEMPLATE_DB}\""
+        )))
+        .execute(maintenance)
+        .await;
+        match cloned {
+            Ok(_) => break,
+            Err(error)
+                if error
+                    .as_database_error()
+                    .is_some_and(|db| db.code().as_deref() == Some("55006"))
+                    && attempt < 30 =>
+            {
+                attempt += 1;
+                tokio::time::sleep(std::time::Duration::from_millis(200 * attempt)).await;
+            }
+            Err(error) => panic!("test database {name} cannot be cloned: {error}"),
+        }
+    }
     let (server, _) = base_url
         .split_once('?')
         .map_or(base_url, |(base, _)| base)
