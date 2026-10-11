@@ -14,22 +14,11 @@ use deepref_postgres::{
     ProtocolActor, ProtocolError, get_protocol_editor, get_published_protocol, migrate,
     publish_protocol, save_protocol_draft,
 };
-use sqlx::{AssertSqlSafe, Connection, PgConnection, PgPool, Row, postgres::PgPoolOptions};
+use sqlx::{AssertSqlSafe, Connection, PgConnection, PgPool, Row};
 use uuid::Uuid;
 
 async fn database() -> Option<PgPool> {
-    let url = match std::env::var("DATABASE_URL") {
-        Ok(url) => url,
-        Err(_) if std::env::var("DEEPREF_REQUIRE_DATABASE").as_deref() == Ok("1") => {
-            panic!("DATABASE_URL must be set when DEEPREF_REQUIRE_DATABASE=1")
-        }
-        Err(_) => return None,
-    };
-    let pool = PgPoolOptions::new()
-        .max_connections(8)
-        .connect(&url)
-        .await
-        .ok()?;
+    let pool = deepref_postgres::test_isolation::isolated_pool_from_env("DATABASE_URL", 8).await?;
     migrate(&pool).await.ok()?;
     Some(pool)
 }
@@ -395,10 +384,8 @@ async fn published_protocol_and_criteria_reject_direct_scientific_mutation() {
 
 #[tokio::test]
 async fn migration_backfills_legacy_json_criteria_deterministically() {
-    let Some(url) = std::env::var("DATABASE_URL").ok() else {
-        if std::env::var("DEEPREF_REQUIRE_DATABASE").as_deref() == Ok("1") {
-            panic!("DATABASE_URL must be set when DEEPREF_REQUIRE_DATABASE=1")
-        }
+    let Some(url) = deepref_postgres::test_isolation::isolated_url_from_env("DATABASE_URL").await
+    else {
         return;
     };
     let schema = format!("protocol_migration_test_{}", Uuid::new_v4().simple());

@@ -14,7 +14,7 @@ use deepref_postgres::*;
 use deepref_review::{
     ReviewDefinitionKey, ReviewOrigin, ReviewScheduler, ReviewSubject, ScheduleReviewRun,
 };
-use sqlx::{PgPool, Postgres, Transaction, postgres::PgPoolOptions};
+use sqlx::{PgPool, Postgres, Transaction};
 use std::collections::BTreeMap;
 use uuid::Uuid;
 
@@ -60,18 +60,7 @@ fn actor(id: &str) -> Actor {
     Actor::new(ActorKind::User, id).unwrap()
 }
 async fn database() -> Option<PgPool> {
-    let url = match std::env::var("DATABASE_URL") {
-        Ok(url) => url,
-        Err(_) if std::env::var("DEEPREF_REQUIRE_DATABASE").as_deref() == Ok("1") => {
-            panic!("DATABASE_URL must be set when DEEPREF_REQUIRE_DATABASE=1")
-        }
-        Err(_) => return None,
-    };
-    let pool = PgPoolOptions::new()
-        .max_connections(6)
-        .connect(&url)
-        .await
-        .expect("database connection");
+    let pool = deepref_postgres::test_isolation::isolated_pool_from_env("DATABASE_URL", 6).await?;
     migrate(&pool).await.expect("migrations");
     Some(pool)
 }

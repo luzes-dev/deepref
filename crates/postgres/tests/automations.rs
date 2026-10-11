@@ -17,25 +17,14 @@ use deepref_postgres::{
     finalize_automation_run, get_automation_run, list_automation_definitions, list_automation_runs,
     migrate, recover_expired_jobs, retry_automation_run, start_automation_manually,
 };
-use sqlx::{PgPool, Row, postgres::PgPoolOptions};
+use sqlx::{PgPool, Row};
 use std::time::Duration;
 use uuid::Uuid;
 
 static DATABASE_TEST_MUTEX: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
 async fn database() -> Option<PgPool> {
-    let url = match std::env::var("DATABASE_URL") {
-        Ok(url) => url,
-        Err(_) if std::env::var("DEEPREF_REQUIRE_DATABASE").as_deref() == Ok("1") => {
-            panic!("DATABASE_URL must be set when DEEPREF_REQUIRE_DATABASE=1")
-        }
-        Err(_) => return None,
-    };
-    let pool = PgPoolOptions::new()
-        .max_connections(12)
-        .connect(&url)
-        .await
-        .expect("DATABASE_URL database must be reachable");
+    let pool = deepref_postgres::test_isolation::isolated_pool_from_env("DATABASE_URL", 12).await?;
     migrate(&pool)
         .await
         .expect("DATABASE_URL migrations must apply");

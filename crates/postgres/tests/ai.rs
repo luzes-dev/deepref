@@ -15,22 +15,11 @@ use deepref_postgres::{
     PostgresAiStore, ensure_default_model_routes, get_ai_study_grouping_target, insert_model_route,
     migrate, persist_document_block_embedding, resolve_ai_proposal,
 };
-use sqlx::{PgPool, postgres::PgPoolOptions};
+use sqlx::PgPool;
 use uuid::Uuid;
 
 async fn database() -> Option<PgPool> {
-    let url = match std::env::var("DATABASE_URL") {
-        Ok(url) => url,
-        Err(_) if std::env::var("DEEPREF_REQUIRE_DATABASE").as_deref() == Ok("1") => {
-            panic!("DATABASE_URL must be set when DEEPREF_REQUIRE_DATABASE=1")
-        }
-        Err(_) => return None,
-    };
-    let pool = PgPoolOptions::new()
-        .max_connections(8)
-        .connect(&url)
-        .await
-        .expect("DATABASE_URL database must be reachable");
+    let pool = deepref_postgres::test_isolation::isolated_pool_from_env("DATABASE_URL", 8).await?;
     migrate(&pool)
         .await
         .expect("DATABASE_URL migrations must apply");

@@ -21,7 +21,7 @@ use deepref_review::{
     CalibrationBundleId, ContentDigest, ProtocolDigest, ReviewDefinitionKey, ReviewSemanticContract,
 };
 use serde_json::json;
-use sqlx::{PgPool, Postgres, Transaction, postgres::PgPoolOptions};
+use sqlx::{PgPool, Postgres, Transaction};
 use uuid::Uuid;
 
 /// Arbitrary key for the database-wide lock that serializes route fixtures.
@@ -42,18 +42,7 @@ async fn sweep_turn(pool: &PgPool) -> Transaction<'static, Postgres> {
 }
 
 async fn database() -> Option<PgPool> {
-    let url = match std::env::var("DATABASE_URL") {
-        Ok(url) => url,
-        Err(_) if std::env::var("DEEPREF_REQUIRE_DATABASE").as_deref() == Ok("1") => {
-            panic!("DATABASE_URL must be set when DEEPREF_REQUIRE_DATABASE=1")
-        }
-        Err(_) => return None,
-    };
-    let pool = PgPoolOptions::new()
-        .max_connections(4)
-        .connect(&url)
-        .await
-        .ok()?;
+    let pool = deepref_postgres::test_isolation::isolated_pool_from_env("DATABASE_URL", 4).await?;
     migrate(&pool).await.ok()?;
     Some(pool)
 }

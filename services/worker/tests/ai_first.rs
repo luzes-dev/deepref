@@ -17,7 +17,6 @@ use deepref_postgres::{
 };
 use deepref_worker::{delivery::DeliveryAction, processor::handle_job_with_documents_owned_and_ai};
 use serde_json::{Value, json};
-use sqlx::{PgPool, postgres::PgPoolOptions};
 use std::{collections::BTreeMap, sync::Arc, time::Duration};
 use uuid::Uuid;
 
@@ -67,17 +66,11 @@ impl AiGateway for GroundedGateway {
 
 #[tokio::test]
 async fn compiled_worker_quarantines_only_eligible_exclusions_without_scientific_writes() {
-    let Ok(url) = std::env::var("DATABASE_URL") else {
-        if std::env::var("DEEPREF_REQUIRE_DATABASE").as_deref() == Ok("1") {
-            panic!("DATABASE_URL must be set when DEEPREF_REQUIRE_DATABASE=1")
-        }
+    let Some(pool) =
+        deepref_postgres::test_isolation::isolated_pool_from_env("DATABASE_URL", 8).await
+    else {
         return;
     };
-    let pool: PgPool = PgPoolOptions::new()
-        .max_connections(8)
-        .connect(&url)
-        .await
-        .unwrap();
     migrate(&pool).await.unwrap();
     sqlx::query("UPDATE jobs SET state='dead',last_error='parked by compiled AI-first test',completed_at=now() WHERE state IN ('queued','running')")
         .execute(&pool).await.unwrap();

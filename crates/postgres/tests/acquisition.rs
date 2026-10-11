@@ -8,22 +8,11 @@ use deepref_application::{RawAuthor, RawIdentifier, RawRecord};
 use deepref_domain::{IdentifierScheme, ImportFormat};
 use deepref_postgres::{AcquisitionError, ImportPersistRequest, migrate, persist_import};
 use serde_json::json;
-use sqlx::{PgPool, Row, postgres::PgPoolOptions};
+use sqlx::{PgPool, Row};
 use uuid::Uuid;
 
 async fn database() -> Option<PgPool> {
-    let url = match std::env::var("DATABASE_URL") {
-        Ok(url) => url,
-        Err(_) if std::env::var("DEEPREF_REQUIRE_DATABASE").as_deref() == Ok("1") => {
-            panic!("DATABASE_URL must be set when DEEPREF_REQUIRE_DATABASE=1")
-        }
-        Err(_) => return None,
-    };
-    let pool = PgPoolOptions::new()
-        .max_connections(5)
-        .connect(&url)
-        .await
-        .unwrap();
+    let pool = deepref_postgres::test_isolation::isolated_pool_from_env("DATABASE_URL", 5).await?;
     migrate(&pool).await.unwrap();
     Some(pool)
 }

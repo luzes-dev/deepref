@@ -13,24 +13,13 @@ use deepref_postgres::{
 };
 use deepref_worker::{delivery::DeliveryAction, workflows};
 use serde_json::{Value, json};
-use sqlx::{PgPool, postgres::PgPoolOptions};
+use sqlx::PgPool;
 use uuid::Uuid;
 
 static GUARD: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
 
 async fn database() -> Option<PgPool> {
-    let url = match std::env::var("DATABASE_URL") {
-        Ok(url) => url,
-        Err(_) if std::env::var("DEEPREF_REQUIRE_DATABASE").as_deref() == Ok("1") => {
-            panic!("DATABASE_URL must be set when DEEPREF_REQUIRE_DATABASE=1")
-        }
-        Err(_) => return None,
-    };
-    let pool = PgPoolOptions::new()
-        .max_connections(8)
-        .connect(&url)
-        .await
-        .ok()?;
+    let pool = deepref_postgres::test_isolation::isolated_pool_from_env("DATABASE_URL", 8).await?;
     migrate(&pool).await.expect("migrations apply");
     // `claim_job` takes the next job of any project, so jobs left queued by
     // other test binaries sharing this database would be claimed here. Park

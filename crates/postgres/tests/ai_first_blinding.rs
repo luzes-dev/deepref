@@ -7,22 +7,11 @@ use deepref_application::workflows::{GraphNode, Position, WorkflowGraph};
 use deepref_domain::{Actor, ActorKind, ProjectId};
 use deepref_postgres::*;
 use serde_json::json;
-use sqlx::{PgPool, postgres::PgPoolOptions};
+use sqlx::PgPool;
 use uuid::Uuid;
 
 async fn database() -> Option<PgPool> {
-    let url = match std::env::var("DATABASE_URL") {
-        Ok(url) => url,
-        Err(_) if std::env::var("DEEPREF_REQUIRE_DATABASE").as_deref() == Ok("1") => {
-            panic!("DATABASE_URL must be set when DEEPREF_REQUIRE_DATABASE=1")
-        }
-        Err(_) => return None,
-    };
-    let pool = PgPoolOptions::new()
-        .max_connections(4)
-        .connect(&url)
-        .await
-        .expect("DATABASE_URL is set but PostgreSQL is unavailable");
+    let pool = deepref_postgres::test_isolation::isolated_pool_from_env("DATABASE_URL", 4).await?;
     migrate(&pool).await.expect("migrations should apply");
     Some(pool)
 }

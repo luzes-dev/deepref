@@ -12,22 +12,15 @@ use axum::{
 };
 use deepref_http_api::{config::ApiConfig, routes::router, state::AppState};
 use serde_json::{Value, json};
-use sqlx::{PgPool, postgres::PgPoolOptions};
+use sqlx::PgPool;
 use tower::ServiceExt;
 
 async fn database() -> Option<PgPool> {
-    let url = match std::env::var("TEST_DATABASE_URL").or_else(|_| std::env::var("DATABASE_URL")) {
-        Ok(url) => url,
-        Err(_) if std::env::var("DEEPREF_REQUIRE_DATABASE").as_deref() == Ok("1") => {
-            panic!("TEST_DATABASE_URL or DATABASE_URL must be set when DEEPREF_REQUIRE_DATABASE=1")
-        }
-        Err(_) => return None,
-    };
-    let pool = PgPoolOptions::new()
-        .max_connections(5)
-        .connect(&url)
-        .await
-        .expect("DATABASE_URL is set but PostgreSQL is unavailable");
+    let pool = deepref_postgres::test_isolation::isolated_pool_from_env_first(
+        &["TEST_DATABASE_URL", "DATABASE_URL"],
+        5,
+    )
+    .await?;
     deepref_postgres::migrate(&pool)
         .await
         .expect("all migrations should apply");

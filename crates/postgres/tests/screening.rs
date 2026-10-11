@@ -24,18 +24,7 @@ use sqlx::{
 use uuid::Uuid;
 
 async fn database() -> Option<PgPool> {
-    let url = match std::env::var("DATABASE_URL") {
-        Ok(url) => url,
-        Err(_) if std::env::var("DEEPREF_REQUIRE_DATABASE").as_deref() == Ok("1") => {
-            panic!("DATABASE_URL must be set when DEEPREF_REQUIRE_DATABASE=1")
-        }
-        Err(_) => return None,
-    };
-    let pool = PgPoolOptions::new()
-        .max_connections(20)
-        .connect(&url)
-        .await
-        .expect("DATABASE_URL is set but PostgreSQL is unavailable");
+    let pool = deepref_postgres::test_isolation::isolated_pool_from_env("DATABASE_URL", 20).await?;
     migrate(&pool).await.expect("migrations should apply");
     Some(pool)
 }
@@ -494,10 +483,8 @@ async fn queue_page_is_bounded_and_required_indexes_exist_for_large_fixture() {
 
 #[tokio::test]
 async fn migration_replays_legacy_screening_events_before_projection_constraints() {
-    let Some(url) = std::env::var("DATABASE_URL").ok() else {
-        if std::env::var("DEEPREF_REQUIRE_DATABASE").as_deref() == Ok("1") {
-            panic!("DATABASE_URL must be set when DEEPREF_REQUIRE_DATABASE=1")
-        }
+    let Some(url) = deepref_postgres::test_isolation::isolated_url_from_env("DATABASE_URL").await
+    else {
         return;
     };
     let schema = format!("screening_migration_test_{}", Uuid::new_v4().simple());

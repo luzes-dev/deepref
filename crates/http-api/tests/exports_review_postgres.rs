@@ -18,7 +18,7 @@ use axum::{
 use chrono::{Duration, Utc};
 use deepref_http_api::{config::ApiConfig, routes::router, state::AppState};
 use serde_json::{Value, json};
-use sqlx::{PgPool, postgres::PgPoolOptions};
+use sqlx::PgPool;
 use tower::ServiceExt;
 use uuid::Uuid;
 
@@ -29,20 +29,8 @@ fn test_lock() -> &'static tokio::sync::Mutex<()> {
 }
 
 async fn database() -> Option<PgPool> {
-    let url = match std::env::var("TEST_DATABASE_URL") {
-        Ok(url) => url,
-        Err(_) if std::env::var("DEEPREF_REQUIRE_DATABASE").as_deref() == Ok("1") => {
-            panic!("TEST_DATABASE_URL must be set when DEEPREF_REQUIRE_DATABASE=1")
-        }
-        Err(_) => return None,
-    };
-    let pool = PgPoolOptions::new()
-        .max_connections(5)
-        .connect(&url)
-        .await
-        .unwrap_or_else(|error| {
-            panic!("TEST_DATABASE_URL is set but PostgreSQL is unavailable: {error}")
-        });
+    let pool =
+        deepref_postgres::test_isolation::isolated_pool_from_env("TEST_DATABASE_URL", 5).await?;
     deepref_postgres::migrate(&pool)
         .await
         .unwrap_or_else(|error| panic!("TEST_DATABASE_URL migrations failed: {error}"));

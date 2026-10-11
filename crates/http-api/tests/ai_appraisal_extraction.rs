@@ -17,7 +17,7 @@ use deepref_ai::{
     GatewayCompletion, ModelParameters, ModelProfile, ResolvedModel, sha256_bytes,
 };
 use deepref_http_api::{config::ApiConfig, routes::router, state::AppState};
-use sqlx::{PgPool, Row, postgres::PgPoolOptions};
+use sqlx::{PgPool, Row};
 use tower::ServiceExt;
 use uuid::Uuid;
 
@@ -28,18 +28,7 @@ fn test_lock() -> &'static tokio::sync::Mutex<()> {
 }
 
 async fn database() -> Option<PgPool> {
-    let url = match std::env::var("DATABASE_URL") {
-        Ok(url) => url,
-        Err(_) if std::env::var("DEEPREF_REQUIRE_DATABASE").as_deref() == Ok("1") => {
-            panic!("DATABASE_URL must be set when DEEPREF_REQUIRE_DATABASE=1")
-        }
-        Err(_) => return None,
-    };
-    let pool = PgPoolOptions::new()
-        .max_connections(8)
-        .connect(&url)
-        .await
-        .expect("DATABASE_URL database must be reachable");
+    let pool = deepref_postgres::test_isolation::isolated_pool_from_env("DATABASE_URL", 8).await?;
     deepref_postgres::migrate(&pool)
         .await
         .expect("DATABASE_URL migrations must apply");

@@ -34,6 +34,7 @@ mod review_runs;
 mod screening;
 mod second_review;
 mod study;
+pub mod test_isolation;
 mod worker_runtime;
 mod workflows;
 
