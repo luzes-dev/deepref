@@ -51,7 +51,7 @@
 		"@tanstack/eslint-plugin-query": "^5.104.1",
 		"@testing-library/jest-dom": "^7.0.1",
 		"@testing-library/svelte": "^5.4.2",
-		"@types/node": "^24.19.1",
+		"@types/node": "^26.6.4",
 		"@vitest/coverage-v8": "5.0.3",
 		"bits-ui": "^2.19.5",
 		"clsx": "^2.1.1",
