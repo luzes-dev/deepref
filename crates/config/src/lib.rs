@@ -8,10 +8,10 @@ use std::collections::HashMap;
 
 pub use ai::{
     AiProviderConfig, AiProviderKind, DEFAULT_AI_MODEL, DEFAULT_OPENCODE_BASE_URL,
-    DEFAULT_ZAI_BASE_URL, ModelPriceOverride, load_dotenv_files,
+    DEFAULT_ZAI_BASE_URL, ModelPriceOverride,
 };
 pub use database::DatabaseConfig;
-pub use environment::Environment;
+pub use environment::{APP_ENV, Environment, load_local_dotenv_files};
 pub use error::ConfigError;
 pub use telemetry::TelemetryConfig;
 
@@ -38,7 +38,7 @@ impl RuntimeConfig {
         service_name: &str,
         get: &dyn Fn(&str) -> Option<String>,
     ) -> Result<Self, ConfigError> {
-        let environment = Environment::parse(get("APP_ENV").as_deref().unwrap_or("local"))?;
+        let environment = Environment::from_app_env(get(APP_ENV).as_deref())?;
         Ok(Self {
             database: DatabaseConfig::from_source(environment, get)?,
             telemetry: TelemetryConfig::from_source(service_name, get)?,

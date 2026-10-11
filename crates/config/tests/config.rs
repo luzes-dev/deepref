@@ -6,7 +6,7 @@
 )]
 use std::collections::HashMap;
 
-use deepref_config::RuntimeConfig;
+use deepref_config::{ConfigError, Environment, RuntimeConfig};
 
 #[test]
 fn local_has_disposable_defaults() {
@@ -35,4 +35,17 @@ fn direct_and_file_secrets_are_exclusive() {
         ("DATABASE_URL_FILE".to_owned(), "/unused".to_owned()),
     ]);
     assert!(RuntimeConfig::from_map("test", &values).is_err());
+}
+
+#[test]
+fn unset_app_env_is_production_and_fails_fast() {
+    let values = HashMap::new();
+    let error = RuntimeConfig::from_map("test", &values).unwrap_err();
+    assert!(
+        matches!(
+            error,
+            ConfigError::Missing("DATABASE_URL", Environment::Production)
+        ),
+        "unexpected result: {error}"
+    );
 }
