@@ -713,3 +713,41 @@ async fn migration_replays_legacy_screening_events_before_projection_constraints
         .await
         .expect("test schema should be removed");
 }
+
+#[tokio::test]
+async fn screening_events_record_a_constrained_origin() {
+    let Some(pool) = database().await else { return };
+    let (project_id, protocol_id, reports) = fixture(&pool, 1).await;
+    let report_id = reports[0];
+    let insert = |origin: Option<&'static str>| {
+        let pool = pool.clone();
+        async move {
+            sqlx::query(
+                "INSERT INTO screening_events (id,project_id,report_id,stage,decision,protocol_version_id,actor_kind,actor_id,origin)
+                 VALUES ($1,$2,$3,'title_abstract','include',$4,'user','origin-test',$5)",
+            )
+            .bind(Uuid::new_v4())
+            .bind(project_id)
+            .bind(report_id)
+            .bind(protocol_id)
+            .bind(origin)
+            .execute(&pool)
+            .await
+        }
+    };
+    insert(None).await.expect("a direct decision has no origin");
+    insert(Some("direct"))
+        .await
+        .expect("direct is an explicit origin");
+    insert(Some("assistant_plan"))
+        .await
+        .expect("assistant plans are a recorded origin");
+    let error = insert(Some("model"))
+        .await
+        .expect_err("unknown origins are refused");
+    assert!(
+        error.to_string().contains("screening_events_origin_check"),
+        "{error}"
+    );
+    cleanup(&pool, project_id).await;
+}
