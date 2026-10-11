@@ -510,6 +510,19 @@ jobs:
       DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/deepref
       TEST_DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/deepref
       DEEPREF_REQUIRE_DATABASE: "1"
+    services:
+      postgres:
+        image: pgvector/pgvector:0.8.7-pg17-bookworm
+        env:
+          POSTGRES_PASSWORD: postgres
+          POSTGRES_DB: deepref
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+        ports:
+          - 5432:5432
     steps:
       - name: Skip check (no Rust, Web, or Container changes)
         if: github.event_name != 'push' && needs.changes.outputs.rust != 'true' && needs.changes.outputs.web != 'true' && needs.changes.outputs.containers != 'true'
@@ -563,9 +576,6 @@ jobs:
             echo "SCCACHE_GHA_RW_MODE=READ_ONLY"
             echo "RUSTC_WRAPPER=sccache"
           } >> "$GITHUB_ENV"
-      - name: Start disposable dependencies
-        if: github.event_name == 'push' || needs.changes.outputs.rust == 'true' || needs.changes.outputs.web == 'true' || needs.changes.outputs.containers == 'true'
-        run: docker compose -f compose.yaml up -d --wait
       - name: Apply database migrations
         if: github.event_name == 'push' || needs.changes.outputs.rust == 'true' || needs.changes.outputs.web == 'true' || needs.changes.outputs.containers == 'true'
         env:
@@ -586,9 +596,6 @@ jobs:
       - name: Show sccache statistics
         if: always() && (github.event_name == 'push' || needs.changes.outputs.rust == 'true' || needs.changes.outputs.web == 'true' || needs.changes.outputs.containers == 'true')
         run: ${SCCACHE_PATH:-sccache} --show-stats
-      - name: Stop disposable dependencies
-        if: always() && (github.event_name == 'push' || needs.changes.outputs.rust == 'true' || needs.changes.outputs.web == 'true' || needs.changes.outputs.containers == 'true')
-        run: docker compose -f compose.yaml down --volumes
 
   browser-e2e:
     name: Browser E2E
