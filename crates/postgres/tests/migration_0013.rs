@@ -25,6 +25,9 @@ const PRE_PR8_MIGRATIONS: [&str; 12] = [
 #[tokio::test]
 async fn upgrades_legacy_documents_blocks_and_reason_catalog_truthfully() {
     let Some(url) = std::env::var("DATABASE_URL").ok() else {
+        if std::env::var("DEEPREF_REQUIRE_DATABASE").as_deref() == Ok("1") {
+            panic!("DATABASE_URL must be set when DEEPREF_REQUIRE_DATABASE=1")
+        }
         return;
     };
     let mut connection = PgConnection::connect(&url)

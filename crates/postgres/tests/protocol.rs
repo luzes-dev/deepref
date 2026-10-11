@@ -18,7 +18,13 @@ use sqlx::{AssertSqlSafe, Connection, PgConnection, PgPool, Row, postgres::PgPoo
 use uuid::Uuid;
 
 async fn database() -> Option<PgPool> {
-    let url = std::env::var("DATABASE_URL").ok()?;
+    let url = match std::env::var("DATABASE_URL") {
+        Ok(url) => url,
+        Err(_) if std::env::var("DEEPREF_REQUIRE_DATABASE").as_deref() == Ok("1") => {
+            panic!("DATABASE_URL must be set when DEEPREF_REQUIRE_DATABASE=1")
+        }
+        Err(_) => return None,
+    };
     let pool = PgPoolOptions::new()
         .max_connections(8)
         .connect(&url)
@@ -390,6 +396,9 @@ async fn published_protocol_and_criteria_reject_direct_scientific_mutation() {
 #[tokio::test]
 async fn migration_backfills_legacy_json_criteria_deterministically() {
     let Some(url) = std::env::var("DATABASE_URL").ok() else {
+        if std::env::var("DEEPREF_REQUIRE_DATABASE").as_deref() == Ok("1") {
+            panic!("DATABASE_URL must be set when DEEPREF_REQUIRE_DATABASE=1")
+        }
         return;
     };
     let schema = format!("protocol_migration_test_{}", Uuid::new_v4().simple());

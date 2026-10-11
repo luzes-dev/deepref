@@ -8,18 +8,35 @@ slow-timeout = { period = "60s", terminate-after = 2 }
 # Integration tests with database requirements can be isolated or concurrency-capped
 [test-groups]
 database = { max-threads = 4 }
+# Tests that claim jobs globally or rely on newest-route ordering cannot run
+# beside each other: nextest runs every test in its own process, so the
+# in-process mutexes in these binaries do not serialize them. Serialize the
+# interfering binaries until per-test database isolation lands.
+database-serial = { max-threads = 1 }
 # The review run tests insert a model route and then rely on it being the newest route for its
 # profile, so they cannot run beside each other. Nextest runs every test in its own process, so
 # the in-process mutex in that test binary does not serialize them.
 review-routes = { max-threads = 1 }
 
 [[profile.default.overrides]]
-filter = 'package(deepref-postgres) and not binary(review_runs)'
-test-group = 'database'
-
-[[profile.default.overrides]]
 filter = 'binary(review_runs)'
 test-group = 'review-routes'
+
+[[profile.default.overrides]]
+filter = 'package(deepref-postgres) and (binary(jobs) or binary(ai_first))'
+test-group = 'database-serial'
+
+[[profile.default.overrides]]
+filter = 'package(deepref-worker) and (binary(assistant) or binary(workflows) or binary(ai_first))'
+test-group = 'database-serial'
+
+[[profile.default.overrides]]
+filter = 'package(deepref-http-api) and binary(assistant_postgres)'
+test-group = 'database-serial'
+
+[[profile.default.overrides]]
+filter = 'package(deepref-postgres) and not binary(review_runs) and not binary(jobs) and not binary(ai_first)'
+test-group = 'database'
 
 [profile.ci]
 retries = 1

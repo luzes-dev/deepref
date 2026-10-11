@@ -35,7 +35,13 @@ use uuid::Uuid;
 const STAGE_SCOPED_CALIBRATION: i64 = 50;
 
 fn database_url() -> Option<String> {
-    std::env::var("DATABASE_URL").ok()
+    match std::env::var("DATABASE_URL") {
+        Ok(url) => Some(url),
+        Err(_) if std::env::var("DEEPREF_REQUIRE_DATABASE").as_deref() == Ok("1") => {
+            panic!("DATABASE_URL must be set when DEEPREF_REQUIRE_DATABASE=1")
+        }
+        Err(_) => None,
+    }
 }
 
 /// The same server and credentials, pointed at another database.
@@ -226,7 +232,12 @@ fn rejection_message(error: sqlx::Error) -> String {
 
 #[tokio::test]
 async fn legacy_calibration_bundles_keep_scheme_one_and_never_admit_automation() {
-    let Some(url) = database_url() else { return };
+    let Some(url) = database_url() else {
+        if std::env::var("DEEPREF_REQUIRE_DATABASE").as_deref() == Ok("1") {
+            panic!("DATABASE_URL must be set when DEEPREF_REQUIRE_DATABASE=1")
+        }
+        return;
+    };
     let database = format!("deepref_pr2_legacy_{}", Uuid::new_v4().simple());
     let mut maintenance = PgConnection::connect(&url_for_database(&url, "postgres"))
         .await
@@ -390,7 +401,12 @@ async fn upgrade_legacy_database(legacy_url: &str) {
 
 #[tokio::test]
 async fn new_calibration_bundles_must_state_a_stage_and_a_component_snapshot() {
-    let Some(url) = database_url() else { return };
+    let Some(url) = database_url() else {
+        if std::env::var("DEEPREF_REQUIRE_DATABASE").as_deref() == Ok("1") {
+            panic!("DATABASE_URL must be set when DEEPREF_REQUIRE_DATABASE=1")
+        }
+        return;
+    };
     let pool = pool_for(&url).await;
     migrate(&pool).await.expect("migrations apply");
     let project_id = Uuid::new_v4();

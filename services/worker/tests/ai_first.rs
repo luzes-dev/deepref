@@ -68,6 +68,9 @@ impl AiGateway for GroundedGateway {
 #[tokio::test]
 async fn compiled_worker_quarantines_only_eligible_exclusions_without_scientific_writes() {
     let Ok(url) = std::env::var("DATABASE_URL") else {
+        if std::env::var("DEEPREF_REQUIRE_DATABASE").as_deref() == Ok("1") {
+            panic!("DATABASE_URL must be set when DEEPREF_REQUIRE_DATABASE=1")
+        }
         return;
     };
     let pool: PgPool = PgPoolOptions::new()

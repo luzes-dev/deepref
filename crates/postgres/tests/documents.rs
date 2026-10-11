@@ -19,7 +19,13 @@ const DOCUMENT_HASH: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa
 const BLOCK_HASH: &str = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
 
 async fn database() -> Option<PgPool> {
-    let url = std::env::var("DATABASE_URL").ok()?;
+    let url = match std::env::var("DATABASE_URL") {
+        Ok(url) => url,
+        Err(_) if std::env::var("DEEPREF_REQUIRE_DATABASE").as_deref() == Ok("1") => {
+            panic!("DATABASE_URL must be set when DEEPREF_REQUIRE_DATABASE=1")
+        }
+        Err(_) => return None,
+    };
     let pool = PgPoolOptions::new()
         .max_connections(8)
         .connect(&url)
