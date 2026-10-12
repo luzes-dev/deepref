@@ -12,13 +12,15 @@ use deepref_domain::{
 };
 use deepref_postgres::{
     NewReviewerDecision, ProtocolActor, ReviewCalibrationBundleInput, ReviewCalibrationStatus,
-    SecondReviewStatus, insert_model_route, insert_review_calibration_bundle,
-    insert_reviewer_decision_in_transaction, list_reviewer_decisions, migrate,
-    preview_screening_identity, publish_protocol, save_protocol_draft, schedule_screening_review,
-    second_review_status, set_autonomy_level, sweep_second_reviews,
+    SecondReviewStatus, block_review_run, fail_review_run, insert_model_route,
+    insert_review_calibration_bundle, insert_reviewer_decision_in_transaction,
+    list_reviewer_decisions, migrate, preview_screening_identity, publish_protocol,
+    save_protocol_draft, schedule_screening_review, second_review_status, set_autonomy_level,
+    sweep_second_reviews,
 };
 use deepref_review::{
-    CalibrationBundleId, ContentDigest, ProtocolDigest, ReviewDefinitionKey, ReviewSemanticContract,
+    CalibrationBundleId, ContentDigest, ProtocolDigest, ReviewBlockCode, ReviewDefinitionKey,
+    ReviewRunId, ReviewSemanticContract,
 };
 use serde_json::json;
 use sqlx::{PgPool, Postgres, Transaction};
@@ -348,6 +350,113 @@ async fn stale_calibration_does_not_block_advisory_or_grant_scientific_authority
             .await
             .unwrap();
     assert_eq!(events, 0);
+}
+
+/// The newest advisory run for a report.
+async fn latest_advisory_run(pool: &PgPool, project_id: Uuid) -> (Uuid, String) {
+    sqlx::query_as(
+        "SELECT automation_run_id,state FROM review_run_manifests
+         WHERE project_id=$1 AND origin->>'kind'='advisory_triggered'
+         ORDER BY created_at DESC,automation_run_id DESC LIMIT 1",
+    )
+    .bind(project_id)
+    .fetch_one(pool)
+    .await
+    .expect("advisory run")
+}
+
+/// Moves every finished advisory run of the project into the past, as if the
+/// retry backoff had elapsed.
+async fn age_finished_runs(pool: &PgPool, project_id: Uuid) {
+    sqlx::query(
+        "UPDATE review_run_manifests SET finished_at=finished_at-interval '1 day'
+         WHERE project_id=$1 AND finished_at IS NOT NULL",
+    )
+    .bind(project_id)
+    .execute(pool)
+    .await
+    .expect("runs age");
+}
+
+/// A provider outage must not leave a record without its second opinion for good:
+/// after a backoff, a failed or blocked advisory run is retried a bounded number
+/// of times (review ai F1, `second_review_attempts`).
+#[tokio::test]
+async fn a_failed_or_blocked_advisory_run_is_retried_after_a_backoff_a_bounded_number_of_times() {
+    let Some(pool) = database().await else { return };
+    let _turn = sweep_turn(&pool).await;
+    screening_routes(&pool).await;
+    let project_id = project(&pool).await;
+    publish_protocol_for(&pool, project_id).await;
+    waiting_record(&pool, project_id, "Retried after an outage").await;
+    let project = ProjectId::from(project_id);
+
+    sweep_second_reviews(&pool).await.expect("first sweep");
+    assert_eq!(automatic_runs(&pool, project_id).await, 1);
+    let (first, _) = latest_advisory_run(&pool, project_id).await;
+    fail_review_run(
+        &pool,
+        project,
+        ReviewRunId::new(first).unwrap(),
+        "provider_unavailable",
+        "the provider timed out",
+    )
+    .await
+    .expect("run fails");
+
+    sweep_second_reviews(&pool)
+        .await
+        .expect("sweep inside backoff");
+    assert_eq!(
+        automatic_runs(&pool, project_id).await,
+        1,
+        "no retry before the backoff elapses"
+    );
+
+    age_finished_runs(&pool, project_id).await;
+    sweep_second_reviews(&pool)
+        .await
+        .expect("sweep after backoff");
+    assert_eq!(automatic_runs(&pool, project_id).await, 2);
+    let (second, state) = latest_advisory_run(&pool, project_id).await;
+    assert_ne!(second, first);
+    assert_eq!(state, "queued");
+
+    block_review_run(
+        &pool,
+        project,
+        ReviewRunId::new(second).unwrap(),
+        ReviewBlockCode::RepairBudgetExhausted,
+        "repair budget exhausted",
+    )
+    .await
+    .expect("run blocks");
+    age_finished_runs(&pool, project_id).await;
+    sweep_second_reviews(&pool)
+        .await
+        .expect("sweep after a block");
+    assert_eq!(automatic_runs(&pool, project_id).await, 3);
+
+    let (third, _) = latest_advisory_run(&pool, project_id).await;
+    fail_review_run(
+        &pool,
+        project,
+        ReviewRunId::new(third).unwrap(),
+        "provider_unavailable",
+        "the provider timed out again",
+    )
+    .await
+    .expect("run fails");
+    age_finished_runs(&pool, project_id).await;
+    sweep_second_reviews(&pool)
+        .await
+        .expect("sweep at the limit");
+    assert_eq!(
+        automatic_runs(&pool, project_id).await,
+        3,
+        "retries are bounded"
+    );
+    assert_eq!(attempts(&pool, project_id).await, 1);
 }
 
 #[tokio::test]

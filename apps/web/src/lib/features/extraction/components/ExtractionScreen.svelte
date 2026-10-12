@@ -71,6 +71,7 @@
 	} from '@lucide/svelte';
 	import { Skeleton } from '@deepref/ui/skeleton';
 	import { ReviewRunObserver } from '#lib/features/ai-assistance/review-run-observer.svelte.js';
+	import ReviewRunActions from '#lib/features/ai-assistance/components/ReviewRunActions.svelte';
 	import {
 		buildExtractionEvidenceSearch,
 		deriveFieldKey,
@@ -874,6 +875,7 @@
 						? 'Generating…'
 						: 'Generate proposal'}
 				</Button>
+				<ReviewRunActions run={reviewRun} />
 			{/if}
 			<Button
 				variant="ghost"

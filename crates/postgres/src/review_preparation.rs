@@ -51,7 +51,8 @@ use crate::{
     AiDedupeTarget, AiGroupingReport, AiProposalError, AiStudyGroupingTarget, ExtractionError,
     PostgresReviewError, PreparedReviewRun, ProtocolError, StudyError, get_ai_dedupe_target,
     get_ai_screening_target, get_ai_study_grouping_target, get_study, list_ai_extraction_evidence,
-    list_ai_grounding_blocks, list_field_definitions, schedule_prepared_review_run,
+    list_ai_grounding_blocks, list_field_definitions, review_runs::ReviewScheduleIntent,
+    schedule_prepared_review_run_as,
 };
 
 #[derive(Debug, Error)]
@@ -85,6 +86,7 @@ struct ReviewScheduleContext {
     origin: ReviewOrigin,
     actor: Actor,
     expected_subject: Option<ReviewSubject>,
+    intent: ReviewScheduleIntent,
 }
 
 impl ReviewScheduleContext {
@@ -93,6 +95,7 @@ impl ReviewScheduleContext {
             origin: ReviewOrigin::ReviewerRequested,
             actor,
             expected_subject: None,
+            intent: ReviewScheduleIntent::Request,
         }
     }
 }
@@ -655,6 +658,7 @@ async fn schedule(
         origin,
         actor,
         expected_subject,
+        intent,
     } = context;
     let project_id = task.project_id();
     let definition = task.definition_key();
@@ -667,7 +671,7 @@ async fn schedule(
             "review subject changed while the run was being prepared".to_owned(),
         ));
     }
-    Ok(schedule_prepared_review_run(
+    Ok(schedule_prepared_review_run_as(
         pool,
         PreparedReviewRun {
             command: ScheduleReviewRun {
@@ -679,8 +683,43 @@ async fn schedule(
             },
             task,
         },
+        intent,
     )
     .await?)
+}
+
+/// Retries or regenerates a reviewer-requested run from its stored subject.
+///
+/// The subject is prepared again from current data, so a subject that changed
+/// since the run was requested is refused (409) instead of being reviewed stale.
+/// The AI-task gate and route resolution apply as for a new request. Repeated
+/// calls while the new generation is in flight return that generation.
+pub async fn retry_review_run(
+    pool: &sqlx::PgPool,
+    project_id: deepref_domain::ProjectId,
+    run_id: ReviewRunId,
+    intent: ReviewScheduleIntent,
+    actor: Actor,
+) -> Result<ReviewRunSnapshot, ReviewPreparationError> {
+    let run = crate::get_review_run(pool, project_id, run_id).await?;
+    if run.origin != ReviewOrigin::ReviewerRequested {
+        return Err(PostgresReviewError::InvalidState(
+            "only reviewer-requested review runs can be retried or regenerated".to_owned(),
+        )
+        .into());
+    }
+    schedule_command(
+        pool,
+        ScheduleReviewRun {
+            project_id,
+            definition: run.definition,
+            subject: run.subject,
+            origin: ReviewOrigin::ReviewerRequested,
+            actor,
+        },
+        intent,
+    )
+    .await
 }
 
 impl ReviewScheduler for PostgresReviewScheduler {
@@ -690,126 +729,11 @@ impl ReviewScheduler for PostgresReviewScheduler {
         &'a self,
         command: ScheduleReviewRun,
     ) -> ReviewFuture<'a, ReviewRunSnapshot, Self::Error> {
-        Box::pin(async move {
-            command
-                .validate()
-                .map_err(PostgresReviewError::from)
-                .map_err(ReviewPreparationError::from)?;
-            let project_id = command.project_id.as_uuid();
-            let origin = command.origin;
-            let actor = command.actor.clone();
-            let expected_subject = Some(command.subject.clone());
-            match command.subject {
-                ReviewSubject::Screening {
-                    report_id,
-                    stage,
-                    protocol_version_id,
-                    expected_revision,
-                } => {
-                    let stage = match stage {
-                        deepref_domain::ScreeningStage::TitleAbstract => {
-                            ScreeningStage::TitleAbstract
-                        }
-                        deepref_domain::ScreeningStage::FullText => ScreeningStage::FullText,
-                    };
-                    schedule_screening_review_with_origin(
-                        &self.pool,
-                        project_id,
-                        report_id.as_uuid(),
-                        stage,
-                        Some(protocol_version_id.as_uuid()),
-                        Some(expected_revision),
-                        ReviewScheduleContext {
-                            origin,
-                            actor,
-                            expected_subject,
-                        },
-                    )
-                    .await
-                }
-                ReviewSubject::DuplicateDetection {
-                    record_id,
-                    candidate_report_id,
-                } => {
-                    schedule_duplicate_detection_review_with_origin(
-                        &self.pool,
-                        project_id,
-                        record_id.as_uuid(),
-                        candidate_report_id.as_uuid(),
-                        ReviewScheduleContext {
-                            origin,
-                            actor,
-                            expected_subject,
-                        },
-                    )
-                    .await
-                }
-                ReviewSubject::StudyClassification {
-                    study_id,
-                    expected_revision: _,
-                } => {
-                    schedule_study_classification_review_with_origin(
-                        &self.pool,
-                        project_id,
-                        study_id.as_uuid(),
-                        ReviewScheduleContext {
-                            origin,
-                            actor,
-                            expected_subject,
-                        },
-                    )
-                    .await
-                }
-                ReviewSubject::StudyGrouping { report_id, .. } => {
-                    schedule_study_grouping_review_with_origin(
-                        &self.pool,
-                        project_id,
-                        report_id.as_uuid(),
-                        ReviewScheduleContext {
-                            origin,
-                            actor,
-                            expected_subject,
-                        },
-                    )
-                    .await
-                }
-                ReviewSubject::AppraisalPrefill {
-                    report_id,
-                    definition_id,
-                    definition_version,
-                } => {
-                    schedule_appraisal_prefill_review_with_origin(
-                        &self.pool,
-                        project_id,
-                        report_id.as_uuid(),
-                        &definition_id,
-                        definition_version,
-                        ReviewScheduleContext {
-                            origin,
-                            actor,
-                            expected_subject,
-                        },
-                    )
-                    .await
-                }
-                ReviewSubject::DataExtraction {
-                    study_id,
-                    field_set_version: _,
-                } => {
-                    schedule_data_extraction_review_with_origin(
-                        &self.pool,
-                        project_id,
-                        study_id.as_uuid(),
-                        ReviewScheduleContext {
-                            origin,
-                            actor,
-                            expected_subject,
-                        },
-                    )
-                    .await
-                }
-            }
-        })
+        Box::pin(schedule_command(
+            &self.pool,
+            command,
+            ReviewScheduleIntent::Request,
+        ))
     }
 
     fn get<'a>(
@@ -822,6 +746,138 @@ impl ReviewScheduler for PostgresReviewScheduler {
                 .await
                 .map_err(ReviewPreparationError::from)
         })
+    }
+}
+
+/// Prepares the subject of `command` from current data and schedules it.
+async fn schedule_command(
+    pool: &sqlx::PgPool,
+    command: ScheduleReviewRun,
+    intent: ReviewScheduleIntent,
+) -> Result<ReviewRunSnapshot, ReviewPreparationError> {
+    {
+        command
+            .validate()
+            .map_err(PostgresReviewError::from)
+            .map_err(ReviewPreparationError::from)?;
+        let project_id = command.project_id.as_uuid();
+        let origin = command.origin;
+        let actor = command.actor.clone();
+        let expected_subject = Some(command.subject.clone());
+        match command.subject {
+            ReviewSubject::Screening {
+                report_id,
+                stage,
+                protocol_version_id,
+                expected_revision,
+            } => {
+                let stage = match stage {
+                    deepref_domain::ScreeningStage::TitleAbstract => ScreeningStage::TitleAbstract,
+                    deepref_domain::ScreeningStage::FullText => ScreeningStage::FullText,
+                };
+                schedule_screening_review_with_origin(
+                    pool,
+                    project_id,
+                    report_id.as_uuid(),
+                    stage,
+                    Some(protocol_version_id.as_uuid()),
+                    Some(expected_revision),
+                    ReviewScheduleContext {
+                        origin,
+                        actor,
+                        expected_subject,
+                        intent,
+                    },
+                )
+                .await
+            }
+            ReviewSubject::DuplicateDetection {
+                record_id,
+                candidate_report_id,
+            } => {
+                schedule_duplicate_detection_review_with_origin(
+                    pool,
+                    project_id,
+                    record_id.as_uuid(),
+                    candidate_report_id.as_uuid(),
+                    ReviewScheduleContext {
+                        origin,
+                        actor,
+                        expected_subject,
+                        intent,
+                    },
+                )
+                .await
+            }
+            ReviewSubject::StudyClassification {
+                study_id,
+                expected_revision: _,
+            } => {
+                schedule_study_classification_review_with_origin(
+                    pool,
+                    project_id,
+                    study_id.as_uuid(),
+                    ReviewScheduleContext {
+                        origin,
+                        actor,
+                        expected_subject,
+                        intent,
+                    },
+                )
+                .await
+            }
+            ReviewSubject::StudyGrouping { report_id, .. } => {
+                schedule_study_grouping_review_with_origin(
+                    pool,
+                    project_id,
+                    report_id.as_uuid(),
+                    ReviewScheduleContext {
+                        origin,
+                        actor,
+                        expected_subject,
+                        intent,
+                    },
+                )
+                .await
+            }
+            ReviewSubject::AppraisalPrefill {
+                report_id,
+                definition_id,
+                definition_version,
+            } => {
+                schedule_appraisal_prefill_review_with_origin(
+                    pool,
+                    project_id,
+                    report_id.as_uuid(),
+                    &definition_id,
+                    definition_version,
+                    ReviewScheduleContext {
+                        origin,
+                        actor,
+                        expected_subject,
+                        intent,
+                    },
+                )
+                .await
+            }
+            ReviewSubject::DataExtraction {
+                study_id,
+                field_set_version: _,
+            } => {
+                schedule_data_extraction_review_with_origin(
+                    pool,
+                    project_id,
+                    study_id.as_uuid(),
+                    ReviewScheduleContext {
+                        origin,
+                        actor,
+                        expected_subject,
+                        intent,
+                    },
+                )
+                .await
+            }
+        }
     }
 }
 

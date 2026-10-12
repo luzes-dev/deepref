@@ -9,7 +9,7 @@ use std::collections::BTreeSet;
 use chrono::Utc;
 use deepref_ai::{
     AiProposal, AiRunRecord, AiRunStatus, AiRunStore, AiTaskKind, AuthorityTier, DedupeInput,
-    DuplicateSignal, IdentityProvenance, ModelParameters, ModelProfile, ProposalDraft,
+    DuplicateSignal, IdentityProvenance, ModelParameters, ModelProfile, ModelRouter, ProposalDraft,
     ProposalStatus, ProposalStore, ProviderEndpoint, ResolvedModel,
     ScreeningStage as AiScreeningStage, TokenUsage, register_provider_endpoint,
 };
@@ -21,22 +21,24 @@ use deepref_domain::{
     ProtocolVersionId, ReportId, ScreeningStage,
 };
 use deepref_postgres::{
-    AutomationFinalization, ProtocolActor, begin_next_automation_step, fail_automation_step,
-    fail_review_run, finalize_automation_run, get_ai_screening_target, get_published_protocol,
-    publish_protocol, save_protocol_draft,
+    AiProposalDecision, AiProposalDecisionRequest, CalibrationRefusal, LeasedReviewRun,
+    PostgresAiStore, PostgresReviewError, PostgresReviewScheduler, PreparedReviewRun,
+    ReviewAttemptCompletion, ReviewAttemptStart, ReviewCalibrationBundleInput,
+    ReviewCalibrationStatus, ReviewFinalization, ReviewPreparationError, ReviewScheduleIntent,
+    begin_review_attempt, complete_review_attempt, decide_ai_proposal, fail_review_attempt,
+    finalize_review_proposal, get_review_run, insert_model_route, insert_review_calibration_bundle,
+    load_leased_review_run, mark_review_run_running, migrate, preview_review_identity,
+    preview_screening_identity, schedule_prepared_review_run, schedule_prepared_review_run_as,
 };
 use deepref_postgres::{
-    CalibrationRefusal, PostgresAiStore, PostgresReviewError, PostgresReviewScheduler,
-    PreparedReviewRun, ReviewAttemptCompletion, ReviewAttemptStart, ReviewCalibrationBundleInput,
-    ReviewCalibrationStatus, ReviewFinalization, ReviewPreparationError, begin_review_attempt,
-    complete_review_attempt, fail_review_attempt, finalize_review_proposal, get_review_run,
-    insert_model_route, insert_review_calibration_bundle, load_leased_review_run,
-    mark_review_run_running, migrate, preview_review_identity, preview_screening_identity,
-    schedule_prepared_review_run,
+    AutomationFinalization, ProtocolActor, begin_next_automation_step, block_review_run,
+    fail_automation_step, fail_review_run, finalize_automation_run, get_ai_screening_target,
+    get_published_protocol, publish_protocol, save_protocol_draft,
 };
 use deepref_review::{
-    CalibrationBundleId, ReviewDefinitionKey, ReviewOrigin, ReviewRunSnapshot, ReviewRunState,
-    ReviewScheduler, ReviewSemanticContract, ReviewSubject, ScheduleReviewRun, SemanticChange,
+    CalibrationBundleId, ReviewBlockCode, ReviewDefinitionKey, ReviewOrigin, ReviewRunSnapshot,
+    ReviewRunState, ReviewScheduler, ReviewSemanticContract, ReviewSubject, ScheduleReviewRun,
+    SemanticChange,
     worker::{
         AcceptedArtifactInput, CompiledReview, ExecutedReviewTask, PreparedReviewTask,
         ReviewExecutionPlan, ReviewRunManifest,
@@ -767,8 +769,16 @@ fn actor() -> Actor {
 }
 
 fn prepared_task(project_id: ProjectId) -> PreparedReviewTask {
-    let source_record_id = Uuid::new_v4();
-    let candidate_report_id = Uuid::new_v4();
+    prepared_task_for(project_id, Uuid::new_v4(), Uuid::new_v4())
+}
+
+/// The same duplicate-detection request every time for one record and candidate,
+/// so repeated schedules compile to the same manifest hash.
+fn prepared_task_for(
+    project_id: ProjectId,
+    source_record_id: Uuid,
+    candidate_report_id: Uuid,
+) -> PreparedReviewTask {
     let grounded_provenance = vec![
         IdentityProvenance {
             entity_type: "record".to_owned(),
@@ -1319,4 +1329,352 @@ async fn scheduled_reviews_store_the_normalized_endpoint_of_their_route() {
         serde_json::from_value(stored).expect("stored manifest deserializes");
     assert_eq!(manifest.resolved_models.len(), 1);
     assert_eq!(manifest.resolved_models[0].endpoint, Some(endpoint));
+}
+
+/// A project with a duplicate-detection route. Returns the project and the fixed
+/// record and candidate, so every schedule compiles to the same manifest hash.
+async fn generation_fixture(pool: &PgPool, name: &str) -> (ProjectId, Uuid, Uuid) {
+    let project_id = ProjectId::new(Uuid::new_v4());
+    sqlx::query("INSERT INTO projects (id,name) VALUES ($1,$2)")
+        .bind(project_id.as_uuid())
+        .bind(name)
+        .execute(pool)
+        .await
+        .expect("project inserts");
+    insert_route(pool, ModelProfile::FastClassifier, "2026-08").await;
+    (project_id, Uuid::new_v4(), Uuid::new_v4())
+}
+
+/// Claims the run's job and loads it as the worker would.
+async fn lease(
+    pool: &PgPool,
+    project_id: ProjectId,
+    run: &ReviewRunSnapshot,
+    owner: &str,
+) -> LeasedReviewRun {
+    claim_run(pool, run.id.as_uuid(), owner).await;
+    let leased = load_leased_review_run(pool, project_id, run.id, owner)
+        .await
+        .expect("leased run loads");
+    mark_review_run_running(pool, project_id, run.id, owner)
+        .await
+        .expect("leased run starts");
+    leased
+}
+
+/// Begins the first node of a duplicate review.
+async fn begin_prepare(pool: &PgPool, run: &LeasedReviewRun, owner: &str) -> ReviewAttemptStart {
+    let review = CompiledReview::compile(ReviewDefinitionKey::DuplicateDetection)
+        .expect("definition compiles");
+    let ReviewExecutionPlan::Standard(plan) = review.plan() else {
+        panic!("duplicate detection uses the standard execution plan")
+    };
+    begin_review_attempt(pool, run, &review, &plan.prepare, &[], owner)
+        .await
+        .expect("prepare begins")
+}
+
+/// Begins and accepts the first node, so later generations could reuse it.
+async fn accept_prepare(pool: &PgPool, run: &LeasedReviewRun, owner: &str) {
+    let ReviewAttemptStart::Started { attempt_id, .. } = begin_prepare(pool, run, owner).await
+    else {
+        panic!("a first attempt starts fresh")
+    };
+    complete_review_attempt(
+        pool,
+        run,
+        ReviewAttemptCompletion {
+            attempt_id,
+            payload: json!({"artifact":"prepare"}),
+            media_type: "application/json",
+            predecessors: &[],
+            model_run_id: None,
+            worker_id: owner,
+        },
+    )
+    .await
+    .expect("prepare is accepted");
+}
+
+/// Completes the leased run with a pending duplicate proposal and returns it.
+async fn complete_with_proposal(
+    pool: &PgPool,
+    project_id: ProjectId,
+    run: &LeasedReviewRun,
+    record: Uuid,
+    candidate: Uuid,
+    owner: &str,
+) -> Uuid {
+    sqlx::query("INSERT INTO reports (id,title) VALUES ($1,'candidate report')")
+        .bind(candidate)
+        .execute(pool)
+        .await
+        .expect("candidate report inserts");
+    sqlx::query("INSERT INTO project_reports (project_id,report_id) VALUES ($1,$2)")
+        .bind(project_id.as_uuid())
+        .bind(candidate)
+        .execute(pool)
+        .await
+        .expect("candidate membership inserts");
+    sqlx::query(
+        "INSERT INTO records (id,project_id,source,source_key,title,raw)
+         VALUES ($1,$2,'test',$3,'source record','{}'::jsonb)",
+    )
+    .bind(record)
+    .bind(project_id.as_uuid())
+    .bind(record.to_string())
+    .execute(pool)
+    .await
+    .expect("source record inserts");
+    let route = PostgresAiStore::new(pool)
+        .resolve(ModelProfile::FastClassifier)
+        .await
+        .expect("route resolves");
+    let model_run_id = Uuid::new_v4();
+    let now = Utc::now();
+    PostgresAiStore::new(pool)
+        .save_run(AiRunRecord {
+            id: model_run_id,
+            project_id: Some(project_id),
+            task_kind: AiTaskKind::DuplicateCandidateDetection,
+            route,
+            prompt_version: "fixture.v1".to_owned(),
+            prompt_hash: "1".repeat(64),
+            schema_version: "fixture.v1".to_owned(),
+            schema_hash: "2".repeat(64),
+            input_hash: "3".repeat(64),
+            reuse_hash: "4".repeat(64),
+            protocol_hash: None,
+            document_hash: None,
+            evidence_hash: None,
+            evidence_refs: Vec::new(),
+            usage: TokenUsage {
+                input_tokens: 1,
+                output_tokens: 1,
+            },
+            cost_micros: None,
+            provider_served_model: None,
+            provider_system_fingerprint: None,
+            output: Some(json!({"decision":"match"})),
+            status: AiRunStatus::Completed,
+            error: None,
+            parent_automation_run_id: Some(run.snapshot.id.as_uuid()),
+            created_at: now,
+            completed_at: Some(now),
+        })
+        .await
+        .expect("completed model run persists");
+    let executed = ExecutedReviewTask {
+        output: json!({"decision":"match"}),
+        model_run_id,
+        proposal: ProposalDraft {
+            project_id,
+            entity_type: "record".to_owned(),
+            entity_id: Some(record),
+            operation: "duplicate_assistance".to_owned(),
+            payload: json!({
+                "kind":"duplicate_detection",
+                "task_kind":"duplicate_candidate_detection",
+                "record_id":record,
+                "candidate_report_id":candidate,
+                "decision":"match"
+            }),
+            authority: AuthorityTier::WorkflowSuggestion,
+        },
+    };
+    match finalize_review_proposal(pool, run, executed, owner)
+        .await
+        .expect("proposal finalizes")
+    {
+        ReviewFinalization::Completed { proposal_id } => proposal_id,
+        ReviewFinalization::Blocked => panic!("a current subject completes"),
+    }
+}
+
+#[tokio::test]
+async fn a_retry_reuses_the_steps_its_failed_predecessor_accepted() {
+    let Some(pool) = database().await else { return };
+    let _lock = route_fixture_lock(&pool).await;
+    let (project_id, record, candidate) = generation_fixture(&pool, "retry reuse").await;
+    let request = || duplicate_request(project_id, record, candidate);
+    let owner = "retry-reuse-worker";
+    let first = schedule_prepared_review_run(&pool, request())
+        .await
+        .expect("first run schedules");
+    let leased = lease(&pool, project_id, &first, owner).await;
+    accept_prepare(&pool, &leased, owner).await;
+    fail_review_run(
+        &pool,
+        project_id,
+        first.id,
+        "provider_unavailable",
+        "outage",
+    )
+    .await
+    .expect("run fails");
+
+    let retried = schedule_prepared_review_run(&pool, request())
+        .await
+        .expect("retry schedules");
+    assert_ne!(retried.id, first.id);
+    let leased = lease(&pool, project_id, &retried, owner).await;
+    assert!(matches!(
+        begin_prepare(&pool, &leased, owner).await,
+        ReviewAttemptStart::Reused { .. }
+    ));
+}
+
+#[tokio::test]
+async fn a_rejected_suggestion_regenerates_a_fresh_generation_that_reuses_nothing() {
+    let Some(pool) = database().await else { return };
+    let _lock = route_fixture_lock(&pool).await;
+    let (project_id, record, candidate) = generation_fixture(&pool, "regenerate").await;
+    let request = || duplicate_request(project_id, record, candidate);
+    let owner = "regenerate-worker";
+    let first = schedule_prepared_review_run(&pool, request())
+        .await
+        .expect("first run schedules");
+    let leased = lease(&pool, project_id, &first, owner).await;
+    accept_prepare(&pool, &leased, owner).await;
+    let proposal_id =
+        complete_with_proposal(&pool, project_id, &leased, record, candidate, owner).await;
+
+    let again = schedule_prepared_review_run(&pool, request())
+        .await
+        .expect("double submit");
+    assert_eq!(
+        again.id, first.id,
+        "a completed run answers a double submit"
+    );
+    assert!(
+        matches!(
+            schedule_prepared_review_run_as(&pool, request(), ReviewScheduleIntent::Regenerate)
+                .await,
+            Err(PostgresReviewError::InvalidState(_))
+        ),
+        "a pending suggestion cannot be regenerated"
+    );
+
+    decide_ai_proposal(
+        &pool,
+        AiProposalDecisionRequest {
+            project_id: project_id.as_uuid(),
+            proposal_id,
+            decision: AiProposalDecision::Reject,
+            reason: "Not a duplicate.".to_owned(),
+            reviewed_payload: None,
+            actor: actor(),
+        },
+    )
+    .await
+    .expect("suggestion is rejected");
+
+    let regenerated =
+        schedule_prepared_review_run_as(&pool, request(), ReviewScheduleIntent::Regenerate)
+            .await
+            .expect("regeneration schedules");
+    assert_ne!(regenerated.id, first.id);
+    assert!(matches!(regenerated.state, ReviewRunState::Queued));
+    let twice = schedule_prepared_review_run_as(&pool, request(), ReviewScheduleIntent::Regenerate)
+        .await
+        .expect("double regenerate");
+    assert_eq!(
+        twice.id, regenerated.id,
+        "a double regenerate returns the in-flight run"
+    );
+
+    let leased = lease(&pool, project_id, &regenerated, owner).await;
+    assert!(
+        matches!(
+            begin_prepare(&pool, &leased, owner).await,
+            ReviewAttemptStart::Started { .. }
+        ),
+        "a regeneration must not reuse the rejected opinion's steps"
+    );
+}
+
+fn duplicate_request(project_id: ProjectId, record: Uuid, candidate: Uuid) -> PreparedReviewRun {
+    let task = prepared_task_for(project_id, record, candidate);
+    PreparedReviewRun {
+        command: ScheduleReviewRun {
+            project_id,
+            definition: ReviewDefinitionKey::DuplicateDetection,
+            subject: task.subject(),
+            origin: ReviewOrigin::ReviewerRequested,
+            actor: actor(),
+        },
+        task,
+    }
+}
+
+#[tokio::test]
+async fn a_failed_review_run_is_retried_as_a_new_queued_generation() {
+    let Some(pool) = database().await else { return };
+    let _lock = route_fixture_lock(&pool).await;
+    let (project_id, record, candidate) = generation_fixture(&pool, "retry failed").await;
+    let request = || duplicate_request(project_id, record, candidate);
+    let first = schedule_prepared_review_run(&pool, request())
+        .await
+        .expect("first run schedules");
+    fail_review_run(
+        &pool,
+        project_id,
+        first.id,
+        "provider_unavailable",
+        "the provider timed out",
+    )
+    .await
+    .expect("run fails");
+
+    let retried = schedule_prepared_review_run(&pool, request())
+        .await
+        .expect("retry schedules");
+    assert_ne!(
+        retried.id, first.id,
+        "a failed run must not be returned again"
+    );
+    assert!(matches!(retried.state, ReviewRunState::Queued));
+    let again = schedule_prepared_review_run(&pool, request())
+        .await
+        .expect("double submit");
+    assert_eq!(
+        again.id, retried.id,
+        "a double submit returns the in-flight retry"
+    );
+    assert!(matches!(
+        get_review_run(&pool, project_id, first.id)
+            .await
+            .expect("history is kept")
+            .state,
+        ReviewRunState::Failed { .. }
+    ));
+}
+
+#[tokio::test]
+async fn a_blocked_review_run_is_retried_as_a_new_queued_generation() {
+    let Some(pool) = database().await else { return };
+    let _lock = route_fixture_lock(&pool).await;
+    let (project_id, record, candidate) = generation_fixture(&pool, "retry blocked").await;
+    let request = || duplicate_request(project_id, record, candidate);
+    let first = schedule_prepared_review_run(&pool, request())
+        .await
+        .expect("first run schedules");
+    block_review_run(
+        &pool,
+        project_id,
+        first.id,
+        ReviewBlockCode::RepairBudgetExhausted,
+        "repair budget exhausted",
+    )
+    .await
+    .expect("run blocks");
+
+    let retried = schedule_prepared_review_run(&pool, request())
+        .await
+        .expect("retry schedules");
+    assert_ne!(
+        retried.id, first.id,
+        "a blocked run must not be returned again"
+    );
+    assert!(matches!(retried.state, ReviewRunState::Queued));
 }

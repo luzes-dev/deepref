@@ -122,6 +122,7 @@ fn openapi_router(document_max_bytes: usize) -> OpenApiRouter<AppState> {
         .routes(routes!(ai::generate_appraisal_prefill_suggestion))
         .routes(routes!(ai::generate_duplicate_suggestion))
         .routes(routes!(ai::get_review_run))
+        .routes(routes!(ai::retry_review_run))
         .routes(routes!(extraction::list_extraction_fields))
         .routes(routes!(extraction::create_extraction_field))
         .routes(routes!(extraction::update_extraction_field))

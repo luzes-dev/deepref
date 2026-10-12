@@ -1,4 +1,4 @@
-import { getReviewRun } from '#lib/api/generated/ai/ai.js';
+import { getReviewRun, retryReviewRun } from '#lib/api/generated/ai/ai.js';
 import type { ReviewRunDto, ReviewRunStateDto } from '#lib/api/generated/models/index.js';
 import { useInterval } from 'runed';
 
@@ -19,6 +19,8 @@ function loadErrorMessage(error: unknown): string {
 export class ReviewRunObserver {
 	current = $state.raw<ReviewRunDto>();
 	error = $state('');
+	/** True while a retry or regeneration request is being sent. */
+	restarting = $state(false);
 
 	#runId: string | undefined;
 	#refreshing = false;
@@ -42,6 +44,46 @@ export class ReviewRunObserver {
 
 	get state(): ReviewRunStateDto | undefined {
 		return this.current?.state;
+	}
+
+	/** A failed or blocked run can be retried as a new attempt. */
+	get canRetry(): boolean {
+		return this.current?.state.kind === 'failed' || this.current?.state.kind === 'blocked';
+	}
+
+	/**
+	 * A completed run can be regenerated once its suggestion was rejected; the
+	 * server refuses otherwise.
+	 */
+	get canRegenerate(): boolean {
+		return this.current?.state.kind === 'completed';
+	}
+
+	/** Retries a failed or blocked run and observes the new attempt. */
+	async retry(): Promise<void> {
+		if (!this.canRetry) return;
+		await this.#restart(false);
+	}
+
+	/** Asks for a fresh opinion after the completed run's suggestion was rejected. */
+	async regenerate(): Promise<void> {
+		if (!this.canRegenerate) return;
+		await this.#restart(true);
+	}
+
+	async #restart(regenerate: boolean): Promise<void> {
+		const runId = this.#runId;
+		if (!runId || this.restarting) return;
+		this.restarting = true;
+		this.error = '';
+		try {
+			const response = await retryReviewRun(this.#projectId(), runId, { regenerate });
+			await this.observe(response.data);
+		} catch (error) {
+			this.error = loadErrorMessage(error);
+		} finally {
+			this.restarting = false;
+		}
 	}
 
 	async observe(run: ReviewRunDto): Promise<void> {

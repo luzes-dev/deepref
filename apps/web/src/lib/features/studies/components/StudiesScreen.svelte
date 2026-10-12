@@ -44,6 +44,7 @@
 	import PageTemplate from '#lib/shell/PageTemplate.svelte';
 	import { useQueryClient } from '@tanstack/svelte-query';
 	import { ReviewRunObserver } from '#lib/features/ai-assistance/review-run-observer.svelte.js';
+	import ReviewRunActions from '#lib/features/ai-assistance/components/ReviewRunActions.svelte';
 	import { notifyError, notifyWarning } from '#lib/features/notifications/toast.js';
 	import { parseStudyLocation, updateStudyLocation } from '../url';
 	import StudyClassificationAssistance from './StudyClassificationAssistance.svelte';
@@ -164,7 +165,9 @@
 	const groupingMutationError = $derived(
 		generateGroupingMutation.error?.message ?? decideGroupingMutation.error?.message ?? ''
 	);
-	const groupingErrorMessage = $derived(groupingQueryError || groupingMutationError);
+	const groupingErrorMessage = $derived(
+		groupingQueryError || groupingMutationError || groupingReviewRun.error
+	);
 	const groupingConflict = $derived(
 		isApiErrorWithStatus(groupingProposalsQuery.error, 409) ||
 			isApiErrorWithStatus(generateGroupingMutation.error, 409) ||
@@ -620,6 +623,7 @@
 						onGenerate={() => void generateGrouping()}
 						onDecide={(decision) => void decideGrouping(decision)}
 					/>
+					<ReviewRunActions run={groupingReviewRun} />
 				</Tabs.Content>
 				<Tabs.Content value="history" class="pt-2"
 					><StudyHistoryPanel {history} /></Tabs.Content

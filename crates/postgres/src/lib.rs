@@ -182,17 +182,18 @@ pub use review_completion::{
     complete_review_outcome, complete_review_step,
 };
 pub use review_preparation::{
-    PostgresReviewScheduler, ReviewPreparationError, preview_screening_identity,
+    PostgresReviewScheduler, ReviewPreparationError, preview_screening_identity, retry_review_run,
     schedule_appraisal_prefill_review, schedule_data_extraction_review,
     schedule_duplicate_detection_review, schedule_screening_review,
     schedule_study_classification_review, schedule_study_grouping_review,
 };
 pub use review_runs::{
     AcceptedReviewAttempt, LeasedReviewRun, PostgresReviewError, PreparedReviewRun,
-    ReviewAttemptCompletion, ReviewAttemptStart, ReviewFinalization, begin_review_attempt,
-    block_review_run, fail_review_attempt, fail_review_run, finalize_review_proposal,
-    get_review_run, get_review_runs, load_leased_review_run, mark_review_run_running,
-    preview_review_identity, schedule_prepared_review_run,
+    ReviewAttemptCompletion, ReviewAttemptStart, ReviewFinalization, ReviewScheduleIntent,
+    begin_review_attempt, block_review_run, fail_review_attempt, fail_review_run,
+    finalize_review_proposal, get_review_run, get_review_runs, load_leased_review_run,
+    mark_review_run_running, preview_review_identity, schedule_prepared_review_run,
+    schedule_prepared_review_run_as,
 };
 pub use screening::{
     ScreeningError, ScreeningHistory, ScreeningHistoryItem, ScreeningProgress, ScreeningQueue,
