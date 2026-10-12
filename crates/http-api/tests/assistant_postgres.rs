@@ -630,7 +630,7 @@ where
     handle_job_with_documents_owned_and_ai(
         pool.clone(),
         &job,
-        &owner,
+        &job.lease(owner.as_str()),
         StdDuration::from_secs(300),
         None,
         None,

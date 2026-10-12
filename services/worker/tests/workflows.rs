@@ -76,12 +76,12 @@ async fn drain(pool: &PgPool, project: Uuid) {
             "unexpected job from another project"
         );
         assert_eq!(job.kind, "workflow_step");
-        match workflows::handle_step(pool, &job, None)
+        match workflows::handle_step(pool, &job, &job.lease("workflow-test"), None)
             .await
             .expect("step")
         {
             DeliveryAction::Ack => {
-                complete_job(pool, "workflow-test", job.id)
+                complete_job(pool, &job.lease("workflow-test"))
                     .await
                     .expect("complete");
             }
@@ -468,7 +468,7 @@ async fn a_failed_run_is_recorded_once_and_a_test_run_stays_silent() {
     let node_run_id =
         Uuid::parse_str(claim.payload["node_run_id"].as_str().expect("payload")).expect("uuid");
     assert!(matches!(
-        begin_node_execution(&pool, node_run_id)
+        begin_node_execution(&pool, node_run_id, &claim.lease("wf-test-fail"))
             .await
             .expect("begin"),
         StepClaim::Execute(_)
@@ -476,13 +476,14 @@ async fn a_failed_run_is_recorded_once_and_a_test_run_stays_silent() {
     finish_node_execution(
         &pool,
         node_run_id,
+        &claim.lease("wf-test-fail"),
         NodeOutcome::Failed {
             message: "The other service did not answer in time.".to_owned(),
         },
     )
     .await
     .expect("fail the test step");
-    complete_job(&pool, "wf-test-fail", claim.id)
+    complete_job(&pool, &claim.lease("wf-test-fail"))
         .await
         .expect("complete");
     let test_run = get_workflow_run(&pool, project, test.run_id)
@@ -530,7 +531,7 @@ async fn defer_queued_step(pool: &PgPool, project: ProjectId) -> Uuid {
     assert_eq!(claim.project_id.as_uuid(), project.as_uuid());
     let node_run_id =
         Uuid::parse_str(claim.payload["node_run_id"].as_str().expect("payload")).expect("uuid");
-    match begin_node_execution(pool, node_run_id)
+    match begin_node_execution(pool, node_run_id, &claim.lease("wait-test"))
         .await
         .expect("begin")
     {
@@ -546,6 +547,7 @@ async fn defer_queued_step(pool: &PgPool, project: ProjectId) -> Uuid {
     finish_node_execution(
         pool,
         node_run_id,
+        &claim.lease("wait-test"),
         waiting(json!({"polls": 1, "reviews": []})),
     )
     .await
@@ -554,11 +556,12 @@ async fn defer_queued_step(pool: &PgPool, project: ProjectId) -> Uuid {
     finish_node_execution(
         pool,
         node_run_id,
+        &claim.lease("wait-test"),
         waiting(json!({"polls": 1, "reviews": []})),
     )
     .await
     .expect("defer again");
-    complete_job(pool, "wait-test", claim.id)
+    complete_job(pool, &claim.lease("wait-test"))
         .await
         .expect("complete");
     node_run_id
@@ -666,4 +669,174 @@ async fn a_waiting_step_is_looked_at_later_and_a_lost_look_fails_it() {
         .execute(&pool)
         .await
         .expect("cleanup");
+}
+
+/// Start a one-block "notify" workflow and claim its step job.
+async fn claimed_notify_step(
+    pool: &PgPool,
+    project: ProjectId,
+    owner: &str,
+) -> (Uuid, Uuid, deepref_application::jobs::ClaimedJob) {
+    let actor = Actor::new(ActorKind::User, "wf-test").expect("actor");
+    let graph = WorkflowGraph {
+        nodes: vec![
+            node("start", "trigger.manual", json!({})),
+            node("tell", "integration.notify", json!({"title": "Once"})),
+        ],
+        edges: vec![edge("start", "data", "tell", "data")],
+    };
+    let workflow = create_workflow(pool, project, "Fence", "", graph.clone(), &actor)
+        .await
+        .expect("create");
+    let run_id = start_run(
+        pool,
+        &StartRun {
+            project_id: project.as_uuid(),
+            workflow_id: workflow.id,
+            version_id: None,
+            graph,
+            trigger_kind: "manual".to_owned(),
+            trigger_data: json!({}),
+            idempotency_key: format!("fence:{}", Uuid::new_v4()),
+            actor_kind: "user".to_owned(),
+            actor_id: "wf-test".to_owned(),
+            test_mode: false,
+        },
+    )
+    .await
+    .expect("start")
+    .run_id;
+    let job = claim_job(pool, owner, Duration::from_secs(60))
+        .await
+        .expect("claim")
+        .expect("the notify step is queued");
+    let node_run_id =
+        Uuid::parse_str(job.payload["node_run_id"].as_str().expect("payload")).expect("uuid");
+    (run_id, node_run_id, job)
+}
+
+async fn node_attempts(pool: &PgPool, node_run_id: Uuid) -> i32 {
+    sqlx::query_scalar("SELECT attempts FROM workflow_node_runs WHERE id=$1")
+        .bind(node_run_id)
+        .fetch_one(pool)
+        .await
+        .expect("node attempts")
+}
+
+async fn new_project(pool: &PgPool, label: &str) -> ProjectId {
+    let project = ProjectId::new(Uuid::new_v4());
+    sqlx::query("INSERT INTO projects (id,name) VALUES ($1,$2)")
+        .bind(project.as_uuid())
+        .bind(format!("{label}-{}", project.as_uuid()))
+        .execute(pool)
+        .await
+        .expect("project");
+    project
+}
+
+/// A step delivered twice under one claim (a duplicate dispatch, a retried
+/// RPC) runs its side effect once and records one outcome.
+#[tokio::test]
+async fn concurrent_handle_step_calls_on_one_node_execute_once() {
+    let _guard = GUARD.lock().await;
+    let Some(pool) = database().await else { return };
+    let project = new_project(&pool, "wf-fence-concurrent").await;
+    let (run_id, node_run_id, job) = claimed_notify_step(&pool, project, "fence-worker").await;
+    let lease = job.lease("fence-worker");
+
+    let (left, right) = tokio::join!(
+        workflows::handle_step(&pool, &job, &lease, None),
+        workflows::handle_step(&pool, &job, &lease, None),
+    );
+    assert_eq!(left.expect("left"), DeliveryAction::Ack);
+    assert_eq!(right.expect("right"), DeliveryAction::Ack);
+
+    assert_eq!(
+        node_attempts(&pool, node_run_id).await,
+        1,
+        "the block must execute once"
+    );
+    assert_eq!(
+        workflow_notifications(&pool, project.as_uuid()).await,
+        1,
+        "the side effect must happen once"
+    );
+    let run = get_workflow_run(&pool, project, run_id).await.expect("run");
+    assert_eq!(run.status, "completed", "{:?}", run.error);
+}
+
+/// After the same worker reclaims an expired step job, the stale attempt can
+/// neither restart the block nor overwrite the live attempt's outcome.
+#[tokio::test]
+async fn a_stale_attempt_cannot_restart_or_overwrite_a_reclaimed_step() {
+    let _guard = GUARD.lock().await;
+    let Some(pool) = database().await else { return };
+    let project = new_project(&pool, "wf-fence-stale").await;
+    let (run_id, node_run_id, first) = claimed_notify_step(&pool, project, "fence-worker").await;
+    let stale = first.lease("fence-worker");
+    assert!(matches!(
+        begin_node_execution(&pool, node_run_id, &stale)
+            .await
+            .expect("begin"),
+        StepClaim::Execute(_)
+    ));
+
+    // The first attempt stalls past its lease; the same process reclaims it.
+    sqlx::query("UPDATE jobs SET leased_until=now()-interval '1 second' WHERE id=$1")
+        .bind(first.id)
+        .execute(&pool)
+        .await
+        .expect("expire");
+    assert_eq!(
+        deepref_postgres::recover_expired_jobs(&pool)
+            .await
+            .expect("recover"),
+        1
+    );
+    sqlx::query("UPDATE jobs SET available_at=now() WHERE id=$1")
+        .bind(first.id)
+        .execute(&pool)
+        .await
+        .expect("skip backoff");
+    let second = claim_job(&pool, "fence-worker", Duration::from_secs(60))
+        .await
+        .expect("claim")
+        .expect("reclaimed");
+    assert_eq!(second.id, first.id);
+    let live = second.lease("fence-worker");
+    assert_eq!(
+        workflows::handle_step(&pool, &second, &live, None)
+            .await
+            .expect("live attempt"),
+        DeliveryAction::Ack
+    );
+    assert_eq!(
+        notify_step(&pool, project, run_id).await.status,
+        "completed"
+    );
+
+    // The stale attempt wakes up: it may not restart the block...
+    assert!(matches!(
+        begin_node_execution(&pool, node_run_id, &stale)
+            .await
+            .expect("stale begin"),
+        StepClaim::Stale
+    ));
+    // ...nor overwrite the recorded outcome.
+    let overwritten = finish_node_execution(
+        &pool,
+        node_run_id,
+        &stale,
+        NodeOutcome::Failed {
+            message: "late duplicate".to_owned(),
+        },
+    )
+    .await
+    .expect("stale finish");
+    assert!(!overwritten, "a stale finish must be a no-op");
+    assert_eq!(
+        notify_step(&pool, project, run_id).await.status,
+        "completed"
+    );
+    assert_eq!(workflow_notifications(&pool, project.as_uuid()).await, 1);
 }

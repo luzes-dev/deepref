@@ -6,7 +6,8 @@ use deepref_application::{
     AutomationStepRun, AutomationStepRunId, AutomationStepRunStatus, AutomationStepSnapshot,
     AutomationTriggerKind, AutomationTriggerReference, AutomationUsage, AutomationValidationError,
     BuiltInAutomationRecipe, ConfigureAutomationDefinition, DispatchAutomationTrigger,
-    StartAutomationManually, validate_error, validate_run_list_limit, validate_worker_id,
+    StartAutomationManually, jobs::JobLease, validate_error, validate_run_list_limit,
+    validate_worker_id,
 };
 use deepref_domain::{Actor, ActorKind, ProjectId};
 use serde::Deserialize;
@@ -430,9 +431,12 @@ fn validate_project(project_id: ProjectId) -> Result<(), AutomationError> {
     }
 }
 
-fn job_lease_is_valid(row: &PgRow, worker_id: &str) -> bool {
+/// The job is running under exactly this claim: same owner *and* attempt, so a
+/// stale attempt of a process that reclaimed its own job is fenced out.
+fn job_lease_is_valid(row: &PgRow, lease: &JobLease) -> bool {
     row.get::<String, _>("job_state") == "running"
-        && row.get::<Option<String>, _>("lease_owner").as_deref() == Some(worker_id)
+        && row.get::<Option<String>, _>("lease_owner").as_deref() == Some(lease.owner.as_str())
+        && row.get::<i32, _>("job_attempts") == lease.attempt
         && row
             .get::<Option<bool>, _>("lease_is_valid")
             .unwrap_or(false)
@@ -442,9 +446,10 @@ pub async fn begin_next_automation_step(
     pool: &PgPool,
     project_id: ProjectId,
     run_id: AutomationRunId,
-    worker_id: &str,
+    lease: &JobLease,
 ) -> Result<Option<AutomationStepRun>, AutomationError> {
     validate_project(project_id)?;
+    let worker_id = lease.owner.as_str();
     validate_worker_id(worker_id)?;
     let mut transaction = pool.begin().await?;
     let run_and_job = sqlx::query(
@@ -470,7 +475,7 @@ pub async fn begin_next_automation_step(
         }
         AutomationRunStatus::Failed => return Err(AutomationError::RunNotRetryable),
         AutomationRunStatus::Queued => {
-            if !job_lease_is_valid(&run_and_job, worker_id) {
+            if !job_lease_is_valid(&run_and_job, lease) {
                 return Err(AutomationError::WorkerOwnership);
             }
             sqlx::query(
@@ -485,7 +490,7 @@ pub async fn begin_next_automation_step(
             .await?;
         }
         AutomationRunStatus::Running => {
-            if !job_lease_is_valid(&run_and_job, worker_id) {
+            if !job_lease_is_valid(&run_and_job, lease) {
                 return Err(AutomationError::WorkerOwnership);
             }
         }
@@ -548,26 +553,27 @@ pub async fn complete_automation_step(
     pool: &PgPool,
     project_id: ProjectId,
     step_run_id: AutomationStepRunId,
-    worker_id: &str,
+    lease: &JobLease,
 ) -> Result<bool, AutomationError> {
-    complete_automation_step_with_output(pool, project_id, step_run_id, worker_id, None).await
+    complete_automation_step_with_output(pool, project_id, step_run_id, lease, None).await
 }
 
 pub async fn complete_automation_step_with_output(
     pool: &PgPool,
     project_id: ProjectId,
     step_run_id: AutomationStepRunId,
-    worker_id: &str,
+    lease: &JobLease,
     output: Option<Value>,
 ) -> Result<bool, AutomationError> {
     validate_project(project_id)?;
+    let worker_id = lease.owner.as_str();
     validate_worker_id(worker_id)?;
     let mut transaction = pool.begin().await?;
     let changed = complete_automation_step_with_output_in_transaction(
         &mut transaction,
         project_id,
         step_run_id,
-        worker_id,
+        lease,
         output,
     )
     .await?;
@@ -579,7 +585,7 @@ pub(crate) async fn complete_automation_step_with_output_in_transaction(
     transaction: &mut Transaction<'_, Postgres>,
     project_id: ProjectId,
     step_run_id: AutomationStepRunId,
-    worker_id: &str,
+    lease: &JobLease,
     output: Option<Value>,
 ) -> Result<bool, AutomationError> {
     let row = lock_step_and_job(transaction, project_id, step_run_id).await?;
@@ -587,7 +593,7 @@ pub(crate) async fn complete_automation_step_with_output_in_transaction(
     if status == AutomationStepRunStatus::Completed {
         return Ok(false);
     }
-    ensure_step_lease_owner(&row, status, worker_id)?;
+    ensure_step_lease_owner(&row, status, lease)?;
     let job_attempts: i32 = row.get("job_attempts");
     let updated = sqlx::query(
         "UPDATE automation_step_runs
@@ -599,7 +605,7 @@ pub(crate) async fn complete_automation_step_with_output_in_transaction(
     )
     .bind(project_id.as_uuid())
     .bind(step_run_id.as_uuid())
-    .bind(worker_id)
+    .bind(&lease.owner)
     .bind(job_attempts)
     .bind(output)
     .fetch_optional(&mut **transaction)
@@ -614,10 +620,11 @@ pub async fn fail_automation_step(
     pool: &PgPool,
     project_id: ProjectId,
     step_run_id: AutomationStepRunId,
-    worker_id: &str,
+    lease: &JobLease,
     error: &str,
 ) -> Result<bool, AutomationError> {
     validate_project(project_id)?;
+    let worker_id = lease.owner.as_str();
     validate_worker_id(worker_id)?;
     validate_error(error)?;
     let mut transaction = pool.begin().await?;
@@ -627,7 +634,7 @@ pub async fn fail_automation_step(
         transaction.commit().await?;
         return Ok(false);
     }
-    ensure_step_lease_owner(&row, status, worker_id)?;
+    ensure_step_lease_owner(&row, status, lease)?;
     let job_attempts: i32 = row.get("job_attempts");
     let updated = sqlx::query(
         "UPDATE automation_step_runs
@@ -680,15 +687,15 @@ async fn lock_step_and_job(
 fn ensure_step_lease_owner(
     row: &PgRow,
     status: AutomationStepRunStatus,
-    worker_id: &str,
+    lease: &JobLease,
 ) -> Result<(), AutomationError> {
     if status != AutomationStepRunStatus::Running {
         return Err(AutomationError::InvalidTransition(format!(
             "step is {status:?}, not running"
         )));
     }
-    if !job_lease_is_valid(row, worker_id)
-        || row.get::<Option<String>, _>("claimed_by").as_deref() != Some(worker_id)
+    if !job_lease_is_valid(row, lease)
+        || row.get::<Option<String>, _>("claimed_by").as_deref() != Some(lease.owner.as_str())
         || row.get::<Option<i32>, _>("claimed_job_attempt") != Some(row.get("job_attempts"))
     {
         return Err(AutomationError::WorkerOwnership);

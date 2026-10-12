@@ -8,7 +8,7 @@ use std::{
     time::Duration,
 };
 
-use deepref_application::jobs::ClaimedJob;
+use deepref_application::jobs::{ClaimedJob, JobLease};
 use deepref_domain::ProjectId;
 use deepref_postgres::{enqueue_job_pool, job, migrate};
 use deepref_worker::{ClaimLoopConfig, JobHandler, delivery::DeliveryAction, run_claim_loop};
@@ -95,7 +95,9 @@ async fn handler_panic_fails_the_job_and_the_loop_keeps_claiming() {
     );
     // Claimed first, so the healthy job only runs if the loop survives.
     poison.priority = 10;
-    enqueue_job_pool(&pool, &poison).await.expect("enqueue poison");
+    enqueue_job_pool(&pool, &poison)
+        .await
+        .expect("enqueue poison");
     enqueue_job_pool(
         &pool,
         &job(
@@ -109,7 +111,7 @@ async fn handler_panic_fails_the_job_and_the_loop_keeps_claiming() {
     .await
     .expect("enqueue healthy");
 
-    let handler: JobHandler = Arc::new(|job: ClaimedJob, _owner: String| {
+    let handler: JobHandler = Arc::new(|job: ClaimedJob, _lease: JobLease| {
         Box::pin(async move {
             if job.kind == "test_poison" {
                 panic!("poison payload tripped the handler");
@@ -148,7 +150,10 @@ async fn handler_panic_fails_the_job_and_the_loop_keeps_claiming() {
     result.expect("a handler panic must not stop the worker");
 
     let (state, attempts, last_error) = job_row(&pool, poison_id).await;
-    assert_eq!(state, "queued", "the panicked attempt is retried with backoff");
+    assert_eq!(
+        state, "queued",
+        "the panicked attempt is retried with backoff"
+    );
     assert_eq!(attempts, 1);
     let last_error = last_error.expect("the panic is recorded");
     assert!(

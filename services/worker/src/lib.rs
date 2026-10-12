@@ -1,7 +1,7 @@
 use std::{future::Future, pin::Pin, sync::Arc, time::Duration};
 
 use deepref_ai::{AiGateway, RoutedGateway};
-use deepref_application::jobs::ClaimedJob;
+use deepref_application::jobs::{ClaimedJob, JobLease, JobRetry};
 use deepref_documents::DocumentStore;
 use deepref_postgres::{claim_job, complete_job, fail_job, renew_job};
 use delivery::DeliveryAction;
@@ -79,9 +79,13 @@ pub async fn run(config: config::WorkerConfig) -> anyhow::Result<()> {
 
 /// Runs one claimed job and says what the queue should do with it. The
 /// production handler dispatches by job kind (`processor`); tests substitute
-/// their own to exercise the claim loop.
+/// their own to exercise the claim loop. The `JobLease` is the claim token
+/// every lease-checked write of the job must present.
 pub type JobHandler = Arc<
-    dyn Fn(ClaimedJob, String) -> Pin<Box<dyn Future<Output = anyhow::Result<DeliveryAction>> + Send>>
+    dyn Fn(
+            ClaimedJob,
+            JobLease,
+        ) -> Pin<Box<dyn Future<Output = anyhow::Result<DeliveryAction>> + Send>>
         + Send
         + Sync,
 >;
@@ -153,11 +157,11 @@ pub async fn run_with_shutdown(
 
 fn production_handler(
     pool: sqlx::PgPool,
-    lease: Duration,
+    claim_lease: Duration,
     document_store: Arc<DocumentStore>,
     ai_gateway: Arc<dyn AiGateway>,
 ) -> JobHandler {
-    Arc::new(move |job: ClaimedJob, owner: String| {
+    Arc::new(move |job: ClaimedJob, lease: JobLease| {
         let pool = pool.clone();
         let document_store = Arc::clone(&document_store);
         let ai_gateway = Arc::clone(&ai_gateway);
@@ -165,8 +169,8 @@ fn production_handler(
             processor::handle_job_with_documents_owned_and_ai(
                 pool,
                 &job,
-                &owner,
-                lease,
+                &lease,
+                claim_lease,
                 Some(document_store),
                 None,
                 ai_gateway,
@@ -225,12 +229,12 @@ pub async fn run_claim_loop(
                             }
                         };
                         let pool = pool.clone();
-                        let owner = owner.clone();
+                        let lease = job.lease(owner.clone());
                         let handler = Arc::clone(&handler);
-                        let lease = config.claim_lease;
+                        let duration = config.claim_lease;
                         active.spawn(async move {
                             let _permit = permit;
-                            process_claimed_job(pool, owner, job, lease, handler).await
+                            process_claimed_job(pool, job, lease, duration, handler).await
                         });
                     }
                     Ok(None) => {}
@@ -270,39 +274,48 @@ pub async fn run_claim_loop(
 
 async fn process_claimed_job(
     pool: sqlx::PgPool,
-    owner: String,
     job: ClaimedJob,
-    lease: Duration,
+    lease: JobLease,
+    duration: Duration,
     handler: JobHandler,
 ) -> anyhow::Result<()> {
-    let result = run_with_lease_renewal(
-        pool.clone(),
-        owner.clone(),
-        job.id,
-        lease,
-        run_isolated(handler(job.clone(), owner.clone())),
-    )
-    .await;
+    let result = {
+        let renew_pool = pool.clone();
+        let renew_lease = lease.clone();
+        run_with_lease_renewal(
+            duration,
+            move || {
+                let pool = renew_pool.clone();
+                let lease = renew_lease.clone();
+                async move { renew_job(&pool, &lease, duration).await }
+            },
+            run_isolated(handler(job.clone(), lease.clone())),
+        )
+        .await
+    };
     match result {
         Ok(DeliveryAction::Ack) => {
-            if !complete_job(&pool, &owner, job.id).await? {
+            if !complete_job(&pool, &lease).await? {
                 tracing::warn!(job_id=%job.id, kind=%job.kind, attempts=job.attempts, "job completion rejected because the lease is no longer owned");
             }
         }
         Ok(DeliveryAction::Nak(delay)) => {
-            record_failure(&pool, &owner, &job, "retry requested", delay).await?;
-        }
-        Ok(DeliveryAction::Terminate) => {
-            let terminal = ClaimedJob {
-                attempts: job.max_attempts,
-                ..job.clone()
-            };
             record_failure(
                 &pool,
-                &owner,
-                &terminal,
+                &job,
+                &lease,
+                "retry requested",
+                JobRetry::After(delay),
+            )
+            .await?;
+        }
+        Ok(DeliveryAction::Terminate) => {
+            record_failure(
+                &pool,
+                &job,
+                &lease,
                 "terminal job failure",
-                Duration::ZERO,
+                JobRetry::DeadLetter,
             )
             .await?;
         }
@@ -312,10 +325,10 @@ async fn process_claimed_job(
             // only an error while persisting that decision should stop the worker.
             record_failure(
                 &pool,
-                &owner,
                 &job,
+                &lease,
                 &error.to_string(),
-                Duration::from_secs(10),
+                JobRetry::After(Duration::from_secs(10)),
             )
             .await?;
         }
@@ -327,12 +340,16 @@ async fn process_claimed_job(
 /// retried, `error!` when this attempt dead-letters it.
 async fn record_failure(
     pool: &sqlx::PgPool,
-    owner: &str,
     job: &ClaimedJob,
+    lease: &JobLease,
     error: &str,
-    retry_after: Duration,
+    retry: JobRetry,
 ) -> anyhow::Result<()> {
-    let persisted = fail_job(pool, owner, job, error, retry_after).await?;
+    let persisted = fail_job(pool, lease, error, retry).await?;
+    let dead_letter = match retry {
+        JobRetry::DeadLetter => true,
+        JobRetry::After(_) => job.attempts >= job.max_attempts,
+    };
     if !persisted {
         tracing::warn!(
             job_id = %job.id,
@@ -341,7 +358,7 @@ async fn record_failure(
             error,
             "job failure update rejected because the lease is no longer owned"
         );
-    } else if job.attempts >= job.max_attempts {
+    } else if dead_letter {
         tracing::error!(
             job_id = %job.id,
             kind = %job.kind,
@@ -351,12 +368,16 @@ async fn record_failure(
             "job dead-lettered"
         );
     } else {
+        let retry_after_ms = match retry {
+            JobRetry::After(delay) => delay.as_millis() as u64,
+            JobRetry::DeadLetter => 0,
+        };
         tracing::warn!(
             job_id = %job.id,
             kind = %job.kind,
             attempts = job.attempts,
             max_attempts = job.max_attempts,
-            retry_after_ms = retry_after.as_millis() as u64,
+            retry_after_ms,
             error,
             "job failed; will retry"
         );
@@ -393,29 +414,127 @@ where
     }
 }
 
-async fn run_with_lease_renewal<F>(
-    pool: sqlx::PgPool,
-    owner: String,
-    job_id: uuid::Uuid,
+/// Drive `work` while renewing its lease every third of `lease`. `renew`
+/// returns whether the lease is still held.
+async fn run_with_lease_renewal<F, R, RF>(
     lease: Duration,
+    mut renew: R,
     work: F,
 ) -> anyhow::Result<DeliveryAction>
 where
     F: Future<Output = anyhow::Result<DeliveryAction>>,
+    R: FnMut() -> RF,
+    RF: Future<Output = anyhow::Result<bool>>,
 {
+    use tokio::time::Instant;
+
     let interval = (lease / 3).max(Duration::from_millis(100));
     tokio::pin!(work);
-    let mut renewal = tokio::time::interval(interval);
-    renewal.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
-    renewal.tick().await;
+    // The lease is certainly held until `held_until`: it is measured from
+    // before the last successful renewal was sent, so it never overestimates.
+    let mut held_until = Instant::now() + lease;
+    let mut next_renewal = Instant::now() + interval;
+    let mut failures: u32 = 0;
     loop {
         tokio::select! {
             result = &mut work => return result,
-            _ = renewal.tick() => {
-                if !renew_job(&pool, &owner, job_id, lease).await? {
-                    anyhow::bail!("job lease was lost before completion");
+            _ = tokio::time::sleep_until(next_renewal) => {
+                let sent_at = Instant::now();
+                match renew().await {
+                    Ok(true) => {
+                        held_until = sent_at + lease;
+                        failures = 0;
+                        next_renewal = Instant::now() + interval;
+                    }
+                    // Another claim owns the job now: stop at once.
+                    Ok(false) => anyhow::bail!("job lease was lost before completion"),
+                    // A failed UPDATE says nothing about the lease, which may
+                    // still be valid: retry with backoff while it lasts instead
+                    // of cancelling work that may already have side effects.
+                    Err(error) => {
+                        failures += 1;
+                        let backoff = Duration::from_millis(100)
+                            .saturating_mul(2_u32.saturating_pow(failures - 1))
+                            .min(interval);
+                        let retry_at = Instant::now() + backoff;
+                        if retry_at >= held_until {
+                            anyhow::bail!(
+                                "job lease could not be renewed before it expired: {error:#}"
+                            );
+                        }
+                        tracing::warn!(%error, failures, retry_in_ms = backoff.as_millis() as u64, "job lease renewal failed; retrying");
+                        next_renewal = retry_at;
+                    }
                 }
             }
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::sync::atomic::{AtomicU32, Ordering};
+
+    use super::*;
+
+    /// One failed renewal UPDATE (a dropped connection, a pool timeout) must
+    /// not cancel work that still holds a valid lease.
+    #[tokio::test]
+    async fn a_transient_renewal_error_does_not_cancel_the_work() {
+        let calls = Arc::new(AtomicU32::new(0));
+        let renew = {
+            let calls = Arc::clone(&calls);
+            move || {
+                let call = calls.fetch_add(1, Ordering::SeqCst);
+                async move {
+                    if call == 0 {
+                        anyhow::bail!("connection reset by peer");
+                    }
+                    Ok(true)
+                }
+            }
+        };
+        let work = async {
+            tokio::time::sleep(Duration::from_millis(700)).await;
+            Ok(DeliveryAction::Ack)
+        };
+        let result = run_with_lease_renewal(Duration::from_millis(600), renew, work).await;
+        assert!(
+            matches!(result, Ok(DeliveryAction::Ack)),
+            "work was cancelled: {result:?}"
+        );
+        assert!(calls.load(Ordering::SeqCst) >= 2, "renewal was retried");
+    }
+
+    /// A lease that is definitely gone (another claim holds the job) still
+    /// stops the work at once.
+    #[tokio::test]
+    async fn a_lost_lease_stops_the_work() {
+        let work = async {
+            tokio::time::sleep(Duration::from_secs(5)).await;
+            Ok(DeliveryAction::Ack)
+        };
+        let result =
+            run_with_lease_renewal(Duration::from_millis(300), || async { Ok(false) }, work).await;
+        assert!(result.is_err());
+    }
+
+    /// Renewal that keeps failing gives up once the lease must have expired,
+    /// instead of running unfenced forever.
+    #[tokio::test]
+    async fn renewal_gives_up_once_the_lease_has_expired() {
+        let work = async {
+            tokio::time::sleep(Duration::from_secs(5)).await;
+            Ok(DeliveryAction::Ack)
+        };
+        let started = tokio::time::Instant::now();
+        let result = run_with_lease_renewal(
+            Duration::from_millis(300),
+            || async { anyhow::bail!("database unavailable") },
+            work,
+        )
+        .await;
+        assert!(result.is_err());
+        assert!(started.elapsed() < Duration::from_secs(2));
     }
 }
