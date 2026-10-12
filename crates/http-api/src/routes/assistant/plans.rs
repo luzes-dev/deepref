@@ -53,6 +53,8 @@ pub(crate) struct AssistantPlanResultDto {
     pub review_run_id: Option<Uuid>,
     pub applied: Option<u32>,
     pub unchanged: Option<u32>,
+    /// Records left alone because they changed after the plan was made.
+    pub stale: Option<u32>,
     pub failed: Option<u32>,
 }
 
@@ -93,6 +95,7 @@ fn result_dto(value: &Value) -> Option<AssistantPlanResultDto> {
         review_run_id: field("review_run_id").and_then(|id| Uuid::parse_str(&id).ok()),
         applied: count("applied"),
         unchanged: count("unchanged"),
+        stale: count("stale"),
         failed: count("failed"),
     })
 }
@@ -664,28 +667,20 @@ async fn run_screen_reports(
     }));
     let evidence = provenance.activity_evidence(action);
 
-    let report_ids: Vec<Uuid> = action
-        .args
-        .get("report_ids")
-        .and_then(Value::as_array)
-        .map(|ids| {
-            ids.iter()
-                .filter_map(|id| id.as_str().and_then(|text| Uuid::parse_str(text).ok()))
-                .collect()
-        })
-        .unwrap_or_default();
-    let (mut applied, mut unchanged, mut failed) = (0_u32, 0_u32, 0_u32);
-    for report_id in report_ids {
-        let revision = sqlx::query_scalar::<_, i64>(
-            "SELECT revision FROM screening_state WHERE project_id = $1 AND report_id = $2",
-        )
-        .bind(project_id.as_uuid())
-        .bind(report_id)
-        .fetch_optional(&state.pool)
-        .await
-        .ok()
-        .flatten()
-        .unwrap_or(0);
+    // Each record is screened only while it is still as it was when the plan
+    // was made. A record without a plan-time snapshot (a plan made before
+    // snapshots existed) cannot be checked, so it counts as stale too.
+    let planned = action.screening_items();
+    let (mut applied, mut unchanged, mut stale, mut failed) = (0_u32, 0_u32, 0_u32, 0_u32);
+    for report_id in action.report_ids() {
+        let Some(revision) = planned
+            .iter()
+            .find(|item| item.report_id == report_id)
+            .map(|item| item.expected_revision)
+        else {
+            stale += 1;
+            continue;
+        };
         let command = ScreenReportCommand {
             project_id,
             report_id: report_id.into(),
@@ -714,23 +709,29 @@ async fn run_screen_reports(
                 .await;
             }
             Err(deepref_postgres::ScreeningError::Repeated { .. }) => unchanged += 1,
+            Err(deepref_postgres::ScreeningError::RevisionConflict { .. }) => stale += 1,
             Err(error) => {
                 tracing::warn!(%error, %report_id, "assistant plan: screening decision failed");
                 failed += 1;
             }
         }
     }
-    let status = if failed > 0 && applied == 0 && unchanged == 0 {
+    let status = if failed > 0 && applied == 0 && unchanged == 0 && stale == 0 {
         "failed"
     } else {
         "executed"
     };
-    let message = format!(
-        "{applied} decision(s) recorded, {unchanged} already that way, {failed} could not be recorded."
-    );
+    let mut message = format!("{applied} decision(s) recorded, {unchanged} already that way");
+    if stale > 0 {
+        message.push_str(&format!(
+            ", {stale} left alone because the record changed after the plan was made"
+        ));
+    }
+    message.push_str(&format!(", {failed} could not be recorded."));
     let mut value = outcome(action, status, message);
     value["applied"] = json!(applied);
     value["unchanged"] = json!(unchanged);
+    value["stale"] = json!(stale);
     value["failed"] = json!(failed);
     value
 }

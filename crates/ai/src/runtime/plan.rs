@@ -28,8 +28,8 @@ pub(crate) use consistency::NO_PLAN_CORRECTION;
 pub use consistency::{claims_pending_change, no_plan_notice};
 pub(crate) use policy::{MAX_ACTIONS_PER_PLAN, plan_write_call};
 pub use policy::{
-    MAX_REPORTS_PER_ACTION, ManualStep, PlanAction, plan_action_is_executable,
-    validate_screen_reports,
+    MAX_REPORTS_PER_ACTION, ManualStep, PlanAction, PlannedScreeningItem, SCREEN_REPORT_ITEMS,
+    plan_action_is_executable, validate_screen_reports,
 };
 
 use serde_json::Value;

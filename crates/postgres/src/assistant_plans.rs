@@ -179,6 +179,67 @@ pub async fn update_assistant_plan_results(
     Ok(plan_from_row(&row))
 }
 
+/// One record of a planned `screen_reports` action as it is now.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct ScreeningPlanSnapshot {
+    pub report_id: Uuid,
+    pub title: String,
+    pub title_abstract_status: String,
+    pub revision: i64,
+    /// The record sits in a blind AI-first audit; only a person may screen it.
+    pub audit_masked: bool,
+}
+
+const MAX_SNAPSHOT_TITLE_CHARS: usize = 300;
+
+/// Reads the current title, title/abstract status and screening revision of
+/// each report, in the order given. Reports that are not in the project are
+/// missing from the result. Blind-audit records read as unscreened, exactly
+/// like every other assistant read.
+pub async fn snapshot_screening_plan_items(
+    pool: &PgPool,
+    project_id: Uuid,
+    report_ids: &[Uuid],
+) -> Result<Vec<ScreeningPlanSnapshot>, AssistantError> {
+    let rows = sqlx::query(
+        "SELECT ids.report_id, r.title,
+                ai_first_audit_masked(pr.project_id, pr.report_id) AS masked,
+                COALESCE(s.title_abstract_status, 'unscreened') AS status,
+                COALESCE(s.revision, 0) AS revision
+         FROM unnest($2::uuid[]) WITH ORDINALITY AS ids(report_id, ordinal)
+         JOIN project_reports pr ON pr.project_id = $1 AND pr.report_id = ids.report_id
+         JOIN reports r ON r.id = ids.report_id
+         LEFT JOIN screening_state s ON s.project_id = pr.project_id AND s.report_id = pr.report_id
+         ORDER BY ids.ordinal",
+    )
+    .bind(project_id)
+    .bind(report_ids)
+    .fetch_all(pool)
+    .await?;
+    Ok(rows
+        .iter()
+        .map(|row| {
+            let masked: bool = row.get("masked");
+            let title = row
+                .get::<Option<String>, _>("title")
+                .map(|title| crate::decode_html_entities(&title))
+                .filter(|title| !title.trim().is_empty())
+                .unwrap_or_else(|| "Untitled record".to_owned());
+            ScreeningPlanSnapshot {
+                report_id: row.get("report_id"),
+                title: title.chars().take(MAX_SNAPSHOT_TITLE_CHARS).collect(),
+                title_abstract_status: if masked {
+                    "unscreened".to_owned()
+                } else {
+                    row.get("status")
+                },
+                revision: row.get("revision"),
+                audit_masked: masked,
+            }
+        })
+        .collect())
+}
+
 pub async fn finish_assistant_plan(
     pool: &PgPool,
     plan_id: Uuid,

@@ -59,6 +59,23 @@ async fn project(pool: &PgPool) -> (Uuid, Uuid) {
     (project_id, conversation_id)
 }
 
+/// A report in the project: plans only accept records the project holds.
+async fn project_report(pool: &PgPool, project_id: Uuid) -> Uuid {
+    let report_id = Uuid::new_v4();
+    sqlx::query("INSERT INTO reports (id,title) VALUES ($1,'Worker plan report')")
+        .bind(report_id)
+        .execute(pool)
+        .await
+        .expect("report inserts");
+    sqlx::query("INSERT INTO project_reports (project_id,report_id) VALUES ($1,$2)")
+        .bind(project_id)
+        .bind(report_id)
+        .execute(pool)
+        .await
+        .expect("project report inserts");
+    report_id
+}
+
 fn route() -> ResolvedModel {
     ResolvedModel {
         profile: ModelProfile::Reasoning,
@@ -127,7 +144,7 @@ async fn worker_completes_a_run_with_one_answer_one_plan_and_a_cassette() {
     let _guard = DATABASE_TEST_MUTEX.lock().await;
     let Some(pool) = database().await else { return };
     let (project_id, conversation_id) = project(&pool).await;
-    let report_id = Uuid::new_v4();
+    let report_id = project_report(&pool, project_id).await;
     let model = MockCompletionModel::from_stream_turns(vec![
         stream_call(
             "c1",
@@ -534,7 +551,7 @@ async fn plan_event_resolves_to_the_stored_plan() {
     let _guard = DATABASE_TEST_MUTEX.lock().await;
     let Some(pool) = database().await else { return };
     let (project_id, conversation_id) = project(&pool).await;
-    let report_id = Uuid::new_v4();
+    let report_id = project_report(&pool, project_id).await;
     let model = MockCompletionModel::from_stream_turns(vec![
         stream_call(
             "c1",

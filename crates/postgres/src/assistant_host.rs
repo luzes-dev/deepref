@@ -13,9 +13,10 @@
 
 use deepref_ai::{
     AgentReadOperation, AgentToolName, AiError, AiFuture, AppraisalToolArgs, BoundedAgentJson,
-    DocumentBlocksToolArgs, ListStudiesToolArgs, ProjectToolArgs, ReportToolArgs,
-    ScreeningStateToolArgs, SearchDocumentToolArgs, SearchProjectReportsToolArgs, StudyToolArgs,
-    TOOL_LIST_REPORTS, TOOL_PROJECT_OVERVIEW, runtime::AssistantToolHost, truncate_chars,
+    DocumentBlocksToolArgs, ListStudiesToolArgs, PlanAction, PlannedScreeningItem, ProjectToolArgs,
+    ReportToolArgs, ScreeningStateToolArgs, SearchDocumentToolArgs, SearchProjectReportsToolArgs,
+    StudyToolArgs, TOOL_LIST_REPORTS, TOOL_PROJECT_OVERVIEW, TOOL_SCREEN_REPORTS,
+    runtime::AssistantToolHost, truncate_chars,
 };
 use deepref_domain::{ProjectId, StudyDesign};
 use serde_json::{Value, json};
@@ -95,6 +96,56 @@ impl AssistantToolHost for PostgresAssistantToolHost {
         args: Value,
     ) -> AiFuture<'a, Value> {
         Box::pin(async move { self.read(project_id, tool, args).await })
+    }
+
+    fn prepare_plan_action<'a>(
+        &'a self,
+        project_id: ProjectId,
+        action: PlanAction,
+    ) -> AiFuture<'a, PlanAction> {
+        Box::pin(async move {
+            if action.tool != TOOL_SCREEN_REPORTS {
+                return Ok(action);
+            }
+            self.prepare_screen_reports(project_id, action).await
+        })
+    }
+}
+
+impl PostgresAssistantToolHost {
+    /// Captures, at plan time, each targeted record's title, status and
+    /// screening revision. Confirmation compares against these revisions.
+    async fn prepare_screen_reports(
+        &self,
+        project_id: ProjectId,
+        action: PlanAction,
+    ) -> Result<PlanAction, AiError> {
+        let report_ids = action.report_ids();
+        let snapshots =
+            crate::snapshot_screening_plan_items(&self.pool, project_id.as_uuid(), &report_ids)
+                .await
+                .map_err(|_| AiError::Persistence("plan snapshot failed".to_owned()))?;
+        if snapshots.len() != report_ids.len() {
+            return Err(AiError::InvalidContext(
+                "some report ids are not in this project; use report ids from tool results"
+                    .to_owned(),
+            ));
+        }
+        if snapshots.iter().any(|snapshot| snapshot.audit_masked) {
+            return Err(AiError::InvalidContext(
+                "some of these records are in a blind audit and must be screened by a person in the screening queue".to_owned(),
+            ));
+        }
+        let items: Vec<PlannedScreeningItem> = snapshots
+            .into_iter()
+            .map(|snapshot| PlannedScreeningItem {
+                report_id: snapshot.report_id,
+                title: snapshot.title,
+                current_status: snapshot.title_abstract_status,
+                expected_revision: snapshot.revision,
+            })
+            .collect();
+        Ok(action.with_screening_items(&items))
     }
 }
 

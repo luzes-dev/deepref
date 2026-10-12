@@ -62,10 +62,11 @@ pub use runner::{
 };
 pub use runtime::{
     ASSISTANT_PROMPT_VERSION, AgentLoopConfig, ChatMessage, ChatToolCall, MAX_REPORTS_PER_ACTION,
-    ManualStep, PlanAction, TOOL_FINAL_EXCLUSION, TOOL_LIST_REPORTS, TOOL_PROJECT_OVERVIEW,
-    TOOL_PUBLISH_PROTOCOL, TOOL_SCREEN_REPORTS, ToolTraceEntry, agent_tool_declarations,
-    assistant_system_prompt, claims_pending_change, is_read_tool, no_plan_notice,
-    plan_action_is_executable, truncate_chars, validate_screen_reports,
+    ManualStep, PlanAction, PlannedScreeningItem, SCREEN_REPORT_ITEMS, TOOL_FINAL_EXCLUSION,
+    TOOL_LIST_REPORTS, TOOL_PROJECT_OVERVIEW, TOOL_PUBLISH_PROTOCOL, TOOL_SCREEN_REPORTS,
+    ToolTraceEntry, agent_tool_declarations, assistant_system_prompt, claims_pending_change,
+    is_read_tool, no_plan_notice, plan_action_is_executable, truncate_chars,
+    validate_screen_reports,
 };
 pub use screening::{
     CriterionJudgment, CriterionPrompt, CriterionResult, ScreeningAnalysis, ScreeningEvidence,

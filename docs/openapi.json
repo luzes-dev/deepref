@@ -14015,6 +14015,15 @@
             ],
             "format": "uuid"
           },
+          "stale": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "Records left alone because they changed after the plan was made.",
+            "minimum": 0
+          },
           "status": {
             "type": "string",
             "description": "`executed`, `queued` (an AI review is running), `completed` (the review\nfinished), `failed`, `skipped` or `manual`."

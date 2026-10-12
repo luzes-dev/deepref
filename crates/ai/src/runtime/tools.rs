@@ -200,7 +200,7 @@ async fn execute_tool_call(
     if is_read_tool(name) {
         execute_read_tool(scope, name, args).await
     } else if super::plan::is_write_tool(name) {
-        execute_write_tool(scope, name, args)
+        execute_write_tool(scope, name, args).await
     } else {
         Ok(ToolOutput::json(error_output("unknown tool")))
     }
@@ -264,7 +264,7 @@ async fn execute_read_tool(
     }
 }
 
-fn execute_write_tool(
+async fn execute_write_tool(
     scope: &ToolHostScope,
     name: &str,
     args: Value,
@@ -282,12 +282,26 @@ fn execute_write_tool(
         name: name.to_owned(),
         arguments: args.clone(),
     };
-    match super::plan::plan_write_call(
+    let planned = super::plan::plan_write_call(
         scope.context.project_id,
         &scope.context.actor,
         &call,
         scope.plans.len(),
-    ) {
+    );
+    // Host-known facts (plan-time revisions, the project's AI settings)
+    // complete or refuse an executable action before it joins the plan.
+    let planned = match planned {
+        Ok(action) if action.executable => scope
+            .host
+            .prepare_plan_action(scope.context.project_id, action)
+            .await
+            .map_err(|error| match error {
+                AiError::InvalidContext(message) => message,
+                _ => "the change could not be planned".to_owned(),
+            }),
+        other => other,
+    };
+    match planned {
         Ok(action) => {
             let output = if action.executable {
                 json!({"status": "queued_in_plan", "note": "Not executed. It only runs if the user confirms the plan."})

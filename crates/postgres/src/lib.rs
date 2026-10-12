@@ -103,8 +103,9 @@ pub use assistant::{
 };
 pub use assistant_host::PostgresAssistantToolHost;
 pub use assistant_plans::{
-    AssistantPlanRecord, NewAssistantPlan, claim_assistant_plan, create_assistant_plan,
-    finish_assistant_plan, get_assistant_plan, update_assistant_plan_results,
+    AssistantPlanRecord, NewAssistantPlan, ScreeningPlanSnapshot, claim_assistant_plan,
+    create_assistant_plan, finish_assistant_plan, get_assistant_plan,
+    snapshot_screening_plan_items, update_assistant_plan_results,
 };
 pub use assistant_runs::{
     ASSISTANT_AGENT_RUN_JOB_KIND, AssistantAgentRunRecord, AssistantAgentRunStatus,

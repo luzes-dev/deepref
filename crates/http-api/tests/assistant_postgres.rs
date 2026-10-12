@@ -1749,3 +1749,178 @@ async fn assistant_refuses_overlong_messages_before_storing_them() {
     assert!(stored.is_empty(), "an overlong message is not stored");
     cleanup(&pool, fixture).await;
 }
+
+/// Adds an unscreened report to the fixture project.
+async fn add_unscreened_report(pool: &PgPool, project: Uuid, title: &str) -> Uuid {
+    let report_id = Uuid::new_v4();
+    sqlx::query("INSERT INTO reports (id,title,abstract_text) VALUES ($1,$2,'plan abstract')")
+        .bind(report_id)
+        .bind(title)
+        .execute(pool)
+        .await
+        .expect("report inserts");
+    sqlx::query("INSERT INTO project_reports (project_id,report_id) VALUES ($1,$2)")
+        .bind(project)
+        .bind(report_id)
+        .execute(pool)
+        .await
+        .expect("project report inserts");
+    report_id
+}
+
+/// Runs one scripted assistant turn and returns the id of the plan it
+/// persisted, or `None` when the turn produced no plan.
+async fn plan_from_turn(
+    pool: &PgPool,
+    state: &AppState,
+    project: Uuid,
+    model: MockCompletionModel,
+) -> Option<Uuid> {
+    let conversation_id = create_conversation(state, project, "plan").await;
+    let (status, body) = post_json(
+        state,
+        &format!("/projects/{project}/assistant/chat"),
+        json!({"conversation_id": conversation_id, "message": "screen these"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::ACCEPTED, "{body}");
+    let run: Value = serde_json::from_str(&body).expect("run json");
+    let run_id: Uuid = serde_json::from_value(run["id"].clone()).expect("run id");
+    drive_assistant_job(pool, model).await;
+    let run = get_run(state, project, run_id).await;
+    assert_eq!(run["status"], "completed", "{run}");
+    sqlx::query_scalar("SELECT id FROM assistant_plans WHERE project_id=$1 AND status='pending'")
+        .bind(project)
+        .fetch_optional(pool)
+        .await
+        .expect("plan lookup")
+}
+
+async fn title_abstract_status(pool: &PgPool, project: Uuid, report: Uuid) -> String {
+    sqlx::query_scalar(
+        "SELECT COALESCE((SELECT title_abstract_status FROM screening_state
+           WHERE project_id=$1 AND report_id=$2),'unscreened')",
+    )
+    .bind(project)
+    .bind(report)
+    .fetch_one(pool)
+    .await
+    .expect("screening status")
+}
+
+fn exclude_plan_model(report_ids: &[Uuid]) -> MockCompletionModel {
+    MockCompletionModel::from_stream_turns(vec![
+        rig_call(
+            "c1",
+            "screen_reports",
+            json!({
+                "report_ids": report_ids,
+                "decision": "exclude",
+                "summary": "Tidy up a few records",
+                "rationale": "Off-topic"
+            }),
+        ),
+        rig_text("I prepared a plan; nothing has changed yet."),
+    ])
+}
+
+async fn delete_project_and_reports(pool: &PgPool, project: Uuid, reports: &[Uuid]) {
+    sqlx::query("DELETE FROM projects WHERE id=$1")
+        .bind(project)
+        .execute(pool)
+        .await
+        .expect("project cleanup");
+    sqlx::query("DELETE FROM reports WHERE id = ANY($1)")
+        .bind(reports)
+        .execute(pool)
+        .await
+        .expect("report cleanup");
+}
+
+#[tokio::test]
+async fn confirmed_plan_rejects_records_changed_since_it_was_made() {
+    let _guard = test_lock().lock().await;
+    let Some(pool) = database().await else { return };
+    let fixture = seed(&pool).await;
+    deepref_postgres::insert_model_route(
+        &pool,
+        &model_route(ModelProfile::Reasoning),
+        Utc::now() - Duration::milliseconds(1),
+    )
+    .await
+    .expect("route inserts");
+    let project = fixture.project_id;
+    let changed = add_unscreened_report(&pool, project, "Changed by a colleague").await;
+    let mut state = AppState::new(pool.clone());
+    state.ai_info.configured = true;
+    let plan_id = plan_from_turn(
+        &pool,
+        &state,
+        project,
+        exclude_plan_model(&[fixture.report_id, changed]),
+    )
+    .await
+    .expect("the turn produced a plan");
+
+    // The plan remembers the revision each record had when it was made.
+    let actions: Value = sqlx::query_scalar("SELECT actions FROM assistant_plans WHERE id=$1")
+        .bind(plan_id)
+        .fetch_one(&pool)
+        .await
+        .expect("plan actions");
+    let items = actions[0]["args"]["items"]
+        .as_array()
+        .expect("plan-time items are stored with the action");
+    assert_eq!(items.len(), 2, "{actions}");
+    assert_eq!(items[0]["report_id"], json!(fixture.report_id));
+    assert_eq!(items[0]["expected_revision"], 3, "{actions}");
+    assert_eq!(items[0]["current_status"], "maybe", "{actions}");
+    assert_eq!(items[0]["title"], "Assistant report", "{actions}");
+    assert_eq!(items[1]["expected_revision"], 0, "{actions}");
+
+    // A colleague includes one of the records before the plan is confirmed.
+    let protocol_version_id = deepref_postgres::get_published_protocol(&pool, project)
+        .await
+        .expect("published protocol")
+        .id;
+    deepref_postgres::screen_report(
+        &pool,
+        deepref_application::ScreenReportCommand {
+            project_id: project.into(),
+            report_id: changed.into(),
+            stage: deepref_domain::ScreeningStage::TitleAbstract,
+            decision: deepref_domain::ScreeningDecision::Include,
+            exclusion_reason_id: None,
+            protocol_version_id: protocol_version_id.into(),
+            expected_revision: 0,
+            notes: None,
+            actor: deepref_domain::Actor::new(deepref_domain::ActorKind::User, "colleague")
+                .expect("actor"),
+        },
+    )
+    .await
+    .expect("the colleague's decision is recorded");
+
+    let (status, body) = post_json(
+        &state,
+        &format!("/projects/{project}/assistant/plans/{plan_id}/confirm"),
+        json!({}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let plan: Value = serde_json::from_str(&body).expect("plan json");
+    assert_eq!(plan["results"][0]["applied"], 1, "{body}");
+    assert_eq!(plan["results"][0]["stale"], 1, "{body}");
+    assert_eq!(
+        title_abstract_status(&pool, project, fixture.report_id).await,
+        "exclude",
+        "the unchanged record is screened"
+    );
+    assert_eq!(
+        title_abstract_status(&pool, project, changed).await,
+        "include",
+        "the colleague's newer decision is kept"
+    );
+    delete_project_and_reports(&pool, project, &[changed]).await;
+    cleanup(&pool, fixture).await;
+}
