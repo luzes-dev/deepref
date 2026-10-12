@@ -67,6 +67,86 @@ pub async fn apply_autonomy_for_proposal(
     }
 }
 
+/// Most outbox entries one reconciler pass applies.
+const AUTONOMY_OUTBOX_BATCH: i64 = 20;
+/// An entry that failed this often stays for inspection and is not retried.
+const AUTONOMY_OUTBOX_MAX_ATTEMPTS: i32 = 5;
+
+/// Records, in the review run's finalization transaction, that autonomy must
+/// still be applied to `proposal_id`. The entry survives a crash after commit.
+pub(crate) async fn enqueue_autonomy_in_transaction(
+    tx: &mut Transaction<'_, Postgres>,
+    project_id: Uuid,
+    proposal_id: Uuid,
+) -> Result<(), sqlx::Error> {
+    sqlx::query(
+        "INSERT INTO ai_autonomy_outbox (project_id, proposal_id) VALUES ($1,$2)
+         ON CONFLICT DO NOTHING",
+    )
+    .bind(project_id)
+    .bind(proposal_id)
+    .execute(&mut **tx)
+    .await?;
+    Ok(())
+}
+
+/// Applies autonomy for one outbox entry and settles the entry: removed once
+/// applied (any outcome, including "left as a suggestion"), otherwise kept with
+/// the error for the next reconciler pass. Applying is idempotent: it acts only
+/// on a still-pending proposal through a compare-and-set.
+pub(crate) async fn apply_pending_autonomy(
+    pool: &PgPool,
+    project_id: Uuid,
+    proposal_id: Uuid,
+) -> anyhow::Result<AutonomyOutcome> {
+    match apply_autonomy_for_proposal(pool, project_id, proposal_id).await {
+        Ok(outcome) => {
+            sqlx::query("DELETE FROM ai_autonomy_outbox WHERE project_id=$1 AND proposal_id=$2")
+                .bind(project_id)
+                .bind(proposal_id)
+                .execute(pool)
+                .await?;
+            Ok(outcome)
+        }
+        Err(error) => {
+            sqlx::query(
+                "UPDATE ai_autonomy_outbox SET attempts=attempts+1,last_error=left($3,1000)
+                 WHERE project_id=$1 AND proposal_id=$2",
+            )
+            .bind(project_id)
+            .bind(proposal_id)
+            .bind(error.to_string())
+            .execute(pool)
+            .await?;
+            Err(error)
+        }
+    }
+}
+
+/// One bounded reconciler pass over autonomy that was committed but not yet
+/// applied, for example because the worker stopped right after finalization.
+/// Returns how many entries were applied.
+pub async fn sweep_ai_autonomy_outbox(pool: &PgPool) -> anyhow::Result<u64> {
+    let entries: Vec<(Uuid, Uuid)> = sqlx::query_as(
+        "SELECT project_id, proposal_id FROM ai_autonomy_outbox
+         WHERE attempts < $1 ORDER BY created_at, proposal_id LIMIT $2",
+    )
+    .bind(AUTONOMY_OUTBOX_MAX_ATTEMPTS)
+    .bind(AUTONOMY_OUTBOX_BATCH)
+    .fetch_all(pool)
+    .await?;
+    let mut applied = 0;
+    for (project_id, proposal_id) in entries {
+        match apply_pending_autonomy(pool, project_id, proposal_id).await {
+            Ok(_) => applied += 1,
+            Err(error) => {
+                tracing::warn!(%error, %project_id, %proposal_id, "AI autonomy is still pending");
+            }
+        }
+    }
+    Ok(applied)
+}
+
 async fn report_title(pool: &PgPool, report_id: Uuid) -> String {
     sqlx::query_scalar::<_, Option<String>>("SELECT title FROM reports WHERE id=$1")
         .bind(report_id)

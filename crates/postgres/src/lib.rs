@@ -75,7 +75,9 @@ pub use ai::{
     list_ai_extraction_evidence, list_ai_grounding_blocks, list_ai_proposals,
     persist_document_block_embedding, resolve_ai_proposal,
 };
-pub use ai_autonomy_apply::{AutonomyOutcome, apply_autonomy_for_proposal};
+pub use ai_autonomy_apply::{
+    AutonomyOutcome, apply_autonomy_for_proposal, sweep_ai_autonomy_outbox,
+};
 pub use ai_exposure::{
     ExposureSource, NewExposure, ReviewRunProposal, ReviewerPair, ReviewerPairs,
     independent_reviewer_pairs, record_exposure, record_exposure_in_transaction, record_exposures,
