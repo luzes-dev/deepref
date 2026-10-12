@@ -14,9 +14,19 @@ slow-timeout = { period = "60s", terminate-after = 2 }
 # the in-process mutex in that test binary does not serialize them.
 review-routes = { max-threads = 1 }
 
+# This group only budgets connections. A DB test holds one lease connection,
+# one short-lived maintenance connection, and a lazily grown pool of at most
+# 12 (screening: 20). Six at once stay under 20 + 5 x 12 + 6 + 6 = 92 of the
+# stock Postgres max_connections = 100; the cap binds only above six cores.
+postgres = { max-threads = 6 }
+
 [[profile.default.overrides]]
 filter = 'binary(review_runs)'
 test-group = 'review-routes'
+
+[[profile.default.overrides]]
+filter = 'kind(test) and (package(deepref-postgres) or package(deepref-worker) or package(deepref-http-api))'
+test-group = 'postgres'
 
 [profile.ci]
 retries = 1
