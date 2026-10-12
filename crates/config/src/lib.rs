@@ -2,6 +2,7 @@ mod ai;
 mod database;
 mod environment;
 mod error;
+mod listen;
 mod telemetry;
 
 use std::collections::HashMap;
@@ -13,6 +14,7 @@ pub use ai::{
 pub use database::DatabaseConfig;
 pub use environment::{APP_ENV, Environment, load_local_dotenv_files};
 pub use error::ConfigError;
+pub use listen::{ALLOW_NETWORK_BIND, API_BIND_ADDR, DEFAULT_API_BIND_ADDR, ListenConfig};
 pub use telemetry::TelemetryConfig;
 
 #[derive(Debug, Clone)]

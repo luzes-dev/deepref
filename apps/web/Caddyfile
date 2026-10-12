@@ -24,6 +24,10 @@
 		respond "ok" 200
 	}
 
+	# The API container listens on 0.0.0.0 with DEEPREF_ALLOW_NETWORK_BIND=1 (set in
+	# docker/rust-service.Dockerfile) so that this proxy can reach it. Neither this
+	# proxy nor the API authenticates anyone: put an authenticating proxy in front of
+	# this site before exposing it beyond a trusted machine.
 	@api path /api /api/*
 	handle @api {
 		uri strip_prefix /api

@@ -1,7 +1,7 @@
 use std::net::SocketAddr;
 
 use axum::http::HeaderValue;
-use deepref_config::RuntimeConfig;
+use deepref_config::{ListenConfig, RuntimeConfig};
 
 #[derive(Debug, Clone)]
 pub struct ApiConfig {
@@ -14,9 +14,8 @@ pub struct ApiConfig {
 impl ApiConfig {
     pub fn from_env() -> anyhow::Result<Self> {
         let runtime = RuntimeConfig::from_env("deepref-api")?;
-        let bind_addr = std::env::var("API_BIND_ADDR")
-            .unwrap_or_else(|_| "0.0.0.0:8080".into())
-            .parse()?;
+        // Loopback by default; a network bind needs DEEPREF_ALLOW_NETWORK_BIND.
+        let bind_addr = ListenConfig::from_env()?.bind_addr;
         let cors_allow_any = bool_env("API_CORS_ALLOW_ANY");
         if cors_allow_any && !runtime.environment.is_local() {
             anyhow::bail!("API_CORS_ALLOW_ANY is permitted only when APP_ENV=local");
