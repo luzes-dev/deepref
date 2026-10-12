@@ -13,20 +13,20 @@ use uuid::Uuid;
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub(crate) enum StaleReason {
     /// A different protocol version is published (ADR 0005 §13).
-    ProtocolChanged,
+    Protocol,
     /// The compiled semantic identity differs (ADR 0005 §2.4). Holds the
     /// identity the project compiles to now.
-    SemanticIdentityChanged { current: String },
+    SemanticIdentity { current: String },
     /// Frozen evidence (frame, references or sources) changed under the cohort.
-    FrozenEvidenceChanged,
+    FrozenEvidence,
 }
 
 impl StaleReason {
     pub(crate) fn as_str(&self) -> &'static str {
         match self {
-            Self::ProtocolChanged => "protocol_changed",
-            Self::SemanticIdentityChanged { .. } => "semantic_identity_changed",
-            Self::FrozenEvidenceChanged => "frozen_evidence_changed",
+            Self::Protocol => "protocol_changed",
+            Self::SemanticIdentity { .. } => "semantic_identity_changed",
+            Self::FrozenEvidence => "frozen_evidence_changed",
         }
     }
 }
@@ -77,7 +77,7 @@ async fn check_identity(
     let protocol:Option<Uuid>=sqlx::query_scalar("SELECT id FROM protocol_versions WHERE project_id=$1 AND status='published' ORDER BY version DESC LIMIT 1")
         .bind(project).fetch_optional(&mut **tx).await?;
     if protocol != Some(c.get("protocol_version_id")) {
-        return Ok(IdentityCheck::Stale(StaleReason::ProtocolChanged));
+        return Ok(IdentityCheck::Stale(StaleReason::Protocol));
     }
     // The semantic contract depends on the protocol, the compiled definition and
     // the resolved routes, not on the report; any member still in the project
@@ -93,7 +93,7 @@ async fn check_identity(
     // Same transaction, same connection: no second pool connection is requested
     // while this transaction holds the project, route and report locks.
     let identity = match crate::review_preparation::preview_screening_identity_on(
-        &mut **tx,
+        tx,
         project,
         report,
         deepref_ai::ScreeningStage::TitleAbstract,
@@ -105,12 +105,12 @@ async fn check_identity(
     };
     let current = identity.id().as_str().to_owned();
     if current != c.get::<String, _>("semantic_bundle_hash") {
-        return Ok(IdentityCheck::Stale(StaleReason::SemanticIdentityChanged {
+        return Ok(IdentityCheck::Stale(StaleReason::SemanticIdentity {
             current,
         }));
     }
     if !super::audit::frozen_evidence_current(tx, c).await? {
-        return Ok(IdentityCheck::Stale(StaleReason::FrozenEvidenceChanged));
+        return Ok(IdentityCheck::Stale(StaleReason::FrozenEvidence));
     }
     Ok(IdentityCheck::Current)
 }
@@ -129,10 +129,10 @@ async fn demote(
     let project = c.get::<Uuid, _>("project_id");
     let cohort = c.get::<Uuid, _>("id");
     match reason {
-        StaleReason::ProtocolChanged | StaleReason::FrozenEvidenceChanged => {
+        StaleReason::Protocol | StaleReason::FrozenEvidence => {
             invalidate_in_transaction(tx, project, cohort, reason.as_str(), true).await
         }
-        StaleReason::SemanticIdentityChanged { current } => {
+        StaleReason::SemanticIdentity { current } => {
             if c.get::<String, _>("status") != "finalized" {
                 invalidate_in_transaction(tx, project, cohort, reason.as_str(), true).await?;
             }
