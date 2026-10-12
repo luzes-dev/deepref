@@ -962,6 +962,7 @@ dependencies = [
  "deepref-domain",
  "deepref-events",
  "deepref-graph",
+ "deepref-postgres",
  "deepref-review",
  "pgvector",
  "serde",
