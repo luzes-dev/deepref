@@ -123,8 +123,8 @@ pub use automations::{
     list_automation_runs, retry_automation_run, start_automation_manually,
 };
 pub use autonomy::{
-    AutonomySetting, AutonomyStoreError, ProjectAutonomyGate, get_autonomy_settings,
-    resolve_autonomy_level, set_autonomy_level,
+    ASSISTANT_SCREENING_OFF_MESSAGE, AutonomySetting, AutonomyStoreError, ProjectAutonomyGate,
+    assistant_screening_allowed, get_autonomy_settings, resolve_autonomy_level, set_autonomy_level,
 };
 pub use deduplication::{
     DedupeError, DedupeProposal, DedupeProposalCursor, DedupeRunRequest, DedupeRunSummary,

@@ -1924,3 +1924,84 @@ async fn confirmed_plan_rejects_records_changed_since_it_was_made() {
     delete_project_and_reports(&pool, project, &[changed]).await;
     cleanup(&pool, fixture).await;
 }
+
+async fn set_title_abstract_autonomy(pool: &PgPool, project: Uuid, level: &str) {
+    sqlx::query(
+        "INSERT INTO project_ai_autonomy (project_id,task,level,updated_by_kind,updated_by_id)
+         VALUES ($1,'title_abstract_screening',$2,'user','autonomy-test')
+         ON CONFLICT (project_id,task) DO UPDATE SET level=EXCLUDED.level",
+    )
+    .bind(project)
+    .bind(level)
+    .execute(pool)
+    .await
+    .expect("autonomy setting");
+}
+
+#[tokio::test]
+async fn projects_with_title_abstract_ai_off_refuse_assistant_screening_plans() {
+    let _guard = test_lock().lock().await;
+    let Some(pool) = database().await else { return };
+    let fixture = seed(&pool).await;
+    deepref_postgres::insert_model_route(
+        &pool,
+        &model_route(ModelProfile::Reasoning),
+        Utc::now() - Duration::milliseconds(1),
+    )
+    .await
+    .expect("route inserts");
+    let project = fixture.project_id;
+    let mut state = AppState::new(pool.clone());
+    state.ai_info.configured = true;
+
+    // With AI title/abstract screening off, the change is never planned.
+    set_title_abstract_autonomy(&pool, project, "off").await;
+    let refused_model = MockCompletionModel::from_stream_turns(vec![
+        rig_call(
+            "c1",
+            "screen_reports",
+            json!({
+                "report_ids": [fixture.report_id],
+                "decision": "exclude",
+                "summary": "Exclude one record",
+                "rationale": "Off-topic"
+            }),
+        ),
+        rig_text("AI help with screening is off in this project, so nothing was changed."),
+    ]);
+    let refused = plan_from_turn(&pool, &state, project, refused_model).await;
+    assert_eq!(refused, None, "an autonomy-off project gets no plan");
+
+    // A plan made while AI help was on does not run once it is turned off.
+    set_title_abstract_autonomy(&pool, project, "suggest").await;
+    let plan_id = plan_from_turn(
+        &pool,
+        &state,
+        project,
+        exclude_plan_model(&[fixture.report_id]),
+    )
+    .await
+    .expect("the turn produced a plan");
+    set_title_abstract_autonomy(&pool, project, "off").await;
+    let (status, body) = post_json(
+        &state,
+        &format!("/projects/{project}/assistant/plans/{plan_id}/confirm"),
+        json!({}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let plan: Value = serde_json::from_str(&body).expect("plan json");
+    assert_eq!(plan["results"][0]["status"], "skipped", "{body}");
+    assert!(
+        plan["results"][0]["message"]
+            .as_str()
+            .is_some_and(|message| message.contains("AI settings")),
+        "{body}"
+    );
+    assert_eq!(
+        title_abstract_status(&pool, project, fixture.report_id).await,
+        "maybe",
+        "nothing is screened"
+    );
+    cleanup(&pool, fixture).await;
+}

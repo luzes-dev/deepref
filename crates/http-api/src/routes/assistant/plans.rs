@@ -644,6 +644,22 @@ async fn run_screen_reports(
         Some("maybe") => ScreeningDecision::Maybe,
         _ => return outcome(action, "skipped", "The decision is missing."),
     };
+    // The AI setting is checked again at confirmation: turning AI help off
+    // after a plan was made stops the plan.
+    match deepref_postgres::assistant_screening_allowed(&state.pool, project_id.as_uuid()).await {
+        Ok(true) => {}
+        Ok(false) => {
+            return outcome(
+                action,
+                "skipped",
+                deepref_postgres::ASSISTANT_SCREENING_OFF_MESSAGE,
+            );
+        }
+        Err(error) => {
+            tracing::warn!(%error, "assistant plan: AI settings lookup failed");
+            return outcome(action, "failed", "Something went wrong while doing this.");
+        }
+    }
     let protocol =
         match deepref_postgres::get_published_protocol(&state.pool, project_id.as_uuid()).await {
             Ok(protocol) => protocol,

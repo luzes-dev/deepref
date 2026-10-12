@@ -113,13 +113,22 @@ impl AssistantToolHost for PostgresAssistantToolHost {
 }
 
 impl PostgresAssistantToolHost {
-    /// Captures, at plan time, each targeted record's title, status and
+    /// Gates the action on the project's title/abstract AI setting, then
+    /// captures, at plan time, each targeted record's title, status and
     /// screening revision. Confirmation compares against these revisions.
     async fn prepare_screen_reports(
         &self,
         project_id: ProjectId,
         action: PlanAction,
     ) -> Result<PlanAction, AiError> {
+        let allowed = crate::assistant_screening_allowed(&self.pool, project_id.as_uuid())
+            .await
+            .map_err(|_| AiError::Persistence("AI settings lookup failed".to_owned()))?;
+        if !allowed {
+            return Err(AiError::InvalidContext(
+                crate::ASSISTANT_SCREENING_OFF_MESSAGE.to_owned(),
+            ));
+        }
         let report_ids = action.report_ids();
         let snapshots =
             crate::snapshot_screening_plan_items(&self.pool, project_id.as_uuid(), &report_ids)
