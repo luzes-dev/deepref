@@ -50,9 +50,8 @@ async fn ensure_ai_task_enabled(
 use crate::{
     AiDedupeTarget, AiGroupingReport, AiProposalError, AiStudyGroupingTarget, ExtractionError,
     PostgresReviewError, PreparedReviewRun, ProtocolError, StudyError, get_ai_dedupe_target,
-    get_ai_screening_target, get_ai_study_grouping_target, get_published_protocol, get_study,
-    list_ai_exclusion_reasons, list_ai_extraction_evidence, list_ai_grounding_blocks,
-    list_field_definitions, preview_review_identity, schedule_prepared_review_run,
+    get_ai_screening_target, get_ai_study_grouping_target, get_study, list_ai_extraction_evidence,
+    list_ai_grounding_blocks, list_field_definitions, schedule_prepared_review_run,
 };
 
 #[derive(Debug, Error)]
@@ -128,7 +127,20 @@ pub async fn preview_screening_identity(
     report_id: Uuid,
     stage: ScreeningStage,
 ) -> Result<ReviewSemanticContract, ReviewPreparationError> {
-    let task = screening_task(pool, project_id, report_id, stage, None, None).await?;
+    let mut connection = pool.acquire().await.map_err(PostgresReviewError::from)?;
+    preview_screening_identity_on(&mut connection, project_id, report_id, stage).await
+}
+
+/// [`preview_screening_identity`] on one connection. AI-first passes the
+/// transaction that holds its cohort and route locks, so the identity it compares
+/// is computed under those locks and never waits on a second pool connection.
+pub(crate) async fn preview_screening_identity_on(
+    connection: &mut sqlx::PgConnection,
+    project_id: Uuid,
+    report_id: Uuid,
+    stage: ScreeningStage,
+) -> Result<ReviewSemanticContract, ReviewPreparationError> {
+    let task = screening_task_on(connection, project_id, report_id, stage, None, None).await?;
     let actor = Actor::new(ActorKind::System, "identity-preview")
         .map_err(|error| ReviewPreparationError::InvalidInput(error.to_string()))?;
     let request = PreparedReviewRun {
@@ -141,7 +153,7 @@ pub async fn preview_screening_identity(
         },
         task,
     };
-    Ok(preview_review_identity(pool, &request).await?)
+    Ok(crate::review_runs::preview_review_identity_on(connection, &request).await?)
 }
 
 async fn schedule_screening_review_with_origin(
@@ -185,14 +197,34 @@ async fn screening_task(
     requested_protocol_version_id: Option<Uuid>,
     requested_revision: Option<i64>,
 ) -> Result<PreparedReviewTask, ReviewPreparationError> {
-    let protocol = get_published_protocol(pool, project_id).await?;
+    let mut connection = pool.acquire().await.map_err(PostgresReviewError::from)?;
+    screening_task_on(
+        &mut connection,
+        project_id,
+        report_id,
+        stage,
+        requested_protocol_version_id,
+        requested_revision,
+    )
+    .await
+}
+
+async fn screening_task_on(
+    connection: &mut sqlx::PgConnection,
+    project_id: Uuid,
+    report_id: Uuid,
+    stage: ScreeningStage,
+    requested_protocol_version_id: Option<Uuid>,
+    requested_revision: Option<i64>,
+) -> Result<PreparedReviewTask, ReviewPreparationError> {
+    let protocol = crate::protocol::get_published_protocol_on(connection, project_id).await?;
     if requested_protocol_version_id.is_some_and(|id| id != protocol.id) {
         return Err(ReviewPreparationError::InvalidInput(format!(
             "published protocol changed to {}",
             protocol.id
         )));
     }
-    let target = get_ai_screening_target(pool, project_id, report_id).await?;
+    let target = crate::ai::get_ai_screening_target_on(connection, project_id, report_id).await?;
     let expected_revision = requested_revision.unwrap_or(target.expected_revision);
     if expected_revision != target.expected_revision {
         return Err(ReviewPreparationError::InvalidInput(format!(
@@ -204,7 +236,7 @@ async fn screening_task(
         ScreeningStage::TitleAbstract => deepref_domain::ScreeningStage::TitleAbstract,
         ScreeningStage::FullText => deepref_domain::ScreeningStage::FullText,
     };
-    let exclusion_reasons = list_ai_exclusion_reasons(pool, project_id)
+    let exclusion_reasons = crate::ai::list_ai_exclusion_reasons_on(connection, project_id)
         .await?
         .into_iter()
         .map(|(id, stage)| ScreeningExclusionReason { id, stage })

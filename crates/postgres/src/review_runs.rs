@@ -1,5 +1,5 @@
 use chrono::{DateTime, Utc};
-use deepref_ai::{AiProposal, ModelRouter, ProposalStatus, ProposalStore, hash_json};
+use deepref_ai::{AiProposal, ProposalStatus, ProposalStore, hash_json};
 use deepref_domain::ProjectId;
 use deepref_review::{
     ReviewBlockCode, ReviewDefinitionKey, ReviewError, ReviewOrigin, ReviewRunId,
@@ -104,7 +104,10 @@ pub async fn schedule_prepared_review_run(
     pool: &PgPool,
     request: PreparedReviewRun,
 ) -> Result<ReviewRunSnapshot, PostgresReviewError> {
-    let manifest = build_prepared_manifest(pool, &request).await?;
+    let manifest = {
+        let mut connection = pool.acquire().await?;
+        build_prepared_manifest(&mut connection, &request).await?
+    };
     // Runs, cohorts and calibration bundles all key semantic identity by the
     // structured contract id; the legacy aggregate is no longer admitted.
     let semantic_contract_id = manifest.semantic_contract_id()?;
@@ -246,7 +249,18 @@ pub async fn preview_review_identity(
     pool: &PgPool,
     request: &PreparedReviewRun,
 ) -> Result<ReviewSemanticContract, PostgresReviewError> {
-    let manifest = build_prepared_manifest(pool, request).await?;
+    let mut connection = pool.acquire().await?;
+    preview_review_identity_on(&mut connection, request).await
+}
+
+/// [`preview_review_identity`] on one connection. A caller that holds locks on
+/// the identity inputs passes its own transaction, so the identity it compares
+/// is the one those locks protect and no second pool connection is needed.
+pub(crate) async fn preview_review_identity_on(
+    connection: &mut PgConnection,
+    request: &PreparedReviewRun,
+) -> Result<ReviewSemanticContract, PostgresReviewError> {
+    let manifest = build_prepared_manifest(connection, request).await?;
     manifest.semantic_contract.ok_or_else(|| {
         PostgresReviewError::InvalidStoredValue(
             "compiled review manifest has no semantic contract".to_owned(),
@@ -257,7 +271,7 @@ pub async fn preview_review_identity(
 /// Compiles the run manifest for a prepared review: the one place that decides
 /// what a scheduled run and a previewed identity are built from.
 async fn build_prepared_manifest(
-    pool: &PgPool,
+    connection: &mut PgConnection,
     request: &PreparedReviewRun,
 ) -> Result<ReviewRunManifest, PostgresReviewError> {
     request.command.validate()?;
@@ -274,9 +288,7 @@ async fn build_prepared_manifest(
     }
 
     let review = CompiledReview::compile(request.command.definition)?;
-    let route = PostgresAiStore::new(pool)
-        .resolve(request.task.model_profile())
-        .await?;
+    let route = crate::ai::resolve_route_on(connection, request.task.model_profile()).await?;
     let source_content_hash = request.task.source_content_hash()?;
     Ok(review.build_manifest(ReviewManifestInput {
         project_id: request.command.project_id,

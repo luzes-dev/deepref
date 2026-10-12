@@ -11847,6 +11847,13 @@
             "type": "string",
             "format": "uuid"
           },
+          "identity_flag_reason": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Set when a finalized cohort is flagged for review because the semantic\nidentity changed after finalization; its exclusions stay in force."
+          },
           "invalidation_reason": {
             "type": [
               "string",

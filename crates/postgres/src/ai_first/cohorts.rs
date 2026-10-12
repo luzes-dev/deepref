@@ -32,6 +32,9 @@ pub struct AiFirstCohort {
     pub result: Option<Value>,
     pub forecast: Option<AiFirstForecast>,
     pub invalidation_reason: Option<String>,
+    /// Set when a finalized cohort was flagged for review because the semantic
+    /// identity changed after finalization (ADR 0005 §2.4).
+    pub identity_flag_reason: Option<String>,
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AiFirstOverview {
@@ -84,7 +87,7 @@ pub async fn get_ai_first_overview(
     .bind(project)
     .fetch_optional(pool)
     .await?;
-    let rows = sqlx::query("SELECT c.id,c.status,c.target_percent,c.reference_relevant,c.alpha_billionths,c.result,c.invalidation_reason,
+    let rows = sqlx::query("SELECT c.id,c.status,c.target_percent,c.reference_relevant,c.alpha_billionths,c.result,c.invalidation_reason,c.identity_flag_reason,
       (SELECT count(*) FROM ai_screening_cohort_members m WHERE m.cohort_id=c.id) AS members,
       (SELECT count(*) FROM ai_screening_cohort_members m JOIN review_run_manifests r ON r.project_id=m.project_id AND r.automation_run_id=m.review_run_id WHERE m.cohort_id=c.id AND r.state='completed') AS evaluated,
       (SELECT count(*) FROM ai_screening_dispositions d WHERE d.cohort_id=c.id AND d.voided_at IS NULL AND d.finalized_at IS NULL) AS quarantined,
@@ -156,6 +159,7 @@ pub async fn get_ai_first_overview(
             alpha_billionths: r.get("alpha_billionths"),
             result: r.get("result"),
             invalidation_reason: r.get("invalidation_reason"),
+            identity_flag_reason: r.get("identity_flag_reason"),
             forecast,
         });
     }
@@ -307,6 +311,42 @@ pub(crate) async fn invalidate_in_transaction(
         &actor,
     )
     .await?;
+    Ok(())
+}
+
+/// ADR 0005 §2.4: on a semantic identity change, finalized cohorts keep their
+/// status and their automation exclusions; they are only flagged for review.
+/// Flags every finalized cohort of the project pinned to another identity.
+pub(crate) async fn flag_finalized_identity_drift(
+    tx: &mut Transaction<'_, Postgres>,
+    project: Uuid,
+    current_identity: &str,
+    reason: &str,
+) -> Result<(), AiFirstError> {
+    let flagged: Vec<Uuid> = sqlx::query_scalar(
+        "UPDATE ai_screening_cohorts SET identity_flagged_at=now(),identity_flag_reason=$3
+         WHERE project_id=$1 AND status='finalized' AND semantic_bundle_hash<>$2
+           AND identity_flagged_at IS NULL
+         RETURNING id",
+    )
+    .bind(project)
+    .bind(current_identity)
+    .bind(reason)
+    .fetch_all(&mut **tx)
+    .await?;
+    let actor = Actor::new(ActorKind::System, "ai-first-safety")
+        .map_err(|e| AiFirstError::Invalid(e.to_string()))?;
+    for cohort in flagged {
+        ledger(
+            tx,
+            project,
+            cohort,
+            "ai_first_identity_drift_flagged",
+            json!({"reason":reason,"finalized_exclusions":"unchanged"}),
+            &actor,
+        )
+        .await?;
+    }
     Ok(())
 }
 
