@@ -10,11 +10,13 @@ use tokio::{
     sync::{Semaphore, watch},
     task::JoinSet,
 };
+use tracing::Instrument;
 
 pub mod assistant;
 pub mod config;
 pub mod delivery;
 pub mod enrichment;
+pub mod heartbeat;
 pub mod limiter;
 pub mod pmid_import;
 pub mod processor;
@@ -129,6 +131,15 @@ pub async fn run_with_shutdown(
         config.reconciler_interval,
         reconciler_signal,
     ));
+    // The heartbeat outlives the drain: the worker is alive until its last
+    // in-flight job has been settled.
+    let (heartbeat_stop, heartbeat_signal) = watch::channel(false);
+    let heartbeat_task = tokio::spawn(heartbeat::run(
+        pool.clone(),
+        owner.clone(),
+        heartbeat::HEARTBEAT_INTERVAL,
+        heartbeat_signal,
+    ));
     let loop_config = ClaimLoopConfig {
         concurrency: config.concurrency,
         claim_lease: config.claim_lease,
@@ -144,6 +155,13 @@ pub async fn run_with_shutdown(
     };
     let loop_result = run_claim_loop(pool, owner, loop_config, handler, loop_shutdown).await;
 
+    heartbeat_stop.send_replace(true);
+    if tokio::time::timeout(Duration::from_secs(5), heartbeat_task)
+        .await
+        .is_err()
+    {
+        tracing::warn!("worker heartbeat did not stop in time; its row will age out");
+    }
     reconciler_shutdown.send_replace(true);
     let reconciler_drained =
         tokio::time::timeout(config.runtime.telemetry.shutdown_deadline, reconciler_task).await;
@@ -232,10 +250,22 @@ pub async fn run_claim_loop(
                         let lease = job.lease(owner.clone());
                         let handler = Arc::clone(&handler);
                         let duration = config.claim_lease;
-                        active.spawn(async move {
-                            let _permit = permit;
-                            process_claimed_job(pool, job, lease, duration, handler).await
-                        });
+                        // Every line logged for this job, including inside its
+                        // handler task, carries the job and project it serves.
+                        let span = tracing::info_span!(
+                            "job",
+                            job_id = %job.id,
+                            kind = %job.kind,
+                            project_id = %job.project_id.as_uuid(),
+                            attempt = job.attempts,
+                        );
+                        active.spawn(
+                            async move {
+                                let _permit = permit;
+                                process_claimed_job(pool, job, lease, duration, handler).await
+                            }
+                            .instrument(span),
+                        );
                     }
                     Ok(None) => {}
                     Err(error) => {
@@ -398,7 +428,7 @@ where
             self.0.abort();
         }
     }
-    let mut task = AbortOnDrop(tokio::spawn(work));
+    let mut task = AbortOnDrop(tokio::spawn(work.in_current_span()));
     match (&mut task.0).await {
         Ok(result) => result,
         Err(error) if error.is_panic() => {

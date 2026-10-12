@@ -15360,12 +15360,28 @@
             ],
             "format": "int64"
           },
+          "last_heartbeat_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "The most recent worker heartbeat, live or not (worker only)."
+          },
           "last_success_at": {
             "type": [
               "string",
               "null"
             ],
             "format": "date-time"
+          },
+          "live_workers": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Worker processes with a recent heartbeat (worker only)."
           },
           "oldest_age_seconds": {
             "type": [

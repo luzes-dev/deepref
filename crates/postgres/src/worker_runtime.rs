@@ -120,3 +120,30 @@ pub async fn find_missing_ingestion_work(
         })
         .collect()
 }
+
+/// Upsert `owner`'s liveness row (`worker_heartbeats`), and prune rows of
+/// workers that stopped without a clean shutdown more than a day ago.
+pub async fn record_worker_heartbeat(pool: &PgPool, owner: &str) -> anyhow::Result<()> {
+    let mut tx = pool.begin().await?;
+    sqlx::query(
+        "INSERT INTO worker_heartbeats (owner) VALUES ($1)
+         ON CONFLICT (owner) DO UPDATE SET seen_at = now()",
+    )
+    .bind(owner)
+    .execute(&mut *tx)
+    .await?;
+    sqlx::query("DELETE FROM worker_heartbeats WHERE seen_at < now() - interval '1 day'")
+        .execute(&mut *tx)
+        .await?;
+    tx.commit().await?;
+    Ok(())
+}
+
+/// Remove `owner`'s liveness row after a clean shutdown.
+pub async fn remove_worker_heartbeat(pool: &PgPool, owner: &str) -> anyhow::Result<()> {
+    sqlx::query("DELETE FROM worker_heartbeats WHERE owner = $1")
+        .bind(owner)
+        .execute(pool)
+        .await?;
+    Ok(())
+}
