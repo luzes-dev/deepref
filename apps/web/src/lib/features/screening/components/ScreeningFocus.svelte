@@ -111,6 +111,8 @@
 	// True from the first line of decide() or undo() until navigation and the mutation
 	// settle. The mutation's own isPending is false while the URL is still changing.
 	let deciding = $state(false);
+	// The report decide() moves to. Shown while the URL still names the decided report.
+	let pendingNext = $state<ScreeningQueueItemDto | null>(null);
 	let searchTimer: ReturnType<typeof setTimeout> | undefined;
 
 	const pages = $derived(queueQuery.data?.pages ?? []);
@@ -125,7 +127,17 @@
 	const currentIndex = $derived(
 		selectedReportId ? queueItems.findIndex((item) => item.report_id === selectedReportId) : 0
 	);
-	const current = $derived(queueItems[currentIndex] ?? queueItems[0] ?? null);
+	// A URL that names a report missing from the queue never falls back to the first item:
+	// a key press there would decide on a report the reviewer never saw.
+	const current = $derived(queueItems[currentIndex] ?? (urlState.report ? pendingNext : null));
+	const locatingReport = $derived(
+		Boolean(
+			urlState.report &&
+			!current &&
+			queueQuery.hasNextPage &&
+			!queueQuery.isFetchNextPageError
+		)
+	);
 	const protocol = $derived(protocolQuery.data?.data);
 	const historyItems = $derived(historyQuery.data?.data.items ?? []);
 	const latestHistory = $derived(historyItems.at(-1) ?? null);
@@ -202,7 +214,8 @@
 			urlState.report &&
 			!current &&
 			queueQuery.hasNextPage &&
-			!queueQuery.isFetchingNextPage
+			!queueQuery.isFetchingNextPage &&
+			!queueQuery.isFetchNextPageError
 		) {
 			void queueQuery.fetchNextPage();
 		}
@@ -329,7 +342,11 @@
 		const priorLocation = findQueueLocation(oldCache, reportId);
 		const priorItem = { ...current };
 		const expectedRevision = current.revision;
-		const nextItem = queueItems[currentIndex + 1] ?? queueItems[0] ?? null;
+		const nextItem =
+			queueItems[currentIndex + 1] ??
+			queueItems.find((item) => item.report_id !== reportId) ??
+			null;
+		pendingNext = nextItem;
 		queryClient.setQueryData<QueueCache>(queueKey, (cache) =>
 			applyOptimisticStatusChange(cache, {
 				reportId,
@@ -378,6 +395,7 @@
 				await updateUrl({ report: reportId }, true);
 			}
 		} finally {
+			pendingNext = null;
 			deciding = false;
 		}
 	}
@@ -663,6 +681,21 @@
 						>Undo last decision</Button
 					>{/if}
 			</div>
+		{:else if urlState.report && queueItems.length > 0}
+			<h2 class="editorial-title text-xl">This report is not in this view</h2>
+			<p class="text-sm text-muted-foreground">
+				It may have been screened already, or the filter or search excludes it.
+			</p>
+			<div class="flex flex-wrap gap-2">
+				<Button
+					variant="outline"
+					onclick={() => void selectReport(queueItems[0].report_id, false)}
+					>Go to the first report in view</Button
+				>
+				{#if canUndo}<Button variant="ghost" onclick={() => void undo()}
+						>Undo last decision</Button
+					>{/if}
+			</div>
 		{:else}
 			<h2 class="editorial-title text-xl">Nothing to show</h2>
 			<p class="text-sm text-muted-foreground">
@@ -681,7 +714,7 @@
 {/snippet}
 
 {#snippet readerContent()}
-	{#if queueQuery.isPending}
+	{#if queueQuery.isPending || locatingReport}
 		<div class="flex flex-col gap-4 py-8" aria-label="Loading reports" aria-live="polite">
 			<Skeleton class="h-4 w-32" /><Skeleton class="h-10 w-4/5" /><Skeleton
 				class="h-40 w-full"
