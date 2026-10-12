@@ -6,6 +6,7 @@ function prisma(overrides: Partial<PrismaDto> = {}): PrismaDto {
 	return {
 		ai_quarantined: 0,
 		automation_excluded: 0,
+		assistant_excluded: 0,
 		project_id: 'project-1',
 		reconciliation_warnings: [],
 		identified_records: 12,

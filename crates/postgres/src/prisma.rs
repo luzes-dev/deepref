@@ -169,6 +169,12 @@ WITH project_exists AS (
     (SELECT count(*) FROM ai_screening_dispositions d JOIN screening_state s
       ON s.project_id=d.project_id AND s.report_id=d.report_id
       WHERE d.project_id=$1 AND d.finalized_event_id=s.last_event_id AND s.title_abstract_status='exclude')::bigint AS automation_excluded,
+    -- Exclusions a person confirmed from an assistant plan: the model chose
+    -- them, so they are not a person's own title/abstract screening.
+    (SELECT count(*) FROM screening_state s JOIN screening_events e
+      ON e.id=s.last_event_id
+      WHERE s.project_id=$1 AND s.title_abstract_status='exclude'
+        AND e.origin='assistant_plan')::bigint AS assistant_excluded,
     (SELECT count(*) FROM ai_screening_dispositions d
       WHERE d.project_id=$1 AND d.voided_at IS NULL AND d.finalized_at IS NULL)::bigint AS ai_quarantined,
     flow_counts.title_abstract_pending,
@@ -228,6 +234,7 @@ JOIN project_exists ON true
         manually_created_reports: count(manually_created_reports, "manually_created_reports")?,
         screened_records: count(row.get("screened_records"), "screened_records")?,
         automation_excluded: count(row.get("automation_excluded"), "automation_excluded")?,
+        assistant_excluded: count(row.get("assistant_excluded"), "assistant_excluded")?,
         ai_quarantined: count(row.get("ai_quarantined"), "ai_quarantined")?,
         title_abstract_excluded: count(
             row.get("title_abstract_excluded"),

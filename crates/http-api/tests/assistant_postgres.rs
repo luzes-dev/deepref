@@ -2005,3 +2005,59 @@ async fn projects_with_title_abstract_ai_off_refuse_assistant_screening_plans() 
     );
     cleanup(&pool, fixture).await;
 }
+
+#[tokio::test]
+async fn confirmed_plan_decisions_are_assistant_authored_and_not_counted_as_human() {
+    let _guard = test_lock().lock().await;
+    let Some(pool) = database().await else { return };
+    let fixture = seed(&pool).await;
+    deepref_postgres::insert_model_route(
+        &pool,
+        &model_route(ModelProfile::Reasoning),
+        Utc::now() - Duration::milliseconds(1),
+    )
+    .await
+    .expect("route inserts");
+    let project = fixture.project_id;
+    let mut state = AppState::new(pool.clone());
+    state.ai_info.configured = true;
+    let plan_id = plan_from_turn(
+        &pool,
+        &state,
+        project,
+        exclude_plan_model(&[fixture.report_id]),
+    )
+    .await
+    .expect("the turn produced a plan");
+    let (status, body) = post_json(
+        &state,
+        &format!("/projects/{project}/assistant/plans/{plan_id}/confirm"),
+        json!({}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+
+    // The event names its origin; the actor is still the confirming person.
+    let (origin, actor_kind): (Option<String>, String) = sqlx::query_as(
+        "SELECT e.origin, e.actor_kind FROM screening_state s
+         JOIN screening_events e ON e.id = s.last_event_id
+         WHERE s.project_id=$1 AND s.report_id=$2",
+    )
+    .bind(project)
+    .bind(fixture.report_id)
+    .fetch_one(&pool)
+    .await
+    .expect("canonical event");
+    assert_eq!(origin.as_deref(), Some("assistant_plan"));
+    assert_eq!(actor_kind, "user");
+
+    // PRISMA reports the exclusion as assistant-authored, not as a
+    // person's own title/abstract exclusion.
+    let (status, body) = get_json(&state, &format!("/projects/{project}/prisma")).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let prisma: Value = serde_json::from_str(&body).expect("prisma json");
+    assert_eq!(prisma["title_abstract_excluded"], 1, "{body}");
+    assert_eq!(prisma["assistant_excluded"], 1, "{body}");
+    assert_eq!(prisma["automation_excluded"], 0, "{body}");
+    cleanup(&pool, fixture).await;
+}

@@ -1093,3 +1093,34 @@ async fn identity_is_checked_on_the_locking_transaction_connection() {
     assert_eq!(count, 40 - sample.len() as u32);
     assert_eq!(f.status().await, "finalized");
 }
+
+#[tokio::test]
+async fn assistant_plan_decisions_never_join_the_human_reference_stratum() {
+    let Some(pool) = database().await else { return };
+    let f = Fixture::new(pool.clone(), true).await;
+    // A reviewer confirms an assistant plan that excludes one record of the
+    // human stratum: the model chose that decision, not the reviewer.
+    let report = f.human[0];
+    screen_report_from_assistant_plan(
+        &pool,
+        ScreenReportCommand {
+            project_id: f.project.into(),
+            report_id: report.into(),
+            stage: ScreeningStage::TitleAbstract,
+            decision: deepref_domain::ScreeningDecision::Exclude,
+            exclusion_reason_id: None,
+            protocol_version_id: f.protocol.into(),
+            expected_revision: f.revision(report).await,
+            notes: None,
+            actor: actor("reviewer-initial"),
+        },
+    )
+    .await
+    .expect("the confirmed plan decision is recorded");
+    close_ai_first_cohort(&pool, f.project, f.cohort, &actor("owner"))
+        .await
+        .unwrap();
+    let refused = draw_ai_first_audit(&pool, f.project, f.cohort, None, &actor("owner")).await;
+    let error = refused.expect_err("the frozen human reference must be a person's own screening");
+    assert!(error.to_string().contains("assistant"), "{error}");
+}

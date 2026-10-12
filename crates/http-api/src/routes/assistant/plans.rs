@@ -708,7 +708,7 @@ async fn run_screen_reports(
             notes: notes.clone(),
             actor: actor.clone(),
         };
-        match deepref_postgres::screen_report(&state.pool, command).await {
+        match deepref_postgres::screen_report_from_assistant_plan(&state.pool, command).await {
             Ok(snapshot) => {
                 applied += 1;
                 record_screening_activity(

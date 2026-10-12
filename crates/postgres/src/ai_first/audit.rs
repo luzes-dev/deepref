@@ -81,11 +81,11 @@ pub async fn draw_ai_first_audit(
     }
     let mut tx = super::routing::require_current(tx, &c).await?;
     // Freeze the non-quarantine human reference, including pre-draw targeted rescues.
-    let human=sqlx::query("SELECT m.report_id,s.title_abstract_status,s.revision,e.id AS event_id,e.actor_kind,r.title,r.abstract_text
+    let human=sqlx::query("SELECT m.report_id,s.title_abstract_status,s.revision,e.id AS event_id,e.actor_kind,e.origin,r.title,r.abstract_text
        FROM ai_screening_cohort_members m
        JOIN reports r ON r.id=m.report_id
        LEFT JOIN screening_state s ON s.project_id=m.project_id AND s.report_id=m.report_id
-       LEFT JOIN LATERAL (SELECT id,actor_kind,decision FROM screening_events e WHERE e.project_id=m.project_id
+       LEFT JOIN LATERAL (SELECT id,actor_kind,origin,decision FROM screening_events e WHERE e.project_id=m.project_id
          AND e.report_id=m.report_id AND e.stage='title_abstract' ORDER BY e.created_at DESC,e.id DESC LIMIT 1) e ON true
        WHERE m.cohort_id=$1 AND NOT EXISTS(SELECT 1 FROM ai_screening_dispositions d
          WHERE d.cohort_id=m.cohort_id AND d.report_id=m.report_id AND d.voided_at IS NULL AND d.finalized_at IS NULL)
@@ -103,6 +103,14 @@ pub async fn draw_ai_first_audit(
         {
             return Err(AiFirstError::Refused(
                 "complete human screening outside quarantine before drawing".into(),
+            ));
+        }
+        // ADR 0005's human reference is a person's own screening. A decision
+        // confirmed from an assistant plan was chosen by a model, so it must
+        // be screened again by a person before the reference is frozen.
+        if row.get::<Option<String>, _>("origin").as_deref() == Some(crate::ORIGIN_ASSISTANT_PLAN) {
+            return Err(AiFirstError::Refused(
+                "some human-stratum decisions came from an assistant plan; a person must screen those records before drawing".into(),
             ));
         }
         if matches!(status.as_str(), "include" | "maybe") {
@@ -574,7 +582,7 @@ pub(crate) async fn frozen_evidence_current(
           AND s.title_abstract_status=$3 AND jsonb_build_object('title',r.title,'abstract_text',r.abstract_text)=$4
           AND $5=(SELECT e.id FROM screening_events e WHERE e.project_id=s.project_id AND e.report_id=s.report_id
           AND e.stage='title_abstract' ORDER BY e.created_at DESC,e.id DESC LIMIT 1)
-          AND EXISTS(SELECT 1 FROM screening_events e WHERE e.id=$5 AND e.actor_kind='user'))")
+          AND EXISTS(SELECT 1 FROM screening_events e WHERE e.id=$5 AND e.actor_kind='user' AND e.origin IS DISTINCT FROM 'assistant_plan'))")
             .bind(c.get::<Uuid,_>("project_id")).bind(reference.report_id).bind(reference.decision).bind(reference.source_snapshot)
             .bind(reference.event_id).fetch_one(&mut **tx).await?;
         if !valid {

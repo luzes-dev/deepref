@@ -199,9 +199,10 @@ pub use review_runs::{
     schedule_prepared_review_run_as,
 };
 pub use screening::{
-    ScreeningError, ScreeningHistory, ScreeningHistoryItem, ScreeningProgress, ScreeningQueue,
-    ScreeningQueueItem, ScreeningStateSnapshot, get_next_screening_item, get_screening_history,
-    get_screening_queue, screen_report, undo_screening,
+    ORIGIN_ASSISTANT_PLAN, ScreeningError, ScreeningHistory, ScreeningHistoryItem,
+    ScreeningProgress, ScreeningQueue, ScreeningQueueItem, ScreeningStateSnapshot,
+    get_next_screening_item, get_screening_history, get_screening_queue, screen_report,
+    screen_report_from_assistant_plan, undo_screening,
 };
 pub use second_review::{
     SECOND_REVIEW_BATCH, SecondReviewStatus, SecondReviewSweep, second_review_status,
