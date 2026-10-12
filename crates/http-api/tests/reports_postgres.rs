@@ -17,11 +17,7 @@ use tower::ServiceExt;
 use uuid::Uuid;
 
 async fn database() -> Option<PgPool> {
-    let pool = deepref_postgres::test_isolation::isolated_pool_from_env("DATABASE_URL", 5).await?;
-    deepref_postgres::migrate(&pool)
-        .await
-        .unwrap_or_else(|error| panic!("failed to apply PostgreSQL migrations: {error}"));
-    Some(pool)
+    deepref_postgres::test_isolation::isolated_pool_from_env("DATABASE_URL", 5).await
 }
 
 fn api_config() -> ApiConfig {

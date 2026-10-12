@@ -360,9 +360,7 @@ async fn concurrent_retrieval_completion_cleans_the_losing_object() {
 }
 
 async fn database() -> Option<PgPool> {
-    let pool = deepref_postgres::test_isolation::isolated_pool_from_env("DATABASE_URL", 5).await?;
-    deepref_postgres::migrate(&pool).await.ok()?;
-    Some(pool)
+    deepref_postgres::test_isolation::isolated_pool_from_env("DATABASE_URL", 5).await
 }
 
 #[tokio::test]

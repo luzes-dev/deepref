@@ -5,16 +5,12 @@
     clippy::string_slice
 )]
 use anyhow::{Result, ensure};
-use deepref_postgres::{import_legacy, migrate};
+use deepref_postgres::import_legacy;
 use sqlx::{PgPool, Row};
 use uuid::Uuid;
 
 async fn database() -> Option<PgPool> {
-    let pool = deepref_postgres::test_isolation::isolated_pool_from_env("DATABASE_URL", 5).await?;
-    migrate(&pool)
-        .await
-        .unwrap_or_else(|error| panic!("failed to apply PostgreSQL migrations: {error}"));
-    Some(pool)
+    deepref_postgres::test_isolation::isolated_pool_from_env("DATABASE_URL", 5).await
 }
 
 #[tokio::test]

@@ -7,16 +7,12 @@
 use anyhow::{Result, ensure};
 use chrono::Utc;
 use deepref_graph::GraphEdge;
-use deepref_postgres::{load_project_graph, migrate, recompute_project_metrics};
+use deepref_postgres::{load_project_graph, recompute_project_metrics};
 use sqlx::{PgPool, Row};
 use uuid::Uuid;
 
 async fn database() -> Option<PgPool> {
-    let pool = deepref_postgres::test_isolation::isolated_pool_from_env("DATABASE_URL", 8).await?;
-    migrate(&pool)
-        .await
-        .unwrap_or_else(|error| panic!("failed to apply PostgreSQL migrations: {error}"));
-    Some(pool)
+    deepref_postgres::test_isolation::isolated_pool_from_env("DATABASE_URL", 8).await
 }
 
 #[tokio::test]

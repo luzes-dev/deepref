@@ -13,16 +13,14 @@ use deepref_application::{
 use deepref_domain::{Actor, ActorKind, ProjectId, StudyDesign, StudyDesignContext, StudyTitle};
 use deepref_postgres::{
     StudyError, assign_report_to_study, classify_study, complete_appraisal, create_study,
-    get_prisma_projection, get_study, list_study_events, migrate, remove_report_from_study,
+    get_prisma_projection, get_study, list_study_events, remove_report_from_study,
 };
 use sqlx::PgPool;
 use tokio::time::{Duration, timeout};
 use uuid::Uuid;
 
 async fn database() -> Option<PgPool> {
-    let pool = deepref_postgres::test_isolation::isolated_pool_from_env("DATABASE_URL", 8).await?;
-    migrate(&pool).await.ok()?;
-    Some(pool)
+    deepref_postgres::test_isolation::isolated_pool_from_env("DATABASE_URL", 8).await
 }
 
 async fn seed_project(pool: &PgPool, name: &str, report_ids: &[Uuid]) -> Uuid {
