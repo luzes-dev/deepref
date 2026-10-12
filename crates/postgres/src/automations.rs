@@ -857,10 +857,14 @@ pub async fn retry_automation_run(
     .bind(run_id.as_uuid())
     .execute(&mut *transaction)
     .await?;
+    // `attempts` keeps counting so automation step fencing on
+    // `claimed_job_attempt` stays monotonic; an exhausted budget is extended by
+    // one attempt so the claim guard (`attempts < max_attempts`) admits it.
     sqlx::query(
         "UPDATE jobs
          SET state='queued', available_at=now(), leased_until=NULL,
-             lease_owner=NULL, lease_renewed_at=NULL, last_error=NULL, completed_at=NULL
+             lease_owner=NULL, lease_renewed_at=NULL, last_error=NULL, completed_at=NULL,
+             max_attempts=GREATEST(max_attempts, attempts + 1)
          WHERE project_id=$1 AND id=(
            SELECT job_id FROM automation_runs WHERE project_id=$1 AND id=$2
          ) AND kind='automation_run'",

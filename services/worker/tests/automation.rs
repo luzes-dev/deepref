@@ -343,6 +343,11 @@ async fn crashed_step_is_reclaimed_by_new_owner_without_repeating_completed_step
         .execute(&pool)
         .await?;
         ensure!(recover_expired_jobs(&pool).await? == 1);
+        // Recovery backs the job off; skip the wait instead of sleeping.
+        sqlx::query("UPDATE jobs SET available_at=now() WHERE id=$1")
+            .bind(job_id)
+            .execute(&pool)
+            .await?;
         let claimed_b = claimed_job(&pool, job_id, "worker-recovered").await?;
         ensure!(claimed_b.attempts == claimed_a.attempts + 1);
         ensure!(

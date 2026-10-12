@@ -270,6 +270,11 @@ async fn expired_job_recovery_reclaims_running_step_and_rejects_zombie_completio
         .execute(&pool)
         .await?;
         ensure!(recover_expired_jobs(&pool).await? == 1);
+        // Recovery backs the job off; skip the wait instead of sleeping.
+        sqlx::query("UPDATE jobs SET available_at=now() WHERE id=$1")
+            .bind(dispatch.job_id)
+            .execute(&pool)
+            .await?;
         claim_automation_job(&pool, "worker-b", dispatch.job_id, Duration::from_secs(10)).await?;
 
         let resumed = begin_next_automation_step(&pool, project_id, dispatch.run_id, "worker-b")

@@ -1,9 +1,10 @@
-use std::{future::Future, sync::Arc, time::Duration};
+use std::{future::Future, pin::Pin, sync::Arc, time::Duration};
 
 use deepref_ai::{AiGateway, RoutedGateway};
 use deepref_application::jobs::ClaimedJob;
 use deepref_documents::DocumentStore;
 use deepref_postgres::{claim_job, complete_job, fail_job, renew_job};
+use delivery::DeliveryAction;
 use sqlx::postgres::PgPoolOptions;
 use tokio::{
     sync::{Semaphore, watch},
@@ -76,6 +77,23 @@ pub async fn run(config: config::WorkerConfig) -> anyhow::Result<()> {
     run_with_shutdown(config, shutdown::wait_for_signal()).await
 }
 
+/// Runs one claimed job and says what the queue should do with it. The
+/// production handler dispatches by job kind (`processor`); tests substitute
+/// their own to exercise the claim loop.
+pub type JobHandler = Arc<
+    dyn Fn(ClaimedJob, String) -> Pin<Box<dyn Future<Output = anyhow::Result<DeliveryAction>> + Send>>
+        + Send
+        + Sync,
+>;
+
+/// Settings of the claim loop, separate from process wiring.
+#[derive(Debug, Clone)]
+pub struct ClaimLoopConfig {
+    pub concurrency: usize,
+    pub claim_lease: Duration,
+    pub drain_deadline: Duration,
+}
+
 pub async fn run_with_shutdown(
     config: config::WorkerConfig,
     shutdown_signal: impl Future<Output = ()> + Send + 'static,
@@ -96,8 +114,6 @@ pub async fn run_with_shutdown(
     // Workflow blocks that change review state follow the project's AI
     // autonomy settings.
     workflows::set_autonomy_gate(Arc::new(deepref_postgres::ProjectAutonomyGate::new(&pool)));
-    let semaphore = Arc::new(Semaphore::new(config.concurrency));
-    let mut active = JoinSet::new();
     let (reconciler_shutdown, reconciler_signal) = watch::channel(false);
     tokio::spawn(workflows::run_scheduler(
         pool.clone(),
@@ -109,16 +125,77 @@ pub async fn run_with_shutdown(
         config.reconciler_interval,
         reconciler_signal,
     ));
-    let mut shutdown_signal = Box::pin(shutdown_signal);
+    let loop_config = ClaimLoopConfig {
+        concurrency: config.concurrency,
+        claim_lease: config.claim_lease,
+        drain_deadline: config.runtime.telemetry.shutdown_deadline,
+    };
+    let handler = production_handler(pool.clone(), config.claim_lease, document_store, ai_gateway);
+    let loop_shutdown = {
+        let reconciler_shutdown = reconciler_shutdown.clone();
+        async move {
+            shutdown_signal.await;
+            reconciler_shutdown.send_replace(true);
+        }
+    };
+    let loop_result = run_claim_loop(pool, owner, loop_config, handler, loop_shutdown).await;
+
+    reconciler_shutdown.send_replace(true);
+    let reconciler_drained =
+        tokio::time::timeout(config.runtime.telemetry.shutdown_deadline, reconciler_task).await;
+    loop_result?;
+    match reconciler_drained {
+        Ok(result) => result?,
+        Err(_) => anyhow::bail!("worker reconciler drain deadline exceeded"),
+    }
+    Ok(())
+}
+
+fn production_handler(
+    pool: sqlx::PgPool,
+    lease: Duration,
+    document_store: Arc<DocumentStore>,
+    ai_gateway: Arc<dyn AiGateway>,
+) -> JobHandler {
+    Arc::new(move |job: ClaimedJob, owner: String| {
+        let pool = pool.clone();
+        let document_store = Arc::clone(&document_store);
+        let ai_gateway = Arc::clone(&ai_gateway);
+        Box::pin(async move {
+            processor::handle_job_with_documents_owned_and_ai(
+                pool,
+                &job,
+                &owner,
+                lease,
+                Some(document_store),
+                None,
+                ai_gateway,
+            )
+            .await
+        })
+    })
+}
+
+/// Claim jobs and run them through `handler` until `shutdown` resolves, then
+/// drain in-flight jobs within the configured deadline.
+pub async fn run_claim_loop(
+    pool: sqlx::PgPool,
+    owner: String,
+    config: ClaimLoopConfig,
+    handler: JobHandler,
+    shutdown: impl Future<Output = ()> + Send,
+) -> anyhow::Result<()> {
+    let semaphore = Arc::new(Semaphore::new(config.concurrency));
+    let mut active = JoinSet::new();
+    let mut shutdown = Box::pin(shutdown);
     let mut loop_error = None;
     let mut claim_tick = tokio::time::interval(Duration::from_millis(100));
     claim_tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
 
     loop {
         tokio::select! {
-            _ = &mut shutdown_signal => {
+            _ = &mut shutdown => {
                 tracing::info!(active=active.len(), "worker drain started");
-                reconciler_shutdown.send_replace(true);
                 break;
             }
             Some(joined) = active.join_next(), if !active.is_empty() => {
@@ -128,9 +205,12 @@ pub async fn run_with_shutdown(
                         loop_error = Some(error);
                         break;
                     }
+                    // Handler panics are caught inside `process_claimed_job`;
+                    // anything reaching here panicked in the queue bookkeeping
+                    // itself. Lease recovery spends the attempt, so one job
+                    // never takes the worker down.
                     Err(error) => {
-                        loop_error = Some(error.into());
-                        break;
+                        tracing::error!(%error, "job task ended abnormally; its lease will be recovered");
                     }
                 }
             }
@@ -146,20 +226,11 @@ pub async fn run_with_shutdown(
                         };
                         let pool = pool.clone();
                         let owner = owner.clone();
-                        let document_store = Arc::clone(&document_store);
-                        let ai_gateway = Arc::clone(&ai_gateway);
+                        let handler = Arc::clone(&handler);
                         let lease = config.claim_lease;
                         active.spawn(async move {
                             let _permit = permit;
-                            process_claimed_job(
-                                pool,
-                                owner,
-                                job,
-                                lease,
-                                document_store,
-                                ai_gateway,
-                            )
-                            .await
+                            process_claimed_job(pool, owner, job, lease, handler).await
                         });
                     }
                     Ok(None) => {}
@@ -172,26 +243,24 @@ pub async fn run_with_shutdown(
         }
     }
 
-    reconciler_shutdown.send_replace(true);
-    let active_drained = tokio::time::timeout(config.runtime.telemetry.shutdown_deadline, async {
+    let active_drained = tokio::time::timeout(config.drain_deadline, async {
         while let Some(result) = active.join_next().await {
-            result??;
+            match result {
+                Ok(result) => result?,
+                Err(error) => {
+                    tracing::error!(%error, "job task ended abnormally during drain; its lease will be recovered");
+                }
+            }
         }
         Ok::<(), anyhow::Error>(())
     })
     .await;
-    let reconciler_drained =
-        tokio::time::timeout(config.runtime.telemetry.shutdown_deadline, reconciler_task).await;
     match active_drained {
         Ok(result) => result?,
         Err(_) => anyhow::bail!(
             "worker drain deadline exceeded with {} active tasks",
             active.len()
         ),
-    }
-    match reconciler_drained {
-        Ok(result) => result?,
-        Err(_) => anyhow::bail!("worker reconciler drain deadline exceeded"),
     }
     if let Some(error) = loop_error {
         return Err(error);
@@ -204,72 +273,124 @@ async fn process_claimed_job(
     owner: String,
     job: ClaimedJob,
     lease: Duration,
-    document_store: Arc<DocumentStore>,
-    ai_gateway: Arc<dyn AiGateway>,
+    handler: JobHandler,
 ) -> anyhow::Result<()> {
     let result = run_with_lease_renewal(
         pool.clone(),
         owner.clone(),
         job.id,
         lease,
-        processor::handle_job_with_documents_owned_and_ai(
-            pool.clone(),
-            &job,
-            &owner,
-            lease,
-            Some(document_store),
-            None,
-            ai_gateway,
-        ),
+        run_isolated(handler(job.clone(), owner.clone())),
     )
     .await;
     match result {
-        Ok(delivery::DeliveryAction::Ack) => {
+        Ok(DeliveryAction::Ack) => {
             if !complete_job(&pool, &owner, job.id).await? {
-                tracing::warn!(job_id=%job.id, "job completion rejected because the lease is no longer owned");
+                tracing::warn!(job_id=%job.id, kind=%job.kind, attempts=job.attempts, "job completion rejected because the lease is no longer owned");
             }
         }
-        Ok(delivery::DeliveryAction::Nak(delay)) => {
-            if !fail_job(&pool, &owner, &job, "retry requested", delay).await? {
-                tracing::warn!(job_id=%job.id, "job retry update rejected because the lease is no longer owned");
-            }
+        Ok(DeliveryAction::Nak(delay)) => {
+            record_failure(&pool, &owner, &job, "retry requested", delay).await?;
         }
-        Ok(delivery::DeliveryAction::Terminate) => {
-            let job_id = job.id;
+        Ok(DeliveryAction::Terminate) => {
             let terminal = ClaimedJob {
                 attempts: job.max_attempts,
-                ..job
+                ..job.clone()
             };
-            if !fail_job(
+            record_failure(
                 &pool,
                 &owner,
                 &terminal,
                 "terminal job failure",
                 Duration::ZERO,
             )
-            .await?
-            {
-                tracing::warn!(job_id=%job_id, "terminal job update rejected because the lease is no longer owned");
-            }
+            .await?;
         }
         Err(error) => {
             // A job failure is durable work state, not a worker-process failure. The
             // queue update decides whether this attempt is retried or dead-lettered;
             // only an error while persisting that decision should stop the worker.
-            if !fail_job(
+            record_failure(
                 &pool,
                 &owner,
                 &job,
                 &error.to_string(),
                 Duration::from_secs(10),
             )
-            .await?
-            {
-                tracing::warn!(job_id=%job.id, "job failure update rejected because the lease is no longer owned");
-            }
+            .await?;
         }
     }
     Ok(())
+}
+
+/// Persist a failed attempt and say so in the log: `warn!` when the job will be
+/// retried, `error!` when this attempt dead-letters it.
+async fn record_failure(
+    pool: &sqlx::PgPool,
+    owner: &str,
+    job: &ClaimedJob,
+    error: &str,
+    retry_after: Duration,
+) -> anyhow::Result<()> {
+    let persisted = fail_job(pool, owner, job, error, retry_after).await?;
+    if !persisted {
+        tracing::warn!(
+            job_id = %job.id,
+            kind = %job.kind,
+            attempts = job.attempts,
+            error,
+            "job failure update rejected because the lease is no longer owned"
+        );
+    } else if job.attempts >= job.max_attempts {
+        tracing::error!(
+            job_id = %job.id,
+            kind = %job.kind,
+            attempts = job.attempts,
+            max_attempts = job.max_attempts,
+            error,
+            "job dead-lettered"
+        );
+    } else {
+        tracing::warn!(
+            job_id = %job.id,
+            kind = %job.kind,
+            attempts = job.attempts,
+            max_attempts = job.max_attempts,
+            retry_after_ms = retry_after.as_millis() as u64,
+            error,
+            "job failed; will retry"
+        );
+    }
+    Ok(())
+}
+
+/// Run a handler future on its own task so a panic becomes this job's failure
+/// instead of tearing down the claim loop. The task is aborted if the caller
+/// stops waiting (for example when the lease is lost).
+async fn run_isolated<F>(work: F) -> anyhow::Result<DeliveryAction>
+where
+    F: Future<Output = anyhow::Result<DeliveryAction>> + Send + 'static,
+{
+    struct AbortOnDrop(tokio::task::JoinHandle<anyhow::Result<DeliveryAction>>);
+    impl Drop for AbortOnDrop {
+        fn drop(&mut self) {
+            self.0.abort();
+        }
+    }
+    let mut task = AbortOnDrop(tokio::spawn(work));
+    match (&mut task.0).await {
+        Ok(result) => result,
+        Err(error) if error.is_panic() => {
+            let payload = error.into_panic();
+            let message = payload
+                .downcast_ref::<&str>()
+                .map(|message| (*message).to_owned())
+                .or_else(|| payload.downcast_ref::<String>().cloned())
+                .unwrap_or_else(|| "non-string panic payload".to_owned());
+            Err(anyhow::anyhow!("job handler panicked: {message}"))
+        }
+        Err(error) => Err(anyhow::anyhow!("job handler was cancelled: {error}")),
+    }
 }
 
 async fn run_with_lease_renewal<F>(
@@ -278,9 +399,9 @@ async fn run_with_lease_renewal<F>(
     job_id: uuid::Uuid,
     lease: Duration,
     work: F,
-) -> anyhow::Result<delivery::DeliveryAction>
+) -> anyhow::Result<DeliveryAction>
 where
-    F: Future<Output = anyhow::Result<delivery::DeliveryAction>>,
+    F: Future<Output = anyhow::Result<DeliveryAction>>,
 {
     let interval = (lease / 3).max(Duration::from_millis(100));
     tokio::pin!(work);

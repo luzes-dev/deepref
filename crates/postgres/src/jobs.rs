@@ -14,6 +14,7 @@ WITH candidate AS (
   SELECT id
   FROM jobs
   WHERE state = 'queued' AND project_id IS NOT NULL AND available_at <= now()
+    AND attempts < max_attempts
   ORDER BY priority DESC, available_at ASC, id ASC
   FOR UPDATE SKIP LOCKED
   LIMIT 1
@@ -57,13 +58,47 @@ pub async fn enqueue_job_pool(pool: &PgPool, job: &EnqueueJob) -> anyhow::Result
     Ok(id)
 }
 
+/// Requeue or dead-letter jobs whose lease expired without a graceful
+/// `complete_job`/`fail_job` (the worker crashed, was killed, or lost the
+/// lease). A lost lease spends an attempt exactly like a reported failure:
+/// the job dead-letters at `max_attempts`, and otherwise waits an exponential
+/// backoff (30 s doubling per attempt, capped at 15 min) so a job that kills
+/// its worker is not reclaimed at once by the next one.
 pub async fn recover_expired_jobs(pool: &PgPool) -> anyhow::Result<u64> {
-    Ok(sqlx::query!(
-        "UPDATE jobs SET state='queued',lease_owner=NULL,leased_until=NULL,lease_renewed_at=NULL WHERE state='running' AND leased_until < now()",
+    let recovered = sqlx::query!(
+        r#"UPDATE jobs
+           SET state = CASE WHEN attempts >= max_attempts THEN 'dead' ELSE 'queued' END,
+               last_error = 'lease expired',
+               available_at = now()
+                 + least(30 * power(2, greatest(attempts - 1, 0)), 900) * interval '1 second',
+               lease_owner = NULL,
+               leased_until = NULL,
+               lease_renewed_at = NULL
+           WHERE state = 'running' AND leased_until < now()
+           RETURNING id, kind, attempts, max_attempts, state"#,
     )
-    .execute(pool)
-    .await?
-    .rows_affected())
+    .fetch_all(pool)
+    .await?;
+    for job in &recovered {
+        if job.state == "dead" {
+            tracing::error!(
+                job_id = %job.id,
+                kind = %job.kind,
+                attempts = job.attempts,
+                max_attempts = job.max_attempts,
+                "job dead-lettered after its lease expired"
+            );
+        } else {
+            tracing::warn!(
+                job_id = %job.id,
+                kind = %job.kind,
+                attempts = job.attempts,
+                max_attempts = job.max_attempts,
+                "job lease expired; requeued with backoff"
+            );
+        }
+    }
+    Ok(recovered.len() as u64)
 }
 
 pub async fn claim_job(

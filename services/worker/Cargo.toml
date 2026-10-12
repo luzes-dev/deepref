@@ -36,6 +36,7 @@ bytes.workspace = true
 deepref-domain.workspace = true
 futures.workspace = true
 rig-core = { workspace = true, features = ["test-utils"] }
+tracing-subscriber.workspace = true
 url.workspace = true
 
 [lints]

@@ -9,7 +9,7 @@ use std::time::Duration;
 use anyhow::{Result, ensure};
 use deepref_application::jobs::{EnqueueJob, JobQueue};
 use deepref_domain::ProjectId;
-use deepref_postgres::{PostgresJobQueue, job, migrate};
+use deepref_postgres::{PostgresJobQueue, job, migrate, recover_expired_jobs};
 use sqlx::{PgPool, Row};
 use uuid::Uuid;
 
@@ -191,10 +191,10 @@ async fn expired_leases_are_fenced_and_retries_reach_dead_at_max_attempts() -> R
 
         // Force the lease past its expiry boundary instead of sleeping for a
         // wall-clock interval, keeping the integration test deterministic.
-        sqlx::query("UPDATE jobs SET leased_until=now()-interval '1 second' WHERE id=$1")
-            .bind(lease_job_id)
-            .execute(&pool)
-            .await?;
+        expire_lease(&pool, lease_job_id).await?;
+        // Recovery backs the job off; skip the wait instead of sleeping.
+        ensure!(recover_expired_jobs(&pool).await? == 1);
+        make_available(&pool, lease_job_id).await?;
 
         let replacement = queue
             .claim("replacement-owner", Duration::from_secs(10))
@@ -335,4 +335,131 @@ async fn expired_leases_are_fenced_and_retries_reach_dead_at_max_attempts() -> R
     let cleanup_result = cleanup(&pool, project_id).await;
     cleanup_result?;
     result
+}
+
+/// A job whose worker dies (OOM, segfault, panic outside the handler) never
+/// reaches `fail_job`. Lease recovery must spend the same attempt budget as the
+/// graceful path, back off before the next attempt, and dead-letter at
+/// `max_attempts`; `CLAIM` must refuse an exhausted job as a second guard.
+#[tokio::test]
+async fn lease_recovery_dead_letters_at_max_attempts_and_backs_off() -> Result<()> {
+    let Some(pool) = database().await else {
+        return Ok(());
+    };
+    let queue = PostgresJobQueue { pool: pool.clone() };
+    let project_id = fixture_project(&pool).await?;
+    let result = async {
+        // max_attempts=1: the crashed first attempt exhausts the budget.
+        let poison_id = Uuid::new_v4();
+        let mut poison = fixture_job(
+            project_id,
+            poison_id,
+            "integration_poison",
+            format!("jobs-integration-poison:{poison_id}"),
+        );
+        poison.max_attempts = 1;
+        queue.enqueue(poison).await?;
+        let claimed = queue
+            .claim("crashing-owner", Duration::from_secs(10))
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("poison job should be claimable"))?;
+        ensure!(claimed.id == poison_id && claimed.attempts == 1);
+        expire_lease(&pool, poison_id).await?;
+        ensure!(recover_expired_jobs(&pool).await? == 1);
+        let dead =
+            sqlx::query("SELECT state,attempts,last_error,lease_owner FROM jobs WHERE id=$1")
+                .bind(poison_id)
+                .fetch_one(&pool)
+                .await?;
+        ensure!(
+            dead.get::<String, _>("state") == "dead",
+            "an expired lease at max_attempts must dead-letter, got {}",
+            dead.get::<String, _>("state")
+        );
+        ensure!(dead.get::<i32, _>("attempts") == 1);
+        ensure!(dead.get::<Option<String>, _>("last_error").as_deref() == Some("lease expired"));
+        ensure!(dead.get::<Option<String>, _>("lease_owner").is_none());
+
+        // Budget left: requeue with a backoff, so the crash is not retried at once.
+        let retry_id = Uuid::new_v4();
+        let mut retry = fixture_job(
+            project_id,
+            retry_id,
+            "integration_crash_retry",
+            format!("jobs-integration-crash-retry:{retry_id}"),
+        );
+        retry.max_attempts = 3;
+        queue.enqueue(retry).await?;
+        queue
+            .claim("crashing-owner", Duration::from_secs(10))
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("retry job should be claimable"))?;
+        expire_lease(&pool, retry_id).await?;
+        ensure!(recover_expired_jobs(&pool).await? == 1);
+        let queued = sqlx::query("SELECT state,last_error,available_at FROM jobs WHERE id=$1")
+            .bind(retry_id)
+            .fetch_one(&pool)
+            .await?;
+        ensure!(queued.get::<String, _>("state") == "queued");
+        ensure!(
+            queued.get::<Option<String>, _>("last_error").as_deref() == Some("lease expired")
+        );
+        ensure!(
+            queued.get::<chrono::DateTime<chrono::Utc>, _>("available_at") > chrono::Utc::now(),
+            "a recovered lease must back off before the next attempt"
+        );
+        ensure!(
+            queue
+                .claim("next-owner", Duration::from_secs(10))
+                .await?
+                .is_none(),
+            "a backed-off job must not be reclaimed immediately"
+        );
+
+        // Second guard: CLAIM never starts an attempt beyond max_attempts.
+        let exhausted_id = Uuid::new_v4();
+        let mut exhausted = fixture_job(
+            project_id,
+            exhausted_id,
+            "integration_exhausted",
+            format!("jobs-integration-exhausted:{exhausted_id}"),
+        );
+        exhausted.max_attempts = 2;
+        queue.enqueue(exhausted).await?;
+        sqlx::query("UPDATE jobs SET attempts=2 WHERE id=$1")
+            .bind(exhausted_id)
+            .execute(&pool)
+            .await?;
+        ensure!(
+            queue
+                .claim("next-owner", Duration::from_secs(10))
+                .await?
+                .is_none(),
+            "CLAIM must not start attempt max_attempts+1"
+        );
+        Ok::<_, anyhow::Error>(())
+    }
+    .await;
+
+    let cleanup_result = cleanup(&pool, project_id).await;
+    cleanup_result?;
+    result
+}
+
+/// Force a lease past its expiry boundary instead of sleeping.
+async fn expire_lease(pool: &PgPool, job_id: Uuid) -> Result<()> {
+    sqlx::query("UPDATE jobs SET leased_until=now()-interval '1 second' WHERE id=$1")
+        .bind(job_id)
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
+/// Skip a backoff instead of sleeping through it.
+async fn make_available(pool: &PgPool, job_id: Uuid) -> Result<()> {
+    sqlx::query("UPDATE jobs SET available_at=now()-interval '1 second' WHERE id=$1")
+        .bind(job_id)
+        .execute(pool)
+        .await?;
+    Ok(())
 }
