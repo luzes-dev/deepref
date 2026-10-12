@@ -214,6 +214,9 @@
 	);
 
 	let choosingReason = $state(false);
+	// True from the first line of decide() or undo() until the mutation and the queue
+	// refresh settle. The mutation's own isPending is false while the queue catches up.
+	let deciding = $state(false);
 	let documentView = $state<'pdf' | 'outline' | 'references' | 'blocks'>('pdf');
 	let statusMessage = $state('');
 	let errorMessage = $state('');
@@ -401,13 +404,16 @@
 		);
 	}
 
-	function currentStateFromError(error: unknown): AuthoritativeFullTextState | null {
+	function currentStateFromError(
+		error: unknown,
+		reportId: string
+	): AuthoritativeFullTextState | null {
 		if (!(error instanceof ApiError)) return null;
 		const info = error.info as ApiErrorBody | null;
 		const details = info?.details;
 		if (!details || typeof details !== 'object' || !('currentState' in details)) return null;
 		const state = details.currentState;
-		return isAuthoritativeState(state) && state.report_id === currentReportId ? state : null;
+		return isAuthoritativeState(state) && state.report_id === reportId ? state : null;
 	}
 
 	function acceptAuthoritativeState(state: AuthoritativeFullTextState, message: string) {
@@ -468,6 +474,7 @@
 
 	async function decide(decision: ScreeningDecisionInput, reasonId: string | null) {
 		if (
+			deciding ||
 			!currentReportId ||
 			!protocol ||
 			!usableFullText ||
@@ -479,10 +486,12 @@
 			errorMessage = 'Choose exactly one full-text exclusion reason.';
 			return;
 		}
+		deciding = true;
+		const reportId = currentReportId;
 		const previous = queryClient.getQueryData<FullTextQueueCache>(fullTextQueueKey);
 		const expectedRevision = screenRevision;
 		const nextState: AuthoritativeFullTextState = {
-			report_id: currentReportId,
+			report_id: reportId,
 			full_text_status: decision,
 			full_text_exclusion_reason_id: decision === 'exclude' ? reasonId : null,
 			revision: expectedRevision + 1
@@ -499,16 +508,12 @@
 				expected_revision: expectedRevision,
 				...(decision === 'exclude' ? { exclusion_reason_id: reasonId } : {})
 			};
-			const result = await decisionMutation.mutateAsync({
-				projectId,
-				reportId: currentReportId,
-				data
-			});
+			const result = await decisionMutation.mutateAsync({ projectId, reportId, data });
 			acceptAuthoritativeState(result.data, `Full-text ${decision} recorded.`);
 			await queryClient.invalidateQueries({ queryKey: fullTextQueueKey });
 			await queryClient.invalidateQueries({ queryKey: missingQuery.queryKey });
 		} catch (error) {
-			const state = currentStateFromError(error);
+			const state = currentStateFromError(error, reportId);
 			if (state) {
 				queryClient.setQueryData<FullTextQueueCache>(fullTextQueueKey, (cache) =>
 					applyFullTextState(cache, state)
@@ -521,11 +526,14 @@
 				errorMessage =
 					error instanceof Error ? error.message : 'The full-text decision failed.';
 			}
+		} finally {
+			deciding = false;
 		}
 	}
 
 	async function undo() {
 		if (
+			deciding ||
 			!currentReportId ||
 			!protocol ||
 			!canUndo ||
@@ -533,28 +541,31 @@
 			decisionMutation.isPending
 		)
 			return;
+		deciding = true;
+		const reportId = currentReportId;
+		const expectedRevision = screenRevision;
 		const previous = queryClient.getQueryData<FullTextQueueCache>(fullTextQueueKey);
 		queryClient.setQueryData<FullTextQueueCache>(fullTextQueueKey, (cache) =>
 			applyFullTextState(cache, {
-				report_id: currentReportId,
+				report_id: reportId,
 				full_text_status: latestHistory?.previous_full_text_status ?? 'unscreened',
-				revision: screenRevision + 1
+				revision: expectedRevision + 1
 			})
 		);
 		try {
 			const result = await undoMutation.mutateAsync({
 				projectId,
-				reportId: currentReportId,
+				reportId,
 				data: {
 					stage: 'full_text',
 					protocol_version_id: protocol.id,
-					expected_revision: screenRevision
+					expected_revision: expectedRevision
 				}
 			});
 			acceptAuthoritativeState(result.data, 'The last full-text decision was undone.');
 			await historyQuery.refetch();
 		} catch (error) {
-			const state = currentStateFromError(error);
+			const state = currentStateFromError(error, reportId);
 			if (state) {
 				queryClient.setQueryData<FullTextQueueCache>(fullTextQueueKey, (cache) =>
 					applyFullTextState(cache, state)
@@ -567,6 +578,8 @@
 				: error instanceof Error
 					? error.message
 					: 'Undo failed.';
+		} finally {
+			deciding = false;
 		}
 	}
 
@@ -1129,7 +1142,7 @@
 		reasons={reasons.filter((reason) => reason.stage === 'full_text')}
 		current={screenStatus}
 		bind:choosingReason
-		pending={decisionMutation.isPending || undoMutation.isPending}
+		pending={deciding || decisionMutation.isPending || undoMutation.isPending}
 		{canUndo}
 		{statusMessage}
 		available={usableFullText}

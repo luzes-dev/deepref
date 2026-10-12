@@ -108,6 +108,9 @@
 	const undoMutation = createUndoScreening();
 	let statusMessage = $state('');
 	let lastAction = $state<LastAction | null>(null);
+	// True from the first line of decide() or undo() until navigation and the mutation
+	// settle. The mutation's own isPending is false while the URL is still changing.
+	let deciding = $state(false);
 	let searchTimer: ReturnType<typeof setTimeout> | undefined;
 
 	const pages = $derived(queueQuery.data?.pages ?? []);
@@ -311,7 +314,15 @@
 	}
 
 	async function decide(decision: 'include' | 'exclude' | 'maybe') {
-		if (!current || !protocol || decisionMutation.isPending || undoMutation.isPending) return;
+		if (
+			deciding ||
+			!current ||
+			!protocol ||
+			decisionMutation.isPending ||
+			undoMutation.isPending
+		)
+			return;
+		deciding = true;
 		statusMessage = '';
 		const reportId = current.report_id;
 		const oldCache = queryClient.getQueryData<QueueCache>(queueKey);
@@ -322,7 +333,7 @@
 		queryClient.setQueryData<QueueCache>(queueKey, (cache) =>
 			applyOptimisticStatusChange(cache, {
 				reportId,
-				fromStatus: current.title_abstract_status,
+				fromStatus: priorItem.title_abstract_status,
 				toStatus: decision,
 				revision: expectedRevision + 1,
 				filterStatus: urlState.status,
@@ -330,8 +341,8 @@
 				priorLocation
 			})
 		);
-		await updateUrl({ report: nextItem?.report_id ?? null }, false);
 		try {
+			await updateUrl({ report: nextItem?.report_id ?? null }, false);
 			const result = await decisionMutation.mutateAsync({
 				projectId,
 				reportId,
@@ -366,12 +377,21 @@
 				queryClient.setQueryData(queueKey, oldCache);
 				await updateUrl({ report: reportId }, true);
 			}
+		} finally {
+			deciding = false;
 		}
 	}
 
 	async function undo() {
-		if (!protocol || !undoTarget || undoMutation.isPending || decisionMutation.isPending)
+		if (
+			deciding ||
+			!protocol ||
+			!undoTarget ||
+			undoMutation.isPending ||
+			decisionMutation.isPending
+		)
 			return;
+		deciding = true;
 		statusMessage = '';
 		const target = undoTarget;
 		const reportId = target.reportId;
@@ -390,8 +410,8 @@
 				priorLocation
 			})
 		);
-		await updateUrl({ mode: 'focus', report: reportId }, false);
 		try {
+			await updateUrl({ mode: 'focus', report: reportId }, false);
 			const result = await undoMutation.mutateAsync({
 				projectId,
 				reportId,
@@ -420,6 +440,8 @@
 				if (lastAction?.reportId === reportId)
 					await updateUrl({ report: previousReport }, true);
 			}
+		} finally {
+			deciding = false;
 		}
 	}
 
@@ -704,7 +726,7 @@
 	{#if current}
 		<DecisionBar
 			disabled={!protocol}
-			pending={decisionMutation.isPending || undoMutation.isPending}
+			pending={deciding || decisionMutation.isPending || undoMutation.isPending}
 			current={current.title_abstract_status}
 			{canUndo}
 			onDecision={decide}
