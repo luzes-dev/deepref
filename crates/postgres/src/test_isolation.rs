@@ -47,7 +47,7 @@ use uuid::Uuid;
 const TEST_DB_PREFIX: &str = "dt_";
 /// Prefix for migrated templates, followed by the migration-set hash.
 const TEMPLATE_PREFIX: &str = "dtpl_";
-/// Advisory-lock key making template construction and reaping exclusive.
+/// Advisory lock: template builds take it exclusively, reapers shared.
 const SETUP_LOCK_KEY: i64 = 810_311;
 /// Clones younger than this are never reaped (see the module docs).
 const REAP_AFTER_SECS: u64 = 600;
@@ -186,11 +186,12 @@ async fn ensure_template(maintenance: &mut PgConnection, base_url: &str, templat
         .expect("template setup unlock");
 }
 
-/// Drops up to [`REAP_BATCH`] clones of finished earlier runs. Skipped while
-/// another process builds a template or reaps (the lock covers both). Runs
-/// detached, so errors are ignored and it never panics.
+/// Drops up to [`REAP_BATCH`] clones of finished earlier runs. Reapers share
+/// the setup lock, so they run side by side (and concurrent drops share one
+/// forced checkpoint) but never during a template build. Runs detached, so
+/// errors are ignored and it never panics.
 async fn reap(mut maintenance: PgConnection) {
-    let locked: Result<bool, _> = sqlx::query_scalar("SELECT pg_try_advisory_lock($1)")
+    let locked: Result<bool, _> = sqlx::query_scalar("SELECT pg_try_advisory_lock_shared($1)")
         .bind(SETUP_LOCK_KEY)
         .fetch_one(&mut maintenance)
         .await;
@@ -198,7 +199,8 @@ async fn reap(mut maintenance: PgConnection) {
         let idle: Vec<String> = sqlx::query_scalar(
             "SELECT d.datname FROM pg_database d
              WHERE d.datname LIKE 'dt\\_%'
-               AND NOT EXISTS (SELECT 1 FROM pg_stat_activity a WHERE a.datid = d.oid)",
+               AND NOT EXISTS (SELECT 1 FROM pg_stat_activity a WHERE a.datid = d.oid)
+             ORDER BY random()",
         )
         .fetch_all(&mut maintenance)
         .await
