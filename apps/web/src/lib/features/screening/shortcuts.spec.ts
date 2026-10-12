@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import {
 	hasCommandModifier,
 	hasOpenScreeningOverlay,
+	ignoresAutoRepeat,
 	isShortcutSuppressed,
 	shortcutAction
 } from './shortcuts';
@@ -15,6 +16,15 @@ describe('screening shortcuts', () => {
 		expect(shortcutAction('ArrowRight')).toBe('next');
 		expect(shortcutAction('u')).toBe('undo');
 		expect(shortcutAction('x')).toBeNull();
+	});
+
+	it('lets only navigation keys auto-repeat', () => {
+		for (const action of ['include', 'exclude', 'maybe', 'undo'] as const) {
+			expect(ignoresAutoRepeat(action, { repeat: true })).toBe(true);
+			expect(ignoresAutoRepeat(action, { repeat: false })).toBe(false);
+		}
+		expect(ignoresAutoRepeat('previous', { repeat: true })).toBe(false);
+		expect(ignoresAutoRepeat('next', { repeat: true })).toBe(false);
 	});
 
 	it('suppresses shortcuts only while typing into fields and inside overlays', () => {

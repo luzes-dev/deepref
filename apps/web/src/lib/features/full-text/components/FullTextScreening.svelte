@@ -66,6 +66,7 @@
 	import {
 		hasCommandModifier,
 		hasOpenScreeningOverlay,
+		ignoresAutoRepeat,
 		isShortcutSuppressed,
 		shortcutAction
 	} from '#lib/features/screening/shortcuts.js';
@@ -343,6 +344,8 @@
 		)
 			return;
 		if (choosingReason) {
+			// A held reason key must not record a second exclusion.
+			if (event.repeat) return;
 			const index = Number(event.key) - 1;
 			const options = reasons.filter((reason) => reason.stage === 'full_text');
 			if (Number.isInteger(index) && options[index]) {
@@ -358,6 +361,7 @@
 		const action = shortcutAction(event.key);
 		if (!action) return;
 		event.preventDefault();
+		if (ignoresAutoRepeat(action, event)) return;
 		if (action === 'previous' || action === 'next') return void move(action);
 		if (action === 'undo') return void undo();
 		if (!usableFullText) return;

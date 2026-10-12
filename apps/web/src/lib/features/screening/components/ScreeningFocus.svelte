@@ -52,6 +52,7 @@
 	import {
 		hasCommandModifier,
 		hasOpenScreeningOverlay,
+		ignoresAutoRepeat,
 		isShortcutSuppressed,
 		shortcutAction
 	} from '../shortcuts';
@@ -469,6 +470,7 @@
 		const action = shortcutAction(event.key);
 		if (!action) return;
 		event.preventDefault();
+		if (ignoresAutoRepeat(action, event)) return;
 		if (action === 'include' || action === 'exclude' || action === 'maybe') void decide(action);
 		if (action === 'undo') void undo();
 		if (action === 'previous' || action === 'next') void move(action);
