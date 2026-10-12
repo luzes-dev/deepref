@@ -45,6 +45,11 @@ port in `DATABASE_URL` in `.env` to the same value before starting the stack.
 
 Every published dependency port binds only to `127.0.0.1`.
 
+`just` recipes and Process Compose run with `APP_ENV=local`. The server binary itself
+defaults to `APP_ENV=production` and reads `.env` and `.env.local` only when the process
+environment already says `APP_ENV=local`. To run it by hand, export that first, for example
+`APP_ENV=local cargo run -p deepref-server -- serve`.
+
 ## Fast continuous Rust feedback (Bacon)
 
 Bacon is pinned in `.mise.toml` as an interactive local developer tool (it is not a CI gate). It watches the codebase and runs checks or tests on file changes:
