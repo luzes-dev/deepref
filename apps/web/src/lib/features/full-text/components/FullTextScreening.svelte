@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { createAllDocumentBlocks } from '#lib/api/pagination.js';
 	import {
 		createGetProjectProtocol,
 		createGetScreeningHistory,
@@ -8,7 +9,6 @@
 	import {
 		createGetReportDocument,
 		createListDocumentPages,
-		createListDocumentBlocks,
 		createListDocumentReferences,
 		createListDocumentSections,
 		createListFullTextExclusionReasons,
@@ -175,7 +175,7 @@
 		})
 	);
 
-	const blocksQuery = createListDocumentBlocks(
+	const blocksQuery = createAllDocumentBlocks(
 		() => projectId,
 		() => currentReportId ?? '',
 		() => effectiveDocumentId,

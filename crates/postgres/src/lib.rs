@@ -134,7 +134,7 @@ pub use documents::{
     FullTextQueueRecord, MissingFullTextRecord, NewDocument, NewDocumentReference,
     NewDocumentSection, acknowledge_identity_mismatch, complete_document_retrieval,
     create_document, delete_document, enqueue_parse, enqueue_retrieve,
-    find_failed_document_by_hash, get_document, get_document_blocks, get_document_by_id,
+    find_failed_document_by_hash, get_document, get_document_blocks, get_document_blocks_page, get_document_by_id,
     get_document_pages, insert_document_blocks, list_document_references, list_document_sections,
     list_documents, list_full_text_queue, list_full_text_reasons, list_missing_full_text,
     mark_document_failed, mark_document_parsing, mark_document_retrieval_failed,

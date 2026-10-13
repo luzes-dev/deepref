@@ -2,9 +2,9 @@
 	import * as Resizable from '@deepref/ui/resizable';
 	import { MediaQuery } from 'svelte/reactivity';
 	import {
-		createListDocumentBlocks,
 		createListReportDocuments
 	} from '#lib/api/generated/documents/documents.js';
+	import { createAllDocumentBlocks } from '#lib/api/pagination.js';
 	import { fullTextUrlString } from '#lib/features/full-text/url.js';
 	import EvidenceLabel from '#lib/features/evidence/EvidenceLabel.svelte';
 	import CitationLabel from './CitationLabel.svelte';
@@ -154,7 +154,7 @@
 		() => ({ query: { enabled: Boolean(sourceReportId) } })
 	);
 	const sourceDocumentId = $derived(sourceDocuments.data?.data[0]?.id ?? '');
-	const sourceBlocks = createListDocumentBlocks(
+	const sourceBlocks = createAllDocumentBlocks(
 		() => projectId,
 		() => sourceReportId,
 		() => sourceDocumentId,

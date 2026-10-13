@@ -88,3 +88,8 @@ Citation expansion depth is a domain value from zero through three. Project
 creation/update, global settings, ingestion, and acquisition reject larger or
 negative values with 400. The corresponding database columns enforce the same
 range; migration fails on unsafe historical values rather than rewriting them.
+
+Document blocks now use `items`/`next_cursor` pages ordered by page number,
+ordinal and block UUID (maximum 100 blocks per request). Full-text screening,
+appraisal, extraction and citation labels collect every page before exposing
+overlay/evidence blocks; a later-page failure is an error, not a partial paper.
