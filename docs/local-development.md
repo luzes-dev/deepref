@@ -32,6 +32,8 @@ mise exec -- just dev
 
 `just dev` waits for PostgreSQL to become healthy, applies PostgreSQL migrations, and then starts the web app, API, and worker under Process Compose. Process names prefix their logs. API readiness gates the other processes, and Ctrl-C sends each service its configured clean shutdown signal in reverse dependency order.
 
+Workers spend an attempt when a lease expires: recovery backs off retries and dead-letters jobs at their attempt limit. Queue and workflow writes require the current job ID, owner, and attempt with an unexpired lease; restarting the same worker does not authorize a stale attempt. Transient renewal errors retry within the lease deadline, and a stalled renewal is cancelled at that deadline. Handler panics fail the individual job, including panics while constructing its future, rather than stopping the claim loop. `/health/dependencies` reports live worker heartbeat rows; a clean shutdown removes the row after draining.
+
 Local endpoints:
 
 | Service         | Address                 |

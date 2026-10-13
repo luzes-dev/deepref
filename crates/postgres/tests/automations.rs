@@ -5,6 +5,7 @@
     clippy::string_slice
 )]
 use anyhow::{Result, ensure};
+use deepref_application::jobs::JobLease;
 use deepref_application::{
     AutomationDefinitionStatus, AutomationRunStatus, AutomationStepRunStatus,
     AutomationTriggerKind, BuiltInAutomationRecipe, ConfigureAutomationDefinition,
@@ -241,13 +242,26 @@ async fn expired_job_recovery_reclaims_running_step_and_rejects_zombie_completio
             )?,
         )
         .await?;
-        claim_automation_job(&pool, "worker-a", dispatch.job_id, Duration::from_secs(10)).await?;
-        let first = begin_next_automation_step(&pool, project_id, dispatch.run_id, "worker-a")
+        let lease_a =
+            claim_automation_job(&pool, "worker-a", dispatch.job_id, Duration::from_secs(10))
+                .await?
+                .lease("worker-a");
+        let first = begin_next_automation_step(&pool, project_id, dispatch.run_id, &lease_a)
             .await?
             .expect("owner A starts the step");
         ensure!(first.attempts == 1);
         ensure!(matches!(
-            begin_next_automation_step(&pool, project_id, dispatch.run_id, "worker-b").await,
+            begin_next_automation_step(
+                &pool,
+                project_id,
+                dispatch.run_id,
+                &JobLease {
+                    id: dispatch.job_id,
+                    owner: "worker-b".to_owned(),
+                    attempt: 1
+                }
+            )
+            .await,
             Err(AutomationError::WorkerOwnership)
         ));
 
@@ -261,19 +275,27 @@ async fn expired_job_recovery_reclaims_running_step_and_rejects_zombie_completio
         .execute(&pool)
         .await?;
         ensure!(recover_expired_jobs(&pool).await? == 1);
-        claim_automation_job(&pool, "worker-b", dispatch.job_id, Duration::from_secs(10)).await?;
+        // Recovery backs the job off; skip the wait instead of sleeping.
+        sqlx::query("UPDATE jobs SET available_at=now() WHERE id=$1")
+            .bind(dispatch.job_id)
+            .execute(&pool)
+            .await?;
+        let lease_b =
+            claim_automation_job(&pool, "worker-b", dispatch.job_id, Duration::from_secs(10))
+                .await?
+                .lease("worker-b");
 
-        let resumed = begin_next_automation_step(&pool, project_id, dispatch.run_id, "worker-b")
+        let resumed = begin_next_automation_step(&pool, project_id, dispatch.run_id, &lease_b)
             .await?
             .expect("owner B reclaims the stale step");
         ensure!(resumed.id == first.id);
         ensure!(resumed.attempts == 2);
         ensure!(resumed.claimed_by.as_deref() == Some("worker-b"));
         ensure!(matches!(
-            complete_automation_step(&pool, project_id, first.id, "worker-a").await,
+            complete_automation_step(&pool, project_id, first.id, &lease_a).await,
             Err(AutomationError::WorkerOwnership)
         ));
-        ensure!(complete_automation_step(&pool, project_id, resumed.id, "worker-b").await?);
+        ensure!(complete_automation_step(&pool, project_id, resumed.id, &lease_b).await?);
 
         let row = sqlx::query(
             "SELECT count(*)::bigint AS rows, count(DISTINCT id)::bigint AS effects,
@@ -314,10 +336,13 @@ async fn concurrent_step_begin_under_one_lease_has_one_effective_claim() -> Resu
             )?,
         )
         .await?;
-        claim_automation_job(&pool, "worker-a", dispatch.job_id, Duration::from_secs(10)).await?;
+        let lease_a =
+            claim_automation_job(&pool, "worker-a", dispatch.job_id, Duration::from_secs(10))
+                .await?
+                .lease("worker-a");
         let (left, right) = tokio::join!(
-            begin_next_automation_step(&pool, project_id, dispatch.run_id, "worker-a"),
-            begin_next_automation_step(&pool, project_id, dispatch.run_id, "worker-a"),
+            begin_next_automation_step(&pool, project_id, dispatch.run_id, &lease_a),
+            begin_next_automation_step(&pool, project_id, dispatch.run_id, &lease_a),
         );
         let left = left?.is_some();
         let right = right?.is_some();
@@ -437,16 +462,16 @@ async fn failed_manual_run_retries_only_incomplete_steps_and_completed_retry_is_
             claim_automation_job(&pool, "worker-a", dispatch.job_id, Duration::from_secs(10))
                 .await?;
         ensure!(claimed_a.attempts == 1);
-        let first_step = begin_next_automation_step(&pool, project_id, dispatch.run_id, "worker-a")
+        let lease_a = claimed_a.lease("worker-a");
+        let first_step = begin_next_automation_step(&pool, project_id, dispatch.run_id, &lease_a)
             .await?
             .expect("claimed run has a first step");
         ensure!(first_step.status == AutomationStepRunStatus::Running);
         ensure!(first_step.attempts == 1);
-        ensure!(complete_automation_step(&pool, project_id, first_step.id, "worker-a").await?);
-        let second_step =
-            begin_next_automation_step(&pool, project_id, dispatch.run_id, "worker-a")
-                .await?
-                .expect("claimed run has a second step");
+        ensure!(complete_automation_step(&pool, project_id, first_step.id, &lease_a).await?);
+        let second_step = begin_next_automation_step(&pool, project_id, dispatch.run_id, &lease_a)
+            .await?
+            .expect("claimed run has a second step");
         ensure!(second_step.ordinal == 1);
         ensure!(second_step.attempts == 1);
         ensure!(
@@ -454,7 +479,7 @@ async fn failed_manual_run_retries_only_incomplete_steps_and_completed_retry_is_
                 &pool,
                 project_id,
                 second_step.id,
-                "worker-a",
+                &lease_a,
                 "deterministic action failed",
             )
             .await?
@@ -483,7 +508,8 @@ async fn failed_manual_run_retries_only_incomplete_steps_and_completed_retry_is_
             claim_automation_job(&pool, "worker-b", dispatch.job_id, Duration::from_secs(10))
                 .await?;
         ensure!(claimed_b.attempts == attempts_before_retry + 1);
-        let resumed = begin_next_automation_step(&pool, project_id, dispatch.run_id, "worker-b")
+        let lease_b = claimed_b.lease("worker-b");
+        let resumed = begin_next_automation_step(&pool, project_id, dispatch.run_id, &lease_b)
             .await?
             .expect("retry resumes the failed step");
         ensure!(resumed.id == second_step.id);
@@ -491,15 +517,15 @@ async fn failed_manual_run_retries_only_incomplete_steps_and_completed_retry_is_
         let after_begin = get_automation_run(&pool, project_id, dispatch.run_id).await?;
         ensure!(after_begin.steps[0].status == AutomationStepRunStatus::Completed);
         ensure!(after_begin.steps[0].attempts == 1);
-        ensure!(complete_automation_step(&pool, project_id, resumed.id, "worker-b").await?);
+        ensure!(complete_automation_step(&pool, project_id, resumed.id, &lease_b).await?);
         ensure!(
             finalize_automation_run(&pool, project_id, dispatch.run_id).await?
                 == AutomationFinalization::Completed
         );
-        ensure!(!complete_automation_step(&pool, project_id, resumed.id, "worker-b").await?);
+        ensure!(!complete_automation_step(&pool, project_id, resumed.id, &lease_b).await?);
         ensure!(!retry_automation_run(&pool, project_id, dispatch.run_id).await?);
         ensure!(
-            begin_next_automation_step(&pool, project_id, dispatch.run_id, "worker-b")
+            begin_next_automation_step(&pool, project_id, dispatch.run_id, &lease_b)
                 .await?
                 .is_none()
         );

@@ -121,7 +121,7 @@ async fn automation_job_executes_builtin_step_and_completed_retry_is_noop() -> R
             handle_job_with_documents_owned(
                 pool.clone(),
                 &claimed,
-                owner,
+                &claimed.lease(owner),
                 Duration::from_secs(30),
                 None,
                 None,
@@ -133,7 +133,7 @@ async fn automation_job_executes_builtin_step_and_completed_retry_is_noop() -> R
             handle_job_with_documents_owned(
                 pool.clone(),
                 &claimed,
-                owner,
+                &claimed.lease(owner),
                 Duration::from_secs(30),
                 None,
                 None,
@@ -141,7 +141,7 @@ async fn automation_job_executes_builtin_step_and_completed_retry_is_noop() -> R
             .await?
                 == DeliveryAction::Ack
         );
-        ensure!(complete_job(&pool, owner, job_id).await?);
+        ensure!(complete_job(&pool, &claimed.lease(owner)).await?);
 
         let run = get_automation_run(&pool, project_id, run_id).await?;
         ensure!(run.status == AutomationRunStatus::Completed);
@@ -178,7 +178,7 @@ async fn swapped_run_payload_cannot_execute_another_same_owner_job() -> Result<(
         let error = handle_job_with_documents_owned(
             pool.clone(),
             &corrupted,
-            owner,
+            &corrupted.lease(owner),
             Duration::from_secs(30),
             None,
             None,
@@ -259,7 +259,7 @@ async fn unknown_step_fails_closed_and_lease_owner_is_required() -> Result<()> {
         let wrong_owner = handle_job_with_documents_owned(
             pool.clone(),
             &claimed,
-            "another-worker",
+            &claimed.lease("another-worker"),
             Duration::from_secs(30),
             None,
             None,
@@ -271,7 +271,7 @@ async fn unknown_step_fails_closed_and_lease_owner_is_required() -> Result<()> {
             handle_job_with_documents_owned(
                 pool.clone(),
                 &claimed,
-                "worker-policy",
+                &claimed.lease("worker-policy"),
                 Duration::from_secs(30),
                 None,
                 None,
@@ -279,17 +279,12 @@ async fn unknown_step_fails_closed_and_lease_owner_is_required() -> Result<()> {
             .await?
                 == DeliveryAction::Terminate
         );
-        let terminal = deepref_application::jobs::ClaimedJob {
-            max_attempts: claimed.attempts,
-            ..claimed
-        };
         ensure!(
             deepref_postgres::fail_job(
                 &pool,
-                "worker-policy",
-                &terminal,
+                &claimed.lease("worker-policy"),
                 "terminal job failure",
-                Duration::ZERO,
+                deepref_application::jobs::JobRetry::DeadLetter,
             )
             .await?
         );
@@ -322,9 +317,14 @@ async fn crashed_step_is_reclaimed_by_new_owner_without_repeating_completed_step
     let result = async {
         let (run_id, job_id) = started_job(&pool, project_id, "crash").await?;
         let claimed_a = claimed_job(&pool, job_id, "worker-crashed").await?;
-        let first = begin_next_automation_step(&pool, project_id, run_id, "worker-crashed")
-            .await?
-            .expect("first worker claims the step");
+        let first = begin_next_automation_step(
+            &pool,
+            project_id,
+            run_id,
+            &claimed_a.lease("worker-crashed"),
+        )
+        .await?
+        .expect("first worker claims the step");
         ensure!(first.attempts == 1);
 
         sqlx::query(
@@ -335,13 +335,18 @@ async fn crashed_step_is_reclaimed_by_new_owner_without_repeating_completed_step
         .execute(&pool)
         .await?;
         ensure!(recover_expired_jobs(&pool).await? == 1);
+        // Recovery backs the job off; skip the wait instead of sleeping.
+        sqlx::query("UPDATE jobs SET available_at=now() WHERE id=$1")
+            .bind(job_id)
+            .execute(&pool)
+            .await?;
         let claimed_b = claimed_job(&pool, job_id, "worker-recovered").await?;
         ensure!(claimed_b.attempts == claimed_a.attempts + 1);
         ensure!(
             handle_job_with_documents_owned(
                 pool.clone(),
                 &claimed_b,
-                "worker-recovered",
+                &claimed_b.lease("worker-recovered"),
                 Duration::from_secs(30),
                 None,
                 None,
@@ -349,7 +354,7 @@ async fn crashed_step_is_reclaimed_by_new_owner_without_repeating_completed_step
             .await?
                 == DeliveryAction::Ack
         );
-        ensure!(complete_job(&pool, "worker-recovered", job_id).await?);
+        ensure!(complete_job(&pool, &claimed_b.lease("worker-recovered")).await?);
 
         let run = get_automation_run(&pool, project_id, run_id).await?;
         ensure!(run.status == AutomationRunStatus::Completed);

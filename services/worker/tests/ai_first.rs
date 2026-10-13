@@ -184,7 +184,7 @@ async fn compiled_worker_quarantines_only_eligible_exclusions_without_scientific
         let action = handle_job_with_documents_owned_and_ai(
             pool.clone(),
             &job,
-            worker,
+            &job.lease(worker),
             Duration::from_secs(60),
             None,
             None,
@@ -193,7 +193,7 @@ async fn compiled_worker_quarantines_only_eligible_exclusions_without_scientific
         .await
         .unwrap();
         assert_eq!(action, DeliveryAction::Ack);
-        assert!(complete_job(&pool, worker, job.id).await.unwrap());
+        assert!(complete_job(&pool, &job.lease(worker)).await.unwrap());
     }
     let states: Vec<String> =
         sqlx::query_scalar("SELECT state FROM review_run_manifests WHERE project_id=$1")

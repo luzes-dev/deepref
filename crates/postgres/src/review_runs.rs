@@ -1,5 +1,6 @@
 use chrono::{DateTime, Utc};
 use deepref_ai::{AiProposal, ModelRouter, ProposalStatus, ProposalStore, hash_json};
+use deepref_application::jobs::JobLease;
 use deepref_domain::ProjectId;
 use deepref_review::{
     ReviewBlockCode, ReviewDefinitionKey, ReviewError, ReviewOrigin, ReviewRunId,
@@ -91,7 +92,7 @@ pub struct ReviewAttemptCompletion<'a> {
     pub media_type: &'a str,
     pub predecessors: &'a [AcceptedArtifactInput],
     pub model_run_id: Option<Uuid>,
-    pub worker_id: &'a str,
+    pub lease: &'a JobLease,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -334,7 +335,7 @@ pub async fn load_leased_review_run(
     pool: &PgPool,
     project_id: ProjectId,
     run_id: ReviewRunId,
-    worker_id: &str,
+    lease: &JobLease,
 ) -> Result<LeasedReviewRun, PostgresReviewError> {
     let row = sqlx::query(
         "SELECT m.automation_run_id,m.project_id,m.definition_key,m.subject,m.origin,m.state,
@@ -346,11 +347,12 @@ pub async fn load_leased_review_run(
          JOIN jobs AS j ON j.project_id=r.project_id AND j.id=r.job_id
          WHERE m.project_id=$1 AND m.automation_run_id=$2
            AND j.kind='automation_run' AND j.state='running'
-           AND j.lease_owner=$3 AND j.leased_until > now()",
+           AND j.lease_owner=$3 AND j.attempts=$4 AND j.leased_until > now()",
     )
     .bind(project_id.as_uuid())
     .bind(run_id.as_uuid())
-    .bind(worker_id)
+    .bind(&lease.owner)
+    .bind(lease.attempt)
     .fetch_optional(pool)
     .await?
     .ok_or(PostgresReviewError::WorkerOwnership)?;
@@ -368,7 +370,7 @@ pub async fn mark_review_run_running(
     pool: &PgPool,
     project_id: ProjectId,
     run_id: ReviewRunId,
-    worker_id: &str,
+    lease: &JobLease,
 ) -> Result<(), PostgresReviewError> {
     let changed = sqlx::query(
         "UPDATE review_run_manifests AS m
@@ -379,11 +381,12 @@ pub async fn mark_review_run_running(
            AND m.state IN ('queued','running')
            AND r.project_id=m.project_id AND r.id=m.automation_run_id
            AND j.project_id=r.project_id AND j.id=r.job_id
-           AND j.state='running' AND j.lease_owner=$3 AND j.leased_until > now()",
+           AND j.state='running' AND j.lease_owner=$3 AND j.attempts=$4 AND j.leased_until > now()",
     )
     .bind(project_id.as_uuid())
     .bind(run_id.as_uuid())
-    .bind(worker_id)
+    .bind(&lease.owner)
+    .bind(lease.attempt)
     .execute(pool)
     .await?
     .rows_affected();
@@ -492,13 +495,13 @@ pub async fn begin_review_attempt(
     review: &CompiledReview,
     node: &ReviewNode,
     predecessors: &[AcceptedArtifactInput],
-    worker_id: &str,
+    lease: &JobLease,
 ) -> Result<ReviewAttemptStart, PostgresReviewError> {
     let identity = review.attempt_identity(&run.manifest, node, predecessors)?;
     let project_id = run.snapshot.project_id;
     let run_id = run.snapshot.id;
     let mut transaction = pool.begin().await?;
-    assert_worker_lease(&mut transaction, project_id, run_id, worker_id).await?;
+    assert_worker_lease(&mut transaction, project_id, run_id, lease).await?;
     if let Some(row) = find_accepted_attempt(
         &mut transaction,
         project_id,
@@ -536,7 +539,7 @@ pub async fn begin_review_attempt(
     })?)
     .bind(attempt_number)
     .bind(identity.input_fingerprint.as_str())
-    .bind(worker_id)
+    .bind(&lease.owner)
     .execute(&mut *transaction)
     .await?;
     transaction.commit().await?;
@@ -553,14 +556,14 @@ pub async fn fail_review_attempt(
     attempt_id: Uuid,
     code: &str,
     message: &str,
-    worker_id: &str,
+    lease: &JobLease,
 ) -> Result<(), PostgresReviewError> {
     let mut transaction = pool.begin().await?;
     assert_worker_lease(
         &mut transaction,
         run.snapshot.project_id,
         run.snapshot.id,
-        worker_id,
+        lease,
     )
     .await?;
     let changed = sqlx::query(
@@ -574,7 +577,7 @@ pub async fn fail_review_attempt(
     .bind(message)
     .bind(run.snapshot.project_id.as_uuid())
     .bind(run.snapshot.id.as_uuid())
-    .bind(worker_id)
+    .bind(&lease.owner)
     .execute(&mut *transaction)
     .await?
     .rows_affected();
@@ -591,14 +594,14 @@ pub async fn finalize_review_proposal(
     pool: &PgPool,
     run: &LeasedReviewRun,
     executed: ExecutedReviewTask,
-    worker_id: &str,
+    lease: &JobLease,
 ) -> Result<ReviewFinalization, PostgresReviewError> {
     let project_id = run.snapshot.project_id;
     if executed.proposal.project_id != project_id {
         return Err(PostgresReviewError::FinalizationConflict);
     }
     let mut lease_check = pool.begin().await?;
-    assert_worker_lease(&mut lease_check, project_id, run.snapshot.id, worker_id).await?;
+    assert_worker_lease(&mut lease_check, project_id, run.snapshot.id, lease).await?;
     lease_check.commit().await?;
     if !subject_is_current(pool, project_id, &run.snapshot.subject).await? {
         block_review_run(
@@ -779,7 +782,7 @@ pub(crate) async fn assert_worker_lease(
     transaction: &mut Transaction<'_, Postgres>,
     project_id: ProjectId,
     run_id: ReviewRunId,
-    worker_id: &str,
+    lease: &JobLease,
 ) -> Result<(), PostgresReviewError> {
     let owns_lease = sqlx::query_scalar::<_, bool>(
         "SELECT EXISTS (
@@ -788,12 +791,13 @@ pub(crate) async fn assert_worker_lease(
            JOIN jobs AS j ON j.project_id=r.project_id AND j.id=r.job_id
            WHERE r.project_id=$1 AND r.id=$2
              AND j.kind='automation_run' AND j.state='running'
-             AND j.lease_owner=$3 AND j.leased_until > now()
+             AND j.lease_owner=$3 AND j.attempts=$4 AND j.leased_until > now()
          )",
     )
     .bind(project_id.as_uuid())
     .bind(run_id.as_uuid())
-    .bind(worker_id)
+    .bind(&lease.owner)
+    .bind(lease.attempt)
     .fetch_one(&mut **transaction)
     .await?;
     if !owns_lease {

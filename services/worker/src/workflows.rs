@@ -15,7 +15,7 @@ use std::{
 use chrono::Utc;
 use deepref_ai::AiGateway;
 use deepref_application::{
-    jobs::ClaimedJob,
+    jobs::{ClaimedJob, JobLease},
     workflows::{AutonomyGate, DefaultAutonomyGate, PublicationQuery},
 };
 use deepref_postgres::{
@@ -103,14 +103,17 @@ fn backoff(attempt: i32) -> Duration {
     }
 }
 
-/// Execute one block of a workflow run.
+/// Execute one block of a workflow run under the job claim `lease`. The step
+/// is fenced on that claim: a second execution under the same claim is
+/// skipped, and an outcome from a claim that lost the step is dropped.
 pub async fn handle_step(
     pool: &PgPool,
     job: &ClaimedJob,
+    lease: &JobLease,
     ai_gateway: Option<Arc<dyn AiGateway>>,
 ) -> anyhow::Result<DeliveryAction> {
     let payload: StepPayload = serde_json::from_value(job.payload.clone())?;
-    let execution = match begin_node_execution(pool, payload.node_run_id).await? {
+    let execution = match begin_node_execution(pool, payload.node_run_id, lease).await? {
         StepClaim::Stale => return Ok(DeliveryAction::Ack),
         StepClaim::Execute(execution) => *execution,
     };
@@ -119,27 +122,33 @@ pub async fn handle_step(
         ai: ai_gateway.as_deref(),
         execution: &execution,
     };
-    match nodes::execute(&context).await {
-        Ok(outcome) => {
-            finish_node_execution(pool, payload.node_run_id, outcome).await?;
-            Ok(DeliveryAction::Ack)
-        }
+    let finished = match nodes::execute(&context).await {
+        Ok(outcome) => finish_node_execution(pool, payload.node_run_id, lease, outcome).await?,
         Err(error) if error.retryable && job.attempts < job.max_attempts => {
-            record_node_retry(pool, payload.node_run_id, &error.message).await?;
-            Ok(DeliveryAction::Nak(backoff(job.attempts)))
+            record_node_retry(pool, payload.node_run_id, lease, &error.message).await?;
+            return Ok(DeliveryAction::Nak(backoff(job.attempts)));
         }
         Err(error) => {
             finish_node_execution(
                 pool,
                 payload.node_run_id,
+                lease,
                 NodeOutcome::Failed {
                     message: error.message,
                 },
             )
-            .await?;
-            Ok(DeliveryAction::Ack)
+            .await?
         }
+    };
+    if !finished {
+        tracing::warn!(
+            job_id = %job.id,
+            node_run_id = %payload.node_run_id,
+            attempt = lease.attempt,
+            "workflow step outcome dropped because a newer claim owns the step"
+        );
     }
+    Ok(DeliveryAction::Ack)
 }
 
 /// Background loop for schedules, publication alerts and orphaned steps.

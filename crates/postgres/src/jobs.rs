@@ -2,7 +2,7 @@ use std::time::Duration;
 
 use deepref_application::{
     AutomationRunId,
-    jobs::{ClaimedJob, EnqueueJob, JobQueue},
+    jobs::{ClaimedJob, EnqueueJob, JobLease, JobQueue, JobRetry},
 };
 use deepref_domain::ProjectId;
 use serde_json::Value;
@@ -14,6 +14,7 @@ WITH candidate AS (
   SELECT id
   FROM jobs
   WHERE state = 'queued' AND project_id IS NOT NULL AND available_at <= now()
+    AND attempts < max_attempts
   ORDER BY priority DESC, available_at ASC, id ASC
   FOR UPDATE SKIP LOCKED
   LIMIT 1
@@ -57,13 +58,47 @@ pub async fn enqueue_job_pool(pool: &PgPool, job: &EnqueueJob) -> anyhow::Result
     Ok(id)
 }
 
+/// Requeue or dead-letter jobs whose lease expired without a graceful
+/// `complete_job`/`fail_job` (the worker crashed, was killed, or lost the
+/// lease). A lost lease spends an attempt exactly like a reported failure:
+/// the job dead-letters at `max_attempts`, and otherwise waits an exponential
+/// backoff (30 s doubling per attempt, capped at 15 min) so a job that kills
+/// its worker is not reclaimed at once by the next one.
 pub async fn recover_expired_jobs(pool: &PgPool) -> anyhow::Result<u64> {
-    Ok(sqlx::query!(
-        "UPDATE jobs SET state='queued',lease_owner=NULL,leased_until=NULL,lease_renewed_at=NULL WHERE state='running' AND leased_until < now()",
+    let recovered = sqlx::query!(
+        r#"UPDATE jobs
+           SET state = CASE WHEN attempts >= max_attempts THEN 'dead' ELSE 'queued' END,
+               last_error = 'lease expired',
+               available_at = now()
+                 + least(30 * power(2, greatest(attempts - 1, 0)), 900) * interval '1 second',
+               lease_owner = NULL,
+               leased_until = NULL,
+               lease_renewed_at = NULL
+           WHERE state = 'running' AND leased_until < now()
+           RETURNING id, kind, attempts, max_attempts, state"#,
     )
-    .execute(pool)
-    .await?
-    .rows_affected())
+    .fetch_all(pool)
+    .await?;
+    for job in &recovered {
+        if job.state == "dead" {
+            tracing::error!(
+                job_id = %job.id,
+                kind = %job.kind,
+                attempts = job.attempts,
+                max_attempts = job.max_attempts,
+                "job dead-lettered after its lease expired"
+            );
+        } else {
+            tracing::warn!(
+                job_id = %job.id,
+                kind = %job.kind,
+                attempts = job.attempts,
+                max_attempts = job.max_attempts,
+                "job lease expired; requeued with backoff"
+            );
+        }
+    }
+    Ok(recovered.len() as u64)
 }
 
 pub async fn claim_job(
@@ -94,9 +129,8 @@ pub async fn claim_job(
 /// because the caller may have waited between claiming and dispatching.
 pub async fn get_claimed_automation_job_project_id_for_run(
     pool: &PgPool,
-    job_id: Uuid,
+    lease: &JobLease,
     run_id: AutomationRunId,
-    owner: &str,
 ) -> anyhow::Result<Option<ProjectId>> {
     let run_uuid = run_id.as_uuid();
     let project_id = sqlx::query_scalar!(
@@ -105,11 +139,12 @@ pub async fn get_claimed_automation_job_project_id_for_run(
          JOIN automation_runs AS r
            ON r.project_id = j.project_id AND r.job_id = j.id
          WHERE j.id=$1 AND j.kind='automation_run' AND j.state='running'
-           AND j.lease_owner=$2 AND j.leased_until > now()
+           AND j.lease_owner=$2 AND j.attempts=$4 AND j.leased_until > now()
            AND r.id=$3 AND j.project_id IS NOT NULL"#,
-        job_id,
-        owner,
+        lease.id,
+        lease.owner,
         run_uuid,
+        lease.attempt,
     )
     .fetch_optional(pool)
     .await?;
@@ -118,19 +153,20 @@ pub async fn get_claimed_automation_job_project_id_for_run(
 
 pub async fn renew_job(
     pool: &PgPool,
-    owner: &str,
-    job_id: Uuid,
-    lease: Duration,
+    lease: &JobLease,
+    duration: Duration,
 ) -> anyhow::Result<bool> {
-    let lease_ms = lease.as_millis() as f64;
+    let lease_ms = duration.as_millis() as f64;
     Ok(sqlx::query!(
         r#"UPDATE jobs
            SET leased_until = now() + ($3::double precision * interval '1 millisecond'),
                lease_renewed_at = now()
-           WHERE id = $1 AND state = 'running' AND lease_owner = $2 AND leased_until > now()"#,
-        job_id,
-        owner,
+           WHERE id = $1 AND state = 'running' AND lease_owner = $2 AND attempts = $4
+             AND leased_until > now()"#,
+        lease.id,
+        lease.owner,
         lease_ms,
+        lease.attempt,
     )
     .execute(pool)
     .await?
@@ -138,11 +174,12 @@ pub async fn renew_job(
         == 1)
 }
 
-pub async fn complete_job(pool: &PgPool, owner: &str, job_id: Uuid) -> anyhow::Result<bool> {
+pub async fn complete_job(pool: &PgPool, lease: &JobLease) -> anyhow::Result<bool> {
     Ok(sqlx::query!(
-        "UPDATE jobs SET state='completed',completed_at=now(),lease_owner=NULL,leased_until=NULL,lease_renewed_at=NULL WHERE id=$1 AND state='running' AND lease_owner=$2 AND leased_until > now()",
-        job_id,
-        owner,
+        "UPDATE jobs SET state='completed',completed_at=now(),lease_owner=NULL,leased_until=NULL,lease_renewed_at=NULL WHERE id=$1 AND state='running' AND lease_owner=$2 AND attempts=$3 AND leased_until > now()",
+        lease.id,
+        lease.owner,
+        lease.attempt,
     )
     .execute(pool)
     .await?
@@ -150,33 +187,35 @@ pub async fn complete_job(pool: &PgPool, owner: &str, job_id: Uuid) -> anyhow::R
         == 1)
 }
 
+/// Record a failed attempt. The job is requeued after the retry delay, or
+/// dead-lettered when `retry` says so or the attempt budget is spent.
 pub async fn fail_job(
     pool: &PgPool,
-    owner: &str,
-    job: &ClaimedJob,
+    lease: &JobLease,
     error: &str,
-    retry_after: Duration,
+    retry: JobRetry,
 ) -> anyhow::Result<bool> {
-    let next_state = if job.attempts >= job.max_attempts {
-        "dead"
-    } else {
-        "queued"
+    let (dead_letter, retry_after) = match retry {
+        JobRetry::After(delay) => (false, delay),
+        JobRetry::DeadLetter => (true, Duration::ZERO),
     };
     let retry_ms = retry_after.as_millis() as f64;
     Ok(sqlx::query!(
         r#"UPDATE jobs
-           SET state = $3,
+           SET state = CASE WHEN $3 OR attempts >= max_attempts THEN 'dead' ELSE 'queued' END,
                last_error = $4,
                available_at = now() + ($5::double precision * interval '1 millisecond'),
                lease_owner = NULL,
                leased_until = NULL,
                lease_renewed_at = NULL
-           WHERE id = $1 AND state = 'running' AND lease_owner = $2 AND leased_until > now()"#,
-        job.id,
-        owner,
-        next_state,
+           WHERE id = $1 AND state = 'running' AND lease_owner = $2 AND attempts = $6
+             AND leased_until > now()"#,
+        lease.id,
+        lease.owner,
+        dead_letter,
         error,
         retry_ms,
+        lease.attempt,
     )
     .execute(pool)
     .await?
@@ -198,22 +237,16 @@ impl JobQueue for PostgresJobQueue {
         claim_job(&self.pool, owner, lease).await
     }
 
-    async fn renew(&self, owner: &str, job_id: Uuid, lease: Duration) -> anyhow::Result<bool> {
-        renew_job(&self.pool, owner, job_id, lease).await
+    async fn renew(&self, lease: &JobLease, duration: Duration) -> anyhow::Result<bool> {
+        renew_job(&self.pool, lease, duration).await
     }
 
-    async fn complete(&self, owner: &str, job_id: Uuid) -> anyhow::Result<bool> {
-        complete_job(&self.pool, owner, job_id).await
+    async fn complete(&self, lease: &JobLease) -> anyhow::Result<bool> {
+        complete_job(&self.pool, lease).await
     }
 
-    async fn fail(
-        &self,
-        owner: &str,
-        job: &ClaimedJob,
-        error: &str,
-        retry_after: Duration,
-    ) -> anyhow::Result<bool> {
-        fail_job(&self.pool, owner, job, error, retry_after).await
+    async fn fail(&self, lease: &JobLease, error: &str, retry: JobRetry) -> anyhow::Result<bool> {
+        fail_job(&self.pool, lease, error, retry).await
     }
 }
 

@@ -1,5 +1,6 @@
 use chrono::Utc;
 use deepref_ai::{AiProposal, hash_json};
+use deepref_application::jobs::JobLease;
 use deepref_domain::ProjectId;
 use deepref_review::{
     ReviewBlockCode, ReviewRunState,
@@ -33,7 +34,7 @@ pub struct ReviewOutcomeCompletion<'a> {
     pub predecessors: &'a [AcceptedArtifactInput],
     pub outcome: ReviewOutcome<'a>,
     pub automation_step_id: deepref_application::AutomationStepRunId,
-    pub worker_id: &'a str,
+    pub lease: &'a JobLease,
 }
 
 pub async fn complete_review_attempt(
@@ -59,7 +60,7 @@ async fn complete_review_attempt_in_transaction(
         media_type,
         predecessors,
         model_run_id,
-        worker_id,
+        lease,
     } = completion;
     if media_type.trim().is_empty() || media_type.len() > 200 {
         return Err(PostgresReviewError::InvalidStoredValue(
@@ -68,7 +69,7 @@ async fn complete_review_attempt_in_transaction(
     }
     let content_hash = ReviewHash::parse(hash_json(&payload)?)?;
     let project_id = run.snapshot.project_id;
-    assert_worker_lease(transaction, project_id, run.snapshot.id, worker_id).await?;
+    assert_worker_lease(transaction, project_id, run.snapshot.id, lease).await?;
     let attempt = sqlx::query(
         "SELECT node_id,input_fingerprint,status
          FROM review_step_attempts
@@ -172,7 +173,7 @@ pub async fn bind_review_step_acceptance(
     project_id: ProjectId,
     automation_step_id: deepref_application::AutomationStepRunId,
     accepted_attempt_id: Uuid,
-    worker_id: &str,
+    lease: &JobLease,
 ) -> Result<(), PostgresReviewError> {
     let mut transaction = pool.begin().await?;
     bind_review_step_acceptance_in_transaction(
@@ -180,7 +181,7 @@ pub async fn bind_review_step_acceptance(
         project_id,
         automation_step_id,
         accepted_attempt_id,
-        worker_id,
+        lease,
     )
     .await?;
     transaction.commit().await?;
@@ -192,7 +193,7 @@ async fn bind_review_step_acceptance_in_transaction(
     project_id: ProjectId,
     automation_step_id: deepref_application::AutomationStepRunId,
     accepted_attempt_id: Uuid,
-    worker_id: &str,
+    lease: &JobLease,
 ) -> Result<(), PostgresReviewError> {
     let changed = sqlx::query(
         "UPDATE automation_step_runs AS s
@@ -205,12 +206,13 @@ async fn bind_review_step_acceptance_in_transaction(
            AND a.status='completed' AND a.accepted_at IS NOT NULL
            AND r.project_id=s.project_id AND r.id=s.automation_run_id
            AND j.project_id=r.project_id AND j.id=r.job_id
-           AND j.state='running' AND j.lease_owner=$3 AND j.leased_until > now()",
+           AND j.state='running' AND j.lease_owner=$3 AND j.attempts=$5 AND j.leased_until > now()",
     )
     .bind(project_id.as_uuid())
     .bind(automation_step_id.as_uuid())
-    .bind(worker_id)
+    .bind(&lease.owner)
     .bind(accepted_attempt_id)
+    .bind(lease.attempt)
     .execute(&mut **transaction)
     .await?
     .rows_affected();
@@ -241,7 +243,7 @@ pub async fn complete_review_step(
     project_id: ProjectId,
     automation_step_id: deepref_application::AutomationStepRunId,
     accepted_attempt_id: Uuid,
-    worker_id: &str,
+    lease: &JobLease,
     output: Option<Value>,
 ) -> Result<(), PostgresReviewError> {
     let mut transaction = pool.begin().await?;
@@ -250,14 +252,14 @@ pub async fn complete_review_step(
         project_id,
         automation_step_id,
         accepted_attempt_id,
-        worker_id,
+        lease,
     )
     .await?;
     crate::automations::complete_automation_step_with_output_in_transaction(
         &mut transaction,
         project_id,
         automation_step_id,
-        worker_id,
+        lease,
         output,
     )
     .await
@@ -291,7 +293,7 @@ pub async fn complete_review_outcome(
         predecessors,
         outcome,
         automation_step_id,
-        worker_id,
+        lease,
     } = outcome;
     let (proposal, blocked, model_run_id) = match outcome {
         ReviewOutcome::Candidate { proposal } => {
@@ -305,7 +307,7 @@ pub async fn complete_review_outcome(
         &mut transaction,
         run.snapshot.project_id,
         run.snapshot.id,
-        worker_id,
+        lease,
     )
     .await?;
 
@@ -381,7 +383,7 @@ pub async fn complete_review_outcome(
             media_type: "application/vnd.deepref.review-finalization+json",
             predecessors,
             model_run_id,
-            worker_id,
+            lease,
         },
     )
     .await?;
@@ -390,7 +392,7 @@ pub async fn complete_review_outcome(
         run.snapshot.project_id,
         automation_step_id,
         accepted.attempt_id,
-        worker_id,
+        lease,
     )
     .await?;
     let mut snapshot = run.snapshot.clone();
@@ -400,7 +402,7 @@ pub async fn complete_review_outcome(
         &mut transaction,
         run.snapshot.project_id,
         automation_step_id,
-        worker_id,
+        lease,
         Some(serde_json::to_value(snapshot)?),
     )
     .await

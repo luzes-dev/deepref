@@ -13,6 +13,7 @@ use deepref_ai::{
     ProposalStatus, ProposalStore, ProviderEndpoint, ResolvedModel,
     ScreeningStage as AiScreeningStage, TokenUsage, register_provider_endpoint,
 };
+use deepref_application::jobs::JobLease;
 use deepref_application::{
     AutomationRunId, ProtocolCriterionCommand, PublishProtocolCommand, SaveProtocolDraftCommand,
 };
@@ -825,8 +826,7 @@ async fn a_failed_review_run_is_announced_once() {
 
     let snapshot = schedule(&pool, project_id).await;
     let run_id = AutomationRunId::new(snapshot.id.as_uuid()).expect("automation run id");
-    let owner = "review-notice-worker";
-    claim_run(&pool, snapshot.id.as_uuid(), owner).await;
+    let owner = &claim_run(&pool, snapshot.id.as_uuid(), "review-notice-worker").await;
     let message = "review execution failed: AI output failed semantic validation";
 
     // The worker's order for a failed review: the review fails, its step
@@ -862,25 +862,29 @@ async fn a_failed_review_run_is_announced_once() {
     assert_eq!(kinds, vec!["review_run.failed".to_owned()]);
 }
 
-async fn claim_run(pool: &PgPool, run_id: Uuid, owner: &str) {
+async fn claim_run(pool: &PgPool, run_id: Uuid, owner: &str) -> JobLease {
     let job_id: Uuid = sqlx::query_scalar("SELECT job_id FROM automation_runs WHERE id=$1")
         .bind(run_id)
         .fetch_one(pool)
         .await
         .expect("run job exists");
-    let changed = sqlx::query(
+    let attempt: i32 = sqlx::query_scalar(
         "UPDATE jobs
          SET state='running',lease_owner=$2,leased_until=now()+interval '5 minutes',
              lease_renewed_at=now(),attempts=attempts+1
-         WHERE id=$1 AND state='queued'",
+         WHERE id=$1 AND state='queued'
+         RETURNING attempts",
     )
     .bind(job_id)
     .bind(owner)
-    .execute(pool)
+    .fetch_one(pool)
     .await
-    .expect("job claim updates")
-    .rows_affected();
-    assert_eq!(changed, 1);
+    .expect("job claim updates");
+    JobLease {
+        id: job_id,
+        owner: owner.to_owned(),
+        attempt,
+    }
 }
 
 #[tokio::test]
@@ -914,13 +918,15 @@ async fn review_attempts_enforce_scope_lease_exact_reuse_lineage_and_immutabilit
             Err(PostgresReviewError::RunNotFound)
         ));
 
-        let owner = "review-worker";
-        claim_run(&pool, snapshot.id.as_uuid(), owner).await;
+        let owner = &claim_run(&pool, snapshot.id.as_uuid(), "review-worker").await;
         let run = load_leased_review_run(&pool, project_id, snapshot.id, owner)
             .await
             .expect("owner loads leased run");
         assert!(matches!(
-            load_leased_review_run(&pool, project_id, snapshot.id, "wrong-worker").await,
+            load_leased_review_run(&pool, project_id, snapshot.id, &JobLease {
+                    owner: "wrong-worker".to_owned(),
+                    ..owner.clone()
+                }).await,
             Err(PostgresReviewError::WorkerOwnership)
         ));
         mark_review_run_running(&pool, project_id, snapshot.id, owner)
@@ -933,7 +939,10 @@ async fn review_attempts_enforce_scope_lease_exact_reuse_lineage_and_immutabilit
         };
 
         assert!(matches!(
-            begin_review_attempt(&pool, &run, &review, &plan.prepare, &[], "wrong-worker").await,
+            begin_review_attempt(&pool, &run, &review, &plan.prepare, &[], &JobLease {
+                    owner: "wrong-worker".to_owned(),
+                    ..owner.clone()
+                }).await,
             Err(PostgresReviewError::WorkerOwnership)
         ));
         let first = begin_review_attempt(&pool, &run, &review, &plan.prepare, &[], owner)
@@ -976,7 +985,7 @@ async fn review_attempts_enforce_scope_lease_exact_reuse_lineage_and_immutabilit
                 media_type: "application/json",
                 predecessors: &[],
                 model_run_id: None,
-                worker_id: owner,
+                lease: owner,
             },
         )
         .await
@@ -1017,7 +1026,7 @@ async fn review_attempts_enforce_scope_lease_exact_reuse_lineage_and_immutabilit
                 media_type: "application/json",
                 predecessors: std::slice::from_ref(&prepare_input),
                 model_run_id: None,
-                worker_id: owner,
+                lease: owner,
             },
         )
         .await
@@ -1049,7 +1058,7 @@ async fn review_attempts_enforce_scope_lease_exact_reuse_lineage_and_immutabilit
                 media_type: "application/json",
                 predecessors: std::slice::from_ref(&generated_input),
                 model_run_id: None,
-                worker_id: owner,
+                lease: owner,
             },
         )
         .await
@@ -1103,7 +1112,7 @@ async fn review_attempts_enforce_scope_lease_exact_reuse_lineage_and_immutabilit
             "UPDATE jobs SET leased_until=now()+interval '5 minutes' WHERE id=$1 AND lease_owner=$2",
         )
         .bind(job_id)
-        .bind(owner)
+        .bind(&owner.owner)
         .execute(&pool)
         .await
         .expect("lease restores");

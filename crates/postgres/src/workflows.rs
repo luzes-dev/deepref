@@ -6,6 +6,7 @@ use std::collections::HashMap;
 
 use chrono::{DateTime, Utc};
 use deepref_application::AutomationDomainEvent;
+use deepref_application::jobs::JobLease;
 use deepref_application::workflows::{
     InputSource, NodeRunSnapshot, NodeRunState, ValidationContext, ValidationReport, WorkflowGraph,
     WorkflowStatus, WorkflowTrigger, email_is_configured, extract_secrets, generate_secret,
@@ -1338,16 +1339,34 @@ pub enum StepClaim {
 pub async fn begin_node_execution(
     pool: &PgPool,
     node_run_id: Uuid,
+    lease: &JobLease,
 ) -> Result<StepClaim, WorkflowError> {
     let mut tx = pool.begin().await?;
+    // `holds_lease`: the caller's claim still owns its job. `claim_is_live`:
+    // the claim recorded on a running step still owns *its* job, so another
+    // execution is in flight and must not be duplicated.
     let row = sqlx::query(
         "SELECT n.run_id, n.project_id, n.node_id, n.node_type, n.iteration, n.status,
-                n.wait_state, r.status AS run_status, r.graph, r.test_mode, r.workflow_id,
-                r.actor_kind, r.actor_id, r.trigger_data
+                n.wait_state, n.claimed_job_id, n.claimed_attempt,
+                r.status AS run_status, r.graph, r.test_mode, r.workflow_id,
+                r.actor_kind, r.actor_id, r.trigger_data,
+                EXISTS (
+                  SELECT 1 FROM jobs j
+                  WHERE j.id=$2 AND j.state='running' AND j.lease_owner=$3
+                    AND j.attempts=$4 AND j.leased_until > now()
+                ) AS holds_lease,
+                EXISTS (
+                  SELECT 1 FROM jobs j
+                  WHERE j.id=n.claimed_job_id AND j.state='running'
+                    AND j.attempts=n.claimed_attempt AND j.leased_until > now()
+                ) AS claim_is_live
          FROM workflow_node_runs n JOIN workflow_runs r ON r.id = n.run_id
          WHERE n.id=$1 FOR UPDATE OF n",
     )
     .bind(node_run_id)
+    .bind(lease.id)
+    .bind(&lease.owner)
+    .bind(lease.attempt)
     .fetch_optional(&mut *tx)
     .await?;
     let Some(row) = row else {
@@ -1357,8 +1376,21 @@ pub async fn begin_node_execution(
     let run_status: String = row.get("run_status");
     if !matches!(status.as_str(), "queued" | "running")
         || !matches!(run_status.as_str(), "queued" | "running")
+        || !row.get::<bool, _>("holds_lease")
     {
         return Ok(StepClaim::Stale);
+    }
+    if status == "running" {
+        let claimed = (
+            row.get::<Option<Uuid>, _>("claimed_job_id"),
+            row.get::<Option<i32>, _>("claimed_attempt"),
+        );
+        // Already running under this very claim (a duplicate delivery), or
+        // under another claim that is still alive: do not run it twice. A
+        // running step whose claim died is taken over.
+        if claimed == (Some(lease.id), Some(lease.attempt)) || row.get::<bool, _>("claim_is_live") {
+            return Ok(StepClaim::Stale);
+        }
     }
     let run_id: Uuid = row.get("run_id");
     let graph = parse_graph(row.get("graph"))?;
@@ -1381,11 +1413,14 @@ pub async fn begin_node_execution(
     let attempts: i32 = sqlx::query_scalar(
         "UPDATE workflow_node_runs
          SET status='running', attempts=attempts+1, input=$2, error=NULL,
-             started_at=COALESCE(started_at, now())
+             started_at=COALESCE(started_at, now()),
+             claimed_job_id=$3, claimed_attempt=$4
          WHERE id=$1 RETURNING attempts",
     )
     .bind(node_run_id)
     .bind(stored_input)
+    .bind(lease.id)
+    .bind(lease.attempt)
     .fetch_one(&mut *tx)
     .await?;
     tx.commit().await?;
@@ -1515,19 +1550,62 @@ pub enum NodeOutcome {
     },
 }
 
-/// Record the outcome of a step and plan what comes next.
+/// Record the outcome of a step executed under `lease` and plan what comes
+/// next. Returns `false`, changing nothing, when this claim no longer owns the
+/// step (a newer attempt took it over, or its outcome is already recorded).
 pub async fn finish_node_execution(
     pool: &PgPool,
     node_run_id: Uuid,
+    lease: &JobLease,
     outcome: NodeOutcome,
-) -> Result<(), WorkflowError> {
+) -> Result<bool, WorkflowError> {
+    finish_node(pool, node_run_id, Some(lease), outcome).await
+}
+
+/// `fence` is the claim that executed the step; `None` is the reaper, which
+/// fails steps whose job died without any live claim.
+async fn finish_node(
+    pool: &PgPool,
+    node_run_id: Uuid,
+    fence: Option<&JobLease>,
+    outcome: NodeOutcome,
+) -> Result<bool, WorkflowError> {
     let mut tx = pool.begin().await?;
-    let (run_id, project_id): (Uuid, Uuid) =
-        sqlx::query_as("SELECT run_id, project_id FROM workflow_node_runs WHERE id=$1 FOR UPDATE")
+    // Compare-and-set: only the claim that began the step may record its
+    // outcome, and only while it is still running.
+    let locked: Option<(Uuid, Uuid)> = match fence {
+        Some(lease) => {
+            sqlx::query_as(
+                "SELECT run_id, project_id FROM workflow_node_runs
+                 WHERE id=$1 AND status='running'
+                   AND claimed_job_id=$2 AND claimed_attempt=$3
+                   AND EXISTS (
+                     SELECT 1 FROM jobs j WHERE j.id=$2 AND j.state='running'
+                       AND j.attempts=$3 AND j.lease_owner=$4 AND j.leased_until > now()
+                   )
+                 FOR UPDATE",
+            )
+            .bind(node_run_id)
+            .bind(lease.id)
+            .bind(lease.attempt)
+            .bind(&lease.owner)
+            .fetch_optional(&mut *tx)
+            .await?
+        }
+        None => {
+            sqlx::query_as(
+                "SELECT run_id, project_id FROM workflow_node_runs
+                 WHERE id=$1 AND status IN ('queued','running')
+                 FOR UPDATE",
+            )
             .bind(node_run_id)
             .fetch_optional(&mut *tx)
             .await?
-            .ok_or(WorkflowError::NotFound)?;
+        }
+    };
+    let Some((run_id, project_id)) = locked else {
+        return Ok(false);
+    };
     match outcome {
         NodeOutcome::Waiting {
             delay_secs,
@@ -1564,7 +1642,7 @@ pub async fn finish_node_execution(
             .execute(&mut *tx)
             .await?;
             tx.commit().await?;
-            return Ok(());
+            return Ok(true);
         }
         NodeOutcome::Completed {
             outputs,
@@ -1619,20 +1697,29 @@ pub async fn finish_node_execution(
     }
     advance_run_in_transaction(&mut tx, run_id).await?;
     tx.commit().await?;
-    Ok(())
+    Ok(true)
 }
 
 /// A retryable failure: keep the step queued and show the reason in the log.
 pub async fn record_node_retry(
     pool: &PgPool,
     node_run_id: Uuid,
+    lease: &JobLease,
     message: &str,
 ) -> Result<(), WorkflowError> {
     sqlx::query(
-        "UPDATE workflow_node_runs SET status='queued', error=$2 WHERE id=$1 AND status='running'",
+        "UPDATE workflow_node_runs SET status='queued', error=$2
+         WHERE id=$1 AND status='running' AND claimed_job_id=$3 AND claimed_attempt=$4
+           AND EXISTS (
+             SELECT 1 FROM jobs j WHERE j.id=$3 AND j.state='running'
+               AND j.attempts=$4 AND j.lease_owner=$5 AND j.leased_until > now()
+           )",
     )
     .bind(node_run_id)
     .bind(truncate_message(message))
+    .bind(lease.id)
+    .bind(lease.attempt)
+    .bind(&lease.owner)
     .execute(pool)
     .await?;
     Ok(())
@@ -1659,15 +1746,18 @@ pub async fn fail_abandoned_steps(pool: &PgPool) -> Result<u64, WorkflowError> {
     let mut count = 0;
     for row in rows {
         let id: Uuid = row.get("id");
-        finish_node_execution(
+        let reaped = finish_node(
             pool,
             id,
+            None,
             NodeOutcome::Failed {
                 message: "This step stopped unexpectedly and could not be completed.".to_owned(),
             },
         )
         .await?;
-        count += 1;
+        if reaped {
+            count += 1;
+        }
     }
     Ok(count)
 }

@@ -71,12 +71,12 @@ async fn drain(pool: &PgPool, project: Uuid) {
             project,
             "unexpected job from another project"
         );
-        match workflows::handle_step(pool, &job, None)
+        match workflows::handle_step(pool, &job, &job.lease("ai-exposure-test"), None)
             .await
             .expect("step")
         {
             DeliveryAction::Ack => {
-                complete_job(pool, "ai-exposure-test", job.id)
+                complete_job(pool, &job.lease("ai-exposure-test"))
                     .await
                     .expect("complete");
             }

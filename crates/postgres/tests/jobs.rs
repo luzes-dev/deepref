@@ -7,9 +7,9 @@
 use std::time::Duration;
 
 use anyhow::{Result, ensure};
-use deepref_application::jobs::{EnqueueJob, JobQueue};
+use deepref_application::jobs::{EnqueueJob, JobQueue, JobRetry};
 use deepref_domain::ProjectId;
-use deepref_postgres::{PostgresJobQueue, job};
+use deepref_postgres::{PostgresJobQueue, job, recover_expired_jobs};
 use sqlx::{PgPool, Row};
 use uuid::Uuid;
 
@@ -183,10 +183,10 @@ async fn expired_leases_are_fenced_and_retries_reach_dead_at_max_attempts() -> R
 
         // Force the lease past its expiry boundary instead of sleeping for a
         // wall-clock interval, keeping the integration test deterministic.
-        sqlx::query("UPDATE jobs SET leased_until=now()-interval '1 second' WHERE id=$1")
-            .bind(lease_job_id)
-            .execute(&pool)
-            .await?;
+        expire_lease(&pool, lease_job_id).await?;
+        // Recovery backs the job off; skip the wait instead of sleeping.
+        ensure!(recover_expired_jobs(&pool).await? == 1);
+        make_available(&pool, lease_job_id).await?;
 
         let replacement = queue
             .claim("replacement-owner", Duration::from_secs(10))
@@ -200,35 +200,34 @@ async fn expired_leases_are_fenced_and_retries_reach_dead_at_max_attempts() -> R
             replacement.attempts == 2,
             "reclaiming a lease must increment attempts"
         );
+        let stale_lease = stale.lease("stale-owner");
+        let replacement_lease = replacement.lease("replacement-owner");
         ensure!(
-            !queue
-                .renew("stale-owner", stale.id, Duration::from_secs(10))
-                .await?,
+            !queue.renew(&stale_lease, Duration::from_secs(10)).await?,
             "stale owner must not renew a reclaimed lease"
         );
         ensure!(
-            !queue.complete("stale-owner", stale.id).await?,
+            !queue.complete(&stale_lease).await?,
             "stale owner must not complete a reclaimed lease"
         );
         ensure!(
             !queue
                 .fail(
-                    "stale-owner",
-                    &stale,
+                    &stale_lease,
                     "stale failure",
-                    Duration::from_secs(1)
+                    JobRetry::After(Duration::from_secs(1))
                 )
                 .await?,
             "stale owner must not fail a reclaimed lease"
         );
         ensure!(
             queue
-                .renew("replacement-owner", replacement.id, Duration::from_secs(10))
+                .renew(&replacement_lease, Duration::from_secs(10))
                 .await?,
             "replacement owner should renew its lease"
         );
         ensure!(
-            queue.complete("replacement-owner", replacement.id).await?,
+            queue.complete(&replacement_lease).await?,
             "replacement owner should complete its lease"
         );
 
@@ -264,10 +263,9 @@ async fn expired_leases_are_fenced_and_retries_reach_dead_at_max_attempts() -> R
         ensure!(
             queue
                 .fail(
-                    "retry-owner",
-                    &first_attempt,
+                    &first_attempt.lease("retry-owner"),
                     "first retry error",
-                    Duration::from_secs(30),
+                    JobRetry::After(Duration::from_secs(30)),
                 )
                 .await?,
             "first retry failure should be persisted"
@@ -297,10 +295,9 @@ async fn expired_leases_are_fenced_and_retries_reach_dead_at_max_attempts() -> R
         ensure!(
             queue
                 .fail(
-                    "retry-owner",
-                    &second_attempt,
+                    &second_attempt.lease("retry-owner"),
                     "terminal retry error",
-                    Duration::from_secs(30),
+                    JobRetry::After(Duration::from_secs(30)),
                 )
                 .await?,
             "max-attempt failure should be persisted"
@@ -327,4 +324,193 @@ async fn expired_leases_are_fenced_and_retries_reach_dead_at_max_attempts() -> R
     let cleanup_result = cleanup(&pool, project_id).await;
     cleanup_result?;
     result
+}
+
+/// A job whose worker dies (OOM, segfault, panic outside the handler) never
+/// reaches `fail_job`. Lease recovery must spend the same attempt budget as the
+/// graceful path, back off before the next attempt, and dead-letter at
+/// `max_attempts`; `CLAIM` must refuse an exhausted job as a second guard.
+#[tokio::test]
+async fn lease_recovery_dead_letters_at_max_attempts_and_backs_off() -> Result<()> {
+    let Some(pool) = database().await else {
+        return Ok(());
+    };
+    let queue = PostgresJobQueue { pool: pool.clone() };
+    let project_id = fixture_project(&pool).await?;
+    let result = async {
+        // max_attempts=1: the crashed first attempt exhausts the budget.
+        let poison_id = Uuid::new_v4();
+        let mut poison = fixture_job(
+            project_id,
+            poison_id,
+            "integration_poison",
+            format!("jobs-integration-poison:{poison_id}"),
+        );
+        poison.max_attempts = 1;
+        queue.enqueue(poison).await?;
+        let claimed = queue
+            .claim("crashing-owner", Duration::from_secs(10))
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("poison job should be claimable"))?;
+        ensure!(claimed.id == poison_id && claimed.attempts == 1);
+        expire_lease(&pool, poison_id).await?;
+        ensure!(recover_expired_jobs(&pool).await? == 1);
+        let dead =
+            sqlx::query("SELECT state,attempts,last_error,lease_owner FROM jobs WHERE id=$1")
+                .bind(poison_id)
+                .fetch_one(&pool)
+                .await?;
+        ensure!(
+            dead.get::<String, _>("state") == "dead",
+            "an expired lease at max_attempts must dead-letter, got {}",
+            dead.get::<String, _>("state")
+        );
+        ensure!(dead.get::<i32, _>("attempts") == 1);
+        ensure!(dead.get::<Option<String>, _>("last_error").as_deref() == Some("lease expired"));
+        ensure!(dead.get::<Option<String>, _>("lease_owner").is_none());
+
+        // Budget left: requeue with a backoff, so the crash is not retried at once.
+        let retry_id = Uuid::new_v4();
+        let mut retry = fixture_job(
+            project_id,
+            retry_id,
+            "integration_crash_retry",
+            format!("jobs-integration-crash-retry:{retry_id}"),
+        );
+        retry.max_attempts = 3;
+        queue.enqueue(retry).await?;
+        queue
+            .claim("crashing-owner", Duration::from_secs(10))
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("retry job should be claimable"))?;
+        expire_lease(&pool, retry_id).await?;
+        ensure!(recover_expired_jobs(&pool).await? == 1);
+        let queued = sqlx::query("SELECT state,last_error,available_at FROM jobs WHERE id=$1")
+            .bind(retry_id)
+            .fetch_one(&pool)
+            .await?;
+        ensure!(queued.get::<String, _>("state") == "queued");
+        ensure!(queued.get::<Option<String>, _>("last_error").as_deref() == Some("lease expired"));
+        ensure!(
+            queued.get::<chrono::DateTime<chrono::Utc>, _>("available_at") > chrono::Utc::now(),
+            "a recovered lease must back off before the next attempt"
+        );
+        ensure!(
+            queue
+                .claim("next-owner", Duration::from_secs(10))
+                .await?
+                .is_none(),
+            "a backed-off job must not be reclaimed immediately"
+        );
+
+        // Second guard: CLAIM never starts an attempt beyond max_attempts.
+        let exhausted_id = Uuid::new_v4();
+        let mut exhausted = fixture_job(
+            project_id,
+            exhausted_id,
+            "integration_exhausted",
+            format!("jobs-integration-exhausted:{exhausted_id}"),
+        );
+        exhausted.max_attempts = 2;
+        queue.enqueue(exhausted).await?;
+        sqlx::query("UPDATE jobs SET attempts=2 WHERE id=$1")
+            .bind(exhausted_id)
+            .execute(&pool)
+            .await?;
+        ensure!(
+            queue
+                .claim("next-owner", Duration::from_secs(10))
+                .await?
+                .is_none(),
+            "CLAIM must not start attempt max_attempts+1"
+        );
+        Ok::<_, anyhow::Error>(())
+    }
+    .await;
+
+    let cleanup_result = cleanup(&pool, project_id).await;
+    cleanup_result?;
+    result
+}
+
+/// The owner string names a worker process, not a claim: a process can reclaim
+/// its own expired job. The first attempt's token must then be fenced out, so
+/// a slow stale attempt cannot complete, fail or extend the live attempt.
+#[tokio::test]
+async fn a_stale_attempt_of_the_same_owner_cannot_touch_the_reclaimed_job() -> Result<()> {
+    let Some(pool) = database().await else {
+        return Ok(());
+    };
+    let queue = PostgresJobQueue { pool: pool.clone() };
+    let project_id = fixture_project(&pool).await?;
+    let job_id = Uuid::new_v4();
+    let result = async {
+        queue
+            .enqueue(fixture_job(
+                project_id,
+                job_id,
+                "integration_same_owner",
+                format!("jobs-integration-same-owner:{job_id}"),
+            ))
+            .await?;
+        let first = queue
+            .claim("one-process", Duration::from_millis(50))
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("first attempt should claim"))?;
+        expire_lease(&pool, job_id).await?;
+        ensure!(recover_expired_jobs(&pool).await? == 1);
+        make_available(&pool, job_id).await?;
+        let second = queue
+            .claim("one-process", Duration::from_secs(10))
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("the same process should reclaim"))?;
+        ensure!(second.id == first.id && second.attempts == first.attempts + 1);
+
+        let stale = first.lease("one-process");
+        let live = second.lease("one-process");
+        ensure!(
+            !queue.renew(&stale, Duration::from_secs(10)).await?,
+            "the first attempt must not renew the second attempt's lease"
+        );
+        ensure!(
+            !queue.complete(&stale).await?,
+            "the first attempt must not complete the second attempt"
+        );
+        ensure!(
+            !queue
+                .fail(&stale, "stale failure", JobRetry::DeadLetter)
+                .await?,
+            "the first attempt must not fail the second attempt"
+        );
+        let row = sqlx::query("SELECT state,attempts FROM jobs WHERE id=$1")
+            .bind(job_id)
+            .fetch_one(&pool)
+            .await?;
+        ensure!(row.get::<String, _>("state") == "running");
+        ensure!(queue.complete(&live).await?, "the live attempt completes");
+        Ok::<_, anyhow::Error>(())
+    }
+    .await;
+
+    let cleanup_result = cleanup(&pool, project_id).await;
+    cleanup_result?;
+    result
+}
+
+/// Force a lease past its expiry boundary instead of sleeping.
+async fn expire_lease(pool: &PgPool, job_id: Uuid) -> Result<()> {
+    sqlx::query("UPDATE jobs SET leased_until=now()-interval '1 second' WHERE id=$1")
+        .bind(job_id)
+        .execute(pool)
+        .await?;
+    Ok(())
+}
+
+/// Skip a backoff instead of sleeping through it.
+async fn make_available(pool: &PgPool, job_id: Uuid) -> Result<()> {
+    sqlx::query("UPDATE jobs SET available_at=now()-interval '1 second' WHERE id=$1")
+        .bind(job_id)
+        .execute(pool)
+        .await?;
+    Ok(())
 }
