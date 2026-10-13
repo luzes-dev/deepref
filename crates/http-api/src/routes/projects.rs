@@ -47,10 +47,9 @@ impl CreateProject {
         if self.name.is_empty() {
             return Err(ApiError::BadRequest("name must not be blank".to_owned()));
         }
-        if self.default_max_depth.is_some_and(|value| value < 0) {
-            return Err(ApiError::BadRequest(
-                "default_max_depth must be >= 0".to_owned(),
-            ));
+        if let Some(value) = self.default_max_depth {
+            deepref_domain::acquisition::MaxDepth::try_from(value)
+                .map_err(|message| ApiError::BadRequest(message.to_owned()))?;
         }
         Ok(self)
     }

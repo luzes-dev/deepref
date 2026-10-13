@@ -35,8 +35,9 @@ struct ValidatedIngestion {
 
 impl CreateIngestion {
     fn validate(self) -> Result<ValidatedIngestion, ApiError> {
-        if self.max_depth.is_some_and(|value| value < 0) {
-            return Err(ApiError::BadRequest("max_depth must be >= 0".to_owned()));
+        if let Some(value) = self.max_depth {
+            deepref_domain::acquisition::MaxDepth::try_from(value)
+                .map_err(|message| ApiError::BadRequest(message.to_owned()))?;
         }
         let metadata_provider = self
             .metadata_provider

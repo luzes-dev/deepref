@@ -879,3 +879,25 @@ async fn ingestion_cancel_requires_an_existing_active_run() {
         assert_eq!(call(&pool, cancel(id)).await.status(), StatusCode::CONFLICT);
     }
 }
+
+#[tokio::test]
+async fn citation_depth_ten_is_rejected_at_every_api_boundary_and_in_database() {
+    let Some(pool) = database().await else { return };
+    let project = Uuid::new_v4();
+    sqlx::query("INSERT INTO projects (id,name) VALUES ($1,'depth test')")
+        .bind(project).execute(&pool).await.unwrap();
+    for (method, uri, body) in [
+        ("POST", "/projects".to_owned(), json!({"name":"too deep","default_max_depth":10})),
+        ("PATCH", format!("/projects/{project}"), json!({"name":"too deep","default_max_depth":10})),
+        ("PATCH", "/settings".to_owned(), json!({"default_max_depth":10})),
+        ("POST", "/ingestions".to_owned(), json!({"project_id":project,"seed_dois":["10.1000/depth"],"max_depth":10})),
+        ("POST", format!("/projects/{project}/acquisitions"), json!({"seed_dois":["10.1000/depth"],"max_depth":10})),
+    ] {
+        let response = call(&pool, Request::builder().method(method).uri(uri)
+            .header("content-type","application/json").body(Body::from(body.to_string())).unwrap()).await;
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
+    let error = sqlx::query("UPDATE projects SET default_max_depth=10 WHERE id=$1")
+        .bind(project).execute(&pool).await.unwrap_err();
+    assert_eq!(error.as_database_error().and_then(|error| error.code()).as_deref(), Some("23514"));
+}

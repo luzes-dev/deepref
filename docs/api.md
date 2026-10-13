@@ -83,3 +83,8 @@ Cancelling ingestion requires an existing queued/running run. Missing runs retur
 404; terminal runs (including previously cancelled runs) return 409 without
 altering their status or completion timestamp. Cancellation locks the run row
 before checking state so concurrent completion cannot be overwritten.
+
+Citation expansion depth is a domain value from zero through three. Project
+creation/update, global settings, ingestion, and acquisition reject larger or
+negative values with 400. The corresponding database columns enforce the same
+range; migration fails on unsafe historical values rather than rewriting them.

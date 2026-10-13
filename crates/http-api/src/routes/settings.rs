@@ -79,7 +79,10 @@ impl UpdateSettings {
                 ));
             }
         }
-        reject_negative("default_max_depth", self.default_max_depth)?;
+        if let Some(value) = self.default_max_depth {
+            deepref_domain::acquisition::MaxDepth::try_from(value)
+                .map_err(|message| ApiError::BadRequest(message.to_owned()))?;
+        }
         reject_less_than_one("max_concurrency", self.max_concurrency)?;
         reject_less_than_one("rate_limit_per_second", self.rate_limit_per_second)?;
         reject_less_than_one("retry_attempts", self.retry_attempts)?;
@@ -137,13 +140,6 @@ pub(crate) async fn ensure_settings(pool: &PgPool) -> Result<(), sqlx::Error> {
     )
     .execute(pool)
     .await?;
-    Ok(())
-}
-
-fn reject_negative(name: &str, value: Option<i32>) -> Result<(), ApiError> {
-    if value.is_some_and(|value| value < 0) {
-        return Err(ApiError::BadRequest(format!("{name} must be >= 0")));
-    }
     Ok(())
 }
 
