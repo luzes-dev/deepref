@@ -19,6 +19,9 @@ members = [
     "apps/server",
     "services/worker",
 ]
+# cargo-fuzz builds `fuzz/` on nightly with sanitizer flags, so it is its own
+# workspace (with its own Cargo.lock) rather than a member of this one.
+exclude = ["fuzz"]
 resolver = "3"
 
 # Keep correctness and panic-safety rules centralized. Clippy's broad
