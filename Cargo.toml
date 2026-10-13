@@ -4,7 +4,7 @@ members = [
     "crates/domain",
     "crates/application",
     "crates/documents",
-    "crates/postgres",
+    "crates/app",
     "crates/http-api",
     "crates/config",
     "crates/integrations",
@@ -47,7 +47,7 @@ version = "0.1.0"
 deepref-domain = { path = "crates/domain" }
 deepref-application = { path = "crates/application" }
 deepref-documents = { path = "crates/documents" }
-deepref-postgres = { path = "crates/postgres" }
+deepref-app = { path = "crates/app" }
 deepref-http-api = { path = "crates/http-api" }
 deepref-config = { path = "crates/config" }
 deepref-integrations = { path = "crates/integrations" }

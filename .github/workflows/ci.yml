@@ -485,7 +485,7 @@ jobs:
           DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/deepref
         run: |
           cargo sqlx migrate run \
-            --source crates/postgres/migrations \
+            --source crates/app/migrations \
             --database-url "$DATABASE_URL" \
             --no-dotenv
       - name: Verify SQLx offline query metadata against live database

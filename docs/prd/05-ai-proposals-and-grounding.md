@@ -30,7 +30,7 @@ scientific state by itself.
 ## Acceptance evidence
 
 - Gateway and policy code: `crates/ai/src/`.
-- Proposal persistence and routes: `crates/postgres/src/ai.rs` and
+- Proposal persistence and routes: `crates/app/src/ai.rs` and
   `crates/http-api/src/routes/ai.rs`.
 - Regression suites:
   `crates/ai/tests/eval_gate.rs` and

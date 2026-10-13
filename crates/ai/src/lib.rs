@@ -2,7 +2,7 @@
 //!
 //! The crate is split by seam: domain-safe types and hashes, provider
 //! gateways, prompt definitions, grounding, policy, and task orchestration.
-//! SQLx and pgvector stay in `deepref-postgres`.
+//! SQLx and pgvector stay in `deepref-app`.
 
 mod agents;
 mod assistant;

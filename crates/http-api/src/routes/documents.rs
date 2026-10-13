@@ -196,7 +196,7 @@ pub(crate) async fn list_documents(
     Query(query): Query<DocumentLimit>,
 ) -> Result<Json<Vec<DocumentDto>>, ApiError> {
     ensure_report_scope(&state.pool, project_id, report_id).await?;
-    let documents = deepref_postgres::list_documents(
+    let documents = deepref_app::list_documents(
         &state.pool,
         project_id,
         Some(report_id),
@@ -247,7 +247,7 @@ pub(crate) async fn list_full_text_queue(
         .transpose()
         .map_err(|_| ApiError::BadRequest("invalid full-text queue cursor".to_owned()))?;
     let limit = bounded_limit(query.limit)?;
-    let mut items = deepref_postgres::list_full_text_queue(
+    let mut items = deepref_app::list_full_text_queue(
         &state.pool,
         project_id,
         query.status.as_deref(),
@@ -295,7 +295,7 @@ pub(crate) async fn list_missing_full_text(
     Query(query): Query<DocumentLimit>,
 ) -> Result<Json<Vec<MissingFullTextDto>>, ApiError> {
     ensure_project_scope(&state.pool, project_id).await?;
-    let items = deepref_postgres::list_missing_full_text(
+    let items = deepref_app::list_missing_full_text(
         &state.pool,
         project_id,
         bounded_limit(query.limit)?,
@@ -317,7 +317,7 @@ pub(crate) async fn list_full_text_reasons(
     Path(project_id): Path<Uuid>,
 ) -> Result<Json<Vec<FullTextExclusionReasonDto>>, ApiError> {
     ensure_project_scope(&state.pool, project_id).await?;
-    let reasons = deepref_postgres::list_full_text_reasons(&state.pool, project_id).await?;
+    let reasons = deepref_app::list_full_text_reasons(&state.pool, project_id).await?;
     Ok(Json(
         reasons
             .into_iter()
@@ -344,7 +344,7 @@ pub(crate) async fn get_document(
     Path((project_id, report_id, document_id)): Path<(Uuid, Uuid, Uuid)>,
 ) -> Result<Json<DocumentDto>, ApiError> {
     Ok(Json(document_dto(
-        deepref_postgres::get_document(&state.pool, project_id, report_id, document_id)
+        deepref_app::get_document(&state.pool, project_id, report_id, document_id)
             .await
             .map_err(map_database_document_error)?,
     )))
@@ -363,7 +363,7 @@ pub(crate) async fn list_document_blocks(
     Path((project_id, report_id, document_id)): Path<(Uuid, Uuid, Uuid)>,
     Query(query): Query<BlockQuery>,
 ) -> Result<Json<Vec<DocumentBlockDto>>, ApiError> {
-    deepref_postgres::get_document(&state.pool, project_id, report_id, document_id)
+    deepref_app::get_document(&state.pool, project_id, report_id, document_id)
         .await
         .map_err(map_database_document_error)?;
     let blocks = match query
@@ -378,7 +378,7 @@ pub(crate) async fn list_document_blocks(
                     "block search must be at most 200 bytes".to_owned(),
                 ));
             }
-            deepref_postgres::search_document_blocks(
+            deepref_app::search_document_blocks(
                 &state.pool,
                 project_id,
                 report_id,
@@ -389,7 +389,7 @@ pub(crate) async fn list_document_blocks(
             .await?
         }
         None => {
-            deepref_postgres::get_document_blocks(&state.pool, project_id, report_id, document_id)
+            deepref_app::get_document_blocks(&state.pool, project_id, report_id, document_id)
                 .await?
         }
     };
@@ -427,11 +427,11 @@ pub(crate) async fn list_document_pages(
     State(state): State<AppState>,
     Path((project_id, report_id, document_id)): Path<(Uuid, Uuid, Uuid)>,
 ) -> Result<Json<Vec<DocumentPageDto>>, ApiError> {
-    deepref_postgres::get_document(&state.pool, project_id, report_id, document_id)
+    deepref_app::get_document(&state.pool, project_id, report_id, document_id)
         .await
         .map_err(map_database_document_error)?;
     let pages =
-        deepref_postgres::get_document_pages(&state.pool, project_id, report_id, document_id)
+        deepref_app::get_document_pages(&state.pool, project_id, report_id, document_id)
             .await?;
     Ok(Json(
         pages
@@ -460,11 +460,11 @@ pub(crate) async fn list_document_references(
     State(state): State<AppState>,
     Path((project_id, report_id, document_id)): Path<(Uuid, Uuid, Uuid)>,
 ) -> Result<Json<Vec<DocumentReferenceDto>>, ApiError> {
-    deepref_postgres::get_document(&state.pool, project_id, report_id, document_id)
+    deepref_app::get_document(&state.pool, project_id, report_id, document_id)
         .await
         .map_err(map_database_document_error)?;
     let references =
-        deepref_postgres::list_document_references(&state.pool, project_id, report_id, document_id)
+        deepref_app::list_document_references(&state.pool, project_id, report_id, document_id)
             .await?;
     Ok(Json(
         references
@@ -496,11 +496,11 @@ pub(crate) async fn list_document_sections(
     State(state): State<AppState>,
     Path((project_id, report_id, document_id)): Path<(Uuid, Uuid, Uuid)>,
 ) -> Result<Json<Vec<DocumentSectionDto>>, ApiError> {
-    deepref_postgres::get_document(&state.pool, project_id, report_id, document_id)
+    deepref_app::get_document(&state.pool, project_id, report_id, document_id)
         .await
         .map_err(map_database_document_error)?;
     let sections =
-        deepref_postgres::list_document_sections(&state.pool, project_id, report_id, document_id)
+        deepref_app::list_document_sections(&state.pool, project_id, report_id, document_id)
             .await?;
     Ok(Json(
         sections
@@ -530,7 +530,7 @@ pub(crate) async fn get_document_content(
     State(state): State<AppState>,
     Path((project_id, report_id, document_id)): Path<(Uuid, Uuid, Uuid)>,
 ) -> Result<Response, ApiError> {
-    let document = deepref_postgres::get_document(&state.pool, project_id, report_id, document_id)
+    let document = deepref_app::get_document(&state.pool, project_id, report_id, document_id)
         .await
         .map_err(map_database_document_error)?;
     let object_key = document.object_key.ok_or_else(|| ApiError::Conflict {
@@ -676,9 +676,9 @@ async fn persist_uploaded_document(
             return Err(ApiError::Database(error));
         }
     };
-    let result = deepref_postgres::create_document(
+    let result = deepref_app::create_document(
         &mut tx,
-        deepref_postgres::NewDocument {
+        deepref_app::NewDocument {
             project_id,
             report_id,
             id: Uuid::new_v4(),
@@ -697,7 +697,7 @@ async fn persist_uploaded_document(
     .await;
     let document = match result {
         Ok(document) => {
-            match deepref_postgres::enqueue_parse(
+            match deepref_app::enqueue_parse(
                 &mut tx,
                 ProjectId::new(project_id),
                 document.id,
@@ -751,7 +751,7 @@ pub(crate) async fn upload_document(
     let (stored, original_filename) = extract_multipart_pdf(multipart, store).await?;
     // Re-uploading identical content for a document whose processing failed
     // retries that document instead of colliding with the unique content hash.
-    if let Some(existing) = deepref_postgres::find_failed_document_by_hash(
+    if let Some(existing) = deepref_app::find_failed_document_by_hash(
         &state.pool,
         project_id,
         report_id,
@@ -800,7 +800,7 @@ async fn requeue_document(
     .bind(actor.id())
     .execute(&mut *tx)
     .await?;
-    let document = deepref_postgres::requeue_document_processing(
+    let document = deepref_app::requeue_document_processing(
         &mut tx,
         ProjectId::new(project_id),
         report_id,
@@ -832,7 +832,7 @@ pub(crate) async fn reparse_document(
 ) -> Result<(StatusCode, Json<DocumentDto>), ApiError> {
     let actor = super::actor::extract_actor(&headers)?;
     ensure_report_scope(&state.pool, project_id, report_id).await?;
-    let stored = deepref_postgres::get_document(&state.pool, project_id, report_id, document_id)
+    let stored = deepref_app::get_document(&state.pool, project_id, report_id, document_id)
         .await
         .map_err(map_database_document_error)?;
     // Refuse before queueing: a parse job cannot succeed without the PDF bytes,
@@ -898,11 +898,11 @@ async fn attach_external_url(
     url: &str,
     original_filename: Option<&str>,
     actor: &super::actor::Actor,
-) -> Result<deepref_postgres::DocumentRecord, ApiError> {
+) -> Result<deepref_app::DocumentRecord, ApiError> {
     let mut tx = pool.begin().await?;
-    let document = deepref_postgres::create_document(
+    let document = deepref_app::create_document(
         &mut tx,
-        deepref_postgres::NewDocument {
+        deepref_app::NewDocument {
             project_id,
             report_id,
             id: Uuid::new_v4(),
@@ -920,7 +920,7 @@ async fn attach_external_url(
     )
     .await;
     match document {
-        Ok(document) => match deepref_postgres::enqueue_retrieve(
+        Ok(document) => match deepref_app::enqueue_retrieve(
             &mut tx,
             ProjectId::new(project_id),
             document.id,
@@ -958,7 +958,7 @@ pub(crate) async fn attach_open_access_document(
 ) -> Result<(StatusCode, Json<DocumentDto>), ApiError> {
     ensure_report_scope(&state.pool, project_id, report_id).await?;
     let actor = super::actor::extract_actor(&headers)?;
-    let (_, doi) = deepref_postgres::report_identity(&state.pool, report_id).await?;
+    let (_, doi) = deepref_app::report_identity(&state.pool, report_id).await?;
     let doi = doi.ok_or_else(|| ApiError::Conflict {
         code: "report_doi_missing".to_owned(),
         message: "This report has no DOI, so an open-access copy cannot be looked up. Upload the PDF or paste a link instead.".to_owned(),
@@ -1039,7 +1039,7 @@ pub(crate) async fn acknowledge_document_identity(
     Path((project_id, report_id, document_id)): Path<(Uuid, Uuid, Uuid)>,
 ) -> Result<Json<DocumentDto>, ApiError> {
     ensure_report_scope(&state.pool, project_id, report_id).await?;
-    let document = deepref_postgres::get_document(&state.pool, project_id, report_id, document_id)
+    let document = deepref_app::get_document(&state.pool, project_id, report_id, document_id)
         .await
         .map_err(map_database_document_error)?;
     let flagged = document
@@ -1053,14 +1053,14 @@ pub(crate) async fn acknowledge_document_identity(
             details: serde_json::json!({}),
         });
     }
-    deepref_postgres::acknowledge_identity_mismatch(
+    deepref_app::acknowledge_identity_mismatch(
         &state.pool,
         project_id,
         report_id,
         document_id,
     )
     .await?;
-    let document = deepref_postgres::get_document(&state.pool, project_id, report_id, document_id)
+    let document = deepref_app::get_document(&state.pool, project_id, report_id, document_id)
         .await
         .map_err(map_database_document_error)?;
     Ok(Json(document_dto(document)))
@@ -1080,12 +1080,12 @@ pub(crate) async fn delete_report_document(
 ) -> Result<StatusCode, ApiError> {
     ensure_report_scope(&state.pool, project_id, report_id).await?;
     let removed =
-        deepref_postgres::delete_document(&state.pool, project_id, report_id, document_id)
+        deepref_app::delete_document(&state.pool, project_id, report_id, document_id)
             .await
             .map_err(|error| {
                 // AI evidence and extracted values refer to the PDF's blocks and are kept on purpose.
                 if error.chain().filter_map(|cause| cause.downcast_ref::<SqlxError>())
-                    .any(|error| deepref_postgres::classify(error).is_foreign_key_violation())
+                    .any(|error| deepref_app::classify(error).is_foreign_key_violation())
                 {
                     return ApiError::Conflict {
                         code: "document_in_use".to_owned(),
@@ -1143,7 +1143,7 @@ async fn ensure_report_scope(
     Ok(())
 }
 
-fn document_dto(document: deepref_postgres::DocumentRecord) -> DocumentDto {
+fn document_dto(document: deepref_app::DocumentRecord) -> DocumentDto {
     let identity = document.identity_check.map(|check| DocumentIdentityDto {
         verdict: match check.verdict {
             deepref_documents::IdentityVerdict::Match => "match",
@@ -1175,7 +1175,7 @@ fn document_dto(document: deepref_postgres::DocumentRecord) -> DocumentDto {
     }
 }
 
-fn missing_full_text_dto(item: deepref_postgres::MissingFullTextRecord) -> MissingFullTextDto {
+fn missing_full_text_dto(item: deepref_app::MissingFullTextRecord) -> MissingFullTextDto {
     MissingFullTextDto {
         report_id: item.report_id,
         title: item.title,

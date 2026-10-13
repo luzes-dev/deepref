@@ -246,7 +246,7 @@ pub(crate) async fn delete_project(
     .bind(event.event_id)
     .execute(&mut *tx)
     .await?;
-    if !deepref_postgres::delete_project_in_transaction(&mut tx, project_id).await? {
+    if !deepref_app::delete_project_in_transaction(&mut tx, project_id).await? {
         return Err(ApiError::NotFound("project not found".into()));
     }
     tx.commit().await?;

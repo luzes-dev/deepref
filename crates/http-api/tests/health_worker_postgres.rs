@@ -18,12 +18,12 @@ use tower::ServiceExt;
 use uuid::Uuid;
 
 async fn database() -> Option<PgPool> {
-    let pool = deepref_postgres::test_isolation::isolated_pool_from_env_first(
+    let pool = deepref_app::test_isolation::isolated_pool_from_env_first(
         &["TEST_DATABASE_URL", "DATABASE_URL"],
         5,
     )
     .await?;
-    deepref_postgres::migrate(&pool)
+    deepref_app::migrate(&pool)
         .await
         .expect("all migrations should apply");
     Some(pool)
@@ -90,7 +90,7 @@ async fn dependencies_report_live_workers_from_heartbeats() {
     );
 
     // A worker heartbeats: it is live and reported.
-    deepref_postgres::record_worker_heartbeat(&pool, "health-test-worker")
+    deepref_app::record_worker_heartbeat(&pool, "health-test-worker")
         .await
         .expect("heartbeat");
     let worker = worker_health(&pool).await;

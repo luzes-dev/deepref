@@ -4,7 +4,7 @@ on:
   workflow_dispatch:
     inputs:
       package:
-        description: "Specific workspace member to mutate (e.g. deepref-domain, deepref-postgres, deepref-application, deepref-ai). Empty runs default workspace."
+        description: "Specific workspace member to mutate (e.g. deepref-domain, deepref-app, deepref-application, deepref-ai). Empty runs default workspace."
         required: false
         default: "deepref-domain"
         type: string

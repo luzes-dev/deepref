@@ -9,12 +9,7 @@ use deepref_application::{
     ScreeningQueueStatus, UndoScreeningCommand,
 };
 use deepref_domain::{ScreeningDecision, ScreeningStage};
-use deepref_postgres::{
-    ScreeningError, ScreeningHistory as PersistenceScreeningHistory,
-    ScreeningHistoryItem as PersistenceScreeningHistoryItem,
-    ScreeningQueue as PersistenceScreeningQueue,
-    ScreeningQueueItem as PersistenceScreeningQueueItem, ScreeningStateSnapshot,
-};
+use deepref_app::screening::{ScreeningError, ScreeningHistory as PersistenceScreeningHistory, ScreeningHistoryItem as PersistenceScreeningHistoryItem, ScreeningQueue as PersistenceScreeningQueue, ScreeningQueueItem as PersistenceScreeningQueueItem, ScreeningStateSnapshot};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use utoipa::ToSchema;
@@ -235,7 +230,7 @@ pub(crate) async fn get_screening_queue(
 ) -> Result<Json<ScreeningQueueDto>, ApiError> {
     let mut query = queue_query(project_id, params)?;
     query.reviewer_id = Some(extract_actor(&headers)?.id().to_owned());
-    let queue = deepref_postgres::get_screening_queue(&state.pool, query)
+    let queue = deepref_app::screening::get_screening_queue(&state.pool, query)
         .await
         .map_err(map_screening_error)?;
     Ok(Json(queue_dto(queue)))
@@ -269,7 +264,7 @@ pub(crate) async fn list_title_abstract_queue(
 ) -> Result<Json<ScreeningQueueDto>, ApiError> {
     let mut query = queue_query(project_id, params)?;
     query.reviewer_id = Some(extract_actor(&headers)?.id().to_owned());
-    let queue = deepref_postgres::get_screening_queue(&state.pool, query)
+    let queue = deepref_app::screening::get_screening_queue(&state.pool, query)
         .await
         .map_err(map_screening_error)?;
     Ok(Json(queue_dto(queue)))
@@ -302,7 +297,7 @@ pub(crate) async fn get_next_screening_item(
 ) -> Result<Json<ScreeningQueueItemDto>, ApiError> {
     let mut query = queue_query(project_id, params)?;
     query.reviewer_id = Some(extract_actor(&headers)?.id().to_owned());
-    let item = deepref_postgres::get_next_screening_item(&state.pool, query)
+    let item = deepref_app::screening::get_next_screening_item(&state.pool, query)
         .await
         .map_err(map_screening_error)?;
     Ok(Json(queue_item_dto(item)))
@@ -344,7 +339,7 @@ pub(crate) async fn screen_report(
         notes: input.notes,
         actor,
     };
-    let state = deepref_postgres::screen_report(&state.pool, command)
+    let state = deepref_app::screening::screen_report(&state.pool, command)
         .await
         .map_err(map_screening_error)?;
     Ok(Json(state_dto(state)))
@@ -384,7 +379,7 @@ pub(crate) async fn undo_screening(
         notes: input.notes,
         actor,
     };
-    let state = deepref_postgres::undo_screening(&state.pool, command)
+    let state = deepref_app::screening::undo_screening(&state.pool, command)
         .await
         .map_err(map_screening_error)?;
     Ok(Json(state_dto(state)))
@@ -409,7 +404,7 @@ pub(crate) async fn get_screening_history(
     State(state): State<AppState>,
     Path((project_id, report_id)): Path<(Uuid, Uuid)>,
 ) -> Result<Json<ScreeningHistoryDto>, ApiError> {
-    let history = deepref_postgres::get_screening_history(&state.pool, project_id, report_id)
+    let history = deepref_app::screening::get_screening_history(&state.pool, project_id, report_id)
         .await
         .map_err(map_screening_error)?;
     Ok(Json(history_dto(history)))
@@ -431,14 +426,14 @@ pub(crate) async fn get_prisma(
     State(state): State<AppState>,
     Path(project_id): Path<Uuid>,
 ) -> Result<Json<PrismaDto>, ApiError> {
-    let projection = deepref_postgres::get_prisma_projection(&state.pool, project_id)
+    let projection = deepref_app::get_prisma_projection(&state.pool, project_id)
         .await
         .map_err(|error| match error {
-            deepref_postgres::PrismaProjectionError::NegativeCount { .. } => {
+            deepref_app::PrismaProjectionError::NegativeCount { .. } => {
                 ApiError::DataIntegrity(error.to_string())
             }
-            deepref_postgres::PrismaProjectionError::Database(error) => ApiError::Database(error),
-            deepref_postgres::PrismaProjectionError::Json(error) => {
+            deepref_app::PrismaProjectionError::Database(error) => ApiError::Database(error),
+            deepref_app::PrismaProjectionError::Json(error) => {
                 ApiError::Internal(error.into())
             }
         })?
@@ -620,9 +615,9 @@ pub(crate) fn map_screening_error(error: ScreeningError) -> ApiError {
     match error {
         ScreeningError::Database(error) => ApiError::Database(error),
         ScreeningError::AiFirst(error) => match *error {
-            deepref_postgres::AiFirstError::Database(error) => ApiError::Database(error),
-            deepref_postgres::AiFirstError::Screening(error) => map_screening_error(error),
-            deepref_postgres::AiFirstError::Invalid(message) | deepref_postgres::AiFirstError::Refused(message) => ApiError::BadRequest(message),
+            deepref_app::AiFirstError::Database(error) => ApiError::Database(error),
+            deepref_app::AiFirstError::Screening(error) => map_screening_error(error),
+            deepref_app::AiFirstError::Invalid(message) | deepref_app::AiFirstError::Refused(message) => ApiError::BadRequest(message),
             other => ApiError::Internal(anyhow::Error::new(other)),
         },
         ScreeningError::ProjectNotFound => ApiError::NotFound("project not found".to_owned()),

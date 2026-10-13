@@ -46,7 +46,7 @@ pub(crate) async fn stream_run_events(
     Query(query): Query<AssistantRunEventsQuery>,
 ) -> Result<Response, ApiError> {
     validate_project_id(project_id)?;
-    let record = deepref_postgres::get_assistant_agent_run(&state.pool, run_id)
+    let record = deepref_app::get_assistant_agent_run(&state.pool, run_id)
         .await
         .map_err(|error| ApiError::Internal(anyhow::anyhow!(error)))?;
     let record = match record.filter(|record| record.project_id == project_id) {
@@ -72,7 +72,7 @@ pub(crate) async fn stream_run_events(
                 if poll.unavailable {
                     return None;
                 }
-                let events = match deepref_postgres::list_assistant_run_events(
+                let events = match deepref_app::list_assistant_run_events(
                     &poll.state.pool,
                     poll.run_id,
                     poll.after_seq,
@@ -108,7 +108,7 @@ pub(crate) async fn stream_run_events(
                     // resumes past the done/error row in the milliseconds
                     // before the status flip would otherwise long-poll until
                     // it gives up. A deleted run ends the stream as well.
-                    match deepref_postgres::get_assistant_agent_run(&poll.state.pool, poll.run_id).await {
+                    match deepref_app::get_assistant_agent_run(&poll.state.pool, poll.run_id).await {
                         Ok(None) => return None,
                         Ok(Some(record)) if record.status.terminal() => return None,
                         Ok(Some(_)) => {}
@@ -152,7 +152,7 @@ async fn resolve_plan_frame(pool: &sqlx::PgPool, project_id: Uuid, plan_id: Uuid
     const DELAY: std::time::Duration = std::time::Duration::from_millis(100);
     for attempt in 0..ATTEMPTS {
         if let Ok(Some(plan)) =
-            deepref_postgres::get_assistant_plan(pool, project_id, plan_id).await
+            deepref_app::get_assistant_plan(pool, project_id, plan_id).await
             && let Ok(value) = serde_json::to_value(super::plans::plan_dto(&plan))
         {
             return Some(value);
@@ -169,7 +169,7 @@ async fn resolve_plan_frame(pool: &sqlx::PgPool, project_id: Uuid, plan_id: Uuid
 async fn run_event_frame(
     pool: &sqlx::PgPool,
     project_id: Uuid,
-    event: &deepref_postgres::AssistantRunEventRecord,
+    event: &deepref_app::AssistantRunEventRecord,
 ) -> Option<Result<Event, std::convert::Infallible>> {
     let payload = &event.payload;
     let frame = match event.kind.as_str() {

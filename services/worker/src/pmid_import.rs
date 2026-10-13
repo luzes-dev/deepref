@@ -10,7 +10,7 @@ use std::{
 };
 
 use deepref_integrations::{MAX_IDS_PER_FETCH, PubmedArticle, PubmedClient};
-use deepref_postgres::{PmidOutcome, PmidRunCounts};
+use deepref_app::{PmidOutcome, PmidRunCounts};
 use serde::Deserialize;
 use serde_json::Value;
 use sqlx::PgPool;
@@ -50,7 +50,7 @@ pub async fn handle_job(
     max_attempts: i32,
 ) -> anyhow::Result<DeliveryAction> {
     let payload: PmidImportPayload = serde_json::from_value(payload)?;
-    let Some(run) = deepref_postgres::load_pmid_run(pool, payload.acquisition_id).await? else {
+    let Some(run) = deepref_app::load_pmid_run(pool, payload.acquisition_id).await? else {
         tracing::warn!(acquisition_id = %payload.acquisition_id, "PubMed import job names a missing run");
         return Ok(DeliveryAction::Ack);
     };
@@ -58,13 +58,13 @@ pub async fn handle_job(
     {
         return Ok(DeliveryAction::Ack);
     }
-    deepref_postgres::start_pmid_run(pool, run.run_id).await?;
+    deepref_app::start_pmid_run(pool, run.run_id).await?;
     let settings = store::load_runtime_settings(pool).await?;
     let http = net::trusted_client().map_err(|error| anyhow::anyhow!(error.message))?;
     let client = PubmedClient::new(http, settings.crossref_mailto);
     loop {
         let batch =
-            deepref_postgres::queued_pmids(pool, run.run_id, MAX_IDS_PER_FETCH as i64).await?;
+            deepref_app::queued_pmids(pool, run.run_id, MAX_IDS_PER_FETCH as i64).await?;
         if batch.is_empty() {
             break;
         }
@@ -87,7 +87,7 @@ pub async fn handle_job(
                         error: error.message().to_owned(),
                     })
                     .collect();
-                deepref_postgres::save_pmid_outcomes(pool, run.project_id, run.run_id, &outcomes)
+                deepref_app::save_pmid_outcomes(pool, run.project_id, run.run_id, &outcomes)
                     .await?;
             }
         }
@@ -115,9 +115,9 @@ async fn save_found(
         .filter(|pmid| returned_set.contains(pmid.as_str()))
         .cloned()
         .collect();
-    let held = deepref_postgres::pmids_in_project(pool, project_id, &returned).await?;
+    let held = deepref_app::pmids_in_project(pool, project_id, &returned).await?;
     let outcomes = batch_outcomes(batch, articles, &held);
-    deepref_postgres::save_pmid_outcomes(pool, project_id, run_id, &outcomes).await?;
+    deepref_app::save_pmid_outcomes(pool, project_id, run_id, &outcomes).await?;
     Ok(())
 }
 
@@ -156,9 +156,9 @@ fn batch_outcomes(
 /// commit together. A run that saved new records queues the duplicate check.
 async fn settle(pool: &PgPool, project_id: Uuid, run_id: Uuid) -> anyhow::Result<()> {
     let mut tx = pool.begin().await?;
-    let counts: PmidRunCounts = deepref_postgres::pmid_run_counts(&mut tx, run_id).await?;
+    let counts: PmidRunCounts = deepref_app::pmid_run_counts(&mut tx, run_id).await?;
     let status = store::settled_run_status(counts.found(), counts.missed());
-    deepref_postgres::complete_pmid_run(&mut tx, project_id, run_id, status, &counts).await?;
+    deepref_app::complete_pmid_run(&mut tx, project_id, run_id, status, &counts).await?;
     let draft = store::acquisition_notification(
         status,
         project_id,
@@ -166,11 +166,11 @@ async fn settle(pool: &PgPool, project_id: Uuid, run_id: Uuid) -> anyhow::Result
         to_i32(counts.imported),
         to_i32(counts.missed()),
     );
-    deepref_postgres::record_notification_in_transaction(&mut tx, &draft).await?;
+    deepref_app::record_notification_in_transaction(&mut tx, &draft).await?;
     tx.commit().await?;
     if counts.imported > 0
         && let Err(error) =
-            deepref_postgres::enqueue_import_deduplication(pool, project_id, run_id).await
+            deepref_app::enqueue_import_deduplication(pool, project_id, run_id).await
     {
         // The records are saved; they wait for a manual duplicate check instead.
         tracing::warn!(%error, %project_id, "could not queue the duplicate check for a PubMed import");

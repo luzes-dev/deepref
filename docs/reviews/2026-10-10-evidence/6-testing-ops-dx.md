@@ -13,8 +13,8 @@ I did not modify the repo. Evidence comes from reading files, `gh` (run logs, ar
 |---|---|---|---|---|
 | Rust unit (`#[cfg(test)]`) | all crates | ~850 tests in total, ~4.8 s | yes (`Rust / test`) | Strong in ai, review, application, domain. |
 | Rust "integration", pure | `crates/ai/tests` (eval_gate, prompt_injection, screening_normalization), `crates/documents/tests` (gated on `PDFIUM_LIBRARY_PATH`), `crates/config/tests` | ~2.4k LOC | yes | eval_gate scores a checked-in prediction fixture. No model is called. |
-| Rust "integration", DB-backed | `crates/postgres/tests` (35 files, 17k LOC), `crates/http-api/tests` (22 files, 9.8k LOC), `services/worker/tests` (13 files, 3k LOC) | ~30k LOC | **no. They skip silently** (finding F1) | Each test starts with `let url = std::env::var("DATABASE_URL").ok()?;` and returns `Ok(())` when it is unset. |
-| Source-text "tests" | `services/worker/tests/{crash_boundaries,persistence_boundaries,global_throttle,reconciliation}.rs`, `crates/http-api/tests/migration.rs`, `crates/postgres/tests/migration_001[3-5].rs` (partly) | small | yes | Built on `include_str!(...)` plus `contains()` (§4). |
+| Rust "integration", DB-backed | `crates/app/tests` (35 files, 17k LOC), `crates/http-api/tests` (22 files, 9.8k LOC), `services/worker/tests` (13 files, 3k LOC) | ~30k LOC | **no. They skip silently** (finding F1) | Each test starts with `let url = std::env::var("DATABASE_URL").ok()?;` and returns `Ok(())` when it is unset. |
+| Source-text "tests" | `services/worker/tests/{crash_boundaries,persistence_boundaries,global_throttle,reconciliation}.rs`, `crates/http-api/tests/migration.rs`, `crates/app/tests/migration_001[3-5].rs` (partly) | small | yes | Built on `include_str!(...)` plus `contains()` (§4). |
 | Web unit/component (vitest, node + jsdom projects) | `apps/web/src/**` | 73 spec files, ~8k LOC | yes (`Web`, with coverage) | MSW is used in only 2 specs, so there is no over-mocking. Leftover scaffold `src/lib/vitest-examples/greet.*`. |
 | UI package vitest | `packages/ui` | 5 spec files | **never in CI** (F4) | `pnpm --filter @deepref/ui test` is not invoked anywhere in CI. |
 | UI package Playwright visual | `packages/ui` `test:visual` | n/a | never | |
@@ -95,7 +95,7 @@ I did not modify the repo. Evidence comes from reading files, `gh` (run logs, ar
 - **The SQLx offline cache is verified against a live, migrated DB in CI** (`cargo xtask sqlx check`), so `.sqlx` drift is caught.
 - **Aggregator jobs** (`Rust`, `E2E`, `Docker`, `Security`) keep required checks stable under path filtering.
 - **The DB test code itself is good where it exists.**
-  - `crates/postgres/tests/jobs.rs::expired_leases_are_fenced_and_retries_reach_dead_at_max_attempts` checks stale-owner fencing for renew, complete and fail without wall-clock sleeps.
+  - `crates/app/tests/jobs.rs::expired_leases_are_fenced_and_retries_reach_dead_at_max_attempts` checks stale-owner fencing for renew, complete and fail without wall-clock sleeps.
   - `calibration_stage_migration.rs` applies migrations up to N on a fresh database, writes legacy rows, then applies the rest. That is a real data-migration test.
   - The problem is that CI never executes them (F1).
 - **The visual and e2e fixtures are typed against the generated OpenAPI models** and refuse unmodelled requests. That keeps them honest about request shape, though not about backend behaviour.
@@ -117,15 +117,15 @@ I did not modify the repo. Evidence comes from reading files, `gh` (run logs, ar
 - **Category:** Defect (CI gap). **Severity:** P1, the highest-impact item in this lens. **Confidence:** High.
 - **Evidence:**
   - In `.github/workflows/ci.yml:579-581`, the step `Run integration tests` runs `cargo nextest run --workspace --tests --locked` with no `env: DATABASE_URL`. Only the migrate step (`:567`) and the sqlx-check step (`:577`) set it, at step scope. The workflow-level `env` has no DATABASE_URL, and `.env` is gitignored and absent in CI.
-  - Every DB test opens with `std::env::var("DATABASE_URL").ok()?` and returns `Ok(())` when it is unset. Examples: `crates/postgres/tests/jobs.rs:19`, `services/worker/tests/automation.rs:27`, `crates/http-api/tests/extraction_manual_values.rs:14`.
-  - Log of main run 38097154018, job 114345331715: `856 tests run: 856 passed, 3 skipped` in **4.848 s**. DB tests show as PASS in ~10 ms, for example `deepref-postgres::jobs expired_leases_are_fenced_and_retries_reach_dead_at_max_attempts [0.010s]`, `deepref-worker::durable_processing claims_and_doi_leases_have_owner_expiry_and_attempts [0.006s]`, and `deepref-http-api::screening_postgres ... [0.013s]`. The slowest test in the whole run took 1.08 s.
+  - Every DB test opens with `std::env::var("DATABASE_URL").ok()?` and returns `Ok(())` when it is unset. Examples: `crates/app/tests/jobs.rs:19`, `services/worker/tests/automation.rs:27`, `crates/http-api/tests/extraction_manual_values.rs:14`.
+  - Log of main run 38097154018, job 114345331715: `856 tests run: 856 passed, 3 skipped` in **4.848 s**. DB tests show as PASS in ~10 ms, for example `deepref-app::jobs expired_leases_are_fenced_and_retries_reach_dead_at_max_attempts [0.010s]`, `deepref-worker::durable_processing claims_and_doi_leases_have_owner_expiry_and_attempts [0.006s]`, and `deepref-http-api::screening_postgres ... [0.013s]`. The slowest test in the whole run took 1.08 s.
   - History: `git log -S DATABASE_URL -- .github/workflows/ci.yml` shows only 429f68f and 13024c8. The pre-13024c8 workflow also lacked DATABASE_URL on the test step.
 - **Current behaviour:** About 30k LOC of PostgreSQL, HTTP and worker integration tests pass vacuously on every PR. The required `E2E` check is green whatever the persistence layer does. That covers job leasing and fencing, migration data tests, screening transitions, AI-first blinding, project deletion and assistant runs.
 - **Why it matters:** These are the app's real risks: durable jobs, double execution, migrations on realistic data, and cross-project boundaries. Tests for them exist, look rigorous, and give a green badge, but they never execute. They may already be broken locally too (I could not verify; see Open Questions).
 - **Root cause:** The test helpers treat a missing DB as "skip" instead of "fail". CI and local differ: `justfile` has `set dotenv-load`, so `.env` supplies DATABASE_URL locally but not in CI. Nothing asserts that DB tests actually ran.
 - **Proposed direction:**
   1. Add `DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/deepref` at job level in `full-stack`.
-  2. Add a guard. Option A: an env var such as `DEEPREF_REQUIRE_DB=1`, which makes the helper `panic!` instead of returning `None`. Option B: a final step asserting a minimum run time or count for `binary_id(deepref-postgres::*)`.
+  2. Add a guard. Option A: an env var such as `DEEPREF_REQUIRE_DB=1`, which makes the helper `panic!` instead of returning `None`. Option B: a final step asserting a minimum run time or count for `binary_id(deepref-app::*)`.
   3. Use `--profile ci`, which already exists in `.config/nextest.toml` and is unused.
   4. Drop `--tests` from `rust/test` or from `full-stack`. Today both compile and run the same binaries.
   5. Expect a first wave of real failures. Budget for it.
@@ -134,7 +134,7 @@ I did not modify the repo. Evidence comes from reading files, `gh` (run logs, ar
 ### F2. A job that crashes the worker is reclaimed forever, ignores `max_attempts`, and takes the worker pool down each time (poison pill)
 - **Category:** Defect (runtime and ops). **Severity:** P2. **Confidence:** High for the code path, Medium for the likelihood of a crashing job.
 - **Evidence:**
-  - `crates/postgres/src/jobs.rs:60-67`: `recover_expired_jobs` sets `state='queued'` for any expired `running` job with no `attempts < max_attempts` check.
+  - `crates/app/src/jobs.rs:60-67`: `recover_expired_jobs` sets `state='queued'` for any expired `running` job with no `attempts < max_attempts` check.
   - `CLAIM` (`:12-28`) does not filter on attempts either. Only `fail_job` (`:153-185`) moves a job to `dead`.
   - `services/worker/src/lib.rs:124-133`: when a spawned job task ends in a `JoinError` (panic), the loop sets `loop_error` and exits, and the whole worker process stops.
   - The PDF parse runs in-process through PDFium under a global mutex (`crates/documents/src/parser.rs:117-121`).
@@ -245,7 +245,7 @@ I did not modify the repo. Evidence comes from reading files, `gh` (run logs, ar
   - `process-compose.yaml` gates on `/health/live`.
 - **Current behaviour:** If you deploy API N against DB N-k (migrate forgotten or failed), readiness passes, traffic arrives, and individual queries fail with 500s. The worker fails per job. An N-1 worker running beside an N schema (for example after 0058 removed `suspended`) is not detected either.
 - **Proposed direction:**
-  - Derive the required version from `deepref_postgres::MIGRATOR.iter().map(|m| m.version).max()`.
+  - Derive the required version from `deepref_app::MIGRATOR.iter().map(|m| m.version).max()`.
   - Have readiness fail when the DB is behind, and log a warning when it is ahead (N+1 schema with an N binary, which is OK only under an expand/contract policy).
   - Give the worker either a tiny `/health/live` listener or a heartbeat row such as `worker_heartbeats(owner, seen_at)` that `/health/dependencies` reports.
   - Document the expand/contract rule for migrations.
@@ -302,7 +302,7 @@ I did not modify the repo. Evidence comes from reading files, `gh` (run logs, ar
     These happen to be installed globally on this machine (`~/.cargo/bin`, `~/.local/bin/sentrux`).
   - PDF parsing needs libpdfium (`PDFIUM_LIBRARY_PATH`, `crates/documents/src/parser.rs:105`). The local docs never mention it, so `just dev` cannot parse PDFs out of the box. Failure shows up lazily as job errors, not at worker startup.
   - `just test-integration` runs DB tests against the developer's **dev database**: the same compose volume and `.env` DATABASE_URL. Tests like `jobs.rs` call `queue.claim()` globally and can claim real queued dev jobs while `just dev`'s worker competes for test fixtures.
-  - `DATABASE_TEST_MUTEX` is an in-process mutex. Nextest runs each test in its own process, so it serialises nothing (the nextest config admits this for `review_runs`). The `database` test group covers only `deepref-postgres`. Worker and http-api DB tests are unbounded.
+  - `DATABASE_TEST_MUTEX` is an in-process mutex. Nextest runs each test in its own process, so it serialises nothing (the nextest config admits this for `review_runs`). The `database` test group covers only `deepref-app`. Worker and http-api DB tests are unbounded.
   - Logs are always JSON (`crates/telemetry/src/lib.rs:56-75`), which is hard to read under process-compose.
 - **Proposed direction:**
   - Pin `cargo:cargo-nextest`, `cargo:cargo-llvm-cov`, `cargo:sqlx-cli` and `cargo:cargo-deny` in `.mise.toml`, and either pin sentrux or remove it from `verify`.

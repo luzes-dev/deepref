@@ -90,7 +90,7 @@ Severity uses the review's scale: P1 is high, P2 medium, P3 low. Packets 1–6 a
 
 **Problem.** About 30k lines of DB-backed tests never run in CI:
 - The CI test step has no `DATABASE_URL` (`.github/workflows/ci.yml:563-581`; it is set only on the migrate and sqlx-check steps).
-- Every test helper does `std::env::var("DATABASE_URL").ok()?` and returns `Ok(())` (example: `crates/postgres/tests/jobs.rs:18-19,64-66`; the same pattern is in all ~35 files under `crates/postgres/tests`, `services/worker/tests` and `crates/http-api/tests`).
+- Every test helper does `std::env::var("DATABASE_URL").ok()?` and returns `Ok(())` (example: `crates/app/tests/jobs.rs:18-19,64-66`; the same pattern is in all ~35 files under `crates/app/tests`, `services/worker/tests` and `crates/http-api/tests`).
 - When the tests do run in parallel, 19 fail from shared-DB interference. `DATABASE_TEST_MUTEX` is in-process only, and tests claim jobs globally.
 
 Evidence: data F1, ops F1.
@@ -107,13 +107,13 @@ Evidence: data F1, ops F1.
 
 **Known parallel failures** (they should all pass once tests are isolated):
 - `deepref-http-api::assistant_postgres` ×2;
-- `deepref-postgres::ai_first` ×3: `a_new_positive_control_…`, `audit_failure_recovers_…`, `blinded_fixed_audit_…`;
-- `deepref-postgres::jobs` ×2: `enqueue_returns_canonical_id_…`, `expired_leases_are_fenced_…`;
+- `deepref-app::ai_first` ×3: `a_new_positive_control_…`, `audit_failure_recovers_…`, `blinded_fixed_audit_…`;
+- `deepref-app::jobs` ×2: `enqueue_returns_canonical_id_…`, `expired_leases_are_fenced_…`;
 - `deepref-worker::ai_first` ×1;
 - `deepref-worker::assistant` ×7;
 - `deepref-worker::workflows` ×4.
 
-**Red proof.** Temporarily invert `leased_until > now()` in `complete_job` (`crates/postgres/src/jobs.rs`). CI must go red on `jobs.rs` tests. Revert the inversion.
+**Red proof.** Temporarily invert `leased_until > now()` in `complete_job` (`crates/app/src/jobs.rs`). CI must go red on `jobs.rs` tests. Revert the inversion.
 
 **Done when:**
 - In CI, the DB suites take seconds, not milliseconds.
@@ -147,7 +147,7 @@ Evidence: fe F1.
 ### Packet 3: `fix(ai-first): never demote on unknown identity; keep finalized cohorts` (P1)
 
 **Problem.** Any failure to compute semantic identity becomes a committed, destructive demotion.
-- `crates/postgres/src/ai_first/routing.rs:35-61` does `preview_screening_identity(...).await.ok().is_some_and(...)`. The `.ok()` turns a failure into "false", and on false it calls `invalidate_in_transaction(..., "semantic_identity_changed", true)`.
+- `crates/app/src/ai_first/routing.rs:35-61` does `preview_screening_identity(...).await.ok().is_some_and(...)`. The `.ok()` turns a failure into "false", and on false it calls `invalidate_in_transaction(..., "semantic_identity_changed", true)`.
 - `invalidate_in_transaction` (`ai_first/cohorts.rs:283-386`):
   - reopens *finalized*, human-audited exclusions by writing undo screening events;
   - voids dispositions;
@@ -251,7 +251,7 @@ Evidence: sec S1, S2, S8; ops F10.
 ### Packet 6: `fix(jobs): attempt-aware recovery and panic isolation` (P2, Stage-0 part of the queue work)
 
 **Problem.**
-- **Recovery ignores attempts:** `recover_expired_jobs` (`crates/postgres/src/jobs.rs:59-66`) requeues expired jobs without checking `max_attempts` and without backoff. `CLAIM` (≈12-28) has no attempts predicate. A job that crashes the worker (poison PDF, OOM, PDFium segfault) is reclaimed forever and never reaches `dead`.
+- **Recovery ignores attempts:** `recover_expired_jobs` (`crates/app/src/jobs.rs:59-66`) requeues expired jobs without checking `max_attempts` and without backoff. `CLAIM` (≈12-28) has no attempts predicate. A job that crashes the worker (poison PDF, OOM, PDFium segfault) is reclaimed forever and never reaches `dead`.
 - **One panic kills the worker:** in `services/worker/src/lib.rs:124-133`, a job task panic (`JoinError`) ends the whole worker loop.
 
 Evidence: data F4, ops F2.
@@ -273,7 +273,7 @@ Evidence: data F4, ops F2.
 
 **Problem.**
 - **The lease token is per process, not per claim:** the owner string is created once per process (`services/worker/src/lib.rs:92`). `renew_job`, `complete_job` and `fail_job` (`jobs.rs:119-183`) match only the owner. `claim_job` recovers expired jobs before claiming (`jobs.rs:76`), so the same process can reclaim its own expired job while the stale attempt can still complete it.
-- **Workflow steps have no fence:** `begin_node_execution` / `finish_node_execution` (`crates/postgres/src/workflows.rs:1338-1460, 1519-1620`) don't fence at all. Late duplicates overwrite results, and HTTP, email and screening side effects can run twice.
+- **Workflow steps have no fence:** `begin_node_execution` / `finish_node_execution` (`crates/app/src/workflows.rs:1338-1460, 1519-1620`) don't fence at all. Late duplicates overwrite results, and HTTP, email and screening side effects can run twice.
 - **A renewal error cancels work:** one renewal error (`lib.rs:294`, `renew_job(...).await?`) drops the in-flight future mid-execution.
 
 Evidence: data F3.
@@ -293,7 +293,7 @@ Automation steps already fence correctly on `claimed_job_attempt` (`automations.
 
 ### Packet 8: `fix(review): allow retry and regenerate of terminal review runs` (P2)
 
-**Problem.** A failed or blocked review run can never be retried. The key `review:{manifest_hash}` (`crates/postgres/src/review_runs.rs:182`) contains no actor, time or generation. `dispatch_automation_trigger` (`crates/postgres/migrations/0019_automation_agent.sql:429-440`) returns the existing run whatever its status. After a provider outage, a record's "AI suggestion" stays `failed` until something changes the manifest.
+**Problem.** A failed or blocked review run can never be retried. The key `review:{manifest_hash}` (`crates/app/src/review_runs.rs:182`) contains no actor, time or generation. `dispatch_automation_trigger` (`crates/app/migrations/0019_automation_agent.sql:429-440`) returns the existing run whatever its status. After a provider outage, a record's "AI suggestion" stays `failed` until something changes the manifest.
 
 Evidence: ai F1.
 
@@ -310,14 +310,14 @@ Evidence: ai F1.
 ### Packet 9: `feat(api): persistence error classification and real correlation ids` (P2)
 
 **Problem.**
-- **Transient DB errors become a 400 with raw SQL text:** in `crates/postgres/src/screening.rs:204-206,276`, `.map_err(|e| ScreeningError::InvalidTransition(e.to_string()))` wraps DB errors, and `routes/review.rs:664` turns them into `400 Bad Request` with raw sqlx text.
+- **Transient DB errors become a 400 with raw SQL text:** in `crates/app/src/screening.rs:204-206,276`, `.map_err(|e| ScreeningError::InvalidTransition(e.to_string()))` wraps DB errors, and `routes/review.rs:664` turns them into `400 Bad Request` with raw sqlx text.
 - **No error classification:** `error.rs:62-82` maps every non-`RowNotFound` sqlx error to 500. There are five hand-rolled SQLSTATE checks (`extraction.rs:915`, `workflows.rs:216`, `assistant*.rs`, `automations.rs:609`, `documents.rs:1088`), and no handling of 40001/40P01.
 - **The correlation id matches nothing:** `error.rs:157` sets `correlation_id: Some(Uuid::new_v4())`, a random value, while the middleware's id (`routes/mod.rs:305-319`) is unused.
 
 Evidence: data F11, ops F3.
 
 **Fix.**
-1. In `deepref-postgres`, add `classify(&sqlx::Error) -> PersistenceError { NotFound, Conflict(constraint), Retryable, Integrity, Other }`, plus a `with_retry` helper for serializable or repeatable-read transactions.
+1. In `deepref-app`, add `classify(&sqlx::Error) -> PersistenceError { NotFound, Conflict(constraint), Retryable, Integrity, Other }`, plus a `with_retry` helper for serializable or repeatable-read transactions.
 2. Map to `ApiError`: Retryable → 503 with Retry-After, Conflict → 409, Integrity → 409 or 422, Other → 500 with no raw text.
 3. Replace the five hand-rolled checks.
 4. Give screening errors a `Database` variant instead of stringifying them into `InvalidTransition`.
@@ -341,7 +341,7 @@ Evidence: data F11, ops F3.
 Evidence: ops F3, F9.
 
 **Fix.**
-1. Derive the required version from `deepref_postgres::MIGRATOR.iter().map(|m| m.version).max()`. Fail readiness when the DB is behind, and warn when it is ahead.
+1. Derive the required version from `deepref_app::MIGRATOR.iter().map(|m| m.version).max()`. Fail readiness when the DB is behind, and warn when it is ahead.
 2. Open a `job` span in `process_claimed_job` with `job_id`, `kind`, `project_id`, `attempt`, and the correlation id. Persist the correlation id on enqueue.
 3. Add a worker heartbeat row (`worker_heartbeats(owner, seen_at)`) and report it in `/health/dependencies`.
 4. Set `service.version` from `DEEPREF_BUILD_SHA`.
@@ -386,7 +386,7 @@ Each item is independent. For each one, write the red test from its evidence sec
 | A transient `getProject` error navigates to a different project | `ProjectWorkspace.svelte:38-43,107-113`, `workspace-navigation.ts:9-20` | fall back only on a 404 from the initial load; otherwise show an inline alert with retry; show an explicit "Project not found" state | fe F4 |
 | Assistant runs orphaned on `Terminate`, so the UI polls forever | worker `assistant.rs:52-56,117-125,194-196,243,368`; `run_events.rs:78` `.unwrap_or_default()` | every `Terminate` calls `fail_run` first; add a reconciler pass failing runs whose job is dead or missing; surface DB errors instead of "no events" | ai F4 |
 | Citation depth unbounded | `acquisitions.rs:183-206`, `settings.rs:82` | domain `MaxDepth` (≤ 3) plus DB CHECKs; depth 10 → 400 | data F9 |
-| Workflow HTTP secrets follow an edited URL | `services/worker/src/workflows/nodes.rs:340-372`, `crates/postgres/src/workflows.rs:276-310,383-394`, `validate.rs:220-222`, `conditions.rs:191-211` | bind each secret to the origin it was entered for and drop it when the origin changes; require a fixed origin (no `{{` before the path); percent-encode substituted values | sec S3 |
+| Workflow HTTP secrets follow an edited URL | `services/worker/src/workflows/nodes.rs:340-372`, `crates/app/src/workflows.rs:276-310,383-394`, `validate.rs:220-222`, `conditions.rs:191-211` | bind each secret to the origin it was entered for and drop it when the origin changes; require a fixed origin (no `{{` before the path); percent-encode substituted values | sec S3 |
 | Hook rate limiter unbounded; unsigned webhooks accepted | `routes/workflows.rs:1473-1492,1612-1621` | bounded LRU keyed after token lookup; `signature_required=true` for new webhooks | sec S9 |
 | Ingestion cancel accepts any UUID and completed runs | ingestion cancel route | status guard plus existence check; 404 or 409 | data F5 |
 | Assistant hardcodes `x-actor-id: local-user` | web assistant data layer | use `currentReviewerId()` and the generated client | fe F9 |

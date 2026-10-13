@@ -18,7 +18,7 @@ use tower::ServiceExt;
 use uuid::Uuid;
 
 async fn database() -> Option<PgPool> {
-    deepref_postgres::test_isolation::isolated_pool_from_env("TEST_DATABASE_URL", 5).await
+    deepref_app::test_isolation::isolated_pool_from_env("TEST_DATABASE_URL", 5).await
 }
 
 fn api_config() -> ApiConfig {

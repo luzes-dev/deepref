@@ -155,7 +155,8 @@ pub fn run() -> Result<()> {
     }
     let metadata: Metadata = serde_json::from_slice(&output.stdout)
         .context("invalid Cargo metadata or unknown Deepref layer")?;
-    let errors = validate(&metadata);
+    let mut errors = validate(&metadata);
+    validate_screening_sources(&metadata, &mut errors)?;
     if !errors.is_empty() {
         bail!("architecture violations:\n\n{}", errors.join("\n\n"));
     }
@@ -163,6 +164,29 @@ pub fn run() -> Result<()> {
         "Architecture validated: {} workspace members (all dependency kinds and targets).",
         metadata.workspace_members.len()
     );
+    Ok(())
+}
+
+fn validate_screening_sources(metadata: &Metadata, errors: &mut Vec<String>) -> Result<()> {
+    let Some(http) = metadata.packages.iter().find(|package| package.name == "deepref-http-api") else {
+        bail!("screening source rule requires deepref-http-api");
+    };
+    let root = http.manifest_path.parent().context("HTTP manifest has no parent")?;
+    for relative in ["src/routes/review.rs", "src/routes/assistant/plans.rs"] {
+        let path = root.join(relative);
+        let source = std::fs::read_to_string(&path)
+            .with_context(|| format!("could not inspect {}", path.display()))?;
+        // These migrated files contain transport/DTO logic only. Unmigrated
+        // contexts and separate dev-test targets may continue to use SQLx.
+        for forbidden in ["sqlx", "query!", "query_as!", "query_scalar!", "QueryBuilder"] {
+            if source.contains(forbidden) {
+                errors.push(format!(
+                    "{}: migrated screening transport must use deepref_app::screening, not {forbidden}",
+                    path.display()
+                ));
+            }
+        }
+    }
     Ok(())
 }
 
@@ -178,7 +202,7 @@ fn validate_workspace_dependency(
             && target.name == "deepref-worker"
             && dependency.kind.as_deref() == Some("dev");
         // A package dev-depending on itself only turns on its own test-only
-        // features (e.g. deepref-postgres `test-support`); it crosses no layer.
+        // features (e.g. deepref-app `test-support`); it crosses no layer.
         let own_test_features =
             source.name == target.name && dependency.kind.as_deref() == Some("dev");
         if !layer.permits(target_layer) && !fixture_edge && !own_test_features {
@@ -230,13 +254,13 @@ fn validate_required_seams(packages: &[&Package], errors: &mut Vec<String>) {
         ("deepref-application", &["deepref-domain"][..]),
         (
             "deepref-http-api",
-            &["deepref-application", "deepref-postgres"][..],
+            &["deepref-application", "deepref-app"][..],
         ),
         (
             "deepref-review",
             &["deepref-domain", "deepref-application", "deepref-ai"][..],
         ),
-        ("deepref-postgres", &["sqlx"][..]),
+        ("deepref-app", &["sqlx"][..]),
         ("deepref-integrations", &["deepref-application"][..]),
     ] {
         if let Some(source) = packages.iter().find(|p| p.name == source_name) {

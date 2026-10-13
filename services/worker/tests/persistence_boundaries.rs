@@ -12,7 +12,7 @@ fn contains_identifier(source: &str, identifier: &str) -> bool {
 
 #[test]
 fn reconciliation_schema_knowledge_stays_in_postgres_adapter() {
-    let persistence = include_str!("../../../crates/postgres/src/worker_runtime.rs");
+    let persistence = include_str!("../../../crates/app/src/worker_runtime.rs");
     let worker = include_str!("../src/reconciler.rs");
 
     for table in [

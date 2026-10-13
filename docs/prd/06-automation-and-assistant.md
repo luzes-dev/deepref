@@ -26,7 +26,7 @@ assistant.
 ## Acceptance evidence
 
 - Automation persistence and execution:
-  `crates/postgres/src/automations.rs`,
+  `crates/app/src/automations.rs`,
   `services/worker/tests/automation.rs`, and
   `services/worker/tests/crash_boundaries.rs`.
 - Assistant policy tests:

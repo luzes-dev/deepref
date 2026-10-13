@@ -18,7 +18,7 @@ use deepref_application::{
     jobs::{ClaimedJob, JobLease},
     workflows::{AutonomyGate, DefaultAutonomyGate, PublicationQuery},
 };
-use deepref_postgres::{
+use deepref_app::{
     AlertHit, DueAlert, NodeOutcome, StepClaim, begin_node_execution, claim_due_workflows,
     fail_abandoned_steps, finish_node_execution, record_alert_poll, record_node_retry,
 };
@@ -78,10 +78,10 @@ impl From<sqlx::Error> for NodeError {
     }
 }
 
-impl From<deepref_postgres::WorkflowError> for NodeError {
-    fn from(error: deepref_postgres::WorkflowError) -> Self {
+impl From<deepref_app::WorkflowError> for NodeError {
+    fn from(error: deepref_app::WorkflowError) -> Self {
         match error {
-            deepref_postgres::WorkflowError::Database(_) => {
+            deepref_app::WorkflowError::Database(_) => {
                 Self::retryable("The database was busy. This will be tried again.")
             }
             other => Self::permanent(other.to_string()),

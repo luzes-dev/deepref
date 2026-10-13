@@ -202,11 +202,11 @@ footer { margin-top: 48px; padding-top: 16px; border-top: 1px solid var(--border
   <h3 style="margin-top:20px">How a record reaches the AI automatically</h3>
   <ol class="flow">
     <li><strong>Stage is set to &ldquo;second reviewer&rdquo;</strong><span>Autonomy level resolved per project and task (<code>resolve_autonomy_level</code>).</span></li>
-    <li><strong>The worker sweep finds a passing bundle</strong><span>Only projects that have a row in <code>review_calibration_bundles</code> with <code>status='passing'</code> are swept at all (<a href="../../crates/postgres/src/second_review.rs"><code>crates/postgres/src/second_review.rs</code></a>). The newest by <code>evaluated_at</code> is used. Projects without one cost one query and get no work.</span></li>
-    <li><strong>It picks up to 5 waiting records per project per tick</strong><span>Records with no human decision yet and no AI decision; one attempt per record, stage and protocol version (<code>second_review_attempts</code>, migration <a href="../../crates/postgres/migrations/0040_second_review_attempts.sql"><code>0040</code></a>). Stops when the project&rsquo;s AI budget is spent.</span></li>
-    <li><strong>Admission compares hashes</strong><span>The run&rsquo;s freshly built manifest must have the same <code>semantic_bundle_hash</code> as the bundle, and the bundle must be <code>passing</code> (<code>admit_calibration</code> in <a href="../../crates/postgres/src/review_calibration.rs"><code>review_calibration.rs</code></a>, called from <a href="../../crates/postgres/src/review_runs.rs"><code>review_runs.rs</code></a>). Otherwise: <code>calibration_missing</code>, <code>calibration_failed</code> or <code>calibration_stale</code>.</span></li>
+    <li><strong>The worker sweep finds a passing bundle</strong><span>Only projects that have a row in <code>review_calibration_bundles</code> with <code>status='passing'</code> are swept at all (<a href="../../crates/app/src/second_review.rs"><code>crates/app/src/second_review.rs</code></a>). The newest by <code>evaluated_at</code> is used. Projects without one cost one query and get no work.</span></li>
+    <li><strong>It picks up to 5 waiting records per project per tick</strong><span>Records with no human decision yet and no AI decision; one attempt per record, stage and protocol version (<code>second_review_attempts</code>, migration <a href="../../crates/app/migrations/0040_second_review_attempts.sql"><code>0040</code></a>). Stops when the project&rsquo;s AI budget is spent.</span></li>
+    <li><strong>Admission compares hashes</strong><span>The run&rsquo;s freshly built manifest must have the same <code>semantic_bundle_hash</code> as the bundle, and the bundle must be <code>passing</code> (<code>admit_calibration</code> in <a href="../../crates/app/src/review_calibration.rs"><code>review_calibration.rs</code></a>, called from <a href="../../crates/app/src/review_runs.rs"><code>review_runs.rs</code></a>). Otherwise: <code>calibration_missing</code>, <code>calibration_failed</code> or <code>calibration_stale</code>.</span></li>
     <li><strong>On refusal the sweep stops and records why</strong><span>A stale refusal is written to <code>second_review_gate</code>; the API reports <code>needs_calibration</code> or <code>calibration_stale</code>; the web banner <code>second-review-paused</code> appears (<a href="../../apps/web/src/lib/features/ai-autonomy/components/ScreeningViewSwitch.svelte"><code>ScreeningViewSwitch.svelte</code></a>).</span></li>
-    <li><strong>Result is an opinion, not a decision</strong><span>Stored in <code>ai_reviewer_decisions</code> (migration <a href="../../crates/postgres/migrations/0029_ai_autonomy_and_activity.sql"><code>0029</code></a>). If it differs from the human, it is a conflict a person resolves.</span></li>
+    <li><strong>Result is an opinion, not a decision</strong><span>Stored in <code>ai_reviewer_decisions</code> (migration <a href="../../crates/app/migrations/0029_ai_autonomy_and_activity.sql"><code>0029</code></a>). If it differs from the human, it is a conflict a person resolves.</span></li>
   </ol>
 
   <h3 style="margin-top:24px">What &ldquo;hash-matched&rdquo; binds to</h3>
@@ -217,7 +217,7 @@ footer { margin-top: 48px; padding-top: 16px; border-top: 1px solid var(--border
     <tbody>
       <tr><td data-label="Input"><strong>Definition and assets</strong><br><span class="meta">definition id/version, workflow, prompt, schema, policy, parser</span></td><td data-label="Changes when">Editing anything under <code>review-definitions/</code> (for screening: <code>prompt.txt</code>, <code>schema.json</code>, <code>workflow.json</code>, and the shared policy). Prompt label bumps are not what counts; content is hashed.</td></tr>
       <tr><td data-label="Input"><strong>Protocol</strong></td><td data-label="Changes when">The hash covers the <code>protocol_version_id</code> and the eligibility criteria shown to the model. A protocol amendment or republish makes the bundle stale.</td></tr>
-      <tr><td data-label="Input"><strong>Resolved model identity</strong><br><span class="meta">profile, provider, model, model_version, parameters hash</span></td><td data-label="Changes when">Any edit to the route rows in <code>ai_model_routes</code> (migration <a href="../../crates/postgres/migrations/0016_ai_foundation.sql"><code>0016</code></a>), including temperature or other parameters.</td></tr>
+      <tr><td data-label="Input"><strong>Resolved model identity</strong><br><span class="meta">profile, provider, model, model_version, parameters hash</span></td><td data-label="Changes when">Any edit to the route rows in <code>ai_model_routes</code> (migration <a href="../../crates/app/migrations/0016_ai_foundation.sql"><code>0016</code></a>), including temperature or other parameters.</td></tr>
       <tr><td data-label="Input"><strong>Runtime build</strong></td><td data-label="Changes when">See finding B below. This is the surprising one.</td></tr>
     </tbody>
   </table>
@@ -227,12 +227,12 @@ footer { margin-top: 48px; padding-top: 16px; border-top: 1px solid var(--border
   <div class="grid2">
     <div class="finding">
       <h3><span class="chip bad">Blocker</span> A. Nothing can create a bundle</h3>
-      <p><code>insert_review_calibration_bundle</code> exists (<a href="../../crates/postgres/src/review_calibration.rs"><code>review_calibration.rs</code></a>) and is exported, but only tests call it. There is no HTTP route, no CLI, no worker job, no UI. The banner tells users to &ldquo;ask the person who runs this DeepRef deployment&rdquo;, who in practice would need raw SQL.</p>
+      <p><code>insert_review_calibration_bundle</code> exists (<a href="../../crates/app/src/review_calibration.rs"><code>review_calibration.rs</code></a>) and is exported, but only tests call it. There is no HTTP route, no CLI, no worker job, no UI. The banner tells users to &ldquo;ask the person who runs this DeepRef deployment&rdquo;, who in practice would need raw SQL.</p>
       <p class="refs">Rows are immutable (an update trigger rejects changes, migration 0022); correction means inserting a new row.</p>
     </div>
     <div class="finding">
       <h3><span class="chip bad">Design risk</span> B. Any code change invalidates calibration</h3>
-      <p>The &ldquo;runtime&rdquo; input is <code>DEEPREF_SEMANTIC_BUILD_SHA</code>, computed in <a href="../../crates/postgres/build.rs"><code>crates/postgres/build.rs</code></a> by hashing <strong>every file</strong> under <code>crates/</code>, <code>services/</code> and <code>review-definitions/</code>, plus <code>Cargo.toml</code>, <code>Cargo.lock</code> and an optional <code>DEEPREF_BUILD_SHA</code>. A fix to an unrelated HTTP route, a test, or a dependency bump changes the hash. A calibration is therefore valid for exactly one build.</p>
+      <p>The &ldquo;runtime&rdquo; input is <code>DEEPREF_SEMANTIC_BUILD_SHA</code>, computed in <a href="../../crates/app/build.rs"><code>crates/app/build.rs</code></a> by hashing <strong>every file</strong> under <code>crates/</code>, <code>services/</code> and <code>review-definitions/</code>, plus <code>Cargo.toml</code>, <code>Cargo.lock</code> and an optional <code>DEEPREF_BUILD_SHA</code>. A fix to an unrelated HTTP route, a test, or a dependency bump changes the hash. A calibration is therefore valid for exactly one build.</p>
       <p class="refs">This is safe but unworkable: a calibration that takes weeks to earn would be voided by the next deploy.</p>
     </div>
     <div class="finding">
@@ -245,7 +245,7 @@ footer { margin-top: 48px; padding-top: 16px; border-top: 1px solid var(--border
     </div>
     <div class="finding">
       <h3><span class="chip accent">Asset</span> E. Useful building blocks already exist</h3>
-      <p><code>reviewer_agreement</code> in <a href="../../crates/postgres/src/ai_reviewer.rs"><code>ai_reviewer.rs</code></a> already computes human-vs-AI agreement and <strong>Cohen&rsquo;s kappa</strong> per stage using the human&rsquo;s decision <em>before</em> any conflict was settled (<code>human_decision_before</code>). It is exposed through <a href="../../crates/http-api/src/routes/autonomy.rs"><code>autonomy.rs</code></a>. The project also has <code>screening_events</code> with actors, an <code>ai_budget</code>, and the sweep scaffolding to reuse.</p>
+      <p><code>reviewer_agreement</code> in <a href="../../crates/app/src/ai_reviewer.rs"><code>ai_reviewer.rs</code></a> already computes human-vs-AI agreement and <strong>Cohen&rsquo;s kappa</strong> per stage using the human&rsquo;s decision <em>before</em> any conflict was settled (<code>human_decision_before</code>). It is exposed through <a href="../../crates/http-api/src/routes/autonomy.rs"><code>autonomy.rs</code></a>. The project also has <code>screening_events</code> with actors, an <code>ai_budget</code>, and the sweep scaffolding to reuse.</p>
     </div>
     <div class="finding">
       <h3><span class="chip warn">UX</span> F. The banner can lag and is a dead end</h3>
@@ -363,7 +363,7 @@ footer { margin-top: 48px; padding-top: 16px; border-top: 1px solid var(--border
         <li>Contradicts the ADR 0004 &ldquo;fail closed&rdquo; stance; needs an ADR amendment.</li>
       </ul></div>
       <div class="wide"><h4>What it needs in the product</h4><ul>
-        <li>Do <strong>not</strong> reuse <code>review_calibration_bundles</code> with a fake &ldquo;passing&rdquo; status. Its <code>status</code> check allows only <code>passing</code> and <code>failed</code>, and a faked row would be indistinguishable from real evidence in the audit export (<a href="../../crates/postgres/src/audit_export.rs"><code>audit_export.rs</code></a>). Use a separate <code>review_gate_overrides</code> table (who, when, scope, expiry, text of the acknowledgement) and a distinct admission origin.</li>
+        <li>Do <strong>not</strong> reuse <code>review_calibration_bundles</code> with a fake &ldquo;passing&rdquo; status. Its <code>status</code> check allows only <code>passing</code> and <code>failed</code>, and a faked row would be indistinguishable from real evidence in the audit export (<a href="../../crates/app/src/audit_export.rs"><code>audit_export.rs</code></a>). Use a separate <code>review_gate_overrides</code> table (who, when, scope, expiry, text of the acknowledgement) and a distinct admission origin.</li>
         <li>Include the override in the audit export and in any methods-section text DeepRef generates.</li>
       </ul></div>
     </div>
@@ -502,7 +502,7 @@ footer { margin-top: 48px; padding-top: 16px; border-top: 1px solid var(--border
   <div class="grid2">
     <div class="finding">
       <h3>What the code does now</h3>
-      <p>The provider label <code>"zai"</code> is hard-coded in <a href="../../crates/http-api/src/lib.rs"><code>crates/http-api/src/lib.rs</code></a> and <a href="../../services/worker/src/lib.rs"><code>services/worker/src/lib.rs</code></a>, and is written into <code>ai_model_routes.provider</code> by <code>ensure_default_model_routes</code> (<a href="../../crates/postgres/src/ai_usage.rs"><code>ai_usage.rs</code></a>). That function inserts routes only when <em>no</em> enabled route exists for a profile, and sets <code>model_version</code> equal to the model name.</p>
+      <p>The provider label <code>"zai"</code> is hard-coded in <a href="../../crates/http-api/src/lib.rs"><code>crates/http-api/src/lib.rs</code></a> and <a href="../../services/worker/src/lib.rs"><code>services/worker/src/lib.rs</code></a>, and is written into <code>ai_model_routes.provider</code> by <code>ensure_default_model_routes</code> (<a href="../../crates/app/src/ai_usage.rs"><code>ai_usage.rs</code></a>). That function inserts routes only when <em>no</em> enabled route exists for a profile, and sets <code>model_version</code> equal to the model name.</p>
     </div>
     <div class="finding">
       <h3>Does it invalidate calibrations?</h3>
@@ -673,7 +673,7 @@ footer { margin-top: 48px; padding-top: 16px; border-top: 1px solid var(--border
     <li>Landis JR, Koch GG. The measurement of observer agreement for categorical data. <em>Biometrics</em> 1977;33:159-174 (kappa bands; secondary reproductions checked, original not retrieved). McHugh ML. <a href="https://www.biochemia-medica.com/en/journal/22/3/10.11613/BM.2012.031">Interrater reliability: the kappa statistic</a>. <em>Biochemia Medica</em> 2012;22(3):276-282.</li>
     <li>Confidence intervals and sample-size tables in section 3: exact binomial (Clopper-Pearson), computed for this document with a short script; not taken from a source.</li>
   </ol>
-  <p class="meta"><strong>Code and docs read:</strong> ADR 0004; <code>docs/acceptance/ai-evals-hardening.md</code>; <code>crates/postgres/src/{second_review,review_calibration,review_runs,review_run_setup,ai_reviewer,ai_usage}.rs</code>; <code>crates/postgres/build.rs</code>; migrations 0016, 0022, 0029, 0040; <code>crates/review/src/{manifest,execution}.rs</code>; <code>crates/ai/src/evals.rs</code> and the reviewed gold-set fixture; <code>crates/http-api/src/{lib.rs,routes/autonomy.rs}</code>; <code>services/worker/src/{lib,second_review}.rs</code>; <code>ScreeningViewSwitch.svelte</code>.</p>
+  <p class="meta"><strong>Code and docs read:</strong> ADR 0004; <code>docs/acceptance/ai-evals-hardening.md</code>; <code>crates/app/src/{second_review,review_calibration,review_runs,review_run_setup,ai_reviewer,ai_usage}.rs</code>; <code>crates/app/build.rs</code>; migrations 0016, 0022, 0029, 0040; <code>crates/review/src/{manifest,execution}.rs</code>; <code>crates/ai/src/evals.rs</code> and the reviewed gold-set fixture; <code>crates/http-api/src/{lib.rs,routes/autonomy.rs}</code>; <code>services/worker/src/{lib,second_review}.rs</code>; <code>ScreeningViewSwitch.svelte</code>.</p>
 </section>
 
 </div>

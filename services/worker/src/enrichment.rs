@@ -7,7 +7,7 @@ use std::collections::HashMap;
 use std::time::Duration;
 
 use deepref_integrations::{GrobidClient, GrobidConfig, TeiDocument};
-use deepref_postgres::{DocumentStructure, NewDocumentReference, NewDocumentSection};
+use deepref_app::{DocumentStructure, NewDocumentReference, NewDocumentSection};
 
 const MIN_BODY_MATCH_CHARS: usize = 20;
 const PREFIX_MATCH_CHARS: usize = 48;

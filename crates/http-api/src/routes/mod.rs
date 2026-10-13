@@ -353,8 +353,8 @@ mod tests {
     #[tokio::test]
     async fn screening_database_failures_are_sanitized_server_errors() {
         let error = crate::routes::review::map_screening_error(
-            deepref_postgres::ScreeningError::AiFirst(Box::new(
-                deepref_postgres::AiFirstError::Database(sqlx::Error::Protocol("secret SQL and parameters".into()))
+            deepref_app::screening::ScreeningError::AiFirst(Box::new(
+                deepref_app::AiFirstError::Database(sqlx::Error::Protocol("secret SQL and parameters".into()))
             ))
         );
         let response = error.into_response();

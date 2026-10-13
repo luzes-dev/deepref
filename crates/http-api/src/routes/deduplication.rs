@@ -151,9 +151,9 @@ pub(crate) async fn run_project_deduplication(
     let limit = bounded_limit(input.limit)?;
     let (actor_kind, actor_id) =
         actor(&extract_actor(&headers)?, input.actor_kind, input.actor_id)?;
-    let summary = deepref_postgres::run_deduplication(
+    let summary = deepref_app::run_deduplication(
         &state.pool,
-        deepref_postgres::DedupeRunRequest {
+        deepref_app::DedupeRunRequest {
             project_id,
             limit,
             actor_kind,
@@ -208,11 +208,11 @@ pub(crate) async fn list_project_dedupe_proposals(
         limit: Some(limit),
     };
     let cursor = pagination.decode::<(DateTime<Utc>, Uuid)>()?;
-    let proposals = deepref_postgres::list_proposals(
+    let proposals = deepref_app::list_proposals(
         &state.pool,
         project_id,
         &status,
-        cursor.map(|(created_at, id)| deepref_postgres::DedupeProposalCursor { created_at, id }),
+        cursor.map(|(created_at, id)| deepref_app::DedupeProposalCursor { created_at, id }),
         limit,
     )
     .await
@@ -249,9 +249,9 @@ pub(crate) async fn decide_project_dedupe_proposal(
 ) -> Result<Json<ResolutionDto>, ApiError> {
     let (actor_kind, actor_id) =
         actor(&extract_actor(&headers)?, input.actor_kind, input.actor_id)?;
-    let result = deepref_postgres::decide_proposal(
+    let result = deepref_app::decide_proposal(
         &state.pool,
-        deepref_postgres::ProposalDecisionRequest {
+        deepref_app::ProposalDecisionRequest {
             project_id,
             proposal_id,
             decision: input.decision.domain(),
@@ -291,7 +291,7 @@ pub(crate) async fn resolve_project_record(
 ) -> Result<Json<ResolutionDto>, ApiError> {
     let (actor_kind, actor_id) =
         actor(&extract_actor(&headers)?, input.actor_kind, input.actor_id)?;
-    let result = deepref_postgres::resolve_record(
+    let result = deepref_app::resolve_record(
         &state.pool,
         ResolveRecordCommand {
             project_id: project_id.into(),
@@ -360,7 +360,7 @@ fn actor(
     Ok((kind.as_str().to_owned(), id))
 }
 
-fn proposal_dto(proposal: deepref_postgres::DedupeProposal) -> DedupeProposalDto {
+fn proposal_dto(proposal: deepref_app::DedupeProposal) -> DedupeProposalDto {
     DedupeProposalDto {
         id: proposal.id,
         project_id: proposal.project_id,
@@ -393,7 +393,7 @@ fn proposal_dto(proposal: deepref_postgres::DedupeProposal) -> DedupeProposalDto
     }
 }
 
-fn resolution_dto(result: deepref_postgres::ResolutionResult) -> ResolutionDto {
+fn resolution_dto(result: deepref_app::ResolutionResult) -> ResolutionDto {
     ResolutionDto {
         record_id: result.record_id,
         prior_report_id: result.prior_report_id,
@@ -402,37 +402,37 @@ fn resolution_dto(result: deepref_postgres::ResolutionResult) -> ResolutionDto {
     }
 }
 
-pub(crate) fn map_dedupe_error(error: deepref_postgres::DedupeError) -> ApiError {
+pub(crate) fn map_dedupe_error(error: deepref_app::DedupeError) -> ApiError {
     match error {
-        deepref_postgres::DedupeError::ProjectNotFound
-        | deepref_postgres::DedupeError::RecordNotFound
-        | deepref_postgres::DedupeError::ProposalNotFound
-        | deepref_postgres::DedupeError::ReportNotInProject => {
+        deepref_app::DedupeError::ProjectNotFound
+        | deepref_app::DedupeError::RecordNotFound
+        | deepref_app::DedupeError::ProposalNotFound
+        | deepref_app::DedupeError::ReportNotInProject => {
             ApiError::NotFound(error.to_string())
         }
-        deepref_postgres::DedupeError::ProposalNotPending => ApiError::Conflict {
+        deepref_app::DedupeError::ProposalNotPending => ApiError::Conflict {
             code: "DEDUPE_PROPOSAL_NOT_PENDING".to_owned(),
             message: error.to_string(),
             details: Value::Null,
         },
-        deepref_postgres::DedupeError::ConflictCreateNew => ApiError::Conflict {
+        deepref_app::DedupeError::ConflictCreateNew => ApiError::Conflict {
             code: "DEDUPE_CONFLICT_CREATE_NEW_NOT_ALLOWED".to_owned(),
             message: error.to_string(),
             details: Value::Null,
         },
-        deepref_postgres::DedupeError::RevertConflict => ApiError::Conflict {
+        deepref_app::DedupeError::RevertConflict => ApiError::Conflict {
             code: "DEDUPE_REVERT_CONFLICT".to_owned(),
             message: error.to_string(),
             details: Value::Null,
         },
-        deepref_postgres::DedupeError::IdentifierConflict => ApiError::Conflict {
+        deepref_app::DedupeError::IdentifierConflict => ApiError::Conflict {
             code: "DEDUPE_IDENTIFIER_CONFLICT".to_owned(),
             message: error.to_string(),
             details: Value::Null,
         },
-        deepref_postgres::DedupeError::InvalidCommand(message) => ApiError::BadRequest(message),
-        deepref_postgres::DedupeError::Database(error) => ApiError::Database(error),
-        deepref_postgres::DedupeError::Serialization(error) => ApiError::Internal(error.into()),
+        deepref_app::DedupeError::InvalidCommand(message) => ApiError::BadRequest(message),
+        deepref_app::DedupeError::Database(error) => ApiError::Database(error),
+        deepref_app::DedupeError::Serialization(error) => ApiError::Internal(error.into()),
     }
 }
 
