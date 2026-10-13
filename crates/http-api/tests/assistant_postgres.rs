@@ -2061,3 +2061,108 @@ async fn confirmed_plan_decisions_are_assistant_authored_and_not_counted_as_huma
     assert_eq!(prisma["automation_excluded"], 0, "{body}");
     cleanup(&pool, fixture).await;
 }
+
+#[tokio::test]
+async fn plan_lists_its_records_and_runs_only_the_ones_left_selected() {
+    let _guard = test_lock().lock().await;
+    let Some(pool) = database().await else { return };
+    let fixture = seed(&pool).await;
+    deepref_postgres::insert_model_route(
+        &pool,
+        &model_route(ModelProfile::Reasoning),
+        Utc::now() - Duration::milliseconds(1),
+    )
+    .await
+    .expect("route inserts");
+    let project = fixture.project_id;
+    let kept_out = add_unscreened_report(&pool, project, "Left out by the reviewer").await;
+    let mut state = AppState::new(pool.clone());
+    state.ai_info.configured = true;
+    let plan_id = plan_from_turn(
+        &pool,
+        &state,
+        project,
+        exclude_plan_model(&[fixture.report_id, kept_out]),
+    )
+    .await
+    .expect("the turn produced a plan");
+
+    // The card shows what will actually happen, taken from the action args.
+    let (status, body) = get_json(
+        &state,
+        &format!("/projects/{project}/assistant/plans/{plan_id}"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let plan: Value = serde_json::from_str(&body).expect("plan json");
+    let action = &plan["actions"][0];
+    assert_eq!(action["decision"], "exclude", "{body}");
+    assert_eq!(action["items"][0]["report_id"], json!(fixture.report_id));
+    assert_eq!(action["items"][0]["title"], "Assistant report", "{body}");
+    assert_eq!(action["items"][0]["current_status"], "maybe", "{body}");
+    assert_eq!(action["items"][1]["title"], "Left out by the reviewer");
+    assert_eq!(action["items"][1]["current_status"], "unscreened");
+
+    // An unknown record cannot be deselected.
+    let confirm_uri = format!("/projects/{project}/assistant/plans/{plan_id}/confirm");
+    let (status, body) = post_json(
+        &state,
+        &confirm_uri,
+        json!({"deselected": [{"action_id": "a1", "report_id": Uuid::new_v4()}]}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+
+    let (status, body) = post_json(
+        &state,
+        &confirm_uri,
+        json!({"deselected": [{"action_id": "a1", "report_id": kept_out}]}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let plan: Value = serde_json::from_str(&body).expect("plan json");
+    assert_eq!(plan["results"][0]["applied"], 1, "{body}");
+    assert_eq!(plan["results"][0]["deselected"], 1, "{body}");
+    assert_eq!(
+        title_abstract_status(&pool, project, fixture.report_id).await,
+        "exclude"
+    );
+    assert_eq!(
+        title_abstract_status(&pool, project, kept_out).await,
+        "unscreened",
+        "a deselected record is left alone"
+    );
+    delete_project_and_reports(&pool, project, &[kept_out]).await;
+    cleanup(&pool, fixture).await;
+}
+
+#[tokio::test]
+async fn assistant_event_stream_surfaces_database_failure_and_closes() {
+    let _guard = test_lock().lock().await;
+    let Some(pool) = database().await else { return };
+    let fixture = seed(&pool).await;
+    let state = AppState::new(pool.clone());
+    let (status, body) = post_json(&state,
+        &format!("/projects/{}/assistant/conversations", fixture.project_id),
+        json!({"title": "Event failure"})).await;
+    assert_eq!(status, StatusCode::CREATED, "{body}");
+    let conversation: Value = serde_json::from_str(&body).expect("conversation JSON");
+    let conversation_id = Uuid::parse_str(conversation["id"].as_str().expect("conversation id")).expect("UUID");
+    let run = deepref_postgres::submit_assistant_agent_run(
+        &pool, fixture.project_id, conversation_id, "Read my corpus", "user", "event-test",
+        &serde_json::to_value(model_route(ModelProfile::Reasoning)).expect("route JSON"),
+        deepref_ai::ASSISTANT_PROMPT_VERSION
+    ).await.expect("submit run");
+    let response = router(state, &api_config()).oneshot(
+        Request::builder().method("GET")
+            .uri(format!("/projects/{}/assistant/runs/{}/events", fixture.project_id, run.id))
+            .body(Body::empty()).expect("request")
+    ).await.expect("SSE response");
+    assert_eq!(response.status(), StatusCode::OK);
+    pool.close().await;
+    let body = tokio::time::timeout(StdDuration::from_secs(2), to_bytes(response.into_body(), 32_768))
+        .await.expect("stream closes instead of polling forever").expect("body bytes");
+    let text = String::from_utf8(body.to_vec()).expect("UTF-8 SSE");
+    assert!(text.contains("event: error"), "{text}");
+    assert!(text.contains("assistant_events_unavailable"), "{text}");
+}

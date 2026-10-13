@@ -4,6 +4,7 @@
 		reviewQueuePathForTool,
 		type AssistantPlan,
 		type AssistantPlanAction,
+		type AssistantPlanDeselection,
 		type AssistantPlanResult
 	} from '../chat-api';
 	import * as Alert from '@deepref/ui/alert';
@@ -24,26 +25,60 @@
 		plan: AssistantPlan;
 		busy?: boolean;
 		error?: string | null;
-		onconfirm: () => void;
+		onconfirm: (deselected: AssistantPlanDeselection[]) => void;
 		oncancel: () => void;
 	} = $props();
 
+	let deselected = $state<AssistantPlanDeselection[]>([]);
 	const hasExecutable = $derived(plan.actions.some((action) => action.executable));
+	const hasSelected = $derived(plan.actions.some((action) =>
+		action.executable && (action.tool !== 'screen_reports' ||
+			action.items.some((item) => !isDeselected(action.id, item.report_id)))
+	));
+
+	function isDeselected(actionId: string, reportId: string): boolean {
+		return deselected.some((item) => item.action_id === actionId && item.report_id === reportId);
+	}
+
+	function toggleRecord(actionId: string, reportId: string): void {
+		deselected = isDeselected(actionId, reportId)
+			? deselected.filter((item) => item.action_id !== actionId || item.report_id !== reportId)
+			: [...deselected, { action_id: actionId, report_id: reportId }];
+	}
+
+	function headline(action: AssistantPlanAction): string {
+		if (action.tool !== 'screen_reports') return action.summary;
+		const count = action.items.filter((item) => !isDeselected(action.id, item.report_id)).length;
+		const decision = action.decision ? action.decision[0].toUpperCase() + action.decision.slice(1) : 'Screen';
+		return count === action.items.length
+			? `${decision} ${count} ${count === 1 ? 'record' : 'records'}`
+			: `${decision} ${count} of ${action.items.length} records`;
+	}
+
+	function statusText(status: string | null | undefined): string {
+		switch (status) {
+			case 'include': return 'Included';
+			case 'exclude': return 'Excluded';
+			case 'maybe': return 'Maybe';
+			case 'unscreened': return 'Unscreened';
+			default: return status ?? 'Unknown status';
+		}
+	}
 	// An AI review that is still running is not "Done" until it finishes.
 	const reviewPending = $derived(
 		plan.results?.some((result) => result.status === 'queued') ?? false
 	);
-	const statusLabel = $derived(
-		plan.status === 'executed' && reviewPending
-			? 'Queued for review'
-			: {
-					pending: 'Waiting for your OK',
-					confirmed: 'Running',
-					rejected: 'Cancelled',
-					executed: 'Done',
-					failed: 'Some steps failed'
-				}[plan.status]
-	);
+	const statusLabel = $derived.by(() => {
+		if (plan.status === 'executed' && reviewPending) return 'Queued for review';
+		switch (plan.status) {
+			case 'pending': return 'Waiting for your OK';
+			case 'confirmed': return 'Running';
+			case 'rejected': return 'Cancelled';
+			case 'executed': return 'Done';
+			case 'failed': return 'Some steps failed';
+			default: return plan.status;
+		}
+	});
 	const statusVariant = $derived(
 		plan.status === 'executed' && reviewPending
 			? 'info'
@@ -61,7 +96,8 @@
 	}
 
 	function countLabel(action: AssistantPlanAction): string {
-		return action.affected_count === 1 ? '1 item' : `${action.affected_count} items`;
+		const count = action.tool === 'screen_reports' ? action.items.length : action.affected_count;
+		return count === 1 ? '1 item' : `${count} items`;
 	}
 </script>
 
@@ -93,13 +129,38 @@
 				{@const result = resultFor(action)}
 				<li class="flex flex-col gap-1 border-l pl-3" data-testid="assistant-plan-action">
 					<div class="flex flex-wrap items-center gap-2">
-						<span class="text-sm font-medium text-foreground">{action.summary}</span>
+						<span class="text-sm font-medium text-foreground" data-testid="assistant-plan-headline">{headline(action)}</span>
 						{#if action.executable}
 							<Badge variant="outline" size="xs">{countLabel(action)}</Badge>
 						{/if}
 					</div>
 					{#if action.rationale}
 						<p class="text-xs text-muted-foreground">{action.rationale}</p>
+					{/if}
+					{#if action.tool === 'screen_reports'}
+						<ul class="flex flex-col gap-2">
+							{#each action.items as item (item.report_id)}
+								<li data-testid="assistant-plan-item">
+									<label class="flex items-start gap-2 text-sm">
+										{#if plan.status === 'pending' && action.executable}
+											<input
+												type="checkbox"
+												checked={!isDeselected(action.id, item.report_id)}
+												onchange={() => toggleRecord(action.id, item.report_id)}
+												disabled={busy}
+												aria-label={item.title}
+											/>
+										{/if}
+										<span>
+											{item.title}
+											<span class="block text-xs text-muted-foreground">
+												{statusText(item.current_status)} → {action.decision ? action.decision[0].toUpperCase() + action.decision.slice(1) : 'Screen'}
+											</span>
+										</span>
+									</label>
+								</li>
+							{/each}
+						</ul>
 					{/if}
 					{#if action.manual}
 						<Alert.Root variant="warning">
@@ -151,8 +212,8 @@
 			{#if hasExecutable}
 				<Button
 					size="sm"
-					onclick={onconfirm}
-					disabled={busy}
+					onclick={() => onconfirm(deselected)}
+					disabled={busy || !hasSelected}
 					data-testid="assistant-plan-confirm"
 				>
 					{#if busy}<Spinner />{/if}
