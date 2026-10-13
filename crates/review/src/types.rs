@@ -261,6 +261,92 @@ impl ReviewBlockCode {
     }
 }
 
+/// Persisted lifecycle discriminator; [`ReviewRunState`] carries its metadata.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ReviewRunStatus {
+    Queued,
+    Running,
+    Blocked,
+    Failed,
+    Completed,
+}
+
+impl ReviewRunStatus {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Queued => "queued",
+            Self::Running => "running",
+            Self::Blocked => "blocked",
+            Self::Failed => "failed",
+            Self::Completed => "completed",
+        }
+    }
+
+    pub fn parse(value: &str) -> Option<Self> {
+        match value {
+            "queued" => Some(Self::Queued),
+            "running" => Some(Self::Running),
+            "blocked" => Some(Self::Blocked),
+            "failed" => Some(Self::Failed),
+            "completed" => Some(Self::Completed),
+            _ => None,
+        }
+    }
+}
+
+/// An immutable review-node attempt's persistence lifecycle.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ReviewAttemptStatus {
+    Running,
+    Completed,
+    Failed,
+}
+
+impl ReviewAttemptStatus {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Running => "running",
+            Self::Completed => "completed",
+            Self::Failed => "failed",
+        }
+    }
+
+    pub fn parse(value: &str) -> Option<Self> {
+        match value {
+            "running" => Some(Self::Running),
+            "completed" => Some(Self::Completed),
+            "failed" => Some(Self::Failed),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ReviewCalibrationStatus {
+    Passing,
+    Failed,
+}
+
+impl ReviewCalibrationStatus {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Passing => "passing",
+            Self::Failed => "failed",
+        }
+    }
+
+    pub fn parse(value: &str) -> Option<Self> {
+        match value {
+            "passing" => Some(Self::Passing),
+            "failed" => Some(Self::Failed),
+            _ => None,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(tag = "kind", rename_all = "snake_case")]
 pub enum ReviewRunState {
@@ -347,4 +433,125 @@ pub enum ReviewError {
     Persistence(String),
     #[error("review execution failed: {0}")]
     Execution(String),
+}
+
+#[cfg(test)]
+mod lifecycle_status_tests {
+    use super::{ReviewAttemptStatus, ReviewCalibrationStatus, ReviewRunStatus};
+
+    #[test]
+    fn review_lifecycle_statuses_round_trip() {
+        for status in [
+            ReviewRunStatus::Queued,
+            ReviewRunStatus::Running,
+            ReviewRunStatus::Blocked,
+            ReviewRunStatus::Failed,
+            ReviewRunStatus::Completed,
+        ] {
+            assert_eq!(ReviewRunStatus::parse(status.as_str()), Some(status));
+        }
+        for status in [
+            ReviewAttemptStatus::Running,
+            ReviewAttemptStatus::Completed,
+            ReviewAttemptStatus::Failed,
+        ] {
+            assert_eq!(ReviewAttemptStatus::parse(status.as_str()), Some(status));
+        }
+        for status in [ReviewCalibrationStatus::Passing, ReviewCalibrationStatus::Failed] {
+            assert_eq!(ReviewCalibrationStatus::parse(status.as_str()), Some(status));
+        }
+    }
+
+    #[test]
+    fn review_lifecycle_statuses_reject_invalid_persisted_values() {
+        for value in ["", "RUNNING", "complete", " running", "cancelled"] {
+            assert_eq!(ReviewRunStatus::parse(value), None);
+            assert_eq!(ReviewAttemptStatus::parse(value), None);
+            assert_eq!(ReviewCalibrationStatus::parse(value), None);
+        }
+        assert_eq!(ReviewAttemptStatus::parse("queued"), None);
+        assert_eq!(ReviewAttemptStatus::parse("blocked"), None);
+        assert_eq!(ReviewCalibrationStatus::parse("completed"), None);
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ReviewerStatus {
+    Waiting,
+    Concordant,
+    Conflict,
+    Resolved,
+}
+
+impl ReviewerStatus {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Waiting => "waiting",
+            Self::Concordant => "concordant",
+            Self::Conflict => "conflict",
+            Self::Resolved => "resolved",
+        }
+    }
+
+    pub fn parse(value: &str) -> Option<Self> {
+        match value {
+            "waiting" => Some(Self::Waiting),
+            "concordant" => Some(Self::Concordant),
+            "conflict" => Some(Self::Conflict),
+            "resolved" => Some(Self::Resolved),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ReviewerResolution {
+    KeptHuman,
+    AdoptedAi,
+    Other,
+}
+
+impl ReviewerResolution {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::KeptHuman => "kept_human",
+            Self::AdoptedAi => "adopted_ai",
+            Self::Other => "other",
+        }
+    }
+
+    pub fn parse(value: &str) -> Option<Self> {
+        match value {
+            "kept_human" => Some(Self::KeptHuman),
+            "adopted_ai" => Some(Self::AdoptedAi),
+            "other" => Some(Self::Other),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ReviewerSource {
+    Ai,
+    Workflow,
+}
+
+impl ReviewerSource {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Ai => "ai",
+            Self::Workflow => "workflow",
+        }
+    }
+
+    pub fn parse(value: &str) -> Option<Self> {
+        match value {
+            "ai" => Some(Self::Ai),
+            "workflow" => Some(Self::Workflow),
+            _ => None,
+        }
+    }
 }

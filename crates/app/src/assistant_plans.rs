@@ -1,4 +1,5 @@
 use chrono::{DateTime, Utc};
+use deepref_ai::AssistantPlanStatus;
 use serde::Serialize;
 use serde_json::Value;
 use sqlx::{PgPool, Postgres, Row, Transaction, postgres::PgRow};
@@ -11,7 +12,7 @@ pub struct AssistantPlanRecord {
     pub id: Uuid,
     pub project_id: Uuid,
     pub conversation_id: Uuid,
-    pub status: String,
+    pub status: AssistantPlanStatus,
     pub summary: String,
     pub actions: Value,
     pub results: Option<Value>,
@@ -49,12 +50,16 @@ macro_rules! columns {
     };
 }
 
-fn plan_from_row(row: &PgRow) -> AssistantPlanRecord {
-    AssistantPlanRecord {
+fn plan_from_row(row: &PgRow) -> Result<AssistantPlanRecord, AssistantError> {
+    let stored_status: String = row.get("status");
+    let status = AssistantPlanStatus::parse(&stored_status).ok_or_else(|| {
+        AssistantError::InvalidInput(format!("unknown assistant plan status {stored_status}"))
+    })?;
+    Ok(AssistantPlanRecord {
         id: row.get("id"),
         project_id: row.get("project_id"),
         conversation_id: row.get("conversation_id"),
-        status: row.get("status"),
+        status,
         summary: row.get("summary"),
         actions: row.get("actions"),
         results: row.get("results"),
@@ -68,7 +73,7 @@ fn plan_from_row(row: &PgRow) -> AssistantPlanRecord {
         resolved_by_kind: row.get("resolved_by_kind"),
         resolved_by_id: row.get("resolved_by_id"),
         resolved_at: row.get("resolved_at"),
-    }
+    })
 }
 
 pub async fn create_assistant_plan(
@@ -105,7 +110,7 @@ pub(crate) async fn create_assistant_plan_tx(
     .bind(&plan.evidence)
     .fetch_one(&mut **tx)
     .await?;
-    Ok(plan_from_row(&row))
+    plan_from_row(&row)
 }
 
 pub async fn get_assistant_plan(
@@ -122,7 +127,7 @@ pub async fn get_assistant_plan(
     .bind(project_id)
     .fetch_optional(pool)
     .await?;
-    Ok(row.as_ref().map(plan_from_row))
+    row.as_ref().map(plan_from_row).transpose()
 }
 
 /// Atomically moves a pending plan to `confirmed` (execution claimed) or
@@ -132,11 +137,11 @@ pub async fn claim_assistant_plan(
     pool: &PgPool,
     project_id: Uuid,
     plan_id: Uuid,
-    next_status: &str,
+    next_status: AssistantPlanStatus,
     actor_kind: &str,
     actor_id: &str,
 ) -> Result<Option<AssistantPlanRecord>, AssistantError> {
-    debug_assert!(matches!(next_status, "confirmed" | "rejected"));
+    debug_assert!(matches!(next_status, AssistantPlanStatus::Confirmed | AssistantPlanStatus::Rejected));
     let row = sqlx::query(concat!(
         "UPDATE assistant_plans
          SET status = $3, resolved_by_kind = $4, resolved_by_id = $5, resolved_at = now()
@@ -146,12 +151,12 @@ pub async fn claim_assistant_plan(
     ))
     .bind(plan_id)
     .bind(project_id)
-    .bind(next_status)
+    .bind(next_status.as_str())
     .bind(actor_kind)
     .bind(actor_id)
     .fetch_optional(pool)
     .await?;
-    Ok(row.as_ref().map(plan_from_row))
+    row.as_ref().map(plan_from_row).transpose()
 }
 
 /// Stores refreshed per-step results and the plan status after the review runs
@@ -160,43 +165,44 @@ pub async fn claim_assistant_plan(
 pub async fn update_assistant_plan_results(
     pool: &PgPool,
     plan_id: Uuid,
-    status: &str,
+    status: AssistantPlanStatus,
     results: &Value,
     error: Option<&str>,
 ) -> Result<AssistantPlanRecord, AssistantError> {
-    debug_assert!(matches!(status, "executed" | "failed"));
+    debug_assert!(matches!(status, AssistantPlanStatus::Executed | AssistantPlanStatus::Failed));
     let row = sqlx::query(concat!(
         "UPDATE assistant_plans SET status = $2, results = $3, error = $4
          WHERE id = $1 RETURNING ",
         columns!()
     ))
     .bind(plan_id)
-    .bind(status)
+    .bind(status.as_str())
     .bind(results)
     .bind(error)
     .fetch_one(pool)
     .await?;
-    Ok(plan_from_row(&row))
+    plan_from_row(&row)
 }
+
 
 pub async fn finish_assistant_plan(
     pool: &PgPool,
     plan_id: Uuid,
-    status: &str,
+    status: AssistantPlanStatus,
     results: &Value,
     error: Option<&str>,
 ) -> Result<AssistantPlanRecord, AssistantError> {
-    debug_assert!(matches!(status, "executed" | "failed"));
+    debug_assert!(matches!(status, AssistantPlanStatus::Executed | AssistantPlanStatus::Failed));
     let row = sqlx::query(concat!(
         "UPDATE assistant_plans SET status = $2, results = $3, error = $4
          WHERE id = $1 RETURNING ",
         columns!()
     ))
     .bind(plan_id)
-    .bind(status)
+    .bind(status.as_str())
     .bind(results)
     .bind(error)
     .fetch_one(pool)
     .await?;
-    Ok(plan_from_row(&row))
+    plan_from_row(&row)
 }

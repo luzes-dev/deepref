@@ -501,7 +501,7 @@ async fn enqueue_child(
             &deepref_app::job(
                 child.event_id,
                 event.payload.project_id.into(),
-                "work_fetch_requested",
+                deepref_domain::JobKind::WorkFetchRequested,
                 serde_json::to_value(&child)?,
                 format!("work_fetch:{}", child.event_id),
             ),
@@ -518,7 +518,7 @@ async fn emit_metrics_request(
     let revision: i64 = sqlx::query_scalar("UPDATE projects SET metric_requested_revision=metric_requested_revision+1 WHERE id=$1 RETURNING metric_requested_revision")
         .bind(event.payload.project_id).fetch_one(&mut **tx).await?;
     deepref_app::enqueue_job(tx, &deepref_app::job(
-        Uuid::new_v4(), event.payload.project_id.into(), "recompute_metrics",
+        Uuid::new_v4(), event.payload.project_id.into(), deepref_domain::JobKind::RecomputeMetrics,
         serde_json::json!({"project_id":event.payload.project_id,"revision":revision}),
         format!("recompute_metrics:{}:{revision}",event.payload.project_id),
     )).await?;

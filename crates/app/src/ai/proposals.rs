@@ -9,7 +9,7 @@ pub struct AiProposalCursor {
 
 #[derive(Debug, Clone, Copy)]
 pub struct AiProposalFilters<'a> {
-    pub status: Option<&'a str>,
+    pub status: Option<ProposalStatus>,
     pub task_kind: Option<&'a str>,
     pub target_report_id: Option<Uuid>,
     pub target_record_id: Option<Uuid>,
@@ -75,12 +75,7 @@ pub async fn list_ai_proposals(
     cursor: Option<AiProposalCursor>,
     limit: i64,
 ) -> Result<Vec<AiProposalRecord>, AiProposalError> {
-    let status = filters.status.unwrap_or("pending");
-    if !matches!(status, "pending" | "accepted" | "rejected" | "expired") {
-        return Err(AiProposalError::InvalidPayload(
-            "status is invalid".to_owned(),
-        ));
-    }
+    let status = filters.status.unwrap_or(ProposalStatus::Pending);
     let query = format!(
         "{AI_PROPOSAL_SELECT}
          AND p.status=$2 AND ($3::text IS NULL OR p.task_kind=$3)
@@ -95,7 +90,7 @@ pub async fn list_ai_proposals(
     );
     let rows = sqlx::query(sqlx::AssertSqlSafe(query))
         .bind(project_id)
-        .bind(status)
+        .bind(status.as_str())
         .bind(filters.task_kind)
         .bind(filters.target_report_id)
         .bind(filters.target_record_id)
@@ -144,7 +139,7 @@ pub async fn decide_ai_proposal(
         .await?
         .ok_or(AiProposalError::NotFound)?;
     let proposal = proposal_record_from_row(row).map_err(AiProposalError::InvalidPayload)?;
-    if proposal.status != "pending" {
+    if proposal.status != ProposalStatus::Pending {
         return Err(AiProposalError::NotPending);
     }
 
@@ -230,8 +225,8 @@ pub async fn decide_ai_proposal(
     }
 
     let status = match request.decision {
-        AiProposalDecision::Accept => "accepted",
-        AiProposalDecision::Reject => "rejected",
+        AiProposalDecision::Accept => ProposalStatus::Accepted,
+        AiProposalDecision::Reject => ProposalStatus::Rejected,
     };
     let updated = sqlx::query(
         "UPDATE ai_proposals
@@ -241,7 +236,7 @@ pub async fn decide_ai_proposal(
     )
     .bind(request.project_id)
     .bind(request.proposal_id)
-    .bind(status)
+    .bind(status.as_str())
     .bind(request.actor.kind().as_str())
     .bind(request.actor.id())
     .bind(&request.reason)
@@ -271,7 +266,7 @@ pub async fn decide_ai_proposal(
     tx.commit().await?;
     Ok(AiProposalResolution {
         proposal_id: request.proposal_id,
-        status: status.to_owned(),
+        status,
         target_report_id: proposal.target_report_id,
         target_record_id: proposal.target_record_id,
         applied_revision,

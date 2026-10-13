@@ -29,9 +29,9 @@ pub async fn serve_with_shutdown(
         .map_err(|error| anyhow::anyhow!("invalid shipped appraisal definition: {error}"))?;
     let pool = database_pool(&config).await?;
 
-    let document_store = deepref_documents::DocumentStore::from_env()?;
-    let mut state = AppState::new(pool.clone()).with_document_store(document_store);
-    let ai_config = deepref_config::AiProviderConfig::from_env()?;
+    let document_store = deepref_documents::DocumentStore::from_config(&config.documents)?;
+    let mut state = AppState::new(pool.clone()).with_document_store(document_store).with_smtp(config.runtime.smtp.clone());
+    let ai_config = &config.runtime.ai;
     for notice in ai_config.deprecations() {
         tracing::warn!("{notice}");
     }
@@ -43,7 +43,7 @@ pub async fn serve_with_shutdown(
                 &ai_config.base_url,
                 api_key,
                 std::sync::Arc::new(deepref_app::PostgresUsageLedger::new(&pool)),
-                price_book(&ai_config),
+                price_book(ai_config),
             )?;
             let routes = deepref_app::ensure_default_model_routes(
                 &pool,

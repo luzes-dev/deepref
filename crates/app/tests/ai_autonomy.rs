@@ -124,7 +124,7 @@ async fn second_reviewer_disagreement_becomes_a_conflict_until_a_person_resolves
             decision: "include".to_owned(),
             rationale: "Matches the population.".to_owned(),
             evidence: serde_json::json!([{"label": "Abstract", "quote": "adults with asthma"}]),
-            source: "ai",
+            source: deepref_review::ReviewerSource::Ai,
             proposal_id: None,
             ai_run_id: None,
             model: Some("test".to_owned()),
@@ -139,7 +139,7 @@ async fn second_reviewer_disagreement_becomes_a_conflict_until_a_person_resolves
         .await
         .expect("list");
     assert_eq!(rows.len(), 1);
-    assert_eq!(rows[0].status, "waiting");
+    assert_eq!(rows[0].status, deepref_review::ReviewerStatus::Waiting);
 
     // A human screening state that disagrees creates a conflict.
     sqlx::query(

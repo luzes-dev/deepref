@@ -137,7 +137,7 @@ pub async fn enqueue_metrics_recompute(
         &crate::jobs::job(
             job_id,
             ProjectId::new(project_id),
-            "recompute_metrics",
+            deepref_domain::JobKind::RecomputeMetrics,
             payload,
             format!("recompute_metrics:{project_id}:{revision}"),
         ),

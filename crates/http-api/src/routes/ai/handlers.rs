@@ -33,11 +33,19 @@ pub(crate) async fn list_ai_proposals(
     };
     let limit = pagination.limit()?;
     let cursor = pagination.decode::<(DateTime<Utc>, Uuid)>()?;
+    let status = params
+        .status
+        .as_deref()
+        .map(|value| {
+            deepref_ai::ProposalStatus::parse(value)
+                .ok_or_else(|| ApiError::BadRequest("status is invalid".to_owned()))
+        })
+        .transpose()?;
     let proposals = deepref_app::list_ai_proposals(
         &state.pool,
         project_id,
         deepref_app::AiProposalFilters {
-            status: params.status.as_deref(),
+            status,
             task_kind: params.task_kind.as_deref(),
             target_report_id: params.target_report_id,
             target_record_id: params.target_record_id,

@@ -778,7 +778,8 @@ pub(super) fn proposal_record_from_row(
         model_version: row.get("model_version"),
         prompt_version: row.get("prompt_version"),
         schema_version: row.get("schema_version"),
-        status: row.get("status"),
+        status: ProposalStatus::parse(&row.get::<String, _>("status"))
+            .ok_or_else(|| "stored proposal status is invalid".to_owned())?,
         protocol_version_id: row.get("protocol_version_id"),
         expected_revision: row.get("expected_revision"),
         target_report_id: row.get("target_report_id"),

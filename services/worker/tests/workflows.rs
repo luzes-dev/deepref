@@ -59,7 +59,7 @@ async fn drain(pool: &PgPool, project: Uuid) {
             "unexpected job from another project"
         );
         assert_eq!(job.kind, "workflow_step");
-        match workflows::handle_step(pool, &job, &job.lease("workflow-test"), None)
+        match workflows::handle_step(pool, &job, &job.lease("workflow-test"), None, &deepref_config::RuntimeConfig::from_source("workflow-test", &|name| (name == "APP_ENV").then(|| "local".into())).expect("local runtime configuration"))
             .await
             .expect("step")
         {
@@ -150,11 +150,11 @@ async fn trigger_filter_notification_runs_and_dry_runs() {
     let run = get_workflow_run(&pool, project, started.run_id)
         .await
         .expect("run");
-    assert_eq!(run.status, "completed", "{:?}", run.error);
+    assert_eq!(run.status, deepref_application::workflows::WorkflowRunStatus::Completed, "{:?}", run.error);
     let statuses: Vec<(String, String)> = run
         .nodes
         .iter()
-        .map(|n| (n.node_id.clone(), n.status.clone()))
+        .map(|n| (n.node_id.clone(), n.status.as_str().to_owned()))
         .collect();
     assert!(
         statuses.contains(&("recent".to_owned(), "completed".to_owned())),
@@ -205,7 +205,7 @@ async fn trigger_filter_notification_runs_and_dry_runs() {
     let run = get_workflow_run(&pool, project, test.run_id)
         .await
         .expect("test run detail");
-    assert_eq!(run.status, "completed");
+    assert_eq!(run.status, deepref_application::workflows::WorkflowRunStatus::Completed);
     let note = run
         .nodes
         .iter()
@@ -289,17 +289,17 @@ async fn filter_with_no_match_skips_the_rest_and_for_each_fans_out() {
     let run = get_workflow_run(&pool, project, started.run_id)
         .await
         .expect("run");
-    assert_eq!(run.status, "completed", "{:?}", run.error);
+    assert_eq!(run.status, deepref_application::workflows::WorkflowRunStatus::Completed, "{:?}", run.error);
     let tells = run
         .nodes
         .iter()
-        .filter(|n| n.node_id == "tell" && n.status == "completed")
+        .filter(|n| n.node_id == "tell" && n.status == deepref_application::workflows::NodeRunState::Completed)
         .count();
     assert_eq!(tells, 3);
     assert!(
         run.nodes
             .iter()
-            .any(|n| n.node_id == "done" && n.status == "completed")
+            .any(|n| n.node_id == "done" && n.status == deepref_application::workflows::NodeRunState::Completed)
     );
     let titles: Vec<String> =
         sqlx::query_scalar("SELECT title FROM notifications WHERE project_id=$1 ORDER BY title")
@@ -405,7 +405,7 @@ async fn a_failed_run_is_recorded_once_and_a_test_run_stays_silent() {
     let run = get_workflow_run(&pool, project, started.run_id)
         .await
         .expect("run");
-    assert_eq!(run.status, "failed", "{:?}", run.error);
+    assert_eq!(run.status, deepref_application::workflows::WorkflowRunStatus::Failed, "{:?}", run.error);
 
     let rows = run_failure_rows(&pool, started.run_id).await;
     assert_eq!(rows.len(), 1, "exactly one notification for the failed run");
@@ -469,7 +469,7 @@ async fn a_failed_run_is_recorded_once_and_a_test_run_stays_silent() {
     let test_run = get_workflow_run(&pool, project, test.run_id)
         .await
         .expect("test run");
-    assert_eq!(test_run.status, "failed");
+    assert_eq!(test_run.status, deepref_application::workflows::WorkflowRunStatus::Failed);
     assert!(
         run_failure_rows(&pool, test.run_id).await.is_empty(),
         "a test run must not notify"
@@ -591,7 +591,7 @@ async fn a_waiting_step_is_looked_at_later_and_a_lost_look_fails_it() {
         .run_id;
     let node_run_id = defer_queued_step(&pool, project).await;
     let step = notify_step(&pool, project, first).await;
-    assert_eq!(step.status, "queued");
+    assert_eq!(step.status, deepref_application::workflows::NodeRunState::Queued);
     assert_eq!(step.note.as_deref(), Some("Waiting for the AI."));
     let saved: Option<Value> =
         sqlx::query_scalar("SELECT wait_state FROM workflow_node_runs WHERE id=$1")
@@ -622,8 +622,8 @@ async fn a_waiting_step_is_looked_at_later_and_a_lost_look_fails_it() {
         .expect("make due");
     drain(&pool, project.as_uuid()).await;
     let run = get_workflow_run(&pool, project, first).await.expect("run");
-    assert_eq!(run.status, "completed", "{:?}", run.error);
-    assert_eq!(notify_step(&pool, project, first).await.status, "completed");
+    assert_eq!(run.status, deepref_application::workflows::WorkflowRunStatus::Completed, "{:?}", run.error);
+    assert_eq!(notify_step(&pool, project, first).await.status, deepref_application::workflows::NodeRunState::Completed);
     assert_eq!(workflow_notifications(&pool, project.as_uuid()).await, 1);
 
     // Run two: its look dies. The reaper fails the step, so the run ends.
@@ -639,8 +639,8 @@ async fn a_waiting_step_is_looked_at_later_and_a_lost_look_fails_it() {
         .expect("kill the look");
     assert!(fail_abandoned_steps(&pool).await.expect("reap") >= 1);
     let run = get_workflow_run(&pool, project, second).await.expect("run");
-    assert_eq!(run.status, "failed");
-    assert_eq!(notify_step(&pool, project, second).await.status, "failed");
+    assert_eq!(run.status, deepref_application::workflows::WorkflowRunStatus::Failed);
+    assert_eq!(notify_step(&pool, project, second).await.status, deepref_application::workflows::NodeRunState::Failed);
     assert_eq!(workflow_notifications(&pool, project.as_uuid()).await, 1);
 
     sqlx::query("DELETE FROM projects WHERE id=$1")
@@ -722,10 +722,15 @@ async fn concurrent_handle_step_calls_on_one_node_execute_once() {
     let project = new_project(&pool, "wf-fence-concurrent").await;
     let (run_id, node_run_id, job) = claimed_notify_step(&pool, project, "fence-worker").await;
     let lease = job.lease("fence-worker");
+    let runtime = deepref_config::RuntimeConfig::from_source(
+        "workflow-test",
+        &|name| (name == "APP_ENV").then(|| "local".into()),
+    )
+    .expect("local runtime configuration");
 
     let (left, right) = tokio::join!(
-        workflows::handle_step(&pool, &job, &lease, None),
-        workflows::handle_step(&pool, &job, &lease, None),
+        workflows::handle_step(&pool, &job, &lease, None, &runtime),
+        workflows::handle_step(&pool, &job, &lease, None, &runtime),
     );
     assert_eq!(left.expect("left"), DeliveryAction::Ack);
     assert_eq!(right.expect("right"), DeliveryAction::Ack);
@@ -741,7 +746,7 @@ async fn concurrent_handle_step_calls_on_one_node_execute_once() {
         "the side effect must happen once"
     );
     let run = get_workflow_run(&pool, project, run_id).await.expect("run");
-    assert_eq!(run.status, "completed", "{:?}", run.error);
+    assert_eq!(run.status, deepref_application::workflows::WorkflowRunStatus::Completed, "{:?}", run.error);
 }
 
 /// After the same worker reclaims an expired step job, the stale attempt can
@@ -782,7 +787,7 @@ async fn a_stale_attempt_cannot_restart_or_overwrite_a_reclaimed_step() {
     )
     .await
     .expect("expired retry");
-    assert_eq!(notify_step(&pool, project, run_id).await.status, "running");
+    assert_eq!(notify_step(&pool, project, run_id).await.status, deepref_application::workflows::NodeRunState::Running);
     assert_eq!(
         deepref_app::recover_expired_jobs(&pool)
             .await
@@ -800,15 +805,20 @@ async fn a_stale_attempt_cannot_restart_or_overwrite_a_reclaimed_step() {
         .expect("reclaimed");
     assert_eq!(second.id, first.id);
     let live = second.lease("fence-worker");
+    let runtime = deepref_config::RuntimeConfig::from_source(
+        "workflow-test",
+        &|name| (name == "APP_ENV").then(|| "local".into()),
+    )
+    .expect("local runtime configuration");
     assert_eq!(
-        workflows::handle_step(&pool, &second, &live, None)
+        workflows::handle_step(&pool, &second, &live, None, &runtime)
             .await
             .expect("live attempt"),
         DeliveryAction::Ack
     );
     assert_eq!(
         notify_step(&pool, project, run_id).await.status,
-        "completed"
+        deepref_application::workflows::NodeRunState::Completed
     );
 
     // The stale attempt wakes up: it may not restart the block...
@@ -832,7 +842,7 @@ async fn a_stale_attempt_cannot_restart_or_overwrite_a_reclaimed_step() {
     assert!(!overwritten, "a stale finish must be a no-op");
     assert_eq!(
         notify_step(&pool, project, run_id).await.status,
-        "completed"
+        deepref_application::workflows::NodeRunState::Completed
     );
     assert_eq!(workflow_notifications(&pool, project.as_uuid()).await, 1);
 }

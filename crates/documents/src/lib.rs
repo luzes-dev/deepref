@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use deepref_config::{DocumentConfig, DocumentStorageBackend, DEFAULT_MAX_DOCUMENT_BYTES};
 use std::sync::Arc;
 
 use bytes::{Buf, Bytes, BytesMut};
@@ -28,8 +28,6 @@ pub use remote::{
 pub use structure::is_caption as is_caption_text;
 
 pub const PARSER_VERSION: &str = "deepref-pdfium-0.9-v4";
-pub const DEFAULT_MAX_DOCUMENT_BYTES: usize = 25 * 1024 * 1024;
-pub const MAX_DOCUMENT_BYTES: usize = 100 * 1024 * 1024;
 
 #[derive(Debug, Error)]
 pub enum StoreConfigError {
@@ -37,8 +35,6 @@ pub enum StoreConfigError {
     ObjectStore(#[from] object_store::Error),
     #[error("document storage configuration is invalid: {0}")]
     Invalid(&'static str),
-    #[error("required document storage setting is missing: {0}")]
-    Missing(&'static str),
     #[error("document storage root could not be initialized: {0}")]
     Initialization(String),
 }
@@ -96,70 +92,6 @@ impl StoreConfig {
             inner: Arc::new(store),
         })
     }
-
-    pub fn from_env() -> Result<Self, StoreConfigError> {
-        Self::from_values(&std::env::vars().collect())
-    }
-
-    fn from_values(values: &HashMap<String, String>) -> Result<Self, StoreConfigError> {
-        let is_local = values
-            .get("APP_ENV")
-            .map(|value| value.trim().eq_ignore_ascii_case("local"))
-            .unwrap_or(false);
-        let backend = values
-            .get("DOCUMENT_STORAGE_BACKEND")
-            .map(|value| value.trim().to_ascii_lowercase())
-            .or_else(|| is_local.then_some("local".to_owned()))
-            .ok_or(StoreConfigError::Missing("DOCUMENT_STORAGE_BACKEND"))?;
-
-        match backend.as_str() {
-            "local" if is_local => Self::local(
-                values
-                    .get("DOCUMENT_STORAGE_ROOT")
-                    .map(String::as_str)
-                    .unwrap_or("/tmp/deepref-documents"),
-            ),
-            "local" => Err(StoreConfigError::Invalid(
-                "DOCUMENT_STORAGE_BACKEND=local is allowed only when APP_ENV=local",
-            )),
-            "s3" => Self::s3(
-                required_value(values, "DOCUMENT_STORAGE_ENDPOINT")?,
-                required_value(values, "DOCUMENT_STORAGE_BUCKET")?,
-                required_value(values, "DOCUMENT_STORAGE_REGION")?,
-                required_value(values, "DOCUMENT_STORAGE_ACCESS_KEY_ID")?,
-                required_value(values, "DOCUMENT_STORAGE_SECRET_ACCESS_KEY")?,
-            ),
-            _ => Err(StoreConfigError::Invalid("DOCUMENT_STORAGE_BACKEND")),
-        }
-    }
-}
-
-fn required_value<'a>(
-    values: &'a HashMap<String, String>,
-    name: &'static str,
-) -> Result<&'a str, StoreConfigError> {
-    values
-        .get(name)
-        .map(String::as_str)
-        .filter(|value| !value.trim().is_empty())
-        .ok_or(StoreConfigError::Missing(name))
-}
-
-pub fn document_max_bytes_from_env() -> Result<usize, StoreConfigError> {
-    let value = std::env::var("DOCUMENT_MAX_BYTES")
-        .unwrap_or_else(|_| DEFAULT_MAX_DOCUMENT_BYTES.to_string());
-    parse_document_max_bytes(&value)
-}
-
-fn parse_document_max_bytes(value: &str) -> Result<usize, StoreConfigError> {
-    let parsed = value
-        .trim()
-        .parse::<usize>()
-        .map_err(|_| StoreConfigError::Invalid("DOCUMENT_MAX_BYTES"))?;
-    if parsed == 0 || parsed > MAX_DOCUMENT_BYTES {
-        return Err(StoreConfigError::Invalid("DOCUMENT_MAX_BYTES"));
-    }
-    Ok(parsed)
 }
 
 #[derive(Clone)]
@@ -177,10 +109,14 @@ impl std::fmt::Debug for DocumentStore {
 }
 
 impl DocumentStore {
-    pub fn from_env() -> Result<Self, StoreConfigError> {
-        let config = StoreConfig::from_env()?;
-        let max_bytes = document_max_bytes_from_env()?;
-        Ok(Self::new(config, max_bytes))
+    pub fn from_config(config: &DocumentConfig) -> Result<Self, StoreConfigError> {
+        let store = match &config.backend {
+            DocumentStorageBackend::Local { root } => StoreConfig::local(root)?,
+            DocumentStorageBackend::S3 {
+                endpoint, bucket, region, access_key_id, secret_access_key,
+            } => StoreConfig::s3(endpoint, bucket, region, access_key_id, secret_access_key)?,
+        };
+        Ok(Self::new(store, config.max_bytes))
     }
 
     pub fn from_object_store(store: Arc<dyn ObjectStoreTrait>) -> Self {
@@ -680,31 +616,16 @@ mod tests {
     }
 
     #[test]
-    fn hosted_storage_requires_s3_and_document_limits_are_bounded() {
-        assert!(StoreConfig::from_values(&HashMap::new()).is_err());
-        let hosted = HashMap::from([(String::from("APP_ENV"), String::from("production"))]);
-        assert!(matches!(
-            StoreConfig::from_values(&hosted),
-            Err(StoreConfigError::Missing("DOCUMENT_STORAGE_BACKEND"))
-        ));
-
-        let local = HashMap::from([
-            (String::from("APP_ENV"), String::from("local")),
-            (
-                String::from("DOCUMENT_STORAGE_BACKEND"),
-                String::from("local"),
-            ),
-            (
-                String::from("DOCUMENT_STORAGE_ROOT"),
-                String::from("/tmp/deepref-documents-test"),
-            ),
-        ]);
-        assert!(StoreConfig::from_values(&local).is_ok());
-        assert!(parse_document_max_bytes("0").is_err());
-        assert!(parse_document_max_bytes(&(MAX_DOCUMENT_BYTES + 1).to_string()).is_err());
-        assert_eq!(
-            parse_document_max_bytes("26214400").unwrap(),
-            25 * 1024 * 1024
-        );
+    fn configured_local_store_uses_injected_source() {
+        let root = std::env::temp_dir().join(format!("deepref-configured-store-{}", Uuid::new_v4()));
+        let config = DocumentConfig::from_source(&|name| match name {
+            "APP_ENV" => Some("local".into()),
+            "DOCUMENT_STORAGE_ROOT" => Some(root.to_string_lossy().into_owned()),
+            "DOCUMENT_MAX_BYTES" => Some("1024".into()),
+            _ => None,
+        }).unwrap();
+        let store = DocumentStore::from_config(&config).unwrap();
+        assert_eq!(store.max_bytes(), 1024);
+        std::fs::remove_dir_all(root).unwrap();
     }
 }

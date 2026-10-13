@@ -6,15 +6,13 @@
 use std::collections::HashSet;
 
 use deepref_application::{AutomationDomainEvent, RawRecord};
-use deepref_domain::ProjectId;
+use deepref_domain::{AcquisitionStatus, ProjectId};
 use serde_json::json;
 use sqlx::{PgPool, Postgres, Row, Transaction};
 use uuid::Uuid;
 
 use crate::acquisition::{AcquisitionError, insert_raw_record};
 
-/// Durable job kind that fetches the queued PMIDs of one run.
-pub const PMID_IMPORT_JOB_KIND: &str = "pmid_import";
 /// Acquisition strategy of a PubMed ID run.
 pub const PMID_IMPORT_STRATEGY: &str = "pmid_import";
 /// Source of the records a PubMed ID run saves. File imports use `import:<format>`.
@@ -38,6 +36,17 @@ impl PmidItemStatus {
             Self::AlreadyInProject => "already_in_project",
             Self::NotFound => "not_found",
             Self::Failed => "failed",
+        }
+    }
+
+    pub fn parse(value: &str) -> Option<Self> {
+        match value {
+            "queued" => Some(Self::Queued),
+            "imported" => Some(Self::Imported),
+            "already_in_project" => Some(Self::AlreadyInProject),
+            "not_found" => Some(Self::NotFound),
+            "failed" => Some(Self::Failed),
+            _ => None,
         }
     }
 }
@@ -136,9 +145,9 @@ pub async fn create_pmid_import(
         &crate::jobs::job(
             Uuid::new_v4(),
             ProjectId::new(request.project_id),
-            PMID_IMPORT_JOB_KIND,
+            deepref_domain::JobKind::PmidImport,
             json!({ "project_id": request.project_id, "acquisition_id": run_id }),
-            format!("{PMID_IMPORT_JOB_KIND}:{run_id}"),
+            format!("pmid_import:{run_id}"),
         ),
     )
     .await
@@ -155,7 +164,7 @@ pub async fn create_pmid_import(
 pub struct PmidRun {
     pub run_id: Uuid,
     pub project_id: Uuid,
-    pub status: String,
+    pub status: AcquisitionStatus,
 }
 
 pub async fn load_pmid_run(pool: &PgPool, run_id: Uuid) -> Result<Option<PmidRun>, sqlx::Error> {
@@ -166,11 +175,18 @@ pub async fn load_pmid_run(pool: &PgPool, run_id: Uuid) -> Result<Option<PmidRun
     .bind(PMID_IMPORT_STRATEGY)
     .fetch_optional(pool)
     .await?;
-    Ok(row.map(|row| PmidRun {
-        run_id: row.get("id"),
-        project_id: row.get("project_id"),
-        status: row.get("status"),
-    }))
+    row.map(|row| {
+        let value: &str = row.try_get("status")?;
+        let status = AcquisitionStatus::parse(value).ok_or_else(|| sqlx::Error::ColumnDecode {
+            index: "status".to_owned(),
+            source: format!("invalid persisted acquisition status: {value}").into(),
+        })?;
+        Ok(PmidRun {
+            run_id: row.get("id"),
+            project_id: row.get("project_id"),
+            status,
+        })
+    }).transpose()
 }
 
 /// Marks a queued run as running. A run that is already running is left as it is.

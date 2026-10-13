@@ -109,7 +109,7 @@ pub use assistant_plans::{
     update_assistant_plan_results,
 };
 pub use assistant_runs::{
-    ASSISTANT_AGENT_RUN_JOB_KIND, AssistantAgentRunRecord, AssistantAgentRunStatus,
+    AssistantAgentRunRecord,
     AssistantRunEventRecord, ClaimedAssistantAgentRun, CompletedAssistantAgentRun,
     NewAssistantAgentRun, append_assistant_run_event, begin_assistant_agent_run,
     complete_assistant_agent_run, create_assistant_agent_run, fail_assistant_agent_run,
@@ -129,7 +129,7 @@ pub use autonomy::{
 };
 pub use deduplication::{
     DedupeError, DedupeProposal, DedupeProposalCursor, DedupeRunRequest, DedupeRunSummary,
-    IMPORT_DEDUPLICATION_JOB_KIND, ProposalDecisionRequest, ResolutionResult, decide_proposal,
+    ProposalDecisionRequest, ResolutionResult, decide_proposal,
     enqueue_import_deduplication, list_proposals, resolve_record, run_deduplication,
 };
 pub use documents::{
@@ -169,7 +169,7 @@ pub use persistence::{
     with_retry,
 };
 pub use pmid_import::{
-    PMID_IMPORT_JOB_KIND, PMID_IMPORT_SOURCE, PMID_IMPORT_STRATEGY, PmidImportRequest,
+    PMID_IMPORT_SOURCE, PMID_IMPORT_STRATEGY, PmidImportRequest,
     PmidImportResult, PmidItemStatus, PmidOutcome, PmidRun, PmidRunCounts, complete_pmid_run,
     create_pmid_import, load_pmid_run, pmid_run_counts, pmids_in_project, queued_pmids,
     save_pmid_outcomes, start_pmid_run,
@@ -182,7 +182,7 @@ pub use protocol::{
 };
 pub use review_calibration::{
     CalibrationRefusal, ReviewCalibrationBundleInput, ReviewCalibrationError,
-    ReviewCalibrationStatus, insert_review_calibration_bundle,
+    insert_review_calibration_bundle,
 };
 pub use review_completion::{
     ReviewOutcome, ReviewOutcomeCompletion, bind_review_step_acceptance, complete_review_attempt,

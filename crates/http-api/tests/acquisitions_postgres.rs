@@ -75,12 +75,10 @@ fn api_config() -> ApiConfig {
         &HashMap::from([("APP_ENV".to_owned(), "local".to_owned())]),
     )
     .expect("local test runtime should parse");
-    ApiConfig {
-        runtime,
-        bind_addr: "127.0.0.1:0".parse().unwrap(),
-        cors_allow_any: false,
-        cors_origins: vec!["http://localhost:3000".parse().unwrap()],
-    }
+    ApiConfig { documents: deepref_config::DocumentConfig::from_source(&|name| (name == "APP_ENV").then(|| "local".into())).expect("local test document configuration"), runtime,
+    bind_addr: "127.0.0.1:0".parse().unwrap(),
+    cors_allow_any: false,
+    cors_origins: vec!["http://localhost:3000".parse().unwrap()], }
 }
 
 async fn call(pool: &PgPool, request: Request<Body>) -> Response<Body> {

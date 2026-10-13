@@ -13,50 +13,13 @@
 //! Terminal redeliveries settle nothing and append nothing.
 
 use chrono::{DateTime, Utc};
+use deepref_ai::AssistantAgentRunStatus;
 use serde_json::{Value, json};
 use sqlx::{PgPool, Postgres, Row, Transaction, postgres::PgRow};
 use uuid::Uuid;
 
 use crate::{AppendAssistantMessage, AssistantError, AssistantMessageRecord, NewAssistantPlan};
 
-/// Assistant agent job kind in the durable PostgreSQL job queue.
-pub const ASSISTANT_AGENT_RUN_JOB_KIND: &str = "assistant_agent_run";
-
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum AssistantAgentRunStatus {
-    Queued,
-    Running,
-    Completed,
-    Failed,
-    Cancelled,
-}
-
-impl AssistantAgentRunStatus {
-    pub const fn as_str(self) -> &'static str {
-        match self {
-            Self::Queued => "queued",
-            Self::Running => "running",
-            Self::Completed => "completed",
-            Self::Failed => "failed",
-            Self::Cancelled => "cancelled",
-        }
-    }
-
-    fn parse(value: &str) -> Option<Self> {
-        match value {
-            "queued" => Some(Self::Queued),
-            "running" => Some(Self::Running),
-            "completed" => Some(Self::Completed),
-            "failed" => Some(Self::Failed),
-            "cancelled" => Some(Self::Cancelled),
-            _ => None,
-        }
-    }
-
-    pub const fn terminal(self) -> bool {
-        matches!(self, Self::Completed | Self::Failed | Self::Cancelled)
-    }
-}
 
 #[derive(Debug, Clone)]
 pub struct NewAssistantAgentRun {
@@ -240,7 +203,7 @@ pub async fn submit_assistant_agent_run(
         &crate::jobs::job(
             Uuid::new_v4(),
             deepref_domain::ProjectId::new(project_id),
-            ASSISTANT_AGENT_RUN_JOB_KIND,
+            deepref_domain::JobKind::AssistantAgentRun,
             serde_json::json!({ "assistant_run_id": run_id }),
             format!("assistant-run:{run_id}"),
         ),

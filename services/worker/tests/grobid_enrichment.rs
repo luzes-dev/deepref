@@ -12,7 +12,8 @@ async fn enriches_a_real_pdf() {
     let url = std::env::var("GROBID_URL").expect("GROBID_URL");
     let path = std::env::var("GROBID_TEST_PDF").expect("GROBID_TEST_PDF");
     let bytes = std::fs::read(&path).unwrap();
-    let parsed = deepref_documents::parse_pdf_file(std::path::Path::new(&path)).unwrap();
+    let pdf = deepref_config::PdfConfig::from_source(&|name| std::env::var(name).ok());
+    let parsed = deepref_documents::parse_pdf_file(std::path::Path::new(&path), &pdf).unwrap();
     let client = GrobidClient::new(GrobidConfig::new(url)).unwrap();
     assert!(client.is_alive().await);
     let tei = client.process_fulltext(&bytes).await.unwrap();

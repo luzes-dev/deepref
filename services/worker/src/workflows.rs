@@ -111,6 +111,7 @@ pub async fn handle_step(
     job: &ClaimedJob,
     lease: &JobLease,
     ai_gateway: Option<Arc<dyn AiGateway>>,
+    runtime: &deepref_config::RuntimeConfig,
 ) -> anyhow::Result<DeliveryAction> {
     let payload: StepPayload = serde_json::from_value(job.payload.clone())?;
     let execution = match begin_node_execution(pool, payload.node_run_id, lease).await? {
@@ -121,6 +122,7 @@ pub async fn handle_step(
         pool,
         ai: ai_gateway.as_deref(),
         execution: &execution,
+        runtime,
     };
     let finished = match nodes::execute(&context).await {
         Ok(outcome) => finish_node_execution(pool, payload.node_run_id, lease, outcome).await?,
