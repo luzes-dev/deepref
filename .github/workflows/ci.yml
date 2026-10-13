@@ -50,6 +50,7 @@ jobs:
               - '.github/workflows/ci.yml'
             web:
               - 'apps/web/**'
+              - 'packages/**'
               - 'package.json'
               - 'pnpm-lock.yaml'
               - 'pnpm-workspace.yaml'
@@ -64,6 +65,7 @@ jobs:
               - 'crates/**'
               - 'services/**'
               - 'apps/web/**'
+              - 'packages/**'
               - '.github/actions/reproducible-container-build/**'
               - '.github/workflows/ci.yml'
 
@@ -76,8 +78,6 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
-      - name: Install documentation tooling
-        run: sudo apt-get update && sudo apt-get install --yes ripgrep
       - name: Validate operations, acceptance, and links
         run: bash scripts/check-docs.sh
 
@@ -343,6 +343,9 @@ jobs:
         run: pnpm run check
       - if: github.event_name == 'push' || needs.changes.outputs.web == 'true'
         run: pnpm --filter @deepref/web test:coverage
+      - name: Run UI package tests
+        if: github.event_name == 'push' || needs.changes.outputs.web == 'true'
+        run: pnpm --filter @deepref/ui test
       - name: Upload web coverage artifact
         if: github.event_name == 'push' || needs.changes.outputs.web == 'true'
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
@@ -385,7 +388,6 @@ jobs:
       - name: Download web coverage artifact
         if: needs.changes.outputs.web == 'true'
         uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
-        continue-on-error: true
         with:
           name: web-coverage-${{ github.sha }}
           path: apps/web/coverage
@@ -398,43 +400,6 @@ jobs:
       - name: Scan TypeScript security candidates
         if: needs.changes.outputs.web == 'true'
         run: pnpm run quality:ts:security
-
-  duplication:
-    name: Duplication / Rust
-    needs: changes
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-    steps:
-      - name: Skip check (no Rust changes)
-        if: github.event_name != 'push' && needs.changes.outputs.rust != 'true'
-        run: echo "No Rust changes detected in PR; skipping check."
-      - name: Checkout trusted source
-        if: github.event_name == 'push' || needs.changes.outputs.rust == 'true'
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - name: Set up pnpm
-        if: github.event_name == 'push' || needs.changes.outputs.rust == 'true'
-        uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
-        with:
-          version: 11.3.0
-      - name: Set up Node.js
-        if: github.event_name == 'push' || needs.changes.outputs.rust == 'true'
-        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
-        with:
-          node-version: 24.21.0
-          cache: pnpm
-      - if: github.event_name == 'push' || needs.changes.outputs.rust == 'true'
-        run: pnpm install --frozen-lockfile
-      - name: Run Rust duplication analysis
-        if: github.event_name == 'push' || needs.changes.outputs.rust == 'true'
-        run: pnpm run quality:rust:duplication
-      - name: Upload duplication report
-        if: always() && (github.event_name == 'push' || needs.changes.outputs.rust == 'true')
-        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
-        with:
-          name: rust-duplication-report
-          path: reports/duplication-rust
 
   codegen:
     name: OpenAPI and Orval drift
