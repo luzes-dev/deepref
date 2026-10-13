@@ -2,7 +2,7 @@ use std::{future::Future, pin::Pin};
 
 use bytes::Bytes;
 use deepref_domain::{
-    Actor, DocumentBlock, DocumentId, DocumentMetadata, DocumentSource, ProjectId, ReportId,
+    Actor, DocumentId, DocumentSource, ProjectId, ReportId,
 };
 use futures::Stream;
 use thiserror::Error;
@@ -42,15 +42,6 @@ pub trait DocumentStore: Send + Sync {
     fn delete_pdf<'a>(&'a self, id: DocumentStorageId) -> DocumentFuture<'a, ()>;
 }
 
-pub trait DocumentRepository: Send + Sync {
-    fn list<'a>(&'a self, query: DocumentListQuery) -> DocumentFuture<'a, Vec<DocumentMetadata>>;
-    fn detail<'a>(&'a self, query: DocumentDetailQuery) -> DocumentFuture<'a, DocumentMetadata>;
-    fn blocks<'a>(&'a self, query: DocumentDetailQuery) -> DocumentFuture<'a, Vec<DocumentBlock>>;
-}
-
-pub trait OcrEngine: Send + Sync {
-    fn enqueue<'a>(&'a self, document_id: DocumentId) -> DocumentFuture<'a, ()>;
-}
 
 #[derive(Debug, Error)]
 pub enum DocumentPortError {

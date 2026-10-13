@@ -557,19 +557,17 @@ async fn import_identifiers(context: &Context<'_>) -> NodeResult {
     let mut records = Vec::new();
     let mut unresolved = 0usize;
     if !dois.is_empty() {
-        let provider = deepref_providers::CrossrefProvider::new(settings.crossref_mailto.clone())
-            .map_err(|_| {
-            NodeError::permanent("The Crossref connection could not be prepared.")
-        })?;
+        let provider = deepref_integrations::CrossrefClient::new(settings.crossref_mailto.clone())
+            .map_err(|_| NodeError::permanent("The Crossref connection could not be prepared."))?;
         for doi in &dois {
             match provider.fetch_work_with_references(doi).await {
-                Ok(work) => records.push(deepref_providers::raw_record_from_crossref_work(work)),
+                Ok(work) => records.push(deepref_integrations::raw_record_from_crossref_work(work)),
                 Err(_) => unresolved += 1,
             }
         }
     }
     if !pmids.is_empty() {
-        let client = deepref_providers::PubmedClient::new(
+        let client = deepref_integrations::PubmedClient::new(
             net::trusted_client()?,
             settings.crossref_mailto.clone(),
         );
@@ -577,7 +575,7 @@ async fn import_identifiers(context: &Context<'_>) -> NodeResult {
         records.extend(
             articles
                 .iter()
-                .map(deepref_providers::PubmedArticle::to_raw_record),
+                .map(deepref_integrations::PubmedArticle::to_raw_record),
         );
     }
     if records.is_empty() {

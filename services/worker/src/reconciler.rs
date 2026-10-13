@@ -55,7 +55,7 @@ async fn repair_missing_work(pool: &PgPool) -> anyhow::Result<u64> {
         let payload = serde_json::json!({
             "schema_version": 1,
             "event_id": event_id,
-            "event_type": deepref_events::SUBJECT_WORK_FETCH_REQUESTED,
+            "event_type": deepref_domain::events::SUBJECT_WORK_FETCH_REQUESTED,
             "occurred_at": chrono::Utc::now(),
             "producer": "deepref.worker.reconciler",
             "correlation_id": ingestion_id,

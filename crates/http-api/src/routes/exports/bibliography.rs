@@ -260,7 +260,7 @@ fn bib_verbatim(value: &str) -> String {
 #[cfg(test)]
 mod tests {
     use deepref_domain::ImportFormat;
-    use deepref_providers::parse_import;
+    use deepref_integrations::parse_import;
 
     use super::super::sample_report;
     use super::{PublicationKind, render_reports_bib, render_reports_ris};

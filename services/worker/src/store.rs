@@ -1,8 +1,8 @@
 use std::time::Duration;
 
 use deepref_application::AutomationDomainEvent;
-use deepref_core::{IngestionItemStatus, IngestionStatus, Reference, WorkWithReferences};
-use deepref_events::{
+use deepref_domain::{IngestionItemStatus, IngestionStatus, Reference, WorkWithReferences};
+use deepref_domain::events::{
     CitationUpserted, DeadLetterRecord, DomainPayload, EntityType, EventEnvelope,
     MetricsRecomputeRequested, ProjectMembershipUpserted, SUBJECT_CITATION_UPSERTED, SUBJECT_DLQ,
     SUBJECT_METRICS_RECOMPUTE_REQUESTED, SUBJECT_PROJECT_MEMBERSHIP_UPSERTED,
@@ -581,7 +581,7 @@ async fn persist_unresolved(
     source: &str,
     reference: &Reference,
 ) -> anyhow::Result<()> {
-    let id = deepref_graph::unresolved_reference_id(source, reference);
+    let id = deepref_domain::graph::unresolved_reference_id(source, reference);
     sqlx::query(
         "INSERT INTO fetched_unresolved_reference_facts \
          (id,source_doi,raw_unstructured,article_title,author,year,volume,first_page) \

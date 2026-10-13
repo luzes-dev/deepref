@@ -42,7 +42,7 @@ Every change must uphold the following system invariants:
 | Subsystem | Frontend Location | Backend Location |
 | :--- | :--- | :--- |
 | **Articles Catalog** | [`ProjectArticlesView.svelte`](../apps/web/src/lib/features/projects/components/ProjectArticlesView.svelte)<br>[`ProjectWorkspace.svelte`](../apps/web/src/lib/features/projects/components/ProjectWorkspace.svelte)<br>[`context.svelte.ts`](../apps/web/src/lib/features/projects/context.svelte.ts) | [`crates/http-api/src/routes/articles.rs`](../crates/http-api/src/routes/articles.rs)<br>[`crates/postgres/src/`](../crates/postgres/src/) |
-| **Citation Graph** | [`project-graph-renderer.ts`](../apps/web/src/lib/features/projects/project-graph-renderer.ts)<br>[`ProjectGraphView.svelte`](../apps/web/src/lib/features/projects/components/ProjectGraphView.svelte) | [`crates/graph/src/`](../crates/graph/src/)<br>[`crates/http-api/src/routes/articles.rs`](../crates/http-api/src/routes/articles.rs)<br>`services/worker/src/processor.rs` |
+| **Citation Graph** | [`project-graph-renderer.ts`](../apps/web/src/lib/features/projects/project-graph-renderer.ts)<br>[`ProjectGraphView.svelte`](../apps/web/src/lib/features/projects/components/ProjectGraphView.svelte) | [`crates/domain/src/graph/`](../crates/domain/src/graph/)<br>[`crates/http-api/src/routes/articles.rs`](../crates/http-api/src/routes/articles.rs)<br>`services/worker/src/processor.rs` |
 | **Workflow Hub** | [`apps/web/src/lib/features/workflows/`](../apps/web/src/lib/features/workflows/)<br>`AutomationCenter.svelte`<br>`AutomationEditor.svelte` | [`crates/application/src/automations.rs`](../crates/application/src/automations.rs)<br>[`crates/postgres/src/automations.rs`](../crates/postgres/src/automations.rs)<br>[`crates/review/src/definition.rs`](../crates/review/src/definition.rs)<br>`services/worker/src/processor.rs` |
 | **Document Full-Text** | [`PdfViewer.svelte`](../apps/web/src/lib/features/full-text/components/PdfViewer.svelte)<br>[`PdfPage.svelte`](../apps/web/src/lib/features/full-text/components/PdfPage.svelte) | [`crates/documents/src/parser.rs`](../crates/documents/src/parser.rs)<br>[`crates/http-api/src/routes/documents.rs`](../crates/http-api/src/routes/documents.rs) |
 | **Screening Queue** | [`optimistic.ts`](../apps/web/src/lib/features/screening/optimistic.ts)<br>[`ScreeningFocus.svelte`](../apps/web/src/lib/features/screening/components/ScreeningFocus.svelte) | [`crates/http-api/src/routes/review.rs`](../crates/http-api/src/routes/review.rs)<br>[`crates/application/src/`](../crates/application/src/) |
@@ -93,7 +93,7 @@ In [`project-graph-renderer.ts:L820-L845`](../apps/web/src/lib/features/projects
 #### Target Implementation
 1. **Schema & Model Updates**:
    - In `crates/postgres/migrations/`, add `graph_layout_x DOUBLE PRECISION` and `graph_layout_y DOUBLE PRECISION` to `project_reports` (or a dedicated `project_graph_layouts` table keyed by `(project_id, report_id, projection_revision)`).
-   - In [`crates/graph/src/model.rs`](../crates/graph/src/model.rs), update `GraphNode` to include:
+   - In [`crates/domain/src/graph/model.rs`](../crates/domain/src/graph/model.rs), update `GraphNode` to include:
      ```rust
      pub x: Option<f64>,
      pub y: Option<f64>,

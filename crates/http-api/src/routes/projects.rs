@@ -4,7 +4,7 @@ use axum::{
     http::StatusCode,
 };
 use chrono::{DateTime, Utc};
-use deepref_events::{
+use deepref_domain::events::{
     DomainPayload, EntityType, EventEnvelope, ProjectTombstoned, SUBJECT_PROJECT_TOMBSTONED,
 };
 use serde::{Deserialize, Serialize};

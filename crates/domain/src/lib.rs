@@ -6,6 +6,15 @@ pub mod acquisition;
 pub mod bibliography;
 pub mod documents;
 pub mod protocol;
+pub mod events;
+pub mod graph;
+mod ingestion;
+mod reference;
+mod work;
+
+pub use ingestion::{IngestionItemStatus, IngestionStatus};
+pub use reference::Reference;
+pub use work::{FetchStatus, Work, WorkWithReferences};
 
 pub use acquisition::{AcquisitionRunId, AcquisitionSource, AcquisitionStatus, ImportFormat};
 pub use bibliography::{

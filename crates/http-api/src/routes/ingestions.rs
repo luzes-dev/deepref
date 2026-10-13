@@ -4,7 +4,7 @@ use axum::{
     http::StatusCode,
 };
 use chrono::{DateTime, Utc};
-use deepref_core::IngestionStatus;
+use deepref_domain::IngestionStatus;
 use serde::{Deserialize, Serialize};
 use sqlx::Row;
 use utoipa::ToSchema;

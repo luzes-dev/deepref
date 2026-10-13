@@ -64,11 +64,6 @@
       "svelte": "./src/primitives/badge/index.ts",
       "default": "./src/primitives/badge/index.ts"
     },
-    "./breadcrumb": {
-      "types": "./src/primitives/breadcrumb/index.ts",
-      "svelte": "./src/primitives/breadcrumb/index.ts",
-      "default": "./src/primitives/breadcrumb/index.ts"
-    },
     "./bubble": {
       "types": "./src/primitives/bubble/index.ts",
       "svelte": "./src/primitives/bubble/index.ts",
@@ -88,11 +83,6 @@
       "types": "./src/primitives/checkbox/index.ts",
       "svelte": "./src/primitives/checkbox/index.ts",
       "default": "./src/primitives/checkbox/index.ts"
-    },
-    "./close-button": {
-      "types": "./src/primitives/close-button/index.ts",
-      "svelte": "./src/primitives/close-button/index.ts",
-      "default": "./src/primitives/close-button/index.ts"
     },
     "./command": {
       "types": "./src/primitives/command/index.ts",
@@ -169,11 +159,6 @@
       "svelte": "./src/primitives/number-field/index.ts",
       "default": "./src/primitives/number-field/index.ts"
     },
-    "./pagination": {
-      "types": "./src/primitives/pagination/index.ts",
-      "svelte": "./src/primitives/pagination/index.ts",
-      "default": "./src/primitives/pagination/index.ts"
-    },
     "./popover": {
       "types": "./src/primitives/popover/index.ts",
       "svelte": "./src/primitives/popover/index.ts",
@@ -209,11 +194,6 @@
       "svelte": "./src/primitives/sheet/index.ts",
       "default": "./src/primitives/sheet/index.ts"
     },
-    "./sidebar": {
-      "types": "./src/primitives/sidebar/index.ts",
-      "svelte": "./src/primitives/sidebar/index.ts",
-      "default": "./src/primitives/sidebar/index.ts"
-    },
     "./skeleton": {
       "types": "./src/primitives/skeleton/index.ts",
       "svelte": "./src/primitives/skeleton/index.ts",
@@ -234,11 +214,6 @@
       "svelte": "./src/primitives/spinner/index.ts",
       "default": "./src/primitives/spinner/index.ts"
     },
-    "./stepper": {
-      "types": "./src/primitives/stepper/index.ts",
-      "svelte": "./src/primitives/stepper/index.ts",
-      "default": "./src/primitives/stepper/index.ts"
-    },
     "./switch": {
       "types": "./src/primitives/switch/index.ts",
       "svelte": "./src/primitives/switch/index.ts",
@@ -254,30 +229,10 @@
       "svelte": "./src/primitives/tabs/index.ts",
       "default": "./src/primitives/tabs/index.ts"
     },
-    "./tags-input": {
-      "types": "./src/primitives/tags-input/index.ts",
-      "svelte": "./src/primitives/tags-input/index.ts",
-      "default": "./src/primitives/tags-input/index.ts"
-    },
-    "./terminal": {
-      "types": "./src/primitives/terminal/index.ts",
-      "svelte": "./src/primitives/terminal/index.ts",
-      "default": "./src/primitives/terminal/index.ts"
-    },
     "./textarea": {
       "types": "./src/primitives/textarea/index.ts",
       "svelte": "./src/primitives/textarea/index.ts",
       "default": "./src/primitives/textarea/index.ts"
-    },
-    "./theme-selector": {
-      "types": "./src/primitives/theme-selector/index.ts",
-      "svelte": "./src/primitives/theme-selector/index.ts",
-      "default": "./src/primitives/theme-selector/index.ts"
-    },
-    "./toggle": {
-      "types": "./src/primitives/toggle/index.ts",
-      "svelte": "./src/primitives/toggle/index.ts",
-      "default": "./src/primitives/toggle/index.ts"
     },
     "./toggle-group": {
       "types": "./src/primitives/toggle-group/index.ts",
@@ -289,25 +244,10 @@
       "svelte": "./src/primitives/tooltip/index.ts",
       "default": "./src/primitives/tooltip/index.ts"
     },
-    "./window": {
-      "types": "./src/primitives/window/index.ts",
-      "svelte": "./src/primitives/window/index.ts",
-      "default": "./src/primitives/window/index.ts"
-    },
-    "./chat": {
-      "types": "./src/patterns/chat/index.ts",
-      "svelte": "./src/patterns/chat/index.ts",
-      "default": "./src/patterns/chat/index.ts"
-    },
     "./page-frame": {
       "types": "./src/patterns/page-frame/index.ts",
       "svelte": "./src/patterns/page-frame/index.ts",
       "default": "./src/patterns/page-frame/index.ts"
-    },
-    "./page-header": {
-      "types": "./src/patterns/page-header/index.ts",
-      "svelte": "./src/patterns/page-header/index.ts",
-      "default": "./src/patterns/page-header/index.ts"
     },
     "./page-toolbar": {
       "types": "./src/patterns/page-toolbar/index.ts",
@@ -324,25 +264,10 @@
       "svelte": "./src/patterns/state-panel/index.ts",
       "default": "./src/patterns/state-panel/index.ts"
     },
-    "./metric-tile": {
-      "types": "./src/patterns/metric-tile/index.ts",
-      "svelte": "./src/patterns/metric-tile/index.ts",
-      "default": "./src/patterns/metric-tile/index.ts"
-    },
-    "./loading-button": {
-      "types": "./src/patterns/loading-button/index.ts",
-      "svelte": "./src/patterns/loading-button/index.ts",
-      "default": "./src/patterns/loading-button/index.ts"
-    },
     "./pagination-load-more": {
       "types": "./src/patterns/pagination-load-more/index.ts",
       "svelte": "./src/patterns/pagination-load-more/index.ts",
       "default": "./src/patterns/pagination-load-more/index.ts"
-    },
-    "./workflow-canvas": {
-      "types": "./src/patterns/workflow-canvas/index.ts",
-      "svelte": "./src/patterns/workflow-canvas/index.ts",
-      "default": "./src/patterns/workflow-canvas/index.ts"
     }
   },
   "peerDependencies": {

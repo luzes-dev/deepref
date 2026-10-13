@@ -972,7 +972,7 @@ pub(crate) async fn attach_open_access_document(
     if contact.trim().is_empty() {
         return Err(missing_contact_email());
     }
-    let lookup = deepref_crossref::UnpaywallClient::new(contact)
+    let lookup = deepref_integrations::UnpaywallClient::new(contact)
         .map_err(|error| ApiError::Internal(error.into()))?;
     let pdf_url = lookup
         .open_access_pdf_url(&doi)
@@ -1005,8 +1005,8 @@ fn missing_contact_email() -> ApiError {
     }
 }
 
-fn map_unpaywall_error(error: deepref_crossref::UnpaywallError) -> ApiError {
-    use deepref_crossref::UnpaywallError;
+fn map_unpaywall_error(error: deepref_integrations::UnpaywallError) -> ApiError {
+    use deepref_integrations::UnpaywallError;
     match error {
         UnpaywallError::MissingEmail => missing_contact_email(),
         UnpaywallError::Rejected(status) if status == StatusCode::UNPROCESSABLE_ENTITY => {
