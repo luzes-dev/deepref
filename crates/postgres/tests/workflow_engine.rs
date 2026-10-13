@@ -276,3 +276,40 @@ async fn an_undone_ai_action_is_no_longer_undoable() {
     );
     remove_project(&pool, project).await;
 }
+
+#[tokio::test]
+async fn http_secrets_stay_bound_to_the_origin_where_they_were_entered() {
+    use deepref_postgres::{get_workflow_http_secret, get_workflow_secret, update_workflow, UpdateWorkflow};
+    use deepref_application::workflows::SECRET_PLACEHOLDER;
+    let Some(pool) = database().await else { return };
+    let project = insert_project(&pool).await;
+    let actor = Actor::new(ActorKind::User, "origin-test").unwrap();
+    let graph = |url: &str, auth: &str| WorkflowGraph {
+        nodes: vec![node("t", "trigger.manual", json!({})),
+            node("http", "integration.http_request", json!({"method":"GET","url":url,"auth":auth}))],
+        edges: vec![edge("t", "data", "http", "data")],
+    };
+    let workflow = create_workflow(&pool, project, "Origin", "",
+        graph("https://example.com/one", "Bearer private"), &actor).await.unwrap();
+    assert_eq!(get_workflow_http_secret(&pool, workflow.id, "http", "https://example.com/two")
+        .await.unwrap().as_deref(), Some("Bearer private"));
+    assert!(get_workflow_http_secret(&pool, workflow.id, "http", "https://other.example/one")
+        .await.unwrap().is_none());
+    update_workflow(&pool, project, workflow.id, UpdateWorkflow {
+        graph: Some(graph("https://example.com/two", SECRET_PLACEHOLDER)), ..Default::default()
+    }).await.unwrap();
+    assert!(get_workflow_http_secret(&pool, workflow.id, "http", "https://example.com/two")
+        .await.unwrap().is_some());
+    update_workflow(&pool, project, workflow.id, UpdateWorkflow {
+        graph: Some(graph("https://other.example/one", SECRET_PLACEHOLDER)), ..Default::default()
+    }).await.unwrap();
+    assert!(get_workflow_secret(&pool, workflow.id, "http", "auth").await.unwrap().is_none());
+    update_workflow(&pool, project, workflow.id, UpdateWorkflow {
+        graph: Some(graph("https://other.example/one", "Bearer replacement")), ..Default::default()
+    }).await.unwrap();
+    assert_eq!(get_workflow_http_secret(&pool, workflow.id, "http", "https://other.example/two")
+        .await.unwrap().as_deref(), Some("Bearer replacement"));
+    assert!(get_workflow_http_secret(&pool, workflow.id, "http", "https://example.com/one")
+        .await.unwrap().is_none(), "an older published graph cannot borrow the replacement secret");
+    remove_project(&pool, project).await;
+}

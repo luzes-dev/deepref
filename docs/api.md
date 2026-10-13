@@ -103,3 +103,10 @@ AI proposal decisions invalidate generated title/abstract queue, full-text queue
 proposal and deduplication keys scoped to the mutation's project. Suggestion
 creation invalidates only that project's proposal list. Generated clients must
 not emit a bare `/api/projects/` invalidation prefix.
+
+Workflow HTTP credentials are stored with their entered URL origin. Changing
+origin drops the credential, while changing only path/query retains it. Execution
+also matches origin, preventing an older published graph from borrowing a
+credential later entered for a different host. Legacy unbound HTTP credentials
+require re-entry. HTTP templates require a literal scheme/authority; substituted
+path/query values are percent-encoded as components.
