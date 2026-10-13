@@ -1,6 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { render, screen, waitFor, within } from '@testing-library/svelte';
 import { http, HttpResponse } from 'msw';
+import { tick } from 'svelte';
 import { server } from '../../../../tests/mocks/server';
 import * as sveltekit from '#lib/tests/fake-sveltekit.svelte.js';
 import FullTextScreeningTestHost from '#lib/tests/FullTextScreeningTestHost.svelte';
@@ -162,7 +163,7 @@ function installApi() {
 			HttpResponse.json(documentFor(String(params.reportId)))
 		),
 		http.get(`${base}/reports/:reportId/documents/:documentId/blocks`, () =>
-			HttpResponse.json([])
+			HttpResponse.json({ items: [], next_cursor: null })
 		),
 		http.get(`${base}/reports/:reportId/documents/:documentId/pages`, () =>
 			HttpResponse.json([])
@@ -330,6 +331,34 @@ describe('full-text screening shortcuts', () => {
 				})
 			}
 		]);
+	});
+
+	it('records a clicked exclusion reason for the report that opened the picker', async () => {
+		installApi();
+		await renderAt('report-1');
+		decisionBar().getByRole('button', { name: /^Exclude/ }).click();
+		await waitFor(() => expect(decisionBar().getByRole('button', { name: /Wrong population/ })).toBeVisible());
+		decisionBar().getByRole('button', { name: /Wrong population/ }).click();
+
+		await waitFor(() => expect(decisionBar().getByRole('button', { name: /^Exclude/ })).toHaveAttribute('aria-pressed', 'true'));
+		await waitFor(() => expect(decisionBar().getByRole('button', { name: 'Undo latest full-text decision' })).not.toBeDisabled());
+	});
+
+	it('cancels a pending exclusion when the reviewer switches reports', async () => {
+		const api = installApi();
+		await renderAt('report-1');
+		press('e');
+		await waitFor(() => expect(decisionBar().getByText('Exclude because')).toBeVisible());
+
+		screen.getByRole('button', { name: 'Next report (ArrowRight)' }).click();
+		await waitFor(() => expect(screen.getByRole('heading', { level: 2 })).toHaveTextContent('Full-text report 2'));
+		await waitFor(() => expect(screen.getByRole('group', { name: 'Document view' })).toBeVisible());
+		press('1');
+		await tick();
+
+		await waitFor(() => expect(decisionBar().getByRole('button', { name: /^Exclude/ })).toHaveAttribute('aria-pressed', 'false'));
+		expect(api.decisions).toEqual([]);
+		expect(decisionBar().queryByText('Exclude because')).not.toBeInTheDocument();
 	});
 
 	it('still undoes the last decision once', async () => {

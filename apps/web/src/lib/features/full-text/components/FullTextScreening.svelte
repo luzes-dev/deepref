@@ -213,7 +213,8 @@
 		})
 	);
 
-	let choosingReason = $state(false);
+	let reasonReportId = $state<string | null>(null);
+	const choosingReason = $derived(reasonReportId !== null && reasonReportId === currentReportId);
 	// True from the first line of decide() or undo() until the mutation and the queue
 	// refresh settle. The mutation's own isPending is false while the queue catches up.
 	let deciding = $state(false);
@@ -231,6 +232,7 @@
 	$effect(() => {
 		void currentReportId;
 		statusMessage = '';
+		reasonReportId = null;
 	});
 
 	const historyItems = $derived(historyQuery.data?.data.items ?? []);
@@ -266,7 +268,7 @@
 	const screenStatus = $derived(queueCurrent?.full_text_status ?? 'unscreened');
 	const screenRevision = $derived(queueCurrent?.revision ?? 0);
 	const usableFullText = $derived(
-		document?.status === 'available' && Boolean(document.parser_version)
+		Boolean(current) && document?.status === 'available' && Boolean(document.parser_version)
 	);
 	const contentUrl = $derived(
 		effectiveDocumentId && currentReportId
@@ -353,11 +355,10 @@
 			const options = reasons.filter((reason) => reason.stage === 'full_text');
 			if (Number.isInteger(index) && options[index]) {
 				event.preventDefault();
-				choosingReason = false;
 				void decide('exclude', options[index].id);
 			} else if (event.key === 'Escape') {
 				event.preventDefault();
-				choosingReason = false;
+				reasonReportId = null;
 			}
 			return;
 		}
@@ -368,7 +369,7 @@
 		if (action === 'previous' || action === 'next') return void move(action);
 		if (action === 'undo') return void undo();
 		if (!usableFullText) return;
-		if (action === 'exclude') choosingReason = true;
+		if (action === 'exclude') reasonReportId = currentReportId;
 		else void decide(action, null);
 	}
 
@@ -424,6 +425,7 @@
 	}
 
 	function selectReport(reportId: string, push = true) {
+		reasonReportId = null;
 		return updateUrl({ report: reportId, page: null, block: null }, !push);
 	}
 
@@ -486,7 +488,9 @@
 			errorMessage = 'Choose exactly one full-text exclusion reason.';
 			return;
 		}
+		if (decision === 'exclude' && reasonReportId !== currentReportId) return;
 		deciding = true;
+		reasonReportId = null;
 		const reportId = currentReportId;
 		const previous = queryClient.getQueryData<FullTextQueueCache>(fullTextQueueKey);
 		const expectedRevision = screenRevision;
@@ -1141,7 +1145,10 @@
 	<FullTextDecisionBar
 		reasons={reasons.filter((reason) => reason.stage === 'full_text')}
 		current={screenStatus}
-		bind:choosingReason
+		bind:choosingReason={
+			() => choosingReason,
+			(choosing: boolean) => { reasonReportId = choosing ? currentReportId : null; }
+		}
 		pending={deciding || decisionMutation.isPending || undoMutation.isPending}
 		{canUndo}
 		{statusMessage}
