@@ -34,6 +34,7 @@ pub async fn run(pool: PgPool, interval: Duration, mut shutdown: watch::Receiver
 pub async fn reconcile_once(pool: &PgPool) -> anyhow::Result<ReconcileReport> {
     let recovery = deepref_postgres::recover_expired_worker_state(pool).await?;
     let repaired_work = repair_missing_work(pool).await?;
+    crate::assistant::reconcile_orphan_runs(pool).await?;
     Ok(ReconcileReport {
         expired_event_claims: recovery.expired_event_claims,
         expired_doi_leases: recovery.expired_doi_leases,
