@@ -93,3 +93,8 @@ Document blocks now use `items`/`next_cursor` pages ordered by page number,
 ordinal and block UUID (maximum 100 blocks per request). Full-text screening,
 appraisal, extraction and citation labels collect every page before exposing
 overlay/evidence blocks; a later-page failure is an error, not a partial paper.
+
+The workspace keeps explicitly selected project URLs on load failures. Transient
+errors show “Project unavailable” with Retry; 404 shows “Project not found” with
+Retry. Automatic default-project selection applies only to routes with no project
+identifier, never to a failed named project.
