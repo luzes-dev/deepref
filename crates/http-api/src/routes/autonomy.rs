@@ -750,7 +750,7 @@ pub(crate) async fn resolve_ai_reviewer_conflict(
                     .to_owned(),
                 details: json!({}),
             },
-            other => ApiError::BadRequest(other.to_string()),
+            other => super::review::map_screening_error(other),
         },
         deepref_postgres::ReviewerError::Database(error) => ApiError::Database(error),
     })?;

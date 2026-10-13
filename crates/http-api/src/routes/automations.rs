@@ -602,13 +602,14 @@ fn map_automation_error(error: deepref_postgres::AutomationError) -> ApiError {
 }
 
 fn map_automation_database_error(error: sqlx::Error) -> ApiError {
+    let classified = deepref_postgres::classify(&error);
+    if matches!(classified, deepref_postgres::PersistenceError::NotFound) || classified.is_foreign_key_violation() {
+        return ApiError::NotFound("automation resource not found".to_owned());
+    }
     let code = error
         .as_database_error()
         .and_then(|database_error| database_error.code());
     match code.as_deref() {
-        Some("P0002") | Some("23503") => {
-            ApiError::NotFound("automation resource not found".to_owned())
-        }
         Some("55000") => ApiError::Conflict {
             code: "AUTOMATION_PAUSED".to_owned(),
             message: "automation definition is paused".to_owned(),

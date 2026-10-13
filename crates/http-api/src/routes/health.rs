@@ -92,6 +92,10 @@ pub async fn live(State(state): State<AppState>) -> Json<LivenessResponse> {
     })
 }
 
+fn required_schema_version() -> i64 {
+    deepref_postgres::MIGRATOR.iter().map(|migration| migration.version).max().unwrap_or(0)
+}
+
 #[utoipa::path(get, path="/health/ready", operation_id="getReadiness", tag="health",
     responses((status=200, body=ReadinessResponse), (status=503, body=ApiErrorBody)))]
 pub async fn ready(State(state): State<AppState>) -> Result<Json<ReadinessResponse>, ApiError> {
@@ -101,15 +105,19 @@ pub async fn ready(State(state): State<AppState>) -> Result<Json<ReadinessRespon
     .fetch_one(&state.pool)
     .await
     .map_err(ApiError::Database)?;
-    if schema_version < 10 {
+    let required = required_schema_version();
+    if schema_version < required {
         return Err(ApiError::Configuration(format!(
-            "database schema {schema_version} is older than required version 10"
+            "database schema {schema_version} is older than required version {required}"
         )));
+    }
+    if schema_version > required {
+        tracing::warn!(schema_version, required_schema_version = required, "database schema is ahead of this service");
     }
     Ok(Json(ReadinessResponse {
         status: "ready",
         schema_version,
-        required_schema_version: 10,
+        required_schema_version: required,
     }))
 }
 
@@ -181,6 +189,11 @@ pub async fn deprecated_health(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn readiness_requires_latest_embedded_migration() {
+        assert_eq!(required_schema_version(), deepref_postgres::MIGRATOR.iter().map(|migration| migration.version).max().expect("embedded migrations"));
+    }
+
 
     #[test]
     fn historical_dead_jobs_do_not_degrade_the_worker() {

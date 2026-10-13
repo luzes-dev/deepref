@@ -22,6 +22,7 @@ mod graph;
 mod jobs;
 mod legacy_import;
 mod notifications;
+mod persistence;
 mod pmid_import;
 mod prisma;
 mod project_deletion;
@@ -160,6 +161,10 @@ pub use notifications::{
     NotificationSeverity, NotificationUnreadSummary, list_notifications, mark_notifications_read,
     record_notification, record_notification_in_transaction,
     record_run_notification_once_in_transaction, unread_summary,
+};
+pub use persistence::{
+    IntegrityViolation, PersistenceError, PersistenceFailure, RetryPolicy, RetryReason, classify,
+    with_retry,
 };
 pub use pmid_import::{
     PMID_IMPORT_JOB_KIND, PMID_IMPORT_SOURCE, PMID_IMPORT_STRATEGY, PmidImportRequest,

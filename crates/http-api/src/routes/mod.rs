@@ -272,7 +272,9 @@ pub fn router(state: AppState, config: &ApiConfig) -> Router {
             header::HeaderName::from_static("idempotency-key"),
             header::HeaderName::from_static("x-actor-kind"),
             header::HeaderName::from_static("x-actor-id"),
-        ]);
+            header::HeaderName::from_static("x-correlation-id"),
+        ])
+        .expose_headers([header::HeaderName::from_static("x-correlation-id")]);
 
     let document_max_bytes = state
         .document_store
@@ -297,8 +299,19 @@ pub fn router(state: AppState, config: &ApiConfig) -> Router {
             })
         })
         .layer(cors)
+        .layer(TraceLayer::new_for_http()
+            .make_span_with(|request: &Request| {
+                let route = request.extensions().get::<axum::extract::MatchedPath>()
+                    .map_or("unmatched", |path| path.as_str());
+                let id = request.extensions().get::<uuid::Uuid>().copied();
+                tracing::info_span!("http_request", correlation_id = ?id, route, status = tracing::field::Empty, latency_ms = tracing::field::Empty)
+            })
+            .on_response(|response: &Response, latency: std::time::Duration, span: &tracing::Span| {
+                span.record("status", response.status().as_u16());
+                span.record("latency_ms", latency.as_secs_f64() * 1000.0);
+                tracing::info!(parent: span, "request completed");
+            }))
         .layer(from_fn(correlation))
-        .layer(TraceLayer::new_for_http())
         .with_state(state)
 }
 
@@ -311,7 +324,7 @@ async fn correlation(mut request: Request, next: Next) -> Response {
         .and_then(|value| uuid::Uuid::parse_str(value).ok())
         .unwrap_or_else(uuid::Uuid::new_v4);
     request.extensions_mut().insert(correlation_id);
-    let mut response = next.run(request).await;
+    let mut response = crate::error::REQUEST_CORRELATION_ID.scope(correlation_id, next.run(request)).await;
     if let Ok(value) = correlation_id.to_string().parse() {
         response.headers_mut().insert(HEADER, value);
     }
@@ -331,6 +344,37 @@ mod tests {
     use tower::ServiceExt;
 
     use super::*;
+    use axum::response::IntoResponse;
+    #[tokio::test]
+    async fn screening_database_failures_are_sanitized_server_errors() {
+        let error = crate::routes::review::map_screening_error(
+            deepref_postgres::ScreeningError::AiFirst(Box::new(
+                deepref_postgres::AiFirstError::Database(sqlx::Error::Protocol("secret SQL and parameters".into()))
+            ))
+        );
+        let response = error.into_response();
+        assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
+        let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+        let text = std::str::from_utf8(&body).unwrap();
+        assert!(!text.contains("secret"));
+    }
+
+    #[tokio::test]
+    async fn error_body_uses_request_correlation_id() {
+        let id = uuid::Uuid::new_v4();
+        let app = Router::new().route("/failure", get(|| async {
+            Err::<(), _>(ApiError::Database(sqlx::Error::PoolTimedOut))
+        })).layer(from_fn(correlation));
+        let response = app.oneshot(Request::builder().uri("/failure")
+            .header("x-correlation-id", id.to_string()).body(Body::empty()).unwrap()).await.unwrap();
+        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+        assert_eq!(response.headers()["retry-after"], "1");
+        assert_eq!(response.headers()["x-correlation-id"], id.to_string());
+        let body: serde_json::Value = serde_json::from_slice(&to_bytes(response.into_body(), usize::MAX).await.unwrap()).unwrap();
+        assert_eq!(body["correlation_id"], id.to_string());
+        assert_eq!(body["message"], "database temporarily unavailable; retry later");
+    }
+
 
     #[test]
     fn openapi_contains_every_public_operation_with_unique_ids() {
