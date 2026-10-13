@@ -25,7 +25,7 @@ The DeepRef project has evolved from two overlapping screens into a decoupled, p
 | :--- | :--- | :--- | :--- |
 | **Phase 1** | **Base Chat UI Primitives & Patterns (`@deepref/ui`)** | **COMPLETED** | 26 unit tests passing (`chat.spec.ts`, `chat-primitives.spec.ts`). Exported in `@deepref/ui`. |
 | **Phase 2** | **Workflows Hub & Predefined Recipes (`/automations`)** | **COMPLETED** | `recipes.ts` (14 recipes) + `RecipeLibrary.svelte` + `RecipeLaunchModal.svelte` mounted in `AutomationCenter.svelte` behind a hub-view toggle. |
-| **Phase 3** | **Backend Chat Persistence & Streaming Agent Loop** | **COMPLETED** | `0023_assistant_chat.sql`, `crates/postgres/src/assistant.rs`, `crates/ai/src/assistant.rs`, plus SSE chat + conversation routes in `crates/http-api/src/routes/assistant.rs` (25 http-api lib tests green). |
+| **Phase 3** | **Backend Chat Persistence & Streaming Agent Loop** | **COMPLETED** | `0023_assistant_chat.sql`, `crates/app/src/assistant.rs`, `crates/ai/src/assistant.rs`, plus SSE chat + conversation routes in `crates/http-api/src/routes/assistant.rs` (25 http-api lib tests green). |
 | **Phase 4** | **Frontend Chatbot Interface (`/assistant`)** | **COMPLETED** | `ProjectChatAssistant.svelte` + `chat-api.ts` + `$lib/api/assistant-stream.ts` (SSE) + rewritten e2e spec; web check/test/lint green. |
 
 ---
@@ -159,13 +159,13 @@ This section documents the specific UI/UX, styling, accessibility, and component
 
 ### Phase 3: Backend Persistence & Agent Engine — **CORE DONE**
 1. Database Migration:
-   - Created [`crates/postgres/migrations/0023_assistant_chat.sql`](../crates/postgres/migrations/0023_assistant_chat.sql):
+   - Created [`crates/app/migrations/0023_assistant_chat.sql`](../crates/app/migrations/0023_assistant_chat.sql):
      - `assistant_conversations` table with project FK and updated_at indexes.
      - `assistant_messages` table with role check, JSONB tool_calls, tool_results, metadata.
-2. PostgreSQL persistence in [`crates/postgres/src/assistant.rs`](../crates/postgres/src/assistant.rs):
+2. PostgreSQL persistence in [`crates/app/src/assistant.rs`](../crates/app/src/assistant.rs):
    - `create_assistant_conversation`, `list_assistant_conversations`, `get_assistant_conversation`, `delete_assistant_conversation`.
    - `append_assistant_message`, `list_assistant_messages`.
-   - Re-exported in `crates/postgres/src/lib.rs`.
+   - Re-exported in `crates/app/src/lib.rs`.
 3. Agent Declarations & Policy in [`crates/ai/src/assistant.rs`](../crates/ai/src/assistant.rs):
    - Multi-turn conversation types (`AssistantChatMessage`, `AssistantRole`, `AssistantToolCall`, `AssistantToolResult`).
    - Function declarations for all 14 tools + `trigger_workflow`.

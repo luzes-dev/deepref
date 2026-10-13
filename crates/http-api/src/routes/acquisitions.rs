@@ -455,9 +455,9 @@ pub(crate) async fn import_project_records(
         "content_sha256": content_sha256,
         "csv_mapping": csv_mapping,
     });
-    let result = deepref_postgres::persist_import(
+    let result = deepref_app::persist_import(
         &state.pool,
-        &deepref_postgres::ImportPersistRequest {
+        &deepref_app::ImportPersistRequest {
             project_id,
             source: format!("import:{}", format.as_str()),
             strategy: "file_import".to_owned(),
@@ -472,7 +472,7 @@ pub(crate) async fn import_project_records(
     .map_err(map_acquisition_error)?;
     if result.created
         && let Err(error) =
-            deepref_postgres::enqueue_import_deduplication(&state.pool, project_id, result.run_id)
+            deepref_app::enqueue_import_deduplication(&state.pool, project_id, result.run_id)
                 .await
     {
         // The import itself succeeded; the records wait for a manual run instead.
@@ -501,9 +501,9 @@ async fn import_pmids(
 ) -> Result<(StatusCode, Json<AcquisitionDto>), ApiError> {
     let pmids = parse_pmid_list(content)?;
     let idempotency_key = idempotency_key(headers)?;
-    let result = deepref_postgres::create_pmid_import(
+    let result = deepref_app::create_pmid_import(
         &state.pool,
-        &deepref_postgres::PmidImportRequest {
+        &deepref_app::PmidImportRequest {
             project_id,
             idempotency_key,
             pmids,
@@ -862,9 +862,9 @@ pub(crate) async fn enqueue_seed_jobs(
         .bind(event.event_id)
         .execute(&mut **tx)
         .await?;
-        deepref_postgres::enqueue_job(
+        deepref_app::enqueue_job(
             tx,
-            &deepref_postgres::job(
+            &deepref_app::job(
                 event.event_id,
                 ProjectId::new(project_id),
                 "work_fetch_requested",
@@ -988,21 +988,21 @@ fn idempotency_key(headers: &HeaderMap) -> Result<Option<String>, ApiError> {
         .transpose()
 }
 
-fn map_acquisition_error(error: deepref_postgres::AcquisitionError) -> ApiError {
+fn map_acquisition_error(error: deepref_app::AcquisitionError) -> ApiError {
     match error {
-        deepref_postgres::AcquisitionError::ProjectNotFound => {
+        deepref_app::AcquisitionError::ProjectNotFound => {
             ApiError::NotFound("project not found".to_owned())
         }
-        deepref_postgres::AcquisitionError::IdempotencyConflict { run_id } => ApiError::Conflict {
+        deepref_app::AcquisitionError::IdempotencyConflict { run_id } => ApiError::Conflict {
             code: "IDEMPOTENCY_KEY_REUSED".to_owned(),
             message: "Idempotency-Key was already used with different import content".to_owned(),
             details: json!({ "acquisition_id": run_id }),
         },
-        deepref_postgres::AcquisitionError::Database(error) => ApiError::Database(error),
-        deepref_postgres::AcquisitionError::Serialization(error) => {
+        deepref_app::AcquisitionError::Database(error) => ApiError::Database(error),
+        deepref_app::AcquisitionError::Serialization(error) => {
             ApiError::Internal(error.into())
         }
-        deepref_postgres::AcquisitionError::Queue(error) => ApiError::Internal(error),
+        deepref_app::AcquisitionError::Queue(error) => ApiError::Internal(error),
     }
 }
 

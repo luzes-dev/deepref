@@ -19,18 +19,15 @@ use deepref_domain::{
     Actor, ActorKind, CriterionDimension, CriterionKind, CriterionStage, FrameworkKind, ProjectId,
     ProtocolVersionId, ReportId, ScreeningDecision, ScreeningStage,
 };
-use deepref_postgres::{
-    ProjectAutonomyGate, ProtocolActor, StartRun, claim_job, complete_job, create_workflow,
-    get_published_graph, get_published_protocol, independent_reviewer_pairs, publish_protocol,
-    publish_workflow, save_protocol_draft, screen_report, set_ai_budget, start_run,
-};
+use deepref_app::{ProjectAutonomyGate, ProtocolActor, StartRun, claim_job, complete_job, create_workflow, get_published_graph, get_published_protocol, independent_reviewer_pairs, publish_protocol, publish_workflow, save_protocol_draft, set_ai_budget, start_run};
+use deepref_app::screening::{screen_report};
 use deepref_worker::{delivery::DeliveryAction, workflows};
 use serde_json::{Value, json};
 use sqlx::PgPool;
 use uuid::Uuid;
 
 async fn database() -> Option<PgPool> {
-    deepref_postgres::test_isolation::isolated_pool_from_env("DATABASE_URL", 8).await
+    deepref_app::test_isolation::isolated_pool_from_env("DATABASE_URL", 8).await
 }
 
 fn node(id: &str, node_type: &str, config: Value) -> GraphNode {

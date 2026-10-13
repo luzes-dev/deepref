@@ -260,7 +260,7 @@ async fn prisma(
     state: &AppState,
     project_id: Uuid,
 ) -> Result<deepref_application::PrismaProjection, ApiError> {
-    deepref_postgres::get_prisma_projection(&state.pool, project_id)
+    deepref_app::get_prisma_projection(&state.pool, project_id)
         .await
         .map_err(|error| ApiError::DataIntegrity(error.to_string()))?
         .ok_or_else(|| ApiError::NotFound("project not found".to_owned()))
@@ -444,7 +444,7 @@ const AUDIT_CSV_COLUMNS: &[&str] = &[
 ];
 
 async fn audit_csv(state: &AppState, project_id: Uuid) -> Result<String, ApiError> {
-    let rows = deepref_postgres::load_audit_export_rows(
+    let rows = deepref_app::load_audit_export_rows(
         &state.pool,
         project_id,
         (MAX_EXPORT_ROWS + 1) as i64,
@@ -512,18 +512,18 @@ fn actor_label(kind: Option<&str>, id: Option<&str>) -> String {
 }
 
 async fn protocol(state: &AppState, project_id: Uuid) -> Result<ProtocolExport, ApiError> {
-    let document = deepref_postgres::get_published_protocol(&state.pool, project_id)
+    let document = deepref_app::get_published_protocol(&state.pool, project_id)
         .await
         .map_err(|error| match error {
-            deepref_postgres::ProtocolError::ProjectNotFound
-            | deepref_postgres::ProtocolError::NotFound => {
+            deepref_app::ProtocolError::ProjectNotFound
+            | deepref_app::ProtocolError::NotFound => {
                 ApiError::NotFound("published protocol not found".to_owned())
             }
-            deepref_postgres::ProtocolError::Database(error) => ApiError::Database(error),
-            deepref_postgres::ProtocolError::DataIntegrity(message) => {
+            deepref_app::ProtocolError::Database(error) => ApiError::Database(error),
+            deepref_app::ProtocolError::DataIntegrity(message) => {
                 ApiError::DataIntegrity(message)
             }
-            deepref_postgres::ProtocolError::Serialization(error) => {
+            deepref_app::ProtocolError::Serialization(error) => {
                 ApiError::Internal(error.into())
             }
             other => ApiError::Internal(anyhow::anyhow!(other)),

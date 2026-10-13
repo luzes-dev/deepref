@@ -206,7 +206,7 @@ pub(crate) async fn get_published_protocol(
     State(state): State<AppState>,
     Path(project_id): Path<Uuid>,
 ) -> Result<Json<ProtocolDto>, ApiError> {
-    let protocol = deepref_postgres::get_published_protocol(&state.pool, project_id)
+    let protocol = deepref_app::get_published_protocol(&state.pool, project_id)
         .await
         .map_err(map_protocol_error)?;
     Ok(Json(protocol_dto(protocol)))
@@ -228,10 +228,10 @@ pub(crate) async fn get_protocol_editor(
     State(state): State<AppState>,
     Path(project_id): Path<Uuid>,
 ) -> Result<Json<Option<ProtocolDto>>, ApiError> {
-    match deepref_postgres::get_protocol_editor(&state.pool, project_id).await {
+    match deepref_app::get_protocol_editor(&state.pool, project_id).await {
         Ok(protocol) => Ok(Json(Some(protocol_dto(protocol)))),
         // A project without a protocol yet is a normal state, not a missing resource.
-        Err(deepref_postgres::ProtocolError::NotFound) => Ok(Json(None)),
+        Err(deepref_app::ProtocolError::NotFound) => Ok(Json(None)),
         Err(error) => Err(map_protocol_error(error)),
     }
 }
@@ -257,7 +257,7 @@ pub(crate) async fn list_protocol_versions(
     State(state): State<AppState>,
     Path(project_id): Path<Uuid>,
 ) -> Result<Json<ProtocolVersionsResponse>, ApiError> {
-    let versions = deepref_postgres::list_protocol_versions(&state.pool, project_id)
+    let versions = deepref_app::list_protocol_versions(&state.pool, project_id)
         .await
         .map_err(map_protocol_error)?;
     Ok(Json(ProtocolVersionsResponse {
@@ -292,7 +292,7 @@ pub(crate) async fn save_protocol_draft(
     let actor = extract_actor(&headers)?;
     let command = save_command(project_id, input)?;
     let protocol =
-        deepref_postgres::save_protocol_draft(&state.pool, &command, &protocol_actor(&actor))
+        deepref_app::save_protocol_draft(&state.pool, &command, &protocol_actor(&actor))
             .await
             .map_err(map_protocol_error)?;
     Ok(Json(protocol_dto(protocol)))
@@ -323,7 +323,7 @@ pub(crate) async fn publish_protocol(
         .validate()
         .map_err(|error| ApiError::BadRequest(error.to_string()))?;
     let actor = extract_actor(&headers)?;
-    let protocol = deepref_postgres::publish_protocol(
+    let protocol = deepref_app::publish_protocol(
         &state.pool,
         &PublishProtocolCommand {
             project_id: ProjectId::from(project_id),
@@ -366,14 +366,14 @@ fn save_command(
     })
 }
 
-fn protocol_actor(actor: &Actor) -> deepref_postgres::ProtocolActor {
-    deepref_postgres::ProtocolActor {
+fn protocol_actor(actor: &Actor) -> deepref_app::ProtocolActor {
+    deepref_app::ProtocolActor {
         kind: actor.kind().as_str().to_owned(),
         id: actor.id().to_owned(),
     }
 }
 
-fn protocol_dto(protocol: deepref_postgres::ProtocolDocument) -> ProtocolDto {
+fn protocol_dto(protocol: deepref_app::ProtocolDocument) -> ProtocolDto {
     ProtocolDto {
         id: protocol.id,
         project_id: protocol.project_id,
@@ -442,15 +442,15 @@ fn protocol_status_dto(status: ProtocolStatus) -> ProtocolStatusDto {
     }
 }
 
-fn map_protocol_error(error: deepref_postgres::ProtocolError) -> ApiError {
+fn map_protocol_error(error: deepref_app::ProtocolError) -> ApiError {
     match error {
-        deepref_postgres::ProtocolError::ProjectNotFound
-        | deepref_postgres::ProtocolError::NotFound => {
+        deepref_app::ProtocolError::ProjectNotFound
+        | deepref_app::ProtocolError::NotFound => {
             ApiError::NotFound("project or protocol not found".to_owned())
         }
-        deepref_postgres::ProtocolError::DraftAlreadyExists
-        | deepref_postgres::ProtocolError::NotEditable => ApiError::BadRequest(error.to_string()),
-        deepref_postgres::ProtocolError::Conflict {
+        deepref_app::ProtocolError::DraftAlreadyExists
+        | deepref_app::ProtocolError::NotEditable => ApiError::BadRequest(error.to_string()),
+        deepref_app::ProtocolError::Conflict {
             code,
             message,
             current_revision,
@@ -459,9 +459,9 @@ fn map_protocol_error(error: deepref_postgres::ProtocolError) -> ApiError {
             message: message.to_owned(),
             details: json!({ "currentRevision": current_revision }),
         },
-        deepref_postgres::ProtocolError::Invalid(message) => ApiError::BadRequest(message),
-        deepref_postgres::ProtocolError::DataIntegrity(message) => ApiError::DataIntegrity(message),
-        deepref_postgres::ProtocolError::Database(error) => ApiError::Database(error),
-        deepref_postgres::ProtocolError::Serialization(error) => ApiError::Internal(error.into()),
+        deepref_app::ProtocolError::Invalid(message) => ApiError::BadRequest(message),
+        deepref_app::ProtocolError::DataIntegrity(message) => ApiError::DataIntegrity(message),
+        deepref_app::ProtocolError::Database(error) => ApiError::Database(error),
+        deepref_app::ProtocolError::Serialization(error) => ApiError::Internal(error.into()),
     }
 }

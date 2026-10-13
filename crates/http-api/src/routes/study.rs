@@ -339,7 +339,7 @@ pub(crate) async fn list_project_studies(
 ) -> Result<Json<StudyListDto>, ApiError> {
     ensure_project(&state, project_id).await?;
     let limit = bounded_limit(params.limit)?;
-    let studies = deepref_postgres::list_studies(&state.pool, project_id, params.cursor, limit)
+    let studies = deepref_app::list_studies(&state.pool, project_id, params.cursor, limit)
         .await
         .map_err(map_study_error)?;
     let study_ids = studies
@@ -348,7 +348,7 @@ pub(crate) async fn list_project_studies(
         .map(|study| Uuid::from(study.id))
         .collect::<Vec<_>>();
     let mut reports =
-        deepref_postgres::list_reports_for_studies(&state.pool, project_id, &study_ids)
+        deepref_app::list_reports_for_studies(&state.pool, project_id, &study_ids)
             .await
             .map_err(map_study_error)?;
     Ok(Json(StudyListDto {
@@ -397,7 +397,7 @@ pub(crate) async fn list_ungrouped_included_reports(
     State(state): State<AppState>,
     Path(project_id): Path<Uuid>,
 ) -> Result<Json<Vec<UngroupedReportDto>>, ApiError> {
-    let reports = deepref_postgres::list_ungrouped_included_reports(&state.pool, project_id)
+    let reports = deepref_app::list_ungrouped_included_reports(&state.pool, project_id)
         .await
         .map_err(map_study_error)?;
     Ok(Json(
@@ -437,7 +437,7 @@ pub(crate) async fn create_project_study(
         title,
         actor: extract_actor(&headers)?,
     };
-    let result = deepref_postgres::create_study(&state.pool, command)
+    let result = deepref_app::create_study(&state.pool, command)
         .await
         .map_err(map_study_error)?;
     Ok((StatusCode::CREATED, Json(study_dto_from_record(result))))
@@ -455,7 +455,7 @@ pub(crate) async fn get_project_study(
     State(state): State<AppState>,
     Path((project_id, study_id)): Path<(Uuid, Uuid)>,
 ) -> Result<Json<StudyDto>, ApiError> {
-    let result = deepref_postgres::get_study(&state.pool, project_id, study_id)
+    let result = deepref_app::get_study(&state.pool, project_id, study_id)
         .await
         .map_err(map_study_error)?;
     Ok(Json(study_dto_from_record(result)))
@@ -473,7 +473,7 @@ pub(crate) async fn get_report_study_membership(
     State(state): State<AppState>,
     Path((project_id, report_id)): Path<(Uuid, Uuid)>,
 ) -> Result<StudyMembershipLookupResponse, ApiError> {
-    let membership = deepref_postgres::get_study_for_report(&state.pool, project_id, report_id)
+    let membership = deepref_app::get_study_for_report(&state.pool, project_id, report_id)
         .await
         .map_err(map_study_error)?;
     match membership {
@@ -504,7 +504,7 @@ pub(crate) async fn rename_project_study(
     let title =
         StudyTitle::new(input.title).map_err(|error| ApiError::BadRequest(error.to_string()))?;
     let expected_revision = non_negative_revision(input.expected_revision)?;
-    let result = deepref_postgres::rename_study(
+    let result = deepref_app::rename_study(
         &state.pool,
         RenameStudy {
             project_id: project_id.into(),
@@ -531,10 +531,10 @@ pub(crate) async fn list_project_study_history(
     State(state): State<AppState>,
     Path((project_id, study_id)): Path<(Uuid, Uuid)>,
 ) -> Result<Json<Vec<StudyEventDto>>, ApiError> {
-    deepref_postgres::get_study(&state.pool, project_id, study_id)
+    deepref_app::get_study(&state.pool, project_id, study_id)
         .await
         .map_err(map_study_error)?;
-    let events = deepref_postgres::list_study_events(&state.pool, project_id, study_id)
+    let events = deepref_app::list_study_events(&state.pool, project_id, study_id)
         .await
         .map_err(map_study_error)?;
     Ok(Json(events.into_iter().map(study_event_dto).collect()))
@@ -558,7 +558,7 @@ pub(crate) async fn classify_project_study(
     let design = StudyDesign::parse(input.design.trim()).ok_or_else(|| {
         ApiError::BadRequest("design is not in the normalized catalog".to_owned())
     })?;
-    let result = deepref_postgres::classify_study(
+    let result = deepref_app::classify_study(
         &state.pool,
         ClassifyStudy {
             project_id: project_id.into(),
@@ -596,7 +596,7 @@ pub(crate) async fn put_report_study_membership(
     let actor = extract_actor(&headers)?;
     let expected_revision = non_negative_revision(input.expected_revision)?;
     let result = if let Some(study_id) = input.study_id {
-        let result = deepref_postgres::assign_report_to_study(
+        let result = deepref_app::assign_report_to_study(
             &state.pool,
             AssignReportToStudy {
                 project_id: project_id.into(),
@@ -619,13 +619,13 @@ pub(crate) async fn put_report_study_membership(
         .map_err(map_study_error)?;
         StudyMembershipResponse::Study(Box::new(Json(study_dto_from_record(result))))
     } else {
-        let current = deepref_postgres::get_study_for_report(&state.pool, project_id, report_id)
+        let current = deepref_app::get_study_for_report(&state.pool, project_id, report_id)
             .await
             .map_err(map_study_error)?;
         let Some(membership) = current else {
             return Ok(StudyMembershipResponse::NoContent(StatusCode::NO_CONTENT));
         };
-        let result = deepref_postgres::remove_report_from_study(
+        let result = deepref_app::remove_report_from_study(
             &state.pool,
             RemoveReportFromStudy {
                 project_id: project_id.into(),
@@ -791,7 +791,7 @@ pub(crate) async fn list_report_appraisals(
     State(state): State<AppState>,
     Path((project_id, report_id)): Path<(Uuid, Uuid)>,
 ) -> Result<Json<Vec<AppraisalAssessmentDto>>, ApiError> {
-    let assessments = deepref_postgres::list_appraisals(&state.pool, project_id, report_id)
+    let assessments = deepref_app::list_appraisals(&state.pool, project_id, report_id)
         .await
         .map_err(map_appraisal_error)?;
     Ok(Json(assessments.into_iter().map(appraisal_dto).collect()))
@@ -828,7 +828,7 @@ pub(crate) async fn complete_report_appraisal(
             content_hash: None,
         })
         .collect();
-    let assessment = deepref_postgres::complete_appraisal(
+    let assessment = deepref_app::complete_appraisal(
         &state.pool,
         project_id.into(),
         report_id.into(),
@@ -875,7 +875,7 @@ fn non_negative_revision(value: i64) -> Result<u64, ApiError> {
         .map_err(|_| ApiError::BadRequest("expected_revision must be non-negative".to_owned()))
 }
 
-fn study_dto_from_record(record: deepref_postgres::StudyDetailRecord) -> StudyDto {
+fn study_dto_from_record(record: deepref_app::StudyDetailRecord) -> StudyDto {
     let study = record.study;
     StudyDto {
         id: study.id.into(),
@@ -909,7 +909,7 @@ fn study_dto_from_record(record: deepref_postgres::StudyDetailRecord) -> StudyDt
     }
 }
 
-fn study_membership_dto(record: deepref_postgres::StudyMembershipRecord) -> StudyMembershipDto {
+fn study_membership_dto(record: deepref_app::StudyMembershipRecord) -> StudyMembershipDto {
     StudyMembershipDto {
         study_id: record.study_id.into(),
         role: record.role.as_str().to_owned(),
@@ -918,7 +918,7 @@ fn study_membership_dto(record: deepref_postgres::StudyMembershipRecord) -> Stud
     }
 }
 
-fn study_dto_from_summary(study: deepref_postgres::StudyRecord) -> StudyDto {
+fn study_dto_from_summary(study: deepref_app::StudyRecord) -> StudyDto {
     let suggestions = study
         .design
         .map(|design| deepref_domain::suggest_appraisal_tools(design, study.design_context))
@@ -944,7 +944,7 @@ fn study_dto_from_summary(study: deepref_postgres::StudyRecord) -> StudyDto {
     }
 }
 
-fn study_event_dto(event: deepref_postgres::StudyEventRecord) -> StudyEventDto {
+fn study_event_dto(event: deepref_app::StudyEventRecord) -> StudyEventDto {
     StudyEventDto {
         id: event.id,
         study_id: event.study_id.into(),
@@ -1063,7 +1063,7 @@ fn answer_option_dto(
     }
 }
 
-fn appraisal_dto(record: deepref_postgres::AppraisalAssessmentRecord) -> AppraisalAssessmentDto {
+fn appraisal_dto(record: deepref_app::AppraisalAssessmentRecord) -> AppraisalAssessmentDto {
     AppraisalAssessmentDto {
         id: record.id,
         project_id: record.project_id.into(),
@@ -1095,41 +1095,41 @@ fn validate_definition_for_response(
         .map_err(|error| ApiError::DataIntegrity(error.to_string()))
 }
 
-pub(crate) fn map_study_error(error: deepref_postgres::StudyError) -> ApiError {
+pub(crate) fn map_study_error(error: deepref_app::StudyError) -> ApiError {
     match error {
-        deepref_postgres::StudyError::Database(error) => ApiError::Database(error),
-        deepref_postgres::StudyError::ProjectNotFound
-        | deepref_postgres::StudyError::StudyNotFound
-        | deepref_postgres::StudyError::ReportNotInProject => ApiError::NotFound(error.to_string()),
-        deepref_postgres::StudyError::AlreadyMember | deepref_postgres::StudyError::NotMember => {
+        deepref_app::StudyError::Database(error) => ApiError::Database(error),
+        deepref_app::StudyError::ProjectNotFound
+        | deepref_app::StudyError::StudyNotFound
+        | deepref_app::StudyError::ReportNotInProject => ApiError::NotFound(error.to_string()),
+        deepref_app::StudyError::AlreadyMember | deepref_app::StudyError::NotMember => {
             ApiError::BadRequest(error.to_string())
         }
-        deepref_postgres::StudyError::RevisionConflict { current } => ApiError::Conflict {
+        deepref_app::StudyError::RevisionConflict { current } => ApiError::Conflict {
             code: "STUDY_REVISION_CONFLICT".to_owned(),
             message: "study changed since it was read".to_owned(),
             details: json!({ "current": study_dto_from_record(*current) }),
         },
-        deepref_postgres::StudyError::DataIntegrity(message) => ApiError::DataIntegrity(message),
+        deepref_app::StudyError::DataIntegrity(message) => ApiError::DataIntegrity(message),
     }
 }
 
-pub(crate) fn map_appraisal_error(error: deepref_postgres::AppraisalError) -> ApiError {
+pub(crate) fn map_appraisal_error(error: deepref_app::AppraisalError) -> ApiError {
     match error {
-        deepref_postgres::AppraisalError::Database(error) => ApiError::Database(error),
-        deepref_postgres::AppraisalError::ReportNotInProject
-        | deepref_postgres::AppraisalError::AssessmentNotFound => {
+        deepref_app::AppraisalError::Database(error) => ApiError::Database(error),
+        deepref_app::AppraisalError::ReportNotInProject
+        | deepref_app::AppraisalError::AssessmentNotFound => {
             ApiError::NotFound(error.to_string())
         }
-        deepref_postgres::AppraisalError::Definition(error) => {
+        deepref_app::AppraisalError::Definition(error) => {
             ApiError::BadRequest(error.to_string())
         }
-        deepref_postgres::AppraisalError::Validation(error) => {
+        deepref_app::AppraisalError::Validation(error) => {
             ApiError::BadRequest(error.to_string())
         }
-        deepref_postgres::AppraisalError::EvidenceNotInReport => {
+        deepref_app::AppraisalError::EvidenceNotInReport => {
             ApiError::BadRequest(error.to_string())
         }
-        deepref_postgres::AppraisalError::DataIntegrity(message) => {
+        deepref_app::AppraisalError::DataIntegrity(message) => {
             ApiError::DataIntegrity(message)
         }
     }

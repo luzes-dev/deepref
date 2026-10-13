@@ -31,16 +31,16 @@ trustworthiness without changing eligibility.
 ## Acceptance evidence
 
 - Document code and migrations:
-  `crates/documents/`, `crates/postgres/migrations/0013_documents_full_text.sql`,
+  `crates/documents/`, `crates/app/migrations/0013_documents_full_text.sql`,
   and `services/worker/tests/document_parse.rs`.
 - Study and appraisal tests:
-  `crates/postgres/tests/study_appraisal.rs`,
+  `crates/app/tests/study_appraisal.rs`,
   `crates/http-api/tests/study_postgres.rs`, and the appraisal and extraction
   Playwright suites.
 - Run:
 
 ```text
-cargo test -p deepref-postgres --test study_appraisal --locked
+cargo test -p deepref-app --test study_appraisal --locked
 cargo test -p deepref-worker --test document_parse --locked
 pnpm --filter @deepref/web test:e2e -- --grep 'appraisal|extraction|study'
 ```

@@ -11,16 +11,16 @@ use crate::{config::ApiConfig, state::AppState};
 
 pub async fn migrate(config: &ApiConfig) -> anyhow::Result<()> {
     let pool = database_pool(config).await?;
-    deepref_postgres::migrate(&pool).await?;
+    deepref_app::migrate(&pool).await?;
     tracing::info!("database migrations completed");
     Ok(())
 }
 
 pub async fn import_legacy(
     config: &ApiConfig,
-) -> anyhow::Result<deepref_postgres::LegacyImportCounts> {
+) -> anyhow::Result<deepref_app::LegacyImportCounts> {
     let pool = database_pool(config).await?;
-    deepref_postgres::import_legacy(&pool).await
+    deepref_app::import_legacy(&pool).await
 }
 
 pub async fn serve(config: ApiConfig) -> anyhow::Result<()> {
@@ -48,10 +48,10 @@ pub async fn serve_with_shutdown(
                 provider.id(),
                 &ai_config.base_url,
                 api_key,
-                std::sync::Arc::new(deepref_postgres::PostgresUsageLedger::new(&pool)),
+                std::sync::Arc::new(deepref_app::PostgresUsageLedger::new(&pool)),
                 price_book(&ai_config),
             )?;
-            let routes = deepref_postgres::ensure_default_model_routes(
+            let routes = deepref_app::ensure_default_model_routes(
                 &pool,
                 provider.id(),
                 &ai_config.default_model,

@@ -24,7 +24,7 @@ use sqlx::PgPool;
 use uuid::Uuid;
 
 use super::delivery::DeliveryAction;
-use deepref_postgres::{
+use deepref_app::{
     AppendAssistantMessage, NewAssistantPlan, PostgresAssistantToolHost, PostgresUsageLedger,
     begin_assistant_agent_run, get_assistant_agent_run,
 };
@@ -136,7 +136,7 @@ enum RunFailure {
 async fn drive_assistant_run(
     pool: &PgPool,
     job: &deepref_application::jobs::ClaimedJob,
-    claimed: &deepref_postgres::ClaimedAssistantAgentRun,
+    claimed: &deepref_app::ClaimedAssistantAgentRun,
     services: &AssistantWorkerServices,
 ) -> Result<(), RunFailure> {
     let record = &claimed.record;
@@ -225,7 +225,7 @@ async fn drive_assistant_run(
             )
             .await?;
             let cassette = finished.cassette.as_ref();
-            let completed = deepref_postgres::CompletedAssistantAgentRun {
+            let completed = deepref_app::CompletedAssistantAgentRun {
                 answer: answer_message(record, &model_label, &finished),
                 plan: plan_record(record, &actor, &model_label, &finished)?,
                 effect_log: cassette
@@ -239,7 +239,7 @@ async fn drive_assistant_run(
                     .transpose()?,
                 run_spec_hash: cassette.map(|cassette| format!("{:016x}", cassette.run_spec_hash)),
             };
-            if !deepref_postgres::complete_assistant_agent_run(pool, record.id, &completed)
+            if !deepref_app::complete_assistant_agent_run(pool, record.id, &completed)
                 .await
                 .map_err(|error| RunFailure::Fatal(error.into()))?
             {
@@ -284,7 +284,7 @@ fn retryable(error: &AiError) -> bool {
 async fn fail_run(pool: &PgPool, run_id: Uuid, code: &str, message: &str) -> anyhow::Result<()> {
     // One atomic transaction appends the `error` event and flips the run to
     // failed, or appends nothing when the run already settled.
-    deepref_postgres::fail_assistant_agent_run(
+    deepref_app::fail_assistant_agent_run(
         pool,
         run_id,
         &json!({"code": code, "message": message}),
@@ -364,7 +364,7 @@ async fn persist_event_row(
     kind: &str,
     payload: &Value,
 ) -> Result<(), RunFailure> {
-    deepref_postgres::append_assistant_run_event(pool, run_id, kind, payload)
+    deepref_app::append_assistant_run_event(pool, run_id, kind, payload)
         .await
         .map_err(|error| RunFailure::Fatal(error.into()))?;
     Ok(())
@@ -384,7 +384,7 @@ fn stored_output(output: &Value) -> Value {
 }
 
 fn answer_message(
-    record: &deepref_postgres::AssistantAgentRunRecord,
+    record: &deepref_app::AssistantAgentRunRecord,
     model: &str,
     finished: &deepref_ai::runtime::RigTurnOutcome,
 ) -> AppendAssistantMessage {
@@ -432,7 +432,7 @@ fn answer_message(
 }
 
 fn plan_record(
-    record: &deepref_postgres::AssistantAgentRunRecord,
+    record: &deepref_app::AssistantAgentRunRecord,
     actor: &Actor,
     model: &str,
     finished: &deepref_ai::runtime::RigTurnOutcome,

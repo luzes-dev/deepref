@@ -12,6 +12,19 @@ Graph reads use canonical UUIDs from `reports`, `project_reports`, and `citation
 
 The v2 screening command writes its event, state projection, and project lifecycle status in one transaction. PRISMA is a live deterministic projection of canonical relational state; no recomputation job or snapshot is authoritative. The command uses optimistic revisions and returns `409 screening_revision_conflict` when another browser, worker, or automation changes the same report.
 
+The screening pilot lives in `deepref_app::screening`, in `crates/app`.
+This is the renamed Postgres-backed application crate, not a facade over a
+second backend crate. The module owns command SQL, queue/history readmodels,
+blind-audit assistant reads and plan snapshots, and assistant activity
+provenance. HTTP review routes, assistant confirmations, workers and autonomy
+cross the same screening seam. Pure transition and blind-audit preconditions
+live in `deepref-domain`; authoritative membership reads, row locks, revision
+CAS, published-protocol checks and event writes remain in the app transaction.
+Other contexts temporarily retain their existing app-root interfaces.
+`cargo xtask boundaries` rejects SQLx and direct query entry points in migrated
+review and assistant-plan transports; unmigrated contexts and dev-test targets
+are intentionally outside that source rule.
+
 ## AI foundation and evidence grounding
 
 `deepref-ai` is the provider-neutral seam for structured AI work. It owns typed
@@ -73,7 +86,7 @@ domain commands remain the sole scientific-write authority.
 
 `deepref-server serve` runs HTTP only. `deepref-server worker` runs the bounded PostgreSQL job executor. `deepref-server all` runs both roles in one process with coordinated shutdown. Deployments package the same `deepref-server` binary for API and worker targets; local Process Compose supervises the API, worker, and web processes.
 
-Crate boundaries follow dependency direction: `deepref-domain` owns pure invariants, ingestion/fetch states and work/reference models, event envelopes and payloads (`events`), and in-memory graph models/algorithms (`graph`). `deepref-application` owns use-case commands and the live `JobQueue` port; `deepref-review` retains `ReviewScheduler`. `deepref-integrations` owns Crossref, PubMed, import parsers, Unpaywall and GROBID; `deepref-postgres` owns SQLx migrations and adapters; `deepref-http-api` owns HTTP adapters and SQL-backed handlers. See [ADR 0002](adr/0002-layered-crate-boundaries.md).
+Crate boundaries follow dependency direction: `deepref-domain` owns pure invariants, ingestion/fetch states and work/reference models, event envelopes and payloads (`events`), and in-memory graph models/algorithms (`graph`). `deepref-application` owns use-case commands and the live `JobQueue` port; `deepref-review` retains `ReviewScheduler`. `deepref-integrations` owns Crossref, PubMed, import parsers, Unpaywall and GROBID; `deepref-app` owns SQLx migrations and adapters; `deepref-http-api` owns HTTP adapters and SQL-backed handlers. See [ADR 0002](adr/0002-layered-crate-boundaries.md).
 
 ## API and web degradation
 

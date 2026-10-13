@@ -11,8 +11,8 @@ tokio::task_local! {
     pub(crate) static REQUEST_CORRELATION_ID: Uuid;
 }
 
-fn persistence_response(error: deepref_postgres::PersistenceError) -> (StatusCode, String, String, Option<u64>, Option<serde_json::Value>) {
-    use deepref_postgres::PersistenceError;
+fn persistence_response(error: deepref_app::PersistenceError) -> (StatusCode, String, String, Option<u64>, Option<serde_json::Value>) {
+    use deepref_app::PersistenceError;
     let (status, code, message, retry) = match error {
         PersistenceError::NotFound => (StatusCode::NOT_FOUND, "NOT_FOUND", "resource not found", None),
         PersistenceError::Conflict { .. } => (StatusCode::CONFLICT, "CONFLICT", "resource conflicts with existing data", None),
@@ -84,11 +84,11 @@ impl IntoResponse for ApiError {
             ),
             Self::Database(error) => {
                 tracing::error!(%error, "database operation failed");
-                persistence_response(deepref_postgres::classify(&error))
+                persistence_response(deepref_app::classify(&error))
             }
             Self::Internal(error) => {
                 tracing::error!(%error, "internal operation failed");
-                use deepref_postgres::PersistenceFailure;
+                use deepref_app::PersistenceFailure;
                 if let Some(classified) = error.persistence_error() {
                     let (status, code, message, retry_after, details) = persistence_response(classified);
                     let body = ApiErrorBody { code, message, correlation_id: REQUEST_CORRELATION_ID.try_with(|id| *id).ok(), details };
@@ -216,7 +216,7 @@ mod tests {
 
     #[test]
     fn persistence_conflicts_and_integrity_are_http_conflicts() {
-        use deepref_postgres::{IntegrityViolation, PersistenceError};
+        use deepref_app::{IntegrityViolation, PersistenceError};
         for error in [
             PersistenceError::Conflict { constraint: Some("private_constraint".into()) },
             PersistenceError::Integrity { violation: IntegrityViolation::ForeignKey, constraint: None },

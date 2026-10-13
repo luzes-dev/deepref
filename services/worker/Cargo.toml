@@ -7,7 +7,7 @@ license.workspace = true
 [dependencies]
 deepref-config.workspace = true
 deepref-domain.workspace = true
-deepref-postgres.workspace = true
+deepref-app.workspace = true
 deepref-integrations.workspace = true
 deepref-application.workspace = true
 deepref-documents.workspace = true
@@ -29,7 +29,7 @@ uuid.workspace = true
 [dev-dependencies]
 bytes.workspace = true
 deepref-domain.workspace = true
-deepref-postgres = { workspace = true, features = ["test-support"] }
+deepref-app = { workspace = true, features = ["test-support"] }
 futures.workspace = true
 rig-core = { workspace = true, features = ["test-utils"] }
 tracing-subscriber.workspace = true

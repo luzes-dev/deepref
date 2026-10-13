@@ -12,7 +12,7 @@ use deepref_application::{
 use deepref_domain::{
     Actor, ActorKind, CriterionDimension, CriterionKind, CriterionStage, FrameworkKind,
 };
-use deepref_postgres::{
+use deepref_app::{
     ProtocolActor, claim_job, complete_job, insert_model_route, migrate, publish_protocol,
     save_protocol_draft, schedule_screening_review,
 };
@@ -132,7 +132,7 @@ async fn reviewer_decisions(pool: &sqlx::PgPool, project: Uuid, report: Uuid) ->
 #[tokio::test]
 async fn a_second_opinion_lost_after_finalization_is_recorded_by_the_reconciler() {
     let Some(pool) =
-        deepref_postgres::test_isolation::isolated_pool_from_env("DATABASE_URL", 8).await
+        deepref_app::test_isolation::isolated_pool_from_env("DATABASE_URL", 8).await
     else {
         return;
     };

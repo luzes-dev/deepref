@@ -28,7 +28,7 @@ use tower::ServiceExt;
 use uuid::Uuid;
 
 async fn database() -> Option<PgPool> {
-    deepref_postgres::test_isolation::isolated_pool_from_env_first(
+    deepref_app::test_isolation::isolated_pool_from_env_first(
         &["TEST_DATABASE_URL", "DATABASE_URL"],
         8,
     )
@@ -638,7 +638,7 @@ async fn all_proposal_tools_schedule_observable_review_runs_without_domain_write
         ModelProfile::Reasoning,
         ModelProfile::LongContextReasoning,
     ] {
-        deepref_postgres::insert_model_route(
+        deepref_app::insert_model_route(
             &pool,
             &model_route(profile),
             Utc::now() - Duration::milliseconds(1),
@@ -728,7 +728,7 @@ async fn all_proposal_tools_schedule_observable_review_runs_without_domain_write
 }
 
 async fn create_classification_proposal(pool: &PgPool, fixture: Fixture) -> Uuid {
-    deepref_postgres::insert_model_route(
+    deepref_app::insert_model_route(
         pool,
         &model_route(ModelProfile::FastClassifier),
         Utc::now() - Duration::seconds(1),
@@ -758,7 +758,7 @@ async fn create_classification_proposal(pool: &PgPool, fixture: Fixture) -> Uuid
         process_review_run(pool, run_id, gateway).await,
         DeliveryAction::Ack
     );
-    let snapshot = deepref_postgres::get_review_run(
+    let snapshot = deepref_app::get_review_run(
         pool,
         fixture.project_id.into(),
         deepref_review::ReviewRunId::new(run_id).expect("valid run id"),
@@ -1122,7 +1122,7 @@ fn rig_call(id: &str, name: &str, args: Value) -> Vec<MockStreamEvent> {
 /// Drives the next queued assistant job with a scripted Rig model, the way
 /// the worker would. Returns when the job acked.
 async fn drive_assistant_job(pool: &PgPool, model: MockCompletionModel) {
-    let job = deepref_postgres::claim_job(pool, "http-test-worker", StdDuration::from_secs(30))
+    let job = deepref_app::claim_job(pool, "http-test-worker", StdDuration::from_secs(30))
         .await
         .expect("claim works")
         .expect("an assistant job is queued");
@@ -1173,7 +1173,7 @@ async fn post_json(state: &AppState, uri: &str, body: Value) -> (StatusCode, Str
 async fn assistant_writes_only_after_plan_confirmation_and_respects_budget() {
     let Some(pool) = database().await else { return };
     let fixture = seed(&pool).await;
-    deepref_postgres::insert_model_route(
+    deepref_app::insert_model_route(
         &pool,
         &model_route(ModelProfile::Reasoning),
         Utc::now() - Duration::milliseconds(1),
@@ -1270,7 +1270,7 @@ async fn assistant_writes_only_after_plan_confirmation_and_respects_budget() {
     assert_eq!(status, StatusCode::CONFLICT, "confirm is exactly-once");
 
     // Once the month's spend reaches the budget, free-form chat is refused.
-    deepref_postgres::set_ai_budget(&pool, project, 1)
+    deepref_app::set_ai_budget(&pool, project, 1)
         .await
         .expect("budget");
     sqlx::query(
@@ -1482,7 +1482,7 @@ async fn assistant_reads_match_several_words_report_documents_and_studies() {
 
     // The overview's title/abstract buckets add up to the report total, and the
     // full-text count is part of `include`, not an extra bucket.
-    let overview = deepref_postgres::get_agent_project_overview(&pool, fixture.project_id)
+    let overview = deepref_app::get_agent_project_overview(&pool, fixture.project_id)
         .await
         .expect("overview");
     let title_abstract = &overview["title_abstract"];
@@ -1514,7 +1514,7 @@ async fn assistant_reads_match_several_words_report_documents_and_studies() {
 async fn assistant_claim_without_a_plan_is_corrected_before_the_user_relies_on_it() {
     let Some(pool) = database().await else { return };
     let fixture = seed(&pool).await;
-    deepref_postgres::insert_model_route(
+    deepref_app::insert_model_route(
         &pool,
         &model_route(ModelProfile::Reasoning),
         Utc::now() - Duration::milliseconds(1),
@@ -1550,7 +1550,7 @@ async fn assistant_claim_without_a_plan_is_corrected_before_the_user_relies_on_i
     .await;
     assert_eq!(status, StatusCode::OK, "{stream}");
     assert!(!stream.contains("event: plan"), "{stream}");
-    let messages = deepref_postgres::list_assistant_messages(&pool, conversation_id)
+    let messages = deepref_app::list_assistant_messages(&pool, conversation_id)
         .await
         .expect("messages");
     let reply = messages.last().expect("assistant reply is stored");
@@ -1572,7 +1572,7 @@ async fn assistant_claim_without_a_plan_is_corrected_before_the_user_relies_on_i
 async fn assistant_plan_step_follows_its_review_run_to_a_plain_failure() {
     let Some(pool) = database().await else { return };
     let fixture = seed(&pool).await;
-    deepref_postgres::insert_model_route(
+    deepref_app::insert_model_route(
         &pool,
         &model_route(ModelProfile::Reasoning),
         Utc::now() - Duration::milliseconds(1),
@@ -1643,7 +1643,7 @@ async fn assistant_plan_step_follows_its_review_run_to_a_plain_failure() {
     assert_eq!(plan["results"][0]["status"], "queued", "{body}");
 
     // The review run then fails the way the worker records it.
-    deepref_postgres::fail_review_run(
+    deepref_app::fail_review_run(
         &pool,
         deepref_domain::ProjectId::new(project),
         deepref_review::ReviewRunId::new(run_id).expect("review run id"),
@@ -1674,10 +1674,10 @@ async fn assistant_plan_step_follows_its_review_run_to_a_plain_failure() {
     );
 
     // The change is in the activity feed with its model, reasoning and reads.
-    let activity = deepref_postgres::list_activity(
+    let activity = deepref_app::list_activity(
         &pool,
         project,
-        deepref_postgres::ActivityFilters::default(),
+        deepref_app::ActivityFilters::default(),
         None,
         20,
     )
@@ -1724,7 +1724,7 @@ async fn assistant_refuses_overlong_messages_before_storing_them() {
         body.contains("4000 characters"),
         "the client hint names the limit: {body}"
     );
-    let stored = deepref_postgres::list_assistant_messages(&pool, conversation_id)
+    let stored = deepref_app::list_assistant_messages(&pool, conversation_id)
         .await
         .expect("messages");
     assert!(stored.is_empty(), "an overlong message is not stored");
@@ -1823,7 +1823,7 @@ async fn confirmed_plan_rejects_records_changed_since_it_was_made() {
     let _guard = test_lock().lock().await;
     let Some(pool) = database().await else { return };
     let fixture = seed(&pool).await;
-    deepref_postgres::insert_model_route(
+    deepref_app::insert_model_route(
         &pool,
         &model_route(ModelProfile::Reasoning),
         Utc::now() - Duration::milliseconds(1),
@@ -1860,11 +1860,11 @@ async fn confirmed_plan_rejects_records_changed_since_it_was_made() {
     assert_eq!(items[1]["expected_revision"], 0, "{actions}");
 
     // A colleague includes one of the records before the plan is confirmed.
-    let protocol_version_id = deepref_postgres::get_published_protocol(&pool, project)
+    let protocol_version_id = deepref_app::get_published_protocol(&pool, project)
         .await
         .expect("published protocol")
         .id;
-    deepref_postgres::screen_report(
+    deepref_app::screening::screen_report(
         &pool,
         deepref_application::ScreenReportCommand {
             project_id: project.into(),
@@ -1924,7 +1924,7 @@ async fn projects_with_title_abstract_ai_off_refuse_assistant_screening_plans() 
     let _guard = test_lock().lock().await;
     let Some(pool) = database().await else { return };
     let fixture = seed(&pool).await;
-    deepref_postgres::insert_model_route(
+    deepref_app::insert_model_route(
         &pool,
         &model_route(ModelProfile::Reasoning),
         Utc::now() - Duration::milliseconds(1),
@@ -1992,7 +1992,7 @@ async fn confirmed_plan_decisions_are_assistant_authored_and_not_counted_as_huma
     let _guard = test_lock().lock().await;
     let Some(pool) = database().await else { return };
     let fixture = seed(&pool).await;
-    deepref_postgres::insert_model_route(
+    deepref_app::insert_model_route(
         &pool,
         &model_route(ModelProfile::Reasoning),
         Utc::now() - Duration::milliseconds(1),
@@ -2048,7 +2048,7 @@ async fn plan_lists_its_records_and_runs_only_the_ones_left_selected() {
     let _guard = test_lock().lock().await;
     let Some(pool) = database().await else { return };
     let fixture = seed(&pool).await;
-    deepref_postgres::insert_model_route(
+    deepref_app::insert_model_route(
         &pool,
         &model_route(ModelProfile::Reasoning),
         Utc::now() - Duration::milliseconds(1),
@@ -2129,7 +2129,7 @@ async fn assistant_event_stream_surfaces_database_failure_and_closes() {
     assert_eq!(status, StatusCode::CREATED, "{body}");
     let conversation: Value = serde_json::from_str(&body).expect("conversation JSON");
     let conversation_id = Uuid::parse_str(conversation["id"].as_str().expect("conversation id")).expect("UUID");
-    let run = deepref_postgres::submit_assistant_agent_run(
+    let run = deepref_app::submit_assistant_agent_run(
         &pool, fixture.project_id, conversation_id, "Read my corpus", "user", "event-test",
         &serde_json::to_value(model_route(ModelProfile::Reasoning)).expect("route JSON"),
         deepref_ai::ASSISTANT_PROMPT_VERSION

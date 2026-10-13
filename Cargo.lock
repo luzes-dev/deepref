@@ -868,7 +868,7 @@ dependencies = [
  "deepref-documents",
  "deepref-domain",
  "deepref-integrations",
- "deepref-postgres",
+ "deepref-app",
  "deepref-review",
  "deepref-worker",
  "futures",
@@ -910,7 +910,7 @@ dependencies = [
 ]
 
 [[package]]
-name = "deepref-postgres"
+name = "deepref-app"
 version = "0.1.0"
 dependencies = [
  "anyhow",
@@ -920,7 +920,7 @@ dependencies = [
  "deepref-application",
  "deepref-documents",
  "deepref-domain",
- "deepref-postgres",
+ "deepref-app",
  "deepref-review",
  "pgvector",
  "serde",
@@ -990,7 +990,7 @@ dependencies = [
  "deepref-documents",
  "deepref-domain",
  "deepref-integrations",
- "deepref-postgres",
+ "deepref-app",
  "deepref-review",
  "futures",
  "lettre",

@@ -3,7 +3,7 @@ use std::{future::Future, pin::Pin, sync::Arc, time::Duration};
 use deepref_ai::{AiGateway, RoutedGateway};
 use deepref_application::jobs::{ClaimedJob, JobLease, JobRetry};
 use deepref_documents::DocumentStore;
-use deepref_postgres::{claim_job, complete_job, fail_job, renew_job};
+use deepref_app::{claim_job, complete_job, fail_job, renew_job};
 use delivery::DeliveryAction;
 use sqlx::postgres::PgPoolOptions;
 use tokio::{
@@ -53,7 +53,7 @@ async fn build_ai_gateway(pool: &sqlx::PgPool) -> anyhow::Result<Arc<dyn AiGatew
             },
         )
     }));
-    let routes = deepref_postgres::ensure_default_model_routes(
+    let routes = deepref_app::ensure_default_model_routes(
         pool,
         provider.id(),
         &ai_config.default_model,
@@ -69,7 +69,7 @@ async fn build_ai_gateway(pool: &sqlx::PgPool) -> anyhow::Result<Arc<dyn AiGatew
         provider.id(),
         &ai_config.base_url,
         api_key,
-        Arc::new(deepref_postgres::PostgresUsageLedger::new(pool)),
+        Arc::new(deepref_app::PostgresUsageLedger::new(pool)),
         prices,
     )?;
     Ok(gateway)
@@ -119,7 +119,7 @@ pub async fn run_with_shutdown(
     let ai_gateway = build_ai_gateway(&pool).await?;
     // Workflow blocks that change review state follow the project's AI
     // autonomy settings.
-    workflows::set_autonomy_gate(Arc::new(deepref_postgres::ProjectAutonomyGate::new(&pool)));
+    workflows::set_autonomy_gate(Arc::new(deepref_app::ProjectAutonomyGate::new(&pool)));
     let (reconciler_shutdown, reconciler_signal) = watch::channel(false);
     tokio::spawn(workflows::run_scheduler(
         pool.clone(),

@@ -11,7 +11,7 @@ use deepref_application::{
     StartAutomationManually,
 };
 use deepref_domain::{Actor, ActorKind, ProjectId};
-use deepref_postgres::{
+use deepref_app::{
     begin_next_automation_step, complete_job, configure_automation_definition, get_automation_run,
     recover_expired_jobs, start_automation_manually,
 };
@@ -22,7 +22,7 @@ use std::time::Duration;
 use uuid::Uuid;
 
 async fn database() -> Option<PgPool> {
-    deepref_postgres::test_isolation::isolated_pool_from_env("DATABASE_URL", 8).await
+    deepref_app::test_isolation::isolated_pool_from_env("DATABASE_URL", 8).await
 }
 
 fn actor() -> Actor {
@@ -280,7 +280,7 @@ async fn unknown_step_fails_closed_and_lease_owner_is_required() -> Result<()> {
                 == DeliveryAction::Terminate
         );
         ensure!(
-            deepref_postgres::fail_job(
+            deepref_app::fail_job(
                 &pool,
                 &claimed.lease("worker-policy"),
                 "terminal job failure",

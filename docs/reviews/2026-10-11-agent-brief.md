@@ -8,7 +8,7 @@ Several agents work at the same time, each on one **track**. Read this brief, th
 
 ## Base and branch
 
-- **Packet 1 is already implemented** on branch `ci/run-db-integration-tests-with-isolated-databases` (PR #209, head `cc5f3f5`). It adds `deepref_postgres::test_isolation`: every DB test clones a private database from a migrated template. New DB tests use the same helper as their neighbours.
+- **Packet 1 is already implemented** on branch `ci/run-db-integration-tests-with-isolated-databases` (PR #209, head `cc5f3f5`). It adds `deepref_app::test_isolation`: every DB test clones a private database from a migrated template. New DB tests use the same helper as their neighbours.
 - **Your worktree starts from that commit.** Create your track's branch from it: `git switch -c <your-branch>`.
 - **Commit locally only.** Use one commit per packet item, with conventional messages ending in the attribution line `Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>`. The user has **not** authorized pushing or opening PRs, so do neither.
 
@@ -52,9 +52,9 @@ Stay inside your track's scope. Touch another track's hot files only for a mecha
 
 | Track | Hot files |
 |---|---|
-| A | `crates/postgres/src/jobs.rs`, `services/worker/src/lib.rs`, workflow node execution in `crates/postgres/src/workflows.rs` and `services/worker/src/workflows*` |
+| A | `crates/app/src/jobs.rs`, `services/worker/src/lib.rs`, workflow node execution in `crates/app/src/workflows.rs` and `services/worker/src/workflows*` |
 | B | `crates/http-api/src/error.rs`, `routes/mod.rs` middleware, `routes/health.rs`, `crates/telemetry` |
-| C | `crates/postgres/src/ai_first/**`, `review_runs.rs`, `second_review.rs`, the review-run observer UI |
+| C | `crates/app/src/ai_first/**`, `review_runs.rs`, `second_review.rs`, the review-run observer UI |
 | D | `crates/http-api/src/routes/assistant/**`, `crates/ai/src/runtime/**`, `services/worker/src/assistant*`, assistant web feature |
 | E1 | `ScreeningFocus.svelte`, `FullTextScreening.svelte` keyboard handling |
 | E2 | `crates/config`, `crates/http-api/src/config.rs`, `routes/actor.rs`, `apps/server/src/main.rs`, Dockerfiles |

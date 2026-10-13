@@ -6,7 +6,7 @@ retries = 0
 slow-timeout = { period = "60s", terminate-after = 2 }
 
 # Each DB-backed test clones a private database from a migrated template
-# (see deepref-postgres::test_isolation, feature `test-support`), so tests
+# (see deepref-app::test_isolation, feature `test-support`), so tests
 # share no rows and need no serial groups.
 #
 # This group only budgets connections. A DB test holds one lease connection,
@@ -18,7 +18,7 @@ slow-timeout = { period = "60s", terminate-after = 2 }
 postgres = { max-threads = 4 }
 
 [[profile.default.overrides]]
-filter = 'kind(test) and (package(deepref-postgres) or package(deepref-worker) or package(deepref-http-api))'
+filter = 'kind(test) and (package(deepref-app) or package(deepref-worker) or package(deepref-http-api))'
 test-group = 'postgres'
 
 [profile.ci]

@@ -1,6 +1,6 @@
 # Review 1: Data architecture, persistence, durable jobs, concurrency
 
-Reviewer lens: crates/postgres (migrations, src, tests), services/worker, crates/application, crates/domain, crates/events, apps/server, and how crates/http-api handlers write state.
+Reviewer lens: crates/app (migrations, src, tests), services/worker, crates/application, crates/domain, crates/events, apps/server, and how crates/http-api handlers write state.
 Method: static tracing of SQL and Rust, git history, CI config, and **read-only** queries against the local dev DB (`deepref-local-postgres-1`, schema at migration 48, inside `BEGIN READ ONLY`). I asked to create an isolated scratch database to run SQL experiments and the DB integration tests; the permission system denied it. So the concurrency findings below rest on code reading plus PostgreSQL semantics, and each one is labelled for that.
 
 ---
@@ -14,7 +14,7 @@ Method: static tracing of SQL and Rust, git history, CI config, and **read-only*
 
 Each `work_fetch_requested` job is the old NATS consumer protocol running inside a PG job. That gives **three stacked leases**: the job lease (`jobs.lease_owner`, a process-wide string), the event lease (`processed_events.owner_token`, a fresh UUID per delivery), and the DOI lease (`doi_fetch_state.owner_token`). The job's `attempts` field doubles as the old "delivery_count" (`processor.rs:779`).
 
-### Job lifecycle state machine (`crates/postgres/src/jobs.rs`)
+### Job lifecycle state machine (`crates/app/src/jobs.rs`)
 ```
 enqueue (INSERT … ON CONFLICT (dedupe_key) DO UPDATE SET id=jobs.id → returns EXISTING row, whatever its state)
    │
@@ -55,7 +55,7 @@ Worker claim loop (one claim per 100 ms tick); reconciler every 30 s (lease reco
   - In `.github/workflows/ci.yml:563-581`, `DATABASE_URL` is set only as step-level `env` on "Apply database migrations" (l.568) and "Verify SQLx offline query metadata" (l.577).
   - "Run integration tests" (l.579-581) runs `cargo nextest run --workspace --tests --locked` with no `env`. There is no job-level or workflow-level `DATABASE_URL` (workflow `env:` at l.15-18 holds only cargo variables), and nothing writes it to `$GITHUB_ENV`.
   - `.cargo/config.toml` and `.config/nextest.toml` set no env. `.env` is untracked, and test binaries do not load dotenv.
-  - Every DB test starts like `crates/postgres/tests/jobs.rs:18-19`: `let url = std::env::var("DATABASE_URL").ok()?;`, then `let Some(pool) = database().await else { return Ok(()); };` (l.64-66). The same pattern appears in all ~35 files under `crates/postgres/tests` and in `services/worker/tests`.
+  - Every DB test starts like `crates/app/tests/jobs.rs:18-19`: `let url = std::env::var("DATABASE_URL").ok()?;`, then `let Some(pool) = database().await else { return Ok(()); };` (l.64-66). The same pattern appears in all ~35 files under `crates/app/tests` and in `services/worker/tests`.
   - The previous CI version (`13024c8^`) had the same omission, so this has likely never worked since the full-stack job was split out.
 - **Current behavior:** CI reports green while every persistence, queue, screening, AI-first, migration and worker integration test is skipped.
 - **Why it matters:** All the durability and concurrency claims in `docs/architecture.md` and ADR 0005 rest on these tests. Today they are checked only on developer machines that have `.env` loaded, against a shared dev DB that some tests mutate (they "park" other jobs as `dead`, e.g. `services/worker/tests/workflows.rs:36-45`).
@@ -70,7 +70,7 @@ Worker claim loop (one claim per 100 ms tick); reconciler every 30 s (lease reco
 - **Category:** Defect. **Severity:** P1. **Confidence:** High for the error conflation. Medium-high that reopening finalized cohorts on an identity change is unintended (it diverges from the ADR wording).
 - **Status:** Verified by code reading. The trigger scenarios are a strong inference.
 - **Evidence:**
-  - `crates/postgres/src/ai_first/routing.rs:35-47`:
+  - `crates/app/src/ai_first/routing.rs:35-47`:
     ```rust
     crate::preview_screening_identity(pool, project, report, …).await
         .ok()
@@ -105,7 +105,7 @@ Worker claim loop (one claim per 100 ms tick); reconciler every 30 s (lease reco
   - The owner string is created once per process (`lib.rs:92`). `renew_job`, `complete_job` and `fail_job` (`jobs.rs:119-183`) match only `id, state='running', lease_owner=$owner, leased_until>now()`.
   - `claim_job` calls `recover_expired_jobs` before every claim (`jobs.rs:76`), so the **same process** reclaims its own expired job, and the old attempt's `complete_job` still matches. Two attempts can then hold the same lease and either can complete it.
   - A transient DB error during renewal (`lib.rs:294`, `renew_job(...).await?`) aborts `run_with_lease_renewal`, which **drops the in-flight work future** mid-execution. That cancels it after possible external effects, and the job is retried.
-  - Workflow steps (`services/worker/src/workflows.rs:107-140`, `crates/postgres/src/workflows.rs:1338-1460, 1519-1620`):
+  - Workflow steps (`services/worker/src/workflows.rs:107-140`, `crates/app/src/workflows.rs:1338-1460, 1519-1620`):
     - `begin_node_execution` accepts nodes already in `running` and bumps `attempts` with no owner recorded.
     - `finish_node_execution` writes `completed`/`failed`/`skipped` without checking the node's current status or attempt, so a late duplicate can overwrite the result of `fail_abandoned_steps` or of a parallel execution.
     - Workflow nodes include outbound HTTP, email and notifications, and review-state changes (via `AUTONOMY_GATE`).
@@ -221,7 +221,7 @@ Worker claim loop (one claim per 100 ms tick); reconciler every 30 s (lease reco
 - **Category:** Architecture. **Severity:** P3. **Confidence:** High. **Status:** Verified.
 - **Evidence:** In `crates/http-api/src/error.rs:62-82`, `Database(RowNotFound)` maps to 404 and every other `sqlx::Error` to 500 `INTERNAL_ERROR`. SQLSTATE checks are hand-rolled in five modules (`extraction.rs:915`, `workflows.rs:216`, `assistant*.rs`, `automations.rs:609`, `documents.rs:1088`). There is no handling of `40001`/`40P01` anywhere, even though `recompute_project_metrics` deliberately uses REPEATABLE READ.
 - **Why it matters:** Clients cannot tell a retryable conflict (409/503 with Retry-After) from a bug. Racing deletes (23503) and unique races (23505) show up as 500s outside the five handled modules.
-- **Proposed direction:** Add a single `classify(sqlx::Error) -> PersistenceError {NotFound, Conflict(constraint), Retryable, Integrity, Other}` in `deepref-postgres`, a `with_retry` helper for serializable transactions, and an `ApiError` mapping from it.
+- **Proposed direction:** Add a single `classify(sqlx::Error) -> PersistenceError {NotFound, Conflict(constraint), Retryable, Integrity, Other}` in `deepref-app`, a `with_retry` helper for serializable transactions, and an `ApiError` mapping from it.
 - **Verification:** Unit-test `classify` against fabricated `PgDatabaseError` codes.
 
 ### F12. The persistence layer is mostly runtime-checked SQL with stringly-typed states; the typed IDs and the `.sqlx` cache cover a small fraction
@@ -306,7 +306,7 @@ Model `CohortState × Trigger → Effect` in `deepref-application` (pure and tab
 
 1. **Is reopening finalized AI-first exclusions on a non-protocol identity change intended?** The ADR text says no; the code does it. There may be an unwritten V1 decision. Ask the owner.
 2. **Can I run the experiments?** I could not create an isolated scratch DB (denied). Suggested commands for the owner:
-   - Create a throwaway DB (`createdb review_scratch`), apply the migrations, then run `DATABASE_URL=… cargo nextest run -p deepref-postgres -p deepref-worker` to see whether the suites pass (F1).
+   - Create a throwaway DB (`createdb review_scratch`), apply the migrations, then run `DATABASE_URL=… cargo nextest run -p deepref-app -p deepref-worker` to see whether the suites pass (F1).
    - Reproduce F5 with two `psql` sessions completing the last two items around a held advisory lock.
    - Reproduce F3 with a 50 ms lease and the same owner string.
 3. **Are any deployments running more than one worker process?** Several sweeps (F14) and the project-row locks (F10) assume low concurrency.

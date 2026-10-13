@@ -426,7 +426,7 @@ async fn handle_retrieve_document_job(
         .and_then(serde_json::Value::as_str)
         .ok_or_else(|| anyhow::anyhow!("retrieve_document payload is missing document_id"))?
         .parse::<Uuid>()?;
-    let document = deepref_postgres::get_document_by_id(pool, document_id).await?;
+    let document = deepref_app::get_document_by_id(pool, document_id).await?;
     if document.object_key.is_some() && matches!(document.status.as_str(), "uploaded" | "available")
     {
         return Ok(DeliveryAction::Ack);
@@ -439,7 +439,7 @@ async fn handle_retrieve_document_job(
         Some(store) => store,
         None => Arc::new(DocumentStore::from_env()?),
     };
-    if !deepref_postgres::mark_document_retrieving(pool, document_id).await? {
+    if !deepref_app::mark_document_retrieving(pool, document_id).await? {
         return Ok(DeliveryAction::Ack);
     }
     let fetcher: Arc<dyn RemoteDocumentFetcher> =
@@ -454,7 +454,7 @@ async fn handle_retrieve_document_job(
                 error = %error,
                 "external document retrieval failed"
             );
-            deepref_postgres::mark_document_retrieval_failed(
+            deepref_app::mark_document_retrieval_failed(
                 pool,
                 document_id,
                 &error.failure_record(),
@@ -472,7 +472,7 @@ async fn handle_retrieve_document_job(
         Ok(value) => value,
         Err(error) => {
             let _ = store.delete(&stored.opaque_id).await;
-            deepref_postgres::mark_document_retrieval_failed(
+            deepref_app::mark_document_retrieval_failed(
                 pool,
                 document_id,
                 "retrieved document size overflowed persistence bounds",
@@ -482,7 +482,7 @@ async fn handle_retrieve_document_job(
         }
     };
     let mut transaction = pool.begin().await?;
-    let completion = match deepref_postgres::complete_document_retrieval(
+    let completion = match deepref_app::complete_document_retrieval(
         &mut transaction,
         deepref_domain::ProjectId::new(document.project_id),
         document_id,
@@ -496,7 +496,7 @@ async fn handle_retrieve_document_job(
         Err(error) => {
             let _ = transaction.rollback().await;
             let _ = store.delete(&stored.opaque_id).await;
-            deepref_postgres::mark_document_retrieval_failed(
+            deepref_app::mark_document_retrieval_failed(
                 pool,
                 document_id,
                 "retrieved document could not be persisted",
@@ -509,9 +509,9 @@ async fn handle_retrieve_document_job(
         let _ = store.delete(&stored.opaque_id).await;
         if matches!(
             completion,
-            deepref_postgres::CompleteDocumentRetrievalOutcome::Applied
+            deepref_app::CompleteDocumentRetrievalOutcome::Applied
         ) {
-            deepref_postgres::mark_document_retrieval_failed(
+            deepref_app::mark_document_retrieval_failed(
                 pool,
                 document_id,
                 "retrieved document transaction could not commit",
@@ -521,8 +521,8 @@ async fn handle_retrieve_document_job(
         return Err(error.into());
     }
     match completion {
-        deepref_postgres::CompleteDocumentRetrievalOutcome::Applied => {}
-        deepref_postgres::CompleteDocumentRetrievalOutcome::AlreadyCompleted => {
+        deepref_app::CompleteDocumentRetrievalOutcome::Applied => {}
+        deepref_app::CompleteDocumentRetrievalOutcome::AlreadyCompleted => {
             store.delete(&stored.opaque_id).await?;
         }
     }
@@ -556,7 +556,7 @@ async fn handle_parse_document_job(
         .get("force")
         .and_then(serde_json::Value::as_bool)
         .unwrap_or(false);
-    let document = deepref_postgres::get_document_by_id(pool, document_id).await?;
+    let document = deepref_app::get_document_by_id(pool, document_id).await?;
     if !forced
         && document
             .active_parser_version
@@ -573,7 +573,7 @@ async fn handle_parse_document_job(
         Some(store) => store,
         None => Arc::new(DocumentStore::from_env()?),
     };
-    deepref_postgres::mark_document_parsing(pool, document_id).await?;
+    deepref_app::mark_document_parsing(pool, document_id).await?;
     let parse_permit = pdf_parse_semaphore()
         .acquire_owned()
         .await
@@ -585,7 +585,7 @@ async fn handle_parse_document_job(
             Ok(parsed) => parsed,
             Err(error) => {
                 drop(parse_permit);
-                deepref_postgres::mark_document_failed(pool, document_id, &error.to_string())
+                deepref_app::mark_document_failed(pool, document_id, &error.to_string())
                     .await?;
                 return Err(error);
             }
@@ -599,7 +599,7 @@ async fn handle_parse_document_job(
         header.doi.as_deref(),
     );
     let parsed = parsed.document;
-    deepref_postgres::persist_parsed_document_with_structure(
+    deepref_app::persist_parsed_document_with_structure(
         pool,
         document_id,
         &parsed,
@@ -620,7 +620,7 @@ async fn record_identity_check(
     pdf: &deepref_documents::PdfIdentity,
 ) {
     let outcome = async {
-        let (title, doi) = deepref_postgres::report_identity(pool, report_id).await?;
+        let (title, doi) = deepref_app::report_identity(pool, report_id).await?;
         let check = deepref_documents::check_identity(
             pdf,
             &deepref_documents::ReportIdentity {
@@ -628,7 +628,7 @@ async fn record_identity_check(
                 doi: doi.as_deref(),
             },
         );
-        deepref_postgres::record_identity_check(pool, document_id, &check).await?;
+        deepref_app::record_identity_check(pool, document_id, &check).await?;
         anyhow::Ok(check.verdict)
     }
     .await;
@@ -656,7 +656,7 @@ async fn grobid_enrichment(
     object_key: &str,
     store: &DocumentStore,
     structured: &deepref_documents::StructuredDocument,
-) -> (deepref_postgres::DocumentStructure, String, GrobidHeader) {
+) -> (deepref_app::DocumentStructure, String, GrobidHeader) {
     let parsed = &structured.document;
     let native = (
         crate::enrichment::native_structure(structured),
@@ -726,7 +726,7 @@ async fn handle_recompute_metrics_job(
         deepref_domain::events::DomainPayload::MetricsRecomputeRequested(p) => p.project_id,
         _ => anyhow::bail!("recompute_metrics job has an unsupported payload"),
     };
-    deepref_postgres::recompute_project_metrics(pool, project_id).await?;
+    deepref_app::recompute_project_metrics(pool, project_id).await?;
     Ok(DeliveryAction::Ack)
 }
 
@@ -745,9 +745,9 @@ async fn handle_import_deduplication_job(
     }
     let payload: ImportDeduplicationPayload = serde_json::from_value(payload)?;
     for _ in 0..IMPORT_DEDUPLICATION_MAX_PASSES {
-        let summary = deepref_postgres::run_deduplication(
+        let summary = deepref_app::run_deduplication(
             pool,
-            deepref_postgres::DedupeRunRequest {
+            deepref_app::DedupeRunRequest {
                 project_id: payload.project_id,
                 limit: 100,
                 actor_kind: "automation".to_owned(),
@@ -781,10 +781,10 @@ async fn handle_job_with_document_services_inner(
             handle_message(pool, bytes, job.attempts.max(1) as u64, claim_lease).await
         }
         "recompute_metrics" => handle_recompute_metrics_job(&pool, job.payload.clone()).await,
-        deepref_postgres::IMPORT_DEDUPLICATION_JOB_KIND => {
+        deepref_app::IMPORT_DEDUPLICATION_JOB_KIND => {
             handle_import_deduplication_job(&pool, job.payload.clone()).await
         }
-        deepref_postgres::PMID_IMPORT_JOB_KIND => {
+        deepref_app::PMID_IMPORT_JOB_KIND => {
             crate::pmid_import::handle_job(
                 &pool,
                 job.payload.clone(),
@@ -799,7 +799,7 @@ async fn handle_job_with_document_services_inner(
             })?;
             handle_automation_run(&pool, job, lease, ai_gateway.as_deref()).await
         }
-        deepref_postgres::ASSISTANT_AGENT_RUN_JOB_KIND => {
+        deepref_app::ASSISTANT_AGENT_RUN_JOB_KIND => {
             let lease = lease.ok_or_else(|| {
                 anyhow::anyhow!("assistant job processing requires its lease owner")
             })?;
@@ -841,24 +841,24 @@ async fn handle_automation_run(
     let run_id = deepref_application::AutomationRunId::new(payload.automation_run_id)
         .map_err(|error| anyhow::anyhow!("automation run id is invalid: {error}"))?;
     let project_id =
-        deepref_postgres::get_claimed_automation_job_project_id_for_run(pool, lease, run_id)
+        deepref_app::get_claimed_automation_job_project_id_for_run(pool, lease, run_id)
             .await?
             .ok_or_else(|| anyhow::anyhow!("automation job and run association is invalid"))?;
     let project_uuid = project_id.as_uuid();
 
     loop {
         let Some(step) =
-            deepref_postgres::begin_next_automation_step(pool, project_id, run_id, lease).await?
+            deepref_app::begin_next_automation_step(pool, project_id, run_id, lease).await?
         else {
-            deepref_postgres::finalize_automation_run(pool, project_id, run_id).await?;
+            deepref_app::finalize_automation_run(pool, project_id, run_id).await?;
             return Ok(DeliveryAction::Ack);
         };
 
         if step.key == "recompute_project_metrics"
             && step.kind == deepref_application::AutomationStepKind::DeterministicAction
         {
-            deepref_postgres::recompute_project_metrics(pool, project_uuid).await?;
-            deepref_postgres::complete_automation_step(pool, project_id, step.id, lease).await?;
+            deepref_app::recompute_project_metrics(pool, project_uuid).await?;
+            deepref_app::complete_automation_step(pool, project_id, step.id, lease).await?;
             continue;
         }
 
@@ -873,7 +873,7 @@ async fn handle_automation_run(
                 Err(error) if job.attempts < job.max_attempts => return Err(error),
                 Err(error) => {
                     let message = bounded_worker_error(&error);
-                    deepref_postgres::fail_review_run(
+                    deepref_app::fail_review_run(
                         pool,
                         project_id,
                         deepref_review::ReviewRunId::new(run_id.as_uuid())?,
@@ -881,17 +881,17 @@ async fn handle_automation_run(
                         &message,
                     )
                     .await?;
-                    deepref_postgres::fail_automation_step(
+                    deepref_app::fail_automation_step(
                         pool, project_id, step.id, lease, &message,
                     )
                     .await?;
-                    deepref_postgres::finalize_automation_run(pool, project_id, run_id).await?;
+                    deepref_app::finalize_automation_run(pool, project_id, run_id).await?;
                     return Ok(DeliveryAction::Terminate);
                 }
             }
         }
 
-        deepref_postgres::fail_automation_step(
+        deepref_app::fail_automation_step(
             pool,
             project_id,
             step.id,
@@ -899,7 +899,7 @@ async fn handle_automation_run(
             UNKNOWN_AUTOMATION_STEP_ERROR,
         )
         .await?;
-        deepref_postgres::finalize_automation_run(pool, project_id, run_id).await?;
+        deepref_app::finalize_automation_run(pool, project_id, run_id).await?;
         return Ok(DeliveryAction::Terminate);
     }
 }
@@ -914,7 +914,7 @@ async fn execute_compiled_review(
 ) -> anyhow::Result<()> {
     let review_run_id = deepref_review::ReviewRunId::new(automation_run_id.as_uuid())?;
     let run =
-        deepref_postgres::load_leased_review_run(pool, project_id, review_run_id, lease).await?;
+        deepref_app::load_leased_review_run(pool, project_id, review_run_id, lease).await?;
     let review = CompiledReview::compile(run.snapshot.definition)?;
     if let deepref_review::ReviewRunState::Completed { .. }
     | deepref_review::ReviewRunState::Blocked { .. } = run.snapshot.state
@@ -926,7 +926,7 @@ async fn execute_compiled_review(
             final_review_node(&review).id(),
         )
         .await?;
-        deepref_postgres::complete_review_step(
+        deepref_app::complete_review_step(
             pool,
             project_id,
             automation_step.id,
@@ -937,7 +937,7 @@ async fn execute_compiled_review(
         .await?;
         return Ok(());
     }
-    deepref_postgres::mark_review_run_running(pool, project_id, review_run_id, lease).await?;
+    deepref_app::mark_review_run_running(pool, project_id, review_run_id, lease).await?;
 
     let prepare = persist_review_node(
         pool,
@@ -1015,7 +1015,7 @@ fn provider_endpoint_mismatch(
 
 struct CompiledReviewExecution<'a> {
     pool: &'a sqlx::PgPool,
-    run: &'a deepref_postgres::LeasedReviewRun,
+    run: &'a deepref_app::LeasedReviewRun,
     review: &'a CompiledReview,
     automation_step: &'a deepref_application::AutomationStepRun,
     lease: &'a JobLease,
@@ -1336,7 +1336,7 @@ fn screening_analysis(node: &GeneratedReviewNode) -> anyhow::Result<deepref_ai::
 
 async fn finalize_compiled_candidate(
     pool: &sqlx::PgPool,
-    run: &deepref_postgres::LeasedReviewRun,
+    run: &deepref_app::LeasedReviewRun,
     review: &CompiledReview,
     request: ReviewFinalizationRequest<'_>,
     automation_step: &deepref_application::AutomationStepRun,
@@ -1355,7 +1355,7 @@ async fn finalize_compiled_candidate(
         );
     }
     let predecessor_input = artifact_input(predecessor);
-    let final_start = deepref_postgres::begin_review_attempt(
+    let final_start = deepref_app::begin_review_attempt(
         pool,
         run,
         review,
@@ -1365,15 +1365,15 @@ async fn finalize_compiled_candidate(
     )
     .await?;
     let final_attempt = match final_start {
-        deepref_postgres::ReviewAttemptStart::Reused { attempt_id, .. } => attempt_id,
-        deepref_postgres::ReviewAttemptStart::Started { attempt_id, .. } => {
-            let outcome = deepref_postgres::complete_review_outcome(
+        deepref_app::ReviewAttemptStart::Reused { attempt_id, .. } => attempt_id,
+        deepref_app::ReviewAttemptStart::Started { attempt_id, .. } => {
+            let outcome = deepref_app::complete_review_outcome(
                 pool,
                 run,
-                deepref_postgres::ReviewOutcomeCompletion {
+                deepref_app::ReviewOutcomeCompletion {
                     final_attempt_id: attempt_id,
                     predecessors: std::slice::from_ref(&predecessor_input),
-                    outcome: deepref_postgres::ReviewOutcome::Candidate {
+                    outcome: deepref_app::ReviewOutcome::Candidate {
                         proposal: Box::new(deepref_ai::AiProposal {
                             id: Uuid::new_v4(),
                             draft: executed.proposal,
@@ -1389,8 +1389,8 @@ async fn finalize_compiled_candidate(
             )
             .await?;
             return match outcome {
-                deepref_postgres::ReviewFinalization::Completed { .. }
-                | deepref_postgres::ReviewFinalization::Blocked => Ok(()),
+                deepref_app::ReviewFinalization::Completed { .. }
+                | deepref_app::ReviewFinalization::Blocked => Ok(()),
             };
         }
     };
@@ -1405,7 +1405,7 @@ struct ReviewFinalizationRequest<'a> {
 
 async fn finalize_blocked_review(
     pool: &sqlx::PgPool,
-    run: &deepref_postgres::LeasedReviewRun,
+    run: &deepref_app::LeasedReviewRun,
     review: &CompiledReview,
     finalize_node: &ReviewNode,
     automation_step: &deepref_application::AutomationStepRun,
@@ -1418,7 +1418,7 @@ async fn finalize_blocked_review(
         message,
     } = blocked;
     let predecessor_input = artifact_input(predecessor);
-    let final_start = deepref_postgres::begin_review_attempt(
+    let final_start = deepref_app::begin_review_attempt(
         pool,
         run,
         review,
@@ -1428,17 +1428,17 @@ async fn finalize_blocked_review(
     )
     .await?;
     match final_start {
-        deepref_postgres::ReviewAttemptStart::Reused { attempt_id, .. } => {
+        deepref_app::ReviewAttemptStart::Reused { attempt_id, .. } => {
             complete_review_automation_step(pool, run, automation_step, attempt_id, lease).await
         }
-        deepref_postgres::ReviewAttemptStart::Started { attempt_id, .. } => {
-            deepref_postgres::complete_review_outcome(
+        deepref_app::ReviewAttemptStart::Started { attempt_id, .. } => {
+            deepref_app::complete_review_outcome(
                 pool,
                 run,
-                deepref_postgres::ReviewOutcomeCompletion {
+                deepref_app::ReviewOutcomeCompletion {
                     final_attempt_id: attempt_id,
                     predecessors: std::slice::from_ref(&predecessor_input),
-                    outcome: deepref_postgres::ReviewOutcome::Blocked { code, message },
+                    outcome: deepref_app::ReviewOutcome::Blocked { code, message },
                     automation_step_id: automation_step.id,
                     lease,
                 },
@@ -1451,19 +1451,19 @@ async fn finalize_blocked_review(
 
 async fn complete_review_automation_step(
     pool: &sqlx::PgPool,
-    run: &deepref_postgres::LeasedReviewRun,
+    run: &deepref_app::LeasedReviewRun,
     automation_step: &deepref_application::AutomationStepRun,
     final_attempt: Uuid,
     lease: &JobLease,
 ) -> anyhow::Result<()> {
-    deepref_postgres::complete_review_step(
+    deepref_app::complete_review_step(
         pool,
         run.snapshot.project_id,
         automation_step.id,
         final_attempt,
         lease,
         Some(serde_json::to_value(
-            &deepref_postgres::get_review_run(pool, run.snapshot.project_id, run.snapshot.id)
+            &deepref_app::get_review_run(pool, run.snapshot.project_id, run.snapshot.id)
                 .await?,
         )?),
     )
@@ -1499,7 +1499,7 @@ struct ReviewNodeWrite<'a> {
 
 async fn persist_review_node(
     pool: &sqlx::PgPool,
-    run: &deepref_postgres::LeasedReviewRun,
+    run: &deepref_app::LeasedReviewRun,
     review: &CompiledReview,
     lease: &JobLease,
     write: ReviewNodeWrite<'_>,
@@ -1511,7 +1511,7 @@ async fn persist_review_node(
         model_run_id,
     } = write;
     let predecessor_inputs = predecessors.iter().map(artifact_input).collect::<Vec<_>>();
-    match deepref_postgres::begin_review_attempt(
+    match deepref_app::begin_review_attempt(
         pool,
         run,
         review,
@@ -1521,7 +1521,7 @@ async fn persist_review_node(
     )
     .await?
     {
-        deepref_postgres::ReviewAttemptStart::Reused {
+        deepref_app::ReviewAttemptStart::Reused {
             artifact_id,
             artifact_hash,
             ..
@@ -1529,11 +1529,11 @@ async fn persist_review_node(
             artifact_id,
             artifact_hash,
         }),
-        deepref_postgres::ReviewAttemptStart::Started { attempt_id, .. } => {
-            let accepted = deepref_postgres::complete_review_attempt(
+        deepref_app::ReviewAttemptStart::Started { attempt_id, .. } => {
+            let accepted = deepref_app::complete_review_attempt(
                 pool,
                 run,
-                deepref_postgres::ReviewAttemptCompletion {
+                deepref_app::ReviewAttemptCompletion {
                     attempt_id,
                     payload,
                     media_type: "application/vnd.deepref.review-artifact+json",
@@ -1553,7 +1553,7 @@ async fn persist_review_node(
 
 async fn execute_review_ai_node(
     pool: &sqlx::PgPool,
-    run: &deepref_postgres::LeasedReviewRun,
+    run: &deepref_app::LeasedReviewRun,
     review: &CompiledReview,
     node: &ReviewNode,
     predecessors: &[AcceptedNodeArtifact],
@@ -1583,7 +1583,7 @@ struct ReviewAiNodeRequest<'a> {
 
 async fn execute_review_ai_node_with_context(
     pool: &sqlx::PgPool,
-    run: &deepref_postgres::LeasedReviewRun,
+    run: &deepref_app::LeasedReviewRun,
     review: &CompiledReview,
     lease: &JobLease,
     gateway: &dyn AiGateway,
@@ -1596,10 +1596,10 @@ async fn execute_review_ai_node_with_context(
     } = request;
     let predecessor_inputs = predecessors.iter().map(artifact_input).collect::<Vec<_>>();
     let start =
-        deepref_postgres::begin_review_attempt(pool, run, review, node, &predecessor_inputs, lease)
+        deepref_app::begin_review_attempt(pool, run, review, node, &predecessor_inputs, lease)
             .await?;
     match start {
-        deepref_postgres::ReviewAttemptStart::Reused {
+        deepref_app::ReviewAttemptStart::Reused {
             artifact_id,
             artifact_hash,
             payload,
@@ -1616,12 +1616,12 @@ async fn execute_review_ai_node_with_context(
                 },
             })
         }
-        deepref_postgres::ReviewAttemptStart::Started {
+        deepref_app::ReviewAttemptStart::Started {
             attempt_id,
             input_fingerprint,
             ..
         } => {
-            let store = deepref_postgres::PostgresAiStore::new(pool);
+            let store = deepref_app::PostgresAiStore::new(pool);
             let runner = AiTaskRunner::new(
                 gateway,
                 &store,
@@ -1643,7 +1643,7 @@ async fn execute_review_ai_node_with_context(
             {
                 Ok(executed) => executed,
                 Err(error) => {
-                    deepref_postgres::fail_review_attempt(
+                    deepref_app::fail_review_attempt(
                         pool,
                         run,
                         attempt_id,
@@ -1656,10 +1656,10 @@ async fn execute_review_ai_node_with_context(
                 }
             };
             let model_run_id = executed.model_run_id;
-            let accepted = deepref_postgres::complete_review_attempt(
+            let accepted = deepref_app::complete_review_attempt(
                 pool,
                 run,
-                deepref_postgres::ReviewAttemptCompletion {
+                deepref_app::ReviewAttemptCompletion {
                     attempt_id,
                     payload: serde_json::to_value(&executed)?,
                     media_type: "application/vnd.deepref.executed-review-task+json",
@@ -1744,7 +1744,7 @@ fn pdf_parse_semaphore() -> Arc<Semaphore> {
 }
 
 async fn parse_stored_document(
-    document: &deepref_postgres::DocumentRecord,
+    document: &deepref_app::DocumentRecord,
     object_key: &str,
     store: Arc<DocumentStore>,
     parser: Option<Arc<dyn DocumentParser>>,

@@ -17,7 +17,7 @@ use tower::ServiceExt;
 use uuid::Uuid;
 
 async fn database() -> Option<PgPool> {
-    deepref_postgres::test_isolation::isolated_pool_from_env_first(
+    deepref_app::test_isolation::isolated_pool_from_env_first(
         &["TEST_DATABASE_URL", "DATABASE_URL"],
         5,
     )
@@ -914,8 +914,8 @@ async fn hooks_resolve_tokens_before_limiting_and_reject_unsigned_new_webhooks()
     let project = ProjectId::new(project);
     let actor = Actor::new(ActorKind::User, "hook-test").unwrap();
     let graph = serde_json::from_value(json!({"nodes":[{"id":"trigger","type":"trigger.webhook","config":{}}],"edges":[]})).unwrap();
-    let workflow = deepref_postgres::create_workflow(&pool, project, "Signed", "", graph, &actor).await.unwrap();
-    let endpoint = deepref_postgres::get_webhook_config(&pool, project, workflow.id).await.unwrap();
+    let workflow = deepref_app::create_workflow(&pool, project, "Signed", "", graph, &actor).await.unwrap();
+    let endpoint = deepref_app::get_webhook_config(&pool, project, workflow.id).await.unwrap();
     let response = call(&pool, Request::builder().method("POST")
         .uri(format!("/hooks/workflows/{}", endpoint.token)).body(Body::from("{}")).unwrap()).await;
     assert_eq!(response.status(), StatusCode::FORBIDDEN);

@@ -147,7 +147,7 @@ pub(crate) async fn create_ingestion(
     .bind(&input.citation_provider)
     .fetch_one(&mut *tx)
     .await?;
-    deepref_postgres::ensure_legacy_acquisition_run(
+    deepref_app::ensure_legacy_acquisition_run(
         &mut tx,
         ingestion_id,
         input.project_id,
