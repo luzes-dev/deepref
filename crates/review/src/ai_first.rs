@@ -60,3 +60,73 @@ pub fn automation_eligible_exclusion(
             }
     })
 }
+
+/// Persisted lifecycle of an AI-first cohort.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AiFirstCohortStatus {
+    Open,
+    Closed,
+    Auditing,
+    Passed,
+    Failed,
+    Invalidated,
+    Declined,
+    Finalized,
+}
+
+impl AiFirstCohortStatus {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Open => "open",
+            Self::Closed => "closed",
+            Self::Auditing => "auditing",
+            Self::Passed => "passed",
+            Self::Failed => "failed",
+            Self::Invalidated => "invalidated",
+            Self::Declined => "declined",
+            Self::Finalized => "finalized",
+        }
+    }
+
+    pub fn parse(value: &str) -> Option<Self> {
+        match value {
+            "open" => Some(Self::Open),
+            "closed" => Some(Self::Closed),
+            "auditing" => Some(Self::Auditing),
+            "passed" => Some(Self::Passed),
+            "failed" => Some(Self::Failed),
+            "invalidated" => Some(Self::Invalidated),
+            "declined" => Some(Self::Declined),
+            "finalized" => Some(Self::Finalized),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, serde::Serialize, serde::Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AiFirstCeiling {
+    Off,
+    Routing,
+    CohortFinalization,
+}
+
+impl AiFirstCeiling {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Off => "off",
+            Self::Routing => "routing",
+            Self::CohortFinalization => "cohort_finalization",
+        }
+    }
+
+    pub fn parse(value: &str) -> Option<Self> {
+        match value {
+            "off" => Some(Self::Off),
+            "routing" => Some(Self::Routing),
+            "cohort_finalization" => Some(Self::CohortFinalization),
+            _ => None,
+        }
+    }
+}

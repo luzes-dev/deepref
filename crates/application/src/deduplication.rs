@@ -9,6 +9,33 @@ use thiserror::Error;
 pub const FUZZY_PROPOSAL_THRESHOLD: f64 = 0.82;
 pub const FUZZY_SHORTLIST_LIMIT: i64 = 50;
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum DedupeProposalStatus {
+    Pending,
+    Accepted,
+    Rejected,
+}
+
+impl DedupeProposalStatus {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Pending => "pending",
+            Self::Accepted => "accepted",
+            Self::Rejected => "rejected",
+        }
+    }
+
+    pub fn parse(value: &str) -> Option<Self> {
+        match value {
+            "pending" => Some(Self::Pending),
+            "accepted" => Some(Self::Accepted),
+            "rejected" => Some(Self::Rejected),
+            _ => None,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]
 pub struct DedupeCandidate {
     pub report_id: ReportId,

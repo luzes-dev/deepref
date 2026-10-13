@@ -22,6 +22,7 @@ pub struct AppState {
     pub ai_gateway: Arc<dyn AiGateway>,
     pub ai_info: AiRuntimeInfo,
     pub workflow: deepref_config::WorkflowConfig,
+    pub smtp: deepref_config::SmtpConfig,
 }
 
 impl AppState {
@@ -33,6 +34,7 @@ impl AppState {
             ai_gateway: Arc::new(RoutedGateway::default()),
             ai_info: AiRuntimeInfo::default(),
             workflow: deepref_config::WorkflowConfig { niche_nodes_enabled: false },
+            smtp: deepref_config::SmtpConfig::from_source(&|_| None),
         }
     }
 
@@ -43,6 +45,11 @@ impl AppState {
 
     pub fn with_document_store(mut self, document_store: DocumentStore) -> Self {
         self.document_store = Some(document_store);
+        self
+    }
+
+    pub fn with_smtp(mut self, smtp: deepref_config::SmtpConfig) -> Self {
+        self.smtp = smtp;
         self
     }
 

@@ -1,5 +1,5 @@
 use std::{
-    sync::{Arc, OnceLock},
+    sync::Arc,
     time::Duration,
 };
 
@@ -31,19 +31,6 @@ use crate::{
     limiter, store,
 };
 
-static PDF_PARSE_SEMAPHORE: OnceLock<Arc<Semaphore>> = OnceLock::new();
-
-pub fn validate_pdf_parse_concurrency() -> anyhow::Result<()> {
-    if let Ok(value) = std::env::var("DOCUMENT_PARSE_CONCURRENCY") {
-        let parsed = value.parse::<usize>().map_err(|_| {
-            anyhow::anyhow!("DOCUMENT_PARSE_CONCURRENCY must be a positive integer up to 16")
-        })?;
-        if !(1..=16).contains(&parsed) {
-            anyhow::bail!("DOCUMENT_PARSE_CONCURRENCY must be a positive integer up to 16");
-        }
-    }
-    Ok(())
-}
 
 async fn parse_work_fetch_event(
     pool: &PgPool,
@@ -156,9 +143,10 @@ async fn execute_work_fetch(
     owner: Uuid,
     claim_lease: Duration,
     delivery_count: u64,
+    config: &crate::config::WorkerConfig,
 ) -> anyhow::Result<DeliveryAction> {
     let settings = store::load_runtime_settings(&pool).await?;
-    let client = match CrossrefClient::new(settings.crossref_mailto.clone()) {
+    let client = match CrossrefClient::new(settings.crossref_mailto.clone(), &config.runtime.crossref) {
         Ok(client) => client.with_max_attempts(settings.retry_attempts),
         Err(error) => {
             store::finalize_terminal_failure(
@@ -242,6 +230,7 @@ pub async fn handle_message(
     bytes: Vec<u8>,
     delivery_count: u64,
     claim_lease: Duration,
+    config: &crate::config::WorkerConfig,
 ) -> anyhow::Result<DeliveryAction> {
     let event = match parse_work_fetch_event(&pool, &bytes, delivery_count).await? {
         Ok(event) => event,
@@ -305,6 +294,7 @@ pub async fn handle_message(
         owner,
         claim_lease,
         delivery_count,
+        config,
     )
     .await
 }
@@ -313,8 +303,9 @@ pub async fn handle_job(
     pool: sqlx::PgPool,
     job: &deepref_application::jobs::ClaimedJob,
     claim_lease: Duration,
+    config: &crate::config::WorkerConfig,
 ) -> anyhow::Result<DeliveryAction> {
-    handle_job_with_document_services_inner(pool, job, claim_lease, JobServices::default()).await
+    handle_job_with_document_services_inner(pool, job, claim_lease, JobServices::new(config)).await
 }
 
 pub async fn handle_job_with_documents(
@@ -323,6 +314,7 @@ pub async fn handle_job_with_documents(
     claim_lease: Duration,
     document_store: Option<Arc<DocumentStore>>,
     document_parser: Option<Arc<dyn DocumentParser>>,
+    config: &crate::config::WorkerConfig,
 ) -> anyhow::Result<DeliveryAction> {
     handle_job_with_document_services_inner(
         pool,
@@ -331,7 +323,7 @@ pub async fn handle_job_with_documents(
         JobServices {
             document_store,
             document_parser,
-            ..JobServices::default()
+            ..JobServices::new(config)
         },
     )
     .await
@@ -344,6 +336,7 @@ pub async fn handle_job_with_documents_owned(
     claim_lease: Duration,
     document_store: Option<Arc<DocumentStore>>,
     document_parser: Option<Arc<dyn DocumentParser>>,
+    config: &crate::config::WorkerConfig,
 ) -> anyhow::Result<DeliveryAction> {
     handle_job_with_document_services_inner(
         pool,
@@ -353,7 +346,7 @@ pub async fn handle_job_with_documents_owned(
             document_store,
             document_parser,
             lease: Some(lease),
-            ..JobServices::default()
+            ..JobServices::new(config)
         },
     )
     .await
@@ -366,6 +359,7 @@ pub async fn handle_job_with_document_services(
     document_store: Option<Arc<DocumentStore>>,
     document_parser: Option<Arc<dyn DocumentParser>>,
     remote_fetcher: Option<Arc<dyn RemoteDocumentFetcher>>,
+    config: &crate::config::WorkerConfig,
 ) -> anyhow::Result<DeliveryAction> {
     handle_job_with_document_services_inner(
         pool,
@@ -375,7 +369,7 @@ pub async fn handle_job_with_document_services(
             document_store,
             document_parser,
             remote_fetcher,
-            ..JobServices::default()
+            ..JobServices::new(config)
         },
     )
     .await
@@ -389,7 +383,7 @@ pub async fn handle_job_with_documents_owned_and_ai(
     document_store: Option<Arc<DocumentStore>>,
     document_parser: Option<Arc<dyn DocumentParser>>,
     ai_gateway: Arc<dyn AiGateway>,
-    niche_nodes_enabled: bool,
+    config: &crate::config::WorkerConfig,
 ) -> anyhow::Result<DeliveryAction> {
     handle_job_with_document_services_inner(
         pool,
@@ -400,21 +394,32 @@ pub async fn handle_job_with_documents_owned_and_ai(
             document_parser,
             lease: Some(lease),
             ai_gateway: Some(ai_gateway),
-            niche_nodes_enabled,
-            ..JobServices::default()
+            ..JobServices::new(config)
         },
     )
     .await
 }
 
-#[derive(Default)]
 struct JobServices<'a> {
+    config: &'a crate::config::WorkerConfig,
     document_store: Option<Arc<DocumentStore>>,
     document_parser: Option<Arc<dyn DocumentParser>>,
     remote_fetcher: Option<Arc<dyn RemoteDocumentFetcher>>,
     lease: Option<&'a JobLease>,
     ai_gateway: Option<Arc<dyn AiGateway>>,
-    niche_nodes_enabled: bool,
+}
+
+impl<'a> JobServices<'a> {
+    fn new(config: &'a crate::config::WorkerConfig) -> Self {
+        Self {
+            config,
+            document_store: None,
+            document_parser: None,
+            remote_fetcher: None,
+            lease: None,
+            ai_gateway: None,
+        }
+    }
 }
 
 async fn handle_retrieve_document_job(
@@ -422,6 +427,7 @@ async fn handle_retrieve_document_job(
     job: &deepref_application::jobs::ClaimedJob,
     document_store: Option<Arc<DocumentStore>>,
     remote_fetcher: Option<Arc<dyn RemoteDocumentFetcher>>,
+    config: &crate::config::WorkerConfig,
 ) -> anyhow::Result<DeliveryAction> {
     let document_id = job
         .payload
@@ -440,7 +446,7 @@ async fn handle_retrieve_document_job(
         .ok_or_else(|| anyhow::anyhow!("external document has no source URL"))?;
     let store = match document_store {
         Some(store) => store,
-        None => Arc::new(DocumentStore::from_env()?),
+        None => Arc::new(DocumentStore::from_config(&config.documents)?),
     };
     if !deepref_app::mark_document_retrieving(pool, document_id).await? {
         return Ok(DeliveryAction::Ack);
@@ -537,6 +543,7 @@ async fn handle_parse_document_job(
     job: &deepref_application::jobs::ClaimedJob,
     document_store: Option<Arc<DocumentStore>>,
     document_parser: Option<Arc<dyn DocumentParser>>,
+    config: &crate::config::WorkerConfig,
 ) -> anyhow::Result<DeliveryAction> {
     let document_id = job
         .payload
@@ -574,15 +581,15 @@ async fn handle_parse_document_job(
         .ok_or_else(|| anyhow::anyhow!("document has no stored object"))?;
     let store = match document_store {
         Some(store) => store,
-        None => Arc::new(DocumentStore::from_env()?),
+        None => Arc::new(DocumentStore::from_config(&config.documents)?),
     };
     deepref_app::mark_document_parsing(pool, document_id).await?;
-    let parse_permit = pdf_parse_semaphore()
+    let parse_permit = Arc::clone(&config.pdf_parse_semaphore)
         .acquire_owned()
         .await
         .map_err(|error| anyhow::anyhow!("PDF parser concurrency limiter closed: {error}"))?;
     let parsed =
-        match parse_stored_document(&document, object_key, Arc::clone(&store), document_parser)
+        match parse_stored_document(&document, object_key, Arc::clone(&store), document_parser, &config.runtime.pdf)
             .await
         {
             Ok(parsed) => parsed,
@@ -595,7 +602,7 @@ async fn handle_parse_document_job(
         };
     drop(parse_permit);
     let (structure, parser_version, header) =
-        grobid_enrichment(document_id, object_key, &store, &parsed).await;
+        grobid_enrichment(document_id, object_key, &store, &parsed, config).await;
     let pdf_identity = deepref_documents::PdfIdentity::from_parse(
         &parsed,
         header.title.as_deref(),
@@ -659,6 +666,7 @@ async fn grobid_enrichment(
     object_key: &str,
     store: &DocumentStore,
     structured: &deepref_documents::StructuredDocument,
+    config: &crate::config::WorkerConfig,
 ) -> (deepref_app::DocumentStructure, String, GrobidHeader) {
     let parsed = &structured.document;
     let native = (
@@ -666,7 +674,7 @@ async fn grobid_enrichment(
         PARSER_VERSION.to_owned(),
         GrobidHeader::default(),
     );
-    let client = match crate::enrichment::grobid_client_from_env() {
+    let client = match crate::enrichment::grobid_client_from_config(config) {
         Ok(Some(client)) => client,
         Ok(None) => return native,
         Err(error) => {
@@ -777,18 +785,18 @@ async fn handle_job_with_document_services_inner(
         remote_fetcher,
         lease,
         ai_gateway,
-        niche_nodes_enabled,
+        config,
     } = services;
-    match job.kind.as_str() {
-        "work_fetch_requested" => {
+    match job.kind {
+        deepref_domain::JobKind::WorkFetchRequested => {
             let bytes = serde_json::to_vec(&job.payload)?;
-            handle_message(pool, bytes, job.attempts.max(1) as u64, claim_lease).await
+            handle_message(pool, bytes, job.attempts.max(1) as u64, claim_lease, config).await
         }
-        "recompute_metrics" => handle_recompute_metrics_job(&pool, job.payload.clone()).await,
-        deepref_app::IMPORT_DEDUPLICATION_JOB_KIND => {
+        deepref_domain::JobKind::RecomputeMetrics => handle_recompute_metrics_job(&pool, job.payload.clone()).await,
+        deepref_domain::JobKind::ImportDeduplication => {
             handle_import_deduplication_job(&pool, job.payload.clone()).await
         }
-        deepref_app::PMID_IMPORT_JOB_KIND => {
+        deepref_domain::JobKind::PmidImport => {
             crate::pmid_import::handle_job(
                 &pool,
                 job.payload.clone(),
@@ -797,29 +805,28 @@ async fn handle_job_with_document_services_inner(
             )
             .await
         }
-        deepref_app::durable_runs::DURABLE_RUN_STEP_JOB_KIND => {
+        deepref_domain::JobKind::DurableRunStep => {
             let lease = lease.ok_or_else(|| anyhow::anyhow!("durable step requires its job lease"))?;
             let payload: DurableStepJobPayload = serde_json::from_value(job.payload.clone())?;
             match payload.handler_kind.as_str() {
-                "workflow" => crate::workflows::handle_step(&pool, job, lease, ai_gateway.clone(),niche_nodes_enabled).await,
+                "workflow" => crate::workflows::handle_step(&pool, job, lease, ai_gateway.clone(),&config.runtime).await,
                 "automation" | "review" => handle_durable_recipe_step(&pool, job, lease, ai_gateway.as_deref(), payload).await,
                 other => anyhow::bail!("unsupported durable handler kind: {other}"),
             }
         }
-        deepref_app::ASSISTANT_AGENT_RUN_JOB_KIND => {
+        deepref_domain::JobKind::AssistantAgentRun => {
             let lease = lease.ok_or_else(|| {
                 anyhow::anyhow!("assistant job processing requires its lease owner")
             })?;
-            crate::assistant::handle_assistant_agent_run(&pool, job, &lease.owner).await
+            crate::assistant::handle_assistant_agent_run(&pool, job, &lease.owner, &config.runtime.ai).await
         }
-        "recompute_prisma" => Ok(DeliveryAction::Ack),
-        "retrieve_document" => {
-            handle_retrieve_document_job(&pool, job, document_store, remote_fetcher).await
+        deepref_domain::JobKind::RecomputePrisma => Ok(DeliveryAction::Ack),
+        deepref_domain::JobKind::RetrieveDocument => {
+            handle_retrieve_document_job(&pool, job, document_store, remote_fetcher, config).await
         }
-        "parse_document" => {
-            handle_parse_document_job(&pool, job, document_store, document_parser).await
+        deepref_domain::JobKind::ParseDocument => {
+            handle_parse_document_job(&pool, job, document_store, document_parser, config).await
         }
-        other => anyhow::bail!("unsupported durable job kind: {other}"),
     }
 }
 
@@ -1719,22 +1726,13 @@ fn bounded_message(message: &str, max_bytes: usize) -> String {
     message.get(..end).unwrap_or("").to_owned()
 }
 
-fn pdf_parse_semaphore() -> Arc<Semaphore> {
-    Arc::clone(PDF_PARSE_SEMAPHORE.get_or_init(|| {
-        let permits = std::env::var("DOCUMENT_PARSE_CONCURRENCY")
-            .ok()
-            .and_then(|value| value.parse::<usize>().ok())
-            .filter(|value| (1..=16).contains(value))
-            .unwrap_or(2);
-        Arc::new(Semaphore::new(permits))
-    }))
-}
 
 async fn parse_stored_document(
     document: &deepref_app::DocumentRecord,
     object_key: &str,
     store: Arc<DocumentStore>,
     parser: Option<Arc<dyn DocumentParser>>,
+    config: &deepref_config::PdfConfig,
 ) -> anyhow::Result<deepref_documents::StructuredDocument> {
     let path = std::env::temp_dir().join(format!("deepref-parse-{}.pdf", Uuid::new_v4()));
     let mut file = tokio::fs::OpenOptions::new()
@@ -1765,7 +1763,7 @@ async fn parse_stored_document(
     }
     let parser = match parser {
         Some(parser) => parser,
-        None => PdfiumParser::shared_from_env()?,
+        None => PdfiumParser::shared_from_config(config)?,
     };
     if parser.version() != PARSER_VERSION {
         let _ = tokio::fs::remove_file(&path).await;

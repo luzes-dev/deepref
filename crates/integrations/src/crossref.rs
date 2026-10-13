@@ -40,14 +40,13 @@ pub struct CrossrefClient {
 }
 
 impl CrossrefClient {
-    /// Builds the client for `api.crossref.org`. Abstract enrichment is on unless
-    /// `DEEPREF_ABSTRACT_ENRICHMENT` is `off`, `0` or `false`.
-    pub fn new(mailto: impl Into<String>) -> Result<Self, ProviderError> {
+    /// Builds the client for `api.crossref.org` with the configured abstract enrichment.
+    pub fn new(
+        mailto: impl Into<String>,
+        config: &deepref_config::CrossrefConfig,
+    ) -> Result<Self, ProviderError> {
         let mailto = mailto.into();
-        // Set DEEPREF_ABSTRACT_ENRICHMENT=off to skip Europe PMC / OpenAlex lookups.
-        let enrich = !std::env::var("DEEPREF_ABSTRACT_ENRICHMENT")
-            .is_ok_and(|value| matches!(value.trim(), "off" | "0" | "false"));
-        let enricher = if enrich {
+        let enricher = if config.abstract_enrichment {
             AbstractEnricher::new(mailto.clone()).ok()
         } else {
             None

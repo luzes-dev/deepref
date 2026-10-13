@@ -29,8 +29,10 @@ pub mod workflows;
 /// Metered provider gateway for the configured AI provider (OpenCode Go by
 /// default) when its key is set, otherwise an empty router so AI jobs fail with
 /// a clear "no adapter" error instead of a crash.
-async fn build_ai_gateway(pool: &sqlx::PgPool) -> anyhow::Result<Arc<dyn AiGateway>> {
-    let ai_config = deepref_config::AiProviderConfig::from_env()?;
+async fn build_ai_gateway(
+    pool: &sqlx::PgPool,
+    ai_config: &deepref_config::AiProviderConfig,
+) -> anyhow::Result<Arc<dyn AiGateway>> {
     for notice in ai_config.deprecations() {
         tracing::warn!("{notice}");
     }
@@ -114,9 +116,8 @@ pub async fn run_with_shutdown(
         .connect(&database.url)
         .await?;
     let owner = format!("deepref-worker-{}", uuid::Uuid::new_v4());
-    processor::validate_pdf_parse_concurrency()?;
-    let document_store = Arc::new(DocumentStore::from_env()?);
-    let ai_gateway = build_ai_gateway(&pool).await?;
+    let document_store = Arc::new(DocumentStore::from_config(&config.documents)?);
+    let ai_gateway = build_ai_gateway(&pool, &config.runtime.ai).await?;
     // Workflow blocks that change review state follow the project's AI
     // autonomy settings.
     workflows::set_autonomy_gate(Arc::new(deepref_app::ProjectAutonomyGate::new(&pool)));
@@ -147,8 +148,7 @@ pub async fn run_with_shutdown(
         claim_lease: config.claim_lease,
         drain_deadline: config.runtime.telemetry.shutdown_deadline,
     };
-    let handler = production_handler(pool.clone(), config.claim_lease, document_store, ai_gateway,
-        config.runtime.workflow.niche_nodes_enabled);
+    let handler = production_handler(pool.clone(), config.claim_lease, document_store, ai_gateway, Arc::new(config.clone()));
     let loop_shutdown = {
         let reconciler_shutdown = reconciler_shutdown.clone();
         async move {
@@ -181,12 +181,13 @@ fn production_handler(
     claim_lease: Duration,
     document_store: Arc<DocumentStore>,
     ai_gateway: Arc<dyn AiGateway>,
-    niche_nodes_enabled: bool,
+    config: Arc<config::WorkerConfig>,
 ) -> JobHandler {
     Arc::new(move |job: ClaimedJob, lease: JobLease| {
         let pool = pool.clone();
         let document_store = Arc::clone(&document_store);
         let ai_gateway = Arc::clone(&ai_gateway);
+        let config = Arc::clone(&config);
         Box::pin(async move {
             processor::handle_job_with_documents_owned_and_ai(
                 pool,
@@ -196,7 +197,7 @@ fn production_handler(
                 Some(document_store),
                 None,
                 ai_gateway,
-                niche_nodes_enabled,
+                &config,
             )
             .await
         })
@@ -603,7 +604,7 @@ mod lease_deadline_tests {
         let job = ClaimedJob {
             id: uuid::Uuid::new_v4(),
             project_id: deepref_domain::ProjectId::new(uuid::Uuid::new_v4()),
-            kind: "test".to_owned(),
+            kind: deepref_domain::JobKind::RecomputeMetrics,
             payload: serde_json::json!({}),
             attempts: 1,
             max_attempts: 2,

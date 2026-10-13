@@ -113,7 +113,7 @@ pub async fn handle_step(
     job: &ClaimedJob,
     lease: &JobLease,
     ai_gateway: Option<Arc<dyn AiGateway>>,
-    niche_nodes_enabled: bool,
+    runtime: &deepref_config::RuntimeConfig,
 ) -> anyhow::Result<DeliveryAction> {
     let payload: StepPayload = serde_json::from_value(job.payload.clone())?;
     anyhow::ensure!(payload.handler_kind == "workflow", "wrong durable workflow handler");
@@ -129,7 +129,7 @@ pub async fn handle_step(
         pool,
         ai: ai_gateway.as_deref(),
         execution: &execution,
-        niche_nodes_enabled,
+        runtime,
     };
     let finished = match nodes::execute(&context).await {
         Ok(outcome) => finish_node_execution(pool, payload.step_id, lease, outcome).await?,

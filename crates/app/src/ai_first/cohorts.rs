@@ -1,5 +1,6 @@
 use super::AiFirstError;
 use deepref_domain::{Actor, ActorKind};
+use deepref_review::ai_first::{AiFirstCeiling, AiFirstCohortStatus};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use sqlx::{PgPool, Postgres, Row, Transaction};
@@ -19,7 +20,7 @@ pub struct AiFirstForecast {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AiFirstCohort {
     pub id: Uuid,
-    pub status: String,
+    pub status: AiFirstCohortStatus,
     pub target_percent: i32,
     pub members: i64,
     pub evaluated: i64,
@@ -38,7 +39,7 @@ pub struct AiFirstCohort {
 }
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct AiFirstOverview {
-    pub ceiling: String,
+    pub ceiling: AiFirstCeiling,
     pub suspended_reason: Option<String>,
     pub cohorts: Vec<AiFirstCohort>,
 }
@@ -99,7 +100,8 @@ pub async fn get_ai_first_overview(
     let mut cohorts = Vec::new();
     for r in &rows {
         let cohort: Uuid = r.get("id");
-        let forecast = if r.get::<String, _>("status") == "closed" {
+        let status = super::cohort_status(r)?;
+        let forecast = if status == AiFirstCohortStatus::Closed {
             let counts=sqlx::query("SELECT count(*) FILTER(WHERE COALESCE(s.title_abstract_status,'unscreened')='unscreened') AS remaining,
                count(*) FILTER(WHERE s.title_abstract_status IN ('include','maybe')) AS retained FROM ai_screening_cohort_members m
                LEFT JOIN screening_state s ON s.project_id=m.project_id AND s.report_id=m.report_id
@@ -147,7 +149,7 @@ pub async fn get_ai_first_overview(
         };
         cohorts.push(AiFirstCohort {
             id: r.get("id"),
-            status: r.get("status"),
+            status,
             target_percent: r.get("target_percent"),
             members: r.get("members"),
             evaluated: r.get("evaluated"),
@@ -164,7 +166,7 @@ pub async fn get_ai_first_overview(
         });
     }
     Ok(AiFirstOverview {
-        ceiling: setting.as_ref().map_or("off".into(), |r| r.get("ceiling")),
+        ceiling: setting.as_ref().map(|r| super::stored("ceiling", r.try_get("ceiling")?, AiFirstCeiling::parse)).transpose()?.unwrap_or(AiFirstCeiling::Off),
         suspended_reason: setting.as_ref().and_then(|r| r.get("suspended_reason")),
         cohorts,
     })
@@ -366,7 +368,8 @@ pub async fn recover_ai_first_cohort(
     .bind(cohort)
     .fetch_optional(&mut *tx)
     .await?;
-    status.ok_or(AiFirstError::NotFound)?;
+    let status = status.ok_or(AiFirstError::NotFound)?;
+    super::stored("status", &status, AiFirstCohortStatus::parse)?;
     invalidate_in_transaction(&mut tx, project, cohort, "owner_recovery", false).await?;
     // Recovering the current cohort also withdraws its owner ceiling. Recovering
     // historical work must not disable a separately approved active cohort.
@@ -461,9 +464,9 @@ pub(crate) async fn human_state_changed(
       WHERE m.project_id=$1 AND m.report_id=$2 AND c.status IN ('open','closed','auditing','passed','finalized')")
         .bind(project).bind(report).fetch_all(&mut **tx).await?;
     for row in rows {
-        let status = row.get::<String, _>("status");
+        let status = super::cohort_status(&row)?;
         let cohort = row.get::<Uuid, _>("id");
-        let drift = status == "finalized"
+        let drift = status == AiFirstCohortStatus::Finalized
             && row.get::<bool, _>("automated")
             && row
                 .get::<Option<String>, _>("title_abstract_status")
@@ -471,10 +474,10 @@ pub(crate) async fn human_state_changed(
                 != Some("exclude");
         let changed_reference = row.get::<Option<Uuid>, _>("sampling_seed").is_some()
             && !row.get::<bool, _>("automated")
-            && (status == "finalized"
+            && (status == AiFirstCohortStatus::Finalized
                 || was_undo
                 || !row.get::<bool, _>("sampled")
-                || status == "passed");
+                || status == AiFirstCohortStatus::Passed);
         if drift || changed_reference {
             invalidate_in_transaction(
                 tx,

@@ -1,4 +1,5 @@
 #![allow(clippy::expect_used, clippy::panic, clippy::unwrap_used)]
+use deepref_review::ReviewCalibrationStatus;
 use std::collections::BTreeMap;
 
 use chrono::Utc;
@@ -11,7 +12,7 @@ use deepref_domain::{
     Actor, ActorKind, CriterionDimension, CriterionKind, CriterionStage, FrameworkKind, ProjectId,
 };
 use deepref_app::{
-    NewReviewerDecision, ProtocolActor, ReviewCalibrationBundleInput, ReviewCalibrationStatus,
+    NewReviewerDecision, ProtocolActor, ReviewCalibrationBundleInput,
     SecondReviewStatus, block_review_run, fail_review_run, insert_model_route,
     insert_review_calibration_bundle, insert_reviewer_decision_in_transaction,
     list_reviewer_decisions, preview_screening_identity, publish_protocol,
@@ -196,7 +197,7 @@ async fn ai_opinion_on_file(pool: &PgPool, project_id: Uuid, report_id: Uuid) {
             decision: "exclude".to_owned(),
             rationale: "Population is children only.".to_owned(),
             evidence: json!([{"label": "Abstract", "quote": "children aged 6"}]),
-            source: "ai",
+            source: deepref_review::ReviewerSource::Ai,
             proposal_id: None,
             ai_run_id: None,
             model: Some("test-model".to_owned()),

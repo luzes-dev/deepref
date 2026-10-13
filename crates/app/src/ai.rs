@@ -523,7 +523,7 @@ pub enum ReviewedAiProposalPayload {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct AiProposalResolution {
     pub proposal_id: Uuid,
-    pub status: String,
+    pub status: ProposalStatus,
     pub target_report_id: Option<Uuid>,
     pub target_record_id: Option<Uuid>,
     pub applied_revision: Option<i64>,
@@ -571,7 +571,7 @@ pub struct AiProposalRecord {
     pub model_version: String,
     pub prompt_version: String,
     pub schema_version: String,
-    pub status: String,
+    pub status: ProposalStatus,
     pub protocol_version_id: Option<Uuid>,
     pub expected_revision: Option<i64>,
     pub target_report_id: Option<Uuid>,

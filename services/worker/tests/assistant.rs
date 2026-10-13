@@ -162,7 +162,7 @@ async fn worker_completes_a_run_with_one_answer_one_plan_and_a_cassette() {
     let run = run_record(&pool, run_id).await;
     assert_eq!(
         run.status,
-        deepref_app::AssistantAgentRunStatus::Completed
+        deepref_ai::AssistantAgentRunStatus::Completed
     );
     assert!(run.completed_at.is_some());
     assert!(run.effect_log.is_some(), "cassette effect log persists");
@@ -247,7 +247,7 @@ async fn duplicate_delivery_keeps_one_answer_and_one_plan() {
     let run = run_record(&pool, run_id).await;
     assert_eq!(
         run.status,
-        deepref_app::AssistantAgentRunStatus::Completed
+        deepref_ai::AssistantAgentRunStatus::Completed
     );
 
     sqlx::query("DELETE FROM projects WHERE id=$1")
@@ -275,7 +275,7 @@ async fn provider_failure_requeues_then_terminal_exhaustion_fails_the_run() {
     let run = run_record(&pool, run_id).await;
     assert_eq!(
         run.status,
-        deepref_app::AssistantAgentRunStatus::Running
+        deepref_ai::AssistantAgentRunStatus::Running
     );
     let messages: i64 = sqlx::query_scalar(
         "SELECT count(*) FROM assistant_messages WHERE conversation_id=$1 AND role='assistant'",
@@ -300,7 +300,7 @@ async fn provider_failure_requeues_then_terminal_exhaustion_fails_the_run() {
     let run = run_record(&pool, run_id).await;
     assert_eq!(
         run.status,
-        deepref_app::AssistantAgentRunStatus::Failed
+        deepref_ai::AssistantAgentRunStatus::Failed
     );
     assert!(run.error.is_some());
 
@@ -339,7 +339,7 @@ async fn exhausted_budget_fails_the_run_without_an_answer() {
     let run = run_record(&pool, run_id).await;
     assert_eq!(
         run.status,
-        deepref_app::AssistantAgentRunStatus::Failed
+        deepref_ai::AssistantAgentRunStatus::Failed
     );
     assert!(
         run.error
@@ -386,7 +386,7 @@ async fn recovered_lease_redrives_to_a_single_completion() {
     let run = run_record(&pool, run_id).await;
     assert_eq!(
         run.status,
-        deepref_app::AssistantAgentRunStatus::Completed
+        deepref_ai::AssistantAgentRunStatus::Completed
     );
     let messages: i64 = sqlx::query_scalar(
         "SELECT count(*) FROM assistant_messages WHERE conversation_id=$1 AND role='assistant'",
@@ -446,7 +446,7 @@ async fn exhausted_redelivery_of_a_terminal_run_acks_without_an_error_event() {
     let run = run_record(&pool, run_id).await;
     assert_eq!(
         run.status,
-        deepref_app::AssistantAgentRunStatus::Completed
+        deepref_ai::AssistantAgentRunStatus::Completed
     );
 
     sqlx::query("DELETE FROM projects WHERE id=$1")
@@ -508,7 +508,7 @@ async fn recovered_lease_preserves_prior_events_with_monotonic_seqs() {
     let run = run_record(&pool, run_id).await;
     assert_eq!(
         run.status,
-        deepref_app::AssistantAgentRunStatus::Completed
+        deepref_ai::AssistantAgentRunStatus::Completed
     );
     let messages: i64 = sqlx::query_scalar(
         "SELECT count(*) FROM assistant_messages WHERE conversation_id=$1 AND role='assistant'",
@@ -595,7 +595,7 @@ async fn malformed_model_route_fails_run_before_terminating_job() {
     let model = MockCompletionModel::from_stream_turns(vec![stream_text("unused")]);
     let action = handle_assistant_agent_run_with(&pool, &job, &services(model)).await;
     assert!(matches!(action, Ok(DeliveryAction::Terminate)), "{action:?}");
-    assert_eq!(run_record(&pool, run_id).await.status, deepref_app::AssistantAgentRunStatus::Failed);
+    assert_eq!(run_record(&pool, run_id).await.status, deepref_ai::AssistantAgentRunStatus::Failed);
     let events = list_assistant_run_events(&pool, run_id, -1, 100).await.expect("events");
     assert_eq!(events.iter().filter(|event| event.kind == "error").count(), 1);
 }
@@ -615,9 +615,9 @@ async fn reconciler_fails_missing_and_dead_assistant_jobs_but_preserves_live_job
     deepref_worker::reconciler::reconcile_once(&pool).await.expect("reconcile");
     deepref_worker::reconciler::reconcile_once(&pool).await.expect("repeat reconciliation");
     for id in [missing, dead] {
-        assert_eq!(run_record(&pool, id).await.status, deepref_app::AssistantAgentRunStatus::Failed);
+        assert_eq!(run_record(&pool, id).await.status, deepref_ai::AssistantAgentRunStatus::Failed);
         let events = list_assistant_run_events(&pool, id, -1, 100).await.expect("events");
         assert_eq!(events.iter().filter(|event| event.kind == "error").count(), 1);
     }
-    assert_eq!(run_record(&pool, live).await.status, deepref_app::AssistantAgentRunStatus::Queued);
+    assert_eq!(run_record(&pool, live).await.status, deepref_ai::AssistantAgentRunStatus::Queued);
 }

@@ -4,7 +4,7 @@ use deepref_application::jobs::JobLease;
 use deepref_domain::ProjectId;
 use deepref_review::{
     ReviewBlockCode, ReviewDefinitionKey, ReviewError, ReviewOrigin, ReviewRunId,
-    ReviewRunSnapshot, ReviewRunState, ReviewSemanticContract, ReviewSubject, ScheduleReviewRun,
+    ReviewRunSnapshot, ReviewRunState, ReviewRunStatus, ReviewSemanticContract, ReviewSubject, ScheduleReviewRun,
     worker::{
         AcceptedArtifactInput, CompiledReview, ExecutedReviewTask, PreparedReviewTask, ReviewHash,
         ReviewManifestInput, ReviewNode, ReviewRunManifest,
@@ -164,38 +164,40 @@ async fn decide_generation(
     let run_id: Uuid = latest.get("automation_run_id");
     let generation: i32 = latest.get("generation");
     let reuse_epoch: i32 = latest.get("reuse_epoch");
-    let state: String = latest.get("state");
-    let proposal_status: Option<String> = latest.get("proposal_status");
+    let state = stored_review_status(latest.get::<String, _>("state").as_str())?;
+    let proposal_status = latest.get::<Option<String>, _>("proposal_status")
+        .map(|value| ProposalStatus::parse(&value).ok_or_else(|| {
+            PostgresReviewError::InvalidStoredValue(format!("unknown proposal status {value}"))
+        }))
+        .transpose()?;
     let next = generation
         .checked_add(1)
         .ok_or_else(|| PostgresReviewError::InvalidStoredValue("generation overflow".into()))?;
-    match (state.as_str(), intent) {
-        ("queued" | "running", _) | ("completed", ReviewScheduleIntent::Request) => {
+    match (state, intent) {
+        (ReviewRunStatus::Queued | ReviewRunStatus::Running, _)
+        | (ReviewRunStatus::Completed, ReviewScheduleIntent::Request) => {
             Ok(GenerationDecision::Existing(run_id))
         }
-        ("failed" | "blocked", ReviewScheduleIntent::Request) => Ok(GenerationDecision::New {
+        (ReviewRunStatus::Failed | ReviewRunStatus::Blocked, ReviewScheduleIntent::Request) => Ok(GenerationDecision::New {
             generation: next,
             reuse_epoch,
         }),
-        ("failed" | "blocked", ReviewScheduleIntent::Regenerate) => Ok(GenerationDecision::New {
+        (ReviewRunStatus::Failed | ReviewRunStatus::Blocked, ReviewScheduleIntent::Regenerate) => Ok(GenerationDecision::New {
             generation: next,
             reuse_epoch: next,
         }),
-        ("completed", ReviewScheduleIntent::Regenerate)
-            if proposal_status.as_deref() == Some("rejected") =>
+        (ReviewRunStatus::Completed, ReviewScheduleIntent::Regenerate)
+            if proposal_status == Some(ProposalStatus::Rejected) =>
         {
             Ok(GenerationDecision::New {
                 generation: next,
                 reuse_epoch: next,
             })
         }
-        ("completed", ReviewScheduleIntent::Regenerate) => Err(PostgresReviewError::InvalidState(
+        (ReviewRunStatus::Completed, ReviewScheduleIntent::Regenerate) => Err(PostgresReviewError::InvalidState(
             "only a rejected suggestion can be regenerated; reject the current suggestion first"
                 .to_owned(),
         )),
-        (other, _) => Err(PostgresReviewError::InvalidStoredValue(format!(
-            "unknown review state {other}"
-        ))),
     }
 }
 
@@ -572,7 +574,7 @@ pub async fn block_review_run(
     code: ReviewBlockCode,
     message: &str,
 ) -> Result<(), PostgresReviewError> {
-    finish_review_run(pool, project_id, run_id, "blocked", code.as_str(), message).await
+    finish_review_run(pool, project_id, run_id, ReviewRunStatus::Blocked, code.as_str(), message).await
 }
 
 pub async fn fail_review_run(
@@ -582,14 +584,14 @@ pub async fn fail_review_run(
     code: &str,
     message: &str,
 ) -> Result<(), PostgresReviewError> {
-    finish_review_run(pool, project_id, run_id, "failed", code, message).await
+    finish_review_run(pool, project_id, run_id, ReviewRunStatus::Failed, code, message).await
 }
 
 async fn finish_review_run(
     pool: &PgPool,
     project_id: ProjectId,
     run_id: ReviewRunId,
-    state: &str,
+    state: ReviewRunStatus,
     code: &str,
     message: &str,
 ) -> Result<(), PostgresReviewError> {
@@ -615,7 +617,7 @@ async fn finish_review_run(
     )
     .bind(project_id.as_uuid())
     .bind(run_id.as_uuid())
-    .bind(state)
+    .bind(state.as_str())
     .bind(code)
     .bind(message)
     .fetch_optional(pool)
@@ -951,7 +953,7 @@ pub async fn finalize_review_proposal(
         .bind(run.snapshot.id.as_uuid())
         .fetch_one(&mut *transaction)
         .await?;
-        if state.get::<String, _>("state") != "completed"
+        if stored_review_status(state.get::<String, _>("state").as_str())? != ReviewRunStatus::Completed
             || state.get::<Option<Uuid>, _>("proposal_id") != Some(proposal_id)
         {
             return Err(PostgresReviewError::FinalizationConflict);
@@ -959,6 +961,12 @@ pub async fn finalize_review_proposal(
     }
     transaction.commit().await?;
     Ok(ReviewFinalization::Completed { proposal_id })
+}
+
+fn stored_review_status(value: &str) -> Result<ReviewRunStatus, PostgresReviewError> {
+    ReviewRunStatus::parse(value).ok_or_else(|| {
+        PostgresReviewError::InvalidStoredValue(format!("unknown review state {value}"))
+    })
 }
 
 fn snapshot_from_row(row: &PgRow) -> Result<ReviewRunSnapshot, PostgresReviewError> {
@@ -973,10 +981,10 @@ fn snapshot_from_row(row: &PgRow) -> Result<ReviewRunSnapshot, PostgresReviewErr
     let state_name: String = row.get("state");
     let state_code: Option<String> = row.get("state_code");
     let state_message: Option<String> = row.get("state_message");
-    let state = match state_name.as_str() {
-        "queued" => ReviewRunState::Queued,
-        "running" => ReviewRunState::Running,
-        "blocked" => ReviewRunState::Blocked {
+    let state = match stored_review_status(&state_name)? {
+        ReviewRunStatus::Queued => ReviewRunState::Queued,
+        ReviewRunStatus::Running => ReviewRunState::Running,
+        ReviewRunStatus::Blocked => ReviewRunState::Blocked {
             code: ReviewBlockCode::parse(state_code.as_deref().unwrap_or_default()).ok_or_else(
                 || PostgresReviewError::InvalidStoredValue("unknown review block code".to_owned()),
             )?,
@@ -984,7 +992,7 @@ fn snapshot_from_row(row: &PgRow) -> Result<ReviewRunSnapshot, PostgresReviewErr
                 PostgresReviewError::InvalidStoredValue("blocked review has no message".to_owned())
             })?,
         },
-        "failed" => ReviewRunState::Failed {
+        ReviewRunStatus::Failed => ReviewRunState::Failed {
             code: state_code.ok_or_else(|| {
                 PostgresReviewError::InvalidStoredValue("failed review has no code".to_owned())
             })?,
@@ -992,18 +1000,13 @@ fn snapshot_from_row(row: &PgRow) -> Result<ReviewRunSnapshot, PostgresReviewErr
                 PostgresReviewError::InvalidStoredValue("failed review has no message".to_owned())
             })?,
         },
-        "completed" => ReviewRunState::Completed {
+        ReviewRunStatus::Completed => ReviewRunState::Completed {
             proposal_id: row.get::<Option<Uuid>, _>("proposal_id").ok_or_else(|| {
                 PostgresReviewError::InvalidStoredValue(
                     "completed review has no proposal".to_owned(),
                 )
             })?,
         },
-        _ => {
-            return Err(PostgresReviewError::InvalidStoredValue(format!(
-                "unknown review state {state_name}"
-            )));
-        }
     };
     Ok(ReviewRunSnapshot {
         id: ReviewRunId::new(row.get("automation_run_id"))?,
@@ -1209,5 +1212,20 @@ async fn subject_is_current_on_connection(
         .bind(study_id.as_uuid())
         .fetch_one(&mut *connection)
         .await?),
+    }
+}
+
+#[cfg(test)]
+mod lifecycle_status_tests {
+    use super::{PostgresReviewError, stored_review_status};
+
+    #[test]
+    fn unknown_review_run_status_is_invalid_stored_value() {
+        for value in ["", "RUNNING", "complete", " running", "cancelled"] {
+            assert!(matches!(
+                stored_review_status(value),
+                Err(PostgresReviewError::InvalidStoredValue(_))
+            ));
+        }
     }
 }
