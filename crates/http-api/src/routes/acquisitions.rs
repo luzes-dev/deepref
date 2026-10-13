@@ -58,6 +58,7 @@ pub(crate) struct AcquisitionDto {
     pub strategy: String,
     pub format: Option<String>,
     pub status: String,
+    pub max_depth: i32,
     pub seed_count: i32,
     pub queued_count: i32,
     pub fetched_count: i32,
@@ -91,6 +92,7 @@ struct DoiAcquisitionRequest {
     project_id: Uuid,
     seed_dois: Vec<String>,
     max_depth: i32,
+    historical_max_depth: Option<i32>,
     metadata_provider: String,
     citation_provider: String,
     source: String,
@@ -135,7 +137,7 @@ pub(crate) async fn list_acquisitions(
     let strategy = filter.strategy.filter(|value| !value.is_empty());
     let rows = sqlx::query(
         "SELECT id,project_id,source,strategy,format,status,seed_count,queued_count,fetched_count,
-                failed_count,created_at,started_at,completed_at,config
+                failed_count,max_depth,created_at,started_at,completed_at,config
          FROM acquisition_runs
          WHERE project_id=$1 AND ($2::timestamptz IS NULL OR (created_at,id)<($2,$3))
            AND ($5::text IS NULL OR strategy=$5)
@@ -229,6 +231,7 @@ pub(crate) async fn create_acquisition(
             project_id,
             seed_dois,
             max_depth,
+            historical_max_depth: None,
             metadata_provider,
             citation_provider,
             source: "crossref".to_owned(),
@@ -284,7 +287,7 @@ pub(crate) async fn refresh_acquisition(
     })?;
     let mut tx = state.pool.begin().await?;
     let source = sqlx::query(
-        "SELECT id,source,strategy,format,status,config
+        "SELECT id,source,strategy,format,status,config,historical_max_depth
          FROM acquisition_runs
          WHERE project_id=$1 AND id=$2
          FOR UPDATE",
@@ -364,6 +367,7 @@ pub(crate) async fn refresh_acquisition(
             project_id,
             seed_dois,
             max_depth,
+            historical_max_depth: source.get("historical_max_depth"),
             metadata_provider,
             citation_provider,
             source: source_name,
@@ -573,22 +577,28 @@ fn is_pmid_format(value: &str) -> bool {
     matches!(value.trim().to_lowercase().as_str(), "pmid" | "pmids")
 }
 
-/// One PubMed ID of a PubMed ID import run.
+/// A DOI traversal item or PubMed import item.
 #[derive(Debug, Clone, Serialize, ToSchema)]
 pub(crate) struct AcquisitionItemDto {
-    /// The PubMed ID, as it was imported.
+    /// DOI or PubMed identifier.
     pub identifier: String,
-    /// The place the ID had in the import. Items are paged in this order.
+    /// Import order for PubMed; DOI items use queued_at and identifier for pagination.
     pub position: i32,
-    /// One of queued, imported, already_in_project, not_found, or failed.
+    /// Provider-specific item processing status.
     pub status: String,
-    /// The article's title, once PubMed has answered for this ID.
+    /// Report title, when available.
     pub title: Option<String>,
     /// The record this import saved for the ID, when one was saved.
     pub record_id: Option<Uuid>,
     /// Why the ID could not be fetched, when it failed.
     pub last_error: Option<String>,
     pub processed_at: Option<DateTime<Utc>>,
+    pub kind: String,
+    pub depth: Option<i32>,
+    pub parent_doi: Option<String>,
+    pub attempts: i32,
+    pub queued_at: Option<DateTime<Utc>>,
+    pub report_id: Option<Uuid>,
 }
 
 #[utoipa::path(
@@ -603,7 +613,7 @@ pub(crate) struct AcquisitionItemDto {
         ("limit" = Option<i64>, Query, description = "Page size")
     ),
     responses(
-        (status = 200, description = "Items of a PubMed ID run, in the order they were given", body = PaginatedResponse<AcquisitionItemDto>),
+        (status = 200, description = "DOI traversal or PubMed import items", body = PaginatedResponse<AcquisitionItemDto>),
         (status = 400, description = "Invalid pagination cursor", body = ErrorResponse),
         (status = 404, description = "Acquisition not found in this project", body = ErrorResponse),
         (status = 500, description = "Internal server error", body = ErrorResponse)
@@ -615,17 +625,47 @@ pub(crate) async fn list_acquisition_items(
     Query(pagination): Query<PaginationParams>,
 ) -> Result<Json<PaginatedResponse<AcquisitionItemDto>>, ApiError> {
     let limit = pagination.limit()?;
-    let after: Option<i32> = pagination.decode()?;
-    let exists: bool = sqlx::query_scalar(
-        "SELECT EXISTS (SELECT 1 FROM acquisition_runs WHERE id=$1 AND project_id=$2)",
+    let source: String = sqlx::query_scalar(
+        "SELECT source FROM acquisition_runs WHERE id=$1 AND project_id=$2",
     )
     .bind(acquisition_id)
     .bind(project_id)
-    .fetch_one(&state.pool)
-    .await?;
-    if !exists {
-        return Err(ApiError::NotFound("acquisition not found".to_owned()));
+    .fetch_optional(&state.pool)
+    .await?
+    .ok_or_else(|| ApiError::NotFound("acquisition not found".to_owned()))?;
+    if source == "crossref" {
+        let after: Option<(DateTime<Utc>, String)> = pagination.decode()?;
+        let rows = sqlx::query(
+            "SELECT i.*,r.title FROM acquisition_items i JOIN reports r ON r.id=i.report_id
+             WHERE acquisition_id=$1 AND ($2::timestamptz IS NULL OR (queued_at,canonical_doi)<($2,$3))
+             ORDER BY queued_at DESC,canonical_doi DESC LIMIT $4",
+        )
+        .bind(acquisition_id)
+        .bind(after.as_ref().map(|value| value.0))
+        .bind(after.as_ref().map(|value| &value.1))
+        .bind(limit + 1)
+        .fetch_all(&state.pool)
+        .await?;
+        let items = rows.into_iter().map(|row| AcquisitionItemDto {
+            identifier: row.get("canonical_doi"),
+            position: 0,
+            status: row.get("status"),
+            title: row.get("title"),
+            record_id: None,
+            last_error: row.get("last_error"),
+            processed_at: row.get("fetched_at"),
+            kind: "doi".to_owned(),
+            depth: Some(row.get("depth")),
+            parent_doi: row.get("parent_doi"),
+            attempts: row.get("attempts"),
+            queued_at: Some(row.get("queued_at")),
+            report_id: Some(row.get("report_id")),
+        }).collect();
+        return Ok(Json(page(items, limit as usize, |item| {
+            (item.queued_at, item.identifier.clone())
+        })?));
     }
+    let after: Option<i32> = pagination.decode()?;
     let rows = sqlx::query(
         "SELECT pmid, position, status, title, record_id, last_error, processed_at
          FROM pmid_import_items
@@ -662,7 +702,7 @@ pub(crate) async fn get_acquisition(
 ) -> Result<Json<AcquisitionDto>, ApiError> {
     let row = sqlx::query(
         "SELECT id,project_id,source,strategy,format,status,seed_count,queued_count,fetched_count,
-                failed_count,created_at,started_at,completed_at,config
+                failed_count,max_depth,created_at,started_at,completed_at,config
          FROM acquisition_runs WHERE id=$1 AND project_id=$2",
     )
     .bind(acquisition_id)
@@ -682,6 +722,12 @@ fn acquisition_item_from_row(row: sqlx::postgres::PgRow) -> AcquisitionItemDto {
         record_id: row.get("record_id"),
         last_error: row.get("last_error"),
         processed_at: row.get("processed_at"),
+        kind: "pmid".to_owned(),
+        depth: None,
+        parent_doi: None,
+        attempts: 0,
+        queued_at: None,
+        report_id: None,
     }
 }
 
@@ -689,50 +735,27 @@ async fn persist_doi_acquisition(
     tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     request: DoiAcquisitionRequest,
 ) -> Result<DoiAcquisitionResult, ApiError> {
+    let mailto: String = sqlx::query_scalar("SELECT crossref_mailto FROM settings WHERE id=1")
+        .fetch_optional(&mut **tx).await?.unwrap_or_default();
+    let valid_mailto = mailto.trim().split_once('@').is_some_and(|(local, domain)| {
+        !local.is_empty() && domain.contains('.') && !domain.starts_with('.') && !domain.ends_with('.')
+    });
+    if !valid_mailto {
+        return Err(ApiError::Configuration(
+            "a valid Crossref mail address must be configured before creating an acquisition".to_owned(),
+        ));
+    }
     let seed_count = i32::try_from(request.seed_dois.len()).unwrap_or(i32::MAX);
-    let ingestion_inserted = if request.idempotency_key.is_some() {
-        sqlx::query_scalar::<_, Uuid>(
-            "INSERT INTO ingestions
-             (id,project_id,status,max_depth,seed_count,queued_count,metadata_provider,citation_provider)
-             VALUES ($1,$2,'queued',$3,$4,$4,$5,$6)
-             ON CONFLICT (id) DO NOTHING RETURNING id",
-        )
-        .bind(request.run_id)
-        .bind(request.project_id)
-        .bind(request.max_depth)
-        .bind(seed_count)
-        .bind(&request.metadata_provider)
-        .bind(&request.citation_provider)
-        .fetch_optional(&mut **tx)
-        .await?
-        .is_some()
-    } else {
-        sqlx::query_scalar::<_, Uuid>(
-            "INSERT INTO ingestions
-             (id,project_id,status,max_depth,seed_count,queued_count,metadata_provider,citation_provider)
-             VALUES ($1,$2,'queued',$3,$4,$4,$5,$6) RETURNING id",
-        )
-        .bind(request.run_id)
-        .bind(request.project_id)
-        .bind(request.max_depth)
-        .bind(seed_count)
-        .bind(&request.metadata_provider)
-        .bind(&request.citation_provider)
-        .fetch_one(&mut **tx)
-        .await?;
-        true
-    };
     let inserted_run_id = sqlx::query_scalar::<_, Uuid>(
         "INSERT INTO acquisition_runs
-         (id,project_id,legacy_ingestion_id,source,strategy,format,idempotency_key,config,metadata,status,
-          max_depth,seed_count,queued_count,fetched_count,failed_count,metadata_provider,citation_provider,created_at)
-         VALUES ($1,$2,$3,$4,$5,NULL,$6,$7,$8,'queued',$9,$10,$10,0,0,$11,$12,now())
+         (id,project_id,source,strategy,format,idempotency_key,config,metadata,status,
+          max_depth,seed_count,queued_count,fetched_count,failed_count,metadata_provider,citation_provider,created_at,historical_max_depth)
+         VALUES ($1,$2,$3,$4,NULL,$5,$6,$7,'queued',$8,$9,$9,0,0,$10,$11,now(),$12)
          ON CONFLICT (project_id,idempotency_key) WHERE idempotency_key IS NOT NULL
          DO NOTHING RETURNING id",
     )
     .bind(request.run_id)
     .bind(request.project_id)
-    .bind(request.run_id)
     .bind(&request.source)
     .bind(&request.strategy)
     .bind(request.idempotency_key.as_deref())
@@ -742,16 +765,11 @@ async fn persist_doi_acquisition(
     .bind(seed_count)
     .bind(&request.metadata_provider)
     .bind(&request.citation_provider)
+    .bind(request.historical_max_depth)
     .fetch_optional(&mut **tx)
     .await?;
 
     let Some(run_id) = inserted_run_id else {
-        if ingestion_inserted {
-            sqlx::query("DELETE FROM ingestions WHERE id=$1")
-                .bind(request.run_id)
-                .execute(&mut **tx)
-                .await?;
-        }
         let row = sqlx::query(
             "SELECT id,source,strategy,config
              FROM acquisition_runs
@@ -811,61 +829,45 @@ async fn persist_doi_acquisition(
 pub(crate) async fn enqueue_seed_jobs(
     tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     project_id: Uuid,
-    ingestion_id: Uuid,
+    acquisition_id: Uuid,
     max_depth: i32,
     seed_dois: &[String],
 ) -> Result<(), ApiError> {
     for doi in seed_dois {
-        let revision: i64 = sqlx::query_scalar("SELECT nextval('graph_domain_revision_seq')")
-            .fetch_one(&mut **tx)
-            .await?;
+        let report_id = ensure_doi_report(tx, doi).await?;
         let event = EventEnvelope::v1(
             SUBJECT_WORK_FETCH_REQUESTED,
             "deepref.api",
             EntityType::Work,
-            format!("{ingestion_id}|{doi}"),
-            revision,
-            ingestion_id,
+            format!("{acquisition_id}|{doi}"),
+            0,
+            acquisition_id,
             None,
             WorkFetchRequested {
                 project_id,
-                ingestion_id,
+                acquisition_id,
                 doi: doi.clone(),
                 depth: 0,
                 max_depth,
                 parent_doi: None,
             },
         );
+        let event_id = event.event_id;
         sqlx::query(
-            "INSERT INTO domain_events (event_id,schema_version,event_type,entity_type,entity_key,revision,payload,correlation_id,causation_id,created_at)
-             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) ON CONFLICT (event_id) DO NOTHING",
+            "INSERT INTO acquisition_items (acquisition_id,project_id,report_id,canonical_doi,depth,parent_doi,status,work_event_id)
+             VALUES ($1,$2,$3,$4,0,NULL,'queued',$5) ON CONFLICT (acquisition_id,canonical_doi) DO NOTHING",
         )
-        .bind(event.event_id)
-        .bind(event.schema_version as i16)
-        .bind(&event.event_type)
-        .bind(event.entity_type.as_str())
-        .bind(&event.entity_key)
-        .bind(event.revision)
-        .bind(serde_json::to_value(&event.payload)?)
-        .bind(event.correlation_id)
-        .bind(event.causation_id)
-        .bind(event.occurred_at)
-        .execute(&mut **tx)
-        .await?;
-        sqlx::query(
-            "INSERT INTO ingestion_items (ingestion_id,project_id,canonical_doi,depth,parent_doi,status,work_event_id)
-             VALUES ($1,$2,$3,0,NULL,'queued',$4) ON CONFLICT (ingestion_id,canonical_doi) DO NOTHING",
-        )
-        .bind(ingestion_id)
+        .bind(acquisition_id)
         .bind(project_id)
+        .bind(report_id)
         .bind(doi)
-        .bind(event.event_id)
+        .bind(event_id)
         .execute(&mut **tx)
         .await?;
         deepref_app::enqueue_job(
             tx,
             &deepref_app::job(
-                event.event_id,
+                event_id,
                 ProjectId::new(project_id),
                 "work_fetch_requested",
                 serde_json::to_value(&event)?,
@@ -877,9 +879,55 @@ pub(crate) async fn enqueue_seed_jobs(
     Ok(())
 }
 
+async fn ensure_doi_report(tx: &mut sqlx::Transaction<'_, sqlx::Postgres>, doi: &str) -> Result<Uuid, ApiError> {
+    sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1,0))")
+        .bind(doi).execute(&mut **tx).await?;
+    if let Some(id) = sqlx::query_scalar("SELECT report_id FROM report_identifiers WHERE scheme='doi' AND normalized_value=$1")
+        .bind(doi).fetch_optional(&mut **tx).await? {
+        return Ok(id);
+    }
+    let id: Uuid = sqlx::query_scalar("SELECT md5('deepref:report:' || $1)::uuid")
+        .bind(doi).fetch_one(&mut **tx).await?;
+    sqlx::query("INSERT INTO reports (id) VALUES ($1) ON CONFLICT (id) DO NOTHING")
+        .bind(id).execute(&mut **tx).await?;
+    sqlx::query("INSERT INTO report_identifiers (id,report_id,scheme,value,normalized_value) VALUES ($1,$2,'doi',$3,$3) ON CONFLICT (scheme,normalized_value) DO NOTHING")
+        .bind(Uuid::new_v4()).bind(id).bind(doi).execute(&mut **tx).await?;
+    Ok(sqlx::query_scalar("SELECT report_id FROM report_identifiers WHERE scheme='doi' AND normalized_value=$1")
+        .bind(doi).fetch_one(&mut **tx).await?)
+}
+
+#[utoipa::path(
+    post, path = "/projects/{project_id}/acquisitions/{acquisition_id}/cancel",
+    operation_id = "cancelAcquisition", tag = "acquisitions",
+    params(("project_id" = Uuid, Path), ("acquisition_id" = Uuid, Path)),
+    responses(
+        (status = 202, description = "Cancellation accepted"),
+        (status = 404, description = "Acquisition not found", body = ErrorResponse),
+        (status = 409, description = "Acquisition is no longer cancellable", body = ErrorResponse),
+        (status = 500, description = "Internal server error", body = ErrorResponse)
+    )
+)]
+pub(crate) async fn cancel_acquisition(State(state): State<AppState>, Path((project_id, acquisition_id)): Path<(Uuid, Uuid)>) -> Result<StatusCode, ApiError> {
+    let mut tx = state.pool.begin().await?;
+    let status: String = sqlx::query_scalar("SELECT status FROM acquisition_runs WHERE id=$1 AND project_id=$2 FOR UPDATE")
+        .bind(acquisition_id).bind(project_id).fetch_optional(&mut *tx).await?
+        .ok_or_else(|| ApiError::NotFound("acquisition not found".to_owned()))?;
+    if status != "queued" && status != "running" {
+        return Err(ApiError::Conflict {
+            code: "ACQUISITION_NOT_CANCELLABLE".to_owned(),
+            message: "only queued or running acquisitions can be cancelled".to_owned(),
+            details: json!({ "status": status }),
+        });
+    }
+    sqlx::query("UPDATE acquisition_runs SET status='cancelled',completed_at=now() WHERE id=$1")
+        .bind(acquisition_id).execute(&mut *tx).await?;
+    tx.commit().await?;
+    Ok(StatusCode::ACCEPTED)
+}
+
 fn acquisition_select() -> &'static str {
     "SELECT id,project_id,source,strategy,format,status,seed_count,queued_count,fetched_count,
-            failed_count,created_at,started_at,completed_at,config FROM acquisition_runs WHERE id=$1"
+            failed_count,max_depth,created_at,started_at,completed_at,config FROM acquisition_runs WHERE id=$1"
 }
 
 fn parse_stored_doi_config(
@@ -1024,6 +1072,7 @@ fn acquisition_from_row(row: sqlx::postgres::PgRow) -> AcquisitionDto {
         format: row.get("format"),
         status: row.get("status"),
         seed_count: row.get("seed_count"),
+        max_depth: row.get("max_depth"),
         queued_count: row.get("queued_count"),
         fetched_count: row.get("fetched_count"),
         failed_count: row.get("failed_count"),

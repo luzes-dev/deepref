@@ -73,7 +73,7 @@ async function mockPrismaWorkspace(page: Page): Promise<void> {
 		route.fulfill({ json: { items: [project], next_cursor: null } })
 	);
 	await page.route(`${api}/projects/${projectId}`, (route) => route.fulfill({ json: project }));
-	await page.route(/\/api\/ingestions(?:\?.*)?$/, (route) =>
+	await page.route(/\/api\/projects\/[^/]+\/acquisitions(?:\?.*)?$/, (route) =>
 		route.fulfill({ json: { items: [], next_cursor: null } })
 	);
 	await page.route(/\/api\/notifications(?:\/unread-count)?(?:\?.*)?$/, (route) =>

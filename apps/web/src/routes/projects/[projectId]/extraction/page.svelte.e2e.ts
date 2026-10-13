@@ -118,7 +118,7 @@ async function mockExtractionPage(page: Page, decisionMode: DecisionMode): Promi
 		route.fulfill({ json: { items: [project], next_cursor: null } })
 	);
 	await page.route(`${api}/projects/project-1`, (route) => route.fulfill({ json: project }));
-	await page.route(/\/api\/ingestions(?:\?.*)?$/, (route) =>
+	await page.route(/\/api\/projects\/[^/]+\/acquisitions(?:\?.*)?$/, (route) =>
 		route.fulfill({ json: { items: [], next_cursor: null } })
 	);
 	await page.route(/\/api\/notifications(?:\/unread-count)?$/, (route) =>

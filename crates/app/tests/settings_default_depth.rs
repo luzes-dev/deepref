@@ -71,8 +71,8 @@ async fn depth_after_migration(pool: &PgPool, seed: &str) -> i32 {
     depth
 }
 
-/// Every migration in a fresh schema leaves the depth defaults at 1 for settings, projects and
-/// legacy ingestions, and a settings row created without values takes that default.
+/// Every migration in a fresh schema leaves active settings/project depth defaults at 1,
+/// and a settings row created without values takes that default.
 async fn assert_new_rows_default_to_one(pool: &PgPool) {
     let schema = format!("depth_defaults_{}", Uuid::new_v4().simple());
     let mut connection = isolated_connection(pool, &schema).await;
@@ -87,8 +87,7 @@ async fn assert_new_rows_default_to_one(pool: &PgPool) {
          WHERE table_schema = current_schema()
            AND (table_name, column_name) IN (
              ('settings', 'default_max_depth'),
-             ('projects', 'default_max_depth'),
-             ('ingestions', 'max_depth'))
+             ('projects', 'default_max_depth'))
          ORDER BY 1",
     )
     .fetch_all(&mut *connection)
@@ -97,7 +96,6 @@ async fn assert_new_rows_default_to_one(pool: &PgPool) {
     assert_eq!(
         defaults,
         vec![
-            ("ingestions.max_depth".to_owned(), Some("1".to_owned())),
             (
                 "projects.default_max_depth".to_owned(),
                 Some("1".to_owned())

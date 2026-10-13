@@ -62,10 +62,10 @@ pub async fn persist_import(
     let inserted_id = if request.idempotency_key.is_some() {
         sqlx::query_scalar::<_, Uuid>(
             "INSERT INTO acquisition_runs
-             (id,project_id,legacy_ingestion_id,source,strategy,format,idempotency_key,config,metadata,status,
+             (id,project_id,source,strategy,format,idempotency_key,config,metadata,status,
               max_depth,seed_count,queued_count,fetched_count,failed_count,metadata_provider,citation_provider,
               created_at,started_at,completed_at)
-             VALUES ($1,$2,NULL,$3,$4,$5,$6,$7,$8,'completed',0,0,$9,0,0,'','',now(),now(),now())
+             VALUES ($1,$2,$3,$4,$5,$6,$7,$8,'completed',0,0,$9,0,0,'','',now(),now(),now())
              ON CONFLICT (project_id,idempotency_key) WHERE idempotency_key IS NOT NULL DO NOTHING
              RETURNING id",
         )
@@ -84,10 +84,10 @@ pub async fn persist_import(
         Some(
             sqlx::query_scalar::<_, Uuid>(
                 "INSERT INTO acquisition_runs
-                 (id,project_id,legacy_ingestion_id,source,strategy,format,idempotency_key,config,metadata,status,
+                 (id,project_id,source,strategy,format,idempotency_key,config,metadata,status,
                   max_depth,seed_count,queued_count,fetched_count,failed_count,metadata_provider,citation_provider,
                   created_at,started_at,completed_at)
-                 VALUES ($1,$2,NULL,$3,$4,$5,$6,$7,$8,'completed',0,0,$9,0,0,'','',now(),now(),now())
+                 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,'completed',0,0,$9,0,0,'','',now(),now(),now())
                  RETURNING id",
             )
                 .bind(run_id)
@@ -214,35 +214,3 @@ pub(crate) async fn insert_raw_record(
     Ok(Some(record_id))
 }
 
-pub async fn ensure_legacy_acquisition_run(
-    tx: &mut Transaction<'_, Postgres>,
-    ingestion_id: Uuid,
-    project_id: Uuid,
-    max_depth: i32,
-    seed_count: i32,
-    metadata_provider: &str,
-    citation_provider: &str,
-) -> Result<(), sqlx::Error> {
-    sqlx::query(
-        "INSERT INTO acquisition_runs
-         (id,project_id,legacy_ingestion_id,source,strategy,status,max_depth,seed_count,queued_count,
-          fetched_count,failed_count,metadata_provider,citation_provider,created_at)
-         VALUES ($1,$2,$1,'legacy-ingestion','citation_traversal','queued',$3,$4,$4,0,0,$5,$6,now())
-         ON CONFLICT (id) DO UPDATE SET
-           project_id=EXCLUDED.project_id,
-           max_depth=EXCLUDED.max_depth,
-           seed_count=EXCLUDED.seed_count,
-           queued_count=EXCLUDED.queued_count,
-           metadata_provider=EXCLUDED.metadata_provider,
-           citation_provider=EXCLUDED.citation_provider",
-    )
-    .bind(ingestion_id)
-    .bind(project_id)
-    .bind(max_depth)
-    .bind(seed_count)
-    .bind(metadata_provider)
-    .bind(citation_provider)
-    .execute(&mut **tx)
-    .await?;
-    Ok(())
-}

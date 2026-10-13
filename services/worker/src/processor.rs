@@ -13,7 +13,7 @@ use deepref_documents::{
     DocumentParser, DocumentStore, HttpsPdfFetcher, PARSER_VERSION, PdfiumParser,
     RemoteDocumentFetcher,
 };
-use deepref_domain::events::{DeadLetterRecord, EventEnvelope, WorkFetchRequested, deserialize_compatible};
+use deepref_domain::events::{EventEnvelope, WorkFetchRequested};
 use deepref_integrations::CrossrefClient;
 use deepref_integrations::CrossrefError;
 use deepref_review::worker::{
@@ -21,7 +21,6 @@ use deepref_review::worker::{
     StandardReviewPlan,
 };
 use serde::Deserialize;
-use sha2::{Digest, Sha256};
 use sqlx::PgPool;
 use tokio::sync::{Semaphore, watch};
 use uuid::Uuid;
@@ -45,268 +44,98 @@ pub fn validate_pdf_parse_concurrency() -> anyhow::Result<()> {
     Ok(())
 }
 
-async fn parse_work_fetch_event(
-    pool: &PgPool,
-    bytes: &[u8],
-    delivery_count: u64,
-) -> anyhow::Result<Result<EventEnvelope<WorkFetchRequested>, DeliveryAction>> {
-    match deserialize_compatible(bytes) {
-        Ok(event) => Ok(Ok(event)),
-        Err(error) => {
-            let record = dead_letter(bytes, None, delivery_count, "MALFORMED_PAYLOAD");
-            store::persist_malformed_dead_letter(
-                pool,
-                &record,
-                serde_json::json!({
-                    "payload_utf8_lossy": String::from_utf8_lossy(bytes),
-                    "error": error.to_string(),
-                }),
-            )
-            .await?;
-            Ok(Err(action_for(FailureClass::Malformed, delivery_count)))
-        }
-    }
-}
-
-enum PreconditionOutcome {
-    Proceed,
-    Action(DeliveryAction),
-}
-
-async fn check_work_fetch_preconditions(
-    pool: &PgPool,
-    event: &EventEnvelope<WorkFetchRequested>,
-    doi: &str,
-    owner: Uuid,
-) -> anyhow::Result<PreconditionOutcome> {
-    if event.payload.depth > event.payload.max_depth {
-        store::complete_without_doi(
-            pool,
-            event,
-            doi,
-            owner,
-            IngestionItemStatus::Skipped,
-            Some("maximum depth exceeded"),
-            None,
-        )
-        .await?;
-        return Ok(PreconditionOutcome::Action(DeliveryAction::Ack));
-    }
-    if store::ingestion_cancelled(pool, event.payload.ingestion_id).await? {
-        store::complete_without_doi(
-            pool,
-            event,
-            doi,
-            owner,
-            IngestionItemStatus::Skipped,
-            Some("ingestion cancelled"),
-            None,
-        )
-        .await?;
-        return Ok(PreconditionOutcome::Action(DeliveryAction::Ack));
-    }
-    if store::is_cached(pool, doi).await? {
-        store::attach_cached(pool, event, doi, owner).await?;
-        return Ok(PreconditionOutcome::Action(DeliveryAction::Ack));
-    }
-    Ok(PreconditionOutcome::Proceed)
-}
-
-async fn claim_doi_lease(
-    pool: &PgPool,
-    bytes: &[u8],
-    event: &EventEnvelope<WorkFetchRequested>,
-    doi: &str,
-    owner: Uuid,
-    claim_lease: Duration,
-    delivery_count: u64,
-) -> anyhow::Result<Option<DeliveryAction>> {
-    if store::claim_doi(pool, doi, owner, claim_lease).await? != store::ClaimState::Acquired {
-        let action = action_for(FailureClass::Retryable, delivery_count);
-        if action == DeliveryAction::Terminate {
-            let record = dead_letter(
-                bytes,
-                Some(event.event_id),
-                delivery_count,
-                "DOI_LEASE_EXHAUSTED",
-            );
-            store::complete_without_doi(
-                pool,
-                event,
-                doi,
-                owner,
-                IngestionItemStatus::Failed,
-                Some("DOI lease remained busy through the final delivery"),
-                Some(&record),
-            )
-            .await?;
-        } else {
-            store::release_event_claim(pool, event.event_id, owner, "DOI lease is busy").await?;
-        }
-        return Ok(Some(action));
-    }
-    Ok(None)
-}
-
-async fn execute_work_fetch(
+async fn handle_work_fetch(
     pool: PgPool,
-    bytes: &[u8],
-    event: &EventEnvelope<WorkFetchRequested>,
-    doi: &str,
-    owner: Uuid,
+    job: &deepref_application::jobs::ClaimedJob,
+    lease: &JobLease,
     claim_lease: Duration,
-    delivery_count: u64,
 ) -> anyhow::Result<DeliveryAction> {
+    let event: EventEnvelope<WorkFetchRequested> = match EventEnvelope::deserialize(&job.payload) {
+        Ok(event) => event,
+        Err(error) => {
+            tracing::warn!(job_id=%job.id, %error, "malformed DOI job");
+            return Ok(DeliveryAction::Terminate);
+        }
+    };
+    if event.event_id != job.id || lease.id != job.id {
+        anyhow::bail!("DOI job identity does not match its execution lease");
+    }
+    let doi = match normalize_doi(&event.payload.doi) {
+        Ok(doi) => doi,
+        Err(error) => {
+            store::complete_without_doi(&pool, &event, &event.payload.doi, lease,
+                IngestionItemStatus::Failed, Some(&error.to_string())).await?;
+            return Ok(DeliveryAction::Terminate);
+        }
+    };
+    if !store::mark_fetching(&pool, &event, &doi, lease).await? {
+        return Ok(DeliveryAction::Ack);
+    }
+    if event.payload.depth > event.payload.max_depth
+        || store::acquisition_cancelled(&pool, event.payload.acquisition_id).await?
+    {
+        store::complete_without_doi(&pool, &event, &doi, lease,
+            IngestionItemStatus::Skipped, Some("acquisition cancelled or maximum depth exceeded")).await?;
+        return Ok(DeliveryAction::Ack);
+    }
+    if store::is_cached(&pool, &doi).await? {
+        store::attach_cached(&pool, &event, &doi, lease).await?;
+        return Ok(DeliveryAction::Ack);
+    }
+    let owner = Uuid::new_v4();
+    if store::claim_doi(&pool, &doi, owner, claim_lease).await? != store::ClaimState::Acquired {
+        // Another alias or project may have completed the report between the
+        // cache read and the claim. Attach that cache without poisoning it.
+        if store::is_cached(&pool, &doi).await? {
+            store::attach_cached(&pool, &event, &doi, lease).await?;
+            return Ok(DeliveryAction::Ack);
+        }
+        let action = action_for(FailureClass::Retryable, job.attempts.max(1) as u64);
+        if action == DeliveryAction::Terminate {
+            store::complete_without_doi(&pool, &event, &doi, lease,
+                IngestionItemStatus::Failed, Some("report cache lease remained busy through the final delivery")).await?;
+        }
+        return Ok(action);
+    }
     let settings = store::load_runtime_settings(&pool).await?;
-    let client = match CrossrefClient::new(settings.crossref_mailto.clone()) {
+    let client = match CrossrefClient::new(settings.crossref_mailto) {
         Ok(client) => client.with_max_attempts(settings.retry_attempts),
         Err(error) => {
-            store::finalize_terminal_failure(
-                &pool,
-                event,
-                doi,
-                owner,
-                IngestionItemStatus::Failed,
-                &error.to_string(),
-                None,
-            )
-            .await?;
+            store::finalize_terminal_failure(&pool, &event, &doi, owner, lease,
+                IngestionItemStatus::Failed, &error.to_string()).await?;
             return Ok(DeliveryAction::Ack);
         }
     };
-    limiter::acquire(&pool, "crossref", settings.rate_limit_per_second).await?;
     let (cancel_heartbeat, heartbeat_done) = spawn_heartbeat(
-        pool.clone(),
-        event.event_id,
-        doi.to_owned(),
-        owner,
-        claim_lease,
+        pool.clone(), lease.clone(), doi.clone(), owner, claim_lease,
     );
-    let fetched = client.fetch_work_with_references(doi).await;
+    limiter::acquire(&pool, "crossref", settings.rate_limit_per_second).await?;
+    let fetched = client.fetch_work_with_references(&doi).await;
     cancel_heartbeat.send_replace(true);
     let _ = heartbeat_done.await;
-
     match fetched {
         Ok(work) => {
-            store::finalize_success(&pool, event, doi, owner, &work).await?;
+            store::finalize_success(&pool, &event, &doi, owner, lease, &work).await?;
             Ok(DeliveryAction::Ack)
         }
         Err(error) if is_retryable_crossref_error(&error) => {
-            let action = action_for(FailureClass::Retryable, delivery_count);
+            let action = action_for(FailureClass::Retryable, job.attempts.max(1) as u64);
             if action == DeliveryAction::Terminate {
-                let record = dead_letter(
-                    bytes,
-                    Some(event.event_id),
-                    delivery_count,
-                    "DELIVERY_EXHAUSTED",
-                );
-                store::finalize_terminal_failure(
-                    &pool,
-                    event,
-                    doi,
-                    owner,
-                    IngestionItemStatus::Failed,
-                    &error.to_string(),
-                    Some(&record),
-                )
-                .await?;
+                store::finalize_terminal_failure(&pool, &event, &doi, owner, lease,
+                    IngestionItemStatus::Failed, &error.to_string()).await?;
             } else {
-                store::release_retryable(&pool, event.event_id, doi, owner, &error.to_string())
-                    .await?;
+                store::release_retryable(&pool, lease, &doi, owner, &error.to_string()).await?;
             }
             Ok(action)
         }
         Err(error) => {
             let status = if matches!(error, CrossrefError::NotFound(_)) {
                 IngestionItemStatus::NotFound
-            } else {
-                IngestionItemStatus::Failed
-            };
-            store::finalize_terminal_failure(
-                &pool,
-                event,
-                doi,
-                owner,
-                status,
-                &error.to_string(),
-                None,
-            )
-            .await?;
+            } else { IngestionItemStatus::Failed };
+            store::finalize_terminal_failure(&pool, &event, &doi, owner, lease, status, &error.to_string()).await?;
             Ok(DeliveryAction::Ack)
         }
     }
-}
-
-pub async fn handle_message(
-    pool: PgPool,
-    bytes: Vec<u8>,
-    delivery_count: u64,
-    claim_lease: Duration,
-) -> anyhow::Result<DeliveryAction> {
-    let event = match parse_work_fetch_event(&pool, &bytes, delivery_count).await? {
-        Ok(event) => event,
-        Err(action) => return Ok(action),
-    };
-    let owner = Uuid::new_v4();
-    match store::claim_event(&pool, event.event_id, owner, claim_lease).await? {
-        store::ClaimState::Completed => return Ok(DeliveryAction::Ack),
-        store::ClaimState::Busy => {
-            return Ok(DeliveryAction::Nak(
-                (claim_lease / 3).max(Duration::from_secs(1)),
-            ));
-        }
-        store::ClaimState::Acquired => {}
-    }
-
-    let doi = match normalize_doi(&event.payload.doi) {
-        Ok(doi) => doi,
-        Err(error) => {
-            let record = dead_letter(&bytes, Some(event.event_id), delivery_count, "INVALID_DOI");
-            store::complete_without_doi(
-                &pool,
-                &event,
-                &event.payload.doi,
-                owner,
-                IngestionItemStatus::Failed,
-                Some(&error.to_string()),
-                Some(&record),
-            )
-            .await?;
-            return Ok(DeliveryAction::Terminate);
-        }
-    };
-    store::mark_fetching(&pool, &event, &doi).await?;
-
-    if let PreconditionOutcome::Action(action) =
-        check_work_fetch_preconditions(&pool, &event, &doi, owner).await?
-    {
-        return Ok(action);
-    }
-
-    if let Some(action) = claim_doi_lease(
-        &pool,
-        &bytes,
-        &event,
-        &doi,
-        owner,
-        claim_lease,
-        delivery_count,
-    )
-    .await?
-    {
-        return Ok(action);
-    }
-
-    execute_work_fetch(
-        pool,
-        &bytes,
-        &event,
-        &doi,
-        owner,
-        claim_lease,
-        delivery_count,
-    )
-    .await
 }
 
 pub async fn handle_job(
@@ -721,12 +550,12 @@ async fn handle_recompute_metrics_job(
     pool: &sqlx::PgPool,
     payload: serde_json::Value,
 ) -> anyhow::Result<DeliveryAction> {
-    let event: EventEnvelope<deepref_domain::events::DomainPayload> = serde_json::from_value(payload)?;
-    let project_id = match event.payload {
-        deepref_domain::events::DomainPayload::MetricsRecomputeRequested(p) => p.project_id,
-        _ => anyhow::bail!("recompute_metrics job has an unsupported payload"),
-    };
-    deepref_app::recompute_project_metrics(pool, project_id).await?;
+    #[derive(Deserialize)]
+    #[serde(deny_unknown_fields)]
+    struct MetricsRequest { project_id: Uuid, revision: i64 }
+    let request: MetricsRequest = serde_json::from_value(payload)?;
+    if request.revision < 0 { anyhow::bail!("metric request revision must be nonnegative"); }
+    deepref_app::recompute_project_metrics(pool, request.project_id).await?;
     Ok(DeliveryAction::Ack)
 }
 
@@ -777,8 +606,8 @@ async fn handle_job_with_document_services_inner(
     } = services;
     match job.kind.as_str() {
         "work_fetch_requested" => {
-            let bytes = serde_json::to_vec(&job.payload)?;
-            handle_message(pool, bytes, job.attempts.max(1) as u64, claim_lease).await
+            let lease = lease.ok_or_else(|| anyhow::anyhow!("DOI processing requires its live job lease"))?;
+            handle_work_fetch(pool, job, lease, claim_lease).await
         }
         "recompute_metrics" => handle_recompute_metrics_job(&pool, job.payload.clone()).await,
         deepref_app::IMPORT_DEDUPLICATION_JOB_KIND => {
@@ -1792,7 +1621,7 @@ async fn parse_stored_document(
 
 fn spawn_heartbeat(
     pool: PgPool,
-    event_id: Uuid,
+    job_lease: JobLease,
     doi: String,
     owner: Uuid,
     lease: Duration,
@@ -1806,10 +1635,10 @@ fn spawn_heartbeat(
                     if result.is_err() || *receiver.borrow() { break; }
                 }
                 _ = tokio::time::sleep(interval) => {
-                    match store::renew_claims(&pool, event_id, &doi, owner, lease).await {
-                        Ok(true) => tracing::debug!(%event_id, %doi, "processing lease renewed"),
-                        Ok(false) => { tracing::error!(%event_id, %doi, "processing lease was lost"); break; }
-                        Err(error) => tracing::warn!(%error, %event_id, %doi, "lease heartbeat failed"),
+                    match store::renew_claims(&pool, &job_lease, &doi, owner, lease).await {
+                        Ok(true) => tracing::debug!(job_id=%job_lease.id, %doi, "cache lease renewed"),
+                        Ok(false) => { tracing::error!(job_id=%job_lease.id, %doi, "cache lease was lost"); break; }
+                        Err(error) => tracing::warn!(%error, job_id=%job_lease.id, %doi, "cache heartbeat failed"),
                     }
                 }
             }
@@ -1818,26 +1647,6 @@ fn spawn_heartbeat(
     (sender, handle)
 }
 
-fn dead_letter(
-    bytes: &[u8],
-    event_id: Option<Uuid>,
-    delivery_count: u64,
-    reason: &str,
-) -> DeadLetterRecord {
-    let digest = Sha256::digest(bytes);
-    let payload_sha256 = digest
-        .iter()
-        .map(|byte| format!("{byte:02x}"))
-        .collect::<String>();
-    DeadLetterRecord {
-        identity: format!("sha256:{payload_sha256}"),
-        source_subject: deepref_domain::events::SUBJECT_WORK_FETCH_REQUESTED.to_owned(),
-        source_event_id: event_id,
-        delivery_count,
-        reason_code: reason.to_owned(),
-        payload_sha256,
-    }
-}
 
 fn is_retryable_crossref_error(error: &CrossrefError) -> bool {
     matches!(

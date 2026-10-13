@@ -30,7 +30,7 @@ async function mockProjectShell(page: Page): Promise<void> {
 			await route.fulfill({ json: { items: [], next_cursor: null } });
 		}
 	);
-	await page.route(/http:\/\/localhost:4173\/api\/ingestions(?:\?.*)?$/, async (route) => {
+	await page.route(/http:\/\/localhost:4173\/api\/projects\/[^/]+\/acquisitions(?:\?.*)?$/, async (route) => {
 		await route.fulfill({ json: { items: [], next_cursor: null } });
 	});
 }
