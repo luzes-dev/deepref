@@ -1,4 +1,4 @@
--- PR6: versioned, project-scoped review protocols.
+-- Versioned, project-scoped review protocols.
 -- Existing 0006 protocol rows remain readable. The legacy `criteria` JSON column
 -- is retained as a compatibility projection; the ordered criteria table below is
 -- authoritative for new writes.

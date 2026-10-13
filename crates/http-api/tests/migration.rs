@@ -104,7 +104,7 @@ fn migrations_are_append_only_and_define_durability_contract() {
     ] {
         assert!(
             studies_appraisals.contains(required),
-            "missing PR9 migration contract: {required}"
+            "missing studies and appraisals migration contract: {required}"
         );
     }
     assert!(!studies_appraisals.contains("normalized_design"));

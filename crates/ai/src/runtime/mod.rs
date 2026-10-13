@@ -14,7 +14,7 @@
 //! * [`hooks`] — budget, usage, telemetry and plan-consistency hooks.
 //! * [`agent`] — the turn driver mapping Rig events onto DeepRef's assistant
 //!   contract. Cassette recording attaches through [`RigTurn`][agent::RigTurn]'s
-//!   recorder; replay fixtures arrive with the cassette module (PR4).
+//!   recorder; replay fixtures arrive with the cassette module.
 //! * [`builder`] — the single shared agent construction (preamble, tools,
 //!   hooks, history, runner limits) for live runs and cassette replays.
 

@@ -7,7 +7,7 @@
 use sqlx::{AssertSqlSafe, Connection, Executor, PgConnection, Row};
 use uuid::Uuid;
 
-const MIGRATIONS_THROUGH_PR8: [&str; 13] = [
+const MIGRATIONS_THROUGH_0013: [&str; 13] = [
     include_str!("../migrations/0001_initial.sql"),
     include_str!("../migrations/0002_metrics.sql"),
     include_str!("../migrations/0003_outbox_claims.sql"),
@@ -32,7 +32,7 @@ async fn upgrades_legacy_studies_and_enforces_project_scoped_truth() {
     let mut connection = PgConnection::connect(&url)
         .await
         .expect("database connects");
-    let schema = format!("pr9_upgrade_{}", Uuid::new_v4().simple());
+    let schema = format!("studies_upgrade_{}", Uuid::new_v4().simple());
     connection
         .execute(AssertSqlSafe(format!("CREATE SCHEMA {schema}")))
         .await
@@ -41,7 +41,7 @@ async fn upgrades_legacy_studies_and_enforces_project_scoped_truth() {
         .execute(AssertSqlSafe(format!("SET search_path TO {schema},public")))
         .await
         .expect("search path changes");
-    for migration in MIGRATIONS_THROUGH_PR8 {
+    for migration in MIGRATIONS_THROUGH_0013 {
         connection
             .execute(migration)
             .await
@@ -105,7 +105,7 @@ async fn upgrades_legacy_studies_and_enforces_project_scoped_truth() {
     connection
         .execute(include_str!("../migrations/0014_studies_appraisals.sql"))
         .await
-        .expect("PR9 migration applies");
+        .expect("migration 0014 applies");
 
     let migrated = sqlx::query(
         "SELECT project_id, design, title, study_revision, updated_by_actor_kind

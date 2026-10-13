@@ -1,5 +1,5 @@
--- PR9 study grouping and generic appraisal. This migration evolves the shallow
--- PR2 study tables without rewriting history or encoding domain transitions in triggers.
+-- Study grouping and generic appraisal. This migration evolves the shallow
+-- study tables from 0006 without rewriting history or encoding domain transitions in triggers.
 
 ALTER TABLE studies
   ADD COLUMN study_revision bigint NOT NULL DEFAULT 0,

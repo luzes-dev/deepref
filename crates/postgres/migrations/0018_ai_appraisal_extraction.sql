@@ -1,4 +1,4 @@
--- PR13 AI appraisal, study grouping, and durable extraction.
+-- AI appraisal, study grouping, and durable extraction.
 -- AI remains proposal-only.  These constraints make every accepted extraction
 -- value prove its project, study, report, document, block, and parser scope.
 

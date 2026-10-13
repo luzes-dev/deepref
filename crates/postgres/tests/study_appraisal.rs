@@ -49,7 +49,7 @@ async fn seed_project(pool: &PgPool, name: &str, report_ids: &[Uuid]) -> Uuid {
 }
 
 fn actor() -> Actor {
-    Actor::new(ActorKind::User, "pr9-integration-test").expect("actor is valid")
+    Actor::new(ActorKind::User, "study-appraisal-integration-test").expect("actor is valid")
 }
 
 #[tokio::test]
@@ -57,8 +57,8 @@ async fn study_grouping_is_reversible_and_appraisal_is_immutable_and_scoped() {
     let Some(pool) = database().await else { return };
     let report_a = Uuid::new_v4();
     let report_b = Uuid::new_v4();
-    let project_a = seed_project(&pool, "PR9 grouping", &[report_a, report_b]).await;
-    let project_b = seed_project(&pool, "PR9 shared report", &[report_a]).await;
+    let project_a = seed_project(&pool, "grouping", &[report_a, report_b]).await;
+    let project_b = seed_project(&pool, "shared report", &[report_a]).await;
     let study_a = Uuid::new_v4();
     let study_b = Uuid::new_v4();
     let study_c = Uuid::new_v4();
@@ -471,7 +471,7 @@ async fn concurrent_opposite_moves_are_ordered_and_conflict_authoritatively() {
     let Some(pool) = database().await else { return };
     let report_a = Uuid::new_v4();
     let report_b = Uuid::new_v4();
-    let project_id = seed_project(&pool, "PR9 concurrent moves", &[report_a, report_b]).await;
+    let project_id = seed_project(&pool, "concurrent moves", &[report_a, report_b]).await;
     let study_a = Uuid::new_v4();
     let study_b = Uuid::new_v4();
     let actor = actor();

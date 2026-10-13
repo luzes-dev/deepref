@@ -177,8 +177,8 @@ jobs:
         if: always() && (github.event_name == 'push' || needs.changes.outputs.rust == 'true') && matrix.command != 'fmt'
         run: ${SCCACHE_PATH:-sccache} --show-stats
 
-  ai-pr15-gates:
-    name: AI PR15 evaluation and security gates
+  ai-eval-security-gates:
+    name: AI evaluation and security gates
     needs: changes
     runs-on: ubuntu-latest
     timeout-minutes: 15

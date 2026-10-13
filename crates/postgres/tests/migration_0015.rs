@@ -7,7 +7,7 @@
 use sqlx::{AssertSqlSafe, Connection, Executor, PgConnection, Row};
 use uuid::Uuid;
 
-const MIGRATIONS_THROUGH_PR9: [&str; 14] = [
+const MIGRATIONS_THROUGH_0014: [&str; 14] = [
     include_str!("../migrations/0001_initial.sql"),
     include_str!("../migrations/0002_metrics.sql"),
     include_str!("../migrations/0003_outbox_claims.sql"),
@@ -33,7 +33,7 @@ async fn migration_0015_adds_reason_freshness_without_reading_missing_created_at
     let mut connection = PgConnection::connect(&url)
         .await
         .expect("database connects");
-    let schema = format!("pr10_migration_{}", Uuid::new_v4().simple());
+    let schema = format!("migration_0015_{}", Uuid::new_v4().simple());
     connection
         .execute(AssertSqlSafe(format!("CREATE SCHEMA {schema}")))
         .await
@@ -43,7 +43,7 @@ async fn migration_0015_adds_reason_freshness_without_reading_missing_created_at
         .await
         .expect("search path changes");
 
-    for migration in MIGRATIONS_THROUGH_PR9 {
+    for migration in MIGRATIONS_THROUGH_0014 {
         connection
             .execute(migration)
             .await
@@ -52,7 +52,7 @@ async fn migration_0015_adds_reason_freshness_without_reading_missing_created_at
     connection
         .execute(include_str!("../migrations/0015_prisma_freshness.sql"))
         .await
-        .expect("PR10 freshness migration applies");
+        .expect("migration 0015 applies");
 
     let columns = sqlx::query(
         "SELECT column_name, is_nullable FROM information_schema.columns

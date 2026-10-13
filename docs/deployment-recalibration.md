@@ -1,8 +1,8 @@
 # Calibration deployment and recalibration sequencing
 
 Operator guide for the semantic-contract calibration migration
-(`crates/postgres/migrations/0056_semantic_contract_calibration.sql`, PR0 of the
-Rig 0.44 + rig-cassette migration). It states the blast radius, the required
+(`crates/postgres/migrations/0056_semantic_contract_calibration.sql`, the first
+step of the Rig 0.44 + rig-cassette migration). It states the blast radius, the required
 migrate → recalibrate → verify sequence, and how to tell an expected
 "refused: recalibrate" refusal apart from a real failure.
 
@@ -18,7 +18,7 @@ The mechanism is the scheme gate in
 `crates/postgres/src/review_calibration.rs:305-311`: `check_admission` compares
 the stored `identity_scheme` against `SEMANTIC_CONTRACT_SCHEME`, which is `3`
 (`crates/review/src/contract.rs:49-53`). Any stored scheme other than 3 —
-i.e. every row written before PR0 — is refused as
+i.e. every row written before the calibration migration — is refused as
 `CalibrationRefusal::IncompatibleIdentityScheme`. A refusal is fail-closed: no
 run is scheduled (`crates/postgres/src/review_calibration.rs:67-77`,
 `admit_calibration` at `review_calibration.rs:260-288`).

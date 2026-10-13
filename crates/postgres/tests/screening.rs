@@ -503,7 +503,7 @@ async fn migration_replays_legacy_screening_events_before_projection_constraints
         deepref_postgres::MIGRATOR
             .run_to(11, &mut connection)
             .await
-            .expect("pre-PR7 migrations through protocol versions should apply");
+            .expect("migrations through protocol versions should apply");
         let project_id = Uuid::new_v4();
         let report_id = Uuid::new_v4();
         let protocol_id = Uuid::new_v4();
@@ -584,7 +584,7 @@ async fn migration_replays_legacy_screening_events_before_projection_constraints
         deepref_postgres::MIGRATOR
             .run(&mut connection)
             .await
-            .expect("PR7 migrations should replay legacy events");
+            .expect("screening migrations should replay legacy events");
 
         let events = sqlx::query(
             "SELECT id, supersedes_event_id, previous_title_abstract_status, previous_full_text_status, previous_full_text_exclusion_reason_id, previous_final_status, result_title_abstract_status, result_full_text_status, result_full_text_exclusion_reason_id, result_final_status FROM screening_events WHERE project_id=$1 AND report_id=$2 ORDER BY created_at,id",

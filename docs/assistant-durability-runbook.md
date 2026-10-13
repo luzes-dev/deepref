@@ -1,7 +1,7 @@
 # Assistant durability runbook (durable runs + cassette replay)
 
 Operator notes for Level A durable assistant turns (Rig 0.44 + rig-cassette
-migration, PR0–PR6). Execution belongs to the worker; the browser only
+migration). Execution belongs to the worker; the browser only
 observes. See ADR 0006
 (`docs/adr/0006-deferred-mid-turn-checkpoint-resume.md`) for what durability
 covers and what it deliberately does not.

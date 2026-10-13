@@ -1,4 +1,4 @@
--- PR8 documents and full-text screening. Evolve the 0006 tables in place.
+-- Documents and full-text screening. Evolve the 0006 tables in place.
 
 ALTER TABLE documents
   ADD COLUMN IF NOT EXISTS project_id uuid,

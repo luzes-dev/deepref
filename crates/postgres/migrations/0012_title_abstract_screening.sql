@@ -1,4 +1,4 @@
--- PR7 title/abstract screening: audit snapshots, deterministic legacy replay,
+-- Title/abstract screening: audit snapshots, deterministic legacy replay,
 -- bounded queue indexes, and final event/projection invariants.
 ALTER TABLE screening_events
   ADD COLUMN IF NOT EXISTS event_kind text NOT NULL DEFAULT 'decision',
@@ -31,9 +31,9 @@ ALTER TABLE screening_events
   DROP CONSTRAINT IF EXISTS screening_events_actor_id_check;
 
 -- Replay the original event stream in a stable order. The projection is
--- rebuilt as each event is applied, so pre-PR7 snapshots and revisions are not
+-- rebuilt as each event is applied, so legacy snapshots and revisions are not
 -- inferred from migration defaults.
--- The pre-PR7 schema could not encode undo events. A database that already
+-- The legacy schema could not encode undo events. A database that already
 -- contains an event_kind=undo row is therefore a partial rollout, and this
 -- migration aborts instead of treating defaulted snapshots as authoritative.
 DO $$

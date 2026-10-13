@@ -6,8 +6,8 @@ Accepted.
 
 ## Context
 
-The Rig 0.44 + rig-cassette migration (branch `feat/rig-044-cassette-migration`,
-PR0–PR6) implements Level A durability for assistant turns:
+The Rig 0.44 + rig-cassette migration (branch `feat/rig-044-cassette-migration`)
+implements Level A durability for assistant turns:
 
 - `crates/ai/src/runtime/agent.rs` runs one turn on Rig's `AgentRunner`;
   `run_rig_turn_channel` splits execution from observation so a slow or

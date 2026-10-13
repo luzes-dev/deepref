@@ -783,7 +783,7 @@ async fn hybrid_retrieval_is_dimension_safe_parser_scoped_and_prefix_ordered() {
 }
 
 #[tokio::test]
-async fn pr12_migration_installs_project_scoped_typed_proposal_fields() {
+async fn proposal_migration_installs_project_scoped_typed_proposal_fields() {
     let Some(pool) = database().await else { return };
     let columns: Vec<String> = sqlx::query_scalar(
         "SELECT column_name FROM information_schema.columns
@@ -799,7 +799,7 @@ async fn pr12_migration_installs_project_scoped_typed_proposal_fields() {
     ])
     .fetch_all(&pool)
     .await
-    .expect("PR12 proposal columns");
+    .expect("proposal columns");
     assert_eq!(columns.len(), 5);
 
     for table in ["ai_proposal_criterion_judgments", "ai_proposal_evidence"] {
@@ -807,7 +807,7 @@ async fn pr12_migration_installs_project_scoped_typed_proposal_fields() {
             .bind(table)
             .fetch_one(&pool)
             .await
-            .expect("PR12 typed proposal table");
+            .expect("typed proposal table");
         assert!(exists, "missing {table}");
     }
     let judgment_columns: Vec<String> = sqlx::query_scalar(
@@ -850,12 +850,12 @@ async fn pr12_migration_installs_project_scoped_typed_proposal_fields() {
     )
     .fetch_one(&pool)
     .await
-    .expect("PR12 project target constraints");
+    .expect("project target constraints");
     assert_eq!(project_target_fk, 3);
 }
 
 #[tokio::test]
-async fn pr12_projection_foreign_keys_reject_cross_project_criterion_and_block_references() {
+async fn proposal_projection_foreign_keys_reject_cross_project_criterion_and_block_references() {
     let Some(pool) = database().await else { return };
     let (project_a, document_a, _block_a) = fixture(&pool).await;
     let (project_b, document_b, block_b) = fixture(&pool).await;

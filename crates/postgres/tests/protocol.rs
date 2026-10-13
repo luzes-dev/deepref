@@ -405,7 +405,7 @@ async fn migration_backfills_legacy_json_criteria_deterministically() {
         deepref_postgres::MIGRATOR
             .run_to(10, &mut connection)
             .await
-            .expect("migrations through PR5 should apply");
+            .expect("migrations through 0010 should apply");
         let project_id = Uuid::new_v4();
         let protocol_id = Uuid::new_v4();
         sqlx::query("INSERT INTO projects (id,name) VALUES ($1,'legacy backfill project')")
@@ -428,7 +428,7 @@ async fn migration_backfills_legacy_json_criteria_deterministically() {
         deepref_postgres::MIGRATOR
             .run(&mut connection)
             .await
-            .expect("PR6 migration should apply");
+            .expect("remaining migrations should apply");
 
         let rows = sqlx::query(
             "SELECT id,ordinal,criterion_type,stage,dimension,label,description FROM eligibility_criteria WHERE protocol_version_id=$1 ORDER BY ordinal",

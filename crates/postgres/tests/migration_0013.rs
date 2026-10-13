@@ -7,7 +7,7 @@
 use sqlx::{AssertSqlSafe, Connection, Executor, PgConnection, Row};
 use uuid::Uuid;
 
-const PRE_PR8_MIGRATIONS: [&str; 12] = [
+const MIGRATIONS_THROUGH_0012: [&str; 12] = [
     include_str!("../migrations/0001_initial.sql"),
     include_str!("../migrations/0002_metrics.sql"),
     include_str!("../migrations/0003_outbox_claims.sql"),
@@ -31,7 +31,7 @@ async fn upgrades_legacy_documents_blocks_and_reason_catalog_truthfully() {
     let mut connection = PgConnection::connect(&url)
         .await
         .expect("database connects");
-    let schema = format!("pr8_upgrade_{}", Uuid::new_v4().simple());
+    let schema = format!("documents_upgrade_{}", Uuid::new_v4().simple());
     let create_schema = format!("CREATE SCHEMA {schema}");
     sqlx::query(AssertSqlSafe(create_schema))
         .execute(&mut connection)
@@ -42,11 +42,11 @@ async fn upgrades_legacy_documents_blocks_and_reason_catalog_truthfully() {
         .execute(&mut connection)
         .await
         .expect("search path changes");
-    for migration in PRE_PR8_MIGRATIONS {
+    for migration in MIGRATIONS_THROUGH_0012 {
         connection
             .execute(migration)
             .await
-            .expect("pre-PR8 migration applies");
+            .expect("pre-documents migration applies");
     }
 
     let project_id = Uuid::new_v4();
@@ -93,7 +93,7 @@ async fn upgrades_legacy_documents_blocks_and_reason_catalog_truthfully() {
     connection
         .execute(include_str!("../migrations/0013_documents_full_text.sql"))
         .await
-        .expect("PR8 migration applies to legacy rows");
+        .expect("migration 0013 applies to legacy rows");
 
     let document = sqlx::query(
         "SELECT project_id,status,active_parser_version,ocr_required FROM documents WHERE id=$1",

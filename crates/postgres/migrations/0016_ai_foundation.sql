@@ -1,4 +1,4 @@
--- PR11 AI foundation. This migration is additive and safe for the legacy
+-- AI foundation. This migration is additive and safe for the legacy
 -- evidence workspace: failed/running attempts remain audit rows, completed
 -- reuse is an indexed lookup rather than a uniqueness constraint.
 CREATE EXTENSION IF NOT EXISTS vector;

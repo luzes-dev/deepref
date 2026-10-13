@@ -1,7 +1,7 @@
 {
   "schema": "deepref.ai.evaluation",
   "version": 1,
-  "gold_set_id": "pr15-reviewed-methodology-small-v1",
+  "gold_set_id": "reviewed-methodology-small-v1",
   "reviewer": {
     "reviewer_id": "reviewer-methodology-1",
     "reviewed_at": "2026-08-28T12:00:00Z",
