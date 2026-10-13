@@ -79,6 +79,33 @@ wording: "Disconnect — the assistant keeps working".)
   failure codes (`ai_attempts_exhausted`, `ai_budget_exceeded`,
   `ai_run_failed`) are observable on the run's `error` field and as `error`
   SSE events (`fail_run`, `~283-296`).
+- Every terminal worker failure settles the run before terminating its job,
+  including missing provider configuration and malformed model routes.
+  Failure settlement handles both queued and running runs atomically and is
+  idempotent for already terminal runs.
+- The reconciler fails queued/running assistant runs whose matching durable
+  job is missing or no longer queued/running, appending one persisted error.
+  Live queued jobs and recoverable running jobs remain eligible for execution.
+- SSE database failures emit `assistant_events_unavailable` and close the
+  observer rather than masquerading as an empty event list. Reconnect to
+  resume from the last persisted sequence.
+
+## Confirmed screening plans
+
+Title/abstract screening plans capture host-owned record titles, statuses,
+and revisions before being persisted. Model-supplied snapshots are removed.
+Turning title/abstract AI autonomy off refuses planning and stops confirmation.
+The confirmation card derives its decision/count from the stored arguments,
+lists every affected record, and sends reviewer deselections to the API.
+Deselections are checked against the immutable plan; stale records are rejected
+individually without changing the unaffected records' confirmation semantics.
+
+Screening events from confirmed plans retain the confirming reviewer identity
+and carry `origin=assistant_plan`. PRISMA reports this as a distinct assistant
+subset, not the reviewer's own screening; ADR 0005 human references reject these
+events until a person independently screens the record. Tool-read text is
+escaped inside `<evidence-json>` and the system prompt treats it as untrusted
+evidence, never instructions.
 
 ## Where to observe runs
 

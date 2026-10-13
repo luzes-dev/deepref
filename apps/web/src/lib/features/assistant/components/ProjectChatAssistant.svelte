@@ -15,6 +15,7 @@
 		type AiBudget,
 		type AssistantConversation,
 		type AssistantMessageRecord,
+		type AssistantPlanDeselection,
 		type AssistantPlan
 	} from '../chat-api';
 	import {
@@ -263,7 +264,7 @@
 		return () => clearInterval(timer);
 	});
 
-	async function resolvePlan(turn: ChatTurn, action: 'confirm' | 'cancel'): Promise<void> {
+	async function resolvePlan(turn: ChatTurn, action: 'confirm' | 'cancel', deselected: AssistantPlanDeselection[] = []): Promise<void> {
 		if (turn.kind !== 'assistant' || !turn.plan || turn.planBusy) return;
 		const plan = turn.plan;
 		turn.planBusy = true;
@@ -272,7 +273,7 @@
 		try {
 			turn.plan =
 				action === 'confirm'
-					? await confirmAssistantPlan(projectId, plan.id)
+					? await confirmAssistantPlan(projectId, plan.id, deselected)
 					: await rejectAssistantPlan(projectId, plan.id);
 		} catch (error: unknown) {
 			turn.planError =
@@ -697,7 +698,7 @@
 												plan={turn.plan}
 												busy={turn.planBusy}
 												error={turn.planError}
-												onconfirm={() => void resolvePlan(turn, 'confirm')}
+												onconfirm={(deselected) => void resolvePlan(turn, 'confirm', deselected)}
 												oncancel={() => void resolvePlan(turn, 'cancel')}
 											/>
 										{:else if turn.planError}

@@ -14015,6 +14015,15 @@
             ],
             "format": "uuid"
           },
+          "stale": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "Records left alone because they changed after the plan was made.",
+            "minimum": 0
+          },
           "status": {
             "type": "string",
             "description": "`executed`, `queued` (an AI review is running), `completed` (the review\nfinished), `failed`, `skipped` or `manual`."
@@ -18418,6 +18427,7 @@
           "screened_records",
           "title_abstract_excluded",
           "automation_excluded",
+          "assistant_excluded",
           "ai_quarantined",
           "title_abstract_pending",
           "reports_sought",
@@ -18442,6 +18452,12 @@
               "null"
             ],
             "format": "date-time"
+          },
+          "assistant_excluded": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Title/abstract exclusions a reviewer confirmed from an assistant plan.\nThe assistant chose them, so they are not counted as a person's own\nscreening. Disjoint from `automation_excluded`.",
+            "minimum": 0
           },
           "automation_excluded": {
             "type": "integer",

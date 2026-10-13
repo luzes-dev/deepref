@@ -53,6 +53,8 @@ pub async fn handle_assistant_agent_run(
     let _ = owner;
     let config = deepref_config::AiProviderConfig::from_env()?;
     let Some(api_key) = config.api_key() else {
+        let payload: AssistantAgentRunJobPayload = serde_json::from_value(job.payload.clone())?;
+        fail_run(pool, payload.assistant_run_id, "ai_not_configured", "The AI provider is not configured.").await?;
         return Ok(DeliveryAction::Terminate);
     };
     let factory = Arc::new(deepref_ai::runtime::OpenAiCompatModelFactory::new(
@@ -91,13 +93,11 @@ pub async fn handle_assistant_agent_run_with(
         .await?
         .is_none()
     {
+        fail_run(pool, payload.assistant_run_id, "assistant_run_missing", "The assistant run no longer exists.").await?;
         return Ok(DeliveryAction::Terminate);
     }
-    // Terminal check first: a duplicate delivery after settlement acks
-    // without appending anything. The attempts-exhausted fail runs after it
-    // so a terminal redelivery never gains a bogus error event, and so the
-    // run is already `running` when the fail flip applies (failing a merely
-    // queued run would append an event while stranding its status).
+    // Terminal redeliveries ack before the attempts-exhausted guard, so
+    // already settled runs never acquire a bogus failure event.
     let Some(claimed) = begin_assistant_agent_run(pool, payload.assistant_run_id).await? else {
         return Ok(DeliveryAction::Ack);
     };
@@ -121,6 +121,7 @@ pub async fn handle_assistant_agent_run_with(
         }
         Err(RunFailure::Fatal(error)) => {
             tracing::warn!(run_id = %payload.assistant_run_id, %error, "assistant run failed");
+            fail_run(pool, payload.assistant_run_id, "assistant_run_failed", "The assistant run could not finish.").await?;
             Ok(DeliveryAction::Terminate)
         }
     }
@@ -508,4 +509,30 @@ async fn emit_plan_event(
         }),
     )
     .await
+}
+
+/// Settle runs whose delivery can no longer execute. Holding each run lock
+/// serializes the failure event with normal worker settlement.
+pub(crate) async fn reconcile_orphan_runs(pool: &PgPool) -> anyhow::Result<()> {
+    let mut tx = pool.begin().await?;
+    let ids = sqlx::query_scalar::<_, Uuid>(
+        "SELECT r.id FROM assistant_agent_runs r
+         WHERE r.status IN ('queued','running') AND NOT EXISTS (
+           SELECT 1 FROM jobs j WHERE j.kind='assistant_agent_run'
+             AND j.payload->>'assistant_run_id'=r.id::text
+             AND j.state IN ('queued','running')
+         ) FOR UPDATE OF r SKIP LOCKED"
+    ).fetch_all(&mut *tx).await?;
+    for id in ids {
+        let error = json!({"code": "assistant_job_unavailable", "message": "The assistant job is missing or no longer executable."});
+        sqlx::query(
+            "INSERT INTO assistant_run_events (run_id,seq,kind,payload)
+             SELECT $1,COALESCE(MAX(seq),-1)+1,'error',$2 FROM assistant_run_events WHERE run_id=$1"
+        ).bind(id).bind(&error).execute(&mut *tx).await?;
+        sqlx::query(
+            "UPDATE assistant_agent_runs SET status='failed',error=$2,updated_at=now(),completed_at=now() WHERE id=$1"
+        ).bind(id).bind(&error).execute(&mut *tx).await?;
+    }
+    tx.commit().await?;
+    Ok(())
 }

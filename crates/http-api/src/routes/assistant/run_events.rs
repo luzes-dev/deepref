@@ -61,6 +61,7 @@ pub(crate) async fn stream_run_events(
             run_id,
             after_seq: query.after_seq.unwrap_or(-1),
             terminal,
+            unavailable: false,
             buffer: std::collections::VecDeque::new(),
         },
         |mut poll: RunEventPoll| async move {
@@ -68,14 +69,26 @@ pub(crate) async fn stream_run_events(
                 if let Some(frame) = poll.buffer.pop_front() {
                     return Some((frame, poll));
                 }
-                let events = deepref_postgres::list_assistant_run_events(
+                if poll.unavailable {
+                    return None;
+                }
+                let events = match deepref_postgres::list_assistant_run_events(
                     &poll.state.pool,
                     poll.run_id,
                     poll.after_seq,
                     200,
-                )
-                .await
-                .unwrap_or_default();
+                ).await {
+                    Ok(events) => events,
+                    Err(error) => {
+                        tracing::error!(%error, run_id = %poll.run_id, "assistant event polling failed");
+                        poll.terminal = true;
+                        poll.unavailable = true;
+                        return Some((sse_frame("error", &json!({
+                            "code": "assistant_events_unavailable",
+                            "message": "Assistant events could not be loaded. Reconnect to resume."
+                        })), poll));
+                    }
+                };
                 for event in &events {
                     poll.after_seq = poll.after_seq.max(event.seq);
                     if let Some(frame) =
@@ -95,16 +108,19 @@ pub(crate) async fn stream_run_events(
                     // resumes past the done/error row in the milliseconds
                     // before the status flip would otherwise long-poll until
                     // it gives up. A deleted run ends the stream as well.
-                    let status =
-                        deepref_postgres::get_assistant_agent_run(&poll.state.pool, poll.run_id)
-                            .await
-                            .ok()
-                            .flatten()
-                            .map(|record| record.status);
-                    match status {
-                        None => return None,
-                        Some(status) if status.terminal() => return None,
-                        _ => {}
+                    match deepref_postgres::get_assistant_agent_run(&poll.state.pool, poll.run_id).await {
+                        Ok(None) => return None,
+                        Ok(Some(record)) if record.status.terminal() => return None,
+                        Ok(Some(_)) => {}
+                        Err(error) => {
+                            tracing::error!(%error, run_id = %poll.run_id, "assistant status polling failed");
+                            poll.terminal = true;
+                            poll.unavailable = true;
+                            return Some((sse_frame("error", &json!({
+                                "code": "assistant_events_unavailable",
+                                "message": "Assistant status could not be loaded. Reconnect to resume."
+                            })), poll));
+                        }
                     }
                     tokio::time::sleep(std::time::Duration::from_millis(500)).await;
                 }
@@ -121,6 +137,7 @@ struct RunEventPoll {
     project_id: Uuid,
     run_id: Uuid,
     after_seq: i64,
+    unavailable: bool,
     terminal: bool,
     buffer: std::collections::VecDeque<Result<Event, std::convert::Infallible>>,
 }

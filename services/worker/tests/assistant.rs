@@ -46,6 +46,23 @@ async fn project(pool: &PgPool) -> (Uuid, Uuid) {
     (project_id, conversation_id)
 }
 
+/// A report in the project: plans only accept records the project holds.
+async fn project_report(pool: &PgPool, project_id: Uuid) -> Uuid {
+    let report_id = Uuid::new_v4();
+    sqlx::query("INSERT INTO reports (id,title) VALUES ($1,'Worker plan report')")
+        .bind(report_id)
+        .execute(pool)
+        .await
+        .expect("report inserts");
+    sqlx::query("INSERT INTO project_reports (project_id,report_id) VALUES ($1,$2)")
+        .bind(project_id)
+        .bind(report_id)
+        .execute(pool)
+        .await
+        .expect("project report inserts");
+    report_id
+}
+
 fn route() -> ResolvedModel {
     ResolvedModel {
         profile: ModelProfile::Reasoning,
@@ -113,7 +130,7 @@ async fn run_record(pool: &PgPool, run_id: Uuid) -> deepref_postgres::AssistantA
 async fn worker_completes_a_run_with_one_answer_one_plan_and_a_cassette() {
     let Some(pool) = database().await else { return };
     let (project_id, conversation_id) = project(&pool).await;
-    let report_id = Uuid::new_v4();
+    let report_id = project_report(&pool, project_id).await;
     let model = MockCompletionModel::from_stream_turns(vec![
         stream_call(
             "c1",
@@ -513,7 +530,7 @@ async fn recovered_lease_preserves_prior_events_with_monotonic_seqs() {
 async fn plan_event_resolves_to_the_stored_plan() {
     let Some(pool) = database().await else { return };
     let (project_id, conversation_id) = project(&pool).await;
-    let report_id = Uuid::new_v4();
+    let report_id = project_report(&pool, project_id).await;
     let model = MockCompletionModel::from_stream_turns(vec![
         stream_call(
             "c1",
@@ -564,4 +581,43 @@ async fn plan_event_resolves_to_the_stored_plan() {
         .execute(&pool)
         .await
         .expect("cleanup");
+}
+
+#[tokio::test]
+async fn malformed_model_route_fails_run_before_terminating_job() {
+    let _guard = DATABASE_TEST_MUTEX.lock().await;
+    let Some(pool) = database().await else { return };
+    let (project_id, conversation_id) = project(&pool).await;
+    let run_id = submit(&pool, project_id, conversation_id).await;
+    sqlx::query("UPDATE assistant_agent_runs SET model_route='{}'::jsonb WHERE id=$1")
+        .bind(run_id).execute(&pool).await.expect("corrupt model route");
+    let job = claim(&pool).await;
+    let model = MockCompletionModel::from_stream_turns(vec![stream_text("unused")]);
+    let action = handle_assistant_agent_run_with(&pool, &job, &services(model)).await;
+    assert!(matches!(action, Ok(DeliveryAction::Terminate)), "{action:?}");
+    assert_eq!(run_record(&pool, run_id).await.status, deepref_postgres::AssistantAgentRunStatus::Failed);
+    let events = list_assistant_run_events(&pool, run_id, -1, 100).await.expect("events");
+    assert_eq!(events.iter().filter(|event| event.kind == "error").count(), 1);
+}
+
+#[tokio::test]
+async fn reconciler_fails_missing_and_dead_assistant_jobs_but_preserves_live_jobs() {
+    let _guard = DATABASE_TEST_MUTEX.lock().await;
+    let Some(pool) = database().await else { return };
+    let (project_id, conversation_id) = project(&pool).await;
+    let missing = submit(&pool, project_id, conversation_id).await;
+    sqlx::query("DELETE FROM jobs WHERE payload->>'assistant_run_id'=$1")
+        .bind(missing.to_string()).execute(&pool).await.expect("remove job");
+    let dead = submit(&pool, project_id, conversation_id).await;
+    sqlx::query("UPDATE jobs SET state='dead' WHERE payload->>'assistant_run_id'=$1")
+        .bind(dead.to_string()).execute(&pool).await.expect("kill job");
+    let live = submit(&pool, project_id, conversation_id).await;
+    deepref_worker::reconciler::reconcile_once(&pool).await.expect("reconcile");
+    deepref_worker::reconciler::reconcile_once(&pool).await.expect("repeat reconciliation");
+    for id in [missing, dead] {
+        assert_eq!(run_record(&pool, id).await.status, deepref_postgres::AssistantAgentRunStatus::Failed);
+        let events = list_assistant_run_events(&pool, id, -1, 100).await.expect("events");
+        assert_eq!(events.iter().filter(|event| event.kind == "error").count(), 1);
+    }
+    assert_eq!(run_record(&pool, live).await.status, deepref_postgres::AssistantAgentRunStatus::Queued);
 }

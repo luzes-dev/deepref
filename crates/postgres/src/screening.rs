@@ -149,24 +149,46 @@ pub async fn screen_report(
     Ok(next_snapshot)
 }
 
+/// Records a title/abstract decision that a person confirmed as part of an
+/// assistant plan. The actor is the confirming person; the event's `origin`
+/// says the decision itself was chosen by the assistant, so PRISMA and the
+/// ADR 0005 human reference stratum do not count it as a person's own
+/// screening. Records in a blind AI-first audit are refused: only a fresh
+/// person may label them.
+pub async fn screen_report_from_assistant_plan(
+    pool: &PgPool,
+    command: ScreenReportCommand,
+) -> Result<ScreeningStateSnapshot, ScreeningError> {
+    let mut tx = pool.begin().await?;
+    let next_snapshot =
+        apply_screen_report(&mut tx, command, false, Some(ORIGIN_ASSISTANT_PLAN)).await?;
+    tx.commit().await?;
+    Ok(next_snapshot)
+}
+
+/// `screening_events.origin` for decisions applied from a confirmed
+/// assistant plan.
+pub const ORIGIN_ASSISTANT_PLAN: &str = "assistant_plan";
+
 pub(crate) async fn screen_report_in_transaction(
     tx: &mut Transaction<'_, Postgres>,
     command: ScreenReportCommand,
 ) -> Result<ScreeningStateSnapshot, ScreeningError> {
-    apply_screen_report(tx, command, false).await
+    apply_screen_report(tx, command, false, None).await
 }
 
 pub(crate) async fn write_audit_reference(
     tx: &mut Transaction<'_, Postgres>,
     command: ScreenReportCommand,
 ) -> Result<ScreeningStateSnapshot, ScreeningError> {
-    apply_screen_report(tx, command, true).await
+    apply_screen_report(tx, command, true, None).await
 }
 
 async fn apply_screen_report(
     tx: &mut Transaction<'_, Postgres>,
     command: ScreenReportCommand,
     audit_reference: bool,
+    origin: Option<&'static str>,
 ) -> Result<ScreeningStateSnapshot, ScreeningError> {
     sqlx::query("SELECT id FROM projects WHERE id=$1 FOR UPDATE")
         .bind(command.project_id.as_uuid())
@@ -198,6 +220,11 @@ async fn apply_screen_report(
             .bind(command.report_id.as_uuid())
             .fetch_one(&mut **tx)
             .await?;
+        if masked && origin.is_some() {
+            return Err(ScreeningError::InvalidTransition(
+                "records in a blind audit must be screened by a person".into(),
+            ));
+        }
         if masked && command.stage != ScreeningStage::TitleAbstract {
             return Err(ScreeningError::InvalidTransition(
                 "complete or recover the blind audit before editing full text".into(),
@@ -255,6 +282,7 @@ async fn apply_screen_report(
             actor: command.actor,
             supersedes_event_id,
             undoes_event_id: None,
+            origin,
             previous: &current_snapshot,
             result: &state_snapshot_from_domain(
                 command.project_id.into(),
@@ -401,6 +429,7 @@ pub(crate) async fn undo_screening_in_transaction(
             actor: command.actor,
             supersedes_event_id: current_snapshot.last_event_id,
             undoes_event_id: current_snapshot.last_event_id,
+            origin: None,
             previous: &current_snapshot,
             result: &result,
         },
@@ -515,6 +544,7 @@ struct EventWrite<'a> {
     actor: Actor,
     supersedes_event_id: Option<Uuid>,
     undoes_event_id: Option<Uuid>,
+    origin: Option<&'static str>,
     previous: &'a ScreeningStateSnapshot,
     result: &'a ScreeningStateSnapshot,
 }
@@ -531,8 +561,8 @@ async fn persist_event_and_state(
           previous_title_abstract_status,previous_full_text_status,
           previous_full_text_exclusion_reason_id,previous_final_status,
           result_title_abstract_status,result_full_text_status,
-          result_full_text_exclusion_reason_id,result_final_status
-        ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21)
+          result_full_text_exclusion_reason_id,result_final_status,origin
+        ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18,$19,$20,$21,$22)
         "#,
     )
     .bind(write.event_id)
@@ -556,6 +586,7 @@ async fn persist_event_and_state(
     .bind(&write.result.full_text_status)
     .bind(write.result.full_text_exclusion_reason_id)
     .bind(&write.result.final_status)
+    .bind(write.origin)
     .execute(&mut **tx)
     .await?;
 

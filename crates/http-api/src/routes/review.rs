@@ -182,6 +182,10 @@ pub(crate) struct PrismaDto {
     pub screened_records: u64,
     pub title_abstract_excluded: u64,
     pub automation_excluded: u64,
+    /// Title/abstract exclusions a reviewer confirmed from an assistant plan.
+    /// The assistant chose them, so they are not counted as a person's own
+    /// screening. Disjoint from `automation_excluded`.
+    pub assistant_excluded: u64,
     pub ai_quarantined: u64,
     pub title_abstract_pending: u64,
     pub reports_sought: u64,
@@ -470,6 +474,7 @@ fn prisma_dto(projection: PrismaProjection) -> PrismaDto {
         screened_records: projection.screened_records.get(),
         title_abstract_excluded: projection.title_abstract_excluded.get(),
         automation_excluded: projection.automation_excluded.get(),
+        assistant_excluded: projection.assistant_excluded.get(),
         ai_quarantined: projection.ai_quarantined.get(),
         title_abstract_pending: projection.title_abstract_pending.get(),
         reports_sought: projection.reports_sought.get(),

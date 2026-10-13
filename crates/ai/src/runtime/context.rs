@@ -52,15 +52,25 @@ pub trait AssistantToolHost: Send + Sync {
         args: Value,
     ) -> AiFuture<'a, Value>;
 
-    /// Validates and policy-checks one write tool call and returns the plan
-    /// action to collect, or a model-visible message when rejected. The
-    /// default implementation shares the custom loop's exact semantics.
-    fn plan_write(
-        &self,
-        context: &DeepRefAgentContext,
-        call: &crate::ChatToolCall,
-        index: usize,
-    ) -> Result<crate::PlanAction, String> {
-        super::plan::plan_write_call(context.project_id, &context.actor, call, index)
+    /// Completes a validated, policy-checked plan action with host-known
+    /// facts before it joins the plan, or refuses it.
+    ///
+    /// This is where plan-time state is captured: for `screen_reports` the
+    /// Postgres host stores each record's title, current status and screening
+    /// revision in the action's `items`, so confirmation can reject records
+    /// that changed after the plan was made, and gates the action on the
+    /// project's AI settings. Returning [`AiError::InvalidContext`] sends the
+    /// message back to the model and keeps the action out of the plan.
+    ///
+    /// The default keeps the action unchanged.
+    ///
+    /// [`AiError::InvalidContext`]: crate::AiError::InvalidContext
+    fn prepare_plan_action<'a>(
+        &'a self,
+        project_id: ProjectId,
+        action: crate::PlanAction,
+    ) -> AiFuture<'a, crate::PlanAction> {
+        let _ = project_id;
+        Box::pin(async move { Ok(action) })
     }
 }

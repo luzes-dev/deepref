@@ -48,6 +48,11 @@ pub struct PrismaProjection {
     pub title_abstract_excluded: NonNegativeCount,
     /// Subset of title_abstract_excluded, counted only while the approved event is canonical.
     pub automation_excluded: NonNegativeCount,
+    /// Subset of title_abstract_excluded whose canonical event a person
+    /// confirmed from an assistant plan (`origin = 'assistant_plan'`). The
+    /// model chose these decisions, so they are reported apart from a
+    /// person's own exclusions. Disjoint from `automation_excluded`.
+    pub assistant_excluded: NonNegativeCount,
     /// Still scientifically unscreened; never an exclusion count.
     pub ai_quarantined: NonNegativeCount,
     pub title_abstract_pending: NonNegativeCount,
@@ -589,6 +594,7 @@ mod tests {
     fn projection() -> PrismaProjection {
         PrismaProjection {
             automation_excluded: NonNegativeCount::new(0),
+            assistant_excluded: NonNegativeCount::new(0),
             ai_quarantined: NonNegativeCount::new(0),
             project_id: Uuid::nil(),
             screening_high_watermark: NonNegativeCount::new(3),

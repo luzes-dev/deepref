@@ -105,8 +105,9 @@ pub use assistant::{
 };
 pub use assistant_host::PostgresAssistantToolHost;
 pub use assistant_plans::{
-    AssistantPlanRecord, NewAssistantPlan, claim_assistant_plan, create_assistant_plan,
-    finish_assistant_plan, get_assistant_plan, update_assistant_plan_results,
+    AssistantPlanRecord, NewAssistantPlan, ScreeningPlanSnapshot, claim_assistant_plan,
+    create_assistant_plan, finish_assistant_plan, get_assistant_plan,
+    snapshot_screening_plan_items, update_assistant_plan_results,
 };
 pub use assistant_runs::{
     ASSISTANT_AGENT_RUN_JOB_KIND, AssistantAgentRunRecord, AssistantAgentRunStatus,
@@ -124,8 +125,8 @@ pub use automations::{
     list_automation_runs, retry_automation_run, start_automation_manually,
 };
 pub use autonomy::{
-    AutonomySetting, AutonomyStoreError, ProjectAutonomyGate, get_autonomy_settings,
-    resolve_autonomy_level, set_autonomy_level,
+    ASSISTANT_SCREENING_OFF_MESSAGE, AutonomySetting, AutonomyStoreError, ProjectAutonomyGate,
+    assistant_screening_allowed, get_autonomy_settings, resolve_autonomy_level, set_autonomy_level,
 };
 pub use deduplication::{
     DedupeError, DedupeProposal, DedupeProposalCursor, DedupeRunRequest, DedupeRunSummary,
@@ -204,9 +205,10 @@ pub use review_runs::{
     schedule_prepared_review_run_as,
 };
 pub use screening::{
-    ScreeningError, ScreeningHistory, ScreeningHistoryItem, ScreeningProgress, ScreeningQueue,
-    ScreeningQueueItem, ScreeningStateSnapshot, get_next_screening_item, get_screening_history,
-    get_screening_queue, screen_report, undo_screening,
+    ORIGIN_ASSISTANT_PLAN, ScreeningError, ScreeningHistory, ScreeningHistoryItem,
+    ScreeningProgress, ScreeningQueue, ScreeningQueueItem, ScreeningStateSnapshot,
+    get_next_screening_item, get_screening_history, get_screening_queue, screen_report,
+    screen_report_from_assistant_plan, undo_screening,
 };
 pub use second_review::{
     SECOND_REVIEW_BATCH, SecondReviewStatus, SecondReviewSweep, second_review_status,

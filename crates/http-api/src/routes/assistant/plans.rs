@@ -12,7 +12,7 @@ use deepref_ai::{
 };
 use deepref_application::ScreenReportCommand;
 use deepref_domain::{Actor, ProjectId, ScreeningDecision, ScreeningStage};
-use serde::Serialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use utoipa::ToSchema;
 use uuid::Uuid;
@@ -41,6 +41,38 @@ pub(crate) struct AssistantPlanActionDto {
     /// False when the assistant is never allowed to run this; see `manual`.
     pub executable: bool,
     pub manual: Option<AssistantPlanManualStepDto>,
+    /// The decision a `screen_reports` action records (`include`, `exclude`
+    /// or `maybe`), read from the action's arguments, not from its summary.
+    pub decision: Option<String>,
+    /// The records a `screen_reports` action changes, in order, as they were
+    /// when the plan was made. Empty for other actions.
+    pub items: Vec<AssistantPlanItemDto>,
+}
+
+#[derive(Debug, Serialize, ToSchema)]
+pub(crate) struct AssistantPlanItemDto {
+    pub report_id: Uuid,
+    pub title: String,
+    /// Title/abstract status when the plan was made; `null` for plans made
+    /// before records were captured.
+    pub current_status: Option<String>,
+}
+
+/// One record (or, without `report_id`, a whole action) the reviewer left
+/// out of a plan before confirming it.
+#[derive(Debug, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct AssistantPlanDeselectionDto {
+    pub action_id: String,
+    pub report_id: Option<Uuid>,
+}
+
+#[derive(Debug, Default, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct ConfirmAssistantPlanRequestDto {
+    /// Records or actions to leave out. Everything else in the plan runs.
+    #[serde(default)]
+    pub deselected: Vec<AssistantPlanDeselectionDto>,
 }
 
 #[derive(Debug, Serialize, ToSchema)]
@@ -53,6 +85,10 @@ pub(crate) struct AssistantPlanResultDto {
     pub review_run_id: Option<Uuid>,
     pub applied: Option<u32>,
     pub unchanged: Option<u32>,
+    /// Records left alone because they changed after the plan was made.
+    pub stale: Option<u32>,
+    /// Records the reviewer left out before confirming.
+    pub deselected: Option<u32>,
     pub failed: Option<u32>,
 }
 
@@ -78,6 +114,28 @@ fn parse_actions(value: &Value) -> Vec<PlanAction> {
     serde_json::from_value(value.clone()).unwrap_or_default()
 }
 
+/// The records of a `screen_reports` action, from its report ids and the
+/// plan-time snapshots stored beside them.
+fn plan_items(action: &PlanAction) -> Vec<AssistantPlanItemDto> {
+    if action.tool != TOOL_SCREEN_REPORTS {
+        return Vec::new();
+    }
+    let planned = action.screening_items();
+    action
+        .report_ids()
+        .into_iter()
+        .map(|report_id| {
+            let snapshot = planned.iter().find(|item| item.report_id == report_id);
+            AssistantPlanItemDto {
+                report_id,
+                title: snapshot
+                    .map_or_else(|| "Untitled record".to_owned(), |item| item.title.clone()),
+                current_status: snapshot.map(|item| item.current_status.clone()),
+            }
+        })
+        .collect()
+}
+
 fn result_dto(value: &Value) -> Option<AssistantPlanResultDto> {
     let field = |name: &str| value.get(name).and_then(Value::as_str).map(str::to_owned);
     let count = |name: &str| {
@@ -93,6 +151,8 @@ fn result_dto(value: &Value) -> Option<AssistantPlanResultDto> {
         review_run_id: field("review_run_id").and_then(|id| Uuid::parse_str(&id).ok()),
         applied: count("applied"),
         unchanged: count("unchanged"),
+        stale: count("stale"),
+        deselected: count("deselected"),
         failed: count("failed"),
     })
 }
@@ -107,6 +167,11 @@ pub(super) fn plan_dto(record: &deepref_postgres::AssistantPlanRecord) -> Assist
         actions: parse_actions(&record.actions)
             .into_iter()
             .map(|action| AssistantPlanActionDto {
+                decision: (action.tool == TOOL_SCREEN_REPORTS)
+                    .then(|| action.args.get("decision").and_then(Value::as_str))
+                    .flatten()
+                    .map(str::to_owned),
+                items: plan_items(&action),
                 id: action.id,
                 tool: action.tool,
                 summary: action.summary,
@@ -229,8 +294,10 @@ pub(crate) async fn reject_plan(
         ("project_id" = Uuid, Path, description = "Project identifier"),
         ("plan_id" = Uuid, Path, description = "Plan identifier")
     ),
+    request_body(content = Option<ConfirmAssistantPlanRequestDto>, description = "Records or actions to leave out; omit to run the whole plan"),
     responses(
         (status = 200, description = "The executed plan with a result per action", body = AssistantPlanDto),
+        (status = 400, description = "A deselection names a record or action that is not in the plan", body = ErrorResponse),
         (status = 404, description = "Plan not found", body = ErrorResponse),
         (status = 409, description = "Plan is no longer pending", body = ErrorResponse),
         (status = 500, description = "Internal server error", body = ErrorResponse)
@@ -240,9 +307,12 @@ pub(crate) async fn confirm_plan(
     State(state): State<AppState>,
     Path((project_id, plan_id)): Path<(Uuid, Uuid)>,
     headers: HeaderMap,
+    body: Option<Json<ConfirmAssistantPlanRequestDto>>,
 ) -> Result<Json<AssistantPlanDto>, ApiError> {
     let actor = extract_actor(&headers)?;
-    load_plan(&state, project_id, plan_id).await?;
+    let request = body.map(|Json(request)| request).unwrap_or_default();
+    let pending = load_plan(&state, project_id, plan_id).await?;
+    let deselection = Deselection::checked(&parse_actions(&pending.actions), &request)?;
     // The pending -> confirmed transition is the exactly-once guard.
     let claimed = deepref_postgres::claim_assistant_plan(
         &state.pool,
@@ -261,14 +331,19 @@ pub(crate) async fn confirm_plan(
     let mut results = Vec::with_capacity(actions.len());
     let mut any_failed = false;
     for action in &actions {
-        let result = run_action(
-            &state,
-            ProjectId::new(project_id),
-            &provenance,
-            &actor,
-            action,
-        )
-        .await;
+        let result = if deselection.whole_action(&action.id) {
+            outcome(action, "skipped", "You left this out of the plan.")
+        } else {
+            run_action(
+                &state,
+                ProjectId::new(project_id),
+                &provenance,
+                &actor,
+                action,
+                &deselection,
+            )
+            .await
+        };
         any_failed |= result.get("status").and_then(Value::as_str) == Some("failed");
         results.push(result);
     }
@@ -514,12 +589,60 @@ async fn refresh_review_steps(
     }
 }
 
+/// What the reviewer left out of a plan, checked against the plan.
+#[derive(Debug, Default)]
+struct Deselection {
+    actions: std::collections::BTreeSet<String>,
+    records: std::collections::BTreeMap<String, std::collections::BTreeSet<Uuid>>,
+}
+
+impl Deselection {
+    fn checked(
+        actions: &[PlanAction],
+        request: &ConfirmAssistantPlanRequestDto,
+    ) -> Result<Self, ApiError> {
+        let mut deselection = Self::default();
+        for item in &request.deselected {
+            let Some(action) = actions.iter().find(|action| action.id == item.action_id) else {
+                return Err(ApiError::BadRequest(format!(
+                    "the plan has no step {}",
+                    item.action_id
+                )));
+            };
+            match item.report_id {
+                None => {
+                    deselection.actions.insert(action.id.clone());
+                }
+                Some(report_id) if action.report_ids().contains(&report_id) => {
+                    deselection.records.entry(action.id.clone()).or_default().insert(report_id);
+                }
+                Some(report_id) => {
+                    return Err(ApiError::BadRequest(format!(
+                        "record {report_id} is not part of step {}",
+                        action.id
+                    )));
+                }
+            }
+        }
+        Ok(deselection)
+    }
+
+    fn whole_action(&self, action_id: &str) -> bool {
+        self.actions.contains(action_id)
+    }
+
+    fn record(&self, action_id: &str, report_id: Uuid) -> bool {
+        self.records.get(action_id).is_some_and(|records| records.contains(&report_id))
+    }
+}
+
 async fn run_action(
     state: &AppState,
     project_id: ProjectId,
     provenance: &PlanProvenance,
     actor: &Actor,
     action: &PlanAction,
+    deselection: &Deselection,
 ) -> Value {
     if action.manual.is_some() {
         return outcome(action, "manual", "You need to do this yourself.");
@@ -533,7 +656,7 @@ async fn run_action(
         );
     }
     if action.tool == TOOL_SCREEN_REPORTS {
-        return run_screen_reports(state, project_id, provenance, actor, action).await;
+        return run_screen_reports(state, project_id, provenance, actor, action, deselection).await;
     }
     let operation = AgentToolName::parse(&action.tool)
         .and_then(|name| AgentTool::from_name_and_args(name, action.args.clone()).ok())
@@ -634,6 +757,7 @@ async fn run_screen_reports(
     provenance: &PlanProvenance,
     actor: &Actor,
     action: &PlanAction,
+    deselection: &Deselection,
 ) -> Value {
     let decision = match action.args.get("decision").and_then(Value::as_str) {
         Some("include") => ScreeningDecision::Include,
@@ -641,6 +765,22 @@ async fn run_screen_reports(
         Some("maybe") => ScreeningDecision::Maybe,
         _ => return outcome(action, "skipped", "The decision is missing."),
     };
+    // The AI setting is checked again at confirmation: turning AI help off
+    // after a plan was made stops the plan.
+    match deepref_postgres::assistant_screening_allowed(&state.pool, project_id.as_uuid()).await {
+        Ok(true) => {}
+        Ok(false) => {
+            return outcome(
+                action,
+                "skipped",
+                deepref_postgres::ASSISTANT_SCREENING_OFF_MESSAGE,
+            );
+        }
+        Err(error) => {
+            tracing::warn!(%error, "assistant plan: AI settings lookup failed");
+            return outcome(action, "failed", "Something went wrong while doing this.");
+        }
+    }
     let protocol =
         match deepref_postgres::get_published_protocol(&state.pool, project_id.as_uuid()).await {
             Ok(protocol) => protocol,
@@ -664,28 +804,25 @@ async fn run_screen_reports(
     }));
     let evidence = provenance.activity_evidence(action);
 
-    let report_ids: Vec<Uuid> = action
-        .args
-        .get("report_ids")
-        .and_then(Value::as_array)
-        .map(|ids| {
-            ids.iter()
-                .filter_map(|id| id.as_str().and_then(|text| Uuid::parse_str(text).ok()))
-                .collect()
-        })
-        .unwrap_or_default();
-    let (mut applied, mut unchanged, mut failed) = (0_u32, 0_u32, 0_u32);
-    for report_id in report_ids {
-        let revision = sqlx::query_scalar::<_, i64>(
-            "SELECT revision FROM screening_state WHERE project_id = $1 AND report_id = $2",
-        )
-        .bind(project_id.as_uuid())
-        .bind(report_id)
-        .fetch_optional(&state.pool)
-        .await
-        .ok()
-        .flatten()
-        .unwrap_or(0);
+    // Each record is screened only while it is still as it was when the plan
+    // was made. A record without a plan-time snapshot (a plan made before
+    // snapshots existed) cannot be checked, so it counts as stale too.
+    let planned = action.screening_items();
+    let (mut applied, mut unchanged, mut stale, mut failed) = (0_u32, 0_u32, 0_u32, 0_u32);
+    let mut deselected = 0_u32;
+    for report_id in action.report_ids() {
+        if deselection.record(&action.id, report_id) {
+            deselected += 1;
+            continue;
+        }
+        let Some(revision) = planned
+            .iter()
+            .find(|item| item.report_id == report_id)
+            .map(|item| item.expected_revision)
+        else {
+            stale += 1;
+            continue;
+        };
         let command = ScreenReportCommand {
             project_id,
             report_id: report_id.into(),
@@ -697,7 +834,7 @@ async fn run_screen_reports(
             notes: notes.clone(),
             actor: actor.clone(),
         };
-        match deepref_postgres::screen_report(&state.pool, command).await {
+        match deepref_postgres::screen_report_from_assistant_plan(&state.pool, command).await {
             Ok(snapshot) => {
                 applied += 1;
                 record_screening_activity(
@@ -714,23 +851,33 @@ async fn run_screen_reports(
                 .await;
             }
             Err(deepref_postgres::ScreeningError::Repeated { .. }) => unchanged += 1,
+            Err(deepref_postgres::ScreeningError::RevisionConflict { .. }) => stale += 1,
             Err(error) => {
                 tracing::warn!(%error, %report_id, "assistant plan: screening decision failed");
                 failed += 1;
             }
         }
     }
-    let status = if failed > 0 && applied == 0 && unchanged == 0 {
+    let status = if failed > 0 {
         "failed"
     } else {
         "executed"
     };
-    let message = format!(
-        "{applied} decision(s) recorded, {unchanged} already that way, {failed} could not be recorded."
-    );
+    let mut message = format!("{applied} decision(s) recorded, {unchanged} already that way");
+    if deselected > 0 {
+        message.push_str(&format!(", {deselected} left out by you"));
+    }
+    if stale > 0 {
+        message.push_str(&format!(
+            ", {stale} left alone because the record changed after the plan was made"
+        ));
+    }
+    message.push_str(&format!(", {failed} could not be recorded."));
     let mut value = outcome(action, status, message);
     value["applied"] = json!(applied);
     value["unchanged"] = json!(unchanged);
+    value["stale"] = json!(stale);
+    value["deselected"] = json!(deselected);
     value["failed"] = json!(failed);
     value
 }

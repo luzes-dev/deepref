@@ -517,7 +517,7 @@ async fn ensure_plan(
     Ok(())
 }
 
-/// Marks a running run failed with a machine-readable error and records the
+/// Marks a queued or running run failed with a machine-readable error and records the
 /// matching `error` event in the same transaction. Runs that already settled
 /// (or are missing) are left alone and nothing is appended: a duplicate
 /// delivery after settlement must never add a bogus error event. No
@@ -534,7 +534,7 @@ pub async fn fail_assistant_agent_run(
             .bind(run_id)
             .fetch_optional(&mut *tx)
             .await?;
-    if status.as_deref() != Some("running") {
+    if !matches!(status.as_deref(), Some("queued" | "running")) {
         return Ok(false);
     }
     let seq: Option<i64> =

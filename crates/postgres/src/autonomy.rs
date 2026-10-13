@@ -113,6 +113,23 @@ pub async fn set_autonomy_level(
 }
 
 /// The effective level for one task. Unknown projects resolve to the default.
+/// Whether the project assistant may plan or apply title/abstract screening
+/// decisions. A plan is AI help with screening, so it follows the project's
+/// title/abstract AI setting: `off` refuses it, every other level allows the
+/// human-confirmed plan. Checked when the plan is made and again when it is
+/// confirmed.
+pub async fn assistant_screening_allowed(
+    pool: &PgPool,
+    project_id: Uuid,
+) -> Result<bool, sqlx::Error> {
+    let level =
+        resolve_autonomy_level(pool, project_id, AutonomyTask::TitleAbstractScreening).await?;
+    Ok(level != AutonomyLevel::Off)
+}
+
+/// What the assistant says when title/abstract AI help is turned off.
+pub const ASSISTANT_SCREENING_OFF_MESSAGE: &str = "AI help with title/abstract screening is turned off in this project's AI settings, so the assistant cannot screen records.";
+
 pub async fn resolve_autonomy_level(
     pool: &PgPool,
     project_id: Uuid,
