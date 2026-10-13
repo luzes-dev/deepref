@@ -11,6 +11,7 @@
 	import { Badge } from '@deepref/ui/badge';
 	import { Button } from '@deepref/ui/button';
 	import * as Card from '@deepref/ui/card';
+	import { Checkbox } from '@deepref/ui/checkbox';
 	import { Spinner } from '@deepref/ui/spinner';
 
 	let {
@@ -143,10 +144,9 @@
 								<li data-testid="assistant-plan-item">
 									<label class="flex items-start gap-2 text-sm">
 										{#if plan.status === 'pending' && action.executable}
-											<input
-												type="checkbox"
+											<Checkbox
 												checked={!isDeselected(action.id, item.report_id)}
-												onchange={() => toggleRecord(action.id, item.report_id)}
+												onCheckedChange={() => toggleRecord(action.id, item.report_id)}
 												disabled={busy}
 												aria-label={item.title}
 											/>
