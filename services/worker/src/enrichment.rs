@@ -6,7 +6,7 @@
 use std::collections::HashMap;
 use std::time::Duration;
 
-use deepref_grobid::{GrobidClient, GrobidConfig, TeiDocument};
+use deepref_integrations::{GrobidClient, GrobidConfig, TeiDocument};
 use deepref_postgres::{DocumentStructure, NewDocumentReference, NewDocumentSection};
 
 const MIN_BODY_MATCH_CHARS: usize = 20;
@@ -272,7 +272,7 @@ fn find_in_corpus(corpus: &str, text: &str, cursor: usize) -> Option<usize> {
 #[allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 mod tests {
     use super::*;
-    use deepref_grobid::{TeiReference, TeiSection};
+    use deepref_integrations::{TeiReference, TeiSection};
 
     fn tei() -> TeiDocument {
         let section = |number: &str, title: &str, path: &[&str], text: &str| TeiSection {

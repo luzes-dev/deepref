@@ -1,4 +1,4 @@
-use deepref_core::Reference;
+use crate::Reference;
 use sha2::{Digest, Sha256};
 
 pub fn unresolved_reference_id(source_doi: &str, reference: &Reference) -> String {

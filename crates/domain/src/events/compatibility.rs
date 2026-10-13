@@ -1,6 +1,6 @@
 use serde::de::DeserializeOwned;
 
-use crate::{EventEnvelope, SCHEMA_VERSION_V1};
+use super::{EventEnvelope, SCHEMA_VERSION_V1};
 
 /// Accepts the one-release legacy fetch envelope through serde aliases and
 /// defaults, while rejecting unknown future schema versions.
@@ -20,7 +20,7 @@ pub fn deserialize_compatible<T: DeserializeOwned>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::{EntityType, WorkFetchRequested};
+    use crate::events::{EntityType, WorkFetchRequested};
     use uuid::Uuid;
 
     #[test]

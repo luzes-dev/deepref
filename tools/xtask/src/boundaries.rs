@@ -8,8 +8,6 @@ use serde::Deserialize;
 enum Layer {
     Domain,
     Application,
-    Core,
-    Graph,
     Ai,
     Review,
     Configuration,
@@ -30,21 +28,20 @@ impl fmt::Display for Layer {
 impl Layer {
     fn permits(self, target: Self) -> bool {
         use Layer::{
-            Adapter, Ai, Application, Composition, Configuration, Core, Domain, Graph, Http,
+            Adapter, Ai, Application, Composition, Configuration, Domain, Http,
             Persistence, Review, Tooling, Worker,
         };
         match self {
             Domain | Configuration => false,
-            Application | Core | Ai => target == Domain,
-            Graph => matches!(target, Core | Domain),
+            Application | Ai => target == Domain,
             Review => matches!(target, Ai | Application | Domain),
             Adapter => matches!(
                 target,
-                Adapter | Application | Configuration | Core | Domain
+                Adapter | Application | Configuration | Domain
             ),
             Persistence => matches!(
                 target,
-                Ai | Application | Adapter | Core | Domain | Graph | Review
+                Ai | Application | Adapter | Domain | Review
             ),
             Http | Worker => !matches!(target, Http | Worker | Composition | Tooling),
             Composition => !matches!(target, Composition | Tooling),
@@ -108,6 +105,11 @@ const INFRASTRUCTURE: &[&str] = &[
     "csv",
 ];
 const DOMAIN_EXTERNAL: &[&str] = &[
+    // Domain-owned ingestion, event envelopes and graph algorithms remain pure.
+    "chrono",
+    "petgraph",
+    "serde_json",
+    "sha2",
     "serde",
     "thiserror",
     "unicode-normalization",
@@ -231,7 +233,7 @@ fn validate_required_seams(packages: &[&Package], errors: &mut Vec<String>) {
             &["deepref-domain", "deepref-application", "deepref-ai"][..],
         ),
         ("deepref-postgres", &["sqlx"][..]),
-        ("deepref-providers", &["deepref-application"][..]),
+        ("deepref-integrations", &["deepref-application"][..]),
     ] {
         if let Some(source) = packages.iter().find(|p| p.name == source_name) {
             for dependency in dependencies {

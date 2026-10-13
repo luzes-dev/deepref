@@ -38,7 +38,7 @@ resolution.
 - Run:
 
 ```text
-cargo test -p deepref-providers --locked
+cargo test -p deepref-integrations --locked
 cargo test -p deepref-postgres --test deduplication --locked
 cargo test -p deepref-http-api --test acquisitions_postgres --locked
 ```

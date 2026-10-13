@@ -1,5 +1,5 @@
 use chrono::Utc;
-use deepref_core::{Reference, Work, WorkWithReferences};
+use deepref_domain::{Reference, Work, WorkWithReferences};
 use deepref_domain::normalize_doi;
 use serde::Deserialize;
 
@@ -90,7 +90,7 @@ impl CrossrefWorksResponse {
                 abstract_text: message
                     .abstract_text
                     .as_deref()
-                    .and_then(crate::clean_abstract),
+                    .and_then(super::clean_abstract),
                 work_type: message.work_type,
                 publisher: message.publisher,
                 container_title: message.container_title.into_iter().next(),
@@ -102,7 +102,7 @@ impl CrossrefWorksResponse {
                 metadata_provider: "crossref".to_owned(),
                 citation_provider: "crossref".to_owned(),
                 fetched_at: Utc::now(),
-                fetch_status: deepref_core::FetchStatus::Fetched.as_str().to_owned(),
+                fetch_status: deepref_domain::FetchStatus::Fetched.as_str().to_owned(),
             },
             references,
             raw,

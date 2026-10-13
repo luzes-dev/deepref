@@ -3,7 +3,7 @@ use std::time::Duration;
 use reqwest::{StatusCode, multipart};
 use thiserror::Error;
 
-use crate::tei::{TeiDocument, TeiError, parse_tei};
+use super::tei::{TeiDocument, TeiError, parse_tei};
 
 #[derive(Debug, Clone)]
 pub struct GrobidConfig {

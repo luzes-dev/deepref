@@ -816,32 +816,6 @@ dependencies = [
 ]
 
 [[package]]
-name = "deepref-core"
-version = "0.1.0"
-dependencies = [
- "chrono",
- "deepref-domain",
- "serde",
- "serde_json",
- "uuid",
-]
-
-[[package]]
-name = "deepref-crossref"
-version = "0.1.0"
-dependencies = [
- "chrono",
- "deepref-core",
- "deepref-domain",
- "reqwest",
- "serde",
- "serde_json",
- "thiserror",
- "tokio",
- "urlencoding",
-]
-
-[[package]]
 name = "deepref-documents"
 version = "0.1.0"
 dependencies = [
@@ -865,47 +839,17 @@ dependencies = [
 name = "deepref-domain"
 version = "0.1.0"
 dependencies = [
+ "chrono",
  "criterion",
+ "petgraph",
  "proptest",
  "serde",
+ "serde_json",
+ "sha2 0.11.0",
  "thiserror",
  "unicode-normalization",
  "unicode_categories",
  "uuid",
-]
-
-[[package]]
-name = "deepref-events"
-version = "0.1.0"
-dependencies = [
- "chrono",
- "serde",
- "serde_json",
- "uuid",
-]
-
-[[package]]
-name = "deepref-graph"
-version = "0.1.0"
-dependencies = [
- "chrono",
- "deepref-core",
- "petgraph",
- "serde",
- "serde_json",
- "sha2 0.11.0",
- "uuid",
-]
-
-[[package]]
-name = "deepref-grobid"
-version = "0.1.0"
-dependencies = [
- "reqwest",
- "roxmltree",
- "serde",
- "thiserror",
- "tokio",
 ]
 
 [[package]]
@@ -921,14 +865,10 @@ dependencies = [
  "deepref-ai",
  "deepref-application",
  "deepref-config",
- "deepref-core",
- "deepref-crossref",
  "deepref-documents",
  "deepref-domain",
- "deepref-events",
- "deepref-graph",
+ "deepref-integrations",
  "deepref-postgres",
- "deepref-providers",
  "deepref-review",
  "deepref-worker",
  "futures",
@@ -950,6 +890,26 @@ dependencies = [
 ]
 
 [[package]]
+name = "deepref-integrations"
+version = "0.1.0"
+dependencies = [
+ "biblatex",
+ "chrono",
+ "csv",
+ "deepref-application",
+ "deepref-domain",
+ "quick-xml",
+ "reqwest",
+ "roxmltree",
+ "serde",
+ "serde_json",
+ "thiserror",
+ "tokio",
+ "unicode-normalization",
+ "urlencoding",
+]
+
+[[package]]
 name = "deepref-postgres"
 version = "0.1.0"
 dependencies = [
@@ -960,8 +920,6 @@ dependencies = [
  "deepref-application",
  "deepref-documents",
  "deepref-domain",
- "deepref-events",
- "deepref-graph",
  "deepref-review",
  "pgvector",
  "serde",
@@ -972,23 +930,6 @@ dependencies = [
  "tokio",
  "tracing",
  "uuid",
-]
-
-[[package]]
-name = "deepref-providers"
-version = "0.1.0"
-dependencies = [
- "biblatex",
- "chrono",
- "csv",
- "deepref-application",
- "deepref-core",
- "deepref-crossref",
- "deepref-domain",
- "quick-xml",
- "reqwest",
- "serde_json",
- "unicode-normalization",
 ]
 
 [[package]]
@@ -1045,15 +986,10 @@ dependencies = [
  "deepref-ai",
  "deepref-application",
  "deepref-config",
- "deepref-core",
- "deepref-crossref",
  "deepref-documents",
  "deepref-domain",
- "deepref-events",
- "deepref-graph",
- "deepref-grobid",
+ "deepref-integrations",
  "deepref-postgres",
- "deepref-providers",
  "deepref-review",
  "futures",
  "lettre",

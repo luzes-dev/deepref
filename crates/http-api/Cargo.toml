@@ -12,15 +12,11 @@ path = "src/lib.rs"
 deepref-application.workspace = true
 deepref-ai.workspace = true
 deepref-review.workspace = true
-deepref-core = { version = "0.1.0", path = "../../crates/core" }
 deepref-domain.workspace = true
 deepref-documents = { version = "0.1.0", path = "../../crates/documents" }
 deepref-config.workspace = true
-deepref-events = { version = "0.1.0", path = "../../crates/events" }
-deepref-graph.workspace = true
 deepref-postgres.workspace = true
-deepref-providers.workspace = true
-deepref-crossref.workspace = true
+deepref-integrations.workspace = true
 anyhow.workspace = true
 axum.workspace = true
 bytes.workspace = true

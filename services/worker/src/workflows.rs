@@ -222,7 +222,7 @@ async fn poll_alert_sources(pool: &PgPool, alert: &DueAlert) -> Result<Vec<Alert
         .map(|settings| settings.crossref_mailto)
         .unwrap_or_default();
     let client = net::trusted_client()?;
-    let pubmed_client = deepref_providers::PubmedClient::new(client.clone(), mailto.clone());
+    let pubmed_client = deepref_integrations::PubmedClient::new(client.clone(), mailto.clone());
     let mut items: Vec<Value> = Vec::new();
     let mut failures: Vec<NodeError> = Vec::new();
     if matches!(sources, "both" | "pubmed") {
@@ -232,7 +232,7 @@ async fn poll_alert_sources(pool: &PgPool, alert: &DueAlert) -> Result<Vec<Alert
         }
     }
     if matches!(sources, "both" | "crossref") {
-        match pubmed::search_crossref(
+        match deepref_integrations::search_crossref(
             &client,
             &query.crossref_terms(),
             &since.format("%Y-%m-%d").to_string(),
@@ -241,7 +241,10 @@ async fn poll_alert_sources(pool: &PgPool, alert: &DueAlert) -> Result<Vec<Alert
         .await
         {
             Ok(found) => items.extend(found),
-            Err(error) => failures.push(error),
+            Err(error) => failures.push(match error {
+                deepref_integrations::CrossrefSearchError::Retryable(message) => NodeError::retryable(message),
+                deepref_integrations::CrossrefSearchError::Permanent(message) => NodeError::permanent(message),
+            }),
         }
     }
     if items.is_empty()

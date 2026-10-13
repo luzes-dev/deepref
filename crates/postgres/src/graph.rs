@@ -1,10 +1,10 @@
 use chrono::{DateTime, Utc};
 use deepref_domain::ProjectId;
-use deepref_events::{
+use deepref_domain::events::{
     DomainPayload, EntityType, EventEnvelope, MetricsRecomputeRequested,
     SUBJECT_METRICS_RECOMPUTE_REQUESTED,
 };
-use deepref_graph::{
+use deepref_domain::graph::{
     GraphAppraisalOverlay, GraphEdge, GraphFieldSelection, GraphMetricsOverlay, GraphNode,
     GraphProvenanceOverlay, GraphScreeningOverlay, GraphStudyOverlay, ProjectGraph,
 };
@@ -201,7 +201,7 @@ pub async fn recompute_project_metrics(pool: &PgPool, project_id: Uuid) -> anyho
         sqlx::query_as("SELECT now(), EXTRACT(YEAR FROM CURRENT_DATE)::int")
             .fetch_one(&mut *transaction)
             .await?;
-    let metrics = deepref_graph::compute_metrics(&graph.nodes, &graph.edges, current_year);
+    let metrics = deepref_domain::graph::compute_metrics(&graph.nodes, &graph.edges, current_year);
     let current_revision: i64 = sqlx::query_scalar(
         "SELECT COALESCE(MAX(revision), 0) FROM domain_events
          WHERE entity_type='metric' AND entity_key=$1",

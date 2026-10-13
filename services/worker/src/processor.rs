@@ -7,14 +7,14 @@ use deepref_ai::{
     AiExecutionContext, AiGateway, AiTaskRunner, ProposalPersistence, ProviderEndpoint,
     SystemClock, UuidProvider,
 };
-use deepref_core::{IngestionItemStatus, normalize_doi};
-use deepref_crossref::CrossrefError;
+use deepref_domain::{IngestionItemStatus, normalize_doi};
 use deepref_documents::{
     DocumentParser, DocumentStore, HttpsPdfFetcher, PARSER_VERSION, PdfiumParser,
     RemoteDocumentFetcher,
 };
-use deepref_events::{DeadLetterRecord, EventEnvelope, WorkFetchRequested, deserialize_compatible};
-use deepref_providers::CrossrefProvider;
+use deepref_domain::events::{DeadLetterRecord, EventEnvelope, WorkFetchRequested, deserialize_compatible};
+use deepref_integrations::CrossrefClient;
+use deepref_integrations::CrossrefError;
 use deepref_review::worker::{
     CompiledReview, ReviewExecutionPlan, ReviewModelIdentity, ReviewNode, ScreeningReviewPlan,
     StandardReviewPlan,
@@ -157,7 +157,7 @@ async fn execute_work_fetch(
     delivery_count: u64,
 ) -> anyhow::Result<DeliveryAction> {
     let settings = store::load_runtime_settings(&pool).await?;
-    let client = match CrossrefProvider::new(settings.crossref_mailto.clone()) {
+    let client = match CrossrefClient::new(settings.crossref_mailto.clone()) {
         Ok(client) => client.with_max_attempts(settings.retry_attempts),
         Err(error) => {
             store::finalize_terminal_failure(
@@ -720,9 +720,9 @@ async fn handle_recompute_metrics_job(
     pool: &sqlx::PgPool,
     payload: serde_json::Value,
 ) -> anyhow::Result<DeliveryAction> {
-    let event: EventEnvelope<deepref_events::DomainPayload> = serde_json::from_value(payload)?;
+    let event: EventEnvelope<deepref_domain::events::DomainPayload> = serde_json::from_value(payload)?;
     let project_id = match event.payload {
-        deepref_events::DomainPayload::MetricsRecomputeRequested(p) => p.project_id,
+        deepref_domain::events::DomainPayload::MetricsRecomputeRequested(p) => p.project_id,
         _ => anyhow::bail!("recompute_metrics job has an unsupported payload"),
     };
     deepref_postgres::recompute_project_metrics(pool, project_id).await?;
@@ -1826,7 +1826,7 @@ fn dead_letter(
         .collect::<String>();
     DeadLetterRecord {
         identity: format!("sha256:{payload_sha256}"),
-        source_subject: deepref_events::SUBJECT_WORK_FETCH_REQUESTED.to_owned(),
+        source_subject: deepref_domain::events::SUBJECT_WORK_FETCH_REQUESTED.to_owned(),
         source_event_id: event_id,
         delivery_count,
         reason_code: reason.to_owned(),

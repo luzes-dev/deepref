@@ -2,7 +2,7 @@ use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
-use crate::EntityType;
+use super::EntityType;
 
 pub const SCHEMA_VERSION_V1: u16 = 1;
 const EVENT_NAMESPACE: Uuid = Uuid::from_u128(0xd3ed_5c52_3587_5f9b_a3f2_b093_5bda_955c);
@@ -109,7 +109,7 @@ impl<T> EventEnvelope<T> {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::WorkFetchRequested;
+    use crate::events::WorkFetchRequested;
 
     fn event() -> EventEnvelope<WorkFetchRequested> {
         EventEnvelope::v1(

@@ -1,19 +1,47 @@
+//! Crossref: work metadata and reference lists by DOI, with best-effort abstract
+//! enrichment from Europe PMC / OpenAlex when Crossref has no abstract.
+
+mod abstracts;
+mod error;
+mod status;
+mod search;
+mod wire;
+
+use std::time::Duration;
+
 use deepref_application::{
     CitationProvider, MetadataProvider, ProviderError, ProviderFuture, RawAuthor, RawIdentifier,
-    RawRecord, SearchProvider,
+    RawRecord,
 };
-use deepref_core::WorkWithReferences;
-use deepref_crossref::{AbstractEnricher, AbstractSource, CrossrefClient, CrossrefError};
+use deepref_domain::WorkWithReferences;
 use deepref_domain::{IdentifierScheme, normalize_doi};
+use reqwest::header;
 use serde_json::{Value, json};
 
+pub use abstracts::{AbstractEnricher, AbstractSource, clean_abstract};
+pub use error::CrossrefError;
+pub use status::{StatusClassification, classify_status};
+pub use search::{CrossrefSearchError, search_crossref};
+
+use wire::CrossrefWorksResponse;
+
+const CROSSREF_BASE: &str = "https://api.crossref.org";
+
+/// The one Crossref client. `fetch_work` returns what Crossref holds;
+/// `fetch_work_with_references` also fills a missing abstract from the enricher.
 #[derive(Debug, Clone)]
-pub struct CrossrefProvider {
-    client: CrossrefClient,
+pub struct CrossrefClient {
+    client: reqwest::Client,
+    base_url: String,
+    mailto: String,
+    user_agent: String,
+    max_attempts: usize,
     enricher: Option<AbstractEnricher>,
 }
 
-impl CrossrefProvider {
+impl CrossrefClient {
+    /// Builds the client for `api.crossref.org`. Abstract enrichment is on unless
+    /// `DEEPREF_ABSTRACT_ENRICHMENT` is `off`, `0` or `false`.
     pub fn new(mailto: impl Into<String>) -> Result<Self, ProviderError> {
         let mailto = mailto.into();
         // Set DEEPREF_ABSTRACT_ENRICHMENT=off to skip Europe PMC / OpenAlex lookups.
@@ -24,35 +52,95 @@ impl CrossrefProvider {
         } else {
             None
         };
-        CrossrefClient::new(mailto)
-            .map(|client| Self { client, enricher })
+        Self::with_base_url(CROSSREF_BASE, mailto)
+            .map(|client| Self { enricher, ..client })
             .map_err(|error| ProviderError::Request(error.to_string()))
     }
 
-    pub fn with_client(client: CrossrefClient) -> Self {
-        Self {
-            client,
-            enricher: None,
+    /// Builds a client for another Crossref-compatible base URL, without enrichment.
+    pub fn with_base_url(
+        base_url: impl Into<String>,
+        mailto: impl Into<String>,
+    ) -> Result<Self, CrossrefError> {
+        let mailto = mailto.into();
+        if mailto.trim().is_empty() {
+            return Err(CrossrefError::MissingMailto);
         }
-    }
+        let user_agent = format!("deepref/0.1 (mailto:{mailto})");
+        let client = reqwest::Client::builder()
+            .timeout(Duration::from_secs(15))
+            .user_agent(user_agent.clone())
+            .build()?;
 
-    #[must_use]
-    pub fn with_enricher(mut self, enricher: Option<AbstractEnricher>) -> Self {
-        self.enricher = enricher;
-        self
+        Ok(Self {
+            client,
+            base_url: base_url.into().trim_end_matches('/').to_owned(),
+            mailto,
+            user_agent,
+            max_attempts: 5,
+            enricher: None,
+        })
     }
 
     #[must_use]
     pub fn with_max_attempts(mut self, max_attempts: usize) -> Self {
-        self.client = self.client.with_max_attempts(max_attempts);
+        self.max_attempts = max_attempts.max(1);
         self
+    }
+
+    pub async fn fetch_work(&self, doi: &str) -> Result<WorkWithReferences, CrossrefError> {
+        let doi = deepref_domain::normalize_doi(doi)?;
+        let encoded = urlencoding::encode(&doi);
+        let url = format!("{}/works/{}?mailto={}", self.base_url, encoded, self.mailto);
+
+        let mut last_retryable = None;
+        for attempt in 1..=self.max_attempts {
+            let response = self
+                .client
+                .get(&url)
+                .header(header::ACCEPT, "application/json")
+                .header(header::USER_AGENT, &self.user_agent)
+                .send()
+                .await;
+
+            match response {
+                Ok(response) if response.status().is_success() => {
+                    let raw: serde_json::Value = response.json().await?;
+                    let message_raw = raw.get("message").cloned().unwrap_or_default();
+                    let body: CrossrefWorksResponse = serde_json::from_value(raw)?;
+                    return Ok(body.into_domain(doi, message_raw));
+                }
+                Ok(response) => match classify_status(response.status()) {
+                    StatusClassification::NotFound => return Err(CrossrefError::NotFound(doi)),
+                    StatusClassification::Blocked => {
+                        return Err(CrossrefError::Blocked(response.status()));
+                    }
+                    StatusClassification::Retryable => {
+                        last_retryable = Some(CrossrefError::RetryableStatus(response.status()));
+                        sleep_backoff(attempt).await;
+                    }
+                    StatusClassification::NonRetryable => {
+                        return Err(CrossrefError::NonRetryableStatus(response.status()));
+                    }
+                },
+                Err(error) if error.is_timeout() || error.is_connect() => {
+                    last_retryable = Some(CrossrefError::Request(error));
+                    sleep_backoff(attempt).await;
+                }
+                Err(error) => return Err(CrossrefError::Request(error)),
+            }
+        }
+
+        Err(last_retryable.unwrap_or(CrossrefError::RetryableStatus(
+            reqwest::StatusCode::SERVICE_UNAVAILABLE,
+        )))
     }
 
     pub async fn fetch_work_with_references(
         &self,
         doi: &str,
     ) -> Result<WorkWithReferences, CrossrefError> {
-        let work = self.client.fetch_work(doi).await?;
+        let work = self.fetch_work(doi).await?;
         Ok(self.enrich_abstract(work).await)
     }
 
@@ -75,7 +163,12 @@ impl CrossrefProvider {
     }
 }
 
-impl MetadataProvider for CrossrefProvider {
+async fn sleep_backoff(attempt: usize) {
+    let millis = 250_u64.saturating_mul(2_u64.saturating_pow(attempt as u32 - 1));
+    tokio::time::sleep(Duration::from_millis(millis.min(5_000))).await;
+}
+
+impl MetadataProvider for CrossrefClient {
     fn name(&self) -> &'static str {
         "crossref"
     }
@@ -99,7 +192,7 @@ impl MetadataProvider for CrossrefProvider {
     }
 }
 
-impl CitationProvider for CrossrefProvider {
+impl CitationProvider for CrossrefClient {
     fn name(&self) -> &'static str {
         "crossref"
     }
@@ -114,7 +207,6 @@ impl CitationProvider for CrossrefProvider {
                     ProviderError::UnsupportedIdentifier("record has no DOI".to_owned())
                 })?;
             let work = self
-                .client
                 .fetch_work(&doi.normalized_value)
                 .await
                 .map_err(|error| ProviderError::Request(error.to_string()))?;
@@ -185,46 +277,12 @@ pub fn raw_record_from_crossref_work(work: WorkWithReferences) -> RawRecord {
     }
 }
 
-#[derive(Debug, Clone, Default)]
-pub struct StaticSearchProvider {
-    records: Vec<RawRecord>,
-}
-
-impl StaticSearchProvider {
-    pub fn new(records: Vec<RawRecord>) -> Self {
-        Self { records }
-    }
-}
-
-impl SearchProvider for StaticSearchProvider {
-    fn name(&self) -> &'static str {
-        "static"
-    }
-
-    fn search<'a>(&'a self, query: &'a str) -> ProviderFuture<'a, Vec<RawRecord>> {
-        Box::pin(async move {
-            let query = query.trim().to_lowercase();
-            Ok(self
-                .records
-                .iter()
-                .filter(|record| {
-                    record
-                        .title
-                        .as_deref()
-                        .is_some_and(|title| title.to_lowercase().contains(&query))
-                })
-                .cloned()
-                .collect())
-        })
-    }
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
     use crate::parse_import;
     use chrono::Utc;
-    use deepref_core::{FetchStatus, Work, WorkWithReferences};
+    use deepref_domain::{FetchStatus, Work, WorkWithReferences};
     use deepref_domain::ImportFormat;
 
     #[test]

@@ -1818,11 +1818,11 @@ async fn dedupe_run_that_creates_reports_queues_one_metrics_recompute() {
     .fetch_one(&pool)
     .await
     .unwrap();
-    let envelope: deepref_events::EventEnvelope<deepref_events::DomainPayload> =
+    let envelope: deepref_domain::events::EventEnvelope<deepref_domain::events::DomainPayload> =
         serde_json::from_value(payload).unwrap();
     assert!(matches!(
         envelope.payload,
-        deepref_events::DomainPayload::MetricsRecomputeRequested(ref request)
+        deepref_domain::events::DomainPayload::MetricsRecomputeRequested(ref request)
             if request.project_id == project_id
     ));
 

@@ -3,7 +3,7 @@
 //!  cargo test -p deepref-worker --test grobid_enrichment -- --ignored --nocapture`.
 #![allow(clippy::unwrap_used, clippy::expect_used, clippy::panic)]
 
-use deepref_grobid::{GrobidClient, GrobidConfig};
+use deepref_integrations::{GrobidClient, GrobidConfig};
 use deepref_worker::enrichment::{BlockView, build_structure};
 
 #[tokio::test]

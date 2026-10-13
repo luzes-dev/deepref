@@ -9,8 +9,8 @@ use std::{
     time::Duration,
 };
 
+use deepref_integrations::{MAX_IDS_PER_FETCH, PubmedArticle, PubmedClient};
 use deepref_postgres::{PmidOutcome, PmidRunCounts};
-use deepref_providers::{MAX_IDS_PER_FETCH, PubmedArticle, PubmedClient};
 use serde::Deserialize;
 use serde_json::Value;
 use sqlx::PgPool;

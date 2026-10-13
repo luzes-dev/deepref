@@ -1,6 +1,4 @@
-use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize};
-use uuid::Uuid;
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "snake_case")]
@@ -79,20 +77,6 @@ impl TryFrom<&str> for IngestionItemStatus {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
-pub struct Ingestion {
-    pub id: Uuid,
-    pub project_id: Uuid,
-    pub status: IngestionStatus,
-    pub max_depth: i32,
-    pub seed_count: i32,
-    pub queued_count: i32,
-    pub fetched_count: i32,
-    pub failed_count: i32,
-    pub created_at: DateTime<Utc>,
-    pub started_at: Option<DateTime<Utc>>,
-    pub completed_at: Option<DateTime<Utc>>,
-}
 
 #[cfg(test)]
 mod tests {

@@ -7,9 +7,9 @@ use axum::{
 };
 use chrono::{DateTime, Utc};
 use deepref_application::{CsvColumnMapping, ImportParser};
-use deepref_core::normalize_doi;
+use deepref_domain::normalize_doi;
 use deepref_domain::{ImportFormat, ProjectId};
-use deepref_events::{EntityType, EventEnvelope, SUBJECT_WORK_FETCH_REQUESTED, WorkFetchRequested};
+use deepref_domain::events::{EntityType, EventEnvelope, SUBJECT_WORK_FETCH_REQUESTED, WorkFetchRequested};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use sha2::{Digest, Sha256};
@@ -435,7 +435,7 @@ pub(crate) async fn import_project_records(
             "CSV imports require csv_mapping".to_owned(),
         ));
     }
-    let parser = deepref_providers::ImportParserAdapter::new(format, csv_mapping.clone());
+    let parser = deepref_integrations::ImportParserAdapter::new(format, csv_mapping.clone());
     let records = parser
         .parse(input.content.as_bytes())
         .map_err(|error| ApiError::BadRequest(error.to_string()))?;
@@ -532,7 +532,7 @@ pub(crate) fn parse_pmid_list(content: &str) -> Result<Vec<String>, ApiError> {
             .map(str::trim)
             .filter(|token| !token.is_empty())
         {
-            match deepref_providers::normalize_pmid(token) {
+            match deepref_integrations::normalize_pmid(token) {
                 Some(pmid) => {
                     if seen.insert(pmid.clone()) {
                         pmids.push(pmid);

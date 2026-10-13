@@ -73,7 +73,7 @@ domain commands remain the sole scientific-write authority.
 
 `deepref-server serve` runs HTTP only. `deepref-server worker` runs the bounded PostgreSQL job executor. `deepref-server all` runs both roles in one process with coordinated shutdown. Deployments package the same `deepref-server` binary for API and worker targets; local Process Compose supervises the API, worker, and web processes.
 
-Crate boundaries follow dependency direction: `deepref-domain` owns pure invariants, `deepref-application` owns use-case commands and the minimal `JobQueue` port, `deepref-postgres` owns SQLx migrations and adapters, and `deepref-http-api` owns HTTP adapters and SQL-backed handlers. See [ADR 0002](adr/0002-layered-crate-boundaries.md).
+Crate boundaries follow dependency direction: `deepref-domain` owns pure invariants, ingestion/fetch states and work/reference models, event envelopes and payloads (`events`), and in-memory graph models/algorithms (`graph`). `deepref-application` owns use-case commands and the live `JobQueue` port; `deepref-review` retains `ReviewScheduler`. `deepref-integrations` owns Crossref, PubMed, import parsers, Unpaywall and GROBID; `deepref-postgres` owns SQLx migrations and adapters; `deepref-http-api` owns HTTP adapters and SQL-backed handlers. See [ADR 0002](adr/0002-layered-crate-boundaries.md).
 
 ## API and web degradation
 
@@ -101,6 +101,18 @@ dependencies. Domain/application external dependency restrictions and the remove
 NATS guard remain enforced. The HTTP package may use the worker only as a dev
 dependency for existing integration fixtures. SQL-backed HTTP handlers remain
 permitted; persistence cannot depend on worker orchestration or HTTP adapters.
+
+The workspace contains 13 members. The former `core`, `events` and `graph`
+packages are domain modules, not compatibility crates; the former `crossref`,
+`providers` and `grobid` packages form `integrations`. Crossref DOI acquisition,
+metadata and citation adapters use one client and wire conversion; enrichment
+remains best-effort, and GROBID keeps its HTTP/TEI behavior. Unused catalogue
+models and graph-upsert helpers are removed. Zero-implementation
+`DocumentRepository`, `OcrEngine` and `FullTextResolver` ports are removed;
+live document storage, queue and review scheduling contracts are retained.
+Telemetry remains a separate runtime adapter in this low-conflict cutover.
+Moving SQL-backed handlers into use cases and forbidding SQLx at the HTTP/worker
+boundary is a later migration, not a claim made by the current rules.
 
 Just remains the public command interface, Mise owns tool versions, and xtask
 owns the repository graph. Ordinary build, test, and service commands stay in Just.

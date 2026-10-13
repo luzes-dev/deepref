@@ -11,13 +11,6 @@ pub struct WorkFetchRequested {
     pub parent_doi: Option<String>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
-pub struct WorkFetchCompleted {
-    pub project_id: Uuid,
-    pub ingestion_id: Uuid,
-    pub doi: String,
-    pub references_discovered: usize,
-}
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct WorkFetchFailed {

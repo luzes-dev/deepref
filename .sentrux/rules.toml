@@ -23,8 +23,7 @@ name = "infrastructure"
 paths = [
   "crates/postgres/**/*",
   "crates/documents/**/*",
-  "crates/crossref/**/*",
-  "crates/providers/**/*",
+  "crates/integrations/**/*",
   "crates/ai/**/*",
   "crates/review/**/*",
 ]
@@ -34,8 +33,6 @@ order = 10
 name = "application"
 paths = [
   "crates/application/**/*",
-  "crates/events/**/*",
-  "crates/graph/**/*",
 ]
 order = 20
 
@@ -45,13 +42,6 @@ paths = [
   "crates/domain/**/*",
 ]
 order = 30
-
-[[layers]]
-name = "core"
-paths = [
-  "crates/core/**/*",
-]
-order = 40
 
 [[boundaries]]
 from = "crates/domain/**/*"

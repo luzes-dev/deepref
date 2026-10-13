@@ -1,6 +1,6 @@
 use std::time::Duration;
 
-use deepref_events::{DELIVERY_BACKOFF_SECONDS, MAX_DELIVERIES};
+use deepref_domain::events::{DELIVERY_BACKOFF_SECONDS, MAX_DELIVERIES};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum DeliveryAction {

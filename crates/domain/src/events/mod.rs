@@ -12,4 +12,4 @@ pub use entity::EntityType;
 pub use envelope::{EventEnvelope, SCHEMA_VERSION_V1, deterministic_event_id};
 pub use metrics::MetricsRecomputeRequested;
 pub use subjects::*;
-pub use work::{DeadLetterRecord, WorkFetchCompleted, WorkFetchFailed, WorkFetchRequested};
+pub use work::{DeadLetterRecord, WorkFetchFailed, WorkFetchRequested};
