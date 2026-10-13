@@ -91,9 +91,9 @@ pub async fn create_pmid_import(
     let count = i32::try_from(request.pmids.len()).unwrap_or(i32::MAX);
     let inserted = sqlx::query_scalar::<_, Uuid>(
         "INSERT INTO acquisition_runs
-         (id,project_id,legacy_ingestion_id,source,strategy,format,idempotency_key,config,metadata,status,
+         (id,project_id,source,strategy,format,idempotency_key,config,metadata,status,
           max_depth,seed_count,queued_count,fetched_count,failed_count,metadata_provider,citation_provider,created_at)
-         VALUES ($1,$2,NULL,'pubmed',$3,'pmid',$4,$5,$6,'queued',0,$7,$7,0,0,'','',now())
+         VALUES ($1,$2,'pubmed',$3,'pmid',$4,$5,$6,'queued',0,$7,$7,0,0,'','',now())
          ON CONFLICT (project_id,idempotency_key) WHERE idempotency_key IS NOT NULL DO NOTHING
          RETURNING id",
     )

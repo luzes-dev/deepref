@@ -6,14 +6,13 @@ use uuid::Uuid;
 
 #[derive(Debug, Clone, Copy, Default, PartialEq, Eq)]
 pub struct WorkerLeaseRecovery {
-    pub expired_event_claims: u64,
     pub expired_doi_leases: u64,
     pub expired_jobs: u64,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
-pub struct MissingIngestionWork {
-    pub ingestion_id: Uuid,
+pub struct MissingAcquisitionWork {
+    pub acquisition_id: Uuid,
     pub project_id: Uuid,
     pub canonical_doi: String,
     pub depth: i32,
@@ -60,40 +59,34 @@ pub async fn reserve_provider_permit(
 /// worker runtime.
 pub async fn recover_expired_worker_state(pool: &PgPool) -> anyhow::Result<WorkerLeaseRecovery> {
     let expired_jobs = crate::jobs::recover_expired_jobs(pool).await?;
-    let expired_event_claims = sqlx::query(
-        "UPDATE processed_events SET owner_token=NULL,last_error=COALESCE(last_error,'lease expired') WHERE completed_at IS NULL AND owner_token IS NOT NULL AND lease_expires_at < now()",
-    )
-    .execute(pool)
-    .await?
-    .rows_affected();
+    // Generic jobs are the sole execution lease authority.
     let expired_doi_leases = sqlx::query(
-        "UPDATE doi_fetch_state SET status='failed',owner_token=NULL,last_error=COALESCE(last_error,'lease expired'),updated_at=now() WHERE status='fetching' AND lease_expires_at < now()",
+        "UPDATE report_fetch_state SET status='failed',owner_token=NULL,last_error=COALESCE(last_error,'lease expired'),updated_at=now() WHERE status='fetching' AND lease_expires_at < now()",
     )
     .execute(pool)
     .await?
     .rows_affected();
     sqlx::query(
-        "UPDATE ingestion_items SET status='queued',last_error=COALESCE(last_error,'lease recovered') WHERE status='fetching' AND NOT EXISTS (SELECT 1 FROM doi_fetch_state d WHERE d.canonical_doi=ingestion_items.canonical_doi AND d.status='fetching' AND d.lease_expires_at>now())",
+        "UPDATE acquisition_items SET status='queued',last_error=COALESCE(last_error,'lease recovered') WHERE status='fetching' AND NOT EXISTS (SELECT 1 FROM jobs j WHERE j.id=acquisition_items.work_event_id AND j.state='running' AND j.leased_until>now())",
     )
     .execute(pool)
     .await?;
 
     Ok(WorkerLeaseRecovery {
-        expired_event_claims,
         expired_doi_leases,
         expired_jobs,
     })
 }
 
-/// Finds ingestion work whose durable job is missing. Schema details stay in
+/// Finds acquisition work whose durable job is missing. Schema details stay in
 /// the PostgreSQL adapter; callers receive only the data required to rebuild
 /// the job envelope.
-pub async fn find_missing_ingestion_work(
+pub async fn find_missing_acquisition_work(
     pool: &PgPool,
     limit: i64,
-) -> anyhow::Result<Vec<MissingIngestionWork>> {
+) -> anyhow::Result<Vec<MissingAcquisitionWork>> {
     let rows = sqlx::query(
-        "SELECT i.ingestion_id,i.project_id,i.canonical_doi,i.depth,i.parent_doi,i.work_event_id,g.max_depth FROM ingestion_items i JOIN ingestions g ON g.id=i.ingestion_id WHERE i.status='queued' AND NOT EXISTS (SELECT 1 FROM jobs j WHERE j.id=i.work_event_id) ORDER BY i.queued_at LIMIT $1",
+        "SELECT i.acquisition_id,i.project_id,i.canonical_doi,i.depth,i.parent_doi,i.work_event_id,COALESCE(g.historical_max_depth,g.max_depth) AS max_depth FROM acquisition_items i JOIN acquisition_runs g ON g.id=i.acquisition_id WHERE i.status IN ('queued','fetching') AND g.status NOT IN ('cancelled','completed','failed') AND NOT EXISTS (SELECT 1 FROM jobs j WHERE j.id=i.work_event_id) ORDER BY i.queued_at LIMIT $1",
     )
     .bind(limit.max(1))
     .fetch_all(pool)
@@ -101,15 +94,15 @@ pub async fn find_missing_ingestion_work(
 
     rows.into_iter()
         .map(|row| {
-            let ingestion_id: Uuid = row.get("ingestion_id");
+            let acquisition_id: Uuid = row.get("acquisition_id");
             let canonical_doi: String = row.get("canonical_doi");
             let work_event_id = row.get::<Option<Uuid>, _>("work_event_id").ok_or_else(|| {
                 anyhow::anyhow!(
-                    "queued ingestion item {ingestion_id}|{canonical_doi} has no work_event_id"
+                    "queued acquisition item {acquisition_id}|{canonical_doi} has no work_event_id"
                 )
             })?;
-            Ok(MissingIngestionWork {
-                ingestion_id,
+            Ok(MissingAcquisitionWork {
+                acquisition_id,
                 project_id: row.get("project_id"),
                 canonical_doi,
                 depth: row.get("depth"),

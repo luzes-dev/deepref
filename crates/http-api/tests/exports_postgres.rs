@@ -120,8 +120,8 @@ async fn postgres_exports_return_every_deterministic_attachment_and_boundary_sta
     .expect("report identifier should insert");
     sqlx::query(
         "INSERT INTO acquisition_runs
-         (id,project_id,legacy_ingestion_id,source,status,max_depth,seed_count,queued_count,fetched_count,failed_count,metadata_provider,citation_provider,created_at)
-         VALUES ($1,$2,NULL,'export-fixture','completed',1,1,1,1,0,'fixture-metadata','fixture-citations',now())",
+         (id,project_id,source,status,max_depth,seed_count,queued_count,fetched_count,failed_count,metadata_provider,citation_provider,created_at)
+         VALUES ($1,$2,'export-fixture','completed',1,1,1,1,0,'fixture-metadata','fixture-citations',now())",
     )
     .bind(acquisition_run_id)
     .bind(project_id)
