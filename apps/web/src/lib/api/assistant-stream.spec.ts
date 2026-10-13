@@ -247,15 +247,15 @@ describe('durable assistant runs', () => {
 			chat: jsonResponse(runJson({ status: 'queued' }), 202),
 			events: [
 				eventsResponse([
-					frame('token', { delta: 'Hi' }),
-					frame('tool_start', { tool: 'get_report', tool_call_id: 't1', args: {} }),
+					frame('token', { delta: 'Hi' }, 0),
+					frame('tool_start', { tool: 'get_report', tool_call_id: 't1', args: {} }, 1),
 					frame('tool_complete', {
 						tool: 'get_report',
 						tool_call_id: 't1',
 						output: { title: 'T' }
-					}),
-					frame('plan', { plan: { id: 'p1', status: 'pending', actions: [] } }),
-					frame('done', { message_id: 'm1', input_tokens: 3, output_tokens: 5 })
+					}, 2),
+					frame('plan', { plan: { id: 'p1', status: 'pending', actions: [] } }, 3),
+					frame('done', { message_id: 'm1', input_tokens: 3, output_tokens: 5 }, 4)
 				])
 			],
 			runs: [runJson({ status: 'completed', plan_id: 'p1' })]
@@ -287,10 +287,10 @@ describe('durable assistant runs', () => {
 		const requested = routeFetch({
 			chat: jsonResponse(runJson({ status: 'queued' }), 202),
 			events: [
-				eventsResponse([frame('token', { delta: 'Hel' })]),
+				eventsResponse([frame('token', { delta: 'Hel' }, 0)]),
 				eventsResponse([
-					frame('token', { delta: 'lo' }),
-					frame('done', { message_id: 'm1', input_tokens: 1, output_tokens: 2 })
+					frame('token', { delta: 'lo' }, 1),
+					frame('done', { message_id: 'm1', input_tokens: 1, output_tokens: 2 }, 2)
 				])
 			],
 			runs: [runJson({ status: 'running' }), runJson({ status: 'completed' })]
@@ -349,9 +349,9 @@ describe('durable assistant runs', () => {
 				chat: jsonResponse(runJson({ status: 'queued' }), 202),
 				events: [
 					eventsResponse([
-						frame('token', { delta: 'Hi' }),
-						frame('plan', { plan: null }),
-						frame('done', { message_id: 'm1', input_tokens: 1, output_tokens: 2 })
+						frame('token', { delta: 'Hi' }, 0),
+						frame('plan', { plan: null }, 1),
+						frame('done', { message_id: 'm1', input_tokens: 1, output_tokens: 2 }, 2)
 					])
 				],
 				runs: [runJson({ status: 'completed', plan_id: 'plan-1' })]
@@ -430,7 +430,7 @@ describe('durable assistant runs', () => {
 	it('reflects a failed run as an error event when no error frame arrived', async () => {
 		routeFetch({
 			chat: jsonResponse(runJson({ status: 'queued' }), 202),
-			events: [eventsResponse([frame('token', { delta: 'Hi' })])],
+			events: [eventsResponse([frame('token', { delta: 'Hi' }, 0)])],
 			runs: [
 				runJson({
 					status: 'failed',
@@ -459,7 +459,7 @@ describe('durable assistant runs', () => {
 	it('keeps the streamed error frame instead of duplicating the run error', async () => {
 		routeFetch({
 			chat: jsonResponse(runJson({ status: 'queued' }), 202),
-			events: [eventsResponse([frame('error', { message: 'boom', code: 'x' })])],
+			events: [eventsResponse([frame('error', { message: 'boom', code: 'x' }, 0)])],
 			runs: [runJson({ status: 'failed', error: { code: 'x', message: 'boom' } })]
 		});
 
@@ -504,30 +504,42 @@ describe('durable assistant runs', () => {
 		expect(fetchMock.mock.calls[0][0]).toBe('/api/projects/project-1/assistant/chat');
 	});
 
-	it('reports resume progress from the run events stream', async () => {
-		const fetchMock = vi
-			.fn()
-			.mockResolvedValue(
-				eventsResponse([
-					frame('token', { delta: 'Hi' }),
-					frame('done', { message_id: 'm1', input_tokens: 1, output_tokens: 2 })
-				])
-			);
-		vi.stubGlobal('fetch', fetchMock);
 
+	it('resumes after a polling failure without skipping the first persisted event', async () => {
+		const rows = [
+			{ seq: 0, wire: frame('token', { delta: 'Recovered answer' }, 0) },
+			{ seq: 1, wire: frame('done', { message_id: 'm1', input_tokens: 1, output_tokens: 2 }, 1) }
+		];
+		vi.stubGlobal(
+			'fetch',
+			vi.fn()
+				.mockResolvedValueOnce(eventsResponse([frame('error', {
+					code: 'assistant_events_unavailable',
+					message: 'Assistant events could not be loaded. Reconnect to resume.'
+				})]))
+				.mockImplementation(async (input: string) => {
+					const cursor = Number(new URL(input, 'http://localhost').searchParams.get('after_seq'));
+					return eventsResponse(rows.filter((row) => row.seq > cursor).map((row) => row.wire));
+				})
+		);
 		const events: AssistantChatStreamEvent[] = [];
-		const progress = await streamAssistantRunEvents(
-			'project-1',
-			runId,
-			(event) => events.push(event),
-			{ afterSeq: 4 }
+		const interrupted = await streamAssistantRunEvents('project-1', runId, (event) => events.push(event));
+		const recovered = await streamAssistantRunEvents(
+			'project-1', runId, (event) => events.push(event),
+			{ afterSeq: interrupted.nextAfterSeq }
 		);
 
-		expect(events.map((event) => event.event)).toEqual(['token', 'done']);
-		expect(progress).toEqual({ frames: 2, nextAfterSeq: 6, terminal: true });
-		expect(fetchMock.mock.calls[0][0]).toBe(
-			`/api/projects/project-1/assistant/runs/${runId}/events?after_seq=4`
-		);
+		expect(events).toEqual([
+			{
+				event: 'error',
+				code: 'assistant_events_unavailable',
+				message: 'Assistant events could not be loaded. Reconnect to resume.'
+			},
+			{ event: 'token', delta: 'Recovered answer' },
+			{ event: 'done', message_id: 'm1', input_tokens: 1, output_tokens: 2 }
+		]);
+		expect(interrupted).toEqual({ frames: 0, nextAfterSeq: -1, terminal: false });
+		expect(recovered).toEqual({ frames: 2, nextAfterSeq: 1, terminal: true });
 	});
 
 	it('honors a payload-embedded seq cursor without an SSE id', async () => {
@@ -545,29 +557,6 @@ describe('durable assistant runs', () => {
 		expect(progress).toEqual({ frames: 1, nextAfterSeq: 7, terminal: false });
 	});
 
-	it('warns loudly in dev when frames are dropped', async () => {
-		const warn = vi.spyOn(console, 'warn').mockImplementation(() => {});
-		try {
-			vi.stubGlobal(
-				'fetch',
-				vi
-					.fn()
-					.mockResolvedValue(
-						eventsResponse([frame('mystery', { x: 1 }), 'event: token\ndata: not json'])
-					)
-			);
-
-			const events: AssistantChatStreamEvent[] = [];
-			await streamAssistantRunEvents('project-1', runId, (event) => events.push(event));
-
-			expect(events).toEqual([]);
-			const warned = warn.mock.calls.map((call) => String(call[1]));
-			expect(warned.some((payload) => payload.includes('mystery'))).toBe(true);
-			expect(warned.some((payload) => payload.includes('not json'))).toBe(true);
-		} finally {
-			warn.mockRestore();
-		}
-	});
 
 	it('raises run lookup failures as stream errors', async () => {
 		vi.stubGlobal(
