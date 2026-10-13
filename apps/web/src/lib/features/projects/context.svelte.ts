@@ -253,8 +253,7 @@ class ProjectWorkspaceContext {
 
 	syncProjectSelection = (
 		projects: ProjectDto[],
-		loading: boolean,
-		selectedProjectFailed: boolean
+		loading: boolean
 	) => {
 		const route = projectRouteSelection(
 			page.params.projectId,
@@ -265,7 +264,6 @@ class ProjectWorkspaceContext {
 			projects,
 			loading,
 			route.projectId,
-			selectedProjectFailed,
 			route.resolvingProject
 		);
 		if (projectId) navigateTo(pathnameForView(projectId, 'overview'));

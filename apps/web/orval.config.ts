@@ -75,16 +75,16 @@ export default defineConfig({
 								'generateScreeningSuggestion',
 								'generateDuplicateSuggestion'
 							],
-							invalidates: ['listAiProposals']
+							invalidates: [{ query: 'listAiProposals', params: ['projectId'] }]
 						},
 						{
 							onMutations: ['decideAiProposal'],
 							invalidates: [
-								'listAiProposals',
+								{ query: 'listAiProposals', params: ['projectId'] },
 								{ query: 'getAiProposal', params: ['projectId', 'proposalId'] },
-								'listTitleAbstractScreeningQueue',
-								'listFullTextScreeningQueue',
-								'listProjectDedupeProposals'
+								{ query: 'getScreeningQueue', params: ['projectId'] },
+								{ query: 'listFullTextScreeningQueue', params: ['projectId'] },
+								{ query: 'listProjectDedupeProposals', params: ['projectId'] }
 							]
 						}
 					]

@@ -18,10 +18,10 @@
 		getListReportAppraisalsQueryKey
 	} from '#lib/api/generated/appraisal/appraisal.js';
 	import {
-		createListDocumentBlocks,
 		createListFullTextScreeningQueue,
 		createListReportDocuments
 	} from '#lib/api/generated/documents/documents.js';
+	import { createAllDocumentBlocks } from '#lib/api/pagination.js';
 	import { createListProjectReports } from '#lib/api/generated/reports/reports.js';
 	import { createGetReportStudyMembership } from '#lib/api/generated/studies/studies.js';
 	import type {
@@ -102,7 +102,7 @@
 		() => ({ query: { enabled: Boolean(reportId) } })
 	);
 	const selectedDocumentId = $derived(documentsQuery.data?.data[0]?.id);
-	const blocksQuery = createListDocumentBlocks(
+	const blocksQuery = createAllDocumentBlocks(
 		() => projectId,
 		() => reportId ?? '',
 		() => selectedDocumentId ?? '',

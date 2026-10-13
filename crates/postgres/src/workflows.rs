@@ -242,8 +242,8 @@ pub async fn create_workflow(
     let inserted = sqlx::query(
         "INSERT INTO workflows
            (id, project_id, name, description, draft_graph, webhook_token, webhook_secret,
-            email_token, created_by_kind, created_by_id)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)",
+            email_token, created_by_kind, created_by_id, webhook_signature_required)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,true)",
     )
     .bind(id)
     .bind(project_uuid(project_id))
@@ -266,7 +266,7 @@ pub async fn create_workflow(
         }
         Err(error) => return Err(error.into()),
     }
-    write_secrets(&mut tx, id, &secrets).await?;
+    write_secrets(&mut tx, id, &secrets, &graph).await?;
     tx.commit().await?;
     get_workflow(pool, project_id, id).await
 }
@@ -275,20 +275,41 @@ async fn write_secrets(
     tx: &mut Transaction<'_, Postgres>,
     workflow_id: Uuid,
     secrets: &[deepref_application::workflows::SecretWrite],
+    graph: &WorkflowGraph,
 ) -> Result<(), sqlx::Error> {
+    for node in &graph.nodes {
+        if node.node_type == "integration.http_request" {
+            let origin = deepref_application::workflows::conditions::fixed_url_origin(
+                node.config.get("url").and_then(Value::as_str).unwrap_or_default(),
+            ).ok();
+            sqlx::query(
+                "DELETE FROM workflow_secrets WHERE workflow_id=$1 AND node_id=$2
+                 AND origin IS DISTINCT FROM $3",
+            )
+            .bind(workflow_id)
+            .bind(&node.id)
+            .bind(origin)
+            .execute(&mut **tx)
+            .await?;
+        }
+    }
     for secret in secrets {
         match &secret.value {
             Some(value) => {
                 sqlx::query(
-                    "INSERT INTO workflow_secrets (workflow_id,node_id,key,value)
-                     VALUES ($1,$2,$3,$4)
+                    "INSERT INTO workflow_secrets (workflow_id,node_id,key,value,origin)
+                     VALUES ($1,$2,$3,$4,$5)
                      ON CONFLICT (workflow_id,node_id,key)
-                     DO UPDATE SET value=EXCLUDED.value, updated_at=now()",
+                     DO UPDATE SET value=EXCLUDED.value, origin=EXCLUDED.origin, updated_at=now()",
                 )
                 .bind(workflow_id)
                 .bind(&secret.node_id)
                 .bind(&secret.key)
                 .bind(value)
+                .bind(graph.nodes.iter().find(|node| node.id == secret.node_id)
+                    .filter(|node| node.node_type == "integration.http_request")
+                    .and_then(|node| node.config.get("url").and_then(Value::as_str))
+                    .and_then(|url| deepref_application::workflows::conditions::fixed_url_origin(url).ok()))
                 .execute(&mut **tx)
                 .await?;
             }
@@ -381,7 +402,25 @@ pub async fn update_workflow(
     let mut graph_value = None;
     if let Some(mut graph) = update.graph {
         let secrets = extract_secrets(&mut graph);
-        write_secrets(&mut tx, workflow_id, &secrets).await?;
+        write_secrets(&mut tx, workflow_id, &secrets, &graph).await?;
+        for node in &mut graph.nodes {
+            if node.node_type == "integration.http_request"
+                && node.config.get("auth").and_then(Value::as_str)
+                    == Some(deepref_application::workflows::SECRET_PLACEHOLDER)
+            {
+                let present: bool = sqlx::query_scalar(
+                    "SELECT EXISTS(SELECT 1 FROM workflow_secrets
+                     WHERE workflow_id=$1 AND node_id=$2 AND key='auth')",
+                )
+                .bind(workflow_id)
+                .bind(&node.id)
+                .fetch_one(&mut *tx)
+                .await?;
+                if !present && let Some(config) = node.config.as_object_mut() {
+                    config.remove("auth");
+                }
+            }
+        }
         // Forget secrets of blocks that were deleted from the canvas.
         let live: Vec<String> = graph.nodes.iter().map(|node| node.id.clone()).collect();
         sqlx::query(
@@ -792,6 +831,26 @@ pub async fn get_workflow_secret(
     .bind(workflow_id)
     .bind(node_id)
     .bind(key)
+    .fetch_optional(pool)
+    .await?)
+}
+
+/// An HTTP credential is usable only for the origin where it was entered.
+pub async fn get_workflow_http_secret(
+    pool: &PgPool,
+    workflow_id: Uuid,
+    node_id: &str,
+    url: &str,
+) -> Result<Option<String>, WorkflowError> {
+    let origin = deepref_application::workflows::conditions::fixed_url_origin(url)
+        .map_err(|message| WorkflowError::InvalidInput(message.to_owned()))?;
+    Ok(sqlx::query_scalar(
+        "SELECT value FROM workflow_secrets
+         WHERE workflow_id=$1 AND node_id=$2 AND key='auth' AND origin=$3",
+    )
+    .bind(workflow_id)
+    .bind(node_id)
+    .bind(origin)
     .fetch_optional(pool)
     .await?)
 }

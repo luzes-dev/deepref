@@ -211,6 +211,49 @@ pub fn render_template(template: &str, data: &Value) -> String {
     output
 }
 
+/// HTTP templates may substitute path/query values, never scheme or authority.
+pub fn fixed_url_origin(template: &str) -> Result<String, &'static str> {
+    let (_, authority_and_path) = template.split_once("://").ok_or("URL must have a fixed origin")?;
+    let authority = authority_and_path.split(['/', '?', '#']).next().unwrap_or_default();
+    if authority.contains("{{") {
+        return Err("URL must have a fixed origin");
+    }
+    let literal = template.split("{{").next().unwrap_or(template);
+    let url = url::Url::parse(literal).map_err(|_| "URL must have a fixed origin")?;
+    if !matches!(url.scheme(), "http" | "https") || url.host_str().is_none()
+        || !url.username().is_empty() || url.password().is_some()
+    {
+        return Err("URL must have an HTTP origin without credentials");
+    }
+    Ok(url.origin().ascii_serialization())
+}
+
+pub fn render_url_template(template: &str, data: &Value) -> Result<String, &'static str> {
+    let origin = fixed_url_origin(template)?;
+    let mut output = String::with_capacity(template.len());
+    let mut rest = template;
+    while let Some((before, after)) = rest.split_once("{{") {
+        output.push_str(before);
+        let (path, tail) = after.split_once("}}").ok_or("Unclosed URL template token")?;
+        if let Some(text) = detail_text(data, path.trim()) {
+            use std::fmt::Write;
+            for byte in text.bytes() {
+                if byte.is_ascii_alphanumeric() || matches!(byte, b'-' | b'.' | b'_' | b'~') {
+                    output.push(char::from(byte));
+                } else {
+                    write!(output, "%{byte:02X}").map_err(|_| "Could not encode URL")?;
+                }
+            }
+        }
+        rest = tail;
+    }
+    output.push_str(rest);
+    if fixed_url_origin(&output)? != origin {
+        return Err("URL substitution changed origin");
+    }
+    Ok(output)
+}
+
 #[cfg(test)]
 mod tests {
     use serde_json::json;
@@ -330,5 +373,29 @@ mod tests {
         let open = template_tokens("x {{title");
         assert!(open.unclosed);
         assert!(open.paths.is_empty());
+    }
+}
+
+#[cfg(test)]
+#[allow(clippy::unwrap_used)]
+mod url_tests {
+    use super::{fixed_url_origin, render_url_template};
+    use serde_json::json;
+
+    #[test]
+    fn http_templates_require_a_fixed_origin() {
+        for url in ["{{url}}", "{{scheme}}://example.com/x", "https://{{host}}/x",
+            "https://example.com{{suffix}}/x", "https://user:password@example.com/x"] {
+            assert!(fixed_url_origin(url).is_err(), "{url}");
+        }
+        assert_eq!(fixed_url_origin("https://EXAMPLE.com:443/path/{{id}}").unwrap(), "https://example.com");
+    }
+
+    #[test]
+    fn url_values_are_encoded_as_components_not_url_syntax() {
+        let url = render_url_template("https://example.com/p/{{id}}?q={{query}}",
+            &json!({"id":"//evil.example/a?b#c","query":"a&admin=true ü"})).unwrap();
+        assert_eq!(url, "https://example.com/p/%2F%2Fevil.example%2Fa%3Fb%23c?q=a%26admin%3Dtrue%20%C3%BC");
+        assert_eq!(fixed_url_origin(&url).unwrap(), "https://example.com");
     }
 }

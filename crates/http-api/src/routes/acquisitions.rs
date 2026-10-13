@@ -181,8 +181,9 @@ pub(crate) async fn create_acquisition(
 ) -> Result<(StatusCode, Json<AcquisitionDto>), ApiError> {
     let seed_dois = validate_seeds(input.seed_dois)?;
     let requested_max_depth = input.max_depth;
-    if requested_max_depth.is_some_and(|value| value < 0) {
-        return Err(ApiError::BadRequest("max_depth must be >= 0".to_owned()));
+    if let Some(value) = requested_max_depth {
+        deepref_domain::acquisition::MaxDepth::try_from(value)
+            .map_err(|message| ApiError::BadRequest(message.to_owned()))?;
     }
     let metadata_provider = input
         .metadata_provider
@@ -203,7 +204,11 @@ pub(crate) async fn create_acquisition(
             .fetch_optional(&mut *tx)
             .await?
             .ok_or_else(|| ApiError::NotFound("project not found".to_owned()))?;
-    let max_depth = requested_max_depth.unwrap_or(project_default_depth);
+    let max_depth = i32::from(
+        deepref_domain::acquisition::MaxDepth::try_from(
+            requested_max_depth.unwrap_or(project_default_depth),
+        ).map_err(|message| ApiError::BadRequest(message.to_owned()))?,
+    );
     let seed_count = i32::try_from(seed_dois.len()).unwrap_or(i32::MAX);
     let config = json!({
         "seed_dois": seed_dois,

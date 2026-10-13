@@ -341,7 +341,9 @@ pub async fn execute(context: &Context<'_>) -> NodeResult {
         "integration.http_request" => {
             let data = input("data").cloned().unwrap_or(Value::Null);
             let method = cfg_str(config, "method").unwrap_or("POST").to_uppercase();
-            let url = render_template(cfg_str(config, "url").unwrap_or_default(), &data);
+            let url = deepref_application::workflows::conditions::render_url_template(
+                cfg_str(config, "url").unwrap_or_default(), &data,
+            ).map_err(NodeError::permanent)?;
             let body = cfg_str(config, "body").map(|text| render_template(text, &data));
             if execution.test_mode {
                 // Resolved the way a real call is, so a test fails where a real run would.
@@ -360,11 +362,11 @@ pub async fn execute(context: &Context<'_>) -> NodeResult {
                 .map(|(name, value)| (name.trim().to_owned(), render_template(value.trim(), &data)))
                 .filter(|(name, _)| !name.is_empty())
                 .collect();
-            if let Some(auth) = get_workflow_secret(
+            if let Some(auth) = deepref_postgres::get_workflow_http_secret(
                 context.pool,
                 execution.workflow_id,
                 &execution.node_id,
-                "auth",
+                &url,
             )
             .await?
             {
