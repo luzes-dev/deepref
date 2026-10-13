@@ -26,6 +26,8 @@ fn app() -> axum::Router {
         cors_allow_any: false,
         cors_origins: vec![
             "http://localhost:5173".parse().unwrap(),
+            "http://localhost:4173".parse().unwrap(),
+            "http://127.0.0.1:4173".parse().unwrap(),
             "https://deepref.example.org".parse().unwrap(),
         ],
     };
@@ -51,6 +53,8 @@ async fn foreign_host_is_rejected() {
         "evil.example:8080",
         "localhost.evil.example:8080",
         "127.0.0.1.evil.example",
+        "localhost:18080",
+        "deepref.example.org:8080",
     ] {
         assert_eq!(
             status_for("/openapi.json", Some(host)).await,
@@ -67,9 +71,9 @@ async fn loopback_and_configured_origin_hosts_are_accepted() {
         "LOCALHOST:8080",
         "127.0.0.1:8080",
         "[::1]:8080",
-        "localhost",
-        // A published container port or a same-origin proxy keeps the browser's port.
-        "localhost:18080",
+        "localhost:5173",
+        "localhost:4173",
+        "127.0.0.1:4173",
         "deepref.example.org",
         "deepref.example.org:443",
     ] {
@@ -83,16 +87,35 @@ async fn loopback_and_configured_origin_hosts_are_accepted() {
 
 #[tokio::test]
 async fn request_without_host_is_accepted() {
-    // Browsers always send Host, so a rebinding page can never omit it; in-process
-    // callers and HTTP/1.0 clients may.
+    // In-process and HTTP/1.0 callers can omit Host; browsers cannot.
     assert_eq!(status_for("/openapi.json", None).await, StatusCode::OK);
 }
 
 #[tokio::test]
-async fn liveness_probe_ignores_host() {
-    // Orchestrator probes address the pod or container IP.
+async fn liveness_probe_rejects_unknown_host() {
     assert_eq!(
         status_for("/health/live", Some("10.1.2.3:8080")).await,
+        StatusCode::FORBIDDEN
+    );
+    assert_eq!(
+        status_for("/health/live", Some("127.0.0.1:8080")).await,
         StatusCode::OK
     );
+}
+
+#[tokio::test]
+async fn client_automation_and_system_actors_are_rejected_before_database_access() {
+    for kind in ["automation", "system"] {
+        let request = Request::builder()
+            .uri("/projects/00000000-0000-0000-0000-000000000001/screening")
+            .header(header::HOST, "localhost:8080")
+            .header("x-actor-kind", kind)
+            .body(Body::empty())
+            .unwrap();
+        assert_eq!(
+            app().oneshot(request).await.unwrap().status(),
+            StatusCode::BAD_REQUEST,
+            "{kind} must be rejected"
+        );
+    }
 }

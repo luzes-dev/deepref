@@ -22,7 +22,7 @@ docs            Architecture, API, and local development
 DeepRef is a single-user application for a trusted machine. The API has no authentication: anyone who can reach it can read, change, and delete every project, run workflows, and spend the configured AI key. Actor ids in requests are self-asserted, so they label work but do not prove who did it.
 
 - The API binds `127.0.0.1:8080` by default and refuses a non-loopback address unless `DEEPREF_ALLOW_NETWORK_BIND=1` is set.
-- It rejects requests addressed to an unknown `Host`, which blocks DNS rebinding from web pages you visit.
+- It rejects requests addressed to an unknown `Host` or port, which blocks DNS rebinding from web pages you visit. Loopback names use the API bind port; `API_CORS_ORIGINS` adds browser/proxy authorities (including their ports). Set it to the site's public origin when using Caddy or a published container port. Health probes must use an allowed Host too.
 - HTTP clients act only as `user`; automation and system actors are created by the server itself.
 - An unset `APP_ENV` means `production`, with its fail-fast checks. Local development sets `APP_ENV=local`.
 
