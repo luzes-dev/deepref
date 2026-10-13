@@ -52,6 +52,19 @@ defaults to `APP_ENV=production` and reads `.env` and `.env.local` only when the
 environment already says `APP_ENV=local`. To run it by hand, export that first, for example
 `APP_ENV=local cargo run -p deepref-server -- serve`.
 
+API `/health/ready` requires the latest embedded SQLx migration, not a fixed
+schema version. An older database returns 503; a newer database remains ready
+and emits a warning. Set `DEEPREF_BUILD_SHA` to the deployed revision to populate
+the startup log and OpenTelemetry `service.version` (otherwise `unknown`).
+
+Send a UUID in `x-correlation-id` to correlate API response headers, error bodies,
+and INFO-level request spans. Invalid or missing IDs are replaced once per
+request. Database failures never expose SQL or constraint names: retryable
+failures return 503 with `Retry-After: 1`, constraint conflicts return 409, and
+unexpected failures return a sanitized 500. Metric recomputation retries only
+whole transactions rolled back for serialization failures or deadlocks; it
+does not retry ambiguous connection/commit failures.
+
 ## Fast continuous Rust feedback (Bacon)
 
 Bacon is pinned in `.mise.toml` as an interactive local developer tool (it is not a CI gate). It watches the codebase and runs checks or tests on file changes:

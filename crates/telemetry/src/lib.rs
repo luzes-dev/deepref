@@ -39,6 +39,7 @@ fn build_otlp_provider(
         .with_resource(
             Resource::builder()
                 .with_service_name(service_name.to_owned())
+                .with_attributes([opentelemetry::KeyValue::new("service.version", std::env::var("DEEPREF_BUILD_SHA").unwrap_or_else(|_| "unknown".to_owned()))])
                 .build(),
         )
         .build())
@@ -78,7 +79,7 @@ pub fn init(config: TelemetryConfig) -> Result<TelemetryHandle, TelemetryError> 
                 .map_err(|error| TelemetryError::Subscriber(error.to_string()))?;
         }
     }
-    tracing::info!(service.name = %config.service_name, otlp.enabled = config.otlp_endpoint.is_some(), "telemetry initialized");
+    tracing::info!(service.name = %config.service_name, service.version = %std::env::var("DEEPREF_BUILD_SHA").unwrap_or_else(|_| "unknown".to_owned()), otlp.enabled = config.otlp_endpoint.is_some(), "telemetry initialized");
     Ok(TelemetryHandle {
         shutdown_deadline: config.shutdown_deadline,
         provider,

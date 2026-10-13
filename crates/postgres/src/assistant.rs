@@ -99,9 +99,7 @@ pub async fn create_assistant_conversation(
     .fetch_one(pool)
     .await
     .map_err(|err| {
-        if let sqlx::Error::Database(ref db_err) = err
-            && db_err.code().as_deref() == Some("23503")
-        {
+        if crate::classify(&err).is_foreign_key_violation() {
             return AssistantError::ProjectNotFound;
         }
         AssistantError::Database(err)
@@ -223,9 +221,7 @@ pub(crate) async fn append_assistant_message_tx(
     .fetch_one(&mut **tx)
     .await
     .map_err(|err| {
-        if let sqlx::Error::Database(ref db_err) = err
-            && db_err.code().as_deref() == Some("23503")
-        {
+        if crate::classify(&err).is_foreign_key_violation() {
             return AssistantError::ConversationNotFound;
         }
         AssistantError::Database(err)

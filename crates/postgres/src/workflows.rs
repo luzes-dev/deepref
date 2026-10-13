@@ -215,10 +215,7 @@ fn version_from_row(row: &PgRow) -> Result<WorkflowVersionRecord, WorkflowError>
 }
 
 fn is_unique_violation(error: &sqlx::Error) -> bool {
-    error
-        .as_database_error()
-        .and_then(|database| database.code())
-        .is_some_and(|code| code == "23505")
+    crate::classify(error).is_unique_conflict()
 }
 
 // ---------------------------------------------------------------------------

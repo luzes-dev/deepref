@@ -303,9 +303,7 @@ pub(crate) async fn create_assistant_agent_run_tx(
     .fetch_one(&mut **tx)
     .await
     .map_err(|err| {
-        if let sqlx::Error::Database(ref db_err) = err
-            && db_err.code().as_deref() == Some("23503")
-        {
+        if crate::classify(&err).is_foreign_key_violation() {
             return AssistantError::InvalidInput(RUN_REFERENCE_MISSING.to_owned());
         }
         AssistantError::Database(err)

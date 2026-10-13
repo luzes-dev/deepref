@@ -1084,8 +1084,8 @@ pub(crate) async fn delete_report_document(
             .await
             .map_err(|error| {
                 // AI evidence and extracted values refer to the PDF's blocks and are kept on purpose.
-                if let Some(SqlxError::Database(database)) = error.downcast_ref::<SqlxError>()
-                    && database.code().as_deref() == Some("23503")
+                if error.chain().filter_map(|cause| cause.downcast_ref::<SqlxError>())
+                    .any(|error| deepref_postgres::classify(error).is_foreign_key_violation())
                 {
                     return ApiError::Conflict {
                         code: "document_in_use".to_owned(),

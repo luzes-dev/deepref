@@ -913,5 +913,5 @@ fn extraction_validation_error(error: ExtractionValidationError) -> ExtractionEr
 }
 
 fn is_unique_violation(error: &sqlx::Error) -> bool {
-    matches!(error, sqlx::Error::Database(database) if database.code().as_deref() == Some("23505"))
+    crate::classify(error).is_unique_conflict()
 }

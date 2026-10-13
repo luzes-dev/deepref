@@ -16,6 +16,8 @@ use uuid::Uuid;
 pub enum ScreeningError {
     #[error("database operation failed")]
     Database(#[from] sqlx::Error),
+    #[error("AI-first screening operation failed")]
+    AiFirst(#[source] Box<crate::AiFirstError>),
     #[error("project not found")]
     ProjectNotFound,
     #[error("report is not part of this project")]
@@ -203,7 +205,7 @@ async fn apply_screen_report(
         }
         match crate::ai_first::record_audit_label(tx, &command)
             .await
-            .map_err(|e| ScreeningError::InvalidTransition(e.to_string()))?
+            .map_err(|error| ScreeningError::AiFirst(Box::new(error)))?
         {
             crate::ai_first::audit::AuditLabelOutcome::NotAudit => {}
             crate::ai_first::audit::AuditLabelOutcome::Pending => {
@@ -273,7 +275,7 @@ async fn apply_screen_report(
             false,
         )
         .await
-        .map_err(|e| ScreeningError::InvalidTransition(e.to_string()))?;
+        .map_err(|error| ScreeningError::AiFirst(Box::new(error)))?;
     }
     Ok(next_snapshot)
 }
@@ -309,7 +311,7 @@ pub async fn undo_screening(
             true,
         )
         .await
-        .map_err(|e| ScreeningError::InvalidTransition(e.to_string()))?;
+        .map_err(|error| ScreeningError::AiFirst(Box::new(error)))?;
     }
     tx.commit().await?;
     Ok(next)
