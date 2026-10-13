@@ -1,4 +1,4 @@
--- Keep PRISMA freshness tied to exported exclusion-reason definitions.
+-- PR10: keep PRISMA freshness tied to exported exclusion-reason definitions.
 -- The append-only decision/study event tables remain the source for transition
 -- timestamps; this column covers labels and codes rendered in the reason list.
 

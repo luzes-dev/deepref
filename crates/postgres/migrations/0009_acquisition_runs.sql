@@ -1,4 +1,4 @@
--- Generic acquisition provenance and source-record metadata.
+-- PR4: generic acquisition provenance and source-record metadata.
 
 ALTER TABLE acquisition_runs
   ALTER COLUMN legacy_ingestion_id DROP NOT NULL,

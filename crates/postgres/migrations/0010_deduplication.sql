@@ -1,4 +1,4 @@
--- Deterministic source-record deduplication.
+-- PR5: deterministic source-record deduplication.
 --
 -- The SQL backfill below is intentionally conservative. PostgreSQL cannot
 -- reproduce the Rust NFKC + Unicode-category normalizer byte-for-byte without
@@ -130,7 +130,7 @@ CREATE TABLE IF NOT EXISTS dedupe_resolution_events (
 );
 
 -- Constraints below make rerunning the migration safe for databases created by
--- the first draft of this migration while preserving the project-scoped audit contract.
+-- the first PR5 draft while preserving the project-scoped audit contract.
 ALTER TABLE dedupe_resolution_events
   DROP CONSTRAINT IF EXISTS dedupe_resolution_events_prior_report_id_fkey,
   DROP CONSTRAINT IF EXISTS dedupe_resolution_events_resolved_report_id_fkey,

@@ -1,4 +1,4 @@
--- Typed AI screening and duplicate-assistance proposal projections.
+-- PR12 typed AI screening and duplicate-assistance proposal projections.
 -- AI remains advisory: these columns and joins describe a proposal and never
 -- replace screening_state, screening_events, records, or project_reports.
 

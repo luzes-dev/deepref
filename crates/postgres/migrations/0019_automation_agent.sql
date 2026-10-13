@@ -1,4 +1,4 @@
--- Typed automation persistence core.
+-- PR14 typed automation persistence core.
 --
 -- This migration deliberately stores recipe steps relationally.  The public
 -- application API selects a built-in recipe; callers cannot submit an

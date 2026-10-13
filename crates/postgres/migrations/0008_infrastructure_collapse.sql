@@ -1,4 +1,4 @@
--- PostgreSQL owns the graph read model and durable worker queue.
+-- PR3: PostgreSQL owns the graph read model and durable worker queue.
 -- Migrations 0001-0007 remain immutable; legacy DOI tables are retained only
 -- for import/ingestion compatibility and are not used by public graph reads.
 
