@@ -298,6 +298,10 @@ pub fn router(state: AppState, config: &ApiConfig) -> Router {
         })
         .layer(cors)
         .layer(from_fn(correlation))
+        .layer(axum::middleware::from_fn_with_state(
+            crate::host_guard::AllowedHosts::from_config(config),
+            crate::host_guard::reject_unknown_hosts,
+        ))
         .layer(TraceLayer::new_for_http())
         .with_state(state)
 }

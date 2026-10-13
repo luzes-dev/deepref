@@ -42,6 +42,18 @@ API_CORS_ALLOW_ANY=false
 
 Use `API_CORS_ALLOW_ANY=true` only for local testing when the browser origin is changing.
 
+## Bind address and Host allow-list
+
+- `API_BIND_ADDR` defaults to `127.0.0.1:8080`. A non-loopback address refuses to start unless
+  `DEEPREF_ALLOW_NETWORK_BIND=1` is set. Set it only when an authenticating proxy is the sole route
+  to the API; the API container image sets it so that its proxy can reach it.
+- The API answers `403` to any request whose `Host` is not `localhost`, `127.0.0.1`, `[::1]`, the
+  bound IP, or the host of an `API_CORS_ORIGINS` entry. This blocks DNS rebinding. Ports are not
+  compared. `/health/live` and `/health/ready` skip the check for orchestrator probes.
+- The Vite dev proxy rewrites `Host` to its target (`changeOrigin`), so `API_PROXY_TARGET` needs no
+  extra configuration. A reverse proxy that forwards the browser's `Host` (the bundled Caddy does)
+  needs its public origin in `API_CORS_ORIGINS`.
+
 ## Health and degradation
 
 The v2 review workflow exposes:
