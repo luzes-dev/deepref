@@ -75,3 +75,11 @@ jobs:
           name: fuzz-findings-${{ github.sha }}
           path: fuzz/artifacts/
           retention-days: 30
+
+  report-failure:
+    if: always() && github.event_name == 'schedule' && needs.fuzz.result == 'failure'
+    needs: fuzz
+    permissions:
+      contents: read
+      issues: write
+    uses: ./.github/workflows/scheduled-failure.yml

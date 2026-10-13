@@ -1,0 +1,26 @@
+name: Report scheduled workflow failure
+
+on:
+  workflow_call:
+
+permissions:
+  contents: read
+  issues: write
+
+jobs:
+  report:
+    name: Open scheduled failure issue
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Report failed scheduled run
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+          FAILED_WORKFLOW: ${{ github.workflow }}
+          RUN_URL: ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}
+          RUN_SHA: ${{ github.sha }}
+        run: |
+          gh issue create \
+            --title "Scheduled workflow failed: $FAILED_WORKFLOW" \
+            --body "Scheduled run failed for commit $RUN_SHA. Inspect the failed jobs and their artifacts: $RUN_URL"
