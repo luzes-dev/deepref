@@ -1,5 +1,4 @@
 import adapter from '@sveltejs/adapter-static';
-import { vitePreprocess } from '@sveltejs/vite-plugin-svelte';
 import { loadEnv } from 'vite';
 import { defineConfig } from 'vitest/config';
 import tailwindcss from '@tailwindcss/vite';
@@ -14,9 +13,6 @@ export default defineConfig(({ mode }) => {
 		plugins: [
 			tailwindcss(),
 			sveltekit({
-				// The official Rete Svelte renderer ships SCSS in its presets.
-				preprocess: vitePreprocess(),
-
 				compilerOptions: {
 					runes: ({ filename }) =>
 						filename.split(/[/\\\\]/).includes('node_modules') ? undefined : true

@@ -8,8 +8,6 @@ allowBuilds:
   '@parcel/watcher': false
   esbuild: true
   msw: true
-  # Rete ships prebuilt artifacts; its postinstall only prints a banner.
-  rete: false
   svelte-preprocess: false
 
 overrides:

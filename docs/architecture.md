@@ -79,6 +79,16 @@ Crate boundaries follow dependency direction: `deepref-domain` owns pure invaria
 
 The API exposes process liveness, PostgreSQL/schema readiness, durable worker-job status, and per-project graph metric freshness. Collections use bounded cursor pagination. The web app polls dependency status independently and keeps project, article metadata, ingestion, settings, and navigation available while queued work drains. Graph and recommendation routes read PostgreSQL directly and do not return an external-graph `503`.
 
+The SPA uses the live workflow builder, not the retired renderer-neutral
+workflow prototype or assistant preview fixtures. Scaffold demo routes and
+Vitest examples, unused web typewriter/hook re-exports, and the unreachable
+deduplication page are removed. The `/deduplication` redirect still sends
+existing links to `/discovery/duplicates`. Sass/Rete preprocessing is removed
+because no live SCSS source remains. The shared UI layout barrel exposes only
+live layout composition, while live chat cards and BuilderCanvas retain their
+explicit entry points. Generated operations are unchanged until merged API
+regeneration.
+
 The application has no user/tenant model.
 
 ## Local development
