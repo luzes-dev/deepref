@@ -17,7 +17,7 @@ async fn database() -> Option<PgPool> {
     deepref_postgres::test_isolation::isolated_pool_from_env("DATABASE_URL", 8).await
 }
 
-fn fixture_job(project_id: ProjectId, id: Uuid, kind: &str, dedupe_key: String) -> EnqueueJob {
+fn fixture_job(project_id: ProjectId, id: Uuid, kind: deepref_domain::JobKind, dedupe_key: String) -> EnqueueJob {
     job(
         id,
         project_id,
@@ -62,7 +62,7 @@ async fn enqueue_returns_canonical_id_and_concurrent_claims_are_exclusive() -> R
             .enqueue(fixture_job(
                 project_id,
                 first_id,
-                "integration_dedupe",
+                deepref_domain::JobKind::RecomputeMetrics,
                 dedupe_key.clone(),
             ))
             .await?;
@@ -75,7 +75,7 @@ async fn enqueue_returns_canonical_id_and_concurrent_claims_are_exclusive() -> R
             .enqueue(fixture_job(
                 project_id,
                 duplicate_id,
-                "integration_dedupe",
+                deepref_domain::JobKind::RecomputeMetrics,
                 dedupe_key.clone(),
             ))
             .await?;
@@ -106,7 +106,7 @@ async fn enqueue_returns_canonical_id_and_concurrent_claims_are_exclusive() -> R
         let mut claim_fixture = fixture_job(
             project_id,
             claim_id,
-            "integration_claim",
+            deepref_domain::JobKind::RecomputeMetrics,
             claim_dedupe_key,
         );
         // Other workspace integration tests may leave legitimate queued work
@@ -167,7 +167,7 @@ async fn expired_leases_are_fenced_and_retries_reach_dead_at_max_attempts() -> R
         let mut lease_fixture = fixture_job(
             project_id,
             lease_job_id,
-            "integration_lease",
+            deepref_domain::JobKind::RecomputeMetrics,
             format!("jobs-integration-lease:{lease_job_id}"),
         );
         lease_fixture.priority = i32::MAX;
@@ -248,7 +248,7 @@ async fn expired_leases_are_fenced_and_retries_reach_dead_at_max_attempts() -> R
         let mut retry_job = fixture_job(
             project_id,
             retry_job_id,
-            "integration_retry",
+            deepref_domain::JobKind::RecomputeMetrics,
             format!("jobs-integration-retry:{retry_job_id}"),
         );
         retry_job.priority = i32::MAX;
@@ -343,7 +343,7 @@ async fn lease_recovery_dead_letters_at_max_attempts_and_backs_off() -> Result<(
         let mut poison = fixture_job(
             project_id,
             poison_id,
-            "integration_poison",
+            deepref_domain::JobKind::RecomputeMetrics,
             format!("jobs-integration-poison:{poison_id}"),
         );
         poison.max_attempts = 1;
@@ -374,7 +374,7 @@ async fn lease_recovery_dead_letters_at_max_attempts_and_backs_off() -> Result<(
         let mut retry = fixture_job(
             project_id,
             retry_id,
-            "integration_crash_retry",
+            deepref_domain::JobKind::RecomputeMetrics,
             format!("jobs-integration-crash-retry:{retry_id}"),
         );
         retry.max_attempts = 3;
@@ -408,7 +408,7 @@ async fn lease_recovery_dead_letters_at_max_attempts_and_backs_off() -> Result<(
         let mut exhausted = fixture_job(
             project_id,
             exhausted_id,
-            "integration_exhausted",
+            deepref_domain::JobKind::RecomputeMetrics,
             format!("jobs-integration-exhausted:{exhausted_id}"),
         );
         exhausted.max_attempts = 2;
@@ -449,7 +449,7 @@ async fn a_stale_attempt_of_the_same_owner_cannot_touch_the_reclaimed_job() -> R
             .enqueue(fixture_job(
                 project_id,
                 job_id,
-                "integration_same_owner",
+                deepref_domain::JobKind::RecomputeMetrics,
                 format!("jobs-integration-same-owner:{job_id}"),
             ))
             .await?;
@@ -494,6 +494,39 @@ async fn a_stale_attempt_of_the_same_owner_cannot_touch_the_reclaimed_job() -> R
 
     let cleanup_result = cleanup(&pool, project_id).await;
     cleanup_result?;
+    result
+}
+
+#[tokio::test]
+async fn an_invalid_persisted_kind_fails_visibly_without_discarding_the_job() -> Result<()> {
+    let Some(pool) = database().await else {
+        return Ok(());
+    };
+    let project_id = fixture_project(&pool).await?;
+    let job_id = Uuid::new_v4();
+    let result = async {
+        sqlx::query(
+            "INSERT INTO jobs (id,project_id,kind,payload,priority,dedupe_key) VALUES ($1,$2,'invalid_persisted_kind','{}',$3,$4)",
+        )
+        .bind(job_id)
+        .bind(project_id.as_uuid())
+        .bind(i32::MAX)
+        .bind(format!("invalid-kind:{job_id}"))
+        .execute(&pool)
+        .await?;
+        let queue = PostgresJobQueue { pool: pool.clone() };
+        let error = queue.claim("invalid-kind-owner", Duration::from_secs(30))
+            .await.expect_err("unknown persisted kind must not dispatch or fall back");
+        ensure!(format!("{error:#}").contains("invalid_persisted_kind"));
+        ensure!(format!("{error:#}").contains(&job_id.to_string()));
+        let row = sqlx::query("SELECT kind,state,attempts FROM jobs WHERE id=$1")
+            .bind(job_id).fetch_one(&pool).await?;
+        ensure!(row.get::<String, _>("kind") == "invalid_persisted_kind");
+        ensure!(row.get::<String, _>("state") == "running");
+        ensure!(row.get::<i32, _>("attempts") == 1);
+        Ok::<_, anyhow::Error>(())
+    }.await;
+    cleanup(&pool, project_id).await?;
     result
 }
 

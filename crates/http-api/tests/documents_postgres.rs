@@ -26,12 +26,10 @@ fn api_config() -> ApiConfig {
         &HashMap::from([("APP_ENV".to_owned(), "local".to_owned())]),
     )
     .unwrap();
-    ApiConfig {
-        runtime,
-        bind_addr: "127.0.0.1:0".parse().unwrap(),
-        cors_allow_any: false,
-        cors_origins: Vec::new(),
-    }
+    ApiConfig { documents: deepref_config::DocumentConfig::from_source(&|name| (name == "APP_ENV").then(|| "local".into())).expect("local test document configuration"), runtime,
+    bind_addr: "127.0.0.1:0".parse().unwrap(),
+    cors_allow_any: false,
+    cors_origins: Vec::new(), }
 }
 
 fn multipart(pdf: &[u8], filename: &str) -> (String, Body) {

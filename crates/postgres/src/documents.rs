@@ -1,7 +1,7 @@
 use chrono::{DateTime, Utc};
 use deepref_application::AutomationDomainEvent;
 use deepref_documents::{PARSER_VERSION, ParsedDocument};
-use deepref_domain::{Actor, ActorKind, ProjectId};
+use deepref_domain::{Actor, ActorKind, ProjectId, ScreeningStage, ScreeningStatus, documents::DocumentStatus};
 use serde_json::Value;
 use sqlx::{PgPool, Postgres, Row, Transaction};
 use uuid::Uuid;
@@ -14,7 +14,7 @@ pub struct DocumentRecord {
     pub original_filename: Option<String>,
     pub external_url: Option<String>,
     pub source: String,
-    pub status: String,
+    pub status: DocumentStatus,
     pub mime_type: String,
     pub byte_size: i64,
     pub content_hash: Option<String>,
@@ -64,7 +64,7 @@ pub struct MissingFullTextRecord {
     pub title: Option<String>,
     pub abstract_text: Option<String>,
     pub doi: Option<String>,
-    pub status: String,
+    pub status: DocumentStatus,
 }
 
 #[derive(Debug, Clone)]
@@ -74,7 +74,7 @@ pub struct FullTextQueueRecord {
     pub abstract_text: Option<String>,
     pub doi: Option<String>,
     pub publication_year: Option<i32>,
-    pub full_text_status: String,
+    pub full_text_status: ScreeningStatus,
     pub revision: i64,
     pub document: Option<DocumentRecord>,
 }
@@ -84,7 +84,7 @@ pub struct ExclusionReasonRecord {
     pub id: Uuid,
     pub code: String,
     pub label: String,
-    pub stage: String,
+    pub stage: ScreeningStage,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -121,15 +121,15 @@ pub async fn list_full_text_reasons(
     .bind(project_id)
     .fetch_all(pool)
     .await?;
-    Ok(rows
-        .into_iter()
-        .map(|row| ExclusionReasonRecord {
+    rows.into_iter()
+        .map(|row| Ok(ExclusionReasonRecord {
             id: row.get("id"),
             code: row.get("code"),
             label: row.get("label"),
-            stage: row.get("stage"),
-        })
-        .collect())
+            stage: ScreeningStage::parse(row.try_get("stage")?)
+                .ok_or_else(|| anyhow::anyhow!("invalid persisted exclusion reason stage"))?,
+        }))
+        .collect()
 }
 
 pub async fn list_documents(
@@ -150,7 +150,7 @@ pub async fn list_documents(
     .bind(limit.clamp(1, 100))
     .fetch_all(pool)
     .await?;
-    Ok(rows.into_iter().map(document_from_row).collect())
+    rows.into_iter().map(document_from_row).collect()
 }
 
 pub async fn get_document(
@@ -170,7 +170,7 @@ pub async fn get_document(
     .bind(report_id)
     .fetch_one(pool)
     .await?;
-    Ok(document_from_row(row))
+    document_from_row(row)
 }
 
 pub async fn get_document_by_id(
@@ -185,7 +185,7 @@ pub async fn get_document_by_id(
     .bind(document_id)
     .fetch_one(pool)
     .await?;
-    Ok(document_from_row(row))
+    document_from_row(row)
 }
 
 pub async fn get_document_blocks(
@@ -348,7 +348,7 @@ pub async fn create_document(
         )
         .await?;
     }
-    Ok(document_from_row(row))
+    document_from_row(row)
 }
 
 pub async fn enqueue_parse(
@@ -363,7 +363,7 @@ pub async fn enqueue_parse(
         serde_json::json!({ "document_id": document_id, "parser_version": PARSER_VERSION });
     crate::enqueue_job(
         tx,
-        &crate::job(job_id, project_id, "parse_document", payload, dedupe),
+        &crate::job(job_id, project_id, deepref_domain::JobKind::ParseDocument, payload, dedupe),
     )
     .await
 }
@@ -388,7 +388,7 @@ pub async fn enqueue_reparse(
         &crate::job(
             job_id,
             project_id,
-            "parse_document",
+            deepref_domain::JobKind::ParseDocument,
             payload,
             dedupe.clone(),
         ),
@@ -407,7 +407,7 @@ pub async fn enqueue_retrieve(
     let payload = serde_json::json!({ "document_id": document_id });
     crate::enqueue_job(
         tx,
-        &crate::job(job_id, project_id, "retrieve_document", payload, dedupe),
+        &crate::job(job_id, project_id, deepref_domain::JobKind::RetrieveDocument, payload, dedupe),
     )
     .await
 }
@@ -452,12 +452,12 @@ pub async fn requeue_document_processing(
     else {
         return Err(sqlx::Error::RowNotFound.into());
     };
-    let status: String = current.get("status");
+    let status = DocumentStatus::parse(current.try_get("status")?)?;
     let source: String = current.get("source");
     let object_key: Option<String> = current.get("object_key");
     let content_hash: Option<String> = current.get("content_hash");
-    let dedupe = match (status.as_str(), object_key.is_some()) {
-        ("failed", true) => {
+    let dedupe = match (status, object_key.is_some()) {
+        (DocumentStatus::Failed, true) => {
             sqlx::query(
                 "UPDATE documents SET status='uploaded',parser_error=NULL,failed_at=NULL,updated_at=now()
                  WHERE id=$1",
@@ -474,7 +474,7 @@ pub async fn requeue_document_processing(
             .await?;
             format!("parse_document:{document_id}:{PARSER_VERSION}")
         }
-        ("failed", false) if source == "external_url" => {
+        (DocumentStatus::Failed, false) if source == "external_url" => {
             sqlx::query(
                 "UPDATE documents SET status='external',parser_error=NULL,failed_at=NULL,updated_at=now()
                  WHERE id=$1",
@@ -485,7 +485,7 @@ pub async fn requeue_document_processing(
             enqueue_retrieve(tx, project_id, document_id).await?;
             format!("retrieve_document:{document_id}")
         }
-        ("available", true) => {
+        (DocumentStatus::Available, true) => {
             // A reparse must run even when the stored parse is current, so it
             // gets its own forced job and bumps `updated_at` for the UI.
             let dedupe = enqueue_reparse(tx, project_id, document_id).await?;
@@ -513,7 +513,7 @@ pub async fn requeue_document_processing(
     .bind(document_id)
     .fetch_one(&mut **tx)
     .await?;
-    Ok(Some(document_from_row(row)))
+    Ok(Some(document_from_row(row)?))
 }
 
 pub async fn mark_document_retrieving(pool: &PgPool, document_id: Uuid) -> anyhow::Result<bool> {
@@ -640,25 +640,25 @@ pub async fn list_full_text_queue(
     .await?;
     Ok(rows
         .into_iter()
-        .map(|row| FullTextQueueRecord {
+        .map(|row| Ok(FullTextQueueRecord {
             report_id: row.get("report_id"),
             title: row.get("title"),
             abstract_text: row.get("abstract_text"),
             doi: row.get("doi"),
             publication_year: row.get("publication_year"),
-            full_text_status: row.get("full_text_status"),
+            full_text_status: crate::screening::status_from_row(&row, "full_text_status")?,
             revision: row.get("revision"),
             document: row
                 .try_get::<Uuid, _>("document_id")
                 .ok()
-                .map(|id| DocumentRecord {
+                .map(|id| -> anyhow::Result<DocumentRecord> { Ok(DocumentRecord {
                     id,
                     project_id: row.get("document_project_id"),
                     report_id: row.get("document_report_id"),
                     original_filename: row.get("original_filename"),
                     external_url: row.get("external_url"),
                     source: row.get("source"),
-                    status: row.get("document_status"),
+                    status: DocumentStatus::parse(row.try_get("document_status")?)?,
                     mime_type: row.get("mime_type"),
                     byte_size: row.get("byte_size"),
                     content_hash: row.get("content_hash"),
@@ -671,9 +671,9 @@ pub async fn list_full_text_queue(
                     identity_acknowledged_at: row.get("document_identity_acknowledged_at"),
                     created_at: row.get("document_created_at"),
                     updated_at: row.get("document_updated_at"),
-                }),
-        })
-        .collect())
+                }) }).transpose()?,
+        }))
+        .collect::<anyhow::Result<Vec<_>>>()?)
 }
 
 pub async fn list_missing_full_text(
@@ -703,16 +703,15 @@ pub async fn list_missing_full_text(
     .bind(limit.clamp(1, 100))
     .fetch_all(pool)
     .await?;
-    Ok(rows
-        .into_iter()
-        .map(|row| MissingFullTextRecord {
+    rows.into_iter()
+        .map(|row| Ok(MissingFullTextRecord {
             report_id: row.get("report_id"),
             title: row.get("title"),
             abstract_text: row.get("abstract_text"),
             doi: row.get("doi"),
-            status: row.get("status"),
-        })
-        .collect())
+            status: DocumentStatus::parse(row.try_get("status")?)?,
+        }))
+        .collect()
 }
 
 pub async fn mark_document_parsing(pool: &PgPool, document_id: Uuid) -> anyhow::Result<()> {
@@ -1131,15 +1130,15 @@ pub async fn delete_document(
     Ok(row.map(|row| row.get("object_key")))
 }
 
-fn document_from_row(row: sqlx::postgres::PgRow) -> DocumentRecord {
-    DocumentRecord {
+fn document_from_row(row: sqlx::postgres::PgRow) -> anyhow::Result<DocumentRecord> {
+    Ok(DocumentRecord {
         id: row.get("id"),
         project_id: row.get("project_id"),
         report_id: row.get("report_id"),
         original_filename: row.get("original_filename"),
         external_url: row.get("external_url"),
         source: row.get("source"),
-        status: row.get("status"),
+        status: DocumentStatus::parse(row.try_get("status")?)?,
         mime_type: row.get("mime_type"),
         byte_size: row.get("byte_size"),
         content_hash: row.get("content_hash"),
@@ -1152,7 +1151,7 @@ fn document_from_row(row: sqlx::postgres::PgRow) -> DocumentRecord {
         identity_acknowledged_at: row.get("identity_acknowledged_at"),
         created_at: row.get("created_at"),
         updated_at: row.get("updated_at"),
-    }
+    })
 }
 
 /// The stored verdict; a value this build cannot read is treated as no verdict.

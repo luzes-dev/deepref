@@ -611,8 +611,8 @@ fn reviewer_dto(record: deepref_postgres::ReviewerDecisionRecord) -> AiReviewerD
         human_decision: record.human_decision,
         human_notes: record.human_notes,
         human_actor: record.human_actor,
-        status: record.status,
-        resolution: record.resolution,
+        status: record.status.as_str().to_owned(),
+        resolution: record.resolution.map(|value| value.as_str().to_owned()),
         resolved_at: record.resolved_at,
         created_at: record.created_at,
     }

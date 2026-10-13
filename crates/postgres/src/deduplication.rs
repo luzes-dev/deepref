@@ -3,7 +3,7 @@ use std::collections::BTreeSet;
 use deepref_application::RawAuthor;
 use deepref_application::workflows::{AutonomyLevel, AutonomyTask};
 use deepref_application::{
-    AutomationDomainEvent, DedupeCandidate, DedupeScore, FUZZY_PROPOSAL_THRESHOLD,
+    AutomationDomainEvent, DedupeCandidate, DedupeProposalStatus, DedupeScore, FUZZY_PROPOSAL_THRESHOLD,
     FUZZY_SHORTLIST_LIMIT, ProposalDecision, ProposalKind, RecordResolutionAction,
     ResolveRecordCommand, select_fuzzy_candidate,
 };
@@ -84,7 +84,7 @@ pub struct DedupeProposal {
     pub conflicting_identifier: bool,
     pub score: f64,
     pub metadata: Value,
-    pub status: String,
+    pub status: DedupeProposalStatus,
     pub revision: i64,
     pub reviewer_kind: Option<String>,
     pub reviewer_id: Option<String>,
@@ -217,9 +217,6 @@ pub async fn run_deduplication(
     Ok(summary)
 }
 
-/// Durable job kind for the duplicate check that follows a file import.
-pub const IMPORT_DEDUPLICATION_JOB_KIND: &str = "run_deduplication";
-
 /// Queues the duplicate check for records a file import just added, so they
 /// reach Articles without a manual run. Exact identifier matches follow the
 /// project's autonomy; fuzzy matches stay proposals for a person to decide.
@@ -234,7 +231,7 @@ pub async fn enqueue_import_deduplication(
         &crate::jobs::job(
             Uuid::new_v4(),
             ProjectId::new(project_id),
-            IMPORT_DEDUPLICATION_JOB_KIND,
+            deepref_domain::JobKind::ImportDeduplication,
             json!({"project_id": project_id, "import_run_id": import_run_id}),
             format!("run_deduplication:import:{import_run_id}"),
         ),
@@ -1049,7 +1046,7 @@ pub async fn list_proposals(
     .bind(limit + 1)
     .fetch_all(pool)
     .await?;
-    Ok(rows.into_iter().map(proposal_from_row).collect())
+    rows.into_iter().map(proposal_from_row).collect()
 }
 
 pub async fn decide_proposal(
@@ -1074,7 +1071,7 @@ pub async fn decide_proposal(
     .fetch_optional(&mut *tx)
     .await?
     .ok_or(DedupeError::ProposalNotFound)?;
-    if proposal.get::<String, _>("status") != "pending" {
+    if parse_proposal_status(proposal.try_get("status")?)? != DedupeProposalStatus::Pending {
         return Err(DedupeError::ProposalNotPending);
     }
     let record_id: Uuid = proposal.get("record_id");
@@ -1401,7 +1398,7 @@ async fn resolve_record_in_transaction_with_action(
         if proposal.get::<Uuid, _>("record_id") != record_id {
             return Err(DedupeError::ProposalNotFound);
         }
-        if proposal.get::<String, _>("status") != "pending" {
+        if parse_proposal_status(proposal.try_get("status")?)? != DedupeProposalStatus::Pending {
             return Err(DedupeError::ProposalNotPending);
         }
         proposal_kind = Some(proposal.get::<String, _>("proposal_kind"));
@@ -1653,8 +1650,10 @@ fn validate_actor(kind: &str, id: &str) -> Result<(), DedupeError> {
     Ok(())
 }
 
-fn proposal_from_row(row: sqlx::postgres::PgRow) -> DedupeProposal {
-    DedupeProposal {
+fn proposal_from_row(row: sqlx::postgres::PgRow) -> Result<DedupeProposal, DedupeError> {
+    let value: &str = row.try_get("status")?;
+    let status = parse_proposal_status(value)?;
+    Ok(DedupeProposal {
         id: row.get("id"),
         project_id: row.get("project_id"),
         record_id: row.get("record_id"),
@@ -1678,12 +1677,19 @@ fn proposal_from_row(row: sqlx::postgres::PgRow) -> DedupeProposal {
         conflicting_identifier: row.get("conflicting_identifier"),
         score: row.get("score"),
         metadata: row.get("metadata"),
-        status: row.get("status"),
+        status,
         revision: row.get("revision"),
         reviewer_kind: row.get("reviewer_kind"),
         reviewer_id: row.get("reviewer_id"),
         decided_at: row.get("decided_at"),
         decision_reason: row.get("decision_reason"),
         created_at: row.get("created_at"),
-    }
+    })
+}
+
+fn parse_proposal_status(value: &str) -> Result<DedupeProposalStatus, sqlx::Error> {
+    DedupeProposalStatus::parse(value).ok_or_else(|| sqlx::Error::ColumnDecode {
+        index: "status".to_owned(),
+        source: format!("invalid persisted deduplication proposal status: {value}").into(),
+    })
 }

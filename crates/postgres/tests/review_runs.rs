@@ -4,6 +4,7 @@
     clippy::unwrap_used,
     clippy::string_slice
 )]
+use deepref_review::ReviewCalibrationStatus;
 use std::collections::BTreeSet;
 
 use chrono::Utc;
@@ -25,7 +26,7 @@ use deepref_postgres::{
     AiProposalDecision, AiProposalDecisionRequest, CalibrationRefusal, LeasedReviewRun,
     PostgresAiStore, PostgresReviewError, PostgresReviewScheduler, PreparedReviewRun,
     ReviewAttemptCompletion, ReviewAttemptStart, ReviewCalibrationBundleInput,
-    ReviewCalibrationStatus, ReviewFinalization, ReviewPreparationError, ReviewScheduleIntent,
+    ReviewFinalization, ReviewPreparationError, ReviewScheduleIntent,
     begin_review_attempt, complete_review_attempt, decide_ai_proposal, fail_review_attempt,
     finalize_review_proposal, get_review_run, insert_model_route, insert_review_calibration_bundle,
     load_leased_review_run, mark_review_run_running, preview_review_identity,

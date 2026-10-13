@@ -1,7 +1,7 @@
 use std::time::Duration;
 
 use deepref_application::AutomationDomainEvent;
-use deepref_domain::{IngestionItemStatus, IngestionStatus, Reference, WorkWithReferences};
+use deepref_domain::{AcquisitionStatus, IngestionItemStatus, IngestionStatus, Reference, WorkWithReferences};
 use deepref_domain::events::{
     CitationUpserted, DeadLetterRecord, DomainPayload, EntityType, EventEnvelope,
     MetricsRecomputeRequested, ProjectMembershipUpserted, SUBJECT_CITATION_UPSERTED, SUBJECT_DLQ,
@@ -212,7 +212,9 @@ pub async fn ingestion_cancelled(pool: &PgPool, ingestion_id: Uuid) -> anyhow::R
         .bind(ingestion_id)
         .fetch_one(pool)
         .await?;
-    Ok(status == IngestionStatus::Cancelled.as_str())
+    let status = IngestionStatus::parse(&status)
+        .ok_or_else(|| anyhow::anyhow!("unknown stored ingestion status {status}"))?;
+    Ok(status == IngestionStatus::Cancelled)
 }
 
 pub async fn attach_cached(
@@ -676,7 +678,7 @@ async fn enqueue_child(
             &deepref_postgres::job(
                 child.event_id,
                 event.payload.project_id.into(),
-                "work_fetch_requested",
+                deepref_domain::JobKind::WorkFetchRequested,
                 serde_json::to_value(&child)?,
                 format!("work_fetch:{}", child.event_id),
             ),
@@ -751,7 +753,7 @@ async fn emit_metrics_request(
         &deepref_postgres::job(
             envelope.event_id,
             event.payload.project_id.into(),
-            "recompute_metrics",
+            deepref_domain::JobKind::RecomputeMetrics,
             serde_json::to_value(&envelope)?,
             format!(
                 "recompute_metrics:{}:{}",
@@ -945,6 +947,8 @@ async fn complete_item_and_claim(
     .bind(event.payload.ingestion_id)
     .fetch_one(&mut **tx)
     .await?;
+    let previous_acquisition_status = AcquisitionStatus::parse(&previous_acquisition_status)
+        .ok_or_else(|| anyhow::anyhow!("unknown stored acquisition status {previous_acquisition_status}"))?;
     let (acquisition_status, fetched_count, failed_count) = sqlx::query_as::<_, (String, i32, i32)>(
         r#"UPDATE acquisition_runs SET
         status = CASE WHEN status='cancelled' THEN status
@@ -963,7 +967,11 @@ async fn complete_item_and_claim(
     .bind(settled)
     .fetch_one(&mut **tx)
     .await?;
-    if previous_acquisition_status != "completed" && acquisition_status == "completed" {
+    let acquisition_status = AcquisitionStatus::parse(&acquisition_status)
+        .ok_or_else(|| anyhow::anyhow!("unknown stored acquisition status {acquisition_status}"))?;
+    if previous_acquisition_status != AcquisitionStatus::Completed
+        && acquisition_status == AcquisitionStatus::Completed
+    {
         deepref_postgres::dispatch_automation_domain_event(
             tx,
             &AutomationDomainEvent::AcquisitionCompleted {

@@ -619,7 +619,7 @@ fn report_value(report: deepref_postgres::AgentReportRecord, abstract_limit: usi
         // Full text exists only when a document has been parsed (status available).
         let full_text_available = documents
             .iter()
-            .any(|document| document.status == "available");
+            .any(|document| document.status == deepref_domain::documents::DocumentStatus::Available);
         value["full_text_available"] = json!(full_text_available);
         value["documents"] = json!(documents);
     }
@@ -718,7 +718,8 @@ fn read_failure(error: deepref_postgres::AgentReadError) -> AssistantFailure {
     match error {
         deepref_postgres::AgentReadError::NotFound => AssistantFailure::NotFound,
         deepref_postgres::AgentReadError::Database(_)
-        | deepref_postgres::AgentReadError::InvalidData => AssistantFailure::Internal,
+        | deepref_postgres::AgentReadError::InvalidData
+        | deepref_postgres::AgentReadError::InvalidStoredValue(_) => AssistantFailure::Internal,
     }
 }
 

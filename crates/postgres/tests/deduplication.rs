@@ -1858,7 +1858,7 @@ async fn file_import_queues_one_duplicate_check_per_run() {
     let queued: i64 =
         sqlx::query_scalar("SELECT count(*) FROM jobs WHERE project_id=$1 AND kind=$2")
             .bind(project_id)
-            .bind(deepref_postgres::IMPORT_DEDUPLICATION_JOB_KIND)
+            .bind(deepref_domain::JobKind::ImportDeduplication.as_str())
             .fetch_one(&pool)
             .await
             .unwrap();

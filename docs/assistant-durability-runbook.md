@@ -22,10 +22,16 @@ There is no cancel path for assistant runs: no route transitions a run to
 `cancelled`, and `suspended` was removed entirely (migration
 `0058_assistant_runs_no_suspended.sql`). `cancelled` still exists in the
 column CHECK and parses in `AssistantAgentRunStatus`
-(`crates/postgres/src/assistant_runs.rs`), but a tree-wide search surfaces
+(`crates/ai/src/assistant.rs`), but a tree-wide search surfaces
 no writer — it is parse-only today. (The web
 Svelte copy for this state is owned by the web agent; it must use this same
 wording: "Disconnect — the assistant keeps working".)
+
+Assistant run and plan records carry the pure `deepref_ai` lifecycle enums.
+PostgreSQL parses stored text when loading records; unknown lifecycle values
+return errors rather than inventing a default. HTTP status strings remain
+unchanged. Refreshing a plan also propagates review-read and persistence errors
+instead of returning stale results.
 
 ## Lease recovery semantics
 

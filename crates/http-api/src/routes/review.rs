@@ -563,9 +563,9 @@ fn queue_item_dto(item: PersistenceScreeningQueueItem) -> ScreeningQueueItemDto 
         abstract_text: item.abstract_text,
         doi: item.doi,
         publication_year: item.publication_year,
-        title_abstract_status: item.title_abstract_status,
-        full_text_status: item.full_text_status,
-        final_status: item.final_status,
+        title_abstract_status: item.title_abstract_status.as_str().to_owned(),
+        full_text_status: item.full_text_status.as_str().to_owned(),
+        final_status: item.final_status.as_str().to_owned(),
         revision: item.revision,
     }
 }
@@ -574,10 +574,10 @@ fn state_dto(state: ScreeningStateSnapshot) -> ScreeningStateDto {
     ScreeningStateDto {
         project_id: state.project_id,
         report_id: state.report_id,
-        title_abstract_status: state.title_abstract_status,
-        full_text_status: state.full_text_status,
+        title_abstract_status: state.title_abstract_status.as_str().to_owned(),
+        full_text_status: state.full_text_status.as_str().to_owned(),
         full_text_exclusion_reason_id: state.full_text_exclusion_reason_id,
-        final_status: state.final_status,
+        final_status: state.final_status.as_str().to_owned(),
         revision: state.revision,
         last_event_id: state.last_event_id,
         updated_at: state.updated_at,
@@ -596,8 +596,8 @@ fn history_item_dto(item: PersistenceScreeningHistoryItem) -> ScreeningHistoryIt
     ScreeningHistoryItemDto {
         id: item.id,
         event_kind: item.event_kind,
-        stage: item.stage,
-        decision: item.decision,
+        stage: item.stage.as_str().to_owned(),
+        decision: item.decision.map(|decision| decision.as_str().to_owned()),
         notes: item.notes,
         protocol_version_id: item.protocol_version_id,
         actor_kind: item.actor_kind,
@@ -605,14 +605,14 @@ fn history_item_dto(item: PersistenceScreeningHistoryItem) -> ScreeningHistoryIt
         supersedes_event_id: item.supersedes_event_id,
         undoes_event_id: item.undoes_event_id,
         created_at: item.created_at,
-        previous_title_abstract_status: item.previous_title_abstract_status,
-        previous_full_text_status: item.previous_full_text_status,
+        previous_title_abstract_status: item.previous_title_abstract_status.as_str().to_owned(),
+        previous_full_text_status: item.previous_full_text_status.as_str().to_owned(),
         previous_full_text_exclusion_reason_id: item.previous_full_text_exclusion_reason_id,
-        previous_final_status: item.previous_final_status,
-        result_title_abstract_status: item.result_title_abstract_status,
-        result_full_text_status: item.result_full_text_status,
+        previous_final_status: item.previous_final_status.as_str().to_owned(),
+        result_title_abstract_status: item.result_title_abstract_status.as_str().to_owned(),
+        result_full_text_status: item.result_full_text_status.as_str().to_owned(),
         result_full_text_exclusion_reason_id: item.result_full_text_exclusion_reason_id,
-        result_final_status: item.result_final_status,
+        result_final_status: item.result_final_status.as_str().to_owned(),
     }
 }
 

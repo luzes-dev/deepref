@@ -1,9 +1,17 @@
 mod ai;
+mod api;
 mod database;
 mod environment;
 mod error;
 mod listen;
 mod telemetry;
+mod smtp;
+mod workflow;
+mod source;
+mod worker;
+mod document;
+mod pdf;
+mod integrations;
 
 use std::collections::HashMap;
 
@@ -16,12 +24,25 @@ pub use environment::{APP_ENV, Environment, load_local_dotenv_files};
 pub use error::ConfigError;
 pub use listen::{ALLOW_NETWORK_BIND, API_BIND_ADDR, DEFAULT_API_BIND_ADDR, ListenConfig};
 pub use telemetry::TelemetryConfig;
+pub use smtp::{SmtpConfig, SmtpTls};
+pub use workflow::WorkflowConfig;
+pub use api::ApiSettings;
+pub use source::ConfigSource;
+pub use worker::WorkerSettings;
+pub use document::{DocumentConfig, DocumentStorageBackend, DEFAULT_MAX_DOCUMENT_BYTES, MAX_DOCUMENT_BYTES};
+pub use pdf::PdfConfig;
+pub use integrations::CrossrefConfig;
 
 #[derive(Debug, Clone)]
 pub struct RuntimeConfig {
     pub environment: Environment,
     pub database: DatabaseConfig,
     pub telemetry: TelemetryConfig,
+    pub workflow: WorkflowConfig,
+    pub smtp: SmtpConfig,
+    pub ai: AiProviderConfig,
+    pub pdf: PdfConfig,
+    pub crossref: CrossrefConfig,
 }
 
 impl RuntimeConfig {
@@ -36,7 +57,7 @@ impl RuntimeConfig {
         Self::from_source(service_name, &|name| values.get(name).cloned())
     }
 
-    fn from_source(
+    pub fn from_source(
         service_name: &str,
         get: &dyn Fn(&str) -> Option<String>,
     ) -> Result<Self, ConfigError> {
@@ -44,6 +65,11 @@ impl RuntimeConfig {
         Ok(Self {
             database: DatabaseConfig::from_source(environment, get)?,
             telemetry: TelemetryConfig::from_source(service_name, get)?,
+            workflow: WorkflowConfig::from_source(get),
+            smtp: SmtpConfig::from_source(get),
+            ai: AiProviderConfig::from_source(get)?,
+            pdf: PdfConfig::from_source(get),
+            crossref: CrossrefConfig::from_source(get),
             environment,
         })
     }

@@ -12,7 +12,7 @@ use std::{
 
 use deepref_application::workflows::preflight::{
     EMAIL_NOBODY, EMAIL_NOT_CONFIGURED, INVALID_WEB_ADDRESS, PRIVATE_ADDRESS, WEB_ADDRESS_NO_HOST,
-    email_is_configured, ip_is_public, recipients_problem, web_address_problem,
+    ip_is_public, recipients_problem, web_address_problem,
 };
 use reqwest::Url;
 
@@ -145,21 +145,14 @@ pub fn trusted_client() -> Result<reqwest::Client, NodeError> {
         .map_err(|_| NodeError::permanent("The network client could not be prepared."))
 }
 
-/// Whether this server has outgoing mail set up, from the environment.
-pub fn email_setup_present() -> bool {
-    email_is_configured(
-        &std::env::var("SMTP_HOST").unwrap_or_default(),
-        &std::env::var("SMTP_FROM").unwrap_or_default(),
-    )
-}
 
 /// What stops an e-mail from being sent, worded as the step reports it. A test
 /// run calls this too, so it fails where a real run would.
-pub fn email_preflight(to: &[String]) -> Result<(), NodeError> {
+pub fn email_preflight(to: &[String], config: &deepref_config::SmtpConfig) -> Result<(), NodeError> {
     if to.is_empty() {
         return Err(NodeError::permanent(EMAIL_NOBODY));
     }
-    if !email_setup_present() {
+    if !config.is_configured() {
         return Err(NodeError::permanent(EMAIL_NOT_CONFIGURED));
     }
     if let Some(problem) = recipients_problem(to) {
@@ -168,37 +161,25 @@ pub fn email_preflight(to: &[String]) -> Result<(), NodeError> {
     Ok(())
 }
 
-/// Send an e-mail through the SMTP server configured in the environment.
-pub async fn send_email(to: &[String], subject: &str, body: &str) -> Result<(), NodeError> {
+/// Send an e-mail through the explicitly configured SMTP server.
+pub async fn send_email(to: &[String], subject: &str, body: &str, config: &deepref_config::SmtpConfig) -> Result<(), NodeError> {
     use lettre::{
         AsyncSmtpTransport, AsyncTransport, Message, Tokio1Executor, message::Mailbox,
         transport::smtp::authentication::Credentials,
     };
-    email_preflight(to)?;
-    let host = std::env::var("SMTP_HOST").unwrap_or_default();
-    let from = std::env::var("SMTP_FROM").unwrap_or_default();
-    let port: u16 = std::env::var("SMTP_PORT")
-        .ok()
-        .and_then(|value| value.parse().ok())
-        .unwrap_or(587);
-    let mut builder = match std::env::var("SMTP_TLS").unwrap_or_default().as_str() {
-        "tls" => AsyncSmtpTransport::<Tokio1Executor>::relay(&host),
-        "none" => Ok(AsyncSmtpTransport::<Tokio1Executor>::builder_dangerous(
-            &host,
-        )),
-        _ => AsyncSmtpTransport::<Tokio1Executor>::starttls_relay(&host),
+    email_preflight(to, config)?;
+    let mut builder = match config.tls {
+        deepref_config::SmtpTls::Tls => AsyncSmtpTransport::<Tokio1Executor>::relay(&config.host),
+        deepref_config::SmtpTls::None => Ok(AsyncSmtpTransport::<Tokio1Executor>::builder_dangerous(&config.host)),
+        deepref_config::SmtpTls::StartTls => AsyncSmtpTransport::<Tokio1Executor>::starttls_relay(&config.host),
     }
     .map_err(|_| NodeError::permanent("The e-mail server address is not valid."))?
-    .port(port);
-    if let (Ok(user), Ok(password)) = (
-        std::env::var("SMTP_USERNAME"),
-        std::env::var("SMTP_PASSWORD"),
-    ) && !user.is_empty()
-    {
-        builder = builder.credentials(Credentials::new(user, password));
+    .port(config.port);
+    if let Some((user, password)) = &config.credentials {
+        builder = builder.credentials(Credentials::new(user.clone(), password.clone()));
     }
     let transport = builder.build();
-    let from: Mailbox = from.parse().map_err(|_| {
+    let from: Mailbox = config.from.parse().map_err(|_| {
         NodeError::permanent("The sender address set up on the server is not valid.")
     })?;
     let mut message = Message::builder().from(from).subject(subject);

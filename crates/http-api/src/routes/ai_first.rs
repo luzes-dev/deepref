@@ -121,7 +121,7 @@ pub(crate) async fn get_overview(
                 });
             Ok(AiFirstCohortDto {
                 id: c.id,
-                status: c.status,
+                status: c.status.as_str().to_owned(),
                 target_percent: c.target_percent,
                 members: c.members,
                 evaluated: c.evaluated,
@@ -147,7 +147,7 @@ pub(crate) async fn get_overview(
         })
         .collect::<Result<Vec<_>, ApiError>>()?;
     Ok(Json(AiFirstOverviewDto {
-        ceiling: overview.ceiling,
+        ceiling: overview.ceiling.as_str().to_owned(),
         suspended_reason: overview.suspended_reason,
         cohorts,
     }))

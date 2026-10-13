@@ -6,6 +6,7 @@
 //! or an unrestricted repository.
 
 use chrono::{DateTime, Utc};
+use deepref_domain::documents::DocumentStatus;
 use serde::Serialize;
 use serde_json::Value;
 use sqlx::{PgPool, Row};
@@ -20,6 +21,8 @@ pub enum AgentReadError {
     NotFound,
     #[error("stored agent read data is invalid")]
     InvalidData,
+    #[error("stored agent read lifecycle is invalid: {0}")]
+    InvalidStoredValue(String),
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -48,7 +51,7 @@ pub struct AgentDocumentSummary {
     pub id: Uuid,
     /// `missing`, `external`, `uploaded`, `retrieving`, `available` or `failed`.
     /// Only `available` documents have readable full text.
-    pub status: String,
+    pub status: DocumentStatus,
     pub source: String,
     pub original_filename: Option<String>,
     /// Active parsed blocks; zero until the document has been parsed.
@@ -189,7 +192,12 @@ async fn list_agent_report_documents(
         };
         documents.push(AgentDocumentSummary {
             id,
-            status: row.get("status"),
+            status: DocumentStatus::parse(row.try_get("status")?).map_err(|error| {
+                sqlx::Error::ColumnDecode {
+                    index: "status".to_owned(),
+                    source: Box::new(error),
+                }
+            })?,
             source: row.get("source"),
             original_filename: row.get("original_filename"),
             block_count: row.get("block_count"),
@@ -480,16 +488,9 @@ pub async fn get_agent_screening_state(
     .fetch_optional(pool)
     .await?
     .ok_or(AgentReadError::NotFound)?;
-    Ok(crate::screening::ScreeningStateSnapshot {
-        project_id: row.get("project_id"),
-        report_id: row.get("report_id"),
-        title_abstract_status: row.get("title_abstract_status"),
-        full_text_status: row.get("full_text_status"),
-        full_text_exclusion_reason_id: row.get("full_text_exclusion_reason_id"),
-        final_status: row.get("final_status"),
-        revision: row.get("revision"),
-        last_event_id: row.get("last_event_id"),
-        updated_at: row.get("updated_at"),
+    crate::screening::state_snapshot_from_row(&row).map_err(|error| match error {
+        crate::screening::ScreeningError::Database(error) => AgentReadError::Database(error),
+        error => AgentReadError::InvalidStoredValue(error.to_string()),
     })
 }
 
@@ -672,16 +673,20 @@ pub async fn list_agent_reports_by_screening(
     Ok(Value::Array(
         rows.into_iter()
             .map(|row| {
-                serde_json::json!({
+                let status = deepref_domain::ScreeningStatus::parse(row.try_get("status")?)
+                    .ok_or(AgentReadError::InvalidData)?;
+                let final_status = deepref_domain::ScreeningStatus::parse(row.try_get("final_status")?)
+                    .ok_or(AgentReadError::InvalidData)?;
+                Ok(serde_json::json!({
                     "report_id": row.get::<Uuid, _>("id"),
                     "title": decoded(row.get::<Option<String>, _>("title")),
                     "year": row.get::<Option<i32>, _>("publication_year"),
                     "journal": row.get::<Option<String>, _>("journal"),
-                    "title_abstract_status": row.get::<String, _>("status"),
-                    "final_status": row.get::<String, _>("final_status"),
-                })
+                    "title_abstract_status": status.as_str(),
+                    "final_status": final_status.as_str(),
+                }))
             })
-            .collect(),
+            .collect::<Result<Vec<_>, AgentReadError>>()?,
     ))
 }
 

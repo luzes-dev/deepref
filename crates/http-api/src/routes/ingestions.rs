@@ -4,7 +4,7 @@ use axum::{
     http::StatusCode,
 };
 use chrono::{DateTime, Utc};
-use deepref_domain::IngestionStatus;
+use deepref_domain::{IngestionItemStatus, IngestionStatus};
 use serde::{Deserialize, Serialize};
 use sqlx::Row;
 use utoipa::ToSchema;
@@ -167,7 +167,7 @@ pub(crate) async fn create_ingestion(
     .await?;
     tx.commit().await?;
 
-    Ok((StatusCode::CREATED, Json(ingestion_from_row(row))))
+    Ok((StatusCode::CREATED, Json(ingestion_from_row(row)?)))
 }
 
 #[utoipa::path(
@@ -199,7 +199,7 @@ pub(crate) async fn list_ingestions(
     .bind(limit + 1)
     .fetch_all(&state.pool)
     .await?;
-    let items = rows.into_iter().map(ingestion_from_row).collect();
+    let items = rows.into_iter().map(ingestion_from_row).collect::<Result<Vec<_>, _>>()?;
     Ok(Json(page(items, limit as usize, |item| {
         (item.created_at, item.id)
     })?))
@@ -231,7 +231,7 @@ pub(crate) async fn get_ingestion(
     .bind(ingestion_id)
     .fetch_one(&state.pool)
     .await?;
-    Ok(Json(ingestion_from_row(row)))
+    Ok(Json(ingestion_from_row(row)?))
 }
 
 #[utoipa::path(
@@ -289,7 +289,7 @@ pub(crate) async fn list_ingestion_items(
     .bind(limit + 1)
     .fetch_all(&state.pool)
     .await?;
-    let items = rows.into_iter().map(ingestion_item_from_row).collect();
+    let items = rows.into_iter().map(ingestion_item_from_row).collect::<Result<Vec<_>, _>>()?;
     Ok(Json(page(items, limit as usize, |item| {
         (item.queued_at, item.doi.clone())
     })?))
@@ -303,11 +303,14 @@ fn valid_email(value: &str) -> bool {
     !local.is_empty() && domain.contains('.') && !domain.starts_with('.') && !domain.ends_with('.')
 }
 
-pub(crate) fn ingestion_from_row(row: sqlx::postgres::PgRow) -> IngestionDto {
-    IngestionDto {
+pub(crate) fn ingestion_from_row(row: sqlx::postgres::PgRow) -> Result<IngestionDto, ApiError> {
+    let raw_status: String = row.try_get("status")?;
+    let status = IngestionStatus::try_from(raw_status.as_str())
+        .map_err(|error| ApiError::Internal(anyhow::anyhow!(error)))?;
+    Ok(IngestionDto {
         id: row.get("id"),
         project_id: row.get("project_id"),
-        status: row.get("status"),
+        status: status.as_str().to_owned(),
         max_depth: row.get("max_depth"),
         seed_count: row.get("seed_count"),
         queued_count: row.get("queued_count"),
@@ -316,20 +319,23 @@ pub(crate) fn ingestion_from_row(row: sqlx::postgres::PgRow) -> IngestionDto {
         created_at: row.get("created_at"),
         started_at: row.get("started_at"),
         completed_at: row.get("completed_at"),
-    }
+    })
 }
 
-pub(crate) fn ingestion_item_from_row(row: sqlx::postgres::PgRow) -> IngestionItemDto {
-    IngestionItemDto {
+pub(crate) fn ingestion_item_from_row(row: sqlx::postgres::PgRow) -> Result<IngestionItemDto, ApiError> {
+    let raw_status: String = row.try_get("status")?;
+    let status = IngestionItemStatus::try_from(raw_status.as_str())
+        .map_err(|error| ApiError::Internal(anyhow::anyhow!(error)))?;
+    Ok(IngestionItemDto {
         doi: row.get("canonical_doi"),
         depth: row.get("depth"),
         parent_doi: row.get("parent_doi"),
-        status: row.get("status"),
+        status: status.as_str().to_owned(),
         attempts: row.get("attempts"),
         last_error: row.get("last_error"),
         queued_at: row.get("queued_at"),
         fetched_at: row.get("fetched_at"),
-    }
+    })
 }
 
 #[cfg(test)]

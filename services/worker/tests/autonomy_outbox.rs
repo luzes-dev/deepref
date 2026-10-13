@@ -211,19 +211,17 @@ async fn a_second_opinion_lost_after_finalization_is_recorded_by_the_reconciler(
         else {
             break;
         };
-        let action = handle_job_with_documents_owned_and_ai(
-            pool.clone(),
-            &job,
-            worker,
-            Duration::from_secs(60),
-            None,
-            None,
-            gateway.clone(),
-        )
+        let action = handle_job_with_documents_owned_and_ai(pool.clone(),
+        &job,
+        &job.lease(worker),
+        Duration::from_secs(60),
+        None,
+        None,
+        gateway.clone(), &deepref_worker::config::WorkerConfig::from_source(&|name| (name == "APP_ENV").then(|| "local".into())).expect("local worker configuration"))
         .await
         .unwrap();
         assert_eq!(action, DeliveryAction::Ack);
-        assert!(complete_job(&pool, worker, job.id).await.unwrap());
+        assert!(complete_job(&pool, &job.lease(worker)).await.unwrap());
     }
     let state: String = sqlx::query_scalar(
         "SELECT state FROM review_run_manifests WHERE project_id=$1 AND automation_run_id=$2",

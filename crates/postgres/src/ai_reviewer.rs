@@ -4,7 +4,8 @@
 
 use chrono::{DateTime, Utc};
 use deepref_application::ScreenReportCommand;
-use deepref_domain::{Actor, ScreeningDecision, ScreeningStage};
+use deepref_domain::{Actor, ScreeningDecision, ScreeningStage, ScreeningStatus};
+use deepref_review::{ReviewerResolution, ReviewerSource, ReviewerStatus};
 use serde_json::Value;
 use sqlx::{PgPool, Postgres, Row, Transaction};
 use thiserror::Error;
@@ -37,7 +38,7 @@ pub struct NewReviewerDecision {
     pub decision: String,
     pub rationale: String,
     pub evidence: Value,
-    pub source: &'static str,
+    pub source: ReviewerSource,
     pub proposal_id: Option<Uuid>,
     pub ai_run_id: Option<Uuid>,
     pub model: Option<String>,
@@ -73,7 +74,7 @@ pub async fn insert_reviewer_decision_in_transaction(
     .bind(&decision.decision)
     .bind(&decision.rationale)
     .bind(&decision.evidence)
-    .bind(decision.source)
+    .bind(decision.source.as_str())
     .bind(decision.proposal_id)
     .bind(decision.ai_run_id)
     .bind(&decision.model)
@@ -95,13 +96,13 @@ pub struct ReviewerDecisionRecord {
     pub ai_rationale: String,
     pub ai_evidence: Value,
     pub ai_model: Option<String>,
-    pub ai_source: String,
+    pub ai_source: ReviewerSource,
     pub human_decision: Option<String>,
     pub human_notes: Option<String>,
     pub human_actor: Option<String>,
     /// `waiting`, `concordant`, `conflict` or `resolved`.
-    pub status: String,
-    pub resolution: Option<String>,
+    pub status: ReviewerStatus,
+    pub resolution: Option<ReviewerResolution>,
     pub resolved_at: Option<DateTime<Utc>>,
     pub created_at: DateTime<Utc>,
 }
@@ -122,41 +123,49 @@ const STATUS_VIEW: &str = "
     LEFT JOIN screening_events e ON e.id=s.last_event_id
     WHERE d.project_id=$1 AND d.voided_at IS NULL AND NOT ai_first_audit_masked(d.project_id,d.report_id) AND ($2::text IS NULL OR d.stage=$2)";
 
+pub(crate) fn stored<T>(column: &str, value: &str, parse: impl FnOnce(&str) -> Option<T>) -> Result<T, sqlx::Error> {
+    parse(value).ok_or_else(|| sqlx::Error::ColumnDecode {
+        index: column.to_owned(),
+        source: format!("unknown stored {column}: {value}").into(),
+    })
+}
+
 fn status_of(
     resolved_at: Option<DateTime<Utc>>,
-    human_status: Option<&str>,
-    ai_decision: &str,
-) -> &'static str {
+    human_status: Option<ScreeningStatus>,
+    ai_decision: ScreeningDecision,
+) -> ReviewerStatus {
     if resolved_at.is_some() {
-        return "resolved";
+        return ReviewerStatus::Resolved;
     }
     match human_status {
-        None | Some("unscreened" | "not_required") => "waiting",
-        Some(status) if status == ai_decision => "concordant",
-        Some(_) => "conflict",
+        None | Some(ScreeningStatus::Unscreened | ScreeningStatus::NotRequired) => ReviewerStatus::Waiting,
+        Some(status) if status.as_str() == ai_decision.as_str() => ReviewerStatus::Concordant,
+        Some(ScreeningStatus::PendingFullText | ScreeningStatus::Include | ScreeningStatus::Exclude | ScreeningStatus::Maybe) => ReviewerStatus::Conflict,
     }
 }
 
-fn record_from_row(row: &sqlx::postgres::PgRow) -> ReviewerDecisionRecord {
-    let ai_decision: String = row.get("ai_decision");
-    let human_status: Option<String> = row.get("human_status");
-    let resolved_at: Option<DateTime<Utc>> = row.get("resolved_at");
-    let status = status_of(resolved_at, human_status.as_deref(), &ai_decision);
+fn record_from_row(row: &sqlx::postgres::PgRow) -> Result<ReviewerDecisionRecord, sqlx::Error> {
+    let ai_decision = stored("ai_decision", row.try_get("ai_decision")?, ScreeningDecision::parse)?;
+    let human_status = row.try_get::<Option<&str>, _>("human_status")?
+        .map(|value| stored("human_status", value, ScreeningStatus::parse)).transpose()?;
+    let resolved_at: Option<DateTime<Utc>> = row.try_get("resolved_at")?;
+    let status = status_of(resolved_at, human_status, ai_decision);
     // Blinding: until the person has decided, the AI's opinion is withheld from
     // every reader. Second-reviewer independence depends on it, so the server
     // never returns the decision, rationale or evidence for a waiting record.
-    let withheld = status == "waiting";
-    let human_decision = match human_status.as_deref() {
-        None | Some("unscreened" | "not_required") => None,
-        Some(value) => Some(value.to_owned()),
+    let withheld = status == ReviewerStatus::Waiting;
+    let human_decision = match human_status {
+        None | Some(ScreeningStatus::Unscreened | ScreeningStatus::NotRequired) => None,
+        Some(value) => Some(value.as_str().to_owned()),
     };
-    ReviewerDecisionRecord {
+    Ok(ReviewerDecisionRecord {
         id: row.get("id"),
         report_id: row.get("report_id"),
         stage: row.get("stage"),
         title: row.get("title"),
         abstract_text: row.get("abstract_text"),
-        ai_decision: if withheld { String::new() } else { ai_decision },
+        ai_decision: if withheld { String::new() } else { ai_decision.as_str().to_owned() },
         ai_rationale: if withheld {
             String::new()
         } else {
@@ -168,15 +177,16 @@ fn record_from_row(row: &sqlx::postgres::PgRow) -> ReviewerDecisionRecord {
             row.get("evidence")
         },
         ai_model: if withheld { None } else { row.get("model") },
-        ai_source: row.get("source"),
+        ai_source: stored("source", row.try_get("source")?, ReviewerSource::parse)?,
         human_decision,
         human_notes: row.get("human_notes"),
         human_actor: row.get("human_actor"),
-        status: status.to_owned(),
-        resolution: row.get("resolution"),
+        status,
+        resolution: row.try_get::<Option<&str>, _>("resolution")?
+            .map(|value| stored("resolution", value, ReviewerResolution::parse)).transpose()?,
         resolved_at,
         created_at: row.get("created_at"),
-    }
+    })
 }
 
 /// The opinions as the person may see them, without recording anything.
@@ -187,15 +197,15 @@ async fn fetch_reviewer_records(
     status: Option<&str>,
     limit: i64,
 ) -> Result<Vec<ReviewerDecisionRecord>, sqlx::Error> {
+    let status = status.map(|value| stored("status", value, ReviewerStatus::parse)).transpose()?;
     let query = format!("{STATUS_VIEW} ORDER BY d.created_at DESC,d.id DESC LIMIT 500");
     let rows = sqlx::query(sqlx::AssertSqlSafe(query))
         .bind(project_id)
         .bind(stage)
         .fetch_all(pool)
         .await?;
-    Ok(rows
-        .iter()
-        .map(record_from_row)
+    let records = rows.iter().map(record_from_row).collect::<Result<Vec<_>, _>>()?;
+    Ok(records.into_iter()
         .filter(|record| status.is_none_or(|wanted| record.status == wanted))
         .take(usize::try_from(limit).unwrap_or(100))
         .collect())
@@ -214,7 +224,7 @@ pub async fn list_reviewer_decisions(
     let records = fetch_reviewer_records(pool, project_id, stage, status, limit).await?;
     let revealed: Vec<Uuid> = records
         .iter()
-        .filter(|record| record.status != "waiting")
+        .filter(|record| record.status != ReviewerStatus::Waiting)
         .map(|record| record.id)
         .collect();
     record_reveals(pool, &revealed).await?;
@@ -286,11 +296,12 @@ pub async fn resolve_reviewer_conflict(
         return Err(ReviewerError::AlreadyResolved);
     }
     let report_id: Uuid = row.get("report_id");
-    let stage_name: String = row.get("stage");
-    let ai_decision: String = row.get("decision");
-    let human_before: Option<String> = row
-        .get::<Option<String>, _>("human_status")
-        .filter(|status| !matches!(status.as_str(), "unscreened" | "not_required"));
+    let stage_name: String = row.try_get("stage")?;
+    let stage = stored("stage", &stage_name, ScreeningStage::parse)?;
+    let ai_decision = stored("decision", row.try_get("decision")?, ScreeningDecision::parse)?;
+    let human_before = row.try_get::<Option<&str>, _>("human_status")?
+        .map(|value| stored("human_status", value, ScreeningStatus::parse)).transpose()?
+        .filter(|status| !matches!(status, ScreeningStatus::Unscreened | ScreeningStatus::NotRequired));
     // The AI opinion is shown only once the person has decided. Settling a
     // conflict before that would reveal it to a person who decided blind.
     if human_before.is_none() {
@@ -299,11 +310,6 @@ pub async fn resolve_reviewer_conflict(
     // The time of the decision being replaced. The independence check reads it
     // later, so it is stored with the resolution rather than inferred.
     let human_decided_at: Option<DateTime<Utc>> = row.get("human_decided_at");
-    let stage = if stage_name == "full_text" {
-        ScreeningStage::FullText
-    } else {
-        ScreeningStage::TitleAbstract
-    };
     let protocol = crate::get_published_protocol(pool, project_id)
         .await
         .map_err(|_| ReviewerError::NoProtocol)?;
@@ -338,12 +344,12 @@ pub async fn resolve_reviewer_conflict(
         Err(error) => return Err(error.into()),
     }
     let chosen = decision_name(input.decision);
-    let resolution = if chosen == ai_decision {
-        "adopted_ai"
-    } else if human_before.as_deref() == Some(chosen) {
-        "kept_human"
+    let resolution = if input.decision == ai_decision {
+        ReviewerResolution::AdoptedAi
+    } else if human_before.is_some_and(|status| status.as_str() == chosen) {
+        ReviewerResolution::KeptHuman
     } else {
-        "other"
+        ReviewerResolution::Other
     };
     sqlx::query(
         "UPDATE ai_reviewer_decisions
@@ -355,9 +361,9 @@ pub async fn resolve_reviewer_conflict(
     .bind(decision_id)
     .bind(actor.kind().as_str())
     .bind(actor.id())
-    .bind(resolution)
+    .bind(resolution.as_str())
     .bind(&input.note)
-    .bind(&human_before)
+    .bind(human_before.map(ScreeningStatus::as_str))
     .bind(human_decided_at)
     .execute(&mut *tx)
     .await?;
@@ -393,7 +399,7 @@ pub async fn resolve_reviewer_conflict(
         .bind(decision_id)
         .fetch_one(&mut *tx)
         .await?;
-    let record = record_from_row(&row);
+    let record = record_from_row(&row)?;
     tx.commit().await?;
     Ok(record)
 }
@@ -432,12 +438,11 @@ pub fn cohens_kappa(pairs: &[(usize, usize)]) -> Option<f64> {
     Some((observed - expected) / (1.0 - expected))
 }
 
-fn category(value: &str) -> Option<usize> {
+fn category(value: ScreeningDecision) -> usize {
     match value {
-        "include" => Some(0),
-        "exclude" => Some(1),
-        "maybe" => Some(2),
-        _ => None,
+        ScreeningDecision::Include => 0,
+        ScreeningDecision::Exclude => 1,
+        ScreeningDecision::Maybe => 2,
     }
 }
 
@@ -454,12 +459,7 @@ pub async fn reviewer_agreement(
         let all: Vec<(usize, usize)> = pairs
             .independent
             .iter()
-            .filter_map(|pair| {
-                Some((
-                    category(&pair.human_decision)?,
-                    category(&pair.ai_decision)?,
-                ))
-            })
+            .map(|pair| (category(pair.human_decision), category(pair.ai_decision)))
             .collect();
         result.push((
             stage.to_owned(),
@@ -529,7 +529,7 @@ pub async fn record_workflow_reviewer_decision(
                 .map(str::to_owned)
                 .unwrap_or_else(|| "Recorded by an automation.".to_owned()),
             evidence: serde_json::json!([]),
-            source: "workflow",
+            source: ReviewerSource::Workflow,
             proposal_id: None,
             ai_run_id: None,
             model: None,
@@ -558,12 +558,12 @@ mod tests {
 
     #[test]
     fn status_reflects_the_human_decision() {
-        assert_eq!(status_of(None, Some("unscreened"), "include"), "waiting");
-        assert_eq!(status_of(None, Some("include"), "include"), "concordant");
-        assert_eq!(status_of(None, Some("exclude"), "include"), "conflict");
+        assert_eq!(status_of(None, Some(ScreeningStatus::Unscreened), ScreeningDecision::Include), ReviewerStatus::Waiting);
+        assert_eq!(status_of(None, Some(ScreeningStatus::Include), ScreeningDecision::Include), ReviewerStatus::Concordant);
+        assert_eq!(status_of(None, Some(ScreeningStatus::Exclude), ScreeningDecision::Include), ReviewerStatus::Conflict);
         assert_eq!(
-            status_of(Some(Utc::now()), Some("exclude"), "include"),
-            "resolved"
+            status_of(Some(Utc::now()), Some(ScreeningStatus::Exclude), ScreeningDecision::Include),
+            ReviewerStatus::Resolved
         );
     }
 }

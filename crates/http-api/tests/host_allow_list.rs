@@ -20,17 +20,15 @@ fn app() -> axum::Router {
     let pool = PgPoolOptions::new()
         .connect_lazy("postgres://postgres:postgres@127.0.0.1:1/unused")
         .unwrap();
-    let config = ApiConfig {
-        runtime: support::local_runtime(),
-        bind_addr: "127.0.0.1:8080".parse().unwrap(),
-        cors_allow_any: false,
-        cors_origins: vec![
-            "http://localhost:5173".parse().unwrap(),
-            "http://localhost:4173".parse().unwrap(),
-            "http://127.0.0.1:4173".parse().unwrap(),
-            "https://deepref.example.org".parse().unwrap(),
-        ],
-    };
+    let config = ApiConfig { documents: deepref_config::DocumentConfig::from_source(&|name| (name == "APP_ENV").then(|| "local".into())).expect("local test document configuration"), runtime: support::local_runtime(),
+    bind_addr: "127.0.0.1:8080".parse().unwrap(),
+    cors_allow_any: false,
+    cors_origins: vec![
+        "http://localhost:5173".parse().unwrap(),
+        "http://localhost:4173".parse().unwrap(),
+        "http://127.0.0.1:4173".parse().unwrap(),
+        "https://deepref.example.org".parse().unwrap(),
+    ], };
     router(AppState::core(pool), &config)
 }
 

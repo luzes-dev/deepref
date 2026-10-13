@@ -8,7 +8,7 @@ use axum::{
 };
 use chrono::{DateTime, Utc};
 use deepref_ai::{
-    AgentTool, AgentToolName, PlanAction, TOOL_SCREEN_REPORTS, plan_action_is_executable,
+    AgentTool, AgentToolName, AssistantPlanStatus, PlanAction, TOOL_SCREEN_REPORTS, plan_action_is_executable,
 };
 use deepref_application::ScreenReportCommand;
 use deepref_domain::{Actor, ProjectId, ScreeningDecision, ScreeningStage};
@@ -162,7 +162,7 @@ pub(super) fn plan_dto(record: &deepref_postgres::AssistantPlanRecord) -> Assist
         id: record.id,
         project_id: record.project_id,
         conversation_id: record.conversation_id,
-        status: record.status.clone(),
+        status: record.status.as_str().to_owned(),
         summary: record.summary.clone(),
         actions: parse_actions(&record.actions)
             .into_iter()
@@ -201,7 +201,11 @@ pub(super) fn plan_dto(record: &deepref_postgres::AssistantPlanRecord) -> Assist
 fn map_plan_error(error: deepref_postgres::AssistantError) -> ApiError {
     match error {
         deepref_postgres::AssistantError::Database(error) => ApiError::Database(error),
-        _ => ApiError::NotFound("assistant plan not found".to_owned()),
+        deepref_postgres::AssistantError::InvalidInput(message) => ApiError::DataIntegrity(message),
+        deepref_postgres::AssistantError::ConversationNotFound
+        | deepref_postgres::AssistantError::ProjectNotFound => {
+            ApiError::NotFound("assistant plan not found".to_owned())
+        }
     }
 }
 
@@ -244,7 +248,7 @@ pub(crate) async fn get_plan(
     Path((project_id, plan_id)): Path<(Uuid, Uuid)>,
 ) -> Result<Json<AssistantPlanDto>, ApiError> {
     let record = load_plan(&state, project_id, plan_id).await?;
-    let record = refresh_review_steps(&state, record).await;
+    let record = refresh_review_steps(&state, record).await?;
     Ok(Json(plan_dto(&record)))
 }
 
@@ -275,7 +279,7 @@ pub(crate) async fn reject_plan(
         &state.pool,
         project_id,
         plan_id,
-        "rejected",
+        AssistantPlanStatus::Rejected,
         actor.kind().as_str(),
         actor.id(),
     )
@@ -318,7 +322,7 @@ pub(crate) async fn confirm_plan(
         &state.pool,
         project_id,
         plan_id,
-        "confirmed",
+        AssistantPlanStatus::Confirmed,
         actor.kind().as_str(),
         actor.id(),
     )
@@ -353,7 +357,7 @@ pub(crate) async fn confirm_plan(
     let finished = deepref_postgres::finish_assistant_plan(
         &state.pool,
         plan_id,
-        if any_failed { "failed" } else { "executed" },
+        if any_failed { AssistantPlanStatus::Failed } else { AssistantPlanStatus::Executed },
         &Value::Array(results),
         any_failed.then_some("one or more actions failed"),
     )
@@ -512,10 +516,10 @@ fn sentence(text: &str) -> String {
 async fn refresh_review_steps(
     state: &AppState,
     record: deepref_postgres::AssistantPlanRecord,
-) -> deepref_postgres::AssistantPlanRecord {
+) -> Result<deepref_postgres::AssistantPlanRecord, ApiError> {
     let stored = record.results.as_ref().and_then(Value::as_array).cloned();
     let Some(mut results) = stored else {
-        return record;
+        return Ok(record);
     };
     let queued: Vec<Uuid> = results
         .iter()
@@ -524,14 +528,12 @@ async fn refresh_review_steps(
         .filter_map(|id| Uuid::parse_str(id).ok())
         .collect();
     if queued.is_empty() {
-        return record;
+        return Ok(record);
     }
-    let Ok(runs) =
+    let runs =
         deepref_postgres::get_review_runs(&state.pool, ProjectId::new(record.project_id), &queued)
             .await
-    else {
-        return record;
-    };
+            .map_err(|error| ApiError::Internal(anyhow::anyhow!("failed to read assistant review results: {error}")))?;
     let mut changed = false;
     for result in &mut results {
         if result.get("status").and_then(Value::as_str) != Some("queued") {
@@ -564,15 +566,15 @@ async fn refresh_review_steps(
         changed = true;
     }
     if !changed {
-        return record;
+        return Ok(record);
     }
     let any_failed = results
         .iter()
         .any(|result| result.get("status").and_then(Value::as_str) == Some("failed"));
-    let status = if any_failed { "failed" } else { "executed" };
+    let status = if any_failed { AssistantPlanStatus::Failed } else { AssistantPlanStatus::Executed };
     let error = any_failed.then_some("one or more AI reviews failed");
     let results = Value::Array(results);
-    match deepref_postgres::update_assistant_plan_results(
+    deepref_postgres::update_assistant_plan_results(
         &state.pool,
         record.id,
         status,
@@ -580,13 +582,7 @@ async fn refresh_review_steps(
         error,
     )
     .await
-    {
-        Ok(updated) => updated,
-        Err(error) => {
-            tracing::warn!(%error, "failed to store refreshed assistant plan results");
-            record
-        }
-    }
+    .map_err(map_plan_error)
 }
 
 /// What the reviewer left out of a plan, checked against the plan.

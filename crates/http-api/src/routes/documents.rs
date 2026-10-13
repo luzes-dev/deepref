@@ -272,7 +272,7 @@ pub(crate) async fn list_full_text_queue(
                 abstract_text: item.abstract_text,
                 doi: item.doi,
                 publication_year: item.publication_year,
-                full_text_status: item.full_text_status,
+                full_text_status: item.full_text_status.as_str().to_owned(),
                 revision: item.revision,
                 document: item.document.map(document_dto),
             })
@@ -325,7 +325,7 @@ pub(crate) async fn list_full_text_reasons(
                 id: reason.id,
                 code: reason.code,
                 label: reason.label,
-                stage: reason.stage,
+                stage: reason.stage.as_str().to_owned(),
             })
             .collect(),
     ))
@@ -1161,7 +1161,7 @@ fn document_dto(document: deepref_postgres::DocumentRecord) -> DocumentDto {
         report_id: document.report_id,
         original_filename: document.original_filename,
         source: document.source,
-        status: document.status,
+        status: document.status.as_str().to_owned(),
         external_url: document.external_url,
         mime_type: document.mime_type,
         byte_size: document.byte_size,
@@ -1181,7 +1181,7 @@ fn missing_full_text_dto(item: deepref_postgres::MissingFullTextRecord) -> Missi
         title: item.title,
         abstract_text: item.abstract_text,
         doi: item.doi,
-        status: item.status,
+        status: item.status.as_str().to_owned(),
     }
 }
 
