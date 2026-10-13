@@ -44,7 +44,7 @@ pub use automations::{
     validate_error, validate_run_list_limit, validate_worker_id,
 };
 pub use deduplication::{
-    DecideProposalCommand, DedupeCandidate, DedupeProposalCommand, DedupeScore,
+    DecideProposalCommand, DedupeCandidate, DedupeProposalCommand, DedupeProposalStatus, DedupeScore,
     FUZZY_PROPOSAL_THRESHOLD, FUZZY_SHORTLIST_LIMIT, ProposalDecision, ProposalKind,
     RecordResolutionAction, ResolutionCommandError, ResolveRecordCommand, score_candidate,
     select_fuzzy_candidate,

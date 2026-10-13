@@ -10,6 +10,78 @@ use crate::{
     PolicyInput, ProjectAiPolicy, RequestedAction,
 };
 
+/// Persisted execution lifecycle of a durable assistant turn.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AssistantAgentRunStatus {
+    Queued,
+    Running,
+    Completed,
+    Failed,
+    Cancelled,
+}
+
+impl AssistantAgentRunStatus {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Queued => "queued",
+            Self::Running => "running",
+            Self::Completed => "completed",
+            Self::Failed => "failed",
+            Self::Cancelled => "cancelled",
+        }
+    }
+
+    pub fn parse(value: &str) -> Option<Self> {
+        match value {
+            "queued" => Some(Self::Queued),
+            "running" => Some(Self::Running),
+            "completed" => Some(Self::Completed),
+            "failed" => Some(Self::Failed),
+            "cancelled" => Some(Self::Cancelled),
+            _ => None,
+        }
+    }
+
+    pub const fn terminal(self) -> bool {
+        matches!(self, Self::Completed | Self::Failed | Self::Cancelled)
+    }
+}
+
+/// Persisted lifecycle of a proposed assistant action plan.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AssistantPlanStatus {
+    Pending,
+    Confirmed,
+    Rejected,
+    Executed,
+    Failed,
+}
+
+impl AssistantPlanStatus {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Pending => "pending",
+            Self::Confirmed => "confirmed",
+            Self::Rejected => "rejected",
+            Self::Executed => "executed",
+            Self::Failed => "failed",
+        }
+    }
+
+    pub fn parse(value: &str) -> Option<Self> {
+        match value {
+            "pending" => Some(Self::Pending),
+            "confirmed" => Some(Self::Confirmed),
+            "rejected" => Some(Self::Rejected),
+            "executed" => Some(Self::Executed),
+            "failed" => Some(Self::Failed),
+            _ => None,
+        }
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum AssistantRole {
@@ -621,6 +693,45 @@ mod tests {
     use super::*;
     use deepref_domain::{ActorKind, ProjectId};
     use std::sync::{Arc, Mutex};
+
+    #[test]
+    fn persisted_assistant_states_round_trip_and_reject_unknown_values() {
+        for status in [
+            AssistantAgentRunStatus::Queued,
+            AssistantAgentRunStatus::Running,
+            AssistantAgentRunStatus::Completed,
+            AssistantAgentRunStatus::Failed,
+            AssistantAgentRunStatus::Cancelled,
+        ] {
+            assert_eq!(AssistantAgentRunStatus::parse(status.as_str()), Some(status));
+            assert_eq!(
+                serde_json::to_value(status).unwrap(),
+                json!(status.as_str())
+            );
+        }
+        for status in [
+            AssistantPlanStatus::Pending,
+            AssistantPlanStatus::Confirmed,
+            AssistantPlanStatus::Rejected,
+            AssistantPlanStatus::Executed,
+            AssistantPlanStatus::Failed,
+        ] {
+            assert_eq!(AssistantPlanStatus::parse(status.as_str()), Some(status));
+            assert_eq!(
+                serde_json::to_value(status).unwrap(),
+                json!(status.as_str())
+            );
+        }
+        for invalid in ["", "suspended", "unknown", "Completed", " completed "] {
+            assert_eq!(AssistantAgentRunStatus::parse(invalid), None);
+            assert_eq!(AssistantPlanStatus::parse(invalid), None);
+        }
+        assert!(!AssistantAgentRunStatus::Queued.terminal());
+        assert!(!AssistantAgentRunStatus::Running.terminal());
+        assert!(AssistantAgentRunStatus::Completed.terminal());
+        assert!(AssistantAgentRunStatus::Failed.terminal());
+        assert!(AssistantAgentRunStatus::Cancelled.terminal());
+    }
 
     #[derive(Default, Clone)]
     struct MockDispatcher {

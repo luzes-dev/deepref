@@ -43,9 +43,13 @@ pub async fn resolve_ai_proposal(
     if !matches!(actor_kind, "user" | "automation" | "system") || actor_id.trim().is_empty() {
         anyhow::bail!("proposal resolution requires a valid actor");
     }
-    let status = if accepted { "accepted" } else { "rejected" };
+    let status = if accepted {
+        ProposalStatus::Accepted
+    } else {
+        ProposalStatus::Rejected
+    };
     let result = sqlx::query("UPDATE ai_proposals SET status=$2,resolved_at=now(),resolved_by_actor_kind=$3,resolved_by_actor_id=$4,resolution_reason=$5,decided_by=$4,decided_at=now() WHERE id=$1 AND status='pending'")
-        .bind(proposal_id).bind(status).bind(actor_kind).bind(actor_id).bind(reason).execute(pool).await?;
+        .bind(proposal_id).bind(status.as_str()).bind(actor_kind).bind(actor_id).bind(reason).execute(pool).await?;
     Ok(result.rows_affected() == 1)
 }
 
@@ -160,17 +164,8 @@ pub(super) fn ai_run_from_row(row: sqlx::postgres::PgRow) -> Result<AiRunRecord,
 pub(super) fn proposal_from_row(row: sqlx::postgres::PgRow) -> Result<AiProposal, AiError> {
     let authority = AuthorityTier::parse(&row.get::<String, _>("authority_tier"))
         .ok_or_else(|| AiError::Proposal("stored proposal authority is invalid".to_owned()))?;
-    let status = match row.get::<String, _>("status").as_str() {
-        "pending" => ProposalStatus::Pending,
-        "accepted" => ProposalStatus::Accepted,
-        "rejected" => ProposalStatus::Rejected,
-        "expired" => ProposalStatus::Expired,
-        _ => {
-            return Err(AiError::Proposal(
-                "stored proposal status is invalid".to_owned(),
-            ));
-        }
-    };
+    let status = ProposalStatus::parse(&row.get::<String, _>("status"))
+        .ok_or_else(|| AiError::Proposal("stored proposal status is invalid".to_owned()))?;
     Ok(AiProposal {
         id: row.get("id"),
         draft: ProposalDraft {

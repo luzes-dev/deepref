@@ -9,6 +9,7 @@ biblatex.workspace = true
 chrono.workspace = true
 csv.workspace = true
 deepref-application.workspace = true
+deepref-config.workspace = true
 deepref-domain.workspace = true
 quick-xml = "0.41"
 reqwest = { workspace = true, features = ["multipart"] }

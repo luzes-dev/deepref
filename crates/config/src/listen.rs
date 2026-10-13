@@ -28,7 +28,7 @@ impl ListenConfig {
         Self::from_source(&|name| values.get(name).cloned())
     }
 
-    fn from_source(get: &dyn Fn(&str) -> Option<String>) -> Result<Self, ConfigError> {
+    pub fn from_source(get: &dyn Fn(&str) -> Option<String>) -> Result<Self, ConfigError> {
         let raw = optional(get, API_BIND_ADDR).unwrap_or_else(|| DEFAULT_API_BIND_ADDR.to_owned());
         let bind_addr = raw
             .parse::<SocketAddr>()

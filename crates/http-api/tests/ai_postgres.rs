@@ -144,12 +144,10 @@ fn api_config() -> ApiConfig {
         &HashMap::from([("APP_ENV".to_owned(), "local".to_owned())]),
     )
     .expect("local test runtime should parse");
-    ApiConfig {
-        runtime,
-        bind_addr: "127.0.0.1:0".parse().expect("test bind address is valid"),
-        cors_allow_any: false,
-        cors_origins: Vec::new(),
-    }
+    ApiConfig { documents: deepref_config::DocumentConfig::from_source(&|name| (name == "APP_ENV").then(|| "local".into())).expect("local test document configuration"), runtime,
+    bind_addr: "127.0.0.1:0".parse().expect("test bind address is valid"),
+    cors_allow_any: false,
+    cors_origins: Vec::new(), }
 }
 
 async fn response_json(response: Response<Body>) -> serde_json::Value {
@@ -186,7 +184,7 @@ where
     let job = ClaimedJob {
         id: row.get("id"),
         project_id: row.get::<Uuid, _>("project_id").into(),
-        kind: row.get("kind"),
+        kind: row.get::<String, _>("kind").parse().expect("valid queued job kind"),
         payload: row.get("payload"),
         attempts: row.get("attempts"),
         max_attempts: row.get("max_attempts"),
@@ -199,6 +197,7 @@ where
         None,
         None,
         Arc::new(gateway),
+        &deepref_worker::config::WorkerConfig::from_source(&|name| (name == "APP_ENV").then(|| "local".into())).expect("local worker configuration"),
     )
     .await
     .expect("review worker handles terminal delivery")

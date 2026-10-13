@@ -380,8 +380,8 @@ async fn interleaved_stages_have_truthful_supersession_and_undo_snapshots() {
     )
     .await
     .expect("latest title decision should be undoable");
-    assert_eq!(undo.title_abstract_status, "include");
-    assert_eq!(undo.full_text_status, "exclude");
+    assert_eq!(undo.title_abstract_status, deepref_domain::ScreeningStatus::Include);
+    assert_eq!(undo.full_text_status, deepref_domain::ScreeningStatus::Exclude);
     assert_eq!(undo.full_text_exclusion_reason_id, Some(reason_id));
 
     let history = get_screening_history(&pool, project_id, report_id)
@@ -685,8 +685,8 @@ async fn migration_replays_legacy_screening_events_before_projection_constraints
         )
         .await;
         let restored = restored.expect("migration replay should leave a truthful undo predecessor");
-        assert_eq!(restored.title_abstract_status, "include");
-        assert_eq!(restored.full_text_status, "exclude");
+        assert_eq!(restored.title_abstract_status, deepref_domain::ScreeningStatus::Include);
+        assert_eq!(restored.full_text_status, deepref_domain::ScreeningStatus::Exclude);
         assert_eq!(restored.full_text_exclusion_reason_id, Some(reason_id));
         assert_eq!(restored.revision, 4);
         pool.close().await;
