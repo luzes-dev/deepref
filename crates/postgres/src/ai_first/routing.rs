@@ -49,7 +49,10 @@ pub(crate) async fn ensure_current(
     tx: &mut Transaction<'_, Postgres>,
     c: &sqlx::postgres::PgRow,
 ) -> Result<IdentityCheck, AiFirstError> {
-    let check = check_identity(tx, c).await?;
+    let check = match check_identity(tx, c).await {
+        Ok(check) => check,
+        Err(error) => IdentityCheck::Unknown(error),
+    };
     if let IdentityCheck::Stale(reason) = &check {
         demote(tx, c, reason).await?;
     }

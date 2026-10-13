@@ -1008,6 +1008,28 @@ async fn unknown_identity_leaves_an_open_cohort_and_its_quarantine_untouched() {
     assert_eq!(f.suspended_reason().await, None);
 }
 
+#[tokio::test]
+async fn identity_database_failure_rolls_back_without_aborting_the_sweep() {
+    let Some(pool) = database().await else { return };
+    let f = Fixture::new(pool, true).await;
+    // Inject a database error before the identity-preview call. Errors from
+    // locking or checking frozen evidence must be Unknown too, not only route
+    // resolution failures returned by the preview.
+    sqlx::query("ALTER TABLE reports RENAME TO reports_identity_failure")
+        .execute(&f.pool)
+        .await
+        .unwrap();
+    let result = sweep_ai_first(&f.pool).await;
+    sqlx::query("ALTER TABLE reports_identity_failure RENAME TO reports")
+        .execute(&f.pool)
+        .await
+        .unwrap();
+    assert!(result.is_ok(), "an unknown identity skips the cohort, not the sweep");
+    assert_eq!(f.status().await, "open");
+    assert_eq!(f.quarantined().await, 40);
+    assert_eq!(f.suspended_reason().await, None);
+}
+
 /// ADR 0005 §2.4: an identity change voids open cohorts and their dispositions;
 /// finalized cohorts are only flagged for review. Only a protocol republish
 /// (§13) reopens finalized exclusions.
