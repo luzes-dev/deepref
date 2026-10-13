@@ -17,6 +17,7 @@ mod automations;
 mod autonomy;
 mod deduplication;
 mod documents;
+pub mod durable_runs;
 mod extraction;
 mod graph;
 mod jobs;

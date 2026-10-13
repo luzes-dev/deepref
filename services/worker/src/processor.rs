@@ -389,6 +389,7 @@ pub async fn handle_job_with_documents_owned_and_ai(
     document_store: Option<Arc<DocumentStore>>,
     document_parser: Option<Arc<dyn DocumentParser>>,
     ai_gateway: Arc<dyn AiGateway>,
+    niche_nodes_enabled: bool,
 ) -> anyhow::Result<DeliveryAction> {
     handle_job_with_document_services_inner(
         pool,
@@ -399,6 +400,7 @@ pub async fn handle_job_with_documents_owned_and_ai(
             document_parser,
             lease: Some(lease),
             ai_gateway: Some(ai_gateway),
+            niche_nodes_enabled,
             ..JobServices::default()
         },
     )
@@ -412,6 +414,7 @@ struct JobServices<'a> {
     remote_fetcher: Option<Arc<dyn RemoteDocumentFetcher>>,
     lease: Option<&'a JobLease>,
     ai_gateway: Option<Arc<dyn AiGateway>>,
+    niche_nodes_enabled: bool,
 }
 
 async fn handle_retrieve_document_job(
@@ -774,6 +777,7 @@ async fn handle_job_with_document_services_inner(
         remote_fetcher,
         lease,
         ai_gateway,
+        niche_nodes_enabled,
     } = services;
     match job.kind.as_str() {
         "work_fetch_requested" => {
@@ -793,23 +797,20 @@ async fn handle_job_with_document_services_inner(
             )
             .await
         }
-        "automation_run" => {
-            let lease = lease.ok_or_else(|| {
-                anyhow::anyhow!("automation job processing requires its lease owner")
-            })?;
-            handle_automation_run(&pool, job, lease, ai_gateway.as_deref()).await
+        deepref_app::durable_runs::DURABLE_RUN_STEP_JOB_KIND => {
+            let lease = lease.ok_or_else(|| anyhow::anyhow!("durable step requires its job lease"))?;
+            let payload: DurableStepJobPayload = serde_json::from_value(job.payload.clone())?;
+            match payload.handler_kind.as_str() {
+                "workflow" => crate::workflows::handle_step(&pool, job, lease, ai_gateway.clone(),niche_nodes_enabled).await,
+                "automation" | "review" => handle_durable_recipe_step(&pool, job, lease, ai_gateway.as_deref(), payload).await,
+                other => anyhow::bail!("unsupported durable handler kind: {other}"),
+            }
         }
         deepref_app::ASSISTANT_AGENT_RUN_JOB_KIND => {
             let lease = lease.ok_or_else(|| {
                 anyhow::anyhow!("assistant job processing requires its lease owner")
             })?;
             crate::assistant::handle_assistant_agent_run(&pool, job, &lease.owner).await
-        }
-        "workflow_step" => {
-            let lease = lease.ok_or_else(|| {
-                anyhow::anyhow!("workflow step processing requires its job lease")
-            })?;
-            crate::workflows::handle_step(&pool, job, lease, ai_gateway.clone()).await
         }
         "recompute_prisma" => Ok(DeliveryAction::Ack),
         "retrieve_document" => {
@@ -824,83 +825,69 @@ async fn handle_job_with_document_services_inner(
 
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
-struct AutomationRunJobPayload {
-    automation_run_id: Uuid,
+struct DurableStepJobPayload {
+    run_id: Uuid,
+    step_id: Uuid,
+    handler_kind: String,
 }
 
 const UNKNOWN_AUTOMATION_STEP_ERROR: &str =
     "automation step is not an accepted built-in deterministic action";
 
-async fn handle_automation_run(
+async fn handle_durable_recipe_step(
     pool: &sqlx::PgPool,
     job: &deepref_application::jobs::ClaimedJob,
     lease: &JobLease,
     ai_gateway: Option<&dyn AiGateway>,
+    payload: DurableStepJobPayload,
 ) -> anyhow::Result<DeliveryAction> {
-    let payload: AutomationRunJobPayload = serde_json::from_value(job.payload.clone())?;
-    let run_id = deepref_application::AutomationRunId::new(payload.automation_run_id)
-        .map_err(|error| anyhow::anyhow!("automation run id is invalid: {error}"))?;
-    let project_id =
-        deepref_app::get_claimed_automation_job_project_id_for_run(pool, lease, run_id)
-            .await?
-            .ok_or_else(|| anyhow::anyhow!("automation job and run association is invalid"))?;
-    let project_uuid = project_id.as_uuid();
-
-    loop {
-        let Some(step) =
-            deepref_app::begin_next_automation_step(pool, project_id, run_id, lease).await?
-        else {
-            deepref_app::finalize_automation_run(pool, project_id, run_id).await?;
+    let run_id = deepref_application::AutomationRunId::new(payload.run_id)?;
+    let project_id = job.project_id;
+    let step = if payload.handler_kind == "review" {
+        let run = deepref_app::get_automation_run(pool, project_id, run_id).await?;
+        run.steps.into_iter().find(|step| step.key == "execute_compiled_review")
+            .ok_or_else(|| anyhow::anyhow!("review run lacks its recipe detail"))?
+    } else {
+        let Some(step) = deepref_app::begin_next_automation_step(pool, project_id, run_id, lease).await? else {
             return Ok(DeliveryAction::Ack);
         };
-
-        if step.key == "recompute_project_metrics"
-            && step.kind == deepref_application::AutomationStepKind::DeterministicAction
-        {
-            deepref_app::recompute_project_metrics(pool, project_uuid).await?;
-            deepref_app::complete_automation_step(pool, project_id, step.id, lease).await?;
-            continue;
+        if step.id.as_uuid() != payload.step_id {
+            anyhow::bail!("durable payload does not target the claimed recipe step");
         }
-
-        if step.key == "execute_compiled_review"
-            && step.kind == deepref_application::AutomationStepKind::AiTask
-        {
-            let gateway = ai_gateway.ok_or_else(|| {
-                anyhow::anyhow!("compiled review execution requires an AI gateway")
-            })?;
-            match execute_compiled_review(pool, project_id, run_id, &step, lease, gateway).await {
-                Ok(()) => continue,
-                Err(error) if job.attempts < job.max_attempts => return Err(error),
-                Err(error) => {
-                    let message = bounded_worker_error(&error);
-                    deepref_app::fail_review_run(
-                        pool,
-                        project_id,
-                        deepref_review::ReviewRunId::new(run_id.as_uuid())?,
-                        "review_execution_failed",
-                        &message,
-                    )
-                    .await?;
-                    deepref_app::fail_automation_step(
-                        pool, project_id, step.id, lease, &message,
-                    )
-                    .await?;
-                    deepref_app::finalize_automation_run(pool, project_id, run_id).await?;
-                    return Ok(DeliveryAction::Terminate);
-                }
+        step
+    };
+    if step.key == "recompute_project_metrics"
+        && step.kind == deepref_application::AutomationStepKind::DeterministicAction
+    {
+        deepref_app::recompute_project_metrics(pool, project_id.as_uuid()).await?;
+        deepref_app::complete_automation_step(pool, project_id, step.id, lease).await?;
+    } else if step.key == "execute_compiled_review"
+        && step.kind == deepref_application::AutomationStepKind::AiTask
+    {
+        let gateway = ai_gateway.ok_or_else(|| anyhow::anyhow!("compiled review requires an AI gateway"))?;
+        match execute_compiled_review(pool, project_id, run_id, &step, lease, gateway).await {
+            Ok(()) => {},
+            Err(error) if matches!(error.downcast_ref::<deepref_app::PostgresReviewError>(),
+                Some(deepref_app::PostgresReviewError::StepScheduled)) => return Ok(DeliveryAction::Ack),
+            Err(error) if job.attempts < job.max_attempts => return Err(error),
+            Err(error) => {
+                let message = bounded_worker_error(&error);
+                let mut tx = pool.begin().await?;
+                deepref_app::durable_runs::finish_step(&mut tx,payload.step_id,lease,"failed",Some(&message),None).await?;
+                tx.commit().await?;
+                deepref_app::fail_review_run(pool,project_id,deepref_review::ReviewRunId::new(payload.run_id)?,
+                    "review_execution_failed",&message).await?;
+                return Ok(DeliveryAction::Terminate);
             }
         }
-
-        deepref_app::fail_automation_step(
-            pool,
-            project_id,
-            step.id,
-            lease,
-            UNKNOWN_AUTOMATION_STEP_ERROR,
-        )
-        .await?;
-        deepref_app::finalize_automation_run(pool, project_id, run_id).await?;
+    } else {
+        deepref_app::fail_automation_step(pool,project_id,step.id,lease,UNKNOWN_AUTOMATION_STEP_ERROR).await?;
+        deepref_app::finalize_automation_run(pool,project_id,run_id).await?;
         return Ok(DeliveryAction::Terminate);
+    }
+    match deepref_app::finalize_automation_run(pool,project_id,run_id).await {
+        Ok(_) | Err(deepref_app::AutomationError::RunNotReady) => Ok(DeliveryAction::Ack),
+        Err(error) => Err(error.into()),
     }
 }
 
@@ -1697,8 +1684,8 @@ async fn latest_accepted_review_attempt(
     final_node_id: &str,
 ) -> anyhow::Result<Uuid> {
     sqlx::query_scalar(
-        "SELECT id FROM review_step_attempts
-         WHERE project_id=$1 AND automation_run_id=$2 AND node_id=$3
+        "SELECT id FROM review_attempt_details
+         WHERE project_id=$1 AND run_id=$2 AND node_id=$3
            AND accepted_at IS NOT NULL
          ORDER BY accepted_at DESC,id DESC LIMIT 1",
     )

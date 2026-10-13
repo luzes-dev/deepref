@@ -333,9 +333,10 @@ async fn stale_calibration_does_not_block_advisory_or_grant_scientific_authority
 /// The newest advisory run for a report.
 async fn latest_advisory_run(pool: &PgPool, project_id: Uuid) -> (Uuid, String) {
     sqlx::query_as(
-        "SELECT automation_run_id,state FROM review_run_manifests
-         WHERE project_id=$1 AND origin->>'kind'='advisory_triggered'
-         ORDER BY created_at DESC,automation_run_id DESC LIMIT 1",
+        "SELECT m.automation_run_id,r.status AS state FROM review_run_manifests m
+         JOIN durable_runs r ON r.id=m.automation_run_id
+         WHERE m.project_id=$1 AND m.origin->>'kind'='advisory_triggered'
+         ORDER BY m.created_at DESC,m.automation_run_id DESC LIMIT 1",
     )
     .bind(project_id)
     .fetch_one(pool)
@@ -347,7 +348,7 @@ async fn latest_advisory_run(pool: &PgPool, project_id: Uuid) -> (Uuid, String) 
 /// retry backoff had elapsed.
 async fn age_finished_runs(pool: &PgPool, project_id: Uuid) {
     sqlx::query(
-        "UPDATE review_run_manifests SET finished_at=finished_at-interval '1 day'
+        "UPDATE durable_runs SET finished_at=finished_at-interval '1 day'
          WHERE project_id=$1 AND finished_at IS NOT NULL",
     )
     .bind(project_id)

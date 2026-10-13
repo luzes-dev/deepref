@@ -1,6 +1,6 @@
 //! Worker side of the visual workflow engine.
 //!
-//! * `handle_step` runs one `workflow_step` job: it executes a single block,
+//! * `handle_step` runs the workflow handler of one `durable_run_step` job:
 //!   records the outcome and lets the planner queue what comes next.
 //! * `run_scheduler` fires due schedules, polls publication alerts and fails
 //!   steps whose job died.
@@ -92,7 +92,9 @@ impl From<deepref_app::WorkflowError> for NodeError {
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct StepPayload {
-    node_run_id: Uuid,
+    run_id: Uuid,
+    step_id: Uuid,
+    handler_kind: String,
 }
 
 fn backoff(attempt: i32) -> Duration {
@@ -111,9 +113,15 @@ pub async fn handle_step(
     job: &ClaimedJob,
     lease: &JobLease,
     ai_gateway: Option<Arc<dyn AiGateway>>,
+    niche_nodes_enabled: bool,
 ) -> anyhow::Result<DeliveryAction> {
     let payload: StepPayload = serde_json::from_value(job.payload.clone())?;
-    let execution = match begin_node_execution(pool, payload.node_run_id, lease).await? {
+    anyhow::ensure!(payload.handler_kind == "workflow", "wrong durable workflow handler");
+    let identity: Option<Uuid> = sqlx::query_scalar(
+        "SELECT run_id FROM durable_steps WHERE id=$1 AND handler_kind='workflow'",
+    ).bind(payload.step_id).fetch_optional(pool).await?;
+    anyhow::ensure!(identity == Some(payload.run_id), "durable workflow step/run mismatch");
+    let execution = match begin_node_execution(pool, payload.step_id, lease).await? {
         StepClaim::Stale => return Ok(DeliveryAction::Ack),
         StepClaim::Execute(execution) => *execution,
     };
@@ -121,17 +129,18 @@ pub async fn handle_step(
         pool,
         ai: ai_gateway.as_deref(),
         execution: &execution,
+        niche_nodes_enabled,
     };
     let finished = match nodes::execute(&context).await {
-        Ok(outcome) => finish_node_execution(pool, payload.node_run_id, lease, outcome).await?,
+        Ok(outcome) => finish_node_execution(pool, payload.step_id, lease, outcome).await?,
         Err(error) if error.retryable && job.attempts < job.max_attempts => {
-            record_node_retry(pool, payload.node_run_id, lease, &error.message).await?;
+            record_node_retry(pool, payload.step_id, lease, &error.message).await?;
             return Ok(DeliveryAction::Nak(backoff(job.attempts)));
         }
         Err(error) => {
             finish_node_execution(
                 pool,
-                payload.node_run_id,
+                payload.step_id,
                 lease,
                 NodeOutcome::Failed {
                     message: error.message,
@@ -143,7 +152,7 @@ pub async fn handle_step(
     if !finished {
         tracing::warn!(
             job_id = %job.id,
-            node_run_id = %payload.node_run_id,
+            node_run_id = %payload.step_id,
             attempt = lease.attempt,
             "workflow step outcome dropped because a newer claim owns the step"
         );

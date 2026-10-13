@@ -173,7 +173,7 @@ where
         "UPDATE jobs AS j
          SET state='running',lease_owner=$2,leased_until=now()+interval '5 minutes',
              lease_renewed_at=now(),attempts=CASE WHEN $3 THEN max_attempts ELSE attempts+1 END
-         FROM automation_runs AS r
+         FROM durable_runs AS r
          WHERE r.id=$1 AND j.id=r.job_id AND j.state='queued'
          RETURNING j.id,j.project_id,j.kind,j.payload,j.attempts,j.max_attempts",
     )

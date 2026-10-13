@@ -359,7 +359,9 @@ pub async fn load_audit_export_rows(
                       'ai_linkage_scope', 'automation_run_parent',
                       'provenance_kind', 'automation_run_record'
                     ) AS provenance
-             FROM automation_runs AS r
+             FROM (SELECT r.*, d.definition_id, d.recipe_id, d.recipe_version,
+                          d.trigger_kind, d.trigger_reference
+                   FROM durable_runs r JOIN automation_run_details d ON d.id=r.id) AS r
              JOIN jobs AS j
                ON j.project_id = r.project_id AND j.id = r.job_id
              LEFT JOIN LATERAL (
@@ -405,7 +407,7 @@ pub async fn load_audit_export_rows(
                       'provenance_kind', 'automation_job_record'
                     ) AS provenance
              FROM jobs AS j
-             WHERE j.project_id = $1 AND j.kind = 'automation_run' AND NOT EXISTS(SELECT 1 FROM automation_runs r WHERE r.project_id=j.project_id AND r.job_id=j.id AND NOT ai_first_run_visible(r.project_id,r.id))
+             WHERE j.project_id = $1 AND j.kind = 'durable_run_step' AND EXISTS(SELECT 1 FROM durable_runs r JOIN automation_run_details d ON d.id=r.id WHERE r.project_id=j.project_id AND r.job_id=j.id) AND NOT EXISTS(SELECT 1 FROM durable_runs r WHERE r.project_id=j.project_id AND r.job_id=j.id AND NOT ai_first_run_visible(r.project_id,r.id))
              UNION ALL
              SELECT s.id, r.created_at, 'automation_step_snapshot' AS event_type,
                     'automation_step_run' AS aggregate_type, s.id AS aggregate_id,
@@ -454,8 +456,10 @@ pub async fn load_audit_export_rows(
                       'ai_linkage_scope', 'automation_run_parent',
                       'provenance_kind', 'automation_step_run_record'
                     ) AS provenance
-             FROM automation_step_runs AS s
-             JOIN automation_runs AS r
+             FROM (SELECT s.*, s.run_id AS automation_run_id, d.step_kind
+                   FROM durable_steps s JOIN automation_step_details d ON d.id=s.id) AS s
+             JOIN (SELECT r.*, d.definition_id FROM durable_runs r
+                   JOIN automation_run_details d ON d.id=r.id) AS r
                ON r.project_id = s.project_id AND r.id = s.automation_run_id
              LEFT JOIN LATERAL (
                SELECT count(*) AS ai_run_count,
@@ -479,13 +483,13 @@ pub async fn load_audit_export_rows(
                     NULL::uuid AS supersedes_event_id, NULL::uuid AS undoes_event_id,
                     '{}'::jsonb AS previous_snapshot,
                     jsonb_strip_nulls(jsonb_build_object(
-                      'state', m.state,
+                      'state', r.status,
                       'state_code', m.state_code,
                       'state_message', m.state_message,
                       'candidate_hash', m.candidate_hash,
                       'proposal_id', m.proposal_id,
-                      'started_at', m.started_at,
-                      'finished_at', m.finished_at
+                      'started_at', r.started_at,
+                      'finished_at', r.finished_at
                     )) AS result_snapshot,
                     m.state_message AS notes,
                     jsonb_build_object(
@@ -506,7 +510,7 @@ pub async fn load_audit_export_rows(
                       'provenance_kind', 'review_run_manifest'
                     )) AS provenance
              FROM review_run_manifests AS m
-             JOIN automation_runs AS r
+             JOIN durable_runs AS r
                ON r.project_id=m.project_id AND r.id=m.automation_run_id
              WHERE m.project_id=$1 AND ai_first_run_visible(m.project_id,m.automation_run_id)
              UNION ALL
@@ -547,7 +551,10 @@ pub async fn load_audit_export_rows(
                       'predecessor_artifact_ids', COALESCE(lineage.predecessors, '[]'::jsonb),
                       'provenance_kind', 'review_step_attempt'
                     )) AS provenance
-             FROM review_step_attempts AS a
+             FROM (SELECT a.*, a.run_id AS automation_run_id, d.node_id, d.node_version,
+                          d.input_fingerprint, d.artifact_id, d.model_run_id,
+                          d.error_code, d.error_message, d.accepted_at
+                   FROM durable_attempts a JOIN review_attempt_details d ON d.id=a.id) AS a
              LEFT JOIN LATERAL (
                SELECT jsonb_agg(l.predecessor_artifact_id ORDER BY l.predecessor_artifact_id)
                         AS predecessors

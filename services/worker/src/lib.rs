@@ -120,6 +120,8 @@ pub async fn run_with_shutdown(
     // Workflow blocks that change review state follow the project's AI
     // autonomy settings.
     workflows::set_autonomy_gate(Arc::new(deepref_app::ProjectAutonomyGate::new(&pool)));
+    anyhow::ensure!(deepref_app::configure_workflow_runtime(config.runtime.workflow.niche_nodes_enabled),
+        "API and worker workflow feature configuration must agree");
     let (reconciler_shutdown, reconciler_signal) = watch::channel(false);
     tokio::spawn(workflows::run_scheduler(
         pool.clone(),
@@ -145,7 +147,8 @@ pub async fn run_with_shutdown(
         claim_lease: config.claim_lease,
         drain_deadline: config.runtime.telemetry.shutdown_deadline,
     };
-    let handler = production_handler(pool.clone(), config.claim_lease, document_store, ai_gateway);
+    let handler = production_handler(pool.clone(), config.claim_lease, document_store, ai_gateway,
+        config.runtime.workflow.niche_nodes_enabled);
     let loop_shutdown = {
         let reconciler_shutdown = reconciler_shutdown.clone();
         async move {
@@ -178,6 +181,7 @@ fn production_handler(
     claim_lease: Duration,
     document_store: Arc<DocumentStore>,
     ai_gateway: Arc<dyn AiGateway>,
+    niche_nodes_enabled: bool,
 ) -> JobHandler {
     Arc::new(move |job: ClaimedJob, lease: JobLease| {
         let pool = pool.clone();
@@ -192,6 +196,7 @@ fn production_handler(
                 Some(document_store),
                 None,
                 ai_gateway,
+                niche_nodes_enabled,
             )
             .await
         })

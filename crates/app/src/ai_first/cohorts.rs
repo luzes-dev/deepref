@@ -89,7 +89,7 @@ pub async fn get_ai_first_overview(
     .await?;
     let rows = sqlx::query("SELECT c.id,c.status,c.target_percent,c.reference_relevant,c.alpha_billionths,c.result,c.invalidation_reason,c.identity_flag_reason,
       (SELECT count(*) FROM ai_screening_cohort_members m WHERE m.cohort_id=c.id) AS members,
-      (SELECT count(*) FROM ai_screening_cohort_members m JOIN review_run_manifests r ON r.project_id=m.project_id AND r.automation_run_id=m.review_run_id WHERE m.cohort_id=c.id AND r.state='completed') AS evaluated,
+      (SELECT count(*) FROM ai_screening_cohort_members m JOIN durable_runs r ON r.project_id=m.project_id AND r.id=m.review_run_id WHERE m.cohort_id=c.id AND r.status='completed') AS evaluated,
       (SELECT count(*) FROM ai_screening_dispositions d WHERE d.cohort_id=c.id AND d.voided_at IS NULL AND d.finalized_at IS NULL) AS quarantined,
       (SELECT count(*) FROM ai_screening_cohort_members m WHERE m.cohort_id=c.id AND m.sampled) AS sampled,
       (SELECT count(*) FROM ai_screening_cohort_members m WHERE m.cohort_id=c.id AND m.audit_control) AS controls,

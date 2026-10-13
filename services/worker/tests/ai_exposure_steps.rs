@@ -68,7 +68,7 @@ async fn drain(pool: &PgPool, project: Uuid) {
             project,
             "unexpected job from another project"
         );
-        match workflows::handle_step(pool, &job, &job.lease("ai-exposure-test"), None)
+        match workflows::handle_step(pool, &job, &job.lease("ai-exposure-test"), None,false)
             .await
             .expect("step")
         {
@@ -184,6 +184,7 @@ async fn run_on_records(
         .expect("publish");
     let (version_id, graph) = get_published_graph(pool, workflow.id).await.expect("graph");
     let request = StartRun {
+        niche_nodes_enabled: false,
         project_id: project.as_uuid(),
         workflow_id: workflow.id,
         version_id: Some(version_id),

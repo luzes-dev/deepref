@@ -29,7 +29,22 @@ pub const NODE_SNAPSHOT_LIMIT_BYTES: i64 = 32 * 1024;
 /// Attempts per block execution (the first try plus retries).
 pub const NODE_MAX_ATTEMPTS: i32 = 4;
 pub const MAX_WORKFLOW_RUN_LIST_LIMIT: i64 = 100;
-pub const WORKFLOW_STEP_JOB_KIND: &str = "workflow_step";
+
+// Event dispatch is invoked by transactional use cases outside HTTP handlers.
+// Both production compositions install the same immutable runtime policy; a
+// mixed API/worker configuration is rejected instead of becoming last-writer-wins.
+static NICHE_NODES_ENABLED: std::sync::OnceLock<bool> = std::sync::OnceLock::new();
+
+pub fn configure_workflow_runtime(niche_nodes_enabled: bool) -> bool {
+    match NICHE_NODES_ENABLED.set(niche_nodes_enabled) {
+        Ok(()) => true,
+        Err(value) => NICHE_NODES_ENABLED.get() == Some(&value),
+    }
+}
+
+fn workflow_niche_nodes_enabled() -> bool {
+    NICHE_NODES_ENABLED.get().copied().unwrap_or(false)
+}
 
 #[derive(Debug, Error)]
 pub enum WorkflowError {
@@ -860,6 +875,7 @@ pub async fn get_workflow_http_secret(
 
 #[derive(Debug, Clone)]
 pub struct StartRun {
+    pub niche_nodes_enabled: bool,
     pub project_id: Uuid,
     pub workflow_id: Uuid,
     pub version_id: Option<Uuid>,
@@ -900,65 +916,48 @@ pub async fn start_run_in_transaction(
     tx: &mut Transaction<'_, Postgres>,
     request: &StartRun,
 ) -> Result<StartedRun, WorkflowError> {
+    if !deepref_application::workflows::catalog::graph_is_available(&request.graph,request.niche_nodes_enabled) {
+        return Err(WorkflowError::InvalidInput("Niche workflow nodes are disabled.".to_owned()));
+    }
     if serde_json::to_vec(&request.trigger_data)?.len() > MAX_TRIGGER_DATA_BYTES {
         return Err(WorkflowError::InvalidInput(
             "The information that started this automation is too large.".to_owned(),
         ));
     }
     let run_id = Uuid::new_v4();
-    let inserted: Option<Uuid> = sqlx::query_scalar(
-        "INSERT INTO workflow_runs
-           (id, project_id, workflow_id, version_id, graph, trigger_kind, trigger_data,
-            idempotency_key, test_mode, status, actor_kind, actor_id, started_at)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,'running',$10,$11,now())
-         ON CONFLICT (workflow_id, idempotency_key) DO NOTHING
-         RETURNING id",
-    )
-    .bind(run_id)
-    .bind(request.project_id)
-    .bind(request.workflow_id)
-    .bind(request.version_id)
-    .bind(serde_json::to_value(&request.graph)?)
-    .bind(&request.trigger_kind)
-    .bind(&request.trigger_data)
-    .bind(&request.idempotency_key)
-    .bind(request.test_mode)
-    .bind(&request.actor_kind)
-    .bind(&request.actor_id)
-    .fetch_optional(&mut **tx)
-    .await?;
-    let Some(run_id) = inserted else {
-        let existing: Uuid = sqlx::query_scalar(
-            "SELECT id FROM workflow_runs WHERE workflow_id=$1 AND idempotency_key=$2",
-        )
-        .bind(request.workflow_id)
-        .bind(&request.idempotency_key)
-        .fetch_one(&mut **tx)
-        .await?;
-        return Ok(StartedRun {
-            run_id: existing,
-            created: false,
-        });
-    };
+    // Serialize the workflow-scoped idempotency key before creating its canonical identity.
+    sqlx::query("SELECT id FROM workflows WHERE id=$1 FOR UPDATE")
+        .bind(request.workflow_id).fetch_one(&mut **tx).await?;
+    let existing: Option<Uuid> = sqlx::query_scalar(
+        "SELECT id FROM workflow_run_details WHERE workflow_id=$1 AND idempotency_key=$2",
+    ).bind(request.workflow_id).bind(&request.idempotency_key)
+        .fetch_optional(&mut **tx).await?;
+    if let Some(existing) = existing {
+        return Ok(StartedRun { run_id: existing, created: false });
+    }
+    sqlx::query(
+        "INSERT INTO durable_runs
+         (id,project_id,kind,status,actor_kind,actor_id,idempotency_key,started_at)
+         VALUES ($1,$2,'workflow','running',$3,$4,$5,now())",
+    ).bind(run_id).bind(request.project_id).bind(&request.actor_kind)
+        .bind(&request.actor_id).bind(&request.idempotency_key)
+        .execute(&mut **tx).await?;
+    sqlx::query(
+        "INSERT INTO workflow_run_details
+         (id,project_id,workflow_id,version_id,graph,trigger_kind,trigger_data,idempotency_key,test_mode)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9)",
+    ).bind(run_id).bind(request.project_id).bind(request.workflow_id)
+        .bind(request.version_id).bind(serde_json::to_value(&request.graph)?)
+        .bind(&request.trigger_kind).bind(&request.trigger_data)
+        .bind(&request.idempotency_key).bind(request.test_mode)
+        .execute(&mut **tx).await?;
     let trigger = request
         .graph
         .trigger_node()
         .ok_or_else(|| WorkflowError::InvalidInput("The automation has no trigger.".to_owned()))?;
     let (output, fired) = trigger_outputs(&trigger.node_type, &request.trigger_data);
-    sqlx::query(
-        "INSERT INTO workflow_node_runs
-           (project_id, run_id, node_id, iteration, node_type, status, attempts, output,
-            fired_ports, started_at, finished_at)
-         VALUES ($1,$2,$3,'',$4,'completed',1,$5,$6,now(),now())",
-    )
-    .bind(request.project_id)
-    .bind(run_id)
-    .bind(&trigger.id)
-    .bind(&trigger.node_type)
-    .bind(output)
-    .bind(&fired)
-    .execute(&mut **tx)
-    .await?;
+    insert_workflow_step(tx, request.project_id, run_id, &trigger.id, "",
+        &trigger.node_type, "completed", Some(&output), &fired, None).await?;
     advance_run_in_transaction(tx, run_id).await?;
     Ok(StartedRun {
         run_id,
@@ -986,12 +985,38 @@ fn snapshot_from_row(row: &PgRow) -> Result<NodeRunSnapshot, WorkflowError> {
     })
 }
 
+async fn insert_workflow_step(
+    tx: &mut Transaction<'_, Postgres>, project_id: Uuid, run_id: Uuid,
+    node_id: &str, iteration: &str, node_type: &str, status: &str,
+    output: Option<&Value>, fired: &[String], note: Option<&str>,
+) -> Result<Option<Uuid>, WorkflowError> {
+    let existing: Option<Uuid> = sqlx::query_scalar(
+        "SELECT id FROM workflow_step_details WHERE run_id=$1 AND node_id=$2 AND iteration=$3",
+    ).bind(run_id).bind(node_id).bind(iteration).fetch_optional(&mut **tx).await?;
+    if existing.is_some() { return Ok(None); }
+    let id = Uuid::new_v4();
+    sqlx::query(
+        "INSERT INTO durable_steps (id,project_id,run_id,handler_kind,step_key,status,output,attempts,started_at,finished_at)
+         VALUES ($1,$2,$3,'workflow',$4,$5,$6,
+           CASE WHEN $5='completed' THEN 1 ELSE 0 END,
+           CASE WHEN $5='completed' THEN now() END,
+           CASE WHEN $5 IN ('completed','skipped') THEN now() END)",
+    ).bind(id).bind(project_id).bind(run_id).bind(node_id)
+        .bind(status).bind(output).execute(&mut **tx).await?;
+    sqlx::query(
+        "INSERT INTO workflow_step_details (id,run_id,node_id,iteration,node_type,fired_ports,note)
+         VALUES ($1,$2,$3,$4,$5,$6,$7)",
+    ).bind(id).bind(run_id).bind(node_id).bind(iteration).bind(node_type)
+        .bind(fired).bind(note).execute(&mut **tx).await?;
+    Ok(Some(id))
+}
 async fn load_snapshots(
     tx: &mut Transaction<'_, Postgres>,
     run_id: Uuid,
 ) -> Result<Vec<NodeRunSnapshot>, WorkflowError> {
     let rows = sqlx::query(
-        "SELECT node_id, iteration, status, fired_ports, items FROM workflow_node_runs WHERE run_id=$1",
+        "SELECT d.node_id, d.iteration, s.status, d.fired_ports, d.items
+         FROM durable_steps s JOIN workflow_step_details d ON d.id=s.id WHERE s.run_id=$1",
     )
     .bind(run_id)
     .fetch_all(&mut **tx)
@@ -1039,8 +1064,8 @@ pub async fn advance_run_in_transaction(
     run_id: Uuid,
 ) -> Result<(), WorkflowError> {
     let row = sqlx::query(
-        "SELECT project_id, workflow_id, graph, status, test_mode
-         FROM workflow_runs WHERE id=$1 FOR UPDATE",
+        "SELECT r.project_id, d.workflow_id, d.graph, r.status, d.test_mode
+         FROM durable_runs r JOIN workflow_run_details d ON d.id=r.id WHERE r.id=$1 FOR UPDATE OF r",
     )
     .bind(run_id)
     .fetch_optional(&mut **tx)
@@ -1061,39 +1086,15 @@ pub async fn advance_run_in_transaction(
         let node_type = graph
             .node(node_id)
             .map_or_else(String::new, |node| node.node_type.clone());
-        sqlx::query(
-            "INSERT INTO workflow_node_runs
-               (project_id, run_id, node_id, iteration, node_type, status, note, finished_at)
-             VALUES ($1,$2,$3,$4,$5,'skipped',$6,now())
-             ON CONFLICT (run_id,node_id,iteration) DO NOTHING",
-        )
-        .bind(project_id)
-        .bind(run_id)
-        .bind(node_id)
-        .bind(iteration)
-        .bind(node_type)
-        .bind(reason)
-        .execute(&mut **tx)
-        .await?;
+        insert_workflow_step(tx, project_id, run_id, node_id, iteration,
+            &node_type, "skipped", None, &[], Some(reason)).await?;
     }
     for planned in &plan.ready {
         let node_type = graph
             .node(&planned.node_id)
             .map_or_else(String::new, |node| node.node_type.clone());
-        let node_run_id: Option<Uuid> = sqlx::query_scalar(
-            "INSERT INTO workflow_node_runs
-               (project_id, run_id, node_id, iteration, node_type, status)
-             VALUES ($1,$2,$3,$4,$5,'queued')
-             ON CONFLICT (run_id,node_id,iteration) DO NOTHING
-             RETURNING id",
-        )
-        .bind(project_id)
-        .bind(run_id)
-        .bind(&planned.node_id)
-        .bind(&planned.iteration)
-        .bind(node_type)
-        .fetch_optional(&mut **tx)
-        .await?;
+        let node_run_id = insert_workflow_step(tx, project_id, run_id,
+            &planned.node_id, &planned.iteration, &node_type, "queued", None, &[], None).await?;
         if let Some(node_run_id) = node_run_id {
             sqlx::query(
                 "INSERT INTO jobs (id,project_id,kind,payload,priority,max_attempts,dedupe_key,available_at)
@@ -1102,8 +1103,8 @@ pub async fn advance_run_in_transaction(
             )
             .bind(Uuid::new_v4())
             .bind(project_id)
-            .bind(WORKFLOW_STEP_JOB_KIND)
-            .bind(json!({ "node_run_id": node_run_id }))
+            .bind(crate::durable_runs::DURABLE_RUN_STEP_JOB_KIND)
+            .bind(json!({ "run_id": run_id, "step_id": node_run_id, "handler_kind": "workflow" }))
             .bind(NODE_MAX_ATTEMPTS)
             .bind(format!("workflow_step:{node_run_id}"))
             .bind(planned.delay_secs as f64)
@@ -1114,7 +1115,7 @@ pub async fn advance_run_in_transaction(
     if plan.finished {
         let first_error: Option<String> = if plan.failed {
             sqlx::query_scalar(
-                "SELECT error FROM workflow_node_runs
+                "SELECT error FROM durable_steps
                  WHERE run_id=$1 AND status='failed' ORDER BY finished_at LIMIT 1",
             )
             .bind(run_id)
@@ -1128,7 +1129,7 @@ pub async fn advance_run_in_transaction(
             plan.failed
                 .then(|| "A step did not finish, so the automation stopped.".to_owned())
         });
-        sqlx::query("UPDATE workflow_runs SET status=$2, error=$3, finished_at=now() WHERE id=$1")
+        sqlx::query("UPDATE durable_runs SET status=$2, error=$3, finished_at=now() WHERE id=$1")
             .bind(run_id)
             .bind(if plan.failed { "failed" } else { "completed" })
             .bind(stop_reason.as_deref())
@@ -1145,8 +1146,8 @@ pub async fn advance_run_in_transaction(
     Ok(())
 }
 
-/// Request cancellation: queued steps are cancelled at once, a running step
-/// finishes its current attempt but nothing further is planned.
+/// Cancel the canonical run and its unfinished attempts. An in-flight external
+/// operation may return, but its fenced outcome cannot schedule more work.
 pub async fn cancel_workflow_run(
     pool: &PgPool,
     project_id: ProjectId,
@@ -1154,7 +1155,7 @@ pub async fn cancel_workflow_run(
 ) -> Result<(), WorkflowError> {
     let mut tx = pool.begin().await?;
     let status: Option<String> = sqlx::query_scalar(
-        "SELECT status FROM workflow_runs WHERE project_id=$1 AND id=$2 FOR UPDATE",
+        "SELECT status FROM durable_runs WHERE project_id=$1 AND id=$2 AND kind='workflow' FOR UPDATE",
     )
     .bind(project_uuid(project_id))
     .bind(run_id)
@@ -1165,15 +1166,18 @@ pub async fn cancel_workflow_run(
         return Err(WorkflowError::RunFinished);
     }
     sqlx::query(
-        "UPDATE workflow_node_runs SET status='cancelled', finished_at=now(),
-                note='Cancelled before it started.'
-         WHERE run_id=$1 AND status='queued'",
+        "UPDATE durable_steps SET status='cancelled', finished_at=now()
+         WHERE run_id=$1 AND status IN ('queued','waiting','running')",
     )
     .bind(run_id)
     .execute(&mut *tx)
     .await?;
     sqlx::query(
-        "UPDATE workflow_runs SET status='cancelled', finished_at=now(),
+        "UPDATE durable_attempts SET status='cancelled',finished_at=now()
+         WHERE run_id=$1 AND status='running'",
+    ).bind(run_id).execute(&mut *tx).await?;
+    sqlx::query(
+        "UPDATE durable_runs SET status='cancelled', finished_at=now(),
                 error='Cancelled by a person.'
          WHERE id=$1",
     )
@@ -1184,13 +1188,13 @@ pub async fn cancel_workflow_run(
     Ok(())
 }
 
-const NODE_RUN_SELECT: &str = "SELECT id, node_id, node_type, iteration, status, attempts,
-        CASE WHEN octet_length(input::text) > $2 THEN NULL ELSE input END AS input,
-        CASE WHEN octet_length(input::text) > $2 THEN left(input::text, 2000) END AS input_preview,
-        CASE WHEN octet_length(output::text) > $2 THEN NULL ELSE output END AS output,
-        CASE WHEN octet_length(output::text) > $2 THEN left(output::text, 2000) END AS output_preview,
-        note, error, created_at, started_at, finished_at
-     FROM workflow_node_runs";
+const NODE_RUN_SELECT: &str = "SELECT s.id, d.node_id, d.node_type, d.iteration, s.status, s.attempts,
+        CASE WHEN octet_length(d.input::text) > $2 THEN NULL ELSE d.input END AS input,
+        CASE WHEN octet_length(d.input::text) > $2 THEN left(d.input::text, 2000) END AS input_preview,
+        CASE WHEN octet_length(s.output::text) > $2 THEN NULL ELSE s.output END AS output,
+        CASE WHEN octet_length(s.output::text) > $2 THEN left(s.output::text, 2000) END AS output_preview,
+        d.note, s.error, s.created_at, s.started_at, s.finished_at
+     FROM durable_steps s JOIN workflow_step_details d ON d.id=s.id";
 
 fn node_run_from_row(row: &PgRow) -> NodeRunRecord {
     NodeRunRecord {
@@ -1212,12 +1216,12 @@ fn node_run_from_row(row: &PgRow) -> NodeRunRecord {
     }
 }
 
-const RUN_SELECT: &str = "SELECT r.id, r.project_id, r.workflow_id, w.name AS workflow_name,
-        v.version, r.trigger_kind, r.status, r.test_mode, r.actor_kind, r.actor_id,
-        r.error, r.created_at, r.started_at, r.finished_at, r.trigger_data, r.graph
-     FROM workflow_runs r
-     JOIN workflows w ON w.id = r.workflow_id
-     LEFT JOIN workflow_versions v ON v.id = r.version_id";
+const RUN_SELECT: &str = "SELECT r.id, r.project_id, d.workflow_id, w.name AS workflow_name,
+        v.version, d.trigger_kind, r.status, d.test_mode, r.actor_kind, r.actor_id,
+        r.error, r.created_at, r.started_at, r.finished_at, d.trigger_data, d.graph
+     FROM durable_runs r JOIN workflow_run_details d ON d.id=r.id
+     JOIN workflows w ON w.id = d.workflow_id
+     LEFT JOIN workflow_versions v ON v.id = d.version_id";
 
 fn run_from_row(
     row: &PgRow,
@@ -1258,7 +1262,7 @@ pub async fn list_workflow_runs(
     // Run snapshots carry raw node input and output, including screening judgments
     // written by `data.find_records`, so a blind audit withholds them project-wide.
     let rows = sqlx::query(sqlx::AssertSqlSafe(format!(
-        "{RUN_SELECT} WHERE r.project_id=$1 AND ($2::uuid IS NULL OR r.workflow_id=$2)
+        "{RUN_SELECT} WHERE r.project_id=$1 AND ($2::uuid IS NULL OR d.workflow_id=$2)
          AND ai_first_run_visible(r.project_id, r.id)
          ORDER BY r.created_at DESC, r.id DESC LIMIT $3"
     )))
@@ -1290,16 +1294,16 @@ pub async fn review_counts_for_runs(
         return Ok(HashMap::new());
     }
     let rows = sqlx::query(
-        "SELECT run_id,
-            SUM(jsonb_array_length(output->'included'))::bigint AS included,
-            SUM(jsonb_array_length(output->'excluded'))::bigint AS excluded,
-            SUM(jsonb_array_length(output->'unsure'))::bigint AS unsure
-         FROM workflow_node_runs
-         WHERE run_id = ANY($1) AND node_type = 'ai.run_review'
-           AND jsonb_typeof(output->'included') = 'array'
-           AND jsonb_typeof(output->'excluded') = 'array'
-           AND jsonb_typeof(output->'unsure') = 'array'
-         GROUP BY run_id",
+        "SELECT s.run_id,
+            SUM(jsonb_array_length(s.output->'included'))::bigint AS included,
+            SUM(jsonb_array_length(s.output->'excluded'))::bigint AS excluded,
+            SUM(jsonb_array_length(s.output->'unsure'))::bigint AS unsure
+         FROM durable_steps s JOIN workflow_step_details d ON d.id=s.id
+         WHERE s.run_id = ANY($1) AND d.node_type = 'ai.run_review'
+           AND jsonb_typeof(s.output->'included') = 'array'
+           AND jsonb_typeof(s.output->'excluded') = 'array'
+           AND jsonb_typeof(s.output->'unsure') = 'array'
+         GROUP BY s.run_id",
     )
     .bind(run_ids)
     .fetch_all(pool)
@@ -1335,7 +1339,7 @@ pub async fn get_workflow_run(
     .await?
     .ok_or(WorkflowError::RunNotFound)?;
     let nodes = sqlx::query(sqlx::AssertSqlSafe(format!(
-        "{NODE_RUN_SELECT} WHERE run_id=$1 ORDER BY COALESCE(started_at, finished_at, created_at), created_at"
+        "{NODE_RUN_SELECT} WHERE s.run_id=$1 ORDER BY COALESCE(s.started_at, s.finished_at, s.created_at), s.created_at"
     )))
     .bind(run_id)
     .bind(NODE_SNAPSHOT_LIMIT_BYTES)
@@ -1398,56 +1402,17 @@ pub async fn begin_node_execution(
     lease: &JobLease,
 ) -> Result<StepClaim, WorkflowError> {
     let mut tx = pool.begin().await?;
-    // `holds_lease`: the caller's claim still owns its job. `claim_is_live`:
-    // the claim recorded on a running step still owns *its* job, so another
-    // execution is in flight and must not be duplicated.
-    let row = sqlx::query(
-        "SELECT n.run_id, n.project_id, n.node_id, n.node_type, n.iteration, n.status,
-                n.wait_state, n.claimed_job_id, n.claimed_attempt,
-                r.status AS run_status, r.graph, r.test_mode, r.workflow_id,
-                r.actor_kind, r.actor_id, r.trigger_data,
-                EXISTS (
-                  SELECT 1 FROM jobs j
-                  WHERE j.id=$2 AND j.state='running' AND j.lease_owner=$3
-                    AND j.attempts=$4 AND j.leased_until > now()
-                ) AS holds_lease,
-                EXISTS (
-                  SELECT 1 FROM jobs j
-                  WHERE j.id=n.claimed_job_id AND j.state='running'
-                    AND j.attempts=n.claimed_attempt AND j.leased_until > now()
-                ) AS claim_is_live
-         FROM workflow_node_runs n JOIN workflow_runs r ON r.id = n.run_id
-         WHERE n.id=$1 FOR UPDATE OF n",
-    )
-    .bind(node_run_id)
-    .bind(lease.id)
-    .bind(&lease.owner)
-    .bind(lease.attempt)
-    .fetch_optional(&mut *tx)
-    .await?;
-    let Some(row) = row else {
+    let Some(attempts) = crate::durable_runs::begin_step(&mut tx, node_run_id, lease).await? else {
         return Ok(StepClaim::Stale);
     };
-    let status: String = row.get("status");
-    let run_status: String = row.get("run_status");
-    if !matches!(status.as_str(), "queued" | "running")
-        || !matches!(run_status.as_str(), "queued" | "running")
-        || !row.get::<bool, _>("holds_lease")
-    {
-        return Ok(StepClaim::Stale);
-    }
-    if status == "running" {
-        let claimed = (
-            row.get::<Option<Uuid>, _>("claimed_job_id"),
-            row.get::<Option<i32>, _>("claimed_attempt"),
-        );
-        // Already running under this very claim (a duplicate delivery), or
-        // under another claim that is still alive: do not run it twice. A
-        // running step whose claim died is taken over.
-        if claimed == (Some(lease.id), Some(lease.attempt)) || row.get::<bool, _>("claim_is_live") {
-            return Ok(StepClaim::Stale);
-        }
-    }
+    let row = sqlx::query(
+        "SELECT s.run_id, s.project_id, d.node_id, d.node_type, d.iteration,
+                d.wait_state, r.actor_kind, r.actor_id, w.graph, w.test_mode,
+                w.workflow_id, w.trigger_data
+         FROM durable_steps s JOIN workflow_step_details d ON d.id=s.id
+         JOIN durable_runs r ON r.id=s.run_id JOIN workflow_run_details w ON w.id=r.id
+         WHERE s.id=$1",
+    ).bind(node_run_id).fetch_one(&mut *tx).await?;
     let run_id: Uuid = row.get("run_id");
     let graph = parse_graph(row.get("graph"))?;
     let node_id: String = row.get("node_id");
@@ -1466,19 +1431,8 @@ pub async fn begin_node_execution(
     } else {
         input_value
     };
-    let attempts: i32 = sqlx::query_scalar(
-        "UPDATE workflow_node_runs
-         SET status='running', attempts=attempts+1, input=$2, error=NULL,
-             started_at=COALESCE(started_at, now()),
-             claimed_job_id=$3, claimed_attempt=$4
-         WHERE id=$1 RETURNING attempts",
-    )
-    .bind(node_run_id)
-    .bind(stored_input)
-    .bind(lease.id)
-    .bind(lease.attempt)
-    .fetch_one(&mut *tx)
-    .await?;
+    sqlx::query("UPDATE workflow_step_details SET input=$2 WHERE id=$1")
+        .bind(node_run_id).bind(stored_input).execute(&mut *tx).await?;
     tx.commit().await?;
     Ok(StepClaim::Execute(Box::new(NodeExecution {
         node_run_id,
@@ -1511,8 +1465,8 @@ async fn resolve_inputs(
         .map(|source| source.source_node.clone())
         .collect();
     let rows = sqlx::query(
-        "SELECT node_id, iteration, status, fired_ports, output
-         FROM workflow_node_runs WHERE run_id=$1 AND node_id = ANY($2)",
+        "SELECT d.node_id, d.iteration, s.status, d.fired_ports, s.output
+         FROM durable_steps s JOIN workflow_step_details d ON d.id=s.id WHERE s.run_id=$1 AND d.node_id = ANY($2)",
     )
     .bind(run_id)
     .bind(&source_nodes)
@@ -1627,129 +1581,51 @@ async fn finish_node(
     outcome: NodeOutcome,
 ) -> Result<bool, WorkflowError> {
     let mut tx = pool.begin().await?;
-    // Compare-and-set: only the claim that began the step may record its
-    // outcome, and only while it is still running.
-    let locked: Option<(Uuid, Uuid)> = match fence {
-        Some(lease) => {
-            sqlx::query_as(
-                "SELECT run_id, project_id FROM workflow_node_runs
-                 WHERE id=$1 AND status='running'
-                   AND claimed_job_id=$2 AND claimed_attempt=$3
-                   AND EXISTS (
-                     SELECT 1 FROM jobs j WHERE j.id=$2 AND j.state='running'
-                       AND j.attempts=$3 AND j.lease_owner=$4 AND j.leased_until > now()
-                   )
-                 FOR UPDATE",
-            )
-            .bind(node_run_id)
-            .bind(lease.id)
-            .bind(lease.attempt)
-            .bind(&lease.owner)
-            .fetch_optional(&mut *tx)
-            .await?
-        }
-        None => {
-            sqlx::query_as(
-                "SELECT run_id, project_id FROM workflow_node_runs
-                 WHERE id=$1 AND status IN ('queued','running')
-                 FOR UPDATE",
-            )
-            .bind(node_run_id)
-            .fetch_optional(&mut *tx)
-            .await?
-        }
-    };
-    let Some((run_id, project_id)) = locked else {
-        return Ok(false);
-    };
-    match outcome {
-        NodeOutcome::Waiting {
-            delay_secs,
-            poll,
-            note,
-            wait_state,
-        } => {
-            // The waiting step and its next look are written in one
-            // transaction: a crash cannot leave the step queued with nothing to
-            // run it. The look is keyed by its number, so a duplicate look is
-            // dropped by the queue.
-            sqlx::query(
-                "UPDATE workflow_node_runs
-                 SET status='queued', note=$2, wait_state=$3, error=NULL
-                 WHERE id=$1",
-            )
-            .bind(node_run_id)
-            .bind(note)
-            .bind(wait_state)
-            .execute(&mut *tx)
-            .await?;
-            sqlx::query(
-                "INSERT INTO jobs (id,project_id,kind,payload,priority,max_attempts,dedupe_key,available_at)
-                 VALUES ($1,$2,$3,$4,0,$5,$6, now() + ($7::double precision * interval '1 second'))
-                 ON CONFLICT (dedupe_key) DO NOTHING",
-            )
-            .bind(Uuid::new_v4())
-            .bind(project_id)
-            .bind(WORKFLOW_STEP_JOB_KIND)
-            .bind(json!({ "node_run_id": node_run_id }))
-            .bind(NODE_MAX_ATTEMPTS)
-            .bind(format!("workflow_step:{node_run_id}:wait:{poll}"))
-            .bind(delay_secs as f64)
-            .execute(&mut *tx)
-            .await?;
-            tx.commit().await?;
-            return Ok(true);
-        }
-        NodeOutcome::Completed {
-            outputs,
-            fired,
-            items,
-            note,
-        } => {
+    let row: Option<(Uuid, Uuid)> = sqlx::query_as(
+        "SELECT run_id,project_id FROM durable_steps WHERE id=$1 AND handler_kind='workflow'",
+    ).bind(node_run_id).fetch_optional(&mut *tx).await?;
+    let Some((run_id, project_id)) = row else { return Ok(false); };
+    let (status, error, output, fired, items, note, wait_state, wait) = match outcome {
+        NodeOutcome::Waiting { delay_secs, poll, note, wait_state } =>
+            ("queued", None, None, Vec::new(), 0, Some(note), Some(wait_state), Some((delay_secs, poll))),
+        NodeOutcome::Completed { outputs, fired, items, note } => {
             let output = Value::Object(outputs);
             if serde_json::to_vec(&output)?.len() > MAX_NODE_OUTPUT_BYTES {
-                sqlx::query(
-                    "UPDATE workflow_node_runs SET status='failed', finished_at=now(),
-                            error='This step produced more information than an automation can pass along. Narrow it down, for example with a filter.'
-                     WHERE id=$1",
-                )
-                .bind(node_run_id)
-                .execute(&mut *tx)
-                .await?;
+                ("failed", Some("This step produced more information than an automation can pass along. Narrow it down, for example with a filter.".to_owned()),
+                 None, Vec::new(), 0, None, None, None)
             } else {
-                sqlx::query(
-                    "UPDATE workflow_node_runs
-                     SET status='completed', output=$2, fired_ports=$3, items=$4, note=$5,
-                         error=NULL, finished_at=now(), wait_state=NULL
-                     WHERE id=$1",
-                )
-                .bind(node_run_id)
-                .bind(output)
-                .bind(&fired)
-                .bind(i32::try_from(items).unwrap_or(i32::MAX))
-                .bind(note)
-                .execute(&mut *tx)
-                .await?;
+                ("completed", None, Some(output), fired, i32::try_from(items).unwrap_or(i32::MAX), note, None, None)
             }
         }
-        NodeOutcome::Skipped { note } => {
-            sqlx::query(
-                "UPDATE workflow_node_runs SET status='skipped', note=$2, finished_at=now(), wait_state=NULL WHERE id=$1",
-            )
-            .bind(node_run_id)
-            .bind(note)
-            .execute(&mut *tx)
-            .await?;
-        }
-        NodeOutcome::Failed { message } => {
-            sqlx::query(
-                "UPDATE workflow_node_runs SET status='failed', error=$2, finished_at=now(), wait_state=NULL WHERE id=$1",
-            )
-            .bind(node_run_id)
-            .bind(truncate_message(&message))
-            .execute(&mut *tx)
-            .await?;
-        }
+        NodeOutcome::Skipped { note } =>
+            ("skipped", None, None, Vec::new(), 0, Some(note), None, None),
+        NodeOutcome::Failed { message } =>
+            ("failed", Some(truncate_message(&message)), None, Vec::new(), 0, None, None, None),
+    };
+    let changed = match fence {
+        Some(lease) => crate::durable_runs::finish_step(
+            &mut tx, node_run_id, lease, status, error.as_deref(), output.as_ref(),
+        ).await?,
+        None => crate::durable_runs::fail_unclaimed_step(
+            &mut tx, node_run_id, error.as_deref().unwrap_or("This step stopped unexpectedly."),
+        ).await?,
+    };
+    if !changed { return Ok(false); }
+    sqlx::query(
+        "UPDATE workflow_step_details SET fired_ports=$2,items=$3,note=$4,wait_state=$5 WHERE id=$1",
+    ).bind(node_run_id).bind(&fired).bind(items).bind(note).bind(wait_state)
+        .execute(&mut *tx).await?;
+    if let Some((delay_secs, poll)) = wait {
+        sqlx::query(
+            "INSERT INTO jobs (id,project_id,kind,payload,priority,max_attempts,dedupe_key,available_at)
+             VALUES ($1,$2,$3,$4,0,$5,$6,now()+($7::double precision * interval '1 second'))
+             ON CONFLICT (dedupe_key) DO NOTHING",
+        ).bind(Uuid::new_v4()).bind(project_id).bind(crate::durable_runs::DURABLE_RUN_STEP_JOB_KIND)
+            .bind(json!({"run_id":run_id,"step_id":node_run_id,"handler_kind":"workflow"}))
+            .bind(NODE_MAX_ATTEMPTS).bind(format!("workflow_step:{node_run_id}:wait:{poll}"))
+            .bind(delay_secs as f64).execute(&mut *tx).await?;
+        tx.commit().await?;
+        return Ok(true);
     }
     advance_run_in_transaction(&mut tx, run_id).await?;
     tx.commit().await?;
@@ -1763,21 +1639,9 @@ pub async fn record_node_retry(
     lease: &JobLease,
     message: &str,
 ) -> Result<(), WorkflowError> {
-    sqlx::query(
-        "UPDATE workflow_node_runs SET status='queued', error=$2
-         WHERE id=$1 AND status='running' AND claimed_job_id=$3 AND claimed_attempt=$4
-           AND EXISTS (
-             SELECT 1 FROM jobs j WHERE j.id=$3 AND j.state='running'
-               AND j.attempts=$4 AND j.lease_owner=$5 AND j.leased_until > now()
-           )",
-    )
-    .bind(node_run_id)
-    .bind(truncate_message(message))
-    .bind(lease.id)
-    .bind(lease.attempt)
-    .bind(&lease.owner)
-    .execute(pool)
-    .await?;
+    let mut tx = pool.begin().await?;
+    crate::durable_runs::retry_step(&mut tx, node_run_id, lease, Some(&truncate_message(message))).await?;
+    tx.commit().await?;
     Ok(())
 }
 
@@ -1792,9 +1656,9 @@ pub async fn fail_abandoned_steps(pool: &PgPool) -> Result<u64, WorkflowError> {
     // queued while a step waits for the AI.
     let rows = sqlx::query(
         "SELECT n.id FROM jobs j
-         JOIN workflow_node_runs n ON n.id = (j.payload->>'node_run_id')::uuid
-         WHERE j.kind = 'workflow_step' AND j.state IN ('dead','failed')
-           AND n.status IN ('queued','running')
+         JOIN durable_steps n ON n.id = (j.payload->>'step_id')::uuid
+         WHERE j.kind = 'durable_run_step' AND j.state IN ('dead','failed')
+           AND n.handler_kind='workflow' AND n.status IN ('queued','running')
          LIMIT 50",
     )
     .fetch_all(pool)
@@ -1870,6 +1734,7 @@ pub async fn claim_due_workflows(
         match trigger {
             Some(WorkflowTrigger::Schedule(_)) => {
                 let request = StartRun {
+                    niche_nodes_enabled: workflow_niche_nodes_enabled(),
                     project_id,
                     workflow_id: id,
                     version_id: Some(version_id),
@@ -1956,6 +1821,7 @@ pub async fn record_alert_poll(
         fresh_ids.sort();
         let digest = sha256_hex(&fresh_ids.join("|"));
         let request = StartRun {
+            niche_nodes_enabled: workflow_niche_nodes_enabled(),
             project_id: alert.project_id,
             workflow_id: alert.workflow_id,
             version_id: Some(alert.version_id),
@@ -2019,6 +1885,7 @@ pub async fn dispatch_workflow_event(
             continue;
         };
         let request = StartRun {
+            niche_nodes_enabled: workflow_niche_nodes_enabled(),
             project_id,
             workflow_id: row.get("id"),
             version_id: row.get("published_version_id"),

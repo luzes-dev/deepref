@@ -873,7 +873,7 @@ async fn a_failed_review_run_is_announced_once() {
 }
 
 async fn claim_run(pool: &PgPool, run_id: Uuid, owner: &str) -> JobLease {
-    let job_id: Uuid = sqlx::query_scalar("SELECT job_id FROM automation_runs WHERE id=$1")
+    let job_id: Uuid = sqlx::query_scalar("SELECT job_id FROM durable_runs WHERE id=$1")
         .bind(run_id)
         .fetch_one(pool)
         .await
@@ -1096,7 +1096,7 @@ async fn review_attempts_enforce_scope_lease_exact_reuse_lineage_and_immutabilit
         .await;
         assert!(immutable.is_err());
 
-        let job_id: Uuid = sqlx::query_scalar("SELECT job_id FROM automation_runs WHERE id=$1")
+        let job_id: Uuid = sqlx::query_scalar("SELECT job_id FROM durable_runs WHERE id=$1")
             .bind(snapshot.id.as_uuid())
             .fetch_one(&pool)
             .await

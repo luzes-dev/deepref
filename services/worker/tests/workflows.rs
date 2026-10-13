@@ -58,8 +58,8 @@ async fn drain(pool: &PgPool, project: Uuid) {
             project,
             "unexpected job from another project"
         );
-        assert_eq!(job.kind, "workflow_step");
-        match workflows::handle_step(pool, &job, &job.lease("workflow-test"), None)
+        assert_eq!(job.kind, "durable_run_step");
+        match workflows::handle_step(pool, &job, &job.lease("workflow-test"), None,true)
             .await
             .expect("step")
         {
@@ -128,6 +128,7 @@ async fn trigger_filter_notification_runs_and_dry_runs() {
         {"title": "Old", "year": 2018}, {"title": "New", "year": 2023}, {"title": "Newer", "year": 2024}
     ]});
     let request = StartRun {
+        niche_nodes_enabled: true,
         project_id: project.as_uuid(),
         workflow_id: workflow.id,
         version_id: Some(version_id),
@@ -187,6 +188,7 @@ async fn trigger_filter_notification_runs_and_dry_runs() {
     let test = start_run(
         &pool,
         &StartRun {
+            niche_nodes_enabled: true,
             project_id: project.as_uuid(),
             workflow_id: workflow.id,
             version_id: None,
@@ -271,6 +273,7 @@ async fn filter_with_no_match_skips_the_rest_and_for_each_fans_out() {
     let started = start_run(
         &pool,
         &StartRun {
+            niche_nodes_enabled: true,
             project_id: project.as_uuid(),
             workflow_id: workflow.id,
             version_id: Some(version_id),
@@ -387,6 +390,7 @@ async fn a_failed_run_is_recorded_once_and_a_test_run_stays_silent() {
     let started = start_run(
         &pool,
         &StartRun {
+            niche_nodes_enabled: true,
             project_id: project.as_uuid(),
             workflow_id: workflow.id,
             version_id: Some(version_id),
@@ -426,6 +430,7 @@ async fn a_failed_run_is_recorded_once_and_a_test_run_stays_silent() {
     let test = start_run(
         &pool,
         &StartRun {
+            niche_nodes_enabled: true,
             project_id: project.as_uuid(),
             workflow_id: workflow.id,
             version_id: None,
@@ -446,7 +451,7 @@ async fn a_failed_run_is_recorded_once_and_a_test_run_stays_silent() {
         .expect("the test step is queued");
     assert_eq!(claim.project_id.as_uuid(), project.as_uuid());
     let node_run_id =
-        Uuid::parse_str(claim.payload["node_run_id"].as_str().expect("payload")).expect("uuid");
+        Uuid::parse_str(claim.payload["step_id"].as_str().expect("payload")).expect("uuid");
     assert!(matches!(
         begin_node_execution(&pool, node_run_id, &claim.lease("wf-test-fail"))
             .await
@@ -510,7 +515,7 @@ async fn defer_queued_step(pool: &PgPool, project: ProjectId) -> Uuid {
         .expect("the notification step is queued");
     assert_eq!(claim.project_id.as_uuid(), project.as_uuid());
     let node_run_id =
-        Uuid::parse_str(claim.payload["node_run_id"].as_str().expect("payload")).expect("uuid");
+        Uuid::parse_str(claim.payload["step_id"].as_str().expect("payload")).expect("uuid");
     match begin_node_execution(pool, node_run_id, &claim.lease("wait-test"))
         .await
         .expect("begin")
@@ -572,6 +577,7 @@ async fn a_waiting_step_is_looked_at_later_and_a_lost_look_fails_it() {
         .await
         .expect("create");
     let start = |key: &str| StartRun {
+        niche_nodes_enabled: true,
         project_id: project.as_uuid(),
         workflow_id: workflow.id,
         version_id: None,
@@ -594,7 +600,7 @@ async fn a_waiting_step_is_looked_at_later_and_a_lost_look_fails_it() {
     assert_eq!(step.status, "queued");
     assert_eq!(step.note.as_deref(), Some("Waiting for the AI."));
     let saved: Option<Value> =
-        sqlx::query_scalar("SELECT wait_state FROM workflow_node_runs WHERE id=$1")
+        sqlx::query_scalar("SELECT wait_state FROM workflow_step_details WHERE id=$1")
             .bind(node_run_id)
             .fetch_one(&pool)
             .await
@@ -670,6 +676,7 @@ async fn claimed_notify_step(
     let run_id = start_run(
         pool,
         &StartRun {
+            niche_nodes_enabled: true,
             project_id: project.as_uuid(),
             workflow_id: workflow.id,
             version_id: None,
@@ -690,12 +697,12 @@ async fn claimed_notify_step(
         .expect("claim")
         .expect("the notify step is queued");
     let node_run_id =
-        Uuid::parse_str(job.payload["node_run_id"].as_str().expect("payload")).expect("uuid");
+        Uuid::parse_str(job.payload["step_id"].as_str().expect("payload")).expect("uuid");
     (run_id, node_run_id, job)
 }
 
 async fn node_attempts(pool: &PgPool, node_run_id: Uuid) -> i32 {
-    sqlx::query_scalar("SELECT attempts FROM workflow_node_runs WHERE id=$1")
+    sqlx::query_scalar("SELECT attempts FROM durable_steps WHERE id=$1")
         .bind(node_run_id)
         .fetch_one(pool)
         .await
@@ -724,8 +731,8 @@ async fn concurrent_handle_step_calls_on_one_node_execute_once() {
     let lease = job.lease("fence-worker");
 
     let (left, right) = tokio::join!(
-        workflows::handle_step(&pool, &job, &lease, None),
-        workflows::handle_step(&pool, &job, &lease, None),
+        workflows::handle_step(&pool, &job, &lease, None,true),
+        workflows::handle_step(&pool, &job, &lease, None,true),
     );
     assert_eq!(left.expect("left"), DeliveryAction::Ack);
     assert_eq!(right.expect("right"), DeliveryAction::Ack);
@@ -801,7 +808,7 @@ async fn a_stale_attempt_cannot_restart_or_overwrite_a_reclaimed_step() {
     assert_eq!(second.id, first.id);
     let live = second.lease("fence-worker");
     assert_eq!(
-        workflows::handle_step(&pool, &second, &live, None)
+        workflows::handle_step(&pool, &second, &live, None,true)
             .await
             .expect("live attempt"),
         DeliveryAction::Ack
@@ -835,4 +842,56 @@ async fn a_stale_attempt_cannot_restart_or_overwrite_a_reclaimed_step() {
         "completed"
     );
     assert_eq!(workflow_notifications(&pool, project.as_uuid()).await, 1);
+}
+
+#[tokio::test]
+async fn cancelling_a_running_step_prevents_its_wait_reschedule() {
+    let _guard = GUARD.lock().await;
+    let Some(pool) = database().await else { return };
+    let project = new_project(&pool, "wf-cancel-running").await;
+    let (run_id, step_id, job) = claimed_notify_step(&pool, project, "cancel-worker").await;
+    let lease = job.lease("cancel-worker");
+    assert!(matches!(begin_node_execution(&pool, step_id, &lease).await.expect("begin"),
+        StepClaim::Execute(_)));
+    deepref_app::cancel_workflow_run(&pool, project, run_id).await.expect("cancel");
+    assert!(!finish_node_execution(&pool, step_id, &lease, NodeOutcome::Waiting {
+        delay_secs: 60, poll: 1, note: "waiting".to_owned(), wait_state: json!({"polls":1}),
+    }).await.expect("late wait"));
+    let looks: i64 = sqlx::query_scalar("SELECT count(*) FROM jobs WHERE dedupe_key=$1")
+        .bind(format!("workflow_step:{step_id}:wait:1")).fetch_one(&pool).await.expect("looks");
+    assert_eq!(looks, 0);
+    assert_eq!(get_workflow_run(&pool, project, run_id).await.expect("run").status, "cancelled");
+    assert!(!finish_node_execution(&pool, step_id, &lease, NodeOutcome::Completed {
+        outputs: serde_json::Map::new(), fired: vec!["done".to_owned()], items: 0, note: None,
+    }).await.expect("late completion"));
+    assert_eq!(notify_step(&pool, project, run_id).await.status, "cancelled");
+    let active: i64 = sqlx::query_scalar(
+        "SELECT count(*) FROM durable_steps WHERE run_id=$1 AND status IN ('queued','running','waiting')",
+    ).bind(run_id).fetch_one(&pool).await.expect("active steps");
+    assert_eq!(active, 0);
+}
+
+#[tokio::test]
+async fn a_dead_wait_job_cannot_reap_a_new_live_attempt() {
+    let _guard = GUARD.lock().await;
+    let Some(pool) = database().await else { return };
+    let project = new_project(&pool, "wf-reaper-live").await;
+    let (run_id, step_id, first) = claimed_notify_step(&pool, project, "wait-worker").await;
+    let lease = first.lease("wait-worker");
+    assert!(matches!(begin_node_execution(&pool, step_id, &lease).await.expect("begin"),
+        StepClaim::Execute(_)));
+    assert!(finish_node_execution(&pool, step_id, &lease, NodeOutcome::Waiting {
+        delay_secs: 0, poll: 1, note: "waiting".to_owned(), wait_state: json!({"polls":1}),
+    }).await.expect("wait"));
+    sqlx::query("UPDATE jobs SET state='dead',lease_owner=NULL,leased_until=NULL WHERE id=$1")
+        .bind(first.id).execute(&pool).await.expect("old dead look");
+    let next = claim_job(&pool, "live-worker", Duration::from_secs(60)).await
+        .expect("claim").expect("next look");
+    assert!(matches!(begin_node_execution(&pool, step_id, &next.lease("live-worker")).await.expect("begin next"),
+        StepClaim::Execute(_)));
+    assert_eq!(fail_abandoned_steps(&pool).await.expect("reap"), 0);
+    assert_eq!(notify_step(&pool, project, run_id).await.status, "running");
+    let attempts: i64 = sqlx::query_scalar("SELECT count(*) FROM durable_attempts WHERE step_id=$1")
+        .bind(step_id).fetch_one(&pool).await.expect("attempt ledger");
+    assert_eq!(attempts, 2);
 }

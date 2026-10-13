@@ -135,8 +135,8 @@ async fn all_typed_domain_events_dispatch_once_to_active_definitions() -> Result
         transaction.commit().await?;
 
         let rows = sqlx::query(
-            "SELECT trigger_kind,trigger_reference,idempotency_key,actor_kind,actor_id
-             FROM automation_runs WHERE project_id=$1 ORDER BY trigger_kind",
+            "SELECT d.trigger_kind,d.trigger_reference,d.idempotency_key,r.actor_kind,r.actor_id
+             FROM durable_runs r JOIN automation_run_details d ON d.id=r.id WHERE r.project_id=$1 ORDER BY d.trigger_kind",
         )
         .bind(project_id.as_uuid())
         .fetch_all(&pool)
@@ -160,7 +160,7 @@ async fn all_typed_domain_events_dispatch_once_to_active_definitions() -> Result
                 .all(|row| row.get::<String, _>("actor_id") == "automation-domain-event")
         );
         let project_jobs: i64 = sqlx::query_scalar(
-            "SELECT count(*) FROM jobs WHERE project_id=$1 AND kind='automation_run'",
+            "SELECT count(*) FROM jobs WHERE project_id=$1 AND kind='durable_run_step'",
         )
         .bind(project_id.as_uuid())
         .fetch_one(&pool)
@@ -219,12 +219,12 @@ async fn dispatch_rolls_back_with_source_transaction_and_is_project_isolated() -
         );
         transaction.rollback().await?;
         let source_runs: i64 =
-            sqlx::query_scalar("SELECT count(*) FROM automation_runs WHERE project_id=$1")
+            sqlx::query_scalar("SELECT count(*) FROM automation_run_details WHERE project_id=$1")
                 .bind(source_project.as_uuid())
                 .fetch_one(&pool)
                 .await?;
         let other_runs: i64 =
-            sqlx::query_scalar("SELECT count(*) FROM automation_runs WHERE project_id=$1")
+            sqlx::query_scalar("SELECT count(*) FROM automation_run_details WHERE project_id=$1")
                 .bind(other_project.as_uuid())
                 .fetch_one(&pool)
                 .await?;

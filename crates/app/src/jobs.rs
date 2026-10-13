@@ -98,6 +98,7 @@ pub async fn recover_expired_jobs(pool: &PgPool) -> anyhow::Result<u64> {
             );
         }
     }
+    crate::durable_runs::settle_exhausted_jobs(pool).await?;
     Ok(recovered.len() as u64)
 }
 
@@ -136,9 +137,9 @@ pub async fn get_claimed_automation_job_project_id_for_run(
     let project_id = sqlx::query_scalar!(
         r#"SELECT j.project_id as "project_id!"
          FROM jobs AS j
-         JOIN automation_runs AS r
+         JOIN durable_runs AS r
            ON r.project_id = j.project_id AND r.job_id = j.id
-         WHERE j.id=$1 AND j.kind='automation_run' AND j.state='running'
+         WHERE j.id=$1 AND j.kind='durable_run_step' AND j.state='running'
            AND j.lease_owner=$2 AND j.attempts=$4 AND j.leased_until > now()
            AND r.id=$3 AND j.project_id IS NOT NULL"#,
         lease.id,

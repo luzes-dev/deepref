@@ -599,7 +599,7 @@ where
         "UPDATE jobs AS j
          SET state='running',lease_owner=$2,leased_until=now()+interval '5 minutes',
              lease_renewed_at=now(),attempts=attempts+1
-         FROM automation_runs AS r
+         FROM durable_runs AS r
          WHERE r.id=$1 AND j.id=r.job_id AND j.state='queued'
          RETURNING j.id,j.project_id,j.kind,j.payload,j.attempts,j.max_attempts",
     )
@@ -700,7 +700,7 @@ async fn all_proposal_tools_schedule_observable_review_runs_without_domain_write
     }
     assert_eq!(*calls.lock().expect("gateway calls lock"), 0);
     let queued: i64 = sqlx::query_scalar(
-        "SELECT count(*) FROM review_run_manifests WHERE project_id=$1 AND state='queued'",
+        "SELECT count(*) FROM review_run_manifests m JOIN durable_runs r ON r.id=m.automation_run_id WHERE m.project_id=$1 AND r.status='queued'",
     )
     .bind(fixture.project_id)
     .fetch_one(&pool)
