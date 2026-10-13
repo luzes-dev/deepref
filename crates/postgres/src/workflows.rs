@@ -1579,11 +1579,16 @@ async fn finish_node(
                 "SELECT run_id, project_id FROM workflow_node_runs
                  WHERE id=$1 AND status='running'
                    AND claimed_job_id=$2 AND claimed_attempt=$3
+                   AND EXISTS (
+                     SELECT 1 FROM jobs j WHERE j.id=$2 AND j.state='running'
+                       AND j.attempts=$3 AND j.lease_owner=$4 AND j.leased_until > now()
+                   )
                  FOR UPDATE",
             )
             .bind(node_run_id)
             .bind(lease.id)
             .bind(lease.attempt)
+            .bind(&lease.owner)
             .fetch_optional(&mut *tx)
             .await?
         }
@@ -1704,12 +1709,17 @@ pub async fn record_node_retry(
 ) -> Result<(), WorkflowError> {
     sqlx::query(
         "UPDATE workflow_node_runs SET status='queued', error=$2
-         WHERE id=$1 AND status='running' AND claimed_job_id=$3 AND claimed_attempt=$4",
+         WHERE id=$1 AND status='running' AND claimed_job_id=$3 AND claimed_attempt=$4
+           AND EXISTS (
+             SELECT 1 FROM jobs j WHERE j.id=$3 AND j.state='running'
+               AND j.attempts=$4 AND j.lease_owner=$5 AND j.leased_until > now()
+           )",
     )
     .bind(node_run_id)
     .bind(truncate_message(message))
     .bind(lease.id)
     .bind(lease.attempt)
+    .bind(&lease.owner)
     .execute(pool)
     .await?;
     Ok(())

@@ -312,6 +312,8 @@ async fn process_claimed_job(
     let result = {
         let renew_pool = pool.clone();
         let renew_lease = lease.clone();
+        let handler_job = job.clone();
+        let handler_lease = lease.clone();
         run_with_lease_renewal(
             duration,
             move || {
@@ -319,7 +321,7 @@ async fn process_claimed_job(
                 let lease = renew_lease.clone();
                 async move { renew_job(&pool, &lease, duration).await }
             },
-            run_isolated(handler(job.clone(), lease.clone())),
+            run_isolated(async move { handler(handler_job, handler_lease).await }),
         )
         .await
     };
@@ -470,7 +472,10 @@ where
             result = &mut work => return result,
             _ = tokio::time::sleep_until(next_renewal) => {
                 let sent_at = Instant::now();
-                match renew().await {
+                let renewal = tokio::time::timeout_at(held_until, renew())
+                    .await
+                    .map_err(|_| anyhow::anyhow!("job lease renewal timed out before expiry"))?;
+                match renewal {
                     Ok(true) => {
                         held_until = sent_at + lease;
                         failures = 0;
@@ -566,5 +571,40 @@ mod tests {
         .await;
         assert!(result.is_err());
         assert!(started.elapsed() < Duration::from_secs(2));
+    }
+}
+
+#[allow(clippy::expect_used, clippy::unwrap_used, clippy::panic)]
+#[cfg(test)]
+mod lease_deadline_tests {
+    use super::*;
+
+    #[tokio::test]
+    async fn a_stalled_renewal_cannot_outlive_the_lease() {
+        let started = tokio::time::Instant::now();
+        let result = run_with_lease_renewal(
+            Duration::from_millis(300),
+            || std::future::pending::<anyhow::Result<bool>>(),
+            std::future::pending::<anyhow::Result<DeliveryAction>>(),
+        )
+        .await;
+        assert!(result.is_err());
+        assert!(started.elapsed() < Duration::from_secs(2));
+    }
+
+    #[tokio::test]
+    async fn a_panic_while_constructing_the_handler_future_is_isolated() {
+        let handler: JobHandler = Arc::new(|_, _| panic!("handler construction failed"));
+        let job = ClaimedJob {
+            id: uuid::Uuid::new_v4(),
+            project_id: deepref_domain::ProjectId::new(uuid::Uuid::new_v4()),
+            kind: "test".to_owned(),
+            payload: serde_json::json!({}),
+            attempts: 1,
+            max_attempts: 2,
+        };
+        let lease = job.lease("test-worker".to_owned());
+        let result = run_isolated(async move { handler(job, lease).await }).await;
+        assert!(result.unwrap_err().to_string().contains("handler construction failed"));
     }
 }
