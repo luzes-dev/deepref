@@ -10,6 +10,12 @@ variable "TAG" {
   default = ""
 }
 
+// Only a validated stable release publication should advance the rolling tag.
+variable "PUBLISH_LATEST" {
+  type    = bool
+  default = false
+}
+
 variable "OCI_SOURCE" {
   default = "https://github.com/luzes-dev/deepref"
 }
@@ -54,11 +60,10 @@ function "image_tags" {
   ] : (TAG == "latest" ? [
     "${REGISTRY}/${IMAGE_PREFIX}-${service}:latest",
     "${REGISTRY}/${IMAGE_PREFIX}-${service}:${GIT_TREE_HASH}"
-  ] : [
+  ] : concat([
     "${REGISTRY}/${IMAGE_PREFIX}-${service}:${TAG}",
-    "${REGISTRY}/${IMAGE_PREFIX}-${service}:latest",
     "${REGISTRY}/${IMAGE_PREFIX}-${service}:${GIT_TREE_HASH}"
-  ])
+  ], PUBLISH_LATEST ? ["${REGISTRY}/${IMAGE_PREFIX}-${service}:latest"] : []))
 }
 
 group "default" {
