@@ -67,6 +67,7 @@
 	let role = $state<StudyReportRole>(StudyReportRoleInput.report_of_study);
 	let groupingAction = $state<'generate' | 'accept' | 'reject' | null>(null);
 	let pendingGroupingProposalId = $state<string | null>(null);
+	let rejectedGroupingProposalId = $state<string | null>(null);
 	let classificationAction = $state<'accept' | 'reject' | null>(null);
 	let pendingClassificationProposalId = $state<string | null>(null);
 
@@ -313,6 +314,7 @@
 					reason: `Human reviewer ${decision === 'accept' ? 'accepted' : 'rejected'} study grouping suggestion.`
 				}
 			});
+			if (decision === 'reject') rejectedGroupingProposalId = proposal.id;
 			await refreshGroupingQueries(payload);
 		} catch (error) {
 			if (error instanceof ApiError && error.status === 409) {
@@ -623,7 +625,12 @@
 						onGenerate={() => void generateGrouping()}
 						onDecide={(decision) => void decideGrouping(decision)}
 					/>
-					<ReviewRunActions run={groupingReviewRun} />
+					<ReviewRunActions
+						run={groupingReviewRun}
+						allowRegenerate={!activeGroupingProposal &&
+							groupingReviewRun.state?.kind === 'completed' &&
+							groupingReviewRun.state.proposal_id === rejectedGroupingProposalId}
+					/>
 				</Tabs.Content>
 				<Tabs.Content value="history" class="pt-2"
 					><StudyHistoryPanel {history} /></Tabs.Content

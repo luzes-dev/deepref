@@ -171,6 +171,7 @@
 		)
 	);
 	const activeProposal = $derived(dataExtractionProposals[0]);
+	let rejectedProposalId = $state<string | null>(null);
 	const selectedStudyLabel = $derived(
 		selectedStudy?.title ?? selectedStudyId ?? 'Select a study'
 	);
@@ -707,6 +708,7 @@
 						reason: 'Human reviewer rejected the data extraction proposal.'
 					}
 				});
+				rejectedProposalId = proposal.id;
 			} else {
 				const validation = validateExtractionDrafts(fields, draftFields);
 				if (validation) {
@@ -875,7 +877,11 @@
 						? 'Generating…'
 						: 'Generate proposal'}
 				</Button>
-				<ReviewRunActions run={reviewRun} />
+				<ReviewRunActions
+					run={reviewRun}
+					allowRegenerate={reviewRun.state?.kind === 'completed' &&
+						reviewRun.state.proposal_id === rejectedProposalId}
+				/>
 			{/if}
 			<Button
 				variant="ghost"

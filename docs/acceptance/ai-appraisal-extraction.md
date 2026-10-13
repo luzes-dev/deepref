@@ -12,6 +12,24 @@ ungrounded model output fails a bounded step attempt; disagreement in screening 
 adjudication; and retries must reuse only an exact accepted fingerprint and create no duplicate
 proposal.
 
+### Retrying and regenerating review runs
+
+- A failed or blocked run exposes **Retry**, which starts another generation and may reuse
+  previously accepted steps with identical fingerprints. Plain duplicate requests return the
+  current queued, running, or completed generation.
+- After the reviewer successfully rejects the observed proposal, Appraisal, Extraction, and
+  Studies expose **Regenerate** for that completed run. A failed rejection or an accepted
+  proposal must not enable it. The new generation uses a new reuse epoch and does not reuse
+  the rejected opinion's model output.
+- Both actions use `POST /api/projects/:projectId/review-runs/:runId/retry`; regeneration sends
+  `{"regenerate": true}`. The server rechecks subject currency, project AI settings, and proposal
+  rejection before scheduling.
+- The page acceptance scenarios cover a rejected appraisal pre-fill, a rejected extraction
+  proposal, and a study-grouping rejection that first conflicts and then succeeds. These
+  regression changes require the integration owner's validation commands below; they are not
+  a record of a completed verification run.
+
+
 ## Study grouping review
 
 - The Studies screen requests a grounded grouping proposal for a report and displays the proposed

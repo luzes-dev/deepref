@@ -426,6 +426,7 @@ test('reviews study grouping proposals with typed provenance and refreshes after
 		reason: 'Human reviewer accepted study grouping suggestion.'
 	});
 	await expect(page.getByText('No pending grouping suggestion', { exact: true })).toBeVisible();
+	await expect(page.getByRole('button', { name: 'Regenerate', exact: true })).toHaveCount(0);
 
 	await page.getByRole('button', { name: 'Suggest study group' }).click();
 	await expect(page.getByTestId('study-grouping-choice')).toBeVisible();
@@ -436,6 +437,43 @@ test('reviews study grouping proposals with typed provenance and refreshes after
 		reason: 'Human reviewer rejected study grouping suggestion.'
 	});
 	await expect(page.getByRole('alert')).toContainText('Study data changed elsewhere');
+	await expect(page.getByRole('button', { name: 'Regenerate', exact: true })).toHaveCount(0);
+	await page.route(
+		'http://localhost:4173/api/projects/project-1/ai/proposals/grouping-2/decision',
+		async (route) => {
+			pendingProposal = undefined;
+			await route.fulfill({
+				json: { proposal: { ...groupingProposal('grouping-2'), status: 'rejected' } }
+			});
+		}
+	);
+	let regenerationRequests = 0;
+	await page.route(
+		'http://localhost:4173/api/projects/project-1/review-runs/grouping-run-2/retry',
+		async (route) => {
+			expect(route.request().postDataJSON()).toEqual({ regenerate: true });
+			regenerationRequests += 1;
+			pendingProposal = groupingProposal('grouping-3');
+			await route.fulfill({
+				status: 202,
+				json: {
+					id: 'grouping-run-3',
+					project_id: 'project-1',
+					definition: 'study_grouping',
+					subject: {},
+					origin: { kind: 'reviewer_requested' },
+					state: { kind: 'completed', proposal_id: pendingProposal.id },
+					created_at: '2026-01-01T00:00:02Z',
+					finished_at: '2026-01-01T00:00:03Z'
+				}
+			});
+		}
+	);
+	await page.getByRole('button', { name: 'Reject', exact: true }).click();
+	await page.getByRole('button', { name: 'Regenerate', exact: true }).click();
+	await expect.poll(() => regenerationRequests).toBe(1);
+	await expect(page.getByTestId('study-grouping-choice')).toBeVisible();
+	expect(generationRequests).toBe(2);
 });
 
 test('reviews study classification proposals without calling manual classification', async ({

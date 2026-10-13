@@ -164,6 +164,7 @@
 			.toSorted((a, b) => b.completed_at.localeCompare(a.completed_at))[0];
 	});
 	let selectedAiProposalId = $state<string | null>(null);
+	let rejectedAiProposalId = $state<string | null>(null);
 	let aiError = $state('');
 	const reviewRun = new ReviewRunObserver(
 		() => projectId,
@@ -336,6 +337,7 @@
 					...(reviewedPayload ? { reviewed_payload: reviewedPayload } : {})
 				}
 			});
+			if (decision === 'reject') rejectedAiProposalId = proposal.id;
 			selectedAiProposalId = null;
 			await refreshAfterDecision();
 			if (decision === 'accept') {
@@ -709,7 +711,11 @@
 						/>{:else}<Brain data-icon="inline-start" />{/if}
 					Pre-fill with AI
 				</Button>
-				<ReviewRunActions run={reviewRun} />
+				<ReviewRunActions
+					run={reviewRun}
+					allowRegenerate={reviewRun.state?.kind === 'completed' &&
+						reviewRun.state.proposal_id === rejectedAiProposalId}
+				/>
 				<span class="text-xs text-muted-foreground"
 					>Suggestions fill the form for your review; nothing is saved until you accept.</span
 				>
