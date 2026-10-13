@@ -856,3 +856,26 @@ async fn provider_refresh_rejects_invalid_sources_and_enforces_project_scope() {
 
     clean_acquisition_projects(&pool, &[project_id, other_project_id], &[]).await;
 }
+
+#[tokio::test]
+async fn ingestion_cancel_requires_an_existing_active_run() {
+    let Some(pool) = database().await else { return };
+    let project = Uuid::new_v4();
+    sqlx::query("INSERT INTO projects (id,name) VALUES ($1,'cancel test')")
+        .bind(project).execute(&pool).await.unwrap();
+    let cancel = |id| Request::builder().method("POST")
+        .uri(format!("/ingestions/{id}/cancel")).body(Body::empty()).unwrap();
+    assert_eq!(call(&pool, cancel(Uuid::new_v4())).await.status(), StatusCode::NOT_FOUND);
+    for status in ["queued", "running", "completed", "failed", "cancelled"] {
+        let id = Uuid::new_v4();
+        sqlx::query("INSERT INTO ingestions (id,project_id,status,max_depth,seed_count) VALUES ($1,$2,$3,1,1)")
+            .bind(id).bind(project).bind(status).execute(&pool).await.unwrap();
+        let response = call(&pool, cancel(id)).await;
+        let active = status == "queued" || status == "running";
+        assert_eq!(response.status(), if active { StatusCode::ACCEPTED } else { StatusCode::CONFLICT });
+        let stored: String = sqlx::query_scalar("SELECT status FROM ingestions WHERE id=$1")
+            .bind(id).fetch_one(&pool).await.unwrap();
+        assert_eq!(stored, if active { "cancelled" } else { status });
+        assert_eq!(call(&pool, cancel(id)).await.status(), StatusCode::CONFLICT);
+    }
+}

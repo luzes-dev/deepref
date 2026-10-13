@@ -78,3 +78,8 @@ List responses use bounded cursor pagination (`items` and `next_cursor`). Articl
 
 Endpoint paths, request bodies, response schemas, operation IDs, and status codes are defined only
 in the OpenAPI document to avoid duplicating the Rust contract here.
+
+Cancelling ingestion requires an existing queued/running run. Missing runs return
+404; terminal runs (including previously cancelled runs) return 409 without
+altering their status or completion timestamp. Cancellation locks the run row
+before checking state so concurrent completion cannot be overwritten.
