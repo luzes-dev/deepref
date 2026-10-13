@@ -5,7 +5,8 @@
 		createScreenReport,
 		createUndoScreening,
 		getGetScreeningHistoryQueryOptions,
-		getScreeningQueue
+		getScreeningQueue,
+		getGetScreeningQueueQueryKey
 	} from '#lib/api/generated/review/review.js';
 	import type {
 		ApiErrorBody,
@@ -78,13 +79,12 @@
 	const urlState = $derived(
 		parseScreeningUrl(new URLSearchParams(page.url.searchParams.toString()))
 	);
-	const queueKey = $derived([
-		'screening-queue',
-		projectId,
-		urlState.status,
-		urlState.search,
-		urlState.sort
-	] as const);
+	const queueKey = $derived(getGetScreeningQueueQueryKey(projectId, {
+		status: urlState.status,
+		search: urlState.search || undefined,
+		sort: urlState.sort,
+		limit: 25
+	}));
 	const queueQuery = createInfiniteQuery(() => ({
 		queryKey: queueKey,
 		initialPageParam: undefined as string | undefined,

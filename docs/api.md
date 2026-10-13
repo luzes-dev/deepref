@@ -98,3 +98,8 @@ The workspace keeps explicitly selected project URLs on load failures. Transient
 errors show “Project unavailable” with Retry; 404 shows “Project not found” with
 Retry. Automatic default-project selection applies only to routes with no project
 identifier, never to a failed named project.
+
+AI proposal decisions invalidate generated title/abstract queue, full-text queue,
+proposal and deduplication keys scoped to the mutation's project. Suggestion
+creation invalidates only that project's proposal list. Generated clients must
+not emit a bare `/api/projects/` invalidation prefix.
