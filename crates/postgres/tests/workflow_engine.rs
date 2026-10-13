@@ -313,3 +313,20 @@ async fn http_secrets_stay_bound_to_the_origin_where_they_were_entered() {
         .await.unwrap().is_none(), "an older published graph cannot borrow the replacement secret");
     remove_project(&pool, project).await;
 }
+
+#[tokio::test]
+async fn new_webhooks_require_signatures_even_if_a_database_default_was_changed() {
+    let Some(pool) = database().await else { return };
+    sqlx::query("ALTER TABLE workflows ALTER COLUMN webhook_signature_required SET DEFAULT false")
+        .execute(&pool).await.unwrap();
+    let project = insert_project(&pool).await;
+    let actor = Actor::new(ActorKind::User, "signature-test").unwrap();
+    let graph = WorkflowGraph {
+        nodes: vec![node("t", "trigger.webhook", json!({}))], edges: vec![],
+    };
+    let workflow = create_workflow(&pool, project, "Signed", "", graph, &actor).await.unwrap();
+    assert!(workflow.webhook_signature_required);
+    let endpoints = deepref_postgres::get_webhook_config(&pool, project, workflow.id).await.unwrap();
+    assert!(endpoints.signature_required);
+    remove_project(&pool, project).await;
+}

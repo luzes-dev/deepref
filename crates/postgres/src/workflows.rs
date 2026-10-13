@@ -244,8 +244,8 @@ pub async fn create_workflow(
     let inserted = sqlx::query(
         "INSERT INTO workflows
            (id, project_id, name, description, draft_graph, webhook_token, webhook_secret,
-            email_token, created_by_kind, created_by_id)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)",
+            email_token, created_by_kind, created_by_id, webhook_signature_required)
+         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,true)",
     )
     .bind(id)
     .bind(project_uuid(project_id))

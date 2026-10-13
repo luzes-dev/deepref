@@ -901,3 +901,26 @@ async fn citation_depth_ten_is_rejected_at_every_api_boundary_and_in_database() 
         .bind(project).execute(&pool).await.unwrap_err();
     assert_eq!(error.as_database_error().and_then(|error| error.code()).as_deref(), Some("23514"));
 }
+
+#[tokio::test]
+async fn hooks_resolve_tokens_before_limiting_and_reject_unsigned_new_webhooks() {
+    use deepref_domain::{Actor, ActorKind, ProjectId};
+    let Some(pool) = database().await else { return };
+    let unknown = Uuid::new_v4().to_string();
+    for _ in 0..65 {
+        let response = call(&pool, Request::builder().method("POST")
+            .uri(format!("/hooks/workflows/{unknown}")).body(Body::from("{}")).unwrap()).await;
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    }
+    let project = Uuid::new_v4();
+    sqlx::query("INSERT INTO projects (id,name) VALUES ($1,'signed hook')")
+        .bind(project).execute(&pool).await.unwrap();
+    let project = ProjectId::new(project);
+    let actor = Actor::new(ActorKind::User, "hook-test").unwrap();
+    let graph = serde_json::from_value(json!({"nodes":[{"id":"trigger","type":"trigger.webhook","config":{}}],"edges":[]})).unwrap();
+    let workflow = deepref_postgres::create_workflow(&pool, project, "Signed", "", graph, &actor).await.unwrap();
+    let endpoint = deepref_postgres::get_webhook_config(&pool, project, workflow.id).await.unwrap();
+    let response = call(&pool, Request::builder().method("POST")
+        .uri(format!("/hooks/workflows/{}", endpoint.token)).body(Body::from("{}")).unwrap()).await;
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+}

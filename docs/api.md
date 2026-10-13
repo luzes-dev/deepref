@@ -110,3 +110,9 @@ also matches origin, preventing an older published graph from borrowing a
 credential later entered for a different host. Legacy unbound HTTP credentials
 require re-entry. HTTP templates require a literal scheme/authority; substituted
 path/query values are percent-encoded as components.
+
+Public hook rate limits are applied only after a token resolves to a workflow,
+keyed by workflow/address kind, and retained in a maximum 10,000-entry LRU map.
+Unknown tokens cannot allocate limiter entries. Each address permits 60 calls
+per minute. Newly created webhooks explicitly require HMAC signatures, even if a
+database default was changed; existing workflows retain their explicit setting.
