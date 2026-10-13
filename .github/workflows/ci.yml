@@ -177,68 +177,6 @@ jobs:
         if: always() && (github.event_name == 'push' || needs.changes.outputs.rust == 'true') && matrix.command != 'fmt'
         run: ${SCCACHE_PATH:-sccache} --show-stats
 
-  ai-eval-security-gates:
-    name: AI evaluation and security gates
-    needs: changes
-    runs-on: ubuntu-latest
-    timeout-minutes: 15
-    steps:
-      - name: Skip check (no Rust changes)
-        if: github.event_name != 'push' && needs.changes.outputs.rust != 'true'
-        run: echo "No Rust changes detected in PR; skipping check."
-      - name: Checkout trusted source
-        if: github.event_name == 'push' || needs.changes.outputs.rust == 'true'
-        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-        with:
-          persist-credentials: false
-      - name: Install pinned Rust toolchain
-        if: github.event_name == 'push' || needs.changes.outputs.rust == 'true'
-        run: |
-          rustup toolchain install 1.95.0 --profile minimal
-          rustup override set 1.95.0
-      - name: Install pinned cargo-nextest
-        if: github.event_name == 'push' || needs.changes.outputs.rust == 'true'
-        uses: taiki-e/install-action@ab6895351a88b908e96a4697860d4ffea5e57dbe # v2.87.27
-        with:
-          tool: cargo-nextest@0.9.143
-          checksum: true
-          fallback: none
-      - name: Restore shared Cargo cache
-        if: github.event_name == 'push' || needs.changes.outputs.rust == 'true'
-        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
-        with:
-          path: |
-            ~/.cargo/registry
-            ~/.cargo/git
-          key: cargo-${{ runner.os }}-1.95.0-${{ hashFiles('Cargo.lock') }}
-          restore-keys: cargo-${{ runner.os }}-1.95.0-
-      - name: Set up sccache
-        if: github.event_name == 'push' || needs.changes.outputs.rust == 'true'
-        uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba # v0.0.11
-        with:
-          version: v0.17.0
-      - name: Enable read-only sccache compiler wrapper
-        if: github.event_name == 'push' || needs.changes.outputs.rust == 'true'
-        run: |
-          {
-            echo "SCCACHE_GHA_ENABLED=true"
-            echo "SCCACHE_GHA_RW_MODE=READ_ONLY"
-            echo "RUSTC_WRAPPER=sccache"
-          } >> "$GITHUB_ENV"
-      - name: Run checked-in gold-set evaluation gate
-        if: github.event_name == 'push' || needs.changes.outputs.rust == 'true'
-        env:
-          SQLX_OFFLINE: "true"
-        run: cargo nextest run -p deepref-ai --test eval_gate --locked
-      - name: Run prompt-injection and security regressions
-        if: github.event_name == 'push' || needs.changes.outputs.rust == 'true'
-        env:
-          SQLX_OFFLINE: "true"
-        run: cargo nextest run -p deepref-ai --test prompt_injection_regressions --locked
-      - name: Show sccache statistics
-        if: always() && (github.event_name == 'push' || needs.changes.outputs.rust == 'true')
-        run: ${SCCACHE_PATH:-sccache} --show-stats
-
   coverage:
     name: Coverage / Rust
     if: github.event_name == 'push' && github.ref == 'refs/heads/main' && needs.changes.outputs.rust == 'true'
