@@ -46,6 +46,9 @@ pub(crate) struct AiFirstCohortDto {
     result: Option<AuditResultDto>,
     forecast: Option<AiFirstForecastDto>,
     invalidation_reason: Option<String>,
+    /// Set when a finalized cohort is flagged for review because the semantic
+    /// identity changed after finalization; its exclusions stay in force.
+    identity_flag_reason: Option<String>,
 }
 #[derive(Debug, Serialize, ToSchema)]
 pub(crate) struct AiFirstOverviewDto {
@@ -139,6 +142,7 @@ pub(crate) async fn get_overview(
                 }),
                 result,
                 invalidation_reason: c.invalidation_reason,
+                identity_flag_reason: c.identity_flag_reason,
             })
         })
         .collect::<Result<Vec<_>, ApiError>>()?;

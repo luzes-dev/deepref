@@ -275,6 +275,7 @@ export * from './reportDetailDtoRaw.ts';
 export * from './reportDto.ts';
 export * from './resolutionDto.ts';
 export * from './resolveReviewerConflictRequest.ts';
+export * from './retryReviewRunRequest.ts';
 export * from './reviewCountsDto.ts';
 export * from './reviewRunDto.ts';
 export * from './reviewRunStateDto.ts';

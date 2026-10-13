@@ -20,6 +20,19 @@ use crate::{
 /// Most records one project may send to the reviewer in one sweep.
 pub const SECOND_REVIEW_BATCH: i64 = 5;
 
+/// Most advisory runs one record, stage and protocol version may get. A failed
+/// or blocked run is retried until this many attempts were made.
+pub const SECOND_REVIEW_MAX_ATTEMPTS: i32 = 3;
+
+/// An attempt (alias `a`) may be claimed again when its run ended `failed` or
+/// `blocked` more than the backoff ago and the attempt limit (`$5`) allows it.
+/// A provider outage then costs at most one run per record per backoff.
+const RETRYABLE_ATTEMPT: &str = "a.attempts < $5 AND EXISTS (
+    SELECT 1 FROM review_run_manifests m
+    WHERE m.project_id=a.project_id AND m.automation_run_id=a.review_run_id
+      AND m.state IN ('failed','blocked')
+      AND m.finished_at < now() - interval '10 minutes')";
+
 /// What the second-reviewer setting does for one screening stage right now.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum SecondReviewStatus {
@@ -172,15 +185,20 @@ async fn sweep_project(pool: &PgPool, project_id: Uuid) -> anyhow::Result<Second
         }
         let reports = waiting_reports(pool, project_id, stage, protocol.id, remaining).await?;
         for report_id in reports {
-            let claim = sqlx::query(
-                "INSERT INTO second_review_attempts (project_id, report_id, stage, protocol_version_id)
+            // A new record is claimed once; a record whose last advisory run failed
+            // or was blocked is reclaimed after the backoff, up to the attempt limit.
+            let claim = sqlx::query(sqlx::AssertSqlSafe(format!(
+                "INSERT INTO second_review_attempts AS a (project_id, report_id, stage, protocol_version_id)
                  VALUES ($1,$2,$3,$4)
-                 ON CONFLICT DO NOTHING",
-            )
+                 ON CONFLICT (project_id, report_id, stage, protocol_version_id) DO UPDATE
+                 SET attempts=a.attempts+1, review_run_id=NULL, updated_at=now()
+                 WHERE {RETRYABLE_ATTEMPT}"
+            )))
             .bind(project_id)
             .bind(report_id)
             .bind(stage_key(stage))
             .bind(protocol.id)
+            .bind(SECOND_REVIEW_MAX_ATTEMPTS)
             .execute(pool)
             .await?;
             if claim.rows_affected() == 0 {
@@ -200,7 +218,18 @@ async fn sweep_project(pool: &PgPool, project_id: Uuid) -> anyhow::Result<Second
                 actor: Actor::new(ActorKind::Automation, "second-reviewer")?,
             };
             match PostgresReviewScheduler::new(pool).schedule(command).await {
-                Ok(_) => {
+                Ok(run) => {
+                    sqlx::query(
+                        "UPDATE second_review_attempts SET review_run_id=$5, updated_at=now()
+                         WHERE project_id=$1 AND report_id=$2 AND stage=$3 AND protocol_version_id=$4",
+                    )
+                    .bind(project_id)
+                    .bind(report_id)
+                    .bind(stage_key(stage))
+                    .bind(protocol.id)
+                    .bind(run.id.as_uuid())
+                    .execute(pool)
+                    .await?;
                     record_gate(pool, project_id, stage, None).await?;
                     sweep.scheduled += 1;
                 }
@@ -248,7 +277,7 @@ async fn waiting_reports(
     protocol_version_id: Uuid,
     limit: i64,
 ) -> anyhow::Result<Vec<Uuid>> {
-    Ok(sqlx::query_scalar::<_, Uuid>(
+    Ok(sqlx::query_scalar::<_, Uuid>(sqlx::AssertSqlSafe(format!(
         "SELECT pr.report_id
          FROM project_reports pr
          LEFT JOIN screening_state s ON s.project_id=pr.project_id AND s.report_id=pr.report_id
@@ -265,18 +294,20 @@ async fn waiting_reports(
            AND NOT EXISTS (
              SELECT 1 FROM second_review_attempts a
              WHERE a.project_id=pr.project_id AND a.report_id=pr.report_id
-               AND a.stage=$2 AND a.protocol_version_id=$4)
+               AND a.stage=$2 AND a.protocol_version_id=$4
+               AND NOT ({RETRYABLE_ATTEMPT}))
            AND NOT EXISTS (
              SELECT 1 FROM ai_reviewer_decisions r
              WHERE r.project_id=pr.project_id AND r.report_id=pr.report_id
                AND r.stage=$2 AND r.voided_at IS NULL)
          ORDER BY pr.created_at, pr.report_id
-         LIMIT $3",
-    )
+         LIMIT $3"
+    )))
     .bind(project_id)
     .bind(stage_key(stage))
     .bind(limit)
     .bind(protocol_version_id)
+    .bind(SECOND_REVIEW_MAX_ATTEMPTS)
     .fetch_all(pool)
     .await?)
 }

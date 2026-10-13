@@ -9071,6 +9071,108 @@
         }
       }
     },
+    "/projects/{project_id}/review-runs/{run_id}/retry": {
+      "post": {
+        "tags": [
+          "ai"
+        ],
+        "operationId": "retryReviewRun",
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "path",
+            "description": "Project identifier",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "run_id",
+            "in": "path",
+            "description": "Review run to retry or regenerate",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RetryReviewRunRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "description": "The retry or regeneration, or the attempt already in flight",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReviewRunDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid AI request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Review run not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The subject changed, or only a rejected suggestion can be regenerated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "AI provider is unavailable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/projects/{project_id}/review/protocol": {
       "get": {
         "tags": [
@@ -11846,6 +11948,13 @@
           "id": {
             "type": "string",
             "format": "uuid"
+          },
+          "identity_flag_reason": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Set when a finalized cohort is flagged for review because the semantic\nidentity changed after finalization; its exclusions stay in force."
           },
           "invalidation_reason": {
             "type": [
@@ -19251,6 +19360,17 @@
             ]
           }
         }
+      },
+      "RetryReviewRunRequest": {
+        "type": "object",
+        "description": "Retry a failed or blocked review run, or regenerate one whose suggestion was\nrejected. An in-flight retry is returned as is.",
+        "properties": {
+          "regenerate": {
+            "type": "boolean",
+            "description": "Ask for a fresh opinion that reuses nothing from earlier attempts. Only a\ncompleted run whose suggestion was rejected can be regenerated."
+          }
+        },
+        "additionalProperties": false
       },
       "ReviewCountsDto": {
         "type": "object",

@@ -415,18 +415,27 @@ pub async fn complete_review_outcome(
         proposal_id,
     )
     .await?;
+    if let Some(proposal_id) = proposal_id {
+        // Applying the project's autonomy setting is committed with the proposal,
+        // so a crash after this commit cannot lose the second opinion.
+        crate::ai_autonomy_apply::enqueue_autonomy_in_transaction(
+            &mut transaction,
+            run.snapshot.project_id.as_uuid(),
+            proposal_id,
+        )
+        .await?;
+    }
     transaction.commit().await?;
     if let Some(proposal_id) = proposal_id {
-        // The proposal is durable. Applying the project's autonomy setting is
-        // best effort: on failure the proposal simply stays a suggestion.
-        if let Err(error) = crate::ai_autonomy_apply::apply_autonomy_for_proposal(
+        // Apply now; on failure the outbox entry stays and the reconciler retries.
+        if let Err(error) = crate::ai_autonomy_apply::apply_pending_autonomy(
             pool,
             run.snapshot.project_id.as_uuid(),
             proposal_id,
         )
         .await
         {
-            tracing::warn!(%error, %proposal_id, "could not apply AI autonomy to the proposal");
+            tracing::warn!(%error, %proposal_id, "AI autonomy deferred to the reconciler");
         }
     }
     Ok(match proposal_id {

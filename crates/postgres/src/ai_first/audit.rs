@@ -79,12 +79,7 @@ pub async fn draw_ai_first_audit(
             "close the cohort; only one audit draw is permitted".into(),
         ));
     }
-    if !super::routing::ensure_current(pool, &mut tx, &c).await? {
-        tx.commit().await?;
-        return Err(AiFirstError::Refused(
-            "cohort identity or protocol changed".into(),
-        ));
-    }
+    let mut tx = super::routing::require_current(tx, &c).await?;
     // Freeze the non-quarantine human reference, including pre-draw targeted rescues.
     let human=sqlx::query("SELECT m.report_id,s.title_abstract_status,s.revision,e.id AS event_id,e.actor_kind,r.title,r.abstract_text
        FROM ai_screening_cohort_members m
@@ -373,12 +368,7 @@ pub async fn evaluate_ai_first_audit(
             "the audit has already been evaluated or invalidated".into(),
         ));
     }
-    if !super::routing::ensure_current(pool, &mut tx, &c).await? {
-        tx.commit().await?;
-        return Err(AiFirstError::Refused(
-            "cohort identity or protocol changed".into(),
-        ));
-    }
+    let mut tx = super::routing::require_current(tx, &c).await?;
     let incomplete:bool=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM ai_screening_cohort_members m WHERE m.cohort_id=$1 AND (m.sampled OR m.audit_control)
        AND (SELECT count(*) FROM ai_screening_audit_labels l WHERE l.cohort_id=m.cohort_id AND l.report_id=m.report_id)<>2)")
         .bind(cohort).fetch_one(&mut *tx).await?;
@@ -475,12 +465,7 @@ pub async fn finalize_ai_first_cohort(
             "only a passing, current cohort can be finalized".into(),
         ));
     }
-    if !super::routing::ensure_current(pool, &mut tx, &c).await? {
-        tx.commit().await?;
-        return Err(AiFirstError::Refused(
-            "cohort identity or protocol changed".into(),
-        ));
-    }
+    let mut tx = super::routing::require_current(tx, &c).await?;
     let ceiling: bool = sqlx::query_scalar(
         "SELECT ceiling='cohort_finalization' AND suspended_reason IS NULL
        FROM project_ai_screening_authority WHERE project_id=$1",

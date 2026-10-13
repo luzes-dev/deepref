@@ -10,7 +10,7 @@ use deepref_domain::{
     validate_publishable_criteria,
 };
 use serde_json::json;
-use sqlx::{PgPool, Postgres, Transaction};
+use sqlx::{PgConnection, PgPool, Postgres, Transaction};
 use thiserror::Error;
 use uuid::Uuid;
 
@@ -106,17 +106,33 @@ pub async fn get_published_protocol(
     pool: &PgPool,
     project_id: Uuid,
 ) -> Result<ProtocolDocument, ProtocolError> {
-    if !project_exists(pool, project_id).await? {
+    let mut connection = pool.acquire().await?;
+    get_published_protocol_on(&mut connection, project_id).await
+}
+
+/// [`get_published_protocol`] on one connection, so a caller holding a
+/// transaction reads under its own locks instead of asking the pool again.
+pub(crate) async fn get_published_protocol_on(
+    connection: &mut PgConnection,
+    project_id: Uuid,
+) -> Result<ProtocolDocument, ProtocolError> {
+    let exists = sqlx::query_scalar!(
+        r#"SELECT EXISTS(SELECT 1 FROM projects WHERE id=$1) as "exists!""#,
+        project_id,
+    )
+    .fetch_one(&mut *connection)
+    .await?;
+    if !exists {
         return Err(ProtocolError::ProjectNotFound);
     }
     let row = sqlx::query!(
         "SELECT id FROM protocol_versions WHERE project_id=$1 AND status='published' ORDER BY version DESC, id DESC LIMIT 1",
         project_id,
     )
-    .fetch_optional(pool)
+    .fetch_optional(&mut *connection)
     .await?
     .ok_or(ProtocolError::NotFound)?;
-    load_document(pool, project_id, row.id).await
+    load_document_on(connection, project_id, row.id).await
 }
 
 /// Lists every published or superseded version of the project protocol, oldest first.
@@ -489,6 +505,15 @@ async fn load_document(
     project_id: Uuid,
     id: Uuid,
 ) -> Result<ProtocolDocument, ProtocolError> {
+    let mut connection = pool.acquire().await?;
+    load_document_on(&mut connection, project_id, id).await
+}
+
+async fn load_document_on(
+    connection: &mut PgConnection,
+    project_id: Uuid,
+    id: Uuid,
+) -> Result<ProtocolDocument, ProtocolError> {
     let row = sqlx::query!(
         r#"
         SELECT id, project_id, version, name, status, framework_kind,
@@ -501,14 +526,14 @@ async fn load_document(
         project_id,
         id,
     )
-    .fetch_optional(pool)
+    .fetch_optional(&mut *connection)
     .await?
     .ok_or(ProtocolError::NotFound)?;
     let criterion_rows = sqlx::query!(
         "SELECT id,criterion_type,stage,dimension,label,description,ordinal FROM eligibility_criteria WHERE protocol_version_id=$1 ORDER BY ordinal,id",
         id,
     )
-    .fetch_all(pool)
+    .fetch_all(&mut *connection)
     .await?;
     let criteria = criterion_rows
         .into_iter()

@@ -45,6 +45,7 @@ import type {
 	PaginatedResponseAiActivityDto,
 	PaginatedResponseAiProposalDto,
 	ResolveReviewerConflictRequest,
+	RetryReviewRunRequest,
 	ReviewRunDto,
 	StartAiFirstRequest,
 	UpdateAiAutonomyRequest,
@@ -3563,6 +3564,155 @@ export const prefetchGetReviewRunQuery = async <
 	return queryClient;
 };
 
+export type retryReviewRunResponse202 = {
+	data: ReviewRunDto;
+	status: 202;
+};
+
+export type retryReviewRunResponse400 = {
+	data: ApiErrorBody;
+	status: 400;
+};
+
+export type retryReviewRunResponse404 = {
+	data: ApiErrorBody;
+	status: 404;
+};
+
+export type retryReviewRunResponse409 = {
+	data: ApiErrorBody;
+	status: 409;
+};
+
+export type retryReviewRunResponse500 = {
+	data: ApiErrorBody;
+	status: 500;
+};
+
+export type retryReviewRunResponse503 = {
+	data: ApiErrorBody;
+	status: 503;
+};
+
+export type retryReviewRunResponseSuccess = retryReviewRunResponse202 & {
+	headers: Headers;
+};
+export type retryReviewRunResponseError = (
+	| retryReviewRunResponse400
+	| retryReviewRunResponse404
+	| retryReviewRunResponse409
+	| retryReviewRunResponse500
+	| retryReviewRunResponse503
+) & {
+	headers: Headers;
+};
+
+export const getRetryReviewRunUrl = (projectId: string, runId: string) => {
+	return `/api/projects/${projectId}/review-runs/${runId}/retry`;
+};
+
+export const retryReviewRun = async (
+	projectId: string,
+	runId: string,
+	retryReviewRunRequest: RetryReviewRunRequest,
+	options?: Parameters<typeof customFetch>[1]
+): Promise<retryReviewRunResponseSuccess> => {
+	const getHeaders = (
+		h?: NonNullable<RequestInit['headers']>
+	): Record<string, string | readonly string[]> => {
+		if (!h) return {};
+		if (h instanceof Headers) return Object.fromEntries(h.entries());
+		if (Symbol.iterator in h) {
+			return Object.fromEntries(
+				Array.from(
+					h as Iterable<Iterable<string>>,
+					(entry) => Array.from(entry) as [string, string]
+				)
+			);
+		}
+		const headers: Record<string, string | readonly string[]> = {};
+		for (const [name, value] of Object.entries<string | readonly string[] | undefined>(h)) {
+			if (value !== undefined) headers[name] = value;
+		}
+		return headers;
+	};
+	return customFetch<retryReviewRunResponseSuccess>(getRetryReviewRunUrl(projectId, runId), {
+		...options,
+		method: 'POST',
+		headers: { 'Content-Type': 'application/json', ...getHeaders(options?.headers) },
+		body: JSON.stringify(retryReviewRunRequest)
+	});
+};
+
+export const getRetryReviewRunMutationKey = () => ['retryReviewRun'] as const;
+
+export const getRetryReviewRunMutationOptions = <
+	TError = ErrorType<ApiErrorBody>,
+	TContext = unknown
+>(options?: {
+	mutation?: CreateMutationOptions<
+		Awaited<ReturnType<typeof retryReviewRun>>,
+		TError,
+		RetryReviewRunMutationVariables,
+		TContext
+	>;
+	request?: SecondParameter<typeof customFetch>;
+}): CreateMutationOptions<
+	Awaited<ReturnType<typeof retryReviewRun>>,
+	TError,
+	RetryReviewRunMutationVariables,
+	TContext
+> => {
+	const mutationKey = getRetryReviewRunMutationKey();
+	const { mutation: mutationOptions, request: requestOptions } = options
+		? options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey
+			? options
+			: { ...options, mutation: { ...options.mutation, mutationKey } }
+		: { mutation: { mutationKey }, request: undefined };
+
+	const mutationFn: MutationFunction<
+		Awaited<ReturnType<typeof retryReviewRun>>,
+		RetryReviewRunMutationVariables
+	> = (props) => {
+		const { projectId, runId, data } = props ?? {};
+
+		return retryReviewRun(projectId, runId, data, requestOptions);
+	};
+
+	return { mutationFn, ...mutationOptions };
+};
+
+export type RetryReviewRunMutationResult = NonNullable<Awaited<ReturnType<typeof retryReviewRun>>>;
+export type RetryReviewRunMutationBody = BodyType<RetryReviewRunRequest>;
+export type RetryReviewRunMutationError = ErrorType<ApiErrorBody>;
+export type RetryReviewRunMutationVariables = {
+	projectId: string;
+	runId: string;
+	data: BodyType<RetryReviewRunRequest>;
+};
+
+export const createRetryReviewRun = <TError = ErrorType<ApiErrorBody>, TContext = unknown>(
+	options?: () => {
+		mutation?: CreateMutationOptions<
+			Awaited<ReturnType<typeof retryReviewRun>>,
+			TError,
+			RetryReviewRunMutationVariables,
+			TContext
+		>;
+		request?: SecondParameter<typeof customFetch>;
+	},
+	queryClient?: () => QueryClient
+): CreateMutationResult<
+	Awaited<ReturnType<typeof retryReviewRun>>,
+	TError,
+	RetryReviewRunMutationVariables,
+	TContext
+> => {
+	return createMutation(
+		() => ({ ...getRetryReviewRunMutationOptions(options?.()) }),
+		queryClient
+	);
+};
 export type generateDataExtractionSuggestionResponse202 = {
 	data: ReviewRunDto;
 	status: 202;

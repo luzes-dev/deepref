@@ -473,6 +473,26 @@ test('reviews an edited AI appraisal pre-fill with evidence navigation and decis
 		}
 	);
 	await page.route(
+		'http://localhost:4173/api/projects/project-1/review-runs/appraisal-run/retry',
+		async (route) => {
+			expect(route.request().postDataJSON()).toEqual({ regenerate: true });
+			pendingProposal = createProposal();
+			await route.fulfill({
+				status: 202,
+				json: {
+					id: 'appraisal-regenerated-run',
+					project_id: 'project-1',
+					definition: 'appraisal_prefill',
+					subject: {},
+					origin: { kind: 'reviewer_requested' },
+					state: { kind: 'completed', proposal_id: pendingProposal.id },
+					created_at: '2026-01-01T00:00:02Z',
+					finished_at: '2026-01-01T00:00:03Z'
+				}
+			});
+		}
+	);
+	await page.route(
 		/http:\/\/localhost:4173\/api\/projects\/project-1\/ai\/proposals\/proposal-\d+\/decision$/,
 		async (route) => {
 			const body: unknown = route.request().postDataJSON();
@@ -583,6 +603,7 @@ test('reviews an edited AI appraisal pre-fill with evidence navigation and decis
 	await expect(page.getByTestId('appraisal-summary')).toBeVisible();
 	await page.getByRole('button', { name: 'Start a new assessment' }).click();
 	await expect(page.getByTestId('generate-ai-prefill')).toBeVisible();
+	await expect(page.getByRole('button', { name: 'Regenerate', exact: true })).toHaveCount(0);
 
 	await page.getByTestId('generate-ai-prefill').click();
 	await page.getByText(/^Rationale and evidence/).click();
@@ -597,7 +618,7 @@ test('reviews an edited AI appraisal pre-fill with evidence navigation and decis
 		expect('reviewed_payload' in decisions[1]).toBe(false);
 	}
 
-	await page.getByTestId('generate-ai-prefill').click();
+	await page.getByRole('button', { name: 'Regenerate', exact: true }).click();
 	await page.getByText(/^Rationale and evidence/).click();
 	await expect(page.getByTestId('ai-prefill-proposal')).toBeVisible();
 	await page.route(

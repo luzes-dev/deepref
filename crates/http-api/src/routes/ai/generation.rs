@@ -181,6 +181,60 @@ pub(crate) async fn get_review_run(
     Ok(Json(review_run_dto(snapshot)?))
 }
 
+#[utoipa::path(
+    post,
+    path = "/projects/{project_id}/review-runs/{run_id}/retry",
+    operation_id = "retryReviewRun",
+    tag = "ai",
+    params(
+        ("project_id" = Uuid, Path, description = "Project identifier"),
+        ("run_id" = Uuid, Path, description = "Review run to retry or regenerate")
+    ),
+    request_body = RetryReviewRunRequest,
+    responses(
+        (status = 202, description = "The retry or regeneration, or the attempt already in flight", body = ReviewRunDto),
+        (status = 400, description = "Invalid AI request", body = ErrorResponse),
+        (status = 404, description = "Review run not found", body = ErrorResponse),
+        (status = 409, description = "The subject changed, or only a rejected suggestion can be regenerated", body = ErrorResponse),
+        (status = 503, description = "AI provider is unavailable", body = ErrorResponse),
+        (status = 500, description = "Internal server error", body = ErrorResponse)
+    )
+)]
+pub(crate) async fn retry_review_run(
+    State(state): State<AppState>,
+    Path((project_id, run_id)): Path<(Uuid, Uuid)>,
+    headers: HeaderMap,
+    Json(input): Json<RetryReviewRunRequest>,
+) -> Result<AcceptedReviewRun, ApiError> {
+    let visible: bool = sqlx::query_scalar("SELECT ai_first_run_visible($1,$2)")
+        .bind(project_id)
+        .bind(run_id)
+        .fetch_one(&state.pool)
+        .await?;
+    if !visible {
+        return Err(ApiError::NotFound(
+            "review run is withheld while independent screening is in progress".into(),
+        ));
+    }
+    let run_id = deepref_review::ReviewRunId::new(run_id)
+        .map_err(|error| ApiError::BadRequest(error.to_string()))?;
+    let intent = if input.regenerate {
+        deepref_postgres::ReviewScheduleIntent::Regenerate
+    } else {
+        deepref_postgres::ReviewScheduleIntent::Request
+    };
+    let snapshot = deepref_postgres::retry_review_run(
+        &state.pool,
+        project_id.into(),
+        run_id,
+        intent,
+        extract_actor(&headers)?,
+    )
+    .await
+    .map_err(map_review_preparation_error)?;
+    accepted_review_run(snapshot)
+}
+
 pub(crate) fn accepted_review_run(
     snapshot: deepref_review::ReviewRunSnapshot,
 ) -> Result<AcceptedReviewRun, ApiError> {

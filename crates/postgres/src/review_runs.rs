@@ -1,5 +1,5 @@
 use chrono::{DateTime, Utc};
-use deepref_ai::{AiProposal, ModelRouter, ProposalStatus, ProposalStore, hash_json};
+use deepref_ai::{AiProposal, ProposalStatus, ProposalStore, hash_json};
 use deepref_application::jobs::JobLease;
 use deepref_domain::ProjectId;
 use deepref_review::{
@@ -60,6 +60,8 @@ pub struct LeasedReviewRun {
     pub snapshot: ReviewRunSnapshot,
     pub manifest: ReviewRunManifest,
     pub task: PreparedReviewTask,
+    /// The reuse epoch of the run's generation; see [`ReviewScheduleIntent`].
+    pub reuse_epoch: i32,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -101,11 +103,140 @@ pub enum ReviewFinalization {
     Blocked,
 }
 
+/// How a schedule request treats an earlier run of the same manifest.
+///
+/// The manifest hash is the identity of the work; the generation separates
+/// attempts at that work. A run that ended `failed` or `blocked` never reserves
+/// its subject: the next request starts generation n+1 (review ai F1).
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum ReviewScheduleIntent {
+    /// A plain request. An in-flight or completed run is returned (double-submit
+    /// dedupe); a failed or blocked run is retried as a new generation that may
+    /// reuse the steps its predecessors already accepted.
+    #[default]
+    Request,
+    /// A fresh opinion after the completed run's proposal was rejected. The new
+    /// generation reuses no step or model output from earlier generations.
+    Regenerate,
+}
+
+enum GenerationDecision {
+    Existing(Uuid),
+    New { generation: i32, reuse_epoch: i32 },
+}
+
+/// Decides which generation a schedule request maps to. Serialized per manifest
+/// so that concurrent double submits observe one generation.
+async fn decide_generation(
+    transaction: &mut Transaction<'_, Postgres>,
+    project_id: ProjectId,
+    manifest_hash: &ReviewHash,
+    intent: ReviewScheduleIntent,
+) -> Result<GenerationDecision, PostgresReviewError> {
+    sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1,0))")
+        .bind(format!(
+            "review-generation:{}:{}",
+            project_id.as_uuid(),
+            manifest_hash.as_str()
+        ))
+        .execute(&mut **transaction)
+        .await?;
+    let Some(latest) = sqlx::query(
+        "SELECT m.automation_run_id,m.generation,m.reuse_epoch,m.state,p.status AS proposal_status
+         FROM review_run_manifests m
+         LEFT JOIN ai_proposals p ON p.project_id=m.project_id AND p.id=m.proposal_id
+         WHERE m.project_id=$1 AND m.manifest_hash=$2
+         ORDER BY m.generation DESC LIMIT 1",
+    )
+    .bind(project_id.as_uuid())
+    .bind(manifest_hash.as_str())
+    .fetch_optional(&mut **transaction)
+    .await?
+    else {
+        return Ok(GenerationDecision::New {
+            generation: 0,
+            reuse_epoch: 0,
+        });
+    };
+    let run_id: Uuid = latest.get("automation_run_id");
+    let generation: i32 = latest.get("generation");
+    let reuse_epoch: i32 = latest.get("reuse_epoch");
+    let state: String = latest.get("state");
+    let proposal_status: Option<String> = latest.get("proposal_status");
+    let next = generation
+        .checked_add(1)
+        .ok_or_else(|| PostgresReviewError::InvalidStoredValue("generation overflow".into()))?;
+    match (state.as_str(), intent) {
+        ("queued" | "running", _) | ("completed", ReviewScheduleIntent::Request) => {
+            Ok(GenerationDecision::Existing(run_id))
+        }
+        ("failed" | "blocked", ReviewScheduleIntent::Request) => Ok(GenerationDecision::New {
+            generation: next,
+            reuse_epoch,
+        }),
+        ("failed" | "blocked", ReviewScheduleIntent::Regenerate) => Ok(GenerationDecision::New {
+            generation: next,
+            reuse_epoch: next,
+        }),
+        ("completed", ReviewScheduleIntent::Regenerate)
+            if proposal_status.as_deref() == Some("rejected") =>
+        {
+            Ok(GenerationDecision::New {
+                generation: next,
+                reuse_epoch: next,
+            })
+        }
+        ("completed", ReviewScheduleIntent::Regenerate) => Err(PostgresReviewError::InvalidState(
+            "only a rejected suggestion can be regenerated; reject the current suggestion first"
+                .to_owned(),
+        )),
+        (other, _) => Err(PostgresReviewError::InvalidStoredValue(format!(
+            "unknown review state {other}"
+        ))),
+    }
+}
+
+/// The idempotency key of one generation. Generation 0 keeps the historical key,
+/// so runs scheduled before generations existed are found again.
+fn generation_key(manifest_hash: &ReviewHash, generation: i32) -> String {
+    if generation == 0 {
+        format!("review:{}", manifest_hash.as_str())
+    } else {
+        format!("review:{}:{generation}", manifest_hash.as_str())
+    }
+}
+
+/// The attempt fingerprint for a run. Generations in reuse epoch 0 keep the
+/// manifest fingerprint, so a retry reuses steps already accepted. A
+/// regeneration opens a new epoch whose fingerprints match nothing earlier, so
+/// neither step attempts nor model runs (keyed by this fingerprint) are reused.
+fn epoch_fingerprint(fingerprint: ReviewHash, reuse_epoch: i32) -> ReviewHash {
+    if reuse_epoch == 0 {
+        fingerprint
+    } else {
+        ReviewHash::digest_bytes(format!(
+            "deepref-review-reuse-epoch-v1:{}:{reuse_epoch}",
+            fingerprint.as_str()
+        ))
+    }
+}
+
 pub async fn schedule_prepared_review_run(
     pool: &PgPool,
     request: PreparedReviewRun,
 ) -> Result<ReviewRunSnapshot, PostgresReviewError> {
-    let manifest = build_prepared_manifest(pool, &request).await?;
+    schedule_prepared_review_run_as(pool, request, ReviewScheduleIntent::Request).await
+}
+
+pub async fn schedule_prepared_review_run_as(
+    pool: &PgPool,
+    request: PreparedReviewRun,
+    intent: ReviewScheduleIntent,
+) -> Result<ReviewRunSnapshot, PostgresReviewError> {
+    let manifest = {
+        let mut connection = pool.acquire().await?;
+        build_prepared_manifest(&mut connection, &request).await?
+    };
     // Runs, cohorts and calibration bundles all key semantic identity by the
     // structured contract id; the legacy aggregate is no longer admitted.
     let semantic_contract_id = manifest.semantic_contract_id()?;
@@ -180,56 +311,76 @@ pub async fn schedule_prepared_review_run(
         &request.command.actor,
     )
     .await?;
-    let idempotency_key = format!("review:{}", manifest.manifest_hash);
-    let dispatch = sqlx::query(
-        "SELECT run_id, job_id, created
-         FROM dispatch_automation_trigger($1,$2,'manual',NULL,$3,$4,$5)",
+    let run_id = match decide_generation(
+        &mut transaction,
+        request.command.project_id,
+        &manifest.manifest_hash,
+        intent,
     )
-    .bind(request.command.project_id.as_uuid())
-    .bind(definition_id)
-    .bind(idempotency_key)
-    .bind(request.command.actor.kind().as_str())
-    .bind(request.command.actor.id())
-    .fetch_one(&mut *transaction)
-    .await?;
-    let run_id: Uuid = dispatch.get("run_id");
-    let manifest_json = serde_json::to_value(&manifest)?;
-    let subject_json = serde_json::to_value(&request.command.subject)?;
-    let origin_json = serde_json::to_value(request.command.origin)?;
-    let task_json = serde_json::to_value(&request.task)?;
-    sqlx::query(
-        "INSERT INTO review_run_manifests
-         (project_id,automation_run_id,definition_key,definition_id,definition_version,
-          manifest_hash,semantic_bundle_hash,manifest,subject,origin,prepared_task)
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11)
-         ON CONFLICT (project_id,automation_run_id) DO NOTHING",
-    )
-    .bind(request.command.project_id.as_uuid())
-    .bind(run_id)
-    .bind(request.command.definition.as_str())
-    .bind(&manifest.definition_id)
-    .bind(i32::try_from(manifest.definition_version).map_err(|_| {
-        PostgresReviewError::InvalidStoredValue("definition version is too large".to_owned())
-    })?)
-    .bind(manifest.manifest_hash.as_str())
-    .bind(semantic_contract_id.as_str())
-    .bind(manifest_json)
-    .bind(subject_json)
-    .bind(origin_json)
-    .bind(task_json)
-    .execute(&mut *transaction)
-    .await?;
-    let stored_hash = sqlx::query_scalar::<_, String>(
-        "SELECT manifest_hash FROM review_run_manifests
-         WHERE project_id=$1 AND automation_run_id=$2",
-    )
-    .bind(request.command.project_id.as_uuid())
-    .bind(run_id)
-    .fetch_one(&mut *transaction)
-    .await?;
-    if stored_hash != manifest.manifest_hash.as_str() {
-        return Err(PostgresReviewError::FinalizationConflict);
-    }
+    .await?
+    {
+        GenerationDecision::Existing(run_id) => run_id,
+        GenerationDecision::New {
+            generation,
+            reuse_epoch,
+        } => {
+            let dispatch = sqlx::query(
+                "SELECT run_id, job_id, created
+                 FROM dispatch_automation_trigger($1,$2,'manual',NULL,$3,$4,$5)",
+            )
+            .bind(request.command.project_id.as_uuid())
+            .bind(definition_id)
+            .bind(generation_key(&manifest.manifest_hash, generation))
+            .bind(request.command.actor.kind().as_str())
+            .bind(request.command.actor.id())
+            .fetch_one(&mut *transaction)
+            .await?;
+            let run_id: Uuid = dispatch.get("run_id");
+            let manifest_json = serde_json::to_value(&manifest)?;
+            let subject_json = serde_json::to_value(&request.command.subject)?;
+            let origin_json = serde_json::to_value(request.command.origin)?;
+            let task_json = serde_json::to_value(&request.task)?;
+            sqlx::query(
+                "INSERT INTO review_run_manifests
+                 (project_id,automation_run_id,definition_key,definition_id,definition_version,
+                  manifest_hash,semantic_bundle_hash,manifest,subject,origin,prepared_task,
+                  generation,reuse_epoch)
+                 VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13)
+                 ON CONFLICT (project_id,automation_run_id) DO NOTHING",
+            )
+            .bind(request.command.project_id.as_uuid())
+            .bind(run_id)
+            .bind(request.command.definition.as_str())
+            .bind(&manifest.definition_id)
+            .bind(i32::try_from(manifest.definition_version).map_err(|_| {
+                PostgresReviewError::InvalidStoredValue(
+                    "definition version is too large".to_owned(),
+                )
+            })?)
+            .bind(manifest.manifest_hash.as_str())
+            .bind(semantic_contract_id.as_str())
+            .bind(manifest_json)
+            .bind(subject_json)
+            .bind(origin_json)
+            .bind(task_json)
+            .bind(generation)
+            .bind(reuse_epoch)
+            .execute(&mut *transaction)
+            .await?;
+            let stored_hash = sqlx::query_scalar::<_, String>(
+                "SELECT manifest_hash FROM review_run_manifests
+                 WHERE project_id=$1 AND automation_run_id=$2",
+            )
+            .bind(request.command.project_id.as_uuid())
+            .bind(run_id)
+            .fetch_one(&mut *transaction)
+            .await?;
+            if stored_hash != manifest.manifest_hash.as_str() {
+                return Err(PostgresReviewError::FinalizationConflict);
+            }
+            run_id
+        }
+    };
     if let ReviewOrigin::AiFirstTriggered { cohort_id } = request.command.origin
         && let ReviewSubject::Screening { report_id, .. } = request.command.subject
     {
@@ -247,7 +398,18 @@ pub async fn preview_review_identity(
     pool: &PgPool,
     request: &PreparedReviewRun,
 ) -> Result<ReviewSemanticContract, PostgresReviewError> {
-    let manifest = build_prepared_manifest(pool, request).await?;
+    let mut connection = pool.acquire().await?;
+    preview_review_identity_on(&mut connection, request).await
+}
+
+/// [`preview_review_identity`] on one connection. A caller that holds locks on
+/// the identity inputs passes its own transaction, so the identity it compares
+/// is the one those locks protect and no second pool connection is needed.
+pub(crate) async fn preview_review_identity_on(
+    connection: &mut PgConnection,
+    request: &PreparedReviewRun,
+) -> Result<ReviewSemanticContract, PostgresReviewError> {
+    let manifest = build_prepared_manifest(connection, request).await?;
     manifest.semantic_contract.ok_or_else(|| {
         PostgresReviewError::InvalidStoredValue(
             "compiled review manifest has no semantic contract".to_owned(),
@@ -258,7 +420,7 @@ pub async fn preview_review_identity(
 /// Compiles the run manifest for a prepared review: the one place that decides
 /// what a scheduled run and a previewed identity are built from.
 async fn build_prepared_manifest(
-    pool: &PgPool,
+    connection: &mut PgConnection,
     request: &PreparedReviewRun,
 ) -> Result<ReviewRunManifest, PostgresReviewError> {
     request.command.validate()?;
@@ -275,9 +437,7 @@ async fn build_prepared_manifest(
     }
 
     let review = CompiledReview::compile(request.command.definition)?;
-    let route = PostgresAiStore::new(pool)
-        .resolve(request.task.model_profile())
-        .await?;
+    let route = crate::ai::resolve_route_on(connection, request.task.model_profile()).await?;
     let source_content_hash = request.task.source_content_hash()?;
     Ok(review.build_manifest(ReviewManifestInput {
         project_id: request.command.project_id,
@@ -340,7 +500,7 @@ pub async fn load_leased_review_run(
     let row = sqlx::query(
         "SELECT m.automation_run_id,m.project_id,m.definition_key,m.subject,m.origin,m.state,
                 m.state_code,m.state_message,m.proposal_id,m.created_at,m.started_at,m.finished_at,
-                m.manifest,m.prepared_task
+                m.manifest,m.prepared_task,m.reuse_epoch
          FROM review_run_manifests AS m
          JOIN automation_runs AS r
            ON r.project_id=m.project_id AND r.id=m.automation_run_id
@@ -363,6 +523,7 @@ pub async fn load_leased_review_run(
         snapshot,
         manifest,
         task,
+        reuse_epoch: row.get("reuse_epoch"),
     })
 }
 
@@ -497,7 +658,8 @@ pub async fn begin_review_attempt(
     predecessors: &[AcceptedArtifactInput],
     lease: &JobLease,
 ) -> Result<ReviewAttemptStart, PostgresReviewError> {
-    let identity = review.attempt_identity(&run.manifest, node, predecessors)?;
+    let mut identity = review.attempt_identity(&run.manifest, node, predecessors)?;
+    identity.input_fingerprint = epoch_fingerprint(identity.input_fingerprint, run.reuse_epoch);
     let project_id = run.snapshot.project_id;
     let run_id = run.snapshot.id;
     let mut transaction = pool.begin().await?;

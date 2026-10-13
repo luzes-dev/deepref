@@ -8,11 +8,62 @@ use serde_json::{Value, json};
 use sqlx::{PgPool, Postgres, Row, Transaction};
 use uuid::Uuid;
 
+/// Why a cohort's pinned identity no longer holds. Each reason is a computed,
+/// positive observation; a failure to compute is [`IdentityCheck::Unknown`].
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub(crate) enum StaleReason {
+    /// A different protocol version is published (ADR 0005 §13).
+    Protocol,
+    /// The compiled semantic identity differs (ADR 0005 §2.4). Holds the
+    /// identity the project compiles to now.
+    SemanticIdentity { current: String },
+    /// Frozen evidence (frame, references or sources) changed under the cohort.
+    FrozenEvidence,
+}
+
+impl StaleReason {
+    pub(crate) fn as_str(&self) -> &'static str {
+        match self {
+            Self::Protocol => "protocol_changed",
+            Self::SemanticIdentity { .. } => "semantic_identity_changed",
+            Self::FrozenEvidence => "frozen_evidence_changed",
+        }
+    }
+}
+
+/// The outcome of checking a cohort against the current identity. `Unknown`
+/// means the identity could not be computed (pool, route or data failure); it
+/// is never evidence of change and must never demote anything.
+#[derive(Debug)]
+pub(crate) enum IdentityCheck {
+    Current,
+    Stale(StaleReason),
+    Unknown(AiFirstError),
+}
+
+/// Checks the cohort's pinned identity on the caller's locking transaction and,
+/// when it is stale, applies the ADR 0005 demotion for that trigger in the same
+/// transaction (the caller commits). On `Unknown` nothing is written: the caller
+/// rolls back and keeps every cohort, exclusion and authority as it was.
 pub(crate) async fn ensure_current(
-    pool: &PgPool,
     tx: &mut Transaction<'_, Postgres>,
     c: &sqlx::postgres::PgRow,
-) -> Result<bool, AiFirstError> {
+) -> Result<IdentityCheck, AiFirstError> {
+    let check = match check_identity(tx, c).await {
+        Ok(check) => check,
+        Err(error) => IdentityCheck::Unknown(error),
+    };
+    if let IdentityCheck::Stale(reason) = &check {
+        demote(tx, c, reason).await?;
+    }
+    Ok(check)
+}
+
+/// Computes the check without writing anything.
+async fn check_identity(
+    tx: &mut Transaction<'_, Postgres>,
+    c: &sqlx::postgres::PgRow,
+) -> Result<IdentityCheck, AiFirstError> {
     let project = c.get::<Uuid, _>("project_id");
     let cohort = c.get::<Uuid, _>("id");
     // Keep the identity and frozen sources stable until the approving transaction
@@ -26,46 +77,111 @@ pub(crate) async fn ensure_current(
         .await?;
     sqlx::query("SELECT r.id FROM reports r JOIN ai_screening_cohort_members m ON m.report_id=r.id WHERE m.cohort_id=$1 FOR SHARE OF r")
         .bind(cohort).fetch_all(&mut **tx).await?;
-    let report:Option<Uuid>=sqlx::query_scalar("SELECT report_id FROM ai_screening_cohort_members WHERE cohort_id=$1 ORDER BY report_id LIMIT 1")
-        .bind(cohort).fetch_optional(&mut **tx).await?;
     let protocol:Option<Uuid>=sqlx::query_scalar("SELECT id FROM protocol_versions WHERE project_id=$1 AND status='published' ORDER BY version DESC LIMIT 1")
         .bind(project).fetch_optional(&mut **tx).await?;
-    let same_protocol = protocol == Some(c.get("protocol_version_id"));
-    let current = if let Some(report) = report {
-        crate::preview_screening_identity(
-            pool,
-            project,
-            report,
-            deepref_ai::ScreeningStage::TitleAbstract,
-        )
-        .await
-        .ok()
-        .is_some_and(|contract| {
-            contract.id().as_str() == c.get::<String, _>("semantic_bundle_hash")
-        })
-    } else {
-        false
+    if protocol != Some(c.get("protocol_version_id")) {
+        return Ok(IdentityCheck::Stale(StaleReason::Protocol));
+    }
+    // The semantic contract depends on the protocol, the compiled definition and
+    // the resolved routes, not on the report; any member still in the project
+    // can stand in for building the task.
+    let report:Option<Uuid>=sqlx::query_scalar("SELECT m.report_id FROM ai_screening_cohort_members m JOIN project_reports pr
+       ON pr.project_id=m.project_id AND pr.report_id=m.report_id WHERE m.cohort_id=$1 ORDER BY m.report_id LIMIT 1")
+        .bind(cohort).fetch_optional(&mut **tx).await?;
+    let Some(report) = report else {
+        return Ok(IdentityCheck::Unknown(AiFirstError::Refused(
+            "no cohort member remains to compile the identity".into(),
+        )));
     };
-    if !same_protocol || !current {
-        invalidate_in_transaction(
-            tx,
-            project,
-            cohort,
-            if !same_protocol {
-                "protocol_changed"
-            } else {
-                "semantic_identity_changed"
-            },
-            true,
-        )
-        .await?;
-        return Ok(false);
+    // Same transaction, same connection: no second pool connection is requested
+    // while this transaction holds the project, route and report locks.
+    let identity = match crate::review_preparation::preview_screening_identity_on(
+        tx,
+        project,
+        report,
+        deepref_ai::ScreeningStage::TitleAbstract,
+    )
+    .await
+    {
+        Ok(identity) => identity,
+        Err(error) => return Ok(IdentityCheck::Unknown(error.into())),
+    };
+    let current = identity.id().as_str().to_owned();
+    if current != c.get::<String, _>("semantic_bundle_hash") {
+        return Ok(IdentityCheck::Stale(StaleReason::SemanticIdentity {
+            current,
+        }));
     }
     if !super::audit::frozen_evidence_current(tx, c).await? {
-        invalidate_in_transaction(tx, project, cohort, "frozen_evidence_changed", true).await?;
-        return Ok(false);
+        return Ok(IdentityCheck::Stale(StaleReason::FrozenEvidence));
     }
-    Ok(true)
+    Ok(IdentityCheck::Current)
+}
+
+/// ADR 0005 demotion by trigger and cohort status.
+/// - Protocol republish (§13) and changed frozen evidence invalidate the cohort
+///   and reopen still-canonical finalized automation exclusions.
+/// - A semantic identity change (§2.4) voids non-finalized cohorts and their
+///   dispositions and suspends routing; finalized cohorts of the project whose
+///   pinned identity differs are only flagged for review.
+async fn demote(
+    tx: &mut Transaction<'_, Postgres>,
+    c: &sqlx::postgres::PgRow,
+    reason: &StaleReason,
+) -> Result<(), AiFirstError> {
+    let project = c.get::<Uuid, _>("project_id");
+    let cohort = c.get::<Uuid, _>("id");
+    match reason {
+        StaleReason::Protocol | StaleReason::FrozenEvidence => {
+            invalidate_in_transaction(tx, project, cohort, reason.as_str(), true).await
+        }
+        StaleReason::SemanticIdentity { current } => {
+            if c.get::<String, _>("status") != "finalized" {
+                invalidate_in_transaction(tx, project, cohort, reason.as_str(), true).await?;
+            }
+            super::cohorts::flag_finalized_identity_drift(tx, project, current, reason.as_str())
+                .await
+        }
+    }
+}
+
+/// Logs why the identity could not be checked. The caller must roll back.
+fn warn_unknown(error: &AiFirstError, project: Uuid, cohort: Uuid) {
+    tracing::warn!(%error, %project, %cohort,
+        "AI-first identity could not be computed; nothing was demoted");
+}
+
+/// The error a user-facing action returns when the identity cannot be checked.
+pub(crate) fn unknown_refusal(error: AiFirstError) -> AiFirstError {
+    match error {
+        AiFirstError::Database(error) => AiFirstError::Database(error),
+        other => AiFirstError::Refused(format!(
+            "the AI-first identity could not be verified, so nothing was changed: {other}"
+        )),
+    }
+}
+
+/// Runs the identity check for a user action on a locked cohort. `Ok(())` means
+/// current. A stale identity is demoted and committed before refusing; an
+/// unknown identity rolls back and refuses.
+pub(crate) async fn require_current<'t>(
+    mut tx: Transaction<'t, Postgres>,
+    c: &sqlx::postgres::PgRow,
+) -> Result<Transaction<'t, Postgres>, AiFirstError> {
+    match ensure_current(&mut tx, c).await? {
+        IdentityCheck::Current => Ok(tx),
+        IdentityCheck::Stale(_) => {
+            tx.commit().await?;
+            Err(AiFirstError::Refused(
+                "cohort identity or protocol changed".into(),
+            ))
+        }
+        IdentityCheck::Unknown(error) => {
+            warn_unknown(&error, c.get("project_id"), c.get("id"));
+            tx.rollback().await?;
+            Err(unknown_refusal(error))
+        }
+    }
 }
 
 pub(crate) async fn admit_ai_first(
@@ -130,9 +246,18 @@ pub async fn route_ai_first_result(
     if c.get::<String, _>("status") != "open" {
         return Ok(false);
     }
-    if !ensure_current(pool, &mut tx, &c).await? {
-        tx.commit().await?;
-        return Ok(false);
+    match ensure_current(&mut tx, &c).await? {
+        IdentityCheck::Current => {}
+        IdentityCheck::Stale(_) => {
+            tx.commit().await?;
+            return Ok(false);
+        }
+        IdentityCheck::Unknown(error) => {
+            // The result stays unrouted; the next sweep retries it.
+            warn_unknown(&error, project, cohort);
+            tx.rollback().await?;
+            return Ok(false);
+        }
     }
     let r=sqlx::query("SELECT r.prepared_task,r.origin,r.semantic_bundle_hash,p.payload,p.model_run_id
        FROM review_run_manifests r JOIN ai_proposals p ON p.id=r.proposal_id AND p.project_id=r.project_id
@@ -259,7 +384,14 @@ pub async fn route_ai_first_result(
 
 /// Bounded scheduling, identity monitoring and partial-budget closure on each tick.
 pub async fn sweep_ai_first(pool: &PgPool) -> Result<u64, AiFirstError> {
-    let cohorts=sqlx::query("SELECT id,project_id FROM ai_screening_cohorts WHERE status IN ('open','closed','auditing','passed','finalized') ORDER BY created_at")
+    // Finalized cohorts are revisited only when the protocol changed (ADR 0005
+    // §13); identity drift merely flags them, which a stale active cohort does.
+    let cohorts=sqlx::query("SELECT c.id,c.project_id FROM ai_screening_cohorts c
+       WHERE c.status IN ('open','closed','auditing','passed')
+          OR (c.status='finalized' AND c.protocol_version_id IS DISTINCT FROM
+            (SELECT p.id FROM protocol_versions p WHERE p.project_id=c.project_id AND p.status='published'
+             ORDER BY p.version DESC LIMIT 1))
+       ORDER BY c.created_at")
         .fetch_all(pool).await?;
     let mut scheduled = 0u64;
     for row in cohorts {
@@ -271,9 +403,19 @@ pub async fn sweep_ai_first(pool: &PgPool) -> Result<u64, AiFirstError> {
             .bind(cohort)
             .fetch_one(&mut *tx)
             .await?;
-        let current = ensure_current(pool, &mut tx, &c).await?;
-        tx.commit().await?;
-        if !current || c.get::<String, _>("status") != "open" {
+        match ensure_current(&mut tx, &c).await? {
+            IdentityCheck::Current => tx.commit().await?,
+            IdentityCheck::Stale(_) => {
+                tx.commit().await?;
+                continue;
+            }
+            IdentityCheck::Unknown(error) => {
+                warn_unknown(&error, project, cohort);
+                tx.rollback().await?;
+                continue;
+            }
+        }
+        if c.get::<String, _>("status") != "open" {
             continue;
         }
         let finished=sqlx::query("SELECT m.report_id,m.review_run_id FROM ai_screening_cohort_members m

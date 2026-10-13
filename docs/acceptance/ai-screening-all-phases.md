@@ -11,6 +11,23 @@ foundation report, including its commands and commits. Its statement that no
 AI-first workflow exists describes the Phase 1 boundary. This document tracks
 the later work, with implementation references and verification evidence below.
 
+### Identity failure correction (integration verification pending)
+
+Identity checks use the locking transaction's connection. Any computation failure,
+including a database error while taking identity locks or checking frozen evidence,
+is `Unknown`: log its cause, roll back, and leave authority, dispositions, exclusions,
+and cohorts unchanged. The periodic sweep skips that cohort rather than aborting the
+remaining pass. `identity_database_failure_rolls_back_without_aborting_the_sweep`
+injects a pre-preview database failure to cover this boundary.
+
+Confirmed semantic identity drift invalidates non-finalized cohorts and flags
+finalized cohorts without reopening their exclusions. Finalized-only projects are
+not monitored for semantic drift by the periodic sweep; finalized cohorts enter it
+only after a protocol change. Protocol republish still reopens canonical automation
+exclusions. These rules and the new regression require parent verification; the
+2026-10-09 evidence below is historical, not proof of these later corrections.
+
+
 ## Scope and phase status
 
 | Phase                                     | Required outcome                                                                                                                                                                                                                                        | Current evidence/status               |

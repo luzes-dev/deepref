@@ -94,6 +94,15 @@ pub async fn get_ai_screening_target(
     project_id: Uuid,
     report_id: Uuid,
 ) -> Result<AiScreeningTarget, AiProposalError> {
+    let mut connection = pool.acquire().await?;
+    get_ai_screening_target_on(&mut connection, project_id, report_id).await
+}
+
+pub(crate) async fn get_ai_screening_target_on(
+    connection: &mut sqlx::PgConnection,
+    project_id: Uuid,
+    report_id: Uuid,
+) -> Result<AiScreeningTarget, AiProposalError> {
     sqlx::query(
         "SELECT r.title,r.abstract_text,coalesce(ss.revision,0)::bigint AS expected_revision
          FROM project_reports pr
@@ -103,7 +112,7 @@ pub async fn get_ai_screening_target(
     )
     .bind(project_id)
     .bind(report_id)
-    .fetch_optional(pool)
+    .fetch_optional(connection)
     .await?
     .map(|row| AiScreeningTarget {
         title: row.get("title"),
@@ -383,11 +392,19 @@ pub async fn list_ai_exclusion_reasons(
     pool: &PgPool,
     project_id: Uuid,
 ) -> Result<Vec<(Uuid, ScreeningStage)>, AiProposalError> {
+    let mut connection = pool.acquire().await?;
+    list_ai_exclusion_reasons_on(&mut connection, project_id).await
+}
+
+pub(crate) async fn list_ai_exclusion_reasons_on(
+    connection: &mut sqlx::PgConnection,
+    project_id: Uuid,
+) -> Result<Vec<(Uuid, ScreeningStage)>, AiProposalError> {
     let rows: Vec<(Uuid, String)> = sqlx::query_as(
         "SELECT id, stage FROM exclusion_reasons WHERE project_id=$1 ORDER BY code,id",
     )
     .bind(project_id)
-    .fetch_all(pool)
+    .fetch_all(connection)
     .await?;
     rows.into_iter()
         .map(|(id, stage)| match stage.as_str() {
@@ -574,31 +591,45 @@ pub struct AiProposalRecord {
 impl ModelRouter for PostgresAiStore {
     fn resolve<'a>(&'a self, profile: ModelProfile) -> AiFuture<'a, ResolvedModel> {
         Box::pin(async move {
-            let row = sqlx::query(
-                "SELECT id,provider,model,model_version,parameters FROM ai_model_routes
-                 WHERE profile=$1 AND enabled AND effective_from <= now()
-                   AND (effective_until IS NULL OR effective_until > now())
-                 ORDER BY effective_from DESC,id DESC LIMIT 1",
-            )
-            .bind(profile.as_str())
-            .fetch_optional(&self.pool)
-            .await
-            .map_err(|_| AiError::Route("route lookup failed".to_owned()))?
-            .ok_or_else(|| AiError::Route("no enabled route exists".to_owned()))?;
-            let parameters = serde_json::from_value::<ModelParameters>(row.get("parameters"))
-                .map_err(|_| AiError::Route("route parameters are invalid".to_owned()))?;
-            let route = ResolvedModel {
-                profile,
-                provider: row.get("provider"),
-                model: row.get("model"),
-                model_version: row.get("model_version"),
-                parameters,
-                route_id: Some(row.get("id")),
-            };
-            route.validate()?;
-            Ok(route)
+            let mut connection = self
+                .pool
+                .acquire()
+                .await
+                .map_err(|_| AiError::Route("route lookup failed".to_owned()))?;
+            resolve_route_on(&mut connection, profile).await
         })
     }
+}
+
+/// The enabled route for `profile`, read on one connection so a caller holding
+/// `LOCK TABLE ai_model_routes` resolves exactly the routes it locked.
+pub(crate) async fn resolve_route_on(
+    connection: &mut sqlx::PgConnection,
+    profile: ModelProfile,
+) -> Result<ResolvedModel, AiError> {
+    let row = sqlx::query(
+        "SELECT id,provider,model,model_version,parameters FROM ai_model_routes
+         WHERE profile=$1 AND enabled AND effective_from <= now()
+           AND (effective_until IS NULL OR effective_until > now())
+         ORDER BY effective_from DESC,id DESC LIMIT 1",
+    )
+    .bind(profile.as_str())
+    .fetch_optional(connection)
+    .await
+    .map_err(|_| AiError::Route("route lookup failed".to_owned()))?
+    .ok_or_else(|| AiError::Route("no enabled route exists".to_owned()))?;
+    let parameters = serde_json::from_value::<ModelParameters>(row.get("parameters"))
+        .map_err(|_| AiError::Route("route parameters are invalid".to_owned()))?;
+    let route = ResolvedModel {
+        profile,
+        provider: row.get("provider"),
+        model: row.get("model"),
+        model_version: row.get("model_version"),
+        parameters,
+        route_id: Some(row.get("id")),
+    };
+    route.validate()?;
+    Ok(route)
 }
 
 impl AiRunStore for PostgresAiStore {

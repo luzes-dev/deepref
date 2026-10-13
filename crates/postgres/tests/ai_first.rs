@@ -879,3 +879,216 @@ async fn a_new_positive_control_rescues_and_invalidates_before_the_statistical_l
             .is_err()
     );
 }
+
+impl Fixture {
+    /// Draw, label without a miss, evaluate and finalize the cohort.
+    async fn finalize(&self) -> u32 {
+        let sample = self.draw().await;
+        self.label_all(&sample, false).await;
+        assert!(
+            evaluate_ai_first_audit(&self.pool, self.project, self.cohort, &actor("owner"))
+                .await
+                .unwrap()
+                .passed
+        );
+        finalize_ai_first_cohort(&self.pool, self.project, self.cohort, true, &actor("owner"))
+            .await
+            .unwrap()
+    }
+    async fn automation_excluded(&self) -> u64 {
+        get_prisma_projection(&self.pool, self.project)
+            .await
+            .unwrap()
+            .unwrap()
+            .automation_excluded
+            .get()
+    }
+    async fn suspended_reason(&self) -> Option<String> {
+        get_ai_first_overview(&self.pool, self.project)
+            .await
+            .unwrap()
+            .suspended_reason
+    }
+    async fn quarantined(&self) -> i64 {
+        sqlx::query_scalar(
+            "SELECT count(*) FROM ai_screening_dispositions
+             WHERE cohort_id=$1 AND voided_at IS NULL AND finalized_at IS NULL",
+        )
+        .bind(self.cohort)
+        .fetch_one(&self.pool)
+        .await
+        .unwrap()
+    }
+}
+
+/// No route resolves, so the semantic identity cannot be computed at all.
+async fn disable_routes(pool: &PgPool) {
+    sqlx::query("UPDATE ai_model_routes SET enabled=false")
+        .execute(pool)
+        .await
+        .unwrap();
+}
+
+/// A newer route for the screening profile changes the semantic identity.
+async fn change_route(pool: &PgPool) {
+    let lock = route_fixture_lock(pool).await;
+    insert_model_route(
+        pool,
+        &ResolvedModel {
+            profile: ModelProfile::Reasoning,
+            provider: "ai-first-fixture".into(),
+            model: "test-model".into(),
+            model_version: "immutable-test-v2".into(),
+            parameters: ModelParameters::default(),
+            route_id: None,
+        },
+        Utc::now(),
+    )
+    .await
+    .unwrap();
+    lock.commit().await.unwrap();
+}
+
+#[tokio::test]
+async fn unknown_identity_never_demotes_a_finalized_cohort() {
+    let Some(pool) = database().await else { return };
+    let f = Fixture::new(pool, true).await;
+    let count = f.finalize().await;
+    assert_eq!(f.automation_excluded().await, u64::from(count));
+    disable_routes(&f.pool).await;
+    sweep_ai_first(&f.pool).await.unwrap();
+    assert_eq!(f.status().await, "finalized");
+    assert_eq!(f.automation_excluded().await, u64::from(count));
+    assert_eq!(f.suspended_reason().await, None);
+}
+
+#[tokio::test]
+async fn unknown_identity_leaves_an_open_cohort_and_its_quarantine_untouched() {
+    let Some(pool) = database().await else { return };
+    let f = Fixture::new(pool, true).await;
+    assert_eq!(f.quarantined().await, 40);
+    disable_routes(&f.pool).await;
+    sweep_ai_first(&f.pool).await.unwrap();
+    assert_eq!(f.status().await, "open");
+    assert_eq!(f.quarantined().await, 40);
+    assert_eq!(f.suspended_reason().await, None);
+    // A user action refuses without changing anything either.
+    close_ai_first_cohort(&f.pool, f.project, f.cohort, &actor("owner"))
+        .await
+        .unwrap();
+    assert!(matches!(
+        draw_ai_first_audit(&f.pool, f.project, f.cohort, None, &actor("owner")).await,
+        Err(AiFirstError::Refused(_))
+    ));
+    assert_eq!(f.status().await, "closed");
+    assert_eq!(f.quarantined().await, 40);
+    assert_eq!(f.suspended_reason().await, None);
+}
+
+#[tokio::test]
+async fn identity_database_failure_rolls_back_without_aborting_the_sweep() {
+    let Some(pool) = database().await else { return };
+    let f = Fixture::new(pool, true).await;
+    // Inject a database error before the identity-preview call. Errors from
+    // locking or checking frozen evidence must be Unknown too, not only route
+    // resolution failures returned by the preview.
+    sqlx::query("ALTER TABLE reports RENAME TO reports_identity_failure")
+        .execute(&f.pool)
+        .await
+        .unwrap();
+    let result = sweep_ai_first(&f.pool).await;
+    sqlx::query("ALTER TABLE reports_identity_failure RENAME TO reports")
+        .execute(&f.pool)
+        .await
+        .unwrap();
+    assert!(result.is_ok(), "an unknown identity skips the cohort, not the sweep");
+    assert_eq!(f.status().await, "open");
+    assert_eq!(f.quarantined().await, 40);
+    assert_eq!(f.suspended_reason().await, None);
+}
+
+/// ADR 0005 §2.4: an identity change voids open cohorts and their dispositions;
+/// finalized cohorts are only flagged for review. Only a protocol republish
+/// (§13) reopens finalized exclusions.
+#[tokio::test]
+async fn identity_drift_voids_open_cohorts_and_only_flags_finalized_ones() {
+    let Some(pool) = database().await else { return };
+    let f = Fixture::new(pool, true).await;
+    let count = f.finalize().await;
+    for i in 0..10 {
+        let id = Uuid::new_v4();
+        sqlx::query("INSERT INTO reports(id,title,abstract_text) VALUES($1,$2,'Later import.')")
+            .bind(id)
+            .bind(format!("Later {i}"))
+            .execute(&f.pool)
+            .await
+            .unwrap();
+        sqlx::query("INSERT INTO project_reports(project_id,report_id) VALUES($1,$2)")
+            .bind(f.project)
+            .bind(id)
+            .execute(&f.pool)
+            .await
+            .unwrap();
+    }
+    let open = start_ai_first_cohort(&f.pool, f.project, 95, true, &actor("owner"))
+        .await
+        .unwrap();
+    change_route(&f.pool).await;
+    sweep_ai_first(&f.pool).await.unwrap();
+
+    assert_eq!(f.status().await, "finalized");
+    assert_eq!(f.automation_excluded().await, u64::from(count));
+    let flag: Option<String> =
+        sqlx::query_scalar("SELECT identity_flag_reason FROM ai_screening_cohorts WHERE id=$1")
+            .bind(f.cohort)
+            .fetch_one(&f.pool)
+            .await
+            .unwrap();
+    assert_eq!(flag.as_deref(), Some("semantic_identity_changed"));
+
+    let (status, reason): (String, Option<String>) =
+        sqlx::query_as("SELECT status,invalidation_reason FROM ai_screening_cohorts WHERE id=$1")
+            .bind(open)
+            .fetch_one(&f.pool)
+            .await
+            .unwrap();
+    assert_eq!(status, "invalidated");
+    assert_eq!(reason.as_deref(), Some("semantic_identity_changed"));
+    assert_eq!(
+        f.suspended_reason().await.as_deref(),
+        Some("semantic_identity_changed")
+    );
+}
+
+/// The identity is computed on the transaction that holds the cohort locks, so a
+/// one-connection pool still finalizes instead of starving and demoting.
+#[tokio::test]
+async fn identity_is_checked_on_the_locking_transaction_connection() {
+    let Some(url) = deepref_postgres::test_isolation::isolated_url_from_env("DATABASE_URL").await
+    else {
+        return;
+    };
+    let pool = sqlx::postgres::PgPoolOptions::new()
+        .max_connections(6)
+        .connect(&url)
+        .await
+        .unwrap();
+    migrate(&pool).await.unwrap();
+    let f = Fixture::new(pool, true).await;
+    let sample = f.draw().await;
+    f.label_all(&sample, false).await;
+    evaluate_ai_first_audit(&f.pool, f.project, f.cohort, &actor("owner"))
+        .await
+        .unwrap();
+    let single = sqlx::postgres::PgPoolOptions::new()
+        .max_connections(1)
+        .acquire_timeout(std::time::Duration::from_secs(3))
+        .connect(&url)
+        .await
+        .unwrap();
+    let count = finalize_ai_first_cohort(&single, f.project, f.cohort, true, &actor("owner"))
+        .await
+        .unwrap();
+    assert_eq!(count, 40 - sample.len() as u32);
+    assert_eq!(f.status().await, "finalized");
+}
