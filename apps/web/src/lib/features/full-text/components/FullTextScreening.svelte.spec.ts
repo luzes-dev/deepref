@@ -2,6 +2,7 @@ import { beforeEach, describe, expect, it, vi } from 'vitest';
 import { render, screen, waitFor, within } from '@testing-library/svelte';
 import { http, HttpResponse } from 'msw';
 import { tick } from 'svelte';
+import type { DocumentBlockDto } from '#lib/api/generated/models/index.js';
 import { server } from '../../../../tests/mocks/server';
 import * as sveltekit from '#lib/tests/fake-sveltekit.svelte.js';
 import FullTextScreeningTestHost from '#lib/tests/FullTextScreeningTestHost.svelte';
@@ -46,6 +47,21 @@ function documentFor(reportId: string) {
 		identity: null,
 		created_at: '2026-01-01T00:00:00Z',
 		updated_at: '2026-01-01T00:00:00Z'
+	};
+}
+
+function blockFor(reportId: string, id: string, text: string, pageNumber = 1): DocumentBlockDto {
+	return {
+		id,
+		document_id: `document-${reportId}`,
+		content_hash: 'fixture-block-hash',
+		kind: 'paragraph',
+		ordinal: pageNumber - 1,
+		page_number: pageNumber,
+		page_ocr_required: false,
+		parser_version: 'fixture-parser-v1',
+		section_path: ['Methods'],
+		text
 	};
 }
 
@@ -385,5 +401,36 @@ describe('full-text screening shortcuts', () => {
 		expect(api.undos).toEqual([
 			{ reportId: 'report-1', body: expect.objectContaining({ expected_revision: 5 }) }
 		]);
+	});
+
+	it('shows a later evidence-page failure and retries the complete evidence set', async () => {
+		installApi();
+		let failLaterPage = true;
+		server.use(http.get(`${base}/reports/:reportId/documents/:documentId/blocks`, ({ request }) => {
+			if (!new URL(request.url).searchParams.has('cursor')) {
+				return HttpResponse.json({
+					items: [blockFor('report-1', 'first-block', 'First page evidence')],
+					next_cursor: 'later-page'
+				});
+			}
+			return failLaterPage
+				? HttpResponse.json({ code: 'DATABASE_UNAVAILABLE', message: 'Evidence service unavailable' }, { status: 503 })
+				: HttpResponse.json({
+					items: [blockFor('report-1', 'later-block', 'Later page evidence', 2)],
+					next_cursor: null
+				});
+		}));
+		await renderAt('report-1');
+		screen.getByRole('button', { name: /Parsed evidence/ }).click();
+
+		const retry = await screen.findByRole('button', { name: 'Retry evidence' });
+		expect(screen.getByRole('alert')).toHaveTextContent('Evidence service unavailable');
+		expect(screen.queryByText('First page evidence')).not.toBeInTheDocument();
+		failLaterPage = false;
+		retry.click();
+
+		expect(await screen.findByText('First page evidence')).toBeVisible();
+		expect(await screen.findByText('Later page evidence')).toBeVisible();
+		expect(screen.queryByRole('alert')).not.toBeInTheDocument();
 	});
 });

@@ -241,7 +241,7 @@
 		Boolean(latestHistory?.stage === 'full_text' && latestHistory.event_kind === 'decision')
 	);
 	const document = $derived(documentQuery.data?.data);
-	const blocks = $derived(blocksQuery.data?.data ?? []);
+	const blocks = $derived(blocksQuery.isError ? [] : (blocksQuery.data?.data ?? []));
 	const pages = $derived<DocumentPageDto[]>(pagesQuery.data?.data ?? []);
 	const selectedBlockId = $derived(urlState.block);
 	const selectedBlock = $derived(blocks.find((block) => block.id === selectedBlockId));
@@ -950,6 +950,23 @@
 			</Alert.Description>
 		</Alert.Root>
 	{/if}
+	{#if document?.status === 'available' && (blocksQuery.isPending || blocksQuery.isFetching)}
+		<p class="p-6 text-sm text-muted-foreground" role="status">Loading parsed evidence…</p>
+	{:else if document?.status === 'available' && blocksQuery.isError}
+		<Alert.Root variant="destructive" class="m-6">
+			<Alert.Title>Parsed evidence unavailable</Alert.Title>
+			<Alert.Description>
+				<p>{blocksQuery.error.message}</p>
+				<Button
+					type="button"
+					variant="outline"
+					size="sm"
+					disabled={blocksQuery.isFetching}
+					onclick={() => void blocksQuery.refetch()}>Retry evidence</Button
+				>
+			</Alert.Description>
+		</Alert.Root>
+	{/if}
 	{#if documentView === 'blocks'}
 		<div class="flex flex-col gap-3 p-6">
 			<p class="text-xs text-muted-foreground">
@@ -957,11 +974,11 @@
 					? ' · OCR required on one or more pages'
 					: ''}
 			</p>
-			{#if blocks.length === 0}
+			{#if blocksQuery.isSuccess && blocks.length === 0}
 				<p class="text-sm text-muted-foreground">
-					Evidence blocks appear after the PDF is parsed.
+					No parsed evidence blocks are available for this PDF.
 				</p>
-			{:else}
+			{:else if blocksQuery.isSuccess}
 				<ol class="flex flex-col gap-2" aria-label="Parsed evidence blocks">
 					{#each blocks as block (block.id)}<li>
 							<EvidenceLink
@@ -1121,7 +1138,7 @@
 					</details>
 				{/if}
 			</div>
-			{#if selectedBlockId && !selectedBlock && blocks.length > 0}
+			{#if blocksQuery.isSuccess && selectedBlockId && !selectedBlock}
 				<p
 					class="rounded-md border border-warning/40 bg-warning/10 p-2 text-xs text-muted-foreground"
 					role="status"
