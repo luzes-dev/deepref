@@ -33,6 +33,14 @@ Workflow execution shares `durable_runs`, `durable_steps`, and `durable_attempts
 
 Every node attempt requires a live job lease matching job identity, owner and attempt. Waiting queues another look at the same canonical step; branch and iteration planning consumes its typed details. Cancellation locks the run before its steps, closes unfinished steps and attempts, and prevents late outcomes from scheduling successors or another wait poll. Public run and node UUIDs remain stable.
 
+Slack, arbitrary HTTP, webhook and inbound-email nodes are parked by default.
+The catalog preserves every definition and exposes runtime `available` metadata;
+the editor retains all definitions for saved-graph rendering and offers only
+available definitions when adding a block. Disabled graphs cannot be newly
+saved, published, enabled or started, and queued worker executions fail before
+any network side effect. `DEEPREF_WORKFLOW_NICHE_NODES=true` opts into these
+nodes through the shared runtime configuration. Outgoing email is not parked.
+
 ## Renderer dependencies
 
 The integration follows the [official Svelte renderer guide](https://retejs.org/docs/guides/renderers/svelte/), with `rete-svelte-plugin/5` dynamically imported through the client editor lifecycle. Installed versions at migration: Rete 2.0.6, area 2.3.2, connection 2.0.5, Svelte renderer 2.1.2 render-utils 2.0.3 and minimap 2.0.3. Package manifests report MIT licenses and a Svelte peer range that includes the installed Svelte 5.57.0.

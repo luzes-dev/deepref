@@ -125,6 +125,15 @@ pub async fn handle_step(
         StepClaim::Stale => return Ok(DeliveryAction::Ack),
         StepClaim::Execute(execution) => *execution,
     };
+    let graph:Value=sqlx::query_scalar("SELECT graph FROM workflow_run_details WHERE id=$1")
+        .bind(payload.run_id).fetch_one(pool).await?;
+    let graph:deepref_application::workflows::WorkflowGraph=serde_json::from_value(graph)?;
+    if !deepref_application::workflows::catalog::graph_is_available(&graph,runtime.workflow.niche_nodes_enabled) {
+        finish_node_execution(pool,payload.step_id,lease,NodeOutcome::Failed{
+            message:"Niche workflow nodes are disabled.".to_owned(),
+        }).await?;
+        return Ok(DeliveryAction::Terminate);
+    }
     let context = nodes::Context {
         pool,
         ai: ai_gateway.as_deref(),

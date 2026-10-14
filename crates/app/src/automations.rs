@@ -101,10 +101,16 @@ const RUN_QUERY: &str = "SELECT r.id AS run_id,r.project_id,d.definition_id,r.jo
  r.actor_kind,r.actor_id,r.status,r.created_at,r.started_at,r.finished_at,r.error AS run_error,
  j.state AS job_state,j.attempts AS job_attempts,j.max_attempts AS job_max_attempts,
  j.available_at AS job_available_at,j.leased_until AS job_leased_until,j.last_error AS job_last_error,
- COALESCE((SELECT jsonb_agg(jsonb_build_object('id',s.id,'ordinal',s.ordinal,'key',s.step_key,
- 'kind',sd.step_kind,'status',CASE WHEN s.status='queued' THEN 'pending' ELSE s.status END,
- 'attempts',s.attempts,'claimed_by',s.claimed_by,'started_at',s.started_at,'finished_at',s.finished_at,
- 'error',s.error) ORDER BY s.ordinal) FROM durable_steps s JOIN automation_step_details sd ON sd.id=s.id
+ COALESCE((SELECT jsonb_agg(jsonb_build_object('id',s.id,'ordinal',sd.ordinal,'key',sd.step_key,
+ 'kind',sd.step_kind,'status',CASE WHEN sd.step_key='execute_compiled_review' THEN
+   CASE r.status WHEN 'queued' THEN 'pending' WHEN 'waiting' THEN 'running'
+     WHEN 'blocked' THEN 'failed' WHEN 'cancelled' THEN 'failed' ELSE r.status END
+   WHEN s.status='queued' THEN 'pending' ELSE s.status END,
+ 'attempts',s.attempts,'claimed_by',s.claimed_by,
+ 'started_at',CASE WHEN sd.step_key='execute_compiled_review' THEN r.started_at ELSE s.started_at END,
+ 'finished_at',CASE WHEN sd.step_key='execute_compiled_review' THEN r.finished_at ELSE s.finished_at END,
+ 'error',CASE WHEN sd.step_key='execute_compiled_review' THEN r.error ELSE s.error END) ORDER BY sd.ordinal)
+ FROM durable_steps s JOIN automation_step_details sd ON sd.id=s.id
  WHERE s.project_id=r.project_id AND s.run_id=r.id),'[]'::jsonb) AS steps,
  COALESCE(u.input_tokens,0)::bigint AS input_tokens,COALESCE(u.output_tokens,0)::bigint AS output_tokens,
  COALESCE(u.cost_micros,0)::bigint AS cost_micros
@@ -671,16 +677,7 @@ pub async fn finalize_automation_run(
             .get::<Option<String>, _>("first_error")
             .unwrap_or_else(|| "automation step failed".to_owned());
         validate_error(&error)?;
-        sqlx::query(
-            "UPDATE durable_runs
-             SET status='failed', finished_at=now(), error=$3
-             WHERE project_id=$1 AND id=$2",
-        )
-        .bind(project_id.as_uuid())
-        .bind(run_id.as_uuid())
-        .bind(&error)
-        .execute(&mut *transaction)
-        .await?;
+        crate::durable_runs::finish_run(&mut transaction,run_id.as_uuid(),"failed",Some(&error)).await?;
         // A review run that failed or was blocked has already notified once,
         // with the review's own name and reason (see `review_runs`). A second
         // "Automation failed" for the same run only duplicates that entry.
@@ -713,15 +710,7 @@ pub async fn finalize_automation_run(
         return Ok(AutomationFinalization::Failed);
     }
 
-    sqlx::query(
-        "UPDATE durable_runs
-         SET status='completed', finished_at=now(), error=NULL
-         WHERE project_id=$1 AND id=$2",
-    )
-    .bind(project_id.as_uuid())
-    .bind(run_id.as_uuid())
-    .execute(&mut *transaction)
-    .await?;
+    crate::durable_runs::finish_run(&mut transaction,run_id.as_uuid(),"completed",None).await?;
     record_notification_in_transaction(
         &mut transaction,
         &NotificationDraft::success(
@@ -763,18 +752,9 @@ pub async fn retry_automation_run(
             return Err(AutomationError::RunNotRetryable);
         }
     }
-    sqlx::query(
-        "UPDATE durable_runs
-         SET status='queued', started_at=NULL, finished_at=NULL, error=NULL
-         WHERE project_id=$1 AND id=$2",
-    )
-    .bind(project_id.as_uuid())
-    .bind(run_id.as_uuid())
-    .execute(&mut *transaction)
-    .await?;
-    sqlx::query("UPDATE durable_steps SET status='queued',finished_at=NULL,error=NULL
-        WHERE project_id=$1 AND run_id=$2 AND status='failed'")
-        .bind(project_id.as_uuid()).bind(run_id.as_uuid()).execute(&mut *transaction).await?;
+    if !crate::durable_runs::reopen_recipe_run(&mut transaction,run_id.as_uuid()).await? {
+        return Err(AutomationError::RunNotRetryable);
+    }
     // Requeue the failed step's existing job; the run's first job identity never changes.
     sqlx::query(
         "UPDATE jobs

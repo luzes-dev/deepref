@@ -158,7 +158,7 @@ pub use graph::{
 };
 pub use jobs::{
     PostgresJobQueue, claim_job, complete_job, enqueue_job, enqueue_job_pool, fail_job,
-    get_claimed_automation_job_project_id_for_run, job, recover_expired_jobs, renew_job,
+    job, recover_expired_jobs, renew_job,
 };
 pub use legacy_import::{LegacyImportCounts, import_legacy};
 pub use notifications::{
@@ -201,8 +201,8 @@ pub use review_runs::{
     AcceptedReviewAttempt, LeasedReviewRun, PostgresReviewError, PreparedReviewRun,
     ReviewAttemptCompletion, ReviewAttemptStart, ReviewFinalization, ReviewScheduleIntent,
     begin_review_attempt, block_review_run, fail_review_attempt, fail_review_run,
-    finalize_review_proposal, get_review_run, get_review_runs, load_leased_review_run,
-    mark_review_run_running, preview_review_identity, schedule_prepared_review_run,
+    get_review_run, get_review_runs, load_leased_review_run,
+    preview_review_identity, schedule_prepared_review_run,
     schedule_prepared_review_run_as,
 };
 pub use second_review::{

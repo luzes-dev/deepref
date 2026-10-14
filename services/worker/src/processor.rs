@@ -808,10 +808,16 @@ async fn handle_job_with_document_services_inner(
         deepref_domain::JobKind::DurableRunStep => {
             let lease = lease.ok_or_else(|| anyhow::anyhow!("durable step requires its job lease"))?;
             let payload: DurableStepJobPayload = serde_json::from_value(job.payload.clone())?;
-            match payload.handler_kind.as_str() {
-                "workflow" => crate::workflows::handle_step(&pool, job, lease, ai_gateway.clone(),&config.runtime).await,
-                "automation" | "review" => handle_durable_recipe_step(&pool, job, lease, ai_gateway.as_deref(), payload).await,
-                other => anyhow::bail!("unsupported durable handler kind: {other}"),
+            let stored:Option<String>=sqlx::query_scalar(
+                "SELECT handler_kind FROM durable_steps WHERE id=$1 AND run_id=$2 AND project_id=$3")
+                .bind(payload.step_id).bind(payload.run_id).bind(job.project_id.as_uuid())
+                .fetch_optional(&pool).await?;
+            anyhow::ensure!(stored.as_deref()==Some(payload.handler_kind.as_str()),"durable step identity or handler mismatch");
+            match payload.handler_kind {
+                deepref_domain::jobs::DurableHandlerKind::Workflow =>
+                    crate::workflows::handle_step(&pool, job, lease, ai_gateway.clone(),&config.runtime).await,
+                deepref_domain::jobs::DurableHandlerKind::Automation | deepref_domain::jobs::DurableHandlerKind::Review =>
+                    handle_durable_recipe_step(&pool, job, lease, ai_gateway.as_deref(), payload).await,
             }
         }
         deepref_domain::JobKind::AssistantAgentRun => {
@@ -835,7 +841,7 @@ async fn handle_job_with_document_services_inner(
 struct DurableStepJobPayload {
     run_id: Uuid,
     step_id: Uuid,
-    handler_kind: String,
+    handler_kind: deepref_domain::jobs::DurableHandlerKind,
 }
 
 const UNKNOWN_AUTOMATION_STEP_ERROR: &str =
@@ -850,7 +856,7 @@ async fn handle_durable_recipe_step(
 ) -> anyhow::Result<DeliveryAction> {
     let run_id = deepref_application::AutomationRunId::new(payload.run_id)?;
     let project_id = job.project_id;
-    let step = if payload.handler_kind == "review" {
+    let step = if payload.handler_kind == deepref_domain::jobs::DurableHandlerKind::Review {
         let run = deepref_app::get_automation_run(pool, project_id, run_id).await?;
         run.steps.into_iter().find(|step| step.key == "execute_compiled_review")
             .ok_or_else(|| anyhow::anyhow!("review run lacks its recipe detail"))?
@@ -931,7 +937,6 @@ async fn execute_compiled_review(
         .await?;
         return Ok(());
     }
-    deepref_app::mark_review_run_running(pool, project_id, review_run_id, lease).await?;
 
     let prepare = persist_review_node(
         pool,
@@ -1691,10 +1696,10 @@ async fn latest_accepted_review_attempt(
     final_node_id: &str,
 ) -> anyhow::Result<Uuid> {
     sqlx::query_scalar(
-        "SELECT id FROM review_attempt_details
+        "SELECT accepted_attempt_id FROM review_attempt_details
          WHERE project_id=$1 AND run_id=$2 AND node_id=$3
-           AND accepted_at IS NOT NULL
-         ORDER BY accepted_at DESC,id DESC LIMIT 1",
+           AND accepted_attempt_id IS NOT NULL
+         ORDER BY accepted_at DESC NULLS LAST,id DESC LIMIT 1",
     )
     .bind(project_id.as_uuid())
     .bind(review_run_id.as_uuid())

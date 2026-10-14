@@ -16,6 +16,33 @@ cohort evaluation and second-review retry backoff use the same canonical run
 status. Review artifact acceptance and step completion share the live job-lease
 fence and transaction, rather than maintaining a separate review attempt state.
 
+There is one `durable_run_step` queue kind, dispatched by a typed handler
+(`automation`, `workflow`, or `review`). Recipe steps enqueue their successor
+transactionally rather than executing an entire recipe inside one queue claim.
+The compiled-review planner replays already-completed typed artifacts and
+schedules the next uncompleted node; only that node's live claim may execute
+or accept an attempt. Reused evidence keeps its original accepted-attempt UUID,
+while the current generation still records its own canonical attempt.
+
+Migrations `0073` and `0074` preflight cross-engine UUID collisions, copy existing
+run/step/attempt identities and review generations/reuse epochs, retarget jobs
+without changing queue IDs, dedupe keys, attempts or live leases, and validate
+the retargeted foreign keys. They retire the old lifecycle tables and SQL
+entry points, not replace them with compatibility views. Exhausted expired
+step jobs are reconciled to terminal canonical state even when the handler
+crashes; this lets review scheduling create a new generation instead of
+reusing a permanently running manifest.
+
+`RuntimeConfig.workflow.niche_nodes_enabled` defaults to false through
+`DEEPREF_WORKFLOW_NICHE_NODES`. Slack, arbitrary HTTP, webhook and inbound-email
+nodes remain in the catalog with `available: false` so saved graphs render
+unchanged, but the palette, API authoring/activation/ingress and queued worker
+execution deny their use. Outgoing `integration.email` remains enabled. API
+and worker composition install the same immutable application dispatch policy;
+in-process configuration disagreement fails startup. When enabled, the existing
+origin-bound credentials, signed hooks and token-before-rate-limit checks remain
+authoritative.
+
 
 The durable queue port carries the pure `deepref-domain::JobKind`, not an
 arbitrary string. Producers and exhaustive worker dispatch share the same closed

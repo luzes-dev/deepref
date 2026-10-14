@@ -4,7 +4,7 @@ use serde_json::Value;
 use sqlx::{Postgres, Row, Transaction};
 use uuid::Uuid;
 
-pub const DURABLE_RUN_STEP_JOB_KIND: &str = "durable_run_step";
+pub const DURABLE_RUN_STEP_JOB_KIND: &str = deepref_domain::JobKind::DurableRunStep.as_str();
 
 /// Lock run before step everywhere, including cancellation and domain planning.
 async fn lock_step(
@@ -30,12 +30,21 @@ async fn live_lease(
     Ok(sqlx::query_scalar::<_, Uuid>(
         "SELECT j.id FROM jobs j JOIN durable_steps s ON s.project_id=j.project_id
          WHERE s.id=$1 AND j.id=$2 AND j.state='running' AND j.lease_owner=$3
-           AND j.attempts=$4 AND j.leased_until>now()
+           AND j.attempts=$4 AND j.leased_until>clock_timestamp()
            AND j.kind='durable_run_step' AND j.payload->>'run_id'=s.run_id::text
            AND j.payload->>'step_id'=s.id::text
          FOR UPDATE OF j")
         .bind(step_id).bind(lease.id).bind(&lease.owner).bind(lease.attempt)
         .fetch_optional(&mut **tx).await?.is_some())
+}
+
+/// Fence typed planning and artifact writes without beginning another attempt.
+pub async fn verify_active_step_lease(
+    tx:&mut Transaction<'_,Postgres>,step_id:Uuid,lease:&JobLease,
+) -> Result<bool,sqlx::Error> {
+    let Some(status)=lock_step(tx,step_id).await? else{return Ok(false)};
+    if !matches!(status.as_str(),"queued"|"running"|"waiting"){return Ok(false)}
+    live_lease(tx,step_id,lease).await
 }
 
 /// Claim one step and create its sole attempt record. Duplicate delivery of the
@@ -62,7 +71,7 @@ pub async fn begin_step(
             && old_owner.as_deref() == Some(lease.owner.as_str()) { return Ok(None) }
         let old_live: bool = sqlx::query_scalar(
             "SELECT EXISTS(SELECT 1 FROM jobs WHERE id=$1 AND attempts=$2
-             AND state='running' AND lease_owner=$3 AND leased_until>now())")
+             AND state='running' AND lease_owner=$3 AND leased_until>clock_timestamp())")
             .bind(old_job).bind(old_attempt).bind(old_owner).fetch_one(&mut **tx).await?;
         if old_live { return Ok(None) }
         sqlx::query("UPDATE durable_attempts SET status='failed',finished_at=now(),error='lease expired'
@@ -142,11 +151,11 @@ pub async fn fail_unclaimed_step(
     let changed = sqlx::query(
         "UPDATE durable_steps s SET status='failed',error=$2,finished_at=now(),
            claimed_by=NULL,claimed_job_id=NULL,claimed_job_attempt=NULL
-         WHERE s.id=$1 AND s.status IN ('queued','running','waiting')
+         WHERE s.id=$1 AND s.status IN ('pending','queued','running','waiting')
          AND NOT EXISTS(SELECT 1 FROM jobs j WHERE j.kind='durable_run_step'
            AND j.payload->>'step_id'=s.id::text AND j.state IN ('queued','running'))
          AND NOT EXISTS(SELECT 1 FROM jobs j WHERE j.id=s.claimed_job_id
-           AND j.attempts=s.claimed_job_attempt AND j.state='running' AND j.leased_until>now())")
+           AND j.attempts=s.claimed_job_attempt AND j.state='running' AND j.leased_until>clock_timestamp())")
         .bind(step_id).bind(error).execute(&mut **tx).await?.rows_affected();
     if changed == 0 { return Ok(false) }
     sqlx::query("UPDATE durable_attempts SET status='failed',error=$2,finished_at=now()
@@ -175,16 +184,7 @@ pub async fn settle_exhausted_jobs(pool: &sqlx::PgPool) -> Result<(), sqlx::Erro
         }
         let run_id = sqlx::query_scalar::<_,Uuid>("SELECT run_id FROM durable_steps WHERE id=$1")
             .bind(step_id).fetch_one(&mut *tx).await?;
-        sqlx::query("UPDATE durable_runs SET status='failed',finished_at=now(),error='job attempt budget exhausted'
-            WHERE id=$1 AND status IN ('queued','running','waiting')")
-            .bind(run_id).execute(&mut *tx).await?;
-        sqlx::query("UPDATE durable_steps SET status='cancelled',finished_at=now(),
-            claimed_by=NULL,claimed_job_id=NULL,claimed_job_attempt=NULL
-            WHERE run_id=$1 AND status IN ('pending','queued','running','waiting')")
-            .bind(run_id).execute(&mut *tx).await?;
-        sqlx::query("UPDATE durable_attempts SET status='cancelled',finished_at=now()
-            WHERE run_id=$1 AND status='running'")
-            .bind(run_id).execute(&mut *tx).await?;
+        finish_run(&mut tx,run_id,"failed",Some("job attempt budget exhausted")).await?;
         sqlx::query("UPDATE review_run_manifests SET state_code='review_execution_failed',
             state_message='job attempt budget exhausted' WHERE automation_run_id=$1")
             .bind(run_id).execute(&mut *tx).await?;
@@ -205,20 +205,41 @@ pub async fn finish_run(
     if !matches!(status,"completed"|"failed"|"blocked"|"cancelled") {
         return Err(sqlx::Error::Protocol("invalid durable run outcome".into()));
     }
-    Ok(sqlx::query("UPDATE durable_runs SET status=$2,error=$3,started_at=COALESCE(started_at,now()),
-        finished_at=now() WHERE id=$1 AND status IN ('queued','running','waiting')")
-        .bind(run_id).bind(status).bind(error).execute(&mut **tx).await?.rows_affected()==1)
+    sqlx::query("SELECT id FROM durable_runs WHERE id=$1 FOR UPDATE")
+        .bind(run_id).fetch_optional(&mut **tx).await?;
+    let changed = sqlx::query("UPDATE durable_runs SET status=$2,error=$3,started_at=COALESCE(started_at,now()),
+        finished_at=now() WHERE id=$1 AND status IN ('queued','running','waiting')
+        AND ($2<>'completed' OR NOT EXISTS(SELECT 1 FROM durable_steps
+          WHERE run_id=$1 AND status IN ('pending','queued','running','waiting')))")
+        .bind(run_id).bind(status).bind(error).execute(&mut **tx).await?.rows_affected()==1;
+    if changed && status != "completed" {
+        sqlx::query("UPDATE durable_steps SET status='cancelled',finished_at=now(),
+            claimed_by=NULL,claimed_job_id=NULL,claimed_job_attempt=NULL WHERE run_id=$1
+            AND status IN ('pending','queued','running','waiting')")
+            .bind(run_id).execute(&mut **tx).await?;
+        sqlx::query("UPDATE durable_attempts SET status='cancelled',finished_at=now()
+            WHERE run_id=$1 AND status='running'")
+            .bind(run_id).execute(&mut **tx).await?;
+    }
+    Ok(changed)
 }
 
 pub async fn cancel_run(tx: &mut Transaction<'_,Postgres>,run_id:Uuid,error:&str)->Result<bool,sqlx::Error> {
-    sqlx::query("SELECT id FROM durable_runs WHERE id=$1 FOR UPDATE")
-        .bind(run_id).fetch_optional(&mut **tx).await?;
-    if !finish_run(tx,run_id,"cancelled",Some(error)).await? { return Ok(false) }
-    sqlx::query("UPDATE durable_steps SET status='cancelled',finished_at=now(),
-        claimed_by=NULL,claimed_job_id=NULL,claimed_job_attempt=NULL WHERE run_id=$1
-        AND status IN ('pending','queued','running','waiting')")
-        .bind(run_id).execute(&mut **tx).await?;
-    sqlx::query("UPDATE durable_attempts SET status='cancelled',finished_at=now() WHERE run_id=$1 AND status='running'")
-        .bind(run_id).execute(&mut **tx).await?;
-    Ok(true)
+    finish_run(tx,run_id,"cancelled",Some(error)).await
+}
+
+/// Purpose-built recipes retry their existing identity; review generations are
+/// intentionally not reopened here.
+pub async fn reopen_recipe_run(tx:&mut Transaction<'_,Postgres>,run_id:Uuid)->Result<bool,sqlx::Error> {
+    let changed=sqlx::query("UPDATE durable_runs SET status='queued',started_at=NULL,finished_at=NULL,error=NULL
+        WHERE id=$1 AND kind='automation' AND status='failed'
+        AND NOT EXISTS(SELECT 1 FROM review_run_manifests WHERE automation_run_id=$1)")
+        .bind(run_id).execute(&mut **tx).await?.rows_affected()==1;
+    if changed {
+        sqlx::query("UPDATE durable_steps SET status='queued',finished_at=NULL,error=NULL,
+            claimed_by=NULL,claimed_job_id=NULL,claimed_job_attempt=NULL
+            WHERE run_id=$1 AND status IN ('failed','cancelled')")
+            .bind(run_id).execute(&mut **tx).await?;
+    }
+    Ok(changed)
 }

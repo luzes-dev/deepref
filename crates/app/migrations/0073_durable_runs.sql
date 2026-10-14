@@ -182,11 +182,13 @@ CREATE TABLE review_attempt_details (
  error_code text,
  error_message text,
  accepted_at timestamptz,
+ accepted_attempt_id uuid REFERENCES durable_attempts(id) DEFERRABLE INITIALLY DEFERRED,
  FOREIGN KEY(project_id,artifact_id) REFERENCES review_artifacts(project_id,id) DEFERRABLE INITIALLY DEFERRED,
  FOREIGN KEY(model_run_id,project_id) REFERENCES ai_runs(id,project_id) DEFERRABLE INITIALLY DEFERRED
 );
 CREATE UNIQUE INDEX review_attempt_details_accepted_fingerprint_uq ON review_attempt_details(project_id,node_id,input_fingerprint) WHERE accepted_at IS NOT NULL;
-INSERT INTO review_attempt_details SELECT id,project_id,automation_run_id,node_id,node_version,input_fingerprint,artifact_id,model_run_id,error_code,error_message,accepted_at FROM review_step_attempts;
+INSERT INTO review_attempt_details SELECT id,project_id,automation_run_id,node_id,node_version,input_fingerprint,artifact_id,model_run_id,error_code,error_message,accepted_at,
+ CASE WHEN accepted_at IS NOT NULL THEN id END FROM review_step_attempts;
 INSERT INTO automation_step_details SELECT id,project_id,automation_run_id,ordinal,step_key,step_kind,accepted_attempt_id,input_fingerprint FROM automation_step_runs;
 -- Legacy recipe/workflow histories recorded only a count; preserve that count and
 -- the known latest transition, without inventing earlier timing or identities.

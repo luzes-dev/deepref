@@ -762,4 +762,15 @@ mod tests {
         assert!(node_type("integration.slack").is_some_and(|def| def.has_side_effects));
         assert!(node_type("logic.filter").is_some_and(|def| !def.has_side_effects));
     }
+
+    #[test]
+    fn parked_nodes_keep_definitions_but_require_explicit_runtime_enablement() {
+        for id in ["trigger.webhook","trigger.email","integration.http_request","integration.slack"] {
+            assert!(node_type(id).is_some(),"saved graphs retain {id}");
+            assert!(!super::node_is_available(id,false));
+            assert!(super::node_is_available(id,true));
+        }
+        assert!(super::node_is_available("integration.email",false));
+        assert!(super::node_is_available("trigger.manual",false));
+    }
 }

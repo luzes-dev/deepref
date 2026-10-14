@@ -112,10 +112,11 @@ async fn complete_review_attempt_in_transaction(
             return Err(PostgresReviewError::WorkerOwnership);
         }
         sqlx::query(
-            "UPDATE review_attempt_details SET artifact_id=$2 WHERE id=$1",
+            "UPDATE review_attempt_details SET artifact_id=$2,accepted_attempt_id=$3 WHERE id=$1",
         )
         .bind(attempt_id)
         .bind(accepted.artifact_id)
+        .bind(accepted.attempt_id)
         .execute(&mut **transaction)
         .await?;
         return Ok(accepted);
@@ -165,7 +166,7 @@ async fn complete_review_attempt_in_transaction(
     }
     sqlx::query(
         "UPDATE review_attempt_details
-         SET artifact_id=$2,model_run_id=$3,accepted_at=now()
+         SET artifact_id=$2,model_run_id=$3,accepted_at=now(),accepted_attempt_id=id
          WHERE id=$1",
     )
     .bind(attempt_id)
@@ -217,12 +218,17 @@ async fn bind_review_step_acceptance_in_transaction(
          WHERE d.id=s.id AND s.project_id=$1 AND s.id=$2 AND s.status IN ('running','completed')
            AND (s.status='completed' OR (s.claimed_by=$3 AND s.claimed_job_attempt=$5))
            AND a.id=$4 AND ad.id=a.id AND a.project_id=s.project_id
-           AND a.run_id=s.run_id
            AND a.status='completed' AND ad.accepted_at IS NOT NULL
            AND r.project_id=s.project_id AND r.id=s.run_id
            AND j.project_id=r.project_id AND j.id=$6
            AND j.payload->>'run_id'=r.id::text
-           AND j.state='running' AND j.lease_owner=$3 AND j.attempts=$5 AND j.leased_until > now()",
+           AND j.state='running' AND j.lease_owner=$3 AND j.attempts=$5 AND j.leased_until > now()
+           AND EXISTS(SELECT 1 FROM durable_attempts current
+             JOIN review_attempt_details cd ON cd.id=current.id
+             WHERE current.run_id=s.run_id AND current.project_id=s.project_id
+               AND current.job_id=j.id AND current.job_attempt=j.attempts
+               AND current.step_id::text=j.payload->>'step_id'
+               AND cd.accepted_attempt_id=a.id AND current.status='completed')",
     )
     .bind(project_id.as_uuid())
     .bind(automation_step_id.as_uuid())
@@ -267,6 +273,10 @@ pub async fn complete_review_step(
     lease: &JobLease,
     output: Option<Value>,
 ) -> Result<(), PostgresReviewError> {
+    let run_id:Uuid=sqlx::query_scalar("SELECT run_id FROM durable_steps WHERE id=$1 AND project_id=$2")
+        .bind(automation_step_id.as_uuid()).bind(project_id.as_uuid()).fetch_one(pool).await?;
+    let run=super::review_runs::load_leased_review_run(pool,project_id,
+        deepref_review::ReviewRunId::new(run_id)?,lease).await?;
     let mut transaction = pool.begin().await?;
     bind_review_step_acceptance_in_transaction(
         &mut transaction,
@@ -285,6 +295,26 @@ pub async fn complete_review_step(
     )
     .await
     .map_err(map_automation_error)?;
+    if !run.snapshot.state.terminal() {
+        let payload:Value=sqlx::query_scalar("SELECT artifact.payload FROM review_attempt_details detail
+            JOIN review_artifacts artifact ON artifact.id=detail.artifact_id AND artifact.project_id=detail.project_id
+            WHERE detail.id=$1 AND detail.project_id=$2 AND detail.accepted_at IS NOT NULL")
+            .bind(accepted_attempt_id).bind(project_id.as_uuid()).fetch_one(&mut *transaction).await?;
+        // A completed generation is returned by scheduling, never retried in
+        // the same reuse epoch. A blocked accepted final node may be reused by
+        // a new retry generation, and must terminalize that generation too.
+        let code=payload.get("code").and_then(Value::as_str).and_then(ReviewBlockCode::parse)
+            .ok_or(PostgresReviewError::FinalizationConflict)?;
+        let message=payload.get("message").and_then(Value::as_str)
+            .ok_or(PostgresReviewError::FinalizationConflict)?;
+        resolve_blocked_outcome(code,message)?;
+        if !crate::durable_runs::finish_run(&mut transaction,run_id,"blocked",Some(message)).await? {
+            return Err(PostgresReviewError::FinalizationConflict);
+        }
+        sqlx::query("UPDATE review_run_manifests SET state_code=$2,state_message=$3 WHERE automation_run_id=$1")
+            .bind(run_id).bind(code.as_str()).bind(message).execute(&mut *transaction).await?;
+        record_review_outcome_notification_in_transaction(&mut transaction,&run,"blocked",Some(message),None).await?;
+    }
     transaction.commit().await?;
     Ok(())
 }

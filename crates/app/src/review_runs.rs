@@ -1,12 +1,12 @@
 use chrono::{DateTime, Utc};
-use deepref_ai::{AiProposal, ProposalStatus, ProposalStore, hash_json};
+use deepref_ai::ProposalStatus;
 use deepref_application::jobs::JobLease;
 use deepref_domain::ProjectId;
 use deepref_review::{
     ReviewBlockCode, ReviewDefinitionKey, ReviewError, ReviewOrigin, ReviewRunId,
     ReviewRunSnapshot, ReviewRunState, ReviewRunStatus, ReviewSemanticContract, ReviewSubject, ScheduleReviewRun,
     worker::{
-        AcceptedArtifactInput, CompiledReview, ExecutedReviewTask, PreparedReviewTask, ReviewHash,
+        AcceptedArtifactInput, CompiledReview, PreparedReviewTask, ReviewHash,
         ReviewManifestInput, ReviewNode, ReviewRunManifest,
     },
 };
@@ -16,7 +16,6 @@ use thiserror::Error;
 use uuid::Uuid;
 
 use crate::{
-    PostgresAiStore,
     notifications::{NotificationDraft, record_notification},
     review_calibration::{CalibrationRefusal, admit_calibration},
     review_run_setup::{
@@ -535,37 +534,6 @@ pub async fn load_leased_review_run(
     })
 }
 
-pub async fn mark_review_run_running(
-    pool: &PgPool,
-    project_id: ProjectId,
-    run_id: ReviewRunId,
-    lease: &JobLease,
-) -> Result<(), PostgresReviewError> {
-    let changed = sqlx::query(
-        "UPDATE durable_runs AS r
-         SET status='running',started_at=COALESCE(r.started_at,now()),finished_at=NULL
-         FROM jobs AS j
-         WHERE r.project_id=$1 AND r.id=$2
-           AND r.status IN ('queued','running')
-           AND j.project_id=r.project_id AND j.id=$5
-           AND j.kind='durable_run_step' AND (j.payload->>'run_id')::uuid=r.id
-           AND j.state='running' AND j.lease_owner=$3 AND j.attempts=$4 AND j.leased_until > now()",
-    )
-    .bind(project_id.as_uuid())
-    .bind(run_id.as_uuid())
-    .bind(&lease.owner)
-    .bind(lease.attempt)
-    .bind(lease.id)
-    .execute(pool)
-    .await?
-    .rows_affected();
-    if changed == 0 {
-        return Err(PostgresReviewError::InvalidState(
-            "review run is already terminal".to_owned(),
-        ));
-    }
-    Ok(())
-}
 
 pub async fn block_review_run(
     pool: &PgPool,
@@ -604,34 +572,23 @@ async fn finish_review_run(
             "terminal review error metadata is invalid".to_owned(),
         ));
     }
-    let terminal_row = sqlx::query(
-        "WITH terminal AS (
-           UPDATE durable_runs SET status=$3,started_at=COALESCE(started_at,now()),
-             finished_at=now(),error=$5
-           WHERE project_id=$1 AND id=$2 AND status IN ('queued','running')
-           RETURNING id
-         )
-         UPDATE review_run_manifests m SET state_code=$4,state_message=$5
-         FROM terminal t WHERE m.project_id=$1 AND m.automation_run_id=t.id
-         RETURNING m.definition_key",
-    )
-    .bind(project_id.as_uuid())
-    .bind(run_id.as_uuid())
-    .bind(state.as_str())
-    .bind(code)
-    .bind(message)
-    .fetch_optional(pool)
-    .await?;
-    let Some(terminal_row) = terminal_row else {
-        let existing = get_review_run(pool, project_id, run_id).await?;
+    let mut tx=pool.begin().await?;
+    let definition_key = sqlx::query_scalar::<_,String>(
+        "SELECT definition_key FROM review_run_manifests WHERE project_id=$1 AND automation_run_id=$2")
+        .bind(project_id.as_uuid()).bind(run_id.as_uuid()).fetch_optional(&mut *tx).await?
+        .ok_or(PostgresReviewError::RunNotFound)?;
+    if !crate::durable_runs::finish_run(&mut tx,run_id.as_uuid(),state.as_str(),Some(message)).await? {
+        tx.commit().await?;
+        let existing=get_review_run(pool,project_id,run_id).await?;
         if !existing.state.terminal() {
-            return Err(PostgresReviewError::InvalidState(
-                "review run could not enter a terminal state".to_owned(),
-            ));
+            return Err(PostgresReviewError::InvalidState("review run could not enter a terminal state".to_owned()));
         }
         return Ok(());
-    };
-    let definition_key: String = terminal_row.get("definition_key");
+    }
+    sqlx::query("UPDATE review_run_manifests SET state_code=$3,state_message=$4 WHERE project_id=$1 AND automation_run_id=$2")
+        .bind(project_id.as_uuid()).bind(run_id.as_uuid()).bind(code).bind(message)
+        .execute(&mut *tx).await?;
+    tx.commit().await?;
     record_notification(
         pool,
         &NotificationDraft::error(
@@ -672,10 +629,17 @@ async fn schedule_review_node(
         return Err(PostgresReviewError::WorkerOwnership);
     }
     let step_key = format!("{node_id}:{fingerprint}");
-    let step_id = sqlx::query_scalar::<_,Uuid>(
-        "SELECT automation_uuid_from_text('durable-review-step',$1)")
-        .bind(format!("{}:{}:{step_key}",project_id.as_uuid(),run_id.as_uuid()))
-        .fetch_one(&mut **tx).await?;
+    let existing=sqlx::query_scalar::<_,Uuid>("SELECT a.step_id FROM durable_attempts a
+        JOIN review_attempt_details d ON d.id=a.id WHERE d.project_id=$1 AND d.run_id=$2
+        AND d.node_id=$3 AND d.input_fingerprint=$4 ORDER BY a.attempt_number DESC LIMIT 1")
+        .bind(project_id.as_uuid()).bind(run_id.as_uuid()).bind(node_id).bind(fingerprint)
+        .fetch_optional(&mut **tx).await?;
+    let step_id=match existing {
+        Some(step_id)=>step_id,
+        None=>sqlx::query_scalar::<_,Uuid>("SELECT automation_uuid_from_text('durable-review-step',$1)")
+            .bind(format!("{}:{}:{step_key}",project_id.as_uuid(),run_id.as_uuid()))
+            .fetch_one(&mut **tx).await?,
+    };
     sqlx::query("INSERT INTO durable_steps(id,project_id,run_id,handler_kind,step_key,status)
         VALUES($1,$2,$3,'review',$4,'queued') ON CONFLICT(id) DO NOTHING")
         .bind(step_id).bind(project_id.as_uuid()).bind(run_id.as_uuid()).bind(step_key)
@@ -705,7 +669,7 @@ pub async fn begin_review_attempt(
     // Replay only artifacts completed in this generation. Global accepted reuse
     // still gets its own canonical step/attempt in the new generation.
     if let Some(row) = sqlx::query(
-        "SELECT a.id AS attempt_id,a.artifact_id,r.content_hash,r.payload
+        "SELECT COALESCE(a.accepted_attempt_id,a.id) AS attempt_id,a.artifact_id,r.content_hash,r.payload
          FROM review_attempt_details a
          JOIN durable_attempts d ON d.project_id=a.project_id AND d.id=a.id
          JOIN review_artifacts r ON r.project_id=a.project_id AND r.id=a.artifact_id
@@ -777,11 +741,12 @@ pub async fn begin_review_attempt(
         &mut transaction, project_id, &identity.node_id, &identity.input_fingerprint,
     ).await? {
         sqlx::query(
-            "UPDATE review_attempt_details SET artifact_id=$2
+            "UPDATE review_attempt_details SET artifact_id=$2,accepted_attempt_id=$3
              WHERE id=$1",
         )
         .bind(attempt_id)
         .bind(row.get::<Uuid, _>("artifact_id"))
+        .bind(row.get::<Uuid,_>("attempt_id"))
         .execute(&mut *transaction)
         .await?;
         if !crate::durable_runs::finish_step(
@@ -850,118 +815,6 @@ pub async fn fail_review_attempt(
     Ok(())
 }
 
-pub async fn finalize_review_proposal(
-    pool: &PgPool,
-    run: &LeasedReviewRun,
-    executed: ExecutedReviewTask,
-    lease: &JobLease,
-) -> Result<ReviewFinalization, PostgresReviewError> {
-    let project_id = run.snapshot.project_id;
-    if executed.proposal.project_id != project_id {
-        return Err(PostgresReviewError::FinalizationConflict);
-    }
-    let mut lease_check = pool.begin().await?;
-    assert_worker_lease(&mut lease_check, project_id, run.snapshot.id, lease).await?;
-    lease_check.commit().await?;
-    if !subject_is_current(pool, project_id, &run.snapshot.subject).await? {
-        block_review_run(
-            pool,
-            project_id,
-            run.snapshot.id,
-            ReviewBlockCode::SubjectChanged,
-            "the review subject or published protocol changed before finalization",
-        )
-        .await?;
-        return Ok(ReviewFinalization::Blocked);
-    }
-    let candidate_hash = ReviewHash::parse(hash_json(&serde_json::to_value(&executed.proposal)?)?)?;
-    if let Some(proposal_id) = sqlx::query_scalar::<_, Uuid>(
-        "SELECT proposal_id FROM review_proposal_finalizations
-         WHERE project_id=$1 AND automation_run_id=$2 AND candidate_hash=$3",
-    )
-    .bind(project_id.as_uuid())
-    .bind(run.snapshot.id.as_uuid())
-    .bind(candidate_hash.as_str())
-    .fetch_optional(pool)
-    .await?
-    {
-        return Ok(ReviewFinalization::Completed { proposal_id });
-    }
-    let proposal = PostgresAiStore::new(pool)
-        .create(AiProposal {
-            id: Uuid::new_v4(),
-            draft: executed.proposal,
-            model_run_id: executed.model_run_id,
-            status: ProposalStatus::Pending,
-            resolved_at: None,
-            resolved_by_actor_id: None,
-        })
-        .await?;
-    let mut transaction = pool.begin().await?;
-    sqlx::query(
-        "INSERT INTO review_proposal_finalizations
-         (project_id,automation_run_id,candidate_hash,proposal_id,model_run_id)
-         VALUES ($1,$2,$3,$4,$5)
-         ON CONFLICT (project_id,automation_run_id,candidate_hash) DO NOTHING",
-    )
-    .bind(project_id.as_uuid())
-    .bind(run.snapshot.id.as_uuid())
-    .bind(candidate_hash.as_str())
-    .bind(proposal.id)
-    .bind(executed.model_run_id)
-    .execute(&mut *transaction)
-    .await?;
-    let persisted = sqlx::query(
-        "SELECT proposal_id,model_run_id FROM review_proposal_finalizations
-         WHERE project_id=$1 AND automation_run_id=$2 AND candidate_hash=$3
-         FOR UPDATE",
-    )
-    .bind(project_id.as_uuid())
-    .bind(run.snapshot.id.as_uuid())
-    .bind(candidate_hash.as_str())
-    .fetch_one(&mut *transaction)
-    .await?;
-    let proposal_id: Uuid = persisted.get("proposal_id");
-    if proposal_id != proposal.id
-        || persisted.get::<Uuid, _>("model_run_id") != executed.model_run_id
-    {
-        return Err(PostgresReviewError::FinalizationConflict);
-    }
-    let changed = sqlx::query(
-        "WITH terminal AS (
-           UPDATE durable_runs SET status='completed',finished_at=now(),error=NULL
-           WHERE project_id=$1 AND id=$2 AND status='running' RETURNING id
-         )
-         UPDATE review_run_manifests m SET candidate_hash=$3,proposal_id=$4,
-             state_code=NULL,state_message=NULL
-         FROM terminal t WHERE m.project_id=$1 AND m.automation_run_id=t.id",
-    )
-    .bind(project_id.as_uuid())
-    .bind(run.snapshot.id.as_uuid())
-    .bind(candidate_hash.as_str())
-    .bind(proposal_id)
-    .execute(&mut *transaction)
-    .await?
-    .rows_affected();
-    if changed == 0 {
-        let state = sqlx::query(
-            "SELECT r.status AS state,m.proposal_id FROM review_run_manifests m
-             JOIN durable_runs r ON r.project_id=m.project_id AND r.id=m.automation_run_id
-             WHERE m.project_id=$1 AND m.automation_run_id=$2 FOR UPDATE OF r,m",
-        )
-        .bind(project_id.as_uuid())
-        .bind(run.snapshot.id.as_uuid())
-        .fetch_one(&mut *transaction)
-        .await?;
-        if stored_review_status(state.get::<String, _>("state").as_str())? != ReviewRunStatus::Completed
-            || state.get::<Option<Uuid>, _>("proposal_id") != Some(proposal_id)
-        {
-            return Err(PostgresReviewError::FinalizationConflict);
-        }
-    }
-    transaction.commit().await?;
-    Ok(ReviewFinalization::Completed { proposal_id })
-}
 
 fn stored_review_status(value: &str) -> Result<ReviewRunStatus, PostgresReviewError> {
     ReviewRunStatus::parse(value).ok_or_else(|| {
@@ -1050,25 +903,13 @@ pub(crate) async fn assert_worker_lease(
     run_id: ReviewRunId,
     lease: &JobLease,
 ) -> Result<(), PostgresReviewError> {
-    let owns_lease = sqlx::query_scalar::<_, bool>(
-        "SELECT EXISTS (
-           SELECT 1
-           FROM durable_runs AS r
-           JOIN jobs AS j ON j.project_id=r.project_id AND j.id=$5
-           WHERE r.project_id=$1 AND r.id=$2
-             AND j.kind='durable_run_step' AND (j.payload->>'run_id')::uuid=r.id
-             AND j.state='running'
-             AND j.lease_owner=$3 AND j.attempts=$4 AND j.leased_until > now()
-         )",
-    )
-    .bind(project_id.as_uuid())
-    .bind(run_id.as_uuid())
-    .bind(&lease.owner)
-    .bind(lease.attempt)
-    .bind(lease.id)
-    .fetch_one(&mut **transaction)
-    .await?;
-    if !owns_lease {
+    let step_id=sqlx::query_scalar::<_,Uuid>("SELECT s.id FROM jobs j JOIN durable_steps s
+        ON j.payload->>'step_id'=s.id::text AND j.project_id=s.project_id
+        WHERE j.id=$1 AND s.project_id=$2 AND s.run_id=$3")
+        .bind(lease.id).bind(project_id.as_uuid()).bind(run_id.as_uuid())
+        .fetch_optional(&mut **transaction).await?;
+    let Some(step_id)=step_id else{return Err(PostgresReviewError::WorkerOwnership)};
+    if !crate::durable_runs::verify_active_step_lease(transaction,step_id,lease).await? {
         return Err(PostgresReviewError::WorkerOwnership);
     }
     Ok(())
@@ -1096,14 +937,6 @@ pub(crate) fn accepted_attempt_from_row(
     })
 }
 
-async fn subject_is_current(
-    pool: &PgPool,
-    project_id: ProjectId,
-    subject: &ReviewSubject,
-) -> Result<bool, sqlx::Error> {
-    let mut connection = pool.acquire().await?;
-    subject_is_current_on_connection(&mut connection, project_id, subject).await
-}
 
 pub(crate) async fn subject_is_current_in_transaction(
     transaction: &mut Transaction<'_, Postgres>,

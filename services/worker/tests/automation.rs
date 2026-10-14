@@ -235,21 +235,21 @@ async fn unknown_step_fails_closed_and_lease_owner_is_required() -> Result<()> {
         // fixture so the worker's fail-closed branch is exercised.
         let mut transaction = pool.begin().await?;
         sqlx::query(
-            "ALTER TABLE automation_step_runs DISABLE TRIGGER automation_step_snapshot_trigger",
+            "ALTER TABLE durable_steps DISABLE TRIGGER durable_steps_identity",
         )
         .execute(&mut *transaction)
         .await?;
         sqlx::query(
-            "UPDATE automation_step_runs
+            "UPDATE durable_steps
              SET step_key='untrusted_command'
-             WHERE project_id=$1 AND automation_run_id=$2",
+             WHERE project_id=$1 AND run_id=$2",
         )
         .bind(project_id.as_uuid())
         .bind(run_id.as_uuid())
         .execute(&mut *transaction)
         .await?;
         sqlx::query(
-            "ALTER TABLE automation_step_runs ENABLE TRIGGER automation_step_snapshot_trigger",
+            "ALTER TABLE durable_steps ENABLE TRIGGER durable_steps_identity",
         )
         .execute(&mut *transaction)
         .await?;

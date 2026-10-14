@@ -72,7 +72,7 @@ DO $$ DECLARE f record; BEGIN
  FOR f IN SELECT oid::regprocedure AS signature FROM pg_proc WHERE pronamespace='public'::regnamespace
   AND proname IN ('dispatch_automation_trigger','start_automation_manually','enforce_automation_run_transition',
     'enforce_automation_step_transition','enforce_automation_run_snapshot','enforce_automation_step_snapshot')
- LOOP EXECUTE 'DROP FUNCTION '||f.signature::text||' CASCADE'; END LOOP;
+ LOOP EXECUTE 'DROP FUNCTION IF EXISTS '||f.signature::text||' CASCADE'; END LOOP;
 END $$;
 DROP TABLE automation_step_runs;
 DROP TABLE workflow_node_runs;
@@ -88,3 +88,44 @@ DO $$ DECLARE c record; BEGIN
   WHERE contype='f' AND confrelid IN ('durable_runs'::regclass,'durable_steps'::regclass,'durable_attempts'::regclass)
  LOOP EXECUTE format('ALTER TABLE %s VALIDATE CONSTRAINT %I',c.child,c.conname); END LOOP;
 END $$;
+
+ALTER TABLE durable_steps ADD UNIQUE(project_id,run_id,id), ADD UNIQUE(run_id,id);
+ALTER TABLE durable_attempts ADD UNIQUE(project_id,run_id,id);
+ALTER TABLE automation_step_details ADD FOREIGN KEY(project_id,run_id,id)
+ REFERENCES durable_steps(project_id,run_id,id) ON DELETE CASCADE;
+ALTER TABLE workflow_step_details ADD FOREIGN KEY(run_id,id)
+ REFERENCES durable_steps(run_id,id) ON DELETE CASCADE;
+ALTER TABLE review_attempt_details ADD FOREIGN KEY(project_id,run_id,id)
+ REFERENCES durable_attempts(project_id,run_id,id) ON DELETE CASCADE;
+
+CREATE FUNCTION protect_durable_identity() RETURNS trigger LANGUAGE plpgsql AS $$
+DECLARE mutable text[]; BEGIN
+ mutable:=CASE TG_TABLE_NAME
+  WHEN 'durable_runs' THEN ARRAY['status','error','started_at','finished_at']
+  WHEN 'durable_steps' THEN ARRAY['status','attempts','claimed_by','claimed_job_id','claimed_job_attempt','started_at','finished_at','error','output']
+  WHEN 'durable_attempts' THEN ARRAY['status','finished_at','error']
+  WHEN 'automation_step_details' THEN ARRAY['accepted_attempt_id','input_fingerprint']
+  WHEN 'workflow_step_details' THEN ARRAY['input','fired_ports','items','note','wait_state']
+  ELSE ARRAY[]::text[] END;
+ IF (to_jsonb(NEW)-mutable) IS DISTINCT FROM (to_jsonb(OLD)-mutable) THEN
+  RAISE EXCEPTION 'durable identity and domain snapshot are immutable' USING ERRCODE='integrity_constraint_violation';
+ END IF;
+ IF TG_TABLE_NAME='durable_attempts' THEN
+  IF OLD.status<>'running' AND NEW IS DISTINCT FROM OLD THEN
+   RAISE EXCEPTION 'terminal durable attempt is immutable' USING ERRCODE='integrity_constraint_violation';
+  END IF;
+ END IF;
+ IF TG_TABLE_NAME='automation_step_details' THEN
+  IF OLD.accepted_attempt_id IS NOT NULL AND NEW IS DISTINCT FROM OLD THEN
+   RAISE EXCEPTION 'accepted recipe evidence is immutable' USING ERRCODE='integrity_constraint_violation';
+  END IF;
+ END IF;
+ RETURN NEW;
+END $$;
+CREATE TRIGGER durable_runs_identity BEFORE UPDATE ON durable_runs FOR EACH ROW EXECUTE FUNCTION protect_durable_identity();
+CREATE TRIGGER durable_steps_identity BEFORE UPDATE ON durable_steps FOR EACH ROW EXECUTE FUNCTION protect_durable_identity();
+CREATE TRIGGER durable_attempts_identity BEFORE UPDATE ON durable_attempts FOR EACH ROW EXECUTE FUNCTION protect_durable_identity();
+CREATE TRIGGER automation_run_details_identity BEFORE UPDATE ON automation_run_details FOR EACH ROW EXECUTE FUNCTION protect_durable_identity();
+CREATE TRIGGER automation_step_details_identity BEFORE UPDATE ON automation_step_details FOR EACH ROW EXECUTE FUNCTION protect_durable_identity();
+CREATE TRIGGER workflow_run_details_identity BEFORE UPDATE ON workflow_run_details FOR EACH ROW EXECUTE FUNCTION protect_durable_identity();
+CREATE TRIGGER workflow_step_details_identity BEFORE UPDATE ON workflow_step_details FOR EACH ROW EXECUTE FUNCTION protect_durable_identity();

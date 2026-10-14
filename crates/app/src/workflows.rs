@@ -479,15 +479,19 @@ pub async fn delete_workflow(
     project_id: ProjectId,
     workflow_id: Uuid,
 ) -> Result<(), WorkflowError> {
+    let mut tx=pool.begin().await?;
+    sqlx::query("SELECT id FROM workflows WHERE project_id=$1 AND id=$2 FOR UPDATE")
+        .bind(project_uuid(project_id)).bind(workflow_id).fetch_optional(&mut *tx).await?
+        .ok_or(WorkflowError::NotFound)?;
+    sqlx::query("DELETE FROM durable_runs r USING workflow_run_details d
+        WHERE d.id=r.id AND d.project_id=$1 AND d.workflow_id=$2")
+        .bind(project_uuid(project_id)).bind(workflow_id).execute(&mut *tx).await?;
     let deleted = sqlx::query("DELETE FROM workflows WHERE project_id=$1 AND id=$2")
-        .bind(project_uuid(project_id))
-        .bind(workflow_id)
-        .execute(pool)
-        .await?
-        .rows_affected();
+        .bind(project_uuid(project_id)).bind(workflow_id).execute(&mut *tx).await?.rows_affected();
     if deleted == 0 {
         return Err(WorkflowError::NotFound);
     }
+    tx.commit().await?;
     Ok(())
 }
 
@@ -1126,12 +1130,8 @@ pub async fn advance_run_in_transaction(
             plan.failed
                 .then(|| "A step did not finish, so the automation stopped.".to_owned())
         });
-        sqlx::query("UPDATE durable_runs SET status=$2, error=$3, finished_at=now() WHERE id=$1")
-            .bind(run_id)
-            .bind(if plan.failed { "failed" } else { "completed" })
-            .bind(stop_reason.as_deref())
-            .execute(&mut **tx)
-            .await?;
+        crate::durable_runs::finish_run(tx,run_id,
+            if plan.failed { "failed" } else { "completed" },stop_reason.as_deref()).await?;
         if plan.failed && !test_mode {
             notify_run_failed(tx, project_id, workflow_id, run_id, stop_reason.as_deref()).await?;
         }
@@ -1162,25 +1162,7 @@ pub async fn cancel_workflow_run(
     if matches!(status.as_str(), "completed" | "failed" | "cancelled") {
         return Err(WorkflowError::RunFinished);
     }
-    sqlx::query(
-        "UPDATE durable_steps SET status='cancelled', finished_at=now()
-         WHERE run_id=$1 AND status IN ('queued','waiting','running')",
-    )
-    .bind(run_id)
-    .execute(&mut *tx)
-    .await?;
-    sqlx::query(
-        "UPDATE durable_attempts SET status='cancelled',finished_at=now()
-         WHERE run_id=$1 AND status='running'",
-    ).bind(run_id).execute(&mut *tx).await?;
-    sqlx::query(
-        "UPDATE durable_runs SET status='cancelled', finished_at=now(),
-                error='Cancelled by a person.'
-         WHERE id=$1",
-    )
-    .bind(run_id)
-    .execute(&mut *tx)
-    .await?;
+    crate::durable_runs::cancel_run(&mut tx,run_id,"Cancelled by a person.").await?;
     tx.commit().await?;
     Ok(())
 }

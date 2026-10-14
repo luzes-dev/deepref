@@ -33,6 +33,26 @@ impl JobKind {
     }
 }
 
+/// The sole step dispatcher routes to typed domain handlers, not queue kinds
+/// with independent lifecycles.
+#[derive(Debug,Clone,Copy,PartialEq,Eq,Serialize,Deserialize)]
+#[serde(rename_all="snake_case")]
+pub enum DurableHandlerKind {
+    Automation,
+    Workflow,
+    Review,
+}
+
+impl DurableHandlerKind {
+    pub const fn as_str(self)->&'static str {
+        match self {
+            Self::Automation=>"automation",
+            Self::Workflow=>"workflow",
+            Self::Review=>"review",
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
 #[error("unknown durable job kind: {0}")]
 pub struct InvalidJobKind(pub String);

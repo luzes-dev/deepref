@@ -471,6 +471,7 @@
 		at: { x: number; y: number },
 		from: { nodeId: string; portId: string } | null
 	) {
+		if (!('available' in def) || def.available !== true) return;
 		const id = newNodeId(
 			def.id,
 			nodes.map((node) => node.id)
@@ -573,6 +574,14 @@
 	}
 	function pasteNodes(at?: { x: number; y: number }) {
 		if (!clipboard || readOnly) return;
+		if (clipboard.nodes.some((node) => {
+			if (node.type === 'note') return false;
+			const def = defs.get(node.data.typeId ?? '');
+			return !def || !('available' in def) || def.available !== true;
+		})) {
+			notifyInfo('This selection includes blocks that are unavailable on this server.');
+			return;
+		}
 		const first = clipboard.nodes[0];
 		const dx = at ? at.x - first.position.x : 40;
 		const dy = at ? at.y - first.position.y : 40;
@@ -1694,7 +1703,7 @@
 		y={menu.y}
 		entries={menu.entries}
 		startInAdd={menu.startInAdd}
-		{catalog}
+		catalog={catalog.filter((def) => 'available' in def && def.available === true)}
 		accepts={menu.accepts}
 		{hasTrigger}
 		presentation={narrow.current ? 'sheet' : 'popover'}
