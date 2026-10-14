@@ -8,7 +8,7 @@
 
 ## 1. Executive Summary & Objective
 
-The DeepRef monorepo pairs a high-performance Rust backend (`axum`, `sqlx`, `pgvector`, `petgraph`, `pdfium-render`) with a SvelteKit single-page application (`apps/web` with `@deepref/ui`). 
+The DeepRef monorepo pairs a high-performance Rust backend (`axum`, `sqlx`, `pgvector`, `petgraph`, `pdfium-render`) with a SvelteKit single-page application (`apps/web` with `@deepref/ui`).
 
 An architectural audit of `apps/web` reveals that the client currently acts as an overloaded **"thick client"**, executing algorithmic workloads, maintaining disconnected local storage domain models, performing client-only filtering over loaded pagination slices, and managing fragile multi-page cache surgery.
 
@@ -21,7 +21,7 @@ This handoff specifies the migration of six subsystems from the browser to autho
 5. **Screening Queue Projection**: Rebalance screening state synchronization to rely on server-projected queue windows and lightweight invalidation rather than manual multi-page cache surgery in TanStack Query.
 6. **Publication-Ready PRISMA Export**: Add server-side headless rasterization (PNG/PDF) to `crates/http-api/src/routes/exports.rs` for deterministic publication-grade flowcharts.
 
-*(Note: Assistant chatbot orchestration and LLM conversational streaming are handled separately under [`docs/assistant-and-workflows-handoff.md`](./assistant-and-workflows-handoff.md).)*
+_(Note: Assistant chatbot orchestration and LLM conversational streaming are handled separately under [`docs/assistant-and-workflows-handoff.md`](./assistant-and-workflows-handoff.md).)_
 
 ---
 
@@ -39,14 +39,14 @@ Every change must uphold the following system invariants:
 
 ## 3. Existing Codebase Anchors
 
-| Subsystem | Frontend Location | Backend Location |
-| :--- | :--- | :--- |
-| **Articles Catalog** | [`ProjectArticlesView.svelte`](../apps/web/src/lib/features/projects/components/ProjectArticlesView.svelte)<br>[`ProjectWorkspace.svelte`](../apps/web/src/lib/features/projects/components/ProjectWorkspace.svelte)<br>[`context.svelte.ts`](../apps/web/src/lib/features/projects/context.svelte.ts) | [`crates/http-api/src/routes/articles.rs`](../crates/http-api/src/routes/articles.rs)<br>[`crates/postgres/src/`](../crates/postgres/src/) |
-| **Citation Graph** | [`project-graph-renderer.ts`](../apps/web/src/lib/features/projects/project-graph-renderer.ts)<br>[`ProjectGraphView.svelte`](../apps/web/src/lib/features/projects/components/ProjectGraphView.svelte) | [`crates/domain/src/graph/`](../crates/domain/src/graph/)<br>[`crates/http-api/src/routes/articles.rs`](../crates/http-api/src/routes/articles.rs)<br>`services/worker/src/processor.rs` |
-| **Workflow Hub** | [`apps/web/src/lib/features/workflows/`](../apps/web/src/lib/features/workflows/)<br>`AutomationCenter.svelte`<br>`AutomationEditor.svelte` | [`crates/application/src/automations.rs`](../crates/application/src/automations.rs)<br>[`crates/postgres/src/automations.rs`](../crates/postgres/src/automations.rs)<br>[`crates/review/src/definition.rs`](../crates/review/src/definition.rs)<br>`services/worker/src/processor.rs` |
-| **Document Full-Text** | [`PdfViewer.svelte`](../apps/web/src/lib/features/full-text/components/PdfViewer.svelte)<br>[`PdfPage.svelte`](../apps/web/src/lib/features/full-text/components/PdfPage.svelte) | [`crates/documents/src/parser.rs`](../crates/documents/src/parser.rs)<br>[`crates/http-api/src/routes/documents.rs`](../crates/http-api/src/routes/documents.rs) |
-| **Screening Queue** | [`optimistic.ts`](../apps/web/src/lib/features/screening/optimistic.ts)<br>[`ScreeningFocus.svelte`](../apps/web/src/lib/features/screening/components/ScreeningFocus.svelte) | [`crates/http-api/src/routes/review.rs`](../crates/http-api/src/routes/review.rs)<br>[`crates/application/src/`](../crates/application/src/) |
-| **PRISMA Exports** | [`png.ts`](../apps/web/src/lib/features/prisma/png.ts) | [`crates/application/src/prisma.rs`](../crates/application/src/prisma.rs)<br>[`crates/http-api/src/routes/exports.rs`](../crates/http-api/src/routes/exports.rs) |
+| Subsystem              | Frontend Location                                                                                                                                                                                                                                                                                      | Backend Location                                                                                                                                                                                                                                                            |
+| :--------------------- | :----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | :-------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| **Articles Catalog**   | [`ProjectArticlesView.svelte`](../apps/web/src/lib/features/projects/components/ProjectArticlesView.svelte)<br>[`ProjectWorkspace.svelte`](../apps/web/src/lib/features/projects/components/ProjectWorkspace.svelte)<br>[`context.svelte.ts`](../apps/web/src/lib/features/projects/context.svelte.ts) | [`crates/http-api/src/routes/articles.rs`](../crates/http-api/src/routes/articles.rs)<br>[`crates/postgres/src/`](../crates/postgres/src/)                                                                                                                                            |
+| **Citation Graph**     | [`project-graph-renderer.ts`](../apps/web/src/lib/features/projects/project-graph-renderer.ts)<br>[`ProjectGraphView.svelte`](../apps/web/src/lib/features/projects/components/ProjectGraphView.svelte)                                                                                                | [`crates/domain/src/graph/`](../crates/domain/src/graph/)<br>[`crates/http-api/src/routes/articles.rs`](../crates/http-api/src/routes/articles.rs)<br>`services/worker/src/processor.rs`                                                                                    |
+| **Workflow Hub**       | [`apps/web/src/lib/features/automations/`](../apps/web/src/lib/features/automations/)<br>`AutomationBuilder.svelte`<br>`AutomationList.svelte`                                                                                                                                                         | [`crates/application/src/automations.rs`](../crates/application/src/automations.rs)<br>[`crates/postgres/src/automations.rs`](../crates/postgres/src/automations.rs)<br>[`crates/review/src/definition.rs`](../crates/review/src/definition.rs)<br>`services/worker/src/processor.rs` |
+| **Document Full-Text** | [`PdfViewer.svelte`](../apps/web/src/lib/features/full-text/components/PdfViewer.svelte)<br>[`PdfPage.svelte`](../apps/web/src/lib/features/full-text/components/PdfPage.svelte)                                                                                                                       | [`crates/documents/src/parser.rs`](../crates/documents/src/parser.rs)<br>[`crates/http-api/src/routes/documents.rs`](../crates/http-api/src/routes/documents.rs)                                                                                                            |
+| **Screening Queue**    | [`optimistic.ts`](../apps/web/src/lib/features/screening/optimistic.ts)<br>[`ScreeningFocus.svelte`](../apps/web/src/lib/features/screening/components/ScreeningFocus.svelte)                                                                                                                          | [`crates/http-api/src/routes/review.rs`](../crates/http-api/src/routes/review.rs)<br>[`crates/application/src/`](../crates/application/src/)                                                                                                                                |
+| **PRISMA Exports**     | [`png.ts`](../apps/web/src/lib/features/prisma/png.ts)                                                                                                                                                                                                                                                 | [`crates/application/src/prisma.rs`](../crates/application/src/prisma.rs)<br>[`crates/http-api/src/routes/exports.rs`](../crates/http-api/src/routes/exports.rs)                                                                                                            |
 
 ---
 
@@ -55,9 +55,11 @@ Every change must uphold the following system invariants:
 ### 4.1. Articles Catalog: Server-Side Query, Filter, & Keyset Sort
 
 #### The Defect
+
 In [`ProjectArticlesView.svelte:L28-L52`](../apps/web/src/lib/features/projects/components/ProjectArticlesView.svelte#L28-L52), `filtered` runs in-memory JavaScript `.filter()` and `.toSorted()` over `workspace.articles`. Because `workspace.articles` is populated via infinite scrolling in 50-item batches, searching or sorting only evaluates loaded items. In a project with 5,000 articles, un-fetched articles matching the search term or sort criteria are completely invisible.
 
 #### Target Implementation
+
 1. **Backend Endpoint Updates ([`crates/http-api/src/routes/articles.rs`](../crates/http-api/src/routes/articles.rs))**:
    - Enhance `PaginationParams` or define `ListReportsQuery`:
      ```rust
@@ -88,11 +90,13 @@ In [`ProjectArticlesView.svelte:L28-L52`](../apps/web/src/lib/features/projects/
 ### 4.2. Citation Graph: Precomputed Layout Coordinates in Worker
 
 #### The Defect
+
 In [`project-graph-renderer.ts:L820-L845`](../apps/web/src/lib/features/projects/project-graph-renderer.ts#L820-L845), the browser dynamically loads `graphology`, `sigma`, `graphology-layout-forceatlas2`, and `graphology-layout-noverlap`. Every time the user navigates to the graph, the browser runs 120–300 iterations of Barnes-Hut and 150–500 iterations of Noverlap on the main JavaScript thread, locking the UI and yielding non-deterministic coordinates across sessions.
 
 #### Target Implementation
+
 1. **Schema & Model Updates**:
-   - In `crates/postgres/migrations/`, add `graph_layout_x DOUBLE PRECISION` and `graph_layout_y DOUBLE PRECISION` to `project_reports` (or a dedicated `project_graph_layouts` table keyed by `(project_id, report_id, projection_revision)`).
+   - In `crates/app/migrations/`, add `graph_layout_x DOUBLE PRECISION` and `graph_layout_y DOUBLE PRECISION` to `project_reports` (or a dedicated `project_graph_layouts` table keyed by `(project_id, report_id, projection_revision)`).
    - In [`crates/domain/src/graph/model.rs`](../crates/domain/src/graph/model.rs), update `GraphNode` to include:
      ```rust
      pub x: Option<f64>,
@@ -117,11 +121,13 @@ In [`project-graph-renderer.ts:L820-L845`](../apps/web/src/lib/features/projects
 ### 4.3. Workflow Hub: Authoritative PostgreSQL Persistence & Worker Execution
 
 #### The Defect
+
 In `AutomationCenter.svelte:L310-L335` and `graph.ts`, visual workflow graphs authored in Rete are saved **only to `localStorage`** (`deepref:automation-graph`). The backend API only stores `{ name, trigger, status }` for a hardcoded recipe (`BuiltInAutomationRecipe::ProjectMaintenanceV1`). Custom graphs cannot be executed by the worker and disappear if cache is cleared.
 
 #### Target Implementation
+
 1. **PostgreSQL Workflow Storage**:
-   - Add migration in `crates/postgres/migrations/` creating `automation_workflows`:
+   - Add migration in `crates/app/migrations/` creating `automation_workflows`:
      ```sql
      CREATE TABLE automation_workflows (
          id UUID PRIMARY KEY,
@@ -136,7 +142,7 @@ In `AutomationCenter.svelte:L310-L335` and `graph.ts`, visual workflow graphs au
      CREATE UNIQUE INDEX idx_automation_workflows_project_def ON automation_workflows(project_id, definition_id);
      ```
 2. **Backend Domain & Schema Validation**:
-   - In [`crates/application/src/automations.rs`](../crates/application/src/automations.rs), define `WorkflowDocument` matching the versioned JSON shape from [`apps/web/src/lib/features/workflows/domain/types.ts`](../apps/web/src/lib/features/workflows/domain/types.ts).
+   - In [`crates/application/src/automations.rs`](../crates/application/src/automations.rs), define `WorkflowDocument` matching the versioned JSON shape. The current client contract is [`workflowGraphDto.ts`](../apps/web/src/lib/api/generated/models/workflowGraphDto.ts); the former `features/workflows/domain/types.ts` prototype has been retired.
    - Authoritatively validate:
      - Schema version compatibility.
      - Known node kinds and valid node parameters.
@@ -161,9 +167,11 @@ In `AutomationCenter.svelte:L310-L335` and `graph.ts`, visual workflow graphs au
 ### 4.4. Full-Text Document Streaming: Native Pdfium Page Tiles & Bounding Boxes
 
 #### The Defect
+
 In [`PdfViewer.svelte:L50-L72`](../apps/web/src/lib/features/full-text/components/PdfViewer.svelte#L50-L72), the frontend bundles `pdfjs-dist` (~2.5MB), downloads the entire PDF file (up to 50MB), and eagerly instantiates an HTML `<canvas>` for all pages at once. For a 40-page paper, this consumes 300MB–500MB of browser RAM. Concurrently, the backend already contains Google's C++ Pdfium library via `pdfium-render` ([`crates/documents/src/parser.rs`](../crates/documents/src/parser.rs)).
 
 #### Target Implementation
+
 1. **Server-Side Page Rasterization Endpoint**:
    - In [`crates/http-api/src/routes/documents.rs`](../crates/http-api/src/routes/documents.rs), add:
      ```rust
@@ -190,9 +198,11 @@ In [`PdfViewer.svelte:L50-L72`](../apps/web/src/lib/features/full-text/component
 ### 4.5. Screening Queue: Server-Projected Window & Simplified Client Cache
 
 #### The Defect
+
 In [`optimistic.ts:L23-L60`](../apps/web/src/lib/features/screening/optimistic.ts#L23-L60), the frontend performs extensive manual mutation across nested pages in the TanStack Query cache (`findQueueLocation`, `progressAfter`, `updatePageItems`). When rapid keyboard triage occurs or when the server raises `409 screening_revision_conflict`, the client cache desynchronizes, showing duplicate cards or incorrect counter totals.
 
 #### Target Implementation
+
 1. **Server Queue Window Projection**:
    - Verify that [`crates/http-api/src/routes/review.rs`](../crates/http-api/src/routes/review.rs) (`getScreeningQueue`) returns the current queue slice with authoritative progress counters:
      ```rust
@@ -216,9 +226,11 @@ In [`optimistic.ts:L23-L60`](../apps/web/src/lib/features/screening/optimistic.t
 ### 4.6. Publication-Ready PRISMA Export: Headless Server Rasterization
 
 #### The Defect
+
 In [`png.ts`](../apps/web/src/lib/features/prisma/png.ts), PRISMA PNG exports rely on loading the SVG into a client-side `HTMLImageElement` and painting to a `<canvas>`. Output quality, DPI, and typography depend on client OS fonts and browser rendering bugs.
 
 #### Target Implementation
+
 1. **Server Export Endpoint**:
    - In [`crates/http-api/src/routes/exports.rs`](../crates/http-api/src/routes/exports.rs), extend `ExportKind` to include `PrismaPng` and `PrismaPdf`:
      ```rust
@@ -238,6 +250,7 @@ In [`png.ts`](../apps/web/src/lib/features/prisma/png.ts), PRISMA PNG exports re
 To minimize risk and deliver immediate value, implement the fixes in three distinct phases:
 
 ### Phase 1: High ROI Correctness & Persistence
+
 1. **Article Catalog Filtering & Sorting** (Subsystem 4.1):
    - Update `crates/http-api/src/routes/articles.rs` with query parameters (`search`, `sort`, `min_internal`).
    - Run `pnpm run generate:api` to update generated client code.
@@ -248,6 +261,7 @@ To minimize risk and deliver immediate value, implement the fixes in three disti
    - Update `AutomationCenter.svelte` to save/load from server.
 
 ### Phase 2: Performance & Scalability
+
 3. **Graph Layout Precomputation** (Subsystem 4.2):
    - Add `graph_layout_x` and `graph_layout_y` to `project_reports` schema.
    - Add deterministic 2D layout calculation to worker projection pass.
@@ -257,6 +271,7 @@ To minimize risk and deliver immediate value, implement the fixes in three disti
    - Update PRISMA download buttons to trigger server export.
 
 ### Phase 3: Resource Footprint & Reliability
+
 5. **Document Page Streaming via Pdfium** (Subsystem 4.4):
    - Add page tile endpoint in `crates/http-api/src/routes/documents.rs`.
    - Replace `<canvas>` loop in `PdfViewer.svelte` with virtualized `<img>` tiles.
