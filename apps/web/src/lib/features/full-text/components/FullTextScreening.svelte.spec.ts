@@ -66,12 +66,14 @@ function blockFor(reportId: string, id: string, text: string, pageNumber = 1): D
 }
 
 function installApi(reportCount = 2) {
-	const reports: Report[] = Array.from({ length: reportCount }, (_, index) => index + 1).map((index) => ({
-		report_id: `report-${index}`,
-		title: `Full-text report ${index}`,
-		full_text_status: 'unscreened',
-		revision: 4
-	}));
+	const reports: Report[] = Array.from({ length: reportCount }, (_, index) => index + 1).map(
+		(index) => ({
+			report_id: `report-${index}`,
+			title: `Full-text report ${index}`,
+			full_text_status: 'unscreened',
+			revision: 4
+		})
+	);
 	const history = new Map<string, Record<string, unknown>[]>();
 	const decisions: Call[] = [];
 	const undos: Call[] = [];
@@ -289,7 +291,9 @@ describe('full-text screening shortcuts', () => {
 		server.use(
 			http.get(`${base}/reports/report-101/documents/:documentId/blocks`, () =>
 				HttpResponse.json({
-					items: [blockFor('report-101', 'linked-passage', 'Cited late-page evidence', 4)],
+					items: [
+						blockFor('report-101', 'linked-passage', 'Cited late-page evidence', 4)
+					],
 					next_cursor: null
 				})
 			)
@@ -298,7 +302,9 @@ describe('full-text screening shortcuts', () => {
 		sveltekit.resetNavigation(`/projects/${projectId}/screening/full-text${search}`);
 		render(FullTextScreeningTestHost, { projectId });
 		await waitFor(() =>
-			expect(screen.getByRole('heading', { level: 2 })).toHaveTextContent('Full-text report 101')
+			expect(screen.getByRole('heading', { level: 2 })).toHaveTextContent(
+				'Full-text report 101'
+			)
 		);
 		await waitFor(() => expect(screen.getByText('Cited late-page evidence')).toBeVisible());
 		expect(sveltekit.page.url.search).toBe(search);
@@ -317,16 +323,18 @@ describe('full-text screening shortcuts', () => {
 					);
 				}
 				return HttpResponse.json({
-					items: [{
-						report_id: 'report-101',
-						title: 'Full-text report 101',
-						abstract_text: null,
-						doi: null,
-						publication_year: 2024,
-						full_text_status: 'unscreened',
-						revision: 4,
-						document: documentFor('report-101')
-					}],
+					items: [
+						{
+							report_id: 'report-101',
+							title: 'Full-text report 101',
+							abstract_text: null,
+							doi: null,
+							publication_year: 2024,
+							full_text_status: 'unscreened',
+							revision: 4,
+							document: documentFor('report-101')
+						}
+					],
 					next_cursor: null
 				});
 			})
@@ -334,27 +342,34 @@ describe('full-text screening shortcuts', () => {
 		const search = '?report=report-101&page=4&block=linked-passage';
 		sveltekit.resetNavigation(`/projects/${projectId}/screening/full-text${search}`);
 		render(FullTextScreeningTestHost, { projectId });
-		await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent('Queue page unavailable'));
+		await waitFor(() =>
+			expect(screen.getByRole('alert')).toHaveTextContent('Queue page unavailable')
+		);
 		screen.getByRole('button', { name: 'Retry queue' }).click();
 		await waitFor(() =>
-			expect(screen.getByRole('heading', { level: 2 })).toHaveTextContent('Full-text report 101')
+			expect(screen.getByRole('heading', { level: 2 })).toHaveTextContent(
+				'Full-text report 101'
+			)
 		);
 		expect(sveltekit.page.url.search).toBe(search);
 	});
 
 	it('does not replace an absent cited report with an unrelated queue item', async () => {
 		const api = installApi();
-		sveltekit.resetNavigation(`/projects/${projectId}/screening/full-text?report=absent&page=4&block=linked-passage`);
+		sveltekit.resetNavigation(
+			`/projects/${projectId}/screening/full-text?report=absent&page=4&block=linked-passage`
+		);
 		render(FullTextScreeningTestHost, { projectId });
 		await waitFor(() =>
-			expect(screen.getByRole('heading', { level: 2 })).toHaveTextContent('Requested report is not in the full-text queue')
+			expect(screen.getByRole('heading', { level: 2 })).toHaveTextContent(
+				'Requested report is not in the full-text queue'
+			)
 		);
 		press('i');
 		await tick();
 		expect(api.decisions).toEqual([]);
 		expect(sveltekit.page.url.search).toBe('?report=absent&page=4&block=linked-passage');
 	});
-
 
 	it('records one decision for a held key on the displayed report', async () => {
 		const api = installApi();
@@ -427,12 +442,27 @@ describe('full-text screening shortcuts', () => {
 	it('records a clicked exclusion reason for the report that opened the picker', async () => {
 		installApi();
 		await renderAt('report-1');
-		decisionBar().getByRole('button', { name: /^Exclude/ }).click();
-		await waitFor(() => expect(decisionBar().getByRole('button', { name: /Wrong population/ })).toBeVisible());
-		decisionBar().getByRole('button', { name: /Wrong population/ }).click();
+		decisionBar()
+			.getByRole('button', { name: /^Exclude/ })
+			.click();
+		await waitFor(() =>
+			expect(decisionBar().getByRole('button', { name: /Wrong population/ })).toBeVisible()
+		);
+		decisionBar()
+			.getByRole('button', { name: /Wrong population/ })
+			.click();
 
-		await waitFor(() => expect(decisionBar().getByRole('button', { name: /^Exclude/ })).toHaveAttribute('aria-pressed', 'true'));
-		await waitFor(() => expect(decisionBar().getByRole('button', { name: 'Undo latest full-text decision' })).not.toBeDisabled());
+		await waitFor(() =>
+			expect(decisionBar().getByRole('button', { name: /^Exclude/ })).toHaveAttribute(
+				'aria-pressed',
+				'true'
+			)
+		);
+		await waitFor(() =>
+			expect(
+				decisionBar().getByRole('button', { name: 'Undo latest full-text decision' })
+			).not.toBeDisabled()
+		);
 	});
 
 	it('cancels a pending exclusion when the reviewer switches reports', async () => {
@@ -442,12 +472,23 @@ describe('full-text screening shortcuts', () => {
 		await waitFor(() => expect(decisionBar().getByText('Exclude because')).toBeVisible());
 
 		screen.getByRole('button', { name: 'Next report (ArrowRight)' }).click();
-		await waitFor(() => expect(screen.getByRole('heading', { level: 2 })).toHaveTextContent('Full-text report 2'));
-		await waitFor(() => expect(screen.getByRole('group', { name: 'Document view' })).toBeVisible());
+		await waitFor(() =>
+			expect(screen.getByRole('heading', { level: 2 })).toHaveTextContent(
+				'Full-text report 2'
+			)
+		);
+		await waitFor(() =>
+			expect(screen.getByRole('group', { name: 'Document view' })).toBeVisible()
+		);
 		press('1');
 		await tick();
 
-		await waitFor(() => expect(decisionBar().getByRole('button', { name: /^Exclude/ })).toHaveAttribute('aria-pressed', 'false'));
+		await waitFor(() =>
+			expect(decisionBar().getByRole('button', { name: /^Exclude/ })).toHaveAttribute(
+				'aria-pressed',
+				'false'
+			)
+		);
 		expect(api.decisions).toEqual([]);
 		expect(decisionBar().queryByText('Exclude because')).not.toBeInTheDocument();
 	});
@@ -481,20 +522,28 @@ describe('full-text screening shortcuts', () => {
 	it('shows a later evidence-page failure and retries the complete evidence set', async () => {
 		installApi();
 		let failLaterPage = true;
-		server.use(http.get(`${base}/reports/:reportId/documents/:documentId/blocks`, ({ request }) => {
-			if (!new URL(request.url).searchParams.has('cursor')) {
-				return HttpResponse.json({
-					items: [blockFor('report-1', 'first-block', 'First page evidence')],
-					next_cursor: 'later-page'
-				});
-			}
-			return failLaterPage
-				? HttpResponse.json({ code: 'DATABASE_UNAVAILABLE', message: 'Evidence service unavailable' }, { status: 503 })
-				: HttpResponse.json({
-					items: [blockFor('report-1', 'later-block', 'Later page evidence', 2)],
-					next_cursor: null
-				});
-		}));
+		server.use(
+			http.get(`${base}/reports/:reportId/documents/:documentId/blocks`, ({ request }) => {
+				if (!new URL(request.url).searchParams.has('cursor')) {
+					return HttpResponse.json({
+						items: [blockFor('report-1', 'first-block', 'First page evidence')],
+						next_cursor: 'later-page'
+					});
+				}
+				return failLaterPage
+					? HttpResponse.json(
+							{
+								code: 'DATABASE_UNAVAILABLE',
+								message: 'Evidence service unavailable'
+							},
+							{ status: 503 }
+						)
+					: HttpResponse.json({
+							items: [blockFor('report-1', 'later-block', 'Later page evidence', 2)],
+							next_cursor: null
+						});
+			})
+		);
 		await renderAt('report-1');
 		screen.getByRole('button', { name: /Parsed evidence/ }).click();
 

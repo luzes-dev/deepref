@@ -149,7 +149,9 @@
 	);
 	const current = $derived<FullTextItem | null>(queueCurrent ?? missingCurrent ?? null);
 	const locatingReport = $derived(
-		Boolean(urlState.report && !current && fullQueueQuery.hasNextPage && !fullQueueQuery.isError)
+		Boolean(
+			urlState.report && !current && fullQueueQuery.hasNextPage && !fullQueueQuery.isError
+		)
 	);
 	$effect(() => {
 		if (locatingReport && !fullQueueQuery.isFetching) {
@@ -1172,7 +1174,9 @@
 		current={screenStatus}
 		bind:choosingReason={
 			() => choosingReason,
-			(choosing: boolean) => { reasonReportId = choosing ? currentReportId : null; }
+			(choosing: boolean) => {
+				reasonReportId = choosing ? currentReportId : null;
+			}
 		}
 		pending={deciding || decisionMutation.isPending || undoMutation.isPending}
 		{canUndo}
@@ -1224,7 +1228,8 @@
 					size="sm"
 					disabled={fullQueueQuery.isFetching || missingQuery.isFetching}
 					onclick={() => {
-						if (fullQueueQuery.isFetchNextPageError) void fullQueueQuery.fetchNextPage();
+						if (fullQueueQuery.isFetchNextPageError)
+							void fullQueueQuery.fetchNextPage();
 						else if (fullQueueQuery.isError) void fullQueueQuery.refetch();
 						if (missingQuery.isError) void missingQuery.refetch();
 					}}>Retry queue</Button
@@ -1237,7 +1242,9 @@
 			<p class="text-sm text-muted-foreground">
 				The report may have left this stage or the citation may belong to another project.
 			</p>
-			<Button variant="outline" onclick={() => void updateUrl({ report: null, page: null, block: null })}
+			<Button
+				variant="outline"
+				onclick={() => void updateUrl({ report: null, page: null, block: null })}
 				>Open full-text queue</Button
 			>
 		</div>

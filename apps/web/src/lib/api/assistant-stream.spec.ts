@@ -249,11 +249,15 @@ describe('durable assistant runs', () => {
 				eventsResponse([
 					frame('token', { delta: 'Hi' }, 0),
 					frame('tool_start', { tool: 'get_report', tool_call_id: 't1', args: {} }, 1),
-					frame('tool_complete', {
-						tool: 'get_report',
-						tool_call_id: 't1',
-						output: { title: 'T' }
-					}, 2),
+					frame(
+						'tool_complete',
+						{
+							tool: 'get_report',
+							tool_call_id: 't1',
+							output: { title: 'T' }
+						},
+						2
+					),
 					frame('plan', { plan: { id: 'p1', status: 'pending', actions: [] } }, 3),
 					frame('done', { message_id: 'm1', input_tokens: 3, output_tokens: 5 }, 4)
 				])
@@ -504,28 +508,43 @@ describe('durable assistant runs', () => {
 		expect(fetchMock.mock.calls[0][0]).toBe('/api/projects/project-1/assistant/chat');
 	});
 
-
 	it('resumes after a polling failure without skipping the first persisted event', async () => {
 		const rows = [
 			{ seq: 0, wire: frame('token', { delta: 'Recovered answer' }, 0) },
-			{ seq: 1, wire: frame('done', { message_id: 'm1', input_tokens: 1, output_tokens: 2 }, 1) }
+			{
+				seq: 1,
+				wire: frame('done', { message_id: 'm1', input_tokens: 1, output_tokens: 2 }, 1)
+			}
 		];
 		vi.stubGlobal(
 			'fetch',
-			vi.fn()
-				.mockResolvedValueOnce(eventsResponse([frame('error', {
-					code: 'assistant_events_unavailable',
-					message: 'Assistant events could not be loaded. Reconnect to resume.'
-				})]))
+			vi
+				.fn()
+				.mockResolvedValueOnce(
+					eventsResponse([
+						frame('error', {
+							code: 'assistant_events_unavailable',
+							message: 'Assistant events could not be loaded. Reconnect to resume.'
+						})
+					])
+				)
 				.mockImplementation(async (input: string) => {
-					const cursor = Number(new URL(input, 'http://localhost').searchParams.get('after_seq'));
-					return eventsResponse(rows.filter((row) => row.seq > cursor).map((row) => row.wire));
+					const cursor = Number(
+						new URL(input, 'http://localhost').searchParams.get('after_seq')
+					);
+					return eventsResponse(
+						rows.filter((row) => row.seq > cursor).map((row) => row.wire)
+					);
 				})
 		);
 		const events: AssistantChatStreamEvent[] = [];
-		const interrupted = await streamAssistantRunEvents('project-1', runId, (event) => events.push(event));
+		const interrupted = await streamAssistantRunEvents('project-1', runId, (event) =>
+			events.push(event)
+		);
 		const recovered = await streamAssistantRunEvents(
-			'project-1', runId, (event) => events.push(event),
+			'project-1',
+			runId,
+			(event) => events.push(event),
 			{ afterSeq: interrupted.nextAfterSeq }
 		);
 
@@ -556,7 +575,6 @@ describe('durable assistant runs', () => {
 		expect(events).toEqual([{ event: 'token', delta: 'Hi' }]);
 		expect(progress).toEqual({ frames: 1, nextAfterSeq: 7, terminal: false });
 	});
-
 
 	it('raises run lookup failures as stream errors', async () => {
 		vi.stubGlobal(
