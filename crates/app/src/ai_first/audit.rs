@@ -108,7 +108,9 @@ pub async fn draw_ai_first_audit(
         // ADR 0005's human reference is a person's own screening. A decision
         // confirmed from an assistant plan was chosen by a model, so it must
         // be screened again by a person before the reference is frozen.
-        if row.get::<Option<String>, _>("origin").as_deref() == Some(crate::screening::ORIGIN_ASSISTANT_PLAN) {
+        if row.get::<Option<String>, _>("origin").as_deref()
+            == Some(crate::screening::ORIGIN_ASSISTANT_PLAN)
+        {
             return Err(AiFirstError::Refused(
                 "some human-stratum decisions came from an assistant plan; a person must screen those records before drawing".into(),
             ));

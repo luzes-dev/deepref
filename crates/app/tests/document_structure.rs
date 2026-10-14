@@ -1,9 +1,9 @@
 #![allow(clippy::expect_used, clippy::panic, clippy::unwrap_used)]
-use deepref_documents::ParsedDocument;
 use deepref_app::{
     DocumentStructure, NewDocument, NewDocumentReference, NewDocumentSection, create_document,
     list_document_references, list_document_sections, persist_parsed_document_with_structure,
 };
+use deepref_documents::ParsedDocument;
 use sqlx::PgPool;
 use uuid::Uuid;
 

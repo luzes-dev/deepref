@@ -280,8 +280,12 @@ async fn write_secrets(
     for node in &graph.nodes {
         if node.node_type == "integration.http_request" {
             let origin = deepref_application::workflows::conditions::fixed_url_origin(
-                node.config.get("url").and_then(Value::as_str).unwrap_or_default(),
-            ).ok();
+                node.config
+                    .get("url")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default(),
+            )
+            .ok();
             sqlx::query(
                 "DELETE FROM workflow_secrets WHERE workflow_id=$1 AND node_id=$2
                  AND origin IS DISTINCT FROM $3",
@@ -306,10 +310,17 @@ async fn write_secrets(
                 .bind(&secret.node_id)
                 .bind(&secret.key)
                 .bind(value)
-                .bind(graph.nodes.iter().find(|node| node.id == secret.node_id)
-                    .filter(|node| node.node_type == "integration.http_request")
-                    .and_then(|node| node.config.get("url").and_then(Value::as_str))
-                    .and_then(|url| deepref_application::workflows::conditions::fixed_url_origin(url).ok()))
+                .bind(
+                    graph
+                        .nodes
+                        .iter()
+                        .find(|node| node.id == secret.node_id)
+                        .filter(|node| node.node_type == "integration.http_request")
+                        .and_then(|node| node.config.get("url").and_then(Value::as_str))
+                        .and_then(|url| {
+                            deepref_application::workflows::conditions::fixed_url_origin(url).ok()
+                        }),
+                )
                 .execute(&mut **tx)
                 .await?;
             }

@@ -16,14 +16,14 @@ use axum::{
     response::{IntoResponse, Response},
 };
 use chrono::{DateTime, Utc};
-use deepref_application::workflows::{
-    self as wf, ConfigFieldKind, InboundEmail, NodeTypeDef, ValidationReport, WorkflowGraph,
-};
-use deepref_domain::ProjectId;
 use deepref_app::{
     NodeRunRecord, RotateTarget, StartRun, UpdateWorkflow, WebhookConfig, WorkflowError,
     WorkflowRecord, WorkflowRunRecord, WorkflowVersionRecord,
 };
+use deepref_application::workflows::{
+    self as wf, ConfigFieldKind, InboundEmail, NodeTypeDef, ValidationReport, WorkflowGraph,
+};
+use deepref_domain::ProjectId;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use sqlx::PgPool;
@@ -847,10 +847,9 @@ pub(crate) async fn validate_workflow(
     State(state): State<AppState>,
     Path((project, workflow)): Path<(Uuid, Uuid)>,
 ) -> Result<Json<ValidationReportDto>, ApiError> {
-    let report =
-        deepref_app::validate_workflow_draft(&state.pool, project_id(project)?, workflow)
-            .await
-            .map_err(map_error)?;
+    let report = deepref_app::validate_workflow_draft(&state.pool, project_id(project)?, workflow)
+        .await
+        .map_err(map_error)?;
     Ok(Json(report_dto(&report)))
 }
 
@@ -1002,10 +1001,9 @@ pub(crate) async fn list_versions(
     State(state): State<AppState>,
     Path((project, workflow)): Path<(Uuid, Uuid)>,
 ) -> Result<Json<Vec<VersionDto>>, ApiError> {
-    let versions =
-        deepref_app::list_workflow_versions(&state.pool, project_id(project)?, workflow)
-            .await
-            .map_err(map_error)?;
+    let versions = deepref_app::list_workflow_versions(&state.pool, project_id(project)?, workflow)
+        .await
+        .map_err(map_error)?;
     Ok(Json(
         versions
             .into_iter()
@@ -1026,14 +1024,10 @@ pub(crate) async fn get_version(
     State(state): State<AppState>,
     Path((project, workflow, version)): Path<(Uuid, Uuid, i32)>,
 ) -> Result<Json<VersionDto>, ApiError> {
-    let version = deepref_app::get_workflow_version(
-        &state.pool,
-        project_id(project)?,
-        workflow,
-        version,
-    )
-    .await
-    .map_err(map_error)?;
+    let version =
+        deepref_app::get_workflow_version(&state.pool, project_id(project)?, workflow, version)
+            .await
+            .map_err(map_error)?;
     Ok(Json(version_dto(version)?))
 }
 
@@ -1483,9 +1477,15 @@ fn hook_allowed(key: HookRateKey) -> bool {
     hook_window_allowed(&mut windows, key, Instant::now())
 }
 
-fn hook_window_allowed(windows: &mut HashMap<HookRateKey, RateWindow>, key: HookRateKey, now: Instant) -> bool {
+fn hook_window_allowed(
+    windows: &mut HashMap<HookRateKey, RateWindow>,
+    key: HookRateKey,
+    now: Instant,
+) -> bool {
     if !windows.contains_key(&key) && windows.len() >= MAX_HOOK_RATE_WINDOWS {
-        let oldest = windows.iter().min_by_key(|(_, window)| window.last_used)
+        let oldest = windows
+            .iter()
+            .min_by_key(|(_, window)| window.last_used)
             .map(|(key, _)| *key);
         if let Some(oldest) = oldest {
             windows.remove(&oldest);
@@ -1537,10 +1537,9 @@ async fn start_hook_run(
             details: json!({}),
         });
     }
-    let (version_id, graph) =
-        deepref_app::get_published_graph(&state.pool, target.workflow_id)
-            .await
-            .map_err(map_error)?;
+    let (version_id, graph) = deepref_app::get_published_graph(&state.pool, target.workflow_id)
+        .await
+        .map_err(map_error)?;
     let started = deepref_app::start_run(
         &state.pool,
         &StartRun {
@@ -1754,7 +1753,11 @@ mod tests {
         }
         assert!(!hook_window_allowed(&mut windows, key, now));
         assert!(hook_window_allowed(&mut windows, (key.0, "email"), now));
-        assert!(hook_window_allowed(&mut windows, key, now + Duration::from_secs(60)));
+        assert!(hook_window_allowed(
+            &mut windows,
+            key,
+            now + Duration::from_secs(60)
+        ));
     }
 
     #[test]
@@ -1764,13 +1767,28 @@ mod tests {
         let oldest = (Uuid::new_v4(), "webhook");
         let touched = (Uuid::new_v4(), "webhook");
         assert!(hook_window_allowed(&mut windows, touched, now));
-        assert!(hook_window_allowed(&mut windows, oldest, now + Duration::from_millis(1)));
+        assert!(hook_window_allowed(
+            &mut windows,
+            oldest,
+            now + Duration::from_millis(1)
+        ));
         for i in 2..MAX_HOOK_RATE_WINDOWS {
-            assert!(hook_window_allowed(&mut windows, (Uuid::new_v4(), "webhook"),
-                now + Duration::from_millis(i as u64)));
+            assert!(hook_window_allowed(
+                &mut windows,
+                (Uuid::new_v4(), "webhook"),
+                now + Duration::from_millis(i as u64)
+            ));
         }
-        assert!(hook_window_allowed(&mut windows, touched, now + Duration::from_secs(10)));
-        assert!(hook_window_allowed(&mut windows, (Uuid::new_v4(), "webhook"), now + Duration::from_secs(11)));
+        assert!(hook_window_allowed(
+            &mut windows,
+            touched,
+            now + Duration::from_secs(10)
+        ));
+        assert!(hook_window_allowed(
+            &mut windows,
+            (Uuid::new_v4(), "webhook"),
+            now + Duration::from_secs(11)
+        ));
         assert_eq!(windows.len(), MAX_HOOK_RATE_WINDOWS);
         assert!(!windows.contains_key(&oldest));
         assert!(windows.contains_key(&touched));

@@ -109,10 +109,7 @@
 	});
 
 	$effect(() => {
-		workspace.syncProjectSelection(
-			projects,
-			projectsQuery.isPending
-		);
+		workspace.syncProjectSelection(projects, projectsQuery.isPending);
 	});
 </script>
 
@@ -137,10 +134,13 @@
 					<CircleAlertIcon />
 					<Alert.Title>
 						{projectQuery.error instanceof ApiError && projectQuery.error.status === 404
-							? 'Project not found' : 'Project unavailable'}
+							? 'Project not found'
+							: 'Project unavailable'}
 					</Alert.Title>
 					<Alert.Description>{projectQuery.error.message}</Alert.Description>
-					<Button variant="outline" onclick={() => void projectQuery.refetch()}>Retry</Button>
+					<Button variant="outline" onclick={() => void projectQuery.refetch()}
+						>Retry</Button
+					>
 				</Alert.Root>
 			</div>
 		{:else if projects.length === 0}

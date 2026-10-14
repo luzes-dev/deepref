@@ -4,12 +4,17 @@ use axum::{
     http::HeaderMap,
 };
 use chrono::{DateTime, Utc};
+use deepref_app::screening::{
+    ScreeningError, ScreeningHistory as PersistenceScreeningHistory,
+    ScreeningHistoryItem as PersistenceScreeningHistoryItem,
+    ScreeningQueue as PersistenceScreeningQueue,
+    ScreeningQueueItem as PersistenceScreeningQueueItem, ScreeningStateSnapshot,
+};
 use deepref_application::{
     GetScreeningQueueQuery, PrismaProjection, ScreenReportCommand, ScreeningQueueSort,
     ScreeningQueueStatus, UndoScreeningCommand,
 };
 use deepref_domain::{ScreeningDecision, ScreeningStage};
-use deepref_app::screening::{ScreeningError, ScreeningHistory as PersistenceScreeningHistory, ScreeningHistoryItem as PersistenceScreeningHistoryItem, ScreeningQueue as PersistenceScreeningQueue, ScreeningQueueItem as PersistenceScreeningQueueItem, ScreeningStateSnapshot};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use utoipa::ToSchema;
@@ -433,9 +438,7 @@ pub(crate) async fn get_prisma(
                 ApiError::DataIntegrity(error.to_string())
             }
             deepref_app::PrismaProjectionError::Database(error) => ApiError::Database(error),
-            deepref_app::PrismaProjectionError::Json(error) => {
-                ApiError::Internal(error.into())
-            }
+            deepref_app::PrismaProjectionError::Json(error) => ApiError::Internal(error.into()),
         })?
         .ok_or_else(|| ApiError::NotFound("project not found".to_owned()))?;
     Ok(Json(prisma_dto(projection)))
@@ -617,7 +620,8 @@ pub(crate) fn map_screening_error(error: ScreeningError) -> ApiError {
         ScreeningError::AiFirst(error) => match *error {
             deepref_app::AiFirstError::Database(error) => ApiError::Database(error),
             deepref_app::AiFirstError::Screening(error) => map_screening_error(error),
-            deepref_app::AiFirstError::Invalid(message) | deepref_app::AiFirstError::Refused(message) => ApiError::BadRequest(message),
+            deepref_app::AiFirstError::Invalid(message)
+            | deepref_app::AiFirstError::Refused(message) => ApiError::BadRequest(message),
             other => ApiError::Internal(anyhow::Error::new(other)),
         },
         ScreeningError::ProjectNotFound => ApiError::NotFound("project not found".to_owned()),

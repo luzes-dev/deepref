@@ -37,13 +37,20 @@ impl AllowedHosts {
             hosts.insert((ip_host(bind_ip), port));
         }
         for origin in &config.cors_origins {
-            if let Some(uri) = origin.to_str().ok().and_then(|value| value.parse::<Uri>().ok()) {
-                if let Some(host) = uri.host() {
-                    let port = uri.port_u16().unwrap_or_else(|| {
-                        if uri.scheme_str() == Some("https") { 443 } else { 80 }
-                    });
-                    hosts.insert((normalize(host), port));
-                }
+            if let Some(uri) = origin
+                .to_str()
+                .ok()
+                .and_then(|value| value.parse::<Uri>().ok())
+                && let Some(host) = uri.host()
+            {
+                let port = uri.port_u16().unwrap_or_else(|| {
+                    if uri.scheme_str() == Some("https") {
+                        443
+                    } else {
+                        80
+                    }
+                });
+                hosts.insert((normalize(host), port));
             }
         }
         Self(Arc::new(hosts))
@@ -54,9 +61,10 @@ impl AllowedHosts {
             let host = normalize(authority.host());
             match authority.port_u16() {
                 Some(port) => self.0.contains(&(host, port)),
-                None => self.0.iter().any(|(allowed_host, port)| {
-                    allowed_host == &host && matches!(port, 80 | 443)
-                }),
+                None => self
+                    .0
+                    .iter()
+                    .any(|(allowed_host, port)| allowed_host == &host && matches!(port, 80 | 443)),
             }
         })
     }

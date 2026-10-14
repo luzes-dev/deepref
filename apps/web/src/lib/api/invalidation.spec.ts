@@ -3,7 +3,9 @@ import { getGetScreeningQueueQueryKey } from './generated/review/review.js';
 import { screeningKeys } from '../features/screening/api.js';
 
 const generatedSources = import.meta.glob<string>('./generated/**/*.ts', {
-	query: '?raw', import: 'default', eager: true
+	query: '?raw',
+	import: 'default',
+	eager: true
 });
 
 describe('generated project invalidation', () => {

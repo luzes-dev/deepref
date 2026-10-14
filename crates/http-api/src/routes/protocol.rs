@@ -291,10 +291,9 @@ pub(crate) async fn save_protocol_draft(
         .map_err(|error| ApiError::BadRequest(error.to_string()))?;
     let actor = extract_actor(&headers)?;
     let command = save_command(project_id, input)?;
-    let protocol =
-        deepref_app::save_protocol_draft(&state.pool, &command, &protocol_actor(&actor))
-            .await
-            .map_err(map_protocol_error)?;
+    let protocol = deepref_app::save_protocol_draft(&state.pool, &command, &protocol_actor(&actor))
+        .await
+        .map_err(map_protocol_error)?;
     Ok(Json(protocol_dto(protocol)))
 }
 
@@ -444,8 +443,7 @@ fn protocol_status_dto(status: ProtocolStatus) -> ProtocolStatusDto {
 
 fn map_protocol_error(error: deepref_app::ProtocolError) -> ApiError {
     match error {
-        deepref_app::ProtocolError::ProjectNotFound
-        | deepref_app::ProtocolError::NotFound => {
+        deepref_app::ProtocolError::ProjectNotFound | deepref_app::ProtocolError::NotFound => {
             ApiError::NotFound("project or protocol not found".to_owned())
         }
         deepref_app::ProtocolError::DraftAlreadyExists

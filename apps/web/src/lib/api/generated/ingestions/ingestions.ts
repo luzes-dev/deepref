@@ -395,6 +395,16 @@ export type cancelIngestionResponse202 = {
 	status: 202;
 };
 
+export type cancelIngestionResponse404 = {
+	data: ApiErrorBody;
+	status: 404;
+};
+
+export type cancelIngestionResponse409 = {
+	data: ApiErrorBody;
+	status: 409;
+};
+
 export type cancelIngestionResponse500 = {
 	data: ApiErrorBody;
 	status: 500;
@@ -403,7 +413,9 @@ export type cancelIngestionResponse500 = {
 export type cancelIngestionResponseSuccess = cancelIngestionResponse202 & {
 	headers: Headers;
 };
-export type cancelIngestionResponseError = cancelIngestionResponse500 & {
+export type cancelIngestionResponseError = (
+	cancelIngestionResponse404 | cancelIngestionResponse409 | cancelIngestionResponse500
+) & {
 	headers: Headers;
 };
 

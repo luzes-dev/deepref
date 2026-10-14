@@ -6,14 +6,14 @@
 )]
 use std::collections::BTreeMap;
 
-use deepref_application::{
-    ProtocolCriterionCommand, PublishProtocolCommand, SaveProtocolDraftCommand,
-};
-use deepref_domain::{CriterionDimension, CriterionKind, CriterionStage, FrameworkKind, ProjectId};
 use deepref_app::{
     ProtocolActor, ProtocolError, get_protocol_editor, get_published_protocol, publish_protocol,
     save_protocol_draft,
 };
+use deepref_application::{
+    ProtocolCriterionCommand, PublishProtocolCommand, SaveProtocolDraftCommand,
+};
+use deepref_domain::{CriterionDimension, CriterionKind, CriterionStage, FrameworkKind, ProjectId};
 use sqlx::{AssertSqlSafe, Connection, PgConnection, PgPool, Row};
 use uuid::Uuid;
 
@@ -382,8 +382,7 @@ async fn published_protocol_and_criteria_reject_direct_scientific_mutation() {
 
 #[tokio::test]
 async fn migration_backfills_legacy_json_criteria_deterministically() {
-    let Some(url) = deepref_app::test_isolation::isolated_url_from_env("DATABASE_URL").await
-    else {
+    let Some(url) = deepref_app::test_isolation::isolated_url_from_env("DATABASE_URL").await else {
         return;
     };
     let schema = format!("protocol_migration_test_{}", Uuid::new_v4().simple());
