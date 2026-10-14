@@ -13,6 +13,12 @@ export interface AssistantPlanResultDto {
 	 */
 	applied?: number | null;
 	/**
+	 * Records the reviewer left out before confirming.
+	 * @minimum 0
+	 * @nullable
+	 */
+	deselected?: number | null;
+	/**
 	 * @minimum 0
 	 * @nullable
 	 */

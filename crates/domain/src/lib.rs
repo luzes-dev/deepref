@@ -5,10 +5,10 @@ use uuid::Uuid;
 pub mod acquisition;
 pub mod bibliography;
 pub mod documents;
-pub mod protocol;
 pub mod events;
 pub mod graph;
 mod ingestion;
+pub mod protocol;
 mod reference;
 mod work;
 

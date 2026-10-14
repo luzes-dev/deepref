@@ -53,4 +53,3 @@ pub async fn search_pubmed(
     let articles = fetch_pubmed(pool, client, &ids).await?;
     Ok(articles.iter().map(PubmedArticle::to_item).collect())
 }
-

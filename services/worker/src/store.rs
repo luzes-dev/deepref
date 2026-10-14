@@ -1,7 +1,6 @@
 use std::time::Duration;
 
 use deepref_application::AutomationDomainEvent;
-use deepref_domain::{IngestionItemStatus, IngestionStatus, Reference, WorkWithReferences};
 use deepref_domain::events::{
     CitationUpserted, DeadLetterRecord, DomainPayload, EntityType, EventEnvelope,
     MetricsRecomputeRequested, ProjectMembershipUpserted, SUBJECT_CITATION_UPSERTED, SUBJECT_DLQ,
@@ -9,6 +8,7 @@ use deepref_domain::events::{
     SUBJECT_UNRESOLVED_REFERENCE_UPSERTED, SUBJECT_WORK_FETCH_REQUESTED, SUBJECT_WORK_UPSERTED,
     UnresolvedReferenceUpserted, WorkFetchRequested, WorkUpserted, deterministic_event_id,
 };
+use deepref_domain::{IngestionItemStatus, IngestionStatus, Reference, WorkWithReferences};
 use sqlx::{PgPool, Postgres, Row, Transaction};
 use uuid::Uuid;
 

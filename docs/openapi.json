@@ -3627,6 +3627,23 @@
             }
           }
         ],
+        "requestBody": {
+          "description": "Records or actions to leave out; omit to run the whole plan",
+          "content": {
+            "application/json": {
+              "schema": {
+                "oneOf": [
+                  {
+                    "$ref": "#/components/schemas/ConfirmAssistantPlanRequestDto"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            }
+          }
+        },
         "responses": {
           "200": {
             "description": "The executed plan with a result per action",
@@ -3634,6 +3651,16 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/AssistantPlanDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "A deselection names a record or action that is not in the plan",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
                 }
               }
             }
@@ -13885,7 +13912,8 @@
           "summary",
           "rationale",
           "affected_count",
-          "executable"
+          "executable",
+          "items"
         ],
         "properties": {
           "affected_count": {
@@ -13893,12 +13921,26 @@
             "format": "int32",
             "minimum": 0
           },
+          "decision": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The decision a `screen_reports` action records (`include`, `exclude`\nor `maybe`), read from the action's arguments, not from its summary."
+          },
           "executable": {
             "type": "boolean",
             "description": "False when the assistant is never allowed to run this; see `manual`."
           },
           "id": {
             "type": "string"
+          },
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AssistantPlanItemDto"
+            },
+            "description": "The records a `screen_reports` action changes, in order, as they were\nwhen the plan was made. Empty for other actions."
           },
           "manual": {
             "oneOf": [
@@ -13920,6 +13962,26 @@
             "type": "string"
           }
         }
+      },
+      "AssistantPlanDeselectionDto": {
+        "type": "object",
+        "description": "One record (or, without `report_id`, a whole action) the reviewer left\nout of a plan before confirming it.",
+        "required": [
+          "action_id"
+        ],
+        "properties": {
+          "action_id": {
+            "type": "string"
+          },
+          "report_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          }
+        },
+        "additionalProperties": false
       },
       "AssistantPlanDto": {
         "type": "object",
@@ -14000,6 +14062,29 @@
           }
         }
       },
+      "AssistantPlanItemDto": {
+        "type": "object",
+        "required": [
+          "report_id",
+          "title"
+        ],
+        "properties": {
+          "current_status": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Title/abstract status when the plan was made; `null` for plans made\nbefore records were captured."
+          },
+          "report_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "title": {
+            "type": "string"
+          }
+        }
+      },
       "AssistantPlanManualStepDto": {
         "type": "object",
         "required": [
@@ -14033,6 +14118,15 @@
               "null"
             ],
             "format": "int32",
+            "minimum": 0
+          },
+          "deselected": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "Records the reviewer left out before confirming.",
             "minimum": 0
           },
           "failed": {
@@ -15060,6 +15154,19 @@
             "$ref": "#/components/schemas/AutomationTriggerInput"
           }
         }
+      },
+      "ConfirmAssistantPlanRequestDto": {
+        "type": "object",
+        "properties": {
+          "deselected": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AssistantPlanDeselectionDto"
+            },
+            "description": "Records or actions to leave out. Everything else in the plan runs."
+          }
+        },
+        "additionalProperties": false
       },
       "CreateAcquisition": {
         "type": "object",

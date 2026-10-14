@@ -7,6 +7,5 @@ pub const SUBJECT_PROJECT_TOMBSTONED: &str = "domain.project.tombstoned.v1";
 pub const SUBJECT_METRICS_RECOMPUTE_REQUESTED: &str = "domain.metrics.recompute.requested.v1";
 pub const SUBJECT_DLQ: &str = "dlq.recorded.v1";
 
-
 pub const DELIVERY_BACKOFF_SECONDS: [u64; 5] = [5, 30, 120, 600, 1_800];
 pub const MAX_DELIVERIES: u64 = DELIVERY_BACKOFF_SECONDS.len() as u64;

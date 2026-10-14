@@ -19,9 +19,8 @@ pub mod study;
 pub mod workflows;
 
 pub use acquisition::{
-    CitationProvider, CsvColumnMapping, ImportError, ImportParser,
-    MetadataProvider, ProviderError, ProviderFuture, RawAuthor, RawIdentifier, RawRecord,
-    SearchProvider,
+    CitationProvider, CsvColumnMapping, ImportError, ImportParser, MetadataProvider, ProviderError,
+    ProviderFuture, RawAuthor, RawIdentifier, RawRecord, SearchProvider,
 };
 pub use appraisal::{
     AnswerSchema, AppliesWhen, AppraisalAssessmentInput, AppraisalCompleted, AppraisalDefinition,
@@ -51,8 +50,8 @@ pub use deduplication::{
 };
 pub use documents::{
     AttachDocumentCommand, DocumentByteStream, DocumentDetailQuery, DocumentFuture,
-    DocumentListQuery, DocumentPortError, DocumentQueryError,
-    DocumentStorageId, DocumentStore, MissingFullTextQuery, StoredDocumentContent,
+    DocumentListQuery, DocumentPortError, DocumentQueryError, DocumentStorageId, DocumentStore,
+    MissingFullTextQuery, StoredDocumentContent,
 };
 pub use extraction::{
     ExtractionFieldDefinition, ExtractionFieldType, ExtractionValidationError, ExtractionValue,

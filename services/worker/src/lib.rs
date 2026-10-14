@@ -605,6 +605,11 @@ mod lease_deadline_tests {
         };
         let lease = job.lease("test-worker".to_owned());
         let result = run_isolated(async move { handler(job, lease).await }).await;
-        assert!(result.unwrap_err().to_string().contains("handler construction failed"));
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("handler construction failed")
+        );
     }
 }

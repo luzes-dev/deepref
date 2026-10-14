@@ -771,17 +771,17 @@ async fn a_stale_attempt_cannot_restart_or_overwrite_a_reclaimed_step() {
             &pool,
             node_run_id,
             &stale,
-            NodeOutcome::Failed { message: "expired before reclaim".to_owned() },
+            NodeOutcome::Failed {
+                message: "expired before reclaim".to_owned()
+            },
         )
         .await
         .expect("expired finish"),
         "expiry alone fences the outcome, even before recovery or takeover"
     );
-    deepref_postgres::record_node_retry(
-        &pool, node_run_id, &stale, "expired retry",
-    )
-    .await
-    .expect("expired retry");
+    deepref_postgres::record_node_retry(&pool, node_run_id, &stale, "expired retry")
+        .await
+        .expect("expired retry");
     assert_eq!(notify_step(&pool, project, run_id).await.status, "running");
     assert_eq!(
         deepref_postgres::recover_expired_jobs(&pool)
