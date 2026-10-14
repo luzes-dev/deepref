@@ -96,34 +96,99 @@ pub async fn list_automation_definitions(
         .collect()
 }
 
+const RUN_QUERY: &str = "SELECT r.id AS run_id,r.project_id,d.definition_id,r.job_id,
+ d.recipe_id,d.recipe_version,d.trigger_kind,d.trigger_reference,d.idempotency_key,
+ r.actor_kind,r.actor_id,r.status,r.created_at,r.started_at,r.finished_at,r.error AS run_error,
+ j.state AS job_state,j.attempts AS job_attempts,j.max_attempts AS job_max_attempts,
+ j.available_at AS job_available_at,j.leased_until AS job_leased_until,j.last_error AS job_last_error,
+ COALESCE((SELECT jsonb_agg(jsonb_build_object('id',s.id,'ordinal',sd.ordinal,'key',sd.step_key,
+ 'kind',sd.step_kind,'status',CASE WHEN sd.step_key='execute_compiled_review' THEN
+   CASE r.status WHEN 'queued' THEN 'pending' WHEN 'waiting' THEN 'running'
+     WHEN 'blocked' THEN 'failed' WHEN 'cancelled' THEN 'failed' ELSE r.status END
+   WHEN s.status='queued' THEN 'pending' ELSE s.status END,
+ 'attempts',s.attempts,'claimed_by',s.claimed_by,
+ 'started_at',CASE WHEN sd.step_key='execute_compiled_review' THEN r.started_at ELSE s.started_at END,
+ 'finished_at',CASE WHEN sd.step_key='execute_compiled_review' THEN r.finished_at ELSE s.finished_at END,
+ 'error',CASE WHEN sd.step_key='execute_compiled_review' THEN r.error ELSE s.error END) ORDER BY sd.ordinal)
+ FROM durable_steps s JOIN automation_step_details sd ON sd.id=s.id
+ WHERE s.project_id=r.project_id AND s.run_id=r.id),'[]'::jsonb) AS steps,
+ COALESCE(u.input_tokens,0)::bigint AS input_tokens,COALESCE(u.output_tokens,0)::bigint AS output_tokens,
+ COALESCE(u.cost_micros,0)::bigint AS cost_micros
+ FROM durable_runs r JOIN automation_run_details d ON d.id=r.id AND d.project_id=r.project_id
+ JOIN jobs j ON j.id=r.job_id AND j.project_id=r.project_id
+ LEFT JOIN LATERAL (SELECT sum(input_tokens) input_tokens,sum(output_tokens) output_tokens,
+ sum(cost_micros) cost_micros FROM ai_runs WHERE project_id=r.project_id AND parent_automation_run_id=r.id) u ON true";
+
+pub(crate) async fn dispatch_automation_trigger_in_transaction(
+    transaction: &mut Transaction<'_, Postgres>, project_id: Uuid, definition_id: Uuid,
+    trigger: &str, reference: Option<&str>, idempotency_key: &str, actor_kind: &str, actor_id: &str,
+) -> Result<(Uuid, Uuid, bool), sqlx::Error> {
+    // Serialize the idempotency scope before checking the definition's current state.
+    let identity = format!("{project_id}:{definition_id}:{trigger}:{idempotency_key}");
+    sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1,0))").bind(&identity)
+        .execute(&mut **transaction).await?;
+    if let Some(row) = sqlx::query("SELECT r.id,r.job_id FROM durable_runs r JOIN automation_run_details d ON d.id=r.id
+        WHERE d.project_id=$1 AND d.definition_id=$2 AND d.trigger_kind=$3 AND d.idempotency_key=$4")
+        .bind(project_id).bind(definition_id).bind(trigger).bind(idempotency_key)
+        .fetch_optional(&mut **transaction).await? {
+        return Ok((row.get("id"),row.get("job_id"),false));
+    }
+    let definition = sqlx::query("SELECT recipe_id,recipe_version FROM automation_definitions
+        WHERE project_id=$1 AND id=$2 AND trigger_kind=$3 AND status='active' FOR SHARE")
+        .bind(project_id).bind(definition_id).bind(trigger).fetch_one(&mut **transaction).await?;
+    let steps = sqlx::query("SELECT ordinal,step_key,step_kind FROM automation_definition_steps
+        WHERE project_id=$1 AND definition_id=$2 ORDER BY ordinal")
+        .bind(project_id).bind(definition_id).fetch_all(&mut **transaction).await?;
+    if steps.is_empty() { return Err(sqlx::Error::RowNotFound); }
+    let run_id = Uuid::new_v4();
+    let first_step_id = Uuid::new_v4();
+    let job_id = enqueue_recipe_step(transaction,project_id,run_id,first_step_id).await?;
+    sqlx::query("INSERT INTO durable_runs(id,project_id,kind,status,job_id,actor_kind,actor_id,idempotency_key)
+        VALUES($1,$2,'automation','queued',$3,$4,$5,$6)")
+        .bind(run_id).bind(project_id).bind(job_id).bind(actor_kind).bind(actor_id).bind(idempotency_key)
+        .execute(&mut **transaction).await?;
+    sqlx::query("INSERT INTO automation_run_details(id,project_id,definition_id,recipe_id,recipe_version,trigger_kind,trigger_reference,idempotency_key)
+        VALUES($1,$2,$3,$4,$5,$6,$7,$8)")
+        .bind(run_id).bind(project_id).bind(definition_id).bind(definition.get::<String,_>("recipe_id"))
+        .bind(definition.get::<i32,_>("recipe_version")).bind(trigger).bind(reference).bind(idempotency_key)
+        .execute(&mut **transaction).await?;
+    for (index, step) in steps.iter().enumerate() {
+        let id = if index == 0 { first_step_id } else { Uuid::new_v4() };
+        sqlx::query("INSERT INTO durable_steps(id,project_id,run_id,handler_kind,step_key,ordinal,status)
+            VALUES($1,$2,$3,'automation',$4,$5,'queued')")
+            .bind(id).bind(project_id).bind(run_id).bind(step.get::<String,_>("step_key"))
+            .bind(step.get::<i32,_>("ordinal")).execute(&mut **transaction).await?;
+        sqlx::query("INSERT INTO automation_step_details(id,project_id,run_id,ordinal,step_key,step_kind)
+            VALUES($1,$2,$3,$4,$5,$6)")
+            .bind(id).bind(project_id).bind(run_id).bind(step.get::<i32,_>("ordinal"))
+            .bind(step.get::<String,_>("step_key")).bind(step.get::<String,_>("step_kind"))
+            .execute(&mut **transaction).await?;
+    }
+    Ok((run_id,job_id,true))
+}
+
+async fn enqueue_recipe_step(transaction: &mut Transaction<'_,Postgres>, project_id: Uuid, run_id: Uuid, step_id: Uuid) -> Result<Uuid,sqlx::Error> {
+    sqlx::query_scalar("INSERT INTO jobs(id,project_id,kind,payload,state,priority,max_attempts,dedupe_key)
+        VALUES($1,$2,'durable_run_step',$3,'queued',0,5,$4)
+        ON CONFLICT(dedupe_key) DO UPDATE SET id=jobs.id RETURNING id")
+        .bind(Uuid::new_v4()).bind(project_id)
+        .bind(serde_json::json!({"run_id":run_id,"step_id":step_id,"handler_kind":"automation"}))
+        .bind(format!("durable-step:{step_id}")).fetch_one(&mut **transaction).await
+}
+
 pub async fn dispatch_automation_trigger(
     pool: &PgPool,
     request: &DispatchAutomationTrigger,
 ) -> Result<AutomationDispatchResult, AutomationError> {
     request.validate()?;
-    let row = sqlx::query(
-        "SELECT run_id, job_id, created
-         FROM dispatch_automation_trigger($1,$2,$3,$4,$5,$6,$7)",
-    )
-    .bind(request.project_id.as_uuid())
-    .bind(request.definition_id.as_uuid())
-    .bind(request.trigger.as_str())
-    .bind(
-        request
-            .trigger_reference
-            .as_ref()
-            .map(AutomationTriggerReference::as_str),
-    )
-    .bind(request.idempotency_key.as_str())
-    .bind(request.actor.kind().as_str())
-    .bind(request.actor.id())
-    .fetch_one(pool)
-    .await?;
-    Ok(AutomationDispatchResult {
-        run_id: AutomationRunId::new(row.get("run_id"))?,
-        job_id: row.get("job_id"),
-        created: row.get("created"),
-    })
+    let mut transaction = pool.begin().await?;
+    let (run_id, job_id, created) = dispatch_automation_trigger_in_transaction(
+        &mut transaction, request.project_id.as_uuid(), request.definition_id.as_uuid(),
+        request.trigger.as_str(), request.trigger_reference.as_ref().map(AutomationTriggerReference::as_str),
+        request.idempotency_key.as_str(), request.actor.kind().as_str(), request.actor.id(),
+    ).await?;
+    transaction.commit().await?;
+    Ok(AutomationDispatchResult { run_id: AutomationRunId::new(run_id)?, job_id, created })
 }
 
 /// Dispatch a typed scientific transition inside the transaction that made
@@ -158,19 +223,10 @@ pub async fn dispatch_automation_domain_event(
     .fetch_all(&mut **transaction)
     .await?;
     for definition_id in definitions {
-        let was_created = sqlx::query_scalar::<_, bool>(
-            "SELECT created
-             FROM dispatch_automation_trigger($1,$2,$3,$4,$5,$6,$7)",
-        )
-        .bind(project_id.as_uuid())
-        .bind(definition_id)
-        .bind(trigger.as_str())
-        .bind(&source_identity)
-        .bind(&source_identity)
-        .bind(actor_kind.as_str())
-        .bind(actor_id)
-        .fetch_one(&mut **transaction)
-        .await?;
+        let (_, _, was_created) = dispatch_automation_trigger_in_transaction(
+            transaction, project_id.as_uuid(), definition_id, trigger.as_str(),
+            Some(&source_identity), &source_identity, actor_kind.as_str(), actor_id,
+        ).await?;
         created += u64::from(was_created);
     }
     Ok(created)
@@ -181,22 +237,13 @@ pub async fn start_automation_manually(
     request: &StartAutomationManually,
 ) -> Result<AutomationDispatchResult, AutomationError> {
     request.validate()?;
-    let row = sqlx::query(
-        "SELECT run_id, job_id, created
-         FROM start_automation_manually($1,$2,$3,$4,$5)",
-    )
-    .bind(request.project_id.as_uuid())
-    .bind(request.definition_id.as_uuid())
-    .bind(request.idempotency_key.as_str())
-    .bind(request.actor.kind().as_str())
-    .bind(request.actor.id())
-    .fetch_one(pool)
-    .await?;
-    Ok(AutomationDispatchResult {
-        run_id: AutomationRunId::new(row.get("run_id"))?,
-        job_id: row.get("job_id"),
-        created: row.get("created"),
-    })
+    let mut transaction = pool.begin().await?;
+    let (run_id, job_id, created) = dispatch_automation_trigger_in_transaction(
+        &mut transaction, request.project_id.as_uuid(), request.definition_id.as_uuid(),
+        "manual", None, request.idempotency_key.as_str(), request.actor.kind().as_str(), request.actor.id(),
+    ).await?;
+    transaction.commit().await?;
+    Ok(AutomationDispatchResult { run_id: AutomationRunId::new(run_id)?, job_id, created })
 }
 
 pub async fn list_automation_runs(
@@ -207,7 +254,7 @@ pub async fn list_automation_runs(
     validate_project(project_id)?;
     validate_run_list_limit(limit)?;
     let rows =
-        sqlx::query("SELECT * FROM automation_run_details WHERE project_id=$1 AND ai_first_run_visible($1,run_id) ORDER BY created_at DESC,run_id DESC LIMIT $2")
+        sqlx::query(&format!("{RUN_QUERY} WHERE r.project_id=$1 AND ai_first_run_visible($1,r.id) ORDER BY r.created_at DESC,r.id DESC LIMIT $2"))
             .bind(project_id.as_uuid())
             .bind(i32::try_from(limit).map_err(|_| {
                 AutomationError::InvalidInput(AutomationValidationError::InvalidRunListLimit)
@@ -224,7 +271,7 @@ pub async fn get_automation_run(
 ) -> Result<AutomationRun, AutomationError> {
     validate_project(project_id)?;
     let row =
-        sqlx::query("SELECT * FROM get_automation_run($1,$2) WHERE ai_first_run_visible($1,$2)")
+        sqlx::query(&format!("{RUN_QUERY} WHERE r.project_id=$1 AND r.id=$2 AND ai_first_run_visible($1,$2)"))
             .bind(project_id.as_uuid())
             .bind(run_id.as_uuid())
             .fetch_optional(pool)
@@ -397,6 +444,11 @@ fn parse_definition_status(value: &str) -> Result<AutomationDefinitionStatus, Au
 }
 
 fn parse_run_status(value: &str) -> Result<AutomationRunStatus, AutomationError> {
+    let value = match value {
+        "blocked" | "cancelled" => "failed",
+        "waiting" => "running",
+        value => value,
+    };
     AutomationRunStatus::parse(value)
         .ok_or_else(|| AutomationError::InvalidStoredValue(format!("unknown run status {value}")))
 }
@@ -407,6 +459,13 @@ fn parse_step_kind(value: &str) -> Result<AutomationStepKind, AutomationError> {
 }
 
 fn parse_step_run_status(value: &str) -> Result<AutomationStepRunStatus, AutomationError> {
+    let value = match value {
+        "queued" => "pending",
+        "waiting" => "running",
+        "blocked" | "cancelled" => "failed",
+        "skipped" => "completed",
+        value => value,
+    };
     AutomationStepRunStatus::parse(value).ok_or_else(|| {
         AutomationError::InvalidStoredValue(format!("unknown step run status {value}"))
     })
@@ -431,15 +490,14 @@ fn validate_project(project_id: ProjectId) -> Result<(), AutomationError> {
     }
 }
 
-/// The job is running under exactly this claim: same owner *and* attempt, so a
-/// stale attempt of a process that reclaimed its own job is fenced out.
-fn job_lease_is_valid(row: &PgRow, lease: &JobLease) -> bool {
-    row.get::<String, _>("job_state") == "running"
-        && row.get::<Option<String>, _>("lease_owner").as_deref() == Some(lease.owner.as_str())
-        && row.get::<i32, _>("job_attempts") == lease.attempt
-        && row
-            .get::<Option<bool>, _>("lease_is_valid")
-            .unwrap_or(false)
+
+async fn ensure_live_lease(transaction: &mut Transaction<'_,Postgres>,project_id: ProjectId,lease: &JobLease) -> Result<(),AutomationError> {
+    let valid: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM jobs WHERE id=$1 AND project_id=$2
+        AND state='running' AND lease_owner=$3 AND attempts=$4 AND leased_until>now())")
+        .bind(lease.id).bind(project_id.as_uuid()).bind(&lease.owner).bind(lease.attempt)
+        .fetch_one(&mut **transaction).await?;
+    if !valid { return Err(AutomationError::WorkerOwnership); }
+    Ok(())
 }
 
 pub async fn begin_next_automation_step(
@@ -452,101 +510,24 @@ pub async fn begin_next_automation_step(
     let worker_id = lease.owner.as_str();
     validate_worker_id(worker_id)?;
     let mut transaction = pool.begin().await?;
-    let run_and_job = sqlx::query(
-        "SELECT r.status AS run_status, j.state AS job_state,
-                j.lease_owner, j.leased_until, j.attempts AS job_attempts,
-                (j.leased_until > now()) AS lease_is_valid
-         FROM automation_runs AS r
-         JOIN jobs AS j
-           ON j.project_id = r.project_id AND j.id = r.job_id
-         WHERE r.project_id=$1 AND r.id=$2
-         FOR UPDATE OF r, j",
-    )
-    .bind(project_id.as_uuid())
-    .bind(run_id.as_uuid())
-    .fetch_optional(&mut *transaction)
-    .await?
-    .ok_or(AutomationError::RunNotFound)?;
-    let run_status = parse_run_status(&run_and_job.get::<String, _>("run_status"))?;
-    match run_status {
-        AutomationRunStatus::Completed => {
-            transaction.commit().await?;
-            return Ok(None);
-        }
-        AutomationRunStatus::Failed => return Err(AutomationError::RunNotRetryable),
-        AutomationRunStatus::Queued => {
-            if !job_lease_is_valid(&run_and_job, lease) {
-                return Err(AutomationError::WorkerOwnership);
-            }
-            sqlx::query(
-                "UPDATE automation_runs
-                 SET status='running', started_at=COALESCE(started_at, now()),
-                     finished_at=NULL, error=NULL
-                 WHERE project_id=$1 AND id=$2",
-            )
-            .bind(project_id.as_uuid())
-            .bind(run_id.as_uuid())
-            .execute(&mut *transaction)
-            .await?;
-        }
-        AutomationRunStatus::Running => {
-            if !job_lease_is_valid(&run_and_job, lease) {
-                return Err(AutomationError::WorkerOwnership);
-            }
-        }
-    }
-
-    let job_attempts: i32 = run_and_job.get("job_attempts");
-    let row = sqlx::query(
-        "SELECT id, project_id, automation_run_id, ordinal, step_key, step_kind,
-                status, attempts, claimed_by, claimed_job_attempt,
-                started_at, finished_at, error
-         FROM automation_step_runs
-         WHERE project_id=$1 AND automation_run_id=$2
-           AND (
-             status IN ('pending','failed')
-             OR (status='running' AND claimed_job_attempt IS DISTINCT FROM $3)
-           )
-         ORDER BY ordinal
-         LIMIT 1
-         FOR UPDATE",
-    )
-    .bind(project_id.as_uuid())
-    .bind(run_id.as_uuid())
-    .bind(job_attempts)
-    .fetch_optional(&mut *transaction)
-    .await?;
-    let Some(row) = row else {
+    ensure_live_lease(&mut transaction,project_id,lease).await?;
+    let step_id = sqlx::query_scalar::<_,Uuid>(
+        "SELECT s.id FROM durable_steps s JOIN jobs j ON j.id=$3 AND j.project_id=s.project_id
+         WHERE s.project_id=$1 AND s.run_id=$2 AND j.kind='durable_run_step'
+           AND j.payload->>'step_id'=s.id::text AND j.payload->>'run_id'=s.run_id::text
+           AND NOT EXISTS(SELECT 1 FROM durable_steps p WHERE p.run_id=s.run_id AND p.ordinal<s.ordinal AND p.status<>'completed')",
+    ).bind(project_id.as_uuid()).bind(run_id.as_uuid()).bind(lease.id)
+        .fetch_optional(&mut *transaction).await?;
+    let Some(step_id) = step_id else { return Ok(None); };
+    if crate::durable_runs::begin_step(&mut transaction,step_id,lease).await?.is_none() {
         transaction.commit().await?;
         return Ok(None);
-    };
-    let old_status = parse_step_run_status(&row.get::<String, _>("status"))?;
-    if old_status != AutomationStepRunStatus::Running {
-        old_status
-            .transition_to(AutomationStepRunStatus::Running)
-            .map_err(|error| AutomationError::InvalidTransition(error.to_string()))?;
     }
-    let updated = sqlx::query(
-        "UPDATE automation_step_runs
-         SET status='running', attempts=attempts+1, claimed_by=$4,
-             claimed_job_attempt=$5, started_at=now(), finished_at=NULL, error=NULL
-         WHERE project_id=$1 AND automation_run_id=$2 AND id=$3
-           AND (
-             status IN ('pending','failed')
-             OR (status='running' AND claimed_job_attempt IS DISTINCT FROM $5)
-           )
-         RETURNING id, project_id, automation_run_id, ordinal, step_key, step_kind,
-                   status, attempts, claimed_by, started_at, finished_at, error",
-    )
-    .bind(project_id.as_uuid())
-    .bind(run_id.as_uuid())
-    .bind(row.get::<Uuid, _>("id"))
-    .bind(worker_id)
-    .bind(job_attempts)
-    .fetch_one(&mut *transaction)
-    .await?;
+    let row = sqlx::query("SELECT s.*,d.step_kind FROM durable_steps s JOIN automation_step_details d ON d.id=s.id WHERE s.id=$1")
+        .bind(step_id).fetch_one(&mut *transaction).await?;
+    let step = step_run_from_row(&row)?;
     transaction.commit().await?;
-    Ok(Some(step_run_from_row(&updated)?))
+    Ok(Some(step))
 }
 
 pub async fn complete_automation_step(
@@ -588,32 +569,28 @@ pub(crate) async fn complete_automation_step_with_output_in_transaction(
     lease: &JobLease,
     output: Option<Value>,
 ) -> Result<bool, AutomationError> {
-    let row = lock_step_and_job(transaction, project_id, step_run_id).await?;
-    let status = parse_step_run_status(&row.get::<String, _>("status"))?;
-    if status == AutomationStepRunStatus::Completed {
-        return Ok(false);
+    let run_id = sqlx::query_scalar::<_,Uuid>("SELECT run_id FROM durable_steps WHERE project_id=$1 AND id=$2")
+        .bind(project_id.as_uuid()).bind(step_run_id.as_uuid()).fetch_one(&mut **transaction).await?;
+    ensure_live_lease(transaction,project_id,lease).await?;
+    let changed = crate::durable_runs::finish_step(transaction,step_run_id.as_uuid(),lease,"completed",None,output.as_ref()).await?;
+    if !changed {
+        let status = sqlx::query_scalar::<_,String>("SELECT status FROM durable_steps WHERE id=$1")
+            .bind(step_run_id.as_uuid()).fetch_one(&mut **transaction).await?;
+        if status != "completed" { return Err(AutomationError::WorkerOwnership); }
+        if let Some(output)=output.as_ref()
+            && !crate::durable_runs::set_completed_step_output(transaction,step_run_id.as_uuid(),lease,output).await? {
+            return Err(AutomationError::WorkerOwnership);
+        }
     }
-    ensure_step_lease_owner(&row, status, lease)?;
-    let job_attempts: i32 = row.get("job_attempts");
-    let updated = sqlx::query(
-        "UPDATE automation_step_runs
-         SET status='completed', finished_at=now(), claimed_by=NULL,
-             claimed_job_attempt=NULL, error=NULL, output=COALESCE($5, output)
-         WHERE project_id=$1 AND id=$2 AND status='running' AND claimed_by=$3
-           AND claimed_job_attempt=$4
-         RETURNING id",
-    )
-    .bind(project_id.as_uuid())
-    .bind(step_run_id.as_uuid())
-    .bind(&lease.owner)
-    .bind(job_attempts)
-    .bind(output)
-    .fetch_optional(&mut **transaction)
-    .await?;
-    if updated.is_none() {
-        return Err(AutomationError::WorkerOwnership);
+    if changed {
+        let next = sqlx::query_scalar::<_,Uuid>("SELECT id FROM durable_steps WHERE project_id=$1 AND run_id=$2
+            AND status='queued' ORDER BY ordinal LIMIT 1")
+            .bind(project_id.as_uuid()).bind(run_id).fetch_optional(&mut **transaction).await?;
+        if let Some(next) = next {
+            enqueue_recipe_step(transaction,project_id.as_uuid(),run_id,next).await?;
+        }
     }
-    Ok(true)
+    Ok(changed)
 }
 
 pub async fn fail_automation_step(
@@ -628,80 +605,20 @@ pub async fn fail_automation_step(
     validate_worker_id(worker_id)?;
     validate_error(error)?;
     let mut transaction = pool.begin().await?;
-    let row = lock_step_and_job(&mut transaction, project_id, step_run_id).await?;
-    let status = parse_step_run_status(&row.get::<String, _>("status"))?;
-    if status == AutomationStepRunStatus::Completed {
-        transaction.commit().await?;
-        return Ok(false);
-    }
-    ensure_step_lease_owner(&row, status, lease)?;
-    let job_attempts: i32 = row.get("job_attempts");
-    let updated = sqlx::query(
-        "UPDATE automation_step_runs
-         SET status='failed', finished_at=now(), claimed_by=NULL,
-             claimed_job_attempt=NULL, error=$5
-         WHERE project_id=$1 AND id=$2 AND status='running' AND claimed_by=$3
-           AND claimed_job_attempt=$4
-         RETURNING id",
-    )
-    .bind(project_id.as_uuid())
-    .bind(step_run_id.as_uuid())
-    .bind(worker_id)
-    .bind(job_attempts)
-    .bind(error)
-    .fetch_optional(&mut *transaction)
-    .await?;
-    if updated.is_none() {
-        return Err(AutomationError::WorkerOwnership);
+    ensure_live_lease(&mut transaction,project_id,lease).await?;
+    let exists = sqlx::query_scalar::<_,bool>("SELECT EXISTS(SELECT 1 FROM durable_steps WHERE project_id=$1 AND id=$2)")
+        .bind(project_id.as_uuid()).bind(step_run_id.as_uuid()).fetch_one(&mut *transaction).await?;
+    if !exists { return Err(AutomationError::StepNotFound); }
+    let changed = crate::durable_runs::finish_step(&mut transaction,step_run_id.as_uuid(),lease,"failed",Some(error),None).await?;
+    if !changed {
+        let status = sqlx::query_scalar::<_,String>("SELECT status FROM durable_steps WHERE id=$1")
+            .bind(step_run_id.as_uuid()).fetch_one(&mut *transaction).await?;
+        if status != "completed" { return Err(AutomationError::WorkerOwnership); }
     }
     transaction.commit().await?;
-    Ok(true)
+    Ok(changed)
 }
 
-async fn lock_step_and_job(
-    transaction: &mut Transaction<'_, Postgres>,
-    project_id: ProjectId,
-    step_run_id: AutomationStepRunId,
-) -> Result<PgRow, AutomationError> {
-    let row = sqlx::query(
-        "SELECT s.status, s.claimed_by, s.claimed_job_attempt,
-                j.state AS job_state, j.lease_owner, j.leased_until,
-                j.attempts AS job_attempts,
-                (j.leased_until > now()) AS lease_is_valid
-         FROM automation_step_runs AS s
-         JOIN automation_runs AS r
-           ON r.project_id = s.project_id AND r.id = s.automation_run_id
-         JOIN jobs AS j
-           ON j.project_id = r.project_id AND j.id = r.job_id
-         WHERE s.project_id=$1 AND s.id=$2
-         FOR UPDATE OF s, j",
-    )
-    .bind(project_id.as_uuid())
-    .bind(step_run_id.as_uuid())
-    .fetch_optional(&mut **transaction)
-    .await?
-    .ok_or(AutomationError::StepNotFound)?;
-    Ok(row)
-}
-
-fn ensure_step_lease_owner(
-    row: &PgRow,
-    status: AutomationStepRunStatus,
-    lease: &JobLease,
-) -> Result<(), AutomationError> {
-    if status != AutomationStepRunStatus::Running {
-        return Err(AutomationError::InvalidTransition(format!(
-            "step is {status:?}, not running"
-        )));
-    }
-    if !job_lease_is_valid(row, lease)
-        || row.get::<Option<String>, _>("claimed_by").as_deref() != Some(lease.owner.as_str())
-        || row.get::<Option<i32>, _>("claimed_job_attempt") != Some(row.get("job_attempts"))
-    {
-        return Err(AutomationError::WorkerOwnership);
-    }
-    Ok(())
-}
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AutomationFinalization {
@@ -713,12 +630,13 @@ pub async fn finalize_automation_run(
     pool: &PgPool,
     project_id: ProjectId,
     run_id: AutomationRunId,
+    lease: &JobLease,
 ) -> Result<AutomationFinalization, AutomationError> {
     validate_project(project_id)?;
     let mut transaction = pool.begin().await?;
     let status = sqlx::query_scalar::<_, String>(
         "SELECT status
-         FROM automation_runs
+         FROM durable_runs
          WHERE project_id=$1 AND id=$2
          FOR UPDATE",
     )
@@ -746,8 +664,8 @@ pub async fn finalize_automation_run(
                 count(*) FILTER (WHERE status='completed')::bigint AS completed,
                 count(*) FILTER (WHERE status='failed')::bigint AS failed,
                 min(error) FILTER (WHERE status='failed') AS first_error
-         FROM automation_step_runs
-         WHERE project_id=$1 AND automation_run_id=$2",
+         FROM durable_steps
+         WHERE project_id=$1 AND run_id=$2",
     )
     .bind(project_id.as_uuid())
     .bind(run_id.as_uuid())
@@ -756,32 +674,33 @@ pub async fn finalize_automation_run(
     let total: i64 = summary.get("total");
     let completed: i64 = summary.get("completed");
     let failed: i64 = summary.get("failed");
-    if total == 0 || (completed + failed) < total {
+    if total == 0 || (failed == 0 && completed < total) {
         return Err(AutomationError::RunNotReady);
+    }
+    let current=sqlx::query_scalar::<_,Uuid>(
+        "SELECT s.id FROM jobs j JOIN durable_steps s ON s.project_id=j.project_id
+         AND j.payload->>'step_id'=s.id::text AND j.payload->>'run_id'=s.run_id::text
+         WHERE j.id=$1 AND s.project_id=$2 AND s.run_id=$3")
+        .bind(lease.id).bind(project_id.as_uuid()).bind(run_id.as_uuid())
+        .fetch_optional(&mut *transaction).await?.ok_or(AutomationError::WorkerOwnership)?;
+    if !crate::durable_runs::verify_active_step_lease(&mut transaction,current,lease).await? {
+        return Err(AutomationError::WorkerOwnership);
     }
     if failed > 0 {
         let error = summary
             .get::<Option<String>, _>("first_error")
             .unwrap_or_else(|| "automation step failed".to_owned());
         validate_error(&error)?;
-        sqlx::query(
-            "UPDATE automation_runs
-             SET status='failed', finished_at=now(), error=$3
-             WHERE project_id=$1 AND id=$2",
-        )
-        .bind(project_id.as_uuid())
-        .bind(run_id.as_uuid())
-        .bind(&error)
-        .execute(&mut *transaction)
-        .await?;
+        crate::durable_runs::finish_run(&mut transaction,run_id.as_uuid(),"failed",Some(&error)).await?;
         // A review run that failed or was blocked has already notified once,
         // with the review's own name and reason (see `review_runs`). A second
         // "Automation failed" for the same run only duplicates that entry.
         let review_already_reported: bool = sqlx::query_scalar(
             "SELECT EXISTS (
-               SELECT 1 FROM review_run_manifests
-               WHERE project_id=$1 AND automation_run_id=$2
-                 AND state IN ('failed','blocked')
+               SELECT 1 FROM review_run_manifests m
+               JOIN durable_runs r ON r.id=m.automation_run_id
+               WHERE m.project_id=$1 AND m.automation_run_id=$2
+                 AND r.status IN ('failed','blocked')
              )",
         )
         .bind(project_id.as_uuid())
@@ -805,15 +724,7 @@ pub async fn finalize_automation_run(
         return Ok(AutomationFinalization::Failed);
     }
 
-    sqlx::query(
-        "UPDATE automation_runs
-         SET status='completed', finished_at=now(), error=NULL
-         WHERE project_id=$1 AND id=$2",
-    )
-    .bind(project_id.as_uuid())
-    .bind(run_id.as_uuid())
-    .execute(&mut *transaction)
-    .await?;
+    crate::durable_runs::finish_run(&mut transaction,run_id.as_uuid(),"completed",None).await?;
     record_notification_in_transaction(
         &mut transaction,
         &NotificationDraft::success(
@@ -837,7 +748,7 @@ pub async fn retry_automation_run(
     validate_project(project_id)?;
     let mut transaction = pool.begin().await?;
     let status = sqlx::query_scalar::<_, String>(
-        "SELECT status FROM automation_runs
+        "SELECT status FROM durable_runs
          WHERE project_id=$1 AND id=$2 FOR UPDATE",
     )
     .bind(project_id.as_uuid())
@@ -855,26 +766,18 @@ pub async fn retry_automation_run(
             return Err(AutomationError::RunNotRetryable);
         }
     }
-    sqlx::query(
-        "UPDATE automation_runs
-         SET status='queued', started_at=NULL, finished_at=NULL, error=NULL
-         WHERE project_id=$1 AND id=$2",
-    )
-    .bind(project_id.as_uuid())
-    .bind(run_id.as_uuid())
-    .execute(&mut *transaction)
-    .await?;
-    // `attempts` keeps counting so automation step fencing on
-    // `claimed_job_attempt` stays monotonic; an exhausted budget is extended by
-    // one attempt so the claim guard (`attempts < max_attempts`) admits it.
+    if !crate::durable_runs::reopen_recipe_run(&mut transaction,run_id.as_uuid()).await? {
+        return Err(AutomationError::RunNotRetryable);
+    }
+    // Requeue the failed step's existing job; the run's first job identity never changes.
     sqlx::query(
         "UPDATE jobs
          SET state='queued', available_at=now(), leased_until=NULL,
              lease_owner=NULL, lease_renewed_at=NULL, last_error=NULL, completed_at=NULL,
              max_attempts=GREATEST(max_attempts, attempts + 1)
-         WHERE project_id=$1 AND id=(
-           SELECT job_id FROM automation_runs WHERE project_id=$1 AND id=$2
-         ) AND kind='automation_run'",
+         WHERE project_id=$1 AND payload->>'step_id'=(
+           SELECT id::text FROM durable_steps WHERE project_id=$1 AND run_id=$2 AND status='queued' ORDER BY ordinal LIMIT 1
+         ) AND kind='durable_run_step'",
     )
     .bind(project_id.as_uuid())
     .bind(run_id.as_uuid())
@@ -888,7 +791,7 @@ fn step_run_from_row(row: &PgRow) -> Result<AutomationStepRun, AutomationError> 
     Ok(AutomationStepRun {
         id: AutomationStepRunId::new(row.get("id"))?,
         project_id: ProjectId::new(row.get("project_id")),
-        run_id: AutomationRunId::new(row.get("automation_run_id"))?,
+        run_id: AutomationRunId::new(row.get("run_id"))?,
         ordinal: row.get("ordinal"),
         key: row.get("step_key"),
         kind: parse_step_kind(&row.get::<String, _>("step_kind"))?,

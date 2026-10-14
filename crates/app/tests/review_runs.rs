@@ -28,13 +28,13 @@ use deepref_app::{
     ReviewAttemptCompletion, ReviewAttemptStart, ReviewCalibrationBundleInput,
     ReviewFinalization, ReviewPreparationError, ReviewScheduleIntent,
     begin_review_attempt, complete_review_attempt, decide_ai_proposal, fail_review_attempt,
-    finalize_review_proposal, get_review_run, insert_model_route, insert_review_calibration_bundle,
-    load_leased_review_run, mark_review_run_running, preview_review_identity,
+    get_review_run, insert_model_route, insert_review_calibration_bundle,
+    load_leased_review_run, preview_review_identity,
     preview_screening_identity, schedule_prepared_review_run, schedule_prepared_review_run_as,
 };
 use deepref_app::{
     AutomationFinalization, ProtocolActor, begin_next_automation_step, block_review_run,
-    fail_automation_step, fail_review_run, finalize_automation_run, get_ai_screening_target,
+    fail_review_run, finalize_automation_run, get_ai_screening_target,
     get_published_protocol, publish_protocol, save_protocol_draft,
 };
 use deepref_review::{
@@ -840,25 +840,22 @@ async fn a_failed_review_run_is_announced_once() {
     let owner = &claim_run(&pool, snapshot.id.as_uuid(), "review-notice-worker").await;
     let message = "review execution failed: AI output failed semantic validation";
 
-    // The worker's order for a failed review: the review fails, its step
-    // fails, then the automation run is finalised.
+    // A domain failure terminalizes the sole lifecycle, not a parallel
+    // manifest state. A late recipe claim cannot resurrect it.
     fail_review_run(
         &pool,
         project_id,
         snapshot.id,
         "review_execution_failed",
         message,
+        owner,
     )
     .await
     .expect("review fails");
-    let step = begin_next_automation_step(&pool, project_id, run_id, owner)
-        .await
-        .expect("step starts")
-        .expect("the review step is queued");
-    fail_automation_step(&pool, project_id, step.id, owner, message)
-        .await
-        .expect("step fails");
-    let finalization = finalize_automation_run(&pool, project_id, run_id)
+    assert!(begin_next_automation_step(&pool,project_id,run_id,owner).await.expect("late claim").is_none());
+    fail_review_run(&pool,project_id,snapshot.id,"review_execution_failed",message,owner)
+        .await.expect("terminal replay is idempotent");
+    let finalization = finalize_automation_run(&pool, project_id, run_id,owner)
         .await
         .expect("run finalises");
     assert_eq!(finalization, AutomationFinalization::Failed);
@@ -874,7 +871,7 @@ async fn a_failed_review_run_is_announced_once() {
 }
 
 async fn claim_run(pool: &PgPool, run_id: Uuid, owner: &str) -> JobLease {
-    let job_id: Uuid = sqlx::query_scalar("SELECT job_id FROM automation_runs WHERE id=$1")
+    let job_id: Uuid = sqlx::query_scalar("SELECT job_id FROM durable_runs WHERE id=$1")
         .bind(run_id)
         .fetch_one(pool)
         .await
@@ -896,6 +893,63 @@ async fn claim_run(pool: &PgPool, run_id: Uuid, owner: &str) -> JobLease {
         owner: owner.to_owned(),
         attempt,
     }
+}
+
+async fn begin_node_attempt(
+    pool:&PgPool,run:&LeasedReviewRun,review:&CompiledReview,
+    node:&deepref_review::worker::ReviewNode,predecessors:&[AcceptedArtifactInput],lease:&mut JobLease,
+) -> ReviewAttemptStart {
+    let handler:String=sqlx::query_scalar("SELECT payload->>'handler_kind' FROM jobs WHERE id=$1")
+        .bind(lease.id).fetch_one(pool).await.expect("current handler");
+    if handler=="automation" {
+        begin_next_automation_step(pool,run.snapshot.project_id,
+            AutomationRunId::new(run.snapshot.id.as_uuid()).expect("run id"),lease)
+            .await.expect("recipe entry claim");
+    }
+    match begin_review_attempt(pool,run,review,node,predecessors,lease).await {
+        Ok(start)=>start,
+        Err(PostgresReviewError::StepScheduled)=>{
+            assert!(deepref_app::complete_job(pool,lease).await.expect("entry delivery ack"));
+            let claimed=deepref_app::claim_job(pool,&lease.owner,std::time::Duration::from_secs(300))
+                .await.expect("next node claim").expect("node scheduled");
+            assert_eq!(claimed.project_id,run.snapshot.project_id);
+            *lease=claimed.lease(lease.owner.clone());
+            begin_review_attempt(pool,run,review,node,predecessors,lease)
+                .await.expect("scheduled node begins")
+        },
+        Err(error)=>panic!("node could not begin: {error}"),
+    }
+}
+
+async fn current_review_lease(pool:&PgPool,run:Uuid,owner:&str)->JobLease {
+    let row=sqlx::query("SELECT id,attempts FROM jobs WHERE payload->>'run_id'=$1
+        AND lease_owner=$2 AND state='running' ORDER BY available_at DESC,id LIMIT 1")
+        .bind(run.to_string()).bind(owner).fetch_one(pool).await.expect("live node lease");
+    JobLease{id:row.get("id"),owner:owner.to_owned(),attempt:row.get("attempts")}
+}
+
+async fn finish_fixture_proposal(pool:&PgPool,run:&LeasedReviewRun,executed:ExecutedReviewTask,
+    lease:&mut JobLease)->ReviewFinalization {
+    let current=load_leased_review_run(pool,run.snapshot.project_id,run.snapshot.id,lease)
+        .await.expect("live finalizer lease");
+    if let ReviewRunState::Completed{proposal_id,..}=current.snapshot.state {
+        return ReviewFinalization::Completed{proposal_id};
+    }
+    let review=CompiledReview::compile(run.snapshot.definition).expect("definition");
+    let ReviewExecutionPlan::Standard(plan)=review.plan() else{panic!("standard review")};
+    let final_start=begin_node_attempt(pool,run,&review,&plan.finalize,&[],lease).await;
+    let ReviewAttemptStart::Started{attempt_id,..}=final_start else{panic!("fresh final node")};
+    let proposal=PostgresAiStore::new(pool).create(AiProposal{
+        id:Uuid::new_v4(),draft:executed.proposal,model_run_id:executed.model_run_id,
+        status:ProposalStatus::Pending,resolved_at:None,resolved_by_actor_id:None,
+    }).await.expect("proposal");
+    let step:Uuid=sqlx::query_scalar("SELECT id FROM automation_step_details WHERE run_id=$1 AND step_key='execute_compiled_review'")
+        .bind(run.snapshot.id.as_uuid()).fetch_one(pool).await.expect("recipe detail");
+    deepref_app::complete_review_outcome(pool,run,deepref_app::ReviewOutcomeCompletion{
+        final_attempt_id:attempt_id,predecessors:&[],
+        outcome:deepref_app::ReviewOutcome::Candidate{proposal:Box::new(proposal)},
+        automation_step_id:deepref_application::AutomationStepRunId::new(step).expect("step id"),lease,
+    }).await.expect("typed finalization")
 }
 
 #[tokio::test]
@@ -929,7 +983,7 @@ async fn review_attempts_enforce_scope_lease_exact_reuse_lineage_and_immutabilit
             Err(PostgresReviewError::RunNotFound)
         ));
 
-        let owner = &claim_run(&pool, snapshot.id.as_uuid(), "review-worker").await;
+        let owner = &mut claim_run(&pool, snapshot.id.as_uuid(), "review-worker").await;
         let run = load_leased_review_run(&pool, project_id, snapshot.id, owner)
             .await
             .expect("owner loads leased run");
@@ -940,9 +994,6 @@ async fn review_attempts_enforce_scope_lease_exact_reuse_lineage_and_immutabilit
                 }).await,
             Err(PostgresReviewError::WorkerOwnership)
         ));
-        mark_review_run_running(&pool, project_id, snapshot.id, owner)
-            .await
-            .expect("leased run starts");
         let review = CompiledReview::compile(ReviewDefinitionKey::DuplicateDetection)
             .expect("definition compiles");
         let ReviewExecutionPlan::Standard(plan) = review.plan() else {
@@ -956,37 +1007,27 @@ async fn review_attempts_enforce_scope_lease_exact_reuse_lineage_and_immutabilit
                 }).await,
             Err(PostgresReviewError::WorkerOwnership)
         ));
-        let first = begin_review_attempt(&pool, &run, &review, &plan.prepare, &[], owner)
-            .await
-            .expect("first attempt begins");
+        let first = begin_node_attempt(&pool, &run, &review, &plan.prepare, &[], owner).await;
         let first_id = match first {
             ReviewAttemptStart::Started { attempt_id, .. } => attempt_id,
             ReviewAttemptStart::Reused { .. } => panic!("running attempts cannot reserve reuse"),
         };
-        let second = begin_review_attempt(&pool, &run, &review, &plan.prepare, &[], owner)
-            .await
-            .expect("concurrent attempt begins");
-        let second_id = match second {
-            ReviewAttemptStart::Started {
-                attempt_id,
-                attempt_number,
-                ..
-            } => {
-                assert_eq!(attempt_number, 2);
-                attempt_id
-            }
-            ReviewAttemptStart::Reused { .. } => panic!("running attempts cannot reserve reuse"),
+        assert!(matches!(begin_review_attempt(&pool,&run,&review,&plan.prepare,&[],owner).await,
+            Err(PostgresReviewError::WorkerOwnership)), "duplicate delivery cannot create a second attempt");
+        fail_review_attempt(&pool,&run,first_id,"test_failure","fixture failure",owner)
+            .await.expect("first attempt fails");
+        assert!(deepref_app::fail_job(&pool,owner,"fixture failure",
+            deepref_application::jobs::JobRetry::After(std::time::Duration::ZERO)).await.expect("queue retry"));
+        let next=deepref_app::claim_job(&pool,&owner.owner,std::time::Duration::from_secs(300))
+            .await.expect("claim retry").expect("retry queued");
+        *owner=next.lease(owner.owner.clone());
+        let second=begin_node_attempt(&pool,&run,&review,&plan.prepare,&[],owner).await;
+        let second_id=match second {
+            ReviewAttemptStart::Started{attempt_id,attempt_number,..}=>{
+                assert_eq!(attempt_number,2);attempt_id
+            },
+            ReviewAttemptStart::Reused{..}=>panic!("failed attempt cannot reserve reuse"),
         };
-        fail_review_attempt(
-            &pool,
-            &run,
-            first_id,
-            "test_failure",
-            "fixture failure",
-            owner,
-        )
-        .await
-        .expect("running attempt fails");
         let prepare = complete_review_attempt(
             &pool,
             &run,
@@ -1014,16 +1055,8 @@ async fn review_attempts_enforce_scope_lease_exact_reuse_lineage_and_immutabilit
             artifact_id: prepare.artifact_id,
             content_hash: prepare.artifact_hash.clone(),
         };
-        let generated = begin_review_attempt(
-            &pool,
-            &run,
-            &review,
-            &plan.generate,
-            std::slice::from_ref(&prepare_input),
-            owner,
-        )
-        .await
-        .expect("generate begins");
+        let generated = begin_node_attempt(&pool,&run,&review,&plan.generate,
+            std::slice::from_ref(&prepare_input),owner).await;
         let generated_id = match generated {
             ReviewAttemptStart::Started { attempt_id, .. } => attempt_id,
             ReviewAttemptStart::Reused { .. } => panic!("new fingerprint cannot reuse"),
@@ -1046,16 +1079,8 @@ async fn review_attempts_enforce_scope_lease_exact_reuse_lineage_and_immutabilit
             artifact_id: generated.artifact_id,
             content_hash: generated.artifact_hash,
         };
-        let validated = begin_review_attempt(
-            &pool,
-            &run,
-            &review,
-            &plan.validate,
-            std::slice::from_ref(&generated_input),
-            owner,
-        )
-        .await
-        .expect("validation begins");
+        let validated = begin_node_attempt(&pool,&run,&review,&plan.validate,
+            std::slice::from_ref(&generated_input),owner).await;
         let validated_id = match validated {
             ReviewAttemptStart::Started { attempt_id, .. } => attempt_id,
             ReviewAttemptStart::Reused { .. } => panic!("new node cannot reuse"),
@@ -1097,11 +1122,7 @@ async fn review_attempts_enforce_scope_lease_exact_reuse_lineage_and_immutabilit
         .await;
         assert!(immutable.is_err());
 
-        let job_id: Uuid = sqlx::query_scalar("SELECT job_id FROM automation_runs WHERE id=$1")
-            .bind(snapshot.id.as_uuid())
-            .fetch_one(&pool)
-            .await
-            .expect("job id");
+        let job_id=owner.id;
         sqlx::query("UPDATE jobs SET leased_until=now()-interval '1 second' WHERE id=$1")
             .bind(job_id)
             .execute(&pool)
@@ -1219,13 +1240,8 @@ async fn review_attempts_enforce_scope_lease_exact_reuse_lineage_and_immutabilit
             })
             .await
             .expect("proposal creation survives a crash before finalization linkage");
-        let first_finalization =
-            finalize_review_proposal(&pool, &run, executed.clone(), owner)
-                .await
-                .expect("proposal finalizes");
-        let second_finalization = finalize_review_proposal(&pool, &run, executed, owner)
-            .await
-            .expect("proposal finalization replays");
+        let first_finalization = finish_fixture_proposal(&pool,&run,executed.clone(),owner).await;
+        let second_finalization = finish_fixture_proposal(&pool,&run,executed,owner).await;
         let proposal_id = match first_finalization {
             ReviewFinalization::Completed { proposal_id } => proposal_id,
             ReviewFinalization::Blocked => panic!("current subject should complete"),
@@ -1334,13 +1350,10 @@ async fn lease(
     run: &ReviewRunSnapshot,
     owner: &str,
 ) -> LeasedReviewRun {
-    claim_run(pool, run.id.as_uuid(), owner).await;
-    let leased = load_leased_review_run(pool, project_id, run.id, owner)
+    let lease=claim_run(pool, run.id.as_uuid(), owner).await;
+    let leased = load_leased_review_run(pool, project_id, run.id, &lease)
         .await
         .expect("leased run loads");
-    mark_review_run_running(pool, project_id, run.id, owner)
-        .await
-        .expect("leased run starts");
     leased
 }
 
@@ -1351,9 +1364,8 @@ async fn begin_prepare(pool: &PgPool, run: &LeasedReviewRun, owner: &str) -> Rev
     let ReviewExecutionPlan::Standard(plan) = review.plan() else {
         panic!("duplicate detection uses the standard execution plan")
     };
-    begin_review_attempt(pool, run, &review, &plan.prepare, &[], owner)
-        .await
-        .expect("prepare begins")
+    let mut lease=current_review_lease(pool,run.snapshot.id.as_uuid(),owner).await;
+    begin_node_attempt(pool,run,&review,&plan.prepare,&[],&mut lease).await
 }
 
 /// Begins and accepts the first node, so later generations could reuse it.
@@ -1362,6 +1374,7 @@ async fn accept_prepare(pool: &PgPool, run: &LeasedReviewRun, owner: &str) {
     else {
         panic!("a first attempt starts fresh")
     };
+    let lease=current_review_lease(pool,run.snapshot.id.as_uuid(),owner).await;
     complete_review_attempt(
         pool,
         run,
@@ -1371,7 +1384,7 @@ async fn accept_prepare(pool: &PgPool, run: &LeasedReviewRun, owner: &str) {
             media_type: "application/json",
             predecessors: &[],
             model_run_id: None,
-            worker_id: owner,
+            lease: &lease,
         },
     )
     .await
@@ -1464,9 +1477,8 @@ async fn complete_with_proposal(
             authority: AuthorityTier::WorkflowSuggestion,
         },
     };
-    match finalize_review_proposal(pool, run, executed, owner)
-        .await
-        .expect("proposal finalizes")
+    let mut lease=current_review_lease(pool,run.snapshot.id.as_uuid(),owner).await;
+    match finish_fixture_proposal(pool,run,executed,&mut lease).await
     {
         ReviewFinalization::Completed { proposal_id } => proposal_id,
         ReviewFinalization::Blocked => panic!("a current subject completes"),
@@ -1485,12 +1497,14 @@ async fn a_retry_reuses_the_steps_its_failed_predecessor_accepted() {
         .expect("first run schedules");
     let leased = lease(&pool, project_id, &first, owner).await;
     accept_prepare(&pool, &leased, owner).await;
+    let failure_lease=current_review_lease(&pool,first.id.as_uuid(),owner).await;
     fail_review_run(
         &pool,
         project_id,
         first.id,
         "provider_unavailable",
         "outage",
+        &failure_lease,
     )
     .await
     .expect("run fails");
@@ -1598,12 +1612,14 @@ async fn a_failed_review_run_is_retried_as_a_new_queued_generation() {
     let first = schedule_prepared_review_run(&pool, request())
         .await
         .expect("first run schedules");
+    let owner=claim_run(&pool,first.id.as_uuid(),"retry-failed-worker").await;
     fail_review_run(
         &pool,
         project_id,
         first.id,
         "provider_unavailable",
         "the provider timed out",
+        &owner,
     )
     .await
     .expect("run fails");
@@ -1641,12 +1657,14 @@ async fn a_blocked_review_run_is_retried_as_a_new_queued_generation() {
     let first = schedule_prepared_review_run(&pool, request())
         .await
         .expect("first run schedules");
+    let owner=claim_run(&pool,first.id.as_uuid(),"retry-blocked-worker").await;
     block_review_run(
         &pool,
         project_id,
         first.id,
         ReviewBlockCode::RepairBudgetExhausted,
         "repair budget exhausted",
+        &owner,
     )
     .await
     .expect("run blocks");
@@ -1659,4 +1677,40 @@ async fn a_blocked_review_run_is_retried_as_a_new_queued_generation() {
         "a blocked run must not be returned again"
     );
     assert!(matches!(retried.state, ReviewRunState::Queued));
+}
+
+#[tokio::test]
+async fn exhausted_expired_review_claim_settles_history_and_opens_a_new_generation() {
+    let Some(pool)=database().await else{return};
+    let _lock=route_fixture_lock(&pool).await;
+    let (project,record,candidate)=generation_fixture(&pool,"expired final review claim").await;
+    let request=||duplicate_request(project,record,candidate);
+    let first=schedule_prepared_review_run(&pool,request()).await.expect("first generation");
+    let mut lease=claim_run(&pool,first.id.as_uuid(),"expired-review-worker").await;
+    let run=load_leased_review_run(&pool,project,first.id,&lease).await.expect("leased review");
+    let review=CompiledReview::compile(first.definition).expect("definition");
+    let ReviewExecutionPlan::Standard(plan)=review.plan() else{panic!("standard plan")};
+    let start=begin_node_attempt(&pool,&run,&review,&plan.prepare,&[],&mut lease).await;
+    let ReviewAttemptStart::Started{attempt_id,..}=start else{panic!("fresh claim")};
+    let step:Uuid=sqlx::query_scalar("SELECT step_id FROM durable_attempts WHERE id=$1")
+        .bind(attempt_id).fetch_one(&pool).await.expect("canonical attempt");
+    sqlx::query("UPDATE jobs SET max_attempts=attempts,leased_until=now()-interval '1 second' WHERE id=$1")
+        .bind(lease.id).execute(&pool).await.expect("last claim expires");
+    deepref_app::recover_expired_jobs(&pool).await.expect("crash recovery");
+    deepref_app::recover_expired_jobs(&pool).await.expect("idempotent recovery sweep");
+    let history=get_review_run(&pool,project,first.id).await.expect("original UUID remains readable");
+    assert!(matches!(history.state,ReviewRunState::Failed{..}));
+    let status:String=sqlx::query_scalar("SELECT status FROM durable_attempts WHERE id=$1")
+        .bind(attempt_id).fetch_one(&pool).await.expect("attempt terminal");
+    assert_eq!(status,"failed");
+    let mut tx=pool.begin().await.expect("stale transaction");
+    assert!(!deepref_app::durable_runs::finish_step(&mut tx,step,&lease,"completed",None,None)
+        .await.expect("stale fence"));
+    tx.commit().await.expect("no-op commit");
+    let retried=schedule_prepared_review_run(&pool,request()).await.expect("new retry generation");
+    assert_ne!(retried.id,first.id);
+    assert!(matches!(retried.state,ReviewRunState::Queued));
+    let identity:(i32,i32)=sqlx::query_as("SELECT generation,reuse_epoch FROM review_run_manifests WHERE automation_run_id=$1")
+        .bind(retried.id.as_uuid()).fetch_one(&pool).await.expect("generation contract");
+    assert_eq!(identity,(1,0));
 }

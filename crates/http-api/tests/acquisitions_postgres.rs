@@ -88,6 +88,13 @@ async fn call(pool: &PgPool, request: Request<Body>) -> Response<Body> {
         .expect("request should be handled")
 }
 
+async fn call_with_workflow_policy(pool:&PgPool,request:Request<Body>,enabled:bool)->Response<Body> {
+    let mut config=api_config();
+    config.runtime.workflow.niche_nodes_enabled=enabled;
+    let state=AppState::core(pool.clone()).with_workflow_config(config.runtime.workflow.clone());
+    router(state,&config).oneshot(request).await.expect("workflow request")
+}
+
 async fn json_body(response: Response<Body>) -> serde_json::Value {
     let body = to_bytes(response.into_body(), usize::MAX)
         .await
@@ -939,8 +946,8 @@ async fn hooks_resolve_tokens_before_limiting_and_reject_unsigned_new_webhooks()
     let Some(pool) = database().await else { return };
     let unknown = Uuid::new_v4().to_string();
     for _ in 0..65 {
-        let response = call(&pool, Request::builder().method("POST")
-            .uri(format!("/hooks/workflows/{unknown}")).body(Body::from("{}")).unwrap()).await;
+        let response = call_with_workflow_policy(&pool, Request::builder().method("POST")
+            .uri(format!("/hooks/workflows/{unknown}")).body(Body::from("{}")).unwrap(),true).await;
         assert_eq!(response.status(), StatusCode::NOT_FOUND);
     }
     let project = Uuid::new_v4();
@@ -949,9 +956,76 @@ async fn hooks_resolve_tokens_before_limiting_and_reject_unsigned_new_webhooks()
     let project = ProjectId::new(project);
     let actor = Actor::new(ActorKind::User, "hook-test").unwrap();
     let graph = serde_json::from_value(json!({"nodes":[{"id":"trigger","type":"trigger.webhook","config":{}}],"edges":[]})).unwrap();
-    let workflow = deepref_app::create_workflow(&pool, project, "Signed", "", graph, &actor).await.unwrap();
+    let workflow = deepref_app::create_workflow(&pool, project, "Signed", "", graph, &actor, true).await.unwrap();
     let endpoint = deepref_app::get_webhook_config(&pool, project, workflow.id).await.unwrap();
-    let response = call(&pool, Request::builder().method("POST")
-        .uri(format!("/hooks/workflows/{}", endpoint.token)).body(Body::from("{}")).unwrap()).await;
+    let response = call_with_workflow_policy(&pool, Request::builder().method("POST")
+        .uri(format!("/hooks/workflows/{}", endpoint.token)).body(Body::from("{}")).unwrap(),true).await;
     assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    deepref_app::publish_workflow(&pool, project, workflow.id, None, &actor, false, true).await.expect("publishes");
+    deepref_app::set_workflow_enabled(&pool,project,workflow.id,true, true).await.expect("enabled");
+    let signature=deepref_application::workflows::sign_payload(&endpoint.secret,b"{}");
+    let signed=||Request::builder().method("POST").uri(format!("/hooks/workflows/{}",endpoint.token))
+        .header("X-DeepRef-Signature",&signature).header("Idempotency-Key","signed-positive")
+        .body(Body::from("{}")).unwrap();
+    let accepted=call_with_workflow_policy(&pool,signed(),true).await;
+    assert_eq!(accepted.status(),StatusCode::ACCEPTED);
+    let first=json_body(accepted).await;
+    let repeated=call_with_workflow_policy(&pool,signed(),true).await;
+    assert_eq!(repeated.status(),StatusCode::ACCEPTED);
+    assert_eq!(json_body(repeated).await["run_id"],first["run_id"]);
+    let denied=call_with_workflow_policy(&pool,signed(),false).await;
+    assert_eq!(denied.status(),StatusCode::FORBIDDEN);
+}
+
+#[tokio::test]
+async fn niche_flag_preserves_catalog_and_saved_graphs_but_denies_authoring_activation_and_ingress() {
+    use deepref_domain::{Actor,ActorKind,ProjectId};
+    let Some(pool)=database().await else{return};
+    let project=Uuid::new_v4();
+    sqlx::query("INSERT INTO projects(id,name) VALUES($1,'parked graph')")
+        .bind(project).execute(&pool).await.unwrap();
+    let graph=json!({"nodes":[{"id":"trigger","type":"trigger.webhook","config":{}}],"edges":[]});
+    let create=||Request::builder().method("POST").uri(format!("/projects/{project}/automations/workflows"))
+        .header("Content-Type","application/json").body(Body::from(json!({"name":"Parked","graph":graph}).to_string())).unwrap();
+    let denied=call_with_workflow_policy(&pool,create(),false).await;
+    assert_eq!(denied.status(),StatusCode::FORBIDDEN);
+    let enabled=call_with_workflow_policy(&pool,create(),true).await;
+    assert_eq!(enabled.status(),StatusCode::CREATED);
+    let created=json_body(enabled).await;
+    let workflow=Uuid::parse_str(created["id"].as_str().unwrap()).unwrap();
+    let catalog=call_with_workflow_policy(&pool,Request::builder().uri("/automations/catalog").body(Body::empty()).unwrap(),false).await;
+    let catalog=json_body(catalog).await;
+    let definitions=catalog.as_array().unwrap();
+    for id in ["trigger.webhook","trigger.email","integration.slack","integration.http_request"] {
+        let definition=definitions.iter().find(|node|node["id"]==id).expect("historical definition");
+        assert_eq!(definition["available"],false);
+    }
+    assert_eq!(definitions.iter().find(|node|node["id"]=="integration.email").unwrap()["available"],true);
+    let saved=call_with_workflow_policy(&pool,Request::builder().uri(format!("/projects/{project}/automations/workflows/{workflow}"))
+        .body(Body::empty()).unwrap(),false).await;
+    assert_eq!(saved.status(),StatusCode::OK);
+    assert_eq!(json_body(saved).await["graph"]["nodes"][0]["type"],"trigger.webhook");
+    for (method,suffix,body) in [("PUT","","{}"),("POST","/publish","{}"),("POST","/test-runs","{}")] {
+        let response=call_with_workflow_policy(&pool,Request::builder().method(method)
+            .uri(format!("/projects/{project}/automations/workflows/{workflow}{suffix}"))
+            .header("Content-Type","application/json").body(Body::from(body)).unwrap(),false).await;
+        assert_eq!(response.status(),StatusCode::FORBIDDEN);
+    }
+    let actor=Actor::new(ActorKind::User,"historical").unwrap();
+    deepref_app::publish_workflow(&pool, ProjectId::new(project), workflow, None, &actor, false, true).await.unwrap();
+    for suffix in ["/enable","/runs"] {
+        let denied=call_with_workflow_policy(&pool,Request::builder().method("POST")
+            .uri(format!("/projects/{project}/automations/workflows/{workflow}{suffix}"))
+            .header("Content-Type","application/json").body(Body::from("{}")).unwrap(),false).await;
+        assert_eq!(denied.status(),StatusCode::FORBIDDEN);
+    }
+    let endpoint=deepref_app::get_webhook_config(&pool,ProjectId::new(project),workflow).await.unwrap();
+    for path in [format!("/hooks/workflows/{}",endpoint.token),format!("/hooks/email/{}",endpoint.email_token)] {
+        let denied=call_with_workflow_policy(&pool,Request::builder().method("POST").uri(path)
+            .header("Content-Type","application/json").body(Body::from("{}")).unwrap(),false).await;
+        assert_eq!(denied.status(),StatusCode::FORBIDDEN);
+    }
+    let count:i64=sqlx::query_scalar("SELECT count(*) FROM workflow_run_details WHERE workflow_id=$1")
+        .bind(workflow).fetch_one(&pool).await.unwrap();
+    assert_eq!(count,0,"denial creates no durable run");
 }

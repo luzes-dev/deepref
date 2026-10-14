@@ -486,6 +486,10 @@ export function catalogIndex(catalog: NodeTypeDto[]): Map<string, NodeTypeDto> {
 	return new Map(catalog.map((def) => [def.id, def]));
 }
 
+export function nodeIsAvailable(def: NodeTypeDto | undefined): boolean {
+	return !!def && 'available' in def && def.available === true;
+}
+
 function toBuilderPorts(ports: PortDto[]): BuilderPort[] {
 	return ports.map((port) => ({ id: port.id, label: port.label, type: port.type }));
 }

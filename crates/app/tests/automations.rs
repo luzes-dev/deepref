@@ -131,22 +131,12 @@ async fn manual_start_is_idempotent_and_persists_typed_recipe_steps() -> Result<
             stored.steps[0].kind == deepref_application::AutomationStepKind::DeterministicAction
         );
         ensure!(stored.job.id == first.job_id);
-        let executor_columns: i64 = sqlx::query_scalar(
-            "SELECT count(*)::bigint
-             FROM information_schema.columns
-             WHERE table_schema=current_schema()
-               AND table_name IN ('automation_definition_steps', 'automation_step_runs')
-               AND column_name='executor'",
-        )
-        .fetch_one(&pool)
-        .await?;
-        ensure!(executor_columns == 0);
 
         let definitions = list_automation_definitions(&pool, project_id).await?;
         ensure!(definitions.len() == 1);
         ensure!(definitions[0].steps.len() == 1);
         let run_count: i64 = sqlx::query_scalar(
-            "SELECT count(*)::bigint FROM automation_runs
+            "SELECT count(*)::bigint FROM automation_run_details
              WHERE project_id=$1 AND definition_id=$2",
         )
         .bind(project_id.as_uuid())
@@ -160,8 +150,8 @@ async fn manual_start_is_idempotent_and_persists_typed_recipe_steps() -> Result<
                 .fetch_one(&pool)
                 .await?;
         let step_count: i64 = sqlx::query_scalar(
-            "SELECT count(*)::bigint FROM automation_step_runs
-             WHERE project_id=$1 AND automation_run_id=$2",
+            "SELECT count(*)::bigint FROM durable_steps
+             WHERE project_id=$1 AND run_id=$2",
         )
         .bind(project_id.as_uuid())
         .bind(first.run_id.as_uuid())
@@ -205,9 +195,9 @@ async fn concurrent_known_trigger_dispatch_creates_one_run_job_and_step_set() ->
 
         let counts = sqlx::query(
             "SELECT
-               (SELECT count(*) FROM automation_runs WHERE project_id=$1 AND id=$2) AS runs,
+               (SELECT count(*) FROM durable_runs WHERE project_id=$1 AND id=$2) AS runs,
                (SELECT count(*) FROM jobs WHERE project_id=$1 AND id=$3) AS jobs,
-               (SELECT count(*) FROM automation_step_runs WHERE project_id=$1 AND automation_run_id=$2) AS steps",
+               (SELECT count(*) FROM durable_steps WHERE project_id=$1 AND run_id=$2) AS steps",
         )
         .bind(project_id.as_uuid())
         .bind(left.run_id.as_uuid())
@@ -274,6 +264,10 @@ async fn expired_job_recovery_reclaims_running_step_and_rejects_zombie_completio
         .bind(dispatch.job_id)
         .execute(&pool)
         .await?;
+        ensure!(matches!(complete_automation_step(&pool,project_id,first.id,&lease_a).await,
+            Err(AutomationError::WorkerOwnership)));
+        ensure!(matches!(fail_automation_step(&pool,project_id,first.id,&lease_a,"expired lease").await,
+            Err(AutomationError::WorkerOwnership)));
         ensure!(recover_expired_jobs(&pool).await? == 1);
         // Recovery backs the job off; skip the wait instead of sleeping.
         sqlx::query("UPDATE jobs SET available_at=now() WHERE id=$1")
@@ -300,8 +294,8 @@ async fn expired_job_recovery_reclaims_running_step_and_rejects_zombie_completio
         let row = sqlx::query(
             "SELECT count(*)::bigint AS rows, count(DISTINCT id)::bigint AS effects,
                     min(attempts) AS attempts, min(status) AS status
-             FROM automation_step_runs
-             WHERE project_id=$1 AND automation_run_id=$2",
+             FROM durable_steps
+             WHERE project_id=$1 AND run_id=$2",
         )
         .bind(project_id.as_uuid())
         .bind(dispatch.run_id.as_uuid())
@@ -350,8 +344,8 @@ async fn concurrent_step_begin_under_one_lease_has_one_effective_claim() -> Resu
         let row = sqlx::query(
             "SELECT count(*)::bigint AS rows, max(attempts) AS attempts,
                     max(claimed_job_attempt) AS job_attempt
-             FROM automation_step_runs
-             WHERE project_id=$1 AND automation_run_id=$2",
+             FROM durable_steps
+             WHERE project_id=$1 AND run_id=$2",
         )
         .bind(project_id.as_uuid())
         .bind(dispatch.run_id.as_uuid())
@@ -423,6 +417,8 @@ async fn known_non_manual_trigger_persists_reference_and_paused_definition_is_re
             actor(),
         )?;
         ensure!(dispatch_automation_trigger(&pool, &rejected).await.is_err());
+        let duplicate = dispatch_automation_trigger(&pool,&dispatch).await?;
+        ensure!(!duplicate.created && duplicate.run_id == created.run_id && duplicate.job_id == created.job_id);
         Ok::<_, anyhow::Error>(())
     }
     .await;
@@ -469,9 +465,15 @@ async fn failed_manual_run_retries_only_incomplete_steps_and_completed_retry_is_
         ensure!(first_step.status == AutomationStepRunStatus::Running);
         ensure!(first_step.attempts == 1);
         ensure!(complete_automation_step(&pool, project_id, first_step.id, &lease_a).await?);
-        let second_step = begin_next_automation_step(&pool, project_id, dispatch.run_id, &lease_a)
+        ensure!(begin_next_automation_step(&pool, project_id, dispatch.run_id, &lease_a).await?.is_none());
+        let second_job: Uuid = sqlx::query_scalar("SELECT id FROM jobs WHERE project_id=$1 AND kind='durable_run_step'
+            AND payload->>'run_id'=$2 AND id<>$3")
+            .bind(project_id.as_uuid()).bind(dispatch.run_id.as_uuid().to_string()).bind(dispatch.job_id)
+            .fetch_one(&pool).await?;
+        let second_lease = claim_automation_job(&pool,"worker-a",second_job,Duration::from_secs(10)).await?.lease("worker-a");
+        let second_step = begin_next_automation_step(&pool, project_id, dispatch.run_id, &second_lease)
             .await?
-            .expect("claimed run has a second step");
+            .expect("successor runs under its own step job");
         ensure!(second_step.ordinal == 1);
         ensure!(second_step.attempts == 1);
         ensure!(
@@ -479,33 +481,33 @@ async fn failed_manual_run_retries_only_incomplete_steps_and_completed_retry_is_
                 &pool,
                 project_id,
                 second_step.id,
-                &lease_a,
+                &second_lease,
                 "deterministic action failed",
             )
             .await?
         );
         ensure!(
-            finalize_automation_run(&pool, project_id, dispatch.run_id).await?
+            finalize_automation_run(&pool, project_id, dispatch.run_id,&second_lease).await?
                 == AutomationFinalization::Failed
         );
         let attempts_before_retry: i32 =
             sqlx::query_scalar("SELECT attempts FROM jobs WHERE project_id=$1 AND id=$2")
                 .bind(project_id.as_uuid())
-                .bind(dispatch.job_id)
+                .bind(second_job)
                 .fetch_one(&pool)
                 .await?;
         ensure!(retry_automation_run(&pool, project_id, dispatch.run_id).await?);
         let retry_job =
             sqlx::query("SELECT state, attempts FROM jobs WHERE project_id=$1 AND id=$2")
                 .bind(project_id.as_uuid())
-                .bind(dispatch.job_id)
+                .bind(second_job)
                 .fetch_one(&pool)
                 .await?;
         ensure!(retry_job.get::<String, _>("state") == "queued");
         ensure!(retry_job.get::<i32, _>("attempts") == attempts_before_retry);
 
         let claimed_b =
-            claim_automation_job(&pool, "worker-b", dispatch.job_id, Duration::from_secs(10))
+            claim_automation_job(&pool, "worker-b", second_job, Duration::from_secs(10))
                 .await?;
         ensure!(claimed_b.attempts == attempts_before_retry + 1);
         let lease_b = claimed_b.lease("worker-b");
@@ -519,7 +521,7 @@ async fn failed_manual_run_retries_only_incomplete_steps_and_completed_retry_is_
         ensure!(after_begin.steps[0].attempts == 1);
         ensure!(complete_automation_step(&pool, project_id, resumed.id, &lease_b).await?);
         ensure!(
-            finalize_automation_run(&pool, project_id, dispatch.run_id).await?
+            finalize_automation_run(&pool, project_id, dispatch.run_id,&lease_b).await?
                 == AutomationFinalization::Completed
         );
         ensure!(!complete_automation_step(&pool, project_id, resumed.id, &lease_b).await?);
@@ -530,12 +532,16 @@ async fn failed_manual_run_retries_only_incomplete_steps_and_completed_retry_is_
                 .is_none()
         );
         ensure!(
-            finalize_automation_run(&pool, project_id, dispatch.run_id).await?
+            finalize_automation_run(&pool, project_id, dispatch.run_id,&lease_b).await?
                 == AutomationFinalization::Completed
         );
 
         let stored = get_automation_run(&pool, project_id, dispatch.run_id).await?;
         ensure!(stored.status == AutomationRunStatus::Completed);
+        ensure!(stored.job.id == dispatch.job_id);
+        let attempts: i64 = sqlx::query_scalar("SELECT count(*) FROM durable_attempts WHERE project_id=$1 AND run_id=$2")
+            .bind(project_id.as_uuid()).bind(dispatch.run_id.as_uuid()).fetch_one(&pool).await?;
+        ensure!(attempts == 3);
         ensure!(stored.steps[0].status == AutomationStepRunStatus::Completed);
         ensure!(stored.steps[0].attempts == 1);
         ensure!(stored.steps[1].status == AutomationStepRunStatus::Completed);
@@ -601,7 +607,7 @@ async fn project_scoping_hides_runs_and_rejects_cross_project_definition_dispatc
 }
 
 #[tokio::test]
-async fn run_detail_aggregates_ai_usage_and_database_rejects_invalid_transitions() -> Result<()> {
+async fn run_detail_aggregates_ai_usage_and_unclaimed_step_cannot_complete() -> Result<()> {
     let Some(pool) = database().await else {
         return Ok(());
     };
@@ -643,33 +649,20 @@ async fn run_detail_aggregates_ai_usage_and_database_rejects_invalid_transitions
         ensure!(stored.usage.input_tokens == 16);
         ensure!(stored.usage.output_tokens == 10);
         ensure!(stored.usage.cost_micros == 15);
-        let invalid_run_transition = sqlx::query(
-            "UPDATE automation_runs
-             SET status='completed', started_at=now(), finished_at=now()
-             WHERE project_id=$1 AND id=$2",
-        )
-        .bind(project_id.as_uuid())
-        .bind(dispatch.run_id.as_uuid())
-        .execute(&pool)
-        .await;
-        ensure!(invalid_run_transition.is_err());
         let step_id: Uuid = sqlx::query_scalar(
-            "SELECT id FROM automation_step_runs WHERE project_id=$1 AND automation_run_id=$2",
+            "SELECT id FROM durable_steps WHERE project_id=$1 AND run_id=$2",
         )
         .bind(project_id.as_uuid())
         .bind(dispatch.run_id.as_uuid())
         .fetch_one(&pool)
         .await?;
-        let invalid_step_transition = sqlx::query(
-            "UPDATE automation_step_runs
-             SET status='completed', started_at=now(), finished_at=now()
-             WHERE project_id=$1 AND id=$2",
-        )
-        .bind(project_id.as_uuid())
-        .bind(step_id)
-        .execute(&pool)
-        .await;
-        ensure!(invalid_step_transition.is_err());
+        let unclaimed = JobLease { id: dispatch.job_id, owner:"unclaimed-worker".to_owned(), attempt:1 };
+        ensure!(matches!(complete_automation_step(&pool,project_id,
+            deepref_application::AutomationStepRunId::new(step_id)?,&unclaimed).await,
+            Err(AutomationError::WorkerOwnership)));
+        let stored = get_automation_run(&pool,project_id,dispatch.run_id).await?;
+        ensure!(stored.status == AutomationRunStatus::Queued);
+        ensure!(stored.steps[0].status == AutomationStepRunStatus::Pending);
         Ok::<_, anyhow::Error>(())
     }
     .await;
@@ -731,7 +724,7 @@ async fn deleting_automation_parent_or_definition_preserves_ai_audit_and_project
                 .await
                 .is_err()
         );
-        sqlx::query("DELETE FROM automation_runs WHERE project_id=$1 AND id=$2")
+        sqlx::query("DELETE FROM durable_runs WHERE project_id=$1 AND id=$2")
             .bind(project_id.as_uuid())
             .bind(dispatch.run_id.as_uuid())
             .execute(&pool)

@@ -121,6 +121,8 @@ pub async fn run_with_shutdown(
     // Workflow blocks that change review state follow the project's AI
     // autonomy settings.
     workflows::set_autonomy_gate(Arc::new(deepref_app::ProjectAutonomyGate::new(&pool)));
+    anyhow::ensure!(deepref_app::configure_workflow_runtime(config.runtime.workflow.niche_nodes_enabled),
+        "API and worker workflow feature configuration must agree");
     let (reconciler_shutdown, reconciler_signal) = watch::channel(false);
     tokio::spawn(workflows::run_scheduler(
         pool.clone(),

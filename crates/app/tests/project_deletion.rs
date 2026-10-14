@@ -54,14 +54,17 @@ const SEEDED_TABLES: &[&str] = &[
     "assistant_plans",
     "workflows",
     "workflow_versions",
-    "workflow_runs",
-    "workflow_node_runs",
+    "workflow_run_details",
+    "durable_runs",
+    "durable_steps",
+    "durable_attempts",
+    "review_attempt_details",
     "workflow_files",
     "jobs",
     "automation_definitions",
     "automation_definition_steps",
-    "automation_runs",
-    "automation_step_runs",
+    "automation_run_details",
+    "automation_step_details",
     "dedupe_proposals",
     "dedupe_resolution_events",
     "review_artifacts",
@@ -77,6 +80,7 @@ const TOKENS: &[&str] = &[
     "proj", "rep1", "rep2", "rec", "pver", "crit", "exr", "stu1", "stu2", "doc", "blk", "fdef",
     "ai", "prop", "scev", "exev", "appr", "act", "conv", "wf", "wfv", "wfr", "job", "def", "arun",
     "ded", "dre",
+    "rstep", "rattempt",
 ];
 
 const SEED_SQL: &str = r#"
@@ -154,21 +158,45 @@ INSERT INTO workflows (id, project_id, name, webhook_token, webhook_secret, emai
 INSERT INTO workflow_versions (id, project_id, workflow_id, version, graph, trigger_kind, published_by_kind, published_by_id)
   VALUES ('@wfv@', '@proj@', '@wf@', 1, '{}'::jsonb, 'manual', 'user', 'fixture');
 UPDATE workflows SET published_version_id = '@wfv@' WHERE id = '@wf@';
-INSERT INTO workflow_runs (id, project_id, workflow_id, version_id, graph, trigger_kind, idempotency_key, actor_kind, actor_id)
-  VALUES ('@wfr@', '@proj@', '@wf@', '@wfv@', '{}'::jsonb, 'manual', gen_random_uuid()::text, 'user', 'fixture');
-INSERT INTO workflow_node_runs (id, project_id, run_id, node_id, node_type)
-  VALUES (gen_random_uuid(), '@proj@', '@wfr@', 'node-1', 'trigger');
+INSERT INTO durable_runs (id, project_id, kind, actor_kind, actor_id, idempotency_key, status)
+  VALUES ('@wfr@', '@proj@', 'workflow', 'user', 'fixture', '@wfr@', 'queued');
+INSERT INTO workflow_run_details (id, project_id, workflow_id, version_id, graph, trigger_kind, idempotency_key, trigger_data, test_mode)
+  VALUES ('@wfr@', '@proj@', '@wf@', '@wfv@', '{}'::jsonb, 'manual', '@wfr@', '{}'::jsonb, false);
+WITH step AS (
+  INSERT INTO durable_steps (id, project_id, run_id, handler_kind, step_key, status)
+  VALUES (gen_random_uuid(), '@proj@', '@wfr@', 'workflow', 'node-1:', 'queued') RETURNING id
+)
+INSERT INTO workflow_step_details (id, run_id, node_id, iteration, node_type)
+  SELECT id, '@wfr@', 'node-1', '', 'trigger' FROM step;
 INSERT INTO workflow_files (id, project_id, run_id, node_id, name, content_type, content)
   VALUES (gen_random_uuid(), '@proj@', '@wfr@', 'node-1', 'fixture.txt', 'text/plain', '\x6869'::bytea);
-INSERT INTO jobs (id, project_id, kind, state) VALUES ('@job@', '@proj@', 'automation_run', 'queued');
+INSERT INTO jobs (id, project_id, kind, state) VALUES ('@job@', '@proj@', 'durable_run_step', 'queued');
 INSERT INTO automation_definitions (id, project_id, name, trigger_kind, recipe_id, recipe_version, status, actor_kind, actor_id)
   VALUES ('@def@', '@proj@', 'Fixture automation', 'manual', 'review_screening', 1, 'active', 'user', 'fixture');
 INSERT INTO automation_definition_steps (project_id, definition_id, ordinal, step_key, step_kind)
   VALUES ('@proj@', '@def@', 0, 'screen', 'ai_task');
-INSERT INTO automation_runs (id, project_id, definition_id, job_id, recipe_id, recipe_version, trigger_kind, idempotency_key, actor_kind, actor_id)
-  VALUES ('@arun@', '@proj@', '@def@', '@job@', 'review_screening', 1, 'manual', gen_random_uuid()::text, 'user', 'fixture');
-INSERT INTO automation_step_runs (project_id, automation_run_id, ordinal, step_key, step_kind, status, attempts)
-  VALUES ('@proj@', '@arun@', 0, 'screen', 'ai_task', 'pending', 0);
+INSERT INTO durable_runs (id, project_id, kind, job_id, actor_kind, actor_id, idempotency_key, status)
+  VALUES ('@arun@', '@proj@', 'automation', '@job@', 'user', 'fixture', '@arun@', 'running');
+INSERT INTO automation_run_details (id, project_id, definition_id, recipe_id, recipe_version, trigger_kind, idempotency_key)
+  VALUES ('@arun@', '@proj@', '@def@', 'review_screening', 1, 'manual', gen_random_uuid()::text);
+WITH step AS (
+  INSERT INTO durable_steps (id, project_id, run_id, ordinal, step_key, handler_kind, status, attempts)
+  VALUES (gen_random_uuid(), '@proj@', '@arun@', 0, 'screen', 'automation', 'pending', 0) RETURNING id
+)
+INSERT INTO automation_step_details (id, project_id, run_id, ordinal, step_key, step_kind)
+  SELECT id, '@proj@', '@arun@', 0, 'screen', 'ai_task' FROM step;
+UPDATE jobs SET state='running',attempts=1,lease_owner='fixture',
+ leased_until=now()+interval '1 hour',lease_renewed_at=now(),
+ payload=jsonb_build_object('run_id','@arun@','step_id','@rstep@','handler_kind','review')
+ WHERE id='@job@';
+INSERT INTO durable_steps
+ (id,project_id,run_id,handler_kind,step_key,status,attempts,claimed_by,claimed_job_id,claimed_job_attempt,started_at)
+ VALUES('@rstep@','@proj@','@arun@','review','prepare_review','running',1,'fixture','@job@',1,now());
+INSERT INTO durable_attempts
+ (id,project_id,run_id,step_id,attempt_number,status,worker_id,job_id,job_attempt,started_at)
+ VALUES('@rattempt@','@proj@','@arun@','@rstep@',1,'running','fixture','@job@',1,now());
+INSERT INTO review_attempt_details(id,project_id,run_id,node_id,node_version,input_fingerprint)
+ VALUES('@rattempt@','@proj@','@arun@','prepare_review',1,repeat('a',64));
 INSERT INTO dedupe_proposals (id, project_id, record_id, proposal_kind, status, score, title_similarity)
   VALUES ('@ded@', '@proj@', '@rec@', 'fuzzy', 'pending', 0.9, 0.9);
 INSERT INTO dedupe_resolution_events (id, project_id, record_id, action, reason, actor_kind, actor_id, proposal_id)

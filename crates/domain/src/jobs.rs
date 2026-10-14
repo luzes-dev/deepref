@@ -10,9 +10,8 @@ pub enum JobKind {
     #[serde(rename = "run_deduplication")]
     ImportDeduplication,
     PmidImport,
-    AutomationRun,
+    DurableRunStep,
     AssistantAgentRun,
-    WorkflowStep,
     RecomputePrisma,
     RetrieveDocument,
     ParseDocument,
@@ -25,12 +24,31 @@ impl JobKind {
             Self::RecomputeMetrics => "recompute_metrics",
             Self::ImportDeduplication => "run_deduplication",
             Self::PmidImport => "pmid_import",
-            Self::AutomationRun => "automation_run",
+            Self::DurableRunStep => "durable_run_step",
             Self::AssistantAgentRun => "assistant_agent_run",
-            Self::WorkflowStep => "workflow_step",
             Self::RecomputePrisma => "recompute_prisma",
             Self::RetrieveDocument => "retrieve_document",
             Self::ParseDocument => "parse_document",
+        }
+    }
+}
+
+/// The sole step dispatcher routes to typed domain handlers, not queue kinds
+/// with independent lifecycles.
+#[derive(Debug,Clone,Copy,PartialEq,Eq,Serialize,Deserialize)]
+#[serde(rename_all="snake_case")]
+pub enum DurableHandlerKind {
+    Automation,
+    Workflow,
+    Review,
+}
+
+impl DurableHandlerKind {
+    pub const fn as_str(self)->&'static str {
+        match self {
+            Self::Automation=>"automation",
+            Self::Workflow=>"workflow",
+            Self::Review=>"review",
         }
     }
 }
@@ -48,9 +66,8 @@ impl std::str::FromStr for JobKind {
             "recompute_metrics" => Ok(Self::RecomputeMetrics),
             "run_deduplication" => Ok(Self::ImportDeduplication),
             "pmid_import" => Ok(Self::PmidImport),
-            "automation_run" => Ok(Self::AutomationRun),
+            "durable_run_step" => Ok(Self::DurableRunStep),
             "assistant_agent_run" => Ok(Self::AssistantAgentRun),
-            "workflow_step" => Ok(Self::WorkflowStep),
             "recompute_prisma" => Ok(Self::RecomputePrisma),
             "retrieve_document" => Ok(Self::RetrieveDocument),
             "parse_document" => Ok(Self::ParseDocument),
@@ -113,8 +130,8 @@ mod tests {
     #[test]
     fn queued_wire_kinds_round_trip() {
         for kind in [JobKind::WorkFetchRequested, JobKind::RecomputeMetrics,
-            JobKind::ImportDeduplication, JobKind::PmidImport, JobKind::AutomationRun,
-            JobKind::AssistantAgentRun, JobKind::WorkflowStep, JobKind::RecomputePrisma,
+            JobKind::ImportDeduplication, JobKind::PmidImport, JobKind::DurableRunStep,
+            JobKind::AssistantAgentRun, JobKind::RecomputePrisma,
             JobKind::RetrieveDocument, JobKind::ParseDocument] {
             assert_eq!(kind.as_str().parse::<JobKind>().unwrap(), kind);
             assert_eq!(serde_json::to_value(kind).unwrap(), kind.as_str());
