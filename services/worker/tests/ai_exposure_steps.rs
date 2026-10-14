@@ -11,6 +11,12 @@ use std::collections::BTreeMap;
 use std::sync::Arc;
 use std::time::Duration;
 
+use deepref_app::screening::screen_report;
+use deepref_app::{
+    ProjectAutonomyGate, ProtocolActor, StartRun, claim_job, complete_job, create_workflow,
+    get_published_graph, get_published_protocol, independent_reviewer_pairs, publish_protocol,
+    publish_workflow, save_protocol_draft, set_ai_budget, start_run,
+};
 use deepref_application::workflows::{Endpoint, GraphEdge, GraphNode, Position, WorkflowGraph};
 use deepref_application::{
     ProtocolCriterionCommand, PublishProtocolCommand, SaveProtocolDraftCommand, ScreenReportCommand,
@@ -19,8 +25,6 @@ use deepref_domain::{
     Actor, ActorKind, CriterionDimension, CriterionKind, CriterionStage, FrameworkKind, ProjectId,
     ProtocolVersionId, ReportId, ScreeningDecision, ScreeningStage,
 };
-use deepref_app::{ProjectAutonomyGate, ProtocolActor, StartRun, claim_job, complete_job, create_workflow, get_published_graph, get_published_protocol, independent_reviewer_pairs, publish_protocol, publish_workflow, save_protocol_draft, set_ai_budget, start_run};
-use deepref_app::screening::{screen_report};
 use deepref_worker::{delivery::DeliveryAction, workflows};
 use serde_json::{Value, json};
 use sqlx::PgPool;
@@ -68,9 +72,18 @@ async fn drain(pool: &PgPool, project: Uuid) {
             project,
             "unexpected job from another project"
         );
-        match workflows::handle_step(pool, &job, &job.lease("ai-exposure-test"), None, &deepref_config::RuntimeConfig::from_source("workflow-test", &|name| (name == "APP_ENV").then(|| "local".into())).expect("local runtime configuration"))
-            .await
-            .expect("step")
+        match workflows::handle_step(
+            pool,
+            &job,
+            &job.lease("ai-exposure-test"),
+            None,
+            &deepref_config::RuntimeConfig::from_source("workflow-test", &|name| {
+                (name == "APP_ENV").then(|| "local".into())
+            })
+            .expect("local runtime configuration"),
+        )
+        .await
+        .expect("step")
         {
             DeliveryAction::Ack => {
                 complete_job(pool, &job.lease("ai-exposure-test"))

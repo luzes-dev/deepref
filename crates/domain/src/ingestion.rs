@@ -77,7 +77,6 @@ impl TryFrom<&str> for IngestionItemStatus {
     }
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;

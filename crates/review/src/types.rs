@@ -457,8 +457,14 @@ mod lifecycle_status_tests {
         ] {
             assert_eq!(ReviewAttemptStatus::parse(status.as_str()), Some(status));
         }
-        for status in [ReviewCalibrationStatus::Passing, ReviewCalibrationStatus::Failed] {
-            assert_eq!(ReviewCalibrationStatus::parse(status.as_str()), Some(status));
+        for status in [
+            ReviewCalibrationStatus::Passing,
+            ReviewCalibrationStatus::Failed,
+        ] {
+            assert_eq!(
+                ReviewCalibrationStatus::parse(status.as_str()),
+                Some(status)
+            );
         }
     }
 

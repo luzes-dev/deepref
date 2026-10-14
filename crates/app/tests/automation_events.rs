@@ -5,12 +5,12 @@
     clippy::string_slice
 )]
 use anyhow::{Result, ensure};
+use deepref_app::{configure_automation_definition, dispatch_automation_domain_event};
 use deepref_application::{
     AutomationDefinitionStatus, AutomationDomainEvent, AutomationTriggerKind,
     BuiltInAutomationRecipe, ConfigureAutomationDefinition,
 };
 use deepref_domain::{Actor, ActorKind, ProjectId};
-use deepref_app::{configure_automation_definition, dispatch_automation_domain_event};
 use sqlx::{PgPool, Row};
 use uuid::Uuid;
 

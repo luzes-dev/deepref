@@ -1,4 +1,9 @@
-use std::{collections::BTreeMap, fmt, path::{Path, PathBuf}, process::Command};
+use std::{
+    collections::BTreeMap,
+    fmt,
+    path::{Path, PathBuf},
+    process::Command,
+};
 
 use anyhow::{Context, Result, bail};
 use serde::Deserialize;
@@ -28,21 +33,15 @@ impl fmt::Display for Layer {
 impl Layer {
     fn permits(self, target: Self) -> bool {
         use Layer::{
-            Adapter, Ai, Application, Composition, Configuration, Domain, Http,
-            Persistence, Review, Tooling, Worker,
+            Adapter, Ai, Application, Composition, Configuration, Domain, Http, Persistence,
+            Review, Tooling, Worker,
         };
         match self {
             Domain | Configuration => false,
             Application | Ai => target == Domain,
             Review => matches!(target, Ai | Application | Domain),
-            Adapter => matches!(
-                target,
-                Adapter | Application | Configuration | Domain
-            ),
-            Persistence => matches!(
-                target,
-                Ai | Application | Adapter | Domain | Review
-            ),
+            Adapter => matches!(target, Adapter | Application | Configuration | Domain),
+            Persistence => matches!(target, Ai | Application | Adapter | Domain | Review),
             Http | Worker => !matches!(target, Http | Worker | Composition | Tooling),
             Composition => !matches!(target, Composition | Tooling),
             Tooling => true,
@@ -169,17 +168,30 @@ pub fn run() -> Result<()> {
 }
 
 fn validate_screening_sources(metadata: &Metadata, errors: &mut Vec<String>) -> Result<()> {
-    let Some(http) = metadata.packages.iter().find(|package| package.name == "deepref-http-api") else {
+    let Some(http) = metadata
+        .packages
+        .iter()
+        .find(|package| package.name == "deepref-http-api")
+    else {
         bail!("screening source rule requires deepref-http-api");
     };
-    let root = http.manifest_path.parent().context("HTTP manifest has no parent")?;
+    let root = http
+        .manifest_path
+        .parent()
+        .context("HTTP manifest has no parent")?;
     for relative in ["src/routes/review.rs", "src/routes/assistant/plans.rs"] {
         let path = root.join(relative);
         let source = std::fs::read_to_string(&path)
             .with_context(|| format!("could not inspect {}", path.display()))?;
         // These migrated files contain transport/DTO logic only. Unmigrated
         // contexts and separate dev-test targets may continue to use SQLx.
-        for forbidden in ["sqlx", "query!", "query_as!", "query_scalar!", "QueryBuilder"] {
+        for forbidden in [
+            "sqlx",
+            "query!",
+            "query_as!",
+            "query_scalar!",
+            "QueryBuilder",
+        ] {
             if source.contains(forbidden) {
                 errors.push(format!(
                     "{}: migrated screening transport must use deepref_app::screening, not {forbidden}",
@@ -196,9 +208,14 @@ fn validate_screening_sources(metadata: &Metadata, errors: &mut Vec<String>) -> 
 /// subject to a blanket source-level infrastructure prohibition.
 fn validate_runtime_configuration(root: &Path, errors: &mut Vec<String>) -> Result<()> {
     for relative in [
-        "apps/server/src", "services/worker/src", "crates/http-api/src",
-        "crates/ai/src", "crates/documents/src", "crates/integrations/src",
-        "crates/telemetry/src", "crates/app/src/workflows.rs",
+        "apps/server/src",
+        "services/worker/src",
+        "crates/http-api/src",
+        "crates/ai/src",
+        "crates/documents/src",
+        "crates/integrations/src",
+        "crates/telemetry/src",
+        "crates/app/src/workflows.rs",
     ] {
         inspect_runtime_source(&root.join(relative), root, errors)?;
     }
@@ -208,7 +225,8 @@ fn validate_runtime_configuration(root: &Path, errors: &mut Vec<String>) -> Resu
 fn inspect_runtime_source(path: &Path, root: &Path, errors: &mut Vec<String>) -> Result<()> {
     if path.is_dir() {
         for entry in std::fs::read_dir(path)
-            .with_context(|| format!("could not inspect {}", path.display()))? {
+            .with_context(|| format!("could not inspect {}", path.display()))?
+        {
             inspect_runtime_source(&entry?.path(), root, errors)?;
         }
     } else if path.extension().is_some_and(|extension| extension == "rs") {
@@ -227,9 +245,13 @@ fn inspect_runtime_source(path: &Path, root: &Path, errors: &mut Vec<String>) ->
 }
 
 fn reads_runtime_environment(source: &str) -> bool {
-    let compact: String = source.chars().filter(|character| !character.is_whitespace()).collect();
+    let compact: String = source
+        .chars()
+        .filter(|character| !character.is_whitespace())
+        .collect();
     ["env::var(", "env::var_os(", "env::vars(", "env::vars_os("]
-        .iter().any(|pattern| compact.contains(pattern))
+        .iter()
+        .any(|pattern| compact.contains(pattern))
 }
 fn validate_workspace_dependency(
     source: &Package,
@@ -376,6 +398,8 @@ mod tests {
     fn runtime_config_guard_leaves_process_and_fixture_inputs_distinct() {
         assert!(!reads_runtime_environment("std::env::args().skip(1)"));
         assert!(!reads_runtime_environment("std::env::temp_dir()"));
-        assert!(!reads_runtime_environment("RuntimeConfig::from_source(get)?"));
+        assert!(!reads_runtime_environment(
+            "RuntimeConfig::from_source(get)?"
+        ));
     }
 }

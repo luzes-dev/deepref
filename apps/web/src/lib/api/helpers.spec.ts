@@ -12,7 +12,9 @@ import { shouldPollIngestion } from './helpers';
 
 describe('generated query keys', () => {
 	it('include every path parameter', () => {
-		expect(getGetAcquisitionQueryKey('project-1', 'acquisition-1')).toEqual(['/api/projects/project-1/acquisitions/acquisition-1']);
+		expect(getGetAcquisitionQueryKey('project-1', 'acquisition-1')).toEqual([
+			'/api/projects/project-1/acquisitions/acquisition-1'
+		]);
 		expect(getListAcquisitionItemsQueryKey('project-1', 'acquisition-1')).toEqual([
 			'/api/projects/project-1/acquisitions/acquisition-1/items'
 		]);

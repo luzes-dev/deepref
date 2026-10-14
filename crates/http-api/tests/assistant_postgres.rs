@@ -41,10 +41,16 @@ fn api_config() -> ApiConfig {
         &HashMap::from([("APP_ENV".to_owned(), "local".to_owned())]),
     )
     .expect("local test runtime should parse");
-    ApiConfig { documents: deepref_config::DocumentConfig::from_source(&|name| (name == "APP_ENV").then(|| "local".into())).expect("local test document configuration"), runtime,
-    bind_addr: "127.0.0.1:0".parse().expect("test bind address is valid"),
-    cors_allow_any: false,
-    cors_origins: Vec::new(), }
+    ApiConfig {
+        documents: deepref_config::DocumentConfig::from_source(&|name| {
+            (name == "APP_ENV").then(|| "local".into())
+        })
+        .expect("local test document configuration"),
+        runtime,
+        bind_addr: "127.0.0.1:0".parse().expect("test bind address is valid"),
+        cors_allow_any: false,
+        cors_origins: Vec::new(),
+    }
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -593,26 +599,58 @@ where
     G: AiGateway + 'static,
 {
     let owner = format!("assistant-review-test-{run_id}");
-    let gateway=Arc::new(gateway);
-    let config=deepref_worker::config::WorkerConfig::from_source(&|name|
-        (name=="APP_ENV").then(||"local".into())).expect("local worker configuration");
+    let gateway = Arc::new(gateway);
+    let config = deepref_worker::config::WorkerConfig::from_source(&|name| match name {
+        "APP_ENV" => Some("local".into()),
+        "WORKER_CLAIM_LEASE_SECS" => Some("300".into()),
+        _ => None,
+    })
+    .expect("local worker configuration");
     for _ in 0..64 {
         let row=sqlx::query("UPDATE jobs j SET state='running',lease_owner=$2,
             leased_until=now()+interval '5 minutes',lease_renewed_at=now(),attempts=attempts+1
             WHERE j.kind='durable_run_step' AND j.payload->>'run_id'=$1::uuid::text AND j.state='queued'
             RETURNING j.id,j.project_id,j.kind,j.payload,j.attempts,j.max_attempts")
             .bind(run_id).bind(&owner).fetch_one(pool).await.expect("next typed review node claims");
-        let job=ClaimedJob{id:row.get("id"),project_id:row.get::<Uuid,_>("project_id").into(),
-            kind:row.get::<String,_>("kind").parse().expect("durable job kind"),
-            payload:row.get("payload"),attempts:row.get("attempts"),max_attempts:row.get("max_attempts")};
-        let lease=job.lease(owner.as_str());
-        let action=handle_job_with_documents_owned_and_ai(pool.clone(),&job,&lease,StdDuration::from_secs(300),
-            None,None,gateway.clone(),&config).await.expect("review node handles delivery");
-        if action!=DeliveryAction::Ack {return action}
-        assert!(deepref_app::complete_job(pool,&lease).await.expect("node queue ack"));
-        let state:String=sqlx::query_scalar("SELECT status FROM durable_runs WHERE id=$1")
-            .bind(run_id).fetch_one(pool).await.expect("canonical state");
-        if matches!(state.as_str(),"completed"|"blocked"|"failed") {return action}
+        let job = ClaimedJob {
+            id: row.get("id"),
+            project_id: row.get::<Uuid, _>("project_id").into(),
+            kind: row
+                .get::<String, _>("kind")
+                .parse()
+                .expect("durable job kind"),
+            payload: row.get("payload"),
+            attempts: row.get("attempts"),
+            max_attempts: row.get("max_attempts"),
+        };
+        let lease = job.lease(owner.as_str());
+        let action = handle_job_with_documents_owned_and_ai(
+            pool.clone(),
+            &job,
+            &lease,
+            None,
+            None,
+            gateway.clone(),
+            &config,
+        )
+        .await
+        .expect("review node handles delivery");
+        if action != DeliveryAction::Ack {
+            return action;
+        }
+        assert!(
+            deepref_app::complete_job(pool, &lease)
+                .await
+                .expect("node queue ack")
+        );
+        let state: String = sqlx::query_scalar("SELECT status FROM durable_runs WHERE id=$1")
+            .bind(run_id)
+            .fetch_one(pool)
+            .await
+            .expect("canonical state");
+        if matches!(state.as_str(), "completed" | "blocked" | "failed") {
+            return action;
+        }
     }
     panic!("review planner did not reach a terminal state");
 }
@@ -1631,13 +1669,27 @@ async fn assistant_plan_step_follows_its_review_run_to_a_plain_failure() {
     assert_eq!(plan["results"][0]["status"], "queued", "{body}");
 
     // The review run then fails the way the worker records it.
-    sqlx::query("UPDATE jobs SET available_at=clock_timestamp()-interval '1 day'
-        WHERE id=(SELECT job_id FROM durable_runs WHERE id=$1)")
-        .bind(run_id).execute(&pool).await.expect("prioritize the failed review fixture");
-    let claimed=deepref_app::claim_job(&pool,"assistant-failed-review-worker",std::time::Duration::from_secs(300))
-        .await.expect("queue claim").expect("review delivery");
-    assert_eq!(Uuid::parse_str(claimed.payload["run_id"].as_str().expect("durable run")).expect("UUID"),run_id);
-    let lease=claimed.lease("assistant-failed-review-worker");
+    sqlx::query(
+        "UPDATE jobs SET available_at=clock_timestamp()-interval '1 day'
+        WHERE id=(SELECT job_id FROM durable_runs WHERE id=$1)",
+    )
+    .bind(run_id)
+    .execute(&pool)
+    .await
+    .expect("prioritize the failed review fixture");
+    let claimed = deepref_app::claim_job(
+        &pool,
+        "assistant-failed-review-worker",
+        std::time::Duration::from_secs(300),
+    )
+    .await
+    .expect("queue claim")
+    .expect("review delivery");
+    assert_eq!(
+        Uuid::parse_str(claimed.payload["run_id"].as_str().expect("durable run")).expect("UUID"),
+        run_id
+    );
+    let lease = claimed.lease("assistant-failed-review-worker");
     deepref_app::fail_review_run(
         &pool,
         deepref_domain::ProjectId::new(project),
@@ -1816,7 +1868,6 @@ async fn delete_project_and_reports(pool: &PgPool, project: Uuid, reports: &[Uui
 
 #[tokio::test]
 async fn confirmed_plan_rejects_records_changed_since_it_was_made() {
-    let _guard = test_lock().lock().await;
     let Some(pool) = database().await else { return };
     let fixture = seed(&pool).await;
     deepref_app::insert_model_route(
@@ -1917,7 +1968,6 @@ async fn set_title_abstract_autonomy(pool: &PgPool, project: Uuid, level: &str) 
 
 #[tokio::test]
 async fn projects_with_title_abstract_ai_off_refuse_assistant_screening_plans() {
-    let _guard = test_lock().lock().await;
     let Some(pool) = database().await else { return };
     let fixture = seed(&pool).await;
     deepref_app::insert_model_route(
@@ -1985,7 +2035,6 @@ async fn projects_with_title_abstract_ai_off_refuse_assistant_screening_plans() 
 
 #[tokio::test]
 async fn confirmed_plan_decisions_are_assistant_authored_and_not_counted_as_human() {
-    let _guard = test_lock().lock().await;
     let Some(pool) = database().await else { return };
     let fixture = seed(&pool).await;
     deepref_app::insert_model_route(
@@ -2041,7 +2090,6 @@ async fn confirmed_plan_decisions_are_assistant_authored_and_not_counted_as_huma
 
 #[tokio::test]
 async fn plan_lists_its_records_and_runs_only_the_ones_left_selected() {
-    let _guard = test_lock().lock().await;
     let Some(pool) = database().await else { return };
     let fixture = seed(&pool).await;
     deepref_app::insert_model_route(
@@ -2115,30 +2163,53 @@ async fn plan_lists_its_records_and_runs_only_the_ones_left_selected() {
 
 #[tokio::test]
 async fn assistant_event_stream_surfaces_database_failure_and_closes() {
-    let _guard = test_lock().lock().await;
     let Some(pool) = database().await else { return };
     let fixture = seed(&pool).await;
     let state = AppState::new(pool.clone());
-    let (status, body) = post_json(&state,
+    let (status, body) = post_json(
+        &state,
         &format!("/projects/{}/assistant/conversations", fixture.project_id),
-        json!({"title": "Event failure"})).await;
+        json!({"title": "Event failure"}),
+    )
+    .await;
     assert_eq!(status, StatusCode::CREATED, "{body}");
     let conversation: Value = serde_json::from_str(&body).expect("conversation JSON");
-    let conversation_id = Uuid::parse_str(conversation["id"].as_str().expect("conversation id")).expect("UUID");
+    let conversation_id =
+        Uuid::parse_str(conversation["id"].as_str().expect("conversation id")).expect("UUID");
     let run = deepref_app::submit_assistant_agent_run(
-        &pool, fixture.project_id, conversation_id, "Read my corpus", "user", "event-test",
+        &pool,
+        fixture.project_id,
+        conversation_id,
+        "Read my corpus",
+        "user",
+        "event-test",
         &serde_json::to_value(model_route(ModelProfile::Reasoning)).expect("route JSON"),
-        deepref_ai::ASSISTANT_PROMPT_VERSION
-    ).await.expect("submit run");
-    let response = router(state, &api_config()).oneshot(
-        Request::builder().method("GET")
-            .uri(format!("/projects/{}/assistant/runs/{}/events", fixture.project_id, run.id))
-            .body(Body::empty()).expect("request")
-    ).await.expect("SSE response");
+        deepref_ai::ASSISTANT_PROMPT_VERSION,
+    )
+    .await
+    .expect("submit run");
+    let response = router(state, &api_config())
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri(format!(
+                    "/projects/{}/assistant/runs/{}/events",
+                    fixture.project_id, run.id
+                ))
+                .body(Body::empty())
+                .expect("request"),
+        )
+        .await
+        .expect("SSE response");
     assert_eq!(response.status(), StatusCode::OK);
     pool.close().await;
-    let body = tokio::time::timeout(StdDuration::from_secs(2), to_bytes(response.into_body(), 32_768))
-        .await.expect("stream closes instead of polling forever").expect("body bytes");
+    let body = tokio::time::timeout(
+        StdDuration::from_secs(2),
+        to_bytes(response.into_body(), 32_768),
+    )
+    .await
+    .expect("stream closes instead of polling forever")
+    .expect("body bytes");
     let text = String::from_utf8(body.to_vec()).expect("UTF-8 SSE");
     assert!(text.contains("event: error"), "{text}");
     assert!(text.contains("assistant_events_unavailable"), "{text}");

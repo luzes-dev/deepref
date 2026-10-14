@@ -3,9 +3,9 @@ use std::collections::BTreeSet;
 use deepref_application::RawAuthor;
 use deepref_application::workflows::{AutonomyLevel, AutonomyTask};
 use deepref_application::{
-    AutomationDomainEvent, DedupeCandidate, DedupeProposalStatus, DedupeScore, FUZZY_PROPOSAL_THRESHOLD,
-    FUZZY_SHORTLIST_LIMIT, ProposalDecision, ProposalKind, RecordResolutionAction,
-    ResolveRecordCommand, select_fuzzy_candidate,
+    AutomationDomainEvent, DedupeCandidate, DedupeProposalStatus, DedupeScore,
+    FUZZY_PROPOSAL_THRESHOLD, FUZZY_SHORTLIST_LIMIT, ProposalDecision, ProposalKind,
+    RecordResolutionAction, ResolveRecordCommand, select_fuzzy_candidate,
 };
 use deepref_domain::{Actor, ActorKind, ProjectId, normalize_bibliography_title};
 use serde::Serialize;

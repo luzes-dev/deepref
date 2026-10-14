@@ -185,14 +185,9 @@ pub(crate) async fn close(
     Path((project, cohort)): Path<(Uuid, Uuid)>,
     headers: HeaderMap,
 ) -> Result<Json<AiFirstActionDto>, ApiError> {
-    deepref_app::close_ai_first_cohort(
-        &state.pool,
-        project,
-        cohort,
-        &extract_actor(&headers)?,
-    )
-    .await
-    .map_err(map_error)?;
+    deepref_app::close_ai_first_cohort(&state.pool, project, cohort, &extract_actor(&headers)?)
+        .await
+        .map_err(map_error)?;
     Ok(Json(AiFirstActionDto {
         cohort_id: cohort,
         count: 0,
@@ -271,14 +266,9 @@ pub(crate) async fn recover(
     Path((project, cohort)): Path<(Uuid, Uuid)>,
     headers: HeaderMap,
 ) -> Result<Json<AiFirstActionDto>, ApiError> {
-    deepref_app::recover_ai_first_cohort(
-        &state.pool,
-        project,
-        cohort,
-        &extract_actor(&headers)?,
-    )
-    .await
-    .map_err(map_error)?;
+    deepref_app::recover_ai_first_cohort(&state.pool, project, cohort, &extract_actor(&headers)?)
+        .await
+        .map_err(map_error)?;
     Ok(Json(AiFirstActionDto {
         cohort_id: cohort,
         count: 0,

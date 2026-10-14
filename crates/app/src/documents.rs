@@ -1,7 +1,9 @@
 use chrono::{DateTime, Utc};
 use deepref_application::AutomationDomainEvent;
 use deepref_documents::{PARSER_VERSION, ParsedDocument};
-use deepref_domain::{Actor, ActorKind, ProjectId, ScreeningStage, ScreeningStatus, documents::DocumentStatus};
+use deepref_domain::{
+    Actor, ActorKind, ProjectId, ScreeningStage, ScreeningStatus, documents::DocumentStatus,
+};
 use serde_json::Value;
 use sqlx::{PgPool, Postgres, Row, Transaction};
 use uuid::Uuid;
@@ -122,13 +124,15 @@ pub async fn list_full_text_reasons(
     .fetch_all(pool)
     .await?;
     rows.into_iter()
-        .map(|row| Ok(ExclusionReasonRecord {
-            id: row.get("id"),
-            code: row.get("code"),
-            label: row.get("label"),
-            stage: ScreeningStage::parse(row.try_get("stage")?)
-                .ok_or_else(|| anyhow::anyhow!("invalid persisted exclusion reason stage"))?,
-        }))
+        .map(|row| {
+            Ok(ExclusionReasonRecord {
+                id: row.get("id"),
+                code: row.get("code"),
+                label: row.get("label"),
+                stage: ScreeningStage::parse(row.try_get("stage")?)
+                    .ok_or_else(|| anyhow::anyhow!("invalid persisted exclusion reason stage"))?,
+            })
+        })
         .collect()
 }
 
@@ -382,7 +386,13 @@ pub async fn enqueue_parse(
         serde_json::json!({ "document_id": document_id, "parser_version": PARSER_VERSION });
     crate::enqueue_job(
         tx,
-        &crate::job(job_id, project_id, deepref_domain::JobKind::ParseDocument, payload, dedupe),
+        &crate::job(
+            job_id,
+            project_id,
+            deepref_domain::JobKind::ParseDocument,
+            payload,
+            dedupe,
+        ),
     )
     .await
 }
@@ -426,7 +436,13 @@ pub async fn enqueue_retrieve(
     let payload = serde_json::json!({ "document_id": document_id });
     crate::enqueue_job(
         tx,
-        &crate::job(job_id, project_id, deepref_domain::JobKind::RetrieveDocument, payload, dedupe),
+        &crate::job(
+            job_id,
+            project_id,
+            deepref_domain::JobKind::RetrieveDocument,
+            payload,
+            dedupe,
+        ),
     )
     .await
 }
@@ -657,42 +673,48 @@ pub async fn list_full_text_queue(
     .bind(limit.clamp(1, 101))
     .fetch_all(pool)
     .await?;
-    Ok(rows
-        .into_iter()
-        .map(|row| Ok(FullTextQueueRecord {
-            report_id: row.get("report_id"),
-            title: row.get("title"),
-            abstract_text: row.get("abstract_text"),
-            doi: row.get("doi"),
-            publication_year: row.get("publication_year"),
-            full_text_status: crate::screening::status_from_row(&row, "full_text_status")?,
-            revision: row.get("revision"),
-            document: row
-                .try_get::<Uuid, _>("document_id")
-                .ok()
-                .map(|id| -> anyhow::Result<DocumentRecord> { Ok(DocumentRecord {
-                    id,
-                    project_id: row.get("document_project_id"),
-                    report_id: row.get("document_report_id"),
-                    original_filename: row.get("original_filename"),
-                    external_url: row.get("external_url"),
-                    source: row.get("source"),
-                    status: DocumentStatus::parse(row.try_get("document_status")?)?,
-                    mime_type: row.get("mime_type"),
-                    byte_size: row.get("byte_size"),
-                    content_hash: row.get("content_hash"),
-                    object_key: row.get("object_key"),
-                    parser_version: row.get("parser_version"),
-                    active_parser_version: row.get("active_parser_version"),
-                    parser_error: row.get("parser_error"),
-                    ocr_required: row.get("ocr_required"),
-                    identity_check: identity_check_from_column(row.get("document_identity_check")),
-                    identity_acknowledged_at: row.get("document_identity_acknowledged_at"),
-                    created_at: row.get("document_created_at"),
-                    updated_at: row.get("document_updated_at"),
-                }) }).transpose()?,
-        }))
-        .collect::<anyhow::Result<Vec<_>>>()?)
+    rows.into_iter()
+        .map(|row| {
+            Ok(FullTextQueueRecord {
+                report_id: row.get("report_id"),
+                title: row.get("title"),
+                abstract_text: row.get("abstract_text"),
+                doi: row.get("doi"),
+                publication_year: row.get("publication_year"),
+                full_text_status: crate::screening::status_from_row(&row, "full_text_status")?,
+                revision: row.get("revision"),
+                document: row
+                    .try_get::<Uuid, _>("document_id")
+                    .ok()
+                    .map(|id| -> anyhow::Result<DocumentRecord> {
+                        Ok(DocumentRecord {
+                            id,
+                            project_id: row.get("document_project_id"),
+                            report_id: row.get("document_report_id"),
+                            original_filename: row.get("original_filename"),
+                            external_url: row.get("external_url"),
+                            source: row.get("source"),
+                            status: DocumentStatus::parse(row.try_get("document_status")?)?,
+                            mime_type: row.get("mime_type"),
+                            byte_size: row.get("byte_size"),
+                            content_hash: row.get("content_hash"),
+                            object_key: row.get("object_key"),
+                            parser_version: row.get("parser_version"),
+                            active_parser_version: row.get("active_parser_version"),
+                            parser_error: row.get("parser_error"),
+                            ocr_required: row.get("ocr_required"),
+                            identity_check: identity_check_from_column(
+                                row.get("document_identity_check"),
+                            ),
+                            identity_acknowledged_at: row.get("document_identity_acknowledged_at"),
+                            created_at: row.get("document_created_at"),
+                            updated_at: row.get("document_updated_at"),
+                        })
+                    })
+                    .transpose()?,
+            })
+        })
+        .collect::<anyhow::Result<Vec<_>>>()
 }
 
 pub async fn list_missing_full_text(
@@ -723,13 +745,15 @@ pub async fn list_missing_full_text(
     .fetch_all(pool)
     .await?;
     rows.into_iter()
-        .map(|row| Ok(MissingFullTextRecord {
-            report_id: row.get("report_id"),
-            title: row.get("title"),
-            abstract_text: row.get("abstract_text"),
-            doi: row.get("doi"),
-            status: DocumentStatus::parse(row.try_get("status")?)?,
-        }))
+        .map(|row| {
+            Ok(MissingFullTextRecord {
+                report_id: row.get("report_id"),
+                title: row.get("title"),
+                abstract_text: row.get("abstract_text"),
+                doi: row.get("doi"),
+                status: DocumentStatus::parse(row.try_get("status")?)?,
+            })
+        })
         .collect()
 }
 

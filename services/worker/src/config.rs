@@ -16,7 +16,6 @@ pub struct WorkerConfig {
 }
 
 impl WorkerConfig {
-
     pub fn from_source(get: &dyn Fn(&str) -> Option<String>) -> anyhow::Result<Self> {
         let runtime = RuntimeConfig::from_source("deepref-worker", get)?;
         let settings = WorkerSettings::from_source(get)?;

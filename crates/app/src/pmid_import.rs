@@ -186,7 +186,8 @@ pub async fn load_pmid_run(pool: &PgPool, run_id: Uuid) -> Result<Option<PmidRun
             project_id: row.get("project_id"),
             status,
         })
-    }).transpose()
+    })
+    .transpose()
 }
 
 /// Marks a queued run as running. A run that is already running is left as it is.

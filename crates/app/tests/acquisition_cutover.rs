@@ -7,21 +7,53 @@ use uuid::Uuid;
 const PROJECT: &str = "00000000-0000-0000-0000-000000000001";
 
 async fn assert_database(pool: &PgPool, sql: &'static str, message: &str) {
-    let matches: bool = sqlx::query_scalar(sql).fetch_one(pool).await.expect(message);
+    let matches: bool = sqlx::query_scalar(sql)
+        .fetch_one(pool)
+        .await
+        .expect(message);
     assert!(matches, "{message}");
 }
 
 #[tokio::test]
 async fn populated_legacy_database_expands_backfills_and_retires_doi_plane() {
-    let Some(url) = deepref_app::test_isolation::isolated_empty_url_from_env("DATABASE_URL").await else {
+    let Some(url) = deepref_app::test_isolation::isolated_empty_url_from_env("DATABASE_URL").await
+    else {
         return;
     };
-    let pool = PgPool::connect(&url).await.expect("private empty database connects");
-    Migrator::with_migrations(MIGRATOR.iter().filter(|migration| migration.version < 70).cloned().collect())
-        .run(&pool).await.expect("only pre-0070 migrations apply before historical fixtures");
-    sqlx::raw_sql(SEED).execute(&pool).await.expect("populated legacy fixture inserts");
-    MIGRATOR.run(&pool).await.expect("0070 through full DOI retirement migrate populated data");
+    let pool = PgPool::connect(&url)
+        .await
+        .expect("private empty database connects");
+    Migrator::with_migrations(
+        MIGRATOR
+            .iter()
+            .filter(|migration| migration.version < 70)
+            .cloned()
+            .collect(),
+    )
+    .run(&pool)
+    .await
+    .expect("only pre-0070 migrations apply before historical fixtures");
+    sqlx::raw_sql(SEED)
+        .execute(&pool)
+        .await
+        .expect("populated legacy fixture inserts");
+    MIGRATOR
+        .run(&pool)
+        .await
+        .expect("0070 through full DOI retirement migrate populated data");
 
+    assert_database(
+        &pool,
+        "SELECT default_max_depth=4 AND historical_default_max_depth=4 FROM projects",
+        "historical project default survives without silently clamping",
+    )
+    .await;
+    assert_database(
+        &pool,
+        "SELECT default_max_depth=5 AND historical_default_max_depth=5 FROM settings WHERE id=1",
+        "historical operator default survives without blocking cutover",
+    )
+    .await;
     assert_database(&pool, "SELECT NOT EXISTS (SELECT 1 FROM fixture_items f FULL JOIN acquisition_items a ON a.acquisition_id=f.ingestion_id AND a.canonical_doi=f.canonical_doi WHERE (to_jsonb(a)-'report_id'-'acquisition_id') IS DISTINCT FROM (to_jsonb(f)-'ingestion_id'))", "every item preserves depth, parent, attempts, errors, timestamps and job ID").await;
     assert_database(&pool, "SELECT NOT EXISTS (SELECT 1 FROM fixture_runs f JOIN acquisition_runs a ON a.id=f.id WHERE (to_jsonb(a)->'max_depth') IS DISTINCT FROM (to_jsonb(f)->'max_depth') OR a.historical_max_depth<>f.max_depth OR a.seed_count<>f.seed_count OR a.created_at<>f.created_at OR a.started_at IS DISTINCT FROM f.started_at OR a.completed_at IS DISTINCT FROM f.completed_at OR a.metadata_provider<>f.metadata_provider OR a.citation_provider<>f.citation_provider) AND (SELECT count(*) FROM acquisition_runs)=4", "all historical runs and their provenance survive").await;
     assert_database(&pool, "SELECT bool_and((status,seed_count,queued_count,fetched_count,failed_count) = CASE id WHEN '00000000-0000-0000-0000-000000000011'::uuid THEN ROW('completed'::text,7,0,1,0) WHEN '00000000-0000-0000-0000-000000000012'::uuid THEN ROW('failed'::text,11,0,0,1) WHEN '00000000-0000-0000-0000-000000000013'::uuid THEN ROW('cancelled'::text,1,0,0,0) ELSE ROW('running'::text,2,2,0,0) END) FROM acquisition_runs", "counters derive from items without reviving cancelled runs").await;
@@ -36,30 +68,87 @@ async fn populated_legacy_database_expands_backfills_and_retires_doi_plane() {
     assert_database(&pool, "SELECT status='fetched' AND provider='crossref' AND fetched_at='2020-01-02T03:04:05Z' FROM report_fetch_state WHERE report_id=(SELECT report_id FROM report_identifiers WHERE normalized_value='10.5555/two')", "global successful cache remains fetched despite failed run item").await;
     assert_database(&pool, "SELECT NOT EXISTS(SELECT 1 FROM fixture_fetch f JOIN report_identifiers i ON i.normalized_value=f.canonical_doi JOIN report_fetch_state s ON s.report_id=i.report_id WHERE (to_jsonb(s)-'report_id'-'provider') IS DISTINCT FROM to_jsonb(f))", "provider fetching lease, owner, attempts and timestamps survive").await;
     assert_database(&pool, "SELECT (SELECT jsonb_agg(to_jsonb(w) ORDER BY canonical_doi) FROM works w)=(SELECT jsonb_agg(to_jsonb(w)-'fetch_status' ORDER BY canonical_doi) FROM fixture_works w) AND (SELECT jsonb_agg(to_jsonb(f) ORDER BY id) FROM fetched_unresolved_reference_facts f)=(SELECT jsonb_agg(to_jsonb(f) ORDER BY id) FROM fixture_facts f) AND (SELECT count(*) FROM fetched_citation_facts)=1 AND (SELECT count(*) FROM crossref_raw_records)=1", "provider cache and reusable fetched facts remain intact").await;
-    assert_database(&pool, "SELECT metric_requested_revision=90 FROM projects", "requested revision floors events, snapshots and completed watermark").await;
-    sqlx::query("SELECT recompute_project_report_metrics($1)").bind(Uuid::parse_str(PROJECT).unwrap()).execute(&pool).await.expect("v2 metrics remain callable after event retirement");
-    assert_database(&pool, "SELECT revision=90 AND watermark=90 FROM projection_state WHERE project_id IS NOT NULL", "recomputation cannot regress completed revision floor").await;
-    assert_database(&pool, "SELECT work_count=3 AND edge_count=1 FROM metric_snapshots WHERE revision=90", "v2 graph metric counts retain memberships and edge").await;
-    sqlx::query("UPDATE projects SET metric_requested_revision=metric_requested_revision+1").execute(&pool).await.unwrap();
-    sqlx::query("SELECT recompute_project_report_metrics($1)").bind(Uuid::parse_str(PROJECT).unwrap()).execute(&pool).await.unwrap();
-    assert_database(&pool, "SELECT revision=91 AND watermark=91 FROM projection_state WHERE project_id IS NOT NULL", "new graph revision advances monotonically").await;
+    assert_database(
+        &pool,
+        "SELECT metric_requested_revision=90 FROM projects",
+        "requested revision floors events, snapshots and completed watermark",
+    )
+    .await;
+    sqlx::query("SELECT recompute_project_report_metrics($1)")
+        .bind(Uuid::parse_str(PROJECT).unwrap())
+        .execute(&pool)
+        .await
+        .expect("v2 metrics remain callable after event retirement");
+    assert_database(
+        &pool,
+        "SELECT revision=90 AND watermark=90 FROM projection_state WHERE project_id IS NOT NULL",
+        "recomputation cannot regress completed revision floor",
+    )
+    .await;
+    assert_database(
+        &pool,
+        "SELECT work_count=3 AND edge_count=1 FROM metric_snapshots WHERE revision=90",
+        "v2 graph metric counts retain memberships and edge",
+    )
+    .await;
+    sqlx::query("UPDATE projects SET metric_requested_revision=metric_requested_revision+1")
+        .execute(&pool)
+        .await
+        .unwrap();
+    sqlx::query("SELECT recompute_project_report_metrics($1)")
+        .bind(Uuid::parse_str(PROJECT).unwrap())
+        .execute(&pool)
+        .await
+        .unwrap();
+    assert_database(
+        &pool,
+        "SELECT revision=91 AND watermark=91 FROM projection_state WHERE project_id IS NOT NULL",
+        "new graph revision advances monotonically",
+    )
+    .await;
 
-    let rejected = sqlx::query("INSERT INTO acquisition_runs(id,project_id,source,strategy,max_depth) VALUES ($1,$2,'doi','doi_crawl',10)").bind(Uuid::new_v4()).bind(Uuid::parse_str(PROJECT).unwrap()).execute(&pool).await.expect_err("new depth ten must fail without historical provenance");
-    assert_eq!(rejected.as_database_error().and_then(|error| error.code()).as_deref(), Some("23514"));
+    let rejected = sqlx::query("INSERT INTO acquisition_runs(id,project_id,source,strategy,max_depth,created_at) VALUES ($1,$2,'crossref','citation_traversal',10,now())").bind(Uuid::new_v4()).bind(Uuid::parse_str(PROJECT).unwrap()).execute(&pool).await.expect_err("new depth ten must fail without historical provenance");
+    assert_eq!(
+        rejected
+            .as_database_error()
+            .and_then(|error| error.code())
+            .as_deref(),
+        Some("23514")
+    );
     assert_database(&pool, "SELECT NOT EXISTS(SELECT 1 FROM pg_class WHERE relnamespace=current_schema()::regnamespace AND relname=ANY(ARRAY['ingestions','ingestion_items','project_works','legacy_citations','doi_fetch_state','unresolved_references','processed_events','dead_letter_records','domain_events','domain_tombstones','record_provenance','graph_domain_revision_seq'])) AND to_regprocedure('recompute_project_metrics(uuid)') IS NULL AND NOT EXISTS(SELECT 1 FROM information_schema.columns WHERE table_schema=current_schema() AND ((table_name='works' AND column_name='fetch_status') OR (table_name='acquisition_runs' AND column_name='legacy_ingestion_id') OR (table_name='citations' AND column_name IN ('legacy_source_doi','legacy_target_doi','first_seen_ingestion_id'))))", "retired tables, sequence, function and compatibility columns are absent").await;
-    let job = deepref_app::claim_job(&pool, "cutover-test", Duration::from_secs(60)).await.unwrap().expect("pending migrated job is executable");
-    assert_eq!(job.id, Uuid::parse_str("00000000-0000-0000-0000-000000000031").unwrap());
-    assert_eq!(job.payload["payload"]["acquisition_id"], "00000000-0000-0000-0000-000000000014");
+    let job = deepref_app::claim_job(&pool, "cutover-test", Duration::from_secs(60))
+        .await
+        .unwrap()
+        .expect("pending migrated job is executable");
+    assert_eq!(
+        job.id,
+        Uuid::parse_str("00000000-0000-0000-0000-000000000031").unwrap()
+    );
+    assert_eq!(
+        job.payload["payload"]["acquisition_id"],
+        "00000000-0000-0000-0000-000000000014"
+    );
     let event: deepref_domain::events::EventEnvelope<deepref_domain::events::WorkFetchRequested> =
-        serde_json::from_value(job.payload.clone()).expect("migrated pending payload executes without a compatibility parser");
+        serde_json::from_value(job.payload.clone())
+            .expect("migrated pending payload executes without a compatibility parser");
     assert_eq!(event.event_id, job.id);
     assert_eq!(event.payload.max_depth, 5);
-    assert!(deepref_app::claim_job(&pool, "second-worker", Duration::from_secs(60)).await.unwrap().is_none(), "leased pending job executes only once");
-    MIGRATOR.run(&pool).await.expect("SQLx migration replay is idempotent");
+    assert!(
+        deepref_app::claim_job(&pool, "second-worker", Duration::from_secs(60))
+            .await
+            .unwrap()
+            .is_none(),
+        "leased pending job executes only once"
+    );
+    MIGRATOR
+        .run(&pool)
+        .await
+        .expect("SQLx migration replay is idempotent");
 }
 
 const SEED: &str = r#"
-INSERT INTO projects(id,name) VALUES ('00000000-0000-0000-0000-000000000001','cutover');
+INSERT INTO projects(id,name,default_max_depth) VALUES ('00000000-0000-0000-0000-000000000001','cutover',4);
+INSERT INTO settings(id,default_max_depth) VALUES (1,5) ON CONFLICT(id) DO UPDATE SET default_max_depth=EXCLUDED.default_max_depth;
 INSERT INTO reports(id,title,raw) VALUES ('00000000-0000-0000-0000-000000000021','Existing reviewed title','{"reviewed":true}');
 INSERT INTO report_identifiers(id,report_id,scheme,value,normalized_value) VALUES
 ('00000000-0000-0000-0000-000000000022','00000000-0000-0000-0000-000000000021','doi','10.5555/one','10.5555/one'),

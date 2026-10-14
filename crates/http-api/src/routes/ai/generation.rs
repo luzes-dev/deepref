@@ -289,9 +289,7 @@ pub(super) fn review_run_dto(
     })
 }
 
-pub(crate) fn map_review_preparation_error(
-    error: deepref_app::ReviewPreparationError,
-) -> ApiError {
+pub(crate) fn map_review_preparation_error(error: deepref_app::ReviewPreparationError) -> ApiError {
     match error {
         deepref_app::ReviewPreparationError::Review(error) => map_postgres_review_error(error),
         deepref_app::ReviewPreparationError::Protocol(error) => map_protocol_error(error),
@@ -299,9 +297,7 @@ pub(crate) fn map_review_preparation_error(
         deepref_app::ReviewPreparationError::Extraction(error) => match error {
             deepref_app::ExtractionError::Database(error) => ApiError::Database(error),
             deepref_app::ExtractionError::DefinitionNotFound
-            | deepref_app::ExtractionError::StudyNotFound => {
-                ApiError::NotFound(error.to_string())
-            }
+            | deepref_app::ExtractionError::StudyNotFound => ApiError::NotFound(error.to_string()),
             _ => ApiError::BadRequest(error.to_string()),
         },
         deepref_app::ReviewPreparationError::Study(error) => {
@@ -316,18 +312,14 @@ pub(crate) fn map_review_preparation_error(
                 details: Value::Null,
             }
         }
-        deepref_app::ReviewPreparationError::InvalidInput(message) => {
-            ApiError::BadRequest(message)
-        }
+        deepref_app::ReviewPreparationError::InvalidInput(message) => ApiError::BadRequest(message),
     }
 }
 
 fn map_postgres_review_error(error: deepref_app::PostgresReviewError) -> ApiError {
     match error {
         deepref_app::PostgresReviewError::Database(error) => ApiError::Database(error),
-        deepref_app::PostgresReviewError::Serialization(error) => {
-            ApiError::Internal(error.into())
-        }
+        deepref_app::PostgresReviewError::Serialization(error) => ApiError::Internal(error.into()),
         deepref_app::PostgresReviewError::Review(error) => {
             ApiError::Configuration(error.to_string())
         }
@@ -346,6 +338,9 @@ fn map_postgres_review_error(error: deepref_app::PostgresReviewError) -> ApiErro
         deepref_app::PostgresReviewError::WorkerOwnership => {
             ApiError::Internal(anyhow::anyhow!("review worker lease is not owned"))
         }
+        deepref_app::PostgresReviewError::StepScheduled => ApiError::Internal(anyhow::anyhow!(
+            "worker scheduling outcome reached the HTTP boundary"
+        )),
         deepref_app::PostgresReviewError::FinalizationConflict => ApiError::Conflict {
             code: "review_finalization_conflict".to_owned(),
             message: "review proposal finalization conflicts with persisted state".to_owned(),

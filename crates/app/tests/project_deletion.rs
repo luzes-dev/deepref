@@ -79,8 +79,7 @@ const SEEDED_TABLES: &[&str] = &[
 const TOKENS: &[&str] = &[
     "proj", "rep1", "rep2", "rec", "pver", "crit", "exr", "stu1", "stu2", "doc", "blk", "fdef",
     "ai", "prop", "scev", "exev", "appr", "act", "conv", "wf", "wfv", "wfr", "job", "def", "arun",
-    "ded", "dre",
-    "rstep", "rattempt",
+    "ded", "dre", "rstep", "rattempt",
 ];
 
 const SEED_SQL: &str = r#"

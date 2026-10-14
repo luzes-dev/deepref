@@ -474,13 +474,10 @@ pub(crate) async fn get_ai_activity_overview(
     )
     .await
     .map_err(ApiError::Internal)?;
-    let full_text = deepref_app::second_review_status(
-        &state.pool,
-        project_id,
-        AutonomyTask::FullTextScreening,
-    )
-    .await
-    .map_err(ApiError::Internal)?;
+    let full_text =
+        deepref_app::second_review_status(&state.pool, project_id, AutonomyTask::FullTextScreening)
+            .await
+            .map_err(ApiError::Internal)?;
     Ok(Json(AiActivityOverviewDto {
         to_verify: overview.to_verify,
         open_conflicts: overview.open_conflicts,
@@ -826,9 +823,8 @@ pub(crate) async fn confirm_extraction_value(
     headers: HeaderMap,
 ) -> Result<Json<ExtractionValueDto>, ApiError> {
     let actor = extract_actor(&headers)?;
-    let record =
-        deepref_app::confirm_value(&state.pool, project_id, study_id, value_id, &actor)
-            .await
-            .map_err(map_extraction_error)?;
+    let record = deepref_app::confirm_value(&state.pool, project_id, study_id, value_id, &actor)
+        .await
+        .map_err(map_extraction_error)?;
     Ok(Json(value_dto(record)))
 }

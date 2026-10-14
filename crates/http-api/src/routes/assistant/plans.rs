@@ -8,7 +8,8 @@ use axum::{
 };
 use chrono::{DateTime, Utc};
 use deepref_ai::{
-    AgentTool, AgentToolName, AssistantPlanStatus, PlanAction, TOOL_SCREEN_REPORTS, plan_action_is_executable,
+    AgentTool, AgentToolName, AssistantPlanStatus, PlanAction, TOOL_SCREEN_REPORTS,
+    plan_action_is_executable,
 };
 use deepref_application::ScreenReportCommand;
 use deepref_domain::{Actor, ProjectId, ScreeningDecision, ScreeningStage};
@@ -357,7 +358,11 @@ pub(crate) async fn confirm_plan(
     let finished = deepref_app::finish_assistant_plan(
         &state.pool,
         plan_id,
-        if any_failed { AssistantPlanStatus::Failed } else { AssistantPlanStatus::Executed },
+        if any_failed {
+            AssistantPlanStatus::Failed
+        } else {
+            AssistantPlanStatus::Executed
+        },
         &Value::Array(results),
         any_failed.then_some("one or more actions failed"),
     )
@@ -533,7 +538,11 @@ async fn refresh_review_steps(
     let runs =
         deepref_app::get_review_runs(&state.pool, ProjectId::new(record.project_id), &queued)
             .await
-            .map_err(|error| ApiError::Internal(anyhow::anyhow!("failed to read assistant review results: {error}")))?;
+            .map_err(|error| {
+                ApiError::Internal(anyhow::anyhow!(
+                    "failed to read assistant review results: {error}"
+                ))
+            })?;
     let mut changed = false;
     for result in &mut results {
         if result.get("status").and_then(Value::as_str) != Some("queued") {
@@ -571,18 +580,16 @@ async fn refresh_review_steps(
     let any_failed = results
         .iter()
         .any(|result| result.get("status").and_then(Value::as_str) == Some("failed"));
-    let status = if any_failed { AssistantPlanStatus::Failed } else { AssistantPlanStatus::Executed };
+    let status = if any_failed {
+        AssistantPlanStatus::Failed
+    } else {
+        AssistantPlanStatus::Executed
+    };
     let error = any_failed.then_some("one or more AI reviews failed");
     let results = Value::Array(results);
-    deepref_app::update_assistant_plan_results(
-        &state.pool,
-        record.id,
-        status,
-        &results,
-        error,
-    )
-    .await
-    .map_err(map_plan_error)
+    deepref_app::update_assistant_plan_results(&state.pool, record.id, status, &results, error)
+        .await
+        .map_err(map_plan_error)
 }
 
 /// What the reviewer left out of a plan, checked against the plan.
@@ -610,7 +617,11 @@ impl Deselection {
                     deselection.actions.insert(action.id.clone());
                 }
                 Some(report_id) if action.report_ids().contains(&report_id) => {
-                    deselection.records.entry(action.id.clone()).or_default().insert(report_id);
+                    deselection
+                        .records
+                        .entry(action.id.clone())
+                        .or_default()
+                        .insert(report_id);
                 }
                 Some(report_id) => {
                     return Err(ApiError::BadRequest(format!(
@@ -628,7 +639,9 @@ impl Deselection {
     }
 
     fn record(&self, action_id: &str, report_id: Uuid) -> bool {
-        self.records.get(action_id).is_some_and(|records| records.contains(&report_id))
+        self.records
+            .get(action_id)
+            .is_some_and(|records| records.contains(&report_id))
     }
 }
 
@@ -772,7 +785,8 @@ async fn run_screen_reports(
             notes: notes.clone(),
             actor: actor.clone(),
         };
-        match deepref_app::screening::screen_report_from_assistant_plan(&state.pool, command).await {
+        match deepref_app::screening::screen_report_from_assistant_plan(&state.pool, command).await
+        {
             Ok(snapshot) => {
                 applied += 1;
                 deepref_app::screening::record_assistant_screening_activity(
@@ -798,11 +812,7 @@ async fn run_screen_reports(
             }
         }
     }
-    let status = if failed > 0 {
-        "failed"
-    } else {
-        "executed"
-    };
+    let status = if failed > 0 { "failed" } else { "executed" };
     let mut message = format!("{applied} decision(s) recorded, {unchanged} already that way");
     if deselected > 0 {
         message.push_str(&format!(", {deselected} left out by you"));

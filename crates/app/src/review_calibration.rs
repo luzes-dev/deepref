@@ -266,9 +266,11 @@ pub(crate) async fn admit_calibration(
     };
     let stored = StoredCalibration {
         status: ReviewCalibrationStatus::parse(row.get::<String, _>("status").as_str())
-            .ok_or_else(|| PostgresReviewError::InvalidStoredValue(
-                "unknown review calibration status".to_owned(),
-            ))?,
+            .ok_or_else(|| {
+                PostgresReviewError::InvalidStoredValue(
+                    "unknown review calibration status".to_owned(),
+                )
+            })?,
         stage: row.get("stage"),
         identity_scheme: row.get("identity_scheme"),
         semantic_bundle_hash: row.get("semantic_bundle_hash"),

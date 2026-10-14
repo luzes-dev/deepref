@@ -93,7 +93,9 @@
 	);
 	const dataError = $derived(workspace.articlesError ?? workspace.ingestionsError);
 	const dependencyError = $derived(dependenciesQuery.error?.message);
-	const hasEvidence = $derived(workspace.articles.length > 0 || workspace.acquisitions.length > 0);
+	const hasEvidence = $derived(
+		workspace.articles.length > 0 || workspace.acquisitions.length > 0
+	);
 	const overviewState = $derived(
 		dataError && !hasEvidence
 			? 'error'
