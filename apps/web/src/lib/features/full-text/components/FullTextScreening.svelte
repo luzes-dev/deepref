@@ -148,6 +148,14 @@
 		missingItems.find((item) => item.report_id === currentReportId)
 	);
 	const current = $derived<FullTextItem | null>(queueCurrent ?? missingCurrent ?? null);
+	const locatingReport = $derived(
+		Boolean(urlState.report && !current && fullQueueQuery.hasNextPage && !fullQueueQuery.isError)
+	);
+	$effect(() => {
+		if (locatingReport && !fullQueueQuery.isFetching) {
+			void fullQueueQuery.fetchNextPage();
+		}
+	});
 	const protocol = $derived(protocolQuery.data?.data);
 	const reasons = $derived(sortExclusionReasons(reasonsQuery.data?.data ?? []));
 	const historyQuery = createGetScreeningHistory(
@@ -1200,10 +1208,38 @@
 {/snippet}
 
 {#snippet emptyState()}
-	{#if fullQueueQuery.isPending || missingQuery.isPending}
+	{#if fullQueueQuery.isPending || missingQuery.isPending || locatingReport}
 		<div class="flex flex-col gap-3 p-6" aria-live="polite">
 			<Skeleton class="h-6 w-2/3" /><Skeleton class="h-32 w-full" />
 			<p class="text-sm text-muted-foreground">Loading full-text queue…</p>
+		</div>
+	{:else if fullQueueQuery.isError || missingQuery.isError}
+		<Alert.Root variant="destructive" class="m-6">
+			<Alert.Title>Full-text queue unavailable</Alert.Title>
+			<Alert.Description>
+				<p>{(fullQueueQuery.error ?? missingQuery.error)?.message}</p>
+				<Button
+					type="button"
+					variant="outline"
+					size="sm"
+					disabled={fullQueueQuery.isFetching || missingQuery.isFetching}
+					onclick={() => {
+						if (fullQueueQuery.isFetchNextPageError) void fullQueueQuery.fetchNextPage();
+						else if (fullQueueQuery.isError) void fullQueueQuery.refetch();
+						if (missingQuery.isError) void missingQuery.refetch();
+					}}>Retry queue</Button
+				>
+			</Alert.Description>
+		</Alert.Root>
+	{:else if urlState.report}
+		<div class="flex flex-col items-start gap-3 p-6" role="status">
+			<h2 class="editorial-title text-xl">Requested report is not in the full-text queue</h2>
+			<p class="text-sm text-muted-foreground">
+				The report may have left this stage or the citation may belong to another project.
+			</p>
+			<Button variant="outline" onclick={() => void updateUrl({ report: null, page: null, block: null })}
+				>Open full-text queue</Button
+			>
 		</div>
 	{:else}
 		<div class="flex flex-col items-start gap-3 p-6">

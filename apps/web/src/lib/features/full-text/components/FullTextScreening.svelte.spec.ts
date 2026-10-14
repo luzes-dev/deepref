@@ -65,8 +65,8 @@ function blockFor(reportId: string, id: string, text: string, pageNumber = 1): D
 	};
 }
 
-function installApi() {
-	const reports: Report[] = [1, 2].map((index) => ({
+function installApi(reportCount = 2) {
+	const reports: Report[] = Array.from({ length: reportCount }, (_, index) => index + 1).map((index) => ({
 		report_id: `report-${index}`,
 		title: `Full-text report ${index}`,
 		full_text_status: 'unscreened',
@@ -139,10 +139,13 @@ function installApi() {
 				amendment_of: null
 			})
 		),
-		http.get(`${base}/screening/full-text`, async () => {
+		http.get(`${base}/screening/full-text`, async ({ request }) => {
 			if (queueGate) await queueGate;
+			const url = new URL(request.url);
+			const start = Number(url.searchParams.get('cursor') ?? 0);
+			const limit = Number(url.searchParams.get('limit') ?? 100);
 			return HttpResponse.json({
-				items: reports.map((report) => ({
+				items: reports.slice(start, start + limit).map((report) => ({
 					report_id: report.report_id,
 					title: report.title,
 					abstract_text: null,
@@ -152,7 +155,7 @@ function installApi() {
 					revision: report.revision,
 					document: documentFor(report.report_id)
 				})),
-				next_cursor: null
+				next_cursor: start + limit < reports.length ? String(start + limit) : null
 			});
 		}),
 		http.get(`${base}/screening/full-text/missing`, () => HttpResponse.json([])),
@@ -281,6 +284,78 @@ beforeEach(() => {
 });
 
 describe('full-text screening shortcuts', () => {
+	it('opens a cited report beyond the first queue page without changing the citation', async () => {
+		installApi(101);
+		server.use(
+			http.get(`${base}/reports/report-101/documents/:documentId/blocks`, () =>
+				HttpResponse.json({
+					items: [blockFor('report-101', 'linked-passage', 'Cited late-page evidence', 4)],
+					next_cursor: null
+				})
+			)
+		);
+		const search = '?report=report-101&page=4&block=linked-passage';
+		sveltekit.resetNavigation(`/projects/${projectId}/screening/full-text${search}`);
+		render(FullTextScreeningTestHost, { projectId });
+		await waitFor(() =>
+			expect(screen.getByRole('heading', { level: 2 })).toHaveTextContent('Full-text report 101')
+		);
+		await waitFor(() => expect(screen.getByText('Cited late-page evidence')).toBeVisible());
+		expect(sveltekit.page.url.search).toBe(search);
+	});
+	it('retries a failed queue page while retaining the requested citation', async () => {
+		installApi(101);
+		let failed = false;
+		server.use(
+			http.get(`${base}/screening/full-text`, ({ request }) => {
+				if (!new URL(request.url).searchParams.has('cursor')) return;
+				if (!failed) {
+					failed = true;
+					return HttpResponse.json(
+						{ code: 'DATABASE_UNAVAILABLE', message: 'Queue page unavailable' },
+						{ status: 503 }
+					);
+				}
+				return HttpResponse.json({
+					items: [{
+						report_id: 'report-101',
+						title: 'Full-text report 101',
+						abstract_text: null,
+						doi: null,
+						publication_year: 2024,
+						full_text_status: 'unscreened',
+						revision: 4,
+						document: documentFor('report-101')
+					}],
+					next_cursor: null
+				});
+			})
+		);
+		const search = '?report=report-101&page=4&block=linked-passage';
+		sveltekit.resetNavigation(`/projects/${projectId}/screening/full-text${search}`);
+		render(FullTextScreeningTestHost, { projectId });
+		await waitFor(() => expect(screen.getByRole('alert')).toHaveTextContent('Queue page unavailable'));
+		screen.getByRole('button', { name: 'Retry queue' }).click();
+		await waitFor(() =>
+			expect(screen.getByRole('heading', { level: 2 })).toHaveTextContent('Full-text report 101')
+		);
+		expect(sveltekit.page.url.search).toBe(search);
+	});
+
+	it('does not replace an absent cited report with an unrelated queue item', async () => {
+		const api = installApi();
+		sveltekit.resetNavigation(`/projects/${projectId}/screening/full-text?report=absent&page=4&block=linked-passage`);
+		render(FullTextScreeningTestHost, { projectId });
+		await waitFor(() =>
+			expect(screen.getByRole('heading', { level: 2 })).toHaveTextContent('Requested report is not in the full-text queue')
+		);
+		press('i');
+		await tick();
+		expect(api.decisions).toEqual([]);
+		expect(sveltekit.page.url.search).toBe('?report=absent&page=4&block=linked-passage');
+	});
+
+
 	it('records one decision for a held key on the displayed report', async () => {
 		const api = installApi();
 		await renderAt('report-2');
