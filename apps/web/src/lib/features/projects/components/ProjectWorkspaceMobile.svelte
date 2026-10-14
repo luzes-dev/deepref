@@ -41,9 +41,7 @@
 				workspace.view === 'graph' ||
 				workspace.view === 'recommendations')
 	);
-	const ingestionSheetOpen = $derived(
-		Boolean(workspace.selectedAcquisition)
-	);
+	const ingestionSheetOpen = $derived(Boolean(workspace.selectedAcquisition));
 
 	function isActive(item: ProjectNavigationItem): boolean {
 		return Boolean(projectId) && isProjectNavigationItemActive(item, pathname, projectId);
@@ -175,7 +173,7 @@
 			<Sheet.Header class="sr-only">
 				<Sheet.Title>Ingestion inspector</Sheet.Title>
 			</Sheet.Header>
-				<AcquisitionInspector />
+			<AcquisitionInspector />
 		</Sheet.Content>
 	</Sheet.Root>
 </div>

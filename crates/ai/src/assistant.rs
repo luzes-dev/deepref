@@ -703,7 +703,10 @@ mod tests {
             AssistantAgentRunStatus::Failed,
             AssistantAgentRunStatus::Cancelled,
         ] {
-            assert_eq!(AssistantAgentRunStatus::parse(status.as_str()), Some(status));
+            assert_eq!(
+                AssistantAgentRunStatus::parse(status.as_str()),
+                Some(status)
+            );
             assert_eq!(
                 serde_json::to_value(status).unwrap(),
                 json!(status.as_str())

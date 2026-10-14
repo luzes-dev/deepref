@@ -40,7 +40,10 @@ fn build_otlp_provider(
         .with_resource(
             Resource::builder()
                 .with_service_name(service_name.to_owned())
-                .with_attributes([opentelemetry::KeyValue::new("service.version", build_sha.to_owned())])
+                .with_attributes([opentelemetry::KeyValue::new(
+                    "service.version",
+                    build_sha.to_owned(),
+                )])
                 .build(),
         )
         .build())

@@ -141,7 +141,10 @@ pub async fn claim_assistant_plan(
     actor_kind: &str,
     actor_id: &str,
 ) -> Result<Option<AssistantPlanRecord>, AssistantError> {
-    debug_assert!(matches!(next_status, AssistantPlanStatus::Confirmed | AssistantPlanStatus::Rejected));
+    debug_assert!(matches!(
+        next_status,
+        AssistantPlanStatus::Confirmed | AssistantPlanStatus::Rejected
+    ));
     let row = sqlx::query(concat!(
         "UPDATE assistant_plans
          SET status = $3, resolved_by_kind = $4, resolved_by_id = $5, resolved_at = now()
@@ -169,7 +172,10 @@ pub async fn update_assistant_plan_results(
     results: &Value,
     error: Option<&str>,
 ) -> Result<AssistantPlanRecord, AssistantError> {
-    debug_assert!(matches!(status, AssistantPlanStatus::Executed | AssistantPlanStatus::Failed));
+    debug_assert!(matches!(
+        status,
+        AssistantPlanStatus::Executed | AssistantPlanStatus::Failed
+    ));
     let row = sqlx::query(concat!(
         "UPDATE assistant_plans SET status = $2, results = $3, error = $4
          WHERE id = $1 RETURNING ",
@@ -184,7 +190,6 @@ pub async fn update_assistant_plan_results(
     plan_from_row(&row)
 }
 
-
 pub async fn finish_assistant_plan(
     pool: &PgPool,
     plan_id: Uuid,
@@ -192,7 +197,10 @@ pub async fn finish_assistant_plan(
     results: &Value,
     error: Option<&str>,
 ) -> Result<AssistantPlanRecord, AssistantError> {
-    debug_assert!(matches!(status, AssistantPlanStatus::Executed | AssistantPlanStatus::Failed));
+    debug_assert!(matches!(
+        status,
+        AssistantPlanStatus::Executed | AssistantPlanStatus::Failed
+    ));
     let row = sqlx::query(concat!(
         "UPDATE assistant_plans SET status = $2, results = $3, error = $4
          WHERE id = $1 RETURNING ",

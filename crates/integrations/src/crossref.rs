@@ -3,8 +3,8 @@
 
 mod abstracts;
 mod error;
-mod status;
 mod search;
+mod status;
 mod wire;
 
 use std::time::Duration;
@@ -20,8 +20,8 @@ use serde_json::{Value, json};
 
 pub use abstracts::{AbstractEnricher, AbstractSource, clean_abstract};
 pub use error::CrossrefError;
-pub use status::{StatusClassification, classify_status};
 pub use search::{CrossrefSearchError, search_crossref};
+pub use status::{StatusClassification, classify_status};
 
 use wire::CrossrefWorksResponse;
 
@@ -281,8 +281,8 @@ mod tests {
     use super::*;
     use crate::parse_import;
     use chrono::Utc;
-    use deepref_domain::{FetchStatus, Work, WorkWithReferences};
     use deepref_domain::ImportFormat;
+    use deepref_domain::{FetchStatus, Work, WorkWithReferences};
 
     #[test]
     fn crossref_adapter_emits_the_application_raw_record() {

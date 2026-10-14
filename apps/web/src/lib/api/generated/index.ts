@@ -9,7 +9,6 @@ export * from './exports/exports.ts';
 export * from './extraction/extraction.ts';
 export * from './health/health.ts';
 export * from './hooks/hooks.ts';
-export * from './ingestions/ingestions.ts';
 export * from './notifications/notifications.ts';
 export * from './projection/projection.ts';
 export * from './projects/projects.ts';

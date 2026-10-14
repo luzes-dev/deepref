@@ -371,7 +371,9 @@ pub(crate) async fn undo_screening_in_transaction(
     .await?
     .ok_or(ScreeningError::NoHistory)?;
     let stage_value: String = event.try_get("stage")?;
-    let event_stage = ScreeningStage::parse(&stage_value).ok_or_else(|| ScreeningError::InvalidData(format!("unknown screening stage {stage_value:?}")))?;
+    let event_stage = ScreeningStage::parse(&stage_value).ok_or_else(|| {
+        ScreeningError::InvalidData(format!("unknown screening stage {stage_value:?}"))
+    })?;
     if event_stage != command.stage {
         return Err(ScreeningError::UndoNotLatest {
             current: Box::new(current_snapshot),
@@ -466,7 +468,10 @@ pub async fn get_screening_queue(
     )
     .await?;
     let progress = queue_progress(pool, project_id).await?;
-    let items: Vec<_> = rows.iter().map(queue_item_from_row).collect::<Result<_, _>>()?;
+    let items: Vec<_> = rows
+        .iter()
+        .map(queue_item_from_row)
+        .collect::<Result<_, _>>()?;
     let next_cursor = if has_next {
         rows.last()
             .map(|row| encode_cursor(&query, row))
@@ -523,7 +528,10 @@ pub async fn get_screening_history(
     Ok(ScreeningHistory {
         project_id,
         report_id,
-        items: rows.into_iter().map(history_item_from_row).collect::<Result<_, _>>()?,
+        items: rows
+            .into_iter()
+            .map(history_item_from_row)
+            .collect::<Result<_, _>>()?,
     })
 }
 
@@ -638,8 +646,8 @@ async fn persist_event_and_state(
     .bind(json!({
         "screening_event_id": write.event_id,
         "event_kind": write.event_kind,
-        "stage": stage_name(write.stage),
-        "decision": write.decision.map(decision_name),
+        "stage": write.stage.as_str(),
+        "decision": write.decision.map(ScreeningDecision::as_str),
         "revision": next.revision,
         "protocol_version_id": write.protocol_version_id,
         "supersedes_event_id": write.supersedes_event_id,
@@ -811,7 +819,9 @@ async fn ensure_exclusion_reason(
     .fetch_optional(&mut **tx)
     .await?;
     let value = reason_stage.ok_or(ScreeningError::ExclusionReasonNotFound)?;
-    let reason_stage = ScreeningStage::parse(&value).ok_or_else(|| ScreeningError::InvalidData(format!("unknown exclusion reason stage {value:?}")))?;
+    let reason_stage = ScreeningStage::parse(&value).ok_or_else(|| {
+        ScreeningError::InvalidData(format!("unknown exclusion reason stage {value:?}"))
+    })?;
     if reason_stage == stage {
         Ok(())
     } else {
@@ -998,7 +1008,9 @@ fn default_state(project_id: Uuid, report_id: Uuid) -> ScreeningStateSnapshot {
     }
 }
 
-pub(crate) fn state_snapshot_from_row(row: &sqlx::postgres::PgRow) -> Result<ScreeningStateSnapshot, ScreeningError> {
+pub(crate) fn state_snapshot_from_row(
+    row: &sqlx::postgres::PgRow,
+) -> Result<ScreeningStateSnapshot, ScreeningError> {
     Ok(ScreeningStateSnapshot {
         project_id: row.get("project_id"),
         report_id: row.get("report_id"),
@@ -1020,8 +1032,14 @@ fn state_snapshot_from_domain(
     state: CurrentScreeningState,
 ) -> ScreeningStateSnapshot {
     use deepref_domain::ScreeningStatus;
-    let title = state.title_abstract.map(status_from_decision).unwrap_or(ScreeningStatus::Unscreened);
-    let full_text = state.full_text.map(status_from_decision).unwrap_or(ScreeningStatus::NotRequired);
+    let title = state
+        .title_abstract
+        .map(status_from_decision)
+        .unwrap_or(ScreeningStatus::Unscreened);
+    let full_text = state
+        .full_text
+        .map(status_from_decision)
+        .unwrap_or(ScreeningStatus::NotRequired);
     let final_status = match (state.title_abstract, state.full_text) {
         (Some(ScreeningDecision::Include), Some(decision)) => status_from_decision(decision),
         (Some(ScreeningDecision::Include), None) => ScreeningStatus::PendingFullText,
@@ -1064,14 +1082,24 @@ fn queue_item_from_row(row: &sqlx::postgres::PgRow) -> Result<ScreeningQueueItem
     })
 }
 
-fn history_item_from_row(row: sqlx::postgres::PgRow) -> Result<ScreeningHistoryItem, ScreeningError> {
+fn history_item_from_row(
+    row: sqlx::postgres::PgRow,
+) -> Result<ScreeningHistoryItem, ScreeningError> {
     let stage: String = row.try_get("stage")?;
     let decision: Option<String> = row.try_get("decision")?;
     Ok(ScreeningHistoryItem {
         id: row.get("id"),
         event_kind: row.get("event_kind"),
-        stage: ScreeningStage::parse(&stage).ok_or_else(|| ScreeningError::InvalidData(format!("unknown screening stage {stage:?}")))?,
-        decision: decision.map(|value| ScreeningDecision::parse(&value).ok_or_else(|| ScreeningError::InvalidData(format!("unknown screening decision {value:?}")))).transpose()?,
+        stage: ScreeningStage::parse(&stage).ok_or_else(|| {
+            ScreeningError::InvalidData(format!("unknown screening stage {stage:?}"))
+        })?,
+        decision: decision
+            .map(|value| {
+                ScreeningDecision::parse(&value).ok_or_else(|| {
+                    ScreeningError::InvalidData(format!("unknown screening decision {value:?}"))
+                })
+            })
+            .transpose()?,
         notes: row.get("notes"),
         protocol_version_id: row.get("protocol_version_id"),
         actor_kind: row.get("actor_kind"),
@@ -1090,22 +1118,35 @@ fn history_item_from_row(row: sqlx::postgres::PgRow) -> Result<ScreeningHistoryI
     })
 }
 
-pub(crate) fn status_from_row(row: &sqlx::postgres::PgRow, column: &str) -> Result<deepref_domain::ScreeningStatus, ScreeningError> {
+pub(crate) fn status_from_row(
+    row: &sqlx::postgres::PgRow,
+    column: &str,
+) -> Result<deepref_domain::ScreeningStatus, ScreeningError> {
     let value: String = row.try_get(column)?;
     parse_status(&value, column)
 }
 
-pub(crate) fn parse_status(value: &str, column: &str) -> Result<deepref_domain::ScreeningStatus, ScreeningError> {
-    let status = deepref_domain::ScreeningStatus::parse(value).ok_or_else(|| ScreeningError::InvalidData(format!("unknown {column} {value:?}")))?;
+pub(crate) fn parse_status(
+    value: &str,
+    column: &str,
+) -> Result<deepref_domain::ScreeningStatus, ScreeningError> {
+    let status = deepref_domain::ScreeningStatus::parse(value)
+        .ok_or_else(|| ScreeningError::InvalidData(format!("unknown {column} {value:?}")))?;
     let valid = if column.ends_with("title_abstract_status") {
-        !matches!(status, deepref_domain::ScreeningStatus::NotRequired | deepref_domain::ScreeningStatus::PendingFullText)
+        !matches!(
+            status,
+            deepref_domain::ScreeningStatus::NotRequired
+                | deepref_domain::ScreeningStatus::PendingFullText
+        )
     } else if column.ends_with("full_text_status") {
         status != deepref_domain::ScreeningStatus::PendingFullText
     } else {
         status != deepref_domain::ScreeningStatus::NotRequired
     };
     if !valid {
-        return Err(ScreeningError::InvalidData(format!("invalid {column} {value:?}")));
+        return Err(ScreeningError::InvalidData(format!(
+            "invalid {column} {value:?}"
+        )));
     }
     Ok(status)
 }
@@ -1150,17 +1191,20 @@ fn decode_cursor(value: &str) -> Result<ScreeningCursor, ScreeningError> {
     Ok(cursor)
 }
 
-fn decision_from_status(status: &deepref_domain::ScreeningStatus) -> Result<Option<ScreeningDecision>, ScreeningError> {
+fn decision_from_status(
+    status: &deepref_domain::ScreeningStatus,
+) -> Result<Option<ScreeningDecision>, ScreeningError> {
     use deepref_domain::ScreeningStatus;
     match status {
         ScreeningStatus::Include => Ok(Some(ScreeningDecision::Include)),
         ScreeningStatus::Exclude => Ok(Some(ScreeningDecision::Exclude)),
         ScreeningStatus::Maybe => Ok(Some(ScreeningDecision::Maybe)),
         ScreeningStatus::Unscreened | ScreeningStatus::NotRequired => Ok(None),
-        ScreeningStatus::PendingFullText => Err(ScreeningError::InvalidData("pending_full_text is not a screening decision".into())),
+        ScreeningStatus::PendingFullText => Err(ScreeningError::InvalidData(
+            "pending_full_text is not a screening decision".into(),
+        )),
     }
 }
-
 
 fn lifecycle_for_status(status: &deepref_domain::ScreeningStatus) -> &'static str {
     use deepref_domain::ScreeningStatus;
@@ -1168,7 +1212,9 @@ fn lifecycle_for_status(status: &deepref_domain::ScreeningStatus) -> &'static st
         ScreeningStatus::Include => "included",
         ScreeningStatus::Exclude => "excluded",
         ScreeningStatus::Maybe => "maybe",
-        ScreeningStatus::Unscreened | ScreeningStatus::NotRequired | ScreeningStatus::PendingFullText => "screening",
+        ScreeningStatus::Unscreened
+        | ScreeningStatus::NotRequired
+        | ScreeningStatus::PendingFullText => "screening",
     }
 }
 
@@ -1180,9 +1226,18 @@ mod tests {
     #[test]
     fn stored_statuses_reject_unknown_and_inapplicable_states() {
         use deepref_domain::ScreeningStatus;
-        assert_eq!(parse_status("include", "title_abstract_status").unwrap(), ScreeningStatus::Include);
-        assert_eq!(parse_status("not_required", "full_text_status").unwrap(), ScreeningStatus::NotRequired);
-        assert_eq!(parse_status("pending_full_text", "final_status").unwrap(), ScreeningStatus::PendingFullText);
+        assert_eq!(
+            parse_status("include", "title_abstract_status").unwrap(),
+            ScreeningStatus::Include
+        );
+        assert_eq!(
+            parse_status("not_required", "full_text_status").unwrap(),
+            ScreeningStatus::NotRequired
+        );
+        assert_eq!(
+            parse_status("pending_full_text", "final_status").unwrap(),
+            ScreeningStatus::PendingFullText
+        );
         for (value, column) in [
             ("unknown", "final_status"),
             ("not_required", "title_abstract_status"),
@@ -1190,7 +1245,10 @@ mod tests {
             ("pending_full_text", "full_text_status"),
             ("not_required", "final_status"),
         ] {
-            assert!(matches!(parse_status(value, column), Err(ScreeningError::InvalidData(_))));
+            assert!(matches!(
+                parse_status(value, column),
+                Err(ScreeningError::InvalidData(_))
+            ));
         }
     }
 
@@ -1292,7 +1350,6 @@ pub async fn record_assistant_screening_activity(
     }
 }
 
-
 pub async fn get_agent_screening_state(
     pool: &PgPool,
     project_id: Uuid,
@@ -1318,7 +1375,6 @@ pub async fn get_agent_screening_state(
         error => crate::AgentReadError::InvalidStoredValue(error.to_string()),
     })
 }
-
 
 /// One record of a planned `screen_reports` action as it is now.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1357,14 +1413,16 @@ pub async fn snapshot_screening_plan_items(
     .bind(report_ids)
     .fetch_all(pool)
     .await?;
-    rows
-        .iter()
+    rows.iter()
         .map(|row| {
             let masked: bool = row.get("masked");
             let stored_status: String = row.try_get("status")?;
-            let status = deepref_domain::ScreeningStatus::parse(&stored_status).ok_or_else(|| {
-                crate::AssistantError::InvalidInput(format!("unknown screening status {stored_status}"))
-            })?;
+            let status =
+                deepref_domain::ScreeningStatus::parse(&stored_status).ok_or_else(|| {
+                    crate::AssistantError::InvalidInput(format!(
+                        "unknown screening status {stored_status}"
+                    ))
+                })?;
             let title = row
                 .get::<Option<String>, _>("title")
                 .map(|title| crate::decode_html_entities(&title))
@@ -1384,7 +1442,6 @@ pub async fn snapshot_screening_plan_items(
         })
         .collect()
 }
-
 
 /// Lists reports with their title/abstract screening status. `status` is one
 /// of `unscreened`, `include`, `exclude`, `maybe`, or `None` for all.
@@ -1435,4 +1492,3 @@ pub async fn list_agent_reports_by_screening(
             .collect::<Result<Vec<_>, crate::AgentReadError>>()?,
     ))
 }
-

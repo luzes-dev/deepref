@@ -617,9 +617,9 @@ fn report_value(report: deepref_app::AgentReportRecord, abstract_limit: usize) -
     });
     if let Some(documents) = report.documents {
         // Full text exists only when a document has been parsed (status available).
-        let full_text_available = documents
-            .iter()
-            .any(|document| document.status == deepref_domain::documents::DocumentStatus::Available);
+        let full_text_available = documents.iter().any(|document| {
+            document.status == deepref_domain::documents::DocumentStatus::Available
+        });
         value["full_text_available"] = json!(full_text_available);
         value["documents"] = json!(documents);
     }
@@ -725,8 +725,9 @@ fn read_failure(error: deepref_app::AgentReadError) -> AssistantFailure {
 
 fn protocol_failure(error: deepref_app::ProtocolError) -> AssistantFailure {
     match error {
-        deepref_app::ProtocolError::ProjectNotFound
-        | deepref_app::ProtocolError::NotFound => AssistantFailure::NotFound,
+        deepref_app::ProtocolError::ProjectNotFound | deepref_app::ProtocolError::NotFound => {
+            AssistantFailure::NotFound
+        }
         _ => AssistantFailure::Internal,
     }
 }
@@ -780,9 +781,7 @@ pub(crate) struct AssistantChatRequestDto {
     message: String,
 }
 
-fn conversation_dto(
-    record: &deepref_app::AssistantConversationRecord,
-) -> AssistantConversationDto {
+fn conversation_dto(record: &deepref_app::AssistantConversationRecord) -> AssistantConversationDto {
     AssistantConversationDto {
         id: record.id,
         project_id: record.project_id,
@@ -1158,10 +1157,9 @@ pub(crate) async fn chat(
         .await
         .map(|dto| (StatusCode::ACCEPTED, Json(dto)).into_response());
     }
-    let history_records =
-        deepref_app::list_assistant_messages(&state.pool, body.conversation_id)
-            .await
-            .map_err(map_conversation_error)?;
+    let history_records = deepref_app::list_assistant_messages(&state.pool, body.conversation_id)
+        .await
+        .map_err(map_conversation_error)?;
     let history = history_records
         .iter()
         .filter_map(history_chat_message)

@@ -5,12 +5,12 @@
     clippy::string_slice
 )]
 
-use deepref_application::{ExtractionFieldDefinition, ExtractionFieldType};
-use deepref_domain::ProjectId;
 use deepref_app::{
     ExtractionError, ExtractionFieldUpdate, create_field_definition, list_field_definitions,
     list_values, update_field_definition,
 };
+use deepref_application::{ExtractionFieldDefinition, ExtractionFieldType};
+use deepref_domain::ProjectId;
 use sqlx::PgPool;
 use uuid::Uuid;
 

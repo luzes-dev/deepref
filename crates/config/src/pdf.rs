@@ -7,7 +7,9 @@ pub struct PdfConfig {
 
 impl PdfConfig {
     pub fn from_source(get: &dyn Fn(&str) -> Option<String>) -> Self {
-        Self { library_path: get("PDFIUM_LIBRARY_PATH").map(PathBuf::from) }
+        Self {
+            library_path: get("PDFIUM_LIBRARY_PATH").map(PathBuf::from),
+        }
     }
 }
 

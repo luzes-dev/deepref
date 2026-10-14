@@ -4,7 +4,8 @@ use deepref_application::jobs::JobLease;
 use deepref_domain::ProjectId;
 use deepref_review::{
     ReviewBlockCode, ReviewDefinitionKey, ReviewError, ReviewOrigin, ReviewRunId,
-    ReviewRunSnapshot, ReviewRunState, ReviewRunStatus, ReviewSemanticContract, ReviewSubject, ScheduleReviewRun,
+    ReviewRunSnapshot, ReviewRunState, ReviewRunStatus, ReviewSemanticContract, ReviewSubject,
+    ScheduleReviewRun,
     worker::{
         AcceptedArtifactInput, CompiledReview, ExecutedReviewTask, PreparedReviewTask, ReviewHash,
         ReviewManifestInput, ReviewNode, ReviewRunManifest,
@@ -162,10 +163,13 @@ async fn decide_generation(
     let generation: i32 = latest.get("generation");
     let reuse_epoch: i32 = latest.get("reuse_epoch");
     let state = stored_review_status(latest.get::<String, _>("state").as_str())?;
-    let proposal_status = latest.get::<Option<String>, _>("proposal_status")
-        .map(|value| ProposalStatus::parse(&value).ok_or_else(|| {
-            PostgresReviewError::InvalidStoredValue(format!("unknown proposal status {value}"))
-        }))
+    let proposal_status = latest
+        .get::<Option<String>, _>("proposal_status")
+        .map(|value| {
+            ProposalStatus::parse(&value).ok_or_else(|| {
+                PostgresReviewError::InvalidStoredValue(format!("unknown proposal status {value}"))
+            })
+        })
         .transpose()?;
     let next = generation
         .checked_add(1)
@@ -568,7 +572,15 @@ pub async fn block_review_run(
     code: ReviewBlockCode,
     message: &str,
 ) -> Result<(), PostgresReviewError> {
-    finish_review_run(pool, project_id, run_id, ReviewRunStatus::Blocked, code.as_str(), message).await
+    finish_review_run(
+        pool,
+        project_id,
+        run_id,
+        ReviewRunStatus::Blocked,
+        code.as_str(),
+        message,
+    )
+    .await
 }
 
 pub async fn fail_review_run(
@@ -578,7 +590,15 @@ pub async fn fail_review_run(
     code: &str,
     message: &str,
 ) -> Result<(), PostgresReviewError> {
-    finish_review_run(pool, project_id, run_id, ReviewRunStatus::Failed, code, message).await
+    finish_review_run(
+        pool,
+        project_id,
+        run_id,
+        ReviewRunStatus::Failed,
+        code,
+        message,
+    )
+    .await
 }
 
 async fn finish_review_run(
@@ -853,7 +873,8 @@ pub async fn finalize_review_proposal(
         .bind(run.snapshot.id.as_uuid())
         .fetch_one(&mut *transaction)
         .await?;
-        if stored_review_status(state.get::<String, _>("state").as_str())? != ReviewRunStatus::Completed
+        if stored_review_status(state.get::<String, _>("state").as_str())?
+            != ReviewRunStatus::Completed
             || state.get::<Option<Uuid>, _>("proposal_id") != Some(proposal_id)
         {
             return Err(PostgresReviewError::FinalizationConflict);

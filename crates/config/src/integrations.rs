@@ -5,7 +5,9 @@ pub struct CrossrefConfig {
 
 impl Default for CrossrefConfig {
     fn default() -> Self {
-        Self { abstract_enrichment: true }
+        Self {
+            abstract_enrichment: true,
+        }
     }
 }
 

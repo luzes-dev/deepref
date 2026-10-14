@@ -25,14 +25,18 @@ impl WorkerSettings {
             });
         }
         let grobid_url = optional(get, "GROBID_URL");
-        if grobid_url.as_ref().is_some_and(|url| !(url.starts_with("http://") || url.starts_with("https://"))) {
+        if grobid_url
+            .as_ref()
+            .is_some_and(|url| !(url.starts_with("http://") || url.starts_with("https://")))
+        {
             return Err(ConfigError::Invalid {
                 name: "GROBID_URL",
                 reason: "expected an http(s) URL".into(),
             });
         }
         let grobid_timeout = get("GROBID_TIMEOUT_SECS")
-            .and_then(|value| value.trim().parse::<u64>().ok()).filter(|secs| *secs > 0)
+            .and_then(|value| value.trim().parse::<u64>().ok())
+            .filter(|secs| *secs > 0)
             .unwrap_or(120);
         Ok(Self {
             concurrency,
@@ -45,11 +49,21 @@ impl WorkerSettings {
     }
 }
 
-fn positive<T>(get: &dyn Fn(&str) -> Option<String>, name: &'static str, default: T) -> Result<T, ConfigError>
-where T: std::str::FromStr + Default + PartialEq, T::Err: std::fmt::Display {
+fn positive<T>(
+    get: &dyn Fn(&str) -> Option<String>,
+    name: &'static str,
+    default: T,
+) -> Result<T, ConfigError>
+where
+    T: std::str::FromStr + Default + PartialEq,
+    T::Err: std::fmt::Display,
+{
     let value = parse(get, name, default)?;
     if value == T::default() {
-        return Err(ConfigError::Invalid { name, reason: "must be greater than zero".into() });
+        return Err(ConfigError::Invalid {
+            name,
+            reason: "must be greater than zero".into(),
+        });
     }
     Ok(value)
 }
@@ -67,9 +81,18 @@ mod tests {
         assert_eq!(config.document_parse_concurrency, 2);
         assert_eq!(config.grobid_timeout, Duration::from_secs(120));
         for value in ["0", "17", "invalid"] {
-            assert!(WorkerSettings::from_source(&|name| (name == "DOCUMENT_PARSE_CONCURRENCY").then(|| value.into())).is_err());
+            assert!(
+                WorkerSettings::from_source(
+                    &|name| (name == "DOCUMENT_PARSE_CONCURRENCY").then(|| value.into())
+                )
+                .is_err()
+            );
         }
-        for name in ["WORKER_CONCURRENCY", "WORKER_CLAIM_LEASE_SECS", "WORKER_RECONCILER_INTERVAL_SECS"] {
+        for name in [
+            "WORKER_CONCURRENCY",
+            "WORKER_CLAIM_LEASE_SECS",
+            "WORKER_RECONCILER_INTERVAL_SECS",
+        ] {
             assert!(WorkerSettings::from_source(&|key| (key == name).then(|| "0".into())).is_err());
         }
     }

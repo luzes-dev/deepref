@@ -1,9 +1,9 @@
 use std::{future::Future, pin::Pin, sync::Arc, time::Duration};
 
 use deepref_ai::{AiGateway, RoutedGateway};
+use deepref_app::{claim_job, complete_job, fail_job, renew_job};
 use deepref_application::jobs::{ClaimedJob, JobLease, JobRetry};
 use deepref_documents::DocumentStore;
-use deepref_app::{claim_job, complete_job, fail_job, renew_job};
 use delivery::DeliveryAction;
 use sqlx::postgres::PgPoolOptions;
 use tokio::{
@@ -55,12 +55,9 @@ async fn build_ai_gateway(
             },
         )
     }));
-    let routes = deepref_app::ensure_default_model_routes(
-        pool,
-        provider.id(),
-        &ai_config.default_model,
-    )
-    .await?;
+    let routes =
+        deepref_app::ensure_default_model_routes(pool, provider.id(), &ai_config.default_model)
+            .await?;
     tracing::info!(
         provider = provider.id(),
         routes_created = routes.created,
@@ -146,7 +143,13 @@ pub async fn run_with_shutdown(
         claim_lease: config.claim_lease,
         drain_deadline: config.runtime.telemetry.shutdown_deadline,
     };
-    let handler = production_handler(pool.clone(), config.claim_lease, document_store, ai_gateway, Arc::new(config.clone()));
+    let handler = production_handler(
+        pool.clone(),
+        config.claim_lease,
+        document_store,
+        ai_gateway,
+        Arc::new(config.clone()),
+    );
     let loop_shutdown = {
         let reconciler_shutdown = reconciler_shutdown.clone();
         async move {
@@ -609,6 +612,11 @@ mod lease_deadline_tests {
         };
         let lease = job.lease("test-worker".to_owned());
         let result = run_isolated(async move { handler(job, lease).await }).await;
-        assert!(result.unwrap_err().to_string().contains("handler construction failed"));
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("handler construction failed")
+        );
     }
 }

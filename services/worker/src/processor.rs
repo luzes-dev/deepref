@@ -1,19 +1,16 @@
-use std::{
-    sync::Arc,
-    time::Duration,
-};
+use std::{sync::Arc, time::Duration};
 
 use deepref_ai::{
     AiExecutionContext, AiGateway, AiTaskRunner, ProposalPersistence, ProviderEndpoint,
     SystemClock, UuidProvider,
 };
 use deepref_application::jobs::JobLease;
-use deepref_domain::{IngestionItemStatus, normalize_doi};
 use deepref_documents::{
     DocumentParser, DocumentStore, HttpsPdfFetcher, PARSER_VERSION, PdfiumParser,
     RemoteDocumentFetcher,
 };
 use deepref_domain::events::{EventEnvelope, WorkFetchRequested};
+use deepref_domain::{IngestionItemStatus, normalize_doi};
 use deepref_integrations::CrossrefClient;
 use deepref_integrations::CrossrefError;
 use deepref_review::worker::{
@@ -29,7 +26,6 @@ use crate::{
     delivery::{DeliveryAction, FailureClass, action_for},
     limiter, store,
 };
-
 
 async fn handle_work_fetch(
     pool: PgPool,
@@ -51,8 +47,15 @@ async fn handle_work_fetch(
     let doi = match normalize_doi(&event.payload.doi) {
         Ok(doi) => doi,
         Err(error) => {
-            store::complete_without_doi(&pool, &event, &event.payload.doi, lease,
-                IngestionItemStatus::Failed, Some(&error.to_string())).await?;
+            store::complete_without_doi(
+                &pool,
+                &event,
+                &event.payload.doi,
+                lease,
+                IngestionItemStatus::Failed,
+                Some(&error.to_string()),
+            )
+            .await?;
             return Ok(DeliveryAction::Terminate);
         }
     };
@@ -62,8 +65,15 @@ async fn handle_work_fetch(
     if event.payload.depth > event.payload.max_depth
         || store::acquisition_cancelled(&pool, event.payload.acquisition_id).await?
     {
-        store::complete_without_doi(&pool, &event, &doi, lease,
-            IngestionItemStatus::Skipped, Some("acquisition cancelled or maximum depth exceeded")).await?;
+        store::complete_without_doi(
+            &pool,
+            &event,
+            &doi,
+            lease,
+            IngestionItemStatus::Skipped,
+            Some("acquisition cancelled or maximum depth exceeded"),
+        )
+        .await?;
         return Ok(DeliveryAction::Ack);
     }
     if store::is_cached(&pool, &doi).await? {
@@ -80,23 +90,38 @@ async fn handle_work_fetch(
         }
         let action = action_for(FailureClass::Retryable, job.attempts.max(1) as u64);
         if action == DeliveryAction::Terminate {
-            store::complete_without_doi(&pool, &event, &doi, lease,
-                IngestionItemStatus::Failed, Some("report cache lease remained busy through the final delivery")).await?;
+            store::complete_without_doi(
+                &pool,
+                &event,
+                &doi,
+                lease,
+                IngestionItemStatus::Failed,
+                Some("report cache lease remained busy through the final delivery"),
+            )
+            .await?;
         }
         return Ok(action);
     }
     let settings = store::load_runtime_settings(&pool).await?;
-    let client = match CrossrefClient::new(settings.crossref_mailto.clone(), &config.runtime.crossref) {
-        Ok(client) => client.with_max_attempts(settings.retry_attempts),
-        Err(error) => {
-            store::finalize_terminal_failure(&pool, &event, &doi, owner, lease,
-                IngestionItemStatus::Failed, &error.to_string()).await?;
-            return Ok(DeliveryAction::Ack);
-        }
-    };
-    let (cancel_heartbeat, heartbeat_done) = spawn_heartbeat(
-        pool.clone(), lease.clone(), doi.clone(), owner, claim_lease,
-    );
+    let client =
+        match CrossrefClient::new(settings.crossref_mailto.clone(), &config.runtime.crossref) {
+            Ok(client) => client.with_max_attempts(settings.retry_attempts),
+            Err(error) => {
+                store::finalize_terminal_failure(
+                    &pool,
+                    &event,
+                    &doi,
+                    owner,
+                    lease,
+                    IngestionItemStatus::Failed,
+                    &error.to_string(),
+                )
+                .await?;
+                return Ok(DeliveryAction::Ack);
+            }
+        };
+    let (cancel_heartbeat, heartbeat_done) =
+        spawn_heartbeat(pool.clone(), lease.clone(), doi.clone(), owner, claim_lease);
     limiter::acquire(&pool, "crossref", settings.rate_limit_per_second).await?;
     let fetched = client.fetch_work_with_references(&doi).await;
     cancel_heartbeat.send_replace(true);
@@ -109,8 +134,16 @@ async fn handle_work_fetch(
         Err(error) if is_retryable_crossref_error(&error) => {
             let action = action_for(FailureClass::Retryable, job.attempts.max(1) as u64);
             if action == DeliveryAction::Terminate {
-                store::finalize_terminal_failure(&pool, &event, &doi, owner, lease,
-                    IngestionItemStatus::Failed, &error.to_string()).await?;
+                store::finalize_terminal_failure(
+                    &pool,
+                    &event,
+                    &doi,
+                    owner,
+                    lease,
+                    IngestionItemStatus::Failed,
+                    &error.to_string(),
+                )
+                .await?;
             } else {
                 store::release_retryable(&pool, lease, &doi, owner, &error.to_string()).await?;
             }
@@ -119,13 +152,23 @@ async fn handle_work_fetch(
         Err(error) => {
             let status = if matches!(error, CrossrefError::NotFound(_)) {
                 IngestionItemStatus::NotFound
-            } else { IngestionItemStatus::Failed };
-            store::finalize_terminal_failure(&pool, &event, &doi, owner, lease, status, &error.to_string()).await?;
+            } else {
+                IngestionItemStatus::Failed
+            };
+            store::finalize_terminal_failure(
+                &pool,
+                &event,
+                &doi,
+                owner,
+                lease,
+                status,
+                &error.to_string(),
+            )
+            .await?;
             Ok(DeliveryAction::Ack)
         }
     }
 }
-
 
 pub async fn handle_job(
     pool: sqlx::PgPool,
@@ -291,12 +334,8 @@ async fn handle_retrieve_document_job(
                 error = %error,
                 "external document retrieval failed"
             );
-            deepref_app::mark_document_retrieval_failed(
-                pool,
-                document_id,
-                &error.failure_record(),
-            )
-            .await?;
+            deepref_app::mark_document_retrieval_failed(pool, document_id, &error.failure_record())
+                .await?;
             if error.is_permanent() {
                 // Retrying the same link cannot succeed. The reason is recorded on the
                 // document, so the job completes instead of retrying and dead-lettering.
@@ -416,18 +455,22 @@ async fn handle_parse_document_job(
         .acquire_owned()
         .await
         .map_err(|error| anyhow::anyhow!("PDF parser concurrency limiter closed: {error}"))?;
-    let parsed =
-        match parse_stored_document(&document, object_key, Arc::clone(&store), document_parser, &config.runtime.pdf)
-            .await
-        {
-            Ok(parsed) => parsed,
-            Err(error) => {
-                drop(parse_permit);
-                deepref_app::mark_document_failed(pool, document_id, &error.to_string())
-                    .await?;
-                return Err(error);
-            }
-        };
+    let parsed = match parse_stored_document(
+        &document,
+        object_key,
+        Arc::clone(&store),
+        document_parser,
+        &config.runtime.pdf,
+    )
+    .await
+    {
+        Ok(parsed) => parsed,
+        Err(error) => {
+            drop(parse_permit);
+            deepref_app::mark_document_failed(pool, document_id, &error.to_string()).await?;
+            return Err(error);
+        }
+    };
     drop(parse_permit);
     let (structure, parser_version, header) =
         grobid_enrichment(document_id, object_key, &store, &parsed, config).await;
@@ -562,9 +605,14 @@ async fn handle_recompute_metrics_job(
 ) -> anyhow::Result<DeliveryAction> {
     #[derive(Deserialize)]
     #[serde(deny_unknown_fields)]
-    struct MetricsRequest { project_id: Uuid, revision: i64 }
+    struct MetricsRequest {
+        project_id: Uuid,
+        revision: i64,
+    }
     let request: MetricsRequest = serde_json::from_value(payload)?;
-    if request.revision < 0 { anyhow::bail!("metric request revision must be nonnegative"); }
+    if request.revision < 0 {
+        anyhow::bail!("metric request revision must be nonnegative");
+    }
     deepref_app::recompute_project_metrics(pool, request.project_id).await?;
     Ok(DeliveryAction::Ack)
 }
@@ -617,10 +665,13 @@ async fn handle_job_with_document_services_inner(
     } = services;
     match job.kind {
         deepref_domain::JobKind::WorkFetchRequested => {
-            let lease = lease.ok_or_else(|| anyhow::anyhow!("DOI processing requires its live job lease"))?;
+            let lease = lease
+                .ok_or_else(|| anyhow::anyhow!("DOI processing requires its live job lease"))?;
             handle_work_fetch(pool, job, lease, claim_lease, config).await
         }
-        deepref_domain::JobKind::RecomputeMetrics => handle_recompute_metrics_job(&pool, job.payload.clone()).await,
+        deepref_domain::JobKind::RecomputeMetrics => {
+            handle_recompute_metrics_job(&pool, job.payload.clone()).await
+        }
         deepref_domain::JobKind::ImportDeduplication => {
             handle_import_deduplication_job(&pool, job.payload.clone()).await
         }
@@ -643,13 +694,20 @@ async fn handle_job_with_document_services_inner(
             let lease = lease.ok_or_else(|| {
                 anyhow::anyhow!("assistant job processing requires its lease owner")
             })?;
-            crate::assistant::handle_assistant_agent_run(&pool, job, &lease.owner, &config.runtime.ai).await
+            crate::assistant::handle_assistant_agent_run(
+                &pool,
+                job,
+                &lease.owner,
+                &config.runtime.ai,
+            )
+            .await
         }
         deepref_domain::JobKind::WorkflowStep => {
             let lease = lease.ok_or_else(|| {
                 anyhow::anyhow!("workflow step processing requires its job lease")
             })?;
-            crate::workflows::handle_step(&pool, job, lease, ai_gateway.clone(), &config.runtime).await
+            crate::workflows::handle_step(&pool, job, lease, ai_gateway.clone(), &config.runtime)
+                .await
         }
         deepref_domain::JobKind::RecomputePrisma => Ok(DeliveryAction::Ack),
         deepref_domain::JobKind::RetrieveDocument => {
@@ -720,10 +778,8 @@ async fn handle_automation_run(
                         &message,
                     )
                     .await?;
-                    deepref_app::fail_automation_step(
-                        pool, project_id, step.id, lease, &message,
-                    )
-                    .await?;
+                    deepref_app::fail_automation_step(pool, project_id, step.id, lease, &message)
+                        .await?;
                     deepref_app::finalize_automation_run(pool, project_id, run_id).await?;
                     return Ok(DeliveryAction::Terminate);
                 }
@@ -752,8 +808,7 @@ async fn execute_compiled_review(
     gateway: &dyn AiGateway,
 ) -> anyhow::Result<()> {
     let review_run_id = deepref_review::ReviewRunId::new(automation_run_id.as_uuid())?;
-    let run =
-        deepref_app::load_leased_review_run(pool, project_id, review_run_id, lease).await?;
+    let run = deepref_app::load_leased_review_run(pool, project_id, review_run_id, lease).await?;
     let review = CompiledReview::compile(run.snapshot.definition)?;
     if let deepref_review::ReviewRunState::Completed { .. }
     | deepref_review::ReviewRunState::Blocked { .. } = run.snapshot.state
@@ -1302,8 +1357,7 @@ async fn complete_review_automation_step(
         final_attempt,
         lease,
         Some(serde_json::to_value(
-            &deepref_app::get_review_run(pool, run.snapshot.project_id, run.snapshot.id)
-                .await?,
+            &deepref_app::get_review_run(pool, run.snapshot.project_id, run.snapshot.id).await?,
         )?),
     )
     .await?;
@@ -1350,15 +1404,8 @@ async fn persist_review_node(
         model_run_id,
     } = write;
     let predecessor_inputs = predecessors.iter().map(artifact_input).collect::<Vec<_>>();
-    match deepref_app::begin_review_attempt(
-        pool,
-        run,
-        review,
-        node,
-        &predecessor_inputs,
-        lease,
-    )
-    .await?
+    match deepref_app::begin_review_attempt(pool, run, review, node, &predecessor_inputs, lease)
+        .await?
     {
         deepref_app::ReviewAttemptStart::Reused {
             artifact_id,
@@ -1571,7 +1618,6 @@ fn bounded_message(message: &str, max_bytes: usize) -> String {
     message.get(..end).unwrap_or("").to_owned()
 }
 
-
 async fn parse_stored_document(
     document: &deepref_app::DocumentRecord,
     object_key: &str,
@@ -1647,7 +1693,6 @@ fn spawn_heartbeat(
     });
     (sender, handle)
 }
-
 
 fn is_retryable_crossref_error(error: &CrossrefError) -> bool {
     matches!(

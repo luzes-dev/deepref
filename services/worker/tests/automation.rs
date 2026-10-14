@@ -5,16 +5,16 @@
     clippy::string_slice
 )]
 use anyhow::{Result, ensure};
+use deepref_app::{
+    begin_next_automation_step, complete_job, configure_automation_definition, get_automation_run,
+    recover_expired_jobs, start_automation_manually,
+};
 use deepref_application::{
     AutomationDefinitionStatus, AutomationRunId, AutomationRunStatus, AutomationStepRunStatus,
     AutomationTriggerKind, BuiltInAutomationRecipe, ConfigureAutomationDefinition,
     StartAutomationManually,
 };
 use deepref_domain::{Actor, ActorKind, ProjectId};
-use deepref_app::{
-    begin_next_automation_step, complete_job, configure_automation_definition, get_automation_run,
-    recover_expired_jobs, start_automation_manually,
-};
 use deepref_worker::{delivery::DeliveryAction, processor::handle_job_with_documents_owned};
 use serde_json::json;
 use sqlx::{PgPool, Row};
@@ -125,7 +125,10 @@ async fn automation_job_executes_builtin_step_and_completed_retry_is_noop() -> R
                 Duration::from_secs(30),
                 None,
                 None,
-                &deepref_worker::config::WorkerConfig::from_source(&|name| (name == "APP_ENV").then(|| "local".into())).expect("local worker configuration"),
+                &deepref_worker::config::WorkerConfig::from_source(
+                    &|name| (name == "APP_ENV").then(|| "local".into())
+                )
+                .expect("local worker configuration"),
             )
             .await?
                 == DeliveryAction::Ack
@@ -138,7 +141,10 @@ async fn automation_job_executes_builtin_step_and_completed_retry_is_noop() -> R
                 Duration::from_secs(30),
                 None,
                 None,
-                &deepref_worker::config::WorkerConfig::from_source(&|name| (name == "APP_ENV").then(|| "local".into())).expect("local worker configuration"),
+                &deepref_worker::config::WorkerConfig::from_source(
+                    &|name| (name == "APP_ENV").then(|| "local".into())
+                )
+                .expect("local worker configuration"),
             )
             .await?
                 == DeliveryAction::Ack
@@ -177,12 +183,18 @@ async fn swapped_run_payload_cannot_execute_another_same_owner_job() -> Result<(
 
         let mut corrupted = claimed_a;
         corrupted.payload = json!({"automation_run_id": run_b.as_uuid()});
-        let error = handle_job_with_documents_owned(pool.clone(),
-        &corrupted,
-        &corrupted.lease(owner),
-        Duration::from_secs(30),
-        None,
-        None, &deepref_worker::config::WorkerConfig::from_source(&|name| (name == "APP_ENV").then(|| "local".into())).expect("local worker configuration"))
+        let error = handle_job_with_documents_owned(
+            pool.clone(),
+            &corrupted,
+            &corrupted.lease(owner),
+            Duration::from_secs(30),
+            None,
+            None,
+            &deepref_worker::config::WorkerConfig::from_source(&|name| {
+                (name == "APP_ENV").then(|| "local".into())
+            })
+            .expect("local worker configuration"),
+        )
         .await;
         ensure!(error.is_err(), "swapped automation payload was accepted");
 
@@ -256,12 +268,18 @@ async fn unknown_step_fails_closed_and_lease_owner_is_required() -> Result<()> {
         transaction.commit().await?;
 
         let claimed = claimed_job(&pool, job_id, "worker-policy").await?;
-        let wrong_owner = handle_job_with_documents_owned(pool.clone(),
-        &claimed,
-        &claimed.lease("another-worker"),
-        Duration::from_secs(30),
-        None,
-        None, &deepref_worker::config::WorkerConfig::from_source(&|name| (name == "APP_ENV").then(|| "local".into())).expect("local worker configuration"))
+        let wrong_owner = handle_job_with_documents_owned(
+            pool.clone(),
+            &claimed,
+            &claimed.lease("another-worker"),
+            Duration::from_secs(30),
+            None,
+            None,
+            &deepref_worker::config::WorkerConfig::from_source(&|name| {
+                (name == "APP_ENV").then(|| "local".into())
+            })
+            .expect("local worker configuration"),
+        )
         .await;
         ensure!(wrong_owner.is_err());
 
@@ -273,7 +291,10 @@ async fn unknown_step_fails_closed_and_lease_owner_is_required() -> Result<()> {
                 Duration::from_secs(30),
                 None,
                 None,
-                &deepref_worker::config::WorkerConfig::from_source(&|name| (name == "APP_ENV").then(|| "local".into())).expect("local worker configuration"),
+                &deepref_worker::config::WorkerConfig::from_source(
+                    &|name| (name == "APP_ENV").then(|| "local".into())
+                )
+                .expect("local worker configuration"),
             )
             .await?
                 == DeliveryAction::Terminate
@@ -349,7 +370,10 @@ async fn crashed_step_is_reclaimed_by_new_owner_without_repeating_completed_step
                 Duration::from_secs(30),
                 None,
                 None,
-                &deepref_worker::config::WorkerConfig::from_source(&|name| (name == "APP_ENV").then(|| "local".into())).expect("local worker configuration"),
+                &deepref_worker::config::WorkerConfig::from_source(
+                    &|name| (name == "APP_ENV").then(|| "local".into())
+                )
+                .expect("local worker configuration"),
             )
             .await?
                 == DeliveryAction::Ack

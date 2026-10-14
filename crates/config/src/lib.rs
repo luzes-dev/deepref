@@ -1,17 +1,17 @@
 mod ai;
 mod api;
 mod database;
+mod document;
 mod environment;
 mod error;
-mod listen;
-mod telemetry;
-mod smtp;
-mod workflow;
-mod source;
-mod worker;
-mod document;
-mod pdf;
 mod integrations;
+mod listen;
+mod pdf;
+mod smtp;
+mod source;
+mod telemetry;
+mod worker;
+mod workflow;
 
 use std::collections::HashMap;
 
@@ -19,19 +19,21 @@ pub use ai::{
     AiProviderConfig, AiProviderKind, DEFAULT_AI_MODEL, DEFAULT_OPENCODE_BASE_URL,
     DEFAULT_ZAI_BASE_URL, ModelPriceOverride,
 };
+pub use api::ApiSettings;
 pub use database::DatabaseConfig;
+pub use document::{
+    DEFAULT_MAX_DOCUMENT_BYTES, DocumentConfig, DocumentStorageBackend, MAX_DOCUMENT_BYTES,
+};
 pub use environment::{APP_ENV, Environment, load_local_dotenv_files};
 pub use error::ConfigError;
-pub use listen::{ALLOW_NETWORK_BIND, API_BIND_ADDR, DEFAULT_API_BIND_ADDR, ListenConfig};
-pub use telemetry::TelemetryConfig;
-pub use smtp::{SmtpConfig, SmtpTls};
-pub use workflow::WorkflowConfig;
-pub use api::ApiSettings;
-pub use source::ConfigSource;
-pub use worker::WorkerSettings;
-pub use document::{DocumentConfig, DocumentStorageBackend, DEFAULT_MAX_DOCUMENT_BYTES, MAX_DOCUMENT_BYTES};
-pub use pdf::PdfConfig;
 pub use integrations::CrossrefConfig;
+pub use listen::{ALLOW_NETWORK_BIND, API_BIND_ADDR, DEFAULT_API_BIND_ADDR, ListenConfig};
+pub use pdf::PdfConfig;
+pub use smtp::{SmtpConfig, SmtpTls};
+pub use source::ConfigSource;
+pub use telemetry::TelemetryConfig;
+pub use worker::WorkerSettings;
+pub use workflow::WorkflowConfig;
 
 #[derive(Debug, Clone)]
 pub struct RuntimeConfig {

@@ -24,13 +24,23 @@ fn proposal_status_parses_and_serializes_canonical_lifecycle_values() {
         ProposalStatus::Expired,
     ] {
         assert_eq!(ProposalStatus::parse(status.as_str()), Some(status));
-        assert_eq!(serde_json::to_value(status).expect("status JSON"), json!(status.as_str()));
+        assert_eq!(
+            serde_json::to_value(status).expect("status JSON"),
+            json!(status.as_str())
+        );
         assert_eq!(
             serde_json::from_value::<ProposalStatus>(json!(status.as_str())).expect("status"),
             status
         );
     }
-    for invalid in ["", "Pending", " accepted", "rejected ", "resolved", "unknown"] {
+    for invalid in [
+        "",
+        "Pending",
+        " accepted",
+        "rejected ",
+        "resolved",
+        "unknown",
+    ] {
         assert_eq!(ProposalStatus::parse(invalid), None);
         assert!(serde_json::from_value::<ProposalStatus>(json!(invalid)).is_err());
     }

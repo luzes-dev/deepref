@@ -76,7 +76,9 @@
 		refetchInterval: (query) =>
 			polling ||
 			(query.state.data?.pages ?? []).some((page) =>
-				page.data.items.some((item) => item.status === 'queued' || item.status === 'fetching')
+				page.data.items.some(
+					(item) => item.status === 'queued' || item.status === 'fetching'
+				)
 			)
 				? 2_000
 				: false,
@@ -88,7 +90,11 @@
 	const display = $derived(run ? runStatusDisplay(run.status, run.failed_count) : undefined);
 	const progress = $derived(
 		run && run.fetched_count + run.failed_count + run.queued_count > 0
-			? Math.round(((run.fetched_count + run.failed_count) / (run.fetched_count + run.failed_count + run.queued_count)) * 100)
+			? Math.round(
+					((run.fetched_count + run.failed_count) /
+						(run.fetched_count + run.failed_count + run.queued_count)) *
+						100
+				)
 			: 0
 	);
 	const queryError = $derived(runQuery.error ?? itemsQuery.error);
@@ -193,15 +199,22 @@
 						</p>
 						{#if !polling && run.failed_count > 0}
 							<p class="text-xs text-muted-foreground" data-testid="run-misses">
-								{pluralize(run.failed_count, 'article')} could not be fetched. Each
-								one below says why.
+								{pluralize(run.failed_count, 'article')} could not be fetched. Each one
+								below says why.
 							</p>
 						{/if}
 						{#if run.strategy === 'citation_traversal' || run.strategy === 'provider_refresh'}
-							<p class="text-xs text-muted-foreground">Citation depth {run.max_depth}</p>
+							<p class="text-xs text-muted-foreground">
+								Citation depth {run.max_depth}
+							</p>
 						{/if}
 						{#if polling && run}
-							<Button variant="outline" size="sm" onclick={cancel} disabled={cancelMutation.isPending}>Cancel import</Button>
+							<Button
+								variant="outline"
+								size="sm"
+								onclick={cancel}
+								disabled={cancelMutation.isPending}>Cancel import</Button
+							>
 						{/if}
 					</section>
 
@@ -226,16 +239,27 @@
 													<p class="line-clamp-2 text-sm">{item.title}</p>
 												{/if}
 												<Badge
-													variant={item.kind === 'doi' ? ingestionItemStatusVariant(item.status) : pmidItemStatusVariant(item.status)}
+													variant={item.kind === 'doi'
+														? ingestionItemStatusVariant(item.status)
+														: pmidItemStatusVariant(item.status)}
 													class="my-1 whitespace-nowrap"
-													>{item.kind === 'doi' ? ingestionItemStatusLabel(item.status) : pmidItemStatusLabel(item.status)}</Badge
+													>{item.kind === 'doi'
+														? ingestionItemStatusLabel(item.status)
+														: pmidItemStatusLabel(item.status)}</Badge
 												>
 												<p class="truncate text-xs text-muted-foreground">
-													{item.kind === 'doi' ? 'DOI' : 'PMID'} {item.identifier}
+													{item.kind === 'doi' ? 'DOI' : 'PMID'}
+													{item.identifier}
 												</p>
 												{#if item.kind === 'doi'}
-													<p class="text-xs text-muted-foreground">Depth {item.depth} · Attempts {item.attempts}</p>
-													{#if item.parent_doi}<p class="break-all text-xs text-muted-foreground">From {item.parent_doi}</p>{/if}
+													<p class="text-xs text-muted-foreground">
+														Depth {item.depth} · Attempts {item.attempts}
+													</p>
+													{#if item.parent_doi}<p
+															class="text-xs break-all text-muted-foreground"
+														>
+															From {item.parent_doi}
+														</p>{/if}
 												{/if}
 												{#if item.last_error}
 													<p

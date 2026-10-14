@@ -112,10 +112,18 @@ mod tests {
 
     #[test]
     fn queued_wire_kinds_round_trip() {
-        for kind in [JobKind::WorkFetchRequested, JobKind::RecomputeMetrics,
-            JobKind::ImportDeduplication, JobKind::PmidImport, JobKind::AutomationRun,
-            JobKind::AssistantAgentRun, JobKind::WorkflowStep, JobKind::RecomputePrisma,
-            JobKind::RetrieveDocument, JobKind::ParseDocument] {
+        for kind in [
+            JobKind::WorkFetchRequested,
+            JobKind::RecomputeMetrics,
+            JobKind::ImportDeduplication,
+            JobKind::PmidImport,
+            JobKind::AutomationRun,
+            JobKind::AssistantAgentRun,
+            JobKind::WorkflowStep,
+            JobKind::RecomputePrisma,
+            JobKind::RetrieveDocument,
+            JobKind::ParseDocument,
+        ] {
             assert_eq!(kind.as_str().parse::<JobKind>().unwrap(), kind);
             assert_eq!(serde_json::to_value(kind).unwrap(), kind.as_str());
         }
@@ -129,8 +137,13 @@ mod tests {
 
     #[test]
     fn durable_job_states_round_trip_and_reject_invalid_values() {
-        for state in [JobState::Queued, JobState::Running, JobState::Completed,
-            JobState::Failed, JobState::Dead] {
+        for state in [
+            JobState::Queued,
+            JobState::Running,
+            JobState::Completed,
+            JobState::Failed,
+            JobState::Dead,
+        ] {
             assert_eq!(state.as_str().parse::<JobState>().unwrap(), state);
         }
         for invalid in ["", "complete", "RUNNING", " queued"] {

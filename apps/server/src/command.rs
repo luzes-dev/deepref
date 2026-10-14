@@ -17,9 +17,7 @@ impl Command {
             [command] if command == "all" => Ok(Self::All),
             [command] if command == "migrate" => Ok(Self::Migrate),
             [command] if command == "--print-openapi" => Ok(Self::PrintOpenApi),
-            _ => anyhow::bail!(
-                "usage: deepref-server [serve|worker|all|migrate|--print-openapi]"
-            ),
+            _ => anyhow::bail!("usage: deepref-server [serve|worker|all|migrate|--print-openapi]"),
         }
     }
 }

@@ -4,9 +4,9 @@
     clippy::unwrap_used,
     clippy::string_slice
 )]
+use deepref_app::{AcquisitionError, ImportPersistRequest, migrate, persist_import};
 use deepref_application::{RawAuthor, RawIdentifier, RawRecord};
 use deepref_domain::{IdentifierScheme, ImportFormat};
-use deepref_app::{AcquisitionError, ImportPersistRequest, migrate, persist_import};
 use serde_json::json;
 use sqlx::{PgPool, Row};
 use uuid::Uuid;

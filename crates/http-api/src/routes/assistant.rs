@@ -105,8 +105,7 @@ async fn execute_proposal(
 fn review_preparation_failure(error: deepref_app::ReviewPreparationError) -> AssistantFailure {
     match error {
         deepref_app::ReviewPreparationError::Protocol(
-            deepref_app::ProtocolError::ProjectNotFound
-            | deepref_app::ProtocolError::NotFound,
+            deepref_app::ProtocolError::ProjectNotFound | deepref_app::ProtocolError::NotFound,
         )
         | deepref_app::ReviewPreparationError::Study(
             deepref_app::StudyError::ProjectNotFound
@@ -127,9 +126,7 @@ fn map_conversation_error(error: deepref_app::AssistantError) -> ApiError {
             ApiError::NotFound("project not found".to_owned())
         }
         deepref_app::AssistantError::InvalidInput(message) => ApiError::BadRequest(message),
-        deepref_app::AssistantError::Database(error) => {
-            ApiError::Internal(anyhow::anyhow!(error))
-        }
+        deepref_app::AssistantError::Database(error) => ApiError::Internal(anyhow::anyhow!(error)),
     }
 }
 

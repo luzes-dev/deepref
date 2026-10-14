@@ -141,7 +141,8 @@ mod depth_tests {
         }
         for value in [-1, 4, 10, i32::MAX] {
             assert!(MaxDepth::try_from(value).is_err());
-            let deserializer = serde::de::value::I32Deserializer::<serde::de::value::Error>::new(value);
+            let deserializer =
+                serde::de::value::I32Deserializer::<serde::de::value::Error>::new(value);
             assert!(MaxDepth::deserialize(deserializer).is_err());
         }
     }

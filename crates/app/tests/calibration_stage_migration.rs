@@ -11,16 +11,16 @@ use std::collections::BTreeMap;
 
 use chrono::Utc;
 use deepref_ai::{ModelParameters, ModelProfile, ResolvedModel};
+use deepref_app::{
+    CalibrationRefusal, MIGRATOR, PostgresReviewError, PostgresReviewScheduler, ProtocolActor,
+    ReviewPreparationError, SecondReviewStatus, get_ai_screening_target, get_published_protocol,
+    insert_model_route, migrate, save_protocol_draft, second_review_status, sweep_second_reviews,
+};
 use deepref_application::workflows::AutonomyTask;
 use deepref_application::{ProtocolCriterionCommand, SaveProtocolDraftCommand};
 use deepref_domain::{
     Actor, ActorKind, CriterionDimension, CriterionKind, CriterionStage, FrameworkKind, ProjectId,
     ProtocolVersionId, ReportId, ScreeningStage,
-};
-use deepref_app::{
-    CalibrationRefusal, MIGRATOR, PostgresReviewError, PostgresReviewScheduler, ProtocolActor,
-    ReviewPreparationError, SecondReviewStatus, get_ai_screening_target, get_published_protocol,
-    insert_model_route, migrate, save_protocol_draft, second_review_status, sweep_second_reviews,
 };
 use deepref_review::{
     CalibrationBundleId, ReviewDefinitionKey, ReviewOrigin, ReviewRunSnapshot, ReviewScheduler,
@@ -207,8 +207,7 @@ fn rejection_message(error: sqlx::Error) -> String {
 
 #[tokio::test]
 async fn legacy_calibration_bundles_keep_scheme_one_and_never_admit_automation() {
-    let Some(url) =
-        deepref_app::test_isolation::isolated_empty_url_from_env("DATABASE_URL").await
+    let Some(url) = deepref_app::test_isolation::isolated_empty_url_from_env("DATABASE_URL").await
     else {
         return;
     };
@@ -349,8 +348,7 @@ async fn upgrade_legacy_database(legacy_url: &str) {
 
 #[tokio::test]
 async fn new_calibration_bundles_must_state_a_stage_and_a_component_snapshot() {
-    let Some(pool) =
-        deepref_app::test_isolation::isolated_pool_from_env("DATABASE_URL", 4).await
+    let Some(pool) = deepref_app::test_isolation::isolated_pool_from_env("DATABASE_URL", 4).await
     else {
         return;
     };

@@ -26,8 +26,7 @@
 	const pathname = $derived(page.url.pathname);
 
 	const hasInspector = $derived(
-		(workspace.view === 'ingestions' &&
-			Boolean(workspace.selectedAcquisition)) ||
+		(workspace.view === 'ingestions' && Boolean(workspace.selectedAcquisition)) ||
 			(['articles', 'graph', 'recommendations'].includes(workspace.view) &&
 				Boolean(workspace.selectedArticle))
 	);
@@ -105,10 +104,10 @@
 								class="min-w-12.5 transition-all duration-300 ease-in-out"
 							>
 								{#if workspace.view === 'ingestions'}
-										<AcquisitionInspector
-											collapsed={workspace.inspectorCollapsed.current}
-											onToggleCollapse={toggleInspector}
-										/>
+									<AcquisitionInspector
+										collapsed={workspace.inspectorCollapsed.current}
+										onToggleCollapse={toggleInspector}
+									/>
 								{:else if workspace.view === 'articles' || workspace.view === 'graph' || workspace.view === 'recommendations'}
 									<ArticleInspector
 										collapsed={workspace.inspectorCollapsed.current}

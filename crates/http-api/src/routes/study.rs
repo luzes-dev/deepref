@@ -347,10 +347,9 @@ pub(crate) async fn list_project_studies(
         .iter()
         .map(|study| Uuid::from(study.id))
         .collect::<Vec<_>>();
-    let mut reports =
-        deepref_app::list_reports_for_studies(&state.pool, project_id, &study_ids)
-            .await
-            .map_err(map_study_error)?;
+    let mut reports = deepref_app::list_reports_for_studies(&state.pool, project_id, &study_ids)
+        .await
+        .map_err(map_study_error)?;
     Ok(Json(StudyListDto {
         items: studies
             .items
@@ -1117,20 +1116,10 @@ pub(crate) fn map_appraisal_error(error: deepref_app::AppraisalError) -> ApiErro
     match error {
         deepref_app::AppraisalError::Database(error) => ApiError::Database(error),
         deepref_app::AppraisalError::ReportNotInProject
-        | deepref_app::AppraisalError::AssessmentNotFound => {
-            ApiError::NotFound(error.to_string())
-        }
-        deepref_app::AppraisalError::Definition(error) => {
-            ApiError::BadRequest(error.to_string())
-        }
-        deepref_app::AppraisalError::Validation(error) => {
-            ApiError::BadRequest(error.to_string())
-        }
-        deepref_app::AppraisalError::EvidenceNotInReport => {
-            ApiError::BadRequest(error.to_string())
-        }
-        deepref_app::AppraisalError::DataIntegrity(message) => {
-            ApiError::DataIntegrity(message)
-        }
+        | deepref_app::AppraisalError::AssessmentNotFound => ApiError::NotFound(error.to_string()),
+        deepref_app::AppraisalError::Definition(error) => ApiError::BadRequest(error.to_string()),
+        deepref_app::AppraisalError::Validation(error) => ApiError::BadRequest(error.to_string()),
+        deepref_app::AppraisalError::EvidenceNotInReport => ApiError::BadRequest(error.to_string()),
+        deepref_app::AppraisalError::DataIntegrity(message) => ApiError::DataIntegrity(message),
     }
 }

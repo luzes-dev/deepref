@@ -20,9 +20,12 @@ async fn database() -> Option<PgPool> {
     let pool = deepref_app::test_isolation::isolated_pool_from_env_first(
         &["TEST_DATABASE_URL", "DATABASE_URL"],
         5,
-    ).await?;
+    )
+    .await?;
     sqlx::query("UPDATE settings SET crossref_mailto='tests@example.org' WHERE id=1")
-        .execute(&pool).await.expect("Crossref test configuration should be stored");
+        .execute(&pool)
+        .await
+        .expect("Crossref test configuration should be stored");
     Some(pool)
 }
 
@@ -31,28 +34,50 @@ async fn doi_acquisitions_require_mailto_and_expose_project_scoped_items_and_dep
     let Some(pool) = database().await else { return };
     let project = Uuid::new_v4();
     sqlx::query("INSERT INTO projects (id,name) VALUES ($1,'canonical DOI')")
-        .bind(project).execute(&pool).await.unwrap();
-    let create = || Request::builder().method("POST")
-        .uri(format!("/projects/{project}/acquisitions"))
-        .header("content-type", "application/json")
-        .body(Body::from(json!({"seed_dois":["10.1000/canonical"],"max_depth":2}).to_string())).unwrap();
+        .bind(project)
+        .execute(&pool)
+        .await
+        .unwrap();
+    let create = || {
+        Request::builder()
+            .method("POST")
+            .uri(format!("/projects/{project}/acquisitions"))
+            .header("content-type", "application/json")
+            .body(Body::from(
+                json!({"seed_dois":["10.1000/canonical"],"max_depth":2}).to_string(),
+            ))
+            .unwrap()
+    };
     sqlx::query("UPDATE settings SET crossref_mailto='' WHERE id=1")
-        .execute(&pool).await.unwrap();
+        .execute(&pool)
+        .await
+        .unwrap();
     let rejected = call(&pool, create()).await;
     assert!(!rejected.status().is_success());
-    let count: i64 = sqlx::query_scalar("SELECT count(*) FROM acquisition_runs WHERE project_id=$1")
-        .bind(project).fetch_one(&pool).await.unwrap();
+    let count: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM acquisition_runs WHERE project_id=$1")
+            .bind(project)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
     assert_eq!(count, 0);
     sqlx::query("UPDATE settings SET crossref_mailto='tests@example.org' WHERE id=1")
-        .execute(&pool).await.unwrap();
+        .execute(&pool)
+        .await
+        .unwrap();
     let created = call(&pool, create()).await;
     assert_eq!(created.status(), StatusCode::CREATED);
     let body = json_body(created).await;
     assert_eq!(body["max_depth"], 2);
     let id = Uuid::parse_str(body["id"].as_str().unwrap()).unwrap();
-    let items = call(&pool, Request::builder()
-        .uri(format!("/projects/{project}/acquisitions/{id}/items"))
-        .body(Body::empty()).unwrap()).await;
+    let items = call(
+        &pool,
+        Request::builder()
+            .uri(format!("/projects/{project}/acquisitions/{id}/items"))
+            .body(Body::empty())
+            .unwrap(),
+    )
+    .await;
     assert_eq!(items.status(), StatusCode::OK);
     let items = json_body(items).await;
     assert_eq!(items["items"][0]["identifier"], "10.1000/canonical");
@@ -61,10 +86,17 @@ async fn doi_acquisitions_require_mailto_and_expose_project_scoped_items_and_dep
     assert!(items["items"][0]["report_id"].is_string());
     let wrong_project = Uuid::new_v4();
     for suffix in ["items", "cancel"] {
-        let response = call(&pool, Request::builder()
-            .method(if suffix == "cancel" { "POST" } else { "GET" })
-            .uri(format!("/projects/{wrong_project}/acquisitions/{id}/{suffix}"))
-            .body(Body::empty()).unwrap()).await;
+        let response = call(
+            &pool,
+            Request::builder()
+                .method(if suffix == "cancel" { "POST" } else { "GET" })
+                .uri(format!(
+                    "/projects/{wrong_project}/acquisitions/{id}/{suffix}"
+                ))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await;
         assert_eq!(response.status(), StatusCode::NOT_FOUND);
     }
 }
@@ -75,10 +107,16 @@ fn api_config() -> ApiConfig {
         &HashMap::from([("APP_ENV".to_owned(), "local".to_owned())]),
     )
     .expect("local test runtime should parse");
-    ApiConfig { documents: deepref_config::DocumentConfig::from_source(&|name| (name == "APP_ENV").then(|| "local".into())).expect("local test document configuration"), runtime,
-    bind_addr: "127.0.0.1:0".parse().unwrap(),
-    cors_allow_any: false,
-    cors_origins: vec!["http://localhost:3000".parse().unwrap()], }
+    ApiConfig {
+        documents: deepref_config::DocumentConfig::from_source(&|name| {
+            (name == "APP_ENV").then(|| "local".into())
+        })
+        .expect("local test document configuration"),
+        runtime,
+        bind_addr: "127.0.0.1:0".parse().unwrap(),
+        cors_allow_any: false,
+        cors_origins: vec!["http://localhost:3000".parse().unwrap()],
+    }
 }
 
 async fn call(pool: &PgPool, request: Request<Body>) -> Response<Body> {
@@ -894,19 +932,40 @@ async fn acquisition_cancel_requires_an_existing_active_run() {
     let Some(pool) = database().await else { return };
     let project = Uuid::new_v4();
     sqlx::query("INSERT INTO projects (id,name) VALUES ($1,'cancel test')")
-        .bind(project).execute(&pool).await.unwrap();
-    let cancel = |id| Request::builder().method("POST")
-        .uri(format!("/projects/{project}/acquisitions/{id}/cancel")).body(Body::empty()).unwrap();
-    assert_eq!(call(&pool, cancel(Uuid::new_v4())).await.status(), StatusCode::NOT_FOUND);
+        .bind(project)
+        .execute(&pool)
+        .await
+        .unwrap();
+    let cancel = |id| {
+        Request::builder()
+            .method("POST")
+            .uri(format!("/projects/{project}/acquisitions/{id}/cancel"))
+            .body(Body::empty())
+            .unwrap()
+    };
+    assert_eq!(
+        call(&pool, cancel(Uuid::new_v4())).await.status(),
+        StatusCode::NOT_FOUND
+    );
     for status in ["queued", "running", "completed", "failed", "cancelled"] {
         let id = Uuid::new_v4();
         sqlx::query("INSERT INTO acquisition_runs (id,project_id,source,strategy,status,max_depth,seed_count) VALUES ($1,$2,'crossref','citation_traversal',$3,1,1)")
             .bind(id).bind(project).bind(status).execute(&pool).await.unwrap();
         let response = call(&pool, cancel(id)).await;
         let active = status == "queued" || status == "running";
-        assert_eq!(response.status(), if active { StatusCode::ACCEPTED } else { StatusCode::CONFLICT });
+        assert_eq!(
+            response.status(),
+            if active {
+                StatusCode::ACCEPTED
+            } else {
+                StatusCode::CONFLICT
+            }
+        );
         let stored: String = sqlx::query_scalar("SELECT status FROM acquisition_runs WHERE id=$1")
-            .bind(id).fetch_one(&pool).await.unwrap();
+            .bind(id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
         assert_eq!(stored, if active { "cancelled" } else { status });
         assert_eq!(call(&pool, cancel(id)).await.status(), StatusCode::CONFLICT);
     }
@@ -917,20 +976,56 @@ async fn citation_depth_ten_is_rejected_at_every_api_boundary_and_in_database() 
     let Some(pool) = database().await else { return };
     let project = Uuid::new_v4();
     sqlx::query("INSERT INTO projects (id,name) VALUES ($1,'depth test')")
-        .bind(project).execute(&pool).await.unwrap();
+        .bind(project)
+        .execute(&pool)
+        .await
+        .unwrap();
     for (method, uri, body) in [
-        ("POST", "/projects".to_owned(), json!({"name":"too deep","default_max_depth":10})),
-        ("PATCH", format!("/projects/{project}"), json!({"name":"too deep","default_max_depth":10})),
-        ("PATCH", "/settings".to_owned(), json!({"default_max_depth":10})),
-        ("POST", format!("/projects/{project}/acquisitions"), json!({"seed_dois":["10.1000/depth"],"max_depth":10})),
+        (
+            "POST",
+            "/projects".to_owned(),
+            json!({"name":"too deep","default_max_depth":10}),
+        ),
+        (
+            "PATCH",
+            format!("/projects/{project}"),
+            json!({"name":"too deep","default_max_depth":10}),
+        ),
+        (
+            "PATCH",
+            "/settings".to_owned(),
+            json!({"default_max_depth":10}),
+        ),
+        (
+            "POST",
+            format!("/projects/{project}/acquisitions"),
+            json!({"seed_dois":["10.1000/depth"],"max_depth":10}),
+        ),
     ] {
-        let response = call(&pool, Request::builder().method(method).uri(uri)
-            .header("content-type","application/json").body(Body::from(body.to_string())).unwrap()).await;
+        let response = call(
+            &pool,
+            Request::builder()
+                .method(method)
+                .uri(uri)
+                .header("content-type", "application/json")
+                .body(Body::from(body.to_string()))
+                .unwrap(),
+        )
+        .await;
         assert_eq!(response.status(), StatusCode::BAD_REQUEST);
     }
     let error = sqlx::query("UPDATE projects SET default_max_depth=10 WHERE id=$1")
-        .bind(project).execute(&pool).await.unwrap_err();
-    assert_eq!(error.as_database_error().and_then(|error| error.code()).as_deref(), Some("23514"));
+        .bind(project)
+        .execute(&pool)
+        .await
+        .unwrap_err();
+    assert_eq!(
+        error
+            .as_database_error()
+            .and_then(|error| error.code())
+            .as_deref(),
+        Some("23514")
+    );
 }
 
 #[tokio::test]
@@ -939,19 +1034,43 @@ async fn hooks_resolve_tokens_before_limiting_and_reject_unsigned_new_webhooks()
     let Some(pool) = database().await else { return };
     let unknown = Uuid::new_v4().to_string();
     for _ in 0..65 {
-        let response = call(&pool, Request::builder().method("POST")
-            .uri(format!("/hooks/workflows/{unknown}")).body(Body::from("{}")).unwrap()).await;
+        let response = call(
+            &pool,
+            Request::builder()
+                .method("POST")
+                .uri(format!("/hooks/workflows/{unknown}"))
+                .body(Body::from("{}"))
+                .unwrap(),
+        )
+        .await;
         assert_eq!(response.status(), StatusCode::NOT_FOUND);
     }
     let project = Uuid::new_v4();
     sqlx::query("INSERT INTO projects (id,name) VALUES ($1,'signed hook')")
-        .bind(project).execute(&pool).await.unwrap();
+        .bind(project)
+        .execute(&pool)
+        .await
+        .unwrap();
     let project = ProjectId::new(project);
     let actor = Actor::new(ActorKind::User, "hook-test").unwrap();
-    let graph = serde_json::from_value(json!({"nodes":[{"id":"trigger","type":"trigger.webhook","config":{}}],"edges":[]})).unwrap();
-    let workflow = deepref_app::create_workflow(&pool, project, "Signed", "", graph, &actor).await.unwrap();
-    let endpoint = deepref_app::get_webhook_config(&pool, project, workflow.id).await.unwrap();
-    let response = call(&pool, Request::builder().method("POST")
-        .uri(format!("/hooks/workflows/{}", endpoint.token)).body(Body::from("{}")).unwrap()).await;
+    let graph = serde_json::from_value(
+        json!({"nodes":[{"id":"trigger","type":"trigger.webhook","config":{}}],"edges":[]}),
+    )
+    .unwrap();
+    let workflow = deepref_app::create_workflow(&pool, project, "Signed", "", graph, &actor)
+        .await
+        .unwrap();
+    let endpoint = deepref_app::get_webhook_config(&pool, project, workflow.id)
+        .await
+        .unwrap();
+    let response = call(
+        &pool,
+        Request::builder()
+            .method("POST")
+            .uri(format!("/hooks/workflows/{}", endpoint.token))
+            .body(Body::from("{}"))
+            .unwrap(),
+    )
+    .await;
     assert_eq!(response.status(), StatusCode::FORBIDDEN);
 }

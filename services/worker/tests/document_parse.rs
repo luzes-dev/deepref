@@ -6,12 +6,12 @@
 )]
 use std::{path::Path, sync::Arc, time::Duration};
 
+use deepref_app::NewDocument;
 use deepref_application::jobs::ClaimedJob;
 use deepref_documents::{
     DocumentParser, DocumentStore, PARSER_VERSION, ParsedBlock, ParsedDocument, ParsedPage,
     PdfParserError, RemoteDocumentFetcher, RemoteFetchError, content_sha256,
 };
-use deepref_app::NewDocument;
 use deepref_worker::{
     delivery::DeliveryAction,
     processor::{handle_job_with_document_services, handle_job_with_documents},
@@ -174,12 +174,18 @@ async fn retrieve_document_is_durable_idempotent_and_records_terminal_failure() 
             attempts: 1,
             max_attempts: 5,
         };
-        let result = handle_job_with_document_services(pool.clone(),
-        &job,
-        Duration::from_secs(30),
-        Some(Arc::clone(&store)),
-        None,
-        Some(Arc::new(FakeFetcher { fail })), &deepref_worker::config::WorkerConfig::from_source(&|name| (name == "APP_ENV").then(|| "local".into())).expect("local worker configuration"))
+        let result = handle_job_with_document_services(
+            pool.clone(),
+            &job,
+            Duration::from_secs(30),
+            Some(Arc::clone(&store)),
+            None,
+            Some(Arc::new(FakeFetcher { fail })),
+            &deepref_worker::config::WorkerConfig::from_source(&|name| {
+                (name == "APP_ENV").then(|| "local".into())
+            })
+            .expect("local worker configuration"),
+        )
         .await;
         // A fetched file that is not a valid PDF is a permanent failure: the
         // document is marked failed once and the job is not retried.
@@ -202,12 +208,18 @@ async fn retrieve_document_is_durable_idempotent_and_records_terminal_failure() 
             .await
             .unwrap();
             assert_eq!(parse_jobs, 1);
-            let second = handle_job_with_document_services(pool.clone(),
-            &job,
-            Duration::from_secs(30),
-            Some(Arc::clone(&store)),
-            None,
-            Some(Arc::new(FakeFetcher { fail: false })), &deepref_worker::config::WorkerConfig::from_source(&|name| (name == "APP_ENV").then(|| "local".into())).expect("local worker configuration"))
+            let second = handle_job_with_document_services(
+                pool.clone(),
+                &job,
+                Duration::from_secs(30),
+                Some(Arc::clone(&store)),
+                None,
+                Some(Arc::new(FakeFetcher { fail: false })),
+                &deepref_worker::config::WorkerConfig::from_source(&|name| {
+                    (name == "APP_ENV").then(|| "local".into())
+                })
+                .expect("local worker configuration"),
+            )
             .await
             .unwrap();
             assert_eq!(second, DeliveryAction::Ack);
@@ -280,21 +292,28 @@ async fn concurrent_retrieval_completion_cleans_the_losing_object() {
         attempts: 1,
         max_attempts: 5,
     };
-    let config = deepref_worker::config::WorkerConfig::from_source(
-        &|name| (name == "APP_ENV").then(|| "local".into()),
-    ).expect("local worker configuration");
-    let first = handle_job_with_document_services(pool.clone(),
-    &job,
-    Duration::from_secs(30),
-    Some(Arc::clone(&store)),
-    None,
-    Some(Arc::clone(&fetcher)), &config);
-    let second = handle_job_with_document_services(pool.clone(),
-    &job,
-    Duration::from_secs(30),
-    Some(Arc::clone(&store)),
-    None,
-    Some(Arc::clone(&fetcher)), &config);
+    let config = deepref_worker::config::WorkerConfig::from_source(&|name| {
+        (name == "APP_ENV").then(|| "local".into())
+    })
+    .expect("local worker configuration");
+    let first = handle_job_with_document_services(
+        pool.clone(),
+        &job,
+        Duration::from_secs(30),
+        Some(Arc::clone(&store)),
+        None,
+        Some(Arc::clone(&fetcher)),
+        &config,
+    );
+    let second = handle_job_with_document_services(
+        pool.clone(),
+        &job,
+        Duration::from_secs(30),
+        Some(Arc::clone(&store)),
+        None,
+        Some(Arc::clone(&fetcher)),
+        &config,
+    );
     let (first, second) = tokio::join!(first, second);
     assert_eq!(first.unwrap(), DeliveryAction::Ack);
     assert_eq!(second.unwrap(), DeliveryAction::Ack);
@@ -302,7 +321,10 @@ async fn concurrent_retrieval_completion_cleans_the_losing_object() {
     let document = deepref_app::get_document_by_id(&pool, document_id)
         .await
         .unwrap();
-    assert_eq!(document.status, deepref_domain::documents::DocumentStatus::Uploaded);
+    assert_eq!(
+        document.status,
+        deepref_domain::documents::DocumentStatus::Uploaded
+    );
     let authoritative_key = document.object_key.clone().unwrap();
     let keys = stored_keys.lock().await.clone();
     assert_eq!(keys.len(), 2);
@@ -320,12 +342,18 @@ async fn concurrent_retrieval_completion_cleans_the_losing_object() {
     .unwrap();
     assert_eq!(parse_jobs, 1);
 
-    let retry = handle_job_with_document_services(pool.clone(),
-    &job,
-    Duration::from_secs(30),
-    Some(Arc::clone(&store)),
-    None,
-    Some(fetcher), &deepref_worker::config::WorkerConfig::from_source(&|name| (name == "APP_ENV").then(|| "local".into())).expect("local worker configuration"))
+    let retry = handle_job_with_document_services(
+        pool.clone(),
+        &job,
+        Duration::from_secs(30),
+        Some(Arc::clone(&store)),
+        None,
+        Some(fetcher),
+        &deepref_worker::config::WorkerConfig::from_source(&|name| {
+            (name == "APP_ENV").then(|| "local".into())
+        })
+        .expect("local worker configuration"),
+    )
     .await
     .unwrap();
     assert_eq!(retry, DeliveryAction::Ack);
@@ -417,19 +445,31 @@ async fn parse_document_is_streamed_versioned_and_idempotent() {
     };
     let store = Arc::new(store);
     let parser: Arc<dyn DocumentParser> = Arc::new(FakeParser);
-    let first = handle_job_with_documents(pool.clone(),
-    &job,
-    Duration::from_secs(30),
-    Some(Arc::clone(&store)),
-    Some(Arc::clone(&parser)), &deepref_worker::config::WorkerConfig::from_source(&|name| (name == "APP_ENV").then(|| "local".into())).expect("local worker configuration"))
+    let first = handle_job_with_documents(
+        pool.clone(),
+        &job,
+        Duration::from_secs(30),
+        Some(Arc::clone(&store)),
+        Some(Arc::clone(&parser)),
+        &deepref_worker::config::WorkerConfig::from_source(&|name| {
+            (name == "APP_ENV").then(|| "local".into())
+        })
+        .expect("local worker configuration"),
+    )
     .await
     .unwrap();
     assert_eq!(first, DeliveryAction::Ack);
-    let second = handle_job_with_documents(pool.clone(),
-    &job,
-    Duration::from_secs(30),
-    Some(store),
-    Some(parser), &deepref_worker::config::WorkerConfig::from_source(&|name| (name == "APP_ENV").then(|| "local".into())).expect("local worker configuration"))
+    let second = handle_job_with_documents(
+        pool.clone(),
+        &job,
+        Duration::from_secs(30),
+        Some(store),
+        Some(parser),
+        &deepref_worker::config::WorkerConfig::from_source(&|name| {
+            (name == "APP_ENV").then(|| "local".into())
+        })
+        .expect("local worker configuration"),
+    )
     .await
     .unwrap();
     assert_eq!(second, DeliveryAction::Ack);
@@ -451,7 +491,10 @@ async fn parse_document_is_streamed_versioned_and_idempotent() {
     let document = deepref_app::get_document_by_id(&pool, document_id)
         .await
         .unwrap();
-    assert_eq!(document.status, deepref_domain::documents::DocumentStatus::Available);
+    assert_eq!(
+        document.status,
+        deepref_domain::documents::DocumentStatus::Available
+    );
     assert!(document.ocr_required);
     assert_eq!(
         document.active_parser_version.as_deref(),

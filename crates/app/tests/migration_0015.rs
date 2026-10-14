@@ -26,8 +26,7 @@ const MIGRATIONS_THROUGH_0014: [&str; 14] = [
 
 #[tokio::test]
 async fn migration_0015_adds_reason_freshness_without_reading_missing_created_at() {
-    let Some(url) = deepref_app::test_isolation::isolated_url_from_env("DATABASE_URL").await
-    else {
+    let Some(url) = deepref_app::test_isolation::isolated_url_from_env("DATABASE_URL").await else {
         return;
     };
     let mut connection = PgConnection::connect(&url)

@@ -277,8 +277,12 @@ async fn write_secrets(
     for node in &graph.nodes {
         if node.node_type == "integration.http_request" {
             let origin = deepref_application::workflows::conditions::fixed_url_origin(
-                node.config.get("url").and_then(Value::as_str).unwrap_or_default(),
-            ).ok();
+                node.config
+                    .get("url")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default(),
+            )
+            .ok();
             sqlx::query(
                 "DELETE FROM workflow_secrets WHERE workflow_id=$1 AND node_id=$2
                  AND origin IS DISTINCT FROM $3",
@@ -303,10 +307,17 @@ async fn write_secrets(
                 .bind(&secret.node_id)
                 .bind(&secret.key)
                 .bind(value)
-                .bind(graph.nodes.iter().find(|node| node.id == secret.node_id)
-                    .filter(|node| node.node_type == "integration.http_request")
-                    .and_then(|node| node.config.get("url").and_then(Value::as_str))
-                    .and_then(|url| deepref_application::workflows::conditions::fixed_url_origin(url).ok()))
+                .bind(
+                    graph
+                        .nodes
+                        .iter()
+                        .find(|node| node.id == secret.node_id)
+                        .filter(|node| node.node_type == "integration.http_request")
+                        .and_then(|node| node.config.get("url").and_then(Value::as_str))
+                        .and_then(|url| {
+                            deepref_application::workflows::conditions::fixed_url_origin(url).ok()
+                        }),
+                )
                 .execute(&mut **tx)
                 .await?;
             }
@@ -507,7 +518,8 @@ pub async fn validate_workflow_draft(
     email_configured: bool,
 ) -> Result<ValidationReport, WorkflowError> {
     let workflow = get_workflow(pool, project_id, workflow_id).await?;
-    let ctx = validation_context(pool, workflow_id, &workflow.draft_graph, email_configured).await?;
+    let ctx =
+        validation_context(pool, workflow_id, &workflow.draft_graph, email_configured).await?;
     Ok(validate_graph(&workflow.draft_graph, &ctx))
 }
 
@@ -1043,7 +1055,10 @@ pub async fn advance_run_in_transaction(
     .await?
     .ok_or(WorkflowError::RunNotFound)?;
     let status = parse_run_status(row.try_get("status")?)?;
-    if matches!(status, WorkflowRunStatus::Completed | WorkflowRunStatus::Failed | WorkflowRunStatus::Cancelled) {
+    if matches!(
+        status,
+        WorkflowRunStatus::Completed | WorkflowRunStatus::Failed | WorkflowRunStatus::Cancelled
+    ) {
         return Ok(());
     }
     let project_id: Uuid = row.get("project_id");
@@ -1343,7 +1358,13 @@ pub async fn get_workflow_run(
     .bind(NODE_SNAPSHOT_LIMIT_BYTES)
     .fetch_all(pool)
     .await?;
-    run_from_row(&row, nodes.iter().map(node_run_from_row).collect::<Result<_, _>>()?)
+    run_from_row(
+        &row,
+        nodes
+            .iter()
+            .map(node_run_from_row)
+            .collect::<Result<_, _>>()?,
+    )
 }
 
 /// Whether an active blind audit withholds this project's run inspection. Starting a
@@ -1433,7 +1454,10 @@ pub async fn begin_node_execution(
     let status = parse_node_run_state(row.try_get("status")?)?;
     let run_status = parse_run_status(row.try_get("run_status")?)?;
     if !matches!(status, NodeRunState::Queued | NodeRunState::Running)
-        || !matches!(run_status, WorkflowRunStatus::Queued | WorkflowRunStatus::Running)
+        || !matches!(
+            run_status,
+            WorkflowRunStatus::Queued | WorkflowRunStatus::Running
+        )
         || !row.get::<bool, _>("holds_lease")
     {
         return Ok(StepClaim::Stale);
@@ -1525,7 +1549,11 @@ async fn resolve_inputs(
     for row in &rows {
         outputs.insert(
             (row.get("node_id"), row.get("iteration")),
-            (parse_node_run_state(row.try_get("status")?)?, row.get("fired_ports"), row.get("output")),
+            (
+                parse_node_run_state(row.try_get("status")?)?,
+                row.get("fired_ports"),
+                row.get("output"),
+            ),
         );
     }
     let multiple_ports: Vec<String> = graph

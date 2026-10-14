@@ -71,9 +71,12 @@ async function mockProjectShell(page: Page): Promise<void> {
 			await route.fulfill({ json: { items: [], next_cursor: null } });
 		}
 	);
-	await page.route(/http:\/\/localhost:4173\/api\/projects\/[^/]+\/acquisitions(?:\?.*)?$/, async (route) => {
-		await route.fulfill({ json: { items: [], next_cursor: null } });
-	});
+	await page.route(
+		/http:\/\/localhost:4173\/api\/projects\/[^/]+\/acquisitions(?:\?.*)?$/,
+		async (route) => {
+			await route.fulfill({ json: { items: [], next_cursor: null } });
+		}
+	);
 	await page.route(
 		/http:\/\/localhost:4173\/api\/notifications(?:\/unread-count)?$/,
 		async (route) => {
@@ -105,9 +108,12 @@ test('deep-links, refreshes, publishes, and amends a protocol version', async ({
 			await route.fulfill({ json: { items: [], next_cursor: null } });
 		}
 	);
-	await page.route(/http:\/\/localhost:4173\/api\/projects\/[^/]+\/acquisitions(?:\?.*)?$/, async (route) => {
-		await route.fulfill({ json: { items: [], next_cursor: null } });
-	});
+	await page.route(
+		/http:\/\/localhost:4173\/api\/projects\/[^/]+\/acquisitions(?:\?.*)?$/,
+		async (route) => {
+			await route.fulfill({ json: { items: [], next_cursor: null } });
+		}
+	);
 	await page.route(
 		/http:\/\/localhost:4173\/api\/notifications(?:\/unread-count)?$/,
 		async (route) => {

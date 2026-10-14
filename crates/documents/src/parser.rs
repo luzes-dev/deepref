@@ -83,7 +83,9 @@ impl PdfiumParser {
 
     /// One parser per process. Dropping a `Pdfium` tears down the shared PDFium library, so
     /// per-job parsers corrupt the heap when two parses overlap in a multi-threaded worker.
-    pub fn shared_from_config(config: &deepref_config::PdfConfig) -> Result<std::sync::Arc<Self>, PdfParserError> {
+    pub fn shared_from_config(
+        config: &deepref_config::PdfConfig,
+    ) -> Result<std::sync::Arc<Self>, PdfParserError> {
         // Initialization must happen once: a losing racer's `Pdfium` would be dropped and
         // tear the library down. A failed init is not cached, so a later call can retry.
         static SHARED: std::sync::Mutex<Option<std::sync::Arc<PdfiumParser>>> =
@@ -94,7 +96,10 @@ impl PdfiumParser {
         if let Some(parser) = shared.as_ref() {
             return Ok(parser.clone());
         }
-        let parser = std::sync::Arc::new(Self::from_config(config.library_path.as_deref(), ParserLimits::default())?);
+        let parser = std::sync::Arc::new(Self::from_config(
+            config.library_path.as_deref(),
+            ParserLimits::default(),
+        )?);
         *shared = Some(parser.clone());
         Ok(parser)
     }
@@ -306,7 +311,10 @@ impl DocumentParser for PdfiumParser {
     }
 }
 
-pub fn parse_pdf_file(path: &Path, config: &deepref_config::PdfConfig) -> Result<ParsedDocument, PdfParserError> {
+pub fn parse_pdf_file(
+    path: &Path,
+    config: &deepref_config::PdfConfig,
+) -> Result<ParsedDocument, PdfParserError> {
     PdfiumParser::shared_from_config(config)?.parse_file(path)
 }
 
@@ -375,7 +383,8 @@ mod tests {
         let handles: Vec<_> = (0..4)
             .map(|_| {
                 let pdf = pdf.clone();
-                let config = deepref_config::PdfConfig::from_source(&|name| std::env::var(name).ok());
+                let config =
+                    deepref_config::PdfConfig::from_source(&|name| std::env::var(name).ok());
                 std::thread::spawn(move || {
                     for _ in 0..3 {
                         let parser = PdfiumParser::shared_from_config(&config).expect("pdfium");

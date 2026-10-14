@@ -14,13 +14,13 @@ use std::{
 
 use chrono::Utc;
 use deepref_ai::AiGateway;
-use deepref_application::{
-    jobs::{ClaimedJob, JobLease},
-    workflows::{AutonomyGate, DefaultAutonomyGate, PublicationQuery},
-};
 use deepref_app::{
     AlertHit, DueAlert, NodeOutcome, StepClaim, begin_node_execution, claim_due_workflows,
     fail_abandoned_steps, finish_node_execution, record_alert_poll, record_node_retry,
+};
+use deepref_application::{
+    jobs::{ClaimedJob, JobLease},
+    workflows::{AutonomyGate, DefaultAutonomyGate, PublicationQuery},
 };
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -253,8 +253,12 @@ async fn poll_alert_sources(pool: &PgPool, alert: &DueAlert) -> Result<Vec<Alert
         {
             Ok(found) => items.extend(found),
             Err(error) => failures.push(match error {
-                deepref_integrations::CrossrefSearchError::Retryable(message) => NodeError::retryable(message),
-                deepref_integrations::CrossrefSearchError::Permanent(message) => NodeError::permanent(message),
+                deepref_integrations::CrossrefSearchError::Retryable(message) => {
+                    NodeError::retryable(message)
+                }
+                deepref_integrations::CrossrefSearchError::Permanent(message) => {
+                    NodeError::permanent(message)
+                }
             }),
         }
     }

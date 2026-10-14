@@ -13,16 +13,19 @@ pub struct ApiConfig {
 }
 
 impl ApiConfig {
-
     pub fn from_source(get: &dyn Fn(&str) -> Option<String>) -> anyhow::Result<Self> {
         let runtime = RuntimeConfig::from_source("deepref-api", get)?;
         let settings = ApiSettings::from_source(get)?;
         let documents = DocumentConfig::from_source(get)?;
-        let cors_origins = settings.cors_origins.iter().map(|value| {
-            HeaderValue::from_str(value).map_err(|error| {
-                anyhow::anyhow!("invalid API_CORS_ORIGINS entry {value}: {error}")
+        let cors_origins = settings
+            .cors_origins
+            .iter()
+            .map(|value| {
+                HeaderValue::from_str(value).map_err(|error| {
+                    anyhow::anyhow!("invalid API_CORS_ORIGINS entry {value}: {error}")
+                })
             })
-        }).collect::<Result<Vec<_>, _>>()?;
+            .collect::<Result<Vec<_>, _>>()?;
         Ok(Self {
             runtime,
             documents,

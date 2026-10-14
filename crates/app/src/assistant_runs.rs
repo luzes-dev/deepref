@@ -20,7 +20,6 @@ use uuid::Uuid;
 
 use crate::{AppendAssistantMessage, AssistantError, AssistantMessageRecord, NewAssistantPlan};
 
-
 #[derive(Debug, Clone)]
 pub struct NewAssistantAgentRun {
     pub id: Uuid,

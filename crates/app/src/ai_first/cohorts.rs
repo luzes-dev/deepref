@@ -166,7 +166,11 @@ pub async fn get_ai_first_overview(
         });
     }
     Ok(AiFirstOverview {
-        ceiling: setting.as_ref().map(|r| super::stored("ceiling", r.try_get("ceiling")?, AiFirstCeiling::parse)).transpose()?.unwrap_or(AiFirstCeiling::Off),
+        ceiling: setting
+            .as_ref()
+            .map(|r| super::stored("ceiling", r.try_get("ceiling")?, AiFirstCeiling::parse))
+            .transpose()?
+            .unwrap_or(AiFirstCeiling::Off),
         suspended_reason: setting.as_ref().and_then(|r| r.get("suspended_reason")),
         cohorts,
     })

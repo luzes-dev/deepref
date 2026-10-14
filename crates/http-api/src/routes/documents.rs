@@ -296,12 +296,9 @@ pub(crate) async fn list_missing_full_text(
     Query(query): Query<DocumentLimit>,
 ) -> Result<Json<Vec<MissingFullTextDto>>, ApiError> {
     ensure_project_scope(&state.pool, project_id).await?;
-    let items = deepref_app::list_missing_full_text(
-        &state.pool,
-        project_id,
-        bounded_limit(query.limit)?,
-    )
-    .await?;
+    let items =
+        deepref_app::list_missing_full_text(&state.pool, project_id, bounded_limit(query.limit)?)
+            .await?;
     Ok(Json(items.into_iter().map(missing_full_text_dto).collect()))
 }
 
@@ -367,16 +364,32 @@ pub(crate) async fn list_document_blocks(
     deepref_app::get_document(&state.pool, project_id, report_id, document_id)
         .await
         .map_err(map_database_document_error)?;
-    let pagination = super::pagination::PaginationParams { limit: query.limit, cursor: query.cursor };
+    let pagination = super::pagination::PaginationParams {
+        limit: query.limit,
+        cursor: query.cursor,
+    };
     let limit = pagination.limit()?;
     let cursor = pagination.decode::<(i32, i32, Uuid)>()?;
-    let search = query.q.as_deref().map(str::trim).filter(|value| !value.is_empty());
+    let search = query
+        .q
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
     if search.is_some_and(|value| value.len() > 200) {
-        return Err(ApiError::BadRequest("block search must be at most 200 bytes".to_owned()));
+        return Err(ApiError::BadRequest(
+            "block search must be at most 200 bytes".to_owned(),
+        ));
     }
     let blocks = deepref_app::get_document_blocks_page(
-        &state.pool, project_id, report_id, document_id, cursor, Some(limit + 1), search,
-    ).await?;
+        &state.pool,
+        project_id,
+        report_id,
+        document_id,
+        cursor,
+        Some(limit + 1),
+        search,
+    )
+    .await?;
     Ok(Json(super::pagination::page(
         blocks
             .into_iter()
@@ -417,8 +430,7 @@ pub(crate) async fn list_document_pages(
         .await
         .map_err(map_database_document_error)?;
     let pages =
-        deepref_app::get_document_pages(&state.pool, project_id, report_id, document_id)
-            .await?;
+        deepref_app::get_document_pages(&state.pool, project_id, report_id, document_id).await?;
     Ok(Json(
         pages
             .into_iter()
@@ -906,22 +918,20 @@ async fn attach_external_url(
     )
     .await;
     match document {
-        Ok(document) => match deepref_app::enqueue_retrieve(
-            &mut tx,
-            ProjectId::new(project_id),
-            document.id,
-        )
-        .await
-        {
-            Ok(_) => {
-                tx.commit().await?;
-                Ok(document)
+        Ok(document) => {
+            match deepref_app::enqueue_retrieve(&mut tx, ProjectId::new(project_id), document.id)
+                .await
+            {
+                Ok(_) => {
+                    tx.commit().await?;
+                    Ok(document)
+                }
+                Err(error) => {
+                    let _ = tx.rollback().await;
+                    Err(map_database_document_error(error))
+                }
             }
-            Err(error) => {
-                let _ = tx.rollback().await;
-                Err(map_database_document_error(error))
-            }
-        },
+        }
         Err(error) => {
             tx.rollback().await?;
             Err(map_database_document_error(error))
@@ -1039,13 +1049,8 @@ pub(crate) async fn acknowledge_document_identity(
             details: serde_json::json!({}),
         });
     }
-    deepref_app::acknowledge_identity_mismatch(
-        &state.pool,
-        project_id,
-        report_id,
-        document_id,
-    )
-    .await?;
+    deepref_app::acknowledge_identity_mismatch(&state.pool, project_id, report_id, document_id)
+        .await?;
     let document = deepref_app::get_document(&state.pool, project_id, report_id, document_id)
         .await
         .map_err(map_database_document_error)?;

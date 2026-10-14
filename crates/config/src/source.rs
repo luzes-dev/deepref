@@ -8,7 +8,9 @@ pub struct ConfigSource {
 
 impl ConfigSource {
     pub fn from_env() -> Self {
-        Self { values: std::env::vars().collect() }
+        Self {
+            values: std::env::vars().collect(),
+        }
     }
 
     pub fn from_map(values: HashMap<String, String>) -> Self {

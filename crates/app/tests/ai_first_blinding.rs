@@ -3,10 +3,10 @@
 //! cohort member's earlier judgment, or a workflow snapshot carrying one, stays eligible to
 //! label the cohort while knowing what the reference says.
 
+use deepref_app::screening::*;
+use deepref_app::*;
 use deepref_application::workflows::{GraphNode, Position, WorkflowGraph};
 use deepref_domain::{Actor, ActorKind, ProjectId};
-use deepref_app::*;
-use deepref_app::screening::*;
 use serde_json::json;
 use sqlx::PgPool;
 use uuid::Uuid;
