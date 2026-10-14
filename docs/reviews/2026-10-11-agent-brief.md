@@ -106,23 +106,25 @@ Your final message is your report. Include:
 
 ## Reviewed branch heads
 
-| Track    | Branch                                                | Track head |
-| -------- | ----------------------------------------------------- | ---------- |
-| Packet 1 | `ci/run-db-integration-tests-with-isolated-databases` | `ee03cf4`  |
-| E1       | `fix/screening-keyboard-guard`                        | `f21df1a`  |
-| E2       | `fix/server-safe-defaults`                            | `8d92a4d`  |
-| A        | `fix/jobs-hardening`                                  | `d068c9e`  |
-| B        | `feat/api-errors-observability`                       | `0b81e76`  |
-| C        | `fix/ai-first-and-review-retry`                       | `3027e82`  |
-| D        | `fix/assistant-plan-governance`                       | `025163d`  |
-| F        | `ci/coverage-and-scheduled-lanes`                     | `13069ed`  |
-| G        | `fix/data-correctness-smalls`                         | `38ec8d1`  |
-| H1       | `refactor/collapse-crates-and-dead-code`              | `7375bdd`  |
-| H2       | `refactor/typed-runtime-seams`                        | `0244fba`  |
-| H3       | `refactor/screening-context`                          | `c7b926f`  |
-| H5       | `refactor/legacy-plane-retirement`                    | `f1d29bd`  |
-| H4       | `refactor/durable-runs`                               | `63474a8`  |
+| Track    | Branch                                                | Track head | Review                                                |
+| -------- | ----------------------------------------------------- | ---------- | ----------------------------------------------------- |
+| Packet 1 | `ci/run-db-integration-tests-with-isolated-databases` | `ee03cf4`  | [#209](https://github.com/luzes-dev/deepref/pull/209) |
+| E1       | `fix/screening-keyboard-guard`                        | `f21df1a`  | [#210](https://github.com/luzes-dev/deepref/pull/210) |
+| E2       | `fix/server-safe-defaults`                            | `8d92a4d`  | [#215](https://github.com/luzes-dev/deepref/pull/215) |
+| A        | `fix/jobs-hardening`                                  | `d068c9e`  | [#212](https://github.com/luzes-dev/deepref/pull/212) |
+| B        | `feat/api-errors-observability`                       | `0b81e76`  | [#213](https://github.com/luzes-dev/deepref/pull/213) |
+| C        | `fix/ai-first-and-review-retry`                       | `3027e82`  | [#211](https://github.com/luzes-dev/deepref/pull/211) |
+| D        | `fix/assistant-plan-governance`                       | `025163d`  | [#214](https://github.com/luzes-dev/deepref/pull/214) |
+| F        | `ci/coverage-and-scheduled-lanes`                     | `13069ed`  | [#216](https://github.com/luzes-dev/deepref/pull/216) |
+| G        | `fix/data-correctness-smalls`                         | `38ec8d1`  | [#217](https://github.com/luzes-dev/deepref/pull/217) |
+| H1       | `refactor/collapse-crates-and-dead-code`              | `7375bdd`  | [#218](https://github.com/luzes-dev/deepref/pull/218) |
+| H2       | `refactor/typed-runtime-seams`                        | `0244fba`  | [#222](https://github.com/luzes-dev/deepref/pull/222) |
+| H3       | `refactor/screening-context`                          | `c7b926f`  | [#220](https://github.com/luzes-dev/deepref/pull/220) |
+| H5       | `refactor/legacy-plane-retirement`                    | `f1d29bd`  | [#221](https://github.com/luzes-dev/deepref/pull/221) |
+| H4       | `refactor/durable-runs`                               | `63474a8`  | [#225](https://github.com/luzes-dev/deepref/pull/225) |
 
 Integration retains these commits and their authors, plus merge repairs. The final gates apply to `integration/review-resume`, not to each intermediate branch in isolation. Final backend/consumer repair commits are `cf872d3`, `06f6978` and `d122b33`; screening/SSE follow-ups are `32d6d7c`, `ef73348`, `5137664`, `47801c1` and formatting commit `c886db4`. Source branch histories remain available for individual commit review.
 
 Review checkpoints `review/wave1-integrated` (`d402f57`) and `review/screening-integrated` (`ba0dffe`) preserve the dependency bases for wave 2 without rewriting track history. Their drafts are integration checkpoints, not additional feature work. Review individual track diffs first; merge through the checkpoints and then the final integration branch so generated contracts, migration repairs and consumer fixes are included.
+
+All listed branches are pushed. Track and checkpoint reviews are drafts; #209 retains its original non-draft state. The wave-one checkpoint is [#219](https://github.com/luzes-dev/deepref/pull/219), screening checkpoint [#223](https://github.com/luzes-dev/deepref/pull/223), and final integration [#224](https://github.com/luzes-dev/deepref/pull/224). Hosted CI fixes after publication are `7db5e7f` (nightly/target fuzz selection) and `6c675c1` (full-corpus mutation sharding), carried by the final integration draft.
