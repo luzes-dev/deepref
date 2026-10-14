@@ -367,16 +367,32 @@ pub(crate) async fn list_document_blocks(
     deepref_postgres::get_document(&state.pool, project_id, report_id, document_id)
         .await
         .map_err(map_database_document_error)?;
-    let pagination = super::pagination::PaginationParams { limit: query.limit, cursor: query.cursor };
+    let pagination = super::pagination::PaginationParams {
+        limit: query.limit,
+        cursor: query.cursor,
+    };
     let limit = pagination.limit()?;
     let cursor = pagination.decode::<(i32, i32, Uuid)>()?;
-    let search = query.q.as_deref().map(str::trim).filter(|value| !value.is_empty());
+    let search = query
+        .q
+        .as_deref()
+        .map(str::trim)
+        .filter(|value| !value.is_empty());
     if search.is_some_and(|value| value.len() > 200) {
-        return Err(ApiError::BadRequest("block search must be at most 200 bytes".to_owned()));
+        return Err(ApiError::BadRequest(
+            "block search must be at most 200 bytes".to_owned(),
+        ));
     }
     let blocks = deepref_postgres::get_document_blocks_page(
-        &state.pool, project_id, report_id, document_id, cursor, Some(limit + 1), search,
-    ).await?;
+        &state.pool,
+        project_id,
+        report_id,
+        document_id,
+        cursor,
+        Some(limit + 1),
+        search,
+    )
+    .await?;
     Ok(Json(super::pagination::page(
         blocks
             .into_iter()

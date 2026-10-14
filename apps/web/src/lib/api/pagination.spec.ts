@@ -20,13 +20,25 @@ describe('document block pagination', () => {
 		const requests: Request[] = [];
 		vi.stubGlobal('fetch', async (request: Request) => {
 			requests.push(request);
-			const page = requests.length === 1
-				? { items: Array.from({ length: 100 }, (_, id) => ({ id: String(id) })), next_cursor: 'opaque+/=cursor' }
-				: { items: [{ id: '100' }, { id: '101' }], next_cursor: null };
-			return new Response(JSON.stringify(page), { headers: { 'content-type': 'application/json' } });
+			const page =
+				requests.length === 1
+					? {
+							items: Array.from({ length: 100 }, (_, id) => ({ id: String(id) })),
+							next_cursor: 'opaque+/=cursor'
+						}
+					: { items: [{ id: '100' }, { id: '101' }], next_cursor: null };
+			return new Response(JSON.stringify(page), {
+				headers: { 'content-type': 'application/json' }
+			});
 		});
 		const controller = new AbortController();
-		const response = await fetchAllDocumentBlocks('project', 'report', 'document', 100, controller.signal);
+		const response = await fetchAllDocumentBlocks(
+			'project',
+			'report',
+			'document',
+			100,
+			controller.signal
+		);
 		expect(response.data).toHaveLength(102);
 		expect(response.data.at(-1)?.id).toBe('101');
 		expect(requests).toHaveLength(2);
@@ -40,9 +52,16 @@ describe('document block pagination', () => {
 		vi.stubGlobal('fetch', async () => {
 			calls += 1;
 			return calls === 1
-				? new Response(JSON.stringify({ items: [{ id: 'first' }], next_cursor: 'next' }), { headers: { 'content-type': 'application/json' } })
-				: new Response(JSON.stringify({ message: 'unavailable' }), { status: 503, headers: { 'content-type': 'application/json' } });
+				? new Response(JSON.stringify({ items: [{ id: 'first' }], next_cursor: 'next' }), {
+						headers: { 'content-type': 'application/json' }
+					})
+				: new Response(JSON.stringify({ message: 'unavailable' }), {
+						status: 503,
+						headers: { 'content-type': 'application/json' }
+					});
 		});
-		await expect(fetchAllDocumentBlocks('project', 'report', 'document')).rejects.toMatchObject({ status: 503 });
+		await expect(fetchAllDocumentBlocks('project', 'report', 'document')).rejects.toMatchObject(
+			{ status: 503 }
+		);
 	});
 });

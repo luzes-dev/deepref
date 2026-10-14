@@ -253,12 +253,11 @@ pub(crate) async fn cancel_ingestion(
     Path(ingestion_id): Path<Uuid>,
 ) -> Result<StatusCode, ApiError> {
     let mut transaction = state.pool.begin().await?;
-    let status: Option<String> = sqlx::query_scalar(
-        "SELECT status FROM ingestions WHERE id = $1 FOR UPDATE",
-    )
-    .bind(ingestion_id)
-    .fetch_optional(&mut *transaction)
-    .await?;
+    let status: Option<String> =
+        sqlx::query_scalar("SELECT status FROM ingestions WHERE id = $1 FOR UPDATE")
+            .bind(ingestion_id)
+            .fetch_optional(&mut *transaction)
+            .await?;
     let status = status.ok_or_else(|| ApiError::NotFound("ingestion not found".to_owned()))?;
     if status != "queued" && status != "running" {
         return Err(ApiError::Conflict {

@@ -232,6 +232,9 @@ export * from './paginatedResponseDedupeProposalDtoItemsItemCandidateIdentifiers
 export * from './paginatedResponseDedupeProposalDtoItemsItemMetadata.ts';
 export * from './paginatedResponseDedupeProposalDtoItemsItemSourceAuthors.ts';
 export * from './paginatedResponseDedupeProposalDtoItemsItemSourceIdentifiers.ts';
+export * from './paginatedResponseDocumentBlockDto.ts';
+export * from './paginatedResponseDocumentBlockDtoItemsItem.ts';
+export * from './paginatedResponseDocumentBlockDtoItemsItemBbox.ts';
 export * from './paginatedResponseIngestionDto.ts';
 export * from './paginatedResponseIngestionDtoItemsItem.ts';
 export * from './paginatedResponseIngestionItemDto.ts';

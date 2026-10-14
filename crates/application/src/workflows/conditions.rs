@@ -213,15 +213,22 @@ pub fn render_template(template: &str, data: &Value) -> String {
 
 /// HTTP templates may substitute path/query values, never scheme or authority.
 pub fn fixed_url_origin(template: &str) -> Result<String, &'static str> {
-    let (_, authority_and_path) = template.split_once("://").ok_or("URL must have a fixed origin")?;
-    let authority = authority_and_path.split(['/', '?', '#']).next().unwrap_or_default();
+    let (_, authority_and_path) = template
+        .split_once("://")
+        .ok_or("URL must have a fixed origin")?;
+    let authority = authority_and_path
+        .split(['/', '?', '#'])
+        .next()
+        .unwrap_or_default();
     if authority.contains("{{") {
         return Err("URL must have a fixed origin");
     }
     let literal = template.split("{{").next().unwrap_or(template);
     let url = url::Url::parse(literal).map_err(|_| "URL must have a fixed origin")?;
-    if !matches!(url.scheme(), "http" | "https") || url.host_str().is_none()
-        || !url.username().is_empty() || url.password().is_some()
+    if !matches!(url.scheme(), "http" | "https")
+        || url.host_str().is_none()
+        || !url.username().is_empty()
+        || url.password().is_some()
     {
         return Err("URL must have an HTTP origin without credentials");
     }
@@ -234,7 +241,9 @@ pub fn render_url_template(template: &str, data: &Value) -> Result<String, &'sta
     let mut rest = template;
     while let Some((before, after)) = rest.split_once("{{") {
         output.push_str(before);
-        let (path, tail) = after.split_once("}}").ok_or("Unclosed URL template token")?;
+        let (path, tail) = after
+            .split_once("}}")
+            .ok_or("Unclosed URL template token")?;
         if let Some(text) = detail_text(data, path.trim()) {
             use std::fmt::Write;
             for byte in text.bytes() {
@@ -384,18 +393,32 @@ mod url_tests {
 
     #[test]
     fn http_templates_require_a_fixed_origin() {
-        for url in ["{{url}}", "{{scheme}}://example.com/x", "https://{{host}}/x",
-            "https://example.com{{suffix}}/x", "https://user:password@example.com/x"] {
+        for url in [
+            "{{url}}",
+            "{{scheme}}://example.com/x",
+            "https://{{host}}/x",
+            "https://example.com{{suffix}}/x",
+            "https://user:password@example.com/x",
+        ] {
             assert!(fixed_url_origin(url).is_err(), "{url}");
         }
-        assert_eq!(fixed_url_origin("https://EXAMPLE.com:443/path/{{id}}").unwrap(), "https://example.com");
+        assert_eq!(
+            fixed_url_origin("https://EXAMPLE.com:443/path/{{id}}").unwrap(),
+            "https://example.com"
+        );
     }
 
     #[test]
     fn url_values_are_encoded_as_components_not_url_syntax() {
-        let url = render_url_template("https://example.com/p/{{id}}?q={{query}}",
-            &json!({"id":"//evil.example/a?b#c","query":"a&admin=true ü"})).unwrap();
-        assert_eq!(url, "https://example.com/p/%2F%2Fevil.example%2Fa%3Fb%23c?q=a%26admin%3Dtrue%20%C3%BC");
+        let url = render_url_template(
+            "https://example.com/p/{{id}}?q={{query}}",
+            &json!({"id":"//evil.example/a?b#c","query":"a&admin=true ü"}),
+        )
+        .unwrap();
+        assert_eq!(
+            url,
+            "https://example.com/p/%2F%2Fevil.example%2Fa%3Fb%23c?q=a%26admin%3Dtrue%20%C3%BC"
+        );
         assert_eq!(fixed_url_origin(&url).unwrap(), "https://example.com");
     }
 }

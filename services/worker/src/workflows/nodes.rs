@@ -342,8 +342,10 @@ pub async fn execute(context: &Context<'_>) -> NodeResult {
             let data = input("data").cloned().unwrap_or(Value::Null);
             let method = cfg_str(config, "method").unwrap_or("POST").to_uppercase();
             let url = deepref_application::workflows::conditions::render_url_template(
-                cfg_str(config, "url").unwrap_or_default(), &data,
-            ).map_err(NodeError::permanent)?;
+                cfg_str(config, "url").unwrap_or_default(),
+                &data,
+            )
+            .map_err(NodeError::permanent)?;
             let body = cfg_str(config, "body").map(|text| render_template(text, &data));
             if execution.test_mode {
                 // Resolved the way a real call is, so a test fails where a real run would.
