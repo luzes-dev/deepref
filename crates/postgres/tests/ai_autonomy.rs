@@ -10,9 +10,7 @@ use sqlx::PgPool;
 use uuid::Uuid;
 
 async fn database() -> Option<PgPool> {
-    let pool = deepref_postgres::test_isolation::isolated_pool_from_env("DATABASE_URL", 4).await?;
-    deepref_postgres::migrate(&pool).await.ok()?;
-    Some(pool)
+    deepref_postgres::test_isolation::isolated_pool_from_env("DATABASE_URL", 4).await
 }
 
 async fn project(pool: &PgPool) -> Uuid {

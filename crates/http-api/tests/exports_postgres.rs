@@ -14,23 +14,11 @@ use chrono::{DateTime, Timelike, Utc};
 use deepref_http_api::{config::ApiConfig, routes::router, state::AppState};
 use serde_json::Value;
 use sqlx::PgPool;
-use std::sync::OnceLock;
 use tower::ServiceExt;
 use uuid::Uuid;
 
-static DATABASE_TEST_MUTEX: OnceLock<tokio::sync::Mutex<()>> = OnceLock::new();
-
-fn test_lock() -> &'static tokio::sync::Mutex<()> {
-    DATABASE_TEST_MUTEX.get_or_init(tokio::sync::Mutex::default)
-}
-
 async fn database() -> Option<PgPool> {
-    let pool =
-        deepref_postgres::test_isolation::isolated_pool_from_env("TEST_DATABASE_URL", 5).await?;
-    deepref_postgres::migrate(&pool)
-        .await
-        .unwrap_or_else(|error| panic!("TEST_DATABASE_URL migrations failed: {error}"));
-    Some(pool)
+    deepref_postgres::test_isolation::isolated_pool_from_env("TEST_DATABASE_URL", 5).await
 }
 
 fn api_config() -> ApiConfig {
@@ -68,7 +56,6 @@ async fn response_bytes(response: Response<Body>) -> Vec<u8> {
 
 #[tokio::test]
 async fn postgres_exports_return_every_deterministic_attachment_and_boundary_statuses() {
-    let _guard = test_lock().lock().await;
     let Some(pool) = database().await else {
         return;
     };

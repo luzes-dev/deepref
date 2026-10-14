@@ -27,7 +27,7 @@ use deepref_postgres::{
     ReviewCalibrationStatus, ReviewFinalization, ReviewPreparationError, ReviewScheduleIntent,
     begin_review_attempt, complete_review_attempt, decide_ai_proposal, fail_review_attempt,
     finalize_review_proposal, get_review_run, insert_model_route, insert_review_calibration_bundle,
-    load_leased_review_run, mark_review_run_running, migrate, preview_review_identity,
+    load_leased_review_run, mark_review_run_running, preview_review_identity,
     preview_screening_identity, schedule_prepared_review_run, schedule_prepared_review_run_as,
 };
 use deepref_postgres::{
@@ -45,25 +45,8 @@ use deepref_review::{
     },
 };
 use serde_json::json;
-use sqlx::{PgPool, Postgres, Transaction};
+use sqlx::PgPool;
 use uuid::Uuid;
-
-/// Arbitrary key for the database-wide lock that serializes route fixtures.
-const ROUTE_FIXTURE_LOCK: i64 = 0x5245_5649_4557_0001;
-
-/// Route resolution is global per profile and every test inserts its own routes,
-/// so a compiled identity is stable only while no other test is inserting routes.
-/// nextest runs each test in its own process, so the lock lives in the database.
-/// It is transaction-scoped: it is released when the returned transaction ends.
-async fn route_fixture_lock(pool: &PgPool) -> Transaction<'static, Postgres> {
-    let mut transaction = pool.begin().await.expect("route lock transaction begins");
-    sqlx::query("SELECT pg_advisory_xact_lock($1)")
-        .bind(ROUTE_FIXTURE_LOCK)
-        .execute(&mut *transaction)
-        .await
-        .expect("route fixture lock is acquired");
-    transaction
-}
 
 #[test]
 fn postgres_adapter_implements_the_public_review_scheduler_port() {
@@ -72,11 +55,7 @@ fn postgres_adapter_implements_the_public_review_scheduler_port() {
 }
 
 async fn database() -> Option<PgPool> {
-    let pool = deepref_postgres::test_isolation::isolated_pool_from_env("DATABASE_URL", 8).await?;
-    migrate(&pool)
-        .await
-        .expect("DATABASE_URL migrations must apply");
-    Some(pool)
+    deepref_postgres::test_isolation::isolated_pool_from_env("DATABASE_URL", 8).await
 }
 
 async fn schedule_with_origin(
@@ -343,7 +322,6 @@ async fn delete_project(pool: &PgPool, project_id: ProjectId) {
 #[tokio::test]
 async fn automation_reviews_require_an_exact_passing_immutable_calibration_bundle() {
     let Some(pool) = database().await else { return };
-    let _lock = route_fixture_lock(&pool).await;
     let project_id = ProjectId::new(Uuid::new_v4());
     sqlx::query("INSERT INTO projects (id,name) VALUES ($1,'calibration admission')")
         .bind(project_id.as_uuid())
@@ -470,7 +448,6 @@ async fn automation_reviews_require_an_exact_passing_immutable_calibration_bundl
 #[tokio::test]
 async fn calibration_admission_is_stage_scoped_and_fails_closed() {
     let Some(pool) = database().await else { return };
-    let _lock = route_fixture_lock(&pool).await;
     insert_route(&pool, ModelProfile::Reasoning, "v1").await;
     insert_route(&pool, ModelProfile::LongContextReasoning, "v1").await;
     let (project_id, report_id) = screening_project(&pool, "stage scoped calibration").await;
@@ -594,7 +571,6 @@ async fn calibration_admission_is_stage_scoped_and_fails_closed() {
 #[tokio::test]
 async fn a_route_change_stales_only_the_stage_that_uses_it() {
     let Some(pool) = database().await else { return };
-    let _lock = route_fixture_lock(&pool).await;
     insert_route(&pool, ModelProfile::Reasoning, "v1").await;
     insert_route(&pool, ModelProfile::LongContextReasoning, "v1").await;
     let (project_id, report_id) = screening_project(&pool, "route change calibration").await;
@@ -693,7 +669,6 @@ async fn a_route_change_stales_only_the_stage_that_uses_it() {
 #[tokio::test]
 async fn republishing_the_protocol_stales_both_stages_on_protocol() {
     let Some(pool) = database().await else { return };
-    let _lock = route_fixture_lock(&pool).await;
     insert_route(&pool, ModelProfile::Reasoning, "v1").await;
     insert_route(&pool, ModelProfile::LongContextReasoning, "v1").await;
     let (project_id, report_id) = screening_project(&pool, "protocol republish calibration").await;
@@ -840,7 +815,6 @@ async fn schedule(pool: &PgPool, project_id: ProjectId) -> deepref_review::Revie
 #[tokio::test]
 async fn a_failed_review_run_is_announced_once() {
     let Some(pool) = database().await else { return };
-    let _lock = route_fixture_lock(&pool).await;
     let project_id = ProjectId::new(Uuid::new_v4());
     sqlx::query("INSERT INTO projects (id,name) VALUES ($1,'review failure notice')")
         .bind(project_id.as_uuid())
@@ -922,7 +896,6 @@ async fn claim_run(pool: &PgPool, run_id: Uuid, owner: &str) {
 #[tokio::test]
 async fn review_attempts_enforce_scope_lease_exact_reuse_lineage_and_immutability() {
     let Some(pool) = database().await else { return };
-    let _lock = route_fixture_lock(&pool).await;
     let project_id = ProjectId::new(Uuid::new_v4());
     let other_project_id = ProjectId::new(Uuid::new_v4());
     sqlx::query("INSERT INTO projects (id,name) VALUES ($1,'review run'),($2,'other project')")
@@ -1275,7 +1248,6 @@ async fn review_attempts_enforce_scope_lease_exact_reuse_lineage_and_immutabilit
 #[tokio::test]
 async fn scheduled_reviews_store_the_normalized_endpoint_of_their_route() {
     let Some(pool) = database().await else { return };
-    let _lock = route_fixture_lock(&pool).await;
     let project_id = ProjectId::new(Uuid::new_v4());
     sqlx::query("INSERT INTO projects (id,name) VALUES ($1,'endpoint identity')")
         .bind(project_id.as_uuid())
@@ -1494,7 +1466,6 @@ async fn complete_with_proposal(
 #[tokio::test]
 async fn a_retry_reuses_the_steps_its_failed_predecessor_accepted() {
     let Some(pool) = database().await else { return };
-    let _lock = route_fixture_lock(&pool).await;
     let (project_id, record, candidate) = generation_fixture(&pool, "retry reuse").await;
     let request = || duplicate_request(project_id, record, candidate);
     let owner = "retry-reuse-worker";
@@ -1527,7 +1498,6 @@ async fn a_retry_reuses_the_steps_its_failed_predecessor_accepted() {
 #[tokio::test]
 async fn a_rejected_suggestion_regenerates_a_fresh_generation_that_reuses_nothing() {
     let Some(pool) = database().await else { return };
-    let _lock = route_fixture_lock(&pool).await;
     let (project_id, record, candidate) = generation_fixture(&pool, "regenerate").await;
     let request = || duplicate_request(project_id, record, candidate);
     let owner = "regenerate-worker";
@@ -1610,7 +1580,6 @@ fn duplicate_request(project_id: ProjectId, record: Uuid, candidate: Uuid) -> Pr
 #[tokio::test]
 async fn a_failed_review_run_is_retried_as_a_new_queued_generation() {
     let Some(pool) = database().await else { return };
-    let _lock = route_fixture_lock(&pool).await;
     let (project_id, record, candidate) = generation_fixture(&pool, "retry failed").await;
     let request = || duplicate_request(project_id, record, candidate);
     let first = schedule_prepared_review_run(&pool, request())
@@ -1653,7 +1622,6 @@ async fn a_failed_review_run_is_retried_as_a_new_queued_generation() {
 #[tokio::test]
 async fn a_blocked_review_run_is_retried_as_a_new_queued_generation() {
     let Some(pool) = database().await else { return };
-    let _lock = route_fixture_lock(&pool).await;
     let (project_id, record, candidate) = generation_fixture(&pool, "retry blocked").await;
     let request = || duplicate_request(project_id, record, candidate);
     let first = schedule_prepared_review_run(&pool, request())

@@ -14,31 +14,11 @@ use deepref_postgres::*;
 use deepref_review::{
     ReviewDefinitionKey, ReviewOrigin, ReviewScheduler, ReviewSubject, ScheduleReviewRun,
 };
-use sqlx::{PgPool, Postgres, Transaction};
+use sqlx::PgPool;
 use std::collections::BTreeMap;
 use uuid::Uuid;
 
-/// Same database-wide key as `review_runs.rs` so route inserts serialize even
-/// when both binaries share a database. Transaction-scoped: released when the
-/// returned transaction commits or rolls back.
-const ROUTE_FIXTURE_LOCK: i64 = 0x5245_5649_4557_0001;
-
-async fn route_fixture_lock(pool: &PgPool) -> Transaction<'static, Postgres> {
-    let mut transaction = pool.begin().await.expect("route lock transaction begins");
-    sqlx::query("SELECT pg_advisory_xact_lock($1)")
-        .bind(ROUTE_FIXTURE_LOCK)
-        .execute(&mut *transaction)
-        .await
-        .expect("route fixture lock is acquired");
-    transaction
-}
-
-/// Every test inserts the identical global route, so concurrent inserts collide
-/// on the profile/provider/model/version unique key. Serialize just the insert;
-/// the routes are identical, so the resolved identity is stable afterwards and
-/// the rest of the fixture can run in parallel.
 async fn insert_fixture_route(pool: &PgPool) {
-    let lock = route_fixture_lock(pool).await;
     insert_model_route(
         pool,
         &ResolvedModel {
@@ -53,16 +33,13 @@ async fn insert_fixture_route(pool: &PgPool) {
     )
     .await
     .unwrap();
-    lock.commit().await.unwrap();
 }
 
 fn actor(id: &str) -> Actor {
     Actor::new(ActorKind::User, id).unwrap()
 }
 async fn database() -> Option<PgPool> {
-    let pool = deepref_postgres::test_isolation::isolated_pool_from_env("DATABASE_URL", 6).await?;
-    migrate(&pool).await.expect("migrations");
-    Some(pool)
+    deepref_postgres::test_isolation::isolated_pool_from_env("DATABASE_URL", 6).await
 }
 struct Fixture {
     pool: PgPool,
@@ -954,7 +931,6 @@ async fn disable_routes(pool: &PgPool) {
 
 /// A newer route for the screening profile changes the semantic identity.
 async fn change_route(pool: &PgPool) {
-    let lock = route_fixture_lock(pool).await;
     insert_model_route(
         pool,
         &ResolvedModel {
@@ -969,7 +945,6 @@ async fn change_route(pool: &PgPool) {
     )
     .await
     .unwrap();
-    lock.commit().await.unwrap();
 }
 
 #[tokio::test]
@@ -1024,7 +999,10 @@ async fn identity_database_failure_rolls_back_without_aborting_the_sweep() {
         .execute(&f.pool)
         .await
         .unwrap();
-    assert!(result.is_ok(), "an unknown identity skips the cohort, not the sweep");
+    assert!(
+        result.is_ok(),
+        "an unknown identity skips the cohort, not the sweep"
+    );
     assert_eq!(f.status().await, "open");
     assert_eq!(f.quarantined().await, 40);
     assert_eq!(f.suspended_reason().await, None);
@@ -1096,7 +1074,6 @@ async fn identity_is_checked_on_the_locking_transaction_connection() {
         .connect(&url)
         .await
         .unwrap();
-    migrate(&pool).await.unwrap();
     let f = Fixture::new(pool, true).await;
     let sample = f.draw().await;
     f.label_all(&sample, false).await;

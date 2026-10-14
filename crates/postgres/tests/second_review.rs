@@ -14,39 +14,19 @@ use deepref_postgres::{
     NewReviewerDecision, ProtocolActor, ReviewCalibrationBundleInput, ReviewCalibrationStatus,
     SecondReviewStatus, block_review_run, fail_review_run, insert_model_route,
     insert_review_calibration_bundle, insert_reviewer_decision_in_transaction,
-    list_reviewer_decisions, migrate, preview_screening_identity, publish_protocol,
-    save_protocol_draft, schedule_screening_review, second_review_status, set_autonomy_level,
-    sweep_second_reviews,
+    list_reviewer_decisions, preview_screening_identity, publish_protocol, save_protocol_draft,
+    schedule_screening_review, second_review_status, set_autonomy_level, sweep_second_reviews,
 };
 use deepref_review::{
     CalibrationBundleId, ContentDigest, ProtocolDigest, ReviewBlockCode, ReviewDefinitionKey,
     ReviewRunId, ReviewSemanticContract,
 };
 use serde_json::json;
-use sqlx::{PgPool, Postgres, Transaction};
+use sqlx::PgPool;
 use uuid::Uuid;
 
-/// Arbitrary key for the database-wide lock that serializes route fixtures.
-const ROUTE_FIXTURE_LOCK: i64 = 0x5245_5649_4557_0002;
-
-/// A sweep looks at every calibrated project and route resolution is global per
-/// profile, so the tests that insert routes or sweep take turns. nextest runs each
-/// test in its own process, so the turn is taken in the database. The lock is
-/// transaction-scoped and released when the returned transaction ends.
-async fn sweep_turn(pool: &PgPool) -> Transaction<'static, Postgres> {
-    let mut transaction = pool.begin().await.expect("sweep turn transaction begins");
-    sqlx::query("SELECT pg_advisory_xact_lock($1)")
-        .bind(ROUTE_FIXTURE_LOCK)
-        .execute(&mut *transaction)
-        .await
-        .expect("sweep turn is acquired");
-    transaction
-}
-
 async fn database() -> Option<PgPool> {
-    let pool = deepref_postgres::test_isolation::isolated_pool_from_env("DATABASE_URL", 4).await?;
-    migrate(&pool).await.ok()?;
-    Some(pool)
+    deepref_postgres::test_isolation::isolated_pool_from_env("DATABASE_URL", 4).await
 }
 
 async fn project(pool: &PgPool) -> Uuid {
@@ -231,7 +211,6 @@ async fn ai_opinion_on_file(pool: &PgPool, project_id: Uuid, report_id: Uuid) {
 #[tokio::test]
 async fn advisory_second_review_contributes_from_record_one_without_calibration() {
     let Some(pool) = database().await else { return };
-    let _turn = sweep_turn(&pool).await;
     screening_routes(&pool).await;
     let project_id = project(&pool).await;
     publish_protocol_for(&pool, project_id).await;
@@ -266,7 +245,6 @@ async fn advisory_second_review_contributes_from_record_one_without_calibration(
 #[tokio::test]
 async fn the_sweep_schedules_a_bounded_batch_and_never_repeats_an_attempt() {
     let Some(pool) = database().await else { return };
-    let _turn = sweep_turn(&pool).await;
     screening_routes(&pool).await;
     let project_id = project(&pool).await;
     publish_protocol_for(&pool, project_id).await;
@@ -326,7 +304,6 @@ async fn the_sweep_schedules_a_bounded_batch_and_never_repeats_an_attempt() {
 #[tokio::test]
 async fn stale_calibration_does_not_block_advisory_or_grant_scientific_authority() {
     let Some(pool) = database().await else { return };
-    let _turn = sweep_turn(&pool).await;
     screening_routes(&pool).await;
     let project_id = project(&pool).await;
     publish_protocol_for(&pool, project_id).await;
@@ -384,7 +361,6 @@ async fn age_finished_runs(pool: &PgPool, project_id: Uuid) {
 #[tokio::test]
 async fn a_failed_or_blocked_advisory_run_is_retried_after_a_backoff_a_bounded_number_of_times() {
     let Some(pool) = database().await else { return };
-    let _turn = sweep_turn(&pool).await;
     screening_routes(&pool).await;
     let project_id = project(&pool).await;
     publish_protocol_for(&pool, project_id).await;

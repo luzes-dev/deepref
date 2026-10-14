@@ -307,31 +307,37 @@ test('regenerates a rejected extraction proposal without repeating the plain gen
 }) => {
 	const state = await mockExtractionPage(page, 'accept');
 	state.fields = [field];
-	await page.route(`${api}/projects/project-1/ai/proposals/proposal-1/decision`, async (route) => {
-		expect(route.request().postDataJSON()).toMatchObject({ decision: 'reject' });
-		state.proposalPresent = false;
-		await route.fulfill({ json: { proposal: { id: 'proposal-1', status: 'rejected' } } });
-	});
+	await page.route(
+		`${api}/projects/project-1/ai/proposals/proposal-1/decision`,
+		async (route) => {
+			expect(route.request().postDataJSON()).toMatchObject({ decision: 'reject' });
+			state.proposalPresent = false;
+			await route.fulfill({ json: { proposal: { id: 'proposal-1', status: 'rejected' } } });
+		}
+	);
 	let regenerationRequests = 0;
-	await page.route(`${api}/projects/project-1/review-runs/extraction-run/retry`, async (route) => {
-		expect(route.request().postDataJSON()).toEqual({ regenerate: true });
-		regenerationRequests += 1;
-		state.proposalPresent = true;
-		state.proposalId = 'proposal-2';
-		await route.fulfill({
-			status: 202,
-			json: {
-				id: 'extraction-regenerated-run',
-				project_id: 'project-1',
-				definition: 'data_extraction',
-				subject: {},
-				origin: { kind: 'reviewer_requested' },
-				state: { kind: 'completed', proposal_id: state.proposalId },
-				created_at: '2026-01-01T00:00:02Z',
-				finished_at: '2026-01-01T00:00:03Z'
-			}
-		});
-	});
+	await page.route(
+		`${api}/projects/project-1/review-runs/extraction-run/retry`,
+		async (route) => {
+			expect(route.request().postDataJSON()).toEqual({ regenerate: true });
+			regenerationRequests += 1;
+			state.proposalPresent = true;
+			state.proposalId = 'proposal-2';
+			await route.fulfill({
+				status: 202,
+				json: {
+					id: 'extraction-regenerated-run',
+					project_id: 'project-1',
+					definition: 'data_extraction',
+					subject: {},
+					origin: { kind: 'reviewer_requested' },
+					state: { kind: 'completed', proposal_id: state.proposalId },
+					created_at: '2026-01-01T00:00:02Z',
+					finished_at: '2026-01-01T00:00:03Z'
+				}
+			});
+		}
+	);
 	await page.goto('/projects/project-1/extraction?study=study-1');
 	await page.getByRole('button', { name: 'Generate proposal', exact: true }).click();
 	await expect(page.getByTestId('extraction-proposal-editor')).toBeVisible();

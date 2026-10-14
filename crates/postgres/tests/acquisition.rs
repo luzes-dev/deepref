@@ -13,6 +13,11 @@ use uuid::Uuid;
 
 async fn database() -> Option<PgPool> {
     let pool = deepref_postgres::test_isolation::isolated_pool_from_env("DATABASE_URL", 5).await?;
+    // Redundant on a migrated clone, but without it the two same-key
+    // `import_idempotency_*` tests fail about half the time: concurrent
+    // `persist_import` calls with one idempotency key race on the derived
+    // primary key, which `ON CONFLICT (project_id, idempotency_key)` does not
+    // arbitrate (23505 on acquisition_runs_pkey). Drop this with that fix.
     migrate(&pool).await.unwrap();
     Some(pool)
 }
