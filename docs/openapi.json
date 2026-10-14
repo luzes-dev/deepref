@@ -564,6 +564,26 @@
           "202": {
             "description": "Cancellation accepted"
           },
+          "404": {
+            "description": "Ingestion not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Ingestion is no longer cancellable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
           "500": {
             "description": "Internal server error",
             "content": {
@@ -8134,6 +8154,17 @@
               ],
               "format": "int64"
             }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
           }
         ],
         "responses": {
@@ -8141,10 +8172,17 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "type": "array",
-                  "items": {
-                    "$ref": "#/components/schemas/DocumentBlockDto"
-                  }
+                  "$ref": "#/components/schemas/PaginatedResponse_DocumentBlockDto"
+                }
+              }
+            },
+            "description": ""
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
                 }
               }
             },
@@ -17845,6 +17883,97 @@
                     "boolean",
                     "null"
                   ]
+                }
+              }
+            }
+          },
+          "next_cursor": {
+            "type": [
+              "string",
+              "null"
+            ]
+          }
+        }
+      },
+      "PaginatedResponse_DocumentBlockDto": {
+        "type": "object",
+        "required": [
+          "items"
+        ],
+        "properties": {
+          "items": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "required": [
+                "id",
+                "document_id",
+                "parser_version",
+                "page_number",
+                "page_ocr_required",
+                "kind",
+                "section_path",
+                "ordinal",
+                "text",
+                "content_hash"
+              ],
+              "properties": {
+                "bbox": {
+                  "type": [
+                    "object",
+                    "null"
+                  ]
+                },
+                "content_hash": {
+                  "type": "string"
+                },
+                "document_id": {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                "id": {
+                  "type": "string",
+                  "format": "uuid"
+                },
+                "kind": {
+                  "type": "string"
+                },
+                "ordinal": {
+                  "type": "integer",
+                  "format": "int32"
+                },
+                "page_height": {
+                  "type": [
+                    "number",
+                    "null"
+                  ],
+                  "format": "double"
+                },
+                "page_number": {
+                  "type": "integer",
+                  "format": "int32"
+                },
+                "page_ocr_required": {
+                  "type": "boolean"
+                },
+                "page_width": {
+                  "type": [
+                    "number",
+                    "null"
+                  ],
+                  "format": "double"
+                },
+                "parser_version": {
+                  "type": "string"
+                },
+                "section_path": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                },
+                "text": {
+                  "type": "string"
                 }
               }
             }

@@ -79,12 +79,14 @@
 	const urlState = $derived(
 		parseScreeningUrl(new URLSearchParams(page.url.searchParams.toString()))
 	);
-	const queueKey = $derived(getGetScreeningQueueQueryKey(projectId, {
-		status: urlState.status,
-		search: urlState.search || undefined,
-		sort: urlState.sort,
-		limit: 25
-	}));
+	const queueKey = $derived(
+		getGetScreeningQueueQueryKey(projectId, {
+			status: urlState.status,
+			search: urlState.search || undefined,
+			sort: urlState.sort,
+			limit: 25
+		})
+	);
 	const queueQuery = createInfiniteQuery(() => ({
 		queryKey: queueKey,
 		initialPageParam: undefined as string | undefined,

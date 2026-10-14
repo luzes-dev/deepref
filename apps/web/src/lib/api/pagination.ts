@@ -5,13 +5,11 @@ import type { listProjectsResponseSuccess } from '#lib/api/generated/projects/pr
 import { customFetch } from './custom-fetch';
 import { createQuery } from '@tanstack/svelte-query';
 import type { DocumentBlockDto } from './generated/models/index.js';
-import { getListDocumentBlocksQueryKey, getListDocumentBlocksUrl } from './generated/documents/documents.js';
-
-type BlockPage = {
-	data: { items: DocumentBlockDto[]; next_cursor: string | null };
-	status: number;
-	headers: Headers;
-};
+import {
+	getListDocumentBlocksQueryKey,
+	listDocumentBlocks,
+	type listDocumentBlocksResponseSuccess
+} from './generated/documents/documents.js';
 
 export async function fetchAllDocumentBlocks(
 	projectId: string,
@@ -20,13 +18,16 @@ export async function fetchAllDocumentBlocks(
 	limit = 100,
 	signal?: AbortSignal
 ) {
-	const url = getListDocumentBlocksUrl(projectId, reportId, documentId);
 	const items: DocumentBlockDto[] = [];
 	let cursor: string | undefined;
-	let response: BlockPage;
+	let response: listDocumentBlocksResponseSuccess;
 	do {
-		response = await customFetch<BlockPage>(
-			cursorUrl(url, cursor, limit), { method: 'GET', signal }
+		response = await listDocumentBlocks(
+			projectId,
+			reportId,
+			documentId,
+			{ cursor, limit },
+			{ signal }
 		);
 		items.push(...response.data.items);
 		cursor = response.data.next_cursor ?? undefined;
@@ -43,11 +44,19 @@ export function createAllDocumentBlocks(
 	options: () => { query: { enabled: boolean } }
 ) {
 	return createQuery(() => ({
-		queryKey: [...getListDocumentBlocksQueryKey(projectId(), reportId(), documentId(), params()), 'all-pages'],
+		queryKey: [
+			...getListDocumentBlocksQueryKey(projectId(), reportId(), documentId(), params()),
+			'all-pages'
+		],
 		enabled: options().query.enabled,
-		queryFn: ({ signal }) => fetchAllDocumentBlocks(
-			projectId(), reportId(), documentId(), params().limit ?? 100, signal
-		)
+		queryFn: ({ signal }) =>
+			fetchAllDocumentBlocks(
+				projectId(),
+				reportId(),
+				documentId(),
+				params().limit ?? 100,
+				signal
+			)
 	}));
 }
 

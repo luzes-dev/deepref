@@ -207,7 +207,8 @@ pub(crate) async fn create_acquisition(
     let max_depth = i32::from(
         deepref_domain::acquisition::MaxDepth::try_from(
             requested_max_depth.unwrap_or(project_default_depth),
-        ).map_err(|message| ApiError::BadRequest(message.to_owned()))?,
+        )
+        .map_err(|message| ApiError::BadRequest(message.to_owned()))?,
     );
     let seed_count = i32::try_from(seed_dois.len()).unwrap_or(i32::MAX);
     let config = json!({
