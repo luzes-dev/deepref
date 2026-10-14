@@ -15,20 +15,14 @@ use deepref_postgres::{
     AutomationError, AutomationFinalization, begin_next_automation_step, complete_automation_step,
     configure_automation_definition, dispatch_automation_trigger, fail_automation_step,
     finalize_automation_run, get_automation_run, list_automation_definitions, list_automation_runs,
-    migrate, recover_expired_jobs, retry_automation_run, start_automation_manually,
+    recover_expired_jobs, retry_automation_run, start_automation_manually,
 };
 use sqlx::{PgPool, Row};
 use std::time::Duration;
 use uuid::Uuid;
 
-static DATABASE_TEST_MUTEX: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
-
 async fn database() -> Option<PgPool> {
-    let pool = deepref_postgres::test_isolation::isolated_pool_from_env("DATABASE_URL", 12).await?;
-    migrate(&pool)
-        .await
-        .expect("DATABASE_URL migrations must apply");
-    Some(pool)
+    deepref_postgres::test_isolation::isolated_pool_from_env("DATABASE_URL", 12).await
 }
 
 fn actor() -> Actor {
@@ -108,7 +102,6 @@ async fn claim_automation_job(
 
 #[tokio::test]
 async fn manual_start_is_idempotent_and_persists_typed_recipe_steps() -> Result<()> {
-    let _guard = DATABASE_TEST_MUTEX.lock().await;
     let Some(pool) = database().await else {
         return Ok(());
     };
@@ -185,7 +178,6 @@ async fn manual_start_is_idempotent_and_persists_typed_recipe_steps() -> Result<
 
 #[tokio::test]
 async fn concurrent_known_trigger_dispatch_creates_one_run_job_and_step_set() -> Result<()> {
-    let _guard = DATABASE_TEST_MUTEX.lock().await;
     let Some(pool) = database().await else {
         return Ok(());
     };
@@ -233,7 +225,6 @@ async fn concurrent_known_trigger_dispatch_creates_one_run_job_and_step_set() ->
 
 #[tokio::test]
 async fn expired_job_recovery_reclaims_running_step_and_rejects_zombie_completion() -> Result<()> {
-    let _guard = DATABASE_TEST_MUTEX.lock().await;
     let Some(pool) = database().await else {
         return Ok(());
     };
@@ -307,7 +298,6 @@ async fn expired_job_recovery_reclaims_running_step_and_rejects_zombie_completio
 
 #[tokio::test]
 async fn concurrent_step_begin_under_one_lease_has_one_effective_claim() -> Result<()> {
-    let _guard = DATABASE_TEST_MUTEX.lock().await;
     let Some(pool) = database().await else {
         return Ok(());
     };
@@ -355,7 +345,6 @@ async fn concurrent_step_begin_under_one_lease_has_one_effective_claim() -> Resu
 #[tokio::test]
 async fn known_non_manual_trigger_persists_reference_and_paused_definition_is_rejected()
 -> Result<()> {
-    let _guard = DATABASE_TEST_MUTEX.lock().await;
     let Some(pool) = database().await else {
         return Ok(());
     };
@@ -419,7 +408,6 @@ async fn known_non_manual_trigger_persists_reference_and_paused_definition_is_re
 #[tokio::test]
 async fn failed_manual_run_retries_only_incomplete_steps_and_completed_retry_is_noop() -> Result<()>
 {
-    let _guard = DATABASE_TEST_MUTEX.lock().await;
     let Some(pool) = database().await else {
         return Ok(());
     };
@@ -535,7 +523,6 @@ async fn failed_manual_run_retries_only_incomplete_steps_and_completed_retry_is_
 
 #[tokio::test]
 async fn project_scoping_hides_runs_and_rejects_cross_project_definition_dispatch() -> Result<()> {
-    let _guard = DATABASE_TEST_MUTEX.lock().await;
     let Some(pool) = database().await else {
         return Ok(());
     };
@@ -589,7 +576,6 @@ async fn project_scoping_hides_runs_and_rejects_cross_project_definition_dispatc
 
 #[tokio::test]
 async fn run_detail_aggregates_ai_usage_and_database_rejects_invalid_transitions() -> Result<()> {
-    let _guard = DATABASE_TEST_MUTEX.lock().await;
     let Some(pool) = database().await else {
         return Ok(());
     };
@@ -668,7 +654,6 @@ async fn run_detail_aggregates_ai_usage_and_database_rejects_invalid_transitions
 #[tokio::test]
 async fn deleting_automation_parent_or_definition_preserves_ai_audit_and_project_identity()
 -> Result<()> {
-    let _guard = DATABASE_TEST_MUTEX.lock().await;
     let Some(pool) = database().await else {
         return Ok(());
     };

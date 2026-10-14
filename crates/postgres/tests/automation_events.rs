@@ -10,29 +10,12 @@ use deepref_application::{
     BuiltInAutomationRecipe, ConfigureAutomationDefinition,
 };
 use deepref_domain::{Actor, ActorKind, ProjectId};
-use deepref_postgres::{
-    configure_automation_definition, dispatch_automation_domain_event, migrate,
-};
+use deepref_postgres::{configure_automation_definition, dispatch_automation_domain_event};
 use sqlx::{PgPool, Row};
-use std::sync::OnceLock;
-use tokio::sync::Mutex;
 use uuid::Uuid;
 
-static DATABASE_TEST_MUTEX: OnceLock<Mutex<()>> = OnceLock::new();
-
 async fn database() -> Option<PgPool> {
-    let pool = deepref_postgres::test_isolation::isolated_pool_from_env("DATABASE_URL", 12).await?;
-    migrate(&pool)
-        .await
-        .expect("DATABASE_URL migrations must apply");
-    Some(pool)
-}
-
-async fn test_guard() -> tokio::sync::MutexGuard<'static, ()> {
-    DATABASE_TEST_MUTEX
-        .get_or_init(|| Mutex::const_new(()))
-        .lock()
-        .await
+    deepref_postgres::test_isolation::isolated_pool_from_env("DATABASE_URL", 12).await
 }
 
 fn actor(id: &str) -> Actor {
@@ -118,7 +101,6 @@ fn events(project_id: ProjectId) -> Vec<AutomationDomainEvent> {
 
 #[tokio::test]
 async fn all_typed_domain_events_dispatch_once_to_active_definitions() -> Result<()> {
-    let _guard = test_guard().await;
     let Some(pool) = database().await else {
         return Ok(());
     };
@@ -193,7 +175,6 @@ async fn all_typed_domain_events_dispatch_once_to_active_definitions() -> Result
 
 #[tokio::test]
 async fn dispatch_rolls_back_with_source_transaction_and_is_project_isolated() -> Result<()> {
-    let _guard = test_guard().await;
     let Some(pool) = database().await else {
         return Ok(());
     };
@@ -257,7 +238,6 @@ async fn dispatch_rolls_back_with_source_transaction_and_is_project_isolated() -
 
 #[tokio::test]
 async fn scientific_tables_have_no_automation_transition_triggers() -> Result<()> {
-    let _guard = test_guard().await;
     let Some(pool) = database().await else {
         return Ok(());
     };

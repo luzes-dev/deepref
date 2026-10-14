@@ -11,16 +11,14 @@ use deepref_application::{
 };
 use deepref_domain::{CriterionDimension, CriterionKind, CriterionStage, FrameworkKind, ProjectId};
 use deepref_postgres::{
-    ProtocolActor, ProtocolError, get_protocol_editor, get_published_protocol, migrate,
-    publish_protocol, save_protocol_draft,
+    ProtocolActor, ProtocolError, get_protocol_editor, get_published_protocol, publish_protocol,
+    save_protocol_draft,
 };
 use sqlx::{AssertSqlSafe, Connection, PgConnection, PgPool, Row};
 use uuid::Uuid;
 
 async fn database() -> Option<PgPool> {
-    let pool = deepref_postgres::test_isolation::isolated_pool_from_env("DATABASE_URL", 8).await?;
-    migrate(&pool).await.ok()?;
-    Some(pool)
+    deepref_postgres::test_isolation::isolated_pool_from_env("DATABASE_URL", 8).await
 }
 
 async fn project(pool: &PgPool, name: &str) -> Uuid {

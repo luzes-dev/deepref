@@ -35,6 +35,7 @@ mod review_runs;
 mod screening;
 mod second_review;
 mod study;
+#[cfg(feature = "test-support")]
 pub mod test_isolation;
 mod worker_runtime;
 mod workflows;

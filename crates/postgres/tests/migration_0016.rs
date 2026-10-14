@@ -4,7 +4,7 @@
     clippy::unwrap_used,
     clippy::string_slice
 )]
-use deepref_postgres::{MIGRATOR, migrate};
+use deepref_postgres::MIGRATOR;
 use sqlx::{Executor, PgPool, Row, migrate::Migrator};
 use uuid::Uuid;
 
@@ -84,7 +84,6 @@ async fn ai_foundation_evolves_representative_legacy_rows_without_loss() {
 #[tokio::test]
 async fn ai_foundation_migration_requires_and_installs_vector_state() {
     let Some(pool) = database().await else { return };
-    migrate(&pool).await.expect("all migrations should apply");
 
     let extension: Option<String> =
         sqlx::query_scalar("SELECT extversion FROM pg_extension WHERE extname='vector'")

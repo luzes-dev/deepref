@@ -5,16 +5,14 @@
 use deepref_application::workflows::{GraphNode, Position, WorkflowGraph};
 use deepref_domain::{Actor, ActorKind, ProjectId};
 use deepref_postgres::{
-    ReviewCounts, StartRun, create_workflow, migrate, review_counts_for_runs, start_run,
+    ReviewCounts, StartRun, create_workflow, review_counts_for_runs, start_run,
 };
 use serde_json::{Value, json};
 use sqlx::PgPool;
 use uuid::Uuid;
 
 async fn database() -> Option<PgPool> {
-    let pool = deepref_postgres::test_isolation::isolated_pool_from_env("DATABASE_URL", 4).await?;
-    migrate(&pool).await.expect("migrations should apply");
-    Some(pool)
+    deepref_postgres::test_isolation::isolated_pool_from_env("DATABASE_URL", 4).await
 }
 
 async fn insert_project(pool: &PgPool) -> ProjectId {
