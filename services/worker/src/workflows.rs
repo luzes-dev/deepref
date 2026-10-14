@@ -14,13 +14,13 @@ use std::{
 
 use chrono::Utc;
 use deepref_ai::AiGateway;
-use deepref_application::{
-    jobs::{ClaimedJob, JobLease},
-    workflows::{AutonomyGate, DefaultAutonomyGate, PublicationQuery},
-};
 use deepref_app::{
     AlertHit, DueAlert, NodeOutcome, StepClaim, begin_node_execution, claim_due_workflows,
     fail_abandoned_steps, finish_node_execution, record_alert_poll, record_node_retry,
+};
+use deepref_application::{
+    jobs::{ClaimedJob, JobLease},
+    workflows::{AutonomyGate, DefaultAutonomyGate, PublicationQuery},
 };
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -116,24 +116,46 @@ pub async fn handle_step(
     runtime: &deepref_config::RuntimeConfig,
 ) -> anyhow::Result<DeliveryAction> {
     let payload = StepPayload::deserialize(&job.payload)?;
-    anyhow::ensure!(payload.handler_kind == deepref_domain::jobs::DurableHandlerKind::Workflow, "wrong durable workflow handler");
+    anyhow::ensure!(
+        payload.handler_kind == deepref_domain::jobs::DurableHandlerKind::Workflow,
+        "wrong durable workflow handler"
+    );
     let identity: Option<Uuid> = sqlx::query_scalar(
         "SELECT run_id FROM durable_steps WHERE id=$1 AND handler_kind='workflow'",
-    ).bind(payload.step_id).fetch_optional(pool).await?;
-    anyhow::ensure!(identity == Some(payload.run_id), "durable workflow step/run mismatch");
+    )
+    .bind(payload.step_id)
+    .fetch_optional(pool)
+    .await?;
+    anyhow::ensure!(
+        identity == Some(payload.run_id),
+        "durable workflow step/run mismatch"
+    );
     let execution = match begin_node_execution(pool, payload.step_id, lease).await? {
         StepClaim::Stale => return Ok(DeliveryAction::Ack),
         StepClaim::Execute(execution) => *execution,
     };
     if !runtime.workflow.niche_nodes_enabled {
-        let types:Vec<String>=sqlx::query_scalar("SELECT ARRAY(
+        let types: Vec<String> = sqlx::query_scalar(
+            "SELECT ARRAY(
             SELECT node->>'type' FROM jsonb_array_elements(graph->'nodes') node)
-            FROM workflow_run_details WHERE id=$1")
-            .bind(payload.run_id).fetch_one(pool).await?;
-        if types.iter().any(|id|!deepref_application::workflows::catalog::node_is_available(id,false)) {
-            finish_node_execution(pool,payload.step_id,lease,NodeOutcome::Failed{
-                message:"Niche workflow nodes are disabled.".to_owned(),
-            }).await?;
+            FROM workflow_run_details WHERE id=$1",
+        )
+        .bind(payload.run_id)
+        .fetch_one(pool)
+        .await?;
+        if types
+            .iter()
+            .any(|id| !deepref_application::workflows::catalog::node_is_available(id, false))
+        {
+            finish_node_execution(
+                pool,
+                payload.step_id,
+                lease,
+                NodeOutcome::Failed {
+                    message: "Niche workflow nodes are disabled.".to_owned(),
+                },
+            )
+            .await?;
             return Ok(DeliveryAction::Terminate);
         }
     }
@@ -272,8 +294,12 @@ async fn poll_alert_sources(pool: &PgPool, alert: &DueAlert) -> Result<Vec<Alert
         {
             Ok(found) => items.extend(found),
             Err(error) => failures.push(match error {
-                deepref_integrations::CrossrefSearchError::Retryable(message) => NodeError::retryable(message),
-                deepref_integrations::CrossrefSearchError::Permanent(message) => NodeError::permanent(message),
+                deepref_integrations::CrossrefSearchError::Retryable(message) => {
+                    NodeError::retryable(message)
+                }
+                deepref_integrations::CrossrefSearchError::Permanent(message) => {
+                    NodeError::permanent(message)
+                }
             }),
         }
     }

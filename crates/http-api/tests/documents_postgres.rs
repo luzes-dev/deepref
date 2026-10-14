@@ -26,10 +26,16 @@ fn api_config() -> ApiConfig {
         &HashMap::from([("APP_ENV".to_owned(), "local".to_owned())]),
     )
     .unwrap();
-    ApiConfig { documents: deepref_config::DocumentConfig::from_source(&|name| (name == "APP_ENV").then(|| "local".into())).expect("local test document configuration"), runtime,
-    bind_addr: "127.0.0.1:0".parse().unwrap(),
-    cors_allow_any: false,
-    cors_origins: Vec::new(), }
+    ApiConfig {
+        documents: deepref_config::DocumentConfig::from_source(&|name| {
+            (name == "APP_ENV").then(|| "local".into())
+        })
+        .expect("local test document configuration"),
+        runtime,
+        bind_addr: "127.0.0.1:0".parse().unwrap(),
+        cors_allow_any: false,
+        cors_origins: Vec::new(),
+    }
 }
 
 fn multipart(pdf: &[u8], filename: &str) -> (String, Body) {
@@ -349,11 +355,7 @@ async fn document_upload_has_its_own_limit_above_the_acquisition_default() {
         .unwrap();
 }
 
-async fn seed_long_document(
-    pool: &PgPool,
-    blocks_per_page: i32,
-    pages: i32,
-) -> (Uuid, Uuid, Uuid) {
+async fn seed_long_document(pool: &PgPool, blocks_per_page: i32, pages: i32) -> (Uuid, Uuid, Uuid) {
     let project_id = Uuid::new_v4();
     let report_id = Uuid::new_v4();
     let document_id = Uuid::new_v4();
@@ -446,7 +448,10 @@ async fn document_blocks_page_through_every_block_of_a_long_document() {
     assert_eq!(status, StatusCode::OK, "{second}");
     let second_items = second["items"].as_array().expect("a page of blocks");
     assert_eq!(second_items.len(), 50);
-    assert!(second["next_cursor"].is_null(), "the last page ends the cursor");
+    assert!(
+        second["next_cursor"].is_null(),
+        "the last page ends the cursor"
+    );
 
     let mut ids = first_items
         .iter()

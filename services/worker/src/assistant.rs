@@ -54,7 +54,13 @@ pub async fn handle_assistant_agent_run(
     let _ = owner;
     let Some(api_key) = config.api_key() else {
         let payload: AssistantAgentRunJobPayload = serde_json::from_value(job.payload.clone())?;
-        fail_run(pool, payload.assistant_run_id, "ai_not_configured", "The AI provider is not configured.").await?;
+        fail_run(
+            pool,
+            payload.assistant_run_id,
+            "ai_not_configured",
+            "The AI provider is not configured.",
+        )
+        .await?;
         return Ok(DeliveryAction::Terminate);
     };
     let factory = Arc::new(deepref_ai::runtime::OpenAiCompatModelFactory::new(
@@ -93,7 +99,13 @@ pub async fn handle_assistant_agent_run_with(
         .await?
         .is_none()
     {
-        fail_run(pool, payload.assistant_run_id, "assistant_run_missing", "The assistant run no longer exists.").await?;
+        fail_run(
+            pool,
+            payload.assistant_run_id,
+            "assistant_run_missing",
+            "The assistant run no longer exists.",
+        )
+        .await?;
         return Ok(DeliveryAction::Terminate);
     }
     // Terminal redeliveries ack before the attempts-exhausted guard, so
@@ -121,7 +133,13 @@ pub async fn handle_assistant_agent_run_with(
         }
         Err(RunFailure::Fatal(error)) => {
             tracing::warn!(run_id = %payload.assistant_run_id, %error, "assistant run failed");
-            fail_run(pool, payload.assistant_run_id, "assistant_run_failed", "The assistant run could not finish.").await?;
+            fail_run(
+                pool,
+                payload.assistant_run_id,
+                "assistant_run_failed",
+                "The assistant run could not finish.",
+            )
+            .await?;
             Ok(DeliveryAction::Terminate)
         }
     }
@@ -284,13 +302,9 @@ fn retryable(error: &AiError) -> bool {
 async fn fail_run(pool: &PgPool, run_id: Uuid, code: &str, message: &str) -> anyhow::Result<()> {
     // One atomic transaction appends the `error` event and flips the run to
     // failed, or appends nothing when the run already settled.
-    deepref_app::fail_assistant_agent_run(
-        pool,
-        run_id,
-        &json!({"code": code, "message": message}),
-    )
-    .await
-    .map_err(|error| anyhow::anyhow!("assistant failure bookkeeping failed: {error:?}"))?;
+    deepref_app::fail_assistant_agent_run(pool, run_id, &json!({"code": code, "message": message}))
+        .await
+        .map_err(|error| anyhow::anyhow!("assistant failure bookkeeping failed: {error:?}"))?;
     Ok(())
 }
 
@@ -521,8 +535,10 @@ pub(crate) async fn reconcile_orphan_runs(pool: &PgPool) -> anyhow::Result<()> {
            SELECT 1 FROM jobs j WHERE j.kind='assistant_agent_run'
              AND j.payload->>'assistant_run_id'=r.id::text
              AND j.state IN ('queued','running')
-         ) FOR UPDATE OF r SKIP LOCKED"
-    ).fetch_all(&mut *tx).await?;
+         ) FOR UPDATE OF r SKIP LOCKED",
+    )
+    .fetch_all(&mut *tx)
+    .await?;
     for id in ids {
         let error = json!({"code": "assistant_job_unavailable", "message": "The assistant job is missing or no longer executable."});
         sqlx::query(

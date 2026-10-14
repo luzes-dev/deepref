@@ -9,8 +9,8 @@ use std::{
     time::Duration,
 };
 
-use deepref_integrations::{MAX_IDS_PER_FETCH, PubmedArticle, PubmedClient};
 use deepref_app::{PmidOutcome, PmidRunCounts};
+use deepref_integrations::{MAX_IDS_PER_FETCH, PubmedArticle, PubmedClient};
 use serde::Deserialize;
 use serde_json::Value;
 use sqlx::PgPool;
@@ -63,8 +63,7 @@ pub async fn handle_job(
     let http = net::trusted_client().map_err(|error| anyhow::anyhow!(error.message))?;
     let client = PubmedClient::new(http, settings.crossref_mailto);
     loop {
-        let batch =
-            deepref_app::queued_pmids(pool, run.run_id, MAX_IDS_PER_FETCH as i64).await?;
+        let batch = deepref_app::queued_pmids(pool, run.run_id, MAX_IDS_PER_FETCH as i64).await?;
         if batch.is_empty() {
             break;
         }

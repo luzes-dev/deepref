@@ -35,8 +35,8 @@ impl JobKind {
 
 /// The sole step dispatcher routes to typed domain handlers, not queue kinds
 /// with independent lifecycles.
-#[derive(Debug,Clone,Copy,PartialEq,Eq,Serialize,Deserialize)]
-#[serde(rename_all="snake_case")]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub enum DurableHandlerKind {
     Automation,
     Workflow,
@@ -44,11 +44,11 @@ pub enum DurableHandlerKind {
 }
 
 impl DurableHandlerKind {
-    pub const fn as_str(self)->&'static str {
+    pub const fn as_str(self) -> &'static str {
         match self {
-            Self::Automation=>"automation",
-            Self::Workflow=>"workflow",
-            Self::Review=>"review",
+            Self::Automation => "automation",
+            Self::Workflow => "workflow",
+            Self::Review => "review",
         }
     }
 }
@@ -129,10 +129,17 @@ mod tests {
 
     #[test]
     fn queued_wire_kinds_round_trip() {
-        for kind in [JobKind::WorkFetchRequested, JobKind::RecomputeMetrics,
-            JobKind::ImportDeduplication, JobKind::PmidImport, JobKind::DurableRunStep,
-            JobKind::AssistantAgentRun, JobKind::RecomputePrisma,
-            JobKind::RetrieveDocument, JobKind::ParseDocument] {
+        for kind in [
+            JobKind::WorkFetchRequested,
+            JobKind::RecomputeMetrics,
+            JobKind::ImportDeduplication,
+            JobKind::PmidImport,
+            JobKind::DurableRunStep,
+            JobKind::AssistantAgentRun,
+            JobKind::RecomputePrisma,
+            JobKind::RetrieveDocument,
+            JobKind::ParseDocument,
+        ] {
             assert_eq!(kind.as_str().parse::<JobKind>().unwrap(), kind);
             assert_eq!(serde_json::to_value(kind).unwrap(), kind.as_str());
         }
@@ -146,8 +153,13 @@ mod tests {
 
     #[test]
     fn durable_job_states_round_trip_and_reject_invalid_values() {
-        for state in [JobState::Queued, JobState::Running, JobState::Completed,
-            JobState::Failed, JobState::Dead] {
+        for state in [
+            JobState::Queued,
+            JobState::Running,
+            JobState::Completed,
+            JobState::Failed,
+            JobState::Dead,
+        ] {
             assert_eq!(state.as_str().parse::<JobState>().unwrap(), state);
         }
         for invalid in ["", "complete", "RUNNING", " queued"] {

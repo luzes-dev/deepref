@@ -24,8 +24,7 @@ const MIGRATIONS_THROUGH_0012: [&str; 12] = [
 
 #[tokio::test]
 async fn upgrades_legacy_documents_blocks_and_reason_catalog_truthfully() {
-    let Some(url) = deepref_app::test_isolation::isolated_url_from_env("DATABASE_URL").await
-    else {
+    let Some(url) = deepref_app::test_isolation::isolated_url_from_env("DATABASE_URL").await else {
         return;
     };
     let mut connection = PgConnection::connect(&url)

@@ -136,7 +136,8 @@ async fn demote(
             invalidate_in_transaction(tx, project, cohort, reason.as_str(), true).await
         }
         StaleReason::SemanticIdentity { current } => {
-            if super::cohort_status(&c)? != deepref_review::ai_first::AiFirstCohortStatus::Finalized {
+            if super::cohort_status(c)? != deepref_review::ai_first::AiFirstCohortStatus::Finalized
+            {
                 invalidate_in_transaction(tx, project, cohort, reason.as_str(), true).await?;
             }
             super::cohorts::flag_finalized_identity_drift(tx, project, current, reason.as_str())
@@ -288,7 +289,11 @@ pub async fn route_ai_first_result(
        FROM project_reports pr LEFT JOIN screening_state s ON s.project_id=pr.project_id AND s.report_id=pr.report_id
        WHERE pr.project_id=$1 AND pr.report_id=$2 FOR UPDATE OF pr")
         .bind(project).bind(report).fetch_one(&mut *tx).await?;
-    if super::stored("status", state.try_get("status")?, deepref_domain::ScreeningStatus::parse)? != deepref_domain::ScreeningStatus::Unscreened
+    if super::stored(
+        "status",
+        state.try_get("status")?,
+        deepref_domain::ScreeningStatus::parse,
+    )? != deepref_domain::ScreeningStatus::Unscreened
         || state.get::<i64, _>("revision") != input.expected_revision
     {
         return Ok(false);

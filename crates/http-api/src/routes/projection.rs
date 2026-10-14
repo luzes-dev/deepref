@@ -3,11 +3,11 @@ use axum::{
     extract::{Path, State},
 };
 use chrono::{DateTime, Utc};
+use deepref_domain::graph::ProjectionState;
 use serde::Serialize;
 use sqlx::Row;
 use utoipa::ToSchema;
 use uuid::Uuid;
-use deepref_domain::graph::ProjectionState;
 
 use crate::{
     error::{ApiError, ErrorResponse},
@@ -38,7 +38,8 @@ pub async fn get_projection(
          FROM projection_state WHERE projection_name='postgres_graph' AND (project_id=$1 OR project_id IS NULL) \
          ORDER BY project_id NULLS LAST LIMIT 1",
     ).bind(project_id).fetch_one(&state.pool).await?;
-    let projection_state = row.try_get::<String, _>("state")?
+    let projection_state = row
+        .try_get::<String, _>("state")?
         .parse::<ProjectionState>()
         .map_err(|error| ApiError::Internal(error.into()))?;
     let rebuild_state: Option<String> = row.try_get("rebuild_state")?;

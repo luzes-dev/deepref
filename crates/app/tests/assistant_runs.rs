@@ -8,8 +8,8 @@
 
 use deepref_ai::AssistantAgentRunStatus;
 use deepref_app::{
-    AppendAssistantMessage, AssistantError, CompletedAssistantAgentRun,
-    NewAssistantAgentRun, NewAssistantPlan, append_assistant_run_event, begin_assistant_agent_run,
+    AppendAssistantMessage, AssistantError, CompletedAssistantAgentRun, NewAssistantAgentRun,
+    NewAssistantPlan, append_assistant_run_event, begin_assistant_agent_run,
     complete_assistant_agent_run, create_assistant_agent_run, get_assistant_agent_run,
     list_assistant_run_events, submit_assistant_agent_run,
 };
@@ -468,14 +468,29 @@ async fn queued_runs_can_fail_atomically_without_duplicate_error_events() {
     let (project_id, conversation_id) = project(&pool).await;
     let trigger = user_message(&pool, conversation_id).await;
     let input = new_run(project_id, conversation_id, trigger);
-    create_assistant_agent_run(&pool, &input).await.expect("create run");
+    create_assistant_agent_run(&pool, &input)
+        .await
+        .expect("create run");
     let error = json!({"code": "ai_not_configured", "message": "Provider unavailable"});
-    assert!(deepref_app::fail_assistant_agent_run(&pool, input.id, &error).await.expect("fail queued run"));
-    assert!(!deepref_app::fail_assistant_agent_run(&pool, input.id, &error).await.expect("repeat failure"));
-    let run = get_assistant_agent_run(&pool, input.id).await.expect("load").expect("run");
+    assert!(
+        deepref_app::fail_assistant_agent_run(&pool, input.id, &error)
+            .await
+            .expect("fail queued run")
+    );
+    assert!(
+        !deepref_app::fail_assistant_agent_run(&pool, input.id, &error)
+            .await
+            .expect("repeat failure")
+    );
+    let run = get_assistant_agent_run(&pool, input.id)
+        .await
+        .expect("load")
+        .expect("run");
     assert_eq!(run.status, AssistantAgentRunStatus::Failed);
     assert_eq!(run.error, Some(error.clone()));
-    let events = list_assistant_run_events(&pool, input.id, -1, 100).await.expect("events");
+    let events = list_assistant_run_events(&pool, input.id, -1, 100)
+        .await
+        .expect("events");
     assert_eq!(events.len(), 1);
     assert_eq!(events[0].kind, "error");
     assert_eq!(events[0].payload, error);

@@ -19,9 +19,8 @@ pub mod study;
 pub mod workflows;
 
 pub use acquisition::{
-    CitationProvider, CsvColumnMapping, ImportError, ImportParser,
-    MetadataProvider, ProviderError, ProviderFuture, RawAuthor, RawIdentifier, RawRecord,
-    SearchProvider,
+    CitationProvider, CsvColumnMapping, ImportError, ImportParser, MetadataProvider, ProviderError,
+    ProviderFuture, RawAuthor, RawIdentifier, RawRecord, SearchProvider,
 };
 pub use appraisal::{
     AnswerSchema, AppliesWhen, AppraisalAssessmentInput, AppraisalCompleted, AppraisalDefinition,
@@ -44,15 +43,15 @@ pub use automations::{
     validate_error, validate_run_list_limit, validate_worker_id,
 };
 pub use deduplication::{
-    DecideProposalCommand, DedupeCandidate, DedupeProposalCommand, DedupeProposalStatus, DedupeScore,
-    FUZZY_PROPOSAL_THRESHOLD, FUZZY_SHORTLIST_LIMIT, ProposalDecision, ProposalKind,
+    DecideProposalCommand, DedupeCandidate, DedupeProposalCommand, DedupeProposalStatus,
+    DedupeScore, FUZZY_PROPOSAL_THRESHOLD, FUZZY_SHORTLIST_LIMIT, ProposalDecision, ProposalKind,
     RecordResolutionAction, ResolutionCommandError, ResolveRecordCommand, score_candidate,
     select_fuzzy_candidate,
 };
 pub use documents::{
     AttachDocumentCommand, DocumentByteStream, DocumentDetailQuery, DocumentFuture,
-    DocumentListQuery, DocumentPortError, DocumentQueryError,
-    DocumentStorageId, DocumentStore, MissingFullTextQuery, StoredDocumentContent,
+    DocumentListQuery, DocumentPortError, DocumentQueryError, DocumentStorageId, DocumentStore,
+    MissingFullTextQuery, StoredDocumentContent,
 };
 pub use extraction::{
     ExtractionFieldDefinition, ExtractionFieldType, ExtractionValidationError, ExtractionValue,

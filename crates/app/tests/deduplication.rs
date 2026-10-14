@@ -4,15 +4,15 @@
     clippy::unwrap_used,
     clippy::string_slice
 )]
+use deepref_app::{
+    DedupeError, DedupeRunRequest, ProposalDecisionRequest, decide_proposal, get_prisma_projection,
+    list_proposals, persist_import, resolve_record, run_deduplication,
+};
 use deepref_application::{
     ProposalDecision, RawAuthor, RawIdentifier, RawRecord, RecordResolutionAction,
     ResolveRecordCommand,
 };
 use deepref_domain::IdentifierScheme;
-use deepref_app::{
-    DedupeError, DedupeRunRequest, ProposalDecisionRequest, decide_proposal, get_prisma_projection,
-    list_proposals, persist_import, resolve_record, run_deduplication,
-};
 use serde_json::{Value, json};
 use sqlx::{PgPool, Row};
 use uuid::Uuid;

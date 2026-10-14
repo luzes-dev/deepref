@@ -2,11 +2,9 @@
 //! The run history shows how many records an AI review sent out on each
 //! verdict. Runs without a finished screening step have no counts.
 
+use deepref_app::{ReviewCounts, StartRun, create_workflow, review_counts_for_runs, start_run};
 use deepref_application::workflows::{GraphNode, Position, WorkflowGraph};
 use deepref_domain::{Actor, ActorKind, ProjectId};
-use deepref_app::{
-    ReviewCounts, StartRun, create_workflow, review_counts_for_runs, start_run,
-};
 use serde_json::{Value, json};
 use sqlx::PgPool;
 use uuid::Uuid;
@@ -104,12 +102,15 @@ async fn verdicts_of_every_screening_step_are_counted_per_run() {
         ],
         edges: vec![],
     };
-    let workflow = create_workflow(&pool,
-    project,
-    "Screen with AI",
-    "Review counts",
-    graph.clone(),
-    &actor,, true)
+    let workflow = create_workflow(
+        &pool,
+        project,
+        "Screen with AI",
+        "Review counts",
+        graph.clone(),
+        &actor,
+        true,
+    )
     .await
     .expect("workflow")
     .id;

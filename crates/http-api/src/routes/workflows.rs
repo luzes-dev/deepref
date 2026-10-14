@@ -16,14 +16,14 @@ use axum::{
     response::{IntoResponse, Response},
 };
 use chrono::{DateTime, Utc};
-use deepref_application::workflows::{
-    self as wf, ConfigFieldKind, InboundEmail, NodeTypeDef, ValidationReport, WorkflowGraph,
-};
-use deepref_domain::ProjectId;
 use deepref_app::{
     NodeRunRecord, RotateTarget, StartRun, UpdateWorkflow, WebhookConfig, WorkflowError,
     WorkflowRecord, WorkflowRunRecord, WorkflowVersionRecord,
 };
+use deepref_application::workflows::{
+    self as wf, ConfigFieldKind, InboundEmail, NodeTypeDef, ValidationReport, WorkflowGraph,
+};
+use deepref_domain::ProjectId;
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use sqlx::PgPool;
@@ -144,7 +144,7 @@ fn node_type_dto(def: &NodeTypeDef, niche_nodes_enabled: bool) -> NodeTypeDto {
     };
     NodeTypeDto {
         id: def.id.clone(),
-        available: wf::catalog::node_is_available(&def.id,niche_nodes_enabled),
+        available: wf::catalog::node_is_available(&def.id, niche_nodes_enabled),
         category: def.category.as_str().to_owned(),
         label: def.label.clone(),
         description: def.description.clone(),
@@ -618,17 +618,25 @@ fn idempotency_key(headers: &HeaderMap) -> String {
         )
 }
 
-fn ensure_graph_available(state: &AppState, graph: &WorkflowGraph) -> Result<(),ApiError> {
-    if wf::catalog::graph_is_available(graph,state.workflow.niche_nodes_enabled) {
+fn ensure_graph_available(state: &AppState, graph: &WorkflowGraph) -> Result<(), ApiError> {
+    if wf::catalog::graph_is_available(graph, state.workflow.niche_nodes_enabled) {
         Ok(())
     } else {
-        Err(ApiError::Forbidden("Niche workflow nodes are disabled.".to_owned()))
+        Err(ApiError::Forbidden(
+            "Niche workflow nodes are disabled.".to_owned(),
+        ))
     }
 }
 
-async fn ensure_draft_available(state: &AppState, project: Uuid, workflow: Uuid) -> Result<(),ApiError> {
-    let record = deepref_app::get_workflow(&state.pool,project_id(project)?,workflow).await.map_err(map_error)?;
-    ensure_graph_available(state,&record.draft_graph)
+async fn ensure_draft_available(
+    state: &AppState,
+    project: Uuid,
+    workflow: Uuid,
+) -> Result<(), ApiError> {
+    let record = deepref_app::get_workflow(&state.pool, project_id(project)?, workflow)
+        .await
+        .map_err(map_error)?;
+    ensure_graph_available(state, &record.draft_graph)
 }
 
 // ---------------------------------------------------------------------------
@@ -642,7 +650,12 @@ async fn ensure_draft_available(state: &AppState, project: Uuid, workflow: Uuid)
     responses((status = 200, description = "Every block available on the canvas", body = Vec<NodeTypeDto>))
 )]
 pub(crate) async fn get_catalog(State(state): State<AppState>) -> Json<Vec<NodeTypeDto>> {
-    Json(wf::catalog().iter().map(|def| node_type_dto(def,state.workflow.niche_nodes_enabled)).collect())
+    Json(
+        wf::catalog()
+            .iter()
+            .map(|def| node_type_dto(def, state.workflow.niche_nodes_enabled))
+            .collect(),
+    )
 }
 
 fn template_dto(template: &wf::WorkflowTemplate) -> Result<TemplateDto, ApiError> {
@@ -729,13 +742,16 @@ pub(crate) async fn create_workflow(
         .map(from_graph_dto)
         .transpose()?
         .unwrap_or_default();
-    ensure_graph_available(&state,&graph)?;
-    let record = deepref_app::create_workflow(&state.pool,
-    project,
-    &input.name,
-    input.description.as_deref().unwrap_or_default(),
-    graph,
-    &extract_actor(&headers)?,, state.workflow.niche_nodes_enabled)
+    ensure_graph_available(&state, &graph)?;
+    let record = deepref_app::create_workflow(
+        &state.pool,
+        project,
+        &input.name,
+        input.description.as_deref().unwrap_or_default(),
+        graph,
+        &extract_actor(&headers)?,
+        state.workflow.niche_nodes_enabled,
+    )
     .await
     .map_err(map_error)?;
     Ok((StatusCode::CREATED, Json(workflow_dto(record)?)))
@@ -765,13 +781,16 @@ pub(crate) async fn create_workflow_from_template(
     let template = wf::template(&input.template_id)
         .ok_or_else(|| ApiError::BadRequest("That template does not exist.".to_owned()))?;
     let name = input.name.unwrap_or_else(|| template.name.to_owned());
-    ensure_graph_available(&state,&template.graph)?;
-    let record = deepref_app::create_workflow(&state.pool,
-    project,
-    &name,
-    template.description,
-    template.graph.clone(),
-    &extract_actor(&headers)?,, state.workflow.niche_nodes_enabled)
+    ensure_graph_available(&state, &template.graph)?;
+    let record = deepref_app::create_workflow(
+        &state.pool,
+        project,
+        &name,
+        template.description,
+        template.graph.clone(),
+        &extract_actor(&headers)?,
+        state.workflow.niche_nodes_enabled,
+    )
     .await
     .map_err(map_error)?;
     Ok((StatusCode::CREATED, Json(workflow_dto(record)?)))
@@ -815,9 +834,9 @@ pub(crate) async fn update_workflow(
 ) -> Result<Json<WorkflowDto>, ApiError> {
     let graph = input.graph.as_ref().map(from_graph_dto).transpose()?;
     if let Some(graph) = graph.as_ref() {
-        ensure_graph_available(&state,graph)?;
+        ensure_graph_available(&state, graph)?;
     } else {
-        ensure_draft_available(&state,project,workflow).await?;
+        ensure_draft_available(&state, project, workflow).await?;
     }
     let record = deepref_app::update_workflow(
         &state.pool,
@@ -866,11 +885,10 @@ pub(crate) async fn validate_workflow(
     State(state): State<AppState>,
     Path((project, workflow)): Path<(Uuid, Uuid)>,
 ) -> Result<Json<ValidationReportDto>, ApiError> {
-    ensure_draft_available(&state,project,workflow).await?;
-    let report =
-        deepref_app::validate_workflow_draft(&state.pool, project_id(project)?, workflow)
-            .await
-            .map_err(map_error)?;
+    ensure_draft_available(&state, project, workflow).await?;
+    let report = deepref_app::validate_workflow_draft(&state.pool, project_id(project)?, workflow)
+        .await
+        .map_err(map_error)?;
     Ok(Json(report_dto(&report)))
 }
 
@@ -998,12 +1016,15 @@ pub(crate) async fn publish_workflow(
     headers: HeaderMap,
     Json(input): Json<PublishRequest>,
 ) -> Result<(StatusCode, Json<VersionDto>), ApiError> {
-    ensure_draft_available(&state,project,workflow).await?;
-    let version = deepref_app::publish_workflow(&state.pool,
-    project_id(project)?,
-    workflow,
-    input.note.as_deref(),
-    &extract_actor(&headers)?,, state.workflow.niche_nodes_enabled)
+    ensure_draft_available(&state, project, workflow).await?;
+    let version = deepref_app::publish_workflow(
+        &state.pool,
+        project_id(project)?,
+        workflow,
+        input.note.as_deref(),
+        &extract_actor(&headers)?,
+        state.workflow.niche_nodes_enabled,
+    )
     .await
     .map_err(map_error)?;
     Ok((StatusCode::CREATED, Json(version_dto(version)?)))
@@ -1021,10 +1042,9 @@ pub(crate) async fn list_versions(
     State(state): State<AppState>,
     Path((project, workflow)): Path<(Uuid, Uuid)>,
 ) -> Result<Json<Vec<VersionDto>>, ApiError> {
-    let versions =
-        deepref_app::list_workflow_versions(&state.pool, project_id(project)?, workflow)
-            .await
-            .map_err(map_error)?;
+    let versions = deepref_app::list_workflow_versions(&state.pool, project_id(project)?, workflow)
+        .await
+        .map_err(map_error)?;
     Ok(Json(
         versions
             .into_iter()
@@ -1045,14 +1065,10 @@ pub(crate) async fn get_version(
     State(state): State<AppState>,
     Path((project, workflow, version)): Path<(Uuid, Uuid, i32)>,
 ) -> Result<Json<VersionDto>, ApiError> {
-    let version = deepref_app::get_workflow_version(
-        &state.pool,
-        project_id(project)?,
-        workflow,
-        version,
-    )
-    .await
-    .map_err(map_error)?;
+    let version =
+        deepref_app::get_workflow_version(&state.pool, project_id(project)?, workflow, version)
+            .await
+            .map_err(map_error)?;
     Ok(Json(version_dto(version)?))
 }
 
@@ -1068,13 +1084,22 @@ pub(crate) async fn enable_workflow(
     State(state): State<AppState>,
     Path((project, workflow)): Path<(Uuid, Uuid)>,
 ) -> Result<Json<WorkflowDto>, ApiError> {
-    deepref_app::get_workflow(&state.pool,project_id(project)?,workflow).await.map_err(map_error)?;
-    let (_,graph) = deepref_app::get_published_graph(&state.pool,workflow).await.map_err(map_error)?;
-    ensure_graph_available(&state,&graph)?;
-    let record =
-        deepref_app::set_workflow_enabled(&state.pool, project_id(project)?, workflow, true, state.workflow.niche_nodes_enabled)
-            .await
-            .map_err(map_error)?;
+    deepref_app::get_workflow(&state.pool, project_id(project)?, workflow)
+        .await
+        .map_err(map_error)?;
+    let (_, graph) = deepref_app::get_published_graph(&state.pool, workflow)
+        .await
+        .map_err(map_error)?;
+    ensure_graph_available(&state, &graph)?;
+    let record = deepref_app::set_workflow_enabled(
+        &state.pool,
+        project_id(project)?,
+        workflow,
+        true,
+        state.workflow.niche_nodes_enabled,
+    )
+    .await
+    .map_err(map_error)?;
     Ok(Json(workflow_dto(record)?))
 }
 
@@ -1090,10 +1115,15 @@ pub(crate) async fn disable_workflow(
     State(state): State<AppState>,
     Path((project, workflow)): Path<(Uuid, Uuid)>,
 ) -> Result<Json<WorkflowDto>, ApiError> {
-    let record =
-        deepref_app::set_workflow_enabled(&state.pool, project_id(project)?, workflow, false, state.workflow.niche_nodes_enabled)
-            .await
-            .map_err(map_error)?;
+    let record = deepref_app::set_workflow_enabled(
+        &state.pool,
+        project_id(project)?,
+        workflow,
+        false,
+        state.workflow.niche_nodes_enabled,
+    )
+    .await
+    .map_err(map_error)?;
     Ok(Json(workflow_dto(record)?))
 }
 
@@ -1220,7 +1250,7 @@ pub(crate) async fn start_workflow_run(
     let (version_id, graph) = deepref_app::get_published_graph(&state.pool, workflow)
         .await
         .map_err(map_error)?;
-    ensure_graph_available(&state,&graph)?;
+    ensure_graph_available(&state, &graph)?;
     let actor = extract_actor(&headers)?;
     let trigger_data = input.trigger_data.unwrap_or_else(|| json!({}));
     let started = deepref_app::start_run(
@@ -1279,7 +1309,7 @@ pub(crate) async fn start_test_run(
     let record = deepref_app::get_workflow(&state.pool, project, workflow)
         .await
         .map_err(map_error)?;
-    ensure_graph_available(&state,&record.draft_graph)?;
+    ensure_graph_available(&state, &record.draft_graph)?;
     // A test run answers with the run snapshot, and a blind audit withholds run
     // inspection entirely. Refuse instead of producing a snapshot nobody may read.
     if deepref_app::workflow_run_inspection_withheld(&state.pool, project)
@@ -1509,9 +1539,15 @@ fn hook_allowed(key: HookRateKey) -> bool {
     hook_window_allowed(&mut windows, key, Instant::now())
 }
 
-fn hook_window_allowed(windows: &mut HashMap<HookRateKey, RateWindow>, key: HookRateKey, now: Instant) -> bool {
+fn hook_window_allowed(
+    windows: &mut HashMap<HookRateKey, RateWindow>,
+    key: HookRateKey,
+    now: Instant,
+) -> bool {
     if !windows.contains_key(&key) && windows.len() >= MAX_HOOK_RATE_WINDOWS {
-        let oldest = windows.iter().min_by_key(|(_, window)| window.last_used)
+        let oldest = windows
+            .iter()
+            .min_by_key(|(_, window)| window.last_used)
             .map(|(key, _)| *key);
         if let Some(oldest) = oldest {
             windows.remove(&oldest);
@@ -1563,11 +1599,10 @@ async fn start_hook_run(
             details: json!({}),
         });
     }
-    let (version_id, graph) =
-        deepref_app::get_published_graph(&state.pool, target.workflow_id)
-            .await
-            .map_err(map_error)?;
-    ensure_graph_available(state,&graph)?;
+    let (version_id, graph) = deepref_app::get_published_graph(&state.pool, target.workflow_id)
+        .await
+        .map_err(map_error)?;
+    ensure_graph_available(state, &graph)?;
     let started = deepref_app::start_run(
         &state.pool,
         &StartRun {
@@ -1647,7 +1682,9 @@ pub(crate) async fn receive_webhook(
         .map_err(map_error)?
         .ok_or_else(|| ApiError::NotFound("unknown address".to_owned()))?;
     if !state.workflow.niche_nodes_enabled {
-        return Err(ApiError::Forbidden("Niche workflow nodes are disabled.".to_owned()));
+        return Err(ApiError::Forbidden(
+            "Niche workflow nodes are disabled.".to_owned(),
+        ));
     }
     if !hook_allowed((target.workflow_id, "webhook")) {
         return Ok(too_many_requests());
@@ -1760,7 +1797,9 @@ pub(crate) async fn receive_inbound_email(
         .map_err(map_error)?
         .ok_or_else(|| ApiError::NotFound("unknown address".to_owned()))?;
     if !state.workflow.niche_nodes_enabled {
-        return Err(ApiError::Forbidden("Niche workflow nodes are disabled.".to_owned()));
+        return Err(ApiError::Forbidden(
+            "Niche workflow nodes are disabled.".to_owned(),
+        ));
     }
     if !hook_allowed((target.workflow_id, "email")) {
         return Ok(too_many_requests());
@@ -1788,7 +1827,11 @@ mod tests {
         }
         assert!(!hook_window_allowed(&mut windows, key, now));
         assert!(hook_window_allowed(&mut windows, (key.0, "email"), now));
-        assert!(hook_window_allowed(&mut windows, key, now + Duration::from_secs(60)));
+        assert!(hook_window_allowed(
+            &mut windows,
+            key,
+            now + Duration::from_secs(60)
+        ));
     }
 
     #[test]
@@ -1798,13 +1841,28 @@ mod tests {
         let oldest = (Uuid::new_v4(), "webhook");
         let touched = (Uuid::new_v4(), "webhook");
         assert!(hook_window_allowed(&mut windows, touched, now));
-        assert!(hook_window_allowed(&mut windows, oldest, now + Duration::from_millis(1)));
+        assert!(hook_window_allowed(
+            &mut windows,
+            oldest,
+            now + Duration::from_millis(1)
+        ));
         for i in 2..MAX_HOOK_RATE_WINDOWS {
-            assert!(hook_window_allowed(&mut windows, (Uuid::new_v4(), "webhook"),
-                now + Duration::from_millis(i as u64)));
+            assert!(hook_window_allowed(
+                &mut windows,
+                (Uuid::new_v4(), "webhook"),
+                now + Duration::from_millis(i as u64)
+            ));
         }
-        assert!(hook_window_allowed(&mut windows, touched, now + Duration::from_secs(10)));
-        assert!(hook_window_allowed(&mut windows, (Uuid::new_v4(), "webhook"), now + Duration::from_secs(11)));
+        assert!(hook_window_allowed(
+            &mut windows,
+            touched,
+            now + Duration::from_secs(10)
+        ));
+        assert!(hook_window_allowed(
+            &mut windows,
+            (Uuid::new_v4(), "webhook"),
+            now + Duration::from_secs(11)
+        ));
         assert_eq!(windows.len(), MAX_HOOK_RATE_WINDOWS);
         assert!(!windows.contains_key(&oldest));
         assert!(windows.contains_key(&touched));

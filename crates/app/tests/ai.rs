@@ -10,11 +10,11 @@ use deepref_ai::{
     EvidenceRef, EvidenceRetriever, ModelParameters, ModelProfile, ModelRouter, ProposalDraft,
     ProposalStatus, ProposalStore, ResolvedModel, RetrievalRequest, safe_error_metadata,
 };
-use deepref_domain::{DocumentBlockId, DocumentId, ProjectId};
 use deepref_app::{
     PostgresAiStore, ensure_default_model_routes, get_ai_study_grouping_target, insert_model_route,
     persist_document_block_embedding, resolve_ai_proposal,
 };
+use deepref_domain::{DocumentBlockId, DocumentId, ProjectId};
 use sqlx::PgPool;
 use uuid::Uuid;
 

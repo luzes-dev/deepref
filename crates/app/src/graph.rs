@@ -148,7 +148,10 @@ pub async fn enqueue_metrics_recompute(
 }
 
 pub async fn recompute_project_metrics(pool: &PgPool, project_id: Uuid) -> anyhow::Result<()> {
-    crate::with_retry(crate::RetryPolicy::default(), || recompute_project_metrics_once(pool, project_id)).await
+    crate::with_retry(crate::RetryPolicy::default(), || {
+        recompute_project_metrics_once(pool, project_id)
+    })
+    .await
 }
 
 async fn recompute_project_metrics_once(pool: &PgPool, project_id: Uuid) -> anyhow::Result<()> {
@@ -166,12 +169,11 @@ async fn recompute_project_metrics_once(pool: &PgPool, project_id: Uuid) -> anyh
     // Serialize recomputations and graph-change requests on the project row.
     // Under repeatable read a changed lock target forces a retry rather than
     // allowing an older snapshot to overwrite a newer metric projection.
-    let current_revision: i64 = sqlx::query_scalar(
-        "SELECT metric_requested_revision FROM projects WHERE id=$1 FOR UPDATE",
-    )
-    .bind(project_id)
-    .fetch_one(&mut *transaction)
-    .await?;
+    let current_revision: i64 =
+        sqlx::query_scalar("SELECT metric_requested_revision FROM projects WHERE id=$1 FOR UPDATE")
+            .bind(project_id)
+            .fetch_one(&mut *transaction)
+            .await?;
     let graph = load_project_graph_from_connection(
         &mut transaction,
         project_id,

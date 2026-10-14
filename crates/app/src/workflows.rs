@@ -46,11 +46,16 @@ fn workflow_niche_nodes_enabled() -> bool {
     NICHE_NODES_ENABLED.get().copied().unwrap_or(false)
 }
 
-fn require_available_graph(graph:&WorkflowGraph,niche_nodes_enabled:bool)->Result<(),WorkflowError> {
-    if deepref_application::workflows::catalog::graph_is_available(graph,niche_nodes_enabled) {
+fn require_available_graph(
+    graph: &WorkflowGraph,
+    niche_nodes_enabled: bool,
+) -> Result<(), WorkflowError> {
+    if deepref_application::workflows::catalog::graph_is_available(graph, niche_nodes_enabled) {
         Ok(())
     } else {
-        Err(WorkflowError::InvalidInput("Niche workflow nodes are disabled.".to_owned()))
+        Err(WorkflowError::InvalidInput(
+            "Niche workflow nodes are disabled.".to_owned(),
+        ))
     }
 }
 
@@ -251,7 +256,7 @@ pub async fn create_workflow(
     actor: &Actor,
     niche_nodes_enabled: bool,
 ) -> Result<WorkflowRecord, WorkflowError> {
-    require_available_graph(&graph,niche_nodes_enabled)?;
+    require_available_graph(&graph, niche_nodes_enabled)?;
     let name = name.trim();
     if name.is_empty() || name.len() > 200 {
         return Err(WorkflowError::InvalidInput(
@@ -303,8 +308,12 @@ async fn write_secrets(
     for node in &graph.nodes {
         if node.node_type == "integration.http_request" {
             let origin = deepref_application::workflows::conditions::fixed_url_origin(
-                node.config.get("url").and_then(Value::as_str).unwrap_or_default(),
-            ).ok();
+                node.config
+                    .get("url")
+                    .and_then(Value::as_str)
+                    .unwrap_or_default(),
+            )
+            .ok();
             sqlx::query(
                 "DELETE FROM workflow_secrets WHERE workflow_id=$1 AND node_id=$2
                  AND origin IS DISTINCT FROM $3",
@@ -329,10 +338,17 @@ async fn write_secrets(
                 .bind(&secret.node_id)
                 .bind(&secret.key)
                 .bind(value)
-                .bind(graph.nodes.iter().find(|node| node.id == secret.node_id)
-                    .filter(|node| node.node_type == "integration.http_request")
-                    .and_then(|node| node.config.get("url").and_then(Value::as_str))
-                    .and_then(|url| deepref_application::workflows::conditions::fixed_url_origin(url).ok()))
+                .bind(
+                    graph
+                        .nodes
+                        .iter()
+                        .find(|node| node.id == secret.node_id)
+                        .filter(|node| node.node_type == "integration.http_request")
+                        .and_then(|node| node.config.get("url").and_then(Value::as_str))
+                        .and_then(|url| {
+                            deepref_application::workflows::conditions::fixed_url_origin(url).ok()
+                        }),
+                )
                 .execute(&mut **tx)
                 .await?;
             }
@@ -407,10 +423,13 @@ pub async fn update_workflow(
     .await?
     .ok_or(WorkflowError::NotFound)?;
     let revision: i64 = current.get("draft_revision");
-    if let Some(graph)=update.graph.as_ref() {
-        require_available_graph(graph,update.niche_nodes_enabled)?;
+    if let Some(graph) = update.graph.as_ref() {
+        require_available_graph(graph, update.niche_nodes_enabled)?;
     } else {
-        require_available_graph(&parse_graph(current.get("draft_graph"))?,update.niche_nodes_enabled)?;
+        require_available_graph(
+            &parse_graph(current.get("draft_graph"))?,
+            update.niche_nodes_enabled,
+        )?;
     }
     if update
         .expected_revision
@@ -495,15 +514,27 @@ pub async fn delete_workflow(
     project_id: ProjectId,
     workflow_id: Uuid,
 ) -> Result<(), WorkflowError> {
-    let mut tx=pool.begin().await?;
+    let mut tx = pool.begin().await?;
     sqlx::query("SELECT id FROM workflows WHERE project_id=$1 AND id=$2 FOR UPDATE")
-        .bind(project_uuid(project_id)).bind(workflow_id).fetch_optional(&mut *tx).await?
+        .bind(project_uuid(project_id))
+        .bind(workflow_id)
+        .fetch_optional(&mut *tx)
+        .await?
         .ok_or(WorkflowError::NotFound)?;
-    sqlx::query("DELETE FROM durable_runs r USING workflow_run_details d
-        WHERE d.id=r.id AND d.project_id=$1 AND d.workflow_id=$2")
-        .bind(project_uuid(project_id)).bind(workflow_id).execute(&mut *tx).await?;
+    sqlx::query(
+        "DELETE FROM durable_runs r USING workflow_run_details d
+        WHERE d.id=r.id AND d.project_id=$1 AND d.workflow_id=$2",
+    )
+    .bind(project_uuid(project_id))
+    .bind(workflow_id)
+    .execute(&mut *tx)
+    .await?;
     let deleted = sqlx::query("DELETE FROM workflows WHERE project_id=$1 AND id=$2")
-        .bind(project_uuid(project_id)).bind(workflow_id).execute(&mut *tx).await?.rows_affected();
+        .bind(project_uuid(project_id))
+        .bind(workflow_id)
+        .execute(&mut *tx)
+        .await?
+        .rows_affected();
     if deleted == 0 {
         return Err(WorkflowError::NotFound);
     }
@@ -543,7 +574,8 @@ pub async fn validate_workflow_draft(
     email_configured: bool,
 ) -> Result<ValidationReport, WorkflowError> {
     let workflow = get_workflow(pool, project_id, workflow_id).await?;
-    let ctx = validation_context(pool, workflow_id, &workflow.draft_graph, email_configured).await?;
+    let ctx =
+        validation_context(pool, workflow_id, &workflow.draft_graph, email_configured).await?;
     Ok(validate_graph(&workflow.draft_graph, &ctx))
 }
 
@@ -575,7 +607,7 @@ pub async fn publish_workflow(
     .await?
     .ok_or(WorkflowError::NotFound)?;
     let graph = parse_graph(row.get("draft_graph"))?;
-    require_available_graph(&graph,niche_nodes_enabled)?;
+    require_available_graph(&graph, niche_nodes_enabled)?;
     let status = parse_workflow_status(row.try_get("status")?)?;
     let ctx = validation_context(pool, workflow_id, &graph, email_configured).await?;
     let report = validate_graph(&graph, &ctx);
@@ -659,7 +691,7 @@ pub async fn set_workflow_enabled(
     let graph: Option<Value> = row.get("graph");
     let next_fire = if enabled {
         let graph = parse_graph(graph.ok_or(WorkflowError::NotPublished)?)?;
-        require_available_graph(&graph,niche_nodes_enabled)?;
+        require_available_graph(&graph, niche_nodes_enabled)?;
         trigger_of_graph(&graph).and_then(|trigger| next_fire_for(&trigger, Utc::now()))
     } else {
         None
@@ -938,8 +970,13 @@ pub async fn start_run_in_transaction(
     tx: &mut Transaction<'_, Postgres>,
     request: &StartRun,
 ) -> Result<StartedRun, WorkflowError> {
-    if !deepref_application::workflows::catalog::graph_is_available(&request.graph,request.niche_nodes_enabled) {
-        return Err(WorkflowError::InvalidInput("Niche workflow nodes are disabled.".to_owned()));
+    if !deepref_application::workflows::catalog::graph_is_available(
+        &request.graph,
+        request.niche_nodes_enabled,
+    ) {
+        return Err(WorkflowError::InvalidInput(
+            "Niche workflow nodes are disabled.".to_owned(),
+        ));
     }
     if serde_json::to_vec(&request.trigger_data)?.len() > MAX_TRIGGER_DATA_BYTES {
         return Err(WorkflowError::InvalidInput(
@@ -949,21 +986,34 @@ pub async fn start_run_in_transaction(
     let run_id = Uuid::new_v4();
     // Serialize the workflow-scoped idempotency key before creating its canonical identity.
     sqlx::query("SELECT id FROM workflows WHERE id=$1 FOR UPDATE")
-        .bind(request.workflow_id).fetch_one(&mut **tx).await?;
+        .bind(request.workflow_id)
+        .fetch_one(&mut **tx)
+        .await?;
     let existing: Option<Uuid> = sqlx::query_scalar(
         "SELECT id FROM workflow_run_details WHERE workflow_id=$1 AND idempotency_key=$2",
-    ).bind(request.workflow_id).bind(&request.idempotency_key)
-        .fetch_optional(&mut **tx).await?;
+    )
+    .bind(request.workflow_id)
+    .bind(&request.idempotency_key)
+    .fetch_optional(&mut **tx)
+    .await?;
     if let Some(existing) = existing {
-        return Ok(StartedRun { run_id: existing, created: false });
+        return Ok(StartedRun {
+            run_id: existing,
+            created: false,
+        });
     }
     sqlx::query(
         "INSERT INTO durable_runs
          (id,project_id,kind,status,actor_kind,actor_id,idempotency_key,started_at)
          VALUES ($1,$2,'workflow','running',$3,$4,$5,now())",
-    ).bind(run_id).bind(request.project_id).bind(&request.actor_kind)
-        .bind(&request.actor_id).bind(&request.idempotency_key)
-        .execute(&mut **tx).await?;
+    )
+    .bind(run_id)
+    .bind(request.project_id)
+    .bind(&request.actor_kind)
+    .bind(&request.actor_id)
+    .bind(&request.idempotency_key)
+    .execute(&mut **tx)
+    .await?;
     sqlx::query(
         "INSERT INTO workflow_run_details
          (id,project_id,workflow_id,version_id,graph,trigger_kind,trigger_data,idempotency_key,test_mode)
@@ -978,8 +1028,21 @@ pub async fn start_run_in_transaction(
         .trigger_node()
         .ok_or_else(|| WorkflowError::InvalidInput("The automation has no trigger.".to_owned()))?;
     let (output, fired) = trigger_outputs(&trigger.node_type, &request.trigger_data);
-    insert_workflow_step(tx, request.project_id, run_id, &trigger.id, "",
-        &trigger.node_type, "completed", Some(&output), &fired, None).await?;
+    insert_workflow_step(
+        tx,
+        request.project_id,
+        run_id,
+        WorkflowStepWrite {
+            node_id: &trigger.id,
+            iteration: "",
+            node_type: &trigger.node_type,
+            status: "completed",
+            output: Some(&output),
+            fired: &fired,
+            note: None,
+        },
+    )
+    .await?;
     advance_run_in_transaction(tx, run_id).await?;
     Ok(StartedRun {
         run_id,
@@ -1006,15 +1069,34 @@ fn snapshot_from_row(row: &PgRow) -> Result<NodeRunSnapshot, WorkflowError> {
     })
 }
 
+struct WorkflowStepWrite<'a> {
+    node_id: &'a str,
+    iteration: &'a str,
+    node_type: &'a str,
+    status: &'a str,
+    output: Option<&'a Value>,
+    fired: &'a [String],
+    note: Option<&'a str>,
+}
+
 async fn insert_workflow_step(
-    tx: &mut Transaction<'_, Postgres>, project_id: Uuid, run_id: Uuid,
-    node_id: &str, iteration: &str, node_type: &str, status: &str,
-    output: Option<&Value>, fired: &[String], note: Option<&str>,
+    tx: &mut Transaction<'_, Postgres>,
+    project_id: Uuid,
+    run_id: Uuid,
+    step: WorkflowStepWrite<'_>,
 ) -> Result<Option<Uuid>, WorkflowError> {
+    let WorkflowStepWrite { node_id, iteration, node_type, status, output, fired, note } = step;
     let existing: Option<Uuid> = sqlx::query_scalar(
         "SELECT id FROM workflow_step_details WHERE run_id=$1 AND node_id=$2 AND iteration=$3",
-    ).bind(run_id).bind(node_id).bind(iteration).fetch_optional(&mut **tx).await?;
-    if existing.is_some() { return Ok(None); }
+    )
+    .bind(run_id)
+    .bind(node_id)
+    .bind(iteration)
+    .fetch_optional(&mut **tx)
+    .await?;
+    if existing.is_some() {
+        return Ok(None);
+    }
     let id = Uuid::new_v4();
     sqlx::query(
         "INSERT INTO durable_steps (id,project_id,run_id,handler_kind,step_key,status,output,attempts,started_at,finished_at)
@@ -1027,8 +1109,16 @@ async fn insert_workflow_step(
     sqlx::query(
         "INSERT INTO workflow_step_details (id,run_id,node_id,iteration,node_type,fired_ports,note)
          VALUES ($1,$2,$3,$4,$5,$6,$7)",
-    ).bind(id).bind(run_id).bind(node_id).bind(iteration).bind(node_type)
-        .bind(fired).bind(note).execute(&mut **tx).await?;
+    )
+    .bind(id)
+    .bind(run_id)
+    .bind(node_id)
+    .bind(iteration)
+    .bind(node_type)
+    .bind(fired)
+    .bind(note)
+    .execute(&mut **tx)
+    .await?;
     Ok(Some(id))
 }
 async fn load_snapshots(
@@ -1093,7 +1183,10 @@ pub async fn advance_run_in_transaction(
     .await?
     .ok_or(WorkflowError::RunNotFound)?;
     let status = parse_run_status(row.try_get("status")?)?;
-    if matches!(status, WorkflowRunStatus::Completed | WorkflowRunStatus::Failed | WorkflowRunStatus::Cancelled) {
+    if matches!(
+        status,
+        WorkflowRunStatus::Completed | WorkflowRunStatus::Failed | WorkflowRunStatus::Cancelled
+    ) {
         return Ok(());
     }
     let project_id: Uuid = row.get("project_id");
@@ -1107,15 +1200,41 @@ pub async fn advance_run_in_transaction(
         let node_type = graph
             .node(node_id)
             .map_or_else(String::new, |node| node.node_type.clone());
-        insert_workflow_step(tx, project_id, run_id, node_id, iteration,
-            &node_type, "skipped", None, &[], Some(reason)).await?;
+        insert_workflow_step(
+            tx,
+            project_id,
+            run_id,
+            WorkflowStepWrite {
+                node_id,
+                iteration,
+                node_type: &node_type,
+                status: "skipped",
+                output: None,
+                fired: &[],
+                note: Some(reason),
+            },
+        )
+        .await?;
     }
     for planned in &plan.ready {
         let node_type = graph
             .node(&planned.node_id)
             .map_or_else(String::new, |node| node.node_type.clone());
-        let node_run_id = insert_workflow_step(tx, project_id, run_id,
-            &planned.node_id, &planned.iteration, &node_type, "queued", None, &[], None).await?;
+        let node_run_id = insert_workflow_step(
+            tx,
+            project_id,
+            run_id,
+            WorkflowStepWrite {
+                node_id: &planned.node_id,
+                iteration: &planned.iteration,
+                node_type: &node_type,
+                status: "queued",
+                output: None,
+                fired: &[],
+                note: None,
+            },
+        )
+        .await?;
         if let Some(node_run_id) = node_run_id {
             sqlx::query(
                 "INSERT INTO jobs (id,project_id,kind,payload,priority,max_attempts,dedupe_key,available_at)
@@ -1150,8 +1269,13 @@ pub async fn advance_run_in_transaction(
             plan.failed
                 .then(|| "A step did not finish, so the automation stopped.".to_owned())
         });
-        crate::durable_runs::finish_run(tx,run_id,
-            if plan.failed { "failed" } else { "completed" },stop_reason.as_deref()).await?;
+        crate::durable_runs::finish_run(
+            tx,
+            run_id,
+            if plan.failed { "failed" } else { "completed" },
+            stop_reason.as_deref(),
+        )
+        .await?;
         if plan.failed && !test_mode {
             notify_run_failed(tx, project_id, workflow_id, run_id, stop_reason.as_deref()).await?;
         }
@@ -1182,7 +1306,7 @@ pub async fn cancel_workflow_run(
     if matches!(status.as_str(), "completed" | "failed" | "cancelled") {
         return Err(WorkflowError::RunFinished);
     }
-    crate::durable_runs::cancel_run(&mut tx,run_id,"Cancelled by a person.").await?;
+    crate::durable_runs::cancel_run(&mut tx, run_id, "Cancelled by a person.").await?;
     tx.commit().await?;
     Ok(())
 }
@@ -1350,7 +1474,13 @@ pub async fn get_workflow_run(
     .bind(NODE_SNAPSHOT_LIMIT_BYTES)
     .fetch_all(pool)
     .await?;
-    run_from_row(&row, nodes.iter().map(node_run_from_row).collect::<Result<_, _>>()?)
+    run_from_row(
+        &row,
+        nodes
+            .iter()
+            .map(node_run_from_row)
+            .collect::<Result<_, _>>()?,
+    )
 }
 
 /// Whether an active blind audit withholds this project's run inspection. Starting a
@@ -1417,7 +1547,10 @@ pub async fn begin_node_execution(
          FROM durable_steps s JOIN workflow_step_details d ON d.id=s.id
          JOIN durable_runs r ON r.id=s.run_id JOIN workflow_run_details w ON w.id=r.id
          WHERE s.id=$1",
-    ).bind(node_run_id).fetch_one(&mut *tx).await?;
+    )
+    .bind(node_run_id)
+    .fetch_one(&mut *tx)
+    .await?;
     let run_id: Uuid = row.get("run_id");
     let graph = parse_graph(row.get("graph"))?;
     let node_id: String = row.get("node_id");
@@ -1437,7 +1570,10 @@ pub async fn begin_node_execution(
         input_value
     };
     sqlx::query("UPDATE workflow_step_details SET input=$2 WHERE id=$1")
-        .bind(node_run_id).bind(stored_input).execute(&mut *tx).await?;
+        .bind(node_run_id)
+        .bind(stored_input)
+        .execute(&mut *tx)
+        .await?;
     tx.commit().await?;
     Ok(StepClaim::Execute(Box::new(NodeExecution {
         node_run_id,
@@ -1482,7 +1618,11 @@ async fn resolve_inputs(
     for row in &rows {
         outputs.insert(
             (row.get("node_id"), row.get("iteration")),
-            (parse_node_run_state(row.try_get("status")?)?, row.get("fired_ports"), row.get("output")),
+            (
+                parse_node_run_state(row.try_get("status")?)?,
+                row.get("fired_ports"),
+                row.get("output"),
+            ),
         );
     }
     let multiple_ports: Vec<String> = graph
@@ -1588,34 +1728,92 @@ async fn finish_node(
     let mut tx = pool.begin().await?;
     let row: Option<(Uuid, Uuid)> = sqlx::query_as(
         "SELECT run_id,project_id FROM durable_steps WHERE id=$1 AND handler_kind='workflow'",
-    ).bind(node_run_id).fetch_optional(&mut *tx).await?;
-    let Some((run_id, project_id)) = row else { return Ok(false); };
+    )
+    .bind(node_run_id)
+    .fetch_optional(&mut *tx)
+    .await?;
+    let Some((run_id, project_id)) = row else {
+        return Ok(false);
+    };
     let (status, error, output, fired, items, note, wait_state, wait) = match outcome {
-        NodeOutcome::Waiting { delay_secs, poll, note, wait_state } =>
-            ("queued", None, None, Vec::new(), 0, Some(note), Some(wait_state), Some((delay_secs, poll))),
-        NodeOutcome::Completed { outputs, fired, items, note } => {
+        NodeOutcome::Waiting {
+            delay_secs,
+            poll,
+            note,
+            wait_state,
+        } => (
+            "queued",
+            None,
+            None,
+            Vec::new(),
+            0,
+            Some(note),
+            Some(wait_state),
+            Some((delay_secs, poll)),
+        ),
+        NodeOutcome::Completed {
+            outputs,
+            fired,
+            items,
+            note,
+        } => {
             let output = Value::Object(outputs);
             if serde_json::to_vec(&output)?.len() > MAX_NODE_OUTPUT_BYTES {
                 ("failed", Some("This step produced more information than an automation can pass along. Narrow it down, for example with a filter.".to_owned()),
                  None, Vec::new(), 0, None, None, None)
             } else {
-                ("completed", None, Some(output), fired, i32::try_from(items).unwrap_or(i32::MAX), note, None, None)
+                (
+                    "completed",
+                    None,
+                    Some(output),
+                    fired,
+                    i32::try_from(items).unwrap_or(i32::MAX),
+                    note,
+                    None,
+                    None,
+                )
             }
         }
-        NodeOutcome::Skipped { note } =>
-            ("skipped", None, None, Vec::new(), 0, Some(note), None, None),
-        NodeOutcome::Failed { message } =>
-            ("failed", Some(truncate_message(&message)), None, Vec::new(), 0, None, None, None),
+        NodeOutcome::Skipped { note } => {
+            ("skipped", None, None, Vec::new(), 0, Some(note), None, None)
+        }
+        NodeOutcome::Failed { message } => (
+            "failed",
+            Some(truncate_message(&message)),
+            None,
+            Vec::new(),
+            0,
+            None,
+            None,
+            None,
+        ),
     };
     let changed = match fence {
-        Some(lease) => crate::durable_runs::finish_step(
-            &mut tx, node_run_id, lease, status, error.as_deref(), output.as_ref(),
-        ).await?,
-        None => crate::durable_runs::fail_unclaimed_step(
-            &mut tx, node_run_id, error.as_deref().unwrap_or("This step stopped unexpectedly."),
-        ).await?,
+        Some(lease) => {
+            crate::durable_runs::finish_step(
+                &mut tx,
+                node_run_id,
+                lease,
+                status,
+                error.as_deref(),
+                output.as_ref(),
+            )
+            .await?
+        }
+        None => {
+            crate::durable_runs::fail_unclaimed_step(
+                &mut tx,
+                node_run_id,
+                error
+                    .as_deref()
+                    .unwrap_or("This step stopped unexpectedly."),
+            )
+            .await?
+        }
     };
-    if !changed { return Ok(false); }
+    if !changed {
+        return Ok(false);
+    }
     sqlx::query(
         "UPDATE workflow_step_details SET fired_ports=$2,items=$3,note=$4,wait_state=$5 WHERE id=$1",
     ).bind(node_run_id).bind(&fired).bind(items).bind(note).bind(wait_state)
@@ -1645,7 +1843,13 @@ pub async fn record_node_retry(
     message: &str,
 ) -> Result<(), WorkflowError> {
     let mut tx = pool.begin().await?;
-    crate::durable_runs::retry_step(&mut tx, node_run_id, lease, Some(&truncate_message(message))).await?;
+    crate::durable_runs::retry_step(
+        &mut tx,
+        node_run_id,
+        lease,
+        Some(&truncate_message(message)),
+    )
+    .await?;
     tx.commit().await?;
     Ok(())
 }

@@ -10,8 +10,9 @@ impl WorkflowConfig {
 
     pub fn from_source(get: &dyn Fn(&str) -> Option<String>) -> Self {
         Self {
-            niche_nodes_enabled: get("DEEPREF_WORKFLOW_NICHE_NODES")
-                .is_some_and(|value| matches!(value.to_ascii_lowercase().as_str(), "1" | "true" | "yes")),
+            niche_nodes_enabled: get("DEEPREF_WORKFLOW_NICHE_NODES").is_some_and(|value| {
+                matches!(value.to_ascii_lowercase().as_str(), "1" | "true" | "yes")
+            }),
         }
     }
 }

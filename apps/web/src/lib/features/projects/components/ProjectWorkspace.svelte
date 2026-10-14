@@ -10,7 +10,10 @@
 		getListProjectReportsQueryKey,
 		listProjectReports
 	} from '#lib/api/generated/reports/reports.js';
-	import { getListAcquisitionsQueryKey, listAcquisitions } from '#lib/api/generated/acquisitions/acquisitions.js';
+	import {
+		getListAcquisitionsQueryKey,
+		listAcquisitions
+	} from '#lib/api/generated/acquisitions/acquisitions.js';
 	import {
 		createGetProject,
 		getListProjectsQueryKey
@@ -64,7 +67,12 @@
 
 	const ingestionsQuery = createInfiniteQuery(() => ({
 		queryKey: getListAcquisitionsQueryKey(selectedProjectId),
-		queryFn: ({ pageParam, signal }) => listAcquisitions(selectedProjectId, { cursor: pageParam || undefined, limit: 50 }, { signal }),
+		queryFn: ({ pageParam, signal }) =>
+			listAcquisitions(
+				selectedProjectId,
+				{ cursor: pageParam || undefined, limit: 50 },
+				{ signal }
+			),
 		initialPageParam: '',
 		getNextPageParam: (lastPage) => lastPage.data.next_cursor ?? undefined,
 		staleTime: 0,
@@ -104,10 +112,7 @@
 	});
 
 	$effect(() => {
-		workspace.syncProjectSelection(
-			projects,
-			projectsQuery.isPending
-		);
+		workspace.syncProjectSelection(projects, projectsQuery.isPending);
 	});
 </script>
 
@@ -132,10 +137,13 @@
 					<CircleAlertIcon />
 					<Alert.Title>
 						{projectQuery.error instanceof ApiError && projectQuery.error.status === 404
-							? 'Project not found' : 'Project unavailable'}
+							? 'Project not found'
+							: 'Project unavailable'}
 					</Alert.Title>
 					<Alert.Description>{projectQuery.error.message}</Alert.Description>
-					<Button variant="outline" onclick={() => void projectQuery.refetch()}>Retry</Button>
+					<Button variant="outline" onclick={() => void projectQuery.refetch()}
+						>Retry</Button
+					>
 				</Alert.Root>
 			</div>
 		{:else if projects.length === 0}

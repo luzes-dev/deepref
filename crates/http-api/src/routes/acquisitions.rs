@@ -7,9 +7,11 @@ use axum::{
 };
 use chrono::{DateTime, Utc};
 use deepref_application::{CsvColumnMapping, ImportParser};
+use deepref_domain::events::{
+    EntityType, EventEnvelope, SUBJECT_WORK_FETCH_REQUESTED, WorkFetchRequested,
+};
 use deepref_domain::normalize_doi;
 use deepref_domain::{AcquisitionStatus, ImportFormat, ProjectId};
-use deepref_domain::events::{EntityType, EventEnvelope, SUBJECT_WORK_FETCH_REQUESTED, WorkFetchRequested};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use sha2::{Digest, Sha256};
@@ -150,7 +152,10 @@ pub(crate) async fn list_acquisitions(
     .bind(strategy)
     .fetch_all(&state.pool)
     .await?;
-    let items = rows.into_iter().map(acquisition_from_row).collect::<Result<Vec<_>, _>>()?;
+    let items = rows
+        .into_iter()
+        .map(acquisition_from_row)
+        .collect::<Result<Vec<_>, _>>()?;
     Ok(Json(page(items, limit as usize, |item| {
         (item.created_at, item.id)
     })?))
@@ -209,7 +214,8 @@ pub(crate) async fn create_acquisition(
     let max_depth = i32::from(
         deepref_domain::acquisition::MaxDepth::try_from(
             requested_max_depth.unwrap_or(project_default_depth),
-        ).map_err(|message| ApiError::BadRequest(message.to_owned()))?,
+        )
+        .map_err(|message| ApiError::BadRequest(message.to_owned()))?,
     );
     let seed_count = i32::try_from(seed_dois.len()).unwrap_or(i32::MAX);
     let config = json!({
@@ -477,8 +483,7 @@ pub(crate) async fn import_project_records(
     .map_err(map_acquisition_error)?;
     if result.created
         && let Err(error) =
-            deepref_app::enqueue_import_deduplication(&state.pool, project_id, result.run_id)
-                .await
+            deepref_app::enqueue_import_deduplication(&state.pool, project_id, result.run_id).await
     {
         // The import itself succeeded; the records wait for a manual run instead.
         tracing::warn!(%error, %project_id, "could not queue the duplicate check for an import");
@@ -626,14 +631,13 @@ pub(crate) async fn list_acquisition_items(
     Query(pagination): Query<PaginationParams>,
 ) -> Result<Json<PaginatedResponse<AcquisitionItemDto>>, ApiError> {
     let limit = pagination.limit()?;
-    let source: String = sqlx::query_scalar(
-        "SELECT source FROM acquisition_runs WHERE id=$1 AND project_id=$2",
-    )
-    .bind(acquisition_id)
-    .bind(project_id)
-    .fetch_optional(&state.pool)
-    .await?
-    .ok_or_else(|| ApiError::NotFound("acquisition not found".to_owned()))?;
+    let source: String =
+        sqlx::query_scalar("SELECT source FROM acquisition_runs WHERE id=$1 AND project_id=$2")
+            .bind(acquisition_id)
+            .bind(project_id)
+            .fetch_optional(&state.pool)
+            .await?
+            .ok_or_else(|| ApiError::NotFound("acquisition not found".to_owned()))?;
     if source == "crossref" {
         let after: Option<(DateTime<Utc>, String)> = pagination.decode()?;
         let rows = sqlx::query(
@@ -647,21 +651,24 @@ pub(crate) async fn list_acquisition_items(
         .bind(limit + 1)
         .fetch_all(&state.pool)
         .await?;
-        let items = rows.into_iter().map(|row| AcquisitionItemDto {
-            identifier: row.get("canonical_doi"),
-            position: 0,
-            status: row.get("status"),
-            title: row.get("title"),
-            record_id: None,
-            last_error: row.get("last_error"),
-            processed_at: row.get("fetched_at"),
-            kind: "doi".to_owned(),
-            depth: Some(row.get("depth")),
-            parent_doi: row.get("parent_doi"),
-            attempts: row.get("attempts"),
-            queued_at: Some(row.get("queued_at")),
-            report_id: Some(row.get("report_id")),
-        }).collect();
+        let items = rows
+            .into_iter()
+            .map(|row| AcquisitionItemDto {
+                identifier: row.get("canonical_doi"),
+                position: 0,
+                status: row.get("status"),
+                title: row.get("title"),
+                record_id: None,
+                last_error: row.get("last_error"),
+                processed_at: row.get("fetched_at"),
+                kind: "doi".to_owned(),
+                depth: Some(row.get("depth")),
+                parent_doi: row.get("parent_doi"),
+                attempts: row.get("attempts"),
+                queued_at: Some(row.get("queued_at")),
+                report_id: Some(row.get("report_id")),
+            })
+            .collect();
         return Ok(Json(page(items, limit as usize, |item| {
             (item.queued_at, item.identifier.clone())
         })?));
@@ -678,7 +685,10 @@ pub(crate) async fn list_acquisition_items(
     .bind(limit + 1)
     .fetch_all(&state.pool)
     .await?;
-    let items = rows.into_iter().map(acquisition_item_from_row).collect::<Result<Vec<_>, _>>()?;
+    let items = rows
+        .into_iter()
+        .map(acquisition_item_from_row)
+        .collect::<Result<Vec<_>, _>>()?;
     Ok(Json(page(items, limit as usize, |item| item.position)?))
 }
 
@@ -739,13 +749,22 @@ async fn persist_doi_acquisition(
     request: DoiAcquisitionRequest,
 ) -> Result<DoiAcquisitionResult, ApiError> {
     let mailto: String = sqlx::query_scalar("SELECT crossref_mailto FROM settings WHERE id=1")
-        .fetch_optional(&mut **tx).await?.unwrap_or_default();
-    let valid_mailto = mailto.trim().split_once('@').is_some_and(|(local, domain)| {
-        !local.is_empty() && domain.contains('.') && !domain.starts_with('.') && !domain.ends_with('.')
-    });
+        .fetch_optional(&mut **tx)
+        .await?
+        .unwrap_or_default();
+    let valid_mailto = mailto
+        .trim()
+        .split_once('@')
+        .is_some_and(|(local, domain)| {
+            !local.is_empty()
+                && domain.contains('.')
+                && !domain.starts_with('.')
+                && !domain.ends_with('.')
+        });
     if !valid_mailto {
         return Err(ApiError::Configuration(
-            "a valid Crossref mail address must be configured before creating an acquisition".to_owned(),
+            "a valid Crossref mail address must be configured before creating an acquisition"
+                .to_owned(),
         ));
     }
     let seed_count = i32::try_from(request.seed_dois.len()).unwrap_or(i32::MAX);
@@ -882,21 +901,39 @@ pub(crate) async fn enqueue_seed_jobs(
     Ok(())
 }
 
-async fn ensure_doi_report(tx: &mut sqlx::Transaction<'_, sqlx::Postgres>, doi: &str) -> Result<Uuid, ApiError> {
+async fn ensure_doi_report(
+    tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
+    doi: &str,
+) -> Result<Uuid, ApiError> {
     sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1,0))")
-        .bind(doi).execute(&mut **tx).await?;
-    if let Some(id) = sqlx::query_scalar("SELECT report_id FROM report_identifiers WHERE scheme='doi' AND normalized_value=$1")
-        .bind(doi).fetch_optional(&mut **tx).await? {
+        .bind(doi)
+        .execute(&mut **tx)
+        .await?;
+    if let Some(id) = sqlx::query_scalar(
+        "SELECT report_id FROM report_identifiers WHERE scheme='doi' AND normalized_value=$1",
+    )
+    .bind(doi)
+    .fetch_optional(&mut **tx)
+    .await?
+    {
         return Ok(id);
     }
     let id: Uuid = sqlx::query_scalar("SELECT md5('deepref:report:' || $1)::uuid")
-        .bind(doi).fetch_one(&mut **tx).await?;
+        .bind(doi)
+        .fetch_one(&mut **tx)
+        .await?;
     sqlx::query("INSERT INTO reports (id) VALUES ($1) ON CONFLICT (id) DO NOTHING")
-        .bind(id).execute(&mut **tx).await?;
+        .bind(id)
+        .execute(&mut **tx)
+        .await?;
     sqlx::query("INSERT INTO report_identifiers (id,report_id,scheme,value,normalized_value) VALUES ($1,$2,'doi',$3,$3) ON CONFLICT (scheme,normalized_value) DO NOTHING")
         .bind(Uuid::new_v4()).bind(id).bind(doi).execute(&mut **tx).await?;
-    Ok(sqlx::query_scalar("SELECT report_id FROM report_identifiers WHERE scheme='doi' AND normalized_value=$1")
-        .bind(doi).fetch_one(&mut **tx).await?)
+    Ok(sqlx::query_scalar(
+        "SELECT report_id FROM report_identifiers WHERE scheme='doi' AND normalized_value=$1",
+    )
+    .bind(doi)
+    .fetch_one(&mut **tx)
+    .await?)
 }
 
 #[utoipa::path(
@@ -910,11 +947,19 @@ async fn ensure_doi_report(tx: &mut sqlx::Transaction<'_, sqlx::Postgres>, doi: 
         (status = 500, description = "Internal server error", body = ErrorResponse)
     )
 )]
-pub(crate) async fn cancel_acquisition(State(state): State<AppState>, Path((project_id, acquisition_id)): Path<(Uuid, Uuid)>) -> Result<StatusCode, ApiError> {
+pub(crate) async fn cancel_acquisition(
+    State(state): State<AppState>,
+    Path((project_id, acquisition_id)): Path<(Uuid, Uuid)>,
+) -> Result<StatusCode, ApiError> {
     let mut tx = state.pool.begin().await?;
-    let status: String = sqlx::query_scalar("SELECT status FROM acquisition_runs WHERE id=$1 AND project_id=$2 FOR UPDATE")
-        .bind(acquisition_id).bind(project_id).fetch_optional(&mut *tx).await?
-        .ok_or_else(|| ApiError::NotFound("acquisition not found".to_owned()))?;
+    let status: String = sqlx::query_scalar(
+        "SELECT status FROM acquisition_runs WHERE id=$1 AND project_id=$2 FOR UPDATE",
+    )
+    .bind(acquisition_id)
+    .bind(project_id)
+    .fetch_optional(&mut *tx)
+    .await?
+    .ok_or_else(|| ApiError::NotFound("acquisition not found".to_owned()))?;
     if status != "queued" && status != "running" {
         return Err(ApiError::Conflict {
             code: "ACQUISITION_NOT_CANCELLABLE".to_owned(),
@@ -923,7 +968,9 @@ pub(crate) async fn cancel_acquisition(State(state): State<AppState>, Path((proj
         });
     }
     sqlx::query("UPDATE acquisition_runs SET status='cancelled',completed_at=now() WHERE id=$1")
-        .bind(acquisition_id).execute(&mut *tx).await?;
+        .bind(acquisition_id)
+        .execute(&mut *tx)
+        .await?;
     tx.commit().await?;
     Ok(StatusCode::ACCEPTED)
 }
@@ -1050,23 +1097,19 @@ fn map_acquisition_error(error: deepref_app::AcquisitionError) -> ApiError {
             details: json!({ "acquisition_id": run_id }),
         },
         deepref_app::AcquisitionError::Database(error) => ApiError::Database(error),
-        deepref_app::AcquisitionError::Serialization(error) => {
-            ApiError::Internal(error.into())
-        }
+        deepref_app::AcquisitionError::Serialization(error) => ApiError::Internal(error.into()),
         deepref_app::AcquisitionError::Queue(error) => ApiError::Internal(error),
     }
 }
 
 fn parse_acquisition_status(value: &str) -> Result<AcquisitionStatus, ApiError> {
-    AcquisitionStatus::parse(value).ok_or_else(|| {
-        ApiError::Internal(anyhow::anyhow!("unknown acquisition status: {value}"))
-    })
+    AcquisitionStatus::parse(value)
+        .ok_or_else(|| ApiError::Internal(anyhow::anyhow!("unknown acquisition status: {value}")))
 }
 
 fn parse_pmid_item_status(value: &str) -> Result<deepref_app::PmidItemStatus, ApiError> {
-    deepref_app::PmidItemStatus::parse(value).ok_or_else(|| {
-        ApiError::Internal(anyhow::anyhow!("unknown PMID item status: {value}"))
-    })
+    deepref_app::PmidItemStatus::parse(value)
+        .ok_or_else(|| ApiError::Internal(anyhow::anyhow!("unknown PMID item status: {value}")))
 }
 
 fn acquisition_from_row(row: sqlx::postgres::PgRow) -> Result<AcquisitionDto, ApiError> {
@@ -1106,7 +1149,10 @@ mod tests {
 
     #[test]
     fn lifecycle_status_decoding_rejects_unknown_database_values() {
-        assert_eq!(parse_acquisition_status("completed").unwrap(), AcquisitionStatus::Completed);
+        assert_eq!(
+            parse_acquisition_status("completed").unwrap(),
+            AcquisitionStatus::Completed
+        );
         assert!(parse_acquisition_status("unknown").is_err());
         assert_eq!(
             parse_pmid_item_status("imported").unwrap(),

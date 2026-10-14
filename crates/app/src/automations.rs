@@ -120,32 +120,52 @@ const RUN_QUERY: &str = "SELECT r.id AS run_id,r.project_id,d.definition_id,r.jo
  sum(cost_micros) cost_micros FROM ai_runs WHERE project_id=r.project_id AND parent_automation_run_id=r.id) u ON true";
 
 pub(crate) async fn dispatch_automation_trigger_in_transaction(
-    transaction: &mut Transaction<'_, Postgres>, project_id: Uuid, definition_id: Uuid,
-    trigger: &str, reference: Option<&str>, idempotency_key: &str, actor_kind: &str, actor_id: &str,
+    transaction: &mut Transaction<'_, Postgres>,
+    project_id: Uuid,
+    definition_id: Uuid,
+    trigger: &str,
+    reference: Option<&str>,
+    idempotency_key: &str,
+    actor: (ActorKind, &str),
 ) -> Result<(Uuid, Uuid, bool), sqlx::Error> {
     // Serialize the idempotency scope before checking the definition's current state.
     let identity = format!("{project_id}:{definition_id}:{trigger}:{idempotency_key}");
-    sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1,0))").bind(&identity)
-        .execute(&mut **transaction).await?;
+    sqlx::query("SELECT pg_advisory_xact_lock(hashtextextended($1,0))")
+        .bind(&identity)
+        .execute(&mut **transaction)
+        .await?;
     if let Some(row) = sqlx::query("SELECT r.id,r.job_id FROM durable_runs r JOIN automation_run_details d ON d.id=r.id
         WHERE d.project_id=$1 AND d.definition_id=$2 AND d.trigger_kind=$3 AND d.idempotency_key=$4")
         .bind(project_id).bind(definition_id).bind(trigger).bind(idempotency_key)
         .fetch_optional(&mut **transaction).await? {
         return Ok((row.get("id"),row.get("job_id"),false));
     }
-    let definition = sqlx::query("SELECT recipe_id,recipe_version FROM automation_definitions
-        WHERE project_id=$1 AND id=$2 AND trigger_kind=$3 AND status='active' FOR SHARE")
-        .bind(project_id).bind(definition_id).bind(trigger).fetch_one(&mut **transaction).await?;
-    let steps = sqlx::query("SELECT ordinal,step_key,step_kind FROM automation_definition_steps
-        WHERE project_id=$1 AND definition_id=$2 ORDER BY ordinal")
-        .bind(project_id).bind(definition_id).fetch_all(&mut **transaction).await?;
-    if steps.is_empty() { return Err(sqlx::Error::RowNotFound); }
+    let definition = sqlx::query(
+        "SELECT recipe_id,recipe_version FROM automation_definitions
+        WHERE project_id=$1 AND id=$2 AND trigger_kind=$3 AND status='active' FOR SHARE",
+    )
+    .bind(project_id)
+    .bind(definition_id)
+    .bind(trigger)
+    .fetch_one(&mut **transaction)
+    .await?;
+    let steps = sqlx::query(
+        "SELECT ordinal,step_key,step_kind FROM automation_definition_steps
+        WHERE project_id=$1 AND definition_id=$2 ORDER BY ordinal",
+    )
+    .bind(project_id)
+    .bind(definition_id)
+    .fetch_all(&mut **transaction)
+    .await?;
+    if steps.is_empty() {
+        return Err(sqlx::Error::RowNotFound);
+    }
     let run_id = Uuid::new_v4();
     let first_step_id = Uuid::new_v4();
-    let job_id = enqueue_recipe_step(transaction,project_id,run_id,first_step_id).await?;
+    let job_id = enqueue_recipe_step(transaction, project_id, run_id, first_step_id).await?;
     sqlx::query("INSERT INTO durable_runs(id,project_id,kind,status,job_id,actor_kind,actor_id,idempotency_key)
         VALUES($1,$2,'automation','queued',$3,$4,$5,$6)")
-        .bind(run_id).bind(project_id).bind(job_id).bind(actor_kind).bind(actor_id).bind(idempotency_key)
+        .bind(run_id).bind(project_id).bind(job_id).bind(actor.0.as_str()).bind(actor.1).bind(idempotency_key)
         .execute(&mut **transaction).await?;
     sqlx::query("INSERT INTO automation_run_details(id,project_id,definition_id,recipe_id,recipe_version,trigger_kind,trigger_reference,idempotency_key)
         VALUES($1,$2,$3,$4,$5,$6,$7,$8)")
@@ -153,27 +173,55 @@ pub(crate) async fn dispatch_automation_trigger_in_transaction(
         .bind(definition.get::<i32,_>("recipe_version")).bind(trigger).bind(reference).bind(idempotency_key)
         .execute(&mut **transaction).await?;
     for (index, step) in steps.iter().enumerate() {
-        let id = if index == 0 { first_step_id } else { Uuid::new_v4() };
-        sqlx::query("INSERT INTO durable_steps(id,project_id,run_id,handler_kind,step_key,ordinal,status)
-            VALUES($1,$2,$3,'automation',$4,$5,'queued')")
-            .bind(id).bind(project_id).bind(run_id).bind(step.get::<String,_>("step_key"))
-            .bind(step.get::<i32,_>("ordinal")).execute(&mut **transaction).await?;
-        sqlx::query("INSERT INTO automation_step_details(id,project_id,run_id,ordinal,step_key,step_kind)
-            VALUES($1,$2,$3,$4,$5,$6)")
-            .bind(id).bind(project_id).bind(run_id).bind(step.get::<i32,_>("ordinal"))
-            .bind(step.get::<String,_>("step_key")).bind(step.get::<String,_>("step_kind"))
-            .execute(&mut **transaction).await?;
+        let id = if index == 0 {
+            first_step_id
+        } else {
+            Uuid::new_v4()
+        };
+        sqlx::query(
+            "INSERT INTO durable_steps(id,project_id,run_id,handler_kind,step_key,ordinal,status)
+            VALUES($1,$2,$3,'automation',$4,$5,'queued')",
+        )
+        .bind(id)
+        .bind(project_id)
+        .bind(run_id)
+        .bind(step.get::<String, _>("step_key"))
+        .bind(step.get::<i32, _>("ordinal"))
+        .execute(&mut **transaction)
+        .await?;
+        sqlx::query(
+            "INSERT INTO automation_step_details(id,project_id,run_id,ordinal,step_key,step_kind)
+            VALUES($1,$2,$3,$4,$5,$6)",
+        )
+        .bind(id)
+        .bind(project_id)
+        .bind(run_id)
+        .bind(step.get::<i32, _>("ordinal"))
+        .bind(step.get::<String, _>("step_key"))
+        .bind(step.get::<String, _>("step_kind"))
+        .execute(&mut **transaction)
+        .await?;
     }
-    Ok((run_id,job_id,true))
+    Ok((run_id, job_id, true))
 }
 
-async fn enqueue_recipe_step(transaction: &mut Transaction<'_,Postgres>, project_id: Uuid, run_id: Uuid, step_id: Uuid) -> Result<Uuid,sqlx::Error> {
-    sqlx::query_scalar("INSERT INTO jobs(id,project_id,kind,payload,state,priority,max_attempts,dedupe_key)
+async fn enqueue_recipe_step(
+    transaction: &mut Transaction<'_, Postgres>,
+    project_id: Uuid,
+    run_id: Uuid,
+    step_id: Uuid,
+) -> Result<Uuid, sqlx::Error> {
+    sqlx::query_scalar(
+        "INSERT INTO jobs(id,project_id,kind,payload,state,priority,max_attempts,dedupe_key)
         VALUES($1,$2,'durable_run_step',$3,'queued',0,5,$4)
-        ON CONFLICT(dedupe_key) DO UPDATE SET id=jobs.id RETURNING id")
-        .bind(Uuid::new_v4()).bind(project_id)
-        .bind(serde_json::json!({"run_id":run_id,"step_id":step_id,"handler_kind":"automation"}))
-        .bind(format!("durable-step:{step_id}")).fetch_one(&mut **transaction).await
+        ON CONFLICT(dedupe_key) DO UPDATE SET id=jobs.id RETURNING id",
+    )
+    .bind(Uuid::new_v4())
+    .bind(project_id)
+    .bind(serde_json::json!({"run_id":run_id,"step_id":step_id,"handler_kind":"automation"}))
+    .bind(format!("durable-step:{step_id}"))
+    .fetch_one(&mut **transaction)
+    .await
 }
 
 pub async fn dispatch_automation_trigger(
@@ -183,12 +231,24 @@ pub async fn dispatch_automation_trigger(
     request.validate()?;
     let mut transaction = pool.begin().await?;
     let (run_id, job_id, created) = dispatch_automation_trigger_in_transaction(
-        &mut transaction, request.project_id.as_uuid(), request.definition_id.as_uuid(),
-        request.trigger.as_str(), request.trigger_reference.as_ref().map(AutomationTriggerReference::as_str),
-        request.idempotency_key.as_str(), request.actor.kind().as_str(), request.actor.id(),
-    ).await?;
+        &mut transaction,
+        request.project_id.as_uuid(),
+        request.definition_id.as_uuid(),
+        request.trigger.as_str(),
+        request
+            .trigger_reference
+            .as_ref()
+            .map(AutomationTriggerReference::as_str),
+        request.idempotency_key.as_str(),
+        (request.actor.kind(), request.actor.id()),
+    )
+    .await?;
     transaction.commit().await?;
-    Ok(AutomationDispatchResult { run_id: AutomationRunId::new(run_id)?, job_id, created })
+    Ok(AutomationDispatchResult {
+        run_id: AutomationRunId::new(run_id)?,
+        job_id,
+        created,
+    })
 }
 
 /// Dispatch a typed scientific transition inside the transaction that made
@@ -224,9 +284,15 @@ pub async fn dispatch_automation_domain_event(
     .await?;
     for definition_id in definitions {
         let (_, _, was_created) = dispatch_automation_trigger_in_transaction(
-            transaction, project_id.as_uuid(), definition_id, trigger.as_str(),
-            Some(&source_identity), &source_identity, actor_kind.as_str(), actor_id,
-        ).await?;
+            transaction,
+            project_id.as_uuid(),
+            definition_id,
+            trigger.as_str(),
+            Some(&source_identity),
+            &source_identity,
+            (actor_kind, actor_id),
+        )
+        .await?;
         created += u64::from(was_created);
     }
     Ok(created)
@@ -239,11 +305,21 @@ pub async fn start_automation_manually(
     request.validate()?;
     let mut transaction = pool.begin().await?;
     let (run_id, job_id, created) = dispatch_automation_trigger_in_transaction(
-        &mut transaction, request.project_id.as_uuid(), request.definition_id.as_uuid(),
-        "manual", None, request.idempotency_key.as_str(), request.actor.kind().as_str(), request.actor.id(),
-    ).await?;
+        &mut transaction,
+        request.project_id.as_uuid(),
+        request.definition_id.as_uuid(),
+        "manual",
+        None,
+        request.idempotency_key.as_str(),
+        (request.actor.kind(), request.actor.id()),
+    )
+    .await?;
     transaction.commit().await?;
-    Ok(AutomationDispatchResult { run_id: AutomationRunId::new(run_id)?, job_id, created })
+    Ok(AutomationDispatchResult {
+        run_id: AutomationRunId::new(run_id)?,
+        job_id,
+        created,
+    })
 }
 
 pub async fn list_automation_runs(
@@ -253,8 +329,9 @@ pub async fn list_automation_runs(
 ) -> Result<Vec<AutomationRun>, AutomationError> {
     validate_project(project_id)?;
     validate_run_list_limit(limit)?;
-    let rows =
-        sqlx::query(&format!("{RUN_QUERY} WHERE r.project_id=$1 AND ai_first_run_visible($1,r.id) ORDER BY r.created_at DESC,r.id DESC LIMIT $2"))
+    let mut query = sqlx::QueryBuilder::<sqlx::Postgres>::new(RUN_QUERY);
+    query.push(" WHERE r.project_id=$1 AND ai_first_run_visible($1,r.id) ORDER BY r.created_at DESC,r.id DESC LIMIT $2");
+    let rows = query.build()
             .bind(project_id.as_uuid())
             .bind(i32::try_from(limit).map_err(|_| {
                 AutomationError::InvalidInput(AutomationValidationError::InvalidRunListLimit)
@@ -270,13 +347,14 @@ pub async fn get_automation_run(
     run_id: AutomationRunId,
 ) -> Result<AutomationRun, AutomationError> {
     validate_project(project_id)?;
-    let row =
-        sqlx::query(&format!("{RUN_QUERY} WHERE r.project_id=$1 AND r.id=$2 AND ai_first_run_visible($1,$2)"))
-            .bind(project_id.as_uuid())
-            .bind(run_id.as_uuid())
-            .fetch_optional(pool)
-            .await?
-            .ok_or(AutomationError::RunNotFound)?;
+    let mut query = sqlx::QueryBuilder::<sqlx::Postgres>::new(RUN_QUERY);
+    query.push(" WHERE r.project_id=$1 AND r.id=$2 AND ai_first_run_visible($1,$2)");
+    let row = query.build()
+    .bind(project_id.as_uuid())
+    .bind(run_id.as_uuid())
+    .fetch_optional(pool)
+    .await?
+    .ok_or(AutomationError::RunNotFound)?;
     run_from_row(&row)
 }
 
@@ -490,13 +568,24 @@ fn validate_project(project_id: ProjectId) -> Result<(), AutomationError> {
     }
 }
 
-
-async fn ensure_live_lease(transaction: &mut Transaction<'_,Postgres>,project_id: ProjectId,lease: &JobLease) -> Result<(),AutomationError> {
-    let valid: bool = sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM jobs WHERE id=$1 AND project_id=$2
-        AND state='running' AND lease_owner=$3 AND attempts=$4 AND leased_until>now())")
-        .bind(lease.id).bind(project_id.as_uuid()).bind(&lease.owner).bind(lease.attempt)
-        .fetch_one(&mut **transaction).await?;
-    if !valid { return Err(AutomationError::WorkerOwnership); }
+async fn ensure_live_lease(
+    transaction: &mut Transaction<'_, Postgres>,
+    project_id: ProjectId,
+    lease: &JobLease,
+) -> Result<(), AutomationError> {
+    let valid: bool = sqlx::query_scalar(
+        "SELECT EXISTS(SELECT 1 FROM jobs WHERE id=$1 AND project_id=$2
+        AND state='running' AND lease_owner=$3 AND attempts=$4 AND leased_until>now())",
+    )
+    .bind(lease.id)
+    .bind(project_id.as_uuid())
+    .bind(&lease.owner)
+    .bind(lease.attempt)
+    .fetch_one(&mut **transaction)
+    .await?;
+    if !valid {
+        return Err(AutomationError::WorkerOwnership);
+    }
     Ok(())
 }
 
@@ -510,7 +599,7 @@ pub async fn begin_next_automation_step(
     let worker_id = lease.owner.as_str();
     validate_worker_id(worker_id)?;
     let mut transaction = pool.begin().await?;
-    ensure_live_lease(&mut transaction,project_id,lease).await?;
+    ensure_live_lease(&mut transaction, project_id, lease).await?;
     let step_id = sqlx::query_scalar::<_,Uuid>(
         "SELECT s.id FROM durable_steps s JOIN jobs j ON j.id=$3 AND j.project_id=s.project_id
          WHERE s.project_id=$1 AND s.run_id=$2 AND j.kind='durable_run_step'
@@ -518,8 +607,13 @@ pub async fn begin_next_automation_step(
            AND NOT EXISTS(SELECT 1 FROM durable_steps p WHERE p.run_id=s.run_id AND p.ordinal<s.ordinal AND p.status<>'completed')",
     ).bind(project_id.as_uuid()).bind(run_id.as_uuid()).bind(lease.id)
         .fetch_optional(&mut *transaction).await?;
-    let Some(step_id) = step_id else { return Ok(None); };
-    if crate::durable_runs::begin_step(&mut transaction,step_id,lease).await?.is_none() {
+    let Some(step_id) = step_id else {
+        return Ok(None);
+    };
+    if crate::durable_runs::begin_step(&mut transaction, step_id, lease)
+        .await?
+        .is_none()
+    {
         transaction.commit().await?;
         return Ok(None);
     }
@@ -569,25 +663,55 @@ pub(crate) async fn complete_automation_step_with_output_in_transaction(
     lease: &JobLease,
     output: Option<Value>,
 ) -> Result<bool, AutomationError> {
-    let run_id = sqlx::query_scalar::<_,Uuid>("SELECT run_id FROM durable_steps WHERE project_id=$1 AND id=$2")
-        .bind(project_id.as_uuid()).bind(step_run_id.as_uuid()).fetch_one(&mut **transaction).await?;
-    ensure_live_lease(transaction,project_id,lease).await?;
-    let changed = crate::durable_runs::finish_step(transaction,step_run_id.as_uuid(),lease,"completed",None,output.as_ref()).await?;
+    let run_id = sqlx::query_scalar::<_, Uuid>(
+        "SELECT run_id FROM durable_steps WHERE project_id=$1 AND id=$2",
+    )
+    .bind(project_id.as_uuid())
+    .bind(step_run_id.as_uuid())
+    .fetch_one(&mut **transaction)
+    .await?;
+    ensure_live_lease(transaction, project_id, lease).await?;
+    let changed = crate::durable_runs::finish_step(
+        transaction,
+        step_run_id.as_uuid(),
+        lease,
+        "completed",
+        None,
+        output.as_ref(),
+    )
+    .await?;
     if !changed {
-        let status = sqlx::query_scalar::<_,String>("SELECT status FROM durable_steps WHERE id=$1")
-            .bind(step_run_id.as_uuid()).fetch_one(&mut **transaction).await?;
-        if status != "completed" { return Err(AutomationError::WorkerOwnership); }
-        if let Some(output)=output.as_ref()
-            && !crate::durable_runs::set_completed_step_output(transaction,step_run_id.as_uuid(),lease,output).await? {
+        let status =
+            sqlx::query_scalar::<_, String>("SELECT status FROM durable_steps WHERE id=$1")
+                .bind(step_run_id.as_uuid())
+                .fetch_one(&mut **transaction)
+                .await?;
+        if status != "completed" {
+            return Err(AutomationError::WorkerOwnership);
+        }
+        if let Some(output) = output.as_ref()
+            && !crate::durable_runs::set_completed_step_output(
+                transaction,
+                step_run_id.as_uuid(),
+                lease,
+                output,
+            )
+            .await?
+        {
             return Err(AutomationError::WorkerOwnership);
         }
     }
     if changed {
-        let next = sqlx::query_scalar::<_,Uuid>("SELECT id FROM durable_steps WHERE project_id=$1 AND run_id=$2
-            AND status='queued' ORDER BY ordinal LIMIT 1")
-            .bind(project_id.as_uuid()).bind(run_id).fetch_optional(&mut **transaction).await?;
+        let next = sqlx::query_scalar::<_, Uuid>(
+            "SELECT id FROM durable_steps WHERE project_id=$1 AND run_id=$2
+            AND status='queued' ORDER BY ordinal LIMIT 1",
+        )
+        .bind(project_id.as_uuid())
+        .bind(run_id)
+        .fetch_optional(&mut **transaction)
+        .await?;
         if let Some(next) = next {
-            enqueue_recipe_step(transaction,project_id.as_uuid(),run_id,next).await?;
+            enqueue_recipe_step(transaction, project_id.as_uuid(), run_id, next).await?;
         }
     }
     Ok(changed)
@@ -605,20 +729,39 @@ pub async fn fail_automation_step(
     validate_worker_id(worker_id)?;
     validate_error(error)?;
     let mut transaction = pool.begin().await?;
-    ensure_live_lease(&mut transaction,project_id,lease).await?;
-    let exists = sqlx::query_scalar::<_,bool>("SELECT EXISTS(SELECT 1 FROM durable_steps WHERE project_id=$1 AND id=$2)")
-        .bind(project_id.as_uuid()).bind(step_run_id.as_uuid()).fetch_one(&mut *transaction).await?;
-    if !exists { return Err(AutomationError::StepNotFound); }
-    let changed = crate::durable_runs::finish_step(&mut transaction,step_run_id.as_uuid(),lease,"failed",Some(error),None).await?;
+    ensure_live_lease(&mut transaction, project_id, lease).await?;
+    let exists = sqlx::query_scalar::<_, bool>(
+        "SELECT EXISTS(SELECT 1 FROM durable_steps WHERE project_id=$1 AND id=$2)",
+    )
+    .bind(project_id.as_uuid())
+    .bind(step_run_id.as_uuid())
+    .fetch_one(&mut *transaction)
+    .await?;
+    if !exists {
+        return Err(AutomationError::StepNotFound);
+    }
+    let changed = crate::durable_runs::finish_step(
+        &mut transaction,
+        step_run_id.as_uuid(),
+        lease,
+        "failed",
+        Some(error),
+        None,
+    )
+    .await?;
     if !changed {
-        let status = sqlx::query_scalar::<_,String>("SELECT status FROM durable_steps WHERE id=$1")
-            .bind(step_run_id.as_uuid()).fetch_one(&mut *transaction).await?;
-        if status != "completed" { return Err(AutomationError::WorkerOwnership); }
+        let status =
+            sqlx::query_scalar::<_, String>("SELECT status FROM durable_steps WHERE id=$1")
+                .bind(step_run_id.as_uuid())
+                .fetch_one(&mut *transaction)
+                .await?;
+        if status != "completed" {
+            return Err(AutomationError::WorkerOwnership);
+        }
     }
     transaction.commit().await?;
     Ok(changed)
 }
-
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AutomationFinalization {
@@ -677,13 +820,18 @@ pub async fn finalize_automation_run(
     if total == 0 || (failed == 0 && completed < total) {
         return Err(AutomationError::RunNotReady);
     }
-    let current=sqlx::query_scalar::<_,Uuid>(
+    let current = sqlx::query_scalar::<_, Uuid>(
         "SELECT s.id FROM jobs j JOIN durable_steps s ON s.project_id=j.project_id
          AND j.payload->>'step_id'=s.id::text AND j.payload->>'run_id'=s.run_id::text
-         WHERE j.id=$1 AND s.project_id=$2 AND s.run_id=$3")
-        .bind(lease.id).bind(project_id.as_uuid()).bind(run_id.as_uuid())
-        .fetch_optional(&mut *transaction).await?.ok_or(AutomationError::WorkerOwnership)?;
-    if !crate::durable_runs::verify_active_step_lease(&mut transaction,current,lease).await? {
+         WHERE j.id=$1 AND s.project_id=$2 AND s.run_id=$3",
+    )
+    .bind(lease.id)
+    .bind(project_id.as_uuid())
+    .bind(run_id.as_uuid())
+    .fetch_optional(&mut *transaction)
+    .await?
+    .ok_or(AutomationError::WorkerOwnership)?;
+    if !crate::durable_runs::verify_active_step_lease(&mut transaction, current, lease).await? {
         return Err(AutomationError::WorkerOwnership);
     }
     if failed > 0 {
@@ -691,7 +839,8 @@ pub async fn finalize_automation_run(
             .get::<Option<String>, _>("first_error")
             .unwrap_or_else(|| "automation step failed".to_owned());
         validate_error(&error)?;
-        crate::durable_runs::finish_run(&mut transaction,run_id.as_uuid(),"failed",Some(&error)).await?;
+        crate::durable_runs::finish_run(&mut transaction, run_id.as_uuid(), "failed", Some(&error))
+            .await?;
         // A review run that failed or was blocked has already notified once,
         // with the review's own name and reason (see `review_runs`). A second
         // "Automation failed" for the same run only duplicates that entry.
@@ -724,7 +873,7 @@ pub async fn finalize_automation_run(
         return Ok(AutomationFinalization::Failed);
     }
 
-    crate::durable_runs::finish_run(&mut transaction,run_id.as_uuid(),"completed",None).await?;
+    crate::durable_runs::finish_run(&mut transaction, run_id.as_uuid(), "completed", None).await?;
     record_notification_in_transaction(
         &mut transaction,
         &NotificationDraft::success(
@@ -766,7 +915,7 @@ pub async fn retry_automation_run(
             return Err(AutomationError::RunNotRetryable);
         }
     }
-    if !crate::durable_runs::reopen_recipe_run(&mut transaction,run_id.as_uuid()).await? {
+    if !crate::durable_runs::reopen_recipe_run(&mut transaction, run_id.as_uuid()).await? {
         return Err(AutomationError::RunNotRetryable);
     }
     // Requeue the failed step's existing job; the run's first job identity never changes.

@@ -575,11 +575,13 @@
 	}
 	function pasteNodes(at?: { x: number; y: number }) {
 		if (!clipboard || readOnly) return;
-		if (clipboard.nodes.some((node) => {
-			if (node.type === 'note') return false;
-			const def = defs.get(node.data.typeId ?? '');
-			return !nodeIsAvailable(def);
-		})) {
+		if (
+			clipboard.nodes.some((node) => {
+				if (node.type === 'note') return false;
+				const def = defs.get(node.data.typeId ?? '');
+				return !nodeIsAvailable(def);
+			})
+		) {
 			notifyInfo('This selection includes blocks that are unavailable on this server.');
 			return;
 		}

@@ -5,11 +5,9 @@
     clippy::string_slice
 )]
 use deepref_ai::{DataExtraction, ExtractedField, ExtractionEvidence, TypedExtractionValue};
+use deepref_app::{ExtractionError, apply_data_extraction_in_transaction, create_field_definition};
 use deepref_application::{ExtractionFieldDefinition, ExtractionFieldType};
 use deepref_domain::{Actor, ActorKind, ProjectId};
-use deepref_app::{
-    ExtractionError, apply_data_extraction_in_transaction, create_field_definition,
-};
 use sqlx::PgPool;
 use uuid::Uuid;
 
@@ -223,11 +221,11 @@ async fn extraction_acceptance_rejects_a_pending_value_from_an_old_field_version
 
 #[tokio::test]
 async fn manual_values_supersede_previous_values_and_keep_history() {
-    use deepref_application::ExtractionValue;
     use deepref_app::{
         ManualExtractionEvidence, ManualExtractionValue, clear_value, list_field_definitions,
         list_values, record_manual_value,
     };
+    use deepref_application::ExtractionValue;
     let Some(pool) = database().await else { return };
     let (project_id, _report_id, study_id, block_id) = seed_project(&pool).await;
     let actor = Actor::new(ActorKind::User, "reviewer-1".to_owned()).expect("actor");
@@ -383,11 +381,11 @@ async fn manual_values_supersede_previous_values_and_keep_history() {
 
 #[tokio::test]
 async fn ai_act_flags_values_to_verify_skips_human_values_and_can_be_undone() {
-    use deepref_application::ExtractionValue;
     use deepref_app::{
         ExtractionApplyOptions, ManualExtractionValue, NewActivity, confirm_value, list_values,
         record_activity_in_transaction, record_manual_value, undo_activity,
     };
+    use deepref_application::ExtractionValue;
     let Some(pool) = database().await else { return };
     let (project_id, report_id, study_id, block_id) = seed_project(&pool).await;
     let document_id: Uuid =

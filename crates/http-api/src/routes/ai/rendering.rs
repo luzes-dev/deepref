@@ -133,8 +133,9 @@ pub(super) fn map_ai_proposal_error(error: AiProposalError) -> ApiError {
 
 pub(super) fn map_protocol_error(error: deepref_app::ProtocolError) -> ApiError {
     match error {
-        deepref_app::ProtocolError::ProjectNotFound
-        | deepref_app::ProtocolError::NotFound => ApiError::NotFound(error.to_string()),
+        deepref_app::ProtocolError::ProjectNotFound | deepref_app::ProtocolError::NotFound => {
+            ApiError::NotFound(error.to_string())
+        }
         deepref_app::ProtocolError::Database(error) => ApiError::Database(error),
         deepref_app::ProtocolError::Serialization(error) => ApiError::Internal(error.into()),
         deepref_app::ProtocolError::Invalid(message)

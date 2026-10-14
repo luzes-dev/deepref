@@ -3,7 +3,10 @@ import type { listProjectsResponseSuccess } from '#lib/api/generated/projects/pr
 import { customFetch } from './custom-fetch';
 import { createQuery } from '@tanstack/svelte-query';
 import type { DocumentBlockDto } from './generated/models/index.js';
-import { getListDocumentBlocksQueryKey, getListDocumentBlocksUrl } from './generated/documents/documents.js';
+import {
+	getListDocumentBlocksQueryKey,
+	getListDocumentBlocksUrl
+} from './generated/documents/documents.js';
 
 type BlockPage = {
 	data: { items: DocumentBlockDto[]; next_cursor: string | null };
@@ -23,9 +26,10 @@ export async function fetchAllDocumentBlocks(
 	let cursor: string | undefined;
 	let response: BlockPage;
 	do {
-		response = await customFetch<BlockPage>(
-			cursorUrl(url, cursor, limit), { method: 'GET', signal }
-		);
+		response = await customFetch<BlockPage>(cursorUrl(url, cursor, limit), {
+			method: 'GET',
+			signal
+		});
 		items.push(...response.data.items);
 		cursor = response.data.next_cursor ?? undefined;
 	} while (cursor);
@@ -41,11 +45,19 @@ export function createAllDocumentBlocks(
 	options: () => { query: { enabled: boolean } }
 ) {
 	return createQuery(() => ({
-		queryKey: [...getListDocumentBlocksQueryKey(projectId(), reportId(), documentId(), params()), 'all-pages'],
+		queryKey: [
+			...getListDocumentBlocksQueryKey(projectId(), reportId(), documentId(), params()),
+			'all-pages'
+		],
 		enabled: options().query.enabled,
-		queryFn: ({ signal }) => fetchAllDocumentBlocks(
-			projectId(), reportId(), documentId(), params().limit ?? 100, signal
-		)
+		queryFn: ({ signal }) =>
+			fetchAllDocumentBlocks(
+				projectId(),
+				reportId(),
+				documentId(),
+				params().limit ?? 100,
+				signal
+			)
 	}));
 }
 
@@ -63,4 +75,3 @@ export function fetchProjectsPage(
 ): Promise<listProjectsResponseSuccess> {
 	return customFetch(cursorUrl(getListProjectsUrl(), cursor), { method: 'GET', signal });
 }
-

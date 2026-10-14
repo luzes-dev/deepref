@@ -468,7 +468,6 @@ pub async fn search_agent_document(
         .collect())
 }
 
-
 pub async fn get_latest_agent_appraisal(
     pool: &PgPool,
     project_id: Uuid,
@@ -614,7 +613,6 @@ pub async fn list_agent_studies(
             .collect(),
     ))
 }
-
 
 #[cfg(test)]
 mod tests {

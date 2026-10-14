@@ -1,11 +1,11 @@
 #![allow(clippy::expect_used, clippy::panic, clippy::unwrap_used)]
-use deepref_application::workflows::{AutonomyLevel, AutonomyTask};
-use deepref_domain::{Actor, ActorKind};
 use deepref_app::{
     NewReviewerDecision, ResolveConflict, get_autonomy_settings,
     insert_reviewer_decision_in_transaction, list_reviewer_decisions, resolve_autonomy_level,
     resolve_reviewer_conflict, set_autonomy_level,
 };
+use deepref_application::workflows::{AutonomyLevel, AutonomyTask};
+use deepref_domain::{Actor, ActorKind};
 use sqlx::PgPool;
 use uuid::Uuid;
 
@@ -171,10 +171,7 @@ async fn second_reviewer_disagreement_becomes_a_conflict_until_a_person_resolves
         &actor,
     )
     .await;
-    assert!(matches!(
-        error,
-        Err(deepref_app::ReviewerError::NoProtocol)
-    ));
+    assert!(matches!(error, Err(deepref_app::ReviewerError::NoProtocol)));
     sqlx::query("DELETE FROM projects WHERE id=$1")
         .bind(project_id)
         .execute(&pool)

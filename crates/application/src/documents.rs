@@ -1,9 +1,7 @@
 use std::{future::Future, pin::Pin};
 
 use bytes::Bytes;
-use deepref_domain::{
-    Actor, DocumentId, DocumentSource, ProjectId, ReportId,
-};
+use deepref_domain::{Actor, DocumentId, DocumentSource, ProjectId, ReportId};
 use futures::Stream;
 use thiserror::Error;
 use uuid::Uuid;
@@ -41,7 +39,6 @@ pub trait DocumentStore: Send + Sync {
     fn read_pdf<'a>(&'a self, id: DocumentStorageId) -> DocumentFuture<'a, DocumentByteStream<'a>>;
     fn delete_pdf<'a>(&'a self, id: DocumentStorageId) -> DocumentFuture<'a, ()>;
 }
-
 
 #[derive(Debug, Error)]
 pub enum DocumentPortError {

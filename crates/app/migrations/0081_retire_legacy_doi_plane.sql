@@ -1,5 +1,5 @@
 -- Deploy with the canonical acquisition worker/API; no legacy producers may run.
-ALTER TABLE citations DROP CONSTRAINT citations_first_seen_ingestion_id_fkey;
+ALTER TABLE citations DROP CONSTRAINT citations_first_seen_ingestion_id_fkey1;
 ALTER TABLE citations RENAME COLUMN first_seen_ingestion_id TO acquisition_run_id;
 ALTER TABLE citations ADD CONSTRAINT citations_acquisition_run_id_fkey
  FOREIGN KEY(acquisition_run_id) REFERENCES acquisition_runs(id) ON DELETE SET NULL;

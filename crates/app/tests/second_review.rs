@@ -4,20 +4,19 @@ use std::collections::BTreeMap;
 
 use chrono::Utc;
 use deepref_ai::{ModelParameters, ModelProfile, ResolvedModel, ScreeningStage};
+use deepref_app::{
+    NewReviewerDecision, ProtocolActor, ReviewCalibrationBundleInput, SecondReviewStatus,
+    block_review_run, fail_review_run, insert_model_route, insert_review_calibration_bundle,
+    insert_reviewer_decision_in_transaction, list_reviewer_decisions, preview_screening_identity,
+    publish_protocol, save_protocol_draft, schedule_screening_review, second_review_status,
+    set_autonomy_level, sweep_second_reviews,
+};
 use deepref_application::workflows::{AutonomyLevel, AutonomyTask};
 use deepref_application::{
     ProtocolCriterionCommand, PublishProtocolCommand, SaveProtocolDraftCommand,
 };
 use deepref_domain::{
     Actor, ActorKind, CriterionDimension, CriterionKind, CriterionStage, FrameworkKind, ProjectId,
-};
-use deepref_app::{
-    NewReviewerDecision, ProtocolActor, ReviewCalibrationBundleInput,
-    SecondReviewStatus, block_review_run, fail_review_run, insert_model_route,
-    insert_review_calibration_bundle, insert_reviewer_decision_in_transaction,
-    list_reviewer_decisions, preview_screening_identity, publish_protocol,
-    save_protocol_draft, schedule_screening_review, second_review_status, set_autonomy_level,
-    sweep_second_reviews,
 };
 use deepref_review::{
     CalibrationBundleId, ContentDigest, ProtocolDigest, ReviewBlockCode, ReviewDefinitionKey,
@@ -31,13 +30,27 @@ async fn database() -> Option<PgPool> {
     deepref_app::test_isolation::isolated_pool_from_env("DATABASE_URL", 4).await
 }
 
-async fn claim_advisory_run(pool:&PgPool,run:Uuid)->deepref_application::jobs::JobLease {
-    sqlx::query("UPDATE jobs SET available_at=clock_timestamp()-interval '1 day'
-        WHERE id=(SELECT job_id FROM durable_runs WHERE id=$1)")
-        .bind(run).execute(pool).await.expect("prioritize the review under test");
-    let job=deepref_app::claim_job(pool,"second-review-worker",std::time::Duration::from_secs(300))
-        .await.expect("queue claim").expect("advisory job");
-    assert_eq!(Uuid::parse_str(job.payload["run_id"].as_str().expect("durable run id")).expect("UUID"),run);
+async fn claim_advisory_run(pool: &PgPool, run: Uuid) -> deepref_application::jobs::JobLease {
+    sqlx::query(
+        "UPDATE jobs SET available_at=clock_timestamp()-interval '1 day'
+        WHERE id=(SELECT job_id FROM durable_runs WHERE id=$1)",
+    )
+    .bind(run)
+    .execute(pool)
+    .await
+    .expect("prioritize the review under test");
+    let job = deepref_app::claim_job(
+        pool,
+        "second-review-worker",
+        std::time::Duration::from_secs(300),
+    )
+    .await
+    .expect("queue claim")
+    .expect("advisory job");
+    assert_eq!(
+        Uuid::parse_str(job.payload["run_id"].as_str().expect("durable run id")).expect("UUID"),
+        run
+    );
     job.lease("second-review-worker")
 }
 
@@ -384,7 +397,7 @@ async fn a_failed_or_blocked_advisory_run_is_retried_after_a_backoff_a_bounded_n
     sweep_second_reviews(&pool).await.expect("first sweep");
     assert_eq!(automatic_runs(&pool, project_id).await, 1);
     let (first, _) = latest_advisory_run(&pool, project_id).await;
-    let first_owner=claim_advisory_run(&pool,first).await;
+    let first_owner = claim_advisory_run(&pool, first).await;
     fail_review_run(
         &pool,
         project,
@@ -413,7 +426,7 @@ async fn a_failed_or_blocked_advisory_run_is_retried_after_a_backoff_a_bounded_n
     let (second, state) = latest_advisory_run(&pool, project_id).await;
     assert_ne!(second, first);
     assert_eq!(state, "queued");
-    let second_owner=claim_advisory_run(&pool,second).await;
+    let second_owner = claim_advisory_run(&pool, second).await;
 
     block_review_run(
         &pool,
@@ -432,7 +445,7 @@ async fn a_failed_or_blocked_advisory_run_is_retried_after_a_backoff_a_bounded_n
     assert_eq!(automatic_runs(&pool, project_id).await, 3);
 
     let (third, _) = latest_advisory_run(&pool, project_id).await;
-    let third_owner=claim_advisory_run(&pool,third).await;
+    let third_owner = claim_advisory_run(&pool, third).await;
     fail_review_run(
         &pool,
         project,

@@ -4,7 +4,6 @@
     clippy::unwrap_used,
     clippy::string_slice
 )]
-use deepref_documents::{ParsedBlock, ParsedDocument, ParsedPage};
 use deepref_app::{
     CompleteDocumentRetrievalOutcome, NewDocument, complete_document_retrieval, create_document,
     enqueue_parse, find_failed_document_by_hash, get_document, get_document_by_id,
@@ -12,6 +11,7 @@ use deepref_app::{
     list_missing_full_text, mark_document_failed, mark_document_retrieving,
     persist_parsed_document, requeue_document_processing, search_document_blocks,
 };
+use deepref_documents::{ParsedBlock, ParsedDocument, ParsedPage};
 use sqlx::{PgPool, Row};
 use uuid::Uuid;
 
@@ -114,7 +114,10 @@ async fn uploaded_document_has_project_scope_blocks_and_audited_metadata() {
         .await
         .expect("documents should list");
     assert_eq!(documents.len(), 1);
-    assert_eq!(documents[0].status, deepref_domain::documents::DocumentStatus::Available);
+    assert_eq!(
+        documents[0].status,
+        deepref_domain::documents::DocumentStatus::Available
+    );
     assert_eq!(documents[0].content_hash.as_deref(), Some(DOCUMENT_HASH));
     let missing = list_missing_full_text(&pool, project_id, 10)
         .await
@@ -510,7 +513,10 @@ async fn full_text_queue_keeps_reports_selected_through_acquisition_states() {
     .await
     .unwrap();
     assert_eq!(attached.len(), 1);
-    assert_eq!(attached[0].document.as_ref().unwrap().status, deepref_domain::documents::DocumentStatus::External);
+    assert_eq!(
+        attached[0].document.as_ref().unwrap().status,
+        deepref_domain::documents::DocumentStatus::External
+    );
     cleanup(&pool, project_id).await;
 }
 
@@ -580,7 +586,10 @@ async fn retrieval_completion_has_one_winner_and_one_parse_job() {
     loser.commit().await.unwrap();
 
     let document = get_document_by_id(&pool, document_id).await.unwrap();
-    assert_eq!(document.status, deepref_domain::documents::DocumentStatus::Uploaded);
+    assert_eq!(
+        document.status,
+        deepref_domain::documents::DocumentStatus::Uploaded
+    );
     assert_eq!(document.object_key.as_deref(), Some(winner_key.as_str()));
     assert_eq!(document.content_hash.as_deref(), Some(DOCUMENT_HASH));
     let parse_jobs: i64 = sqlx::query_scalar(
@@ -662,7 +671,10 @@ async fn failed_document_can_be_requeued_and_revives_its_parse_job() {
         .unwrap()
         .expect("failed document is retryable");
     tx.commit().await.unwrap();
-    assert_eq!(document.status, deepref_domain::documents::DocumentStatus::Uploaded);
+    assert_eq!(
+        document.status,
+        deepref_domain::documents::DocumentStatus::Uploaded
+    );
     assert!(document.parser_error.is_none());
     let (state, attempts, jobs): (String, i32, i64) = sqlx::query_as(
         "SELECT max(state),max(attempts),count(*) FROM jobs WHERE kind='parse_document' AND payload->>'document_id'=$1",

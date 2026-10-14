@@ -4,10 +4,11 @@ use deepref_application::jobs::JobLease;
 use deepref_domain::ProjectId;
 use deepref_review::{
     ReviewBlockCode, ReviewDefinitionKey, ReviewError, ReviewOrigin, ReviewRunId,
-    ReviewRunSnapshot, ReviewRunState, ReviewRunStatus, ReviewSemanticContract, ReviewSubject, ScheduleReviewRun,
+    ReviewRunSnapshot, ReviewRunState, ReviewRunStatus, ReviewSemanticContract, ReviewSubject,
+    ScheduleReviewRun,
     worker::{
-        AcceptedArtifactInput, CompiledReview, PreparedReviewTask, ReviewHash,
-        ReviewManifestInput, ReviewNode, ReviewRunManifest,
+        AcceptedArtifactInput, CompiledReview, PreparedReviewTask, ReviewHash, ReviewManifestInput,
+        ReviewNode, ReviewRunManifest,
     },
 };
 use serde_json::Value;
@@ -164,10 +165,13 @@ async fn decide_generation(
     let generation: i32 = latest.get("generation");
     let reuse_epoch: i32 = latest.get("reuse_epoch");
     let state = stored_review_status(latest.get::<String, _>("state").as_str())?;
-    let proposal_status = latest.get::<Option<String>, _>("proposal_status")
-        .map(|value| ProposalStatus::parse(&value).ok_or_else(|| {
-            PostgresReviewError::InvalidStoredValue(format!("unknown proposal status {value}"))
-        }))
+    let proposal_status = latest
+        .get::<Option<String>, _>("proposal_status")
+        .map(|value| {
+            ProposalStatus::parse(&value).ok_or_else(|| {
+                PostgresReviewError::InvalidStoredValue(format!("unknown proposal status {value}"))
+            })
+        })
         .transpose()?;
     let next = generation
         .checked_add(1)
@@ -335,8 +339,7 @@ pub async fn schedule_prepared_review_run_as(
                 "manual",
                 None,
                 &generation_key(&manifest.manifest_hash, generation),
-                request.command.actor.kind().as_str(),
-                request.command.actor.id(),
+                (request.command.actor.kind(), request.command.actor.id()),
             )
             .await?;
             let manifest_json = serde_json::to_value(&manifest)?;
@@ -534,7 +537,6 @@ pub async fn load_leased_review_run(
     })
 }
 
-
 pub async fn block_review_run(
     pool: &PgPool,
     project_id: ProjectId,
@@ -543,7 +545,16 @@ pub async fn block_review_run(
     message: &str,
     lease: &JobLease,
 ) -> Result<(), PostgresReviewError> {
-    finish_review_run(pool, project_id, run_id, ReviewRunStatus::Blocked, code.as_str(), message,lease).await
+    finish_review_run(
+        pool,
+        project_id,
+        run_id,
+        ReviewRunStatus::Blocked,
+        code.as_str(),
+        message,
+        lease,
+    )
+    .await
 }
 
 pub async fn fail_review_run(
@@ -554,7 +565,16 @@ pub async fn fail_review_run(
     message: &str,
     lease: &JobLease,
 ) -> Result<(), PostgresReviewError> {
-    finish_review_run(pool, project_id, run_id, ReviewRunStatus::Failed, code, message,lease).await
+    finish_review_run(
+        pool,
+        project_id,
+        run_id,
+        ReviewRunStatus::Failed,
+        code,
+        message,
+        lease,
+    )
+    .await
 }
 
 async fn finish_review_run(
@@ -575,23 +595,34 @@ async fn finish_review_run(
             "terminal review error metadata is invalid".to_owned(),
         ));
     }
-    let mut tx=pool.begin().await?;
-    let (definition_key,status) = sqlx::query_as::<_,(String,String)>(
+    let mut tx = pool.begin().await?;
+    let (definition_key, status) = sqlx::query_as::<_, (String, String)>(
         "SELECT m.definition_key,r.status FROM review_run_manifests m
          JOIN durable_runs r ON r.id=m.automation_run_id AND r.project_id=m.project_id
-         WHERE m.project_id=$1 AND m.automation_run_id=$2 FOR UPDATE OF r")
-        .bind(project_id.as_uuid()).bind(run_id.as_uuid()).fetch_optional(&mut *tx).await?
-        .ok_or(PostgresReviewError::RunNotFound)?;
-    if matches!(status.as_str(),"completed"|"failed"|"blocked"|"cancelled") {
+         WHERE m.project_id=$1 AND m.automation_run_id=$2 FOR UPDATE OF r",
+    )
+    .bind(project_id.as_uuid())
+    .bind(run_id.as_uuid())
+    .fetch_optional(&mut *tx)
+    .await?
+    .ok_or(PostgresReviewError::RunNotFound)?;
+    if matches!(
+        status.as_str(),
+        "completed" | "failed" | "blocked" | "cancelled"
+    ) {
         tx.commit().await?;
         return Ok(());
     }
-    assert_worker_lease(&mut tx,project_id,run_id,lease).await?;
-    if !crate::durable_runs::finish_run(&mut tx,run_id.as_uuid(),state.as_str(),Some(message)).await? {
+    assert_worker_lease(&mut tx, project_id, run_id, lease).await?;
+    if !crate::durable_runs::finish_run(&mut tx, run_id.as_uuid(), state.as_str(), Some(message))
+        .await?
+    {
         tx.commit().await?;
-        let existing=get_review_run(pool,project_id,run_id).await?;
+        let existing = get_review_run(pool, project_id, run_id).await?;
         if !existing.state.terminal() {
-            return Err(PostgresReviewError::InvalidState("review run could not enter a terminal state".to_owned()));
+            return Err(PostgresReviewError::InvalidState(
+                "review run could not enter a terminal state".to_owned(),
+            ));
         }
         return Ok(());
     }
@@ -630,35 +661,69 @@ pub(crate) fn review_definition_label(key: &str) -> &'static str {
 }
 
 async fn schedule_review_node(
-    tx: &mut Transaction<'_, Postgres>, project_id: ProjectId, run_id: ReviewRunId,
-    node_id: &str, fingerprint: &str,
+    tx: &mut Transaction<'_, Postgres>,
+    project_id: ProjectId,
+    run_id: ReviewRunId,
+    node_id: &str,
+    fingerprint: &str,
 ) -> Result<(), PostgresReviewError> {
-    let status = sqlx::query_scalar::<_,String>("SELECT status FROM durable_runs WHERE project_id=$1 AND id=$2 FOR UPDATE")
-        .bind(project_id.as_uuid()).bind(run_id.as_uuid()).fetch_one(&mut **tx).await?;
-    if !matches!(status.as_str(),"queued"|"running"|"waiting") {
+    let status = sqlx::query_scalar::<_, String>(
+        "SELECT status FROM durable_runs WHERE project_id=$1 AND id=$2 FOR UPDATE",
+    )
+    .bind(project_id.as_uuid())
+    .bind(run_id.as_uuid())
+    .fetch_one(&mut **tx)
+    .await?;
+    if !matches!(status.as_str(), "queued" | "running" | "waiting") {
         return Err(PostgresReviewError::WorkerOwnership);
     }
     let step_key = format!("{node_id}:{fingerprint}");
-    let existing=sqlx::query_scalar::<_,Uuid>("SELECT a.step_id FROM durable_attempts a
+    let existing = sqlx::query_scalar::<_, Uuid>(
+        "SELECT a.step_id FROM durable_attempts a
         JOIN review_attempt_details d ON d.id=a.id WHERE d.project_id=$1 AND d.run_id=$2
-        AND d.node_id=$3 AND d.input_fingerprint=$4 ORDER BY a.attempt_number DESC LIMIT 1")
-        .bind(project_id.as_uuid()).bind(run_id.as_uuid()).bind(node_id).bind(fingerprint)
-        .fetch_optional(&mut **tx).await?;
-    let step_id=match existing {
-        Some(step_id)=>step_id,
-        None=>sqlx::query_scalar::<_,Uuid>("SELECT automation_uuid_from_text('durable-review-step',$1)")
-            .bind(format!("{}:{}:{step_key}",project_id.as_uuid(),run_id.as_uuid()))
-            .fetch_one(&mut **tx).await?,
+        AND d.node_id=$3 AND d.input_fingerprint=$4 ORDER BY a.attempt_number DESC LIMIT 1",
+    )
+    .bind(project_id.as_uuid())
+    .bind(run_id.as_uuid())
+    .bind(node_id)
+    .bind(fingerprint)
+    .fetch_optional(&mut **tx)
+    .await?;
+    let step_id = match existing {
+        Some(step_id) => step_id,
+        None => {
+            sqlx::query_scalar::<_, Uuid>(
+                "SELECT automation_uuid_from_text('durable-review-step',$1)",
+            )
+            .bind(format!(
+                "{}:{}:{step_key}",
+                project_id.as_uuid(),
+                run_id.as_uuid()
+            ))
+            .fetch_one(&mut **tx)
+            .await?
+        }
     };
-    sqlx::query("INSERT INTO durable_steps(id,project_id,run_id,handler_kind,step_key,status)
-        VALUES($1,$2,$3,'review',$4,'queued') ON CONFLICT(id) DO NOTHING")
-        .bind(step_id).bind(project_id.as_uuid()).bind(run_id.as_uuid()).bind(step_key)
-        .execute(&mut **tx).await?;
-    sqlx::query("INSERT INTO jobs(id,project_id,kind,payload,max_attempts,dedupe_key)
-        VALUES($1,$2,'durable_run_step',$3,5,$4) ON CONFLICT(dedupe_key) DO NOTHING")
-        .bind(Uuid::new_v4()).bind(project_id.as_uuid())
-        .bind(serde_json::json!({"run_id":run_id.as_uuid(),"step_id":step_id,"handler_kind":"review"}))
-        .bind(format!("durable_review_step:{step_id}")).execute(&mut **tx).await?;
+    sqlx::query(
+        "INSERT INTO durable_steps(id,project_id,run_id,handler_kind,step_key,status)
+        VALUES($1,$2,$3,'review',$4,'queued') ON CONFLICT(id) DO NOTHING",
+    )
+    .bind(step_id)
+    .bind(project_id.as_uuid())
+    .bind(run_id.as_uuid())
+    .bind(step_key)
+    .execute(&mut **tx)
+    .await?;
+    sqlx::query(
+        "INSERT INTO jobs(id,project_id,kind,payload,max_attempts,dedupe_key)
+        VALUES($1,$2,'durable_run_step',$3,5,$4) ON CONFLICT(dedupe_key) DO NOTHING",
+    )
+    .bind(Uuid::new_v4())
+    .bind(project_id.as_uuid())
+    .bind(serde_json::json!({"run_id":run_id.as_uuid(),"step_id":step_id,"handler_kind":"review"}))
+    .bind(format!("durable_review_step:{step_id}"))
+    .execute(&mut **tx)
+    .await?;
     Ok(())
 }
 
@@ -699,8 +764,10 @@ pub async fn begin_review_attempt(
            AND s.id=(j.payload->>'step_id')::uuid
          WHERE j.id=$1 AND s.run_id=$2",
     )
-    .bind(lease.id).bind(run_id.as_uuid())
-    .fetch_one(&mut *transaction).await?;
+    .bind(lease.id)
+    .bind(run_id.as_uuid())
+    .fetch_one(&mut *transaction)
+    .await?;
     let current_key: String = current_step.get("step_key");
     let current_matches = current_key == node.id()
         || current_key == format!("{}:{}", node.id(), identity.input_fingerprint.as_str());
@@ -708,14 +775,32 @@ pub async fn begin_review_attempt(
         let current_id: Uuid = current_step.get("id");
         // The recipe entry step delegates to the typed review planner once.
         // Later jobs replay completed domain artifacts without claiming them.
-        let current_kind: String = sqlx::query_scalar("SELECT handler_kind FROM durable_steps WHERE id=$1")
-            .bind(current_id).fetch_one(&mut *transaction).await?;
-        if current_kind == "automation" && !crate::durable_runs::finish_step(
-            &mut transaction,current_id,lease,"completed",None,None).await? {
+        let current_kind: String =
+            sqlx::query_scalar("SELECT handler_kind FROM durable_steps WHERE id=$1")
+                .bind(current_id)
+                .fetch_one(&mut *transaction)
+                .await?;
+        if current_kind == "automation"
+            && !crate::durable_runs::finish_step(
+                &mut transaction,
+                current_id,
+                lease,
+                "completed",
+                None,
+                None,
+            )
+            .await?
+        {
             return Err(PostgresReviewError::WorkerOwnership);
         }
-        schedule_review_node(&mut transaction, project_id, run_id, node.id(),
-            identity.input_fingerprint.as_str()).await?;
+        schedule_review_node(
+            &mut transaction,
+            project_id,
+            run_id,
+            node.id(),
+            identity.input_fingerprint.as_str(),
+        )
+        .await?;
         transaction.commit().await?;
         return Err(PostgresReviewError::StepScheduled);
     }
@@ -748,20 +833,32 @@ pub async fn begin_review_attempt(
     .execute(&mut *transaction)
     .await?;
     if let Some(row) = find_accepted_attempt(
-        &mut transaction, project_id, &identity.node_id, &identity.input_fingerprint,
-    ).await? {
+        &mut transaction,
+        project_id,
+        &identity.node_id,
+        &identity.input_fingerprint,
+    )
+    .await?
+    {
         sqlx::query(
             "UPDATE review_attempt_details SET artifact_id=$2,accepted_attempt_id=$3
              WHERE id=$1",
         )
         .bind(attempt_id)
         .bind(row.get::<Uuid, _>("artifact_id"))
-        .bind(row.get::<Uuid,_>("attempt_id"))
+        .bind(row.get::<Uuid, _>("attempt_id"))
         .execute(&mut *transaction)
         .await?;
         if !crate::durable_runs::finish_step(
-            &mut transaction, step_id, lease, "completed", None, None,
-        ).await? {
+            &mut transaction,
+            step_id,
+            lease,
+            "completed",
+            None,
+            None,
+        )
+        .await?
+        {
             return Err(PostgresReviewError::WorkerOwnership);
         }
         transaction.commit().await?;
@@ -824,7 +921,6 @@ pub async fn fail_review_attempt(
     transaction.commit().await?;
     Ok(())
 }
-
 
 fn stored_review_status(value: &str) -> Result<ReviewRunStatus, PostgresReviewError> {
     ReviewRunStatus::parse(value).ok_or_else(|| {
@@ -913,13 +1009,20 @@ pub(crate) async fn assert_worker_lease(
     run_id: ReviewRunId,
     lease: &JobLease,
 ) -> Result<(), PostgresReviewError> {
-    let step_id=sqlx::query_scalar::<_,Uuid>("SELECT s.id FROM jobs j JOIN durable_steps s
+    let step_id = sqlx::query_scalar::<_, Uuid>(
+        "SELECT s.id FROM jobs j JOIN durable_steps s
         ON j.payload->>'step_id'=s.id::text AND j.project_id=s.project_id
-        WHERE j.id=$1 AND s.project_id=$2 AND s.run_id=$3")
-        .bind(lease.id).bind(project_id.as_uuid()).bind(run_id.as_uuid())
-        .fetch_optional(&mut **transaction).await?;
-    let Some(step_id)=step_id else{return Err(PostgresReviewError::WorkerOwnership)};
-    if !crate::durable_runs::verify_active_step_lease(transaction,step_id,lease).await? {
+        WHERE j.id=$1 AND s.project_id=$2 AND s.run_id=$3",
+    )
+    .bind(lease.id)
+    .bind(project_id.as_uuid())
+    .bind(run_id.as_uuid())
+    .fetch_optional(&mut **transaction)
+    .await?;
+    let Some(step_id) = step_id else {
+        return Err(PostgresReviewError::WorkerOwnership);
+    };
+    if !crate::durable_runs::verify_active_step_lease(transaction, step_id, lease).await? {
         return Err(PostgresReviewError::WorkerOwnership);
     }
     Ok(())
@@ -946,7 +1049,6 @@ pub(crate) fn accepted_attempt_from_row(
         reused,
     })
 }
-
 
 pub(crate) async fn subject_is_current_in_transaction(
     transaction: &mut Transaction<'_, Postgres>,

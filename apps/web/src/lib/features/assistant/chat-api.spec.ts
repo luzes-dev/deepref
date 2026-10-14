@@ -13,9 +13,15 @@ describe('assistant reviewer attribution', () => {
 				setItem: (key: string, value: string) => entries.set(key, value)
 			}
 		});
-		const fetch = vi.fn().mockImplementation(async () =>
-			new Response('{}', { status: 200, headers: { 'Content-Type': 'application/json' } })
-		);
+		const fetch = vi
+			.fn()
+			.mockImplementation(
+				async () =>
+					new Response('{}', {
+						status: 200,
+						headers: { 'Content-Type': 'application/json' }
+					})
+			);
 		vi.stubGlobal('fetch', fetch);
 		saveReviewerId('reviewer-a');
 		await createAssistantConversation('project', 'Review');

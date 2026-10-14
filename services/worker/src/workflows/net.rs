@@ -145,10 +145,12 @@ pub fn trusted_client() -> Result<reqwest::Client, NodeError> {
         .map_err(|_| NodeError::permanent("The network client could not be prepared."))
 }
 
-
 /// What stops an e-mail from being sent, worded as the step reports it. A test
 /// run calls this too, so it fails where a real run would.
-pub fn email_preflight(to: &[String], config: &deepref_config::SmtpConfig) -> Result<(), NodeError> {
+pub fn email_preflight(
+    to: &[String],
+    config: &deepref_config::SmtpConfig,
+) -> Result<(), NodeError> {
     if to.is_empty() {
         return Err(NodeError::permanent(EMAIL_NOBODY));
     }
@@ -162,7 +164,12 @@ pub fn email_preflight(to: &[String], config: &deepref_config::SmtpConfig) -> Re
 }
 
 /// Send an e-mail through the explicitly configured SMTP server.
-pub async fn send_email(to: &[String], subject: &str, body: &str, config: &deepref_config::SmtpConfig) -> Result<(), NodeError> {
+pub async fn send_email(
+    to: &[String],
+    subject: &str,
+    body: &str,
+    config: &deepref_config::SmtpConfig,
+) -> Result<(), NodeError> {
     use lettre::{
         AsyncSmtpTransport, AsyncTransport, Message, Tokio1Executor, message::Mailbox,
         transport::smtp::authentication::Credentials,
@@ -170,8 +177,12 @@ pub async fn send_email(to: &[String], subject: &str, body: &str, config: &deepr
     email_preflight(to, config)?;
     let mut builder = match config.tls {
         deepref_config::SmtpTls::Tls => AsyncSmtpTransport::<Tokio1Executor>::relay(&config.host),
-        deepref_config::SmtpTls::None => Ok(AsyncSmtpTransport::<Tokio1Executor>::builder_dangerous(&config.host)),
-        deepref_config::SmtpTls::StartTls => AsyncSmtpTransport::<Tokio1Executor>::starttls_relay(&config.host),
+        deepref_config::SmtpTls::None => Ok(
+            AsyncSmtpTransport::<Tokio1Executor>::builder_dangerous(&config.host),
+        ),
+        deepref_config::SmtpTls::StartTls => {
+            AsyncSmtpTransport::<Tokio1Executor>::starttls_relay(&config.host)
+        }
     }
     .map_err(|_| NodeError::permanent("The e-mail server address is not valid."))?
     .port(config.port);

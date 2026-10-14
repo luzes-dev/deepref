@@ -44,7 +44,6 @@
 	let source = $state<ImportSource>('dois');
 	let doiNotice = $state<string | undefined>();
 
-
 	const prismaQuery = createGetProjectPrisma(
 		() => projectId,
 		() => ({
@@ -65,18 +64,21 @@
 	};
 
 	const runRows = $derived<RunRow[]>(
-		workspace.acquisitions.map((run) => ({
-			key: run.id,
-			createdAt: run.created_at,
-			status: run.status,
-			failedCount: run.failed_count,
-			fetchedCount: run.fetched_count,
-			records: run.seed_count,
-			source: run.strategy === 'citation_traversal' || run.strategy === 'provider_refresh'
-				? `DOIs · depth ${run.max_depth}`
-				: importRunFormatLabel(run.format),
-			acquisition: run
-		})).toSorted((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt))
+		workspace.acquisitions
+			.map((run) => ({
+				key: run.id,
+				createdAt: run.created_at,
+				status: run.status,
+				failedCount: run.failed_count,
+				fetchedCount: run.fetched_count,
+				records: run.seed_count,
+				source:
+					run.strategy === 'citation_traversal' || run.strategy === 'provider_refresh'
+						? `DOIs · depth ${run.max_depth}`
+						: importRunFormatLabel(run.format),
+				acquisition: run
+			}))
+			.toSorted((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt))
 	);
 
 	const runsLoading = $derived(workspace.ingestionsLoading);
@@ -122,7 +124,9 @@
 				headers: { 'Idempotency-Key': idempotencyKey }
 			});
 			try {
-				await queryClient.invalidateQueries({ queryKey: getListAcquisitionsQueryKey(requestProjectId) });
+				await queryClient.invalidateQueries({
+					queryKey: getListAcquisitionsQueryKey(requestProjectId)
+				});
 			} catch {
 				// The workspace query renders any refetch error; the refresh itself succeeded.
 			}
@@ -242,9 +246,14 @@
 									{@const display = runStatusDisplay(run.status, run.failedCount)}
 									{@const refreshState = refreshStates[run.acquisition.id]}
 									<Table.Row
-										data-selected={workspace.selectedAcquisition === run.acquisition.id}
+										data-selected={workspace.selectedAcquisition ===
+											run.acquisition.id}
 										data-acquisition-id={run.acquisition.id}
-										data-run-kind={run.acquisition.strategy === 'pmid_import' ? 'pmid' : run.acquisition.strategy === 'file_import' ? 'file' : 'doi'}
+										data-run-kind={run.acquisition.strategy === 'pmid_import'
+											? 'pmid'
+											: run.acquisition.strategy === 'file_import'
+												? 'file'
+												: 'doi'}
 										data-refresh-pending={refreshState?.kind === 'pending'}
 									>
 										<Table.Cell>
@@ -267,49 +276,51 @@
 											>{new Date(run.createdAt).toLocaleString()}</Table.Cell
 										>
 										<Table.Cell class="text-right">
-												{@const acquisition = run.acquisition}
-												<div class="flex flex-wrap justify-end gap-2">
-													<Button variant="outline" size="sm" onclick={() => workspace.openAcquisition(acquisition.id)}>Open</Button>
-													{#if (acquisition.strategy === 'citation_traversal' || acquisition.strategy === 'provider_refresh') && acquisition.status === 'completed'}
-														<Button
-															variant="outline"
-															size="sm"
-															title="Fetch the latest metadata and citations again for this run"
-															onclick={() =>
-																refreshProvider(acquisition.id)}
-															disabled={refreshState?.kind ===
-																'pending'}
-														>
-															<RefreshCwIcon
-																data-icon="inline-start"
-															/>
-															{refreshState?.kind === 'pending'
-																? 'Re-fetching…'
-																: refreshState?.kind === 'failed' &&
-																	  refreshState.retriable
-																	? 'Retry re-fetch'
-																	: 'Re-fetch metadata'}
-														</Button>
-													{/if}
-												</div>
-												{#if refreshState?.kind === 'pending'}
-													<p
-														class="mt-2 text-xs text-muted-foreground"
-														role="status"
+											{@const acquisition = run.acquisition}
+											<div class="flex flex-wrap justify-end gap-2">
+												<Button
+													variant="outline"
+													size="sm"
+													onclick={() =>
+														workspace.openAcquisition(acquisition.id)}
+													>Open</Button
+												>
+												{#if (acquisition.strategy === 'citation_traversal' || acquisition.strategy === 'provider_refresh') && acquisition.status === 'completed'}
+													<Button
+														variant="outline"
+														size="sm"
+														title="Fetch the latest metadata and citations again for this run"
+														onclick={() =>
+															refreshProvider(acquisition.id)}
+														disabled={refreshState?.kind === 'pending'}
 													>
-														Re-fetching metadata…
-													</p>
-												{:else if refreshState?.kind === 'failed' || refreshState?.kind === 'key-unavailable'}
-													<div
-														class="mt-2 flex flex-wrap items-center justify-end gap-2"
-														role="alert"
-													>
-														<span
-															class="max-w-64 text-xs text-destructive"
-															>{refreshState.message}</span
-														>
-													</div>
+														<RefreshCwIcon data-icon="inline-start" />
+														{refreshState?.kind === 'pending'
+															? 'Re-fetching…'
+															: refreshState?.kind === 'failed' &&
+																  refreshState.retriable
+																? 'Retry re-fetch'
+																: 'Re-fetch metadata'}
+													</Button>
 												{/if}
+											</div>
+											{#if refreshState?.kind === 'pending'}
+												<p
+													class="mt-2 text-xs text-muted-foreground"
+													role="status"
+												>
+													Re-fetching metadata…
+												</p>
+											{:else if refreshState?.kind === 'failed' || refreshState?.kind === 'key-unavailable'}
+												<div
+													class="mt-2 flex flex-wrap items-center justify-end gap-2"
+													role="alert"
+												>
+													<span class="max-w-64 text-xs text-destructive"
+														>{refreshState.message}</span
+													>
+												</div>
+											{/if}
 										</Table.Cell>
 									</Table.Row>
 								{/each}

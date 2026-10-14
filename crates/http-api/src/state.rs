@@ -33,7 +33,9 @@ impl AppState {
             document_store: None,
             ai_gateway: Arc::new(RoutedGateway::default()),
             ai_info: AiRuntimeInfo::default(),
-            workflow: deepref_config::WorkflowConfig { niche_nodes_enabled: false },
+            workflow: deepref_config::WorkflowConfig {
+                niche_nodes_enabled: false,
+            },
             smtp: deepref_config::SmtpConfig::from_source(&|_| None),
         }
     }

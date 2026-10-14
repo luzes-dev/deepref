@@ -12,12 +12,18 @@ use super::model::PortType;
 /// Catalog definitions remain visible for historical graph rendering. Runtime
 /// availability affects authoring and execution, never graph deserialization.
 pub fn node_is_available(id: &str, niche_nodes_enabled: bool) -> bool {
-    niche_nodes_enabled || !matches!(id,
-        "trigger.webhook" | "trigger.email" | "integration.http_request" | "integration.slack")
+    niche_nodes_enabled
+        || !matches!(
+            id,
+            "trigger.webhook" | "trigger.email" | "integration.http_request" | "integration.slack"
+        )
 }
 
 pub fn graph_is_available(graph: &super::model::WorkflowGraph, niche_nodes_enabled: bool) -> bool {
-    graph.nodes.iter().all(|node| node_is_available(&node.node_type,niche_nodes_enabled))
+    graph
+        .nodes
+        .iter()
+        .all(|node| node_is_available(&node.node_type, niche_nodes_enabled))
 }
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize)]
@@ -765,12 +771,17 @@ mod tests {
 
     #[test]
     fn parked_nodes_keep_definitions_but_require_explicit_runtime_enablement() {
-        for id in ["trigger.webhook","trigger.email","integration.http_request","integration.slack"] {
-            assert!(node_type(id).is_some(),"saved graphs retain {id}");
-            assert!(!super::node_is_available(id,false));
-            assert!(super::node_is_available(id,true));
+        for id in [
+            "trigger.webhook",
+            "trigger.email",
+            "integration.http_request",
+            "integration.slack",
+        ] {
+            assert!(node_type(id).is_some(), "saved graphs retain {id}");
+            assert!(!super::node_is_available(id, false));
+            assert!(super::node_is_available(id, true));
         }
-        assert!(super::node_is_available("integration.email",false));
-        assert!(super::node_is_available("trigger.manual",false));
+        assert!(super::node_is_available("integration.email", false));
+        assert!(super::node_is_available("trigger.manual", false));
     }
 }

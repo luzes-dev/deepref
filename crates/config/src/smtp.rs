@@ -36,7 +36,9 @@ impl SmtpConfig {
         Self {
             host: get("SMTP_HOST").unwrap_or_default(),
             from: get("SMTP_FROM").unwrap_or_default(),
-            port: get("SMTP_PORT").and_then(|value| value.parse().ok()).unwrap_or(587),
+            port: get("SMTP_PORT")
+                .and_then(|value| value.parse().ok())
+                .unwrap_or(587),
             tls: match get("SMTP_TLS").as_deref() {
                 Some("tls") => SmtpTls::Tls,
                 Some("none") => SmtpTls::None,
