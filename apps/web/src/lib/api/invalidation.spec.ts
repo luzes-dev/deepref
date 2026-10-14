@@ -7,6 +7,20 @@ import {
 } from './generated/ai/ai.js';
 import { getGetScreeningQueueQueryKey } from './generated/review/review.js';
 
+const generatedSources = import.meta.glob<string>('./generated/**/*.ts', {
+	query: '?raw',
+	import: 'default',
+	eager: true
+});
+
+describe('generated project invalidation', () => {
+	it('never emits a bare projects prefix that refetches unrelated projects', () => {
+		for (const [path, source] of Object.entries(generatedSources)) {
+			expect(source, path).not.toMatch(/\.startsWith\(['"`]\/api\/projects\/['"`]\)/);
+		}
+	});
+});
+
 describe('proposal decision cache invalidation', () => {
 	it('refreshes the mutation project without invalidating another project', async () => {
 		const queryClient = new QueryClient();
