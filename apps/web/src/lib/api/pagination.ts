@@ -5,14 +5,9 @@ import { createQuery } from '@tanstack/svelte-query';
 import type { DocumentBlockDto } from './generated/models/index.js';
 import {
 	getListDocumentBlocksQueryKey,
-	getListDocumentBlocksUrl
+	listDocumentBlocks,
+	type listDocumentBlocksResponseSuccess
 } from './generated/documents/documents.js';
-
-type BlockPage = {
-	data: { items: DocumentBlockDto[]; next_cursor: string | null };
-	status: number;
-	headers: Headers;
-};
 
 export async function fetchAllDocumentBlocks(
 	projectId: string,
@@ -21,15 +16,17 @@ export async function fetchAllDocumentBlocks(
 	limit = 100,
 	signal?: AbortSignal
 ) {
-	const url = getListDocumentBlocksUrl(projectId, reportId, documentId);
 	const items: DocumentBlockDto[] = [];
 	let cursor: string | undefined;
-	let response: BlockPage;
+	let response: listDocumentBlocksResponseSuccess;
 	do {
-		response = await customFetch<BlockPage>(cursorUrl(url, cursor, limit), {
-			method: 'GET',
-			signal
-		});
+		response = await listDocumentBlocks(
+			projectId,
+			reportId,
+			documentId,
+			{ cursor, limit },
+			{ signal }
+		);
 		items.push(...response.data.items);
 		cursor = response.data.next_cursor ?? undefined;
 	} while (cursor);

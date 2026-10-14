@@ -1,4 +1,5 @@
 import type {
+	AcquisitionDto,
 	AiActivityOverviewDto,
 	AiBudgetDto,
 	AiStatusDto,
@@ -11,7 +12,6 @@ import type {
 	ExtractionFieldDto,
 	FullTextExclusionReasonDto,
 	FullTextQueueDto,
-	IngestionDto,
 	MissingFullTextDto,
 	NodeTypeDto,
 	NotificationUnreadDto,
@@ -19,7 +19,6 @@ import type {
 	PaginatedResponseAiActivityDto,
 	PaginatedResponseAiProposalDto,
 	PaginatedResponseDedupeProposalDto,
-	PaginatedResponseIngestionDto,
 	PaginatedResponseNotificationDto,
 	PaginatedResponseProjectDto,
 	PaginatedResponseReportDto,
@@ -96,10 +95,12 @@ function fixtureReport(index: number): ReportDto {
 const reports: ReportDto[] = Array.from({ length: 12 }, (_, index) => fixtureReport(index));
 const leadReport = fixtureReport(0);
 
-const ingestions: IngestionDto[] = [
+const acquisitions: AcquisitionDto[] = [
 	{
-		id: 'visual-ingestion',
+		id: 'visual-acquisition',
 		project_id: VISUAL_PROJECT_ID,
+		source: 'crossref',
+		strategy: 'citation_traversal',
 		status: 'completed',
 		seed_count: 2,
 		fetched_count: 24,
@@ -111,8 +112,10 @@ const ingestions: IngestionDto[] = [
 		completed_at: '2026-01-14T09:31:45Z'
 	},
 	{
-		id: 'visual-ingestion-previous',
+		id: 'visual-acquisition-previous',
 		project_id: VISUAL_PROJECT_ID,
+		source: 'crossref',
+		strategy: 'citation_traversal',
 		status: 'failed',
 		seed_count: 1,
 		fetched_count: 7,
@@ -329,6 +332,7 @@ const automationCatalog: NodeTypeDto[] = [
 		label: 'When a report is added',
 		category: 'trigger',
 		description: 'Starts when a report joins the review.',
+		available: true,
 		branches: false,
 		has_side_effects: false,
 		config: [],
@@ -340,6 +344,7 @@ const automationCatalog: NodeTypeDto[] = [
 		label: 'Recompute project metrics',
 		category: 'action',
 		description: 'Refreshes citation counts and rank scores for the project.',
+		available: true,
 		branches: false,
 		has_side_effects: true,
 		config: [],
@@ -417,6 +422,7 @@ const aiActivityOverview: AiActivityOverviewDto = {
 
 const prisma: PrismaDto = {
 	ai_quarantined: 0,
+	assistant_excluded: 0,
 	automation_excluded: 0,
 	project_id: VISUAL_PROJECT_ID,
 	as_of: null,
@@ -459,7 +465,7 @@ function pageOf<T>(items: readonly T[]): { items: T[]; next_cursor: null } {
 
 const projectsPage: PaginatedResponseProjectDto = pageOf([project]);
 const reportsPage: PaginatedResponseReportDto = pageOf(reports);
-const ingestionsPage: PaginatedResponseIngestionDto = pageOf(ingestions);
+const acquisitionsPage: PaginatedResponseAcquisitionDto = pageOf(acquisitions);
 const dedupeProposalsPage: PaginatedResponseDedupeProposalDto = pageOf(dedupeProposals);
 const emptyAcquisitions: PaginatedResponseAcquisitionDto = pageOf([]);
 const emptyAiActivity: PaginatedResponseAiActivityDto = pageOf([]);
@@ -483,7 +489,7 @@ const reportPath = `${projectPath}/reports/${VISUAL_REPORT_ID}`;
 
 /** Every GET the deterministic workspace answers, keyed by path and exact query. */
 export const VISUAL_GET_ENDPOINTS: readonly VisualEndpoint[] = [
-	// Workspace shell: projects, ingestions, settings, notifications and dependency health.
+	// Workspace shell: projects, acquisitions, settings, notifications and dependency health.
 	{
 		path: '/api/health/dependencies',
 		query: `project_id=${VISUAL_PROJECT_ID}`,
@@ -491,7 +497,7 @@ export const VISUAL_GET_ENDPOINTS: readonly VisualEndpoint[] = [
 	},
 	{ path: '/api/projects', query: 'limit=50', body: projectsPage },
 	{ path: projectPath, query: '', body: project },
-	{ path: '/api/ingestions', query: 'limit=50', body: ingestionsPage },
+	{ path: `${projectPath}/acquisitions`, query: 'limit=50', body: acquisitionsPage },
 	{ path: '/api/settings', query: '', body: settings },
 	{ path: '/api/notifications', query: '', body: emptyNotifications },
 	{

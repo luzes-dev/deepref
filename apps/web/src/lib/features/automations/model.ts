@@ -487,7 +487,7 @@ export function catalogIndex(catalog: NodeTypeDto[]): Map<string, NodeTypeDto> {
 }
 
 export function nodeIsAvailable(def: NodeTypeDto | undefined): boolean {
-	return !!def && 'available' in def && def.available === true;
+	return def?.available === true;
 }
 
 function toBuilderPorts(ports: PortDto[]): BuilderPort[] {
