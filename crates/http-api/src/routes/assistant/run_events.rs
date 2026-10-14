@@ -77,16 +77,24 @@ pub(crate) async fn stream_run_events(
                     poll.run_id,
                     poll.after_seq,
                     200,
-                ).await {
+                )
+                .await
+                {
                     Ok(events) => events,
                     Err(error) => {
                         tracing::error!(%error, run_id = %poll.run_id, "assistant event polling failed");
                         poll.terminal = true;
                         poll.unavailable = true;
-                        return Some((sse_frame("error", &json!({
-                            "code": "assistant_events_unavailable",
-                            "message": "Assistant events could not be loaded. Reconnect to resume."
-                        })), poll));
+                        return Some((
+                            sse_frame(
+                                "error",
+                                &json!({
+                                    "code": "assistant_events_unavailable",
+                                    "message": "Assistant events could not be loaded. Reconnect to resume."
+                                }),
+                            ),
+                            poll,
+                        ));
                     }
                 };
                 for event in &events {
@@ -108,7 +116,9 @@ pub(crate) async fn stream_run_events(
                     // resumes past the done/error row in the milliseconds
                     // before the status flip would otherwise long-poll until
                     // it gives up. A deleted run ends the stream as well.
-                    match deepref_postgres::get_assistant_agent_run(&poll.state.pool, poll.run_id).await {
+                    match deepref_postgres::get_assistant_agent_run(&poll.state.pool, poll.run_id)
+                        .await
+                    {
                         Ok(None) => return None,
                         Ok(Some(record)) if record.status.terminal() => return None,
                         Ok(Some(_)) => {}
@@ -116,10 +126,16 @@ pub(crate) async fn stream_run_events(
                             tracing::error!(%error, run_id = %poll.run_id, "assistant status polling failed");
                             poll.terminal = true;
                             poll.unavailable = true;
-                            return Some((sse_frame("error", &json!({
-                                "code": "assistant_events_unavailable",
-                                "message": "Assistant status could not be loaded. Reconnect to resume."
-                            })), poll));
+                            return Some((
+                                sse_frame(
+                                    "error",
+                                    &json!({
+                                        "code": "assistant_events_unavailable",
+                                        "message": "Assistant status could not be loaded. Reconnect to resume."
+                                    }),
+                                ),
+                                poll,
+                            ));
                         }
                     }
                     tokio::time::sleep(std::time::Duration::from_millis(500)).await;

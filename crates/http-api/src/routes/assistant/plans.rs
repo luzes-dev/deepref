@@ -614,7 +614,11 @@ impl Deselection {
                     deselection.actions.insert(action.id.clone());
                 }
                 Some(report_id) if action.report_ids().contains(&report_id) => {
-                    deselection.records.entry(action.id.clone()).or_default().insert(report_id);
+                    deselection
+                        .records
+                        .entry(action.id.clone())
+                        .or_default()
+                        .insert(report_id);
                 }
                 Some(report_id) => {
                     return Err(ApiError::BadRequest(format!(
@@ -632,7 +636,9 @@ impl Deselection {
     }
 
     fn record(&self, action_id: &str, report_id: Uuid) -> bool {
-        self.records.get(action_id).is_some_and(|records| records.contains(&report_id))
+        self.records
+            .get(action_id)
+            .is_some_and(|records| records.contains(&report_id))
     }
 }
 
@@ -858,11 +864,7 @@ async fn run_screen_reports(
             }
         }
     }
-    let status = if failed > 0 {
-        "failed"
-    } else {
-        "executed"
-    };
+    let status = if failed > 0 { "failed" } else { "executed" };
     let mut message = format!("{applied} decision(s) recorded, {unchanged} already that way");
     if deselected > 0 {
         message.push_str(&format!(", {deselected} left out by you"));

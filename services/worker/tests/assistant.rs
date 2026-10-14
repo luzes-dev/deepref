@@ -611,14 +611,28 @@ async fn malformed_model_route_fails_run_before_terminating_job() {
     let (project_id, conversation_id) = project(&pool).await;
     let run_id = submit(&pool, project_id, conversation_id).await;
     sqlx::query("UPDATE assistant_agent_runs SET model_route='{}'::jsonb WHERE id=$1")
-        .bind(run_id).execute(&pool).await.expect("corrupt model route");
+        .bind(run_id)
+        .execute(&pool)
+        .await
+        .expect("corrupt model route");
     let job = claim(&pool).await;
     let model = MockCompletionModel::from_stream_turns(vec![stream_text("unused")]);
     let action = handle_assistant_agent_run_with(&pool, &job, &services(model)).await;
-    assert!(matches!(action, Ok(DeliveryAction::Terminate)), "{action:?}");
-    assert_eq!(run_record(&pool, run_id).await.status, deepref_postgres::AssistantAgentRunStatus::Failed);
-    let events = list_assistant_run_events(&pool, run_id, -1, 100).await.expect("events");
-    assert_eq!(events.iter().filter(|event| event.kind == "error").count(), 1);
+    assert!(
+        matches!(action, Ok(DeliveryAction::Terminate)),
+        "{action:?}"
+    );
+    assert_eq!(
+        run_record(&pool, run_id).await.status,
+        deepref_postgres::AssistantAgentRunStatus::Failed
+    );
+    let events = list_assistant_run_events(&pool, run_id, -1, 100)
+        .await
+        .expect("events");
+    assert_eq!(
+        events.iter().filter(|event| event.kind == "error").count(),
+        1
+    );
 }
 
 #[tokio::test]
@@ -628,17 +642,38 @@ async fn reconciler_fails_missing_and_dead_assistant_jobs_but_preserves_live_job
     let (project_id, conversation_id) = project(&pool).await;
     let missing = submit(&pool, project_id, conversation_id).await;
     sqlx::query("DELETE FROM jobs WHERE payload->>'assistant_run_id'=$1")
-        .bind(missing.to_string()).execute(&pool).await.expect("remove job");
+        .bind(missing.to_string())
+        .execute(&pool)
+        .await
+        .expect("remove job");
     let dead = submit(&pool, project_id, conversation_id).await;
     sqlx::query("UPDATE jobs SET state='dead' WHERE payload->>'assistant_run_id'=$1")
-        .bind(dead.to_string()).execute(&pool).await.expect("kill job");
+        .bind(dead.to_string())
+        .execute(&pool)
+        .await
+        .expect("kill job");
     let live = submit(&pool, project_id, conversation_id).await;
-    deepref_worker::reconciler::reconcile_once(&pool).await.expect("reconcile");
-    deepref_worker::reconciler::reconcile_once(&pool).await.expect("repeat reconciliation");
+    deepref_worker::reconciler::reconcile_once(&pool)
+        .await
+        .expect("reconcile");
+    deepref_worker::reconciler::reconcile_once(&pool)
+        .await
+        .expect("repeat reconciliation");
     for id in [missing, dead] {
-        assert_eq!(run_record(&pool, id).await.status, deepref_postgres::AssistantAgentRunStatus::Failed);
-        let events = list_assistant_run_events(&pool, id, -1, 100).await.expect("events");
-        assert_eq!(events.iter().filter(|event| event.kind == "error").count(), 1);
+        assert_eq!(
+            run_record(&pool, id).await.status,
+            deepref_postgres::AssistantAgentRunStatus::Failed
+        );
+        let events = list_assistant_run_events(&pool, id, -1, 100)
+            .await
+            .expect("events");
+        assert_eq!(
+            events.iter().filter(|event| event.kind == "error").count(),
+            1
+        );
     }
-    assert_eq!(run_record(&pool, live).await.status, deepref_postgres::AssistantAgentRunStatus::Queued);
+    assert_eq!(
+        run_record(&pool, live).await.status,
+        deepref_postgres::AssistantAgentRunStatus::Queued
+    );
 }
