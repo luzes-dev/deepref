@@ -93,7 +93,7 @@
 	);
 	const dataError = $derived(workspace.articlesError ?? workspace.ingestionsError);
 	const dependencyError = $derived(dependenciesQuery.error?.message);
-	const hasEvidence = $derived(workspace.articles.length > 0 || workspace.ingestions.length > 0);
+	const hasEvidence = $derived(workspace.articles.length > 0 || workspace.acquisitions.length > 0);
 	const overviewState = $derived(
 		dataError && !hasEvidence
 			? 'error'
@@ -139,7 +139,7 @@
 	}
 
 	function ingestionHref(ingestionId: string): ResolvedPathname {
-		return `${importsHref}?ingestion=${encodeURIComponent(ingestionId)}` as ResolvedPathname;
+		return `${importsHref}?acquisition=${encodeURIComponent(ingestionId)}` as ResolvedPathname;
 	}
 </script>
 
@@ -358,7 +358,7 @@
 							href={importsHref}>Add articles</a
 						>
 					</div>
-					{#each workspace.ingestions.slice(0, 4) as ingestion (ingestion.id)}<a
+					{#each workspace.acquisitions.slice(0, 4) as ingestion (ingestion.id)}<a
 							href={ingestionHref(ingestion.id)}
 							class="flex min-h-6 flex-wrap items-center gap-x-3 gap-y-1 hover:text-primary"
 							><Badge size="sm" variant={statusVariant(ingestion.status)}

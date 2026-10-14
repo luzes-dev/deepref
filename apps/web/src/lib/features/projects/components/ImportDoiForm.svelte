@@ -4,7 +4,7 @@
 	import * as InputGroup from '@deepref/ui/input-group';
 	import * as NumberField from '@deepref/ui/number-field';
 	import { Button } from '@deepref/ui/button';
-	import { createCreateIngestion } from '#lib/api/generated/ingestions/ingestions.js';
+	import { createCreateAcquisition } from '#lib/api/generated/acquisitions/acquisitions.js';
 	import { createGetSettings } from '#lib/api/generated/settings/settings.js';
 	import { notifyError } from '#lib/features/notifications/toast.js';
 	import { openSettingsFromLink } from '#lib/features/settings/navigation.js';
@@ -18,7 +18,7 @@
 	import { parseRememberedDepth, resolveImportDepth } from '../ingestion-depth';
 
 	const workspace = useProjectWorkspaceContext();
-	const createIngestion = createCreateIngestion();
+	const createIngestion = createCreateAcquisition();
 	const settingsQuery = createGetSettings();
 
 	const MAX_LISTED_ISSUES = 5;
@@ -85,18 +85,21 @@
 		}
 		submitIssues = [];
 		if (parsed.dois.length === 0 || waitingForSettings) return;
+		const projectId = workspace.project.id;
 		try {
 			const result = await createIngestion.mutateAsync({
+				projectId,
 				data: {
-					project_id: workspace.project.id,
 					seed_dois: parsed.dois,
 					max_depth: depth.depth,
 					metadata_provider: 'crossref',
 					citation_provider: 'crossref'
 				}
 			});
-			workspace.ingestionDraft.dois = '';
-			workspace.openIngestion(result.data.id);
+			if (workspace.project.id === projectId) {
+				workspace.ingestionDraft.dois = '';
+				workspace.openAcquisition(result.data.id);
+			}
 		} catch (error) {
 			notifyError('Ingestion could not be started', error);
 		}

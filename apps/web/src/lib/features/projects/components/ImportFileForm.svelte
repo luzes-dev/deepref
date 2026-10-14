@@ -175,9 +175,10 @@
 			await Promise.all([
 				queryClient.invalidateQueries({ queryKey: getGetProjectPrismaQueryKey(projectId) }),
 				queryClient.invalidateQueries({
-					queryKey: getListAcquisitionsQueryKey(projectId, { strategy: 'file_import' })
+					queryKey: getListAcquisitionsQueryKey(projectId)
 				})
 			]);
+			if (workspace.project.id === projectId) workspace.openAcquisition(response.data.id);
 		} catch (error) {
 			submitError = importErrorMessage(error);
 		} finally {
