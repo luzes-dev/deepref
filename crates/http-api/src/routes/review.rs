@@ -617,7 +617,8 @@ pub(crate) fn map_screening_error(error: ScreeningError) -> ApiError {
         ScreeningError::AiFirst(error) => match *error {
             deepref_postgres::AiFirstError::Database(error) => ApiError::Database(error),
             deepref_postgres::AiFirstError::Screening(error) => map_screening_error(error),
-            deepref_postgres::AiFirstError::Invalid(message) | deepref_postgres::AiFirstError::Refused(message) => ApiError::BadRequest(message),
+            deepref_postgres::AiFirstError::Invalid(message)
+            | deepref_postgres::AiFirstError::Refused(message) => ApiError::BadRequest(message),
             other => ApiError::Internal(anyhow::Error::new(other)),
         },
         ScreeningError::ProjectNotFound => ApiError::NotFound("project not found".to_owned()),

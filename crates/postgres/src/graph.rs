@@ -179,7 +179,10 @@ pub async fn enqueue_metrics_recompute(
 }
 
 pub async fn recompute_project_metrics(pool: &PgPool, project_id: Uuid) -> anyhow::Result<()> {
-    crate::with_retry(crate::RetryPolicy::default(), || recompute_project_metrics_once(pool, project_id)).await
+    crate::with_retry(crate::RetryPolicy::default(), || {
+        recompute_project_metrics_once(pool, project_id)
+    })
+    .await
 }
 
 async fn recompute_project_metrics_once(pool: &PgPool, project_id: Uuid) -> anyhow::Result<()> {

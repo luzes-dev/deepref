@@ -93,7 +93,11 @@ pub async fn live(State(state): State<AppState>) -> Json<LivenessResponse> {
 }
 
 fn required_schema_version() -> i64 {
-    deepref_postgres::MIGRATOR.iter().map(|migration| migration.version).max().unwrap_or(0)
+    deepref_postgres::MIGRATOR
+        .iter()
+        .map(|migration| migration.version)
+        .max()
+        .unwrap_or(0)
 }
 
 #[utoipa::path(get, path="/health/ready", operation_id="getReadiness", tag="health",
@@ -112,7 +116,11 @@ pub async fn ready(State(state): State<AppState>) -> Result<Json<ReadinessRespon
         )));
     }
     if schema_version > required {
-        tracing::warn!(schema_version, required_schema_version = required, "database schema is ahead of this service");
+        tracing::warn!(
+            schema_version,
+            required_schema_version = required,
+            "database schema is ahead of this service"
+        );
     }
     Ok(Json(ReadinessResponse {
         status: "ready",
@@ -191,9 +199,15 @@ mod tests {
     use super::*;
     #[test]
     fn readiness_requires_latest_embedded_migration() {
-        assert_eq!(required_schema_version(), deepref_postgres::MIGRATOR.iter().map(|migration| migration.version).max().expect("embedded migrations"));
+        assert_eq!(
+            required_schema_version(),
+            deepref_postgres::MIGRATOR
+                .iter()
+                .map(|migration| migration.version)
+                .max()
+                .expect("embedded migrations")
+        );
     }
-
 
     #[test]
     fn historical_dead_jobs_do_not_degrade_the_worker() {
