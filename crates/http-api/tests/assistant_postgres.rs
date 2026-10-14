@@ -600,8 +600,10 @@ where
 {
     let owner = format!("assistant-review-test-{run_id}");
     let gateway = Arc::new(gateway);
-    let config = deepref_worker::config::WorkerConfig::from_source(&|name| {
-        (name == "APP_ENV").then(|| "local".into())
+    let config = deepref_worker::config::WorkerConfig::from_source(&|name| match name {
+        "APP_ENV" => Some("local".into()),
+        "WORKER_CLAIM_LEASE_SECS" => Some("300".into()),
+        _ => None,
     })
     .expect("local worker configuration");
     for _ in 0..64 {
@@ -626,7 +628,6 @@ where
             pool.clone(),
             &job,
             &lease,
-            StdDuration::from_secs(300),
             None,
             None,
             gateway.clone(),
@@ -1867,7 +1868,6 @@ async fn delete_project_and_reports(pool: &PgPool, project: Uuid, reports: &[Uui
 
 #[tokio::test]
 async fn confirmed_plan_rejects_records_changed_since_it_was_made() {
-    let _guard = test_lock().lock().await;
     let Some(pool) = database().await else { return };
     let fixture = seed(&pool).await;
     deepref_app::insert_model_route(
@@ -1968,7 +1968,6 @@ async fn set_title_abstract_autonomy(pool: &PgPool, project: Uuid, level: &str) 
 
 #[tokio::test]
 async fn projects_with_title_abstract_ai_off_refuse_assistant_screening_plans() {
-    let _guard = test_lock().lock().await;
     let Some(pool) = database().await else { return };
     let fixture = seed(&pool).await;
     deepref_app::insert_model_route(
@@ -2036,7 +2035,6 @@ async fn projects_with_title_abstract_ai_off_refuse_assistant_screening_plans() 
 
 #[tokio::test]
 async fn confirmed_plan_decisions_are_assistant_authored_and_not_counted_as_human() {
-    let _guard = test_lock().lock().await;
     let Some(pool) = database().await else { return };
     let fixture = seed(&pool).await;
     deepref_app::insert_model_route(
@@ -2092,7 +2090,6 @@ async fn confirmed_plan_decisions_are_assistant_authored_and_not_counted_as_huma
 
 #[tokio::test]
 async fn plan_lists_its_records_and_runs_only_the_ones_left_selected() {
-    let _guard = test_lock().lock().await;
     let Some(pool) = database().await else { return };
     let fixture = seed(&pool).await;
     deepref_app::insert_model_route(
@@ -2166,7 +2163,6 @@ async fn plan_lists_its_records_and_runs_only_the_ones_left_selected() {
 
 #[tokio::test]
 async fn assistant_event_stream_surfaces_database_failure_and_closes() {
-    let _guard = test_lock().lock().await;
     let Some(pool) = database().await else { return };
     let fixture = seed(&pool).await;
     let state = AppState::new(pool.clone());

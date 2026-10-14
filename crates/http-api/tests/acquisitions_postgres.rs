@@ -22,7 +22,7 @@ async fn database() -> Option<PgPool> {
         5,
     )
     .await?;
-    sqlx::query("UPDATE settings SET crossref_mailto='tests@example.org' WHERE id=1")
+    sqlx::query("INSERT INTO settings (id,crossref_mailto) VALUES (1,'tests@example.org') ON CONFLICT (id) DO UPDATE SET crossref_mailto=EXCLUDED.crossref_mailto")
         .execute(&pool)
         .await
         .expect("Crossref test configuration should be stored");
@@ -53,7 +53,7 @@ async fn doi_acquisitions_require_mailto_and_expose_project_scoped_items_and_dep
         .await
         .unwrap();
     let rejected = call(&pool, create()).await;
-    assert!(!rejected.status().is_success());
+    assert_eq!(rejected.status(), StatusCode::SERVICE_UNAVAILABLE);
     let count: i64 =
         sqlx::query_scalar("SELECT count(*) FROM acquisition_runs WHERE project_id=$1")
             .bind(project)
@@ -587,10 +587,10 @@ async fn completed_provider_refresh_is_lineaged_idempotent_and_preserves_source_
     let source_id =
         create_completed_doi_acquisition(&pool, project_id, "10.5555/refresh-source").await;
     let source_record_id = Uuid::new_v4();
-    let source_event_id = Uuid::new_v4();
     sqlx::query(
-        "INSERT INTO records (id,project_id,acquisition_run_id,source,source_key,title,raw)
-         VALUES ($1,$2,$3,'crossref',$4,'Source record','{}')",
+        "INSERT INTO records (id,project_id,acquisition_run_id,report_id,source,source_key,title,raw)
+         SELECT $1,$2,$3,report_id,'crossref',$4,'Source record','{}'
+         FROM acquisition_items WHERE acquisition_id=$3 AND canonical_doi='10.5555/refresh-source'",
     )
     .bind(source_record_id)
     .bind(project_id)
@@ -600,16 +600,15 @@ async fn completed_provider_refresh_is_lineaged_idempotent_and_preserves_source_
     .await
     .expect("source record should insert");
     sqlx::query(
-        "INSERT INTO record_provenance
-         (record_id,acquisition_run_id,canonical_doi,depth,parent_doi,status,attempts,queued_at,fetched_at,work_event_id)
-         VALUES ($1,$2,'10.5555/refresh-source',0,NULL,'fetched',1,now(),now(),$3)",
+        "UPDATE acquisition_items
+         SET status='fetched',attempts=1,fetched_at=now()
+         WHERE acquisition_id=$2 AND report_id=(SELECT report_id FROM records WHERE id=$1)",
     )
     .bind(source_record_id)
     .bind(source_id)
-    .bind(source_event_id)
     .execute(&pool)
     .await
-    .expect("source provenance should insert");
+    .expect("source provenance should become fetched");
 
     let source_before = sqlx::query(
         "SELECT source,strategy,status,config,metadata FROM acquisition_runs WHERE id=$1",
@@ -779,7 +778,7 @@ async fn completed_provider_refresh_is_lineaged_idempotent_and_preserves_source_
     );
     assert_eq!(
         sqlx::query_scalar::<_, i64>(
-            "SELECT count(*) FROM record_provenance WHERE acquisition_run_id=$1",
+            "SELECT count(*) FROM acquisition_items WHERE acquisition_id=$1 AND status='fetched'",
         )
         .bind(source_id)
         .fetch_one(&pool)
@@ -963,7 +962,7 @@ async fn acquisition_cancel_requires_an_existing_active_run() {
     );
     for status in ["queued", "running", "completed", "failed", "cancelled"] {
         let id = Uuid::new_v4();
-        sqlx::query("INSERT INTO acquisition_runs (id,project_id,source,strategy,status,max_depth,seed_count) VALUES ($1,$2,'crossref','citation_traversal',$3,1,1)")
+        sqlx::query("INSERT INTO acquisition_runs (id,project_id,source,strategy,status,max_depth,seed_count,created_at) VALUES ($1,$2,'crossref','citation_traversal',$3,1,1,now())")
             .bind(id).bind(project).bind(status).execute(&pool).await.unwrap();
         let response = call(&pool, cancel(id)).await;
         let active = status == "queued" || status == "running";
@@ -1126,7 +1125,7 @@ async fn niche_flag_preserves_catalog_and_saved_graphs_but_denies_authoring_acti
         .execute(&pool)
         .await
         .unwrap();
-    let graph = json!({"nodes":[{"id":"trigger","type":"trigger.webhook","config":{}}],"edges":[]});
+    let graph = json!({"nodes":[{"id":"trigger","type":"trigger.webhook","position":{"x":0,"y":0},"config":{}}],"edges":[]});
     let create = || {
         Request::builder()
             .method("POST")

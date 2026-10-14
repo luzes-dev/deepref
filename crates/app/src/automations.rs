@@ -141,14 +141,24 @@ pub(crate) async fn dispatch_automation_trigger_in_transaction(
         return Ok((row.get("id"),row.get("job_id"),false));
     }
     let definition = sqlx::query(
-        "SELECT recipe_id,recipe_version FROM automation_definitions
-        WHERE project_id=$1 AND id=$2 AND trigger_kind=$3 AND status='active' FOR SHARE",
+        "SELECT recipe_id,recipe_version,status FROM automation_definitions
+        WHERE project_id=$1 AND id=$2 AND trigger_kind=$3 FOR SHARE",
     )
     .bind(project_id)
     .bind(definition_id)
     .bind(trigger)
     .fetch_one(&mut **transaction)
     .await?;
+    if definition.get::<String, _>("status") != "active" {
+        // Keep the persisted dispatch contract: an existing paused definition
+        // conflicts, while an absent or cross-project definition is not found.
+        sqlx::query(
+            "DO $$ BEGIN RAISE EXCEPTION 'automation definition is paused'
+             USING ERRCODE = 'object_not_in_prerequisite_state'; END $$",
+        )
+        .execute(&mut **transaction)
+        .await?;
+    }
     let steps = sqlx::query(
         "SELECT ordinal,step_key,step_kind FROM automation_definition_steps
         WHERE project_id=$1 AND definition_id=$2 ORDER BY ordinal",
@@ -331,13 +341,14 @@ pub async fn list_automation_runs(
     validate_run_list_limit(limit)?;
     let mut query = sqlx::QueryBuilder::<sqlx::Postgres>::new(RUN_QUERY);
     query.push(" WHERE r.project_id=$1 AND ai_first_run_visible($1,r.id) ORDER BY r.created_at DESC,r.id DESC LIMIT $2");
-    let rows = query.build()
-            .bind(project_id.as_uuid())
-            .bind(i32::try_from(limit).map_err(|_| {
-                AutomationError::InvalidInput(AutomationValidationError::InvalidRunListLimit)
-            })?)
-            .fetch_all(pool)
-            .await?;
+    let rows = query
+        .build()
+        .bind(project_id.as_uuid())
+        .bind(i32::try_from(limit).map_err(|_| {
+            AutomationError::InvalidInput(AutomationValidationError::InvalidRunListLimit)
+        })?)
+        .fetch_all(pool)
+        .await?;
     rows.iter().map(run_from_row).collect()
 }
 
@@ -349,12 +360,43 @@ pub async fn get_automation_run(
     validate_project(project_id)?;
     let mut query = sqlx::QueryBuilder::<sqlx::Postgres>::new(RUN_QUERY);
     query.push(" WHERE r.project_id=$1 AND r.id=$2 AND ai_first_run_visible($1,$2)");
-    let row = query.build()
-    .bind(project_id.as_uuid())
-    .bind(run_id.as_uuid())
-    .fetch_optional(pool)
-    .await?
-    .ok_or(AutomationError::RunNotFound)?;
+    let row = query
+        .build()
+        .bind(project_id.as_uuid())
+        .bind(run_id.as_uuid())
+        .fetch_optional(pool)
+        .await?
+        .ok_or(AutomationError::RunNotFound)?;
+    run_from_row(&row)
+}
+
+/// Worker-only recipe projection; a live run lease, not reviewer visibility,
+/// authorizes execution of blinded review runs.
+pub async fn get_leased_automation_run(
+    pool: &PgPool,
+    project_id: ProjectId,
+    run_id: AutomationRunId,
+    lease: &JobLease,
+) -> Result<AutomationRun, AutomationError> {
+    validate_project(project_id)?;
+    let mut query = sqlx::QueryBuilder::<sqlx::Postgres>::new(RUN_QUERY);
+    query.push(
+        " WHERE r.project_id=$1 AND r.id=$2 AND EXISTS(
+         SELECT 1 FROM jobs active WHERE active.id=$3 AND active.project_id=r.project_id
+         AND active.kind='durable_run_step' AND active.payload->>'run_id'=r.id::text
+         AND active.state='running' AND active.lease_owner=$4 AND active.attempts=$5
+         AND active.leased_until>now())",
+    );
+    let row = query
+        .build()
+        .bind(project_id.as_uuid())
+        .bind(run_id.as_uuid())
+        .bind(lease.id)
+        .bind(&lease.owner)
+        .bind(lease.attempt)
+        .fetch_optional(pool)
+        .await?
+        .ok_or(AutomationError::WorkerOwnership)?;
     run_from_row(&row)
 }
 

@@ -41,17 +41,16 @@ impl AllowedHosts {
                 .to_str()
                 .ok()
                 .and_then(|value| value.parse::<Uri>().ok())
+                && let Some(host) = uri.host()
             {
-                if let Some(host) = uri.host() {
-                    let port = uri.port_u16().unwrap_or_else(|| {
-                        if uri.scheme_str() == Some("https") {
-                            443
-                        } else {
-                            80
-                        }
-                    });
-                    hosts.insert((normalize(host), port));
-                }
+                let port = uri.port_u16().unwrap_or_else(|| {
+                    if uri.scheme_str() == Some("https") {
+                        443
+                    } else {
+                        80
+                    }
+                });
+                hosts.insert((normalize(host), port));
             }
         }
         Self(Arc::new(hosts))

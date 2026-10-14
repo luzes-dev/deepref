@@ -46,7 +46,7 @@ use deepref_review::{
     },
 };
 use serde_json::json;
-use sqlx::PgPool;
+use sqlx::{PgPool, Row};
 use uuid::Uuid;
 
 #[test]
@@ -1421,10 +1421,9 @@ async fn lease(
     owner: &str,
 ) -> LeasedReviewRun {
     let lease = claim_run(pool, run.id.as_uuid(), owner).await;
-    let leased = load_leased_review_run(pool, project_id, run.id, &lease)
+    load_leased_review_run(pool, project_id, run.id, &lease)
         .await
-        .expect("leased run loads");
-    leased
+        .expect("leased run loads")
 }
 
 /// Begins the first node of a duplicate review.
@@ -1557,7 +1556,6 @@ async fn complete_with_proposal(
 #[tokio::test]
 async fn a_retry_reuses_the_steps_its_failed_predecessor_accepted() {
     let Some(pool) = database().await else { return };
-    let _lock = route_fixture_lock(&pool).await;
     let (project_id, record, candidate) = generation_fixture(&pool, "retry reuse").await;
     let request = || duplicate_request(project_id, record, candidate);
     let owner = "retry-reuse-worker";
@@ -1592,7 +1590,6 @@ async fn a_retry_reuses_the_steps_its_failed_predecessor_accepted() {
 #[tokio::test]
 async fn a_rejected_suggestion_regenerates_a_fresh_generation_that_reuses_nothing() {
     let Some(pool) = database().await else { return };
-    let _lock = route_fixture_lock(&pool).await;
     let (project_id, record, candidate) = generation_fixture(&pool, "regenerate").await;
     let request = || duplicate_request(project_id, record, candidate);
     let owner = "regenerate-worker";
@@ -1675,7 +1672,6 @@ fn duplicate_request(project_id: ProjectId, record: Uuid, candidate: Uuid) -> Pr
 #[tokio::test]
 async fn a_failed_review_run_is_retried_as_a_new_queued_generation() {
     let Some(pool) = database().await else { return };
-    let _lock = route_fixture_lock(&pool).await;
     let (project_id, record, candidate) = generation_fixture(&pool, "retry failed").await;
     let request = || duplicate_request(project_id, record, candidate);
     let first = schedule_prepared_review_run(&pool, request())
@@ -1720,7 +1716,6 @@ async fn a_failed_review_run_is_retried_as_a_new_queued_generation() {
 #[tokio::test]
 async fn a_blocked_review_run_is_retried_as_a_new_queued_generation() {
     let Some(pool) = database().await else { return };
-    let _lock = route_fixture_lock(&pool).await;
     let (project_id, record, candidate) = generation_fixture(&pool, "retry blocked").await;
     let request = || duplicate_request(project_id, record, candidate);
     let first = schedule_prepared_review_run(&pool, request())
@@ -1751,7 +1746,6 @@ async fn a_blocked_review_run_is_retried_as_a_new_queued_generation() {
 #[tokio::test]
 async fn exhausted_expired_review_claim_settles_history_and_opens_a_new_generation() {
     let Some(pool) = database().await else { return };
-    let _lock = route_fixture_lock(&pool).await;
     let (project, record, candidate) =
         generation_fixture(&pool, "expired final review claim").await;
     let request = || duplicate_request(project, record, candidate);

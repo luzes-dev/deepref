@@ -387,7 +387,6 @@ async fn age_finished_runs(pool: &PgPool, project_id: Uuid) {
 #[tokio::test]
 async fn a_failed_or_blocked_advisory_run_is_retried_after_a_backoff_a_bounded_number_of_times() {
     let Some(pool) = database().await else { return };
-    let _turn = sweep_turn(&pool).await;
     screening_routes(&pool).await;
     let project_id = project(&pool).await;
     publish_protocol_for(&pool, project_id).await;

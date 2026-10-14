@@ -149,7 +149,6 @@ pub async fn run_with_shutdown(
     };
     let handler = production_handler(
         pool.clone(),
-        config.claim_lease,
         document_store,
         ai_gateway,
         Arc::new(config.clone()),
@@ -183,7 +182,6 @@ pub async fn run_with_shutdown(
 
 fn production_handler(
     pool: sqlx::PgPool,
-    claim_lease: Duration,
     document_store: Arc<DocumentStore>,
     ai_gateway: Arc<dyn AiGateway>,
     config: Arc<config::WorkerConfig>,
@@ -198,7 +196,6 @@ fn production_handler(
                 pool,
                 &job,
                 &lease,
-                claim_lease,
                 Some(document_store),
                 None,
                 ai_gateway,
@@ -595,7 +592,7 @@ mod lease_deadline_tests {
         let started = tokio::time::Instant::now();
         let result = run_with_lease_renewal(
             Duration::from_millis(300),
-            || std::future::pending::<anyhow::Result<bool>>(),
+            std::future::pending::<anyhow::Result<bool>>,
             std::future::pending::<anyhow::Result<DeliveryAction>>(),
         )
         .await;

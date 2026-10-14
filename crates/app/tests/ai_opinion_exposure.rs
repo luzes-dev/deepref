@@ -407,8 +407,11 @@ async fn an_exposure_before_the_decision_excludes_the_pair() {
     assert_eq!(pairs.unverifiable_excluded, 0);
     assert_eq!(pairs.independent.len(), 1);
     assert_eq!(pairs.independent[0].report_id, clean);
-    assert_eq!(pairs.independent[0].human_decision, "exclude");
-    assert_eq!(pairs.independent[0].ai_decision, "include");
+    assert_eq!(
+        pairs.independent[0].human_decision,
+        ScreeningDecision::Exclude
+    );
+    assert_eq!(pairs.independent[0].ai_decision, ScreeningDecision::Include);
 
     let agreement = title_abstract_agreement(&pool, project_id).await;
     assert_eq!(agreement.compared, 1);

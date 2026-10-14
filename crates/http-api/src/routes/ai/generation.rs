@@ -338,6 +338,9 @@ fn map_postgres_review_error(error: deepref_app::PostgresReviewError) -> ApiErro
         deepref_app::PostgresReviewError::WorkerOwnership => {
             ApiError::Internal(anyhow::anyhow!("review worker lease is not owned"))
         }
+        deepref_app::PostgresReviewError::StepScheduled => ApiError::Internal(anyhow::anyhow!(
+            "worker scheduling outcome reached the HTTP boundary"
+        )),
         deepref_app::PostgresReviewError::FinalizationConflict => ApiError::Conflict {
             code: "review_finalization_conflict".to_owned(),
             message: "review proposal finalization conflicts with persisted state".to_owned(),

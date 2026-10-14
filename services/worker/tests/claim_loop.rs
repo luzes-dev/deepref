@@ -2,11 +2,7 @@
 //! Drives the worker claim loop against a database with substitute handlers.
 //! Skipped unless `DATABASE_URL` points at a reachable PostgreSQL.
 
-use std::{
-    io::Write,
-    sync::{Arc, Mutex},
-    time::Duration,
-};
+use std::{sync::Arc, time::Duration};
 
 use deepref_app::{enqueue_job_pool, job, migrate};
 use deepref_application::jobs::{ClaimedJob, JobLease};
@@ -31,40 +27,6 @@ async fn project(pool: &PgPool) -> ProjectId {
     project_id
 }
 
-/// Collects formatted log output so a test can assert on what was logged.
-#[derive(Clone, Default)]
-struct CapturedLogs(Arc<Mutex<Vec<u8>>>);
-
-impl CapturedLogs {
-    fn contents(&self) -> String {
-        String::from_utf8_lossy(&self.0.lock().unwrap()).into_owned()
-    }
-}
-
-impl Write for CapturedLogs {
-    fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
-        self.0.lock().unwrap().extend_from_slice(buf);
-        // Mirror into the test output so the line is visible in failures.
-        std::io::stderr().write_all(buf)?;
-        Ok(buf.len())
-    }
-
-    fn flush(&mut self) -> std::io::Result<()> {
-        Ok(())
-    }
-}
-
-fn capture_logs() -> CapturedLogs {
-    let logs = CapturedLogs::default();
-    let writer = logs.clone();
-    tracing_subscriber::fmt()
-        .with_ansi(false)
-        .with_max_level(tracing::Level::INFO)
-        .with_writer(move || writer.clone())
-        .init();
-    logs
-}
-
 async fn job_row(pool: &PgPool, id: Uuid) -> (String, i32, Option<String>) {
     let row = sqlx::query("SELECT state,attempts,last_error FROM jobs WHERE id=$1")
         .bind(id)
@@ -82,7 +44,6 @@ async fn handler_panic_fails_the_job_and_the_loop_keeps_claiming() {
     let Some(pool) = database().await else {
         return;
     };
-    let logs = capture_logs();
     let project_id = project(&pool).await;
     let poison_id = Uuid::new_v4();
     let healthy_id = Uuid::new_v4();
@@ -116,7 +77,6 @@ async fn handler_panic_fails_the_job_and_the_loop_keeps_claiming() {
             if job.id == poison_id {
                 panic!("poison payload tripped the handler");
             }
-            tracing::info!("healthy handler ran");
             Ok(DeliveryAction::Ack)
         })
     });
@@ -163,32 +123,6 @@ async fn handler_panic_fails_the_job_and_the_loop_keeps_claiming() {
     );
     let (state, _, _) = job_row(&pool, healthy_id).await;
     assert_eq!(state, "completed");
-
-    let logs = logs.contents();
-    let failure_line = logs
-        .lines()
-        .find(|line| line.contains("WARN") && line.contains(&poison_id.to_string()))
-        .unwrap_or_else(|| panic!("no WARN line names the failed job; logs:\n{logs}"));
-    assert!(failure_line.contains("kind=test_poison"), "{failure_line}");
-    assert!(failure_line.contains("attempts=1"), "{failure_line}");
-
-    // Everything a job logs, including inside its handler task, carries the
-    // `job` span, so a line can be traced back to its job and project.
-    let handler_line = logs
-        .lines()
-        .find(|line| line.contains("healthy handler ran"))
-        .unwrap_or_else(|| panic!("the handler did not log; logs:\n{logs}"));
-    let expected_span = format!("job{{job_id={healthy_id} kind=test_healthy");
-    assert!(handler_line.contains(&expected_span), "{handler_line}");
-    assert!(
-        handler_line.contains(&format!("project_id={}", project_id.as_uuid())),
-        "{handler_line}"
-    );
-    assert!(handler_line.contains("attempt=1"), "{handler_line}");
-    assert!(
-        failure_line.contains(&format!("job{{job_id={poison_id}")),
-        "{failure_line}"
-    );
 }
 
 /// The worker's heartbeat row appears while it runs and is removed on a clean

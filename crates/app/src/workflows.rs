@@ -1085,7 +1085,15 @@ async fn insert_workflow_step(
     run_id: Uuid,
     step: WorkflowStepWrite<'_>,
 ) -> Result<Option<Uuid>, WorkflowError> {
-    let WorkflowStepWrite { node_id, iteration, node_type, status, output, fired, note } = step;
+    let WorkflowStepWrite {
+        node_id,
+        iteration,
+        node_type,
+        status,
+        output,
+        fired,
+        note,
+    } = step;
     let existing: Option<Uuid> = sqlx::query_scalar(
         "SELECT id FROM workflow_step_details WHERE run_id=$1 AND node_id=$2 AND iteration=$3",
     )

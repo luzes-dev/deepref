@@ -707,7 +707,7 @@ mod tests {
             .bind(report_id)
             .execute(&pool)
             .await?;
-        sqlx::query("INSERT INTO acquisition_runs(id,project_id,source,strategy,status,seed_count,queued_count) VALUES($1,$2,'crossref','citation_traversal','running',1,1)")
+        sqlx::query("INSERT INTO acquisition_runs(id,project_id,source,strategy,status,seed_count,queued_count,created_at) VALUES($1,$2,'crossref','citation_traversal','running',1,1,now())")
             .bind(acquisition_id).bind(project_id).execute(&pool).await?;
         let event = deepref_domain::events::EventEnvelope::v1(
             deepref_domain::events::SUBJECT_WORK_FETCH_REQUESTED,
@@ -735,7 +735,7 @@ mod tests {
             owner: "current-owner".to_owned(),
             attempt: 1,
         };
-        assert!(
+        anyhow::ensure!(
             super::complete_without_doi(
                 &pool,
                 &event,
@@ -745,14 +745,15 @@ mod tests {
                 None
             )
             .await
-            .is_err()
+            .is_err(),
+            "a stale attempt must not settle the acquisition item"
         );
         let queued: i32 =
             sqlx::query_scalar("SELECT queued_count FROM acquisition_runs WHERE id=$1")
                 .bind(acquisition_id)
                 .fetch_one(&pool)
                 .await?;
-        assert_eq!(queued, 1);
+        anyhow::ensure!(queued == 1, "stale completion changed the queued count");
         lease.attempt = 2;
         for _ in 0..2 {
             super::complete_without_doi(
@@ -767,7 +768,10 @@ mod tests {
         }
         let counts: (String, i32, i32, i32) = sqlx::query_as("SELECT status,queued_count,fetched_count,failed_count FROM acquisition_runs WHERE id=$1")
             .bind(acquisition_id).fetch_one(&pool).await?;
-        assert_eq!(counts, ("completed".to_owned(), 0, 1, 0));
+        anyhow::ensure!(
+            counts == ("completed".to_owned(), 0, 1, 0),
+            "current completion must settle exactly once"
+        );
         Ok(())
     }
 }

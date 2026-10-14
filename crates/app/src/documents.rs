@@ -673,8 +673,7 @@ pub async fn list_full_text_queue(
     .bind(limit.clamp(1, 101))
     .fetch_all(pool)
     .await?;
-    rows
-        .into_iter()
+    rows.into_iter()
         .map(|row| {
             Ok(FullTextQueueRecord {
                 report_id: row.get("report_id"),

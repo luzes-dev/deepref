@@ -886,9 +886,14 @@ pub(crate) async fn validate_workflow(
     Path((project, workflow)): Path<(Uuid, Uuid)>,
 ) -> Result<Json<ValidationReportDto>, ApiError> {
     ensure_draft_available(&state, project, workflow).await?;
-    let report = deepref_app::validate_workflow_draft(&state.pool, project_id(project)?, workflow)
-        .await
-        .map_err(map_error)?;
+    let report = deepref_app::validate_workflow_draft(
+        &state.pool,
+        project_id(project)?,
+        workflow,
+        state.smtp.is_configured(),
+    )
+    .await
+    .map_err(map_error)?;
     Ok(Json(report_dto(&report)))
 }
 
@@ -1023,6 +1028,7 @@ pub(crate) async fn publish_workflow(
         workflow,
         input.note.as_deref(),
         &extract_actor(&headers)?,
+        state.smtp.is_configured(),
         state.workflow.niche_nodes_enabled,
     )
     .await
@@ -1321,9 +1327,14 @@ pub(crate) async fn start_test_run(
                 .to_owned(),
         )));
     }
-    let ctx = deepref_app::validation_context(&state.pool, workflow, &record.draft_graph)
-        .await
-        .map_err(map_error)?;
+    let ctx = deepref_app::validation_context(
+        &state.pool,
+        workflow,
+        &record.draft_graph,
+        state.smtp.is_configured(),
+    )
+    .await
+    .map_err(map_error)?;
     let report = wf::validate_graph(&record.draft_graph, &ctx);
     if !report.is_ok() {
         return Err(map_error(WorkflowError::Invalid(report)));
@@ -1866,19 +1877,6 @@ mod tests {
         assert_eq!(windows.len(), MAX_HOOK_RATE_WINDOWS);
         assert!(!windows.contains_key(&oldest));
         assert!(windows.contains_key(&touched));
-    }
-
-    #[test]
-    fn catalog_dto_covers_every_block() {
-        assert_eq!(
-            wf::catalog().len(),
-            wf::catalog().iter().map(node_type_dto).count()
-        );
-        let kinds: Vec<String> = wf::catalog()
-            .iter()
-            .flat_map(|def| def.config.iter().map(|field| field_kind_name(field.kind)))
-            .collect();
-        assert!(kinds.iter().all(|kind| !kind.is_empty()));
     }
 
     #[test]

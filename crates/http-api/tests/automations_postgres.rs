@@ -329,6 +329,23 @@ async fn automation_http_api_rejects_unknown_recipe_and_invalid_limits() {
         .await;
         assert_eq!(status, StatusCode::CONFLICT);
         assert_eq!(paused_start["code"], "AUTOMATION_PAUSED");
+        let run_count: i64 = sqlx::query_scalar(
+            "SELECT count(*) FROM durable_runs WHERE project_id=$1 AND kind='automation'",
+        )
+        .bind(project_id)
+        .fetch_one(&pool)
+        .await?;
+        assert_eq!(
+            run_count, 0,
+            "invalid and paused starts must not create runs"
+        );
+        let job_count: i64 = sqlx::query_scalar(
+            "SELECT count(*) FROM jobs WHERE project_id=$1 AND kind='durable_run_step'",
+        )
+        .bind(project_id)
+        .fetch_one(&pool)
+        .await?;
+        assert_eq!(job_count, 0, "rejected starts must not queue execution");
         Ok::<(), anyhow::Error>(())
     }
     .await;

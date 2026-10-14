@@ -115,6 +115,6 @@ mod tests {
 
     #[test]
     fn invalid_otlp_endpoint_is_rejected_during_construction() {
-        assert!(build_otlp_provider("not a URI", "deepref").is_err());
+        assert!(build_otlp_provider("not a URI", "deepref", "test-sha").is_err());
     }
 }

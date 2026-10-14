@@ -6,7 +6,6 @@
 )]
 use std::collections::{HashMap, VecDeque};
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
 
 use axum::{
     body::{Body, to_bytes},
@@ -174,8 +173,10 @@ where
 {
     let owner = format!("http-review-test-{run_id}");
     let gateway = Arc::new(gateway);
-    let config = deepref_worker::config::WorkerConfig::from_source(&|name| {
-        (name == "APP_ENV").then(|| "local".into())
+    let config = deepref_worker::config::WorkerConfig::from_source(&|name| match name {
+        "APP_ENV" => Some("local".into()),
+        "WORKER_CLAIM_LEASE_SECS" => Some("300".into()),
+        _ => None,
     })
     .expect("local worker configuration");
     for _ in 0..64 {
@@ -201,7 +202,6 @@ where
             pool.clone(),
             &job,
             &lease,
-            Duration::from_secs(300),
             None,
             None,
             gateway.clone(),
