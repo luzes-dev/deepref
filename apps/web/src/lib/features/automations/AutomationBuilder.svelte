@@ -66,6 +66,7 @@
 		flowToGraph,
 		graphToFlow,
 		newNodeId,
+		nodeIsAvailable,
 		portsCompatible,
 		previewForRun,
 		refusalReason,
@@ -471,7 +472,7 @@
 		at: { x: number; y: number },
 		from: { nodeId: string; portId: string } | null
 	) {
-		if (!('available' in def) || def.available !== true) return;
+		if (!nodeIsAvailable(def)) return;
 		const id = newNodeId(
 			def.id,
 			nodes.map((node) => node.id)
@@ -577,7 +578,7 @@
 		if (clipboard.nodes.some((node) => {
 			if (node.type === 'note') return false;
 			const def = defs.get(node.data.typeId ?? '');
-			return !def || !('available' in def) || def.available !== true;
+			return !nodeIsAvailable(def);
 		})) {
 			notifyInfo('This selection includes blocks that are unavailable on this server.');
 			return;
@@ -1703,7 +1704,7 @@
 		y={menu.y}
 		entries={menu.entries}
 		startInAdd={menu.startInAdd}
-		catalog={catalog.filter((def) => 'available' in def && def.available === true)}
+		catalog={catalog.filter(nodeIsAvailable)}
 		accepts={menu.accepts}
 		{hasTrigger}
 		presentation={narrow.current ? 'sheet' : 'popover'}

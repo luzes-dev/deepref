@@ -46,6 +46,14 @@ fn workflow_niche_nodes_enabled() -> bool {
     NICHE_NODES_ENABLED.get().copied().unwrap_or(false)
 }
 
+fn require_available_graph(graph:&WorkflowGraph,niche_nodes_enabled:bool)->Result<(),WorkflowError> {
+    if deepref_application::workflows::catalog::graph_is_available(graph,niche_nodes_enabled) {
+        Ok(())
+    } else {
+        Err(WorkflowError::InvalidInput("Niche workflow nodes are disabled.".to_owned()))
+    }
+}
+
 #[derive(Debug, Error)]
 pub enum WorkflowError {
     #[error("workflow database operation failed")]
@@ -241,7 +249,9 @@ pub async fn create_workflow(
     description: &str,
     graph: WorkflowGraph,
     actor: &Actor,
+    niche_nodes_enabled: bool,
 ) -> Result<WorkflowRecord, WorkflowError> {
+    require_available_graph(&graph,niche_nodes_enabled)?;
     let name = name.trim();
     if name.is_empty() || name.len() > 200 {
         return Err(WorkflowError::InvalidInput(
@@ -373,6 +383,7 @@ pub async fn get_workflow(
 
 #[derive(Debug, Clone, Default)]
 pub struct UpdateWorkflow {
+    pub niche_nodes_enabled: bool,
     pub name: Option<String>,
     pub description: Option<String>,
     pub graph: Option<WorkflowGraph>,
@@ -388,7 +399,7 @@ pub async fn update_workflow(
 ) -> Result<WorkflowRecord, WorkflowError> {
     let mut tx = pool.begin().await?;
     let current = sqlx::query(
-        "SELECT draft_revision FROM workflows WHERE project_id=$1 AND id=$2 FOR UPDATE",
+        "SELECT draft_revision,draft_graph FROM workflows WHERE project_id=$1 AND id=$2 FOR UPDATE",
     )
     .bind(project_uuid(project_id))
     .bind(workflow_id)
@@ -396,6 +407,11 @@ pub async fn update_workflow(
     .await?
     .ok_or(WorkflowError::NotFound)?;
     let revision: i64 = current.get("draft_revision");
+    if let Some(graph)=update.graph.as_ref() {
+        require_available_graph(graph,update.niche_nodes_enabled)?;
+    } else {
+        require_available_graph(&parse_graph(current.get("draft_graph"))?,update.niche_nodes_enabled)?;
+    }
     if update
         .expected_revision
         .is_some_and(|expected| expected != revision)
@@ -547,6 +563,7 @@ pub async fn publish_workflow(
     note: Option<&str>,
     actor: &Actor,
     email_configured: bool,
+    niche_nodes_enabled: bool,
 ) -> Result<WorkflowVersionRecord, WorkflowError> {
     let mut tx = pool.begin().await?;
     let row = sqlx::query(
@@ -558,6 +575,7 @@ pub async fn publish_workflow(
     .await?
     .ok_or(WorkflowError::NotFound)?;
     let graph = parse_graph(row.get("draft_graph"))?;
+    require_available_graph(&graph,niche_nodes_enabled)?;
     let status = parse_workflow_status(row.try_get("status")?)?;
     let ctx = validation_context(pool, workflow_id, &graph, email_configured).await?;
     let report = validate_graph(&graph, &ctx);
@@ -625,6 +643,7 @@ pub async fn set_workflow_enabled(
     project_id: ProjectId,
     workflow_id: Uuid,
     enabled: bool,
+    niche_nodes_enabled: bool,
 ) -> Result<WorkflowRecord, WorkflowError> {
     let mut tx = pool.begin().await?;
     let row = sqlx::query(
@@ -640,6 +659,7 @@ pub async fn set_workflow_enabled(
     let graph: Option<Value> = row.get("graph");
     let next_fire = if enabled {
         let graph = parse_graph(graph.ok_or(WorkflowError::NotPublished)?)?;
+        require_available_graph(&graph,niche_nodes_enabled)?;
         trigger_of_graph(&graph).and_then(|trigger| next_fire_for(&trigger, Utc::now()))
     } else {
         None

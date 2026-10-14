@@ -176,10 +176,10 @@ async fn run_on_records(
     records: Value,
 ) -> Uuid {
     let actor = Actor::new(ActorKind::User, "ai-exposure-test").expect("actor");
-    let workflow = create_workflow(pool, project, "AI exposure", "", graph, &actor)
+    let workflow = create_workflow(pool, project, "AI exposure", "", graph, &actor, true)
         .await
         .expect("create");
-    publish_workflow(pool, project, workflow.id, None, &actor)
+    publish_workflow(pool, project, workflow.id, None, &actor, false, true)
         .await
         .expect("publish");
     let (version_id, graph) = get_published_graph(pool, workflow.id).await.expect("graph");

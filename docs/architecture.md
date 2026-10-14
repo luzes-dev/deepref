@@ -27,17 +27,22 @@ while the current generation still records its own canonical attempt.
 Migrations `0073` and `0074` preflight cross-engine UUID collisions, copy existing
 run/step/attempt identities and review generations/reuse epochs, retarget jobs
 without changing queue IDs, dedupe keys, attempts or live leases, and validate
-the retargeted foreign keys. They retire the old lifecycle tables and SQL
-entry points, not replace them with compatibility views. Exhausted expired
-step jobs are reconciled to terminal canonical state even when the handler
-crashes; this lets review scheduling create a new generation instead of
-reusing a permanently running manifest.
+the retargeted foreign keys. Queue and recipe-definition references retain the
+deferred protection required for project deletion; accepted-attempt references
+also enforce project identity. The migrations retire old lifecycle tables and
+SQL entry points, not replace them with compatibility views. Terminal step jobs,
+including exhausted expired leases, are reconciled to terminal canonical state
+even when the handler crashes, without superseding an active successor claim.
+Review scheduling can then create a new generation instead of reusing a
+permanently running manifest.
 
 `RuntimeConfig.workflow.niche_nodes_enabled` defaults to false through
 `DEEPREF_WORKFLOW_NICHE_NODES`. Slack, arbitrary HTTP, webhook and inbound-email
 nodes remain in the catalog with `available: false` so saved graphs render
 unchanged, but the palette, API authoring/activation/ingress and queued worker
-execution deny their use. Outgoing `integration.email` remains enabled. API
+execution deny their use. Authoring, publishing and enabling recheck the effective
+locked graph inside their persistence transactions. Outgoing `integration.email`
+remains enabled. API
 and worker composition install the same immutable application dispatch policy;
 in-process configuration disagreement fails startup. When enabled, the existing
 origin-bound credentials, signed hooks and token-before-rate-limit checks remain

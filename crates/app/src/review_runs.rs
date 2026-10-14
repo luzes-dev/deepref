@@ -16,7 +16,7 @@ use thiserror::Error;
 use uuid::Uuid;
 
 use crate::{
-    notifications::{NotificationDraft, record_notification},
+    notifications::{NotificationDraft, record_notification_in_transaction},
     review_calibration::{CalibrationRefusal, admit_calibration},
     review_run_setup::{
         ensure_review_automation_definition, model_identity, protocol_version_id, recipe_for,
@@ -541,8 +541,9 @@ pub async fn block_review_run(
     run_id: ReviewRunId,
     code: ReviewBlockCode,
     message: &str,
+    lease: &JobLease,
 ) -> Result<(), PostgresReviewError> {
-    finish_review_run(pool, project_id, run_id, ReviewRunStatus::Blocked, code.as_str(), message).await
+    finish_review_run(pool, project_id, run_id, ReviewRunStatus::Blocked, code.as_str(), message,lease).await
 }
 
 pub async fn fail_review_run(
@@ -551,8 +552,9 @@ pub async fn fail_review_run(
     run_id: ReviewRunId,
     code: &str,
     message: &str,
+    lease: &JobLease,
 ) -> Result<(), PostgresReviewError> {
-    finish_review_run(pool, project_id, run_id, ReviewRunStatus::Failed, code, message).await
+    finish_review_run(pool, project_id, run_id, ReviewRunStatus::Failed, code, message,lease).await
 }
 
 async fn finish_review_run(
@@ -562,6 +564,7 @@ async fn finish_review_run(
     state: ReviewRunStatus,
     code: &str,
     message: &str,
+    lease: &JobLease,
 ) -> Result<(), PostgresReviewError> {
     if code.trim().is_empty()
         || code.len() > 100
@@ -573,10 +576,17 @@ async fn finish_review_run(
         ));
     }
     let mut tx=pool.begin().await?;
-    let definition_key = sqlx::query_scalar::<_,String>(
-        "SELECT definition_key FROM review_run_manifests WHERE project_id=$1 AND automation_run_id=$2")
+    let (definition_key,status) = sqlx::query_as::<_,(String,String)>(
+        "SELECT m.definition_key,r.status FROM review_run_manifests m
+         JOIN durable_runs r ON r.id=m.automation_run_id AND r.project_id=m.project_id
+         WHERE m.project_id=$1 AND m.automation_run_id=$2 FOR UPDATE OF r")
         .bind(project_id.as_uuid()).bind(run_id.as_uuid()).fetch_optional(&mut *tx).await?
         .ok_or(PostgresReviewError::RunNotFound)?;
+    if matches!(status.as_str(),"completed"|"failed"|"blocked"|"cancelled") {
+        tx.commit().await?;
+        return Ok(());
+    }
+    assert_worker_lease(&mut tx,project_id,run_id,lease).await?;
     if !crate::durable_runs::finish_run(&mut tx,run_id.as_uuid(),state.as_str(),Some(message)).await? {
         tx.commit().await?;
         let existing=get_review_run(pool,project_id,run_id).await?;
@@ -588,9 +598,8 @@ async fn finish_review_run(
     sqlx::query("UPDATE review_run_manifests SET state_code=$3,state_message=$4 WHERE project_id=$1 AND automation_run_id=$2")
         .bind(project_id.as_uuid()).bind(run_id.as_uuid()).bind(code).bind(message)
         .execute(&mut *tx).await?;
-    tx.commit().await?;
-    record_notification(
-        pool,
+    record_notification_in_transaction(
+        &mut tx,
         &NotificationDraft::error(
             "review_run.failed",
             Some(project_id.as_uuid()),
@@ -604,6 +613,7 @@ async fn finish_review_run(
         ),
     )
     .await?;
+    tx.commit().await?;
     Ok(())
 }
 

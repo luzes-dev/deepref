@@ -33,6 +33,7 @@ async fn live_lease(
            AND j.attempts=$4 AND j.leased_until>clock_timestamp()
            AND j.kind='durable_run_step' AND j.payload->>'run_id'=s.run_id::text
            AND j.payload->>'step_id'=s.id::text
+           AND j.payload->>'handler_kind'=s.handler_kind
          FOR UPDATE OF j")
         .bind(step_id).bind(lease.id).bind(&lease.owner).bind(lease.attempt)
         .fetch_optional(&mut **tx).await?.is_some())
@@ -45,6 +46,25 @@ pub async fn verify_active_step_lease(
     let Some(status)=lock_step(tx,step_id).await? else{return Ok(false)};
     if !matches!(status.as_str(),"queued"|"running"|"waiting"){return Ok(false)}
     live_lease(tx,step_id,lease).await
+}
+
+/// Enrich a completed delegation step from a live claim in the same run.
+/// This changes only its business output, never its lifecycle or accepted evidence.
+pub async fn set_completed_step_output(
+    tx:&mut Transaction<'_,Postgres>,step_id:Uuid,lease:&JobLease,output:&Value,
+) -> Result<bool,sqlx::Error> {
+    let Some(status)=lock_step(tx,step_id).await? else{return Ok(false)};
+    if !matches!(status.as_str(),"queued"|"running"|"waiting"){return Ok(false)}
+    let current=sqlx::query_scalar::<_,Uuid>(
+        "SELECT active.id FROM jobs j JOIN durable_steps active
+         ON j.payload->>'step_id'=active.id::text AND j.project_id=active.project_id
+         JOIN durable_steps target ON target.id=$1 AND target.run_id=active.run_id
+           AND target.project_id=active.project_id WHERE j.id=$2")
+        .bind(step_id).bind(lease.id).fetch_optional(&mut **tx).await?;
+    let Some(current)=current else{return Ok(false)};
+    if !live_lease(tx,current,lease).await?{return Ok(false)}
+    Ok(sqlx::query("UPDATE durable_steps SET output=$2 WHERE id=$1 AND status='completed'")
+        .bind(step_id).bind(output).execute(&mut **tx).await?.rows_affected()==1)
 }
 
 /// Claim one step and create its sole attempt record. Duplicate delivery of the
@@ -153,6 +173,8 @@ pub async fn fail_unclaimed_step(
            claimed_by=NULL,claimed_job_id=NULL,claimed_job_attempt=NULL
          WHERE s.id=$1 AND s.status IN ('pending','queued','running','waiting')
          AND NOT EXISTS(SELECT 1 FROM jobs j WHERE j.kind='durable_run_step'
+           AND j.project_id=s.project_id AND j.payload->>'run_id'=s.run_id::text
+           AND j.payload->>'handler_kind'=s.handler_kind
            AND j.payload->>'step_id'=s.id::text AND j.state IN ('queued','running'))
          AND NOT EXISTS(SELECT 1 FROM jobs j WHERE j.id=s.claimed_job_id
            AND j.attempts=s.claimed_job_attempt AND j.state='running' AND j.leased_until>clock_timestamp())")
@@ -164,30 +186,40 @@ pub async fn fail_unclaimed_step(
     Ok(true)
 }
 
-/// Reconcile exhausted queue claims independently of the handler process. The
+/// Reconcile terminal queue claims independently of the handler process. The
 /// sweep includes older dead jobs so a crash between queue recovery and this
 /// transaction cannot strand a review generation forever.
-pub async fn settle_exhausted_jobs(pool: &sqlx::PgPool) -> Result<(), sqlx::Error> {
-    let ids = sqlx::query_scalar::<_,Uuid>(
-        "SELECT DISTINCT s.id FROM jobs j JOIN durable_steps s
-         ON j.payload->>'step_id'=s.id::text
+pub async fn settle_terminal_step_jobs(pool: &sqlx::PgPool) -> Result<(), sqlx::Error> {
+    let rows = sqlx::query_as::<_,(Uuid,String)>(
+        "SELECT DISTINCT s.id,CASE WHEN j.attempts>=j.max_attempts
+             THEN 'job attempt budget exhausted'
+             ELSE COALESCE(j.last_error,'durable step job terminated') END
+         FROM jobs j JOIN durable_steps s
+         ON j.payload->>'step_id'=s.id::text AND j.project_id=s.project_id
+         AND j.payload->>'run_id'=s.run_id::text
+         AND j.payload->>'handler_kind'=s.handler_kind
          JOIN durable_runs r ON r.id=s.run_id
          WHERE j.kind='durable_run_step' AND j.state IN ('dead','failed')
-           AND j.attempts>=j.max_attempts AND s.status IN ('pending','queued','running','waiting')
+           AND s.status IN ('pending','queued','running','waiting')
            AND r.status IN ('queued','running','waiting')
+           AND (s.claimed_job_id IS NULL OR s.claimed_job_id=j.id)
+           AND NOT EXISTS(SELECT 1 FROM jobs active WHERE active.project_id=s.project_id
+             AND active.kind='durable_run_step' AND active.payload->>'run_id'=s.run_id::text
+             AND active.payload->>'handler_kind'=s.handler_kind
+             AND active.payload->>'step_id'=s.id::text AND active.state IN ('queued','running'))
          LIMIT 100").fetch_all(pool).await?;
-    for step_id in ids {
+    for (step_id,error) in rows {
         let mut tx = pool.begin().await?;
-        if !fail_unclaimed_step(&mut tx,step_id,"job attempt budget exhausted").await? {
+        if !fail_unclaimed_step(&mut tx,step_id,&error).await? {
             tx.commit().await?;
             continue;
         }
         let run_id = sqlx::query_scalar::<_,Uuid>("SELECT run_id FROM durable_steps WHERE id=$1")
             .bind(step_id).fetch_one(&mut *tx).await?;
-        finish_run(&mut tx,run_id,"failed",Some("job attempt budget exhausted")).await?;
+        finish_run(&mut tx,run_id,"failed",Some(&error)).await?;
         sqlx::query("UPDATE review_run_manifests SET state_code='review_execution_failed',
-            state_message='job attempt budget exhausted' WHERE automation_run_id=$1")
-            .bind(run_id).execute(&mut *tx).await?;
+            state_message=$2 WHERE automation_run_id=$1")
+            .bind(run_id).bind(&error).execute(&mut *tx).await?;
         sqlx::query("UPDATE jobs SET state='dead',lease_owner=NULL,leased_until=NULL,lease_renewed_at=NULL,
             last_error='durable run failed' WHERE kind='durable_run_step'
             AND payload->>'run_id'=$1 AND state='queued'")

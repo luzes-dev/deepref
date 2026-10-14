@@ -730,14 +730,12 @@ pub(crate) async fn create_workflow(
         .transpose()?
         .unwrap_or_default();
     ensure_graph_available(&state,&graph)?;
-    let record = deepref_app::create_workflow(
-        &state.pool,
-        project,
-        &input.name,
-        input.description.as_deref().unwrap_or_default(),
-        graph,
-        &extract_actor(&headers)?,
-    )
+    let record = deepref_app::create_workflow(&state.pool,
+    project,
+    &input.name,
+    input.description.as_deref().unwrap_or_default(),
+    graph,
+    &extract_actor(&headers)?,, state.workflow.niche_nodes_enabled)
     .await
     .map_err(map_error)?;
     Ok((StatusCode::CREATED, Json(workflow_dto(record)?)))
@@ -768,14 +766,12 @@ pub(crate) async fn create_workflow_from_template(
         .ok_or_else(|| ApiError::BadRequest("That template does not exist.".to_owned()))?;
     let name = input.name.unwrap_or_else(|| template.name.to_owned());
     ensure_graph_available(&state,&template.graph)?;
-    let record = deepref_app::create_workflow(
-        &state.pool,
-        project,
-        &name,
-        template.description,
-        template.graph.clone(),
-        &extract_actor(&headers)?,
-    )
+    let record = deepref_app::create_workflow(&state.pool,
+    project,
+    &name,
+    template.description,
+    template.graph.clone(),
+    &extract_actor(&headers)?,, state.workflow.niche_nodes_enabled)
     .await
     .map_err(map_error)?;
     Ok((StatusCode::CREATED, Json(workflow_dto(record)?)))
@@ -828,6 +824,7 @@ pub(crate) async fn update_workflow(
         project_id(project)?,
         workflow,
         UpdateWorkflow {
+            niche_nodes_enabled: state.workflow.niche_nodes_enabled,
             name: input.name,
             description: input.description,
             graph,
@@ -1002,13 +999,11 @@ pub(crate) async fn publish_workflow(
     Json(input): Json<PublishRequest>,
 ) -> Result<(StatusCode, Json<VersionDto>), ApiError> {
     ensure_draft_available(&state,project,workflow).await?;
-    let version = deepref_app::publish_workflow(
-        &state.pool,
-        project_id(project)?,
-        workflow,
-        input.note.as_deref(),
-        &extract_actor(&headers)?,
-    )
+    let version = deepref_app::publish_workflow(&state.pool,
+    project_id(project)?,
+    workflow,
+    input.note.as_deref(),
+    &extract_actor(&headers)?,, state.workflow.niche_nodes_enabled)
     .await
     .map_err(map_error)?;
     Ok((StatusCode::CREATED, Json(version_dto(version)?)))
@@ -1073,10 +1068,11 @@ pub(crate) async fn enable_workflow(
     State(state): State<AppState>,
     Path((project, workflow)): Path<(Uuid, Uuid)>,
 ) -> Result<Json<WorkflowDto>, ApiError> {
+    deepref_app::get_workflow(&state.pool,project_id(project)?,workflow).await.map_err(map_error)?;
     let (_,graph) = deepref_app::get_published_graph(&state.pool,workflow).await.map_err(map_error)?;
     ensure_graph_available(&state,&graph)?;
     let record =
-        deepref_app::set_workflow_enabled(&state.pool, project_id(project)?, workflow, true)
+        deepref_app::set_workflow_enabled(&state.pool, project_id(project)?, workflow, true, state.workflow.niche_nodes_enabled)
             .await
             .map_err(map_error)?;
     Ok(Json(workflow_dto(record)?))
@@ -1095,7 +1091,7 @@ pub(crate) async fn disable_workflow(
     Path((project, workflow)): Path<(Uuid, Uuid)>,
 ) -> Result<Json<WorkflowDto>, ApiError> {
     let record =
-        deepref_app::set_workflow_enabled(&state.pool, project_id(project)?, workflow, false)
+        deepref_app::set_workflow_enabled(&state.pool, project_id(project)?, workflow, false, state.workflow.niche_nodes_enabled)
             .await
             .map_err(map_error)?;
     Ok(Json(workflow_dto(record)?))

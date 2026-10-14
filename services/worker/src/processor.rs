@@ -635,12 +635,18 @@ async fn handle_job_with_document_services_inner(
         }
         deepref_domain::JobKind::DurableRunStep => {
             let lease = lease.ok_or_else(|| anyhow::anyhow!("durable step requires its job lease"))?;
-            let payload: DurableStepJobPayload = serde_json::from_value(job.payload.clone())?;
-            let stored:Option<String>=sqlx::query_scalar(
-                "SELECT handler_kind FROM durable_steps WHERE id=$1 AND run_id=$2 AND project_id=$3")
+            let payload = DurableStepJobPayload::deserialize(&job.payload)?;
+            let stored:Option<(String,String)>=sqlx::query_as(
+                "SELECT s.handler_kind,r.status FROM durable_steps s
+                 JOIN durable_runs r ON r.id=s.run_id
+                 WHERE s.id=$1 AND s.run_id=$2 AND s.project_id=$3")
                 .bind(payload.step_id).bind(payload.run_id).bind(job.project_id.as_uuid())
                 .fetch_optional(&pool).await?;
-            anyhow::ensure!(stored.as_deref()==Some(payload.handler_kind.as_str()),"durable step identity or handler mismatch");
+            let (handler,status)=stored.ok_or_else(||anyhow::anyhow!("durable step identity mismatch"))?;
+            anyhow::ensure!(handler==payload.handler_kind.as_str(),"durable step handler mismatch");
+            if matches!(status.as_str(),"completed"|"failed"|"blocked"|"cancelled") {
+                return Ok(DeliveryAction::Ack);
+            }
             match payload.handler_kind {
                 deepref_domain::jobs::DurableHandlerKind::Workflow =>
                     crate::workflows::handle_step(&pool, job, lease, ai_gateway.clone(),&config.runtime).await,
@@ -717,16 +723,16 @@ async fn handle_durable_recipe_step(
                 deepref_app::durable_runs::finish_step(&mut tx,payload.step_id,lease,"failed",Some(&message),None).await?;
                 tx.commit().await?;
                 deepref_app::fail_review_run(pool,project_id,deepref_review::ReviewRunId::new(payload.run_id)?,
-                    "review_execution_failed",&message).await?;
+                    "review_execution_failed",&message,lease).await?;
                 return Ok(DeliveryAction::Terminate);
             }
         }
     } else {
         deepref_app::fail_automation_step(pool,project_id,step.id,lease,UNKNOWN_AUTOMATION_STEP_ERROR).await?;
-        deepref_app::finalize_automation_run(pool,project_id,run_id).await?;
+        deepref_app::finalize_automation_run(pool,project_id,run_id,lease).await?;
         return Ok(DeliveryAction::Terminate);
     }
-    match deepref_app::finalize_automation_run(pool,project_id,run_id).await {
+    match deepref_app::finalize_automation_run(pool,project_id,run_id,lease).await {
         Ok(_) | Err(deepref_app::AutomationError::RunNotReady) => Ok(DeliveryAction::Ack),
         Err(error) => Err(error.into()),
     }
@@ -744,27 +750,6 @@ async fn execute_compiled_review(
     let run =
         deepref_app::load_leased_review_run(pool, project_id, review_run_id, lease).await?;
     let review = CompiledReview::compile(run.snapshot.definition)?;
-    if let deepref_review::ReviewRunState::Completed { .. }
-    | deepref_review::ReviewRunState::Blocked { .. } = run.snapshot.state
-    {
-        let accepted = latest_accepted_review_attempt(
-            pool,
-            project_id,
-            review_run_id,
-            final_review_node(&review).id(),
-        )
-        .await?;
-        deepref_app::complete_review_step(
-            pool,
-            project_id,
-            automation_step.id,
-            accepted,
-            lease,
-            Some(serde_json::to_value(&run.snapshot)?),
-        )
-        .await?;
-        return Ok(());
-    }
 
     let prepare = persist_review_node(
         pool,
@@ -1191,8 +1176,13 @@ async fn finalize_compiled_candidate(
         lease,
     )
     .await?;
-    let final_attempt = match final_start {
-        deepref_app::ReviewAttemptStart::Reused { attempt_id, .. } => attempt_id,
+    match final_start {
+        deepref_app::ReviewAttemptStart::Reused { attempt_id, .. } => {
+            deepref_app::complete_review_step(
+                pool,run.snapshot.project_id,automation_step.id,attempt_id,lease,
+            ).await?;
+            Ok(())
+        }
         deepref_app::ReviewAttemptStart::Started { attempt_id, .. } => {
             let outcome = deepref_app::complete_review_outcome(
                 pool,
@@ -1215,13 +1205,12 @@ async fn finalize_compiled_candidate(
                 },
             )
             .await?;
-            return match outcome {
+            match outcome {
                 deepref_app::ReviewFinalization::Completed { .. }
                 | deepref_app::ReviewFinalization::Blocked => Ok(()),
-            };
+            }
         }
-    };
-    complete_review_automation_step(pool, run, automation_step, final_attempt, lease).await
+    }
 }
 
 struct ReviewFinalizationRequest<'a> {
@@ -1256,7 +1245,10 @@ async fn finalize_blocked_review(
     .await?;
     match final_start {
         deepref_app::ReviewAttemptStart::Reused { attempt_id, .. } => {
-            complete_review_automation_step(pool, run, automation_step, attempt_id, lease).await
+            deepref_app::complete_review_step(
+                pool,run.snapshot.project_id,automation_step.id,attempt_id,lease,
+            ).await?;
+            Ok(())
         }
         deepref_app::ReviewAttemptStart::Started { attempt_id, .. } => {
             deepref_app::complete_review_outcome(
@@ -1276,27 +1268,6 @@ async fn finalize_blocked_review(
     }
 }
 
-async fn complete_review_automation_step(
-    pool: &sqlx::PgPool,
-    run: &deepref_app::LeasedReviewRun,
-    automation_step: &deepref_application::AutomationStepRun,
-    final_attempt: Uuid,
-    lease: &JobLease,
-) -> anyhow::Result<()> {
-    deepref_app::complete_review_step(
-        pool,
-        run.snapshot.project_id,
-        automation_step.id,
-        final_attempt,
-        lease,
-        Some(serde_json::to_value(
-            &deepref_app::get_review_run(pool, run.snapshot.project_id, run.snapshot.id)
-                .await?,
-        )?),
-    )
-    .await?;
-    Ok(())
-}
 
 #[derive(Clone)]
 struct AcceptedNodeArtifact {
@@ -1517,25 +1488,6 @@ fn artifact_input(
     }
 }
 
-async fn latest_accepted_review_attempt(
-    pool: &sqlx::PgPool,
-    project_id: deepref_domain::ProjectId,
-    review_run_id: deepref_review::ReviewRunId,
-    final_node_id: &str,
-) -> anyhow::Result<Uuid> {
-    sqlx::query_scalar(
-        "SELECT accepted_attempt_id FROM review_attempt_details
-         WHERE project_id=$1 AND run_id=$2 AND node_id=$3
-           AND accepted_attempt_id IS NOT NULL
-         ORDER BY accepted_at DESC NULLS LAST,id DESC LIMIT 1",
-    )
-    .bind(project_id.as_uuid())
-    .bind(review_run_id.as_uuid())
-    .bind(final_node_id)
-    .fetch_optional(pool)
-    .await?
-    .ok_or_else(|| anyhow::anyhow!("terminal review run has no accepted attempt"))
-}
 
 fn final_review_node(review: &CompiledReview) -> &ReviewNode {
     match review.plan() {

@@ -104,14 +104,12 @@ async fn verdicts_of_every_screening_step_are_counted_per_run() {
         ],
         edges: vec![],
     };
-    let workflow = create_workflow(
-        &pool,
-        project,
-        "Screen with AI",
-        "Review counts",
-        graph.clone(),
-        &actor,
-    )
+    let workflow = create_workflow(&pool,
+    project,
+    "Screen with AI",
+    "Review counts",
+    graph.clone(),
+    &actor,, true)
     .await
     .expect("workflow")
     .id;

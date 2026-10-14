@@ -90,13 +90,17 @@ DO $$ DECLARE c record; BEGIN
 END $$;
 
 ALTER TABLE durable_steps ADD UNIQUE(project_id,run_id,id), ADD UNIQUE(run_id,id);
-ALTER TABLE durable_attempts ADD UNIQUE(project_id,run_id,id);
+ALTER TABLE durable_attempts ADD UNIQUE(project_id,run_id,id), ADD UNIQUE(project_id,id);
 ALTER TABLE automation_step_details ADD FOREIGN KEY(project_id,run_id,id)
  REFERENCES durable_steps(project_id,run_id,id) ON DELETE CASCADE;
 ALTER TABLE workflow_step_details ADD FOREIGN KEY(run_id,id)
  REFERENCES durable_steps(run_id,id) ON DELETE CASCADE;
 ALTER TABLE review_attempt_details ADD FOREIGN KEY(project_id,run_id,id)
  REFERENCES durable_attempts(project_id,run_id,id) ON DELETE CASCADE;
+ALTER TABLE review_attempt_details ADD FOREIGN KEY(project_id,accepted_attempt_id)
+ REFERENCES durable_attempts(project_id,id) DEFERRABLE INITIALLY DEFERRED;
+ALTER TABLE automation_step_details ADD FOREIGN KEY(project_id,accepted_attempt_id)
+ REFERENCES durable_attempts(project_id,id) DEFERRABLE INITIALLY DEFERRED;
 
 CREATE FUNCTION protect_durable_identity() RETURNS trigger LANGUAGE plpgsql AS $$
 DECLARE mutable text[]; BEGIN

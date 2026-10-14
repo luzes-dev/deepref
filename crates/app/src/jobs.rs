@@ -102,7 +102,7 @@ pub async fn recover_expired_jobs(pool: &PgPool) -> anyhow::Result<u64> {
             );
         }
     }
-    crate::durable_runs::settle_exhausted_jobs(pool).await?;
+    crate::durable_runs::settle_terminal_step_jobs(pool).await?;
     Ok(recovered.len() as u64)
 }
 

@@ -108,3 +108,41 @@ async fn cross_engine_uuid_collision_aborts_without_remapping_or_dropping_source
         .bind(run).fetch_one(&pool).await.expect("rollback retains sources");
     assert_eq!(retained,1);
 }
+
+#[tokio::test]
+async fn terminal_review_history_closes_the_old_running_envelope_without_replacing_its_lease() {
+    let Some(pool)=historical_pool().await else{return};
+    let (run,step,job,_,_,accepted)=seed(&pool,false).await;
+    sqlx::query("UPDATE review_run_manifests SET state='failed',state_code='review_execution_failed',
+        state_message='interrupted envelope',finished_at=now() WHERE automation_run_id=$1")
+        .bind(run).execute(&pool).await.expect("scientific history closes before envelope");
+    deepref_app::MIGRATOR.run(&pool).await.expect("terminal source migrates");
+    let state:String=sqlx::query_scalar("SELECT status FROM durable_runs WHERE id=$1")
+        .bind(run).fetch_one(&pool).await.expect("canonical state");
+    assert_eq!(state,"failed");
+    let unfinished:i64=sqlx::query_scalar("SELECT count(*) FROM durable_steps WHERE run_id=$1
+        AND status IN ('pending','queued','running','waiting')")
+        .bind(run).fetch_one(&pool).await.expect("step closure");
+    assert_eq!(unfinished,0);
+    let unfinished:i64=sqlx::query_scalar("SELECT count(*) FROM durable_attempts WHERE run_id=$1
+        AND status IN ('running','waiting')")
+        .bind(run).fetch_one(&pool).await.expect("attempt closure");
+    assert_eq!(unfinished,0);
+    let accepted_state:String=sqlx::query_scalar("SELECT status FROM durable_attempts WHERE id=$1")
+        .bind(accepted).fetch_one(&pool).await.expect("accepted identity retained");
+    assert_eq!(accepted_state,"completed");
+    let lease=sqlx::query("SELECT kind,state,lease_owner,attempts,payload FROM jobs WHERE id=$1")
+        .bind(job).fetch_one(&pool).await.expect("original queue row");
+    assert_eq!(lease.get::<String,_>("kind"),"durable_run_step");
+    assert_eq!(lease.get::<String,_>("state"),"running");
+    assert_eq!(lease.get::<String,_>("lease_owner"),"migration-worker");
+    assert_eq!(lease.get::<i32,_>("attempts"),1);
+    assert_eq!(lease.get::<serde_json::Value,_>("payload"),json!({
+        "run_id":run,"step_id":step,"handler_kind":"automation"
+    }));
+    let mut tx=pool.begin().await.expect("old worker transaction");
+    let lease=deepref_application::jobs::JobLease{id:job,owner:"migration-worker".into(),attempt:1};
+    assert!(deepref_app::durable_runs::begin_step(&mut tx,step,&lease).await
+        .expect("terminal fence").is_none(),"a still-live old job cannot reopen the terminal run");
+    tx.commit().await.expect("read-only claim rejection commits");
+}

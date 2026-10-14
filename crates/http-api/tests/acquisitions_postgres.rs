@@ -956,13 +956,13 @@ async fn hooks_resolve_tokens_before_limiting_and_reject_unsigned_new_webhooks()
     let project = ProjectId::new(project);
     let actor = Actor::new(ActorKind::User, "hook-test").unwrap();
     let graph = serde_json::from_value(json!({"nodes":[{"id":"trigger","type":"trigger.webhook","config":{}}],"edges":[]})).unwrap();
-    let workflow = deepref_app::create_workflow(&pool, project, "Signed", "", graph, &actor).await.unwrap();
+    let workflow = deepref_app::create_workflow(&pool, project, "Signed", "", graph, &actor, true).await.unwrap();
     let endpoint = deepref_app::get_webhook_config(&pool, project, workflow.id).await.unwrap();
     let response = call_with_workflow_policy(&pool, Request::builder().method("POST")
         .uri(format!("/hooks/workflows/{}", endpoint.token)).body(Body::from("{}")).unwrap(),true).await;
     assert_eq!(response.status(), StatusCode::FORBIDDEN);
-    deepref_app::publish_workflow(&pool,project,workflow.id,None,&actor,false).await.expect("publishes");
-    deepref_app::set_workflow_enabled(&pool,project,workflow.id,true).await.expect("enabled");
+    deepref_app::publish_workflow(&pool, project, workflow.id, None, &actor, false, true).await.expect("publishes");
+    deepref_app::set_workflow_enabled(&pool,project,workflow.id,true, true).await.expect("enabled");
     let signature=deepref_application::workflows::sign_payload(&endpoint.secret,b"{}");
     let signed=||Request::builder().method("POST").uri(format!("/hooks/workflows/{}",endpoint.token))
         .header("X-DeepRef-Signature",&signature).header("Idempotency-Key","signed-positive")
@@ -1012,7 +1012,7 @@ async fn niche_flag_preserves_catalog_and_saved_graphs_but_denies_authoring_acti
         assert_eq!(response.status(),StatusCode::FORBIDDEN);
     }
     let actor=Actor::new(ActorKind::User,"historical").unwrap();
-    deepref_app::publish_workflow(&pool,ProjectId::new(project),workflow,None,&actor,false).await.unwrap();
+    deepref_app::publish_workflow(&pool, ProjectId::new(project), workflow, None, &actor, false, true).await.unwrap();
     for suffix in ["/enable","/runs"] {
         let denied=call_with_workflow_policy(&pool,Request::builder().method("POST")
             .uri(format!("/projects/{project}/automations/workflows/{workflow}{suffix}"))

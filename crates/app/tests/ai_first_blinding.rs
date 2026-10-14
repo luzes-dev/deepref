@@ -244,14 +244,12 @@ async fn blind_audit_withholds_workflow_run_inspection() {
         ],
         edges: vec![],
     };
-    let workflow = create_workflow(
-        &f.pool,
-        project,
-        "Find records",
-        "Blinding",
-        graph.clone(),
-        &actor,
-    )
+    let workflow = create_workflow(&f.pool,
+    project,
+    "Find records",
+    "Blinding",
+    graph.clone(),
+    &actor,, true)
     .await
     .expect("workflow")
     .id;

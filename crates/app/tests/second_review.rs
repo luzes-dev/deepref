@@ -31,6 +31,16 @@ async fn database() -> Option<PgPool> {
     deepref_app::test_isolation::isolated_pool_from_env("DATABASE_URL", 4).await
 }
 
+async fn claim_advisory_run(pool:&PgPool,run:Uuid)->deepref_application::jobs::JobLease {
+    sqlx::query("UPDATE jobs SET available_at=clock_timestamp()-interval '1 day'
+        WHERE id=(SELECT job_id FROM durable_runs WHERE id=$1)")
+        .bind(run).execute(pool).await.expect("prioritize the review under test");
+    let job=deepref_app::claim_job(pool,"second-review-worker",std::time::Duration::from_secs(300))
+        .await.expect("queue claim").expect("advisory job");
+    assert_eq!(Uuid::parse_str(job.payload["run_id"].as_str().expect("durable run id")).expect("UUID"),run);
+    job.lease("second-review-worker")
+}
+
 async fn project(pool: &PgPool) -> Uuid {
     let id = Uuid::new_v4();
     sqlx::query("INSERT INTO projects (id,name) VALUES ($1,'second review test')")
@@ -374,12 +384,14 @@ async fn a_failed_or_blocked_advisory_run_is_retried_after_a_backoff_a_bounded_n
     sweep_second_reviews(&pool).await.expect("first sweep");
     assert_eq!(automatic_runs(&pool, project_id).await, 1);
     let (first, _) = latest_advisory_run(&pool, project_id).await;
+    let first_owner=claim_advisory_run(&pool,first).await;
     fail_review_run(
         &pool,
         project,
         ReviewRunId::new(first).unwrap(),
         "provider_unavailable",
         "the provider timed out",
+        &first_owner,
     )
     .await
     .expect("run fails");
@@ -401,6 +413,7 @@ async fn a_failed_or_blocked_advisory_run_is_retried_after_a_backoff_a_bounded_n
     let (second, state) = latest_advisory_run(&pool, project_id).await;
     assert_ne!(second, first);
     assert_eq!(state, "queued");
+    let second_owner=claim_advisory_run(&pool,second).await;
 
     block_review_run(
         &pool,
@@ -408,6 +421,7 @@ async fn a_failed_or_blocked_advisory_run_is_retried_after_a_backoff_a_bounded_n
         ReviewRunId::new(second).unwrap(),
         ReviewBlockCode::RepairBudgetExhausted,
         "repair budget exhausted",
+        &second_owner,
     )
     .await
     .expect("run blocks");
@@ -418,12 +432,14 @@ async fn a_failed_or_blocked_advisory_run_is_retried_after_a_backoff_a_bounded_n
     assert_eq!(automatic_runs(&pool, project_id).await, 3);
 
     let (third, _) = latest_advisory_run(&pool, project_id).await;
+    let third_owner=claim_advisory_run(&pool,third).await;
     fail_review_run(
         &pool,
         project,
         ReviewRunId::new(third).unwrap(),
         "provider_unavailable",
         "the provider timed out again",
+        &third_owner,
     )
     .await
     .expect("run fails");

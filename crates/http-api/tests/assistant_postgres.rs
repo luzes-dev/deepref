@@ -1631,12 +1631,20 @@ async fn assistant_plan_step_follows_its_review_run_to_a_plain_failure() {
     assert_eq!(plan["results"][0]["status"], "queued", "{body}");
 
     // The review run then fails the way the worker records it.
+    sqlx::query("UPDATE jobs SET available_at=clock_timestamp()-interval '1 day'
+        WHERE id=(SELECT job_id FROM durable_runs WHERE id=$1)")
+        .bind(run_id).execute(&pool).await.expect("prioritize the failed review fixture");
+    let claimed=deepref_app::claim_job(&pool,"assistant-failed-review-worker",std::time::Duration::from_secs(300))
+        .await.expect("queue claim").expect("review delivery");
+    assert_eq!(Uuid::parse_str(claimed.payload["run_id"].as_str().expect("durable run")).expect("UUID"),run_id);
+    let lease=claimed.lease("assistant-failed-review-worker");
     deepref_app::fail_review_run(
         &pool,
         deepref_domain::ProjectId::new(project),
         deepref_review::ReviewRunId::new(run_id).expect("review run id"),
         "review_execution_failed",
         "review execution failed: AI output failed semantic validation",
+        &lease,
     )
     .await
     .expect("review run fails");

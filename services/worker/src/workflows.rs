@@ -94,7 +94,7 @@ impl From<deepref_app::WorkflowError> for NodeError {
 struct StepPayload {
     run_id: Uuid,
     step_id: Uuid,
-    handler_kind: String,
+    handler_kind: deepref_domain::jobs::DurableHandlerKind,
 }
 
 fn backoff(attempt: i32) -> Duration {
@@ -115,8 +115,8 @@ pub async fn handle_step(
     ai_gateway: Option<Arc<dyn AiGateway>>,
     runtime: &deepref_config::RuntimeConfig,
 ) -> anyhow::Result<DeliveryAction> {
-    let payload: StepPayload = serde_json::from_value(job.payload.clone())?;
-    anyhow::ensure!(payload.handler_kind == "workflow", "wrong durable workflow handler");
+    let payload = StepPayload::deserialize(&job.payload)?;
+    anyhow::ensure!(payload.handler_kind == deepref_domain::jobs::DurableHandlerKind::Workflow, "wrong durable workflow handler");
     let identity: Option<Uuid> = sqlx::query_scalar(
         "SELECT run_id FROM durable_steps WHERE id=$1 AND handler_kind='workflow'",
     ).bind(payload.step_id).fetch_optional(pool).await?;
@@ -125,14 +125,17 @@ pub async fn handle_step(
         StepClaim::Stale => return Ok(DeliveryAction::Ack),
         StepClaim::Execute(execution) => *execution,
     };
-    let graph:Value=sqlx::query_scalar("SELECT graph FROM workflow_run_details WHERE id=$1")
-        .bind(payload.run_id).fetch_one(pool).await?;
-    let graph:deepref_application::workflows::WorkflowGraph=serde_json::from_value(graph)?;
-    if !deepref_application::workflows::catalog::graph_is_available(&graph,runtime.workflow.niche_nodes_enabled) {
-        finish_node_execution(pool,payload.step_id,lease,NodeOutcome::Failed{
-            message:"Niche workflow nodes are disabled.".to_owned(),
-        }).await?;
-        return Ok(DeliveryAction::Terminate);
+    if !runtime.workflow.niche_nodes_enabled {
+        let types:Vec<String>=sqlx::query_scalar("SELECT ARRAY(
+            SELECT node->>'type' FROM jsonb_array_elements(graph->'nodes') node)
+            FROM workflow_run_details WHERE id=$1")
+            .bind(payload.run_id).fetch_one(pool).await?;
+        if types.iter().any(|id|!deepref_application::workflows::catalog::node_is_available(id,false)) {
+            finish_node_execution(pool,payload.step_id,lease,NodeOutcome::Failed{
+                message:"Niche workflow nodes are disabled.".to_owned(),
+            }).await?;
+            return Ok(DeliveryAction::Terminate);
+        }
     }
     let context = nodes::Context {
         pool,

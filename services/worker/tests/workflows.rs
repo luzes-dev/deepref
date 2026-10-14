@@ -107,10 +107,10 @@ async fn trigger_filter_notification_runs_and_dry_runs() {
             edge("recent", "records", "tell", "data"),
         ],
     };
-    let workflow = create_workflow(&pool, project, "Recent papers", "", graph, &actor)
+    let workflow = create_workflow(&pool, project, "Recent papers", "", graph, &actor, true)
         .await
         .expect("create");
-    let version = publish_workflow(&pool, project, workflow.id, None, &actor)
+    let version = publish_workflow(&pool, project, workflow.id, None, &actor, false, true)
         .await
         .expect("publish");
     assert_eq!(version.version, 1);
@@ -261,10 +261,10 @@ async fn filter_with_no_match_skips_the_rest_and_for_each_fans_out() {
             edge("all", "merged", "done", "data"),
         ],
     };
-    let workflow = create_workflow(&pool, project, "Loop", "", graph, &actor)
+    let workflow = create_workflow(&pool, project, "Loop", "", graph, &actor, true)
         .await
         .expect("create");
-    publish_workflow(&pool, project, workflow.id, None, &actor)
+    publish_workflow(&pool, project, workflow.id, None, &actor, false, true)
         .await
         .expect("publish");
     let (version_id, graph) = get_published_graph(&pool, workflow.id)
@@ -370,17 +370,15 @@ async fn a_failed_run_is_recorded_once_and_a_test_run_stays_silent() {
         ],
         edges: vec![edge("start", "data", "tell", "data")],
     };
-    let workflow = create_workflow(
-        &pool,
-        project,
-        "Fetch the sample page",
-        "",
-        harmless,
-        &actor,
-    )
+    let workflow = create_workflow(&pool,
+    project,
+    "Fetch the sample page",
+    "",
+    harmless,
+    &actor,, true)
     .await
     .expect("create");
-    publish_workflow(&pool, project, workflow.id, None, &actor)
+    publish_workflow(&pool, project, workflow.id, None, &actor, false, true)
         .await
         .expect("publish");
     let (version_id, _published) = get_published_graph(&pool, workflow.id)
@@ -573,7 +571,7 @@ async fn a_waiting_step_is_looked_at_later_and_a_lost_look_fails_it() {
         ],
         edges: vec![edge("start", "data", "tell", "data")],
     };
-    let workflow = create_workflow(&pool, project, "Wait", "", graph.clone(), &actor)
+    let workflow = create_workflow(&pool, project, "Wait", "", graph.clone(), &actor, true)
         .await
         .expect("create");
     let start = |key: &str| StartRun {
@@ -670,7 +668,7 @@ async fn claimed_notify_step(
         ],
         edges: vec![edge("start", "data", "tell", "data")],
     };
-    let workflow = create_workflow(pool, project, "Fence", "", graph.clone(), &actor)
+    let workflow = create_workflow(pool, project, "Fence", "", graph.clone(), &actor, true)
         .await
         .expect("create");
     let run_id = start_run(
@@ -920,7 +918,7 @@ async fn parked_queued_graph_fails_before_network_and_never_queues_successors() 
         edges:vec![edge("start","data","request","data"),edge("request","data","after","data")],
     };
     let actor=Actor::new(ActorKind::User,"parked-test").expect("actor");
-    let workflow=create_workflow(&pool,project,"Parked","",graph.clone(),&actor).await.expect("historical graph");
+    let workflow=create_workflow(&pool,project,"Parked","",graph.clone(),&actor, true).await.expect("historical graph");
     let request=StartRun{niche_nodes_enabled:true,project_id:project.as_uuid(),workflow_id:workflow.id,
         version_id:None,graph,trigger_kind:"manual".into(),trigger_data:json!({}),idempotency_key:"queued-before-flag".into(),
         actor_kind:"user".into(),actor_id:"parked-test".into(),test_mode:false};

@@ -271,51 +271,79 @@ pub async fn complete_review_step(
     automation_step_id: deepref_application::AutomationStepRunId,
     accepted_attempt_id: Uuid,
     lease: &JobLease,
-    output: Option<Value>,
 ) -> Result<(), PostgresReviewError> {
     let run_id:Uuid=sqlx::query_scalar("SELECT run_id FROM durable_steps WHERE id=$1 AND project_id=$2")
         .bind(automation_step_id.as_uuid()).bind(project_id.as_uuid()).fetch_one(pool).await?;
-    let run=super::review_runs::load_leased_review_run(pool,project_id,
+    let mut run=super::review_runs::load_leased_review_run(pool,project_id,
         deepref_review::ReviewRunId::new(run_id)?,lease).await?;
     let mut transaction = pool.begin().await?;
     bind_review_step_acceptance_in_transaction(
-        &mut transaction,
-        project_id,
-        automation_step_id,
-        accepted_attempt_id,
-        lease,
-    )
-    .await?;
-    crate::automations::complete_automation_step_with_output_in_transaction(
-        &mut transaction,
-        project_id,
-        automation_step_id,
-        lease,
-        output,
-    )
-    .await
-    .map_err(map_automation_error)?;
-    if !run.snapshot.state.terminal() {
-        let payload:Value=sqlx::query_scalar("SELECT artifact.payload FROM review_attempt_details detail
-            JOIN review_artifacts artifact ON artifact.id=detail.artifact_id AND artifact.project_id=detail.project_id
-            WHERE detail.id=$1 AND detail.project_id=$2 AND detail.accepted_at IS NOT NULL")
-            .bind(accepted_attempt_id).bind(project_id.as_uuid()).fetch_one(&mut *transaction).await?;
-        // A completed generation is returned by scheduling, never retried in
-        // the same reuse epoch. A blocked accepted final node may be reused by
-        // a new retry generation, and must terminalize that generation too.
-        let code=payload.get("code").and_then(Value::as_str).and_then(ReviewBlockCode::parse)
-            .ok_or(PostgresReviewError::FinalizationConflict)?;
-        let message=payload.get("message").and_then(Value::as_str)
-            .ok_or(PostgresReviewError::FinalizationConflict)?;
-        resolve_blocked_outcome(code,message)?;
-        if !crate::durable_runs::finish_run(&mut transaction,run_id,"blocked",Some(message)).await? {
-            return Err(PostgresReviewError::FinalizationConflict);
+        &mut transaction,project_id,automation_step_id,accepted_attempt_id,lease,
+    ).await?;
+    let payload:Value=sqlx::query_scalar("SELECT artifact.payload FROM review_attempt_details detail
+        JOIN review_artifacts artifact ON artifact.id=detail.artifact_id AND artifact.project_id=detail.project_id
+        WHERE detail.id=$1 AND detail.project_id=$2 AND detail.accepted_at IS NOT NULL")
+        .bind(accepted_attempt_id).bind(project_id.as_uuid()).fetch_one(&mut *transaction).await?;
+    let mut candidate_hash=None;
+    run.snapshot.state=match payload.get("state").and_then(Value::as_str) {
+        Some("blocked")=>{
+            let code=payload.get("code").and_then(Value::as_str).and_then(ReviewBlockCode::parse)
+                .ok_or(PostgresReviewError::FinalizationConflict)?;
+            let message=payload.get("message").and_then(Value::as_str)
+                .ok_or(PostgresReviewError::FinalizationConflict)?;
+            blocked_state(code,message)?
         }
-        sqlx::query("UPDATE review_run_manifests SET state_code=$2,state_message=$3 WHERE automation_run_id=$1")
-            .bind(run_id).bind(code.as_str()).bind(message).execute(&mut *transaction).await?;
-        record_review_outcome_notification_in_transaction(&mut transaction,&run,"blocked",Some(message),None).await?;
+        Some("completed")=>{
+            let proposal_id=payload.get("proposal_id").and_then(Value::as_str)
+                .and_then(|id|Uuid::parse_str(id).ok())
+                .ok_or(PostgresReviewError::FinalizationConflict)?;
+            let hash:Option<String>=sqlx::query_scalar(
+                "SELECT f.candidate_hash FROM review_proposal_finalizations f
+                 JOIN review_attempt_details source ON source.project_id=f.project_id
+                   AND source.run_id=f.automation_run_id AND source.model_run_id=f.model_run_id
+                 WHERE source.id=$1 AND f.project_id=$2 AND f.proposal_id=$3")
+                .bind(accepted_attempt_id).bind(project_id.as_uuid()).bind(proposal_id)
+                .fetch_optional(&mut *transaction).await?;
+            let hash=ReviewHash::parse(hash.ok_or(PostgresReviewError::FinalizationConflict)?)?;
+            if subject_is_current_in_transaction(&mut transaction,project_id,&run.snapshot.subject).await? {
+                candidate_hash=Some(hash);
+                ReviewRunState::Completed{proposal_id}
+            } else {
+                blocked_state(ReviewBlockCode::SubjectChanged,
+                    "the review subject or published protocol changed before finalization")?
+            }
+        }
+        _=>return Err(PostgresReviewError::FinalizationConflict),
+    };
+    run.snapshot.finished_at=Some(Utc::now());
+    let (state_name,state_code,message,proposal_id)=match &run.snapshot.state {
+        ReviewRunState::Completed{proposal_id}=>("completed",None,None,Some(*proposal_id)),
+        ReviewRunState::Blocked{code,message}=>("blocked",Some(code.as_str()),Some(message.as_str()),None),
+        _=>return Err(PostgresReviewError::FinalizationConflict),
+    };
+    crate::automations::complete_automation_step_with_output_in_transaction(
+        &mut transaction,project_id,automation_step_id,lease,Some(serde_json::to_value(&run.snapshot)?),
+    ).await.map_err(map_automation_error)?;
+    if !crate::durable_runs::finish_run(&mut transaction,run_id,state_name,message).await? {
+        return Err(PostgresReviewError::FinalizationConflict);
+    }
+    sqlx::query("UPDATE review_run_manifests SET state_code=$2,state_message=$3,proposal_id=$4,
+        candidate_hash=COALESCE($5,candidate_hash) WHERE automation_run_id=$1")
+        .bind(run_id).bind(state_code).bind(message).bind(proposal_id)
+        .bind(candidate_hash.as_ref().map(ReviewHash::as_str)).execute(&mut *transaction).await?;
+    record_review_outcome_notification_in_transaction(
+        &mut transaction,&run,state_name,message,proposal_id,
+    ).await?;
+    if let Some(proposal_id)=proposal_id {
+        crate::ai_autonomy_apply::enqueue_autonomy_in_transaction(
+            &mut transaction,project_id.as_uuid(),proposal_id,
+        ).await?;
     }
     transaction.commit().await?;
+    if let Some(proposal_id)=proposal_id
+        && let Err(error)=crate::ai_autonomy_apply::apply_pending_autonomy(pool,project_id.as_uuid(),proposal_id).await {
+        tracing::warn!(%error,%proposal_id,"AI autonomy deferred to the reconciler");
+    }
     Ok(())
 }
 
@@ -518,6 +546,15 @@ async fn record_review_outcome_notification_in_transaction(
     record_notification_in_transaction(transaction, &draft).await
 }
 
+fn blocked_state(code:ReviewBlockCode,message:&str)->Result<ReviewRunState,PostgresReviewError> {
+    if message.trim().is_empty() || message.len()>4096 {
+        return Err(PostgresReviewError::InvalidState(
+            "terminal review error metadata is invalid".to_owned(),
+        ));
+    }
+    Ok(ReviewRunState::Blocked{code,message:message.to_owned()})
+}
+
 fn resolve_blocked_outcome(
     code: ReviewBlockCode,
     message: &str,
@@ -530,15 +567,7 @@ fn resolve_blocked_outcome(
     ),
     PostgresReviewError,
 > {
-    if message.trim().is_empty() || message.len() > 4096 {
-        return Err(PostgresReviewError::InvalidState(
-            "terminal review error metadata is invalid".to_owned(),
-        ));
-    }
-    let state = ReviewRunState::Blocked {
-        code,
-        message: message.to_owned(),
-    };
+    let state=blocked_state(code,message)?;
     Ok((
         state,
         None,

@@ -848,13 +848,14 @@ async fn a_failed_review_run_is_announced_once() {
         snapshot.id,
         "review_execution_failed",
         message,
+        owner,
     )
     .await
     .expect("review fails");
     assert!(begin_next_automation_step(&pool,project_id,run_id,owner).await.expect("late claim").is_none());
-    fail_review_run(&pool,project_id,snapshot.id,"review_execution_failed",message)
+    fail_review_run(&pool,project_id,snapshot.id,"review_execution_failed",message,owner)
         .await.expect("terminal replay is idempotent");
-    let finalization = finalize_automation_run(&pool, project_id, run_id)
+    let finalization = finalize_automation_run(&pool, project_id, run_id,owner)
         .await
         .expect("run finalises");
     assert_eq!(finalization, AutomationFinalization::Failed);
@@ -1496,12 +1497,14 @@ async fn a_retry_reuses_the_steps_its_failed_predecessor_accepted() {
         .expect("first run schedules");
     let leased = lease(&pool, project_id, &first, owner).await;
     accept_prepare(&pool, &leased, owner).await;
+    let failure_lease=current_review_lease(&pool,first.id.as_uuid(),owner).await;
     fail_review_run(
         &pool,
         project_id,
         first.id,
         "provider_unavailable",
         "outage",
+        &failure_lease,
     )
     .await
     .expect("run fails");
@@ -1609,12 +1612,14 @@ async fn a_failed_review_run_is_retried_as_a_new_queued_generation() {
     let first = schedule_prepared_review_run(&pool, request())
         .await
         .expect("first run schedules");
+    let owner=claim_run(&pool,first.id.as_uuid(),"retry-failed-worker").await;
     fail_review_run(
         &pool,
         project_id,
         first.id,
         "provider_unavailable",
         "the provider timed out",
+        &owner,
     )
     .await
     .expect("run fails");
@@ -1652,12 +1657,14 @@ async fn a_blocked_review_run_is_retried_as_a_new_queued_generation() {
     let first = schedule_prepared_review_run(&pool, request())
         .await
         .expect("first run schedules");
+    let owner=claim_run(&pool,first.id.as_uuid(),"retry-blocked-worker").await;
     block_review_run(
         &pool,
         project_id,
         first.id,
         ReviewBlockCode::RepairBudgetExhausted,
         "repair budget exhausted",
+        &owner,
     )
     .await
     .expect("run blocks");

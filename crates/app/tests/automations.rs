@@ -487,7 +487,7 @@ async fn failed_manual_run_retries_only_incomplete_steps_and_completed_retry_is_
             .await?
         );
         ensure!(
-            finalize_automation_run(&pool, project_id, dispatch.run_id).await?
+            finalize_automation_run(&pool, project_id, dispatch.run_id,&second_lease).await?
                 == AutomationFinalization::Failed
         );
         let attempts_before_retry: i32 =
@@ -521,7 +521,7 @@ async fn failed_manual_run_retries_only_incomplete_steps_and_completed_retry_is_
         ensure!(after_begin.steps[0].attempts == 1);
         ensure!(complete_automation_step(&pool, project_id, resumed.id, &lease_b).await?);
         ensure!(
-            finalize_automation_run(&pool, project_id, dispatch.run_id).await?
+            finalize_automation_run(&pool, project_id, dispatch.run_id,&lease_b).await?
                 == AutomationFinalization::Completed
         );
         ensure!(!complete_automation_step(&pool, project_id, resumed.id, &lease_b).await?);
@@ -532,7 +532,7 @@ async fn failed_manual_run_retries_only_incomplete_steps_and_completed_retry_is_
                 .is_none()
         );
         ensure!(
-            finalize_automation_run(&pool, project_id, dispatch.run_id).await?
+            finalize_automation_run(&pool, project_id, dispatch.run_id,&lease_b).await?
                 == AutomationFinalization::Completed
         );
 

@@ -577,6 +577,10 @@ pub(crate) async fn complete_automation_step_with_output_in_transaction(
         let status = sqlx::query_scalar::<_,String>("SELECT status FROM durable_steps WHERE id=$1")
             .bind(step_run_id.as_uuid()).fetch_one(&mut **transaction).await?;
         if status != "completed" { return Err(AutomationError::WorkerOwnership); }
+        if let Some(output)=output.as_ref()
+            && !crate::durable_runs::set_completed_step_output(transaction,step_run_id.as_uuid(),lease,output).await? {
+            return Err(AutomationError::WorkerOwnership);
+        }
     }
     if changed {
         let next = sqlx::query_scalar::<_,Uuid>("SELECT id FROM durable_steps WHERE project_id=$1 AND run_id=$2
@@ -626,6 +630,7 @@ pub async fn finalize_automation_run(
     pool: &PgPool,
     project_id: ProjectId,
     run_id: AutomationRunId,
+    lease: &JobLease,
 ) -> Result<AutomationFinalization, AutomationError> {
     validate_project(project_id)?;
     let mut transaction = pool.begin().await?;
@@ -671,6 +676,15 @@ pub async fn finalize_automation_run(
     let failed: i64 = summary.get("failed");
     if total == 0 || (failed == 0 && completed < total) {
         return Err(AutomationError::RunNotReady);
+    }
+    let current=sqlx::query_scalar::<_,Uuid>(
+        "SELECT s.id FROM jobs j JOIN durable_steps s ON s.project_id=j.project_id
+         AND j.payload->>'step_id'=s.id::text AND j.payload->>'run_id'=s.run_id::text
+         WHERE j.id=$1 AND s.project_id=$2 AND s.run_id=$3")
+        .bind(lease.id).bind(project_id.as_uuid()).bind(run_id.as_uuid())
+        .fetch_optional(&mut *transaction).await?.ok_or(AutomationError::WorkerOwnership)?;
+    if !crate::durable_runs::verify_active_step_lease(&mut transaction,current,lease).await? {
+        return Err(AutomationError::WorkerOwnership);
     }
     if failed > 0 {
         let error = summary

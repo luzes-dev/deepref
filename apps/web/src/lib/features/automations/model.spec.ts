@@ -12,6 +12,7 @@ import {
 	graphToFlow,
 	insertDetail,
 	newNodeId,
+	nodeIsAvailable,
 	portsCompatible,
 	previewForRun,
 	refusalReason,
@@ -29,6 +30,7 @@ const port = (id: string, type: string, label = id) => ({
 
 const filterDef: NodeTypeDto = {
 	id: 'logic.filter',
+	available: true,
 	category: 'logic',
 	label: 'Keep only some records',
 	description: 'Keeps the records that match your rule.',
@@ -238,5 +240,22 @@ describe('insertDetail', () => {
 	it('keeps positions inside the text', () => {
 		expect(insertDetail('ab', 'x', 99, 99).text).toBe('ab{{x}}');
 		expect(insertDetail('ab', 'x', -4, 1).text).toBe('{{x}}b');
+	});
+});
+
+describe('runtime node availability', () => {
+	it('excludes parked definitions from authoring while preserving saved graph rendering and configuration', () => {
+		const parked: NodeTypeDto = { ...filterDef, id: 'integration.slack', label: 'Slack', available: false };
+		const outgoing: NodeTypeDto = { ...filterDef, id: 'integration.email', label: 'Send email' };
+		const catalog = [parked, outgoing];
+		expect(catalog.filter(nodeIsAvailable).map((def) => def.id)).toEqual(['integration.email']);
+		expect(nodeIsAvailable(undefined)).toBe(false);
+		const graph: WfGraph = {
+			nodes: [{ id: 'saved', type: parked.id, position: { x: 0, y: 0 }, config: { webhook: 'stored' } }],
+			edges: []
+		};
+		const flow = graphToFlow(graph, catalogIndex(catalog));
+		expect(flow.nodes[0].data.title).toBe('Slack');
+		expect(flowToGraph(flow.nodes, flow.edges)).toEqual(graph);
 	});
 });

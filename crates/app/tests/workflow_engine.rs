@@ -167,14 +167,12 @@ async fn check_reads_the_stored_slack_address_and_flags_a_wrong_one() {
     };
 
     // The address is stored as a secret; the draft keeps only a placeholder.
-    let wrong = create_workflow(
-        &pool,
-        project,
-        "Not Slack",
-        "",
-        slack("https://example.com/not-slack"),
-        &actor,
-    )
+    let wrong = create_workflow(&pool,
+    project,
+    "Not Slack",
+    "",
+    slack("https://example.com/not-slack"),
+    &actor,, true)
     .await
     .expect("create");
     let report = validate_workflow_draft(&pool, project, wrong.id)
@@ -187,14 +185,12 @@ async fn check_reads_the_stored_slack_address_and_flags_a_wrong_one() {
         "expected the non-Slack address to be rejected"
     );
 
-    let good = create_workflow(
-        &pool,
-        project,
-        "Slack",
-        "",
-        slack("https://hooks.slack.com/services/T000/B000/XXXX"),
-        &actor,
-    )
+    let good = create_workflow(&pool,
+    project,
+    "Slack",
+    "",
+    slack("https://hooks.slack.com/services/T000/B000/XXXX"),
+    &actor,, true)
     .await
     .expect("create");
     let report = validate_workflow_draft(&pool, project, good.id)
@@ -288,21 +284,24 @@ async fn http_secrets_stay_bound_to_the_origin_where_they_were_entered() {
         edges: vec![edge("t", "data", "http", "data")],
     };
     let workflow = create_workflow(&pool, project, "Origin", "",
-        graph("https://example.com/one", "Bearer private"), &actor).await.unwrap();
+        graph("https://example.com/one", "Bearer private"), &actor, true).await.unwrap();
     assert_eq!(get_workflow_http_secret(&pool, workflow.id, "http", "https://example.com/two")
         .await.unwrap().as_deref(), Some("Bearer private"));
     assert!(get_workflow_http_secret(&pool, workflow.id, "http", "https://other.example/one")
         .await.unwrap().is_none());
     update_workflow(&pool, project, workflow.id, UpdateWorkflow {
+        niche_nodes_enabled: true,
         graph: Some(graph("https://example.com/two", SECRET_PLACEHOLDER)), ..Default::default()
     }).await.unwrap();
     assert!(get_workflow_http_secret(&pool, workflow.id, "http", "https://example.com/two")
         .await.unwrap().is_some());
     update_workflow(&pool, project, workflow.id, UpdateWorkflow {
+        niche_nodes_enabled: true,
         graph: Some(graph("https://other.example/one", SECRET_PLACEHOLDER)), ..Default::default()
     }).await.unwrap();
     assert!(get_workflow_secret(&pool, workflow.id, "http", "auth").await.unwrap().is_none());
     update_workflow(&pool, project, workflow.id, UpdateWorkflow {
+        niche_nodes_enabled: true,
         graph: Some(graph("https://other.example/one", "Bearer replacement")), ..Default::default()
     }).await.unwrap();
     assert_eq!(get_workflow_http_secret(&pool, workflow.id, "http", "https://other.example/two")
@@ -322,7 +321,7 @@ async fn new_webhooks_require_signatures_even_if_a_database_default_was_changed(
     let graph = WorkflowGraph {
         nodes: vec![node("t", "trigger.webhook", json!({}))], edges: vec![],
     };
-    let workflow = create_workflow(&pool, project, "Signed", "", graph, &actor).await.unwrap();
+    let workflow = create_workflow(&pool, project, "Signed", "", graph, &actor, true).await.unwrap();
     assert!(workflow.webhook_signature_required);
     let endpoints = deepref_app::get_webhook_config(&pool, project, workflow.id).await.unwrap();
     assert!(endpoints.signature_required);

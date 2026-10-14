@@ -28,7 +28,7 @@ CREATE TABLE durable_runs (
   started_at timestamptz,
   finished_at timestamptz,
   UNIQUE(project_id,id),
-  FOREIGN KEY(project_id,job_id) REFERENCES jobs(project_id,id) ON DELETE RESTRICT
+  FOREIGN KEY(project_id,job_id) REFERENCES jobs(project_id,id) DEFERRABLE INITIALLY DEFERRED
 );
 CREATE INDEX durable_runs_project_created_idx ON durable_runs(project_id,created_at DESC,id DESC);
 CREATE INDEX durable_runs_active_idx ON durable_runs(status) WHERE status IN ('queued','running','waiting');
@@ -47,7 +47,7 @@ CREATE TABLE automation_run_details (
   idempotency_key text NOT NULL,
   UNIQUE(project_id,definition_id,trigger_kind,idempotency_key),
   FOREIGN KEY(project_id,id) REFERENCES durable_runs(project_id,id) ON DELETE CASCADE,
-  FOREIGN KEY(project_id,definition_id) REFERENCES automation_definitions(project_id,id) ON DELETE RESTRICT
+  FOREIGN KEY(project_id,definition_id) REFERENCES automation_definitions(project_id,id) DEFERRABLE INITIALLY DEFERRED
 );
 CREATE TABLE workflow_run_details (
   id uuid PRIMARY KEY REFERENCES durable_runs(id) ON DELETE CASCADE,
@@ -94,7 +94,7 @@ CREATE TABLE durable_steps (
   output jsonb,
   UNIQUE(project_id,id),
   FOREIGN KEY(project_id,run_id) REFERENCES durable_runs(project_id,id) ON DELETE CASCADE,
-  FOREIGN KEY(project_id,claimed_job_id) REFERENCES jobs(project_id,id),
+  FOREIGN KEY(project_id,claimed_job_id) REFERENCES jobs(project_id,id) DEFERRABLE INITIALLY DEFERRED,
   CHECK ((claimed_job_id IS NULL)=(claimed_job_attempt IS NULL)),
   CHECK (claimed_job_attempt IS NULL OR claimed_job_attempt>0)
 );
@@ -115,7 +115,7 @@ CREATE TABLE durable_attempts (
   UNIQUE(step_id,attempt_number),
   FOREIGN KEY(project_id,run_id) REFERENCES durable_runs(project_id,id) ON DELETE CASCADE,
   FOREIGN KEY(project_id,step_id) REFERENCES durable_steps(project_id,id) ON DELETE CASCADE,
-  FOREIGN KEY(project_id,job_id) REFERENCES jobs(project_id,id),
+  FOREIGN KEY(project_id,job_id) REFERENCES jobs(project_id,id) DEFERRABLE INITIALLY DEFERRED,
   CHECK((job_id IS NULL)=(job_attempt IS NULL))
 );
 CREATE TABLE automation_step_details (
@@ -197,6 +197,26 @@ SELECT project_id,run_id,id,attempts,
  CASE WHEN status IN ('pending','queued') THEN 'failed' ELSE status END,
  claimed_by,claimed_job_id,claimed_job_attempt,COALESCE(started_at,created_at),finished_at,error
 FROM durable_steps WHERE handler_kind IN ('automation','workflow') AND attempts>0;
+
+-- A terminal review manifest could precede the legacy recipe envelope's close.
+-- Reconcile those unfinished claims without fabricating accepted node evidence.
+UPDATE durable_steps s SET
+ status=CASE WHEN r.status='completed' AND s.handler_kind='automation'
+   AND EXISTS(SELECT 1 FROM review_run_manifests m WHERE m.automation_run_id=r.id)
+   THEN 'completed' WHEN r.status='completed' THEN 'failed' ELSE r.status END,
+ finished_at=CASE WHEN s.started_at IS NULL OR r.finished_at>=s.started_at
+   THEN COALESCE(r.finished_at,clock_timestamp()) ELSE clock_timestamp() END,
+ error=COALESCE(s.error,r.error),claimed_by=NULL,claimed_job_id=NULL,claimed_job_attempt=NULL
+FROM durable_runs r WHERE r.id=s.run_id AND r.status IN ('completed','failed','blocked','cancelled')
+ AND s.status IN ('pending','queued','running','waiting');
+UPDATE durable_attempts a SET
+ status=CASE WHEN s.handler_kind='automation' AND s.status='completed' THEN 'completed'
+   WHEN r.status='completed' THEN 'failed' ELSE r.status END,
+ finished_at=CASE WHEN r.finished_at>=a.started_at THEN r.finished_at ELSE clock_timestamp() END,
+ error=COALESCE(a.error,s.error,r.error)
+FROM durable_steps s JOIN durable_runs r ON r.id=s.run_id
+WHERE a.step_id=s.id AND r.status IN ('completed','failed','blocked','cancelled')
+ AND a.status IN ('running','waiting');
 
 DO $$ BEGIN
  IF (SELECT count(*) FROM durable_runs)<>(SELECT count(*) FROM automation_runs)+(SELECT count(*) FROM workflow_runs)
