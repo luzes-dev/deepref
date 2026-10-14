@@ -14,8 +14,7 @@ use deepref_application::{
 };
 use deepref_domain::{Actor, ActorKind, ScreeningDecision, ScreeningStage};
 use deepref_postgres::{
-    ScreeningError, get_screening_history, get_screening_queue, migrate, screen_report,
-    undo_screening,
+    ScreeningError, get_screening_history, get_screening_queue, screen_report, undo_screening,
 };
 use sqlx::{
     AssertSqlSafe, Connection, PgPool, Row,
@@ -24,9 +23,7 @@ use sqlx::{
 use uuid::Uuid;
 
 async fn database() -> Option<PgPool> {
-    let pool = deepref_postgres::test_isolation::isolated_pool_from_env("DATABASE_URL", 20).await?;
-    migrate(&pool).await.expect("migrations should apply");
-    Some(pool)
+    deepref_postgres::test_isolation::isolated_pool_from_env("DATABASE_URL", 20).await
 }
 
 async fn fixture(pool: &PgPool, report_count: usize) -> (Uuid, Uuid, Vec<Uuid>) {

@@ -175,7 +175,11 @@ fn validate_workspace_dependency(
         let fixture_edge = source.name == "deepref-http-api"
             && target.name == "deepref-worker"
             && dependency.kind.as_deref() == Some("dev");
-        if !layer.permits(target_layer) && !fixture_edge {
+        // A package dev-depending on itself only turns on its own test-only
+        // features (e.g. deepref-postgres `test-support`); it crosses no layer.
+        let own_test_features =
+            source.name == target.name && dependency.kind.as_deref() == Some("dev");
+        if !layer.permits(target_layer) && !fixture_edge && !own_test_features {
             errors.push(format!(
                 "{} -> {}\nsource layer: {layer}\ntarget layer: {target_layer}\n{layer} -> {target_layer} is forbidden ({})",
                 source.name,

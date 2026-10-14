@@ -10,18 +10,14 @@ use deepref_postgres::{
     AppendAssistantMessage, AssistantAgentRunStatus, AssistantError, CompletedAssistantAgentRun,
     NewAssistantAgentRun, NewAssistantPlan, append_assistant_run_event, begin_assistant_agent_run,
     complete_assistant_agent_run, create_assistant_agent_run, get_assistant_agent_run,
-    list_assistant_run_events, migrate, submit_assistant_agent_run,
+    list_assistant_run_events, submit_assistant_agent_run,
 };
 use serde_json::json;
 use sqlx::PgPool;
 use uuid::Uuid;
 
 async fn database() -> Option<PgPool> {
-    let pool = deepref_postgres::test_isolation::isolated_pool_from_env("DATABASE_URL", 4).await?;
-    migrate(&pool)
-        .await
-        .expect("DATABASE_URL migrations must apply");
-    Some(pool)
+    deepref_postgres::test_isolation::isolated_pool_from_env("DATABASE_URL", 4).await
 }
 
 async fn project(pool: &PgPool) -> (Uuid, Uuid) {

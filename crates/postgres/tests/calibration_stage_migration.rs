@@ -27,37 +27,12 @@ use deepref_review::{
     ReviewSubject, ScheduleReviewRun,
 };
 use serde_json::{Value, json};
-use sqlx::{Connection, PgConnection, PgPool, Row, migrate::Migrator, postgres::PgPoolOptions};
+use sqlx::{PgPool, Row, migrate::Migrator, postgres::PgPoolOptions};
 use uuid::Uuid;
 
 /// The migration that introduces stage-scoped calibration. Every earlier migration
 /// is applied before the legacy rows are written.
 const STAGE_SCOPED_CALIBRATION: i64 = 50;
-
-fn database_url() -> Option<String> {
-    match std::env::var("DATABASE_URL") {
-        Ok(url) => Some(url),
-        Err(_) if std::env::var("DEEPREF_REQUIRE_DATABASE").as_deref() == Ok("1") => {
-            panic!("DATABASE_URL must be set when DEEPREF_REQUIRE_DATABASE=1")
-        }
-        Err(_) => None,
-    }
-}
-
-/// The same server and credentials, pointed at another database.
-fn url_for_database(url: &str, database: &str) -> String {
-    let (base, query) = match url.split_once('?') {
-        Some((base, query)) => (base, Some(query)),
-        None => (url, None),
-    };
-    let (server, _current_database) = base
-        .rsplit_once('/')
-        .expect("DATABASE_URL names a database");
-    match query {
-        Some(query) => format!("{server}/{database}?{query}"),
-        None => format!("{server}/{database}"),
-    }
-}
 
 async fn pool_for(url: &str) -> PgPool {
     PgPoolOptions::new()
@@ -232,39 +207,12 @@ fn rejection_message(error: sqlx::Error) -> String {
 
 #[tokio::test]
 async fn legacy_calibration_bundles_keep_scheme_one_and_never_admit_automation() {
-    let Some(url) = database_url() else {
-        if std::env::var("DEEPREF_REQUIRE_DATABASE").as_deref() == Ok("1") {
-            panic!("DATABASE_URL must be set when DEEPREF_REQUIRE_DATABASE=1")
-        }
+    let Some(url) =
+        deepref_postgres::test_isolation::isolated_empty_url_from_env("DATABASE_URL").await
+    else {
         return;
     };
-    let database = format!("deepref_pr2_legacy_{}", Uuid::new_v4().simple());
-    let mut maintenance = PgConnection::connect(&url_for_database(&url, "postgres"))
-        .await
-        .expect("maintenance connection");
-    sqlx::query(sqlx::AssertSqlSafe(format!(
-        "CREATE DATABASE \"{database}\""
-    )))
-    .execute(&mut maintenance)
-    .await
-    .expect("legacy database is created");
-
-    // The assertions run in their own task, so the temporary database is dropped
-    // even when one of them fails.
-    let legacy_url = url_for_database(&url, &database);
-    let outcome = tokio::spawn(async move { upgrade_legacy_database(&legacy_url).await }).await;
-
-    sqlx::query(sqlx::AssertSqlSafe(format!(
-        "DROP DATABASE \"{database}\" WITH (FORCE)"
-    )))
-    .execute(&mut maintenance)
-    .await
-    .expect("legacy database is dropped");
-    match outcome {
-        Ok(()) => {}
-        Err(error) if error.is_panic() => std::panic::resume_unwind(error.into_panic()),
-        Err(error) => panic!("legacy migration check was cancelled: {error}"),
-    }
+    upgrade_legacy_database(&url).await;
 }
 
 /// Migrates a database to 0048, writes a legacy bundle, and runs the rest.
@@ -401,14 +349,11 @@ async fn upgrade_legacy_database(legacy_url: &str) {
 
 #[tokio::test]
 async fn new_calibration_bundles_must_state_a_stage_and_a_component_snapshot() {
-    let Some(url) = database_url() else {
-        if std::env::var("DEEPREF_REQUIRE_DATABASE").as_deref() == Ok("1") {
-            panic!("DATABASE_URL must be set when DEEPREF_REQUIRE_DATABASE=1")
-        }
+    let Some(pool) =
+        deepref_postgres::test_isolation::isolated_pool_from_env("DATABASE_URL", 4).await
+    else {
         return;
     };
-    let pool = pool_for(&url).await;
-    migrate(&pool).await.expect("migrations apply");
     let project_id = Uuid::new_v4();
     sqlx::query("INSERT INTO projects (id,name) VALUES ($1,'calibration schema')")
         .bind(project_id)

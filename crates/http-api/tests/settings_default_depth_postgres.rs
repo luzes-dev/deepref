@@ -16,15 +16,11 @@ use sqlx::PgPool;
 use tower::ServiceExt;
 
 async fn database() -> Option<PgPool> {
-    let pool = deepref_postgres::test_isolation::isolated_pool_from_env_first(
+    deepref_postgres::test_isolation::isolated_pool_from_env_first(
         &["TEST_DATABASE_URL", "DATABASE_URL"],
         5,
     )
-    .await?;
-    deepref_postgres::migrate(&pool)
-        .await
-        .expect("all migrations should apply");
-    Some(pool)
+    .await
 }
 
 fn api_config() -> ApiConfig {

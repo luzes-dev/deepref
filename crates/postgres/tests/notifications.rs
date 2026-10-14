@@ -1,15 +1,13 @@
 #![allow(clippy::expect_used, clippy::panic, clippy::unwrap_used)]
 use deepref_postgres::{
-    NotificationDraft, list_notifications, mark_notifications_read, migrate, record_notification,
+    NotificationDraft, list_notifications, mark_notifications_read, record_notification,
     record_run_notification_once_in_transaction, unread_summary,
 };
 use sqlx::PgPool;
 use uuid::Uuid;
 
 async fn database() -> Option<PgPool> {
-    let pool = deepref_postgres::test_isolation::isolated_pool_from_env("DATABASE_URL", 10).await?;
-    migrate(&pool).await.expect("migrations should apply");
-    Some(pool)
+    deepref_postgres::test_isolation::isolated_pool_from_env("DATABASE_URL", 10).await
 }
 
 /// The notifications table is shared by every concurrent test, so fixtures are
