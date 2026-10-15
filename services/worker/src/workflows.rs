@@ -242,8 +242,12 @@ async fn poll_alert_sources(pool: &PgPool, alert: &DueAlert) -> Result<Vec<Alert
         {
             Ok(found) => items.extend(found),
             Err(error) => failures.push(match error {
-                deepref_integrations::CrossrefSearchError::Retryable(message) => NodeError::retryable(message),
-                deepref_integrations::CrossrefSearchError::Permanent(message) => NodeError::permanent(message),
+                deepref_integrations::CrossrefSearchError::Retryable(message) => {
+                    NodeError::retryable(message)
+                }
+                deepref_integrations::CrossrefSearchError::Permanent(message) => {
+                    NodeError::permanent(message)
+                }
             }),
         }
     }

@@ -19,11 +19,17 @@ serde.workspace = true
 sha2.workspace = true
 sqlx.workspace = true
 thiserror.workspace = true
-tokio.workspace = true
+tokio = { workspace = true, optional = true }
 tracing.workspace = true
 uuid.workspace = true
 
+[features]
+# Per-test database isolation for integration tests. Enabled only through
+# dev-dependencies (here and in dependent crates), never in production builds.
+test-support = ["dep:tokio"]
+
 [dev-dependencies]
+deepref-postgres = { workspace = true, features = ["test-support"] }
 tokio.workspace = true
 
 [build-dependencies]

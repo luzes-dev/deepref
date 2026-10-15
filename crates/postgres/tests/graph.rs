@@ -7,16 +7,12 @@
 use anyhow::{Result, ensure};
 use chrono::Utc;
 use deepref_domain::graph::GraphEdge;
-use deepref_postgres::{load_project_graph, migrate, recompute_project_metrics};
+use deepref_postgres::{load_project_graph, recompute_project_metrics};
 use sqlx::{PgPool, Row};
 use uuid::Uuid;
 
 async fn database() -> Option<PgPool> {
-    let pool = deepref_postgres::test_isolation::isolated_pool_from_env("DATABASE_URL", 8).await?;
-    migrate(&pool)
-        .await
-        .unwrap_or_else(|error| panic!("failed to apply PostgreSQL migrations: {error}"));
-    Some(pool)
+    deepref_postgres::test_isolation::isolated_pool_from_env("DATABASE_URL", 8).await
 }
 
 #[tokio::test]
@@ -134,8 +130,12 @@ async fn seed_and_assert(
     }
 
     recompute_project_metrics(pool, project_id).await?;
-    let graph =
-        load_project_graph(pool, project_id, deepref_domain::graph::GraphFieldSelection::all()).await?;
+    let graph = load_project_graph(
+        pool,
+        project_id,
+        deepref_domain::graph::GraphFieldSelection::all(),
+    )
+    .await?;
 
     ensure!(graph.nodes.len() == 3, "expected three project nodes");
     let mut expected_edges = vec![

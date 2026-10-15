@@ -28,21 +28,15 @@ impl fmt::Display for Layer {
 impl Layer {
     fn permits(self, target: Self) -> bool {
         use Layer::{
-            Adapter, Ai, Application, Composition, Configuration, Domain, Http,
-            Persistence, Review, Tooling, Worker,
+            Adapter, Ai, Application, Composition, Configuration, Domain, Http, Persistence,
+            Review, Tooling, Worker,
         };
         match self {
             Domain | Configuration => false,
             Application | Ai => target == Domain,
             Review => matches!(target, Ai | Application | Domain),
-            Adapter => matches!(
-                target,
-                Adapter | Application | Configuration | Domain
-            ),
-            Persistence => matches!(
-                target,
-                Ai | Application | Adapter | Domain | Review
-            ),
+            Adapter => matches!(target, Adapter | Application | Configuration | Domain),
+            Persistence => matches!(target, Ai | Application | Adapter | Domain | Review),
             Http | Worker => !matches!(target, Http | Worker | Composition | Tooling),
             Composition => !matches!(target, Composition | Tooling),
             Tooling => true,
@@ -177,7 +171,11 @@ fn validate_workspace_dependency(
         let fixture_edge = source.name == "deepref-http-api"
             && target.name == "deepref-worker"
             && dependency.kind.as_deref() == Some("dev");
-        if !layer.permits(target_layer) && !fixture_edge {
+        // A package dev-depending on itself only turns on its own test-only
+        // features (e.g. deepref-postgres `test-support`); it crosses no layer.
+        let own_test_features =
+            source.name == target.name && dependency.kind.as_deref() == Some("dev");
+        if !layer.permits(target_layer) && !fixture_edge && !own_test_features {
             errors.push(format!(
                 "{} -> {}\nsource layer: {layer}\ntarget layer: {target_layer}\n{layer} -> {target_layer} is forbidden ({})",
                 source.name,

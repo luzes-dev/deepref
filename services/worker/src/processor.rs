@@ -7,12 +7,14 @@ use deepref_ai::{
     AiExecutionContext, AiGateway, AiTaskRunner, ProposalPersistence, ProviderEndpoint,
     SystemClock, UuidProvider,
 };
-use deepref_domain::{IngestionItemStatus, normalize_doi};
 use deepref_documents::{
     DocumentParser, DocumentStore, HttpsPdfFetcher, PARSER_VERSION, PdfiumParser,
     RemoteDocumentFetcher,
 };
-use deepref_domain::events::{DeadLetterRecord, EventEnvelope, WorkFetchRequested, deserialize_compatible};
+use deepref_domain::events::{
+    DeadLetterRecord, EventEnvelope, WorkFetchRequested, deserialize_compatible,
+};
+use deepref_domain::{IngestionItemStatus, normalize_doi};
 use deepref_integrations::CrossrefClient;
 use deepref_integrations::CrossrefError;
 use deepref_review::worker::{
@@ -720,7 +722,8 @@ async fn handle_recompute_metrics_job(
     pool: &sqlx::PgPool,
     payload: serde_json::Value,
 ) -> anyhow::Result<DeliveryAction> {
-    let event: EventEnvelope<deepref_domain::events::DomainPayload> = serde_json::from_value(payload)?;
+    let event: EventEnvelope<deepref_domain::events::DomainPayload> =
+        serde_json::from_value(payload)?;
     let project_id = match event.payload {
         deepref_domain::events::DomainPayload::MetricsRecomputeRequested(p) => p.project_id,
         _ => anyhow::bail!("recompute_metrics job has an unsupported payload"),
