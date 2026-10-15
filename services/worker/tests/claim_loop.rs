@@ -169,7 +169,10 @@ async fn handler_panic_fails_the_job_and_the_loop_keeps_claiming() {
         .lines()
         .find(|line| line.contains("WARN") && line.contains(&poison_id.to_string()))
         .unwrap_or_else(|| panic!("no WARN line names the failed job; logs:\n{logs}"));
-    assert!(failure_line.contains("kind=test_poison"), "{failure_line}");
+    assert!(
+        failure_line.contains("kind=recompute_metrics"),
+        "{failure_line}"
+    );
     assert!(failure_line.contains("attempts=1"), "{failure_line}");
 
     // Everything a job logs, including inside its handler task, carries the
@@ -178,7 +181,7 @@ async fn handler_panic_fails_the_job_and_the_loop_keeps_claiming() {
         .lines()
         .find(|line| line.contains("healthy handler ran"))
         .unwrap_or_else(|| panic!("the handler did not log; logs:\n{logs}"));
-    let expected_span = format!("job{{job_id={healthy_id} kind=test_healthy");
+    let expected_span = format!("job{{job_id={healthy_id} kind=recompute_metrics");
     assert!(handler_line.contains(&expected_span), "{handler_line}");
     assert!(
         handler_line.contains(&format!("project_id={}", project_id.as_uuid())),
