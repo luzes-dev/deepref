@@ -18,6 +18,10 @@ import type {
 	QueryKey
 } from '@tanstack/svelte-query';
 
+import { getListProjectDedupeProposalsQueryKey } from '../deduplication/deduplication';
+
+import { getListFullTextScreeningQueueQueryKey } from '../documents/documents';
+
 import type {
 	AiActivityDto,
 	AiActivityOverviewDto,
@@ -51,6 +55,8 @@ import type {
 	UpdateAiAutonomyRequest,
 	UpdateAiBudgetRequest
 } from '../models';
+
+import { getGetScreeningQueueQueryKey } from '../review/review';
 
 import { customFetch } from '../../custom-fetch.ts';
 import type { ErrorType, BodyType } from '../../custom-fetch.ts';

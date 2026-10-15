@@ -932,7 +932,6 @@ async fn disable_routes(pool: &PgPool) {
 
 /// A newer route for the screening profile changes the semantic identity.
 async fn change_route(pool: &PgPool) {
-    let lock = route_fixture_lock(pool).await;
     insert_model_route(
         pool,
         &ResolvedModel {
@@ -947,7 +946,6 @@ async fn change_route(pool: &PgPool) {
     )
     .await
     .unwrap();
-    lock.commit().await.unwrap();
 }
 
 #[tokio::test]

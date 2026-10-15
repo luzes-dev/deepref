@@ -717,7 +717,6 @@ async fn new_project(pool: &PgPool, label: &str) -> ProjectId {
 /// RPC) runs its side effect once and records one outcome.
 #[tokio::test]
 async fn concurrent_handle_step_calls_on_one_node_execute_once() {
-    let _guard = GUARD.lock().await;
     let Some(pool) = database().await else { return };
     let project = new_project(&pool, "wf-fence-concurrent").await;
     let (run_id, node_run_id, job) = claimed_notify_step(&pool, project, "fence-worker").await;
@@ -748,7 +747,6 @@ async fn concurrent_handle_step_calls_on_one_node_execute_once() {
 /// neither restart the block nor overwrite the live attempt's outcome.
 #[tokio::test]
 async fn a_stale_attempt_cannot_restart_or_overwrite_a_reclaimed_step() {
-    let _guard = GUARD.lock().await;
     let Some(pool) = database().await else { return };
     let project = new_project(&pool, "wf-fence-stale").await;
     let (run_id, node_run_id, first) = claimed_notify_step(&pool, project, "fence-worker").await;

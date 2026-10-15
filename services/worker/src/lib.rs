@@ -581,7 +581,7 @@ mod lease_deadline_tests {
         let started = tokio::time::Instant::now();
         let result = run_with_lease_renewal(
             Duration::from_millis(300),
-            || std::future::pending::<anyhow::Result<bool>>(),
+            std::future::pending::<anyhow::Result<bool>>,
             std::future::pending::<anyhow::Result<DeliveryAction>>(),
         )
         .await;
