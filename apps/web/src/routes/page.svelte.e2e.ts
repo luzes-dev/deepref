@@ -882,11 +882,11 @@ test('refreshes completed provider runs with stable retry keys', async ({ page }
 	await expect.poll(() => refreshKeys).toHaveLength(2);
 	await expect(refreshKeys[1]).toBe(refreshKeys[0]);
 	await expect(refreshPaths).toHaveLength(2);
-	await expect(page.locator('[data-ingestion-id="refreshed-ingestion"]')).toBeVisible();
+	await expect(page.locator('[data-acquisition-id="refreshed-ingestion"]')).toBeVisible();
 	await expect(page.getByRole('heading', { name: 'Status queued' })).toBeVisible();
 
 	await page
-		.locator('[data-ingestion-id="project-ingestion"]')
+		.locator('[data-acquisition-id="project-ingestion"]')
 		.getByRole('button', { name: 'Re-fetch metadata' })
 		.click();
 	await expect.poll(() => refreshKeys).toHaveLength(3);
