@@ -126,11 +126,6 @@ export function deriveConversationTitle(message: string): string {
 	return `${cut.trimEnd()}…`;
 }
 
-export interface AssistantPlanManualStep {
-	reason: string;
-	link_target: string;
-}
-
 export type AssistantPlanAction = AssistantPlanActionDto;
 export type AssistantPlanResult = AssistantPlanResultDto;
 export type AssistantPlan = AssistantPlanDto;
