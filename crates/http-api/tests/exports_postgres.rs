@@ -148,17 +148,18 @@ async fn postgres_exports_return_every_deterministic_attachment_and_boundary_sta
     .await
     .expect("source record should insert");
     sqlx::query(
-        "INSERT INTO record_provenance
-         (record_id,acquisition_run_id,canonical_doi,depth,parent_doi,status,attempts,queued_at,fetched_at,work_event_id)
-         VALUES ($1,$2,$3,0,NULL,'fetched',1,now(),now(),$4)",
+        "INSERT INTO acquisition_items
+         (acquisition_id,project_id,report_id,canonical_doi,depth,parent_doi,status,attempts,queued_at,fetched_at,work_event_id)
+         VALUES ($1,$2,$3,$4,0,NULL,'fetched',1,now(),now(),$5)",
     )
-    .bind(record_id)
     .bind(acquisition_run_id)
+    .bind(project_id)
+    .bind(report_id)
     .bind(&doi)
     .bind(provenance_event_id)
     .execute(&pool)
     .await
-    .expect("record provenance should insert");
+    .expect("acquisition provenance should insert");
     sqlx::query(
         "INSERT INTO project_reports (project_id,report_id,first_seen_record_id,lifecycle_status)
          VALUES ($1,$2,$3,'screening')",
