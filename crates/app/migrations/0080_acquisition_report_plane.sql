@@ -155,7 +155,7 @@ FROM (SELECT a.id,count(i.*) FILTER(WHERE i.status IN('queued','fetching'))::int
 
 -- Only payload identity changes: queue ID, dedupe, attempts, ownership and lease stay intact.
 UPDATE jobs SET payload=jsonb_set(payload,'{payload}',
- (payload->'payload'-'ingestion_id')||jsonb_build_object('acquisition_id',payload->'payload'->'ingestion_id'))
+ ((payload->'payload')-'ingestion_id')||jsonb_build_object('acquisition_id',payload->'payload'->'ingestion_id'))
 WHERE kind='work_fetch_requested' AND payload->'payload' ? 'ingestion_id';
 UPDATE jobs SET payload=(payload-'ingestion_id')||jsonb_build_object('acquisition_id',payload->'ingestion_id')
 WHERE kind='work_fetch_requested' AND payload ? 'ingestion_id';
