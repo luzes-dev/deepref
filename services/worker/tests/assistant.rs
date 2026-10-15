@@ -585,7 +585,6 @@ async fn plan_event_resolves_to_the_stored_plan() {
 
 #[tokio::test]
 async fn malformed_model_route_fails_run_before_terminating_job() {
-    let _guard = DATABASE_TEST_MUTEX.lock().await;
     let Some(pool) = database().await else { return };
     let (project_id, conversation_id) = project(&pool).await;
     let run_id = submit(&pool, project_id, conversation_id).await;
@@ -616,7 +615,6 @@ async fn malformed_model_route_fails_run_before_terminating_job() {
 
 #[tokio::test]
 async fn reconciler_fails_missing_and_dead_assistant_jobs_but_preserves_live_jobs() {
-    let _guard = DATABASE_TEST_MUTEX.lock().await;
     let Some(pool) = database().await else { return };
     let (project_id, conversation_id) = project(&pool).await;
     let missing = submit(&pool, project_id, conversation_id).await;
