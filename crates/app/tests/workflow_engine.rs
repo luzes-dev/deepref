@@ -3,12 +3,12 @@
 //! is added once, Check reads the stored Slack address, and an undone AI action
 //! is no longer reported as undoable.
 
-use deepref_application::workflows::{Endpoint, GraphEdge, GraphNode, Position, WorkflowGraph};
-use deepref_domain::{Actor, ActorKind, ProjectId};
 use deepref_app::{
     ActivityFilters, NewActivity, activity_overview, create_workflow, list_activity,
     notify_from_workflow, record_activity, validate_workflow_draft,
 };
+use deepref_application::workflows::{Endpoint, GraphEdge, GraphNode, Position, WorkflowGraph};
+use deepref_domain::{Actor, ActorKind, ProjectId};
 use serde_json::{Value, json};
 use sqlx::PgPool;
 use uuid::Uuid;
@@ -272,5 +272,134 @@ async fn an_undone_ai_action_is_no_longer_undoable() {
             .undoable,
         0
     );
+    remove_project(&pool, project).await;
+}
+
+#[tokio::test]
+async fn http_secrets_stay_bound_to_the_origin_where_they_were_entered() {
+    use deepref_app::{
+        UpdateWorkflow, get_workflow_http_secret, get_workflow_secret, update_workflow,
+    };
+    use deepref_application::workflows::SECRET_PLACEHOLDER;
+    let Some(pool) = database().await else { return };
+    let project = insert_project(&pool).await;
+    let actor = Actor::new(ActorKind::User, "origin-test").unwrap();
+    let graph = |url: &str, auth: &str| WorkflowGraph {
+        nodes: vec![
+            node("t", "trigger.manual", json!({})),
+            node(
+                "http",
+                "integration.http_request",
+                json!({"method":"GET","url":url,"auth":auth}),
+            ),
+        ],
+        edges: vec![edge("t", "data", "http", "data")],
+    };
+    let workflow = create_workflow(
+        &pool,
+        project,
+        "Origin",
+        "",
+        graph("https://example.com/one", "Bearer private"),
+        &actor,
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        get_workflow_http_secret(&pool, workflow.id, "http", "https://example.com/two")
+            .await
+            .unwrap()
+            .as_deref(),
+        Some("Bearer private")
+    );
+    assert!(
+        get_workflow_http_secret(&pool, workflow.id, "http", "https://other.example/one")
+            .await
+            .unwrap()
+            .is_none()
+    );
+    update_workflow(
+        &pool,
+        project,
+        workflow.id,
+        UpdateWorkflow {
+            graph: Some(graph("https://example.com/two", SECRET_PLACEHOLDER)),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+    assert!(
+        get_workflow_http_secret(&pool, workflow.id, "http", "https://example.com/two")
+            .await
+            .unwrap()
+            .is_some()
+    );
+    update_workflow(
+        &pool,
+        project,
+        workflow.id,
+        UpdateWorkflow {
+            graph: Some(graph("https://other.example/one", SECRET_PLACEHOLDER)),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+    assert!(
+        get_workflow_secret(&pool, workflow.id, "http", "auth")
+            .await
+            .unwrap()
+            .is_none()
+    );
+    update_workflow(
+        &pool,
+        project,
+        workflow.id,
+        UpdateWorkflow {
+            graph: Some(graph("https://other.example/one", "Bearer replacement")),
+            ..Default::default()
+        },
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        get_workflow_http_secret(&pool, workflow.id, "http", "https://other.example/two")
+            .await
+            .unwrap()
+            .as_deref(),
+        Some("Bearer replacement")
+    );
+    assert!(
+        get_workflow_http_secret(&pool, workflow.id, "http", "https://example.com/one")
+            .await
+            .unwrap()
+            .is_none(),
+        "an older published graph cannot borrow the replacement secret"
+    );
+    remove_project(&pool, project).await;
+}
+
+#[tokio::test]
+async fn new_webhooks_require_signatures_even_if_a_database_default_was_changed() {
+    let Some(pool) = database().await else { return };
+    sqlx::query("ALTER TABLE workflows ALTER COLUMN webhook_signature_required SET DEFAULT false")
+        .execute(&pool)
+        .await
+        .unwrap();
+    let project = insert_project(&pool).await;
+    let actor = Actor::new(ActorKind::User, "signature-test").unwrap();
+    let graph = WorkflowGraph {
+        nodes: vec![node("t", "trigger.webhook", json!({}))],
+        edges: vec![],
+    };
+    let workflow = create_workflow(&pool, project, "Signed", "", graph, &actor)
+        .await
+        .unwrap();
+    assert!(workflow.webhook_signature_required);
+    let endpoints = deepref_app::get_webhook_config(&pool, project, workflow.id)
+        .await
+        .unwrap();
+    assert!(endpoints.signature_required);
     remove_project(&pool, project).await;
 }

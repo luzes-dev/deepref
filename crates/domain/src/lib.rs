@@ -5,10 +5,10 @@ use uuid::Uuid;
 pub mod acquisition;
 pub mod bibliography;
 pub mod documents;
-pub mod protocol;
 pub mod events;
 pub mod graph;
 mod ingestion;
+pub mod protocol;
 mod reference;
 mod work;
 
@@ -356,8 +356,14 @@ mod tests {
     fn blind_screening_requires_independent_title_abstract_labels() {
         assert!(validate_blind_screening(true, true, ScreeningStage::TitleAbstract).is_err());
         assert!(validate_blind_screening(true, false, ScreeningStage::FullText).is_err());
-        assert_eq!(validate_blind_screening(true, false, ScreeningStage::TitleAbstract), Ok(()));
-        assert_eq!(validate_blind_screening(false, true, ScreeningStage::FullText), Ok(()));
+        assert_eq!(
+            validate_blind_screening(true, false, ScreeningStage::TitleAbstract),
+            Ok(())
+        );
+        assert_eq!(
+            validate_blind_screening(false, true, ScreeningStage::FullText),
+            Ok(())
+        );
     }
 
     #[test]

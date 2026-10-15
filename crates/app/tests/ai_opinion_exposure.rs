@@ -6,6 +6,16 @@
 use std::collections::BTreeMap;
 
 use chrono::{DateTime, Utc};
+use deepref_app::screening::screen_report;
+use deepref_app::{
+    ActivityFilters, AiProposalError, AiProposalFilters, AutonomyOutcome, ExposureSource,
+    NewExposure, NewReviewerDecision, ProtocolActor, ResolveConflict, ReviewerError,
+    apply_autonomy_for_proposal, delete_project_in_transaction, get_activity,
+    get_published_protocol, get_visible_ai_proposal, independent_reviewer_pairs,
+    insert_reviewer_decision_in_transaction, list_activity, list_ai_proposals,
+    list_reviewer_decisions, publish_protocol, record_exposure, resolve_reviewer_conflict,
+    reviewer_agreement, save_protocol_draft,
+};
 use deepref_application::{
     ProtocolCriterionCommand, PublishProtocolCommand, SaveProtocolDraftCommand, ScreenReportCommand,
 };
@@ -13,8 +23,6 @@ use deepref_domain::{
     Actor, ActorKind, CriterionDimension, CriterionKind, CriterionStage, FrameworkKind, ProjectId,
     ProtocolVersionId, ReportId, ScreeningDecision, ScreeningStage,
 };
-use deepref_app::{ActivityFilters, AiProposalError, AiProposalFilters, AutonomyOutcome, ExposureSource, NewExposure, NewReviewerDecision, ProtocolActor, ResolveConflict, ReviewerError, apply_autonomy_for_proposal, delete_project_in_transaction, get_activity, get_published_protocol, get_visible_ai_proposal, independent_reviewer_pairs, insert_reviewer_decision_in_transaction, list_activity, list_ai_proposals, list_reviewer_decisions, publish_protocol, record_exposure, resolve_reviewer_conflict, reviewer_agreement, save_protocol_draft};
-use deepref_app::screening::{screen_report};
 use serde_json::json;
 use sqlx::PgPool;
 use uuid::Uuid;
@@ -256,10 +264,7 @@ async fn all_exposures(pool: &PgPool, project_id: Uuid) -> i64 {
         .expect("exposure count")
 }
 
-async fn title_abstract_agreement(
-    pool: &PgPool,
-    project_id: Uuid,
-) -> deepref_app::StageAgreement {
+async fn title_abstract_agreement(pool: &PgPool, project_id: Uuid) -> deepref_app::StageAgreement {
     reviewer_agreement(pool, project_id)
         .await
         .expect("agreement")

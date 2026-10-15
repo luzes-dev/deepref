@@ -1820,7 +1820,6 @@ async fn delete_project_and_reports(pool: &PgPool, project: Uuid, reports: &[Uui
 
 #[tokio::test]
 async fn confirmed_plan_rejects_records_changed_since_it_was_made() {
-    let _guard = test_lock().lock().await;
     let Some(pool) = database().await else { return };
     let fixture = seed(&pool).await;
     deepref_app::insert_model_route(
@@ -1921,7 +1920,6 @@ async fn set_title_abstract_autonomy(pool: &PgPool, project: Uuid, level: &str) 
 
 #[tokio::test]
 async fn projects_with_title_abstract_ai_off_refuse_assistant_screening_plans() {
-    let _guard = test_lock().lock().await;
     let Some(pool) = database().await else { return };
     let fixture = seed(&pool).await;
     deepref_app::insert_model_route(
@@ -1989,7 +1987,6 @@ async fn projects_with_title_abstract_ai_off_refuse_assistant_screening_plans() 
 
 #[tokio::test]
 async fn confirmed_plan_decisions_are_assistant_authored_and_not_counted_as_human() {
-    let _guard = test_lock().lock().await;
     let Some(pool) = database().await else { return };
     let fixture = seed(&pool).await;
     deepref_app::insert_model_route(
@@ -2045,7 +2042,6 @@ async fn confirmed_plan_decisions_are_assistant_authored_and_not_counted_as_huma
 
 #[tokio::test]
 async fn plan_lists_its_records_and_runs_only_the_ones_left_selected() {
-    let _guard = test_lock().lock().await;
     let Some(pool) = database().await else { return };
     let fixture = seed(&pool).await;
     deepref_app::insert_model_route(
@@ -2119,30 +2115,53 @@ async fn plan_lists_its_records_and_runs_only_the_ones_left_selected() {
 
 #[tokio::test]
 async fn assistant_event_stream_surfaces_database_failure_and_closes() {
-    let _guard = test_lock().lock().await;
     let Some(pool) = database().await else { return };
     let fixture = seed(&pool).await;
     let state = AppState::new(pool.clone());
-    let (status, body) = post_json(&state,
+    let (status, body) = post_json(
+        &state,
         &format!("/projects/{}/assistant/conversations", fixture.project_id),
-        json!({"title": "Event failure"})).await;
+        json!({"title": "Event failure"}),
+    )
+    .await;
     assert_eq!(status, StatusCode::CREATED, "{body}");
     let conversation: Value = serde_json::from_str(&body).expect("conversation JSON");
-    let conversation_id = Uuid::parse_str(conversation["id"].as_str().expect("conversation id")).expect("UUID");
+    let conversation_id =
+        Uuid::parse_str(conversation["id"].as_str().expect("conversation id")).expect("UUID");
     let run = deepref_app::submit_assistant_agent_run(
-        &pool, fixture.project_id, conversation_id, "Read my corpus", "user", "event-test",
+        &pool,
+        fixture.project_id,
+        conversation_id,
+        "Read my corpus",
+        "user",
+        "event-test",
         &serde_json::to_value(model_route(ModelProfile::Reasoning)).expect("route JSON"),
-        deepref_ai::ASSISTANT_PROMPT_VERSION
-    ).await.expect("submit run");
-    let response = router(state, &api_config()).oneshot(
-        Request::builder().method("GET")
-            .uri(format!("/projects/{}/assistant/runs/{}/events", fixture.project_id, run.id))
-            .body(Body::empty()).expect("request")
-    ).await.expect("SSE response");
+        deepref_ai::ASSISTANT_PROMPT_VERSION,
+    )
+    .await
+    .expect("submit run");
+    let response = router(state, &api_config())
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri(format!(
+                    "/projects/{}/assistant/runs/{}/events",
+                    fixture.project_id, run.id
+                ))
+                .body(Body::empty())
+                .expect("request"),
+        )
+        .await
+        .expect("SSE response");
     assert_eq!(response.status(), StatusCode::OK);
     pool.close().await;
-    let body = tokio::time::timeout(StdDuration::from_secs(2), to_bytes(response.into_body(), 32_768))
-        .await.expect("stream closes instead of polling forever").expect("body bytes");
+    let body = tokio::time::timeout(
+        StdDuration::from_secs(2),
+        to_bytes(response.into_body(), 32_768),
+    )
+    .await
+    .expect("stream closes instead of polling forever")
+    .expect("body bytes");
     let text = String::from_utf8(body.to_vec()).expect("UTF-8 SSE");
     assert!(text.contains("event: error"), "{text}");
     assert!(text.contains("assistant_events_unavailable"), "{text}");

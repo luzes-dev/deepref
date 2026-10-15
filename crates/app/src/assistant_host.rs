@@ -130,10 +130,13 @@ impl PostgresAssistantToolHost {
             ));
         }
         let report_ids = action.report_ids();
-        let snapshots =
-            crate::screening::snapshot_screening_plan_items(&self.pool, project_id.as_uuid(), &report_ids)
-                .await
-                .map_err(|_| AiError::Persistence("plan snapshot failed".to_owned()))?;
+        let snapshots = crate::screening::snapshot_screening_plan_items(
+            &self.pool,
+            project_id.as_uuid(),
+            &report_ids,
+        )
+        .await
+        .map_err(|_| AiError::Persistence("plan snapshot failed".to_owned()))?;
         if snapshots.len() != report_ids.len() {
             return Err(AiError::InvalidContext(
                 "some report ids are not in this project; use report ids from tool results"
@@ -313,9 +316,12 @@ async fn read_screening_state(
     pool: &PgPool,
     args: ScreeningStateToolArgs,
 ) -> Result<Value, crate::AgentReadError> {
-    let screening =
-        crate::screening::get_agent_screening_state(pool, args.project_id.as_uuid(), args.report_id.as_uuid())
-            .await?;
+    let screening = crate::screening::get_agent_screening_state(
+        pool,
+        args.project_id.as_uuid(),
+        args.report_id.as_uuid(),
+    )
+    .await?;
     serde_json::to_value(screening).map_err(|_| crate::AgentReadError::InvalidData)
 }
 

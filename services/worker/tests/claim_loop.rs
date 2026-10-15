@@ -8,9 +8,9 @@ use std::{
     time::Duration,
 };
 
+use deepref_app::{enqueue_job_pool, job, migrate};
 use deepref_application::jobs::{ClaimedJob, JobLease};
 use deepref_domain::ProjectId;
-use deepref_app::{enqueue_job_pool, job, migrate};
 use deepref_worker::{ClaimLoopConfig, JobHandler, delivery::DeliveryAction, run_claim_loop};
 use sqlx::{PgPool, Row};
 use uuid::Uuid;

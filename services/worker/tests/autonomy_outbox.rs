@@ -6,15 +6,15 @@ use deepref_ai::{
     AiFuture, AiGateway, CompletionRequest, GatewayCompletion, ModelParameters, ModelProfile,
     ResolvedModel, ScreeningStage,
 };
+use deepref_app::{
+    ProtocolActor, claim_job, complete_job, insert_model_route, migrate, publish_protocol,
+    save_protocol_draft, schedule_screening_review,
+};
 use deepref_application::{
     ProtocolCriterionCommand, PublishProtocolCommand, SaveProtocolDraftCommand,
 };
 use deepref_domain::{
     Actor, ActorKind, CriterionDimension, CriterionKind, CriterionStage, FrameworkKind,
-};
-use deepref_app::{
-    ProtocolActor, claim_job, complete_job, insert_model_route, migrate, publish_protocol,
-    save_protocol_draft, schedule_screening_review,
 };
 use deepref_worker::{delivery::DeliveryAction, processor::handle_job_with_documents_owned_and_ai};
 use serde_json::{Value, json};
@@ -131,8 +131,7 @@ async fn reviewer_decisions(pool: &sqlx::PgPool, project: Uuid, report: Uuid) ->
 
 #[tokio::test]
 async fn a_second_opinion_lost_after_finalization_is_recorded_by_the_reconciler() {
-    let Some(pool) =
-        deepref_app::test_isolation::isolated_pool_from_env("DATABASE_URL", 8).await
+    let Some(pool) = deepref_app::test_isolation::isolated_pool_from_env("DATABASE_URL", 8).await
     else {
         return;
     };
@@ -211,10 +210,11 @@ async fn a_second_opinion_lost_after_finalization_is_recorded_by_the_reconciler(
         else {
             break;
         };
+        let lease = job.lease(worker);
         let action = handle_job_with_documents_owned_and_ai(
             pool.clone(),
             &job,
-            worker,
+            &lease,
             Duration::from_secs(60),
             None,
             None,
@@ -223,7 +223,7 @@ async fn a_second_opinion_lost_after_finalization_is_recorded_by_the_reconciler(
         .await
         .unwrap();
         assert_eq!(action, DeliveryAction::Ack);
-        assert!(complete_job(&pool, worker, job.id).await.unwrap());
+        assert!(complete_job(&pool, &lease).await.unwrap());
     }
     let state: String = sqlx::query_scalar(
         "SELECT state FROM review_run_manifests WHERE project_id=$1 AND automation_run_id=$2",

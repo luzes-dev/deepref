@@ -8,12 +8,14 @@ use std::collections::HashSet;
 
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use chrono::{Duration, Utc};
+use deepref_app::screening::{
+    ScreeningError, get_screening_history, get_screening_queue, screen_report, undo_screening,
+};
 use deepref_application::{
     GetScreeningQueueQuery, ScreenReportCommand, ScreeningQueueSort, ScreeningQueueStatus,
     UndoScreeningCommand,
 };
 use deepref_domain::{Actor, ActorKind, ScreeningDecision, ScreeningStage};
-use deepref_app::screening::{ScreeningError, get_screening_history, get_screening_queue, screen_report, undo_screening};
 use sqlx::{
     AssertSqlSafe, Connection, PgPool, Row,
     postgres::{PgConnection, PgPoolOptions},
@@ -478,8 +480,7 @@ async fn queue_page_is_bounded_and_required_indexes_exist_for_large_fixture() {
 
 #[tokio::test]
 async fn migration_replays_legacy_screening_events_before_projection_constraints() {
-    let Some(url) = deepref_app::test_isolation::isolated_url_from_env("DATABASE_URL").await
-    else {
+    let Some(url) = deepref_app::test_isolation::isolated_url_from_env("DATABASE_URL").await else {
         return;
     };
     let schema = format!("screening_migration_test_{}", Uuid::new_v4().simple());

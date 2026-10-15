@@ -75,16 +75,29 @@ export default defineConfig({
 								'generateScreeningSuggestion',
 								'generateDuplicateSuggestion'
 							],
-							invalidates: ['listAiProposals']
+							invalidates: [{ query: 'listAiProposals', params: ['projectId'] }]
 						},
 						{
 							onMutations: ['decideAiProposal'],
 							invalidates: [
-								'listAiProposals',
+								{ query: 'listAiProposals', params: ['projectId'] },
 								{ query: 'getAiProposal', params: ['projectId', 'proposalId'] },
-								'listTitleAbstractScreeningQueue',
-								'listFullTextScreeningQueue',
-								'listProjectDedupeProposals'
+								// Orval resolves cross-tag paths from the generated output root.
+								{
+									query: 'getScreeningQueue',
+									params: ['projectId'],
+									file: './review'
+								},
+								{
+									query: 'listFullTextScreeningQueue',
+									params: ['projectId'],
+									file: './documents'
+								},
+								{
+									query: 'listProjectDedupeProposals',
+									params: ['projectId'],
+									file: './deduplication'
+								}
 							]
 						}
 					]

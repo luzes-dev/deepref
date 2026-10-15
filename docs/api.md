@@ -90,3 +90,41 @@ List responses use bounded cursor pagination (`items` and `next_cursor`). Articl
 
 Endpoint paths, request bodies, response schemas, operation IDs, and status codes are defined only
 in the OpenAPI document to avoid duplicating the Rust contract here.
+
+Cancelling ingestion requires an existing queued/running run. Missing runs return
+404; terminal runs (including previously cancelled runs) return 409 without
+altering their status or completion timestamp. Cancellation locks the run row
+before checking state so concurrent completion cannot be overwritten.
+
+Citation expansion depth is a domain value from zero through three. Project
+creation/update, global settings, ingestion, and acquisition reject larger or
+negative values with 400. The corresponding database columns enforce the same
+range; migration fails on unsafe historical values rather than rewriting them.
+
+Document blocks now use `items`/`next_cursor` pages ordered by page number,
+ordinal and block UUID (maximum 100 blocks per request). Full-text screening,
+appraisal, extraction and citation labels collect every page before exposing
+overlay/evidence blocks; a later-page failure is an error, not a partial paper.
+
+The workspace keeps explicitly selected project URLs on load failures. Transient
+errors show “Project unavailable” with Retry; 404 shows “Project not found” with
+Retry. Automatic default-project selection applies only to routes with no project
+identifier, never to a failed named project.
+
+AI proposal decisions invalidate generated title/abstract queue, full-text queue,
+proposal and deduplication keys scoped to the mutation's project. Suggestion
+creation invalidates only that project's proposal list. Generated clients must
+not emit a bare `/api/projects/` invalidation prefix.
+
+Workflow HTTP credentials are stored with their entered URL origin. Changing
+origin drops the credential, while changing only path/query retains it. Execution
+also matches origin, preventing an older published graph from borrowing a
+credential later entered for a different host. Legacy unbound HTTP credentials
+require re-entry. HTTP templates require a literal scheme/authority; substituted
+path/query values are percent-encoded as components.
+
+Public hook rate limits are applied only after a token resolves to a workflow,
+keyed by workflow/address kind, and retained in a maximum 10,000-entry LRU map.
+Unknown tokens cannot allocate limiter entries. Each address permits 60 calls
+per minute. Newly created webhooks explicitly require HMAC signatures, even if a
+database default was changed; existing workflows retain their explicit setting.

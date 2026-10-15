@@ -4,13 +4,13 @@
 
 use std::time::Duration;
 
-use deepref_application::workflows::{Endpoint, GraphEdge, GraphNode, Position, WorkflowGraph};
-use deepref_domain::{Actor, ActorKind, ProjectId};
 use deepref_app::{
     NodeOutcome, StartRun, StepClaim, UpdateWorkflow, begin_node_execution, claim_job,
     complete_job, create_workflow, fail_abandoned_steps, finish_node_execution,
     get_published_graph, get_workflow_run, publish_workflow, start_run, update_workflow,
 };
+use deepref_application::workflows::{Endpoint, GraphEdge, GraphNode, Position, WorkflowGraph};
+use deepref_domain::{Actor, ActorKind, ProjectId};
 use deepref_worker::{delivery::DeliveryAction, workflows};
 use serde_json::{Value, json};
 use sqlx::PgPool;
@@ -717,7 +717,6 @@ async fn new_project(pool: &PgPool, label: &str) -> ProjectId {
 /// RPC) runs its side effect once and records one outcome.
 #[tokio::test]
 async fn concurrent_handle_step_calls_on_one_node_execute_once() {
-    let _guard = GUARD.lock().await;
     let Some(pool) = database().await else { return };
     let project = new_project(&pool, "wf-fence-concurrent").await;
     let (run_id, node_run_id, job) = claimed_notify_step(&pool, project, "fence-worker").await;
@@ -748,7 +747,6 @@ async fn concurrent_handle_step_calls_on_one_node_execute_once() {
 /// neither restart the block nor overwrite the live attempt's outcome.
 #[tokio::test]
 async fn a_stale_attempt_cannot_restart_or_overwrite_a_reclaimed_step() {
-    let _guard = GUARD.lock().await;
     let Some(pool) = database().await else { return };
     let project = new_project(&pool, "wf-fence-stale").await;
     let (run_id, node_run_id, first) = claimed_notify_step(&pool, project, "fence-worker").await;
@@ -771,17 +769,17 @@ async fn a_stale_attempt_cannot_restart_or_overwrite_a_reclaimed_step() {
             &pool,
             node_run_id,
             &stale,
-            NodeOutcome::Failed { message: "expired before reclaim".to_owned() },
+            NodeOutcome::Failed {
+                message: "expired before reclaim".to_owned()
+            },
         )
         .await
         .expect("expired finish"),
         "expiry alone fences the outcome, even before recovery or takeover"
     );
-    deepref_app::record_node_retry(
-        &pool, node_run_id, &stale, "expired retry",
-    )
-    .await
-    .expect("expired retry");
+    deepref_app::record_node_retry(&pool, node_run_id, &stale, "expired retry")
+        .await
+        .expect("expired retry");
     assert_eq!(notify_step(&pool, project, run_id).await.status, "running");
     assert_eq!(
         deepref_app::recover_expired_jobs(&pool)

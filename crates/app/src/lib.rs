@@ -63,9 +63,9 @@ pub use activity::{
 pub use agent_tools::{
     AgentAppraisalEvidence, AgentAppraisalRecord, AgentDocumentBlockRecord, AgentDocumentSummary,
     AgentReadError, AgentReportIdentifier, AgentReportRecord, AgentSectionSummary,
-    decode_html_entities, get_agent_project_overview, get_agent_report,
-    get_latest_agent_appraisal, list_agent_studies,
-    project_exists, read_agent_document_blocks, search_agent_document, search_agent_reports,
+    decode_html_entities, get_agent_project_overview, get_agent_report, get_latest_agent_appraisal,
+    list_agent_studies, project_exists, read_agent_document_blocks, search_agent_document,
+    search_agent_reports,
 };
 pub use ai::{
     AiDedupeTarget, AiGroundingBlock, AiGroupingReport, AiGroupingStudy, AiProposalCursor,
@@ -105,9 +105,8 @@ pub use assistant::{
 };
 pub use assistant_host::PostgresAssistantToolHost;
 pub use assistant_plans::{
-    AssistantPlanRecord, NewAssistantPlan, claim_assistant_plan,
-    create_assistant_plan, finish_assistant_plan, get_assistant_plan,
-    update_assistant_plan_results,
+    AssistantPlanRecord, NewAssistantPlan, claim_assistant_plan, create_assistant_plan,
+    finish_assistant_plan, get_assistant_plan, update_assistant_plan_results,
 };
 pub use assistant_runs::{
     ASSISTANT_AGENT_RUN_JOB_KIND, AssistantAgentRunRecord, AssistantAgentRunStatus,
@@ -139,12 +138,13 @@ pub use documents::{
     FullTextQueueRecord, MissingFullTextRecord, NewDocument, NewDocumentReference,
     NewDocumentSection, acknowledge_identity_mismatch, complete_document_retrieval,
     create_document, delete_document, enqueue_parse, enqueue_retrieve,
-    find_failed_document_by_hash, get_document, get_document_blocks, get_document_by_id,
-    get_document_pages, insert_document_blocks, list_document_references, list_document_sections,
-    list_documents, list_full_text_queue, list_full_text_reasons, list_missing_full_text,
-    mark_document_failed, mark_document_parsing, mark_document_retrieval_failed,
-    mark_document_retrieving, persist_parsed_document, persist_parsed_document_with_structure,
-    record_identity_check, report_identity, requeue_document_processing, search_document_blocks,
+    find_failed_document_by_hash, get_document, get_document_blocks, get_document_blocks_page,
+    get_document_by_id, get_document_pages, insert_document_blocks, list_document_references,
+    list_document_sections, list_documents, list_full_text_queue, list_full_text_reasons,
+    list_missing_full_text, mark_document_failed, mark_document_parsing,
+    mark_document_retrieval_failed, mark_document_retrieving, persist_parsed_document,
+    persist_parsed_document_with_structure, record_identity_check, report_identity,
+    requeue_document_processing, search_document_blocks,
 };
 pub use extraction::{
     ExtractionApplyOptions, ExtractionApplyOutcome, ExtractionError, ExtractionFieldUpdate,

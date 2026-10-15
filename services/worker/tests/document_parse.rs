@@ -6,12 +6,12 @@
 )]
 use std::{path::Path, sync::Arc, time::Duration};
 
+use deepref_app::NewDocument;
 use deepref_application::jobs::ClaimedJob;
 use deepref_documents::{
     DocumentParser, DocumentStore, PARSER_VERSION, ParsedBlock, ParsedDocument, ParsedPage,
     PdfParserError, RemoteDocumentFetcher, RemoteFetchError, content_sha256,
 };
-use deepref_app::NewDocument;
 use deepref_worker::{
     delivery::DeliveryAction,
     processor::{handle_job_with_document_services, handle_job_with_documents},

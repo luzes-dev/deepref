@@ -407,9 +407,7 @@ pub(crate) fn map_dedupe_error(error: deepref_app::DedupeError) -> ApiError {
         deepref_app::DedupeError::ProjectNotFound
         | deepref_app::DedupeError::RecordNotFound
         | deepref_app::DedupeError::ProposalNotFound
-        | deepref_app::DedupeError::ReportNotInProject => {
-            ApiError::NotFound(error.to_string())
-        }
+        | deepref_app::DedupeError::ReportNotInProject => ApiError::NotFound(error.to_string()),
         deepref_app::DedupeError::ProposalNotPending => ApiError::Conflict {
             code: "DEDUPE_PROPOSAL_NOT_PENDING".to_owned(),
             message: error.to_string(),

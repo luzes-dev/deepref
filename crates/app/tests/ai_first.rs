@@ -1,6 +1,8 @@
 #![allow(clippy::expect_used, clippy::unwrap_used, clippy::panic)]
 use chrono::Utc;
 use deepref_ai::{ModelParameters, ModelProfile, ResolvedModel};
+use deepref_app::screening::*;
+use deepref_app::*;
 use deepref_application::{
     GetScreeningQueueQuery, ProtocolCriterionCommand, PublishProtocolCommand,
     SaveProtocolDraftCommand, ScreenReportCommand, ScreeningQueueSort, ScreeningQueueStatus,
@@ -10,8 +12,6 @@ use deepref_domain::{
     Actor, ActorKind, CriterionDimension, CriterionKind, CriterionStage, FrameworkKind,
     ScreeningStage,
 };
-use deepref_app::*;
-use deepref_app::screening::*;
 use deepref_review::{
     ReviewDefinitionKey, ReviewOrigin, ReviewScheduler, ReviewSubject, ScheduleReviewRun,
 };
@@ -932,7 +932,6 @@ async fn disable_routes(pool: &PgPool) {
 
 /// A newer route for the screening profile changes the semantic identity.
 async fn change_route(pool: &PgPool) {
-    let lock = route_fixture_lock(pool).await;
     insert_model_route(
         pool,
         &ResolvedModel {
@@ -947,7 +946,6 @@ async fn change_route(pool: &PgPool) {
     )
     .await
     .unwrap();
-    lock.commit().await.unwrap();
 }
 
 #[tokio::test]
@@ -1002,7 +1000,10 @@ async fn identity_database_failure_rolls_back_without_aborting_the_sweep() {
         .execute(&f.pool)
         .await
         .unwrap();
-    assert!(result.is_ok(), "an unknown identity skips the cohort, not the sweep");
+    assert!(
+        result.is_ok(),
+        "an unknown identity skips the cohort, not the sweep"
+    );
     assert_eq!(f.status().await, "open");
     assert_eq!(f.quarantined().await, 40);
     assert_eq!(f.suspended_reason().await, None);
@@ -1065,8 +1066,7 @@ async fn identity_drift_voids_open_cohorts_and_only_flags_finalized_ones() {
 /// one-connection pool still finalizes instead of starving and demoting.
 #[tokio::test]
 async fn identity_is_checked_on_the_locking_transaction_connection() {
-    let Some(url) = deepref_app::test_isolation::isolated_url_from_env("DATABASE_URL").await
-    else {
+    let Some(url) = deepref_app::test_isolation::isolated_url_from_env("DATABASE_URL").await else {
         return;
     };
     let pool = sqlx::postgres::PgPoolOptions::new()

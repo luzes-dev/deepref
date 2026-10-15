@@ -251,23 +251,13 @@ class ProjectWorkspaceContext {
 	loadMoreArticles = () => this.#dataSources.loadMoreArticles();
 	loadMoreIngestions = () => this.#dataSources.loadMoreIngestions();
 
-	syncProjectSelection = (
-		projects: ProjectDto[],
-		loading: boolean,
-		selectedProjectFailed: boolean
-	) => {
+	syncProjectSelection = (projects: ProjectDto[], loading: boolean) => {
 		const route = projectRouteSelection(
 			page.params.projectId,
 			navigating.to?.params?.projectId,
 			page.url.pathname
 		);
-		const projectId = projectToOpen(
-			projects,
-			loading,
-			route.projectId,
-			selectedProjectFailed,
-			route.resolvingProject
-		);
+		const projectId = projectToOpen(projects, loading, route.projectId, route.resolvingProject);
 		if (projectId) navigateTo(pathnameForView(projectId, 'overview'));
 	};
 

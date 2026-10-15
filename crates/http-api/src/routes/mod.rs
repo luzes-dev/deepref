@@ -329,7 +329,9 @@ async fn correlation(mut request: Request, next: Next) -> Response {
         .and_then(|value| uuid::Uuid::parse_str(value).ok())
         .unwrap_or_else(uuid::Uuid::new_v4);
     request.extensions_mut().insert(correlation_id);
-    let mut response = crate::error::REQUEST_CORRELATION_ID.scope(correlation_id, next.run(request)).await;
+    let mut response = crate::error::REQUEST_CORRELATION_ID
+        .scope(correlation_id, next.run(request))
+        .await;
     if let Ok(value) = correlation_id.to_string().parse() {
         response.headers_mut().insert(HEADER, value);
     }
@@ -354,8 +356,10 @@ mod tests {
     async fn screening_database_failures_are_sanitized_server_errors() {
         let error = crate::routes::review::map_screening_error(
             deepref_app::screening::ScreeningError::AiFirst(Box::new(
-                deepref_app::AiFirstError::Database(sqlx::Error::Protocol("secret SQL and parameters".into()))
-            ))
+                deepref_app::AiFirstError::Database(sqlx::Error::Protocol(
+                    "secret SQL and parameters".into(),
+                )),
+            )),
         );
         let response = error.into_response();
         assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
@@ -367,19 +371,34 @@ mod tests {
     #[tokio::test]
     async fn error_body_uses_request_correlation_id() {
         let id = uuid::Uuid::new_v4();
-        let app = Router::new().route("/failure", get(|| async {
-            Err::<(), _>(ApiError::Database(sqlx::Error::PoolTimedOut))
-        })).layer(from_fn(correlation));
-        let response = app.oneshot(Request::builder().uri("/failure")
-            .header("x-correlation-id", id.to_string()).body(Body::empty()).unwrap()).await.unwrap();
+        let app = Router::new()
+            .route(
+                "/failure",
+                get(|| async { Err::<(), _>(ApiError::Database(sqlx::Error::PoolTimedOut)) }),
+            )
+            .layer(from_fn(correlation));
+        let response = app
+            .oneshot(
+                Request::builder()
+                    .uri("/failure")
+                    .header("x-correlation-id", id.to_string())
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
         assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
         assert_eq!(response.headers()["retry-after"], "1");
         assert_eq!(response.headers()["x-correlation-id"], id.to_string());
-        let body: serde_json::Value = serde_json::from_slice(&to_bytes(response.into_body(), usize::MAX).await.unwrap()).unwrap();
+        let body: serde_json::Value =
+            serde_json::from_slice(&to_bytes(response.into_body(), usize::MAX).await.unwrap())
+                .unwrap();
         assert_eq!(body["correlation_id"], id.to_string());
-        assert_eq!(body["message"], "database temporarily unavailable; retry later");
+        assert_eq!(
+            body["message"],
+            "database temporarily unavailable; retry later"
+        );
     }
-
 
     #[test]
     fn openapi_contains_every_public_operation_with_unique_ids() {

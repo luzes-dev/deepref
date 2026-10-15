@@ -1264,7 +1264,6 @@ pub async fn record_assistant_screening_activity(
     }
 }
 
-
 pub async fn get_agent_screening_state(
     pool: &PgPool,
     project_id: Uuid,
@@ -1297,7 +1296,6 @@ pub async fn get_agent_screening_state(
         updated_at: row.get("updated_at"),
     })
 }
-
 
 /// One record of a planned `screen_reports` action as it is now.
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -1360,7 +1358,6 @@ pub async fn snapshot_screening_plan_items(
         .collect())
 }
 
-
 /// Lists reports with their title/abstract screening status. `status` is one
 /// of `unscreened`, `include`, `exclude`, `maybe`, or `None` for all.
 pub async fn list_agent_reports_by_screening(
@@ -1406,4 +1403,3 @@ pub async fn list_agent_reports_by_screening(
             .collect(),
     ))
 }
-

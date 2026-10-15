@@ -6,6 +6,11 @@ use chrono::Utc;
 use deepref_ai::{
     AiGateway, CompletionRequest, ModelProfile, ModelRouter, ScreeningStage as AiStage,
 };
+use deepref_app::{
+    AiProposalError, ExposureSource, NewExposure, NodeExecution, NodeOutcome, PostgresAiStore,
+    RecordFilter, get_ai_budget, get_ai_proposal, get_review_runs, get_workflow_secret,
+    record_exposures, review_run_proposals,
+};
 use deepref_application::{
     ScreenReportCommand,
     workflows::{
@@ -18,11 +23,6 @@ use deepref_application::{
 use deepref_domain::{
     Actor, ActorKind, ExclusionReasonId, ProjectId, ProtocolVersionId, ReportId, ScreeningDecision,
     ScreeningStage,
-};
-use deepref_app::{
-    AiProposalError, ExposureSource, NewExposure, NodeExecution, NodeOutcome, PostgresAiStore,
-    RecordFilter, get_ai_budget, get_ai_proposal, get_review_runs, get_workflow_secret,
-    record_exposures, review_run_proposals,
 };
 use deepref_review::ReviewRunState;
 use serde_json::{Map, Value, json};
@@ -123,8 +123,7 @@ pub async fn execute(context: &Context<'_>) -> NodeResult {
                 limit: cfg_i64(config, "limit", 100),
             };
             let items =
-                deepref_app::find_record_items(context.pool, project(context), &filter)
-                    .await?;
+                deepref_app::find_record_items(context.pool, project(context), &filter).await?;
             let note = format!("Found {} record(s).", items.len());
             ok("records", Value::Array(items), Some(note))
         }
@@ -341,7 +340,11 @@ pub async fn execute(context: &Context<'_>) -> NodeResult {
         "integration.http_request" => {
             let data = input("data").cloned().unwrap_or(Value::Null);
             let method = cfg_str(config, "method").unwrap_or("POST").to_uppercase();
-            let url = render_template(cfg_str(config, "url").unwrap_or_default(), &data);
+            let url = deepref_application::workflows::conditions::render_url_template(
+                cfg_str(config, "url").unwrap_or_default(),
+                &data,
+            )
+            .map_err(NodeError::permanent)?;
             let body = cfg_str(config, "body").map(|text| render_template(text, &data));
             if execution.test_mode {
                 // Resolved the way a real call is, so a test fails where a real run would.
@@ -360,11 +363,11 @@ pub async fn execute(context: &Context<'_>) -> NodeResult {
                 .map(|(name, value)| (name.trim().to_owned(), render_template(value.trim(), &data)))
                 .filter(|(name, _)| !name.is_empty())
                 .collect();
-            if let Some(auth) = get_workflow_secret(
+            if let Some(auth) = deepref_app::get_workflow_http_secret(
                 context.pool,
                 execution.workflow_id,
                 &execution.node_id,
-                "auth",
+                &url,
             )
             .await?
             {
@@ -809,11 +812,9 @@ async fn record_decision(context: &Context<'_>) -> NodeResult {
         _ => ScreeningDecision::Include,
     };
     let reason = match cfg_str(config, "reason") {
-        Some(name) => {
-            deepref_app::find_exclusion_reason(context.pool, project_id, stage, name)
-                .await?
-                .map(ExclusionReasonId::new)
-        }
+        Some(name) => deepref_app::find_exclusion_reason(context.pool, project_id, stage, name)
+            .await?
+            .map(ExclusionReasonId::new),
         None => None,
     };
     if domain_decision == ScreeningDecision::Exclude && stage == "full_text" && reason.is_none() {
@@ -1346,9 +1347,7 @@ async fn schedule_reviews(context: &Context<'_>, task: &str, stage: &str) -> Nod
                 "appraisal_prefill" => {
                     let definitions =
                         deepref_application::all_appraisal_definitions().map_err(|error| {
-                            deepref_app::ReviewPreparationError::InvalidInput(
-                                error.to_string(),
-                            )
+                            deepref_app::ReviewPreparationError::InvalidInput(error.to_string())
                         })?;
                     let wanted = cfg_str(&execution.config, "appraisal_tool");
                     let definition = definitions
@@ -1372,15 +1371,12 @@ async fn schedule_reviews(context: &Context<'_>, task: &str, stage: &str) -> Nod
                     .await?;
                 }
                 "study_classification" | "data_extraction" => {
-                    let study = deepref_app::study_of_report(
-                        context.pool,
-                        project(context),
-                        report_id,
-                    )
-                    .await
-                    .map_err(|error| {
-                        deepref_app::ReviewPreparationError::InvalidInput(error.to_string())
-                    })?;
+                    let study =
+                        deepref_app::study_of_report(context.pool, project(context), report_id)
+                            .await
+                            .map_err(|error| {
+                                deepref_app::ReviewPreparationError::InvalidInput(error.to_string())
+                            })?;
                     let Some(study_id) = study
                         .as_ref()
                         .and_then(|study| study.get("study_id"))

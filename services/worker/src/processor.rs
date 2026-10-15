@@ -8,12 +8,14 @@ use deepref_ai::{
     SystemClock, UuidProvider,
 };
 use deepref_application::jobs::JobLease;
-use deepref_domain::{IngestionItemStatus, normalize_doi};
 use deepref_documents::{
     DocumentParser, DocumentStore, HttpsPdfFetcher, PARSER_VERSION, PdfiumParser,
     RemoteDocumentFetcher,
 };
-use deepref_domain::events::{DeadLetterRecord, EventEnvelope, WorkFetchRequested, deserialize_compatible};
+use deepref_domain::events::{
+    DeadLetterRecord, EventEnvelope, WorkFetchRequested, deserialize_compatible,
+};
+use deepref_domain::{IngestionItemStatus, normalize_doi};
 use deepref_integrations::CrossrefClient;
 use deepref_integrations::CrossrefError;
 use deepref_review::worker::{
@@ -454,12 +456,8 @@ async fn handle_retrieve_document_job(
                 error = %error,
                 "external document retrieval failed"
             );
-            deepref_app::mark_document_retrieval_failed(
-                pool,
-                document_id,
-                &error.failure_record(),
-            )
-            .await?;
+            deepref_app::mark_document_retrieval_failed(pool, document_id, &error.failure_record())
+                .await?;
             if error.is_permanent() {
                 // Retrying the same link cannot succeed. The reason is recorded on the
                 // document, so the job completes instead of retrying and dead-lettering.
@@ -585,8 +583,7 @@ async fn handle_parse_document_job(
             Ok(parsed) => parsed,
             Err(error) => {
                 drop(parse_permit);
-                deepref_app::mark_document_failed(pool, document_id, &error.to_string())
-                    .await?;
+                deepref_app::mark_document_failed(pool, document_id, &error.to_string()).await?;
                 return Err(error);
             }
         };
@@ -721,7 +718,8 @@ async fn handle_recompute_metrics_job(
     pool: &sqlx::PgPool,
     payload: serde_json::Value,
 ) -> anyhow::Result<DeliveryAction> {
-    let event: EventEnvelope<deepref_domain::events::DomainPayload> = serde_json::from_value(payload)?;
+    let event: EventEnvelope<deepref_domain::events::DomainPayload> =
+        serde_json::from_value(payload)?;
     let project_id = match event.payload {
         deepref_domain::events::DomainPayload::MetricsRecomputeRequested(p) => p.project_id,
         _ => anyhow::bail!("recompute_metrics job has an unsupported payload"),
@@ -881,10 +879,8 @@ async fn handle_automation_run(
                         &message,
                     )
                     .await?;
-                    deepref_app::fail_automation_step(
-                        pool, project_id, step.id, lease, &message,
-                    )
-                    .await?;
+                    deepref_app::fail_automation_step(pool, project_id, step.id, lease, &message)
+                        .await?;
                     deepref_app::finalize_automation_run(pool, project_id, run_id).await?;
                     return Ok(DeliveryAction::Terminate);
                 }
@@ -913,8 +909,7 @@ async fn execute_compiled_review(
     gateway: &dyn AiGateway,
 ) -> anyhow::Result<()> {
     let review_run_id = deepref_review::ReviewRunId::new(automation_run_id.as_uuid())?;
-    let run =
-        deepref_app::load_leased_review_run(pool, project_id, review_run_id, lease).await?;
+    let run = deepref_app::load_leased_review_run(pool, project_id, review_run_id, lease).await?;
     let review = CompiledReview::compile(run.snapshot.definition)?;
     if let deepref_review::ReviewRunState::Completed { .. }
     | deepref_review::ReviewRunState::Blocked { .. } = run.snapshot.state
@@ -1463,8 +1458,7 @@ async fn complete_review_automation_step(
         final_attempt,
         lease,
         Some(serde_json::to_value(
-            &deepref_app::get_review_run(pool, run.snapshot.project_id, run.snapshot.id)
-                .await?,
+            &deepref_app::get_review_run(pool, run.snapshot.project_id, run.snapshot.id).await?,
         )?),
     )
     .await?;
@@ -1511,15 +1505,8 @@ async fn persist_review_node(
         model_run_id,
     } = write;
     let predecessor_inputs = predecessors.iter().map(artifact_input).collect::<Vec<_>>();
-    match deepref_app::begin_review_attempt(
-        pool,
-        run,
-        review,
-        node,
-        &predecessor_inputs,
-        lease,
-    )
-    .await?
+    match deepref_app::begin_review_attempt(pool, run, review, node, &predecessor_inputs, lease)
+        .await?
     {
         deepref_app::ReviewAttemptStart::Reused {
             artifact_id,

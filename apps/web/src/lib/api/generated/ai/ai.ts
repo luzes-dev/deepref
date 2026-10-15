@@ -18,6 +18,10 @@ import type {
 	QueryKey
 } from '@tanstack/svelte-query';
 
+import { getListProjectDedupeProposalsQueryKey } from '../deduplication/deduplication';
+
+import { getListFullTextScreeningQueueQueryKey } from '../documents/documents';
+
 import type {
 	AiActivityDto,
 	AiActivityOverviewDto,
@@ -51,6 +55,8 @@ import type {
 	UpdateAiAutonomyRequest,
 	UpdateAiBudgetRequest
 } from '../models';
+
+import { getGetScreeningQueueQueryKey } from '../review/review';
 
 import { customFetch } from '../../custom-fetch.ts';
 import type { ErrorType, BodyType } from '../../custom-fetch.ts';
@@ -2320,17 +2326,13 @@ export const getDecideAiProposalMutationOptions = <
 		if (!options?.skipInvalidation) {
 			queryClient.invalidateQueries({
 				predicate: (query) =>
-					[getGetAiProposalQueryKey(variables.projectId, variables.proposalId)].some(
-						(queryKey) => matchQuery({ queryKey }, query)
-					) ||
-					(typeof query.queryKey[0] === 'string' &&
-						query.queryKey[0].startsWith('/api/projects/')) ||
-					(typeof query.queryKey[0] === 'string' &&
-						query.queryKey[0].startsWith('/api/projects/')) ||
-					(typeof query.queryKey[0] === 'string' &&
-						query.queryKey[0].startsWith('/api/projects/')) ||
-					(typeof query.queryKey[0] === 'string' &&
-						query.queryKey[0].startsWith('/api/projects/'))
+					[
+						getListAiProposalsQueryKey(variables.projectId),
+						getGetAiProposalQueryKey(variables.projectId, variables.proposalId),
+						getGetScreeningQueueQueryKey(variables.projectId),
+						getListFullTextScreeningQueueQueryKey(variables.projectId),
+						getListProjectDedupeProposalsQueryKey(variables.projectId)
+					].some((queryKey) => matchQuery({ queryKey }, query))
 			});
 		}
 		mutationOptions?.onSuccess?.(data, variables, onMutateResult, context);
@@ -2917,9 +2919,7 @@ export const getGenerateDuplicateSuggestionMutationOptions = <
 	) => {
 		if (!options?.skipInvalidation) {
 			queryClient.invalidateQueries({
-				predicate: (query) =>
-					typeof query.queryKey[0] === 'string' &&
-					query.queryKey[0].startsWith('/api/projects/')
+				queryKey: getListAiProposalsQueryKey(variables.projectId)
 			});
 		}
 		mutationOptions?.onSuccess?.(data, variables, onMutateResult, context);
@@ -3259,9 +3259,7 @@ export const getGenerateScreeningSuggestionMutationOptions = <
 	) => {
 		if (!options?.skipInvalidation) {
 			queryClient.invalidateQueries({
-				predicate: (query) =>
-					typeof query.queryKey[0] === 'string' &&
-					query.queryKey[0].startsWith('/api/projects/')
+				queryKey: getListAiProposalsQueryKey(variables.projectId)
 			});
 		}
 		mutationOptions?.onSuccess?.(data, variables, onMutateResult, context);

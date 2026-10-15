@@ -194,6 +194,18 @@ pub async fn get_document_blocks(
     report_id: Uuid,
     document_id: Uuid,
 ) -> anyhow::Result<Vec<DocumentBlockRecord>> {
+    get_document_blocks_page(pool, project_id, report_id, document_id, None, None, None).await
+}
+
+pub async fn get_document_blocks_page(
+    pool: &PgPool,
+    project_id: Uuid,
+    report_id: Uuid,
+    document_id: Uuid,
+    cursor: Option<(i32, i32, Uuid)>,
+    limit: Option<i64>,
+    search: Option<&str>,
+) -> anyhow::Result<Vec<DocumentBlockRecord>> {
     let rows = sqlx::query(
         "SELECT b.id,b.document_id,b.parser_version,b.page_number,b.page_width,b.page_height,p.ocr_required AS page_ocr_required,b.kind,b.section_path,
                 b.ordinal,b.text,b.bbox,b.content_hash
@@ -202,11 +214,18 @@ pub async fn get_document_blocks(
          JOIN document_pages p ON p.document_id=b.document_id AND p.parser_version=b.parser_version
            AND p.page_number=b.page_number AND p.active
          WHERE b.document_id=$1 AND d.project_id=$2 AND d.report_id=$3 AND b.active
-         ORDER BY b.page_number,b.ordinal,b.id",
+           AND ($4::integer IS NULL OR (b.page_number,b.ordinal,b.id)>($4,$5,$6))
+           AND ($8::text IS NULL OR b.search_vector @@ websearch_to_tsquery('simple',$8))
+         ORDER BY b.page_number,b.ordinal,b.id LIMIT $7",
     )
     .bind(document_id)
     .bind(project_id)
     .bind(report_id)
+    .bind(cursor.map(|value| value.0))
+    .bind(cursor.map(|value| value.1))
+    .bind(cursor.map(|value| value.2))
+    .bind(limit)
+    .bind(search)
     .fetch_all(pool)
     .await?;
     Ok(rows

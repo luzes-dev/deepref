@@ -527,8 +527,7 @@ async fn refresh_review_steps(
         return record;
     }
     let Ok(runs) =
-        deepref_app::get_review_runs(&state.pool, ProjectId::new(record.project_id), &queued)
-            .await
+        deepref_app::get_review_runs(&state.pool, ProjectId::new(record.project_id), &queued).await
     else {
         return record;
     };
@@ -614,7 +613,11 @@ impl Deselection {
                     deselection.actions.insert(action.id.clone());
                 }
                 Some(report_id) if action.report_ids().contains(&report_id) => {
-                    deselection.records.entry(action.id.clone()).or_default().insert(report_id);
+                    deselection
+                        .records
+                        .entry(action.id.clone())
+                        .or_default()
+                        .insert(report_id);
                 }
                 Some(report_id) => {
                     return Err(ApiError::BadRequest(format!(
@@ -632,7 +635,9 @@ impl Deselection {
     }
 
     fn record(&self, action_id: &str, report_id: Uuid) -> bool {
-        self.records.get(action_id).is_some_and(|records| records.contains(&report_id))
+        self.records
+            .get(action_id)
+            .is_some_and(|records| records.contains(&report_id))
     }
 }
 
@@ -776,7 +781,8 @@ async fn run_screen_reports(
             notes: notes.clone(),
             actor: actor.clone(),
         };
-        match deepref_app::screening::screen_report_from_assistant_plan(&state.pool, command).await {
+        match deepref_app::screening::screen_report_from_assistant_plan(&state.pool, command).await
+        {
             Ok(snapshot) => {
                 applied += 1;
                 deepref_app::screening::record_assistant_screening_activity(
@@ -802,11 +808,7 @@ async fn run_screen_reports(
             }
         }
     }
-    let status = if failed > 0 {
-        "failed"
-    } else {
-        "executed"
-    };
+    let status = if failed > 0 { "failed" } else { "executed" };
     let mut message = format!("{applied} decision(s) recorded, {unchanged} already that way");
     if deselected > 0 {
         message.push_str(&format!(", {deselected} left out by you"));

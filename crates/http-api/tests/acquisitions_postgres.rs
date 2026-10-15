@@ -852,3 +852,156 @@ async fn provider_refresh_rejects_invalid_sources_and_enforces_project_scope() {
 
     clean_acquisition_projects(&pool, &[project_id, other_project_id], &[]).await;
 }
+
+#[tokio::test]
+async fn ingestion_cancel_requires_an_existing_active_run() {
+    let Some(pool) = database().await else { return };
+    let project = Uuid::new_v4();
+    sqlx::query("INSERT INTO projects (id,name) VALUES ($1,'cancel test')")
+        .bind(project)
+        .execute(&pool)
+        .await
+        .unwrap();
+    let cancel = |id| {
+        Request::builder()
+            .method("POST")
+            .uri(format!("/ingestions/{id}/cancel"))
+            .body(Body::empty())
+            .unwrap()
+    };
+    assert_eq!(
+        call(&pool, cancel(Uuid::new_v4())).await.status(),
+        StatusCode::NOT_FOUND
+    );
+    for status in ["queued", "running", "completed", "failed", "cancelled"] {
+        let id = Uuid::new_v4();
+        sqlx::query("INSERT INTO ingestions (id,project_id,status,max_depth,seed_count) VALUES ($1,$2,$3,1,1)")
+            .bind(id).bind(project).bind(status).execute(&pool).await.unwrap();
+        let response = call(&pool, cancel(id)).await;
+        let active = status == "queued" || status == "running";
+        assert_eq!(
+            response.status(),
+            if active {
+                StatusCode::ACCEPTED
+            } else {
+                StatusCode::CONFLICT
+            }
+        );
+        let stored: String = sqlx::query_scalar("SELECT status FROM ingestions WHERE id=$1")
+            .bind(id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+        assert_eq!(stored, if active { "cancelled" } else { status });
+        assert_eq!(call(&pool, cancel(id)).await.status(), StatusCode::CONFLICT);
+    }
+}
+
+#[tokio::test]
+async fn citation_depth_ten_is_rejected_at_every_api_boundary_and_in_database() {
+    let Some(pool) = database().await else { return };
+    let project = Uuid::new_v4();
+    sqlx::query("INSERT INTO projects (id,name) VALUES ($1,'depth test')")
+        .bind(project)
+        .execute(&pool)
+        .await
+        .unwrap();
+    for (method, uri, body) in [
+        (
+            "POST",
+            "/projects".to_owned(),
+            json!({"name":"too deep","default_max_depth":10}),
+        ),
+        (
+            "PATCH",
+            format!("/projects/{project}"),
+            json!({"name":"too deep","default_max_depth":10}),
+        ),
+        (
+            "PATCH",
+            "/settings".to_owned(),
+            json!({"default_max_depth":10}),
+        ),
+        (
+            "POST",
+            "/ingestions".to_owned(),
+            json!({"project_id":project,"seed_dois":["10.1000/depth"],"max_depth":10}),
+        ),
+        (
+            "POST",
+            format!("/projects/{project}/acquisitions"),
+            json!({"seed_dois":["10.1000/depth"],"max_depth":10}),
+        ),
+    ] {
+        let response = call(
+            &pool,
+            Request::builder()
+                .method(method)
+                .uri(uri)
+                .header("content-type", "application/json")
+                .body(Body::from(body.to_string()))
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST);
+    }
+    let error = sqlx::query("UPDATE projects SET default_max_depth=10 WHERE id=$1")
+        .bind(project)
+        .execute(&pool)
+        .await
+        .unwrap_err();
+    assert_eq!(
+        error
+            .as_database_error()
+            .and_then(|error| error.code())
+            .as_deref(),
+        Some("23514")
+    );
+}
+
+#[tokio::test]
+async fn hooks_resolve_tokens_before_limiting_and_reject_unsigned_new_webhooks() {
+    use deepref_domain::{Actor, ActorKind, ProjectId};
+    let Some(pool) = database().await else { return };
+    let unknown = Uuid::new_v4().to_string();
+    for _ in 0..65 {
+        let response = call(
+            &pool,
+            Request::builder()
+                .method("POST")
+                .uri(format!("/hooks/workflows/{unknown}"))
+                .body(Body::from("{}"))
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    }
+    let project = Uuid::new_v4();
+    sqlx::query("INSERT INTO projects (id,name) VALUES ($1,'signed hook')")
+        .bind(project)
+        .execute(&pool)
+        .await
+        .unwrap();
+    let project = ProjectId::new(project);
+    let actor = Actor::new(ActorKind::User, "hook-test").unwrap();
+    let graph = serde_json::from_value(
+        json!({"nodes":[{"id":"trigger","type":"trigger.webhook","config":{}}],"edges":[]}),
+    )
+    .unwrap();
+    let workflow = deepref_app::create_workflow(&pool, project, "Signed", "", graph, &actor)
+        .await
+        .unwrap();
+    let endpoint = deepref_app::get_webhook_config(&pool, project, workflow.id)
+        .await
+        .unwrap();
+    let response = call(
+        &pool,
+        Request::builder()
+            .method("POST")
+            .uri(format!("/hooks/workflows/{}", endpoint.token))
+            .body(Body::from("{}"))
+            .unwrap(),
+    )
+    .await;
+    assert_eq!(response.status(), StatusCode::FORBIDDEN);
+}

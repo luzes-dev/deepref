@@ -717,15 +717,17 @@ fn map_runtime_error(error: AgentToolError) -> ApiError {
 fn read_failure(error: deepref_app::AgentReadError) -> AssistantFailure {
     match error {
         deepref_app::AgentReadError::NotFound => AssistantFailure::NotFound,
-        deepref_app::AgentReadError::Database(_)
-        | deepref_app::AgentReadError::InvalidData => AssistantFailure::Internal,
+        deepref_app::AgentReadError::Database(_) | deepref_app::AgentReadError::InvalidData => {
+            AssistantFailure::Internal
+        }
     }
 }
 
 fn protocol_failure(error: deepref_app::ProtocolError) -> AssistantFailure {
     match error {
-        deepref_app::ProtocolError::ProjectNotFound
-        | deepref_app::ProtocolError::NotFound => AssistantFailure::NotFound,
+        deepref_app::ProtocolError::ProjectNotFound | deepref_app::ProtocolError::NotFound => {
+            AssistantFailure::NotFound
+        }
         _ => AssistantFailure::Internal,
     }
 }
@@ -779,9 +781,7 @@ pub(crate) struct AssistantChatRequestDto {
     message: String,
 }
 
-fn conversation_dto(
-    record: &deepref_app::AssistantConversationRecord,
-) -> AssistantConversationDto {
+fn conversation_dto(record: &deepref_app::AssistantConversationRecord) -> AssistantConversationDto {
     AssistantConversationDto {
         id: record.id,
         project_id: record.project_id,
@@ -1157,10 +1157,9 @@ pub(crate) async fn chat(
         .await
         .map(|dto| (StatusCode::ACCEPTED, Json(dto)).into_response());
     }
-    let history_records =
-        deepref_app::list_assistant_messages(&state.pool, body.conversation_id)
-            .await
-            .map_err(map_conversation_error)?;
+    let history_records = deepref_app::list_assistant_messages(&state.pool, body.conversation_id)
+        .await
+        .map_err(map_conversation_error)?;
     let history = history_records
         .iter()
         .filter_map(history_chat_message)

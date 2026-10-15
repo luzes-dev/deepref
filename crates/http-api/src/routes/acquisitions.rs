@@ -7,9 +7,11 @@ use axum::{
 };
 use chrono::{DateTime, Utc};
 use deepref_application::{CsvColumnMapping, ImportParser};
+use deepref_domain::events::{
+    EntityType, EventEnvelope, SUBJECT_WORK_FETCH_REQUESTED, WorkFetchRequested,
+};
 use deepref_domain::normalize_doi;
 use deepref_domain::{ImportFormat, ProjectId};
-use deepref_domain::events::{EntityType, EventEnvelope, SUBJECT_WORK_FETCH_REQUESTED, WorkFetchRequested};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use sha2::{Digest, Sha256};
@@ -181,8 +183,9 @@ pub(crate) async fn create_acquisition(
 ) -> Result<(StatusCode, Json<AcquisitionDto>), ApiError> {
     let seed_dois = validate_seeds(input.seed_dois)?;
     let requested_max_depth = input.max_depth;
-    if requested_max_depth.is_some_and(|value| value < 0) {
-        return Err(ApiError::BadRequest("max_depth must be >= 0".to_owned()));
+    if let Some(value) = requested_max_depth {
+        deepref_domain::acquisition::MaxDepth::try_from(value)
+            .map_err(|message| ApiError::BadRequest(message.to_owned()))?;
     }
     let metadata_provider = input
         .metadata_provider
@@ -203,7 +206,12 @@ pub(crate) async fn create_acquisition(
             .fetch_optional(&mut *tx)
             .await?
             .ok_or_else(|| ApiError::NotFound("project not found".to_owned()))?;
-    let max_depth = requested_max_depth.unwrap_or(project_default_depth);
+    let max_depth = i32::from(
+        deepref_domain::acquisition::MaxDepth::try_from(
+            requested_max_depth.unwrap_or(project_default_depth),
+        )
+        .map_err(|message| ApiError::BadRequest(message.to_owned()))?,
+    );
     let seed_count = i32::try_from(seed_dois.len()).unwrap_or(i32::MAX);
     let config = json!({
         "seed_dois": seed_dois,
@@ -467,8 +475,7 @@ pub(crate) async fn import_project_records(
     .map_err(map_acquisition_error)?;
     if result.created
         && let Err(error) =
-            deepref_app::enqueue_import_deduplication(&state.pool, project_id, result.run_id)
-                .await
+            deepref_app::enqueue_import_deduplication(&state.pool, project_id, result.run_id).await
     {
         // The import itself succeeded; the records wait for a manual run instead.
         tracing::warn!(%error, %project_id, "could not queue the duplicate check for an import");
@@ -994,9 +1001,7 @@ fn map_acquisition_error(error: deepref_app::AcquisitionError) -> ApiError {
             details: json!({ "acquisition_id": run_id }),
         },
         deepref_app::AcquisitionError::Database(error) => ApiError::Database(error),
-        deepref_app::AcquisitionError::Serialization(error) => {
-            ApiError::Internal(error.into())
-        }
+        deepref_app::AcquisitionError::Serialization(error) => ApiError::Internal(error.into()),
         deepref_app::AcquisitionError::Queue(error) => ApiError::Internal(error),
     }
 }

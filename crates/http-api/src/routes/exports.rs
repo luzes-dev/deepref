@@ -444,12 +444,9 @@ const AUDIT_CSV_COLUMNS: &[&str] = &[
 ];
 
 async fn audit_csv(state: &AppState, project_id: Uuid) -> Result<String, ApiError> {
-    let rows = deepref_app::load_audit_export_rows(
-        &state.pool,
-        project_id,
-        (MAX_EXPORT_ROWS + 1) as i64,
-    )
-    .await?;
+    let rows =
+        deepref_app::load_audit_export_rows(&state.pool, project_id, (MAX_EXPORT_ROWS + 1) as i64)
+            .await?;
     enforce_export_cap("audit", rows.len())?;
     let mut csv = csv_output::header(AUDIT_CSV_COLUMNS);
     for row in rows {
@@ -515,17 +512,12 @@ async fn protocol(state: &AppState, project_id: Uuid) -> Result<ProtocolExport, 
     let document = deepref_app::get_published_protocol(&state.pool, project_id)
         .await
         .map_err(|error| match error {
-            deepref_app::ProtocolError::ProjectNotFound
-            | deepref_app::ProtocolError::NotFound => {
+            deepref_app::ProtocolError::ProjectNotFound | deepref_app::ProtocolError::NotFound => {
                 ApiError::NotFound("published protocol not found".to_owned())
             }
             deepref_app::ProtocolError::Database(error) => ApiError::Database(error),
-            deepref_app::ProtocolError::DataIntegrity(message) => {
-                ApiError::DataIntegrity(message)
-            }
-            deepref_app::ProtocolError::Serialization(error) => {
-                ApiError::Internal(error.into())
-            }
+            deepref_app::ProtocolError::DataIntegrity(message) => ApiError::DataIntegrity(message),
+            deepref_app::ProtocolError::Serialization(error) => ApiError::Internal(error.into()),
             other => ApiError::Internal(anyhow::anyhow!(other)),
         })?;
     Ok(ProtocolExport {

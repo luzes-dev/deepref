@@ -4,7 +4,6 @@
     clippy::unwrap_used,
     clippy::string_slice
 )]
-use deepref_documents::{ParsedBlock, ParsedDocument, ParsedPage};
 use deepref_app::{
     CompleteDocumentRetrievalOutcome, NewDocument, complete_document_retrieval, create_document,
     enqueue_parse, find_failed_document_by_hash, get_document, get_document_by_id,
@@ -12,6 +11,7 @@ use deepref_app::{
     list_missing_full_text, mark_document_failed, mark_document_retrieving,
     persist_parsed_document, requeue_document_processing, search_document_blocks,
 };
+use deepref_documents::{ParsedBlock, ParsedDocument, ParsedPage};
 use sqlx::{PgPool, Row};
 use uuid::Uuid;
 
