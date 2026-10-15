@@ -70,6 +70,17 @@ impl AcquisitionStatus {
             Self::Cancelled => "cancelled",
         }
     }
+
+    pub fn parse(value: &str) -> Option<Self> {
+        match value {
+            "queued" => Some(Self::Queued),
+            "running" => Some(Self::Running),
+            "completed" => Some(Self::Completed),
+            "failed" => Some(Self::Failed),
+            "cancelled" => Some(Self::Cancelled),
+            _ => None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
@@ -114,6 +125,27 @@ impl ImportFormat {
             Self::Bibtex => "bibtex",
             Self::Nbib => "nbib",
             Self::Csv => "csv",
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::AcquisitionStatus;
+
+    #[test]
+    fn acquisition_status_rejects_invalid_persisted_values() {
+        for value in ["", "RUNNING", "complete", " queued"] {
+            assert_eq!(AcquisitionStatus::parse(value), None);
+        }
+        for status in [
+            AcquisitionStatus::Queued,
+            AcquisitionStatus::Running,
+            AcquisitionStatus::Completed,
+            AcquisitionStatus::Failed,
+            AcquisitionStatus::Cancelled,
+        ] {
+            assert_eq!(AcquisitionStatus::parse(status.as_str()), Some(status));
         }
     }
 }

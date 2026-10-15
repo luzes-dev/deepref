@@ -617,9 +617,9 @@ fn report_value(report: deepref_app::AgentReportRecord, abstract_limit: usize) -
     });
     if let Some(documents) = report.documents {
         // Full text exists only when a document has been parsed (status available).
-        let full_text_available = documents
-            .iter()
-            .any(|document| document.status == "available");
+        let full_text_available = documents.iter().any(|document| {
+            document.status == deepref_domain::documents::DocumentStatus::Available
+        });
         value["full_text_available"] = json!(full_text_available);
         value["documents"] = json!(documents);
     }
@@ -717,9 +717,9 @@ fn map_runtime_error(error: AgentToolError) -> ApiError {
 fn read_failure(error: deepref_app::AgentReadError) -> AssistantFailure {
     match error {
         deepref_app::AgentReadError::NotFound => AssistantFailure::NotFound,
-        deepref_app::AgentReadError::Database(_) | deepref_app::AgentReadError::InvalidData => {
-            AssistantFailure::Internal
-        }
+        deepref_app::AgentReadError::Database(_)
+        | deepref_app::AgentReadError::InvalidData
+        | deepref_app::AgentReadError::InvalidStoredValue(_) => AssistantFailure::Internal,
     }
 }
 

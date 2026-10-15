@@ -1,10 +1,11 @@
 use std::time::Duration;
 
+use anyhow::Context;
 use deepref_application::{
     AutomationRunId,
     jobs::{ClaimedJob, EnqueueJob, JobLease, JobQueue, JobRetry},
 };
-use deepref_domain::ProjectId;
+use deepref_domain::{JobKind, ProjectId, jobs::JobState};
 use serde_json::Value;
 use sqlx::{PgPool, Postgres, Row, Transaction};
 use uuid::Uuid;
@@ -40,7 +41,7 @@ pub async fn enqueue_job(
            RETURNING id"#,
         job.id,
         project_id,
-        job.kind,
+        job.kind.as_str(),
         job.payload,
         job.priority,
         job.max_attempts,
@@ -80,10 +81,18 @@ pub async fn recover_expired_jobs(pool: &PgPool) -> anyhow::Result<u64> {
     .fetch_all(pool)
     .await?;
     for job in &recovered {
-        if job.state == "dead" {
+        let kind = job
+            .kind
+            .parse::<JobKind>()
+            .with_context(|| format!("invalid persisted kind for job {}", job.id))?;
+        let state = job
+            .state
+            .parse::<JobState>()
+            .with_context(|| format!("invalid persisted state for job {}", job.id))?;
+        if state == JobState::Dead {
             tracing::error!(
                 job_id = %job.id,
-                kind = %job.kind,
+                kind = %kind,
                 attempts = job.attempts,
                 max_attempts = job.max_attempts,
                 "job dead-lettered after its lease expired"
@@ -91,7 +100,7 @@ pub async fn recover_expired_jobs(pool: &PgPool) -> anyhow::Result<u64> {
         } else {
             tracing::warn!(
                 job_id = %job.id,
-                kind = %job.kind,
+                kind = %kind,
                 attempts = job.attempts,
                 max_attempts = job.max_attempts,
                 "job lease expired; requeued with backoff"
@@ -114,14 +123,21 @@ pub async fn claim_job(
         .bind(lease.as_millis() as i64)
         .fetch_optional(pool)
         .await?;
-    Ok(row.map(|row| ClaimedJob {
-        id: row.get("id"),
-        project_id: ProjectId::new(row.get("project_id")),
-        kind: row.get("kind"),
-        payload: row.get("payload"),
-        attempts: row.get("attempts"),
-        max_attempts: row.get("max_attempts"),
-    }))
+    row.map(|row| {
+        let kind: String = row.try_get("kind")?;
+        let id: Uuid = row.try_get("id")?;
+        Ok(ClaimedJob {
+            id,
+            project_id: ProjectId::new(row.try_get("project_id")?),
+            kind: kind
+                .parse::<JobKind>()
+                .with_context(|| format!("invalid persisted kind for job {id}"))?,
+            payload: row.try_get("payload")?,
+            attempts: row.try_get("attempts")?,
+            max_attempts: row.try_get("max_attempts")?,
+        })
+    })
+    .transpose()
 }
 
 /// Resolve the project for an owned automation job without exposing a
@@ -253,14 +269,14 @@ impl JobQueue for PostgresJobQueue {
 pub fn job(
     id: Uuid,
     project_id: ProjectId,
-    kind: impl Into<String>,
+    kind: JobKind,
     payload: Value,
     dedupe_key: impl Into<String>,
 ) -> EnqueueJob {
     EnqueueJob {
         id,
         project_id,
-        kind: kind.into(),
+        kind,
         payload,
         priority: 0,
         max_attempts: 5,

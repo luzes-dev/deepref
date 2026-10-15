@@ -219,6 +219,10 @@ async fn a_second_opinion_lost_after_finalization_is_recorded_by_the_reconciler(
             None,
             None,
             gateway.clone(),
+            &deepref_worker::config::WorkerConfig::from_source(&|name| {
+                (name == "APP_ENV").then(|| "local".into())
+            })
+            .expect("local worker configuration"),
         )
         .await
         .unwrap();

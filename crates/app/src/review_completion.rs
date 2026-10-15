@@ -1,9 +1,10 @@
 use chrono::Utc;
 use deepref_ai::{AiProposal, hash_json};
 use deepref_application::jobs::JobLease;
+use deepref_application::workflows::model::WorkflowRunStatus;
 use deepref_domain::ProjectId;
 use deepref_review::{
-    ReviewBlockCode, ReviewRunState,
+    ReviewAttemptStatus, ReviewBlockCode, ReviewRunState,
     worker::{AcceptedArtifactInput, ReviewHash},
 };
 use serde_json::Value;
@@ -82,7 +83,11 @@ async fn complete_review_attempt_in_transaction(
     .fetch_optional(&mut **transaction)
     .await?
     .ok_or(PostgresReviewError::RunNotFound)?;
-    if attempt.get::<String, _>("status") != "running" {
+    let attempt_status = ReviewAttemptStatus::parse(attempt.get::<String, _>("status").as_str())
+        .ok_or_else(|| {
+            PostgresReviewError::InvalidStoredValue("unknown review attempt status".to_owned())
+        })?;
+    if attempt_status != ReviewAttemptStatus::Running {
         return Err(PostgresReviewError::InvalidState(
             "review attempt is not running".to_owned(),
         ));
@@ -228,7 +233,11 @@ async fn bind_review_step_acceptance_in_transaction(
         .fetch_optional(&mut **transaction)
         .await?
         .ok_or(PostgresReviewError::WorkerOwnership)?;
-        if existing.get::<String, _>("status") == "completed"
+        let step_status = WorkflowRunStatus::parse(existing.get::<String, _>("status").as_str())
+            .ok_or_else(|| {
+                PostgresReviewError::InvalidStoredValue("unknown automation step status".to_owned())
+            })?;
+        if step_status == WorkflowRunStatus::Completed
             && existing.get::<Option<Uuid>, _>("accepted_attempt_id") == Some(accepted_attempt_id)
         {
             return Ok(());

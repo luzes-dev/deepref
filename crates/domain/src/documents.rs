@@ -56,6 +56,29 @@ pub enum DocumentStatus {
 }
 
 impl DocumentStatus {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Missing => "missing",
+            Self::External => "external",
+            Self::Uploaded => "uploaded",
+            Self::Retrieving => "retrieving",
+            Self::Available => "available",
+            Self::Failed => "failed",
+        }
+    }
+
+    pub fn parse(value: &str) -> Result<Self, InvalidDocumentStatus> {
+        match value {
+            "missing" => Ok(Self::Missing),
+            "external" => Ok(Self::External),
+            "uploaded" => Ok(Self::Uploaded),
+            "retrieving" => Ok(Self::Retrieving),
+            "available" => Ok(Self::Available),
+            "failed" => Ok(Self::Failed),
+            _ => Err(InvalidDocumentStatus(value.to_owned())),
+        }
+    }
+
     pub fn transition(self, next: Self) -> Result<Self, DocumentStatusTransitionError> {
         let allowed = self == next
             || matches!(
@@ -81,6 +104,10 @@ pub struct DocumentStatusTransitionError {
     pub current: DocumentStatus,
     pub next: DocumentStatus,
 }
+
+#[derive(Debug, Clone, PartialEq, Eq, Error)]
+#[error("invalid persisted document status: {0}")]
+pub struct InvalidDocumentStatus(pub String);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
@@ -165,6 +192,26 @@ pub enum BoundingBoxError {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn document_status_rejects_invalid_persisted_values() {
+        for value in ["", "AVAILABLE", "complete", " available"] {
+            assert_eq!(
+                DocumentStatus::parse(value),
+                Err(InvalidDocumentStatus(value.to_owned()))
+            );
+        }
+        for status in [
+            DocumentStatus::Missing,
+            DocumentStatus::External,
+            DocumentStatus::Uploaded,
+            DocumentStatus::Retrieving,
+            DocumentStatus::Available,
+            DocumentStatus::Failed,
+        ] {
+            assert_eq!(DocumentStatus::parse(status.as_str()), Ok(status));
+        }
+    }
 
     #[test]
     fn normalized_boxes_reject_coordinates_outside_the_page() {

@@ -9,7 +9,7 @@ use deepref_application::AutomationDomainEvent;
 use deepref_application::jobs::JobLease;
 use deepref_application::workflows::{
     InputSource, NodeRunSnapshot, NodeRunState, ValidationContext, ValidationReport, WorkflowGraph,
-    WorkflowStatus, WorkflowTrigger, email_is_configured, extract_secrets, generate_secret,
+    WorkflowRunStatus, WorkflowStatus, WorkflowTrigger, extract_secrets, generate_secret,
     generate_token, input_sources, next_fire_after, node_type, plan_run, trigger_of_graph,
     validate_graph,
 };
@@ -29,7 +29,6 @@ pub const NODE_SNAPSHOT_LIMIT_BYTES: i64 = 32 * 1024;
 /// Attempts per block execution (the first try plus retries).
 pub const NODE_MAX_ATTEMPTS: i32 = 4;
 pub const MAX_WORKFLOW_RUN_LIST_LIMIT: i64 = 100;
-pub const WORKFLOW_STEP_JOB_KIND: &str = "workflow_step";
 
 #[derive(Debug, Error)]
 pub enum WorkflowError {
@@ -124,7 +123,7 @@ pub struct NodeRunRecord {
     pub node_id: String,
     pub node_type: String,
     pub iteration: String,
-    pub status: String,
+    pub status: NodeRunState,
     pub attempts: i32,
     pub input: Option<Value>,
     pub output: Option<Value>,
@@ -145,7 +144,7 @@ pub struct WorkflowRunRecord {
     pub workflow_name: String,
     pub version: Option<i32>,
     pub trigger_kind: String,
-    pub status: String,
+    pub status: WorkflowRunStatus,
     pub test_mode: bool,
     pub actor_kind: String,
     pub actor_id: String,
@@ -173,16 +172,14 @@ fn parse_graph(value: Value) -> Result<WorkflowGraph, WorkflowError> {
 }
 
 fn workflow_from_row(row: &PgRow) -> Result<WorkflowRecord, WorkflowError> {
-    let status: String = row.get("status");
+    let status = parse_workflow_status(row.try_get("status")?)?;
     let has_unpublished: Option<bool> = row.get("has_unpublished_changes");
     Ok(WorkflowRecord {
         id: row.get("id"),
         project_id: row.get("project_id"),
         name: row.get("name"),
         description: row.get("description"),
-        status: WorkflowStatus::parse(&status).ok_or_else(|| {
-            WorkflowError::InvalidStoredValue(format!("workflow status {status}"))
-        })?,
+        status,
         draft_graph: parse_graph(row.get("draft_graph"))?,
         draft_revision: row.get("draft_revision"),
         published_version_id: row.get("published_version_id"),
@@ -495,6 +492,7 @@ pub async fn validation_context(
     pool: &PgPool,
     workflow_id: Uuid,
     graph: &WorkflowGraph,
+    email_configured: bool,
 ) -> Result<ValidationContext, WorkflowError> {
     let mut secrets = HashMap::new();
     for node in graph
@@ -507,10 +505,7 @@ pub async fn validation_context(
         }
     }
     Ok(ValidationContext {
-        email_configured: email_is_configured(
-            &std::env::var("SMTP_HOST").unwrap_or_default(),
-            &std::env::var("SMTP_FROM").unwrap_or_default(),
-        ),
+        email_configured,
         secrets,
     })
 }
@@ -520,9 +515,11 @@ pub async fn validate_workflow_draft(
     pool: &PgPool,
     project_id: ProjectId,
     workflow_id: Uuid,
+    email_configured: bool,
 ) -> Result<ValidationReport, WorkflowError> {
     let workflow = get_workflow(pool, project_id, workflow_id).await?;
-    let ctx = validation_context(pool, workflow_id, &workflow.draft_graph).await?;
+    let ctx =
+        validation_context(pool, workflow_id, &workflow.draft_graph, email_configured).await?;
     Ok(validate_graph(&workflow.draft_graph, &ctx))
 }
 
@@ -541,6 +538,7 @@ pub async fn publish_workflow(
     workflow_id: Uuid,
     note: Option<&str>,
     actor: &Actor,
+    email_configured: bool,
 ) -> Result<WorkflowVersionRecord, WorkflowError> {
     let mut tx = pool.begin().await?;
     let row = sqlx::query(
@@ -552,8 +550,8 @@ pub async fn publish_workflow(
     .await?
     .ok_or(WorkflowError::NotFound)?;
     let graph = parse_graph(row.get("draft_graph"))?;
-    let status: String = row.get("status");
-    let ctx = validation_context(pool, workflow_id, &graph).await?;
+    let status = parse_workflow_status(row.try_get("status")?)?;
+    let ctx = validation_context(pool, workflow_id, &graph, email_configured).await?;
     let report = validate_graph(&graph, &ctx);
     if !report.is_ok() {
         return Err(WorkflowError::Invalid(report));
@@ -585,7 +583,7 @@ pub async fn publish_workflow(
     .bind(actor.id())
     .execute(&mut *tx)
     .await?;
-    let next_fire = if status == "enabled" {
+    let next_fire = if status == WorkflowStatus::Enabled {
         next_fire_for(&trigger, Utc::now())
     } else {
         None
@@ -787,17 +785,17 @@ pub async fn set_webhook_signature_required(
     get_webhook_config(pool, project_id, workflow_id).await
 }
 
-fn endpoint_target(row: &PgRow) -> EndpointTarget {
-    let status: String = row.get("status");
-    EndpointTarget {
+fn endpoint_target(row: &PgRow) -> Result<EndpointTarget, WorkflowError> {
+    let status = parse_workflow_status(row.try_get("status")?)?;
+    Ok(EndpointTarget {
         workflow_id: row.get("id"),
         project_id: row.get("project_id"),
         secret: row.get("webhook_secret"),
         signature_required: row.get("webhook_signature_required"),
-        enabled: status == "enabled",
+        enabled: status == WorkflowStatus::Enabled,
         version_id: row.get("published_version_id"),
         trigger_kind: row.get("trigger_kind"),
-    }
+    })
 }
 
 pub async fn find_workflow_by_webhook_token(
@@ -812,7 +810,7 @@ pub async fn find_workflow_by_webhook_token(
     .bind(token)
     .fetch_optional(pool)
     .await?;
-    Ok(row.as_ref().map(endpoint_target))
+    row.as_ref().map(endpoint_target).transpose()
 }
 
 pub async fn find_workflow_by_email_token(
@@ -827,7 +825,7 @@ pub async fn find_workflow_by_email_token(
     .bind(token)
     .fetch_optional(pool)
     .await?;
-    Ok(row.as_ref().map(endpoint_target))
+    row.as_ref().map(endpoint_target).transpose()
 }
 
 pub async fn get_workflow_secret(
@@ -986,12 +984,11 @@ pub async fn start_run(pool: &PgPool, request: &StartRun) -> Result<StartedRun, 
 }
 
 fn snapshot_from_row(row: &PgRow) -> Result<NodeRunSnapshot, WorkflowError> {
-    let status: String = row.get("status");
+    let state = parse_node_run_state(row.try_get("status")?)?;
     Ok(NodeRunSnapshot {
         node_id: row.get("node_id"),
         iteration: row.get("iteration"),
-        state: NodeRunState::parse(&status)
-            .ok_or_else(|| WorkflowError::InvalidStoredValue(format!("node status {status}")))?,
+        state,
         fired_ports: row.get("fired_ports"),
         items: usize::try_from(row.get::<i32, _>("items")).unwrap_or_default(),
     })
@@ -1057,8 +1054,11 @@ pub async fn advance_run_in_transaction(
     .fetch_optional(&mut **tx)
     .await?
     .ok_or(WorkflowError::RunNotFound)?;
-    let status: String = row.get("status");
-    if matches!(status.as_str(), "completed" | "failed" | "cancelled") {
+    let status = parse_run_status(row.try_get("status")?)?;
+    if matches!(
+        status,
+        WorkflowRunStatus::Completed | WorkflowRunStatus::Failed | WorkflowRunStatus::Cancelled
+    ) {
         return Ok(());
     }
     let project_id: Uuid = row.get("project_id");
@@ -1113,7 +1113,7 @@ pub async fn advance_run_in_transaction(
             )
             .bind(Uuid::new_v4())
             .bind(project_id)
-            .bind(WORKFLOW_STEP_JOB_KIND)
+            .bind(deepref_domain::JobKind::WorkflowStep.as_str())
             .bind(json!({ "node_run_id": node_run_id }))
             .bind(NODE_MAX_ATTEMPTS)
             .bind(format!("workflow_step:{node_run_id}"))
@@ -1203,13 +1203,16 @@ const NODE_RUN_SELECT: &str = "SELECT id, node_id, node_type, iteration, status,
         note, error, created_at, started_at, finished_at
      FROM workflow_node_runs";
 
-fn node_run_from_row(row: &PgRow) -> NodeRunRecord {
-    NodeRunRecord {
+fn node_run_from_row(row: &PgRow) -> Result<NodeRunRecord, WorkflowError> {
+    let value: &str = row.try_get("status")?;
+    let status = NodeRunState::parse(value)
+        .ok_or_else(|| WorkflowError::InvalidStoredValue(format!("node run status: {value}")))?;
+    Ok(NodeRunRecord {
         id: row.get("id"),
         node_id: row.get("node_id"),
         node_type: row.get("node_type"),
         iteration: row.get("iteration"),
-        status: row.get("status"),
+        status,
         attempts: row.get("attempts"),
         input: row.get("input"),
         output: row.get("output"),
@@ -1220,7 +1223,7 @@ fn node_run_from_row(row: &PgRow) -> NodeRunRecord {
         created_at: row.get("created_at"),
         started_at: row.get("started_at"),
         finished_at: row.get("finished_at"),
-    }
+    })
 }
 
 const RUN_SELECT: &str = "SELECT r.id, r.project_id, r.workflow_id, w.name AS workflow_name,
@@ -1234,6 +1237,9 @@ fn run_from_row(
     row: &PgRow,
     nodes: Vec<NodeRunRecord>,
 ) -> Result<WorkflowRunRecord, WorkflowError> {
+    let value: &str = row.try_get("status")?;
+    let status = WorkflowRunStatus::parse(value)
+        .ok_or_else(|| WorkflowError::InvalidStoredValue(format!("run status: {value}")))?;
     Ok(WorkflowRunRecord {
         id: row.get("id"),
         project_id: row.get("project_id"),
@@ -1241,7 +1247,7 @@ fn run_from_row(
         workflow_name: row.get("workflow_name"),
         version: row.get("version"),
         trigger_kind: row.get("trigger_kind"),
-        status: row.get("status"),
+        status,
         test_mode: row.get("test_mode"),
         actor_kind: row.get("actor_kind"),
         actor_id: row.get("actor_id"),
@@ -1352,7 +1358,13 @@ pub async fn get_workflow_run(
     .bind(NODE_SNAPSHOT_LIMIT_BYTES)
     .fetch_all(pool)
     .await?;
-    run_from_row(&row, nodes.iter().map(node_run_from_row).collect())
+    run_from_row(
+        &row,
+        nodes
+            .iter()
+            .map(node_run_from_row)
+            .collect::<Result<_, _>>()?,
+    )
 }
 
 /// Whether an active blind audit withholds this project's run inspection. Starting a
@@ -1439,15 +1451,18 @@ pub async fn begin_node_execution(
     let Some(row) = row else {
         return Ok(StepClaim::Stale);
     };
-    let status: String = row.get("status");
-    let run_status: String = row.get("run_status");
-    if !matches!(status.as_str(), "queued" | "running")
-        || !matches!(run_status.as_str(), "queued" | "running")
+    let status = parse_node_run_state(row.try_get("status")?)?;
+    let run_status = parse_run_status(row.try_get("run_status")?)?;
+    if !matches!(status, NodeRunState::Queued | NodeRunState::Running)
+        || !matches!(
+            run_status,
+            WorkflowRunStatus::Queued | WorkflowRunStatus::Running
+        )
         || !row.get::<bool, _>("holds_lease")
     {
         return Ok(StepClaim::Stale);
     }
-    if status == "running" {
+    if status == NodeRunState::Running {
         let claimed = (
             row.get::<Option<Uuid>, _>("claimed_job_id"),
             row.get::<Option<i32>, _>("claimed_attempt"),
@@ -1529,12 +1544,16 @@ async fn resolve_inputs(
     .bind(&source_nodes)
     .fetch_all(&mut **tx)
     .await?;
-    type Stored = (String, Vec<String>, Option<Value>);
+    type Stored = (NodeRunState, Vec<String>, Option<Value>);
     let mut outputs: HashMap<(String, String), Stored> = HashMap::new();
     for row in &rows {
         outputs.insert(
             (row.get("node_id"), row.get("iteration")),
-            (row.get("status"), row.get("fired_ports"), row.get("output")),
+            (
+                parse_node_run_state(row.try_get("status")?)?,
+                row.get("fired_ports"),
+                row.get("output"),
+            ),
         );
     }
     let multiple_ports: Vec<String> = graph
@@ -1557,7 +1576,7 @@ async fn resolve_inputs(
             else {
                 continue;
             };
-            if status != "completed" || !fired.contains(&source.source_port) {
+            if *status != NodeRunState::Completed || !fired.contains(&source.source_port) {
                 continue;
             }
             let Some(mut value) = output
@@ -1701,7 +1720,7 @@ async fn finish_node(
             )
             .bind(Uuid::new_v4())
             .bind(project_id)
-            .bind(WORKFLOW_STEP_JOB_KIND)
+            .bind(deepref_domain::JobKind::WorkflowStep.as_str())
             .bind(json!({ "node_run_id": node_run_id }))
             .bind(NODE_MAX_ATTEMPTS)
             .bind(format!("workflow_step:{node_run_id}:wait:{poll}"))
@@ -2303,13 +2322,15 @@ pub async fn report_details(
     .await?
     .iter()
     .map(|row| {
-        json!({
+        let status = deepref_domain::DocumentStatus::parse(row.try_get("status")?)
+            .map_err(|error| WorkflowError::InvalidStoredValue(error.to_string()))?;
+        Ok(json!({
             "document_id": row.get::<Uuid, _>("id"),
-            "status": row.get::<String, _>("status"),
+            "status": status.as_str(),
             "filename": row.get::<Option<String>, _>("original_filename"),
-        })
+        }))
     })
-    .collect();
+    .collect::<Result<Vec<_>, WorkflowError>>()?;
     if let Value::Object(map) = &mut item {
         map.insert("identifiers".to_owned(), Value::Array(identifiers));
         map.insert("documents".to_owned(), Value::Array(documents));
@@ -2544,4 +2565,19 @@ pub async fn get_published_graph(
     .await?
     .ok_or(WorkflowError::NotPublished)?;
     Ok((row.get("id"), parse_graph(row.get("graph"))?))
+}
+
+fn parse_workflow_status(value: &str) -> Result<WorkflowStatus, WorkflowError> {
+    WorkflowStatus::parse(value)
+        .ok_or_else(|| WorkflowError::InvalidStoredValue(format!("workflow status: {value}")))
+}
+
+fn parse_node_run_state(value: &str) -> Result<NodeRunState, WorkflowError> {
+    NodeRunState::parse(value)
+        .ok_or_else(|| WorkflowError::InvalidStoredValue(format!("node run status: {value}")))
+}
+
+fn parse_run_status(value: &str) -> Result<WorkflowRunStatus, WorkflowError> {
+    WorkflowRunStatus::parse(value)
+        .ok_or_else(|| WorkflowError::InvalidStoredValue(format!("run status: {value}")))
 }

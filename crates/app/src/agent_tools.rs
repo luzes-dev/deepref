@@ -6,6 +6,7 @@
 //! or an unrestricted repository.
 
 use chrono::{DateTime, Utc};
+use deepref_domain::documents::DocumentStatus;
 use serde::Serialize;
 use serde_json::Value;
 use sqlx::{PgPool, Row};
@@ -20,6 +21,8 @@ pub enum AgentReadError {
     NotFound,
     #[error("stored agent read data is invalid")]
     InvalidData,
+    #[error("stored agent read lifecycle is invalid: {0}")]
+    InvalidStoredValue(String),
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -48,7 +51,7 @@ pub struct AgentDocumentSummary {
     pub id: Uuid,
     /// `missing`, `external`, `uploaded`, `retrieving`, `available` or `failed`.
     /// Only `available` documents have readable full text.
-    pub status: String,
+    pub status: DocumentStatus,
     pub source: String,
     pub original_filename: Option<String>,
     /// Active parsed blocks; zero until the document has been parsed.
@@ -189,7 +192,12 @@ async fn list_agent_report_documents(
         };
         documents.push(AgentDocumentSummary {
             id,
-            status: row.get("status"),
+            status: DocumentStatus::parse(row.try_get("status")?).map_err(|error| {
+                sqlx::Error::ColumnDecode {
+                    index: "status".to_owned(),
+                    source: Box::new(error),
+                }
+            })?,
             source: row.get("source"),
             original_filename: row.get("original_filename"),
             block_count: row.get("block_count"),

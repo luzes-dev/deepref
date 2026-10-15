@@ -169,7 +169,7 @@ async fn retrieve_document_is_durable_idempotent_and_records_terminal_failure() 
         let job = ClaimedJob {
             id: Uuid::new_v4(),
             project_id: project_id.into(),
-            kind: "retrieve_document".to_owned(),
+            kind: deepref_domain::JobKind::RetrieveDocument,
             payload: serde_json::json!({"document_id": document_id}),
             attempts: 1,
             max_attempts: 5,
@@ -181,6 +181,10 @@ async fn retrieve_document_is_durable_idempotent_and_records_terminal_failure() 
             Some(Arc::clone(&store)),
             None,
             Some(Arc::new(FakeFetcher { fail })),
+            &deepref_worker::config::WorkerConfig::from_source(&|name| {
+                (name == "APP_ENV").then(|| "local".into())
+            })
+            .expect("local worker configuration"),
         )
         .await;
         // A fetched file that is not a valid PDF is a permanent failure: the
@@ -189,7 +193,7 @@ async fn retrieve_document_is_durable_idempotent_and_records_terminal_failure() 
         let document = deepref_app::get_document_by_id(&pool, document_id)
             .await
             .unwrap();
-        assert_eq!(document.status, expected_status);
+        assert_eq!(document.status.as_str(), expected_status);
         if fail {
             assert!(document.object_key.is_none());
             assert!(document.content_hash.is_none());
@@ -211,6 +215,10 @@ async fn retrieve_document_is_durable_idempotent_and_records_terminal_failure() 
                 Some(Arc::clone(&store)),
                 None,
                 Some(Arc::new(FakeFetcher { fail: false })),
+                &deepref_worker::config::WorkerConfig::from_source(&|name| {
+                    (name == "APP_ENV").then(|| "local".into())
+                })
+                .expect("local worker configuration"),
             )
             .await
             .unwrap();
@@ -279,11 +287,15 @@ async fn concurrent_retrieval_completion_cleans_the_losing_object() {
     let job = ClaimedJob {
         id: Uuid::new_v4(),
         project_id: project_id.into(),
-        kind: "retrieve_document".to_owned(),
+        kind: deepref_domain::JobKind::RetrieveDocument,
         payload: serde_json::json!({"document_id": document_id}),
         attempts: 1,
         max_attempts: 5,
     };
+    let config = deepref_worker::config::WorkerConfig::from_source(&|name| {
+        (name == "APP_ENV").then(|| "local".into())
+    })
+    .expect("local worker configuration");
     let first = handle_job_with_document_services(
         pool.clone(),
         &job,
@@ -291,6 +303,7 @@ async fn concurrent_retrieval_completion_cleans_the_losing_object() {
         Some(Arc::clone(&store)),
         None,
         Some(Arc::clone(&fetcher)),
+        &config,
     );
     let second = handle_job_with_document_services(
         pool.clone(),
@@ -299,6 +312,7 @@ async fn concurrent_retrieval_completion_cleans_the_losing_object() {
         Some(Arc::clone(&store)),
         None,
         Some(Arc::clone(&fetcher)),
+        &config,
     );
     let (first, second) = tokio::join!(first, second);
     assert_eq!(first.unwrap(), DeliveryAction::Ack);
@@ -307,7 +321,10 @@ async fn concurrent_retrieval_completion_cleans_the_losing_object() {
     let document = deepref_app::get_document_by_id(&pool, document_id)
         .await
         .unwrap();
-    assert_eq!(document.status, "uploaded");
+    assert_eq!(
+        document.status,
+        deepref_domain::documents::DocumentStatus::Uploaded
+    );
     let authoritative_key = document.object_key.clone().unwrap();
     let keys = stored_keys.lock().await.clone();
     assert_eq!(keys.len(), 2);
@@ -332,6 +349,10 @@ async fn concurrent_retrieval_completion_cleans_the_losing_object() {
         Some(Arc::clone(&store)),
         None,
         Some(fetcher),
+        &deepref_worker::config::WorkerConfig::from_source(&|name| {
+            (name == "APP_ENV").then(|| "local".into())
+        })
+        .expect("local worker configuration"),
     )
     .await
     .unwrap();
@@ -417,7 +438,7 @@ async fn parse_document_is_streamed_versioned_and_idempotent() {
     let job = ClaimedJob {
         id: Uuid::new_v4(),
         project_id: project_id.into(),
-        kind: "parse_document".to_owned(),
+        kind: deepref_domain::JobKind::ParseDocument,
         payload: serde_json::json!({"document_id": document_id, "parser_version": PARSER_VERSION}),
         attempts: 1,
         max_attempts: 5,
@@ -430,6 +451,10 @@ async fn parse_document_is_streamed_versioned_and_idempotent() {
         Duration::from_secs(30),
         Some(Arc::clone(&store)),
         Some(Arc::clone(&parser)),
+        &deepref_worker::config::WorkerConfig::from_source(&|name| {
+            (name == "APP_ENV").then(|| "local".into())
+        })
+        .expect("local worker configuration"),
     )
     .await
     .unwrap();
@@ -440,6 +465,10 @@ async fn parse_document_is_streamed_versioned_and_idempotent() {
         Duration::from_secs(30),
         Some(store),
         Some(parser),
+        &deepref_worker::config::WorkerConfig::from_source(&|name| {
+            (name == "APP_ENV").then(|| "local".into())
+        })
+        .expect("local worker configuration"),
     )
     .await
     .unwrap();
@@ -462,7 +491,10 @@ async fn parse_document_is_streamed_versioned_and_idempotent() {
     let document = deepref_app::get_document_by_id(&pool, document_id)
         .await
         .unwrap();
-    assert_eq!(document.status, "available");
+    assert_eq!(
+        document.status,
+        deepref_domain::documents::DocumentStatus::Available
+    );
     assert!(document.ocr_required);
     assert_eq!(
         document.active_parser_version.as_deref(),

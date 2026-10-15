@@ -234,7 +234,10 @@ impl Fixture {
             };
             let first = self.decide(**id, "reviewer-a", decision).await.unwrap();
             assert_eq!(first.revision, 0);
-            assert_eq!(first.title_abstract_status, "unscreened");
+            assert_eq!(
+                first.title_abstract_status,
+                deepref_domain::ScreeningStatus::Unscreened
+            );
             assert!(self.decide(**id, "reviewer-a", decision).await.is_err());
             let second = self
                 .decide(
@@ -245,7 +248,10 @@ impl Fixture {
                 .await
                 .unwrap();
             assert_eq!(second.revision, 0);
-            assert_eq!(second.title_abstract_status, "unscreened");
+            assert_eq!(
+                second.title_abstract_status,
+                deepref_domain::ScreeningStatus::Unscreened
+            );
         }
     }
     async fn status(&self) -> String {
@@ -313,17 +319,20 @@ async fn blinded_fixed_audit_finalizes_and_reopens_through_normal_events() {
         queue
             .items
             .iter()
-            .all(|r| r.title_abstract_status == "unscreened")
+            .all(|r| r.title_abstract_status == deepref_domain::ScreeningStatus::Unscreened)
     );
     assert!(queue.items.iter().all(|r| r.revision == 0
-        && r.full_text_status == "not_required"
-        && r.final_status == "unscreened"));
+        && r.full_text_status == deepref_domain::ScreeningStatus::NotRequired
+        && r.final_status == deepref_domain::ScreeningStatus::Unscreened));
     for id in f.x.iter().chain(f.human.iter()) {
         let state = get_agent_screening_state(&f.pool, f.project, *id)
             .await
             .unwrap();
         assert_eq!(state.revision, 0);
-        assert_eq!(state.title_abstract_status, "unscreened");
+        assert_eq!(
+            state.title_abstract_status,
+            deepref_domain::ScreeningStatus::Unscreened
+        );
         assert!(state.last_event_id.is_none());
         assert!(
             get_screening_history(&f.pool, f.project, *id)
@@ -499,7 +508,7 @@ async fn blinded_fixed_audit_finalizes_and_reopens_through_normal_events() {
                 .await
                 .unwrap()
                 .title_abstract_status,
-            "include"
+            deepref_domain::ScreeningStatus::Include
         );
         assert_eq!(
             get_screening_history(&f.pool, f.project, *id)
@@ -793,7 +802,7 @@ async fn audit_draw_serializes_and_last_allocation_is_never_reset() {
             .await
             .unwrap()
             .ceiling,
-        "off"
+        deepref_review::ai_first::AiFirstCeiling::Off
     );
 }
 
@@ -860,7 +869,7 @@ async fn a_new_positive_control_rescues_and_invalidates_before_the_statistical_l
             .await
             .unwrap()
             .title_abstract_status,
-        "include"
+        deepref_domain::ScreeningStatus::Include
     );
     let no_look:bool=sqlx::query_scalar("SELECT result IS NULL AND evaluated_at IS NULL AND reference_relevant=19 FROM ai_screening_cohorts WHERE id=$1")
         .bind(f.cohort).fetch_one(&f.pool).await.unwrap();

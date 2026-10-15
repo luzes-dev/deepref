@@ -94,7 +94,7 @@ async fn claim_automation_job(
     Ok(deepref_application::jobs::ClaimedJob {
         id: row.get("id"),
         project_id: ProjectId::new(row.get("project_id")),
-        kind: row.get("kind"),
+        kind: row.get::<String, _>("kind").parse()?,
         payload: row.get("payload"),
         attempts: row.get("attempts"),
         max_attempts: row.get("max_attempts"),

@@ -188,6 +188,10 @@ async fn compiled_worker_quarantines_only_eligible_exclusions_without_scientific
             None,
             None,
             gateway.clone(),
+            &deepref_worker::config::WorkerConfig::from_source(&|name| {
+                (name == "APP_ENV").then(|| "local".into())
+            })
+            .expect("local worker configuration"),
         )
         .await
         .unwrap();

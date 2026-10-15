@@ -35,6 +35,7 @@ pub struct Context<'a> {
     pub pool: &'a PgPool,
     pub ai: Option<&'a dyn AiGateway>,
     pub execution: &'a NodeExecution,
+    pub runtime: &'a deepref_config::RuntimeConfig,
 }
 
 const MAX_BATCH: usize = 200;
@@ -287,7 +288,7 @@ pub async fn execute(context: &Context<'_>) -> NodeResult {
             let subject = render_template(cfg_str(config, "subject").unwrap_or_default(), &data);
             let body = render_template(cfg_str(config, "body").unwrap_or_default(), &data);
             // The checks a real send makes first, so a test fails where a real run would.
-            net::email_preflight(&recipients)?;
+            net::email_preflight(&recipients, &context.runtime.smtp)?;
             if execution.test_mode {
                 return ok(
                     "data",
@@ -295,7 +296,7 @@ pub async fn execute(context: &Context<'_>) -> NodeResult {
                     dry_note(&format!("Would have e-mailed {}.", recipients.join(", "))),
                 );
             }
-            net::send_email(&recipients, &subject, &body).await?;
+            net::send_email(&recipients, &subject, &body, &context.runtime.smtp).await?;
             ok("data", data, Some("E-mail sent.".to_owned()))
         }
         "integration.slack" => {
@@ -560,8 +561,11 @@ async fn import_identifiers(context: &Context<'_>) -> NodeResult {
     let mut records = Vec::new();
     let mut unresolved = 0usize;
     if !dois.is_empty() {
-        let provider = deepref_integrations::CrossrefClient::new(settings.crossref_mailto.clone())
-            .map_err(|_| NodeError::permanent("The Crossref connection could not be prepared."))?;
+        let provider = deepref_integrations::CrossrefClient::new(
+            settings.crossref_mailto.clone(),
+            &context.runtime.crossref,
+        )
+        .map_err(|_| NodeError::permanent("The Crossref connection could not be prepared."))?;
         for doi in &dois {
             match provider.fetch_work_with_references(doi).await {
                 Ok(work) => records.push(deepref_integrations::raw_record_from_crossref_work(work)),

@@ -48,7 +48,7 @@ pub use inbound_email::{
 };
 pub use model::{
     Endpoint, GraphEdge, GraphNode, PortType, Position, PublicationQuery, WorkflowGraph,
-    WorkflowStatus, WorkflowTrigger, trigger_of_graph,
+    WorkflowRunStatus, WorkflowStatus, WorkflowTrigger, trigger_of_graph,
 };
 pub use preflight::{
     email_address_is_valid, email_is_configured, ip_is_public, recipients_problem,

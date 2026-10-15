@@ -16,6 +16,37 @@ use uuid::Uuid;
 use crate::*;
 
 #[test]
+fn proposal_status_parses_and_serializes_canonical_lifecycle_values() {
+    for status in [
+        ProposalStatus::Pending,
+        ProposalStatus::Accepted,
+        ProposalStatus::Rejected,
+        ProposalStatus::Expired,
+    ] {
+        assert_eq!(ProposalStatus::parse(status.as_str()), Some(status));
+        assert_eq!(
+            serde_json::to_value(status).expect("status JSON"),
+            json!(status.as_str())
+        );
+        assert_eq!(
+            serde_json::from_value::<ProposalStatus>(json!(status.as_str())).expect("status"),
+            status
+        );
+    }
+    for invalid in [
+        "",
+        "Pending",
+        " accepted",
+        "rejected ",
+        "resolved",
+        "unknown",
+    ] {
+        assert_eq!(ProposalStatus::parse(invalid), None);
+        assert!(serde_json::from_value::<ProposalStatus>(json!(invalid)).is_err());
+    }
+}
+
+#[test]
 fn hashes_require_the_canonical_lowercase_hex_encoding() {
     assert!(is_sha256(&"a".repeat(64)));
     assert!(!is_sha256(&"A".repeat(64)));

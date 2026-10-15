@@ -383,7 +383,7 @@ fn proposal_dto(proposal: deepref_app::DedupeProposal) -> DedupeProposalDto {
         conflicting_identifier: proposal.conflicting_identifier,
         score: proposal.score,
         metadata: proposal.metadata,
-        status: proposal.status,
+        status: proposal.status.as_str().to_owned(),
         revision: proposal.revision,
         reviewer_kind: proposal.reviewer_kind,
         reviewer_id: proposal.reviewer_id,

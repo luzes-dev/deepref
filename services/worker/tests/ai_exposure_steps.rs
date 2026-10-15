@@ -72,9 +72,18 @@ async fn drain(pool: &PgPool, project: Uuid) {
             project,
             "unexpected job from another project"
         );
-        match workflows::handle_step(pool, &job, &job.lease("ai-exposure-test"), None)
-            .await
-            .expect("step")
+        match workflows::handle_step(
+            pool,
+            &job,
+            &job.lease("ai-exposure-test"),
+            None,
+            &deepref_config::RuntimeConfig::from_source("workflow-test", &|name| {
+                (name == "APP_ENV").then(|| "local".into())
+            })
+            .expect("local runtime configuration"),
+        )
+        .await
+        .expect("step")
         {
             DeliveryAction::Ack => {
                 complete_job(pool, &job.lease("ai-exposure-test"))
@@ -183,7 +192,7 @@ async fn run_on_records(
     let workflow = create_workflow(pool, project, "AI exposure", "", graph, &actor)
         .await
         .expect("create");
-    publish_workflow(pool, project, workflow.id, None, &actor)
+    publish_workflow(pool, project, workflow.id, None, &actor, false)
         .await
         .expect("publish");
     let (version_id, graph) = get_published_graph(pool, workflow.id).await.expect("graph");

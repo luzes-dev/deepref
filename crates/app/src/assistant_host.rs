@@ -153,7 +153,7 @@ impl PostgresAssistantToolHost {
             .map(|snapshot| PlannedScreeningItem {
                 report_id: snapshot.report_id,
                 title: snapshot.title,
-                current_status: snapshot.title_abstract_status,
+                current_status: snapshot.title_abstract_status.as_str().to_owned(),
                 expected_revision: snapshot.revision,
             })
             .collect();
@@ -184,6 +184,7 @@ fn read_error(error: crate::AgentReadError) -> AiError {
             AiError::InvalidContext("invalid argument".to_owned())
         }
         crate::AgentReadError::Database(_) => AiError::Persistence("read failed".to_owned()),
+        crate::AgentReadError::InvalidStoredValue(message) => AiError::Persistence(message),
     }
 }
 
@@ -392,9 +393,9 @@ fn report_value(report: crate::AgentReportRecord, abstract_limit: usize) -> Valu
     });
     if let Some(documents) = report.documents {
         // Full text exists only when a document has been parsed (status available).
-        let full_text_available = documents
-            .iter()
-            .any(|document| document.status == "available");
+        let full_text_available = documents.iter().any(|document| {
+            document.status == deepref_domain::documents::DocumentStatus::Available
+        });
         value["full_text_available"] = json!(full_text_available);
         value["documents"] = json!(documents);
     }

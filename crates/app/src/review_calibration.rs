@@ -22,20 +22,7 @@ use uuid::Uuid;
 
 use crate::review_runs::PostgresReviewError;
 
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ReviewCalibrationStatus {
-    Passing,
-    Failed,
-}
-
-impl ReviewCalibrationStatus {
-    const fn as_str(self) -> &'static str {
-        match self {
-            Self::Passing => "passing",
-            Self::Failed => "failed",
-        }
-    }
-}
+use deepref_review::ReviewCalibrationStatus;
 
 /// A calibration bundle to record. `identity` is the compiled review it was
 /// adjudicated for; obtain it from `preview_review_identity` or
@@ -166,7 +153,7 @@ fn describe_stage(stage: Option<ScreeningStage>) -> &'static str {
 /// The calibration fields that admission reads, as stored.
 #[derive(Debug, Clone)]
 pub(crate) struct StoredCalibration {
-    pub(crate) status: String,
+    pub(crate) status: ReviewCalibrationStatus,
     pub(crate) stage: Option<String>,
     pub(crate) identity_scheme: i32,
     pub(crate) semantic_bundle_hash: String,
@@ -278,7 +265,12 @@ pub(crate) async fn admit_calibration(
         return Err(CalibrationRefusal::Missing.into());
     };
     let stored = StoredCalibration {
-        status: row.get("status"),
+        status: ReviewCalibrationStatus::parse(row.get::<String, _>("status").as_str())
+            .ok_or_else(|| {
+                PostgresReviewError::InvalidStoredValue(
+                    "unknown review calibration status".to_owned(),
+                )
+            })?,
         stage: row.get("stage"),
         identity_scheme: row.get("identity_scheme"),
         semantic_bundle_hash: row.get("semantic_bundle_hash"),
@@ -299,7 +291,7 @@ pub(crate) fn check_admission(
     stored: &StoredCalibration,
     manifest: &ReviewRunManifest,
 ) -> Result<(), CalibrationRefusal> {
-    if stored.status != ReviewCalibrationStatus::Passing.as_str() {
+    if stored.status != ReviewCalibrationStatus::Passing {
         return Err(CalibrationRefusal::Failed);
     }
     let incompatible = || CalibrationRefusal::IncompatibleIdentityScheme {
@@ -410,7 +402,7 @@ mod tests {
     /// The row a bundle recorded for `contract` would hold.
     fn stored_for(contract: &ReviewSemanticContract) -> StoredCalibration {
         StoredCalibration {
-            status: ReviewCalibrationStatus::Passing.as_str().to_owned(),
+            status: ReviewCalibrationStatus::Passing,
             stage: contract.stage.map(|stage| stage_key(stage).to_owned()),
             identity_scheme: i32::try_from(contract.scheme).expect("scheme fits"),
             semantic_bundle_hash: contract.id().as_str().to_owned(),
@@ -460,7 +452,7 @@ mod tests {
     fn a_failed_calibration_is_refused_before_its_identity_is_read() {
         let manifest = screening_manifest(ScreeningStage::TitleAbstract, "v1");
         let mut stored = stored_for(&contract_of(&manifest));
-        stored.status = ReviewCalibrationStatus::Failed.as_str().to_owned();
+        stored.status = ReviewCalibrationStatus::Failed;
         stored.identity_scheme = 1;
         assert_eq!(
             check_admission(&stored, &manifest),

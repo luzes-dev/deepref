@@ -49,9 +49,9 @@ pub async fn handle_assistant_agent_run(
     pool: &PgPool,
     job: &deepref_application::jobs::ClaimedJob,
     owner: &str,
+    config: &deepref_config::AiProviderConfig,
 ) -> anyhow::Result<DeliveryAction> {
     let _ = owner;
-    let config = deepref_config::AiProviderConfig::from_env()?;
     let Some(api_key) = config.api_key() else {
         let payload: AssistantAgentRunJobPayload = serde_json::from_value(job.payload.clone())?;
         fail_run(

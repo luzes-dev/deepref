@@ -29,7 +29,8 @@ fn fixture(prefix: &str) -> Option<PathBuf> {
 }
 
 fn parse(path: &std::path::Path) -> StructuredDocument {
-    PdfiumParser::shared_from_env()
+    let config = deepref_config::PdfConfig::from_source(&|name| std::env::var(name).ok());
+    PdfiumParser::shared_from_config(&config)
         .expect("pdfium")
         .parse_structured(path)
         .expect("fixture parses")

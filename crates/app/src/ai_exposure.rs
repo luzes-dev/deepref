@@ -12,7 +12,7 @@
 //! person saw first contaminates a later decision, whichever run produced it.
 
 use chrono::{DateTime, Utc};
-use deepref_domain::Actor;
+use deepref_domain::{Actor, ScreeningDecision, ScreeningStage};
 use sqlx::{PgPool, Postgres, Row, Transaction};
 use uuid::Uuid;
 
@@ -257,11 +257,11 @@ pub(crate) const PROPOSAL_WITHHELD_SQL: &str = "(ai_first_audit_masked(p.project
 pub struct ReviewerPair {
     pub decision_id: Uuid,
     pub report_id: Uuid,
-    pub stage: String,
+    pub stage: ScreeningStage,
     /// `include`, `exclude` or `maybe`: the person's decision, before any conflict was settled.
-    pub human_decision: String,
+    pub human_decision: ScreeningDecision,
     /// `include`, `exclude` or `maybe`.
-    pub ai_decision: String,
+    pub ai_decision: ScreeningDecision,
 }
 
 /// Pairs that count as independent evidence, and how many were left out.
@@ -338,6 +338,18 @@ pub async fn independent_reviewer_pairs(
     .await?;
     let mut pairs = ReviewerPairs::default();
     for row in rows {
+        let decode = |column: &str| -> Result<&str, sqlx::Error> { row.try_get(column) };
+        let stage = crate::ai_reviewer::stored("stage", decode("stage")?, ScreeningStage::parse)?;
+        let human_decision = crate::ai_reviewer::stored(
+            "human_decision",
+            decode("human_decision")?,
+            ScreeningDecision::parse,
+        )?;
+        let ai_decision = crate::ai_reviewer::stored(
+            "ai_decision",
+            decode("ai_decision")?,
+            ScreeningDecision::parse,
+        )?;
         if row.get::<bool, _>("unverifiable") {
             pairs.unverifiable_excluded += 1;
         } else if row.get::<bool, _>("exposed") {
@@ -346,9 +358,9 @@ pub async fn independent_reviewer_pairs(
             pairs.independent.push(ReviewerPair {
                 decision_id: row.get("decision_id"),
                 report_id: row.get("report_id"),
-                stage: row.get("stage"),
-                human_decision: row.get("human_decision"),
-                ai_decision: row.get("ai_decision"),
+                stage,
+                human_decision,
+                ai_decision,
             });
         }
     }

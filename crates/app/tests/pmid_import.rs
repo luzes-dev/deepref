@@ -73,7 +73,7 @@ async fn a_pmid_run_saves_each_new_article_once_and_settles_with_its_counts() {
     .unwrap();
     assert!(run.created);
     let queued = load_pmid_run(&pool, run.run_id).await.unwrap().unwrap();
-    assert_eq!(queued.status, "queued");
+    assert_eq!(queued.status.as_str(), "queued");
     assert_eq!(queued.project_id, project_id);
 
     start_pmid_run(&pool, run.run_id).await.unwrap();
@@ -82,7 +82,8 @@ async fn a_pmid_run_saves_each_new_article_once_and_settles_with_its_counts() {
             .await
             .unwrap()
             .unwrap()
-            .status,
+            .status
+            .as_str(),
         "running"
     );
     let waiting = queued_pmids(&pool, run.run_id, 200).await.unwrap();

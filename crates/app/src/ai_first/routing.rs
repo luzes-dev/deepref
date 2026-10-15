@@ -136,7 +136,8 @@ async fn demote(
             invalidate_in_transaction(tx, project, cohort, reason.as_str(), true).await
         }
         StaleReason::SemanticIdentity { current } => {
-            if c.get::<String, _>("status") != "finalized" {
+            if super::cohort_status(c)? != deepref_review::ai_first::AiFirstCohortStatus::Finalized
+            {
                 invalidate_in_transaction(tx, project, cohort, reason.as_str(), true).await?;
             }
             super::cohorts::flag_finalized_identity_drift(tx, project, current, reason.as_str())
@@ -243,7 +244,7 @@ pub async fn route_ai_first_result(
             .fetch_optional(&mut *tx)
             .await?
             .ok_or(AiFirstError::NotFound)?;
-    if c.get::<String, _>("status") != "open" {
+    if super::cohort_status(&c)? != deepref_review::ai_first::AiFirstCohortStatus::Open {
         return Ok(false);
     }
     match ensure_current(&mut tx, &c).await? {
@@ -287,7 +288,11 @@ pub async fn route_ai_first_result(
        FROM project_reports pr LEFT JOIN screening_state s ON s.project_id=pr.project_id AND s.report_id=pr.report_id
        WHERE pr.project_id=$1 AND pr.report_id=$2 FOR UPDATE OF pr")
         .bind(project).bind(report).fetch_one(&mut *tx).await?;
-    if state.get::<String, _>("status") != "unscreened"
+    if super::stored(
+        "status",
+        state.try_get("status")?,
+        deepref_domain::ScreeningStatus::parse,
+    )? != deepref_domain::ScreeningStatus::Unscreened
         || state.get::<i64, _>("revision") != input.expected_revision
     {
         return Ok(false);
@@ -415,7 +420,7 @@ pub async fn sweep_ai_first(pool: &PgPool) -> Result<u64, AiFirstError> {
                 continue;
             }
         }
-        if c.get::<String, _>("status") != "open" {
+        if super::cohort_status(&c)? != deepref_review::ai_first::AiFirstCohortStatus::Open {
             continue;
         }
         let finished=sqlx::query("SELECT m.report_id,m.review_run_id FROM ai_screening_cohort_members m

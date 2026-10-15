@@ -441,7 +441,7 @@ fn node_run_dto(node: NodeRunRecord) -> NodeRunDto {
         node_id: node.node_id,
         node_type: node.node_type,
         iteration: node.iteration,
-        status: node.status,
+        status: node.status.as_str().to_owned(),
         attempts: node.attempts,
         input: node.input,
         output: node.output,
@@ -500,7 +500,7 @@ fn run_dto(
         workflow_name: run.workflow_name,
         version: run.version,
         trigger: run.trigger_kind,
-        status: run.status,
+        status: run.status.as_str().to_owned(),
         test_mode: run.test_mode,
         actor: run.actor_id,
         error: run.error,
@@ -847,9 +847,14 @@ pub(crate) async fn validate_workflow(
     State(state): State<AppState>,
     Path((project, workflow)): Path<(Uuid, Uuid)>,
 ) -> Result<Json<ValidationReportDto>, ApiError> {
-    let report = deepref_app::validate_workflow_draft(&state.pool, project_id(project)?, workflow)
-        .await
-        .map_err(map_error)?;
+    let report = deepref_app::validate_workflow_draft(
+        &state.pool,
+        project_id(project)?,
+        workflow,
+        state.smtp.is_configured(),
+    )
+    .await
+    .map_err(map_error)?;
     Ok(Json(report_dto(&report)))
 }
 
@@ -983,6 +988,7 @@ pub(crate) async fn publish_workflow(
         workflow,
         input.note.as_deref(),
         &extract_actor(&headers)?,
+        state.smtp.is_configured(),
     )
     .await
     .map_err(map_error)?;
@@ -1260,9 +1266,14 @@ pub(crate) async fn start_test_run(
                 .to_owned(),
         )));
     }
-    let ctx = deepref_app::validation_context(&state.pool, workflow, &record.draft_graph)
-        .await
-        .map_err(map_error)?;
+    let ctx = deepref_app::validation_context(
+        &state.pool,
+        workflow,
+        &record.draft_graph,
+        state.smtp.is_configured(),
+    )
+    .await
+    .map_err(map_error)?;
     let report = wf::validate_graph(&record.draft_graph, &ctx);
     if !report.is_ok() {
         return Err(map_error(WorkflowError::Invalid(report)));

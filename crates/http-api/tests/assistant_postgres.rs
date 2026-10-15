@@ -42,6 +42,10 @@ fn api_config() -> ApiConfig {
     )
     .expect("local test runtime should parse");
     ApiConfig {
+        documents: deepref_config::DocumentConfig::from_source(&|name| {
+            (name == "APP_ENV").then(|| "local".into())
+        })
+        .expect("local test document configuration"),
         runtime,
         bind_addr: "127.0.0.1:0".parse().expect("test bind address is valid"),
         cors_allow_any: false,
@@ -611,7 +615,10 @@ where
     let job = ClaimedJob {
         id: row.get("id"),
         project_id: row.get::<Uuid, _>("project_id").into(),
-        kind: row.get("kind"),
+        kind: row
+            .get::<String, _>("kind")
+            .parse()
+            .expect("valid queued job kind"),
         payload: row.get("payload"),
         attempts: row.get("attempts"),
         max_attempts: row.get("max_attempts"),
@@ -624,6 +631,10 @@ where
         None,
         None,
         Arc::new(gateway),
+        &deepref_worker::config::WorkerConfig::from_source(&|name| {
+            (name == "APP_ENV").then(|| "local".into())
+        })
+        .expect("local worker configuration"),
     )
     .await
     .expect("assistant review worker handles terminal delivery")
@@ -1126,7 +1137,7 @@ async fn drive_assistant_job(pool: &PgPool, model: MockCompletionModel) {
         .await
         .expect("claim works")
         .expect("an assistant job is queued");
-    assert_eq!(job.kind, "assistant_agent_run");
+    assert_eq!(job.kind, deepref_domain::JobKind::AssistantAgentRun);
     let services = deepref_worker::assistant::AssistantWorkerServices {
         model_factory: Arc::new(StaticModelFactory::new(model.erase())),
         prices: deepref_ai::PriceBook::default(),

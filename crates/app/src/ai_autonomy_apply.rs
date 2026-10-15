@@ -47,7 +47,7 @@ pub async fn apply_autonomy_for_proposal(
     proposal_id: Uuid,
 ) -> anyhow::Result<AutonomyOutcome> {
     let proposal = crate::ai::get_ai_proposal(pool, project_id, proposal_id).await?;
-    if proposal.status != "pending" {
+    if proposal.status != deepref_ai::ProposalStatus::Pending {
         return Ok(AutonomyOutcome::LeftAsSuggestion);
     }
     let Some(task) = task_for_proposal(&proposal.operation, &proposal.payload) else {
@@ -400,7 +400,7 @@ async fn record_second_reviewer(
             decision,
             rationale,
             evidence,
-            source: "ai",
+            source: deepref_review::ReviewerSource::Ai,
             proposal_id: Some(proposal.id),
             ai_run_id: Some(proposal.model_run_id),
             model: Some(proposal.model.clone()),

@@ -6,9 +6,10 @@
 )]
 //! Durable assistant agent runs: lifecycle, idempotency and event ordering.
 
+use deepref_ai::AssistantAgentRunStatus;
 use deepref_app::{
-    AppendAssistantMessage, AssistantAgentRunStatus, AssistantError, CompletedAssistantAgentRun,
-    NewAssistantAgentRun, NewAssistantPlan, append_assistant_run_event, begin_assistant_agent_run,
+    AppendAssistantMessage, AssistantError, CompletedAssistantAgentRun, NewAssistantAgentRun,
+    NewAssistantPlan, append_assistant_run_event, begin_assistant_agent_run,
     complete_assistant_agent_run, create_assistant_agent_run, get_assistant_agent_run,
     list_assistant_run_events, submit_assistant_agent_run,
 };

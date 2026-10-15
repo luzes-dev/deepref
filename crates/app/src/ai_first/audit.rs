@@ -72,7 +72,7 @@ pub async fn draw_ai_first_audit(
             .fetch_optional(&mut *tx)
             .await?
             .ok_or(AiFirstError::NotFound)?;
-    if c.get::<String, _>("status") != "closed"
+    if super::cohort_status(&c)? != deepref_review::ai_first::AiFirstCohortStatus::Closed
         || c.get::<Option<Uuid>, _>("sampling_seed").is_some()
     {
         return Err(AiFirstError::Refused(
@@ -243,14 +243,15 @@ pub(crate) async fn record_audit_label(
         return Ok(AuditLabelOutcome::NotAudit);
     };
     let cohort = row.get::<Uuid, _>("id");
-    if row.get::<String, _>("status") == "auditing"
+    let status = super::cohort_status(&row)?;
+    if status == deepref_review::ai_first::AiFirstCohortStatus::Auditing
         && !(row.get::<bool, _>("sampled") || row.get::<bool, _>("audit_control"))
     {
         return Err(AiFirstError::Refused(
             "complete or recover the blind audit before editing cohort records".into(),
         ));
     }
-    if row.get::<String, _>("status") != "auditing"
+    if status != deepref_review::ai_first::AiFirstCohortStatus::Auditing
         || !(row.get::<bool, _>("sampled") || row.get::<bool, _>("audit_control"))
     {
         if row.get::<Option<Uuid>, _>("sampling_seed").is_some() {
@@ -373,7 +374,7 @@ pub async fn evaluate_ai_first_audit(
             .fetch_optional(&mut *tx)
             .await?
             .ok_or(AiFirstError::NotFound)?;
-    if c.get::<String, _>("status") != "auditing" {
+    if super::cohort_status(&c)? != deepref_review::ai_first::AiFirstCohortStatus::Auditing {
         return Err(AiFirstError::Refused(
             "the audit has already been evaluated or invalidated".into(),
         ));
@@ -470,7 +471,7 @@ pub async fn finalize_ai_first_cohort(
             .fetch_optional(&mut *tx)
             .await?
             .ok_or(AiFirstError::NotFound)?;
-    if c.get::<String, _>("status") != "passed" {
+    if super::cohort_status(&c)? != deepref_review::ai_first::AiFirstCohortStatus::Passed {
         return Err(AiFirstError::Refused(
             "only a passing, current cohort can be finalized".into(),
         ));

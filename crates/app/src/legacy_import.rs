@@ -102,6 +102,8 @@ async fn import_in_transaction(
     .fetch_all(&mut **transaction)
     .await?;
     for row in ingestion_rows {
+        let status = deepref_domain::IngestionStatus::try_from(row.try_get::<&str, _>("status")?)
+            .map_err(anyhow::Error::msg)?;
         let ingestion_id: Uuid = row.get("id");
         let existed: bool = sqlx::query_scalar(
             "SELECT EXISTS (SELECT 1 FROM acquisition_runs WHERE legacy_ingestion_id=$1)",
@@ -123,7 +125,7 @@ async fn import_in_transaction(
         )
         .bind(ingestion_id)
         .bind(row.get::<Uuid, _>("project_id"))
-        .bind(row.get::<String, _>("status"))
+        .bind(status.as_str())
         .bind(row.get::<i32, _>("max_depth"))
         .bind(row.get::<i32, _>("seed_count"))
         .bind(row.get::<i32, _>("queued_count"))
@@ -212,6 +214,9 @@ async fn import_in_transaction(
     .fetch_all(&mut **transaction)
     .await?;
     for row in item_rows {
+        let status =
+            deepref_domain::IngestionItemStatus::try_from(row.try_get::<&str, _>("status")?)
+                .map_err(anyhow::Error::msg)?;
         let ingestion_id: Uuid = row.get("ingestion_id");
         let project_id: Uuid = row.get("project_id");
         let doi: String = row.get("canonical_doi");
@@ -241,7 +246,7 @@ async fn import_in_transaction(
             .bind(ingestion_id)
             .bind(row.get::<i32, _>("depth"))
             .bind(row.get::<Option<String>, _>("parent_doi"))
-            .bind(row.get::<String, _>("status"))
+            .bind(status.as_str())
             .execute(&mut **transaction)
             .await?;
             counts.records_repaired += 1;
@@ -264,7 +269,7 @@ async fn import_in_transaction(
             .bind(&doi)
             .bind(row.get::<i32, _>("depth"))
             .bind(row.get::<Option<String>, _>("parent_doi"))
-            .bind(row.get::<String, _>("status"))
+            .bind(status.as_str())
             .execute(&mut **transaction)
             .await?;
             counts.records_created += 1;
@@ -291,7 +296,7 @@ async fn import_in_transaction(
         .bind(&doi)
         .bind(row.get::<i32, _>("depth"))
         .bind(row.get::<Option<String>, _>("parent_doi"))
-        .bind(row.get::<String, _>("status"))
+        .bind(status.as_str())
         .bind(row.get::<i32, _>("attempts"))
         .bind(row.get::<DateTime<Utc>, _>("queued_at"))
         .bind(row.get::<Option<DateTime<Utc>>, _>("fetched_at"))

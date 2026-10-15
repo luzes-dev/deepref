@@ -13,6 +13,28 @@ pub(crate) use routing::admit_ai_first;
 pub use routing::{route_ai_first_result, sweep_ai_first};
 
 use thiserror::Error;
+
+fn stored<T>(
+    column: &str,
+    value: &str,
+    parse: impl FnOnce(&str) -> Option<T>,
+) -> Result<T, sqlx::Error> {
+    parse(value).ok_or_else(|| sqlx::Error::ColumnDecode {
+        index: column.to_owned(),
+        source: format!("invalid persisted {column}: {value}").into(),
+    })
+}
+
+fn cohort_status(
+    row: &sqlx::postgres::PgRow,
+) -> Result<deepref_review::ai_first::AiFirstCohortStatus, sqlx::Error> {
+    use sqlx::Row;
+    stored(
+        "status",
+        row.try_get("status")?,
+        deepref_review::ai_first::AiFirstCohortStatus::parse,
+    )
+}
 #[derive(Debug, Error)]
 pub enum AiFirstError {
     #[error("AI-first resource not found")]

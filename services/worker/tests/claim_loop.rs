@@ -89,7 +89,7 @@ async fn handler_panic_fails_the_job_and_the_loop_keeps_claiming() {
     let mut poison = job(
         poison_id,
         project_id,
-        "test_poison",
+        deepref_domain::JobKind::RecomputeMetrics,
         serde_json::json!({}),
         format!("claim-loop-poison:{poison_id}"),
     );
@@ -103,7 +103,7 @@ async fn handler_panic_fails_the_job_and_the_loop_keeps_claiming() {
         &job(
             healthy_id,
             project_id,
-            "test_healthy",
+            deepref_domain::JobKind::RecomputeMetrics,
             serde_json::json!({}),
             format!("claim-loop-healthy:{healthy_id}"),
         ),
@@ -111,9 +111,9 @@ async fn handler_panic_fails_the_job_and_the_loop_keeps_claiming() {
     .await
     .expect("enqueue healthy");
 
-    let handler: JobHandler = Arc::new(|job: ClaimedJob, _lease: JobLease| {
+    let handler: JobHandler = Arc::new(move |job: ClaimedJob, _lease: JobLease| {
         Box::pin(async move {
-            if job.kind == "test_poison" {
+            if job.id == poison_id {
                 panic!("poison payload tripped the handler");
             }
             tracing::info!("healthy handler ran");

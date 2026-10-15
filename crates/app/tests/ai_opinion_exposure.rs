@@ -139,7 +139,7 @@ async fn ai_opinion(
             decision: decision.to_owned(),
             rationale: "Fixture rationale.".to_owned(),
             evidence: json!([{"label": "Abstract", "quote": "adults with condition X"}]),
-            source: "ai",
+            source: deepref_review::ReviewerSource::Ai,
             proposal_id: None,
             ai_run_id: None,
             model: Some("exposure-test-model".to_owned()),
@@ -332,7 +332,7 @@ async fn a_waiting_second_opinion_stays_blind_on_every_read_path() {
     assert_eq!(waiting[0].ai_rationale, "");
 
     let expired = AiProposalFilters {
-        status: Some("expired"),
+        status: Some(deepref_ai::ProposalStatus::Expired),
         task_kind: None,
         target_report_id: Some(record),
         target_record_id: None,
@@ -367,7 +367,7 @@ async fn a_waiting_second_opinion_stays_blind_on_every_read_path() {
     let visible = get_visible_ai_proposal(&pool, project_id, proposal_id)
         .await
         .expect("visible after the decision");
-    assert_eq!(visible.status, "expired");
+    assert_eq!(visible.status, deepref_ai::ProposalStatus::Expired);
     let mut tx = pool.begin().await.expect("tx");
     delete_project_in_transaction(&mut tx, project_id)
         .await
@@ -407,8 +407,11 @@ async fn an_exposure_before_the_decision_excludes_the_pair() {
     assert_eq!(pairs.unverifiable_excluded, 0);
     assert_eq!(pairs.independent.len(), 1);
     assert_eq!(pairs.independent[0].report_id, clean);
-    assert_eq!(pairs.independent[0].human_decision, "exclude");
-    assert_eq!(pairs.independent[0].ai_decision, "include");
+    assert_eq!(
+        pairs.independent[0].human_decision,
+        ScreeningDecision::Exclude
+    );
+    assert_eq!(pairs.independent[0].ai_decision, ScreeningDecision::Include);
 
     let agreement = title_abstract_agreement(&pool, project_id).await;
     assert_eq!(agreement.compared, 1);
@@ -546,8 +549,11 @@ async fn resolving_needs_a_decision_and_keeps_the_time_it_replaced() {
     )
     .await
     .expect("resolution");
-    assert_eq!(settled.status, "resolved");
-    assert_eq!(settled.resolution.as_deref(), Some("adopted_ai"));
+    assert_eq!(settled.status, deepref_review::ReviewerStatus::Resolved);
+    assert_eq!(
+        settled.resolution,
+        Some(deepref_review::ReviewerResolution::AdoptedAi)
+    );
 
     let replaced_at: Option<DateTime<Utc>> = sqlx::query_scalar(
         "SELECT human_decision_before_at FROM ai_reviewer_decisions WHERE id=$1",
@@ -586,8 +592,8 @@ async fn resolving_needs_a_decision_and_keeps_the_time_it_replaced() {
         .iter()
         .find(|pair| pair.report_id == conflict)
         .expect("the resolved pair still counts");
-    assert_eq!(pair.human_decision, "exclude");
-    assert_eq!(pair.ai_decision, "include");
+    assert_eq!(pair.human_decision, ScreeningDecision::Exclude);
+    assert_eq!(pair.ai_decision, ScreeningDecision::Include);
 }
 
 #[tokio::test]
@@ -663,7 +669,7 @@ async fn listing_a_pending_suggestion_records_the_exposure_once() {
         "availability is recorded before any proposal is fetched"
     );
     let pending = AiProposalFilters {
-        status: Some("pending"),
+        status: Some(deepref_ai::ProposalStatus::Pending),
         task_kind: None,
         target_report_id: Some(record),
         target_record_id: None,

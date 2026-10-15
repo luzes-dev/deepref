@@ -837,6 +837,7 @@ dependencies = [
  "dotenvy",
  "serde",
  "thiserror",
+ "url",
 ]
 
 [[package]]
@@ -845,6 +846,7 @@ version = "0.1.0"
 dependencies = [
  "bytes",
  "deepref-application",
+ "deepref-config",
  "deepref-domain",
  "futures",
  "object_store",
@@ -921,6 +923,7 @@ dependencies = [
  "chrono",
  "csv",
  "deepref-application",
+ "deepref-config",
  "deepref-domain",
  "quick-xml",
  "reqwest",
