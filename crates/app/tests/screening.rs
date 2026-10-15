@@ -15,7 +15,7 @@ use deepref_application::{
     GetScreeningQueueQuery, ScreenReportCommand, ScreeningQueueSort, ScreeningQueueStatus,
     UndoScreeningCommand,
 };
-use deepref_domain::{Actor, ActorKind, ScreeningDecision, ScreeningStage};
+use deepref_domain::{Actor, ActorKind, ScreeningDecision, ScreeningStage, ScreeningStatus};
 use sqlx::{
     AssertSqlSafe, Connection, PgPool, Row,
     postgres::{PgConnection, PgPoolOptions},
@@ -400,11 +400,11 @@ async fn interleaved_stages_have_truthful_supersession_and_undo_snapshots() {
     assert_eq!(undo_item.undoes_event_id, Some(title_change_event));
     assert_eq!(
         undo_item.previous_title_abstract_status,
-        deepref_domain::ScreeningStatus::Maybe
+        ScreeningStatus::Maybe
     );
     assert_eq!(
         undo_item.result_title_abstract_status,
-        deepref_domain::ScreeningStatus::Include
+        ScreeningStatus::Include
     );
     cleanup(&pool, project_id).await;
 }

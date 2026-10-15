@@ -19,6 +19,17 @@ describe('generated project invalidation', () => {
 			expect(source, path).not.toMatch(/\.startsWith\(['"`]\/api\/projects\/['"`]\)/);
 		}
 	});
+
+	it('proposal decisions target the generated title/abstract queue for the mutation project', () => {
+		const ai = generatedSources['./generated/ai/ai.ts'];
+		expect(ai).toContain('getGetScreeningQueueQueryKey(variables.projectId)');
+		expect(getGetScreeningQueueQueryKey('project-a')).toEqual([
+			'/api/projects/project-a/screening'
+		]);
+		expect(getGetScreeningQueueQueryKey('project-a')).not.toEqual(
+			getGetScreeningQueueQueryKey('project-b')
+		);
+	});
 });
 
 describe('proposal decision cache invalidation', () => {
