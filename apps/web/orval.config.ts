@@ -51,7 +51,11 @@ export default defineConfig({
 							invalidates: ['listProjects']
 						},
 						{
-							onMutations: ['createAcquisition', 'refreshAcquisition', 'importProjectRecords'],
+							onMutations: [
+								'createAcquisition',
+								'refreshAcquisition',
+								'importProjectRecords'
+							],
 							invalidates: [{ query: 'listAcquisitions', params: ['projectId'] }]
 						},
 						{
@@ -59,7 +63,10 @@ export default defineConfig({
 							invalidates: [
 								{ query: 'listAcquisitions', params: ['projectId'] },
 								{ query: 'getAcquisition', params: ['projectId', 'acquisitionId'] },
-								{ query: 'listAcquisitionItems', params: ['projectId', 'acquisitionId'] }
+								{
+									query: 'listAcquisitionItems',
+									params: ['projectId', 'acquisitionId']
+								}
 							]
 						},
 						{
