@@ -211,10 +211,11 @@ async fn a_second_opinion_lost_after_finalization_is_recorded_by_the_reconciler(
         else {
             break;
         };
+        let lease = job.lease(worker);
         let action = handle_job_with_documents_owned_and_ai(
             pool.clone(),
             &job,
-            worker,
+            &lease,
             Duration::from_secs(60),
             None,
             None,
@@ -223,7 +224,7 @@ async fn a_second_opinion_lost_after_finalization_is_recorded_by_the_reconciler(
         .await
         .unwrap();
         assert_eq!(action, DeliveryAction::Ack);
-        assert!(complete_job(&pool, worker, job.id).await.unwrap());
+        assert!(complete_job(&pool, &lease).await.unwrap());
     }
     let state: String = sqlx::query_scalar(
         "SELECT state FROM review_run_manifests WHERE project_id=$1 AND automation_run_id=$2",
