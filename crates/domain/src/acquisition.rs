@@ -130,22 +130,8 @@ impl ImportFormat {
 }
 
 #[cfg(test)]
-mod depth_tests {
-    use super::{AcquisitionStatus, MaxDepth};
-    use serde::Deserialize;
-
-    #[test]
-    fn depth_accepts_only_zero_through_three_even_when_deserialized() {
-        for value in 0..=3 {
-            assert_eq!(MaxDepth::try_from(value).map(i32::from), Ok(value));
-        }
-        for value in [-1, 4, 10, i32::MAX] {
-            assert!(MaxDepth::try_from(value).is_err());
-            let deserializer =
-                serde::de::value::I32Deserializer::<serde::de::value::Error>::new(value);
-            assert!(MaxDepth::deserialize(deserializer).is_err());
-        }
-    }
+mod tests {
+    use super::AcquisitionStatus;
 
     #[test]
     fn acquisition_status_rejects_invalid_persisted_values() {
@@ -160,6 +146,25 @@ mod depth_tests {
             AcquisitionStatus::Cancelled,
         ] {
             assert_eq!(AcquisitionStatus::parse(status.as_str()), Some(status));
+        }
+    }
+}
+
+#[cfg(test)]
+mod depth_tests {
+    use super::MaxDepth;
+    use serde::Deserialize;
+
+    #[test]
+    fn depth_accepts_only_zero_through_three_even_when_deserialized() {
+        for value in 0..=3 {
+            assert_eq!(MaxDepth::try_from(value).map(i32::from), Ok(value));
+        }
+        for value in [-1, 4, 10, i32::MAX] {
+            assert!(MaxDepth::try_from(value).is_err());
+            let deserializer =
+                serde::de::value::I32Deserializer::<serde::de::value::Error>::new(value);
+            assert!(MaxDepth::deserialize(deserializer).is_err());
         }
     }
 }

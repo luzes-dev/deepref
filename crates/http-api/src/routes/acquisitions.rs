@@ -311,7 +311,7 @@ pub(crate) async fn refresh_acquisition(
             message: "only completed acquisitions can be refreshed".to_owned(),
             details: json!({
                 "acquisition_id": acquisition_id,
-                "status": source_status.as_str(),
+                "status": bounded_detail(source_status.as_str(), 32),
             }),
         });
     }

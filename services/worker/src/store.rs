@@ -647,7 +647,7 @@ async fn complete_item_and_claim(
         && matches!(acquisition_status.as_str(), "completed" | "failed")
     {
         let draft = acquisition_notification(
-            &acquisition_status,
+            acquisition_status.as_str(),
             event.payload.project_id,
             event.payload.acquisition_id,
             fetched_count,

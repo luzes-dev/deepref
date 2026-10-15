@@ -4,6 +4,9 @@ ALTER TABLE citations RENAME COLUMN first_seen_ingestion_id TO acquisition_run_i
 ALTER TABLE citations ADD CONSTRAINT citations_acquisition_run_id_fkey
  FOREIGN KEY(acquisition_run_id) REFERENCES acquisition_runs(id) ON DELETE SET NULL;
 ALTER TABLE citations DROP COLUMN legacy_source_doi, DROP COLUMN legacy_target_doi;
+-- The historical-depth trigger reads NEW.legacy_ingestion_id; retire it with the column.
+DROP TRIGGER IF EXISTS acquisition_runs_set_historical_max_depth ON acquisition_runs;
+DROP FUNCTION IF EXISTS acquisition_runs_preserve_historical_depth();
 ALTER TABLE acquisition_runs DROP COLUMN legacy_ingestion_id;
 ALTER TABLE acquisition_runs ALTER COLUMN strategy SET DEFAULT 'citation_traversal';
 

@@ -1,4 +1,5 @@
-use deepref_config::{DEFAULT_MAX_DOCUMENT_BYTES, DocumentConfig, DocumentStorageBackend};
+pub use deepref_config::DEFAULT_MAX_DOCUMENT_BYTES;
+use deepref_config::{DocumentConfig, DocumentStorageBackend};
 use std::sync::Arc;
 
 use bytes::{Buf, Bytes, BytesMut};
