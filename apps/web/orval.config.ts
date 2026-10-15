@@ -51,7 +51,11 @@ export default defineConfig({
 							invalidates: ['listProjects']
 						},
 						{
-							onMutations: ['createAcquisition', 'refreshAcquisition', 'importProjectRecords'],
+							onMutations: [
+								'createAcquisition',
+								'refreshAcquisition',
+								'importProjectRecords'
+							],
 							invalidates: [{ query: 'listAcquisitions', params: ['projectId'] }]
 						},
 						{
@@ -59,7 +63,10 @@ export default defineConfig({
 							invalidates: [
 								{ query: 'listAcquisitions', params: ['projectId'] },
 								{ query: 'getAcquisition', params: ['projectId', 'acquisitionId'] },
-								{ query: 'listAcquisitionItems', params: ['projectId', 'acquisitionId'] }
+								{
+									query: 'listAcquisitionItems',
+									params: ['projectId', 'acquisitionId']
+								}
 							]
 						},
 						{
@@ -82,9 +89,22 @@ export default defineConfig({
 							invalidates: [
 								{ query: 'listAiProposals', params: ['projectId'] },
 								{ query: 'getAiProposal', params: ['projectId', 'proposalId'] },
-								{ query: 'getScreeningQueue', params: ['projectId'] },
-								{ query: 'listFullTextScreeningQueue', params: ['projectId'] },
-								{ query: 'listProjectDedupeProposals', params: ['projectId'] }
+								// Orval resolves cross-tag paths from the generated output root.
+								{
+									query: 'getScreeningQueue',
+									params: ['projectId'],
+									file: './review'
+								},
+								{
+									query: 'listFullTextScreeningQueue',
+									params: ['projectId'],
+									file: './documents'
+								},
+								{
+									query: 'listProjectDedupeProposals',
+									params: ['projectId'],
+									file: './deduplication'
+								}
 							]
 						}
 					]

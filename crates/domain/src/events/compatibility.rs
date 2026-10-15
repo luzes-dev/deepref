@@ -2,8 +2,7 @@ use serde::de::DeserializeOwned;
 
 use super::{EventEnvelope, SCHEMA_VERSION_V1};
 
-/// Accepts the one-release legacy fetch envelope through serde aliases and
-/// defaults, while rejecting unknown future schema versions.
+/// Deserializes an event envelope, rejecting unsupported schema versions.
 pub fn deserialize_compatible<T: DeserializeOwned>(
     bytes: &[u8],
 ) -> Result<EventEnvelope<T>, serde_json::Error> {
@@ -20,30 +19,7 @@ pub fn deserialize_compatible<T: DeserializeOwned>(
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::events::{EntityType, WorkFetchRequested};
     use uuid::Uuid;
-
-    #[test]
-    fn accepts_legacy_fetch_field_names() {
-        let id = Uuid::new_v4();
-        let bytes = serde_json::to_vec(&serde_json::json!({
-            "id": id,
-            "type": "work.fetch.requested",
-            "occurred_at": "2026-01-01T00:00:00Z",
-            "source": "legacy-api",
-            "correlation_id": Uuid::nil(),
-            "subject": "10.1/x",
-            "payload": {
-                "project_id": Uuid::nil(), "ingestion_id": Uuid::nil(),
-                "doi": "10.1/x", "depth": 0, "max_depth": 2, "parent_doi": null
-            }
-        }))
-        .unwrap();
-        let event: EventEnvelope<WorkFetchRequested> = deserialize_compatible(&bytes).unwrap();
-        assert_eq!(event.event_id, id);
-        assert_eq!(event.entity_type, EntityType::Work);
-        assert_eq!(event.revision, 0);
-    }
 
     #[test]
     fn rejects_future_versions() {

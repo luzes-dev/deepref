@@ -246,6 +246,7 @@ pub async fn handle_job_with_document_services(
     .await
 }
 
+#[allow(clippy::too_many_arguments)]
 pub async fn handle_job_with_documents_owned_and_ai(
     pool: sqlx::PgPool,
     job: &deepref_application::jobs::ClaimedJob,

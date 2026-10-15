@@ -245,13 +245,29 @@ describe('insertDetail', () => {
 
 describe('runtime node availability', () => {
 	it('excludes parked definitions from authoring while preserving saved graph rendering and configuration', () => {
-		const parked: NodeTypeDto = { ...filterDef, id: 'integration.slack', label: 'Slack', available: false };
-		const outgoing: NodeTypeDto = { ...filterDef, id: 'integration.email', label: 'Send email' };
+		const parked: NodeTypeDto = {
+			...filterDef,
+			id: 'integration.slack',
+			label: 'Slack',
+			available: false
+		};
+		const outgoing: NodeTypeDto = {
+			...filterDef,
+			id: 'integration.email',
+			label: 'Send email'
+		};
 		const catalog = [parked, outgoing];
 		expect(catalog.filter(nodeIsAvailable).map((def) => def.id)).toEqual(['integration.email']);
 		expect(nodeIsAvailable(undefined)).toBe(false);
 		const graph: WfGraph = {
-			nodes: [{ id: 'saved', type: parked.id, position: { x: 0, y: 0 }, config: { webhook: 'stored' } }],
+			nodes: [
+				{
+					id: 'saved',
+					type: parked.id,
+					position: { x: 0, y: 0 },
+					config: { webhook: 'stored' }
+				}
+			],
 			edges: []
 		};
 		const flow = graphToFlow(graph, catalogIndex(catalog));
