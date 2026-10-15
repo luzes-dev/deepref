@@ -1002,11 +1002,9 @@ dependencies = [
  "rig-core",
  "serde",
  "serde_json",
- "sha2 0.11.0",
  "sqlx",
  "tokio",
  "tracing",
- "tracing-subscriber",
  "url",
  "uuid",
 ]

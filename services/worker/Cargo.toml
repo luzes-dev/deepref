@@ -20,7 +20,6 @@ rig-cassette.workspace = true
 reqwest.workspace = true
 serde.workspace = true
 serde_json.workspace = true
-sha2.workspace = true
 sqlx.workspace = true
 tokio.workspace = true
 tracing.workspace = true
@@ -32,7 +31,6 @@ deepref-domain.workspace = true
 deepref-app = { workspace = true, features = ["test-support"] }
 futures.workspace = true
 rig-core = { workspace = true, features = ["test-utils"] }
-tracing-subscriber.workspace = true
 url.workspace = true
 
 [lints]
