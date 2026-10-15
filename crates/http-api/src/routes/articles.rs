@@ -422,15 +422,17 @@ fn report_from_row(row: sqlx::postgres::PgRow) -> ReportDto {
 }
 
 fn report_from_graph_node(node: deepref_domain::graph::GraphNode) -> Result<ReportDto, ApiError> {
-    let metrics = node.metrics.unwrap_or(deepref_domain::graph::GraphMetricsOverlay {
-        total_citations: 0,
-        references_count: 0,
-        internal_citations: 0,
-        outbound_internal_references: 0,
-        rank_score: 0.0,
-        metrics_as_of: None,
-        metrics_stale: true,
-    });
+    let metrics = node
+        .metrics
+        .unwrap_or(deepref_domain::graph::GraphMetricsOverlay {
+            total_citations: 0,
+            references_count: 0,
+            internal_citations: 0,
+            outbound_internal_references: 0,
+            rank_score: 0.0,
+            metrics_as_of: None,
+            metrics_stale: true,
+        });
     Ok(ReportDto {
         report_id: node.report_id,
         doi: node.doi,
@@ -488,7 +490,9 @@ fn graph_node_dto(node: deepref_domain::graph::GraphNode) -> GraphNodeDto {
     }
 }
 
-fn parse_graph_fields(value: Option<&str>) -> Result<deepref_domain::graph::GraphFieldSelection, ApiError> {
+fn parse_graph_fields(
+    value: Option<&str>,
+) -> Result<deepref_domain::graph::GraphFieldSelection, ApiError> {
     let Some(value) = value else {
         return Ok(deepref_domain::graph::GraphFieldSelection::all());
     };

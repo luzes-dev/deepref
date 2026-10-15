@@ -1,6 +1,5 @@
 use serde_json::{Value, json};
 
-
 #[derive(Debug, thiserror::Error)]
 pub enum CrossrefSearchError {
     #[error("{0}")]
@@ -19,17 +18,24 @@ impl CrossrefSearchError {
     }
 }
 
-async fn search_response(client: &reqwest::Client, url: &str) -> Result<String, CrossrefSearchError> {
-    let response = client.get(url).send().await.map_err(|_| {
-        CrossrefSearchError::retryable("The literature service did not answer.")
-    })?;
+async fn search_response(
+    client: &reqwest::Client,
+    url: &str,
+) -> Result<String, CrossrefSearchError> {
+    let response =
+        client.get(url).send().await.map_err(|_| {
+            CrossrefSearchError::retryable("The literature service did not answer.")
+        })?;
     let status = response.status();
     if status.is_server_error() || status.as_u16() == 429 {
-        return Err(CrossrefSearchError::retryable("The literature service is busy right now."));
+        return Err(CrossrefSearchError::retryable(
+            "The literature service is busy right now.",
+        ));
     }
     if !status.is_success() {
         return Err(CrossrefSearchError::permanent(format!(
-            "The literature service refused the request ({}).", status.as_u16()
+            "The literature service refused the request ({}).",
+            status.as_u16()
         )));
     }
     response.text().await.map_err(|_| {

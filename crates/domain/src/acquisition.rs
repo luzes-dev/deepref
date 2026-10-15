@@ -1,6 +1,29 @@
 use serde::{Deserialize, Serialize};
 use uuid::Uuid;
 
+/// Citation expansion is deliberately limited to three hops.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(try_from = "i32", into = "i32")]
+pub struct MaxDepth(i32);
+
+impl TryFrom<i32> for MaxDepth {
+    type Error = &'static str;
+
+    fn try_from(value: i32) -> Result<Self, Self::Error> {
+        if (0..=3).contains(&value) {
+            Ok(Self(value))
+        } else {
+            Err("max_depth must be between 0 and 3")
+        }
+    }
+}
+
+impl From<MaxDepth> for i32 {
+    fn from(value: MaxDepth) -> Self {
+        value.0
+    }
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(transparent)]
 pub struct AcquisitionRunId(Uuid);
@@ -123,6 +146,25 @@ mod tests {
             AcquisitionStatus::Cancelled,
         ] {
             assert_eq!(AcquisitionStatus::parse(status.as_str()), Some(status));
+        }
+    }
+}
+
+#[cfg(test)]
+mod depth_tests {
+    use super::MaxDepth;
+    use serde::Deserialize;
+
+    #[test]
+    fn depth_accepts_only_zero_through_three_even_when_deserialized() {
+        for value in 0..=3 {
+            assert_eq!(MaxDepth::try_from(value).map(i32::from), Ok(value));
+        }
+        for value in [-1, 4, 10, i32::MAX] {
+            assert!(MaxDepth::try_from(value).is_err());
+            let deserializer =
+                serde::de::value::I32Deserializer::<serde::de::value::Error>::new(value);
+            assert!(MaxDepth::deserialize(deserializer).is_err());
         }
     }
 }

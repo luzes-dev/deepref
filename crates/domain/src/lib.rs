@@ -5,18 +5,18 @@ use uuid::Uuid;
 pub mod acquisition;
 pub mod bibliography;
 pub mod documents;
-pub mod protocol;
 pub mod events;
 pub mod graph;
-pub mod jobs;
 mod ingestion;
+pub mod jobs;
+pub mod protocol;
 mod reference;
 mod work;
 
 pub use ingestion::{IngestionItemStatus, IngestionStatus};
+pub use jobs::{InvalidJobKind, JobKind};
 pub use reference::Reference;
 pub use work::{FetchStatus, Work, WorkWithReferences};
-pub use jobs::{InvalidJobKind, JobKind};
 
 pub use acquisition::{AcquisitionRunId, AcquisitionSource, AcquisitionStatus, ImportFormat};
 pub use bibliography::{
@@ -374,7 +374,11 @@ mod tests {
         for stage in [ScreeningStage::TitleAbstract, ScreeningStage::FullText] {
             assert_eq!(ScreeningStage::parse(stage.as_str()), Some(stage));
         }
-        for decision in [ScreeningDecision::Include, ScreeningDecision::Exclude, ScreeningDecision::Maybe] {
+        for decision in [
+            ScreeningDecision::Include,
+            ScreeningDecision::Exclude,
+            ScreeningDecision::Maybe,
+        ] {
             assert_eq!(ScreeningDecision::parse(decision.as_str()), Some(decision));
         }
         for status in [

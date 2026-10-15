@@ -1,4 +1,9 @@
-use std::{collections::BTreeMap, fmt, path::{Path, PathBuf}, process::Command};
+use std::{
+    collections::BTreeMap,
+    fmt,
+    path::{Path, PathBuf},
+    process::Command,
+};
 
 use anyhow::{Context, Result, bail};
 use serde::Deserialize;
@@ -28,21 +33,15 @@ impl fmt::Display for Layer {
 impl Layer {
     fn permits(self, target: Self) -> bool {
         use Layer::{
-            Adapter, Ai, Application, Composition, Configuration, Domain, Http,
-            Persistence, Review, Tooling, Worker,
+            Adapter, Ai, Application, Composition, Configuration, Domain, Http, Persistence,
+            Review, Tooling, Worker,
         };
         match self {
             Domain | Configuration => false,
             Application | Ai => target == Domain,
             Review => matches!(target, Ai | Application | Domain),
-            Adapter => matches!(
-                target,
-                Adapter | Application | Configuration | Domain
-            ),
-            Persistence => matches!(
-                target,
-                Ai | Application | Adapter | Domain | Review
-            ),
+            Adapter => matches!(target, Adapter | Application | Configuration | Domain),
+            Persistence => matches!(target, Ai | Application | Adapter | Domain | Review),
             Http | Worker => !matches!(target, Http | Worker | Composition | Tooling),
             Composition => !matches!(target, Composition | Tooling),
             Tooling => true,
@@ -172,9 +171,14 @@ pub fn run() -> Result<()> {
 /// subject to a blanket source-level infrastructure prohibition.
 fn validate_runtime_configuration(root: &Path, errors: &mut Vec<String>) -> Result<()> {
     for relative in [
-        "apps/server/src", "services/worker/src", "crates/http-api/src",
-        "crates/ai/src", "crates/documents/src", "crates/integrations/src",
-        "crates/telemetry/src", "crates/postgres/src/workflows.rs",
+        "apps/server/src",
+        "services/worker/src",
+        "crates/http-api/src",
+        "crates/ai/src",
+        "crates/documents/src",
+        "crates/integrations/src",
+        "crates/telemetry/src",
+        "crates/postgres/src/workflows.rs",
     ] {
         inspect_runtime_source(&root.join(relative), root, errors)?;
     }
@@ -184,7 +188,8 @@ fn validate_runtime_configuration(root: &Path, errors: &mut Vec<String>) -> Resu
 fn inspect_runtime_source(path: &Path, root: &Path, errors: &mut Vec<String>) -> Result<()> {
     if path.is_dir() {
         for entry in std::fs::read_dir(path)
-            .with_context(|| format!("could not inspect {}", path.display()))? {
+            .with_context(|| format!("could not inspect {}", path.display()))?
+        {
             inspect_runtime_source(&entry?.path(), root, errors)?;
         }
     } else if path.extension().is_some_and(|extension| extension == "rs") {
@@ -203,9 +208,13 @@ fn inspect_runtime_source(path: &Path, root: &Path, errors: &mut Vec<String>) ->
 }
 
 fn reads_runtime_environment(source: &str) -> bool {
-    let compact: String = source.chars().filter(|character| !character.is_whitespace()).collect();
+    let compact: String = source
+        .chars()
+        .filter(|character| !character.is_whitespace())
+        .collect();
     ["env::var(", "env::var_os(", "env::vars(", "env::vars_os("]
-        .iter().any(|pattern| compact.contains(pattern))
+        .iter()
+        .any(|pattern| compact.contains(pattern))
 }
 
 fn validate_workspace_dependency(
@@ -353,6 +362,8 @@ mod tests {
     fn runtime_config_guard_leaves_process_and_fixture_inputs_distinct() {
         assert!(!reads_runtime_environment("std::env::args().skip(1)"));
         assert!(!reads_runtime_environment("std::env::temp_dir()"));
-        assert!(!reads_runtime_environment("RuntimeConfig::from_source(get)?"));
+        assert!(!reads_runtime_environment(
+            "RuntimeConfig::from_source(get)?"
+        ));
     }
 }

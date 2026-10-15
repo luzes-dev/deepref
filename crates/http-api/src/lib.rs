@@ -36,7 +36,9 @@ pub async fn serve_with_shutdown(
     let pool = database_pool(&config).await?;
 
     let document_store = deepref_documents::DocumentStore::from_config(&config.documents)?;
-    let mut state = AppState::new(pool.clone()).with_document_store(document_store).with_smtp(config.runtime.smtp.clone());
+    let mut state = AppState::new(pool.clone())
+        .with_document_store(document_store)
+        .with_smtp(config.runtime.smtp.clone());
     let ai_config = &config.runtime.ai;
     for notice in ai_config.deprecations() {
         tracing::warn!("{notice}");

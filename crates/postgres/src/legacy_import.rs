@@ -214,8 +214,9 @@ async fn import_in_transaction(
     .fetch_all(&mut **transaction)
     .await?;
     for row in item_rows {
-        let status = deepref_domain::IngestionItemStatus::try_from(row.try_get::<&str, _>("status")?)
-            .map_err(anyhow::Error::msg)?;
+        let status =
+            deepref_domain::IngestionItemStatus::try_from(row.try_get::<&str, _>("status")?)
+                .map_err(anyhow::Error::msg)?;
         let ingestion_id: Uuid = row.get("ingestion_id");
         let project_id: Uuid = row.get("project_id");
         let doi: String = row.get("canonical_doi");

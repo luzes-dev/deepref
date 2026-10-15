@@ -264,7 +264,11 @@
 		return () => clearInterval(timer);
 	});
 
-	async function resolvePlan(turn: ChatTurn, action: 'confirm' | 'cancel', deselected: AssistantPlanDeselection[] = []): Promise<void> {
+	async function resolvePlan(
+		turn: ChatTurn,
+		action: 'confirm' | 'cancel',
+		deselected: AssistantPlanDeselection[] = []
+	): Promise<void> {
 		if (turn.kind !== 'assistant' || !turn.plan || turn.planBusy) return;
 		const plan = turn.plan;
 		turn.planBusy = true;
@@ -698,7 +702,8 @@
 												plan={turn.plan}
 												busy={turn.planBusy}
 												error={turn.planError}
-												onconfirm={(deselected) => void resolvePlan(turn, 'confirm', deselected)}
+												onconfirm={(deselected) =>
+													void resolvePlan(turn, 'confirm', deselected)}
 												oncancel={() => void resolvePlan(turn, 'cancel')}
 											/>
 										{:else if turn.planError}

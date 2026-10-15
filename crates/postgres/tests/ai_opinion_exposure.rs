@@ -549,7 +549,10 @@ async fn resolving_needs_a_decision_and_keeps_the_time_it_replaced() {
     .await
     .expect("resolution");
     assert_eq!(settled.status, deepref_review::ReviewerStatus::Resolved);
-    assert_eq!(settled.resolution, Some(deepref_review::ReviewerResolution::AdoptedAi));
+    assert_eq!(
+        settled.resolution,
+        Some(deepref_review::ReviewerResolution::AdoptedAi)
+    );
 
     let replaced_at: Option<DateTime<Utc>> = sqlx::query_scalar(
         "SELECT human_decision_before_at FROM ai_reviewer_decisions WHERE id=$1",

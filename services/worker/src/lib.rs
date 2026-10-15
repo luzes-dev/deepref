@@ -146,7 +146,13 @@ pub async fn run_with_shutdown(
         claim_lease: config.claim_lease,
         drain_deadline: config.runtime.telemetry.shutdown_deadline,
     };
-    let handler = production_handler(pool.clone(), config.claim_lease, document_store, ai_gateway, Arc::new(config.clone()));
+    let handler = production_handler(
+        pool.clone(),
+        config.claim_lease,
+        document_store,
+        ai_gateway,
+        Arc::new(config.clone()),
+    );
     let loop_shutdown = {
         let reconciler_shutdown = reconciler_shutdown.clone();
         async move {
@@ -588,7 +594,7 @@ mod lease_deadline_tests {
         let started = tokio::time::Instant::now();
         let result = run_with_lease_renewal(
             Duration::from_millis(300),
-            || std::future::pending::<anyhow::Result<bool>>(),
+            std::future::pending::<anyhow::Result<bool>>,
             std::future::pending::<anyhow::Result<DeliveryAction>>(),
         )
         .await;
@@ -609,6 +615,11 @@ mod lease_deadline_tests {
         };
         let lease = job.lease("test-worker".to_owned());
         let result = run_isolated(async move { handler(job, lease).await }).await;
-        assert!(result.unwrap_err().to_string().contains("handler construction failed"));
+        assert!(
+            result
+                .unwrap_err()
+                .to_string()
+                .contains("handler construction failed")
+        );
     }
 }

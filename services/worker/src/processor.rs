@@ -1,19 +1,18 @@
-use std::{
-    sync::Arc,
-    time::Duration,
-};
+use std::{sync::Arc, time::Duration};
 
 use deepref_ai::{
     AiExecutionContext, AiGateway, AiTaskRunner, ProposalPersistence, ProviderEndpoint,
     SystemClock, UuidProvider,
 };
 use deepref_application::jobs::JobLease;
-use deepref_domain::{IngestionItemStatus, normalize_doi};
 use deepref_documents::{
     DocumentParser, DocumentStore, HttpsPdfFetcher, PARSER_VERSION, PdfiumParser,
     RemoteDocumentFetcher,
 };
-use deepref_domain::events::{DeadLetterRecord, EventEnvelope, WorkFetchRequested, deserialize_compatible};
+use deepref_domain::events::{
+    DeadLetterRecord, EventEnvelope, WorkFetchRequested, deserialize_compatible,
+};
+use deepref_domain::{IngestionItemStatus, normalize_doi};
 use deepref_integrations::CrossrefClient;
 use deepref_integrations::CrossrefError;
 use deepref_review::worker::{
@@ -30,7 +29,6 @@ use crate::{
     delivery::{DeliveryAction, FailureClass, action_for},
     limiter, store,
 };
-
 
 async fn parse_work_fetch_event(
     pool: &PgPool,
@@ -146,22 +144,23 @@ async fn execute_work_fetch(
     config: &crate::config::WorkerConfig,
 ) -> anyhow::Result<DeliveryAction> {
     let settings = store::load_runtime_settings(&pool).await?;
-    let client = match CrossrefClient::new(settings.crossref_mailto.clone(), &config.runtime.crossref) {
-        Ok(client) => client.with_max_attempts(settings.retry_attempts),
-        Err(error) => {
-            store::finalize_terminal_failure(
-                &pool,
-                event,
-                doi,
-                owner,
-                IngestionItemStatus::Failed,
-                &error.to_string(),
-                None,
-            )
-            .await?;
-            return Ok(DeliveryAction::Ack);
-        }
-    };
+    let client =
+        match CrossrefClient::new(settings.crossref_mailto.clone(), &config.runtime.crossref) {
+            Ok(client) => client.with_max_attempts(settings.retry_attempts),
+            Err(error) => {
+                store::finalize_terminal_failure(
+                    &pool,
+                    event,
+                    doi,
+                    owner,
+                    IngestionItemStatus::Failed,
+                    &error.to_string(),
+                    None,
+                )
+                .await?;
+                return Ok(DeliveryAction::Ack);
+            }
+        };
     limiter::acquire(&pool, "crossref", settings.rate_limit_per_second).await?;
     let (cancel_heartbeat, heartbeat_done) = spawn_heartbeat(
         pool.clone(),
@@ -588,18 +587,22 @@ async fn handle_parse_document_job(
         .acquire_owned()
         .await
         .map_err(|error| anyhow::anyhow!("PDF parser concurrency limiter closed: {error}"))?;
-    let parsed =
-        match parse_stored_document(&document, object_key, Arc::clone(&store), document_parser, &config.runtime.pdf)
-            .await
-        {
-            Ok(parsed) => parsed,
-            Err(error) => {
-                drop(parse_permit);
-                deepref_postgres::mark_document_failed(pool, document_id, &error.to_string())
-                    .await?;
-                return Err(error);
-            }
-        };
+    let parsed = match parse_stored_document(
+        &document,
+        object_key,
+        Arc::clone(&store),
+        document_parser,
+        &config.runtime.pdf,
+    )
+    .await
+    {
+        Ok(parsed) => parsed,
+        Err(error) => {
+            drop(parse_permit);
+            deepref_postgres::mark_document_failed(pool, document_id, &error.to_string()).await?;
+            return Err(error);
+        }
+    };
     drop(parse_permit);
     let (structure, parser_version, header) =
         grobid_enrichment(document_id, object_key, &store, &parsed, config).await;
@@ -732,7 +735,8 @@ async fn handle_recompute_metrics_job(
     pool: &sqlx::PgPool,
     payload: serde_json::Value,
 ) -> anyhow::Result<DeliveryAction> {
-    let event: EventEnvelope<deepref_domain::events::DomainPayload> = serde_json::from_value(payload)?;
+    let event: EventEnvelope<deepref_domain::events::DomainPayload> =
+        serde_json::from_value(payload)?;
     let project_id = match event.payload {
         deepref_domain::events::DomainPayload::MetricsRecomputeRequested(p) => p.project_id,
         _ => anyhow::bail!("recompute_metrics job has an unsupported payload"),
@@ -792,7 +796,9 @@ async fn handle_job_with_document_services_inner(
             let bytes = serde_json::to_vec(&job.payload)?;
             handle_message(pool, bytes, job.attempts.max(1) as u64, claim_lease, config).await
         }
-        deepref_domain::JobKind::RecomputeMetrics => handle_recompute_metrics_job(&pool, job.payload.clone()).await,
+        deepref_domain::JobKind::RecomputeMetrics => {
+            handle_recompute_metrics_job(&pool, job.payload.clone()).await
+        }
         deepref_domain::JobKind::ImportDeduplication => {
             handle_import_deduplication_job(&pool, job.payload.clone()).await
         }
@@ -815,13 +821,20 @@ async fn handle_job_with_document_services_inner(
             let lease = lease.ok_or_else(|| {
                 anyhow::anyhow!("assistant job processing requires its lease owner")
             })?;
-            crate::assistant::handle_assistant_agent_run(&pool, job, &lease.owner, &config.runtime.ai).await
+            crate::assistant::handle_assistant_agent_run(
+                &pool,
+                job,
+                &lease.owner,
+                &config.runtime.ai,
+            )
+            .await
         }
         deepref_domain::JobKind::WorkflowStep => {
             let lease = lease.ok_or_else(|| {
                 anyhow::anyhow!("workflow step processing requires its job lease")
             })?;
-            crate::workflows::handle_step(&pool, job, lease, ai_gateway.clone(), &config.runtime).await
+            crate::workflows::handle_step(&pool, job, lease, ai_gateway.clone(), &config.runtime)
+                .await
         }
         deepref_domain::JobKind::RecomputePrisma => Ok(DeliveryAction::Ack),
         deepref_domain::JobKind::RetrieveDocument => {
@@ -1742,7 +1755,6 @@ fn bounded_message(message: &str, max_bytes: usize) -> String {
     }
     message.get(..end).unwrap_or("").to_owned()
 }
-
 
 async fn parse_stored_document(
     document: &deepref_postgres::DocumentRecord,

@@ -387,9 +387,9 @@ fn report_value(report: crate::AgentReportRecord, abstract_limit: usize) -> Valu
     });
     if let Some(documents) = report.documents {
         // Full text exists only when a document has been parsed (status available).
-        let full_text_available = documents
-            .iter()
-            .any(|document| document.status == deepref_domain::documents::DocumentStatus::Available);
+        let full_text_available = documents.iter().any(|document| {
+            document.status == deepref_domain::documents::DocumentStatus::Available
+        });
         value["full_text_available"] = json!(full_text_available);
         value["documents"] = json!(documents);
     }

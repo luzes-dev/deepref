@@ -1,13 +1,15 @@
 use std::time::Duration;
 
 use deepref_application::AutomationDomainEvent;
-use deepref_domain::{AcquisitionStatus, IngestionItemStatus, IngestionStatus, Reference, WorkWithReferences};
 use deepref_domain::events::{
     CitationUpserted, DeadLetterRecord, DomainPayload, EntityType, EventEnvelope,
     MetricsRecomputeRequested, ProjectMembershipUpserted, SUBJECT_CITATION_UPSERTED, SUBJECT_DLQ,
     SUBJECT_METRICS_RECOMPUTE_REQUESTED, SUBJECT_PROJECT_MEMBERSHIP_UPSERTED,
     SUBJECT_UNRESOLVED_REFERENCE_UPSERTED, SUBJECT_WORK_FETCH_REQUESTED, SUBJECT_WORK_UPSERTED,
     UnresolvedReferenceUpserted, WorkFetchRequested, WorkUpserted, deterministic_event_id,
+};
+use deepref_domain::{
+    AcquisitionStatus, IngestionItemStatus, IngestionStatus, Reference, WorkWithReferences,
 };
 use sqlx::{PgPool, Postgres, Row, Transaction};
 use uuid::Uuid;
@@ -948,7 +950,9 @@ async fn complete_item_and_claim(
     .fetch_one(&mut **tx)
     .await?;
     let previous_acquisition_status = AcquisitionStatus::parse(&previous_acquisition_status)
-        .ok_or_else(|| anyhow::anyhow!("unknown stored acquisition status {previous_acquisition_status}"))?;
+        .ok_or_else(|| {
+            anyhow::anyhow!("unknown stored acquisition status {previous_acquisition_status}")
+        })?;
     let (acquisition_status, fetched_count, failed_count) = sqlx::query_as::<_, (String, i32, i32)>(
         r#"UPDATE acquisition_runs SET
         status = CASE WHEN status='cancelled' THEN status

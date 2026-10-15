@@ -1,7 +1,7 @@
 mod model;
-mod references;
 mod projection;
+mod references;
 
 pub use model::*;
-pub use references::unresolved_reference_id;
 pub use projection::{InvalidProjectionState, ProjectionState};
+pub use references::unresolved_reference_id;

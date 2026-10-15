@@ -130,8 +130,12 @@ async fn seed_and_assert(
     }
 
     recompute_project_metrics(pool, project_id).await?;
-    let graph =
-        load_project_graph(pool, project_id, deepref_domain::graph::GraphFieldSelection::all()).await?;
+    let graph = load_project_graph(
+        pool,
+        project_id,
+        deepref_domain::graph::GraphFieldSelection::all(),
+    )
+    .await?;
 
     ensure!(graph.nodes.len() == 3, "expected three project nodes");
     let mut expected_edges = vec![

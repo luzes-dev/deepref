@@ -181,13 +181,19 @@ async fn compiled_worker_quarantines_only_eligible_exclusions_without_scientific
             break;
         };
         assert_eq!(job.project_id.as_uuid(), project);
-        let action = handle_job_with_documents_owned_and_ai(pool.clone(),
-        &job,
-        &job.lease(worker),
-        Duration::from_secs(60),
-        None,
-        None,
-        gateway.clone(), &deepref_worker::config::WorkerConfig::from_source(&|name| (name == "APP_ENV").then(|| "local".into())).expect("local worker configuration"))
+        let action = handle_job_with_documents_owned_and_ai(
+            pool.clone(),
+            &job,
+            &job.lease(worker),
+            Duration::from_secs(60),
+            None,
+            None,
+            gateway.clone(),
+            &deepref_worker::config::WorkerConfig::from_source(&|name| {
+                (name == "APP_ENV").then(|| "local".into())
+            })
+            .expect("local worker configuration"),
+        )
         .await
         .unwrap();
         assert_eq!(action, DeliveryAction::Ack);

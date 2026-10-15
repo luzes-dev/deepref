@@ -162,6 +162,7 @@ pub(crate) struct DocumentLimit {
 pub(crate) struct BlockQuery {
     pub q: Option<String>,
     pub limit: Option<i64>,
+    pub cursor: Option<String>,
 }
 
 #[derive(Debug, Deserialize, utoipa::IntoParams)]
@@ -356,44 +357,43 @@ pub(crate) async fn get_document(
     operation_id = "listDocumentBlocks",
     tag = "documents",
     params(("project_id" = Uuid, Path), ("report_id" = Uuid, Path), ("document_id" = Uuid, Path), BlockQuery),
-    responses((status = 200, body = Vec<DocumentBlockDto>), (status = 404, body = ErrorResponse), (status = 500, body = ErrorResponse))
+    responses((status = 200, body = super::pagination::PaginatedResponse<DocumentBlockDto>), (status = 400, body = ErrorResponse), (status = 404, body = ErrorResponse), (status = 500, body = ErrorResponse))
 )]
 pub(crate) async fn list_document_blocks(
     State(state): State<AppState>,
     Path((project_id, report_id, document_id)): Path<(Uuid, Uuid, Uuid)>,
     Query(query): Query<BlockQuery>,
-) -> Result<Json<Vec<DocumentBlockDto>>, ApiError> {
+) -> Result<Json<super::pagination::PaginatedResponse<DocumentBlockDto>>, ApiError> {
     deepref_postgres::get_document(&state.pool, project_id, report_id, document_id)
         .await
         .map_err(map_database_document_error)?;
-    let blocks = match query
+    let pagination = super::pagination::PaginationParams {
+        limit: query.limit,
+        cursor: query.cursor,
+    };
+    let limit = pagination.limit()?;
+    let cursor = pagination.decode::<(i32, i32, Uuid)>()?;
+    let search = query
         .q
         .as_deref()
         .map(str::trim)
-        .filter(|query| !query.is_empty())
-    {
-        Some(search) => {
-            if search.len() > 200 {
-                return Err(ApiError::BadRequest(
-                    "block search must be at most 200 bytes".to_owned(),
-                ));
-            }
-            deepref_postgres::search_document_blocks(
-                &state.pool,
-                project_id,
-                report_id,
-                document_id,
-                search,
-                bounded_limit(query.limit)?,
-            )
-            .await?
-        }
-        None => {
-            deepref_postgres::get_document_blocks(&state.pool, project_id, report_id, document_id)
-                .await?
-        }
-    };
-    Ok(Json(
+        .filter(|value| !value.is_empty());
+    if search.is_some_and(|value| value.len() > 200) {
+        return Err(ApiError::BadRequest(
+            "block search must be at most 200 bytes".to_owned(),
+        ));
+    }
+    let blocks = deepref_postgres::get_document_blocks_page(
+        &state.pool,
+        project_id,
+        report_id,
+        document_id,
+        cursor,
+        Some(limit + 1),
+        search,
+    )
+    .await?;
+    Ok(Json(super::pagination::page(
         blocks
             .into_iter()
             .map(|block| DocumentBlockDto {
@@ -412,7 +412,9 @@ pub(crate) async fn list_document_blocks(
                 content_hash: block.content_hash,
             })
             .collect(),
-    ))
+        limit as usize,
+        |block: &DocumentBlockDto| (block.page_number, block.ordinal, block.id),
+    )?))
 }
 
 #[utoipa::path(

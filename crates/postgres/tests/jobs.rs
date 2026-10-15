@@ -17,7 +17,12 @@ async fn database() -> Option<PgPool> {
     deepref_postgres::test_isolation::isolated_pool_from_env("DATABASE_URL", 8).await
 }
 
-fn fixture_job(project_id: ProjectId, id: Uuid, kind: deepref_domain::JobKind, dedupe_key: String) -> EnqueueJob {
+fn fixture_job(
+    project_id: ProjectId,
+    id: Uuid,
+    kind: deepref_domain::JobKind,
+    dedupe_key: String,
+) -> EnqueueJob {
     job(
         id,
         project_id,

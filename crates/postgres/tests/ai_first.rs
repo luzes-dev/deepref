@@ -931,7 +931,6 @@ async fn disable_routes(pool: &PgPool) {
 
 /// A newer route for the screening profile changes the semantic identity.
 async fn change_route(pool: &PgPool) {
-    let lock = route_fixture_lock(pool).await;
     insert_model_route(
         pool,
         &ResolvedModel {
@@ -946,7 +945,6 @@ async fn change_route(pool: &PgPool) {
     )
     .await
     .unwrap();
-    lock.commit().await.unwrap();
 }
 
 #[tokio::test]
@@ -1001,7 +999,10 @@ async fn identity_database_failure_rolls_back_without_aborting_the_sweep() {
         .execute(&f.pool)
         .await
         .unwrap();
-    assert!(result.is_ok(), "an unknown identity skips the cohort, not the sweep");
+    assert!(
+        result.is_ok(),
+        "an unknown identity skips the cohort, not the sweep"
+    );
     assert_eq!(f.status().await, "open");
     assert_eq!(f.quarantined().await, 40);
     assert_eq!(f.suspended_reason().await, None);

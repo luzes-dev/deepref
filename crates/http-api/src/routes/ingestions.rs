@@ -35,8 +35,9 @@ struct ValidatedIngestion {
 
 impl CreateIngestion {
     fn validate(self) -> Result<ValidatedIngestion, ApiError> {
-        if self.max_depth.is_some_and(|value| value < 0) {
-            return Err(ApiError::BadRequest("max_depth must be >= 0".to_owned()));
+        if let Some(value) = self.max_depth {
+            deepref_domain::acquisition::MaxDepth::try_from(value)
+                .map_err(|message| ApiError::BadRequest(message.to_owned()))?;
         }
         let metadata_provider = self
             .metadata_provider
@@ -199,7 +200,10 @@ pub(crate) async fn list_ingestions(
     .bind(limit + 1)
     .fetch_all(&state.pool)
     .await?;
-    let items = rows.into_iter().map(ingestion_from_row).collect::<Result<Vec<_>, _>>()?;
+    let items = rows
+        .into_iter()
+        .map(ingestion_from_row)
+        .collect::<Result<Vec<_>, _>>()?;
     Ok(Json(page(items, limit as usize, |item| {
         (item.created_at, item.id)
     })?))
@@ -242,6 +246,8 @@ pub(crate) async fn get_ingestion(
     params(("ingestion_id" = Uuid, Path, description = "Ingestion identifier")),
     responses(
         (status = 202, description = "Cancellation accepted"),
+        (status = 404, description = "Ingestion not found", body = ErrorResponse),
+        (status = 409, description = "Ingestion is no longer cancellable", body = ErrorResponse),
         (status = 500, description = "Internal server error", body = ErrorResponse)
     )
 )]
@@ -249,11 +255,26 @@ pub(crate) async fn cancel_ingestion(
     State(state): State<AppState>,
     Path(ingestion_id): Path<Uuid>,
 ) -> Result<StatusCode, ApiError> {
+    let mut transaction = state.pool.begin().await?;
+    let status: Option<String> =
+        sqlx::query_scalar("SELECT status FROM ingestions WHERE id = $1 FOR UPDATE")
+            .bind(ingestion_id)
+            .fetch_optional(&mut *transaction)
+            .await?;
+    let status = status.ok_or_else(|| ApiError::NotFound("ingestion not found".to_owned()))?;
+    if status != "queued" && status != "running" {
+        return Err(ApiError::Conflict {
+            code: "INGESTION_NOT_CANCELLABLE".to_owned(),
+            message: "only queued or running ingestions can be cancelled".to_owned(),
+            details: serde_json::json!({ "status": status }),
+        });
+    }
     sqlx::query("UPDATE ingestions SET status = $2, completed_at = now() WHERE id = $1")
         .bind(ingestion_id)
         .bind(IngestionStatus::Cancelled.as_str())
-        .execute(&state.pool)
+        .execute(&mut *transaction)
         .await?;
+    transaction.commit().await?;
     Ok(StatusCode::ACCEPTED)
 }
 
@@ -289,7 +310,10 @@ pub(crate) async fn list_ingestion_items(
     .bind(limit + 1)
     .fetch_all(&state.pool)
     .await?;
-    let items = rows.into_iter().map(ingestion_item_from_row).collect::<Result<Vec<_>, _>>()?;
+    let items = rows
+        .into_iter()
+        .map(ingestion_item_from_row)
+        .collect::<Result<Vec<_>, _>>()?;
     Ok(Json(page(items, limit as usize, |item| {
         (item.queued_at, item.doi.clone())
     })?))
@@ -322,7 +346,9 @@ pub(crate) fn ingestion_from_row(row: sqlx::postgres::PgRow) -> Result<Ingestion
     })
 }
 
-pub(crate) fn ingestion_item_from_row(row: sqlx::postgres::PgRow) -> Result<IngestionItemDto, ApiError> {
+pub(crate) fn ingestion_item_from_row(
+    row: sqlx::postgres::PgRow,
+) -> Result<IngestionItemDto, ApiError> {
     let raw_status: String = row.try_get("status")?;
     let status = IngestionItemStatus::try_from(raw_status.as_str())
         .map_err(|error| ApiError::Internal(anyhow::anyhow!(error)))?;

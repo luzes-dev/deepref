@@ -340,8 +340,16 @@ pub async fn independent_reviewer_pairs(
     for row in rows {
         let decode = |column: &str| -> Result<&str, sqlx::Error> { row.try_get(column) };
         let stage = crate::ai_reviewer::stored("stage", decode("stage")?, ScreeningStage::parse)?;
-        let human_decision = crate::ai_reviewer::stored("human_decision", decode("human_decision")?, ScreeningDecision::parse)?;
-        let ai_decision = crate::ai_reviewer::stored("ai_decision", decode("ai_decision")?, ScreeningDecision::parse)?;
+        let human_decision = crate::ai_reviewer::stored(
+            "human_decision",
+            decode("human_decision")?,
+            ScreeningDecision::parse,
+        )?;
+        let ai_decision = crate::ai_reviewer::stored(
+            "ai_decision",
+            decode("ai_decision")?,
+            ScreeningDecision::parse,
+        )?;
         if row.get::<bool, _>("unverifiable") {
             pairs.unverifiable_excluded += 1;
         } else if row.get::<bool, _>("exposed") {

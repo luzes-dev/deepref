@@ -12,12 +12,11 @@ use deepref_domain::{
     Actor, ActorKind, CriterionDimension, CriterionKind, CriterionStage, FrameworkKind, ProjectId,
 };
 use deepref_postgres::{
-    NewReviewerDecision, ProtocolActor, ReviewCalibrationBundleInput,
-    SecondReviewStatus, block_review_run, fail_review_run, insert_model_route,
-    insert_review_calibration_bundle, insert_reviewer_decision_in_transaction,
-    list_reviewer_decisions, preview_screening_identity, publish_protocol,
-    save_protocol_draft, schedule_screening_review, second_review_status, set_autonomy_level,
-    sweep_second_reviews,
+    NewReviewerDecision, ProtocolActor, ReviewCalibrationBundleInput, SecondReviewStatus,
+    block_review_run, fail_review_run, insert_model_route, insert_review_calibration_bundle,
+    insert_reviewer_decision_in_transaction, list_reviewer_decisions, preview_screening_identity,
+    publish_protocol, save_protocol_draft, schedule_screening_review, second_review_status,
+    set_autonomy_level, sweep_second_reviews,
 };
 use deepref_review::{
     CalibrationBundleId, ContentDigest, ProtocolDigest, ReviewBlockCode, ReviewDefinitionKey,
@@ -363,7 +362,6 @@ async fn age_finished_runs(pool: &PgPool, project_id: Uuid) {
 #[tokio::test]
 async fn a_failed_or_blocked_advisory_run_is_retried_after_a_backoff_a_bounded_number_of_times() {
     let Some(pool) = database().await else { return };
-    let _turn = sweep_turn(&pool).await;
     screening_routes(&pool).await;
     let project_id = project(&pool).await;
     publish_protocol_for(&pool, project_id).await;

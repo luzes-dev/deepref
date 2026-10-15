@@ -110,11 +110,11 @@ pub use assistant_plans::{
     snapshot_screening_plan_items, update_assistant_plan_results,
 };
 pub use assistant_runs::{
-    AssistantAgentRunRecord,
-    AssistantRunEventRecord, ClaimedAssistantAgentRun, CompletedAssistantAgentRun,
-    NewAssistantAgentRun, append_assistant_run_event, begin_assistant_agent_run,
-    complete_assistant_agent_run, create_assistant_agent_run, fail_assistant_agent_run,
-    get_assistant_agent_run, list_assistant_run_events, submit_assistant_agent_run,
+    AssistantAgentRunRecord, AssistantRunEventRecord, ClaimedAssistantAgentRun,
+    CompletedAssistantAgentRun, NewAssistantAgentRun, append_assistant_run_event,
+    begin_assistant_agent_run, complete_assistant_agent_run, create_assistant_agent_run,
+    fail_assistant_agent_run, get_assistant_agent_run, list_assistant_run_events,
+    submit_assistant_agent_run,
 };
 pub use audit_export::{AuditExportRow, load_audit_export_rows};
 pub use automations::{
@@ -130,8 +130,8 @@ pub use autonomy::{
 };
 pub use deduplication::{
     DedupeError, DedupeProposal, DedupeProposalCursor, DedupeRunRequest, DedupeRunSummary,
-    ProposalDecisionRequest, ResolutionResult, decide_proposal,
-    enqueue_import_deduplication, list_proposals, resolve_record, run_deduplication,
+    ProposalDecisionRequest, ResolutionResult, decide_proposal, enqueue_import_deduplication,
+    list_proposals, resolve_record, run_deduplication,
 };
 pub use documents::{
     CompleteDocumentRetrievalOutcome, DocumentBlockRecord, DocumentPageRecord, DocumentRecord,
@@ -139,12 +139,13 @@ pub use documents::{
     FullTextQueueRecord, MissingFullTextRecord, NewDocument, NewDocumentReference,
     NewDocumentSection, acknowledge_identity_mismatch, complete_document_retrieval,
     create_document, delete_document, enqueue_parse, enqueue_retrieve,
-    find_failed_document_by_hash, get_document, get_document_blocks, get_document_by_id,
-    get_document_pages, insert_document_blocks, list_document_references, list_document_sections,
-    list_documents, list_full_text_queue, list_full_text_reasons, list_missing_full_text,
-    mark_document_failed, mark_document_parsing, mark_document_retrieval_failed,
-    mark_document_retrieving, persist_parsed_document, persist_parsed_document_with_structure,
-    record_identity_check, report_identity, requeue_document_processing, search_document_blocks,
+    find_failed_document_by_hash, get_document, get_document_blocks, get_document_blocks_page,
+    get_document_by_id, get_document_pages, insert_document_blocks, list_document_references,
+    list_document_sections, list_documents, list_full_text_queue, list_full_text_reasons,
+    list_missing_full_text, mark_document_failed, mark_document_parsing,
+    mark_document_retrieval_failed, mark_document_retrieving, persist_parsed_document,
+    persist_parsed_document_with_structure, record_identity_check, report_identity,
+    requeue_document_processing, search_document_blocks,
 };
 pub use extraction::{
     ExtractionApplyOptions, ExtractionApplyOutcome, ExtractionError, ExtractionFieldUpdate,
@@ -171,10 +172,9 @@ pub use persistence::{
     with_retry,
 };
 pub use pmid_import::{
-    PMID_IMPORT_SOURCE, PMID_IMPORT_STRATEGY, PmidImportRequest,
-    PmidImportResult, PmidItemStatus, PmidOutcome, PmidRun, PmidRunCounts, complete_pmid_run,
-    create_pmid_import, load_pmid_run, pmid_run_counts, pmids_in_project, queued_pmids,
-    save_pmid_outcomes, start_pmid_run,
+    PMID_IMPORT_SOURCE, PMID_IMPORT_STRATEGY, PmidImportRequest, PmidImportResult, PmidItemStatus,
+    PmidOutcome, PmidRun, PmidRunCounts, complete_pmid_run, create_pmid_import, load_pmid_run,
+    pmid_run_counts, pmids_in_project, queued_pmids, save_pmid_outcomes, start_pmid_run,
 };
 pub use prisma::{PrismaProjectionError, get_prisma_projection};
 pub use project_deletion::delete_project_in_transaction;

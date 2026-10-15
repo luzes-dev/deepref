@@ -1,11 +1,11 @@
 use std::time::Duration;
 
+use anyhow::Context;
 use deepref_application::{
     AutomationRunId,
     jobs::{ClaimedJob, EnqueueJob, JobLease, JobQueue, JobRetry},
 };
-use anyhow::Context;
-use deepref_domain::{JobKind, jobs::JobState, ProjectId};
+use deepref_domain::{JobKind, ProjectId, jobs::JobState};
 use serde_json::Value;
 use sqlx::{PgPool, Postgres, Row, Transaction};
 use uuid::Uuid;
@@ -81,9 +81,13 @@ pub async fn recover_expired_jobs(pool: &PgPool) -> anyhow::Result<u64> {
     .fetch_all(pool)
     .await?;
     for job in &recovered {
-        let kind = job.kind.parse::<JobKind>()
+        let kind = job
+            .kind
+            .parse::<JobKind>()
             .with_context(|| format!("invalid persisted kind for job {}", job.id))?;
-        let state = job.state.parse::<JobState>()
+        let state = job
+            .state
+            .parse::<JobState>()
             .with_context(|| format!("invalid persisted state for job {}", job.id))?;
         if state == JobState::Dead {
             tracing::error!(
@@ -125,13 +129,15 @@ pub async fn claim_job(
         Ok(ClaimedJob {
             id,
             project_id: ProjectId::new(row.try_get("project_id")?),
-            kind: kind.parse::<JobKind>()
+            kind: kind
+                .parse::<JobKind>()
                 .with_context(|| format!("invalid persisted kind for job {id}"))?,
             payload: row.try_get("payload")?,
             attempts: row.try_get("attempts")?,
             max_attempts: row.try_get("max_attempts")?,
         })
-    }).transpose()
+    })
+    .transpose()
 }
 
 /// Resolve the project for an owned automation job without exposing a

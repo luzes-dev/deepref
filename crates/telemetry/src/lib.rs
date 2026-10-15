@@ -40,7 +40,10 @@ fn build_otlp_provider(
         .with_resource(
             Resource::builder()
                 .with_service_name(service_name.to_owned())
-                .with_attributes([opentelemetry::KeyValue::new("service.version", build_sha.to_owned())])
+                .with_attributes([opentelemetry::KeyValue::new(
+                    "service.version",
+                    build_sha.to_owned(),
+                )])
                 .build(),
         )
         .build())
@@ -112,6 +115,6 @@ mod tests {
 
     #[test]
     fn invalid_otlp_endpoint_is_rejected_during_construction() {
-        assert!(build_otlp_provider("not a URI", "deepref").is_err());
+        assert!(build_otlp_provider("not a URI", "deepref", "test-sha").is_err());
     }
 }

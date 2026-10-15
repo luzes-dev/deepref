@@ -342,7 +342,11 @@ pub async fn execute(context: &Context<'_>) -> NodeResult {
         "integration.http_request" => {
             let data = input("data").cloned().unwrap_or(Value::Null);
             let method = cfg_str(config, "method").unwrap_or("POST").to_uppercase();
-            let url = render_template(cfg_str(config, "url").unwrap_or_default(), &data);
+            let url = deepref_application::workflows::conditions::render_url_template(
+                cfg_str(config, "url").unwrap_or_default(),
+                &data,
+            )
+            .map_err(NodeError::permanent)?;
             let body = cfg_str(config, "body").map(|text| render_template(text, &data));
             if execution.test_mode {
                 // Resolved the way a real call is, so a test fails where a real run would.
@@ -361,11 +365,11 @@ pub async fn execute(context: &Context<'_>) -> NodeResult {
                 .map(|(name, value)| (name.trim().to_owned(), render_template(value.trim(), &data)))
                 .filter(|(name, _)| !name.is_empty())
                 .collect();
-            if let Some(auth) = get_workflow_secret(
+            if let Some(auth) = deepref_postgres::get_workflow_http_secret(
                 context.pool,
                 execution.workflow_id,
                 &execution.node_id,
-                "auth",
+                &url,
             )
             .await?
             {
@@ -558,8 +562,11 @@ async fn import_identifiers(context: &Context<'_>) -> NodeResult {
     let mut records = Vec::new();
     let mut unresolved = 0usize;
     if !dois.is_empty() {
-        let provider = deepref_integrations::CrossrefClient::new(settings.crossref_mailto.clone(), &context.runtime.crossref)
-            .map_err(|_| NodeError::permanent("The Crossref connection could not be prepared."))?;
+        let provider = deepref_integrations::CrossrefClient::new(
+            settings.crossref_mailto.clone(),
+            &context.runtime.crossref,
+        )
+        .map_err(|_| NodeError::permanent("The Crossref connection could not be prepared."))?;
         for doi in &dois {
             match provider.fetch_work_with_references(doi).await {
                 Ok(work) => records.push(deepref_integrations::raw_record_from_crossref_work(work)),

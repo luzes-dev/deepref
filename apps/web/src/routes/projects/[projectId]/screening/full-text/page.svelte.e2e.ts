@@ -1,4 +1,5 @@
 import { expect, test, type Page } from '@playwright/test';
+import type { PaginatedResponseDocumentBlockDto } from '#lib/api/generated/models/index.js';
 
 const api = 'http://localhost:4173/api';
 const projectId = 'project-1';
@@ -252,20 +253,24 @@ async function installMocks(page: Page, options: { paginated?: boolean } = {}) {
 		),
 		(route) =>
 			route.fulfill({
-				json: [
-					{
-						id: 'block-1',
-						document_id: documentId,
-						parser_version: 'fixture-parser-v1',
-						page_number: 1,
-						kind: 'paragraph',
-						section_path: [],
-						ordinal: 1,
-						text: 'Evidence text',
-						content_hash: 'block-hash',
-						bbox: { x: 0.1, y: 0.2, width: 0.4, height: 0.1 }
-					}
-				]
+				json: {
+					items: [
+						{
+							id: 'block-1',
+							document_id: documentId,
+							parser_version: 'fixture-parser-v1',
+							page_number: 1,
+							page_ocr_required: false,
+							kind: 'paragraph',
+							section_path: [],
+							ordinal: 1,
+							text: 'Evidence text',
+							content_hash: 'block-hash',
+							bbox: { x: 0.1, y: 0.2, width: 0.4, height: 0.1 }
+						}
+					],
+					next_cursor: null
+				} satisfies PaginatedResponseDocumentBlockDto
 			})
 	);
 	await page.route(

@@ -675,8 +675,9 @@ pub async fn list_agent_reports_by_screening(
             .map(|row| {
                 let status = deepref_domain::ScreeningStatus::parse(row.try_get("status")?)
                     .ok_or(AgentReadError::InvalidData)?;
-                let final_status = deepref_domain::ScreeningStatus::parse(row.try_get("final_status")?)
-                    .ok_or(AgentReadError::InvalidData)?;
+                let final_status =
+                    deepref_domain::ScreeningStatus::parse(row.try_get("final_status")?)
+                        .ok_or(AgentReadError::InvalidData)?;
                 Ok(serde_json::json!({
                     "report_id": row.get::<Uuid, _>("id"),
                     "title": decoded(row.get::<Option<String>, _>("title")),

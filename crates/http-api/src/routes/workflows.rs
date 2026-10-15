@@ -4,7 +4,7 @@
 
 use std::{
     collections::HashMap,
-    sync::{Mutex, OnceLock},
+    sync::{LazyLock, Mutex},
     time::{Duration, Instant},
 };
 
@@ -1467,28 +1467,47 @@ pub(crate) async fn download_workflow_file(
 
 struct RateWindow {
     started: Instant,
+    last_used: Instant,
     count: u32,
 }
 
-fn hook_allowed(token: &str) -> bool {
-    static WINDOWS: OnceLock<Mutex<HashMap<String, RateWindow>>> = OnceLock::new();
-    let windows = WINDOWS.get_or_init(|| Mutex::new(HashMap::new()));
-    let Ok(mut windows) = windows.lock() else {
-        return true;
+const MAX_HOOK_RATE_WINDOWS: usize = 10_000;
+type HookRateKey = (Uuid, &'static str);
+
+fn hook_allowed(key: HookRateKey) -> bool {
+    static WINDOWS: LazyLock<Mutex<HashMap<HookRateKey, RateWindow>>> =
+        LazyLock::new(|| Mutex::new(HashMap::new()));
+    let Ok(mut windows) = WINDOWS.lock() else {
+        return false;
     };
-    let now = Instant::now();
-    if windows.len() > 10_000 {
-        windows.retain(|_, window| now.duration_since(window.started) < Duration::from_secs(60));
+    hook_window_allowed(&mut windows, key, Instant::now())
+}
+
+fn hook_window_allowed(
+    windows: &mut HashMap<HookRateKey, RateWindow>,
+    key: HookRateKey,
+    now: Instant,
+) -> bool {
+    if !windows.contains_key(&key) && windows.len() >= MAX_HOOK_RATE_WINDOWS {
+        let oldest = windows
+            .iter()
+            .min_by_key(|(_, window)| window.last_used)
+            .map(|(key, _)| *key);
+        if let Some(oldest) = oldest {
+            windows.remove(&oldest);
+        }
     }
-    let window = windows.entry(token.to_owned()).or_insert(RateWindow {
+    let window = windows.entry(key).or_insert(RateWindow {
         started: now,
+        last_used: now,
         count: 0,
     });
     if now.duration_since(window.started) >= Duration::from_secs(60) {
         window.started = now;
         window.count = 0;
     }
-    window.count += 1;
+    window.last_used = now;
+    window.count = window.count.saturating_add(1);
     window.count <= HOOK_RATE_LIMIT_PER_MINUTE
 }
 
@@ -1596,9 +1615,6 @@ pub(crate) async fn receive_webhook(
     headers: HeaderMap,
     body: axum::body::Bytes,
 ) -> Result<Response, ApiError> {
-    if !hook_allowed(&token) {
-        return Ok(too_many_requests());
-    }
     if body.len() > MAX_HOOK_BODY_BYTES {
         return Err(ApiError::PayloadTooLarge(
             "The body is larger than 256 KB.".to_owned(),
@@ -1608,6 +1624,9 @@ pub(crate) async fn receive_webhook(
         .await
         .map_err(map_error)?
         .ok_or_else(|| ApiError::NotFound("unknown address".to_owned()))?;
+    if !hook_allowed((target.workflow_id, "webhook")) {
+        return Ok(too_many_requests());
+    }
     if target.signature_required {
         let signature = headers
             .get(SIGNATURE_HEADER)
@@ -1711,13 +1730,13 @@ pub(crate) async fn receive_inbound_email(
     Path(token): Path<String>,
     request: Request,
 ) -> Result<Response, ApiError> {
-    if !hook_allowed(&token) {
-        return Ok(too_many_requests());
-    }
     let target = deepref_postgres::find_workflow_by_email_token(&state.pool, &token)
         .await
         .map_err(map_error)?
         .ok_or_else(|| ApiError::NotFound("unknown address".to_owned()))?;
+    if !hook_allowed((target.workflow_id, "email")) {
+        return Ok(too_many_requests());
+    }
     let headers = request.headers().clone();
     let (email, message_id) = email_from_request(request).await?;
     let data = email.trigger_data();
@@ -1733,12 +1752,53 @@ mod tests {
 
     #[test]
     fn hook_rate_limit_applies_per_token() {
-        let token = format!("test-{}", Uuid::new_v4());
+        let key = (Uuid::new_v4(), "webhook");
+        let now = Instant::now();
+        let mut windows = HashMap::new();
         for _ in 0..HOOK_RATE_LIMIT_PER_MINUTE {
-            assert!(hook_allowed(&token));
+            assert!(hook_window_allowed(&mut windows, key, now));
         }
-        assert!(!hook_allowed(&token));
-        assert!(hook_allowed("another-token"));
+        assert!(!hook_window_allowed(&mut windows, key, now));
+        assert!(hook_window_allowed(&mut windows, (key.0, "email"), now));
+        assert!(hook_window_allowed(
+            &mut windows,
+            key,
+            now + Duration::from_secs(60)
+        ));
+    }
+
+    #[test]
+    fn hook_windows_are_bounded_and_evict_the_least_recently_used_address() {
+        let now = Instant::now();
+        let mut windows = HashMap::new();
+        let oldest = (Uuid::new_v4(), "webhook");
+        let touched = (Uuid::new_v4(), "webhook");
+        assert!(hook_window_allowed(&mut windows, touched, now));
+        assert!(hook_window_allowed(
+            &mut windows,
+            oldest,
+            now + Duration::from_millis(1)
+        ));
+        for i in 2..MAX_HOOK_RATE_WINDOWS {
+            assert!(hook_window_allowed(
+                &mut windows,
+                (Uuid::new_v4(), "webhook"),
+                now + Duration::from_millis(i as u64)
+            ));
+        }
+        assert!(hook_window_allowed(
+            &mut windows,
+            touched,
+            now + Duration::from_secs(10)
+        ));
+        assert!(hook_window_allowed(
+            &mut windows,
+            (Uuid::new_v4(), "webhook"),
+            now + Duration::from_secs(11)
+        ));
+        assert_eq!(windows.len(), MAX_HOOK_RATE_WINDOWS);
+        assert!(!windows.contains_key(&oldest));
+        assert!(windows.contains_key(&touched));
     }
 
     #[test]

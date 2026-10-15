@@ -71,9 +71,18 @@ async fn drain(pool: &PgPool, project: Uuid) {
             project,
             "unexpected job from another project"
         );
-        match workflows::handle_step(pool, &job, &job.lease("ai-exposure-test"), None, &deepref_config::RuntimeConfig::from_source("workflow-test", &|name| (name == "APP_ENV").then(|| "local".into())).expect("local runtime configuration"))
-            .await
-            .expect("step")
+        match workflows::handle_step(
+            pool,
+            &job,
+            &job.lease("ai-exposure-test"),
+            None,
+            &deepref_config::RuntimeConfig::from_source("workflow-test", &|name| {
+                (name == "APP_ENV").then(|| "local".into())
+            })
+            .expect("local runtime configuration"),
+        )
+        .await
+        .expect("step")
         {
             DeliveryAction::Ack => {
                 complete_job(pool, &job.lease("ai-exposure-test"))

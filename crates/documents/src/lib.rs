@@ -1,4 +1,4 @@
-use deepref_config::{DocumentConfig, DocumentStorageBackend, DEFAULT_MAX_DOCUMENT_BYTES};
+use deepref_config::{DEFAULT_MAX_DOCUMENT_BYTES, DocumentConfig, DocumentStorageBackend};
 use std::sync::Arc;
 
 use bytes::{Buf, Bytes, BytesMut};
@@ -113,7 +113,11 @@ impl DocumentStore {
         let store = match &config.backend {
             DocumentStorageBackend::Local { root } => StoreConfig::local(root)?,
             DocumentStorageBackend::S3 {
-                endpoint, bucket, region, access_key_id, secret_access_key,
+                endpoint,
+                bucket,
+                region,
+                access_key_id,
+                secret_access_key,
             } => StoreConfig::s3(endpoint, bucket, region, access_key_id, secret_access_key)?,
         };
         Ok(Self::new(store, config.max_bytes))
@@ -617,13 +621,15 @@ mod tests {
 
     #[test]
     fn configured_local_store_uses_injected_source() {
-        let root = std::env::temp_dir().join(format!("deepref-configured-store-{}", Uuid::new_v4()));
+        let root =
+            std::env::temp_dir().join(format!("deepref-configured-store-{}", Uuid::new_v4()));
         let config = DocumentConfig::from_source(&|name| match name {
             "APP_ENV" => Some("local".into()),
             "DOCUMENT_STORAGE_ROOT" => Some(root.to_string_lossy().into_owned()),
             "DOCUMENT_MAX_BYTES" => Some("1024".into()),
             _ => None,
-        }).unwrap();
+        })
+        .unwrap();
         let store = DocumentStore::from_config(&config).unwrap();
         assert_eq!(store.max_bytes(), 1024);
         std::fs::remove_dir_all(root).unwrap();
