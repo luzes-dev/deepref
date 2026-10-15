@@ -6,7 +6,7 @@
 use deepref_app::screening::*;
 use deepref_app::*;
 use deepref_application::workflows::{GraphNode, Position, WorkflowGraph};
-use deepref_domain::{Actor, ActorKind, ProjectId};
+use deepref_domain::{Actor, ActorKind, ProjectId, ScreeningStatus};
 use serde_json::json;
 use sqlx::PgPool;
 use uuid::Uuid;
@@ -191,16 +191,24 @@ async fn overview_counts_each_hidden_cohort_member_once() {
         let state = get_agent_screening_state(&f.pool, f.project, report)
             .await
             .expect("masked state");
-        assert_eq!(state.title_abstract_status, "unscreened", "{report}");
-        assert_eq!(state.full_text_status, "not_required", "{report}");
-        assert_eq!(state.final_status, "unscreened", "{report}");
+        assert_eq!(
+            state.title_abstract_status,
+            ScreeningStatus::Unscreened,
+            "{report}"
+        );
+        assert_eq!(
+            state.full_text_status,
+            ScreeningStatus::NotRequired,
+            "{report}"
+        );
+        assert_eq!(state.final_status, ScreeningStatus::Unscreened, "{report}");
         assert_eq!(state.full_text_exclusion_reason_id, None, "{report}");
         assert_eq!(state.revision, 0, "{report}");
     }
     let state = get_agent_screening_state(&f.pool, f.project, f.outside)
         .await
         .expect("state outside the cohort");
-    assert_eq!(state.title_abstract_status, "maybe");
+    assert_eq!(state.title_abstract_status, ScreeningStatus::Maybe);
 
     f.unblind().await;
     let visible = get_agent_project_overview(&f.pool, f.project)

@@ -136,7 +136,7 @@ async fn demote(
             invalidate_in_transaction(tx, project, cohort, reason.as_str(), true).await
         }
         StaleReason::SemanticIdentity { current } => {
-            if super::cohort_status(&c)? != deepref_review::ai_first::AiFirstCohortStatus::Finalized
+            if super::cohort_status(c)? != deepref_review::ai_first::AiFirstCohortStatus::Finalized
             {
                 invalidate_in_transaction(tx, project, cohort, reason.as_str(), true).await?;
             }

@@ -1333,32 +1333,36 @@ async fn lease(
     project_id: ProjectId,
     run: &ReviewRunSnapshot,
     owner: &str,
-) -> LeasedReviewRun {
-    claim_run(pool, run.id.as_uuid(), owner).await;
-    let leased = load_leased_review_run(pool, project_id, run.id, owner)
+) -> (LeasedReviewRun, JobLease) {
+    let claimed = claim_run(pool, run.id.as_uuid(), owner).await;
+    let leased = load_leased_review_run(pool, project_id, run.id, &claimed)
         .await
         .expect("leased run loads");
-    mark_review_run_running(pool, project_id, run.id, owner)
+    mark_review_run_running(pool, project_id, run.id, &claimed)
         .await
         .expect("leased run starts");
-    leased
+    (leased, claimed)
 }
 
 /// Begins the first node of a duplicate review.
-async fn begin_prepare(pool: &PgPool, run: &LeasedReviewRun, owner: &str) -> ReviewAttemptStart {
+async fn begin_prepare(
+    pool: &PgPool,
+    run: &LeasedReviewRun,
+    lease: &JobLease,
+) -> ReviewAttemptStart {
     let review = CompiledReview::compile(ReviewDefinitionKey::DuplicateDetection)
         .expect("definition compiles");
     let ReviewExecutionPlan::Standard(plan) = review.plan() else {
         panic!("duplicate detection uses the standard execution plan")
     };
-    begin_review_attempt(pool, run, &review, &plan.prepare, &[], owner)
+    begin_review_attempt(pool, run, &review, &plan.prepare, &[], lease)
         .await
         .expect("prepare begins")
 }
 
 /// Begins and accepts the first node, so later generations could reuse it.
-async fn accept_prepare(pool: &PgPool, run: &LeasedReviewRun, owner: &str) {
-    let ReviewAttemptStart::Started { attempt_id, .. } = begin_prepare(pool, run, owner).await
+async fn accept_prepare(pool: &PgPool, run: &LeasedReviewRun, lease: &JobLease) {
+    let ReviewAttemptStart::Started { attempt_id, .. } = begin_prepare(pool, run, lease).await
     else {
         panic!("a first attempt starts fresh")
     };
@@ -1371,7 +1375,7 @@ async fn accept_prepare(pool: &PgPool, run: &LeasedReviewRun, owner: &str) {
             media_type: "application/json",
             predecessors: &[],
             model_run_id: None,
-            worker_id: owner,
+            lease,
         },
     )
     .await
@@ -1385,7 +1389,7 @@ async fn complete_with_proposal(
     run: &LeasedReviewRun,
     record: Uuid,
     candidate: Uuid,
-    owner: &str,
+    lease: &JobLease,
 ) -> Uuid {
     sqlx::query("INSERT INTO reports (id,title) VALUES ($1,'candidate report')")
         .bind(candidate)
@@ -1464,7 +1468,7 @@ async fn complete_with_proposal(
             authority: AuthorityTier::WorkflowSuggestion,
         },
     };
-    match finalize_review_proposal(pool, run, executed, owner)
+    match finalize_review_proposal(pool, run, executed, lease)
         .await
         .expect("proposal finalizes")
     {
@@ -1476,15 +1480,14 @@ async fn complete_with_proposal(
 #[tokio::test]
 async fn a_retry_reuses_the_steps_its_failed_predecessor_accepted() {
     let Some(pool) = database().await else { return };
-    let _lock = route_fixture_lock(&pool).await;
     let (project_id, record, candidate) = generation_fixture(&pool, "retry reuse").await;
     let request = || duplicate_request(project_id, record, candidate);
     let owner = "retry-reuse-worker";
     let first = schedule_prepared_review_run(&pool, request())
         .await
         .expect("first run schedules");
-    let leased = lease(&pool, project_id, &first, owner).await;
-    accept_prepare(&pool, &leased, owner).await;
+    let (leased, run_lease) = lease(&pool, project_id, &first, owner).await;
+    accept_prepare(&pool, &leased, &run_lease).await;
     fail_review_run(
         &pool,
         project_id,
@@ -1499,9 +1502,9 @@ async fn a_retry_reuses_the_steps_its_failed_predecessor_accepted() {
         .await
         .expect("retry schedules");
     assert_ne!(retried.id, first.id);
-    let leased = lease(&pool, project_id, &retried, owner).await;
+    let (leased, run_lease) = lease(&pool, project_id, &retried, owner).await;
     assert!(matches!(
-        begin_prepare(&pool, &leased, owner).await,
+        begin_prepare(&pool, &leased, &run_lease).await,
         ReviewAttemptStart::Reused { .. }
     ));
 }
@@ -1509,17 +1512,16 @@ async fn a_retry_reuses_the_steps_its_failed_predecessor_accepted() {
 #[tokio::test]
 async fn a_rejected_suggestion_regenerates_a_fresh_generation_that_reuses_nothing() {
     let Some(pool) = database().await else { return };
-    let _lock = route_fixture_lock(&pool).await;
     let (project_id, record, candidate) = generation_fixture(&pool, "regenerate").await;
     let request = || duplicate_request(project_id, record, candidate);
     let owner = "regenerate-worker";
     let first = schedule_prepared_review_run(&pool, request())
         .await
         .expect("first run schedules");
-    let leased = lease(&pool, project_id, &first, owner).await;
-    accept_prepare(&pool, &leased, owner).await;
+    let (leased, run_lease) = lease(&pool, project_id, &first, owner).await;
+    accept_prepare(&pool, &leased, &run_lease).await;
     let proposal_id =
-        complete_with_proposal(&pool, project_id, &leased, record, candidate, owner).await;
+        complete_with_proposal(&pool, project_id, &leased, record, candidate, &run_lease).await;
 
     let again = schedule_prepared_review_run(&pool, request())
         .await
@@ -1565,10 +1567,10 @@ async fn a_rejected_suggestion_regenerates_a_fresh_generation_that_reuses_nothin
         "a double regenerate returns the in-flight run"
     );
 
-    let leased = lease(&pool, project_id, &regenerated, owner).await;
+    let (leased, run_lease) = lease(&pool, project_id, &regenerated, owner).await;
     assert!(
         matches!(
-            begin_prepare(&pool, &leased, owner).await,
+            begin_prepare(&pool, &leased, &run_lease).await,
             ReviewAttemptStart::Started { .. }
         ),
         "a regeneration must not reuse the rejected opinion's steps"
@@ -1592,7 +1594,6 @@ fn duplicate_request(project_id: ProjectId, record: Uuid, candidate: Uuid) -> Pr
 #[tokio::test]
 async fn a_failed_review_run_is_retried_as_a_new_queued_generation() {
     let Some(pool) = database().await else { return };
-    let _lock = route_fixture_lock(&pool).await;
     let (project_id, record, candidate) = generation_fixture(&pool, "retry failed").await;
     let request = || duplicate_request(project_id, record, candidate);
     let first = schedule_prepared_review_run(&pool, request())
@@ -1635,7 +1636,6 @@ async fn a_failed_review_run_is_retried_as_a_new_queued_generation() {
 #[tokio::test]
 async fn a_blocked_review_run_is_retried_as_a_new_queued_generation() {
     let Some(pool) = database().await else { return };
-    let _lock = route_fixture_lock(&pool).await;
     let (project_id, record, candidate) = generation_fixture(&pool, "retry blocked").await;
     let request = || duplicate_request(project_id, record, candidate);
     let first = schedule_prepared_review_run(&pool, request())

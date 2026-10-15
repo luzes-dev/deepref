@@ -58,7 +58,7 @@ async fn drain(pool: &PgPool, project: Uuid) {
             project,
             "unexpected job from another project"
         );
-        assert_eq!(job.kind, "workflow_step");
+        assert_eq!(job.kind, deepref_domain::JobKind::WorkflowStep);
         match workflows::handle_step(
             pool,
             &job,
@@ -119,7 +119,7 @@ async fn trigger_filter_notification_runs_and_dry_runs() {
     let workflow = create_workflow(&pool, project, "Recent papers", "", graph, &actor)
         .await
         .expect("create");
-    let version = publish_workflow(&pool, project, workflow.id, None, &actor)
+    let version = publish_workflow(&pool, project, workflow.id, None, &actor, false)
         .await
         .expect("publish");
     assert_eq!(version.version, 1);
@@ -279,7 +279,7 @@ async fn filter_with_no_match_skips_the_rest_and_for_each_fans_out() {
     let workflow = create_workflow(&pool, project, "Loop", "", graph, &actor)
         .await
         .expect("create");
-    publish_workflow(&pool, project, workflow.id, None, &actor)
+    publish_workflow(&pool, project, workflow.id, None, &actor, false)
         .await
         .expect("publish");
     let (version_id, graph) = get_published_graph(&pool, workflow.id)
@@ -399,7 +399,7 @@ async fn a_failed_run_is_recorded_once_and_a_test_run_stays_silent() {
     )
     .await
     .expect("create");
-    publish_workflow(&pool, project, workflow.id, None, &actor)
+    publish_workflow(&pool, project, workflow.id, None, &actor, false)
         .await
         .expect("publish");
     let (version_id, _published) = get_published_graph(&pool, workflow.id)
@@ -764,7 +764,6 @@ async fn new_project(pool: &PgPool, label: &str) -> ProjectId {
 /// RPC) runs its side effect once and records one outcome.
 #[tokio::test]
 async fn concurrent_handle_step_calls_on_one_node_execute_once() {
-    let _guard = GUARD.lock().await;
     let Some(pool) = database().await else { return };
     let project = new_project(&pool, "wf-fence-concurrent").await;
     let (run_id, node_run_id, job) = claimed_notify_step(&pool, project, "fence-worker").await;
@@ -804,7 +803,6 @@ async fn concurrent_handle_step_calls_on_one_node_execute_once() {
 /// neither restart the block nor overwrite the live attempt's outcome.
 #[tokio::test]
 async fn a_stale_attempt_cannot_restart_or_overwrite_a_reclaimed_step() {
-    let _guard = GUARD.lock().await;
     let Some(pool) = database().await else { return };
     let project = new_project(&pool, "wf-fence-stale").await;
     let (run_id, node_run_id, first) = claimed_notify_step(&pool, project, "fence-worker").await;

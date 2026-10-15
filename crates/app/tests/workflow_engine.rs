@@ -177,7 +177,7 @@ async fn check_reads_the_stored_slack_address_and_flags_a_wrong_one() {
     )
     .await
     .expect("create");
-    let report = validate_workflow_draft(&pool, project, wrong.id)
+    let report = validate_workflow_draft(&pool, project, wrong.id, false)
         .await
         .expect("check");
     assert!(
@@ -197,7 +197,7 @@ async fn check_reads_the_stored_slack_address_and_flags_a_wrong_one() {
     )
     .await
     .expect("create");
-    let report = validate_workflow_draft(&pool, project, good.id)
+    let report = validate_workflow_draft(&pool, project, good.id, false)
         .await
         .expect("check");
     assert!(report.is_ok(), "expected the Slack webhook to pass");

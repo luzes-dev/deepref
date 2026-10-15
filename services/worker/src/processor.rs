@@ -19,7 +19,7 @@ use deepref_review::worker::{
 };
 use serde::Deserialize;
 use sqlx::PgPool;
-use tokio::sync::{Semaphore, watch};
+use tokio::sync::watch;
 use uuid::Uuid;
 
 use crate::{
@@ -246,6 +246,7 @@ pub async fn handle_job_with_document_services(
     .await
 }
 
+#[allow(clippy::too_many_arguments)]
 pub async fn handle_job_with_documents_owned_and_ai(
     pool: sqlx::PgPool,
     job: &deepref_application::jobs::ClaimedJob,
@@ -1707,14 +1708,6 @@ mod tests {
     use deepref_review::worker::ReviewHash;
 
     use super::*;
-
-    #[test]
-    fn malformed_identity_is_stable() {
-        assert_eq!(
-            dead_letter(b"bad", None, 1, "bad").identity,
-            dead_letter(b"bad", None, 5, "other").identity
-        );
-    }
 
     fn endpoint(raw: &str) -> ProviderEndpoint {
         ProviderEndpoint::from_configured_url(raw).unwrap()

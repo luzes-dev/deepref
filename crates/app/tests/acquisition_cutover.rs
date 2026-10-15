@@ -95,7 +95,7 @@ async fn populated_legacy_database_expands_backfills_and_retires_doi_plane() {
     )
     .await;
 
-    let rejected = sqlx::query("INSERT INTO acquisition_runs(id,project_id,source,strategy,max_depth) VALUES ($1,$2,'doi','doi_crawl',10)").bind(Uuid::new_v4()).bind(Uuid::parse_str(PROJECT).unwrap()).execute(&pool).await.expect_err("new depth ten must fail without historical provenance");
+    let rejected = sqlx::query("INSERT INTO acquisition_runs(id,project_id,source,strategy,max_depth,created_at) VALUES ($1,$2,'crossref','citation_traversal',10,now())").bind(Uuid::new_v4()).bind(Uuid::parse_str(PROJECT).unwrap()).execute(&pool).await.expect_err("new depth ten must fail without historical provenance");
     assert_eq!(
         rejected
             .as_database_error()

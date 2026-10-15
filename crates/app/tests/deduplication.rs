@@ -1816,13 +1816,15 @@ async fn dedupe_run_that_creates_reports_queues_one_metrics_recompute() {
     .fetch_one(&pool)
     .await
     .unwrap();
-    let envelope: deepref_domain::events::EventEnvelope<deepref_domain::events::DomainPayload> =
-        serde_json::from_value(payload).unwrap();
-    assert!(matches!(
-        envelope.payload,
-        deepref_domain::events::DomainPayload::MetricsRecomputeRequested(ref request)
-            if request.project_id == project_id
-    ));
+    let revision: i64 =
+        sqlx::query_scalar("SELECT metric_requested_revision FROM projects WHERE id=$1")
+            .bind(project_id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert!(revision > 0);
+    assert_eq!(payload["project_id"], serde_json::json!(project_id));
+    assert_eq!(payload["revision"], revision);
 
     // Nothing was created or linked by this run, so no further recompute is queued.
     run_deduplication(&pool, run_request(project_id, 100))

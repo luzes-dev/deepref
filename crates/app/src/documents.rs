@@ -673,8 +673,7 @@ pub async fn list_full_text_queue(
     .bind(limit.clamp(1, 101))
     .fetch_all(pool)
     .await?;
-    Ok(rows
-        .into_iter()
+    rows.into_iter()
         .map(|row| {
             Ok(FullTextQueueRecord {
                 report_id: row.get("report_id"),
@@ -715,7 +714,7 @@ pub async fn list_full_text_queue(
                     .transpose()?,
             })
         })
-        .collect::<anyhow::Result<Vec<_>>>()?)
+        .collect::<anyhow::Result<Vec<_>>>()
 }
 
 pub async fn list_missing_full_text(
