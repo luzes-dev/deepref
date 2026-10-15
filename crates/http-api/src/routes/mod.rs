@@ -203,7 +203,7 @@ fn openapi_router(document_max_bytes: usize) -> OpenApiRouter<AppState> {
 }
 
 pub fn openapi_document() -> OpenApi {
-    openapi_router(deepref_documents::DEFAULT_MAX_DOCUMENT_BYTES).into_openapi()
+    openapi_router(deepref_config::DEFAULT_MAX_DOCUMENT_BYTES).into_openapi()
 }
 
 /// The OpenAPI document as JSON, with every response carrying its required `description`.
@@ -280,7 +280,7 @@ pub fn router(state: AppState, config: &ApiConfig) -> Router {
     let document_max_bytes = state
         .document_store
         .as_ref()
-        .map_or(deepref_documents::DEFAULT_MAX_DOCUMENT_BYTES, |store| {
+        .map_or(deepref_config::DEFAULT_MAX_DOCUMENT_BYTES, |store| {
             store.max_bytes()
         });
     let (router, openapi) = openapi_router(document_max_bytes).split_for_parts();

@@ -22,7 +22,7 @@ use deepref_review::worker::{
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
 use sqlx::PgPool;
-use tokio::sync::{Semaphore, watch};
+use tokio::sync::watch;
 use uuid::Uuid;
 
 use crate::{
@@ -133,6 +133,7 @@ async fn claim_doi_lease(
     Ok(None)
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn execute_work_fetch(
     pool: PgPool,
     bytes: &[u8],
@@ -374,6 +375,7 @@ pub async fn handle_job_with_document_services(
     .await
 }
 
+#[allow(clippy::too_many_arguments)]
 pub async fn handle_job_with_documents_owned_and_ai(
     pool: sqlx::PgPool,
     job: &deepref_application::jobs::ClaimedJob,

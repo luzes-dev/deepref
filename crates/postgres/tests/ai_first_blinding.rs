@@ -190,16 +190,31 @@ async fn overview_counts_each_hidden_cohort_member_once() {
         let state = get_agent_screening_state(&f.pool, f.project, report)
             .await
             .expect("masked state");
-        assert_eq!(state.title_abstract_status, "unscreened", "{report}");
-        assert_eq!(state.full_text_status, "not_required", "{report}");
-        assert_eq!(state.final_status, "unscreened", "{report}");
+        assert_eq!(
+            state.title_abstract_status,
+            deepref_domain::ScreeningStatus::Unscreened,
+            "{report}"
+        );
+        assert_eq!(
+            state.full_text_status,
+            deepref_domain::ScreeningStatus::NotRequired,
+            "{report}"
+        );
+        assert_eq!(
+            state.final_status,
+            deepref_domain::ScreeningStatus::Unscreened,
+            "{report}"
+        );
         assert_eq!(state.full_text_exclusion_reason_id, None, "{report}");
         assert_eq!(state.revision, 0, "{report}");
     }
     let state = get_agent_screening_state(&f.pool, f.project, f.outside)
         .await
         .expect("state outside the cohort");
-    assert_eq!(state.title_abstract_status, "maybe");
+    assert_eq!(
+        state.title_abstract_status,
+        deepref_domain::ScreeningStatus::Maybe
+    );
 
     f.unblind().await;
     let visible = get_agent_project_overview(&f.pool, f.project)

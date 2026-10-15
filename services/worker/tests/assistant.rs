@@ -151,7 +151,7 @@ async fn worker_completes_a_run_with_one_answer_one_plan_and_a_cassette() {
     ]);
     let run_id = submit(&pool, project_id, conversation_id).await;
     let job = claim(&pool).await;
-    assert_eq!(job.kind, "assistant_agent_run");
+    assert_eq!(job.kind, deepref_domain::JobKind::AssistantAgentRun);
 
     let action = handle_assistant_agent_run_with(&pool, &job, &services(model)).await;
     assert!(

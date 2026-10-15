@@ -136,8 +136,7 @@ async fn demote(
             invalidate_in_transaction(tx, project, cohort, reason.as_str(), true).await
         }
         StaleReason::SemanticIdentity { current } => {
-            if super::cohort_status(&c)? != deepref_review::ai_first::AiFirstCohortStatus::Finalized
-            {
+            if super::cohort_status(c)? != deepref_review::AiFirstCohortStatus::Finalized {
                 invalidate_in_transaction(tx, project, cohort, reason.as_str(), true).await?;
             }
             super::cohorts::flag_finalized_identity_drift(tx, project, current, reason.as_str())
@@ -244,7 +243,7 @@ pub async fn route_ai_first_result(
             .fetch_optional(&mut *tx)
             .await?
             .ok_or(AiFirstError::NotFound)?;
-    if super::cohort_status(&c)? != deepref_review::ai_first::AiFirstCohortStatus::Open {
+    if super::cohort_status(&c)? != deepref_review::AiFirstCohortStatus::Open {
         return Ok(false);
     }
     match ensure_current(&mut tx, &c).await? {
@@ -420,7 +419,7 @@ pub async fn sweep_ai_first(pool: &PgPool) -> Result<u64, AiFirstError> {
                 continue;
             }
         }
-        if super::cohort_status(&c)? != deepref_review::ai_first::AiFirstCohortStatus::Open {
+        if super::cohort_status(&c)? != deepref_review::AiFirstCohortStatus::Open {
             continue;
         }
         let finished=sqlx::query("SELECT m.report_id,m.review_run_id FROM ai_screening_cohort_members m

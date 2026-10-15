@@ -27,12 +27,12 @@ fn stored<T>(
 
 fn cohort_status(
     row: &sqlx::postgres::PgRow,
-) -> Result<deepref_review::ai_first::AiFirstCohortStatus, sqlx::Error> {
+) -> Result<deepref_review::AiFirstCohortStatus, sqlx::Error> {
     use sqlx::Row;
     stored(
         "status",
         row.try_get("status")?,
-        deepref_review::ai_first::AiFirstCohortStatus::parse,
+        deepref_review::AiFirstCohortStatus::parse,
     )
 }
 #[derive(Debug, Error)]

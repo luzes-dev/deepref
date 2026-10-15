@@ -654,8 +654,8 @@ async fn persist_event_and_state(
     .bind(json!({
         "screening_event_id": write.event_id,
         "event_kind": write.event_kind,
-        "stage": stage_name(write.stage),
-        "decision": write.decision.map(decision_name),
+        "stage": write.stage.as_str(),
+        "decision": write.decision.map(ScreeningDecision::as_str),
         "revision": next.revision,
         "protocol_version_id": write.protocol_version_id,
         "supersedes_event_id": write.supersedes_event_id,

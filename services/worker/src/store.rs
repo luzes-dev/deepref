@@ -214,8 +214,8 @@ pub async fn ingestion_cancelled(pool: &PgPool, ingestion_id: Uuid) -> anyhow::R
         .bind(ingestion_id)
         .fetch_one(pool)
         .await?;
-    let status = IngestionStatus::parse(&status)
-        .ok_or_else(|| anyhow::anyhow!("unknown stored ingestion status {status}"))?;
+    let status = IngestionStatus::try_from(status.as_str())
+        .map_err(|_| anyhow::anyhow!("unknown stored ingestion status {status}"))?;
     Ok(status == IngestionStatus::Cancelled)
 }
 
@@ -989,7 +989,7 @@ async fn complete_item_and_claim(
         && matches!(acquisition_status.as_str(), "completed" | "failed")
     {
         let draft = acquisition_notification(
-            &acquisition_status,
+            acquisition_status.as_str(),
             event.payload.project_id,
             event.payload.ingestion_id,
             fetched_count,

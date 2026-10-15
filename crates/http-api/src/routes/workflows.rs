@@ -847,10 +847,14 @@ pub(crate) async fn validate_workflow(
     State(state): State<AppState>,
     Path((project, workflow)): Path<(Uuid, Uuid)>,
 ) -> Result<Json<ValidationReportDto>, ApiError> {
-    let report =
-        deepref_postgres::validate_workflow_draft(&state.pool, project_id(project)?, workflow)
-            .await
-            .map_err(map_error)?;
+    let report = deepref_postgres::validate_workflow_draft(
+        &state.pool,
+        project_id(project)?,
+        workflow,
+        state.smtp.is_configured(),
+    )
+    .await
+    .map_err(map_error)?;
     Ok(Json(report_dto(&report)))
 }
 
@@ -984,6 +988,7 @@ pub(crate) async fn publish_workflow(
         workflow,
         input.note.as_deref(),
         &extract_actor(&headers)?,
+        state.smtp.is_configured(),
     )
     .await
     .map_err(map_error)?;
@@ -1266,9 +1271,14 @@ pub(crate) async fn start_test_run(
                 .to_owned(),
         )));
     }
-    let ctx = deepref_postgres::validation_context(&state.pool, workflow, &record.draft_graph)
-        .await
-        .map_err(map_error)?;
+    let ctx = deepref_postgres::validation_context(
+        &state.pool,
+        workflow,
+        &record.draft_graph,
+        state.smtp.is_configured(),
+    )
+    .await
+    .map_err(map_error)?;
     let report = wf::validate_graph(&record.draft_graph, &ctx);
     if !report.is_ok() {
         return Err(map_error(WorkflowError::Invalid(report)));
