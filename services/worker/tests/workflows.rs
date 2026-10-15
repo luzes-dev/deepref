@@ -9,32 +9,15 @@ use deepref_domain::{Actor, ActorKind, ProjectId};
 use deepref_postgres::{
     NodeOutcome, StartRun, StepClaim, UpdateWorkflow, begin_node_execution, claim_job,
     complete_job, create_workflow, fail_abandoned_steps, finish_node_execution,
-    get_published_graph, get_workflow_run, migrate, publish_workflow, start_run, update_workflow,
+    get_published_graph, get_workflow_run, publish_workflow, start_run, update_workflow,
 };
 use deepref_worker::{delivery::DeliveryAction, workflows};
 use serde_json::{Value, json};
 use sqlx::PgPool;
 use uuid::Uuid;
 
-static GUARD: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
-
 async fn database() -> Option<PgPool> {
-    let pool = deepref_postgres::test_isolation::isolated_pool_from_env("DATABASE_URL", 8).await?;
-    migrate(&pool).await.expect("migrations apply");
-    // `claim_job` takes the next job of any project, so jobs left queued by
-    // other test binaries sharing this database would be claimed here. Park
-    // only jobs older than this process; jobs of tests in this binary stay.
-    static STARTED: std::sync::OnceLock<chrono::DateTime<chrono::Utc>> = std::sync::OnceLock::new();
-    let started = *STARTED.get_or_init(chrono::Utc::now);
-    sqlx::query(
-        "UPDATE jobs SET state='dead', last_error='parked by worker workflow tests', completed_at=now()
-         WHERE state='queued' AND created_at < $1",
-    )
-    .bind(started)
-    .execute(&pool)
-    .await
-    .expect("park stale jobs");
-    Some(pool)
+    deepref_postgres::test_isolation::isolated_pool_from_env("DATABASE_URL", 8).await
 }
 
 fn node(id: &str, node_type: &str, config: Value) -> GraphNode {
@@ -92,7 +75,6 @@ async fn drain(pool: &PgPool, project: Uuid) {
 
 #[tokio::test]
 async fn trigger_filter_notification_runs_and_dry_runs() {
-    let _guard = GUARD.lock().await;
     let Some(pool) = database().await else { return };
     let project = ProjectId::new(Uuid::new_v4());
     sqlx::query("INSERT INTO projects (id,name) VALUES ($1,$2)")
@@ -249,7 +231,6 @@ async fn trigger_filter_notification_runs_and_dry_runs() {
 
 #[tokio::test]
 async fn filter_with_no_match_skips_the_rest_and_for_each_fans_out() {
-    let _guard = GUARD.lock().await;
     let Some(pool) = database().await else { return };
     let project = ProjectId::new(Uuid::new_v4());
     sqlx::query("INSERT INTO projects (id,name) VALUES ($1,$2)")
@@ -354,7 +335,6 @@ async fn run_failure_rows(
 /// reason and the run it belongs to. A test run that fails stays silent.
 #[tokio::test]
 async fn a_failed_run_is_recorded_once_and_a_test_run_stays_silent() {
-    let _guard = GUARD.lock().await;
     let Some(pool) = database().await else { return };
     let project = ProjectId::new(Uuid::new_v4());
     sqlx::query("INSERT INTO projects (id,name) VALUES ($1,$2)")
@@ -572,7 +552,6 @@ async fn defer_queued_step(pool: &PgPool, project: ProjectId) -> Uuid {
 /// instead of leaving the run waiting forever.
 #[tokio::test]
 async fn a_waiting_step_is_looked_at_later_and_a_lost_look_fails_it() {
-    let _guard = GUARD.lock().await;
     let Some(pool) = database().await else { return };
     let project = ProjectId::new(Uuid::new_v4());
     sqlx::query("INSERT INTO projects (id,name) VALUES ($1,$2)")
@@ -738,7 +717,6 @@ async fn new_project(pool: &PgPool, label: &str) -> ProjectId {
 /// RPC) runs its side effect once and records one outcome.
 #[tokio::test]
 async fn concurrent_handle_step_calls_on_one_node_execute_once() {
-    let _guard = GUARD.lock().await;
     let Some(pool) = database().await else { return };
     let project = new_project(&pool, "wf-fence-concurrent").await;
     let (run_id, node_run_id, job) = claimed_notify_step(&pool, project, "fence-worker").await;
@@ -769,7 +747,6 @@ async fn concurrent_handle_step_calls_on_one_node_execute_once() {
 /// neither restart the block nor overwrite the live attempt's outcome.
 #[tokio::test]
 async fn a_stale_attempt_cannot_restart_or_overwrite_a_reclaimed_step() {
-    let _guard = GUARD.lock().await;
     let Some(pool) = database().await else { return };
     let project = new_project(&pool, "wf-fence-stale").await;
     let (run_id, node_run_id, first) = claimed_notify_step(&pool, project, "fence-worker").await;
@@ -792,17 +769,17 @@ async fn a_stale_attempt_cannot_restart_or_overwrite_a_reclaimed_step() {
             &pool,
             node_run_id,
             &stale,
-            NodeOutcome::Failed { message: "expired before reclaim".to_owned() },
+            NodeOutcome::Failed {
+                message: "expired before reclaim".to_owned()
+            },
         )
         .await
         .expect("expired finish"),
         "expiry alone fences the outcome, even before recovery or takeover"
     );
-    deepref_postgres::record_node_retry(
-        &pool, node_run_id, &stale, "expired retry",
-    )
-    .await
-    .expect("expired retry");
+    deepref_postgres::record_node_retry(&pool, node_run_id, &stale, "expired retry")
+        .await
+        .expect("expired retry");
     assert_eq!(notify_step(&pool, project, run_id).await.status, "running");
     assert_eq!(
         deepref_postgres::recover_expired_jobs(&pool)

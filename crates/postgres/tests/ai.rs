@@ -13,17 +13,13 @@ use deepref_ai::{
 use deepref_domain::{DocumentBlockId, DocumentId, ProjectId};
 use deepref_postgres::{
     PostgresAiStore, ensure_default_model_routes, get_ai_study_grouping_target, insert_model_route,
-    migrate, persist_document_block_embedding, resolve_ai_proposal,
+    persist_document_block_embedding, resolve_ai_proposal,
 };
 use sqlx::PgPool;
 use uuid::Uuid;
 
 async fn database() -> Option<PgPool> {
-    let pool = deepref_postgres::test_isolation::isolated_pool_from_env("DATABASE_URL", 8).await?;
-    migrate(&pool)
-        .await
-        .expect("DATABASE_URL migrations must apply");
-    Some(pool)
+    deepref_postgres::test_isolation::isolated_pool_from_env("DATABASE_URL", 8).await
 }
 
 async fn fixture(pool: &PgPool) -> (ProjectId, Uuid, DocumentBlockId) {

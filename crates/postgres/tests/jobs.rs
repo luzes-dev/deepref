@@ -9,18 +9,12 @@ use std::time::Duration;
 use anyhow::{Result, ensure};
 use deepref_application::jobs::{EnqueueJob, JobQueue, JobRetry};
 use deepref_domain::ProjectId;
-use deepref_postgres::{PostgresJobQueue, job, migrate, recover_expired_jobs};
+use deepref_postgres::{PostgresJobQueue, job, recover_expired_jobs};
 use sqlx::{PgPool, Row};
 use uuid::Uuid;
 
-static DATABASE_TEST_MUTEX: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
-
 async fn database() -> Option<PgPool> {
-    let pool = deepref_postgres::test_isolation::isolated_pool_from_env("DATABASE_URL", 8).await?;
-    migrate(&pool)
-        .await
-        .unwrap_or_else(|error| panic!("failed to apply PostgreSQL migrations: {error}"));
-    Some(pool)
+    deepref_postgres::test_isolation::isolated_pool_from_env("DATABASE_URL", 8).await
 }
 
 fn fixture_job(project_id: ProjectId, id: Uuid, kind: &str, dedupe_key: String) -> EnqueueJob {
@@ -53,7 +47,6 @@ async fn cleanup(pool: &PgPool, project_id: ProjectId) -> Result<()> {
 
 #[tokio::test]
 async fn enqueue_returns_canonical_id_and_concurrent_claims_are_exclusive() -> Result<()> {
-    let _guard = DATABASE_TEST_MUTEX.lock().await;
     let Some(pool) = database().await else {
         return Ok(());
     };
@@ -163,7 +156,6 @@ async fn enqueue_returns_canonical_id_and_concurrent_claims_are_exclusive() -> R
 
 #[tokio::test]
 async fn expired_leases_are_fenced_and_retries_reach_dead_at_max_attempts() -> Result<()> {
-    let _guard = DATABASE_TEST_MUTEX.lock().await;
     let Some(pool) = database().await else {
         return Ok(());
     };

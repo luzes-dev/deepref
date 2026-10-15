@@ -6,7 +6,7 @@
 use deepref_application::workflows::{Endpoint, GraphEdge, GraphNode, Position, WorkflowGraph};
 use deepref_domain::{Actor, ActorKind, ProjectId};
 use deepref_postgres::{
-    ActivityFilters, NewActivity, activity_overview, create_workflow, list_activity, migrate,
+    ActivityFilters, NewActivity, activity_overview, create_workflow, list_activity,
     notify_from_workflow, record_activity, validate_workflow_draft,
 };
 use serde_json::{Value, json};
@@ -14,9 +14,7 @@ use sqlx::PgPool;
 use uuid::Uuid;
 
 async fn database() -> Option<PgPool> {
-    let pool = deepref_postgres::test_isolation::isolated_pool_from_env("DATABASE_URL", 5).await?;
-    migrate(&pool).await.expect("migrations should apply");
-    Some(pool)
+    deepref_postgres::test_isolation::isolated_pool_from_env("DATABASE_URL", 5).await
 }
 
 async fn insert_project(pool: &PgPool) -> ProjectId {
