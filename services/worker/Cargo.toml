@@ -31,6 +31,7 @@ deepref-domain.workspace = true
 deepref-app = { workspace = true, features = ["test-support"] }
 futures.workspace = true
 rig-core = { workspace = true, features = ["test-utils"] }
+tracing-subscriber.workspace = true
 url.workspace = true
 
 [lints]
