@@ -2,6 +2,7 @@
 	import type { Snippet } from 'svelte';
 	import { goto } from '$app/navigation';
 	import { page } from '$app/state';
+	import type { ResolvedPathname } from '$app/types';
 	import { createGetAiActivityOverview } from '#lib/api/generated/ai/ai.js';
 	import { Button } from '@deepref/ui/button';
 	import { Badge } from '@deepref/ui/badge';
@@ -36,7 +37,12 @@
 		const url = new URL(page.url.href);
 		if (view !== 'queue') url.searchParams.set('view', view);
 		else url.searchParams.delete('view');
-		await goto(url, { replace: true, reset: false });
+		// Reuse the page URL; page.url.pathname is already base-resolved, so the
+		// navigation helper needs ResolvedPathname rather than a route path.
+		await goto(`${url.pathname}${url.search}` as ResolvedPathname, {
+			replace: true,
+			reset: false
+		});
 	}
 </script>
 
