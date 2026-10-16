@@ -13,7 +13,7 @@ pub enum SqlxSubcommand {
 
 pub fn run(subcommand: SqlxSubcommand) -> Result<()> {
     let root = find_root()?;
-    let migrations_dir = root.join("crates/postgres/migrations");
+    let migrations_dir = root.join("crates/app/migrations");
     if !migrations_dir.is_dir() {
         bail!(
             "migrations directory not found at {}",
@@ -126,7 +126,7 @@ pub fn ensure_sqlx_cli() -> Result<()> {
 }
 
 fn run_migrations(root: &Path, database_url: &str) -> Result<()> {
-    let source = root.join("crates/postgres/migrations");
+    let source = root.join("crates/app/migrations");
     let status = Command::new("cargo")
         .args(migration_arguments(&source, database_url))
         .current_dir(root)
@@ -190,7 +190,7 @@ API_BIND_ADDR=127.0.0.1:8080
     #[test]
     fn migration_arguments_run_the_shared_migration_set_without_project_compilation() {
         let args = migration_arguments(
-            Path::new("crates/postgres/migrations"),
+            Path::new("crates/app/migrations"),
             "postgres://localhost/deepref",
         );
         assert_eq!(
@@ -200,7 +200,7 @@ API_BIND_ADDR=127.0.0.1:8080
                 "migrate",
                 "run",
                 "--source",
-                "crates/postgres/migrations",
+                "crates/app/migrations",
                 "--database-url",
                 "postgres://localhost/deepref",
                 "--no-dotenv",

@@ -38,7 +38,7 @@ pub(crate) struct AssistantRunDto {
     pub completed_at: Option<DateTime<Utc>>,
 }
 
-fn run_dto(record: &deepref_postgres::AssistantAgentRunRecord) -> AssistantRunDto {
+fn run_dto(record: &deepref_app::AssistantAgentRunRecord) -> AssistantRunDto {
     AssistantRunDto {
         id: record.id,
         conversation_id: record.conversation_id,
@@ -70,17 +70,17 @@ pub(super) async fn chat_durable(
                 .to_owned(),
         ));
     }
-    let mut route = deepref_postgres::PostgresAiStore::new(&state.pool)
+    let mut route = deepref_app::PostgresAiStore::new(&state.pool)
         .resolve(deepref_ai::ModelProfile::Reasoning)
         .await
         .map_err(|_| {
             ApiError::Configuration("No AI model is configured for the assistant.".to_owned())
         })?;
     route.parameters.temperature = Some(ASSISTANT_TEMPERATURE);
-    let budget = deepref_postgres::get_ai_budget(&state.pool, project_id)
+    let budget = deepref_app::get_ai_budget(&state.pool, project_id)
         .await
         .map_err(|error| match error {
-            deepref_postgres::AiUsageError::ProjectNotFound => {
+            deepref_app::AiUsageError::ProjectNotFound => {
                 ApiError::NotFound("project not found".to_owned())
             }
             _ => ApiError::Internal(anyhow::anyhow!("AI budget lookup failed")),
@@ -90,7 +90,7 @@ pub(super) async fn chat_durable(
     }
     let model_route = serde_json::to_value(&route)
         .map_err(|_| ApiError::Internal(anyhow::anyhow!("assistant route is not serializable")))?;
-    let run = deepref_postgres::submit_assistant_agent_run(
+    let run = deepref_app::submit_assistant_agent_run(
         &state.pool,
         project_id,
         conversation_id,
@@ -121,7 +121,7 @@ pub(crate) async fn get_run(
     Path((project_id, run_id)): Path<(Uuid, Uuid)>,
 ) -> Result<Json<AssistantRunDto>, ApiError> {
     validate_project_id(project_id)?;
-    let record = deepref_postgres::get_assistant_agent_run(&state.pool, run_id)
+    let record = deepref_app::get_assistant_agent_run(&state.pool, run_id)
         .await
         .map_err(|error| ApiError::Internal(anyhow::anyhow!(error)))?;
     match record.filter(|record| record.project_id == project_id) {

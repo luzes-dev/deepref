@@ -13,15 +13,6 @@ const PRICES_VARIABLE: &str = "DEEPREF_AI_MODEL_PRICES";
 const ZAI_SELECTED_NOTICE: &str = "DEEPREF_AI_PROVIDER=zai selects Z.AI, which is retired. Use OpenCode Go (the default) instead; ZAI_API_KEY and ZAI_BASE_URL are deprecated.";
 const ZAI_IGNORED_NOTICE: &str = "ZAI_API_KEY and ZAI_BASE_URL are deprecated and ignored. Set OPENCODE_API_KEY for OpenCode Go, or DEEPREF_AI_PROVIDER=zai to keep the legacy Z.AI provider.";
 
-/// Loads `.env.local` and then `.env` from the working directory (or any
-/// ancestor). Variables already present in the process environment always win,
-/// and because `.env.local` is read first it takes precedence over `.env`.
-/// Missing files are not an error.
-pub fn load_dotenv_files() {
-    let _ = dotenvy::from_filename(".env.local");
-    let _ = dotenvy::from_filename(".env");
-}
-
 /// The OpenAI-compatible service that answers AI calls.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum AiProviderKind {

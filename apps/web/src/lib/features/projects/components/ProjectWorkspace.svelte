@@ -1,6 +1,8 @@
 <script lang="ts">
 	import type { Snippet } from 'svelte';
 	import * as Alert from '@deepref/ui/alert';
+	import { Button } from '@deepref/ui/button';
+	import { ApiError } from '#lib/api/custom-fetch.js';
 	import { Skeleton } from '@deepref/ui/skeleton';
 	import { Spinner } from '@deepref/ui/spinner';
 	import { shouldPollIngestion } from '#lib/api/helpers.js';
@@ -107,11 +109,7 @@
 	});
 
 	$effect(() => {
-		workspace.syncProjectSelection(
-			projects,
-			projectsQuery.isPending,
-			Boolean(projectQuery.error)
-		);
+		workspace.syncProjectSelection(projects, projectsQuery.isPending);
 	});
 </script>
 
@@ -129,6 +127,21 @@
 			<div class="flex h-full items-center justify-center gap-3">
 				<Spinner />
 				<span class="text-sm text-muted-foreground">Loading workspace</span>
+			</div>
+		{:else if projectQuery.error}
+			<div class="p-4">
+				<Alert.Root variant="destructive">
+					<CircleAlertIcon />
+					<Alert.Title>
+						{projectQuery.error instanceof ApiError && projectQuery.error.status === 404
+							? 'Project not found'
+							: 'Project unavailable'}
+					</Alert.Title>
+					<Alert.Description>{projectQuery.error.message}</Alert.Description>
+					<Button variant="outline" onclick={() => void projectQuery.refetch()}
+						>Retry</Button
+					>
+				</Alert.Root>
 			</div>
 		{:else if projects.length === 0}
 			<ProjectWorkspaceEmptyState />

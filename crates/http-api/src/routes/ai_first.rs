@@ -46,6 +46,9 @@ pub(crate) struct AiFirstCohortDto {
     result: Option<AuditResultDto>,
     forecast: Option<AiFirstForecastDto>,
     invalidation_reason: Option<String>,
+    /// Set when a finalized cohort is flagged for review because the semantic
+    /// identity changed after finalization; its exclusions stay in force.
+    identity_flag_reason: Option<String>,
 }
 #[derive(Debug, Serialize, ToSchema)]
 pub(crate) struct AiFirstOverviewDto {
@@ -75,18 +78,18 @@ pub(crate) struct AiFirstActionDto {
     count: u32,
 }
 
-fn map_error(error: deepref_postgres::AiFirstError) -> ApiError {
+fn map_error(error: deepref_app::AiFirstError) -> ApiError {
     match error {
-        deepref_postgres::AiFirstError::NotFound => {
+        deepref_app::AiFirstError::NotFound => {
             ApiError::NotFound("AI-first resource not found".into())
         }
-        deepref_postgres::AiFirstError::Invalid(message) => ApiError::BadRequest(message),
-        deepref_postgres::AiFirstError::Refused(message) => ApiError::Conflict {
+        deepref_app::AiFirstError::Invalid(message) => ApiError::BadRequest(message),
+        deepref_app::AiFirstError::Refused(message) => ApiError::Conflict {
             code: "ai_first_refused".into(),
             message,
             details: serde_json::Value::Null,
         },
-        deepref_postgres::AiFirstError::Database(error) => ApiError::Database(error),
+        deepref_app::AiFirstError::Database(error) => ApiError::Database(error),
         other => ApiError::Internal(anyhow::anyhow!(other)),
     }
 }
@@ -97,7 +100,7 @@ pub(crate) async fn get_overview(
     State(state): State<AppState>,
     Path(project): Path<Uuid>,
 ) -> Result<Json<AiFirstOverviewDto>, ApiError> {
-    let overview = deepref_postgres::get_ai_first_overview(&state.pool, project)
+    let overview = deepref_app::get_ai_first_overview(&state.pool, project)
         .await
         .map_err(map_error)?;
     let cohorts = overview
@@ -118,7 +121,7 @@ pub(crate) async fn get_overview(
                 });
             Ok(AiFirstCohortDto {
                 id: c.id,
-                status: c.status,
+                status: c.status.as_str().to_owned(),
                 target_percent: c.target_percent,
                 members: c.members,
                 evaluated: c.evaluated,
@@ -139,11 +142,12 @@ pub(crate) async fn get_overview(
                 }),
                 result,
                 invalidation_reason: c.invalidation_reason,
+                identity_flag_reason: c.identity_flag_reason,
             })
         })
         .collect::<Result<Vec<_>, ApiError>>()?;
     Ok(Json(AiFirstOverviewDto {
-        ceiling: overview.ceiling,
+        ceiling: overview.ceiling.as_str().to_owned(),
         suspended_reason: overview.suspended_reason,
         cohorts,
     }))
@@ -159,7 +163,7 @@ pub(crate) async fn start(
     Json(body): Json<StartAiFirstRequest>,
 ) -> Result<Json<AiFirstActionDto>, ApiError> {
     let actor = extract_actor(&headers)?;
-    let cohort = deepref_postgres::start_ai_first_cohort(
+    let cohort = deepref_app::start_ai_first_cohort(
         &state.pool,
         project,
         body.target_percent,
@@ -181,14 +185,9 @@ pub(crate) async fn close(
     Path((project, cohort)): Path<(Uuid, Uuid)>,
     headers: HeaderMap,
 ) -> Result<Json<AiFirstActionDto>, ApiError> {
-    deepref_postgres::close_ai_first_cohort(
-        &state.pool,
-        project,
-        cohort,
-        &extract_actor(&headers)?,
-    )
-    .await
-    .map_err(map_error)?;
+    deepref_app::close_ai_first_cohort(&state.pool, project, cohort, &extract_actor(&headers)?)
+        .await
+        .map_err(map_error)?;
     Ok(Json(AiFirstActionDto {
         cohort_id: cohort,
         count: 0,
@@ -203,7 +202,7 @@ pub(crate) async fn draw(
     headers: HeaderMap,
     Json(body): Json<DrawAiFirstRequest>,
 ) -> Result<Json<AiFirstActionDto>, ApiError> {
-    let count = deepref_postgres::draw_ai_first_audit(
+    let count = deepref_app::draw_ai_first_audit(
         &state.pool,
         project,
         cohort,
@@ -224,7 +223,7 @@ pub(crate) async fn evaluate(
     Path((project, cohort)): Path<(Uuid, Uuid)>,
     headers: HeaderMap,
 ) -> Result<Json<AiFirstActionDto>, ApiError> {
-    let result = deepref_postgres::evaluate_ai_first_audit(
+    let result = deepref_app::evaluate_ai_first_audit(
         &state.pool,
         project,
         cohort,
@@ -246,7 +245,7 @@ pub(crate) async fn finalize(
     headers: HeaderMap,
     Json(body): Json<FinalizeAiFirstRequest>,
 ) -> Result<Json<AiFirstActionDto>, ApiError> {
-    let count = deepref_postgres::finalize_ai_first_cohort(
+    let count = deepref_app::finalize_ai_first_cohort(
         &state.pool,
         project,
         cohort,
@@ -267,14 +266,9 @@ pub(crate) async fn recover(
     Path((project, cohort)): Path<(Uuid, Uuid)>,
     headers: HeaderMap,
 ) -> Result<Json<AiFirstActionDto>, ApiError> {
-    deepref_postgres::recover_ai_first_cohort(
-        &state.pool,
-        project,
-        cohort,
-        &extract_actor(&headers)?,
-    )
-    .await
-    .map_err(map_error)?;
+    deepref_app::recover_ai_first_cohort(&state.pool, project, cohort, &extract_actor(&headers)?)
+        .await
+        .map_err(map_error)?;
     Ok(Json(AiFirstActionDto {
         cohort_id: cohort,
         count: 0,

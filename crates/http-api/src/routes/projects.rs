@@ -4,7 +4,7 @@ use axum::{
     http::StatusCode,
 };
 use chrono::{DateTime, Utc};
-use deepref_events::{
+use deepref_domain::events::{
     DomainPayload, EntityType, EventEnvelope, ProjectTombstoned, SUBJECT_PROJECT_TOMBSTONED,
 };
 use serde::{Deserialize, Serialize};
@@ -47,10 +47,9 @@ impl CreateProject {
         if self.name.is_empty() {
             return Err(ApiError::BadRequest("name must not be blank".to_owned()));
         }
-        if self.default_max_depth.is_some_and(|value| value < 0) {
-            return Err(ApiError::BadRequest(
-                "default_max_depth must be >= 0".to_owned(),
-            ));
+        if let Some(value) = self.default_max_depth {
+            deepref_domain::acquisition::MaxDepth::try_from(value)
+                .map_err(|message| ApiError::BadRequest(message.to_owned()))?;
         }
         Ok(self)
     }
@@ -246,7 +245,7 @@ pub(crate) async fn delete_project(
     .bind(event.event_id)
     .execute(&mut *tx)
     .await?;
-    if !deepref_postgres::delete_project_in_transaction(&mut tx, project_id).await? {
+    if !deepref_app::delete_project_in_transaction(&mut tx, project_id).await? {
         return Err(ApiError::NotFound("project not found".into()));
     }
     tx.commit().await?;

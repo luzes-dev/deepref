@@ -1,5 +1,8 @@
 import { expect, test, type Page } from '@playwright/test';
-import type { AiProposalDto } from '#lib/api/generated/models/index.js';
+import type {
+	AiProposalDto,
+	PaginatedResponseDocumentBlockDto
+} from '#lib/api/generated/models/index.js';
 
 const project = {
 	id: 'project-1',
@@ -184,35 +187,41 @@ async function mockShell(page: Page): Promise<void> {
 	);
 	await page.route(
 		/\/api\/projects\/project-1\/reports\/report-1\/documents\/document-1\/blocks(?:\?.*)?$/,
-		async (route) =>
-			route.fulfill({
-				json: [
-					{
-						id: 'block-1',
-						document_id: 'document-1',
-						page_number: 1,
-						ordinal: 0,
-						kind: 'text',
-						text: 'The allocation process was described.',
-						section_path: [],
-						content_hash: 'a'.repeat(64),
-						parser_version: 'parser-1',
-						page_ocr_required: false
-					},
-					{
-						id: 'block-2',
-						document_id: 'document-1',
-						page_number: 1,
-						ordinal: 1,
-						kind: 'text',
-						text: 'The allocation sequence was reported.',
-						section_path: [],
-						content_hash: 'b'.repeat(64),
-						parser_version: 'parser-1',
-						page_ocr_required: false
-					}
-				]
-			})
+		async (route) => {
+			const blocks = [
+				{
+					id: 'block-1',
+					document_id: 'document-1',
+					page_number: 1,
+					ordinal: 0,
+					kind: 'text',
+					text: 'The allocation process was described.',
+					section_path: [],
+					content_hash: 'a'.repeat(64),
+					parser_version: 'parser-1',
+					page_ocr_required: false
+				},
+				{
+					id: 'block-2',
+					document_id: 'document-1',
+					page_number: 1,
+					ordinal: 1,
+					kind: 'text',
+					text: 'The allocation sequence was reported.',
+					section_path: [],
+					content_hash: 'b'.repeat(64),
+					parser_version: 'parser-1',
+					page_ocr_required: false
+				}
+			];
+			const cursor = new URL(route.request().url()).searchParams.get('cursor');
+			await route.fulfill({
+				json: {
+					items: cursor ? blocks.slice(1) : blocks.slice(0, 1),
+					next_cursor: cursor ? null : 'after-block-1'
+				} satisfies PaginatedResponseDocumentBlockDto
+			});
+		}
 	);
 	await page.route(
 		/\/api\/projects\/project-1\/reports\/report-1\/appraisals(?:\?.*)?$/,
@@ -473,6 +482,26 @@ test('reviews an edited AI appraisal pre-fill with evidence navigation and decis
 		}
 	);
 	await page.route(
+		'http://localhost:4173/api/projects/project-1/review-runs/appraisal-run/retry',
+		async (route) => {
+			expect(route.request().postDataJSON()).toEqual({ regenerate: true });
+			pendingProposal = createProposal();
+			await route.fulfill({
+				status: 202,
+				json: {
+					id: 'appraisal-regenerated-run',
+					project_id: 'project-1',
+					definition: 'appraisal_prefill',
+					subject: {},
+					origin: { kind: 'reviewer_requested' },
+					state: { kind: 'completed', proposal_id: pendingProposal.id },
+					created_at: '2026-01-01T00:00:02Z',
+					finished_at: '2026-01-01T00:00:03Z'
+				}
+			});
+		}
+	);
+	await page.route(
 		/http:\/\/localhost:4173\/api\/projects\/project-1\/ai\/proposals\/proposal-\d+\/decision$/,
 		async (route) => {
 			const body: unknown = route.request().postDataJSON();
@@ -583,6 +612,7 @@ test('reviews an edited AI appraisal pre-fill with evidence navigation and decis
 	await expect(page.getByTestId('appraisal-summary')).toBeVisible();
 	await page.getByRole('button', { name: 'Start a new assessment' }).click();
 	await expect(page.getByTestId('generate-ai-prefill')).toBeVisible();
+	await expect(page.getByRole('button', { name: 'Regenerate', exact: true })).toHaveCount(0);
 
 	await page.getByTestId('generate-ai-prefill').click();
 	await page.getByText(/^Rationale and evidence/).click();
@@ -597,7 +627,7 @@ test('reviews an edited AI appraisal pre-fill with evidence navigation and decis
 		expect('reviewed_payload' in decisions[1]).toBe(false);
 	}
 
-	await page.getByTestId('generate-ai-prefill').click();
+	await page.getByRole('button', { name: 'Regenerate', exact: true }).click();
 	await page.getByText(/^Rationale and evidence/).click();
 	await expect(page.getByTestId('ai-prefill-proposal')).toBeVisible();
 	await page.route(

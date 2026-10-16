@@ -32,8 +32,9 @@ pub async fn run(pool: PgPool, interval: Duration, mut shutdown: watch::Receiver
 }
 
 pub async fn reconcile_once(pool: &PgPool) -> anyhow::Result<ReconcileReport> {
-    let recovery = deepref_postgres::recover_expired_worker_state(pool).await?;
+    let recovery = deepref_app::recover_expired_worker_state(pool).await?;
     let repaired_work = repair_missing_work(pool).await?;
+    crate::assistant::reconcile_orphan_runs(pool).await?;
     Ok(ReconcileReport {
         expired_event_claims: recovery.expired_event_claims,
         expired_doi_leases: recovery.expired_doi_leases,
@@ -43,7 +44,7 @@ pub async fn reconcile_once(pool: &PgPool) -> anyhow::Result<ReconcileReport> {
 }
 
 async fn repair_missing_work(pool: &PgPool) -> anyhow::Result<u64> {
-    let items = deepref_postgres::find_missing_ingestion_work(pool, 100).await?;
+    let items = deepref_app::find_missing_ingestion_work(pool, 100).await?;
     let mut repaired = 0;
     for item in items {
         let ingestion_id = item.ingestion_id;
@@ -54,7 +55,7 @@ async fn repair_missing_work(pool: &PgPool) -> anyhow::Result<u64> {
         let payload = serde_json::json!({
             "schema_version": 1,
             "event_id": event_id,
-            "event_type": deepref_events::SUBJECT_WORK_FETCH_REQUESTED,
+            "event_type": deepref_domain::events::SUBJECT_WORK_FETCH_REQUESTED,
             "occurred_at": chrono::Utc::now(),
             "producer": "deepref.worker.reconciler",
             "correlation_id": ingestion_id,
@@ -71,12 +72,12 @@ async fn repair_missing_work(pool: &PgPool) -> anyhow::Result<u64> {
                 "parent_doi": item.parent_doi
             }
         });
-        deepref_postgres::enqueue_job_pool(
+        deepref_app::enqueue_job_pool(
             pool,
-            &deepref_postgres::job(
+            &deepref_app::job(
                 event_id,
                 deepref_domain::ProjectId::new(project_id),
-                "work_fetch_requested",
+                deepref_domain::JobKind::WorkFetchRequested,
                 payload,
                 format!("work_fetch:{event_id}"),
             ),

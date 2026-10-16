@@ -1,13 +1,15 @@
 use std::time::Duration;
 
 use deepref_application::AutomationDomainEvent;
-use deepref_core::{IngestionItemStatus, IngestionStatus, Reference, WorkWithReferences};
-use deepref_events::{
+use deepref_domain::events::{
     CitationUpserted, DeadLetterRecord, DomainPayload, EntityType, EventEnvelope,
     MetricsRecomputeRequested, ProjectMembershipUpserted, SUBJECT_CITATION_UPSERTED, SUBJECT_DLQ,
     SUBJECT_METRICS_RECOMPUTE_REQUESTED, SUBJECT_PROJECT_MEMBERSHIP_UPSERTED,
     SUBJECT_UNRESOLVED_REFERENCE_UPSERTED, SUBJECT_WORK_FETCH_REQUESTED, SUBJECT_WORK_UPSERTED,
     UnresolvedReferenceUpserted, WorkFetchRequested, WorkUpserted, deterministic_event_id,
+};
+use deepref_domain::{
+    AcquisitionStatus, IngestionItemStatus, IngestionStatus, Reference, WorkWithReferences,
 };
 use sqlx::{PgPool, Postgres, Row, Transaction};
 use uuid::Uuid;
@@ -212,7 +214,9 @@ pub async fn ingestion_cancelled(pool: &PgPool, ingestion_id: Uuid) -> anyhow::R
         .bind(ingestion_id)
         .fetch_one(pool)
         .await?;
-    Ok(status == IngestionStatus::Cancelled.as_str())
+    let status = IngestionStatus::try_from(status.as_str())
+        .map_err(|_| anyhow::anyhow!("unknown stored ingestion status {status}"))?;
+    Ok(status == IngestionStatus::Cancelled)
 }
 
 pub async fn attach_cached(
@@ -581,7 +585,7 @@ async fn persist_unresolved(
     source: &str,
     reference: &Reference,
 ) -> anyhow::Result<()> {
-    let id = deepref_graph::unresolved_reference_id(source, reference);
+    let id = deepref_domain::graph::unresolved_reference_id(source, reference);
     sqlx::query(
         "INSERT INTO fetched_unresolved_reference_facts \
          (id,source_doi,raw_unstructured,article_title,author,year,volume,first_page) \
@@ -671,12 +675,12 @@ async fn enqueue_child(
         .bind(child.event_id)
         .execute(&mut **tx)
         .await?;
-        deepref_postgres::enqueue_job(
+        deepref_app::enqueue_job(
             tx,
-            &deepref_postgres::job(
+            &deepref_app::job(
                 child.event_id,
                 event.payload.project_id.into(),
-                "work_fetch_requested",
+                deepref_domain::JobKind::WorkFetchRequested,
                 serde_json::to_value(&child)?,
                 format!("work_fetch:{}", child.event_id),
             ),
@@ -746,12 +750,12 @@ async fn emit_metrics_request(
         }),
     )
     .await?;
-    deepref_postgres::enqueue_job(
+    deepref_app::enqueue_job(
         tx,
-        &deepref_postgres::job(
+        &deepref_app::job(
             envelope.event_id,
             event.payload.project_id.into(),
-            "recompute_metrics",
+            deepref_domain::JobKind::RecomputeMetrics,
             serde_json::to_value(&envelope)?,
             format!(
                 "recompute_metrics:{}:{}",
@@ -823,7 +827,7 @@ pub(crate) fn acquisition_notification(
     acquisition_id: Uuid,
     fetched_count: i32,
     failed_count: i32,
-) -> deepref_postgres::NotificationDraft {
+) -> deepref_app::NotificationDraft {
     let plural = |count: i32| if count == 1 { "article" } else { "articles" };
     let project_id = Some(project_id);
     let payload = serde_json::json!({
@@ -832,7 +836,7 @@ pub(crate) fn acquisition_notification(
         "failed_count": failed_count,
     });
     match status {
-        "completed" if failed_count > 0 => deepref_postgres::NotificationDraft::warning(
+        "completed" if failed_count > 0 => deepref_app::NotificationDraft::warning(
             "acquisition.completed",
             project_id,
             "Import completed with problems",
@@ -845,7 +849,7 @@ pub(crate) fn acquisition_notification(
             )),
             payload,
         ),
-        "completed" => deepref_postgres::NotificationDraft::success(
+        "completed" => deepref_app::NotificationDraft::success(
             "acquisition.completed",
             project_id,
             "Import completed",
@@ -856,7 +860,7 @@ pub(crate) fn acquisition_notification(
             )),
             payload,
         ),
-        _ => deepref_postgres::NotificationDraft::error(
+        _ => deepref_app::NotificationDraft::error(
             "acquisition.failed",
             project_id,
             "Import failed",
@@ -945,6 +949,10 @@ async fn complete_item_and_claim(
     .bind(event.payload.ingestion_id)
     .fetch_one(&mut **tx)
     .await?;
+    let previous_acquisition_status = AcquisitionStatus::parse(&previous_acquisition_status)
+        .ok_or_else(|| {
+            anyhow::anyhow!("unknown stored acquisition status {previous_acquisition_status}")
+        })?;
     let (acquisition_status, fetched_count, failed_count) = sqlx::query_as::<_, (String, i32, i32)>(
         r#"UPDATE acquisition_runs SET
         status = CASE WHEN status='cancelled' THEN status
@@ -963,8 +971,12 @@ async fn complete_item_and_claim(
     .bind(settled)
     .fetch_one(&mut **tx)
     .await?;
-    if previous_acquisition_status != "completed" && acquisition_status == "completed" {
-        deepref_postgres::dispatch_automation_domain_event(
+    let acquisition_status = AcquisitionStatus::parse(&acquisition_status)
+        .ok_or_else(|| anyhow::anyhow!("unknown stored acquisition status {acquisition_status}"))?;
+    if previous_acquisition_status != AcquisitionStatus::Completed
+        && acquisition_status == AcquisitionStatus::Completed
+    {
+        deepref_app::dispatch_automation_domain_event(
             tx,
             &AutomationDomainEvent::AcquisitionCompleted {
                 project_id: event.payload.project_id.into(),
@@ -977,13 +989,13 @@ async fn complete_item_and_claim(
         && matches!(acquisition_status.as_str(), "completed" | "failed")
     {
         let draft = acquisition_notification(
-            &acquisition_status,
+            acquisition_status.as_str(),
             event.payload.project_id,
             event.payload.ingestion_id,
             fetched_count,
             failed_count,
         );
-        deepref_postgres::record_notification_in_transaction(tx, &draft).await?;
+        deepref_app::record_notification_in_transaction(tx, &draft).await?;
     }
     let completed = sqlx::query(
         "UPDATE processed_events SET completed_at=now(),processed_at=now(),owner_token=NULL,lease_expires_at=NULL,last_error=$3 \
@@ -998,7 +1010,7 @@ async fn complete_item_and_claim(
 #[cfg(test)]
 mod tests {
     use super::{acquisition_notification, settled_run_status};
-    use deepref_postgres::NotificationSeverity;
+    use deepref_app::NotificationSeverity;
     use uuid::Uuid;
 
     #[test]

@@ -1,5 +1,5 @@
 <script lang="ts">
-	import { createListDocumentBlocks } from '#lib/api/generated/documents/documents.js';
+	import { createAllDocumentBlocks } from '#lib/api/pagination.js';
 	import EvidenceLabel from '#lib/features/evidence/EvidenceLabel.svelte';
 	import { citationLabel } from '#lib/features/evidence/labels.js';
 
@@ -26,7 +26,7 @@
 		technical: string;
 	} = $props();
 
-	const blocksQuery = createListDocumentBlocks(
+	const blocksQuery = createAllDocumentBlocks(
 		() => projectId,
 		() => reportId,
 		() => documentId,

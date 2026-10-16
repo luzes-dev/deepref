@@ -21,10 +21,9 @@ order = 0
 [[layers]]
 name = "infrastructure"
 paths = [
-  "crates/postgres/**/*",
+  "crates/app/**/*",
   "crates/documents/**/*",
-  "crates/crossref/**/*",
-  "crates/providers/**/*",
+  "crates/integrations/**/*",
   "crates/ai/**/*",
   "crates/review/**/*",
 ]
@@ -34,8 +33,6 @@ order = 10
 name = "application"
 paths = [
   "crates/application/**/*",
-  "crates/events/**/*",
-  "crates/graph/**/*",
 ]
 order = 20
 
@@ -46,16 +43,9 @@ paths = [
 ]
 order = 30
 
-[[layers]]
-name = "core"
-paths = [
-  "crates/core/**/*",
-]
-order = 40
-
 [[boundaries]]
 from = "crates/domain/**/*"
-to = "crates/postgres/**/*"
+to = "crates/app/**/*"
 reason = "domain layer must not depend on persistence adapters"
 
 [[boundaries]]
@@ -70,7 +60,7 @@ reason = "domain layer must not depend on worker runtime"
 
 [[boundaries]]
 from = "crates/application/**/*"
-to = "crates/postgres/**/*"
+to = "crates/app/**/*"
 reason = "application layer must depend only on abstractions, not concrete database implementations"
 
 [[boundaries]]

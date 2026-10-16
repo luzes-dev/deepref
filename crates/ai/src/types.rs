@@ -541,6 +541,15 @@ impl ProposalStatus {
             Self::Expired => "expired",
         }
     }
+    pub fn parse(value: &str) -> Option<Self> {
+        match value {
+            "pending" => Some(Self::Pending),
+            "accepted" => Some(Self::Accepted),
+            "rejected" => Some(Self::Rejected),
+            "expired" => Some(Self::Expired),
+            _ => None,
+        }
+    }
 }
 
 #[derive(Debug, Clone, PartialEq, Serialize, Deserialize)]

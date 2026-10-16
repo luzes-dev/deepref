@@ -1,6 +1,6 @@
 # AI foundation acceptance
 
-This register covers the PR11 local implementation. It is not production
+This register covers the local AI-foundation implementation. It is not production
 deployment evidence and does not claim that hosted model credentials,
 PostgreSQL extensions, collectors, or model-evaluation gold sets have been
 deployed.
@@ -39,13 +39,12 @@ deployed.
 
 The disposable local and integration fixture is pinned to
 pgvector/pgvector:0.8.0-pg17 in infra/local/compose.yaml. The corrected
-validation target used for this handoff is the explicitly named
-deepref-pr11-corrected-pgvector-20260824 container at port 55435; the earlier
-55434 database was not modified.
+validation target used for this handoff was a disposable pgvector container
+exposed at port 55435; the earlier 55434 database was not modified.
 
 DATABASE_URL=postgres://deepref:deepref@127.0.0.1:55435/deepref cargo test -p deepref-ai
 
-DATABASE_URL=postgres://deepref:deepref@127.0.0.1:55435/deepref cargo test -p deepref-postgres --test migration_0016 --test ai
+DATABASE_URL=postgres://deepref:deepref@127.0.0.1:55435/deepref cargo test -p deepref-app --test migration_0016 --test ai
 
 The tests cover provider swapping without task changes, retry/reuse and
 proposal recovery, content-addressed hashes, schema-before-semantic

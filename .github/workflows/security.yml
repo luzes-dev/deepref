@@ -130,3 +130,11 @@ jobs:
             fi
           done
           echo "All substantive security checks passed or were intentionally skipped."
+
+  report-failure:
+    if: always() && github.event_name == 'schedule' && needs.security-required.result == 'failure'
+    needs: security-required
+    permissions:
+      contents: read
+      issues: write
+    uses: ./.github/workflows/scheduled-failure.yml

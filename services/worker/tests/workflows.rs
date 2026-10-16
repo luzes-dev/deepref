@@ -4,20 +4,20 @@
 
 use std::time::Duration;
 
-use deepref_application::workflows::{Endpoint, GraphEdge, GraphNode, Position, WorkflowGraph};
-use deepref_domain::{Actor, ActorKind, ProjectId};
-use deepref_postgres::{
+use deepref_app::{
     NodeOutcome, StartRun, StepClaim, UpdateWorkflow, begin_node_execution, claim_job,
     complete_job, create_workflow, fail_abandoned_steps, finish_node_execution,
     get_published_graph, get_workflow_run, publish_workflow, start_run, update_workflow,
 };
+use deepref_application::workflows::{Endpoint, GraphEdge, GraphNode, Position, WorkflowGraph};
+use deepref_domain::{Actor, ActorKind, ProjectId};
 use deepref_worker::{delivery::DeliveryAction, workflows};
 use serde_json::{Value, json};
 use sqlx::PgPool;
 use uuid::Uuid;
 
 async fn database() -> Option<PgPool> {
-    deepref_postgres::test_isolation::isolated_pool_from_env("DATABASE_URL", 8).await
+    deepref_app::test_isolation::isolated_pool_from_env("DATABASE_URL", 8).await
 }
 
 fn node(id: &str, node_type: &str, config: Value) -> GraphNode {
@@ -58,13 +58,22 @@ async fn drain(pool: &PgPool, project: Uuid) {
             project,
             "unexpected job from another project"
         );
-        assert_eq!(job.kind, "workflow_step");
-        match workflows::handle_step(pool, &job, None)
-            .await
-            .expect("step")
+        assert_eq!(job.kind.as_str(), "workflow_step");
+        match workflows::handle_step(
+            pool,
+            &job,
+            &job.lease("workflow-test"),
+            None,
+            &deepref_config::RuntimeConfig::from_source("workflow-test", &|name| {
+                (name == "APP_ENV").then(|| "local".into())
+            })
+            .expect("local runtime configuration"),
+        )
+        .await
+        .expect("step")
         {
             DeliveryAction::Ack => {
-                complete_job(pool, "workflow-test", job.id)
+                complete_job(pool, &job.lease("workflow-test"))
                     .await
                     .expect("complete");
             }
@@ -110,7 +119,7 @@ async fn trigger_filter_notification_runs_and_dry_runs() {
     let workflow = create_workflow(&pool, project, "Recent papers", "", graph, &actor)
         .await
         .expect("create");
-    let version = publish_workflow(&pool, project, workflow.id, None, &actor)
+    let version = publish_workflow(&pool, project, workflow.id, None, &actor, false)
         .await
         .expect("publish");
     assert_eq!(version.version, 1);
@@ -150,11 +159,16 @@ async fn trigger_filter_notification_runs_and_dry_runs() {
     let run = get_workflow_run(&pool, project, started.run_id)
         .await
         .expect("run");
-    assert_eq!(run.status, "completed", "{:?}", run.error);
+    assert_eq!(
+        run.status,
+        deepref_application::workflows::WorkflowRunStatus::Completed,
+        "{:?}",
+        run.error
+    );
     let statuses: Vec<(String, String)> = run
         .nodes
         .iter()
-        .map(|n| (n.node_id.clone(), n.status.clone()))
+        .map(|n| (n.node_id.clone(), n.status.as_str().to_owned()))
         .collect();
     assert!(
         statuses.contains(&("recent".to_owned(), "completed".to_owned())),
@@ -205,7 +219,10 @@ async fn trigger_filter_notification_runs_and_dry_runs() {
     let run = get_workflow_run(&pool, project, test.run_id)
         .await
         .expect("test run detail");
-    assert_eq!(run.status, "completed");
+    assert_eq!(
+        run.status,
+        deepref_application::workflows::WorkflowRunStatus::Completed
+    );
     let note = run
         .nodes
         .iter()
@@ -262,7 +279,7 @@ async fn filter_with_no_match_skips_the_rest_and_for_each_fans_out() {
     let workflow = create_workflow(&pool, project, "Loop", "", graph, &actor)
         .await
         .expect("create");
-    publish_workflow(&pool, project, workflow.id, None, &actor)
+    publish_workflow(&pool, project, workflow.id, None, &actor, false)
         .await
         .expect("publish");
     let (version_id, graph) = get_published_graph(&pool, workflow.id)
@@ -289,18 +306,23 @@ async fn filter_with_no_match_skips_the_rest_and_for_each_fans_out() {
     let run = get_workflow_run(&pool, project, started.run_id)
         .await
         .expect("run");
-    assert_eq!(run.status, "completed", "{:?}", run.error);
+    assert_eq!(
+        run.status,
+        deepref_application::workflows::WorkflowRunStatus::Completed,
+        "{:?}",
+        run.error
+    );
     let tells = run
         .nodes
         .iter()
-        .filter(|n| n.node_id == "tell" && n.status == "completed")
+        .filter(|n| {
+            n.node_id == "tell"
+                && n.status == deepref_application::workflows::NodeRunState::Completed
+        })
         .count();
     assert_eq!(tells, 3);
-    assert!(
-        run.nodes
-            .iter()
-            .any(|n| n.node_id == "done" && n.status == "completed")
-    );
+    assert!(run.nodes.iter().any(|n| n.node_id == "done"
+        && n.status == deepref_application::workflows::NodeRunState::Completed));
     let titles: Vec<String> =
         sqlx::query_scalar("SELECT title FROM notifications WHERE project_id=$1 ORDER BY title")
             .bind(project.as_uuid())
@@ -377,7 +399,7 @@ async fn a_failed_run_is_recorded_once_and_a_test_run_stays_silent() {
     )
     .await
     .expect("create");
-    publish_workflow(&pool, project, workflow.id, None, &actor)
+    publish_workflow(&pool, project, workflow.id, None, &actor, false)
         .await
         .expect("publish");
     let (version_id, _published) = get_published_graph(&pool, workflow.id)
@@ -405,7 +427,12 @@ async fn a_failed_run_is_recorded_once_and_a_test_run_stays_silent() {
     let run = get_workflow_run(&pool, project, started.run_id)
         .await
         .expect("run");
-    assert_eq!(run.status, "failed", "{:?}", run.error);
+    assert_eq!(
+        run.status,
+        deepref_application::workflows::WorkflowRunStatus::Failed,
+        "{:?}",
+        run.error
+    );
 
     let rows = run_failure_rows(&pool, started.run_id).await;
     assert_eq!(rows.len(), 1, "exactly one notification for the failed run");
@@ -448,7 +475,7 @@ async fn a_failed_run_is_recorded_once_and_a_test_run_stays_silent() {
     let node_run_id =
         Uuid::parse_str(claim.payload["node_run_id"].as_str().expect("payload")).expect("uuid");
     assert!(matches!(
-        begin_node_execution(&pool, node_run_id)
+        begin_node_execution(&pool, node_run_id, &claim.lease("wf-test-fail"))
             .await
             .expect("begin"),
         StepClaim::Execute(_)
@@ -456,19 +483,23 @@ async fn a_failed_run_is_recorded_once_and_a_test_run_stays_silent() {
     finish_node_execution(
         &pool,
         node_run_id,
+        &claim.lease("wf-test-fail"),
         NodeOutcome::Failed {
             message: "The other service did not answer in time.".to_owned(),
         },
     )
     .await
     .expect("fail the test step");
-    complete_job(&pool, "wf-test-fail", claim.id)
+    complete_job(&pool, &claim.lease("wf-test-fail"))
         .await
         .expect("complete");
     let test_run = get_workflow_run(&pool, project, test.run_id)
         .await
         .expect("test run");
-    assert_eq!(test_run.status, "failed");
+    assert_eq!(
+        test_run.status,
+        deepref_application::workflows::WorkflowRunStatus::Failed
+    );
     assert!(
         run_failure_rows(&pool, test.run_id).await.is_empty(),
         "a test run must not notify"
@@ -485,7 +516,7 @@ async fn notify_step(
     pool: &PgPool,
     project: ProjectId,
     run_id: Uuid,
-) -> deepref_postgres::NodeRunRecord {
+) -> deepref_app::NodeRunRecord {
     let run = get_workflow_run(pool, project, run_id).await.expect("run");
     run.nodes
         .into_iter()
@@ -510,7 +541,7 @@ async fn defer_queued_step(pool: &PgPool, project: ProjectId) -> Uuid {
     assert_eq!(claim.project_id.as_uuid(), project.as_uuid());
     let node_run_id =
         Uuid::parse_str(claim.payload["node_run_id"].as_str().expect("payload")).expect("uuid");
-    match begin_node_execution(pool, node_run_id)
+    match begin_node_execution(pool, node_run_id, &claim.lease("wait-test"))
         .await
         .expect("begin")
     {
@@ -526,6 +557,7 @@ async fn defer_queued_step(pool: &PgPool, project: ProjectId) -> Uuid {
     finish_node_execution(
         pool,
         node_run_id,
+        &claim.lease("wait-test"),
         waiting(json!({"polls": 1, "reviews": []})),
     )
     .await
@@ -534,11 +566,12 @@ async fn defer_queued_step(pool: &PgPool, project: ProjectId) -> Uuid {
     finish_node_execution(
         pool,
         node_run_id,
+        &claim.lease("wait-test"),
         waiting(json!({"polls": 1, "reviews": []})),
     )
     .await
     .expect("defer again");
-    complete_job(pool, "wait-test", claim.id)
+    complete_job(pool, &claim.lease("wait-test"))
         .await
         .expect("complete");
     node_run_id
@@ -588,7 +621,10 @@ async fn a_waiting_step_is_looked_at_later_and_a_lost_look_fails_it() {
         .run_id;
     let node_run_id = defer_queued_step(&pool, project).await;
     let step = notify_step(&pool, project, first).await;
-    assert_eq!(step.status, "queued");
+    assert_eq!(
+        step.status,
+        deepref_application::workflows::NodeRunState::Queued
+    );
     assert_eq!(step.note.as_deref(), Some("Waiting for the AI."));
     let saved: Option<Value> =
         sqlx::query_scalar("SELECT wait_state FROM workflow_node_runs WHERE id=$1")
@@ -619,8 +655,16 @@ async fn a_waiting_step_is_looked_at_later_and_a_lost_look_fails_it() {
         .expect("make due");
     drain(&pool, project.as_uuid()).await;
     let run = get_workflow_run(&pool, project, first).await.expect("run");
-    assert_eq!(run.status, "completed", "{:?}", run.error);
-    assert_eq!(notify_step(&pool, project, first).await.status, "completed");
+    assert_eq!(
+        run.status,
+        deepref_application::workflows::WorkflowRunStatus::Completed,
+        "{:?}",
+        run.error
+    );
+    assert_eq!(
+        notify_step(&pool, project, first).await.status,
+        deepref_application::workflows::NodeRunState::Completed
+    );
     assert_eq!(workflow_notifications(&pool, project.as_uuid()).await, 1);
 
     // Run two: its look dies. The reaper fails the step, so the run ends.
@@ -636,8 +680,14 @@ async fn a_waiting_step_is_looked_at_later_and_a_lost_look_fails_it() {
         .expect("kill the look");
     assert!(fail_abandoned_steps(&pool).await.expect("reap") >= 1);
     let run = get_workflow_run(&pool, project, second).await.expect("run");
-    assert_eq!(run.status, "failed");
-    assert_eq!(notify_step(&pool, project, second).await.status, "failed");
+    assert_eq!(
+        run.status,
+        deepref_application::workflows::WorkflowRunStatus::Failed
+    );
+    assert_eq!(
+        notify_step(&pool, project, second).await.status,
+        deepref_application::workflows::NodeRunState::Failed
+    );
     assert_eq!(workflow_notifications(&pool, project.as_uuid()).await, 1);
 
     sqlx::query("DELETE FROM projects WHERE id=$1")
@@ -645,4 +695,205 @@ async fn a_waiting_step_is_looked_at_later_and_a_lost_look_fails_it() {
         .execute(&pool)
         .await
         .expect("cleanup");
+}
+
+/// Start a one-block "notify" workflow and claim its step job.
+async fn claimed_notify_step(
+    pool: &PgPool,
+    project: ProjectId,
+    owner: &str,
+) -> (Uuid, Uuid, deepref_application::jobs::ClaimedJob) {
+    let actor = Actor::new(ActorKind::User, "wf-test").expect("actor");
+    let graph = WorkflowGraph {
+        nodes: vec![
+            node("start", "trigger.manual", json!({})),
+            node("tell", "integration.notify", json!({"title": "Once"})),
+        ],
+        edges: vec![edge("start", "data", "tell", "data")],
+    };
+    let workflow = create_workflow(pool, project, "Fence", "", graph.clone(), &actor)
+        .await
+        .expect("create");
+    let run_id = start_run(
+        pool,
+        &StartRun {
+            project_id: project.as_uuid(),
+            workflow_id: workflow.id,
+            version_id: None,
+            graph,
+            trigger_kind: "manual".to_owned(),
+            trigger_data: json!({}),
+            idempotency_key: format!("fence:{}", Uuid::new_v4()),
+            actor_kind: "user".to_owned(),
+            actor_id: "wf-test".to_owned(),
+            test_mode: false,
+        },
+    )
+    .await
+    .expect("start")
+    .run_id;
+    let job = claim_job(pool, owner, Duration::from_secs(60))
+        .await
+        .expect("claim")
+        .expect("the notify step is queued");
+    let node_run_id =
+        Uuid::parse_str(job.payload["node_run_id"].as_str().expect("payload")).expect("uuid");
+    (run_id, node_run_id, job)
+}
+
+async fn node_attempts(pool: &PgPool, node_run_id: Uuid) -> i32 {
+    sqlx::query_scalar("SELECT attempts FROM workflow_node_runs WHERE id=$1")
+        .bind(node_run_id)
+        .fetch_one(pool)
+        .await
+        .expect("node attempts")
+}
+
+async fn new_project(pool: &PgPool, label: &str) -> ProjectId {
+    let project = ProjectId::new(Uuid::new_v4());
+    sqlx::query("INSERT INTO projects (id,name) VALUES ($1,$2)")
+        .bind(project.as_uuid())
+        .bind(format!("{label}-{}", project.as_uuid()))
+        .execute(pool)
+        .await
+        .expect("project");
+    project
+}
+
+/// A step delivered twice under one claim (a duplicate dispatch, a retried
+/// RPC) runs its side effect once and records one outcome.
+#[tokio::test]
+async fn concurrent_handle_step_calls_on_one_node_execute_once() {
+    let Some(pool) = database().await else { return };
+    let project = new_project(&pool, "wf-fence-concurrent").await;
+    let (run_id, node_run_id, job) = claimed_notify_step(&pool, project, "fence-worker").await;
+    let lease = job.lease("fence-worker");
+    let runtime = deepref_config::RuntimeConfig::from_source("workflow-test", &|name| {
+        (name == "APP_ENV").then(|| "local".into())
+    })
+    .expect("local runtime configuration");
+
+    let (left, right) = tokio::join!(
+        workflows::handle_step(&pool, &job, &lease, None, &runtime),
+        workflows::handle_step(&pool, &job, &lease, None, &runtime),
+    );
+    assert_eq!(left.expect("left"), DeliveryAction::Ack);
+    assert_eq!(right.expect("right"), DeliveryAction::Ack);
+
+    assert_eq!(
+        node_attempts(&pool, node_run_id).await,
+        1,
+        "the block must execute once"
+    );
+    assert_eq!(
+        workflow_notifications(&pool, project.as_uuid()).await,
+        1,
+        "the side effect must happen once"
+    );
+    let run = get_workflow_run(&pool, project, run_id).await.expect("run");
+    assert_eq!(
+        run.status,
+        deepref_application::workflows::WorkflowRunStatus::Completed,
+        "{:?}",
+        run.error
+    );
+}
+
+/// After the same worker reclaims an expired step job, the stale attempt can
+/// neither restart the block nor overwrite the live attempt's outcome.
+#[tokio::test]
+async fn a_stale_attempt_cannot_restart_or_overwrite_a_reclaimed_step() {
+    let Some(pool) = database().await else { return };
+    let project = new_project(&pool, "wf-fence-stale").await;
+    let (run_id, node_run_id, first) = claimed_notify_step(&pool, project, "fence-worker").await;
+    let stale = first.lease("fence-worker");
+    assert!(matches!(
+        begin_node_execution(&pool, node_run_id, &stale)
+            .await
+            .expect("begin"),
+        StepClaim::Execute(_)
+    ));
+
+    // The first attempt stalls past its lease; the same process reclaims it.
+    sqlx::query("UPDATE jobs SET leased_until=now()-interval '1 second' WHERE id=$1")
+        .bind(first.id)
+        .execute(&pool)
+        .await
+        .expect("expire");
+    assert!(
+        !finish_node_execution(
+            &pool,
+            node_run_id,
+            &stale,
+            NodeOutcome::Failed {
+                message: "expired before reclaim".to_owned()
+            },
+        )
+        .await
+        .expect("expired finish"),
+        "expiry alone fences the outcome, even before recovery or takeover"
+    );
+    deepref_app::record_node_retry(&pool, node_run_id, &stale, "expired retry")
+        .await
+        .expect("expired retry");
+    assert_eq!(
+        notify_step(&pool, project, run_id).await.status,
+        deepref_application::workflows::NodeRunState::Running
+    );
+    assert_eq!(
+        deepref_app::recover_expired_jobs(&pool)
+            .await
+            .expect("recover"),
+        1
+    );
+    sqlx::query("UPDATE jobs SET available_at=now() WHERE id=$1")
+        .bind(first.id)
+        .execute(&pool)
+        .await
+        .expect("skip backoff");
+    let second = claim_job(&pool, "fence-worker", Duration::from_secs(60))
+        .await
+        .expect("claim")
+        .expect("reclaimed");
+    assert_eq!(second.id, first.id);
+    let live = second.lease("fence-worker");
+    let runtime = deepref_config::RuntimeConfig::from_source("workflow-test", &|name| {
+        (name == "APP_ENV").then(|| "local".into())
+    })
+    .expect("local runtime configuration");
+    assert_eq!(
+        workflows::handle_step(&pool, &second, &live, None, &runtime)
+            .await
+            .expect("live attempt"),
+        DeliveryAction::Ack
+    );
+    assert_eq!(
+        notify_step(&pool, project, run_id).await.status,
+        deepref_application::workflows::NodeRunState::Completed
+    );
+
+    // The stale attempt wakes up: it may not restart the block...
+    assert!(matches!(
+        begin_node_execution(&pool, node_run_id, &stale)
+            .await
+            .expect("stale begin"),
+        StepClaim::Stale
+    ));
+    // ...nor overwrite the recorded outcome.
+    let overwritten = finish_node_execution(
+        &pool,
+        node_run_id,
+        &stale,
+        NodeOutcome::Failed {
+            message: "late duplicate".to_owned(),
+        },
+    )
+    .await
+    .expect("stale finish");
+    assert!(!overwritten, "a stale finish must be a no-op");
+    assert_eq!(
+        notify_step(&pool, project, run_id).await.status,
+        deepref_application::workflows::NodeRunState::Completed
+    );
+    assert_eq!(workflow_notifications(&pool, project.as_uuid()).await, 1);
 }

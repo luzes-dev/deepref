@@ -1,8 +1,8 @@
 # Calibration deployment and recalibration sequencing
 
 Operator guide for the semantic-contract calibration migration
-(`crates/postgres/migrations/0056_semantic_contract_calibration.sql`, PR0 of the
-Rig 0.44 + rig-cassette migration). It states the blast radius, the required
+(`crates/app/migrations/0056_semantic_contract_calibration.sql`, the first
+step of the Rig 0.44 + rig-cassette migration). It states the blast radius, the required
 migrate → recalibrate → verify sequence, and how to tell an expected
 "refused: recalibrate" refusal apart from a real failure.
 
@@ -12,22 +12,22 @@ After the migration ships, **every calibration bundle stored before it refuses
 automation admission until it is recalibrated**. The migration leaves scheme-1
 and scheme-2 rows stored for audit but declares they "can never admit
 automation under the new recipe"
-(`crates/postgres/migrations/0056_semantic_contract_calibration.sql:15-19`).
+(`crates/app/migrations/0056_semantic_contract_calibration.sql:15-19`).
 
 The mechanism is the scheme gate in
-`crates/postgres/src/review_calibration.rs:305-311`: `check_admission` compares
+`crates/app/src/review_calibration.rs:305-311`: `check_admission` compares
 the stored `identity_scheme` against `SEMANTIC_CONTRACT_SCHEME`, which is `3`
 (`crates/review/src/contract.rs:49-53`). Any stored scheme other than 3 —
-i.e. every row written before PR0 — is refused as
+i.e. every row written before the calibration migration — is refused as
 `CalibrationRefusal::IncompatibleIdentityScheme`. A refusal is fail-closed: no
-run is scheduled (`crates/postgres/src/review_calibration.rs:67-77`,
+run is scheduled (`crates/app/src/review_calibration.rs:67-77`,
 `admit_calibration` at `review_calibration.rs:260-288`).
 
 Scope notes:
 
 - Only automation-triggered origins are gated (`AdvisoryTriggered` /
   `AiFirstTriggered` in
-  `crates/postgres/src/review_runs.rs:114-120`). Manual scheduling does not go
+  `crates/app/src/review_runs.rs:114-120`). Manual scheduling does not go
   through `admit_calibration`.
 - A scheme-3 bundle that is `Failed` still refuses as `calibration_failed`
   (`review_calibration.rs:302-304`), independent of the migration.
@@ -42,14 +42,14 @@ Scope notes:
 2. **Recalibrate.** Record one new **scheme-3, `passing`** bundle per
    definition/stage that should admit automation. The bundle identity must come
    from `preview_review_identity` or `preview_screening_identity`, never be
-   built by hand (`crates/postgres/src/review_calibration.rs:40-42`), and is
+   built by hand (`crates/app/src/review_calibration.rs:40-42`), and is
    recorded with `insert_review_calibration_bundle`
    (`review_calibration.rs:192-229`).
    - **Gap, verified:** there is no HTTP endpoint or CLI that records
      calibration bundles. The only callers of
      `insert_review_calibration_bundle` in the tree are tests
-     (`crates/postgres/tests/second_review.rs`,
-     `crates/postgres/tests/review_runs.rs`); the http-api test suite inserts
+     (`crates/app/tests/second_review.rs`,
+     `crates/app/tests/review_runs.rs`); the http-api test suite inserts
      bundles with raw SQL
      (`crates/http-api/tests/exports_postgres.rs:387-417`). Recalibration is
      therefore an out-of-band, expert-adjudicated action today — confirm the
@@ -57,7 +57,7 @@ Scope notes:
      with the owning team before announcing the deploy.
 3. **Verify (no enable flag exists).** Recovery is automatic: the next
    successful schedule clears the per-stage gate record
-   (`crates/postgres/src/second_review.rs:202-205`). Confirm via:
+   (`crates/app/src/second_review.rs:202-205`). Confirm via:
    - `GET /projects/{project_id}/ai/activity/overview`
      (`crates/http-api/src/routes/autonomy.rs:465-491`) — but see the caveat
      below;

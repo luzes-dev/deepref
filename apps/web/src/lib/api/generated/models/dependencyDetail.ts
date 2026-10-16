@@ -11,8 +11,18 @@ export interface DependencyDetail {
 	backlog?: number | null;
 	/** @nullable */
 	lag?: number | null;
+	/**
+	 * The most recent worker heartbeat, live or not (worker only).
+	 * @nullable
+	 */
+	last_heartbeat_at?: string | null;
 	/** @nullable */
 	last_success_at?: string | null;
+	/**
+	 * Worker processes with a recent heartbeat (worker only).
+	 * @nullable
+	 */
+	live_workers?: number | null;
 	/** @nullable */
 	oldest_age_seconds?: number | null;
 	/**

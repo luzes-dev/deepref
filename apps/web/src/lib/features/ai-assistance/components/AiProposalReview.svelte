@@ -24,6 +24,7 @@
 	import { Spinner } from '@deepref/ui/spinner';
 	import { Brain, Check, FileSearch, Info, X } from '@lucide/svelte';
 	import { ReviewRunObserver } from '../review-run-observer.svelte';
+	import ReviewRunActions from './ReviewRunActions.svelte';
 	import EvidenceLabel from '#lib/features/evidence/EvidenceLabel.svelte';
 	import { humanizeCode } from '#lib/features/evidence/labels.js';
 	import { plainText } from '#lib/features/notifications/notification-copy.js';
@@ -116,6 +117,9 @@
 
 	const proposals = $derived(proposalsQuery.data?.data.items ?? []);
 	const activeProposal = $derived(proposals[0] ?? null);
+	// After the suggestion was rejected, the observed completed run can be asked
+	// again for a fresh opinion. A diverted second-reviewer opinion cannot.
+	const canRegenerate = $derived(!activeProposal && !divertedOpinion);
 	const errorMessage = $derived(
 		localError ||
 			reviewRun.error ||
@@ -532,7 +536,8 @@
 			{/if}
 		</Card.Content>
 		<Card.Footer class="flex flex-wrap justify-end gap-2 border-t border-border/60 pt-4">
-			{#if !activeProposal && ((stage === 'dedupe' && recordId && candidateReportId) || stage !== 'dedupe')}
+			<ReviewRunActions run={reviewRun} allowRegenerate={canRegenerate} />
+			{#if !activeProposal && !reviewRun.canRetry && !(canRegenerate && reviewRun.canRegenerate) && ((stage === 'dedupe' && recordId && candidateReportId) || stage !== 'dedupe')}
 				<Button
 					variant="outline"
 					onclick={() => void generate()}

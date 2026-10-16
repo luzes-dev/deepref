@@ -135,7 +135,7 @@ impl AiGateway for DedupeEchoGateway {
 }
 
 async fn database() -> Option<PgPool> {
-    deepref_postgres::test_isolation::isolated_pool_from_env("DATABASE_URL", 8).await
+    deepref_app::test_isolation::isolated_pool_from_env("DATABASE_URL", 8).await
 }
 
 fn api_config() -> ApiConfig {
@@ -145,6 +145,10 @@ fn api_config() -> ApiConfig {
     )
     .expect("local test runtime should parse");
     ApiConfig {
+        documents: deepref_config::DocumentConfig::from_source(&|name| {
+            (name == "APP_ENV").then(|| "local".into())
+        })
+        .expect("local test document configuration"),
         runtime,
         bind_addr: "127.0.0.1:0".parse().expect("test bind address is valid"),
         cors_allow_any: false,
@@ -186,7 +190,10 @@ where
     let job = ClaimedJob {
         id: row.get("id"),
         project_id: row.get::<Uuid, _>("project_id").into(),
-        kind: row.get("kind"),
+        kind: row
+            .get::<String, _>("kind")
+            .parse()
+            .expect("valid queued job kind"),
         payload: row.get("payload"),
         attempts: row.get("attempts"),
         max_attempts: row.get("max_attempts"),
@@ -194,11 +201,15 @@ where
     handle_job_with_documents_owned_and_ai(
         pool.clone(),
         &job,
-        &owner,
+        &job.lease(owner.as_str()),
         Duration::from_secs(300),
         None,
         None,
         Arc::new(gateway),
+        &deepref_worker::config::WorkerConfig::from_source(&|name| {
+            (name == "APP_ENV").then(|| "local".into())
+        })
+        .expect("local worker configuration"),
     )
     .await
     .expect("review worker handles terminal delivery")
@@ -209,7 +220,7 @@ async fn blind_screening_disagreement_blocks_without_exposing_primary_output() {
     let Some(pool) = database().await else { return };
     let (project_id, report_id, criterion_id, title) = setup(&pool).await;
     let provider = format!("blind-screening-provider-{}", Uuid::new_v4());
-    deepref_postgres::insert_model_route(&pool, &route(&provider), Utc::now())
+    deepref_app::insert_model_route(&pool, &route(&provider), Utc::now())
         .await
         .expect("model route inserts");
     let protocol_id: Uuid = sqlx::query_scalar(
@@ -304,7 +315,7 @@ async fn candidate_audit_and_repair_cannot_patch_protected_screening_fields() {
     let Some(pool) = database().await else { return };
     let (project_id, report_id, criterion_id, title) = setup(&pool).await;
     let provider = format!("candidate-audit-provider-{}", Uuid::new_v4());
-    deepref_postgres::insert_model_route(&pool, &route(&provider), Utc::now())
+    deepref_app::insert_model_route(&pool, &route(&provider), Utc::now())
         .await
         .expect("model route inserts");
     let protocol_id: Uuid = sqlx::query_scalar(
@@ -409,7 +420,7 @@ async fn changed_screening_revision_blocks_finalization_without_a_proposal() {
     let Some(pool) = database().await else { return };
     let (project_id, report_id, criterion_id, title) = setup(&pool).await;
     let provider = format!("stale-screening-provider-{}", Uuid::new_v4());
-    deepref_postgres::insert_model_route(&pool, &route(&provider), Utc::now())
+    deepref_app::insert_model_route(&pool, &route(&provider), Utc::now())
         .await
         .expect("model route inserts");
     let protocol_id: Uuid = sqlx::query_scalar(
@@ -511,7 +522,7 @@ async fn duplicate_detection_executes_through_the_same_compiled_runtime() {
     .execute(&pool)
     .await
     .expect("record inserts");
-    deepref_postgres::insert_model_route(
+    deepref_app::insert_model_route(
         &pool,
         &ResolvedModel {
             profile: ModelProfile::FastClassifier,
@@ -755,7 +766,7 @@ async fn injected_gateway_is_called_and_run_provenance_is_persisted() {
     let (project_id, report_id, criterion_id, title) = setup(&pool).await;
     let provider = format!("test-provider-{}", Uuid::new_v4());
     let model_route = route(&provider);
-    deepref_postgres::insert_model_route(&pool, &model_route, Utc::now())
+    deepref_app::insert_model_route(&pool, &model_route, Utc::now())
         .await
         .expect("model route inserts");
     let calls = Arc::new(Mutex::new(0));
@@ -933,7 +944,7 @@ async fn full_text_retrieval_uses_or_terms_and_passes_grounding_to_gateway() {
     .expect("target evidence block");
 
     let provider = format!("full-text-provider-{}", Uuid::new_v4());
-    deepref_postgres::insert_model_route(&pool, &full_text_route(&provider), Utc::now())
+    deepref_app::insert_model_route(&pool, &full_text_route(&provider), Utc::now())
         .await
         .expect("full-text model route");
     let calls = Arc::new(Mutex::new(0));
@@ -1020,7 +1031,7 @@ async fn gateway_failure_is_a_failed_run_without_a_proposal() {
     let Some(pool) = database().await else { return };
     let (project_id, report_id, criterion_id, _title) = setup(&pool).await;
     let provider = format!("failing-provider-{}", Uuid::new_v4());
-    deepref_postgres::insert_model_route(&pool, &route(&provider), Utc::now())
+    deepref_app::insert_model_route(&pool, &route(&provider), Utc::now())
         .await
         .expect("model route inserts");
     let gateway = TestGateway {

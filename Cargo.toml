@@ -4,21 +4,19 @@ members = [
     "crates/domain",
     "crates/application",
     "crates/documents",
-    "crates/grobid",
-    "crates/postgres",
+    "crates/app",
     "crates/http-api",
     "crates/config",
-    "crates/core",
-    "crates/crossref",
-    "crates/providers",
-    "crates/events",
-    "crates/graph",
+    "crates/integrations",
     "crates/telemetry",
     "crates/ai",
     "crates/review",
     "apps/server",
     "services/worker",
 ]
+# cargo-fuzz builds `fuzz/` on nightly with sanitizer flags, so it is its own
+# workspace (with its own Cargo.lock) rather than a member of this one.
+exclude = ["fuzz"]
 resolver = "3"
 
 # Keep correctness and panic-safety rules centralized. Clippy's broad
@@ -49,15 +47,10 @@ version = "0.1.0"
 deepref-domain = { path = "crates/domain" }
 deepref-application = { path = "crates/application" }
 deepref-documents = { path = "crates/documents" }
-deepref-grobid = { path = "crates/grobid" }
-deepref-postgres = { path = "crates/postgres" }
+deepref-app = { path = "crates/app" }
 deepref-http-api = { path = "crates/http-api" }
-deepref-core = { path = "crates/core" }
 deepref-config = { path = "crates/config" }
-deepref-crossref = { path = "crates/crossref" }
-deepref-providers = { path = "crates/providers" }
-deepref-events = { path = "crates/events" }
-deepref-graph = { path = "crates/graph" }
+deepref-integrations = { path = "crates/integrations" }
 deepref-telemetry = { path = "crates/telemetry" }
 deepref-ai = { path = "crates/ai" }
 deepref-review = { path = "crates/review" }

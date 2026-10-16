@@ -1,20 +1,20 @@
-use std::{
-    sync::{Arc, OnceLock},
-    time::Duration,
-};
+use std::{sync::Arc, time::Duration};
 
 use deepref_ai::{
     AiExecutionContext, AiGateway, AiTaskRunner, ProposalPersistence, ProviderEndpoint,
     SystemClock, UuidProvider,
 };
-use deepref_core::{IngestionItemStatus, normalize_doi};
-use deepref_crossref::CrossrefError;
+use deepref_application::jobs::JobLease;
 use deepref_documents::{
     DocumentParser, DocumentStore, HttpsPdfFetcher, PARSER_VERSION, PdfiumParser,
     RemoteDocumentFetcher,
 };
-use deepref_events::{DeadLetterRecord, EventEnvelope, WorkFetchRequested, deserialize_compatible};
-use deepref_providers::CrossrefProvider;
+use deepref_domain::events::{
+    DeadLetterRecord, EventEnvelope, WorkFetchRequested, deserialize_compatible,
+};
+use deepref_domain::{IngestionItemStatus, normalize_doi};
+use deepref_integrations::CrossrefClient;
+use deepref_integrations::CrossrefError;
 use deepref_review::worker::{
     CompiledReview, ReviewExecutionPlan, ReviewModelIdentity, ReviewNode, ScreeningReviewPlan,
     StandardReviewPlan,
@@ -22,27 +22,13 @@ use deepref_review::worker::{
 use serde::Deserialize;
 use sha2::{Digest, Sha256};
 use sqlx::PgPool;
-use tokio::sync::{Semaphore, watch};
+use tokio::sync::watch;
 use uuid::Uuid;
 
 use crate::{
     delivery::{DeliveryAction, FailureClass, action_for},
     limiter, store,
 };
-
-static PDF_PARSE_SEMAPHORE: OnceLock<Arc<Semaphore>> = OnceLock::new();
-
-pub fn validate_pdf_parse_concurrency() -> anyhow::Result<()> {
-    if let Ok(value) = std::env::var("DOCUMENT_PARSE_CONCURRENCY") {
-        let parsed = value.parse::<usize>().map_err(|_| {
-            anyhow::anyhow!("DOCUMENT_PARSE_CONCURRENCY must be a positive integer up to 16")
-        })?;
-        if !(1..=16).contains(&parsed) {
-            anyhow::bail!("DOCUMENT_PARSE_CONCURRENCY must be a positive integer up to 16");
-        }
-    }
-    Ok(())
-}
 
 async fn parse_work_fetch_event(
     pool: &PgPool,
@@ -147,6 +133,7 @@ async fn claim_doi_lease(
     Ok(None)
 }
 
+#[allow(clippy::too_many_arguments)]
 async fn execute_work_fetch(
     pool: PgPool,
     bytes: &[u8],
@@ -155,24 +142,26 @@ async fn execute_work_fetch(
     owner: Uuid,
     claim_lease: Duration,
     delivery_count: u64,
+    config: &crate::config::WorkerConfig,
 ) -> anyhow::Result<DeliveryAction> {
     let settings = store::load_runtime_settings(&pool).await?;
-    let client = match CrossrefProvider::new(settings.crossref_mailto.clone()) {
-        Ok(client) => client.with_max_attempts(settings.retry_attempts),
-        Err(error) => {
-            store::finalize_terminal_failure(
-                &pool,
-                event,
-                doi,
-                owner,
-                IngestionItemStatus::Failed,
-                &error.to_string(),
-                None,
-            )
-            .await?;
-            return Ok(DeliveryAction::Ack);
-        }
-    };
+    let client =
+        match CrossrefClient::new(settings.crossref_mailto.clone(), &config.runtime.crossref) {
+            Ok(client) => client.with_max_attempts(settings.retry_attempts),
+            Err(error) => {
+                store::finalize_terminal_failure(
+                    &pool,
+                    event,
+                    doi,
+                    owner,
+                    IngestionItemStatus::Failed,
+                    &error.to_string(),
+                    None,
+                )
+                .await?;
+                return Ok(DeliveryAction::Ack);
+            }
+        };
     limiter::acquire(&pool, "crossref", settings.rate_limit_per_second).await?;
     let (cancel_heartbeat, heartbeat_done) = spawn_heartbeat(
         pool.clone(),
@@ -241,6 +230,7 @@ pub async fn handle_message(
     bytes: Vec<u8>,
     delivery_count: u64,
     claim_lease: Duration,
+    config: &crate::config::WorkerConfig,
 ) -> anyhow::Result<DeliveryAction> {
     let event = match parse_work_fetch_event(&pool, &bytes, delivery_count).await? {
         Ok(event) => event,
@@ -304,6 +294,7 @@ pub async fn handle_message(
         owner,
         claim_lease,
         delivery_count,
+        config,
     )
     .await
 }
@@ -312,8 +303,9 @@ pub async fn handle_job(
     pool: sqlx::PgPool,
     job: &deepref_application::jobs::ClaimedJob,
     claim_lease: Duration,
+    config: &crate::config::WorkerConfig,
 ) -> anyhow::Result<DeliveryAction> {
-    handle_job_with_document_services_inner(pool, job, claim_lease, JobServices::default()).await
+    handle_job_with_document_services_inner(pool, job, claim_lease, JobServices::new(config)).await
 }
 
 pub async fn handle_job_with_documents(
@@ -322,6 +314,7 @@ pub async fn handle_job_with_documents(
     claim_lease: Duration,
     document_store: Option<Arc<DocumentStore>>,
     document_parser: Option<Arc<dyn DocumentParser>>,
+    config: &crate::config::WorkerConfig,
 ) -> anyhow::Result<DeliveryAction> {
     handle_job_with_document_services_inner(
         pool,
@@ -330,7 +323,7 @@ pub async fn handle_job_with_documents(
         JobServices {
             document_store,
             document_parser,
-            ..JobServices::default()
+            ..JobServices::new(config)
         },
     )
     .await
@@ -339,10 +332,11 @@ pub async fn handle_job_with_documents(
 pub async fn handle_job_with_documents_owned(
     pool: sqlx::PgPool,
     job: &deepref_application::jobs::ClaimedJob,
-    owner: &str,
+    lease: &JobLease,
     claim_lease: Duration,
     document_store: Option<Arc<DocumentStore>>,
     document_parser: Option<Arc<dyn DocumentParser>>,
+    config: &crate::config::WorkerConfig,
 ) -> anyhow::Result<DeliveryAction> {
     handle_job_with_document_services_inner(
         pool,
@@ -351,8 +345,8 @@ pub async fn handle_job_with_documents_owned(
         JobServices {
             document_store,
             document_parser,
-            owner: Some(owner),
-            ..JobServices::default()
+            lease: Some(lease),
+            ..JobServices::new(config)
         },
     )
     .await
@@ -365,6 +359,7 @@ pub async fn handle_job_with_document_services(
     document_store: Option<Arc<DocumentStore>>,
     document_parser: Option<Arc<dyn DocumentParser>>,
     remote_fetcher: Option<Arc<dyn RemoteDocumentFetcher>>,
+    config: &crate::config::WorkerConfig,
 ) -> anyhow::Result<DeliveryAction> {
     handle_job_with_document_services_inner(
         pool,
@@ -374,20 +369,22 @@ pub async fn handle_job_with_document_services(
             document_store,
             document_parser,
             remote_fetcher,
-            ..JobServices::default()
+            ..JobServices::new(config)
         },
     )
     .await
 }
 
+#[allow(clippy::too_many_arguments)]
 pub async fn handle_job_with_documents_owned_and_ai(
     pool: sqlx::PgPool,
     job: &deepref_application::jobs::ClaimedJob,
-    owner: &str,
+    lease: &JobLease,
     claim_lease: Duration,
     document_store: Option<Arc<DocumentStore>>,
     document_parser: Option<Arc<dyn DocumentParser>>,
     ai_gateway: Arc<dyn AiGateway>,
+    config: &crate::config::WorkerConfig,
 ) -> anyhow::Result<DeliveryAction> {
     handle_job_with_document_services_inner(
         pool,
@@ -396,21 +393,34 @@ pub async fn handle_job_with_documents_owned_and_ai(
         JobServices {
             document_store,
             document_parser,
-            owner: Some(owner),
+            lease: Some(lease),
             ai_gateway: Some(ai_gateway),
-            ..JobServices::default()
+            ..JobServices::new(config)
         },
     )
     .await
 }
 
-#[derive(Default)]
 struct JobServices<'a> {
+    config: &'a crate::config::WorkerConfig,
     document_store: Option<Arc<DocumentStore>>,
     document_parser: Option<Arc<dyn DocumentParser>>,
     remote_fetcher: Option<Arc<dyn RemoteDocumentFetcher>>,
-    owner: Option<&'a str>,
+    lease: Option<&'a JobLease>,
     ai_gateway: Option<Arc<dyn AiGateway>>,
+}
+
+impl<'a> JobServices<'a> {
+    fn new(config: &'a crate::config::WorkerConfig) -> Self {
+        Self {
+            config,
+            document_store: None,
+            document_parser: None,
+            remote_fetcher: None,
+            lease: None,
+            ai_gateway: None,
+        }
+    }
 }
 
 async fn handle_retrieve_document_job(
@@ -418,6 +428,7 @@ async fn handle_retrieve_document_job(
     job: &deepref_application::jobs::ClaimedJob,
     document_store: Option<Arc<DocumentStore>>,
     remote_fetcher: Option<Arc<dyn RemoteDocumentFetcher>>,
+    config: &crate::config::WorkerConfig,
 ) -> anyhow::Result<DeliveryAction> {
     let document_id = job
         .payload
@@ -425,7 +436,7 @@ async fn handle_retrieve_document_job(
         .and_then(serde_json::Value::as_str)
         .ok_or_else(|| anyhow::anyhow!("retrieve_document payload is missing document_id"))?
         .parse::<Uuid>()?;
-    let document = deepref_postgres::get_document_by_id(pool, document_id).await?;
+    let document = deepref_app::get_document_by_id(pool, document_id).await?;
     if document.object_key.is_some() && matches!(document.status.as_str(), "uploaded" | "available")
     {
         return Ok(DeliveryAction::Ack);
@@ -436,9 +447,9 @@ async fn handle_retrieve_document_job(
         .ok_or_else(|| anyhow::anyhow!("external document has no source URL"))?;
     let store = match document_store {
         Some(store) => store,
-        None => Arc::new(DocumentStore::from_env()?),
+        None => Arc::new(DocumentStore::from_config(&config.documents)?),
     };
-    if !deepref_postgres::mark_document_retrieving(pool, document_id).await? {
+    if !deepref_app::mark_document_retrieving(pool, document_id).await? {
         return Ok(DeliveryAction::Ack);
     }
     let fetcher: Arc<dyn RemoteDocumentFetcher> =
@@ -453,12 +464,8 @@ async fn handle_retrieve_document_job(
                 error = %error,
                 "external document retrieval failed"
             );
-            deepref_postgres::mark_document_retrieval_failed(
-                pool,
-                document_id,
-                &error.failure_record(),
-            )
-            .await?;
+            deepref_app::mark_document_retrieval_failed(pool, document_id, &error.failure_record())
+                .await?;
             if error.is_permanent() {
                 // Retrying the same link cannot succeed. The reason is recorded on the
                 // document, so the job completes instead of retrying and dead-lettering.
@@ -471,7 +478,7 @@ async fn handle_retrieve_document_job(
         Ok(value) => value,
         Err(error) => {
             let _ = store.delete(&stored.opaque_id).await;
-            deepref_postgres::mark_document_retrieval_failed(
+            deepref_app::mark_document_retrieval_failed(
                 pool,
                 document_id,
                 "retrieved document size overflowed persistence bounds",
@@ -481,7 +488,7 @@ async fn handle_retrieve_document_job(
         }
     };
     let mut transaction = pool.begin().await?;
-    let completion = match deepref_postgres::complete_document_retrieval(
+    let completion = match deepref_app::complete_document_retrieval(
         &mut transaction,
         deepref_domain::ProjectId::new(document.project_id),
         document_id,
@@ -495,7 +502,7 @@ async fn handle_retrieve_document_job(
         Err(error) => {
             let _ = transaction.rollback().await;
             let _ = store.delete(&stored.opaque_id).await;
-            deepref_postgres::mark_document_retrieval_failed(
+            deepref_app::mark_document_retrieval_failed(
                 pool,
                 document_id,
                 "retrieved document could not be persisted",
@@ -508,9 +515,9 @@ async fn handle_retrieve_document_job(
         let _ = store.delete(&stored.opaque_id).await;
         if matches!(
             completion,
-            deepref_postgres::CompleteDocumentRetrievalOutcome::Applied
+            deepref_app::CompleteDocumentRetrievalOutcome::Applied
         ) {
-            deepref_postgres::mark_document_retrieval_failed(
+            deepref_app::mark_document_retrieval_failed(
                 pool,
                 document_id,
                 "retrieved document transaction could not commit",
@@ -520,8 +527,8 @@ async fn handle_retrieve_document_job(
         return Err(error.into());
     }
     match completion {
-        deepref_postgres::CompleteDocumentRetrievalOutcome::Applied => {}
-        deepref_postgres::CompleteDocumentRetrievalOutcome::AlreadyCompleted => {
+        deepref_app::CompleteDocumentRetrievalOutcome::Applied => {}
+        deepref_app::CompleteDocumentRetrievalOutcome::AlreadyCompleted => {
             store.delete(&stored.opaque_id).await?;
         }
     }
@@ -533,6 +540,7 @@ async fn handle_parse_document_job(
     job: &deepref_application::jobs::ClaimedJob,
     document_store: Option<Arc<DocumentStore>>,
     document_parser: Option<Arc<dyn DocumentParser>>,
+    config: &crate::config::WorkerConfig,
 ) -> anyhow::Result<DeliveryAction> {
     let document_id = job
         .payload
@@ -555,7 +563,7 @@ async fn handle_parse_document_job(
         .get("force")
         .and_then(serde_json::Value::as_bool)
         .unwrap_or(false);
-    let document = deepref_postgres::get_document_by_id(pool, document_id).await?;
+    let document = deepref_app::get_document_by_id(pool, document_id).await?;
     if !forced
         && document
             .active_parser_version
@@ -570,35 +578,39 @@ async fn handle_parse_document_job(
         .ok_or_else(|| anyhow::anyhow!("document has no stored object"))?;
     let store = match document_store {
         Some(store) => store,
-        None => Arc::new(DocumentStore::from_env()?),
+        None => Arc::new(DocumentStore::from_config(&config.documents)?),
     };
-    deepref_postgres::mark_document_parsing(pool, document_id).await?;
-    let parse_permit = pdf_parse_semaphore()
+    deepref_app::mark_document_parsing(pool, document_id).await?;
+    let parse_permit = Arc::clone(&config.pdf_parse_semaphore)
         .acquire_owned()
         .await
         .map_err(|error| anyhow::anyhow!("PDF parser concurrency limiter closed: {error}"))?;
-    let parsed =
-        match parse_stored_document(&document, object_key, Arc::clone(&store), document_parser)
-            .await
-        {
-            Ok(parsed) => parsed,
-            Err(error) => {
-                drop(parse_permit);
-                deepref_postgres::mark_document_failed(pool, document_id, &error.to_string())
-                    .await?;
-                return Err(error);
-            }
-        };
+    let parsed = match parse_stored_document(
+        &document,
+        object_key,
+        Arc::clone(&store),
+        document_parser,
+        &config.runtime.pdf,
+    )
+    .await
+    {
+        Ok(parsed) => parsed,
+        Err(error) => {
+            drop(parse_permit);
+            deepref_app::mark_document_failed(pool, document_id, &error.to_string()).await?;
+            return Err(error);
+        }
+    };
     drop(parse_permit);
     let (structure, parser_version, header) =
-        grobid_enrichment(document_id, object_key, &store, &parsed).await;
+        grobid_enrichment(document_id, object_key, &store, &parsed, config).await;
     let pdf_identity = deepref_documents::PdfIdentity::from_parse(
         &parsed,
         header.title.as_deref(),
         header.doi.as_deref(),
     );
     let parsed = parsed.document;
-    deepref_postgres::persist_parsed_document_with_structure(
+    deepref_app::persist_parsed_document_with_structure(
         pool,
         document_id,
         &parsed,
@@ -619,7 +631,7 @@ async fn record_identity_check(
     pdf: &deepref_documents::PdfIdentity,
 ) {
     let outcome = async {
-        let (title, doi) = deepref_postgres::report_identity(pool, report_id).await?;
+        let (title, doi) = deepref_app::report_identity(pool, report_id).await?;
         let check = deepref_documents::check_identity(
             pdf,
             &deepref_documents::ReportIdentity {
@@ -627,7 +639,7 @@ async fn record_identity_check(
                 doi: doi.as_deref(),
             },
         );
-        deepref_postgres::record_identity_check(pool, document_id, &check).await?;
+        deepref_app::record_identity_check(pool, document_id, &check).await?;
         anyhow::Ok(check.verdict)
     }
     .await;
@@ -655,14 +667,15 @@ async fn grobid_enrichment(
     object_key: &str,
     store: &DocumentStore,
     structured: &deepref_documents::StructuredDocument,
-) -> (deepref_postgres::DocumentStructure, String, GrobidHeader) {
+    config: &crate::config::WorkerConfig,
+) -> (deepref_app::DocumentStructure, String, GrobidHeader) {
     let parsed = &structured.document;
     let native = (
         crate::enrichment::native_structure(structured),
         PARSER_VERSION.to_owned(),
         GrobidHeader::default(),
     );
-    let client = match crate::enrichment::grobid_client_from_env() {
+    let client = match crate::enrichment::grobid_client_from_config(config) {
         Ok(Some(client)) => client,
         Ok(None) => return native,
         Err(error) => {
@@ -720,12 +733,13 @@ async fn handle_recompute_metrics_job(
     pool: &sqlx::PgPool,
     payload: serde_json::Value,
 ) -> anyhow::Result<DeliveryAction> {
-    let event: EventEnvelope<deepref_events::DomainPayload> = serde_json::from_value(payload)?;
+    let event: EventEnvelope<deepref_domain::events::DomainPayload> =
+        serde_json::from_value(payload)?;
     let project_id = match event.payload {
-        deepref_events::DomainPayload::MetricsRecomputeRequested(p) => p.project_id,
+        deepref_domain::events::DomainPayload::MetricsRecomputeRequested(p) => p.project_id,
         _ => anyhow::bail!("recompute_metrics job has an unsupported payload"),
     };
-    deepref_postgres::recompute_project_metrics(pool, project_id).await?;
+    deepref_app::recompute_project_metrics(pool, project_id).await?;
     Ok(DeliveryAction::Ack)
 }
 
@@ -744,9 +758,9 @@ async fn handle_import_deduplication_job(
     }
     let payload: ImportDeduplicationPayload = serde_json::from_value(payload)?;
     for _ in 0..IMPORT_DEDUPLICATION_MAX_PASSES {
-        let summary = deepref_postgres::run_deduplication(
+        let summary = deepref_app::run_deduplication(
             pool,
-            deepref_postgres::DedupeRunRequest {
+            deepref_app::DedupeRunRequest {
                 project_id: payload.project_id,
                 limit: 100,
                 actor_kind: "automation".to_owned(),
@@ -771,19 +785,22 @@ async fn handle_job_with_document_services_inner(
         document_store,
         document_parser,
         remote_fetcher,
-        owner,
+        lease,
         ai_gateway,
+        config,
     } = services;
-    match job.kind.as_str() {
-        "work_fetch_requested" => {
+    match job.kind {
+        deepref_domain::JobKind::WorkFetchRequested => {
             let bytes = serde_json::to_vec(&job.payload)?;
-            handle_message(pool, bytes, job.attempts.max(1) as u64, claim_lease).await
+            handle_message(pool, bytes, job.attempts.max(1) as u64, claim_lease, config).await
         }
-        "recompute_metrics" => handle_recompute_metrics_job(&pool, job.payload.clone()).await,
-        deepref_postgres::IMPORT_DEDUPLICATION_JOB_KIND => {
+        deepref_domain::JobKind::RecomputeMetrics => {
+            handle_recompute_metrics_job(&pool, job.payload.clone()).await
+        }
+        deepref_domain::JobKind::ImportDeduplication => {
             handle_import_deduplication_job(&pool, job.payload.clone()).await
         }
-        deepref_postgres::PMID_IMPORT_JOB_KIND => {
+        deepref_domain::JobKind::PmidImport => {
             crate::pmid_import::handle_job(
                 &pool,
                 job.payload.clone(),
@@ -792,27 +809,38 @@ async fn handle_job_with_document_services_inner(
             )
             .await
         }
-        "automation_run" => {
-            let owner = owner.ok_or_else(|| {
+        deepref_domain::JobKind::AutomationRun => {
+            let lease = lease.ok_or_else(|| {
                 anyhow::anyhow!("automation job processing requires its lease owner")
             })?;
-            handle_automation_run(&pool, job, owner, ai_gateway.as_deref()).await
+            handle_automation_run(&pool, job, lease, ai_gateway.as_deref()).await
         }
-        deepref_postgres::ASSISTANT_AGENT_RUN_JOB_KIND => {
-            let owner = owner.ok_or_else(|| {
+        deepref_domain::JobKind::AssistantAgentRun => {
+            let lease = lease.ok_or_else(|| {
                 anyhow::anyhow!("assistant job processing requires its lease owner")
             })?;
-            crate::assistant::handle_assistant_agent_run(&pool, job, owner).await
+            crate::assistant::handle_assistant_agent_run(
+                &pool,
+                job,
+                &lease.owner,
+                &config.runtime.ai,
+            )
+            .await
         }
-        "workflow_step" => crate::workflows::handle_step(&pool, job, ai_gateway.clone()).await,
-        "recompute_prisma" => Ok(DeliveryAction::Ack),
-        "retrieve_document" => {
-            handle_retrieve_document_job(&pool, job, document_store, remote_fetcher).await
+        deepref_domain::JobKind::WorkflowStep => {
+            let lease = lease.ok_or_else(|| {
+                anyhow::anyhow!("workflow step processing requires its job lease")
+            })?;
+            crate::workflows::handle_step(&pool, job, lease, ai_gateway.clone(), &config.runtime)
+                .await
         }
-        "parse_document" => {
-            handle_parse_document_job(&pool, job, document_store, document_parser).await
+        deepref_domain::JobKind::RecomputePrisma => Ok(DeliveryAction::Ack),
+        deepref_domain::JobKind::RetrieveDocument => {
+            handle_retrieve_document_job(&pool, job, document_store, remote_fetcher, config).await
         }
-        other => anyhow::bail!("unsupported durable job kind: {other}"),
+        deepref_domain::JobKind::ParseDocument => {
+            handle_parse_document_job(&pool, job, document_store, document_parser, config).await
+        }
     }
 }
 
@@ -828,32 +856,31 @@ const UNKNOWN_AUTOMATION_STEP_ERROR: &str =
 async fn handle_automation_run(
     pool: &sqlx::PgPool,
     job: &deepref_application::jobs::ClaimedJob,
-    owner: &str,
+    lease: &JobLease,
     ai_gateway: Option<&dyn AiGateway>,
 ) -> anyhow::Result<DeliveryAction> {
     let payload: AutomationRunJobPayload = serde_json::from_value(job.payload.clone())?;
     let run_id = deepref_application::AutomationRunId::new(payload.automation_run_id)
         .map_err(|error| anyhow::anyhow!("automation run id is invalid: {error}"))?;
-    let project_id = deepref_postgres::get_claimed_automation_job_project_id_for_run(
-        pool, job.id, run_id, owner,
-    )
-    .await?
-    .ok_or_else(|| anyhow::anyhow!("automation job and run association is invalid"))?;
+    let project_id =
+        deepref_app::get_claimed_automation_job_project_id_for_run(pool, lease, run_id)
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("automation job and run association is invalid"))?;
     let project_uuid = project_id.as_uuid();
 
     loop {
         let Some(step) =
-            deepref_postgres::begin_next_automation_step(pool, project_id, run_id, owner).await?
+            deepref_app::begin_next_automation_step(pool, project_id, run_id, lease).await?
         else {
-            deepref_postgres::finalize_automation_run(pool, project_id, run_id).await?;
+            deepref_app::finalize_automation_run(pool, project_id, run_id).await?;
             return Ok(DeliveryAction::Ack);
         };
 
         if step.key == "recompute_project_metrics"
             && step.kind == deepref_application::AutomationStepKind::DeterministicAction
         {
-            deepref_postgres::recompute_project_metrics(pool, project_uuid).await?;
-            deepref_postgres::complete_automation_step(pool, project_id, step.id, owner).await?;
+            deepref_app::recompute_project_metrics(pool, project_uuid).await?;
+            deepref_app::complete_automation_step(pool, project_id, step.id, lease).await?;
             continue;
         }
 
@@ -863,12 +890,12 @@ async fn handle_automation_run(
             let gateway = ai_gateway.ok_or_else(|| {
                 anyhow::anyhow!("compiled review execution requires an AI gateway")
             })?;
-            match execute_compiled_review(pool, project_id, run_id, &step, owner, gateway).await {
+            match execute_compiled_review(pool, project_id, run_id, &step, lease, gateway).await {
                 Ok(()) => continue,
                 Err(error) if job.attempts < job.max_attempts => return Err(error),
                 Err(error) => {
                     let message = bounded_worker_error(&error);
-                    deepref_postgres::fail_review_run(
+                    deepref_app::fail_review_run(
                         pool,
                         project_id,
                         deepref_review::ReviewRunId::new(run_id.as_uuid())?,
@@ -876,25 +903,23 @@ async fn handle_automation_run(
                         &message,
                     )
                     .await?;
-                    deepref_postgres::fail_automation_step(
-                        pool, project_id, step.id, owner, &message,
-                    )
-                    .await?;
-                    deepref_postgres::finalize_automation_run(pool, project_id, run_id).await?;
+                    deepref_app::fail_automation_step(pool, project_id, step.id, lease, &message)
+                        .await?;
+                    deepref_app::finalize_automation_run(pool, project_id, run_id).await?;
                     return Ok(DeliveryAction::Terminate);
                 }
             }
         }
 
-        deepref_postgres::fail_automation_step(
+        deepref_app::fail_automation_step(
             pool,
             project_id,
             step.id,
-            owner,
+            lease,
             UNKNOWN_AUTOMATION_STEP_ERROR,
         )
         .await?;
-        deepref_postgres::finalize_automation_run(pool, project_id, run_id).await?;
+        deepref_app::finalize_automation_run(pool, project_id, run_id).await?;
         return Ok(DeliveryAction::Terminate);
     }
 }
@@ -904,12 +929,11 @@ async fn execute_compiled_review(
     project_id: deepref_domain::ProjectId,
     automation_run_id: deepref_application::AutomationRunId,
     automation_step: &deepref_application::AutomationStepRun,
-    owner: &str,
+    lease: &JobLease,
     gateway: &dyn AiGateway,
 ) -> anyhow::Result<()> {
     let review_run_id = deepref_review::ReviewRunId::new(automation_run_id.as_uuid())?;
-    let run =
-        deepref_postgres::load_leased_review_run(pool, project_id, review_run_id, owner).await?;
+    let run = deepref_app::load_leased_review_run(pool, project_id, review_run_id, lease).await?;
     let review = CompiledReview::compile(run.snapshot.definition)?;
     if let deepref_review::ReviewRunState::Completed { .. }
     | deepref_review::ReviewRunState::Blocked { .. } = run.snapshot.state
@@ -921,24 +945,24 @@ async fn execute_compiled_review(
             final_review_node(&review).id(),
         )
         .await?;
-        deepref_postgres::complete_review_step(
+        deepref_app::complete_review_step(
             pool,
             project_id,
             automation_step.id,
             accepted,
-            owner,
+            lease,
             Some(serde_json::to_value(&run.snapshot)?),
         )
         .await?;
         return Ok(());
     }
-    deepref_postgres::mark_review_run_running(pool, project_id, review_run_id, owner).await?;
+    deepref_app::mark_review_run_running(pool, project_id, review_run_id, lease).await?;
 
     let prepare = persist_review_node(
         pool,
         &run,
         &review,
-        owner,
+        lease,
         ReviewNodeWrite {
             node: review.plan().prepare(),
             payload: serde_json::to_value(&run.task)?,
@@ -962,7 +986,7 @@ async fn execute_compiled_review(
             &review,
             final_review_node(&review),
             automation_step,
-            owner,
+            lease,
             BlockedReview {
                 predecessor: &prepare,
                 code: deepref_review::ReviewBlockCode::ProviderEndpointMismatch,
@@ -976,7 +1000,7 @@ async fn execute_compiled_review(
         run: &run,
         review: &review,
         automation_step,
-        owner,
+        lease,
         gateway,
     };
     match review.plan() {
@@ -1010,10 +1034,10 @@ fn provider_endpoint_mismatch(
 
 struct CompiledReviewExecution<'a> {
     pool: &'a sqlx::PgPool,
-    run: &'a deepref_postgres::LeasedReviewRun,
+    run: &'a deepref_app::LeasedReviewRun,
     review: &'a CompiledReview,
     automation_step: &'a deepref_application::AutomationStepRun,
-    owner: &'a str,
+    lease: &'a JobLease,
     gateway: &'a dyn AiGateway,
 }
 
@@ -1026,7 +1050,7 @@ async fn execute_compiled_standard(
     let run = execution.run;
     let review = execution.review;
     let automation_step = execution.automation_step;
-    let owner = execution.owner;
+    let lease = execution.lease;
     let gateway = execution.gateway;
     let generated = execute_review_ai_node(
         pool,
@@ -1034,7 +1058,7 @@ async fn execute_compiled_standard(
         review,
         &plan.generate,
         std::slice::from_ref(&prepare),
-        owner,
+        lease,
         gateway,
     )
     .await?;
@@ -1042,7 +1066,7 @@ async fn execute_compiled_standard(
         pool,
         run,
         review,
-        owner,
+        lease,
         ReviewNodeWrite {
             node: &plan.validate,
             payload: serde_json::json!({
@@ -1059,7 +1083,7 @@ async fn execute_compiled_standard(
         pool,
         run,
         review,
-        owner,
+        lease,
         ReviewNodeWrite {
             node: &plan.assemble,
             payload: serde_json::to_value(&generated.executed)?,
@@ -1079,7 +1103,7 @@ async fn execute_compiled_standard(
             finalize_node: &plan.finalize,
         },
         automation_step,
-        owner,
+        lease,
     )
     .await
 }
@@ -1093,7 +1117,7 @@ async fn execute_compiled_screening(
     let run = execution.run;
     let review = execution.review;
     let automation_step = execution.automation_step;
-    let owner = execution.owner;
+    let lease = execution.lease;
     let gateway = execution.gateway;
     let primary = execute_review_ai_node(
         pool,
@@ -1101,7 +1125,7 @@ async fn execute_compiled_screening(
         review,
         &plan.primary_screen,
         std::slice::from_ref(&prepare),
-        owner,
+        lease,
         gateway,
     )
     .await?;
@@ -1110,7 +1134,7 @@ async fn execute_compiled_screening(
         pool,
         run,
         review,
-        owner,
+        lease,
         ReviewNodeWrite {
             node: &plan.validate_primary,
             payload: serde_json::json!({
@@ -1128,7 +1152,7 @@ async fn execute_compiled_screening(
         pool,
         run,
         review,
-        owner,
+        lease,
         ReviewNodeWrite {
             node: &plan.derive_primary,
             payload: serde_json::json!({
@@ -1150,7 +1174,7 @@ async fn execute_compiled_screening(
             review,
             &plan.independent_screen,
             std::slice::from_ref(&derived),
-            owner,
+            lease,
             gateway,
         )
         .await?;
@@ -1159,7 +1183,7 @@ async fn execute_compiled_screening(
             pool,
             run,
             review,
-            owner,
+            lease,
             ReviewNodeWrite {
                 node: &plan.validate_independent,
                 payload: serde_json::json!({
@@ -1178,7 +1202,7 @@ async fn execute_compiled_screening(
             pool,
             run,
             review,
-            owner,
+            lease,
             ReviewNodeWrite {
                 node: &plan.reconcile,
                 payload: serde_json::json!({
@@ -1199,7 +1223,7 @@ async fn execute_compiled_screening(
                 review,
                 &plan.finalize,
                 automation_step,
-                owner,
+                lease,
                 BlockedReview {
                     predecessor: &reconciliation,
                     code: deepref_review::ReviewBlockCode::HumanAdjudicationRequired,
@@ -1220,7 +1244,7 @@ async fn execute_compiled_screening(
             pool,
             run,
             review,
-            owner,
+            lease,
             ReviewNodeWrite {
                 node: &plan.assemble,
                 payload: serde_json::to_value(&candidate.executed)?,
@@ -1234,7 +1258,7 @@ async fn execute_compiled_screening(
             pool,
             run,
             review,
-            owner,
+            lease,
             gateway,
             ReviewAiNodeRequest {
                 node: &plan.candidate_audit,
@@ -1258,7 +1282,7 @@ async fn execute_compiled_screening(
                     finalize_node: &plan.finalize,
                 },
                 automation_step,
-                owner,
+                lease,
             )
             .await;
         }
@@ -1269,7 +1293,7 @@ async fn execute_compiled_screening(
                 review,
                 &plan.finalize,
                 automation_step,
-                owner,
+                lease,
                 BlockedReview {
                     predecessor: &audit.artifact,
                     code: deepref_review::ReviewBlockCode::RepairBudgetExhausted,
@@ -1282,7 +1306,7 @@ async fn execute_compiled_screening(
             pool,
             run,
             review,
-            owner,
+            lease,
             gateway,
             ReviewAiNodeRequest {
                 node: &plan.semantic_repair,
@@ -1302,7 +1326,7 @@ async fn execute_compiled_screening(
             pool,
             run,
             review,
-            owner,
+            lease,
             ReviewNodeWrite {
                 node: &plan.validate_repair,
                 payload: serde_json::json!({
@@ -1331,11 +1355,11 @@ fn screening_analysis(node: &GeneratedReviewNode) -> anyhow::Result<deepref_ai::
 
 async fn finalize_compiled_candidate(
     pool: &sqlx::PgPool,
-    run: &deepref_postgres::LeasedReviewRun,
+    run: &deepref_app::LeasedReviewRun,
     review: &CompiledReview,
     request: ReviewFinalizationRequest<'_>,
     automation_step: &deepref_application::AutomationStepRun,
-    owner: &str,
+    lease: &JobLease,
 ) -> anyhow::Result<()> {
     let ReviewFinalizationRequest {
         predecessor,
@@ -1350,25 +1374,25 @@ async fn finalize_compiled_candidate(
         );
     }
     let predecessor_input = artifact_input(predecessor);
-    let final_start = deepref_postgres::begin_review_attempt(
+    let final_start = deepref_app::begin_review_attempt(
         pool,
         run,
         review,
         finalize_node,
         std::slice::from_ref(&predecessor_input),
-        owner,
+        lease,
     )
     .await?;
     let final_attempt = match final_start {
-        deepref_postgres::ReviewAttemptStart::Reused { attempt_id, .. } => attempt_id,
-        deepref_postgres::ReviewAttemptStart::Started { attempt_id, .. } => {
-            let outcome = deepref_postgres::complete_review_outcome(
+        deepref_app::ReviewAttemptStart::Reused { attempt_id, .. } => attempt_id,
+        deepref_app::ReviewAttemptStart::Started { attempt_id, .. } => {
+            let outcome = deepref_app::complete_review_outcome(
                 pool,
                 run,
-                deepref_postgres::ReviewOutcomeCompletion {
+                deepref_app::ReviewOutcomeCompletion {
                     final_attempt_id: attempt_id,
                     predecessors: std::slice::from_ref(&predecessor_input),
-                    outcome: deepref_postgres::ReviewOutcome::Candidate {
+                    outcome: deepref_app::ReviewOutcome::Candidate {
                         proposal: Box::new(deepref_ai::AiProposal {
                             id: Uuid::new_v4(),
                             draft: executed.proposal,
@@ -1379,17 +1403,17 @@ async fn finalize_compiled_candidate(
                         }),
                     },
                     automation_step_id: automation_step.id,
-                    worker_id: owner,
+                    lease,
                 },
             )
             .await?;
             return match outcome {
-                deepref_postgres::ReviewFinalization::Completed { .. }
-                | deepref_postgres::ReviewFinalization::Blocked => Ok(()),
+                deepref_app::ReviewFinalization::Completed { .. }
+                | deepref_app::ReviewFinalization::Blocked => Ok(()),
             };
         }
     };
-    complete_review_automation_step(pool, run, automation_step, final_attempt, owner).await
+    complete_review_automation_step(pool, run, automation_step, final_attempt, lease).await
 }
 
 struct ReviewFinalizationRequest<'a> {
@@ -1400,11 +1424,11 @@ struct ReviewFinalizationRequest<'a> {
 
 async fn finalize_blocked_review(
     pool: &sqlx::PgPool,
-    run: &deepref_postgres::LeasedReviewRun,
+    run: &deepref_app::LeasedReviewRun,
     review: &CompiledReview,
     finalize_node: &ReviewNode,
     automation_step: &deepref_application::AutomationStepRun,
-    owner: &str,
+    lease: &JobLease,
     blocked: BlockedReview<'_>,
 ) -> anyhow::Result<()> {
     let BlockedReview {
@@ -1413,29 +1437,29 @@ async fn finalize_blocked_review(
         message,
     } = blocked;
     let predecessor_input = artifact_input(predecessor);
-    let final_start = deepref_postgres::begin_review_attempt(
+    let final_start = deepref_app::begin_review_attempt(
         pool,
         run,
         review,
         finalize_node,
         std::slice::from_ref(&predecessor_input),
-        owner,
+        lease,
     )
     .await?;
     match final_start {
-        deepref_postgres::ReviewAttemptStart::Reused { attempt_id, .. } => {
-            complete_review_automation_step(pool, run, automation_step, attempt_id, owner).await
+        deepref_app::ReviewAttemptStart::Reused { attempt_id, .. } => {
+            complete_review_automation_step(pool, run, automation_step, attempt_id, lease).await
         }
-        deepref_postgres::ReviewAttemptStart::Started { attempt_id, .. } => {
-            deepref_postgres::complete_review_outcome(
+        deepref_app::ReviewAttemptStart::Started { attempt_id, .. } => {
+            deepref_app::complete_review_outcome(
                 pool,
                 run,
-                deepref_postgres::ReviewOutcomeCompletion {
+                deepref_app::ReviewOutcomeCompletion {
                     final_attempt_id: attempt_id,
                     predecessors: std::slice::from_ref(&predecessor_input),
-                    outcome: deepref_postgres::ReviewOutcome::Blocked { code, message },
+                    outcome: deepref_app::ReviewOutcome::Blocked { code, message },
                     automation_step_id: automation_step.id,
-                    worker_id: owner,
+                    lease,
                 },
             )
             .await?;
@@ -1446,20 +1470,19 @@ async fn finalize_blocked_review(
 
 async fn complete_review_automation_step(
     pool: &sqlx::PgPool,
-    run: &deepref_postgres::LeasedReviewRun,
+    run: &deepref_app::LeasedReviewRun,
     automation_step: &deepref_application::AutomationStepRun,
     final_attempt: Uuid,
-    owner: &str,
+    lease: &JobLease,
 ) -> anyhow::Result<()> {
-    deepref_postgres::complete_review_step(
+    deepref_app::complete_review_step(
         pool,
         run.snapshot.project_id,
         automation_step.id,
         final_attempt,
-        owner,
+        lease,
         Some(serde_json::to_value(
-            &deepref_postgres::get_review_run(pool, run.snapshot.project_id, run.snapshot.id)
-                .await?,
+            &deepref_app::get_review_run(pool, run.snapshot.project_id, run.snapshot.id).await?,
         )?),
     )
     .await?;
@@ -1494,9 +1517,9 @@ struct ReviewNodeWrite<'a> {
 
 async fn persist_review_node(
     pool: &sqlx::PgPool,
-    run: &deepref_postgres::LeasedReviewRun,
+    run: &deepref_app::LeasedReviewRun,
     review: &CompiledReview,
-    owner: &str,
+    lease: &JobLease,
     write: ReviewNodeWrite<'_>,
 ) -> anyhow::Result<AcceptedNodeArtifact> {
     let ReviewNodeWrite {
@@ -1506,17 +1529,10 @@ async fn persist_review_node(
         model_run_id,
     } = write;
     let predecessor_inputs = predecessors.iter().map(artifact_input).collect::<Vec<_>>();
-    match deepref_postgres::begin_review_attempt(
-        pool,
-        run,
-        review,
-        node,
-        &predecessor_inputs,
-        owner,
-    )
-    .await?
+    match deepref_app::begin_review_attempt(pool, run, review, node, &predecessor_inputs, lease)
+        .await?
     {
-        deepref_postgres::ReviewAttemptStart::Reused {
+        deepref_app::ReviewAttemptStart::Reused {
             artifact_id,
             artifact_hash,
             ..
@@ -1524,17 +1540,17 @@ async fn persist_review_node(
             artifact_id,
             artifact_hash,
         }),
-        deepref_postgres::ReviewAttemptStart::Started { attempt_id, .. } => {
-            let accepted = deepref_postgres::complete_review_attempt(
+        deepref_app::ReviewAttemptStart::Started { attempt_id, .. } => {
+            let accepted = deepref_app::complete_review_attempt(
                 pool,
                 run,
-                deepref_postgres::ReviewAttemptCompletion {
+                deepref_app::ReviewAttemptCompletion {
                     attempt_id,
                     payload,
                     media_type: "application/vnd.deepref.review-artifact+json",
                     predecessors: &predecessor_inputs,
                     model_run_id,
-                    worker_id: owner,
+                    lease,
                 },
             )
             .await?;
@@ -1548,18 +1564,18 @@ async fn persist_review_node(
 
 async fn execute_review_ai_node(
     pool: &sqlx::PgPool,
-    run: &deepref_postgres::LeasedReviewRun,
+    run: &deepref_app::LeasedReviewRun,
     review: &CompiledReview,
     node: &ReviewNode,
     predecessors: &[AcceptedNodeArtifact],
-    owner: &str,
+    lease: &JobLease,
     gateway: &dyn AiGateway,
 ) -> anyhow::Result<GeneratedReviewNode> {
     execute_review_ai_node_with_context(
         pool,
         run,
         review,
-        owner,
+        lease,
         gateway,
         ReviewAiNodeRequest {
             node,
@@ -1578,9 +1594,9 @@ struct ReviewAiNodeRequest<'a> {
 
 async fn execute_review_ai_node_with_context(
     pool: &sqlx::PgPool,
-    run: &deepref_postgres::LeasedReviewRun,
+    run: &deepref_app::LeasedReviewRun,
     review: &CompiledReview,
-    owner: &str,
+    lease: &JobLease,
     gateway: &dyn AiGateway,
     request: ReviewAiNodeRequest<'_>,
 ) -> anyhow::Result<GeneratedReviewNode> {
@@ -1591,10 +1607,10 @@ async fn execute_review_ai_node_with_context(
     } = request;
     let predecessor_inputs = predecessors.iter().map(artifact_input).collect::<Vec<_>>();
     let start =
-        deepref_postgres::begin_review_attempt(pool, run, review, node, &predecessor_inputs, owner)
+        deepref_app::begin_review_attempt(pool, run, review, node, &predecessor_inputs, lease)
             .await?;
     match start {
-        deepref_postgres::ReviewAttemptStart::Reused {
+        deepref_app::ReviewAttemptStart::Reused {
             artifact_id,
             artifact_hash,
             payload,
@@ -1611,12 +1627,12 @@ async fn execute_review_ai_node_with_context(
                 },
             })
         }
-        deepref_postgres::ReviewAttemptStart::Started {
+        deepref_app::ReviewAttemptStart::Started {
             attempt_id,
             input_fingerprint,
             ..
         } => {
-            let store = deepref_postgres::PostgresAiStore::new(pool);
+            let store = deepref_app::PostgresAiStore::new(pool);
             let runner = AiTaskRunner::new(
                 gateway,
                 &store,
@@ -1638,29 +1654,29 @@ async fn execute_review_ai_node_with_context(
             {
                 Ok(executed) => executed,
                 Err(error) => {
-                    deepref_postgres::fail_review_attempt(
+                    deepref_app::fail_review_attempt(
                         pool,
                         run,
                         attempt_id,
                         "ai_task_failed",
                         &bounded_message(&error.to_string(), 4_096),
-                        owner,
+                        lease,
                     )
                     .await?;
                     return Err(error.into());
                 }
             };
             let model_run_id = executed.model_run_id;
-            let accepted = deepref_postgres::complete_review_attempt(
+            let accepted = deepref_app::complete_review_attempt(
                 pool,
                 run,
-                deepref_postgres::ReviewAttemptCompletion {
+                deepref_app::ReviewAttemptCompletion {
                     attempt_id,
                     payload: serde_json::to_value(&executed)?,
                     media_type: "application/vnd.deepref.executed-review-task+json",
                     predecessors: &predecessor_inputs,
                     model_run_id: Some(model_run_id),
-                    worker_id: owner,
+                    lease,
                 },
             )
             .await?;
@@ -1727,22 +1743,12 @@ fn bounded_message(message: &str, max_bytes: usize) -> String {
     message.get(..end).unwrap_or("").to_owned()
 }
 
-fn pdf_parse_semaphore() -> Arc<Semaphore> {
-    Arc::clone(PDF_PARSE_SEMAPHORE.get_or_init(|| {
-        let permits = std::env::var("DOCUMENT_PARSE_CONCURRENCY")
-            .ok()
-            .and_then(|value| value.parse::<usize>().ok())
-            .filter(|value| (1..=16).contains(value))
-            .unwrap_or(2);
-        Arc::new(Semaphore::new(permits))
-    }))
-}
-
 async fn parse_stored_document(
-    document: &deepref_postgres::DocumentRecord,
+    document: &deepref_app::DocumentRecord,
     object_key: &str,
     store: Arc<DocumentStore>,
     parser: Option<Arc<dyn DocumentParser>>,
+    config: &deepref_config::PdfConfig,
 ) -> anyhow::Result<deepref_documents::StructuredDocument> {
     let path = std::env::temp_dir().join(format!("deepref-parse-{}.pdf", Uuid::new_v4()));
     let mut file = tokio::fs::OpenOptions::new()
@@ -1773,7 +1779,7 @@ async fn parse_stored_document(
     }
     let parser = match parser {
         Some(parser) => parser,
-        None => PdfiumParser::shared_from_env()?,
+        None => PdfiumParser::shared_from_config(config)?,
     };
     if parser.version() != PARSER_VERSION {
         let _ = tokio::fs::remove_file(&path).await;
@@ -1826,7 +1832,7 @@ fn dead_letter(
         .collect::<String>();
     DeadLetterRecord {
         identity: format!("sha256:{payload_sha256}"),
-        source_subject: deepref_events::SUBJECT_WORK_FETCH_REQUESTED.to_owned(),
+        source_subject: deepref_domain::events::SUBJECT_WORK_FETCH_REQUESTED.to_owned(),
         source_event_id: event_id,
         delivery_count,
         reason_code: reason.to_owned(),

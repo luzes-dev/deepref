@@ -29,16 +29,16 @@ resolution.
 
 ## Acceptance evidence
 
-- Identity and import migrations: `crates/postgres/migrations/0006_evidence_workspace.sql`,
+- Identity and import migrations: `crates/app/migrations/0006_evidence_workspace.sql`,
   `0007_evidence_identity.sql`, and `0009_acquisition_runs.sql`.
 - Provider parity tests: `crates/providers/src/` and
   `crates/providers/tests/`.
-- Deduplication tests: `crates/postgres/tests/deduplication.rs` and
+- Deduplication tests: `crates/app/tests/deduplication.rs` and
   `crates/http-api/tests/acquisitions_postgres.rs`.
 - Run:
 
 ```text
-cargo test -p deepref-providers --locked
-cargo test -p deepref-postgres --test deduplication --locked
+cargo test -p deepref-integrations --locked
+cargo test -p deepref-app --test deduplication --locked
 cargo test -p deepref-http-api --test acquisitions_postgres --locked
 ```

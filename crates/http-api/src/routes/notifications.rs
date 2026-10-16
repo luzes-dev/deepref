@@ -6,7 +6,7 @@ use serde::{Deserialize, Serialize};
 use utoipa::{IntoParams, ToSchema};
 use uuid::Uuid;
 
-use deepref_postgres::{list_notifications, mark_notifications_read, unread_summary};
+use deepref_app::{list_notifications, mark_notifications_read, unread_summary};
 
 use super::pagination::{PaginatedResponse, PaginationParams, page};
 use crate::{
@@ -70,7 +70,7 @@ pub(crate) struct UnreadNotificationParams {
     pub project_id: Option<Uuid>,
 }
 
-fn dto_from_record(record: deepref_postgres::NotificationRecord) -> NotificationDto {
+fn dto_from_record(record: deepref_app::NotificationRecord) -> NotificationDto {
     NotificationDto {
         id: record.id,
         revision: record.revision,
@@ -157,7 +157,7 @@ pub(crate) async fn mark_notifications_read_route(
 ) -> Result<Json<MarkNotificationsReadResponse>, ApiError> {
     let updated = mark_notifications_read(
         &state.pool,
-        &deepref_postgres::MarkNotificationsRead {
+        &deepref_app::MarkNotificationsRead {
             ids: input.ids,
             all: input.all,
             project_id: input.project_id,

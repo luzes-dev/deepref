@@ -364,6 +364,13 @@
 					{#if cohort.invalidation_reason}<p class="text-sm text-destructive">
 							{cohort.invalidation_reason}
 						</p>{/if}
+					{#if cohort.identity_flag_reason}<p
+							class="text-sm text-warning"
+							data-testid="ai-first-identity-flag"
+						>
+							Flagged for review: the AI configuration changed after this cohort was
+							finalized. Its exclusions stay in force.
+						</p>{/if}
 					{#if cohort.result}
 						<p class="text-sm tabular-nums">
 							Audit {cohort.result.passed ? 'passed' : 'failed'} · {cohort.result

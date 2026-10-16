@@ -1,4 +1,3 @@
-export { default as WorkflowCanvas } from "./WorkflowCanvas.svelte";
 export { default as CanvasControls } from "./CanvasControls.svelte";
 export {
 	default as NodeGallery,

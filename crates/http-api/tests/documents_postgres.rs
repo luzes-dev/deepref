@@ -17,7 +17,7 @@ use tower::ServiceExt;
 use uuid::Uuid;
 
 async fn database() -> Option<PgPool> {
-    deepref_postgres::test_isolation::isolated_pool_from_env("DATABASE_URL", 5).await
+    deepref_app::test_isolation::isolated_pool_from_env("DATABASE_URL", 5).await
 }
 
 fn api_config() -> ApiConfig {
@@ -27,6 +27,10 @@ fn api_config() -> ApiConfig {
     )
     .unwrap();
     ApiConfig {
+        documents: deepref_config::DocumentConfig::from_source(&|name| {
+            (name == "APP_ENV").then(|| "local".into())
+        })
+        .expect("local test document configuration"),
         runtime,
         bind_addr: "127.0.0.1:0".parse().unwrap(),
         cors_allow_any: false,
@@ -349,4 +353,121 @@ async fn document_upload_has_its_own_limit_above_the_acquisition_default() {
         .execute(&pool)
         .await
         .unwrap();
+}
+
+async fn seed_long_document(pool: &PgPool, blocks_per_page: i32, pages: i32) -> (Uuid, Uuid, Uuid) {
+    let project_id = Uuid::new_v4();
+    let report_id = Uuid::new_v4();
+    let document_id = Uuid::new_v4();
+    sqlx::query("INSERT INTO projects(id,name) VALUES($1,'long document')")
+        .bind(project_id)
+        .execute(pool)
+        .await
+        .unwrap();
+    sqlx::query("INSERT INTO reports(id,title) VALUES($1,'long document report')")
+        .bind(report_id)
+        .execute(pool)
+        .await
+        .unwrap();
+    sqlx::query("INSERT INTO project_reports(project_id,report_id) VALUES($1,$2)")
+        .bind(project_id)
+        .bind(report_id)
+        .execute(pool)
+        .await
+        .unwrap();
+    sqlx::query(
+        "INSERT INTO documents
+         (id,project_id,report_id,object_key,content_hash,mime_type,byte_size,source,status,
+          actor_kind,actor_id,active_parser_version,parser_version)
+         VALUES ($1,$2,$3,$4,$5,'application/pdf',10,'upload','available',
+                 'system','long-document-test','parser.v2','parser.v2')",
+    )
+    .bind(document_id)
+    .bind(project_id)
+    .bind(report_id)
+    .bind(format!("documents/{document_id}"))
+    .bind("b".repeat(64))
+    .execute(pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO document_pages(document_id,parser_version,page_number,width,height,active)
+         SELECT $1,'parser.v2',page,600,800,true FROM generate_series(1,$2) AS page",
+    )
+    .bind(document_id)
+    .bind(pages)
+    .execute(pool)
+    .await
+    .unwrap();
+    sqlx::query(
+        "INSERT INTO document_blocks
+         (id,document_id,parser_version,page_number,kind,section_path,ordinal,text,content_hash,active)
+         SELECT gen_random_uuid(),$1,'parser.v2',page,'text',ARRAY['Body'],(page-1)*$3+slot,
+                format('page %s block %s', page, slot), repeat('c',64), true
+         FROM generate_series(1,$2) AS page, generate_series(0,$3-1) AS slot",
+    )
+    .bind(document_id)
+    .bind(pages)
+    .bind(blocks_per_page)
+    .execute(pool)
+    .await
+    .unwrap();
+    (project_id, report_id, document_id)
+}
+
+async fn get_json(state: &AppState, uri: String) -> (StatusCode, serde_json::Value) {
+    let response = router(state.clone(), &api_config())
+        .oneshot(Request::builder().uri(uri).body(Body::empty()).unwrap())
+        .await
+        .unwrap();
+    let status = response.status();
+    let bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    (
+        status,
+        serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null),
+    )
+}
+
+/// A long paper must expose every block, page by page, through a bounded cursor.
+#[tokio::test]
+async fn document_blocks_page_through_every_block_of_a_long_document() {
+    let Some(pool) = database().await else { return };
+    let (project_id, report_id, document_id) = seed_long_document(&pool, 50, 3).await;
+    let state = AppState::new(pool.clone());
+    let base = format!("/projects/{project_id}/reports/{report_id}/documents/{document_id}/blocks");
+
+    let (status, first) = get_json(&state, format!("{base}?limit=100")).await;
+    assert_eq!(status, StatusCode::OK, "{first}");
+    let first_items = first["items"].as_array().expect("a page of blocks");
+    assert_eq!(first_items.len(), 100, "the page honours the limit");
+    let cursor = first["next_cursor"]
+        .as_str()
+        .expect("a truncated page carries a cursor");
+
+    let (status, second) = get_json(&state, format!("{base}?limit=100&cursor={cursor}")).await;
+    assert_eq!(status, StatusCode::OK, "{second}");
+    let second_items = second["items"].as_array().expect("a page of blocks");
+    assert_eq!(second_items.len(), 50);
+    assert!(
+        second["next_cursor"].is_null(),
+        "the last page ends the cursor"
+    );
+
+    let mut ids = first_items
+        .iter()
+        .chain(second_items)
+        .map(|block| block["id"].as_str().unwrap().to_owned())
+        .collect::<Vec<_>>();
+    assert!(
+        second_items.iter().all(|block| block["page_number"] == 3),
+        "the last page of the paper is reachable"
+    );
+    ids.sort();
+    ids.dedup();
+    assert_eq!(ids.len(), 150, "pages neither overlap nor skip blocks");
+
+    let (status, _) = get_json(&state, format!("{base}?limit=0")).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+    let (status, _) = get_json(&state, format!("{base}?cursor=not-a-cursor")).await;
+    assert_eq!(status, StatusCode::BAD_REQUEST);
 }

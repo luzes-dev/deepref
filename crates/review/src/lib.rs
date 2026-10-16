@@ -5,7 +5,7 @@
 //! node fingerprints. Provider calls remain in `deepref-ai`; PostgreSQL and
 //! worker adapters live outside this crate.
 
-mod ai_first;
+pub mod ai_first;
 mod contract;
 mod definition;
 mod execution;
@@ -43,7 +43,8 @@ pub(crate) use definition::{CompiledReviewDefinition, ReviewCatalog};
 pub(crate) use hash::ReviewHash;
 pub(crate) use task::DefinedAiTask;
 pub use types::{
-    CalibrationBundleId, ReviewBlockCode, ReviewDefinitionKey, ReviewError, ReviewFuture,
-    ReviewOrigin, ReviewRunId, ReviewRunSnapshot, ReviewRunState, ReviewScheduler, ReviewSubject,
-    ScheduleReviewRun,
+    CalibrationBundleId, ReviewAttemptStatus, ReviewBlockCode, ReviewCalibrationStatus,
+    ReviewDefinitionKey, ReviewError, ReviewFuture, ReviewOrigin, ReviewRunId, ReviewRunSnapshot,
+    ReviewRunState, ReviewRunStatus, ReviewScheduler, ReviewSubject, ReviewerResolution,
+    ReviewerSource, ReviewerStatus, ScheduleReviewRun,
 };

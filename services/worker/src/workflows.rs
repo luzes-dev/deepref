@@ -14,13 +14,13 @@ use std::{
 
 use chrono::Utc;
 use deepref_ai::AiGateway;
-use deepref_application::{
-    jobs::ClaimedJob,
-    workflows::{AutonomyGate, DefaultAutonomyGate, PublicationQuery},
-};
-use deepref_postgres::{
+use deepref_app::{
     AlertHit, DueAlert, NodeOutcome, StepClaim, begin_node_execution, claim_due_workflows,
     fail_abandoned_steps, finish_node_execution, record_alert_poll, record_node_retry,
+};
+use deepref_application::{
+    jobs::{ClaimedJob, JobLease},
+    workflows::{AutonomyGate, DefaultAutonomyGate, PublicationQuery},
 };
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -78,10 +78,10 @@ impl From<sqlx::Error> for NodeError {
     }
 }
 
-impl From<deepref_postgres::WorkflowError> for NodeError {
-    fn from(error: deepref_postgres::WorkflowError) -> Self {
+impl From<deepref_app::WorkflowError> for NodeError {
+    fn from(error: deepref_app::WorkflowError) -> Self {
         match error {
-            deepref_postgres::WorkflowError::Database(_) => {
+            deepref_app::WorkflowError::Database(_) => {
                 Self::retryable("The database was busy. This will be tried again.")
             }
             other => Self::permanent(other.to_string()),
@@ -103,14 +103,18 @@ fn backoff(attempt: i32) -> Duration {
     }
 }
 
-/// Execute one block of a workflow run.
+/// Execute one block of a workflow run under the job claim `lease`. The step
+/// is fenced on that claim: a second execution under the same claim is
+/// skipped, and an outcome from a claim that lost the step is dropped.
 pub async fn handle_step(
     pool: &PgPool,
     job: &ClaimedJob,
+    lease: &JobLease,
     ai_gateway: Option<Arc<dyn AiGateway>>,
+    runtime: &deepref_config::RuntimeConfig,
 ) -> anyhow::Result<DeliveryAction> {
     let payload: StepPayload = serde_json::from_value(job.payload.clone())?;
-    let execution = match begin_node_execution(pool, payload.node_run_id).await? {
+    let execution = match begin_node_execution(pool, payload.node_run_id, lease).await? {
         StepClaim::Stale => return Ok(DeliveryAction::Ack),
         StepClaim::Execute(execution) => *execution,
     };
@@ -118,28 +122,35 @@ pub async fn handle_step(
         pool,
         ai: ai_gateway.as_deref(),
         execution: &execution,
+        runtime,
     };
-    match nodes::execute(&context).await {
-        Ok(outcome) => {
-            finish_node_execution(pool, payload.node_run_id, outcome).await?;
-            Ok(DeliveryAction::Ack)
-        }
+    let finished = match nodes::execute(&context).await {
+        Ok(outcome) => finish_node_execution(pool, payload.node_run_id, lease, outcome).await?,
         Err(error) if error.retryable && job.attempts < job.max_attempts => {
-            record_node_retry(pool, payload.node_run_id, &error.message).await?;
-            Ok(DeliveryAction::Nak(backoff(job.attempts)))
+            record_node_retry(pool, payload.node_run_id, lease, &error.message).await?;
+            return Ok(DeliveryAction::Nak(backoff(job.attempts)));
         }
         Err(error) => {
             finish_node_execution(
                 pool,
                 payload.node_run_id,
+                lease,
                 NodeOutcome::Failed {
                     message: error.message,
                 },
             )
-            .await?;
-            Ok(DeliveryAction::Ack)
+            .await?
         }
+    };
+    if !finished {
+        tracing::warn!(
+            job_id = %job.id,
+            node_run_id = %payload.node_run_id,
+            attempt = lease.attempt,
+            "workflow step outcome dropped because a newer claim owns the step"
+        );
     }
+    Ok(DeliveryAction::Ack)
 }
 
 /// Background loop for schedules, publication alerts and orphaned steps.
@@ -222,7 +233,7 @@ async fn poll_alert_sources(pool: &PgPool, alert: &DueAlert) -> Result<Vec<Alert
         .map(|settings| settings.crossref_mailto)
         .unwrap_or_default();
     let client = net::trusted_client()?;
-    let pubmed_client = deepref_providers::PubmedClient::new(client.clone(), mailto.clone());
+    let pubmed_client = deepref_integrations::PubmedClient::new(client.clone(), mailto.clone());
     let mut items: Vec<Value> = Vec::new();
     let mut failures: Vec<NodeError> = Vec::new();
     if matches!(sources, "both" | "pubmed") {
@@ -232,7 +243,7 @@ async fn poll_alert_sources(pool: &PgPool, alert: &DueAlert) -> Result<Vec<Alert
         }
     }
     if matches!(sources, "both" | "crossref") {
-        match pubmed::search_crossref(
+        match deepref_integrations::search_crossref(
             &client,
             &query.crossref_terms(),
             &since.format("%Y-%m-%d").to_string(),
@@ -241,7 +252,14 @@ async fn poll_alert_sources(pool: &PgPool, alert: &DueAlert) -> Result<Vec<Alert
         .await
         {
             Ok(found) => items.extend(found),
-            Err(error) => failures.push(error),
+            Err(error) => failures.push(match error {
+                deepref_integrations::CrossrefSearchError::Retryable(message) => {
+                    NodeError::retryable(message)
+                }
+                deepref_integrations::CrossrefSearchError::Permanent(message) => {
+                    NodeError::permanent(message)
+                }
+            }),
         }
     }
     if items.is_empty()

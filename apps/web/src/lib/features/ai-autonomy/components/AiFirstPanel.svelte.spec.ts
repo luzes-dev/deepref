@@ -32,7 +32,8 @@ function cohort(status: string, labels = 8): AiFirstCohortDto {
 						reference_retention: 1
 					}
 				: null,
-		invalidation_reason: null
+		invalidation_reason: null,
+		identity_flag_reason: null
 	};
 }
 
@@ -65,6 +66,14 @@ describe('AI-first owner controls', () => {
 		expect(
 			screen.getByText(/A new positive on a previously excluded control ends this/)
 		).toBeInTheDocument();
+	});
+
+	it('shows a finalized cohort flagged for review after an identity change', async () => {
+		overview([{ ...cohort('finalized'), identity_flag_reason: 'semantic_identity_changed' }]);
+		render(AiFirstPanelTestHost, { projectId });
+		expect(await screen.findByTestId('ai-first-identity-flag')).toHaveTextContent(
+			/Its exclusions stay in force/
+		);
 	});
 
 	it('requires two labels for every sample and interleaved control', async () => {

@@ -7,9 +7,11 @@ use axum::{
 };
 use chrono::{DateTime, Utc};
 use deepref_application::{CsvColumnMapping, ImportParser};
-use deepref_core::normalize_doi;
-use deepref_domain::{ImportFormat, ProjectId};
-use deepref_events::{EntityType, EventEnvelope, SUBJECT_WORK_FETCH_REQUESTED, WorkFetchRequested};
+use deepref_domain::events::{
+    EntityType, EventEnvelope, SUBJECT_WORK_FETCH_REQUESTED, WorkFetchRequested,
+};
+use deepref_domain::normalize_doi;
+use deepref_domain::{AcquisitionStatus, ImportFormat, ProjectId};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use sha2::{Digest, Sha256};
@@ -148,7 +150,10 @@ pub(crate) async fn list_acquisitions(
     .bind(strategy)
     .fetch_all(&state.pool)
     .await?;
-    let items = rows.into_iter().map(acquisition_from_row).collect();
+    let items = rows
+        .into_iter()
+        .map(acquisition_from_row)
+        .collect::<Result<Vec<_>, _>>()?;
     Ok(Json(page(items, limit as usize, |item| {
         (item.created_at, item.id)
     })?))
@@ -181,8 +186,9 @@ pub(crate) async fn create_acquisition(
 ) -> Result<(StatusCode, Json<AcquisitionDto>), ApiError> {
     let seed_dois = validate_seeds(input.seed_dois)?;
     let requested_max_depth = input.max_depth;
-    if requested_max_depth.is_some_and(|value| value < 0) {
-        return Err(ApiError::BadRequest("max_depth must be >= 0".to_owned()));
+    if let Some(value) = requested_max_depth {
+        deepref_domain::acquisition::MaxDepth::try_from(value)
+            .map_err(|message| ApiError::BadRequest(message.to_owned()))?;
     }
     let metadata_provider = input
         .metadata_provider
@@ -203,7 +209,12 @@ pub(crate) async fn create_acquisition(
             .fetch_optional(&mut *tx)
             .await?
             .ok_or_else(|| ApiError::NotFound("project not found".to_owned()))?;
-    let max_depth = requested_max_depth.unwrap_or(project_default_depth);
+    let max_depth = i32::from(
+        deepref_domain::acquisition::MaxDepth::try_from(
+            requested_max_depth.unwrap_or(project_default_depth),
+        )
+        .map_err(|message| ApiError::BadRequest(message.to_owned()))?,
+    );
     let seed_count = i32::try_from(seed_dois.len()).unwrap_or(i32::MAX);
     let config = json!({
         "seed_dois": seed_dois,
@@ -246,7 +257,7 @@ pub(crate) async fn create_acquisition(
         } else {
             StatusCode::OK
         },
-        Json(acquisition_from_row(run)),
+        Json(acquisition_from_row(run)?),
     ))
 }
 
@@ -289,14 +300,15 @@ pub(crate) async fn refresh_acquisition(
     .fetch_optional(&mut *tx)
     .await?
     .ok_or_else(|| ApiError::NotFound("acquisition not found".to_owned()))?;
-    let source_status: String = source.get("status");
-    if source_status != "completed" {
+    let raw_status: String = source.try_get("status")?;
+    let source_status = parse_acquisition_status(&raw_status)?;
+    if source_status != AcquisitionStatus::Completed {
         return Err(ApiError::Conflict {
             code: "ACQUISITION_NOT_COMPLETED".to_owned(),
             message: "only completed acquisitions can be refreshed".to_owned(),
             details: json!({
                 "acquisition_id": acquisition_id,
-                "status": bounded_detail(&source_status, 32),
+                "status": bounded_detail(source_status.as_str(), 32),
             }),
         });
     }
@@ -381,7 +393,7 @@ pub(crate) async fn refresh_acquisition(
         } else {
             StatusCode::OK
         },
-        Json(acquisition_from_row(run)),
+        Json(acquisition_from_row(run)?),
     ))
 }
 
@@ -435,7 +447,7 @@ pub(crate) async fn import_project_records(
             "CSV imports require csv_mapping".to_owned(),
         ));
     }
-    let parser = deepref_providers::ImportParserAdapter::new(format, csv_mapping.clone());
+    let parser = deepref_integrations::ImportParserAdapter::new(format, csv_mapping.clone());
     let records = parser
         .parse(input.content.as_bytes())
         .map_err(|error| ApiError::BadRequest(error.to_string()))?;
@@ -450,9 +462,9 @@ pub(crate) async fn import_project_records(
         "content_sha256": content_sha256,
         "csv_mapping": csv_mapping,
     });
-    let result = deepref_postgres::persist_import(
+    let result = deepref_app::persist_import(
         &state.pool,
-        &deepref_postgres::ImportPersistRequest {
+        &deepref_app::ImportPersistRequest {
             project_id,
             source: format!("import:{}", format.as_str()),
             strategy: "file_import".to_owned(),
@@ -467,8 +479,7 @@ pub(crate) async fn import_project_records(
     .map_err(map_acquisition_error)?;
     if result.created
         && let Err(error) =
-            deepref_postgres::enqueue_import_deduplication(&state.pool, project_id, result.run_id)
-                .await
+            deepref_app::enqueue_import_deduplication(&state.pool, project_id, result.run_id).await
     {
         // The import itself succeeded; the records wait for a manual run instead.
         tracing::warn!(%error, %project_id, "could not queue the duplicate check for an import");
@@ -483,7 +494,7 @@ pub(crate) async fn import_project_records(
         } else {
             StatusCode::OK
         },
-        Json(acquisition_from_row(run)),
+        Json(acquisition_from_row(run)?),
     ))
 }
 
@@ -496,9 +507,9 @@ async fn import_pmids(
 ) -> Result<(StatusCode, Json<AcquisitionDto>), ApiError> {
     let pmids = parse_pmid_list(content)?;
     let idempotency_key = idempotency_key(headers)?;
-    let result = deepref_postgres::create_pmid_import(
+    let result = deepref_app::create_pmid_import(
         &state.pool,
-        &deepref_postgres::PmidImportRequest {
+        &deepref_app::PmidImportRequest {
             project_id,
             idempotency_key,
             pmids,
@@ -516,7 +527,7 @@ async fn import_pmids(
         } else {
             StatusCode::OK
         },
-        Json(acquisition_from_row(run)),
+        Json(acquisition_from_row(run)?),
     ))
 }
 
@@ -532,7 +543,7 @@ pub(crate) fn parse_pmid_list(content: &str) -> Result<Vec<String>, ApiError> {
             .map(str::trim)
             .filter(|token| !token.is_empty())
         {
-            match deepref_providers::normalize_pmid(token) {
+            match deepref_integrations::normalize_pmid(token) {
                 Some(pmid) => {
                     if seen.insert(pmid.clone()) {
                         pmids.push(pmid);
@@ -632,7 +643,10 @@ pub(crate) async fn list_acquisition_items(
     .bind(limit + 1)
     .fetch_all(&state.pool)
     .await?;
-    let items = rows.into_iter().map(acquisition_item_from_row).collect();
+    let items = rows
+        .into_iter()
+        .map(acquisition_item_from_row)
+        .collect::<Result<Vec<_>, _>>()?;
     Ok(Json(page(items, limit as usize, |item| item.position)?))
 }
 
@@ -665,19 +679,21 @@ pub(crate) async fn get_acquisition(
     .fetch_optional(&state.pool)
     .await?
     .ok_or_else(|| ApiError::NotFound("acquisition not found".to_owned()))?;
-    Ok(Json(acquisition_from_row(row)))
+    Ok(Json(acquisition_from_row(row)?))
 }
 
-fn acquisition_item_from_row(row: sqlx::postgres::PgRow) -> AcquisitionItemDto {
-    AcquisitionItemDto {
+fn acquisition_item_from_row(row: sqlx::postgres::PgRow) -> Result<AcquisitionItemDto, ApiError> {
+    let raw_status: String = row.try_get("status")?;
+    let status = parse_pmid_item_status(&raw_status)?;
+    Ok(AcquisitionItemDto {
         identifier: row.get("pmid"),
         position: row.get("position"),
-        status: row.get("status"),
+        status: status.as_str().to_owned(),
         title: row.get("title"),
         record_id: row.get("record_id"),
         last_error: row.get("last_error"),
         processed_at: row.get("processed_at"),
-    }
+    })
 }
 
 async fn persist_doi_acquisition(
@@ -857,12 +873,12 @@ pub(crate) async fn enqueue_seed_jobs(
         .bind(event.event_id)
         .execute(&mut **tx)
         .await?;
-        deepref_postgres::enqueue_job(
+        deepref_app::enqueue_job(
             tx,
-            &deepref_postgres::job(
+            &deepref_app::job(
                 event.event_id,
                 ProjectId::new(project_id),
-                "work_fetch_requested",
+                deepref_domain::JobKind::WorkFetchRequested,
                 serde_json::to_value(&event)?,
                 format!("work_fetch:{}", event.event_id),
             ),
@@ -983,25 +999,35 @@ fn idempotency_key(headers: &HeaderMap) -> Result<Option<String>, ApiError> {
         .transpose()
 }
 
-fn map_acquisition_error(error: deepref_postgres::AcquisitionError) -> ApiError {
+fn map_acquisition_error(error: deepref_app::AcquisitionError) -> ApiError {
     match error {
-        deepref_postgres::AcquisitionError::ProjectNotFound => {
+        deepref_app::AcquisitionError::ProjectNotFound => {
             ApiError::NotFound("project not found".to_owned())
         }
-        deepref_postgres::AcquisitionError::IdempotencyConflict { run_id } => ApiError::Conflict {
+        deepref_app::AcquisitionError::IdempotencyConflict { run_id } => ApiError::Conflict {
             code: "IDEMPOTENCY_KEY_REUSED".to_owned(),
             message: "Idempotency-Key was already used with different import content".to_owned(),
             details: json!({ "acquisition_id": run_id }),
         },
-        deepref_postgres::AcquisitionError::Database(error) => ApiError::Database(error),
-        deepref_postgres::AcquisitionError::Serialization(error) => {
-            ApiError::Internal(error.into())
-        }
-        deepref_postgres::AcquisitionError::Queue(error) => ApiError::Internal(error),
+        deepref_app::AcquisitionError::Database(error) => ApiError::Database(error),
+        deepref_app::AcquisitionError::Serialization(error) => ApiError::Internal(error.into()),
+        deepref_app::AcquisitionError::Queue(error) => ApiError::Internal(error),
     }
 }
 
-fn acquisition_from_row(row: sqlx::postgres::PgRow) -> AcquisitionDto {
+fn parse_acquisition_status(value: &str) -> Result<AcquisitionStatus, ApiError> {
+    AcquisitionStatus::parse(value)
+        .ok_or_else(|| ApiError::Internal(anyhow::anyhow!("unknown acquisition status: {value}")))
+}
+
+fn parse_pmid_item_status(value: &str) -> Result<deepref_app::PmidItemStatus, ApiError> {
+    deepref_app::PmidItemStatus::parse(value)
+        .ok_or_else(|| ApiError::Internal(anyhow::anyhow!("unknown PMID item status: {value}")))
+}
+
+fn acquisition_from_row(row: sqlx::postgres::PgRow) -> Result<AcquisitionDto, ApiError> {
+    let raw_status: String = row.try_get("status")?;
+    let status = parse_acquisition_status(&raw_status)?;
     let refresh_of = row
         .try_get::<serde_json::Value, _>("config")
         .ok()
@@ -1011,13 +1037,13 @@ fn acquisition_from_row(row: sqlx::postgres::PgRow) -> AcquisitionDto {
                 .and_then(serde_json::Value::as_str)
                 .and_then(|value| Uuid::parse_str(value).ok())
         });
-    AcquisitionDto {
+    Ok(AcquisitionDto {
         id: row.get("id"),
         project_id: row.get("project_id"),
         source: row.get("source"),
         strategy: row.get("strategy"),
         format: row.get("format"),
-        status: row.get("status"),
+        status: status.as_str().to_owned(),
         seed_count: row.get("seed_count"),
         queued_count: row.get("queued_count"),
         fetched_count: row.get("fetched_count"),
@@ -1026,12 +1052,26 @@ fn acquisition_from_row(row: sqlx::postgres::PgRow) -> AcquisitionDto {
         started_at: row.get("started_at"),
         completed_at: row.get("completed_at"),
         refresh_of,
-    }
+    })
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn lifecycle_status_decoding_rejects_unknown_database_values() {
+        assert_eq!(
+            parse_acquisition_status("completed").unwrap(),
+            AcquisitionStatus::Completed
+        );
+        assert!(parse_acquisition_status("unknown").is_err());
+        assert_eq!(
+            parse_pmid_item_status("imported").unwrap(),
+            deepref_app::PmidItemStatus::Imported,
+        );
+        assert!(parse_pmid_item_status("unknown").is_err());
+    }
 
     #[test]
     fn pmid_lists_accept_labels_links_and_commas_and_keep_the_first_repeat() {

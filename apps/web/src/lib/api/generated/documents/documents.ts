@@ -19,7 +19,6 @@ import type {
 
 import type {
 	ApiErrorBody,
-	DocumentBlockDto,
 	DocumentDto,
 	DocumentPageDto,
 	DocumentReferenceDto,
@@ -32,6 +31,7 @@ import type {
 	ListMissingFullTextParams,
 	ListReportDocumentsParams,
 	MissingFullTextDto,
+	PaginatedResponseDocumentBlockDto,
 	UploadDocumentForm
 } from '../models';
 
@@ -867,8 +867,13 @@ export const createDeleteReportDocument = <TError = ErrorType<ApiErrorBody>, TCo
 	);
 };
 export type listDocumentBlocksResponse200 = {
-	data: DocumentBlockDto[];
+	data: PaginatedResponseDocumentBlockDto;
 	status: 200;
+};
+
+export type listDocumentBlocksResponse400 = {
+	data: ApiErrorBody;
+	status: 400;
 };
 
 export type listDocumentBlocksResponse404 = {
@@ -885,7 +890,7 @@ export type listDocumentBlocksResponseSuccess = listDocumentBlocksResponse200 & 
 	headers: Headers;
 };
 export type listDocumentBlocksResponseError = (
-	listDocumentBlocksResponse404 | listDocumentBlocksResponse500
+	listDocumentBlocksResponse400 | listDocumentBlocksResponse404 | listDocumentBlocksResponse500
 ) & {
 	headers: Headers;
 };

@@ -45,6 +45,58 @@ pub struct PlanAction {
     pub manual: Option<ManualStep>,
 }
 
+/// Key under which a `screen_reports` action stores its plan-time records.
+pub const SCREEN_REPORT_ITEMS: &str = "items";
+
+/// One record of a `screen_reports` action as it was when the plan was made.
+///
+/// Written by the host (never by the model) when the action joins the plan.
+/// Confirmation screens a record only while its screening revision still
+/// equals `expected_revision`, so a decision someone made after the plan was
+/// drafted is never silently overwritten. The UI lists these records.
+#[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
+pub struct PlannedScreeningItem {
+    pub report_id: Uuid,
+    pub title: String,
+    /// Title/abstract status when the plan was made.
+    pub current_status: String,
+    pub expected_revision: i64,
+}
+
+impl PlanAction {
+    /// The plan-time records of a `screen_reports` action; empty for other
+    /// tools and for plans made before records were captured.
+    pub fn screening_items(&self) -> Vec<PlannedScreeningItem> {
+        self.args
+            .get(SCREEN_REPORT_ITEMS)
+            .cloned()
+            .and_then(|items| serde_json::from_value(items).ok())
+            .unwrap_or_default()
+    }
+
+    /// Stores plan-time records on the action.
+    #[must_use]
+    pub fn with_screening_items(mut self, items: &[PlannedScreeningItem]) -> Self {
+        if let Some(object) = self.args.as_object_mut() {
+            object.insert(SCREEN_REPORT_ITEMS.to_owned(), json!(items));
+        }
+        self
+    }
+
+    /// The report ids a `screen_reports` action targets, in model order.
+    pub fn report_ids(&self) -> Vec<Uuid> {
+        self.args
+            .get("report_ids")
+            .and_then(Value::as_array)
+            .map(|ids| {
+                ids.iter()
+                    .filter_map(|id| id.as_str().and_then(|text| Uuid::parse_str(text).ok()))
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
+}
+
 fn take_text(args: &mut Value, key: &str) -> String {
     args.as_object_mut()
         .and_then(|object| object.remove(key))
@@ -117,6 +169,11 @@ pub(crate) fn plan_write_call(
     }
     if let Some(object) = args.as_object_mut() {
         object.insert("project_id".to_owned(), json!(project_id.as_uuid()));
+        // Plan-time record snapshots are host-owned: a model-supplied
+        // `items` (with made-up revisions) never reaches the plan.
+        if call.name == TOOL_SCREEN_REPORTS {
+            object.remove(SCREEN_REPORT_ITEMS);
+        }
     }
 
     let (action, authority) = match call.name.as_str() {
@@ -209,4 +266,38 @@ pub fn validate_screen_reports(args: &Value) -> Result<(), String> {
         return Err("`decision` must be include, exclude or maybe".to_owned());
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use deepref_domain::ActorKind;
+
+    #[test]
+    fn model_supplied_screening_items_never_reach_the_plan() {
+        let report_id = Uuid::new_v4();
+        let call = ChatToolCall {
+            id: "c1".to_owned(),
+            name: TOOL_SCREEN_REPORTS.to_owned(),
+            arguments: json!({
+                "report_ids": [report_id],
+                "decision": "exclude",
+                "summary": "Exclude one",
+                "items": [{"report_id": report_id, "title": "x", "current_status": "unscreened", "expected_revision": 99}]
+            }),
+        };
+        let actor = Actor::new(ActorKind::User, "planner").expect("actor");
+        let action = plan_write_call(ProjectId::new(Uuid::new_v4()), &actor, &call, 0)
+            .expect("the call is planned");
+        assert!(action.screening_items().is_empty(), "{:?}", action.args);
+        assert_eq!(action.report_ids(), vec![report_id]);
+        let item = PlannedScreeningItem {
+            report_id,
+            title: "Record".to_owned(),
+            current_status: "maybe".to_owned(),
+            expected_revision: 3,
+        };
+        let action = action.with_screening_items(std::slice::from_ref(&item));
+        assert_eq!(action.screening_items(), vec![item]);
+    }
 }
