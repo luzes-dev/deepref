@@ -112,7 +112,7 @@ jobs:
           rustup override set 1.95.0
       - name: Install pinned cargo-nextest
         if: (github.event_name == 'push' || needs.changes.outputs.rust == 'true') && matrix.command == 'test'
-        uses: taiki-e/install-action@ab6895351a88b908e96a4697860d4ffea5e57dbe # v2.87.27
+        uses: taiki-e/install-action@1168f6810a3cb30a3514bf5756a3b7f0422c6df8 # v2.87.28
         with:
           tool: cargo-nextest@0.9.143
           checksum: true
@@ -193,7 +193,7 @@ jobs:
           rustup toolchain install 1.95.0 --profile minimal --component llvm-tools-preview
           rustup override set 1.95.0
       - name: Install pinned tools
-        uses: taiki-e/install-action@ab6895351a88b908e96a4697860d4ffea5e57dbe # v2.87.27
+        uses: taiki-e/install-action@1168f6810a3cb30a3514bf5756a3b7f0422c6df8 # v2.87.28
         with:
           tool: cargo-llvm-cov@0.9.0,cargo-nextest@0.9.143
           checksum: true
@@ -442,14 +442,14 @@ jobs:
           rustup override set 1.95.0
       - name: Install pinned cargo-nextest
         if: github.event_name == 'push' || needs.changes.outputs.rust == 'true' || needs.changes.outputs.web == 'true' || needs.changes.outputs.containers == 'true'
-        uses: taiki-e/install-action@ab6895351a88b908e96a4697860d4ffea5e57dbe # v2.87.27
+        uses: taiki-e/install-action@1168f6810a3cb30a3514bf5756a3b7f0422c6df8 # v2.87.28
         with:
           tool: cargo-nextest@0.9.143
           checksum: true
           fallback: none
       - name: Install pinned cargo-binstall
         if: github.event_name == 'push' || needs.changes.outputs.rust == 'true' || needs.changes.outputs.web == 'true' || needs.changes.outputs.containers == 'true'
-        uses: taiki-e/install-action@ab6895351a88b908e96a4697860d4ffea5e57dbe # v2.87.27
+        uses: taiki-e/install-action@1168f6810a3cb30a3514bf5756a3b7f0422c6df8 # v2.87.28
         with:
           tool: cargo-binstall@1.22.0
           checksum: true
