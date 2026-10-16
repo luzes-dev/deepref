@@ -30,7 +30,9 @@ pub mod worker;
 #[path = "../build_support/fingerprint.rs"]
 mod build_support;
 
-pub use ai_first::{AI_FIRST_POLICY_VERSION, automation_eligible_exclusion};
+pub use ai_first::{
+    AI_FIRST_POLICY_VERSION, AiFirstCeiling, AiFirstCohortStatus, automation_eligible_exclusion,
+};
 pub use contract::{
     APPRAISAL_PREFILL_SEMANTIC_VERSION, BuildProvenance, CalibrationCompatibility, ContentDigest,
     DATA_EXTRACTION_SEMANTIC_VERSION, DUPLICATE_DETECTION_SEMANTIC_VERSION, ModelContract,

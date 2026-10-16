@@ -1,6 +1,6 @@
 use super::AiFirstError;
 use deepref_domain::{Actor, ActorKind};
-use deepref_review::ai_first::{AiFirstCeiling, AiFirstCohortStatus};
+use deepref_review::{AiFirstCeiling, AiFirstCohortStatus};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use sqlx::{PgPool, Postgres, Row, Transaction};
