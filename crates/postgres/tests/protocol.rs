@@ -11,21 +11,14 @@ use deepref_application::{
 };
 use deepref_domain::{CriterionDimension, CriterionKind, CriterionStage, FrameworkKind, ProjectId};
 use deepref_postgres::{
-    ProtocolActor, ProtocolError, get_protocol_editor, get_published_protocol, migrate,
-    publish_protocol, save_protocol_draft,
+    ProtocolActor, ProtocolError, get_protocol_editor, get_published_protocol, publish_protocol,
+    save_protocol_draft,
 };
-use sqlx::{AssertSqlSafe, Connection, PgConnection, PgPool, Row, postgres::PgPoolOptions};
+use sqlx::{AssertSqlSafe, Connection, PgConnection, PgPool, Row};
 use uuid::Uuid;
 
 async fn database() -> Option<PgPool> {
-    let url = std::env::var("DATABASE_URL").ok()?;
-    let pool = PgPoolOptions::new()
-        .max_connections(8)
-        .connect(&url)
-        .await
-        .ok()?;
-    migrate(&pool).await.ok()?;
-    Some(pool)
+    deepref_postgres::test_isolation::isolated_pool_from_env("DATABASE_URL", 8).await
 }
 
 async fn project(pool: &PgPool, name: &str) -> Uuid {
@@ -389,7 +382,8 @@ async fn published_protocol_and_criteria_reject_direct_scientific_mutation() {
 
 #[tokio::test]
 async fn migration_backfills_legacy_json_criteria_deterministically() {
-    let Some(url) = std::env::var("DATABASE_URL").ok() else {
+    let Some(url) = deepref_postgres::test_isolation::isolated_url_from_env("DATABASE_URL").await
+    else {
         return;
     };
     let schema = format!("protocol_migration_test_{}", Uuid::new_v4().simple());

@@ -6,18 +6,11 @@
 )]
 
 use deepref_postgres::list_ungrouped_included_reports;
-use sqlx::{PgPool, postgres::PgPoolOptions};
+use sqlx::PgPool;
 use uuid::Uuid;
 
 async fn database() -> Option<PgPool> {
-    let url = std::env::var("DATABASE_URL").ok()?;
-    let pool = PgPoolOptions::new()
-        .max_connections(8)
-        .connect(&url)
-        .await
-        .ok()?;
-    deepref_postgres::migrate(&pool).await.ok()?;
-    Some(pool)
+    deepref_postgres::test_isolation::isolated_pool_from_env("DATABASE_URL", 8).await
 }
 
 async fn add_report(pool: &PgPool, project: Uuid, title: &str) -> Uuid {

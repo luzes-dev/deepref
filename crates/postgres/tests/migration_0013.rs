@@ -24,7 +24,8 @@ const PRE_PR8_MIGRATIONS: [&str; 12] = [
 
 #[tokio::test]
 async fn upgrades_legacy_documents_blocks_and_reason_catalog_truthfully() {
-    let Some(url) = std::env::var("DATABASE_URL").ok() else {
+    let Some(url) = deepref_postgres::test_isolation::isolated_url_from_env("DATABASE_URL").await
+    else {
         return;
     };
     let mut connection = PgConnection::connect(&url)

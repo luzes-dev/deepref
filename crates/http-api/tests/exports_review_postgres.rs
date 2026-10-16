@@ -9,7 +9,6 @@
 )]
 
 use std::collections::HashMap;
-use std::sync::OnceLock;
 
 use axum::{
     body::{Body, to_bytes},
@@ -18,29 +17,12 @@ use axum::{
 use chrono::{Duration, Utc};
 use deepref_http_api::{config::ApiConfig, routes::router, state::AppState};
 use serde_json::{Value, json};
-use sqlx::{PgPool, postgres::PgPoolOptions};
+use sqlx::PgPool;
 use tower::ServiceExt;
 use uuid::Uuid;
 
-static DATABASE_TEST_MUTEX: OnceLock<tokio::sync::Mutex<()>> = OnceLock::new();
-
-fn test_lock() -> &'static tokio::sync::Mutex<()> {
-    DATABASE_TEST_MUTEX.get_or_init(tokio::sync::Mutex::default)
-}
-
 async fn database() -> Option<PgPool> {
-    let url = std::env::var("TEST_DATABASE_URL").ok()?;
-    let pool = PgPoolOptions::new()
-        .max_connections(5)
-        .connect(&url)
-        .await
-        .unwrap_or_else(|error| {
-            panic!("TEST_DATABASE_URL is set but PostgreSQL is unavailable: {error}")
-        });
-    deepref_postgres::migrate(&pool)
-        .await
-        .unwrap_or_else(|error| panic!("TEST_DATABASE_URL migrations failed: {error}"));
-    Some(pool)
+    deepref_postgres::test_isolation::isolated_pool_from_env("TEST_DATABASE_URL", 5).await
 }
 
 fn api_config() -> ApiConfig {
@@ -144,7 +126,6 @@ async fn insert_report(
 
 #[tokio::test]
 async fn review_exports_carry_decisions_values_judgments_and_included_studies() {
-    let _guard = test_lock().lock().await;
     let Some(pool) = database().await else {
         return;
     };
@@ -673,7 +654,6 @@ async fn review_exports_carry_decisions_values_judgments_and_included_studies() 
 /// the controls, read their previous labels and still be allowed to label the cohort.
 #[tokio::test]
 async fn blind_audit_redacts_cohort_judgments_from_decision_bearing_exports() {
-    let _guard = test_lock().lock().await;
     let Some(pool) = database().await else {
         return;
     };

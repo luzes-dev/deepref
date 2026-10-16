@@ -4,25 +4,12 @@
     clippy::unwrap_used,
     clippy::string_slice
 )]
-use deepref_postgres::{get_prisma_projection, migrate};
-use sqlx::{PgPool, postgres::PgPoolOptions};
+use deepref_postgres::get_prisma_projection;
+use sqlx::PgPool;
 use uuid::Uuid;
 
 async fn database() -> Option<PgPool> {
-    let Ok(url) = std::env::var("DATABASE_URL") else {
-        return None;
-    };
-    let pool = PgPoolOptions::new()
-        .max_connections(12)
-        .connect(&url)
-        .await
-        .unwrap_or_else(|error| {
-            panic!("DATABASE_URL is set but PostgreSQL is unavailable: {error}")
-        });
-    migrate(&pool)
-        .await
-        .unwrap_or_else(|error| panic!("failed to apply PostgreSQL migrations: {error}"));
-    Some(pool)
+    deepref_postgres::test_isolation::isolated_pool_from_env("DATABASE_URL", 12).await
 }
 
 async fn delete_fixture(pool: &PgPool, project_id: Uuid, report_ids: &[Uuid]) {

@@ -17,7 +17,7 @@ use deepref_worker::{
     processor::{handle_job_with_document_services, handle_job_with_documents},
 };
 use futures::stream;
-use sqlx::{PgPool, postgres::PgPoolOptions};
+use sqlx::PgPool;
 use tokio::sync::{Barrier, Mutex};
 use uuid::Uuid;
 
@@ -360,14 +360,7 @@ async fn concurrent_retrieval_completion_cleans_the_losing_object() {
 }
 
 async fn database() -> Option<PgPool> {
-    let url = std::env::var("DATABASE_URL").ok()?;
-    let pool = PgPoolOptions::new()
-        .max_connections(5)
-        .connect(&url)
-        .await
-        .ok()?;
-    deepref_postgres::migrate(&pool).await.ok()?;
-    Some(pool)
+    deepref_postgres::test_isolation::isolated_pool_from_env("DATABASE_URL", 5).await
 }
 
 #[tokio::test]

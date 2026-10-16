@@ -19,22 +19,15 @@ use deepref_postgres::{
     apply_autonomy_for_proposal, delete_project_in_transaction, get_activity,
     get_published_protocol, get_visible_ai_proposal, independent_reviewer_pairs,
     insert_reviewer_decision_in_transaction, list_activity, list_ai_proposals,
-    list_reviewer_decisions, migrate, publish_protocol, record_exposure, resolve_reviewer_conflict,
+    list_reviewer_decisions, publish_protocol, record_exposure, resolve_reviewer_conflict,
     reviewer_agreement, save_protocol_draft, screen_report,
 };
 use serde_json::json;
-use sqlx::{PgPool, postgres::PgPoolOptions};
+use sqlx::PgPool;
 use uuid::Uuid;
 
 async fn database() -> Option<PgPool> {
-    let url = std::env::var("DATABASE_URL").ok()?;
-    let pool = PgPoolOptions::new()
-        .max_connections(4)
-        .connect(&url)
-        .await
-        .expect("DATABASE_URL must be reachable");
-    migrate(&pool).await.expect("migrations must apply");
-    Some(pool)
+    deepref_postgres::test_isolation::isolated_pool_from_env("DATABASE_URL", 4).await
 }
 
 fn person() -> Actor {

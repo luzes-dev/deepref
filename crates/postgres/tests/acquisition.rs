@@ -8,16 +8,16 @@ use deepref_application::{RawAuthor, RawIdentifier, RawRecord};
 use deepref_domain::{IdentifierScheme, ImportFormat};
 use deepref_postgres::{AcquisitionError, ImportPersistRequest, migrate, persist_import};
 use serde_json::json;
-use sqlx::{PgPool, Row, postgres::PgPoolOptions};
+use sqlx::{PgPool, Row};
 use uuid::Uuid;
 
 async fn database() -> Option<PgPool> {
-    let url = std::env::var("DATABASE_URL").ok()?;
-    let pool = PgPoolOptions::new()
-        .max_connections(5)
-        .connect(&url)
-        .await
-        .unwrap();
+    let pool = deepref_postgres::test_isolation::isolated_pool_from_env("DATABASE_URL", 5).await?;
+    // Redundant on a migrated clone, but without it the two same-key
+    // `import_idempotency_*` tests fail about half the time: concurrent
+    // `persist_import` calls with one idempotency key race on the derived
+    // primary key, which `ON CONFLICT (project_id, idempotency_key)` does not
+    // arbitrate (23505 on acquisition_runs_pkey). Drop this with that fix.
     migrate(&pool).await.unwrap();
     Some(pool)
 }

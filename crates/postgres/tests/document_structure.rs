@@ -2,21 +2,13 @@
 use deepref_documents::ParsedDocument;
 use deepref_postgres::{
     DocumentStructure, NewDocument, NewDocumentReference, NewDocumentSection, create_document,
-    list_document_references, list_document_sections, migrate,
-    persist_parsed_document_with_structure,
+    list_document_references, list_document_sections, persist_parsed_document_with_structure,
 };
-use sqlx::{PgPool, postgres::PgPoolOptions};
+use sqlx::PgPool;
 use uuid::Uuid;
 
 async fn database() -> Option<PgPool> {
-    let url = std::env::var("DATABASE_URL").ok()?;
-    let pool = PgPoolOptions::new()
-        .max_connections(4)
-        .connect(&url)
-        .await
-        .ok()?;
-    migrate(&pool).await.ok()?;
-    Some(pool)
+    deepref_postgres::test_isolation::isolated_pool_from_env("DATABASE_URL", 4).await
 }
 
 #[tokio::test]

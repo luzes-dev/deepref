@@ -6,18 +6,11 @@ use deepref_postgres::{
     insert_reviewer_decision_in_transaction, list_reviewer_decisions, resolve_autonomy_level,
     resolve_reviewer_conflict, set_autonomy_level,
 };
-use sqlx::{PgPool, postgres::PgPoolOptions};
+use sqlx::PgPool;
 use uuid::Uuid;
 
 async fn database() -> Option<PgPool> {
-    let url = std::env::var("DATABASE_URL").ok()?;
-    let pool = PgPoolOptions::new()
-        .max_connections(4)
-        .connect(&url)
-        .await
-        .ok()?;
-    deepref_postgres::migrate(&pool).await.ok()?;
-    Some(pool)
+    deepref_postgres::test_isolation::isolated_pool_from_env("DATABASE_URL", 4).await
 }
 
 async fn project(pool: &PgPool) -> Uuid {

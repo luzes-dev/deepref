@@ -13,7 +13,7 @@ use deepref_ai::{ModelParameters, ModelProfile, ResolvedModel, runtime::StaticMo
 use deepref_application::jobs::ClaimedJob;
 use deepref_postgres::{
     append_assistant_run_event, begin_assistant_agent_run, claim_job, get_assistant_plan,
-    list_assistant_run_events, migrate, submit_assistant_agent_run,
+    list_assistant_run_events, submit_assistant_agent_run,
 };
 use deepref_worker::{
     assistant::{AssistantWorkerServices, handle_assistant_agent_run_with},
@@ -21,29 +21,11 @@ use deepref_worker::{
 };
 use rig_core::test_utils::{MockCompletionModel, MockStreamEvent};
 use serde_json::{Value, json};
-use sqlx::{PgPool, postgres::PgPoolOptions};
+use sqlx::PgPool;
 use uuid::Uuid;
 
-static DATABASE_TEST_MUTEX: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
-
 async fn database() -> Option<PgPool> {
-    let url = std::env::var("DATABASE_URL").ok()?;
-    let pool = PgPoolOptions::new()
-        .max_connections(8)
-        .connect(&url)
-        .await
-        .expect("DATABASE_URL must be reachable");
-    migrate(&pool).await.expect("migrations apply");
-    let started = chrono::Utc::now();
-    sqlx::query(
-        "UPDATE jobs SET state='dead', last_error='parked by worker assistant tests', completed_at=now()
-         WHERE state='queued' AND created_at < $1",
-    )
-    .bind(started)
-    .execute(&pool)
-    .await
-    .expect("park stale jobs");
-    Some(pool)
+    deepref_postgres::test_isolation::isolated_pool_from_env("DATABASE_URL", 8).await
 }
 
 async fn project(pool: &PgPool) -> (Uuid, Uuid) {
@@ -129,7 +111,6 @@ async fn run_record(pool: &PgPool, run_id: Uuid) -> deepref_postgres::AssistantA
 
 #[tokio::test]
 async fn worker_completes_a_run_with_one_answer_one_plan_and_a_cassette() {
-    let _guard = DATABASE_TEST_MUTEX.lock().await;
     let Some(pool) = database().await else { return };
     let (project_id, conversation_id) = project(&pool).await;
     let report_id = Uuid::new_v4();
@@ -213,7 +194,6 @@ async fn worker_completes_a_run_with_one_answer_one_plan_and_a_cassette() {
 
 #[tokio::test]
 async fn duplicate_delivery_keeps_one_answer_and_one_plan() {
-    let _guard = DATABASE_TEST_MUTEX.lock().await;
     let Some(pool) = database().await else { return };
     let (project_id, conversation_id) = project(&pool).await;
     let model = MockCompletionModel::from_stream_turns(vec![stream_text("Done.")]);
@@ -262,7 +242,6 @@ async fn duplicate_delivery_keeps_one_answer_and_one_plan() {
 
 #[tokio::test]
 async fn provider_failure_requeues_then_terminal_exhaustion_fails_the_run() {
-    let _guard = DATABASE_TEST_MUTEX.lock().await;
     let Some(pool) = database().await else { return };
     let (project_id, conversation_id) = project(&pool).await;
     let failing = MockCompletionModel::from_stream_turns(vec![vec![MockStreamEvent::error(
@@ -321,7 +300,6 @@ fn failing_model() -> MockCompletionModel {
 
 #[tokio::test]
 async fn exhausted_budget_fails_the_run_without_an_answer() {
-    let _guard = DATABASE_TEST_MUTEX.lock().await;
     let Some(pool) = database().await else { return };
     let (project_id, conversation_id) = project(&pool).await;
     deepref_postgres::set_ai_budget(&pool, project_id, 1)
@@ -371,7 +349,6 @@ async fn exhausted_budget_fails_the_run_without_an_answer() {
 
 #[tokio::test]
 async fn recovered_lease_redrives_to_a_single_completion() {
-    let _guard = DATABASE_TEST_MUTEX.lock().await;
     let Some(pool) = database().await else { return };
     let (project_id, conversation_id) = project(&pool).await;
     let model = MockCompletionModel::from_stream_turns(vec![stream_text("Done.")]);
@@ -412,7 +389,6 @@ async fn recovered_lease_redrives_to_a_single_completion() {
 
 #[tokio::test]
 async fn exhausted_redelivery_of_a_terminal_run_acks_without_an_error_event() {
-    let _guard = DATABASE_TEST_MUTEX.lock().await;
     let Some(pool) = database().await else { return };
     let (project_id, conversation_id) = project(&pool).await;
     let model = MockCompletionModel::from_stream_turns(vec![stream_text("Done.")]);
@@ -465,7 +441,6 @@ async fn exhausted_redelivery_of_a_terminal_run_acks_without_an_error_event() {
 
 #[tokio::test]
 async fn recovered_lease_preserves_prior_events_with_monotonic_seqs() {
-    let _guard = DATABASE_TEST_MUTEX.lock().await;
     let Some(pool) = database().await else { return };
     let (project_id, conversation_id) = project(&pool).await;
     let run_id = submit(&pool, project_id, conversation_id).await;
@@ -536,7 +511,6 @@ async fn recovered_lease_preserves_prior_events_with_monotonic_seqs() {
 
 #[tokio::test]
 async fn plan_event_resolves_to_the_stored_plan() {
-    let _guard = DATABASE_TEST_MUTEX.lock().await;
     let Some(pool) = database().await else { return };
     let (project_id, conversation_id) = project(&pool).await;
     let report_id = Uuid::new_v4();

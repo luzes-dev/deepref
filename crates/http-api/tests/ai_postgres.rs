@@ -5,7 +5,6 @@
     clippy::string_slice
 )]
 use std::collections::{HashMap, VecDeque};
-use std::sync::OnceLock;
 use std::sync::{Arc, Mutex};
 use std::time::Duration;
 
@@ -22,15 +21,9 @@ use deepref_ai::{
 use deepref_application::jobs::ClaimedJob;
 use deepref_http_api::{config::ApiConfig, routes::router, state::AppState};
 use deepref_worker::{delivery::DeliveryAction, processor::handle_job_with_documents_owned_and_ai};
-use sqlx::{PgPool, Row, postgres::PgPoolOptions};
+use sqlx::{PgPool, Row};
 use tower::ServiceExt;
 use uuid::Uuid;
-
-static TEST_LOCK: OnceLock<tokio::sync::Mutex<()>> = OnceLock::new();
-
-fn test_lock() -> &'static tokio::sync::Mutex<()> {
-    TEST_LOCK.get_or_init(tokio::sync::Mutex::default)
-}
 
 #[derive(Clone)]
 struct TestGateway {
@@ -142,16 +135,7 @@ impl AiGateway for DedupeEchoGateway {
 }
 
 async fn database() -> Option<PgPool> {
-    let url = std::env::var("DATABASE_URL").ok()?;
-    let pool = PgPoolOptions::new()
-        .max_connections(8)
-        .connect(&url)
-        .await
-        .expect("DATABASE_URL database must be reachable");
-    deepref_postgres::migrate(&pool)
-        .await
-        .expect("DATABASE_URL migrations must apply");
-    Some(pool)
+    deepref_postgres::test_isolation::isolated_pool_from_env("DATABASE_URL", 8).await
 }
 
 fn api_config() -> ApiConfig {
@@ -222,7 +206,6 @@ where
 
 #[tokio::test]
 async fn blind_screening_disagreement_blocks_without_exposing_primary_output() {
-    let _guard = test_lock().lock().await;
     let Some(pool) = database().await else { return };
     let (project_id, report_id, criterion_id, title) = setup(&pool).await;
     let provider = format!("blind-screening-provider-{}", Uuid::new_v4());
@@ -318,7 +301,6 @@ async fn blind_screening_disagreement_blocks_without_exposing_primary_output() {
 
 #[tokio::test]
 async fn candidate_audit_and_repair_cannot_patch_protected_screening_fields() {
-    let _guard = test_lock().lock().await;
     let Some(pool) = database().await else { return };
     let (project_id, report_id, criterion_id, title) = setup(&pool).await;
     let provider = format!("candidate-audit-provider-{}", Uuid::new_v4());
@@ -424,7 +406,6 @@ async fn candidate_audit_and_repair_cannot_patch_protected_screening_fields() {
 
 #[tokio::test]
 async fn changed_screening_revision_blocks_finalization_without_a_proposal() {
-    let _guard = test_lock().lock().await;
     let Some(pool) = database().await else { return };
     let (project_id, report_id, criterion_id, title) = setup(&pool).await;
     let provider = format!("stale-screening-provider-{}", Uuid::new_v4());
@@ -496,7 +477,6 @@ async fn changed_screening_revision_blocks_finalization_without_a_proposal() {
 
 #[tokio::test]
 async fn duplicate_detection_executes_through_the_same_compiled_runtime() {
-    let _guard = test_lock().lock().await;
     let Some(pool) = database().await else { return };
     let project_id = Uuid::new_v4();
     let report_id = Uuid::new_v4();
@@ -771,7 +751,6 @@ async fn cleanup_project(pool: &PgPool, project_id: Uuid, report_id: Uuid) {
 
 #[tokio::test]
 async fn injected_gateway_is_called_and_run_provenance_is_persisted() {
-    let _guard = test_lock().lock().await;
     let Some(pool) = database().await else { return };
     let (project_id, report_id, criterion_id, title) = setup(&pool).await;
     let provider = format!("test-provider-{}", Uuid::new_v4());
@@ -882,7 +861,6 @@ async fn injected_gateway_is_called_and_run_provenance_is_persisted() {
 
 #[tokio::test]
 async fn full_text_retrieval_uses_or_terms_and_passes_grounding_to_gateway() {
-    let _guard = test_lock().lock().await;
     let Some(pool) = database().await else { return };
     let (project_id, report_id, first_criterion_id, _title) = setup_full_text(&pool).await;
     let document_id = Uuid::new_v4();
@@ -1039,7 +1017,6 @@ async fn full_text_retrieval_uses_or_terms_and_passes_grounding_to_gateway() {
 
 #[tokio::test]
 async fn gateway_failure_is_a_failed_run_without_a_proposal() {
-    let _guard = test_lock().lock().await;
     let Some(pool) = database().await else { return };
     let (project_id, report_id, criterion_id, _title) = setup(&pool).await;
     let provider = format!("failing-provider-{}", Uuid::new_v4());

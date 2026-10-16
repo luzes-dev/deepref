@@ -5,23 +5,14 @@
     clippy::string_slice
 )]
 use deepref_postgres::MIGRATOR;
-use sqlx::{
-    Executor, PgPool, Postgres, migrate::Migrator, pool::PoolConnection, postgres::PgPoolOptions,
-};
+use sqlx::{Executor, PgPool, Postgres, migrate::Migrator, pool::PoolConnection};
 use uuid::Uuid;
 
 /// Migration 0048 moves the workspace default citation depth from 2 to 1.
 const DEPTH_MIGRATION_VERSION: i64 = 48;
 
 async fn database() -> Option<PgPool> {
-    let url = std::env::var("DATABASE_URL").ok()?;
-    Some(
-        PgPoolOptions::new()
-            .max_connections(4)
-            .connect(&url)
-            .await
-            .expect("DATABASE_URL database must be reachable"),
-    )
+    deepref_postgres::test_isolation::isolated_pool_from_env("DATABASE_URL", 4).await
 }
 
 /// A connection whose search path is a fresh schema, so a scenario starts from an empty database.

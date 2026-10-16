@@ -13,25 +13,16 @@ use deepref_application::{
 use deepref_domain::{Actor, ActorKind, ProjectId};
 use deepref_postgres::{
     begin_next_automation_step, complete_job, configure_automation_definition, get_automation_run,
-    migrate, recover_expired_jobs, start_automation_manually,
+    recover_expired_jobs, start_automation_manually,
 };
 use deepref_worker::{delivery::DeliveryAction, processor::handle_job_with_documents_owned};
 use serde_json::json;
-use sqlx::{PgPool, Row, postgres::PgPoolOptions};
+use sqlx::{PgPool, Row};
 use std::time::Duration;
 use uuid::Uuid;
 
-static DATABASE_TEST_MUTEX: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
-
 async fn database() -> Option<PgPool> {
-    let url = std::env::var("DATABASE_URL").ok()?;
-    let pool = PgPoolOptions::new()
-        .max_connections(8)
-        .connect(&url)
-        .await
-        .ok()?;
-    migrate(&pool).await.ok()?;
-    Some(pool)
+    deepref_postgres::test_isolation::isolated_pool_from_env("DATABASE_URL", 8).await
 }
 
 fn actor() -> Actor {
@@ -117,7 +108,6 @@ async fn claimed_job(
 
 #[tokio::test]
 async fn automation_job_executes_builtin_step_and_completed_retry_is_noop() -> Result<()> {
-    let _guard = DATABASE_TEST_MUTEX.lock().await;
     let Some(pool) = database().await else {
         return Ok(());
     };
@@ -172,7 +162,6 @@ async fn automation_job_executes_builtin_step_and_completed_retry_is_noop() -> R
 
 #[tokio::test]
 async fn swapped_run_payload_cannot_execute_another_same_owner_job() -> Result<()> {
-    let _guard = DATABASE_TEST_MUTEX.lock().await;
     let Some(pool) = database().await else {
         return Ok(());
     };
@@ -235,7 +224,6 @@ async fn swapped_run_payload_cannot_execute_another_same_owner_job() -> Result<(
 
 #[tokio::test]
 async fn unknown_step_fails_closed_and_lease_owner_is_required() -> Result<()> {
-    let _guard = DATABASE_TEST_MUTEX.lock().await;
     let Some(pool) = database().await else {
         return Ok(());
     };
@@ -327,7 +315,6 @@ async fn unknown_step_fails_closed_and_lease_owner_is_required() -> Result<()> {
 
 #[tokio::test]
 async fn crashed_step_is_reclaimed_by_new_owner_without_repeating_completed_steps() -> Result<()> {
-    let _guard = DATABASE_TEST_MUTEX.lock().await;
     let Some(pool) = database().await else {
         return Ok(());
     };

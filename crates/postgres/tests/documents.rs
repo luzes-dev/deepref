@@ -9,24 +9,17 @@ use deepref_postgres::{
     CompleteDocumentRetrievalOutcome, NewDocument, complete_document_retrieval, create_document,
     enqueue_parse, find_failed_document_by_hash, get_document, get_document_by_id,
     insert_document_blocks, list_documents, list_full_text_queue, list_full_text_reasons,
-    list_missing_full_text, mark_document_failed, mark_document_retrieving, migrate,
+    list_missing_full_text, mark_document_failed, mark_document_retrieving,
     persist_parsed_document, requeue_document_processing, search_document_blocks,
 };
-use sqlx::{PgPool, Row, postgres::PgPoolOptions};
+use sqlx::{PgPool, Row};
 use uuid::Uuid;
 
 const DOCUMENT_HASH: &str = "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa";
 const BLOCK_HASH: &str = "bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb";
 
 async fn database() -> Option<PgPool> {
-    let url = std::env::var("DATABASE_URL").ok()?;
-    let pool = PgPoolOptions::new()
-        .max_connections(8)
-        .connect(&url)
-        .await
-        .ok()?;
-    migrate(&pool).await.ok()?;
-    Some(pool)
+    deepref_postgres::test_isolation::isolated_pool_from_env("DATABASE_URL", 8).await
 }
 
 async fn fixture(pool: &PgPool) -> (Uuid, Uuid) {

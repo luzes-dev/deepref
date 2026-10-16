@@ -5,7 +5,6 @@
     clippy::string_slice
 )]
 use std::collections::HashMap;
-use std::sync::OnceLock;
 
 use axum::{
     body::{Body, to_bytes},
@@ -17,27 +16,12 @@ use deepref_ai::{
     GatewayCompletion, ModelParameters, ModelProfile, ResolvedModel, sha256_bytes,
 };
 use deepref_http_api::{config::ApiConfig, routes::router, state::AppState};
-use sqlx::{PgPool, Row, postgres::PgPoolOptions};
+use sqlx::{PgPool, Row};
 use tower::ServiceExt;
 use uuid::Uuid;
 
-static TEST_LOCK: OnceLock<tokio::sync::Mutex<()>> = OnceLock::new();
-
-fn test_lock() -> &'static tokio::sync::Mutex<()> {
-    TEST_LOCK.get_or_init(tokio::sync::Mutex::default)
-}
-
 async fn database() -> Option<PgPool> {
-    let url = std::env::var("DATABASE_URL").ok()?;
-    let pool = PgPoolOptions::new()
-        .max_connections(8)
-        .connect(&url)
-        .await
-        .expect("DATABASE_URL database must be reachable");
-    deepref_postgres::migrate(&pool)
-        .await
-        .expect("DATABASE_URL migrations must apply");
-    Some(pool)
+    deepref_postgres::test_isolation::isolated_pool_from_env("DATABASE_URL", 8).await
 }
 
 fn api_config() -> ApiConfig {
@@ -692,7 +676,6 @@ async fn seed_screening_state(pool: &PgPool, fixture: Fixture) {
 #[tokio::test]
 async fn appraisal_reviewed_acceptance_persists_edited_answer_and_audit_without_screening_changes()
 {
-    let _guard = test_lock().lock().await;
     let Some(pool) = database().await else { return };
     let fixture = fixture(&pool).await;
     let evidence = seed_document(&pool, fixture).await;
@@ -840,7 +823,6 @@ async fn appraisal_reviewed_acceptance_persists_edited_answer_and_audit_without_
 
 #[tokio::test]
 async fn extraction_reviewed_acceptance_persists_typed_values_provenance_and_audit() {
-    let _guard = test_lock().lock().await;
     let Some(pool) = database().await else { return };
     let fixture = fixture(&pool).await;
     let evidence = seed_document(&pool, fixture).await;
@@ -1031,7 +1013,6 @@ async fn extraction_reviewed_acceptance_persists_typed_values_provenance_and_aud
 
 #[tokio::test]
 async fn appraisal_acceptance_allows_answers_that_cite_the_same_passage() {
-    let _guard = test_lock().lock().await;
     let Some(pool) = database().await else { return };
     let fixture = fixture(&pool).await;
     let evidence = seed_document(&pool, fixture).await;
@@ -1064,7 +1045,6 @@ async fn appraisal_acceptance_allows_answers_that_cite_the_same_passage() {
 
 #[tokio::test]
 async fn appraisal_acceptance_rolls_back_on_inactive_or_wrong_project_evidence_and_keeps_pending() {
-    let _guard = test_lock().lock().await;
     let Some(pool) = database().await else { return };
     let fixture = fixture(&pool).await;
     let evidence = seed_document(&pool, fixture).await;
@@ -1179,7 +1159,6 @@ async fn appraisal_acceptance_rolls_back_on_inactive_or_wrong_project_evidence_a
 
 #[tokio::test]
 async fn extraction_acceptance_rolls_back_on_wrong_hash_and_required_insufficiency() {
-    let _guard = test_lock().lock().await;
     let Some(pool) = database().await else { return };
     let fixture = fixture(&pool).await;
     let evidence = seed_document(&pool, fixture).await;
@@ -1251,7 +1230,6 @@ async fn extraction_acceptance_rolls_back_on_wrong_hash_and_required_insufficien
 
 #[tokio::test]
 async fn extraction_rejection_writes_only_one_review_event_and_no_scientific_rows() {
-    let _guard = test_lock().lock().await;
     let Some(pool) = database().await else { return };
     let fixture = fixture(&pool).await;
     let evidence = seed_document(&pool, fixture).await;
@@ -1320,7 +1298,6 @@ async fn extraction_rejection_writes_only_one_review_event_and_no_scientific_row
 
 #[tokio::test]
 async fn accepted_study_grouping_creates_membership_and_audited_study_events() {
-    let _guard = test_lock().lock().await;
     let Some(pool) = database().await else { return };
     let fixture = fixture(&pool).await;
     let payload = grouping_payload(
@@ -1411,7 +1388,6 @@ async fn accepted_study_grouping_creates_membership_and_audited_study_events() {
 
 #[tokio::test]
 async fn stale_grouping_previous_or_target_revision_rolls_back_and_keeps_proposal_pending() {
-    let _guard = test_lock().lock().await;
     let Some(pool) = database().await else { return };
     let fixture = fixture(&pool).await;
     let target_study_id = Uuid::new_v4();
@@ -1528,7 +1504,6 @@ async fn stale_grouping_previous_or_target_revision_rolls_back_and_keeps_proposa
 
 #[tokio::test]
 async fn extraction_values_http_returns_empty_only_for_an_existing_project_study() {
-    let _guard = test_lock().lock().await;
     let Some(pool) = database().await else { return };
     let fixture = fixture(&pool).await;
 
@@ -1585,7 +1560,6 @@ async fn extraction_values_http_returns_empty_only_for_an_existing_project_study
 
 #[tokio::test]
 async fn decision_rejects_reviewed_grouping_payload_and_allows_audited_rejection_without_one() {
-    let _guard = test_lock().lock().await;
     let Some(pool) = database().await else { return };
     let fixture = fixture(&pool).await;
     let proposal_id = insert_grouping_proposal(&pool, fixture).await;
@@ -1655,7 +1629,6 @@ async fn decision_rejects_reviewed_grouping_payload_and_allows_audited_rejection
 
 #[tokio::test]
 async fn decision_is_project_scoped_and_reviewed_variant_must_match_operation() {
-    let _guard = test_lock().lock().await;
     let Some(pool) = database().await else { return };
     let fixture = fixture(&pool).await;
     let proposal_id = insert_grouping_proposal(&pool, fixture).await;
@@ -1713,7 +1686,6 @@ async fn decision_is_project_scoped_and_reviewed_variant_must_match_operation() 
 
 #[tokio::test]
 async fn study_grouping_schedules_a_review_run_without_calling_the_provider_inline() {
-    let _guard = test_lock().lock().await;
     let Some(pool) = database().await else { return };
     let fixture = fixture(&pool).await;
     let model_route = route(
@@ -1804,7 +1776,6 @@ fn rob2_payload(
 
 #[tokio::test]
 async fn rob2_reviewed_acceptance_stores_the_rule_suggestion_and_the_override_reason() {
-    let _guard = test_lock().lock().await;
     let Some(pool) = database().await else { return };
     let fixture = fixture(&pool).await;
     // The model proposed the same high-risk judgment the rules suggest, so no reason is needed.
@@ -1863,7 +1834,6 @@ async fn rob2_reviewed_acceptance_stores_the_rule_suggestion_and_the_override_re
 
 #[tokio::test]
 async fn rob2_acceptance_without_a_reason_for_a_changed_judgment_stays_pending() {
-    let _guard = test_lock().lock().await;
     let Some(pool) = database().await else { return };
     let fixture = fixture(&pool).await;
     let proposal_id = insert_appraisal_proposal(

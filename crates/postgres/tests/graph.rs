@@ -7,23 +7,12 @@
 use anyhow::{Result, ensure};
 use chrono::Utc;
 use deepref_graph::GraphEdge;
-use deepref_postgres::{load_project_graph, migrate, recompute_project_metrics};
-use sqlx::{PgPool, Row, postgres::PgPoolOptions};
+use deepref_postgres::{load_project_graph, recompute_project_metrics};
+use sqlx::{PgPool, Row};
 use uuid::Uuid;
 
 async fn database() -> Option<PgPool> {
-    let url = std::env::var("DATABASE_URL").ok()?;
-    let pool = PgPoolOptions::new()
-        .max_connections(8)
-        .connect(&url)
-        .await
-        .unwrap_or_else(|error| {
-            panic!("DATABASE_URL is set but PostgreSQL is unavailable: {error}")
-        });
-    migrate(&pool)
-        .await
-        .unwrap_or_else(|error| panic!("failed to apply PostgreSQL migrations: {error}"));
-    Some(pool)
+    deepref_postgres::test_isolation::isolated_pool_from_env("DATABASE_URL", 8).await
 }
 
 #[tokio::test]

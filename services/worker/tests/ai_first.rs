@@ -12,12 +12,11 @@ use deepref_domain::{
     Actor, ActorKind, CriterionDimension, CriterionKind, CriterionStage, FrameworkKind,
 };
 use deepref_postgres::{
-    ProtocolActor, claim_job, complete_job, insert_model_route, migrate, publish_protocol,
+    ProtocolActor, claim_job, complete_job, insert_model_route, publish_protocol,
     save_protocol_draft, start_ai_first_cohort, sweep_ai_first,
 };
 use deepref_worker::{delivery::DeliveryAction, processor::handle_job_with_documents_owned_and_ai};
 use serde_json::{Value, json};
-use sqlx::{PgPool, postgres::PgPoolOptions};
 use std::{collections::BTreeMap, sync::Arc, time::Duration};
 use uuid::Uuid;
 
@@ -67,17 +66,11 @@ impl AiGateway for GroundedGateway {
 
 #[tokio::test]
 async fn compiled_worker_quarantines_only_eligible_exclusions_without_scientific_writes() {
-    let Ok(url) = std::env::var("DATABASE_URL") else {
+    let Some(pool) =
+        deepref_postgres::test_isolation::isolated_pool_from_env("DATABASE_URL", 8).await
+    else {
         return;
     };
-    let pool: PgPool = PgPoolOptions::new()
-        .max_connections(8)
-        .connect(&url)
-        .await
-        .unwrap();
-    migrate(&pool).await.unwrap();
-    sqlx::query("UPDATE jobs SET state='dead',last_error='parked by compiled AI-first test',completed_at=now() WHERE state IN ('queued','running')")
-        .execute(&pool).await.unwrap();
     let project = Uuid::new_v4();
     sqlx::query("INSERT INTO projects(id,name) VALUES($1,'compiled AI first test')")
         .bind(project)

@@ -10,22 +10,15 @@ use deepref_application::{RawAuthor, RawIdentifier, RawRecord};
 use deepref_domain::{IdentifierScheme, ImportFormat};
 use deepref_postgres::{
     ImportPersistRequest, PmidImportRequest, PmidOutcome, PmidRunCounts, complete_pmid_run,
-    create_pmid_import, load_pmid_run, migrate, persist_import, pmid_run_counts, pmids_in_project,
+    create_pmid_import, load_pmid_run, persist_import, pmid_run_counts, pmids_in_project,
     queued_pmids, save_pmid_outcomes, start_pmid_run,
 };
 use serde_json::json;
-use sqlx::{PgPool, Row, postgres::PgPoolOptions};
+use sqlx::{PgPool, Row};
 use uuid::Uuid;
 
 async fn database() -> Option<PgPool> {
-    let url = std::env::var("DATABASE_URL").ok()?;
-    let pool = PgPoolOptions::new()
-        .max_connections(5)
-        .connect(&url)
-        .await
-        .unwrap();
-    migrate(&pool).await.unwrap();
-    Some(pool)
+    deepref_postgres::test_isolation::isolated_pool_from_env("DATABASE_URL", 5).await
 }
 
 fn pubmed_record(pmid: &str, title: &str) -> RawRecord {

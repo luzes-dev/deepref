@@ -5,7 +5,7 @@
     clippy::string_slice
 )]
 use std::collections::HashMap;
-use std::sync::{Arc, Mutex, OnceLock};
+use std::sync::{Arc, Mutex};
 use std::time::Duration as StdDuration;
 
 use axum::{
@@ -23,29 +23,16 @@ use deepref_http_api::{config::ApiConfig, routes::router, state::AppState};
 use deepref_worker::{delivery::DeliveryAction, processor::handle_job_with_documents_owned_and_ai};
 use rig_core::test_utils::{MockCompletionModel, MockStreamEvent};
 use serde_json::{Value, json};
-use sqlx::{PgPool, Row, postgres::PgPoolOptions};
+use sqlx::{PgPool, Row};
 use tower::ServiceExt;
 use uuid::Uuid;
 
-static TEST_LOCK: OnceLock<tokio::sync::Mutex<()>> = OnceLock::new();
-
-fn test_lock() -> &'static tokio::sync::Mutex<()> {
-    TEST_LOCK.get_or_init(tokio::sync::Mutex::default)
-}
-
 async fn database() -> Option<PgPool> {
-    let url = std::env::var("TEST_DATABASE_URL")
-        .or_else(|_| std::env::var("DATABASE_URL"))
-        .ok()?;
-    let pool = PgPoolOptions::new()
-        .max_connections(8)
-        .connect(&url)
-        .await
-        .expect("DATABASE_URL database must be reachable");
-    deepref_postgres::migrate(&pool)
-        .await
-        .expect("DATABASE_URL migrations must apply");
-    Some(pool)
+    deepref_postgres::test_isolation::isolated_pool_from_env_first(
+        &["TEST_DATABASE_URL", "DATABASE_URL"],
+        8,
+    )
+    .await
 }
 
 fn api_config() -> ApiConfig {
@@ -316,7 +303,6 @@ async fn execute_with_state(
 
 #[tokio::test]
 async fn catalog_and_all_reads_are_project_scoped_and_bounded() {
-    let _guard = test_lock().lock().await;
     let Some(pool) = database().await else { return };
     let fixture = seed(&pool).await;
     let list_response = router(AppState::new(pool.clone()), &api_config())
@@ -645,7 +631,6 @@ where
 
 #[tokio::test]
 async fn all_proposal_tools_schedule_observable_review_runs_without_domain_writes() {
-    let _guard = test_lock().lock().await;
     let Some(pool) = database().await else { return };
     let fixture = seed(&pool).await;
     for profile in [
@@ -834,7 +819,6 @@ async fn proposal_status(pool: &PgPool, fixture: Fixture, proposal_id: Uuid) -> 
 
 #[tokio::test]
 async fn classification_proposal_lifecycle_is_atomic_and_fail_closed() {
-    let _guard = test_lock().lock().await;
     let Some(pool) = database().await else { return };
 
     let rejected = seed(&pool).await;
@@ -1070,7 +1054,6 @@ async fn classification_proposal_lifecycle_is_atomic_and_fail_closed() {
 
 #[tokio::test]
 async fn assistant_envelope_and_unsupported_actions_fail_closed() {
-    let _guard = test_lock().lock().await;
     let Some(pool) = database().await else { return };
     let fixture = seed(&pool).await;
     let state = AppState::new(pool.clone());
@@ -1188,7 +1171,6 @@ async fn post_json(state: &AppState, uri: &str, body: Value) -> (StatusCode, Str
 
 #[tokio::test]
 async fn assistant_writes_only_after_plan_confirmation_and_respects_budget() {
-    let _guard = test_lock().lock().await;
     let Some(pool) = database().await else { return };
     let fixture = seed(&pool).await;
     deepref_postgres::insert_model_route(
@@ -1368,7 +1350,6 @@ async fn add_search_reports(pool: &PgPool, fixture: Fixture) -> (Uuid, Uuid) {
 
 #[tokio::test]
 async fn assistant_reads_match_several_words_report_documents_and_studies() {
-    let _guard = test_lock().lock().await;
     let Some(pool) = database().await else { return };
     let fixture = seed(&pool).await;
     let (fitbit, unrelated) = add_search_reports(&pool, fixture).await;
@@ -1531,7 +1512,6 @@ async fn assistant_reads_match_several_words_report_documents_and_studies() {
 
 #[tokio::test]
 async fn assistant_claim_without_a_plan_is_corrected_before_the_user_relies_on_it() {
-    let _guard = test_lock().lock().await;
     let Some(pool) = database().await else { return };
     let fixture = seed(&pool).await;
     deepref_postgres::insert_model_route(
@@ -1590,7 +1570,6 @@ async fn assistant_claim_without_a_plan_is_corrected_before_the_user_relies_on_i
 
 #[tokio::test]
 async fn assistant_plan_step_follows_its_review_run_to_a_plain_failure() {
-    let _guard = test_lock().lock().await;
     let Some(pool) = database().await else { return };
     let fixture = seed(&pool).await;
     deepref_postgres::insert_model_route(
@@ -1727,7 +1706,6 @@ async fn assistant_plan_step_follows_its_review_run_to_a_plain_failure() {
 
 #[tokio::test]
 async fn assistant_refuses_overlong_messages_before_storing_them() {
-    let _guard = test_lock().lock().await;
     let Some(pool) = database().await else { return };
     let fixture = seed(&pool).await;
     let mut state = AppState::new(pool.clone());

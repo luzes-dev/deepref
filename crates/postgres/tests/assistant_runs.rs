@@ -10,23 +10,14 @@ use deepref_postgres::{
     AppendAssistantMessage, AssistantAgentRunStatus, AssistantError, CompletedAssistantAgentRun,
     NewAssistantAgentRun, NewAssistantPlan, append_assistant_run_event, begin_assistant_agent_run,
     complete_assistant_agent_run, create_assistant_agent_run, get_assistant_agent_run,
-    list_assistant_run_events, migrate, submit_assistant_agent_run,
+    list_assistant_run_events, submit_assistant_agent_run,
 };
 use serde_json::json;
-use sqlx::{PgPool, postgres::PgPoolOptions};
+use sqlx::PgPool;
 use uuid::Uuid;
 
 async fn database() -> Option<PgPool> {
-    let url = std::env::var("DATABASE_URL").ok()?;
-    let pool = PgPoolOptions::new()
-        .max_connections(4)
-        .connect(&url)
-        .await
-        .expect("DATABASE_URL database must be reachable");
-    migrate(&pool)
-        .await
-        .expect("DATABASE_URL migrations must apply");
-    Some(pool)
+    deepref_postgres::test_isolation::isolated_pool_from_env("DATABASE_URL", 4).await
 }
 
 async fn project(pool: &PgPool) -> (Uuid, Uuid) {

@@ -1,20 +1,13 @@
 #![allow(clippy::expect_used, clippy::panic, clippy::unwrap_used)]
 use deepref_postgres::{
-    NotificationDraft, list_notifications, mark_notifications_read, migrate, record_notification,
+    NotificationDraft, list_notifications, mark_notifications_read, record_notification,
     record_run_notification_once_in_transaction, unread_summary,
 };
-use sqlx::{PgPool, postgres::PgPoolOptions};
+use sqlx::PgPool;
 use uuid::Uuid;
 
 async fn database() -> Option<PgPool> {
-    let url = std::env::var("DATABASE_URL").ok()?;
-    let pool = PgPoolOptions::new()
-        .max_connections(10)
-        .connect(&url)
-        .await
-        .expect("DATABASE_URL is set but PostgreSQL is unavailable");
-    migrate(&pool).await.expect("migrations should apply");
-    Some(pool)
+    deepref_postgres::test_isolation::isolated_pool_from_env("DATABASE_URL", 10).await
 }
 
 /// The notifications table is shared by every concurrent test, so fixtures are

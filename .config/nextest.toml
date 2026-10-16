@@ -5,21 +5,21 @@
 retries = 0
 slow-timeout = { period = "60s", terminate-after = 2 }
 
-# Integration tests with database requirements can be isolated or concurrency-capped
+# Each DB-backed test clones a private database from a migrated template
+# (see deepref-postgres::test_isolation, feature `test-support`), so tests
+# share no rows and need no serial groups.
+#
+# This group only budgets connections. A DB test holds one lease connection,
+# one short-lived maintenance connection, and a lazily grown pool of at most
+# 20 per pool. Four tests at once need at most 4 x (20 + 2) connections,
+# plus one server-wide background reaper, leaving headroom under the stock
+# Postgres max_connections = 100. Tests still run in parallel.
 [test-groups]
-database = { max-threads = 4 }
-# The review run tests insert a model route and then rely on it being the newest route for its
-# profile, so they cannot run beside each other. Nextest runs every test in its own process, so
-# the in-process mutex in that test binary does not serialize them.
-review-routes = { max-threads = 1 }
+postgres = { max-threads = 4 }
 
 [[profile.default.overrides]]
-filter = 'package(deepref-postgres) and not binary(review_runs)'
-test-group = 'database'
-
-[[profile.default.overrides]]
-filter = 'binary(review_runs)'
-test-group = 'review-routes'
+filter = 'kind(test) and (package(deepref-postgres) or package(deepref-worker) or package(deepref-http-api))'
+test-group = 'postgres'
 
 [profile.ci]
 retries = 1

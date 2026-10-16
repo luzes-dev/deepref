@@ -11,21 +11,14 @@ use deepref_application::{
 use deepref_domain::IdentifierScheme;
 use deepref_postgres::{
     DedupeError, DedupeRunRequest, ProposalDecisionRequest, decide_proposal, get_prisma_projection,
-    list_proposals, migrate, persist_import, resolve_record, run_deduplication,
+    list_proposals, persist_import, resolve_record, run_deduplication,
 };
 use serde_json::{Value, json};
-use sqlx::{PgPool, Row, postgres::PgPoolOptions};
+use sqlx::{PgPool, Row};
 use uuid::Uuid;
 
 async fn database() -> Option<PgPool> {
-    let url = std::env::var("DATABASE_URL").ok()?;
-    let pool = PgPoolOptions::new()
-        .max_connections(12)
-        .connect(&url)
-        .await
-        .ok()?;
-    migrate(&pool).await.ok()?;
-    Some(pool)
+    deepref_postgres::test_isolation::isolated_pool_from_env("DATABASE_URL", 12).await
 }
 
 async fn project(pool: &PgPool, name: &str) -> Uuid {

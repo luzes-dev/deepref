@@ -11,26 +11,12 @@ use axum::{
     http::{Request, Response, StatusCode},
 };
 use deepref_http_api::{config::ApiConfig, routes::router, state::AppState};
-use sqlx::{PgPool, postgres::PgPoolOptions};
+use sqlx::PgPool;
 use tower::ServiceExt;
 use uuid::Uuid;
 
 async fn database() -> Option<PgPool> {
-    let url = match std::env::var("DATABASE_URL") {
-        Ok(url) => url,
-        Err(_) => return None,
-    };
-    let pool = PgPoolOptions::new()
-        .max_connections(5)
-        .connect(&url)
-        .await
-        .unwrap_or_else(|error| {
-            panic!("DATABASE_URL is set but PostgreSQL is unavailable: {error}")
-        });
-    deepref_postgres::migrate(&pool)
-        .await
-        .unwrap_or_else(|error| panic!("failed to apply PostgreSQL migrations: {error}"));
-    Some(pool)
+    deepref_postgres::test_isolation::isolated_pool_from_env("DATABASE_URL", 5).await
 }
 
 fn api_config() -> ApiConfig {

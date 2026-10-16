@@ -5,26 +5,12 @@
     clippy::string_slice
 )]
 use anyhow::{Result, ensure};
-use deepref_postgres::{import_legacy, migrate};
-use sqlx::{PgPool, Row, postgres::PgPoolOptions};
+use deepref_postgres::import_legacy;
+use sqlx::{PgPool, Row};
 use uuid::Uuid;
 
 async fn database() -> Option<PgPool> {
-    let url = match std::env::var("DATABASE_URL") {
-        Ok(url) => url,
-        Err(_) => return None,
-    };
-    let pool = PgPoolOptions::new()
-        .max_connections(5)
-        .connect(&url)
-        .await
-        .unwrap_or_else(|error| {
-            panic!("DATABASE_URL is set but PostgreSQL is unavailable: {error}")
-        });
-    migrate(&pool)
-        .await
-        .unwrap_or_else(|error| panic!("failed to apply PostgreSQL migrations: {error}"));
-    Some(pool)
+    deepref_postgres::test_isolation::isolated_pool_from_env("DATABASE_URL", 5).await
 }
 
 #[tokio::test]

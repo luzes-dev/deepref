@@ -10,29 +10,13 @@ use axum::{
 };
 use deepref_http_api::{config::ApiConfig, routes::router, state::AppState};
 use serde_json::Value;
-use sqlx::{PgPool, postgres::PgPoolOptions};
+use sqlx::PgPool;
 use std::collections::HashMap;
-use std::sync::OnceLock;
 use tower::ServiceExt;
 use uuid::Uuid;
 
-static DATABASE_TEST_MUTEX: OnceLock<tokio::sync::Mutex<()>> = OnceLock::new();
-
-fn test_lock() -> &'static tokio::sync::Mutex<()> {
-    DATABASE_TEST_MUTEX.get_or_init(tokio::sync::Mutex::default)
-}
-
 async fn database() -> Option<PgPool> {
-    let url = std::env::var("DATABASE_URL").ok()?;
-    let pool = PgPoolOptions::new()
-        .max_connections(8)
-        .connect(&url)
-        .await
-        .expect("DATABASE_URL database must be reachable");
-    deepref_postgres::migrate(&pool)
-        .await
-        .expect("DATABASE_URL migrations must apply");
-    Some(pool)
+    deepref_postgres::test_isolation::isolated_pool_from_env("DATABASE_URL", 8).await
 }
 
 fn api_config() -> ApiConfig {
@@ -137,7 +121,6 @@ async fn request(
 
 #[tokio::test]
 async fn automation_http_api_configures_lists_and_manually_starts_idempotently() {
-    let _guard = test_lock().lock().await;
     let Some(pool) = database().await else {
         return;
     };
@@ -271,7 +254,6 @@ async fn automation_http_api_configures_lists_and_manually_starts_idempotently()
 
 #[tokio::test]
 async fn automation_http_api_rejects_unknown_recipe_and_invalid_limits() {
-    let _guard = test_lock().lock().await;
     let Some(pool) = database().await else {
         return;
     };

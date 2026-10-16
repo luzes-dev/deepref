@@ -7,18 +7,11 @@ use deepref_application::workflows::{GraphNode, Position, WorkflowGraph};
 use deepref_domain::{Actor, ActorKind, ProjectId};
 use deepref_postgres::*;
 use serde_json::json;
-use sqlx::{PgPool, postgres::PgPoolOptions};
+use sqlx::PgPool;
 use uuid::Uuid;
 
 async fn database() -> Option<PgPool> {
-    let url = std::env::var("DATABASE_URL").ok()?;
-    let pool = PgPoolOptions::new()
-        .max_connections(4)
-        .connect(&url)
-        .await
-        .expect("DATABASE_URL is set but PostgreSQL is unavailable");
-    migrate(&pool).await.expect("migrations should apply");
-    Some(pool)
+    deepref_postgres::test_isolation::isolated_pool_from_env("DATABASE_URL", 4).await
 }
 
 struct Fixture {

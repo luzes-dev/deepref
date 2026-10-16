@@ -21,36 +21,16 @@ use deepref_domain::{
 };
 use deepref_postgres::{
     ProjectAutonomyGate, ProtocolActor, StartRun, claim_job, complete_job, create_workflow,
-    get_published_graph, get_published_protocol, independent_reviewer_pairs, migrate,
-    publish_protocol, publish_workflow, save_protocol_draft, screen_report, set_ai_budget,
-    start_run,
+    get_published_graph, get_published_protocol, independent_reviewer_pairs, publish_protocol,
+    publish_workflow, save_protocol_draft, screen_report, set_ai_budget, start_run,
 };
 use deepref_worker::{delivery::DeliveryAction, workflows};
 use serde_json::{Value, json};
-use sqlx::{PgPool, postgres::PgPoolOptions};
+use sqlx::PgPool;
 use uuid::Uuid;
 
 async fn database() -> Option<PgPool> {
-    let url = std::env::var("DATABASE_URL").ok()?;
-    let pool = PgPoolOptions::new()
-        .max_connections(8)
-        .connect(&url)
-        .await
-        .expect("DATABASE_URL must be reachable");
-    migrate(&pool).await.expect("migrations apply");
-    // `claim_job` takes the next job of any project, so jobs left queued by other
-    // test binaries sharing this database would be claimed here. Park only the jobs
-    // older than this process.
-    let started = chrono::Utc::now();
-    sqlx::query(
-        "UPDATE jobs SET state='dead', last_error='parked by worker AI exposure tests', completed_at=now()
-         WHERE state='queued' AND created_at < $1",
-    )
-    .bind(started)
-    .execute(&pool)
-    .await
-    .expect("park stale jobs");
-    Some(pool)
+    deepref_postgres::test_isolation::isolated_pool_from_env("DATABASE_URL", 8).await
 }
 
 fn node(id: &str, node_type: &str, config: Value) -> GraphNode {
