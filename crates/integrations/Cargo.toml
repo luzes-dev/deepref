@@ -11,7 +11,7 @@ csv.workspace = true
 deepref-application.workspace = true
 deepref-config.workspace = true
 deepref-domain.workspace = true
-quick-xml = "0.41"
+quick-xml = "0.42"
 reqwest = { workspace = true, features = ["multipart"] }
 roxmltree.workspace = true
 serde = { workspace = true, features = ["derive"] }
