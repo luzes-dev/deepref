@@ -475,23 +475,28 @@ jobs:
           fallback: none
       # cargo-binstall occasionally falls back to compiling sqlx-cli from
       # source when the release download flakes (observed 177 s). Install once
-      # per runner OS and reuse afterwards. The cache path must be the exact
-      # binary file, not a glob: actions/cache stores wildcard matches
-      # relative to the pattern base, so restoring them re-roots under the
-      # repo directory instead of ~/.cargo/bin. Verify by file presence
-      # rather than trusting cache-hit, and the key carries -r2 because the
-      # first (wildcard) archive is poisoned; drop the suffix once the old
-      # entry rotates out of the cache budget.
+      # per runner OS and reuse afterwards. sqlx-cli ships two binaries: the
+      # standalone `sqlx` and the `cargo-sqlx` dispatch wrapper required by
+      # `cargo sqlx migrate run`; cache BOTH and verify BOTH by file presence
+      # rather than trusting cache-hit — restoring `sqlx` alone passes the
+      # existence check while cargo cannot dispatch `cargo sqlx` without the
+      # wrapper (observed "no such command: sqlx"), so the -r3 key supersedes
+      # the wrapper-less -r2 archive and the earlier wildcard entry. Cache
+      # paths must be exact files, not globs: actions/cache stores wildcard
+      # matches relative to the pattern base, so restoring them re-roots under
+      # the repo directory instead of ~/.cargo/bin.
       - name: Restore sqlx-cli
         id: sqlx-cli
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
-          path: ~/.cargo/bin/sqlx
-          key: sqlx-cli-0.9.0-${{ runner.os }}-r2
+          path: |
+            ~/.cargo/bin/sqlx
+            ~/.cargo/bin/cargo-sqlx
+          key: sqlx-cli-0.9.0-${{ runner.os }}-r3
       - name: Install pinned sqlx-cli
         id: install-sqlx
         run: |
-          if test -x "$HOME/.cargo/bin/sqlx"; then
+          if test -x "$HOME/.cargo/bin/sqlx" && test -x "$HOME/.cargo/bin/cargo-sqlx"; then
             echo "sqlx already present"
           else
             cargo binstall --no-confirm sqlx-cli@0.9.0
@@ -502,8 +507,10 @@ jobs:
         continue-on-error: true
         uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
-          path: ~/.cargo/bin/sqlx
-          key: sqlx-cli-0.9.0-${{ runner.os }}-r2
+          path: |
+            ~/.cargo/bin/sqlx
+            ~/.cargo/bin/cargo-sqlx
+          key: sqlx-cli-0.9.0-${{ runner.os }}-r3
       - name: Restore shared Cargo cache
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
@@ -546,14 +553,14 @@ jobs:
         env:
           DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/deepref
         run: |
+          set +e
           cargo xtask sqlx check > "$RUNNER_TEMP/sqlx-check.log" 2>&1 &
           SQLX_PID=$!
-          set +e
           cargo nextest run --workspace --tests --locked --profile ci --no-build
           TEST_STATUS=$?
-          set -e
           wait "$SQLX_PID"
           SQLX_STATUS=$?
+          set -e
           tail --lines 30 "$RUNNER_TEMP/sqlx-check.log"
           test "$TEST_STATUS" -eq 0 && test "$SQLX_STATUS" -eq 0
       - name: Show sccache statistics
