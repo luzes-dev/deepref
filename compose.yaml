@@ -4,6 +4,10 @@ services:
   postgres:
     # Migration 0016 installs vector, so the disposable runtime must provide it.
     image: pgvector/pgvector:0.8.7-pg17-bookworm
+    # nextest caps the postgres test group at 6 threads; each DB-backed test may
+    # open a pool of 20 plus 2 maintenance connections (6 x 22 = 132), so keep
+    # the server above that ceiling. CI starts Postgres with the same flag.
+    command: ["postgres", "-c", "max_connections=300"]
     environment:
       POSTGRES_USER: postgres
       POSTGRES_PASSWORD: postgres

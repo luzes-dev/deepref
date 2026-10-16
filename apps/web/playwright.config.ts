@@ -2,6 +2,13 @@ import { defineConfig, devices } from '@playwright/test';
 
 const serverURL = 'http://localhost:4173';
 
+/**
+ * CI builds the preview bundle once in a dedicated step and sets this flag so the
+ * webServer below only serves it. Locally the build step is skipped and the
+ * webServer builds on demand, which keeps `pnpm test:e2e` a single command.
+ */
+const skipWebBuild = process.env.E2E_SKIP_WEB_BUILD === '1';
+
 const standardProject = {
 	name: 'e2e',
 	testMatch: '**/*.e2e.{ts,js}'
@@ -70,9 +77,11 @@ export default defineConfig({
 		baseURL: serverURL
 	},
 	webServer: {
-		command: 'npm run build && npm run preview -- --host 0.0.0.0',
+		command: skipWebBuild
+			? 'npm run preview -- --host 0.0.0.0'
+			: 'npm run build && npm run preview -- --host 0.0.0.0',
 		port: 4173,
-		reuseExistingServer: true
+		reuseExistingServer: !process.env.CI
 	},
 	projects: [standardProject, ...deterministicVisualProjects]
 });
