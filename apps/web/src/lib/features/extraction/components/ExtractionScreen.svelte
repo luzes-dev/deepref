@@ -1,10 +1,8 @@
 <script lang="ts">
 	import * as Resizable from '@deepref/ui/resizable';
 	import { MediaQuery } from 'svelte/reactivity';
-	import {
-		createListDocumentBlocks,
-		createListReportDocuments
-	} from '#lib/api/generated/documents/documents.js';
+	import { createListReportDocuments } from '#lib/api/generated/documents/documents.js';
+	import { createAllDocumentBlocks } from '#lib/api/pagination.js';
 	import { fullTextUrlString } from '#lib/features/full-text/url.js';
 	import EvidenceLabel from '#lib/features/evidence/EvidenceLabel.svelte';
 	import CitationLabel from './CitationLabel.svelte';
@@ -71,6 +69,7 @@
 	} from '@lucide/svelte';
 	import { Skeleton } from '@deepref/ui/skeleton';
 	import { ReviewRunObserver } from '#lib/features/ai-assistance/review-run-observer.svelte.js';
+	import ReviewRunActions from '#lib/features/ai-assistance/components/ReviewRunActions.svelte';
 	import {
 		buildExtractionEvidenceSearch,
 		deriveFieldKey,
@@ -154,7 +153,7 @@
 		() => ({ query: { enabled: Boolean(sourceReportId) } })
 	);
 	const sourceDocumentId = $derived(sourceDocuments.data?.data[0]?.id ?? '');
-	const sourceBlocks = createListDocumentBlocks(
+	const sourceBlocks = createAllDocumentBlocks(
 		() => projectId,
 		() => sourceReportId,
 		() => sourceDocumentId,
@@ -170,6 +169,7 @@
 		)
 	);
 	const activeProposal = $derived(dataExtractionProposals[0]);
+	let rejectedProposalId = $state<string | null>(null);
 	const selectedStudyLabel = $derived(
 		selectedStudy?.title ?? selectedStudyId ?? 'Select a study'
 	);
@@ -706,6 +706,7 @@
 						reason: 'Human reviewer rejected the data extraction proposal.'
 					}
 				});
+				rejectedProposalId = proposal.id;
 			} else {
 				const validation = validateExtractionDrafts(fields, draftFields);
 				if (validation) {
@@ -874,6 +875,11 @@
 						? 'Generating…'
 						: 'Generate proposal'}
 				</Button>
+				<ReviewRunActions
+					run={reviewRun}
+					allowRegenerate={reviewRun.state?.kind === 'completed' &&
+						reviewRun.state.proposal_id === rejectedProposalId}
+				/>
 			{/if}
 			<Button
 				variant="ghost"

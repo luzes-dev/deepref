@@ -260,7 +260,7 @@ pub(crate) async fn project_graph(
         return Err(ApiError::NotFound("project not found".to_owned()));
     }
     let projection = projection_metadata(&state, project_id).await?;
-    let graph = deepref_postgres::load_project_graph(&state.pool, project_id, fields).await?;
+    let graph = deepref_app::load_project_graph(&state.pool, project_id, fields).await?;
     let nodes = graph.nodes.into_iter().map(graph_node_dto).collect();
     let edges = graph
         .edges
@@ -285,7 +285,7 @@ pub(crate) async fn recommendations(
     Path(project_id): Path<Uuid>,
 ) -> Result<Json<RecommendationGroupsDto>, ApiError> {
     let projection = projection_metadata(&state, project_id).await?;
-    let graph = deepref_postgres::load_project_graph(
+    let graph = deepref_app::load_project_graph(
         &state.pool,
         project_id,
         deepref_domain::graph::GraphFieldSelection {
@@ -369,7 +369,7 @@ pub(crate) async fn recompute_metrics(
     Path(project_id): Path<Uuid>,
 ) -> Result<(StatusCode, Json<RecomputeMetricsDto>), ApiError> {
     let mut tx = state.pool.begin().await?;
-    let event_id = deepref_postgres::enqueue_metrics_recompute(&mut tx, project_id).await?;
+    let event_id = deepref_app::enqueue_metrics_recompute(&mut tx, project_id).await?;
     tx.commit().await?;
     Ok((
         StatusCode::ACCEPTED,

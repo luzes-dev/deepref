@@ -20,6 +20,17 @@ export function shortcutAction(key: string): ScreeningShortcutAction | null {
 	}
 }
 
+/**
+ * Only navigation may auto-repeat. A held I/E/M/U key would otherwise record or
+ * undo a decision for every report that slides into view.
+ */
+export function ignoresAutoRepeat(
+	action: ScreeningShortcutAction,
+	event: Pick<KeyboardEvent, 'repeat'>
+): boolean {
+	return event.repeat && action !== 'previous' && action !== 'next';
+}
+
 type ShortcutTarget = EventTarget & {
 	tagName?: string;
 	isContentEditable?: boolean;

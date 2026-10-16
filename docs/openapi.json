@@ -402,223 +402,6 @@
         }
       }
     },
-    "/ingestions": {
-      "get": {
-        "tags": [
-          "ingestions"
-        ],
-        "operationId": "listIngestions",
-        "responses": {
-          "200": {
-            "description": "Ingestions ordered newest first",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/PaginatedResponse_IngestionDto"
-                }
-              }
-            }
-          },
-          "500": {
-            "description": "Internal server error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ApiErrorBody"
-                }
-              }
-            }
-          }
-        }
-      },
-      "post": {
-        "tags": [
-          "ingestions"
-        ],
-        "operationId": "createIngestion",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/CreateIngestion"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "201": {
-            "description": "Ingestion created",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/IngestionDto"
-                }
-              }
-            }
-          },
-          "400": {
-            "description": "Invalid ingestion",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ApiErrorBody"
-                }
-              }
-            }
-          },
-          "404": {
-            "description": "Project not found",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ApiErrorBody"
-                }
-              }
-            }
-          },
-          "500": {
-            "description": "Internal server error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ApiErrorBody"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/ingestions/{ingestion_id}": {
-      "get": {
-        "tags": [
-          "ingestions"
-        ],
-        "operationId": "getIngestion",
-        "parameters": [
-          {
-            "name": "ingestion_id",
-            "in": "path",
-            "description": "Ingestion identifier",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "format": "uuid"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Ingestion",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/IngestionDto"
-                }
-              }
-            }
-          },
-          "404": {
-            "description": "Ingestion not found",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ApiErrorBody"
-                }
-              }
-            }
-          },
-          "500": {
-            "description": "Internal server error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ApiErrorBody"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/ingestions/{ingestion_id}/cancel": {
-      "post": {
-        "tags": [
-          "ingestions"
-        ],
-        "operationId": "cancelIngestion",
-        "parameters": [
-          {
-            "name": "ingestion_id",
-            "in": "path",
-            "description": "Ingestion identifier",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "format": "uuid"
-            }
-          }
-        ],
-        "responses": {
-          "202": {
-            "description": "Cancellation accepted"
-          },
-          "500": {
-            "description": "Internal server error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ApiErrorBody"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/ingestions/{ingestion_id}/items": {
-      "get": {
-        "tags": [
-          "ingestions"
-        ],
-        "operationId": "listIngestionItems",
-        "parameters": [
-          {
-            "name": "ingestion_id",
-            "in": "path",
-            "description": "Ingestion identifier",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "format": "uuid"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Ingestion items",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/PaginatedResponse_IngestionItemDto"
-                }
-              }
-            }
-          },
-          "500": {
-            "description": "Internal server error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ApiErrorBody"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
     "/notifications": {
       "get": {
         "tags": [
@@ -1281,6 +1064,69 @@
         }
       }
     },
+    "/projects/{project_id}/acquisitions/{acquisition_id}/cancel": {
+      "post": {
+        "tags": [
+          "acquisitions"
+        ],
+        "operationId": "cancelAcquisition",
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "acquisition_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "202": {
+            "description": "Cancellation accepted"
+          },
+          "404": {
+            "description": "Acquisition not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Acquisition is no longer cancellable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/projects/{project_id}/acquisitions/{acquisition_id}/items": {
       "get": {
         "tags": [
@@ -1330,7 +1176,7 @@
         ],
         "responses": {
           "200": {
-            "description": "Items of a PubMed ID run, in the order they were given",
+            "description": "DOI traversal or PubMed import items",
             "content": {
               "application/json": {
                 "schema": {
@@ -3607,6 +3453,23 @@
             }
           }
         ],
+        "requestBody": {
+          "description": "Records or actions to leave out; omit to run the whole plan",
+          "content": {
+            "application/json": {
+              "schema": {
+                "oneOf": [
+                  {
+                    "$ref": "#/components/schemas/ConfirmAssistantPlanRequestDto"
+                  },
+                  {
+                    "type": "null"
+                  }
+                ]
+              }
+            }
+          }
+        },
         "responses": {
           "200": {
             "description": "The executed plan with a result per action",
@@ -3614,6 +3477,16 @@
               "application/json": {
                 "schema": {
                   "$ref": "#/components/schemas/AssistantPlanDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "A deselection names a record or action that is not in the plan",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
                 }
               }
             }
@@ -8134,6 +8007,17 @@
               ],
               "format": "int64"
             }
+          },
+          {
+            "name": "cursor",
+            "in": "query",
+            "required": false,
+            "schema": {
+              "type": [
+                "string",
+                "null"
+              ]
+            }
           }
         ],
         "responses": {
@@ -8141,10 +8025,17 @@
             "content": {
               "application/json": {
                 "schema": {
-                  "type": "array",
-                  "items": {
-                    "$ref": "#/components/schemas/DocumentBlockDto"
-                  }
+                  "$ref": "#/components/schemas/PaginatedResponse_DocumentBlockDto"
+                }
+              }
+            },
+            "description": ""
+          },
+          "400": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
                 }
               }
             },
@@ -9060,6 +8951,108 @@
           },
           "500": {
             "description": "Internal server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "/projects/{project_id}/review-runs/{run_id}/retry": {
+      "post": {
+        "tags": [
+          "ai"
+        ],
+        "operationId": "retryReviewRun",
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "path",
+            "description": "Project identifier",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "run_id",
+            "in": "path",
+            "description": "Review run to retry or regenerate",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RetryReviewRunRequest"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "202": {
+            "description": "The retry or regeneration, or the attempt already in flight",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ReviewRunDto"
+                }
+              }
+            }
+          },
+          "400": {
+            "description": "Invalid AI request",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "404": {
+            "description": "Review run not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "The subject changed, or only a rejected suggestion can be regenerated",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "503": {
+            "description": "AI provider is unavailable",
             "content": {
               "application/json": {
                 "schema": {
@@ -10822,6 +10815,7 @@
           "source",
           "strategy",
           "status",
+          "max_depth",
           "seed_count",
           "queued_count",
           "fetched_count",
@@ -10857,6 +10851,10 @@
           "id": {
             "type": "string",
             "format": "uuid"
+          },
+          "max_depth": {
+            "type": "integer",
+            "format": "int32"
           },
           "project_id": {
             "type": "string",
@@ -10897,16 +10895,32 @@
       },
       "AcquisitionItemDto": {
         "type": "object",
-        "description": "One PubMed ID of a PubMed ID import run.",
+        "description": "A DOI traversal item or PubMed import item.",
         "required": [
           "identifier",
           "position",
-          "status"
+          "status",
+          "kind",
+          "attempts"
         ],
         "properties": {
+          "attempts": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "depth": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32"
+          },
           "identifier": {
             "type": "string",
-            "description": "The PubMed ID, as it was imported."
+            "description": "DOI or PubMed identifier."
+          },
+          "kind": {
+            "type": "string"
           },
           "last_error": {
             "type": [
@@ -10915,12 +10929,25 @@
             ],
             "description": "Why the ID could not be fetched, when it failed."
           },
+          "parent_doi": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "position": {
             "type": "integer",
             "format": "int32",
-            "description": "The place the ID had in the import. Items are paged in this order."
+            "description": "Import order for PubMed; DOI items use queued_at and identifier for pagination."
           },
           "processed_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "queued_at": {
             "type": [
               "string",
               "null"
@@ -10935,16 +10962,23 @@
             "format": "uuid",
             "description": "The record this import saved for the ID, when one was saved."
           },
+          "report_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          },
           "status": {
             "type": "string",
-            "description": "One of queued, imported, already_in_project, not_found, or failed."
+            "description": "Provider-specific item processing status."
           },
           "title": {
             "type": [
               "string",
               "null"
             ],
-            "description": "The article's title, once PubMed has answered for this ID."
+            "description": "Report title, when available."
           }
         }
       },
@@ -11846,6 +11880,13 @@
           "id": {
             "type": "string",
             "format": "uuid"
+          },
+          "identity_flag_reason": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Set when a finalized cohort is flagged for review because the semantic\nidentity changed after finalization; its exclusions stay in force."
           },
           "invalidation_reason": {
             "type": [
@@ -13738,7 +13779,8 @@
           "summary",
           "rationale",
           "affected_count",
-          "executable"
+          "executable",
+          "items"
         ],
         "properties": {
           "affected_count": {
@@ -13746,12 +13788,26 @@
             "format": "int32",
             "minimum": 0
           },
+          "decision": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "The decision a `screen_reports` action records (`include`, `exclude`\nor `maybe`), read from the action's arguments, not from its summary."
+          },
           "executable": {
             "type": "boolean",
             "description": "False when the assistant is never allowed to run this; see `manual`."
           },
           "id": {
             "type": "string"
+          },
+          "items": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AssistantPlanItemDto"
+            },
+            "description": "The records a `screen_reports` action changes, in order, as they were\nwhen the plan was made. Empty for other actions."
           },
           "manual": {
             "oneOf": [
@@ -13773,6 +13829,26 @@
             "type": "string"
           }
         }
+      },
+      "AssistantPlanDeselectionDto": {
+        "type": "object",
+        "description": "One record (or, without `report_id`, a whole action) the reviewer left\nout of a plan before confirming it.",
+        "required": [
+          "action_id"
+        ],
+        "properties": {
+          "action_id": {
+            "type": "string"
+          },
+          "report_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          }
+        },
+        "additionalProperties": false
       },
       "AssistantPlanDto": {
         "type": "object",
@@ -13853,6 +13929,29 @@
           }
         }
       },
+      "AssistantPlanItemDto": {
+        "type": "object",
+        "required": [
+          "report_id",
+          "title"
+        ],
+        "properties": {
+          "current_status": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "Title/abstract status when the plan was made; `null` for plans made\nbefore records were captured."
+          },
+          "report_id": {
+            "type": "string",
+            "format": "uuid"
+          },
+          "title": {
+            "type": "string"
+          }
+        }
+      },
       "AssistantPlanManualStepDto": {
         "type": "object",
         "required": [
@@ -13888,6 +13987,15 @@
             "format": "int32",
             "minimum": 0
           },
+          "deselected": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "Records the reviewer left out before confirming.",
+            "minimum": 0
+          },
           "failed": {
             "type": [
               "integer",
@@ -13905,6 +14013,15 @@
               "null"
             ],
             "format": "uuid"
+          },
+          "stale": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32",
+            "description": "Records left alone because they changed after the plan was made.",
+            "minimum": 0
           },
           "status": {
             "type": "string",
@@ -14905,6 +15022,19 @@
           }
         }
       },
+      "ConfirmAssistantPlanRequestDto": {
+        "type": "object",
+        "properties": {
+          "deselected": {
+            "type": "array",
+            "items": {
+              "$ref": "#/components/schemas/AssistantPlanDeselectionDto"
+            },
+            "description": "Records or actions to leave out. Everything else in the plan runs."
+          }
+        },
+        "additionalProperties": false
+      },
       "CreateAcquisition": {
         "type": "object",
         "required": [
@@ -14983,44 +15113,6 @@
             "type": "integer",
             "format": "int32",
             "minimum": 0
-          }
-        }
-      },
-      "CreateIngestion": {
-        "type": "object",
-        "required": [
-          "project_id",
-          "seed_dois"
-        ],
-        "properties": {
-          "citation_provider": {
-            "type": [
-              "string",
-              "null"
-            ]
-          },
-          "max_depth": {
-            "type": [
-              "integer",
-              "null"
-            ],
-            "format": "int32"
-          },
-          "metadata_provider": {
-            "type": [
-              "string",
-              "null"
-            ]
-          },
-          "project_id": {
-            "type": "string",
-            "format": "uuid"
-          },
-          "seed_dois": {
-            "type": "array",
-            "items": {
-              "type": "string"
-            }
           }
         }
       },
@@ -15360,12 +15452,28 @@
             ],
             "format": "int64"
           },
+          "last_heartbeat_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time",
+            "description": "The most recent worker heartbeat, live or not (worker only)."
+          },
           "last_success_at": {
             "type": [
               "string",
               "null"
             ],
             "format": "date-time"
+          },
+          "live_workers": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int64",
+            "description": "Worker processes with a recent heartbeat (worker only)."
           },
           "oldest_age_seconds": {
             "type": [
@@ -16712,120 +16820,6 @@
           }
         }
       },
-      "IngestionDto": {
-        "type": "object",
-        "required": [
-          "id",
-          "project_id",
-          "status",
-          "max_depth",
-          "seed_count",
-          "queued_count",
-          "fetched_count",
-          "failed_count",
-          "created_at"
-        ],
-        "properties": {
-          "completed_at": {
-            "type": [
-              "string",
-              "null"
-            ],
-            "format": "date-time"
-          },
-          "created_at": {
-            "type": "string",
-            "format": "date-time"
-          },
-          "failed_count": {
-            "type": "integer",
-            "format": "int32"
-          },
-          "fetched_count": {
-            "type": "integer",
-            "format": "int32"
-          },
-          "id": {
-            "type": "string",
-            "format": "uuid"
-          },
-          "max_depth": {
-            "type": "integer",
-            "format": "int32"
-          },
-          "project_id": {
-            "type": "string",
-            "format": "uuid"
-          },
-          "queued_count": {
-            "type": "integer",
-            "format": "int32"
-          },
-          "seed_count": {
-            "type": "integer",
-            "format": "int32"
-          },
-          "started_at": {
-            "type": [
-              "string",
-              "null"
-            ],
-            "format": "date-time"
-          },
-          "status": {
-            "type": "string"
-          }
-        }
-      },
-      "IngestionItemDto": {
-        "type": "object",
-        "required": [
-          "doi",
-          "depth",
-          "status",
-          "attempts",
-          "queued_at"
-        ],
-        "properties": {
-          "attempts": {
-            "type": "integer",
-            "format": "int32"
-          },
-          "depth": {
-            "type": "integer",
-            "format": "int32"
-          },
-          "doi": {
-            "type": "string"
-          },
-          "fetched_at": {
-            "type": [
-              "string",
-              "null"
-            ],
-            "format": "date-time"
-          },
-          "last_error": {
-            "type": [
-              "string",
-              "null"
-            ]
-          },
-          "parent_doi": {
-            "type": [
-              "string",
-              "null"
-            ]
-          },
-          "queued_at": {
-            "type": "string",
-            "format": "date-time"
-          },
-          "status": {
-            "type": "string"
-          }
-        }
-      },
       "IssueDto": {
         "type": "object",
         "required": [
@@ -17088,6 +17082,7 @@
         "type": "object",
         "required": [
           "id",
+          "available",
           "category",
           "label",
           "description",
@@ -17098,6 +17093,9 @@
           "branches"
         ],
         "properties": {
+          "available": {
+            "type": "boolean"
+          },
           "branches": {
             "type": "boolean",
             "description": "Several outputs of which only one carries data on each run."
@@ -17237,6 +17235,7 @@
                 "source",
                 "strategy",
                 "status",
+                "max_depth",
                 "seed_count",
                 "queued_count",
                 "fetched_count",
@@ -17272,6 +17271,10 @@
                 "id": {
                   "type": "string",
                   "format": "uuid"
+                },
+                "max_depth": {
+                  "type": "integer",
+                  "format": "int32"
                 },
                 "project_id": {
                   "type": "string",
@@ -17329,16 +17332,32 @@
             "type": "array",
             "items": {
               "type": "object",
-              "description": "One PubMed ID of a PubMed ID import run.",
+              "description": "A DOI traversal item or PubMed import item.",
               "required": [
                 "identifier",
                 "position",
-                "status"
+                "status",
+                "kind",
+                "attempts"
               ],
               "properties": {
+                "attempts": {
+                  "type": "integer",
+                  "format": "int32"
+                },
+                "depth": {
+                  "type": [
+                    "integer",
+                    "null"
+                  ],
+                  "format": "int32"
+                },
                 "identifier": {
                   "type": "string",
-                  "description": "The PubMed ID, as it was imported."
+                  "description": "DOI or PubMed identifier."
+                },
+                "kind": {
+                  "type": "string"
                 },
                 "last_error": {
                   "type": [
@@ -17347,12 +17366,25 @@
                   ],
                   "description": "Why the ID could not be fetched, when it failed."
                 },
+                "parent_doi": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
                 "position": {
                   "type": "integer",
                   "format": "int32",
-                  "description": "The place the ID had in the import. Items are paged in this order."
+                  "description": "Import order for PubMed; DOI items use queued_at and identifier for pagination."
                 },
                 "processed_at": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "format": "date-time"
+                },
+                "queued_at": {
                   "type": [
                     "string",
                     "null"
@@ -17367,16 +17399,23 @@
                   "format": "uuid",
                   "description": "The record this import saved for the ID, when one was saved."
                 },
+                "report_id": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "format": "uuid"
+                },
                 "status": {
                   "type": "string",
-                  "description": "One of queued, imported, already_in_project, not_found, or failed."
+                  "description": "Provider-specific item processing status."
                 },
                 "title": {
                   "type": [
                     "string",
                     "null"
                   ],
-                  "description": "The article's title, once PubMed has answered for this ID."
+                  "description": "Report title, when available."
                 }
               }
             }
@@ -17857,7 +17896,7 @@
           }
         }
       },
-      "PaginatedResponse_IngestionDto": {
+      "PaginatedResponse_DocumentBlockDto": {
         "type": "object",
         "required": [
           "items"
@@ -17869,129 +17908,72 @@
               "type": "object",
               "required": [
                 "id",
-                "project_id",
-                "status",
-                "max_depth",
-                "seed_count",
-                "queued_count",
-                "fetched_count",
-                "failed_count",
-                "created_at"
+                "document_id",
+                "parser_version",
+                "page_number",
+                "page_ocr_required",
+                "kind",
+                "section_path",
+                "ordinal",
+                "text",
+                "content_hash"
               ],
               "properties": {
-                "completed_at": {
+                "bbox": {
                   "type": [
-                    "string",
+                    "object",
                     "null"
-                  ],
-                  "format": "date-time"
+                  ]
                 },
-                "created_at": {
+                "content_hash": {
+                  "type": "string"
+                },
+                "document_id": {
                   "type": "string",
-                  "format": "date-time"
-                },
-                "failed_count": {
-                  "type": "integer",
-                  "format": "int32"
-                },
-                "fetched_count": {
-                  "type": "integer",
-                  "format": "int32"
+                  "format": "uuid"
                 },
                 "id": {
                   "type": "string",
                   "format": "uuid"
                 },
-                "max_depth": {
-                  "type": "integer",
-                  "format": "int32"
-                },
-                "project_id": {
-                  "type": "string",
-                  "format": "uuid"
-                },
-                "queued_count": {
-                  "type": "integer",
-                  "format": "int32"
-                },
-                "seed_count": {
-                  "type": "integer",
-                  "format": "int32"
-                },
-                "started_at": {
-                  "type": [
-                    "string",
-                    "null"
-                  ],
-                  "format": "date-time"
-                },
-                "status": {
-                  "type": "string"
-                }
-              }
-            }
-          },
-          "next_cursor": {
-            "type": [
-              "string",
-              "null"
-            ]
-          }
-        }
-      },
-      "PaginatedResponse_IngestionItemDto": {
-        "type": "object",
-        "required": [
-          "items"
-        ],
-        "properties": {
-          "items": {
-            "type": "array",
-            "items": {
-              "type": "object",
-              "required": [
-                "doi",
-                "depth",
-                "status",
-                "attempts",
-                "queued_at"
-              ],
-              "properties": {
-                "attempts": {
-                  "type": "integer",
-                  "format": "int32"
-                },
-                "depth": {
-                  "type": "integer",
-                  "format": "int32"
-                },
-                "doi": {
+                "kind": {
                   "type": "string"
                 },
-                "fetched_at": {
+                "ordinal": {
+                  "type": "integer",
+                  "format": "int32"
+                },
+                "page_height": {
                   "type": [
-                    "string",
+                    "number",
                     "null"
                   ],
-                  "format": "date-time"
+                  "format": "double"
                 },
-                "last_error": {
+                "page_number": {
+                  "type": "integer",
+                  "format": "int32"
+                },
+                "page_ocr_required": {
+                  "type": "boolean"
+                },
+                "page_width": {
                   "type": [
-                    "string",
+                    "number",
                     "null"
-                  ]
+                  ],
+                  "format": "double"
                 },
-                "parent_doi": {
-                  "type": [
-                    "string",
-                    "null"
-                  ]
+                "parser_version": {
+                  "type": "string"
                 },
-                "queued_at": {
-                  "type": "string",
-                  "format": "date-time"
+                "section_path": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
                 },
-                "status": {
+                "text": {
                   "type": "string"
                 }
               }
@@ -18293,6 +18275,7 @@
           "screened_records",
           "title_abstract_excluded",
           "automation_excluded",
+          "assistant_excluded",
           "ai_quarantined",
           "title_abstract_pending",
           "reports_sought",
@@ -18317,6 +18300,12 @@
               "null"
             ],
             "format": "date-time"
+          },
+          "assistant_excluded": {
+            "type": "integer",
+            "format": "int64",
+            "description": "Title/abstract exclusions a reviewer confirmed from an assistant plan.\nThe assistant chose them, so they are not counted as a person's own\nscreening. Disjoint from `automation_excluded`.",
+            "minimum": 0
           },
           "automation_excluded": {
             "type": "integer",
@@ -19235,6 +19224,17 @@
             ]
           }
         }
+      },
+      "RetryReviewRunRequest": {
+        "type": "object",
+        "description": "Retry a failed or blocked review run, or regenerate one whose suggestion was\nrejected. An in-flight retry is returned as is.",
+        "properties": {
+          "regenerate": {
+            "type": "boolean",
+            "description": "Ask for a fresh opinion that reuses nothing from earlier attempts. Only a\ncompleted run whose suggestion was rejected can be regenerated."
+          }
+        },
+        "additionalProperties": false
       },
       "ReviewCountsDto": {
         "type": "object",

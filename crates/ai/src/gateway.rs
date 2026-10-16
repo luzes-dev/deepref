@@ -114,7 +114,7 @@ impl AiGateway for RoutedGateway {
 
 /// Rig adapter over an erased 0.44 completion model. The DeepRef route
 /// identity selects the model per request and every supported parameter is
-/// forwarded into Rig's request builder. Construct the model with PR3's
+/// forwarded into Rig's request builder. Construct the model with the
 /// `AgentModelFactory` (or any `impl Into<DynModel<Completion>>`); this
 /// adapter only translates DeepRef requests into Rig calls.
 pub struct RigGateway {

@@ -48,9 +48,9 @@
 			);
 			text = '';
 			void queryClient.invalidateQueries({
-				queryKey: getListAcquisitionsQueryKey(projectId, { strategy: 'pmid_import' })
+				queryKey: getListAcquisitionsQueryKey(projectId)
 			});
-			workspace.openAcquisition(response.data.id);
+			if (workspace.project.id === projectId) workspace.openAcquisition(response.data.id);
 		} catch (error) {
 			notifyError('PubMed IDs could not be imported', error);
 		} finally {

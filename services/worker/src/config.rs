@@ -1,50 +1,33 @@
-use std::time::Duration;
+use std::{sync::Arc, time::Duration};
 
-use deepref_config::RuntimeConfig;
+use deepref_config::{DocumentConfig, RuntimeConfig, WorkerSettings};
+use tokio::sync::Semaphore;
 
 #[derive(Debug, Clone)]
 pub struct WorkerConfig {
     pub runtime: RuntimeConfig,
+    pub documents: DocumentConfig,
     pub concurrency: usize,
     pub claim_lease: Duration,
     pub reconciler_interval: Duration,
-    /// Base URL of a GROBID service used to enrich parsed PDFs; unset disables enrichment.
     pub grobid_url: Option<String>,
+    pub grobid_timeout: Duration,
+    pub pdf_parse_semaphore: Arc<Semaphore>,
 }
 
 impl WorkerConfig {
-    pub fn from_env() -> anyhow::Result<Self> {
-        let concurrency = parse("WORKER_CONCURRENCY", 8_usize)?;
-        if concurrency == 0 {
-            anyhow::bail!("WORKER_CONCURRENCY must be >= 1");
-        }
-        let lease = parse("WORKER_CLAIM_LEASE_SECS", 60_u64)?;
-        if lease == 0 {
-            anyhow::bail!("worker lease duration must be greater than zero");
-        }
-        let reconciler_interval = parse("WORKER_RECONCILER_INTERVAL_SECS", 30_u64)?;
-        if reconciler_interval == 0 {
-            anyhow::bail!("worker reconciler interval must be greater than zero");
-        }
-        let grobid_url = crate::enrichment::grobid_url_from_env()?;
+    pub fn from_source(get: &dyn Fn(&str) -> Option<String>) -> anyhow::Result<Self> {
+        let runtime = RuntimeConfig::from_source("deepref-worker", get)?;
+        let settings = WorkerSettings::from_source(get)?;
         Ok(Self {
-            runtime: RuntimeConfig::from_env("deepref-worker")?,
-            concurrency,
-            claim_lease: Duration::from_secs(lease),
-            reconciler_interval: Duration::from_secs(reconciler_interval),
-            grobid_url,
+            runtime,
+            documents: DocumentConfig::from_source(get)?,
+            concurrency: settings.concurrency,
+            claim_lease: settings.claim_lease,
+            reconciler_interval: settings.reconciler_interval,
+            grobid_url: settings.grobid_url,
+            grobid_timeout: settings.grobid_timeout,
+            pdf_parse_semaphore: Arc::new(Semaphore::new(settings.document_parse_concurrency)),
         })
     }
-}
-
-fn parse<T>(name: &str, default: T) -> anyhow::Result<T>
-where
-    T: std::str::FromStr,
-    T::Err: std::error::Error + Send + Sync + 'static,
-{
-    Ok(std::env::var(name)
-        .ok()
-        .map(|value| value.parse())
-        .transpose()?
-        .unwrap_or(default))
 }

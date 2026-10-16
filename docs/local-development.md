@@ -32,6 +32,8 @@ mise exec -- just dev
 
 `just dev` waits for PostgreSQL to become healthy, applies PostgreSQL migrations, and then starts the web app, API, and worker under Process Compose. Process names prefix their logs. API readiness gates the other processes, and Ctrl-C sends each service its configured clean shutdown signal in reverse dependency order.
 
+Workers spend an attempt when a lease expires: recovery backs off retries and dead-letters jobs at their attempt limit. Queue and workflow writes require the current job ID, owner, and attempt with an unexpired lease; restarting the same worker does not authorize a stale attempt. Transient renewal errors retry within the lease deadline, and a stalled renewal is cancelled at that deadline. Handler panics fail the individual job, including panics while constructing its future, rather than stopping the claim loop. `/health/dependencies` reports live worker heartbeat rows; a clean shutdown removes the row after draining.
+
 Local endpoints:
 
 | Service         | Address                 |
@@ -44,6 +46,24 @@ If port `5432` is already in use, set `POSTGRES_HOST_PORT` and update the
 port in `DATABASE_URL` in `.env` to the same value before starting the stack.
 
 Every published dependency port binds only to `127.0.0.1`.
+
+`just` recipes and Process Compose run with `APP_ENV=local`. The server binary itself
+defaults to `APP_ENV=production` and reads `.env` and `.env.local` only when the process
+environment already says `APP_ENV=local`. To run it by hand, export that first, for example
+`APP_ENV=local cargo run -p deepref-server -- serve`.
+
+API `/health/ready` requires the latest embedded SQLx migration, not a fixed
+schema version. An older database returns 503; a newer database remains ready
+and emits a warning. Set `DEEPREF_BUILD_SHA` to the deployed revision to populate
+the startup log and OpenTelemetry `service.version` (otherwise `unknown`).
+
+Send a UUID in `x-correlation-id` to correlate API response headers, error bodies,
+and INFO-level request spans. Invalid or missing IDs are replaced once per
+request. Database failures never expose SQL or constraint names: retryable
+failures return 503 with `Retry-After: 1`, constraint conflicts return 409, and
+unexpected failures return a sanitized 500. Metric recomputation retries only
+whole transactions rolled back for serialization failures or deadlocks; it
+does not retry ambiguous connection/commit failures.
 
 ## Fast continuous Rust feedback (Bacon)
 

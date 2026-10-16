@@ -1,4 +1,9 @@
-use std::{collections::BTreeMap, fmt, path::PathBuf, process::Command};
+use std::{
+    collections::BTreeMap,
+    fmt,
+    path::{Path, PathBuf},
+    process::Command,
+};
 
 use anyhow::{Context, Result, bail};
 use serde::Deserialize;
@@ -149,7 +154,9 @@ pub fn run() -> Result<()> {
     }
     let metadata: Metadata = serde_json::from_slice(&output.stdout)
         .context("invalid Cargo metadata or unknown Deepref layer")?;
-    let errors = validate(&metadata);
+    let mut errors = validate(&metadata);
+    validate_screening_sources(&metadata, &mut errors)?;
+    validate_runtime_configuration(&crate::workspace::find_root()?, &mut errors)?;
     if !errors.is_empty() {
         bail!("architecture violations:\n\n{}", errors.join("\n\n"));
     }
@@ -160,6 +167,92 @@ pub fn run() -> Result<()> {
     Ok(())
 }
 
+fn validate_screening_sources(metadata: &Metadata, errors: &mut Vec<String>) -> Result<()> {
+    let Some(http) = metadata
+        .packages
+        .iter()
+        .find(|package| package.name == "deepref-http-api")
+    else {
+        bail!("screening source rule requires deepref-http-api");
+    };
+    let root = http
+        .manifest_path
+        .parent()
+        .context("HTTP manifest has no parent")?;
+    for relative in ["src/routes/review.rs", "src/routes/assistant/plans.rs"] {
+        let path = root.join(relative);
+        let source = std::fs::read_to_string(&path)
+            .with_context(|| format!("could not inspect {}", path.display()))?;
+        // These migrated files contain transport/DTO logic only. Unmigrated
+        // contexts and separate dev-test targets may continue to use SQLx.
+        for forbidden in [
+            "sqlx",
+            "query!",
+            "query_as!",
+            "query_scalar!",
+            "QueryBuilder",
+        ] {
+            if source.contains(forbidden) {
+                errors.push(format!(
+                    "{}: migrated screening transport must use deepref_app::screening, not {forbidden}",
+                    path.display()
+                ));
+            }
+        }
+    }
+    Ok(())
+}
+
+/// These runtime contexts have completed the typed configuration cutover.
+/// Build scripts, test targets, and unmigrated persistence contexts are not
+/// subject to a blanket source-level infrastructure prohibition.
+fn validate_runtime_configuration(root: &Path, errors: &mut Vec<String>) -> Result<()> {
+    for relative in [
+        "apps/server/src",
+        "services/worker/src",
+        "crates/http-api/src",
+        "crates/ai/src",
+        "crates/documents/src",
+        "crates/integrations/src",
+        "crates/telemetry/src",
+        "crates/app/src/workflows.rs",
+    ] {
+        inspect_runtime_source(&root.join(relative), root, errors)?;
+    }
+    Ok(())
+}
+
+fn inspect_runtime_source(path: &Path, root: &Path, errors: &mut Vec<String>) -> Result<()> {
+    if path.is_dir() {
+        for entry in std::fs::read_dir(path)
+            .with_context(|| format!("could not inspect {}", path.display()))?
+        {
+            inspect_runtime_source(&entry?.path(), root, errors)?;
+        }
+    } else if path.extension().is_some_and(|extension| extension == "rs") {
+        let source = std::fs::read_to_string(path)
+            .with_context(|| format!("could not read {}", path.display()))?;
+        // Unit fixture modules are separate from production runtime input.
+        let production = source.split("#[cfg(test)]").next().unwrap_or(&source);
+        if reads_runtime_environment(production) {
+            errors.push(format!(
+                "{} reads runtime environment directly; use typed deepref-config configuration injected at composition",
+                path.strip_prefix(root).unwrap_or(path).display(),
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn reads_runtime_environment(source: &str) -> bool {
+    let compact: String = source
+        .chars()
+        .filter(|character| !character.is_whitespace())
+        .collect();
+    ["env::var(", "env::var_os(", "env::vars(", "env::vars_os("]
+        .iter()
+        .any(|pattern| compact.contains(pattern))
+}
 fn validate_workspace_dependency(
     source: &Package,
     layer: Layer,
@@ -172,7 +265,7 @@ fn validate_workspace_dependency(
             && target.name == "deepref-worker"
             && dependency.kind.as_deref() == Some("dev");
         // A package dev-depending on itself only turns on its own test-only
-        // features (e.g. deepref-postgres `test-support`); it crosses no layer.
+        // features (e.g. deepref-app `test-support`); it crosses no layer.
         let own_test_features =
             source.name == target.name && dependency.kind.as_deref() == Some("dev");
         if !layer.permits(target_layer) && !fixture_edge && !own_test_features {
@@ -224,13 +317,13 @@ fn validate_required_seams(packages: &[&Package], errors: &mut Vec<String>) {
         ("deepref-application", &["deepref-domain"][..]),
         (
             "deepref-http-api",
-            &["deepref-application", "deepref-postgres"][..],
+            &["deepref-application", "deepref-app"][..],
         ),
         (
             "deepref-review",
             &["deepref-domain", "deepref-application", "deepref-ai"][..],
         ),
-        ("deepref-postgres", &["sqlx"][..]),
+        ("deepref-app", &["sqlx"][..]),
         ("deepref-integrations", &["deepref-application"][..]),
     ] {
         if let Some(source) = packages.iter().find(|p| p.name == source_name) {
@@ -283,4 +376,30 @@ fn validate(metadata: &Metadata) -> Vec<String> {
     validate_required_seams(&packages, &mut errors);
     errors.sort();
     errors
+}
+
+#[cfg(test)]
+mod tests {
+    use super::reads_runtime_environment;
+
+    #[test]
+    fn migrated_runtime_config_guard_rejects_direct_environment_reads() {
+        for source in [
+            "std::env::var(\"SMTP_HOST\")",
+            "env :: var_os (\"PDFIUM_LIBRARY_PATH\")",
+            "std::env::vars().collect()",
+            "env::vars_os()",
+        ] {
+            assert!(reads_runtime_environment(source));
+        }
+    }
+
+    #[test]
+    fn runtime_config_guard_leaves_process_and_fixture_inputs_distinct() {
+        assert!(!reads_runtime_environment("std::env::args().skip(1)"));
+        assert!(!reads_runtime_environment("std::env::temp_dir()"));
+        assert!(!reads_runtime_environment(
+            "RuntimeConfig::from_source(get)?"
+        ));
+    }
 }

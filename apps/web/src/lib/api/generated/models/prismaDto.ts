@@ -11,6 +11,13 @@ export interface PrismaDto {
 	ai_quarantined: number;
 	/** @nullable */
 	as_of?: string | null;
+	/**
+	 * Title/abstract exclusions a reviewer confirmed from an assistant plan.
+	 * The assistant chose them, so they are not counted as a person's own
+	 * screening. Disjoint from `automation_excluded`.
+	 * @minimum 0
+	 */
+	assistant_excluded: number;
 	/** @minimum 0 */
 	automation_excluded: number;
 	/** @minimum 0 */

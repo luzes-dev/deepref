@@ -24,7 +24,7 @@ use sqlx::PgPool;
 use uuid::Uuid;
 
 use super::delivery::DeliveryAction;
-use deepref_postgres::{
+use deepref_app::{
     AppendAssistantMessage, NewAssistantPlan, PostgresAssistantToolHost, PostgresUsageLedger,
     begin_assistant_agent_run, get_assistant_agent_run,
 };
@@ -49,10 +49,18 @@ pub async fn handle_assistant_agent_run(
     pool: &PgPool,
     job: &deepref_application::jobs::ClaimedJob,
     owner: &str,
+    config: &deepref_config::AiProviderConfig,
 ) -> anyhow::Result<DeliveryAction> {
     let _ = owner;
-    let config = deepref_config::AiProviderConfig::from_env()?;
     let Some(api_key) = config.api_key() else {
+        let payload: AssistantAgentRunJobPayload = serde_json::from_value(job.payload.clone())?;
+        fail_run(
+            pool,
+            payload.assistant_run_id,
+            "ai_not_configured",
+            "The AI provider is not configured.",
+        )
+        .await?;
         return Ok(DeliveryAction::Terminate);
     };
     let factory = Arc::new(deepref_ai::runtime::OpenAiCompatModelFactory::new(
@@ -91,13 +99,17 @@ pub async fn handle_assistant_agent_run_with(
         .await?
         .is_none()
     {
+        fail_run(
+            pool,
+            payload.assistant_run_id,
+            "assistant_run_missing",
+            "The assistant run no longer exists.",
+        )
+        .await?;
         return Ok(DeliveryAction::Terminate);
     }
-    // Terminal check first: a duplicate delivery after settlement acks
-    // without appending anything. The attempts-exhausted fail runs after it
-    // so a terminal redelivery never gains a bogus error event, and so the
-    // run is already `running` when the fail flip applies (failing a merely
-    // queued run would append an event while stranding its status).
+    // Terminal redeliveries ack before the attempts-exhausted guard, so
+    // already settled runs never acquire a bogus failure event.
     let Some(claimed) = begin_assistant_agent_run(pool, payload.assistant_run_id).await? else {
         return Ok(DeliveryAction::Ack);
     };
@@ -121,6 +133,13 @@ pub async fn handle_assistant_agent_run_with(
         }
         Err(RunFailure::Fatal(error)) => {
             tracing::warn!(run_id = %payload.assistant_run_id, %error, "assistant run failed");
+            fail_run(
+                pool,
+                payload.assistant_run_id,
+                "assistant_run_failed",
+                "The assistant run could not finish.",
+            )
+            .await?;
             Ok(DeliveryAction::Terminate)
         }
     }
@@ -135,7 +154,7 @@ enum RunFailure {
 async fn drive_assistant_run(
     pool: &PgPool,
     job: &deepref_application::jobs::ClaimedJob,
-    claimed: &deepref_postgres::ClaimedAssistantAgentRun,
+    claimed: &deepref_app::ClaimedAssistantAgentRun,
     services: &AssistantWorkerServices,
 ) -> Result<(), RunFailure> {
     let record = &claimed.record;
@@ -224,7 +243,7 @@ async fn drive_assistant_run(
             )
             .await?;
             let cassette = finished.cassette.as_ref();
-            let completed = deepref_postgres::CompletedAssistantAgentRun {
+            let completed = deepref_app::CompletedAssistantAgentRun {
                 answer: answer_message(record, &model_label, &finished),
                 plan: plan_record(record, &actor, &model_label, &finished)?,
                 effect_log: cassette
@@ -238,7 +257,7 @@ async fn drive_assistant_run(
                     .transpose()?,
                 run_spec_hash: cassette.map(|cassette| format!("{:016x}", cassette.run_spec_hash)),
             };
-            if !deepref_postgres::complete_assistant_agent_run(pool, record.id, &completed)
+            if !deepref_app::complete_assistant_agent_run(pool, record.id, &completed)
                 .await
                 .map_err(|error| RunFailure::Fatal(error.into()))?
             {
@@ -283,13 +302,9 @@ fn retryable(error: &AiError) -> bool {
 async fn fail_run(pool: &PgPool, run_id: Uuid, code: &str, message: &str) -> anyhow::Result<()> {
     // One atomic transaction appends the `error` event and flips the run to
     // failed, or appends nothing when the run already settled.
-    deepref_postgres::fail_assistant_agent_run(
-        pool,
-        run_id,
-        &json!({"code": code, "message": message}),
-    )
-    .await
-    .map_err(|error| anyhow::anyhow!("assistant failure bookkeeping failed: {error:?}"))?;
+    deepref_app::fail_assistant_agent_run(pool, run_id, &json!({"code": code, "message": message}))
+        .await
+        .map_err(|error| anyhow::anyhow!("assistant failure bookkeeping failed: {error:?}"))?;
     Ok(())
 }
 
@@ -363,7 +378,7 @@ async fn persist_event_row(
     kind: &str,
     payload: &Value,
 ) -> Result<(), RunFailure> {
-    deepref_postgres::append_assistant_run_event(pool, run_id, kind, payload)
+    deepref_app::append_assistant_run_event(pool, run_id, kind, payload)
         .await
         .map_err(|error| RunFailure::Fatal(error.into()))?;
     Ok(())
@@ -383,7 +398,7 @@ fn stored_output(output: &Value) -> Value {
 }
 
 fn answer_message(
-    record: &deepref_postgres::AssistantAgentRunRecord,
+    record: &deepref_app::AssistantAgentRunRecord,
     model: &str,
     finished: &deepref_ai::runtime::RigTurnOutcome,
 ) -> AppendAssistantMessage {
@@ -431,7 +446,7 @@ fn answer_message(
 }
 
 fn plan_record(
-    record: &deepref_postgres::AssistantAgentRunRecord,
+    record: &deepref_app::AssistantAgentRunRecord,
     actor: &Actor,
     model: &str,
     finished: &deepref_ai::runtime::RigTurnOutcome,
@@ -508,4 +523,32 @@ async fn emit_plan_event(
         }),
     )
     .await
+}
+
+/// Settle runs whose delivery can no longer execute. Holding each run lock
+/// serializes the failure event with normal worker settlement.
+pub(crate) async fn reconcile_orphan_runs(pool: &PgPool) -> anyhow::Result<()> {
+    let mut tx = pool.begin().await?;
+    let ids = sqlx::query_scalar::<_, Uuid>(
+        "SELECT r.id FROM assistant_agent_runs r
+         WHERE r.status IN ('queued','running') AND NOT EXISTS (
+           SELECT 1 FROM jobs j WHERE j.kind='assistant_agent_run'
+             AND j.payload->>'assistant_run_id'=r.id::text
+             AND j.state IN ('queued','running')
+         ) FOR UPDATE OF r SKIP LOCKED",
+    )
+    .fetch_all(&mut *tx)
+    .await?;
+    for id in ids {
+        let error = json!({"code": "assistant_job_unavailable", "message": "The assistant job is missing or no longer executable."});
+        sqlx::query(
+            "INSERT INTO assistant_run_events (run_id,seq,kind,payload)
+             SELECT $1,COALESCE(MAX(seq),-1)+1,'error',$2 FROM assistant_run_events WHERE run_id=$1"
+        ).bind(id).bind(&error).execute(&mut *tx).await?;
+        sqlx::query(
+            "UPDATE assistant_agent_runs SET status='failed',error=$2,updated_at=now(),completed_at=now() WHERE id=$1"
+        ).bind(id).bind(&error).execute(&mut *tx).await?;
+    }
+    tx.commit().await?;
+    Ok(())
 }

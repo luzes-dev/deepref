@@ -98,7 +98,7 @@ pub(crate) async fn list_extraction_fields(
     State(state): State<AppState>,
     Path(project_id): Path<Uuid>,
 ) -> Result<Json<Vec<ExtractionFieldDto>>, ApiError> {
-    let definitions = deepref_postgres::list_field_definitions(&state.pool, project_id)
+    let definitions = deepref_app::list_field_definitions(&state.pool, project_id)
         .await
         .map_err(map_extraction_error)?;
     Ok(Json(definitions.into_iter().map(field_dto).collect()))
@@ -129,7 +129,7 @@ pub(crate) async fn create_extraction_field(
         value_type,
         required: input.required,
     };
-    let definition = deepref_postgres::create_field_definition(&state.pool, definition)
+    let definition = deepref_app::create_field_definition(&state.pool, definition)
         .await
         .map_err(map_extraction_error)?;
     Ok((axum::http::StatusCode::CREATED, Json(field_dto(definition))))
@@ -158,11 +158,11 @@ pub(crate) async fn update_extraction_field(
 ) -> Result<Json<ExtractionFieldDto>, ApiError> {
     let value_type = ExtractionFieldType::parse(&input.value_type)
         .ok_or_else(|| ApiError::BadRequest("value_type is invalid".to_owned()))?;
-    let definition = deepref_postgres::update_field_definition(
+    let definition = deepref_app::update_field_definition(
         &state.pool,
         project_id,
         field_id,
-        deepref_postgres::ExtractionFieldUpdate {
+        deepref_app::ExtractionFieldUpdate {
             label: input.label,
             value_type,
             required: input.required,
@@ -185,7 +185,7 @@ pub(crate) async fn list_study_extraction_values(
     State(state): State<AppState>,
     Path((project_id, study_id)): Path<(Uuid, Uuid)>,
 ) -> Result<Json<Vec<ExtractionValueDto>>, ApiError> {
-    let values = deepref_postgres::list_values(&state.pool, project_id, study_id)
+    let values = deepref_app::list_values(&state.pool, project_id, study_id)
         .await
         .map_err(map_extraction_error)?;
     Ok(Json(values.into_iter().map(value_dto).collect()))
@@ -215,17 +215,17 @@ pub(crate) async fn record_extraction_value(
                 .map_err(|_| ApiError::BadRequest("date value must be YYYY-MM-DD".to_owned()))?,
         },
     };
-    let record = deepref_postgres::record_manual_value(
+    let record = deepref_app::record_manual_value(
         &state.pool,
         project_id,
         study_id,
-        deepref_postgres::ManualExtractionValue {
+        deepref_app::ManualExtractionValue {
             field_id,
             value,
             rationale: input.rationale,
             evidence: input
                 .source
-                .map(|source| deepref_postgres::ManualExtractionEvidence {
+                .map(|source| deepref_app::ManualExtractionEvidence {
                     document_id: source.document_id,
                     document_block_id: source.document_block_id,
                 }),
@@ -250,7 +250,7 @@ pub(crate) async fn clear_extraction_value(
     Path((project_id, study_id, field_id)): Path<(Uuid, Uuid, Uuid)>,
     headers: HeaderMap,
 ) -> Result<axum::http::StatusCode, ApiError> {
-    deepref_postgres::clear_value(
+    deepref_app::clear_value(
         &state.pool,
         project_id,
         study_id,
@@ -275,7 +275,7 @@ pub(crate) async fn generate_data_extraction_suggestion(
     Path((project_id, study_id)): Path<(Uuid, Uuid)>,
     headers: HeaderMap,
 ) -> Result<AcceptedReviewRun, ApiError> {
-    let snapshot = deepref_postgres::schedule_data_extraction_review(
+    let snapshot = deepref_app::schedule_data_extraction_review(
         &state.pool,
         project_id,
         study_id,
@@ -298,7 +298,7 @@ fn field_dto(definition: ExtractionFieldDefinition) -> ExtractionFieldDto {
     }
 }
 
-pub(crate) fn value_dto(value: deepref_postgres::ExtractionValueRecord) -> ExtractionValueDto {
+pub(crate) fn value_dto(value: deepref_app::ExtractionValueRecord) -> ExtractionValueDto {
     let typed_value = match value.value {
         ExtractionValue::Text { value } => ExtractionValueDtoValue::Text { value },
         ExtractionValue::Number { value } => ExtractionValueDtoValue::Number { value },
@@ -329,31 +329,31 @@ pub(crate) fn value_dto(value: deepref_postgres::ExtractionValueRecord) -> Extra
     }
 }
 
-pub(crate) fn map_extraction_error(error: deepref_postgres::ExtractionError) -> ApiError {
+pub(crate) fn map_extraction_error(error: deepref_app::ExtractionError) -> ApiError {
     match error {
-        deepref_postgres::ExtractionError::Database(error) => ApiError::Database(error),
-        deepref_postgres::ExtractionError::ImmutableDefinition
-        | deepref_postgres::ExtractionError::ValueAlreadyApproved => ApiError::Conflict {
+        deepref_app::ExtractionError::Database(error) => ApiError::Database(error),
+        deepref_app::ExtractionError::ImmutableDefinition
+        | deepref_app::ExtractionError::ValueAlreadyApproved => ApiError::Conflict {
             code: "extraction_conflict".to_owned(),
             message: error.to_string(),
             details: Value::Null,
         },
-        deepref_postgres::ExtractionError::DefinitionNotFound
-        | deepref_postgres::ExtractionError::StudyNotFound => ApiError::NotFound(error.to_string()),
-        deepref_postgres::ExtractionError::FieldHasValues => ApiError::Conflict {
+        deepref_app::ExtractionError::DefinitionNotFound
+        | deepref_app::ExtractionError::StudyNotFound => ApiError::NotFound(error.to_string()),
+        deepref_app::ExtractionError::FieldHasValues => ApiError::Conflict {
             code: "extraction_field_has_values".to_owned(),
             message: error.to_string(),
             details: Value::Null,
         },
-        deepref_postgres::ExtractionError::StaleDefinitionVersion => ApiError::Conflict {
+        deepref_app::ExtractionError::StaleDefinitionVersion => ApiError::Conflict {
             code: "extraction_definition_changed".to_owned(),
             message: error.to_string(),
             details: Value::Null,
         },
-        deepref_postgres::ExtractionError::InvalidDefinition(message)
-        | deepref_postgres::ExtractionError::InvalidValue(message) => ApiError::BadRequest(message),
-        deepref_postgres::ExtractionError::EvidenceNotInStudy
-        | deepref_postgres::ExtractionError::RequiredFieldInsufficient => ApiError::Conflict {
+        deepref_app::ExtractionError::InvalidDefinition(message)
+        | deepref_app::ExtractionError::InvalidValue(message) => ApiError::BadRequest(message),
+        deepref_app::ExtractionError::EvidenceNotInStudy
+        | deepref_app::ExtractionError::RequiredFieldInsufficient => ApiError::Conflict {
             code: "extraction_evidence_conflict".to_owned(),
             message: error.to_string(),
             details: Value::Null,

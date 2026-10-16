@@ -2,7 +2,7 @@ import { goto } from '$app/navigation';
 import { navigating, page } from '$app/state';
 import { resolve } from '$app/paths';
 import type { ResolvedPathname } from '$app/types';
-import type { IngestionDto, ProjectDto, ReportDto } from '#lib/api/generated/models/index.js';
+import type { AcquisitionDto, ProjectDto, ReportDto } from '#lib/api/generated/models/index.js';
 import { Context, PersistedState, type Getter } from 'runed';
 import { SvelteURLSearchParams } from 'svelte/reactivity';
 import { PROJECT_INSPECTOR_COLLAPSED_KEY, PROJECT_NAV_COLLAPSED_KEY } from './constants';
@@ -28,7 +28,7 @@ type ProjectWorkspaceDataSources = {
 	projects: Getter<ProjectDto[]>;
 	project: Getter<ProjectDto | undefined>;
 	articles: Getter<ReportDto[]>;
-	ingestions: Getter<IngestionDto[]>;
+	acquisitions: Getter<AcquisitionDto[]>;
 	articlesLoading: Getter<boolean>;
 	ingestionsLoading: Getter<boolean>;
 	projectsHasNextPage: Getter<boolean>;
@@ -99,7 +99,7 @@ class ProjectWorkspaceContext {
 		projects: () => [],
 		project: () => undefined,
 		articles: () => [],
-		ingestions: () => [],
+		acquisitions: () => [],
 		articlesLoading: () => false,
 		ingestionsLoading: () => false,
 		projectsHasNextPage: () => false,
@@ -118,7 +118,7 @@ class ProjectWorkspaceContext {
 	projects = $derived.by(() => this.#dataSources.projects());
 	project = $derived.by(() => this.#dataSources.project() as ProjectDto);
 	articles = $derived.by(() => this.#dataSources.articles());
-	ingestions = $derived.by(() => this.#dataSources.ingestions());
+	acquisitions = $derived.by(() => this.#dataSources.acquisitions());
 	articlesLoading = $derived.by(() => this.#dataSources.articlesLoading());
 	ingestionsLoading = $derived.by(() => this.#dataSources.ingestionsLoading());
 	projectsHasNextPage = $derived.by(() => this.#dataSources.projectsHasNextPage());
@@ -132,12 +132,11 @@ class ProjectWorkspaceContext {
 
 	selectedProjectId = $derived.by(() => page.params.projectId ?? '');
 	selectedArticle = $derived.by(() => page.url.searchParams.get('report') ?? undefined);
-	selectedIngestion = $derived.by(() => page.url.searchParams.get('ingestion') ?? undefined);
 	selectedAcquisition = $derived.by(() => page.url.searchParams.get('acquisition') ?? undefined);
 	view = $derived.by(() => viewForPathname(page.url.pathname));
 	counts = $derived.by<ProjectWorkspaceCounts>(() => ({
 		articles: this.articles.length,
-		ingestions: this.ingestions.length
+		ingestions: this.acquisitions.length
 	}));
 
 	navCollapsed = new PersistedState(PROJECT_NAV_COLLAPSED_KEY, false, { syncTabs: false });
@@ -239,7 +238,7 @@ class ProjectWorkspaceContext {
 	#navigateToView = (view: ProjectWorkspaceNavView, search?: URLSearchParams) => {
 		if (!this.selectedProjectId) return;
 		const params = search ?? new SvelteURLSearchParams(page.url.searchParams.toString());
-		if (view !== 'ingestions') params.delete('ingestion');
+		if (view !== 'ingestions') params.delete('acquisition');
 		navigateTo(appendSearch(pathnameForView(this.selectedProjectId, view), params));
 	};
 
@@ -251,23 +250,13 @@ class ProjectWorkspaceContext {
 	loadMoreArticles = () => this.#dataSources.loadMoreArticles();
 	loadMoreIngestions = () => this.#dataSources.loadMoreIngestions();
 
-	syncProjectSelection = (
-		projects: ProjectDto[],
-		loading: boolean,
-		selectedProjectFailed: boolean
-	) => {
+	syncProjectSelection = (projects: ProjectDto[], loading: boolean) => {
 		const route = projectRouteSelection(
 			page.params.projectId,
 			navigating.to?.params?.projectId,
 			page.url.pathname
 		);
-		const projectId = projectToOpen(
-			projects,
-			loading,
-			route.projectId,
-			selectedProjectFailed,
-			route.resolvingProject
-		);
+		const projectId = projectToOpen(projects, loading, route.projectId, route.resolvingProject);
 		if (projectId) navigateTo(pathnameForView(projectId, 'overview'));
 	};
 
@@ -285,7 +274,7 @@ class ProjectWorkspaceContext {
 		if (!reportId || !this.selectedProjectId) return;
 		const params = new SvelteURLSearchParams(page.url.searchParams.toString());
 		params.set('report', reportId);
-		params.delete('ingestion');
+		params.delete('acquisition');
 		this.#navigateToView(articleView(this.view), params);
 	};
 
@@ -295,28 +284,16 @@ class ProjectWorkspaceContext {
 		navigateTo(appendSearch(page.url.pathname, params), { reset: false });
 	};
 
-	openIngestion = (ingestionId: string) => {
-		if (!ingestionId || !this.selectedProjectId) return;
-		const params = new SvelteURLSearchParams(page.url.searchParams.toString());
-		params.set('ingestion', ingestionId);
-		params.delete('acquisition');
-		params.delete('report');
-		this.#navigateToView('ingestions', params);
-	};
-
-	/** Opens a PubMed ID run in the run inspector. */
 	openAcquisition = (acquisitionId: string) => {
 		if (!acquisitionId || !this.selectedProjectId) return;
 		const params = new SvelteURLSearchParams(page.url.searchParams.toString());
 		params.set('acquisition', acquisitionId);
-		params.delete('ingestion');
 		params.delete('report');
 		this.#navigateToView('ingestions', params);
 	};
 
-	clearIngestion = () => {
+	clearAcquisition = () => {
 		const params = new SvelteURLSearchParams(page.url.searchParams.toString());
-		params.delete('ingestion');
 		params.delete('acquisition');
 		navigateTo(appendSearch(page.url.pathname, params), { reset: false });
 	};

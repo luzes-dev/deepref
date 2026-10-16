@@ -4,41 +4,22 @@
 //! and the native result is kept.
 
 use std::collections::HashMap;
-use std::time::Duration;
 
+use deepref_app::{DocumentStructure, NewDocumentReference, NewDocumentSection};
 use deepref_integrations::{GrobidClient, GrobidConfig, TeiDocument};
-use deepref_postgres::{DocumentStructure, NewDocumentReference, NewDocumentSection};
 
 const MIN_BODY_MATCH_CHARS: usize = 20;
 const PREFIX_MATCH_CHARS: usize = 48;
 const MIN_PREFIX_MATCH_CHARS: usize = 32;
 
-/// Reads `GROBID_URL` (unset or blank disables enrichment) and validates it.
-pub fn grobid_url_from_env() -> anyhow::Result<Option<String>> {
-    let Some(url) = std::env::var("GROBID_URL")
-        .ok()
-        .map(|value| value.trim().to_owned())
-        .filter(|value| !value.is_empty())
-    else {
+pub fn grobid_client_from_config(
+    settings: &crate::config::WorkerConfig,
+) -> anyhow::Result<Option<GrobidClient>> {
+    let Some(url) = &settings.grobid_url else {
         return Ok(None);
     };
-    GrobidClient::new(GrobidConfig::new(url.clone()))
-        .map_err(|error| anyhow::anyhow!("GROBID_URL is invalid: {error}"))?;
-    Ok(Some(url))
-}
-
-pub fn grobid_client_from_env() -> anyhow::Result<Option<GrobidClient>> {
-    let Some(url) = grobid_url_from_env()? else {
-        return Ok(None);
-    };
-    let mut config = GrobidConfig::new(url);
-    if let Some(secs) = std::env::var("GROBID_TIMEOUT_SECS")
-        .ok()
-        .and_then(|value| value.trim().parse::<u64>().ok())
-        .filter(|secs| *secs > 0)
-    {
-        config.timeout = Duration::from_secs(secs);
-    }
+    let mut config = GrobidConfig::new(url.clone());
+    config.timeout = settings.grobid_timeout;
     Ok(Some(GrobidClient::new(config)?))
 }
 

@@ -44,6 +44,7 @@
 	import PageTemplate from '#lib/shell/PageTemplate.svelte';
 	import { useQueryClient } from '@tanstack/svelte-query';
 	import { ReviewRunObserver } from '#lib/features/ai-assistance/review-run-observer.svelte.js';
+	import ReviewRunActions from '#lib/features/ai-assistance/components/ReviewRunActions.svelte';
 	import { notifyError, notifyWarning } from '#lib/features/notifications/toast.js';
 	import { parseStudyLocation, updateStudyLocation } from '../url';
 	import StudyClassificationAssistance from './StudyClassificationAssistance.svelte';
@@ -66,6 +67,7 @@
 	let role = $state<StudyReportRole>(StudyReportRoleInput.report_of_study);
 	let groupingAction = $state<'generate' | 'accept' | 'reject' | null>(null);
 	let pendingGroupingProposalId = $state<string | null>(null);
+	let rejectedGroupingProposalId = $state<string | null>(null);
 	let classificationAction = $state<'accept' | 'reject' | null>(null);
 	let pendingClassificationProposalId = $state<string | null>(null);
 
@@ -164,7 +166,9 @@
 	const groupingMutationError = $derived(
 		generateGroupingMutation.error?.message ?? decideGroupingMutation.error?.message ?? ''
 	);
-	const groupingErrorMessage = $derived(groupingQueryError || groupingMutationError);
+	const groupingErrorMessage = $derived(
+		groupingQueryError || groupingMutationError || groupingReviewRun.error
+	);
 	const groupingConflict = $derived(
 		isApiErrorWithStatus(groupingProposalsQuery.error, 409) ||
 			isApiErrorWithStatus(generateGroupingMutation.error, 409) ||
@@ -310,6 +314,7 @@
 					reason: `Human reviewer ${decision === 'accept' ? 'accepted' : 'rejected'} study grouping suggestion.`
 				}
 			});
+			if (decision === 'reject') rejectedGroupingProposalId = proposal.id;
 			await refreshGroupingQueries(payload);
 		} catch (error) {
 			if (error instanceof ApiError && error.status === 409) {
@@ -619,6 +624,12 @@
 						{studyLabel}
 						onGenerate={() => void generateGrouping()}
 						onDecide={(decision) => void decideGrouping(decision)}
+					/>
+					<ReviewRunActions
+						run={groupingReviewRun}
+						allowRegenerate={!activeGroupingProposal &&
+							groupingReviewRun.state?.kind === 'completed' &&
+							groupingReviewRun.state.proposal_id === rejectedGroupingProposalId}
 					/>
 				</Tabs.Content>
 				<Tabs.Content value="history" class="pt-2"

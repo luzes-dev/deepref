@@ -184,7 +184,7 @@ pub(crate) async fn list_definitions(
 ) -> Result<Json<Vec<AutomationDefinitionDto>>, ApiError> {
     let project_id = validated_project_id(project_id)?;
     ensure_project(&state.pool, project_id).await?;
-    let definitions = deepref_postgres::list_automation_definitions(&state.pool, project_id)
+    let definitions = deepref_app::list_automation_definitions(&state.pool, project_id)
         .await
         .map_err(map_automation_error)?;
     Ok(Json(
@@ -248,7 +248,7 @@ pub(crate) async fn configure_definition(
         extract_actor(&headers)?,
     )
     .map_err(|error| ApiError::BadRequest(error.to_string()))?;
-    let definition = deepref_postgres::configure_automation_definition(&state.pool, &command)
+    let definition = deepref_app::configure_automation_definition(&state.pool, &command)
         .await
         .map_err(map_automation_error)?;
     Ok(Json(definition_dto(definition)))
@@ -288,7 +288,7 @@ pub(crate) async fn trigger_manually(
         extract_actor(&headers)?,
     )
     .map_err(|error| ApiError::BadRequest(error.to_string()))?;
-    let result = deepref_postgres::start_automation_manually(&state.pool, &request)
+    let result = deepref_app::start_automation_manually(&state.pool, &request)
         .await
         .map_err(map_automation_error)?;
     let status = if result.created {
@@ -354,13 +354,13 @@ pub(crate) async fn run_recipe_once(
         actor.clone(),
     )
     .map_err(|error| ApiError::BadRequest(error.to_string()))?;
-    let definition = deepref_postgres::configure_automation_definition(&state.pool, &configure)
+    let definition = deepref_app::configure_automation_definition(&state.pool, &configure)
         .await
         .map_err(map_automation_error)?;
     let request =
         StartAutomationManually::new(project_id, definition.id.as_uuid(), idempotency_key, actor)
             .map_err(|error| ApiError::BadRequest(error.to_string()))?;
-    let result = deepref_postgres::start_automation_manually(&state.pool, &request)
+    let result = deepref_app::start_automation_manually(&state.pool, &request)
         .await
         .map_err(map_automation_error)?;
     let status = if result.created {
@@ -403,7 +403,7 @@ pub(crate) async fn list_runs(
     ensure_project(&state.pool, project_id).await?;
     let limit = query.limit.unwrap_or(25);
     validate_run_list_limit(limit).map_err(|error| ApiError::BadRequest(error.to_string()))?;
-    let runs = deepref_postgres::list_automation_runs(&state.pool, project_id, limit)
+    let runs = deepref_app::list_automation_runs(&state.pool, project_id, limit)
         .await
         .map_err(map_automation_error)?;
     Ok(Json(runs.into_iter().map(run_dto).collect()))
@@ -433,7 +433,7 @@ pub(crate) async fn get_run(
     ensure_project(&state.pool, project_id).await?;
     let run_id = deepref_application::AutomationRunId::new(run_id)
         .map_err(|error| ApiError::BadRequest(error.to_string()))?;
-    let run = deepref_postgres::get_automation_run(&state.pool, project_id, run_id)
+    let run = deepref_app::get_automation_run(&state.pool, project_id, run_id)
         .await
         .map_err(map_automation_error)?;
     Ok(Json(run_dto(run)))
@@ -568,47 +568,50 @@ fn job_status_name(status: AutomationJobStatus) -> &'static str {
     }
 }
 
-fn map_automation_error(error: deepref_postgres::AutomationError) -> ApiError {
+fn map_automation_error(error: deepref_app::AutomationError) -> ApiError {
     match error {
-        deepref_postgres::AutomationError::InvalidInput(error) => {
+        deepref_app::AutomationError::InvalidInput(error) => {
             ApiError::BadRequest(error.to_string())
         }
-        deepref_postgres::AutomationError::DefinitionNotFound
-        | deepref_postgres::AutomationError::RunNotFound => {
+        deepref_app::AutomationError::DefinitionNotFound
+        | deepref_app::AutomationError::RunNotFound => {
             ApiError::NotFound("automation resource not found".to_owned())
         }
-        deepref_postgres::AutomationError::RunNotRetryable => ApiError::Conflict {
+        deepref_app::AutomationError::RunNotRetryable => ApiError::Conflict {
             code: "AUTOMATION_NOT_RETRYABLE".to_owned(),
             message: "automation run cannot be started from its current state".to_owned(),
             details: serde_json::json!({}),
         },
-        deepref_postgres::AutomationError::InvalidTransition(message) => ApiError::Conflict {
+        deepref_app::AutomationError::InvalidTransition(message) => ApiError::Conflict {
             code: "AUTOMATION_STATE_CONFLICT".to_owned(),
             message: "automation state transition conflicted".to_owned(),
             details: serde_json::json!({ "reason": message }),
         },
-        deepref_postgres::AutomationError::Serialization(error) => ApiError::Internal(error.into()),
-        deepref_postgres::AutomationError::InvalidStoredValue(message) => {
+        deepref_app::AutomationError::Serialization(error) => ApiError::Internal(error.into()),
+        deepref_app::AutomationError::InvalidStoredValue(message) => {
             ApiError::DataIntegrity(message)
         }
-        deepref_postgres::AutomationError::Database(error) => map_automation_database_error(error),
-        deepref_postgres::AutomationError::StepNotFound
-        | deepref_postgres::AutomationError::WorkerOwnership
-        | deepref_postgres::AutomationError::RunNotReady
-        | deepref_postgres::AutomationError::RunAlreadyTerminal => {
+        deepref_app::AutomationError::Database(error) => map_automation_database_error(error),
+        deepref_app::AutomationError::StepNotFound
+        | deepref_app::AutomationError::WorkerOwnership
+        | deepref_app::AutomationError::RunNotReady
+        | deepref_app::AutomationError::RunAlreadyTerminal => {
             ApiError::Internal(anyhow::anyhow!("unexpected automation worker state"))
         }
     }
 }
 
 fn map_automation_database_error(error: sqlx::Error) -> ApiError {
+    let classified = deepref_app::classify(&error);
+    if matches!(classified, deepref_app::PersistenceError::NotFound)
+        || classified.is_foreign_key_violation()
+    {
+        return ApiError::NotFound("automation resource not found".to_owned());
+    }
     let code = error
         .as_database_error()
         .and_then(|database_error| database_error.code());
     match code.as_deref() {
-        Some("P0002") | Some("23503") => {
-            ApiError::NotFound("automation resource not found".to_owned())
-        }
         Some("55000") => ApiError::Conflict {
             code: "AUTOMATION_PAUSED".to_owned(),
             message: "automation definition is paused".to_owned(),

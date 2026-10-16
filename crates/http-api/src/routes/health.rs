@@ -44,6 +44,10 @@ pub struct DependencyDetail {
     pub last_success_at: Option<DateTime<Utc>>,
     /// Jobs that failed within the recent window (worker only).
     pub recent_failed: Option<i64>,
+    /// Worker processes with a recent heartbeat (worker only).
+    pub live_workers: Option<i64>,
+    /// The most recent worker heartbeat, live or not (worker only).
+    pub last_heartbeat_at: Option<DateTime<Utc>>,
 }
 
 #[derive(Debug, Serialize, ToSchema)]
@@ -63,6 +67,8 @@ const STALE_QUEUE_SECONDS: i64 = 300;
 /// Jobs that exhausted their retries longer ago than this are history, not an
 /// ongoing worker problem; they stay visible in job listings.
 const RECENT_DEAD_WINDOW_SECONDS: i64 = 30 * 60;
+/// A worker heartbeats every 15 s; one seen within this window is live.
+const LIVE_WORKER_WINDOW_SECONDS: i64 = 60;
 
 fn worker_state(recent_dead: i64, oldest_queued_age_seconds: Option<i64>) -> DependencyState {
     if recent_dead > 0 || oldest_queued_age_seconds.is_some_and(|age| age > STALE_QUEUE_SECONDS) {
@@ -80,6 +86,8 @@ fn available() -> DependencyDetail {
         oldest_age_seconds: None,
         last_success_at: None,
         recent_failed: None,
+        live_workers: None,
+        last_heartbeat_at: None,
     }
 }
 
@@ -92,6 +100,14 @@ pub async fn live(State(state): State<AppState>) -> Json<LivenessResponse> {
     })
 }
 
+fn required_schema_version() -> i64 {
+    deepref_app::MIGRATOR
+        .iter()
+        .map(|migration| migration.version)
+        .max()
+        .unwrap_or(0)
+}
+
 #[utoipa::path(get, path="/health/ready", operation_id="getReadiness", tag="health",
     responses((status=200, body=ReadinessResponse), (status=503, body=ApiErrorBody)))]
 pub async fn ready(State(state): State<AppState>) -> Result<Json<ReadinessResponse>, ApiError> {
@@ -101,15 +117,23 @@ pub async fn ready(State(state): State<AppState>) -> Result<Json<ReadinessRespon
     .fetch_one(&state.pool)
     .await
     .map_err(ApiError::Database)?;
-    if schema_version < 10 {
+    let required = required_schema_version();
+    if schema_version < required {
         return Err(ApiError::Configuration(format!(
-            "database schema {schema_version} is older than required version 10"
+            "database schema {schema_version} is older than required version {required}"
         )));
+    }
+    if schema_version > required {
+        tracing::warn!(
+            schema_version,
+            required_schema_version = required,
+            "database schema is ahead of this service"
+        );
     }
     Ok(Json(ReadinessResponse {
         status: "ready",
         schema_version,
-        required_schema_version: 10,
+        required_schema_version: required,
     }))
 }
 
@@ -137,12 +161,17 @@ pub async fn dependencies(
                       AND available_at > now() - make_interval(secs => $1::double precision)
                 )::bigint AS recent_dead,
                 EXTRACT(EPOCH FROM (now() - min(available_at) FILTER (WHERE state = 'queued')))::bigint AS oldest_age_seconds,
-                max(completed_at) AS last_success_at
+                max(completed_at) AS last_success_at,
+                (SELECT count(*) FROM worker_heartbeats
+                  WHERE seen_at > now() - make_interval(secs => $3::double precision))::bigint
+                  AS live_workers,
+                (SELECT max(seen_at) FROM worker_heartbeats) AS last_heartbeat_at
          FROM jobs
          WHERE ($2::uuid IS NULL OR project_id = $2)",
     )
     .bind(RECENT_DEAD_WINDOW_SECONDS as f64)
     .bind(query.project_id)
+    .bind(LIVE_WORKER_WINDOW_SECONDS as f64)
     .fetch_one(&state.pool)
     .await
     {
@@ -150,13 +179,22 @@ pub async fn dependencies(
             let backlog: i64 = row.get("backlog");
             let recent_dead: i64 = row.get("recent_dead");
             let oldest_age_seconds: Option<i64> = row.get("oldest_age_seconds");
+            let live_workers: i64 = row.get("live_workers");
+            // Work is waiting and no worker is alive to take it.
+            let state = if backlog > 0 && live_workers == 0 {
+                DependencyState::Degraded
+            } else {
+                worker_state(recent_dead, oldest_age_seconds)
+            };
             DependencyDetail {
-                state: worker_state(recent_dead, oldest_age_seconds),
+                state,
                 backlog: Some(backlog),
                 lag: None,
                 oldest_age_seconds,
                 last_success_at: row.get("last_success_at"),
                 recent_failed: Some(recent_dead),
+                live_workers: Some(live_workers),
+                last_heartbeat_at: row.get("last_heartbeat_at"),
             }
         }
         Err(error) => {
@@ -181,6 +219,17 @@ pub async fn deprecated_health(
 #[cfg(test)]
 mod tests {
     use super::*;
+    #[test]
+    fn readiness_requires_latest_embedded_migration() {
+        assert_eq!(
+            required_schema_version(),
+            deepref_app::MIGRATOR
+                .iter()
+                .map(|migration| migration.version)
+                .max()
+                .expect("embedded migrations")
+        );
+    }
 
     #[test]
     fn historical_dead_jobs_do_not_degrade_the_worker() {

@@ -218,11 +218,15 @@ fn check_block_settings(
     match def.id.as_str() {
         "integration.http_request" => {
             let url = text("url");
-            if !url.trim().is_empty()
-                && !url.contains("{{")
-                && let Some(problem) = web_address_problem(url)
-            {
-                report.node(&node.id, format!("\"{title}\": {problem}"));
+            if !url.trim().is_empty() {
+                match super::conditions::render_url_template(url, &serde_json::json!({})) {
+                    Err(problem) => report.node(&node.id, format!("\"{title}\": {problem}")),
+                    Ok(rendered) => {
+                        if let Some(problem) = web_address_problem(&rendered) {
+                            report.node(&node.id, format!("\"{title}\": {problem}"));
+                        }
+                    }
+                }
             }
         }
         "integration.slack" => {

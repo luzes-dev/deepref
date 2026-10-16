@@ -18,10 +18,10 @@
 		getListReportAppraisalsQueryKey
 	} from '#lib/api/generated/appraisal/appraisal.js';
 	import {
-		createListDocumentBlocks,
 		createListFullTextScreeningQueue,
 		createListReportDocuments
 	} from '#lib/api/generated/documents/documents.js';
+	import { createAllDocumentBlocks } from '#lib/api/pagination.js';
 	import { createListProjectReports } from '#lib/api/generated/reports/reports.js';
 	import { createGetReportStudyMembership } from '#lib/api/generated/studies/studies.js';
 	import type {
@@ -35,6 +35,7 @@
 	import { useQueryClient } from '@tanstack/svelte-query';
 	import { fullTextUrlString } from '#lib/features/full-text/url.js';
 	import { ReviewRunObserver } from '#lib/features/ai-assistance/review-run-observer.svelte.js';
+	import ReviewRunActions from '#lib/features/ai-assistance/components/ReviewRunActions.svelte';
 	import { Button } from '@deepref/ui/button';
 	import { Skeleton } from '@deepref/ui/skeleton';
 	import { Spinner } from '@deepref/ui/spinner';
@@ -101,7 +102,7 @@
 		() => ({ query: { enabled: Boolean(reportId) } })
 	);
 	const selectedDocumentId = $derived(documentsQuery.data?.data[0]?.id);
-	const blocksQuery = createListDocumentBlocks(
+	const blocksQuery = createAllDocumentBlocks(
 		() => projectId,
 		() => reportId ?? '',
 		() => selectedDocumentId ?? '',
@@ -163,6 +164,7 @@
 			.toSorted((a, b) => b.completed_at.localeCompare(a.completed_at))[0];
 	});
 	let selectedAiProposalId = $state<string | null>(null);
+	let rejectedAiProposalId = $state<string | null>(null);
 	let aiError = $state('');
 	const reviewRun = new ReviewRunObserver(
 		() => projectId,
@@ -335,6 +337,7 @@
 					...(reviewedPayload ? { reviewed_payload: reviewedPayload } : {})
 				}
 			});
+			if (decision === 'reject') rejectedAiProposalId = proposal.id;
 			selectedAiProposalId = null;
 			await refreshAfterDecision();
 			if (decision === 'accept') {
@@ -708,6 +711,11 @@
 						/>{:else}<Brain data-icon="inline-start" />{/if}
 					Pre-fill with AI
 				</Button>
+				<ReviewRunActions
+					run={reviewRun}
+					allowRegenerate={reviewRun.state?.kind === 'completed' &&
+						reviewRun.state.proposal_id === rejectedAiProposalId}
+				/>
 				<span class="text-xs text-muted-foreground"
 					>Suggestions fill the form for your review; nothing is saved until you accept.</span
 				>
