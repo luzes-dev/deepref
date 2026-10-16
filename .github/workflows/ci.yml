@@ -2,11 +2,16 @@ name: CI
 
 on:
   pull_request:
+  merge_group:
+    types: [checks_requested]
   push:
     branches: [main]
 
 concurrency:
-  group: ci-${{ github.event.pull_request.number || github.ref }}
+  # Merge-queue runs carry the queued PR's number in the event payload; the
+  # event-name prefix keeps a PR run and its queued merge-commit run from
+  # cancelling each other while queue retries still supersede each other.
+  group: ci-${{ github.event_name }}-${{ github.event.pull_request.number || github.ref }}
   cancel-in-progress: true
 
 permissions:
@@ -529,12 +534,28 @@ jobs:
             --source crates/app/migrations \
             --database-url "$DATABASE_URL" \
             --no-dotenv
-      - name: Verify SQLx offline query metadata against live database
+      # The metadata check and the test suite both build into the same target
+      # directory, so their cargo invocations serialize on the build lock. A
+      # --no-run pass first warms every test binary, then the check's proc-macro
+      # expansion takes the lock while the database-bound test phase executes
+      # without touching cargo. The check's compile overlaps the test tail
+      # instead of adding to it (measured 107 s standalone).
+      - name: Build integration tests
+        run: cargo nextest run --workspace --tests --locked --profile ci --no-run
+      - name: Verify SQLx offline query metadata and run integration tests
         env:
           DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/deepref
-        run: cargo xtask sqlx check
-      - name: Run integration tests
-        run: cargo nextest run --workspace --tests --locked --profile ci
+        run: |
+          cargo xtask sqlx check > "$RUNNER_TEMP/sqlx-check.log" 2>&1 &
+          SQLX_PID=$!
+          set +e
+          cargo nextest run --workspace --tests --locked --profile ci --no-build
+          TEST_STATUS=$?
+          set -e
+          wait "$SQLX_PID"
+          SQLX_STATUS=$?
+          tail --lines 30 "$RUNNER_TEMP/sqlx-check.log"
+          test "$TEST_STATUS" -eq 0 && test "$SQLX_STATUS" -eq 0
       - name: Show sccache statistics
         if: always()
         run: |
@@ -657,8 +678,9 @@ jobs:
           INTEGRATION_RESULT: ${{ needs.full-stack.result }}
           BROWSER_RESULT: ${{ needs.browser-e2e.result }}
         run: |
-          if [ "$GITHUB_EVENT_NAME" = "pull_request" ]; then
-            # Path-filtered lanes legitimately skip on PRs; keep push strict.
+          if [ "$GITHUB_EVENT_NAME" = "pull_request" ] || [ "$GITHUB_EVENT_NAME" = "merge_group" ]; then
+            # Path-filtered lanes legitimately skip on PRs and queued merge
+            # commits; keep push strict.
             test "$INTEGRATION_RESULT" = "success" || test "$INTEGRATION_RESULT" = "skipped"
             test "$BROWSER_RESULT" = "success" || test "$BROWSER_RESULT" = "skipped"
           else
@@ -678,8 +700,9 @@ jobs:
           AMD64_RESULT: ${{ needs.containers.result }}
           ARM64_RESULT: ${{ needs.containers-arm64.result }}
         run: |
-          if [ "$GITHUB_EVENT_NAME" = "pull_request" ]; then
-            # PR image builds are path-filtered; push-to-main always builds both arches.
+          if [ "$GITHUB_EVENT_NAME" = "pull_request" ] || [ "$GITHUB_EVENT_NAME" = "merge_group" ]; then
+            # PR image builds are path-filtered, and queued merge commits reuse
+            # the same acceptance; push-to-main always builds both arches.
             test "$AMD64_RESULT" = "success" || test "$AMD64_RESULT" = "skipped"
           else
             test "$AMD64_RESULT" = "success"

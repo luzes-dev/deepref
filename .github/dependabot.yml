@@ -5,28 +5,58 @@ updates:
     target-branch: main
     schedule:
       interval: weekly
+    # One weekly PR per ecosystem for minor/patch bumps keeps Cargo.lock and
+    # pnpm-lock churn low; the sccache bundle invalidates once per grouped
+    # merge instead of once per dependency. Major bumps stay individual so a
+    # risky release can be bisected and reviewed on its own.
+    groups:
+      minor-and-patch:
+        update-types:
+          - minor
+          - patch
   - package-ecosystem: cargo
     directory: /
     target-branch: main
     schedule:
       interval: weekly
+    groups:
+      minor-and-patch:
+        update-types:
+          - minor
+          - patch
   - package-ecosystem: github-actions
     directory: /
     target-branch: main
     schedule:
       interval: weekly
+    groups:
+      all:
+        patterns:
+          - "*"
   - package-ecosystem: docker
     directory: /
     target-branch: main
     schedule:
       interval: weekly
+    groups:
+      all:
+        patterns:
+          - "*"
   - package-ecosystem: docker
     directory: /apps/web
     target-branch: main
     schedule:
       interval: weekly
+    groups:
+      all:
+        patterns:
+          - "*"
   - package-ecosystem: docker
     directory: /docker
     target-branch: main
     schedule:
       interval: weekly
+    groups:
+      all:
+        patterns:
+          - "*"
