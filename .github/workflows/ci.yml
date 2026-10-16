@@ -135,6 +135,22 @@ jobs:
             ~/.cargo/git
           key: cargo-${{ runner.os }}-1.95.0-${{ hashFiles('Cargo.lock') }}
           restore-keys: cargo-${{ runner.os }}-1.95.0-
+      # sccache runs against local disk storage shipped as ONE cache bundle per
+      # run: the ghac backend stores one GitHub cache entry per compiled object,
+      # blows past GitHub's save rate limit, and every concurrent writer loses
+      # (observed 577/577 cache_write_errors with 0 stored objects). Only the
+      # test lane persists the bundle (save step below) because its
+      # lib/bins/examples coverage warms every other rustc lane; clippy-driver
+      # and instrumented objects are lane-local and stay cold.
+      - name: Restore sccache bundle
+        if: (github.event_name == 'push' || needs.changes.outputs.rust == 'true') && matrix.command != 'fmt'
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/sccache
+          key: sccache-bundle-${{ runner.os }}-rust-${{ hashFiles('Cargo.lock') }}-${{ github.run_id }}
+          restore-keys: |
+            sccache-bundle-${{ runner.os }}-rust-${{ hashFiles('Cargo.lock') }}-
+            sccache-bundle-${{ runner.os }}-rust-
       - name: Set up sccache for compile-heavy checks
         if: (github.event_name == 'push' || needs.changes.outputs.rust == 'true') && matrix.command != 'fmt'
         uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba # v0.0.11
@@ -142,12 +158,7 @@ jobs:
           version: v0.17.0
       - name: Enable sccache compiler wrapper
         if: (github.event_name == 'push' || needs.changes.outputs.rust == 'true') && matrix.command != 'fmt'
-        run: |
-          {
-            echo "SCCACHE_GHA_ENABLED=true"
-            echo "RUSTC_WRAPPER=sccache"
-            echo "SCCACHE_GHA_RW_MODE=READ_WRITE"
-          } >> "$GITHUB_ENV"
+        run: echo "RUSTC_WRAPPER=sccache" >> "$GITHUB_ENV"
       - name: Validate Cargo workspace architecture
         if: (github.event_name == 'push' || needs.changes.outputs.rust == 'true') && matrix.command == 'fmt'
         run: |
@@ -165,6 +176,12 @@ jobs:
             test) cargo nextest run --workspace --lib --bins --examples --locked ;;
             doctest) cargo test --doc --workspace --locked ;;
           esac
+      - name: Save sccache bundle
+        if: always() && (github.event_name == 'push' || needs.changes.outputs.rust == 'true') && matrix.command == 'test'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/sccache
+          key: sccache-bundle-${{ runner.os }}-rust-${{ hashFiles('Cargo.lock') }}-${{ github.run_id }}
       - name: Show sccache statistics
         if: always() && (github.event_name == 'push' || needs.changes.outputs.rust == 'true') && matrix.command != 'fmt'
         run: |
@@ -203,17 +220,9 @@ jobs:
             ~/.cargo/git
           key: cargo-${{ runner.os }}-1.95.0-${{ hashFiles('Cargo.lock') }}
           restore-keys: cargo-${{ runner.os }}-1.95.0-
-      - name: Set up sccache
-        uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba # v0.0.11
-        with:
-          version: v0.17.0
-      - name: Enable read-only sccache compiler wrapper
-        run: |
-          {
-            echo "SCCACHE_GHA_ENABLED=true"
-            echo "SCCACHE_GHA_RW_MODE=READ_ONLY"
-            echo "RUSTC_WRAPPER=sccache"
-          } >> "$GITHUB_ENV"
+      # llvm-cov compiles with instrumentation, so every object is unique to
+      # this lane: the shared bundle cannot warm it, and a compiler wrapper
+      # would only cache objects that nothing else ever consumes.
       - name: Run Rust test coverage
         env:
           SQLX_OFFLINE: "true"
@@ -232,14 +241,6 @@ jobs:
           name: rust-coverage-${{ github.sha }}
           path: coverage/rust/
           retention-days: 14
-      - name: Show sccache statistics
-        if: always()
-        run: |
-          {
-            echo '```'
-            "${SCCACHE_PATH:-sccache}" --show-stats
-            echo '```'
-          } | tee -a "$GITHUB_STEP_SUMMARY"
 
   web:
     name: Web
@@ -369,6 +370,15 @@ jobs:
             ~/.cargo/git
           key: cargo-${{ runner.os }}-1.95.0-${{ hashFiles('Cargo.lock') }}
           restore-keys: cargo-${{ runner.os }}-1.95.0-
+      - name: Restore sccache bundle
+        if: github.event_name == 'push' || needs.changes.outputs.rust == 'true' || needs.changes.outputs.web == 'true'
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/sccache
+          key: sccache-bundle-${{ runner.os }}-rust-${{ hashFiles('Cargo.lock') }}-${{ github.run_id }}
+          restore-keys: |
+            sccache-bundle-${{ runner.os }}-rust-${{ hashFiles('Cargo.lock') }}-
+            sccache-bundle-${{ runner.os }}-rust-
       - name: Set up sccache
         if: github.event_name == 'push' || needs.changes.outputs.rust == 'true' || needs.changes.outputs.web == 'true'
         uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba # v0.0.11
@@ -376,12 +386,7 @@ jobs:
           version: v0.17.0
       - name: Enable sccache compiler wrapper
         if: github.event_name == 'push' || needs.changes.outputs.rust == 'true' || needs.changes.outputs.web == 'true'
-        run: |
-          {
-            echo "SCCACHE_GHA_ENABLED=true"
-            echo "RUSTC_WRAPPER=sccache"
-            echo "SCCACHE_GHA_RW_MODE=READ_WRITE"
-          } >> "$GITHUB_ENV"
+        run: echo "RUSTC_WRAPPER=sccache" >> "$GITHUB_ENV"
       - name: Set up pnpm
         if: github.event_name == 'push' || needs.changes.outputs.rust == 'true' || needs.changes.outputs.web == 'true'
         uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
@@ -473,17 +478,20 @@ jobs:
             ~/.cargo/git
           key: cargo-${{ runner.os }}-1.95.0-${{ hashFiles('Cargo.lock') }}
           restore-keys: cargo-${{ runner.os }}-1.95.0-
+      - name: Restore sccache bundle
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/sccache
+          key: sccache-bundle-${{ runner.os }}-rust-${{ hashFiles('Cargo.lock') }}-${{ github.run_id }}
+          restore-keys: |
+            sccache-bundle-${{ runner.os }}-rust-${{ hashFiles('Cargo.lock') }}-
+            sccache-bundle-${{ runner.os }}-rust-
       - name: Set up sccache
         uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba # v0.0.11
         with:
           version: v0.17.0
       - name: Enable sccache compiler wrapper
-        run: |
-          {
-            echo "SCCACHE_GHA_ENABLED=true"
-            echo "RUSTC_WRAPPER=sccache"
-            echo "SCCACHE_GHA_RW_MODE=READ_WRITE"
-          } >> "$GITHUB_ENV"
+        run: echo "RUSTC_WRAPPER=sccache" >> "$GITHUB_ENV"
       - name: Apply database migrations
         env:
           DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/deepref
@@ -533,14 +541,27 @@ jobs:
           node-version: 24.21.0
           cache: pnpm
       - run: pnpm install --frozen-lockfile
+      # actions/cache's implicit post-save lost its reservation whenever cache
+      # traffic peaked ("another job may be creating this cache"). Restore and
+      # save are split explicitly, and save only runs when the lockfile key
+      # missed, i.e. once per Playwright version bump.
       - name: Restore Playwright browsers
-        uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        id: playwright-cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ~/.cache/ms-playwright
           key: playwright-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}
-          restore-keys: playwright-${{ runner.os }}-
+          restore-keys: |
+            playwright-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}-
+            playwright-${{ runner.os }}-
       - name: Install Chromium
         run: pnpm --filter @deepref/web exec playwright install --with-deps chromium
+      - name: Save Playwright browsers
+        if: steps.playwright-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}
       - name: Build web preview bundle
         run: pnpm --filter @deepref/web exec vite build
       - name: Run browser tests
