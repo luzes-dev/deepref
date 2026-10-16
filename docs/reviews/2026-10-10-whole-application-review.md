@@ -81,7 +81,7 @@ The stack is a Rust Axum API and worker sharing one binary, PostgreSQL as the on
  Caddy (web image): /api/* → API, else SPA          Vite proxy in dev
    ▼
  deepref-server serve (Axum, ~254 routes, 166 OpenAPI ops)
-   │  routes → deepref-postgres free fns (639 queries)  + 61 queries in handlers
+   │  routes → deepref-app free fns (639 queries)  + 61 queries in handlers
    │          → plpgsql (38 functions, 24 triggers: dispatch, visibility, transitions)
    ▼
  PostgreSQL 17 + pgvector  ── single source of truth: state, events, jobs, AI audit
@@ -166,19 +166,19 @@ The assistant is a separate stack:
 
 | # | Finding | Category | Sev | Conf | Evidence |
 |---|---|---|---|---|---|
-| 1 | DB-backed integration suite (~30k LOC) never runs in CI. Tests skip silently without `DATABASE_URL`, and the CI test step doesn't set it. In parallel the suite shows 19 interference failures, because the mutex is in-process only and tests claim global jobs. | Defect (verification) | **P1** | Very high **[re-verified: 837/856 parallel; 33/33 of the failing binaries pass serially]** | `ci.yml:579-581`, `crates/postgres/tests/jobs.rs:18-19,64-66`, `db-tests.log`, `db-tests-serial.log` |
+| 1 | DB-backed integration suite (~30k LOC) never runs in CI. Tests skip silently without `DATABASE_URL`, and the CI test step doesn't set it. In parallel the suite shows 19 interference failures, because the mutex is in-process only and tests claim global jobs. | Defect (verification) | **P1** | Very high **[re-verified: 837/856 parallel; 33/33 of the failing binaries pass serially]** | `ci.yml:579-581`, `crates/app/tests/jobs.rs:18-19,64-66`, `db-tests.log`, `db-tests-serial.log` |
 | 2 | No authentication. Identity is a client header from per-tab sessionStorage (two different defaults), yet blinding, fresh-auditor checks, kappa and audit attribution depend on it. Unsafe deploy defaults: `0.0.0.0`, `APP_ENV=local`, published images. DNS rebinding against the local API is plausible (no Host check). | Defect / Architecture | **P1** (P0 if network-exposed) | Very high **[re-verified]** | `routes/actor.rs`, `deduplication.rs:335-337`, `apps/web/src/lib/api/reviewer.ts`, `http-api/src/config.rs:17-18`, `config/src/lib.rs:41`; sec S1/S2/S8 |
 | 3 | The AI-first sweep turns *any* failure computing semantic identity into a committed demotion that **reopens finalized, human-audited exclusions** and suspends AI-first, every 30 s on every worker. This contradicts ADR 0005 §2.4. | Defect | **P1** | High **[re-verified: `.ok().is_some_and` + sweep includes `finalized`]** | `ai_first/routing.rs:35-61, 261-275`, `cohorts.rs:283-386`; data F2 |
 | 4 | Assistant `screen_reports` plans apply up to 25×200 decisions as the confirming human. They bypass autonomy settings, calibration, blinding and exposure provenance. The revision is read at confirm time (defeating the CAS), the card shows only the model-written summary, and each report is its own transaction (partial plans). | Defect / Product | **P1** | Very high **[re-verified]** | `routes/assistant/plans.rs:631-728`, `AssistantPlanCard.svelte:94-103`; ai F2, sec S7 |
 | 5 | Holding or quickly re-pressing I/E/M records decisions on reports never displayed: `isPending` is false across `await updateUrl`, and `event.repeat` is not checked. | Defect | **P1** (integrity of the highest-frequency action) | High **[re-verified]** | `ScreeningFocus.svelte:312-334, 461-475`; fe F1 |
-| 6 | Job queue robustness: | Defect | P2 | High | `jobs.rs:12-28,59-66,119-183`, `worker/src/lib.rs:92,124-133,294`, `crates/postgres/src/workflows.rs:1338-1620`; data F3/F4, ops F2 |
+| 6 | Job queue robustness: | Defect | P2 | High | `jobs.rs:12-28,59-66,119-183`, `worker/src/lib.rs:92,124-133,294`, `crates/app/src/workflows.rs:1338-1620`; data F3/F4, ops F2 |
 | | • lease recovery ignores `max_attempts`, so a poison job loops forever; | | | | |
 | | • a panicking job task stops the whole worker process; | | | | |
 | | • the fencing token is per process, not per claim; | | | | |
 | | • workflow steps have no fence; | | | | |
 | | • a renewal hiccup cancels in-flight work. | | | | |
 | 7 | A failed or blocked review run can never be retried. The idempotency key is a pure function of the manifest, and terminal runs are returned forever. | Defect | P2 | High | `review_runs.rs:182`, `0019:429-440`; ai F1 |
-| 8 | Workflow HTTP node: stored secrets are keyed by node, not origin. A templated or edited URL can exfiltrate them. Templates are not context-encoded. Inbound hooks rely on bearer-in-URL tokens and an unbounded rate-limit map. | Defect (security) | P2 (P1 if hosted) | High **[re-verified keying]** | `crates/postgres/src/workflows.rs:276-394`, `validate.rs:220`, `conditions.rs:191`; sec S3/S9/S11 |
+| 8 | Workflow HTTP node: stored secrets are keyed by node, not origin. A templated or edited URL can exfiltrate them. Templates are not context-encoded. Inbound hooks rely on bearer-in-URL tokens and an unbounded rate-limit map. | Defect (security) | P2 (P1 if hosted) | High **[re-verified keying]** | `crates/app/src/workflows.rs:276-394`, `validate.rs:220`, `conditions.rs:191`; sec S3/S9/S11 |
 | 9 | Run-model sprawl: recipe automations, the workflow engine and the review DAG each have their own state machine, idempotency and retry semantics, entangled through the jobs table. About 20k LOC of workflow/automation, roughly 4× screening. | Architecture | P2 | High | arch A5, ai §5, prod P1 |
 | 10 | Legacy and v2 ingestion dual-write with no contract phase. About 10 tables plus N events per DOI. `ingestions` and `acquisition_runs` drift (seen in dev data). Status is recomputed O(N) per item under a READ COMMITTED race. Metric recompute is uncoalesced, with 35% serialization failures. | Architecture / Defect | P2 | High | `store.rs:261-996`, `graph.rs:180-277`; data F5/F6/F7 |
 | 11 | Operators are blind: | Defect (ops) | P2 | High | ops F3/F9 |
@@ -284,7 +284,7 @@ Beyond D #1, #3–#7 and #10–#13:
 - *Declared* (ADR 0002, `architecture.md`): domain → application (use cases and ports) → adapters.
 - *Actual:* a transaction script (arch A1):
   - `deepref-application` has **zero `async fn`**: pure rules plus 10 port traits;
-  - `deepref-postgres` (26.7k non-test lines, 639 queries) is the real application layer;
+  - `deepref-app` (26.7k non-test lines, 639 queries) is the real application layer;
   - plpgsql holds 38 functions and 24 triggers, mixing invariants with *policy* (visibility, dispatch, transition tables);
   - handlers run 61 queries;
   - the worker's `store.rs` has 47 more.

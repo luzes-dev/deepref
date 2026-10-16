@@ -44,7 +44,7 @@ exposed at port 55435; the earlier 55434 database was not modified.
 
 DATABASE_URL=postgres://deepref:deepref@127.0.0.1:55435/deepref cargo test -p deepref-ai
 
-DATABASE_URL=postgres://deepref:deepref@127.0.0.1:55435/deepref cargo test -p deepref-postgres --test migration_0016 --test ai
+DATABASE_URL=postgres://deepref:deepref@127.0.0.1:55435/deepref cargo test -p deepref-app --test migration_0016 --test ai
 
 The tests cover provider swapping without task changes, retry/reuse and
 proposal recovery, content-addressed hashes, schema-before-semantic

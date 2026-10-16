@@ -26,7 +26,7 @@ pub(crate) async fn generate_screening_suggestion(
     headers: HeaderMap,
     Json(input): Json<GenerateScreeningRequest>,
 ) -> Result<AcceptedReviewRun, ApiError> {
-    let snapshot = deepref_postgres::schedule_screening_review(
+    let snapshot = deepref_app::schedule_screening_review(
         &state.pool,
         project_id,
         report_id,
@@ -60,7 +60,7 @@ pub(crate) async fn generate_study_grouping_suggestion(
     Path((project_id, report_id)): Path<(Uuid, Uuid)>,
     headers: HeaderMap,
 ) -> Result<AcceptedReviewRun, ApiError> {
-    let snapshot = deepref_postgres::schedule_study_grouping_review(
+    let snapshot = deepref_app::schedule_study_grouping_review(
         &state.pool,
         project_id,
         report_id,
@@ -93,7 +93,7 @@ pub(crate) async fn generate_appraisal_prefill_suggestion(
     headers: HeaderMap,
     Json(input): Json<GenerateAppraisalPrefillRequest>,
 ) -> Result<AcceptedReviewRun, ApiError> {
-    let snapshot = deepref_postgres::schedule_appraisal_prefill_review(
+    let snapshot = deepref_app::schedule_appraisal_prefill_review(
         &state.pool,
         project_id,
         report_id,
@@ -131,7 +131,7 @@ pub(crate) async fn generate_duplicate_suggestion(
     headers: HeaderMap,
     Json(input): Json<GenerateDuplicateRequest>,
 ) -> Result<AcceptedReviewRun, ApiError> {
-    let snapshot = deepref_postgres::schedule_duplicate_detection_review(
+    let snapshot = deepref_app::schedule_duplicate_detection_review(
         &state.pool,
         project_id,
         record_id,
@@ -174,7 +174,7 @@ pub(crate) async fn get_review_run(
     }
     let run_id = deepref_review::ReviewRunId::new(run_id)
         .map_err(|error| ApiError::BadRequest(error.to_string()))?;
-    let snapshot = deepref_postgres::PostgresReviewScheduler::new(&state.pool)
+    let snapshot = deepref_app::PostgresReviewScheduler::new(&state.pool)
         .get(project_id.into(), run_id)
         .await
         .map_err(map_review_preparation_error)?;
@@ -219,11 +219,11 @@ pub(crate) async fn retry_review_run(
     let run_id = deepref_review::ReviewRunId::new(run_id)
         .map_err(|error| ApiError::BadRequest(error.to_string()))?;
     let intent = if input.regenerate {
-        deepref_postgres::ReviewScheduleIntent::Regenerate
+        deepref_app::ReviewScheduleIntent::Regenerate
     } else {
-        deepref_postgres::ReviewScheduleIntent::Request
+        deepref_app::ReviewScheduleIntent::Request
     };
-    let snapshot = deepref_postgres::retry_review_run(
+    let snapshot = deepref_app::retry_review_run(
         &state.pool,
         project_id.into(),
         run_id,
@@ -289,25 +289,21 @@ pub(super) fn review_run_dto(
     })
 }
 
-pub(crate) fn map_review_preparation_error(
-    error: deepref_postgres::ReviewPreparationError,
-) -> ApiError {
+pub(crate) fn map_review_preparation_error(error: deepref_app::ReviewPreparationError) -> ApiError {
     match error {
-        deepref_postgres::ReviewPreparationError::Review(error) => map_postgres_review_error(error),
-        deepref_postgres::ReviewPreparationError::Protocol(error) => map_protocol_error(error),
-        deepref_postgres::ReviewPreparationError::AiProposal(error) => map_ai_proposal_error(error),
-        deepref_postgres::ReviewPreparationError::Extraction(error) => match error {
-            deepref_postgres::ExtractionError::Database(error) => ApiError::Database(error),
-            deepref_postgres::ExtractionError::DefinitionNotFound
-            | deepref_postgres::ExtractionError::StudyNotFound => {
-                ApiError::NotFound(error.to_string())
-            }
+        deepref_app::ReviewPreparationError::Review(error) => map_postgres_review_error(error),
+        deepref_app::ReviewPreparationError::Protocol(error) => map_protocol_error(error),
+        deepref_app::ReviewPreparationError::AiProposal(error) => map_ai_proposal_error(error),
+        deepref_app::ReviewPreparationError::Extraction(error) => match error {
+            deepref_app::ExtractionError::Database(error) => ApiError::Database(error),
+            deepref_app::ExtractionError::DefinitionNotFound
+            | deepref_app::ExtractionError::StudyNotFound => ApiError::NotFound(error.to_string()),
             _ => ApiError::BadRequest(error.to_string()),
         },
-        deepref_postgres::ReviewPreparationError::Study(error) => {
+        deepref_app::ReviewPreparationError::Study(error) => {
             super::super::study::map_study_error(error)
         }
-        deepref_postgres::ReviewPreparationError::InvalidInput(message)
+        deepref_app::ReviewPreparationError::InvalidInput(message)
             if message.contains("changed") =>
         {
             ApiError::Conflict {
@@ -316,44 +312,40 @@ pub(crate) fn map_review_preparation_error(
                 details: Value::Null,
             }
         }
-        deepref_postgres::ReviewPreparationError::InvalidInput(message) => {
-            ApiError::BadRequest(message)
-        }
+        deepref_app::ReviewPreparationError::InvalidInput(message) => ApiError::BadRequest(message),
     }
 }
 
-fn map_postgres_review_error(error: deepref_postgres::PostgresReviewError) -> ApiError {
+fn map_postgres_review_error(error: deepref_app::PostgresReviewError) -> ApiError {
     match error {
-        deepref_postgres::PostgresReviewError::Database(error) => ApiError::Database(error),
-        deepref_postgres::PostgresReviewError::Serialization(error) => {
-            ApiError::Internal(error.into())
-        }
-        deepref_postgres::PostgresReviewError::Review(error) => {
+        deepref_app::PostgresReviewError::Database(error) => ApiError::Database(error),
+        deepref_app::PostgresReviewError::Serialization(error) => ApiError::Internal(error.into()),
+        deepref_app::PostgresReviewError::Review(error) => {
             ApiError::Configuration(error.to_string())
         }
-        deepref_postgres::PostgresReviewError::Ai(error) => map_ai_error(error),
-        deepref_postgres::PostgresReviewError::RunNotFound => {
+        deepref_app::PostgresReviewError::Ai(error) => map_ai_error(error),
+        deepref_app::PostgresReviewError::RunNotFound => {
             ApiError::NotFound("review run not found".to_owned())
         }
-        deepref_postgres::PostgresReviewError::InvalidState(message) => ApiError::Conflict {
+        deepref_app::PostgresReviewError::InvalidState(message) => ApiError::Conflict {
             code: "review_run_state_conflict".to_owned(),
             message,
             details: Value::Null,
         },
-        deepref_postgres::PostgresReviewError::InvalidStoredValue(message) => {
+        deepref_app::PostgresReviewError::InvalidStoredValue(message) => {
             ApiError::Internal(anyhow::anyhow!(message))
         }
-        deepref_postgres::PostgresReviewError::WorkerOwnership => {
+        deepref_app::PostgresReviewError::WorkerOwnership => {
             ApiError::Internal(anyhow::anyhow!("review worker lease is not owned"))
         }
-        deepref_postgres::PostgresReviewError::FinalizationConflict => ApiError::Conflict {
+        deepref_app::PostgresReviewError::FinalizationConflict => ApiError::Conflict {
             code: "review_finalization_conflict".to_owned(),
             message: "review proposal finalization conflicts with persisted state".to_owned(),
             details: Value::Null,
         },
-        deepref_postgres::PostgresReviewError::CalibrationRefused(refusal) => {
+        deepref_app::PostgresReviewError::CalibrationRefused(refusal) => {
             let details = match &refusal {
-                deepref_postgres::CalibrationRefusal::Stale { changes } => serde_json::json!({
+                deepref_app::CalibrationRefusal::Stale { changes } => serde_json::json!({
                     "changes": changes
                         .iter()
                         .map(|change| change.as_str())

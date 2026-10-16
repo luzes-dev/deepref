@@ -354,12 +354,13 @@ mod tests {
     use axum::response::IntoResponse;
     #[tokio::test]
     async fn screening_database_failures_are_sanitized_server_errors() {
-        let error =
-            crate::routes::review::map_screening_error(deepref_postgres::ScreeningError::AiFirst(
-                Box::new(deepref_postgres::AiFirstError::Database(
-                    sqlx::Error::Protocol("secret SQL and parameters".into()),
+        let error = crate::routes::review::map_screening_error(
+            deepref_app::screening::ScreeningError::AiFirst(Box::new(
+                deepref_app::AiFirstError::Database(sqlx::Error::Protocol(
+                    "secret SQL and parameters".into(),
                 )),
-            ));
+            )),
+        );
         let response = error.into_response();
         assert_eq!(response.status(), StatusCode::INTERNAL_SERVER_ERROR);
         let body = to_bytes(response.into_body(), usize::MAX).await.unwrap();

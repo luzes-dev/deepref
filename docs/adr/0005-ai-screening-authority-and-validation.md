@@ -1313,7 +1313,7 @@ The interim screening source boundary includes:
 - worker `processor.rs` and workflow `nodes.rs`.
 
 The V1 extension also includes `crates/application/src/ai_first.rs`, the
-`crates/postgres/src/ai_first/` directory and migration 0054;
+`crates/app/src/ai_first/` directory and migration 0054;
 `crates/review/src/ai_first.rs` is covered by the review source directory.
 The declared policy component includes V1 metadata, and golden parse outcomes
 include the automation eligibility result. These are requirements for the

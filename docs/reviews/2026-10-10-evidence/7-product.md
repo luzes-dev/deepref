@@ -1,6 +1,6 @@
 # DeepRef whole-application review: product strategy lens
 
-Reviewer 7 of 7. Read-only. Sources: README, docs/prd/*, docs/adr/* (especially ADR 0005), docs/acceptance/*, docs/ui-review.md, docs/ux-walkthrough/relatorio-2026-10-06.html, the handoff docs, docs/rete-workflow-migration.md, docs/openapi.json (166 operations), the route tree and navigation, crates/domain, crates/postgres/migrations (0001–0058), and targeted reads of the code that implements key capabilities. Every claim below about capabilities cites the code or contract I checked.
+Reviewer 7 of 7. Read-only. Sources: README, docs/prd/*, docs/adr/* (especially ADR 0005), docs/acceptance/*, docs/ui-review.md, docs/ux-walkthrough/relatorio-2026-10-06.html, the handoff docs, docs/rete-workflow-migration.md, docs/openapi.json (166 operations), the route tree and navigation, crates/domain, crates/app/migrations (0001–0058), and targeted reads of the code that implements key capabilities. Every claim below about capabilities cites the code or contract I checked.
 
 ---
 
@@ -42,7 +42,7 @@ Side destinations get equal weight in the navigation: Articles, Graph, Recommend
 The core value is **"AI help you can defend in a methods section."** It rests on:
 - every decision being an append-only event with protocol version, actor, revision and supersession (`screening_events`);
 - AI output arriving as a typed proposal with criterion-level judgments and block-level evidence (`ai_proposal_criterion_judgments`, `ai_proposal_evidence`);
-- blinding plus exposure provenance, so agreement statistics exclude pairs where the human saw the AI first (`ai_opinion_exposures`, and `StageAgreement.excluded_exposed` in `crates/postgres/src/ai_reviewer.rs:402`);
+- blinding plus exposure provenance, so agreement statistics exclude pairs where the human saw the AI first (`ai_opinion_exposures`, and `StageAgreement.excluded_exposed` in `crates/app/src/ai_reviewer.rs:402`);
 - immutable compiled run manifests and a deep audit export.
 
 **It is not obvious from the UI.** The defensibility story never reaches a user-facing artifact: there is no methods text, no AI disclosure, and no agreement report on the PRISMA/report page. Meanwhile Graph, Recommendations, Automations and Assistant compete for attention at the same level as screening. The AI setup is split across env vars, global Settings (autonomy levels) and a tab inside screening (AI-first). A new user sees a citation-graph tool with an SR workflow attached, which is how the product grew (`docs/architecture.md` opens "DeepRef maps article citation networks from seed DOIs"). They do not see an SR tool whose distinctive feature is trustworthy AI.
@@ -72,7 +72,7 @@ Benchmarks: Covidence (Cv), Rayyan (Ry), DistillerSR (DS), EPPI-Reviewer (EPPI),
 | **User accounts, project members, roles** | **Missing.** "No user/tenant model" (`docs/architecture.md`). The actor is a self-asserted `x-actor-id` from `sessionStorage` (`apps/web/src/lib/api/reviewer.ts`). The reviewer ID is editable only inside the AI-first panel (`AiFirstPanel.svelte:171`). | All except AS-solo | **Critical** |
 | **Dual independent human screening with blinding** | **Missing.** `screening_state` has one status per report per stage (`0006_evidence_workspace.sql:125`). The only "second reviewer" is AI (`ai_reviewer_decisions`). Two blind human labels exist **only** inside AI-first audits (`ai_screening_audit_labels`, `0054`). | Cv, Ry, DS, EPPI | **Critical** for Cochrane-grade |
 | Conflict resolution | **Partial:** human vs AI only. `ConflictsPanel.svelte` and `POST …/ai/reviewer-decisions/{id}/resolve`, with resolution enum `kept_human/adopted_ai/other`. | Cv, Ry, DS, EPPI | High |
-| Agreement statistics (kappa) | **Partial:** human–AI Cohen's kappa over I/E/M, excluding exposed pairs (`crates/postgres/src/ai_reviewer.rs:412`). No human–human kappa, no confidence interval or PABAK, and not in any export or report. | Cv, DS, EPPI | High |
+| Agreement statistics (kappa) | **Partial:** human–AI Cohen's kappa over I/E/M, excluding exposed pairs (`crates/app/src/ai_reviewer.rs:412`). No human–human kappa, no confidence interval or PABAK, and not in any export or report. | Cv, DS, EPPI | High |
 | Protocol authoring and versioning | **Has** (`crates/domain/src/protocol.rs`, publish/amend/diff). | Cv (basic), DS | — |
 | PROSPERO/OSF registration export | **Missing.** No registration number, outcomes, planned analyses or planned RoB tool fields. Only `protocol.json`. | none native (Cv partial) | Medium |
 | **Search strategy documentation (PRISMA-S)** | **Missing.** The file import captures only format and column mapping (`ImportFileForm.svelte`). No database name, platform, date searched or query string. PRD 01 says acquisition runs record "query or import metadata", but the UI doesn't collect it. | DS, EPPI (partial) | **High** |
@@ -85,11 +85,11 @@ Benchmarks: Covidence (Cv), Rayyan (Ry), DistillerSR (DS), EPPI-Reviewer (EPPI),
 | GRADE / summary of findings | **Missing.** | Cv (basic), GRADEpro | Medium to high |
 | **Structured data extraction** | **Partial:** flat study-level fields of type text, number, boolean or date (`extraction_field_definitions`). One value per study per field. Values carry a source citation, history, an AI proposal path and a verification flag. No arms, outcomes or timepoints, no choice/categorical type, no dual extraction or consensus, no templates. | Cv, DS, EPPI | **High** |
 | Meta-analysis-ready export (RevMan / R metafor) | **Partial:** `extraction.csv` is long format, one row per value (`crates/http-api/src/routes/exports/review_tables.rs:261`). No wide study×outcome×arm table and no effect-size fields. | Cv (RevMan), DS, EPPI | Medium to high |
-| **PRISMA 2020 flow diagram** | **Has, with gaps.** Standard diagram plus SVG/PNG/JSON. Identification is a **single column** (`crates/postgres/src/prisma.rs:30-37`, `apps/web/src/lib/features/prisma/flow.ts`): no per-database n, no "other methods" column (citation searching, which is exactly what DOI traversal is), no registers, no update-review variant. AI-first exclusions are counted correctly (ADR 0005 §16). | Cv, DS | **High** |
+| **PRISMA 2020 flow diagram** | **Has, with gaps.** Standard diagram plus SVG/PNG/JSON. Identification is a **single column** (`crates/app/src/prisma.rs:30-37`, `apps/web/src/lib/features/prisma/flow.ts`): no per-database n, no "other methods" column (citation searching, which is exactly what DOI traversal is), no registers, no update-review variant. AI-first exclusions are counted correctly (ADR 0005 §16). | Cv, DS | **High** |
 | PRISMA checklist / methods text | **Missing.** | none | High (differentiator) |
 | Living review / search updates | **Partial:** "Weekly literature alert" templates (`crates/application/src/workflows/templates.rs:158-206`). `POST …/acquisitions/{id}/refresh` works only for Crossref citation traversal and rejects file imports (`crates/http-api/src/routes/acquisitions.rs:302-325`). The search is not tied to the protocol, and PRISMA has no update cycles. | DS, EPPI (some) | Medium |
-| Audit trail export | **Has, and it is deep:** screening, study and appraisal events, AI runs, manifests, step attempts, artifacts and lineage, cohorts, labels, exposures and calibration (`crates/postgres/src/audit_export.rs`). But the CSV has raw JSON snapshot columns (`exports.rs:423-444`), it is not human-readable, and nothing summarises it. | DS (audit), others weak | High (differentiator) |
-| **Screening prioritisation (active learning)** | **Missing.** Queue sort is only created, title or year (`crates/postgres/src/screening.rs:855-863`). | Ry, Cv, DS, EPPI, AS (core) | **High** |
+| Audit trail export | **Has, and it is deep:** screening, study and appraisal events, AI runs, manifests, step attempts, artifacts and lineage, cohorts, labels, exposures and calibration (`crates/app/src/audit_export.rs`). But the CSV has raw JSON snapshot columns (`exports.rs:423-444`), it is not human-readable, and nothing summarises it. | DS (audit), others weak | High (differentiator) |
+| **Screening prioritisation (active learning)** | **Missing.** Queue sort is only created, title or year (`crates/app/src/screening.rs:855-863`). | Ry, Cv, DS, EPPI, AS (core) | **High** |
 | AI screening assistance | **Has, best in class on governance** (suggest, blinded second reviewer, AI-first with audit). | DS, Ry (newer), others | — (differentiator) |
 | Keyword highlighting in the reader | **Missing** (no highlight in `features/screening`). | Ry, Cv | Medium (small effort) |
 | Record labels and tags | **Missing.** | Ry, Cv | Medium |
@@ -251,7 +251,7 @@ Each item condenses nine points: **Problem** · **Why now** (what in the current
 - The `action.record_decision` node has an `Act` branch that writes screening events (`nodes.rs:795+`). It is unreachable because screening disallows `act`, but it shows how far the engine reaches into scientific state.
 
 **P2. Remove or park calibration bundles**
-- `insert_review_calibration_bundle` (`crates/postgres/src/review_calibration.rs:192`) has **no non-test caller**.
+- `insert_review_calibration_bundle` (`crates/app/src/review_calibration.rs:192`) has **no non-test caller**.
 - The `ReviewOrigin::AutomationTriggered { calibration_bundle_id }` admission path has **no production caller** (only `ReviewerRequested`, `AdvisoryTriggered` and `AiFirstTriggered` are used).
 - ADR 0005 states "There is no product calibration-bundle creation flow."
 - Yet they carry migrations 0022, 0050, 0053 and 0056, a deployment recalibration runbook (`docs/deployment-recalibration.md`), and audit-export joins.
@@ -296,7 +296,7 @@ Each item condenses nine points: **Problem** · **Why now** (what in the current
   - For a solo user with no identity model this is unreachable in practice. Explore hiding the tab until the unscreened count passes a threshold, with a clear "allowed but unlikely to help" message.
   - Validate with users whether anyone reaches that scale.
 - **E2. Reuse the hypergeometric audit for stopping rules.**
-  - With prioritised screening (H4), the hard methodological question is when to stop. DeepRef's cohort, sample, label and one-look machinery (`crates/postgres/src/ai_first/`) is close to what a stopping-rule audit needs (screen a random sample of the unscreened remainder and bound the missed includes).
+  - With prioritised screening (H4), the hard methodological question is when to stop. DeepRef's cohort, sample, label and one-look machinery (`crates/app/src/ai_first/`) is close to what a stopping-rule audit needs (screen a random sample of the unscreened remainder and bound the missed includes).
   - That is simpler and more widely applicable than quarantine-based AI-first, and it would make DeepRef the defensible ASReview-style tool.
 - **E3. Draft a PROSPERO/OSF registration from the structured protocol**, with AI drafting the free-text fields under the proposal model.
 - **E4. Cross-project reuse:** libraries of exclusion reasons, extraction templates and custom appraisal tools (user-defined JSON definitions are architecturally natural).

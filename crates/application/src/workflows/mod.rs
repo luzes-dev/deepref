@@ -4,7 +4,7 @@
 //! HTTP layer share.
 //!
 //! Everything in this module is free of I/O so it can be unit tested without a
-//! database. Persistence lives in `deepref-postgres::workflows`; node
+//! database. Persistence lives in `deepref-app::workflows`; node
 //! execution lives in `deepref-worker::workflows`.
 
 pub mod autonomy;

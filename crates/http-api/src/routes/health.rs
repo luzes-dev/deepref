@@ -101,7 +101,7 @@ pub async fn live(State(state): State<AppState>) -> Json<LivenessResponse> {
 }
 
 fn required_schema_version() -> i64 {
-    deepref_postgres::MIGRATOR
+    deepref_app::MIGRATOR
         .iter()
         .map(|migration| migration.version)
         .max()
@@ -223,7 +223,7 @@ mod tests {
     fn readiness_requires_latest_embedded_migration() {
         assert_eq!(
             required_schema_version(),
-            deepref_postgres::MIGRATOR
+            deepref_app::MIGRATOR
                 .iter()
                 .map(|migration| migration.version)
                 .max()

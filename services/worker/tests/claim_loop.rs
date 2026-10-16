@@ -8,15 +8,15 @@ use std::{
     time::Duration,
 };
 
+use deepref_app::{enqueue_job_pool, job, migrate};
 use deepref_application::jobs::{ClaimedJob, JobLease};
 use deepref_domain::ProjectId;
-use deepref_postgres::{enqueue_job_pool, job, migrate};
 use deepref_worker::{ClaimLoopConfig, JobHandler, delivery::DeliveryAction, run_claim_loop};
 use sqlx::{PgPool, Row};
 use uuid::Uuid;
 
 async fn database() -> Option<PgPool> {
-    let pool = deepref_postgres::test_isolation::isolated_pool_from_env("DATABASE_URL", 8).await?;
+    let pool = deepref_app::test_isolation::isolated_pool_from_env("DATABASE_URL", 8).await?;
     migrate(&pool).await.expect("migrations apply");
     Some(pool)
 }

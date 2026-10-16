@@ -5,4 +5,4 @@
     clippy::string_slice
 )]
 pub const DURABILITY_MIGRATION: &str =
-    include_str!("../../../../crates/postgres/migrations/0004_ingestion_durability.sql");
+    include_str!("../../../../crates/app/migrations/0004_ingestion_durability.sql");

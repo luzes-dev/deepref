@@ -24,7 +24,7 @@ pub async fn run(
     loop {
         tokio::select! {
             _ = ticker.tick() => {
-                if let Err(error) = deepref_postgres::record_worker_heartbeat(&pool, &owner).await {
+                if let Err(error) = deepref_app::record_worker_heartbeat(&pool, &owner).await {
                     tracing::warn!(%error, owner, "worker heartbeat write failed");
                 }
             }
@@ -35,7 +35,7 @@ pub async fn run(
             }
         }
     }
-    if let Err(error) = deepref_postgres::remove_worker_heartbeat(&pool, &owner).await {
+    if let Err(error) = deepref_app::remove_worker_heartbeat(&pool, &owner).await {
         tracing::warn!(%error, owner, "worker heartbeat removal failed");
     }
 }

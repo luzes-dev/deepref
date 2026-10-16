@@ -5,15 +5,15 @@ use deepref_ai::{
     AiFuture, AiGateway, CompletionRequest, GatewayCompletion, ModelParameters, ModelProfile,
     ResolvedModel,
 };
+use deepref_app::{
+    ProtocolActor, claim_job, complete_job, insert_model_route, publish_protocol,
+    save_protocol_draft, start_ai_first_cohort, sweep_ai_first,
+};
 use deepref_application::{
     ProtocolCriterionCommand, PublishProtocolCommand, SaveProtocolDraftCommand,
 };
 use deepref_domain::{
     Actor, ActorKind, CriterionDimension, CriterionKind, CriterionStage, FrameworkKind,
-};
-use deepref_postgres::{
-    ProtocolActor, claim_job, complete_job, insert_model_route, publish_protocol,
-    save_protocol_draft, start_ai_first_cohort, sweep_ai_first,
 };
 use deepref_worker::{delivery::DeliveryAction, processor::handle_job_with_documents_owned_and_ai};
 use serde_json::{Value, json};
@@ -66,8 +66,7 @@ impl AiGateway for GroundedGateway {
 
 #[tokio::test]
 async fn compiled_worker_quarantines_only_eligible_exclusions_without_scientific_writes() {
-    let Some(pool) =
-        deepref_postgres::test_isolation::isolated_pool_from_env("DATABASE_URL", 8).await
+    let Some(pool) = deepref_app::test_isolation::isolated_pool_from_env("DATABASE_URL", 8).await
     else {
         return;
     };
@@ -243,7 +242,7 @@ async fn compiled_worker_quarantines_only_eligible_exclusions_without_scientific
         .await
         .unwrap();
     assert_eq!(status, "closed");
-    let export = deepref_postgres::load_audit_export_rows(&pool, project, 10_000)
+    let export = deepref_app::load_audit_export_rows(&pool, project, 10_000)
         .await
         .unwrap();
     assert!(
@@ -313,9 +312,7 @@ async fn compiled_worker_quarantines_only_eligible_exclusions_without_scientific
     let partial = start_ai_first_cohort(&pool, project, 98, false, &owner)
         .await
         .unwrap();
-    deepref_postgres::set_ai_budget(&pool, project, 0)
-        .await
-        .unwrap();
+    deepref_app::set_ai_budget(&pool, project, 0).await.unwrap();
     sweep_ai_first(&pool).await.unwrap();
     let status: String = sqlx::query_scalar("SELECT status FROM ai_screening_cohorts WHERE id=$1")
         .bind(partial)

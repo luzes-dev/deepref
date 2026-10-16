@@ -4,20 +4,20 @@
 
 use std::time::Duration;
 
-use deepref_application::workflows::{Endpoint, GraphEdge, GraphNode, Position, WorkflowGraph};
-use deepref_domain::{Actor, ActorKind, ProjectId};
-use deepref_postgres::{
+use deepref_app::{
     NodeOutcome, StartRun, StepClaim, UpdateWorkflow, begin_node_execution, claim_job,
     complete_job, create_workflow, fail_abandoned_steps, finish_node_execution,
     get_published_graph, get_workflow_run, publish_workflow, start_run, update_workflow,
 };
+use deepref_application::workflows::{Endpoint, GraphEdge, GraphNode, Position, WorkflowGraph};
+use deepref_domain::{Actor, ActorKind, ProjectId};
 use deepref_worker::{delivery::DeliveryAction, workflows};
 use serde_json::{Value, json};
 use sqlx::PgPool;
 use uuid::Uuid;
 
 async fn database() -> Option<PgPool> {
-    deepref_postgres::test_isolation::isolated_pool_from_env("DATABASE_URL", 8).await
+    deepref_app::test_isolation::isolated_pool_from_env("DATABASE_URL", 8).await
 }
 
 fn node(id: &str, node_type: &str, config: Value) -> GraphNode {
@@ -486,7 +486,7 @@ async fn notify_step(
     pool: &PgPool,
     project: ProjectId,
     run_id: Uuid,
-) -> deepref_postgres::NodeRunRecord {
+) -> deepref_app::NodeRunRecord {
     let run = get_workflow_run(pool, project, run_id).await.expect("run");
     run.nodes
         .into_iter()
@@ -777,12 +777,12 @@ async fn a_stale_attempt_cannot_restart_or_overwrite_a_reclaimed_step() {
         .expect("expired finish"),
         "expiry alone fences the outcome, even before recovery or takeover"
     );
-    deepref_postgres::record_node_retry(&pool, node_run_id, &stale, "expired retry")
+    deepref_app::record_node_retry(&pool, node_run_id, &stale, "expired retry")
         .await
         .expect("expired retry");
     assert_eq!(notify_step(&pool, project, run_id).await.status, "running");
     assert_eq!(
-        deepref_postgres::recover_expired_jobs(&pool)
+        deepref_app::recover_expired_jobs(&pool)
             .await
             .expect("recover"),
         1

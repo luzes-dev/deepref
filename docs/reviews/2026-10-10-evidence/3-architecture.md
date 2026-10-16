@@ -17,7 +17,7 @@ All line counts below exclude `tests/` directories and `*.spec`/`*.test` files. 
 
 | Crate | Layer (xtask) | Non-test LoC | Internal deps |
 |---|---|---|---|
-| `crates/postgres` | persistence | 26,703 (+17k tests) | application, ai, graph, domain, documents, events, review |
+| `crates/app` | persistence | 26,703 (+17k tests) | application, ai, graph, domain, documents, events, review |
 | `crates/http-api` | http | 18,773 (+9.9k) | 11 of the 15 library crates (everything except `grobid`, `telemetry`) |
 | `crates/ai` | ai | 14,950 | domain |
 | `crates/application` | application | 12,337 | domain |
@@ -45,7 +45,7 @@ The workspace has 18 members for about 100k lines of non-test Rust. `services/ap
 |---|---|---|
 | `crates/domain` (2.1k) | Typed IDs, the screening state machine (`transition`, `undo_transition`, `lib.rs:180-236`), protocol validation, bibliography identifiers | Pure, no I/O |
 | `crates/application` (12.3k) | **Pure** rules (appraisal/RoB2, PRISMA arithmetic, dedup scoring, the workflow planner, validation and catalog), plus 10 port traits | **0 `async fn`** in the whole crate. It holds no use cases. |
-| `crates/postgres` (26.7k, 639 `sqlx::query` calls) | The **de facto application layer**: preconditions, locking, orchestration, cross-context reads, visibility policy | e.g. `screening.rs:140-800` |
+| `crates/app` (26.7k, 639 `sqlx::query` calls) | The **de facto application layer**: preconditions, locking, orchestration, cross-context reads, visibility policy | e.g. `screening.rs:140-800` |
 | plpgsql in migrations | 38 functions and 24 triggers: dispatch, visibility, transitions, immutability | `dispatch_automation_trigger`, `ai_first_run_visible`, `ai_screening_proposal_withheld`, `enforce_automation_run_transition`, `recompute_project_metrics`, … |
 | `crates/http-api` | Orchestration and SQL in handlers (61 queries in 16 files, 8 `begin()`), external HTTP calls | `routes/acquisitions.rs` (18 queries), `routes/documents.rs:975` (Unpaywall) |
 | `services/worker` | Ingestion persistence (47 queries in `store.rs`), review execution, outbound HTTP, SMTP | `store.rs`, `processor.rs:902-1708`, `workflows/net.rs` |
@@ -70,7 +70,7 @@ So the code's stated architecture is hexagonal (domain, then application ports, 
 
 - **Current behavior.**
   - `deepref-application` has no async code and no orchestration (`git grep 'async fn' crates/application/src` returns nothing).
-  - Every use case is written as a free function in `deepref-postgres` that takes `&PgPool` or a transaction and mixes precondition checks, locking, domain calls, and SQL. Example, screening a report:
+  - Every use case is written as a free function in `deepref-app` that takes `&PgPool` or a transaction and mixes precondition checks, locking, domain calls, and SQL. Example, screening a report:
     - The pure rule is in `domain::transition` (`domain/src/lib.rs:180`).
     - "Protocol must be published" is in `postgres/src/screening.rs:751` (`ensure_published_protocol`).
     - "Exclusion reason must belong to the project" is at `:770`.
@@ -110,7 +110,7 @@ So the code's stated architecture is hexagonal (domain, then application ports, 
 | `OcrEngine` (`documents.rs:51`) | 0 | none |
 | `FullTextResolver` (`acquisition.rs:115`) | 0 | none |
 | `DocumentStore` (`documents.rs:36`) | 1 (`documents/src/lib.rs:488`) | `write_pdf` and `read_pdf` are never called. Callers use the concrete `DocumentStore::put`/`get` (a struct with the same name as the trait). |
-| `JobQueue` (`jobs.rs:29`) | 1 (`postgres/jobs.rs:192`) | Used only in `crates/postgres/tests/jobs.rs`. Production calls the free functions `enqueue_job` and `claim_job` (`jobs.rs:30,69`). |
+| `JobQueue` (`jobs.rs:29`) | 1 (`postgres/jobs.rs:192`) | Used only in `crates/app/tests/jobs.rs`. Production calls the free functions `enqueue_job` and `claim_job` (`jobs.rs:30,69`). |
 | `MetadataProvider`, `CitationProvider`, `SearchProvider` (`acquisition.rs:99-113`) | 1 each (`CrossrefProvider`, `StaticSearchProvider`) | Never called through the trait. The worker calls concrete `CrossrefProvider::fetch_work_with_references` (`processor.rs:160`, `workflows/nodes.rs:560`). `StaticSearchProvider` has no callers outside its crate. |
 | `ReviewScheduler` (`review/src/types.rs:304`) | 2 | `MemoryReviewScheduler` (`review/src/memory.rs`) has no callers. Every production and test call constructs `PostgresReviewScheduler::new(pool)` concretely. |
 
@@ -196,7 +196,7 @@ So the code's stated architecture is hexagonal (domain, then application ports, 
   - `http-api` re-declares each as a DTO, field for field. Example: `postgres/src/screening.rs:102-124` (`ScreeningHistoryItem`) is mirrored by `http-api/src/routes/review.rs:145-167` (`ScreeningHistoryItemDto`), found by jscpd.
   - `http-api` defines 142 `*Dto` structs, and conversion goes through 53 `*_dto`/`into_dto` functions and 27 `map_*_error` functions.
   - The OpenAPI schema is generated from the DTOs, so enum values reach TypeScript as `string`. The web then hand-lists them: `apps/web/src/lib/features/automations/model.ts:229-251` duplicates the server's `ConditionOperator` and fields, and `BLOCK_ALIASES` duplicates catalog knowledge.
-  - Job kinds are string literals matched in `processor.rs:777-816`. One kind, `"recompute_prisma"`, is acked as a no-op (`:808`). Payload structs are declared in whichever module handles them, and some kind constants live in `deepref-postgres`.
+  - Job kinds are string literals matched in `processor.rs:777-816`. One kind, `"recompute_prisma"`, is acked as a no-op (`:808`). Payload structs are declared in whichever module handles them, and some kind constants live in `deepref-app`.
   - IDs: `project_id: Uuid` appears 289 times across postgres, http-api, and worker, against 154 uses of `ProjectId`.
   - The data reviewer (F12) covers the SQL-side stringly states. This finding covers the Rust and TypeScript type boundary.
 - **Why it matters.**
@@ -214,7 +214,7 @@ So the code's stated architecture is hexagonal (domain, then application ports, 
 
 | File | Lines | Responsibilities mixed |
 |---|---|---|
-| `crates/postgres/src/workflows.rs` | 2,390 | 44 public functions: workflow CRUD and versions (`:226`), webhook and email tokens and credential rotation (`:647-785`), secrets (`:785`), the run engine and node executions (`:842-1689`), the scheduler (`:1689`), and **reads of other contexts' tables** for node data: `screening_queue_items` (`:2097`), `report_details` (`:2121`), `study_of_report` (`:2164`), `find_exclusion_reason` (`:2223`) |
+| `crates/app/src/workflows.rs` | 2,390 | 44 public functions: workflow CRUD and versions (`:226`), webhook and email tokens and credential rotation (`:647-785`), secrets (`:785`), the run engine and node executions (`:842-1689`), the scheduler (`:1689`), and **reads of other contexts' tables** for node data: `screening_queue_items` (`:2097`), `report_details` (`:2121`), `study_of_report` (`:2164`), `find_exclusion_reason` (`:2223`) |
 | `services/worker/src/processor.rs` | 1,923 | DOI fetch and ingestion, metrics, document retrieve and parse, GROBID enrichment, the automation-run driver, and the whole compiled-review executor (`execute_compiled_*`, `persist_review_node`, `final_review_node`, `:902-1708`) |
 | `services/worker/src/workflows/nodes.rs` | 1,814 | Every workflow node: HTTP, email, Slack, PubMed and Crossref search, AI, and DB actions |
 | `crates/http-api/src/routes/workflows.rs` | 1,767 | Workflow routes plus inbound webhooks and email |
@@ -226,7 +226,7 @@ So the code's stated architecture is hexagonal (domain, then application ports, 
   - Split along the responsibility rows above.
   - In particular, move the review executor out of `processor.rs` into `crates/review` (or the AI context), behind one `run_review(job)` function.
   - Have workflow nodes call the owning context's use-case function (A1) instead of private SQL.
-- **Verification.** No non-generated, non-test Rust file is over 1,200 lines. `git grep 'FROM screening_states\|FROM reports' crates/postgres/src/workflows.rs` is empty.
+- **Verification.** No non-generated, non-test Rust file is over 1,200 lines. `git grep 'FROM screening_states\|FROM reports' crates/app/src/workflows.rs` is empty.
 
 ### A8. The boundary checks do not encode the boundaries that matter
 

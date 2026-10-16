@@ -33,13 +33,13 @@ concurrent edits.
   `apps/web/src/lib/features/protocol/` and
   `apps/web/src/routes/projects/[projectId]/protocol/page.svelte.e2e.ts`.
 - Screening implementation and tests:
-  `crates/postgres/tests/screening.rs`,
+  `crates/app/tests/screening.rs`,
   `apps/web/src/lib/features/screening/`, and the title/abstract and full-text
   Playwright suites.
 - Run:
 
 ```text
-cargo test -p deepref-postgres --test screening --locked
+cargo test -p deepref-app --test screening --locked
 pnpm --filter @deepref/web check
 pnpm --filter @deepref/web test:e2e -- --grep 'conflict|protocol'
 ```

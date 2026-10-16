@@ -327,7 +327,7 @@ pub(crate) async fn list_tools(
     Path(project_id): Path<Uuid>,
 ) -> Result<Json<Vec<AssistantToolDescriptor>>, ApiError> {
     validate_project_id(project_id)?;
-    if !deepref_postgres::project_exists(&state.pool, project_id).await? {
+    if !deepref_app::project_exists(&state.pool, project_id).await? {
         return Err(ApiError::NotFound("project not found".to_owned()));
     }
     Ok(Json(
@@ -363,7 +363,7 @@ pub(crate) async fn execute_tool(
 ) -> Result<Json<AssistantToolResponse>, ApiError> {
     validate_project_id(project_id)?;
     let actor = extract_actor(&headers)?;
-    if !deepref_postgres::project_exists(&state.pool, project_id).await? {
+    if !deepref_app::project_exists(&state.pool, project_id).await? {
         return Err(ApiError::NotFound("project not found".to_owned()));
     }
     let tool = serde_json::from_value::<AssistantToolRequest>(body)
@@ -483,13 +483,13 @@ async fn execute_read(
     match operation {
         AgentReadOperation::GetProjectProtocol(args) => {
             let protocol =
-                deepref_postgres::get_published_protocol(&state.pool, args.project_id.as_uuid())
+                deepref_app::get_published_protocol(&state.pool, args.project_id.as_uuid())
                     .await
                     .map_err(protocol_failure)?;
             protocol_value(protocol)
         }
         AgentReadOperation::GetReport(args) => {
-            let report = deepref_postgres::get_agent_report(
+            let report = deepref_app::get_agent_report(
                 &state.pool,
                 args.project_id.as_uuid(),
                 args.report_id.as_uuid(),
@@ -504,7 +504,7 @@ async fn execute_read(
                 .iter()
                 .map(|block_id| block_id.as_uuid())
                 .collect::<Vec<_>>();
-            let blocks = deepref_postgres::read_agent_document_blocks(
+            let blocks = deepref_app::read_agent_document_blocks(
                 &state.pool,
                 args.project_id.as_uuid(),
                 args.document_id.as_uuid(),
@@ -515,7 +515,7 @@ async fn execute_read(
             Ok(blocks_value(blocks))
         }
         AgentReadOperation::SearchDocument(args) => {
-            let blocks = deepref_postgres::search_agent_document(
+            let blocks = deepref_app::search_agent_document(
                 &state.pool,
                 args.project_id.as_uuid(),
                 args.document_id.as_uuid(),
@@ -527,7 +527,7 @@ async fn execute_read(
             Ok(blocks_value(blocks))
         }
         AgentReadOperation::SearchProjectReports(args) => {
-            let reports = deepref_postgres::search_agent_reports(
+            let reports = deepref_app::search_agent_reports(
                 &state.pool,
                 args.project_id.as_uuid(),
                 &args.query,
@@ -543,7 +543,7 @@ async fn execute_read(
             ))
         }
         AgentReadOperation::GetScreeningState(args) => {
-            let screening = deepref_postgres::get_agent_screening_state(
+            let screening = deepref_app::screening::get_agent_screening_state(
                 &state.pool,
                 args.project_id.as_uuid(),
                 args.report_id.as_uuid(),
@@ -553,7 +553,7 @@ async fn execute_read(
             serde_json::to_value(screening).map_err(|_| AssistantFailure::Internal)
         }
         AgentReadOperation::GetStudy(args) => {
-            let study = deepref_postgres::get_study(
+            let study = deepref_app::get_study(
                 &state.pool,
                 args.project_id.as_uuid(),
                 args.study_id.as_uuid(),
@@ -562,7 +562,7 @@ async fn execute_read(
             .map_err(study_failure)?;
             study_value(study)
         }
-        AgentReadOperation::ListStudies(args) => deepref_postgres::list_agent_studies(
+        AgentReadOperation::ListStudies(args) => deepref_app::list_agent_studies(
             &state.pool,
             args.project_id.as_uuid(),
             i64::from(args.limit.unwrap_or(25)),
@@ -570,7 +570,7 @@ async fn execute_read(
         .await
         .map_err(read_failure),
         AgentReadOperation::GetAppraisal(args) => {
-            let appraisal = deepref_postgres::get_latest_agent_appraisal(
+            let appraisal = deepref_app::get_latest_agent_appraisal(
                 &state.pool,
                 args.project_id.as_uuid(),
                 args.report_id.as_uuid(),
@@ -584,7 +584,7 @@ async fn execute_read(
     }
 }
 
-fn protocol_value(protocol: deepref_postgres::ProtocolDocument) -> Result<Value, AssistantFailure> {
+fn protocol_value(protocol: deepref_app::ProtocolDocument) -> Result<Value, AssistantFailure> {
     let framework =
         serde_json::to_value(protocol.framework).map_err(|_| AssistantFailure::Internal)?;
     let criteria =
@@ -604,7 +604,7 @@ fn protocol_value(protocol: deepref_postgres::ProtocolDocument) -> Result<Value,
     }))
 }
 
-fn report_value(report: deepref_postgres::AgentReportRecord, abstract_limit: usize) -> Value {
+fn report_value(report: deepref_app::AgentReportRecord, abstract_limit: usize) -> Value {
     let mut value = json!({
         "id": report.id,
         "project_id": report.project_id,
@@ -626,7 +626,7 @@ fn report_value(report: deepref_postgres::AgentReportRecord, abstract_limit: usi
     value
 }
 
-fn blocks_value(blocks: Vec<deepref_postgres::AgentDocumentBlockRecord>) -> Value {
+fn blocks_value(blocks: Vec<deepref_app::AgentDocumentBlockRecord>) -> Value {
     Value::Array(
         blocks
             .into_iter()
@@ -646,14 +646,14 @@ fn blocks_value(blocks: Vec<deepref_postgres::AgentDocumentBlockRecord>) -> Valu
     )
 }
 
-fn study_value(study: deepref_postgres::StudyDetailRecord) -> Result<Value, AssistantFailure> {
+fn study_value(study: deepref_app::StudyDetailRecord) -> Result<Value, AssistantFailure> {
     let reports = study
         .reports
         .into_iter()
         .map(|report| {
             json!({
                 "report_id": report.report_id,
-                "title": report.title.as_deref().map(deepref_postgres::decode_html_entities),
+                "title": report.title.as_deref().map(deepref_app::decode_html_entities),
                 "abstract_text": report.abstract_text.as_deref().map(|value| bounded_text(value, MAX_REPORT_ABSTRACT_CHARS)),
                 "publication_year": report.publication_year,
                 "role": report.role.as_str(),
@@ -664,7 +664,7 @@ fn study_value(study: deepref_postgres::StudyDetailRecord) -> Result<Value, Assi
     Ok(json!({
         "id": study.study.id,
         "project_id": study.study.project_id,
-        "title": deepref_postgres::decode_html_entities(&study.study.title),
+        "title": deepref_app::decode_html_entities(&study.study.title),
         "design": study.study.design.map(StudyDesign::as_str),
         "design_context": study.study.design_context,
         "revision": study.study.revision,
@@ -714,27 +714,29 @@ fn map_runtime_error(error: AgentToolError) -> ApiError {
     }
 }
 
-fn read_failure(error: deepref_postgres::AgentReadError) -> AssistantFailure {
+fn read_failure(error: deepref_app::AgentReadError) -> AssistantFailure {
     match error {
-        deepref_postgres::AgentReadError::NotFound => AssistantFailure::NotFound,
-        deepref_postgres::AgentReadError::Database(_)
-        | deepref_postgres::AgentReadError::InvalidData => AssistantFailure::Internal,
+        deepref_app::AgentReadError::NotFound => AssistantFailure::NotFound,
+        deepref_app::AgentReadError::Database(_) | deepref_app::AgentReadError::InvalidData => {
+            AssistantFailure::Internal
+        }
     }
 }
 
-fn protocol_failure(error: deepref_postgres::ProtocolError) -> AssistantFailure {
+fn protocol_failure(error: deepref_app::ProtocolError) -> AssistantFailure {
     match error {
-        deepref_postgres::ProtocolError::ProjectNotFound
-        | deepref_postgres::ProtocolError::NotFound => AssistantFailure::NotFound,
+        deepref_app::ProtocolError::ProjectNotFound | deepref_app::ProtocolError::NotFound => {
+            AssistantFailure::NotFound
+        }
         _ => AssistantFailure::Internal,
     }
 }
 
-fn study_failure(error: deepref_postgres::StudyError) -> AssistantFailure {
+fn study_failure(error: deepref_app::StudyError) -> AssistantFailure {
     match error {
-        deepref_postgres::StudyError::ProjectNotFound
-        | deepref_postgres::StudyError::StudyNotFound
-        | deepref_postgres::StudyError::ReportNotInProject => AssistantFailure::NotFound,
+        deepref_app::StudyError::ProjectNotFound
+        | deepref_app::StudyError::StudyNotFound
+        | deepref_app::StudyError::ReportNotInProject => AssistantFailure::NotFound,
         _ => AssistantFailure::Internal,
     }
 }
@@ -779,9 +781,7 @@ pub(crate) struct AssistantChatRequestDto {
     message: String,
 }
 
-fn conversation_dto(
-    record: &deepref_postgres::AssistantConversationRecord,
-) -> AssistantConversationDto {
+fn conversation_dto(record: &deepref_app::AssistantConversationRecord) -> AssistantConversationDto {
     AssistantConversationDto {
         id: record.id,
         project_id: record.project_id,
@@ -792,7 +792,7 @@ fn conversation_dto(
 }
 
 #[allow(clippy::too_many_lines)]
-fn message_dto(record: &deepref_postgres::AssistantMessageRecord) -> AssistantMessageDto {
+fn message_dto(record: &deepref_app::AssistantMessageRecord) -> AssistantMessageDto {
     AssistantMessageDto {
         id: record.id,
         conversation_id: record.conversation_id,
@@ -823,10 +823,10 @@ pub(crate) async fn list_conversations(
     Path(project_id): Path<Uuid>,
 ) -> Result<Json<Vec<AssistantConversationDto>>, ApiError> {
     validate_project_id(project_id)?;
-    if !deepref_postgres::project_exists(&state.pool, project_id).await? {
+    if !deepref_app::project_exists(&state.pool, project_id).await? {
         return Err(ApiError::NotFound("project not found".to_owned()));
     }
-    let conversations = deepref_postgres::list_assistant_conversations(&state.pool, project_id)
+    let conversations = deepref_app::list_assistant_conversations(&state.pool, project_id)
         .await
         .map_err(map_conversation_error)?;
     Ok(Json(conversations.iter().map(conversation_dto).collect()))
@@ -852,11 +852,11 @@ pub(crate) async fn create_conversation(
     Json(body): Json<CreateAssistantConversationRequestDto>,
 ) -> Result<(StatusCode, Json<AssistantConversationDto>), ApiError> {
     validate_project_id(project_id)?;
-    if !deepref_postgres::project_exists(&state.pool, project_id).await? {
+    if !deepref_app::project_exists(&state.pool, project_id).await? {
         return Err(ApiError::NotFound("project not found".to_owned()));
     }
     let conversation =
-        deepref_postgres::create_assistant_conversation(&state.pool, project_id, &body.title)
+        deepref_app::create_assistant_conversation(&state.pool, project_id, &body.title)
             .await
             .map_err(map_conversation_error)?;
     Ok((StatusCode::CREATED, Json(conversation_dto(&conversation))))
@@ -883,13 +883,13 @@ pub(crate) async fn list_conversation_messages(
     Path((project_id, conversation_id)): Path<(Uuid, Uuid)>,
 ) -> Result<Json<Vec<AssistantMessageDto>>, ApiError> {
     validate_project_id(project_id)?;
-    if !deepref_postgres::project_exists(&state.pool, project_id).await? {
+    if !deepref_app::project_exists(&state.pool, project_id).await? {
         return Err(ApiError::NotFound("project not found".to_owned()));
     }
-    deepref_postgres::get_assistant_conversation(&state.pool, project_id, conversation_id)
+    deepref_app::get_assistant_conversation(&state.pool, project_id, conversation_id)
         .await
         .map_err(map_conversation_error)?;
-    let messages = deepref_postgres::list_assistant_messages(&state.pool, conversation_id)
+    let messages = deepref_app::list_assistant_messages(&state.pool, conversation_id)
         .await
         .map_err(map_conversation_error)?;
     Ok(Json(messages.iter().map(message_dto).collect()))
@@ -916,11 +916,11 @@ pub(crate) async fn delete_conversation(
     Path((project_id, conversation_id)): Path<(Uuid, Uuid)>,
 ) -> Result<StatusCode, ApiError> {
     validate_project_id(project_id)?;
-    if !deepref_postgres::project_exists(&state.pool, project_id).await? {
+    if !deepref_app::project_exists(&state.pool, project_id).await? {
         return Err(ApiError::NotFound("project not found".to_owned()));
     }
     let deleted =
-        deepref_postgres::delete_assistant_conversation(&state.pool, project_id, conversation_id)
+        deepref_app::delete_assistant_conversation(&state.pool, project_id, conversation_id)
             .await
             .map_err(map_conversation_error)?;
     if !deleted {
@@ -1005,7 +1005,7 @@ async fn trigger_workflow(
         actor,
     )
     .map_err(|_| AgentToolError::InvalidArguments)?;
-    let result = deepref_postgres::start_automation_manually(&state.pool, &request)
+    let result = deepref_app::start_automation_manually(&state.pool, &request)
         .await
         .map_err(|_| AgentToolError::ExecutionFailed)?;
     Ok(AssistantToolOutput::WorkflowTriggered {
@@ -1052,7 +1052,7 @@ fn map_turn_error(error: AgentToolError) -> ApiError {
 }
 
 fn history_chat_message(
-    record: &deepref_postgres::AssistantMessageRecord,
+    record: &deepref_app::AssistantMessageRecord,
 ) -> Option<AssistantChatMessage> {
     let role = AssistantRole::parse(&record.role)?;
     let tool_calls = record
@@ -1076,8 +1076,8 @@ async fn persist_assistant_turn(
     pool: &sqlx::PgPool,
     conversation_id: Uuid,
     message: &AssistantChatMessage,
-) -> Result<(), deepref_postgres::AssistantError> {
-    let record = deepref_postgres::AppendAssistantMessage {
+) -> Result<(), deepref_app::AssistantError> {
+    let record = deepref_app::AppendAssistantMessage {
         id: None,
         conversation_id,
         role: message.role.as_str().to_owned(),
@@ -1092,7 +1092,7 @@ async fn persist_assistant_turn(
             .map(|value| serde_json::to_value(value).unwrap_or(Value::Null)),
         metadata: message.metadata.clone(),
     };
-    deepref_postgres::append_assistant_message(pool, &record)
+    deepref_app::append_assistant_message(pool, &record)
         .await
         .map(|_| ())
 }
@@ -1130,7 +1130,7 @@ pub(crate) async fn chat(
 ) -> Result<Response, ApiError> {
     validate_project_id(project_id)?;
     let actor = extract_actor(&headers)?;
-    if !deepref_postgres::project_exists(&state.pool, project_id).await? {
+    if !deepref_app::project_exists(&state.pool, project_id).await? {
         return Err(ApiError::NotFound("project not found".to_owned()));
     }
     let user_message = body.message.trim().to_owned();
@@ -1142,7 +1142,7 @@ pub(crate) async fn chat(
             "This message is too long. Messages can be up to {MAX_ASSISTANT_MESSAGE_CHARS} characters; shorten it or split it into two messages."
         )));
     }
-    deepref_postgres::get_assistant_conversation(&state.pool, project_id, body.conversation_id)
+    deepref_app::get_assistant_conversation(&state.pool, project_id, body.conversation_id)
         .await
         .map_err(map_conversation_error)?;
     let free_form = !is_tool_command(&user_message);
@@ -1157,18 +1157,17 @@ pub(crate) async fn chat(
         .await
         .map(|dto| (StatusCode::ACCEPTED, Json(dto)).into_response());
     }
-    let history_records =
-        deepref_postgres::list_assistant_messages(&state.pool, body.conversation_id)
-            .await
-            .map_err(map_conversation_error)?;
+    let history_records = deepref_app::list_assistant_messages(&state.pool, body.conversation_id)
+        .await
+        .map_err(map_conversation_error)?;
     let history = history_records
         .iter()
         .filter_map(history_chat_message)
         .collect::<Vec<_>>();
 
-    deepref_postgres::append_assistant_message(
+    deepref_app::append_assistant_message(
         &state.pool,
-        &deepref_postgres::AppendAssistantMessage {
+        &deepref_app::AppendAssistantMessage {
             id: None,
             conversation_id: body.conversation_id,
             role: "user".to_owned(),
@@ -1254,7 +1253,7 @@ mod tests {
 
     #[test]
     fn history_records_map_into_chat_messages() {
-        let record = deepref_postgres::AssistantMessageRecord {
+        let record = deepref_app::AssistantMessageRecord {
             id: Uuid::nil(),
             conversation_id: Uuid::nil(),
             role: "assistant".to_owned(),
@@ -1277,7 +1276,7 @@ mod tests {
 
     #[test]
     fn unknown_roles_and_malformed_tool_payloads_are_dropped_from_history() {
-        let mut record = deepref_postgres::AssistantMessageRecord {
+        let mut record = deepref_app::AssistantMessageRecord {
             id: Uuid::nil(),
             conversation_id: Uuid::nil(),
             role: "moderator".to_owned(),

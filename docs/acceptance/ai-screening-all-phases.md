@@ -172,13 +172,13 @@ records are detected with sensitivity 0.90; the arithmetic is
 
 ## Implementation map
 
-- [Blind controls migration](../../crates/postgres/migrations/0055_ai_first_blind_controls.sql): frozen control membership, fresh-reviewer admission and masked/interleaved queue policy.
-- [Migration 0054](../../crates/postgres/migrations/0054_ai_first_cohorts.sql): separate owner ceiling, immutable dispositions, frozen frame and dual reference labels.
-- [Cohort lifecycle](../../crates/postgres/src/ai_first/cohorts.rs), [routing](../../crates/postgres/src/ai_first/routing.rs), and [audit/finalization](../../crates/postgres/src/ai_first/audit.rs): approvals, bounded worker scheduling, current-evidence checks and recovery.
+- [Blind controls migration](../../crates/app/migrations/0055_ai_first_blind_controls.sql): frozen control membership, fresh-reviewer admission and masked/interleaved queue policy.
+- [Migration 0054](../../crates/app/migrations/0054_ai_first_cohorts.sql): separate owner ceiling, immutable dispositions, frozen frame and dual reference labels.
+- [Cohort lifecycle](../../crates/app/src/ai_first/cohorts.rs), [routing](../../crates/app/src/ai_first/routing.rs), and [audit/finalization](../../crates/app/src/ai_first/audit.rs): approvals, bounded worker scheduling, current-evidence checks and recovery.
 - [Pure audit calculation](../../crates/application/src/ai_first.rs) and [eligibility rule](../../crates/review/src/ai_first.rs): exact integer authority and grounded two-screen agreement.
 - [API](../../crates/http-api/src/routes/ai_first.rs) and [UI](../../apps/web/src/lib/features/ai-autonomy/components/AiFirstPanel.svelte): fixed-sample workload forecast, blinded actor attribution, explicit approval and recovery.
-- [Lifecycle regressions](../../crates/postgres/tests/ai_first.rs) and [compiled worker regression](../../services/worker/tests/ai_first.rs): real event writes, invalidation, ceiling checks, exposure, model changes, later imports and budget stops.
-- [Audit export](../../crates/postgres/src/audit_export.rs) and [independent reproduction tool](../../scripts/reproduce-ai-first-audit.py): terminal evidence without model reruns.
+- [Lifecycle regressions](../../crates/app/tests/ai_first.rs) and [compiled worker regression](../../services/worker/tests/ai_first.rs): real event writes, invalidation, ceiling checks, exposure, model changes, later imports and budget stops.
+- [Audit export](../../crates/app/src/audit_export.rs) and [independent reproduction tool](../../scripts/reproduce-ai-first-audit.py): terminal evidence without model reruns.
 
 Recovery withdraws the current owner ceiling when no separately approved active
 cohort remains. Previously drawn failed or invalidated frames return to humans;

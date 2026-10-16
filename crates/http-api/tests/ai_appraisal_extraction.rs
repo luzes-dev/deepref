@@ -21,7 +21,7 @@ use tower::ServiceExt;
 use uuid::Uuid;
 
 async fn database() -> Option<PgPool> {
-    deepref_postgres::test_isolation::isolated_pool_from_env("DATABASE_URL", 8).await
+    deepref_app::test_isolation::isolated_pool_from_env("DATABASE_URL", 8).await
 }
 
 fn api_config() -> ApiConfig {
@@ -251,7 +251,7 @@ async fn save_run(
         }
         _ => ModelProfile::Reasoning,
     };
-    let store = deepref_postgres::PostgresAiStore::new(pool);
+    let store = deepref_app::PostgresAiStore::new(pool);
     store
         .save_run(AiRunRecord {
             id: run_id,
@@ -1692,7 +1692,7 @@ async fn study_grouping_schedules_a_review_run_without_calling_the_provider_inli
         ModelProfile::Reasoning,
         "appraisal-extraction-failing-provider",
     );
-    deepref_postgres::insert_model_route(&pool, &model_route, Utc::now())
+    deepref_app::insert_model_route(&pool, &model_route, Utc::now())
         .await
         .expect("grouping test model route");
 

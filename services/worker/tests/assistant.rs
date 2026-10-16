@@ -10,11 +10,11 @@
 use std::{sync::Arc, time::Duration};
 
 use deepref_ai::{ModelParameters, ModelProfile, ResolvedModel, runtime::StaticModelFactory};
-use deepref_application::jobs::ClaimedJob;
-use deepref_postgres::{
+use deepref_app::{
     append_assistant_run_event, begin_assistant_agent_run, claim_job, get_assistant_plan,
     list_assistant_run_events, submit_assistant_agent_run,
 };
+use deepref_application::jobs::ClaimedJob;
 use deepref_worker::{
     assistant::{AssistantWorkerServices, handle_assistant_agent_run_with},
     delivery::DeliveryAction,
@@ -25,7 +25,7 @@ use sqlx::PgPool;
 use uuid::Uuid;
 
 async fn database() -> Option<PgPool> {
-    deepref_postgres::test_isolation::isolated_pool_from_env("DATABASE_URL", 8).await
+    deepref_app::test_isolation::isolated_pool_from_env("DATABASE_URL", 8).await
 }
 
 async fn project(pool: &PgPool) -> (Uuid, Uuid) {
@@ -119,8 +119,8 @@ async fn claim(pool: &PgPool) -> ClaimedJob {
         .expect("a job is queued")
 }
 
-async fn run_record(pool: &PgPool, run_id: Uuid) -> deepref_postgres::AssistantAgentRunRecord {
-    deepref_postgres::get_assistant_agent_run(pool, run_id)
+async fn run_record(pool: &PgPool, run_id: Uuid) -> deepref_app::AssistantAgentRunRecord {
+    deepref_app::get_assistant_agent_run(pool, run_id)
         .await
         .expect("run loads")
         .expect("run exists")
@@ -160,10 +160,7 @@ async fn worker_completes_a_run_with_one_answer_one_plan_and_a_cassette() {
     );
 
     let run = run_record(&pool, run_id).await;
-    assert_eq!(
-        run.status,
-        deepref_postgres::AssistantAgentRunStatus::Completed
-    );
+    assert_eq!(run.status, deepref_app::AssistantAgentRunStatus::Completed);
     assert!(run.completed_at.is_some());
     assert!(run.effect_log.is_some(), "cassette effect log persists");
     assert!(run.run_spec_hash.is_some());
@@ -245,10 +242,7 @@ async fn duplicate_delivery_keeps_one_answer_and_one_plan() {
     .expect("message count");
     assert_eq!(messages, 1, "duplicate delivery keeps one answer");
     let run = run_record(&pool, run_id).await;
-    assert_eq!(
-        run.status,
-        deepref_postgres::AssistantAgentRunStatus::Completed
-    );
+    assert_eq!(run.status, deepref_app::AssistantAgentRunStatus::Completed);
 
     sqlx::query("DELETE FROM projects WHERE id=$1")
         .bind(project_id)
@@ -273,10 +267,7 @@ async fn provider_failure_requeues_then_terminal_exhaustion_fails_the_run() {
         "transient provider failures requeue, got {action:?}"
     );
     let run = run_record(&pool, run_id).await;
-    assert_eq!(
-        run.status,
-        deepref_postgres::AssistantAgentRunStatus::Running
-    );
+    assert_eq!(run.status, deepref_app::AssistantAgentRunStatus::Running);
     let messages: i64 = sqlx::query_scalar(
         "SELECT count(*) FROM assistant_messages WHERE conversation_id=$1 AND role='assistant'",
     )
@@ -298,10 +289,7 @@ async fn provider_failure_requeues_then_terminal_exhaustion_fails_the_run() {
         "exhausted runs terminate, got {action:?}"
     );
     let run = run_record(&pool, run_id).await;
-    assert_eq!(
-        run.status,
-        deepref_postgres::AssistantAgentRunStatus::Failed
-    );
+    assert_eq!(run.status, deepref_app::AssistantAgentRunStatus::Failed);
     assert!(run.error.is_some());
 
     sqlx::query("DELETE FROM projects WHERE id=$1")
@@ -319,7 +307,7 @@ fn failing_model() -> MockCompletionModel {
 async fn exhausted_budget_fails_the_run_without_an_answer() {
     let Some(pool) = database().await else { return };
     let (project_id, conversation_id) = project(&pool).await;
-    deepref_postgres::set_ai_budget(&pool, project_id, 1)
+    deepref_app::set_ai_budget(&pool, project_id, 1)
         .await
         .expect("budget");
     sqlx::query(
@@ -337,10 +325,7 @@ async fn exhausted_budget_fails_the_run_without_an_answer() {
     let action = handle_assistant_agent_run_with(&pool, &job, &services(model)).await;
     assert!(matches!(action, Ok(DeliveryAction::Ack)), "{action:?}");
     let run = run_record(&pool, run_id).await;
-    assert_eq!(
-        run.status,
-        deepref_postgres::AssistantAgentRunStatus::Failed
-    );
+    assert_eq!(run.status, deepref_app::AssistantAgentRunStatus::Failed);
     assert!(
         run.error
             .as_ref()
@@ -384,10 +369,7 @@ async fn recovered_lease_redrives_to_a_single_completion() {
     assert!(matches!(action, Ok(DeliveryAction::Ack)), "{action:?}");
 
     let run = run_record(&pool, run_id).await;
-    assert_eq!(
-        run.status,
-        deepref_postgres::AssistantAgentRunStatus::Completed
-    );
+    assert_eq!(run.status, deepref_app::AssistantAgentRunStatus::Completed);
     let messages: i64 = sqlx::query_scalar(
         "SELECT count(*) FROM assistant_messages WHERE conversation_id=$1 AND role='assistant'",
     )
@@ -444,10 +426,7 @@ async fn exhausted_redelivery_of_a_terminal_run_acks_without_an_error_event() {
         "terminal redelivery appends no error event, got {kinds:?}"
     );
     let run = run_record(&pool, run_id).await;
-    assert_eq!(
-        run.status,
-        deepref_postgres::AssistantAgentRunStatus::Completed
-    );
+    assert_eq!(run.status, deepref_app::AssistantAgentRunStatus::Completed);
 
     sqlx::query("DELETE FROM projects WHERE id=$1")
         .bind(project_id)
@@ -506,10 +485,7 @@ async fn recovered_lease_preserves_prior_events_with_monotonic_seqs() {
     );
     assert_eq!(kinds[kinds.len() - 1], "done");
     let run = run_record(&pool, run_id).await;
-    assert_eq!(
-        run.status,
-        deepref_postgres::AssistantAgentRunStatus::Completed
-    );
+    assert_eq!(run.status, deepref_app::AssistantAgentRunStatus::Completed);
     let messages: i64 = sqlx::query_scalar(
         "SELECT count(*) FROM assistant_messages WHERE conversation_id=$1 AND role='assistant'",
     )
@@ -602,7 +578,7 @@ async fn malformed_model_route_fails_run_before_terminating_job() {
     );
     assert_eq!(
         run_record(&pool, run_id).await.status,
-        deepref_postgres::AssistantAgentRunStatus::Failed
+        deepref_app::AssistantAgentRunStatus::Failed
     );
     let events = list_assistant_run_events(&pool, run_id, -1, 100)
         .await
@@ -639,7 +615,7 @@ async fn reconciler_fails_missing_and_dead_assistant_jobs_but_preserves_live_job
     for id in [missing, dead] {
         assert_eq!(
             run_record(&pool, id).await.status,
-            deepref_postgres::AssistantAgentRunStatus::Failed
+            deepref_app::AssistantAgentRunStatus::Failed
         );
         let events = list_assistant_run_events(&pool, id, -1, 100)
             .await
@@ -651,6 +627,6 @@ async fn reconciler_fails_missing_and_dead_assistant_jobs_but_preserves_live_job
     }
     assert_eq!(
         run_record(&pool, live).await.status,
-        deepref_postgres::AssistantAgentRunStatus::Queued
+        deepref_app::AssistantAgentRunStatus::Queued
     );
 }
