@@ -301,13 +301,13 @@ fn parse_articles(xml: &str) -> Vec<Article> {
     loop {
         match reader.read_event() {
             Ok(Event::Start(element)) => {
-                let name = String::from_utf8_lossy(element.local_name().as_ref()).into_owned();
+                let name = element.local_name().as_ref().to_string();
                 if name == "PubmedArticle" {
                     current = Some(Article::default());
                 }
                 if name == "ArticleId" {
                     doi_pending = element.attributes().flatten().any(|attribute| {
-                        attribute.key.as_ref() == b"IdType" && attribute.value.as_ref() == b"doi"
+                        attribute.key.as_ref() == "IdType" && attribute.value.as_ref() == "doi"
                     });
                 }
                 if name == "Author" {
@@ -317,7 +317,7 @@ fn parse_articles(xml: &str) -> Vec<Article> {
                 path.push(name);
             }
             Ok(Event::End(element)) => {
-                let name = String::from_utf8_lossy(element.local_name().as_ref()).into_owned();
+                let name = element.local_name().as_ref().to_string();
                 path.pop();
                 if name == "Author" {
                     let full = format!("{fore_name} {last_name}").trim().to_owned();
@@ -337,7 +337,7 @@ fn parse_articles(xml: &str) -> Vec<Article> {
                 }
             }
             Ok(Event::Text(text)) => {
-                if let (Some(article), Ok(text)) = (current.as_mut(), text.decode()) {
+                if let (Some(article), text) = (current.as_mut(), text.xml10_content()) {
                     append_text(
                         article,
                         &path,
@@ -349,12 +349,12 @@ fn parse_articles(xml: &str) -> Vec<Article> {
                 }
             }
             Ok(Event::GeneralRef(reference)) => {
-                let resolved = match reference.decode().as_deref() {
-                    Ok("amp") => "&",
-                    Ok("lt") => "<",
-                    Ok("gt") => ">",
-                    Ok("quot") => "\"",
-                    Ok("apos") => "'",
+                let resolved = match reference.xml10_content().as_ref() {
+                    "amp" => "&",
+                    "lt" => "<",
+                    "gt" => ">",
+                    "quot" => "\"",
+                    "apos" => "'",
                     _ => "",
                 };
                 if let Some(article) = current.as_mut() {
