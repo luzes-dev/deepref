@@ -2,9 +2,15 @@
 //! Autonomy for a completed review is committed with the proposal, so a failure
 //! (or a crash) right after finalization cannot lose the AI second opinion
 //! (review ai F13).
+//! The queue is drained across the canonical per-node durable workflow before
+//! testing recovery of the independently committed second opinion.
 use deepref_ai::{
     AiFuture, AiGateway, CompletionRequest, GatewayCompletion, ModelParameters, ModelProfile,
     ResolvedModel, ScreeningStage,
+};
+use deepref_app::{
+    ProtocolActor, claim_job, complete_job, insert_model_route, migrate, publish_protocol,
+    save_protocol_draft, schedule_screening_review,
 };
 use deepref_application::{
     ProtocolCriterionCommand, PublishProtocolCommand, SaveProtocolDraftCommand,
@@ -131,8 +137,7 @@ async fn reviewer_decisions(pool: &sqlx::PgPool, project: Uuid, report: Uuid) ->
 
 #[tokio::test]
 async fn a_second_opinion_lost_after_finalization_is_recorded_by_the_reconciler() {
-    let Some(pool) =
-        deepref_postgres::test_isolation::isolated_pool_from_env("DATABASE_URL", 8).await
+    let Some(pool) = deepref_app::test_isolation::isolated_pool_from_env("DATABASE_URL", 8).await
     else {
         return;
     };
@@ -203,29 +208,37 @@ async fn a_second_opinion_lost_after_finalization_is_recorded_by_the_reconciler(
     .unwrap();
     let gateway: Arc<dyn AiGateway> = Arc::new(ExcludingGateway);
     let worker = "autonomy-outbox-test";
-    for _ in 0..10 {
-        let Some(job) = claim_job(&pool, worker, Duration::from_secs(60))
+    // Finalization follows one durable delivery per compiled node, not ten jobs.
+    tokio::time::timeout(Duration::from_secs(60), async {
+        loop {
+            let Some(job) = claim_job(&pool, worker, Duration::from_secs(60))
+                .await
+                .unwrap()
+            else {
+                break;
+            };
+            let action = handle_job_with_documents_owned_and_ai(
+                pool.clone(),
+                &job,
+                &job.lease(worker),
+                None,
+                None,
+                gateway.clone(),
+                &deepref_worker::config::WorkerConfig::from_source(&|name| {
+                    (name == "APP_ENV").then(|| "local".into())
+                })
+                .expect("local worker configuration"),
+            )
             .await
-            .unwrap()
-        else {
-            break;
-        };
-        let action = handle_job_with_documents_owned_and_ai(
-            pool.clone(),
-            &job,
-            worker,
-            Duration::from_secs(60),
-            None,
-            None,
-            gateway.clone(),
-        )
-        .await
-        .unwrap();
-        assert_eq!(action, DeliveryAction::Ack);
-        assert!(complete_job(&pool, worker, job.id).await.unwrap());
-    }
+            .unwrap();
+            assert_eq!(action, DeliveryAction::Ack);
+            assert!(complete_job(&pool, &job.lease(worker)).await.unwrap());
+        }
+    })
+    .await
+    .expect("the compiled review workflow must drain");
     let state: String = sqlx::query_scalar(
-        "SELECT state FROM review_run_manifests WHERE project_id=$1 AND automation_run_id=$2",
+        "SELECT r.status FROM review_run_manifests m JOIN durable_runs r ON r.id=m.automation_run_id WHERE m.project_id=$1 AND m.automation_run_id=$2",
     )
     .bind(project)
     .bind(run.id.as_uuid())

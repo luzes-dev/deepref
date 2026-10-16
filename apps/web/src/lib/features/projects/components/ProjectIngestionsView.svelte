@@ -7,17 +7,14 @@
 	import PaginationLoadMore from '@deepref/ui/pagination-load-more';
 	import { StatePanel } from '@deepref/ui/layout';
 	import { ApiError } from '#lib/api/custom-fetch.js';
-	import { shouldPollIngestion } from '#lib/api/helpers.js';
 	import {
 		getListAcquisitionsQueryKey,
-		listAcquisitions,
 		refreshAcquisition
 	} from '#lib/api/generated/acquisitions/acquisitions.js';
-	import type { AcquisitionDto, IngestionDto } from '#lib/api/generated/models/index.js';
-	import { getListIngestionsQueryKey } from '#lib/api/generated/ingestions/ingestions.js';
+	import type { AcquisitionDto } from '#lib/api/generated/models/index.js';
 	import { createGetProjectPrisma } from '#lib/api/generated/review/review.js';
 	import { resolve } from '$app/paths';
-	import { createInfiniteQuery, useQueryClient } from '@tanstack/svelte-query';
+	import { useQueryClient } from '@tanstack/svelte-query';
 	import RefreshCwIcon from '@lucide/svelte/icons/refresh-cw';
 	import PageTemplate from '#lib/shell/PageTemplate.svelte';
 	import { useProjectWorkspaceContext } from '../context.svelte.js';
@@ -47,49 +44,6 @@
 	let source = $state<ImportSource>('dois');
 	let doiNotice = $state<string | undefined>();
 
-	const sortedIngestions = $derived(
-		workspace.ingestions.toSorted((a, b) => Date.parse(b.created_at) - Date.parse(a.created_at))
-	);
-
-	// File-import runs live in the acquisitions list, which DOI runs share; filter on the server.
-	const fileRunsQuery = createInfiniteQuery(() => ({
-		queryKey: getListAcquisitionsQueryKey(projectId, { strategy: 'file_import' }),
-		queryFn: ({ pageParam, signal }) =>
-			listAcquisitions(
-				projectId,
-				{ strategy: 'file_import', cursor: pageParam || undefined, limit: 50 },
-				{ signal }
-			),
-		initialPageParam: '',
-		getNextPageParam: (lastPage) => lastPage.data.next_cursor ?? undefined,
-		enabled: Boolean(projectId),
-		staleTime: 0
-	}));
-	const fileRuns = $derived(fileRunsQuery.data?.pages.flatMap((page) => page.data.items) ?? []);
-
-	// PubMed ID runs are acquisition runs too, so the server filters them the same way.
-	const pmidRunsQuery = createInfiniteQuery(() => ({
-		queryKey: getListAcquisitionsQueryKey(projectId, { strategy: 'pmid_import' }),
-		queryFn: ({ pageParam, signal }) =>
-			listAcquisitions(
-				projectId,
-				{ strategy: 'pmid_import', cursor: pageParam || undefined, limit: 50 },
-				{ signal }
-			),
-		initialPageParam: '',
-		getNextPageParam: (lastPage) => lastPage.data.next_cursor ?? undefined,
-		enabled: Boolean(projectId),
-		// A PubMed run that is still queued or running is re-read, so its row settles on its own.
-		refetchInterval: (query) =>
-			(query.state.data?.pages ?? []).some((page) =>
-				page.data.items.some((run) => shouldPollIngestion(run.status) !== false)
-			)
-				? 2_000
-				: false,
-		staleTime: 0
-	}));
-	const pmidRuns = $derived(pmidRunsQuery.data?.pages.flatMap((page) => page.data.items) ?? []);
-
 	const prismaQuery = createGetProjectPrisma(
 		() => projectId,
 		() => ({
@@ -106,52 +60,29 @@
 		fetchedCount: number | undefined;
 		records: number;
 		source: string;
-		ingestion?: IngestionDto;
-		acquisition?: AcquisitionDto;
+		acquisition: AcquisitionDto;
 	};
 
-	const runRows = $derived.by<RunRow[]>(() => {
-		const doiRuns: RunRow[] = sortedIngestions.map((ingestion) => ({
-			key: `doi:${ingestion.id}`,
-			createdAt: ingestion.created_at,
-			status: ingestion.status,
-			failedCount: ingestion.failed_count,
-			fetchedCount: ingestion.fetched_count,
-			records: ingestion.seed_count,
-			source: `DOIs · depth ${ingestion.max_depth}`,
-			ingestion
-		}));
-		const fileImports: RunRow[] = fileRuns.map((run: AcquisitionDto) => ({
-			key: `file:${run.id}`,
-			createdAt: run.created_at,
-			status: run.status,
-			failedCount: run.failed_count,
-			fetchedCount: undefined,
-			records: run.queued_count,
-			source: importRunFormatLabel(run.format)
-		}));
-		const pmidImports: RunRow[] = pmidRuns.map((run: AcquisitionDto) => ({
-			key: `pmid:${run.id}`,
-			createdAt: run.created_at,
-			status: run.status,
-			failedCount: run.failed_count,
-			fetchedCount: run.fetched_count,
-			records: run.seed_count,
-			source: importRunFormatLabel(run.format),
-			acquisition: run
-		}));
-		return [...doiRuns, ...fileImports, ...pmidImports].sort(
-			(a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt)
-		);
-	});
+	const runRows = $derived<RunRow[]>(
+		workspace.acquisitions
+			.map((run) => ({
+				key: run.id,
+				createdAt: run.created_at,
+				status: run.status,
+				failedCount: run.failed_count,
+				fetchedCount: run.fetched_count,
+				records: run.seed_count,
+				source:
+					run.strategy === 'citation_traversal' || run.strategy === 'provider_refresh'
+						? `DOIs · depth ${run.max_depth}`
+						: importRunFormatLabel(run.format),
+				acquisition: run
+			}))
+			.toSorted((a, b) => Date.parse(b.createdAt) - Date.parse(a.createdAt))
+	);
 
 	const runsLoading = $derived(workspace.ingestionsLoading);
 	const runsError = $derived(workspace.ingestionsError);
-	const importRunsError = $derived(
-		fileRunsQuery.isError || pmidRunsQuery.isError
-			? 'Some imports could not be loaded.'
-			: undefined
-	);
 
 	function refreshErrorMessage(error: unknown): string {
 		const message = error instanceof Error ? error.message.trim() : '';
@@ -171,6 +102,7 @@
 
 	async function refreshProvider(ingestionId: string): Promise<void> {
 		const previous = refreshStates[ingestionId];
+		const requestProjectId = projectId;
 		if (previous?.kind === 'pending') return;
 
 		const idempotencyKey =
@@ -188,16 +120,18 @@
 
 		refreshStates[ingestionId] = { kind: 'pending', idempotencyKey };
 		try {
-			const response = await refreshAcquisition(workspace.project.id, ingestionId, {
+			const response = await refreshAcquisition(requestProjectId, ingestionId, {
 				headers: { 'Idempotency-Key': idempotencyKey }
 			});
 			try {
-				await queryClient.invalidateQueries({ queryKey: getListIngestionsQueryKey() });
+				await queryClient.invalidateQueries({
+					queryKey: getListAcquisitionsQueryKey(requestProjectId)
+				});
 			} catch {
 				// The workspace query renders any refetch error; the refresh itself succeeded.
 			}
 			delete refreshStates[ingestionId];
-			workspace.openIngestion(response.data.id);
+			if (projectId === requestProjectId) workspace.openAcquisition(response.data.id);
 		} catch (error: unknown) {
 			refreshStates[ingestionId] = {
 				kind: 'failed',
@@ -272,7 +206,7 @@
 			<ImportPmidForm />
 		{/if}
 
-		{#if runRows.length > 0 || runsLoading || runsError || importRunsError}
+		{#if runRows.length > 0 || runsLoading || runsError}
 			<section aria-label="Run history" class="flex min-h-0 flex-1 flex-col gap-3">
 				<h3 class="text-sm font-semibold" role="status">
 					Runs <span class="font-normal text-muted-foreground tabular-nums"
@@ -294,11 +228,6 @@
 						{/each}
 					</div>
 				{:else}
-					{#if importRunsError}
-						<p class="px-4 pt-4 text-sm text-destructive sm:px-5" role="alert">
-							{importRunsError}
-						</p>
-					{/if}
 					<div class="max-h-full overflow-auto">
 						<Table.Root containerLabel="Project ingestion runs">
 							<Table.Header>
@@ -315,21 +244,16 @@
 							<Table.Body>
 								{#each runRows as run (run.key)}
 									{@const display = runStatusDisplay(run.status, run.failedCount)}
-									{@const refreshState = run.ingestion
-										? refreshStates[run.ingestion.id]
-										: undefined}
+									{@const refreshState = refreshStates[run.acquisition.id]}
 									<Table.Row
-										data-selected={(run.ingestion !== undefined &&
-											workspace.selectedIngestion === run.ingestion.id) ||
-											(run.acquisition !== undefined &&
-												workspace.selectedAcquisition ===
-													run.acquisition.id)}
-										data-ingestion-id={run.ingestion?.id}
-										data-run-kind={run.ingestion
-											? 'doi'
-											: run.acquisition
-												? 'pmid'
-												: 'file'}
+										data-selected={workspace.selectedAcquisition ===
+											run.acquisition.id}
+										data-acquisition-id={run.acquisition.id}
+										data-run-kind={run.acquisition.strategy === 'pmid_import'
+											? 'pmid'
+											: run.acquisition.strategy === 'file_import'
+												? 'file'
+												: 'doi'}
 										data-refresh-pending={refreshState?.kind === 'pending'}
 									>
 										<Table.Cell>
@@ -346,98 +270,68 @@
 											>{run.fetchedCount ?? '—'}</Table.Cell
 										>
 										<Table.Cell class="tabular-nums"
-											>{run.ingestion || run.acquisition
-												? run.failedCount
-												: '—'}</Table.Cell
+											>{run.failedCount}</Table.Cell
 										>
 										<Table.Cell
 											>{new Date(run.createdAt).toLocaleString()}</Table.Cell
 										>
 										<Table.Cell class="text-right">
-											{#if run.acquisition}
-												{@const acquisition = run.acquisition}
+											{@const acquisition = run.acquisition}
+											<div class="flex flex-wrap justify-end gap-2">
 												<Button
 													variant="outline"
 													size="sm"
 													onclick={() =>
 														workspace.openAcquisition(acquisition.id)}
+													>Open</Button
 												>
-													Open
-												</Button>
-											{:else if run.ingestion}
-												{@const ingestion = run.ingestion}
-												<div class="flex flex-wrap justify-end gap-2">
+												{#if (acquisition.strategy === 'citation_traversal' || acquisition.strategy === 'provider_refresh') && acquisition.status === 'completed'}
 													<Button
 														variant="outline"
 														size="sm"
+														title="Fetch the latest metadata and citations again for this run"
 														onclick={() =>
-															workspace.openIngestion(ingestion.id)}
+															refreshProvider(acquisition.id)}
+														disabled={refreshState?.kind === 'pending'}
 													>
-														Open
+														<RefreshCwIcon data-icon="inline-start" />
+														{refreshState?.kind === 'pending'
+															? 'Re-fetching…'
+															: refreshState?.kind === 'failed' &&
+																  refreshState.retriable
+																? 'Retry re-fetch'
+																: 'Re-fetch metadata'}
 													</Button>
-													{#if ingestion.status === 'completed'}
-														<Button
-															variant="outline"
-															size="sm"
-															title="Fetch the latest metadata and citations again for this run"
-															onclick={() =>
-																refreshProvider(ingestion.id)}
-															disabled={refreshState?.kind ===
-																'pending'}
-														>
-															<RefreshCwIcon
-																data-icon="inline-start"
-															/>
-															{refreshState?.kind === 'pending'
-																? 'Re-fetching…'
-																: refreshState?.kind === 'failed' &&
-																	  refreshState.retriable
-																	? 'Retry re-fetch'
-																	: 'Re-fetch metadata'}
-														</Button>
-													{/if}
-												</div>
-												{#if refreshState?.kind === 'pending'}
-													<p
-														class="mt-2 text-xs text-muted-foreground"
-														role="status"
-													>
-														Re-fetching metadata…
-													</p>
-												{:else if refreshState?.kind === 'failed' || refreshState?.kind === 'key-unavailable'}
-													<div
-														class="mt-2 flex flex-wrap items-center justify-end gap-2"
-														role="alert"
-													>
-														<span
-															class="max-w-64 text-xs text-destructive"
-															>{refreshState.message}</span
-														>
-													</div>
 												{/if}
+											</div>
+											{#if refreshState?.kind === 'pending'}
+												<p
+													class="mt-2 text-xs text-muted-foreground"
+													role="status"
+												>
+													Re-fetching metadata…
+												</p>
+											{:else if refreshState?.kind === 'failed' || refreshState?.kind === 'key-unavailable'}
+												<div
+													class="mt-2 flex flex-wrap items-center justify-end gap-2"
+													role="alert"
+												>
+													<span class="max-w-64 text-xs text-destructive"
+														>{refreshState.message}</span
+													>
+												</div>
 											{/if}
 										</Table.Cell>
 									</Table.Row>
 								{/each}
 							</Table.Body>
 						</Table.Root>
-						{#if workspace.ingestionsHasNextPage || fileRunsQuery.hasNextPage || pmidRunsQuery.hasNextPage}
+						{#if workspace.ingestionsHasNextPage}
 							<div class="border-t p-4">
 								<PaginationLoadMore
-									hasNextPage={workspace.ingestionsHasNextPage ||
-										fileRunsQuery.hasNextPage ||
-										pmidRunsQuery.hasNextPage}
-									isLoading={workspace.ingestionsLoadingMore ||
-										fileRunsQuery.isFetchingNextPage ||
-										pmidRunsQuery.isFetchingNextPage}
-									onLoadMore={() => {
-										if (workspace.ingestionsHasNextPage)
-											workspace.loadMoreIngestions();
-										if (fileRunsQuery.hasNextPage)
-											void fileRunsQuery.fetchNextPage();
-										if (pmidRunsQuery.hasNextPage)
-											void pmidRunsQuery.fetchNextPage();
-									}}
+									hasNextPage={workspace.ingestionsHasNextPage}
+									isLoading={workspace.ingestionsLoadingMore}
+									onLoadMore={workspace.loadMoreIngestions}
 								/>
 							</div>
 						{/if}

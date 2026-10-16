@@ -276,36 +276,5 @@ export default defineConfig(
 				}
 			]
 		}
-	},
-	{
-		files: ['src/lib/features/workflows/domain/**/*.ts'],
-		rules: {
-			'no-restricted-imports': [
-				'error',
-				{
-					patterns: [
-						{
-							group: [
-								'rete',
-								'rete-*',
-								'rete-*/**',
-								'svelte',
-								'svelte/**',
-								'@xyflow/**',
-								'@deepref/ui',
-								'@deepref/ui/**',
-								'$app/**',
-								'#lib/api/**',
-								'**/api/**',
-								'**/editor/**',
-								'**/routes/**'
-							],
-							message:
-								'Workflow definitions, validation and commands must remain renderer-neutral and independent of transport/UI modules.'
-						}
-					]
-				}
-			]
-		}
 	}
 );

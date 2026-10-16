@@ -7,9 +7,11 @@ pub mod command;
 pub use command::Command;
 
 pub async fn run(command: Command) -> anyhow::Result<()> {
+    let source = deepref_config::ConfigSource::from_env();
+    let get = |name: &str| source.get(name);
     match command {
         Command::Serve => {
-            let config = deepref_http_api::config::ApiConfig::from_env()?;
+            let config = deepref_http_api::config::ApiConfig::from_source(&get)?;
             with_telemetry(
                 config.runtime.telemetry.clone(),
                 deepref_http_api::serve(config),
@@ -17,7 +19,7 @@ pub async fn run(command: Command) -> anyhow::Result<()> {
             .await
         }
         Command::Worker => {
-            let config = deepref_worker::config::WorkerConfig::from_env()?;
+            let config = deepref_worker::config::WorkerConfig::from_source(&get)?;
             with_telemetry(
                 config.runtime.telemetry.clone(),
                 deepref_worker::run(config),
@@ -25,8 +27,8 @@ pub async fn run(command: Command) -> anyhow::Result<()> {
             .await
         }
         Command::All => {
-            let api = deepref_http_api::config::ApiConfig::from_env()?;
-            let worker = deepref_worker::config::WorkerConfig::from_env()?;
+            let api = deepref_http_api::config::ApiConfig::from_source(&get)?;
+            let worker = deepref_worker::config::WorkerConfig::from_source(&get)?;
             with_telemetry(
                 api.runtime.telemetry.clone(),
                 run_all(api, worker, wait_for_signal()),
@@ -34,22 +36,14 @@ pub async fn run(command: Command) -> anyhow::Result<()> {
             .await
         }
         Command::Migrate => {
-            let config = deepref_http_api::config::ApiConfig::from_env()?;
+            let config = deepref_http_api::config::ApiConfig::from_source(&get)?;
             with_telemetry(
                 config.runtime.telemetry.clone(),
                 deepref_http_api::migrate(&config),
             )
             .await
         }
-        Command::ImportLegacy => {
-            let config = deepref_http_api::config::ApiConfig::from_env()?;
-            with_telemetry(config.runtime.telemetry.clone(), async move {
-                let counts = deepref_http_api::import_legacy(&config).await?;
-                println!("legacy import completed: {counts:?}");
-                Ok(())
-            })
-            .await
-        }
+
         Command::PrintOpenApi => {
             println!(
                 "{}",

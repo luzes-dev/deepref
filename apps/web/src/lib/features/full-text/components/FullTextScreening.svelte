@@ -1,4 +1,5 @@
 <script lang="ts">
+	import { createAllDocumentBlocks } from '#lib/api/pagination.js';
 	import {
 		createGetProjectProtocol,
 		createGetScreeningHistory,
@@ -8,7 +9,6 @@
 	import {
 		createGetReportDocument,
 		createListDocumentPages,
-		createListDocumentBlocks,
 		createListDocumentReferences,
 		createListDocumentSections,
 		createListFullTextExclusionReasons,
@@ -66,6 +66,7 @@
 	import {
 		hasCommandModifier,
 		hasOpenScreeningOverlay,
+		ignoresAutoRepeat,
 		isShortcutSuppressed,
 		shortcutAction
 	} from '#lib/features/screening/shortcuts.js';
@@ -147,6 +148,16 @@
 		missingItems.find((item) => item.report_id === currentReportId)
 	);
 	const current = $derived<FullTextItem | null>(queueCurrent ?? missingCurrent ?? null);
+	const locatingReport = $derived(
+		Boolean(
+			urlState.report && !current && fullQueueQuery.hasNextPage && !fullQueueQuery.isError
+		)
+	);
+	$effect(() => {
+		if (locatingReport && !fullQueueQuery.isFetching) {
+			void fullQueueQuery.fetchNextPage();
+		}
+	});
 	const protocol = $derived(protocolQuery.data?.data);
 	const reasons = $derived(sortExclusionReasons(reasonsQuery.data?.data ?? []));
 	const historyQuery = createGetScreeningHistory(
@@ -175,7 +186,7 @@
 		})
 	);
 
-	const blocksQuery = createListDocumentBlocks(
+	const blocksQuery = createAllDocumentBlocks(
 		() => projectId,
 		() => currentReportId ?? '',
 		() => effectiveDocumentId,
@@ -212,7 +223,11 @@
 		})
 	);
 
-	let choosingReason = $state(false);
+	let reasonReportId = $state<string | null>(null);
+	const choosingReason = $derived(reasonReportId !== null && reasonReportId === currentReportId);
+	// True from the first line of decide() or undo() until the mutation and the queue
+	// refresh settle. The mutation's own isPending is false while the queue catches up.
+	let deciding = $state(false);
 	let documentView = $state<'pdf' | 'outline' | 'references' | 'blocks'>('pdf');
 	let statusMessage = $state('');
 	let errorMessage = $state('');
@@ -227,6 +242,7 @@
 	$effect(() => {
 		void currentReportId;
 		statusMessage = '';
+		reasonReportId = null;
 	});
 
 	const historyItems = $derived(historyQuery.data?.data.items ?? []);
@@ -235,7 +251,7 @@
 		Boolean(latestHistory?.stage === 'full_text' && latestHistory.event_kind === 'decision')
 	);
 	const document = $derived(documentQuery.data?.data);
-	const blocks = $derived(blocksQuery.data?.data ?? []);
+	const blocks = $derived(blocksQuery.isError ? [] : (blocksQuery.data?.data ?? []));
 	const pages = $derived<DocumentPageDto[]>(pagesQuery.data?.data ?? []);
 	const selectedBlockId = $derived(urlState.block);
 	const selectedBlock = $derived(blocks.find((block) => block.id === selectedBlockId));
@@ -262,7 +278,7 @@
 	const screenStatus = $derived(queueCurrent?.full_text_status ?? 'unscreened');
 	const screenRevision = $derived(queueCurrent?.revision ?? 0);
 	const usableFullText = $derived(
-		document?.status === 'available' && Boolean(document.parser_version)
+		Boolean(current) && document?.status === 'available' && Boolean(document.parser_version)
 	);
 	const contentUrl = $derived(
 		effectiveDocumentId && currentReportId
@@ -343,25 +359,27 @@
 		)
 			return;
 		if (choosingReason) {
+			// A held reason key must not record a second exclusion.
+			if (event.repeat) return;
 			const index = Number(event.key) - 1;
 			const options = reasons.filter((reason) => reason.stage === 'full_text');
 			if (Number.isInteger(index) && options[index]) {
 				event.preventDefault();
-				choosingReason = false;
 				void decide('exclude', options[index].id);
 			} else if (event.key === 'Escape') {
 				event.preventDefault();
-				choosingReason = false;
+				reasonReportId = null;
 			}
 			return;
 		}
 		const action = shortcutAction(event.key);
 		if (!action) return;
 		event.preventDefault();
+		if (ignoresAutoRepeat(action, event)) return;
 		if (action === 'previous' || action === 'next') return void move(action);
 		if (action === 'undo') return void undo();
 		if (!usableFullText) return;
-		if (action === 'exclude') choosingReason = true;
+		if (action === 'exclude') reasonReportId = currentReportId;
 		else void decide(action, null);
 	}
 
@@ -397,13 +415,16 @@
 		);
 	}
 
-	function currentStateFromError(error: unknown): AuthoritativeFullTextState | null {
+	function currentStateFromError(
+		error: unknown,
+		reportId: string
+	): AuthoritativeFullTextState | null {
 		if (!(error instanceof ApiError)) return null;
 		const info = error.info as ApiErrorBody | null;
 		const details = info?.details;
 		if (!details || typeof details !== 'object' || !('currentState' in details)) return null;
 		const state = details.currentState;
-		return isAuthoritativeState(state) && state.report_id === currentReportId ? state : null;
+		return isAuthoritativeState(state) && state.report_id === reportId ? state : null;
 	}
 
 	function acceptAuthoritativeState(state: AuthoritativeFullTextState, message: string) {
@@ -414,6 +435,7 @@
 	}
 
 	function selectReport(reportId: string, push = true) {
+		reasonReportId = null;
 		return updateUrl({ report: reportId, page: null, block: null }, !push);
 	}
 
@@ -464,6 +486,7 @@
 
 	async function decide(decision: ScreeningDecisionInput, reasonId: string | null) {
 		if (
+			deciding ||
 			!currentReportId ||
 			!protocol ||
 			!usableFullText ||
@@ -475,10 +498,14 @@
 			errorMessage = 'Choose exactly one full-text exclusion reason.';
 			return;
 		}
+		if (decision === 'exclude' && reasonReportId !== currentReportId) return;
+		deciding = true;
+		reasonReportId = null;
+		const reportId = currentReportId;
 		const previous = queryClient.getQueryData<FullTextQueueCache>(fullTextQueueKey);
 		const expectedRevision = screenRevision;
 		const nextState: AuthoritativeFullTextState = {
-			report_id: currentReportId,
+			report_id: reportId,
 			full_text_status: decision,
 			full_text_exclusion_reason_id: decision === 'exclude' ? reasonId : null,
 			revision: expectedRevision + 1
@@ -495,16 +522,12 @@
 				expected_revision: expectedRevision,
 				...(decision === 'exclude' ? { exclusion_reason_id: reasonId } : {})
 			};
-			const result = await decisionMutation.mutateAsync({
-				projectId,
-				reportId: currentReportId,
-				data
-			});
+			const result = await decisionMutation.mutateAsync({ projectId, reportId, data });
 			acceptAuthoritativeState(result.data, `Full-text ${decision} recorded.`);
 			await queryClient.invalidateQueries({ queryKey: fullTextQueueKey });
 			await queryClient.invalidateQueries({ queryKey: missingQuery.queryKey });
 		} catch (error) {
-			const state = currentStateFromError(error);
+			const state = currentStateFromError(error, reportId);
 			if (state) {
 				queryClient.setQueryData<FullTextQueueCache>(fullTextQueueKey, (cache) =>
 					applyFullTextState(cache, state)
@@ -517,11 +540,14 @@
 				errorMessage =
 					error instanceof Error ? error.message : 'The full-text decision failed.';
 			}
+		} finally {
+			deciding = false;
 		}
 	}
 
 	async function undo() {
 		if (
+			deciding ||
 			!currentReportId ||
 			!protocol ||
 			!canUndo ||
@@ -529,28 +555,31 @@
 			decisionMutation.isPending
 		)
 			return;
+		deciding = true;
+		const reportId = currentReportId;
+		const expectedRevision = screenRevision;
 		const previous = queryClient.getQueryData<FullTextQueueCache>(fullTextQueueKey);
 		queryClient.setQueryData<FullTextQueueCache>(fullTextQueueKey, (cache) =>
 			applyFullTextState(cache, {
-				report_id: currentReportId,
+				report_id: reportId,
 				full_text_status: latestHistory?.previous_full_text_status ?? 'unscreened',
-				revision: screenRevision + 1
+				revision: expectedRevision + 1
 			})
 		);
 		try {
 			const result = await undoMutation.mutateAsync({
 				projectId,
-				reportId: currentReportId,
+				reportId,
 				data: {
 					stage: 'full_text',
 					protocol_version_id: protocol.id,
-					expected_revision: screenRevision
+					expected_revision: expectedRevision
 				}
 			});
 			acceptAuthoritativeState(result.data, 'The last full-text decision was undone.');
 			await historyQuery.refetch();
 		} catch (error) {
-			const state = currentStateFromError(error);
+			const state = currentStateFromError(error, reportId);
 			if (state) {
 				queryClient.setQueryData<FullTextQueueCache>(fullTextQueueKey, (cache) =>
 					applyFullTextState(cache, state)
@@ -563,6 +592,8 @@
 				: error instanceof Error
 					? error.message
 					: 'Undo failed.';
+		} finally {
+			deciding = false;
 		}
 	}
 
@@ -929,6 +960,23 @@
 			</Alert.Description>
 		</Alert.Root>
 	{/if}
+	{#if document?.status === 'available' && (blocksQuery.isPending || blocksQuery.isFetching)}
+		<p class="p-6 text-sm text-muted-foreground" role="status">Loading parsed evidence…</p>
+	{:else if document?.status === 'available' && blocksQuery.isError}
+		<Alert.Root variant="destructive" class="m-6">
+			<Alert.Title>Parsed evidence unavailable</Alert.Title>
+			<Alert.Description>
+				<p>{blocksQuery.error.message}</p>
+				<Button
+					type="button"
+					variant="outline"
+					size="sm"
+					disabled={blocksQuery.isFetching}
+					onclick={() => void blocksQuery.refetch()}>Retry evidence</Button
+				>
+			</Alert.Description>
+		</Alert.Root>
+	{/if}
 	{#if documentView === 'blocks'}
 		<div class="flex flex-col gap-3 p-6">
 			<p class="text-xs text-muted-foreground">
@@ -936,11 +984,11 @@
 					? ' · OCR required on one or more pages'
 					: ''}
 			</p>
-			{#if blocks.length === 0}
+			{#if blocksQuery.isSuccess && blocks.length === 0}
 				<p class="text-sm text-muted-foreground">
-					Evidence blocks appear after the PDF is parsed.
+					No parsed evidence blocks are available for this PDF.
 				</p>
-			{:else}
+			{:else if blocksQuery.isSuccess}
 				<ol class="flex flex-col gap-2" aria-label="Parsed evidence blocks">
 					{#each blocks as block (block.id)}<li>
 							<EvidenceLink
@@ -1100,7 +1148,7 @@
 					</details>
 				{/if}
 			</div>
-			{#if selectedBlockId && !selectedBlock && blocks.length > 0}
+			{#if blocksQuery.isSuccess && selectedBlockId && !selectedBlock}
 				<p
 					class="rounded-md border border-warning/40 bg-warning/10 p-2 text-xs text-muted-foreground"
 					role="status"
@@ -1124,8 +1172,13 @@
 	<FullTextDecisionBar
 		reasons={reasons.filter((reason) => reason.stage === 'full_text')}
 		current={screenStatus}
-		bind:choosingReason
-		pending={decisionMutation.isPending || undoMutation.isPending}
+		bind:choosingReason={
+			() => choosingReason,
+			(choosing: boolean) => {
+				reasonReportId = choosing ? currentReportId : null;
+			}
+		}
+		pending={deciding || decisionMutation.isPending || undoMutation.isPending}
 		{canUndo}
 		{statusMessage}
 		available={usableFullText}
@@ -1159,10 +1212,41 @@
 {/snippet}
 
 {#snippet emptyState()}
-	{#if fullQueueQuery.isPending || missingQuery.isPending}
+	{#if fullQueueQuery.isPending || missingQuery.isPending || locatingReport}
 		<div class="flex flex-col gap-3 p-6" aria-live="polite">
 			<Skeleton class="h-6 w-2/3" /><Skeleton class="h-32 w-full" />
 			<p class="text-sm text-muted-foreground">Loading full-text queue…</p>
+		</div>
+	{:else if fullQueueQuery.isError || missingQuery.isError}
+		<Alert.Root variant="destructive" class="m-6">
+			<Alert.Title>Full-text queue unavailable</Alert.Title>
+			<Alert.Description>
+				<p>{(fullQueueQuery.error ?? missingQuery.error)?.message}</p>
+				<Button
+					type="button"
+					variant="outline"
+					size="sm"
+					disabled={fullQueueQuery.isFetching || missingQuery.isFetching}
+					onclick={() => {
+						if (fullQueueQuery.isFetchNextPageError)
+							void fullQueueQuery.fetchNextPage();
+						else if (fullQueueQuery.isError) void fullQueueQuery.refetch();
+						if (missingQuery.isError) void missingQuery.refetch();
+					}}>Retry queue</Button
+				>
+			</Alert.Description>
+		</Alert.Root>
+	{:else if urlState.report}
+		<div class="flex flex-col items-start gap-3 p-6" role="status">
+			<h2 class="editorial-title text-xl">Requested report is not in the full-text queue</h2>
+			<p class="text-sm text-muted-foreground">
+				The report may have left this stage or the citation may belong to another project.
+			</p>
+			<Button
+				variant="outline"
+				onclick={() => void updateUrl({ report: null, page: null, block: null })}
+				>Open full-text queue</Button
+			>
 		</div>
 	{:else}
 		<div class="flex flex-col items-start gap-3 p-6">

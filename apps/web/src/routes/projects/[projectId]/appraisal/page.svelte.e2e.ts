@@ -1,5 +1,9 @@
 import { expect, test, type Page } from '@playwright/test';
-import type { AiProposalDto } from '#lib/api/generated/models/index.js';
+import type {
+	AiProposalDto,
+	DocumentBlockDto,
+	PaginatedResponseDocumentBlockDto
+} from '#lib/api/generated/models/index.js';
 
 const project = {
 	id: 'project-1',
@@ -147,7 +151,7 @@ async function mockShell(page: Page): Promise<void> {
 	await page.route(/\/api\/projects\/project-1(?:\?.*)?$/, async (route) =>
 		route.fulfill({ json: project })
 	);
-	await page.route(/\/api\/ingestions(?:\?.*)?$/, async (route) =>
+	await page.route(/\/api\/projects\/[^/]+\/acquisitions(?:\?.*)?$/, async (route) =>
 		route.fulfill({ json: { items: [], next_cursor: null } })
 	);
 	await page.route(/\/api\/projects\/project-1\/reports(?:\?.*)?$/, async (route) =>
@@ -184,35 +188,42 @@ async function mockShell(page: Page): Promise<void> {
 	);
 	await page.route(
 		/\/api\/projects\/project-1\/reports\/report-1\/documents\/document-1\/blocks(?:\?.*)?$/,
-		async (route) =>
-			route.fulfill({
-				json: [
-					{
-						id: 'block-1',
-						document_id: 'document-1',
-						page_number: 1,
-						ordinal: 0,
-						kind: 'text',
-						text: 'The allocation process was described.',
-						section_path: [],
-						content_hash: 'a'.repeat(64),
-						parser_version: 'parser-1',
-						page_ocr_required: false
-					},
-					{
-						id: 'block-2',
-						document_id: 'document-1',
-						page_number: 1,
-						ordinal: 1,
-						kind: 'text',
-						text: 'The allocation sequence was reported.',
-						section_path: [],
-						content_hash: 'b'.repeat(64),
-						parser_version: 'parser-1',
-						page_ocr_required: false
-					}
-				]
-			})
+		async (route) => {
+			const blocks = [
+				{
+					id: 'block-1',
+					document_id: 'document-1',
+					page_number: 1,
+					ordinal: 0,
+					kind: 'text',
+					text: 'The allocation process was described.',
+					section_path: [],
+					content_hash: 'a'.repeat(64),
+					parser_version: 'parser-1',
+					page_ocr_required: false
+				},
+				{
+					id: 'block-2',
+					document_id: 'document-1',
+					page_number: 1,
+					ordinal: 1,
+					kind: 'text',
+					text: 'The allocation sequence was reported.',
+					section_path: [],
+					content_hash: 'b'.repeat(64),
+					parser_version: 'parser-1',
+					page_ocr_required: false
+				}
+			] satisfies DocumentBlockDto[];
+			const cursor = new URL(route.request().url()).searchParams.get('cursor');
+			expect([null, 'after-block-1']).toContain(cursor);
+			await route.fulfill({
+				json: {
+					items: cursor ? blocks.slice(1) : blocks.slice(0, 1),
+					next_cursor: cursor ? null : 'after-block-1'
+				} satisfies PaginatedResponseDocumentBlockDto
+			});
+		}
 	);
 	await page.route(
 		/\/api\/projects\/project-1\/reports\/report-1\/appraisals(?:\?.*)?$/,

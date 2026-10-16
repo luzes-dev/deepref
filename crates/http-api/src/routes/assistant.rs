@@ -36,7 +36,7 @@ async fn execute_proposal(
 ) -> Result<deepref_review::ReviewRunSnapshot, AssistantFailure> {
     let result = match operation {
         AgentProposalOperation::ProposeScreeningDecision(args) => {
-            deepref_postgres::schedule_screening_review(
+            deepref_app::schedule_screening_review(
                 &state.pool,
                 args.project_id.as_uuid(),
                 args.report_id.as_uuid(),
@@ -51,7 +51,7 @@ async fn execute_proposal(
             .await
         }
         AgentProposalOperation::ProposeDuplicateMerge(args) => {
-            deepref_postgres::schedule_duplicate_detection_review(
+            deepref_app::schedule_duplicate_detection_review(
                 &state.pool,
                 args.project_id.as_uuid(),
                 args.source_record_id.as_uuid(),
@@ -61,7 +61,7 @@ async fn execute_proposal(
             .await
         }
         AgentProposalOperation::ProposeStudyGrouping(args) => {
-            deepref_postgres::schedule_study_grouping_review(
+            deepref_app::schedule_study_grouping_review(
                 &state.pool,
                 args.project_id.as_uuid(),
                 args.report_id.as_uuid(),
@@ -70,7 +70,7 @@ async fn execute_proposal(
             .await
         }
         AgentProposalOperation::ProposeClassification(args) => {
-            deepref_postgres::schedule_study_classification_review(
+            deepref_app::schedule_study_classification_review(
                 &state.pool,
                 args.project_id.as_uuid(),
                 args.study_id.as_uuid(),
@@ -79,7 +79,7 @@ async fn execute_proposal(
             .await
         }
         AgentProposalOperation::ProposeExtraction(args) => {
-            deepref_postgres::schedule_data_extraction_review(
+            deepref_app::schedule_data_extraction_review(
                 &state.pool,
                 args.project_id.as_uuid(),
                 args.study_id.as_uuid(),
@@ -88,7 +88,7 @@ async fn execute_proposal(
             .await
         }
         AgentProposalOperation::ProposeAppraisalAnswer(args) => {
-            deepref_postgres::schedule_appraisal_prefill_review(
+            deepref_app::schedule_appraisal_prefill_review(
                 &state.pool,
                 args.project_id.as_uuid(),
                 args.report_id.as_uuid(),
@@ -102,34 +102,31 @@ async fn execute_proposal(
     result.map_err(review_preparation_failure)
 }
 
-fn review_preparation_failure(error: deepref_postgres::ReviewPreparationError) -> AssistantFailure {
+fn review_preparation_failure(error: deepref_app::ReviewPreparationError) -> AssistantFailure {
     match error {
-        deepref_postgres::ReviewPreparationError::Protocol(
-            deepref_postgres::ProtocolError::ProjectNotFound
-            | deepref_postgres::ProtocolError::NotFound,
+        deepref_app::ReviewPreparationError::Protocol(
+            deepref_app::ProtocolError::ProjectNotFound | deepref_app::ProtocolError::NotFound,
         )
-        | deepref_postgres::ReviewPreparationError::Study(
-            deepref_postgres::StudyError::ProjectNotFound
-            | deepref_postgres::StudyError::StudyNotFound
-            | deepref_postgres::StudyError::ReportNotInProject,
+        | deepref_app::ReviewPreparationError::Study(
+            deepref_app::StudyError::ProjectNotFound
+            | deepref_app::StudyError::StudyNotFound
+            | deepref_app::StudyError::ReportNotInProject,
         ) => AssistantFailure::NotFound,
-        deepref_postgres::ReviewPreparationError::InvalidInput(_) => AssistantFailure::Conflict,
+        deepref_app::ReviewPreparationError::InvalidInput(_) => AssistantFailure::Conflict,
         _ => AssistantFailure::Internal,
     }
 }
 
-fn map_conversation_error(error: deepref_postgres::AssistantError) -> ApiError {
+fn map_conversation_error(error: deepref_app::AssistantError) -> ApiError {
     match error {
-        deepref_postgres::AssistantError::ConversationNotFound => {
+        deepref_app::AssistantError::ConversationNotFound => {
             ApiError::NotFound("assistant conversation not found".to_owned())
         }
-        deepref_postgres::AssistantError::ProjectNotFound => {
+        deepref_app::AssistantError::ProjectNotFound => {
             ApiError::NotFound("project not found".to_owned())
         }
-        deepref_postgres::AssistantError::InvalidInput(message) => ApiError::BadRequest(message),
-        deepref_postgres::AssistantError::Database(error) => {
-            ApiError::Internal(anyhow::anyhow!(error))
-        }
+        deepref_app::AssistantError::InvalidInput(message) => ApiError::BadRequest(message),
+        deepref_app::AssistantError::Database(error) => ApiError::Internal(anyhow::anyhow!(error)),
     }
 }
 

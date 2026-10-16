@@ -20,7 +20,7 @@ export const LEVEL_EXPLANATION: Record<AutonomyLevel, string> = {
 /**
  * "Similar records" matches at or above this score merge on their own when the
  * level is "Act and notify". Keep in step with the `p.score>=0.95` filter in
- * `auto_accept_fuzzy_proposals` (crates/postgres/src/deduplication.rs). Matches
+ * `auto_accept_fuzzy_proposals` (crates/app/src/deduplication.rs). Matches
  * below it stay suggestions, whatever the level.
  */
 export const FUZZY_AUTO_MERGE_SCORE = 0.95;

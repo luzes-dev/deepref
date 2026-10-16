@@ -27,6 +27,7 @@ import type {
 	AssistantToolDescriptor,
 	AssistantToolRequest,
 	AssistantToolResponse,
+	ConfirmAssistantPlanRequestDto,
 	CreateAssistantConversationRequestDto
 } from '../models';
 
@@ -922,6 +923,11 @@ export type confirmAssistantPlanResponse200 = {
 	status: 200;
 };
 
+export type confirmAssistantPlanResponse400 = {
+	data: ApiErrorBody;
+	status: 400;
+};
+
 export type confirmAssistantPlanResponse404 = {
 	data: ApiErrorBody;
 	status: 404;
@@ -941,6 +947,7 @@ export type confirmAssistantPlanResponseSuccess = confirmAssistantPlanResponse20
 	headers: Headers;
 };
 export type confirmAssistantPlanResponseError = (
+	| confirmAssistantPlanResponse400
 	| confirmAssistantPlanResponse404
 	| confirmAssistantPlanResponse409
 	| confirmAssistantPlanResponse500
@@ -955,13 +962,35 @@ export const getConfirmAssistantPlanUrl = (projectId: string, planId: string) =>
 export const confirmAssistantPlan = async (
 	projectId: string,
 	planId: string,
+	confirmAssistantPlanRequestDtoNull?: ConfirmAssistantPlanRequestDto | null,
 	options?: Parameters<typeof customFetch>[1]
 ): Promise<confirmAssistantPlanResponseSuccess> => {
+	const getHeaders = (
+		h?: NonNullable<RequestInit['headers']>
+	): Record<string, string | readonly string[]> => {
+		if (!h) return {};
+		if (h instanceof Headers) return Object.fromEntries(h.entries());
+		if (Symbol.iterator in h) {
+			return Object.fromEntries(
+				Array.from(
+					h as Iterable<Iterable<string>>,
+					(entry) => Array.from(entry) as [string, string]
+				)
+			);
+		}
+		const headers: Record<string, string | readonly string[]> = {};
+		for (const [name, value] of Object.entries<string | readonly string[] | undefined>(h)) {
+			if (value !== undefined) headers[name] = value;
+		}
+		return headers;
+	};
 	return customFetch<confirmAssistantPlanResponseSuccess>(
 		getConfirmAssistantPlanUrl(projectId, planId),
 		{
 			...options,
-			method: 'POST'
+			method: 'POST',
+			headers: { 'Content-Type': 'application/json', ...getHeaders(options?.headers) },
+			body: JSON.stringify(confirmAssistantPlanRequestDtoNull)
 		}
 	);
 };
@@ -996,9 +1025,9 @@ export const getConfirmAssistantPlanMutationOptions = <
 		Awaited<ReturnType<typeof confirmAssistantPlan>>,
 		ConfirmAssistantPlanMutationVariables
 	> = (props) => {
-		const { projectId, planId } = props ?? {};
+		const { projectId, planId, data } = props ?? {};
 
-		return confirmAssistantPlan(projectId, planId, requestOptions);
+		return confirmAssistantPlan(projectId, planId, data, requestOptions);
 	};
 
 	return { mutationFn, ...mutationOptions };
@@ -1007,9 +1036,14 @@ export const getConfirmAssistantPlanMutationOptions = <
 export type ConfirmAssistantPlanMutationResult = NonNullable<
 	Awaited<ReturnType<typeof confirmAssistantPlan>>
 >;
-
+export type ConfirmAssistantPlanMutationBody =
+	BodyType<ConfirmAssistantPlanRequestDto | null> | undefined;
 export type ConfirmAssistantPlanMutationError = ErrorType<ApiErrorBody>;
-export type ConfirmAssistantPlanMutationVariables = { projectId: string; planId: string };
+export type ConfirmAssistantPlanMutationVariables = {
+	projectId: string;
+	planId: string;
+	data?: BodyType<ConfirmAssistantPlanRequestDto | null>;
+};
 
 export const createConfirmAssistantPlan = <TError = ErrorType<ApiErrorBody>, TContext = unknown>(
 	options?: () => {

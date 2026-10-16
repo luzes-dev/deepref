@@ -1,4 +1,15 @@
 import { customFetch } from '#lib/api/custom-fetch.js';
+import {
+	getAssistantPlan as getGeneratedAssistantPlan,
+	confirmAssistantPlan as confirmGeneratedAssistantPlan,
+	rejectAssistantPlan as rejectGeneratedAssistantPlan
+} from '#lib/api/generated/assistant/assistant.js';
+import type {
+	AssistantPlanDto,
+	AssistantPlanActionDto,
+	AssistantPlanResultDto,
+	AssistantPlanDeselectionDto
+} from '#lib/api/generated/models/index.js';
 
 export interface AssistantConversation {
 	id: string;
@@ -35,10 +46,7 @@ export interface AssistantMessageRecord {
 export type ReviewDestination =
 	'screening' | 'deduplication' | 'studies' | 'extraction' | 'appraisal';
 
-const ACTOR_HEADERS = {
-	'x-actor-kind': 'user',
-	'x-actor-id': 'local-user'
-} as const;
+const ACTOR_HEADERS = { 'x-actor-kind': 'user' } as const;
 
 const REVIEW_DESTINATIONS: Record<string, ReviewDestination> = {
 	propose_screening_decision: 'screening',
@@ -118,48 +126,9 @@ export function deriveConversationTitle(message: string): string {
 	return `${cut.trimEnd()}…`;
 }
 
-export interface AssistantPlanManualStep {
-	reason: string;
-	link_target: string;
-}
-
-export interface AssistantPlanAction {
-	id: string;
-	tool: string;
-	summary: string;
-	rationale: string;
-	affected_count: number;
-	executable: boolean;
-	manual: AssistantPlanManualStep | null;
-}
-
-export interface AssistantPlanResult {
-	action_id: string;
-	status: 'executed' | 'queued' | 'completed' | 'failed' | 'skipped' | 'manual';
-	message: string;
-	review_run_id: string | null;
-	applied: number | null;
-	unchanged: number | null;
-	failed: number | null;
-}
-
-export type AssistantPlanStatus = 'pending' | 'confirmed' | 'rejected' | 'executed' | 'failed';
-
-export interface AssistantPlan {
-	id: string;
-	project_id: string;
-	conversation_id: string;
-	status: AssistantPlanStatus;
-	summary: string;
-	actions: AssistantPlanAction[];
-	results: AssistantPlanResult[] | null;
-	error: string | null;
-	model: string;
-	prompt_version: string;
-	created_at: string;
-	resolved_by: string | null;
-	resolved_at: string | null;
-}
+export type AssistantPlanAction = AssistantPlanActionDto;
+export type AssistantPlanResult = AssistantPlanResultDto;
+export type AssistantPlan = AssistantPlanDto;
 
 export function isAssistantPlan(value: unknown): value is AssistantPlan {
 	if (typeof value !== 'object' || value === null) return false;
@@ -184,21 +153,18 @@ export function budgetReachedMessage(error: unknown): string | null {
 }
 
 export async function getAssistantPlan(projectId: string, planId: string): Promise<AssistantPlan> {
-	const response = await customFetch<CustomFetchEnvelope<AssistantPlan>>(
-		`/api/projects/${projectId}/assistant/plans/${planId}`,
-		{ method: 'GET', headers: { ...ACTOR_HEADERS } }
-	);
+	const response = await getGeneratedAssistantPlan(projectId, planId);
 	return response.data;
 }
 
+export type AssistantPlanDeselection = AssistantPlanDeselectionDto;
+
 export async function confirmAssistantPlan(
 	projectId: string,
-	planId: string
+	planId: string,
+	deselected: AssistantPlanDeselection[] = []
 ): Promise<AssistantPlan> {
-	const response = await customFetch<CustomFetchEnvelope<AssistantPlan>>(
-		`/api/projects/${projectId}/assistant/plans/${planId}/confirm`,
-		{ method: 'POST', headers: { ...ACTOR_HEADERS } }
-	);
+	const response = await confirmGeneratedAssistantPlan(projectId, planId, { deselected });
 	return response.data;
 }
 
@@ -206,10 +172,7 @@ export async function rejectAssistantPlan(
 	projectId: string,
 	planId: string
 ): Promise<AssistantPlan> {
-	const response = await customFetch<CustomFetchEnvelope<AssistantPlan>>(
-		`/api/projects/${projectId}/assistant/plans/${planId}/reject`,
-		{ method: 'POST', headers: { ...ACTOR_HEADERS } }
-	);
+	const response = await rejectGeneratedAssistantPlan(projectId, planId);
 	return response.data;
 }
 

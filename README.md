@@ -13,9 +13,30 @@ The goal is not to automate researchers out of the process. It is to make more o
 ```text
 apps/web        SvelteKit frontend
 crates/*        Rust library crates, including the HTTP API and PostgreSQL adapter
-services/worker Rust ingestion worker
+services/worker Rust durable-job worker
 docs            Architecture, API, and local development
 ```
+
+## Security model
+
+DeepRef is a single-user application for a trusted machine. The API has no authentication: anyone who can reach it can read, change, and delete every project, run workflows, and spend the configured AI key. Actor ids in requests are self-asserted, so they label work but do not prove who did it.
+
+- The API binds `127.0.0.1:8080` by default and refuses a non-loopback address unless `DEEPREF_ALLOW_NETWORK_BIND=1` is set.
+- It rejects requests addressed to an unknown `Host` or port, which blocks DNS rebinding from web pages you visit. Loopback names use the API bind port; `API_CORS_ORIGINS` adds browser/proxy authorities (including their ports). Set it to the site's public origin when using Caddy or a published container port. Health probes must use an allowed Host too.
+- HTTP clients act only as `user`; automation and system actors are created by the server itself.
+- An unset `APP_ENV` means `production`, with its fail-fast checks. Local development sets `APP_ENV=local`.
+
+Never expose the API, or the web image that proxies to it, to a network without an authenticating proxy in front. The API container image sets `DEEPREF_ALLOW_NETWORK_BIND=1` only so that such a proxy can reach it. See [SECURITY.md](SECURITY.md) to report a vulnerability.
+
+## Runtime contracts
+
+Workflows, purpose-built automations, and compiled reviews share `durable_runs`, `durable_steps`, `durable_attempts`, and the fenced `durable_run_step` job. Review manifests retain their scientific identity and history; exhausted claims settle before a new retry generation opens. Worker lookups use live leases, independently of reviewer-facing AI-first visibility.
+
+Slack, arbitrary HTTP, webhook triggers, and inbound e-mail nodes are parked by default (`DEEPREF_WORKFLOW_NICHE_NODES=false`). Existing graphs remain readable. Enabling this explicit flag restores authoring and ingress; a flag-off worker rejects queued niche graphs before their effects. Outgoing e-mail and purpose-built automations remain available.
+
+DOI acquisition uses canonical `acquisition_items`, report memberships, and `report_fetch_state`; migrations 0080–0081 backfill and remove the legacy DOI plane. New acquisition depths are bounded to 0–3. Previously valid operator/project defaults above 3 are retained with historical provenance, not silently clamped; update such defaults before starting a new acquisition without an explicit supported depth.
+
+Full-text citation links resolve through bounded queue and evidence pages. A later-page evidence error shows a retry action rather than partial overlays. Exclusion reasons stay bound to the displayed report, and held decision keys cannot decide unseen reports.
 
 ## Requirements
 

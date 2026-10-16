@@ -14,4 +14,8 @@ export type ListDocumentBlocksParams = {
 	 * @nullable
 	 */
 	limit?: number | null;
+	/**
+	 * @nullable
+	 */
+	cursor?: string | null;
 };

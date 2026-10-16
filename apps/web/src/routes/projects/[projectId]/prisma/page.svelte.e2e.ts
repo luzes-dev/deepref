@@ -20,6 +20,7 @@ const dependencies = {
 const projection: PrismaDto = {
 	ai_quarantined: 0,
 	automation_excluded: 0,
+	assistant_excluded: 0,
 	project_id: projectId,
 	as_of: '2026-01-01T00:00:00Z',
 	identified_records: 8,
@@ -72,7 +73,7 @@ async function mockPrismaWorkspace(page: Page): Promise<void> {
 		route.fulfill({ json: { items: [project], next_cursor: null } })
 	);
 	await page.route(`${api}/projects/${projectId}`, (route) => route.fulfill({ json: project }));
-	await page.route(/\/api\/ingestions(?:\?.*)?$/, (route) =>
+	await page.route(/\/api\/projects\/[^/]+\/acquisitions(?:\?.*)?$/, (route) =>
 		route.fulfill({ json: { items: [], next_cursor: null } })
 	);
 	await page.route(/\/api\/notifications(?:\/unread-count)?(?:\?.*)?$/, (route) =>

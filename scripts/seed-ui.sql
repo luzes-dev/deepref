@@ -36,12 +36,13 @@ FROM ui_reports ON CONFLICT DO NOTHING;
 INSERT INTO project_reports (project_id, report_id, first_seen_record_id)
 SELECT '00000000-0000-4000-8000-000000000201', md5('deepref:ui:report:' || ordinal)::uuid,
 md5('deepref:ui:record:' || ordinal)::uuid FROM ui_reports ON CONFLICT DO NOTHING;
-INSERT INTO citations (project_id, source_report_id, target_report_id, source, legacy_source_doi, legacy_target_doi)
+INSERT INTO citations (project_id, source_report_id, target_report_id, source)
 SELECT '00000000-0000-4000-8000-000000000201', md5('deepref:ui:report:' || a.ordinal)::uuid,
-md5('deepref:ui:report:' || b.ordinal)::uuid, 'sample', '10.5555/deepref.demo.' || a.ordinal,
-'10.5555/deepref.demo.' || b.ordinal
+md5('deepref:ui:report:' || b.ordinal)::uuid, 'sample'
 FROM ui_reports a JOIN ui_reports b ON a.ordinal < b.ordinal AND (a.ordinal + b.ordinal) % 3 = 0
 ON CONFLICT DO NOTHING;
+UPDATE projects SET metric_requested_revision=metric_requested_revision+1
+WHERE id='00000000-0000-4000-8000-000000000201';
 SELECT recompute_project_report_metrics('00000000-0000-4000-8000-000000000201');
 INSERT INTO protocol_versions (id, project_id, version, name, status, criteria, objective, question, framework_kind, framework_fields)
 SELECT '00000000-0000-4000-8000-000000000202', '00000000-0000-4000-8000-000000000201', 1,

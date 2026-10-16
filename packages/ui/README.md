@@ -4,6 +4,16 @@ A compact visual system for evidence and research work. Warm paper and charcoal 
 
 Import primitives from explicit subpaths (`@deepref/ui/button`, `@deepref/ui/field`) and generic composition from `@deepref/ui/layout`. Import `@deepref/ui/styles.css` once in the host stylesheet. The public `theme.css` path is a compatibility export of the same stylesheet; do not import both.
 
+The public surface follows live application imports. `layout` exports only
+PageFrame, PageToolbar, Surface, StatePanel and PaginationLoadMore; it does not
+load the workflow canvas or chat barrel. BuilderCanvas remains available from
+`@deepref/ui/flow`, and the root exports the live ToolCallCard and ProposalCard.
+Unused breadcrumb, close-button, pagination, sidebar, stepper, tags-input,
+terminal, theme-selector, toggle and window subpaths/root exports, and unused
+page-header, metric-tile, loading-button, chat and workflow-canvas subpaths,
+are removed. Storybook-only source components remain internal rather than
+being deleted.
+
 ## Tokens and composition
 
 `src/styles/styles.css` has three layers: a small private foundation palette and rhythm, light/dark semantic roles, then Tailwind mappings consumed by components. Components should use roles rather than raw palette utilities.
@@ -22,9 +32,9 @@ Import primitives from explicit subpaths (`@deepref/ui/button`, `@deepref/ui/fie
 
 Use the existing four-pixel Tailwind rhythm. Standard controls are 36px high; compact variants are for dense toolbars. Page padding is fluid from 16 to 32px. Section gaps are 16px. Keep control labels in the sans family; reserve the serif family for sustained reading. Avoid using disabled text for explanatory copy: disabled states are intentionally subdued.
 
-`PageFrame` owns the shell and skip link. `PageHeader` wraps long titles and actions. `PageToolbar` wraps filters and trailing controls. `Surface` distinguishes plain sections, default working surfaces, subtle context, inset evidence, and raised temporary content; its caller owns padding. Use headings and spacing before adding another surface. `MetricTile` keeps values compact and tabular. `StatePanel` provides labelled empty, loading, success, warning and error feedback.
+`PageFrame` owns the shell and skip link. `PageToolbar` wraps filters and trailing controls. `Surface` distinguishes plain sections, default working surfaces, subtle context, inset evidence, and raised temporary content; its caller owns padding. Use headings and spacing before adding another surface. `StatePanel` provides labelled empty, loading, success, warning and error feedback.
 
-Use Badge for compact status and Alert for actionable explanation. Status should include words or an icon, not color alone. Destructive actions need explicit names. LoadingButton preserves its accessible name, disables repeat submission and exposes `aria-busy`.
+Use Badge for compact status and Alert for actionable explanation. Status should include words or an icon, not color alone. Destructive actions need explicit names. Busy buttons compose Spinner with a stable accessible name and disable repeat submission.
 
 Dialogs need a Title and Description inside Content. Keep long content scrollable and footer actions reachable. Use a Sheet for adjacent inspection and a Drawer for a compact bottom interaction. Form controls require associated labels; connect errors with `aria-describedby` and set `aria-invalid`. Tables retain horizontal scrolling at narrow widths rather than squeezing structured columns into unreadable text.
 

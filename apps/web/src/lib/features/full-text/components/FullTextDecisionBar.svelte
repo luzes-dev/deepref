@@ -53,8 +53,8 @@
 					size="sm"
 					disabled={pending}
 					onclick={() => {
-						choosingReason = false;
 						onDecision('exclude', reason.id);
+						choosingReason = false;
 					}}
 					>{reason.label}{#if index < 9}<kbd aria-hidden="true">{index + 1}</kbd
 						>{/if}</Button

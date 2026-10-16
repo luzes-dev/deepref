@@ -4,14 +4,26 @@
  * DeepRef API
  * OpenAPI spec version: 0.1.0
  */
+import type { AssistantPlanItemDto } from './assistantPlanItemDto.ts';
 import type { AssistantPlanManualStepDto } from './assistantPlanManualStepDto.ts';
 
 export interface AssistantPlanActionDto {
 	/** @minimum 0 */
 	affected_count: number;
+	/**
+	 * The decision a `screen_reports` action records (`include`, `exclude`
+	 * or `maybe`), read from the action's arguments, not from its summary.
+	 * @nullable
+	 */
+	decision?: string | null;
 	/** False when the assistant is never allowed to run this; see `manual`. */
 	executable: boolean;
 	id: string;
+	/**
+	 * The records a `screen_reports` action changes, in order, as they were
+	 * when the plan was made. Empty for other actions.
+	 */
+	items: AssistantPlanItemDto[];
 	manual?: AssistantPlanManualStepDto | null;
 	rationale: string;
 	summary: string;

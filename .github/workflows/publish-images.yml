@@ -17,6 +17,7 @@ concurrency:
 
 permissions:
   contents: read
+  actions: read
   packages: write
 
 jobs:
@@ -31,28 +32,56 @@ jobs:
           fetch-depth: 0
           persist-credentials: false
 
+      - name: Require successful CI for the checked-out commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: |
+          set -euo pipefail
+          sha="$(git rev-parse HEAD)"
+          run_id="$(gh api --method GET "repos/$GH_REPO/actions/workflows/ci.yml/runs" \
+            -f head_sha="$sha" -f event=push -f per_page=1 \
+            --jq '.workflow_runs[0] | select(.status == "completed" and .conclusion == "success") | .id')"
+          if [[ -z "$run_id" ]]; then
+            echo "::error::The latest push CI run for $sha must be completed and successful before publishing."
+            exit 1
+          fi
+          echo "Publishing commit $sha validated by CI run $run_id."
+
       - name: Resolve publication metadata
         id: meta
         shell: bash
+        env:
+          INPUT_TAG: ${{ inputs.tag }}
+          SOURCE_REF: ${{ github.ref }}
+          REPOSITORY_OWNER: ${{ github.repository_owner }}
         run: |
           set -euo pipefail
 
           tree_hash="$(git rev-parse 'HEAD^{tree}')"
           short_sha="$(git rev-parse --short HEAD)"
 
-          input_tag="${{ github.event.inputs.tag }}"
-          if [[ -n "$input_tag" ]]; then
-            tag="$input_tag"
-          elif [[ "${{ github.ref }}" =~ ^refs/tags/v(.+) ]]; then
+          if [[ -n "$INPUT_TAG" ]]; then
+            tag="$INPUT_TAG"
+          elif [[ "$SOURCE_REF" =~ ^refs/tags/v(.+) ]]; then
             tag="${BASH_REMATCH[1]}"
           else
             tag="$short_sha"
           fi
 
-          owner="$(echo "${{ github.repository_owner }}" | tr '[:upper:]' '[:lower:]')"
+          if [[ ! "$tag" =~ ^[A-Za-z0-9_][A-Za-z0-9_.-]{0,127}$ || "$tag" == "latest" ]]; then
+            echo "::error::Image tag must be a valid Docker tag; latest is reserved for stable releases."
+            exit 1
+          fi
+          publish_latest=false
+          if [[ "$SOURCE_REF" =~ ^refs/tags/v([0-9]+\.[0-9]+\.[0-9]+)$ && "$tag" == "${BASH_REMATCH[1]}" ]]; then
+            publish_latest=true
+          fi
+          owner="$(printf '%s' "$REPOSITORY_OWNER" | tr '[:upper:]' '[:lower:]')"
 
           {
             echo "tag=$tag"
+            echo "publish_latest=$publish_latest"
             echo "tree_hash=$tree_hash"
             echo "registry=ghcr.io/$owner"
           } >> "$GITHUB_OUTPUT"
@@ -78,6 +107,7 @@ jobs:
           REGISTRY: ${{ steps.meta.outputs.registry }}
           IMAGE_PREFIX: deepref
           TAG: ${{ steps.meta.outputs.tag }}
+          PUBLISH_LATEST: ${{ steps.meta.outputs.publish_latest }}
           OCI_SOURCE: ${{ github.server_url }}/${{ github.repository }}
           OCI_REVISION: ${{ github.sha }}
           OCI_VERSION: ${{ steps.meta.outputs.tag }}

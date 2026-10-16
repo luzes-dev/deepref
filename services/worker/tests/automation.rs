@@ -5,16 +5,16 @@
     clippy::string_slice
 )]
 use anyhow::{Result, ensure};
+use deepref_app::{
+    begin_next_automation_step, complete_job, configure_automation_definition, get_automation_run,
+    recover_expired_jobs, start_automation_manually,
+};
 use deepref_application::{
     AutomationDefinitionStatus, AutomationRunId, AutomationRunStatus, AutomationStepRunStatus,
     AutomationTriggerKind, BuiltInAutomationRecipe, ConfigureAutomationDefinition,
     StartAutomationManually,
 };
 use deepref_domain::{Actor, ActorKind, ProjectId};
-use deepref_postgres::{
-    begin_next_automation_step, complete_job, configure_automation_definition, get_automation_run,
-    recover_expired_jobs, start_automation_manually,
-};
 use deepref_worker::{delivery::DeliveryAction, processor::handle_job_with_documents_owned};
 use serde_json::json;
 use sqlx::{PgPool, Row};
@@ -22,7 +22,7 @@ use std::time::Duration;
 use uuid::Uuid;
 
 async fn database() -> Option<PgPool> {
-    deepref_postgres::test_isolation::isolated_pool_from_env("DATABASE_URL", 8).await
+    deepref_app::test_isolation::isolated_pool_from_env("DATABASE_URL", 8).await
 }
 
 fn actor() -> Actor {
@@ -99,7 +99,7 @@ async fn claimed_job(
     Ok(deepref_application::jobs::ClaimedJob {
         id: row.get("id"),
         project_id: ProjectId::new(row.get("project_id")),
-        kind: row.get("kind"),
+        kind: row.get::<String, _>("kind").parse()?,
         payload: row.get("payload"),
         attempts: row.get("attempts"),
         max_attempts: row.get("max_attempts"),
@@ -121,10 +121,14 @@ async fn automation_job_executes_builtin_step_and_completed_retry_is_noop() -> R
             handle_job_with_documents_owned(
                 pool.clone(),
                 &claimed,
-                owner,
+                &claimed.lease(owner),
                 Duration::from_secs(30),
                 None,
                 None,
+                &deepref_worker::config::WorkerConfig::from_source(
+                    &|name| (name == "APP_ENV").then(|| "local".into())
+                )
+                .expect("local worker configuration"),
             )
             .await?
                 == DeliveryAction::Ack
@@ -133,15 +137,19 @@ async fn automation_job_executes_builtin_step_and_completed_retry_is_noop() -> R
             handle_job_with_documents_owned(
                 pool.clone(),
                 &claimed,
-                owner,
+                &claimed.lease(owner),
                 Duration::from_secs(30),
                 None,
                 None,
+                &deepref_worker::config::WorkerConfig::from_source(
+                    &|name| (name == "APP_ENV").then(|| "local".into())
+                )
+                .expect("local worker configuration"),
             )
             .await?
                 == DeliveryAction::Ack
         );
-        ensure!(complete_job(&pool, owner, job_id).await?);
+        ensure!(complete_job(&pool, &claimed.lease(owner)).await?);
 
         let run = get_automation_run(&pool, project_id, run_id).await?;
         ensure!(run.status == AutomationRunStatus::Completed);
@@ -178,10 +186,14 @@ async fn swapped_run_payload_cannot_execute_another_same_owner_job() -> Result<(
         let error = handle_job_with_documents_owned(
             pool.clone(),
             &corrupted,
-            owner,
+            &corrupted.lease(owner),
             Duration::from_secs(30),
             None,
             None,
+            &deepref_worker::config::WorkerConfig::from_source(&|name| {
+                (name == "APP_ENV").then(|| "local".into())
+            })
+            .expect("local worker configuration"),
         )
         .await;
         ensure!(error.is_err(), "swapped automation payload was accepted");
@@ -234,35 +246,35 @@ async fn unknown_step_fails_closed_and_lease_owner_is_required() -> Result<()> {
         // production. Temporarily corrupt the durable snapshot only in this
         // fixture so the worker's fail-closed branch is exercised.
         let mut transaction = pool.begin().await?;
+        sqlx::query("ALTER TABLE durable_steps DISABLE TRIGGER durable_steps_identity")
+            .execute(&mut *transaction)
+            .await?;
         sqlx::query(
-            "ALTER TABLE automation_step_runs DISABLE TRIGGER automation_step_snapshot_trigger",
-        )
-        .execute(&mut *transaction)
-        .await?;
-        sqlx::query(
-            "UPDATE automation_step_runs
+            "UPDATE durable_steps
              SET step_key='untrusted_command'
-             WHERE project_id=$1 AND automation_run_id=$2",
+             WHERE project_id=$1 AND run_id=$2",
         )
         .bind(project_id.as_uuid())
         .bind(run_id.as_uuid())
         .execute(&mut *transaction)
         .await?;
-        sqlx::query(
-            "ALTER TABLE automation_step_runs ENABLE TRIGGER automation_step_snapshot_trigger",
-        )
-        .execute(&mut *transaction)
-        .await?;
+        sqlx::query("ALTER TABLE durable_steps ENABLE TRIGGER durable_steps_identity")
+            .execute(&mut *transaction)
+            .await?;
         transaction.commit().await?;
 
         let claimed = claimed_job(&pool, job_id, "worker-policy").await?;
         let wrong_owner = handle_job_with_documents_owned(
             pool.clone(),
             &claimed,
-            "another-worker",
+            &claimed.lease("another-worker"),
             Duration::from_secs(30),
             None,
             None,
+            &deepref_worker::config::WorkerConfig::from_source(&|name| {
+                (name == "APP_ENV").then(|| "local".into())
+            })
+            .expect("local worker configuration"),
         )
         .await;
         ensure!(wrong_owner.is_err());
@@ -271,25 +283,24 @@ async fn unknown_step_fails_closed_and_lease_owner_is_required() -> Result<()> {
             handle_job_with_documents_owned(
                 pool.clone(),
                 &claimed,
-                "worker-policy",
+                &claimed.lease("worker-policy"),
                 Duration::from_secs(30),
                 None,
                 None,
+                &deepref_worker::config::WorkerConfig::from_source(
+                    &|name| (name == "APP_ENV").then(|| "local".into())
+                )
+                .expect("local worker configuration"),
             )
             .await?
                 == DeliveryAction::Terminate
         );
-        let terminal = deepref_application::jobs::ClaimedJob {
-            max_attempts: claimed.attempts,
-            ..claimed
-        };
         ensure!(
-            deepref_postgres::fail_job(
+            deepref_app::fail_job(
                 &pool,
-                "worker-policy",
-                &terminal,
+                &claimed.lease("worker-policy"),
                 "terminal job failure",
-                Duration::ZERO,
+                deepref_application::jobs::JobRetry::DeadLetter,
             )
             .await?
         );
@@ -322,9 +333,14 @@ async fn crashed_step_is_reclaimed_by_new_owner_without_repeating_completed_step
     let result = async {
         let (run_id, job_id) = started_job(&pool, project_id, "crash").await?;
         let claimed_a = claimed_job(&pool, job_id, "worker-crashed").await?;
-        let first = begin_next_automation_step(&pool, project_id, run_id, "worker-crashed")
-            .await?
-            .expect("first worker claims the step");
+        let first = begin_next_automation_step(
+            &pool,
+            project_id,
+            run_id,
+            &claimed_a.lease("worker-crashed"),
+        )
+        .await?
+        .expect("first worker claims the step");
         ensure!(first.attempts == 1);
 
         sqlx::query(
@@ -335,21 +351,30 @@ async fn crashed_step_is_reclaimed_by_new_owner_without_repeating_completed_step
         .execute(&pool)
         .await?;
         ensure!(recover_expired_jobs(&pool).await? == 1);
+        // Recovery backs the job off; skip the wait instead of sleeping.
+        sqlx::query("UPDATE jobs SET available_at=now() WHERE id=$1")
+            .bind(job_id)
+            .execute(&pool)
+            .await?;
         let claimed_b = claimed_job(&pool, job_id, "worker-recovered").await?;
         ensure!(claimed_b.attempts == claimed_a.attempts + 1);
         ensure!(
             handle_job_with_documents_owned(
                 pool.clone(),
                 &claimed_b,
-                "worker-recovered",
+                &claimed_b.lease("worker-recovered"),
                 Duration::from_secs(30),
                 None,
                 None,
+                &deepref_worker::config::WorkerConfig::from_source(
+                    &|name| (name == "APP_ENV").then(|| "local".into())
+                )
+                .expect("local worker configuration"),
             )
             .await?
                 == DeliveryAction::Ack
         );
-        ensure!(complete_job(&pool, "worker-recovered", job_id).await?);
+        ensure!(complete_job(&pool, &claimed_b.lease("worker-recovered")).await?);
 
         let run = get_automation_run(&pool, project_id, run_id).await?;
         ensure!(run.status == AutomationRunStatus::Completed);

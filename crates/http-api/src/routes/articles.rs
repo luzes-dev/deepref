@@ -260,7 +260,7 @@ pub(crate) async fn project_graph(
         return Err(ApiError::NotFound("project not found".to_owned()));
     }
     let projection = projection_metadata(&state, project_id).await?;
-    let graph = deepref_postgres::load_project_graph(&state.pool, project_id, fields).await?;
+    let graph = deepref_app::load_project_graph(&state.pool, project_id, fields).await?;
     let nodes = graph.nodes.into_iter().map(graph_node_dto).collect();
     let edges = graph
         .edges
@@ -285,12 +285,12 @@ pub(crate) async fn recommendations(
     Path(project_id): Path<Uuid>,
 ) -> Result<Json<RecommendationGroupsDto>, ApiError> {
     let projection = projection_metadata(&state, project_id).await?;
-    let graph = deepref_postgres::load_project_graph(
+    let graph = deepref_app::load_project_graph(
         &state.pool,
         project_id,
-        deepref_graph::GraphFieldSelection {
+        deepref_domain::graph::GraphFieldSelection {
             screening: true,
-            ..deepref_graph::GraphFieldSelection::metrics()
+            ..deepref_domain::graph::GraphFieldSelection::metrics()
         },
     )
     .await?;
@@ -312,7 +312,7 @@ pub(crate) async fn recommendations(
 const RECOMMENDATION_GROUP_SIZE: usize = 5;
 
 /// Articles already excluded at either screening stage are never suggested.
-fn is_screened_out(node: &deepref_graph::GraphNode) -> bool {
+fn is_screened_out(node: &deepref_domain::graph::GraphNode) -> bool {
     node.screening.as_ref().is_some_and(|screening| {
         screening.final_status == "exclude" || screening.title_abstract_status == "exclude"
     })
@@ -369,7 +369,7 @@ pub(crate) async fn recompute_metrics(
     Path(project_id): Path<Uuid>,
 ) -> Result<(StatusCode, Json<RecomputeMetricsDto>), ApiError> {
     let mut tx = state.pool.begin().await?;
-    let event_id = deepref_postgres::enqueue_metrics_recompute(&mut tx, project_id).await?;
+    let event_id = deepref_app::enqueue_metrics_recompute(&mut tx, project_id).await?;
     tx.commit().await?;
     Ok((
         StatusCode::ACCEPTED,
@@ -421,16 +421,18 @@ fn report_from_row(row: sqlx::postgres::PgRow) -> ReportDto {
     }
 }
 
-fn report_from_graph_node(node: deepref_graph::GraphNode) -> Result<ReportDto, ApiError> {
-    let metrics = node.metrics.unwrap_or(deepref_graph::GraphMetricsOverlay {
-        total_citations: 0,
-        references_count: 0,
-        internal_citations: 0,
-        outbound_internal_references: 0,
-        rank_score: 0.0,
-        metrics_as_of: None,
-        metrics_stale: true,
-    });
+fn report_from_graph_node(node: deepref_domain::graph::GraphNode) -> Result<ReportDto, ApiError> {
+    let metrics = node
+        .metrics
+        .unwrap_or(deepref_domain::graph::GraphMetricsOverlay {
+            total_citations: 0,
+            references_count: 0,
+            internal_citations: 0,
+            outbound_internal_references: 0,
+            rank_score: 0.0,
+            metrics_as_of: None,
+            metrics_stale: true,
+        });
     Ok(ReportDto {
         report_id: node.report_id,
         doi: node.doi,
@@ -451,7 +453,7 @@ fn report_from_graph_node(node: deepref_graph::GraphNode) -> Result<ReportDto, A
     })
 }
 
-fn graph_node_dto(node: deepref_graph::GraphNode) -> GraphNodeDto {
+fn graph_node_dto(node: deepref_domain::graph::GraphNode) -> GraphNodeDto {
     GraphNodeDto {
         report_id: node.report_id,
         doi: node.doi,
@@ -488,16 +490,18 @@ fn graph_node_dto(node: deepref_graph::GraphNode) -> GraphNodeDto {
     }
 }
 
-fn parse_graph_fields(value: Option<&str>) -> Result<deepref_graph::GraphFieldSelection, ApiError> {
+fn parse_graph_fields(
+    value: Option<&str>,
+) -> Result<deepref_domain::graph::GraphFieldSelection, ApiError> {
     let Some(value) = value else {
-        return Ok(deepref_graph::GraphFieldSelection::all());
+        return Ok(deepref_domain::graph::GraphFieldSelection::all());
     };
     if value.trim().is_empty() {
         return Err(ApiError::BadRequest(
             "graph fields must not be empty".to_owned(),
         ));
     }
-    let mut fields = deepref_graph::GraphFieldSelection {
+    let mut fields = deepref_domain::graph::GraphFieldSelection {
         screening: false,
         metrics: false,
         study: false,
@@ -530,12 +534,12 @@ mod tests {
     fn graph_fields_default_and_selection_are_explicit() {
         assert_eq!(
             parse_graph_fields(None).expect("default fields"),
-            deepref_graph::GraphFieldSelection::all()
+            deepref_domain::graph::GraphFieldSelection::all()
         );
         assert_eq!(
             parse_graph_fields(Some("screening,metrics,study,appraisal,provenance"))
                 .expect("all fields"),
-            deepref_graph::GraphFieldSelection::all()
+            deepref_domain::graph::GraphFieldSelection::all()
         );
         let screening = parse_graph_fields(Some("screening")).expect("screening field");
         assert!(screening.screening);
@@ -571,8 +575,8 @@ mod tests {
         }
     }
 
-    fn screened(final_status: &str, title_abstract: &str) -> deepref_graph::GraphNode {
-        deepref_graph::GraphNode {
+    fn screened(final_status: &str, title_abstract: &str) -> deepref_domain::graph::GraphNode {
+        deepref_domain::graph::GraphNode {
             report_id: Uuid::new_v4(),
             doi: None,
             title: None,
@@ -583,7 +587,7 @@ mod tests {
             container_title: None,
             url: None,
             metrics: None,
-            screening: Some(deepref_graph::GraphScreeningOverlay {
+            screening: Some(deepref_domain::graph::GraphScreeningOverlay {
                 title_abstract_status: title_abstract.to_owned(),
                 full_text_status: "not_required".to_owned(),
                 final_status: final_status.to_owned(),

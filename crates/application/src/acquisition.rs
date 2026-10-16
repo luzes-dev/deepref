@@ -112,11 +112,6 @@ pub trait SearchProvider: Send + Sync {
     fn search<'a>(&'a self, query: &'a str) -> ProviderFuture<'a, Vec<RawRecord>>;
 }
 
-pub trait FullTextResolver: Send + Sync {
-    fn name(&self) -> &'static str;
-    fn resolve<'a>(&'a self, record: &'a RawRecord) -> ProviderFuture<'a, Option<String>>;
-}
-
 pub trait ImportParser: Send + Sync {
     fn format(&self) -> ImportFormat;
     fn parse(&self, bytes: &[u8]) -> Result<Vec<RawRecord>, ImportError>;

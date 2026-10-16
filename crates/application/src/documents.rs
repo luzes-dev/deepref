@@ -1,9 +1,7 @@
 use std::{future::Future, pin::Pin};
 
 use bytes::Bytes;
-use deepref_domain::{
-    Actor, DocumentBlock, DocumentId, DocumentMetadata, DocumentSource, ProjectId, ReportId,
-};
+use deepref_domain::{Actor, DocumentId, DocumentSource, ProjectId, ReportId};
 use futures::Stream;
 use thiserror::Error;
 use uuid::Uuid;
@@ -40,16 +38,6 @@ pub trait DocumentStore: Send + Sync {
     ) -> DocumentFuture<'a, StoredDocumentContent>;
     fn read_pdf<'a>(&'a self, id: DocumentStorageId) -> DocumentFuture<'a, DocumentByteStream<'a>>;
     fn delete_pdf<'a>(&'a self, id: DocumentStorageId) -> DocumentFuture<'a, ()>;
-}
-
-pub trait DocumentRepository: Send + Sync {
-    fn list<'a>(&'a self, query: DocumentListQuery) -> DocumentFuture<'a, Vec<DocumentMetadata>>;
-    fn detail<'a>(&'a self, query: DocumentDetailQuery) -> DocumentFuture<'a, DocumentMetadata>;
-    fn blocks<'a>(&'a self, query: DocumentDetailQuery) -> DocumentFuture<'a, Vec<DocumentBlock>>;
-}
-
-pub trait OcrEngine: Send + Sync {
-    fn enqueue<'a>(&'a self, document_id: DocumentId) -> DocumentFuture<'a, ()>;
 }
 
 #[derive(Debug, Error)]

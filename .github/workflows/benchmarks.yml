@@ -56,7 +56,9 @@ jobs:
         env:
           SQLX_OFFLINE: "true"
         run: |
-          cargo bench --workspace -- --save-baseline main
+          # --benches also selects libtest library/binary harnesses, which reject
+          # Criterion's --save-baseline. Select only explicit benchmark targets.
+          cargo bench --workspace --bench '*' --locked -- --save-baseline main
 
       - name: Archive Criterion benchmark reports
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
@@ -64,3 +66,11 @@ jobs:
           name: criterion-benchmarks-${{ github.sha }}
           path: target/criterion/
           retention-days: 30
+
+  report-failure:
+    if: always() && github.event_name == 'schedule' && needs.bench.result == 'failure'
+    needs: bench
+    permissions:
+      contents: read
+      issues: write
+    uses: ./.github/workflows/scheduled-failure.yml
