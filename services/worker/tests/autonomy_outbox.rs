@@ -9,7 +9,7 @@ use deepref_ai::{
     ResolvedModel, ScreeningStage,
 };
 use deepref_app::{
-    ProtocolActor, claim_job, complete_job, insert_model_route, migrate, publish_protocol,
+    ProtocolActor, claim_job, complete_job, insert_model_route, publish_protocol,
     save_protocol_draft, schedule_screening_review,
 };
 use deepref_application::{
@@ -18,6 +18,7 @@ use deepref_application::{
 use deepref_domain::{
     Actor, ActorKind, CriterionDimension, CriterionKind, CriterionStage, FrameworkKind,
 };
+
 use deepref_worker::{delivery::DeliveryAction, processor::handle_job_with_documents_owned_and_ai};
 use serde_json::{Value, json};
 use std::{collections::BTreeMap, sync::Arc, time::Duration};
@@ -137,7 +138,6 @@ async fn a_second_opinion_lost_after_finalization_is_recorded_by_the_reconciler(
     else {
         return;
     };
-    migrate(&pool).await.unwrap();
     let project = Uuid::new_v4();
     sqlx::query("INSERT INTO projects(id,name) VALUES($1,'autonomy outbox test')")
         .bind(project)
