@@ -9,7 +9,7 @@ use deepref_ai::{
     ResolvedModel, ScreeningStage,
 };
 use deepref_app::{
-    ProtocolActor, claim_job, complete_job, insert_model_route, migrate, publish_protocol,
+    ProtocolActor, claim_job, complete_job, insert_model_route, publish_protocol,
     save_protocol_draft, schedule_screening_review,
 };
 use deepref_application::{
@@ -18,10 +18,7 @@ use deepref_application::{
 use deepref_domain::{
     Actor, ActorKind, CriterionDimension, CriterionKind, CriterionStage, FrameworkKind,
 };
-use deepref_postgres::{
-    ProtocolActor, claim_job, complete_job, insert_model_route, publish_protocol,
-    save_protocol_draft, schedule_screening_review,
-};
+
 use deepref_worker::{delivery::DeliveryAction, processor::handle_job_with_documents_owned_and_ai};
 use serde_json::{Value, json};
 use std::{collections::BTreeMap, sync::Arc, time::Duration};
