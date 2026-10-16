@@ -533,6 +533,12 @@ jobs:
           version: v0.17.0
       - name: Enable sccache compiler wrapper
         run: echo "RUSTC_WRAPPER=sccache" >> "$GITHUB_ENV"
+      # Note: an overlap experiment (nextest build holding cargo's target-dir
+      # build lock while the check compiled) was measured on run 38975468142
+      # and returned ~zero: the lane is compile/link/database bound on one
+      # shared 4-core runner, and a single runner cannot interleave CPU-heavy
+      # link work underneath an already CPU-heavy build+test tail. Serial
+      # steps are kept because they stream nextest progress in the job UI.
       - name: Apply database migrations
         env:
           DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/deepref
@@ -541,33 +547,12 @@ jobs:
             --source crates/app/migrations \
             --database-url "$DATABASE_URL" \
             --no-dotenv
-      # The metadata check and the test suite both run cargo against the same
-      # target directory, so they serialize on cargo's build lock. Starting
-      # nextest first gives the lock to its build phase; the check's own
-      # compile blocks until that lock frees, then expands proc macros while
-      # the database-bound test phase executes with cargo's build lock long
-      # released. nextest has no exec-only mode in 0.9.x ("--no-build" is not
-      # an accepted argument), so the build lock is the overlap sequencer, and
-      # the check's ~100 s compile overlaps the test tail instead of adding to
-      # it. The 1 s grace period keeps nextest from losing the lock race.
-      - name: Verify SQLx offline query metadata and run integration tests
+      - name: Verify SQLx offline query metadata against live database
         env:
           DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/deepref
-        run: |
-          set +e
-          cargo nextest run --workspace --tests --locked --profile ci > "$RUNNER_TEMP/nextest.log" 2>&1 &
-          NEXTEST_PID=$!
-          sleep 1
-          cargo xtask sqlx check > "$RUNNER_TEMP/sqlx-check.log" 2>&1 &
-          SQLX_PID=$!
-          wait "$NEXTEST_PID"
-          TEST_STATUS=$?
-          wait "$SQLX_PID"
-          SQLX_STATUS=$?
-          set -e
-          if test "$TEST_STATUS" -ne 0; then tail --lines 50 "$RUNNER_TEMP/nextest.log"; fi
-          tail --lines 30 "$RUNNER_TEMP/sqlx-check.log"
-          test "$TEST_STATUS" -eq 0 && test "$SQLX_STATUS" -eq 0
+        run: cargo xtask sqlx check
+      - name: Run integration tests
+        run: cargo nextest run --workspace --tests --locked --profile ci
       - name: Show sccache statistics
         if: always()
         run: |
