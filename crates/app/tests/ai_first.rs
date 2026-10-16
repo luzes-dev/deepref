@@ -1075,7 +1075,6 @@ async fn identity_is_checked_on_the_locking_transaction_connection() {
         .connect(&url)
         .await
         .unwrap();
-    migrate(&pool).await.unwrap();
     let f = Fixture::new(pool, true).await;
     let sample = f.draw().await;
     f.label_all(&sample, false).await;
