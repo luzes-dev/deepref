@@ -34,7 +34,7 @@ jobs:
       - name: Install nightly Rust toolchain for libFuzzer
         run: |
           rustup toolchain install nightly --profile minimal
-          rustup default nightly
+          rustup override set nightly
 
       - name: Install pinned cargo-fuzz
         run: |
@@ -56,7 +56,7 @@ jobs:
           run_target() {
             local t="$1"
             echo "::group::Fuzzing $t for ${DURATION}s"
-            cargo fuzz run "$t" -- -max_total_time="$DURATION"
+            cargo fuzz run "$t" --target x86_64-unknown-linux-gnu -- -max_total_time="$DURATION"
             echo "::endgroup::"
           }
 

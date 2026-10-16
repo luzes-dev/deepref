@@ -6,29 +6,39 @@
  */
 
 /**
- * One PubMed ID of a PubMed ID import run.
+ * A DOI traversal item or PubMed import item.
  */
 export interface AcquisitionItemDto {
-	/** The PubMed ID, as it was imported. */
+	attempts: number;
+	/** @nullable */
+	depth?: number | null;
+	/** DOI or PubMed identifier. */
 	identifier: string;
+	kind: string;
 	/**
 	 * Why the ID could not be fetched, when it failed.
 	 * @nullable
 	 */
 	last_error?: string | null;
-	/** The place the ID had in the import. Items are paged in this order. */
+	/** @nullable */
+	parent_doi?: string | null;
+	/** Import order for PubMed; DOI items use queued_at and identifier for pagination. */
 	position: number;
 	/** @nullable */
 	processed_at?: string | null;
+	/** @nullable */
+	queued_at?: string | null;
 	/**
 	 * The record this import saved for the ID, when one was saved.
 	 * @nullable
 	 */
 	record_id?: string | null;
-	/** One of queued, imported, already_in_project, not_found, or failed. */
+	/** @nullable */
+	report_id?: string | null;
+	/** Provider-specific item processing status. */
 	status: string;
 	/**
-	 * The article's title, once PubMed has answered for this ID.
+	 * Report title, when available.
 	 * @nullable
 	 */
 	title?: string | null;

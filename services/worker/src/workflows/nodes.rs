@@ -6,6 +6,11 @@ use chrono::Utc;
 use deepref_ai::{
     AiGateway, CompletionRequest, ModelProfile, ModelRouter, ScreeningStage as AiStage,
 };
+use deepref_app::{
+    AiProposalError, ExposureSource, NewExposure, NodeExecution, NodeOutcome, PostgresAiStore,
+    RecordFilter, get_ai_budget, get_ai_proposal, get_review_runs, get_workflow_secret,
+    record_exposures, review_run_proposals,
+};
 use deepref_application::{
     ScreenReportCommand,
     workflows::{
@@ -18,11 +23,6 @@ use deepref_application::{
 use deepref_domain::{
     Actor, ActorKind, ExclusionReasonId, ProjectId, ProtocolVersionId, ReportId, ScreeningDecision,
     ScreeningStage,
-};
-use deepref_postgres::{
-    AiProposalError, ExposureSource, NewExposure, NodeExecution, NodeOutcome, PostgresAiStore,
-    RecordFilter, get_ai_budget, get_ai_proposal, get_review_runs, get_workflow_secret,
-    record_exposures, review_run_proposals,
 };
 use deepref_review::ReviewRunState;
 use serde_json::{Map, Value, json};
@@ -111,6 +111,12 @@ fn dry_note(what: &str) -> Option<String> {
 }
 
 pub async fn execute(context: &Context<'_>) -> NodeResult {
+    if !deepref_application::workflows::catalog::node_is_available(
+        &context.execution.node_type,
+        context.runtime.workflow.niche_nodes_enabled,
+    ) {
+        return Err(NodeError::permanent("Niche workflow nodes are disabled."));
+    }
     let execution = context.execution;
     let config = &execution.config;
     let input = |port: &str| execution.inputs.get(port);
@@ -124,13 +130,12 @@ pub async fn execute(context: &Context<'_>) -> NodeResult {
                 limit: cfg_i64(config, "limit", 100),
             };
             let items =
-                deepref_postgres::find_record_items(context.pool, project(context), &filter)
-                    .await?;
+                deepref_app::find_record_items(context.pool, project(context), &filter).await?;
             let note = format!("Found {} record(s).", items.len());
             ok("records", Value::Array(items), Some(note))
         }
         "data.screening_queue" => {
-            let items = deepref_postgres::screening_queue_items(
+            let items = deepref_app::screening_queue_items(
                 context.pool,
                 project(context),
                 cfg_str(config, "stage").unwrap_or("title_abstract"),
@@ -145,7 +150,7 @@ pub async fn execute(context: &Context<'_>) -> NodeResult {
             let Some(id) = ids.first() else {
                 return skipped("There was no record to look up.");
             };
-            match deepref_postgres::report_details(context.pool, project(context), *id).await? {
+            match deepref_app::report_details(context.pool, project(context), *id).await? {
                 Some(details) => ok("report", details, None),
                 None => skipped("The record is no longer in this project."),
             }
@@ -155,7 +160,7 @@ pub async fn execute(context: &Context<'_>) -> NodeResult {
             let Some(id) = ids.first() else {
                 return skipped("There was no record to look up.");
             };
-            match deepref_postgres::study_of_report(context.pool, project(context), *id).await? {
+            match deepref_app::study_of_report(context.pool, project(context), *id).await? {
                 Some(study) => ok("study", study, None),
                 None => skipped("This record is not part of a study yet."),
             }
@@ -251,7 +256,7 @@ pub async fn execute(context: &Context<'_>) -> NodeResult {
                 &title,
                 &message,
             );
-            let sent = deepref_postgres::notify_from_workflow(
+            let sent = deepref_app::notify_from_workflow(
                 context.pool,
                 execution.project_id,
                 cfg_str(config, "severity").unwrap_or("info"),
@@ -365,7 +370,7 @@ pub async fn execute(context: &Context<'_>) -> NodeResult {
                 .map(|(name, value)| (name.trim().to_owned(), render_template(value.trim(), &data)))
                 .filter(|(name, _)| !name.is_empty())
                 .collect();
-            if let Some(auth) = deepref_postgres::get_workflow_http_secret(
+            if let Some(auth) = deepref_app::get_workflow_http_secret(
                 context.pool,
                 execution.workflow_id,
                 &execution.node_id,
@@ -412,7 +417,7 @@ pub async fn execute(context: &Context<'_>) -> NodeResult {
                     dry_note("Would have refreshed the project statistics."),
                 );
             }
-            deepref_postgres::recompute_project_metrics(context.pool, execution.project_id)
+            deepref_app::recompute_project_metrics(context.pool, execution.project_id)
                 .await
                 .map_err(|_| {
                     NodeError::retryable(
@@ -465,9 +470,9 @@ async fn run_deduplication(context: &Context<'_>) -> NodeResult {
         }
         _ => {}
     }
-    let summary = deepref_postgres::run_deduplication(
+    let summary = deepref_app::run_deduplication(
         context.pool,
-        deepref_postgres::DedupeRunRequest {
+        deepref_app::DedupeRunRequest {
             project_id: execution.project_id,
             limit: cfg_i64(&execution.config, "limit", 500).clamp(1, 5000),
             actor_kind: ActorKind::Automation.as_str().to_owned(),
@@ -594,9 +599,9 @@ async fn import_identifiers(context: &Context<'_>) -> NodeResult {
     let label = cfg_str(&execution.config, "label")
         .unwrap_or("Added by automation")
         .to_owned();
-    deepref_postgres::persist_import(
+    deepref_app::persist_import(
         context.pool,
-        &deepref_postgres::ImportPersistRequest {
+        &deepref_app::ImportPersistRequest {
             project_id: execution.project_id,
             source: "workflow".to_owned(),
             strategy: "workflow_import".to_owned(),
@@ -615,9 +620,9 @@ async fn import_identifiers(context: &Context<'_>) -> NodeResult {
         NodeError::retryable("The records could not be saved. This will be tried again.")
     })?;
     // Resolve the new records into reports so later steps can use them.
-    deepref_postgres::run_deduplication(
+    deepref_app::run_deduplication(
         context.pool,
-        deepref_postgres::DedupeRunRequest {
+        deepref_app::DedupeRunRequest {
             project_id: execution.project_id,
             limit: 1000,
             actor_kind: ActorKind::Automation.as_str().to_owned(),
@@ -627,7 +632,7 @@ async fn import_identifiers(context: &Context<'_>) -> NodeResult {
     .await
     .map_err(|_| NodeError::retryable("The new records could not be checked for duplicates."))?;
     let ids = identifier_reports(context, &dois, &pmids).await?;
-    let items = deepref_postgres::load_record_items(context.pool, project(context), &ids).await?;
+    let items = deepref_app::load_record_items(context.pool, project(context), &ids).await?;
     // The import saves a copy of each record even when the project already holds it;
     // the copy is then merged. Counting reports, not copies, says what was new.
     let (added, already) = import_counts(&before, &ids);
@@ -645,10 +650,10 @@ async fn identifier_reports(
     pmids: &[String],
 ) -> Result<Vec<Uuid>, NodeError> {
     let mut ids =
-        deepref_postgres::find_reports_by_identifier(context.pool, project(context), "doi", dois)
+        deepref_app::find_reports_by_identifier(context.pool, project(context), "doi", dois)
             .await?;
     ids.extend(
-        deepref_postgres::find_reports_by_identifier(context.pool, project(context), "pmid", pmids)
+        deepref_app::find_reports_by_identifier(context.pool, project(context), "pmid", pmids)
             .await?,
     );
     ids.sort();
@@ -739,7 +744,7 @@ async fn record_decision(context: &Context<'_>) -> NodeResult {
             "title_abstract"
         };
         for report_id in report_ids(&items) {
-            if let Ok(decision_id) = deepref_postgres::record_workflow_reviewer_decision(
+            if let Ok(decision_id) = deepref_app::record_workflow_reviewer_decision(
                 context.pool,
                 execution.project_id,
                 report_id,
@@ -801,7 +806,7 @@ async fn record_decision(context: &Context<'_>) -> NodeResult {
         );
     }
     let project_id = project(context);
-    let protocol = deepref_postgres::get_published_protocol(context.pool, execution.project_id)
+    let protocol = deepref_app::get_published_protocol(context.pool, execution.project_id)
         .await
         .map_err(|_| {
             NodeError::permanent("Publish the protocol before screening automatically.")
@@ -817,11 +822,9 @@ async fn record_decision(context: &Context<'_>) -> NodeResult {
         _ => ScreeningDecision::Include,
     };
     let reason = match cfg_str(config, "reason") {
-        Some(name) => {
-            deepref_postgres::find_exclusion_reason(context.pool, project_id, stage, name)
-                .await?
-                .map(ExclusionReasonId::new)
-        }
+        Some(name) => deepref_app::find_exclusion_reason(context.pool, project_id, stage, name)
+            .await?
+            .map(ExclusionReasonId::new),
         None => None,
     };
     if domain_decision == ScreeningDecision::Exclude && stage == "full_text" && reason.is_none() {
@@ -854,7 +857,7 @@ async fn record_decision(context: &Context<'_>) -> NodeResult {
             notes: cfg_str(config, "note").map(str::to_owned),
             actor: actor.clone(),
         };
-        match deepref_postgres::screen_report(context.pool, command).await {
+        match deepref_app::screening::screen_report(context.pool, command).await {
             Ok(snapshot) => {
                 done += 1;
                 decided.push(item.clone());
@@ -865,7 +868,7 @@ async fn record_decision(context: &Context<'_>) -> NodeResult {
                         .unwrap_or("Untitled record")
                         .to_owned();
                     let shown: String = title.chars().take(120).collect();
-                    let mut entry = deepref_postgres::NewActivity::new(
+                    let mut entry = deepref_app::NewActivity::new(
                         execution.project_id,
                         "automation",
                         "Automation",
@@ -883,10 +886,10 @@ async fn record_decision(context: &Context<'_>) -> NodeResult {
                     });
                     entry.undo_kind = Some("screening_event");
                     entry.batch_id = Some(execution.run_id);
-                    let _ = deepref_postgres::record_activity(context.pool, &entry).await;
+                    let _ = deepref_app::record_activity(context.pool, &entry).await;
                 }
             }
-            Err(deepref_postgres::ScreeningError::Repeated { .. }) => unchanged += 1,
+            Err(deepref_app::screening::ScreeningError::Repeated { .. }) => unchanged += 1,
             Err(_) => failed += 1,
         }
     }
@@ -913,7 +916,7 @@ async fn notify_suggestion(
         );
         map.insert("run_id".to_owned(), json!(context.execution.run_id));
     }
-    deepref_postgres::notify_from_workflow(
+    deepref_app::notify_from_workflow(
         context.pool,
         context.execution.project_id,
         "info",
@@ -1035,9 +1038,9 @@ async fn attach_pdf(context: &Context<'_>) -> NodeResult {
             continue;
         };
         let mut tx = context.pool.begin().await?;
-        let created = deepref_postgres::create_document(
+        let created = deepref_app::create_document(
             &mut tx,
-            deepref_postgres::NewDocument {
+            deepref_app::NewDocument {
                 project_id: execution.project_id,
                 report_id,
                 id: Uuid::new_v4(),
@@ -1056,7 +1059,7 @@ async fn attach_pdf(context: &Context<'_>) -> NodeResult {
         .await;
         match created {
             Ok(document) => {
-                if deepref_postgres::enqueue_retrieve(&mut tx, project(context), document.id)
+                if deepref_app::enqueue_retrieve(&mut tx, project(context), document.id)
                     .await
                     .is_ok()
                     && tx.commit().await.is_ok()
@@ -1195,7 +1198,7 @@ async fn export_records(context: &Context<'_>) -> NodeResult {
             )),
         );
     }
-    let file_id = deepref_postgres::create_workflow_file(
+    let file_id = deepref_app::create_workflow_file(
         context.pool,
         execution.project_id,
         execution.run_id,
@@ -1323,7 +1326,7 @@ async fn schedule_reviews(context: &Context<'_>, task: &str, stage: &str) -> Nod
     let (mut scheduled, mut failed) = (0usize, 0usize);
     let mut first_error: Option<String> = None;
     for report_id in report_ids(&items) {
-        let result: Result<(), deepref_postgres::ReviewPreparationError> = async {
+        let result: Result<(), deepref_app::ReviewPreparationError> = async {
             match task {
                 "screening" => {
                     let ai_stage = if stage == "full_text" {
@@ -1331,7 +1334,7 @@ async fn schedule_reviews(context: &Context<'_>, task: &str, stage: &str) -> Nod
                     } else {
                         AiStage::TitleAbstract
                     };
-                    deepref_postgres::schedule_screening_review(
+                    deepref_app::schedule_screening_review(
                         context.pool,
                         project_id,
                         report_id,
@@ -1343,7 +1346,7 @@ async fn schedule_reviews(context: &Context<'_>, task: &str, stage: &str) -> Nod
                     .await?;
                 }
                 "study_grouping" => {
-                    deepref_postgres::schedule_study_grouping_review(
+                    deepref_app::schedule_study_grouping_review(
                         context.pool,
                         project_id,
                         report_id,
@@ -1354,9 +1357,7 @@ async fn schedule_reviews(context: &Context<'_>, task: &str, stage: &str) -> Nod
                 "appraisal_prefill" => {
                     let definitions =
                         deepref_application::all_appraisal_definitions().map_err(|error| {
-                            deepref_postgres::ReviewPreparationError::InvalidInput(
-                                error.to_string(),
-                            )
+                            deepref_app::ReviewPreparationError::InvalidInput(error.to_string())
                         })?;
                     let wanted = cfg_str(&execution.config, "appraisal_tool");
                     let definition = definitions
@@ -1365,11 +1366,11 @@ async fn schedule_reviews(context: &Context<'_>, task: &str, stage: &str) -> Nod
                             wanted.is_none_or(|wanted| definition.id.as_str() == wanted)
                         })
                         .ok_or_else(|| {
-                            deepref_postgres::ReviewPreparationError::InvalidInput(
+                            deepref_app::ReviewPreparationError::InvalidInput(
                                 "The appraisal tool was not found.".to_owned(),
                             )
                         })?;
-                    deepref_postgres::schedule_appraisal_prefill_review(
+                    deepref_app::schedule_appraisal_prefill_review(
                         context.pool,
                         project_id,
                         report_id,
@@ -1380,27 +1381,24 @@ async fn schedule_reviews(context: &Context<'_>, task: &str, stage: &str) -> Nod
                     .await?;
                 }
                 "study_classification" | "data_extraction" => {
-                    let study = deepref_postgres::study_of_report(
-                        context.pool,
-                        project(context),
-                        report_id,
-                    )
-                    .await
-                    .map_err(|error| {
-                        deepref_postgres::ReviewPreparationError::InvalidInput(error.to_string())
-                    })?;
+                    let study =
+                        deepref_app::study_of_report(context.pool, project(context), report_id)
+                            .await
+                            .map_err(|error| {
+                                deepref_app::ReviewPreparationError::InvalidInput(error.to_string())
+                            })?;
                     let Some(study_id) = study
                         .as_ref()
                         .and_then(|study| study.get("study_id"))
                         .and_then(Value::as_str)
                         .and_then(|id| Uuid::parse_str(id).ok())
                     else {
-                        return Err(deepref_postgres::ReviewPreparationError::InvalidInput(
+                        return Err(deepref_app::ReviewPreparationError::InvalidInput(
                             "The record is not part of a study yet.".to_owned(),
                         ));
                     };
                     if task == "data_extraction" {
-                        deepref_postgres::schedule_data_extraction_review(
+                        deepref_app::schedule_data_extraction_review(
                             context.pool,
                             project_id,
                             study_id,
@@ -1408,7 +1406,7 @@ async fn schedule_reviews(context: &Context<'_>, task: &str, stage: &str) -> Nod
                         )
                         .await?;
                     } else {
-                        deepref_postgres::schedule_study_classification_review(
+                        deepref_app::schedule_study_classification_review(
                             context.pool,
                             project_id,
                             study_id,
@@ -1418,7 +1416,7 @@ async fn schedule_reviews(context: &Context<'_>, task: &str, stage: &str) -> Nod
                     }
                 }
                 _ => {
-                    return Err(deepref_postgres::ReviewPreparationError::InvalidInput(
+                    return Err(deepref_app::ReviewPreparationError::InvalidInput(
                         "This AI task is not available.".to_owned(),
                     ));
                 }
@@ -1556,7 +1554,7 @@ async fn start_screening_reviews(
     let mut started = 0usize;
     let mut first_error: Option<String> = None;
     for report_id in reviewable_reports(items) {
-        match deepref_postgres::schedule_screening_review(
+        match deepref_app::schedule_screening_review(
             context.pool,
             execution.project_id,
             report_id,

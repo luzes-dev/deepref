@@ -28,7 +28,7 @@ use tower::ServiceExt;
 use uuid::Uuid;
 
 async fn database() -> Option<PgPool> {
-    deepref_postgres::test_isolation::isolated_pool_from_env_first(
+    deepref_app::test_isolation::isolated_pool_from_env_first(
         &["TEST_DATABASE_URL", "DATABASE_URL"],
         8,
     )
@@ -599,45 +599,60 @@ where
     G: AiGateway + 'static,
 {
     let owner = format!("assistant-review-test-{run_id}");
-    let row = sqlx::query(
-        "UPDATE jobs AS j
-         SET state='running',lease_owner=$2,leased_until=now()+interval '5 minutes',
-             lease_renewed_at=now(),attempts=attempts+1
-         FROM automation_runs AS r
-         WHERE r.id=$1 AND j.id=r.job_id AND j.state='queued'
-         RETURNING j.id,j.project_id,j.kind,j.payload,j.attempts,j.max_attempts",
-    )
-    .bind(run_id)
-    .bind(&owner)
-    .fetch_one(pool)
-    .await
-    .expect("scheduled assistant review job claims");
-    let job = ClaimedJob {
-        id: row.get("id"),
-        project_id: row.get::<Uuid, _>("project_id").into(),
-        kind: row
-            .get::<String, _>("kind")
-            .parse()
-            .expect("valid queued job kind"),
-        payload: row.get("payload"),
-        attempts: row.get("attempts"),
-        max_attempts: row.get("max_attempts"),
-    };
-    handle_job_with_documents_owned_and_ai(
-        pool.clone(),
-        &job,
-        &job.lease(owner.as_str()),
-        StdDuration::from_secs(300),
-        None,
-        None,
-        Arc::new(gateway),
-        &deepref_worker::config::WorkerConfig::from_source(&|name| {
-            (name == "APP_ENV").then(|| "local".into())
-        })
-        .expect("local worker configuration"),
-    )
-    .await
-    .expect("assistant review worker handles terminal delivery")
+    let gateway = Arc::new(gateway);
+    let config = deepref_worker::config::WorkerConfig::from_source(&|name| match name {
+        "APP_ENV" => Some("local".into()),
+        "WORKER_CLAIM_LEASE_SECS" => Some("300".into()),
+        _ => None,
+    })
+    .expect("local worker configuration");
+    for _ in 0..64 {
+        let row=sqlx::query("UPDATE jobs j SET state='running',lease_owner=$2,
+            leased_until=now()+interval '5 minutes',lease_renewed_at=now(),attempts=attempts+1
+            WHERE j.kind='durable_run_step' AND j.payload->>'run_id'=$1::uuid::text AND j.state='queued'
+            RETURNING j.id,j.project_id,j.kind,j.payload,j.attempts,j.max_attempts")
+            .bind(run_id).bind(&owner).fetch_one(pool).await.expect("next typed review node claims");
+        let job = ClaimedJob {
+            id: row.get("id"),
+            project_id: row.get::<Uuid, _>("project_id").into(),
+            kind: row
+                .get::<String, _>("kind")
+                .parse()
+                .expect("durable job kind"),
+            payload: row.get("payload"),
+            attempts: row.get("attempts"),
+            max_attempts: row.get("max_attempts"),
+        };
+        let lease = job.lease(owner.as_str());
+        let action = handle_job_with_documents_owned_and_ai(
+            pool.clone(),
+            &job,
+            &lease,
+            None,
+            None,
+            gateway.clone(),
+            &config,
+        )
+        .await
+        .expect("review node handles delivery");
+        if action != DeliveryAction::Ack {
+            return action;
+        }
+        assert!(
+            deepref_app::complete_job(pool, &lease)
+                .await
+                .expect("node queue ack")
+        );
+        let state: String = sqlx::query_scalar("SELECT status FROM durable_runs WHERE id=$1")
+            .bind(run_id)
+            .fetch_one(pool)
+            .await
+            .expect("canonical state");
+        if matches!(state.as_str(), "completed" | "blocked" | "failed") {
+            return action;
+        }
+    }
+    panic!("review planner did not reach a terminal state");
 }
 
 #[tokio::test]
@@ -649,7 +664,7 @@ async fn all_proposal_tools_schedule_observable_review_runs_without_domain_write
         ModelProfile::Reasoning,
         ModelProfile::LongContextReasoning,
     ] {
-        deepref_postgres::insert_model_route(
+        deepref_app::insert_model_route(
             &pool,
             &model_route(profile),
             Utc::now() - Duration::milliseconds(1),
@@ -711,7 +726,7 @@ async fn all_proposal_tools_schedule_observable_review_runs_without_domain_write
     }
     assert_eq!(*calls.lock().expect("gateway calls lock"), 0);
     let queued: i64 = sqlx::query_scalar(
-        "SELECT count(*) FROM review_run_manifests WHERE project_id=$1 AND state='queued'",
+        "SELECT count(*) FROM review_run_manifests m JOIN durable_runs r ON r.id=m.automation_run_id WHERE m.project_id=$1 AND r.status='queued'",
     )
     .bind(fixture.project_id)
     .fetch_one(&pool)
@@ -739,7 +754,7 @@ async fn all_proposal_tools_schedule_observable_review_runs_without_domain_write
 }
 
 async fn create_classification_proposal(pool: &PgPool, fixture: Fixture) -> Uuid {
-    deepref_postgres::insert_model_route(
+    deepref_app::insert_model_route(
         pool,
         &model_route(ModelProfile::FastClassifier),
         Utc::now() - Duration::seconds(1),
@@ -769,7 +784,7 @@ async fn create_classification_proposal(pool: &PgPool, fixture: Fixture) -> Uuid
         process_review_run(pool, run_id, gateway).await,
         DeliveryAction::Ack
     );
-    let snapshot = deepref_postgres::get_review_run(
+    let snapshot = deepref_app::get_review_run(
         pool,
         fixture.project_id.into(),
         deepref_review::ReviewRunId::new(run_id).expect("valid run id"),
@@ -1133,7 +1148,7 @@ fn rig_call(id: &str, name: &str, args: Value) -> Vec<MockStreamEvent> {
 /// Drives the next queued assistant job with a scripted Rig model, the way
 /// the worker would. Returns when the job acked.
 async fn drive_assistant_job(pool: &PgPool, model: MockCompletionModel) {
-    let job = deepref_postgres::claim_job(pool, "http-test-worker", StdDuration::from_secs(30))
+    let job = deepref_app::claim_job(pool, "http-test-worker", StdDuration::from_secs(30))
         .await
         .expect("claim works")
         .expect("an assistant job is queued");
@@ -1184,7 +1199,7 @@ async fn post_json(state: &AppState, uri: &str, body: Value) -> (StatusCode, Str
 async fn assistant_writes_only_after_plan_confirmation_and_respects_budget() {
     let Some(pool) = database().await else { return };
     let fixture = seed(&pool).await;
-    deepref_postgres::insert_model_route(
+    deepref_app::insert_model_route(
         &pool,
         &model_route(ModelProfile::Reasoning),
         Utc::now() - Duration::milliseconds(1),
@@ -1281,7 +1296,7 @@ async fn assistant_writes_only_after_plan_confirmation_and_respects_budget() {
     assert_eq!(status, StatusCode::CONFLICT, "confirm is exactly-once");
 
     // Once the month's spend reaches the budget, free-form chat is refused.
-    deepref_postgres::set_ai_budget(&pool, project, 1)
+    deepref_app::set_ai_budget(&pool, project, 1)
         .await
         .expect("budget");
     sqlx::query(
@@ -1493,7 +1508,7 @@ async fn assistant_reads_match_several_words_report_documents_and_studies() {
 
     // The overview's title/abstract buckets add up to the report total, and the
     // full-text count is part of `include`, not an extra bucket.
-    let overview = deepref_postgres::get_agent_project_overview(&pool, fixture.project_id)
+    let overview = deepref_app::get_agent_project_overview(&pool, fixture.project_id)
         .await
         .expect("overview");
     let title_abstract = &overview["title_abstract"];
@@ -1525,7 +1540,7 @@ async fn assistant_reads_match_several_words_report_documents_and_studies() {
 async fn assistant_claim_without_a_plan_is_corrected_before_the_user_relies_on_it() {
     let Some(pool) = database().await else { return };
     let fixture = seed(&pool).await;
-    deepref_postgres::insert_model_route(
+    deepref_app::insert_model_route(
         &pool,
         &model_route(ModelProfile::Reasoning),
         Utc::now() - Duration::milliseconds(1),
@@ -1561,7 +1576,7 @@ async fn assistant_claim_without_a_plan_is_corrected_before_the_user_relies_on_i
     .await;
     assert_eq!(status, StatusCode::OK, "{stream}");
     assert!(!stream.contains("event: plan"), "{stream}");
-    let messages = deepref_postgres::list_assistant_messages(&pool, conversation_id)
+    let messages = deepref_app::list_assistant_messages(&pool, conversation_id)
         .await
         .expect("messages");
     let reply = messages.last().expect("assistant reply is stored");
@@ -1583,7 +1598,7 @@ async fn assistant_claim_without_a_plan_is_corrected_before_the_user_relies_on_i
 async fn assistant_plan_step_follows_its_review_run_to_a_plain_failure() {
     let Some(pool) = database().await else { return };
     let fixture = seed(&pool).await;
-    deepref_postgres::insert_model_route(
+    deepref_app::insert_model_route(
         &pool,
         &model_route(ModelProfile::Reasoning),
         Utc::now() - Duration::milliseconds(1),
@@ -1654,12 +1669,34 @@ async fn assistant_plan_step_follows_its_review_run_to_a_plain_failure() {
     assert_eq!(plan["results"][0]["status"], "queued", "{body}");
 
     // The review run then fails the way the worker records it.
-    deepref_postgres::fail_review_run(
+    sqlx::query(
+        "UPDATE jobs SET available_at=clock_timestamp()-interval '1 day'
+        WHERE id=(SELECT job_id FROM durable_runs WHERE id=$1)",
+    )
+    .bind(run_id)
+    .execute(&pool)
+    .await
+    .expect("prioritize the failed review fixture");
+    let claimed = deepref_app::claim_job(
+        &pool,
+        "assistant-failed-review-worker",
+        std::time::Duration::from_secs(300),
+    )
+    .await
+    .expect("queue claim")
+    .expect("review delivery");
+    assert_eq!(
+        Uuid::parse_str(claimed.payload["run_id"].as_str().expect("durable run")).expect("UUID"),
+        run_id
+    );
+    let lease = claimed.lease("assistant-failed-review-worker");
+    deepref_app::fail_review_run(
         &pool,
         deepref_domain::ProjectId::new(project),
         deepref_review::ReviewRunId::new(run_id).expect("review run id"),
         "review_execution_failed",
         "review execution failed: AI output failed semantic validation",
+        &lease,
     )
     .await
     .expect("review run fails");
@@ -1685,10 +1722,10 @@ async fn assistant_plan_step_follows_its_review_run_to_a_plain_failure() {
     );
 
     // The change is in the activity feed with its model, reasoning and reads.
-    let activity = deepref_postgres::list_activity(
+    let activity = deepref_app::list_activity(
         &pool,
         project,
-        deepref_postgres::ActivityFilters::default(),
+        deepref_app::ActivityFilters::default(),
         None,
         20,
     )
@@ -1735,7 +1772,7 @@ async fn assistant_refuses_overlong_messages_before_storing_them() {
         body.contains("4000 characters"),
         "the client hint names the limit: {body}"
     );
-    let stored = deepref_postgres::list_assistant_messages(&pool, conversation_id)
+    let stored = deepref_app::list_assistant_messages(&pool, conversation_id)
         .await
         .expect("messages");
     assert!(stored.is_empty(), "an overlong message is not stored");
@@ -1833,7 +1870,7 @@ async fn delete_project_and_reports(pool: &PgPool, project: Uuid, reports: &[Uui
 async fn confirmed_plan_rejects_records_changed_since_it_was_made() {
     let Some(pool) = database().await else { return };
     let fixture = seed(&pool).await;
-    deepref_postgres::insert_model_route(
+    deepref_app::insert_model_route(
         &pool,
         &model_route(ModelProfile::Reasoning),
         Utc::now() - Duration::milliseconds(1),
@@ -1870,11 +1907,11 @@ async fn confirmed_plan_rejects_records_changed_since_it_was_made() {
     assert_eq!(items[1]["expected_revision"], 0, "{actions}");
 
     // A colleague includes one of the records before the plan is confirmed.
-    let protocol_version_id = deepref_postgres::get_published_protocol(&pool, project)
+    let protocol_version_id = deepref_app::get_published_protocol(&pool, project)
         .await
         .expect("published protocol")
         .id;
-    deepref_postgres::screen_report(
+    deepref_app::screening::screen_report(
         &pool,
         deepref_application::ScreenReportCommand {
             project_id: project.into(),
@@ -1933,7 +1970,7 @@ async fn set_title_abstract_autonomy(pool: &PgPool, project: Uuid, level: &str) 
 async fn projects_with_title_abstract_ai_off_refuse_assistant_screening_plans() {
     let Some(pool) = database().await else { return };
     let fixture = seed(&pool).await;
-    deepref_postgres::insert_model_route(
+    deepref_app::insert_model_route(
         &pool,
         &model_route(ModelProfile::Reasoning),
         Utc::now() - Duration::milliseconds(1),
@@ -2000,7 +2037,7 @@ async fn projects_with_title_abstract_ai_off_refuse_assistant_screening_plans() 
 async fn confirmed_plan_decisions_are_assistant_authored_and_not_counted_as_human() {
     let Some(pool) = database().await else { return };
     let fixture = seed(&pool).await;
-    deepref_postgres::insert_model_route(
+    deepref_app::insert_model_route(
         &pool,
         &model_route(ModelProfile::Reasoning),
         Utc::now() - Duration::milliseconds(1),
@@ -2055,7 +2092,7 @@ async fn confirmed_plan_decisions_are_assistant_authored_and_not_counted_as_huma
 async fn plan_lists_its_records_and_runs_only_the_ones_left_selected() {
     let Some(pool) = database().await else { return };
     let fixture = seed(&pool).await;
-    deepref_postgres::insert_model_route(
+    deepref_app::insert_model_route(
         &pool,
         &model_route(ModelProfile::Reasoning),
         Utc::now() - Duration::milliseconds(1),
@@ -2139,7 +2176,7 @@ async fn assistant_event_stream_surfaces_database_failure_and_closes() {
     let conversation: Value = serde_json::from_str(&body).expect("conversation JSON");
     let conversation_id =
         Uuid::parse_str(conversation["id"].as_str().expect("conversation id")).expect("UUID");
-    let run = deepref_postgres::submit_assistant_agent_run(
+    let run = deepref_app::submit_assistant_agent_run(
         &pool,
         fixture.project_id,
         conversation_id,

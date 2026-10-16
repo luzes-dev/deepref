@@ -158,7 +158,7 @@ fn result_dto(value: &Value) -> Option<AssistantPlanResultDto> {
     })
 }
 
-pub(super) fn plan_dto(record: &deepref_postgres::AssistantPlanRecord) -> AssistantPlanDto {
+pub(super) fn plan_dto(record: &deepref_app::AssistantPlanRecord) -> AssistantPlanDto {
     AssistantPlanDto {
         id: record.id,
         project_id: record.project_id,
@@ -199,12 +199,12 @@ pub(super) fn plan_dto(record: &deepref_postgres::AssistantPlanRecord) -> Assist
     }
 }
 
-fn map_plan_error(error: deepref_postgres::AssistantError) -> ApiError {
+fn map_plan_error(error: deepref_app::AssistantError) -> ApiError {
     match error {
-        deepref_postgres::AssistantError::Database(error) => ApiError::Database(error),
-        deepref_postgres::AssistantError::InvalidInput(message) => ApiError::DataIntegrity(message),
-        deepref_postgres::AssistantError::ConversationNotFound
-        | deepref_postgres::AssistantError::ProjectNotFound => {
+        deepref_app::AssistantError::Database(error) => ApiError::Database(error),
+        deepref_app::AssistantError::InvalidInput(message) => ApiError::DataIntegrity(message),
+        deepref_app::AssistantError::ConversationNotFound
+        | deepref_app::AssistantError::ProjectNotFound => {
             ApiError::NotFound("assistant plan not found".to_owned())
         }
     }
@@ -222,8 +222,8 @@ async fn load_plan(
     state: &AppState,
     project_id: Uuid,
     plan_id: Uuid,
-) -> Result<deepref_postgres::AssistantPlanRecord, ApiError> {
-    deepref_postgres::get_assistant_plan(&state.pool, project_id, plan_id)
+) -> Result<deepref_app::AssistantPlanRecord, ApiError> {
+    deepref_app::get_assistant_plan(&state.pool, project_id, plan_id)
         .await
         .map_err(map_plan_error)?
         .ok_or_else(|| ApiError::NotFound("assistant plan not found".to_owned()))
@@ -276,7 +276,7 @@ pub(crate) async fn reject_plan(
 ) -> Result<Json<AssistantPlanDto>, ApiError> {
     let actor = extract_actor(&headers)?;
     load_plan(&state, project_id, plan_id).await?;
-    let record = deepref_postgres::claim_assistant_plan(
+    let record = deepref_app::claim_assistant_plan(
         &state.pool,
         project_id,
         plan_id,
@@ -319,7 +319,7 @@ pub(crate) async fn confirm_plan(
     let pending = load_plan(&state, project_id, plan_id).await?;
     let deselection = Deselection::checked(&parse_actions(&pending.actions), &request)?;
     // The pending -> confirmed transition is the exactly-once guard.
-    let claimed = deepref_postgres::claim_assistant_plan(
+    let claimed = deepref_app::claim_assistant_plan(
         &state.pool,
         project_id,
         plan_id,
@@ -355,7 +355,7 @@ pub(crate) async fn confirm_plan(
     let any_queued = results
         .iter()
         .any(|result| result.get("status").and_then(Value::as_str) == Some("queued"));
-    let finished = deepref_postgres::finish_assistant_plan(
+    let finished = deepref_app::finish_assistant_plan(
         &state.pool,
         plan_id,
         if any_failed {
@@ -376,9 +376,9 @@ pub(crate) async fn confirm_plan(
     } else {
         "Done. I carried out the plan you confirmed."
     };
-    if let Err(error) = deepref_postgres::append_assistant_message(
+    if let Err(error) = deepref_app::append_assistant_message(
         &state.pool,
-        &deepref_postgres::AppendAssistantMessage {
+        &deepref_app::AppendAssistantMessage {
             id: None,
             conversation_id: finished.conversation_id,
             role: "assistant".to_owned(),
@@ -438,7 +438,7 @@ struct PlanProvenance {
 }
 
 impl PlanProvenance {
-    fn of(record: &deepref_postgres::AssistantPlanRecord) -> Self {
+    fn of(record: &deepref_app::AssistantPlanRecord) -> Self {
         let reads: std::collections::BTreeSet<String> = record
             .evidence
             .as_array()
@@ -520,8 +520,8 @@ fn sentence(text: &str) -> String {
 /// scheduled. The new state is stored, so it stays once it is known.
 async fn refresh_review_steps(
     state: &AppState,
-    record: deepref_postgres::AssistantPlanRecord,
-) -> Result<deepref_postgres::AssistantPlanRecord, ApiError> {
+    record: deepref_app::AssistantPlanRecord,
+) -> Result<deepref_app::AssistantPlanRecord, ApiError> {
     let stored = record.results.as_ref().and_then(Value::as_array).cloned();
     let Some(mut results) = stored else {
         return Ok(record);
@@ -536,7 +536,7 @@ async fn refresh_review_steps(
         return Ok(record);
     }
     let runs =
-        deepref_postgres::get_review_runs(&state.pool, ProjectId::new(record.project_id), &queued)
+        deepref_app::get_review_runs(&state.pool, ProjectId::new(record.project_id), &queued)
             .await
             .map_err(|error| {
                 ApiError::Internal(anyhow::anyhow!(
@@ -587,7 +587,7 @@ async fn refresh_review_steps(
     };
     let error = any_failed.then_some("one or more AI reviews failed");
     let results = Value::Array(results);
-    deepref_postgres::update_assistant_plan_results(&state.pool, record.id, status, &results, error)
+    deepref_app::update_assistant_plan_results(&state.pool, record.id, status, &results, error)
         .await
         .map_err(map_plan_error)
 }
@@ -675,7 +675,7 @@ async fn run_action(
     };
     match execute_proposal(state, operation, actor.clone()).await {
         Ok(run) => {
-            let mut entry = deepref_postgres::NewActivity::new(
+            let mut entry = deepref_app::NewActivity::new(
                 project_id.as_uuid(),
                 "assistant",
                 "Assistant",
@@ -691,7 +691,7 @@ async fn run_action(
             entry.model = Some(provenance.model.clone());
             entry.prompt_version = Some(provenance.prompt_version.clone());
             entry.evidence = provenance.activity_evidence(action);
-            if let Err(error) = deepref_postgres::record_activity(&state.pool, &entry).await {
+            if let Err(error) = deepref_app::record_activity(&state.pool, &entry).await {
                 tracing::warn!(%error, "failed to record assistant activity");
             }
             let mut value = outcome(action, "queued", QUEUED_MESSAGE);
@@ -699,64 +699,6 @@ async fn run_action(
             value
         }
         Err(error) => outcome(action, "failed", failure_message(&error)),
-    }
-}
-
-/// Every change made by a confirmed plan lands in the activity feed, grouped
-/// by plan so the whole plan can be undone at once.
-#[allow(clippy::too_many_arguments)]
-async fn record_screening_activity(
-    state: &AppState,
-    project_id: ProjectId,
-    provenance: &PlanProvenance,
-    actor: &Actor,
-    report_id: Uuid,
-    decision: ScreeningDecision,
-    event_id: Option<Uuid>,
-    protocol_version_id: Uuid,
-    evidence: &Value,
-) {
-    let Some(event_id) = event_id else {
-        return;
-    };
-    let title = sqlx::query_scalar::<_, Option<String>>("SELECT title FROM reports WHERE id=$1")
-        .bind(report_id)
-        .fetch_optional(&state.pool)
-        .await
-        .ok()
-        .flatten()
-        .flatten()
-        .map(|title| deepref_postgres::decode_html_entities(&title))
-        .unwrap_or_else(|| "Untitled record".to_owned());
-    let verb = match decision {
-        ScreeningDecision::Include => "included",
-        ScreeningDecision::Exclude => "excluded",
-        ScreeningDecision::Maybe => "marked as maybe",
-    };
-    let shown: String = title.chars().take(120).collect();
-    let mut entry = deepref_postgres::NewActivity::new(
-        project_id.as_uuid(),
-        "assistant",
-        "Assistant",
-        actor.clone(),
-        "title_abstract_screening",
-        "screening_decision",
-        format!("The assistant {verb} “{shown}” after you confirmed its plan."),
-    );
-    entry.affected = json!([{"type": "report", "id": report_id, "label": title}]);
-    entry.after_state = json!({
-        "report_id": report_id,
-        "stage": "title_abstract",
-        "event_id": event_id,
-        "protocol_version_id": protocol_version_id,
-    });
-    entry.undo_kind = Some("screening_event");
-    entry.batch_id = Some(provenance.plan_id);
-    entry.model = Some(provenance.model.clone());
-    entry.prompt_version = Some(provenance.prompt_version.clone());
-    entry.evidence = evidence.clone();
-    if let Err(error) = deepref_postgres::record_activity(&state.pool, &entry).await {
-        tracing::warn!(%error, "failed to record assistant activity");
     }
 }
 
@@ -776,13 +718,13 @@ async fn run_screen_reports(
     };
     // The AI setting is checked again at confirmation: turning AI help off
     // after a plan was made stops the plan.
-    match deepref_postgres::assistant_screening_allowed(&state.pool, project_id.as_uuid()).await {
+    match deepref_app::assistant_screening_allowed(&state.pool, project_id.as_uuid()).await {
         Ok(true) => {}
         Ok(false) => {
             return outcome(
                 action,
                 "skipped",
-                deepref_postgres::ASSISTANT_SCREENING_OFF_MESSAGE,
+                deepref_app::ASSISTANT_SCREENING_OFF_MESSAGE,
             );
         }
         Err(error) => {
@@ -791,7 +733,7 @@ async fn run_screen_reports(
         }
     }
     let protocol =
-        match deepref_postgres::get_published_protocol(&state.pool, project_id.as_uuid()).await {
+        match deepref_app::get_published_protocol(&state.pool, project_id.as_uuid()).await {
             Ok(protocol) => protocol,
             Err(_) => {
                 return outcome(
@@ -843,13 +785,16 @@ async fn run_screen_reports(
             notes: notes.clone(),
             actor: actor.clone(),
         };
-        match deepref_postgres::screen_report_from_assistant_plan(&state.pool, command).await {
+        match deepref_app::screening::screen_report_from_assistant_plan(&state.pool, command).await
+        {
             Ok(snapshot) => {
                 applied += 1;
-                record_screening_activity(
-                    state,
+                deepref_app::screening::record_assistant_screening_activity(
+                    &state.pool,
                     project_id,
-                    provenance,
+                    provenance.plan_id,
+                    &provenance.model,
+                    &provenance.prompt_version,
                     actor,
                     report_id,
                     decision,
@@ -859,8 +804,8 @@ async fn run_screen_reports(
                 )
                 .await;
             }
-            Err(deepref_postgres::ScreeningError::Repeated { .. }) => unchanged += 1,
-            Err(deepref_postgres::ScreeningError::RevisionConflict { .. }) => stale += 1,
+            Err(deepref_app::screening::ScreeningError::Repeated { .. }) => unchanged += 1,
+            Err(deepref_app::screening::ScreeningError::RevisionConflict { .. }) => stale += 1,
             Err(error) => {
                 tracing::warn!(%error, %report_id, "assistant plan: screening decision failed");
                 failed += 1;

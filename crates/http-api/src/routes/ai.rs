@@ -5,7 +5,7 @@ use axum::{
 };
 use chrono::{DateTime, Utc};
 use deepref_ai::{AiError, ScreeningStage};
-use deepref_postgres::{
+use deepref_app::{
     AiProposalDecision, AiProposalDecisionRequest, AiProposalError, AiProposalRecord,
     ReviewedAiProposalPayload,
 };

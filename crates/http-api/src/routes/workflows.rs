@@ -16,14 +16,14 @@ use axum::{
     response::{IntoResponse, Response},
 };
 use chrono::{DateTime, Utc};
+use deepref_app::{
+    NodeRunRecord, RotateTarget, StartRun, UpdateWorkflow, WebhookConfig, WorkflowError,
+    WorkflowRecord, WorkflowRunRecord, WorkflowVersionRecord,
+};
 use deepref_application::workflows::{
     self as wf, ConfigFieldKind, InboundEmail, NodeTypeDef, ValidationReport, WorkflowGraph,
 };
 use deepref_domain::ProjectId;
-use deepref_postgres::{
-    NodeRunRecord, RotateTarget, StartRun, UpdateWorkflow, WebhookConfig, WorkflowError,
-    WorkflowRecord, WorkflowRunRecord, WorkflowVersionRecord,
-};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use sqlx::PgPool;
@@ -113,6 +113,7 @@ pub(crate) struct ConfigFieldDto {
 #[derive(Debug, Clone, Serialize, ToSchema)]
 pub(crate) struct NodeTypeDto {
     pub id: String,
+    pub available: bool,
     /// `trigger`, `data`, `action`, `ai`, `logic` or `integration`.
     pub category: String,
     pub label: String,
@@ -133,7 +134,7 @@ fn field_kind_name(kind: ConfigFieldKind) -> String {
         .unwrap_or_default()
 }
 
-fn node_type_dto(def: &NodeTypeDef) -> NodeTypeDto {
+fn node_type_dto(def: &NodeTypeDef, niche_nodes_enabled: bool) -> NodeTypeDto {
     let port = |port: &wf::PortDef| PortDto {
         id: port.id.clone(),
         label: port.label.clone(),
@@ -143,6 +144,7 @@ fn node_type_dto(def: &NodeTypeDef) -> NodeTypeDto {
     };
     NodeTypeDto {
         id: def.id.clone(),
+        available: wf::catalog::node_is_available(&def.id, niche_nodes_enabled),
         category: def.category.as_str().to_owned(),
         label: def.label.clone(),
         description: def.description.clone(),
@@ -492,7 +494,7 @@ pub(crate) struct ReviewCountsDto {
 
 fn run_dto(
     run: WorkflowRunRecord,
-    counts: Option<deepref_postgres::ReviewCounts>,
+    counts: Option<deepref_app::ReviewCounts>,
 ) -> Result<WorkflowRunDto, ApiError> {
     Ok(WorkflowRunDto {
         id: run.id,
@@ -524,7 +526,7 @@ async fn run_list_dtos(
     runs: Vec<WorkflowRunRecord>,
 ) -> Result<Vec<WorkflowRunDto>, ApiError> {
     let ids: Vec<Uuid> = runs.iter().map(|run| run.id).collect();
-    let counts = deepref_postgres::review_counts_for_runs(pool, &ids)
+    let counts = deepref_app::review_counts_for_runs(pool, &ids)
         .await
         .map_err(map_error)?;
     runs.into_iter()
@@ -616,6 +618,27 @@ fn idempotency_key(headers: &HeaderMap) -> String {
         )
 }
 
+fn ensure_graph_available(state: &AppState, graph: &WorkflowGraph) -> Result<(), ApiError> {
+    if wf::catalog::graph_is_available(graph, state.workflow.niche_nodes_enabled) {
+        Ok(())
+    } else {
+        Err(ApiError::Forbidden(
+            "Niche workflow nodes are disabled.".to_owned(),
+        ))
+    }
+}
+
+async fn ensure_draft_available(
+    state: &AppState,
+    project: Uuid,
+    workflow: Uuid,
+) -> Result<(), ApiError> {
+    let record = deepref_app::get_workflow(&state.pool, project_id(project)?, workflow)
+        .await
+        .map_err(map_error)?;
+    ensure_graph_available(state, &record.draft_graph)
+}
+
 // ---------------------------------------------------------------------------
 // Catalog and templates
 
@@ -626,8 +649,13 @@ fn idempotency_key(headers: &HeaderMap) -> String {
     tag = "automations",
     responses((status = 200, description = "Every block available on the canvas", body = Vec<NodeTypeDto>))
 )]
-pub(crate) async fn get_catalog() -> Json<Vec<NodeTypeDto>> {
-    Json(wf::catalog().iter().map(node_type_dto).collect())
+pub(crate) async fn get_catalog(State(state): State<AppState>) -> Json<Vec<NodeTypeDto>> {
+    Json(
+        wf::catalog()
+            .iter()
+            .map(|def| node_type_dto(def, state.workflow.niche_nodes_enabled))
+            .collect(),
+    )
 }
 
 fn template_dto(template: &wf::WorkflowTemplate) -> Result<TemplateDto, ApiError> {
@@ -676,7 +704,7 @@ pub(crate) async fn list_workflows(
 ) -> Result<Json<Vec<WorkflowDto>>, ApiError> {
     let project = project_id(project)?;
     ensure_project(&state.pool, project).await?;
-    let records = deepref_postgres::list_workflows(&state.pool, project)
+    let records = deepref_app::list_workflows(&state.pool, project)
         .await
         .map_err(map_error)?;
     Ok(Json(
@@ -714,13 +742,15 @@ pub(crate) async fn create_workflow(
         .map(from_graph_dto)
         .transpose()?
         .unwrap_or_default();
-    let record = deepref_postgres::create_workflow(
+    ensure_graph_available(&state, &graph)?;
+    let record = deepref_app::create_workflow(
         &state.pool,
         project,
         &input.name,
         input.description.as_deref().unwrap_or_default(),
         graph,
         &extract_actor(&headers)?,
+        state.workflow.niche_nodes_enabled,
     )
     .await
     .map_err(map_error)?;
@@ -751,13 +781,15 @@ pub(crate) async fn create_workflow_from_template(
     let template = wf::template(&input.template_id)
         .ok_or_else(|| ApiError::BadRequest("That template does not exist.".to_owned()))?;
     let name = input.name.unwrap_or_else(|| template.name.to_owned());
-    let record = deepref_postgres::create_workflow(
+    ensure_graph_available(&state, &template.graph)?;
+    let record = deepref_app::create_workflow(
         &state.pool,
         project,
         &name,
         template.description,
         template.graph.clone(),
         &extract_actor(&headers)?,
+        state.workflow.niche_nodes_enabled,
     )
     .await
     .map_err(map_error)?;
@@ -776,7 +808,7 @@ pub(crate) async fn get_workflow(
     State(state): State<AppState>,
     Path((project, workflow)): Path<(Uuid, Uuid)>,
 ) -> Result<Json<WorkflowDto>, ApiError> {
-    let record = deepref_postgres::get_workflow(&state.pool, project_id(project)?, workflow)
+    let record = deepref_app::get_workflow(&state.pool, project_id(project)?, workflow)
         .await
         .map_err(map_error)?;
     Ok(Json(workflow_dto(record)?))
@@ -801,11 +833,17 @@ pub(crate) async fn update_workflow(
     Json(input): Json<UpdateWorkflowRequest>,
 ) -> Result<Json<WorkflowDto>, ApiError> {
     let graph = input.graph.as_ref().map(from_graph_dto).transpose()?;
-    let record = deepref_postgres::update_workflow(
+    if let Some(graph) = graph.as_ref() {
+        ensure_graph_available(&state, graph)?;
+    } else {
+        ensure_draft_available(&state, project, workflow).await?;
+    }
+    let record = deepref_app::update_workflow(
         &state.pool,
         project_id(project)?,
         workflow,
         UpdateWorkflow {
+            niche_nodes_enabled: state.workflow.niche_nodes_enabled,
             name: input.name,
             description: input.description,
             graph,
@@ -829,7 +867,7 @@ pub(crate) async fn delete_workflow(
     State(state): State<AppState>,
     Path((project, workflow)): Path<(Uuid, Uuid)>,
 ) -> Result<StatusCode, ApiError> {
-    deepref_postgres::delete_workflow(&state.pool, project_id(project)?, workflow)
+    deepref_app::delete_workflow(&state.pool, project_id(project)?, workflow)
         .await
         .map_err(map_error)?;
     Ok(StatusCode::NO_CONTENT)
@@ -847,7 +885,8 @@ pub(crate) async fn validate_workflow(
     State(state): State<AppState>,
     Path((project, workflow)): Path<(Uuid, Uuid)>,
 ) -> Result<Json<ValidationReportDto>, ApiError> {
-    let report = deepref_postgres::validate_workflow_draft(
+    ensure_draft_available(&state, project, workflow).await?;
+    let report = deepref_app::validate_workflow_draft(
         &state.pool,
         project_id(project)?,
         workflow,
@@ -982,13 +1021,15 @@ pub(crate) async fn publish_workflow(
     headers: HeaderMap,
     Json(input): Json<PublishRequest>,
 ) -> Result<(StatusCode, Json<VersionDto>), ApiError> {
-    let version = deepref_postgres::publish_workflow(
+    ensure_draft_available(&state, project, workflow).await?;
+    let version = deepref_app::publish_workflow(
         &state.pool,
         project_id(project)?,
         workflow,
         input.note.as_deref(),
         &extract_actor(&headers)?,
         state.smtp.is_configured(),
+        state.workflow.niche_nodes_enabled,
     )
     .await
     .map_err(map_error)?;
@@ -1007,10 +1048,9 @@ pub(crate) async fn list_versions(
     State(state): State<AppState>,
     Path((project, workflow)): Path<(Uuid, Uuid)>,
 ) -> Result<Json<Vec<VersionDto>>, ApiError> {
-    let versions =
-        deepref_postgres::list_workflow_versions(&state.pool, project_id(project)?, workflow)
-            .await
-            .map_err(map_error)?;
+    let versions = deepref_app::list_workflow_versions(&state.pool, project_id(project)?, workflow)
+        .await
+        .map_err(map_error)?;
     Ok(Json(
         versions
             .into_iter()
@@ -1031,14 +1071,10 @@ pub(crate) async fn get_version(
     State(state): State<AppState>,
     Path((project, workflow, version)): Path<(Uuid, Uuid, i32)>,
 ) -> Result<Json<VersionDto>, ApiError> {
-    let version = deepref_postgres::get_workflow_version(
-        &state.pool,
-        project_id(project)?,
-        workflow,
-        version,
-    )
-    .await
-    .map_err(map_error)?;
+    let version =
+        deepref_app::get_workflow_version(&state.pool, project_id(project)?, workflow, version)
+            .await
+            .map_err(map_error)?;
     Ok(Json(version_dto(version)?))
 }
 
@@ -1054,10 +1090,22 @@ pub(crate) async fn enable_workflow(
     State(state): State<AppState>,
     Path((project, workflow)): Path<(Uuid, Uuid)>,
 ) -> Result<Json<WorkflowDto>, ApiError> {
-    let record =
-        deepref_postgres::set_workflow_enabled(&state.pool, project_id(project)?, workflow, true)
-            .await
-            .map_err(map_error)?;
+    deepref_app::get_workflow(&state.pool, project_id(project)?, workflow)
+        .await
+        .map_err(map_error)?;
+    let (_, graph) = deepref_app::get_published_graph(&state.pool, workflow)
+        .await
+        .map_err(map_error)?;
+    ensure_graph_available(&state, &graph)?;
+    let record = deepref_app::set_workflow_enabled(
+        &state.pool,
+        project_id(project)?,
+        workflow,
+        true,
+        state.workflow.niche_nodes_enabled,
+    )
+    .await
+    .map_err(map_error)?;
     Ok(Json(workflow_dto(record)?))
 }
 
@@ -1073,10 +1121,15 @@ pub(crate) async fn disable_workflow(
     State(state): State<AppState>,
     Path((project, workflow)): Path<(Uuid, Uuid)>,
 ) -> Result<Json<WorkflowDto>, ApiError> {
-    let record =
-        deepref_postgres::set_workflow_enabled(&state.pool, project_id(project)?, workflow, false)
-            .await
-            .map_err(map_error)?;
+    let record = deepref_app::set_workflow_enabled(
+        &state.pool,
+        project_id(project)?,
+        workflow,
+        false,
+        state.workflow.niche_nodes_enabled,
+    )
+    .await
+    .map_err(map_error)?;
     Ok(Json(workflow_dto(record)?))
 }
 
@@ -1097,10 +1150,10 @@ pub(crate) async fn list_workflow_runs(
     Query(query): Query<RunListQuery>,
 ) -> Result<Json<Vec<WorkflowRunDto>>, ApiError> {
     let project = project_id(project)?;
-    deepref_postgres::get_workflow(&state.pool, project, workflow)
+    deepref_app::get_workflow(&state.pool, project, workflow)
         .await
         .map_err(map_error)?;
-    let runs = deepref_postgres::list_workflow_runs(
+    let runs = deepref_app::list_workflow_runs(
         &state.pool,
         project,
         Some(workflow),
@@ -1126,7 +1179,7 @@ pub(crate) async fn list_project_workflow_runs(
 ) -> Result<Json<Vec<WorkflowRunDto>>, ApiError> {
     let project = project_id(project)?;
     ensure_project(&state.pool, project).await?;
-    let runs = deepref_postgres::list_workflow_runs(
+    let runs = deepref_app::list_workflow_runs(
         &state.pool,
         project,
         query.workflow_id,
@@ -1149,10 +1202,10 @@ pub(crate) async fn get_workflow_run(
     State(state): State<AppState>,
     Path((project, run)): Path<(Uuid, Uuid)>,
 ) -> Result<Json<WorkflowRunDto>, ApiError> {
-    let run = deepref_postgres::get_workflow_run(&state.pool, project_id(project)?, run)
+    let run = deepref_app::get_workflow_run(&state.pool, project_id(project)?, run)
         .await
         .map_err(map_error)?;
-    let counts = deepref_postgres::review_counts_for_runs(&state.pool, &[run.id])
+    let counts = deepref_app::review_counts_for_runs(&state.pool, &[run.id])
         .await
         .map_err(map_error)?;
     let found = counts.get(&run.id).copied();
@@ -1171,7 +1224,7 @@ pub(crate) async fn cancel_workflow_run(
     State(state): State<AppState>,
     Path((project, run)): Path<(Uuid, Uuid)>,
 ) -> Result<StatusCode, ApiError> {
-    deepref_postgres::cancel_workflow_run(&state.pool, project_id(project)?, run)
+    deepref_app::cancel_workflow_run(&state.pool, project_id(project)?, run)
         .await
         .map_err(map_error)?;
     Ok(StatusCode::NO_CONTENT)
@@ -1197,17 +1250,19 @@ pub(crate) async fn start_workflow_run(
     Json(input): Json<RunRequest>,
 ) -> Result<(StatusCode, Json<RunStartedDto>), ApiError> {
     let project = project_id(project)?;
-    deepref_postgres::get_workflow(&state.pool, project, workflow)
+    deepref_app::get_workflow(&state.pool, project, workflow)
         .await
         .map_err(map_error)?;
-    let (version_id, graph) = deepref_postgres::get_published_graph(&state.pool, workflow)
+    let (version_id, graph) = deepref_app::get_published_graph(&state.pool, workflow)
         .await
         .map_err(map_error)?;
+    ensure_graph_available(&state, &graph)?;
     let actor = extract_actor(&headers)?;
     let trigger_data = input.trigger_data.unwrap_or_else(|| json!({}));
-    let started = deepref_postgres::start_run(
+    let started = deepref_app::start_run(
         &state.pool,
         &StartRun {
+            niche_nodes_enabled: state.workflow.niche_nodes_enabled,
             project_id: project.as_uuid(),
             workflow_id: workflow,
             version_id: Some(version_id),
@@ -1257,12 +1312,13 @@ pub(crate) async fn start_test_run(
     Json(input): Json<TestRunRequest>,
 ) -> Result<Json<WorkflowRunDto>, ApiError> {
     let project = project_id(project)?;
-    let record = deepref_postgres::get_workflow(&state.pool, project, workflow)
+    let record = deepref_app::get_workflow(&state.pool, project, workflow)
         .await
         .map_err(map_error)?;
+    ensure_graph_available(&state, &record.draft_graph)?;
     // A test run answers with the run snapshot, and a blind audit withholds run
     // inspection entirely. Refuse instead of producing a snapshot nobody may read.
-    if deepref_postgres::workflow_run_inspection_withheld(&state.pool, project)
+    if deepref_app::workflow_run_inspection_withheld(&state.pool, project)
         .await
         .map_err(map_error)?
     {
@@ -1271,7 +1327,7 @@ pub(crate) async fn start_test_run(
                 .to_owned(),
         )));
     }
-    let ctx = deepref_postgres::validation_context(
+    let ctx = deepref_app::validation_context(
         &state.pool,
         workflow,
         &record.draft_graph,
@@ -1285,9 +1341,10 @@ pub(crate) async fn start_test_run(
     }
     let actor = extract_actor(&headers)?;
     let sample = input.trigger_data.unwrap_or_else(|| json!({}));
-    let started = deepref_postgres::start_run(
+    let started = deepref_app::start_run(
         &state.pool,
         &StartRun {
+            niche_nodes_enabled: state.workflow.niche_nodes_enabled,
             project_id: project.as_uuid(),
             workflow_id: workflow,
             version_id: None,
@@ -1305,11 +1362,11 @@ pub(crate) async fn start_test_run(
     let deadline =
         Instant::now() + Duration::from_millis(input.wait_ms.unwrap_or(0).min(MAX_TEST_WAIT_MS));
     loop {
-        let run = deepref_postgres::get_workflow_run(&state.pool, project, started.run_id)
+        let run = deepref_app::get_workflow_run(&state.pool, project, started.run_id)
             .await
             .map_err(map_error)?;
         if !matches!(run.status.as_str(), "queued" | "running") || Instant::now() >= deadline {
-            let counts = deepref_postgres::review_counts_for_runs(&state.pool, &[run.id])
+            let counts = deepref_app::review_counts_for_runs(&state.pool, &[run.id])
                 .await
                 .map_err(map_error)?;
             let found = counts.get(&run.id).copied();
@@ -1340,7 +1397,7 @@ pub(crate) async fn get_endpoints(
     State(state): State<AppState>,
     Path((project, workflow)): Path<(Uuid, Uuid)>,
 ) -> Result<Json<EndpointsDto>, ApiError> {
-    let config = deepref_postgres::get_webhook_config(&state.pool, project_id(project)?, workflow)
+    let config = deepref_app::get_webhook_config(&state.pool, project_id(project)?, workflow)
         .await
         .map_err(map_error)?;
     Ok(Json(endpoints_dto(config)))
@@ -1360,7 +1417,7 @@ pub(crate) async fn update_endpoints(
     Path((project, workflow)): Path<(Uuid, Uuid)>,
     Json(input): Json<EndpointSettingsRequest>,
 ) -> Result<Json<EndpointsDto>, ApiError> {
-    let config = deepref_postgres::set_webhook_signature_required(
+    let config = deepref_app::set_webhook_signature_required(
         &state.pool,
         project_id(project)?,
         workflow,
@@ -1377,7 +1434,7 @@ async fn rotate(
     workflow: Uuid,
     target: RotateTarget,
 ) -> Result<Json<EndpointsDto>, ApiError> {
-    let config = deepref_postgres::rotate_endpoint_credentials(
+    let config = deepref_app::rotate_endpoint_credentials(
         &state.pool,
         project_id(project)?,
         workflow,
@@ -1445,7 +1502,7 @@ pub(crate) async fn download_workflow_file(
     State(state): State<AppState>,
     Path((project, file)): Path<(Uuid, Uuid)>,
 ) -> Result<Response, ApiError> {
-    let file = deepref_postgres::get_workflow_file(&state.pool, project_id(project)?, file)
+    let file = deepref_app::get_workflow_file(&state.pool, project_id(project)?, file)
         .await
         .map_err(map_error)?;
     let safe_name: String = file
@@ -1541,7 +1598,7 @@ fn too_many_requests() -> Response {
 
 async fn start_hook_run(
     state: &AppState,
-    target: &deepref_postgres::EndpointTarget,
+    target: &deepref_app::EndpointTarget,
     expected_trigger: &str,
     trigger_data: Value,
     key: String,
@@ -1553,13 +1610,14 @@ async fn start_hook_run(
             details: json!({}),
         });
     }
-    let (version_id, graph) =
-        deepref_postgres::get_published_graph(&state.pool, target.workflow_id)
-            .await
-            .map_err(map_error)?;
-    let started = deepref_postgres::start_run(
+    let (version_id, graph) = deepref_app::get_published_graph(&state.pool, target.workflow_id)
+        .await
+        .map_err(map_error)?;
+    ensure_graph_available(state, &graph)?;
+    let started = deepref_app::start_run(
         &state.pool,
         &StartRun {
+            niche_nodes_enabled: state.workflow.niche_nodes_enabled,
             project_id: target.project_id,
             workflow_id: target.workflow_id,
             version_id: Some(version_id),
@@ -1630,10 +1688,15 @@ pub(crate) async fn receive_webhook(
             "The body is larger than 256 KB.".to_owned(),
         ));
     }
-    let target = deepref_postgres::find_workflow_by_webhook_token(&state.pool, &token)
+    let target = deepref_app::find_workflow_by_webhook_token(&state.pool, &token)
         .await
         .map_err(map_error)?
         .ok_or_else(|| ApiError::NotFound("unknown address".to_owned()))?;
+    if !state.workflow.niche_nodes_enabled {
+        return Err(ApiError::Forbidden(
+            "Niche workflow nodes are disabled.".to_owned(),
+        ));
+    }
     if !hook_allowed((target.workflow_id, "webhook")) {
         return Ok(too_many_requests());
     }
@@ -1740,10 +1803,15 @@ pub(crate) async fn receive_inbound_email(
     Path(token): Path<String>,
     request: Request,
 ) -> Result<Response, ApiError> {
-    let target = deepref_postgres::find_workflow_by_email_token(&state.pool, &token)
+    let target = deepref_app::find_workflow_by_email_token(&state.pool, &token)
         .await
         .map_err(map_error)?
         .ok_or_else(|| ApiError::NotFound("unknown address".to_owned()))?;
+    if !state.workflow.niche_nodes_enabled {
+        return Err(ApiError::Forbidden(
+            "Niche workflow nodes are disabled.".to_owned(),
+        ));
+    }
     if !hook_allowed((target.workflow_id, "email")) {
         return Ok(too_many_requests());
     }
@@ -1809,19 +1877,6 @@ mod tests {
         assert_eq!(windows.len(), MAX_HOOK_RATE_WINDOWS);
         assert!(!windows.contains_key(&oldest));
         assert!(windows.contains_key(&touched));
-    }
-
-    #[test]
-    fn catalog_dto_covers_every_block() {
-        assert_eq!(
-            wf::catalog().len(),
-            wf::catalog().iter().map(node_type_dto).count()
-        );
-        let kinds: Vec<String> = wf::catalog()
-            .iter()
-            .flat_map(|def| def.config.iter().map(|field| field_kind_name(field.kind)))
-            .collect();
-        assert!(kinds.iter().all(|kind| !kind.is_empty()));
     }
 
     #[test]

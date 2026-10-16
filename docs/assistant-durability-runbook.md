@@ -37,7 +37,7 @@ instead of returning stale results.
 
 - Jobs are claimed with a lease (`WORKER_CLAIM_LEASE_SECS`, default 60s in
   `services/worker/src/config.rs:21-33`); expired leases are requeued by
-  `recover_expired_jobs` (`crates/postgres/src/jobs.rs:60-67`) and each claim
+  `recover_expired_jobs` (`crates/app/src/jobs.rs:60-67`) and each claim
   increments `attempts` (`jobs.rs:12-28`).
 - `begin_assistant_agent_run` takes over a `queued` or `running` run after
   recovery and **continues the append-only event log** — prior events are
@@ -46,7 +46,7 @@ instead of returning stale results.
   ("Retrying after interruption") so observers can see the seam. Every SSE
   frame carries its persisted seq as the `id:` field; observers resume with
   `after_seq`, never by counting frames
-  (`crates/postgres/src/assistant_runs.rs`,
+  (`crates/app/src/assistant_runs.rs`,
   `crates/http-api/src/routes/assistant/run_events.rs`).
 - Terminal runs are never re-executed
   (`begin_assistant_agent_run`, `assistant_runs.rs:359-380`); a
@@ -62,7 +62,7 @@ instead of returning stale results.
 
 ## Attempts and retry budgets (spend bounds)
 
-- Job queue: `max_attempts` defaults to 5 (`crates/postgres/src/jobs.rs:220-235`).
+- Job queue: `max_attempts` defaults to 5 (`crates/app/src/jobs.rs:220-235`).
   `fail_job` parks the job `dead` once `attempts >= max_attempts`, else
   requeues it (`jobs.rs:153-185`).
 - Run level (`services/worker/src/assistant.rs`): attempts exhausted fails the
@@ -159,7 +159,7 @@ requires a deterministic host and unchanged state, not just the stored log.
 Storage: cassettes persist in the `assistant_agent_runs.effect_log` column
 (`0057_assistant_agent_runs.sql:24`), written once on successful completion
 (`complete_assistant_agent_run`,
-`crates/postgres/src/assistant_runs.rs:456-487`). Failed runs carry no
+`crates/app/src/assistant_runs.rs:456-487`). Failed runs carry no
 cassette (`AssistantCassette::assemble` runs "on success only",
 `cassette.rs:79-105`).
 

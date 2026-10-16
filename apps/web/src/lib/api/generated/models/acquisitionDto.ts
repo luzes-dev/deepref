@@ -14,6 +14,7 @@ export interface AcquisitionDto {
 	/** @nullable */
 	format?: string | null;
 	id: string;
+	max_depth: number;
 	project_id: string;
 	queued_count: number;
 	/** @nullable */

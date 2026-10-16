@@ -1,4 +1,8 @@
 import { expect, test, type Page } from '@playwright/test';
+import type {
+	AcquisitionDto,
+	PaginatedResponseAcquisitionDto
+} from '#lib/api/generated/models/index.js';
 
 const project = {
 	id: 'test-project',
@@ -114,7 +118,7 @@ const projection = {
 const pageOf = <T>(items: T[], next_cursor: string | null = null) => ({ items, next_cursor });
 
 type WorkspaceMockOptions = {
-	ingestions?: () => ReturnType<typeof pageOf>;
+	acquisitions?: () => PaginatedResponseAcquisitionDto;
 };
 
 async function mockHealth(page: Page) {
@@ -205,21 +209,71 @@ async function mockWorkspace(page: Page, options: WorkspaceMockOptions = {}) {
 			});
 		}
 	);
-	await page.route(/http:\/\/localhost:4173\/api\/ingestions(?:\?.*)?$/, async (route) => {
-		if (route.request().method() === 'POST') {
-			const body = route.request().postDataJSON();
-			expect(body).toMatchObject({
-				project_id: 'test-project',
-				seed_dois: ['10.1/new'],
-				metadata_provider: 'crossref',
-				citation_provider: 'crossref',
-				max_depth: workspaceSettings.default_max_depth
-			});
+	await page.route(
+		/http:\/\/localhost:4173\/api\/projects\/[^/]+\/acquisitions(?:\?.*)?$/,
+		async (route) => {
+			if (route.request().method() === 'POST') {
+				const body = route.request().postDataJSON();
+				expect(body).toMatchObject({
+					seed_dois: ['10.1/new'],
+					metadata_provider: 'crossref',
+					citation_provider: 'crossref',
+					max_depth: workspaceSettings.default_max_depth
+				});
+				await route.fulfill({
+					status: 201,
+					json: {
+						id: 'new-acquisition',
+						project_id: 'test-project',
+						source: 'crossref',
+						strategy: 'citation_traversal',
+						status: 'queued',
+						seed_count: 1,
+						fetched_count: 0,
+						failed_count: 0,
+						queued_count: 1,
+						max_depth: 2,
+						created_at: '2026-01-01T00:00:00Z',
+						started_at: null,
+						completed_at: null
+					}
+				});
+				return;
+			}
+			if (options.acquisitions) {
+				await route.fulfill({ json: options.acquisitions() });
+				return;
+			}
 			await route.fulfill({
-				status: 201,
+				json: pageOf([
+					{
+						id: 'project-acquisition',
+						project_id: 'test-project',
+						source: 'crossref',
+						strategy: 'citation_traversal',
+						status: 'completed',
+						seed_count: 1,
+						fetched_count: 1,
+						failed_count: 0,
+						queued_count: 0,
+						max_depth: 2,
+						created_at: '2026-01-01T00:00:00Z',
+						started_at: null,
+						completed_at: '2026-01-01T00:01:00Z'
+					}
+				])
+			});
+		}
+	);
+	await page.route(
+		'http://localhost:4173/api/projects/test-project/acquisitions/new-acquisition',
+		async (route) => {
+			await route.fulfill({
 				json: {
-					id: 'new-ingestion',
+					id: 'new-acquisition',
 					project_id: 'test-project',
+					source: 'crossref',
+					strategy: 'citation_traversal',
 					status: 'queued',
 					seed_count: 1,
 					fetched_count: 0,
@@ -231,63 +285,14 @@ async function mockWorkspace(page: Page, options: WorkspaceMockOptions = {}) {
 					completed_at: null
 				}
 			});
-			return;
 		}
-		if (options.ingestions) {
-			await route.fulfill({ json: options.ingestions() });
-			return;
+	);
+	await page.route(
+		/\/api\/projects\/test-project\/acquisitions\/new-acquisition\/items(?:\?.*)?$/,
+		async (route) => {
+			await route.fulfill({ json: pageOf([]) });
 		}
-		await route.fulfill({
-			json: pageOf([
-				{
-					id: 'project-ingestion',
-					project_id: 'test-project',
-					status: 'completed',
-					seed_count: 1,
-					fetched_count: 1,
-					failed_count: 0,
-					queued_count: 0,
-					max_depth: 2,
-					created_at: '2026-01-01T00:00:00Z',
-					started_at: null,
-					completed_at: '2026-01-01T00:01:00Z'
-				},
-				{
-					id: 'other-ingestion',
-					project_id: 'other-project',
-					status: 'completed',
-					seed_count: 9,
-					fetched_count: 9,
-					failed_count: 0,
-					queued_count: 0,
-					max_depth: 2,
-					created_at: '2026-01-01T00:00:00Z',
-					started_at: null,
-					completed_at: '2026-01-01T00:01:00Z'
-				}
-			])
-		});
-	});
-	await page.route('http://localhost:4173/api/ingestions/new-ingestion', async (route) => {
-		await route.fulfill({
-			json: {
-				id: 'new-ingestion',
-				project_id: 'test-project',
-				status: 'queued',
-				seed_count: 1,
-				fetched_count: 0,
-				failed_count: 0,
-				queued_count: 1,
-				max_depth: 2,
-				created_at: '2026-01-01T00:00:00Z',
-				started_at: null,
-				completed_at: null
-			}
-		});
-	});
-	await page.route('http://localhost:4173/api/ingestions/new-ingestion/items', async (route) => {
-		await route.fulfill({ json: pageOf([]) });
-	});
+	);
 }
 
 async function mockProjectCreateWorkspace(page: Page, initialProjects = [project]) {
@@ -356,9 +361,12 @@ async function mockProjectCreateWorkspace(page: Page, initialProjects = [project
 		);
 	}
 
-	await page.route(/http:\/\/localhost:4173\/api\/ingestions(?:\?.*)?$/, async (route) => {
-		await route.fulfill({ json: pageOf([]) });
-	});
+	await page.route(
+		/http:\/\/localhost:4173\/api\/projects\/[^/]+\/acquisitions(?:\?.*)?$/,
+		async (route) => {
+			await route.fulfill({ json: pageOf([]) });
+		}
+	);
 }
 
 async function openDefaultProject(page: Page): Promise<void> {
@@ -479,9 +487,12 @@ async function mockProjectManagementWorkspace(
 		await route.fulfill({ status: 404, json: { message: 'Project resource not mocked' } });
 	});
 
-	await page.route(/http:\/\/localhost:4173\/api\/ingestions(?:\?.*)?$/, async (route) => {
-		await route.fulfill({ json: pageOf([]) });
-	});
+	await page.route(
+		/http:\/\/localhost:4173\/api\/projects\/[^/]+\/acquisitions(?:\?.*)?$/,
+		async (route) => {
+			await route.fulfill({ json: pageOf([]) });
+		}
+	);
 }
 
 async function openSourceArticle(page: Page) {
@@ -526,7 +537,7 @@ test('shows dependency degradation without blocking core workspace views', async
 	await expect(page.getByRole('heading', { name: 'Articles' })).toBeVisible();
 });
 
-test('loads opaque cursor pages for projects, articles, and ingestions', async ({ page }) => {
+test('loads opaque cursor pages for projects, articles, and acquisitions', async ({ page }) => {
 	await mockWorkspace(page);
 	await page.route(/http:\/\/localhost:4173\/api\/projects(?:\?.*)?$/, async (route) => {
 		const cursor = new URL(route.request().url()).searchParams.get('cursor');
@@ -545,25 +556,30 @@ test('loads opaque cursor pages for projects, articles, and ingestions', async (
 			});
 		}
 	);
-	await page.route(/http:\/\/localhost:4173\/api\/ingestions(?:\?.*)?$/, async (route) => {
-		const cursor = new URL(route.request().url()).searchParams.get('cursor');
-		const baseIngestion = {
-			id: cursor ? 'second-project-ingestion' : 'first-project-ingestion',
-			project_id: project.id,
-			status: 'completed',
-			seed_count: 1,
-			fetched_count: 1,
-			failed_count: 0,
-			queued_count: 0,
-			max_depth: 2,
-			created_at: cursor ? '2026-01-01T00:00:00Z' : '2026-01-02T00:00:00Z',
-			started_at: null,
-			completed_at: '2026-01-02T00:01:00Z'
-		};
-		await route.fulfill({
-			json: pageOf([baseIngestion], cursor ? null : 'opaque-ingestion+/=cursor')
-		});
-	});
+	await page.route(
+		/http:\/\/localhost:4173\/api\/projects\/[^/]+\/acquisitions(?:\?.*)?$/,
+		async (route) => {
+			const cursor = new URL(route.request().url()).searchParams.get('cursor');
+			const baseAcquisition: AcquisitionDto = {
+				id: cursor ? 'second-project-acquisition' : 'first-project-acquisition',
+				project_id: project.id,
+				source: 'crossref',
+				strategy: 'citation_traversal',
+				status: 'completed',
+				seed_count: 1,
+				fetched_count: 1,
+				failed_count: 0,
+				queued_count: 0,
+				max_depth: 2,
+				created_at: cursor ? '2026-01-01T00:00:00Z' : '2026-01-02T00:00:00Z',
+				started_at: null,
+				completed_at: '2026-01-02T00:01:00Z'
+			};
+			await route.fulfill({
+				json: pageOf([baseAcquisition], cursor ? null : 'opaque-acquisition+/=cursor')
+			});
+		}
+	);
 	await page.goto('/');
 
 	await page.getByRole('combobox', { name: 'Select project' }).click();
@@ -584,7 +600,7 @@ test('loads opaque cursor pages for projects, articles, and ingestions', async (
 		.getByTestId('pagination-load-more')
 		.getByRole('button', { name: 'Load more' })
 		.click();
-	await expect(page.locator('[data-ingestion-id="second-project-ingestion"]')).toBeVisible();
+	await expect(page.locator('[data-acquisition-id="second-project-acquisition"]')).toBeVisible();
 });
 
 test('selecting an article shows inspector', async ({ page }) => {
@@ -732,7 +748,7 @@ test('article filtering survives narrow selection and desktop resizing', async (
 	await expect(page.getByRole('button', { name: /Archive Article/ })).toHaveCount(0);
 });
 
-test('ingestions are filtered and create uses current project', async ({ page }) => {
+test('acquisitions are filtered and create uses current project', async ({ page }) => {
 	await mockWorkspace(page);
 	await page.goto('/');
 
@@ -740,11 +756,10 @@ test('ingestions are filtered and create uses current project', async ({ page })
 	await expect(page.getByRole('region', { name: 'Project ingestion runs' })).toContainText(
 		'completed'
 	);
-	await expect(page.getByText('other-ingestion')).toHaveCount(0);
 	await expect(page.locator('#max-depth')).toHaveValue('3');
 	await page.locator('#dois').fill('10.1/new');
 	await page.getByRole('button', { name: 'Import articles' }).click();
-	await expect(page).toHaveURL(/ingestion=new-ingestion/);
+	await expect(page).toHaveURL(/acquisition=new-acquisition/);
 	await expect(page.getByRole('heading', { name: 'Status queued' })).toBeVisible();
 	await expect(page.getByText('queued', { exact: true }).first()).toBeVisible();
 });
@@ -775,9 +790,11 @@ test('DOI import depth starts from Settings and remembers this project choice', 
 });
 
 test('refreshes completed provider runs with stable retry keys', async ({ page }) => {
-	const completedIngestion = {
-		id: 'project-ingestion',
+	const completedAcquisition: AcquisitionDto = {
+		id: 'project-acquisition',
 		project_id: 'test-project',
+		source: 'crossref',
+		strategy: 'citation_traversal',
 		status: 'completed',
 		seed_count: 1,
 		fetched_count: 1,
@@ -788,36 +805,39 @@ test('refreshes completed provider runs with stable retry keys', async ({ page }
 		started_at: null,
 		completed_at: '2026-01-01T00:01:00Z'
 	};
-	const runningIngestion = {
-		...completedIngestion,
-		id: 'running-ingestion',
+	const runningAcquisition: AcquisitionDto = {
+		...completedAcquisition,
+		id: 'running-acquisition',
 		status: 'running',
 		queued_count: 1,
 		created_at: '2026-01-01T00:02:00Z',
 		completed_at: null
 	};
-	const refreshedIngestion = {
-		...completedIngestion,
-		id: 'refreshed-ingestion',
+	const refreshedAcquisition: AcquisitionDto = {
+		...completedAcquisition,
+		id: 'refreshed-acquisition',
+		strategy: 'provider_refresh',
+		refresh_of: completedAcquisition.id,
+		fetched_count: 0,
 		status: 'queued',
 		queued_count: 1,
 		created_at: '2026-01-01T00:03:00Z',
 		completed_at: null
 	};
-	let listedIngestions = [completedIngestion, runningIngestion];
+	let listedAcquisitions = [completedAcquisition, runningAcquisition];
 	const refreshKeys: string[] = [];
 	const refreshPaths: string[] = [];
 
-	await mockWorkspace(page, { ingestions: () => pageOf(listedIngestions) });
+	await mockWorkspace(page, { acquisitions: () => pageOf(listedAcquisitions) });
 	await page.route(
-		'http://localhost:4173/api/projects/test-project/acquisitions/project-ingestion/refresh',
+		'http://localhost:4173/api/projects/test-project/acquisitions/project-acquisition/refresh',
 		async (route) => {
 			const request = route.request();
 			expect(request.method()).toBe('POST');
 			const url = new URL(request.url());
 			refreshPaths.push(url.pathname);
 			expect(url.pathname).toBe(
-				'/api/projects/test-project/acquisitions/project-ingestion/refresh'
+				'/api/projects/test-project/acquisitions/project-acquisition/refresh'
 			);
 			const idempotencyKey = request.headers()['idempotency-key'];
 			expect(idempotencyKey).toBeTruthy();
@@ -834,15 +854,18 @@ test('refreshes completed provider runs with stable retry keys', async ({ page }
 				return;
 			}
 
-			listedIngestions = [refreshedIngestion, completedIngestion, runningIngestion];
-			await route.fulfill({ status: 201, json: refreshedIngestion });
+			listedAcquisitions = [refreshedAcquisition, completedAcquisition, runningAcquisition];
+			await route.fulfill({ status: 201, json: refreshedAcquisition });
 		}
 	);
-	await page.route('http://localhost:4173/api/ingestions/refreshed-ingestion', async (route) => {
-		await route.fulfill({ json: refreshedIngestion });
-	});
 	await page.route(
-		'http://localhost:4173/api/ingestions/refreshed-ingestion/items',
+		'http://localhost:4173/api/projects/test-project/acquisitions/refreshed-acquisition',
+		async (route) => {
+			await route.fulfill({ json: refreshedAcquisition });
+		}
+	);
+	await page.route(
+		/\/api\/projects\/test-project\/acquisitions\/refreshed-acquisition\/items(?:\?.*)?$/,
 		async (route) => {
 			await route.fulfill({ json: pageOf([]) });
 		}
@@ -850,8 +873,8 @@ test('refreshes completed provider runs with stable retry keys', async ({ page }
 
 	await page.goto('/');
 	await page.getByRole('link', { name: 'Imports' }).click();
-	const completedRow = page.locator('[data-ingestion-id="project-ingestion"]');
-	const runningRow = page.locator('[data-ingestion-id="running-ingestion"]');
+	const completedRow = page.locator('[data-acquisition-id="project-acquisition"]');
+	const runningRow = page.locator('[data-acquisition-id="running-acquisition"]');
 	await expect(completedRow.getByRole('button', { name: 'Re-fetch metadata' })).toBeVisible();
 	await expect(runningRow.getByRole('button', { name: /Re-fetch metadata/ })).toHaveCount(0);
 
@@ -865,11 +888,11 @@ test('refreshes completed provider runs with stable retry keys', async ({ page }
 	await expect.poll(() => refreshKeys).toHaveLength(2);
 	await expect(refreshKeys[1]).toBe(refreshKeys[0]);
 	await expect(refreshPaths).toHaveLength(2);
-	await expect(page.locator('[data-ingestion-id="refreshed-ingestion"]')).toBeVisible();
+	await expect(page.locator('[data-acquisition-id="refreshed-acquisition"]')).toBeVisible();
 	await expect(page.getByRole('heading', { name: 'Status queued' })).toBeVisible();
 
 	await page
-		.locator('[data-ingestion-id="project-ingestion"]')
+		.locator('[data-acquisition-id="project-acquisition"]')
 		.getByRole('button', { name: 'Re-fetch metadata' })
 		.click();
 	await expect.poll(() => refreshKeys).toHaveLength(3);

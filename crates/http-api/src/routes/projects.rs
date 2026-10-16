@@ -4,9 +4,6 @@ use axum::{
     http::StatusCode,
 };
 use chrono::{DateTime, Utc};
-use deepref_domain::events::{
-    DomainPayload, EntityType, EventEnvelope, ProjectTombstoned, SUBJECT_PROJECT_TOMBSTONED,
-};
 use serde::{Deserialize, Serialize};
 use sqlx::Row;
 use utoipa::ToSchema;
@@ -216,36 +213,7 @@ pub(crate) async fn delete_project(
     Path(project_id): Path<Uuid>,
 ) -> Result<StatusCode, ApiError> {
     let mut tx = state.pool.begin().await?;
-    let revision: i64 = sqlx::query_scalar("SELECT nextval('graph_domain_revision_seq')")
-        .fetch_one(&mut *tx)
-        .await?;
-    let event = EventEnvelope::v1(
-        SUBJECT_PROJECT_TOMBSTONED,
-        "deepref.api",
-        EntityType::Project,
-        project_id.to_string(),
-        revision,
-        project_id,
-        None,
-        DomainPayload::ProjectTombstoned(ProjectTombstoned { project_id }),
-    );
-    sqlx::query(
-        "INSERT INTO domain_events (event_id,schema_version,event_type,entity_type,entity_key,revision,payload,correlation_id,causation_id,created_at) \
-         VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10)",
-    ).bind(event.event_id).bind(event.schema_version as i16).bind(&event.event_type)
-        .bind(event.entity_type.as_str()).bind(&event.entity_key).bind(event.revision)
-        .bind(serde_json::to_value(&event.payload)?).bind(event.correlation_id)
-        .bind(event.causation_id).bind(event.occurred_at).execute(&mut *tx).await?;
-    sqlx::query(
-        "INSERT INTO domain_tombstones (entity_type,entity_key,project_id,revision,event_id) \
-         VALUES ('project',$1::text,$1,$2,$3)",
-    )
-    .bind(project_id)
-    .bind(revision)
-    .bind(event.event_id)
-    .execute(&mut *tx)
-    .await?;
-    if !deepref_postgres::delete_project_in_transaction(&mut tx, project_id).await? {
+    if !deepref_app::delete_project_in_transaction(&mut tx, project_id).await? {
         return Err(ApiError::NotFound("project not found".into()));
     }
     tx.commit().await?;

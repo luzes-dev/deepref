@@ -122,7 +122,7 @@ mod tests {
             None,
             WorkFetchRequested {
                 project_id: Uuid::nil(),
-                ingestion_id: Uuid::nil(),
+                acquisition_id: Uuid::nil(),
                 doi: "10.1/x".to_owned(),
                 depth: 0,
                 max_depth: 2,

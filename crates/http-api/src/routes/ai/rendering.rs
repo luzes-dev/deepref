@@ -114,38 +114,39 @@ pub(super) fn map_ai_proposal_error(error: AiProposalError) -> ApiError {
         AiProposalError::Study(error) => super::super::study::map_study_error(error),
         AiProposalError::Appraisal(error) => super::super::study::map_appraisal_error(error),
         AiProposalError::Extraction(
-            error @ (deepref_postgres::ExtractionError::EvidenceNotInStudy
-            | deepref_postgres::ExtractionError::RequiredFieldInsufficient
-            | deepref_postgres::ExtractionError::StaleDefinitionVersion
-            | deepref_postgres::ExtractionError::ValueAlreadyApproved),
+            error @ (deepref_app::ExtractionError::EvidenceNotInStudy
+            | deepref_app::ExtractionError::RequiredFieldInsufficient
+            | deepref_app::ExtractionError::StaleDefinitionVersion
+            | deepref_app::ExtractionError::ValueAlreadyApproved),
         ) => ApiError::Conflict {
             code: "extraction_conflict".to_owned(),
             message: error.to_string(),
             details: Value::Null,
         },
         AiProposalError::Extraction(
-            error @ (deepref_postgres::ExtractionError::DefinitionNotFound
-            | deepref_postgres::ExtractionError::StudyNotFound),
+            error @ (deepref_app::ExtractionError::DefinitionNotFound
+            | deepref_app::ExtractionError::StudyNotFound),
         ) => ApiError::NotFound(error.to_string()),
         AiProposalError::Extraction(error) => ApiError::BadRequest(error.to_string()),
     }
 }
 
-pub(super) fn map_protocol_error(error: deepref_postgres::ProtocolError) -> ApiError {
+pub(super) fn map_protocol_error(error: deepref_app::ProtocolError) -> ApiError {
     match error {
-        deepref_postgres::ProtocolError::ProjectNotFound
-        | deepref_postgres::ProtocolError::NotFound => ApiError::NotFound(error.to_string()),
-        deepref_postgres::ProtocolError::Database(error) => ApiError::Database(error),
-        deepref_postgres::ProtocolError::Serialization(error) => ApiError::Internal(error.into()),
-        deepref_postgres::ProtocolError::Invalid(message)
-        | deepref_postgres::ProtocolError::DataIntegrity(message) => ApiError::BadRequest(message),
-        deepref_postgres::ProtocolError::DraftAlreadyExists
-        | deepref_postgres::ProtocolError::NotEditable => ApiError::Conflict {
+        deepref_app::ProtocolError::ProjectNotFound | deepref_app::ProtocolError::NotFound => {
+            ApiError::NotFound(error.to_string())
+        }
+        deepref_app::ProtocolError::Database(error) => ApiError::Database(error),
+        deepref_app::ProtocolError::Serialization(error) => ApiError::Internal(error.into()),
+        deepref_app::ProtocolError::Invalid(message)
+        | deepref_app::ProtocolError::DataIntegrity(message) => ApiError::BadRequest(message),
+        deepref_app::ProtocolError::DraftAlreadyExists
+        | deepref_app::ProtocolError::NotEditable => ApiError::Conflict {
             code: "protocol_conflict".to_owned(),
             message: error.to_string(),
             details: Value::Null,
         },
-        deepref_postgres::ProtocolError::Conflict { message, .. } => ApiError::Conflict {
+        deepref_app::ProtocolError::Conflict { message, .. } => ApiError::Conflict {
             code: "protocol_conflict".to_owned(),
             message: message.to_owned(),
             details: Value::Null,

@@ -17,11 +17,88 @@ use tower::ServiceExt;
 use uuid::Uuid;
 
 async fn database() -> Option<PgPool> {
-    deepref_postgres::test_isolation::isolated_pool_from_env_first(
+    let pool = deepref_app::test_isolation::isolated_pool_from_env_first(
         &["TEST_DATABASE_URL", "DATABASE_URL"],
         5,
     )
-    .await
+    .await?;
+    sqlx::query("INSERT INTO settings (id,crossref_mailto) VALUES (1,'tests@example.org') ON CONFLICT (id) DO UPDATE SET crossref_mailto=EXCLUDED.crossref_mailto")
+        .execute(&pool)
+        .await
+        .expect("Crossref test configuration should be stored");
+    Some(pool)
+}
+
+#[tokio::test]
+async fn doi_acquisitions_require_mailto_and_expose_project_scoped_items_and_depth() {
+    let Some(pool) = database().await else { return };
+    let project = Uuid::new_v4();
+    sqlx::query("INSERT INTO projects (id,name) VALUES ($1,'canonical DOI')")
+        .bind(project)
+        .execute(&pool)
+        .await
+        .unwrap();
+    let create = || {
+        Request::builder()
+            .method("POST")
+            .uri(format!("/projects/{project}/acquisitions"))
+            .header("content-type", "application/json")
+            .body(Body::from(
+                json!({"seed_dois":["10.1000/canonical"],"max_depth":2}).to_string(),
+            ))
+            .unwrap()
+    };
+    sqlx::query("UPDATE settings SET crossref_mailto='' WHERE id=1")
+        .execute(&pool)
+        .await
+        .unwrap();
+    let rejected = call(&pool, create()).await;
+    assert_eq!(rejected.status(), StatusCode::SERVICE_UNAVAILABLE);
+    let count: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM acquisition_runs WHERE project_id=$1")
+            .bind(project)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(count, 0);
+    sqlx::query("UPDATE settings SET crossref_mailto='tests@example.org' WHERE id=1")
+        .execute(&pool)
+        .await
+        .unwrap();
+    let created = call(&pool, create()).await;
+    assert_eq!(created.status(), StatusCode::CREATED);
+    let body = json_body(created).await;
+    assert_eq!(body["max_depth"], 2);
+    let id = Uuid::parse_str(body["id"].as_str().unwrap()).unwrap();
+    let items = call(
+        &pool,
+        Request::builder()
+            .uri(format!("/projects/{project}/acquisitions/{id}/items"))
+            .body(Body::empty())
+            .unwrap(),
+    )
+    .await;
+    assert_eq!(items.status(), StatusCode::OK);
+    let items = json_body(items).await;
+    assert_eq!(items["items"][0]["identifier"], "10.1000/canonical");
+    assert_eq!(items["items"][0]["kind"], "doi");
+    assert_eq!(items["items"][0]["depth"], 0);
+    assert!(items["items"][0]["report_id"].is_string());
+    let wrong_project = Uuid::new_v4();
+    for suffix in ["items", "cancel"] {
+        let response = call(
+            &pool,
+            Request::builder()
+                .method(if suffix == "cancel" { "POST" } else { "GET" })
+                .uri(format!(
+                    "/projects/{wrong_project}/acquisitions/{id}/{suffix}"
+                ))
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::NOT_FOUND);
+    }
 }
 
 fn api_config() -> ApiConfig {
@@ -47,6 +124,20 @@ async fn call(pool: &PgPool, request: Request<Body>) -> Response<Body> {
         .oneshot(request)
         .await
         .expect("request should be handled")
+}
+
+async fn call_with_workflow_policy(
+    pool: &PgPool,
+    request: Request<Body>,
+    enabled: bool,
+) -> Response<Body> {
+    let mut config = api_config();
+    config.runtime.workflow.niche_nodes_enabled = enabled;
+    let state = AppState::core(pool.clone()).with_workflow_config(config.runtime.workflow.clone());
+    router(state, &config)
+        .oneshot(request)
+        .await
+        .expect("workflow request")
 }
 
 async fn json_body(response: Response<Body>) -> serde_json::Value {
@@ -127,7 +218,7 @@ async fn insert_completed_acquisition(
 }
 
 async fn count_run_items(pool: &PgPool, acquisition_id: Uuid) -> i64 {
-    sqlx::query_scalar("SELECT count(*) FROM ingestion_items WHERE ingestion_id=$1")
+    sqlx::query_scalar("SELECT count(*) FROM acquisition_items WHERE acquisition_id=$1")
         .bind(acquisition_id)
         .fetch_one(pool)
         .await
@@ -135,7 +226,7 @@ async fn count_run_items(pool: &PgPool, acquisition_id: Uuid) -> i64 {
 }
 
 async fn count_run_jobs(pool: &PgPool, acquisition_id: Uuid) -> i64 {
-    sqlx::query_scalar("SELECT count(*) FROM jobs WHERE payload->'payload'->>'ingestion_id'=$1")
+    sqlx::query_scalar("SELECT count(*) FROM jobs WHERE payload->'payload'->>'acquisition_id'=$1")
         .bind(acquisition_id.to_string())
         .fetch_one(pool)
         .await
@@ -144,7 +235,7 @@ async fn count_run_jobs(pool: &PgPool, acquisition_id: Uuid) -> i64 {
 
 async fn clean_acquisition_projects(pool: &PgPool, project_ids: &[Uuid], run_ids: &[Uuid]) {
     for run_id in run_ids {
-        sqlx::query("DELETE FROM jobs WHERE payload->'payload'->>'ingestion_id'=$1")
+        sqlx::query("DELETE FROM jobs WHERE payload->'payload'->>'acquisition_id'=$1")
             .bind(run_id.to_string())
             .execute(pool)
             .await
@@ -355,7 +446,7 @@ async fn doi_acquisition_persists_provenance_before_durable_jobs_are_claimable()
             .await
             .unwrap();
     let jobs: i64 = sqlx::query_scalar(
-        "SELECT count(*) FROM jobs WHERE kind='work_fetch_requested' AND payload->'payload'->>'ingestion_id'=$1",
+        "SELECT count(*) FROM jobs WHERE kind='work_fetch_requested' AND payload->'payload'->>'acquisition_id'=$1",
     )
     .bind(run_id.to_string())
     .fetch_one(&pool)
@@ -364,20 +455,13 @@ async fn doi_acquisition_persists_provenance_before_durable_jobs_are_claimable()
     assert!(run_exists);
     assert_eq!(jobs, 1);
     let items: i64 =
-        sqlx::query_scalar("SELECT count(*) FROM ingestion_items WHERE ingestion_id=$1")
+        sqlx::query_scalar("SELECT count(*) FROM acquisition_items WHERE acquisition_id=$1")
             .bind(run_id)
             .fetch_one(&pool)
             .await
             .unwrap();
     assert_eq!(items, 1);
-    let legacy_link: Uuid =
-        sqlx::query_scalar("SELECT legacy_ingestion_id FROM acquisition_runs WHERE id=$1")
-            .bind(run_id)
-            .fetch_one(&pool)
-            .await
-            .unwrap();
-    assert_eq!(legacy_link, run_id);
-    sqlx::query("DELETE FROM jobs WHERE payload->'payload'->>'ingestion_id'=$1")
+    sqlx::query("DELETE FROM jobs WHERE payload->'payload'->>'acquisition_id'=$1")
         .bind(run_id.to_string())
         .execute(&pool)
         .await
@@ -426,7 +510,7 @@ async fn create_acquisition_idempotency_is_replay_safe_under_concurrency() {
     .await
     .unwrap();
     let ingestion_count: i64 =
-        sqlx::query_scalar("SELECT count(*) FROM ingestions WHERE project_id=$1")
+        sqlx::query_scalar("SELECT count(*) FROM acquisition_runs WHERE project_id=$1")
             .bind(project_id)
             .fetch_one(&pool)
             .await
@@ -503,10 +587,10 @@ async fn completed_provider_refresh_is_lineaged_idempotent_and_preserves_source_
     let source_id =
         create_completed_doi_acquisition(&pool, project_id, "10.5555/refresh-source").await;
     let source_record_id = Uuid::new_v4();
-    let source_event_id = Uuid::new_v4();
     sqlx::query(
-        "INSERT INTO records (id,project_id,acquisition_run_id,source,source_key,title,raw)
-         VALUES ($1,$2,$3,'crossref',$4,'Source record','{}')",
+        "INSERT INTO records (id,project_id,acquisition_run_id,report_id,source,source_key,title,raw)
+         SELECT $1,$2,$3,report_id,'crossref',$4,'Source record','{}'
+         FROM acquisition_items WHERE acquisition_id=$3 AND canonical_doi='10.5555/refresh-source'",
     )
     .bind(source_record_id)
     .bind(project_id)
@@ -516,16 +600,15 @@ async fn completed_provider_refresh_is_lineaged_idempotent_and_preserves_source_
     .await
     .expect("source record should insert");
     sqlx::query(
-        "INSERT INTO record_provenance
-         (record_id,acquisition_run_id,canonical_doi,depth,parent_doi,status,attempts,queued_at,fetched_at,work_event_id)
-         VALUES ($1,$2,'10.5555/refresh-source',0,NULL,'fetched',1,now(),now(),$3)",
+        "UPDATE acquisition_items
+         SET status='fetched',attempts=1,fetched_at=now()
+         WHERE acquisition_id=$2 AND report_id=(SELECT report_id FROM records WHERE id=$1)",
     )
     .bind(source_record_id)
     .bind(source_id)
-    .bind(source_event_id)
     .execute(&pool)
     .await
-    .expect("source provenance should insert");
+    .expect("source provenance should become fetched");
 
     let source_before = sqlx::query(
         "SELECT source,strategy,status,config,metadata FROM acquisition_runs WHERE id=$1",
@@ -695,7 +778,7 @@ async fn completed_provider_refresh_is_lineaged_idempotent_and_preserves_source_
     );
     assert_eq!(
         sqlx::query_scalar::<_, i64>(
-            "SELECT count(*) FROM record_provenance WHERE acquisition_run_id=$1",
+            "SELECT count(*) FROM acquisition_items WHERE acquisition_id=$1 AND status='fetched'",
         )
         .bind(source_id)
         .fetch_one(&pool)
@@ -858,7 +941,7 @@ async fn provider_refresh_rejects_invalid_sources_and_enforces_project_scope() {
 }
 
 #[tokio::test]
-async fn ingestion_cancel_requires_an_existing_active_run() {
+async fn acquisition_cancel_requires_an_existing_active_run() {
     let Some(pool) = database().await else { return };
     let project = Uuid::new_v4();
     sqlx::query("INSERT INTO projects (id,name) VALUES ($1,'cancel test')")
@@ -869,7 +952,7 @@ async fn ingestion_cancel_requires_an_existing_active_run() {
     let cancel = |id| {
         Request::builder()
             .method("POST")
-            .uri(format!("/ingestions/{id}/cancel"))
+            .uri(format!("/projects/{project}/acquisitions/{id}/cancel"))
             .body(Body::empty())
             .unwrap()
     };
@@ -879,7 +962,7 @@ async fn ingestion_cancel_requires_an_existing_active_run() {
     );
     for status in ["queued", "running", "completed", "failed", "cancelled"] {
         let id = Uuid::new_v4();
-        sqlx::query("INSERT INTO ingestions (id,project_id,status,max_depth,seed_count) VALUES ($1,$2,$3,1,1)")
+        sqlx::query("INSERT INTO acquisition_runs (id,project_id,source,strategy,status,max_depth,seed_count,created_at) VALUES ($1,$2,'crossref','citation_traversal',$3,1,1,now())")
             .bind(id).bind(project).bind(status).execute(&pool).await.unwrap();
         let response = call(&pool, cancel(id)).await;
         let active = status == "queued" || status == "running";
@@ -891,7 +974,7 @@ async fn ingestion_cancel_requires_an_existing_active_run() {
                 StatusCode::CONFLICT
             }
         );
-        let stored: String = sqlx::query_scalar("SELECT status FROM ingestions WHERE id=$1")
+        let stored: String = sqlx::query_scalar("SELECT status FROM acquisition_runs WHERE id=$1")
             .bind(id)
             .fetch_one(&pool)
             .await
@@ -925,11 +1008,6 @@ async fn citation_depth_ten_is_rejected_at_every_api_boundary_and_in_database() 
             "PATCH",
             "/settings".to_owned(),
             json!({"default_max_depth":10}),
-        ),
-        (
-            "POST",
-            "/ingestions".to_owned(),
-            json!({"project_id":project,"seed_dois":["10.1000/depth"],"max_depth":10}),
         ),
         (
             "POST",
@@ -969,13 +1047,14 @@ async fn hooks_resolve_tokens_before_limiting_and_reject_unsigned_new_webhooks()
     let Some(pool) = database().await else { return };
     let unknown = Uuid::new_v4().to_string();
     for _ in 0..65 {
-        let response = call(
+        let response = call_with_workflow_policy(
             &pool,
             Request::builder()
                 .method("POST")
                 .uri(format!("/hooks/workflows/{unknown}"))
                 .body(Body::from("{}"))
                 .unwrap(),
+            true,
         )
         .await;
         assert_eq!(response.status(), StatusCode::NOT_FOUND);
@@ -992,20 +1071,196 @@ async fn hooks_resolve_tokens_before_limiting_and_reject_unsigned_new_webhooks()
         json!({"nodes":[{"id":"trigger","type":"trigger.webhook","config":{}}],"edges":[]}),
     )
     .unwrap();
-    let workflow = deepref_postgres::create_workflow(&pool, project, "Signed", "", graph, &actor)
+    let workflow = deepref_app::create_workflow(&pool, project, "Signed", "", graph, &actor, true)
         .await
         .unwrap();
-    let endpoint = deepref_postgres::get_webhook_config(&pool, project, workflow.id)
+    let endpoint = deepref_app::get_webhook_config(&pool, project, workflow.id)
         .await
         .unwrap();
-    let response = call(
+    let response = call_with_workflow_policy(
         &pool,
         Request::builder()
             .method("POST")
             .uri(format!("/hooks/workflows/{}", endpoint.token))
             .body(Body::from("{}"))
             .unwrap(),
+        true,
     )
     .await;
     assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    deepref_app::publish_workflow(&pool, project, workflow.id, None, &actor, false, true)
+        .await
+        .expect("publishes");
+    deepref_app::set_workflow_enabled(&pool, project, workflow.id, true, true)
+        .await
+        .expect("enabled");
+    let signature = deepref_application::workflows::sign_payload(&endpoint.secret, b"{}");
+    let signed = || {
+        Request::builder()
+            .method("POST")
+            .uri(format!("/hooks/workflows/{}", endpoint.token))
+            .header("X-DeepRef-Signature", &signature)
+            .header("Idempotency-Key", "signed-positive")
+            .body(Body::from("{}"))
+            .unwrap()
+    };
+    let accepted = call_with_workflow_policy(&pool, signed(), true).await;
+    assert_eq!(accepted.status(), StatusCode::ACCEPTED);
+    let first = json_body(accepted).await;
+    let repeated = call_with_workflow_policy(&pool, signed(), true).await;
+    assert_eq!(repeated.status(), StatusCode::ACCEPTED);
+    assert_eq!(json_body(repeated).await["run_id"], first["run_id"]);
+    let denied = call_with_workflow_policy(&pool, signed(), false).await;
+    assert_eq!(denied.status(), StatusCode::FORBIDDEN);
+}
+
+#[tokio::test]
+async fn niche_flag_preserves_catalog_and_saved_graphs_but_denies_authoring_activation_and_ingress()
+{
+    use deepref_domain::{Actor, ActorKind, ProjectId};
+    let Some(pool) = database().await else { return };
+    let project = Uuid::new_v4();
+    sqlx::query("INSERT INTO projects(id,name) VALUES($1,'parked graph')")
+        .bind(project)
+        .execute(&pool)
+        .await
+        .unwrap();
+    let graph = json!({"nodes":[{"id":"trigger","type":"trigger.webhook","position":{"x":0,"y":0},"config":{}}],"edges":[]});
+    let create = || {
+        Request::builder()
+            .method("POST")
+            .uri(format!("/projects/{project}/automations/workflows"))
+            .header("Content-Type", "application/json")
+            .body(Body::from(
+                json!({"name":"Parked","graph":graph}).to_string(),
+            ))
+            .unwrap()
+    };
+    let denied = call_with_workflow_policy(&pool, create(), false).await;
+    assert_eq!(denied.status(), StatusCode::FORBIDDEN);
+    let enabled = call_with_workflow_policy(&pool, create(), true).await;
+    assert_eq!(enabled.status(), StatusCode::CREATED);
+    let created = json_body(enabled).await;
+    let workflow = Uuid::parse_str(created["id"].as_str().unwrap()).unwrap();
+    let catalog = call_with_workflow_policy(
+        &pool,
+        Request::builder()
+            .uri("/automations/catalog")
+            .body(Body::empty())
+            .unwrap(),
+        false,
+    )
+    .await;
+    let catalog = json_body(catalog).await;
+    let definitions = catalog.as_array().unwrap();
+    for id in [
+        "trigger.webhook",
+        "trigger.email",
+        "integration.slack",
+        "integration.http_request",
+    ] {
+        let definition = definitions
+            .iter()
+            .find(|node| node["id"] == id)
+            .expect("historical definition");
+        assert_eq!(definition["available"], false);
+    }
+    assert_eq!(
+        definitions
+            .iter()
+            .find(|node| node["id"] == "integration.email")
+            .unwrap()["available"],
+        true
+    );
+    let saved = call_with_workflow_policy(
+        &pool,
+        Request::builder()
+            .uri(format!(
+                "/projects/{project}/automations/workflows/{workflow}"
+            ))
+            .body(Body::empty())
+            .unwrap(),
+        false,
+    )
+    .await;
+    assert_eq!(saved.status(), StatusCode::OK);
+    assert_eq!(
+        json_body(saved).await["graph"]["nodes"][0]["type"],
+        "trigger.webhook"
+    );
+    for (method, suffix, body) in [
+        ("PUT", "", "{}"),
+        ("POST", "/publish", "{}"),
+        ("POST", "/test-runs", "{}"),
+    ] {
+        let response = call_with_workflow_policy(
+            &pool,
+            Request::builder()
+                .method(method)
+                .uri(format!(
+                    "/projects/{project}/automations/workflows/{workflow}{suffix}"
+                ))
+                .header("Content-Type", "application/json")
+                .body(Body::from(body))
+                .unwrap(),
+            false,
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::FORBIDDEN);
+    }
+    let actor = Actor::new(ActorKind::User, "historical").unwrap();
+    deepref_app::publish_workflow(
+        &pool,
+        ProjectId::new(project),
+        workflow,
+        None,
+        &actor,
+        false,
+        true,
+    )
+    .await
+    .unwrap();
+    for suffix in ["/enable", "/runs"] {
+        let denied = call_with_workflow_policy(
+            &pool,
+            Request::builder()
+                .method("POST")
+                .uri(format!(
+                    "/projects/{project}/automations/workflows/{workflow}{suffix}"
+                ))
+                .header("Content-Type", "application/json")
+                .body(Body::from("{}"))
+                .unwrap(),
+            false,
+        )
+        .await;
+        assert_eq!(denied.status(), StatusCode::FORBIDDEN);
+    }
+    let endpoint = deepref_app::get_webhook_config(&pool, ProjectId::new(project), workflow)
+        .await
+        .unwrap();
+    for path in [
+        format!("/hooks/workflows/{}", endpoint.token),
+        format!("/hooks/email/{}", endpoint.email_token),
+    ] {
+        let denied = call_with_workflow_policy(
+            &pool,
+            Request::builder()
+                .method("POST")
+                .uri(path)
+                .header("Content-Type", "application/json")
+                .body(Body::from("{}"))
+                .unwrap(),
+            false,
+        )
+        .await;
+        assert_eq!(denied.status(), StatusCode::FORBIDDEN);
+    }
+    let count: i64 =
+        sqlx::query_scalar("SELECT count(*) FROM workflow_run_details WHERE workflow_id=$1")
+            .bind(workflow)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(count, 0, "denial creates no durable run");
 }

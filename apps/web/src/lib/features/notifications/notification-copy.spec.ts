@@ -147,7 +147,7 @@ describe('notificationHref', () => {
 				project_id: projectId,
 				payload: { acquisition_id: 'acq 1' }
 			})
-		).toBe(`${base}/discovery/imports?ingestion=acq%201`);
+		).toBe(`${base}/discovery/imports?acquisition=acq%201`);
 	});
 
 	it('sends failed AI runs to AI activity and finished proposals to recommendations', () => {

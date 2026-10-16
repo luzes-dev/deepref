@@ -1,7 +1,7 @@
 # Review 2: Security and privacy
 
 Reviewer lens: deployment exposure, cost exhaustion, uploads and PDF parsing, SSRF, assistant tool authority, the workflow engine (webhooks, inbound e-mail, HTTP, Slack, e-mail and secret nodes), XSS, supply chain, and data deletion and retention.
-Method: static reading of `crates/http-api`, `crates/application/src/workflows`, `services/worker/src/workflows`, `crates/documents`, `crates/ai`, `crates/postgres`, `apps/web`, the Docker, Caddy and compose files, and `.github/workflows`. Nothing was run against a live server. Each finding cites file:line. A finding is labelled **(inferred)** when it rests on code reading of an exploit path that I did not test end to end.
+Method: static reading of `crates/http-api`, `crates/application/src/workflows`, `services/worker/src/workflows`, `crates/documents`, `crates/ai`, `crates/app`, `apps/web`, the Docker, Caddy and compose files, and `.github/workflows`. Nothing was run against a live server. Each finding cites file:line. A finding is labelled **(inferred)** when it rests on code reading of an exploit path that I did not test end to end.
 
 Baseline the lead already confirmed (not re-derived here): actor identity is self-asserted through the `x-actor-kind`/`x-actor-id` headers (`crates/http-api/src/routes/actor.rs`, defaulting to `local-user`) and through dedup body fields (`deduplication.rs:337`, defaulting to `web-user`). The web app keeps the reviewer id per tab in sessionStorage (`apps/web/src/lib/api/reviewer.ts`). **There is no authentication or authorization anywhere in the API.** Every finding below is made worse by that.
 
@@ -62,7 +62,7 @@ Fix: a tower layer that rejects requests whose `Host` is not in an allow-list (`
 
 Evidence:
 - `services/worker/src/workflows/nodes.rs:340-372`: `url = render_template(cfg "url", &data)`. If a secret `auth` exists for `(workflow_id, node_id)`, it is attached as `Authorization`.
-- `crates/postgres/src/workflows.rs:276-310` and `:383-394`: secrets are keyed by `(workflow_id, node_id, key)` only. Saving a new graph keeps the secret for any node id that still exists, *whatever the node's URL or type is now*. Secrets are stored in plaintext (`0028_workflow_engine.sql:152-159`).
+- `crates/app/src/workflows.rs:276-310` and `:383-394`: secrets are keyed by `(workflow_id, node_id, key)` only. Saving a new graph keeps the secret for any node id that still exists, *whatever the node's URL or type is now*. Secrets are stored in plaintext (`0028_workflow_engine.sql:152-159`).
 - `crates/application/src/workflows/validate.rs:220-222`: URL checks are skipped when the URL contains `{{`.
 - `crates/application/src/workflows/conditions.rs:191-211`: `render_template` splices raw text, with no URL encoding.
 
@@ -77,7 +77,7 @@ Fix: bind each secret to the origin (scheme+host+port) it was entered for, and d
 Evidence:
 - `crates/ai/src/usage.rs:72-80`: `ensure_budget` reads the budget, then the call happens, then the cost is recorded. This is a check-then-act race: N concurrent assistant runs or workflow AI steps all pass the check and then all spend.
 - Budget is per project (`0027_ai_usage_and_assistant_plans.sql:4-7`, default $5/month). Projects can be created freely (`POST /projects`), so the cap is per attacker-created project, i.e. unlimited.
-- `crates/postgres/src/ai_usage.rs:52-58`: any caller can set the budget to anything up to `100_000_000_000` micros ($100,000) through `PUT /projects/{id}/ai/budget`.
+- `crates/app/src/ai_usage.rs:52-58`: any caller can set the budget to anything up to `100_000_000_000` micros ($100,000) through `PUT /projects/{id}/ai/budget`.
 - Calls with `project_id: None` are "recorded but not budget-limited" (`0027…sql:8-9`, `openai_compat.rs:663`).
 - Per-run guards are good: assistant `max_steps: 8`, `max_total_tokens: 60_000` (`runtime/plan.rs:63-73`), `MAX_ASSISTANT_MESSAGE_CHARS` (`assistant/chat.rs:1140`). Unknown models are priced conservatively (`pricing.rs:49-52`).
 
@@ -164,7 +164,7 @@ Fix: one shared `is_public_ip` in a small crate, extended with the ranges above 
 
 ## S15. Retention and third-party data flow (Low / privacy)
 
-- Only notifications are pruned (`crates/postgres/src/notifications.rs:7-10`). `domain_events` (payloads include `WorkUpserted.title`, `crates/events/src/domain.rs:26-31`), `jobs`, AI runs, assistant transcripts, `ai_usage_ledger` and `workflow_runs` grow forever. Global `works` rows created from a private import survive project deletion.
+- Only notifications are pruned (`crates/app/src/notifications.rs:7-10`). `domain_events` (payloads include `WorkUpserted.title`, `crates/events/src/domain.rs:26-31`), `jobs`, AI runs, assistant transcripts, `ai_usage_ledger` and `workflow_runs` grow forever. Global `works` rows created from a private import survive project deletion.
 - Full text, abstracts and protocols are sent to the configured provider (default `https://opencode.ai/zen/go/v1`, routing to GLM, Kimi or DeepSeek; `crates/config/src/ai.rs:7-9`). For confidential manuscripts or embargoed data, users need a visible disclosure and a per-project "no AI" switch.
 
 Fix: a documented retention policy plus a periodic purge job (completed jobs older than N days, domain_events after projection, AI transcripts per project setting). Show provider and data-flow disclosure in Settings.

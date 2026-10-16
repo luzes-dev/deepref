@@ -5,7 +5,7 @@
 //! node fingerprints. Provider calls remain in `deepref-ai`; PostgreSQL and
 //! worker adapters live outside this crate.
 
-mod ai_first;
+pub mod ai_first;
 mod contract;
 mod definition;
 mod execution;

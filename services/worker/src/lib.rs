@@ -1,9 +1,9 @@
 use std::{future::Future, pin::Pin, sync::Arc, time::Duration};
 
 use deepref_ai::{AiGateway, RoutedGateway};
+use deepref_app::{claim_job, complete_job, fail_job, renew_job};
 use deepref_application::jobs::{ClaimedJob, JobLease, JobRetry};
 use deepref_documents::DocumentStore;
-use deepref_postgres::{claim_job, complete_job, fail_job, renew_job};
 use delivery::DeliveryAction;
 use sqlx::postgres::PgPoolOptions;
 use tokio::{
@@ -55,12 +55,9 @@ async fn build_ai_gateway(
             },
         )
     }));
-    let routes = deepref_postgres::ensure_default_model_routes(
-        pool,
-        provider.id(),
-        &ai_config.default_model,
-    )
-    .await?;
+    let routes =
+        deepref_app::ensure_default_model_routes(pool, provider.id(), &ai_config.default_model)
+            .await?;
     tracing::info!(
         provider = provider.id(),
         routes_created = routes.created,
@@ -71,7 +68,7 @@ async fn build_ai_gateway(
         provider.id(),
         &ai_config.base_url,
         api_key,
-        Arc::new(deepref_postgres::PostgresUsageLedger::new(pool)),
+        Arc::new(deepref_app::PostgresUsageLedger::new(pool)),
         prices,
     )?;
     Ok(gateway)
@@ -120,7 +117,11 @@ pub async fn run_with_shutdown(
     let ai_gateway = build_ai_gateway(&pool, &config.runtime.ai).await?;
     // Workflow blocks that change review state follow the project's AI
     // autonomy settings.
-    workflows::set_autonomy_gate(Arc::new(deepref_postgres::ProjectAutonomyGate::new(&pool)));
+    workflows::set_autonomy_gate(Arc::new(deepref_app::ProjectAutonomyGate::new(&pool)));
+    anyhow::ensure!(
+        deepref_app::configure_workflow_runtime(config.runtime.workflow.niche_nodes_enabled),
+        "API and worker workflow feature configuration must agree"
+    );
     let (reconciler_shutdown, reconciler_signal) = watch::channel(false);
     tokio::spawn(workflows::run_scheduler(
         pool.clone(),
@@ -148,7 +149,6 @@ pub async fn run_with_shutdown(
     };
     let handler = production_handler(
         pool.clone(),
-        config.claim_lease,
         document_store,
         ai_gateway,
         Arc::new(config.clone()),
@@ -182,7 +182,6 @@ pub async fn run_with_shutdown(
 
 fn production_handler(
     pool: sqlx::PgPool,
-    claim_lease: Duration,
     document_store: Arc<DocumentStore>,
     ai_gateway: Arc<dyn AiGateway>,
     config: Arc<config::WorkerConfig>,
@@ -197,7 +196,6 @@ fn production_handler(
                 pool,
                 &job,
                 &lease,
-                claim_lease,
                 Some(document_store),
                 None,
                 ai_gateway,

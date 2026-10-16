@@ -27,7 +27,7 @@ provenance.
 ## Acceptance evidence
 
 - Projection and PRISMA tests:
-  `crates/postgres/tests/prisma.rs`, `crates/postgres/tests/graph.rs`, and
+  `crates/app/tests/prisma.rs`, `crates/app/tests/graph.rs`, and
   `crates/http-api/tests/exports_postgres.rs`.
 - UI projection code:
   `apps/web/src/lib/components/project/graph-overlays.ts` and
@@ -35,7 +35,7 @@ provenance.
 - Run:
 
 ```text
-cargo test -p deepref-postgres --test prisma --locked
-cargo test -p deepref-postgres --test graph --locked
+cargo test -p deepref-app --test prisma --locked
+cargo test -p deepref-app --test graph --locked
 cargo test -p deepref-http-api --test exports_postgres --locked
 ```

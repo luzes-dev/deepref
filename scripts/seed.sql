@@ -52,7 +52,6 @@ INSERT INTO works (
   url,
   total_citations,
   references_count,
-  fetch_status,
   fetched_at,
   raw
 )
@@ -68,7 +67,6 @@ VALUES
     'https://example.invalid/works/1',
     42,
     2,
-    'fetched',
     '2026-01-01T00:00:00Z',
     '{"fixture":true,"ordinal":1}'::jsonb
   ),
@@ -83,7 +81,6 @@ VALUES
     'https://example.invalid/works/2',
     17,
     1,
-    'fetched',
     '2026-01-01T00:00:00Z',
     '{"fixture":true,"ordinal":2}'::jsonb
   ),
@@ -98,7 +95,6 @@ VALUES
     'https://example.invalid/works/3',
     8,
     0,
-    'fetched',
     '2026-01-01T00:00:00Z',
     '{"fixture":true,"ordinal":3}'::jsonb
   )
@@ -112,85 +108,9 @@ ON CONFLICT (canonical_doi) DO UPDATE SET
   url = EXCLUDED.url,
   total_citations = EXCLUDED.total_citations,
   references_count = EXCLUDED.references_count,
-  fetch_status = EXCLUDED.fetch_status,
   fetched_at = EXCLUDED.fetched_at,
   raw = EXCLUDED.raw;
 
-INSERT INTO project_works (
-  project_id,
-  canonical_doi,
-  seed,
-  min_depth,
-  metrics_computed_at
-)
-VALUES
-  ('00000000-0000-4000-8000-000000000001', '10.5555/deepref.seed.1', true, 0, '2026-01-01T00:00:00Z'),
-  ('00000000-0000-4000-8000-000000000001', '10.5555/deepref.seed.2', false, 1, '2026-01-01T00:00:00Z'),
-  ('00000000-0000-4000-8000-000000000001', '10.5555/deepref.seed.3', false, 1, '2026-01-01T00:00:00Z')
-ON CONFLICT (project_id, canonical_doi) DO UPDATE SET
-  seed = EXCLUDED.seed,
-  min_depth = EXCLUDED.min_depth;
-
-INSERT INTO legacy_citations (
-  project_id,
-  source_doi,
-  target_doi,
-  source,
-  created_at
-)
-VALUES
-  (
-    '00000000-0000-4000-8000-000000000001',
-    '10.5555/deepref.seed.1',
-    '10.5555/deepref.seed.2',
-    'local-fixture',
-    '2026-01-01T00:00:00Z'
-  ),
-  (
-    '00000000-0000-4000-8000-000000000001',
-    '10.5555/deepref.seed.1',
-    '10.5555/deepref.seed.3',
-    'local-fixture',
-    '2026-01-01T00:00:00Z'
-  ),
-  (
-    '00000000-0000-4000-8000-000000000001',
-    '10.5555/deepref.seed.2',
-    '10.5555/deepref.seed.3',
-    'local-fixture',
-    '2026-01-01T00:00:00Z'
-  )
-ON CONFLICT (project_id, source_doi, target_doi) DO UPDATE SET
-  source = EXCLUDED.source,
-  created_at = EXCLUDED.created_at;
-
-UPDATE project_works
-SET
-  internal_citations = CASE canonical_doi
-    WHEN '10.5555/deepref.seed.1' THEN 0
-    WHEN '10.5555/deepref.seed.2' THEN 1
-    WHEN '10.5555/deepref.seed.3' THEN 2
-  END,
-  outbound_internal_references = CASE canonical_doi
-    WHEN '10.5555/deepref.seed.1' THEN 2
-    WHEN '10.5555/deepref.seed.2' THEN 1
-    WHEN '10.5555/deepref.seed.3' THEN 0
-  END,
-  rank_score = CASE canonical_doi
-    WHEN '10.5555/deepref.seed.1' THEN 0.70
-    WHEN '10.5555/deepref.seed.2' THEN 0.50
-    WHEN '10.5555/deepref.seed.3' THEN 0.40
-  END,
-  metrics_computed_at = '2026-01-01T00:00:00Z'
-WHERE project_id = '00000000-0000-4000-8000-000000000001'
-  AND canonical_doi IN (
-    '10.5555/deepref.seed.1',
-    '10.5555/deepref.seed.2',
-    '10.5555/deepref.seed.3'
-  );
-
--- Seed the v2 evidence workspace after the legacy fixture rows exist. The production migration
--- performs the same deterministic compatibility import for data that already exists.
 INSERT INTO reports (
   id, title, abstract_text, publication_year, journal, container_title, url,
   work_type, publisher, total_citations, references_count, raw
@@ -226,15 +146,14 @@ ON CONFLICT (scheme, normalized_value) DO NOTHING;
 
 INSERT INTO records (id, project_id, report_id, source, source_key, title, publication_year, raw)
 SELECT
-  format('%s-%s-%s-%s-%s', substr(md5('deepref:record:' || pw.project_id::text || ':' || pw.canonical_doi), 1, 8),
-    substr(md5('deepref:record:' || pw.project_id::text || ':' || pw.canonical_doi), 9, 4), substr(md5('deepref:record:' || pw.project_id::text || ':' || pw.canonical_doi), 13, 4),
-    substr(md5('deepref:record:' || pw.project_id::text || ':' || pw.canonical_doi), 17, 4), substr(md5('deepref:record:' || pw.project_id::text || ':' || pw.canonical_doi), 21, 12))::uuid,
-  pw.project_id, r.id, 'legacy_project_works', pw.canonical_doi, w.title,
-  COALESCE(w.published_year, w.issued_year), jsonb_build_object('legacy_doi', pw.canonical_doi, 'seed', pw.seed)
-FROM project_works pw
-JOIN works w ON w.canonical_doi = pw.canonical_doi
-JOIN report_identifiers ri ON ri.scheme = 'doi' AND ri.normalized_value = lower(pw.canonical_doi)
-JOIN reports r ON r.id = ri.report_id
+  md5('deepref:record:00000000-0000-4000-8000-000000000001:' || w.canonical_doi)::uuid,
+  '00000000-0000-4000-8000-000000000001'::uuid, ri.report_id, 'doi', w.canonical_doi, w.title,
+  COALESCE(w.published_year, w.issued_year),
+  jsonb_build_object('doi', w.canonical_doi, 'seed', w.canonical_doi='10.5555/deepref.seed.1',
+    'min_depth', CASE WHEN w.canonical_doi='10.5555/deepref.seed.1' THEN 0 ELSE 1 END)
+FROM works w
+JOIN report_identifiers ri ON ri.scheme='doi' AND ri.normalized_value=lower(w.canonical_doi)
+WHERE w.canonical_doi IN('10.5555/deepref.seed.1','10.5555/deepref.seed.2','10.5555/deepref.seed.3')
 ON CONFLICT (id) DO NOTHING;
 
 INSERT INTO project_reports (project_id, report_id, first_seen_record_id)
@@ -242,12 +161,11 @@ SELECT project_id, report_id, id FROM records WHERE project_id = '00000000-0000-
 ON CONFLICT (project_id, report_id) DO UPDATE SET first_seen_record_id = COALESCE(project_reports.first_seen_record_id, EXCLUDED.first_seen_record_id);
 
 INSERT INTO citations (
-  project_id, source_report_id, target_report_id, source,
-  legacy_source_doi, legacy_target_doi, created_at
+  project_id, source_report_id, target_report_id, source, created_at
 )
 SELECT
-  '00000000-0000-4000-8000-000000000001', source_report.report_id, target_report.report_id,
-  'local-fixture', edge.source_doi, edge.target_doi, '2026-01-01T00:00:00Z'
+  '00000000-0000-4000-8000-000000000001', source_report.id, target_report.id,
+  'local-fixture', '2026-01-01T00:00:00Z'
 FROM (
   VALUES
     ('10.5555/deepref.seed.1', '10.5555/deepref.seed.2'),
@@ -264,9 +182,10 @@ JOIN reports source_report ON source_report.id = source_report_identifier.report
 JOIN reports target_report ON target_report.id = target_report_identifier.report_id
 ON CONFLICT (project_id, source_report_id, target_report_id) DO UPDATE SET
   source = EXCLUDED.source,
-  legacy_source_doi = EXCLUDED.legacy_source_doi,
-  legacy_target_doi = EXCLUDED.legacy_target_doi,
   created_at = EXCLUDED.created_at;
+
+UPDATE projects SET metric_requested_revision=metric_requested_revision+1
+WHERE id='00000000-0000-4000-8000-000000000001';
 
 SELECT recompute_project_report_metrics('00000000-0000-4000-8000-000000000001');
 

@@ -140,7 +140,7 @@ export function notificationHref(notification: {
 		case 'acquisition.completed':
 		case 'acquisition.failed':
 			return acquisitionId
-				? `${base}/discovery/imports?ingestion=${encodeURIComponent(acquisitionId)}`
+				? `${base}/discovery/imports?acquisition=${encodeURIComponent(acquisitionId)}`
 				: `${base}/discovery/imports`;
 		case 'review_run.completed':
 			return `${base}/recommendations`;

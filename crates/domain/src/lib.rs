@@ -260,6 +260,22 @@ pub struct UndoScreeningTransitionCommand {
     pub stage: ScreeningStage,
 }
 
+/// Blind audit labels must be independent human title/abstract decisions.
+/// The caller supplies the authoritative audit membership under its lock.
+pub fn validate_blind_screening(
+    masked: bool,
+    assistant_origin: bool,
+    stage: ScreeningStage,
+) -> Result<(), &'static str> {
+    if masked && assistant_origin {
+        return Err("records in a blind audit must be screened by a person");
+    }
+    if masked && stage != ScreeningStage::TitleAbstract {
+        return Err("complete or recover the blind audit before editing full text");
+    }
+    Ok(())
+}
+
 pub fn transition(
     command: &ScreenReportTransitionCommand,
     current: CurrentScreeningState,
@@ -437,6 +453,20 @@ mod tests {
             ),
             Err(ScreeningValidationError::TitleAbstractReasonNotAllowed)
         ));
+    }
+
+    #[test]
+    fn blind_screening_requires_independent_title_abstract_labels() {
+        assert!(validate_blind_screening(true, true, ScreeningStage::TitleAbstract).is_err());
+        assert!(validate_blind_screening(true, false, ScreeningStage::FullText).is_err());
+        assert_eq!(
+            validate_blind_screening(true, false, ScreeningStage::TitleAbstract),
+            Ok(())
+        );
+        assert_eq!(
+            validate_blind_screening(false, true, ScreeningStage::FullText),
+            Ok(())
+        );
     }
 
     #[test]

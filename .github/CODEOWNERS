@@ -1,4 +1,4 @@
 * @luzes-dev
 
 /.github/workflows/ @luzes-dev
-/crates/postgres/migrations/ @luzes-dev
+/crates/app/migrations/ @luzes-dev

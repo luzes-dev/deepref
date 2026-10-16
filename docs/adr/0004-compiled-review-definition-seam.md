@@ -20,7 +20,7 @@ loads only checked-in assets, validates a closed workflow graph, hashes actual
 asset contents, and builds the run manifest and node fingerprints.
 
 `deepref-ai` remains the provider-neutral implementation of one structured
-model call. `deepref-postgres` and the worker remain adapters that own durable
+model call. `deepref-app` and the worker remain adapters that own durable
 state and execution. HTTP and assistant adapters never submit arbitrary
 workflow graphs, prompt text, or scientific write tools.
 

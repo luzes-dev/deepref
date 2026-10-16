@@ -10,11 +10,11 @@
 use std::{sync::Arc, time::Duration};
 
 use deepref_ai::{ModelParameters, ModelProfile, ResolvedModel, runtime::StaticModelFactory};
-use deepref_application::jobs::ClaimedJob;
-use deepref_postgres::{
+use deepref_app::{
     append_assistant_run_event, begin_assistant_agent_run, claim_job, get_assistant_plan,
     list_assistant_run_events, submit_assistant_agent_run,
 };
+use deepref_application::jobs::ClaimedJob;
 use deepref_worker::{
     assistant::{AssistantWorkerServices, handle_assistant_agent_run_with},
     delivery::DeliveryAction,
@@ -25,7 +25,7 @@ use sqlx::PgPool;
 use uuid::Uuid;
 
 async fn database() -> Option<PgPool> {
-    deepref_postgres::test_isolation::isolated_pool_from_env("DATABASE_URL", 8).await
+    deepref_app::test_isolation::isolated_pool_from_env("DATABASE_URL", 8).await
 }
 
 async fn project(pool: &PgPool) -> (Uuid, Uuid) {
@@ -119,8 +119,8 @@ async fn claim(pool: &PgPool) -> ClaimedJob {
         .expect("a job is queued")
 }
 
-async fn run_record(pool: &PgPool, run_id: Uuid) -> deepref_postgres::AssistantAgentRunRecord {
-    deepref_postgres::get_assistant_agent_run(pool, run_id)
+async fn run_record(pool: &PgPool, run_id: Uuid) -> deepref_app::AssistantAgentRunRecord {
+    deepref_app::get_assistant_agent_run(pool, run_id)
         .await
         .expect("run loads")
         .expect("run exists")
@@ -307,7 +307,7 @@ fn failing_model() -> MockCompletionModel {
 async fn exhausted_budget_fails_the_run_without_an_answer() {
     let Some(pool) = database().await else { return };
     let (project_id, conversation_id) = project(&pool).await;
-    deepref_postgres::set_ai_budget(&pool, project_id, 1)
+    deepref_app::set_ai_budget(&pool, project_id, 1)
         .await
         .expect("budget");
     sqlx::query(

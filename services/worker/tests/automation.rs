@@ -5,16 +5,16 @@
     clippy::string_slice
 )]
 use anyhow::{Result, ensure};
+use deepref_app::{
+    begin_next_automation_step, complete_job, configure_automation_definition, get_automation_run,
+    recover_expired_jobs, start_automation_manually,
+};
 use deepref_application::{
     AutomationDefinitionStatus, AutomationRunId, AutomationRunStatus, AutomationStepRunStatus,
     AutomationTriggerKind, BuiltInAutomationRecipe, ConfigureAutomationDefinition,
     StartAutomationManually,
 };
 use deepref_domain::{Actor, ActorKind, ProjectId};
-use deepref_postgres::{
-    begin_next_automation_step, complete_job, configure_automation_definition, get_automation_run,
-    recover_expired_jobs, start_automation_manually,
-};
 use deepref_worker::{delivery::DeliveryAction, processor::handle_job_with_documents_owned};
 use serde_json::json;
 use sqlx::{PgPool, Row};
@@ -22,7 +22,7 @@ use std::time::Duration;
 use uuid::Uuid;
 
 async fn database() -> Option<PgPool> {
-    deepref_postgres::test_isolation::isolated_pool_from_env("DATABASE_URL", 8).await
+    deepref_app::test_isolation::isolated_pool_from_env("DATABASE_URL", 8).await
 }
 
 fn actor() -> Actor {
@@ -246,25 +246,21 @@ async fn unknown_step_fails_closed_and_lease_owner_is_required() -> Result<()> {
         // production. Temporarily corrupt the durable snapshot only in this
         // fixture so the worker's fail-closed branch is exercised.
         let mut transaction = pool.begin().await?;
+        sqlx::query("ALTER TABLE durable_steps DISABLE TRIGGER durable_steps_identity")
+            .execute(&mut *transaction)
+            .await?;
         sqlx::query(
-            "ALTER TABLE automation_step_runs DISABLE TRIGGER automation_step_snapshot_trigger",
-        )
-        .execute(&mut *transaction)
-        .await?;
-        sqlx::query(
-            "UPDATE automation_step_runs
+            "UPDATE durable_steps
              SET step_key='untrusted_command'
-             WHERE project_id=$1 AND automation_run_id=$2",
+             WHERE project_id=$1 AND run_id=$2",
         )
         .bind(project_id.as_uuid())
         .bind(run_id.as_uuid())
         .execute(&mut *transaction)
         .await?;
-        sqlx::query(
-            "ALTER TABLE automation_step_runs ENABLE TRIGGER automation_step_snapshot_trigger",
-        )
-        .execute(&mut *transaction)
-        .await?;
+        sqlx::query("ALTER TABLE durable_steps ENABLE TRIGGER durable_steps_identity")
+            .execute(&mut *transaction)
+            .await?;
         transaction.commit().await?;
 
         let claimed = claimed_job(&pool, job_id, "worker-policy").await?;
@@ -300,7 +296,7 @@ async fn unknown_step_fails_closed_and_lease_owner_is_required() -> Result<()> {
                 == DeliveryAction::Terminate
         );
         ensure!(
-            deepref_postgres::fail_job(
+            deepref_app::fail_job(
                 &pool,
                 &claimed.lease("worker-policy"),
                 "terminal job failure",

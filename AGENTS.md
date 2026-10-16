@@ -1,6 +1,6 @@
 # Deepref Agent Guidelines & Engineering Standards
 
-Repository guidance for AI agents and human contributors working across the Deepref monorepo (`apps/web`, `packages/ui`, `packages/core`).
+Repository guidance for AI agents and human contributors working across the Deepref monorepo (`apps/web`, `packages/ui`, `crates/*`, `services/*`).
 
 ---
 
@@ -10,7 +10,7 @@ Deepref enforces a strict design system architecture between `@deepref/ui` (reus
 
 ### Design Tokens & Typography
 
-Theme tokens are declared in [`packages/ui/src/styles/styles.css`](file:///home/luzes/.t3/worktrees/ambient-scribes/t3code-729f9577/packages/ui/src/styles/styles.css) and exposed through Tailwind CSS v4 `@theme inline`:
+Theme tokens are declared in [`packages/ui/src/styles/styles.css`](packages/ui/src/styles/styles.css) and exposed through Tailwind CSS v4 `@theme inline`:
 
 - **Typography Scale**:
   - Headings & reading: Standard scale (`text-xs`, `text-sm`, `text-base`, `text-lg`, `text-xl`, etc.) with `font-sans` (IBM Plex Sans) or `font-serif` (Source Serif 4).
@@ -28,7 +28,7 @@ Theme tokens are declared in [`packages/ui/src/styles/styles.css`](file:///home/
 - **Surface & Shadows**:
   - Semantic shadows: `shadow-xs`, `shadow-sm`, `shadow-md`, `shadow-lg`, and accent shadow `shadow-inset-accent` (`inset 3px 0 0 var(--primary)`).
 - **Custom Utilities**:
-  - Registered via `@utility` in [`packages/ui/src/styles/styles.css`](file:///home/luzes/.t3/worktrees/ambient-scribes/t3code-729f9577/packages/ui/src/styles/styles.css) and [`apps/web/src/routes/layout.css`](file:///home/luzes/.t3/worktrees/ambient-scribes/t3code-729f9577/apps/web/src/routes/layout.css):
+  - Registered via `@utility` in [`packages/ui/src/styles/styles.css`](packages/ui/src/styles/styles.css) and [`apps/web/src/routes/layout.css`](apps/web/src/routes/layout.css):
     - `editorial-title`: Sans, semi-bold (`font-weight: 600`), negative tracking (`-0.02em`).
     - `disclosure`: Border bottom `var(--border)` with vertical padding `0.75rem`.
 
@@ -36,13 +36,13 @@ Theme tokens are declared in [`packages/ui/src/styles/styles.css`](file:///home/
 
 Components own their internal presentation and provide formal variant/size contracts:
 
-- **Badge** ([`packages/ui/src/primitives/badge`](file:///home/luzes/.t3/worktrees/ambient-scribes/t3code-729f9577/packages/ui/src/primitives/badge/badge.svelte)):
+- **Badge** ([`packages/ui/src/primitives/badge`](packages/ui/src/primitives/badge/badge.svelte)):
   - Variants: `default`, `secondary`, `destructive`, `outline`, `success`, `warning`, `info`, `ghost`, `link`.
   - Sizes: `default` (h-5.5, px-2), `sm` (h-4.5, px-1.5, text-2xs), `xs` (h-4, px-1, text-3xs).
-- **BubbleRoot** ([`packages/ui/src/primitives/bubble`](file:///home/luzes/.t3/worktrees/ambient-scribes/t3code-729f9577/packages/ui/src/primitives/bubble/bubble-root.svelte)):
+- **BubbleRoot** ([`packages/ui/src/primitives/bubble`](packages/ui/src/primitives/bubble/bubble-root.svelte)):
   - Variants: `default`, `muted`, `accent`.
   - Sizes: `default` (p-3 rounded-lg), `compact` (px-2.5 py-1.5 rounded-md).
-- **Button** ([`packages/ui/src/primitives/button`](file:///home/luzes/.t3/worktrees/ambient-scribes/t3code-729f9577/packages/ui/src/primitives/button/button.svelte)):
+- **Button** ([`packages/ui/src/primitives/button`](packages/ui/src/primitives/button/button.svelte)):
   - Variants: `default`, `outline`, `secondary`, `ghost`, `destructive`, `link`.
   - Sizes: `default`, `xs`, `sm`, `lg`, `multiline` (height grows with wrapped labels, for list items), `icon`, `icon-xs`, `icon-sm`, `icon-lg`.
 
@@ -50,7 +50,7 @@ Components own their internal presentation and provide formal variant/size contr
 
 ## 2. `@shadcn/lint` Enforcement Rules
 
-`apps/web` integrates `@shadcn/lint` through ESLint ([`apps/web/eslint.config.js`](file:///home/luzes/.t3/worktrees/ambient-scribes/t3code-729f9577/apps/web/eslint.config.js)). All code written must comply with the following contracts:
+`apps/web` integrates `@shadcn/lint` through ESLint ([`apps/web/eslint.config.js`](apps/web/eslint.config.js)). All code written must comply with the following contracts:
 
 ### Rule 1: `shadcn/no-raw-colors` (Severity: Error)
 
@@ -71,7 +71,7 @@ Disallow arbitrary Tailwind classes (`[value]`), except for dynamic layouts (`w-
 
 Every CSS utility used on an element must be recognized by Tailwind CSS v4.
 
-- Custom utilities must be defined using the `@utility <class-name>` directive in the root CSS entry point ([`apps/web/src/routes/layout.css`](file:///home/luzes/.t3/worktrees/ambient-scribes/t3code-729f9577/apps/web/src/routes/layout.css)) or `@deepref/ui/styles.css`.
+- Custom utilities must be defined using the `@utility <class-name>` directive in the root CSS entry point ([`apps/web/src/routes/layout.css`](apps/web/src/routes/layout.css)) or `@deepref/ui/styles.css`.
 
 ### Rule 4: `shadcn/no-inline-styles` (Severity: Error)
 
@@ -109,3 +109,16 @@ When editing Svelte or CSS files, ensure formatting is clean by running:
 pnpm --filter @deepref/web exec prettier --write <modified-files>
 pnpm --filter @deepref/ui exec prettier --write <modified-files>
 ```
+
+For Rust changes, run:
+
+```bash
+cargo fmt --all -- --check
+cargo clippy --workspace --all-targets --locked -- -D warnings
+cargo nextest run --workspace --lib --bins --locked
+cargo xtask boundaries
+```
+
+For database changes, point `DATABASE_URL` and `TEST_DATABASE_URL` at a disposable PostgreSQL instance, set `DEEPREF_REQUIRE_DATABASE=1`, and run `cargo nextest run --workspace --tests --locked`. Keep the configured parallel PostgreSQL test group; the development database is not a test fixture.
+
+For SQL macro changes, run `cargo xtask sqlx prepare`, commit `.sqlx/`, and verify `cargo xtask sqlx check`. Finish metadata preparation before offline builds. For API contract changes, regenerate with `pnpm generate:api` and verify `pnpm generate:api:check`.

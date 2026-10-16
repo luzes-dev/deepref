@@ -1,8 +1,8 @@
 # Reviewer 5: AI subsystem, end to end
 
-Scope: `crates/ai`, `crates/review`, the AI parts of `crates/postgres` / `crates/http-api` / `services/worker`, and the web assistant and proposal UI. This was a read-only review.
+Scope: `crates/ai`, `crates/review`, the AI parts of `crates/app` / `crates/http-api` / `services/worker`, and the web assistant and proposal UI. This was a read-only review.
 
-Verification run: `cargo test -p deepref-ai -p deepref-review --lib` works offline (no database). Result: **deepref-ai 110 passed, deepref-review 74 passed, 0 failed, 0 ignored.** I deleted the scratch target directory afterwards. I did not run the DB-backed integration suites (`crates/postgres/tests`, `services/worker/tests`, `crates/http-api/tests`).
+Verification run: `cargo test -p deepref-ai -p deepref-review --lib` works offline (no database). Result: **deepref-ai 110 passed, deepref-review 74 passed, 0 failed, 0 ignored.** I deleted the scratch target directory afterwards. I did not run the DB-backed integration suites (`crates/app/tests`, `services/worker/tests`, `crates/http-api/tests`).
 
 ---
 
@@ -14,7 +14,7 @@ Verification run: `cargo test -p deepref-ai -p deepref-review --lib` works offli
 HTTP (routes/ai/generation.rs, extraction.rs, assistant/*)        web: ReviewRunObserver, AssistantPlanCard
    │  reviewer picks a typed subject (report/record/study)
    ▼
-deepref-postgres review_preparation.rs   loads subject + protocol, builds PreparedReviewTask (typed input)
+deepref-app review_preparation.rs   loads subject + protocol, builds PreparedReviewTask (typed input)
    │  ensure_ai_task_enabled (project autonomy != Off)
    ▼
 deepref-review  CompiledReview::compile(key)   checked-in review-definitions/<key>/v1/{workflow.json,prompt.txt,schema.json} + shared/{policy.md,parser.json}
@@ -112,7 +112,7 @@ Because `input_hash` includes `node_fingerprint`, which includes `manifest_hash`
 - **Category:** Product and Defect. **Severity:** P1. **Confidence:** High for the mechanics; Medium for the effect on ADR 0005 statistics.
 - **Evidence:**
   - Tool definition: catalog.rs:118-133 (`screen_reports`, up to 200 ids per action, `MAX_ACTIONS_PER_PLAN = 25`, policy.rs:23-24).
-  - Execution: plans.rs:631-728 (`run_screen_reports`). It calls `deepref_postgres::screen_report` with `actor = confirming user` and `exclusion_reason_id: None`. `expected_revision` is **read at confirm time** (plans.rs:679-696).
+  - Execution: plans.rs:631-728 (`run_screen_reports`). It calls `deepref_app::screen_report` with `actor = confirming user` and `exclusion_reason_id: None`. `expected_revision` is **read at confirm time** (plans.rs:679-696).
   - Confirmation UI: AssistantPlanCard.svelte:94-103 shows only the model-written `summary`, its `rationale`, and "N items". It shows no report titles or ids and offers no per-item deselect.
   - No AI-settings gate: `ensure_ai_task_enabled` is only on the review-run path (review_preparation.rs:28-49).
   - ADR 0005 §16 acknowledges that assistant-applied decisions "stay human decisions".

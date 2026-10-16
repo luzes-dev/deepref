@@ -126,7 +126,7 @@ fn task_label(task: &str) -> String {
 }
 
 async fn autonomy_dto(state: &AppState, project_id: Uuid) -> Result<AiAutonomyDto, ApiError> {
-    let settings = deepref_postgres::get_autonomy_settings(&state.pool, project_id)
+    let settings = deepref_app::get_autonomy_settings(&state.pool, project_id)
         .await
         .map_err(map_autonomy_error)?;
     Ok(AiAutonomyDto {
@@ -168,15 +168,15 @@ async fn autonomy_dto(state: &AppState, project_id: Uuid) -> Result<AiAutonomyDt
     })
 }
 
-fn map_autonomy_error(error: deepref_postgres::AutonomyStoreError) -> ApiError {
+fn map_autonomy_error(error: deepref_app::AutonomyStoreError) -> ApiError {
     match error {
-        deepref_postgres::AutonomyStoreError::ProjectNotFound => {
+        deepref_app::AutonomyStoreError::ProjectNotFound => {
             ApiError::NotFound("project not found".to_owned())
         }
-        deepref_postgres::AutonomyStoreError::LevelNotAllowed => {
+        deepref_app::AutonomyStoreError::LevelNotAllowed => {
             ApiError::BadRequest("That level is not available for this task.".to_owned())
         }
-        deepref_postgres::AutonomyStoreError::Database(error) => ApiError::Database(error),
+        deepref_app::AutonomyStoreError::Database(error) => ApiError::Database(error),
     }
 }
 
@@ -239,7 +239,7 @@ pub(crate) async fn update_ai_autonomy(
         parsed.push((task, level));
     }
     for (task, level) in parsed {
-        deepref_postgres::set_autonomy_level(&state.pool, project_id, task, level, &actor)
+        deepref_app::set_autonomy_level(&state.pool, project_id, task, level, &actor)
             .await
             .map_err(map_autonomy_error)?;
     }
@@ -287,7 +287,7 @@ pub(crate) struct AiActivityDto {
     pub undone_by: Option<String>,
 }
 
-fn activity_dto(record: deepref_postgres::ActivityRecord) -> AiActivityDto {
+fn activity_dto(record: deepref_app::ActivityRecord) -> AiActivityDto {
     let text = |value: &Value, key: &str| {
         value
             .get(key)
@@ -369,8 +369,8 @@ pub(crate) struct AiActivityListParams {
     pub undone: Option<bool>,
 }
 
-fn map_activity_error(error: deepref_postgres::ActivityError) -> ApiError {
-    use deepref_postgres::ActivityError as E;
+fn map_activity_error(error: deepref_app::ActivityError) -> ApiError {
+    use deepref_app::ActivityError as E;
     match error {
         E::NotFound => ApiError::NotFound("activity entry not found".to_owned()),
         E::AlreadyUndone => ApiError::Conflict {
@@ -415,10 +415,10 @@ pub(crate) async fn list_ai_activity(
     };
     let limit = pagination.limit()?;
     let cursor = pagination.decode::<(DateTime<Utc>, Uuid)>()?;
-    let records = deepref_postgres::list_activity(
+    let records = deepref_app::list_activity(
         &state.pool,
         project_id,
-        deepref_postgres::ActivityFilters {
+        deepref_app::ActivityFilters {
             task: params.task.as_deref(),
             actor_type: params.actor_type.as_deref(),
             batch_id: params.batch_id,
@@ -466,21 +466,18 @@ pub(crate) async fn get_ai_activity_overview(
     State(state): State<AppState>,
     Path(project_id): Path<Uuid>,
 ) -> Result<Json<AiActivityOverviewDto>, ApiError> {
-    let overview = deepref_postgres::activity_overview(&state.pool, project_id).await?;
-    let title_abstract = deepref_postgres::second_review_status(
+    let overview = deepref_app::activity_overview(&state.pool, project_id).await?;
+    let title_abstract = deepref_app::second_review_status(
         &state.pool,
         project_id,
         AutonomyTask::TitleAbstractScreening,
     )
     .await
     .map_err(ApiError::Internal)?;
-    let full_text = deepref_postgres::second_review_status(
-        &state.pool,
-        project_id,
-        AutonomyTask::FullTextScreening,
-    )
-    .await
-    .map_err(ApiError::Internal)?;
+    let full_text =
+        deepref_app::second_review_status(&state.pool, project_id, AutonomyTask::FullTextScreening)
+            .await
+            .map_err(ApiError::Internal)?;
     Ok(Json(AiActivityOverviewDto {
         to_verify: overview.to_verify,
         open_conflicts: overview.open_conflicts,
@@ -512,7 +509,7 @@ pub(crate) async fn undo_ai_activity(
     headers: HeaderMap,
 ) -> Result<Json<AiActivityDto>, ApiError> {
     let actor = extract_actor(&headers)?;
-    let record = deepref_postgres::undo_activity(&state.pool, project_id, activity_id, &actor)
+    let record = deepref_app::undo_activity(&state.pool, project_id, activity_id, &actor)
         .await
         .map_err(map_activity_error)?;
     Ok(Json(activity_dto(record)))
@@ -553,7 +550,7 @@ pub(crate) async fn undo_ai_activity_batch(
     headers: HeaderMap,
 ) -> Result<Json<BatchUndoDto>, ApiError> {
     let actor = extract_actor(&headers)?;
-    let result = deepref_postgres::undo_batch(&state.pool, project_id, batch_id, &actor)
+    let result = deepref_app::undo_batch(&state.pool, project_id, batch_id, &actor)
         .await
         .map_err(map_activity_error)?;
     Ok(Json(BatchUndoDto {
@@ -597,7 +594,7 @@ pub(crate) struct AiReviewerDecisionDto {
     pub created_at: DateTime<Utc>,
 }
 
-fn reviewer_dto(record: deepref_postgres::ReviewerDecisionRecord) -> AiReviewerDecisionDto {
+fn reviewer_dto(record: deepref_app::ReviewerDecisionRecord) -> AiReviewerDecisionDto {
     AiReviewerDecisionDto {
         id: record.id,
         report_id: record.report_id,
@@ -655,7 +652,7 @@ pub(crate) async fn list_ai_reviewer_decisions(
     {
         return Err(ApiError::BadRequest("invalid filter".to_owned()));
     }
-    let records = deepref_postgres::list_reviewer_decisions(
+    let records = deepref_app::list_reviewer_decisions(
         &state.pool,
         project_id,
         params.stage.as_deref(),
@@ -710,11 +707,11 @@ pub(crate) async fn resolve_ai_reviewer_conflict(
             ));
         }
     };
-    let record = deepref_postgres::resolve_reviewer_conflict(
+    let record = deepref_app::resolve_reviewer_conflict(
         &state.pool,
         project_id,
         decision_id,
-        deepref_postgres::ResolveConflict {
+        deepref_app::ResolveConflict {
             decision,
             exclusion_reason_id: body.exclusion_reason_id,
             note: body.note.filter(|note| !note.trim().is_empty()),
@@ -723,28 +720,28 @@ pub(crate) async fn resolve_ai_reviewer_conflict(
     )
     .await
     .map_err(|error| match error {
-        deepref_postgres::ReviewerError::NotFound => {
+        deepref_app::ReviewerError::NotFound => {
             ApiError::NotFound("reviewer decision not found".to_owned())
         }
-        deepref_postgres::ReviewerError::AlreadyResolved => ApiError::Conflict {
+        deepref_app::ReviewerError::AlreadyResolved => ApiError::Conflict {
             code: "conflict_already_resolved".to_owned(),
             message: "This conflict was already resolved.".to_owned(),
             details: Value::Null,
         },
-        deepref_postgres::ReviewerError::NotDecided => ApiError::Conflict {
+        deepref_app::ReviewerError::NotDecided => ApiError::Conflict {
             code: "human_decision_required".to_owned(),
             message: "Record your own decision for this record before the AI opinion can be shown."
                 .to_owned(),
             details: Value::Null,
         },
-        deepref_postgres::ReviewerError::NoProtocol => ApiError::Conflict {
+        deepref_app::ReviewerError::NoProtocol => ApiError::Conflict {
             code: "protocol_not_published".to_owned(),
             message: "Publish the protocol before screening.".to_owned(),
             details: Value::Null,
         },
-        deepref_postgres::ReviewerError::Screening(error) => match error {
-            deepref_postgres::ScreeningError::Database(error) => ApiError::Database(error),
-            deepref_postgres::ScreeningError::RevisionConflict { .. } => ApiError::Conflict {
+        deepref_app::ReviewerError::Screening(error) => match error {
+            deepref_app::screening::ScreeningError::Database(error) => ApiError::Database(error),
+            deepref_app::screening::ScreeningError::RevisionConflict { .. } => ApiError::Conflict {
                 code: "screening_revision_conflict".to_owned(),
                 message: "The screening decision changed in the meantime. Reload and try again."
                     .to_owned(),
@@ -752,7 +749,7 @@ pub(crate) async fn resolve_ai_reviewer_conflict(
             },
             other => super::review::map_screening_error(other),
         },
-        deepref_postgres::ReviewerError::Database(error) => ApiError::Database(error),
+        deepref_app::ReviewerError::Database(error) => ApiError::Database(error),
     })?;
     Ok(Json(reviewer_dto(record)))
 }
@@ -785,7 +782,7 @@ pub(crate) async fn get_ai_reviewer_agreement(
     State(state): State<AppState>,
     Path(project_id): Path<Uuid>,
 ) -> Result<Json<Vec<AiStageAgreementDto>>, ApiError> {
-    let stages = deepref_postgres::reviewer_agreement(&state.pool, project_id).await?;
+    let stages = deepref_app::reviewer_agreement(&state.pool, project_id).await?;
     Ok(Json(
         stages
             .into_iter()
@@ -826,9 +823,8 @@ pub(crate) async fn confirm_extraction_value(
     headers: HeaderMap,
 ) -> Result<Json<ExtractionValueDto>, ApiError> {
     let actor = extract_actor(&headers)?;
-    let record =
-        deepref_postgres::confirm_value(&state.pool, project_id, study_id, value_id, &actor)
-            .await
-            .map_err(map_extraction_error)?;
+    let record = deepref_app::confirm_value(&state.pool, project_id, study_id, value_id, &actor)
+        .await
+        .map_err(map_extraction_error)?;
     Ok(Json(value_dto(record)))
 }

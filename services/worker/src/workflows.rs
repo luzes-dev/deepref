@@ -1,6 +1,6 @@
 //! Worker side of the visual workflow engine.
 //!
-//! * `handle_step` runs one `workflow_step` job: it executes a single block,
+//! * `handle_step` runs the workflow handler of one `durable_run_step` job:
 //!   records the outcome and lets the planner queue what comes next.
 //! * `run_scheduler` fires due schedules, polls publication alerts and fails
 //!   steps whose job died.
@@ -14,13 +14,13 @@ use std::{
 
 use chrono::Utc;
 use deepref_ai::AiGateway;
+use deepref_app::{
+    AlertHit, DueAlert, NodeOutcome, StepClaim, begin_node_execution, claim_due_workflows,
+    fail_abandoned_steps, finish_node_execution, record_alert_poll, record_node_retry,
+};
 use deepref_application::{
     jobs::{ClaimedJob, JobLease},
     workflows::{AutonomyGate, DefaultAutonomyGate, PublicationQuery},
-};
-use deepref_postgres::{
-    AlertHit, DueAlert, NodeOutcome, StepClaim, begin_node_execution, claim_due_workflows,
-    fail_abandoned_steps, finish_node_execution, record_alert_poll, record_node_retry,
 };
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -78,10 +78,10 @@ impl From<sqlx::Error> for NodeError {
     }
 }
 
-impl From<deepref_postgres::WorkflowError> for NodeError {
-    fn from(error: deepref_postgres::WorkflowError) -> Self {
+impl From<deepref_app::WorkflowError> for NodeError {
+    fn from(error: deepref_app::WorkflowError) -> Self {
         match error {
-            deepref_postgres::WorkflowError::Database(_) => {
+            deepref_app::WorkflowError::Database(_) => {
                 Self::retryable("The database was busy. This will be tried again.")
             }
             other => Self::permanent(other.to_string()),
@@ -92,7 +92,9 @@ impl From<deepref_postgres::WorkflowError> for NodeError {
 #[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 struct StepPayload {
-    node_run_id: Uuid,
+    run_id: Uuid,
+    step_id: Uuid,
+    handler_kind: deepref_domain::jobs::DurableHandlerKind,
 }
 
 fn backoff(attempt: i32) -> Duration {
@@ -113,11 +115,50 @@ pub async fn handle_step(
     ai_gateway: Option<Arc<dyn AiGateway>>,
     runtime: &deepref_config::RuntimeConfig,
 ) -> anyhow::Result<DeliveryAction> {
-    let payload: StepPayload = serde_json::from_value(job.payload.clone())?;
-    let execution = match begin_node_execution(pool, payload.node_run_id, lease).await? {
+    let payload = StepPayload::deserialize(&job.payload)?;
+    anyhow::ensure!(
+        payload.handler_kind == deepref_domain::jobs::DurableHandlerKind::Workflow,
+        "wrong durable workflow handler"
+    );
+    let identity: Option<Uuid> = sqlx::query_scalar(
+        "SELECT run_id FROM durable_steps WHERE id=$1 AND handler_kind='workflow'",
+    )
+    .bind(payload.step_id)
+    .fetch_optional(pool)
+    .await?;
+    anyhow::ensure!(
+        identity == Some(payload.run_id),
+        "durable workflow step/run mismatch"
+    );
+    let execution = match begin_node_execution(pool, payload.step_id, lease).await? {
         StepClaim::Stale => return Ok(DeliveryAction::Ack),
         StepClaim::Execute(execution) => *execution,
     };
+    if !runtime.workflow.niche_nodes_enabled {
+        let types: Vec<String> = sqlx::query_scalar(
+            "SELECT ARRAY(
+            SELECT node->>'type' FROM jsonb_array_elements(graph->'nodes') node)
+            FROM workflow_run_details WHERE id=$1",
+        )
+        .bind(payload.run_id)
+        .fetch_one(pool)
+        .await?;
+        if types
+            .iter()
+            .any(|id| !deepref_application::workflows::catalog::node_is_available(id, false))
+        {
+            finish_node_execution(
+                pool,
+                payload.step_id,
+                lease,
+                NodeOutcome::Failed {
+                    message: "Niche workflow nodes are disabled.".to_owned(),
+                },
+            )
+            .await?;
+            return Ok(DeliveryAction::Terminate);
+        }
+    }
     let context = nodes::Context {
         pool,
         ai: ai_gateway.as_deref(),
@@ -125,15 +166,15 @@ pub async fn handle_step(
         runtime,
     };
     let finished = match nodes::execute(&context).await {
-        Ok(outcome) => finish_node_execution(pool, payload.node_run_id, lease, outcome).await?,
+        Ok(outcome) => finish_node_execution(pool, payload.step_id, lease, outcome).await?,
         Err(error) if error.retryable && job.attempts < job.max_attempts => {
-            record_node_retry(pool, payload.node_run_id, lease, &error.message).await?;
+            record_node_retry(pool, payload.step_id, lease, &error.message).await?;
             return Ok(DeliveryAction::Nak(backoff(job.attempts)));
         }
         Err(error) => {
             finish_node_execution(
                 pool,
-                payload.node_run_id,
+                payload.step_id,
                 lease,
                 NodeOutcome::Failed {
                     message: error.message,
@@ -145,7 +186,7 @@ pub async fn handle_step(
     if !finished {
         tracing::warn!(
             job_id = %job.id,
-            node_run_id = %payload.node_run_id,
+            node_run_id = %payload.step_id,
             attempt = lease.attempt,
             "workflow step outcome dropped because a newer claim owns the step"
         );

@@ -1,6 +1,7 @@
 import { expect, test, type Page } from '@playwright/test';
 import type {
 	AiProposalDto,
+	DocumentBlockDto,
 	PaginatedResponseDocumentBlockDto
 } from '#lib/api/generated/models/index.js';
 
@@ -150,7 +151,7 @@ async function mockShell(page: Page): Promise<void> {
 	await page.route(/\/api\/projects\/project-1(?:\?.*)?$/, async (route) =>
 		route.fulfill({ json: project })
 	);
-	await page.route(/\/api\/ingestions(?:\?.*)?$/, async (route) =>
+	await page.route(/\/api\/projects\/[^/]+\/acquisitions(?:\?.*)?$/, async (route) =>
 		route.fulfill({ json: { items: [], next_cursor: null } })
 	);
 	await page.route(/\/api\/projects\/project-1\/reports(?:\?.*)?$/, async (route) =>
@@ -213,8 +214,9 @@ async function mockShell(page: Page): Promise<void> {
 					parser_version: 'parser-1',
 					page_ocr_required: false
 				}
-			];
+			] satisfies DocumentBlockDto[];
 			const cursor = new URL(route.request().url()).searchParams.get('cursor');
+			expect([null, 'after-block-1']).toContain(cursor);
 			await route.fulfill({
 				json: {
 					items: cursor ? blocks.slice(1) : blocks.slice(0, 1),
