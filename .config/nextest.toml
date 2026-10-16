@@ -11,12 +11,12 @@ slow-timeout = { period = "60s", terminate-after = 2 }
 #
 # This group only budgets connections. A DB test holds one lease connection,
 # one short-lived maintenance connection, and a lazily grown pool of at most
-# 20 per pool. Six tests at once need at most 6 x (20 + 2) connections.
-# CI runs Postgres with max_connections=300 (compose keeps the stock 100);
-# keep the six-thread ceiling inside the compose budget before raising it:
-# 6 x 22 = 132 exceeds stock max_connections = 100.
+# 20 per pool. Eight tests at once need at most 8 x (20 + 2) connections.
+# Both CI and compose run Postgres with max_connections=300; keep the
+# eight-thread ceiling inside that budget before raising it (the stock
+# default of 100 would be exceeded).
 [test-groups]
-postgres = { max-threads = 6 }
+postgres = { max-threads = 8 }
 
 [[profile.default.overrides]]
 filter = 'kind(test) and (package(deepref-app) or package(deepref-worker) or package(deepref-http-api))'
