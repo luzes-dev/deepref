@@ -8,9 +8,10 @@ Accepted.
 
 The Rust workspace follows inward dependency direction:
 
-- `deepref-domain` owns pure identifiers, screening states, and legal transition invariants. It has no HTTP, database, provider, messaging, graph, or storage dependencies.
+- `deepref-domain` owns pure identifiers, screening states, legal transition invariants, ingestion/fetch states, work/reference models, event envelopes/payloads, and in-memory graph models/algorithms. It has no HTTP, database, provider, messaging-service, or storage dependencies. Chrono, serde_json, SHA-256 and petgraph support pure data and computation, not infrastructure I/O.
 - `deepref-application` owns use-case inputs such as `ScreenReportCommand`. It carries project, report, protocol, and revision context, then delegates legal transition evaluation to the domain.
-- `deepref-postgres` owns the SQLx migration set and its shared migrator.
+- `deepref-integrations` owns Crossref, PubMed, import parsing, Unpaywall and GROBID adapters. Crossref acquisition and provider paths share one client, wire conversion and abstract enrichment implementation.
+- `deepref-app` owns the SQLx migration set and its shared migrator.
 - `deepref-http-api` owns Axum routes, request/response mapping, and SQL-backed HTTP handlers. It depends inward on application/domain code and on adapter code needed to serve the existing API.
 - `apps/server` is the composition root. Its `serve`, `worker`, `all`, and `migrate` commands preserve the existing runtime wiring.
 
@@ -23,9 +24,20 @@ The HTTP API package is named `deepref-http-api` and its library crate is
 `deepref-server` binary; API and worker deployment roles select its `serve` and
 `worker` commands.
 
-PostgreSQL migrations now live at `crates/postgres/migrations`; the HTTP API
-and database-backed test fixtures use the shared `deepref-postgres` migrator.
+PostgreSQL migrations now live at `crates/app/migrations`; the HTTP API
+and database-backed test fixtures use the shared `deepref-app` migrator.
 Migration SQL remains unchanged and append-only.
+
+The low-conflict Option C cutover replaces six packages (`core`, `events`,
+`graph`, `crossref`, `providers`, `grobid`) with domain modules and one
+`deepref-integrations` package, reducing 18 workspace members to 13.
+Every live caller imports the owning package directly; there are no crate
+aliases or migration shims. Unused catalogue models and graph-upsert code,
+and the unimplemented `DocumentRepository`, `OcrEngine` and
+`FullTextResolver` ports, are removed. `JobQueue`, `ReviewScheduler` and the
+live document-storage port remain. Telemetry ownership is unchanged.
+SQLx remains permitted in existing HTTP and worker handlers until their
+use-case migration is complete.
 
 ## Consequences
 

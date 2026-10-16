@@ -5,16 +5,16 @@
     clippy::string_slice
 )]
 use anyhow::{Result, ensure};
+use deepref_app::{
+    begin_next_automation_step, complete_job, configure_automation_definition, get_automation_run,
+    recover_expired_jobs, start_automation_manually,
+};
 use deepref_application::{
     AutomationDefinitionStatus, AutomationRunId, AutomationRunStatus, AutomationStepRunStatus,
     AutomationTriggerKind, BuiltInAutomationRecipe, ConfigureAutomationDefinition,
     StartAutomationManually,
 };
 use deepref_domain::{Actor, ActorKind, ProjectId};
-use deepref_postgres::{
-    begin_next_automation_step, complete_job, configure_automation_definition, get_automation_run,
-    recover_expired_jobs, start_automation_manually,
-};
 use deepref_worker::{delivery::DeliveryAction, processor::handle_job_with_documents_owned};
 use serde_json::json;
 use sqlx::{PgPool, Row};
@@ -22,7 +22,7 @@ use std::time::Duration;
 use uuid::Uuid;
 
 async fn database() -> Option<PgPool> {
-    deepref_postgres::test_isolation::isolated_pool_from_env("DATABASE_URL", 8).await
+    deepref_app::test_isolation::isolated_pool_from_env("DATABASE_URL", 8).await
 }
 
 fn actor() -> Actor {
@@ -99,7 +99,7 @@ async fn claimed_job(
     Ok(deepref_application::jobs::ClaimedJob {
         id: row.get("id"),
         project_id: ProjectId::new(row.get("project_id")),
-        kind: row.get("kind"),
+        kind: row.get::<String, _>("kind").parse()?,
         payload: row.get("payload"),
         attempts: row.get("attempts"),
         max_attempts: row.get("max_attempts"),
@@ -125,6 +125,10 @@ async fn automation_job_executes_builtin_step_and_completed_retry_is_noop() -> R
                 Duration::from_secs(30),
                 None,
                 None,
+                &deepref_worker::config::WorkerConfig::from_source(
+                    &|name| (name == "APP_ENV").then(|| "local".into())
+                )
+                .expect("local worker configuration"),
             )
             .await?
                 == DeliveryAction::Ack
@@ -137,6 +141,10 @@ async fn automation_job_executes_builtin_step_and_completed_retry_is_noop() -> R
                 Duration::from_secs(30),
                 None,
                 None,
+                &deepref_worker::config::WorkerConfig::from_source(
+                    &|name| (name == "APP_ENV").then(|| "local".into())
+                )
+                .expect("local worker configuration"),
             )
             .await?
                 == DeliveryAction::Ack
@@ -182,6 +190,10 @@ async fn swapped_run_payload_cannot_execute_another_same_owner_job() -> Result<(
             Duration::from_secs(30),
             None,
             None,
+            &deepref_worker::config::WorkerConfig::from_source(&|name| {
+                (name == "APP_ENV").then(|| "local".into())
+            })
+            .expect("local worker configuration"),
         )
         .await;
         ensure!(error.is_err(), "swapped automation payload was accepted");
@@ -234,25 +246,21 @@ async fn unknown_step_fails_closed_and_lease_owner_is_required() -> Result<()> {
         // production. Temporarily corrupt the durable snapshot only in this
         // fixture so the worker's fail-closed branch is exercised.
         let mut transaction = pool.begin().await?;
+        sqlx::query("ALTER TABLE durable_steps DISABLE TRIGGER durable_steps_identity")
+            .execute(&mut *transaction)
+            .await?;
         sqlx::query(
-            "ALTER TABLE automation_step_runs DISABLE TRIGGER automation_step_snapshot_trigger",
-        )
-        .execute(&mut *transaction)
-        .await?;
-        sqlx::query(
-            "UPDATE automation_step_runs
+            "UPDATE durable_steps
              SET step_key='untrusted_command'
-             WHERE project_id=$1 AND automation_run_id=$2",
+             WHERE project_id=$1 AND run_id=$2",
         )
         .bind(project_id.as_uuid())
         .bind(run_id.as_uuid())
         .execute(&mut *transaction)
         .await?;
-        sqlx::query(
-            "ALTER TABLE automation_step_runs ENABLE TRIGGER automation_step_snapshot_trigger",
-        )
-        .execute(&mut *transaction)
-        .await?;
+        sqlx::query("ALTER TABLE durable_steps ENABLE TRIGGER durable_steps_identity")
+            .execute(&mut *transaction)
+            .await?;
         transaction.commit().await?;
 
         let claimed = claimed_job(&pool, job_id, "worker-policy").await?;
@@ -263,6 +271,10 @@ async fn unknown_step_fails_closed_and_lease_owner_is_required() -> Result<()> {
             Duration::from_secs(30),
             None,
             None,
+            &deepref_worker::config::WorkerConfig::from_source(&|name| {
+                (name == "APP_ENV").then(|| "local".into())
+            })
+            .expect("local worker configuration"),
         )
         .await;
         ensure!(wrong_owner.is_err());
@@ -275,12 +287,16 @@ async fn unknown_step_fails_closed_and_lease_owner_is_required() -> Result<()> {
                 Duration::from_secs(30),
                 None,
                 None,
+                &deepref_worker::config::WorkerConfig::from_source(
+                    &|name| (name == "APP_ENV").then(|| "local".into())
+                )
+                .expect("local worker configuration"),
             )
             .await?
                 == DeliveryAction::Terminate
         );
         ensure!(
-            deepref_postgres::fail_job(
+            deepref_app::fail_job(
                 &pool,
                 &claimed.lease("worker-policy"),
                 "terminal job failure",
@@ -350,6 +366,10 @@ async fn crashed_step_is_reclaimed_by_new_owner_without_repeating_completed_step
                 Duration::from_secs(30),
                 None,
                 None,
+                &deepref_worker::config::WorkerConfig::from_source(
+                    &|name| (name == "APP_ENV").then(|| "local".into())
+                )
+                .expect("local worker configuration"),
             )
             .await?
                 == DeliveryAction::Ack

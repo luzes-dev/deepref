@@ -6,18 +6,17 @@ export function parseArticleSort(value: string | null): (typeof ARTICLE_SORTS)[n
 	return ARTICLE_SORTS.find((sort) => sort === value) ?? 'rank';
 }
 
-/** The project to open when the route names none, or names one that failed to load. */
+/** Choose a default only for an unnamed route; errors never change a named project. */
 export function projectToOpen(
 	projects: readonly { id: string }[],
 	loading: boolean,
 	routeProjectId: string | undefined,
-	routeProjectFailed: boolean,
 	routeIsResolvingProject: boolean = false
 ): string | undefined {
 	if (loading || (routeIsResolvingProject && !routeProjectId)) return undefined;
-	if (routeProjectId && !routeProjectFailed) return undefined;
+	if (routeProjectId) return undefined;
 	const fallbackProjectId = projects[0]?.id;
-	if (!fallbackProjectId || routeProjectId === fallbackProjectId) return undefined;
+	if (!fallbackProjectId) return undefined;
 	return fallbackProjectId;
 }
 

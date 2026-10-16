@@ -28,7 +28,7 @@ use tower::ServiceExt;
 use uuid::Uuid;
 
 async fn database() -> Option<PgPool> {
-    deepref_postgres::test_isolation::isolated_pool_from_env_first(
+    deepref_app::test_isolation::isolated_pool_from_env_first(
         &["TEST_DATABASE_URL", "DATABASE_URL"],
         8,
     )
@@ -42,6 +42,10 @@ fn api_config() -> ApiConfig {
     )
     .expect("local test runtime should parse");
     ApiConfig {
+        documents: deepref_config::DocumentConfig::from_source(&|name| {
+            (name == "APP_ENV").then(|| "local".into())
+        })
+        .expect("local test document configuration"),
         runtime,
         bind_addr: "127.0.0.1:0".parse().expect("test bind address is valid"),
         cors_allow_any: false,
@@ -595,38 +599,60 @@ where
     G: AiGateway + 'static,
 {
     let owner = format!("assistant-review-test-{run_id}");
-    let row = sqlx::query(
-        "UPDATE jobs AS j
-         SET state='running',lease_owner=$2,leased_until=now()+interval '5 minutes',
-             lease_renewed_at=now(),attempts=attempts+1
-         FROM automation_runs AS r
-         WHERE r.id=$1 AND j.id=r.job_id AND j.state='queued'
-         RETURNING j.id,j.project_id,j.kind,j.payload,j.attempts,j.max_attempts",
-    )
-    .bind(run_id)
-    .bind(&owner)
-    .fetch_one(pool)
-    .await
-    .expect("scheduled assistant review job claims");
-    let job = ClaimedJob {
-        id: row.get("id"),
-        project_id: row.get::<Uuid, _>("project_id").into(),
-        kind: row.get("kind"),
-        payload: row.get("payload"),
-        attempts: row.get("attempts"),
-        max_attempts: row.get("max_attempts"),
-    };
-    handle_job_with_documents_owned_and_ai(
-        pool.clone(),
-        &job,
-        &job.lease(owner.as_str()),
-        StdDuration::from_secs(300),
-        None,
-        None,
-        Arc::new(gateway),
-    )
-    .await
-    .expect("assistant review worker handles terminal delivery")
+    let gateway = Arc::new(gateway);
+    let config = deepref_worker::config::WorkerConfig::from_source(&|name| match name {
+        "APP_ENV" => Some("local".into()),
+        "WORKER_CLAIM_LEASE_SECS" => Some("300".into()),
+        _ => None,
+    })
+    .expect("local worker configuration");
+    for _ in 0..64 {
+        let row=sqlx::query("UPDATE jobs j SET state='running',lease_owner=$2,
+            leased_until=now()+interval '5 minutes',lease_renewed_at=now(),attempts=attempts+1
+            WHERE j.kind='durable_run_step' AND j.payload->>'run_id'=$1::uuid::text AND j.state='queued'
+            RETURNING j.id,j.project_id,j.kind,j.payload,j.attempts,j.max_attempts")
+            .bind(run_id).bind(&owner).fetch_one(pool).await.expect("next typed review node claims");
+        let job = ClaimedJob {
+            id: row.get("id"),
+            project_id: row.get::<Uuid, _>("project_id").into(),
+            kind: row
+                .get::<String, _>("kind")
+                .parse()
+                .expect("durable job kind"),
+            payload: row.get("payload"),
+            attempts: row.get("attempts"),
+            max_attempts: row.get("max_attempts"),
+        };
+        let lease = job.lease(owner.as_str());
+        let action = handle_job_with_documents_owned_and_ai(
+            pool.clone(),
+            &job,
+            &lease,
+            None,
+            None,
+            gateway.clone(),
+            &config,
+        )
+        .await
+        .expect("review node handles delivery");
+        if action != DeliveryAction::Ack {
+            return action;
+        }
+        assert!(
+            deepref_app::complete_job(pool, &lease)
+                .await
+                .expect("node queue ack")
+        );
+        let state: String = sqlx::query_scalar("SELECT status FROM durable_runs WHERE id=$1")
+            .bind(run_id)
+            .fetch_one(pool)
+            .await
+            .expect("canonical state");
+        if matches!(state.as_str(), "completed" | "blocked" | "failed") {
+            return action;
+        }
+    }
+    panic!("review planner did not reach a terminal state");
 }
 
 #[tokio::test]
@@ -638,7 +664,7 @@ async fn all_proposal_tools_schedule_observable_review_runs_without_domain_write
         ModelProfile::Reasoning,
         ModelProfile::LongContextReasoning,
     ] {
-        deepref_postgres::insert_model_route(
+        deepref_app::insert_model_route(
             &pool,
             &model_route(profile),
             Utc::now() - Duration::milliseconds(1),
@@ -700,7 +726,7 @@ async fn all_proposal_tools_schedule_observable_review_runs_without_domain_write
     }
     assert_eq!(*calls.lock().expect("gateway calls lock"), 0);
     let queued: i64 = sqlx::query_scalar(
-        "SELECT count(*) FROM review_run_manifests WHERE project_id=$1 AND state='queued'",
+        "SELECT count(*) FROM review_run_manifests m JOIN durable_runs r ON r.id=m.automation_run_id WHERE m.project_id=$1 AND r.status='queued'",
     )
     .bind(fixture.project_id)
     .fetch_one(&pool)
@@ -728,7 +754,7 @@ async fn all_proposal_tools_schedule_observable_review_runs_without_domain_write
 }
 
 async fn create_classification_proposal(pool: &PgPool, fixture: Fixture) -> Uuid {
-    deepref_postgres::insert_model_route(
+    deepref_app::insert_model_route(
         pool,
         &model_route(ModelProfile::FastClassifier),
         Utc::now() - Duration::seconds(1),
@@ -758,7 +784,7 @@ async fn create_classification_proposal(pool: &PgPool, fixture: Fixture) -> Uuid
         process_review_run(pool, run_id, gateway).await,
         DeliveryAction::Ack
     );
-    let snapshot = deepref_postgres::get_review_run(
+    let snapshot = deepref_app::get_review_run(
         pool,
         fixture.project_id.into(),
         deepref_review::ReviewRunId::new(run_id).expect("valid run id"),
@@ -1122,11 +1148,11 @@ fn rig_call(id: &str, name: &str, args: Value) -> Vec<MockStreamEvent> {
 /// Drives the next queued assistant job with a scripted Rig model, the way
 /// the worker would. Returns when the job acked.
 async fn drive_assistant_job(pool: &PgPool, model: MockCompletionModel) {
-    let job = deepref_postgres::claim_job(pool, "http-test-worker", StdDuration::from_secs(30))
+    let job = deepref_app::claim_job(pool, "http-test-worker", StdDuration::from_secs(30))
         .await
         .expect("claim works")
         .expect("an assistant job is queued");
-    assert_eq!(job.kind, "assistant_agent_run");
+    assert_eq!(job.kind, deepref_domain::JobKind::AssistantAgentRun);
     let services = deepref_worker::assistant::AssistantWorkerServices {
         model_factory: Arc::new(StaticModelFactory::new(model.erase())),
         prices: deepref_ai::PriceBook::default(),
@@ -1173,7 +1199,7 @@ async fn post_json(state: &AppState, uri: &str, body: Value) -> (StatusCode, Str
 async fn assistant_writes_only_after_plan_confirmation_and_respects_budget() {
     let Some(pool) = database().await else { return };
     let fixture = seed(&pool).await;
-    deepref_postgres::insert_model_route(
+    deepref_app::insert_model_route(
         &pool,
         &model_route(ModelProfile::Reasoning),
         Utc::now() - Duration::milliseconds(1),
@@ -1270,7 +1296,7 @@ async fn assistant_writes_only_after_plan_confirmation_and_respects_budget() {
     assert_eq!(status, StatusCode::CONFLICT, "confirm is exactly-once");
 
     // Once the month's spend reaches the budget, free-form chat is refused.
-    deepref_postgres::set_ai_budget(&pool, project, 1)
+    deepref_app::set_ai_budget(&pool, project, 1)
         .await
         .expect("budget");
     sqlx::query(
@@ -1482,7 +1508,7 @@ async fn assistant_reads_match_several_words_report_documents_and_studies() {
 
     // The overview's title/abstract buckets add up to the report total, and the
     // full-text count is part of `include`, not an extra bucket.
-    let overview = deepref_postgres::get_agent_project_overview(&pool, fixture.project_id)
+    let overview = deepref_app::get_agent_project_overview(&pool, fixture.project_id)
         .await
         .expect("overview");
     let title_abstract = &overview["title_abstract"];
@@ -1514,7 +1540,7 @@ async fn assistant_reads_match_several_words_report_documents_and_studies() {
 async fn assistant_claim_without_a_plan_is_corrected_before_the_user_relies_on_it() {
     let Some(pool) = database().await else { return };
     let fixture = seed(&pool).await;
-    deepref_postgres::insert_model_route(
+    deepref_app::insert_model_route(
         &pool,
         &model_route(ModelProfile::Reasoning),
         Utc::now() - Duration::milliseconds(1),
@@ -1550,7 +1576,7 @@ async fn assistant_claim_without_a_plan_is_corrected_before_the_user_relies_on_i
     .await;
     assert_eq!(status, StatusCode::OK, "{stream}");
     assert!(!stream.contains("event: plan"), "{stream}");
-    let messages = deepref_postgres::list_assistant_messages(&pool, conversation_id)
+    let messages = deepref_app::list_assistant_messages(&pool, conversation_id)
         .await
         .expect("messages");
     let reply = messages.last().expect("assistant reply is stored");
@@ -1572,7 +1598,7 @@ async fn assistant_claim_without_a_plan_is_corrected_before_the_user_relies_on_i
 async fn assistant_plan_step_follows_its_review_run_to_a_plain_failure() {
     let Some(pool) = database().await else { return };
     let fixture = seed(&pool).await;
-    deepref_postgres::insert_model_route(
+    deepref_app::insert_model_route(
         &pool,
         &model_route(ModelProfile::Reasoning),
         Utc::now() - Duration::milliseconds(1),
@@ -1643,12 +1669,34 @@ async fn assistant_plan_step_follows_its_review_run_to_a_plain_failure() {
     assert_eq!(plan["results"][0]["status"], "queued", "{body}");
 
     // The review run then fails the way the worker records it.
-    deepref_postgres::fail_review_run(
+    sqlx::query(
+        "UPDATE jobs SET available_at=clock_timestamp()-interval '1 day'
+        WHERE id=(SELECT job_id FROM durable_runs WHERE id=$1)",
+    )
+    .bind(run_id)
+    .execute(&pool)
+    .await
+    .expect("prioritize the failed review fixture");
+    let claimed = deepref_app::claim_job(
+        &pool,
+        "assistant-failed-review-worker",
+        std::time::Duration::from_secs(300),
+    )
+    .await
+    .expect("queue claim")
+    .expect("review delivery");
+    assert_eq!(
+        Uuid::parse_str(claimed.payload["run_id"].as_str().expect("durable run")).expect("UUID"),
+        run_id
+    );
+    let lease = claimed.lease("assistant-failed-review-worker");
+    deepref_app::fail_review_run(
         &pool,
         deepref_domain::ProjectId::new(project),
         deepref_review::ReviewRunId::new(run_id).expect("review run id"),
         "review_execution_failed",
         "review execution failed: AI output failed semantic validation",
+        &lease,
     )
     .await
     .expect("review run fails");
@@ -1674,10 +1722,10 @@ async fn assistant_plan_step_follows_its_review_run_to_a_plain_failure() {
     );
 
     // The change is in the activity feed with its model, reasoning and reads.
-    let activity = deepref_postgres::list_activity(
+    let activity = deepref_app::list_activity(
         &pool,
         project,
-        deepref_postgres::ActivityFilters::default(),
+        deepref_app::ActivityFilters::default(),
         None,
         20,
     )
@@ -1724,9 +1772,445 @@ async fn assistant_refuses_overlong_messages_before_storing_them() {
         body.contains("4000 characters"),
         "the client hint names the limit: {body}"
     );
-    let stored = deepref_postgres::list_assistant_messages(&pool, conversation_id)
+    let stored = deepref_app::list_assistant_messages(&pool, conversation_id)
         .await
         .expect("messages");
     assert!(stored.is_empty(), "an overlong message is not stored");
     cleanup(&pool, fixture).await;
+}
+
+/// Adds an unscreened report to the fixture project.
+async fn add_unscreened_report(pool: &PgPool, project: Uuid, title: &str) -> Uuid {
+    let report_id = Uuid::new_v4();
+    sqlx::query("INSERT INTO reports (id,title,abstract_text) VALUES ($1,$2,'plan abstract')")
+        .bind(report_id)
+        .bind(title)
+        .execute(pool)
+        .await
+        .expect("report inserts");
+    sqlx::query("INSERT INTO project_reports (project_id,report_id) VALUES ($1,$2)")
+        .bind(project)
+        .bind(report_id)
+        .execute(pool)
+        .await
+        .expect("project report inserts");
+    report_id
+}
+
+/// Runs one scripted assistant turn and returns the id of the plan it
+/// persisted, or `None` when the turn produced no plan.
+async fn plan_from_turn(
+    pool: &PgPool,
+    state: &AppState,
+    project: Uuid,
+    model: MockCompletionModel,
+) -> Option<Uuid> {
+    let conversation_id = create_conversation(state, project, "plan").await;
+    let (status, body) = post_json(
+        state,
+        &format!("/projects/{project}/assistant/chat"),
+        json!({"conversation_id": conversation_id, "message": "screen these"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::ACCEPTED, "{body}");
+    let run: Value = serde_json::from_str(&body).expect("run json");
+    let run_id: Uuid = serde_json::from_value(run["id"].clone()).expect("run id");
+    drive_assistant_job(pool, model).await;
+    let run = get_run(state, project, run_id).await;
+    assert_eq!(run["status"], "completed", "{run}");
+    sqlx::query_scalar("SELECT id FROM assistant_plans WHERE project_id=$1 AND status='pending'")
+        .bind(project)
+        .fetch_optional(pool)
+        .await
+        .expect("plan lookup")
+}
+
+async fn title_abstract_status(pool: &PgPool, project: Uuid, report: Uuid) -> String {
+    sqlx::query_scalar(
+        "SELECT COALESCE((SELECT title_abstract_status FROM screening_state
+           WHERE project_id=$1 AND report_id=$2),'unscreened')",
+    )
+    .bind(project)
+    .bind(report)
+    .fetch_one(pool)
+    .await
+    .expect("screening status")
+}
+
+fn exclude_plan_model(report_ids: &[Uuid]) -> MockCompletionModel {
+    MockCompletionModel::from_stream_turns(vec![
+        rig_call(
+            "c1",
+            "screen_reports",
+            json!({
+                "report_ids": report_ids,
+                "decision": "exclude",
+                "summary": "Tidy up a few records",
+                "rationale": "Off-topic"
+            }),
+        ),
+        rig_text("I prepared a plan; nothing has changed yet."),
+    ])
+}
+
+async fn delete_project_and_reports(pool: &PgPool, project: Uuid, reports: &[Uuid]) {
+    sqlx::query("DELETE FROM projects WHERE id=$1")
+        .bind(project)
+        .execute(pool)
+        .await
+        .expect("project cleanup");
+    sqlx::query("DELETE FROM reports WHERE id = ANY($1)")
+        .bind(reports)
+        .execute(pool)
+        .await
+        .expect("report cleanup");
+}
+
+#[tokio::test]
+async fn confirmed_plan_rejects_records_changed_since_it_was_made() {
+    let Some(pool) = database().await else { return };
+    let fixture = seed(&pool).await;
+    deepref_app::insert_model_route(
+        &pool,
+        &model_route(ModelProfile::Reasoning),
+        Utc::now() - Duration::milliseconds(1),
+    )
+    .await
+    .expect("route inserts");
+    let project = fixture.project_id;
+    let changed = add_unscreened_report(&pool, project, "Changed by a colleague").await;
+    let mut state = AppState::new(pool.clone());
+    state.ai_info.configured = true;
+    let plan_id = plan_from_turn(
+        &pool,
+        &state,
+        project,
+        exclude_plan_model(&[fixture.report_id, changed]),
+    )
+    .await
+    .expect("the turn produced a plan");
+
+    // The plan remembers the revision each record had when it was made.
+    let actions: Value = sqlx::query_scalar("SELECT actions FROM assistant_plans WHERE id=$1")
+        .bind(plan_id)
+        .fetch_one(&pool)
+        .await
+        .expect("plan actions");
+    let items = actions[0]["args"]["items"]
+        .as_array()
+        .expect("plan-time items are stored with the action");
+    assert_eq!(items.len(), 2, "{actions}");
+    assert_eq!(items[0]["report_id"], json!(fixture.report_id));
+    assert_eq!(items[0]["expected_revision"], 3, "{actions}");
+    assert_eq!(items[0]["current_status"], "maybe", "{actions}");
+    assert_eq!(items[0]["title"], "Assistant report", "{actions}");
+    assert_eq!(items[1]["expected_revision"], 0, "{actions}");
+
+    // A colleague includes one of the records before the plan is confirmed.
+    let protocol_version_id = deepref_app::get_published_protocol(&pool, project)
+        .await
+        .expect("published protocol")
+        .id;
+    deepref_app::screening::screen_report(
+        &pool,
+        deepref_application::ScreenReportCommand {
+            project_id: project.into(),
+            report_id: changed.into(),
+            stage: deepref_domain::ScreeningStage::TitleAbstract,
+            decision: deepref_domain::ScreeningDecision::Include,
+            exclusion_reason_id: None,
+            protocol_version_id: protocol_version_id.into(),
+            expected_revision: 0,
+            notes: None,
+            actor: deepref_domain::Actor::new(deepref_domain::ActorKind::User, "colleague")
+                .expect("actor"),
+        },
+    )
+    .await
+    .expect("the colleague's decision is recorded");
+
+    let (status, body) = post_json(
+        &state,
+        &format!("/projects/{project}/assistant/plans/{plan_id}/confirm"),
+        json!({}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let plan: Value = serde_json::from_str(&body).expect("plan json");
+    assert_eq!(plan["results"][0]["applied"], 1, "{body}");
+    assert_eq!(plan["results"][0]["stale"], 1, "{body}");
+    assert_eq!(
+        title_abstract_status(&pool, project, fixture.report_id).await,
+        "exclude",
+        "the unchanged record is screened"
+    );
+    assert_eq!(
+        title_abstract_status(&pool, project, changed).await,
+        "include",
+        "the colleague's newer decision is kept"
+    );
+    delete_project_and_reports(&pool, project, &[changed]).await;
+    cleanup(&pool, fixture).await;
+}
+
+async fn set_title_abstract_autonomy(pool: &PgPool, project: Uuid, level: &str) {
+    sqlx::query(
+        "INSERT INTO project_ai_autonomy (project_id,task,level,updated_by_kind,updated_by_id)
+         VALUES ($1,'title_abstract_screening',$2,'user','autonomy-test')
+         ON CONFLICT (project_id,task) DO UPDATE SET level=EXCLUDED.level",
+    )
+    .bind(project)
+    .bind(level)
+    .execute(pool)
+    .await
+    .expect("autonomy setting");
+}
+
+#[tokio::test]
+async fn projects_with_title_abstract_ai_off_refuse_assistant_screening_plans() {
+    let Some(pool) = database().await else { return };
+    let fixture = seed(&pool).await;
+    deepref_app::insert_model_route(
+        &pool,
+        &model_route(ModelProfile::Reasoning),
+        Utc::now() - Duration::milliseconds(1),
+    )
+    .await
+    .expect("route inserts");
+    let project = fixture.project_id;
+    let mut state = AppState::new(pool.clone());
+    state.ai_info.configured = true;
+
+    // With AI title/abstract screening off, the change is never planned.
+    set_title_abstract_autonomy(&pool, project, "off").await;
+    let refused_model = MockCompletionModel::from_stream_turns(vec![
+        rig_call(
+            "c1",
+            "screen_reports",
+            json!({
+                "report_ids": [fixture.report_id],
+                "decision": "exclude",
+                "summary": "Exclude one record",
+                "rationale": "Off-topic"
+            }),
+        ),
+        rig_text("AI help with screening is off in this project, so nothing was changed."),
+    ]);
+    let refused = plan_from_turn(&pool, &state, project, refused_model).await;
+    assert_eq!(refused, None, "an autonomy-off project gets no plan");
+
+    // A plan made while AI help was on does not run once it is turned off.
+    set_title_abstract_autonomy(&pool, project, "suggest").await;
+    let plan_id = plan_from_turn(
+        &pool,
+        &state,
+        project,
+        exclude_plan_model(&[fixture.report_id]),
+    )
+    .await
+    .expect("the turn produced a plan");
+    set_title_abstract_autonomy(&pool, project, "off").await;
+    let (status, body) = post_json(
+        &state,
+        &format!("/projects/{project}/assistant/plans/{plan_id}/confirm"),
+        json!({}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let plan: Value = serde_json::from_str(&body).expect("plan json");
+    assert_eq!(plan["results"][0]["status"], "skipped", "{body}");
+    assert!(
+        plan["results"][0]["message"]
+            .as_str()
+            .is_some_and(|message| message.contains("AI settings")),
+        "{body}"
+    );
+    assert_eq!(
+        title_abstract_status(&pool, project, fixture.report_id).await,
+        "maybe",
+        "nothing is screened"
+    );
+    cleanup(&pool, fixture).await;
+}
+
+#[tokio::test]
+async fn confirmed_plan_decisions_are_assistant_authored_and_not_counted_as_human() {
+    let Some(pool) = database().await else { return };
+    let fixture = seed(&pool).await;
+    deepref_app::insert_model_route(
+        &pool,
+        &model_route(ModelProfile::Reasoning),
+        Utc::now() - Duration::milliseconds(1),
+    )
+    .await
+    .expect("route inserts");
+    let project = fixture.project_id;
+    let mut state = AppState::new(pool.clone());
+    state.ai_info.configured = true;
+    let plan_id = plan_from_turn(
+        &pool,
+        &state,
+        project,
+        exclude_plan_model(&[fixture.report_id]),
+    )
+    .await
+    .expect("the turn produced a plan");
+    let (status, body) = post_json(
+        &state,
+        &format!("/projects/{project}/assistant/plans/{plan_id}/confirm"),
+        json!({}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+
+    // The event names its origin; the actor is still the confirming person.
+    let (origin, actor_kind): (Option<String>, String) = sqlx::query_as(
+        "SELECT e.origin, e.actor_kind FROM screening_state s
+         JOIN screening_events e ON e.id = s.last_event_id
+         WHERE s.project_id=$1 AND s.report_id=$2",
+    )
+    .bind(project)
+    .bind(fixture.report_id)
+    .fetch_one(&pool)
+    .await
+    .expect("canonical event");
+    assert_eq!(origin.as_deref(), Some("assistant_plan"));
+    assert_eq!(actor_kind, "user");
+
+    // PRISMA reports the exclusion as assistant-authored, not as a
+    // person's own title/abstract exclusion.
+    let (status, body) = get_json(&state, &format!("/projects/{project}/prisma")).await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let prisma: Value = serde_json::from_str(&body).expect("prisma json");
+    assert_eq!(prisma["title_abstract_excluded"], 1, "{body}");
+    assert_eq!(prisma["assistant_excluded"], 1, "{body}");
+    assert_eq!(prisma["automation_excluded"], 0, "{body}");
+    cleanup(&pool, fixture).await;
+}
+
+#[tokio::test]
+async fn plan_lists_its_records_and_runs_only_the_ones_left_selected() {
+    let Some(pool) = database().await else { return };
+    let fixture = seed(&pool).await;
+    deepref_app::insert_model_route(
+        &pool,
+        &model_route(ModelProfile::Reasoning),
+        Utc::now() - Duration::milliseconds(1),
+    )
+    .await
+    .expect("route inserts");
+    let project = fixture.project_id;
+    let kept_out = add_unscreened_report(&pool, project, "Left out by the reviewer").await;
+    let mut state = AppState::new(pool.clone());
+    state.ai_info.configured = true;
+    let plan_id = plan_from_turn(
+        &pool,
+        &state,
+        project,
+        exclude_plan_model(&[fixture.report_id, kept_out]),
+    )
+    .await
+    .expect("the turn produced a plan");
+
+    // The card shows what will actually happen, taken from the action args.
+    let (status, body) = get_json(
+        &state,
+        &format!("/projects/{project}/assistant/plans/{plan_id}"),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let plan: Value = serde_json::from_str(&body).expect("plan json");
+    let action = &plan["actions"][0];
+    assert_eq!(action["decision"], "exclude", "{body}");
+    assert_eq!(action["items"][0]["report_id"], json!(fixture.report_id));
+    assert_eq!(action["items"][0]["title"], "Assistant report", "{body}");
+    assert_eq!(action["items"][0]["current_status"], "maybe", "{body}");
+    assert_eq!(action["items"][1]["title"], "Left out by the reviewer");
+    assert_eq!(action["items"][1]["current_status"], "unscreened");
+
+    // An unknown record cannot be deselected.
+    let confirm_uri = format!("/projects/{project}/assistant/plans/{plan_id}/confirm");
+    let (status, body) = post_json(
+        &state,
+        &confirm_uri,
+        json!({"deselected": [{"action_id": "a1", "report_id": Uuid::new_v4()}]}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::BAD_REQUEST, "{body}");
+
+    let (status, body) = post_json(
+        &state,
+        &confirm_uri,
+        json!({"deselected": [{"action_id": "a1", "report_id": kept_out}]}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{body}");
+    let plan: Value = serde_json::from_str(&body).expect("plan json");
+    assert_eq!(plan["results"][0]["applied"], 1, "{body}");
+    assert_eq!(plan["results"][0]["deselected"], 1, "{body}");
+    assert_eq!(
+        title_abstract_status(&pool, project, fixture.report_id).await,
+        "exclude"
+    );
+    assert_eq!(
+        title_abstract_status(&pool, project, kept_out).await,
+        "unscreened",
+        "a deselected record is left alone"
+    );
+    delete_project_and_reports(&pool, project, &[kept_out]).await;
+    cleanup(&pool, fixture).await;
+}
+
+#[tokio::test]
+async fn assistant_event_stream_surfaces_database_failure_and_closes() {
+    let Some(pool) = database().await else { return };
+    let fixture = seed(&pool).await;
+    let state = AppState::new(pool.clone());
+    let (status, body) = post_json(
+        &state,
+        &format!("/projects/{}/assistant/conversations", fixture.project_id),
+        json!({"title": "Event failure"}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED, "{body}");
+    let conversation: Value = serde_json::from_str(&body).expect("conversation JSON");
+    let conversation_id =
+        Uuid::parse_str(conversation["id"].as_str().expect("conversation id")).expect("UUID");
+    let run = deepref_app::submit_assistant_agent_run(
+        &pool,
+        fixture.project_id,
+        conversation_id,
+        "Read my corpus",
+        "user",
+        "event-test",
+        &serde_json::to_value(model_route(ModelProfile::Reasoning)).expect("route JSON"),
+        deepref_ai::ASSISTANT_PROMPT_VERSION,
+    )
+    .await
+    .expect("submit run");
+    let response = router(state, &api_config())
+        .oneshot(
+            Request::builder()
+                .method("GET")
+                .uri(format!(
+                    "/projects/{}/assistant/runs/{}/events",
+                    fixture.project_id, run.id
+                ))
+                .body(Body::empty())
+                .expect("request"),
+        )
+        .await
+        .expect("SSE response");
+    assert_eq!(response.status(), StatusCode::OK);
+    pool.close().await;
+    let body = tokio::time::timeout(
+        StdDuration::from_secs(2),
+        to_bytes(response.into_body(), 32_768),
+    )
+    .await
+    .expect("stream closes instead of polling forever")
+    .expect("body bytes");
+    let text = String::from_utf8(body.to_vec()).expect("UTF-8 SSE");
+    assert!(text.contains("event: error"), "{text}");
+    assert!(text.contains("assistant_events_unavailable"), "{text}");
 }

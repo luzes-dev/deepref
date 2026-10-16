@@ -17,14 +17,14 @@ describe('workspace navigation', () => {
 		expect(parseArticleSort(null)).toBe('rank');
 	});
 
-	it('opens the first project only when the route has no usable project', () => {
-		expect(projectToOpen(projects, true, undefined, false)).toBeUndefined();
-		expect(projectToOpen([], false, undefined, false)).toBeUndefined();
-		expect(projectToOpen(projects, false, 'p2', false)).toBeUndefined();
-		expect(projectToOpen(projects, false, 'p2', true)).toBe('p1');
-		expect(projectToOpen(projects, false, 'p1', true)).toBeUndefined();
-		expect(projectToOpen(projects, false, undefined, false)).toBe('p1');
-		expect(projectToOpen(projects, false, undefined, false, true)).toBeUndefined();
+	it('opens the first project only for an unnamed route, never after a load error', () => {
+		expect(projectToOpen(projects, true, undefined)).toBeUndefined();
+		expect(projectToOpen([], false, undefined)).toBeUndefined();
+		expect(projectToOpen(projects, false, 'p2')).toBeUndefined();
+		expect(projectToOpen(projects, false, 'missing-project')).toBeUndefined();
+		expect(projectToOpen(projects, false, 'p1')).toBeUndefined();
+		expect(projectToOpen(projects, false, undefined)).toBe('p1');
+		expect(projectToOpen(projects, false, undefined, true)).toBeUndefined();
 	});
 
 	it('keeps the target project while a project navigation is pending', () => {

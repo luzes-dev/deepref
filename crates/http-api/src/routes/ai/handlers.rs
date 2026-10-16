@@ -33,18 +33,26 @@ pub(crate) async fn list_ai_proposals(
     };
     let limit = pagination.limit()?;
     let cursor = pagination.decode::<(DateTime<Utc>, Uuid)>()?;
-    let proposals = deepref_postgres::list_ai_proposals(
+    let status = params
+        .status
+        .as_deref()
+        .map(|value| {
+            deepref_ai::ProposalStatus::parse(value)
+                .ok_or_else(|| ApiError::BadRequest("status is invalid".to_owned()))
+        })
+        .transpose()?;
+    let proposals = deepref_app::list_ai_proposals(
         &state.pool,
         project_id,
-        deepref_postgres::AiProposalFilters {
-            status: params.status.as_deref(),
+        deepref_app::AiProposalFilters {
+            status,
             task_kind: params.task_kind.as_deref(),
             target_report_id: params.target_report_id,
             target_record_id: params.target_record_id,
             candidate_report_id: params.candidate_report_id,
             target_study_id: params.target_study_id,
         },
-        cursor.map(|(created_at, id)| deepref_postgres::AiProposalCursor { created_at, id }),
+        cursor.map(|(created_at, id)| deepref_app::AiProposalCursor { created_at, id }),
         limit,
     )
     .await
@@ -78,7 +86,7 @@ pub(crate) async fn get_ai_proposal(
     Path((project_id, proposal_id)): Path<(Uuid, Uuid)>,
 ) -> Result<Json<AiProposalDto>, ApiError> {
     Ok(Json(proposal_dto(
-        deepref_postgres::get_visible_ai_proposal(&state.pool, project_id, proposal_id)
+        deepref_app::get_visible_ai_proposal(&state.pool, project_id, proposal_id)
             .await
             .map_err(map_ai_proposal_error)?,
     )?))
@@ -118,7 +126,7 @@ pub(crate) async fn decide_ai_proposal(
         AiProposalDecisionInput::Accept => AiProposalDecision::Accept,
         AiProposalDecisionInput::Reject => AiProposalDecision::Reject,
     };
-    let resolution = deepref_postgres::decide_ai_proposal(
+    let resolution = deepref_app::decide_ai_proposal(
         &state.pool,
         AiProposalDecisionRequest {
             project_id,
@@ -134,7 +142,7 @@ pub(crate) async fn decide_ai_proposal(
     )
     .await
     .map_err(map_ai_proposal_error)?;
-    let proposal = deepref_postgres::get_visible_ai_proposal(&state.pool, project_id, proposal_id)
+    let proposal = deepref_app::get_visible_ai_proposal(&state.pool, project_id, proposal_id)
         .await
         .map_err(map_ai_proposal_error)?;
     Ok(Json(AiProposalDecisionDto {
@@ -209,15 +217,15 @@ fn budget_dto(snapshot: deepref_ai::BudgetSnapshot) -> AiBudgetDto {
     }
 }
 
-fn map_usage_error(error: deepref_postgres::AiUsageError) -> ApiError {
+fn map_usage_error(error: deepref_app::AiUsageError) -> ApiError {
     match error {
-        deepref_postgres::AiUsageError::ProjectNotFound => {
+        deepref_app::AiUsageError::ProjectNotFound => {
             ApiError::NotFound("project not found".to_owned())
         }
-        deepref_postgres::AiUsageError::InvalidBudget => {
+        deepref_app::AiUsageError::InvalidBudget => {
             ApiError::BadRequest("budget must be between 0 and 100000 USD".to_owned())
         }
-        deepref_postgres::AiUsageError::Database(error) => ApiError::Database(error),
+        deepref_app::AiUsageError::Database(error) => ApiError::Database(error),
     }
 }
 
@@ -240,7 +248,7 @@ pub(crate) async fn get_ai_status(
     let available = state.ai_info.configured && ai_routes_enabled(&state.pool).await?;
     let budget = match query.project_id {
         Some(project_id) => Some(budget_dto(
-            deepref_postgres::get_ai_budget(&state.pool, project_id)
+            deepref_app::get_ai_budget(&state.pool, project_id)
                 .await
                 .map_err(map_usage_error)?,
         )),
@@ -273,7 +281,7 @@ pub(crate) async fn get_ai_budget(
     Path(project_id): Path<Uuid>,
 ) -> Result<Json<AiBudgetDto>, ApiError> {
     Ok(Json(budget_dto(
-        deepref_postgres::get_ai_budget(&state.pool, project_id)
+        deepref_app::get_ai_budget(&state.pool, project_id)
             .await
             .map_err(map_usage_error)?,
     )))
@@ -303,7 +311,7 @@ pub(crate) async fn update_ai_budget(
     }
     let micros = (body.monthly_budget_usd * 1_000_000.0).round() as i64;
     Ok(Json(budget_dto(
-        deepref_postgres::set_ai_budget(&state.pool, project_id, micros)
+        deepref_app::set_ai_budget(&state.pool, project_id, micros)
             .await
             .map_err(map_usage_error)?,
     )))

@@ -13,6 +13,12 @@ export interface AssistantPlanResultDto {
 	 */
 	applied?: number | null;
 	/**
+	 * Records the reviewer left out before confirming.
+	 * @minimum 0
+	 * @nullable
+	 */
+	deselected?: number | null;
+	/**
 	 * @minimum 0
 	 * @nullable
 	 */
@@ -20,6 +26,12 @@ export interface AssistantPlanResultDto {
 	message: string;
 	/** @nullable */
 	review_run_id?: string | null;
+	/**
+	 * Records left alone because they changed after the plan was made.
+	 * @minimum 0
+	 * @nullable
+	 */
+	stale?: number | null;
 	/**
 	 * `executed`, `queued` (an AI review is running), `completed` (the review
 	 * finished), `failed`, `skipped` or `manual`.

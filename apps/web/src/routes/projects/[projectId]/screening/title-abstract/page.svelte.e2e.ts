@@ -182,7 +182,7 @@ async function installMocks(page: Page, mock: ScreeningMock) {
 	await page.route(/\/api\/projects\/project-1\/reports(?:\?.*)?$/, (route) =>
 		route.fulfill({ json: { items: [], next_cursor: null } })
 	);
-	await page.route(/\/api\/ingestions(?:\?.*)?$/, (route) =>
+	await page.route(/\/api\/projects\/[^/]+\/acquisitions(?:\?.*)?$/, (route) =>
 		route.fulfill({ json: { items: [], next_cursor: null } })
 	);
 	await page.route(

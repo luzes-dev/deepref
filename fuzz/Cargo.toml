@@ -7,6 +7,10 @@ edition = "2024"
 [package.metadata]
 cargo-fuzz = true
 
+# Standalone workspace: the root manifest excludes `fuzz`, and this table stops
+# Cargo from walking further up (e.g. into an enclosing checkout).
+[workspace]
+
 [dependencies]
 libfuzzer-sys = "0.4.8"
 deepref-domain = { path = "../crates/domain" }

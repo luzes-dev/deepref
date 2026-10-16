@@ -18,11 +18,15 @@ use tower::ServiceExt;
 use uuid::Uuid;
 
 async fn database() -> Option<PgPool> {
-    deepref_postgres::test_isolation::isolated_pool_from_env_first(
+    let pool = deepref_app::test_isolation::isolated_pool_from_env_first(
         &["TEST_DATABASE_URL", "DATABASE_URL"],
         5,
     )
-    .await
+    .await?;
+    deepref_app::migrate(&pool)
+        .await
+        .expect("all migrations should apply");
+    Some(pool)
 }
 
 fn api_config() -> ApiConfig {
@@ -32,6 +36,10 @@ fn api_config() -> ApiConfig {
     )
     .expect("local test runtime should parse");
     ApiConfig {
+        documents: deepref_config::DocumentConfig::from_source(&|name| {
+            (name == "APP_ENV").then(|| "local".into())
+        })
+        .expect("local test document configuration"),
         runtime,
         bind_addr: "127.0.0.1:0".parse().unwrap(),
         cors_allow_any: false,
@@ -86,7 +94,7 @@ async fn dependencies_report_live_workers_from_heartbeats() {
     );
 
     // A worker heartbeats: it is live and reported.
-    deepref_postgres::record_worker_heartbeat(&pool, "health-test-worker")
+    deepref_app::record_worker_heartbeat(&pool, "health-test-worker")
         .await
         .expect("heartbeat");
     let worker = worker_health(&pool).await;

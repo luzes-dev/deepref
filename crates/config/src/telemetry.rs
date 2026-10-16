@@ -5,6 +5,7 @@ use crate::{ConfigError, database::seconds, optional};
 #[derive(Debug, Clone)]
 pub struct TelemetryConfig {
     pub service_name: String,
+    pub build_sha: String,
     pub log_filter: String,
     pub otlp_endpoint: Option<String>,
     pub shutdown_deadline: Duration,
@@ -22,6 +23,7 @@ impl TelemetryConfig {
             });
         }
         Ok(Self {
+            build_sha: get("DEEPREF_BUILD_SHA").unwrap_or_else(|| "unknown".to_owned()),
             service_name: optional(get, "OTEL_SERVICE_NAME")
                 .unwrap_or_else(|| service_name.to_owned()),
             log_filter: optional(get, "RUST_LOG").unwrap_or_else(|| "info".into()),

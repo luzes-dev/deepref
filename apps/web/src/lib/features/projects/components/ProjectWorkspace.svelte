@@ -1,6 +1,8 @@
 <script lang="ts">
 	import type { Snippet } from 'svelte';
 	import * as Alert from '@deepref/ui/alert';
+	import { Button } from '@deepref/ui/button';
+	import { ApiError } from '#lib/api/custom-fetch.js';
 	import { Skeleton } from '@deepref/ui/skeleton';
 	import { Spinner } from '@deepref/ui/spinner';
 	import { shouldPollIngestion } from '#lib/api/helpers.js';
@@ -8,12 +10,15 @@
 		getListProjectReportsQueryKey,
 		listProjectReports
 	} from '#lib/api/generated/reports/reports.js';
-	import { getListIngestionsQueryKey } from '#lib/api/generated/ingestions/ingestions.js';
+	import {
+		getListAcquisitionsQueryKey,
+		listAcquisitions
+	} from '#lib/api/generated/acquisitions/acquisitions.js';
 	import {
 		createGetProject,
 		getListProjectsQueryKey
 	} from '#lib/api/generated/projects/projects.js';
-	import { fetchIngestionsPage, fetchProjectsPage } from '#lib/api/pagination.js';
+	import { fetchProjectsPage } from '#lib/api/pagination.js';
 	import { createInfiniteQuery } from '@tanstack/svelte-query';
 	import { IsMobile } from '#lib/hooks/is-mobile.svelte.js';
 	import { setProjectWorkspaceContext } from '../context.svelte.js';
@@ -61,18 +66,20 @@
 	const articles = $derived(articlesQuery.data?.pages.flatMap((page) => page.data.items) ?? []);
 
 	const ingestionsQuery = createInfiniteQuery(() => ({
-		queryKey: getListIngestionsQueryKey(),
-		queryFn: ({ pageParam, signal }) => fetchIngestionsPage(pageParam || undefined, signal),
+		queryKey: getListAcquisitionsQueryKey(selectedProjectId),
+		queryFn: ({ pageParam, signal }) =>
+			listAcquisitions(
+				selectedProjectId,
+				{ cursor: pageParam || undefined, limit: 50 },
+				{ signal }
+			),
 		initialPageParam: '',
 		getNextPageParam: (lastPage) => lastPage.data.next_cursor ?? undefined,
 		staleTime: 0,
+		enabled: Boolean(selectedProjectId),
 		refetchInterval: (query) => {
-			const selected = selectedProjectId;
-			const projectIngestions = query.state.data?.pages
-				.flatMap((page) => page.data.items)
-				.filter((ingestion) => ingestion.project_id === selected);
-			return projectIngestions?.some(
-				(ingestion) => shouldPollIngestion(ingestion.status) !== false
+			return query.state.data?.pages.some((page) =>
+				page.data.items.some((run) => shouldPollIngestion(run.status) !== false)
 			)
 				? 2_000
 				: false;
@@ -80,17 +87,15 @@
 		refetchIntervalInBackground: false,
 		refetchOnWindowFocus: 'always'
 	}));
-	const projectIngestions = $derived(
-		(ingestionsQuery.data?.pages.flatMap((page) => page.data.items) ?? []).filter(
-			(ingestion) => ingestion.project_id === selectedProjectId
-		)
+	const projectAcquisitions = $derived(
+		ingestionsQuery.data?.pages.flatMap((page) => page.data.items) ?? []
 	);
 
 	workspace.setDataSources({
 		projects: () => projects,
 		project: () => selectedProject,
 		articles: () => articles,
-		ingestions: () => projectIngestions,
+		acquisitions: () => projectAcquisitions,
 		articlesLoading: () => articlesQuery.isPending,
 		ingestionsLoading: () => ingestionsQuery.isPending,
 		projectsHasNextPage: () => projectsQuery.hasNextPage,
@@ -107,11 +112,7 @@
 	});
 
 	$effect(() => {
-		workspace.syncProjectSelection(
-			projects,
-			projectsQuery.isPending,
-			Boolean(projectQuery.error)
-		);
+		workspace.syncProjectSelection(projects, projectsQuery.isPending);
 	});
 </script>
 
@@ -129,6 +130,21 @@
 			<div class="flex h-full items-center justify-center gap-3">
 				<Spinner />
 				<span class="text-sm text-muted-foreground">Loading workspace</span>
+			</div>
+		{:else if projectQuery.error}
+			<div class="p-4">
+				<Alert.Root variant="destructive">
+					<CircleAlertIcon />
+					<Alert.Title>
+						{projectQuery.error instanceof ApiError && projectQuery.error.status === 404
+							? 'Project not found'
+							: 'Project unavailable'}
+					</Alert.Title>
+					<Alert.Description>{projectQuery.error.message}</Alert.Description>
+					<Button variant="outline" onclick={() => void projectQuery.refetch()}
+						>Retry</Button
+					>
+				</Alert.Root>
 			</div>
 		{:else if projects.length === 0}
 			<ProjectWorkspaceEmptyState />

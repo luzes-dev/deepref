@@ -11,6 +11,7 @@
 	import { shouldPollIngestion } from '#lib/api/helpers.js';
 	import {
 		createGetAcquisition,
+		createCancelAcquisition,
 		getListAcquisitionItemsQueryKey,
 		listAcquisitionItems
 	} from '#lib/api/generated/acquisitions/acquisitions.js';
@@ -18,9 +19,12 @@
 	import PanelRightCloseIcon from '@lucide/svelte/icons/panel-right-close';
 	import PanelRightOpenIcon from '@lucide/svelte/icons/panel-right-open';
 	import XIcon from '@lucide/svelte/icons/x';
+	import { notifyError } from '#lib/features/notifications/toast.js';
 	import { useProjectWorkspaceContext } from '../context.svelte.js';
 	import {
 		pluralize,
+		ingestionItemStatusLabel,
+		ingestionItemStatusVariant,
 		pmidItemStatusLabel,
 		pmidItemStatusVariant,
 		runStatusDisplay
@@ -72,7 +76,9 @@
 		refetchInterval: (query) =>
 			polling ||
 			(query.state.data?.pages ?? []).some((page) =>
-				page.data.items.some((item) => item.status === 'queued')
+				page.data.items.some(
+					(item) => item.status === 'queued' || item.status === 'fetching'
+				)
 			)
 				? 2_000
 				: false,
@@ -83,13 +89,26 @@
 
 	const display = $derived(run ? runStatusDisplay(run.status, run.failed_count) : undefined);
 	const progress = $derived(
-		run && run.seed_count > 0
-			? Math.round(((run.fetched_count + run.failed_count) / run.seed_count) * 100)
+		run && run.fetched_count + run.failed_count + run.queued_count > 0
+			? Math.round(
+					((run.fetched_count + run.failed_count) /
+						(run.fetched_count + run.failed_count + run.queued_count)) *
+						100
+				)
 			: 0
 	);
 	const queryError = $derived(runQuery.error ?? itemsQuery.error);
 	const isFetching = $derived(runQuery.isFetching || itemsQuery.isFetching);
 	const dataUpdatedAt = $derived(Math.max(runQuery.dataUpdatedAt, itemsQuery.dataUpdatedAt));
+	const cancelMutation = createCancelAcquisition();
+	async function cancel() {
+		try {
+			await cancelMutation.mutateAsync({ projectId, acquisitionId });
+			await Promise.all([runQuery.refetch(), itemsQuery.refetch()]);
+		} catch (error) {
+			notifyError('Import could not be cancelled', error);
+		}
+	}
 </script>
 
 <aside
@@ -111,7 +130,7 @@
 		</div>
 	{:else}
 		<div class="flex items-center justify-between gap-2 border-b p-4">
-			<h2 class="truncate text-sm font-medium">PubMed import run</h2>
+			<h2 class="truncate text-sm font-medium">Import run</h2>
 			<div class="flex items-center gap-1">
 				<Button
 					variant="ghost"
@@ -126,7 +145,7 @@
 					variant="ghost"
 					size="icon"
 					class="hidden md:inline-flex"
-					onclick={workspace.clearIngestion}
+					onclick={workspace.clearAcquisition}
 					aria-label="Clear import run"
 				>
 					<XIcon data-icon />
@@ -173,27 +192,40 @@
 						{/if}
 						<Progress value={progress} />
 						<p class="text-xs text-muted-foreground tabular-nums">
-							{run.fetched_count} found in PubMed · {run.queued_count} waiting{run.failed_count >
+							{run.fetched_count} fetched · {run.queued_count} waiting{run.failed_count >
 							0
 								? ` · ${run.failed_count} not found or not fetched`
 								: ''}
 						</p>
 						{#if !polling && run.failed_count > 0}
 							<p class="text-xs text-muted-foreground" data-testid="run-misses">
-								{pluralize(run.failed_count, 'PubMed ID')} could not be fetched. Each
-								one below says why.
+								{pluralize(run.failed_count, 'article')} could not be fetched. Each one
+								below says why.
 							</p>
+						{/if}
+						{#if run.strategy === 'citation_traversal' || run.strategy === 'provider_refresh'}
+							<p class="text-xs text-muted-foreground">
+								Citation depth {run.max_depth}
+							</p>
+						{/if}
+						{#if polling && run}
+							<Button
+								variant="outline"
+								size="sm"
+								onclick={cancel}
+								disabled={cancelMutation.isPending}>Cancel import</Button
+							>
 						{/if}
 					</section>
 
-					<section aria-label="Run PubMed IDs" class="flex flex-col gap-2">
+					<section aria-label="Run items" class="flex flex-col gap-2">
 						<h3 class="text-sm font-semibold">
-							PubMed IDs <span class="font-normal text-muted-foreground"
+							Articles <span class="font-normal text-muted-foreground"
 								>({items.length}{itemsQuery.hasNextPage ? '+' : ''})</span
 							>
 						</h3>
 						<div class="max-h-96 overflow-auto">
-							<Table.Root containerLabel="PubMed IDs of this import">
+							<Table.Root containerLabel="Articles of this import">
 								<Table.Header>
 									<Table.Row>
 										<Table.Head>Article and status</Table.Head>
@@ -207,14 +239,29 @@
 													<p class="line-clamp-2 text-sm">{item.title}</p>
 												{/if}
 												<Badge
-													variant={pmidItemStatusVariant(item.status)}
+													variant={item.kind === 'doi'
+														? ingestionItemStatusVariant(item.status)
+														: pmidItemStatusVariant(item.status)}
 													class="my-1 whitespace-nowrap"
-													>{pmidItemStatusLabel(item.status)}</Badge
+													>{item.kind === 'doi'
+														? ingestionItemStatusLabel(item.status)
+														: pmidItemStatusLabel(item.status)}</Badge
 												>
 												<p class="truncate text-xs text-muted-foreground">
-													PMID {item.identifier}
+													{item.kind === 'doi' ? 'DOI' : 'PMID'}
+													{item.identifier}
 												</p>
-												{#if item.status === 'failed' && item.last_error}
+												{#if item.kind === 'doi'}
+													<p class="text-xs text-muted-foreground">
+														Depth {item.depth} · Attempts {item.attempts}
+													</p>
+													{#if item.parent_doi}<p
+															class="text-xs break-all text-muted-foreground"
+														>
+															From {item.parent_doi}
+														</p>{/if}
+												{/if}
+												{#if item.last_error}
 													<p
 														class="line-clamp-2 text-xs text-muted-foreground"
 														title={item.last_error}
@@ -229,7 +276,7 @@
 											<Table.Cell
 												class="h-24 text-center text-muted-foreground"
 											>
-												No PubMed IDs yet.
+												No items yet.
 											</Table.Cell>
 										</Table.Row>
 									{/each}

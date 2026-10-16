@@ -17,7 +17,7 @@ use tower::ServiceExt;
 use uuid::Uuid;
 
 async fn database() -> Option<PgPool> {
-    deepref_postgres::test_isolation::isolated_pool_from_env_first(
+    deepref_app::test_isolation::isolated_pool_from_env_first(
         &["TEST_DATABASE_URL", "DATABASE_URL"],
         5,
     )
@@ -31,6 +31,10 @@ fn api_config() -> ApiConfig {
     )
     .expect("local test runtime should parse");
     ApiConfig {
+        documents: deepref_config::DocumentConfig::from_source(&|name| {
+            (name == "APP_ENV").then(|| "local".into())
+        })
+        .expect("local test document configuration"),
         runtime,
         bind_addr: "127.0.0.1:0".parse().unwrap(),
         cors_allow_any: false,

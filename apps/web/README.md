@@ -2,7 +2,7 @@
 
 SvelteKit frontend for DeepRef.
 
-The app is an SPA behind the web gateway and uses the same-origin `/api` contract. It polls dependency status independently, keeps core project/ingestion/settings navigation usable during graph recovery, and renders typed graph-only degradation and metric freshness. Cloudflare Access is the hosted perimeter; the web app has no user or tenant model.
+The app is an SPA behind the web gateway and uses the same-origin `/api` contract. It polls dependency status independently, keeps core project/import/settings navigation usable during graph recovery, and renders typed graph-only degradation and metric freshness. DOI, file, and PubMed imports share the project-scoped acquisitions list and `acquisition` URL selection; run details, item pagination, cancellation, and provider refresh never use a global import endpoint. Cloudflare Access is the hosted perimeter; the web app has no user or tenant model.
 
 ```bash
 mise exec -- just bootstrap

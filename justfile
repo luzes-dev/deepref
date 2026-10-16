@@ -3,6 +3,8 @@ set export
 set shell := ["bash", "-euo", "pipefail", "-c"]
 
 export SQLX_OFFLINE := env_var_or_default("SQLX_OFFLINE", "true")
+# The server binary defaults to APP_ENV=production; every recipe here is local tooling.
+export APP_ENV := env_var_or_default("APP_ENV", "local")
 
 # Internal shared flags
 compose := "docker compose -f compose.yaml"

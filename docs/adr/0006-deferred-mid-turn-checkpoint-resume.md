@@ -6,8 +6,8 @@ Accepted.
 
 ## Context
 
-The Rig 0.44 + rig-cassette migration (branch `feat/rig-044-cassette-migration`,
-PR0–PR6) implements Level A durability for assistant turns:
+The Rig 0.44 + rig-cassette migration (branch `feat/rig-044-cassette-migration`)
+implements Level A durability for assistant turns:
 
 - `crates/ai/src/runtime/agent.rs` runs one turn on Rig's `AgentRunner`;
   `run_rig_turn_channel` splits execution from observation so a slow or
@@ -16,7 +16,7 @@ PR0–PR6) implements Level A durability for assistant turns:
   dispatches into an `EffectLog` stamped with program identity and run
   metadata (`AssistantCassette`); replay serves the log's completion keys
   offline while tools execute live, and any divergence fails closed.
-- `crates/postgres/migrations/0057_assistant_agent_runs.sql` persists
+- `crates/app/migrations/0057_assistant_agent_runs.sql` persists
   `assistant_agent_runs` (queued/running/completed/failed plus fixed
   answer/plan ids, effect log, run-spec hash) and `assistant_run_events`
   (seq-keyed, batched text, reconnectable SSE observation).

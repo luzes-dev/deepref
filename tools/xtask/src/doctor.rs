@@ -26,7 +26,7 @@ pub fn run() -> Result<()> {
 
     // 2. Database migrations directory
     print!("Checking PostgreSQL migrations directory... ");
-    let migrations_dir = root.join("crates/postgres/migrations");
+    let migrations_dir = root.join("crates/app/migrations");
     if migrations_dir.is_dir() {
         let count = std::fs::read_dir(&migrations_dir)
             .map(|entries| {

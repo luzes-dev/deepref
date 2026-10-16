@@ -4,17 +4,17 @@ use axum::{
     http::HeaderMap,
 };
 use chrono::{DateTime, Utc};
-use deepref_application::{
-    GetScreeningQueueQuery, PrismaProjection, ScreenReportCommand, ScreeningQueueSort,
-    ScreeningQueueStatus, UndoScreeningCommand,
-};
-use deepref_domain::{ScreeningDecision, ScreeningStage};
-use deepref_postgres::{
+use deepref_app::screening::{
     ScreeningError, ScreeningHistory as PersistenceScreeningHistory,
     ScreeningHistoryItem as PersistenceScreeningHistoryItem,
     ScreeningQueue as PersistenceScreeningQueue,
     ScreeningQueueItem as PersistenceScreeningQueueItem, ScreeningStateSnapshot,
 };
+use deepref_application::{
+    GetScreeningQueueQuery, PrismaProjection, ScreenReportCommand, ScreeningQueueSort,
+    ScreeningQueueStatus, UndoScreeningCommand,
+};
+use deepref_domain::{ScreeningDecision, ScreeningStage};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use utoipa::ToSchema;
@@ -182,6 +182,10 @@ pub(crate) struct PrismaDto {
     pub screened_records: u64,
     pub title_abstract_excluded: u64,
     pub automation_excluded: u64,
+    /// Title/abstract exclusions a reviewer confirmed from an assistant plan.
+    /// The assistant chose them, so they are not counted as a person's own
+    /// screening. Disjoint from `automation_excluded`.
+    pub assistant_excluded: u64,
     pub ai_quarantined: u64,
     pub title_abstract_pending: u64,
     pub reports_sought: u64,
@@ -231,7 +235,7 @@ pub(crate) async fn get_screening_queue(
 ) -> Result<Json<ScreeningQueueDto>, ApiError> {
     let mut query = queue_query(project_id, params)?;
     query.reviewer_id = Some(extract_actor(&headers)?.id().to_owned());
-    let queue = deepref_postgres::get_screening_queue(&state.pool, query)
+    let queue = deepref_app::screening::get_screening_queue(&state.pool, query)
         .await
         .map_err(map_screening_error)?;
     Ok(Json(queue_dto(queue)))
@@ -265,7 +269,7 @@ pub(crate) async fn list_title_abstract_queue(
 ) -> Result<Json<ScreeningQueueDto>, ApiError> {
     let mut query = queue_query(project_id, params)?;
     query.reviewer_id = Some(extract_actor(&headers)?.id().to_owned());
-    let queue = deepref_postgres::get_screening_queue(&state.pool, query)
+    let queue = deepref_app::screening::get_screening_queue(&state.pool, query)
         .await
         .map_err(map_screening_error)?;
     Ok(Json(queue_dto(queue)))
@@ -298,7 +302,7 @@ pub(crate) async fn get_next_screening_item(
 ) -> Result<Json<ScreeningQueueItemDto>, ApiError> {
     let mut query = queue_query(project_id, params)?;
     query.reviewer_id = Some(extract_actor(&headers)?.id().to_owned());
-    let item = deepref_postgres::get_next_screening_item(&state.pool, query)
+    let item = deepref_app::screening::get_next_screening_item(&state.pool, query)
         .await
         .map_err(map_screening_error)?;
     Ok(Json(queue_item_dto(item)))
@@ -340,7 +344,7 @@ pub(crate) async fn screen_report(
         notes: input.notes,
         actor,
     };
-    let state = deepref_postgres::screen_report(&state.pool, command)
+    let state = deepref_app::screening::screen_report(&state.pool, command)
         .await
         .map_err(map_screening_error)?;
     Ok(Json(state_dto(state)))
@@ -380,7 +384,7 @@ pub(crate) async fn undo_screening(
         notes: input.notes,
         actor,
     };
-    let state = deepref_postgres::undo_screening(&state.pool, command)
+    let state = deepref_app::screening::undo_screening(&state.pool, command)
         .await
         .map_err(map_screening_error)?;
     Ok(Json(state_dto(state)))
@@ -405,7 +409,7 @@ pub(crate) async fn get_screening_history(
     State(state): State<AppState>,
     Path((project_id, report_id)): Path<(Uuid, Uuid)>,
 ) -> Result<Json<ScreeningHistoryDto>, ApiError> {
-    let history = deepref_postgres::get_screening_history(&state.pool, project_id, report_id)
+    let history = deepref_app::screening::get_screening_history(&state.pool, project_id, report_id)
         .await
         .map_err(map_screening_error)?;
     Ok(Json(history_dto(history)))
@@ -427,16 +431,14 @@ pub(crate) async fn get_prisma(
     State(state): State<AppState>,
     Path(project_id): Path<Uuid>,
 ) -> Result<Json<PrismaDto>, ApiError> {
-    let projection = deepref_postgres::get_prisma_projection(&state.pool, project_id)
+    let projection = deepref_app::get_prisma_projection(&state.pool, project_id)
         .await
         .map_err(|error| match error {
-            deepref_postgres::PrismaProjectionError::NegativeCount { .. } => {
+            deepref_app::PrismaProjectionError::NegativeCount { .. } => {
                 ApiError::DataIntegrity(error.to_string())
             }
-            deepref_postgres::PrismaProjectionError::Database(error) => ApiError::Database(error),
-            deepref_postgres::PrismaProjectionError::Json(error) => {
-                ApiError::Internal(error.into())
-            }
+            deepref_app::PrismaProjectionError::Database(error) => ApiError::Database(error),
+            deepref_app::PrismaProjectionError::Json(error) => ApiError::Internal(error.into()),
         })?
         .ok_or_else(|| ApiError::NotFound("project not found".to_owned()))?;
     Ok(Json(prisma_dto(projection)))
@@ -470,6 +472,7 @@ fn prisma_dto(projection: PrismaProjection) -> PrismaDto {
         screened_records: projection.screened_records.get(),
         title_abstract_excluded: projection.title_abstract_excluded.get(),
         automation_excluded: projection.automation_excluded.get(),
+        assistant_excluded: projection.assistant_excluded.get(),
         ai_quarantined: projection.ai_quarantined.get(),
         title_abstract_pending: projection.title_abstract_pending.get(),
         reports_sought: projection.reports_sought.get(),
@@ -558,9 +561,9 @@ fn queue_item_dto(item: PersistenceScreeningQueueItem) -> ScreeningQueueItemDto 
         abstract_text: item.abstract_text,
         doi: item.doi,
         publication_year: item.publication_year,
-        title_abstract_status: item.title_abstract_status,
-        full_text_status: item.full_text_status,
-        final_status: item.final_status,
+        title_abstract_status: item.title_abstract_status.as_str().to_owned(),
+        full_text_status: item.full_text_status.as_str().to_owned(),
+        final_status: item.final_status.as_str().to_owned(),
         revision: item.revision,
     }
 }
@@ -569,10 +572,10 @@ fn state_dto(state: ScreeningStateSnapshot) -> ScreeningStateDto {
     ScreeningStateDto {
         project_id: state.project_id,
         report_id: state.report_id,
-        title_abstract_status: state.title_abstract_status,
-        full_text_status: state.full_text_status,
+        title_abstract_status: state.title_abstract_status.as_str().to_owned(),
+        full_text_status: state.full_text_status.as_str().to_owned(),
         full_text_exclusion_reason_id: state.full_text_exclusion_reason_id,
-        final_status: state.final_status,
+        final_status: state.final_status.as_str().to_owned(),
         revision: state.revision,
         last_event_id: state.last_event_id,
         updated_at: state.updated_at,
@@ -591,8 +594,8 @@ fn history_item_dto(item: PersistenceScreeningHistoryItem) -> ScreeningHistoryIt
     ScreeningHistoryItemDto {
         id: item.id,
         event_kind: item.event_kind,
-        stage: item.stage,
-        decision: item.decision,
+        stage: item.stage.as_str().to_owned(),
+        decision: item.decision.map(|decision| decision.as_str().to_owned()),
         notes: item.notes,
         protocol_version_id: item.protocol_version_id,
         actor_kind: item.actor_kind,
@@ -600,20 +603,27 @@ fn history_item_dto(item: PersistenceScreeningHistoryItem) -> ScreeningHistoryIt
         supersedes_event_id: item.supersedes_event_id,
         undoes_event_id: item.undoes_event_id,
         created_at: item.created_at,
-        previous_title_abstract_status: item.previous_title_abstract_status,
-        previous_full_text_status: item.previous_full_text_status,
+        previous_title_abstract_status: item.previous_title_abstract_status.as_str().to_owned(),
+        previous_full_text_status: item.previous_full_text_status.as_str().to_owned(),
         previous_full_text_exclusion_reason_id: item.previous_full_text_exclusion_reason_id,
-        previous_final_status: item.previous_final_status,
-        result_title_abstract_status: item.result_title_abstract_status,
-        result_full_text_status: item.result_full_text_status,
+        previous_final_status: item.previous_final_status.as_str().to_owned(),
+        result_title_abstract_status: item.result_title_abstract_status.as_str().to_owned(),
+        result_full_text_status: item.result_full_text_status.as_str().to_owned(),
         result_full_text_exclusion_reason_id: item.result_full_text_exclusion_reason_id,
-        result_final_status: item.result_final_status,
+        result_final_status: item.result_final_status.as_str().to_owned(),
     }
 }
 
 pub(crate) fn map_screening_error(error: ScreeningError) -> ApiError {
     match error {
         ScreeningError::Database(error) => ApiError::Database(error),
+        ScreeningError::AiFirst(error) => match *error {
+            deepref_app::AiFirstError::Database(error) => ApiError::Database(error),
+            deepref_app::AiFirstError::Screening(error) => map_screening_error(error),
+            deepref_app::AiFirstError::Invalid(message)
+            | deepref_app::AiFirstError::Refused(message) => ApiError::BadRequest(message),
+            other => ApiError::Internal(anyhow::Error::new(other)),
+        },
         ScreeningError::ProjectNotFound => ApiError::NotFound("project not found".to_owned()),
         ScreeningError::ReportNotInProject => {
             ApiError::NotFound("report is not part of this project".to_owned())

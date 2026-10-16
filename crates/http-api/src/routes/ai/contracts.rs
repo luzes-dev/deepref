@@ -28,6 +28,17 @@ pub(crate) struct GenerateDuplicateRequest {
     pub candidate_report_id: Uuid,
 }
 
+/// Retry a failed or blocked review run, or regenerate one whose suggestion was
+/// rejected. An in-flight retry is returned as is.
+#[derive(Debug, Default, Deserialize, ToSchema)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct RetryReviewRunRequest {
+    /// Ask for a fresh opinion that reuses nothing from earlier attempts. Only a
+    /// completed run whose suggestion was rejected can be regenerated.
+    #[serde(default)]
+    pub regenerate: bool,
+}
+
 #[derive(Debug, Deserialize, ToSchema)]
 pub(crate) struct GenerateAppraisalPrefillRequest {
     pub definition_id: String,

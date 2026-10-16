@@ -10,7 +10,6 @@
 		PROJECT_WORKSPACE_MAIN_LAYOUT_ID
 	} from '../constants';
 	import { useProjectWorkspaceContext } from '../context.svelte.js';
-	import IngestionInspector from './IngestionInspector.svelte';
 	import AcquisitionInspector from './AcquisitionInspector.svelte';
 	import ProjectSidebar from './ProjectSidebar.svelte';
 	import ProjectWorkspaceViewPanel from './ProjectWorkspaceViewPanel.svelte';
@@ -27,8 +26,7 @@
 	const pathname = $derived(page.url.pathname);
 
 	const hasInspector = $derived(
-		(workspace.view === 'ingestions' &&
-			Boolean(workspace.selectedIngestion || workspace.selectedAcquisition)) ||
+		(workspace.view === 'ingestions' && Boolean(workspace.selectedAcquisition)) ||
 			(['articles', 'graph', 'recommendations'].includes(workspace.view) &&
 				Boolean(workspace.selectedArticle))
 	);
@@ -106,17 +104,10 @@
 								class="min-w-12.5 transition-all duration-300 ease-in-out"
 							>
 								{#if workspace.view === 'ingestions'}
-									{#if workspace.selectedAcquisition}
-										<AcquisitionInspector
-											collapsed={workspace.inspectorCollapsed.current}
-											onToggleCollapse={toggleInspector}
-										/>
-									{:else}
-										<IngestionInspector
-											collapsed={workspace.inspectorCollapsed.current}
-											onToggleCollapse={toggleInspector}
-										/>
-									{/if}
+									<AcquisitionInspector
+										collapsed={workspace.inspectorCollapsed.current}
+										onToggleCollapse={toggleInspector}
+									/>
 								{:else if workspace.view === 'articles' || workspace.view === 'graph' || workspace.view === 'recommendations'}
 									<ArticleInspector
 										collapsed={workspace.inspectorCollapsed.current}

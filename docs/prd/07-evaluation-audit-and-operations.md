@@ -29,7 +29,7 @@ without weakening scientific guarantees.
 
 ## Acceptance evidence
 
-- Evaluation and security: `docs/acceptance/pr15-evals-hardening.md`,
+- Evaluation and security: `docs/acceptance/ai-evals-hardening.md`,
   `crates/ai/tests/`.
 - API and generation contracts:
   `crates/http-api/src/routes/mod.rs` and `scripts/check-api-codegen.sh`.

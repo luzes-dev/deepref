@@ -11,6 +11,23 @@ foundation report, including its commands and commits. Its statement that no
 AI-first workflow exists describes the Phase 1 boundary. This document tracks
 the later work, with implementation references and verification evidence below.
 
+### Identity failure correction (integration verification pending)
+
+Identity checks use the locking transaction's connection. Any computation failure,
+including a database error while taking identity locks or checking frozen evidence,
+is `Unknown`: log its cause, roll back, and leave authority, dispositions, exclusions,
+and cohorts unchanged. The periodic sweep skips that cohort rather than aborting the
+remaining pass. `identity_database_failure_rolls_back_without_aborting_the_sweep`
+injects a pre-preview database failure to cover this boundary.
+
+Confirmed semantic identity drift invalidates non-finalized cohorts and flags
+finalized cohorts without reopening their exclusions. Finalized-only projects are
+not monitored for semantic drift by the periodic sweep; finalized cohorts enter it
+only after a protocol change. Protocol republish still reopens canonical automation
+exclusions. These rules and the new regression require parent verification; the
+2026-10-09 evidence below is historical, not proof of these later corrections.
+
+
 ## Scope and phase status
 
 | Phase                                     | Required outcome                                                                                                                                                                                                                                        | Current evidence/status               |
@@ -155,13 +172,13 @@ records are detected with sensitivity 0.90; the arithmetic is
 
 ## Implementation map
 
-- [Blind controls migration](../../crates/postgres/migrations/0055_ai_first_blind_controls.sql): frozen control membership, fresh-reviewer admission and masked/interleaved queue policy.
-- [Migration 0054](../../crates/postgres/migrations/0054_ai_first_cohorts.sql): separate owner ceiling, immutable dispositions, frozen frame and dual reference labels.
-- [Cohort lifecycle](../../crates/postgres/src/ai_first/cohorts.rs), [routing](../../crates/postgres/src/ai_first/routing.rs), and [audit/finalization](../../crates/postgres/src/ai_first/audit.rs): approvals, bounded worker scheduling, current-evidence checks and recovery.
+- [Blind controls migration](../../crates/app/migrations/0055_ai_first_blind_controls.sql): frozen control membership, fresh-reviewer admission and masked/interleaved queue policy.
+- [Migration 0054](../../crates/app/migrations/0054_ai_first_cohorts.sql): separate owner ceiling, immutable dispositions, frozen frame and dual reference labels.
+- [Cohort lifecycle](../../crates/app/src/ai_first/cohorts.rs), [routing](../../crates/app/src/ai_first/routing.rs), and [audit/finalization](../../crates/app/src/ai_first/audit.rs): approvals, bounded worker scheduling, current-evidence checks and recovery.
 - [Pure audit calculation](../../crates/application/src/ai_first.rs) and [eligibility rule](../../crates/review/src/ai_first.rs): exact integer authority and grounded two-screen agreement.
 - [API](../../crates/http-api/src/routes/ai_first.rs) and [UI](../../apps/web/src/lib/features/ai-autonomy/components/AiFirstPanel.svelte): fixed-sample workload forecast, blinded actor attribution, explicit approval and recovery.
-- [Lifecycle regressions](../../crates/postgres/tests/ai_first.rs) and [compiled worker regression](../../services/worker/tests/ai_first.rs): real event writes, invalidation, ceiling checks, exposure, model changes, later imports and budget stops.
-- [Audit export](../../crates/postgres/src/audit_export.rs) and [independent reproduction tool](../../scripts/reproduce-ai-first-audit.py): terminal evidence without model reruns.
+- [Lifecycle regressions](../../crates/app/tests/ai_first.rs) and [compiled worker regression](../../services/worker/tests/ai_first.rs): real event writes, invalidation, ceiling checks, exposure, model changes, later imports and budget stops.
+- [Audit export](../../crates/app/src/audit_export.rs) and [independent reproduction tool](../../scripts/reproduce-ai-first-audit.py): terminal evidence without model reruns.
 
 Recovery withdraws the current owner ceiling when no separately approved active
 cohort remains. Previously drawn failed or invalidated frames return to humans;

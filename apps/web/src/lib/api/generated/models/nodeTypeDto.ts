@@ -8,6 +8,7 @@ import type { ConfigFieldDto } from './configFieldDto.ts';
 import type { PortDto } from './portDto.ts';
 
 export interface NodeTypeDto {
+	available: boolean;
 	/** Several outputs of which only one carries data on each run. */
 	branches: boolean;
 	/** `trigger`, `data`, `action`, `ai`, `logic` or `integration`. */

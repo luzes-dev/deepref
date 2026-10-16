@@ -5,7 +5,18 @@ use uuid::Uuid;
 pub mod acquisition;
 pub mod bibliography;
 pub mod documents;
+pub mod events;
+pub mod graph;
+mod ingestion;
+pub mod jobs;
 pub mod protocol;
+mod reference;
+mod work;
+
+pub use ingestion::{IngestionItemStatus, IngestionStatus};
+pub use jobs::{InvalidJobKind, JobKind};
+pub use reference::Reference;
+pub use work::{FetchStatus, Work, WorkWithReferences};
 
 pub use acquisition::{AcquisitionRunId, AcquisitionSource, AcquisitionStatus, ImportFormat};
 pub use bibliography::{
@@ -132,6 +143,78 @@ pub enum ScreeningDecision {
     Maybe,
 }
 
+impl ScreeningStage {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::TitleAbstract => "title_abstract",
+            Self::FullText => "full_text",
+        }
+    }
+
+    pub fn parse(value: &str) -> Option<Self> {
+        match value {
+            "title_abstract" => Some(Self::TitleAbstract),
+            "full_text" => Some(Self::FullText),
+            _ => None,
+        }
+    }
+}
+
+impl ScreeningDecision {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Include => "include",
+            Self::Exclude => "exclude",
+            Self::Maybe => "maybe",
+        }
+    }
+
+    pub fn parse(value: &str) -> Option<Self> {
+        match value {
+            "include" => Some(Self::Include),
+            "exclude" => Some(Self::Exclude),
+            "maybe" => Some(Self::Maybe),
+            _ => None,
+        }
+    }
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ScreeningStatus {
+    NotRequired,
+    Unscreened,
+    PendingFullText,
+    Include,
+    Exclude,
+    Maybe,
+}
+
+impl ScreeningStatus {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::NotRequired => "not_required",
+            Self::Unscreened => "unscreened",
+            Self::PendingFullText => "pending_full_text",
+            Self::Include => "include",
+            Self::Exclude => "exclude",
+            Self::Maybe => "maybe",
+        }
+    }
+
+    pub fn parse(value: &str) -> Option<Self> {
+        match value {
+            "not_required" => Some(Self::NotRequired),
+            "unscreened" => Some(Self::Unscreened),
+            "pending_full_text" => Some(Self::PendingFullText),
+            "include" => Some(Self::Include),
+            "exclude" => Some(Self::Exclude),
+            "maybe" => Some(Self::Maybe),
+            _ => None,
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
 pub enum ScreeningValidationError {
     #[error("title/abstract decisions cannot carry an exclusion reason")]
@@ -175,6 +258,22 @@ pub struct ScreenReportTransitionCommand {
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct UndoScreeningTransitionCommand {
     pub stage: ScreeningStage,
+}
+
+/// Blind audit labels must be independent human title/abstract decisions.
+/// The caller supplies the authoritative audit membership under its lock.
+pub fn validate_blind_screening(
+    masked: bool,
+    assistant_origin: bool,
+    stage: ScreeningStage,
+) -> Result<(), &'static str> {
+    if masked && assistant_origin {
+        return Err("records in a blind audit must be screened by a person");
+    }
+    if masked && stage != ScreeningStage::TitleAbstract {
+        return Err("complete or recover the blind audit before editing full text");
+    }
+    Ok(())
 }
 
 pub fn transition(
@@ -286,6 +385,35 @@ fn validate_screening_state(
 mod tests {
     use super::*;
 
+    #[test]
+    fn screening_persistence_names_are_closed_and_round_trip() {
+        for stage in [ScreeningStage::TitleAbstract, ScreeningStage::FullText] {
+            assert_eq!(ScreeningStage::parse(stage.as_str()), Some(stage));
+        }
+        for decision in [
+            ScreeningDecision::Include,
+            ScreeningDecision::Exclude,
+            ScreeningDecision::Maybe,
+        ] {
+            assert_eq!(ScreeningDecision::parse(decision.as_str()), Some(decision));
+        }
+        for status in [
+            ScreeningStatus::NotRequired,
+            ScreeningStatus::Unscreened,
+            ScreeningStatus::PendingFullText,
+            ScreeningStatus::Include,
+            ScreeningStatus::Exclude,
+            ScreeningStatus::Maybe,
+        ] {
+            assert_eq!(ScreeningStatus::parse(status.as_str()), Some(status));
+        }
+        for invalid in ["", "unknown", "Include", "include "] {
+            assert_eq!(ScreeningStage::parse(invalid), None);
+            assert_eq!(ScreeningDecision::parse(invalid), None);
+            assert_eq!(ScreeningStatus::parse(invalid), None);
+        }
+    }
+
     fn command(
         stage: ScreeningStage,
         decision: ScreeningDecision,
@@ -325,6 +453,20 @@ mod tests {
             ),
             Err(ScreeningValidationError::TitleAbstractReasonNotAllowed)
         ));
+    }
+
+    #[test]
+    fn blind_screening_requires_independent_title_abstract_labels() {
+        assert!(validate_blind_screening(true, true, ScreeningStage::TitleAbstract).is_err());
+        assert!(validate_blind_screening(true, false, ScreeningStage::FullText).is_err());
+        assert_eq!(
+            validate_blind_screening(true, false, ScreeningStage::TitleAbstract),
+            Ok(())
+        );
+        assert_eq!(
+            validate_blind_screening(false, true, ScreeningStage::FullText),
+            Ok(())
+        );
     }
 
     #[test]

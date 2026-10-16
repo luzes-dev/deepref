@@ -14,6 +14,12 @@ export interface AiFirstCohortDto {
 	evaluated: number;
 	forecast?: AiFirstForecastDto | null;
 	id: string;
+	/**
+	 * Set when a finalized cohort is flagged for review because the semantic
+	 * identity changed after finalization; its exclusions stay in force.
+	 * @nullable
+	 */
+	identity_flag_reason?: string | null;
 	/** @nullable */
 	invalidation_reason?: string | null;
 	labels: number;

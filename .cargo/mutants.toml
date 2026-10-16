@@ -4,12 +4,11 @@
 test_tool = "nextest"
 cap_lints = true
 
-# Initial scope per modernization contract: domain, application, review, graph.
+# Pure scope: domain (including graph algorithms), application and review.
 examine_globs = [
     "crates/domain/src/**/*.rs",
     "crates/application/src/**/*.rs",
     "crates/review/src/**/*.rs",
-    "crates/graph/src/**/*.rs",
 ]
 
 exclude_globs = [

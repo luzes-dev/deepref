@@ -66,6 +66,10 @@
 					['Screened records', projection.screened_records],
 					['Title/abstract excluded', projection.title_abstract_excluded],
 					['Of these: approved automated exclusions', projection.automation_excluded],
+					[
+						'Of these: assistant-plan exclusions confirmed by a reviewer',
+						projection.assistant_excluded
+					],
 					['AI quarantine (included in pending)', projection.ai_quarantined],
 					['Title/abstract pending', projection.title_abstract_pending],
 					['Reports sought', projection.reports_sought],
@@ -311,6 +315,15 @@
 					exclusions.
 					{projection.ai_quarantined} quarantined records remain pending and have no exclusion
 					decision.
+				</p>
+			{/if}
+			{#if projection.assistant_excluded > 0}
+				<p
+					class="text-sm text-muted-foreground tabular-nums"
+					data-testid="prisma-assistant-accounting"
+				>
+					{projection.assistant_excluded} title/abstract exclusions were chosen by the assistant
+					and confirmed by a reviewer. They are not counted as a reviewer's own screening.
 				</p>
 			{/if}
 			<Tabs.Content value="flow" class="min-w-0">

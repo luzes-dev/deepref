@@ -12,7 +12,6 @@
 	import { openSettingsFromLink } from '#lib/features/settings/navigation.js';
 	import ArticleInspector from './ArticleInspector.svelte';
 	import { useProjectWorkspaceContext } from '../context.svelte.js';
-	import IngestionInspector from './IngestionInspector.svelte';
 	import AcquisitionInspector from './AcquisitionInspector.svelte';
 	import ProjectSelector from './ProjectSelector.svelte';
 	import ProjectWorkspaceViewPanel from './ProjectWorkspaceViewPanel.svelte';
@@ -42,9 +41,7 @@
 				workspace.view === 'graph' ||
 				workspace.view === 'recommendations')
 	);
-	const ingestionSheetOpen = $derived(
-		Boolean(workspace.selectedIngestion || workspace.selectedAcquisition)
-	);
+	const ingestionSheetOpen = $derived(Boolean(workspace.selectedAcquisition));
 
 	function isActive(item: ProjectNavigationItem): boolean {
 		return Boolean(projectId) && isProjectNavigationItemActive(item, pathname, projectId);
@@ -170,17 +167,13 @@
 	</Sheet.Root>
 	<Sheet.Root
 		open={ingestionSheetOpen}
-		onOpenChange={(open) => !open && workspace.clearIngestion()}
+		onOpenChange={(open) => !open && workspace.clearAcquisition()}
 	>
 		<Sheet.Content side="right" class="p-0 data-[side=right]:w-full">
 			<Sheet.Header class="sr-only">
 				<Sheet.Title>Ingestion inspector</Sheet.Title>
 			</Sheet.Header>
-			{#if workspace.selectedAcquisition}
-				<AcquisitionInspector />
-			{:else}
-				<IngestionInspector />
-			{/if}
+			<AcquisitionInspector />
 		</Sheet.Content>
 	</Sheet.Root>
 </div>

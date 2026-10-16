@@ -51,15 +51,22 @@ export default defineConfig({
 							invalidates: ['listProjects']
 						},
 						{
-							onMutations: ['createIngestion'],
-							invalidates: ['listIngestions']
+							onMutations: [
+								'createAcquisition',
+								'refreshAcquisition',
+								'importProjectRecords'
+							],
+							invalidates: [{ query: 'listAcquisitions', params: ['projectId'] }]
 						},
 						{
-							onMutations: ['cancelIngestion'],
+							onMutations: ['cancelAcquisition'],
 							invalidates: [
-								'listIngestions',
-								{ query: 'getIngestion', params: ['ingestionId'] },
-								{ query: 'listIngestionItems', params: ['ingestionId'] }
+								{ query: 'listAcquisitions', params: ['projectId'] },
+								{ query: 'getAcquisition', params: ['projectId', 'acquisitionId'] },
+								{
+									query: 'listAcquisitionItems',
+									params: ['projectId', 'acquisitionId']
+								}
 							]
 						},
 						{
@@ -75,16 +82,29 @@ export default defineConfig({
 								'generateScreeningSuggestion',
 								'generateDuplicateSuggestion'
 							],
-							invalidates: ['listAiProposals']
+							invalidates: [{ query: 'listAiProposals', params: ['projectId'] }]
 						},
 						{
 							onMutations: ['decideAiProposal'],
 							invalidates: [
-								'listAiProposals',
+								{ query: 'listAiProposals', params: ['projectId'] },
 								{ query: 'getAiProposal', params: ['projectId', 'proposalId'] },
-								'listTitleAbstractScreeningQueue',
-								'listFullTextScreeningQueue',
-								'listProjectDedupeProposals'
+								// Orval resolves cross-tag paths from the generated output root.
+								{
+									query: 'getScreeningQueue',
+									params: ['projectId'],
+									file: './review'
+								},
+								{
+									query: 'listFullTextScreeningQueue',
+									params: ['projectId'],
+									file: './documents'
+								},
+								{
+									query: 'listProjectDedupeProposals',
+									params: ['projectId'],
+									file: './deduplication'
+								}
 							]
 						}
 					]

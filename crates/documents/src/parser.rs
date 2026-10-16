@@ -83,7 +83,9 @@ impl PdfiumParser {
 
     /// One parser per process. Dropping a `Pdfium` tears down the shared PDFium library, so
     /// per-job parsers corrupt the heap when two parses overlap in a multi-threaded worker.
-    pub fn shared_from_env() -> Result<std::sync::Arc<Self>, PdfParserError> {
+    pub fn shared_from_config(
+        config: &deepref_config::PdfConfig,
+    ) -> Result<std::sync::Arc<Self>, PdfParserError> {
         // Initialization must happen once: a losing racer's `Pdfium` would be dropped and
         // tear the library down. A failed init is not cached, so a later call can retry.
         static SHARED: std::sync::Mutex<Option<std::sync::Arc<PdfiumParser>>> =
@@ -94,19 +96,12 @@ impl PdfiumParser {
         if let Some(parser) = shared.as_ref() {
             return Ok(parser.clone());
         }
-        let parser = std::sync::Arc::new(Self::from_env()?);
+        let parser = std::sync::Arc::new(Self::from_config(
+            config.library_path.as_deref(),
+            ParserLimits::default(),
+        )?);
         *shared = Some(parser.clone());
         Ok(parser)
-    }
-
-    /// Builds a parser that owns PDFium's lifetime; prefer [`Self::shared_from_env`] anywhere
-    /// more than one parse can run in the process.
-    pub fn from_env() -> Result<Self, PdfParserError> {
-        let library_path = std::env::var_os("PDFIUM_LIBRARY_PATH");
-        Self::from_config(
-            library_path.as_deref().map(Path::new),
-            ParserLimits::default(),
-        )
     }
 
     pub fn parse_file(&self, path: &Path) -> Result<ParsedDocument, PdfParserError> {
@@ -316,8 +311,11 @@ impl DocumentParser for PdfiumParser {
     }
 }
 
-pub fn parse_pdf_file(path: &Path) -> Result<ParsedDocument, PdfParserError> {
-    PdfiumParser::shared_from_env()?.parse_file(path)
+pub fn parse_pdf_file(
+    path: &Path,
+    config: &deepref_config::PdfConfig,
+) -> Result<ParsedDocument, PdfParserError> {
+    PdfiumParser::shared_from_config(config)?.parse_file(path)
 }
 
 impl From<PdfiumError> for PdfParserError {
@@ -354,7 +352,8 @@ mod tests {
         ) else {
             return;
         };
-        let parsed = PdfiumParser::shared_from_env()
+        let config = deepref_config::PdfConfig::from_source(&|name| std::env::var(name).ok());
+        let parsed = PdfiumParser::shared_from_config(&config)
             .expect("pdfium")
             .parse_file(Path::new(&pdf))
             .expect("parse");
@@ -384,9 +383,11 @@ mod tests {
         let handles: Vec<_> = (0..4)
             .map(|_| {
                 let pdf = pdf.clone();
+                let config =
+                    deepref_config::PdfConfig::from_source(&|name| std::env::var(name).ok());
                 std::thread::spawn(move || {
                     for _ in 0..3 {
-                        let parser = PdfiumParser::shared_from_env().expect("pdfium");
+                        let parser = PdfiumParser::shared_from_config(&config).expect("pdfium");
                         let parsed = parser.parse_file(Path::new(&pdf)).expect("parse");
                         assert!(!parsed.blocks.is_empty());
                     }
@@ -438,7 +439,8 @@ mod tests {
         ) else {
             return;
         };
-        let parser = PdfiumParser::shared_from_env().expect("pdfium");
+        let config = deepref_config::PdfConfig::from_source(&|name| std::env::var(name).ok());
+        let parser = PdfiumParser::shared_from_config(&config).expect("pdfium");
         let mut entries: Vec<_> = std::fs::read_dir(&dir)
             .expect("fixture dir")
             .filter_map(Result::ok)

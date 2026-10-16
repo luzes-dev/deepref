@@ -6,7 +6,6 @@
 )]
 use std::collections::{HashMap, VecDeque};
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
 
 use axum::{
     body::{Body, to_bytes},
@@ -135,7 +134,7 @@ impl AiGateway for DedupeEchoGateway {
 }
 
 async fn database() -> Option<PgPool> {
-    deepref_postgres::test_isolation::isolated_pool_from_env("DATABASE_URL", 8).await
+    deepref_app::test_isolation::isolated_pool_from_env("DATABASE_URL", 8).await
 }
 
 fn api_config() -> ApiConfig {
@@ -145,6 +144,10 @@ fn api_config() -> ApiConfig {
     )
     .expect("local test runtime should parse");
     ApiConfig {
+        documents: deepref_config::DocumentConfig::from_source(&|name| {
+            (name == "APP_ENV").then(|| "local".into())
+        })
+        .expect("local test document configuration"),
         runtime,
         bind_addr: "127.0.0.1:0".parse().expect("test bind address is valid"),
         cors_allow_any: false,
@@ -169,39 +172,61 @@ where
     G: AiGateway + 'static,
 {
     let owner = format!("http-review-test-{run_id}");
-    let row = sqlx::query(
-        "UPDATE jobs AS j
-         SET state='running',lease_owner=$2,leased_until=now()+interval '5 minutes',
-             lease_renewed_at=now(),attempts=CASE WHEN $3 THEN max_attempts ELSE attempts+1 END
-         FROM automation_runs AS r
-         WHERE r.id=$1 AND j.id=r.job_id AND j.state='queued'
-         RETURNING j.id,j.project_id,j.kind,j.payload,j.attempts,j.max_attempts",
-    )
-    .bind(run_id)
-    .bind(&owner)
-    .bind(final_delivery)
-    .fetch_one(pool)
-    .await
-    .expect("scheduled review job claims");
-    let job = ClaimedJob {
-        id: row.get("id"),
-        project_id: row.get::<Uuid, _>("project_id").into(),
-        kind: row.get("kind"),
-        payload: row.get("payload"),
-        attempts: row.get("attempts"),
-        max_attempts: row.get("max_attempts"),
-    };
-    handle_job_with_documents_owned_and_ai(
-        pool.clone(),
-        &job,
-        &job.lease(owner.as_str()),
-        Duration::from_secs(300),
-        None,
-        None,
-        Arc::new(gateway),
-    )
-    .await
-    .expect("review worker handles terminal delivery")
+    let gateway = Arc::new(gateway);
+    let config = deepref_worker::config::WorkerConfig::from_source(&|name| match name {
+        "APP_ENV" => Some("local".into()),
+        "WORKER_CLAIM_LEASE_SECS" => Some("300".into()),
+        _ => None,
+    })
+    .expect("local worker configuration");
+    for _ in 0..64 {
+        let row=sqlx::query("UPDATE jobs j SET state='running',lease_owner=$2,
+            leased_until=now()+interval '5 minutes',lease_renewed_at=now(),
+            attempts=CASE WHEN $3 THEN max_attempts ELSE attempts+1 END
+            WHERE j.kind='durable_run_step' AND j.payload->>'run_id'=$1::uuid::text AND j.state='queued'
+            RETURNING j.id,j.project_id,j.kind,j.payload,j.attempts,j.max_attempts")
+            .bind(run_id).bind(&owner).bind(final_delivery).fetch_one(pool).await.expect("next typed review node claims");
+        let job = ClaimedJob {
+            id: row.get("id"),
+            project_id: row.get::<Uuid, _>("project_id").into(),
+            kind: row
+                .get::<String, _>("kind")
+                .parse()
+                .expect("durable job kind"),
+            payload: row.get("payload"),
+            attempts: row.get("attempts"),
+            max_attempts: row.get("max_attempts"),
+        };
+        let lease = job.lease(owner.as_str());
+        let action = handle_job_with_documents_owned_and_ai(
+            pool.clone(),
+            &job,
+            &lease,
+            None,
+            None,
+            gateway.clone(),
+            &config,
+        )
+        .await
+        .expect("review node handles delivery");
+        if action != DeliveryAction::Ack {
+            return action;
+        }
+        assert!(
+            deepref_app::complete_job(pool, &lease)
+                .await
+                .expect("node queue ack")
+        );
+        let state: String = sqlx::query_scalar("SELECT status FROM durable_runs WHERE id=$1")
+            .bind(run_id)
+            .fetch_one(pool)
+            .await
+            .expect("canonical state");
+        if matches!(state.as_str(), "completed" | "blocked" | "failed") {
+            return action;
+        }
+    }
+    panic!("review planner did not reach a terminal state");
 }
 
 #[tokio::test]
@@ -209,7 +234,7 @@ async fn blind_screening_disagreement_blocks_without_exposing_primary_output() {
     let Some(pool) = database().await else { return };
     let (project_id, report_id, criterion_id, title) = setup(&pool).await;
     let provider = format!("blind-screening-provider-{}", Uuid::new_v4());
-    deepref_postgres::insert_model_route(&pool, &route(&provider), Utc::now())
+    deepref_app::insert_model_route(&pool, &route(&provider), Utc::now())
         .await
         .expect("model route inserts");
     let protocol_id: Uuid = sqlx::query_scalar(
@@ -304,7 +329,7 @@ async fn candidate_audit_and_repair_cannot_patch_protected_screening_fields() {
     let Some(pool) = database().await else { return };
     let (project_id, report_id, criterion_id, title) = setup(&pool).await;
     let provider = format!("candidate-audit-provider-{}", Uuid::new_v4());
-    deepref_postgres::insert_model_route(&pool, &route(&provider), Utc::now())
+    deepref_app::insert_model_route(&pool, &route(&provider), Utc::now())
         .await
         .expect("model route inserts");
     let protocol_id: Uuid = sqlx::query_scalar(
@@ -409,7 +434,7 @@ async fn changed_screening_revision_blocks_finalization_without_a_proposal() {
     let Some(pool) = database().await else { return };
     let (project_id, report_id, criterion_id, title) = setup(&pool).await;
     let provider = format!("stale-screening-provider-{}", Uuid::new_v4());
-    deepref_postgres::insert_model_route(&pool, &route(&provider), Utc::now())
+    deepref_app::insert_model_route(&pool, &route(&provider), Utc::now())
         .await
         .expect("model route inserts");
     let protocol_id: Uuid = sqlx::query_scalar(
@@ -511,7 +536,7 @@ async fn duplicate_detection_executes_through_the_same_compiled_runtime() {
     .execute(&pool)
     .await
     .expect("record inserts");
-    deepref_postgres::insert_model_route(
+    deepref_app::insert_model_route(
         &pool,
         &ResolvedModel {
             profile: ModelProfile::FastClassifier,
@@ -755,7 +780,7 @@ async fn injected_gateway_is_called_and_run_provenance_is_persisted() {
     let (project_id, report_id, criterion_id, title) = setup(&pool).await;
     let provider = format!("test-provider-{}", Uuid::new_v4());
     let model_route = route(&provider);
-    deepref_postgres::insert_model_route(&pool, &model_route, Utc::now())
+    deepref_app::insert_model_route(&pool, &model_route, Utc::now())
         .await
         .expect("model route inserts");
     let calls = Arc::new(Mutex::new(0));
@@ -933,7 +958,7 @@ async fn full_text_retrieval_uses_or_terms_and_passes_grounding_to_gateway() {
     .expect("target evidence block");
 
     let provider = format!("full-text-provider-{}", Uuid::new_v4());
-    deepref_postgres::insert_model_route(&pool, &full_text_route(&provider), Utc::now())
+    deepref_app::insert_model_route(&pool, &full_text_route(&provider), Utc::now())
         .await
         .expect("full-text model route");
     let calls = Arc::new(Mutex::new(0));
@@ -1020,7 +1045,7 @@ async fn gateway_failure_is_a_failed_run_without_a_proposal() {
     let Some(pool) = database().await else { return };
     let (project_id, report_id, criterion_id, _title) = setup(&pool).await;
     let provider = format!("failing-provider-{}", Uuid::new_v4());
-    deepref_postgres::insert_model_route(&pool, &route(&provider), Utc::now())
+    deepref_app::insert_model_route(&pool, &route(&provider), Utc::now())
         .await
         .expect("model route inserts");
     let gateway = TestGateway {

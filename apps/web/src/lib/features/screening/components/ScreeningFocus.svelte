@@ -5,7 +5,8 @@
 		createScreenReport,
 		createUndoScreening,
 		getGetScreeningHistoryQueryOptions,
-		getScreeningQueue
+		getScreeningQueue,
+		getGetScreeningQueueQueryKey
 	} from '#lib/api/generated/review/review.js';
 	import type {
 		ApiErrorBody,
@@ -52,6 +53,7 @@
 	import {
 		hasCommandModifier,
 		hasOpenScreeningOverlay,
+		ignoresAutoRepeat,
 		isShortcutSuppressed,
 		shortcutAction
 	} from '../shortcuts';
@@ -78,13 +80,14 @@
 	const urlState = $derived(
 		parseScreeningUrl(new URLSearchParams(page.url.searchParams.toString()))
 	);
-	const queueKey = $derived([
-		'screening-queue',
-		projectId,
-		urlState.status,
-		urlState.search,
-		urlState.sort
-	] as const);
+	const queueKey = $derived(
+		getGetScreeningQueueQueryKey(projectId, {
+			status: urlState.status,
+			search: urlState.search || undefined,
+			sort: urlState.sort,
+			limit: 25
+		})
+	);
 	const queueQuery = createInfiniteQuery(() => ({
 		queryKey: queueKey,
 		initialPageParam: undefined as string | undefined,
@@ -107,6 +110,11 @@
 	const undoMutation = createUndoScreening();
 	let statusMessage = $state('');
 	let lastAction = $state<LastAction | null>(null);
+	// True from the first line of decide() or undo() until navigation and the mutation
+	// settle. The mutation's own isPending is false while the URL is still changing.
+	let deciding = $state(false);
+	// The report decide() moves to. Shown while the URL still names the decided report.
+	let pendingNext = $state<ScreeningQueueItemDto | null>(null);
 	let searchTimer: ReturnType<typeof setTimeout> | undefined;
 
 	const pages = $derived(queueQuery.data?.pages ?? []);
@@ -121,7 +129,17 @@
 	const currentIndex = $derived(
 		selectedReportId ? queueItems.findIndex((item) => item.report_id === selectedReportId) : 0
 	);
-	const current = $derived(queueItems[currentIndex] ?? queueItems[0] ?? null);
+	// A URL that names a report missing from the queue never falls back to the first item:
+	// a key press there would decide on a report the reviewer never saw.
+	const current = $derived(queueItems[currentIndex] ?? (urlState.report ? pendingNext : null));
+	const locatingReport = $derived(
+		Boolean(
+			urlState.report &&
+			!current &&
+			queueQuery.hasNextPage &&
+			!queueQuery.isFetchNextPageError
+		)
+	);
 	const protocol = $derived(protocolQuery.data?.data);
 	const historyItems = $derived(historyQuery.data?.data.items ?? []);
 	const latestHistory = $derived(historyItems.at(-1) ?? null);
@@ -198,7 +216,8 @@
 			urlState.report &&
 			!current &&
 			queueQuery.hasNextPage &&
-			!queueQuery.isFetchingNextPage
+			!queueQuery.isFetchingNextPage &&
+			!queueQuery.isFetchNextPageError
 		) {
 			void queueQuery.fetchNextPage();
 		}
@@ -310,18 +329,30 @@
 	}
 
 	async function decide(decision: 'include' | 'exclude' | 'maybe') {
-		if (!current || !protocol || decisionMutation.isPending || undoMutation.isPending) return;
+		if (
+			deciding ||
+			!current ||
+			!protocol ||
+			decisionMutation.isPending ||
+			undoMutation.isPending
+		)
+			return;
+		deciding = true;
 		statusMessage = '';
 		const reportId = current.report_id;
 		const oldCache = queryClient.getQueryData<QueueCache>(queueKey);
 		const priorLocation = findQueueLocation(oldCache, reportId);
 		const priorItem = { ...current };
 		const expectedRevision = current.revision;
-		const nextItem = queueItems[currentIndex + 1] ?? queueItems[0] ?? null;
+		const nextItem =
+			queueItems[currentIndex + 1] ??
+			queueItems.find((item) => item.report_id !== reportId) ??
+			null;
+		pendingNext = nextItem;
 		queryClient.setQueryData<QueueCache>(queueKey, (cache) =>
 			applyOptimisticStatusChange(cache, {
 				reportId,
-				fromStatus: current.title_abstract_status,
+				fromStatus: priorItem.title_abstract_status,
 				toStatus: decision,
 				revision: expectedRevision + 1,
 				filterStatus: urlState.status,
@@ -329,8 +360,8 @@
 				priorLocation
 			})
 		);
-		await updateUrl({ report: nextItem?.report_id ?? null }, false);
 		try {
+			await updateUrl({ report: nextItem?.report_id ?? null }, false);
 			const result = await decisionMutation.mutateAsync({
 				projectId,
 				reportId,
@@ -365,12 +396,22 @@
 				queryClient.setQueryData(queueKey, oldCache);
 				await updateUrl({ report: reportId }, true);
 			}
+		} finally {
+			pendingNext = null;
+			deciding = false;
 		}
 	}
 
 	async function undo() {
-		if (!protocol || !undoTarget || undoMutation.isPending || decisionMutation.isPending)
+		if (
+			deciding ||
+			!protocol ||
+			!undoTarget ||
+			undoMutation.isPending ||
+			decisionMutation.isPending
+		)
 			return;
+		deciding = true;
 		statusMessage = '';
 		const target = undoTarget;
 		const reportId = target.reportId;
@@ -389,8 +430,8 @@
 				priorLocation
 			})
 		);
-		await updateUrl({ mode: 'focus', report: reportId }, false);
 		try {
+			await updateUrl({ mode: 'focus', report: reportId }, false);
 			const result = await undoMutation.mutateAsync({
 				projectId,
 				reportId,
@@ -419,6 +460,8 @@
 				if (lastAction?.reportId === reportId)
 					await updateUrl({ report: previousReport }, true);
 			}
+		} finally {
+			deciding = false;
 		}
 	}
 
@@ -469,6 +512,7 @@
 		const action = shortcutAction(event.key);
 		if (!action) return;
 		event.preventDefault();
+		if (ignoresAutoRepeat(action, event)) return;
 		if (action === 'include' || action === 'exclude' || action === 'maybe') void decide(action);
 		if (action === 'undo') void undo();
 		if (action === 'previous' || action === 'next') void move(action);
@@ -639,6 +683,21 @@
 						>Undo last decision</Button
 					>{/if}
 			</div>
+		{:else if urlState.report && queueItems.length > 0}
+			<h2 class="editorial-title text-xl">This report is not in this view</h2>
+			<p class="text-sm text-muted-foreground">
+				It may have been screened already, or the filter or search excludes it.
+			</p>
+			<div class="flex flex-wrap gap-2">
+				<Button
+					variant="outline"
+					onclick={() => void selectReport(queueItems[0].report_id, false)}
+					>Go to the first report in view</Button
+				>
+				{#if canUndo}<Button variant="ghost" onclick={() => void undo()}
+						>Undo last decision</Button
+					>{/if}
+			</div>
 		{:else}
 			<h2 class="editorial-title text-xl">Nothing to show</h2>
 			<p class="text-sm text-muted-foreground">
@@ -657,7 +716,7 @@
 {/snippet}
 
 {#snippet readerContent()}
-	{#if queueQuery.isPending}
+	{#if queueQuery.isPending || locatingReport}
 		<div class="flex flex-col gap-4 py-8" aria-label="Loading reports" aria-live="polite">
 			<Skeleton class="h-4 w-32" /><Skeleton class="h-10 w-4/5" /><Skeleton
 				class="h-40 w-full"
@@ -702,7 +761,7 @@
 	{#if current}
 		<DecisionBar
 			disabled={!protocol}
-			pending={decisionMutation.isPending || undoMutation.isPending}
+			pending={deciding || decisionMutation.isPending || undoMutation.isPending}
 			current={current.title_abstract_status}
 			{canUndo}
 			onDecision={decide}

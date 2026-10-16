@@ -28,6 +28,7 @@ pub struct TelemetryHandle {
 fn build_otlp_provider(
     endpoint: &str,
     service_name: &str,
+    build_sha: &str,
 ) -> Result<SdkTracerProvider, TelemetryError> {
     let exporter = SpanExporter::builder()
         .with_tonic()
@@ -39,6 +40,10 @@ fn build_otlp_provider(
         .with_resource(
             Resource::builder()
                 .with_service_name(service_name.to_owned())
+                .with_attributes([opentelemetry::KeyValue::new(
+                    "service.version",
+                    build_sha.to_owned(),
+                )])
                 .build(),
         )
         .build())
@@ -49,7 +54,7 @@ pub fn init(config: TelemetryConfig) -> Result<TelemetryHandle, TelemetryError> 
     let provider = config
         .otlp_endpoint
         .as_deref()
-        .map(|endpoint| build_otlp_provider(endpoint, &config.service_name))
+        .map(|endpoint| build_otlp_provider(endpoint, &config.service_name, &config.build_sha))
         .transpose()?;
     match provider.as_ref() {
         Some(provider) => {
@@ -78,7 +83,7 @@ pub fn init(config: TelemetryConfig) -> Result<TelemetryHandle, TelemetryError> 
                 .map_err(|error| TelemetryError::Subscriber(error.to_string()))?;
         }
     }
-    tracing::info!(service.name = %config.service_name, otlp.enabled = config.otlp_endpoint.is_some(), "telemetry initialized");
+    tracing::info!(service.name = %config.service_name, service.version = %config.build_sha, otlp.enabled = config.otlp_endpoint.is_some(), "telemetry initialized");
     Ok(TelemetryHandle {
         shutdown_deadline: config.shutdown_deadline,
         provider,
@@ -110,6 +115,6 @@ mod tests {
 
     #[test]
     fn invalid_otlp_endpoint_is_rejected_during_construction() {
-        assert!(build_otlp_provider("not a URI", "deepref").is_err());
+        assert!(build_otlp_provider("not a URI", "deepref", "test-sha").is_err());
     }
 }

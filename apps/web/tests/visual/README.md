@@ -11,7 +11,7 @@ that reuses the same visual project definitions:
 - `visual-light-mobile-390x844`
 
 The fixture intercepts every `**/api/**` request, serves stable project/article/
-ingestion/projection/review data, freezes `Date.now()`, supplies deterministic UUIDs,
+acquisition/projection/review data, freezes `Date.now()`, supplies deterministic UUIDs,
 uses UTC/en-US formatting, and disables animation/transition timing. Unmodeled API
 requests, including mutations, fail the fixture instead of receiving a permissive
 success response.
