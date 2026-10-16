@@ -4,7 +4,7 @@
  * DeepRef API
  * OpenAPI spec version: 0.1.0
  */
-import { createMutation, createQuery } from '@tanstack/svelte-query';
+import { createMutation, createQuery, matchQuery, useQueryClient } from '@tanstack/svelte-query';
 import type {
 	CreateMutationOptions,
 	CreateMutationResult,
@@ -12,6 +12,7 @@ import type {
 	CreateQueryResult,
 	DataTag,
 	MutationFunction,
+	MutationFunctionContext,
 	QueryClient,
 	QueryFunction,
 	QueryKey
@@ -249,15 +250,19 @@ export const getCreateAcquisitionMutationKey = () => ['createAcquisition'] as co
 export const getCreateAcquisitionMutationOptions = <
 	TError = ErrorType<ApiErrorBody>,
 	TContext = unknown
->(options?: {
-	mutation?: CreateMutationOptions<
-		Awaited<ReturnType<typeof createAcquisition>>,
-		TError,
-		CreateAcquisitionMutationVariables,
-		TContext
-	>;
-	request?: SecondParameter<typeof customFetch>;
-}): CreateMutationOptions<
+>(
+	queryClient: QueryClient,
+	options?: {
+		mutation?: CreateMutationOptions<
+			Awaited<ReturnType<typeof createAcquisition>>,
+			TError,
+			CreateAcquisitionMutationVariables,
+			TContext
+		>;
+		skipInvalidation?: boolean;
+		request?: SecondParameter<typeof customFetch>;
+	}
+): CreateMutationOptions<
 	Awaited<ReturnType<typeof createAcquisition>>,
 	TError,
 	CreateAcquisitionMutationVariables,
@@ -279,7 +284,21 @@ export const getCreateAcquisitionMutationOptions = <
 		return createAcquisition(projectId, data, requestOptions);
 	};
 
-	return { mutationFn, ...mutationOptions };
+	const onSuccess = (
+		data: Awaited<ReturnType<typeof createAcquisition>>,
+		variables: CreateAcquisitionMutationVariables,
+		onMutateResult: TContext,
+		context: MutationFunctionContext
+	) => {
+		if (!options?.skipInvalidation) {
+			queryClient.invalidateQueries({
+				queryKey: getListAcquisitionsQueryKey(variables.projectId)
+			});
+		}
+		mutationOptions?.onSuccess?.(data, variables, onMutateResult, context);
+	};
+
+	return { ...mutationOptions, mutationFn, onSuccess };
 };
 
 export type CreateAcquisitionMutationResult = NonNullable<
@@ -300,6 +319,7 @@ export const createCreateAcquisition = <TError = ErrorType<ApiErrorBody>, TConte
 			CreateAcquisitionMutationVariables,
 			TContext
 		>;
+		skipInvalidation?: boolean;
 		request?: SecondParameter<typeof customFetch>;
 	},
 	queryClient?: () => QueryClient
@@ -309,8 +329,9 @@ export const createCreateAcquisition = <TError = ErrorType<ApiErrorBody>, TConte
 	CreateAcquisitionMutationVariables,
 	TContext
 > => {
+	const backupQueryClient = useQueryClient(queryClient?.());
 	return createMutation(
-		() => ({ ...getCreateAcquisitionMutationOptions(options?.()) }),
+		() => ({ ...getCreateAcquisitionMutationOptions(backupQueryClient, options?.()) }),
 		queryClient
 	);
 };
@@ -440,6 +461,148 @@ export const prefetchGetAcquisitionQuery = async <
 	return queryClient;
 };
 
+export type cancelAcquisitionResponse202 = {
+	data: void;
+	status: 202;
+};
+
+export type cancelAcquisitionResponse404 = {
+	data: ApiErrorBody;
+	status: 404;
+};
+
+export type cancelAcquisitionResponse409 = {
+	data: ApiErrorBody;
+	status: 409;
+};
+
+export type cancelAcquisitionResponse500 = {
+	data: ApiErrorBody;
+	status: 500;
+};
+
+export type cancelAcquisitionResponseSuccess = cancelAcquisitionResponse202 & {
+	headers: Headers;
+};
+export type cancelAcquisitionResponseError = (
+	cancelAcquisitionResponse404 | cancelAcquisitionResponse409 | cancelAcquisitionResponse500
+) & {
+	headers: Headers;
+};
+
+export const getCancelAcquisitionUrl = (projectId: string, acquisitionId: string) => {
+	return `/api/projects/${projectId}/acquisitions/${acquisitionId}/cancel`;
+};
+
+export const cancelAcquisition = async (
+	projectId: string,
+	acquisitionId: string,
+	options?: Parameters<typeof customFetch>[1]
+): Promise<cancelAcquisitionResponseSuccess> => {
+	return customFetch<cancelAcquisitionResponseSuccess>(
+		getCancelAcquisitionUrl(projectId, acquisitionId),
+		{
+			...options,
+			method: 'POST'
+		}
+	);
+};
+
+export const getCancelAcquisitionMutationKey = () => ['cancelAcquisition'] as const;
+
+export const getCancelAcquisitionMutationOptions = <
+	TError = ErrorType<ApiErrorBody>,
+	TContext = unknown
+>(
+	queryClient: QueryClient,
+	options?: {
+		mutation?: CreateMutationOptions<
+			Awaited<ReturnType<typeof cancelAcquisition>>,
+			TError,
+			CancelAcquisitionMutationVariables,
+			TContext
+		>;
+		skipInvalidation?: boolean;
+		request?: SecondParameter<typeof customFetch>;
+	}
+): CreateMutationOptions<
+	Awaited<ReturnType<typeof cancelAcquisition>>,
+	TError,
+	CancelAcquisitionMutationVariables,
+	TContext
+> => {
+	const mutationKey = getCancelAcquisitionMutationKey();
+	const { mutation: mutationOptions, request: requestOptions } = options
+		? options.mutation && 'mutationKey' in options.mutation && options.mutation.mutationKey
+			? options
+			: { ...options, mutation: { ...options.mutation, mutationKey } }
+		: { mutation: { mutationKey }, request: undefined };
+
+	const mutationFn: MutationFunction<
+		Awaited<ReturnType<typeof cancelAcquisition>>,
+		CancelAcquisitionMutationVariables
+	> = (props) => {
+		const { projectId, acquisitionId } = props ?? {};
+
+		return cancelAcquisition(projectId, acquisitionId, requestOptions);
+	};
+
+	const onSuccess = (
+		data: Awaited<ReturnType<typeof cancelAcquisition>>,
+		variables: CancelAcquisitionMutationVariables,
+		onMutateResult: TContext,
+		context: MutationFunctionContext
+	) => {
+		if (!options?.skipInvalidation) {
+			queryClient.invalidateQueries({
+				predicate: (query) =>
+					[
+						getListAcquisitionsQueryKey(variables.projectId),
+						getGetAcquisitionQueryKey(variables.projectId, variables.acquisitionId),
+						getListAcquisitionItemsQueryKey(
+							variables.projectId,
+							variables.acquisitionId
+						)
+					].some((queryKey) => matchQuery({ queryKey }, query))
+			});
+		}
+		mutationOptions?.onSuccess?.(data, variables, onMutateResult, context);
+	};
+
+	return { ...mutationOptions, mutationFn, onSuccess };
+};
+
+export type CancelAcquisitionMutationResult = NonNullable<
+	Awaited<ReturnType<typeof cancelAcquisition>>
+>;
+
+export type CancelAcquisitionMutationError = ErrorType<ApiErrorBody>;
+export type CancelAcquisitionMutationVariables = { projectId: string; acquisitionId: string };
+
+export const createCancelAcquisition = <TError = ErrorType<ApiErrorBody>, TContext = unknown>(
+	options?: () => {
+		mutation?: CreateMutationOptions<
+			Awaited<ReturnType<typeof cancelAcquisition>>,
+			TError,
+			CancelAcquisitionMutationVariables,
+			TContext
+		>;
+		skipInvalidation?: boolean;
+		request?: SecondParameter<typeof customFetch>;
+	},
+	queryClient?: () => QueryClient
+): CreateMutationResult<
+	Awaited<ReturnType<typeof cancelAcquisition>>,
+	TError,
+	CancelAcquisitionMutationVariables,
+	TContext
+> => {
+	const backupQueryClient = useQueryClient(queryClient?.());
+	return createMutation(
+		() => ({ ...getCancelAcquisitionMutationOptions(backupQueryClient, options?.()) }),
+		queryClient
+	);
+};
 export type listAcquisitionItemsResponse200 = {
 	data: PaginatedResponseAcquisitionItemDto;
 	status: 200;
@@ -681,15 +844,19 @@ export const getRefreshAcquisitionMutationKey = () => ['refreshAcquisition'] as 
 export const getRefreshAcquisitionMutationOptions = <
 	TError = ErrorType<ApiErrorBody>,
 	TContext = unknown
->(options?: {
-	mutation?: CreateMutationOptions<
-		Awaited<ReturnType<typeof refreshAcquisition>>,
-		TError,
-		RefreshAcquisitionMutationVariables,
-		TContext
-	>;
-	request?: SecondParameter<typeof customFetch>;
-}): CreateMutationOptions<
+>(
+	queryClient: QueryClient,
+	options?: {
+		mutation?: CreateMutationOptions<
+			Awaited<ReturnType<typeof refreshAcquisition>>,
+			TError,
+			RefreshAcquisitionMutationVariables,
+			TContext
+		>;
+		skipInvalidation?: boolean;
+		request?: SecondParameter<typeof customFetch>;
+	}
+): CreateMutationOptions<
 	Awaited<ReturnType<typeof refreshAcquisition>>,
 	TError,
 	RefreshAcquisitionMutationVariables,
@@ -711,7 +878,21 @@ export const getRefreshAcquisitionMutationOptions = <
 		return refreshAcquisition(projectId, acquisitionId, requestOptions);
 	};
 
-	return { mutationFn, ...mutationOptions };
+	const onSuccess = (
+		data: Awaited<ReturnType<typeof refreshAcquisition>>,
+		variables: RefreshAcquisitionMutationVariables,
+		onMutateResult: TContext,
+		context: MutationFunctionContext
+	) => {
+		if (!options?.skipInvalidation) {
+			queryClient.invalidateQueries({
+				queryKey: getListAcquisitionsQueryKey(variables.projectId)
+			});
+		}
+		mutationOptions?.onSuccess?.(data, variables, onMutateResult, context);
+	};
+
+	return { ...mutationOptions, mutationFn, onSuccess };
 };
 
 export type RefreshAcquisitionMutationResult = NonNullable<
@@ -729,6 +910,7 @@ export const createRefreshAcquisition = <TError = ErrorType<ApiErrorBody>, TCont
 			RefreshAcquisitionMutationVariables,
 			TContext
 		>;
+		skipInvalidation?: boolean;
 		request?: SecondParameter<typeof customFetch>;
 	},
 	queryClient?: () => QueryClient
@@ -738,8 +920,9 @@ export const createRefreshAcquisition = <TError = ErrorType<ApiErrorBody>, TCont
 	RefreshAcquisitionMutationVariables,
 	TContext
 > => {
+	const backupQueryClient = useQueryClient(queryClient?.());
 	return createMutation(
-		() => ({ ...getRefreshAcquisitionMutationOptions(options?.()) }),
+		() => ({ ...getRefreshAcquisitionMutationOptions(backupQueryClient, options?.()) }),
 		queryClient
 	);
 };
@@ -834,15 +1017,19 @@ export const getImportProjectRecordsMutationKey = () => ['importProjectRecords']
 export const getImportProjectRecordsMutationOptions = <
 	TError = ErrorType<ApiErrorBody>,
 	TContext = unknown
->(options?: {
-	mutation?: CreateMutationOptions<
-		Awaited<ReturnType<typeof importProjectRecords>>,
-		TError,
-		ImportProjectRecordsMutationVariables,
-		TContext
-	>;
-	request?: SecondParameter<typeof customFetch>;
-}): CreateMutationOptions<
+>(
+	queryClient: QueryClient,
+	options?: {
+		mutation?: CreateMutationOptions<
+			Awaited<ReturnType<typeof importProjectRecords>>,
+			TError,
+			ImportProjectRecordsMutationVariables,
+			TContext
+		>;
+		skipInvalidation?: boolean;
+		request?: SecondParameter<typeof customFetch>;
+	}
+): CreateMutationOptions<
 	Awaited<ReturnType<typeof importProjectRecords>>,
 	TError,
 	ImportProjectRecordsMutationVariables,
@@ -864,7 +1051,21 @@ export const getImportProjectRecordsMutationOptions = <
 		return importProjectRecords(projectId, data, requestOptions);
 	};
 
-	return { mutationFn, ...mutationOptions };
+	const onSuccess = (
+		data: Awaited<ReturnType<typeof importProjectRecords>>,
+		variables: ImportProjectRecordsMutationVariables,
+		onMutateResult: TContext,
+		context: MutationFunctionContext
+	) => {
+		if (!options?.skipInvalidation) {
+			queryClient.invalidateQueries({
+				queryKey: getListAcquisitionsQueryKey(variables.projectId)
+			});
+		}
+		mutationOptions?.onSuccess?.(data, variables, onMutateResult, context);
+	};
+
+	return { ...mutationOptions, mutationFn, onSuccess };
 };
 
 export type ImportProjectRecordsMutationResult = NonNullable<
@@ -885,6 +1086,7 @@ export const createImportProjectRecords = <TError = ErrorType<ApiErrorBody>, TCo
 			ImportProjectRecordsMutationVariables,
 			TContext
 		>;
+		skipInvalidation?: boolean;
 		request?: SecondParameter<typeof customFetch>;
 	},
 	queryClient?: () => QueryClient
@@ -894,8 +1096,9 @@ export const createImportProjectRecords = <TError = ErrorType<ApiErrorBody>, TCo
 	ImportProjectRecordsMutationVariables,
 	TContext
 > => {
+	const backupQueryClient = useQueryClient(queryClient?.());
 	return createMutation(
-		() => ({ ...getImportProjectRecordsMutationOptions(options?.()) }),
+		() => ({ ...getImportProjectRecordsMutationOptions(backupQueryClient, options?.()) }),
 		queryClient
 	);
 };

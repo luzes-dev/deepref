@@ -1,5 +1,3 @@
-import type { listIngestionsResponseSuccess } from '#lib/api/generated/ingestions/ingestions.js';
-import { getListIngestionsUrl } from '#lib/api/generated/ingestions/ingestions.js';
 import { getListProjectsUrl } from '#lib/api/generated/projects/projects.js';
 import type { listProjectsResponseSuccess } from '#lib/api/generated/projects/projects.js';
 import { customFetch } from './custom-fetch';
@@ -73,11 +71,4 @@ export function fetchProjectsPage(
 	signal?: AbortSignal
 ): Promise<listProjectsResponseSuccess> {
 	return customFetch(cursorUrl(getListProjectsUrl(), cursor), { method: 'GET', signal });
-}
-
-export function fetchIngestionsPage(
-	cursor: string | undefined,
-	signal?: AbortSignal
-): Promise<listIngestionsResponseSuccess> {
-	return customFetch(cursorUrl(getListIngestionsUrl(), cursor), { method: 'GET', signal });
 }

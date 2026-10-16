@@ -16,11 +16,6 @@ pub async fn migrate(config: &ApiConfig) -> anyhow::Result<()> {
     Ok(())
 }
 
-pub async fn import_legacy(config: &ApiConfig) -> anyhow::Result<deepref_app::LegacyImportCounts> {
-    let pool = database_pool(config).await?;
-    deepref_app::import_legacy(&pool).await
-}
-
 pub async fn serve(config: ApiConfig) -> anyhow::Result<()> {
     serve_with_shutdown(config, shutdown_signal()).await
 }

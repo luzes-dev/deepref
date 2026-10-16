@@ -1,4 +1,5 @@
 import type {
+	AcquisitionDto,
 	AiActivityOverviewDto,
 	AiBudgetDto,
 	AiStatusDto,
@@ -11,7 +12,6 @@ import type {
 	ExtractionFieldDto,
 	FullTextExclusionReasonDto,
 	FullTextQueueDto,
-	IngestionDto,
 	MissingFullTextDto,
 	NodeTypeDto,
 	NotificationUnreadDto,
@@ -19,7 +19,6 @@ import type {
 	PaginatedResponseAiActivityDto,
 	PaginatedResponseAiProposalDto,
 	PaginatedResponseDedupeProposalDto,
-	PaginatedResponseIngestionDto,
 	PaginatedResponseNotificationDto,
 	PaginatedResponseProjectDto,
 	PaginatedResponseReportDto,
@@ -96,11 +95,20 @@ function fixtureReport(index: number): ReportDto {
 const reports: ReportDto[] = Array.from({ length: 12 }, (_, index) => fixtureReport(index));
 const leadReport = fixtureReport(0);
 
-const ingestions: IngestionDto[] = [
+/**
+ * Acquisition runs cover both runs-table render paths: file imports (format
+ * labels) and DOI runs ("DOIs · depth N" with the re-fetch action). Entries
+ * carry distinct `created_at` values in descending order so the table's
+ * created-at sort stays deterministic.
+ */
+const acquisitions: AcquisitionDto[] = [
 	{
 		id: 'visual-ingestion',
 		project_id: VISUAL_PROJECT_ID,
 		status: 'completed',
+		source: 'import:ris',
+		strategy: 'file_import',
+		format: 'ris',
 		seed_count: 2,
 		fetched_count: 24,
 		failed_count: 1,
@@ -111,9 +119,27 @@ const ingestions: IngestionDto[] = [
 		completed_at: '2026-01-14T09:31:45Z'
 	},
 	{
+		id: 'visual-acquisition',
+		project_id: VISUAL_PROJECT_ID,
+		status: 'completed',
+		source: 'crossref',
+		strategy: 'citation_traversal',
+		seed_count: 2,
+		fetched_count: 24,
+		failed_count: 1,
+		queued_count: 0,
+		max_depth: 2,
+		created_at: '2026-01-13T09:30:00Z',
+		started_at: '2026-01-13T09:30:02Z',
+		completed_at: '2026-01-13T09:31:45Z'
+	},
+	{
 		id: 'visual-ingestion-previous',
 		project_id: VISUAL_PROJECT_ID,
 		status: 'failed',
+		source: 'import:pmid',
+		strategy: 'pmid_import',
+		format: 'nbib',
 		seed_count: 1,
 		fetched_count: 7,
 		failed_count: 2,
@@ -122,6 +148,21 @@ const ingestions: IngestionDto[] = [
 		created_at: '2026-01-10T15:00:00Z',
 		started_at: '2026-01-10T15:00:01Z',
 		completed_at: '2026-01-10T15:01:00Z'
+	},
+	{
+		id: 'visual-acquisition-previous',
+		project_id: VISUAL_PROJECT_ID,
+		status: 'failed',
+		source: 'crossref',
+		strategy: 'citation_traversal',
+		seed_count: 1,
+		fetched_count: 7,
+		failed_count: 2,
+		queued_count: 0,
+		max_depth: 1,
+		created_at: '2026-01-09T15:00:00Z',
+		started_at: '2026-01-09T15:00:01Z',
+		completed_at: '2026-01-09T15:01:00Z'
 	}
 ];
 
@@ -460,7 +501,7 @@ function pageOf<T>(items: readonly T[]): { items: T[]; next_cursor: null } {
 
 const projectsPage: PaginatedResponseProjectDto = pageOf([project]);
 const reportsPage: PaginatedResponseReportDto = pageOf(reports);
-const ingestionsPage: PaginatedResponseIngestionDto = pageOf(ingestions);
+const acquisitionsPage: PaginatedResponseAcquisitionDto = pageOf(acquisitions);
 const dedupeProposalsPage: PaginatedResponseDedupeProposalDto = pageOf(dedupeProposals);
 const emptyAcquisitions: PaginatedResponseAcquisitionDto = pageOf([]);
 const emptyAiActivity: PaginatedResponseAiActivityDto = pageOf([]);
@@ -484,7 +525,7 @@ const reportPath = `${projectPath}/reports/${VISUAL_REPORT_ID}`;
 
 /** Every GET the deterministic workspace answers, keyed by path and exact query. */
 export const VISUAL_GET_ENDPOINTS: readonly VisualEndpoint[] = [
-	// Workspace shell: projects, ingestions, settings, notifications and dependency health.
+	// Workspace shell: projects, imports, settings, notifications and dependency health.
 	{
 		path: '/api/health/dependencies',
 		query: `project_id=${VISUAL_PROJECT_ID}`,
@@ -492,7 +533,7 @@ export const VISUAL_GET_ENDPOINTS: readonly VisualEndpoint[] = [
 	},
 	{ path: '/api/projects', query: 'limit=50', body: projectsPage },
 	{ path: projectPath, query: '', body: project },
-	{ path: '/api/ingestions', query: 'limit=50', body: ingestionsPage },
+	{ path: `${projectPath}/acquisitions`, query: 'limit=50', body: acquisitionsPage },
 	{ path: '/api/settings', query: '', body: settings },
 	{ path: '/api/notifications', query: '', body: emptyNotifications },
 	{

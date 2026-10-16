@@ -150,7 +150,7 @@ async function mockShell(page: Page): Promise<void> {
 	await page.route(/\/api\/projects\/project-1(?:\?.*)?$/, async (route) =>
 		route.fulfill({ json: project })
 	);
-	await page.route(/\/api\/ingestions(?:\?.*)?$/, async (route) =>
+	await page.route(/\/api\/projects\/[^/]+\/acquisitions(?:\?.*)?$/, async (route) =>
 		route.fulfill({ json: { items: [], next_cursor: null } })
 	);
 	await page.route(/\/api\/projects\/project-1\/reports(?:\?.*)?$/, async (route) =>

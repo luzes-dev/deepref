@@ -1,9 +1,5 @@
 use chrono::{DateTime, Utc};
 use deepref_domain::ProjectId;
-use deepref_domain::events::{
-    DomainPayload, EntityType, EventEnvelope, MetricsRecomputeRequested,
-    SUBJECT_METRICS_RECOMPUTE_REQUESTED,
-};
 use deepref_domain::graph::{
     GraphAppraisalOverlay, GraphEdge, GraphFieldSelection, GraphMetricsOverlay, GraphNode,
     GraphProvenanceOverlay, GraphScreeningOverlay, GraphStudyOverlay, ProjectGraph,
@@ -130,52 +126,25 @@ pub async fn enqueue_metrics_recompute(
     transaction: &mut Transaction<'_, Postgres>,
     project_id: Uuid,
 ) -> Result<Uuid, sqlx::Error> {
-    let revision: i64 = sqlx::query_scalar("SELECT nextval('graph_domain_revision_seq')")
+    let revision: i64 = sqlx::query_scalar("UPDATE projects SET metric_requested_revision=metric_requested_revision+1 WHERE id=$1 RETURNING metric_requested_revision")
+        .bind(project_id)
         .fetch_one(&mut **transaction)
         .await?;
-    let event = EventEnvelope::v1(
-        SUBJECT_METRICS_RECOMPUTE_REQUESTED,
-        "deepref.api",
-        EntityType::Metric,
-        project_id.to_string(),
-        revision,
-        project_id,
-        None,
-        DomainPayload::MetricsRecomputeRequested(MetricsRecomputeRequested {
-            project_id,
-            ingestion_id: None,
-        }),
-    );
-    sqlx::query(
-        "INSERT INTO domain_events (event_id,schema_version,event_type,entity_type,entity_key,revision,payload,correlation_id,causation_id,created_at) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10) ON CONFLICT (event_id) DO NOTHING",
-    )
-    .bind(event.event_id)
-    .bind(event.schema_version as i16)
-    .bind(&event.event_type)
-    .bind(event.entity_type.as_str())
-    .bind(&event.entity_key)
-    .bind(event.revision)
-    .bind(serde_json::to_value(&event.payload).map_err(|error| sqlx::Error::Encode(Box::new(error)))?)
-    .bind(event.correlation_id)
-    .bind(event.causation_id)
-    .bind(event.occurred_at)
-    .execute(&mut **transaction)
-    .await?;
-    let payload =
-        serde_json::to_value(&event).map_err(|error| sqlx::Error::Encode(Box::new(error)))?;
+    let job_id = Uuid::new_v4();
+    let payload = serde_json::json!({"project_id": project_id, "revision": revision});
     crate::jobs::enqueue_job(
         transaction,
         &crate::jobs::job(
-            event.event_id,
+            job_id,
             ProjectId::new(project_id),
             deepref_domain::JobKind::RecomputeMetrics,
             payload,
-            format!("recompute_metrics:{project_id}:{}", event.event_id),
+            format!("recompute_metrics:{project_id}:{revision}"),
         ),
     )
     .await
     .map_err(|error| sqlx::Error::Protocol(error.to_string()))?;
-    Ok(event.event_id)
+    Ok(job_id)
 }
 
 pub async fn recompute_project_metrics(pool: &PgPool, project_id: Uuid) -> anyhow::Result<()> {
@@ -197,6 +166,14 @@ async fn recompute_project_metrics_once(pool: &PgPool, project_id: Uuid) -> anyh
     sqlx::query("SET TRANSACTION ISOLATION LEVEL REPEATABLE READ")
         .execute(&mut *transaction)
         .await?;
+    // Serialize recomputations and graph-change requests on the project row.
+    // Under repeatable read a changed lock target forces a retry rather than
+    // allowing an older snapshot to overwrite a newer metric projection.
+    let current_revision: i64 =
+        sqlx::query_scalar("SELECT metric_requested_revision FROM projects WHERE id=$1 FOR UPDATE")
+            .bind(project_id)
+            .fetch_one(&mut *transaction)
+            .await?;
     let graph = load_project_graph_from_connection(
         &mut transaction,
         project_id,
@@ -209,13 +186,6 @@ async fn recompute_project_metrics_once(pool: &PgPool, project_id: Uuid) -> anyh
             .fetch_one(&mut *transaction)
             .await?;
     let metrics = deepref_domain::graph::compute_metrics(&graph.nodes, &graph.edges, current_year);
-    let current_revision: i64 = sqlx::query_scalar(
-        "SELECT COALESCE(MAX(revision), 0) FROM domain_events
-         WHERE entity_type='metric' AND entity_key=$1",
-    )
-    .bind(project_id.to_string())
-    .fetch_one(&mut *transaction)
-    .await?;
     for node in &graph.nodes {
         let metric = metrics
             .get(&node.report_id)

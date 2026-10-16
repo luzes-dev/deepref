@@ -11,7 +11,6 @@ mod documents;
 mod exports;
 mod extraction;
 mod health;
-mod ingestions;
 mod notifications;
 mod pagination;
 mod projection;
@@ -92,6 +91,7 @@ fn openapi_router(document_max_bytes: usize) -> OpenApiRouter<AppState> {
         .routes(routes!(acquisitions::refresh_acquisition))
         .routes(routes!(acquisitions::get_acquisition))
         .routes(routes!(acquisitions::list_acquisition_items))
+        .routes(routes!(acquisitions::cancel_acquisition))
         .routes(routes!(acquisitions::import_project_records))
         .routes(routes!(deduplication::run_project_deduplication))
         .routes(routes!(deduplication::list_project_dedupe_proposals))
@@ -133,13 +133,6 @@ fn openapi_router(document_max_bytes: usize) -> OpenApiRouter<AppState> {
         .routes(routes!(ai::list_ai_proposals))
         .routes(routes!(ai::get_ai_proposal))
         .routes(routes!(ai::decide_ai_proposal))
-        .routes(routes!(
-            ingestions::list_ingestions,
-            ingestions::create_ingestion
-        ))
-        .routes(routes!(ingestions::get_ingestion))
-        .routes(routes!(ingestions::list_ingestion_items))
-        .routes(routes!(ingestions::cancel_ingestion))
         .routes(routes!(notifications::list_notifications_route))
         .routes(routes!(notifications::get_unread_notification_count))
         .routes(routes!(notifications::mark_notifications_read_route))
@@ -203,7 +196,7 @@ fn openapi_router(document_max_bytes: usize) -> OpenApiRouter<AppState> {
 }
 
 pub fn openapi_document() -> OpenApi {
-    openapi_router(deepref_documents::DEFAULT_MAX_DOCUMENT_BYTES).into_openapi()
+    openapi_router(deepref_config::DEFAULT_MAX_DOCUMENT_BYTES).into_openapi()
 }
 
 /// The OpenAPI document as JSON, with every response carrying its required `description`.
@@ -280,7 +273,7 @@ pub fn router(state: AppState, config: &ApiConfig) -> Router {
     let document_max_bytes = state
         .document_store
         .as_ref()
-        .map_or(deepref_documents::DEFAULT_MAX_DOCUMENT_BYTES, |store| {
+        .map_or(deepref_config::DEFAULT_MAX_DOCUMENT_BYTES, |store| {
             store.max_bytes()
         });
     let (router, openapi) = openapi_router(document_max_bytes).split_for_parts();
@@ -444,10 +437,7 @@ mod tests {
             "/projects/{project_id}/assistant/chat",
             "/projects/{project_id}/assistant/runs/{run_id}",
             "/projects/{project_id}/assistant/runs/{run_id}/events",
-            "/ingestions",
-            "/ingestions/{ingestion_id}",
-            "/ingestions/{ingestion_id}/items",
-            "/ingestions/{ingestion_id}/cancel",
+            "/projects/{project_id}/acquisitions/{acquisition_id}/cancel",
             "/projects/{project_id}/protocol",
             "/projects/{project_id}/review/protocol",
             "/projects/{project_id}/review/protocol/publish",

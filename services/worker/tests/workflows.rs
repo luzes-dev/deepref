@@ -58,7 +58,7 @@ async fn drain(pool: &PgPool, project: Uuid) {
             project,
             "unexpected job from another project"
         );
-        assert_eq!(job.kind.as_str(), "workflow_step");
+        assert_eq!(job.kind, deepref_domain::JobKind::WorkflowStep);
         match workflows::handle_step(
             pool,
             &job,

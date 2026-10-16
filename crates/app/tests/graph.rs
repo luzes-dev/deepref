@@ -119,8 +119,8 @@ async fn seed_and_assert(
         (report_a, external_report),
     ] {
         sqlx::query(
-            "INSERT INTO citations (project_id,source_report_id,target_report_id,legacy_source_doi,legacy_target_doi) \
-             VALUES ($1,$2,$3,'fixture-source','fixture-target')",
+            "INSERT INTO citations (project_id,source_report_id,target_report_id) \
+             VALUES ($1,$2,$3)",
         )
         .bind(project_id)
         .bind(source)

@@ -20,7 +20,6 @@ mod documents;
 mod extraction;
 mod graph;
 mod jobs;
-mod legacy_import;
 mod notifications;
 mod persistence;
 mod pmid_import;
@@ -52,8 +51,7 @@ pub async fn migrate(pool: &PgPool) -> Result<(), MigrateError> {
 }
 
 pub use acquisition::{
-    AcquisitionError, ImportPersistRequest, ImportPersistResult, ensure_legacy_acquisition_run,
-    persist_import,
+    AcquisitionError, ImportPersistRequest, ImportPersistResult, persist_import,
 };
 pub use activity::{
     ActivityError, ActivityFilters, ActivityOverview, ActivityRecord, BatchUndoResult, NewActivity,
@@ -159,7 +157,6 @@ pub use jobs::{
     PostgresJobQueue, claim_job, complete_job, enqueue_job, enqueue_job_pool, fail_job,
     get_claimed_automation_job_project_id_for_run, job, recover_expired_jobs, renew_job,
 };
-pub use legacy_import::{LegacyImportCounts, import_legacy};
 pub use notifications::{
     MarkNotificationsRead, NotificationDraft, NotificationPage, NotificationRecord,
     NotificationSeverity, NotificationUnreadSummary, list_notifications, mark_notifications_read,
@@ -216,7 +213,7 @@ pub use study::{
     remove_report_from_study, rename_study,
 };
 pub use worker_runtime::{
-    MissingIngestionWork, WorkerLeaseRecovery, find_missing_ingestion_work,
+    MissingAcquisitionWork, WorkerLeaseRecovery, find_missing_acquisition_work,
     record_worker_heartbeat, recover_expired_worker_state, remove_worker_heartbeat,
     reserve_provider_permit,
 };

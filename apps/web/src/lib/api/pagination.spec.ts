@@ -11,7 +11,9 @@ describe('cursorUrl', () => {
 	});
 
 	it('omits the cursor for the initial page', () => {
-		expect(cursorUrl('/api/ingestions', undefined, 50)).toBe('/api/ingestions?limit=50');
+		expect(cursorUrl('/api/projects/project-1/acquisitions', undefined, 50)).toBe(
+			'/api/projects/project-1/acquisitions?limit=50'
+		);
 	});
 });
 

@@ -647,7 +647,7 @@ async fn persist_event_and_state(
         "screening_event_id": write.event_id,
         "event_kind": write.event_kind,
         "stage": write.stage.as_str(),
-        "decision": write.decision.map(|decision| decision.as_str()),
+        "decision": write.decision.map(ScreeningDecision::as_str),
         "revision": next.revision,
         "protocol_version_id": write.protocol_version_id,
         "supersedes_event_id": write.supersedes_event_id,
@@ -1416,7 +1416,7 @@ pub async fn snapshot_screening_plan_items(
     rows.iter()
         .map(|row| {
             let masked: bool = row.get("masked");
-            let stored_status: String = row.get("status");
+            let stored_status: String = row.try_get("status")?;
             let status =
                 deepref_domain::ScreeningStatus::parse(&stored_status).ok_or_else(|| {
                     crate::AssistantError::InvalidInput(format!(
@@ -1478,9 +1478,8 @@ pub async fn list_agent_reports_by_screening(
             .map(|row| {
                 let status = deepref_domain::ScreeningStatus::parse(row.try_get("status")?)
                     .ok_or(crate::AgentReadError::InvalidData)?;
-                let final_status =
-                    deepref_domain::ScreeningStatus::parse(row.try_get("final_status")?)
-                        .ok_or(crate::AgentReadError::InvalidData)?;
+                let final_status = deepref_domain::ScreeningStatus::parse(row.try_get("final_status")?)
+                    .ok_or(crate::AgentReadError::InvalidData)?;
                 Ok(serde_json::json!({
                     "report_id": row.get::<Uuid, _>("id"),
                     "title": row.get::<Option<String>, _>("title").map(|title| crate::decode_html_entities(&title)),

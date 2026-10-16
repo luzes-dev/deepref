@@ -1334,14 +1334,14 @@ async fn lease(
     run: &ReviewRunSnapshot,
     owner: &str,
 ) -> (LeasedReviewRun, JobLease) {
-    let lease = claim_run(pool, run.id.as_uuid(), owner).await;
-    let leased = load_leased_review_run(pool, project_id, run.id, &lease)
+    let claimed = claim_run(pool, run.id.as_uuid(), owner).await;
+    let leased = load_leased_review_run(pool, project_id, run.id, &claimed)
         .await
         .expect("leased run loads");
-    mark_review_run_running(pool, project_id, run.id, &lease)
+    mark_review_run_running(pool, project_id, run.id, &claimed)
         .await
         .expect("leased run starts");
-    (leased, lease)
+    (leased, claimed)
 }
 
 /// Begins the first node of a duplicate review.
@@ -1486,8 +1486,8 @@ async fn a_retry_reuses_the_steps_its_failed_predecessor_accepted() {
     let first = schedule_prepared_review_run(&pool, request())
         .await
         .expect("first run schedules");
-    let (leased, job_lease) = lease(&pool, project_id, &first, owner).await;
-    accept_prepare(&pool, &leased, &job_lease).await;
+    let (leased, run_lease) = lease(&pool, project_id, &first, owner).await;
+    accept_prepare(&pool, &leased, &run_lease).await;
     fail_review_run(
         &pool,
         project_id,
@@ -1502,9 +1502,9 @@ async fn a_retry_reuses_the_steps_its_failed_predecessor_accepted() {
         .await
         .expect("retry schedules");
     assert_ne!(retried.id, first.id);
-    let (leased, job_lease) = lease(&pool, project_id, &retried, owner).await;
+    let (leased, run_lease) = lease(&pool, project_id, &retried, owner).await;
     assert!(matches!(
-        begin_prepare(&pool, &leased, &job_lease).await,
+        begin_prepare(&pool, &leased, &run_lease).await,
         ReviewAttemptStart::Reused { .. }
     ));
 }
@@ -1518,10 +1518,10 @@ async fn a_rejected_suggestion_regenerates_a_fresh_generation_that_reuses_nothin
     let first = schedule_prepared_review_run(&pool, request())
         .await
         .expect("first run schedules");
-    let (leased, job_lease) = lease(&pool, project_id, &first, owner).await;
-    accept_prepare(&pool, &leased, &job_lease).await;
+    let (leased, run_lease) = lease(&pool, project_id, &first, owner).await;
+    accept_prepare(&pool, &leased, &run_lease).await;
     let proposal_id =
-        complete_with_proposal(&pool, project_id, &leased, record, candidate, &job_lease).await;
+        complete_with_proposal(&pool, project_id, &leased, record, candidate, &run_lease).await;
 
     let again = schedule_prepared_review_run(&pool, request())
         .await
@@ -1567,10 +1567,10 @@ async fn a_rejected_suggestion_regenerates_a_fresh_generation_that_reuses_nothin
         "a double regenerate returns the in-flight run"
     );
 
-    let (leased, job_lease) = lease(&pool, project_id, &regenerated, owner).await;
+    let (leased, run_lease) = lease(&pool, project_id, &regenerated, owner).await;
     assert!(
         matches!(
-            begin_prepare(&pool, &leased, &job_lease).await,
+            begin_prepare(&pool, &leased, &run_lease).await,
             ReviewAttemptStart::Started { .. }
         ),
         "a regeneration must not reuse the rejected opinion's steps"

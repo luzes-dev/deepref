@@ -4,7 +4,7 @@ use uuid::Uuid;
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct WorkFetchRequested {
     pub project_id: Uuid,
-    pub ingestion_id: Uuid,
+    pub acquisition_id: Uuid,
     pub doi: String,
     pub depth: i32,
     pub max_depth: i32,

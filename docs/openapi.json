@@ -402,243 +402,6 @@
         }
       }
     },
-    "/ingestions": {
-      "get": {
-        "tags": [
-          "ingestions"
-        ],
-        "operationId": "listIngestions",
-        "responses": {
-          "200": {
-            "description": "Ingestions ordered newest first",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/PaginatedResponse_IngestionDto"
-                }
-              }
-            }
-          },
-          "500": {
-            "description": "Internal server error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ApiErrorBody"
-                }
-              }
-            }
-          }
-        }
-      },
-      "post": {
-        "tags": [
-          "ingestions"
-        ],
-        "operationId": "createIngestion",
-        "requestBody": {
-          "content": {
-            "application/json": {
-              "schema": {
-                "$ref": "#/components/schemas/CreateIngestion"
-              }
-            }
-          },
-          "required": true
-        },
-        "responses": {
-          "201": {
-            "description": "Ingestion created",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/IngestionDto"
-                }
-              }
-            }
-          },
-          "400": {
-            "description": "Invalid ingestion",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ApiErrorBody"
-                }
-              }
-            }
-          },
-          "404": {
-            "description": "Project not found",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ApiErrorBody"
-                }
-              }
-            }
-          },
-          "500": {
-            "description": "Internal server error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ApiErrorBody"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/ingestions/{ingestion_id}": {
-      "get": {
-        "tags": [
-          "ingestions"
-        ],
-        "operationId": "getIngestion",
-        "parameters": [
-          {
-            "name": "ingestion_id",
-            "in": "path",
-            "description": "Ingestion identifier",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "format": "uuid"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Ingestion",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/IngestionDto"
-                }
-              }
-            }
-          },
-          "404": {
-            "description": "Ingestion not found",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ApiErrorBody"
-                }
-              }
-            }
-          },
-          "500": {
-            "description": "Internal server error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ApiErrorBody"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/ingestions/{ingestion_id}/cancel": {
-      "post": {
-        "tags": [
-          "ingestions"
-        ],
-        "operationId": "cancelIngestion",
-        "parameters": [
-          {
-            "name": "ingestion_id",
-            "in": "path",
-            "description": "Ingestion identifier",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "format": "uuid"
-            }
-          }
-        ],
-        "responses": {
-          "202": {
-            "description": "Cancellation accepted"
-          },
-          "404": {
-            "description": "Ingestion not found",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ApiErrorBody"
-                }
-              }
-            }
-          },
-          "409": {
-            "description": "Ingestion is no longer cancellable",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ApiErrorBody"
-                }
-              }
-            }
-          },
-          "500": {
-            "description": "Internal server error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ApiErrorBody"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
-    "/ingestions/{ingestion_id}/items": {
-      "get": {
-        "tags": [
-          "ingestions"
-        ],
-        "operationId": "listIngestionItems",
-        "parameters": [
-          {
-            "name": "ingestion_id",
-            "in": "path",
-            "description": "Ingestion identifier",
-            "required": true,
-            "schema": {
-              "type": "string",
-              "format": "uuid"
-            }
-          }
-        ],
-        "responses": {
-          "200": {
-            "description": "Ingestion items",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/PaginatedResponse_IngestionItemDto"
-                }
-              }
-            }
-          },
-          "500": {
-            "description": "Internal server error",
-            "content": {
-              "application/json": {
-                "schema": {
-                  "$ref": "#/components/schemas/ApiErrorBody"
-                }
-              }
-            }
-          }
-        }
-      }
-    },
     "/notifications": {
       "get": {
         "tags": [
@@ -1301,6 +1064,69 @@
         }
       }
     },
+    "/projects/{project_id}/acquisitions/{acquisition_id}/cancel": {
+      "post": {
+        "tags": [
+          "acquisitions"
+        ],
+        "operationId": "cancelAcquisition",
+        "parameters": [
+          {
+            "name": "project_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          },
+          {
+            "name": "acquisition_id",
+            "in": "path",
+            "required": true,
+            "schema": {
+              "type": "string",
+              "format": "uuid"
+            }
+          }
+        ],
+        "responses": {
+          "202": {
+            "description": "Cancellation accepted"
+          },
+          "404": {
+            "description": "Acquisition not found",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "409": {
+            "description": "Acquisition is no longer cancellable",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          },
+          "500": {
+            "description": "Internal server error",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
+          }
+        }
+      }
+    },
     "/projects/{project_id}/acquisitions/{acquisition_id}/items": {
       "get": {
         "tags": [
@@ -1350,7 +1176,7 @@
         ],
         "responses": {
           "200": {
-            "description": "Items of a PubMed ID run, in the order they were given",
+            "description": "DOI traversal or PubMed import items",
             "content": {
               "application/json": {
                 "schema": {
@@ -10989,6 +10815,7 @@
           "source",
           "strategy",
           "status",
+          "max_depth",
           "seed_count",
           "queued_count",
           "fetched_count",
@@ -11024,6 +10851,10 @@
           "id": {
             "type": "string",
             "format": "uuid"
+          },
+          "max_depth": {
+            "type": "integer",
+            "format": "int32"
           },
           "project_id": {
             "type": "string",
@@ -11064,16 +10895,32 @@
       },
       "AcquisitionItemDto": {
         "type": "object",
-        "description": "One PubMed ID of a PubMed ID import run.",
+        "description": "A DOI traversal item or PubMed import item.",
         "required": [
           "identifier",
           "position",
-          "status"
+          "status",
+          "kind",
+          "attempts"
         ],
         "properties": {
+          "attempts": {
+            "type": "integer",
+            "format": "int32"
+          },
+          "depth": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "format": "int32"
+          },
           "identifier": {
             "type": "string",
-            "description": "The PubMed ID, as it was imported."
+            "description": "DOI or PubMed identifier."
+          },
+          "kind": {
+            "type": "string"
           },
           "last_error": {
             "type": [
@@ -11082,12 +10929,25 @@
             ],
             "description": "Why the ID could not be fetched, when it failed."
           },
+          "parent_doi": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
           "position": {
             "type": "integer",
             "format": "int32",
-            "description": "The place the ID had in the import. Items are paged in this order."
+            "description": "Import order for PubMed; DOI items use queued_at and identifier for pagination."
           },
           "processed_at": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "date-time"
+          },
+          "queued_at": {
             "type": [
               "string",
               "null"
@@ -11102,16 +10962,23 @@
             "format": "uuid",
             "description": "The record this import saved for the ID, when one was saved."
           },
+          "report_id": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "format": "uuid"
+          },
           "status": {
             "type": "string",
-            "description": "One of queued, imported, already_in_project, not_found, or failed."
+            "description": "Provider-specific item processing status."
           },
           "title": {
             "type": [
               "string",
               "null"
             ],
-            "description": "The article's title, once PubMed has answered for this ID."
+            "description": "Report title, when available."
           }
         }
       },
@@ -15249,44 +15116,6 @@
           }
         }
       },
-      "CreateIngestion": {
-        "type": "object",
-        "required": [
-          "project_id",
-          "seed_dois"
-        ],
-        "properties": {
-          "citation_provider": {
-            "type": [
-              "string",
-              "null"
-            ]
-          },
-          "max_depth": {
-            "type": [
-              "integer",
-              "null"
-            ],
-            "format": "int32"
-          },
-          "metadata_provider": {
-            "type": [
-              "string",
-              "null"
-            ]
-          },
-          "project_id": {
-            "type": "string",
-            "format": "uuid"
-          },
-          "seed_dois": {
-            "type": "array",
-            "items": {
-              "type": "string"
-            }
-          }
-        }
-      },
       "CreateProject": {
         "type": "object",
         "required": [
@@ -16991,120 +16820,6 @@
           }
         }
       },
-      "IngestionDto": {
-        "type": "object",
-        "required": [
-          "id",
-          "project_id",
-          "status",
-          "max_depth",
-          "seed_count",
-          "queued_count",
-          "fetched_count",
-          "failed_count",
-          "created_at"
-        ],
-        "properties": {
-          "completed_at": {
-            "type": [
-              "string",
-              "null"
-            ],
-            "format": "date-time"
-          },
-          "created_at": {
-            "type": "string",
-            "format": "date-time"
-          },
-          "failed_count": {
-            "type": "integer",
-            "format": "int32"
-          },
-          "fetched_count": {
-            "type": "integer",
-            "format": "int32"
-          },
-          "id": {
-            "type": "string",
-            "format": "uuid"
-          },
-          "max_depth": {
-            "type": "integer",
-            "format": "int32"
-          },
-          "project_id": {
-            "type": "string",
-            "format": "uuid"
-          },
-          "queued_count": {
-            "type": "integer",
-            "format": "int32"
-          },
-          "seed_count": {
-            "type": "integer",
-            "format": "int32"
-          },
-          "started_at": {
-            "type": [
-              "string",
-              "null"
-            ],
-            "format": "date-time"
-          },
-          "status": {
-            "type": "string"
-          }
-        }
-      },
-      "IngestionItemDto": {
-        "type": "object",
-        "required": [
-          "doi",
-          "depth",
-          "status",
-          "attempts",
-          "queued_at"
-        ],
-        "properties": {
-          "attempts": {
-            "type": "integer",
-            "format": "int32"
-          },
-          "depth": {
-            "type": "integer",
-            "format": "int32"
-          },
-          "doi": {
-            "type": "string"
-          },
-          "fetched_at": {
-            "type": [
-              "string",
-              "null"
-            ],
-            "format": "date-time"
-          },
-          "last_error": {
-            "type": [
-              "string",
-              "null"
-            ]
-          },
-          "parent_doi": {
-            "type": [
-              "string",
-              "null"
-            ]
-          },
-          "queued_at": {
-            "type": "string",
-            "format": "date-time"
-          },
-          "status": {
-            "type": "string"
-          }
-        }
-      },
       "IssueDto": {
         "type": "object",
         "required": [
@@ -17516,6 +17231,7 @@
                 "source",
                 "strategy",
                 "status",
+                "max_depth",
                 "seed_count",
                 "queued_count",
                 "fetched_count",
@@ -17551,6 +17267,10 @@
                 "id": {
                   "type": "string",
                   "format": "uuid"
+                },
+                "max_depth": {
+                  "type": "integer",
+                  "format": "int32"
                 },
                 "project_id": {
                   "type": "string",
@@ -17608,16 +17328,32 @@
             "type": "array",
             "items": {
               "type": "object",
-              "description": "One PubMed ID of a PubMed ID import run.",
+              "description": "A DOI traversal item or PubMed import item.",
               "required": [
                 "identifier",
                 "position",
-                "status"
+                "status",
+                "kind",
+                "attempts"
               ],
               "properties": {
+                "attempts": {
+                  "type": "integer",
+                  "format": "int32"
+                },
+                "depth": {
+                  "type": [
+                    "integer",
+                    "null"
+                  ],
+                  "format": "int32"
+                },
                 "identifier": {
                   "type": "string",
-                  "description": "The PubMed ID, as it was imported."
+                  "description": "DOI or PubMed identifier."
+                },
+                "kind": {
+                  "type": "string"
                 },
                 "last_error": {
                   "type": [
@@ -17626,12 +17362,25 @@
                   ],
                   "description": "Why the ID could not be fetched, when it failed."
                 },
+                "parent_doi": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                },
                 "position": {
                   "type": "integer",
                   "format": "int32",
-                  "description": "The place the ID had in the import. Items are paged in this order."
+                  "description": "Import order for PubMed; DOI items use queued_at and identifier for pagination."
                 },
                 "processed_at": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "format": "date-time"
+                },
+                "queued_at": {
                   "type": [
                     "string",
                     "null"
@@ -17646,16 +17395,23 @@
                   "format": "uuid",
                   "description": "The record this import saved for the ID, when one was saved."
                 },
+                "report_id": {
+                  "type": [
+                    "string",
+                    "null"
+                  ],
+                  "format": "uuid"
+                },
                 "status": {
                   "type": "string",
-                  "description": "One of queued, imported, already_in_project, not_found, or failed."
+                  "description": "Provider-specific item processing status."
                 },
                 "title": {
                   "type": [
                     "string",
                     "null"
                   ],
-                  "description": "The article's title, once PubMed has answered for this ID."
+                  "description": "Report title, when available."
                 }
               }
             }
@@ -18214,154 +17970,6 @@
                   }
                 },
                 "text": {
-                  "type": "string"
-                }
-              }
-            }
-          },
-          "next_cursor": {
-            "type": [
-              "string",
-              "null"
-            ]
-          }
-        }
-      },
-      "PaginatedResponse_IngestionDto": {
-        "type": "object",
-        "required": [
-          "items"
-        ],
-        "properties": {
-          "items": {
-            "type": "array",
-            "items": {
-              "type": "object",
-              "required": [
-                "id",
-                "project_id",
-                "status",
-                "max_depth",
-                "seed_count",
-                "queued_count",
-                "fetched_count",
-                "failed_count",
-                "created_at"
-              ],
-              "properties": {
-                "completed_at": {
-                  "type": [
-                    "string",
-                    "null"
-                  ],
-                  "format": "date-time"
-                },
-                "created_at": {
-                  "type": "string",
-                  "format": "date-time"
-                },
-                "failed_count": {
-                  "type": "integer",
-                  "format": "int32"
-                },
-                "fetched_count": {
-                  "type": "integer",
-                  "format": "int32"
-                },
-                "id": {
-                  "type": "string",
-                  "format": "uuid"
-                },
-                "max_depth": {
-                  "type": "integer",
-                  "format": "int32"
-                },
-                "project_id": {
-                  "type": "string",
-                  "format": "uuid"
-                },
-                "queued_count": {
-                  "type": "integer",
-                  "format": "int32"
-                },
-                "seed_count": {
-                  "type": "integer",
-                  "format": "int32"
-                },
-                "started_at": {
-                  "type": [
-                    "string",
-                    "null"
-                  ],
-                  "format": "date-time"
-                },
-                "status": {
-                  "type": "string"
-                }
-              }
-            }
-          },
-          "next_cursor": {
-            "type": [
-              "string",
-              "null"
-            ]
-          }
-        }
-      },
-      "PaginatedResponse_IngestionItemDto": {
-        "type": "object",
-        "required": [
-          "items"
-        ],
-        "properties": {
-          "items": {
-            "type": "array",
-            "items": {
-              "type": "object",
-              "required": [
-                "doi",
-                "depth",
-                "status",
-                "attempts",
-                "queued_at"
-              ],
-              "properties": {
-                "attempts": {
-                  "type": "integer",
-                  "format": "int32"
-                },
-                "depth": {
-                  "type": "integer",
-                  "format": "int32"
-                },
-                "doi": {
-                  "type": "string"
-                },
-                "fetched_at": {
-                  "type": [
-                    "string",
-                    "null"
-                  ],
-                  "format": "date-time"
-                },
-                "last_error": {
-                  "type": [
-                    "string",
-                    "null"
-                  ]
-                },
-                "parent_doi": {
-                  "type": [
-                    "string",
-                    "null"
-                  ]
-                },
-                "queued_at": {
-                  "type": "string",
-                  "format": "date-time"
-                },
-                "status": {
                   "type": "string"
                 }
               }

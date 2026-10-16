@@ -9,12 +9,12 @@ absent or multiple.
 
 Migration 0007 renames the DOI-keyed citation table to `legacy_citations` and adds a
 UUID-keyed `citations` table. Migration 0008 makes the UUID graph the runtime read
-model and recomputes project metrics in PostgreSQL. The explicit `import-legacy`
-command copies old projects, works, memberships, source records, ingestion
-provenance, and citation edges transactionally and idempotently.
+model and recomputes project metrics in PostgreSQL. The canonical cutover migrations
+backfill DOI acquisition items and graph provenance before removing the legacy
+runtime tables. The `import-legacy` command and `/ingestions` API are retired.
 
 ## Consequences
 
 The UUID evidence model can preserve multiple source observations without making a
-DOI the entity identity. DOI-era runtime behavior remains available during staged
-rollout, and the importer can be rerun after a failed or interrupted operator run.
+DOI the entity identity. DOI imports now use project-scoped acquisition creation,
+items, refresh, and cancellation; stored run depth remains visible as provenance.
