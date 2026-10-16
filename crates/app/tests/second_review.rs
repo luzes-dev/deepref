@@ -18,7 +18,6 @@ use deepref_application::{
 use deepref_domain::{
     Actor, ActorKind, CriterionDimension, CriterionKind, CriterionStage, FrameworkKind, ProjectId,
 };
-
 use deepref_review::{
     CalibrationBundleId, ContentDigest, ProtocolDigest, ReviewBlockCode, ReviewDefinitionKey,
     ReviewRunId, ReviewSemanticContract,
@@ -29,6 +28,30 @@ use uuid::Uuid;
 
 async fn database() -> Option<PgPool> {
     deepref_app::test_isolation::isolated_pool_from_env("DATABASE_URL", 4).await
+}
+
+async fn claim_advisory_run(pool: &PgPool, run: Uuid) -> deepref_application::jobs::JobLease {
+    sqlx::query(
+        "UPDATE jobs SET available_at=clock_timestamp()-interval '1 day'
+        WHERE id=(SELECT job_id FROM durable_runs WHERE id=$1)",
+    )
+    .bind(run)
+    .execute(pool)
+    .await
+    .expect("prioritize the review under test");
+    let job = deepref_app::claim_job(
+        pool,
+        "second-review-worker",
+        std::time::Duration::from_secs(300),
+    )
+    .await
+    .expect("queue claim")
+    .expect("advisory job");
+    assert_eq!(
+        Uuid::parse_str(job.payload["run_id"].as_str().expect("durable run id")).expect("UUID"),
+        run
+    );
+    job.lease("second-review-worker")
 }
 
 async fn project(pool: &PgPool) -> Uuid {
@@ -334,9 +357,10 @@ async fn stale_calibration_does_not_block_advisory_or_grant_scientific_authority
 /// The newest advisory run for a report.
 async fn latest_advisory_run(pool: &PgPool, project_id: Uuid) -> (Uuid, String) {
     sqlx::query_as(
-        "SELECT automation_run_id,state FROM review_run_manifests
-         WHERE project_id=$1 AND origin->>'kind'='advisory_triggered'
-         ORDER BY created_at DESC,automation_run_id DESC LIMIT 1",
+        "SELECT m.automation_run_id,r.status AS state FROM review_run_manifests m
+         JOIN durable_runs r ON r.id=m.automation_run_id
+         WHERE m.project_id=$1 AND m.origin->>'kind'='advisory_triggered'
+         ORDER BY m.created_at DESC,m.automation_run_id DESC LIMIT 1",
     )
     .bind(project_id)
     .fetch_one(pool)
@@ -348,7 +372,7 @@ async fn latest_advisory_run(pool: &PgPool, project_id: Uuid) -> (Uuid, String) 
 /// retry backoff had elapsed.
 async fn age_finished_runs(pool: &PgPool, project_id: Uuid) {
     sqlx::query(
-        "UPDATE review_run_manifests SET finished_at=finished_at-interval '1 day'
+        "UPDATE durable_runs SET finished_at=finished_at-interval '1 day'
          WHERE project_id=$1 AND finished_at IS NOT NULL",
     )
     .bind(project_id)
@@ -372,12 +396,14 @@ async fn a_failed_or_blocked_advisory_run_is_retried_after_a_backoff_a_bounded_n
     sweep_second_reviews(&pool).await.expect("first sweep");
     assert_eq!(automatic_runs(&pool, project_id).await, 1);
     let (first, _) = latest_advisory_run(&pool, project_id).await;
+    let first_owner = claim_advisory_run(&pool, first).await;
     fail_review_run(
         &pool,
         project,
         ReviewRunId::new(first).unwrap(),
         "provider_unavailable",
         "the provider timed out",
+        &first_owner,
     )
     .await
     .expect("run fails");
@@ -399,6 +425,7 @@ async fn a_failed_or_blocked_advisory_run_is_retried_after_a_backoff_a_bounded_n
     let (second, state) = latest_advisory_run(&pool, project_id).await;
     assert_ne!(second, first);
     assert_eq!(state, "queued");
+    let second_owner = claim_advisory_run(&pool, second).await;
 
     block_review_run(
         &pool,
@@ -406,6 +433,7 @@ async fn a_failed_or_blocked_advisory_run_is_retried_after_a_backoff_a_bounded_n
         ReviewRunId::new(second).unwrap(),
         ReviewBlockCode::RepairBudgetExhausted,
         "repair budget exhausted",
+        &second_owner,
     )
     .await
     .expect("run blocks");
@@ -416,12 +444,14 @@ async fn a_failed_or_blocked_advisory_run_is_retried_after_a_backoff_a_bounded_n
     assert_eq!(automatic_runs(&pool, project_id).await, 3);
 
     let (third, _) = latest_advisory_run(&pool, project_id).await;
+    let third_owner = claim_advisory_run(&pool, third).await;
     fail_review_run(
         &pool,
         project,
         ReviewRunId::new(third).unwrap(),
         "provider_unavailable",
         "the provider timed out again",
+        &third_owner,
     )
     .await
     .expect("run fails");

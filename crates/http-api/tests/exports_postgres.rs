@@ -272,7 +272,7 @@ async fn postgres_exports_return_every_deterministic_attachment_and_boundary_sta
     sqlx::query(
         "INSERT INTO jobs
          (id,project_id,kind,payload,state,attempts,max_attempts,available_at,dedupe_key,created_at,completed_at)
-         VALUES ($1,$2,'automation_run',$3,'completed',2,4,now(),$4,now() - interval '5 minutes',now() - interval '4 minutes')",
+         VALUES ($1,$2,'durable_run_step',$3,'completed',2,4,now(),$4,now() - interval '5 minutes',now() - interval '4 minutes')",
     )
     .bind(automation_job_id)
     .bind(project_id)
@@ -282,12 +282,16 @@ async fn postgres_exports_return_every_deterministic_attachment_and_boundary_sta
     .await
     .expect("automation job should insert");
     sqlx::query(
-        "INSERT INTO automation_runs
-         (id,project_id,definition_id,job_id,recipe_id,recipe_version,trigger_kind,trigger_reference,
-          idempotency_key,actor_kind,actor_id,status,created_at,started_at,finished_at)
-         VALUES ($1,$2,$3,$4,'project_maintenance',1,'manual','manual-export-reference',
-                 'export-automation-run','user','export-automation-initiator','completed',
-                 now() - interval '4 minutes',now() - interval '4 minutes',now() - interval '3 minutes')",
+        "WITH run AS (
+           INSERT INTO durable_runs
+           (id,project_id,kind,job_id,actor_kind,actor_id,idempotency_key,status,created_at,started_at,finished_at)
+           VALUES ($1,$2,'automation',$4,'user','export-automation-initiator','export-automation-run','completed',
+                   now()-interval '4 minutes',now()-interval '4 minutes',now()-interval '3 minutes')
+           RETURNING id
+         )
+         INSERT INTO automation_run_details
+         (id,project_id,definition_id,recipe_id,recipe_version,trigger_kind,trigger_reference,idempotency_key)
+         SELECT id,$2,$3,'project_maintenance',1,'manual','manual-export-reference','export-automation-run' FROM run",
     )
     .bind(automation_run_id)
     .bind(project_id)
@@ -297,11 +301,14 @@ async fn postgres_exports_return_every_deterministic_attachment_and_boundary_sta
     .await
     .expect("automation run should insert");
     sqlx::query(
-        "INSERT INTO automation_step_runs
-         (id,project_id,automation_run_id,ordinal,step_key,step_kind,status,attempts,started_at,finished_at,output)
-         VALUES ($1,$2,$3,0,'screening-assistance','ai_task','completed',2,
-                 now() - interval '4 minutes',now() - interval '3 minutes',
-                 $4)",
+        "WITH step AS (
+           INSERT INTO durable_steps
+           (id,project_id,run_id,ordinal,step_key,handler_kind,status,attempts,started_at,finished_at,output)
+           VALUES ($1,$2,$3,0,'screening-assistance','automation','completed',2,
+                   now()-interval '4 minutes',now()-interval '3 minutes',$4) RETURNING id
+         )
+         INSERT INTO automation_step_details (id,project_id,run_id,ordinal,step_key,step_kind)
+         SELECT id,$2,$3,0,'screening-assistance','ai_task' FROM step",
     )
     .bind(automation_step_id)
     .bind(project_id)
@@ -401,10 +408,9 @@ async fn postgres_exports_return_every_deterministic_attachment_and_boundary_sta
     sqlx::query(
         "INSERT INTO review_run_manifests
          (project_id,automation_run_id,definition_key,definition_id,definition_version,
-          manifest_hash,semantic_bundle_hash,manifest,subject,origin,prepared_task,state,
-          candidate_hash,proposal_id,started_at,finished_at)
-         VALUES ($1,$2,'screening','screening.v1',1,$3,$4,$5,$6,$7,$8,'completed',$9,$10,
-                 now()-interval '2 minutes',now()-interval '1 minute')",
+          manifest_hash,semantic_bundle_hash,manifest,subject,origin,prepared_task,
+          candidate_hash,proposal_id)
+         VALUES ($1,$2,'screening','screening.v1',1,$3,$4,$5,$6,$7,$8,$9,$10)",
     )
     .bind(project_id)
     .bind(automation_run_id)
@@ -445,11 +451,17 @@ async fn postgres_exports_return_every_deterministic_attachment_and_boundary_sta
     .await
     .expect("review artifact lineage should insert");
     sqlx::query(
-        "INSERT INTO review_step_attempts
-         (id,project_id,automation_run_id,node_id,node_version,attempt_number,input_fingerprint,
-          status,worker_id,artifact_id,model_run_id,started_at,finished_at,accepted_at)
-         VALUES ($1,$2,$3,'finalize',1,1,$4,'completed','export-worker',$5,$6,
-                 now()-interval '2 minutes',now()-interval '1 minute',now()-interval '1 minute')",
+        "WITH attempt AS (
+           INSERT INTO durable_attempts
+           (id,project_id,run_id,step_id,attempt_number,status,worker_id,started_at,finished_at)
+           SELECT $1,$2,$3,s.id,1,'completed','export-worker',
+                  now()-interval '2 minutes',now()-interval '1 minute'
+           FROM durable_steps s WHERE s.run_id=$3 AND s.step_key='screening-assistance'
+           RETURNING id
+         )
+         INSERT INTO review_attempt_details
+         (id,project_id,run_id,node_id,node_version,input_fingerprint,artifact_id,model_run_id,accepted_at)
+         SELECT id,$2,$3,'finalize',1,$4,$5,$6,now()-interval '1 minute' FROM attempt",
     )
     .bind(review_attempt_id)
     .bind(project_id)
@@ -492,7 +504,7 @@ async fn postgres_exports_return_every_deterministic_attachment_and_boundary_sta
     sqlx::query(
         "INSERT INTO jobs
          (id,project_id,kind,payload,state,attempts,max_attempts,available_at,dedupe_key)
-         VALUES ($1,$2,'automation_run','{}'::jsonb,'queued',0,4,now(),$3)",
+         VALUES ($1,$2,'durable_run_step','{}'::jsonb,'queued',0,4,now(),$3)",
     )
     .bind(other_automation_job_id)
     .bind(other_project_id)
@@ -501,11 +513,13 @@ async fn postgres_exports_return_every_deterministic_attachment_and_boundary_sta
     .await
     .expect("other automation job should insert");
     sqlx::query(
-        "INSERT INTO automation_runs
-         (id,project_id,definition_id,job_id,recipe_id,recipe_version,trigger_kind,trigger_reference,
-          idempotency_key,actor_kind,actor_id,status)
-         VALUES ($1,$2,$3,$4,'project_maintenance',1,'manual','other-reference',
-                 'other-export-automation-run','system','other-system','queued')",
+        "WITH run AS (
+           INSERT INTO durable_runs (id,project_id,kind,job_id,actor_kind,actor_id,idempotency_key,status)
+           VALUES ($1,$2,'automation',$4,'system','other-system','other-export-automation-run','queued') RETURNING id
+         )
+         INSERT INTO automation_run_details
+         (id,project_id,definition_id,recipe_id,recipe_version,trigger_kind,trigger_reference,idempotency_key)
+         SELECT id,$2,$3,'project_maintenance',1,'manual','other-reference','other-export-automation-run' FROM run",
     )
     .bind(other_automation_run_id)
     .bind(other_project_id)
@@ -515,9 +529,12 @@ async fn postgres_exports_return_every_deterministic_attachment_and_boundary_sta
     .await
     .expect("other automation run should insert");
     sqlx::query(
-        "INSERT INTO automation_step_runs
-         (id,project_id,automation_run_id,ordinal,step_key,step_kind,status)
-         VALUES ($1,$2,$3,0,'other-step','deterministic_action','pending')",
+        "WITH step AS (
+           INSERT INTO durable_steps (id,project_id,run_id,ordinal,step_key,handler_kind,status)
+           VALUES ($1,$2,$3,0,'other-step','automation','pending') RETURNING id
+         )
+         INSERT INTO automation_step_details (id,project_id,run_id,ordinal,step_key,step_kind)
+         SELECT id,$2,$3,0,'other-step','deterministic_action' FROM step",
     )
     .bind(other_automation_step_id)
     .bind(other_project_id)

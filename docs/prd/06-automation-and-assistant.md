@@ -11,6 +11,10 @@ assistant.
 - Events can dispatch matching automation runs.
 - Jobs use PostgreSQL leases, retries, idempotency keys, and owner fencing.
 - Completed steps are not repeated after a worker crash or retry.
+- Recipe lifecycle lives in canonical durable runs, steps, and attempts; typed
+  automation detail records retain recipe snapshots without a second lifecycle.
+- Each recipe step executes through one `durable_run_step` job. Completion
+  atomically schedules its successor; workers do not loop over an entire run.
 - Unknown steps fail closed.
 - The assistant exposes a fixed catalog of read and proposal tools.
 - Tool execution records actor, project, proposal, and usage context.
@@ -20,6 +24,9 @@ assistant.
 
 - Automation retries do not duplicate scientific effects.
 - A worker cannot complete a job it does not own.
+- Retrying a failed recipe preserves the run UUID, its first job UUID, and the
+  failed step's existing job UUID; completed predecessor steps are not reclaimed.
+- Step claims and finishes require the live job lease's UUID, owner, and attempt.
 - Assistant tools cannot directly write eligibility, appraisal, grouping, or
   extraction truth.
 
@@ -35,6 +42,7 @@ assistant.
 - Run:
 
 ```text
+cargo test -p deepref-app --test automations --locked
 cargo test -p deepref-worker --test automation --locked
 cargo test -p deepref-worker --test crash_boundaries --locked
 cargo test -p deepref-ai --lib --locked

@@ -42,6 +42,18 @@ async fn populated_legacy_database_expands_backfills_and_retires_doi_plane() {
         .await
         .expect("0070 through full DOI retirement migrate populated data");
 
+    assert_database(
+        &pool,
+        "SELECT default_max_depth=4 AND historical_default_max_depth=4 FROM projects",
+        "historical project default survives without silently clamping",
+    )
+    .await;
+    assert_database(
+        &pool,
+        "SELECT default_max_depth=5 AND historical_default_max_depth=5 FROM settings WHERE id=1",
+        "historical operator default survives without blocking cutover",
+    )
+    .await;
     assert_database(&pool, "SELECT NOT EXISTS (SELECT 1 FROM fixture_items f FULL JOIN acquisition_items a ON a.acquisition_id=f.ingestion_id AND a.canonical_doi=f.canonical_doi WHERE (to_jsonb(a)-'report_id'-'acquisition_id') IS DISTINCT FROM (to_jsonb(f)-'ingestion_id'))", "every item preserves depth, parent, attempts, errors, timestamps and job ID").await;
     assert_database(&pool, "SELECT NOT EXISTS (SELECT 1 FROM fixture_runs f JOIN acquisition_runs a ON a.id=f.id WHERE (to_jsonb(a)->'max_depth') IS DISTINCT FROM (to_jsonb(f)->'max_depth') OR a.historical_max_depth<>f.max_depth OR a.seed_count<>f.seed_count OR a.created_at<>f.created_at OR a.started_at IS DISTINCT FROM f.started_at OR a.completed_at IS DISTINCT FROM f.completed_at OR a.metadata_provider<>f.metadata_provider OR a.citation_provider<>f.citation_provider) AND (SELECT count(*) FROM acquisition_runs)=4", "all historical runs and their provenance survive").await;
     assert_database(&pool, "SELECT bool_and((status,seed_count,queued_count,fetched_count,failed_count) = CASE id WHEN '00000000-0000-0000-0000-000000000011'::uuid THEN ROW('completed'::text,7,0,1,0) WHEN '00000000-0000-0000-0000-000000000012'::uuid THEN ROW('failed'::text,11,0,0,1) WHEN '00000000-0000-0000-0000-000000000013'::uuid THEN ROW('cancelled'::text,1,0,0,0) ELSE ROW('running'::text,2,2,0,0) END) FROM acquisition_runs", "counters derive from items without reviving cancelled runs").await;
@@ -135,7 +147,8 @@ async fn populated_legacy_database_expands_backfills_and_retires_doi_plane() {
 }
 
 const SEED: &str = r#"
-INSERT INTO projects(id,name) VALUES ('00000000-0000-0000-0000-000000000001','cutover');
+INSERT INTO projects(id,name,default_max_depth) VALUES ('00000000-0000-0000-0000-000000000001','cutover',4);
+INSERT INTO settings(id,default_max_depth) VALUES (1,5) ON CONFLICT(id) DO UPDATE SET default_max_depth=EXCLUDED.default_max_depth;
 INSERT INTO reports(id,title,raw) VALUES ('00000000-0000-0000-0000-000000000021','Existing reviewed title','{"reviewed":true}');
 INSERT INTO report_identifiers(id,report_id,scheme,value,normalized_value) VALUES
 ('00000000-0000-0000-0000-000000000022','00000000-0000-0000-0000-000000000021','doi','10.5555/one','10.5555/one'),

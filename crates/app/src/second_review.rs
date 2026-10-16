@@ -28,10 +28,10 @@ pub const SECOND_REVIEW_MAX_ATTEMPTS: i32 = 3;
 /// `blocked` more than the backoff ago and the attempt limit (`$5`) allows it.
 /// A provider outage then costs at most one run per record per backoff.
 const RETRYABLE_ATTEMPT: &str = "a.attempts < $5 AND EXISTS (
-    SELECT 1 FROM review_run_manifests m
-    WHERE m.project_id=a.project_id AND m.automation_run_id=a.review_run_id
-      AND m.state IN ('failed','blocked')
-      AND m.finished_at < now() - interval '10 minutes')";
+    SELECT 1 FROM durable_runs r
+    WHERE r.project_id=a.project_id AND r.id=a.review_run_id
+      AND r.status IN ('failed','blocked')
+      AND r.finished_at < now() - interval '10 minutes')";
 
 /// What the second-reviewer setting does for one screening stage right now.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]

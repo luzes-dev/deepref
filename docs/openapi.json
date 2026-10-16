@@ -17082,6 +17082,7 @@
         "type": "object",
         "required": [
           "id",
+          "available",
           "category",
           "label",
           "description",
@@ -17092,6 +17093,9 @@
           "branches"
         ],
         "properties": {
+          "available": {
+            "type": "boolean"
+          },
           "branches": {
             "type": "boolean",
             "description": "Several outputs of which only one carries data on each run."

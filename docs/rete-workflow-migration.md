@@ -25,11 +25,21 @@ A node instance stores its stable kind and definition version. The registry supp
 
 The registry supports additional operation definitions without importing editor classes. Assistant previews use a separate application-owned registry of explanatory nodes; their runtime progress remains outside the workflow document. A cycle check is separate from structural validity so a future execution planner can impose its own acyclic constraint.
 
-## Future Rust authority
+## Rust execution authority
 
-A future backend endpoint should accept the versioned workflow document through the existing Rust → OpenAPI → generated-client boundary. Rust will validate registered operation versions and runtime-visible port type IDs, then apply the executor's capability restrictions. An initial acyclic planner may reject cycles without changing the graph-shaped persisted schema.
+The backend validates registered workflow nodes and ports before execution. Do not serialize Rete objects or execute JavaScript supplied in node configuration: node kind selects an allowlisted operation, and configuration contains data.
 
-Do not serialize Rete objects or execute JavaScript supplied in node configuration. Node kind identifies an allowlisted operation; configuration contains data. Separate run resources should own queue state, attempts, logs, outputs, provenance and human-review pause/resume. Durable workflow persistence, scheduling, retries, workers and agent planning are follow-up work, not browser runtime substitutes.
+Workflow execution shares `durable_runs`, `durable_steps`, and `durable_attempts` with purpose-built automations and compiled reviews. `workflow_run_details` stores the graph and trigger snapshot; `workflow_step_details` stores node identity, iteration, inputs, fired ports and wait state. These detail tables do not own lifecycle status or leases. The generic job queue dispatches `durable_run_step` to the workflow handler and remains the lease authority.
+
+Every node attempt requires a live job lease matching job identity, owner and attempt. Waiting queues another look at the same canonical step; branch and iteration planning consumes its typed details. Cancellation locks the run before its steps, closes unfinished steps and attempts, and prevents late outcomes from scheduling successors or another wait poll. Public run and node UUIDs remain stable.
+
+Slack, arbitrary HTTP, webhook and inbound-email nodes are parked by default.
+The catalog preserves every definition and exposes runtime `available` metadata;
+the editor retains all definitions for saved-graph rendering and offers only
+available definitions when adding a block. Disabled graphs cannot be newly
+saved, published, enabled or started, and queued worker executions fail before
+any network side effect. `DEEPREF_WORKFLOW_NICHE_NODES=true` opts into these
+nodes through the shared runtime configuration. Outgoing email is not parked.
 
 ## Renderer dependencies
 

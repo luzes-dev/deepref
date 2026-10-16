@@ -111,6 +111,12 @@ fn dry_note(what: &str) -> Option<String> {
 }
 
 pub async fn execute(context: &Context<'_>) -> NodeResult {
+    if !deepref_application::workflows::catalog::node_is_available(
+        &context.execution.node_type,
+        context.runtime.workflow.niche_nodes_enabled,
+    ) {
+        return Err(NodeError::permanent("Niche workflow nodes are disabled."));
+    }
     let execution = context.execution;
     let config = &execution.config;
     let input = |port: &str| execution.inputs.get(port);

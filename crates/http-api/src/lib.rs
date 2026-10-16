@@ -29,9 +29,14 @@ pub async fn serve_with_shutdown(
     let pool = database_pool(&config).await?;
 
     let document_store = deepref_documents::DocumentStore::from_config(&config.documents)?;
+    anyhow::ensure!(
+        deepref_app::configure_workflow_runtime(config.runtime.workflow.niche_nodes_enabled),
+        "API and worker workflow feature configuration must agree"
+    );
     let mut state = AppState::new(pool.clone())
         .with_document_store(document_store)
-        .with_smtp(config.runtime.smtp.clone());
+        .with_smtp(config.runtime.smtp.clone())
+        .with_workflow_config(config.runtime.workflow.clone());
     let ai_config = &config.runtime.ai;
     for notice in ai_config.deprecations() {
         tracing::warn!("{notice}");

@@ -17,6 +17,7 @@ mod automations;
 mod autonomy;
 mod deduplication;
 mod documents;
+pub mod durable_runs;
 mod extraction;
 mod graph;
 mod jobs;
@@ -118,8 +119,9 @@ pub use automations::{
     AutomationDispatchResult, AutomationError, AutomationFinalization, begin_next_automation_step,
     complete_automation_step, complete_automation_step_with_output,
     configure_automation_definition, dispatch_automation_domain_event, dispatch_automation_trigger,
-    fail_automation_step, finalize_automation_run, get_automation_run, list_automation_definitions,
-    list_automation_runs, retry_automation_run, start_automation_manually,
+    fail_automation_step, finalize_automation_run, get_automation_run, get_leased_automation_run,
+    list_automation_definitions, list_automation_runs, retry_automation_run,
+    start_automation_manually,
 };
 pub use autonomy::{
     ASSISTANT_SCREENING_OFF_MESSAGE, AutonomySetting, AutonomyStoreError, ProjectAutonomyGate,
@@ -154,8 +156,8 @@ pub use graph::{
     MAX_GRAPH_NODES, enqueue_metrics_recompute, load_project_graph, recompute_project_metrics,
 };
 pub use jobs::{
-    PostgresJobQueue, claim_job, complete_job, enqueue_job, enqueue_job_pool, fail_job,
-    get_claimed_automation_job_project_id_for_run, job, recover_expired_jobs, renew_job,
+    PostgresJobQueue, claim_job, complete_job, enqueue_job, enqueue_job_pool, fail_job, job,
+    recover_expired_jobs, renew_job,
 };
 pub use notifications::{
     MarkNotificationsRead, NotificationDraft, NotificationPage, NotificationRecord,
@@ -195,9 +197,8 @@ pub use review_preparation::{
 pub use review_runs::{
     AcceptedReviewAttempt, LeasedReviewRun, PostgresReviewError, PreparedReviewRun,
     ReviewAttemptCompletion, ReviewAttemptStart, ReviewFinalization, ReviewScheduleIntent,
-    begin_review_attempt, block_review_run, fail_review_attempt, fail_review_run,
-    finalize_review_proposal, get_review_run, get_review_runs, load_leased_review_run,
-    mark_review_run_running, preview_review_identity, schedule_prepared_review_run,
+    begin_review_attempt, block_review_run, fail_review_attempt, fail_review_run, get_review_run,
+    get_review_runs, load_leased_review_run, preview_review_identity, schedule_prepared_review_run,
     schedule_prepared_review_run_as,
 };
 pub use second_review::{

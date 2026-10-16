@@ -599,45 +599,60 @@ where
     G: AiGateway + 'static,
 {
     let owner = format!("assistant-review-test-{run_id}");
-    let row = sqlx::query(
-        "UPDATE jobs AS j
-         SET state='running',lease_owner=$2,leased_until=now()+interval '5 minutes',
-             lease_renewed_at=now(),attempts=attempts+1
-         FROM automation_runs AS r
-         WHERE r.id=$1 AND j.id=r.job_id AND j.state='queued'
-         RETURNING j.id,j.project_id,j.kind,j.payload,j.attempts,j.max_attempts",
-    )
-    .bind(run_id)
-    .bind(&owner)
-    .fetch_one(pool)
-    .await
-    .expect("scheduled assistant review job claims");
-    let job = ClaimedJob {
-        id: row.get("id"),
-        project_id: row.get::<Uuid, _>("project_id").into(),
-        kind: row
-            .get::<String, _>("kind")
-            .parse()
-            .expect("valid queued job kind"),
-        payload: row.get("payload"),
-        attempts: row.get("attempts"),
-        max_attempts: row.get("max_attempts"),
-    };
-    handle_job_with_documents_owned_and_ai(
-        pool.clone(),
-        &job,
-        &job.lease(owner.as_str()),
-        StdDuration::from_secs(300),
-        None,
-        None,
-        Arc::new(gateway),
-        &deepref_worker::config::WorkerConfig::from_source(&|name| {
-            (name == "APP_ENV").then(|| "local".into())
-        })
-        .expect("local worker configuration"),
-    )
-    .await
-    .expect("assistant review worker handles terminal delivery")
+    let gateway = Arc::new(gateway);
+    let config = deepref_worker::config::WorkerConfig::from_source(&|name| match name {
+        "APP_ENV" => Some("local".into()),
+        "WORKER_CLAIM_LEASE_SECS" => Some("300".into()),
+        _ => None,
+    })
+    .expect("local worker configuration");
+    for _ in 0..64 {
+        let row=sqlx::query("UPDATE jobs j SET state='running',lease_owner=$2,
+            leased_until=now()+interval '5 minutes',lease_renewed_at=now(),attempts=attempts+1
+            WHERE j.kind='durable_run_step' AND j.payload->>'run_id'=$1::uuid::text AND j.state='queued'
+            RETURNING j.id,j.project_id,j.kind,j.payload,j.attempts,j.max_attempts")
+            .bind(run_id).bind(&owner).fetch_one(pool).await.expect("next typed review node claims");
+        let job = ClaimedJob {
+            id: row.get("id"),
+            project_id: row.get::<Uuid, _>("project_id").into(),
+            kind: row
+                .get::<String, _>("kind")
+                .parse()
+                .expect("durable job kind"),
+            payload: row.get("payload"),
+            attempts: row.get("attempts"),
+            max_attempts: row.get("max_attempts"),
+        };
+        let lease = job.lease(owner.as_str());
+        let action = handle_job_with_documents_owned_and_ai(
+            pool.clone(),
+            &job,
+            &lease,
+            None,
+            None,
+            gateway.clone(),
+            &config,
+        )
+        .await
+        .expect("review node handles delivery");
+        if action != DeliveryAction::Ack {
+            return action;
+        }
+        assert!(
+            deepref_app::complete_job(pool, &lease)
+                .await
+                .expect("node queue ack")
+        );
+        let state: String = sqlx::query_scalar("SELECT status FROM durable_runs WHERE id=$1")
+            .bind(run_id)
+            .fetch_one(pool)
+            .await
+            .expect("canonical state");
+        if matches!(state.as_str(), "completed" | "blocked" | "failed") {
+            return action;
+        }
+    }
+    panic!("review planner did not reach a terminal state");
 }
 
 #[tokio::test]
@@ -711,7 +726,7 @@ async fn all_proposal_tools_schedule_observable_review_runs_without_domain_write
     }
     assert_eq!(*calls.lock().expect("gateway calls lock"), 0);
     let queued: i64 = sqlx::query_scalar(
-        "SELECT count(*) FROM review_run_manifests WHERE project_id=$1 AND state='queued'",
+        "SELECT count(*) FROM review_run_manifests m JOIN durable_runs r ON r.id=m.automation_run_id WHERE m.project_id=$1 AND r.status='queued'",
     )
     .bind(fixture.project_id)
     .fetch_one(&pool)
@@ -1654,12 +1669,34 @@ async fn assistant_plan_step_follows_its_review_run_to_a_plain_failure() {
     assert_eq!(plan["results"][0]["status"], "queued", "{body}");
 
     // The review run then fails the way the worker records it.
+    sqlx::query(
+        "UPDATE jobs SET available_at=clock_timestamp()-interval '1 day'
+        WHERE id=(SELECT job_id FROM durable_runs WHERE id=$1)",
+    )
+    .bind(run_id)
+    .execute(&pool)
+    .await
+    .expect("prioritize the failed review fixture");
+    let claimed = deepref_app::claim_job(
+        &pool,
+        "assistant-failed-review-worker",
+        std::time::Duration::from_secs(300),
+    )
+    .await
+    .expect("queue claim")
+    .expect("review delivery");
+    assert_eq!(
+        Uuid::parse_str(claimed.payload["run_id"].as_str().expect("durable run")).expect("UUID"),
+        run_id
+    );
+    let lease = claimed.lease("assistant-failed-review-worker");
     deepref_app::fail_review_run(
         &pool,
         deepref_domain::ProjectId::new(project),
         deepref_review::ReviewRunId::new(run_id).expect("review run id"),
         "review_execution_failed",
         "review execution failed: AI output failed semantic validation",
+        &lease,
     )
     .await
     .expect("review run fails");

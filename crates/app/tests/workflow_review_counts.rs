@@ -46,6 +46,7 @@ async fn run_with_steps(
     let started = start_run(
         pool,
         &StartRun {
+            niche_nodes_enabled: false,
             project_id: project,
             workflow_id: workflow,
             version_id: None,
@@ -63,13 +64,16 @@ async fn run_with_steps(
     for (node_id, node_type, output) in steps {
         // A run already has a row for every node of its graph; record the outcome on it.
         sqlx::query(
-            "INSERT INTO workflow_node_runs
-               (project_id, run_id, node_id, iteration, node_type, status, output)
-             VALUES ($1,$2,$3,'',$4,'completed',$5)
-             ON CONFLICT (run_id, node_id, iteration)
-             DO UPDATE SET node_type = EXCLUDED.node_type,
-                           status = 'completed',
-                           output = EXCLUDED.output",
+            "WITH step AS (
+               INSERT INTO durable_steps (id,project_id,run_id,handler_kind,step_key,status,output,attempts)
+               VALUES (COALESCE((SELECT id FROM workflow_step_details WHERE run_id=$2 AND node_id=$3 AND iteration=''),gen_random_uuid()),
+                       $1,$2,'workflow',$3 || ':','completed',$5,1)
+               ON CONFLICT (id) DO UPDATE SET status='completed',output=EXCLUDED.output
+               RETURNING id
+             )
+             INSERT INTO workflow_step_details (id,run_id,node_id,iteration,node_type)
+             SELECT id,$2,$3,'',$4 FROM step
+             ON CONFLICT (run_id,node_id,iteration) DO UPDATE SET node_type=EXCLUDED.node_type",
         )
         .bind(project)
         .bind(started.run_id)
@@ -105,6 +109,7 @@ async fn verdicts_of_every_screening_step_are_counted_per_run() {
         "Review counts",
         graph.clone(),
         &actor,
+        true,
     )
     .await
     .expect("workflow")

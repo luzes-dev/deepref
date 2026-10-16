@@ -1826,11 +1826,40 @@ async fn dedupe_run_that_creates_reports_queues_one_metrics_recompute() {
     assert_eq!(payload["project_id"], serde_json::json!(project_id));
     assert_eq!(payload["revision"], revision);
 
+    deepref_app::recompute_project_metrics(&pool, project_id)
+        .await
+        .unwrap();
+    let (snapshot_revision, work_count): (i64, i64) =
+        sqlx::query_as("SELECT revision,work_count FROM metric_snapshots WHERE project_id=$1")
+            .bind(project_id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(snapshot_revision, revision);
+    assert_eq!(work_count, 2);
+    let (watermark, lag): (i64, i64) = sqlx::query_as(
+        "SELECT watermark,lag FROM projection_state
+         WHERE project_id=$1 AND projection_name='postgres_graph'",
+    )
+    .bind(project_id)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(watermark, revision);
+    assert_eq!(lag, 0);
+
     // Nothing was created or linked by this run, so no further recompute is queued.
     run_deduplication(&pool, run_request(project_id, 100))
         .await
         .unwrap();
     assert_eq!(recompute_job_count(&pool, project_id).await, 1);
+    let unchanged_revision: i64 =
+        sqlx::query_scalar("SELECT metric_requested_revision FROM projects WHERE id=$1")
+            .bind(project_id)
+            .fetch_one(&pool)
+            .await
+            .unwrap();
+    assert_eq!(unchanged_revision, revision);
     delete_project(&pool, project_id).await;
 }
 

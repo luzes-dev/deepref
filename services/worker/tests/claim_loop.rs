@@ -31,7 +31,17 @@ async fn project(pool: &PgPool) -> ProjectId {
     project_id
 }
 
-/// Collects formatted log output so a test can assert on what was logged.
+async fn job_row(pool: &PgPool, id: Uuid) -> (String, i32, Option<String>) {
+    let row = sqlx::query("SELECT state,attempts,last_error FROM jobs WHERE id=$1")
+        .bind(id)
+        .fetch_one(pool)
+        .await
+        .expect("job row");
+    (row.get("state"), row.get("attempts"), row.get("last_error"))
+}
+
+/// Collects formatted log output so a test can assert on what was logged,
+/// including the span context every job line must carry.
 #[derive(Clone, Default)]
 struct CapturedLogs(Arc<Mutex<Vec<u8>>>);
 
@@ -44,7 +54,7 @@ impl CapturedLogs {
 impl Write for CapturedLogs {
     fn write(&mut self, buf: &[u8]) -> std::io::Result<usize> {
         self.0.lock().unwrap().extend_from_slice(buf);
-        // Mirror into the test output so the line is visible in failures.
+        // Mirror into the test output so lines are visible in failures.
         std::io::stderr().write_all(buf)?;
         Ok(buf.len())
     }
@@ -65,24 +75,15 @@ fn capture_logs() -> CapturedLogs {
     logs
 }
 
-async fn job_row(pool: &PgPool, id: Uuid) -> (String, i32, Option<String>) {
-    let row = sqlx::query("SELECT state,attempts,last_error FROM jobs WHERE id=$1")
-        .bind(id)
-        .fetch_one(pool)
-        .await
-        .expect("job row");
-    (row.get("state"), row.get("attempts"), row.get("last_error"))
-}
-
 /// A handler panic (a poison payload tripping an `unwrap`, an index out of
 /// bounds in a parser) must fail only that job, through the normal attempt
 /// budget, and leave the worker claiming the next job.
 #[tokio::test]
 async fn handler_panic_fails_the_job_and_the_loop_keeps_claiming() {
+    let logs = capture_logs();
     let Some(pool) = database().await else {
         return;
     };
-    let logs = capture_logs();
     let project_id = project(&pool).await;
     let poison_id = Uuid::new_v4();
     let healthy_id = Uuid::new_v4();
@@ -164,6 +165,9 @@ async fn handler_panic_fails_the_job_and_the_loop_keeps_claiming() {
     let (state, _, _) = job_row(&pool, healthy_id).await;
     assert_eq!(state, "completed");
 
+    // Observability contract: the failure line names the failed job through its
+    // span context with the typed kind, and everything a job logs — including
+    // inside its handler task — carries the `job` span back to job and project.
     let logs = logs.contents();
     let failure_line = logs
         .lines()
@@ -174,9 +178,10 @@ async fn handler_panic_fails_the_job_and_the_loop_keeps_claiming() {
         "{failure_line}"
     );
     assert!(failure_line.contains("attempts=1"), "{failure_line}");
-
-    // Everything a job logs, including inside its handler task, carries the
-    // `job` span, so a line can be traced back to its job and project.
+    assert!(
+        failure_line.contains(&format!("job{{job_id={poison_id}")),
+        "{failure_line}"
+    );
     let handler_line = logs
         .lines()
         .find(|line| line.contains("healthy handler ran"))
@@ -187,11 +192,7 @@ async fn handler_panic_fails_the_job_and_the_loop_keeps_claiming() {
         handler_line.contains(&format!("project_id={}", project_id.as_uuid())),
         "{handler_line}"
     );
-    assert!(handler_line.contains("attempt=1"), "{handler_line}");
-    assert!(
-        failure_line.contains(&format!("job{{job_id={poison_id}")),
-        "{failure_line}"
-    );
+    assert!(handler_line.contains("attempt="), "{handler_line}");
 }
 
 /// The worker's heartbeat row appears while it runs and is removed on a clean

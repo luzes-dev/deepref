@@ -6,7 +6,6 @@
 )]
 use std::collections::{HashMap, VecDeque};
 use std::sync::{Arc, Mutex};
-use std::time::Duration;
 
 use axum::{
     body::{Body, to_bytes},
@@ -173,46 +172,61 @@ where
     G: AiGateway + 'static,
 {
     let owner = format!("http-review-test-{run_id}");
-    let row = sqlx::query(
-        "UPDATE jobs AS j
-         SET state='running',lease_owner=$2,leased_until=now()+interval '5 minutes',
-             lease_renewed_at=now(),attempts=CASE WHEN $3 THEN max_attempts ELSE attempts+1 END
-         FROM automation_runs AS r
-         WHERE r.id=$1 AND j.id=r.job_id AND j.state='queued'
-         RETURNING j.id,j.project_id,j.kind,j.payload,j.attempts,j.max_attempts",
-    )
-    .bind(run_id)
-    .bind(&owner)
-    .bind(final_delivery)
-    .fetch_one(pool)
-    .await
-    .expect("scheduled review job claims");
-    let job = ClaimedJob {
-        id: row.get("id"),
-        project_id: row.get::<Uuid, _>("project_id").into(),
-        kind: row
-            .get::<String, _>("kind")
-            .parse()
-            .expect("valid queued job kind"),
-        payload: row.get("payload"),
-        attempts: row.get("attempts"),
-        max_attempts: row.get("max_attempts"),
-    };
-    handle_job_with_documents_owned_and_ai(
-        pool.clone(),
-        &job,
-        &job.lease(owner.as_str()),
-        Duration::from_secs(300),
-        None,
-        None,
-        Arc::new(gateway),
-        &deepref_worker::config::WorkerConfig::from_source(&|name| {
-            (name == "APP_ENV").then(|| "local".into())
-        })
-        .expect("local worker configuration"),
-    )
-    .await
-    .expect("review worker handles terminal delivery")
+    let gateway = Arc::new(gateway);
+    let config = deepref_worker::config::WorkerConfig::from_source(&|name| match name {
+        "APP_ENV" => Some("local".into()),
+        "WORKER_CLAIM_LEASE_SECS" => Some("300".into()),
+        _ => None,
+    })
+    .expect("local worker configuration");
+    for _ in 0..64 {
+        let row=sqlx::query("UPDATE jobs j SET state='running',lease_owner=$2,
+            leased_until=now()+interval '5 minutes',lease_renewed_at=now(),
+            attempts=CASE WHEN $3 THEN max_attempts ELSE attempts+1 END
+            WHERE j.kind='durable_run_step' AND j.payload->>'run_id'=$1::uuid::text AND j.state='queued'
+            RETURNING j.id,j.project_id,j.kind,j.payload,j.attempts,j.max_attempts")
+            .bind(run_id).bind(&owner).bind(final_delivery).fetch_one(pool).await.expect("next typed review node claims");
+        let job = ClaimedJob {
+            id: row.get("id"),
+            project_id: row.get::<Uuid, _>("project_id").into(),
+            kind: row
+                .get::<String, _>("kind")
+                .parse()
+                .expect("durable job kind"),
+            payload: row.get("payload"),
+            attempts: row.get("attempts"),
+            max_attempts: row.get("max_attempts"),
+        };
+        let lease = job.lease(owner.as_str());
+        let action = handle_job_with_documents_owned_and_ai(
+            pool.clone(),
+            &job,
+            &lease,
+            None,
+            None,
+            gateway.clone(),
+            &config,
+        )
+        .await
+        .expect("review node handles delivery");
+        if action != DeliveryAction::Ack {
+            return action;
+        }
+        assert!(
+            deepref_app::complete_job(pool, &lease)
+                .await
+                .expect("node queue ack")
+        );
+        let state: String = sqlx::query_scalar("SELECT status FROM durable_runs WHERE id=$1")
+            .bind(run_id)
+            .fetch_one(pool)
+            .await
+            .expect("canonical state");
+        if matches!(state.as_str(), "completed" | "blocked" | "failed") {
+            return action;
+        }
+    }
+    panic!("review planner did not reach a terminal state");
 }
 
 #[tokio::test]

@@ -1,6 +1,8 @@
 #![allow(clippy::expect_used, clippy::unwrap_used, clippy::panic)]
 //! Production compiled worker artifacts must satisfy the deterministic routing
 //! policy before a disposition can change queue visibility.
+//! Blinded cohorts execute through live worker leases without exposing their
+//! automation projection to reviewers.
 use deepref_ai::{
     AiFuture, AiGateway, CompletionRequest, GatewayCompletion, ModelParameters, ModelProfile,
     ResolvedModel,
@@ -172,34 +174,38 @@ async fn compiled_worker_quarantines_only_eligible_exclusions_without_scientific
     assert_eq!(sweep_ai_first(&pool).await.unwrap(), 3);
     let gateway: Arc<dyn AiGateway> = Arc::new(GroundedGateway);
     let worker = "compiled-ai-first-test";
-    for _ in 0..10 {
-        let Some(job) = claim_job(&pool, worker, Duration::from_secs(60))
+    // Drain per-node deliveries to queue exhaustion, with bounded termination.
+    tokio::time::timeout(Duration::from_secs(60), async {
+        loop {
+            let Some(job) = claim_job(&pool, worker, Duration::from_secs(60))
+                .await
+                .unwrap()
+            else {
+                break;
+            };
+            assert_eq!(job.project_id.as_uuid(), project);
+            let action = handle_job_with_documents_owned_and_ai(
+                pool.clone(),
+                &job,
+                &job.lease(worker),
+                None,
+                None,
+                gateway.clone(),
+                &deepref_worker::config::WorkerConfig::from_source(&|name| {
+                    (name == "APP_ENV").then(|| "local".into())
+                })
+                .expect("local worker configuration"),
+            )
             .await
-            .unwrap()
-        else {
-            break;
-        };
-        assert_eq!(job.project_id.as_uuid(), project);
-        let action = handle_job_with_documents_owned_and_ai(
-            pool.clone(),
-            &job,
-            &job.lease(worker),
-            Duration::from_secs(60),
-            None,
-            None,
-            gateway.clone(),
-            &deepref_worker::config::WorkerConfig::from_source(&|name| {
-                (name == "APP_ENV").then(|| "local".into())
-            })
-            .expect("local worker configuration"),
-        )
-        .await
-        .unwrap();
-        assert_eq!(action, DeliveryAction::Ack);
-        assert!(complete_job(&pool, &job.lease(worker)).await.unwrap());
-    }
+            .unwrap();
+            assert_eq!(action, DeliveryAction::Ack);
+            assert!(complete_job(&pool, &job.lease(worker)).await.unwrap());
+        }
+    })
+    .await
+    .expect("the compiled review workflows must drain");
     let states: Vec<String> =
-        sqlx::query_scalar("SELECT state FROM review_run_manifests WHERE project_id=$1")
+        sqlx::query_scalar("SELECT r.status FROM review_run_manifests m JOIN durable_runs r ON r.id=m.automation_run_id WHERE m.project_id=$1")
             .bind(project)
             .fetch_all(&pool)
             .await

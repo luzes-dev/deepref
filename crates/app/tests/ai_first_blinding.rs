@@ -259,6 +259,7 @@ async fn blind_audit_withholds_workflow_run_inspection() {
         "Blinding",
         graph.clone(),
         &actor,
+        true,
     )
     .await
     .expect("workflow")
@@ -266,6 +267,7 @@ async fn blind_audit_withholds_workflow_run_inspection() {
     let started = start_run(
         &f.pool,
         &StartRun {
+            niche_nodes_enabled: false,
             project_id: f.project,
             workflow_id: workflow,
             version_id: None,
@@ -282,11 +284,16 @@ async fn blind_audit_withholds_workflow_run_inspection() {
     .expect("run starts");
     // The step output carries a raw human judgment, which is what the auditor must not read.
     sqlx::query(
-        "INSERT INTO workflow_node_runs
-           (project_id, run_id, node_id, iteration, node_type, status, input, output)
-         VALUES ($1,$2,'find','' ,'data.find_records','completed',$3,$4)
-         ON CONFLICT (run_id, node_id, iteration)
-         DO UPDATE SET input = EXCLUDED.input, output = EXCLUDED.output",
+        "WITH step AS (
+           INSERT INTO durable_steps (id,project_id,run_id,handler_kind,step_key,status,output,attempts)
+           VALUES (COALESCE((SELECT id FROM workflow_step_details WHERE run_id=$2 AND node_id='find' AND iteration=''),gen_random_uuid()),
+                   $1,$2,'workflow','find:','completed',$4,1)
+           ON CONFLICT (id) DO UPDATE SET output=EXCLUDED.output
+           RETURNING id
+         )
+         INSERT INTO workflow_step_details (id,run_id,node_id,iteration,node_type,input)
+         SELECT id,$2,'find','','data.find_records',$3 FROM step
+         ON CONFLICT (run_id,node_id,iteration) DO UPDATE SET input=EXCLUDED.input",
     )
     .bind(f.project)
     .bind(started.run_id)

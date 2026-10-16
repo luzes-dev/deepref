@@ -174,6 +174,7 @@ async fn check_reads_the_stored_slack_address_and_flags_a_wrong_one() {
         "",
         slack("https://example.com/not-slack"),
         &actor,
+        true,
     )
     .await
     .expect("create");
@@ -194,6 +195,7 @@ async fn check_reads_the_stored_slack_address_and_flags_a_wrong_one() {
         "",
         slack("https://hooks.slack.com/services/T000/B000/XXXX"),
         &actor,
+        true,
     )
     .await
     .expect("create");
@@ -302,6 +304,7 @@ async fn http_secrets_stay_bound_to_the_origin_where_they_were_entered() {
         "",
         graph("https://example.com/one", "Bearer private"),
         &actor,
+        true,
     )
     .await
     .unwrap();
@@ -323,6 +326,7 @@ async fn http_secrets_stay_bound_to_the_origin_where_they_were_entered() {
         project,
         workflow.id,
         UpdateWorkflow {
+            niche_nodes_enabled: true,
             graph: Some(graph("https://example.com/two", SECRET_PLACEHOLDER)),
             ..Default::default()
         },
@@ -340,6 +344,7 @@ async fn http_secrets_stay_bound_to_the_origin_where_they_were_entered() {
         project,
         workflow.id,
         UpdateWorkflow {
+            niche_nodes_enabled: true,
             graph: Some(graph("https://other.example/one", SECRET_PLACEHOLDER)),
             ..Default::default()
         },
@@ -357,6 +362,7 @@ async fn http_secrets_stay_bound_to_the_origin_where_they_were_entered() {
         project,
         workflow.id,
         UpdateWorkflow {
+            niche_nodes_enabled: true,
             graph: Some(graph("https://other.example/one", "Bearer replacement")),
             ..Default::default()
         },
@@ -393,7 +399,7 @@ async fn new_webhooks_require_signatures_even_if_a_database_default_was_changed(
         nodes: vec![node("t", "trigger.webhook", json!({}))],
         edges: vec![],
     };
-    let workflow = create_workflow(&pool, project, "Signed", "", graph, &actor)
+    let workflow = create_workflow(&pool, project, "Signed", "", graph, &actor, true)
         .await
         .unwrap();
     assert!(workflow.webhook_signature_required);

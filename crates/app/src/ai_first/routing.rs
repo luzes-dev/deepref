@@ -261,9 +261,10 @@ pub async fn route_ai_first_result(
         }
     }
     let r=sqlx::query("SELECT r.prepared_task,r.origin,r.semantic_bundle_hash,p.payload,p.model_run_id
-       FROM review_run_manifests r JOIN ai_proposals p ON p.id=r.proposal_id AND p.project_id=r.project_id
+       FROM review_run_manifests r JOIN durable_runs lifecycle ON lifecycle.id=r.automation_run_id
+       JOIN ai_proposals p ON p.id=r.proposal_id AND p.project_id=r.project_id
        JOIN ai_screening_cohort_members m ON m.review_run_id=r.automation_run_id AND m.project_id=r.project_id
-       WHERE r.project_id=$1 AND r.automation_run_id=$2 AND r.state='completed' AND m.cohort_id=$3 AND m.report_id=$4")
+       WHERE r.project_id=$1 AND r.automation_run_id=$2 AND lifecycle.status='completed' AND m.cohort_id=$3 AND m.report_id=$4")
         .bind(project).bind(run_id).bind(cohort).bind(report).fetch_optional(&mut *tx).await?;
     let Some(r) = r else {
         return Ok(false);
@@ -298,9 +299,10 @@ pub async fn route_ai_first_result(
         return Ok(false);
     }
     let artifacts = sqlx::query(
-        "SELECT a.node_id,artifact.payload FROM review_step_attempts a
-       JOIN review_artifacts artifact ON artifact.id=a.artifact_id
-       WHERE a.project_id=$1 AND a.automation_run_id=$2 AND a.accepted_at IS NOT NULL",
+        "SELECT d.node_id,artifact.payload FROM durable_attempts a
+       JOIN review_attempt_details d ON d.id=a.id
+       JOIN review_artifacts artifact ON artifact.id=d.artifact_id AND artifact.project_id=a.project_id
+       WHERE a.project_id=$1 AND a.run_id=$2 AND d.accepted_at IS NOT NULL",
     )
     .bind(project)
     .bind(run_id)
@@ -424,8 +426,8 @@ pub async fn sweep_ai_first(pool: &PgPool) -> Result<u64, AiFirstError> {
             continue;
         }
         let finished=sqlx::query("SELECT m.report_id,m.review_run_id FROM ai_screening_cohort_members m
-          JOIN review_run_manifests r ON r.automation_run_id=m.review_run_id
-          WHERE m.cohort_id=$1 AND r.state='completed' AND NOT EXISTS(SELECT 1 FROM ai_screening_dispositions d
+          JOIN durable_runs r ON r.id=m.review_run_id AND r.project_id=m.project_id
+          WHERE m.cohort_id=$1 AND r.status='completed' AND NOT EXISTS(SELECT 1 FROM ai_screening_dispositions d
             WHERE d.cohort_id=m.cohort_id AND d.report_id=m.report_id)")
             .bind(cohort).fetch_all(pool).await?;
         for r in finished {
@@ -445,8 +447,8 @@ pub async fn sweep_ai_first(pool: &PgPool) -> Result<u64, AiFirstError> {
            LEFT JOIN screening_state s ON s.project_id=m.project_id AND s.report_id=m.report_id
            WHERE m.cohort_id=$1 AND m.review_run_id IS NULL AND COALESCE(s.title_abstract_status,'unscreened')='unscreened'
            ORDER BY sha256(convert_to('ai-first-routing-v1:' || m.cohort_id::text || ':' || m.report_id::text,'UTF8')), m.report_id LIMIT 5").bind(cohort).fetch_all(pool).await?;
-        let pending:bool=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM ai_screening_cohort_members m JOIN review_run_manifests r
-           ON r.automation_run_id=m.review_run_id WHERE m.cohort_id=$1 AND r.state IN ('queued','running'))")
+        let pending:bool=sqlx::query_scalar("SELECT EXISTS(SELECT 1 FROM ai_screening_cohort_members m JOIN durable_runs r
+           ON r.id=m.review_run_id AND r.project_id=m.project_id WHERE m.cohort_id=$1 AND r.status IN ('queued','running'))")
             .bind(cohort).fetch_one(pool).await?;
         if budget.spent_micros >= budget.budget_micros || (reports.is_empty() && !pending) {
             let actor = Actor::new(ActorKind::System, "ai-first-cohort-close")

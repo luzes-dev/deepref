@@ -7,6 +7,47 @@ DeepRef maps article citation networks from seed DOIs. The SvelteKit SPA uses a 
 PostgreSQL owns projects, ingestions/items, works, project membership, canonical fetched-reference facts, citations, unresolved references, claims/leases, domain events, durable jobs, graph status, and metric snapshots. The v2 evidence workspace is layered alongside the citation-ingestion model: records, reports, studies, screening events/state, review events, documents, audit rows, and leased jobs are all PostgreSQL tables.
 
 Authoritative state changes and their follow-up jobs are committed in one transaction. The worker claims jobs with `FOR UPDATE SKIP LOCKED`, owns a lease with expiry renewal, retries failures with persisted attempts, marks terminal failures dead, and reclaims expired work. Stable dedupe keys prevent duplicate logical jobs. Ingestion preserves cached/fetched facts, discovered children, citations, events, and completion in the same transaction boundary; reconciliation repairs already-committed rows without silently dropping work.
+Automation, compiled-review and workflow consumers read lifecycle status and
+timestamps from `durable_runs`, `durable_steps` and `durable_attempts`.
+Recipe, workflow graph and review provenance remain in their typed domain
+detail tables. Audit exports preserve their public event names and
+`automation_run_id` fields while projecting canonical lifecycle rows; AI-first
+cohort evaluation and second-review retry backoff use the same canonical run
+status. Review artifact acceptance and step completion share the live job-lease
+fence and transaction, rather than maintaining a separate review attempt state.
+
+There is one `durable_run_step` queue kind, dispatched by a typed handler
+(`automation`, `workflow`, or `review`). Recipe steps enqueue their successor
+transactionally rather than executing an entire recipe inside one queue claim.
+The compiled-review planner replays already-completed typed artifacts and
+schedules the next uncompleted node; only that node's live claim may execute
+or accept an attempt. Reused evidence keeps its original accepted-attempt UUID,
+while the current generation still records its own canonical attempt.
+
+Migrations `0073` and `0074` preflight cross-engine UUID collisions, copy existing
+run/step/attempt identities and review generations/reuse epochs, retarget jobs
+without changing queue IDs, dedupe keys, attempts or live leases, and validate
+the retargeted foreign keys. Queue and recipe-definition references retain the
+deferred protection required for project deletion; accepted-attempt references
+also enforce project identity. The migrations retire old lifecycle tables and
+SQL entry points, not replace them with compatibility views. Terminal step jobs,
+including exhausted expired leases, are reconciled to terminal canonical state
+even when the handler crashes, without superseding an active successor claim.
+Review scheduling can then create a new generation instead of reusing a
+permanently running manifest.
+
+`RuntimeConfig.workflow.niche_nodes_enabled` defaults to false through
+`DEEPREF_WORKFLOW_NICHE_NODES`. Slack, arbitrary HTTP, webhook and inbound-email
+nodes remain in the catalog with `available: false` so saved graphs render
+unchanged, but the palette, API authoring/activation/ingress and queued worker
+execution deny their use. Authoring, publishing and enabling recheck the effective
+locked graph inside their persistence transactions. Outgoing `integration.email`
+remains enabled. API
+and worker composition install the same immutable application dispatch policy;
+in-process configuration disagreement fails startup. When enabled, the existing
+origin-bound credentials, signed hooks and token-before-rate-limit checks remain
+authoritative.
+
 
 The durable queue port carries the pure `deepref-domain::JobKind`, not an
 arbitrary string. Producers and exhaustive worker dispatch share the same closed

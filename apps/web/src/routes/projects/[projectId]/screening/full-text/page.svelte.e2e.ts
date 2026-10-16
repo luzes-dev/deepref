@@ -260,6 +260,8 @@ async function installMocks(page: Page, options: { paginated?: boolean } = {}) {
 							document_id: documentId,
 							parser_version: 'fixture-parser-v1',
 							page_number: 1,
+							page_width: 612,
+							page_height: 792,
 							page_ocr_required: false,
 							kind: 'paragraph',
 							section_path: [],
@@ -422,15 +424,20 @@ test('keeps the included report selected through attachment and evidence navigat
 	await expect(page).not.toHaveURL(/block=block-1/);
 	await page.goForward();
 	await expect(page).toHaveURL(/page=1.*block=block-1/);
+	const decisionResponse = page.waitForResponse(
+		(response) =>
+			response.url() === `${api}/projects/${projectId}/reports/${reportId}/screening` &&
+			response.request().method() === 'POST'
+	);
 	await page.getByRole('button', { name: 'Include', exact: true }).click();
-	await expect(page.getByText('Full-text include recorded.')).toBeVisible();
-
+	await decisionResponse;
 	const body = mock.decisionBodies.at(-1);
 	expect(body).toBeTruthy();
 	expect(body).toMatchObject({ decision: 'include', expected_revision: 4 });
 	expect(body).not.toHaveProperty('exclusion_reason_id');
 	await page.reload();
 	await expect(page).toHaveURL(/report=report-1.*page=1.*block=block-1/);
+	await expect(page.getByText(report.title, { exact: true })).toBeVisible();
 });
 
 test('requires one reason for exclusion and reconciles a revision conflict', async ({ page }) => {

@@ -52,17 +52,17 @@ async fn response_json(response: Response<Body>) -> Value {
 }
 
 async fn cleanup(pool: &PgPool, project_ids: &[Uuid]) {
-    sqlx::query("DELETE FROM automation_step_runs WHERE project_id = ANY($1)")
+    sqlx::query("DELETE FROM durable_steps WHERE project_id = ANY($1)")
         .bind(project_ids)
         .execute(pool)
         .await
         .expect("automation step-run fixtures should clean up");
-    sqlx::query("DELETE FROM automation_runs WHERE project_id = ANY($1)")
+    sqlx::query("DELETE FROM durable_runs WHERE project_id = ANY($1)")
         .bind(project_ids)
         .execute(pool)
         .await
         .expect("automation run fixtures should clean up");
-    sqlx::query("DELETE FROM jobs WHERE project_id = ANY($1) AND kind = 'automation_run'")
+    sqlx::query("DELETE FROM jobs WHERE project_id = ANY($1) AND kind = 'durable_run_step'")
         .bind(project_ids)
         .execute(pool)
         .await
@@ -329,6 +329,23 @@ async fn automation_http_api_rejects_unknown_recipe_and_invalid_limits() {
         .await;
         assert_eq!(status, StatusCode::CONFLICT);
         assert_eq!(paused_start["code"], "AUTOMATION_PAUSED");
+        let run_count: i64 = sqlx::query_scalar(
+            "SELECT count(*) FROM durable_runs WHERE project_id=$1 AND kind='automation'",
+        )
+        .bind(project_id)
+        .fetch_one(&pool)
+        .await?;
+        assert_eq!(
+            run_count, 0,
+            "invalid and paused starts must not create runs"
+        );
+        let job_count: i64 = sqlx::query_scalar(
+            "SELECT count(*) FROM jobs WHERE project_id=$1 AND kind='durable_run_step'",
+        )
+        .bind(project_id)
+        .fetch_one(&pool)
+        .await?;
+        assert_eq!(job_count, 0, "rejected starts must not queue execution");
         Ok::<(), anyhow::Error>(())
     }
     .await;

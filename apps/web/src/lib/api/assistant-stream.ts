@@ -245,7 +245,7 @@ const STREAM_EVENTS: Record<
 
 async function consumeSseStream(
 	body: ReadableStream<Uint8Array>,
-	onEvent: (event: AssistantChatStreamEvent) => void,
+	onEvent: (event: AssistantChatStreamEvent, seq: number | null) => void,
 	onSeq?: (seq: number | null) => void
 ): Promise<void> {
 	const reader = body.getReader();
@@ -278,12 +278,12 @@ async function consumeSseStream(
  */
 function consumeFrame(
 	frame: string,
-	onEvent: (event: AssistantChatStreamEvent) => void,
+	onEvent: (event: AssistantChatStreamEvent, seq: number | null) => void,
 	onSeq?: (seq: number | null) => void
 ): void {
 	const parsed = parseSseFrameInner(frame);
 	if (parsed.event) {
-		onEvent(parsed.event);
+		onEvent(parsed.event, parsed.seq);
 	} else if (parsed.dropReason) {
 		devWarn(`dropping assistant stream frame (${parsed.dropReason})`, frame);
 	}
@@ -351,18 +351,17 @@ function runFailureEvent(run: AssistantRunDto): AssistantChatStreamEvent {
 }
 
 export interface AssistantRunEventsProgress {
-	/** Frames delivered to onEvent by this stream. */
+	/** Sequenced durable events delivered to onEvent; observation failures are excluded. */
 	frames: number;
 	/**
 	 * The after_seq value that resumes right after the last row seen: the
 	 * highest server seq observed on this stream. Rows the server advances
 	 * past without emitting a frame (unmapped kinds) and frames dropped
-	 * client-side are already covered, so resuming here neither skips nor
-	 * replays. Only when the server sent no seq at all does this fall back
-	 * to the legacy frame count (afterSeq + frames).
+	 * client-side are already covered. Unsequenced observation failures
+	 * never advance the persisted cursor.
 	 */
 	nextAfterSeq: number;
-	/** Whether a done or error frame arrived on this stream. */
+	/** Whether a sequenced done or error event arrived on this stream. */
 	terminal: boolean;
 }
 
@@ -398,16 +397,18 @@ export async function streamAssistantRunEvents(
 	let maxSeq: number | null = null;
 	await consumeSseStream(
 		response.body,
-		(event) => {
-			frames += 1;
-			if (event.event === 'done' || event.event === 'error') terminal = true;
+		(event, seq) => {
+			if (seq !== null) {
+				frames += 1;
+				if (event.event === 'done' || event.event === 'error') terminal = true;
+			}
 			onEvent(event);
 		},
 		(seq) => {
 			if (seq !== null) maxSeq = maxSeq === null ? seq : Math.max(maxSeq, seq);
 		}
 	);
-	const nextAfterSeq = maxSeq === null ? afterSeq + frames : Math.max(afterSeq, maxSeq);
+	const nextAfterSeq = maxSeq === null ? afterSeq : Math.max(afterSeq, maxSeq);
 	return { frames, nextAfterSeq, terminal };
 }
 
