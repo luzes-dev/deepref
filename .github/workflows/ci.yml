@@ -25,7 +25,7 @@ jobs:
     outputs:
       rust: ${{ steps.filter.outputs.rust }}
       web: ${{ steps.filter.outputs.web }}
-      containers: ${{ steps.filter.outputs.containers }}
+      containers-pr: ${{ steps.filter.outputs.containers-pr }}
     steps:
       - name: Checkout trusted source
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
@@ -55,17 +55,16 @@ jobs:
               - 'pnpm-lock.yaml'
               - 'pnpm-workspace.yaml'
               - '.github/workflows/ci.yml'
-            containers:
+            containers-pr:
               - 'docker/**'
               - 'docker-bake.hcl'
               - 'apps/web/Dockerfile'
               - 'apps/web/Caddyfile'
               - 'Cargo.toml'
               - 'Cargo.lock'
-              - 'crates/**'
-              - 'services/**'
-              - 'apps/web/**'
-              - 'packages/**'
+              - 'rust-toolchain.toml'
+              - '.cargo/**'
+              - '.sqlx/**'
               - '.github/actions/reproducible-container-build/**'
               - '.github/workflows/ci.yml'
 
@@ -89,7 +88,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        command: [fmt, clippy, test]
+        command: [fmt, clippy, test, doctest]
     steps:
       - name: Skip check (no Rust changes)
         if: github.event_name != 'push' && needs.changes.outputs.rust != 'true'
@@ -107,6 +106,7 @@ jobs:
           case "$COMMAND" in
             fmt) rustup toolchain install 1.95.0 --profile minimal --component rustfmt ;;
             clippy) rustup toolchain install 1.95.0 --profile minimal --component clippy ;;
+            doctest) rustup toolchain install 1.95.0 --profile minimal ;;
             test) rustup toolchain install 1.95.0 --profile minimal ;;
           esac
           rustup override set 1.95.0
@@ -135,6 +135,22 @@ jobs:
             ~/.cargo/git
           key: cargo-${{ runner.os }}-1.95.0-${{ hashFiles('Cargo.lock') }}
           restore-keys: cargo-${{ runner.os }}-1.95.0-
+      # sccache runs against local disk storage shipped as ONE cache bundle per
+      # run: the ghac backend stores one GitHub cache entry per compiled object,
+      # blows past GitHub's save rate limit, and every concurrent writer loses
+      # (observed 577/577 cache_write_errors with 0 stored objects). Only the
+      # test lane persists the bundle (save step below) because its
+      # lib/bins/examples coverage warms every other rustc lane; clippy-driver
+      # and instrumented objects are lane-local and stay cold.
+      - name: Restore sccache bundle
+        if: (github.event_name == 'push' || needs.changes.outputs.rust == 'true') && matrix.command != 'fmt'
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/sccache
+          key: sccache-bundle-${{ runner.os }}-rust-${{ hashFiles('Cargo.lock') }}-${{ github.run_id }}
+          restore-keys: |
+            sccache-bundle-${{ runner.os }}-rust-${{ hashFiles('Cargo.lock') }}-
+            sccache-bundle-${{ runner.os }}-rust-
       - name: Set up sccache for compile-heavy checks
         if: (github.event_name == 'push' || needs.changes.outputs.rust == 'true') && matrix.command != 'fmt'
         uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba # v0.0.11
@@ -142,18 +158,7 @@ jobs:
           version: v0.17.0
       - name: Enable sccache compiler wrapper
         if: (github.event_name == 'push' || needs.changes.outputs.rust == 'true') && matrix.command != 'fmt'
-        env:
-          COMMAND: ${{ matrix.command }}
-        run: |
-          {
-            echo "SCCACHE_GHA_ENABLED=true"
-            echo "RUSTC_WRAPPER=sccache"
-            if [[ "$COMMAND" == "test" ]]; then
-              echo "SCCACHE_GHA_RW_MODE=READ_WRITE"
-            else
-              echo "SCCACHE_GHA_RW_MODE=READ_ONLY"
-            fi
-          } >> "$GITHUB_ENV"
+        run: echo "RUSTC_WRAPPER=sccache" >> "$GITHUB_ENV"
       - name: Validate Cargo workspace architecture
         if: (github.event_name == 'push' || needs.changes.outputs.rust == 'true') && matrix.command == 'fmt'
         run: |
@@ -168,14 +173,23 @@ jobs:
           case "$COMMAND" in
             fmt) cargo fmt --all -- --check ;;
             clippy) cargo clippy --workspace --lib --bins --tests --examples --locked -- -D warnings ;;
-            test)
-              cargo nextest run --workspace --lib --bins --examples --locked
-              cargo test --doc --workspace --locked
-              ;;
+            test) cargo nextest run --workspace --lib --bins --examples --locked ;;
+            doctest) cargo test --doc --workspace --locked ;;
           esac
+      - name: Save sccache bundle
+        if: always() && (github.event_name == 'push' || needs.changes.outputs.rust == 'true') && matrix.command == 'test'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/sccache
+          key: sccache-bundle-${{ runner.os }}-rust-${{ hashFiles('Cargo.lock') }}-${{ github.run_id }}
       - name: Show sccache statistics
         if: always() && (github.event_name == 'push' || needs.changes.outputs.rust == 'true') && matrix.command != 'fmt'
-        run: ${SCCACHE_PATH:-sccache} --show-stats
+        run: |
+          {
+            echo '```'
+            "${SCCACHE_PATH:-sccache}" --show-stats
+            echo '```'
+          } | tee -a "$GITHUB_STEP_SUMMARY"
 
   coverage:
     name: Coverage / Rust
@@ -206,17 +220,9 @@ jobs:
             ~/.cargo/git
           key: cargo-${{ runner.os }}-1.95.0-${{ hashFiles('Cargo.lock') }}
           restore-keys: cargo-${{ runner.os }}-1.95.0-
-      - name: Set up sccache
-        uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba # v0.0.11
-        with:
-          version: v0.17.0
-      - name: Enable read-only sccache compiler wrapper
-        run: |
-          {
-            echo "SCCACHE_GHA_ENABLED=true"
-            echo "SCCACHE_GHA_RW_MODE=READ_ONLY"
-            echo "RUSTC_WRAPPER=sccache"
-          } >> "$GITHUB_ENV"
+      # llvm-cov compiles with instrumentation, so every object is unique to
+      # this lane: the shared bundle cannot warm it, and a compiler wrapper
+      # would only cache objects that nothing else ever consumes.
       - name: Run Rust test coverage
         env:
           SQLX_OFFLINE: "true"
@@ -235,9 +241,6 @@ jobs:
           name: rust-coverage-${{ github.sha }}
           path: coverage/rust/
           retention-days: 14
-      - name: Show sccache statistics
-        if: always()
-        run: ${SCCACHE_PATH:-sccache} --show-stats
 
   web:
     name: Web
@@ -367,19 +370,23 @@ jobs:
             ~/.cargo/git
           key: cargo-${{ runner.os }}-1.95.0-${{ hashFiles('Cargo.lock') }}
           restore-keys: cargo-${{ runner.os }}-1.95.0-
+      - name: Restore sccache bundle
+        if: github.event_name == 'push' || needs.changes.outputs.rust == 'true' || needs.changes.outputs.web == 'true'
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/sccache
+          key: sccache-bundle-${{ runner.os }}-rust-${{ hashFiles('Cargo.lock') }}-${{ github.run_id }}
+          restore-keys: |
+            sccache-bundle-${{ runner.os }}-rust-${{ hashFiles('Cargo.lock') }}-
+            sccache-bundle-${{ runner.os }}-rust-
       - name: Set up sccache
         if: github.event_name == 'push' || needs.changes.outputs.rust == 'true' || needs.changes.outputs.web == 'true'
         uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba # v0.0.11
         with:
           version: v0.17.0
-      - name: Enable read-only sccache compiler wrapper
+      - name: Enable sccache compiler wrapper
         if: github.event_name == 'push' || needs.changes.outputs.rust == 'true' || needs.changes.outputs.web == 'true'
-        run: |
-          {
-            echo "SCCACHE_GHA_ENABLED=true"
-            echo "SCCACHE_GHA_RW_MODE=READ_ONLY"
-            echo "RUSTC_WRAPPER=sccache"
-          } >> "$GITHUB_ENV"
+        run: echo "RUSTC_WRAPPER=sccache" >> "$GITHUB_ENV"
       - name: Set up pnpm
         if: github.event_name == 'push' || needs.changes.outputs.rust == 'true' || needs.changes.outputs.web == 'true'
         uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
@@ -402,63 +409,97 @@ jobs:
         run: git diff --exit-code
       - name: Show sccache statistics
         if: always() && (github.event_name == 'push' || needs.changes.outputs.rust == 'true' || needs.changes.outputs.web == 'true')
-        run: ${SCCACHE_PATH:-sccache} --show-stats
+        run: |
+          {
+            echo '```'
+            "${SCCACHE_PATH:-sccache}" --show-stats
+            echo '```'
+          } | tee -a "$GITHUB_STEP_SUMMARY"
 
   full-stack:
     name: Full-stack integration
     needs: changes
+    if: >-
+      always() &&
+      (github.event_name == 'push' || needs.changes.outputs.rust == 'true') &&
+      needs.changes.result == 'success'
     runs-on: ubuntu-latest
     timeout-minutes: 45
     env:
       DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/deepref
       TEST_DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/deepref
       DEEPREF_REQUIRE_DATABASE: "1"
-    services:
-      postgres:
-        image: pgvector/pgvector:0.8.7-pg17-bookworm
-        env:
-          POSTGRES_PASSWORD: postgres
-          POSTGRES_DB: deepref
-        options: >-
-          --health-cmd pg_isready
-          --health-interval 10s
-          --health-timeout 5s
-          --health-retries 5
-        ports:
-          - 5432:5432
     steps:
-      - name: Skip check (no Rust, Web, or Container changes)
-        if: github.event_name != 'push' && needs.changes.outputs.rust != 'true' && needs.changes.outputs.web != 'true' && needs.changes.outputs.containers != 'true'
-        run: echo "No Rust, Web, or Container changes detected in PR; skipping check."
+      - name: Start Postgres for integration tests
+        run: |
+          docker run -d --name postgres \
+            -e POSTGRES_USER=postgres \
+            -e POSTGRES_PASSWORD=postgres \
+            -e POSTGRES_DB=deepref \
+            -p 127.0.0.1:5432:5432 \
+            pgvector/pgvector:0.8.7-pg17-bookworm \
+            postgres -c max_connections=300
+          for _ in $(seq 1 45); do
+            if docker exec postgres pg_isready --username postgres --dbname deepref >/dev/null 2>&1; then
+              echo "Postgres is ready"
+              exit 0
+            fi
+            sleep 1
+          done
+          echo "Postgres did not become ready in time" >&2
+          exit 1
       - name: Checkout trusted source
-        if: github.event_name == 'push' || needs.changes.outputs.rust == 'true' || needs.changes.outputs.web == 'true' || needs.changes.outputs.containers == 'true'
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
       - name: Install pinned Rust toolchain
-        if: github.event_name == 'push' || needs.changes.outputs.rust == 'true' || needs.changes.outputs.web == 'true' || needs.changes.outputs.containers == 'true'
         run: |
           rustup toolchain install 1.95.0 --profile minimal
           rustup override set 1.95.0
       - name: Install pinned cargo-nextest
-        if: github.event_name == 'push' || needs.changes.outputs.rust == 'true' || needs.changes.outputs.web == 'true' || needs.changes.outputs.containers == 'true'
         uses: taiki-e/install-action@1168f6810a3cb30a3514bf5756a3b7f0422c6df8 # v2.87.28
         with:
           tool: cargo-nextest@0.9.143
           checksum: true
           fallback: none
       - name: Install pinned cargo-binstall
-        if: github.event_name == 'push' || needs.changes.outputs.rust == 'true' || needs.changes.outputs.web == 'true' || needs.changes.outputs.containers == 'true'
         uses: taiki-e/install-action@1168f6810a3cb30a3514bf5756a3b7f0422c6df8 # v2.87.28
         with:
           tool: cargo-binstall@1.22.0
           checksum: true
           fallback: none
+      # cargo-binstall occasionally falls back to compiling sqlx-cli from
+      # source when the release download flakes (observed 177 s). Install once
+      # per runner OS and reuse afterwards. The cache path must be the exact
+      # binary file, not a glob: actions/cache stores wildcard matches
+      # relative to the pattern base, so restoring them re-roots under the
+      # repo directory instead of ~/.cargo/bin. Verify by file presence
+      # rather than trusting cache-hit, and the key carries -r2 because the
+      # first (wildcard) archive is poisoned; drop the suffix once the old
+      # entry rotates out of the cache budget.
+      - name: Restore sqlx-cli
+        id: sqlx-cli
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cargo/bin/sqlx
+          key: sqlx-cli-0.9.0-${{ runner.os }}-r2
       - name: Install pinned sqlx-cli
-        if: github.event_name == 'push' || needs.changes.outputs.rust == 'true' || needs.changes.outputs.web == 'true' || needs.changes.outputs.containers == 'true'
-        run: cargo binstall --no-confirm sqlx-cli@0.9.0
+        id: install-sqlx
+        run: |
+          if test -x "$HOME/.cargo/bin/sqlx"; then
+            echo "sqlx already present"
+          else
+            cargo binstall --no-confirm sqlx-cli@0.9.0
+            echo "installed=true" >> "$GITHUB_OUTPUT"
+          fi
+      - name: Save sqlx-cli
+        if: steps.install-sqlx.outputs.installed == 'true'
+        continue-on-error: true
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cargo/bin/sqlx
+          key: sqlx-cli-0.9.0-${{ runner.os }}-r2
       - name: Restore shared Cargo cache
-        if: github.event_name == 'push' || needs.changes.outputs.rust == 'true' || needs.changes.outputs.web == 'true' || needs.changes.outputs.containers == 'true'
         uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: |
@@ -466,21 +507,21 @@ jobs:
             ~/.cargo/git
           key: cargo-${{ runner.os }}-1.95.0-${{ hashFiles('Cargo.lock') }}
           restore-keys: cargo-${{ runner.os }}-1.95.0-
+      - name: Restore sccache bundle
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/sccache
+          key: sccache-bundle-${{ runner.os }}-rust-${{ hashFiles('Cargo.lock') }}-${{ github.run_id }}
+          restore-keys: |
+            sccache-bundle-${{ runner.os }}-rust-${{ hashFiles('Cargo.lock') }}-
+            sccache-bundle-${{ runner.os }}-rust-
       - name: Set up sccache
-        if: github.event_name == 'push' || needs.changes.outputs.rust == 'true' || needs.changes.outputs.web == 'true' || needs.changes.outputs.containers == 'true'
         uses: mozilla-actions/sccache-action@fc920bf0ec8de6ee65d409111f7ec508035751ba # v0.0.11
         with:
           version: v0.17.0
-      - name: Enable read-only sccache compiler wrapper
-        if: github.event_name == 'push' || needs.changes.outputs.rust == 'true' || needs.changes.outputs.web == 'true' || needs.changes.outputs.containers == 'true'
-        run: |
-          {
-            echo "SCCACHE_GHA_ENABLED=true"
-            echo "SCCACHE_GHA_RW_MODE=READ_ONLY"
-            echo "RUSTC_WRAPPER=sccache"
-          } >> "$GITHUB_ENV"
+      - name: Enable sccache compiler wrapper
+        run: echo "RUSTC_WRAPPER=sccache" >> "$GITHUB_ENV"
       - name: Apply database migrations
-        if: github.event_name == 'push' || needs.changes.outputs.rust == 'true' || needs.changes.outputs.web == 'true' || needs.changes.outputs.containers == 'true'
         env:
           DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/deepref
         run: |
@@ -489,67 +530,87 @@ jobs:
             --database-url "$DATABASE_URL" \
             --no-dotenv
       - name: Verify SQLx offline query metadata against live database
-        if: github.event_name == 'push' || needs.changes.outputs.rust == 'true' || needs.changes.outputs.web == 'true' || needs.changes.outputs.containers == 'true'
         env:
           DATABASE_URL: postgres://postgres:postgres@127.0.0.1:5432/deepref
         run: cargo xtask sqlx check
       - name: Run integration tests
-        if: github.event_name == 'push' || needs.changes.outputs.rust == 'true' || needs.changes.outputs.web == 'true' || needs.changes.outputs.containers == 'true'
         run: cargo nextest run --workspace --tests --locked --profile ci
       - name: Show sccache statistics
-        if: always() && (github.event_name == 'push' || needs.changes.outputs.rust == 'true' || needs.changes.outputs.web == 'true' || needs.changes.outputs.containers == 'true')
-        run: ${SCCACHE_PATH:-sccache} --show-stats
+        if: always()
+        run: |
+          {
+            echo '```'
+            "${SCCACHE_PATH:-sccache}" --show-stats
+            echo '```'
+          } | tee -a "$GITHUB_STEP_SUMMARY"
 
   browser-e2e:
     name: Browser E2E
     needs: changes
+    if: >-
+      always() &&
+      (github.event_name == 'push' || needs.changes.outputs.web == 'true') &&
+      needs.changes.result == 'success'
     runs-on: ubuntu-latest
     timeout-minutes: 25
+    env:
+      E2E_SKIP_WEB_BUILD: "1"
     steps:
-      - name: Skip check (no Rust, Web, or Container changes)
-        if: github.event_name != 'push' && needs.changes.outputs.rust != 'true' && needs.changes.outputs.web != 'true' && needs.changes.outputs.containers != 'true'
-        run: echo "No Rust, Web, or Container changes detected in PR; skipping browser tests."
       - name: Checkout trusted source
-        if: github.event_name == 'push' || needs.changes.outputs.rust == 'true' || needs.changes.outputs.web == 'true' || needs.changes.outputs.containers == 'true'
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
       - name: Set up pnpm
-        if: github.event_name == 'push' || needs.changes.outputs.rust == 'true' || needs.changes.outputs.web == 'true' || needs.changes.outputs.containers == 'true'
         uses: pnpm/action-setup@ea17c68df8912ef543352723c149a84f56e3d413 # v6.1.0
         with:
           version: 11.3.0
       - name: Set up Node.js
-        if: github.event_name == 'push' || needs.changes.outputs.rust == 'true' || needs.changes.outputs.web == 'true' || needs.changes.outputs.containers == 'true'
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 24.21.0
           cache: pnpm
-      - if: github.event_name == 'push' || needs.changes.outputs.rust == 'true' || needs.changes.outputs.web == 'true' || needs.changes.outputs.containers == 'true'
-        run: pnpm install --frozen-lockfile
+      - run: pnpm install --frozen-lockfile
+      # actions/cache's implicit post-save lost its reservation whenever cache
+      # traffic peaked ("another job may be creating this cache"). Restore and
+      # save are split explicitly, and save only runs when the lockfile key
+      # missed, i.e. once per Playwright version bump.
+      - name: Restore Playwright browsers
+        id: playwright-cache
+        uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}
+          restore-keys: |
+            playwright-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}-
+            playwright-${{ runner.os }}-
       - name: Install Chromium
-        if: github.event_name == 'push' || needs.changes.outputs.rust == 'true' || needs.changes.outputs.web == 'true' || needs.changes.outputs.containers == 'true'
         run: pnpm --filter @deepref/web exec playwright install --with-deps chromium
+      - name: Save Playwright browsers
+        if: steps.playwright-cache.outputs.cache-hit != 'true'
+        uses: actions/cache/save@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: ~/.cache/ms-playwright
+          key: playwright-${{ runner.os }}-${{ hashFiles('pnpm-lock.yaml') }}
+      - name: Build web preview bundle
+        run: pnpm --filter @deepref/web exec vite build
       - name: Run browser tests
-        if: github.event_name == 'push' || needs.changes.outputs.rust == 'true' || needs.changes.outputs.web == 'true' || needs.changes.outputs.containers == 'true'
         run: pnpm --filter @deepref/web test:e2e
 
   containers:
     name: Reproducible container build
     needs: changes
+    if: >-
+      always() &&
+      (github.event_name == 'push' || needs.changes.outputs.containers-pr == 'true') &&
+      needs.changes.result == 'success'
     runs-on: ubuntu-latest
     timeout-minutes: 35
     steps:
-      - name: Skip check (no container changes)
-        if: github.event_name != 'push' && needs.changes.outputs.containers != 'true'
-        run: echo "No container changes detected in PR; skipping check."
       - name: Checkout trusted source
-        if: github.event_name == 'push' || needs.changes.outputs.containers == 'true'
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           persist-credentials: false
       - name: Validate release images on native amd64
-        if: github.event_name == 'push' || needs.changes.outputs.containers == 'true'
         uses: ./.github/actions/reproducible-container-build
         with:
           platform: linux/amd64
@@ -596,8 +657,14 @@ jobs:
           INTEGRATION_RESULT: ${{ needs.full-stack.result }}
           BROWSER_RESULT: ${{ needs.browser-e2e.result }}
         run: |
-          test "$INTEGRATION_RESULT" = "success"
-          test "$BROWSER_RESULT" = "success"
+          if [ "$GITHUB_EVENT_NAME" = "pull_request" ]; then
+            # Path-filtered lanes legitimately skip on PRs; keep push strict.
+            test "$INTEGRATION_RESULT" = "success" || test "$INTEGRATION_RESULT" = "skipped"
+            test "$BROWSER_RESULT" = "success" || test "$BROWSER_RESULT" = "skipped"
+          else
+            test "$INTEGRATION_RESULT" = "success"
+            test "$BROWSER_RESULT" = "success"
+          fi
 
   docker-required:
     name: Docker
@@ -611,5 +678,10 @@ jobs:
           AMD64_RESULT: ${{ needs.containers.result }}
           ARM64_RESULT: ${{ needs.containers-arm64.result }}
         run: |
-          test "$AMD64_RESULT" = "success"
-          test "$ARM64_RESULT" = "success" || test "$ARM64_RESULT" = "skipped"
+          if [ "$GITHUB_EVENT_NAME" = "pull_request" ]; then
+            # PR image builds are path-filtered; push-to-main always builds both arches.
+            test "$AMD64_RESULT" = "success" || test "$AMD64_RESULT" = "skipped"
+          else
+            test "$AMD64_RESULT" = "success"
+            test "$ARM64_RESULT" = "success"
+          fi
