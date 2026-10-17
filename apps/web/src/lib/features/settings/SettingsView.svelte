@@ -21,7 +21,6 @@
 	import AutonomySettings from '#lib/features/ai-autonomy/components/AutonomySettings.svelte';
 	import { Debounced, onCleanup, watch } from 'runed';
 	import { enqueueSettingsSave } from './settings-save-queue';
-	import { crossrefMailtoError } from './crossref-mailto';
 
 	export type SettingsViewProps = {
 		presentation?: 'page' | 'modal';
@@ -32,7 +31,6 @@
 	type NumericSettingKey =
 		'default_max_depth' | 'max_concurrency' | 'rate_limit_per_second' | 'retry_attempts';
 	type DraftSettings = {
-		crossref_mailto: string;
 		default_max_depth: string;
 		max_concurrency: string;
 		rate_limit_per_second: string;
@@ -97,10 +95,9 @@
 			id: 'ingestion',
 			label: 'Ingestion',
 			description: 'Provider and ingestion defaults',
-			searchText: [
-				'Crossref mailto used for the Crossref polite pool and request User-Agent.',
-				...numericFields.flatMap((field) => [field.label, field.description])
-			].join(' '),
+			searchText: numericFields
+				.flatMap((field) => [field.label, field.description])
+				.join(' '),
 			icon: Database
 		},
 		{
@@ -188,7 +185,6 @@
 
 	function emptyDraft(): DraftSettings {
 		return {
-			crossref_mailto: '',
 			default_max_depth: '0',
 			max_concurrency: '1',
 			rate_limit_per_second: '1',
@@ -198,7 +194,6 @@
 
 	function toDraft(settings: SettingsDto): DraftSettings {
 		return {
-			crossref_mailto: settings.crossref_mailto,
 			default_max_depth: String(settings.default_max_depth),
 			max_concurrency: String(settings.max_concurrency),
 			rate_limit_per_second: String(settings.rate_limit_per_second),
@@ -208,7 +203,6 @@
 
 	function sameDraft(left: DraftSettings, right: DraftSettings): boolean {
 		return (
-			left.crossref_mailto === right.crossref_mailto &&
 			left.default_max_depth === right.default_max_depth &&
 			left.max_concurrency === right.max_concurrency &&
 			left.rate_limit_per_second === right.rate_limit_per_second &&
@@ -228,7 +222,6 @@
 	}
 
 	function fieldError(key: DraftKey, value: string): string | undefined {
-		if (key === 'crossref_mailto') return crossrefMailtoError(value);
 		return numericError(key, value);
 	}
 
@@ -256,9 +249,6 @@
 
 	function validateDraft(value: DraftSettings): ValidationResult {
 		const errors: ValidationErrors = {};
-		const mailto = value.crossref_mailto.trim();
-		const mailtoError = crossrefMailtoError(value.crossref_mailto);
-		if (mailtoError) errors.crossref_mailto = mailtoError;
 
 		const parsed: Partial<Record<NumericSettingKey, number>> = {};
 		for (const key of numericFieldKeys) {
@@ -271,7 +261,6 @@
 		return {
 			ok: true,
 			data: {
-				crossref_mailto: mailto,
 				default_max_depth: parsed.default_max_depth ?? 0,
 				max_concurrency: parsed.max_concurrency ?? 1,
 				rate_limit_per_second: parsed.rate_limit_per_second ?? 1,
@@ -293,9 +282,6 @@
 
 		const changed = new Set(changedKeys);
 		return {
-			crossref_mailto: changed.has('crossref_mailto')
-				? data.crossref_mailto
-				: current.crossref_mailto,
 			default_max_depth: changed.has('default_max_depth')
 				? data.default_max_depth
 				: current.default_max_depth,
@@ -578,29 +564,6 @@
 	>
 		{#if activeTab === 'ingestion'}
 			<Field.FieldGroup>
-				<Field.Field data-invalid={Boolean(validationErrors.crossref_mailto)}>
-					<Field.FieldLabel for="mailto">Crossref contact email</Field.FieldLabel>
-					<Input
-						id="mailto"
-						type="email"
-						inputmode="email"
-						autocomplete="email"
-						value={draft.crossref_mailto}
-						aria-required="true"
-						aria-invalid={validationErrors.crossref_mailto ? 'true' : undefined}
-						aria-describedby={validationErrors.crossref_mailto
-							? 'mailto-description mailto-error'
-							: 'mailto-description'}
-						oninput={(event) => setDraft('crossref_mailto', event.currentTarget.value)}
-						placeholder="research@example.org"
-					/>
-					<Field.FieldDescription id="mailto-description"
-						>Identifies requests to Crossref's polite pool.</Field.FieldDescription
-					>
-					{#if validationErrors.crossref_mailto}<Field.FieldError id="mailto-error"
-							>{validationErrors.crossref_mailto}</Field.FieldError
-						>{/if}
-				</Field.Field>
 				{@render numericSetting(numericFields[0])}
 			</Field.FieldGroup>
 			<details

@@ -36,7 +36,13 @@ pub async fn serve_with_shutdown(
     let mut state = AppState::new(pool.clone())
         .with_document_store(document_store)
         .with_smtp(config.runtime.smtp.clone())
-        .with_workflow_config(config.runtime.workflow.clone());
+        .with_workflow_config(config.runtime.workflow.clone())
+        .with_integrations(config.runtime.integrations.clone());
+    if config.runtime.integrations.contact_email.is_empty() {
+        tracing::warn!(
+            "DEEPREF_CONTACT_EMAIL is not set; DOI imports, PubMed imports and open-access lookups will be refused"
+        );
+    }
     let ai_config = &config.runtime.ai;
     for notice in ai_config.deprecations() {
         tracing::warn!("{notice}");

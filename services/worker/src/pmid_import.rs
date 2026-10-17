@@ -48,6 +48,7 @@ pub async fn handle_job(
     payload: Value,
     attempts: i32,
     max_attempts: i32,
+    contact_email: &str,
 ) -> anyhow::Result<DeliveryAction> {
     let payload: PmidImportPayload = serde_json::from_value(payload)?;
     let Some(run) = deepref_app::load_pmid_run(pool, payload.acquisition_id).await? else {
@@ -59,9 +60,8 @@ pub async fn handle_job(
         return Ok(DeliveryAction::Ack);
     }
     deepref_app::start_pmid_run(pool, run.run_id).await?;
-    let settings = store::load_runtime_settings(pool).await?;
     let http = net::trusted_client().map_err(|error| anyhow::anyhow!(error.message))?;
-    let client = PubmedClient::new(http, settings.crossref_mailto);
+    let client = PubmedClient::new(http, contact_email);
     loop {
         let batch = deepref_app::queued_pmids(pool, run.run_id, MAX_IDS_PER_FETCH as i64).await?;
         if batch.is_empty() {

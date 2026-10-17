@@ -113,7 +113,7 @@ pub struct PubmedClient {
 }
 
 impl PubmedClient {
-    /// `mailto` is the workspace contact address (the `crossref_mailto` setting). NCBI asks
+    /// `mailto` is the deployment contact address (`DEEPREF_CONTACT_EMAIL`). NCBI asks
     /// for it as `email`, so it is sent when it is set. It is never a user's own address.
     pub fn new(http: reqwest::Client, mailto: impl Into<String>) -> Self {
         Self {
@@ -474,7 +474,7 @@ mod tests {
     }
 
     #[test]
-    fn requests_carry_the_tool_name_and_the_workspace_contact_only() {
+    fn requests_carry_the_tool_name_and_the_deployment_contact_only() {
         let with_contact = PubmedClient::new(reqwest::Client::new(), " research@example.org ");
         let url = with_contact.url("efetch.fcgi", "db=pubmed&id=123");
         assert!(url.contains("&tool=DeepRef"), "{url}");

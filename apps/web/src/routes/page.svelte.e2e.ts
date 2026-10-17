@@ -17,7 +17,6 @@ const project = {
 // The workspace Settings default citation depth. The Imports form starts from it, and a project
 // created without a depth takes it from the server.
 const workspaceSettings = {
-	crossref_mailto: 'research@example.org',
 	default_max_depth: 3,
 	max_concurrency: 8,
 	rate_limit_per_second: 1,

@@ -247,6 +247,7 @@ pub(crate) async fn create_acquisition(
             metadata: json!({ "seed_dois": seed_count }),
             idempotency_comparison: IdempotencyComparison::ConfigOnly,
         },
+        &state.integrations.contact_email,
     )
     .await?;
     let run = sqlx::query(acquisition_select())
@@ -384,6 +385,7 @@ pub(crate) async fn refresh_acquisition(
             metadata,
             idempotency_comparison: IdempotencyComparison::SourceStrategyAndConfig,
         },
+        &state.integrations.contact_email,
     )
     .await?;
     let run = sqlx::query(acquisition_select())
@@ -747,23 +749,11 @@ fn acquisition_item_from_row(row: sqlx::postgres::PgRow) -> Result<AcquisitionIt
 async fn persist_doi_acquisition(
     tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     request: DoiAcquisitionRequest,
+    contact_email: &str,
 ) -> Result<DoiAcquisitionResult, ApiError> {
-    let mailto: String = sqlx::query_scalar("SELECT crossref_mailto FROM settings WHERE id=1")
-        .fetch_optional(&mut **tx)
-        .await?
-        .unwrap_or_default();
-    let valid_mailto = mailto
-        .trim()
-        .split_once('@')
-        .is_some_and(|(local, domain)| {
-            !local.is_empty()
-                && domain.contains('.')
-                && !domain.starts_with('.')
-                && !domain.ends_with('.')
-        });
-    if !valid_mailto {
+    if contact_email.trim().is_empty() {
         return Err(ApiError::Configuration(
-            "a valid Crossref mail address must be configured before creating an acquisition"
+            "DOI imports are unavailable: the server has no DEEPREF_CONTACT_EMAIL configured"
                 .to_owned(),
         ));
     }

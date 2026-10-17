@@ -103,7 +103,7 @@ const ROUTE_META: ReadonlyArray<readonly [string, RouteMeta]> = [
 		'/settings',
 		{
 			title: 'Settings · DeepRef',
-			description: 'Application-level ingestion and Crossref parameters.'
+			description: 'Application-level ingestion and provider defaults.'
 		}
 	]
 ];

@@ -195,7 +195,12 @@ pub async fn handle_step(
 }
 
 /// Background loop for schedules, publication alerts and orphaned steps.
-pub async fn run_scheduler(pool: PgPool, interval: Duration, mut shutdown: watch::Receiver<bool>) {
+pub async fn run_scheduler(
+    pool: PgPool,
+    interval: Duration,
+    contact_email: String,
+    mut shutdown: watch::Receiver<bool>,
+) {
     let mut ticker = tokio::time::interval(interval);
     loop {
         tokio::select! {
@@ -207,19 +212,19 @@ pub async fn run_scheduler(pool: PgPool, interval: Duration, mut shutdown: watch
                 continue;
             }
         }
-        if let Err(error) = scheduler_tick(&pool).await {
+        if let Err(error) = scheduler_tick(&pool, &contact_email).await {
             tracing::error!(%error, "workflow scheduler tick failed");
         }
     }
 }
 
-pub async fn scheduler_tick(pool: &PgPool) -> anyhow::Result<()> {
+pub async fn scheduler_tick(pool: &PgPool, contact_email: &str) -> anyhow::Result<()> {
     let (fired, alerts) = claim_due_workflows(pool, Utc::now(), 20).await?;
     if fired > 0 {
         tracing::info!(fired, "scheduled workflows started");
     }
     for alert in alerts {
-        poll_alert(pool, alert).await;
+        poll_alert(pool, alert, contact_email).await;
     }
     let reaped = fail_abandoned_steps(pool).await?;
     if reaped > 0 {
@@ -228,9 +233,9 @@ pub async fn scheduler_tick(pool: &PgPool) -> anyhow::Result<()> {
     Ok(())
 }
 
-async fn poll_alert(pool: &PgPool, alert: DueAlert) {
+async fn poll_alert(pool: &PgPool, alert: DueAlert, contact_email: &str) {
     let state = alert.poll_state.clone();
-    let result = poll_alert_sources(pool, &alert).await;
+    let result = poll_alert_sources(pool, &alert, contact_email).await;
     let (hits, error) = match result {
         Ok(hits) => (hits, None),
         Err(error) => (Vec::new(), Some(error.message)),
@@ -240,7 +245,11 @@ async fn poll_alert(pool: &PgPool, alert: DueAlert) {
     }
 }
 
-async fn poll_alert_sources(pool: &PgPool, alert: &DueAlert) -> Result<Vec<AlertHit>, NodeError> {
+async fn poll_alert_sources(
+    pool: &PgPool,
+    alert: &DueAlert,
+    contact_email: &str,
+) -> Result<Vec<AlertHit>, NodeError> {
     let config = alert
         .graph
         .trigger_node()
@@ -269,12 +278,8 @@ async fn poll_alert_sources(pool: &PgPool, alert: &DueAlert) -> Result<Vec<Alert
         |date| date - chrono::Duration::days(1),
     );
     let days = u32::try_from((now - since).num_days().clamp(1, 60)).unwrap_or(1);
-    let mailto = crate::store::load_runtime_settings(pool)
-        .await
-        .map(|settings| settings.crossref_mailto)
-        .unwrap_or_default();
     let client = net::trusted_client()?;
-    let pubmed_client = deepref_integrations::PubmedClient::new(client.clone(), mailto.clone());
+    let pubmed_client = deepref_integrations::PubmedClient::new(client.clone(), contact_email);
     let mut items: Vec<Value> = Vec::new();
     let mut failures: Vec<NodeError> = Vec::new();
     if matches!(sources, "both" | "pubmed") {
@@ -288,7 +293,7 @@ async fn poll_alert_sources(pool: &PgPool, alert: &DueAlert) -> Result<Vec<Alert
             &client,
             &query.crossref_terms(),
             &since.format("%Y-%m-%d").to_string(),
-            &mailto,
+            contact_email,
         )
         .await
         {

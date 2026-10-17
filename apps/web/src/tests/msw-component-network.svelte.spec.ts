@@ -41,7 +41,7 @@ describe('MSW component network simulation layer', () => {
 		expect.hasAssertions();
 		server.use(
 			networkOverrides.validationError('/api/settings', {
-				mailto: ['Must be a valid email address']
+				default_max_depth: ['Must be an integer of at least 0']
 			})
 		);
 

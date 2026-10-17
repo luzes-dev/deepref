@@ -10,7 +10,6 @@ use uuid::Uuid;
 
 #[derive(Debug, Clone)]
 pub struct RuntimeSettings {
-    pub crossref_mailto: String,
     pub rate_limit_per_second: u32,
     pub retry_attempts: usize,
 }
@@ -23,16 +22,14 @@ pub enum ClaimState {
 }
 
 pub async fn load_runtime_settings(pool: &PgPool) -> anyhow::Result<RuntimeSettings> {
-    sqlx::query("INSERT INTO settings (id, crossref_mailto) VALUES (1, '') ON CONFLICT DO NOTHING")
+    sqlx::query("INSERT INTO settings (id) VALUES (1) ON CONFLICT DO NOTHING")
         .execute(pool)
         .await?;
-    let row = sqlx::query(
-        "SELECT crossref_mailto, rate_limit_per_second, retry_attempts FROM settings WHERE id = 1",
-    )
-    .fetch_one(pool)
-    .await?;
+    let row =
+        sqlx::query("SELECT rate_limit_per_second, retry_attempts FROM settings WHERE id = 1")
+            .fetch_one(pool)
+            .await?;
     Ok(RuntimeSettings {
-        crossref_mailto: row.get("crossref_mailto"),
         rate_limit_per_second: row.get::<i32, _>("rate_limit_per_second").max(1) as u32,
         retry_attempts: row.get::<i32, _>("retry_attempts").max(1) as usize,
     })

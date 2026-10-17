@@ -1,7 +1,7 @@
 //! Unpaywall: the location of an open-access PDF for a DOI.
 //!
 //! Unpaywall asks every caller to identify itself with a contact address, so the caller
-//! passes the workspace's configured contact e-mail, never a personal one.
+//! passes the deployment contact e-mail (`DEEPREF_CONTACT_EMAIL`), never a personal one.
 
 use std::time::Duration;
 

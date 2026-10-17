@@ -36,7 +36,7 @@ fn api_config() -> ApiConfig {
 /// Validation runs before any query, so the pool never connects and this test
 /// needs no PostgreSQL instance.
 #[tokio::test]
-async fn patch_settings_rejects_a_malformed_crossref_mailto_with_400() {
+async fn patch_settings_rejects_an_out_of_range_depth_with_400() {
     let pool = PgPoolOptions::new()
         .connect_lazy("postgres://postgres:postgres@127.0.0.1:1/unused")
         .expect("lazy pool should be constructed");
@@ -44,9 +44,7 @@ async fn patch_settings_rejects_a_malformed_crossref_mailto_with_400() {
         .method(Method::PATCH)
         .uri("/settings")
         .header("content-type", "application/json")
-        .body(Body::from(
-            json!({ "crossref_mailto": "not-an-email" }).to_string(),
-        ))
+        .body(Body::from(json!({ "default_max_depth": 4 }).to_string()))
         .expect("request should build");
 
     let response = router(AppState::core(pool), &api_config())
@@ -60,7 +58,7 @@ async fn patch_settings_rejects_a_malformed_crossref_mailto_with_400() {
         .expect("body should be readable");
     let payload: Value = serde_json::from_slice(&body).expect("body should be JSON");
     assert!(
-        payload.to_string().contains("crossref_mailto"),
+        payload.to_string().contains("max_depth"),
         "the error should name the field: {payload}"
     );
 }

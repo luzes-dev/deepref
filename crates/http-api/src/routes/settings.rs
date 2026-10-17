@@ -10,7 +10,6 @@ use crate::{
 
 #[derive(Debug, Serialize, ToSchema)]
 pub(crate) struct SettingsDto {
-    crossref_mailto: String,
     default_max_depth: i32,
     max_concurrency: i32,
     rate_limit_per_second: i32,
@@ -35,7 +34,7 @@ pub(crate) async fn get_settings(
     ensure_settings(&state.pool).await?;
     let row = sqlx::query(
         r#"
-        SELECT crossref_mailto, default_max_depth, max_concurrency, rate_limit_per_second,
+        SELECT default_max_depth, max_concurrency, rate_limit_per_second,
                retry_attempts, metadata_provider, citation_provider
         FROM settings WHERE id = 1
         "#,
@@ -44,7 +43,6 @@ pub(crate) async fn get_settings(
     .await?;
 
     Ok(Json(SettingsDto {
-        crossref_mailto: row.get("crossref_mailto"),
         default_max_depth: row.get("default_max_depth"),
         max_concurrency: row.get("max_concurrency"),
         rate_limit_per_second: row.get("rate_limit_per_second"),
@@ -56,7 +54,6 @@ pub(crate) async fn get_settings(
 
 #[derive(Debug, Deserialize, ToSchema)]
 pub(crate) struct UpdateSettings {
-    crossref_mailto: Option<String>,
     default_max_depth: Option<i32>,
     max_concurrency: Option<i32>,
     rate_limit_per_second: Option<i32>,
@@ -65,20 +62,6 @@ pub(crate) struct UpdateSettings {
 
 impl UpdateSettings {
     fn validate(&self) -> Result<(), ApiError> {
-        if let Some(mailto) = self.crossref_mailto.as_deref() {
-            let mailto = mailto.trim();
-            if mailto.is_empty() {
-                return Err(ApiError::BadRequest(
-                    "crossref_mailto must not be blank".to_owned(),
-                ));
-            }
-            if !is_plausible_email(mailto) {
-                return Err(ApiError::BadRequest(
-                    "crossref_mailto must be an e-mail address such as research@example.org"
-                        .to_owned(),
-                ));
-            }
-        }
         if let Some(value) = self.default_max_depth {
             deepref_domain::acquisition::MaxDepth::try_from(value)
                 .map_err(|message| ApiError::BadRequest(message.to_owned()))?;
@@ -111,16 +94,14 @@ pub(crate) async fn update_settings(
     sqlx::query(
         r#"
         UPDATE settings SET
-          crossref_mailto = COALESCE($1, crossref_mailto),
-          default_max_depth = COALESCE($2, default_max_depth),
-          max_concurrency = COALESCE($3, max_concurrency),
-          rate_limit_per_second = COALESCE($4, rate_limit_per_second),
-          retry_attempts = COALESCE($5, retry_attempts),
+          default_max_depth = COALESCE($1, default_max_depth),
+          max_concurrency = COALESCE($2, max_concurrency),
+          rate_limit_per_second = COALESCE($3, rate_limit_per_second),
+          retry_attempts = COALESCE($4, retry_attempts),
           updated_at = now()
         WHERE id = 1
         "#,
     )
-    .bind(input.crossref_mailto.map(|mailto| mailto.trim().to_owned()))
     .bind(input.default_max_depth)
     .bind(input.max_concurrency)
     .bind(input.rate_limit_per_second)
@@ -133,8 +114,8 @@ pub(crate) async fn update_settings(
 pub(crate) async fn ensure_settings(pool: &PgPool) -> Result<(), sqlx::Error> {
     sqlx::query(
         r#"
-        INSERT INTO settings (id, crossref_mailto)
-        VALUES (1, '')
+        INSERT INTO settings (id)
+        VALUES (1)
         ON CONFLICT (id) DO NOTHING
         "#,
     )
@@ -150,86 +131,15 @@ fn reject_less_than_one(name: &str, value: Option<i32>) -> Result<(), ApiError> 
     Ok(())
 }
 
-/// Shape check for the Crossref contact address: one `@`, no whitespace, and a
-/// dotted domain whose top-level label has at least two characters. It is not
-/// an RFC 5322 parser; it only catches values that would clearly fail Crossref's
-/// polite-pool contact check.
-fn is_plausible_email(value: &str) -> bool {
-    if value.len() > 254 || value.chars().any(char::is_whitespace) {
-        return false;
-    }
-    let Some((local, domain)) = value.split_once('@') else {
-        return false;
-    };
-    if local.is_empty() || domain.contains('@') {
-        return false;
-    }
-    let labels: Vec<&str> = domain.split('.').collect();
-    labels.len() >= 2
-        && labels.iter().all(|label| !label.is_empty())
-        && labels.last().is_some_and(|top| top.len() >= 2)
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
 
     #[test]
-    fn accepts_plausible_crossref_mailto() {
-        for value in [
-            "research@example.org",
-            "first.last+tag@univ.ac.uk",
-            "  padded@example.org  ",
-        ] {
-            assert!(
-                UpdateSettings {
-                    crossref_mailto: Some(value.to_owned()),
-                    default_max_depth: None,
-                    max_concurrency: None,
-                    rate_limit_per_second: None,
-                    retry_attempts: None,
-                }
-                .validate()
-                .is_ok(),
-                "{value} should be accepted"
-            );
-        }
-    }
-
-    #[test]
-    fn rejects_malformed_crossref_mailto() {
-        for value in [
-            "not-an-email",
-            "a@b",
-            "a@b.",
-            "@example.org",
-            "a b@example.org",
-            "a@@example.org",
-            "a@.example.org",
-            "a@example..org",
-            "a@example.o",
-        ] {
-            let result = UpdateSettings {
-                crossref_mailto: Some(value.to_owned()),
-                default_max_depth: None,
-                max_concurrency: None,
-                rate_limit_per_second: None,
-                retry_attempts: None,
-            }
-            .validate();
-            assert!(
-                matches!(result, Err(ApiError::BadRequest(_))),
-                "{value} should be a 400"
-            );
-        }
-    }
-
-    #[test]
     fn rejects_invalid_settings() {
         assert!(
             UpdateSettings {
-                crossref_mailto: Some(" ".to_owned()),
-                default_max_depth: None,
+                default_max_depth: Some(4),
                 max_concurrency: None,
                 rate_limit_per_second: None,
                 retry_attempts: None,
@@ -239,7 +149,6 @@ mod tests {
         );
         assert!(
             UpdateSettings {
-                crossref_mailto: None,
                 default_max_depth: None,
                 max_concurrency: Some(0),
                 rate_limit_per_second: None,
@@ -247,6 +156,16 @@ mod tests {
             }
             .validate()
             .is_err()
+        );
+        assert!(
+            UpdateSettings {
+                default_max_depth: Some(3),
+                max_concurrency: Some(1),
+                rate_limit_per_second: Some(1),
+                retry_attempts: Some(1),
+            }
+            .validate()
+            .is_ok()
         );
     }
 }

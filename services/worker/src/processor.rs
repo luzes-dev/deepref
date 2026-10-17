@@ -103,23 +103,22 @@ async fn handle_work_fetch(
         return Ok(action);
     }
     let settings = store::load_runtime_settings(&pool).await?;
-    let client =
-        match CrossrefClient::new(settings.crossref_mailto.clone(), &config.runtime.crossref) {
-            Ok(client) => client.with_max_attempts(settings.retry_attempts),
-            Err(error) => {
-                store::finalize_terminal_failure(
-                    &pool,
-                    &event,
-                    &doi,
-                    owner,
-                    lease,
-                    IngestionItemStatus::Failed,
-                    &error.to_string(),
-                )
-                .await?;
-                return Ok(DeliveryAction::Ack);
-            }
-        };
+    let client = match CrossrefClient::new(&config.runtime.integrations) {
+        Ok(client) => client.with_max_attempts(settings.retry_attempts),
+        Err(error) => {
+            store::finalize_terminal_failure(
+                &pool,
+                &event,
+                &doi,
+                owner,
+                lease,
+                IngestionItemStatus::Failed,
+                &error.to_string(),
+            )
+            .await?;
+            return Ok(DeliveryAction::Ack);
+        }
+    };
     let (cancel_heartbeat, heartbeat_done) =
         spawn_heartbeat(pool.clone(), lease.clone(), doi.clone(), owner, claim_lease);
     limiter::acquire(&pool, "crossref", settings.rate_limit_per_second).await?;
@@ -681,6 +680,7 @@ async fn handle_job_with_document_services_inner(
                 job.payload.clone(),
                 job.attempts,
                 job.max_attempts,
+                &config.runtime.integrations.contact_email,
             )
             .await
         }

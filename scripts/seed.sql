@@ -2,7 +2,6 @@ BEGIN;
 
 INSERT INTO settings (
   id,
-  crossref_mailto,
   default_max_depth,
   max_concurrency,
   rate_limit_per_second,
@@ -14,7 +13,6 @@ INSERT INTO settings (
 )
 VALUES (
   1,
-  'local@example.invalid',
   1,
   8,
   1,

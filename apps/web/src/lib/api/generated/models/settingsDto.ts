@@ -7,7 +7,6 @@
 
 export interface SettingsDto {
 	citation_provider: string;
-	crossref_mailto: string;
 	default_max_depth: number;
 	max_concurrency: number;
 	metadata_provider: string;

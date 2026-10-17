@@ -19935,7 +19935,6 @@
       "SettingsDto": {
         "type": "object",
         "required": [
-          "crossref_mailto",
           "default_max_depth",
           "max_concurrency",
           "rate_limit_per_second",
@@ -19945,9 +19944,6 @@
         ],
         "properties": {
           "citation_provider": {
-            "type": "string"
-          },
-          "crossref_mailto": {
             "type": "string"
           },
           "default_max_depth": {
@@ -20571,12 +20567,6 @@
       "UpdateSettings": {
         "type": "object",
         "properties": {
-          "crossref_mailto": {
-            "type": [
-              "string",
-              "null"
-            ]
-          },
           "default_max_depth": {
             "type": [
               "integer",

@@ -4,7 +4,6 @@ import { settleVisualPage, test } from './visual/fixtures';
 const articlesUrl = '/projects/visual-project/articles?filter=review&sort=year';
 
 const initialSettings = {
-	crossref_mailto: 'research@example.org',
 	default_max_depth: 2,
 	max_concurrency: 8,
 	rate_limit_per_second: 1,

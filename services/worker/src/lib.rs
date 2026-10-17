@@ -123,9 +123,15 @@ pub async fn run_with_shutdown(
         "API and worker workflow feature configuration must agree"
     );
     let (reconciler_shutdown, reconciler_signal) = watch::channel(false);
+    if config.runtime.integrations.contact_email.is_empty() {
+        tracing::warn!(
+            "DEEPREF_CONTACT_EMAIL is not set; DOI imports, PubMed imports and open-access lookups will be refused"
+        );
+    }
     tokio::spawn(workflows::run_scheduler(
         pool.clone(),
         Duration::from_secs(20),
+        config.runtime.integrations.contact_email.clone(),
         reconciler_signal.clone(),
     ));
     let reconciler_task = tokio::spawn(reconciler::run(

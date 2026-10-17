@@ -960,12 +960,9 @@ pub(crate) async fn attach_open_access_document(
         message: "This report has no DOI, so an open-access copy cannot be looked up. Upload the PDF or paste a link instead.".to_owned(),
         details: serde_json::json!({}),
     })?;
-    // The workspace's contact address identifies us to Unpaywall; a personal address is never used.
-    let contact: String = sqlx::query_scalar("SELECT crossref_mailto FROM settings WHERE id=1")
-        .fetch_optional(&state.pool)
-        .await?
-        .unwrap_or_default();
-    if contact.trim().is_empty() {
+    // The deployment's contact address identifies us to Unpaywall; a personal address is never used.
+    let contact = state.integrations.contact_email.trim();
+    if contact.is_empty() {
         return Err(missing_contact_email());
     }
     let lookup = deepref_integrations::UnpaywallClient::new(contact)
@@ -996,7 +993,7 @@ pub(crate) async fn attach_open_access_document(
 fn missing_contact_email() -> ApiError {
     ApiError::Conflict {
         code: "contact_email_missing".to_owned(),
-        message: "Set a contact e-mail in Settings first. Unpaywall asks for one before it looks up open-access PDFs.".to_owned(),
+        message: "Open-access lookups are unavailable: the server has no DEEPREF_CONTACT_EMAIL configured. Upload the PDF or paste a link instead.".to_owned(),
         details: serde_json::json!({}),
     }
 }
@@ -1008,7 +1005,7 @@ fn map_unpaywall_error(error: deepref_integrations::UnpaywallError) -> ApiError 
         UnpaywallError::Rejected(status) if status == StatusCode::UNPROCESSABLE_ENTITY => {
             ApiError::Conflict {
                 code: "contact_email_rejected".to_owned(),
-                message: "Unpaywall did not accept the contact e-mail in Settings. Check that it is a real address.".to_owned(),
+                message: "Unpaywall did not accept the configured contact e-mail (DEEPREF_CONTACT_EMAIL). Check that it is a real address.".to_owned(),
                 details: serde_json::json!({}),
             }
         }

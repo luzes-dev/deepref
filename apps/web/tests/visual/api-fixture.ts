@@ -488,7 +488,6 @@ const prisma: PrismaDto = {
 };
 
 const settings: SettingsDto = {
-	crossref_mailto: 'research@example.org',
 	default_max_depth: 2,
 	max_concurrency: 8,
 	rate_limit_per_second: 1,

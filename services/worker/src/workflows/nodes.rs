@@ -559,19 +559,13 @@ async fn import_identifiers(context: &Context<'_>) -> NodeResult {
             )),
         );
     }
-    let settings = crate::store::load_runtime_settings(context.pool)
-        .await
-        .map_err(|_| NodeError::retryable("The settings could not be read."))?;
     // What the project already holds under these identifiers, before anything is added.
     let before = identifier_reports(context, &dois, &pmids).await?;
     let mut records = Vec::new();
     let mut unresolved = 0usize;
     if !dois.is_empty() {
-        let provider = deepref_integrations::CrossrefClient::new(
-            settings.crossref_mailto.clone(),
-            &context.runtime.crossref,
-        )
-        .map_err(|_| NodeError::permanent("The Crossref connection could not be prepared."))?;
+        let provider = deepref_integrations::CrossrefClient::new(&context.runtime.integrations)
+            .map_err(|_| NodeError::permanent("The Crossref connection could not be prepared."))?;
         for doi in &dois {
             match provider.fetch_work_with_references(doi).await {
                 Ok(work) => records.push(deepref_integrations::raw_record_from_crossref_work(work)),
@@ -582,7 +576,7 @@ async fn import_identifiers(context: &Context<'_>) -> NodeResult {
     if !pmids.is_empty() {
         let client = deepref_integrations::PubmedClient::new(
             net::trusted_client()?,
-            settings.crossref_mailto.clone(),
+            context.runtime.integrations.contact_email.clone(),
         );
         let articles = pubmed::fetch_pubmed(context.pool, &client, &pmids).await?;
         records.extend(
@@ -997,11 +991,9 @@ async fn attach_pdf(context: &Context<'_>) -> NodeResult {
             )),
         );
     }
-    let settings = crate::store::load_runtime_settings(context.pool)
-        .await
-        .map_err(|_| NodeError::retryable("The settings could not be read."))?;
     let client = net::trusted_client()?;
     let actor = automation_actor(context)?;
+    let contact_email = context.runtime.integrations.contact_email.trim();
     let (mut attached, mut missing) = (0usize, 0usize);
     for item in &items {
         let Some(report_id) = report_ids(std::slice::from_ref(item)).first().copied() else {
@@ -1011,11 +1003,9 @@ async fn attach_pdf(context: &Context<'_>) -> NodeResult {
             cfg_str(&execution.config, "url").map(|template| render_template(template, item))
         } else {
             match item.get("doi").and_then(Value::as_str) {
-                Some(doi) if !settings.crossref_mailto.trim().is_empty() => {
-                    let lookup = format!(
-                        "https://api.unpaywall.org/v2/{doi}?email={}",
-                        settings.crossref_mailto.trim()
-                    );
+                Some(doi) if !contact_email.is_empty() => {
+                    let lookup =
+                        format!("https://api.unpaywall.org/v2/{doi}?email={contact_email}");
                     match net::trusted_get(&client, &lookup).await {
                         Ok(body) => serde_json::from_str::<Value>(&body).ok().and_then(|value| {
                             value
