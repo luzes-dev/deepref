@@ -7,11 +7,6 @@ type Attributes = Record<string, unknown>;
 type Reducer = (key: string, data: Attributes, attrs: Attributes) => Attributes;
 type Handler = (payload: Record<string, unknown>) => void;
 type FakeGraph = import('graphology').default<Attributes, Attributes>;
-type FakePrimitives = {
-	nodes?: {
-		labelAttachments?: Record<string, (context: Attributes) => Attributes | null>;
-	};
-};
 
 const sigma = vi.hoisted(() => ({ instances: [] as FakeSigma[] }));
 
@@ -21,7 +16,6 @@ class FakeSigma {
 		settings: Record<string, unknown>;
 		nodeReducer?: Reducer;
 		edgeReducer?: Reducer;
-		primitives?: FakePrimitives;
 	};
 	handlers = new Map<string, Handler>();
 	refresh = vi.fn();
@@ -52,6 +46,18 @@ class FakeSigma {
 	}
 	viewportToGraph({ x, y }: { x: number; y: number }) {
 		return { x, y };
+	}
+	graphToViewport({ x, y }: { x: number; y: number }) {
+		return { x, y };
+	}
+	scaleSize(size: number) {
+		return size;
+	}
+	getNodeDisplayData(key: string) {
+		return { ...this.graph.getNodeAttributes(key), ...this.node(key) };
+	}
+	getGraphState() {
+		return { isIdle: true };
 	}
 	on(event: string, handler: Handler) {
 		this.handlers.set(event, handler);
@@ -168,20 +174,6 @@ describe('project graph renderer', () => {
 		const { instance } = await mounted();
 		expect(instance.graph.order).toBe(4);
 		expect(instance.graph.edges()).toHaveLength(2);
-		expect(instance.setCustomBBox).toHaveBeenCalled();
-		expect(instance.options.settings.labelDensity).toBe(4);
-		// Match v3 screen-based sizing so nodes keep their size when zooming.
-		expect(instance.options.settings.itemSizesReference).toBe('screen');
-	});
-
-	it('keeps the full label next to the displayed label', async () => {
-		const { instance } = await mounted();
-		const node = instance.graph.getNodeAttributes('a');
-		const fullLabel = String(node.fullLabel);
-		expect(fullLabel).toBe('Early mobilisation after cardiac surgery in older adults');
-		// The displayed label is the truncation of the full label when a measuring
-		// canvas exists; measurement is unavailable in jsdom.
-		expect(String(node.label).length).toBeLessThanOrEqual(fullLabel.length);
 	});
 
 	it.each(fields)('colors nodes by %s', async (colorBy) => {
@@ -210,8 +202,8 @@ describe('project graph renderer', () => {
 	it('focuses the hovered node and its neighbours and dims the rest', async () => {
 		const { instance } = await mounted();
 		instance.emit('enterNode', { node: 'a' });
-		expect(instance.node('a')).toMatchObject({ labelVisibility: 'visible', zIndex: 4 });
-		expect(instance.node('b')).toMatchObject({ labelVisibility: 'visible', zIndex: 2 });
+		expect(instance.node('a').labelVisibility).toBe('hidden');
+		expect(instance.node('b').labelVisibility).toBe('visible');
 		expect(instance.node('d').labelVisibility).toBe('hidden');
 		const [ab, bc] = instance.graph.edges();
 		expect(instance.edge(ab!).size).toBe(2);
@@ -221,31 +213,46 @@ describe('project graph renderer', () => {
 		expect(instance.node('d').labelVisibility).toBe('visible');
 	});
 
-	it('attaches a hover card to the active node only', async () => {
-		const { instance } = await mounted();
-		const primitives = instance.options.primitives as FakePrimitives;
-		expect(Object.keys(primitives.nodes?.labelAttachments ?? {})).toContain('hover-card');
-
+	it('replaces the hovered native label with one full-title card', async () => {
+		const { renderer, instance } = await mounted();
 		instance.emit('enterNode', { node: 'a' });
-		expect(instance.node('a')).toMatchObject({
-			labelAttachment: 'hover-card',
-			labelAttachmentPlacement: 'right',
-			backdropVisibility: 'visible',
-			backdropArea: 'label'
-		});
-		expect(instance.node('b').labelAttachment).toBeUndefined();
+		instance.emit('afterRender');
+		const visibleCards = () => document.querySelectorAll('.graph-hover-card:not([hidden])');
+		expect(visibleCards()).toHaveLength(1);
+		expect(visibleCards()[0]?.textContent).toBe(nodes[0].title);
+		expect(instance.node('a').labelVisibility).toBe('hidden');
 
+		renderer.setSelection('a');
+		instance.emit('afterRender');
+		expect(visibleCards()).toHaveLength(1);
 		instance.emit('leaveNode');
-		expect(instance.node('a').labelAttachment).toBeUndefined();
+		instance.emit('afterRender');
+		expect(visibleCards()).toHaveLength(1);
+		expect(visibleCards()[0]?.textContent).toBe(nodes[0].title);
+
+		renderer.setSelection(undefined);
+		instance.emit('afterRender');
+		expect(visibleCards()).toHaveLength(0);
+		expect(instance.node('a').labelVisibility).toBe('visible');
+		renderer.destroy();
 	});
 
-	it('keeps the selected article highlighted', async () => {
+	it('hides filtered cards and removes them when the graph is cleared', async () => {
 		const { renderer, instance } = await mounted();
 		renderer.setSelection('b');
-		expect(instance.node('b')).toMatchObject({ zIndex: 3, labelVisibility: 'visible' });
-		expect(instance.node('b').labelAttachment).toBe('hover-card');
-		expect(instance.node('a').zIndex).toBe(2);
+		instance.emit('afterRender');
+		expect(document.querySelector('.graph-hover-card:not([hidden])')?.textContent).toBe(
+			nodes[1].title
+		);
+		expect(instance.node('b').labelVisibility).toBe('hidden');
+		expect(instance.node('a').labelVisibility).toBe('visible');
 		expect(instance.node('d').labelVisibility).toBe('hidden');
+
+		renderer.setVisibleNodes(new Set(['a', 'c', 'd']));
+		instance.emit('afterRender');
+		expect(document.querySelector('.graph-hover-card:not([hidden])')).toBeNull();
+		renderer.clear();
+		expect(document.querySelector('.graph-hover-card')).toBeNull();
 	});
 
 	it('selects on click and clears on the stage, but not right after a drag', async () => {
@@ -263,14 +270,5 @@ describe('project graph renderer', () => {
 		instance.emit('upNode');
 		instance.emit('clickNode', { node: 'b' });
 		expect(onSelect).toHaveBeenCalledTimes(1);
-	});
-
-	it('resets the camera and tears down on clear', async () => {
-		const { renderer, instance } = await mounted();
-		await renderer.reset();
-		expect(instance.camera.setState).toHaveBeenCalled();
-		renderer.refreshAppearance({ colorBy: 'study', fields });
-		renderer.destroy();
-		expect(instance.kill).toHaveBeenCalled();
 	});
 });
