@@ -15,6 +15,7 @@ pub mod extraction;
 pub mod jobs;
 pub mod prisma;
 pub mod protocol;
+pub mod router;
 pub mod study;
 pub mod workflows;
 
@@ -63,6 +64,10 @@ pub use prisma::{
 pub use protocol::{
     ProtocolCommandError, ProtocolCriterionCommand, PublishProtocolCommand,
     SaveProtocolDraftCommand, validate_protocol_text,
+};
+pub use router::{
+    AttemptOutcome, ProviderAttempt, ProviderRouter, RouteError, RouteOutput, RouterError,
+    citation_sources, effective_chain,
 };
 pub use study::{
     AssignReportToStudy, ClassifyStudy, CreateStudy, RemoveReportFromStudy, RenameStudy,
