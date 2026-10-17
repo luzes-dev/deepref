@@ -4,9 +4,9 @@ import { appraisalStatus, provenanceStatus, screeningStatus, studyStatus } from 
 import { fitBBoxWithLabels, getGraphNodeSize, layoutIsolatedNodes } from './graph-layout';
 import { reportLabel } from './report-label';
 import type SigmaType from 'sigma';
-import type { NodeHoverDrawingFunction, NodeLabelDrawingFunction } from 'sigma/rendering';
+import type { LabelAttachmentContext, LabelAttachmentContent } from 'sigma/primitives';
 import type { Settings } from 'sigma/settings';
-import type { MouseCoords } from 'sigma/types';
+import type { EdgeDisplayData, MouseCoords, NodeDisplayData, SigmaOptions } from 'sigma/types';
 
 export type ProjectGraphRenderModel = {
 	nodes: GraphNodeDto[];
@@ -37,9 +37,8 @@ export function createProjectGraphRenderer(
 	callbacks: ProjectGraphRendererCallbacks
 ): ProjectGraphRenderer {
 	let target: HTMLDivElement | undefined;
-	let renderer: SigmaType<GraphNodeAttributes, GraphEdgeAttributes> | undefined;
-	let graph:
-		ReturnType<SigmaType<GraphNodeAttributes, GraphEdgeAttributes>['getGraph']> | undefined;
+	let renderer: SigmaRenderer | undefined;
+	let graph: GraphInstance | undefined;
 	let themeObserver: MutationObserver | undefined;
 	let resizeObserver: ResizeObserver | undefined;
 	let renderRun = 0;
@@ -120,25 +119,28 @@ export function createProjectGraphRenderer(
 	};
 
 	type GraphNodeAttributes = GraphNodeDto & {
+		// Raw graph attributes double as display data, so they remain indexable.
+		[key: string]: unknown;
 		label: string;
 		fullLabel: string;
 		type: string;
 		x: number;
 		y: number;
 		size: number;
-		color?: string;
-		hidden?: boolean;
-		highlighted?: boolean;
-		forceLabel?: boolean;
-		zIndex?: number;
 	};
 
 	type GraphEdgeAttributes = {
+		[key: string]: unknown;
 		size: number;
 		color?: string;
-		hidden?: boolean;
 		zIndex?: number;
 	};
+
+	// Sigma 4 keeps the default `Sigma<Attributes, ...>` type instantiations.
+	// Renderer-bound declarations carry the project graph generics and only
+	// downgrade to raw records where sigma hands them over (reducer calls).
+	type SigmaRenderer = SigmaType<GraphNodeAttributes, GraphEdgeAttributes>;
+	type ProjectSigmaOptions = SigmaOptions<GraphNodeAttributes, GraphEdgeAttributes>;
 	type GraphInstance = ReturnType<
 		SigmaType<GraphNodeAttributes, GraphEdgeAttributes>['getGraph']
 	>;
@@ -147,16 +149,16 @@ export function createProjectGraphRenderer(
 	type ForceAtlas2Module = typeof import('graphology-layout-forceatlas2');
 	type NoverlapModule = typeof import('graphology-layout-noverlap');
 
-	type GraphLabelData = {
-		color?: string;
-		doi?: string;
-		report_id?: string;
-		fullLabel?: string | null;
-		label?: string | null;
-		size: number;
-		x: number;
-		y: number;
-	};
+	const HOVER_CARD_ATTACHMENT = 'hover-card';
+	const LABEL_FONT_SIZE = 12;
+	const LABEL_FONT = `500 ${LABEL_FONT_SIZE}px IBM Plex Sans Variable, sans-serif`;
+	const LABEL_FONT_FAMILY = 'IBM Plex Sans Variable, sans-serif';
+	// Sigma derives the label font from this string via its own font parser,
+	// which supports a leading numeric weight.
+	const LABEL_FONT_TOKEN = `500 ${LABEL_FONT_FAMILY}`;
+	const LABEL_LINE_HEIGHT = LABEL_FONT_SIZE + 4;
+	const HOVER_CARD_PADDING_X = 8;
+	const HOVER_CARD_PADDING_Y = 6;
 
 	type GraphInteractionState = {
 		visibleNodeIds: Set<string>;
@@ -185,11 +187,26 @@ export function createProjectGraphRenderer(
 		labelHalo: '#f8fafc',
 		hoverBackground: '#ffffff'
 	};
+	// Sigma 4 still parses hex and comma-separated RGB, but not CSS OKLCH, so
+	// theme colors are resolved through the browser at this rendering boundary.
+	let measureContext: CanvasRenderingContext2D | null | undefined;
+
+	function getMeasureContext(): CanvasRenderingContext2D | null | undefined {
+		if (measureContext !== undefined) return measureContext;
+		measureContext = document.createElement('canvas').getContext('2d');
+		return measureContext;
+	}
+
+	function openLabelMeasuring(): CanvasRenderingContext2D | null {
+		const context = getMeasureContext();
+		if (!context) return null;
+		context.font = LABEL_FONT;
+		return context;
+	}
+
 	function readGraphPalette(target: HTMLElement): GraphPalette {
 		const source = target.closest('.graph-frame') ?? target;
 		const styles = getComputedStyle(source);
-		// Sigma 3 parses hex and comma-separated RGB, but not CSS OKLCH.
-		// Resolve theme colors through the browser at this rendering boundary.
 		const canvas = document.createElement('canvas');
 		canvas.width = canvas.height = 1;
 		const context = canvas.getContext('2d', { willReadFrequently: true });
@@ -222,8 +239,9 @@ export function createProjectGraphRenderer(
 
 	function updateGraphPalette(target: HTMLElement) {
 		interaction.palette = readGraphPalette(target);
-		renderer?.setSettings(buildSigmaSettings());
-		renderer?.scheduleRefresh({ layoutUnchange: true });
+		// Reducers read the palette on every refresh, so a scheduled refresh is
+		// all it takes to propagate a theme change.
+		renderer?.refresh({ schedule: true });
 	}
 
 	function setupThemeObserver(target: HTMLElement) {
@@ -318,24 +336,53 @@ export function createProjectGraphRenderer(
 			: interaction.palette.nodeDefault;
 	}
 
+	// The native backdrop is used as the hover card frame; the attachment itself
+	// carries the wrapped full label. Enabling the backdrop also routes the node
+	// through sigma's attachment pipeline.
+	function hoverCardAppearance(): Partial<NodeDisplayData> {
+		return {
+			labelAttachment: HOVER_CARD_ATTACHMENT,
+			labelAttachmentPlacement: 'right',
+			backdropArea: 'label',
+			backdropVisibility: 'visible',
+			backdropColor: interaction.palette.hoverBackground,
+			backdropBorderColor: interaction.palette.edgeFocused,
+			backdropBorderWidth: 1,
+			backdropCornerRadius: 6,
+			backdropPadding: HOVER_CARD_PADDING_X,
+			backdropShadowBlur: 0,
+			backdropShadowColor: 'rgba(0, 0, 0, 0)'
+		};
+	}
+
 	function reducedNodeAppearance(
 		node: string,
-		data: GraphNodeAttributes
-	): Pick<GraphNodeAttributes, 'color' | 'label' | 'highlighted' | 'forceLabel' | 'zIndex'> {
-		const selected = data.report_id === interaction.selectedArticle;
+		data: NodeDisplayData,
+		attrs: GraphNodeAttributes
+	): Partial<NodeDisplayData> {
+		const selected = attrs.report_id === interaction.selectedArticle;
 		const hovered = node === interaction.hoveredNode;
 		const focused = interaction.focusedNodeIds.has(node);
 		const focusActive = Boolean(interaction.hoveredNode || interaction.selectedNode);
-		const base = {
-			color: getBaseNodeColor(data),
-			label: data.label,
-			highlighted: hovered || selected,
-			forceLabel: graph ? graph.order <= LABEL_ALL_NODE_COUNT : false,
+		const base: Partial<NodeDisplayData> = {
+			color: getBaseNodeColor(attrs),
+			label: data.label ?? attrs.label,
+			labelColor: interaction.palette.label,
+			labelSize: LABEL_FONT_SIZE,
+			labelFont: LABEL_FONT_TOKEN,
+			labelVisibility: graph && graph.order <= LABEL_ALL_NODE_COUNT ? 'visible' : 'auto',
+			visibility: 'visible',
 			zIndex: selected ? 3 : 0
 		};
 		if (!focusActive) return base;
 		if (hovered) {
-			return { ...base, color: interaction.palette.nodeFocused, forceLabel: true, zIndex: 4 };
+			return {
+				...base,
+				color: interaction.palette.nodeFocused,
+				labelVisibility: 'visible',
+				zIndex: 4,
+				...hoverCardAppearance()
+			};
 		}
 		if (focused) {
 			return {
@@ -343,38 +390,64 @@ export function createProjectGraphRenderer(
 				color: selected
 					? interaction.palette.nodeSelected
 					: interaction.palette.nodeFocused,
-				forceLabel: true,
-				zIndex: Math.max(base.zIndex, 2)
+				labelVisibility: 'visible',
+				zIndex: Math.max(base.zIndex ?? 0, 2),
+				...(selected ? hoverCardAppearance() : {})
 			};
 		}
 		return {
 			...base,
 			color: withAlpha(interaction.palette.nodeDimmed, DIMMED_NODE_ALPHA),
-			label: ''
+			labelVisibility: 'hidden'
 		};
 	}
 
-	function createNodeReducer() {
-		return (node: string, data: GraphNodeAttributes): GraphNodeAttributes => {
-			if (!interaction.visibleNodeIds.has(node)) {
-				return { ...data, hidden: true };
-			}
+	function reduceNode(
+		node: string,
+		data: NodeDisplayData,
+		attrs: GraphNodeAttributes
+	): Partial<NodeDisplayData> {
+		if (!interaction.visibleNodeIds.has(node)) {
+			return { visibility: 'hidden' };
+		}
 
+		return reducedNodeAppearance(node, data, attrs);
+	}
+
+	function reduceEdge(
+		edge: string,
+		data: EdgeDisplayData,
+		attrs: GraphEdgeAttributes & { source?: string; target?: string }
+	): Partial<EdgeDisplayData> {
+		const endpoints = edgeEndpoints(edge, attrs);
+		if (!endpoints || endpoints.some((node) => !interaction.visibleNodeIds.has(node))) {
+			return { ...data, visibility: 'hidden', zIndex: 0 };
+		}
+		if (!interaction.hoveredNode && !interaction.selectedNode) {
 			return {
-				...data,
-				...reducedNodeAppearance(node, data),
-				hidden: false
+				color: interaction.palette.edgeDefault,
+				visibility: 'visible',
+				size: 1,
+				zIndex: 0
 			};
-		};
+		}
+		return { ...focusedEdgeAppearance(edge), visibility: 'visible' };
 	}
 
-	function createEdgeReducer() {
-		return reduceEdge;
+	function focusedEdgeAppearance(edge: string): Partial<EdgeDisplayData> {
+		const focused = interaction.focusedEdgeIds.has(edge);
+		return {
+			color: focused
+				? interaction.palette.edgeFocused
+				: withAlpha(interaction.palette.edgeDimmed, DIMMED_EDGE_ALPHA),
+			size: focused ? 2 : 0.5,
+			zIndex: focused ? 2 : 0
+		};
 	}
 
 	function edgeEndpoints(
 		edge: string,
-		data: GraphEdgeAttributes & { source?: string; target?: string }
+		data: { source?: string; target?: string }
 	): [string, string] | undefined {
 		const extremities = graph?.extremities(edge);
 		const source = extremities?.[0] ?? data.source;
@@ -382,55 +455,42 @@ export function createProjectGraphRenderer(
 		return source && target ? [source, target] : undefined;
 	}
 
-	function focusedEdgeAppearance(edge: string): GraphEdgeAttributes {
-		const focused = interaction.focusedEdgeIds.has(edge);
+	function buildSigmaSettings(): Partial<Settings> {
+		const smallGraph = Boolean(graph && graph.order <= LABEL_ALL_NODE_COUNT);
 		return {
-			color: focused
-				? interaction.palette.edgeFocused
-				: withAlpha(interaction.palette.edgeDimmed, DIMMED_EDGE_ALPHA),
-			hidden: false,
-			size: focused ? 2 : 0.5,
-			zIndex: focused ? 2 : 0
+			hideLabelsOnMove: true,
+			labelDensity: smallGraph ? 4 : 0.45,
+			labelGridCellSize: 160,
+			labelRenderedSizeThreshold: smallGraph ? 0 : 8,
+			stagePadding: STAGE_PADDING,
+			// Sigma 4 defaults to "positions", where node sizes grow with zoom; the
+			// graph view keeps v3's screen-constant sizing.
+			itemSizesReference: 'screen'
 		};
 	}
 
-	function reduceEdge(
-		edge: string,
-		data: GraphEdgeAttributes & { source?: string; target?: string }
-	): GraphEdgeAttributes {
-		const endpoints = edgeEndpoints(edge, data);
-		if (!endpoints) return { ...data, hidden: true };
-		if (endpoints.some((node) => !interaction.visibleNodeIds.has(node))) {
-			return { ...data, hidden: true };
-		}
-		if (!interaction.hoveredNode && !interaction.selectedNode) {
-			return {
-				...data,
-				color: interaction.palette.edgeDefault,
-				hidden: false,
-				size: 1,
-				zIndex: 0
-			};
-		}
-		return { ...data, ...focusedEdgeAppearance(edge) };
-	}
-
-	function buildSigmaSettings(): Partial<Settings<GraphNodeAttributes, GraphEdgeAttributes>> {
+	function buildSigmaOptions(): ProjectSigmaOptions {
 		return {
-			hideLabelsOnMove: true,
-			labelFont: 'IBM Plex Sans Variable, sans-serif',
-			labelSize: 12,
-			labelWeight: '500',
-			labelDensity: graph && graph.order <= LABEL_ALL_NODE_COUNT ? 4 : 0.45,
-			labelGridCellSize: 160,
-			labelRenderedSizeThreshold: graph && graph.order <= LABEL_ALL_NODE_COUNT ? 0 : 8,
-			stagePadding: STAGE_PADDING,
-			labelColor: { color: interaction.palette.label },
-			defaultDrawNodeLabel: drawTruncatedNodeLabel,
-			defaultDrawNodeHover: drawNodeHoverLabel,
-			nodeReducer: createNodeReducer(),
-			edgeReducer: createEdgeReducer(),
-			zIndex: true
+			primitives: {
+				nodes: {
+					label: {
+						// The backdrop of a hovered node wraps the label box, the
+						// attachment gap and the attachment itself; the margin keeps
+						// that frame clear of the node disc.
+						margin: 10,
+						font: {
+							family: LABEL_FONT_FAMILY,
+							weight: '500'
+						}
+					},
+					labelAttachments: {
+						[HOVER_CARD_ATTACHMENT]: drawHoverCardAttachment
+					}
+				}
+			},
+			settings: buildSigmaSettings(),
+			nodeReducer: reduceNode,
+			edgeReducer: reduceEdge
 		};
 	}
 
@@ -464,7 +524,7 @@ export function createProjectGraphRenderer(
 	function resetGraphCamera() {
 		fitGraphToView();
 		renderer?.getCamera().setState({ x: 0.5, y: 0.5, ratio: 1, angle: 0 });
-		renderer?.scheduleRefresh({ layoutUnchange: true });
+		renderer?.refresh({ schedule: true });
 	}
 
 	function getForceAtlasIterations(nodeCount: number) {
@@ -516,7 +576,7 @@ export function createProjectGraphRenderer(
 			current = appended.current;
 			if (appended.full) break;
 		}
-		return finishWrappedLines(context, lines, current, text, maxWidth, maxLines);
+		return closeWrappedLines(context, lines, current, text, maxWidth, maxLines);
 	}
 
 	function appendWrappedWord(
@@ -537,7 +597,11 @@ export function createProjectGraphRenderer(
 		return { current: word, full: lines.length === maxLines };
 	}
 
-	function finishWrappedLines(
+	// Sealed off after the word loop: any line still pending is flushed, an
+	// entirely empty wrap means the text itself exceeds the first line width,
+	// and once the line cap was reached the leftover text is re-truncated into
+	// the final line.
+	function closeWrappedLines(
 		context: CanvasRenderingContext2D,
 		lines: string[],
 		current: string,
@@ -547,127 +611,95 @@ export function createProjectGraphRenderer(
 	): string[] {
 		if (lines.length < maxLines && current) lines.push(current);
 		if (lines.length === 0) lines.push(truncateTextToWidth(context, text, maxWidth));
+		return reflowTruncatedTail(context, lines, text, maxWidth, maxLines);
+	}
+
+	function reflowTruncatedTail(
+		context: CanvasRenderingContext2D,
+		lines: string[],
+		text: string,
+		maxWidth: number,
+		maxLines: number
+	): string[] {
 		if (lines.length !== maxLines) return lines.slice(0, maxLines);
 		const consumed = lines.join(' ');
-		if (consumed.length < text.length) {
-			lines[maxLines - 1] = truncateTextToWidth(
-				context,
-				lines[maxLines - 1] + ' ' + text.slice(consumed.length),
-				maxWidth
-			);
-		}
+		if (consumed.length >= text.length) return lines.slice(0, maxLines);
+		lines[maxLines - 1] = truncateTextToWidth(
+			context,
+			`${lines[maxLines - 1]} ${text.slice(consumed.length)}`,
+			maxWidth
+		);
 		return lines.slice(0, maxLines);
 	}
 
-	function roundedRect(
-		context: CanvasRenderingContext2D,
-		x: number,
-		y: number,
-		width: number,
-		height: number,
-		radius: number
-	) {
-		const nextRadius = Math.min(radius, width / 2, height / 2);
-		context.beginPath();
-		context.moveTo(x + nextRadius, y);
-		context.lineTo(x + width - nextRadius, y);
-		context.quadraticCurveTo(x + width, y, x + width, y + nextRadius);
-		context.lineTo(x + width, y + height - nextRadius);
-		context.quadraticCurveTo(x + width, y + height, x + width - nextRadius, y + height);
-		context.lineTo(x + nextRadius, y + height);
-		context.quadraticCurveTo(x, y + height, x, y + height - nextRadius);
-		context.lineTo(x, y + nextRadius);
-		context.quadraticCurveTo(x, y, x + nextRadius, y);
-		context.closePath();
+	function truncateNodeLabel(label: string): string {
+		const context = openLabelMeasuring();
+		if (!context) return label;
+		return truncateTextToWidth(context, label, NORMAL_LABEL_MAX_WIDTH);
 	}
 
-	const drawTruncatedNodeLabel: NodeLabelDrawingFunction<
-		GraphNodeAttributes,
-		GraphEdgeAttributes
-	> = (context, data, settings) => {
-		if (!data.label) return;
-		const active = Boolean(
-			data.report_id === interaction.selectedArticle ||
-			data.report_id === interaction.hoveredNode
-		);
-		if (active) {
-			drawFullNodeLabel(context, data, settings);
-			return;
-		}
+	// Attachment contexts carry the raw graph attributes.
+	function readAttachmentLabel(attributes: unknown): string {
+		const attrs = attributes as GraphNodeAttributes;
+		return String(attrs.fullLabel ?? attrs.label ?? '');
+	}
 
-		context.save();
-		context.font = `${settings.labelWeight} ${settings.labelSize}px ${settings.labelFont}`;
-		const text = truncateTextToWidth(context, String(data.label), NORMAL_LABEL_MAX_WIDTH);
-		const x = data.x + data.size + 4;
-		const y = data.y + settings.labelSize / 3;
-		context.lineJoin = 'round';
-		context.lineWidth = 4;
-		context.strokeStyle = interaction.palette.labelHalo;
-		context.fillStyle = interaction.palette.label;
-		context.strokeText(text, x, y);
-		context.fillText(text, x, y);
-		context.restore();
-	};
+	function buildHoverCardLines(
+		label: string
+	): { measure: CanvasRenderingContext2D; lines: string[] } | null {
+		const measure = openLabelMeasuring();
+		if (!measure) return null;
+		return { measure, lines: wrapTextToLines(measure, label, HOVER_LABEL_MAX_WIDTH, Infinity) };
+	}
 
-	const drawNodeHoverLabel: NodeHoverDrawingFunction<GraphNodeAttributes, GraphEdgeAttributes> = (
-		context,
-		data,
-		settings
-	) => {
-		drawFullNodeLabel(context, data, settings);
-	};
-
-	function drawFullNodeLabel(
-		context: CanvasRenderingContext2D,
-		data: GraphLabelData,
-		settings: Settings<GraphNodeAttributes, GraphEdgeAttributes>
-	) {
-		const label = String(data.fullLabel ?? data.label ?? '');
-		if (!label) return;
-
-		context.save();
-		context.font = `${settings.labelWeight} ${settings.labelSize}px ${settings.labelFont}`;
-		const lines = wrapTextToLines(
-			context,
-			label,
-			HOVER_LABEL_MAX_WIDTH,
-			Number.POSITIVE_INFINITY
-		);
-		const lineHeight = settings.labelSize + 4;
+	function paintHoverCardLines(
+		measure: CanvasRenderingContext2D,
+		lines: string[],
+		pixelRatio: number
+	): HTMLCanvasElement | null {
 		const textWidth = Math.min(
 			HOVER_LABEL_MAX_WIDTH,
-			Math.max(...lines.map((line) => context.measureText(line).width), 0)
+			Math.max(...lines.map((line) => measure.measureText(line).width), 0)
 		);
-		const paddingX = 8;
-		const paddingY = 6;
-		const boxWidth = textWidth + paddingX * 2;
-		const boxHeight = lines.length * lineHeight + paddingY * 2;
-		const boxX = data.x + data.size + 8;
-		const boxY = data.y - boxHeight / 2;
+		const boxWidth = textWidth + HOVER_CARD_PADDING_X * 2;
+		const boxHeight = lines.length * LABEL_LINE_HEIGHT + HOVER_CARD_PADDING_Y * 2;
+		const canvas = document.createElement('canvas');
+		canvas.width = Math.max(1, Math.ceil(boxWidth * pixelRatio));
+		canvas.height = Math.max(1, Math.ceil(boxHeight * pixelRatio));
+		const context = canvas.getContext('2d');
+		if (!context) return null;
 
-		context.beginPath();
-		context.arc(data.x, data.y, data.size + 4, 0, Math.PI * 2);
-		context.fillStyle = interaction.palette.labelHalo;
-		context.fill();
-		context.beginPath();
-		context.arc(data.x, data.y, data.size + 1, 0, Math.PI * 2);
-		context.fillStyle = data.color ?? interaction.palette.nodeFocused;
-		context.fill();
-		roundedRect(context, boxX, boxY, boxWidth, boxHeight, 6);
-		context.fillStyle = interaction.palette.hoverBackground;
-		context.fill();
-		context.strokeStyle = interaction.palette.edgeFocused;
-		context.lineWidth = 1;
-		context.stroke();
+		paintHoverCardText(context, lines, pixelRatio);
+		return canvas;
+	}
+
+	function paintHoverCardText(
+		context: CanvasRenderingContext2D,
+		lines: string[],
+		pixelRatio: number
+	) {
+		context.scale(pixelRatio, pixelRatio);
+		context.font = LABEL_FONT;
 		context.fillStyle = interaction.palette.label;
 		lines.forEach((line, index) => {
 			context.fillText(
 				line,
-				boxX + paddingX,
-				boxY + paddingY + settings.labelSize + index * lineHeight
+				HOVER_CARD_PADDING_X,
+				HOVER_CARD_PADDING_Y + LABEL_FONT_SIZE + index * LABEL_LINE_HEIGHT
 			);
 		});
-		context.restore();
+	}
+
+	function drawHoverCardAttachment({
+		attributes,
+		pixelRatio
+	}: LabelAttachmentContext): LabelAttachmentContent | null {
+		const label = readAttachmentLabel(attributes);
+		if (!label) return null;
+		const prepared = buildHoverCardLines(label);
+		if (!prepared) return null;
+		const canvas = paintHoverCardLines(prepared.measure, prepared.lines, pixelRatio);
+		return canvas ? { type: 'canvas', canvas } : null;
 	}
 
 	function getNodeIdByArticle(reportId: string | undefined) {
@@ -703,7 +735,7 @@ export function createProjectGraphRenderer(
 	function setHoveredNode(node: string | undefined) {
 		interaction.hoveredNode = node;
 		updateFocusSets();
-		renderer?.scheduleRefresh({ layoutUnchange: true });
+		renderer?.refresh({ schedule: true });
 	}
 
 	function getGraphFrame() {
@@ -727,13 +759,11 @@ export function createProjectGraphRenderer(
 		event.original.stopPropagation();
 		interaction.dragMoved = true;
 		const position = renderer.viewportToGraph({ x: event.x, y: event.y });
+		// Sigma refreshes itself whenever node attributes change, so no explicit
+		// refresh is required here.
 		graph.mergeNodeAttributes(interaction.draggedNode, {
 			x: position.x,
 			y: position.y
-		});
-		renderer.scheduleRefresh({
-			partialGraph: { nodes: [interaction.draggedNode] },
-			layoutUnchange: true
 		});
 	}
 
@@ -748,7 +778,7 @@ export function createProjectGraphRenderer(
 		interaction.dragMoved = false;
 		renderer?.setSetting('enableCameraPanning', true);
 		getGraphFrame()?.classList.remove('graph-dragging');
-		renderer?.scheduleRefresh({ layoutUnchange: true });
+		renderer?.refresh({ schedule: true });
 	}
 
 	function updateVisibleNodes(visibleNodeIds: Set<string>) {
@@ -760,7 +790,7 @@ export function createProjectGraphRenderer(
 		if (interaction.draggedNode && !visibleNodeIds.has(interaction.draggedNode)) {
 			endNodeDrag();
 		}
-		renderer?.scheduleRefresh({ layoutUnchange: true });
+		renderer?.refresh({ schedule: true });
 	}
 
 	function updateSelection(selectedArticle: string | undefined) {
@@ -768,14 +798,14 @@ export function createProjectGraphRenderer(
 		interaction.selectedArticle = selectedArticle;
 		interaction.selectedNode = getNodeIdByArticle(selectedArticle);
 		updateFocusSets();
-		renderer?.scheduleRefresh({ layoutUnchange: true });
+		renderer?.refresh({ schedule: true });
 	}
 
 	function shouldIgnoreClickAfterDrag() {
 		return performance.now() - lastDragEndedAt < 250;
 	}
 
-	function registerGraphEvents(nextRenderer: SigmaType) {
+	function registerGraphEvents(nextRenderer: SigmaRenderer) {
 		nextRenderer.on('clickNode', ({ node }: { node: string }) => {
 			if (interaction.draggedNode || shouldIgnoreClickAfterDrag()) return;
 			const article = graph?.getNodeAttributes(node);
@@ -818,10 +848,13 @@ export function createProjectGraphRenderer(
 	): GraphInstance {
 		const nextGraph = new Graph<GraphNodeAttributes, GraphEdgeAttributes>();
 		for (const [index, node] of nodes.entries()) {
+			const label = reportLabel(node);
 			nextGraph.addNode(node.report_id, {
 				...node,
-				label: reportLabel(node),
-				fullLabel: reportLabel(node),
+				// Truncation is precomputed because sigma 4 renders labels through
+				// its SDF glyph pipeline, which has no canvas-style draw callback.
+				label: truncateNodeLabel(label),
+				fullLabel: label,
 				type: 'circle',
 				x: Math.cos(index) * 10,
 				y: Math.sin(index) * 10,
@@ -902,19 +935,16 @@ export function createProjectGraphRenderer(
 		setupThemeObserver(nextTarget);
 		if (!renderer) {
 			// The label settings depend on the graph size, so the graph must be set first.
-			graph = nextGraph;
-			renderer = new Sigma(nextGraph, nextTarget, buildSigmaSettings());
-			graph = renderer.getGraph();
+			renderer = new Sigma(nextGraph, nextTarget, buildSigmaOptions());
 			registerGraphEvents(renderer);
 			setupResizeObserver(nextTarget);
 			fitGraphToView();
 			return;
 		}
 		renderer.setGraph(nextGraph);
-		graph = renderer.getGraph();
-		renderer.setSettings(buildSigmaSettings());
 		fitGraphToView();
-		renderer.scheduleRefresh({ layoutUnchange: true });
+		// setSettings validates, applies and schedules an internal refresh.
+		renderer.setSettings(buildSigmaSettings());
 	}
 
 	async function renderGraph(
@@ -938,6 +968,7 @@ export function createProjectGraphRenderer(
 
 		const nextGraph = buildGraph(Graph, nodes, edges);
 		arrangeGraph(nextGraph, forceAtlas2, noverlap);
+		graph = nextGraph;
 		installGraph(nextGraph, target, Sigma);
 		interaction.selectedNode = getNodeIdByArticle(interaction.selectedArticle);
 		setHoveredNode(undefined);
@@ -975,7 +1006,7 @@ export function createProjectGraphRenderer(
 		setSelection: updateSelection,
 		refreshAppearance(appearance) {
 			model = { ...model, ...appearance };
-			renderer?.scheduleRefresh({ layoutUnchange: true });
+			renderer?.refresh({ schedule: true });
 		},
 		async reset() {
 			if (!target || model.nodes.length === 0) return;

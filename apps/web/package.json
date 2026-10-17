@@ -73,7 +73,7 @@
 		"prettier-plugin-tailwindcss": "^0.8.1",
 		"runed": "^0.37.1",
 		"shadcn-svelte": "^1.7.0",
-		"sigma": "^3.0.3",
+		"sigma": "^4.0.1",
 		"svelte": "^5.57.2",
 		"svelte-check": "^4.7.6",
 		"svelte-sonner": "^1.2.1",
