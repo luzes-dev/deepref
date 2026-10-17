@@ -6514,6 +6514,16 @@
                 }
               }
             }
+          },
+          "503": {
+            "description": "PubMed contact email is not configured",
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ApiErrorBody"
+                }
+              }
+            }
           }
         }
       }

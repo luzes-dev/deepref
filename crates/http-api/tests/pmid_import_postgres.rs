@@ -43,7 +43,20 @@ fn api_config() -> ApiConfig {
 }
 
 async fn call(pool: &PgPool, request: Request<Body>) -> Response<Body> {
-    router(AppState::core(pool.clone()), &api_config())
+    call_with_contact_email(pool, request, "tests@example.org").await
+}
+
+async fn call_with_contact_email(
+    pool: &PgPool,
+    request: Request<Body>,
+    contact_email: &str,
+) -> Response<Body> {
+    let state =
+        AppState::core(pool.clone()).with_integrations(deepref_config::IntegrationsConfig {
+            contact_email: contact_email.to_owned(),
+            ..Default::default()
+        });
+    router(state, &api_config())
         .oneshot(request)
         .await
         .expect("request should be handled")
@@ -79,6 +92,44 @@ fn import_request(project_id: Uuid, key: Option<&str>, content: &str) -> Request
             json!({"format": "pmid", "content": content}).to_string(),
         ))
         .expect("import request should be valid")
+}
+
+#[tokio::test]
+async fn a_pmid_import_without_a_contact_email_is_unavailable_and_creates_no_run_or_job() {
+    let Some(pool) = database().await else {
+        return;
+    };
+    let project_id = create_project(&pool).await;
+    for contact_email in ["", "   "] {
+        let response = call_with_contact_email(
+            &pool,
+            import_request(project_id, None, "19446324"),
+            contact_email,
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+        let body = json_body(response).await;
+        assert_eq!(body["code"], "CONFIGURATION_ERROR");
+        assert!(
+            body["message"]
+                .as_str()
+                .unwrap()
+                .contains("DEEPREF_CONTACT_EMAIL"),
+            "the failure must identify the missing deployment configuration: {body}"
+        );
+    }
+    let runs: i64 = sqlx::query_scalar("SELECT count(*) FROM acquisition_runs WHERE project_id=$1")
+        .bind(project_id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    let jobs: i64 = sqlx::query_scalar("SELECT count(*) FROM jobs WHERE project_id=$1")
+        .bind(project_id)
+        .fetch_one(&pool)
+        .await
+        .unwrap();
+    assert_eq!(runs, 0, "a refused import must not create an acquisition");
+    assert_eq!(jobs, 0, "a refused import must not queue provider requests");
 }
 
 #[tokio::test]

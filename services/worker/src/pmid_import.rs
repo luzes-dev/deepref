@@ -261,4 +261,60 @@ mod tests {
         assert_eq!(backoff(5), Duration::from_secs(300));
         assert_eq!(to_i32(i64::MAX), i32::MAX);
     }
+
+    #[tokio::test]
+    async fn a_queued_import_without_a_contact_email_fails_instead_of_retrying() {
+        let Some(pool) =
+            deepref_app::test_isolation::isolated_pool_from_env("DATABASE_URL", 4).await
+        else {
+            return;
+        };
+        let project_id = Uuid::new_v4();
+        sqlx::query("INSERT INTO projects (id,name) VALUES ($1,'missing PubMed contact')")
+            .bind(project_id)
+            .execute(&pool)
+            .await
+            .unwrap();
+        let run = deepref_app::create_pmid_import(
+            &pool,
+            &deepref_app::PmidImportRequest {
+                project_id,
+                idempotency_key: None,
+                pmids: batch(&["19446324", "123"]),
+            },
+        )
+        .await
+        .unwrap();
+        let action = handle_job(
+            &pool,
+            serde_json::json!({ "project_id": project_id, "acquisition_id": run.run_id }),
+            1,
+            3,
+            "",
+        )
+        .await
+        .unwrap();
+        assert_eq!(action, DeliveryAction::Ack);
+        let settled = deepref_app::load_pmid_run(&pool, run.run_id)
+            .await
+            .unwrap()
+            .unwrap();
+        assert_eq!(settled.status.as_str(), "failed");
+        let items: Vec<(String, String)> = sqlx::query_as(
+            "SELECT status, last_error FROM pmid_import_items
+             WHERE acquisition_run_id=$1 ORDER BY position",
+        )
+        .bind(run.run_id)
+        .fetch_all(&pool)
+        .await
+        .unwrap();
+        assert_eq!(items.len(), 2, "every queued PMID must be settled");
+        for (status, error) in items {
+            assert_eq!(status, "failed");
+            assert!(
+                error.contains("DEEPREF_CONTACT_EMAIL"),
+                "the item must explain the deployment configuration failure: {error}"
+            );
+        }
+    }
 }

@@ -113,8 +113,8 @@ pub struct PubmedClient {
 }
 
 impl PubmedClient {
-    /// `mailto` is the deployment contact address (`DEEPREF_CONTACT_EMAIL`). NCBI asks
-    /// for it as `email`, so it is sent when it is set. It is never a user's own address.
+    /// `mailto` is the deployment contact address (`DEEPREF_CONTACT_EMAIL`), never
+    /// a user's own address. Requests fail permanently when it is blank.
     pub fn new(http: reqwest::Client, mailto: impl Into<String>) -> Self {
         Self {
             http,
@@ -176,6 +176,12 @@ impl PubmedClient {
     }
 
     async fn get(&self, url: &str) -> Result<String, PubmedError> {
+        if self.mailto.trim().is_empty() {
+            return Err(PubmedError::Permanent(
+                "PubMed requests are unavailable: the server has no DEEPREF_CONTACT_EMAIL configured"
+                    .to_owned(),
+            ));
+        }
         let response = self.http.get(url).send().await.map_err(|_| {
             PubmedError::Retryable("The literature service did not answer.".to_owned())
         })?;
@@ -473,17 +479,28 @@ mod tests {
         assert_eq!(record.raw["authors"][0], "Wei Li");
     }
 
-    #[test]
-    fn requests_carry_the_tool_name_and_the_deployment_contact_only() {
-        let with_contact = PubmedClient::new(reqwest::Client::new(), " research@example.org ");
-        let url = with_contact.url("efetch.fcgi", "db=pubmed&id=123");
-        assert!(url.contains("&tool=DeepRef"), "{url}");
-        assert!(url.ends_with("&email=research%40example.org"), "{url}");
-
-        let without_contact = PubmedClient::new(reqwest::Client::new(), "   ");
-        let url = without_contact.url("efetch.fcgi", "db=pubmed&id=123");
-        assert!(url.contains("&tool=DeepRef"), "{url}");
-        assert!(!url.contains("email="), "{url}");
+    #[tokio::test]
+    async fn requests_without_a_contact_email_fail_permanently_before_contacting_pubmed() {
+        let http = reqwest::Client::builder()
+            .proxy(reqwest::Proxy::all("http://127.0.0.1:9").unwrap())
+            .timeout(std::time::Duration::from_secs(1))
+            .build()
+            .unwrap();
+        for contact in ["", "   "] {
+            let client = PubmedClient::new(http.clone(), contact);
+            let fetch_error = client.fetch(&["19446324".to_owned()]).await.unwrap_err();
+            let search_error = client.search("statins", 1).await.unwrap_err();
+            for error in [fetch_error, search_error] {
+                assert!(
+                    matches!(error, PubmedError::Permanent(_)),
+                    "missing contact must be a configuration failure, not a network retry: {error}"
+                );
+                assert!(
+                    error.message().contains("DEEPREF_CONTACT_EMAIL"),
+                    "the failure must name the missing deployment configuration: {error}"
+                );
+            }
+        }
     }
 
     #[test]

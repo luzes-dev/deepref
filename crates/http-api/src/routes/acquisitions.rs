@@ -420,6 +420,7 @@ pub(crate) async fn refresh_acquisition(
         (status = 404, description = "Project not found", body = ErrorResponse),
         (status = 409, description = "Idempotency conflict", body = ErrorResponse),
         (status = 413, description = "Import exceeds the request size limit", body = ErrorResponse),
+        (status = 503, description = "PubMed contact email is not configured", body = ErrorResponse),
         (status = 500, description = "Internal server error", body = ErrorResponse)
     )
 )]
@@ -513,6 +514,12 @@ async fn import_pmids(
 ) -> Result<(StatusCode, Json<AcquisitionDto>), ApiError> {
     let pmids = parse_pmid_list(content)?;
     let idempotency_key = idempotency_key(headers)?;
+    if state.integrations.contact_email.trim().is_empty() {
+        return Err(ApiError::Configuration(
+            "PubMed imports are unavailable: the server has no DEEPREF_CONTACT_EMAIL configured"
+                .to_owned(),
+        ));
+    }
     let result = deepref_app::create_pmid_import(
         &state.pool,
         &deepref_app::PmidImportRequest {
