@@ -71,7 +71,7 @@ pub async fn renew_claims(
 }
 
 pub async fn is_cached(pool: &PgPool, doi: &str) -> anyhow::Result<bool> {
-    Ok(sqlx::query("SELECT 1 FROM report_fetch_state f JOIN report_identifiers i ON i.report_id=f.report_id JOIN works w ON w.canonical_doi=f.canonical_doi WHERE i.scheme='doi' AND i.normalized_value=$1 AND f.provider='crossref' AND f.status='fetched'")
+    Ok(sqlx::query("SELECT 1 FROM report_fetch_state f JOIN report_identifiers i ON i.report_id=f.report_id JOIN works w ON w.canonical_doi=f.canonical_doi WHERE i.scheme='doi' AND i.normalized_value=$1 AND f.status='fetched'")
         .bind(doi).fetch_optional(pool).await?.is_some())
 }
 
@@ -213,18 +213,20 @@ pub async fn finalize_success(
     emit_metrics_request(&mut tx, event).await?;
     complete_item_and_claim(&mut tx, event, doi, IngestionItemStatus::Fetched, None).await?;
     sqlx::query(
-        "UPDATE report_fetch_state SET canonical_doi=$1, status = 'fetched', fetched_at = now(), owner_token = NULL, \
+        "UPDATE report_fetch_state SET canonical_doi=$1, status = 'fetched', provider = $3, fetched_at = now(), owner_token = NULL, \
          lease_expires_at = NULL, heartbeat_at = now(), updated_at = now() \
          WHERE report_id = (SELECT report_id FROM report_identifiers WHERE scheme='doi' AND normalized_value=$1) AND owner_token = $2",
     )
     .bind(doi)
     .bind(owner)
+    .bind(fetched.provider.as_str())
     .execute(&mut *tx)
     .await?;
     tx.commit().await?;
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 pub async fn finalize_terminal_failure(
     pool: &PgPool,
     event: &EventEnvelope<WorkFetchRequested>,
@@ -233,13 +235,14 @@ pub async fn finalize_terminal_failure(
     lease: &JobLease,
     status: IngestionItemStatus,
     error: &str,
+    provider: Option<ProviderKind>,
 ) -> anyhow::Result<()> {
     let mut tx = pool.begin().await?;
     validate_ownership(&mut tx, lease, doi, owner).await?;
     lock_run(&mut tx, event).await?;
     complete_item_and_claim(&mut tx, event, doi, status, Some(error)).await?;
     sqlx::query(
-        "UPDATE report_fetch_state SET status = $3, last_error = $4, owner_token = NULL, \
+        "UPDATE report_fetch_state SET status = $3, last_error = $4, provider = COALESCE($5, provider), owner_token = NULL, \
          lease_expires_at = NULL, updated_at = now() WHERE report_id=(SELECT report_id FROM report_identifiers WHERE scheme='doi' AND normalized_value=$1) AND owner_token = $2 AND status<>'fetched'",
     )
     .bind(doi)
@@ -250,6 +253,7 @@ pub async fn finalize_terminal_failure(
         "failed"
     })
     .bind(error)
+    .bind(provider.map(ProviderKind::as_str))
     .execute(&mut *tx)
     .await?;
     tx.commit().await?;

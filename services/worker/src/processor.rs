@@ -113,6 +113,7 @@ async fn handle_work_fetch(
                 lease,
                 IngestionItemStatus::Failed,
                 &error.to_string(),
+                None,
             )
             .await?;
             return Ok(DeliveryAction::Ack);
@@ -122,6 +123,7 @@ async fn handle_work_fetch(
         spawn_heartbeat(pool.clone(), lease.clone(), doi.clone(), owner, claim_lease);
     let permit = limiter::ProviderLimiter::new(&pool, settings.rate_limit_per_second);
     let output = router.fetch_work(&stored_chain, &doi, &permit).await;
+    let last_provider = output.attempts.last().map(|attempt| attempt.provider);
     cancel_heartbeat.send_replace(true);
     let _ = heartbeat_done.await;
     match output.result {
@@ -140,6 +142,7 @@ async fn handle_work_fetch(
                     lease,
                     IngestionItemStatus::Failed,
                     &message,
+                    last_provider,
                 )
                 .await?;
             } else {
@@ -149,8 +152,17 @@ async fn handle_work_fetch(
         }
         Err(error) => {
             let (status, message) = metadata::terminal_outcome(&error, &doi);
-            store::finalize_terminal_failure(&pool, &event, &doi, owner, lease, status, &message)
-                .await?;
+            store::finalize_terminal_failure(
+                &pool,
+                &event,
+                &doi,
+                owner,
+                lease,
+                status,
+                &message,
+                last_provider,
+            )
+            .await?;
             Ok(DeliveryAction::Ack)
         }
     }
