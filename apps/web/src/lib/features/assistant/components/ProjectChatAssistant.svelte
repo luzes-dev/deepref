@@ -852,8 +852,8 @@
 							size="icon"
 							variant="outline"
 							class="size-9 shrink-0"
-							aria-label="Disconnect — the assistant keeps working"
-							title="Disconnect — the assistant keeps working"
+							aria-label="Disconnect stops live updates. The assistant keeps working."
+							title="Disconnect stops live updates. The assistant keeps working."
 							onclick={stopStreaming}
 							data-testid="assistant-stop"
 						>
@@ -877,7 +877,7 @@
 				</InputGroup.Root>
 				<p class="mt-2 text-center text-2xs text-muted-foreground">
 					{#if isStreaming}
-						Disconnect stops live updates — the assistant keeps working.
+						Disconnect stops live updates. The assistant keeps working.
 					{:else}
 						Enter to send · Shift + Enter for a new line
 					{/if}

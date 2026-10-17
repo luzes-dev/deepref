@@ -175,7 +175,7 @@
 			type="password"
 			autocomplete="off"
 			placeholder={text === SECRET_PLACEHOLDER
-				? 'Saved — type to replace'
+				? 'Saved. Type to replace.'
 				: (field.placeholder ?? '')}
 			value={text === SECRET_PLACEHOLDER ? '' : text}
 			oninput={(event) =>

@@ -122,7 +122,8 @@
 <PageTemplate maxWidth="wide" testId="automations-page">
 	<div class="flex flex-wrap items-center justify-between gap-3">
 		<p class="max-w-2xl text-sm text-muted-foreground">
-			Little helpers that do routine work for you — when something happens, or on a schedule.
+			Little helpers that do routine work for you. They run when something happens, or on a
+			schedule.
 		</p>
 		<Button onclick={() => (galleryOpen = true)} data-testid="new-automation">
 			<PlusIcon /> New automation
