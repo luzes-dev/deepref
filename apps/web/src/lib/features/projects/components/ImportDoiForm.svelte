@@ -91,9 +91,7 @@
 				projectId,
 				data: {
 					seed_dois: parsed.dois,
-					max_depth: depth.depth,
-					metadata_provider: 'crossref',
-					citation_provider: 'crossref'
+					max_depth: depth.depth
 				}
 			});
 			if (workspace.project.id === projectId) {

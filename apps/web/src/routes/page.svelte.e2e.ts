@@ -213,10 +213,9 @@ async function mockWorkspace(page: Page, options: WorkspaceMockOptions = {}) {
 		async (route) => {
 			if (route.request().method() === 'POST') {
 				const body = route.request().postDataJSON();
-				expect(body).toMatchObject({
+				// The form names no providers, so the deployment chain applies.
+				expect(body).toEqual({
 					seed_dois: ['10.1/new'],
-					metadata_provider: 'crossref',
-					citation_provider: 'crossref',
 					max_depth: workspaceSettings.default_max_depth
 				});
 				await route.fulfill({
