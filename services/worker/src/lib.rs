@@ -18,6 +18,7 @@ pub mod delivery;
 pub mod enrichment;
 pub mod heartbeat;
 pub mod limiter;
+pub mod metadata;
 pub mod pmid_import;
 pub mod processor;
 pub mod reconciler;

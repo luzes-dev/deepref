@@ -1,10 +1,10 @@
 use std::time::Duration;
 
-use deepref_application::{AutomationDomainEvent, jobs::JobLease};
+use deepref_application::{AutomationDomainEvent, FetchedWork, jobs::JobLease};
 use deepref_domain::events::{
     EntityType, EventEnvelope, SUBJECT_WORK_FETCH_REQUESTED, WorkFetchRequested,
 };
-use deepref_domain::{IngestionItemStatus, Reference, WorkWithReferences};
+use deepref_domain::{IngestionItemStatus, ProviderKind, Reference, WorkWithReferences};
 use sqlx::{PgPool, Postgres, Row, Transaction};
 use uuid::Uuid;
 
@@ -75,19 +75,41 @@ pub async fn is_cached(pool: &PgPool, doi: &str) -> anyhow::Result<bool> {
         .bind(doi).fetch_optional(pool).await?.is_some())
 }
 
+/// Locks the run and marks the item fetching. Returns the metadata chain the run
+/// stored, or `None` when the item is no longer queued and the job should ack.
 pub async fn mark_fetching(
     pool: &PgPool,
     event: &EventEnvelope<WorkFetchRequested>,
     doi: &str,
     lease: &JobLease,
-) -> anyhow::Result<bool> {
+) -> anyhow::Result<Option<Vec<ProviderKind>>> {
     let mut tx = pool.begin().await?;
     validate_event_ownership(&mut tx, lease).await?;
     lock_run(&mut tx, event).await?;
+    let config: serde_json::Value =
+        sqlx::query_scalar("SELECT config FROM acquisition_runs WHERE id=$1 AND project_id=$2")
+            .bind(event.payload.acquisition_id)
+            .bind(event.payload.project_id)
+            .fetch_one(&mut *tx)
+            .await?;
     let changed = sqlx::query("UPDATE acquisition_items SET status='fetching',attempts=attempts+1 WHERE acquisition_id=$1 AND project_id=$2 AND canonical_doi=$3 AND status IN ('queued','fetching')")
         .bind(event.payload.acquisition_id).bind(event.payload.project_id).bind(doi).execute(&mut *tx).await?.rows_affected() == 1;
     tx.commit().await?;
-    Ok(changed)
+    Ok(changed.then(|| stored_metadata_chain(&config)))
+}
+
+/// The chain a run stored under `metadata_providers`. Lenient: a run without it,
+/// including the legacy `metadata_provider` shape, has no chain, and a name that
+/// is not a provider is dropped. The router falls back to the deployment chain.
+fn stored_metadata_chain(config: &serde_json::Value) -> Vec<ProviderKind> {
+    config
+        .get("metadata_providers")
+        .and_then(serde_json::Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(serde_json::Value::as_str)
+        .filter_map(|name| name.parse::<ProviderKind>().ok())
+        .collect()
 }
 
 pub async fn complete_without_doi(
@@ -162,15 +184,15 @@ pub async fn finalize_success(
     doi: &str,
     owner: Uuid,
     lease: &JobLease,
-    work: &WorkWithReferences,
+    fetched: &FetchedWork,
 ) -> anyhow::Result<()> {
     let mut tx = pool.begin().await?;
     validate_ownership(&mut tx, lease, doi, owner).await?;
     lock_run(&mut tx, event).await?;
-    persist_work(&mut tx, work).await?;
+    persist_work(&mut tx, &fetched.work).await?;
     attach_project_work(&mut tx, &event.payload, doi).await?;
 
-    for reference in &work.references {
+    for reference in &fetched.work.references {
         match &reference.doi {
             Some(target) => persist_citation(&mut tx, event, doi, target).await?,
             None => persist_unresolved(&mut tx, event, doi, reference).await?,
@@ -179,7 +201,8 @@ pub async fn finalize_success(
     // Child items and their deterministic durable jobs are inserted before the
     // terminal counts are evaluated.
     if event.payload.depth < event.payload.max_depth {
-        for target in work
+        for target in fetched
+            .work
             .references
             .iter()
             .filter_map(|reference| reference.doi.as_deref())
