@@ -10,6 +10,7 @@ use axum::{
     body::{Body, to_bytes},
     http::{Request, Response, StatusCode},
 };
+use deepref_domain::ProviderKind;
 use deepref_http_api::{config::ApiConfig, routes::router, state::AppState};
 use serde_json::json;
 use sqlx::{PgPool, Row};
@@ -118,11 +119,19 @@ async fn call_with_contact_email(
     request: Request<Body>,
     contact_email: &str,
 ) -> Response<Body> {
-    let config = api_config();
     let integrations = deepref_config::IntegrationsConfig {
         contact_email: contact_email.to_owned(),
         ..Default::default()
     };
+    call_with_integrations(pool, request, integrations).await
+}
+
+async fn call_with_integrations(
+    pool: &PgPool,
+    request: Request<Body>,
+    integrations: deepref_config::IntegrationsConfig,
+) -> Response<Body> {
+    let config = api_config();
     router(
         AppState::core(pool.clone()).with_integrations(integrations),
         &config,
@@ -1077,6 +1086,179 @@ async fn a_retry_matches_a_legacy_row_and_a_changed_default_chain_conflicts() {
     assert_eq!(json_body(conflict).await["code"], "IDEMPOTENCY_KEY_REUSED");
 
     clean_acquisition_projects(&pool, &[project_id], &[legacy_run]).await;
+}
+
+#[tokio::test]
+async fn doi_acquisitions_accept_only_enabled_metadata_providers() {
+    let Some(pool) = database().await else {
+        return;
+    };
+    let project_id = Uuid::new_v4();
+    sqlx::query("INSERT INTO projects (id,name) VALUES ($1,'provider validation test')")
+        .bind(project_id)
+        .execute(&pool)
+        .await
+        .expect("test project should insert");
+
+    for (providers, message) in [
+        (
+            json!(["openalex"]),
+            "openalex is not enabled in this deployment (enabled: crossref)",
+        ),
+        (
+            json!(["crossref", "datacite"]),
+            "datacite is not enabled in this deployment (enabled: crossref)",
+        ),
+        (
+            json!(["pubmed"]),
+            "pubmed is not enabled in this deployment (enabled: crossref)",
+        ),
+    ] {
+        let response = call(
+            &pool,
+            create_acquisition_request(
+                project_id,
+                None,
+                json!({"seed_dois": ["10.5555/provider-validation"], "metadata_providers": providers}),
+            ),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST, "{providers}");
+        assert_eq!(json_body(response).await["message"], message);
+    }
+    let empty = call(
+        &pool,
+        create_acquisition_request(
+            project_id,
+            None,
+            json!({"seed_dois": ["10.5555/provider-validation"], "metadata_providers": []}),
+        ),
+    )
+    .await;
+    assert_eq!(empty.status(), StatusCode::BAD_REQUEST);
+    let runs: i64 = sqlx::query_scalar("SELECT count(*) FROM acquisition_runs WHERE project_id=$1")
+        .bind(project_id)
+        .fetch_one(&pool)
+        .await
+        .expect("run count should load");
+    assert_eq!(runs, 0);
+
+    let created = call(
+        &pool,
+        create_acquisition_request(
+            project_id,
+            Some("provider-retry"),
+            json!({"seed_dois": ["10.5555/provider-validation"], "metadata_providers": ["crossref", "crossref"]}),
+        ),
+    )
+    .await;
+    assert_eq!(created.status(), StatusCode::CREATED);
+    let run_id = json_body(created).await["id"]
+        .as_str()
+        .expect("created acquisition should have an id")
+        .parse::<Uuid>()
+        .expect("acquisition id should be a UUID");
+    let config: serde_json::Value =
+        sqlx::query_scalar("SELECT config FROM acquisition_runs WHERE id=$1")
+            .bind(run_id)
+            .fetch_one(&pool)
+            .await
+            .expect("created config should load");
+    assert_eq!(config["metadata_providers"], json!(["crossref"]));
+    assert!(config.get("metadata_provider").is_none());
+
+    // A retry that omits the chain resolves to the same enabled chain, so it replays the run.
+    let replay = call(
+        &pool,
+        create_acquisition_request(
+            project_id,
+            Some("provider-retry"),
+            json!({"seed_dois": ["10.5555/provider-validation"]}),
+        ),
+    )
+    .await;
+    assert_eq!(replay.status(), StatusCode::OK);
+    assert_eq!(json_body(replay).await["id"], run_id.to_string());
+
+    clean_acquisition_projects(&pool, &[project_id], &[run_id]).await;
+}
+
+#[tokio::test]
+async fn the_deployment_allowlist_filters_the_chain_and_an_empty_one_is_unavailable() {
+    let Some(pool) = database().await else {
+        return;
+    };
+    let project_id = Uuid::new_v4();
+    sqlx::query("INSERT INTO projects (id,name) VALUES ($1,'allowlist test')")
+        .bind(project_id)
+        .execute(&pool)
+        .await
+        .expect("test project should insert");
+
+    // OpenAlex is configured but has no adapter in this build, so only Crossref is enabled.
+    let configured_chain = deepref_config::IntegrationsConfig {
+        contact_email: TEST_CONTACT_EMAIL.to_owned(),
+        metadata_providers: vec![ProviderKind::OpenAlex, ProviderKind::Crossref],
+        ..Default::default()
+    };
+    let omitted = call_with_integrations(
+        &pool,
+        create_acquisition_request(
+            project_id,
+            None,
+            json!({"seed_dois": ["10.5555/allowlist"]}),
+        ),
+        configured_chain.clone(),
+    )
+    .await;
+    assert_eq!(omitted.status(), StatusCode::CREATED);
+    let omitted_id = json_body(omitted).await["id"]
+        .as_str()
+        .expect("created acquisition should have an id")
+        .parse::<Uuid>()
+        .expect("acquisition id should be a UUID");
+    let config: serde_json::Value =
+        sqlx::query_scalar("SELECT config FROM acquisition_runs WHERE id=$1")
+            .bind(omitted_id)
+            .fetch_one(&pool)
+            .await
+            .expect("created config should load");
+    assert_eq!(config["metadata_providers"], json!(["crossref"]));
+
+    let named = call_with_integrations(
+        &pool,
+        create_acquisition_request(
+            project_id,
+            None,
+            json!({"seed_dois": ["10.5555/allowlist-named"], "metadata_providers": ["openalex"]}),
+        ),
+        configured_chain,
+    )
+    .await;
+    assert_eq!(named.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(
+        json_body(named).await["message"],
+        "openalex is not enabled in this deployment (enabled: crossref)"
+    );
+
+    let no_adapter = deepref_config::IntegrationsConfig {
+        contact_email: TEST_CONTACT_EMAIL.to_owned(),
+        metadata_providers: vec![ProviderKind::DataCite],
+        ..Default::default()
+    };
+    let unavailable = call_with_integrations(
+        &pool,
+        create_acquisition_request(
+            project_id,
+            None,
+            json!({"seed_dois": ["10.5555/unavailable"]}),
+        ),
+        no_adapter,
+    )
+    .await;
+    assert_eq!(unavailable.status(), StatusCode::SERVICE_UNAVAILABLE);
+
+    clean_acquisition_projects(&pool, &[project_id], &[omitted_id]).await;
 }
 
 #[tokio::test]

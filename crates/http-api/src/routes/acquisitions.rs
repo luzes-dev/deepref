@@ -34,8 +34,9 @@ pub(crate) const MAX_REQUEST_BODY_BYTES: usize = MAX_IMPORT_BYTES * 6 + 64 * 102
 pub(crate) struct CreateAcquisition {
     pub seed_dois: Vec<String>,
     pub max_depth: Option<i32>,
-    pub metadata_provider: Option<String>,
-    pub citation_provider: Option<String>,
+    /// Metadata providers the run may use. Each must be enabled in this deployment. The run
+    /// keeps the deployment's order. Omit to use every enabled provider.
+    pub metadata_providers: Option<Vec<String>>,
 }
 
 #[derive(Debug, Deserialize, ToSchema)]
@@ -225,17 +226,10 @@ pub(crate) async fn create_acquisition(
         deepref_domain::acquisition::MaxDepth::try_from(value)
             .map_err(|message| ApiError::BadRequest(message.to_owned()))?;
     }
-    let metadata_provider = input
-        .metadata_provider
-        .unwrap_or_else(|| "crossref".to_owned());
-    let citation_provider = input
-        .citation_provider
-        .unwrap_or_else(|| "crossref".to_owned());
-    if metadata_provider != "crossref" || citation_provider != "crossref" {
-        return Err(ApiError::BadRequest(
-            "only the crossref provider is supported for DOI acquisitions".to_owned(),
-        ));
-    }
+    let metadata_providers = requested_metadata_chain(
+        input.metadata_providers,
+        &state.integrations.enabled_metadata_providers(),
+    )?;
     let idempotency_key = idempotency_key(&headers)?;
     let mut tx = state.pool.begin().await?;
     let project_default_depth: i32 =
@@ -254,7 +248,7 @@ pub(crate) async fn create_acquisition(
     let config = DoiRunConfig {
         seed_dois,
         max_depth,
-        metadata_providers: vec![ProviderKind::Crossref],
+        metadata_providers,
         refresh_of: None,
     };
     let run_id = idempotency_key.as_deref().map_or_else(Uuid::new_v4, |key| {
@@ -1049,6 +1043,53 @@ fn parse_stored_doi_config(
     Ok(run)
 }
 
+/// The chain a new DOI run stores. Omitted names mean every enabled provider. Named providers
+/// must all be enabled, and the stored chain keeps the deployment's order, so the same set in
+/// another order stores the same config.
+fn requested_metadata_chain(
+    requested: Option<Vec<String>>,
+    enabled: &[ProviderKind],
+) -> Result<Vec<ProviderKind>, ApiError> {
+    if enabled.is_empty() {
+        return Err(ApiError::Configuration(
+            "DOI imports are unavailable: no metadata provider is enabled in this deployment"
+                .to_owned(),
+        ));
+    }
+    let Some(requested) = requested else {
+        return Ok(enabled.to_vec());
+    };
+    if requested.is_empty() {
+        return Err(ApiError::BadRequest(
+            "metadata_providers must name at least one provider".to_owned(),
+        ));
+    }
+    let mut named = Vec::with_capacity(requested.len());
+    for name in &requested {
+        let kind = name
+            .parse::<ProviderKind>()
+            .ok()
+            .filter(|kind| enabled.contains(kind))
+            .ok_or_else(|| {
+                let names = enabled
+                    .iter()
+                    .map(|kind| kind.as_str())
+                    .collect::<Vec<_>>()
+                    .join(", ");
+                ApiError::BadRequest(format!(
+                    "{} is not enabled in this deployment (enabled: {names})",
+                    bounded_detail(name, 64)
+                ))
+            })?;
+        named.push(kind);
+    }
+    Ok(enabled
+        .iter()
+        .copied()
+        .filter(|kind| named.contains(kind))
+        .collect())
+}
+
 fn bounded_detail(value: &str, max_chars: usize) -> String {
     value.chars().take(max_chars).collect()
 }
@@ -1290,5 +1331,59 @@ mod tests {
                 "{config}"
             );
         }
+    }
+
+    #[test]
+    fn omitted_metadata_providers_store_every_enabled_provider_in_deployment_order() {
+        let enabled = [ProviderKind::OpenAlex, ProviderKind::Crossref];
+        assert_eq!(
+            requested_metadata_chain(None, &enabled).expect("omitted chain"),
+            enabled
+        );
+    }
+
+    #[test]
+    fn named_metadata_providers_keep_deployment_order_and_drop_repeats() {
+        let enabled = [ProviderKind::OpenAlex, ProviderKind::Crossref];
+        let requested = vec![
+            "crossref".to_owned(),
+            "openalex".to_owned(),
+            "crossref".to_owned(),
+        ];
+        assert_eq!(
+            requested_metadata_chain(Some(requested), &enabled).expect("named chain"),
+            enabled
+        );
+        assert_eq!(
+            requested_metadata_chain(Some(vec!["crossref".to_owned()]), &enabled)
+                .expect("one named provider"),
+            [ProviderKind::Crossref]
+        );
+    }
+
+    #[test]
+    fn a_name_outside_the_enabled_set_is_refused_with_the_set() {
+        let enabled = [ProviderKind::Crossref];
+        for name in ["openalex", "datacite", "pubmed", "Crossref", " crossref"] {
+            match requested_metadata_chain(Some(vec![name.to_owned()]), &enabled) {
+                Err(ApiError::BadRequest(message)) => assert_eq!(
+                    message,
+                    format!("{name} is not enabled in this deployment (enabled: crossref)")
+                ),
+                other => panic!("{name}: unexpected {other:?}"),
+            }
+        }
+    }
+
+    #[test]
+    fn an_empty_list_or_a_deployment_with_no_enabled_provider_is_refused() {
+        assert!(matches!(
+            requested_metadata_chain(Some(Vec::new()), &[ProviderKind::Crossref]),
+            Err(ApiError::BadRequest(_))
+        ));
+        assert!(matches!(
+            requested_metadata_chain(None, &[]),
+            Err(ApiError::Configuration(_))
+        ));
     }
 }

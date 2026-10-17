@@ -98,6 +98,16 @@ impl IntegrationsConfig {
     pub fn metadata_chain_label(&self) -> String {
         join_names(&self.metadata_providers, ",")
     }
+
+    /// The deployment chain filtered to providers with an adapter in this build. This is
+    /// the allowlist a request may name, in deployment order.
+    pub fn enabled_metadata_providers(&self) -> Vec<ProviderKind> {
+        self.metadata_providers
+            .iter()
+            .copied()
+            .filter(|kind| PROVIDERS_WITH_ADAPTERS.contains(kind))
+            .collect()
+    }
 }
 
 fn metadata_providers(
@@ -337,6 +347,22 @@ mod tests {
             load(&[("DEEPREF_METADATA_PROVIDERS", " crossref , crossref ")])
                 .unwrap()
                 .metadata_providers,
+            [ProviderKind::Crossref]
+        );
+    }
+
+    #[test]
+    fn only_providers_with_an_adapter_are_enabled() {
+        let config = IntegrationsConfig {
+            metadata_providers: vec![ProviderKind::DataCite, ProviderKind::Crossref],
+            ..IntegrationsConfig::default()
+        };
+        assert_eq!(
+            config.enabled_metadata_providers(),
+            [ProviderKind::Crossref]
+        );
+        assert_eq!(
+            IntegrationsConfig::default().enabled_metadata_providers(),
             [ProviderKind::Crossref]
         );
     }
