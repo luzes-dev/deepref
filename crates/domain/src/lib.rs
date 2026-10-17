@@ -10,11 +10,13 @@ pub mod graph;
 mod ingestion;
 pub mod jobs;
 pub mod protocol;
+mod provider;
 mod reference;
 mod work;
 
 pub use ingestion::{IngestionItemStatus, IngestionStatus};
 pub use jobs::{InvalidJobKind, JobKind};
+pub use provider::{InvalidProviderKind, ProviderKind};
 pub use reference::Reference;
 pub use work::{FetchStatus, Work, WorkWithReferences};
 
