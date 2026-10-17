@@ -116,3 +116,31 @@ The parent inspected light/dark renders at 390px and 1100px. Wheel zoom matched 
 Fresh checks for this follow-up: `pnpm --filter @deepref/ui test:visual` passed all 68 checks, including the 32 existing screenshot comparisons, without baseline updates; `pnpm check` passed with zero errors/warnings; `pnpm --filter @deepref/ui test` passed all seven tests; `pnpm --filter @deepref/ui lint` passed. Both changed Svelte components passed the autofixer. The prohibited-import scan and `git diff --check` passed.
 
 NOT RUN for this focused follow-up: production build (`pnpm build`), static Storybook build (`pnpm build:storybook`), full application E2E (`pnpm --dir apps/web exec playwright test --project=e2e --workers=3`), and application visual matrix (`pnpm --dir apps/web exec playwright test --config=playwright.visual.config.ts`). This follow-up changes only generic canvas viewport controls and their tests; earlier application/build results in section 12 remain historical validation.
+
+## Citation graph active-title rendering
+
+Sigma 4 label attachments extend the native label instead of replacing it. Active
+titles therefore use application-owned HTML cards above the WebGL canvas, with
+their native truncated labels hidden. Both the node depth and label depth move to
+`topNodes`; neighboring WebGL labels cannot overprint the HTML card.
+
+The renderer reuses one selected card and one hovered card, follows node positions
+after each render, and shows only one card when the selected node is also hovered.
+Cards inherit graph theme tokens, wrap full titles at a 360px text width, ignore
+pointer events, hide during camera movement or filtering, and are removed on graph
+cleanup. Native attachments, canvas card textures, and custom word wrapping are no
+longer part of this path.
+
+Regression coverage checks hover-to-selection transitions, restoration of native
+labels, filtering, and cleanup. The graph route browser scenario also checks that
+the selected card survives overlay reloads and disappears/reappears with search
+filters.
+
+Verification for this follow-up: `pnpm check`, `pnpm test` (563 tests), `pnpm lint`
+(zero errors; 62 existing warnings), and `pnpm build` passed. The focused graph
+route E2E scenario passed, as did the graph visual scenario across all four
+theme/viewport projects with the existing dark screenshot baselines unchanged.
+Live Chromium checks also covered a multiline selected title overlapping a
+neighbor label, hover/selection deduplication, theme changes, camera animation,
+reset, filtering, and removal on destruction. No full application E2E suite or
+full visual suite was run for this follow-up.

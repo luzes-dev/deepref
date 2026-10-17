@@ -4,7 +4,6 @@ import { appraisalStatus, provenanceStatus, screeningStatus, studyStatus } from 
 import { fitBBoxWithLabels, getGraphNodeSize, layoutIsolatedNodes } from './graph-layout';
 import { reportLabel } from './report-label';
 import type SigmaType from 'sigma';
-import type { LabelAttachmentContext, LabelAttachmentContent } from 'sigma/primitives';
 import type { Settings } from 'sigma/settings';
 import type { EdgeDisplayData, MouseCoords, NodeDisplayData, SigmaOptions } from 'sigma/types';
 
@@ -41,6 +40,8 @@ export function createProjectGraphRenderer(
 	let graph: GraphInstance | undefined;
 	let themeObserver: MutationObserver | undefined;
 	let resizeObserver: ResizeObserver | undefined;
+	let selectedCard: HTMLDivElement | undefined;
+	let hoveredCard: HTMLDivElement | undefined;
 	let renderRun = 0;
 	let lastDragEndedAt = 0;
 	let model: ProjectGraphRenderModel = {
@@ -93,7 +94,6 @@ export function createProjectGraphRenderer(
 	// Height of the search/layers toolbar floating over the canvas.
 	const TOOLBAR_INSET = 56;
 	const LABEL_ALL_NODE_COUNT = 150;
-	const HOVER_LABEL_MAX_WIDTH = 360;
 	const SMALL_GRAPH_NODE_COUNT = 100;
 	const LARGE_GRAPH_NODE_COUNT = 500;
 	const SMALL_GRAPH_FORCE_ATLAS_ITERATIONS = 120;
@@ -149,16 +149,12 @@ export function createProjectGraphRenderer(
 	type ForceAtlas2Module = typeof import('graphology-layout-forceatlas2');
 	type NoverlapModule = typeof import('graphology-layout-noverlap');
 
-	const HOVER_CARD_ATTACHMENT = 'hover-card';
 	const LABEL_FONT_SIZE = 12;
 	const LABEL_FONT = `500 ${LABEL_FONT_SIZE}px IBM Plex Sans Variable, sans-serif`;
 	const LABEL_FONT_FAMILY = 'IBM Plex Sans Variable, sans-serif';
 	// Sigma derives the label font from this string via its own font parser,
 	// which supports a leading numeric weight.
 	const LABEL_FONT_TOKEN = `500 ${LABEL_FONT_FAMILY}`;
-	const LABEL_LINE_HEIGHT = LABEL_FONT_SIZE + 4;
-	const HOVER_CARD_PADDING_X = 8;
-	const HOVER_CARD_PADDING_Y = 6;
 
 	type GraphInteractionState = {
 		visibleNodeIds: Set<string>;
@@ -336,24 +332,13 @@ export function createProjectGraphRenderer(
 			: interaction.palette.nodeDefault;
 	}
 
-	// The native backdrop is used as the hover card frame; the attachment itself
-	// carries the wrapped full label. Enabling the backdrop also routes the node
-	// through sigma's attachment pipeline.
-	function hoverCardAppearance(): Partial<NodeDisplayData> {
-		return {
-			labelAttachment: HOVER_CARD_ATTACHMENT,
-			labelAttachmentPlacement: 'right',
-			backdropArea: 'label',
-			backdropVisibility: 'visible',
-			backdropColor: interaction.palette.hoverBackground,
-			backdropBorderColor: interaction.palette.edgeFocused,
-			backdropBorderWidth: 1,
-			backdropCornerRadius: 6,
-			backdropPadding: HOVER_CARD_PADDING_X,
-			backdropShadowBlur: 0,
-			backdropShadowColor: 'rgba(0, 0, 0, 0)'
-		};
-	}
+	// Active titles replace the native label. HTML cards sit above the WebGL
+	// canvas, where neighbouring glyphs cannot paint over their full text.
+	const hoverCardAppearance = {
+		labelVisibility: 'hidden',
+		depth: 'topNodes',
+		labelDepth: 'topNodes'
+	} satisfies Partial<NodeDisplayData>;
 
 	function reducedNodeAppearance(
 		node: string,
@@ -379,9 +364,8 @@ export function createProjectGraphRenderer(
 			return {
 				...base,
 				color: interaction.palette.nodeFocused,
-				labelVisibility: 'visible',
 				zIndex: 4,
-				...hoverCardAppearance()
+				...hoverCardAppearance
 			};
 		}
 		if (focused) {
@@ -392,7 +376,7 @@ export function createProjectGraphRenderer(
 					: interaction.palette.nodeFocused,
 				labelVisibility: 'visible',
 				zIndex: Math.max(base.zIndex ?? 0, 2),
-				...(selected ? hoverCardAppearance() : {})
+				...(selected ? hoverCardAppearance : {})
 			};
 		}
 		return {
@@ -474,17 +458,11 @@ export function createProjectGraphRenderer(
 			primitives: {
 				nodes: {
 					label: {
-						// The backdrop of a hovered node wraps the label box, the
-						// attachment gap and the attachment itself; the margin keeps
-						// that frame clear of the node disc.
-						margin: 10,
+						margin: 4,
 						font: {
 							family: LABEL_FONT_FAMILY,
 							weight: '500'
 						}
-					},
-					labelAttachments: {
-						[HOVER_CARD_ATTACHMENT]: drawHoverCardAttachment
 					}
 				}
 			},
@@ -561,145 +539,50 @@ export function createProjectGraphRenderer(
 		return text.slice(0, low).trimEnd() + suffix;
 	}
 
-	function wrapTextToLines(
-		context: CanvasRenderingContext2D,
-		text: string,
-		maxWidth: number,
-		maxLines: number
-	) {
-		const words = text.split(/\s+/).filter(Boolean);
-		const lines: string[] = [];
-		let current = '';
-
-		for (const word of words) {
-			const appended = appendWrappedWord(context, lines, current, word, maxWidth, maxLines);
-			current = appended.current;
-			if (appended.full) break;
-		}
-		return closeWrappedLines(context, lines, current, text, maxWidth, maxLines);
-	}
-
-	function appendWrappedWord(
-		context: CanvasRenderingContext2D,
-		lines: string[],
-		current: string,
-		word: string,
-		maxWidth: number,
-		maxLines: number
-	): { current: string; full: boolean } {
-		const next = current ? `${current} ${word}` : word;
-		if (context.measureText(next).width <= maxWidth) return { current: next, full: false };
-		if (!current) {
-			lines.push(truncateTextToWidth(context, word, maxWidth));
-			return { current: '', full: lines.length === maxLines };
-		}
-		lines.push(current);
-		return { current: word, full: lines.length === maxLines };
-	}
-
-	// Sealed off after the word loop: any line still pending is flushed, an
-	// entirely empty wrap means the text itself exceeds the first line width,
-	// and once the line cap was reached the leftover text is re-truncated into
-	// the final line.
-	function closeWrappedLines(
-		context: CanvasRenderingContext2D,
-		lines: string[],
-		current: string,
-		text: string,
-		maxWidth: number,
-		maxLines: number
-	): string[] {
-		if (lines.length < maxLines && current) lines.push(current);
-		if (lines.length === 0) lines.push(truncateTextToWidth(context, text, maxWidth));
-		return reflowTruncatedTail(context, lines, text, maxWidth, maxLines);
-	}
-
-	function reflowTruncatedTail(
-		context: CanvasRenderingContext2D,
-		lines: string[],
-		text: string,
-		maxWidth: number,
-		maxLines: number
-	): string[] {
-		if (lines.length !== maxLines) return lines.slice(0, maxLines);
-		const consumed = lines.join(' ');
-		if (consumed.length >= text.length) return lines.slice(0, maxLines);
-		lines[maxLines - 1] = truncateTextToWidth(
-			context,
-			`${lines[maxLines - 1]} ${text.slice(consumed.length)}`,
-			maxWidth
-		);
-		return lines.slice(0, maxLines);
-	}
-
 	function truncateNodeLabel(label: string): string {
 		const context = openLabelMeasuring();
 		if (!context) return label;
 		return truncateTextToWidth(context, label, NORMAL_LABEL_MAX_WIDTH);
 	}
 
-	// Attachment contexts carry the raw graph attributes.
-	function readAttachmentLabel(attributes: unknown): string {
-		const attrs = attributes as GraphNodeAttributes;
-		return String(attrs.fullLabel ?? attrs.label ?? '');
+	function createHoverCard(nextTarget: HTMLDivElement): HTMLDivElement {
+		const card = document.createElement('div');
+		card.className = 'graph-hover-card';
+		card.hidden = true;
+		nextTarget.append(card);
+		return card;
 	}
 
-	function buildHoverCardLines(
-		label: string
-	): { measure: CanvasRenderingContext2D; lines: string[] } | null {
-		const measure = openLabelMeasuring();
-		if (!measure) return null;
-		return { measure, lines: wrapTextToLines(measure, label, HOVER_LABEL_MAX_WIDTH, Infinity) };
+	function updateHoverCard(card: HTMLDivElement | undefined, node: string | undefined) {
+		if (!card || !renderer || !graph) return;
+		const active =
+			node &&
+			(node === interaction.hoveredNode || interaction.focusedNodeIds.has(node)) &&
+			interaction.visibleNodeIds.has(node) &&
+			graph.hasNode(node);
+		card.hidden = !active || !renderer.getGraphState().isIdle;
+		if (card.hidden || !node) return;
+
+		const attributes = graph.getNodeAttributes(node);
+		const data = renderer.getNodeDisplayData(node);
+		if (!data) return;
+		const label = attributes.fullLabel;
+		card.hidden = !label;
+		if (!label) return;
+		if (card.textContent !== label) card.textContent = label;
+		const position = renderer.graphToViewport(attributes);
+		card.style.left = `${position.x + renderer.scaleSize(data.size) + 8}px`;
+		card.style.top = `${position.y}px`;
 	}
 
-	function paintHoverCardLines(
-		measure: CanvasRenderingContext2D,
-		lines: string[],
-		pixelRatio: number
-	): HTMLCanvasElement | null {
-		const textWidth = Math.min(
-			HOVER_LABEL_MAX_WIDTH,
-			Math.max(...lines.map((line) => measure.measureText(line).width), 0)
+	function updateHoverCards() {
+		updateHoverCard(
+			selectedCard,
+			interaction.selectedNode === interaction.hoveredNode
+				? undefined
+				: interaction.selectedNode
 		);
-		const boxWidth = textWidth + HOVER_CARD_PADDING_X * 2;
-		const boxHeight = lines.length * LABEL_LINE_HEIGHT + HOVER_CARD_PADDING_Y * 2;
-		const canvas = document.createElement('canvas');
-		canvas.width = Math.max(1, Math.ceil(boxWidth * pixelRatio));
-		canvas.height = Math.max(1, Math.ceil(boxHeight * pixelRatio));
-		const context = canvas.getContext('2d');
-		if (!context) return null;
-
-		paintHoverCardText(context, lines, pixelRatio);
-		return canvas;
-	}
-
-	function paintHoverCardText(
-		context: CanvasRenderingContext2D,
-		lines: string[],
-		pixelRatio: number
-	) {
-		context.scale(pixelRatio, pixelRatio);
-		context.font = LABEL_FONT;
-		context.fillStyle = interaction.palette.label;
-		lines.forEach((line, index) => {
-			context.fillText(
-				line,
-				HOVER_CARD_PADDING_X,
-				HOVER_CARD_PADDING_Y + LABEL_FONT_SIZE + index * LABEL_LINE_HEIGHT
-			);
-		});
-	}
-
-	function drawHoverCardAttachment({
-		attributes,
-		pixelRatio
-	}: LabelAttachmentContext): LabelAttachmentContent | null {
-		const label = readAttachmentLabel(attributes);
-		if (!label) return null;
-		const prepared = buildHoverCardLines(label);
-		if (!prepared) return null;
-		const canvas = paintHoverCardLines(prepared.measure, prepared.lines, pixelRatio);
-		return canvas ? { type: 'canvas', canvas } : null;
+		updateHoverCard(hoveredCard, interaction.hoveredNode);
 	}
 
 	function getNodeIdByArticle(reportId: string | undefined) {
@@ -936,6 +819,9 @@ export function createProjectGraphRenderer(
 		if (!renderer) {
 			// The label settings depend on the graph size, so the graph must be set first.
 			renderer = new Sigma(nextGraph, nextTarget, buildSigmaOptions());
+			selectedCard = createHoverCard(nextTarget);
+			hoveredCard = createHoverCard(nextTarget);
+			renderer.on('afterRender', updateHoverCards);
 			registerGraphEvents(renderer);
 			setupResizeObserver(nextTarget);
 			fitGraphToView();
@@ -986,6 +872,10 @@ export function createProjectGraphRenderer(
 		resizeObserver = undefined;
 		renderer?.setSetting('enableCameraPanning', true);
 		renderer?.kill();
+		selectedCard?.remove();
+		hoveredCard?.remove();
+		selectedCard = undefined;
+		hoveredCard = undefined;
 		renderer = undefined;
 		graph = undefined;
 	}

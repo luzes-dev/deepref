@@ -151,6 +151,10 @@ test('graph overlay controls request selected fields and preserve graph-only neu
 	);
 
 	await expect(page.getByRole('heading', { name: 'Graph' })).toBeVisible();
+	const selectedCard = page
+		.getByRole('region', { name: 'Graph canvas' })
+		.getByText('Included report', { exact: true });
+	await expect(selectedCard).toBeVisible();
 	await page.getByRole('button', { name: 'Layers & filters' }).click();
 	await expect(page.getByTestId('graph-overlay-legend')).toContainText('include');
 	await expect(page.getByTestId('graph-overlay-legend')).toContainText('exclude');
@@ -170,4 +174,9 @@ test('graph overlay controls request selected fields and preserve graph-only neu
 	await expect(page.getByTestId('graph-overlay-legend')).toContainText('internally cited');
 	await expect(page.getByTestId('graph-overlay-legend')).toContainText('no internal citations');
 	await expect.poll(() => mock.protocolRequested).toBe(false);
+	await page.getByRole('button', { name: 'Layers & filters' }).click();
+	await page.getByRole('textbox', { name: 'Search graph nodes' }).fill('Excluded');
+	await expect(selectedCard).toBeHidden();
+	await page.getByRole('textbox', { name: 'Search graph nodes' }).clear();
+	await expect(selectedCard).toBeVisible();
 });

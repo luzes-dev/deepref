@@ -21,6 +21,26 @@
 	padding-block: 0.75rem;
 }
 
+@utility graph-hover-card {
+	position: absolute;
+	z-index: 1;
+	pointer-events: none;
+	box-sizing: content-box;
+	width: max-content;
+	max-width: 360px;
+	transform: translateY(-50%);
+	overflow-wrap: anywhere;
+	border: 1px solid var(--graph-edge-focused);
+	border-radius: var(--radius-md);
+	background: var(--graph-hover-background);
+	padding: 6px 8px;
+	color: var(--graph-label);
+	font-family: var(--font-sans);
+	font-size: var(--text-xs);
+	font-weight: 500;
+	line-height: 1rem;
+}
+
 /* Long task pages flow inside the workspace's single scrolling viewport. */
 .workspace-page > :first-child {
 	flex-shrink: 0;
