@@ -11,7 +11,7 @@ use deepref_domain::events::{
     EntityType, EventEnvelope, SUBJECT_WORK_FETCH_REQUESTED, WorkFetchRequested,
 };
 use deepref_domain::normalize_doi;
-use deepref_domain::{AcquisitionStatus, ImportFormat, ProjectId};
+use deepref_domain::{AcquisitionStatus, ImportFormat, ProjectId, ProviderKind};
 use serde::{Deserialize, Serialize};
 use serde_json::json;
 use sha2::{Digest, Sha256};
@@ -71,16 +71,53 @@ pub(crate) struct AcquisitionDto {
     pub refresh_of: Option<Uuid>,
 }
 
-#[derive(Debug, Deserialize)]
-#[serde(deny_unknown_fields)]
-struct StoredDoiAcquisitionConfig {
+/// A DOI run's config as stored. `Legacy` rows predate the metadata chain and name Crossref
+/// in both lanes. `Current` rows name the chain. Both shapes reject unknown keys, so a row
+/// is exactly one of them.
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(untagged, deny_unknown_fields)]
+enum StoredDoiAcquisitionConfig {
+    Legacy {
+        seed_dois: Vec<String>,
+        max_depth: i32,
+        metadata_provider: ProviderKind,
+        citation_provider: ProviderKind,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        refresh_of: Option<Uuid>,
+    },
+    Current {
+        seed_dois: Vec<String>,
+        max_depth: i32,
+        metadata_providers: Vec<ProviderKind>,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        refresh_of: Option<Uuid>,
+    },
+}
+
+/// The config every DOI run is compared and written in. Stored rows of either shape
+/// normalize to this.
+#[derive(Debug, Clone, PartialEq)]
+struct DoiRunConfig {
     seed_dois: Vec<String>,
     max_depth: i32,
-    metadata_provider: String,
-    citation_provider: String,
-    #[serde(default)]
+    metadata_providers: Vec<ProviderKind>,
     refresh_of: Option<Uuid>,
 }
+
+impl DoiRunConfig {
+    fn to_json(&self) -> Result<serde_json::Value, serde_json::Error> {
+        serde_json::to_value(StoredDoiAcquisitionConfig::Current {
+            seed_dois: self.seed_dois.clone(),
+            max_depth: self.max_depth,
+            metadata_providers: self.metadata_providers.clone(),
+            refresh_of: self.refresh_of,
+        })
+    }
+}
+
+/// The lane label the legacy `metadata_provider` and `citation_provider` run columns keep.
+/// Nothing reads them; the run's chain lives in `config`.
+const LEGACY_PROVIDER_LANE: &str = "crossref";
 
 #[derive(Debug, Clone, Copy)]
 enum IdempotencyComparison {
@@ -92,15 +129,11 @@ enum IdempotencyComparison {
 struct DoiAcquisitionRequest {
     run_id: Uuid,
     project_id: Uuid,
-    seed_dois: Vec<String>,
-    max_depth: i32,
     historical_max_depth: Option<i32>,
-    metadata_provider: String,
-    citation_provider: String,
     source: String,
     strategy: String,
     idempotency_key: Option<String>,
-    config: serde_json::Value,
+    config: DoiRunConfig,
     metadata: serde_json::Value,
     idempotency_comparison: IdempotencyComparison,
 }
@@ -218,12 +251,12 @@ pub(crate) async fn create_acquisition(
         .map_err(|message| ApiError::BadRequest(message.to_owned()))?,
     );
     let seed_count = i32::try_from(seed_dois.len()).unwrap_or(i32::MAX);
-    let config = json!({
-        "seed_dois": seed_dois,
-        "max_depth": max_depth,
-        "metadata_provider": metadata_provider,
-        "citation_provider": citation_provider,
-    });
+    let config = DoiRunConfig {
+        seed_dois,
+        max_depth,
+        metadata_providers: vec![ProviderKind::Crossref],
+        refresh_of: None,
+    };
     let run_id = idempotency_key.as_deref().map_or_else(Uuid::new_v4, |key| {
         Uuid::new_v5(
             &Uuid::NAMESPACE_URL,
@@ -235,11 +268,7 @@ pub(crate) async fn create_acquisition(
         DoiAcquisitionRequest {
             run_id,
             project_id,
-            seed_dois,
-            max_depth,
             historical_max_depth: None,
-            metadata_provider,
-            citation_provider,
             source: "crossref".to_owned(),
             strategy: "citation_traversal".to_owned(),
             idempotency_key,
@@ -344,21 +373,10 @@ pub(crate) async fn refresh_acquisition(
     }
 
     let stored_config: serde_json::Value = source.get("config");
-    let StoredDoiAcquisitionConfig {
-        seed_dois,
-        max_depth,
-        metadata_provider,
-        citation_provider,
-        refresh_of: _,
-    } = parse_stored_doi_config(stored_config, acquisition_id)?;
-    let config = json!({
-        "seed_dois": &seed_dois,
-        "max_depth": max_depth,
-        "metadata_provider": &metadata_provider,
-        "citation_provider": &citation_provider,
-        "refresh_of": acquisition_id,
-    });
-    let seed_count = i32::try_from(seed_dois.len()).unwrap_or(i32::MAX);
+    // The refresh replays the chain the source stored, never the current default.
+    let mut config = parse_stored_doi_config(stored_config, acquisition_id)?;
+    config.refresh_of = Some(acquisition_id);
+    let seed_count = i32::try_from(config.seed_dois.len()).unwrap_or(i32::MAX);
     let metadata = json!({
         "seed_dois": seed_count,
         "refresh_of": acquisition_id,
@@ -373,11 +391,7 @@ pub(crate) async fn refresh_acquisition(
         DoiAcquisitionRequest {
             run_id,
             project_id,
-            seed_dois,
-            max_depth,
             historical_max_depth: source.get("historical_max_depth"),
-            metadata_provider,
-            citation_provider,
             source: source_name,
             strategy: "provider_refresh".to_owned(),
             idempotency_key: Some(idempotency_key),
@@ -764,14 +778,15 @@ async fn persist_doi_acquisition(
                 .to_owned(),
         ));
     }
-    let seed_count = i32::try_from(request.seed_dois.len()).unwrap_or(i32::MAX);
+    let seed_count = i32::try_from(request.config.seed_dois.len()).unwrap_or(i32::MAX);
+    let config = request.config.to_json()?;
     // No conflict target: a keyed run id is derived from the key, so a concurrent replay
     // collides on the primary key too, and a targeted clause raises instead of skipping.
     let inserted_run_id = sqlx::query_scalar::<_, Uuid>(
         "INSERT INTO acquisition_runs
          (id,project_id,source,strategy,format,idempotency_key,config,metadata,status,
           max_depth,seed_count,queued_count,fetched_count,failed_count,metadata_provider,citation_provider,created_at,historical_max_depth)
-         VALUES ($1,$2,$3,$4,NULL,$5,$6,$7,'queued',$8,$9,$9,0,0,$10,$11,now(),$12)
+         VALUES ($1,$2,$3,$4,NULL,$5,$6,$7,'queued',$8,$9,$9,0,0,$10,$10,now(),$11)
          ON CONFLICT DO NOTHING RETURNING id",
     )
     .bind(request.run_id)
@@ -779,12 +794,11 @@ async fn persist_doi_acquisition(
     .bind(&request.source)
     .bind(&request.strategy)
     .bind(request.idempotency_key.as_deref())
-    .bind(&request.config)
+    .bind(&config)
     .bind(&request.metadata)
-    .bind(request.max_depth)
+    .bind(request.config.max_depth)
     .bind(seed_count)
-    .bind(&request.metadata_provider)
-    .bind(&request.citation_provider)
+    .bind(LEGACY_PROVIDER_LANE)
     .bind(request.historical_max_depth)
     .fetch_optional(&mut **tx)
     .await?;
@@ -804,7 +818,9 @@ async fn persist_doi_acquisition(
         let existing_source: String = row.get("source");
         let existing_strategy: String = row.get("strategy");
         let existing_config: serde_json::Value = row.get("config");
-        let matches = existing_config == request.config
+        // A stored row of either shape compares by the config it normalizes to.
+        let matches = parse_stored_doi_config(existing_config, existing_id)
+            .is_ok_and(|existing| existing == request.config)
             && match request.idempotency_comparison {
                 IdempotencyComparison::ConfigOnly => true,
                 IdempotencyComparison::SourceStrategyAndConfig => {
@@ -836,8 +852,8 @@ async fn persist_doi_acquisition(
         tx,
         request.project_id,
         run_id,
-        request.max_depth,
-        &request.seed_dois,
+        request.config.max_depth,
+        &request.config.seed_dois,
     )
     .await?;
     Ok(DoiAcquisitionResult {
@@ -981,40 +997,56 @@ fn acquisition_select() -> &'static str {
 fn parse_stored_doi_config(
     config: serde_json::Value,
     acquisition_id: Uuid,
-) -> Result<StoredDoiAcquisitionConfig, ApiError> {
-    let stored: StoredDoiAcquisitionConfig =
-        serde_json::from_value(config.clone()).map_err(|_| ApiError::Conflict {
-            code: "ACQUISITION_REFRESH_CONFIG_INVALID".to_owned(),
-            message: "the persisted DOI acquisition configuration is invalid".to_owned(),
-            details: json!({ "acquisition_id": acquisition_id }),
-        })?;
-    let normalized = validate_seeds(stored.seed_dois.clone()).map_err(|_| ApiError::Conflict {
+) -> Result<DoiRunConfig, ApiError> {
+    let invalid = || ApiError::Conflict {
         code: "ACQUISITION_REFRESH_CONFIG_INVALID".to_owned(),
         message: "the persisted DOI acquisition configuration is invalid".to_owned(),
         details: json!({ "acquisition_id": acquisition_id }),
-    })?;
-    let mut canonical = json!({
-        "seed_dois": &normalized,
-        "max_depth": stored.max_depth,
-        "metadata_provider": &stored.metadata_provider,
-        "citation_provider": &stored.citation_provider,
-    });
-    if let Some(refresh_of) = stored.refresh_of {
-        canonical["refresh_of"] = json!(refresh_of);
+    };
+    let stored: StoredDoiAcquisitionConfig =
+        serde_json::from_value(config.clone()).map_err(|_| invalid())?;
+    // Rebuilding the stored shape must reproduce the stored JSON, so a stray or reshaped key
+    // refuses the row rather than being rewritten.
+    if serde_json::to_value(&stored).ok().as_ref() != Some(&config) {
+        return Err(invalid());
     }
-    if stored.max_depth < 0
-        || stored.metadata_provider != "crossref"
-        || stored.citation_provider != "crossref"
-        || stored.seed_dois != normalized
-        || config != canonical
-    {
-        return Err(ApiError::Conflict {
-            code: "ACQUISITION_REFRESH_CONFIG_INVALID".to_owned(),
-            message: "the persisted DOI acquisition configuration is invalid".to_owned(),
-            details: json!({ "acquisition_id": acquisition_id }),
-        });
+    let run = match stored {
+        StoredDoiAcquisitionConfig::Legacy {
+            seed_dois,
+            max_depth,
+            metadata_provider,
+            citation_provider,
+            refresh_of,
+        } => {
+            if metadata_provider != ProviderKind::Crossref
+                || citation_provider != ProviderKind::Crossref
+            {
+                return Err(invalid());
+            }
+            DoiRunConfig {
+                seed_dois,
+                max_depth,
+                metadata_providers: vec![ProviderKind::Crossref],
+                refresh_of,
+            }
+        }
+        StoredDoiAcquisitionConfig::Current {
+            seed_dois,
+            max_depth,
+            metadata_providers,
+            refresh_of,
+        } => DoiRunConfig {
+            seed_dois,
+            max_depth,
+            metadata_providers,
+            refresh_of,
+        },
+    };
+    let normalized = validate_seeds(run.seed_dois.clone()).map_err(|_| invalid())?;
+    if run.max_depth < 0 || run.metadata_providers.is_empty() || run.seed_dois != normalized {
+        return Err(invalid());
     }
-    Ok(stored)
+    Ok(run)
 }
 
 fn bounded_detail(value: &str, max_chars: usize) -> String {
@@ -1197,5 +1229,66 @@ mod tests {
         assert!(is_pmid_format(" PMID "));
         assert!(is_pmid_format("pmids"));
         assert!(!is_pmid_format("pubmed"), "pubmed is the NBIB file format");
+    }
+
+    fn stored_config_error(config: serde_json::Value) -> String {
+        match parse_stored_doi_config(config, Uuid::nil()) {
+            Ok(run) => panic!("stored config should be refused, parsed as {run:?}"),
+            Err(ApiError::Conflict { code, .. }) => code,
+            Err(other) => panic!("unexpected error: {other:?}"),
+        }
+    }
+
+    #[test]
+    fn both_stored_config_shapes_parse_and_a_legacy_row_replays_crossref() {
+        let legacy = parse_stored_doi_config(
+            json!({
+                "seed_dois": ["10.1000/a"],
+                "max_depth": 2,
+                "metadata_provider": "crossref",
+                "citation_provider": "crossref",
+            }),
+            Uuid::nil(),
+        )
+        .expect("a legacy row should parse");
+        assert_eq!(legacy.metadata_providers, [ProviderKind::Crossref]);
+        assert_eq!(legacy.refresh_of, None);
+
+        let current = parse_stored_doi_config(
+            json!({
+                "seed_dois": ["10.1000/a"],
+                "max_depth": 2,
+                "metadata_providers": ["openalex", "crossref"],
+                "refresh_of": Uuid::nil(),
+            }),
+            Uuid::nil(),
+        )
+        .expect("a current row should parse");
+        assert_eq!(
+            current.metadata_providers,
+            [ProviderKind::OpenAlex, ProviderKind::Crossref]
+        );
+        assert_eq!(current.refresh_of, Some(Uuid::nil()));
+    }
+
+    #[test]
+    fn a_stored_config_that_is_not_exactly_one_known_shape_is_refused() {
+        for config in [
+            json!({"seed_dois": ["10.1000/a"], "max_depth": 2, "metadata_providers": ["pubmed"]}),
+            json!({"seed_dois": ["10.1000/a"], "max_depth": 2, "metadata_providers": []}),
+            json!({"seed_dois": ["10.1000/a"], "max_depth": 2, "metadata_providers": ["crossref"], "extra": true}),
+            json!({"seed_dois": ["10.1000/a"], "max_depth": 2, "metadata_providers": ["crossref"], "refresh_of": null}),
+            json!({"seed_dois": ["10.1000/a"], "max_depth": -1, "metadata_providers": ["crossref"]}),
+            json!({"seed_dois": ["https://doi.org/10.1000/A"], "max_depth": 2, "metadata_providers": ["crossref"]}),
+            json!({"seed_dois": ["10.1000/a"], "max_depth": 2, "metadata_provider": "openalex", "citation_provider": "crossref"}),
+            json!({"seed_dois": ["10.1000/a"], "max_depth": 2, "metadata_provider": "crossref", "citation_provider": "crossref", "metadata_providers": ["crossref"]}),
+            json!({"seed_dois": ["10.1000/a"], "max_depth": 2}),
+        ] {
+            assert_eq!(
+                stored_config_error(config.clone()),
+                "ACQUISITION_REFRESH_CONFIG_INVALID",
+                "{config}"
+            );
+        }
     }
 }
