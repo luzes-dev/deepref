@@ -1,11 +1,40 @@
+use std::fmt;
+
+use deepref_domain::ProviderKind;
+
+/// The chain used when `DEEPREF_METADATA_PROVIDERS` is unset. A later phase
+/// changes the default here and nowhere else.
+const DEFAULT_METADATA_PROVIDERS: &[ProviderKind] = &[ProviderKind::Crossref];
+
+/// Providers with an adapter in this build. A chain may name only these. The
+/// domain enum also names providers whose adapters arrive in later phases.
+const PROVIDERS_WITH_ADAPTERS: &[ProviderKind] = &[ProviderKind::Crossref];
+
+/// Which OpenAlex records metadata lookups may answer from.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OpenAlexCorpus {
+    /// Crossref, PubMed, DataCite and repository records.
+    Core,
+    /// Core plus dataset and repository records that have no core match.
+    All,
+}
+
 /// How Deepref identifies itself to the third-party providers it calls: the
-/// polite-pool contact address and Crossref's abstract enrichment.
-#[derive(Debug, Clone)]
+/// polite-pool contact address and Crossref's abstract enrichment. It also
+/// holds the metadata chain, which doubles as the deployment allowlist
+/// (ADR 0007).
+#[derive(Clone)]
 pub struct IntegrationsConfig {
     pub abstract_enrichment: bool,
     /// Deployment-wide contact e-mail reported to Crossref, NCBI, Unpaywall,
     /// Europe PMC and OpenAlex. Empty when the operator has not set it.
     pub contact_email: String,
+    /// The first provider that answers a DOI wins, so order is preference.
+    pub metadata_providers: Vec<ProviderKind>,
+    /// Optional OpenAlex key. A missing key is valid; keyless calls get a
+    /// smaller rate budget. Never printed: `Debug` redacts it.
+    pub openalex_api_key: Option<String>,
+    pub openalex_corpus: OpenAlexCorpus,
 }
 
 impl Default for IntegrationsConfig {
@@ -13,7 +42,26 @@ impl Default for IntegrationsConfig {
         Self {
             abstract_enrichment: true,
             contact_email: String::new(),
+            metadata_providers: DEFAULT_METADATA_PROVIDERS.to_vec(),
+            openalex_api_key: None,
+            openalex_corpus: OpenAlexCorpus::Core,
         }
+    }
+}
+
+impl fmt::Debug for IntegrationsConfig {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        formatter
+            .debug_struct("IntegrationsConfig")
+            .field("abstract_enrichment", &self.abstract_enrichment)
+            .field("contact_email", &self.contact_email)
+            .field("metadata_providers", &self.metadata_providers)
+            .field(
+                "openalex_api_key",
+                &self.openalex_api_key.as_ref().map(|_| "<redacted>"),
+            )
+            .field("openalex_corpus", &self.openalex_corpus)
+            .finish()
     }
 }
 
@@ -26,12 +74,93 @@ impl IntegrationsConfig {
                 reason: "must be an e-mail address such as research@example.org".to_owned(),
             });
         }
+        let openalex_corpus = match crate::optional(get, "DEEPREF_OPENALEX_CORPUS").as_deref() {
+            None | Some("core") => OpenAlexCorpus::Core,
+            Some("all") => OpenAlexCorpus::All,
+            Some(_) => {
+                return Err(crate::ConfigError::Invalid {
+                    name: "DEEPREF_OPENALEX_CORPUS",
+                    reason: "must be core (default) or all".to_owned(),
+                });
+            }
+        };
         Ok(Self {
             abstract_enrichment: !get("DEEPREF_ABSTRACT_ENRICHMENT")
                 .is_some_and(|value| matches!(value.trim(), "off" | "0" | "false")),
             contact_email,
+            metadata_providers: metadata_providers(get)?,
+            openalex_api_key: crate::optional(get, "DEEPREF_OPENALEX_API_KEY"),
+            openalex_corpus,
         })
     }
+
+    /// The chain as one comma-separated string, for example `openalex,crossref`.
+    pub fn metadata_chain_label(&self) -> String {
+        join_names(&self.metadata_providers, ",")
+    }
+}
+
+fn metadata_providers(
+    get: &dyn Fn(&str) -> Option<String>,
+) -> Result<Vec<ProviderKind>, crate::ConfigError> {
+    match get("DEEPREF_METADATA_PROVIDERS") {
+        Some(value) => parse_metadata_chain(&value, PROVIDERS_WITH_ADAPTERS),
+        None => Ok(DEFAULT_METADATA_PROVIDERS.to_vec()),
+    }
+}
+
+/// Reads a comma-separated chain. Entries are trimmed, a repeated provider
+/// keeps its first position, and a chain with no entries is refused. The
+/// adapter set is a parameter so the ordering rules can be tested with any set.
+fn parse_metadata_chain(
+    value: &str,
+    adapters: &[ProviderKind],
+) -> Result<Vec<ProviderKind>, crate::ConfigError> {
+    const NAME: &str = "DEEPREF_METADATA_PROVIDERS";
+    let mut chain: Vec<ProviderKind> = Vec::new();
+    for entry in value
+        .split(',')
+        .map(str::trim)
+        .filter(|entry| !entry.is_empty())
+    {
+        let kind = entry
+            .parse::<ProviderKind>()
+            .map_err(|_| crate::ConfigError::Invalid {
+                name: NAME,
+                reason: format!(
+                    "unknown metadata provider {entry:?}; known providers are {}",
+                    join_names(&ProviderKind::ALL, ", ")
+                ),
+            })?;
+        if !adapters.contains(&kind) {
+            return Err(crate::ConfigError::Invalid {
+                name: NAME,
+                reason: format!(
+                    "{} has no adapter yet; available providers are {}",
+                    kind.as_str(),
+                    join_names(adapters, ", ")
+                ),
+            });
+        }
+        if !chain.contains(&kind) {
+            chain.push(kind);
+        }
+    }
+    if chain.is_empty() {
+        return Err(crate::ConfigError::Invalid {
+            name: NAME,
+            reason: "must name at least one provider, for example crossref".to_owned(),
+        });
+    }
+    Ok(chain)
+}
+
+fn join_names(kinds: &[ProviderKind], separator: &str) -> String {
+    kinds
+        .iter()
+        .map(|kind| kind.as_str())
+        .collect::<Vec<_>>()
+        .join(separator)
 }
 
 /// Shape check for the contact address: one `@`, no whitespace, and a dotted
@@ -141,5 +270,138 @@ mod tests {
                 "{value} should be accepted"
             );
         }
+    }
+
+    fn load(pairs: &[(&str, &str)]) -> Result<IntegrationsConfig, crate::ConfigError> {
+        IntegrationsConfig::from_source(&|name| {
+            pairs
+                .iter()
+                .find(|(key, _)| *key == name)
+                .map(|(_, value)| (*value).to_owned())
+        })
+    }
+
+    fn load_error(pairs: &[(&str, &str)]) -> String {
+        match load(pairs) {
+            Ok(_) => unreachable!("the configuration should be rejected"),
+            Err(error) => error.to_string(),
+        }
+    }
+
+    #[test]
+    fn the_metadata_chain_defaults_to_crossref_with_a_keyless_core_corpus() {
+        let default = IntegrationsConfig::default();
+        assert_eq!(default.metadata_providers, [ProviderKind::Crossref]);
+        assert_eq!(default.openalex_corpus, OpenAlexCorpus::Core);
+
+        let config = load(&[]).unwrap();
+        assert_eq!(config.metadata_providers, [ProviderKind::Crossref]);
+        assert_eq!(config.openalex_api_key, None);
+        assert_eq!(config.openalex_corpus, OpenAlexCorpus::Core);
+        assert_eq!(config.metadata_chain_label(), "crossref");
+    }
+
+    #[test]
+    fn a_configured_chain_and_corpus_override_the_defaults() {
+        let config = load(&[
+            ("DEEPREF_METADATA_PROVIDERS", "crossref"),
+            ("DEEPREF_OPENALEX_CORPUS", " all "),
+        ])
+        .unwrap();
+        assert_eq!(config.metadata_providers, [ProviderKind::Crossref]);
+        assert_eq!(config.openalex_corpus, OpenAlexCorpus::All);
+        assert_eq!(
+            load(&[("DEEPREF_OPENALEX_CORPUS", "core")])
+                .unwrap()
+                .openalex_corpus,
+            OpenAlexCorpus::Core
+        );
+    }
+
+    #[test]
+    fn a_chain_is_trimmed_deduplicated_and_kept_in_configured_order() {
+        let adapters = [
+            ProviderKind::OpenAlex,
+            ProviderKind::Crossref,
+            ProviderKind::DataCite,
+        ];
+        assert_eq!(
+            parse_metadata_chain(" datacite , crossref,datacite,openalex ", &adapters).unwrap(),
+            [
+                ProviderKind::DataCite,
+                ProviderKind::Crossref,
+                ProviderKind::OpenAlex
+            ]
+        );
+        assert_eq!(
+            load(&[("DEEPREF_METADATA_PROVIDERS", " crossref , crossref ")])
+                .unwrap()
+                .metadata_providers,
+            [ProviderKind::Crossref]
+        );
+    }
+
+    #[test]
+    fn unknown_metadata_providers_refuse_to_start() {
+        for value in ["pubmed", "crossref,pubmed", "Crossref", "open_alex"] {
+            let error = load_error(&[("DEEPREF_METADATA_PROVIDERS", value)]);
+            assert!(
+                error.contains("DEEPREF_METADATA_PROVIDERS")
+                    && error.contains("unknown metadata provider"),
+                "{value}: unexpected error {error}"
+            );
+        }
+    }
+
+    #[test]
+    fn an_empty_metadata_chain_refuses_to_start() {
+        for value in ["", "   ", " , "] {
+            let error = load_error(&[("DEEPREF_METADATA_PROVIDERS", value)]);
+            assert!(
+                error.contains("must name at least one provider"),
+                "{value:?}: unexpected error {error}"
+            );
+        }
+    }
+
+    #[test]
+    fn a_provider_without_an_adapter_refuses_to_start_and_names_the_available_ones() {
+        for (value, unavailable) in [("openalex", "openalex"), ("crossref,datacite", "datacite")] {
+            let error = load_error(&[("DEEPREF_METADATA_PROVIDERS", value)]);
+            assert!(
+                error.contains(&format!("{unavailable} has no adapter yet"))
+                    && error.contains("available providers are crossref"),
+                "{value}: unexpected error {error}"
+            );
+        }
+    }
+
+    #[test]
+    fn an_unknown_openalex_corpus_refuses_to_start() {
+        for value in ["everything", "ALL", "all,core"] {
+            let error = load_error(&[("DEEPREF_OPENALEX_CORPUS", value)]);
+            assert!(
+                error.contains("DEEPREF_OPENALEX_CORPUS"),
+                "{value}: unexpected error {error}"
+            );
+        }
+    }
+
+    #[test]
+    fn the_openalex_key_is_optional_trimmed_and_never_printed() {
+        assert_eq!(
+            load(&[("DEEPREF_OPENALEX_API_KEY", "   ")])
+                .unwrap()
+                .openalex_api_key,
+            None
+        );
+        let config = load(&[("DEEPREF_OPENALEX_API_KEY", "  test-openalex-key  ")]).unwrap();
+        assert_eq!(
+            config.openalex_api_key.as_deref(),
+            Some("test-openalex-key")
+        );
+        let debug = format!("{config:?}");
+        assert!(!debug.contains("test-openalex-key"), "{debug}");
+        assert!(debug.contains("<redacted>"), "{debug}");
     }
 }

@@ -128,6 +128,10 @@ pub async fn run_with_shutdown(
             "DEEPREF_CONTACT_EMAIL is not set; DOI imports, PubMed imports and open-access lookups will be refused"
         );
     }
+    tracing::info!(
+        metadata_providers = %config.runtime.integrations.metadata_chain_label(),
+        "metadata provider chain configured"
+    );
     tokio::spawn(workflows::run_scheduler(
         pool.clone(),
         Duration::from_secs(20),
