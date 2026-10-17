@@ -1,6 +1,8 @@
 use std::{future::Future, pin::Pin};
 
-use deepref_domain::{AcquisitionRunId, IdentifierScheme, ImportFormat};
+use deepref_domain::{
+    AcquisitionRunId, IdentifierScheme, ImportFormat, ProviderKind, WorkWithReferences,
+};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
@@ -73,8 +75,7 @@ impl RawRecord {
     }
 }
 
-pub type ProviderFuture<'a, T> =
-    Pin<Box<dyn Future<Output = Result<T, ProviderError>> + Send + 'a>>;
+pub type ProviderFuture<'a, T, E> = Pin<Box<dyn Future<Output = Result<T, E>> + Send + 'a>>;
 
 #[derive(Debug, Error)]
 pub enum ProviderError {
@@ -96,20 +97,53 @@ pub enum ImportError {
     MissingCsvColumn(String),
 }
 
-pub trait MetadataProvider: Send + Sync {
-    fn name(&self) -> &'static str;
-    fn fetch_metadata<'a>(&'a self, identifier: &'a RawIdentifier)
-    -> ProviderFuture<'a, RawRecord>;
+/// Takes the outbound permit for one provider before a request is sent. The worker
+/// backs it with the shared PostgreSQL limiter, so all pods share one schedule.
+pub trait ProviderPermit: Send + Sync {
+    fn acquire<'a>(&'a self, provider: ProviderKind) -> ProviderFuture<'a, (), PermitError>;
 }
 
-pub trait CitationProvider: Send + Sync {
-    fn name(&self) -> &'static str;
-    fn fetch_citations<'a>(&'a self, record: &'a RawRecord) -> ProviderFuture<'a, Vec<RawRecord>>;
+#[derive(Debug, Clone, PartialEq, Eq, Error)]
+#[error("provider permit unavailable: {0}")]
+pub struct PermitError(pub String);
+
+#[derive(Debug, Clone)]
+pub struct FetchedWork {
+    pub work: WorkWithReferences,
+    pub provider: ProviderKind,
 }
 
-pub trait SearchProvider: Send + Sync {
-    fn name(&self) -> &'static str;
-    fn search<'a>(&'a self, query: &'a str) -> ProviderFuture<'a, Vec<RawRecord>>;
+#[derive(Debug, Clone, PartialEq, Eq, Error)]
+pub enum ProviderFetchError {
+    #[error("{} has no record for {doi}", .provider.as_str())]
+    NotFound { provider: ProviderKind, doi: String },
+    #[error("{} rejected the request: {reason}", .provider.as_str())]
+    Rejected {
+        provider: ProviderKind,
+        reason: String,
+    },
+    #[error("{} is unavailable for now: {message}", .provider.as_str())]
+    Retryable {
+        provider: ProviderKind,
+        message: String,
+    },
+    #[error("{} failed: {message}", .provider.as_str())]
+    Fatal {
+        provider: ProviderKind,
+        message: String,
+    },
+}
+
+/// One DOI lookup against one metadata service. The caller takes one permit before
+/// the call. The adapter takes another before each further request it sends inside
+/// the call, such as a retry or a reference lookup.
+pub trait WorkProvider: Send + Sync {
+    fn kind(&self) -> ProviderKind;
+    fn fetch_work_with_references<'a>(
+        &'a self,
+        doi: &'a str,
+        permit: &'a dyn ProviderPermit,
+    ) -> ProviderFuture<'a, FetchedWork, ProviderFetchError>;
 }
 
 pub trait ImportParser: Send + Sync {

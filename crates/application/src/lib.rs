@@ -19,8 +19,9 @@ pub mod study;
 pub mod workflows;
 
 pub use acquisition::{
-    CitationProvider, CsvColumnMapping, ImportError, ImportParser, MetadataProvider, ProviderError,
-    ProviderFuture, RawAuthor, RawIdentifier, RawRecord, SearchProvider,
+    CsvColumnMapping, FetchedWork, ImportError, ImportParser, PermitError, ProviderError,
+    ProviderFetchError, ProviderFuture, ProviderPermit, RawAuthor, RawIdentifier, RawRecord,
+    WorkProvider,
 };
 pub use appraisal::{
     AnswerSchema, AppliesWhen, AppraisalAssessmentInput, AppraisalCompleted, AppraisalDefinition,

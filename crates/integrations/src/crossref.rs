@@ -9,10 +9,7 @@ mod wire;
 
 use std::time::Duration;
 
-use deepref_application::{
-    CitationProvider, MetadataProvider, ProviderError, ProviderFuture, RawAuthor, RawIdentifier,
-    RawRecord,
-};
+use deepref_application::{ProviderError, RawAuthor, RawIdentifier, RawRecord};
 use deepref_domain::WorkWithReferences;
 use deepref_domain::{IdentifierScheme, normalize_doi};
 use reqwest::header;
@@ -165,75 +162,6 @@ async fn sleep_backoff(attempt: usize) {
     tokio::time::sleep(Duration::from_millis(millis.min(5_000))).await;
 }
 
-impl MetadataProvider for CrossrefClient {
-    fn name(&self) -> &'static str {
-        "crossref"
-    }
-
-    fn fetch_metadata<'a>(
-        &'a self,
-        identifier: &'a RawIdentifier,
-    ) -> ProviderFuture<'a, RawRecord> {
-        Box::pin(async move {
-            if identifier.scheme != IdentifierScheme::Doi {
-                return Err(ProviderError::UnsupportedIdentifier(
-                    identifier.value.clone(),
-                ));
-            }
-            let work = self
-                .fetch_work_with_references(&identifier.normalized_value)
-                .await
-                .map_err(|error| ProviderError::Request(error.to_string()))?;
-            Ok(raw_record_from_crossref_work(work))
-        })
-    }
-}
-
-impl CitationProvider for CrossrefClient {
-    fn name(&self) -> &'static str {
-        "crossref"
-    }
-
-    fn fetch_citations<'a>(&'a self, record: &'a RawRecord) -> ProviderFuture<'a, Vec<RawRecord>> {
-        Box::pin(async move {
-            let doi = record
-                .source_identifiers
-                .iter()
-                .find(|identifier| identifier.scheme == IdentifierScheme::Doi)
-                .ok_or_else(|| {
-                    ProviderError::UnsupportedIdentifier("record has no DOI".to_owned())
-                })?;
-            let work = self
-                .fetch_work(&doi.normalized_value)
-                .await
-                .map_err(|error| ProviderError::Request(error.to_string()))?;
-            Ok(work
-                .references
-                .into_iter()
-                .filter_map(|reference| reference.doi)
-                .filter_map(|target| citation_record(doi, target))
-                .collect())
-        })
-    }
-}
-
-fn citation_record(cited_by: &RawIdentifier, target: String) -> Option<RawRecord> {
-    let normalized = normalize_doi(&target).ok()?;
-    Some(RawRecord {
-        source_identifiers: vec![RawIdentifier {
-            scheme: IdentifierScheme::Doi,
-            value: target.clone(),
-            normalized_value: normalized,
-        }],
-        title: None,
-        abstract_text: None,
-        authors: Vec::new(),
-        publication_year: None,
-        journal: None,
-        raw: json!({ "source": "crossref", "cited_by": cited_by.normalized_value, "doi": target }),
-    })
-}
-
 #[must_use]
 pub fn raw_record_from_crossref_work(work: WorkWithReferences) -> RawRecord {
     let doi = work.work.doi.clone();
@@ -362,21 +290,5 @@ mod tests {
         assert_eq!(provider_record.authors, imported.authors);
         assert_eq!(provider_record.publication_year, imported.publication_year);
         assert_eq!(provider_record.journal, imported.journal);
-    }
-
-    #[test]
-    fn citation_targets_use_domain_doi_normalization() {
-        let source = RawIdentifier {
-            scheme: IdentifierScheme::Doi,
-            value: "10.1000/source".to_owned(),
-            normalized_value: "10.1000/source".to_owned(),
-        };
-        let record = citation_record(&source, "https://doi.org/10.1000/TARGET.".to_owned())
-            .expect("valid DOI reference should be emitted");
-        assert_eq!(
-            record.source_identifiers[0].normalized_value,
-            "10.1000/target"
-        );
-        assert!(citation_record(&source, "not-a-doi".to_owned()).is_none());
     }
 }
