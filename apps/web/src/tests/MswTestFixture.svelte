@@ -7,7 +7,6 @@
 	}
 
 	interface SettingsData {
-		crossref_mailto: string;
 		default_max_depth: number;
 		max_concurrency: number;
 	}
@@ -77,7 +76,7 @@
 	let saveInput = $state('');
 
 	function submit() {
-		saveSettings.mutate({ mailto: saveInput });
+		saveSettings.mutate({ default_max_depth: Number(saveInput) });
 	}
 </script>
 
@@ -107,7 +106,7 @@
 		{#if settingsQuery.isLoading}
 			<p data-testid="status-loading">Loading settings...</p>
 		{:else if settingsQuery.data}
-			<p data-testid="settings-mailto">{settingsQuery.data.data.crossref_mailto}</p>
+			<p data-testid="settings-depth">{settingsQuery.data.data.default_max_depth}</p>
 		{/if}
 
 		<input data-testid="settings-input" bind:value={saveInput} />

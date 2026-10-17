@@ -17,20 +17,18 @@ use tower::ServiceExt;
 use uuid::Uuid;
 
 async fn database() -> Option<PgPool> {
-    let pool = deepref_app::test_isolation::isolated_pool_from_env_first(
+    deepref_app::test_isolation::isolated_pool_from_env_first(
         &["TEST_DATABASE_URL", "DATABASE_URL"],
         5,
     )
-    .await?;
-    sqlx::query("INSERT INTO settings (id,crossref_mailto) VALUES (1,'tests@example.org') ON CONFLICT (id) DO UPDATE SET crossref_mailto=EXCLUDED.crossref_mailto")
-        .execute(&pool)
-        .await
-        .expect("Crossref test configuration should be stored");
-    Some(pool)
+    .await
 }
 
+/// Every test but the missing-contact one identifies itself with this address.
+const TEST_CONTACT_EMAIL: &str = "tests@example.org";
+
 #[tokio::test]
-async fn doi_acquisitions_require_mailto_and_expose_project_scoped_items_and_depth() {
+async fn doi_acquisitions_require_a_contact_email_and_expose_project_scoped_items_and_depth() {
     let Some(pool) = database().await else { return };
     let project = Uuid::new_v4();
     sqlx::query("INSERT INTO projects (id,name) VALUES ($1,'canonical DOI')")
@@ -48,11 +46,7 @@ async fn doi_acquisitions_require_mailto_and_expose_project_scoped_items_and_dep
             ))
             .unwrap()
     };
-    sqlx::query("UPDATE settings SET crossref_mailto='' WHERE id=1")
-        .execute(&pool)
-        .await
-        .unwrap();
-    let rejected = call(&pool, create()).await;
+    let rejected = call_with_contact_email(&pool, create(), "").await;
     assert_eq!(rejected.status(), StatusCode::SERVICE_UNAVAILABLE);
     let count: i64 =
         sqlx::query_scalar("SELECT count(*) FROM acquisition_runs WHERE project_id=$1")
@@ -61,10 +55,6 @@ async fn doi_acquisitions_require_mailto_and_expose_project_scoped_items_and_dep
             .await
             .unwrap();
     assert_eq!(count, 0);
-    sqlx::query("UPDATE settings SET crossref_mailto='tests@example.org' WHERE id=1")
-        .execute(&pool)
-        .await
-        .unwrap();
     let created = call(&pool, create()).await;
     assert_eq!(created.status(), StatusCode::CREATED);
     let body = json_body(created).await;
@@ -120,10 +110,26 @@ fn api_config() -> ApiConfig {
 }
 
 async fn call(pool: &PgPool, request: Request<Body>) -> Response<Body> {
-    router(AppState::core(pool.clone()), &api_config())
-        .oneshot(request)
-        .await
-        .expect("request should be handled")
+    call_with_contact_email(pool, request, TEST_CONTACT_EMAIL).await
+}
+
+async fn call_with_contact_email(
+    pool: &PgPool,
+    request: Request<Body>,
+    contact_email: &str,
+) -> Response<Body> {
+    let config = api_config();
+    let integrations = deepref_config::IntegrationsConfig {
+        contact_email: contact_email.to_owned(),
+        ..Default::default()
+    };
+    router(
+        AppState::core(pool.clone()).with_integrations(integrations),
+        &config,
+    )
+    .oneshot(request)
+    .await
+    .expect("request should be handled")
 }
 
 async fn call_with_workflow_policy(

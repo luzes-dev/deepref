@@ -26,7 +26,7 @@ pub use document::{
 };
 pub use environment::{APP_ENV, Environment, load_local_dotenv_files};
 pub use error::ConfigError;
-pub use integrations::CrossrefConfig;
+pub use integrations::IntegrationsConfig;
 pub use listen::{ALLOW_NETWORK_BIND, API_BIND_ADDR, DEFAULT_API_BIND_ADDR, ListenConfig};
 pub use pdf::PdfConfig;
 pub use smtp::{SmtpConfig, SmtpTls};
@@ -44,7 +44,7 @@ pub struct RuntimeConfig {
     pub smtp: SmtpConfig,
     pub ai: AiProviderConfig,
     pub pdf: PdfConfig,
-    pub crossref: CrossrefConfig,
+    pub integrations: IntegrationsConfig,
 }
 
 impl RuntimeConfig {
@@ -71,7 +71,7 @@ impl RuntimeConfig {
             smtp: SmtpConfig::from_source(get),
             ai: AiProviderConfig::from_source(get)?,
             pdf: PdfConfig::from_source(get),
-            crossref: CrossrefConfig::from_source(get),
+            integrations: IntegrationsConfig::from_source(get)?,
             environment,
         })
     }

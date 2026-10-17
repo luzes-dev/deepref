@@ -247,6 +247,7 @@ pub(crate) async fn create_acquisition(
             metadata: json!({ "seed_dois": seed_count }),
             idempotency_comparison: IdempotencyComparison::ConfigOnly,
         },
+        &state.integrations.contact_email,
     )
     .await?;
     let run = sqlx::query(acquisition_select())
@@ -384,6 +385,7 @@ pub(crate) async fn refresh_acquisition(
             metadata,
             idempotency_comparison: IdempotencyComparison::SourceStrategyAndConfig,
         },
+        &state.integrations.contact_email,
     )
     .await?;
     let run = sqlx::query(acquisition_select())
@@ -418,6 +420,7 @@ pub(crate) async fn refresh_acquisition(
         (status = 404, description = "Project not found", body = ErrorResponse),
         (status = 409, description = "Idempotency conflict", body = ErrorResponse),
         (status = 413, description = "Import exceeds the request size limit", body = ErrorResponse),
+        (status = 503, description = "PubMed contact email is not configured", body = ErrorResponse),
         (status = 500, description = "Internal server error", body = ErrorResponse)
     )
 )]
@@ -511,6 +514,12 @@ async fn import_pmids(
 ) -> Result<(StatusCode, Json<AcquisitionDto>), ApiError> {
     let pmids = parse_pmid_list(content)?;
     let idempotency_key = idempotency_key(headers)?;
+    if state.integrations.contact_email.trim().is_empty() {
+        return Err(ApiError::Configuration(
+            "PubMed imports are unavailable: the server has no DEEPREF_CONTACT_EMAIL configured"
+                .to_owned(),
+        ));
+    }
     let result = deepref_app::create_pmid_import(
         &state.pool,
         &deepref_app::PmidImportRequest {
@@ -747,23 +756,11 @@ fn acquisition_item_from_row(row: sqlx::postgres::PgRow) -> Result<AcquisitionIt
 async fn persist_doi_acquisition(
     tx: &mut sqlx::Transaction<'_, sqlx::Postgres>,
     request: DoiAcquisitionRequest,
+    contact_email: &str,
 ) -> Result<DoiAcquisitionResult, ApiError> {
-    let mailto: String = sqlx::query_scalar("SELECT crossref_mailto FROM settings WHERE id=1")
-        .fetch_optional(&mut **tx)
-        .await?
-        .unwrap_or_default();
-    let valid_mailto = mailto
-        .trim()
-        .split_once('@')
-        .is_some_and(|(local, domain)| {
-            !local.is_empty()
-                && domain.contains('.')
-                && !domain.starts_with('.')
-                && !domain.ends_with('.')
-        });
-    if !valid_mailto {
+    if contact_email.trim().is_empty() {
         return Err(ApiError::Configuration(
-            "a valid Crossref mail address must be configured before creating an acquisition"
+            "DOI imports are unavailable: the server has no DEEPREF_CONTACT_EMAIL configured"
                 .to_owned(),
         ));
     }

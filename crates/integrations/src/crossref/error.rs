@@ -3,8 +3,8 @@ use thiserror::Error;
 
 #[derive(Debug, Error)]
 pub enum CrossrefError {
-    #[error("Crossref mailto setting is required")]
-    MissingMailto,
+    #[error("a contact e-mail address is required; the server must set DEEPREF_CONTACT_EMAIL")]
+    MissingContactEmail,
     #[error("Crossref returned not found for {0}")]
     NotFound(String),
     #[error("Crossref blocked or rejected the request: {0}")]

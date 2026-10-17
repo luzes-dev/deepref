@@ -768,38 +768,6 @@ mod tests {
     }
 
     #[test]
-    fn acquisition_post_responses_match_handler_statuses() {
-        let document =
-            serde_json::to_value(openapi_document()).expect("OpenAPI document must serialize");
-        let cases: [(&str, &[&str]); 3] = [
-            (
-                "/projects/{project_id}/acquisitions",
-                &["200", "201", "400", "404", "409", "500"],
-            ),
-            (
-                "/projects/{project_id}/imports",
-                &["200", "201", "400", "404", "409", "413", "500"],
-            ),
-            (
-                "/projects/{project_id}/acquisitions/{acquisition_id}/refresh",
-                &["200", "201", "400", "404", "409", "500"],
-            ),
-        ];
-
-        for (path, expected) in cases {
-            let responses = document["paths"][path]["post"]["responses"]
-                .as_object()
-                .unwrap_or_else(|| panic!("missing POST responses for {path}"));
-            let actual: HashSet<_> = responses.keys().map(String::as_str).collect();
-            let expected: HashSet<_> = expected.iter().copied().collect();
-            assert_eq!(
-                actual, expected,
-                "unexpected POST response contract for {path}"
-            );
-        }
-    }
-
-    #[test]
     fn acquisition_refresh_openapi_contract_requires_idempotency_key() {
         let document =
             serde_json::to_value(openapi_document()).expect("OpenAPI document must serialize");

@@ -40,12 +40,10 @@ pub struct CrossrefClient {
 }
 
 impl CrossrefClient {
-    /// Builds the client for `api.crossref.org` with the configured abstract enrichment.
-    pub fn new(
-        mailto: impl Into<String>,
-        config: &deepref_config::CrossrefConfig,
-    ) -> Result<Self, ProviderError> {
-        let mailto = mailto.into();
+    /// Builds the client for `api.crossref.org` with the deployment's contact
+    /// address and the configured abstract enrichment.
+    pub fn new(config: &deepref_config::IntegrationsConfig) -> Result<Self, ProviderError> {
+        let mailto = config.contact_email.clone();
         let enricher = if config.abstract_enrichment {
             AbstractEnricher::new(mailto.clone()).ok()
         } else {
@@ -63,7 +61,7 @@ impl CrossrefClient {
     ) -> Result<Self, CrossrefError> {
         let mailto = mailto.into();
         if mailto.trim().is_empty() {
-            return Err(CrossrefError::MissingMailto);
+            return Err(CrossrefError::MissingContactEmail);
         }
         let user_agent = format!("deepref/0.1 (mailto:{mailto})");
         let client = reqwest::Client::builder()

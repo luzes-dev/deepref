@@ -27,7 +27,7 @@ test.describe('DeepRef settings pilot', () => {
 		await page.goto('/settings');
 		await expect(page).toHaveURL(/\/settings$/);
 		await expect(page.getByRole('heading', { name: 'Settings', exact: true })).toBeVisible();
-		await expect(page.getByLabel('Crossref contact email')).toHaveValue('research@example.org');
+		await expect(page.getByLabel('Default max depth')).toHaveValue('2');
 		await expect(page.getByRole('button', { name: 'Appearance', exact: true })).toBeVisible();
 
 		const dimensions = await page.evaluate(() => ({

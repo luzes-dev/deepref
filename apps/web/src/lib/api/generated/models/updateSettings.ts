@@ -7,8 +7,6 @@
 
 export interface UpdateSettings {
 	/** @nullable */
-	crossref_mailto?: string | null;
-	/** @nullable */
 	default_max_depth?: number | null;
 	/** @nullable */
 	max_concurrency?: number | null;

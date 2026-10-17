@@ -5,7 +5,6 @@ import type { SettingsDto, ProjectDto } from '#lib/api/generated/models/index.js
 export const mockSettings: SettingsDto = {
 	citation_provider: 'crossref',
 	metadata_provider: 'crossref',
-	crossref_mailto: 'researcher@example.com',
 	default_max_depth: 1,
 	max_concurrency: 4,
 	rate_limit_per_second: 10,

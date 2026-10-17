@@ -23,6 +23,7 @@ pub struct AppState {
     pub ai_info: AiRuntimeInfo,
     pub workflow: deepref_config::WorkflowConfig,
     pub smtp: deepref_config::SmtpConfig,
+    pub integrations: deepref_config::IntegrationsConfig,
 }
 
 impl AppState {
@@ -37,6 +38,7 @@ impl AppState {
                 niche_nodes_enabled: false,
             },
             smtp: deepref_config::SmtpConfig::from_source(&|_| None),
+            integrations: deepref_config::IntegrationsConfig::default(),
         }
     }
 
@@ -52,6 +54,11 @@ impl AppState {
 
     pub fn with_smtp(mut self, smtp: deepref_config::SmtpConfig) -> Self {
         self.smtp = smtp;
+        self
+    }
+
+    pub fn with_integrations(mut self, integrations: deepref_config::IntegrationsConfig) -> Self {
+        self.integrations = integrations;
         self
     }
 

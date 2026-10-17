@@ -133,7 +133,9 @@ In another terminal, run:
 mise exec -- just seed
 ```
 
-The seed is deterministic and idempotent. It creates one project with three works and three citation edges. Its Crossref address is a reserved placeholder; set a real contact address in application settings before starting an actual ingestion.
+The seed is deterministic and idempotent. It creates one project with three works and three citation edges. Ingestions identify themselves to Crossref, NCBI and Unpaywall with `DEEPREF_CONTACT_EMAIL`, so set that variable in `.env` before running a real import.
+
+Without `DEEPREF_CONTACT_EMAIL`, DOI and PubMed ID import requests return HTTP 503 without creating an acquisition or queuing a job. A worker missing the variable also fails already-queued PubMed items and PMID-only workflow imports permanently, with an error naming the variable, before contacting NCBI. Set the address and restart both the API and worker before submitting the import again.
 
 ## Stop or reset
 

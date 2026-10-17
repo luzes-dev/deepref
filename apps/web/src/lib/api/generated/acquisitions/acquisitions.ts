@@ -961,6 +961,11 @@ export type importProjectRecordsResponse500 = {
 	status: 500;
 };
 
+export type importProjectRecordsResponse503 = {
+	data: ApiErrorBody;
+	status: 503;
+};
+
 export type importProjectRecordsResponseSuccess = (
 	importProjectRecordsResponse200 | importProjectRecordsResponse201
 ) & {
@@ -972,6 +977,7 @@ export type importProjectRecordsResponseError = (
 	| importProjectRecordsResponse409
 	| importProjectRecordsResponse413
 	| importProjectRecordsResponse500
+	| importProjectRecordsResponse503
 ) & {
 	headers: Headers;
 };
