@@ -576,7 +576,7 @@ export function createProjectGraphRenderer(
 			current = appended.current;
 			if (appended.full) break;
 		}
-		return finishWrappedLines(context, lines, current, text, maxWidth, maxLines);
+		return closeWrappedLines(context, lines, current, text, maxWidth, maxLines);
 	}
 
 	function appendWrappedWord(
@@ -597,7 +597,11 @@ export function createProjectGraphRenderer(
 		return { current: word, full: lines.length === maxLines };
 	}
 
-	function finishWrappedLines(
+	// Sealed off after the word loop: any line still pending is flushed, an
+	// entirely empty wrap means the text itself exceeds the first line width,
+	// and once the line cap was reached the leftover text is re-truncated into
+	// the final line.
+	function closeWrappedLines(
 		context: CanvasRenderingContext2D,
 		lines: string[],
 		current: string,
@@ -607,15 +611,24 @@ export function createProjectGraphRenderer(
 	): string[] {
 		if (lines.length < maxLines && current) lines.push(current);
 		if (lines.length === 0) lines.push(truncateTextToWidth(context, text, maxWidth));
+		return reflowTruncatedTail(context, lines, text, maxWidth, maxLines);
+	}
+
+	function reflowTruncatedTail(
+		context: CanvasRenderingContext2D,
+		lines: string[],
+		text: string,
+		maxWidth: number,
+		maxLines: number
+	): string[] {
 		if (lines.length !== maxLines) return lines.slice(0, maxLines);
 		const consumed = lines.join(' ');
-		if (consumed.length < text.length) {
-			lines[maxLines - 1] = truncateTextToWidth(
-				context,
-				lines[maxLines - 1] + ' ' + text.slice(consumed.length),
-				maxWidth
-			);
-		}
+		if (consumed.length >= text.length) return lines.slice(0, maxLines);
+		lines[maxLines - 1] = truncateTextToWidth(
+			context,
+			`${lines[maxLines - 1]} ${text.slice(consumed.length)}`,
+			maxWidth
+		);
 		return lines.slice(0, maxLines);
 	}
 
@@ -625,36 +638,46 @@ export function createProjectGraphRenderer(
 		return truncateTextToWidth(context, label, NORMAL_LABEL_MAX_WIDTH);
 	}
 
-	function drawHoverCardAttachment({
-		attributes,
-		pixelRatio
-	}: LabelAttachmentContext): LabelAttachmentContent | null {
-		// Attachment contexts carry the raw graph attributes.
-		const attrs = attributes as unknown as GraphNodeAttributes;
-		const label = String(attrs.fullLabel ?? attrs.label ?? '');
-		if (!label) return null;
+	// Attachment contexts carry the raw graph attributes.
+	function readAttachmentLabel(attributes: unknown): string {
+		const attrs = attributes as GraphNodeAttributes;
+		return String(attrs.fullLabel ?? attrs.label ?? '');
+	}
+
+	function buildHoverCardLines(
+		label: string
+	): { measure: CanvasRenderingContext2D; lines: string[] } | null {
 		const measure = openLabelMeasuring();
 		if (!measure) return null;
+		return { measure, lines: wrapTextToLines(measure, label, HOVER_LABEL_MAX_WIDTH, Infinity) };
+	}
 
-		const lines = wrapTextToLines(
-			measure,
-			label,
-			HOVER_LABEL_MAX_WIDTH,
-			Number.POSITIVE_INFINITY
-		);
-		const lineHeight = LABEL_LINE_HEIGHT;
+	function paintHoverCardLines(
+		measure: CanvasRenderingContext2D,
+		lines: string[],
+		pixelRatio: number
+	): HTMLCanvasElement | null {
 		const textWidth = Math.min(
 			HOVER_LABEL_MAX_WIDTH,
 			Math.max(...lines.map((line) => measure.measureText(line).width), 0)
 		);
 		const boxWidth = textWidth + HOVER_CARD_PADDING_X * 2;
-		const boxHeight = lines.length * lineHeight + HOVER_CARD_PADDING_Y * 2;
+		const boxHeight = lines.length * LABEL_LINE_HEIGHT + HOVER_CARD_PADDING_Y * 2;
 		const canvas = document.createElement('canvas');
 		canvas.width = Math.max(1, Math.ceil(boxWidth * pixelRatio));
 		canvas.height = Math.max(1, Math.ceil(boxHeight * pixelRatio));
 		const context = canvas.getContext('2d');
 		if (!context) return null;
 
+		paintHoverCardText(context, lines, pixelRatio);
+		return canvas;
+	}
+
+	function paintHoverCardText(
+		context: CanvasRenderingContext2D,
+		lines: string[],
+		pixelRatio: number
+	) {
 		context.scale(pixelRatio, pixelRatio);
 		context.font = LABEL_FONT;
 		context.fillStyle = interaction.palette.label;
@@ -662,10 +685,21 @@ export function createProjectGraphRenderer(
 			context.fillText(
 				line,
 				HOVER_CARD_PADDING_X,
-				HOVER_CARD_PADDING_Y + LABEL_FONT_SIZE + index * lineHeight
+				HOVER_CARD_PADDING_Y + LABEL_FONT_SIZE + index * LABEL_LINE_HEIGHT
 			);
 		});
-		return { type: 'canvas', canvas };
+	}
+
+	function drawHoverCardAttachment({
+		attributes,
+		pixelRatio
+	}: LabelAttachmentContext): LabelAttachmentContent | null {
+		const label = readAttachmentLabel(attributes);
+		if (!label) return null;
+		const prepared = buildHoverCardLines(label);
+		if (!prepared) return null;
+		const canvas = paintHoverCardLines(prepared.measure, prepared.lines, pixelRatio);
+		return canvas ? { type: 'canvas', canvas } : null;
 	}
 
 	function getNodeIdByArticle(reportId: string | undefined) {
