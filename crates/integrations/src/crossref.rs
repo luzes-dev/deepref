@@ -27,8 +27,9 @@ use wire::CrossrefWorksResponse;
 
 const CROSSREF_BASE: &str = "https://api.crossref.org";
 
-/// The one Crossref client. `fetch_work` returns what Crossref holds;
-/// `fetch_work_with_references` also fills a missing abstract from the enricher.
+/// The one Crossref client. Every lookup goes through the `WorkProvider` port, so
+/// each request takes a permit. The enricher fills a missing abstract from Europe
+/// PMC or OpenAlex.
 #[derive(Debug, Clone)]
 pub struct CrossrefClient {
     client: reqwest::Client,
@@ -85,17 +86,12 @@ impl CrossrefClient {
         self
     }
 
-    pub async fn fetch_work(&self, doi: &str) -> Result<WorkWithReferences, CrossrefError> {
-        self.fetch_metered(doi, None).await
-    }
-
-    /// One lookup with the client's retry policy. `permit` is `None` when the caller
-    /// meters the lookup itself. Otherwise each retry takes a permit, because the
-    /// caller's permit covers only the first request.
+    /// One lookup with the client's retry policy. The caller's permit covers the
+    /// first request, and each retry takes another.
     async fn fetch_metered(
         &self,
         doi: &str,
-        permit: Option<&dyn ProviderPermit>,
+        permit: &dyn ProviderPermit,
     ) -> Result<WorkWithReferences, CrossrefError> {
         let doi = deepref_domain::normalize_doi(doi)?;
         let encoded = urlencoding::encode(&doi);
@@ -103,9 +99,7 @@ impl CrossrefClient {
 
         let mut last_retryable = None;
         for attempt in 1..=self.max_attempts {
-            if let Some(permit) = permit
-                && attempt > 1
-            {
+            if attempt > 1 {
                 permit.acquire(ProviderKind::Crossref).await?;
             }
             let response = self
@@ -149,14 +143,6 @@ impl CrossrefClient {
         )))
     }
 
-    pub async fn fetch_work_with_references(
-        &self,
-        doi: &str,
-    ) -> Result<WorkWithReferences, CrossrefError> {
-        let work = self.fetch_work(doi).await?;
-        Ok(self.enrich_abstract(work).await)
-    }
-
     /// The DOI's reference list from Crossref, unresolved entries included. The lookup
     /// is free, so OpenAlex uses it when its own reference resolution runs out of
     /// budget. The lookup takes its own permit.
@@ -166,7 +152,7 @@ impl CrossrefClient {
         permit: &dyn ProviderPermit,
     ) -> Result<Vec<Reference>, CrossrefError> {
         permit.acquire(ProviderKind::Crossref).await?;
-        Ok(self.fetch_metered(doi, Some(permit)).await?.references)
+        Ok(self.fetch_metered(doi, permit).await?.references)
     }
 
     /// Fills a missing abstract from Europe PMC / OpenAlex. Never fails.
@@ -193,8 +179,8 @@ async fn sleep_backoff(attempt: usize) {
     tokio::time::sleep(Duration::from_millis(millis.min(5_000))).await;
 }
 
-/// The router's entry point. The inherent `fetch_work_with_references` stays the
-/// unmetered call the worker still uses, so this method is reached through the trait.
+/// The router's entry point. The caller's permit covers the first request, and
+/// retries take their own.
 impl WorkProvider for CrossrefClient {
     fn kind(&self) -> ProviderKind {
         ProviderKind::Crossref
@@ -207,7 +193,7 @@ impl WorkProvider for CrossrefClient {
     ) -> ProviderFuture<'a, FetchedWork, ProviderFetchError> {
         Box::pin(async move {
             let work = self
-                .fetch_metered(doi, Some(permit))
+                .fetch_metered(doi, permit)
                 .await
                 .map_err(CrossrefError::into_fetch_error)?;
             Ok(FetchedWork {

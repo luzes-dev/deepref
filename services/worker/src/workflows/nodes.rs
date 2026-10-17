@@ -21,8 +21,8 @@ use deepref_application::{
     },
 };
 use deepref_domain::{
-    Actor, ActorKind, ExclusionReasonId, ProjectId, ProtocolVersionId, ReportId, ScreeningDecision,
-    ScreeningStage,
+    Actor, ActorKind, ExclusionReasonId, ProjectId, ProtocolVersionId, ProviderKind, ReportId,
+    ScreeningDecision, ScreeningStage,
 };
 use deepref_review::ReviewRunState;
 use serde_json::{Map, Value, json};
@@ -30,6 +30,7 @@ use sqlx::PgPool;
 use uuid::Uuid;
 
 use super::{NodeError, autonomy_gate, net, pubmed};
+use crate::{limiter, metadata};
 
 pub struct Context<'a> {
     pub pool: &'a PgPool,
@@ -564,11 +565,25 @@ async fn import_identifiers(context: &Context<'_>) -> NodeResult {
     let mut records = Vec::new();
     let mut unresolved = 0usize;
     if !dois.is_empty() {
-        let provider = deepref_integrations::CrossrefClient::new(&context.runtime.integrations)
+        let settings = crate::store::load_runtime_settings(context.pool)
+            .await
+            .map_err(|_| {
+                NodeError::retryable("The database was busy. This will be tried again.")
+            })?;
+        let router = metadata::router(&context.runtime.integrations, settings.retry_attempts)
             .map_err(|_| NodeError::permanent("The Crossref connection could not be prepared."))?;
+        let permit = limiter::ProviderLimiter::new(context.pool, settings.rate_limit_per_second);
+        let chain = &context.runtime.integrations.metadata_providers;
         for doi in &dois {
-            match provider.fetch_work_with_references(doi).await {
-                Ok(work) => records.push(deepref_integrations::raw_record_from_crossref_work(work)),
+            let output = router.fetch_work(chain, doi, &permit).await;
+            match output.result {
+                Ok(fetched) => match fetched.provider {
+                    ProviderKind::Crossref => records.push(
+                        deepref_integrations::raw_record_from_crossref_work(fetched.work),
+                    ),
+                    // Only the Crossref adapter is registered in this build.
+                    ProviderKind::OpenAlex | ProviderKind::DataCite => unresolved += 1,
+                },
                 Err(_) => unresolved += 1,
             }
         }
