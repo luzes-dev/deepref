@@ -99,7 +99,10 @@ export default defineConfig(
 					]
 				}
 			],
-			'shadcn/no-raw-colors': 'error',
+			// `shadow-inset-accent` is a declared shadow token (--shadow-inset-accent in
+			// @deepref/ui), but @shadcn/lint 0.2.1's no-raw-colors splits it as shadow-
+			// + a color and flags it as undeclared. Allowlist the token, not the palette.
+			'shadcn/no-raw-colors': ['error', { allow: ['shadow-inset-accent'] }],
 			'shadcn/no-arbitrary-values': [
 				'error',
 				{

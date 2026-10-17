@@ -25,6 +25,10 @@ overrides:
   uuid: ^11.1.1
   devalue: ^5.9.3
   source-map-js: ^1.2.2
+  # svelte-eslint-parser 1.9.0 loads the newest TypeScript reachable in the tree
+  # (TS 7 via fallow-type-aware), whose JS API no longer exports NodeFlags, and
+  # crashes parsing script-less .svelte files. Pin back until upstream guards it.
+  'svelte-eslint-parser@1.9.0': 1.8.1
 
 minimumReleaseAgeExclude:
   - '@tanstack/query-core@5.101.1'
