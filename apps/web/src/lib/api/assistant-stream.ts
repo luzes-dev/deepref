@@ -273,7 +273,7 @@ async function consumeSseStream(
 /**
  * Delivers one complete frame: parsed events go to the renderer, dropped
  * frames are reported loudly in dev with the raw payload, and every frame's
- * server seq (when provided) advances the resume cursor — including dropped
+ * server seq (when provided) advances the resume cursor, including dropped
  * frames, so a resume never replays them.
  */
 function consumeFrame(
@@ -433,7 +433,7 @@ export async function getAssistantRun(
 
 /**
  * Bounds for following a durable run. Observation is best-effort: the worker
- * owns execution, so giving up here never cancels the run — the caller
+ * owns execution, so giving up here never cancels the run. The caller
  * surfaces the rejection (e.g. offers a retry) while the run continues.
  */
 export interface FollowAssistantRunOptions {
@@ -493,7 +493,7 @@ function abortableSleep(ms: number, signal?: AbortSignal): Promise<void> {
  *
  * The loop is bounded three ways: an overall timeout, a cap on reconnect
  * rounds, and stuck detection (no frames and no status change across
- * consecutive rounds). Each surfaces a rejection — never a synthesized
+ * consecutive rounds). Each surfaces a rejection, never a synthesized
  * error frame. Error frames are synthesized only where a terminal failure
  * is actually known: a failed/cancelled run record with no error frame.
  */

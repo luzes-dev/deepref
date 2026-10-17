@@ -62,7 +62,7 @@
 			notifySuccess(
 				which === 'secret'
 					? 'New secret created'
-					: 'New address created — the old one no longer works'
+					: 'New address created. The old one no longer works.'
 			);
 		} catch (error) {
 			notifyError('Could not create a new one', error);

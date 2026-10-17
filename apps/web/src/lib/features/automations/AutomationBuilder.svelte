@@ -1736,7 +1736,7 @@
 			<Dialog.Title>Test this automation</Dialog.Title>
 			<Dialog.Description>
 				The automation runs now with made-up sample information, starting from “{triggerText}”.
-				Steps that would change something — project data, messages, web requests — only
+				Steps that would change something, like project data, messages or web requests, only
 				pretend to run and tell you what they would have done.
 			</Dialog.Description>
 		</Dialog.Header>
