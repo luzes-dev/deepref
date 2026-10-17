@@ -4,31 +4,35 @@ import type { GraphOverlayField } from './context.svelte.js';
 import { createProjectGraphRenderer, type ProjectGraphRenderModel } from './project-graph-renderer';
 
 type Attributes = Record<string, unknown>;
-type Reducer = (key: string, data: Attributes) => Attributes;
-type LabelDrawer = (context: CanvasRenderingContext2D, data: Attributes, settings: object) => void;
+type Reducer = (key: string, data: Attributes, attrs: Attributes) => Attributes;
 type Handler = (payload: Record<string, unknown>) => void;
-type FakeGraph = {
-	order: number;
-	edges: () => string[];
-	getNodeAttributes: (node: string) => Attributes;
-	getEdgeAttributes: (edge: string) => Attributes;
+type FakeGraph = import('graphology').default<Attributes, Attributes>;
+type FakePrimitives = {
+	nodes?: {
+		labelAttachments?: Record<string, (context: Attributes) => Attributes | null>;
+	};
 };
 
 const sigma = vi.hoisted(() => ({ instances: [] as FakeSigma[] }));
 
 class FakeSigma {
 	graph: FakeGraph;
-	settings: Record<string, unknown>;
+	options: {
+		settings: Record<string, unknown>;
+		nodeReducer?: Reducer;
+		edgeReducer?: Reducer;
+		primitives?: FakePrimitives;
+	};
 	handlers = new Map<string, Handler>();
-	scheduleRefresh = vi.fn();
+	refresh = vi.fn();
 	setCustomBBox = vi.fn();
 	setSetting = vi.fn();
 	kill = vi.fn();
 	camera = { setState: vi.fn() };
 
-	constructor(graph: FakeGraph, _target: HTMLElement, settings: Record<string, unknown>) {
+	constructor(graph: FakeGraph, _target: HTMLElement, options: FakeSigma['options']) {
 		this.graph = graph;
-		this.settings = settings;
+		this.options = options;
 		sigma.instances.push(this);
 	}
 	getGraph() {
@@ -38,7 +42,7 @@ class FakeSigma {
 		this.graph = graph;
 	}
 	setSettings(settings: Record<string, unknown>) {
-		this.settings = { ...this.settings, ...settings };
+		this.options.settings = { ...this.options.settings, ...settings };
 	}
 	getDimensions() {
 		return { width: 800, height: 600 };
@@ -56,10 +60,12 @@ class FakeSigma {
 		this.handlers.get(event)?.(payload);
 	}
 	node(key: string): Attributes {
-		return (this.settings.nodeReducer as Reducer)(key, this.graph.getNodeAttributes(key));
+		const attrs = this.graph.getNodeAttributes(key);
+		return (this.options.nodeReducer as Reducer)(key, attrs, attrs);
 	}
 	edge(key: string): Attributes {
-		return (this.settings.edgeReducer as Reducer)(key, this.graph.getEdgeAttributes(key));
+		const attrs = this.graph.getEdgeAttributes(key);
+		return (this.options.edgeReducer as Reducer)(key, attrs, attrs);
 	}
 }
 
@@ -131,25 +137,6 @@ function model(overrides: Partial<ProjectGraphRenderModel> = {}): ProjectGraphRe
 	};
 }
 
-function canvasContext(): CanvasRenderingContext2D {
-	const noop = () => {};
-	return {
-		save: noop,
-		restore: noop,
-		beginPath: noop,
-		closePath: noop,
-		moveTo: noop,
-		lineTo: noop,
-		quadraticCurveTo: noop,
-		arc: noop,
-		fill: noop,
-		stroke: noop,
-		strokeText: noop,
-		fillText: vi.fn(),
-		measureText: (text: string) => ({ width: text.length * 7 }) as TextMetrics
-	} as unknown as CanvasRenderingContext2D;
-}
-
 async function mounted(overrides: Partial<ProjectGraphRenderModel> = {}) {
 	const onSelect = vi.fn();
 	const onClear = vi.fn();
@@ -182,7 +169,19 @@ describe('project graph renderer', () => {
 		expect(instance.graph.order).toBe(4);
 		expect(instance.graph.edges()).toHaveLength(2);
 		expect(instance.setCustomBBox).toHaveBeenCalled();
-		expect(instance.settings.labelDensity).toBe(4);
+		expect(instance.options.settings.labelDensity).toBe(4);
+		// Match v3 screen-based sizing so nodes keep their size when zooming.
+		expect(instance.options.settings.itemSizesReference).toBe('screen');
+	});
+
+	it('keeps the full label next to the displayed label', async () => {
+		const { instance } = await mounted();
+		const node = instance.graph.getNodeAttributes('a');
+		const fullLabel = String(node.fullLabel);
+		expect(fullLabel).toBe('Early mobilisation after cardiac surgery in older adults');
+		// The displayed label is the truncation of the full label when a measuring
+		// canvas exists; measurement is unavailable in jsdom.
+		expect(String(node.label).length).toBeLessThanOrEqual(fullLabel.length);
 	});
 
 	it.each(fields)('colors nodes by %s', async (colorBy) => {
@@ -201,32 +200,52 @@ describe('project graph renderer', () => {
 	it('hides nodes and edges outside the visible set', async () => {
 		const { renderer, instance } = await mounted();
 		renderer.setVisibleNodes(new Set(['a', 'b']));
-		expect(instance.node('c').hidden).toBe(true);
-		expect(instance.node('a').hidden).toBe(false);
+		expect(instance.node('c').visibility).toBe('hidden');
+		expect(instance.node('a').visibility).toBe('visible');
 		const [ab, bc] = instance.graph.edges();
-		expect(instance.edge(ab!).hidden).toBe(false);
-		expect(instance.edge(bc!).hidden).toBe(true);
+		expect(instance.edge(ab!).visibility).toBe('visible');
+		expect(instance.edge(bc!).visibility).toBe('hidden');
 	});
 
 	it('focuses the hovered node and its neighbours and dims the rest', async () => {
 		const { instance } = await mounted();
 		instance.emit('enterNode', { node: 'a' });
-		expect(instance.node('a')).toMatchObject({ forceLabel: true, zIndex: 4 });
-		expect(instance.node('b')).toMatchObject({ forceLabel: true, zIndex: 2 });
-		expect(instance.node('d').label).toBe('');
+		expect(instance.node('a')).toMatchObject({ labelVisibility: 'visible', zIndex: 4 });
+		expect(instance.node('b')).toMatchObject({ labelVisibility: 'visible', zIndex: 2 });
+		expect(instance.node('d').labelVisibility).toBe('hidden');
 		const [ab, bc] = instance.graph.edges();
 		expect(instance.edge(ab!).size).toBe(2);
 		expect(instance.edge(bc!).size).toBe(0.5);
 		instance.emit('leaveNode');
-		expect(instance.node('d').label).not.toBe('');
+		// Small graphs keep forced labels (v3's `forceLabel` behavior).
+		expect(instance.node('d').labelVisibility).toBe('visible');
+	});
+
+	it('attaches a hover card to the active node only', async () => {
+		const { instance } = await mounted();
+		const primitives = instance.options.primitives as FakePrimitives;
+		expect(Object.keys(primitives.nodes?.labelAttachments ?? {})).toContain('hover-card');
+
+		instance.emit('enterNode', { node: 'a' });
+		expect(instance.node('a')).toMatchObject({
+			labelAttachment: 'hover-card',
+			labelAttachmentPlacement: 'right',
+			backdropVisibility: 'visible',
+			backdropArea: 'label'
+		});
+		expect(instance.node('b').labelAttachment).toBeUndefined();
+
+		instance.emit('leaveNode');
+		expect(instance.node('a').labelAttachment).toBeUndefined();
 	});
 
 	it('keeps the selected article highlighted', async () => {
 		const { renderer, instance } = await mounted();
 		renderer.setSelection('b');
-		expect(instance.node('b')).toMatchObject({ highlighted: true, zIndex: 3 });
+		expect(instance.node('b')).toMatchObject({ zIndex: 3, labelVisibility: 'visible' });
+		expect(instance.node('b').labelAttachment).toBe('hover-card');
 		expect(instance.node('a').zIndex).toBe(2);
-		expect(instance.node('d').label).toBe('');
+		expect(instance.node('d').labelVisibility).toBe('hidden');
 	});
 
 	it('selects on click and clears on the stage, but not right after a drag', async () => {
@@ -244,25 +263,6 @@ describe('project graph renderer', () => {
 		instance.emit('upNode');
 		instance.emit('clickNode', { node: 'b' });
 		expect(onSelect).toHaveBeenCalledTimes(1);
-	});
-
-	it('draws short and wrapped hover labels', async () => {
-		const { instance } = await mounted();
-		const settings = { labelWeight: '500', labelSize: 12, labelFont: 'sans-serif' };
-		const context = canvasContext();
-		const node = instance.graph.getNodeAttributes('a');
-		(instance.settings.defaultDrawNodeLabel as LabelDrawer)(context, node, settings);
-		(instance.settings.defaultDrawNodeHover as LabelDrawer)(
-			context,
-			{ ...node, fullLabel: `${'word '.repeat(40)}${'x'.repeat(80)}` },
-			settings
-		);
-		(instance.settings.defaultDrawNodeLabel as LabelDrawer)(
-			context,
-			{ ...node, label: '' },
-			settings
-		);
-		expect(vi.mocked(context.fillText).mock.calls.length).toBeGreaterThan(2);
 	});
 
 	it('resets the camera and tears down on clear', async () => {
