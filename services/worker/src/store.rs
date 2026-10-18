@@ -98,18 +98,29 @@ pub async fn mark_fetching(
     Ok(changed.then(|| stored_metadata_chain(&config)))
 }
 
-/// The chain a run stored under `metadata_providers`. Lenient: a run without it,
-/// including the legacy `metadata_provider` shape, has no chain, and a name that
-/// is not a provider is dropped. The router falls back to the deployment chain.
+/// The chain a run stored under `metadata_providers`. Lenient: a name that is not a
+/// provider is dropped. A run in the legacy shape, `metadata_provider` and `citation_provider`
+/// both `"crossref"`, ran on Crossref alone, so it stays on `[Crossref]` and a deployment that
+/// now prefers OpenAlex does not move it partway through a traversal. A config in neither shape
+/// has no chain, and the router falls back to the deployment chain.
 fn stored_metadata_chain(config: &serde_json::Value) -> Vec<ProviderKind> {
-    config
+    if let Some(providers) = config
         .get("metadata_providers")
         .and_then(serde_json::Value::as_array)
-        .into_iter()
-        .flatten()
-        .filter_map(serde_json::Value::as_str)
-        .filter_map(|name| name.parse::<ProviderKind>().ok())
-        .collect()
+    {
+        return providers
+            .iter()
+            .filter_map(serde_json::Value::as_str)
+            .filter_map(|name| name.parse::<ProviderKind>().ok())
+            .collect();
+    }
+    let legacy = |key: &str| config.get(key).and_then(serde_json::Value::as_str);
+    if legacy("metadata_provider") == Some("crossref")
+        && legacy("citation_provider") == Some("crossref")
+    {
+        return vec![ProviderKind::Crossref];
+    }
+    Vec::new()
 }
 
 pub async fn complete_without_doi(
@@ -161,14 +172,16 @@ pub async fn attach_cached(
     ).bind(event.payload.project_id).bind(&cached_doi).bind(source_report_id).execute(&mut *tx).await?;
     if event.payload.depth < event.payload.max_depth {
         let targets = sqlx::query(
-            "SELECT target_doi FROM fetched_citation_facts WHERE source_doi=$1 ORDER BY target_doi",
+            "SELECT target_doi, source FROM fetched_citation_facts WHERE source_doi=$1 ORDER BY target_doi",
         )
         .bind(&cached_doi)
         .fetch_all(&mut *tx)
         .await?;
-        for target in targets {
-            let target = target.get::<String, _>("target_doi");
-            persist_citation(&mut tx, event, doi, &target).await?;
+        for fact in targets {
+            let target = fact.get::<String, _>("target_doi");
+            // The project citation carries the lane label the cached fact was stored with.
+            let label = fact.get::<String, _>("source");
+            persist_citation(&mut tx, event, doi, &target, &label).await?;
             enqueue_child(&mut tx, event, doi, &target).await?;
         }
     }
@@ -194,7 +207,9 @@ pub async fn finalize_success(
 
     for reference in &fetched.work.references {
         match &reference.doi {
-            Some(target) => persist_citation(&mut tx, event, doi, target).await?,
+            Some(target) => {
+                persist_citation(&mut tx, event, doi, target, NEW_EDGE_LABEL).await?;
+            }
             None => persist_unresolved(&mut tx, event, doi, reference).await?,
         }
     }
@@ -418,28 +433,37 @@ async fn ensure_v2_report(tx: &mut Transaction<'_, Postgres>, doi: &str) -> anyh
     Ok(report_id)
 }
 
+/// The lane label of a DOI-traversal edge written now. It names how the edge was found, not
+/// which provider found it: the answering providers are recorded per work. Edges written before
+/// routing keep their truthful `crossref-reference` label.
+const NEW_EDGE_LABEL: &str = "doi-reference";
+
+/// Writes the citation fact and the project citation with the lane `label`. A fact or citation
+/// that already exists keeps the label it was stored with.
 async fn persist_citation(
     tx: &mut Transaction<'_, Postgres>,
     event: &EventEnvelope<WorkFetchRequested>,
     source: &str,
     target: &str,
+    label: &str,
 ) -> anyhow::Result<()> {
     sqlx::query("INSERT INTO works (canonical_doi) VALUES ($1) ON CONFLICT DO NOTHING")
         .bind(target)
         .execute(&mut **tx)
         .await?;
     sqlx::query(
-        "INSERT INTO fetched_citation_facts (source_doi,target_doi) VALUES ($1,$2) ON CONFLICT DO NOTHING",
-    ).bind(source).bind(target).execute(&mut **tx).await?;
+        "INSERT INTO fetched_citation_facts (source_doi,target_doi,source) VALUES ($1,$2,$3) ON CONFLICT DO NOTHING",
+    ).bind(source).bind(target).bind(label).execute(&mut **tx).await?;
     let source_report_id = ensure_v2_report(tx, source).await?;
     let target_report_id = ensure_v2_report(tx, target).await?;
     sqlx::query(
-        "INSERT INTO citations (project_id,source_report_id,target_report_id,source,acquisition_run_id) VALUES ($1,$2,$3,'crossref-reference',$4) ON CONFLICT (project_id,source_report_id,target_report_id) DO UPDATE SET acquisition_run_id=COALESCE(citations.acquisition_run_id,EXCLUDED.acquisition_run_id)",
+        "INSERT INTO citations (project_id,source_report_id,target_report_id,source,acquisition_run_id) VALUES ($1,$2,$3,$5,$4) ON CONFLICT (project_id,source_report_id,target_report_id) DO UPDATE SET acquisition_run_id=COALESCE(citations.acquisition_run_id,EXCLUDED.acquisition_run_id)",
     )
     .bind(event.payload.project_id)
     .bind(source_report_id)
     .bind(target_report_id)
     .bind(event.payload.acquisition_id)
+    .bind(label)
     .execute(&mut **tx)
     .await?;
     Ok(())
@@ -823,12 +847,19 @@ mod tests {
             stored_metadata_chain(&json!({"metadata_providers": ["openalex", "crossref"]})),
             vec![ProviderKind::OpenAlex, ProviderKind::Crossref]
         );
-        assert!(
+        assert_eq!(
             stored_metadata_chain(
                 &json!({"metadata_provider": "crossref", "citation_provider": "crossref"})
+            ),
+            vec![ProviderKind::Crossref],
+            "the legacy shape ran on Crossref alone"
+        );
+        assert!(
+            stored_metadata_chain(
+                &json!({"metadata_provider": "pubmed", "citation_provider": "crossref"})
             )
             .is_empty(),
-            "the legacy shape has no chain"
+            "an invalid legacy shape has no chain"
         );
         assert!(stored_metadata_chain(&json!({})).is_empty());
         assert_eq!(
@@ -862,7 +893,7 @@ mod tests {
                 raw: json!({ "title": ["A title"] }),
             },
             provider,
-            reference_gap: None,
+            references: deepref_application::ReferenceReport::default(),
         }
     }
 

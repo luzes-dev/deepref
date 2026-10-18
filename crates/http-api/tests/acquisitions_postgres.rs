@@ -1192,6 +1192,97 @@ async fn doi_acquisitions_accept_only_enabled_metadata_providers() {
 }
 
 #[tokio::test]
+async fn provider_names_are_trimmed_and_the_canonical_array_replays_the_run() {
+    let Some(pool) = database().await else {
+        return;
+    };
+    let project_id = Uuid::new_v4();
+    sqlx::query("INSERT INTO projects (id,name) VALUES ($1,'trimmed names test')")
+        .bind(project_id)
+        .execute(&pool)
+        .await
+        .expect("test project should insert");
+    let both = deepref_config::IntegrationsConfig {
+        contact_email: TEST_CONTACT_EMAIL.to_owned(),
+        metadata_providers: vec![ProviderKind::OpenAlex, ProviderKind::Crossref],
+        ..Default::default()
+    };
+
+    let created = call_with_integrations(
+        &pool,
+        create_acquisition_request(
+            project_id,
+            Some("trimmed-names"),
+            json!({"seed_dois": ["10.5555/trimmed"], "metadata_providers": [" crossref ", "openalex", "crossref"]}),
+        ),
+        both.clone(),
+    )
+    .await;
+    assert_eq!(created.status(), StatusCode::CREATED);
+    let run_id = json_body(created).await["id"]
+        .as_str()
+        .expect("created acquisition should have an id")
+        .parse::<Uuid>()
+        .expect("acquisition id should be a UUID");
+    let config: serde_json::Value =
+        sqlx::query_scalar("SELECT config FROM acquisition_runs WHERE id=$1")
+            .bind(run_id)
+            .fetch_one(&pool)
+            .await
+            .expect("created config should load");
+    assert_eq!(
+        config["metadata_providers"],
+        json!(["crossref", "openalex"])
+    );
+
+    let replay = call_with_integrations(
+        &pool,
+        create_acquisition_request(
+            project_id,
+            Some("trimmed-names"),
+            json!({"seed_dois": ["10.5555/trimmed"], "metadata_providers": ["crossref", "openalex"]}),
+        ),
+        both,
+    )
+    .await;
+    assert_eq!(replay.status(), StatusCode::OK);
+    assert_eq!(json_body(replay).await["id"], run_id.to_string());
+
+    clean_acquisition_projects(&pool, &[project_id], &[run_id]).await;
+}
+
+#[tokio::test]
+async fn a_request_with_a_bad_provider_and_no_contact_email_gets_the_400() {
+    let Some(pool) = database().await else {
+        return;
+    };
+    let project_id = Uuid::new_v4();
+    sqlx::query("INSERT INTO projects (id,name) VALUES ($1,'both errors test')")
+        .bind(project_id)
+        .execute(&pool)
+        .await
+        .expect("test project should insert");
+
+    let response = call_with_contact_email(
+        &pool,
+        create_acquisition_request(
+            project_id,
+            None,
+            json!({"seed_dois": ["10.5555/both-errors"], "metadata_providers": ["openalex"]}),
+        ),
+        "",
+    )
+    .await;
+
+    assert_eq!(
+        response.status(),
+        StatusCode::BAD_REQUEST,
+        "provider validation runs before the contact e-mail check"
+    );
+    clean_acquisition_projects(&pool, &[project_id], &[]).await;
+}
+
+#[tokio::test]
 async fn doi_acquisitions_accept_every_provider_under_the_default_chain() {
     let Some(pool) = database().await else {
         return;

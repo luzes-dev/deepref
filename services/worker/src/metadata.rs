@@ -3,8 +3,8 @@
 //! acquisition item.
 
 use deepref_application::{
-    AttemptOutcome, LostEdgeCause, LostEdgeFill, LostEdges, ProviderAttempt, ProviderRouter,
-    RouteError, RouteOutput, WorkProvider,
+    AttemptOutcome, AttemptPurpose, DegradedReason, OutboundService, ProviderAttempt,
+    ProviderRouter, ReferenceSummary, RouteError, RouteOutput, WorkProvider,
 };
 use deepref_config::IntegrationsConfig;
 use deepref_domain::{IngestionItemStatus, ProviderKind};
@@ -63,8 +63,12 @@ pub fn router(
     clients: &MetadataClients,
     retry_attempts: usize,
 ) -> anyhow::Result<ProviderRouter> {
-    let crossref = CrossrefClient::for_base_url(&clients.crossref_base_url, integrations)?
-        .with_max_attempts(retry_attempts);
+    let crossref = CrossrefClient::for_base_url(
+        &clients.crossref_base_url,
+        integrations,
+        clients.openalex.as_ref(),
+    )?
+    .with_max_attempts(retry_attempts);
     let datacite =
         DataCiteClient::with_base_url(&clients.datacite_base_url, &integrations.contact_email)?
             .with_max_attempts(retry_attempts);
@@ -72,37 +76,21 @@ pub fn router(
     if let Some(openalex) = &clients.openalex {
         adapters.push(Box::new(openalex.clone().with_max_attempts(retry_attempts)));
     }
-    Ok(
-        ProviderRouter::new(integrations.metadata_providers.clone(), adapters)?
-            .with_reference_union(integrations.reference_union),
-    )
-}
-
-/// Who an attempt asked. A metadata attempt looks up the DOI's record. A references attempt
-/// reads a reference list to fill edges the metadata answer lacked.
-#[derive(Debug, Clone, Copy, PartialEq, Eq)]
-enum Purpose {
-    Metadata,
-    References,
-}
-
-impl Purpose {
-    fn as_str(self) -> &'static str {
-        match self {
-            Self::Metadata => "metadata",
-            Self::References => "references",
-        }
-    }
+    Ok(ProviderRouter::new(
+        integrations.metadata_providers.clone(),
+        adapters,
+    )?)
 }
 
 /// One tracing event a routed DOI produces. The mapping from the router output is pure,
 /// so it is tested without a subscriber. `report_route` logs what it returns.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum RouteEvent {
-    /// One call into an adapter and what the call produced.
+    /// One group of requests to one service for one purpose, and what it produced.
     Attempt {
-        provider: ProviderKind,
-        purpose: Purpose,
+        service: OutboundService,
+        purpose: AttemptPurpose,
+        requests: u32,
         outcome: &'static str,
     },
     /// The chain moved past `from`, which did not answer, on to `to`.
@@ -112,66 +100,61 @@ enum RouteEvent {
     },
 }
 
-/// The events for one routed DOI in the order they happened: each metadata attempt, then
-/// the fallback when that attempt moved the chain on, then the reference attempt Crossref
-/// made to fill lost edges. A reference fill is an attempt, not a fallback, because the
-/// metadata answer already came back.
+/// The events for one routed DOI in the order they happened: one per attempt record, and a
+/// fallback after a metadata attempt that handed the DOI to the next provider. Purposes come
+/// from the records themselves, so a reference lookup is never reported as a metadata attempt.
 fn route_events(output: &RouteOutput) -> Vec<RouteEvent> {
     let mut events = Vec::with_capacity(output.attempts.len() + 1);
     for (index, attempt) in output.attempts.iter().enumerate() {
         events.push(RouteEvent::Attempt {
-            provider: attempt.provider,
-            purpose: Purpose::Metadata,
+            service: attempt.provider,
+            purpose: attempt.purpose,
+            requests: attempt.requests,
             outcome: attempt.outcome.name(),
         });
-        let next = output.attempts.get(index + 1);
-        if let Some(next) = next.filter(|_| moves_on(attempt)) {
-            events.push(RouteEvent::Fallback {
-                from: attempt.provider,
-                to: next.provider,
-            });
-        }
-    }
-    if let Some(lost) = &output.lost_edges {
-        let outcome = match &lost.fill {
-            LostEdgeFill::Crossref { .. } => Some(AttemptOutcome::Answered),
-            LostEdgeFill::CrossrefFailed { error } => Some(AttemptOutcome::from_error(error)),
-            LostEdgeFill::CrossrefNotEnabled => None,
-        };
-        if let Some(outcome) = outcome {
-            events.push(RouteEvent::Attempt {
-                provider: ProviderKind::Crossref,
-                purpose: Purpose::References,
-                outcome: outcome.name(),
-            });
+        let next = output.attempts[index + 1..]
+            .iter()
+            .find(|next| next.purpose == AttemptPurpose::Metadata);
+        if attempt.purpose == AttemptPurpose::Metadata
+            && moves_on(attempt)
+            && let (Some(from), Some(to)) = (
+                attempt.provider.provider(),
+                next.and_then(|next| next.provider.provider()),
+            )
+        {
+            events.push(RouteEvent::Fallback { from, to });
         }
     }
     events
 }
 
-/// Whether an attempt hands the DOI to the next provider. A not-found or a retryable failure
-/// does. An answer, a rejection or a fatal failure ends the chain.
+/// Whether a metadata attempt hands the DOI to the next provider: a not-found, a retryable
+/// failure or a fatal one. An answer or a rejection ends the chain.
 fn moves_on(attempt: &ProviderAttempt) -> bool {
     matches!(
         attempt.outcome,
-        AttemptOutcome::NotFound | AttemptOutcome::Retryable { .. }
+        AttemptOutcome::NotFound { .. }
+            | AttemptOutcome::Retryable { .. }
+            | AttemptOutcome::Fatal { .. }
     )
 }
 
-/// Logs what one routed DOI did: an event per attempt, one per fallback, then the lost-edge
-/// report. The router returns its record and the worker logs it, because the application
-/// layer does not log. Call it wherever the router output is consumed.
+/// Logs what one routed DOI did: an event per attempt record and per fallback, then the
+/// degradation report of an answer. The router returns its record and the worker logs it,
+/// because the application layer does not log. Call it wherever the router output is consumed.
 pub fn report_route(doi: &str, output: &RouteOutput) {
     for event in route_events(output) {
         match event {
             RouteEvent::Attempt {
-                provider,
+                service,
                 purpose,
+                requests,
                 outcome,
             } => tracing::info!(
                 doi,
-                provider = provider.as_str(),
+                provider = service.as_str(),
                 purpose = purpose.as_str(),
+                requests,
                 outcome,
                 "provider attempt"
             ),
@@ -183,52 +166,93 @@ pub fn report_route(doi: &str, output: &RouteOutput) {
             ),
         }
     }
-    if let Some(lost) = &output.lost_edges {
-        report_lost_edges(doi, lost);
+    if let Some(summary) = &output.references {
+        report_references(doi, summary);
     }
 }
 
-/// Logs an answer the router tried to fill. A budget stop warns, since the budget is spent.
-/// A shortfall or an unverified list is routine, since most works have a target or two
-/// without a DOI, so it logs at debug.
-fn report_lost_edges(doi: &str, lost: &LostEdges) {
-    let provider = lost.provider.as_str();
-    let lost_edges = lost.missing();
-    let LostEdgeCause::BudgetExhausted { reset_secs } = lost.cause else {
+/// Logs a degraded answer. A spent budget and a failed helper warn, since each is something an
+/// operator can act on. Targets that came back without a DOI are routine, so they log at debug.
+fn report_references(doi: &str, summary: &ReferenceSummary) {
+    if !summary.is_degraded() {
+        return;
+    }
+    let reasons = summary
+        .reasons
+        .iter()
+        .map(|reason| reason.as_str())
+        .collect::<Vec<_>>()
+        .join(",");
+    if summary.reasons.iter().any(|reason| {
+        matches!(
+            reason,
+            DegradedReason::BudgetExhausted | DegradedReason::HelperFatal
+        )
+    }) {
+        tracing::warn!(
+            doi,
+            reasons,
+            retained = summary.retained,
+            omitted = summary.omitted,
+            doi_less = summary.doi_less,
+            unattempted = summary.unattempted,
+            reset_secs = summary.budget_reset_secs,
+            "the references of this answer are degraded"
+        );
+    } else {
         tracing::debug!(
             doi,
-            provider,
-            lost_edges,
-            fill = ?lost.fill,
-            "the reference union read Crossref's list after the OpenAlex answer"
+            reasons,
+            retained = summary.retained,
+            omitted = summary.omitted,
+            doi_less = summary.doi_less,
+            "the references of this answer are degraded"
         );
-        return;
-    };
-    match &lost.fill {
-        LostEdgeFill::Crossref { added } => tracing::warn!(
-            doi,
-            provider,
-            lost_edges,
-            reset_secs,
-            crossref_added = added,
-            "OpenAlex budget spent before every reference resolved; Crossref filled the lost edges"
-        ),
-        LostEdgeFill::CrossrefNotEnabled => tracing::warn!(
-            doi,
-            provider,
-            lost_edges,
-            reset_secs,
-            "OpenAlex budget spent before every reference resolved; Crossref is not enabled, so the references stay partial"
-        ),
-        LostEdgeFill::CrossrefFailed { error } => tracing::warn!(
-            doi,
-            provider,
-            lost_edges,
-            reset_secs,
-            %error,
-            "OpenAlex budget spent before every reference resolved; the Crossref reference list failed, so the references stay partial"
-        ),
     }
+}
+
+/// The last provider a route attempted, from the structured records. A reference helper counts,
+/// so a failure caused by Crossref's list names Crossref.
+pub fn last_attempted_provider(attempts: &[ProviderAttempt]) -> Option<ProviderKind> {
+    attempts
+        .iter()
+        .rev()
+        .find_map(|attempt| attempt.provider.provider())
+}
+
+/// The longest `last_error` a failed route stores, history included.
+const LAST_ERROR_LIMIT: usize = 500;
+
+/// The error message plus a short summary of the attempt history, bounded and free of
+/// credentials: it names services, purposes, request counts and outcome names, never a URL or
+/// the message of an earlier attempt.
+pub fn failure_message(message: &str, attempts: &[ProviderAttempt]) -> String {
+    if attempts.is_empty() {
+        return truncate(message, LAST_ERROR_LIMIT);
+    }
+    let history = attempts
+        .iter()
+        .map(|attempt| {
+            format!(
+                "{} {} {} x{}",
+                attempt.provider.as_str(),
+                attempt.purpose.as_str(),
+                attempt.outcome.name(),
+                attempt.requests
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("; ");
+    truncate(&format!("{message} [{history}]"), LAST_ERROR_LIMIT)
+}
+
+fn truncate(text: &str, limit: usize) -> String {
+    if text.chars().count() <= limit {
+        return text.to_owned();
+    }
+    let mut cut: String = text.chars().take(limit.saturating_sub(1)).collect();
+    cut.push('\u{2026}');
+    cut
 }
 
 /// The item status and last error for a route that will not be retried. A
@@ -253,8 +277,6 @@ pub fn terminal_outcome(error: &RouteError, doi: &str) -> (IngestionItemStatus, 
 mod tests {
     use std::io::Write;
     use std::sync::{Arc, Mutex};
-
-    use deepref_application::ProviderFetchError;
 
     use super::*;
 
@@ -360,41 +382,45 @@ mod tests {
     }
 
     fn attempt(provider: ProviderKind, outcome: AttemptOutcome) -> ProviderAttempt {
-        ProviderAttempt { provider, outcome }
+        purposeful(provider, AttemptPurpose::Metadata, outcome)
     }
 
-    fn routed(attempts: Vec<ProviderAttempt>, lost_edges: Option<LostEdges>) -> RouteOutput {
-        RouteOutput {
-            attempts,
-            result: Err(RouteError::NotFound { reason: None }),
-            lost_edges,
+    fn purposeful(
+        provider: ProviderKind,
+        purpose: AttemptPurpose,
+        outcome: AttemptOutcome,
+    ) -> ProviderAttempt {
+        ProviderAttempt {
+            provider: OutboundService::Provider(provider),
+            purpose,
+            requests: 1,
+            outcome,
         }
     }
 
-    fn lost(fill: LostEdgeFill) -> LostEdges {
-        LostEdges {
-            provider: ProviderKind::OpenAlex,
-            expected: 2,
-            resolved: 1,
-            cause: LostEdgeCause::Shortfall,
-            fill,
+    fn routed(attempts: Vec<ProviderAttempt>, references: Option<ReferenceSummary>) -> RouteOutput {
+        RouteOutput {
+            attempts,
+            result: Err(RouteError::NotFound { reason: None }),
+            references,
+        }
+    }
+
+    fn not_found() -> AttemptOutcome {
+        AttemptOutcome::NotFound { reason: None }
+    }
+
+    fn event(provider: ProviderKind, purpose: AttemptPurpose, outcome: &'static str) -> RouteEvent {
+        RouteEvent::Attempt {
+            service: OutboundService::Provider(provider),
+            purpose,
+            requests: 1,
+            outcome,
         }
     }
 
     fn metadata_attempt(provider: ProviderKind, outcome: &'static str) -> RouteEvent {
-        RouteEvent::Attempt {
-            provider,
-            purpose: Purpose::Metadata,
-            outcome,
-        }
-    }
-
-    fn references_attempt(outcome: &'static str) -> RouteEvent {
-        RouteEvent::Attempt {
-            provider: ProviderKind::Crossref,
-            purpose: Purpose::References,
-            outcome,
-        }
+        event(provider, AttemptPurpose::Metadata, outcome)
     }
 
     #[test]
@@ -413,7 +439,7 @@ mod tests {
     fn a_not_found_moves_on_and_records_the_fallback() {
         let output = routed(
             vec![
-                attempt(ProviderKind::OpenAlex, AttemptOutcome::NotFound),
+                attempt(ProviderKind::OpenAlex, not_found()),
                 attempt(ProviderKind::Crossref, AttemptOutcome::Answered),
             ],
             None,
@@ -432,43 +458,39 @@ mod tests {
     }
 
     #[test]
-    fn a_retryable_failure_moves_on_and_records_the_fallback() {
-        let output = routed(
-            vec![
-                attempt(
-                    ProviderKind::OpenAlex,
-                    AttemptOutcome::Retryable {
-                        message: "503".to_owned(),
+    fn a_retryable_or_fatal_failure_moves_on_and_records_the_fallback() {
+        for failed in [
+            AttemptOutcome::Retryable {
+                message: "503".to_owned(),
+            },
+            AttemptOutcome::Fatal {
+                message: "bad request".to_owned(),
+            },
+        ] {
+            let name = failed.name();
+            let output = routed(
+                vec![
+                    attempt(ProviderKind::OpenAlex, failed),
+                    attempt(ProviderKind::Crossref, AttemptOutcome::Answered),
+                ],
+                None,
+            );
+            assert_eq!(
+                route_events(&output),
+                vec![
+                    metadata_attempt(ProviderKind::OpenAlex, name),
+                    RouteEvent::Fallback {
+                        from: ProviderKind::OpenAlex,
+                        to: ProviderKind::Crossref,
                     },
-                ),
-                attempt(ProviderKind::Crossref, AttemptOutcome::Answered),
-            ],
-            None,
-        );
-        assert_eq!(
-            route_events(&output),
-            vec![
-                metadata_attempt(ProviderKind::OpenAlex, "retryable"),
-                RouteEvent::Fallback {
-                    from: ProviderKind::OpenAlex,
-                    to: ProviderKind::Crossref,
-                },
-                metadata_attempt(ProviderKind::Crossref, "answered"),
-            ]
-        );
+                    metadata_attempt(ProviderKind::Crossref, "answered"),
+                ]
+            );
+        }
     }
 
     #[test]
-    fn a_fatal_or_rejected_attempt_ends_the_chain_without_a_fallback() {
-        let fatal = routed(
-            vec![attempt(
-                ProviderKind::OpenAlex,
-                AttemptOutcome::Fatal {
-                    message: "blocked".to_owned(),
-                },
-            )],
-            None,
-        );
+    fn a_rejected_attempt_ends_the_chain_without_a_fallback() {
         let rejected = routed(
             vec![attempt(
                 ProviderKind::Crossref,
@@ -479,20 +501,16 @@ mod tests {
             None,
         );
         assert_eq!(
-            route_events(&fatal),
-            vec![metadata_attempt(ProviderKind::OpenAlex, "fatal")]
-        );
-        assert_eq!(
             route_events(&rejected),
             vec![metadata_attempt(ProviderKind::Crossref, "rejected")]
         );
     }
 
     #[test]
-    fn a_retryable_last_provider_has_no_fallback_after_it() {
+    fn a_last_provider_that_failed_has_no_fallback_after_it() {
         let output = routed(
             vec![
-                attempt(ProviderKind::OpenAlex, AttemptOutcome::NotFound),
+                attempt(ProviderKind::OpenAlex, not_found()),
                 attempt(
                     ProviderKind::Crossref,
                     AttemptOutcome::Retryable {
@@ -516,53 +534,73 @@ mod tests {
     }
 
     #[test]
-    fn a_reference_fill_from_crossref_is_a_references_attempt_after_the_metadata() {
+    fn an_openalex_answer_with_a_failed_crossref_helper_is_two_events_and_no_crossref_metadata() {
         let output = routed(
-            vec![attempt(
-                ProviderKind::OpenAlex,
-                AttemptOutcome::BudgetExhausted,
-            )],
-            Some(lost(LostEdgeFill::Crossref { added: 2 })),
-        );
-        assert_eq!(
-            route_events(&output),
             vec![
-                metadata_attempt(ProviderKind::OpenAlex, "budget_exhausted"),
-                references_attempt("answered"),
-            ]
-        );
-    }
-
-    #[test]
-    fn a_failed_reference_fill_records_the_outcome_of_its_error() {
-        let output = routed(
-            vec![attempt(ProviderKind::OpenAlex, AttemptOutcome::Answered)],
-            Some(lost(LostEdgeFill::CrossrefFailed {
-                error: ProviderFetchError::Retryable {
-                    provider: ProviderKind::Crossref,
-                    message: "upstream timed out".to_owned(),
-                },
-            })),
+                attempt(ProviderKind::OpenAlex, AttemptOutcome::Answered),
+                purposeful(
+                    ProviderKind::Crossref,
+                    AttemptPurpose::ReferenceUnion,
+                    AttemptOutcome::Retryable {
+                        message: "503".to_owned(),
+                    },
+                ),
+            ],
+            None,
         );
         assert_eq!(
             route_events(&output),
             vec![
                 metadata_attempt(ProviderKind::OpenAlex, "answered"),
-                references_attempt("retryable"),
+                event(
+                    ProviderKind::Crossref,
+                    AttemptPurpose::ReferenceUnion,
+                    "retryable"
+                ),
             ]
         );
     }
 
     #[test]
-    fn a_reference_fill_without_crossref_makes_no_attempt() {
-        let output = routed(
-            vec![attempt(ProviderKind::OpenAlex, AttemptOutcome::Answered)],
-            Some(lost(LostEdgeFill::CrossrefNotEnabled)),
-        );
+    fn the_last_attempted_provider_comes_from_the_structured_records() {
+        let attempts = vec![
+            attempt(ProviderKind::OpenAlex, AttemptOutcome::Answered),
+            purposeful(
+                ProviderKind::Crossref,
+                AttemptPurpose::ReferenceUnion,
+                AttemptOutcome::Fatal {
+                    message: "x".to_owned(),
+                },
+            ),
+        ];
         assert_eq!(
-            route_events(&output),
-            vec![metadata_attempt(ProviderKind::OpenAlex, "answered")]
+            last_attempted_provider(&attempts),
+            Some(ProviderKind::Crossref)
         );
+        assert_eq!(last_attempted_provider(&[]), None);
+    }
+
+    #[test]
+    fn a_failure_message_carries_a_bounded_credential_free_history() {
+        let attempts = vec![
+            attempt(
+                ProviderKind::OpenAlex,
+                AttemptOutcome::Retryable {
+                    message: "https://api.openalex.org/works?api_key=secret".to_owned(),
+                },
+            ),
+            attempt(ProviderKind::Crossref, not_found()),
+        ];
+
+        let message = failure_message("OpenAlex is unavailable for now", &attempts);
+
+        assert_eq!(
+            message,
+            "OpenAlex is unavailable for now [openalex metadata retryable x1; crossref metadata not_found x1]"
+        );
+        assert!(!message.contains("secret"));
+        let long = failure_message(&"x".repeat(2_000), &attempts);
+        assert_eq!(long.chars().count(), LAST_ERROR_LIMIT);
     }
 
     /// Collects the formatted log lines of one test and mirrors them to stderr, as the
@@ -606,43 +644,46 @@ mod tests {
     fn report_route_logs_each_attempt_and_fallback_with_structured_fields() {
         let text = logged(&routed(
             vec![
-                attempt(ProviderKind::OpenAlex, AttemptOutcome::NotFound),
+                attempt(ProviderKind::OpenAlex, not_found()),
                 attempt(ProviderKind::Crossref, AttemptOutcome::Answered),
             ],
             None,
         ));
 
         assert!(
-            text.contains(r#"provider="openalex" purpose="metadata" outcome="not_found""#),
+            text.contains(
+                r#"provider="openalex" purpose="metadata" requests=1 outcome="not_found""#
+            ),
             "{text}"
         );
         assert!(
-            text.contains(r#"provider="crossref" purpose="metadata" outcome="answered""#),
+            text.contains(
+                r#"provider="crossref" purpose="metadata" requests=1 outcome="answered""#
+            ),
             "{text}"
         );
         assert!(text.contains(r#"from="openalex" to="crossref""#), "{text}");
     }
 
     #[test]
-    fn report_route_logs_the_budget_reset_as_a_typed_field() {
+    fn report_route_warns_with_the_budget_reset_as_a_typed_field() {
+        let summary = ReferenceSummary {
+            status: "degraded",
+            reasons: vec![DegradedReason::BudgetExhausted],
+            targets: 4,
+            retained: 2,
+            omitted: 0,
+            doi_less: 0,
+            unattempted: 2,
+            budget_reset_secs: Some(3_600),
+        };
         let text = logged(&RouteOutput {
-            attempts: vec![attempt(
-                ProviderKind::OpenAlex,
-                AttemptOutcome::BudgetExhausted,
-            )],
+            attempts: vec![attempt(ProviderKind::OpenAlex, AttemptOutcome::Answered)],
             result: Err(RouteError::NotFound { reason: None }),
-            lost_edges: Some(LostEdges {
-                provider: ProviderKind::OpenAlex,
-                expected: 4,
-                resolved: 2,
-                cause: LostEdgeCause::BudgetExhausted {
-                    reset_secs: Some(3_600),
-                },
-                fill: LostEdgeFill::Crossref { added: 2 },
-            }),
+            references: Some(summary),
         });
 
         assert!(text.contains("reset_secs=3600"), "{text}");
-        assert!(text.contains(r#"crossref_added=2"#), "{text}");
+        assert!(text.contains("unattempted=2"), "{text}");
     }
 }

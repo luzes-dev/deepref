@@ -102,9 +102,9 @@ pub struct ClaimLoopConfig {
 
 /// Checks the OpenAlex key once, when the deployment chain names OpenAlex. A key that
 /// fails only downgrades this process to keyless, so the probe never stops boot.
-async fn probe_openalex(pool: &sqlx::PgPool, config: &config::WorkerConfig) -> anyhow::Result<()> {
+async fn probe_openalex(pool: &sqlx::PgPool, config: &config::WorkerConfig) {
     let Some(openalex) = &config.metadata.openalex else {
-        return Ok(());
+        return;
     };
     if !config
         .runtime
@@ -112,9 +112,15 @@ async fn probe_openalex(pool: &sqlx::PgPool, config: &config::WorkerConfig) -> a
         .enabled_metadata_providers()
         .contains(&deepref_domain::ProviderKind::OpenAlex)
     {
-        return Ok(());
+        return;
     }
-    let settings = store::load_runtime_settings(pool).await?;
+    let settings = match store::load_runtime_settings(pool).await {
+        Ok(settings) => settings,
+        Err(error) => {
+            tracing::warn!(%error, "OpenAlex boot probe skipped; the runtime settings could not be read");
+            return;
+        }
+    };
     let permit =
         limiter::ProviderLimiter::new(pool, settings.rate_limit_per_second, Some(openalex));
     let key_state = openalex.probe_key(&permit).await;
@@ -124,7 +130,6 @@ async fn probe_openalex(pool: &sqlx::PgPool, config: &config::WorkerConfig) -> a
         rate_per_second = openalex.rate_per_second(),
         "OpenAlex boot probe finished"
     );
-    Ok(())
 }
 
 pub async fn run_with_shutdown(
@@ -160,7 +165,7 @@ pub async fn run_with_shutdown(
         metadata_providers = %config.runtime.integrations.metadata_chain_label(),
         "metadata provider chain configured"
     );
-    probe_openalex(&pool, &config).await?;
+    probe_openalex(&pool, &config).await;
     tokio::spawn(workflows::run_scheduler(
         pool.clone(),
         Duration::from_secs(20),

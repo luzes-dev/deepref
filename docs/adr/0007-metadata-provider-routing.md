@@ -38,8 +38,7 @@ refuses to start on:
 
 An unset variable means the default chain, `openalex,crossref,datacite`.
 `DEEPREF_OPENALEX_API_KEY` is optional. `DEEPREF_OPENALEX_CORPUS` is `core` or
-`all`, and defaults to `core`. `DEEPREF_REFERENCE_UNION` is `true` or `false`,
-and defaults to `true`.
+`all`, and defaults to `core`. There is no switch for the reference union.
 
 ### Allowlist
 
@@ -83,15 +82,21 @@ A DOI answered under another DOI is not found, through the identity check.
 `Work.metadata_provider` names the provider that answered the metadata.
 `Work.citation_provider` lists the reference sources in contribution order,
 deduplicated, for example `openalex,crossref`. The raw payload carries
-`deepref_metadata_source`, `deepref_provider_attempts` with one entry per
-attempt and outcome, and `deepref_citation_sources`.
+`deepref_metadata_source`, `deepref_provider_attempts`, and
+`deepref_citation_sources`. An attempt names its service, its purpose
+(`metadata`, `reference_resolution`, `reference_union` or `abstract_enrichment`),
+the number of permits it was granted, which is its request count, and its
+outcome. Failed routes keep the same history in tracing and in a bounded,
+credential-free summary in `last_error`.
 
-When an OpenAlex answer came back short of its references, the raw payload also
-carries `deepref_lost_edges`. It names the cause (`budget_exhausted`, `shortfall` or
-`unverified`), the `expected` and `resolved` reference counts, and the fill
-result: `filled` when Crossref's list was merged, `not_enabled` when Crossref
-was not in the chain, or `failed` when its list could not be read. The record
-lives on the work, because the cache keeps the partial answer.
+`citation_provider` lists only the providers whose references were kept, in
+contribution order, and is empty when none were. The raw payload also carries
+`deepref_reference_status`: `complete` when the reference plan finished, or
+`degraded` with reasons (`budget_exhausted`, `omitted_targets`,
+`doi_less_targets`, `helper_fatal`) and separate counts of retained, omitted,
+DOI-less and unattempted targets. `complete` does not claim the provider captured
+the whole bibliography. The record lives on the work, because the cache keeps the
+answer, and a later attachment sees the same status.
 
 OpenAlex answers also carry `deepref_oa_urls`, the open-access locations the
 PDF lookup reads before Unpaywall.
@@ -104,31 +109,39 @@ DOIs only.
 
 `WorkProvider` has three methods beside the lookup. `fetch_work_after` takes the
 providers that already tried the DOI in this run, so an adapter can skip work
-they did. `reference_list` returns a DOI's raw reference list for the lost-edge
-fill. Its default is a fatal error, so only providers that publish reference
-lists implement it. `FetchedWork.reference_gap` reports a short answer as a
-`ReferenceGap`: `BudgetExhausted`, `Shortfall` or `Unverified`. The router reads the
-gap and returns a `LostEdges` record of what it did. The unused
+they did. `reference_list` returns a DOI's raw reference list for the union. Its
+default is a fatal error, so only providers that publish reference lists
+implement it. `unions_crossref_references` says whether an accepted answer is
+unioned with Crossref's list. `FetchedWork.references` is a `ReferenceReport` of
+what resolution lost. An adapter takes a permit for every request it sends,
+naming the service and the purpose, and the router counts the permits it was
+granted per attempt. A reference failure after the metadata answered is a
+distinct error, so the router never mistakes it for a metadata failure. The unused
 `MetadataProvider`, `CitationProvider` and `SearchProvider` traits were deleted.
 
 ### Reference union
 
-`DEEPREF_REFERENCE_UNION` gates the union on a complete-looking answer. OpenAlex
-defines `referenced_works_count` as the length of `referenced_works`, so meeting
-the count proves nothing about references OpenAlex never matched. With the
-switch on, the router merges Crossref's reference list into every OpenAlex
-answer, and a DOI already present is not added twice. Crossref entries with no
-DOI are kept in `deepref_unresolved_references`. A spent list budget always asks
-Crossref when Crossref is in the chain. With the switch off, a shortfall or an
-unverified list is not tried and leaves no record.
+OpenAlex defines `referenced_works_count` as the length of `referenced_works`, so
+no count shows a reference OpenAlex never matched. The router therefore merges
+Crossref's reference list into every OpenAlex answer when Crossref is enabled in
+the deployment, even if the run's own chain names only OpenAlex. A DOI both lists
+name keeps OpenAlex's position and takes Crossref's bibliographic fields. Crossref
+entries with no DOI are appended to the references, so they reach the unresolved
+reference tables and replay with the cache.
 
 The work cache is permanent, so a Crossref list that fails transiently makes the
-fetch retryable instead of storing a short list. A fatal failure, or Crossref
-missing from the chain, keeps the answer and records the failed fill.
+fetch retryable instead of storing a short list. A fatal helper failure, such as
+a malformed record, is a degraded success with reason `helper_fatal` that keeps
+the OpenAlex references, so one bad Crossref record cannot keep a DOI out of
+every project. A Crossref 404 adds nothing and keeps any existing degradation.
+Budget-degraded and `helper_fatal` successes stay cached, and a reset, a refresh,
+a new acquisition or a rollback does not repair them.
 
 ### Staged default
 
-The default chain moved through these phases. Phase 2 is the default now.
+The default chain moved through these phases. Phase 2 is the default now. The work
+cache never expires, so the stack ships and deploys as one unit: until the whole
+corrected stack is deployed, run with `DEEPREF_METADATA_PROVIDERS=crossref`.
 
 | Phase | Default chain |
 |---|---|
@@ -142,7 +155,8 @@ The default chain moved through these phases. Phase 2 is the default now.
 A DOI acquisition request that names a provider outside the enabled set gets 400,
 and the message names the provider and the enabled set. That check runs before
 the contact e-mail check in `persist_doi_acquisition`, which returns 503 as it
-does today.
+does today, so a request with both errors gets the 400. Names are trimmed before
+they are deduplicated and checked.
 
 ### Contact e-mail
 
@@ -200,8 +214,12 @@ These are the section 10 recommendations, as applied:
   interpolates an unset variable into an empty string must leave the variable
   out instead.
 - Keyless OpenAlex shares its daily list budget with every process on the same
-  IP. When the budget runs out, list calls stop until the reset, and the
-  Crossref fill covers the lost edges when Crossref is in the chain.
+  IP. When the budget runs out, list calls stop until the reset in that process.
+  Each replica sends paid calls until it sees its own 429, and the Crossref union
+  covers the lost edges when Crossref is enabled.
+- Every OpenAlex answer costs a Crossref lookup, and many paid `ids.openalex:`
+  lookups resolve DOIs Crossref also returns. The Crossref permit rate caps
+  throughput either way.
 - The `crossref` literal stays as the DOI lane label on `records.source`,
   `acquisition_runs.source` and `report_fetch_state`. It names the lane, not the
   answering provider, on purpose: changing it would fork records per run, and

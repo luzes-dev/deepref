@@ -186,6 +186,17 @@ struct Fixture {
 /// One queued DOI item under a running run whose stored config is `run_config`, with
 /// its work-fetch job claimed by `OWNER`.
 async fn seed_work_fetch(pool: &PgPool, doi: &str, run_config: Value) -> Result<Fixture> {
+    seed_work_fetch_to_depth(pool, doi, run_config, 0).await
+}
+
+/// Like `seed_work_fetch`, for a run that traverses `max_depth` levels, so a cached
+/// attachment replays the stored edges.
+async fn seed_work_fetch_to_depth(
+    pool: &PgPool,
+    doi: &str,
+    run_config: Value,
+    max_depth: i32,
+) -> Result<Fixture> {
     let project_id = Uuid::new_v4();
     let acquisition_id = Uuid::new_v4();
     let report_id = Uuid::new_v4();
@@ -202,7 +213,7 @@ async fn seed_work_fetch(pool: &PgPool, doi: &str, run_config: Value) -> Result<
             acquisition_id,
             doi: doi.to_owned(),
             depth: 0,
-            max_depth: 0,
+            max_depth,
             parent_doi: None,
         },
     );
@@ -246,7 +257,17 @@ async fn seed_work_fetch(pool: &PgPool, doi: &str, run_config: Value) -> Result<
 }
 
 async fn run_fetch(pool: &PgPool, fixture: &Fixture, config: &WorkerConfig) -> Result<()> {
-    let action = handle_job_with_documents_owned(
+    let action = run_fetch_action(pool, fixture, config).await?;
+    anyhow::ensure!(action == DeliveryAction::Ack, "the fetch should be acked");
+    Ok(())
+}
+
+async fn run_fetch_action(
+    pool: &PgPool,
+    fixture: &Fixture,
+    config: &WorkerConfig,
+) -> Result<DeliveryAction> {
+    handle_job_with_documents_owned(
         pool.clone(),
         &fixture.job,
         &fixture.job.lease(OWNER),
@@ -255,9 +276,7 @@ async fn run_fetch(pool: &PgPool, fixture: &Fixture, config: &WorkerConfig) -> R
         None,
         config,
     )
-    .await?;
-    anyhow::ensure!(action == DeliveryAction::Ack, "the fetch should be acked");
-    Ok(())
+    .await
 }
 
 /// The work row's provenance, its raw payload, and the DOI's cache row provider and status.
@@ -289,6 +308,46 @@ async fn provenance(pool: &PgPool, doi: &str) -> Result<Provenance> {
         cache_provider: cache.get("provider"),
         cache_status: cache.get("status"),
     })
+}
+
+async fn unresolved_facts(pool: &PgPool, doi: &str) -> Result<i64> {
+    Ok(sqlx::query_scalar(
+        "SELECT count(*) FROM fetched_unresolved_reference_facts WHERE source_doi=$1",
+    )
+    .bind(doi)
+    .fetch_one(pool)
+    .await?)
+}
+
+async fn unresolved_in_project(pool: &PgPool, project_id: Uuid) -> Result<i64> {
+    Ok(
+        sqlx::query_scalar(
+            "SELECT count(*) FROM project_unresolved_references WHERE project_id=$1",
+        )
+        .bind(project_id)
+        .fetch_one(pool)
+        .await?,
+    )
+}
+
+/// The lane labels of a project's citations, ordered by target DOI.
+async fn citation_labels(pool: &PgPool, project_id: Uuid) -> Result<Vec<String>> {
+    Ok(sqlx::query_scalar(
+        "SELECT c.source FROM citations c JOIN report_identifiers t ON t.report_id=c.target_report_id AND t.scheme='doi' WHERE c.project_id=$1 ORDER BY t.normalized_value",
+    )
+    .bind(project_id)
+    .fetch_all(pool)
+    .await?)
+}
+
+/// The lane labels of the cached citation facts of one source DOI, ordered by target DOI.
+async fn fact_labels(pool: &PgPool, doi: &str) -> Result<Vec<String>> {
+    Ok(sqlx::query_scalar(
+        "SELECT source FROM fetched_citation_facts WHERE source_doi=$1 ORDER BY target_doi",
+    )
+    .bind(doi)
+    .fetch_all(pool)
+    .await?)
 }
 
 async fn record_sources(pool: &PgPool, project_id: Uuid) -> Result<Vec<String>> {
@@ -336,18 +395,29 @@ async fn an_uncached_doi_is_answered_by_openalex_and_keeps_the_crossref_lane_lab
 
     let saved = provenance(&pool, doi).await?;
     assert_eq!(saved.metadata_provider, "openalex");
-    assert_eq!(saved.citation_provider, "openalex,crossref");
-    assert_eq!(saved.cache_provider, "openalex");
-    assert_eq!(saved.raw["deepref_lost_edges"]["cause"], "unverified");
     assert_eq!(
-        saved.raw["deepref_unresolved_references"][0]["raw_unstructured"],
-        "Smith 1999, a book with no DOI"
+        saved.citation_provider, "crossref",
+        "OpenAlex listed no references, so only Crossref contributed"
     );
+    assert_eq!(saved.cache_provider, "openalex");
+    assert_eq!(saved.raw["deepref_reference_status"]["status"], "complete");
     assert_eq!(saved.cache_status, "fetched");
     assert_eq!(
         saved.raw["deepref_provider_attempts"],
-        json!([{ "provider": "openalex", "outcome": "answered" }])
+        json!([
+            { "provider": "openalex", "purpose": "metadata", "requests": 1, "outcome": "answered" },
+            { "provider": "crossref", "purpose": "reference_union", "requests": 1, "outcome": "answered" },
+        ])
     );
+    // The DOI-less entry reaches both unresolved-reference tables, and the cited DOI becomes
+    // an edge with the provider-neutral label.
+    assert_eq!(unresolved_facts(&pool, doi).await?, 1);
+    assert_eq!(unresolved_in_project(&pool, fixture.project_id).await?, 1);
+    assert_eq!(
+        citation_labels(&pool, fixture.project_id).await?,
+        ["doi-reference"]
+    );
+    assert_eq!(fact_labels(&pool, doi).await?, ["doi-reference"]);
     assert_eq!(
         record_sources(&pool, fixture.project_id).await?,
         ["crossref"],
@@ -394,7 +464,7 @@ async fn the_run_chain_wins_over_the_deployment_default_for_an_uncached_doi() ->
 
     let saved = provenance(&pool, doi).await?;
     assert_eq!(saved.metadata_provider, "crossref");
-    assert_eq!(saved.citation_provider, "crossref");
+    assert_eq!(saved.citation_provider, "", "Crossref listed no references");
     assert_eq!(saved.cache_provider, "crossref");
     assert!(
         openalex.paths().is_empty(),
@@ -430,13 +500,13 @@ async fn a_doi_openalex_does_not_know_falls_through_to_crossref() -> Result<()> 
 
     let saved = provenance(&pool, doi).await?;
     assert_eq!(saved.metadata_provider, "crossref");
-    assert_eq!(saved.citation_provider, "crossref");
+    assert_eq!(saved.citation_provider, "", "Crossref listed no references");
     assert_eq!(saved.cache_provider, "crossref");
     assert_eq!(
         saved.raw["deepref_provider_attempts"],
         json!([
-            { "provider": "openalex", "outcome": "not_found" },
-            { "provider": "crossref", "outcome": "answered" },
+            { "provider": "openalex", "purpose": "metadata", "requests": 1, "outcome": "not_found" },
+            { "provider": "crossref", "purpose": "metadata", "requests": 1, "outcome": "answered" },
         ])
     );
     assert_eq!(
@@ -522,61 +592,372 @@ async fn a_paratext_work_ends_the_item_as_not_found_with_its_reason_and_no_later
     Ok(())
 }
 
+/// An OpenAlex answer for `doi` that names one referenced work and resolves nothing, so the
+/// list endpoint's answer decides what the fetch finds.
+fn openalex_citing_one(doi: &str) -> String {
+    let mut work: Value = serde_json::from_str(&openalex_work(doi)).expect("fixture is JSON");
+    work["referenced_works"] = json!(["https://openalex.org/W9"]);
+    work["referenced_works_count"] = json!(1);
+    work.to_string()
+}
+
+fn crossref_with_references(references: Value) -> String {
+    json!({"message": {"title": ["Answered by Crossref"], "reference": references}}).to_string()
+}
+
+fn crossref_route(doi: &str, status: &'static str, body: String) -> (String, &'static str, String) {
+    (format!("/works/{}", doi.replace('/', "%2F")), status, body)
+}
+
 #[tokio::test]
-async fn the_reference_union_setting_decides_whether_a_short_openalex_list_is_topped_up()
+async fn the_union_runs_for_a_run_chain_of_openalex_alone_and_never_asks_crossref_for_metadata()
 -> Result<()> {
     let Some(pool) = deepref_app::test_isolation::isolated_pool_from_env("DATABASE_URL", 8).await
     else {
         return Ok(());
     };
-    // OpenAlex reports one reference and resolves none of them, so the answer is short.
-    for (doi, union, expected_sources) in [
-        ("10.5555/union-on", true, "openalex,crossref"),
-        ("10.5555/union-off", false, "openalex"),
-    ] {
-        let mut work: Value = serde_json::from_str(&openalex_work(doi))?;
-        work["referenced_works"] = json!(["https://openalex.org/W1"]);
-        work["referenced_works_count"] = json!(1);
-        let openalex = MockServer::start(vec![
-            (format!("/works/doi:{doi}"), "200 OK", work.to_string()),
+    let doi = "10.5555/openalex-only-chain";
+    let openalex = MockServer::start(vec![(
+        format!("/works/doi:{doi}"),
+        "200 OK",
+        openalex_work(doi),
+    )])
+    .await;
+    let crossref = MockServer::start(vec![crossref_route(
+        doi,
+        "200 OK",
+        crossref_with_references(json!([{ "DOI": "10.5555/cited" }])),
+    )])
+    .await;
+    let fixture =
+        seed_work_fetch(&pool, doi, json!({ "metadata_providers": ["openalex"] })).await?;
+
+    let datacite = MockServer::start(Vec::new()).await;
+    run_fetch(
+        &pool,
+        &fixture,
+        &worker_config(&openalex, &crossref, &datacite),
+    )
+    .await?;
+
+    let saved = provenance(&pool, doi).await?;
+    assert_eq!(saved.metadata_provider, "openalex");
+    assert_eq!(saved.citation_provider, "crossref");
+    let purposes: Vec<(&str, &str)> = saved.raw["deepref_provider_attempts"]
+        .as_array()
+        .expect("attempts are an array")
+        .iter()
+        .map(|attempt| {
             (
-                "/works".to_owned(),
-                "200 OK",
-                json!({ "meta": { "count": 0 }, "results": [] }).to_string(),
-            ),
-        ])
-        .await;
-        let crossref = MockServer::start(vec![(
-            format!("/works/{}", doi.replace('/', "%2F")),
+                attempt["provider"].as_str().expect("provider"),
+                attempt["purpose"].as_str().expect("purpose"),
+            )
+        })
+        .collect();
+    assert_eq!(
+        purposes,
+        [("openalex", "metadata"), ("crossref", "reference_union")],
+        "Crossref is asked for references, never for metadata"
+    );
+    assert_eq!(fact_labels(&pool, doi).await?, ["doi-reference"]);
+    Ok(())
+}
+
+#[tokio::test]
+async fn a_legacy_run_config_stays_on_crossref_even_when_openalex_could_answer() -> Result<()> {
+    let Some(pool) = deepref_app::test_isolation::isolated_pool_from_env("DATABASE_URL", 8).await
+    else {
+        return Ok(());
+    };
+    let doi = "10.5555/legacy-run";
+    let openalex = MockServer::start(vec![(
+        format!("/works/doi:{doi}"),
+        "200 OK",
+        openalex_work(doi),
+    )])
+    .await;
+    let crossref = MockServer::start(vec![crossref_route(doi, "200 OK", crossref_work())]).await;
+    let fixture = seed_work_fetch(
+        &pool,
+        doi,
+        json!({
+            "seed_dois": [doi],
+            "max_depth": 0,
+            "metadata_provider": "crossref",
+            "citation_provider": "crossref"
+        }),
+    )
+    .await?;
+
+    let datacite = MockServer::start(Vec::new()).await;
+    run_fetch(
+        &pool,
+        &fixture,
+        &worker_config(&openalex, &crossref, &datacite),
+    )
+    .await?;
+
+    let saved = provenance(&pool, doi).await?;
+    assert_eq!(saved.metadata_provider, "crossref");
+    assert!(
+        openalex.paths().is_empty(),
+        "the legacy shape ran on Crossref alone, so OpenAlex makes no metadata request"
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn a_failed_second_reference_batch_retries_the_job_without_asking_crossref_or_caching()
+-> Result<()> {
+    let Some(pool) = deepref_app::test_isolation::isolated_pool_from_env("DATABASE_URL", 8).await
+    else {
+        return Ok(());
+    };
+    let doi = "10.5555/second-batch";
+    let ids: Vec<String> = (0..101)
+        .map(|index| format!("W{}", 7_000_000 + index))
+        .collect();
+    let mut work: Value = serde_json::from_str(&openalex_work(doi))?;
+    work["referenced_works"] = json!(
+        ids.iter()
+            .map(|id| format!("https://openalex.org/{id}"))
+            .collect::<Vec<_>>()
+    );
+    work["referenced_works_count"] = json!(101);
+    // The list endpoint answers every batch with a 502, so the first batch exhausts its
+    // retries. Crossref would answer if the chain moved on.
+    let openalex = MockServer::start(vec![
+        (format!("/works/doi:{doi}"), "200 OK", work.to_string()),
+        ("/works".to_owned(), "502 Bad Gateway", "{}".to_owned()),
+    ])
+    .await;
+    let crossref = MockServer::start(vec![crossref_route(doi, "200 OK", crossref_work())]).await;
+    let fixture = seed_work_fetch(&pool, doi, json!({})).await?;
+
+    let datacite = MockServer::start(Vec::new()).await;
+    let action = run_fetch_action(
+        &pool,
+        &fixture,
+        &worker_config(&openalex, &crossref, &datacite),
+    )
+    .await?;
+
+    assert!(matches!(action, DeliveryAction::Nak(_)), "{action:?}");
+    assert!(
+        crossref.paths().is_empty(),
+        "a reference failure never selects another metadata provider"
+    );
+    let status: String = sqlx::query_scalar(
+        "SELECT f.status FROM report_fetch_state f JOIN report_identifiers i ON i.report_id=f.report_id WHERE i.scheme='doi' AND i.normalized_value=$1",
+    )
+    .bind(doi)
+    .fetch_one(&pool)
+    .await?;
+    assert_eq!(status, "failed", "no success cache entry");
+    let title: Option<String> =
+        sqlx::query_scalar("SELECT title FROM works WHERE canonical_doi=$1")
+            .bind(doi)
+            .fetch_one(&pool)
+            .await?;
+    assert_eq!(title, None, "no partial work is persisted");
+    Ok(())
+}
+
+#[tokio::test]
+async fn a_fatal_crossref_helper_failure_caches_a_degraded_success_with_its_reason() -> Result<()> {
+    let Some(pool) = deepref_app::test_isolation::isolated_pool_from_env("DATABASE_URL", 8).await
+    else {
+        return Ok(());
+    };
+    let doi = "10.5555/helper-fatal";
+    let openalex = MockServer::start(vec![
+        (
+            format!("/works/doi:{doi}"),
             "200 OK",
-            json!({
-                "message": {
-                    "title": ["Answered by Crossref"],
-                    "references-count": 1,
-                    "reference": [{ "DOI": "10.5555/cited" }]
-                }
-            })
-            .to_string(),
-        )])
-        .await;
-        let fixture = seed_work_fetch(&pool, doi, json!({})).await?;
+            openalex_citing_one(doi),
+        ),
+        (
+            "/works".to_owned(),
+            "200 OK",
+            json!({"results": [{"id": "https://openalex.org/W9", "doi": "https://doi.org/10.5555/resolved"}]})
+                .to_string(),
+        ),
+    ])
+    .await;
+    let crossref = MockServer::start(vec![crossref_route(
+        doi,
+        "200 OK",
+        "this is not JSON".to_owned(),
+    )])
+    .await;
+    let fixture = seed_work_fetch(&pool, doi, json!({})).await?;
 
-        let datacite = MockServer::start(Vec::new()).await;
-        let mut config = worker_config(&openalex, &crossref, &datacite);
-        config.runtime.integrations.reference_union = union;
-        run_fetch(&pool, &fixture, &config).await?;
+    let datacite = MockServer::start(Vec::new()).await;
+    run_fetch(
+        &pool,
+        &fixture,
+        &worker_config(&openalex, &crossref, &datacite),
+    )
+    .await?;
 
-        let saved = provenance(&pool, doi).await?;
-        assert_eq!(
-            saved.citation_provider, expected_sources,
-            "reference union {union}"
-        );
-        assert_eq!(
-            crossref.paths().len(),
-            usize::from(union),
-            "Crossref's reference list is asked only with the union on"
-        );
-    }
+    let saved = provenance(&pool, doi).await?;
+    assert_eq!(saved.cache_status, "fetched");
+    assert_eq!(saved.citation_provider, "openalex");
+    assert_eq!(saved.raw["deepref_reference_status"]["status"], "degraded");
+    assert_eq!(
+        saved.raw["deepref_reference_status"]["reasons"],
+        json!(["helper_fatal"])
+    );
+    assert_eq!(fact_labels(&pool, doi).await?, ["doi-reference"]);
+    Ok(())
+}
+
+#[tokio::test]
+async fn a_fatal_openalex_failure_is_recorded_and_the_chain_moves_on_to_crossref() -> Result<()> {
+    let Some(pool) = deepref_app::test_isolation::isolated_pool_from_env("DATABASE_URL", 8).await
+    else {
+        return Ok(());
+    };
+    let doi = "10.5555/openalex-403";
+    let openalex = MockServer::start(vec![(
+        format!("/works/doi:{doi}"),
+        "403 Forbidden",
+        "{}".to_owned(),
+    )])
+    .await;
+    let crossref = MockServer::start(vec![crossref_route(doi, "200 OK", crossref_work())]).await;
+    let fixture = seed_work_fetch(&pool, doi, json!({})).await?;
+
+    let datacite = MockServer::start(Vec::new()).await;
+    run_fetch(
+        &pool,
+        &fixture,
+        &worker_config(&openalex, &crossref, &datacite),
+    )
+    .await?;
+
+    let saved = provenance(&pool, doi).await?;
+    assert_eq!(saved.metadata_provider, "crossref");
+    assert_eq!(
+        saved.raw["deepref_provider_attempts"][0]["outcome"],
+        "fatal"
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn when_every_provider_fails_fatally_the_item_fails_with_a_bounded_history() -> Result<()> {
+    let Some(pool) = deepref_app::test_isolation::isolated_pool_from_env("DATABASE_URL", 8).await
+    else {
+        return Ok(());
+    };
+    let doi = "10.5555/all-fatal";
+    let openalex = MockServer::start(vec![(
+        format!("/works/doi:{doi}"),
+        "403 Forbidden",
+        "{}".to_owned(),
+    )])
+    .await;
+    let crossref = MockServer::start(vec![crossref_route(
+        doi,
+        "400 Bad Request",
+        "{}".to_owned(),
+    )])
+    .await;
+    let datacite = MockServer::start(vec![(
+        format!("/dois/{doi}"),
+        "400 Bad Request",
+        "{}".to_owned(),
+    )])
+    .await;
+    let fixture = seed_work_fetch(&pool, doi, json!({})).await?;
+
+    run_fetch(
+        &pool,
+        &fixture,
+        &worker_config(&openalex, &crossref, &datacite),
+    )
+    .await?;
+
+    let item =
+        sqlx::query("SELECT status, last_error FROM acquisition_items WHERE canonical_doi=$1")
+            .bind(doi)
+            .fetch_one(&pool)
+            .await?;
+    assert_eq!(item.get::<String, _>("status"), "failed");
+    let last_error = item
+        .get::<Option<String>, _>("last_error")
+        .unwrap_or_default();
+    assert!(
+        last_error.contains("openalex metadata fatal x1")
+            && last_error.contains("crossref metadata fatal x1")
+            && last_error.contains("datacite metadata fatal x1"),
+        "{last_error}"
+    );
+    assert!(last_error.chars().count() <= 500, "{last_error}");
+    let provider: String = sqlx::query_scalar(
+        "SELECT f.provider FROM report_fetch_state f JOIN report_identifiers i ON i.report_id=f.report_id WHERE i.scheme='doi' AND i.normalized_value=$1",
+    )
+    .bind(doi)
+    .fetch_one(&pool)
+    .await?;
+    assert_eq!(provider, "datacite", "the last provider attempted");
+    Ok(())
+}
+
+#[tokio::test]
+async fn a_cached_work_replays_its_edges_labels_and_unresolved_references_into_a_second_project()
+-> Result<()> {
+    let Some(pool) = deepref_app::test_isolation::isolated_pool_from_env("DATABASE_URL", 8).await
+    else {
+        return Ok(());
+    };
+    let doi = "10.5555/replayed";
+    let openalex = MockServer::start(vec![(
+        format!("/works/doi:{doi}"),
+        "200 OK",
+        openalex_work(doi),
+    )])
+    .await;
+    let crossref = MockServer::start(vec![crossref_route(
+        doi,
+        "200 OK",
+        crossref_with_references(json!([
+            { "DOI": "10.5555/a-new-edge" },
+            { "DOI": "10.5555/z-old-edge" },
+            { "unstructured": "Smith 1999, a book with no DOI" }
+        ])),
+    )])
+    .await;
+    let datacite = MockServer::start(Vec::new()).await;
+    let config = worker_config(&openalex, &crossref, &datacite);
+
+    let first = seed_work_fetch_to_depth(&pool, doi, json!({}), 1).await?;
+    run_fetch(&pool, &first, &config).await?;
+    // A cache that holds an edge written before routing next to one written now.
+    sqlx::query(
+        "UPDATE fetched_citation_facts SET source='crossref-reference' WHERE source_doi=$1 AND target_doi='10.5555/z-old-edge'",
+    )
+    .bind(doi)
+    .execute(&pool)
+    .await?;
+
+    let second = seed_work_fetch_to_depth(&pool, doi, json!({}), 1).await?;
+    run_fetch(&pool, &second, &config).await?;
+
+    assert_eq!(
+        crossref.paths().len(),
+        1,
+        "the second project attaches the cache and fetches nothing"
+    );
+    assert_eq!(
+        citation_labels(&pool, second.project_id).await?,
+        ["doi-reference", "crossref-reference"],
+        "each cached fact's label is carried into the project citation"
+    );
+    assert_eq!(unresolved_in_project(&pool, second.project_id).await?, 1);
+    let saved = provenance(&pool, doi).await?;
+    assert_eq!(saved.raw["deepref_reference_status"]["status"], "complete");
     Ok(())
 }
 
@@ -607,15 +988,15 @@ async fn a_doi_only_datacite_holds_is_recorded_as_datacite_and_keeps_the_crossre
 
     let saved = provenance(&pool, doi).await?;
     assert_eq!(saved.metadata_provider, "datacite");
-    assert_eq!(saved.citation_provider, "datacite");
+    assert_eq!(saved.citation_provider, "");
     assert_eq!(saved.cache_provider, "datacite");
     assert_eq!(saved.cache_status, "fetched");
     assert_eq!(
         saved.raw["deepref_provider_attempts"],
         json!([
-            { "provider": "openalex", "outcome": "not_found" },
-            { "provider": "crossref", "outcome": "not_found" },
-            { "provider": "datacite", "outcome": "answered" },
+            { "provider": "openalex", "purpose": "metadata", "requests": 1, "outcome": "not_found" },
+            { "provider": "crossref", "purpose": "metadata", "requests": 1, "outcome": "not_found" },
+            { "provider": "datacite", "purpose": "metadata", "requests": 1, "outcome": "answered" },
         ])
     );
     assert_eq!(
@@ -626,5 +1007,43 @@ async fn a_doi_only_datacite_holds_is_recorded_as_datacite_and_keeps_the_crossre
     assert_eq!(openalex.paths(), ["/works/doi:10.5555/datacite-only"]);
     assert_eq!(crossref.paths(), ["/works/10.5555%2Fdatacite-only"]);
     assert_eq!(datacite.paths(), ["/dois/10.5555/datacite-only"]);
+    Ok(())
+}
+
+#[tokio::test]
+async fn a_datacite_only_edge_is_labelled_doi_reference_and_the_work_keeps_datacite_provenance()
+-> Result<()> {
+    let Some(pool) = deepref_app::test_isolation::isolated_pool_from_env("DATABASE_URL", 8).await
+    else {
+        return Ok(());
+    };
+    let doi = "10.5555/datacite-edge";
+    let mut record: Value = serde_json::from_str(&datacite_record(doi))?;
+    record["data"]["attributes"]["relatedIdentifiers"] = json!([
+        { "relatedIdentifier": "10.5555/cited", "relatedIdentifierType": "DOI", "relationType": "Cites" },
+        { "relatedIdentifier": "10.5555/citing", "relatedIdentifierType": "DOI", "relationType": "IsCitedBy" }
+    ]);
+    let openalex = MockServer::start(Vec::new()).await;
+    let crossref = MockServer::start(Vec::new()).await;
+    let datacite =
+        MockServer::start(vec![(format!("/dois/{doi}"), "200 OK", record.to_string())]).await;
+    let fixture = seed_work_fetch(&pool, doi, json!({})).await?;
+
+    run_fetch(
+        &pool,
+        &fixture,
+        &worker_config(&openalex, &crossref, &datacite),
+    )
+    .await?;
+
+    let saved = provenance(&pool, doi).await?;
+    assert_eq!(saved.metadata_provider, "datacite");
+    assert_eq!(saved.citation_provider, "datacite");
+    assert_eq!(
+        citation_labels(&pool, fixture.project_id).await?,
+        ["doi-reference"],
+        "only the outbound Cites relation is an edge, and its label names no provider"
+    );
+    assert_eq!(fact_labels(&pool, doi).await?, ["doi-reference"]);
     Ok(())
 }

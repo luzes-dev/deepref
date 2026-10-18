@@ -97,52 +97,159 @@ pub enum ImportError {
     MissingCsvColumn(String),
 }
 
-/// Takes the outbound permit for one provider before a request is sent. The worker
-/// backs it with the shared PostgreSQL limiter, so all pods share one schedule.
+/// Why an outbound request is sent. Permits and attempt records carry it, so the history
+/// of a fetch says what each request was for.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize)]
+#[serde(rename_all = "snake_case")]
+pub enum AttemptPurpose {
+    /// The DOI's metadata record.
+    Metadata,
+    /// Resolving the referenced works the metadata named, such as OpenAlex's list calls.
+    ReferenceResolution,
+    /// Reading Crossref's reference list to union with another provider's references.
+    ReferenceUnion,
+    /// The best-effort abstract lookup after a Crossref answer.
+    AbstractEnrichment,
+}
+
+impl AttemptPurpose {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Metadata => "metadata",
+            Self::ReferenceResolution => "reference_resolution",
+            Self::ReferenceUnion => "reference_union",
+            Self::AbstractEnrichment => "abstract_enrichment",
+        }
+    }
+}
+
+/// The service an outbound request goes to. It names the rate limiter, which is not the
+/// same set as the metadata providers: Europe PMC answers abstract lookups but is never
+/// a link in the metadata chain.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
+pub enum OutboundService {
+    Provider(ProviderKind),
+    EuropePmc,
+}
+
+impl OutboundService {
+    pub const fn as_str(self) -> &'static str {
+        match self {
+            Self::Provider(provider) => provider.as_str(),
+            Self::EuropePmc => "europepmc",
+        }
+    }
+
+    /// The metadata provider behind the service, when there is one.
+    pub const fn provider(self) -> Option<ProviderKind> {
+        match self {
+            Self::Provider(provider) => Some(provider),
+            Self::EuropePmc => None,
+        }
+    }
+}
+
+impl From<ProviderKind> for OutboundService {
+    fn from(provider: ProviderKind) -> Self {
+        Self::Provider(provider)
+    }
+}
+
+impl PartialEq<ProviderKind> for OutboundService {
+    fn eq(&self, other: &ProviderKind) -> bool {
+        self.provider() == Some(*other)
+    }
+}
+
+impl Serialize for OutboundService {
+    fn serialize<S: serde::Serializer>(&self, serializer: S) -> Result<S::Ok, S::Error> {
+        serializer.serialize_str(self.as_str())
+    }
+}
+
+/// One outbound HTTP request, named before it is sent.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub struct OutboundRequest {
+    pub service: OutboundService,
+    pub purpose: AttemptPurpose,
+}
+
+impl OutboundRequest {
+    pub fn new(provider: ProviderKind, purpose: AttemptPurpose) -> Self {
+        Self {
+            service: OutboundService::Provider(provider),
+            purpose,
+        }
+    }
+
+    pub fn europe_pmc() -> Self {
+        Self {
+            service: OutboundService::EuropePmc,
+            purpose: AttemptPurpose::AbstractEnrichment,
+        }
+    }
+}
+
+/// Takes the outbound permit for one request, immediately before it is sent, including
+/// each retry and each redirect hop. The worker backs it with the shared PostgreSQL
+/// limiter, so all pods share one schedule.
 pub trait ProviderPermit: Send + Sync {
-    fn acquire<'a>(&'a self, provider: ProviderKind) -> ProviderFuture<'a, (), PermitError>;
+    fn acquire<'a>(&'a self, request: OutboundRequest) -> ProviderFuture<'a, (), PermitError>;
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
 #[error("provider permit unavailable: {0}")]
 pub struct PermitError(pub String);
 
-/// Why a provider answer may list fewer references than the work has. The router acts
-/// on it by asking Crossref for the reference list, subject to the reference union gate
-/// for a shortfall or an unverified list.
+/// What a provider's reference resolution left unresolved. Providers that return the
+/// reference list with the metadata, such as Crossref, report nothing and use the default.
+#[derive(Debug, Clone, Default, PartialEq, Eq)]
+pub struct ReferenceReport {
+    /// Referenced works the provider named and tried to resolve to DOIs.
+    pub targets: usize,
+    /// Targets that resolved to a DOI and became references.
+    pub retained: usize,
+    /// Targets a successful response left out.
+    pub omitted: usize,
+    /// Targets the provider returned without a usable DOI.
+    pub doi_less: usize,
+    /// Targets never asked about because the daily budget stopped the calls.
+    pub unattempted: usize,
+    /// Set when the daily budget stopped paid calls. `reset_secs` is the reset the
+    /// provider sent, if any.
+    pub budget_stop: Option<BudgetStop>,
+}
+
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
-pub enum ReferenceGap {
-    /// The daily budget ran out after `resolved` of `expected` referenced works were
-    /// looked up. `reset_secs` is the reset the provider reported, when it reported one.
-    BudgetExhausted {
-        resolved: usize,
-        expected: usize,
-        reset_secs: Option<u64>,
-    },
-    /// Every referenced work was looked up, but the answer carries `resolved` references
-    /// with a DOI where the work reports `expected`. Targets the provider holds without a
-    /// DOI count too, and Crossref's list may still supply their DOIs.
-    Shortfall { resolved: usize, expected: usize },
-    /// Every referenced work was looked up and the provider's own count is met, but that
-    /// count is the length of the list it resolved, not the size of the bibliography. A
-    /// reference the provider never matched is invisible to it, so only another source can
-    /// confirm the list is complete.
-    Unverified { resolved: usize },
+pub struct BudgetStop {
+    pub reset_secs: Option<u64>,
+}
+
+impl ReferenceReport {
+    /// Whether the report shows a loss that is not a genuinely empty bibliography.
+    pub fn is_degraded(&self) -> bool {
+        self.omitted > 0 || self.doi_less > 0 || self.unattempted > 0 || self.budget_stop.is_some()
+    }
 }
 
 #[derive(Debug, Clone)]
 pub struct FetchedWork {
     pub work: WorkWithReferences,
     pub provider: ProviderKind,
-    /// `None` when every referenced work was looked up, or when the provider has no
-    /// reference list to look up.
-    pub reference_gap: Option<ReferenceGap>,
+    /// What reference resolution lost. The default reports nothing lost.
+    pub references: ReferenceReport,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Error)]
 pub enum ProviderFetchError {
     #[error("{} has no record for {doi}", .provider.as_str())]
-    NotFound { provider: ProviderKind, doi: String },
+    NotFound {
+        provider: ProviderKind,
+        doi: String,
+        /// Why the provider holds no usable record, when it is more than a plain miss, such as
+        /// `corpus_excluded`.
+        reason: Option<String>,
+    },
     #[error("{} rejected the request: {reason}", .provider.as_str())]
     Rejected {
         provider: ProviderKind,
@@ -153,16 +260,30 @@ pub enum ProviderFetchError {
         provider: ProviderKind,
         message: String,
     },
+    /// A failure that retrying cannot fix. The chain records it and moves on.
     #[error("{} failed: {message}", .provider.as_str())]
     Fatal {
         provider: ProviderKind,
         message: String,
     },
+    /// The metadata answered and a later reference request ran out of retries. The chain
+    /// does not move on, because another provider's metadata would hide the failure.
+    #[error("{} is unavailable for now while resolving references: {message}", .provider.as_str())]
+    ReferenceRetryable {
+        provider: ProviderKind,
+        message: String,
+    },
+    /// The metadata answered and a reference request failed in a way retrying cannot fix,
+    /// such as a response that breaks the list contract.
+    #[error("{} failed while resolving references: {message}", .provider.as_str())]
+    ReferenceFatal {
+        provider: ProviderKind,
+        message: String,
+    },
 }
 
-/// One DOI lookup against one metadata service. The caller takes one permit before
-/// the call. The adapter takes another before each further request it sends inside
-/// the call, such as a retry or a reference lookup.
+/// One DOI lookup against one metadata service. The adapter takes a permit immediately
+/// before every request it sends, the first one included, and names the request's purpose.
 pub trait WorkProvider: Send + Sync {
     fn kind(&self) -> ProviderKind;
     fn fetch_work_with_references<'a>(
@@ -182,8 +303,8 @@ pub trait WorkProvider: Send + Sync {
         self.fetch_work_with_references(doi, permit)
     }
 
-    /// The DOI's raw reference list, unresolved entries included, for filling references
-    /// that another provider lost. Only providers that publish reference lists implement it.
+    /// The DOI's raw reference list, unresolved entries included, for the union with
+    /// another provider's references. Only providers that publish reference lists implement it.
     fn reference_list<'a>(
         &'a self,
         _doi: &'a str,
@@ -196,6 +317,13 @@ pub trait WorkProvider: Send + Sync {
                 message: "has no reference list to read".to_owned(),
             })
         })
+    }
+
+    /// Whether an accepted answer from this provider is unioned with Crossref's reference
+    /// list. The bibliography this provider resolves can omit references it never matched,
+    /// and nothing in its answer shows which.
+    fn unions_crossref_references(&self) -> bool {
+        false
     }
 }
 

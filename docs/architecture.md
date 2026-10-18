@@ -216,16 +216,21 @@ typed error. `ProviderRouter` in the same crate walks the chain for each DOI.
 The deployment chain from `DEEPREF_METADATA_PROVIDERS` is the allowlist: a run
 keeps only the providers the deployment still enables, in stored order.
 `deepref-integrations` implements the port for OpenAlex, Crossref and DataCite.
-The first provider that answers wins, and its metadata becomes the work. When
-the router asks Crossref for the reference list if the chain includes it, and
-merges in the missing DOIs, because OpenAlex's own count cannot show a reference
-it never matched. A budget stop always does this. Every other answer does so
-only while `DEEPREF_REFERENCE_UNION` is on, and a transient Crossref failure
-retries the fetch instead of caching a short list. `works.metadata_provider` records the
-provider that answered. `works.citation_provider` lists the reference sources in
-the order they contributed, for example `openalex,crossref`, and the raw payload
-keeps every attempt. Abstract enrichment stays best-effort. Publication alerts
-and PMID imports keep their own providers.
+The first provider that answers wins, and its metadata becomes the work. After
+every OpenAlex answer the router asks Crossref for its reference list when
+Crossref is enabled in the deployment, whatever the run's own chain says, and
+merges it in: a DOI both lists name keeps OpenAlex's position and takes
+Crossref's bibliography, and entries without a DOI follow as unresolved
+references. A transient Crossref failure retries the fetch instead of caching a
+short list, and a fatal one is a degraded success. A reference failure after the
+metadata answered never selects another metadata provider. A fatal failure of one
+provider is recorded and the chain moves on. `works.metadata_provider` records
+the provider that answered. `works.citation_provider` lists the providers whose
+references were kept, in contribution order, and is empty when none were. The raw
+payload keeps every attempt with its purpose and request count, and
+`deepref_reference_status` says whether the reference plan completed or was
+degraded. Abstract enrichment stays best-effort and takes a permit for every
+request. Publication alerts and PMID imports keep their own providers.
 
 Just remains the public command interface, Mise owns tool versions, and xtask
 owns the repository graph. Ordinary build, test, and service commands stay in Just.

@@ -20,9 +20,10 @@ pub mod study;
 pub mod workflows;
 
 pub use acquisition::{
-    CsvColumnMapping, FetchedWork, ImportError, ImportParser, PermitError, ProviderError,
-    ProviderFetchError, ProviderFuture, ProviderPermit, RawAuthor, RawIdentifier, RawRecord,
-    ReferenceGap, WorkProvider,
+    AttemptPurpose, BudgetStop, CsvColumnMapping, FetchedWork, ImportError, ImportParser,
+    OutboundRequest, OutboundService, PermitError, ProviderError, ProviderFetchError,
+    ProviderFuture, ProviderPermit, RawAuthor, RawIdentifier, RawRecord, ReferenceReport,
+    WorkProvider,
 };
 pub use appraisal::{
     AnswerSchema, AppliesWhen, AppraisalAssessmentInput, AppraisalCompleted, AppraisalDefinition,
@@ -66,8 +67,8 @@ pub use protocol::{
     SaveProtocolDraftCommand, validate_protocol_text,
 };
 pub use router::{
-    AttemptOutcome, LostEdgeCause, LostEdgeFill, LostEdges, ProviderAttempt, ProviderRouter,
-    RouteError, RouteOutput, RouterError, citation_sources, effective_chain,
+    AttemptOutcome, DegradedReason, ProviderAttempt, ProviderRouter, ReferenceSummary, RouteError,
+    RouteOutput, RouterError, citation_sources, effective_chain,
 };
 pub use study::{
     AssignReportToStudy, ClassifyStudy, CreateStudy, RemoveReportFromStudy, RenameStudy,
