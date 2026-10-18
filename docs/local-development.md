@@ -133,9 +133,11 @@ In another terminal, run:
 mise exec -- just seed
 ```
 
-The seed is deterministic and idempotent. It creates one project with three works and three citation edges. Ingestions identify themselves to Crossref, NCBI and Unpaywall with `DEEPREF_CONTACT_EMAIL`, so set that variable in `.env` before running a real import.
+The seed is deterministic and idempotent. It creates one project with three works and three citation edges. Ingestions identify themselves to OpenAlex, Crossref, DataCite, NCBI and Unpaywall with `DEEPREF_CONTACT_EMAIL`, so set that variable in `.env` before running a real import.
 
 Without `DEEPREF_CONTACT_EMAIL`, DOI and PubMed ID import requests return HTTP 503 without creating an acquisition or queuing a job. A worker missing the variable also fails already-queued PubMed items and PMID-only workflow imports permanently, with an error naming the variable, before contacting NCBI. Set the address and restart both the API and worker before submitting the import again.
+
+DOI imports try the providers in `DEEPREF_METADATA_PROVIDERS` in order. The default is `openalex,crossref,datacite`. To roll back to the Crossref-only lane, set `DEEPREF_METADATA_PROVIDERS=crossref` and restart both the API and the worker. The rollback also reaches runs created earlier, because a stored chain keeps only the providers the deployment still enables. Keyless OpenAlex is valid, and `DEEPREF_OPENALEX_API_KEY` is optional. A key that is pending or invalid downgrades OpenAlex to keyless until the process restarts, and imports keep running. Deploy the API and the worker together, so both read the same chain.
 
 ## Stop or reset
 

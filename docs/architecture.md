@@ -142,7 +142,7 @@ domain commands remain the sole scientific-write authority.
 
 `deepref-server serve` runs HTTP only. `deepref-server worker` runs the bounded PostgreSQL job executor. `deepref-server all` runs both roles in one process with coordinated shutdown. Deployments package the same `deepref-server` binary for API and worker targets; local Process Compose supervises the API, worker, and web processes.
 
-Crate boundaries follow dependency direction: `deepref-domain` owns pure invariants, ingestion/fetch states and work/reference models, event envelopes and payloads (`events`), and in-memory graph models/algorithms (`graph`). `deepref-application` owns use-case commands and the live `JobQueue` port; `deepref-review` retains `ReviewScheduler`. `deepref-integrations` owns Crossref, PubMed, import parsers, Unpaywall and GROBID; `deepref-app` owns SQLx migrations and adapters; `deepref-http-api` owns HTTP adapters and SQL-backed handlers. See [ADR 0002](adr/0002-layered-crate-boundaries.md).
+Crate boundaries follow dependency direction: `deepref-domain` owns pure invariants, ingestion/fetch states and work/reference models, event envelopes and payloads (`events`), and in-memory graph models/algorithms (`graph`). `deepref-application` owns use-case commands and the live `JobQueue` port; `deepref-review` retains `ReviewScheduler`. `deepref-integrations` owns the OpenAlex, Crossref and DataCite metadata adapters, PubMed, import parsers, Unpaywall and GROBID; `deepref-app` owns SQLx migrations and adapters; `deepref-http-api` owns HTTP adapters and SQL-backed handlers. See [ADR 0002](adr/0002-layered-crate-boundaries.md).
 
 Runtime environment access belongs to `deepref-config`. Its typed
 `from_source` constructors support deterministic injected configuration tests;
@@ -201,15 +201,30 @@ SQLx in HTTP or worker contexts that have not migrated their persistence seams.
 
 The workspace contains 13 members. The former `core`, `events` and `graph`
 packages are domain modules, not compatibility crates; the former `crossref`,
-`providers` and `grobid` packages form `integrations`. Crossref DOI acquisition,
-metadata and citation adapters use one client and wire conversion; enrichment
-remains best-effort, and GROBID keeps its HTTP/TEI behavior. Unused catalogue
+`providers` and `grobid` packages form `integrations`. GROBID keeps its HTTP/TEI
+behavior. Unused catalogue
 models and graph-upsert helpers are removed. Zero-implementation
 `DocumentRepository`, `OcrEngine` and `FullTextResolver` ports are removed;
 live document storage, queue and review scheduling contracts are retained.
 Telemetry remains a separate runtime adapter in this low-conflict cutover.
 Moving SQL-backed handlers into use cases and forbidding SQLx at the HTTP/worker
 boundary is a later migration, not a claim made by the current rules.
+
+DOI metadata runs through a provider chain. The `WorkProvider` port in
+`deepref-application` takes one DOI and returns its work with references, or a
+typed error. `ProviderRouter` in the same crate walks the chain for each DOI.
+The deployment chain from `DEEPREF_METADATA_PROVIDERS` is the allowlist: a run
+keeps only the providers the deployment still enables, in stored order.
+`deepref-integrations` implements the port for OpenAlex, Crossref and DataCite.
+The first provider that answers wins, and its metadata becomes the work. When
+the answer lists fewer references than the work reports, the router asks
+Crossref for the reference list if the chain includes it, and merges in the
+missing DOIs. A budget stop always does this. A plain shortfall does so only
+while `DEEPREF_REFERENCE_UNION` is on. `works.metadata_provider` records the
+provider that answered. `works.citation_provider` lists the reference sources in
+the order they contributed, for example `openalex,crossref`, and the raw payload
+keeps every attempt. Abstract enrichment stays best-effort. Publication alerts
+and PMID imports keep their own providers.
 
 Just remains the public command interface, Mise owns tool versions, and xtask
 owns the repository graph. Ordinary build, test, and service commands stay in Just.
