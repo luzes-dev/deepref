@@ -507,6 +507,64 @@ async fn a_paratext_work_ends_the_item_as_not_found_with_its_reason_and_no_later
 }
 
 #[tokio::test]
+async fn the_reference_union_setting_decides_whether_a_short_openalex_list_is_topped_up()
+-> Result<()> {
+    let Some(pool) = deepref_app::test_isolation::isolated_pool_from_env("DATABASE_URL", 8).await
+    else {
+        return Ok(());
+    };
+    // OpenAlex reports one reference and resolves none of them, so the answer is short.
+    for (doi, union, expected_sources) in [
+        ("10.5555/union-on", true, "openalex,crossref"),
+        ("10.5555/union-off", false, "openalex"),
+    ] {
+        let mut work: Value = serde_json::from_str(&openalex_work(doi))?;
+        work["referenced_works"] = json!(["https://openalex.org/W1"]);
+        work["referenced_works_count"] = json!(1);
+        let openalex = MockServer::start(vec![
+            (format!("/works/doi:{doi}"), "200 OK", work.to_string()),
+            (
+                "/works".to_owned(),
+                "200 OK",
+                json!({ "meta": { "count": 0 }, "results": [] }).to_string(),
+            ),
+        ])
+        .await;
+        let crossref = MockServer::start(vec![(
+            format!("/works/{}", doi.replace('/', "%2F")),
+            "200 OK",
+            json!({
+                "message": {
+                    "title": ["Answered by Crossref"],
+                    "references-count": 1,
+                    "reference": [{ "DOI": "10.5555/cited" }]
+                }
+            })
+            .to_string(),
+        )])
+        .await;
+        let fixture = seed_work_fetch(&pool, doi, json!({})).await?;
+
+        let datacite = MockServer::start(Vec::new()).await;
+        let mut config = worker_config(&openalex, &crossref, &datacite);
+        config.runtime.integrations.reference_union = union;
+        run_fetch(&pool, &fixture, &config).await?;
+
+        let saved = provenance(&pool, doi).await?;
+        assert_eq!(
+            saved.citation_provider, expected_sources,
+            "reference union {union}"
+        );
+        assert_eq!(
+            crossref.paths().len(),
+            usize::from(union),
+            "Crossref's reference list is asked only with the union on"
+        );
+    }
+    Ok(())
+}
+
+#[tokio::test]
 async fn a_doi_only_datacite_holds_is_recorded_as_datacite_and_keeps_the_crossref_lane_label()
 -> Result<()> {
     let Some(pool) = deepref_app::test_isolation::isolated_pool_from_env("DATABASE_URL", 8).await
