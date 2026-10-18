@@ -862,6 +862,7 @@ mod tests {
                 raw: json!({ "title": ["A title"] }),
             },
             provider,
+            reference_gap: None,
         }
     }
 

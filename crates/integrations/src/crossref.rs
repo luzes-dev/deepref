@@ -200,6 +200,7 @@ impl WorkProvider for CrossrefClient {
             Ok(FetchedWork {
                 work: self.enrich_abstract(work).await,
                 provider: ProviderKind::Crossref,
+                reference_gap: None,
             })
         })
     }

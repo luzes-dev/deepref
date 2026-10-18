@@ -22,7 +22,7 @@ pub mod workflows;
 pub use acquisition::{
     CsvColumnMapping, FetchedWork, ImportError, ImportParser, PermitError, ProviderError,
     ProviderFetchError, ProviderFuture, ProviderPermit, RawAuthor, RawIdentifier, RawRecord,
-    WorkProvider,
+    ReferenceGap, WorkProvider,
 };
 pub use appraisal::{
     AnswerSchema, AppliesWhen, AppraisalAssessmentInput, AppraisalCompleted, AppraisalDefinition,

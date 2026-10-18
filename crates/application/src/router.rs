@@ -264,6 +264,7 @@ mod tests {
                 self.answer.clone().map(|work| FetchedWork {
                     work,
                     provider: self.kind,
+                    reference_gap: None,
                 })
             })
         }

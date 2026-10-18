@@ -107,10 +107,26 @@ pub trait ProviderPermit: Send + Sync {
 #[error("provider permit unavailable: {0}")]
 pub struct PermitError(pub String);
 
+/// Why a provider answer lists fewer references than the work resolved. The router can
+/// act on it later, for example by asking Crossref for the reference list.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReferenceGap {
+    /// The daily budget ran out after `resolved` of `expected` referenced works were
+    /// looked up. `reset_secs` is the reset the provider reported, when it reported one.
+    BudgetExhausted {
+        resolved: usize,
+        expected: usize,
+        reset_secs: Option<u64>,
+    },
+}
+
 #[derive(Debug, Clone)]
 pub struct FetchedWork {
     pub work: WorkWithReferences,
     pub provider: ProviderKind,
+    /// `None` when every referenced work was looked up, or when the provider has no
+    /// reference list to look up.
+    pub reference_gap: Option<ReferenceGap>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, Error)]

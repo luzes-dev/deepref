@@ -6,13 +6,14 @@ mod wire;
 
 use std::collections::HashMap;
 use std::fmt;
-use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
-use std::time::Duration;
+use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
+use std::time::{Duration, Instant};
 
+use chrono::{NaiveDate, Utc};
 use deepref_application::{
     FetchedWork, PermitError, ProviderFetchError, ProviderFuture, ProviderPermit, RawAuthor,
-    RawIdentifier, RawRecord, WorkProvider,
+    RawIdentifier, RawRecord, ReferenceGap, WorkProvider,
 };
 use deepref_config::{IntegrationsConfig, OpenAlexCorpus};
 use deepref_domain::{
@@ -117,6 +118,71 @@ impl fmt::Debug for OpenAlexKey {
     }
 }
 
+/// What this process knows about the daily list budget. A list call that comes back 429
+/// with no budget left stops every later list call until the reset. The low-budget
+/// warning fires once per UTC day.
+#[derive(Debug, Default)]
+struct ListBudget {
+    stop: Mutex<Option<Stop>>,
+    warned_on: Mutex<Option<NaiveDate>>,
+}
+
+#[derive(Debug, Clone, Copy)]
+struct Stop {
+    until: Instant,
+    reset_secs: Option<u64>,
+}
+
+impl ListBudget {
+    /// Stops list calls until the reset. Without a reset header the stop lasts until the
+    /// next UTC midnight, when the daily budget refills.
+    fn stop(&self, now: Instant, reset_secs: Option<u64>) {
+        let window = reset_secs.unwrap_or_else(seconds_until_utc_midnight);
+        *lock(&self.stop) = Some(Stop {
+            until: now + Duration::from_secs(window),
+            reset_secs,
+        });
+    }
+
+    /// The reset reported when the stop began, while the stop still holds at `now`.
+    fn stopped(&self, now: Instant) -> Option<Option<u64>> {
+        let stop = *lock(&self.stop);
+        stop.filter(|stop| now < stop.until)
+            .map(|stop| stop.reset_secs)
+    }
+
+    /// True for the first low-budget response of each UTC day.
+    fn claim_daily_warning(&self, today: NaiveDate) -> bool {
+        let mut warned_on = lock(&self.warned_on);
+        if *warned_on == Some(today) {
+            return false;
+        }
+        *warned_on = Some(today);
+        true
+    }
+}
+
+fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
+    // A poisoned lock still holds the last value written, which is all these markers need.
+    mutex.lock().unwrap_or_else(PoisonError::into_inner)
+}
+
+/// Whether the remaining budget is under a tenth of the limit.
+fn budget_is_low(limit: u64, remaining: u64) -> bool {
+    remaining.saturating_mul(10) < limit
+}
+
+/// Seconds until the next UTC midnight, when the daily budget resets.
+fn seconds_until_utc_midnight() -> u64 {
+    const DAY: i64 = 86_400;
+    (DAY - Utc::now().timestamp().rem_euclid(DAY)).unsigned_abs()
+}
+
+/// An integer rate-limit header, or `None` when it is absent or not a number.
+fn header_u64(headers: &header::HeaderMap, name: &str) -> Option<u64> {
+    headers.get(name)?.to_str().ok()?.trim().parse().ok()
+}
+
 /// The two request shapes. A singleton is free and answers on the caller's permit. A list
 /// call costs money, so it takes a permit of its own.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -134,6 +200,7 @@ pub struct OpenAlexClient {
     base_url: String,
     mailto: String,
     key: Arc<OpenAlexKey>,
+    budget: Arc<ListBudget>,
     corpus: OpenAlexCorpus,
     max_attempts: usize,
 }
@@ -171,6 +238,7 @@ impl OpenAlexClient {
             base_url: base_url.into().trim_end_matches('/').to_owned(),
             mailto,
             key: Arc::new(OpenAlexKey::new(api_key)),
+            budget: Arc::new(ListBudget::default()),
             corpus,
             max_attempts: 5,
         })
@@ -254,6 +322,26 @@ impl OpenAlexClient {
         self.key.state()
     }
 
+    /// Logs the low-budget warning once per UTC day, for a response that carries both the
+    /// limit and the remaining budget and shows less than a tenth left.
+    fn observe_budget(&self, headers: &header::HeaderMap) {
+        let (Some(limit), Some(remaining)) = (
+            header_u64(headers, "x-ratelimit-limit"),
+            header_u64(headers, "x-ratelimit-remaining"),
+        ) else {
+            return;
+        };
+        if budget_is_low(limit, remaining)
+            && self.budget.claim_daily_warning(Utc::now().date_naive())
+        {
+            tracing::warn!(
+                limit,
+                remaining,
+                "OpenAlex daily budget is under 10 percent"
+            );
+        }
+    }
+
     /// The request URL for a path and query. The key is added only while the process
     /// is keyed, so a keyless process never sends it.
     fn request_url(&self, path_and_query: &str) -> String {
@@ -279,6 +367,11 @@ impl OpenAlexClient {
         path_and_query: &str,
         permit: &dyn ProviderPermit,
     ) -> Result<Option<Value>, OpenAlexError> {
+        if endpoint == Endpoint::List
+            && let Some(reset_secs) = self.budget.stopped(Instant::now())
+        {
+            return Err(OpenAlexError::BudgetExhausted { reset_secs });
+        }
         let mut requests = 0_usize;
         let mut attempts = 0_usize;
         loop {
@@ -295,6 +388,7 @@ impl OpenAlexClient {
             let failure = match request.send().await {
                 Ok(response) => {
                     let status = response.status();
+                    self.observe_budget(response.headers());
                     if status.is_success() {
                         let raw: Value = response.json().await.map_err(transport)?;
                         return Ok(Some(raw));
@@ -307,6 +401,19 @@ impl OpenAlexClient {
                         }
                         StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN => {
                             return Err(OpenAlexError::Unauthorized(status));
+                        }
+                        StatusCode::TOO_MANY_REQUESTS
+                            if endpoint == Endpoint::List
+                                && header_u64(response.headers(), "x-ratelimit-remaining")
+                                    == Some(0) =>
+                        {
+                            let reset_secs = header_u64(response.headers(), "x-ratelimit-reset");
+                            self.budget.stop(Instant::now(), reset_secs);
+                            tracing::warn!(
+                                ?reset_secs,
+                                "OpenAlex daily budget is spent; list calls stop until the reset"
+                            );
+                            return Err(OpenAlexError::BudgetExhausted { reset_secs });
                         }
                         _ => match classify_status(status) {
                             StatusClassification::Retryable => {
@@ -334,7 +441,7 @@ impl OpenAlexClient {
         &self,
         doi: &str,
         permit: &dyn ProviderPermit,
-    ) -> Result<WorkWithReferences, OpenAlexError> {
+    ) -> Result<FetchedWork, OpenAlexError> {
         let doi = normalize_doi(doi)?;
         let path = format!(
             "/works/doi:{}?select={SELECT_FIELDS}",
@@ -345,37 +452,61 @@ impl OpenAlexClient {
             .await?
             .ok_or_else(|| OpenAlexError::NotFound(doi.clone()))?;
         let mut work = checked_work(&doi, raw)?;
-        work.references = self
+        let (references, reference_gap) = self
             .resolve_references(&wire::referenced_ids(&work.raw), permit)
             .await?;
-        Ok(work)
+        work.references = references;
+        Ok(FetchedWork {
+            work,
+            provider: ProviderKind::OpenAlex,
+            reference_gap,
+        })
     }
 
     /// Resolves OpenAlex reference IDs to DOIs, one list call per `LIST_CHUNK` IDs, run
-    /// in order. Targets without a DOI are left out.
+    /// in order. Targets without a DOI are left out. A budget stop keeps the references
+    /// resolved so far and reports the gap, and the metadata still answers.
     async fn resolve_references(
         &self,
         ids: &[String],
         permit: &dyn ProviderPermit,
-    ) -> Result<Vec<Reference>, OpenAlexError> {
+    ) -> Result<(Vec<Reference>, Option<ReferenceGap>), OpenAlexError> {
         let mut dois = HashMap::new();
+        let mut resolved = 0;
         for chunk in ids.chunks(LIST_CHUNK) {
             let path = format!(
                 "/works?filter=ids.openalex:{}&select=id,doi&per_page={LIST_CHUNK}",
                 chunk.join("|")
             );
-            let body = self
-                .get_metered(Endpoint::List, &path, permit)
-                .await?
-                .ok_or(OpenAlexError::NonRetryableStatus(StatusCode::NOT_FOUND))?;
-            dois.extend(wire::list_dois(&body));
+            match self.get_metered(Endpoint::List, &path, permit).await {
+                Ok(Some(body)) => {
+                    dois.extend(wire::list_dois(&body));
+                    resolved += chunk.len();
+                }
+                Ok(None) => {
+                    return Err(OpenAlexError::NonRetryableStatus(StatusCode::NOT_FOUND));
+                }
+                Err(OpenAlexError::BudgetExhausted { reset_secs }) => {
+                    let gap = ReferenceGap::BudgetExhausted {
+                        resolved,
+                        expected: ids.len(),
+                        reset_secs,
+                    };
+                    return Ok((references_in_order(ids, &dois), Some(gap)));
+                }
+                Err(error) => return Err(error),
+            }
         }
-        Ok(ids
-            .iter()
-            .filter_map(|id| dois.get(id))
-            .map(|doi| doi_reference(doi.clone()))
-            .collect())
+        Ok((references_in_order(ids, &dois), None))
     }
+}
+
+/// The references for the IDs that resolved to a DOI, in reference order.
+fn references_in_order(ids: &[String], dois: &HashMap<String, String>) -> Vec<Reference> {
+    ids.iter()
+        .filter_map(|id| dois.get(id))
+        .map(|doi| doi_reference(doi.clone()))
+        .collect()
 }
 
 /// A reference known only by its DOI.
@@ -432,14 +563,9 @@ impl WorkProvider for OpenAlexClient {
         permit: &'a dyn ProviderPermit,
     ) -> ProviderFuture<'a, FetchedWork, ProviderFetchError> {
         Box::pin(async move {
-            let work = self
-                .fetch_metered(doi, permit)
+            self.fetch_metered(doi, permit)
                 .await
-                .map_err(OpenAlexError::into_fetch_error)?;
-            Ok(FetchedWork {
-                work,
-                provider: ProviderKind::OpenAlex,
-            })
+                .map_err(OpenAlexError::into_fetch_error)
         })
     }
 }
@@ -498,6 +624,8 @@ pub enum OpenAlexError {
     Unauthorized(StatusCode),
     #[error("OpenAlex returned retryable status: {0}")]
     RetryableStatus(StatusCode),
+    #[error("OpenAlex's daily budget is spent; list calls stop until the reset")]
+    BudgetExhausted { reset_secs: Option<u64> },
     #[error("OpenAlex returned non-retryable status: {0}")]
     NonRetryableStatus(StatusCode),
     #[error("request failed: {0}")]
@@ -524,6 +652,7 @@ impl OpenAlexError {
             },
             Self::Unauthorized(_)
             | Self::RetryableStatus(_)
+            | Self::BudgetExhausted { .. }
             | Self::Request(_)
             | Self::Permit(_) => ProviderFetchError::Retryable { provider, message },
             Self::MissingContactEmail | Self::NonRetryableStatus(_) | Self::Json(_) => {
@@ -1003,6 +1132,197 @@ mod tests {
             }
             other => panic!("expected a retryable failure, got {other:?}"),
         }
+    }
+
+    #[tokio::test]
+    async fn a_budget_exhausted_list_call_keeps_the_metadata_and_stops_later_list_calls() {
+        let (base, requests) = scripted_server(vec![
+            reply("200 OK", WORK),
+            Reply {
+                status: "429 Too Many Requests",
+                headers: "X-RateLimit-Limit: 1000\r\nX-RateLimit-Remaining: 0\r\nX-RateLimit-Reset: 3600\r\n"
+                    .to_owned(),
+                body: "{}".to_owned(),
+            },
+            reply("200 OK", WORK),
+            reply("200 OK", NO_REFERENCES),
+        ])
+        .await;
+        let client = client(base, None, 1);
+        let expected_gap = Some(ReferenceGap::BudgetExhausted {
+            resolved: 0,
+            expected: 40,
+            reset_secs: Some(3600),
+        });
+
+        let first = fetch(&client, ABSTRACT_DOI, &RecordingPermit::default())
+            .await
+            .expect("the singleton still answers when the budget is spent");
+        assert_eq!(
+            first.work.work.title.as_deref(),
+            Some("Why Most Published Research Findings Are False")
+        );
+        assert!(first.work.references.is_empty());
+        assert_eq!(first.reference_gap, expected_gap);
+
+        let later = fetch(&client, ABSTRACT_DOI, &RecordingPermit::default())
+            .await
+            .expect("a later work answers from its singleton");
+        assert!(later.work.references.is_empty());
+        assert_eq!(later.reference_gap, expected_gap);
+
+        let unreferenced = fetch(&client, NO_REFERENCES_DOI, &RecordingPermit::default())
+            .await
+            .expect("a work without references answers");
+        assert_eq!(
+            unreferenced.reference_gap, None,
+            "nothing was left to look up"
+        );
+
+        let requests = requests.lock().expect("request log");
+        assert_eq!(requests.len(), 4);
+        assert!(
+            requests[1].starts_with("GET /works?filter=ids.openalex:"),
+            "{}",
+            requests[1]
+        );
+        for request in [&requests[2], &requests[3]] {
+            assert!(request.starts_with("GET /works/doi:"), "{request}");
+        }
+    }
+
+    #[tokio::test]
+    async fn a_partial_budget_stop_keeps_the_references_resolved_so_far() {
+        let ids = synthetic_ids(250);
+        let (base, requests) = scripted_server(vec![
+            reply("200 OK", work_citing(&ids)),
+            reply("200 OK", list_body(&ids[..100], &[])),
+            Reply {
+                status: "429 Too Many Requests",
+                headers: "X-RateLimit-Remaining: 0\r\nX-RateLimit-Reset: 120\r\n".to_owned(),
+                body: "{}".to_owned(),
+            },
+        ])
+        .await;
+
+        let fetched = fetch(
+            &client(base, None, 1),
+            ABSTRACT_DOI,
+            &RecordingPermit::default(),
+        )
+        .await
+        .expect("the metadata still answers");
+
+        assert_eq!(fetched.work.references.len(), 100);
+        assert_eq!(dois(&fetched)[99], "10.9999/w1000099");
+        assert_eq!(
+            fetched.reference_gap,
+            Some(ReferenceGap::BudgetExhausted {
+                resolved: 100,
+                expected: 250,
+                reset_secs: Some(120),
+            })
+        );
+        assert_eq!(requests.lock().expect("request log").len(), 3);
+    }
+
+    #[tokio::test]
+    async fn a_budget_stop_is_not_retried() {
+        let (base, _) = scripted_server(vec![
+            reply("200 OK", WORK),
+            Reply {
+                status: "429 Too Many Requests",
+                headers: "X-RateLimit-Remaining: 0\r\nX-RateLimit-Reset: 60\r\n".to_owned(),
+                body: "{}".to_owned(),
+            },
+        ])
+        .await;
+        let permit = RecordingPermit::default();
+
+        let fetched = fetch(&client(base, None, 5), ABSTRACT_DOI, &permit)
+            .await
+            .expect("the metadata still answers");
+
+        assert!(fetched.reference_gap.is_some());
+        assert_eq!(
+            permit.taken(),
+            vec![ProviderKind::OpenAlex],
+            "one permit for the one list call that ran"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_low_budget_response_claims_the_daily_warning_and_a_quiet_one_does_not() {
+        let quiet = scripted_server(vec![reply("200 OK", WORK), reply("200 OK", EMPTY_LIST)]).await;
+        let low = scripted_server(vec![
+            Reply {
+                status: "200 OK",
+                headers: "X-RateLimit-Limit: 1000\r\nX-RateLimit-Remaining: 50\r\n".to_owned(),
+                body: WORK.to_owned(),
+            },
+            reply("200 OK", EMPTY_LIST),
+        ])
+        .await;
+        let quiet_client = client(quiet.0, None, 1);
+        let low_client = client(low.0, None, 1);
+
+        fetch(&quiet_client, ABSTRACT_DOI, &RecordingPermit::default())
+            .await
+            .expect("openalex should answer");
+        fetch(&low_client, ABSTRACT_DOI, &RecordingPermit::default())
+            .await
+            .expect("openalex should answer");
+
+        assert_eq!(*lock(&quiet_client.budget.warned_on), None);
+        assert_eq!(
+            *lock(&low_client.budget.warned_on),
+            Some(Utc::now().date_naive())
+        );
+    }
+
+    #[test]
+    fn a_budget_stop_holds_until_the_reset_and_then_expires() {
+        let budget = ListBudget::default();
+        let start = Instant::now();
+
+        assert_eq!(budget.stopped(start), None);
+        budget.stop(start, Some(60));
+        assert_eq!(
+            budget.stopped(start + Duration::from_secs(59)),
+            Some(Some(60))
+        );
+        assert_eq!(
+            budget.stopped(start + Duration::from_secs(60)),
+            None,
+            "list calls resume once the reset has passed"
+        );
+    }
+
+    #[test]
+    fn a_budget_stop_without_a_reset_header_lasts_to_the_next_utc_midnight() {
+        let budget = ListBudget::default();
+        let start = Instant::now();
+
+        budget.stop(start, None);
+
+        assert_eq!(budget.stopped(start), Some(None));
+        assert_eq!(budget.stopped(start + Duration::from_secs(86_400)), None);
+    }
+
+    #[test]
+    fn the_low_budget_warning_is_under_a_tenth_and_claimed_once_per_utc_day() {
+        assert!(!budget_is_low(1000, 999));
+        assert!(
+            !budget_is_low(1000, 100),
+            "a tenth exactly is not under a tenth"
+        );
+        assert!(budget_is_low(1000, 99));
+
+        let budget = ListBudget::default();
+        let day = NaiveDate::from_ymd_opt(2026, 10, 18).expect("valid date");
+        assert!(budget.claim_daily_warning(day));
+        assert!(!budget.claim_daily_warning(day));
+        assert!(budget.claim_daily_warning(day.succ_opt().expect("next day")));
     }
 
     #[tokio::test]
@@ -1572,6 +1892,13 @@ mod tests {
         ));
         assert!(matches!(
             OpenAlexError::Unauthorized(StatusCode::FORBIDDEN).into_fetch_error(),
+            ProviderFetchError::Retryable { .. }
+        ));
+        assert!(matches!(
+            OpenAlexError::BudgetExhausted {
+                reset_secs: Some(60)
+            }
+            .into_fetch_error(),
             ProviderFetchError::Retryable { .. }
         ));
         assert!(matches!(
