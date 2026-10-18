@@ -1,3 +1,4 @@
+use deepref_application::PermitError;
 use reqwest::StatusCode;
 use thiserror::Error;
 
@@ -5,6 +6,8 @@ use thiserror::Error;
 pub enum CrossrefError {
     #[error("a contact e-mail address is required; the server must set DEEPREF_CONTACT_EMAIL")]
     MissingContactEmail,
+    #[error(transparent)]
+    Permit(#[from] PermitError),
     #[error("Crossref returned not found for {0}")]
     NotFound(String),
     #[error("Crossref blocked or rejected the request: {0}")]

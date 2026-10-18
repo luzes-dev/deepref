@@ -31,6 +31,14 @@ impl AbstractSource {
     }
 }
 
+/// Whether the abstract lookup asks OpenAlex. A chain that already asked OpenAlex for the
+/// DOI skips that step, since asking again repeats the same call.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum OpenAlexLookup {
+    Enabled,
+    Disabled,
+}
+
 #[derive(Debug, Clone)]
 pub struct AbstractEnricher {
     client: reqwest::Client,
@@ -62,8 +70,13 @@ impl AbstractEnricher {
         })
     }
 
-    /// Looks the DOI up in Europe PMC, then OpenAlex. Returns cleaned plain text.
-    pub async fn lookup(&self, doi: &str) -> Option<(String, AbstractSource)> {
+    /// Looks the DOI up in Europe PMC, then in OpenAlex unless `openalex` disables that
+    /// step. Returns cleaned plain text.
+    pub async fn lookup(
+        &self,
+        doi: &str,
+        openalex: OpenAlexLookup,
+    ) -> Option<(String, AbstractSource)> {
         let query = format!("DOI:\"{doi}\"");
         let url = format!(
             "{}/search?query={}&format=json&resultType=core&pageSize=5",
@@ -74,6 +87,9 @@ impl AbstractEnricher {
             && let Some(text) = parse_europe_pmc(&body, doi)
         {
             return Some((text, AbstractSource::EuropePmc));
+        }
+        if openalex == OpenAlexLookup::Disabled {
+            return None;
         }
         let url = format!(
             "{}/works/doi:{}?mailto={}&select=abstract_inverted_index",
@@ -348,12 +364,75 @@ mod tests {
         assert_eq!(parse_europe_pmc(&body, "10.1/none"), None);
     }
 
+    /// Serves one `200` reply per entry, in order, one connection each, then stops.
+    async fn serve(replies: Vec<&'static str>) -> String {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0")
+            .await
+            .expect("listener should bind");
+        let address = listener.local_addr().expect("listener address");
+        tokio::spawn(async move {
+            for body in replies {
+                let Ok((mut socket, _)) = listener.accept().await else {
+                    return;
+                };
+                let mut request = [0_u8; 4096];
+                let _ = socket.read(&mut request).await;
+                let response = format!(
+                    "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                    body.len()
+                );
+                let _ = socket.write_all(response.as_bytes()).await;
+            }
+        });
+        format!("http://{address}")
+    }
+
+    const NO_EUROPE_PMC_MATCH: &str = r#"{"resultList":{"result":[]}}"#;
+    const OPENALEX_ABSTRACT: &str = r#"{"abstract_inverted_index":{"Hello":[0],"world":[1]}}"#;
+
+    #[tokio::test]
+    async fn openalex_is_asked_only_when_the_lookup_enables_it() {
+        let europe_pmc = serve(vec![NO_EUROPE_PMC_MATCH, NO_EUROPE_PMC_MATCH]).await;
+        let openalex = serve(vec![OPENALEX_ABSTRACT]).await;
+        let enricher = AbstractEnricher::with_base_urls(europe_pmc, openalex, "a@b.co")
+            .expect("enricher should build");
+
+        assert_eq!(
+            enricher.lookup("10.1/x", OpenAlexLookup::Disabled).await,
+            None,
+            "the chain already asked OpenAlex, so the abstract step skips it"
+        );
+        assert_eq!(
+            enricher.lookup("10.1/x", OpenAlexLookup::Enabled).await,
+            Some(("Hello world".to_owned(), AbstractSource::OpenAlex))
+        );
+    }
+
+    #[tokio::test]
+    async fn europe_pmc_still_answers_when_openalex_is_disabled() {
+        const EUROPE_PMC_ABSTRACT: &str =
+            r#"{"resultList":{"result":[{"doi":"10.1/x","abstractText":"From Europe PMC"}]}}"#;
+        let europe_pmc = serve(vec![EUROPE_PMC_ABSTRACT]).await;
+        let openalex = serve(vec![OPENALEX_ABSTRACT]).await;
+        let enricher = AbstractEnricher::with_base_urls(europe_pmc, openalex, "a@b.co")
+            .expect("enricher should build");
+
+        assert_eq!(
+            enricher.lookup("10.1/x", OpenAlexLookup::Disabled).await,
+            Some(("From Europe PMC".to_owned(), AbstractSource::EuropePmc))
+        );
+    }
+
     #[tokio::test]
     async fn unreachable_services_yield_none_without_error() {
         let enricher =
             AbstractEnricher::with_base_urls("http://127.0.0.1:1", "http://127.0.0.1:1", "a@b.co")
                 .unwrap();
-        assert_eq!(enricher.lookup("10.1/x").await, None);
+        assert_eq!(
+            enricher.lookup("10.1/x", OpenAlexLookup::Enabled).await,
+            None
+        );
     }
 
     #[tokio::test]
@@ -361,7 +440,7 @@ mod tests {
     async fn live_europe_pmc_lookup() {
         let enricher = AbstractEnricher::new("test@example.com").unwrap();
         let (text, source) = enricher
-            .lookup("10.1016/j.amepre.2015.01.020")
+            .lookup("10.1016/j.amepre.2015.01.020", OpenAlexLookup::Enabled)
             .await
             .unwrap();
         assert_eq!(source, AbstractSource::EuropePmc);

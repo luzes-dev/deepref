@@ -366,7 +366,7 @@ export function runStatusDisplay(status: string, failedCount: number): RunStatus
 export function ingestionItemStatusLabel(status: string): string {
 	switch (status) {
 		case 'not_found':
-			return 'Not found in Crossref';
+			return 'Not found';
 		case 'failed':
 			return 'Could not be fetched';
 		case 'fetched':
@@ -380,7 +380,7 @@ export function ingestionItemStatusLabel(status: string): string {
 	}
 }
 
-/** Badge variant for one article inside a run. Missing from Crossref is a warning, not an error. */
+/** Badge variant for one article inside a run. Missing from every provider is a warning, not an error. */
 export function ingestionItemStatusVariant(status: string): RunStatusDisplay['variant'] {
 	if (status === 'not_found') return 'warning';
 	if (status === 'failed') return 'destructive';

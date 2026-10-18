@@ -885,6 +885,7 @@ dependencies = [
 name = "deepref-config"
 version = "0.1.0"
 dependencies = [
+ "deepref-domain",
  "dotenvy",
  "serde",
  "thiserror",
@@ -983,6 +984,7 @@ dependencies = [
  "serde_json",
  "thiserror",
  "tokio",
+ "tracing",
  "unicode-normalization",
  "urlencoding",
 ]

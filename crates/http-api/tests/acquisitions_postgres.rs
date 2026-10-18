@@ -10,6 +10,7 @@ use axum::{
     body::{Body, to_bytes},
     http::{Request, Response, StatusCode},
 };
+use deepref_domain::ProviderKind;
 use deepref_http_api::{config::ApiConfig, routes::router, state::AppState};
 use serde_json::json;
 use sqlx::{PgPool, Row};
@@ -118,11 +119,27 @@ async fn call_with_contact_email(
     request: Request<Body>,
     contact_email: &str,
 ) -> Response<Body> {
+    call_with_integrations(pool, request, crossref_only(contact_email)).await
+}
+
+/// The deployment these tests assert against: Crossref alone, so the provenance and
+/// chain assertions hold under the OpenAlex-first default. Built through the source
+/// closure, never the process environment.
+fn crossref_only(contact_email: &str) -> deepref_config::IntegrationsConfig {
+    deepref_config::IntegrationsConfig::from_source(&|name| match name {
+        "DEEPREF_CONTACT_EMAIL" => Some(contact_email.to_owned()),
+        "DEEPREF_METADATA_PROVIDERS" => Some("crossref".to_owned()),
+        _ => None,
+    })
+    .expect("crossref-only integrations should parse")
+}
+
+async fn call_with_integrations(
+    pool: &PgPool,
+    request: Request<Body>,
+    integrations: deepref_config::IntegrationsConfig,
+) -> Response<Body> {
     let config = api_config();
-    let integrations = deepref_config::IntegrationsConfig {
-        contact_email: contact_email.to_owned(),
-        ..Default::default()
-    };
     router(
         AppState::core(pool.clone()).with_integrations(integrations),
         &config,
@@ -162,6 +179,47 @@ fn refresh_request(project_id: Uuid, acquisition_id: Uuid, key: &str) -> Request
         .header("idempotency-key", key)
         .body(Body::empty())
         .expect("refresh request should be valid")
+}
+
+fn create_acquisition_request(
+    project_id: Uuid,
+    key: Option<&str>,
+    body: serde_json::Value,
+) -> Request<Body> {
+    let mut builder = Request::builder()
+        .method("POST")
+        .uri(format!("/projects/{project_id}/acquisitions"))
+        .header("content-type", "application/json");
+    if let Some(key) = key {
+        builder = builder.header("idempotency-key", key);
+    }
+    builder
+        .body(Body::from(body.to_string()))
+        .expect("acquisition request should be valid")
+}
+
+/// A DOI run row written directly, as an earlier deployment would have left it.
+async fn insert_keyed_doi_run(
+    pool: &PgPool,
+    project_id: Uuid,
+    key: &str,
+    config: serde_json::Value,
+) -> Uuid {
+    let run_id = Uuid::new_v4();
+    sqlx::query(
+        "INSERT INTO acquisition_runs
+         (id,project_id,source,strategy,idempotency_key,config,metadata,status,max_depth,seed_count,
+          queued_count,fetched_count,failed_count,metadata_provider,citation_provider,created_at)
+         VALUES ($1,$2,'crossref','citation_traversal',$3,$4,'{}','queued',3,1,1,0,0,'crossref','crossref',now())",
+    )
+    .bind(run_id)
+    .bind(project_id)
+    .bind(key)
+    .bind(config)
+    .execute(pool)
+    .await
+    .expect("keyed test acquisition should insert");
+    run_id
 }
 
 async fn create_completed_doi_acquisition(pool: &PgPool, project_id: Uuid, doi: &str) -> Uuid {
@@ -669,12 +727,8 @@ async fn completed_provider_refresh_is_lineaged_idempotent_and_preserves_source_
         source_config_before["max_depth"]
     );
     assert_eq!(
-        refresh_config["metadata_provider"],
-        source_config_before["metadata_provider"]
-    );
-    assert_eq!(
-        refresh_config["citation_provider"],
-        source_config_before["citation_provider"]
+        refresh_config["metadata_providers"],
+        source_config_before["metadata_providers"]
     );
     assert_eq!(refresh_config["refresh_of"], source_id.to_string());
     let refresh_metadata: serde_json::Value = refresh_row.get("metadata");
@@ -801,6 +855,510 @@ async fn completed_provider_refresh_is_lineaged_idempotent_and_preserves_source_
         &[source_id, refresh_id, second_source_id, chained_id],
     )
     .await;
+}
+
+#[tokio::test]
+async fn new_doi_runs_store_their_chain_in_config() {
+    let Some(pool) = database().await else {
+        return;
+    };
+    let project_id = Uuid::new_v4();
+    sqlx::query("INSERT INTO projects (id,name) VALUES ($1,'chain storage test')")
+        .bind(project_id)
+        .execute(&pool)
+        .await
+        .expect("test project should insert");
+
+    let created = call(
+        &pool,
+        create_acquisition_request(
+            project_id,
+            None,
+            json!({"seed_dois": ["10.5555/stored-chain"]}),
+        ),
+    )
+    .await;
+    assert_eq!(created.status(), StatusCode::CREATED);
+    let body = json_body(created).await;
+    let run_id = body["id"]
+        .as_str()
+        .expect("created acquisition should have an id")
+        .parse::<Uuid>()
+        .expect("acquisition id should be a UUID");
+    assert_eq!(body["source"], "crossref");
+
+    let row = sqlx::query(
+        "SELECT source,config,metadata_provider,citation_provider FROM acquisition_runs WHERE id=$1",
+    )
+    .bind(run_id)
+    .fetch_one(&pool)
+    .await
+    .expect("created run should persist");
+    assert_eq!(row.get::<String, _>("source"), "crossref");
+    assert_eq!(row.get::<String, _>("metadata_provider"), "crossref");
+    assert_eq!(row.get::<String, _>("citation_provider"), "crossref");
+    assert_eq!(
+        row.get::<serde_json::Value, _>("config"),
+        json!({
+            "seed_dois": ["10.5555/stored-chain"],
+            "max_depth": body["max_depth"],
+            "metadata_providers": ["crossref"],
+        })
+    );
+
+    clean_acquisition_projects(&pool, &[project_id], &[run_id]).await;
+}
+
+#[tokio::test]
+async fn legacy_doi_rows_refresh_into_the_current_config_shape() {
+    let Some(pool) = database().await else {
+        return;
+    };
+    let project_id = Uuid::new_v4();
+    sqlx::query("INSERT INTO projects (id,name) VALUES ($1,'legacy refresh test')")
+        .bind(project_id)
+        .execute(&pool)
+        .await
+        .expect("test project should insert");
+    let legacy_id = insert_completed_acquisition(
+        &pool,
+        project_id,
+        "crossref",
+        "citation_traversal",
+        None,
+        json!({
+            "seed_dois": ["10.5555/legacy"],
+            "max_depth": 2,
+            "metadata_provider": "crossref",
+            "citation_provider": "crossref",
+        }),
+    )
+    .await;
+
+    let refresh = call(
+        &pool,
+        refresh_request(project_id, legacy_id, "legacy-refresh-key"),
+    )
+    .await;
+    assert_eq!(refresh.status(), StatusCode::CREATED);
+    let body = json_body(refresh).await;
+    let refresh_id = body["id"]
+        .as_str()
+        .expect("refresh should have an id")
+        .parse::<Uuid>()
+        .expect("refresh id should be a UUID");
+    assert_eq!(body["refresh_of"], legacy_id.to_string());
+
+    let config: serde_json::Value =
+        sqlx::query_scalar("SELECT config FROM acquisition_runs WHERE id=$1")
+            .bind(refresh_id)
+            .fetch_one(&pool)
+            .await
+            .expect("refresh config should load");
+    assert_eq!(
+        config,
+        json!({
+            "seed_dois": ["10.5555/legacy"],
+            "max_depth": 2,
+            "metadata_providers": ["crossref"],
+            "refresh_of": legacy_id,
+        })
+    );
+
+    let items = call(
+        &pool,
+        Request::builder()
+            .uri(format!(
+                "/projects/{project_id}/acquisitions/{refresh_id}/items"
+            ))
+            .body(Body::empty())
+            .expect("items request should be valid"),
+    )
+    .await;
+    assert_eq!(items.status(), StatusCode::OK);
+    assert_eq!(json_body(items).await["items"][0]["kind"], "doi");
+
+    clean_acquisition_projects(&pool, &[project_id], &[legacy_id, refresh_id]).await;
+}
+
+#[tokio::test]
+async fn a_refresh_replays_the_chain_its_source_stored_not_the_current_default() {
+    let Some(pool) = database().await else {
+        return;
+    };
+    let project_id = Uuid::new_v4();
+    sqlx::query("INSERT INTO projects (id,name) VALUES ($1,'chain replay test')")
+        .bind(project_id)
+        .execute(&pool)
+        .await
+        .expect("test project should insert");
+    let source_id = insert_completed_acquisition(
+        &pool,
+        project_id,
+        "crossref",
+        "citation_traversal",
+        None,
+        json!({
+            "seed_dois": ["10.5555/chained"],
+            "max_depth": 1,
+            "metadata_providers": ["openalex", "crossref"],
+        }),
+    )
+    .await;
+
+    let refresh = call(
+        &pool,
+        refresh_request(project_id, source_id, "chain-replay-key"),
+    )
+    .await;
+    assert_eq!(refresh.status(), StatusCode::CREATED);
+    let refresh_id = json_body(refresh).await["id"]
+        .as_str()
+        .expect("refresh should have an id")
+        .parse::<Uuid>()
+        .expect("refresh id should be a UUID");
+
+    let config: serde_json::Value =
+        sqlx::query_scalar("SELECT config FROM acquisition_runs WHERE id=$1")
+            .bind(refresh_id)
+            .fetch_one(&pool)
+            .await
+            .expect("refresh config should load");
+    assert_eq!(
+        config["metadata_providers"],
+        json!(["openalex", "crossref"])
+    );
+    assert_eq!(config["refresh_of"], source_id.to_string());
+
+    clean_acquisition_projects(&pool, &[project_id], &[source_id, refresh_id]).await;
+}
+
+#[tokio::test]
+async fn a_retry_matches_a_legacy_row_and_a_changed_default_chain_conflicts() {
+    let Some(pool) = database().await else {
+        return;
+    };
+    let project_id = Uuid::new_v4();
+    sqlx::query("INSERT INTO projects (id,name) VALUES ($1,'retry comparison test')")
+        .bind(project_id)
+        .execute(&pool)
+        .await
+        .expect("test project should insert");
+
+    let legacy_run = insert_keyed_doi_run(
+        &pool,
+        project_id,
+        "legacy-retry",
+        json!({
+            "seed_dois": ["10.5555/retry"],
+            "max_depth": 3,
+            "metadata_provider": "crossref",
+            "citation_provider": "crossref",
+        }),
+    )
+    .await;
+    let retry = call(
+        &pool,
+        create_acquisition_request(
+            project_id,
+            Some("legacy-retry"),
+            json!({"seed_dois": ["10.5555/retry"], "max_depth": 3}),
+        ),
+    )
+    .await;
+    assert_eq!(retry.status(), StatusCode::OK);
+    assert_eq!(json_body(retry).await["id"], legacy_run.to_string());
+
+    // The same key and seeds, but the row chose a longer chain than the deployment default.
+    insert_keyed_doi_run(
+        &pool,
+        project_id,
+        "changed-default",
+        json!({
+            "seed_dois": ["10.5555/changed"],
+            "max_depth": 3,
+            "metadata_providers": ["openalex", "crossref"],
+        }),
+    )
+    .await;
+    let conflict = call(
+        &pool,
+        create_acquisition_request(
+            project_id,
+            Some("changed-default"),
+            json!({"seed_dois": ["10.5555/changed"], "max_depth": 3}),
+        ),
+    )
+    .await;
+    assert_eq!(conflict.status(), StatusCode::CONFLICT);
+    assert_eq!(json_body(conflict).await["code"], "IDEMPOTENCY_KEY_REUSED");
+
+    clean_acquisition_projects(&pool, &[project_id], &[legacy_run]).await;
+}
+
+#[tokio::test]
+async fn doi_acquisitions_accept_only_enabled_metadata_providers() {
+    let Some(pool) = database().await else {
+        return;
+    };
+    let project_id = Uuid::new_v4();
+    sqlx::query("INSERT INTO projects (id,name) VALUES ($1,'provider validation test')")
+        .bind(project_id)
+        .execute(&pool)
+        .await
+        .expect("test project should insert");
+
+    for (providers, message) in [
+        (
+            json!(["openalex"]),
+            "openalex is not enabled in this deployment (enabled: crossref)",
+        ),
+        (
+            json!(["crossref", "datacite"]),
+            "datacite is not enabled in this deployment (enabled: crossref)",
+        ),
+        (
+            json!(["pubmed"]),
+            "pubmed is not enabled in this deployment (enabled: crossref)",
+        ),
+    ] {
+        let response = call(
+            &pool,
+            create_acquisition_request(
+                project_id,
+                None,
+                json!({"seed_dois": ["10.5555/provider-validation"], "metadata_providers": providers}),
+            ),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST, "{providers}");
+        assert_eq!(json_body(response).await["message"], message);
+    }
+    let empty = call(
+        &pool,
+        create_acquisition_request(
+            project_id,
+            None,
+            json!({"seed_dois": ["10.5555/provider-validation"], "metadata_providers": []}),
+        ),
+    )
+    .await;
+    assert_eq!(empty.status(), StatusCode::BAD_REQUEST);
+    let runs: i64 = sqlx::query_scalar("SELECT count(*) FROM acquisition_runs WHERE project_id=$1")
+        .bind(project_id)
+        .fetch_one(&pool)
+        .await
+        .expect("run count should load");
+    assert_eq!(runs, 0);
+
+    let created = call(
+        &pool,
+        create_acquisition_request(
+            project_id,
+            Some("provider-retry"),
+            json!({"seed_dois": ["10.5555/provider-validation"], "metadata_providers": ["crossref", "crossref"]}),
+        ),
+    )
+    .await;
+    assert_eq!(created.status(), StatusCode::CREATED);
+    let run_id = json_body(created).await["id"]
+        .as_str()
+        .expect("created acquisition should have an id")
+        .parse::<Uuid>()
+        .expect("acquisition id should be a UUID");
+    let config: serde_json::Value =
+        sqlx::query_scalar("SELECT config FROM acquisition_runs WHERE id=$1")
+            .bind(run_id)
+            .fetch_one(&pool)
+            .await
+            .expect("created config should load");
+    assert_eq!(config["metadata_providers"], json!(["crossref"]));
+    assert!(config.get("metadata_provider").is_none());
+
+    // A retry that omits the chain resolves to the same enabled chain, so it replays the run.
+    let replay = call(
+        &pool,
+        create_acquisition_request(
+            project_id,
+            Some("provider-retry"),
+            json!({"seed_dois": ["10.5555/provider-validation"]}),
+        ),
+    )
+    .await;
+    assert_eq!(replay.status(), StatusCode::OK);
+    assert_eq!(json_body(replay).await["id"], run_id.to_string());
+
+    clean_acquisition_projects(&pool, &[project_id], &[run_id]).await;
+}
+
+#[tokio::test]
+async fn doi_acquisitions_accept_every_provider_under_the_default_chain() {
+    let Some(pool) = database().await else {
+        return;
+    };
+    let project_id = Uuid::new_v4();
+    sqlx::query("INSERT INTO projects (id,name) VALUES ($1,'default chain test')")
+        .bind(project_id)
+        .execute(&pool)
+        .await
+        .expect("test project should insert");
+    let default_chain = deepref_config::IntegrationsConfig {
+        contact_email: TEST_CONTACT_EMAIL.to_owned(),
+        ..Default::default()
+    };
+
+    let mut run_ids = Vec::new();
+    for (key, providers, stored) in [
+        ("datacite-named", json!(["datacite"]), json!(["datacite"])),
+        (
+            "datacite-first",
+            json!(["datacite", "openalex"]),
+            json!(["datacite", "openalex"]),
+        ),
+    ] {
+        let response = call_with_integrations(
+            &pool,
+            create_acquisition_request(
+                project_id,
+                Some(key),
+                json!({"seed_dois": ["10.5555/default-chain"], "metadata_providers": providers}),
+            ),
+            default_chain.clone(),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::CREATED, "{providers}");
+        let run_id = json_body(response).await["id"]
+            .as_str()
+            .expect("created acquisition should have an id")
+            .parse::<Uuid>()
+            .expect("acquisition id should be a UUID");
+        let config: serde_json::Value =
+            sqlx::query_scalar("SELECT config FROM acquisition_runs WHERE id=$1")
+                .bind(run_id)
+                .fetch_one(&pool)
+                .await
+                .expect("created config should load");
+        assert_eq!(config["metadata_providers"], stored, "{providers}");
+        run_ids.push(run_id);
+    }
+
+    let named = call_with_integrations(
+        &pool,
+        create_acquisition_request(
+            project_id,
+            Some("openalex-named"),
+            json!({"seed_dois": ["10.5555/default-chain"], "metadata_providers": ["openalex"]}),
+        ),
+        default_chain.clone(),
+    )
+    .await;
+    assert_eq!(named.status(), StatusCode::CREATED);
+    let named_id = json_body(named).await["id"]
+        .as_str()
+        .expect("created acquisition should have an id")
+        .parse::<Uuid>()
+        .expect("acquisition id should be a UUID");
+    let named_config: serde_json::Value =
+        sqlx::query_scalar("SELECT config FROM acquisition_runs WHERE id=$1")
+            .bind(named_id)
+            .fetch_one(&pool)
+            .await
+            .expect("created config should load");
+    assert_eq!(named_config["metadata_providers"], json!(["openalex"]));
+
+    let omitted = call_with_integrations(
+        &pool,
+        create_acquisition_request(
+            project_id,
+            Some("default-omitted"),
+            json!({"seed_dois": ["10.5555/default-omitted"]}),
+        ),
+        default_chain,
+    )
+    .await;
+    assert_eq!(omitted.status(), StatusCode::CREATED);
+    let omitted_id = json_body(omitted).await["id"]
+        .as_str()
+        .expect("created acquisition should have an id")
+        .parse::<Uuid>()
+        .expect("acquisition id should be a UUID");
+    let omitted_config: serde_json::Value =
+        sqlx::query_scalar("SELECT config FROM acquisition_runs WHERE id=$1")
+            .bind(omitted_id)
+            .fetch_one(&pool)
+            .await
+            .expect("created config should load");
+    assert_eq!(
+        omitted_config["metadata_providers"],
+        json!(["openalex", "crossref", "datacite"])
+    );
+
+    run_ids.extend([named_id, omitted_id]);
+    clean_acquisition_projects(&pool, &[project_id], &run_ids).await;
+}
+
+#[tokio::test]
+async fn the_deployment_chain_is_the_allowlist_and_omitted_names_follow_it() {
+    let Some(pool) = database().await else {
+        return;
+    };
+    let project_id = Uuid::new_v4();
+    sqlx::query("INSERT INTO projects (id,name) VALUES ($1,'allowlist test')")
+        .bind(project_id)
+        .execute(&pool)
+        .await
+        .expect("test project should insert");
+
+    // OpenAlex is outside this deployment's chain, so it is outside the allowlist too.
+    let configured_chain = deepref_config::IntegrationsConfig {
+        contact_email: TEST_CONTACT_EMAIL.to_owned(),
+        metadata_providers: vec![ProviderKind::Crossref, ProviderKind::DataCite],
+        ..Default::default()
+    };
+    let omitted = call_with_integrations(
+        &pool,
+        create_acquisition_request(
+            project_id,
+            None,
+            json!({"seed_dois": ["10.5555/allowlist"]}),
+        ),
+        configured_chain.clone(),
+    )
+    .await;
+    assert_eq!(omitted.status(), StatusCode::CREATED);
+    let omitted_id = json_body(omitted).await["id"]
+        .as_str()
+        .expect("created acquisition should have an id")
+        .parse::<Uuid>()
+        .expect("acquisition id should be a UUID");
+    let config: serde_json::Value =
+        sqlx::query_scalar("SELECT config FROM acquisition_runs WHERE id=$1")
+            .bind(omitted_id)
+            .fetch_one(&pool)
+            .await
+            .expect("created config should load");
+    assert_eq!(
+        config["metadata_providers"],
+        json!(["crossref", "datacite"])
+    );
+
+    let named = call_with_integrations(
+        &pool,
+        create_acquisition_request(
+            project_id,
+            None,
+            json!({"seed_dois": ["10.5555/allowlist-named"], "metadata_providers": ["openalex"]}),
+        ),
+        configured_chain,
+    )
+    .await;
+    assert_eq!(named.status(), StatusCode::BAD_REQUEST);
+    assert_eq!(
+        json_body(named).await["message"],
+        "openalex is not enabled in this deployment (enabled: crossref, datacite)"
+    );
+
+    clean_acquisition_projects(&pool, &[project_id], &[omitted_id]).await;
 }
 
 #[tokio::test]

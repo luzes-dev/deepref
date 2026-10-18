@@ -1,0 +1,255 @@
+{
+  "data": {
+    "id": "10.5281/zenodo.22838416",
+    "type": "dois",
+    "attributes": {
+      "doi": "10.5281/zenodo.22838416",
+      "creators": [
+        {
+          "nameType": "Personal",
+          "givenName": "Saeed",
+          "familyName": "Ghezelbash",
+          "name": "Ghezelbash, Saeed",
+          "nameIdentifiers": [
+            {
+              "nameIdentifierScheme": "ORCID",
+              "nameIdentifier": "0009-0001-9346-8475"
+            }
+          ],
+          "affiliation": []
+        }
+      ],
+      "titles": [
+        {
+          "title": "Dr. Saeed Ghezelbash Public Knowledge Graph"
+        }
+      ],
+      "publisher": "Zenodo",
+      "container": {},
+      "publicationYear": 2026,
+      "subjects": [
+        {
+          "subject": "Saeed Ghezelbash"
+        },
+        {
+          "subject": "Dr. Saeed Ghezelbash"
+        },
+        {
+          "subject": "دکتر سعید قزلباش"
+        },
+        {
+          "subject": "Wikidata Q140287622"
+        },
+        {
+          "subject": "Google KG /g/11nqdfk76c"
+        },
+        {
+          "subject": "ORCID 0009-0001-9346-8475"
+        },
+        {
+          "subject": "Version DOI 10.5281/zenodo.22838416"
+        },
+        {
+          "subject": "physician entity"
+        },
+        {
+          "subject": "aesthetic physician"
+        },
+        {
+          "subject": "Kermanshah"
+        },
+        {
+          "subject": "Iran"
+        },
+        {
+          "subject": "medical knowledge graph"
+        },
+        {
+          "subject": "knowledge graph"
+        },
+        {
+          "subject": "knowledge base"
+        },
+        {
+          "subject": "entity resolution"
+        },
+        {
+          "subject": "JSON-LD"
+        },
+        {
+          "subject": "RDF"
+        },
+        {
+          "subject": "Schema.org"
+        },
+        {
+          "subject": "Wikidata"
+        },
+        {
+          "subject": "FAIR data"
+        },
+        {
+          "subject": "machine-readable data"
+        },
+        {
+          "subject": "question answering"
+        },
+        {
+          "subject": "text retrieval"
+        },
+        {
+          "subject": "AI retrieval"
+        },
+        {
+          "subject": "RAG"
+        },
+        {
+          "subject": "Croissant"
+        },
+        {
+          "subject": "DCAT"
+        },
+        {
+          "subject": "provenance"
+        },
+        {
+          "subject": "aesthetic medicine"
+        },
+        {
+          "subject": "clinical facial assessment"
+        },
+        {
+          "subject": "botulinum toxin"
+        },
+        {
+          "subject": "dermal fillers"
+        },
+        {
+          "subject": "revision assessment"
+        },
+        {
+          "subject": "second opinion"
+        },
+        {
+          "subject": "acne scars"
+        },
+        {
+          "subject": "subcision"
+        },
+        {
+          "subject": "clinical education"
+        },
+        {
+          "subject": "passage-level retrieval"
+        },
+        {
+          "subject": "Kermanshah, Iran"
+        },
+        {
+          "subject": "linked data"
+        },
+        {
+          "subject": "research data"
+        },
+        {
+          "subject": "multilingual retrieval"
+        },
+        {
+          "subject": "reproducibility"
+        }
+      ],
+      "types": {
+        "schemaOrg": "Dataset",
+        "resourceTypeGeneral": "Dataset",
+        "citeproc": "dataset",
+        "bibtex": "misc",
+        "ris": "DATA",
+        "resourceType": ""
+      },
+      "relatedIdentifiers": [
+        {
+          "relationType": "IsDerivedFrom",
+          "resourceTypeGeneral": "Dataset",
+          "relatedIdentifier": "https://www.ghezelbaash.ir/graph.jsonld/dataset",
+          "relatedIdentifierType": "URL"
+        },
+        {
+          "relationType": "IsDerivedFrom",
+          "resourceTypeGeneral": "Software",
+          "relatedIdentifier": "https://github.com/medicaldoctor91/doctor-ghezelbaash",
+          "relatedIdentifierType": "URL"
+        },
+        {
+          "relationType": "IsDescribedBy",
+          "resourceTypeGeneral": "Other",
+          "relatedIdentifier": "https://www.ghezelbaash.ir/",
+          "relatedIdentifierType": "URL"
+        },
+        {
+          "relationType": "IsDescribedBy",
+          "relatedIdentifier": "https://www.ghezelbaash.ir/physician-expertise.md",
+          "relatedIdentifierType": "URL"
+        },
+        {
+          "relationType": "IsReferencedBy",
+          "resourceTypeGeneral": "Dataset",
+          "relatedIdentifier": "https://huggingface.co/datasets/doctor-ghezelbaash/dr-saeid-ghezelbaash-entity-data",
+          "relatedIdentifierType": "URL"
+        },
+        {
+          "relationType": "IsReferencedBy",
+          "relatedIdentifier": "https://www.kaggle.com/datasets/saeedghezelbash/dr-saeed-ghezelbash-knowledge-graph-and-nlp-data",
+          "relatedIdentifierType": "URL"
+        },
+        {
+          "relationType": "IsSupplementTo",
+          "relatedIdentifier": "https://www.wikidata.org/wiki/Q140287622",
+          "relatedIdentifierType": "URL"
+        },
+        {
+          "relationType": "IsSupplementTo",
+          "relatedIdentifier": "https://huggingface.co/datasets/doctor-ghezelbaash/dr-saeid-ghezelbaash-entity-data/tree/81db5d14bf98342a07ae273967be06016a64f9aa",
+          "relatedIdentifierType": "URL"
+        },
+        {
+          "relationType": "IsVersionOf",
+          "relatedIdentifier": "10.5281/zenodo.18765168",
+          "relatedIdentifierType": "DOI"
+        },
+        {
+          "relationType": "References",
+          "resourceTypeGeneral": "Other",
+          "relatedIdentifier": "https://www.wikidata.org/entity/Q140287622",
+          "relatedIdentifierType": "URL"
+        },
+        {
+          "relationType": "References",
+          "relatedIdentifier": "https://huggingface.co/datasets/doctor-ghezelbaash/dr-saeid-ghezelbaash-entity-data/tree/0a12c23cc1935ab4056f4e466325d2594b8a2ffe",
+          "relatedIdentifierType": "URL"
+        }
+      ],
+      "rightsList": [
+        {
+          "rightsIdentifierScheme": "SPDX",
+          "rightsUri": "https://creativecommons.org/licenses/by/4.0/legalcode",
+          "schemeUri": "https://spdx.org/licenses/",
+          "rights": "Creative Commons Attribution 4.0 International",
+          "rightsIdentifier": "cc-by-4.0"
+        }
+      ],
+      "descriptions": [
+        {
+          "descriptionType": "Abstract",
+          "description": "Dr. Saeed Ghezelbash Public Knowledge Graph — preserved Version 1.3.3 dataset. This DOI identifies a selected 24-file research-data distribution with documented in-place maintenance under the Creative Commons Attribution 4.0 license. Its machine-readable files include a JSON-LD and RDF/Turtle knowledge graph, evidence and provenance resources, SHACL shapes, CSV facts with CSVW metadata, source-bound question-answer records, multilingual retrieval queries, and JSON, XML, Markdown and text projections.\nProvenance and reproducibility: The snapshot includes file hashes, release attestation, query references, dataset metadata and evidence assessments. These preserve the origin and scope of individual statements and support reproducible retrieval and graph inspection. The corpus contains attributable first-party educational material and linked external sources; publication here does not establish independent clinical validation, treatment efficacy or a comparative ranking.\nCreator context: Dr. Saeed Ghezelbash / دکتر سعید قزلباش, ORCID 0009-0001-9346-8475, Iran Medical Council registration 167430. The graph separates the physician, the supporting clinic, source evidence and dataset-distribution entities.\nRelated current data access: source-bound passages, question-answer bindings, knowledge graph, evidence assessments, the Kaggle dataset and starter notebook. Their recorded provenance identifies the applicable current release; these links do not replace the Version 1.3.3 record or change its DOI.\nPublication convergence — 2026-10-17: Existing DOI 10.5281/zenodo.22838416 and version 1.3.3 remain unchanged. This record received a documented in-place maintenance correction. Canonical OpenAlex: A5146521397; ORCID: 0009-0001-9346-8475; Wikidata: Q140287622. Canonical dataset IRI: https://www.ghezelbaash.ir/graph.jsonld/dataset. Verified source commit: 8edb4d6f2e224886132297ac5f380bee26cb53cb. Publication run: https://github.com/medicaldoctor91/doctor-ghezelbaash/actions/runs/39067474030. Hugging Face revision: a792e71d7edcd9b08be2b64a18d17c935f61ae2c. Website: canonical website; Kaggle: current distribution. Graph and query bindings use current canonical IRIs and the same bytes as the verified website/Hub resources; this is the selected 24-file preservation subset."
+        },
+        {
+          "descriptionType": "Other",
+          "description": "Canonical Dataset IRI: https://www.ghezelbaash.ir/graph.jsonld/dataset. Exact Version DOI: 10.5281/zenodo.22838416."
+        }
+      ],
+      "url": "https://zenodo.org/doi/10.5281/zenodo.22838416",
+      "referenceCount": 0,
+      "citationCount": 0
+    }
+  }
+}

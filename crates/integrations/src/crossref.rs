@@ -10,25 +10,27 @@ mod wire;
 use std::time::Duration;
 
 use deepref_application::{
-    CitationProvider, MetadataProvider, ProviderError, ProviderFuture, RawAuthor, RawIdentifier,
-    RawRecord,
+    FetchedWork, ProviderError, ProviderFetchError, ProviderFuture, ProviderPermit, RawAuthor,
+    RawIdentifier, RawRecord, WorkProvider,
 };
 use deepref_domain::WorkWithReferences;
-use deepref_domain::{IdentifierScheme, normalize_doi};
+use deepref_domain::{IdentifierScheme, ProviderKind, Reference, normalize_doi};
 use reqwest::header;
 use serde_json::{Value, json};
 
-pub use abstracts::{AbstractEnricher, AbstractSource, clean_abstract};
+pub(crate) use abstracts::parse_openalex;
+pub use abstracts::{AbstractEnricher, AbstractSource, OpenAlexLookup, clean_abstract};
 pub use error::CrossrefError;
 pub use search::{CrossrefSearchError, search_crossref};
 pub use status::{StatusClassification, classify_status};
 
 use wire::CrossrefWorksResponse;
 
-const CROSSREF_BASE: &str = "https://api.crossref.org";
+pub const CROSSREF_BASE: &str = "https://api.crossref.org";
 
-/// The one Crossref client. `fetch_work` returns what Crossref holds;
-/// `fetch_work_with_references` also fills a missing abstract from the enricher.
+/// The one Crossref client. Every lookup goes through the `WorkProvider` port, so
+/// each request takes a permit. The enricher fills a missing abstract from Europe
+/// PMC or OpenAlex.
 #[derive(Debug, Clone)]
 pub struct CrossrefClient {
     client: reqwest::Client,
@@ -43,13 +45,22 @@ impl CrossrefClient {
     /// Builds the client for `api.crossref.org` with the deployment's contact
     /// address and the configured abstract enrichment.
     pub fn new(config: &deepref_config::IntegrationsConfig) -> Result<Self, ProviderError> {
+        Self::for_base_url(CROSSREF_BASE, config)
+    }
+
+    /// The client for `base_url`, with the deployment's contact address and abstract
+    /// enrichment. Tests point it at a mock server this way.
+    pub fn for_base_url(
+        base_url: impl Into<String>,
+        config: &deepref_config::IntegrationsConfig,
+    ) -> Result<Self, ProviderError> {
         let mailto = config.contact_email.clone();
         let enricher = if config.abstract_enrichment {
             AbstractEnricher::new(mailto.clone()).ok()
         } else {
             None
         };
-        Self::with_base_url(CROSSREF_BASE, mailto)
+        Self::with_base_url(base_url, mailto)
             .map(|client| Self { enricher, ..client })
             .map_err(|error| ProviderError::Request(error.to_string()))
     }
@@ -85,13 +96,22 @@ impl CrossrefClient {
         self
     }
 
-    pub async fn fetch_work(&self, doi: &str) -> Result<WorkWithReferences, CrossrefError> {
+    /// One lookup with the client's retry policy. The caller's permit covers the
+    /// first request, and each retry takes another.
+    async fn fetch_metered(
+        &self,
+        doi: &str,
+        permit: &dyn ProviderPermit,
+    ) -> Result<WorkWithReferences, CrossrefError> {
         let doi = deepref_domain::normalize_doi(doi)?;
         let encoded = urlencoding::encode(&doi);
         let url = format!("{}/works/{}?mailto={}", self.base_url, encoded, self.mailto);
 
         let mut last_retryable = None;
         for attempt in 1..=self.max_attempts {
+            if attempt > 1 {
+                permit.acquire(ProviderKind::Crossref).await?;
+            }
             let response = self
                 .client
                 .get(&url)
@@ -133,20 +153,58 @@ impl CrossrefClient {
         )))
     }
 
-    pub async fn fetch_work_with_references(
+    /// The DOI's reference list from Crossref, unresolved entries included. The lookup
+    /// is free, so OpenAlex uses it when its own reference resolution runs out of
+    /// budget. The lookup takes its own permit.
+    pub async fn fetch_reference_list(
         &self,
         doi: &str,
-    ) -> Result<WorkWithReferences, CrossrefError> {
-        let work = self.fetch_work(doi).await?;
-        Ok(self.enrich_abstract(work).await)
+        permit: &dyn ProviderPermit,
+    ) -> Result<Vec<Reference>, CrossrefError> {
+        permit.acquire(ProviderKind::Crossref).await?;
+        Ok(self.fetch_metered(doi, permit).await?.references)
     }
 
-    /// Fills a missing abstract from Europe PMC / OpenAlex. Never fails.
-    async fn enrich_abstract(&self, mut work: WorkWithReferences) -> WorkWithReferences {
+    /// The lookup for a DOI the chain already sent to OpenAlex. It is the same as
+    /// `fetch_work_with_references` except that the abstract fallback skips OpenAlex and
+    /// still tries Europe PMC.
+    pub async fn fetch_after_openalex(
+        &self,
+        doi: &str,
+        permit: &dyn ProviderPermit,
+    ) -> Result<FetchedWork, ProviderFetchError> {
+        self.fetch_work(doi, permit, OpenAlexLookup::Disabled).await
+    }
+
+    /// One lookup with the client's retry policy, then the abstract fallback.
+    async fn fetch_work(
+        &self,
+        doi: &str,
+        permit: &dyn ProviderPermit,
+        openalex: OpenAlexLookup,
+    ) -> Result<FetchedWork, ProviderFetchError> {
+        let work = self
+            .fetch_metered(doi, permit)
+            .await
+            .map_err(CrossrefError::into_fetch_error)?;
+        Ok(FetchedWork {
+            work: self.enrich_abstract(work, openalex).await,
+            provider: ProviderKind::Crossref,
+            reference_gap: None,
+        })
+    }
+
+    /// Fills a missing abstract from Europe PMC, and from OpenAlex unless `openalex`
+    /// disables it. Never fails.
+    async fn enrich_abstract(
+        &self,
+        mut work: WorkWithReferences,
+        openalex: OpenAlexLookup,
+    ) -> WorkWithReferences {
         let source = if work.work.abstract_text.is_some() {
             AbstractSource::Crossref
         } else if let Some(enricher) = &self.enricher
-            && let Some((text, source)) = enricher.lookup(&work.work.doi).await
+            && let Some((text, source)) = enricher.lookup(&work.work.doi, openalex).await
         {
             work.work.abstract_text = Some(text);
             source
@@ -160,78 +218,74 @@ impl CrossrefClient {
     }
 }
 
-async fn sleep_backoff(attempt: usize) {
+pub(crate) async fn sleep_backoff(attempt: usize) {
     let millis = 250_u64.saturating_mul(2_u64.saturating_pow(attempt as u32 - 1));
     tokio::time::sleep(Duration::from_millis(millis.min(5_000))).await;
 }
 
-impl MetadataProvider for CrossrefClient {
-    fn name(&self) -> &'static str {
-        "crossref"
+/// The router's entry point. The caller's permit covers the first request, and
+/// retries take their own.
+impl WorkProvider for CrossrefClient {
+    fn kind(&self) -> ProviderKind {
+        ProviderKind::Crossref
     }
 
-    fn fetch_metadata<'a>(
+    fn fetch_work_with_references<'a>(
         &'a self,
-        identifier: &'a RawIdentifier,
-    ) -> ProviderFuture<'a, RawRecord> {
+        doi: &'a str,
+        permit: &'a dyn ProviderPermit,
+    ) -> ProviderFuture<'a, FetchedWork, ProviderFetchError> {
+        Box::pin(self.fetch_work(doi, permit, OpenAlexLookup::Enabled))
+    }
+
+    fn fetch_work_after<'a>(
+        &'a self,
+        doi: &'a str,
+        tried: &'a [ProviderKind],
+        permit: &'a dyn ProviderPermit,
+    ) -> ProviderFuture<'a, FetchedWork, ProviderFetchError> {
+        if tried.contains(&ProviderKind::OpenAlex) {
+            Box::pin(self.fetch_after_openalex(doi, permit))
+        } else {
+            self.fetch_work_with_references(doi, permit)
+        }
+    }
+
+    fn reference_list<'a>(
+        &'a self,
+        doi: &'a str,
+        permit: &'a dyn ProviderPermit,
+    ) -> ProviderFuture<'a, Vec<Reference>, ProviderFetchError> {
         Box::pin(async move {
-            if identifier.scheme != IdentifierScheme::Doi {
-                return Err(ProviderError::UnsupportedIdentifier(
-                    identifier.value.clone(),
-                ));
+            self.fetch_reference_list(doi, permit)
+                .await
+                .map_err(CrossrefError::into_fetch_error)
+        })
+    }
+}
+
+impl CrossrefError {
+    /// Classifies a failed lookup for the provider chain. Status and transport
+    /// failures retry, and everything else stops the chain. The worker's job-level
+    /// retry splits the same errors the same way.
+    fn into_fetch_error(self) -> ProviderFetchError {
+        let provider = ProviderKind::Crossref;
+        let message = self.to_string();
+        match self {
+            Self::NotFound(doi) => ProviderFetchError::NotFound { provider, doi },
+            Self::InvalidDoi(_) => ProviderFetchError::Rejected {
+                provider,
+                reason: message,
+            },
+            Self::RetryableStatus(_) | Self::Request(_) | Self::Permit(_) => {
+                ProviderFetchError::Retryable { provider, message }
             }
-            let work = self
-                .fetch_work_with_references(&identifier.normalized_value)
-                .await
-                .map_err(|error| ProviderError::Request(error.to_string()))?;
-            Ok(raw_record_from_crossref_work(work))
-        })
+            Self::MissingContactEmail
+            | Self::Blocked(_)
+            | Self::NonRetryableStatus(_)
+            | Self::Json(_) => ProviderFetchError::Fatal { provider, message },
+        }
     }
-}
-
-impl CitationProvider for CrossrefClient {
-    fn name(&self) -> &'static str {
-        "crossref"
-    }
-
-    fn fetch_citations<'a>(&'a self, record: &'a RawRecord) -> ProviderFuture<'a, Vec<RawRecord>> {
-        Box::pin(async move {
-            let doi = record
-                .source_identifiers
-                .iter()
-                .find(|identifier| identifier.scheme == IdentifierScheme::Doi)
-                .ok_or_else(|| {
-                    ProviderError::UnsupportedIdentifier("record has no DOI".to_owned())
-                })?;
-            let work = self
-                .fetch_work(&doi.normalized_value)
-                .await
-                .map_err(|error| ProviderError::Request(error.to_string()))?;
-            Ok(work
-                .references
-                .into_iter()
-                .filter_map(|reference| reference.doi)
-                .filter_map(|target| citation_record(doi, target))
-                .collect())
-        })
-    }
-}
-
-fn citation_record(cited_by: &RawIdentifier, target: String) -> Option<RawRecord> {
-    let normalized = normalize_doi(&target).ok()?;
-    Some(RawRecord {
-        source_identifiers: vec![RawIdentifier {
-            scheme: IdentifierScheme::Doi,
-            value: target.clone(),
-            normalized_value: normalized,
-        }],
-        title: None,
-        abstract_text: None,
-        authors: Vec::new(),
-        publication_year: None,
-        journal: None,
-        raw: json!({ "source": "crossref", "cited_by": cited_by.normalized_value, "doi": target }),
-    })
 }
 
 #[must_use]
@@ -279,8 +333,10 @@ mod tests {
     use super::*;
     use crate::parse_import;
     use chrono::Utc;
+    use deepref_application::PermitError;
     use deepref_domain::ImportFormat;
     use deepref_domain::{FetchStatus, Work, WorkWithReferences};
+    use reqwest::StatusCode;
 
     #[test]
     fn crossref_adapter_emits_the_application_raw_record() {
@@ -364,19 +420,293 @@ mod tests {
         assert_eq!(provider_record.journal, imported.journal);
     }
 
-    #[test]
-    fn citation_targets_use_domain_doi_normalization() {
-        let source = RawIdentifier {
-            scheme: IdentifierScheme::Doi,
-            value: "10.1000/source".to_owned(),
-            normalized_value: "10.1000/source".to_owned(),
-        };
-        let record = citation_record(&source, "https://doi.org/10.1000/TARGET.".to_owned())
-            .expect("valid DOI reference should be emitted");
-        assert_eq!(
-            record.source_identifiers[0].normalized_value,
-            "10.1000/target"
+    const DOI: &str = "10.1000/example";
+    const WORK_BODY: &str = r#"{"message":{"title":["Example"],"reference":[{"DOI":"10.1000/CITED"},{"key":"ref1","unstructured":"A reference without a DOI"}],"is-referenced-by-count":3,"references-count":2}}"#;
+
+    /// Serves the scripted responses in order, one connection each, then stops.
+    async fn scripted_server(responses: Vec<(&'static str, &'static str)>) -> String {
+        use tokio::io::{AsyncReadExt, AsyncWriteExt};
+        let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+        let address = listener.local_addr().unwrap();
+        tokio::spawn(async move {
+            for (status_line, body) in responses {
+                let Ok((mut socket, _)) = listener.accept().await else {
+                    return;
+                };
+                let mut request = [0_u8; 4096];
+                let _ = socket.read(&mut request).await;
+                let response = format!(
+                    "HTTP/1.1 {status_line}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
+                    body.len()
+                );
+                let _ = socket.write_all(response.as_bytes()).await;
+            }
+        });
+        format!("http://{address}")
+    }
+
+    #[derive(Default)]
+    struct RecordingPermit(std::sync::Mutex<Vec<ProviderKind>>);
+
+    impl RecordingPermit {
+        fn taken(&self) -> Vec<ProviderKind> {
+            self.0.lock().expect("permit log").clone()
+        }
+    }
+
+    impl ProviderPermit for RecordingPermit {
+        fn acquire<'a>(&'a self, provider: ProviderKind) -> ProviderFuture<'a, (), PermitError> {
+            Box::pin(async move {
+                self.0.lock().expect("permit log").push(provider);
+                Ok(())
+            })
+        }
+    }
+
+    fn test_client(base_url: String, max_attempts: usize) -> CrossrefClient {
+        CrossrefClient::with_base_url(base_url, "ops@example.org")
+            .expect("client should build")
+            .with_max_attempts(max_attempts)
+    }
+
+    #[tokio::test]
+    async fn a_found_work_is_answered_as_crossref_on_the_callers_permit() {
+        let base = scripted_server(vec![("200 OK", WORK_BODY)]).await;
+        let client = test_client(base, 1);
+        let permit = RecordingPermit::default();
+
+        let fetched = WorkProvider::fetch_work_with_references(&client, DOI, &permit)
+            .await
+            .expect("crossref should answer");
+
+        assert_eq!(client.kind(), ProviderKind::Crossref);
+        assert_eq!(fetched.provider, ProviderKind::Crossref);
+        assert_eq!(fetched.work.work.title.as_deref(), Some("Example"));
+        assert_eq!(fetched.work.references.len(), 2);
+        assert!(
+            permit.taken().is_empty(),
+            "the first request runs on the permit the caller took"
         );
-        assert!(citation_record(&source, "not-a-doi".to_owned()).is_none());
+    }
+
+    #[tokio::test]
+    async fn a_missing_work_is_not_found() {
+        let base = scripted_server(vec![("404 Not Found", "{}")]).await;
+        let client = test_client(base, 1);
+
+        let error =
+            WorkProvider::fetch_work_with_references(&client, DOI, &RecordingPermit::default())
+                .await
+                .expect_err("a 404 should not answer");
+
+        assert_eq!(
+            error,
+            ProviderFetchError::NotFound {
+                provider: ProviderKind::Crossref,
+                doi: DOI.to_owned(),
+            }
+        );
+    }
+
+    #[tokio::test]
+    async fn a_rate_limited_lookup_retries_on_a_new_permit_and_then_answers() {
+        let base =
+            scripted_server(vec![("429 Too Many Requests", "{}"), ("200 OK", WORK_BODY)]).await;
+        let client = test_client(base, 2);
+        let permit = RecordingPermit::default();
+
+        let fetched = WorkProvider::fetch_work_with_references(&client, DOI, &permit)
+            .await
+            .expect("the retry should answer");
+
+        assert_eq!(fetched.provider, ProviderKind::Crossref);
+        assert_eq!(
+            permit.taken(),
+            vec![ProviderKind::Crossref],
+            "the retry takes exactly one permit"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_server_error_that_persists_is_retryable() {
+        let base = scripted_server(vec![("500 Internal Server Error", "{}")]).await;
+        let client = test_client(base, 1);
+
+        let error =
+            WorkProvider::fetch_work_with_references(&client, DOI, &RecordingPermit::default())
+                .await
+                .expect_err("a 500 should not answer");
+
+        match error {
+            ProviderFetchError::Retryable { provider, message } => {
+                assert_eq!(provider, ProviderKind::Crossref);
+                assert!(
+                    message.contains("500"),
+                    "the message names the status: {message}"
+                );
+            }
+            other => panic!("expected a retryable failure, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn the_reference_list_helper_keeps_entries_without_a_doi_and_takes_a_permit() {
+        let base = scripted_server(vec![("200 OK", WORK_BODY)]).await;
+        let client = test_client(base, 1);
+        let permit = RecordingPermit::default();
+
+        let references = client
+            .fetch_reference_list(DOI, &permit)
+            .await
+            .expect("the lookup should succeed");
+
+        assert_eq!(references.len(), 2);
+        assert_eq!(references[0].doi.as_deref(), Some("10.1000/cited"));
+        assert_eq!(references[1].doi, None);
+        assert_eq!(
+            references[1].raw_unstructured.as_deref(),
+            Some("A reference without a DOI")
+        );
+        assert_eq!(permit.taken(), vec![ProviderKind::Crossref]);
+    }
+
+    const NO_EUROPE_PMC_MATCH: &str = r#"{"resultList":{"result":[]}}"#;
+    const OPENALEX_ABSTRACT: &str = r#"{"abstract_inverted_index":{"Hello":[0],"world":[1]}}"#;
+
+    /// A Crossref client whose abstract fallback reads from the given Europe PMC and
+    /// OpenAlex servers.
+    fn client_with_enricher(
+        crossref: String,
+        europe_pmc: String,
+        openalex: String,
+    ) -> CrossrefClient {
+        let mut client = test_client(crossref, 1);
+        client.enricher = Some(
+            AbstractEnricher::with_base_urls(europe_pmc, openalex, "ops@example.org")
+                .expect("enricher should build"),
+        );
+        client
+    }
+
+    #[tokio::test]
+    async fn a_fallback_after_openalex_skips_the_openalex_abstract_step() {
+        let client = client_with_enricher(
+            scripted_server(vec![("200 OK", WORK_BODY)]).await,
+            scripted_server(vec![("200 OK", NO_EUROPE_PMC_MATCH)]).await,
+            scripted_server(vec![("200 OK", OPENALEX_ABSTRACT)]).await,
+        );
+
+        let fetched = client
+            .fetch_after_openalex(DOI, &RecordingPermit::default())
+            .await
+            .expect("crossref should answer");
+
+        assert_eq!(
+            fetched.work.work.abstract_text, None,
+            "OpenAlex was already asked, so the abstract step does not ask it again"
+        );
+        assert!(fetched.work.raw.get("deepref_abstract_source").is_none());
+    }
+
+    #[tokio::test]
+    async fn the_default_lookup_still_takes_the_abstract_from_openalex() {
+        let client = client_with_enricher(
+            scripted_server(vec![("200 OK", WORK_BODY)]).await,
+            scripted_server(vec![("200 OK", NO_EUROPE_PMC_MATCH)]).await,
+            scripted_server(vec![("200 OK", OPENALEX_ABSTRACT)]).await,
+        );
+
+        let fetched =
+            WorkProvider::fetch_work_with_references(&client, DOI, &RecordingPermit::default())
+                .await
+                .expect("crossref should answer");
+
+        assert_eq!(
+            fetched.work.work.abstract_text.as_deref(),
+            Some("Hello world")
+        );
+        assert_eq!(
+            fetched.work.raw["deepref_abstract_source"],
+            json!("openalex")
+        );
+    }
+
+    #[tokio::test]
+    async fn the_port_skips_the_openalex_abstract_step_only_when_openalex_tried_the_doi() {
+        let skipped = client_with_enricher(
+            scripted_server(vec![("200 OK", WORK_BODY)]).await,
+            scripted_server(vec![("200 OK", NO_EUROPE_PMC_MATCH)]).await,
+            scripted_server(vec![("200 OK", OPENALEX_ABSTRACT)]).await,
+        );
+        let fetched = WorkProvider::fetch_work_after(
+            &skipped,
+            DOI,
+            &[ProviderKind::OpenAlex],
+            &RecordingPermit::default(),
+        )
+        .await
+        .expect("crossref should answer");
+        assert_eq!(fetched.work.work.abstract_text, None);
+
+        let asked = client_with_enricher(
+            scripted_server(vec![("200 OK", WORK_BODY)]).await,
+            scripted_server(vec![("200 OK", NO_EUROPE_PMC_MATCH)]).await,
+            scripted_server(vec![("200 OK", OPENALEX_ABSTRACT)]).await,
+        );
+        let fetched = WorkProvider::fetch_work_after(&asked, DOI, &[], &RecordingPermit::default())
+            .await
+            .expect("crossref should answer");
+        assert_eq!(
+            fetched.work.work.abstract_text.as_deref(),
+            Some("Hello world")
+        );
+    }
+
+    #[tokio::test]
+    async fn the_port_reads_the_reference_list_through_the_helper() {
+        let client = test_client(scripted_server(vec![("200 OK", WORK_BODY)]).await, 1);
+        let permit = RecordingPermit::default();
+
+        let references = WorkProvider::reference_list(&client, DOI, &permit)
+            .await
+            .expect("the reference list should load");
+
+        assert_eq!(references.len(), 2);
+        assert_eq!(references[0].doi.as_deref(), Some("10.1000/cited"));
+        assert_eq!(permit.taken(), vec![ProviderKind::Crossref]);
+    }
+
+    #[test]
+    fn each_crossref_failure_maps_to_the_outcome_the_chain_acts_on() {
+        let provider = ProviderKind::Crossref;
+        let invalid = deepref_domain::normalize_doi("not a doi").expect_err("not a DOI");
+
+        assert_eq!(
+            CrossrefError::NotFound(DOI.to_owned()).into_fetch_error(),
+            ProviderFetchError::NotFound {
+                provider,
+                doi: DOI.to_owned(),
+            }
+        );
+        assert!(matches!(
+            CrossrefError::InvalidDoi(invalid).into_fetch_error(),
+            ProviderFetchError::Rejected { .. }
+        ));
+        assert!(matches!(
+            CrossrefError::RetryableStatus(StatusCode::BAD_GATEWAY).into_fetch_error(),
+            ProviderFetchError::Retryable { .. }
+        ));
+        assert!(matches!(
+            CrossrefError::Permit(PermitError("limiter is down".to_owned())).into_fetch_error(),
+            ProviderFetchError::Retryable { .. }
+        ));
+        assert!(matches!(
+            CrossrefError::Blocked(StatusCode::FORBIDDEN).into_fetch_error(),
+            ProviderFetchError::Fatal { .. }
+        ));
+        assert!(matches!(
+            CrossrefError::NonRetryableStatus(StatusCode::BAD_REQUEST).into_fetch_error(),
+            ProviderFetchError::Fatal { .. }
+        ));
     }
 }

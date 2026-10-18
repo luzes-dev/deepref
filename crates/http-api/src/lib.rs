@@ -43,6 +43,10 @@ pub async fn serve_with_shutdown(
             "DEEPREF_CONTACT_EMAIL is not set; DOI imports, PubMed imports and open-access lookups will be refused"
         );
     }
+    tracing::info!(
+        metadata_providers = %config.runtime.integrations.metadata_chain_label(),
+        "metadata provider chain configured"
+    );
     let ai_config = &config.runtime.ai;
     for notice in ai_config.deprecations() {
         tracing::warn!("{notice}");

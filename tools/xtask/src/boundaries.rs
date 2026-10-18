@@ -37,8 +37,8 @@ impl Layer {
             Review, Tooling, Worker,
         };
         match self {
-            Domain | Configuration => false,
-            Application | Ai => target == Domain,
+            Domain => false,
+            Application | Ai | Configuration => target == Domain,
             Review => matches!(target, Ai | Application | Domain),
             Adapter => matches!(target, Adapter | Application | Configuration | Domain),
             Persistence => matches!(target, Ai | Application | Adapter | Domain | Review),

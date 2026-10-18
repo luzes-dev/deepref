@@ -1,0 +1,645 @@
+{
+  "id": "https://openalex.org/W2626778328",
+  "doi": "https://doi.org/10.65215/2q58a426",
+  "display_name": "Attention Is All You Need",
+  "publication_year": 2025,
+  "publication_date": "2025-08-23",
+  "type": "preprint",
+  "primary_location": {
+    "id": "doi:10.65215/2q58a426",
+    "doi": "https://doi.org/10.65215/2q58a426",
+    "is_oa": false,
+    "landing_page_url": "https://doi.org/10.65215/2q58a426",
+    "pdf_url": null,
+    "source": null,
+    "license": null,
+    "license_id": null,
+    "version": "acceptedVersion",
+    "is_accepted": true,
+    "is_published": false,
+    "raw_source_name": null,
+    "raw_type": "posted-content"
+  },
+  "cited_by_count": 77978,
+  "referenced_works": [
+    "https://openalex.org/W1632114991",
+    "https://openalex.org/W1810943226",
+    "https://openalex.org/W1902237438",
+    "https://openalex.org/W2113691817",
+    "https://openalex.org/W2126433015",
+    "https://openalex.org/W2139621418",
+    "https://openalex.org/W2163568299",
+    "https://openalex.org/W2173051530",
+    "https://openalex.org/W2194775991",
+    "https://openalex.org/W2259472270",
+    "https://openalex.org/W2267186426",
+    "https://openalex.org/W2289899728",
+    "https://openalex.org/W2514713644",
+    "https://openalex.org/W2525778437",
+    "https://openalex.org/W2545625743",
+    "https://openalex.org/W2586050494",
+    "https://openalex.org/W2594990650",
+    "https://openalex.org/W2605203995",
+    "https://openalex.org/W2612675303",
+    "https://openalex.org/W2613904329",
+    "https://openalex.org/W2951008357",
+    "https://openalex.org/W2951583185",
+    "https://openalex.org/W2952339051",
+    "https://openalex.org/W2962784628",
+    "https://openalex.org/W2963069010",
+    "https://openalex.org/W2963991316",
+    "https://openalex.org/W2964121744",
+    "https://openalex.org/W2964308564"
+  ],
+  "referenced_works_count": 28,
+  "best_oa_location": {
+    "id": "doi:10.65215/r5bs2d54",
+    "doi": "https://doi.org/10.65215/r5bs2d54",
+    "is_oa": true,
+    "landing_page_url": "https://doi.org/10.65215/r5bs2d54",
+    "pdf_url": "https://langtaosha.org.cn/index.php/lts/preprint/download/10/108",
+    "source": null,
+    "license": null,
+    "license_id": null,
+    "version": "acceptedVersion",
+    "is_accepted": true,
+    "is_published": false,
+    "raw_source_name": null,
+    "raw_type": "posted-content"
+  },
+  "locations": [
+    {
+      "id": "doi:10.65215/2q58a426",
+      "doi": "https://doi.org/10.65215/2q58a426",
+      "is_oa": false,
+      "landing_page_url": "https://doi.org/10.65215/2q58a426",
+      "pdf_url": null,
+      "source": null,
+      "license": null,
+      "license_id": null,
+      "version": "acceptedVersion",
+      "is_accepted": true,
+      "is_published": false,
+      "raw_source_name": null,
+      "raw_type": "posted-content"
+    },
+    {
+      "id": "doi:10.65215/ctdc8e75",
+      "doi": "https://doi.org/10.65215/ctdc8e75",
+      "is_oa": false,
+      "landing_page_url": "https://doi.org/10.65215/ctdc8e75",
+      "pdf_url": null,
+      "source": null,
+      "license": null,
+      "license_id": null,
+      "version": "acceptedVersion",
+      "is_accepted": true,
+      "is_published": false,
+      "raw_source_name": null,
+      "raw_type": "posted-content"
+    }
+  ],
+  "is_retracted": false,
+  "is_paratext": false,
+  "ids": {
+    "openalex": "https://openalex.org/W2626778328",
+    "doi": "https://doi.org/10.65215/2q58a426",
+    "mag": "2626778328"
+  },
+  "topics": [
+    {
+      "id": "https://openalex.org/T10181",
+      "display_name": "Natural Language Processing Techniques",
+      "score": 0.7821999788284302,
+      "subfield": {
+        "id": "https://openalex.org/subfields/1702",
+        "display_name": "Artificial Intelligence"
+      },
+      "field": {
+        "id": "https://openalex.org/fields/17",
+        "display_name": "Computer Science"
+      },
+      "domain": {
+        "id": "https://openalex.org/domains/3",
+        "display_name": "Physical Sciences"
+      }
+    },
+    {
+      "id": "https://openalex.org/T10028",
+      "display_name": "Topic Modeling",
+      "score": 0.19449999928474426,
+      "subfield": {
+        "id": "https://openalex.org/subfields/1702",
+        "display_name": "Artificial Intelligence"
+      },
+      "field": {
+        "id": "https://openalex.org/fields/17",
+        "display_name": "Computer Science"
+      },
+      "domain": {
+        "id": "https://openalex.org/domains/3",
+        "display_name": "Physical Sciences"
+      }
+    }
+  ],
+  "authorships": [
+    {
+      "author_position": "first",
+      "author": {
+        "id": "https://openalex.org/A5103024730",
+        "display_name": "Ashish Vaswani",
+        "orcid": "https://orcid.org/0000-0002-7794-2085",
+        "observed_orcids": [
+          "https://orcid.org/0000-0002-7794-2085"
+        ]
+      },
+      "institutions": [
+        {
+          "id": "https://openalex.org/I1291425158",
+          "display_name": "Google (United States)",
+          "ror": "https://ror.org/00njsd438",
+          "country_code": "US",
+          "type": "company",
+          "lineage": [
+            "https://openalex.org/I1291425158",
+            "https://openalex.org/I4210128969"
+          ]
+        }
+      ],
+      "countries": [
+        "US"
+      ],
+      "is_corresponding": false,
+      "raw_author_name": "Ashish Vaswani",
+      "raw_affiliation_strings": [
+        "Google Brain",
+        "Google (United States), Mountain View, United States"
+      ],
+      "raw_orcid": null,
+      "affiliations": [
+        {
+          "raw_affiliation_string": "Google Brain",
+          "institution_ids": [
+            "https://openalex.org/I1291425158"
+          ]
+        },
+        {
+          "raw_affiliation_string": "Google (United States), Mountain View, United States",
+          "institution_ids": [
+            "https://openalex.org/I1291425158"
+          ]
+        }
+      ]
+    },
+    {
+      "author_position": "middle",
+      "author": {
+        "id": "https://openalex.org/A5021878400",
+        "display_name": "Noam Shazeer",
+        "orcid": null,
+        "observed_orcids": []
+      },
+      "institutions": [
+        {
+          "id": "https://openalex.org/I1291425158",
+          "display_name": "Google (United States)",
+          "ror": "https://ror.org/00njsd438",
+          "country_code": "US",
+          "type": "company",
+          "lineage": [
+            "https://openalex.org/I1291425158",
+            "https://openalex.org/I4210128969"
+          ]
+        }
+      ],
+      "countries": [
+        "US"
+      ],
+      "is_corresponding": false,
+      "raw_author_name": "Noam Shazeer",
+      "raw_affiliation_strings": [
+        "Google Brain",
+        "Google (United States), Mountain View, United States"
+      ],
+      "raw_orcid": null,
+      "affiliations": [
+        {
+          "raw_affiliation_string": "Google Brain",
+          "institution_ids": [
+            "https://openalex.org/I1291425158"
+          ]
+        },
+        {
+          "raw_affiliation_string": "Google (United States), Mountain View, United States",
+          "institution_ids": [
+            "https://openalex.org/I1291425158"
+          ]
+        }
+      ]
+    }
+  ],
+  "abstract_inverted_index": {
+    "The": [
+      0,
+      18
+    ],
+    "dominant": [
+      1
+    ],
+    "sequence": [
+      2
+    ],
+    "transduction": [
+      3
+    ],
+    "models": [
+      4,
+      21,
+      60,
+      137
+    ],
+    "are": [
+      5
+    ],
+    "based": [
+      6,
+      41
+    ],
+    "on": [
+      7,
+      43,
+      53,
+      82,
+      124
+    ],
+    "complex": [
+      8
+    ],
+    "recurrent": [
+      9
+    ],
+    "or": [
+      10
+    ],
+    "convolutional": [
+      11
+    ],
+    "neural": [
+      12
+    ],
+    "networks": [
+      13
+    ],
+    "in": [
+      14,
+      64
+    ],
+    "an": [
+      15,
+      29
+    ],
+    "encoder-decoder": [
+      16
+    ],
+    "configuration.": [
+      17
+    ],
+    "best": [
+      19,
+      93,
+      136
+    ],
+    "performing": [
+      20
+    ],
+    "also": [
+      22
+    ],
+    "connect": [
+      23
+    ],
+    "the": [
+      24,
+      39,
+      83,
+      91,
+      102,
+      131,
+      135,
+      139,
+      144
+    ],
+    "encoder": [
+      25
+    ],
+    "and": [
+      26,
+      49,
+      70,
+      162
+    ],
+    "decoder": [
+      27
+    ],
+    "through": [
+      28
+    ],
+    "attention": [
+      30,
+      44
+    ],
+    "mechanism.": [
+      31
+    ],
+    "We": [
+      32,
+      141
+    ],
+    "propose": [
+      33
+    ],
+    "a": [
+      34,
+      111,
+      127
+    ],
+    "new": [
+      35,
+      112
+    ],
+    "simple": [
+      36
+    ],
+    "network": [
+      37
+    ],
+    "architecture,": [
+      38
+    ],
+    "Transformer,": [
+      40
+    ],
+    "solely": [
+      42
+    ],
+    "mechanisms,": [
+      45
+    ],
+    "dispensing": [
+      46
+    ],
+    "with": [
+      47,
+      160
+    ],
+    "recurrence": [
+      48
+    ],
+    "convolutions": [
+      50
+    ],
+    "entirely.": [
+      51
+    ],
+    "Experiments": [
+      52
+    ],
+    "two": [
+      54
+    ],
+    "machine": [
+      55
+    ],
+    "translation": [
+      56,
+      87,
+      106
+    ],
+    "tasks": [
+      57,
+      150
+    ],
+    "show": [
+      58,
+      142
+    ],
+    "these": [
+      59
+    ],
+    "to": [
+      61,
+      75,
+      148,
+      155
+    ],
+    "be": [
+      62
+    ],
+    "superior": [
+      63
+    ],
+    "quality": [
+      65
+    ],
+    "while": [
+      66
+    ],
+    "being": [
+      67
+    ],
+    "more": [
+      68
+    ],
+    "parallelizable": [
+      69
+    ],
+    "requiring": [
+      71
+    ],
+    "significantly": [
+      72
+    ],
+    "less": [
+      73
+    ],
+    "time": [
+      74
+    ],
+    "train.": [
+      76
+    ],
+    "Our": [
+      77
+    ],
+    "model": [
+      78,
+      109
+    ],
+    "achieves": [
+      79
+    ],
+    "28.4": [
+      80
+    ],
+    "BLEU": [
+      81,
+      115
+    ],
+    "WMT": [
+      84,
+      103
+    ],
+    "2014": [
+      85,
+      104
+    ],
+    "English-to-German": [
+      86
+    ],
+    "task,": [
+      88,
+      107
+    ],
+    "improving": [
+      89
+    ],
+    "over": [
+      90,
+      98
+    ],
+    "existing": [
+      92
+    ],
+    "results,": [
+      94
+    ],
+    "including": [
+      95
+    ],
+    "ensembles": [
+      96
+    ],
+    "by": [
+      97,
+      151
+    ],
+    "2": [
+      99
+    ],
+    "BLEU.": [
+      100
+    ],
+    "On": [
+      101
+    ],
+    "English-to-French": [
+      105
+    ],
+    "our": [
+      108
+    ],
+    "establishes": [
+      110
+    ],
+    "single-model": [
+      113
+    ],
+    "state-of-the-art": [
+      114
+    ],
+    "score": [
+      116
+    ],
+    "of": [
+      117,
+      130,
+      134
+    ],
+    "41.8": [
+      118
+    ],
+    "after": [
+      119
+    ],
+    "training": [
+      120,
+      132,
+      164
+    ],
+    "for": [
+      121
+    ],
+    "3.5": [
+      122
+    ],
+    "days": [
+      123
+    ],
+    "eight": [
+      125
+    ],
+    "GPUs,": [
+      126
+    ],
+    "small": [
+      128
+    ],
+    "fraction": [
+      129
+    ],
+    "costs": [
+      133
+    ],
+    "from": [
+      138
+    ],
+    "literature.": [
+      140
+    ],
+    "that": [
+      143
+    ],
+    "Transformer": [
+      145
+    ],
+    "generalizes": [
+      146
+    ],
+    "well": [
+      147
+    ],
+    "other": [
+      149
+    ],
+    "applying": [
+      152
+    ],
+    "it": [
+      153
+    ],
+    "successfully": [
+      154
+    ],
+    "English": [
+      156
+    ],
+    "constituency": [
+      157
+    ],
+    "parsing": [
+      158
+    ],
+    "both": [
+      159
+    ],
+    "large": [
+      161
+    ],
+    "limited": [
+      163
+    ],
+    "data.": [
+      165
+    ]
+  }
+}

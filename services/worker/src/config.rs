@@ -3,6 +3,8 @@ use std::{sync::Arc, time::Duration};
 use deepref_config::{DocumentConfig, RuntimeConfig, WorkerSettings};
 use tokio::sync::Semaphore;
 
+use crate::metadata::MetadataClients;
+
 #[derive(Debug, Clone)]
 pub struct WorkerConfig {
     pub runtime: RuntimeConfig,
@@ -13,12 +15,15 @@ pub struct WorkerConfig {
     pub grobid_url: Option<String>,
     pub grobid_timeout: Duration,
     pub pdf_parse_semaphore: Arc<Semaphore>,
+    /// Built once per process at boot, so every job shares the OpenAlex key state and budget.
+    pub metadata: MetadataClients,
 }
 
 impl WorkerConfig {
     pub fn from_source(get: &dyn Fn(&str) -> Option<String>) -> anyhow::Result<Self> {
         let runtime = RuntimeConfig::from_source("deepref-worker", get)?;
         let settings = WorkerSettings::from_source(get)?;
+        let metadata = MetadataClients::from_config(&runtime.integrations)?;
         Ok(Self {
             runtime,
             documents: DocumentConfig::from_source(get)?,
@@ -28,6 +33,7 @@ impl WorkerConfig {
             grobid_url: settings.grobid_url,
             grobid_timeout: settings.grobid_timeout,
             pdf_parse_semaphore: Arc::new(Semaphore::new(settings.document_parse_concurrency)),
+            metadata,
         })
     }
 }

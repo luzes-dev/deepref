@@ -144,7 +144,7 @@ pub use documents::{
     list_missing_full_text, mark_document_failed, mark_document_parsing,
     mark_document_retrieval_failed, mark_document_retrieving, persist_parsed_document,
     persist_parsed_document_with_structure, record_identity_check, report_identity,
-    requeue_document_processing, search_document_blocks,
+    requeue_document_processing, search_document_blocks, work_oa_urls,
 };
 pub use extraction::{
     ExtractionApplyOptions, ExtractionApplyOutcome, ExtractionError, ExtractionFieldUpdate,

@@ -15051,12 +15051,6 @@
           "seed_dois"
         ],
         "properties": {
-          "citation_provider": {
-            "type": [
-              "string",
-              "null"
-            ]
-          },
           "max_depth": {
             "type": [
               "integer",
@@ -15064,11 +15058,15 @@
             ],
             "format": "int32"
           },
-          "metadata_provider": {
+          "metadata_providers": {
             "type": [
-              "string",
+              "array",
               "null"
-            ]
+            ],
+            "items": {
+              "type": "string"
+            },
+            "description": "Metadata providers the run may use, in priority order. Each must be enabled in this\ndeployment, and the run keeps the order sent. Omit to use every enabled provider in\nthe deployment's order."
           },
           "seed_dois": {
             "type": "array",

@@ -960,6 +960,13 @@ pub(crate) async fn attach_open_access_document(
         message: "This report has no DOI, so an open-access copy cannot be looked up. Upload the PDF or paste a link instead.".to_owned(),
         details: serde_json::json!({}),
     })?;
+    // OpenAlex already stored this work's open-access locations, so they are tried before
+    // Unpaywall. That path needs no contact address.
+    if let Some(url) = cached_openalex_pdf_url(&state.pool, &doi).await? {
+        let document =
+            attach_external_url(&state.pool, project_id, report_id, &url, None, &actor).await?;
+        return Ok((StatusCode::CREATED, Json(document_dto(document))));
+    }
     // The deployment's contact address identifies us to Unpaywall; a personal address is never used.
     let contact = state.integrations.contact_email.trim();
     if contact.is_empty() {
@@ -988,6 +995,21 @@ pub(crate) async fn attach_open_access_document(
     )
     .await?;
     Ok((StatusCode::CREATED, Json(document_dto(document))))
+}
+
+/// The first OpenAlex PDF stored with the cached work for `doi` that passes URL validation, in
+/// preference order. A refused URL is skipped. When none passes, the caller falls back to
+/// Unpaywall.
+async fn cached_openalex_pdf_url(
+    pool: &sqlx::PgPool,
+    doi: &str,
+) -> Result<Option<String>, ApiError> {
+    let stored = deepref_app::work_oa_urls(pool, doi).await?;
+    Ok(stored
+        .iter()
+        .flat_map(deepref_integrations::pdf_urls_from_oa_urls)
+        .find_map(|pdf_url| deepref_documents::validate_external_url(&pdf_url).ok())
+        .map(|url| url.to_string()))
 }
 
 fn missing_contact_email() -> ApiError {

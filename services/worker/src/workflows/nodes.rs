@@ -21,8 +21,8 @@ use deepref_application::{
     },
 };
 use deepref_domain::{
-    Actor, ActorKind, ExclusionReasonId, ProjectId, ProtocolVersionId, ReportId, ScreeningDecision,
-    ScreeningStage,
+    Actor, ActorKind, ExclusionReasonId, ProjectId, ProtocolVersionId, ProviderKind, ReportId,
+    ScreeningDecision, ScreeningStage,
 };
 use deepref_review::ReviewRunState;
 use serde_json::{Map, Value, json};
@@ -30,12 +30,14 @@ use sqlx::PgPool;
 use uuid::Uuid;
 
 use super::{NodeError, autonomy_gate, net, pubmed};
+use crate::{limiter, metadata};
 
 pub struct Context<'a> {
     pub pool: &'a PgPool,
     pub ai: Option<&'a dyn AiGateway>,
     pub execution: &'a NodeExecution,
     pub runtime: &'a deepref_config::RuntimeConfig,
+    pub metadata: &'a metadata::MetadataClients,
 }
 
 const MAX_BATCH: usize = 200;
@@ -564,11 +566,40 @@ async fn import_identifiers(context: &Context<'_>) -> NodeResult {
     let mut records = Vec::new();
     let mut unresolved = 0usize;
     if !dois.is_empty() {
-        let provider = deepref_integrations::CrossrefClient::new(&context.runtime.integrations)
-            .map_err(|_| NodeError::permanent("The Crossref connection could not be prepared."))?;
+        let settings = crate::store::load_runtime_settings(context.pool)
+            .await
+            .map_err(|_| {
+                NodeError::retryable("The database was busy. This will be tried again.")
+            })?;
+        let router = metadata::router(
+            &context.runtime.integrations,
+            context.metadata,
+            settings.retry_attempts,
+        )
+        .map_err(|_| {
+            NodeError::permanent("The metadata provider connection could not be prepared.")
+        })?;
+        let permit = limiter::ProviderLimiter::new(
+            context.pool,
+            settings.rate_limit_per_second,
+            context.metadata.openalex.as_ref(),
+        );
+        let chain = &context.runtime.integrations.metadata_providers;
         for doi in &dois {
-            match provider.fetch_work_with_references(doi).await {
-                Ok(work) => records.push(deepref_integrations::raw_record_from_crossref_work(work)),
+            let output = router.fetch_work(chain, doi, &permit).await;
+            metadata::report_route(doi, &output);
+            match output.result {
+                Ok(fetched) => match fetched.provider {
+                    ProviderKind::OpenAlex => records.push(
+                        deepref_integrations::raw_record_from_openalex_work(fetched.work),
+                    ),
+                    ProviderKind::Crossref => records.push(
+                        deepref_integrations::raw_record_from_crossref_work(fetched.work),
+                    ),
+                    ProviderKind::DataCite => records.push(
+                        deepref_integrations::raw_record_from_datacite_work(fetched.work),
+                    ),
+                },
                 Err(_) => unresolved += 1,
             }
         }

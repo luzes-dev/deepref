@@ -4,6 +4,7 @@ use deepref_ai::{
     AiExecutionContext, AiGateway, AiTaskRunner, ProposalPersistence, ProviderEndpoint,
     SystemClock, UuidProvider,
 };
+use deepref_application::RouteError;
 use deepref_application::jobs::JobLease;
 use deepref_documents::{
     DocumentParser, DocumentStore, HttpsPdfFetcher, PARSER_VERSION, PdfiumParser,
@@ -11,8 +12,6 @@ use deepref_documents::{
 };
 use deepref_domain::events::{EventEnvelope, WorkFetchRequested};
 use deepref_domain::{IngestionItemStatus, normalize_doi};
-use deepref_integrations::CrossrefClient;
-use deepref_integrations::CrossrefError;
 use deepref_review::worker::{
     CompiledReview, ReviewExecutionPlan, ReviewModelIdentity, ReviewNode, ScreeningReviewPlan,
     StandardReviewPlan,
@@ -24,7 +23,7 @@ use uuid::Uuid;
 
 use crate::{
     delivery::{DeliveryAction, FailureClass, action_for},
-    limiter, store,
+    limiter, metadata, store,
 };
 
 async fn handle_work_fetch(
@@ -59,9 +58,9 @@ async fn handle_work_fetch(
             return Ok(DeliveryAction::Terminate);
         }
     };
-    if !store::mark_fetching(&pool, &event, &doi, lease).await? {
+    let Some(stored_chain) = store::mark_fetching(&pool, &event, &doi, lease).await? else {
         return Ok(DeliveryAction::Ack);
-    }
+    };
     if event.payload.depth > event.payload.max_depth
         || store::acquisition_cancelled(&pool, event.payload.acquisition_id).await?
     {
@@ -103,8 +102,12 @@ async fn handle_work_fetch(
         return Ok(action);
     }
     let settings = store::load_runtime_settings(&pool).await?;
-    let client = match CrossrefClient::new(&config.runtime.integrations) {
-        Ok(client) => client.with_max_attempts(settings.retry_attempts),
+    let router = match metadata::router(
+        &config.runtime.integrations,
+        &config.metadata,
+        settings.retry_attempts,
+    ) {
+        Ok(router) => router,
         Err(error) => {
             store::finalize_terminal_failure(
                 &pool,
@@ -114,6 +117,7 @@ async fn handle_work_fetch(
                 lease,
                 IngestionItemStatus::Failed,
                 &error.to_string(),
+                None,
             )
             .await?;
             return Ok(DeliveryAction::Ack);
@@ -121,16 +125,22 @@ async fn handle_work_fetch(
     };
     let (cancel_heartbeat, heartbeat_done) =
         spawn_heartbeat(pool.clone(), lease.clone(), doi.clone(), owner, claim_lease);
-    limiter::acquire(&pool, "crossref", settings.rate_limit_per_second).await?;
-    let fetched = client.fetch_work_with_references(&doi).await;
+    let permit = limiter::ProviderLimiter::new(
+        &pool,
+        settings.rate_limit_per_second,
+        config.metadata.openalex.as_ref(),
+    );
+    let output = router.fetch_work(&stored_chain, &doi, &permit).await;
+    metadata::report_route(&doi, &output);
+    let last_provider = output.attempts.last().map(|attempt| attempt.provider);
     cancel_heartbeat.send_replace(true);
     let _ = heartbeat_done.await;
-    match fetched {
-        Ok(work) => {
-            store::finalize_success(&pool, &event, &doi, owner, lease, &work).await?;
+    match output.result {
+        Ok(fetched) => {
+            store::finalize_success(&pool, &event, &doi, owner, lease, &fetched).await?;
             Ok(DeliveryAction::Ack)
         }
-        Err(error) if is_retryable_crossref_error(&error) => {
+        Err(RouteError::Retryable { message }) => {
             let action = action_for(FailureClass::Retryable, job.attempts.max(1) as u64);
             if action == DeliveryAction::Terminate {
                 store::finalize_terminal_failure(
@@ -140,20 +150,17 @@ async fn handle_work_fetch(
                     owner,
                     lease,
                     IngestionItemStatus::Failed,
-                    &error.to_string(),
+                    &message,
+                    last_provider,
                 )
                 .await?;
             } else {
-                store::release_retryable(&pool, lease, &doi, owner, &error.to_string()).await?;
+                store::release_retryable(&pool, lease, &doi, owner, &message).await?;
             }
             Ok(action)
         }
         Err(error) => {
-            let status = if matches!(error, CrossrefError::NotFound(_)) {
-                IngestionItemStatus::NotFound
-            } else {
-                IngestionItemStatus::Failed
-            };
+            let (status, message) = metadata::terminal_outcome(&error, &doi);
             store::finalize_terminal_failure(
                 &pool,
                 &event,
@@ -161,7 +168,8 @@ async fn handle_work_fetch(
                 owner,
                 lease,
                 status,
-                &error.to_string(),
+                &message,
+                last_provider,
             )
             .await?;
             Ok(DeliveryAction::Ack)
@@ -718,6 +726,7 @@ async fn handle_job_with_document_services_inner(
                         lease,
                         ai_gateway.clone(),
                         &config.runtime,
+                        &config.metadata,
                     )
                     .await
                 }
@@ -1698,13 +1707,6 @@ fn spawn_heartbeat(
         }
     });
     (sender, handle)
-}
-
-fn is_retryable_crossref_error(error: &CrossrefError) -> bool {
-    matches!(
-        error,
-        CrossrefError::RetryableStatus(_) | CrossrefError::Request(_)
-    )
 }
 
 #[cfg(test)]

@@ -1119,6 +1119,17 @@ pub async fn report_identity(
     Ok((row.get("title"), row.get("doi")))
 }
 
+/// The `deepref_oa_urls` value the metadata provider stored with the cached work for `doi`.
+/// `None` when no work is cached for the DOI or its raw payload has no such value.
+pub async fn work_oa_urls(pool: &PgPool, doi: &str) -> anyhow::Result<Option<Value>> {
+    let oa_urls: Option<Option<Value>> =
+        sqlx::query_scalar("SELECT raw->'deepref_oa_urls' FROM works WHERE canonical_doi=$1")
+            .bind(doi)
+            .fetch_optional(pool)
+            .await?;
+    Ok(oa_urls.flatten())
+}
+
 /// Stores the identity verdict of the latest parse.
 pub async fn record_identity_check(
     pool: &PgPool,

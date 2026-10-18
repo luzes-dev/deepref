@@ -1,10 +1,10 @@
 use std::time::Duration;
 
-use deepref_application::{AutomationDomainEvent, jobs::JobLease};
+use deepref_application::{AutomationDomainEvent, FetchedWork, jobs::JobLease};
 use deepref_domain::events::{
     EntityType, EventEnvelope, SUBJECT_WORK_FETCH_REQUESTED, WorkFetchRequested,
 };
-use deepref_domain::{IngestionItemStatus, Reference, WorkWithReferences};
+use deepref_domain::{IngestionItemStatus, ProviderKind, Reference, WorkWithReferences};
 use sqlx::{PgPool, Postgres, Row, Transaction};
 use uuid::Uuid;
 
@@ -71,23 +71,45 @@ pub async fn renew_claims(
 }
 
 pub async fn is_cached(pool: &PgPool, doi: &str) -> anyhow::Result<bool> {
-    Ok(sqlx::query("SELECT 1 FROM report_fetch_state f JOIN report_identifiers i ON i.report_id=f.report_id JOIN works w ON w.canonical_doi=f.canonical_doi WHERE i.scheme='doi' AND i.normalized_value=$1 AND f.provider='crossref' AND f.status='fetched'")
+    Ok(sqlx::query("SELECT 1 FROM report_fetch_state f JOIN report_identifiers i ON i.report_id=f.report_id JOIN works w ON w.canonical_doi=f.canonical_doi WHERE i.scheme='doi' AND i.normalized_value=$1 AND f.status='fetched'")
         .bind(doi).fetch_optional(pool).await?.is_some())
 }
 
+/// Locks the run and marks the item fetching. Returns the metadata chain the run
+/// stored, or `None` when the item is no longer queued and the job should ack.
 pub async fn mark_fetching(
     pool: &PgPool,
     event: &EventEnvelope<WorkFetchRequested>,
     doi: &str,
     lease: &JobLease,
-) -> anyhow::Result<bool> {
+) -> anyhow::Result<Option<Vec<ProviderKind>>> {
     let mut tx = pool.begin().await?;
     validate_event_ownership(&mut tx, lease).await?;
     lock_run(&mut tx, event).await?;
+    let config: serde_json::Value =
+        sqlx::query_scalar("SELECT config FROM acquisition_runs WHERE id=$1 AND project_id=$2")
+            .bind(event.payload.acquisition_id)
+            .bind(event.payload.project_id)
+            .fetch_one(&mut *tx)
+            .await?;
     let changed = sqlx::query("UPDATE acquisition_items SET status='fetching',attempts=attempts+1 WHERE acquisition_id=$1 AND project_id=$2 AND canonical_doi=$3 AND status IN ('queued','fetching')")
         .bind(event.payload.acquisition_id).bind(event.payload.project_id).bind(doi).execute(&mut *tx).await?.rows_affected() == 1;
     tx.commit().await?;
-    Ok(changed)
+    Ok(changed.then(|| stored_metadata_chain(&config)))
+}
+
+/// The chain a run stored under `metadata_providers`. Lenient: a run without it,
+/// including the legacy `metadata_provider` shape, has no chain, and a name that
+/// is not a provider is dropped. The router falls back to the deployment chain.
+fn stored_metadata_chain(config: &serde_json::Value) -> Vec<ProviderKind> {
+    config
+        .get("metadata_providers")
+        .and_then(serde_json::Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(serde_json::Value::as_str)
+        .filter_map(|name| name.parse::<ProviderKind>().ok())
+        .collect()
 }
 
 pub async fn complete_without_doi(
@@ -162,15 +184,15 @@ pub async fn finalize_success(
     doi: &str,
     owner: Uuid,
     lease: &JobLease,
-    work: &WorkWithReferences,
+    fetched: &FetchedWork,
 ) -> anyhow::Result<()> {
     let mut tx = pool.begin().await?;
     validate_ownership(&mut tx, lease, doi, owner).await?;
     lock_run(&mut tx, event).await?;
-    persist_work(&mut tx, work).await?;
+    persist_work(&mut tx, &fetched.work).await?;
     attach_project_work(&mut tx, &event.payload, doi).await?;
 
-    for reference in &work.references {
+    for reference in &fetched.work.references {
         match &reference.doi {
             Some(target) => persist_citation(&mut tx, event, doi, target).await?,
             None => persist_unresolved(&mut tx, event, doi, reference).await?,
@@ -179,7 +201,8 @@ pub async fn finalize_success(
     // Child items and their deterministic durable jobs are inserted before the
     // terminal counts are evaluated.
     if event.payload.depth < event.payload.max_depth {
-        for target in work
+        for target in fetched
+            .work
             .references
             .iter()
             .filter_map(|reference| reference.doi.as_deref())
@@ -190,18 +213,20 @@ pub async fn finalize_success(
     emit_metrics_request(&mut tx, event).await?;
     complete_item_and_claim(&mut tx, event, doi, IngestionItemStatus::Fetched, None).await?;
     sqlx::query(
-        "UPDATE report_fetch_state SET canonical_doi=$1, status = 'fetched', fetched_at = now(), owner_token = NULL, \
+        "UPDATE report_fetch_state SET canonical_doi=$1, status = 'fetched', provider = $3, fetched_at = now(), owner_token = NULL, \
          lease_expires_at = NULL, heartbeat_at = now(), updated_at = now() \
          WHERE report_id = (SELECT report_id FROM report_identifiers WHERE scheme='doi' AND normalized_value=$1) AND owner_token = $2",
     )
     .bind(doi)
     .bind(owner)
+    .bind(fetched.provider.as_str())
     .execute(&mut *tx)
     .await?;
     tx.commit().await?;
     Ok(())
 }
 
+#[allow(clippy::too_many_arguments)]
 pub async fn finalize_terminal_failure(
     pool: &PgPool,
     event: &EventEnvelope<WorkFetchRequested>,
@@ -210,13 +235,14 @@ pub async fn finalize_terminal_failure(
     lease: &JobLease,
     status: IngestionItemStatus,
     error: &str,
+    provider: Option<ProviderKind>,
 ) -> anyhow::Result<()> {
     let mut tx = pool.begin().await?;
     validate_ownership(&mut tx, lease, doi, owner).await?;
     lock_run(&mut tx, event).await?;
     complete_item_and_claim(&mut tx, event, doi, status, Some(error)).await?;
     sqlx::query(
-        "UPDATE report_fetch_state SET status = $3, last_error = $4, owner_token = NULL, \
+        "UPDATE report_fetch_state SET status = $3, last_error = $4, provider = COALESCE($5, provider), owner_token = NULL, \
          lease_expires_at = NULL, updated_at = now() WHERE report_id=(SELECT report_id FROM report_identifiers WHERE scheme='doi' AND normalized_value=$1) AND owner_token = $2 AND status<>'fetched'",
     )
     .bind(doi)
@@ -227,6 +253,7 @@ pub async fn finalize_terminal_failure(
         "failed"
     })
     .bind(error)
+    .bind(provider.map(ProviderKind::as_str))
     .execute(&mut *tx)
     .await?;
     tx.commit().await?;
@@ -657,9 +684,27 @@ async fn complete_item_and_claim(
 
 #[cfg(test)]
 mod tests {
-    use super::{acquisition_notification, settled_run_status};
+    use std::time::Duration;
+
+    use chrono::Utc;
     use deepref_app::NotificationSeverity;
+    use deepref_application::FetchedWork;
+    use deepref_application::jobs::JobLease;
+    use deepref_domain::events::{
+        EntityType, EventEnvelope, SUBJECT_WORK_FETCH_REQUESTED, WorkFetchRequested,
+    };
+    use deepref_domain::{FetchStatus, ProviderKind, Work, WorkWithReferences};
+    use serde_json::json;
+    use sqlx::{PgPool, Row};
     use uuid::Uuid;
+
+    use super::{
+        ClaimState, acquisition_notification, attach_cached, claim_doi, finalize_success,
+        finalize_terminal_failure, is_cached, settled_run_status, stored_metadata_chain,
+    };
+    use deepref_domain::IngestionItemStatus;
+
+    const OWNER_LEASE: Duration = Duration::from_secs(600);
 
     #[test]
     fn a_run_that_fetched_some_articles_completes_instead_of_failing() {
@@ -768,6 +813,295 @@ mod tests {
         anyhow::ensure!(
             counts == ("completed".to_owned(), 0, 1, 0),
             "current completion must settle exactly once"
+        );
+        Ok(())
+    }
+
+    #[test]
+    fn a_stored_chain_is_read_leniently() {
+        assert_eq!(
+            stored_metadata_chain(&json!({"metadata_providers": ["openalex", "crossref"]})),
+            vec![ProviderKind::OpenAlex, ProviderKind::Crossref]
+        );
+        assert!(
+            stored_metadata_chain(
+                &json!({"metadata_provider": "crossref", "citation_provider": "crossref"})
+            )
+            .is_empty(),
+            "the legacy shape has no chain"
+        );
+        assert!(stored_metadata_chain(&json!({})).is_empty());
+        assert_eq!(
+            stored_metadata_chain(&json!({"metadata_providers": ["pubmed", "crossref", 7]})),
+            vec![ProviderKind::Crossref],
+            "names that are not providers are dropped"
+        );
+    }
+
+    fn fetched(doi: &str, provider: ProviderKind) -> FetchedWork {
+        FetchedWork {
+            work: WorkWithReferences {
+                work: Work {
+                    doi: doi.to_owned(),
+                    title: Some("A title".to_owned()),
+                    abstract_text: None,
+                    work_type: None,
+                    publisher: None,
+                    container_title: None,
+                    issued_year: Some(2024),
+                    published_year: None,
+                    url: None,
+                    total_citations: 0,
+                    references_count: 0,
+                    metadata_provider: provider.as_str().to_owned(),
+                    citation_provider: provider.as_str().to_owned(),
+                    fetched_at: Utc::now(),
+                    fetch_status: FetchStatus::Fetched.as_str().to_owned(),
+                },
+                references: Vec::new(),
+                raw: json!({ "title": ["A title"] }),
+            },
+            provider,
+            reference_gap: None,
+        }
+    }
+
+    /// A project with one queued item for `doi` under a running job, so the store
+    /// writes can take the lease. The DOI is not claimed yet.
+    async fn seeded_run(
+        pool: &PgPool,
+        doi: &str,
+    ) -> anyhow::Result<(EventEnvelope<WorkFetchRequested>, JobLease)> {
+        let project_id = Uuid::new_v4();
+        let acquisition_id = Uuid::new_v4();
+        let report_id = Uuid::new_v4();
+        let event = EventEnvelope::v1(
+            SUBJECT_WORK_FETCH_REQUESTED,
+            "test",
+            EntityType::Work,
+            format!("{acquisition_id}|{doi}"),
+            0,
+            acquisition_id,
+            None,
+            WorkFetchRequested {
+                project_id,
+                acquisition_id,
+                doi: doi.to_owned(),
+                depth: 0,
+                max_depth: 0,
+                parent_doi: None,
+            },
+        );
+        sqlx::query("INSERT INTO projects(id,name) VALUES($1,'store provider fixture')")
+            .bind(project_id)
+            .execute(pool)
+            .await?;
+        sqlx::query("INSERT INTO reports(id) VALUES($1)")
+            .bind(report_id)
+            .execute(pool)
+            .await?;
+        sqlx::query("INSERT INTO acquisition_runs(id,project_id,source,strategy,status,seed_count,queued_count,created_at) VALUES($1,$2,'crossref','citation_traversal','running',1,1,now())")
+            .bind(acquisition_id).bind(project_id).execute(pool).await?;
+        sqlx::query("INSERT INTO acquisition_items(acquisition_id,project_id,report_id,canonical_doi,depth,work_event_id) VALUES($1,$2,$3,$4,0,$5)")
+            .bind(acquisition_id).bind(project_id).bind(report_id).bind(doi).bind(event.event_id)
+            .execute(pool).await?;
+        sqlx::query("INSERT INTO jobs(id,project_id,kind,state,attempts,lease_owner,leased_until) VALUES($1,$2,'work_fetch_requested','running',1,'worker-fixture',now()+interval '10 minutes')")
+            .bind(event.event_id).bind(project_id).execute(pool).await?;
+        let lease = JobLease {
+            id: event.event_id,
+            owner: "worker-fixture".to_owned(),
+            attempt: 1,
+        };
+        Ok((event, lease))
+    }
+
+    /// The DOI's cache row as `(provider, status)`.
+    async fn cache_row(pool: &PgPool, doi: &str) -> anyhow::Result<(String, String)> {
+        let row = sqlx::query(
+            "SELECT f.provider, f.status FROM report_fetch_state f JOIN report_identifiers i ON i.report_id=f.report_id WHERE i.scheme='doi' AND i.normalized_value=$1",
+        )
+        .bind(doi)
+        .fetch_one(pool)
+        .await?;
+        Ok((row.get("provider"), row.get("status")))
+    }
+
+    #[tokio::test]
+    async fn a_crossref_era_cache_row_still_attaches_after_the_provider_filter_is_dropped()
+    -> anyhow::Result<()> {
+        let Some(pool) =
+            deepref_app::test_isolation::isolated_pool_from_env("DATABASE_URL", 5).await
+        else {
+            return Ok(());
+        };
+        let doi = "10.5555/crossref-era";
+        let first_owner = Uuid::new_v4();
+        let (first_event, first_lease) = seeded_run(&pool, doi).await?;
+        anyhow::ensure!(
+            claim_doi(&pool, doi, first_owner, OWNER_LEASE).await? == ClaimState::Acquired,
+            "the first run should claim the DOI"
+        );
+        finalize_success(
+            &pool,
+            &first_event,
+            doi,
+            first_owner,
+            &first_lease,
+            &fetched(doi, ProviderKind::Crossref),
+        )
+        .await?;
+        anyhow::ensure!(
+            cache_row(&pool, doi).await? == ("crossref".to_owned(), "fetched".to_owned()),
+            "a Crossref answer leaves a fetched Crossref-era row"
+        );
+
+        let (second_event, second_lease) = seeded_run(&pool, doi).await?;
+        anyhow::ensure!(
+            is_cached(&pool, doi).await?,
+            "the Crossref-era row is still a cache hit"
+        );
+        attach_cached(&pool, &second_event, doi, &second_lease).await?;
+
+        let item_status: String =
+            sqlx::query_scalar("SELECT status FROM acquisition_items WHERE acquisition_id=$1")
+                .bind(second_event.payload.acquisition_id)
+                .fetch_one(&pool)
+                .await?;
+        anyhow::ensure!(
+            item_status == "fetched",
+            "the second run's item attaches from the cache, got {item_status}"
+        );
+        let record_source: String =
+            sqlx::query_scalar("SELECT source FROM records WHERE project_id=$1")
+                .bind(second_event.payload.project_id)
+                .fetch_one(&pool)
+                .await?;
+        anyhow::ensure!(
+            record_source == "crossref",
+            "the attached record keeps the DOI lane label"
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn finalize_success_records_the_answering_provider_and_the_cache_still_hits()
+    -> anyhow::Result<()> {
+        let Some(pool) =
+            deepref_app::test_isolation::isolated_pool_from_env("DATABASE_URL", 5).await
+        else {
+            return Ok(());
+        };
+        let doi = "10.5555/openalex-answer";
+        let owner = Uuid::new_v4();
+        let (event, lease) = seeded_run(&pool, doi).await?;
+        anyhow::ensure!(
+            claim_doi(&pool, doi, owner, OWNER_LEASE).await? == ClaimState::Acquired,
+            "the run should claim the DOI"
+        );
+        anyhow::ensure!(
+            cache_row(&pool, doi).await?.0 == "crossref",
+            "the claim writes the lane placeholder"
+        );
+
+        finalize_success(
+            &pool,
+            &event,
+            doi,
+            owner,
+            &lease,
+            &fetched(doi, ProviderKind::OpenAlex),
+        )
+        .await?;
+
+        anyhow::ensure!(
+            cache_row(&pool, doi).await? == ("openalex".to_owned(), "fetched".to_owned()),
+            "the cache row names the provider that answered"
+        );
+        let work_provider: String =
+            sqlx::query_scalar("SELECT metadata_provider FROM works WHERE canonical_doi=$1")
+                .bind(doi)
+                .fetch_one(&pool)
+                .await?;
+        anyhow::ensure!(
+            work_provider == "openalex",
+            "the work names the answering provider, got {work_provider}"
+        );
+        anyhow::ensure!(
+            is_cached(&pool, doi).await?,
+            "a row fetched by a provider other than Crossref is a cache hit"
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn a_terminal_failure_records_the_last_attempted_provider() -> anyhow::Result<()> {
+        let Some(pool) =
+            deepref_app::test_isolation::isolated_pool_from_env("DATABASE_URL", 5).await
+        else {
+            return Ok(());
+        };
+        let doi = "10.5555/attempted-miss";
+        let owner = Uuid::new_v4();
+        let (event, lease) = seeded_run(&pool, doi).await?;
+        anyhow::ensure!(
+            claim_doi(&pool, doi, owner, OWNER_LEASE).await? == ClaimState::Acquired,
+            "the run should claim the DOI"
+        );
+
+        finalize_terminal_failure(
+            &pool,
+            &event,
+            doi,
+            owner,
+            &lease,
+            IngestionItemStatus::NotFound,
+            "No metadata provider has a record for 10.5555/attempted-miss.",
+            Some(ProviderKind::OpenAlex),
+        )
+        .await?;
+
+        let (provider, status) = cache_row(&pool, doi).await?;
+        anyhow::ensure!(
+            provider == "openalex" && status == "not_found",
+            "the failure names the last provider attempted, got {provider}/{status}"
+        );
+        anyhow::ensure!(
+            !is_cached(&pool, doi).await?,
+            "a not-found row is not a cache hit"
+        );
+        Ok(())
+    }
+
+    #[tokio::test]
+    async fn a_failure_before_any_attempt_keeps_the_claim_placeholder() -> anyhow::Result<()> {
+        let Some(pool) =
+            deepref_app::test_isolation::isolated_pool_from_env("DATABASE_URL", 5).await
+        else {
+            return Ok(());
+        };
+        let doi = "10.5555/no-lane";
+        let owner = Uuid::new_v4();
+        let (event, lease) = seeded_run(&pool, doi).await?;
+        anyhow::ensure!(
+            claim_doi(&pool, doi, owner, OWNER_LEASE).await? == ClaimState::Acquired,
+            "the run should claim the DOI"
+        );
+
+        finalize_terminal_failure(
+            &pool,
+            &event,
+            doi,
+            owner,
+            &lease,
+            IngestionItemStatus::Failed,
+            "a contact e-mail address is required",
+            None,
+        )
+        .await?;
+
+        anyhow::ensure!(
+            cache_row(&pool, doi).await? == ("crossref".to_owned(), "failed".to_owned()),
+            "with no attempt the placeholder stays"
         );
         Ok(())
     }

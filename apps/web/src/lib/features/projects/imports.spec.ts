@@ -242,7 +242,7 @@ describe('run and article status display', () => {
 	});
 
 	it('labels missing articles in plain language', () => {
-		expect(ingestionItemStatusLabel('not_found')).toBe('Not found in Crossref');
+		expect(ingestionItemStatusLabel('not_found')).toBe('Not found');
 		expect(ingestionItemStatusVariant('not_found')).toBe('warning');
 		expect(ingestionItemStatusVariant('failed')).toBe('destructive');
 	});

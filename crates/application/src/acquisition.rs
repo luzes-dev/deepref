@@ -1,6 +1,8 @@
 use std::{future::Future, pin::Pin};
 
-use deepref_domain::{AcquisitionRunId, IdentifierScheme, ImportFormat};
+use deepref_domain::{
+    AcquisitionRunId, IdentifierScheme, ImportFormat, ProviderKind, Reference, WorkWithReferences,
+};
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
@@ -73,8 +75,7 @@ impl RawRecord {
     }
 }
 
-pub type ProviderFuture<'a, T> =
-    Pin<Box<dyn Future<Output = Result<T, ProviderError>> + Send + 'a>>;
+pub type ProviderFuture<'a, T, E> = Pin<Box<dyn Future<Output = Result<T, E>> + Send + 'a>>;
 
 #[derive(Debug, Error)]
 pub enum ProviderError {
@@ -96,20 +97,106 @@ pub enum ImportError {
     MissingCsvColumn(String),
 }
 
-pub trait MetadataProvider: Send + Sync {
-    fn name(&self) -> &'static str;
-    fn fetch_metadata<'a>(&'a self, identifier: &'a RawIdentifier)
-    -> ProviderFuture<'a, RawRecord>;
+/// Takes the outbound permit for one provider before a request is sent. The worker
+/// backs it with the shared PostgreSQL limiter, so all pods share one schedule.
+pub trait ProviderPermit: Send + Sync {
+    fn acquire<'a>(&'a self, provider: ProviderKind) -> ProviderFuture<'a, (), PermitError>;
 }
 
-pub trait CitationProvider: Send + Sync {
-    fn name(&self) -> &'static str;
-    fn fetch_citations<'a>(&'a self, record: &'a RawRecord) -> ProviderFuture<'a, Vec<RawRecord>>;
+#[derive(Debug, Clone, PartialEq, Eq, Error)]
+#[error("provider permit unavailable: {0}")]
+pub struct PermitError(pub String);
+
+/// Why a provider answer may list fewer references than the work has. The router acts
+/// on it by asking Crossref for the reference list, subject to the reference union gate
+/// for a shortfall or an unverified list.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum ReferenceGap {
+    /// The daily budget ran out after `resolved` of `expected` referenced works were
+    /// looked up. `reset_secs` is the reset the provider reported, when it reported one.
+    BudgetExhausted {
+        resolved: usize,
+        expected: usize,
+        reset_secs: Option<u64>,
+    },
+    /// Every referenced work was looked up, but the answer carries `resolved` references
+    /// with a DOI where the work reports `expected`. Targets the provider holds without a
+    /// DOI count too, and Crossref's list may still supply their DOIs.
+    Shortfall { resolved: usize, expected: usize },
+    /// Every referenced work was looked up and the provider's own count is met, but that
+    /// count is the length of the list it resolved, not the size of the bibliography. A
+    /// reference the provider never matched is invisible to it, so only another source can
+    /// confirm the list is complete.
+    Unverified { resolved: usize },
 }
 
-pub trait SearchProvider: Send + Sync {
-    fn name(&self) -> &'static str;
-    fn search<'a>(&'a self, query: &'a str) -> ProviderFuture<'a, Vec<RawRecord>>;
+#[derive(Debug, Clone)]
+pub struct FetchedWork {
+    pub work: WorkWithReferences,
+    pub provider: ProviderKind,
+    /// `None` when every referenced work was looked up, or when the provider has no
+    /// reference list to look up.
+    pub reference_gap: Option<ReferenceGap>,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, Error)]
+pub enum ProviderFetchError {
+    #[error("{} has no record for {doi}", .provider.as_str())]
+    NotFound { provider: ProviderKind, doi: String },
+    #[error("{} rejected the request: {reason}", .provider.as_str())]
+    Rejected {
+        provider: ProviderKind,
+        reason: String,
+    },
+    #[error("{} is unavailable for now: {message}", .provider.as_str())]
+    Retryable {
+        provider: ProviderKind,
+        message: String,
+    },
+    #[error("{} failed: {message}", .provider.as_str())]
+    Fatal {
+        provider: ProviderKind,
+        message: String,
+    },
+}
+
+/// One DOI lookup against one metadata service. The caller takes one permit before
+/// the call. The adapter takes another before each further request it sends inside
+/// the call, such as a retry or a reference lookup.
+pub trait WorkProvider: Send + Sync {
+    fn kind(&self) -> ProviderKind;
+    fn fetch_work_with_references<'a>(
+        &'a self,
+        doi: &'a str,
+        permit: &'a dyn ProviderPermit,
+    ) -> ProviderFuture<'a, FetchedWork, ProviderFetchError>;
+
+    /// The lookup for a DOI that the providers in `tried` already asked this run. An
+    /// adapter overrides it to skip work those providers already did.
+    fn fetch_work_after<'a>(
+        &'a self,
+        doi: &'a str,
+        _tried: &'a [ProviderKind],
+        permit: &'a dyn ProviderPermit,
+    ) -> ProviderFuture<'a, FetchedWork, ProviderFetchError> {
+        self.fetch_work_with_references(doi, permit)
+    }
+
+    /// The DOI's raw reference list, unresolved entries included, for filling references
+    /// that another provider lost. Only providers that publish reference lists implement it.
+    fn reference_list<'a>(
+        &'a self,
+        _doi: &'a str,
+        _permit: &'a dyn ProviderPermit,
+    ) -> ProviderFuture<'a, Vec<Reference>, ProviderFetchError> {
+        let provider = self.kind();
+        Box::pin(async move {
+            Err(ProviderFetchError::Fatal {
+                provider,
+                message: "has no reference list to read".to_owned(),
+            })
+        })
+    }
 }
 
 pub trait ImportParser: Send + Sync {

@@ -15,12 +15,14 @@ pub mod extraction;
 pub mod jobs;
 pub mod prisma;
 pub mod protocol;
+pub mod router;
 pub mod study;
 pub mod workflows;
 
 pub use acquisition::{
-    CitationProvider, CsvColumnMapping, ImportError, ImportParser, MetadataProvider, ProviderError,
-    ProviderFuture, RawAuthor, RawIdentifier, RawRecord, SearchProvider,
+    CsvColumnMapping, FetchedWork, ImportError, ImportParser, PermitError, ProviderError,
+    ProviderFetchError, ProviderFuture, ProviderPermit, RawAuthor, RawIdentifier, RawRecord,
+    ReferenceGap, WorkProvider,
 };
 pub use appraisal::{
     AnswerSchema, AppliesWhen, AppraisalAssessmentInput, AppraisalCompleted, AppraisalDefinition,
@@ -62,6 +64,10 @@ pub use prisma::{
 pub use protocol::{
     ProtocolCommandError, ProtocolCriterionCommand, PublishProtocolCommand,
     SaveProtocolDraftCommand, validate_protocol_text,
+};
+pub use router::{
+    AttemptOutcome, LostEdgeCause, LostEdgeFill, LostEdges, ProviderAttempt, ProviderRouter,
+    RouteError, RouteOutput, RouterError, citation_sources, effective_chain,
 };
 pub use study::{
     AssignReportToStudy, ClassifyStudy, CreateStudy, RemoveReportFromStudy, RenameStudy,

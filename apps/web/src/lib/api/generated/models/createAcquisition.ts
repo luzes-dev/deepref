@@ -7,10 +7,13 @@
 
 export interface CreateAcquisition {
 	/** @nullable */
-	citation_provider?: string | null;
-	/** @nullable */
 	max_depth?: number | null;
-	/** @nullable */
-	metadata_provider?: string | null;
+	/**
+	 * Metadata providers the run may use, in priority order. Each must be enabled in this
+	 * deployment, and the run keeps the order sent. Omit to use every enabled provider in
+	 * the deployment's order.
+	 * @nullable
+	 */
+	metadata_providers?: string[] | null;
 	seed_dois: string[];
 }

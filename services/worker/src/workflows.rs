@@ -114,6 +114,7 @@ pub async fn handle_step(
     lease: &JobLease,
     ai_gateway: Option<Arc<dyn AiGateway>>,
     runtime: &deepref_config::RuntimeConfig,
+    metadata: &crate::metadata::MetadataClients,
 ) -> anyhow::Result<DeliveryAction> {
     let payload = StepPayload::deserialize(&job.payload)?;
     anyhow::ensure!(
@@ -164,6 +165,7 @@ pub async fn handle_step(
         ai: ai_gateway.as_deref(),
         execution: &execution,
         runtime,
+        metadata,
     };
     let finished = match nodes::execute(&context).await {
         Ok(outcome) => finish_node_execution(pool, payload.step_id, lease, outcome).await?,

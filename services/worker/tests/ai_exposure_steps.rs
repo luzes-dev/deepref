@@ -81,6 +81,7 @@ async fn drain(pool: &PgPool, project: Uuid) {
                 (name == "APP_ENV").then(|| "local".into())
             })
             .expect("local runtime configuration"),
+            &deepref_worker::metadata::MetadataClients::default(),
         )
         .await
         .expect("step")

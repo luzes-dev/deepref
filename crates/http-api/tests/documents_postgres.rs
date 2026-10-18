@@ -471,3 +471,256 @@ async fn document_blocks_page_through_every_block_of_a_long_document() {
     let (status, _) = get_json(&state, format!("{base}?cursor=not-a-cursor")).await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
 }
+
+/// A report in a new project, with `doi` as its DOI identifier when one is given.
+async fn seed_report(pool: &PgPool, doi: Option<&str>) -> (Uuid, Uuid) {
+    let project_id = Uuid::new_v4();
+    let report_id = Uuid::new_v4();
+    sqlx::query("INSERT INTO projects(id,name) VALUES($1,'open access api')")
+        .bind(project_id)
+        .execute(pool)
+        .await
+        .unwrap();
+    sqlx::query("INSERT INTO reports(id,title) VALUES($1,'open access report')")
+        .bind(report_id)
+        .execute(pool)
+        .await
+        .unwrap();
+    sqlx::query("INSERT INTO project_reports(project_id,report_id) VALUES($1,$2)")
+        .bind(project_id)
+        .bind(report_id)
+        .execute(pool)
+        .await
+        .unwrap();
+    if let Some(doi) = doi {
+        sqlx::query(
+            "INSERT INTO report_identifiers(id,report_id,scheme,value,normalized_value)
+             VALUES($1,$2,'doi',$3,$3)",
+        )
+        .bind(Uuid::new_v4())
+        .bind(report_id)
+        .bind(doi)
+        .execute(pool)
+        .await
+        .unwrap();
+    }
+    (project_id, report_id)
+}
+
+/// A cached work for `doi` whose raw payload is `raw`, as the metadata provider stored it.
+async fn seed_work(pool: &PgPool, doi: &str, raw: serde_json::Value) {
+    sqlx::query("INSERT INTO works(canonical_doi,metadata_provider,raw) VALUES($1,'openalex',$2)")
+        .bind(doi)
+        .bind(raw)
+        .execute(pool)
+        .await
+        .unwrap();
+}
+
+/// A raw payload carrying the open-access locations the OpenAlex adapter writes.
+fn oa_raw(best: serde_json::Value, locations: serde_json::Value) -> serde_json::Value {
+    serde_json::json!({
+        "deepref_oa_urls": { "best_oa_location": best, "locations": locations }
+    })
+}
+
+async fn post_open_access(
+    state: &AppState,
+    project_id: Uuid,
+    report_id: Uuid,
+) -> (StatusCode, serde_json::Value) {
+    let response = router(state.clone(), &api_config())
+        .oneshot(
+            Request::builder()
+                .method("POST")
+                .uri(format!(
+                    "/projects/{project_id}/reports/{report_id}/documents/open-access"
+                ))
+                .header("x-actor-id", "open-access-test")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    let status = response.status();
+    let bytes = to_bytes(response.into_body(), usize::MAX).await.unwrap();
+    (
+        status,
+        serde_json::from_slice(&bytes).unwrap_or(serde_json::Value::Null),
+    )
+}
+
+async fn report_document_count(pool: &PgPool, report_id: Uuid) -> i64 {
+    sqlx::query_scalar("SELECT count(*) FROM documents WHERE report_id=$1")
+        .bind(report_id)
+        .fetch_one(pool)
+        .await
+        .unwrap()
+}
+
+#[tokio::test]
+async fn open_access_attach_uses_the_openalex_pdf_without_a_contact_address() {
+    let Some(pool) = database().await else { return };
+    let doi = "10.1000/openalex-first";
+    let (project_id, report_id) = seed_report(&pool, Some(doi)).await;
+    seed_work(
+        &pool,
+        doi,
+        oa_raw(
+            serde_json::json!({
+                "url": "https://doi.org/10.1000/openalex-first",
+                "pdf_url": "https://repo.example.org/openalex/paper.pdf"
+            }),
+            serde_json::json!([]),
+        ),
+    )
+    .await;
+    // The default state has no contact address, so an Unpaywall lookup would answer 409.
+    let state = AppState::new(pool.clone());
+
+    let (status, value) = post_open_access(&state, project_id, report_id).await;
+
+    assert_eq!(status, StatusCode::CREATED, "{value}");
+    assert_eq!(
+        value["external_url"],
+        "https://repo.example.org/openalex/paper.pdf"
+    );
+    assert_eq!(report_document_count(&pool, report_id).await, 1);
+}
+
+#[tokio::test]
+async fn open_access_attach_takes_the_first_valid_openalex_pdf_past_a_plain_http_best_location() {
+    let Some(pool) = database().await else { return };
+    let doi = "10.1000/openalex-second-location";
+    let (project_id, report_id) = seed_report(&pool, Some(doi)).await;
+    seed_work(
+        &pool,
+        doi,
+        oa_raw(
+            serde_json::json!({ "pdf_url": "http://repo.example.org/openalex/best.pdf" }),
+            serde_json::json!([
+                { "pdf_url": null },
+                { "pdf_url": "https://repo.example.org/openalex/second.pdf" }
+            ]),
+        ),
+    )
+    .await;
+    // The default state has no contact address, so an Unpaywall lookup would answer 409.
+    let state = AppState::new(pool.clone());
+
+    let (status, value) = post_open_access(&state, project_id, report_id).await;
+
+    assert_eq!(status, StatusCode::CREATED, "{value}");
+    assert_eq!(
+        value["external_url"],
+        "https://repo.example.org/openalex/second.pdf"
+    );
+    assert_eq!(report_document_count(&pool, report_id).await, 1);
+}
+
+#[tokio::test]
+async fn open_access_attach_asks_unpaywall_when_openalex_has_no_pdf() {
+    let Some(pool) = database().await else { return };
+    let state = AppState::new(pool.clone());
+    let cases = [
+        (
+            "10.1000/stored-before-openalex",
+            serde_json::json!({ "title": "stored by another provider" }),
+        ),
+        (
+            "10.1000/landing-page-only",
+            oa_raw(
+                serde_json::json!({ "url": "https://doi.org/10.1000/landing-page-only", "pdf_url": null }),
+                serde_json::json!([{ "url": "https://repo.example.org/landing", "pdf_url": null }]),
+            ),
+        ),
+    ];
+    for (doi, raw) in cases {
+        let (project_id, report_id) = seed_report(&pool, Some(doi)).await;
+        seed_work(&pool, doi, raw).await;
+
+        // Only the Unpaywall step needs the contact address, so its refusal shows the lookup ran.
+        let (status, value) = post_open_access(&state, project_id, report_id).await;
+
+        assert_eq!(status, StatusCode::CONFLICT, "{doi}: {value}");
+        assert_eq!(value["code"], "contact_email_missing", "{doi}");
+        assert_eq!(report_document_count(&pool, report_id).await, 0, "{doi}");
+    }
+}
+
+#[tokio::test]
+async fn open_access_attach_falls_back_when_the_stored_oa_urls_are_malformed() {
+    let Some(pool) = database().await else { return };
+    let state = AppState::new(pool.clone());
+    let cases = [
+        (
+            "10.1000/malformed-string",
+            serde_json::json!({ "deepref_oa_urls": "https://repo.example.org/paper.pdf" }),
+        ),
+        (
+            "10.1000/malformed-array",
+            serde_json::json!({
+                "deepref_oa_urls": [{ "pdf_url": "https://repo.example.org/paper.pdf" }]
+            }),
+        ),
+        (
+            "10.1000/malformed-field",
+            oa_raw(serde_json::json!({ "pdf_url": 7 }), serde_json::json!([])),
+        ),
+    ];
+    for (doi, raw) in cases {
+        let (project_id, report_id) = seed_report(&pool, Some(doi)).await;
+        seed_work(&pool, doi, raw).await;
+
+        let (status, value) = post_open_access(&state, project_id, report_id).await;
+
+        assert_eq!(status, StatusCode::CONFLICT, "{doi}: {value}");
+        assert_eq!(value["code"], "contact_email_missing", "{doi}");
+        assert_eq!(report_document_count(&pool, report_id).await, 0, "{doi}");
+    }
+}
+
+#[tokio::test]
+async fn open_access_attach_falls_back_when_the_openalex_url_is_refused() {
+    let Some(pool) = database().await else { return };
+    let state = AppState::new(pool.clone());
+    let cases = [
+        (
+            "10.1000/private-host",
+            oa_raw(
+                serde_json::json!({ "pdf_url": "https://10.0.0.7/openalex/paper.pdf" }),
+                serde_json::json!([]),
+            ),
+        ),
+        (
+            "10.1000/plain-http",
+            oa_raw(
+                serde_json::json!({ "pdf_url": "http://repo.example.org/openalex/paper.pdf" }),
+                serde_json::json!([]),
+            ),
+        ),
+    ];
+    for (doi, raw) in cases {
+        let (project_id, report_id) = seed_report(&pool, Some(doi)).await;
+        seed_work(&pool, doi, raw).await;
+
+        let (status, value) = post_open_access(&state, project_id, report_id).await;
+
+        assert_eq!(status, StatusCode::CONFLICT, "{doi}: {value}");
+        assert_eq!(value["code"], "contact_email_missing", "{doi}");
+        assert_eq!(report_document_count(&pool, report_id).await, 0, "{doi}");
+    }
+}
+
+#[tokio::test]
+async fn open_access_attach_reports_a_missing_doi_before_anything_else() {
+    let Some(pool) = database().await else { return };
+    let state = AppState::new(pool.clone());
+    let (project_id, report_id) = seed_report(&pool, None).await;
+
+    let (status, value) = post_open_access(&state, project_id, report_id).await;
+
+    assert_eq!(status, StatusCode::CONFLICT, "{value}");
+    assert_eq!(value["code"], "report_doi_missing");
+    assert_eq!(report_document_count(&pool, report_id).await, 0);
+}
