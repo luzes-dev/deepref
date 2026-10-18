@@ -181,6 +181,63 @@ impl OpenAlexClient {
         self.corpus
     }
 
+    /// Asks `GET /rate-limit` whether the configured key works, once at boot. The
+    /// call is free. Only a 401, or a 403 that says the key is not activated,
+    /// downgrades the key. Any other outcome keeps it, and a key that fails later is
+    /// downgraded by the first request it fails. Without a key there is no call.
+    pub async fn probe_key(&self, permit: &dyn ProviderPermit) -> OpenAlexKeyState {
+        let Some(key) = self.key.key() else {
+            return OpenAlexKeyState::Keyless;
+        };
+        if let Err(error) = permit.acquire(ProviderKind::OpenAlex).await {
+            tracing::warn!(%error, "OpenAlex key probe skipped; keeping the key");
+            return self.key.state();
+        }
+        let url = format!(
+            "{}/rate-limit?api_key={}&mailto={}",
+            self.base_url,
+            urlencoding::encode(key),
+            urlencoding::encode(&self.mailto),
+        );
+        match self
+            .client
+            .get(url)
+            .header(header::ACCEPT, "application/json")
+            .send()
+            .await
+        {
+            Ok(response) if response.status().is_success() => {}
+            Ok(response) if response.status() == StatusCode::UNAUTHORIZED => {
+                self.key.downgrade("boot probe returned 401");
+            }
+            Ok(response) if response.status() == StatusCode::FORBIDDEN => {
+                let body = response.text().await.unwrap_or_default();
+                if body.contains("key_not_activated") {
+                    self.key.downgrade("boot probe found the key not activated");
+                } else {
+                    tracing::warn!(
+                        status = 403,
+                        "OpenAlex key probe refused; keeping the key until a request fails"
+                    );
+                }
+            }
+            Ok(response) => {
+                tracing::warn!(
+                    status = %response.status(),
+                    "OpenAlex key probe was inconclusive; keeping the key"
+                );
+            }
+            Err(error) => {
+                let error = error.without_url();
+                tracing::warn!(
+                    %error,
+                    "OpenAlex unreachable at boot; keeping the key until a request reaches it"
+                );
+            }
+        }
+        self.key.state()
+    }
+
     /// `GET /works/doi:{doi}` with the selected fields. The key is sent as a query
     /// parameter only while the process is keyed.
     fn singleton_request(&self, doi: &str) -> reqwest::RequestBuilder {
@@ -873,6 +930,98 @@ mod tests {
             }
             other => panic!("expected a retryable failure, got {other:?}"),
         }
+        assert_eq!(permit.taken(), vec![ProviderKind::OpenAlex]);
+    }
+
+    #[tokio::test]
+    async fn a_missing_key_is_keyless_and_the_probe_makes_no_call() {
+        let (base, requests) = scripted_server(Vec::new()).await;
+        let permit = RecordingPermit::default();
+
+        let state = client(base, None, 1).probe_key(&permit).await;
+
+        assert_eq!(state, OpenAlexKeyState::Keyless);
+        assert!(requests.lock().expect("request log").is_empty());
+        assert!(permit.taken().is_empty());
+    }
+
+    #[tokio::test]
+    async fn an_accepted_key_stays_keyed_after_one_permitted_probe() {
+        let (base, requests) = scripted_server(vec![reply("200 OK", "{}")]).await;
+        let client = client(base, Some("test-key"), 1);
+        let permit = RecordingPermit::default();
+
+        let state = client.probe_key(&permit).await;
+
+        assert_eq!(state, OpenAlexKeyState::Keyed);
+        assert_eq!(client.rate_per_second(), KEYED_RATE_PER_SECOND);
+        assert_eq!(permit.taken(), vec![ProviderKind::OpenAlex]);
+        let requests = requests.lock().expect("request log");
+        assert!(
+            requests[0].starts_with("GET /rate-limit?api_key=test-key&mailto="),
+            "{}",
+            requests[0]
+        );
+    }
+
+    #[tokio::test]
+    async fn a_rejected_key_at_boot_is_downgraded_to_keyless() {
+        let (base, _) = scripted_server(vec![reply("401 Unauthorized", INVALID_KEY)]).await;
+        let client = client(base, Some("test-key"), 1);
+
+        let state = client.probe_key(&RecordingPermit::default()).await;
+
+        assert_eq!(state, OpenAlexKeyState::Keyless);
+        assert_eq!(client.key_state(), OpenAlexKeyState::Keyless);
+        assert_eq!(client.rate_per_second(), KEYLESS_RATE_PER_SECOND);
+    }
+
+    #[tokio::test]
+    async fn a_key_not_yet_activated_at_boot_is_downgraded_to_keyless() {
+        // No pending key exists to provoke the real 403, so the body follows the handoff.
+        let (base, _) = scripted_server(vec![reply(
+            "403 Forbidden",
+            r#"{"error":"key_not_activated"}"#,
+        )])
+        .await;
+        let client = client(base, Some("test-key"), 1);
+
+        let state = client.probe_key(&RecordingPermit::default()).await;
+
+        assert_eq!(state, OpenAlexKeyState::Keyless);
+        assert_eq!(client.rate_per_second(), KEYLESS_RATE_PER_SECOND);
+    }
+
+    #[tokio::test]
+    async fn a_403_without_the_activation_marker_keeps_the_key() {
+        let (base, _) = scripted_server(vec![reply("403 Forbidden", "{}")]).await;
+
+        let state = client(base, Some("test-key"), 1)
+            .probe_key(&RecordingPermit::default())
+            .await;
+
+        assert_eq!(state, OpenAlexKeyState::Keyed);
+    }
+
+    #[tokio::test]
+    async fn a_server_error_at_boot_keeps_the_key() {
+        let (base, _) = scripted_server(vec![reply("500 Internal Server Error", "{}")]).await;
+
+        let state = client(base, Some("test-key"), 1)
+            .probe_key(&RecordingPermit::default())
+            .await;
+
+        assert_eq!(state, OpenAlexKeyState::Keyed);
+    }
+
+    #[tokio::test]
+    async fn an_unreachable_openalex_at_boot_keeps_the_key() {
+        let client = client("http://127.0.0.1:1".to_owned(), Some("test-key"), 1);
+        let permit = RecordingPermit::default();
+
+        let state = client.probe_key(&permit).await;
+
+        assert_eq!(state, OpenAlexKeyState::Keyed);
         assert_eq!(permit.taken(), vec![ProviderKind::OpenAlex]);
     }
 
