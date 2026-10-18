@@ -25,7 +25,7 @@ use thiserror::Error;
 
 use crate::crossref::{StatusClassification, classify_status, sleep_backoff};
 use wire::OpenAlexWork;
-pub use wire::pdf_url_from_oa_urls;
+pub use wire::pdf_urls_from_oa_urls;
 
 const OPENALEX_BASE: &str = "https://api.openalex.org";
 /// The fields the mapping reads, plus the ones kept in the raw payload for

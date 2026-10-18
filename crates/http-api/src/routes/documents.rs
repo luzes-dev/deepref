@@ -997,17 +997,18 @@ pub(crate) async fn attach_open_access_document(
     Ok((StatusCode::CREATED, Json(document_dto(document))))
 }
 
-/// The OpenAlex PDF stored with the cached work for `doi`, when it passes URL validation. A
-/// refused URL is `None`, so the caller falls back to Unpaywall.
+/// The first OpenAlex PDF stored with the cached work for `doi` that passes URL validation, in
+/// preference order. A refused URL is skipped. When none passes, the caller falls back to
+/// Unpaywall.
 async fn cached_openalex_pdf_url(
     pool: &sqlx::PgPool,
     doi: &str,
 ) -> Result<Option<String>, ApiError> {
     let stored = deepref_app::work_oa_urls(pool, doi).await?;
     Ok(stored
-        .as_ref()
-        .and_then(deepref_integrations::pdf_url_from_oa_urls)
-        .and_then(|pdf_url| deepref_documents::validate_external_url(&pdf_url).ok())
+        .iter()
+        .flat_map(deepref_integrations::pdf_urls_from_oa_urls)
+        .find_map(|pdf_url| deepref_documents::validate_external_url(&pdf_url).ok())
         .map(|url| url.to_string()))
 }
 

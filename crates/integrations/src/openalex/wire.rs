@@ -68,7 +68,7 @@ struct OpenAlexLocation {
 /// Each `OaLocation` is `{ "url", "pdf_url", "license", "version", "is_oa", "source" }`.
 /// `url` is OpenAlex's `landing_page_url`, and `source` is the host's display name. A field
 /// OpenAlex omits is `null`, and `is_oa` is `false` when it is omitted. The same type reads the
-/// stored value back in `pdf_url_from_oa_urls`.
+/// stored value back in `pdf_urls_from_oa_urls`.
 #[derive(Debug, Default, Deserialize, Serialize)]
 #[serde(default)]
 pub(crate) struct OaUrls {
@@ -101,18 +101,24 @@ impl From<OpenAlexLocation> for OaLocation {
     }
 }
 
-/// The PDF URL to try before Unpaywall, read from a stored `deepref_oa_urls` value: the best
-/// location's PDF, else the first listed PDF. Landing pages are never returned, and a missing
-/// or malformed value gives `None`. The URL is not validated here; the caller does that.
-pub fn pdf_url_from_oa_urls(stored: &Value) -> Option<String> {
+/// The PDF URLs to try before Unpaywall, read from a stored `deepref_oa_urls` value, in
+/// preference order: the best location's PDF, then each listed location's PDF. Landing pages
+/// are never returned, and a missing or malformed value gives no candidates. The URLs are not
+/// validated here; the caller takes the first one that passes.
+pub fn pdf_urls_from_oa_urls(stored: &Value) -> Vec<String> {
     // A JSON array would otherwise fill the struct's fields by position.
-    stored.as_object()?;
-    let oa_urls = OaUrls::deserialize(stored).ok()?;
+    if !stored.is_object() {
+        return Vec::new();
+    }
+    let Ok(oa_urls) = OaUrls::deserialize(stored) else {
+        return Vec::new();
+    };
     oa_urls
         .best_oa_location
         .into_iter()
         .chain(oa_urls.locations)
-        .find_map(|location| location.pdf_url.filter(|url| !url.trim().is_empty()))
+        .filter_map(|location| location.pdf_url.filter(|url| !url.trim().is_empty()))
+        .collect()
 }
 
 #[derive(Debug, Deserialize)]
@@ -228,8 +234,11 @@ mod tests {
             ]
         });
         assert_eq!(
-            pdf_url_from_oa_urls(&stored).as_deref(),
-            Some("https://repo.example.org/best.pdf")
+            pdf_urls_from_oa_urls(&stored),
+            [
+                "https://repo.example.org/best.pdf",
+                "https://other.example.org/copy.pdf",
+            ]
         );
     }
 
@@ -244,8 +253,11 @@ mod tests {
             ]
         });
         assert_eq!(
-            pdf_url_from_oa_urls(&stored).as_deref(),
-            Some("https://other.example.org/first.pdf")
+            pdf_urls_from_oa_urls(&stored),
+            [
+                "https://other.example.org/first.pdf",
+                "https://repo.example.org/second.pdf",
+            ]
         );
     }
 
@@ -255,7 +267,7 @@ mod tests {
             "best_oa_location": { "url": "https://landing.example.org/a", "pdf_url": null },
             "locations": [{ "url": "https://landing.example.org/b", "pdf_url": null }]
         });
-        assert_eq!(pdf_url_from_oa_urls(&stored), None);
+        assert!(pdf_urls_from_oa_urls(&stored).is_empty());
     }
 
     #[test]
@@ -265,18 +277,17 @@ mod tests {
             "locations": [{ "pdf_url": "https://repo.example.org/only.pdf" }]
         });
         assert_eq!(
-            pdf_url_from_oa_urls(&stored).as_deref(),
-            Some("https://repo.example.org/only.pdf")
+            pdf_urls_from_oa_urls(&stored),
+            ["https://repo.example.org/only.pdf"]
         );
     }
 
     #[test]
     fn a_missing_value_gives_no_candidate() {
-        assert_eq!(pdf_url_from_oa_urls(&Value::Null), None);
-        assert_eq!(pdf_url_from_oa_urls(&json!({})), None);
-        assert_eq!(
-            pdf_url_from_oa_urls(&json!({ "best_oa_location": null, "locations": [] })),
-            None
+        assert!(pdf_urls_from_oa_urls(&Value::Null).is_empty());
+        assert!(pdf_urls_from_oa_urls(&json!({})).is_empty());
+        assert!(
+            pdf_urls_from_oa_urls(&json!({ "best_oa_location": null, "locations": [] })).is_empty()
         );
     }
 
@@ -293,7 +304,7 @@ mod tests {
                 "locations": [{ "pdf_url": "https://repo.example.org/a.pdf" }]
             }),
         ] {
-            assert_eq!(pdf_url_from_oa_urls(&stored), None, "{stored}");
+            assert!(pdf_urls_from_oa_urls(&stored).is_empty(), "{stored}");
         }
     }
 
@@ -311,8 +322,8 @@ mod tests {
         let parsed: OpenAlexWork = serde_json::from_value(body.clone()).unwrap();
         let work = parsed.into_domain("10.1000/stored".to_owned(), body);
         assert_eq!(
-            pdf_url_from_oa_urls(&work.raw["deepref_oa_urls"]).as_deref(),
-            Some("https://repo.example.org/b.pdf")
+            pdf_urls_from_oa_urls(&work.raw["deepref_oa_urls"]),
+            ["https://repo.example.org/b.pdf"]
         );
     }
 
@@ -321,6 +332,6 @@ mod tests {
         let body: Value = serde_json::from_str(WORK).unwrap();
         let parsed: OpenAlexWork = serde_json::from_value(body.clone()).unwrap();
         let work = parsed.into_domain("10.1371/journal.pmed.0020124".to_owned(), body);
-        assert_eq!(pdf_url_from_oa_urls(&work.raw["deepref_oa_urls"]), None);
+        assert!(pdf_urls_from_oa_urls(&work.raw["deepref_oa_urls"]).is_empty());
     }
 }

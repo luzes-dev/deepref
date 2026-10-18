@@ -589,6 +589,36 @@ async fn open_access_attach_uses_the_openalex_pdf_without_a_contact_address() {
 }
 
 #[tokio::test]
+async fn open_access_attach_takes_the_first_valid_openalex_pdf_past_a_plain_http_best_location() {
+    let Some(pool) = database().await else { return };
+    let doi = "10.1000/openalex-second-location";
+    let (project_id, report_id) = seed_report(&pool, Some(doi)).await;
+    seed_work(
+        &pool,
+        doi,
+        oa_raw(
+            serde_json::json!({ "pdf_url": "http://repo.example.org/openalex/best.pdf" }),
+            serde_json::json!([
+                { "pdf_url": null },
+                { "pdf_url": "https://repo.example.org/openalex/second.pdf" }
+            ]),
+        ),
+    )
+    .await;
+    // The default state has no contact address, so an Unpaywall lookup would answer 409.
+    let state = AppState::new(pool.clone());
+
+    let (status, value) = post_open_access(&state, project_id, report_id).await;
+
+    assert_eq!(status, StatusCode::CREATED, "{value}");
+    assert_eq!(
+        value["external_url"],
+        "https://repo.example.org/openalex/second.pdf"
+    );
+    assert_eq!(report_document_count(&pool, report_id).await, 1);
+}
+
+#[tokio::test]
 async fn open_access_attach_asks_unpaywall_when_openalex_has_no_pdf() {
     let Some(pool) = database().await else { return };
     let state = AppState::new(pool.clone());
