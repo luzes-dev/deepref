@@ -2498,4 +2498,61 @@ mod tests {
             ProviderFetchError::Fatal { .. }
         ));
     }
+
+    /// The contact address for the live smoke tests. It is read at run time, so no address is
+    /// written to the source. `None` when `DEEPREF_CONTACT_EMAIL` is unset or blank.
+    fn live_contact_email() -> Option<String> {
+        std::env::var("DEEPREF_CONTACT_EMAIL")
+            .ok()
+            .map(|email| email.trim().to_owned())
+            .filter(|email| !email.is_empty())
+    }
+
+    /// Hits api.openalex.org with a real article. Run by hand: set `DEEPREF_CONTACT_EMAIL` and
+    /// pass `--run-ignored only` to nextest.
+    #[tokio::test]
+    #[ignore = "network: needs DEEPREF_CONTACT_EMAIL"]
+    async fn live_article_doi_through_openalex() {
+        let Some(email) = live_contact_email() else {
+            eprintln!("DEEPREF_CONTACT_EMAIL is not set; the live OpenAlex lookup is skipped");
+            return;
+        };
+        let client =
+            OpenAlexClient::with_base_url(OPENALEX_BASE, email, None, OpenAlexCorpus::Core)
+                .expect("client should build");
+
+        let fetched = fetch(&client, ABSTRACT_DOI, &RecordingPermit::default())
+            .await
+            .expect("OpenAlex should answer for a known article");
+
+        assert_eq!(fetched.provider, ProviderKind::OpenAlex);
+        assert_eq!(fetched.work.work.doi, ABSTRACT_DOI);
+        assert!(fetched.work.work.title.is_some());
+        assert!(!fetched.work.references.is_empty());
+    }
+
+    /// Resolves a few real reference IDs of an article in one list call. Run by hand, as the
+    /// article test above.
+    #[tokio::test]
+    #[ignore = "network: needs DEEPREF_CONTACT_EMAIL"]
+    async fn live_batch_reference_resolution_through_openalex() {
+        let Some(email) = live_contact_email() else {
+            eprintln!("DEEPREF_CONTACT_EMAIL is not set; the live OpenAlex list call is skipped");
+            return;
+        };
+        let client =
+            OpenAlexClient::with_base_url(OPENALEX_BASE, email, None, OpenAlexCorpus::Core)
+                .expect("client should build");
+        let body: Value = serde_json::from_str(WORK).expect("fixture is JSON");
+        let ids: Vec<String> = wire::referenced_ids(&body).into_iter().take(5).collect();
+
+        let (references, gap) = client
+            .resolve_references(&ids, &RecordingPermit::default())
+            .await
+            .expect("the list call should resolve");
+
+        assert!(gap.is_none(), "the list call stopped early: {gap:?}");
+        assert!(!references.is_empty());
+        assert!(references.iter().all(|reference| reference.doi.is_some()));
+    }
 }

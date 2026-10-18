@@ -791,4 +791,34 @@ mod tests {
             ProviderFetchError::Fatal { .. }
         ));
     }
+
+    /// The contact address for the live smoke test, read at run time so no address is written
+    /// to the source. `None` when `DEEPREF_CONTACT_EMAIL` is unset or blank.
+    fn live_contact_email() -> Option<String> {
+        std::env::var("DEEPREF_CONTACT_EMAIL")
+            .ok()
+            .map(|email| email.trim().to_owned())
+            .filter(|email| !email.is_empty())
+    }
+
+    /// Hits api.openalex.org's DataCite counterpart with a real Zenodo software record. Run by
+    /// hand: set `DEEPREF_CONTACT_EMAIL` and pass `--run-ignored only` to nextest.
+    #[tokio::test]
+    #[ignore = "network: needs DEEPREF_CONTACT_EMAIL"]
+    async fn live_zenodo_doi_through_datacite() {
+        let Some(email) = live_contact_email() else {
+            eprintln!("DEEPREF_CONTACT_EMAIL is not set; the live DataCite lookup is skipped");
+            return;
+        };
+        let client =
+            DataCiteClient::with_base_url(DATACITE_BASE, email).expect("client should build");
+
+        let fetched = fetch(&client, SOFTWARE_DOI, &RecordingPermit::default())
+            .await
+            .expect("DataCite should answer for a known Zenodo record");
+
+        assert_eq!(fetched.provider, ProviderKind::DataCite);
+        assert_eq!(fetched.work.work.doi, SOFTWARE_DOI);
+        assert!(fetched.work.work.title.is_some());
+    }
 }
