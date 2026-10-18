@@ -1,6 +1,21 @@
 {
+  "funders": [],
   "id": "https://openalex.org/W2144981148",
   "doi": "https://doi.org/10.1371/journal.pmed.0020124",
+  "counts_by_year": [
+    {
+      "year": 2026,
+      "cited_by_count": 594
+    },
+    {
+      "year": 2025,
+      "cited_by_count": 665
+    },
+    {
+      "year": 2024,
+      "cited_by_count": 648
+    }
+  ],
   "display_name": "Why Most Published Research Findings Are False",
   "publication_year": 2005,
   "publication_date": "2005-08-02",
@@ -99,6 +114,7 @@
     "https://openalex.org/W4300811467"
   ],
   "referenced_works_count": 40,
+  "awards": [],
   "best_oa_location": {
     "id": "doi:10.1371/journal.pmed.0020124",
     "doi": "https://doi.org/10.1371/journal.pmed.0020124",

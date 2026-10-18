@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use chrono::Utc;
 use deepref_domain::{FetchStatus, ProviderKind, Work, WorkWithReferences, normalize_doi};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 
 use crate::crossref::parse_openalex;
@@ -26,14 +26,66 @@ pub(crate) struct OpenAlexWork {
     cited_by_count: i32,
     #[serde(default)]
     referenced_works_count: i32,
+    best_oa_location: Option<OpenAlexLocation>,
+    #[serde(default)]
+    locations: Vec<OpenAlexLocation>,
     /// Front matter such as editorials and indexes. It ends the lookup as rejected.
     #[serde(default)]
     pub(crate) is_paratext: bool,
 }
 
+/// One OpenAlex location (`primary_location`, `best_oa_location` or an entry of
+/// `locations`). Only the fields the mapping reads are declared.
 #[derive(Debug, Deserialize)]
 struct OpenAlexLocation {
     source: Option<OpenAlexSource>,
+    landing_page_url: Option<String>,
+    pdf_url: Option<String>,
+    license: Option<String>,
+    version: Option<String>,
+    #[serde(default)]
+    is_oa: bool,
+}
+
+/// The open-access locations stored under `raw.deepref_oa_urls`, built by
+/// `OpenAlexWork::into_domain`. The open-access path in `documents.rs` reads this from
+/// `works.raw` ahead of Unpaywall, so the shape is a contract:
+///
+/// ```json
+/// { "best_oa_location": OaLocation | null, "locations": [OaLocation] }
+/// ```
+///
+/// Each `OaLocation` is `{ "url", "pdf_url", "license", "version", "is_oa", "source" }`.
+/// `url` is OpenAlex's `landing_page_url`, and `source` is the host's display name. A field
+/// OpenAlex omits is `null`, and `is_oa` is `false` when it is omitted.
+#[derive(Debug, Serialize)]
+pub(crate) struct OaUrls {
+    best_oa_location: Option<OaLocation>,
+    locations: Vec<OaLocation>,
+}
+
+/// One open-access location in `deepref_oa_urls`. See `OaUrls` for the shape.
+#[derive(Debug, Serialize)]
+pub(crate) struct OaLocation {
+    url: Option<String>,
+    pdf_url: Option<String>,
+    license: Option<String>,
+    version: Option<String>,
+    is_oa: bool,
+    source: Option<String>,
+}
+
+impl From<OpenAlexLocation> for OaLocation {
+    fn from(location: OpenAlexLocation) -> Self {
+        Self {
+            url: location.landing_page_url,
+            pdf_url: location.pdf_url,
+            license: location.license,
+            version: location.version,
+            is_oa: location.is_oa,
+            source: location.source.and_then(|source| source.display_name),
+        }
+    }
 }
 
 #[derive(Debug, Deserialize)]
@@ -56,12 +108,12 @@ impl OpenAlexWork {
             .as_ref()
             .and_then(|source| source.host_organization_name.clone());
         let container_title = source.and_then(|source| source.display_name);
-        let oa_urls = json!({
-            "best_oa_location": raw.get("best_oa_location").cloned().unwrap_or(Value::Null),
-            "locations": raw.get("locations").cloned().unwrap_or_else(|| json!([])),
-        });
+        let oa_urls = OaUrls {
+            best_oa_location: self.best_oa_location.map(OaLocation::from),
+            locations: self.locations.into_iter().map(OaLocation::from).collect(),
+        };
         if let Some(object) = raw.as_object_mut() {
-            object.insert(OA_URLS_KEY.to_owned(), oa_urls);
+            object.insert(OA_URLS_KEY.to_owned(), json!(oa_urls));
         }
 
         WorkWithReferences {

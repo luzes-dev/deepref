@@ -28,11 +28,13 @@ use wire::OpenAlexWork;
 
 const OPENALEX_BASE: &str = "https://api.openalex.org";
 /// The fields the mapping reads, plus the ones kept in the raw payload for
-/// enrichment. Anything else in a work stays out of the response.
+/// enrichment. Anything else in a work stays out of the response. Funding is `awards`
+/// and `funders` here: the API rejects `grants` as a select field.
 const SELECT_FIELDS: &str = concat!(
     "id,doi,display_name,publication_year,publication_date,type,primary_location,",
     "cited_by_count,referenced_works,referenced_works_count,best_oa_location,locations,",
-    "is_retracted,is_paratext,ids,topics,authorships,abstract_inverted_index"
+    "is_retracted,is_paratext,ids,topics,authorships,abstract_inverted_index,",
+    "counts_by_year,awards,funders"
 );
 
 /// IDs per reference list call. One `ids.openalex:` filter takes at most 100 values,
@@ -932,6 +934,25 @@ mod tests {
             requests[0]
         );
         assert!(!requests[0].contains("api_key"), "{}", requests[0]);
+        let select = requests[0]
+            .split("select=")
+            .nth(1)
+            .and_then(|rest| rest.split(['&', ' ']).next())
+            .unwrap_or_default();
+        let fields: Vec<&str> = select.split(',').collect();
+        for field in [
+            "counts_by_year",
+            "awards",
+            "funders",
+            "topics",
+            "authorships",
+            "is_retracted",
+            "is_paratext",
+            "best_oa_location",
+            "locations",
+        ] {
+            assert!(fields.contains(&field), "{field} is not selected: {select}");
+        }
     }
 
     #[tokio::test]
@@ -985,6 +1006,65 @@ mod tests {
             Some(2)
         );
         assert!(work.raw["deepref_oa_urls"]["best_oa_location"].is_object());
+        assert_eq!(
+            work.raw["deepref_oa_urls"]["best_oa_location"],
+            json!({
+                "url": "https://doi.org/10.1371/journal.pmed.0020124",
+                "pdf_url": null,
+                "license": "cc-by",
+                "version": "publishedVersion",
+                "is_oa": true,
+                "source": "PLoS Medicine",
+            })
+        );
+        assert_eq!(
+            work.raw["deepref_oa_urls"]["locations"][1],
+            json!({
+                "url": "https://pubmed.ncbi.nlm.nih.gov/16060722",
+                "pdf_url": null,
+                "license": null,
+                "version": "publishedVersion",
+                "is_oa": false,
+                "source": "PubMed",
+            })
+        );
+        assert_eq!(
+            work.raw["authorships"][0]["institutions"][0]["display_name"],
+            "University of Ioannina"
+        );
+        assert_eq!(
+            work.raw["counts_by_year"][0],
+            json!({ "year": 2026, "cited_by_count": 594 })
+        );
+        assert_eq!(work.raw["awards"], json!([]));
+        assert_eq!(work.raw["funders"], json!([]));
+    }
+
+    #[tokio::test]
+    async fn a_retracted_work_keeps_its_funders_counts_and_topics_in_raw() {
+        let (base, _) = scripted_server(vec![
+            reply("200 OK", RETRACTED),
+            reply("200 OK", EMPTY_LIST),
+        ])
+        .await;
+
+        let fetched = fetch(
+            &client(base, None, 1),
+            RETRACTED_DOI,
+            &RecordingPermit::default(),
+        )
+        .await
+        .expect("a retracted work is still answered");
+
+        assert_eq!(
+            fetched.work.raw["funders"][0]["display_name"],
+            "Royal Free London NHS Foundation Trust"
+        );
+        assert_eq!(
+            fetched.work.raw["counts_by_year"][0]["year"],
+            Value::from(2026)
+        );
+        assert_eq!(fetched.work.raw["topics"].as_array().map(Vec::len), Some(3));
     }
 
     #[tokio::test]
