@@ -39,9 +39,18 @@ pub(crate) struct OpenAlexWork {
     best_oa_location: Option<OpenAlexLocation>,
     #[serde(default, deserialize_with = "null_as_default")]
     locations: Vec<OpenAlexLocation>,
-    /// Front matter such as editorials and indexes. It ends the lookup as rejected.
+    /// An expansion-corpus record. A singleton lookup returns these whatever the corpus
+    /// setting says, so the adapter checks the flag itself.
     #[serde(default, deserialize_with = "null_as_default")]
-    pub(crate) is_paratext: bool,
+    pub(crate) is_xpac: bool,
+}
+
+impl OpenAlexWork {
+    /// Front matter such as editorials and indexes. It ends the lookup as rejected.
+    /// OpenAlex derives its deprecated `is_paratext` flag from `type`, so `type` decides.
+    pub(crate) fn is_paratext(&self) -> bool {
+        self.work_type.as_deref() == Some("paratext")
+    }
 }
 
 /// One OpenAlex location (`primary_location`, `best_oa_location` or an entry of

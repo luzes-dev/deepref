@@ -189,7 +189,8 @@ pub fn report_route(doi: &str, output: &RouteOutput) {
 }
 
 /// Logs an answer the router tried to fill. A budget stop warns, since the budget is spent.
-/// A shortfall is routine for works whose targets lack a DOI, so it logs at debug.
+/// A shortfall or an unverified list is routine, since most works have a target or two
+/// without a DOI, so it logs at debug.
 fn report_lost_edges(doi: &str, lost: &LostEdges) {
     let provider = lost.provider.as_str();
     let lost_edges = lost.missing();
@@ -199,7 +200,7 @@ fn report_lost_edges(doi: &str, lost: &LostEdges) {
             provider,
             lost_edges,
             fill = ?lost.fill,
-            "OpenAlex answer lists fewer DOI references than it reports; the reference union ran"
+            "the reference union read Crossref's list after the OpenAlex answer"
         );
         return;
     };

@@ -106,6 +106,9 @@ pub enum LostEdgeCause {
     BudgetExhausted { reset_secs: Option<u64> },
     /// The answer listed fewer DOI references than the work reports.
     Shortfall,
+    /// The answer met the provider's own count, which cannot show references the provider
+    /// never matched, so Crossref's list was read to check it.
+    Unverified,
 }
 
 impl LostEdgeCause {
@@ -114,6 +117,7 @@ impl LostEdgeCause {
         match self {
             Self::BudgetExhausted { .. } => "budget_exhausted",
             Self::Shortfall => "shortfall",
+            Self::Unverified => "unverified",
         }
     }
 }
@@ -254,13 +258,15 @@ impl ProviderRouter {
                         Some(ReferenceGap::BudgetExhausted { .. }) => {
                             AttemptOutcome::BudgetExhausted
                         }
-                        Some(ReferenceGap::Shortfall { .. }) | None => AttemptOutcome::Answered,
+                        Some(ReferenceGap::Shortfall { .. } | ReferenceGap::Unverified { .. })
+                        | None => AttemptOutcome::Answered,
                     };
                     attempts.push(attempt(kind, outcome));
                     let mut contributions = vec![kind];
+                    let mut unresolved = Vec::new();
                     let lost_edges = match gap {
                         Some(gap) if self.fills(gap) => {
-                            let lost = self
+                            let (lost, without_doi) = self
                                 .fill_lost_edges(
                                     &chain_kinds,
                                     kind,
@@ -270,15 +276,40 @@ impl ProviderRouter {
                                     permit,
                                 )
                                 .await;
+                            // The work cache is permanent, so a list that a transient
+                            // Crossref failure left short is retried instead of stored.
+                            if let LostEdgeFill::CrossrefFailed {
+                                error: ProviderFetchError::Retryable { message, .. },
+                            } = &lost.fill
+                            {
+                                let message = message.clone();
+                                attempts.push(attempt(
+                                    ProviderKind::Crossref,
+                                    AttemptOutcome::Retryable {
+                                        message: message.clone(),
+                                    },
+                                ));
+                                return RouteOutput {
+                                    attempts,
+                                    result: Err(RouteError::Retryable { message }),
+                                    lost_edges: Some(lost),
+                                };
+                            }
                             if lost.crossref_contributed() {
                                 contributions.push(ProviderKind::Crossref);
                             }
+                            unresolved = without_doi;
                             Some(lost)
                         }
                         _ => None,
                     };
-                    let fetched =
-                        stamp_provenance(fetched, &attempts, &contributions, lost_edges.as_ref());
+                    let fetched = stamp_provenance(
+                        fetched,
+                        &attempts,
+                        &contributions,
+                        lost_edges.as_ref(),
+                        unresolved,
+                    );
                     return RouteOutput {
                         attempts,
                         result: Ok(fetched),
@@ -345,18 +376,22 @@ impl ProviderRouter {
     }
 
     /// Whether the router asks Crossref to fill this gap. A budget stop always does, since
-    /// the spent budget is the only reason the answer is short. A shortfall does only when
-    /// the reference union is on.
+    /// the spent budget is the only reason the answer is short. A shortfall or an
+    /// unverified list does only when the reference union is on.
     fn fills(&self, gap: ReferenceGap) -> bool {
         match gap {
             ReferenceGap::BudgetExhausted { .. } => true,
-            ReferenceGap::Shortfall { .. } => self.reference_union,
+            ReferenceGap::Shortfall { .. } | ReferenceGap::Unverified { .. } => {
+                self.reference_union
+            }
         }
     }
 
     /// Fills the references the answer is missing, from Crossref's reference list when
-    /// Crossref is in the chain. The answer is never dropped: a Crossref that is missing or
-    /// fails leaves the partial references in place, and the report says so.
+    /// Crossref is in the chain, and returns the list entries that have no DOI, which cannot
+    /// become edges. A Crossref that is not enabled or fails fatally leaves the partial
+    /// references in place and the report says so. The caller decides what a transient
+    /// failure means.
     async fn fill_lost_edges(
         &self,
         chain: &[ProviderKind],
@@ -365,7 +400,7 @@ impl ProviderRouter {
         gap: ReferenceGap,
         references: &mut Vec<Reference>,
         permit: &dyn ProviderPermit,
-    ) -> LostEdges {
+    ) -> (LostEdges, Vec<Reference>) {
         let (cause, resolved, expected) = match gap {
             ReferenceGap::BudgetExhausted {
                 resolved,
@@ -379,44 +414,63 @@ impl ProviderRouter {
             ReferenceGap::Shortfall { resolved, expected } => {
                 (LostEdgeCause::Shortfall, resolved, expected)
             }
+            ReferenceGap::Unverified { resolved } => {
+                (LostEdgeCause::Unverified, resolved, resolved)
+            }
         };
         let crossref = self.adapters.get(&ProviderKind::Crossref).filter(|_| {
             answering != ProviderKind::Crossref && chain.contains(&ProviderKind::Crossref)
         });
+        let mut without_doi = Vec::new();
         let fill = match crossref {
             None => LostEdgeFill::CrossrefNotEnabled,
             Some(crossref) => match crossref.reference_list(doi, permit).await {
-                Ok(list) => LostEdgeFill::Crossref {
-                    added: merge_references(references, list),
-                },
+                Ok(list) => {
+                    let merged = merge_references(references, list);
+                    without_doi = merged.without_doi;
+                    LostEdgeFill::Crossref {
+                        added: merged.added,
+                    }
+                }
                 Err(error) => LostEdgeFill::CrossrefFailed { error },
             },
         };
-        LostEdges {
+        let lost = LostEdges {
             provider: answering,
             expected,
             resolved,
             cause,
             fill,
-        }
+        };
+        (lost, without_doi)
     }
 }
 
-/// Appends the references in `list` whose normalized DOI is new, and returns how many were
-/// added. Entries without a DOI cannot become child jobs, so they stay out.
-fn merge_references(references: &mut Vec<Reference>, list: Vec<Reference>) -> usize {
+/// What a reference list added to an answer.
+struct Merged {
+    /// References whose normalized DOI was new.
+    added: usize,
+    /// Entries with no usable DOI. They cannot become child jobs, so they stay out of the
+    /// references and are kept in the raw record as unresolved.
+    without_doi: Vec<Reference>,
+}
+
+/// Appends the references in `list` whose normalized DOI is new.
+fn merge_references(references: &mut Vec<Reference>, list: Vec<Reference>) -> Merged {
     let mut known: HashSet<String> = references
         .iter()
         .filter_map(|reference| reference.doi.as_deref())
         .filter_map(|doi| normalize_doi(doi).ok())
         .collect();
     let mut added = 0;
+    let mut without_doi = Vec::new();
     for mut reference in list {
         let Some(doi) = reference
             .doi
             .as_deref()
             .and_then(|doi| normalize_doi(doi).ok())
         else {
+            without_doi.push(reference);
             continue;
         };
         if known.insert(doi.clone()) {
@@ -425,7 +479,7 @@ fn merge_references(references: &mut Vec<Reference>, list: Vec<Reference>) -> us
             added += 1;
         }
     }
-    added
+    Merged { added, without_doi }
 }
 
 /// The chain one job runs. The stored chain keeps its order and drops providers that
@@ -481,12 +535,14 @@ impl From<&LostEdges> for LostEdgesRecord {
 
 /// Records the answering provider, its attempts and the reference sources on the work and in
 /// its raw payload. `contributions` lists the reference sources in the order they contributed,
-/// and `lost_edges` is the lost-edge record when the answer came back short.
+/// `lost_edges` is the lost-edge record when the router read another reference list, and
+/// `unresolved` holds that list's entries without a DOI.
 fn stamp_provenance(
     mut fetched: FetchedWork,
     attempts: &[ProviderAttempt],
     contributions: &[ProviderKind],
     lost_edges: Option<&LostEdges>,
+    unresolved: Vec<Reference>,
 ) -> FetchedWork {
     let provider = fetched.provider;
     let sources = citation_sources(contributions);
@@ -505,6 +561,12 @@ fn stamp_provenance(
         raw.insert(
             "deepref_lost_edges".to_owned(),
             json!(LostEdgesRecord::from(lost)),
+        );
+    }
+    if !unresolved.is_empty() {
+        raw.insert(
+            "deepref_unresolved_references".to_owned(),
+            json!(unresolved),
         );
     }
     fetched.work.raw = Value::Object(raw);
@@ -1455,7 +1517,7 @@ mod tests {
     }
 
     #[test]
-    fn a_failing_crossref_reference_list_keeps_the_answer_and_its_partial_references() {
+    fn a_fatal_crossref_reference_list_keeps_the_answer_and_its_partial_references() {
         let calls = Calls::default();
         let permit = FakePermit::default();
         let tried = Tried::default();
@@ -1469,9 +1531,9 @@ mod tests {
             )
         };
         let crossref = FakeProvider {
-            list: Err(ProviderFetchError::Retryable {
+            list: Err(ProviderFetchError::Fatal {
                 provider: ProviderKind::Crossref,
-                message: "upstream timed out".to_owned(),
+                message: "upstream refused the list".to_owned(),
             }),
             ..provider(ProviderKind::Crossref, answers(), &calls, &tried)
         };
@@ -1495,9 +1557,9 @@ mod tests {
                     reset_secs: Some(3_600),
                 },
                 fill: LostEdgeFill::CrossrefFailed {
-                    error: ProviderFetchError::Retryable {
+                    error: ProviderFetchError::Fatal {
                         provider: ProviderKind::Crossref,
-                        message: "upstream timed out".to_owned(),
+                        message: "upstream refused the list".to_owned(),
                     },
                 },
             })
@@ -1656,14 +1718,14 @@ mod tests {
     }
 
     #[test]
-    fn a_failing_crossref_list_on_a_shortfall_keeps_the_answer() {
+    fn a_fatal_crossref_list_on_a_shortfall_keeps_the_answer() {
         let (output, _, _) = gap_run(
             &[ProviderKind::OpenAlex, ProviderKind::Crossref],
             &[],
             shortfall(2, 4),
-            Err(ProviderFetchError::Retryable {
+            Err(ProviderFetchError::Fatal {
                 provider: ProviderKind::Crossref,
-                message: "upstream timed out".to_owned(),
+                message: "upstream refused the list".to_owned(),
             }),
             true,
         );
@@ -1684,9 +1746,9 @@ mod tests {
                 resolved: 2,
                 cause: LostEdgeCause::Shortfall,
                 fill: LostEdgeFill::CrossrefFailed {
-                    error: ProviderFetchError::Retryable {
+                    error: ProviderFetchError::Fatal {
                         provider: ProviderKind::Crossref,
-                        message: "upstream timed out".to_owned(),
+                        message: "upstream refused the list".to_owned(),
                     },
                 },
             })
@@ -1769,7 +1831,128 @@ mod tests {
     }
 
     #[test]
-    fn a_failed_crossref_fill_is_recorded_in_raw() {
+    fn a_transient_crossref_failure_on_a_budget_stop_retries_instead_of_storing_a_short_list() {
+        let (output, _, _) = gap_run(
+            &[ProviderKind::OpenAlex, ProviderKind::Crossref],
+            &[],
+            ReferenceGap::BudgetExhausted {
+                resolved: 1,
+                expected: 2,
+                reset_secs: None,
+            },
+            Err(ProviderFetchError::Retryable {
+                provider: ProviderKind::Crossref,
+                message: "upstream timed out".to_owned(),
+            }),
+            true,
+        );
+
+        assert_eq!(
+            output
+                .result
+                .as_ref()
+                .expect_err("the short list must not be stored"),
+            &RouteError::Retryable {
+                message: "upstream timed out".to_owned()
+            }
+        );
+        assert_eq!(
+            outcomes(&output),
+            vec![
+                (ProviderKind::OpenAlex, AttemptOutcome::BudgetExhausted),
+                (
+                    ProviderKind::Crossref,
+                    AttemptOutcome::Retryable {
+                        message: "upstream timed out".to_owned()
+                    }
+                ),
+            ]
+        );
+    }
+
+    #[test]
+    fn a_transient_crossref_failure_on_an_unverified_list_retries() {
+        let (output, _, _) = gap_run(
+            &[ProviderKind::OpenAlex, ProviderKind::Crossref],
+            &[],
+            ReferenceGap::Unverified { resolved: 2 },
+            Err(ProviderFetchError::Retryable {
+                provider: ProviderKind::Crossref,
+                message: "upstream timed out".to_owned(),
+            }),
+            true,
+        );
+
+        assert!(matches!(output.result, Err(RouteError::Retryable { .. })));
+    }
+
+    #[test]
+    fn an_unverified_list_reads_crossref_and_keeps_entries_without_a_doi_as_unresolved() {
+        let (output, _, calls) = gap_run(
+            &[ProviderKind::OpenAlex, ProviderKind::Crossref],
+            &[],
+            ReferenceGap::Unverified { resolved: 2 },
+            Ok(vec![
+                reference(Some("10.1000/b")),
+                reference(Some("10.1000/c")),
+                reference(None),
+            ]),
+            true,
+        );
+
+        let fetched = output.result.as_ref().expect("the answer is kept");
+        assert_eq!(
+            reference_dois(fetched),
+            vec!["10.1000/a", "10.1000/b", "10.1000/c"]
+        );
+        assert_eq!(fetched.work.work.citation_provider, "openalex,crossref");
+        assert_eq!(
+            output.lost_edges,
+            Some(LostEdges {
+                provider: ProviderKind::OpenAlex,
+                expected: 2,
+                resolved: 2,
+                cause: LostEdgeCause::Unverified,
+                fill: LostEdgeFill::Crossref { added: 1 },
+            })
+        );
+        assert_eq!(
+            fetched.work.raw["deepref_lost_edges"]["cause"],
+            "unverified"
+        );
+        assert_eq!(
+            fetched.work.raw["deepref_unresolved_references"]
+                .as_array()
+                .map(Vec::len),
+            Some(1)
+        );
+        assert_eq!(
+            calls.lock().expect("call log").clone(),
+            vec![ProviderKind::OpenAlex]
+        );
+    }
+
+    #[test]
+    fn an_unverified_list_with_the_reference_union_off_is_not_checked() {
+        let (output, permit, _) = gap_run(
+            &[ProviderKind::OpenAlex, ProviderKind::Crossref],
+            &[],
+            ReferenceGap::Unverified { resolved: 2 },
+            Ok(vec![reference(Some("10.1000/c"))]),
+            false,
+        );
+
+        let fetched = output.result.as_ref().expect("the answer is kept");
+        assert_eq!(reference_dois(fetched), vec!["10.1000/a", "10.1000/b"]);
+        assert_eq!(output.lost_edges, None);
+        assert_eq!(
+            permit.requested.lock().expect("permit log").clone(),
+            vec![ProviderKind::OpenAlex]
+        );
+    }
+
+    #[test]
+    fn a_fatal_crossref_fill_is_recorded_in_raw() {
         let (output, _, _) = gap_run(
             &[ProviderKind::OpenAlex, ProviderKind::Crossref],
             &[],
@@ -1778,9 +1961,9 @@ mod tests {
                 expected: 2,
                 reset_secs: Some(3_600),
             },
-            Err(ProviderFetchError::Retryable {
+            Err(ProviderFetchError::Fatal {
                 provider: ProviderKind::Crossref,
-                message: "upstream timed out".to_owned(),
+                message: "upstream refused the list".to_owned(),
             }),
             true,
         );

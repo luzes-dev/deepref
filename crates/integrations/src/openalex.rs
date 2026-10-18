@@ -34,7 +34,7 @@ const OPENALEX_BASE: &str = "https://api.openalex.org";
 const SELECT_FIELDS: &str = concat!(
     "id,doi,display_name,publication_year,publication_date,type,primary_location,",
     "cited_by_count,referenced_works,referenced_works_count,best_oa_location,locations,",
-    "is_retracted,is_paratext,ids,topics,authorships,abstract_inverted_index,",
+    "is_retracted,is_xpac,ids,topics,authorships,abstract_inverted_index,",
     "counts_by_year,awards,funders"
 );
 
@@ -409,12 +409,26 @@ impl OpenAlexClient {
                         let raw: Value = response.json().await.map_err(transport)?;
                         return Ok(Some(raw));
                     }
-                    match status {
-                        StatusCode::NOT_FOUND => return Ok(None),
-                        StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN if sent_with_key => {
+                    if sent_with_key
+                        && matches!(status, StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN)
+                    {
+                        // A 401 is a bad key. A 403 is one only when it says the key is not
+                        // activated, because OpenAlex also uses it for access refusals that
+                        // have nothing to do with the key.
+                        let key_rejected = status == StatusCode::UNAUTHORIZED
+                            || response
+                                .text()
+                                .await
+                                .unwrap_or_default()
+                                .contains("key_not_activated");
+                        if key_rejected {
                             self.key.downgrade("OpenAlex rejected the key");
                             continue;
                         }
+                        return Err(OpenAlexError::Unauthorized(status));
+                    }
+                    match status {
+                        StatusCode::NOT_FOUND => return Ok(None),
                         StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN => {
                             return Err(OpenAlexError::Unauthorized(status));
                         }
@@ -490,12 +504,17 @@ impl OpenAlexClient {
             .lookup_raw(&doi, permit)
             .await?
             .ok_or_else(|| OpenAlexError::NotFound(doi.clone()))?;
-        let mut work = checked_work(&doi, raw)?;
+        let mut work = checked_work(&doi, raw, self.corpus)?;
         let (references, budget_gap) = self
             .resolve_references(&wire::referenced_ids(&work.raw), permit)
             .await?;
-        let reference_gap =
-            budget_gap.or_else(|| shortfall(references.len(), work.work.references_count));
+        let reference_gap = budget_gap.or_else(|| {
+            shortfall(references.len(), work.work.references_count).or(Some(
+                ReferenceGap::Unverified {
+                    resolved: references.len(),
+                },
+            ))
+        });
         work.references = references;
         Ok(FetchedWork {
             work,
@@ -544,7 +563,8 @@ impl OpenAlexClient {
 }
 
 /// The gap for an answer that lists fewer DOI references than the work reports. A target
-/// without a DOI at OpenAlex is missing from the list too, so it counts here.
+/// without a DOI at OpenAlex is missing from the list too, so it counts here. The count is
+/// the length of `referenced_works`, so it never reveals a reference OpenAlex did not match.
 fn shortfall(resolved: usize, reported: i32) -> Option<ReferenceGap> {
     let expected = usize::try_from(reported).unwrap_or(0);
     (resolved < expected).then_some(ReferenceGap::Shortfall { resolved, expected })
@@ -580,7 +600,11 @@ fn transport(error: reqwest::Error) -> OpenAlexError {
 /// Maps a 200 body after the identity check. A sibling record filed under another
 /// DOI, or a null DOI, is not the work that was asked for, so it is not found. Front
 /// matter is rejected here, before any reference list is resolved.
-fn checked_work(doi: &str, raw: Value) -> Result<WorkWithReferences, OpenAlexError> {
+fn checked_work(
+    doi: &str,
+    raw: Value,
+    corpus: OpenAlexCorpus,
+) -> Result<WorkWithReferences, OpenAlexError> {
     let body: OpenAlexWork = serde_json::from_value(raw.clone())?;
     let same_work = body
         .doi
@@ -599,8 +623,15 @@ fn checked_work(doi: &str, raw: Value) -> Result<WorkWithReferences, OpenAlexErr
             returned: body.doi,
         });
     }
-    if body.is_paratext {
+    if body.is_paratext() {
         return Err(OpenAlexError::Paratext);
+    }
+    if body.is_xpac && corpus == OpenAlexCorpus::Core {
+        tracing::debug!(
+            requested = doi,
+            "OpenAlex answered an expansion record under the core corpus"
+        );
+        return Err(OpenAlexError::NotFound(doi.to_owned()));
     }
     Ok(body.into_domain(doi.to_owned(), raw))
 }
@@ -966,7 +997,8 @@ mod tests {
             "topics",
             "authorships",
             "is_retracted",
-            "is_paratext",
+            "is_xpac",
+            "type",
             "best_oa_location",
             "locations",
         ] {
@@ -1016,7 +1048,6 @@ mod tests {
             work.work.abstract_text
         );
         assert_eq!(work.raw["is_retracted"], Value::Bool(false));
-        assert_eq!(work.raw["is_paratext"], Value::Bool(false));
         assert_eq!(work.raw["topics"].as_array().map(Vec::len), Some(2));
         assert_eq!(
             work.raw["authorships"][0]["author"]["orcid"],
@@ -1339,8 +1370,9 @@ mod tests {
             .await
             .expect("a work without references answers");
         assert_eq!(
-            unreferenced.reference_gap, None,
-            "nothing was left to look up"
+            unreferenced.reference_gap,
+            Some(ReferenceGap::Unverified { resolved: 0 }),
+            "nothing was left to look up, and OpenAlex's own count cannot show what it missed"
         );
 
         let requests = requests.lock().expect("request log");
@@ -1440,7 +1472,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_complete_reference_list_has_no_gap() {
+    async fn a_list_that_meets_the_reported_count_is_still_unverified() {
         let ids = synthetic_ids(3);
         let (base, _) = scripted_server(vec![
             reply("200 OK", work_citing(&ids)),
@@ -1456,7 +1488,52 @@ mod tests {
         .await
         .expect("the metadata answers");
 
-        assert_eq!(fetched.reference_gap, None);
+        assert_eq!(
+            fetched.reference_gap,
+            Some(ReferenceGap::Unverified { resolved: 3 })
+        );
+    }
+
+    #[tokio::test]
+    async fn an_expansion_record_is_not_found_under_the_core_corpus() {
+        let mut body: Value = serde_json::from_str(WORK).expect("fixture is JSON");
+        body["is_xpac"] = Value::Bool(true);
+        let (base, requests) = scripted_server(vec![reply("200 OK", body.to_string())]).await;
+
+        let error = fetch(
+            &client(base, None, 1),
+            ABSTRACT_DOI,
+            &RecordingPermit::default(),
+        )
+        .await
+        .expect_err("core excludes expansion records");
+
+        assert!(
+            matches!(error, ProviderFetchError::NotFound { .. }),
+            "{error:?}"
+        );
+        assert_eq!(requests.lock().expect("request log").len(), 1);
+    }
+
+    #[tokio::test]
+    async fn an_expansion_record_answers_under_corpus_all() {
+        let mut body: Value = serde_json::from_str(WORK).expect("fixture is JSON");
+        body["is_xpac"] = Value::Bool(true);
+        let (base, _) = scripted_server(vec![
+            reply("200 OK", body.to_string()),
+            reply("200 OK", EMPTY_LIST),
+        ])
+        .await;
+
+        let fetched = fetch(
+            &client_in(OpenAlexCorpus::All, base, None, 1),
+            ABSTRACT_DOI,
+            &RecordingPermit::default(),
+        )
+        .await
+        .expect("corpus=all accepts expansion records");
+
+        assert_eq!(fetched.provider, ProviderKind::OpenAlex);
     }
 
     #[tokio::test]
@@ -1828,7 +1905,7 @@ mod tests {
             "referenced_works_count",
             "referenced_works",
             "locations",
-            "is_paratext",
+            "is_xpac",
             "primary_location",
             "authorships",
             "topics",
@@ -1915,7 +1992,7 @@ mod tests {
     #[tokio::test]
     async fn a_paratext_work_is_rejected_before_any_reference_is_resolved() {
         let mut body: Value = serde_json::from_str(WORK).expect("fixture is JSON");
-        body["is_paratext"] = Value::Bool(true);
+        body["type"] = Value::String("paratext".to_owned());
         let (base, requests) = scripted_server(vec![reply("200 OK", body.to_string())]).await;
 
         let error = fetch(
@@ -2152,9 +2229,9 @@ mod tests {
 
     /// A runtime rejection of the key: the first request carries it, the repeat
     /// does not, and every later lookup in the process is keyless from the start.
-    async fn assert_rejected_key_downgrades_once(status: &'static str) {
+    async fn assert_rejected_key_downgrades_once(status: &'static str, body: &'static str) {
         let (base, requests) = scripted_server(vec![
-            reply(status, INVALID_KEY),
+            reply(status, body),
             reply("200 OK", WORK),
             reply("200 OK", EMPTY_LIST),
             reply("200 OK", WORK),
@@ -2197,12 +2274,30 @@ mod tests {
 
     #[tokio::test]
     async fn a_runtime_401_downgrades_the_key_once_and_the_repeat_is_keyless() {
-        assert_rejected_key_downgrades_once("401 Unauthorized").await;
+        assert_rejected_key_downgrades_once("401 Unauthorized", INVALID_KEY).await;
     }
 
     #[tokio::test]
-    async fn a_runtime_403_downgrades_the_key_once_and_the_repeat_is_keyless() {
-        assert_rejected_key_downgrades_once("403 Forbidden").await;
+    async fn a_runtime_403_for_a_key_not_activated_downgrades_the_key_once() {
+        assert_rejected_key_downgrades_once("403 Forbidden", r#"{"error":"key_not_activated"}"#)
+            .await;
+    }
+
+    #[tokio::test]
+    async fn an_unrelated_runtime_403_keeps_the_key() {
+        let (base, requests) = scripted_server(vec![reply("403 Forbidden", "{}")]).await;
+        let client = client(base, Some("test-key"), 1);
+
+        let error = fetch(&client, ABSTRACT_DOI, &RecordingPermit::default())
+            .await
+            .expect_err("a forbidden response should not answer");
+
+        assert!(
+            matches!(error, ProviderFetchError::Retryable { .. }),
+            "{error:?}"
+        );
+        assert_eq!(client.key_state(), OpenAlexKeyState::Keyed);
+        assert_eq!(requests.lock().expect("request log").len(), 1);
     }
 
     #[tokio::test]

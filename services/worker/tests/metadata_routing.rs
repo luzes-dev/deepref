@@ -313,7 +313,17 @@ async fn an_uncached_doi_is_answered_by_openalex_and_keeps_the_crossref_lane_lab
         openalex_work(doi),
     )])
     .await;
-    let crossref = MockServer::start(Vec::new()).await;
+    // OpenAlex lists no references, so only Crossref's list can show what it missed.
+    let crossref = MockServer::start(vec![(
+        "/works/10.5555%2Fopenalex-first".to_owned(),
+        "200 OK",
+        json!({"message": {"reference": [
+            {"key": "r1", "DOI": "10.5555/cited"},
+            {"key": "r2", "unstructured": "Smith 1999, a book with no DOI"}
+        ]}})
+        .to_string(),
+    )])
+    .await;
     let fixture = seed_work_fetch(&pool, doi, json!({})).await?;
 
     let datacite = MockServer::start(Vec::new()).await;
@@ -326,8 +336,13 @@ async fn an_uncached_doi_is_answered_by_openalex_and_keeps_the_crossref_lane_lab
 
     let saved = provenance(&pool, doi).await?;
     assert_eq!(saved.metadata_provider, "openalex");
-    assert_eq!(saved.citation_provider, "openalex");
+    assert_eq!(saved.citation_provider, "openalex,crossref");
     assert_eq!(saved.cache_provider, "openalex");
+    assert_eq!(saved.raw["deepref_lost_edges"]["cause"], "unverified");
+    assert_eq!(
+        saved.raw["deepref_unresolved_references"][0]["raw_unstructured"],
+        "Smith 1999, a book with no DOI"
+    );
     assert_eq!(saved.cache_status, "fetched");
     assert_eq!(
         saved.raw["deepref_provider_attempts"],
@@ -338,9 +353,10 @@ async fn an_uncached_doi_is_answered_by_openalex_and_keeps_the_crossref_lane_lab
         ["crossref"],
         "the DOI lane label does not change with the answering provider"
     );
-    assert!(
-        crossref.paths().is_empty(),
-        "Crossref is not asked once OpenAlex answers"
+    assert_eq!(
+        crossref.paths(),
+        ["/works/10.5555%2Fopenalex-first"],
+        "Crossref is asked only for the reference list once OpenAlex answers"
     );
     Ok(())
 }
@@ -445,7 +461,7 @@ async fn a_paratext_work_ends_the_item_as_not_found_with_its_reason_and_no_later
     };
     let doi = "10.5555/paratext";
     let mut front_matter: Value = serde_json::from_str(&openalex_work(doi))?;
-    front_matter["is_paratext"] = json!(true);
+    front_matter["type"] = json!("paratext");
     let openalex = MockServer::start(vec![(
         "/works/doi:10.5555/paratext".to_owned(),
         "200 OK",
