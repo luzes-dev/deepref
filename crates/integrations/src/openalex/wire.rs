@@ -57,15 +57,18 @@ struct OpenAlexLocation {
 ///
 /// Each `OaLocation` is `{ "url", "pdf_url", "license", "version", "is_oa", "source" }`.
 /// `url` is OpenAlex's `landing_page_url`, and `source` is the host's display name. A field
-/// OpenAlex omits is `null`, and `is_oa` is `false` when it is omitted.
-#[derive(Debug, Serialize)]
+/// OpenAlex omits is `null`, and `is_oa` is `false` when it is omitted. The same type reads the
+/// stored value back in `pdf_url_from_oa_urls`.
+#[derive(Debug, Default, Deserialize, Serialize)]
+#[serde(default)]
 pub(crate) struct OaUrls {
     best_oa_location: Option<OaLocation>,
     locations: Vec<OaLocation>,
 }
 
 /// One open-access location in `deepref_oa_urls`. See `OaUrls` for the shape.
-#[derive(Debug, Serialize)]
+#[derive(Debug, Default, Deserialize, Serialize)]
+#[serde(default)]
 pub(crate) struct OaLocation {
     url: Option<String>,
     pdf_url: Option<String>,
@@ -86,6 +89,20 @@ impl From<OpenAlexLocation> for OaLocation {
             source: location.source.and_then(|source| source.display_name),
         }
     }
+}
+
+/// The PDF URL to try before Unpaywall, read from a stored `deepref_oa_urls` value: the best
+/// location's PDF, else the first listed PDF. Landing pages are never returned, and a missing
+/// or malformed value gives `None`. The URL is not validated here; the caller does that.
+pub fn pdf_url_from_oa_urls(stored: &Value) -> Option<String> {
+    // A JSON array would otherwise fill the struct's fields by position.
+    stored.as_object()?;
+    let oa_urls = OaUrls::deserialize(stored).ok()?;
+    oa_urls
+        .best_oa_location
+        .into_iter()
+        .chain(oa_urls.locations)
+        .find_map(|location| location.pdf_url.filter(|url| !url.trim().is_empty()))
 }
 
 #[derive(Debug, Deserialize)]
@@ -179,4 +196,121 @@ pub(crate) fn list_dois(body: &Value) -> HashMap<String, String> {
 /// The year at the start of an ISO date such as `2005-08-02`.
 fn year_of(date: &str) -> Option<i32> {
     date.get(..4)?.parse().ok()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use serde_json::json;
+
+    /// A real OpenAlex answer whose open-access locations are all landing pages.
+    const WORK: &str = include_str!("../../tests/fixtures/openalex/work_with_abstract.json");
+
+    #[test]
+    fn prefers_the_best_location_pdf() {
+        let stored = json!({
+            "best_oa_location": {
+                "url": "https://repo.example.org/best",
+                "pdf_url": "https://repo.example.org/best.pdf"
+            },
+            "locations": [
+                { "url": "https://other.example.org/copy", "pdf_url": "https://other.example.org/copy.pdf" }
+            ]
+        });
+        assert_eq!(
+            pdf_url_from_oa_urls(&stored).as_deref(),
+            Some("https://repo.example.org/best.pdf")
+        );
+    }
+
+    #[test]
+    fn takes_the_first_listed_pdf_when_the_best_location_has_none() {
+        let stored = json!({
+            "best_oa_location": { "url": "https://landing.example.org/a", "pdf_url": null },
+            "locations": [
+                { "url": "https://landing.example.org/b", "pdf_url": null },
+                { "url": "https://other.example.org/c", "pdf_url": "https://other.example.org/first.pdf" },
+                { "url": "https://repo.example.org/d", "pdf_url": "https://repo.example.org/second.pdf" }
+            ]
+        });
+        assert_eq!(
+            pdf_url_from_oa_urls(&stored).as_deref(),
+            Some("https://other.example.org/first.pdf")
+        );
+    }
+
+    #[test]
+    fn never_returns_a_landing_page() {
+        let stored = json!({
+            "best_oa_location": { "url": "https://landing.example.org/a", "pdf_url": null },
+            "locations": [{ "url": "https://landing.example.org/b", "pdf_url": null }]
+        });
+        assert_eq!(pdf_url_from_oa_urls(&stored), None);
+    }
+
+    #[test]
+    fn ignores_a_blank_pdf_url() {
+        let stored = json!({
+            "best_oa_location": { "pdf_url": "  " },
+            "locations": [{ "pdf_url": "https://repo.example.org/only.pdf" }]
+        });
+        assert_eq!(
+            pdf_url_from_oa_urls(&stored).as_deref(),
+            Some("https://repo.example.org/only.pdf")
+        );
+    }
+
+    #[test]
+    fn a_missing_value_gives_no_candidate() {
+        assert_eq!(pdf_url_from_oa_urls(&Value::Null), None);
+        assert_eq!(pdf_url_from_oa_urls(&json!({})), None);
+        assert_eq!(
+            pdf_url_from_oa_urls(&json!({ "best_oa_location": null, "locations": [] })),
+            None
+        );
+    }
+
+    #[test]
+    fn a_malformed_value_gives_no_candidate() {
+        for stored in [
+            json!("https://repo.example.org/a.pdf"),
+            json!([{ "pdf_url": "https://repo.example.org/a.pdf" }]),
+            json!({ "locations": "https://repo.example.org/a.pdf" }),
+            json!({ "best_oa_location": 5, "locations": [] }),
+            json!({ "locations": [{ "pdf_url": 7 }] }),
+            json!({
+                "best_oa_location": { "pdf_url": 7 },
+                "locations": [{ "pdf_url": "https://repo.example.org/a.pdf" }]
+            }),
+        ] {
+            assert_eq!(pdf_url_from_oa_urls(&stored), None, "{stored}");
+        }
+    }
+
+    #[test]
+    fn reads_back_the_pdf_the_adapter_stored() {
+        let body = json!({
+            "display_name": "A paper",
+            "best_oa_location": { "landing_page_url": "https://landing.example.org/a", "is_oa": true },
+            "locations": [{
+                "landing_page_url": "https://repo.example.org/b",
+                "pdf_url": "https://repo.example.org/b.pdf",
+                "is_oa": true
+            }]
+        });
+        let parsed: OpenAlexWork = serde_json::from_value(body.clone()).unwrap();
+        let work = parsed.into_domain("10.1000/stored".to_owned(), body);
+        assert_eq!(
+            pdf_url_from_oa_urls(&work.raw["deepref_oa_urls"]).as_deref(),
+            Some("https://repo.example.org/b.pdf")
+        );
+    }
+
+    #[test]
+    fn the_landing_page_only_fixture_has_no_candidate() {
+        let body: Value = serde_json::from_str(WORK).unwrap();
+        let parsed: OpenAlexWork = serde_json::from_value(body.clone()).unwrap();
+        let work = parsed.into_domain("10.1371/journal.pmed.0020124".to_owned(), body);
+        assert_eq!(pdf_url_from_oa_urls(&work.raw["deepref_oa_urls"]), None);
+    }
 }
