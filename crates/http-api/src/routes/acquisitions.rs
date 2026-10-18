@@ -1045,8 +1045,10 @@ fn parse_stored_doi_config(
 }
 
 /// The chain a new DOI run stores. Omitted names mean every enabled provider in deployment
-/// order. Named providers must all be enabled, and the stored chain keeps the request's order
-/// with repeats dropped, because the order is the provider priority.
+/// order. Named providers are trimmed and must all be enabled, and the stored chain keeps the
+/// request's order with repeats dropped, because the order is the provider priority. The
+/// provider list is validated before the contact e-mail is checked, so a request with both
+/// errors gets the 400.
 fn requested_metadata_chain(
     requested: Option<Vec<String>>,
     enabled: &[ProviderKind],
@@ -1065,8 +1067,11 @@ fn requested_metadata_chain(
             "metadata_providers must name at least one provider".to_owned(),
         ));
     }
-    let mut named = Vec::with_capacity(requested.len());
+    // The deployment has a handful of providers and the chain holds each at most once, so the
+    // request's length never sizes an allocation.
+    let mut named = Vec::new();
     for name in &requested {
+        let name = name.trim();
         let kind = name
             .parse::<ProviderKind>()
             .ok()
@@ -1363,7 +1368,7 @@ mod tests {
     #[test]
     fn a_name_outside_the_enabled_set_is_refused_with_the_set() {
         let enabled = [ProviderKind::Crossref];
-        for name in ["openalex", "datacite", "pubmed", "Crossref", " crossref"] {
+        for name in ["openalex", "datacite", "pubmed", "Crossref"] {
             match requested_metadata_chain(Some(vec![name.to_owned()]), &enabled) {
                 Err(ApiError::BadRequest(message)) => assert_eq!(
                     message,
@@ -1372,6 +1377,24 @@ mod tests {
                 other => panic!("{name}: unexpected {other:?}"),
             }
         }
+    }
+
+    #[test]
+    fn names_are_trimmed_before_they_are_deduplicated_and_checked() {
+        let enabled = [ProviderKind::OpenAlex, ProviderKind::Crossref];
+        let requested = vec![
+            " crossref ".to_owned(),
+            "openalex".to_owned(),
+            "crossref".to_owned(),
+        ];
+        assert_eq!(
+            requested_metadata_chain(Some(requested), &enabled).expect("trimmed chain"),
+            [ProviderKind::Crossref, ProviderKind::OpenAlex]
+        );
+        assert!(matches!(
+            requested_metadata_chain(Some(vec!["  ".to_owned()]), &enabled),
+            Err(ApiError::BadRequest(_))
+        ));
     }
 
     #[test]

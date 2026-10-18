@@ -3,8 +3,8 @@
 //! DOI metadata runs through a provider chain that `deepref-application` routes.
 //! `openalex` answers first, with free singleton lookups and reference lists
 //! from list calls that share a daily budget. Crossref answers the DOIs OpenAlex
-//! cannot, and its reference lists fill the edges OpenAlex loses when the budget
-//! runs out or an answer comes back short. DataCite answers the DOIs neither
+//! cannot, and its reference list is unioned into every OpenAlex answer, which
+//! also covers the edges lost when the budget runs out. DataCite answers the DOIs neither
 //! holds, mostly datasets, software and repository records. Crossref also serves
 //! the publication alerts and the abstract enrichment, which tries Europe PMC and
 //! then OpenAlex. PubMed, Unpaywall and GROBID keep their own clients, and the

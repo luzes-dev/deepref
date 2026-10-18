@@ -3,7 +3,7 @@
 > **Status:** designed 2026-10-17, revised after review 2026-10-18. Phases 0 through 4 are implemented on this branch stack (not merged). The optional shared cross-work resolver from 5.3 and the optional typed `AcquisitionSource::DataCite` from Phase 2 were not built.
 > **Base:** builds on #250 (`DEEPREF_CONTACT_EMAIL`, merged), which introduced `IntegrationsConfig`.
 > **Scope:** DOI metadata fetching, reference edges, provider configuration, provenance, persistence touchpoints, and the web strings that name providers. Publication alerts and PMID imports keep their current providers.
-> **Review follow-up:** the reference union runs on every OpenAlex answer, a transient Crossref failure during it retries the fetch, a request's chain order is kept, expansion records and paratext follow the current attribute names, and only a 401 or an inactive-key 403 downgrades the key at runtime.
+> **Review follow-up:** the stack follows this revision. The union runs on every OpenAlex answer when Crossref is deployment-enabled, a reference failure never advances the metadata chain, a provider-level fatal failure is recorded and the chain moves on, attempts carry purpose and request counts, `deepref_reference_status` replaces `deepref_lost_edges`, new edges carry `doi-reference`, and only a 401 or an inactive-key 403 downgrades the key. The default chain still switches in the same stack as the behavior it depends on, so deploy the whole stack together and keep `DEEPREF_METADATA_PROVIDERS=crossref` until then.
 > **Audience:** the implementing agent. Confirm section 10 with the user before Phase 1a. Phase 0 was behavior-neutral and is implemented.
 
 ## 1. Objective
@@ -145,28 +145,40 @@ pub trait WorkProvider: Send + Sync {
     // Defaults to fetch_work_with_references. Skips work the providers in `tried` did.
     fn fetch_work_after<'a>(&'a self, doi: &'a str, tried: &'a [ProviderKind], permit: &'a dyn ProviderPermit)
         -> ProviderFuture<'a, FetchedWork, ProviderFetchError>;
-    // The raw reference list, for filling lost edges. Defaults to a fatal error.
+    // The raw reference list, for the union. Defaults to a fatal error.
     fn reference_list<'a>(&'a self, doi: &'a str, permit: &'a dyn ProviderPermit)
         -> ProviderFuture<'a, Vec<Reference>, ProviderFetchError>;
+    // Whether an accepted answer is unioned with Crossref's list. OpenAlex says yes.
+    fn unions_crossref_references(&self) -> bool;
+}
+
+// The permit names the service and the purpose of the request it precedes. The service is
+// the limiter identity and is not a ProviderKind: Europe PMC has its own permits.
+pub trait ProviderPermit: Send + Sync {
+    fn acquire<'a>(&'a self, request: OutboundRequest) -> ProviderFuture<'a, (), PermitError>;
 }
 
 pub struct FetchedWork {
     pub work: WorkWithReferences,
     pub provider: ProviderKind,
-    pub reference_gap: Option<ReferenceGap>,
+    // Targets, retained, omitted, DOI-less and unattempted counts, and a budget stop.
+    pub references: ReferenceReport,
 }
 
 pub enum ProviderFetchError {
-    NotFound { provider: ProviderKind, doi: String },
+    NotFound { provider: ProviderKind, doi: String, reason: Option<String> },
     Rejected { provider: ProviderKind, reason: String },
     Retryable { provider: ProviderKind, message: String },
     Fatal { provider: ProviderKind, message: String },
+    // The metadata answered and a later reference request failed. The chain does not move on.
+    ReferenceRetryable { provider: ProviderKind, message: String },
+    ReferenceFatal { provider: ProviderKind, message: String },
 }
 ```
 
 Delete `MetadataProvider`, `CitationProvider` and `SearchProvider` and their Crossref impls and re-exports in the same phase. `RawRecord` stays for import parsers; `ImportParser::parse` is synchronous and does not use `ProviderFuture`. Replace the existing future alias's fixed `ProviderError` with `ProviderFetchError` as shown above. Keep `ProviderError` only for real remaining consumers, such as the Crossref constructor, and remove obsolete variants.
 
-Attempt semantics: one attempt is one adapter invocation for a purpose: metadata, reference resolution, reference union, or abstract enrichment. It can issue multiple HTTP requests, including internal retries; record its request count and final outcome. Metadata and reference calls use the current policy fed by `settings.retry_attempts`; abstract enrichment retains its existing best-effort retry policy. The router adds no retry loop of its own: metadata routing moves to the next provider on `NotFound` or exhausted `Retryable`. Job-level retries stay as they are. No third layer.
+Attempt semantics: an attempt record is one group of requests to one service for one purpose: metadata, reference resolution, reference union, or abstract enrichment. The record's request count is the number of permits granted, because every request takes a permit immediately before it is sent. It can issue multiple HTTP requests, including internal retries; record its request count and final outcome. Metadata and reference calls use the current policy fed by `settings.retry_attempts`; abstract enrichment retains its existing best-effort retry policy. The router adds no retry loop of its own: metadata routing moves to the next provider on `NotFound` or exhausted `Retryable`. Job-level retries stay as they are. No third layer.
 
 Permits: inject an asynchronous permit callback when constructing the router, adapters and abstract enricher. Acquire immediately before every outbound HTTP request, including each internal retry, reference batch, Crossref helper call, boot probe and Europe PMC/OpenAlex enrichment request. Remove the worker's one-per-fetch permit; it cannot account for internal requests. Use the actual outbound provider's key, and resolve OpenAlex's keyed/keyless rate at request time so downgrade also lowers the permit rate. Permit acquisition failures propagate as retryable infrastructure failures, not provider not-found answers.
 

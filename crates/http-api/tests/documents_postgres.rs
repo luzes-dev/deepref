@@ -589,6 +589,39 @@ async fn open_access_attach_uses_the_openalex_pdf_without_a_contact_address() {
 }
 
 #[tokio::test]
+async fn open_access_attach_reads_the_phase_1b_stored_shape_with_an_object_source() {
+    let Some(pool) = database().await else { return };
+    let doi = "10.1000/phase-1b-shape";
+    let (project_id, report_id) = seed_report(&pool, Some(doi)).await;
+    // Phase 1b stored the upstream objects, so `source` is an object, not a display name.
+    seed_work(
+        &pool,
+        doi,
+        oa_raw(
+            serde_json::json!({
+                "pdf_url": "https://repository.example.org/phase-1b/paper.pdf",
+                "source": { "display_name": "Repository" }
+            }),
+            serde_json::json!([
+                { "pdf_url": null, "source": { "id": "https://openalex.org/S1" } }
+            ]),
+        ),
+    )
+    .await;
+    // The default state has no contact address, so an Unpaywall lookup would answer 409.
+    let state = AppState::new(pool.clone());
+
+    let (status, value) = post_open_access(&state, project_id, report_id).await;
+
+    assert_eq!(status, StatusCode::CREATED, "{value}");
+    assert_eq!(
+        value["external_url"],
+        "https://repository.example.org/phase-1b/paper.pdf"
+    );
+    assert_eq!(report_document_count(&pool, report_id).await, 1);
+}
+
+#[tokio::test]
 async fn open_access_attach_takes_the_first_valid_openalex_pdf_past_a_plain_http_best_location() {
     let Some(pool) = database().await else { return };
     let doi = "10.1000/openalex-second-location";
