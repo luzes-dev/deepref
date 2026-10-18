@@ -128,6 +128,25 @@ fn crossref_work() -> String {
     .to_string()
 }
 
+/// A DataCite singleton body for `doi`, in the shape `GET /dois/{doi}?enriched=true` returns.
+fn datacite_record(doi: &str) -> String {
+    json!({
+        "data": {
+            "id": doi,
+            "type": "dois",
+            "attributes": {
+                "doi": doi,
+                "titles": [{ "title": "Answered by DataCite" }],
+                "publisher": "Zenodo",
+                "publicationYear": 2024,
+                "types": { "resourceTypeGeneral": "Dataset" },
+                "relatedIdentifiers": []
+            }
+        }
+    })
+    .to_string()
+}
+
 /// The worker configuration with every adapter pointed at the mock servers. The
 /// abstract fallback is off, so no test reaches Europe PMC, the public OpenAlex API or
 /// the public DataCite API.
@@ -298,7 +317,6 @@ async fn an_uncached_doi_is_answered_by_openalex_and_keeps_the_crossref_lane_lab
     let fixture = seed_work_fetch(&pool, doi, json!({})).await?;
 
     let datacite = MockServer::start(Vec::new()).await;
-
     run_fetch(
         &pool,
         &fixture,
@@ -351,7 +369,6 @@ async fn the_run_chain_wins_over_the_deployment_default_for_an_uncached_doi() ->
         seed_work_fetch(&pool, doi, json!({ "metadata_providers": ["crossref"] })).await?;
 
     let datacite = MockServer::start(Vec::new()).await;
-
     run_fetch(
         &pool,
         &fixture,
@@ -388,7 +405,6 @@ async fn a_doi_openalex_does_not_know_falls_through_to_crossref() -> Result<()> 
     let fixture = seed_work_fetch(&pool, doi, json!({})).await?;
 
     let datacite = MockServer::start(Vec::new()).await;
-
     run_fetch(
         &pool,
         &fixture,
@@ -417,5 +433,54 @@ async fn a_doi_openalex_does_not_know_falls_through_to_crossref() -> Result<()> 
         ["/works/10.5555%2Fopenalex-miss"],
         "Crossref is asked once OpenAlex has no record"
     );
+    Ok(())
+}
+
+#[tokio::test]
+async fn a_doi_only_datacite_holds_is_recorded_as_datacite_and_keeps_the_crossref_lane_label()
+-> Result<()> {
+    let Some(pool) = deepref_app::test_isolation::isolated_pool_from_env("DATABASE_URL", 8).await
+    else {
+        return Ok(());
+    };
+    let doi = "10.5555/datacite-only";
+    let openalex = MockServer::start(Vec::new()).await;
+    let crossref = MockServer::start(Vec::new()).await;
+    let datacite = MockServer::start(vec![(
+        "/dois/10.5555/datacite-only".to_owned(),
+        "200 OK",
+        datacite_record(doi),
+    )])
+    .await;
+    let fixture = seed_work_fetch(&pool, doi, json!({})).await?;
+
+    run_fetch(
+        &pool,
+        &fixture,
+        &worker_config(&openalex, &crossref, &datacite),
+    )
+    .await?;
+
+    let saved = provenance(&pool, doi).await?;
+    assert_eq!(saved.metadata_provider, "datacite");
+    assert_eq!(saved.citation_provider, "datacite");
+    assert_eq!(saved.cache_provider, "datacite");
+    assert_eq!(saved.cache_status, "fetched");
+    assert_eq!(
+        saved.raw["deepref_provider_attempts"],
+        json!([
+            { "provider": "openalex", "outcome": "not_found" },
+            { "provider": "crossref", "outcome": "not_found" },
+            { "provider": "datacite", "outcome": "answered" },
+        ])
+    );
+    assert_eq!(
+        record_sources(&pool, fixture.project_id).await?,
+        ["crossref"],
+        "the DOI lane label does not change with the answering provider"
+    );
+    assert_eq!(openalex.paths(), ["/works/doi:10.5555/datacite-only"]);
+    assert_eq!(crossref.paths(), ["/works/10.5555%2Fdatacite-only"]);
+    assert_eq!(datacite.paths(), ["/dois/10.5555/datacite-only"]);
     Ok(())
 }

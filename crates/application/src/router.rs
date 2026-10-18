@@ -655,6 +655,55 @@ mod tests {
     }
 
     #[test]
+    fn a_doi_only_datacite_answers_falls_through_to_datacite_with_its_provenance() {
+        let calls = Calls::default();
+        let router = router(
+            &[
+                ProviderKind::OpenAlex,
+                ProviderKind::Crossref,
+                ProviderKind::DataCite,
+            ],
+            vec![
+                fake(
+                    ProviderKind::OpenAlex,
+                    not_found(ProviderKind::OpenAlex),
+                    &calls,
+                ),
+                fake(
+                    ProviderKind::Crossref,
+                    not_found(ProviderKind::Crossref),
+                    &calls,
+                ),
+                fake(ProviderKind::DataCite, answers(), &calls),
+            ],
+        );
+
+        let output = run(&router, &[], &FakePermit::default());
+
+        assert_eq!(answered_by(&output), Some(ProviderKind::DataCite));
+        assert_eq!(
+            outcomes(&output),
+            vec![
+                (ProviderKind::OpenAlex, AttemptOutcome::NotFound),
+                (ProviderKind::Crossref, AttemptOutcome::NotFound),
+                (ProviderKind::DataCite, AttemptOutcome::Answered),
+            ]
+        );
+        assert_eq!(
+            call_log(&calls),
+            [
+                ProviderKind::OpenAlex,
+                ProviderKind::Crossref,
+                ProviderKind::DataCite
+            ]
+        );
+        let fetched = output.result.expect("DataCite should answer");
+        assert_eq!(fetched.work.work.metadata_provider, "datacite");
+        assert_eq!(fetched.work.work.citation_provider, "datacite");
+        assert_eq!(fetched.work.raw["deepref_metadata_source"], "datacite");
+    }
+
+    #[test]
     fn a_rejected_answer_ends_the_chain_as_not_found_with_its_reason() {
         let calls = Calls::default();
         let router = router(

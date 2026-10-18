@@ -445,6 +445,16 @@ mod tests {
     }
 
     #[test]
+    fn datacite_is_accepted_and_keeps_its_configured_position() {
+        assert_eq!(
+            load(&[("DEEPREF_METADATA_PROVIDERS", "datacite,openalex")])
+                .unwrap()
+                .metadata_providers,
+            [ProviderKind::DataCite, ProviderKind::OpenAlex]
+        );
+    }
+
+    #[test]
     fn openalex_is_accepted_and_keeps_its_configured_position() {
         assert_eq!(
             load(&[("DEEPREF_METADATA_PROVIDERS", "crossref,openalex")])
