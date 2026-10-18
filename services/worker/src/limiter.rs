@@ -1,5 +1,6 @@
 use deepref_application::{PermitError, ProviderFuture, ProviderPermit};
 use deepref_domain::ProviderKind;
+use deepref_integrations::OpenAlexClient;
 use sqlx::PgPool;
 
 /// Reserves a provider permit through the PostgreSQL adapter. The returned wait
@@ -14,17 +15,23 @@ pub async fn acquire(pool: &PgPool, provider: &str, rate_per_second: u32) -> any
 }
 
 /// The permit one job takes before each provider request. Crossref uses the
-/// deployment's configured rate. No other provider has an adapter in this build.
+/// deployment's configured rate, and OpenAlex the rate of its client's key state.
 pub struct ProviderLimiter<'a> {
     pool: &'a PgPool,
     crossref_rate_per_second: u32,
+    openalex: Option<&'a OpenAlexClient>,
 }
 
 impl<'a> ProviderLimiter<'a> {
-    pub fn new(pool: &'a PgPool, crossref_rate_per_second: u32) -> Self {
+    pub fn new(
+        pool: &'a PgPool,
+        crossref_rate_per_second: u32,
+        openalex: Option<&'a OpenAlexClient>,
+    ) -> Self {
         Self {
             pool,
             crossref_rate_per_second,
+            openalex,
         }
     }
 }
@@ -32,18 +39,71 @@ impl<'a> ProviderLimiter<'a> {
 impl ProviderPermit for ProviderLimiter<'_> {
     fn acquire<'a>(&'a self, provider: ProviderKind) -> ProviderFuture<'a, (), PermitError> {
         Box::pin(async move {
-            let rate = match provider {
-                ProviderKind::Crossref => self.crossref_rate_per_second,
-                ProviderKind::OpenAlex | ProviderKind::DataCite => {
-                    return Err(PermitError(format!(
-                        "no rate is configured for {}",
-                        provider.as_str()
-                    )));
-                }
-            };
+            let rate = provider_rate(provider, self.crossref_rate_per_second, self.openalex)?;
             acquire(self.pool, provider.as_str(), rate)
                 .await
                 .map_err(|error| PermitError(error.to_string()))
         })
+    }
+}
+
+/// The per-second rate for `provider`. OpenAlex reads its rate from the client on each
+/// permit, so a downgrade to keyless lowers it for every later request. DataCite has no
+/// adapter in this build, so it has no rate.
+fn provider_rate(
+    provider: ProviderKind,
+    crossref_rate_per_second: u32,
+    openalex: Option<&OpenAlexClient>,
+) -> Result<u32, PermitError> {
+    match provider {
+        ProviderKind::Crossref => Ok(crossref_rate_per_second),
+        ProviderKind::OpenAlex => openalex
+            .map(OpenAlexClient::rate_per_second)
+            .ok_or_else(|| no_rate(provider)),
+        ProviderKind::DataCite => Err(no_rate(provider)),
+    }
+}
+
+fn no_rate(provider: ProviderKind) -> PermitError {
+    PermitError(format!("no rate is configured for {}", provider.as_str()))
+}
+
+#[cfg(test)]
+mod tests {
+    use deepref_config::OpenAlexCorpus;
+    use deepref_integrations::{KEYED_RATE_PER_SECOND, KEYLESS_RATE_PER_SECOND};
+
+    use super::*;
+
+    fn openalex(api_key: Option<&str>) -> OpenAlexClient {
+        OpenAlexClient::with_base_url(
+            "http://127.0.0.1:9",
+            "ops@example.org",
+            api_key.map(str::to_owned),
+            OpenAlexCorpus::Core,
+        )
+        .expect("client should build")
+    }
+
+    #[test]
+    fn openalex_takes_its_rate_from_the_key_state() {
+        let keyed = openalex(Some("test-key"));
+        let keyless = openalex(None);
+
+        assert_eq!(
+            provider_rate(ProviderKind::OpenAlex, 4, Some(&keyed)),
+            Ok(KEYED_RATE_PER_SECOND)
+        );
+        assert_eq!(
+            provider_rate(ProviderKind::OpenAlex, 4, Some(&keyless)),
+            Ok(KEYLESS_RATE_PER_SECOND)
+        );
+    }
+
+    #[test]
+    fn crossref_keeps_the_configured_rate_and_the_others_have_none() {
+        assert_eq!(provider_rate(ProviderKind::Crossref, 4, None), Ok(4));
+        assert!(provider_rate(ProviderKind::OpenAlex, 4, None).is_err());
+        assert!(provider_rate(ProviderKind::DataCite, 4, None).is_err());
     }
 }

@@ -70,6 +70,7 @@ async fn drain(pool: &PgPool, project: Uuid) {
                 _ => None,
             })
             .expect("local runtime configuration"),
+            &deepref_worker::metadata::MetadataClients::default(),
         )
         .await
         .expect("step")
@@ -782,10 +783,11 @@ async fn concurrent_handle_step_calls_on_one_node_execute_once() {
         (name == "APP_ENV").then(|| "local".into())
     })
     .expect("local runtime configuration");
+    let metadata = deepref_worker::metadata::MetadataClients::default();
 
     let (left, right) = tokio::join!(
-        workflows::handle_step(&pool, &job, &lease, None, &runtime),
-        workflows::handle_step(&pool, &job, &lease, None, &runtime),
+        workflows::handle_step(&pool, &job, &lease, None, &runtime, &metadata),
+        workflows::handle_step(&pool, &job, &lease, None, &runtime, &metadata),
     );
     assert_eq!(left.expect("left"), DeliveryAction::Ack);
     assert_eq!(right.expect("right"), DeliveryAction::Ack);
@@ -871,8 +873,9 @@ async fn a_stale_attempt_cannot_restart_or_overwrite_a_reclaimed_step() {
         (name == "APP_ENV").then(|| "local".into())
     })
     .expect("local runtime configuration");
+    let metadata = deepref_worker::metadata::MetadataClients::default();
     assert_eq!(
-        workflows::handle_step(&pool, &second, &live, None, &runtime)
+        workflows::handle_step(&pool, &second, &live, None, &runtime, &metadata)
             .await
             .expect("live attempt"),
         DeliveryAction::Ack
@@ -1087,10 +1090,18 @@ async fn parked_queued_graph_fails_before_network_and_never_queues_successors() 
         (name == "APP_ENV").then(|| "local".into())
     })
     .expect("default-off runtime");
+    let metadata = deepref_worker::metadata::MetadataClients::default();
     assert_eq!(
-        workflows::handle_step(&pool, &job, &job.lease("parked-worker"), None, &runtime)
-            .await
-            .expect("guarded delivery"),
+        workflows::handle_step(
+            &pool,
+            &job,
+            &job.lease("parked-worker"),
+            None,
+            &runtime,
+            &metadata
+        )
+        .await
+        .expect("guarded delivery"),
         DeliveryAction::Terminate
     );
     let saved = get_workflow_run(&pool, project, run.run_id)

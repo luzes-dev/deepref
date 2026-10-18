@@ -26,7 +26,7 @@ pub use status::{StatusClassification, classify_status};
 
 use wire::CrossrefWorksResponse;
 
-const CROSSREF_BASE: &str = "https://api.crossref.org";
+pub const CROSSREF_BASE: &str = "https://api.crossref.org";
 
 /// The one Crossref client. Every lookup goes through the `WorkProvider` port, so
 /// each request takes a permit. The enricher fills a missing abstract from Europe
@@ -45,13 +45,22 @@ impl CrossrefClient {
     /// Builds the client for `api.crossref.org` with the deployment's contact
     /// address and the configured abstract enrichment.
     pub fn new(config: &deepref_config::IntegrationsConfig) -> Result<Self, ProviderError> {
+        Self::for_base_url(CROSSREF_BASE, config)
+    }
+
+    /// The client for `base_url`, with the deployment's contact address and abstract
+    /// enrichment. Tests point it at a mock server this way.
+    pub fn for_base_url(
+        base_url: impl Into<String>,
+        config: &deepref_config::IntegrationsConfig,
+    ) -> Result<Self, ProviderError> {
         let mailto = config.contact_email.clone();
         let enricher = if config.abstract_enrichment {
             AbstractEnricher::new(mailto.clone()).ok()
         } else {
             None
         };
-        Self::with_base_url(CROSSREF_BASE, mailto)
+        Self::with_base_url(base_url, mailto)
             .map(|client| Self { enricher, ..client })
             .map_err(|error| ProviderError::Request(error.to_string()))
     }

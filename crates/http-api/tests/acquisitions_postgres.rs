@@ -119,11 +119,19 @@ async fn call_with_contact_email(
     request: Request<Body>,
     contact_email: &str,
 ) -> Response<Body> {
-    let integrations = deepref_config::IntegrationsConfig {
-        contact_email: contact_email.to_owned(),
-        ..Default::default()
-    };
-    call_with_integrations(pool, request, integrations).await
+    call_with_integrations(pool, request, crossref_only(contact_email)).await
+}
+
+/// The deployment these tests assert against: Crossref alone, so the provenance and
+/// chain assertions hold under the OpenAlex-first default. Built through the source
+/// closure, never the process environment.
+fn crossref_only(contact_email: &str) -> deepref_config::IntegrationsConfig {
+    deepref_config::IntegrationsConfig::from_source(&|name| match name {
+        "DEEPREF_CONTACT_EMAIL" => Some(contact_email.to_owned()),
+        "DEEPREF_METADATA_PROVIDERS" => Some("crossref".to_owned()),
+        _ => None,
+    })
+    .expect("crossref-only integrations should parse")
 }
 
 async fn call_with_integrations(
@@ -1184,6 +1192,94 @@ async fn doi_acquisitions_accept_only_enabled_metadata_providers() {
 }
 
 #[tokio::test]
+async fn doi_acquisitions_accept_openalex_under_the_default_chain_and_name_the_enabled_set() {
+    let Some(pool) = database().await else {
+        return;
+    };
+    let project_id = Uuid::new_v4();
+    sqlx::query("INSERT INTO projects (id,name) VALUES ($1,'default chain test')")
+        .bind(project_id)
+        .execute(&pool)
+        .await
+        .expect("test project should insert");
+    let default_chain = deepref_config::IntegrationsConfig {
+        contact_email: TEST_CONTACT_EMAIL.to_owned(),
+        ..Default::default()
+    };
+
+    for providers in [json!(["datacite"]), json!(["openalex", "datacite"])] {
+        let response = call_with_integrations(
+            &pool,
+            create_acquisition_request(
+                project_id,
+                None,
+                json!({"seed_dois": ["10.5555/default-chain"], "metadata_providers": providers}),
+            ),
+            default_chain.clone(),
+        )
+        .await;
+        assert_eq!(response.status(), StatusCode::BAD_REQUEST, "{providers}");
+        assert_eq!(
+            json_body(response).await["message"],
+            "datacite is not enabled in this deployment (enabled: openalex, crossref)"
+        );
+    }
+
+    let named = call_with_integrations(
+        &pool,
+        create_acquisition_request(
+            project_id,
+            Some("openalex-named"),
+            json!({"seed_dois": ["10.5555/default-chain"], "metadata_providers": ["openalex"]}),
+        ),
+        default_chain.clone(),
+    )
+    .await;
+    assert_eq!(named.status(), StatusCode::CREATED);
+    let named_id = json_body(named).await["id"]
+        .as_str()
+        .expect("created acquisition should have an id")
+        .parse::<Uuid>()
+        .expect("acquisition id should be a UUID");
+    let named_config: serde_json::Value =
+        sqlx::query_scalar("SELECT config FROM acquisition_runs WHERE id=$1")
+            .bind(named_id)
+            .fetch_one(&pool)
+            .await
+            .expect("created config should load");
+    assert_eq!(named_config["metadata_providers"], json!(["openalex"]));
+
+    let omitted = call_with_integrations(
+        &pool,
+        create_acquisition_request(
+            project_id,
+            Some("default-omitted"),
+            json!({"seed_dois": ["10.5555/default-omitted"]}),
+        ),
+        default_chain,
+    )
+    .await;
+    assert_eq!(omitted.status(), StatusCode::CREATED);
+    let omitted_id = json_body(omitted).await["id"]
+        .as_str()
+        .expect("created acquisition should have an id")
+        .parse::<Uuid>()
+        .expect("acquisition id should be a UUID");
+    let omitted_config: serde_json::Value =
+        sqlx::query_scalar("SELECT config FROM acquisition_runs WHERE id=$1")
+            .bind(omitted_id)
+            .fetch_one(&pool)
+            .await
+            .expect("created config should load");
+    assert_eq!(
+        omitted_config["metadata_providers"],
+        json!(["openalex", "crossref"])
+    );
+
+    clean_acquisition_projects(&pool, &[project_id], &[named_id, omitted_id]).await;
+}
+
+#[tokio::test]
 async fn the_deployment_allowlist_filters_the_chain_and_an_empty_one_is_unavailable() {
     let Some(pool) = database().await else {
         return;
@@ -1195,10 +1291,10 @@ async fn the_deployment_allowlist_filters_the_chain_and_an_empty_one_is_unavaila
         .await
         .expect("test project should insert");
 
-    // OpenAlex is configured but has no adapter in this build, so only Crossref is enabled.
+    // DataCite is configured but has no adapter in this build, so only Crossref is enabled.
     let configured_chain = deepref_config::IntegrationsConfig {
         contact_email: TEST_CONTACT_EMAIL.to_owned(),
-        metadata_providers: vec![ProviderKind::OpenAlex, ProviderKind::Crossref],
+        metadata_providers: vec![ProviderKind::DataCite, ProviderKind::Crossref],
         ..Default::default()
     };
     let omitted = call_with_integrations(

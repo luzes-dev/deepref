@@ -2,13 +2,15 @@ use std::fmt;
 
 use deepref_domain::ProviderKind;
 
-/// The chain used when `DEEPREF_METADATA_PROVIDERS` is unset. A later phase
-/// changes the default here and nowhere else.
-const DEFAULT_METADATA_PROVIDERS: &[ProviderKind] = &[ProviderKind::Crossref];
+/// The chain used when `DEEPREF_METADATA_PROVIDERS` is unset: OpenAlex answers first
+/// and Crossref falls back. The default moves in stages (handoff section 5.1), and
+/// this constant is the only place it is written.
+const DEFAULT_METADATA_PROVIDERS: &[ProviderKind] =
+    &[ProviderKind::OpenAlex, ProviderKind::Crossref];
 
 /// Providers with an adapter in this build. A chain may name only these. The
 /// domain enum also names providers whose adapters arrive in later phases.
-const PROVIDERS_WITH_ADAPTERS: &[ProviderKind] = &[ProviderKind::Crossref];
+const PROVIDERS_WITH_ADAPTERS: &[ProviderKind] = &[ProviderKind::OpenAlex, ProviderKind::Crossref];
 
 /// Which OpenAlex records metadata lookups may answer from.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -299,16 +301,32 @@ mod tests {
     }
 
     #[test]
-    fn the_metadata_chain_defaults_to_crossref_with_a_keyless_core_corpus() {
+    fn the_metadata_chain_defaults_to_openalex_then_crossref_with_a_keyless_core_corpus() {
         let default = IntegrationsConfig::default();
-        assert_eq!(default.metadata_providers, [ProviderKind::Crossref]);
+        assert_eq!(
+            default.metadata_providers,
+            [ProviderKind::OpenAlex, ProviderKind::Crossref]
+        );
         assert_eq!(default.openalex_corpus, OpenAlexCorpus::Core);
 
         let config = load(&[]).unwrap();
-        assert_eq!(config.metadata_providers, [ProviderKind::Crossref]);
+        assert_eq!(
+            config.metadata_providers,
+            [ProviderKind::OpenAlex, ProviderKind::Crossref]
+        );
         assert_eq!(config.openalex_api_key, None);
         assert_eq!(config.openalex_corpus, OpenAlexCorpus::Core);
-        assert_eq!(config.metadata_chain_label(), "crossref");
+        assert_eq!(config.metadata_chain_label(), "openalex,crossref");
+    }
+
+    #[test]
+    fn crossref_alone_is_the_rollback_chain() {
+        let config = load(&[("DEEPREF_METADATA_PROVIDERS", "crossref")]).unwrap();
+        assert_eq!(config.metadata_providers, [ProviderKind::Crossref]);
+        assert_eq!(
+            config.enabled_metadata_providers(),
+            [ProviderKind::Crossref]
+        );
     }
 
     #[test]
@@ -354,16 +372,20 @@ mod tests {
     #[test]
     fn only_providers_with_an_adapter_are_enabled() {
         let config = IntegrationsConfig {
-            metadata_providers: vec![ProviderKind::DataCite, ProviderKind::Crossref],
+            metadata_providers: vec![
+                ProviderKind::DataCite,
+                ProviderKind::OpenAlex,
+                ProviderKind::Crossref,
+            ],
             ..IntegrationsConfig::default()
         };
         assert_eq!(
             config.enabled_metadata_providers(),
-            [ProviderKind::Crossref]
+            [ProviderKind::OpenAlex, ProviderKind::Crossref]
         );
         assert_eq!(
             IntegrationsConfig::default().enabled_metadata_providers(),
-            [ProviderKind::Crossref]
+            [ProviderKind::OpenAlex, ProviderKind::Crossref]
         );
     }
 
@@ -392,14 +414,24 @@ mod tests {
 
     #[test]
     fn a_provider_without_an_adapter_refuses_to_start_and_names_the_available_ones() {
-        for (value, unavailable) in [("openalex", "openalex"), ("crossref,datacite", "datacite")] {
+        for (value, unavailable) in [("datacite", "datacite"), ("openalex,datacite", "datacite")] {
             let error = load_error(&[("DEEPREF_METADATA_PROVIDERS", value)]);
             assert!(
                 error.contains(&format!("{unavailable} has no adapter yet"))
-                    && error.contains("available providers are crossref"),
+                    && error.contains("available providers are openalex, crossref"),
                 "{value}: unexpected error {error}"
             );
         }
+    }
+
+    #[test]
+    fn openalex_is_accepted_and_keeps_its_configured_position() {
+        assert_eq!(
+            load(&[("DEEPREF_METADATA_PROVIDERS", "crossref,openalex")])
+                .unwrap()
+                .metadata_providers,
+            [ProviderKind::Crossref, ProviderKind::OpenAlex]
+        );
     }
 
     #[test]

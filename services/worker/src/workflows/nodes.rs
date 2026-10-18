@@ -37,6 +37,7 @@ pub struct Context<'a> {
     pub ai: Option<&'a dyn AiGateway>,
     pub execution: &'a NodeExecution,
     pub runtime: &'a deepref_config::RuntimeConfig,
+    pub metadata: &'a metadata::MetadataClients,
 }
 
 const MAX_BATCH: usize = 200;
@@ -570,19 +571,33 @@ async fn import_identifiers(context: &Context<'_>) -> NodeResult {
             .map_err(|_| {
                 NodeError::retryable("The database was busy. This will be tried again.")
             })?;
-        let router = metadata::router(&context.runtime.integrations, settings.retry_attempts)
-            .map_err(|_| NodeError::permanent("The Crossref connection could not be prepared."))?;
-        let permit = limiter::ProviderLimiter::new(context.pool, settings.rate_limit_per_second);
+        let router = metadata::router(
+            &context.runtime.integrations,
+            context.metadata,
+            settings.retry_attempts,
+        )
+        .map_err(|_| NodeError::permanent("The Crossref connection could not be prepared."))?;
+        let permit = limiter::ProviderLimiter::new(
+            context.pool,
+            settings.rate_limit_per_second,
+            context.metadata.openalex.as_ref(),
+        );
         let chain = &context.runtime.integrations.metadata_providers;
         for doi in &dois {
             let output = router.fetch_work(chain, doi, &permit).await;
+            if let Some(lost) = &output.lost_edges {
+                metadata::report_lost_edges(doi, lost);
+            }
             match output.result {
                 Ok(fetched) => match fetched.provider {
+                    ProviderKind::OpenAlex => records.push(
+                        deepref_integrations::raw_record_from_openalex_work(fetched.work),
+                    ),
                     ProviderKind::Crossref => records.push(
                         deepref_integrations::raw_record_from_crossref_work(fetched.work),
                     ),
-                    // Only the Crossref adapter is registered in this build.
-                    ProviderKind::OpenAlex | ProviderKind::DataCite => unresolved += 1,
+                    // No DataCite adapter exists in this build.
+                    ProviderKind::DataCite => unresolved += 1,
                 },
                 Err(_) => unresolved += 1,
             }

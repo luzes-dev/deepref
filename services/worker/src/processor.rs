@@ -102,7 +102,11 @@ async fn handle_work_fetch(
         return Ok(action);
     }
     let settings = store::load_runtime_settings(&pool).await?;
-    let router = match metadata::router(&config.runtime.integrations, settings.retry_attempts) {
+    let router = match metadata::router(
+        &config.runtime.integrations,
+        &config.metadata,
+        settings.retry_attempts,
+    ) {
         Ok(router) => router,
         Err(error) => {
             store::finalize_terminal_failure(
@@ -121,8 +125,15 @@ async fn handle_work_fetch(
     };
     let (cancel_heartbeat, heartbeat_done) =
         spawn_heartbeat(pool.clone(), lease.clone(), doi.clone(), owner, claim_lease);
-    let permit = limiter::ProviderLimiter::new(&pool, settings.rate_limit_per_second);
+    let permit = limiter::ProviderLimiter::new(
+        &pool,
+        settings.rate_limit_per_second,
+        config.metadata.openalex.as_ref(),
+    );
     let output = router.fetch_work(&stored_chain, &doi, &permit).await;
+    if let Some(lost) = &output.lost_edges {
+        metadata::report_lost_edges(&doi, lost);
+    }
     let last_provider = output.attempts.last().map(|attempt| attempt.provider);
     cancel_heartbeat.send_replace(true);
     let _ = heartbeat_done.await;
@@ -717,6 +728,7 @@ async fn handle_job_with_document_services_inner(
                         lease,
                         ai_gateway.clone(),
                         &config.runtime,
+                        &config.metadata,
                     )
                     .await
                 }

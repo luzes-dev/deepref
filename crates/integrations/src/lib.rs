@@ -11,8 +11,8 @@ mod pubmed;
 mod unpaywall;
 
 pub use crossref::{
-    AbstractEnricher, AbstractSource, CrossrefClient, CrossrefError, CrossrefSearchError,
-    OpenAlexLookup, StatusClassification, classify_status, clean_abstract,
+    AbstractEnricher, AbstractSource, CROSSREF_BASE, CrossrefClient, CrossrefError,
+    CrossrefSearchError, OpenAlexLookup, StatusClassification, classify_status, clean_abstract,
     raw_record_from_crossref_work, search_crossref,
 };
 pub use grobid::{
