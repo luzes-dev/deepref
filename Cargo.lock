@@ -984,6 +984,7 @@ dependencies = [
  "serde_json",
  "thiserror",
  "tokio",
+ "tracing",
  "unicode-normalization",
  "urlencoding",
 ]
