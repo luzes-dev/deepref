@@ -576,7 +576,9 @@ async fn import_identifiers(context: &Context<'_>) -> NodeResult {
             context.metadata,
             settings.retry_attempts,
         )
-        .map_err(|_| NodeError::permanent("The Crossref connection could not be prepared."))?;
+        .map_err(|_| {
+            NodeError::permanent("The metadata provider connection could not be prepared.")
+        })?;
         let permit = limiter::ProviderLimiter::new(
             context.pool,
             settings.rate_limit_per_second,

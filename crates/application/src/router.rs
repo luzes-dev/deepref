@@ -219,7 +219,7 @@ impl ProviderRouter {
                 }),
             };
             match result {
-                Ok(fetched) => {
+                Ok(mut fetched) => {
                     let gap = fetched.reference_gap;
                     let outcome = match gap {
                         Some(ReferenceGap::BudgetExhausted { .. }) => {
@@ -228,7 +228,6 @@ impl ProviderRouter {
                         Some(ReferenceGap::Shortfall { .. }) | None => AttemptOutcome::Answered,
                     };
                     attempts.push(attempt(kind, outcome));
-                    let mut fetched = fetched;
                     let mut contributions = vec![kind];
                     let lost_edges = match gap {
                         Some(gap) if self.fills(gap) => {

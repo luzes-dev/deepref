@@ -229,6 +229,7 @@ fn report_lost_edges(doi: &str, lost: &LostEdges) {
         ),
     }
 }
+
 /// The item status and last error for a route that will not be retried. A
 /// rejected answer is not found with its reason, and a fatal failure is a failed
 /// item.

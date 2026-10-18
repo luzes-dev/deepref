@@ -1,9 +1,9 @@
 # Metadata provider routing handoff
 
-> **Status:** designed 2026-10-17, revised after review 2026-10-18. Phases 0, 1a, 1b, 2 and 3 are implemented on this branch stack (not merged). The optional shared cross-work resolver from 5.3 was not built.
+> **Status:** designed 2026-10-17, revised after review 2026-10-18. Phases 0 through 4 are implemented on this branch stack (not merged). The optional shared cross-work resolver from 5.3 and the optional typed `AcquisitionSource::DataCite` from Phase 2 were not built.
 > **Base:** builds on #250 (`DEEPREF_CONTACT_EMAIL`, merged), which introduced `IntegrationsConfig`.
 > **Scope:** DOI metadata fetching, reference edges, provider configuration, provenance, persistence touchpoints, and the web strings that name providers. Publication alerts and PMID imports keep their current providers.
-> **Audience:** the implementing agent. Confirm section 10 with the user before Phase 1a. Phase 0 is behavior-neutral and can start now.
+> **Audience:** the implementing agent. Confirm section 10 with the user before Phase 1a. Phase 0 was behavior-neutral and is implemented.
 
 ## 1. Objective
 
@@ -139,13 +139,20 @@ pub type ProviderFuture<'a, T> = std::pin::Pin<
 
 pub trait WorkProvider: Send + Sync {
     fn kind(&self) -> ProviderKind;
-    fn fetch_work_with_references<'a>(&'a self, doi: &'a str)
-        -> ProviderFuture<'a, FetchedWork>;
+    fn fetch_work_with_references<'a>(&'a self, doi: &'a str, permit: &'a dyn ProviderPermit)
+        -> ProviderFuture<'a, FetchedWork, ProviderFetchError>;
+    // Defaults to fetch_work_with_references. Skips work the providers in `tried` did.
+    fn fetch_work_after<'a>(&'a self, doi: &'a str, tried: &'a [ProviderKind], permit: &'a dyn ProviderPermit)
+        -> ProviderFuture<'a, FetchedWork, ProviderFetchError>;
+    // The raw reference list, for filling lost edges. Defaults to a fatal error.
+    fn reference_list<'a>(&'a self, doi: &'a str, permit: &'a dyn ProviderPermit)
+        -> ProviderFuture<'a, Vec<Reference>, ProviderFetchError>;
 }
 
 pub struct FetchedWork {
     pub work: WorkWithReferences,
     pub provider: ProviderKind,
+    pub reference_gap: Option<ReferenceGap>,
 }
 
 pub enum ProviderFetchError {
