@@ -560,7 +560,8 @@ fn transport(error: reqwest::Error) -> OpenAlexError {
 }
 
 /// Maps a 200 body after the identity check. A sibling record filed under another
-/// DOI, or a null DOI, is not the work that was asked for, so it is not found.
+/// DOI, or a null DOI, is not the work that was asked for, so it is not found. Front
+/// matter is rejected here, before any reference list is resolved.
 fn checked_work(doi: &str, raw: Value) -> Result<WorkWithReferences, OpenAlexError> {
     let body: OpenAlexWork = serde_json::from_value(raw.clone())?;
     let same_work = body
@@ -579,6 +580,9 @@ fn checked_work(doi: &str, raw: Value) -> Result<WorkWithReferences, OpenAlexErr
             requested: doi.to_owned(),
             returned: body.doi,
         });
+    }
+    if body.is_paratext {
+        return Err(OpenAlexError::Paratext);
     }
     Ok(body.into_domain(doi.to_owned(), raw))
 }
@@ -646,6 +650,8 @@ pub enum OpenAlexError {
     Permit(#[from] PermitError),
     #[error("OpenAlex returned not found for {0}")]
     NotFound(String),
+    #[error("OpenAlex lists the work as paratext")]
+    Paratext,
     #[error("OpenAlex answered {returned:?} for a request for {requested}")]
     DoiMismatch {
         requested: String,
@@ -681,6 +687,12 @@ impl OpenAlexError {
                 provider,
                 reason: message,
             },
+            // The reason the worker stores as the item's last error. Crossref returns the same
+            // front matter as a normal record, so no later provider is asked.
+            Self::Paratext => ProviderFetchError::Rejected {
+                provider,
+                reason: "paratext".to_owned(),
+            },
             Self::Unauthorized(_)
             | Self::RetryableStatus(_)
             | Self::BudgetExhausted { .. }
@@ -708,6 +720,9 @@ mod tests {
         include_str!("../tests/fixtures/openalex/work_without_references.json");
     const NOT_FOUND: &str = include_str!("../tests/fixtures/openalex/not_found.html");
     const INVALID_KEY: &str = include_str!("../tests/fixtures/openalex/key_invalid.json");
+    /// The retraction notice for Wakefield's 1998 paper, as OpenAlex answered it.
+    const RETRACTED_DOI: &str = "10.1016/s0140-6736(97)11096-0";
+    const RETRACTED: &str = include_str!("../tests/fixtures/openalex/work_retracted.json");
     /// A real list-call response for the first ten references of `WORK`.
     const REFERENCES_LIST: &str = include_str!("../tests/fixtures/openalex/references_list.json");
     const EMPTY_LIST: &str = r#"{"meta":{"count":0},"results":[]}"#;
@@ -1681,6 +1696,64 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_paratext_work_is_rejected_before_any_reference_is_resolved() {
+        let mut body: Value = serde_json::from_str(WORK).expect("fixture is JSON");
+        body["is_paratext"] = Value::Bool(true);
+        let (base, requests) = scripted_server(vec![reply("200 OK", body.to_string())]).await;
+
+        let error = fetch(
+            &client(base, None, 1),
+            ABSTRACT_DOI,
+            &RecordingPermit::default(),
+        )
+        .await
+        .expect_err("front matter ends the lookup");
+
+        assert_eq!(
+            error,
+            ProviderFetchError::Rejected {
+                provider: ProviderKind::OpenAlex,
+                reason: "paratext".to_owned(),
+            }
+        );
+        assert_eq!(
+            requests.lock().expect("request log").len(),
+            1,
+            "no list call runs for front matter"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_retracted_work_is_answered_and_keeps_its_flag_in_raw() {
+        let (base, _) = scripted_server(vec![
+            reply("200 OK", RETRACTED),
+            reply("200 OK", EMPTY_LIST),
+        ])
+        .await;
+
+        let fetched = fetch(
+            &client(base, None, 1),
+            RETRACTED_DOI,
+            &RecordingPermit::default(),
+        )
+        .await
+        .expect("a retracted work is still answered");
+
+        assert_eq!(fetched.work.work.doi, RETRACTED_DOI);
+        assert!(
+            fetched
+                .work
+                .work
+                .title
+                .as_deref()
+                .is_some_and(|title| title.starts_with("RETRACTED:")),
+            "{:?}",
+            fetched.work.work.title
+        );
+        assert_eq!(fetched.work.raw["is_retracted"], Value::Bool(true));
+    }
+
+    #[tokio::test]
     async fn a_redirect_is_followed_and_the_matching_work_answers() {
         let (base, requests) = scripted_server(vec![
             redirect("/works/W2144981148"),
@@ -2163,6 +2236,13 @@ mod tests {
             ProviderFetchError::NotFound {
                 provider,
                 doi: SIBLING_REQUESTED_DOI.to_owned(),
+            }
+        );
+        assert_eq!(
+            OpenAlexError::Paratext.into_fetch_error(),
+            ProviderFetchError::Rejected {
+                provider,
+                reason: "paratext".to_owned(),
             }
         );
         assert!(matches!(

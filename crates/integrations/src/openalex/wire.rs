@@ -26,6 +26,9 @@ pub(crate) struct OpenAlexWork {
     cited_by_count: i32,
     #[serde(default)]
     referenced_works_count: i32,
+    /// Front matter such as editorials and indexes. It ends the lookup as rejected.
+    #[serde(default)]
+    pub(crate) is_paratext: bool,
 }
 
 #[derive(Debug, Deserialize)]

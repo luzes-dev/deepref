@@ -437,6 +437,76 @@ async fn a_doi_openalex_does_not_know_falls_through_to_crossref() -> Result<()> 
 }
 
 #[tokio::test]
+async fn a_paratext_work_ends_the_item_as_not_found_with_its_reason_and_no_later_provider_is_asked()
+-> Result<()> {
+    let Some(pool) = deepref_app::test_isolation::isolated_pool_from_env("DATABASE_URL", 8).await
+    else {
+        return Ok(());
+    };
+    let doi = "10.5555/paratext";
+    let mut front_matter: Value = serde_json::from_str(&openalex_work(doi))?;
+    front_matter["is_paratext"] = json!(true);
+    let openalex = MockServer::start(vec![(
+        "/works/doi:10.5555/paratext".to_owned(),
+        "200 OK",
+        front_matter.to_string(),
+    )])
+    .await;
+    // Crossref would answer this DOI, so a fall-through would show up as a Crossref work.
+    let crossref = MockServer::start(vec![(
+        "/works/10.5555%2Fparatext".to_owned(),
+        "200 OK",
+        crossref_work(),
+    )])
+    .await;
+    let fixture = seed_work_fetch(&pool, doi, json!({})).await?;
+
+    let datacite = MockServer::start(Vec::new()).await;
+    run_fetch(
+        &pool,
+        &fixture,
+        &worker_config(&openalex, &crossref, &datacite),
+    )
+    .await?;
+
+    let item =
+        sqlx::query("SELECT status, last_error FROM acquisition_items WHERE canonical_doi=$1")
+            .bind(doi)
+            .fetch_one(&pool)
+            .await?;
+    assert_eq!(item.get::<String, _>("status"), "not_found");
+    assert_eq!(
+        item.get::<Option<String>, _>("last_error").as_deref(),
+        Some("paratext")
+    );
+    let state = sqlx::query(
+        "SELECT f.status, f.last_error FROM report_fetch_state f JOIN report_identifiers i ON i.report_id=f.report_id WHERE i.scheme='doi' AND i.normalized_value=$1",
+    )
+    .bind(doi)
+    .fetch_one(&pool)
+    .await?;
+    assert_eq!(state.get::<String, _>("status"), "not_found");
+    assert_eq!(
+        state.get::<Option<String>, _>("last_error").as_deref(),
+        Some("paratext")
+    );
+    // The claim leaves a placeholder row with only the DOI. Front matter never reaches
+    // persist_work, so the title stays empty.
+    let filed_title: Option<String> =
+        sqlx::query_scalar("SELECT title FROM works WHERE canonical_doi=$1")
+            .bind(doi)
+            .fetch_one(&pool)
+            .await?;
+    assert_eq!(filed_title, None, "front matter is not filed as a work");
+    assert_eq!(openalex.paths(), ["/works/doi:10.5555/paratext"]);
+    assert!(
+        crossref.paths().is_empty(),
+        "front matter ends the chain at OpenAlex, so Crossref is never asked"
+    );
+    Ok(())
+}
+
+#[tokio::test]
 async fn a_doi_only_datacite_holds_is_recorded_as_datacite_and_keeps_the_crossref_lane_label()
 -> Result<()> {
     let Some(pool) = deepref_app::test_isolation::isolated_pool_from_env("DATABASE_URL", 8).await
