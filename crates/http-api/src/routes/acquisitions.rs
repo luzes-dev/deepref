@@ -765,13 +765,14 @@ async fn persist_doi_acquisition(
         ));
     }
     let seed_count = i32::try_from(request.seed_dois.len()).unwrap_or(i32::MAX);
+    // No conflict target: a keyed run id is derived from the key, so a concurrent replay
+    // collides on the primary key too, and a targeted clause raises instead of skipping.
     let inserted_run_id = sqlx::query_scalar::<_, Uuid>(
         "INSERT INTO acquisition_runs
          (id,project_id,source,strategy,format,idempotency_key,config,metadata,status,
           max_depth,seed_count,queued_count,fetched_count,failed_count,metadata_provider,citation_provider,created_at,historical_max_depth)
          VALUES ($1,$2,$3,$4,NULL,$5,$6,$7,'queued',$8,$9,$9,0,0,$10,$11,now(),$12)
-         ON CONFLICT (project_id,idempotency_key) WHERE idempotency_key IS NOT NULL
-         DO NOTHING RETURNING id",
+         ON CONFLICT DO NOTHING RETURNING id",
     )
     .bind(request.run_id)
     .bind(request.project_id)
