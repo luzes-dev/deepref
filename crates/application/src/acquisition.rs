@@ -1,7 +1,7 @@
 use std::{future::Future, pin::Pin};
 
 use deepref_domain::{
-    AcquisitionRunId, IdentifierScheme, ImportFormat, ProviderKind, WorkWithReferences,
+    AcquisitionRunId, IdentifierScheme, ImportFormat, ProviderKind, Reference, WorkWithReferences,
 };
 use serde::{Deserialize, Serialize};
 use thiserror::Error;
@@ -160,6 +160,33 @@ pub trait WorkProvider: Send + Sync {
         doi: &'a str,
         permit: &'a dyn ProviderPermit,
     ) -> ProviderFuture<'a, FetchedWork, ProviderFetchError>;
+
+    /// The lookup for a DOI that the providers in `tried` already asked this run. An
+    /// adapter overrides it to skip work those providers already did.
+    fn fetch_work_after<'a>(
+        &'a self,
+        doi: &'a str,
+        _tried: &'a [ProviderKind],
+        permit: &'a dyn ProviderPermit,
+    ) -> ProviderFuture<'a, FetchedWork, ProviderFetchError> {
+        self.fetch_work_with_references(doi, permit)
+    }
+
+    /// The DOI's raw reference list, unresolved entries included, for filling references
+    /// that another provider lost. Only providers that publish reference lists implement it.
+    fn reference_list<'a>(
+        &'a self,
+        _doi: &'a str,
+        _permit: &'a dyn ProviderPermit,
+    ) -> ProviderFuture<'a, Vec<Reference>, ProviderFetchError> {
+        let provider = self.kind();
+        Box::pin(async move {
+            Err(ProviderFetchError::Fatal {
+                provider,
+                message: "has no reference list to read".to_owned(),
+            })
+        })
+    }
 }
 
 pub trait ImportParser: Send + Sync {

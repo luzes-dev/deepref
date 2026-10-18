@@ -228,6 +228,31 @@ impl WorkProvider for CrossrefClient {
     ) -> ProviderFuture<'a, FetchedWork, ProviderFetchError> {
         Box::pin(self.fetch_work(doi, permit, OpenAlexLookup::Enabled))
     }
+
+    fn fetch_work_after<'a>(
+        &'a self,
+        doi: &'a str,
+        tried: &'a [ProviderKind],
+        permit: &'a dyn ProviderPermit,
+    ) -> ProviderFuture<'a, FetchedWork, ProviderFetchError> {
+        if tried.contains(&ProviderKind::OpenAlex) {
+            Box::pin(self.fetch_after_openalex(doi, permit))
+        } else {
+            self.fetch_work_with_references(doi, permit)
+        }
+    }
+
+    fn reference_list<'a>(
+        &'a self,
+        doi: &'a str,
+        permit: &'a dyn ProviderPermit,
+    ) -> ProviderFuture<'a, Vec<Reference>, ProviderFetchError> {
+        Box::pin(async move {
+            self.fetch_reference_list(doi, permit)
+                .await
+                .map_err(CrossrefError::into_fetch_error)
+        })
+    }
 }
 
 impl CrossrefError {
@@ -595,6 +620,51 @@ mod tests {
             fetched.work.raw["deepref_abstract_source"],
             json!("openalex")
         );
+    }
+
+    #[tokio::test]
+    async fn the_port_skips_the_openalex_abstract_step_only_when_openalex_tried_the_doi() {
+        let skipped = client_with_enricher(
+            scripted_server(vec![("200 OK", WORK_BODY)]).await,
+            scripted_server(vec![("200 OK", NO_EUROPE_PMC_MATCH)]).await,
+            scripted_server(vec![("200 OK", OPENALEX_ABSTRACT)]).await,
+        );
+        let fetched = WorkProvider::fetch_work_after(
+            &skipped,
+            DOI,
+            &[ProviderKind::OpenAlex],
+            &RecordingPermit::default(),
+        )
+        .await
+        .expect("crossref should answer");
+        assert_eq!(fetched.work.work.abstract_text, None);
+
+        let asked = client_with_enricher(
+            scripted_server(vec![("200 OK", WORK_BODY)]).await,
+            scripted_server(vec![("200 OK", NO_EUROPE_PMC_MATCH)]).await,
+            scripted_server(vec![("200 OK", OPENALEX_ABSTRACT)]).await,
+        );
+        let fetched = WorkProvider::fetch_work_after(&asked, DOI, &[], &RecordingPermit::default())
+            .await
+            .expect("crossref should answer");
+        assert_eq!(
+            fetched.work.work.abstract_text.as_deref(),
+            Some("Hello world")
+        );
+    }
+
+    #[tokio::test]
+    async fn the_port_reads_the_reference_list_through_the_helper() {
+        let client = test_client(scripted_server(vec![("200 OK", WORK_BODY)]).await, 1);
+        let permit = RecordingPermit::default();
+
+        let references = WorkProvider::reference_list(&client, DOI, &permit)
+            .await
+            .expect("the reference list should load");
+
+        assert_eq!(references.len(), 2);
+        assert_eq!(references[0].doi.as_deref(), Some("10.1000/cited"));
+        assert_eq!(permit.taken(), vec![ProviderKind::Crossref]);
     }
 
     #[test]
