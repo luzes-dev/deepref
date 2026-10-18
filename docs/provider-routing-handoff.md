@@ -1,6 +1,6 @@
 # Metadata provider routing handoff
 
-> **Status:** designed 2026-10-17, revised after review 2026-10-18. Phases 0, 1a and 1b are implemented on this branch stack (not merged).
+> **Status:** designed 2026-10-17, revised after review 2026-10-18. Phases 0, 1a, 1b and 2 are implemented on this branch stack (not merged).
 > **Base:** builds on #250 (`DEEPREF_CONTACT_EMAIL`, merged), which introduced `IntegrationsConfig`.
 > **Scope:** DOI metadata fetching, reference edges, provider configuration, provenance, persistence touchpoints, and the web strings that name providers. Publication alerts and PMID imports keep their current providers.
 > **Audience:** the implementing agent. Confirm section 10 with the user before Phase 1a. Phase 0 is behavior-neutral and can start now.
