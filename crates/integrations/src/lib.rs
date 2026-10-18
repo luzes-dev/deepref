@@ -12,8 +12,8 @@ mod unpaywall;
 
 pub use crossref::{
     AbstractEnricher, AbstractSource, CrossrefClient, CrossrefError, CrossrefSearchError,
-    StatusClassification, classify_status, clean_abstract, raw_record_from_crossref_work,
-    search_crossref,
+    OpenAlexLookup, StatusClassification, classify_status, clean_abstract,
+    raw_record_from_crossref_work, search_crossref,
 };
 pub use grobid::{
     GrobidClient, GrobidConfig, GrobidError, TeiDocument, TeiError, TeiReference, TeiSection,

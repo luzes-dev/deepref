@@ -19,7 +19,7 @@ use reqwest::header;
 use serde_json::{Value, json};
 
 pub(crate) use abstracts::parse_openalex;
-pub use abstracts::{AbstractEnricher, AbstractSource, clean_abstract};
+pub use abstracts::{AbstractEnricher, AbstractSource, OpenAlexLookup, clean_abstract};
 pub use error::CrossrefError;
 pub use search::{CrossrefSearchError, search_crossref};
 pub use status::{StatusClassification, classify_status};
@@ -156,12 +156,46 @@ impl CrossrefClient {
         Ok(self.fetch_metered(doi, permit).await?.references)
     }
 
-    /// Fills a missing abstract from Europe PMC / OpenAlex. Never fails.
-    async fn enrich_abstract(&self, mut work: WorkWithReferences) -> WorkWithReferences {
+    /// The lookup for a DOI the chain already sent to OpenAlex. It is the same as
+    /// `fetch_work_with_references` except that the abstract fallback skips OpenAlex and
+    /// still tries Europe PMC.
+    pub async fn fetch_after_openalex(
+        &self,
+        doi: &str,
+        permit: &dyn ProviderPermit,
+    ) -> Result<FetchedWork, ProviderFetchError> {
+        self.fetch_work(doi, permit, OpenAlexLookup::Disabled).await
+    }
+
+    /// One lookup with the client's retry policy, then the abstract fallback.
+    async fn fetch_work(
+        &self,
+        doi: &str,
+        permit: &dyn ProviderPermit,
+        openalex: OpenAlexLookup,
+    ) -> Result<FetchedWork, ProviderFetchError> {
+        let work = self
+            .fetch_metered(doi, permit)
+            .await
+            .map_err(CrossrefError::into_fetch_error)?;
+        Ok(FetchedWork {
+            work: self.enrich_abstract(work, openalex).await,
+            provider: ProviderKind::Crossref,
+            reference_gap: None,
+        })
+    }
+
+    /// Fills a missing abstract from Europe PMC, and from OpenAlex unless `openalex`
+    /// disables it. Never fails.
+    async fn enrich_abstract(
+        &self,
+        mut work: WorkWithReferences,
+        openalex: OpenAlexLookup,
+    ) -> WorkWithReferences {
         let source = if work.work.abstract_text.is_some() {
             AbstractSource::Crossref
         } else if let Some(enricher) = &self.enricher
-            && let Some((text, source)) = enricher.lookup(&work.work.doi).await
+            && let Some((text, source)) = enricher.lookup(&work.work.doi, openalex).await
         {
             work.work.abstract_text = Some(text);
             source
@@ -192,17 +226,7 @@ impl WorkProvider for CrossrefClient {
         doi: &'a str,
         permit: &'a dyn ProviderPermit,
     ) -> ProviderFuture<'a, FetchedWork, ProviderFetchError> {
-        Box::pin(async move {
-            let work = self
-                .fetch_metered(doi, permit)
-                .await
-                .map_err(CrossrefError::into_fetch_error)?;
-            Ok(FetchedWork {
-                work: self.enrich_abstract(work).await,
-                provider: ProviderKind::Crossref,
-                reference_gap: None,
-            })
-        })
+        Box::pin(self.fetch_work(doi, permit, OpenAlexLookup::Enabled))
     }
 }
 
@@ -510,6 +534,67 @@ mod tests {
             Some("A reference without a DOI")
         );
         assert_eq!(permit.taken(), vec![ProviderKind::Crossref]);
+    }
+
+    const NO_EUROPE_PMC_MATCH: &str = r#"{"resultList":{"result":[]}}"#;
+    const OPENALEX_ABSTRACT: &str = r#"{"abstract_inverted_index":{"Hello":[0],"world":[1]}}"#;
+
+    /// A Crossref client whose abstract fallback reads from the given Europe PMC and
+    /// OpenAlex servers.
+    fn client_with_enricher(
+        crossref: String,
+        europe_pmc: String,
+        openalex: String,
+    ) -> CrossrefClient {
+        let mut client = test_client(crossref, 1);
+        client.enricher = Some(
+            AbstractEnricher::with_base_urls(europe_pmc, openalex, "ops@example.org")
+                .expect("enricher should build"),
+        );
+        client
+    }
+
+    #[tokio::test]
+    async fn a_fallback_after_openalex_skips_the_openalex_abstract_step() {
+        let client = client_with_enricher(
+            scripted_server(vec![("200 OK", WORK_BODY)]).await,
+            scripted_server(vec![("200 OK", NO_EUROPE_PMC_MATCH)]).await,
+            scripted_server(vec![("200 OK", OPENALEX_ABSTRACT)]).await,
+        );
+
+        let fetched = client
+            .fetch_after_openalex(DOI, &RecordingPermit::default())
+            .await
+            .expect("crossref should answer");
+
+        assert_eq!(
+            fetched.work.work.abstract_text, None,
+            "OpenAlex was already asked, so the abstract step does not ask it again"
+        );
+        assert!(fetched.work.raw.get("deepref_abstract_source").is_none());
+    }
+
+    #[tokio::test]
+    async fn the_default_lookup_still_takes_the_abstract_from_openalex() {
+        let client = client_with_enricher(
+            scripted_server(vec![("200 OK", WORK_BODY)]).await,
+            scripted_server(vec![("200 OK", NO_EUROPE_PMC_MATCH)]).await,
+            scripted_server(vec![("200 OK", OPENALEX_ABSTRACT)]).await,
+        );
+
+        let fetched =
+            WorkProvider::fetch_work_with_references(&client, DOI, &RecordingPermit::default())
+                .await
+                .expect("crossref should answer");
+
+        assert_eq!(
+            fetched.work.work.abstract_text.as_deref(),
+            Some("Hello world")
+        );
+        assert_eq!(
+            fetched.work.raw["deepref_abstract_source"],
+            json!("openalex")
+        );
     }
 
     #[test]
