@@ -15066,7 +15066,7 @@
             "items": {
               "type": "string"
             },
-            "description": "Metadata providers the run may use. Each must be enabled in this deployment. The run\nkeeps the deployment's order. Omit to use every enabled provider."
+            "description": "Metadata providers the run may use, in priority order. Each must be enabled in this\ndeployment, and the run keeps the order sent. Omit to use every enabled provider in\nthe deployment's order."
           },
           "seed_dois": {
             "type": "array",

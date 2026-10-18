@@ -1213,7 +1213,7 @@ async fn doi_acquisitions_accept_every_provider_under_the_default_chain() {
         (
             "datacite-first",
             json!(["datacite", "openalex"]),
-            json!(["openalex", "datacite"]),
+            json!(["datacite", "openalex"]),
         ),
     ] {
         let response = call_with_integrations(

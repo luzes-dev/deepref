@@ -34,8 +34,9 @@ pub(crate) const MAX_REQUEST_BODY_BYTES: usize = MAX_IMPORT_BYTES * 6 + 64 * 102
 pub(crate) struct CreateAcquisition {
     pub seed_dois: Vec<String>,
     pub max_depth: Option<i32>,
-    /// Metadata providers the run may use. Each must be enabled in this deployment. The run
-    /// keeps the deployment's order. Omit to use every enabled provider.
+    /// Metadata providers the run may use, in priority order. Each must be enabled in this
+    /// deployment, and the run keeps the order sent. Omit to use every enabled provider in
+    /// the deployment's order.
     pub metadata_providers: Option<Vec<String>>,
 }
 
@@ -1043,9 +1044,9 @@ fn parse_stored_doi_config(
     Ok(run)
 }
 
-/// The chain a new DOI run stores. Omitted names mean every enabled provider. Named providers
-/// must all be enabled, and the stored chain keeps the deployment's order, so the same set in
-/// another order stores the same config.
+/// The chain a new DOI run stores. Omitted names mean every enabled provider in deployment
+/// order. Named providers must all be enabled, and the stored chain keeps the request's order
+/// with repeats dropped, because the order is the provider priority.
 fn requested_metadata_chain(
     requested: Option<Vec<String>>,
     enabled: &[ProviderKind],
@@ -1081,13 +1082,11 @@ fn requested_metadata_chain(
                     bounded_detail(name, 64)
                 ))
             })?;
-        named.push(kind);
+        if !named.contains(&kind) {
+            named.push(kind);
+        }
     }
-    Ok(enabled
-        .iter()
-        .copied()
-        .filter(|kind| named.contains(kind))
-        .collect())
+    Ok(named)
 }
 
 fn bounded_detail(value: &str, max_chars: usize) -> String {
@@ -1343,7 +1342,7 @@ mod tests {
     }
 
     #[test]
-    fn named_metadata_providers_keep_deployment_order_and_drop_repeats() {
+    fn named_metadata_providers_keep_request_order_and_drop_repeats() {
         let enabled = [ProviderKind::OpenAlex, ProviderKind::Crossref];
         let requested = vec![
             "crossref".to_owned(),
@@ -1352,7 +1351,7 @@ mod tests {
         ];
         assert_eq!(
             requested_metadata_chain(Some(requested), &enabled).expect("named chain"),
-            enabled
+            [ProviderKind::Crossref, ProviderKind::OpenAlex]
         );
         assert_eq!(
             requested_metadata_chain(Some(vec!["crossref".to_owned()]), &enabled)
