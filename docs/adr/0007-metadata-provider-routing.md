@@ -56,11 +56,19 @@ router adds none. Each outcome of an attempt routes as follows:
 - `Rejected` ends the DOI as not found, with the reason in `last_error`. No
   later provider is asked.
 - `Retryable` retries through the adapter's policy, then moves on.
-- `Fatal` stops the chain for the request.
+- `Fatal` is a provider-level failure that retrying cannot fix. It is
+  recorded and the chain moves on, so one broken provider cannot fail every
+  DOI.
 
 If every provider returned `NotFound`, the fetch is not found. If a provider
 failed retryably and none answered, the fetch is retryable and the job comes
-back later.
+back later. If none answered and every failure was fatal, the fetch fails
+terminally.
+
+Once metadata is selected, reference failures never advance the chain. A
+transient reference failure retries the job and a fatal OpenAlex reference
+failure fails the request, and neither is cached. A fatal Crossref reference
+helper failure is a degraded success with reason `helper_fatal`.
 
 ### Provenance
 
