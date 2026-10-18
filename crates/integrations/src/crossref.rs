@@ -18,6 +18,7 @@ use deepref_domain::{IdentifierScheme, ProviderKind, Reference, normalize_doi};
 use reqwest::header;
 use serde_json::{Value, json};
 
+pub(crate) use abstracts::parse_openalex;
 pub use abstracts::{AbstractEnricher, AbstractSource, clean_abstract};
 pub use error::CrossrefError;
 pub use search::{CrossrefSearchError, search_crossref};
@@ -174,7 +175,7 @@ impl CrossrefClient {
     }
 }
 
-async fn sleep_backoff(attempt: usize) {
+pub(crate) async fn sleep_backoff(attempt: usize) {
     let millis = 250_u64.saturating_mul(2_u64.saturating_pow(attempt as u32 - 1));
     tokio::time::sleep(Duration::from_millis(millis.min(5_000))).await;
 }

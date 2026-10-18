@@ -20,7 +20,10 @@ pub use grobid::{
     parse_tei,
 };
 pub use imports::{ImportParserAdapter, parse_import};
-pub use openalex::{KEYED_RATE_PER_SECOND, KEYLESS_RATE_PER_SECOND, OpenAlexKey, OpenAlexKeyState};
+pub use openalex::{
+    KEYED_RATE_PER_SECOND, KEYLESS_RATE_PER_SECOND, OpenAlexClient, OpenAlexError, OpenAlexKey,
+    OpenAlexKeyState,
+};
 pub use pubmed::{
     MAX_IDS_PER_FETCH, PubmedArticle, PubmedClient, PubmedError, REQUESTS_PER_SECOND,
     normalize_pmid, parse_efetch,

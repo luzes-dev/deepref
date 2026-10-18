@@ -1,0 +1,728 @@
+{
+  "id": "https://openalex.org/W7084134717",
+  "doi": "https://doi.org/10.5281/zenodo.1",
+  "display_name": "Assessing wind dynamics and turbine power at Princess Elisabeth station, Antarctica, using Doppler wind LiDAR and vertical array anemometers",
+  "publication_year": 2025,
+  "publication_date": "2025-01-01",
+  "type": "article",
+  "primary_location": {
+    "id": "pmh:oai:ojs2.jcdee.com:article/56",
+    "doi": null,
+    "is_oa": true,
+    "landing_page_url": "https://jcdee.com/index.php/jcdee/article/view/56",
+    "pdf_url": "https://jcdee.com/index.php/jcdee/article/download/56/47",
+    "source": {
+      "id": "https://openalex.org/S7407077464",
+      "display_name": "Journal of Child Development, Exceptionality and Education",
+      "issn_l": "2757-7554",
+      "issn": [
+        "2757-7554"
+      ],
+      "is_oa": true,
+      "is_in_doaj": false,
+      "is_core": false,
+      "listed_in": [],
+      "host_organization": null,
+      "host_organization_name": null,
+      "host_organization_lineage": [],
+      "host_organization_lineage_names": [],
+      "type": "journal"
+    },
+    "license": "cc-by-nc-nd",
+    "license_id": "https://openalex.org/licenses/cc-by-nc-nd",
+    "version": "publishedVersion",
+    "is_accepted": true,
+    "is_published": true,
+    "raw_source_name": "2757-7554",
+    "raw_type": "info:eu-repo/semantics/article"
+  },
+  "cited_by_count": 12,
+  "referenced_works": [],
+  "referenced_works_count": 0,
+  "best_oa_location": {
+    "id": "pmh:oai:ojs2.jcdee.com:article/56",
+    "doi": null,
+    "is_oa": true,
+    "landing_page_url": "https://jcdee.com/index.php/jcdee/article/view/56",
+    "pdf_url": "https://jcdee.com/index.php/jcdee/article/download/56/47",
+    "source": {
+      "id": "https://openalex.org/S7407077464",
+      "display_name": "Journal of Child Development, Exceptionality and Education",
+      "issn_l": "2757-7554",
+      "issn": [
+        "2757-7554"
+      ],
+      "is_oa": true,
+      "is_in_doaj": false,
+      "is_core": false,
+      "listed_in": [],
+      "host_organization": null,
+      "host_organization_name": null,
+      "host_organization_lineage": [],
+      "host_organization_lineage_names": [],
+      "type": "journal"
+    },
+    "license": "cc-by-nc-nd",
+    "license_id": "https://openalex.org/licenses/cc-by-nc-nd",
+    "version": "publishedVersion",
+    "is_accepted": true,
+    "is_published": true,
+    "raw_source_name": "2757-7554",
+    "raw_type": "info:eu-repo/semantics/article"
+  },
+  "locations": [
+    {
+      "id": "pmh:oai:ojs2.jcdee.com:article/56",
+      "doi": null,
+      "is_oa": true,
+      "landing_page_url": "https://jcdee.com/index.php/jcdee/article/view/56",
+      "pdf_url": "https://jcdee.com/index.php/jcdee/article/download/56/47",
+      "source": {
+        "id": "https://openalex.org/S7407077464",
+        "display_name": "Journal of Child Development, Exceptionality and Education",
+        "issn_l": "2757-7554",
+        "issn": [
+          "2757-7554"
+        ],
+        "is_oa": true,
+        "is_in_doaj": false,
+        "is_core": false,
+        "listed_in": [],
+        "host_organization": null,
+        "host_organization_name": null,
+        "host_organization_lineage": [],
+        "host_organization_lineage_names": [],
+        "type": "journal"
+      },
+      "license": "cc-by-nc-nd",
+      "license_id": "https://openalex.org/licenses/cc-by-nc-nd",
+      "version": "publishedVersion",
+      "is_accepted": true,
+      "is_published": true,
+      "raw_source_name": "2757-7554",
+      "raw_type": "info:eu-repo/semantics/article"
+    },
+    {
+      "id": "pmh:oai:repository.up.ac.za:2263/112079",
+      "doi": "https://doi.org/10.5281/zenodo.1",
+      "is_oa": true,
+      "landing_page_url": "http://hdl.handle.net/2263/112079",
+      "pdf_url": "https://repository.up.ac.za/bitstreams/eb7c78b9-1643-46cd-913c-8390db703244/download",
+      "source": {
+        "id": "https://openalex.org/S4306401870",
+        "display_name": "UpSpace Institutional Repository (University of Pretoria)",
+        "issn_l": null,
+        "issn": null,
+        "is_oa": false,
+        "is_in_doaj": false,
+        "is_core": false,
+        "listed_in": [],
+        "host_organization": "https://openalex.org/I69552723",
+        "host_organization_name": "University of Pretoria",
+        "host_organization_lineage": [
+          "https://openalex.org/I69552723"
+        ],
+        "host_organization_lineage_names": [],
+        "type": "repository"
+      },
+      "license": "cc-by-nc-nd",
+      "license_id": "https://openalex.org/licenses/cc-by-nc-nd",
+      "version": "submittedVersion",
+      "is_accepted": false,
+      "is_published": false,
+      "raw_source_name": null,
+      "raw_type": "Article"
+    }
+  ],
+  "is_retracted": false,
+  "is_paratext": false,
+  "ids": {
+    "openalex": "https://openalex.org/W7084134717",
+    "doi": "https://doi.org/10.5281/zenodo.1"
+  },
+  "topics": [
+    {
+      "id": "https://openalex.org/T10680",
+      "display_name": "Wind Energy Research and Development",
+      "score": 0.421099990606308,
+      "subfield": {
+        "id": "https://openalex.org/subfields/2202",
+        "display_name": "Aerospace Engineering"
+      },
+      "field": {
+        "id": "https://openalex.org/fields/22",
+        "display_name": "Engineering"
+      },
+      "domain": {
+        "id": "https://openalex.org/domains/3",
+        "display_name": "Physical Sciences"
+      }
+    },
+    {
+      "id": "https://openalex.org/T11185",
+      "display_name": "Integrated Energy Systems Optimization",
+      "score": 0.375,
+      "subfield": {
+        "id": "https://openalex.org/subfields/2208",
+        "display_name": "Electrical and Electronic Engineering"
+      },
+      "field": {
+        "id": "https://openalex.org/fields/22",
+        "display_name": "Engineering"
+      },
+      "domain": {
+        "id": "https://openalex.org/domains/3",
+        "display_name": "Physical Sciences"
+      }
+    }
+  ],
+  "authorships": [
+    {
+      "author_position": "first",
+      "author": {
+        "id": "https://openalex.org/A5007566615",
+        "display_name": "Eduard C. Groen",
+        "orcid": "https://orcid.org/0000-0002-5551-8152",
+        "observed_orcids": [
+          "https://orcid.org/0000-0002-5551-8152"
+        ]
+      },
+      "institutions": [],
+      "countries": [],
+      "is_corresponding": false,
+      "raw_author_name": "Groen, Eduard Christiaan",
+      "raw_affiliation_strings": [],
+      "raw_orcid": null,
+      "affiliations": []
+    },
+    {
+      "author_position": "middle",
+      "author": {
+        "id": "https://openalex.org/A5069677848",
+        "display_name": "Fabiano Dalpiaz",
+        "orcid": "https://orcid.org/0000-0003-4480-3887",
+        "observed_orcids": [
+          "https://orcid.org/0000-0003-4480-3887"
+        ]
+      },
+      "institutions": [],
+      "countries": [],
+      "is_corresponding": false,
+      "raw_author_name": "Dalpiaz, Fabiano",
+      "raw_affiliation_strings": [],
+      "raw_orcid": null,
+      "affiliations": []
+    }
+  ],
+  "abstract_inverted_index": {
+    "As": [
+      0
+    ],
+    "variable": [
+      1,
+      147
+    ],
+    "renewable": [
+      2,
+      148,
+      223
+    ],
+    "energy": [
+      3,
+      64,
+      104,
+      149,
+      213
+    ],
+    "increases": [
+      4
+    ],
+    "and": [
+      5,
+      36,
+      71,
+      76,
+      86,
+      114,
+      152,
+      176,
+      201,
+      218,
+      224
+    ],
+    "more": [
+      6
+    ],
+    "demand": [
+      7,
+      37,
+      87,
+      178
+    ],
+    "is": [
+      8
+    ],
+    "electrified,": [
+      9
+    ],
+    "we": [
+      10,
+      45
+    ],
+    "expect": [
+      11
+    ],
+    "price": [
+      12,
+      52,
+      98,
+      134,
+      143,
+      156
+    ],
+    "formation": [
+      13,
+      53,
+      99
+    ],
+    "in": [
+      14,
+      89,
+      100,
+      117,
+      125,
+      166,
+      184,
+      188,
+      205
+    ],
+    "wholesale": [
+      15
+    ],
+    "electricity": [
+      16,
+      74,
+      186
+    ],
+    "markets": [
+      17
+    ],
+    "to": [
+      18,
+      27,
+      41,
+      50,
+      68,
+      81,
+      96,
+      137,
+      140
+    ],
+    "transition": [
+      19,
+      131
+    ],
+    "from": [
+      20,
+      58,
+      120,
+      132
+    ],
+    "being": [
+      21,
+      28
+    ],
+    "dominated": [
+      22,
+      29
+    ],
+    "by": [
+      23,
+      30,
+      146
+    ],
+    "fossil": [
+      24,
+      138
+    ],
+    "fuel": [
+      25
+    ],
+    "generators": [
+      26
+    ],
+    "the": [
+      31,
+      59,
+      63,
+      69,
+      83,
+      158,
+      210,
+      219
+    ],
+    "opportunity": [
+      32
+    ],
+    "costs": [
+      33
+    ],
+    "of": [
+      34,
+      62,
+      73,
+      168,
+      207,
+      212,
+      222
+    ],
+    "storage": [
+      35,
+      214
+    ],
+    "management.": [
+      38
+    ],
+    "In": [
+      39
+    ],
+    "order": [
+      40
+    ],
+    "analyse": [
+      42,
+      97
+    ],
+    "this": [
+      43,
+      94
+    ],
+    "transition,": [
+      44
+    ],
+    "introduce": [
+      46
+    ],
+    "a": [
+      47,
+      56,
+      101,
+      129,
+      141,
+      181,
+      189
+    ],
+    "new": [
+      48
+    ],
+    "method": [
+      49,
+      95
+    ],
+    "investigate": [
+      51
+    ],
+    "based": [
+      54
+    ],
+    "on": [
+      55
+    ],
+    "mapping": [
+      57
+    ],
+    "dual": [
+      60
+    ],
+    "variables": [
+      61
+    ],
+    "system": [
+      65,
+      105,
+      161
+    ],
+    "optimisation": [
+      66
+    ],
+    "problem": [
+      67
+    ],
+    "bids": [
+      70
+    ],
+    "asks": [
+      72
+    ],
+    "suppliers": [
+      75
+    ],
+    "consumers.": [
+      77
+    ],
+    "This": [
+      78
+    ],
+    "allows": [
+      79
+    ],
+    "us": [
+      80
+    ],
+    "build": [
+      82
+    ],
+    "full": [
+      84,
+      123
+    ],
+    "supply": [
+      85
+    ],
+    "curves": [
+      88
+    ],
+    "each": [
+      90
+    ],
+    "hour.": [
+      91
+    ],
+    "We": [
+      92,
+      127
+    ],
+    "use": [
+      93
+    ],
+    "sector-coupled,": [
+      102
+    ],
+    "climateneutral": [
+      103
+    ],
+    "model": [
+      106
+    ],
+    "for": [
+      107,
+      197
+    ],
+    "Germany,": [
+      108
+    ],
+    "PyPSA-DE,": [
+      109
+    ],
+    "with": [
+      110,
+      163
+    ],
+    "high": [
+      111
+    ],
+    "temporal": [
+      112
+    ],
+    "resolution": [
+      113
+    ],
+    "myopic": [
+      115
+    ],
+    "foresight": [
+      116
+    ],
+    "5-year": [
+      118
+    ],
+    "steps": [
+      119
+    ],
+    "2020": [
+      121
+    ],
+    "until": [
+      122
+    ],
+    "decarbonisation": [
+      124
+    ],
+    "2045.": [
+      126
+    ],
+    "find": [
+      128
+    ],
+    "clear": [
+      130
+    ],
+    "distinct": [
+      133
+    ],
+    "levels,": [
+      135
+    ],
+    "corresponding": [
+      136
+    ],
+    "fuels,": [
+      139
+    ],
+    "smoother": [
+      142
+    ],
+    "curve": [
+      144
+    ],
+    "set": [
+      145
+    ],
+    "sources,": [
+      150
+    ],
+    "batteries": [
+      151
+    ],
+    "electrolysis.": [
+      153
+    ],
+    "Despite": [
+      154
+    ],
+    "higher": [
+      155
+    ],
+    "volatility,": [
+      157
+    ],
+    "fully": [
+      159
+    ],
+    "decarbonised": [
+      160
+    ],
+    "clears": [
+      162
+    ],
+    "non-zero": [
+      164
+    ],
+    "prices": [
+      165,
+      187
+    ],
+    "75%": [
+      167
+    ],
+    "all": [
+      169
+    ],
+    "hours.": [
+      170
+    ],
+    "Our": [
+      171
+    ],
+    "results": [
+      172
+    ],
+    "suggest": [
+      173
+    ],
+    "that": [
+      174
+    ],
+    "flexibility": [
+      175,
+      225
+    ],
+    "cross-sectoral": [
+      177
+    ],
+    "bidding": [
+      179
+    ],
+    "play": [
+      180
+    ],
+    "vital": [
+      182
+    ],
+    "role": [
+      183
+    ],
+    "stabilising": [
+      185
+    ],
+    "climate-neutral": [
+      190
+    ],
+    "future.": [
+      191
+    ],
+    "These": [
+      192
+    ],
+    "findings": [
+      193
+    ],
+    "are": [
+      194
+    ],
+    "highly": [
+      195
+    ],
+    "relevant": [
+      196
+    ],
+    "guiding": [
+      198
+    ],
+    "investment": [
+      199
+    ],
+    "decisions": [
+      200
+    ],
+    "informing": [
+      202
+    ],
+    "policy,": [
+      203
+    ],
+    "particularly": [
+      204
+    ],
+    "support": [
+      206
+    ],
+    "dynamic": [
+      208
+    ],
+    "pricing,": [
+      209
+    ],
+    "expansion": [
+      211
+    ],
+    "across": [
+      215
+    ],
+    "multiple": [
+      216
+    ],
+    "timescales,": [
+      217
+    ],
+    "coordinated": [
+      220
+    ],
+    "development": [
+      221
+    ],
+    "technologies.": [
+      226
+    ]
+  }
+}
