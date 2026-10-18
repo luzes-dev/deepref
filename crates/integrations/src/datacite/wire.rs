@@ -2,7 +2,7 @@ use chrono::Utc;
 use deepref_domain::{
     FetchStatus, ProviderKind, Reference, Work, WorkWithReferences, normalize_doi,
 };
-use serde::Deserialize;
+use serde::{Deserialize, Deserializer};
 use serde_json::{Value, json};
 
 use crate::crossref::clean_abstract;
@@ -31,8 +31,22 @@ pub(crate) struct DataCiteAttributes {
     url: Option<String>,
     citation_count: Option<i32>,
     reference_count: Option<i32>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "skip_malformed")]
     related_identifiers: Vec<RelatedIdentifier>,
+}
+
+/// Keeps the entries that parse and drops the rest, so one malformed relation does not fail
+/// the whole record. A missing or null list is empty.
+fn skip_malformed<'de, D, T>(deserializer: D) -> Result<Vec<T>, D::Error>
+where
+    D: Deserializer<'de>,
+    T: Deserialize<'de>,
+{
+    let entries = Option::<Vec<Value>>::deserialize(deserializer)?.unwrap_or_default();
+    Ok(entries
+        .into_iter()
+        .filter_map(|entry| T::deserialize(entry).ok())
+        .collect())
 }
 
 #[derive(Debug, Deserialize)]
@@ -47,18 +61,20 @@ struct Description {
     description: Option<String>,
 }
 
-/// DataCite has sent the publisher as a plain name and as an object with a `name`.
+/// DataCite has sent the publisher as a plain name and as an object with a `name`. An object
+/// without a name gives no publisher.
 #[derive(Debug, Deserialize)]
 #[serde(untagged)]
 enum Publisher {
     Name(String),
-    Named { name: String },
+    Named { name: Option<String> },
 }
 
 impl Publisher {
-    fn into_name(self) -> String {
+    fn into_name(self) -> Option<String> {
         match self {
-            Self::Name(name) | Self::Named { name } => name,
+            Self::Name(name) => Some(name),
+            Self::Named { name } => name,
         }
     }
 }
@@ -74,12 +90,14 @@ struct Types {
     resource_type_general: Option<String>,
 }
 
+/// One DataCite relation. Each field may be absent, and an entry without the fields it needs
+/// is skipped where the relations are read.
 #[derive(Debug, Deserialize)]
 #[serde(rename_all = "camelCase")]
 pub(crate) struct RelatedIdentifier {
-    related_identifier: String,
-    related_identifier_type: String,
-    relation_type: String,
+    related_identifier: Option<String>,
+    related_identifier_type: Option<String>,
+    relation_type: Option<String>,
 }
 
 /// Which way a DataCite relation points, seen from this record. `Outbound` names a work this
@@ -117,13 +135,20 @@ fn citation_relations(related: &[RelatedIdentifier]) -> CitationRelations {
     let mut references: Vec<Reference> = Vec::new();
     let mut incoming = Vec::new();
     for relation in related {
-        if !relation.related_identifier_type.eq_ignore_ascii_case("DOI") {
-            continue;
-        }
-        let Ok(doi) = normalize_doi(&relation.related_identifier) else {
+        let (Some(identifier), Some(kind), Some(relation_type)) = (
+            relation.related_identifier.as_deref(),
+            relation.related_identifier_type.as_deref(),
+            relation.relation_type.as_deref(),
+        ) else {
             continue;
         };
-        match direction(&relation.relation_type) {
+        if !kind.eq_ignore_ascii_case("DOI") {
+            continue;
+        }
+        let Ok(doi) = normalize_doi(identifier) else {
+            continue;
+        };
+        match direction(relation_type) {
             Some(Direction::Outbound) => {
                 let known = references
                     .iter()
@@ -133,7 +158,7 @@ fn citation_relations(related: &[RelatedIdentifier]) -> CitationRelations {
                 }
             }
             Some(Direction::Incoming) => {
-                incoming.push(json!({ "doi": doi, "relationType": relation.relation_type }));
+                incoming.push(json!({ "doi": doi, "relationType": relation_type }));
             }
             None => {}
         }
@@ -173,7 +198,7 @@ impl DataCiteAttributes {
         let title = self.titles.into_iter().next().and_then(|title| title.title);
         let work_type = self.types.and_then(|types| types.resource_type_general);
         let container_title = self.container.and_then(|container| container.title);
-        let publisher = self.publisher.map(Publisher::into_name);
+        let publisher = self.publisher.and_then(Publisher::into_name);
 
         if let Some(object) = raw.as_object_mut() {
             object.remove(XML_KEY);
@@ -270,7 +295,47 @@ mod tests {
         let plain: Publisher = serde_json::from_value(json!("Zenodo")).expect("plain name");
         let object: Publisher =
             serde_json::from_value(json!({ "name": "Zenodo" })).expect("named publisher");
-        assert_eq!(plain.into_name(), "Zenodo");
-        assert_eq!(object.into_name(), "Zenodo");
+        assert_eq!(plain.into_name().as_deref(), Some("Zenodo"));
+        assert_eq!(object.into_name().as_deref(), Some("Zenodo"));
+    }
+
+    #[test]
+    fn one_malformed_relation_is_skipped_and_the_good_one_is_kept() {
+        let body = json!({
+            "doi": "10.5281/zenodo.1",
+            "titles": [{ "title": "A dataset" }],
+            "relatedIdentifiers": [
+                { "relatedIdentifier": "10.1000/no-type", "relatedIdentifierType": "DOI" },
+                "not an object",
+                {
+                    "relatedIdentifier": "10.1000/kept",
+                    "relatedIdentifierType": "DOI",
+                    "relationType": "References"
+                }
+            ]
+        });
+        let attributes: DataCiteAttributes = serde_json::from_value(body.clone())
+            .expect("one malformed relation should not fail the record");
+
+        let work = attributes.into_domain("10.5281/zenodo.1".to_owned(), body);
+
+        let dois: Vec<_> = work
+            .references
+            .iter()
+            .filter_map(|reference| reference.doi.as_deref())
+            .collect();
+        assert_eq!(dois, ["10.1000/kept"]);
+        assert_eq!(work.work.title.as_deref(), Some("A dataset"));
+    }
+
+    #[test]
+    fn a_publisher_object_without_a_name_gives_no_publisher() {
+        let body = json!({ "doi": "10.5281/zenodo.1", "publisher": {} });
+        let attributes: DataCiteAttributes = serde_json::from_value(body.clone())
+            .expect("a nameless publisher should not fail the record");
+
+        let work = attributes.into_domain("10.5281/zenodo.1".to_owned(), body);
+
+        assert_eq!(work.work.publisher, None);
     }
 }
