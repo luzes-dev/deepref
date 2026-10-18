@@ -131,9 +131,7 @@ async fn handle_work_fetch(
         config.metadata.openalex.as_ref(),
     );
     let output = router.fetch_work(&stored_chain, &doi, &permit).await;
-    if let Some(lost) = &output.lost_edges {
-        metadata::report_lost_edges(&doi, lost);
-    }
+    metadata::report_route(&doi, &output);
     let last_provider = output.attempts.last().map(|attempt| attempt.provider);
     cancel_heartbeat.send_replace(true);
     let _ = heartbeat_done.await;

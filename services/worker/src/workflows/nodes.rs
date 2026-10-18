@@ -585,9 +585,7 @@ async fn import_identifiers(context: &Context<'_>) -> NodeResult {
         let chain = &context.runtime.integrations.metadata_providers;
         for doi in &dois {
             let output = router.fetch_work(chain, doi, &permit).await;
-            if let Some(lost) = &output.lost_edges {
-                metadata::report_lost_edges(doi, lost);
-            }
+            metadata::report_route(doi, &output);
             match output.result {
                 Ok(fetched) => match fetched.provider {
                     ProviderKind::OpenAlex => records.push(

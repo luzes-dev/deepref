@@ -119,7 +119,8 @@ async fn probe_openalex(pool: &sqlx::PgPool, config: &config::WorkerConfig) -> a
         limiter::ProviderLimiter::new(pool, settings.rate_limit_per_second, Some(openalex));
     let key_state = openalex.probe_key(&permit).await;
     tracing::info!(
-        key_state = ?key_state,
+        provider = deepref_domain::ProviderKind::OpenAlex.as_str(),
+        mode = key_state.as_str(),
         rate_per_second = openalex.rate_per_second(),
         "OpenAlex boot probe finished"
     );

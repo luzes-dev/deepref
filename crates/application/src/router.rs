@@ -32,6 +32,36 @@ pub enum AttemptOutcome {
     },
 }
 
+impl AttemptOutcome {
+    /// The snake_case name this outcome serializes to, for logs.
+    pub fn name(&self) -> &'static str {
+        match self {
+            Self::Answered => "answered",
+            Self::BudgetExhausted => "budget_exhausted",
+            Self::NotFound => "not_found",
+            Self::Rejected { .. } => "rejected",
+            Self::Retryable { .. } => "retryable",
+            Self::Fatal { .. } => "fatal",
+        }
+    }
+
+    /// The outcome an attempt records when its adapter failed with `error`.
+    pub fn from_error(error: &ProviderFetchError) -> Self {
+        match error {
+            ProviderFetchError::NotFound { .. } => Self::NotFound,
+            ProviderFetchError::Rejected { reason, .. } => Self::Rejected {
+                reason: reason.clone(),
+            },
+            ProviderFetchError::Retryable { message, .. } => Self::Retryable {
+                message: message.clone(),
+            },
+            ProviderFetchError::Fatal { message, .. } => Self::Fatal {
+                message: message.clone(),
+            },
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq, Serialize)]
 pub struct ProviderAttempt {
     pub provider: ProviderKind,
@@ -82,8 +112,9 @@ pub enum LostEdgeFill {
     Crossref { added: usize },
     /// Crossref is not in the run's chain, so nothing could fill the edges.
     CrossrefNotEnabled,
-    /// Crossref's reference list could not be read.
-    CrossrefFailed { message: String },
+    /// Crossref's reference list could not be read. The error is kept whole so the report
+    /// can name its outcome and its message.
+    CrossrefFailed { error: ProviderFetchError },
 }
 
 impl LostEdges {
@@ -315,9 +346,7 @@ impl ProviderRouter {
                 Ok(list) => LostEdgeFill::Crossref {
                     added: merge_references(references, list),
                 },
-                Err(error) => LostEdgeFill::CrossrefFailed {
-                    message: error.to_string(),
-                },
+                Err(error) => LostEdgeFill::CrossrefFailed { error },
             },
         };
         LostEdges {
@@ -1121,6 +1150,28 @@ mod tests {
     }
 
     #[test]
+    fn the_outcome_name_is_the_serialized_tag() {
+        let outcomes = [
+            AttemptOutcome::Answered,
+            AttemptOutcome::BudgetExhausted,
+            AttemptOutcome::NotFound,
+            AttemptOutcome::Rejected {
+                reason: "paratext".to_owned(),
+            },
+            AttemptOutcome::Retryable {
+                message: "busy".to_owned(),
+            },
+            AttemptOutcome::Fatal {
+                message: "blocked".to_owned(),
+            },
+        ];
+        for outcome in outcomes {
+            let serialized = serde_json::to_value(&outcome).expect("outcome serializes");
+            assert_eq!(serialized["outcome"], outcome.name());
+        }
+    }
+
+    #[test]
     fn the_router_refuses_a_chain_with_nothing_enabled_and_repeated_adapters() {
         let calls = Calls::default();
 
@@ -1304,7 +1355,10 @@ mod tests {
                     reset_secs: Some(3_600),
                 },
                 fill: LostEdgeFill::CrossrefFailed {
-                    message: "crossref is unavailable for now: upstream timed out".to_owned(),
+                    error: ProviderFetchError::Retryable {
+                        provider: ProviderKind::Crossref,
+                        message: "upstream timed out".to_owned(),
+                    },
                 },
             })
         );
@@ -1487,7 +1541,10 @@ mod tests {
                 count: 2,
                 cause: LostEdgeCause::Shortfall,
                 fill: LostEdgeFill::CrossrefFailed {
-                    message: "crossref is unavailable for now: upstream timed out".to_owned(),
+                    error: ProviderFetchError::Retryable {
+                        provider: ProviderKind::Crossref,
+                        message: "upstream timed out".to_owned(),
+                    },
                 },
             })
         );

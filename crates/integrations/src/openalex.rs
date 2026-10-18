@@ -54,6 +54,16 @@ pub enum OpenAlexKeyState {
     Keyless,
 }
 
+impl OpenAlexKeyState {
+    /// The `mode` field of the key log events.
+    pub fn as_str(self) -> &'static str {
+        match self {
+            Self::Keyed => "keyed",
+            Self::Keyless => "keyless",
+        }
+    }
+}
+
 /// The configured key and its one-way downgrade. The flag is atomic so every clone
 /// of the client sees the same state without holding a lock across a request.
 pub struct OpenAlexKey {
@@ -102,6 +112,8 @@ impl OpenAlexKey {
         let first = !self.downgraded.swap(true, Ordering::AcqRel);
         if first {
             tracing::warn!(
+                provider = ProviderKind::OpenAlex.as_str(),
+                mode = OpenAlexKeyState::Keyless.as_str(),
                 reason,
                 rate_per_second = KEYLESS_RATE_PER_SECOND,
                 "OpenAlex key unusable; continuing keyless until restart"
@@ -338,6 +350,7 @@ impl OpenAlexClient {
             && self.budget.claim_daily_warning(Utc::now().date_naive())
         {
             tracing::warn!(
+                provider = ProviderKind::OpenAlex.as_str(),
                 limit,
                 remaining,
                 "OpenAlex daily budget is under 10 percent"
@@ -413,7 +426,8 @@ impl OpenAlexClient {
                             let reset_secs = header_u64(response.headers(), "x-ratelimit-reset");
                             self.budget.stop(Instant::now(), reset_secs);
                             tracing::warn!(
-                                ?reset_secs,
+                                provider = ProviderKind::OpenAlex.as_str(),
+                                reset_secs,
                                 "OpenAlex daily budget is spent; list calls stop until the reset"
                             );
                             return Err(OpenAlexError::BudgetExhausted { reset_secs });
