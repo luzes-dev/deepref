@@ -436,7 +436,7 @@ impl OpenAlexClient {
                             StatusClassification::Retryable => {
                                 OpenAlexError::RetryableStatus(status)
                             }
-                            _ => return Err(OpenAlexError::NonRetryableStatus(status)),
+                            _ => return Err(OpenAlexError::UnexpectedStatus(status)),
                         },
                     }
                 }
@@ -524,8 +524,9 @@ impl OpenAlexClient {
                     dois.extend(wire::list_dois(&body));
                     resolved += chunk.len();
                 }
+                // A list call has no not-found answer, so a 404 here is an unexpected status.
                 Ok(None) => {
-                    return Err(OpenAlexError::NonRetryableStatus(StatusCode::NOT_FOUND));
+                    return Err(OpenAlexError::UnexpectedStatus(StatusCode::NOT_FOUND));
                 }
                 Err(OpenAlexError::BudgetExhausted { reset_secs }) => {
                     let gap = ReferenceGap::BudgetExhausted {
@@ -680,8 +681,10 @@ pub enum OpenAlexError {
     RetryableStatus(StatusCode),
     #[error("OpenAlex's daily budget is spent; list calls stop until the reset")]
     BudgetExhausted { reset_secs: Option<u64> },
-    #[error("OpenAlex returned non-retryable status: {0}")]
-    NonRetryableStatus(StatusCode),
+    /// A status the adapter neither retries nor reads, such as a 400. It costs no further
+    /// request here, and the chain treats it as retryable.
+    #[error("OpenAlex returned an unexpected status: {0}")]
+    UnexpectedStatus(StatusCode),
     #[error("request failed: {0}")]
     Request(reqwest::Error),
     #[error("invalid OpenAlex response: {0}")]
@@ -691,8 +694,9 @@ pub enum OpenAlexError {
 }
 
 impl OpenAlexError {
-    /// Classifies a failed lookup for the provider chain. A keyless refusal is
-    /// Retryable rather than Fatal: OpenAlex cannot answer now, so the chain moves on.
+    /// Classifies a failed lookup for the provider chain. Only a missing contact address can
+    /// never succeed, so it is the one Fatal. Anything OpenAlex might answer later is
+    /// Retryable, and so is a body that does not decode, whichever step caught it.
     fn into_fetch_error(self) -> ProviderFetchError {
         let provider = ProviderKind::OpenAlex;
         let message = self.to_string();
@@ -712,12 +716,12 @@ impl OpenAlexError {
             },
             Self::Unauthorized(_)
             | Self::RetryableStatus(_)
+            | Self::UnexpectedStatus(_)
             | Self::BudgetExhausted { .. }
             | Self::Request(_)
+            | Self::Json(_)
             | Self::Permit(_) => ProviderFetchError::Retryable { provider, message },
-            Self::MissingContactEmail | Self::NonRetryableStatus(_) | Self::Json(_) => {
-                ProviderFetchError::Fatal { provider, message }
-            }
+            Self::MissingContactEmail => ProviderFetchError::Fatal { provider, message },
         }
     }
 }
@@ -1741,6 +1745,120 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn a_404_on_a_reference_list_call_is_retryable_so_the_chain_moves_on() {
+        let (base, _) =
+            scripted_server(vec![reply("200 OK", WORK), reply("404 Not Found", "{}")]).await;
+
+        let error = fetch(
+            &client(base, None, 1),
+            ABSTRACT_DOI,
+            &RecordingPermit::default(),
+        )
+        .await
+        .expect_err("a 404 on a list call should not answer");
+
+        assert!(matches!(
+            error,
+            ProviderFetchError::Retryable {
+                provider: ProviderKind::OpenAlex,
+                ..
+            }
+        ));
+    }
+
+    #[tokio::test]
+    async fn an_unexpected_400_on_the_singleton_is_retryable_without_a_repeat() {
+        let (base, requests) = scripted_server(vec![reply("400 Bad Request", "{}")]).await;
+
+        let error = fetch(
+            &client(base, None, 3),
+            ABSTRACT_DOI,
+            &RecordingPermit::default(),
+        )
+        .await
+        .expect_err("a 400 should not answer");
+
+        assert!(matches!(
+            error,
+            ProviderFetchError::Retryable {
+                provider: ProviderKind::OpenAlex,
+                ..
+            }
+        ));
+        assert_eq!(requests.lock().expect("request log").len(), 1);
+    }
+
+    #[tokio::test]
+    async fn an_undecodable_200_body_is_retryable_whichever_step_fails() {
+        // Text that is not JSON fails while the body is read. A JSON array fails when the
+        // work is mapped. Both must classify the same way.
+        for body in ["not json at all", "[1, 2, 3]"] {
+            let (base, _) = scripted_server(vec![reply("200 OK", body)]).await;
+
+            let error = fetch(
+                &client(base, None, 1),
+                ABSTRACT_DOI,
+                &RecordingPermit::default(),
+            )
+            .await
+            .expect_err("an undecodable body should not answer");
+
+            assert!(
+                matches!(
+                    error,
+                    ProviderFetchError::Retryable {
+                        provider: ProviderKind::OpenAlex,
+                        ..
+                    }
+                ),
+                "{body}: {error:?}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn null_counts_flags_and_lists_map_to_empty_values() {
+        let mut body: Value = serde_json::from_str(WORK).expect("fixture is JSON");
+        for field in [
+            "cited_by_count",
+            "referenced_works_count",
+            "referenced_works",
+            "locations",
+            "is_paratext",
+            "primary_location",
+            "authorships",
+            "topics",
+        ] {
+            body[field] = Value::Null;
+        }
+        body["best_oa_location"] =
+            json!({ "landing_page_url": "https://repo.example.org/a", "is_oa": null });
+        let (base, requests) = scripted_server(vec![reply("200 OK", body.to_string())]).await;
+
+        let fetched = fetch(
+            &client(base, None, 1),
+            ABSTRACT_DOI,
+            &RecordingPermit::default(),
+        )
+        .await
+        .expect("nulls should map to empty values, not fail the lookup");
+
+        assert_eq!(fetched.work.work.total_citations, 0);
+        assert_eq!(fetched.work.work.references_count, 0);
+        assert!(fetched.work.references.is_empty());
+        assert_eq!(fetched.work.raw["deepref_oa_urls"]["locations"], json!([]));
+        assert_eq!(
+            fetched.work.raw["deepref_oa_urls"]["best_oa_location"]["is_oa"],
+            false
+        );
+        assert_eq!(
+            requests.lock().expect("request log").len(),
+            1,
+            "no reference list call without referenced works"
+        );
+    }
+
+    #[tokio::test]
     async fn a_rejected_key_on_a_list_call_downgrades_and_repeats_keyless() {
         let (base, requests) = scripted_server(vec![
             reply("200 OK", WORK),
@@ -2364,12 +2482,12 @@ mod tests {
             ProviderFetchError::Retryable { .. }
         ));
         assert!(matches!(
-            OpenAlexError::NonRetryableStatus(StatusCode::BAD_REQUEST).into_fetch_error(),
-            ProviderFetchError::Fatal { .. }
+            OpenAlexError::UnexpectedStatus(StatusCode::BAD_REQUEST).into_fetch_error(),
+            ProviderFetchError::Retryable { .. }
         ));
         assert!(matches!(
             OpenAlexError::Json(json).into_fetch_error(),
-            ProviderFetchError::Fatal { .. }
+            ProviderFetchError::Retryable { .. }
         ));
         assert!(matches!(
             OpenAlexError::MissingContactEmail.into_fetch_error(),

@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use chrono::Utc;
 use deepref_domain::{FetchStatus, ProviderKind, Work, WorkWithReferences, normalize_doi};
-use serde::{Deserialize, Serialize};
+use serde::{Deserialize, Deserializer, Serialize};
 use serde_json::{Value, json};
 
 use crate::crossref::parse_openalex;
@@ -10,6 +10,16 @@ use crate::crossref::parse_openalex;
 /// Raw key for the open-access locations (`best_oa_location` and `locations`),
 /// kept for PDF and licence lookups.
 const OA_URLS_KEY: &str = "deepref_oa_urls";
+
+/// Reads a JSON `null` as the field's default. `#[serde(default)]` covers only an absent
+/// field, and OpenAlex sends `null` for some counts, flags and lists.
+fn null_as_default<'de, D, T>(deserializer: D) -> Result<T, D::Error>
+where
+    D: Deserializer<'de>,
+    T: Deserialize<'de> + Default,
+{
+    Ok(Option::<T>::deserialize(deserializer)?.unwrap_or_default())
+}
 
 /// The OpenAlex fields the adapter maps. The request's `select=` returns these plus
 /// the fields kept only in the raw payload.
@@ -22,15 +32,15 @@ pub(crate) struct OpenAlexWork {
     #[serde(rename = "type")]
     work_type: Option<String>,
     primary_location: Option<OpenAlexLocation>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "null_as_default")]
     cited_by_count: i32,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "null_as_default")]
     referenced_works_count: i32,
     best_oa_location: Option<OpenAlexLocation>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "null_as_default")]
     locations: Vec<OpenAlexLocation>,
     /// Front matter such as editorials and indexes. It ends the lookup as rejected.
-    #[serde(default)]
+    #[serde(default, deserialize_with = "null_as_default")]
     pub(crate) is_paratext: bool,
 }
 
@@ -43,7 +53,7 @@ struct OpenAlexLocation {
     pdf_url: Option<String>,
     license: Option<String>,
     version: Option<String>,
-    #[serde(default)]
+    #[serde(default, deserialize_with = "null_as_default")]
     is_oa: bool,
 }
 
