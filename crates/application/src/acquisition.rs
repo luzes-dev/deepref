@@ -125,18 +125,6 @@ pub enum ReferenceGap {
     Shortfall { resolved: usize, expected: usize },
 }
 
-impl ReferenceGap {
-    /// How many references the answer is missing.
-    pub fn missing(self) -> usize {
-        match self {
-            Self::BudgetExhausted {
-                resolved, expected, ..
-            }
-            | Self::Shortfall { resolved, expected } => expected.saturating_sub(resolved),
-        }
-    }
-}
-
 #[derive(Debug, Clone)]
 pub struct FetchedWork {
     pub work: WorkWithReferences,
