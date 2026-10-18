@@ -474,9 +474,11 @@ impl OpenAlexClient {
             .await?
             .ok_or_else(|| OpenAlexError::NotFound(doi.clone()))?;
         let mut work = checked_work(&doi, raw)?;
-        let (references, reference_gap) = self
+        let (references, budget_gap) = self
             .resolve_references(&wire::referenced_ids(&work.raw), permit)
             .await?;
+        let reference_gap =
+            budget_gap.or_else(|| shortfall(references.len(), work.work.references_count));
         work.references = references;
         Ok(FetchedWork {
             work,
@@ -521,6 +523,13 @@ impl OpenAlexClient {
         }
         Ok((references_in_order(ids, &dois), None))
     }
+}
+
+/// The gap for an answer that lists fewer DOI references than the work reports. A target
+/// without a DOI at OpenAlex is missing from the list too, so it counts here.
+fn shortfall(resolved: usize, reported: i32) -> Option<ReferenceGap> {
+    let expected = usize::try_from(reported).unwrap_or(0);
+    (resolved < expected).then_some(ReferenceGap::Shortfall { resolved, expected })
 }
 
 /// The references for the IDs that resolved to a DOI, in reference order.
@@ -1261,6 +1270,75 @@ mod tests {
             })
         );
         assert_eq!(requests.lock().expect("request log").len(), 3);
+    }
+
+    #[tokio::test]
+    async fn a_list_that_resolves_fewer_dois_than_the_work_reports_is_a_shortfall() {
+        let ids = synthetic_ids(3);
+        let (base, _) = scripted_server(vec![
+            reply("200 OK", work_citing(&ids)),
+            reply("200 OK", list_body(&ids, &[ids[1].as_str()])),
+        ])
+        .await;
+
+        let fetched = fetch(
+            &client(base, None, 1),
+            ABSTRACT_DOI,
+            &RecordingPermit::default(),
+        )
+        .await
+        .expect("the metadata answers");
+
+        assert_eq!(dois(&fetched), vec!["10.9999/w1000000", "10.9999/w1000002"]);
+        assert_eq!(
+            fetched.reference_gap,
+            Some(ReferenceGap::Shortfall {
+                resolved: 2,
+                expected: 3,
+            })
+        );
+    }
+
+    #[tokio::test]
+    async fn an_empty_reference_list_under_a_reported_count_is_a_shortfall() {
+        let (base, _) =
+            scripted_server(vec![reply("200 OK", WORK), reply("200 OK", EMPTY_LIST)]).await;
+
+        let fetched = fetch(
+            &client(base, None, 1),
+            ABSTRACT_DOI,
+            &RecordingPermit::default(),
+        )
+        .await
+        .expect("the metadata answers");
+
+        assert_eq!(
+            fetched.reference_gap,
+            Some(ReferenceGap::Shortfall {
+                resolved: 0,
+                expected: 40,
+            })
+        );
+    }
+
+    #[tokio::test]
+    async fn a_complete_reference_list_has_no_gap() {
+        let ids = synthetic_ids(3);
+        let (base, _) = scripted_server(vec![
+            reply("200 OK", work_citing(&ids)),
+            reply("200 OK", list_body(&ids, &[])),
+        ])
+        .await;
+
+        let fetched = fetch(
+            &client(base, None, 1),
+            ABSTRACT_DOI,
+            &RecordingPermit::default(),
+        )
+        .await
+        .expect("the metadata answers");
+
+        assert_eq!(fetched.reference_gap, None);
     }
 
     #[tokio::test]

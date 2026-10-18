@@ -51,19 +51,29 @@ pub enum RouteError {
 pub struct RouteOutput {
     pub attempts: Vec<ProviderAttempt>,
     pub result: Result<FetchedWork, RouteError>,
-    /// Set when the answer came back without every reference it listed.
+    /// Set when the answer came back short of its references and the router tried to fill
+    /// them. A shortfall with the reference union off is not tried, so it leaves no record.
     pub lost_edges: Option<LostEdges>,
 }
 
-/// A budget stop that cost an answer some references, and what the router did about it.
-/// The application layer has no logging, so the worker reports this record.
+/// A short answer and what the router did about it. The application layer has no
+/// logging, so the worker reports this record.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LostEdges {
     pub provider: ProviderKind,
-    /// `expected - resolved` at the stop.
+    /// The references the answer is missing, from the gap.
     pub count: usize,
-    pub reset_secs: Option<u64>,
+    pub cause: LostEdgeCause,
     pub fill: LostEdgeFill,
+}
+
+/// What left the answer short of its references.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum LostEdgeCause {
+    /// The daily list budget ran out. `reset_secs` is the reset the provider sent, if any.
+    BudgetExhausted { reset_secs: Option<u64> },
+    /// The answer listed fewer DOI references than the work reports.
+    Shortfall,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -93,10 +103,12 @@ pub enum RouterError {
 pub struct ProviderRouter {
     deployment_chain: Vec<ProviderKind>,
     adapters: HashMap<ProviderKind, Box<dyn WorkProvider>>,
+    reference_union: bool,
 }
 
 impl ProviderRouter {
-    /// Builds the router from the deployment chain and the adapters in this build.
+    /// Builds the router from the deployment chain and the adapters in this build. The
+    /// reference union is on, as `DEEPREF_REFERENCE_UNION` defaults to.
     pub fn new(
         deployment_chain: Vec<ProviderKind>,
         adapters: Vec<Box<dyn WorkProvider>>,
@@ -111,11 +123,20 @@ impl ProviderRouter {
         let router = Self {
             deployment_chain: unique(deployment_chain),
             adapters: by_kind,
+            reference_union: true,
         };
         if router.enabled().is_empty() {
             return Err(RouterError::NoEnabledProvider);
         }
         Ok(router)
+    }
+
+    /// Sets whether a shortfall on an answer asks Crossref for its reference list. A
+    /// budget stop asks either way.
+    #[must_use]
+    pub fn with_reference_union(mut self, enabled: bool) -> Self {
+        self.reference_union = enabled;
+        self
     }
 
     /// The deployment chain filtered to providers with an adapter. This is the allowlist.
@@ -169,31 +190,34 @@ impl ProviderRouter {
             match result {
                 Ok(fetched) => {
                     let gap = fetched.reference_gap;
-                    let outcome = if gap.is_some() {
-                        AttemptOutcome::BudgetExhausted
-                    } else {
-                        AttemptOutcome::Answered
+                    let outcome = match gap {
+                        Some(ReferenceGap::BudgetExhausted { .. }) => {
+                            AttemptOutcome::BudgetExhausted
+                        }
+                        Some(ReferenceGap::Shortfall { .. }) | None => AttemptOutcome::Answered,
                     };
                     attempts.push(attempt(kind, outcome));
                     let mut fetched = fetched;
                     let mut contributions = vec![kind];
-                    let mut lost_edges = None;
-                    if let Some(gap) = gap {
-                        let lost = self
-                            .fill_lost_edges(
-                                &chain_kinds,
-                                kind,
-                                doi,
-                                gap,
-                                &mut fetched.work.references,
-                                permit,
-                            )
-                            .await;
-                        if lost.crossref_contributed() {
-                            contributions.push(ProviderKind::Crossref);
+                    let lost_edges = match gap {
+                        Some(gap) if self.fills(gap) => {
+                            let lost = self
+                                .fill_lost_edges(
+                                    &chain_kinds,
+                                    kind,
+                                    doi,
+                                    gap,
+                                    &mut fetched.work.references,
+                                    permit,
+                                )
+                                .await;
+                            if lost.crossref_contributed() {
+                                contributions.push(ProviderKind::Crossref);
+                            }
+                            Some(lost)
                         }
-                        lost_edges = Some(lost);
-                    }
+                        _ => None,
+                    };
                     let fetched = stamp_provenance(fetched, &attempts, &contributions);
                     return RouteOutput {
                         attempts,
@@ -254,9 +278,19 @@ impl ProviderRouter {
         }
     }
 
-    /// Fills the references that a budget stop cost the answer, from Crossref's reference
-    /// list when Crossref is in the chain. The answer is never dropped: a Crossref that is
-    /// missing or fails leaves the partial references in place, and the report says so.
+    /// Whether the router asks Crossref to fill this gap. A budget stop always does, since
+    /// the spent budget is the only reason the answer is short. A shortfall does only when
+    /// the reference union is on.
+    fn fills(&self, gap: ReferenceGap) -> bool {
+        match gap {
+            ReferenceGap::BudgetExhausted { .. } => true,
+            ReferenceGap::Shortfall { .. } => self.reference_union,
+        }
+    }
+
+    /// Fills the references the answer is missing, from Crossref's reference list when
+    /// Crossref is in the chain. The answer is never dropped: a Crossref that is missing or
+    /// fails leaves the partial references in place, and the report says so.
     async fn fill_lost_edges(
         &self,
         chain: &[ProviderKind],
@@ -266,11 +300,12 @@ impl ProviderRouter {
         references: &mut Vec<Reference>,
         permit: &dyn ProviderPermit,
     ) -> LostEdges {
-        let ReferenceGap::BudgetExhausted {
-            resolved,
-            expected,
-            reset_secs,
-        } = gap;
+        let cause = match gap {
+            ReferenceGap::BudgetExhausted { reset_secs, .. } => {
+                LostEdgeCause::BudgetExhausted { reset_secs }
+            }
+            ReferenceGap::Shortfall { .. } => LostEdgeCause::Shortfall,
+        };
         let crossref = self.adapters.get(&ProviderKind::Crossref).filter(|_| {
             answering != ProviderKind::Crossref && chain.contains(&ProviderKind::Crossref)
         });
@@ -287,8 +322,8 @@ impl ProviderRouter {
         };
         LostEdges {
             provider: answering,
-            count: expected.saturating_sub(resolved),
-            reset_secs,
+            count: gap.missing(),
+            cause,
             fill,
         }
     }
@@ -592,6 +627,45 @@ mod tests {
             expected,
             reset_secs: Some(3_600),
         })
+    }
+
+    /// Runs an OpenAlex answer that carries `gap` through a router with the given deployment
+    /// chain, stored chain and reference union setting. Crossref's list is `list`. Returns
+    /// the output, the permit log and the adapter call log.
+    fn gap_run(
+        deployment: &[ProviderKind],
+        stored: &[ProviderKind],
+        gap: ReferenceGap,
+        list: Result<Vec<Reference>, ProviderFetchError>,
+        reference_union: bool,
+    ) -> (RouteOutput, FakePermit, Calls) {
+        let calls = Calls::default();
+        let tried = Tried::default();
+        let openalex = FakeProvider {
+            gap: Some(gap),
+            ..provider(
+                ProviderKind::OpenAlex,
+                Ok(work_citing(vec![
+                    reference(Some("10.1000/a")),
+                    reference(Some("10.1000/b")),
+                ])),
+                &calls,
+                &tried,
+            )
+        };
+        let crossref = FakeProvider {
+            list,
+            ..provider(ProviderKind::Crossref, answers(), &calls, &tried)
+        };
+        let router = router(deployment, vec![boxed(openalex), boxed(crossref)])
+            .with_reference_union(reference_union);
+        let permit = FakePermit::default();
+        let output = run(&router, stored, &permit);
+        (output, permit, calls)
+    }
+
+    fn shortfall(resolved: usize, expected: usize) -> ReferenceGap {
+        ReferenceGap::Shortfall { resolved, expected }
     }
 
     fn reference_dois(fetched: &FetchedWork) -> Vec<String> {
@@ -1111,7 +1185,9 @@ mod tests {
             Some(LostEdges {
                 provider: ProviderKind::OpenAlex,
                 count: 2,
-                reset_secs: Some(3_600),
+                cause: LostEdgeCause::BudgetExhausted {
+                    reset_secs: Some(3_600),
+                },
                 fill: LostEdgeFill::Crossref { added: 1 },
             })
         );
@@ -1176,7 +1252,9 @@ mod tests {
             Some(LostEdges {
                 provider: ProviderKind::OpenAlex,
                 count: 2,
-                reset_secs: Some(3_600),
+                cause: LostEdgeCause::BudgetExhausted {
+                    reset_secs: Some(3_600),
+                },
                 fill: LostEdgeFill::CrossrefNotEnabled,
             })
         );
@@ -1222,7 +1300,9 @@ mod tests {
             Some(LostEdges {
                 provider: ProviderKind::OpenAlex,
                 count: 1,
-                reset_secs: Some(3_600),
+                cause: LostEdgeCause::BudgetExhausted {
+                    reset_secs: Some(3_600),
+                },
                 fill: LostEdgeFill::CrossrefFailed {
                     message: "crossref is unavailable for now: upstream timed out".to_owned(),
                 },
@@ -1265,6 +1345,219 @@ mod tests {
                 (ProviderKind::OpenAlex, vec![]),
                 (ProviderKind::Crossref, vec![ProviderKind::OpenAlex]),
             ]
+        );
+    }
+
+    #[test]
+    fn a_shortfall_unions_the_crossref_list_and_dedupes_by_doi() {
+        let (output, permit, _) = gap_run(
+            &[ProviderKind::OpenAlex, ProviderKind::Crossref],
+            &[],
+            shortfall(2, 4),
+            Ok(vec![
+                reference(Some("10.1000/B")),
+                reference(Some("10.1000/c")),
+                reference(None),
+            ]),
+            true,
+        );
+
+        let fetched = output.result.as_ref().expect("the OpenAlex answer is kept");
+        assert_eq!(fetched.work.work.metadata_provider, "openalex");
+        assert_eq!(fetched.work.work.citation_provider, "openalex,crossref");
+        assert_eq!(
+            reference_dois(fetched),
+            vec!["10.1000/a", "10.1000/b", "10.1000/c"]
+        );
+        assert_eq!(
+            fetched.work.raw["deepref_provider_attempts"],
+            json!([{ "provider": "openalex", "outcome": "answered" }])
+        );
+        assert_eq!(
+            output.lost_edges,
+            Some(LostEdges {
+                provider: ProviderKind::OpenAlex,
+                count: 2,
+                cause: LostEdgeCause::Shortfall,
+                fill: LostEdgeFill::Crossref { added: 1 },
+            })
+        );
+        assert_eq!(
+            permit.requested.lock().expect("permit log").clone(),
+            vec![ProviderKind::OpenAlex, ProviderKind::Crossref]
+        );
+    }
+
+    #[test]
+    fn a_shortfall_with_the_reference_union_off_does_not_ask_crossref() {
+        let (output, permit, _) = gap_run(
+            &[ProviderKind::OpenAlex, ProviderKind::Crossref],
+            &[],
+            shortfall(2, 4),
+            Ok(vec![reference(Some("10.1000/c"))]),
+            false,
+        );
+
+        let fetched = output.result.as_ref().expect("the OpenAlex answer is kept");
+        assert_eq!(fetched.work.work.citation_provider, "openalex");
+        assert_eq!(reference_dois(fetched), vec!["10.1000/a", "10.1000/b"]);
+        assert_eq!(output.lost_edges, None);
+        assert_eq!(
+            outcomes(&output),
+            vec![(ProviderKind::OpenAlex, AttemptOutcome::Answered)]
+        );
+        assert_eq!(
+            permit.requested.lock().expect("permit log").clone(),
+            vec![ProviderKind::OpenAlex]
+        );
+    }
+
+    #[test]
+    fn a_shortfall_skips_crossref_when_crossref_is_not_enabled() {
+        let (output, permit, _) = gap_run(
+            &[ProviderKind::OpenAlex],
+            &[],
+            shortfall(2, 4),
+            Ok(vec![reference(Some("10.1000/c"))]),
+            true,
+        );
+
+        let fetched = output.result.as_ref().expect("the OpenAlex answer is kept");
+        assert_eq!(fetched.work.work.citation_provider, "openalex");
+        assert_eq!(
+            output.lost_edges,
+            Some(LostEdges {
+                provider: ProviderKind::OpenAlex,
+                count: 2,
+                cause: LostEdgeCause::Shortfall,
+                fill: LostEdgeFill::CrossrefNotEnabled,
+            })
+        );
+        assert_eq!(
+            permit.requested.lock().expect("permit log").clone(),
+            vec![ProviderKind::OpenAlex]
+        );
+    }
+
+    #[test]
+    fn a_shortfall_skips_crossref_when_the_stored_chain_leaves_it_out() {
+        let (output, permit, _) = gap_run(
+            &[ProviderKind::OpenAlex, ProviderKind::Crossref],
+            &[ProviderKind::OpenAlex],
+            shortfall(2, 4),
+            Ok(vec![reference(Some("10.1000/c"))]),
+            true,
+        );
+
+        assert_eq!(
+            output.lost_edges.map(|lost| lost.fill),
+            Some(LostEdgeFill::CrossrefNotEnabled)
+        );
+        assert_eq!(
+            permit.requested.lock().expect("permit log").clone(),
+            vec![ProviderKind::OpenAlex]
+        );
+    }
+
+    #[test]
+    fn a_failing_crossref_list_on_a_shortfall_keeps_the_answer() {
+        let (output, _, _) = gap_run(
+            &[ProviderKind::OpenAlex, ProviderKind::Crossref],
+            &[],
+            shortfall(2, 4),
+            Err(ProviderFetchError::Retryable {
+                provider: ProviderKind::Crossref,
+                message: "upstream timed out".to_owned(),
+            }),
+            true,
+        );
+
+        let fetched = output.result.as_ref().expect("the OpenAlex answer is kept");
+        assert_eq!(fetched.work.work.metadata_provider, "openalex");
+        assert_eq!(fetched.work.work.citation_provider, "openalex");
+        assert_eq!(reference_dois(fetched), vec!["10.1000/a", "10.1000/b"]);
+        assert_eq!(
+            outcomes(&output),
+            vec![(ProviderKind::OpenAlex, AttemptOutcome::Answered)]
+        );
+        assert_eq!(
+            output.lost_edges,
+            Some(LostEdges {
+                provider: ProviderKind::OpenAlex,
+                count: 2,
+                cause: LostEdgeCause::Shortfall,
+                fill: LostEdgeFill::CrossrefFailed {
+                    message: "crossref is unavailable for now: upstream timed out".to_owned(),
+                },
+            })
+        );
+    }
+
+    #[test]
+    fn a_shortfall_whose_crossref_list_adds_no_new_doi_keeps_openalex_as_the_citation_provider() {
+        let (output, _, _) = gap_run(
+            &[ProviderKind::OpenAlex, ProviderKind::Crossref],
+            &[],
+            shortfall(2, 4),
+            Ok(vec![
+                reference(Some("10.1000/a")),
+                reference(Some("10.1000/B")),
+                reference(None),
+            ]),
+            true,
+        );
+
+        let fetched = output.result.as_ref().expect("the OpenAlex answer is kept");
+        assert_eq!(fetched.work.work.citation_provider, "openalex");
+        assert_eq!(
+            fetched.work.raw["deepref_citation_sources"],
+            json!(["openalex"])
+        );
+        assert_eq!(reference_dois(fetched), vec!["10.1000/a", "10.1000/b"]);
+        assert_eq!(
+            output.lost_edges.map(|lost| lost.fill),
+            Some(LostEdgeFill::Crossref { added: 0 })
+        );
+    }
+
+    #[test]
+    fn a_budget_stop_still_fills_from_crossref_when_the_reference_union_is_off() {
+        let (output, permit, _) = gap_run(
+            &[ProviderKind::OpenAlex, ProviderKind::Crossref],
+            &[],
+            ReferenceGap::BudgetExhausted {
+                resolved: 2,
+                expected: 4,
+                reset_secs: Some(3_600),
+            },
+            Ok(vec![reference(Some("10.1000/c"))]),
+            false,
+        );
+
+        let fetched = output.result.as_ref().expect("the OpenAlex answer is kept");
+        assert_eq!(fetched.work.work.citation_provider, "openalex,crossref");
+        assert_eq!(
+            reference_dois(fetched),
+            vec!["10.1000/a", "10.1000/b", "10.1000/c"]
+        );
+        assert_eq!(
+            outcomes(&output),
+            vec![(ProviderKind::OpenAlex, AttemptOutcome::BudgetExhausted)]
+        );
+        assert_eq!(
+            output.lost_edges,
+            Some(LostEdges {
+                provider: ProviderKind::OpenAlex,
+                count: 2,
+                cause: LostEdgeCause::BudgetExhausted {
+                    reset_secs: Some(3_600),
+                },
+                fill: LostEdgeFill::Crossref { added: 1 },
+            })
+        );
+        assert_eq!(
+            permit.requested.lock().expect("permit log").clone(),
+            vec![ProviderKind::OpenAlex, ProviderKind::Crossref]
         );
     }
 }

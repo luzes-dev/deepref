@@ -107,8 +107,9 @@ pub trait ProviderPermit: Send + Sync {
 #[error("provider permit unavailable: {0}")]
 pub struct PermitError(pub String);
 
-/// Why a provider answer lists fewer references than the work resolved. The router can
-/// act on it later, for example by asking Crossref for the reference list.
+/// Why a provider answer lists fewer references than the work reports. The router acts
+/// on it by asking Crossref for the reference list, subject to the reference union gate
+/// for a shortfall.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum ReferenceGap {
     /// The daily budget ran out after `resolved` of `expected` referenced works were
@@ -118,6 +119,22 @@ pub enum ReferenceGap {
         expected: usize,
         reset_secs: Option<u64>,
     },
+    /// Every referenced work was looked up, but the answer carries `resolved` references
+    /// with a DOI where the work reports `expected`. Targets the provider holds without a
+    /// DOI count too, and Crossref's list may still supply their DOIs.
+    Shortfall { resolved: usize, expected: usize },
+}
+
+impl ReferenceGap {
+    /// How many references the answer is missing.
+    pub fn missing(self) -> usize {
+        match self {
+            Self::BudgetExhausted {
+                resolved, expected, ..
+            }
+            | Self::Shortfall { resolved, expected } => expected.saturating_sub(resolved),
+        }
+    }
 }
 
 #[derive(Debug, Clone)]

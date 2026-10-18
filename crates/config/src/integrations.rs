@@ -45,6 +45,9 @@ pub struct IntegrationsConfig {
     /// smaller rate budget. Never printed: `Debug` redacts it.
     pub openalex_api_key: Option<String>,
     pub openalex_corpus: OpenAlexCorpus,
+    /// Whether a short OpenAlex reference list is topped up from Crossref's reference list.
+    /// A budget stop is topped up either way. From `DEEPREF_REFERENCE_UNION`, on by default.
+    pub reference_union: bool,
 }
 
 impl Default for IntegrationsConfig {
@@ -55,6 +58,7 @@ impl Default for IntegrationsConfig {
             metadata_providers: DEFAULT_METADATA_PROVIDERS.to_vec(),
             openalex_api_key: None,
             openalex_corpus: OpenAlexCorpus::Core,
+            reference_union: true,
         }
     }
 }
@@ -71,6 +75,7 @@ impl fmt::Debug for IntegrationsConfig {
                 &self.openalex_api_key.as_ref().map(|_| "<redacted>"),
             )
             .field("openalex_corpus", &self.openalex_corpus)
+            .field("reference_union", &self.reference_union)
             .finish()
     }
 }
@@ -101,6 +106,7 @@ impl IntegrationsConfig {
             metadata_providers: metadata_providers(get)?,
             openalex_api_key: crate::optional(get, "DEEPREF_OPENALEX_API_KEY"),
             openalex_corpus,
+            reference_union: reference_union(get)?,
         })
     }
 
@@ -117,6 +123,19 @@ impl IntegrationsConfig {
             .copied()
             .filter(|kind| PROVIDERS_WITH_ADAPTERS.contains(kind))
             .collect()
+    }
+}
+
+/// Reads the reference union switch. Only the four spellings below are accepted, so a typo
+/// cannot silently leave the union in its default state.
+fn reference_union(get: &dyn Fn(&str) -> Option<String>) -> Result<bool, crate::ConfigError> {
+    match crate::optional(get, "DEEPREF_REFERENCE_UNION").as_deref() {
+        None | Some("true" | "1") => Ok(true),
+        Some("false" | "0") => Ok(false),
+        Some(_) => Err(crate::ConfigError::Invalid {
+            name: "DEEPREF_REFERENCE_UNION",
+            reason: "must be true (default), false, 1 or 0".to_owned(),
+        }),
     }
 }
 
@@ -491,5 +510,37 @@ mod tests {
         let debug = format!("{config:?}");
         assert!(!debug.contains("test-openalex-key"), "{debug}");
         assert!(debug.contains("<redacted>"), "{debug}");
+    }
+
+    #[test]
+    fn the_reference_union_is_on_unless_configured_off() {
+        assert!(IntegrationsConfig::default().reference_union);
+        assert!(load(&[]).unwrap().reference_union);
+        for (value, expected) in [
+            ("true", true),
+            ("1", true),
+            (" true ", true),
+            ("false", false),
+            ("0", false),
+        ] {
+            assert_eq!(
+                load(&[("DEEPREF_REFERENCE_UNION", value)])
+                    .unwrap()
+                    .reference_union,
+                expected,
+                "{value:?}"
+            );
+        }
+    }
+
+    #[test]
+    fn an_unknown_reference_union_value_refuses_to_start() {
+        for value in ["yes", "on", "TRUE", "2", "off"] {
+            let error = load_error(&[("DEEPREF_REFERENCE_UNION", value)]);
+            assert!(
+                error.contains("DEEPREF_REFERENCE_UNION") && error.contains("must be true"),
+                "{value}: unexpected error {error}"
+            );
+        }
     }
 }

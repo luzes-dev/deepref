@@ -2,7 +2,9 @@
 //! runs through, and how a route that ends without an answer maps onto the
 //! acquisition item.
 
-use deepref_application::{LostEdgeFill, LostEdges, ProviderRouter, RouteError, WorkProvider};
+use deepref_application::{
+    LostEdgeCause, LostEdgeFill, LostEdges, ProviderRouter, RouteError, WorkProvider,
+};
 use deepref_config::IntegrationsConfig;
 use deepref_domain::IngestionItemStatus;
 use deepref_integrations::{
@@ -69,18 +71,29 @@ pub fn router(
     if let Some(openalex) = &clients.openalex {
         adapters.push(Box::new(openalex.clone().with_max_attempts(retry_attempts)));
     }
-    Ok(ProviderRouter::new(
-        integrations.metadata_providers.clone(),
-        adapters,
-    )?)
+    Ok(
+        ProviderRouter::new(integrations.metadata_providers.clone(), adapters)?
+            .with_reference_union(integrations.reference_union),
+    )
 }
 
-/// Logs a budget stop that cost an answer some references. The router returns the
-/// record, and the worker logs it, because the application layer does not log.
+/// Logs an answer the router tried to fill. The router returns the record, and the worker
+/// logs it, because the application layer does not log. A budget stop warns, since the
+/// budget is spent. A shortfall is routine for works whose targets lack a DOI, so it logs
+/// at debug.
 pub fn report_lost_edges(doi: &str, lost: &LostEdges) {
     let provider = lost.provider.as_str();
     let lost_edges = lost.count;
-    let reset_secs = lost.reset_secs;
+    let LostEdgeCause::BudgetExhausted { reset_secs } = lost.cause else {
+        tracing::debug!(
+            doi,
+            provider,
+            lost_edges,
+            fill = ?lost.fill,
+            "OpenAlex answer lists fewer DOI references than it reports; the reference union ran"
+        );
+        return;
+    };
     match &lost.fill {
         LostEdgeFill::Crossref { added } => tracing::warn!(
             doi,

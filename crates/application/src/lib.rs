@@ -66,8 +66,8 @@ pub use protocol::{
     SaveProtocolDraftCommand, validate_protocol_text,
 };
 pub use router::{
-    AttemptOutcome, LostEdgeFill, LostEdges, ProviderAttempt, ProviderRouter, RouteError,
-    RouteOutput, RouterError, citation_sources, effective_chain,
+    AttemptOutcome, LostEdgeCause, LostEdgeFill, LostEdges, ProviderAttempt, ProviderRouter,
+    RouteError, RouteOutput, RouterError, citation_sources, effective_chain,
 };
 pub use study::{
     AssignReportToStudy, ClassifyStudy, CreateStudy, RemoveReportFromStudy, RenameStudy,
