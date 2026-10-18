@@ -435,6 +435,32 @@ impl OpenAlexClient {
         }
     }
 
+    /// The singleton by DOI. Under `corpus=all`, a miss is retried once through a list
+    /// call over the full corpus. A stopped budget or a miss there answers not found.
+    async fn lookup_raw(
+        &self,
+        doi: &str,
+        permit: &dyn ProviderPermit,
+    ) -> Result<Option<Value>, OpenAlexError> {
+        let encoded = urlencoding::encode(doi).replace("%2F", "/");
+        let singleton = self
+            .get_metered(
+                Endpoint::Singleton,
+                &format!("/works/doi:{encoded}?select={SELECT_FIELDS}"),
+                permit,
+            )
+            .await?;
+        if singleton.is_some() || self.corpus != OpenAlexCorpus::All {
+            return Ok(singleton);
+        }
+        let path = format!("/works?filter=doi:{encoded}&corpus=all&select={SELECT_FIELDS}");
+        match self.get_metered(Endpoint::List, &path, permit).await {
+            Ok(Some(body)) => Ok(body.pointer("/results/0").cloned()),
+            Ok(None) | Err(OpenAlexError::BudgetExhausted { .. }) => Ok(None),
+            Err(error) => Err(error),
+        }
+    }
+
     /// Looks the DOI up, then resolves its references. The caller's permit covers the
     /// singleton's first request.
     async fn fetch_metered(
@@ -443,12 +469,8 @@ impl OpenAlexClient {
         permit: &dyn ProviderPermit,
     ) -> Result<FetchedWork, OpenAlexError> {
         let doi = normalize_doi(doi)?;
-        let path = format!(
-            "/works/doi:{}?select={SELECT_FIELDS}",
-            urlencoding::encode(&doi).replace("%2F", "/")
-        );
         let raw = self
-            .get_metered(Endpoint::Singleton, &path, permit)
+            .lookup_raw(&doi, permit)
             .await?
             .ok_or_else(|| OpenAlexError::NotFound(doi.clone()))?;
         let mut work = checked_work(&doi, raw)?;
@@ -759,14 +781,29 @@ mod tests {
     }
 
     fn client(base_url: String, api_key: Option<&str>, max_attempts: usize) -> OpenAlexClient {
+        client_in(OpenAlexCorpus::Core, base_url, api_key, max_attempts)
+    }
+
+    fn client_in(
+        corpus: OpenAlexCorpus,
+        base_url: String,
+        api_key: Option<&str>,
+        max_attempts: usize,
+    ) -> OpenAlexClient {
         OpenAlexClient::with_base_url(
             base_url,
             "ops@example.org",
             api_key.map(str::to_owned),
-            OpenAlexCorpus::Core,
+            corpus,
         )
         .expect("client should build")
         .with_max_attempts(max_attempts)
+    }
+
+    /// A list response carrying `work` as its first and only result.
+    fn corpus_hit(work: &str) -> String {
+        let work: Value = serde_json::from_str(work).expect("fixture is JSON");
+        json!({ "results": [work] }).to_string()
     }
 
     async fn fetch(
@@ -1323,6 +1360,174 @@ mod tests {
         assert!(budget.claim_daily_warning(day));
         assert!(!budget.claim_daily_warning(day));
         assert!(budget.claim_daily_warning(day.succ_opt().expect("next day")));
+    }
+
+    #[tokio::test]
+    async fn corpus_all_answers_a_work_the_core_corpus_misses() {
+        let (base, requests) = scripted_server(vec![
+            reply("404 Not Found", NOT_FOUND),
+            reply("200 OK", corpus_hit(NO_REFERENCES)),
+        ])
+        .await;
+        let permit = RecordingPermit::default();
+
+        let fetched = fetch(
+            &client_in(OpenAlexCorpus::All, base, None, 1),
+            NO_REFERENCES_DOI,
+            &permit,
+        )
+        .await
+        .expect("the corpus=all retry should answer");
+
+        assert_eq!(fetched.work.work.doi, NO_REFERENCES_DOI);
+        assert_eq!(fetched.provider, ProviderKind::OpenAlex);
+        assert_eq!(permit.taken(), vec![ProviderKind::OpenAlex]);
+        let requests = requests.lock().expect("request log");
+        assert_eq!(requests.len(), 2);
+        assert!(
+            requests[1].starts_with(
+                "GET /works?filter=doi:10.5281/zenodo.1&corpus=all&select=id,doi,display_name,"
+            ),
+            "{}",
+            requests[1]
+        );
+    }
+
+    #[tokio::test]
+    async fn a_corpus_all_miss_is_not_found() {
+        let (base, _) = scripted_server(vec![
+            reply("404 Not Found", NOT_FOUND),
+            reply("200 OK", EMPTY_LIST),
+        ])
+        .await;
+
+        let error = fetch(
+            &client_in(OpenAlexCorpus::All, base, None, 1),
+            NO_REFERENCES_DOI,
+            &RecordingPermit::default(),
+        )
+        .await
+        .expect_err("nothing in the corpus should answer");
+
+        assert_eq!(
+            error,
+            ProviderFetchError::NotFound {
+                provider: ProviderKind::OpenAlex,
+                doi: NO_REFERENCES_DOI.to_owned(),
+            }
+        );
+    }
+
+    #[tokio::test]
+    async fn the_first_corpus_all_hit_must_carry_the_requested_doi() {
+        let (base, _) = scripted_server(vec![
+            reply("404 Not Found", NOT_FOUND),
+            reply("200 OK", corpus_hit(WORK)),
+        ])
+        .await;
+
+        let error = fetch(
+            &client_in(OpenAlexCorpus::All, base, None, 1),
+            NO_REFERENCES_DOI,
+            &RecordingPermit::default(),
+        )
+        .await
+        .expect_err("a record filed under another DOI must not answer");
+
+        assert!(matches!(
+            error,
+            ProviderFetchError::NotFound {
+                provider: ProviderKind::OpenAlex,
+                ..
+            }
+        ));
+    }
+
+    #[tokio::test]
+    async fn corpus_all_is_not_asked_while_the_budget_is_stopped() {
+        let (base, requests) = scripted_server(vec![
+            reply("200 OK", WORK),
+            Reply {
+                status: "429 Too Many Requests",
+                headers: "X-RateLimit-Remaining: 0\r\nX-RateLimit-Reset: 600\r\n".to_owned(),
+                body: "{}".to_owned(),
+            },
+            reply("404 Not Found", NOT_FOUND),
+        ])
+        .await;
+        let client = client_in(OpenAlexCorpus::All, base, None, 1);
+        fetch(&client, ABSTRACT_DOI, &RecordingPermit::default())
+            .await
+            .expect("the singleton still answers");
+
+        let error = fetch(&client, NO_REFERENCES_DOI, &RecordingPermit::default())
+            .await
+            .expect_err("a stopped budget answers not found");
+
+        assert!(matches!(
+            error,
+            ProviderFetchError::NotFound {
+                provider: ProviderKind::OpenAlex,
+                ..
+            }
+        ));
+        let requests = requests.lock().expect("request log");
+        assert_eq!(
+            requests.len(),
+            3,
+            "no corpus list call while the budget is stopped"
+        );
+        assert!(
+            requests[2].starts_with("GET /works/doi:"),
+            "{}",
+            requests[2]
+        );
+    }
+
+    #[tokio::test]
+    async fn a_corpus_all_retry_that_hits_the_budget_is_not_found() {
+        let (base, requests) = scripted_server(vec![
+            reply("404 Not Found", NOT_FOUND),
+            Reply {
+                status: "429 Too Many Requests",
+                headers: "X-RateLimit-Remaining: 0\r\nX-RateLimit-Reset: 60\r\n".to_owned(),
+                body: "{}".to_owned(),
+            },
+        ])
+        .await;
+
+        let error = fetch(
+            &client_in(OpenAlexCorpus::All, base, None, 5),
+            NO_REFERENCES_DOI,
+            &RecordingPermit::default(),
+        )
+        .await
+        .expect_err("a retry stopped by the budget answers not found");
+
+        assert!(matches!(
+            error,
+            ProviderFetchError::NotFound {
+                provider: ProviderKind::OpenAlex,
+                ..
+            }
+        ));
+        assert_eq!(requests.lock().expect("request log").len(), 2);
+    }
+
+    #[tokio::test]
+    async fn the_core_corpus_does_not_retry_a_missing_work() {
+        let (base, requests) = scripted_server(vec![reply("404 Not Found", NOT_FOUND)]).await;
+
+        let error = fetch(
+            &client(base, None, 1),
+            ABSTRACT_DOI,
+            &RecordingPermit::default(),
+        )
+        .await
+        .expect_err("a 404 in the core corpus is not found");
+
+        assert!(matches!(error, ProviderFetchError::NotFound { .. }));
+        assert_eq!(requests.lock().expect("request log").len(), 1);
     }
 
     #[tokio::test]
