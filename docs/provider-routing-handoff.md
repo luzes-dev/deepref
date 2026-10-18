@@ -3,6 +3,7 @@
 > **Status:** designed 2026-10-17, revised after review 2026-10-18. Phases 0 through 4 are implemented on this branch stack (not merged). The optional shared cross-work resolver from 5.3 and the optional typed `AcquisitionSource::DataCite` from Phase 2 were not built.
 > **Base:** builds on #250 (`DEEPREF_CONTACT_EMAIL`, merged), which introduced `IntegrationsConfig`.
 > **Scope:** DOI metadata fetching, reference edges, provider configuration, provenance, persistence touchpoints, and the web strings that name providers. Publication alerts and PMID imports keep their current providers.
+> **Review follow-up:** the reference union runs on every OpenAlex answer, a transient Crossref failure during it retries the fetch, a request's chain order is kept, expansion records and paratext follow the current attribute names, and only a 401 or an inactive-key 403 downgrades the key at runtime.
 > **Audience:** the implementing agent. Confirm section 10 with the user before Phase 1a. Phase 0 was behavior-neutral and is implemented.
 
 ## 1. Objective

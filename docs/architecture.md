@@ -217,10 +217,11 @@ The deployment chain from `DEEPREF_METADATA_PROVIDERS` is the allowlist: a run
 keeps only the providers the deployment still enables, in stored order.
 `deepref-integrations` implements the port for OpenAlex, Crossref and DataCite.
 The first provider that answers wins, and its metadata becomes the work. When
-the answer lists fewer references than the work reports, the router asks
-Crossref for the reference list if the chain includes it, and merges in the
-missing DOIs. A budget stop always does this. A plain shortfall does so only
-while `DEEPREF_REFERENCE_UNION` is on. `works.metadata_provider` records the
+the router asks Crossref for the reference list if the chain includes it, and
+merges in the missing DOIs, because OpenAlex's own count cannot show a reference
+it never matched. A budget stop always does this. Every other answer does so
+only while `DEEPREF_REFERENCE_UNION` is on, and a transient Crossref failure
+retries the fetch instead of caching a short list. `works.metadata_provider` records the
 provider that answered. `works.citation_provider` lists the reference sources in
 the order they contributed, for example `openalex,crossref`, and the raw payload
 keeps every attempt. Abstract enrichment stays best-effort. Publication alerts

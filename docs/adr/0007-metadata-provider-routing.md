@@ -87,8 +87,8 @@ deduplicated, for example `openalex,crossref`. The raw payload carries
 attempt and outcome, and `deepref_citation_sources`.
 
 When an OpenAlex answer came back short of its references, the raw payload also
-carries `deepref_lost_edges`. It names the cause (`budget_exhausted` or
-`shortfall`), the `expected` and `resolved` reference counts, and the fill
+carries `deepref_lost_edges`. It names the cause (`budget_exhausted`, `shortfall` or
+`unverified`), the `expected` and `resolved` reference counts, and the fill
 result: `filled` when Crossref's list was merged, `not_enabled` when Crossref
 was not in the chain, or `failed` when its list could not be read. The record
 lives on the work, because the cache keeps the partial answer.
@@ -107,18 +107,24 @@ providers that already tried the DOI in this run, so an adapter can skip work
 they did. `reference_list` returns a DOI's raw reference list for the lost-edge
 fill. Its default is a fatal error, so only providers that publish reference
 lists implement it. `FetchedWork.reference_gap` reports a short answer as a
-`ReferenceGap`, either `BudgetExhausted` or `Shortfall`. The router reads the
+`ReferenceGap`: `BudgetExhausted`, `Shortfall` or `Unverified`. The router reads the
 gap and returns a `LostEdges` record of what it did. The unused
 `MetadataProvider`, `CitationProvider` and `SearchProvider` traits were deleted.
 
 ### Reference union
 
-`DEEPREF_REFERENCE_UNION` gates the shortfall union only. When an OpenAlex
-answer lists fewer DOI references than `referenced_works_count` reports, the
-router merges Crossref's reference list, and a DOI already present is not added
-twice. A spent list budget always asks Crossref when Crossref is in the chain,
-because the spent budget is the only reason the answer is short. With the switch
-off, a shortfall is not tried and leaves no record.
+`DEEPREF_REFERENCE_UNION` gates the union on a complete-looking answer. OpenAlex
+defines `referenced_works_count` as the length of `referenced_works`, so meeting
+the count proves nothing about references OpenAlex never matched. With the
+switch on, the router merges Crossref's reference list into every OpenAlex
+answer, and a DOI already present is not added twice. Crossref entries with no
+DOI are kept in `deepref_unresolved_references`. A spent list budget always asks
+Crossref when Crossref is in the chain. With the switch off, a shortfall or an
+unverified list is not tried and leaves no record.
+
+The work cache is permanent, so a Crossref list that fails transiently makes the
+fetch retryable instead of storing a short list. A fatal failure, or Crossref
+missing from the chain, keeps the answer and records the failed fill.
 
 ### Staged default
 
