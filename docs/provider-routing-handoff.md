@@ -1,6 +1,6 @@
 # Metadata provider routing handoff
 
-> **Status:** designed 2026-10-17, revised after review 2026-10-18. Not implemented.
+> **Status:** designed 2026-10-17, revised after review 2026-10-18. Phases 0, 1a and 1b are implemented on this branch stack (not merged).
 > **Base:** builds on #250 (`DEEPREF_CONTACT_EMAIL`, merged), which introduced `IntegrationsConfig`.
 > **Scope:** DOI metadata fetching, reference edges, provider configuration, provenance, persistence touchpoints, and the web strings that name providers. Publication alerts and PMID imports keep their current providers.
 > **Audience:** the implementing agent. Confirm section 10 with the user before Phase 1a. Phase 0 is behavior-neutral and can start now.
@@ -275,7 +275,7 @@ The cache itself is global and provider-neutral: `is_cached` and `attach_cached`
 
 ### 5.7 API
 
-- `POST /projects/{id}/acquisitions` takes optional `metadata_providers: string[]` and no citation field in either direction. For an explicit array, trim names, deduplicate keeping first position, reject an empty array, and validate every name against the deployment's enabled set. Preserve explicit request order; do not reorder by deployment priority. A disabled or unimplemented provider is rejected with 400 naming it and the enabled set, for example `datacite is not enabled in this deployment (enabled: openalex, crossref)`. The contact e-mail check in `persist_doi_acquisition` runs first and is unchanged. An omitted field copies the deployment chain in deployment order. The singular request fields are replaced, and the generated client is regenerated in the same phase.
+- `POST /projects/{id}/acquisitions` takes optional `metadata_providers: string[]` and no citation field in either direction. For an explicit array, trim names, deduplicate keeping first position, reject an empty array, and validate every name against the deployment's enabled set. Preserve explicit request order; do not reorder by deployment priority. A disabled or unimplemented provider is rejected with 400 naming it and the enabled set, for example `datacite is not enabled in this deployment (enabled: openalex, crossref)`. Request validation runs first and returns 400 for a provider outside the enabled set. The contact e-mail check in `persist_doi_acquisition` runs after it, returns 503, and is unchanged. A request with both errors returns the 400. An omitted field copies the deployment chain in deployment order. The singular request fields are replaced, and the generated client is regenerated in the same phase.
 - New runs store that resolved chain in `config.metadata_providers`. Example: deployment `openalex,crossref` with explicit `["crossref","openalex"]` stores Crossref first; omitting the field stores OpenAlex first. `acquisition_runs.source` stays `"crossref"` for every DOI run, and the legacy `metadata_provider` and `citation_provider` run columns keep their current lane values; the run's real chain lives in `config`. `list_acquisition_items` and `refresh_acquisition` retain their existing `source` checks.
 - `parse_stored_doi_config` deserializes `StoredDoiAcquisitionConfig` as an `#[serde(untagged)]` enum, both variants keeping `deny_unknown_fields`:
   - `Legacy { seed_dois, max_depth, metadata_provider, citation_provider, refresh_of? }`, where both provider strings must be `"crossref"`.
