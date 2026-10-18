@@ -148,6 +148,8 @@ impl OpenAlexWork {
         if let Some(object) = raw.as_object_mut() {
             object.insert(OA_URLS_KEY.to_owned(), json!(oa_urls));
         }
+        // OpenAlex sends no article URL, so the DOI resolver link stands in, as Crossref's does.
+        let url = format!("https://doi.org/{doi}");
 
         WorkWithReferences {
             work: Work {
@@ -159,7 +161,7 @@ impl OpenAlexWork {
                 container_title,
                 issued_year: year,
                 published_year: year,
-                url: None,
+                url: Some(url),
                 total_citations: self.cited_by_count,
                 references_count: self.referenced_works_count,
                 metadata_provider: ProviderKind::OpenAlex.as_str().to_owned(),
@@ -221,6 +223,19 @@ mod tests {
 
     /// A real OpenAlex answer whose open-access locations are all landing pages.
     const WORK: &str = include_str!("../../tests/fixtures/openalex/work_with_abstract.json");
+
+    #[test]
+    fn the_article_url_is_the_doi_resolver_link() {
+        let body = json!({ "display_name": "A paper" });
+        let parsed: OpenAlexWork = serde_json::from_value(body.clone()).unwrap();
+
+        let work = parsed.into_domain("10.1000/stored".to_owned(), body);
+
+        assert_eq!(
+            work.work.url.as_deref(),
+            Some("https://doi.org/10.1000/stored")
+        );
+    }
 
     #[test]
     fn prefers_the_best_location_pdf() {

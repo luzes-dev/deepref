@@ -998,6 +998,10 @@ mod tests {
         );
         assert_eq!(work.work.total_citations, 10451);
         assert_eq!(work.work.references_count, 40);
+        assert_eq!(
+            work.work.url.as_deref(),
+            Some("https://doi.org/10.1371/journal.pmed.0020124")
+        );
         assert_eq!(work.work.metadata_provider, "openalex");
         assert_eq!(work.work.citation_provider, "openalex");
         assert_eq!(work.work.fetch_status, "fetched");
