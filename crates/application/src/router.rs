@@ -185,7 +185,8 @@ impl ProviderRouter {
     ///
     /// NotFound moves on. Rejected ends the chain as not found with its reason.
     /// Retryable moves on, and the fetch is retryable when nothing answers. Fatal
-    /// stops the chain.
+    /// stops the chain, and it is retryable too when an earlier provider failed
+    /// retryably.
     pub async fn fetch_work(
         &self,
         stored: &[ProviderKind],
@@ -289,9 +290,15 @@ impl ProviderRouter {
                             message: message.clone(),
                         },
                     ));
+                    // An earlier retryable failure means the DOI may still have an answer, so
+                    // the fetch comes back later instead of failing for good.
+                    let error = match last_retryable {
+                        Some(message) => RouteError::Retryable { message },
+                        None => RouteError::Fatal { message },
+                    };
                     return RouteOutput {
                         attempts,
-                        result: Err(RouteError::Fatal { message }),
+                        result: Err(error),
                         lost_edges: None,
                     };
                 }
@@ -878,7 +885,7 @@ mod tests {
     }
 
     #[test]
-    fn a_fatal_failure_stops_the_chain() {
+    fn a_not_found_then_a_fatal_failure_stops_the_chain_as_fatal() {
         let calls = Calls::default();
         let router = router(
             &[
@@ -913,6 +920,70 @@ mod tests {
             call_log(&calls),
             vec![ProviderKind::OpenAlex, ProviderKind::Crossref]
         );
+    }
+
+    #[test]
+    fn a_retryable_failure_then_a_fatal_one_is_retryable() {
+        let calls = Calls::default();
+        let router = router(
+            &[
+                ProviderKind::OpenAlex,
+                ProviderKind::Crossref,
+                ProviderKind::DataCite,
+            ],
+            vec![
+                fake(
+                    ProviderKind::OpenAlex,
+                    retryable(ProviderKind::OpenAlex, "503 from upstream"),
+                    &calls,
+                ),
+                fake(
+                    ProviderKind::Crossref,
+                    fatal(ProviderKind::Crossref, "bad request"),
+                    &calls,
+                ),
+                fake(ProviderKind::DataCite, answers(), &calls),
+            ],
+        );
+
+        let output = run(&router, &[], &FakePermit::default());
+
+        assert_eq!(
+            output.result.as_ref().err().cloned(),
+            Some(RouteError::Retryable {
+                message: "503 from upstream".to_owned(),
+            })
+        );
+        assert_eq!(
+            call_log(&calls),
+            vec![ProviderKind::OpenAlex, ProviderKind::Crossref]
+        );
+    }
+
+    #[test]
+    fn a_fatal_failure_alone_is_fatal() {
+        let calls = Calls::default();
+        let router = router(
+            &[ProviderKind::OpenAlex, ProviderKind::Crossref],
+            vec![
+                fake(
+                    ProviderKind::OpenAlex,
+                    fatal(ProviderKind::OpenAlex, "bad request"),
+                    &calls,
+                ),
+                fake(ProviderKind::Crossref, answers(), &calls),
+            ],
+        );
+
+        let output = run(&router, &[], &FakePermit::default());
+
+        assert_eq!(
+            output.result.as_ref().err().cloned(),
+            Some(RouteError::Fatal {
+                message: "bad request".to_owned(),
+            })
+        );
+        assert_eq!(call_log(&calls), vec![ProviderKind::OpenAlex]);
     }
 
     #[test]
