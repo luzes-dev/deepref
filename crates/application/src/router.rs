@@ -91,8 +91,10 @@ pub struct RouteOutput {
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct LostEdges {
     pub provider: ProviderKind,
-    /// The references the answer is missing, from the gap.
-    pub count: usize,
+    /// The references the gap expected the answer to resolve.
+    pub expected: usize,
+    /// The references the answer resolved before it stopped or came back short.
+    pub resolved: usize,
     pub cause: LostEdgeCause,
     pub fill: LostEdgeFill,
 }
@@ -106,6 +108,16 @@ pub enum LostEdgeCause {
     Shortfall,
 }
 
+impl LostEdgeCause {
+    /// The snake_case name the raw record stores.
+    pub fn name(self) -> &'static str {
+        match self {
+            Self::BudgetExhausted { .. } => "budget_exhausted",
+            Self::Shortfall => "shortfall",
+        }
+    }
+}
+
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub enum LostEdgeFill {
     /// Crossref's reference list was merged, adding `added` references the answer lacked.
@@ -117,7 +129,23 @@ pub enum LostEdgeFill {
     CrossrefFailed { error: ProviderFetchError },
 }
 
+impl LostEdgeFill {
+    /// The name the raw record stores for the fill result.
+    pub fn name(&self) -> &'static str {
+        match self {
+            Self::Crossref { .. } => "filled",
+            Self::CrossrefNotEnabled => "not_enabled",
+            Self::CrossrefFailed { .. } => "failed",
+        }
+    }
+}
+
 impl LostEdges {
+    /// How many references the answer is missing.
+    pub fn missing(&self) -> usize {
+        self.expected.saturating_sub(self.resolved)
+    }
+
     fn crossref_contributed(&self) -> bool {
         matches!(self.fill, LostEdgeFill::Crossref { added } if added > 0)
     }
@@ -249,7 +277,8 @@ impl ProviderRouter {
                         }
                         _ => None,
                     };
-                    let fetched = stamp_provenance(fetched, &attempts, &contributions);
+                    let fetched =
+                        stamp_provenance(fetched, &attempts, &contributions, lost_edges.as_ref());
                     return RouteOutput {
                         attempts,
                         result: Ok(fetched),
@@ -337,11 +366,19 @@ impl ProviderRouter {
         references: &mut Vec<Reference>,
         permit: &dyn ProviderPermit,
     ) -> LostEdges {
-        let cause = match gap {
-            ReferenceGap::BudgetExhausted { reset_secs, .. } => {
-                LostEdgeCause::BudgetExhausted { reset_secs }
+        let (cause, resolved, expected) = match gap {
+            ReferenceGap::BudgetExhausted {
+                resolved,
+                expected,
+                reset_secs,
+            } => (
+                LostEdgeCause::BudgetExhausted { reset_secs },
+                resolved,
+                expected,
+            ),
+            ReferenceGap::Shortfall { resolved, expected } => {
+                (LostEdgeCause::Shortfall, resolved, expected)
             }
-            ReferenceGap::Shortfall { .. } => LostEdgeCause::Shortfall,
         };
         let crossref = self.adapters.get(&ProviderKind::Crossref).filter(|_| {
             answering != ProviderKind::Crossref && chain.contains(&ProviderKind::Crossref)
@@ -357,7 +394,8 @@ impl ProviderRouter {
         };
         LostEdges {
             provider: answering,
-            count: gap.missing(),
+            expected,
+            resolved,
             cause,
             fill,
         }
@@ -420,12 +458,35 @@ fn attempt(provider: ProviderKind, outcome: AttemptOutcome) -> ProviderAttempt {
     ProviderAttempt { provider, outcome }
 }
 
+/// `raw.deepref_lost_edges`: what left an answer short of its references and what the router
+/// did about it. The cache keeps the work with this record, so a later read still sees the gap.
+#[derive(Debug, Serialize)]
+struct LostEdgesRecord {
+    cause: &'static str,
+    expected: usize,
+    resolved: usize,
+    fill: &'static str,
+}
+
+impl From<&LostEdges> for LostEdgesRecord {
+    fn from(lost: &LostEdges) -> Self {
+        Self {
+            cause: lost.cause.name(),
+            expected: lost.expected,
+            resolved: lost.resolved,
+            fill: lost.fill.name(),
+        }
+    }
+}
+
 /// Records the answering provider, its attempts and the reference sources on the work and in
-/// its raw payload. `contributions` lists the reference sources in the order they contributed.
+/// its raw payload. `contributions` lists the reference sources in the order they contributed,
+/// and `lost_edges` is the lost-edge record when the answer came back short.
 fn stamp_provenance(
     mut fetched: FetchedWork,
     attempts: &[ProviderAttempt],
     contributions: &[ProviderKind],
+    lost_edges: Option<&LostEdges>,
 ) -> FetchedWork {
     let provider = fetched.provider;
     let sources = citation_sources(contributions);
@@ -440,6 +501,12 @@ fn stamp_provenance(
     );
     raw.insert("deepref_provider_attempts".to_owned(), json!(attempts));
     raw.insert("deepref_citation_sources".to_owned(), json!(source_names));
+    if let Some(lost) = lost_edges {
+        raw.insert(
+            "deepref_lost_edges".to_owned(),
+            json!(LostEdgesRecord::from(lost)),
+        );
+    }
     fetched.work.raw = Value::Object(raw);
     fetched.work.work.metadata_provider = provider.as_str().to_owned();
     fetched.work.work.citation_provider = source_names.join(",");
@@ -1305,7 +1372,8 @@ mod tests {
             output.lost_edges,
             Some(LostEdges {
                 provider: ProviderKind::OpenAlex,
-                count: 2,
+                expected: 4,
+                resolved: 2,
                 cause: LostEdgeCause::BudgetExhausted {
                     reset_secs: Some(3_600),
                 },
@@ -1372,7 +1440,8 @@ mod tests {
             output.lost_edges,
             Some(LostEdges {
                 provider: ProviderKind::OpenAlex,
-                count: 2,
+                expected: 3,
+                resolved: 1,
                 cause: LostEdgeCause::BudgetExhausted {
                     reset_secs: Some(3_600),
                 },
@@ -1420,7 +1489,8 @@ mod tests {
             output.lost_edges,
             Some(LostEdges {
                 provider: ProviderKind::OpenAlex,
-                count: 1,
+                expected: 2,
+                resolved: 1,
                 cause: LostEdgeCause::BudgetExhausted {
                     reset_secs: Some(3_600),
                 },
@@ -1501,7 +1571,8 @@ mod tests {
             output.lost_edges,
             Some(LostEdges {
                 provider: ProviderKind::OpenAlex,
-                count: 2,
+                expected: 4,
+                resolved: 2,
                 cause: LostEdgeCause::Shortfall,
                 fill: LostEdgeFill::Crossref { added: 1 },
             })
@@ -1552,7 +1623,8 @@ mod tests {
             output.lost_edges,
             Some(LostEdges {
                 provider: ProviderKind::OpenAlex,
-                count: 2,
+                expected: 4,
+                resolved: 2,
                 cause: LostEdgeCause::Shortfall,
                 fill: LostEdgeFill::CrossrefNotEnabled,
             })
@@ -1608,7 +1680,8 @@ mod tests {
             output.lost_edges,
             Some(LostEdges {
                 provider: ProviderKind::OpenAlex,
-                count: 2,
+                expected: 4,
+                resolved: 2,
                 cause: LostEdgeCause::Shortfall,
                 fill: LostEdgeFill::CrossrefFailed {
                     error: ProviderFetchError::Retryable {
@@ -1675,7 +1748,8 @@ mod tests {
             output.lost_edges,
             Some(LostEdges {
                 provider: ProviderKind::OpenAlex,
-                count: 2,
+                expected: 4,
+                resolved: 2,
                 cause: LostEdgeCause::BudgetExhausted {
                     reset_secs: Some(3_600),
                 },
@@ -1686,5 +1760,99 @@ mod tests {
             permit.requested.lock().expect("permit log").clone(),
             vec![ProviderKind::OpenAlex, ProviderKind::Crossref]
         );
+    }
+
+    /// The lost-edge record the route stored on its answer's raw payload.
+    fn lost_edges_record(output: &RouteOutput) -> Value {
+        let fetched = output.result.as_ref().expect("the OpenAlex answer is kept");
+        fetched.work.raw["deepref_lost_edges"].clone()
+    }
+
+    #[test]
+    fn a_failed_crossref_fill_is_recorded_in_raw() {
+        let (output, _, _) = gap_run(
+            &[ProviderKind::OpenAlex, ProviderKind::Crossref],
+            &[],
+            ReferenceGap::BudgetExhausted {
+                resolved: 1,
+                expected: 2,
+                reset_secs: Some(3_600),
+            },
+            Err(ProviderFetchError::Retryable {
+                provider: ProviderKind::Crossref,
+                message: "upstream timed out".to_owned(),
+            }),
+            true,
+        );
+
+        assert_eq!(
+            lost_edges_record(&output),
+            json!({
+                "cause": "budget_exhausted",
+                "expected": 2,
+                "resolved": 1,
+                "fill": "failed",
+            })
+        );
+    }
+
+    #[test]
+    fn a_fill_with_crossref_outside_the_chain_is_recorded_as_not_enabled() {
+        let (output, _, _) = gap_run(
+            &[ProviderKind::OpenAlex],
+            &[],
+            ReferenceGap::BudgetExhausted {
+                resolved: 1,
+                expected: 2,
+                reset_secs: Some(3_600),
+            },
+            Ok(Vec::new()),
+            true,
+        );
+
+        assert_eq!(
+            lost_edges_record(&output),
+            json!({
+                "cause": "budget_exhausted",
+                "expected": 2,
+                "resolved": 1,
+                "fill": "not_enabled",
+            })
+        );
+    }
+
+    #[test]
+    fn a_shortfall_filled_from_crossref_is_recorded_with_its_cause() {
+        let (output, _, _) = gap_run(
+            &[ProviderKind::OpenAlex, ProviderKind::Crossref],
+            &[],
+            shortfall(1, 2),
+            Ok(vec![reference(Some("10.1000/c"))]),
+            true,
+        );
+
+        assert_eq!(
+            lost_edges_record(&output),
+            json!({
+                "cause": "shortfall",
+                "expected": 2,
+                "resolved": 1,
+                "fill": "filled",
+            })
+        );
+    }
+
+    #[test]
+    fn a_shortfall_with_the_reference_union_off_leaves_no_lost_edges_record() {
+        let (output, _, _) = gap_run(
+            &[ProviderKind::OpenAlex, ProviderKind::Crossref],
+            &[],
+            shortfall(1, 2),
+            Ok(Vec::new()),
+            false,
+        );
+
+        assert!(output.lost_edges.is_none());
+        assert!(lost_edges_record(&output).is_null());
     }
 }

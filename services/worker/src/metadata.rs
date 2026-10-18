@@ -192,7 +192,7 @@ pub fn report_route(doi: &str, output: &RouteOutput) {
 /// A shortfall is routine for works whose targets lack a DOI, so it logs at debug.
 fn report_lost_edges(doi: &str, lost: &LostEdges) {
     let provider = lost.provider.as_str();
-    let lost_edges = lost.count;
+    let lost_edges = lost.missing();
     let LostEdgeCause::BudgetExhausted { reset_secs } = lost.cause else {
         tracing::debug!(
             doi,
@@ -373,7 +373,8 @@ mod tests {
     fn lost(fill: LostEdgeFill) -> LostEdges {
         LostEdges {
             provider: ProviderKind::OpenAlex,
-            count: 1,
+            expected: 2,
+            resolved: 1,
             cause: LostEdgeCause::Shortfall,
             fill,
         }
@@ -631,7 +632,8 @@ mod tests {
             result: Err(RouteError::NotFound { reason: None }),
             lost_edges: Some(LostEdges {
                 provider: ProviderKind::OpenAlex,
-                count: 2,
+                expected: 4,
+                resolved: 2,
                 cause: LostEdgeCause::BudgetExhausted {
                     reset_secs: Some(3_600),
                 },
