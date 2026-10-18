@@ -10,8 +10,9 @@ mod wire;
 use std::time::Duration;
 
 use deepref_application::{
-    FetchedWork, ProviderError, ProviderFetchError, ProviderFuture, ProviderPermit, RawAuthor,
-    RawIdentifier, RawRecord, WorkProvider,
+    AttemptPurpose, FetchedWork, OutboundRequest, ProviderError, ProviderFetchError,
+    ProviderFuture, ProviderPermit, RawAuthor, RawIdentifier, RawRecord, ReferenceReport,
+    WorkProvider,
 };
 use deepref_domain::WorkWithReferences;
 use deepref_domain::{IdentifierScheme, ProviderKind, Reference, normalize_doi};
@@ -19,11 +20,15 @@ use reqwest::header;
 use serde_json::{Value, json};
 
 pub(crate) use abstracts::parse_openalex;
-pub use abstracts::{AbstractEnricher, AbstractSource, OpenAlexLookup, clean_abstract};
+pub use abstracts::{
+    AbstractEnricher, AbstractSource, EUROPE_PMC_RATE_PER_SECOND, EnricherBuildError,
+    OpenAlexLookup, clean_abstract,
+};
 pub use error::CrossrefError;
 pub use search::{CrossrefSearchError, search_crossref};
 pub use status::{StatusClassification, classify_status};
 
+use crate::openalex::OpenAlexClient;
 use wire::CrossrefWorksResponse;
 
 pub const CROSSREF_BASE: &str = "https://api.crossref.org";
@@ -45,18 +50,29 @@ impl CrossrefClient {
     /// Builds the client for `api.crossref.org` with the deployment's contact
     /// address and the configured abstract enrichment.
     pub fn new(config: &deepref_config::IntegrationsConfig) -> Result<Self, ProviderError> {
-        Self::for_base_url(CROSSREF_BASE, config)
+        Self::for_base_url(CROSSREF_BASE, config, None)
     }
 
     /// The client for `base_url`, with the deployment's contact address and abstract
-    /// enrichment. Tests point it at a mock server this way.
+    /// enrichment. Tests point it at a mock server this way. With `openalex`, the enrichment's
+    /// OpenAlex step goes through that shared client, so it keeps the metadata adapter's key
+    /// state and rate instead of opening a second authentication path.
     pub fn for_base_url(
         base_url: impl Into<String>,
         config: &deepref_config::IntegrationsConfig,
+        openalex: Option<&OpenAlexClient>,
     ) -> Result<Self, ProviderError> {
         let mailto = config.contact_email.clone();
         let enricher = if config.abstract_enrichment {
-            AbstractEnricher::new(mailto.clone()).ok()
+            match openalex {
+                Some(openalex) => AbstractEnricher::with_openalex(
+                    abstracts::EUROPE_PMC_BASE,
+                    openalex.clone(),
+                    mailto.clone(),
+                ),
+                None => AbstractEnricher::new(mailto.clone()),
+            }
+            .ok()
         } else {
             None
         };
@@ -96,11 +112,12 @@ impl CrossrefClient {
         self
     }
 
-    /// One lookup with the client's retry policy. The caller's permit covers the
-    /// first request, and each retry takes another.
+    /// One lookup with the client's retry policy. Every request, the first included, takes a
+    /// permit immediately before it is sent, named for `purpose`.
     async fn fetch_metered(
         &self,
         doi: &str,
+        purpose: AttemptPurpose,
         permit: &dyn ProviderPermit,
     ) -> Result<WorkWithReferences, CrossrefError> {
         let doi = deepref_domain::normalize_doi(doi)?;
@@ -109,9 +126,9 @@ impl CrossrefClient {
 
         let mut last_retryable = None;
         for attempt in 1..=self.max_attempts {
-            if attempt > 1 {
-                permit.acquire(ProviderKind::Crossref).await?;
-            }
+            permit
+                .acquire(OutboundRequest::new(ProviderKind::Crossref, purpose))
+                .await?;
             let response = self
                 .client
                 .get(&url)
@@ -122,7 +139,8 @@ impl CrossrefClient {
 
             match response {
                 Ok(response) if response.status().is_success() => {
-                    let raw: serde_json::Value = response.json().await?;
+                    let bytes = response.bytes().await?;
+                    let raw: serde_json::Value = serde_json::from_slice(&bytes)?;
                     let message_raw = raw.get("message").cloned().unwrap_or_default();
                     let body: CrossrefWorksResponse = serde_json::from_value(raw)?;
                     return Ok(body.into_domain(doi, message_raw));
@@ -154,15 +172,17 @@ impl CrossrefClient {
     }
 
     /// The DOI's reference list from Crossref, unresolved entries included. The lookup
-    /// is free, so OpenAlex uses it when its own reference resolution runs out of
-    /// budget. The lookup takes its own permit.
+    /// is free, so the router unions it with OpenAlex's references. Every request takes
+    /// a permit named for the union.
     pub async fn fetch_reference_list(
         &self,
         doi: &str,
         permit: &dyn ProviderPermit,
     ) -> Result<Vec<Reference>, CrossrefError> {
-        permit.acquire(ProviderKind::Crossref).await?;
-        Ok(self.fetch_metered(doi, permit).await?.references)
+        Ok(self
+            .fetch_metered(doi, AttemptPurpose::ReferenceUnion, permit)
+            .await?
+            .references)
     }
 
     /// The lookup for a DOI the chain already sent to OpenAlex. It is the same as
@@ -184,13 +204,13 @@ impl CrossrefClient {
         openalex: OpenAlexLookup,
     ) -> Result<FetchedWork, ProviderFetchError> {
         let work = self
-            .fetch_metered(doi, permit)
+            .fetch_metered(doi, AttemptPurpose::Metadata, permit)
             .await
             .map_err(CrossrefError::into_fetch_error)?;
         Ok(FetchedWork {
-            work: self.enrich_abstract(work, openalex).await,
+            work: self.enrich_abstract(work, openalex, permit).await,
             provider: ProviderKind::Crossref,
-            reference_gap: None,
+            references: ReferenceReport::default(),
         })
     }
 
@@ -200,11 +220,12 @@ impl CrossrefClient {
         &self,
         mut work: WorkWithReferences,
         openalex: OpenAlexLookup,
+        permit: &dyn ProviderPermit,
     ) -> WorkWithReferences {
         let source = if work.work.abstract_text.is_some() {
             AbstractSource::Crossref
         } else if let Some(enricher) = &self.enricher
-            && let Some((text, source)) = enricher.lookup(&work.work.doi, openalex).await
+            && let Some((text, source)) = enricher.lookup(&work.work.doi, openalex, permit).await
         {
             work.work.abstract_text = Some(text);
             source
@@ -223,8 +244,7 @@ pub(crate) async fn sleep_backoff(attempt: usize) {
     tokio::time::sleep(Duration::from_millis(millis.min(5_000))).await;
 }
 
-/// The router's entry point. The caller's permit covers the first request, and
-/// retries take their own.
+/// The router's entry point. Every request takes its own permit.
 impl WorkProvider for CrossrefClient {
     fn kind(&self) -> ProviderKind {
         ProviderKind::Crossref
@@ -266,13 +286,17 @@ impl WorkProvider for CrossrefClient {
 
 impl CrossrefError {
     /// Classifies a failed lookup for the provider chain. Status and transport
-    /// failures retry, and everything else stops the chain. The worker's job-level
-    /// retry splits the same errors the same way.
+    /// failures retry, and everything else is fatal for this provider: the chain records
+    /// it and moves on. The worker's job-level retry splits the same errors the same way.
     fn into_fetch_error(self) -> ProviderFetchError {
         let provider = ProviderKind::Crossref;
         let message = self.to_string();
         match self {
-            Self::NotFound(doi) => ProviderFetchError::NotFound { provider, doi },
+            Self::NotFound(doi) => ProviderFetchError::NotFound {
+                provider,
+                doi,
+                reason: None,
+            },
             Self::InvalidDoi(_) => ProviderFetchError::Rejected {
                 provider,
                 reason: message,
@@ -333,7 +357,7 @@ mod tests {
     use super::*;
     use crate::parse_import;
     use chrono::Utc;
-    use deepref_application::PermitError;
+    use deepref_application::{OutboundService, PermitError};
     use deepref_domain::ImportFormat;
     use deepref_domain::{FetchStatus, Work, WorkWithReferences};
     use reqwest::StatusCode;
@@ -445,23 +469,7 @@ mod tests {
         format!("http://{address}")
     }
 
-    #[derive(Default)]
-    struct RecordingPermit(std::sync::Mutex<Vec<ProviderKind>>);
-
-    impl RecordingPermit {
-        fn taken(&self) -> Vec<ProviderKind> {
-            self.0.lock().expect("permit log").clone()
-        }
-    }
-
-    impl ProviderPermit for RecordingPermit {
-        fn acquire<'a>(&'a self, provider: ProviderKind) -> ProviderFuture<'a, (), PermitError> {
-            Box::pin(async move {
-                self.0.lock().expect("permit log").push(provider);
-                Ok(())
-            })
-        }
-    }
+    use crate::test_permit::RecordingPermit;
 
     fn test_client(base_url: String, max_attempts: usize) -> CrossrefClient {
         CrossrefClient::with_base_url(base_url, "ops@example.org")
@@ -483,9 +491,13 @@ mod tests {
         assert_eq!(fetched.provider, ProviderKind::Crossref);
         assert_eq!(fetched.work.work.title.as_deref(), Some("Example"));
         assert_eq!(fetched.work.references.len(), 2);
-        assert!(
-            permit.taken().is_empty(),
-            "the first request runs on the permit the caller took"
+        assert_eq!(
+            permit.requests(),
+            vec![OutboundRequest::new(
+                ProviderKind::Crossref,
+                AttemptPurpose::Metadata
+            )],
+            "the first request takes its own permit"
         );
     }
 
@@ -502,6 +514,7 @@ mod tests {
         assert_eq!(
             error,
             ProviderFetchError::NotFound {
+                reason: None,
                 provider: ProviderKind::Crossref,
                 doi: DOI.to_owned(),
             }
@@ -522,8 +535,8 @@ mod tests {
         assert_eq!(fetched.provider, ProviderKind::Crossref);
         assert_eq!(
             permit.taken(),
-            vec![ProviderKind::Crossref],
-            "the retry takes exactly one permit"
+            vec![ProviderKind::Crossref; 2],
+            "the first request and its retry each take a permit"
         );
     }
 
@@ -663,6 +676,85 @@ mod tests {
     }
 
     #[tokio::test]
+    async fn abstract_enrichment_takes_a_permit_before_every_request_retries_included() {
+        let client = client_with_enricher(
+            scripted_server(vec![("200 OK", WORK_BODY)]).await,
+            scripted_server(vec![
+                ("503 Service Unavailable", "{}"),
+                ("200 OK", NO_EUROPE_PMC_MATCH),
+            ])
+            .await,
+            scripted_server(vec![("200 OK", OPENALEX_ABSTRACT)]).await,
+        );
+        let permit = RecordingPermit::default();
+
+        let fetched = WorkProvider::fetch_work_with_references(&client, DOI, &permit)
+            .await
+            .expect("crossref should answer");
+
+        assert_eq!(
+            fetched.work.work.abstract_text.as_deref(),
+            Some("Hello world")
+        );
+        assert_eq!(permit.count(OutboundService::EuropePmc), 2);
+        assert_eq!(
+            permit.count(OutboundService::Provider(ProviderKind::OpenAlex)),
+            1
+        );
+        assert_eq!(
+            permit.count(OutboundService::Provider(ProviderKind::Crossref)),
+            1
+        );
+        assert!(
+            permit
+                .requests()
+                .iter()
+                .filter(|request| request.service != ProviderKind::Crossref)
+                .all(|request| request.purpose == AttemptPurpose::AbstractEnrichment)
+        );
+    }
+
+    #[tokio::test]
+    async fn the_enrichment_shares_the_metadata_adapters_openalex_key_state() {
+        let openalex_server = scripted_server(vec![
+            ("401 Unauthorized", r#"{"error":"invalid key"}"#),
+            ("200 OK", OPENALEX_ABSTRACT),
+        ])
+        .await;
+        let shared = crate::OpenAlexClient::with_base_url(
+            openalex_server,
+            "ops@example.org",
+            Some("test-key".to_owned()),
+            deepref_config::OpenAlexCorpus::Core,
+        )
+        .expect("client should build");
+        let mut client = test_client(scripted_server(vec![("200 OK", WORK_BODY)]).await, 1);
+        client.enricher = Some(
+            AbstractEnricher::with_openalex(
+                scripted_server(vec![("200 OK", NO_EUROPE_PMC_MATCH)]).await,
+                shared.clone(),
+                "ops@example.org",
+            )
+            .expect("enricher should build"),
+        );
+
+        let fetched =
+            WorkProvider::fetch_work_with_references(&client, DOI, &RecordingPermit::default())
+                .await
+                .expect("crossref should answer");
+
+        assert_eq!(
+            fetched.work.work.abstract_text.as_deref(),
+            Some("Hello world")
+        );
+        assert_eq!(
+            shared.key_state(),
+            crate::OpenAlexKeyState::Keyless,
+            "the rejected key downgrades the one shared state"
+        );
+    }
+
+    #[tokio::test]
     async fn the_port_reads_the_reference_list_through_the_helper() {
         let client = test_client(scripted_server(vec![("200 OK", WORK_BODY)]).await, 1);
         let permit = RecordingPermit::default();
@@ -676,6 +768,24 @@ mod tests {
         assert_eq!(permit.taken(), vec![ProviderKind::Crossref]);
     }
 
+    #[tokio::test]
+    async fn a_body_that_is_not_json_is_a_fatal_response_not_a_transport_failure() {
+        let client = test_client(
+            scripted_server(vec![("200 OK", "not json at all")]).await,
+            1,
+        );
+
+        let error =
+            WorkProvider::fetch_work_with_references(&client, DOI, &RecordingPermit::default())
+                .await
+                .expect_err("a body that is not JSON must not answer");
+
+        assert!(
+            matches!(error, ProviderFetchError::Fatal { .. }),
+            "{error:?}"
+        );
+    }
+
     #[test]
     fn each_crossref_failure_maps_to_the_outcome_the_chain_acts_on() {
         let provider = ProviderKind::Crossref;
@@ -684,6 +794,7 @@ mod tests {
         assert_eq!(
             CrossrefError::NotFound(DOI.to_owned()).into_fetch_error(),
             ProviderFetchError::NotFound {
+                reason: None,
                 provider,
                 doi: DOI.to_owned(),
             }

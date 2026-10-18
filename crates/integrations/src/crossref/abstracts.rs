@@ -3,14 +3,24 @@
 //! Crossref frequently has no abstract (and when it has one, it is JATS
 //! markup). Enrichment never fails the caller: every error becomes `None`.
 
+use deepref_application::{OutboundRequest, ProviderPermit};
+use deepref_config::OpenAlexCorpus;
 use reqwest::{StatusCode, header};
 use serde_json::Value;
 use std::time::Duration;
 
-const EUROPE_PMC_BASE: &str = "https://www.ebi.ac.uk/europepmc/webservices/rest";
+use crate::openalex::OpenAlexClient;
+
+/// Requests per second the worker spends on Europe PMC across all pods.
+pub const EUROPE_PMC_RATE_PER_SECOND: u32 = 5;
+
+pub(super) const EUROPE_PMC_BASE: &str = "https://www.ebi.ac.uk/europepmc/webservices/rest";
 const OPENALEX_BASE: &str = "https://api.openalex.org";
 const REQUEST_TIMEOUT: Duration = Duration::from_secs(8);
 const MAX_ATTEMPTS: usize = 2;
+
+/// Why an enricher could not be built.
+pub type EnricherBuildError = Box<dyn std::error::Error + Send + Sync>;
 
 /// Where an enriched abstract came from (stored in the record's raw payload).
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -39,16 +49,20 @@ pub enum OpenAlexLookup {
     Disabled,
 }
 
+/// Fills a missing abstract from Europe PMC and then OpenAlex. Every request takes a permit
+/// for its own service. The OpenAlex step goes through the shared OpenAlex client, so it uses
+/// the metadata adapter's key state, rate and redirect handling.
 #[derive(Debug, Clone)]
 pub struct AbstractEnricher {
     client: reqwest::Client,
     europe_pmc_base: String,
-    openalex_base: String,
-    mailto: String,
+    openalex: OpenAlexClient,
 }
 
 impl AbstractEnricher {
-    pub fn new(mailto: impl Into<String>) -> Result<Self, reqwest::Error> {
+    /// An enricher with its own keyless OpenAlex client. Production wiring passes the shared
+    /// client to `with_openalex` instead.
+    pub fn new(mailto: impl Into<String>) -> Result<Self, EnricherBuildError> {
         Self::with_base_urls(EUROPE_PMC_BASE, OPENALEX_BASE, mailto)
     }
 
@@ -56,7 +70,23 @@ impl AbstractEnricher {
         europe_pmc_base: impl Into<String>,
         openalex_base: impl Into<String>,
         mailto: impl Into<String>,
-    ) -> Result<Self, reqwest::Error> {
+    ) -> Result<Self, EnricherBuildError> {
+        let mailto = mailto.into();
+        let openalex = OpenAlexClient::with_base_url(
+            openalex_base,
+            mailto.clone(),
+            None,
+            OpenAlexCorpus::Core,
+        )?;
+        Self::with_openalex(europe_pmc_base, openalex, mailto)
+    }
+
+    /// An enricher that asks OpenAlex through the process's shared client.
+    pub fn with_openalex(
+        europe_pmc_base: impl Into<String>,
+        openalex: OpenAlexClient,
+        mailto: impl Into<String>,
+    ) -> Result<Self, EnricherBuildError> {
         let mailto = mailto.into();
         let client = reqwest::Client::builder()
             .timeout(REQUEST_TIMEOUT)
@@ -65,8 +95,7 @@ impl AbstractEnricher {
         Ok(Self {
             client,
             europe_pmc_base: europe_pmc_base.into().trim_end_matches('/').to_owned(),
-            openalex_base: openalex_base.into().trim_end_matches('/').to_owned(),
-            mailto,
+            openalex,
         })
     }
 
@@ -76,6 +105,7 @@ impl AbstractEnricher {
         &self,
         doi: &str,
         openalex: OpenAlexLookup,
+        permit: &dyn ProviderPermit,
     ) -> Option<(String, AbstractSource)> {
         let query = format!("DOI:\"{doi}\"");
         let url = format!(
@@ -83,7 +113,7 @@ impl AbstractEnricher {
             self.europe_pmc_base,
             urlencoding::encode(&query)
         );
-        if let Some(body) = self.get_json(&url).await
+        if let Some(body) = self.get_json(&url, permit).await
             && let Some(text) = parse_europe_pmc(&body, doi)
         {
             return Some((text, AbstractSource::EuropePmc));
@@ -91,13 +121,7 @@ impl AbstractEnricher {
         if openalex == OpenAlexLookup::Disabled {
             return None;
         }
-        let url = format!(
-            "{}/works/doi:{}?mailto={}&select=abstract_inverted_index",
-            self.openalex_base,
-            urlencoding::encode(doi).replace("%2F", "/"),
-            urlencoding::encode(&self.mailto)
-        );
-        if let Some(body) = self.get_json(&url).await
+        if let Some(body) = self.openalex.abstract_index(doi, permit).await
             && let Some(text) = parse_openalex(&body)
         {
             return Some((text, AbstractSource::OpenAlex));
@@ -105,8 +129,10 @@ impl AbstractEnricher {
         None
     }
 
-    async fn get_json(&self, url: &str) -> Option<Value> {
+    /// A Europe PMC GET under the best-effort retry policy, with a permit before each request.
+    async fn get_json(&self, url: &str, permit: &dyn ProviderPermit) -> Option<Value> {
         for attempt in 1..=MAX_ATTEMPTS {
+            permit.acquire(OutboundRequest::europe_pmc()).await.ok()?;
             let response = self
                 .client
                 .get(url)
@@ -307,6 +333,7 @@ fn decode_entities(input: &str) -> String {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use crate::test_permit::RecordingPermit;
     use serde_json::json;
 
     #[test]
@@ -399,12 +426,24 @@ mod tests {
             .expect("enricher should build");
 
         assert_eq!(
-            enricher.lookup("10.1/x", OpenAlexLookup::Disabled).await,
+            enricher
+                .lookup(
+                    "10.1/x",
+                    OpenAlexLookup::Disabled,
+                    &RecordingPermit::default()
+                )
+                .await,
             None,
             "the chain already asked OpenAlex, so the abstract step skips it"
         );
         assert_eq!(
-            enricher.lookup("10.1/x", OpenAlexLookup::Enabled).await,
+            enricher
+                .lookup(
+                    "10.1/x",
+                    OpenAlexLookup::Enabled,
+                    &RecordingPermit::default()
+                )
+                .await,
             Some(("Hello world".to_owned(), AbstractSource::OpenAlex))
         );
     }
@@ -419,7 +458,13 @@ mod tests {
             .expect("enricher should build");
 
         assert_eq!(
-            enricher.lookup("10.1/x", OpenAlexLookup::Disabled).await,
+            enricher
+                .lookup(
+                    "10.1/x",
+                    OpenAlexLookup::Disabled,
+                    &RecordingPermit::default()
+                )
+                .await,
             Some(("From Europe PMC".to_owned(), AbstractSource::EuropePmc))
         );
     }
@@ -430,7 +475,13 @@ mod tests {
             AbstractEnricher::with_base_urls("http://127.0.0.1:1", "http://127.0.0.1:1", "a@b.co")
                 .unwrap();
         assert_eq!(
-            enricher.lookup("10.1/x", OpenAlexLookup::Enabled).await,
+            enricher
+                .lookup(
+                    "10.1/x",
+                    OpenAlexLookup::Enabled,
+                    &RecordingPermit::default()
+                )
+                .await,
             None
         );
     }
@@ -440,7 +491,11 @@ mod tests {
     async fn live_europe_pmc_lookup() {
         let enricher = AbstractEnricher::new("test@example.com").unwrap();
         let (text, source) = enricher
-            .lookup("10.1016/j.amepre.2015.01.020", OpenAlexLookup::Enabled)
+            .lookup(
+                "10.1016/j.amepre.2015.01.020",
+                OpenAlexLookup::Enabled,
+                &RecordingPermit::default(),
+            )
             .await
             .unwrap();
         assert_eq!(source, AbstractSource::EuropePmc);

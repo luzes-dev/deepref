@@ -132,7 +132,8 @@ async fn handle_work_fetch(
     );
     let output = router.fetch_work(&stored_chain, &doi, &permit).await;
     metadata::report_route(&doi, &output);
-    let last_provider = output.attempts.last().map(|attempt| attempt.provider);
+    let last_provider = metadata::last_attempted_provider(&output.attempts);
+    let attempts = output.attempts.clone();
     cancel_heartbeat.send_replace(true);
     let _ = heartbeat_done.await;
     match output.result {
@@ -141,6 +142,7 @@ async fn handle_work_fetch(
             Ok(DeliveryAction::Ack)
         }
         Err(RouteError::Retryable { message }) => {
+            let message = metadata::failure_message(&message, &attempts);
             let action = action_for(FailureClass::Retryable, job.attempts.max(1) as u64);
             if action == DeliveryAction::Terminate {
                 store::finalize_terminal_failure(
@@ -161,6 +163,12 @@ async fn handle_work_fetch(
         }
         Err(error) => {
             let (status, message) = metadata::terminal_outcome(&error, &doi);
+            // A not-found keeps its plain reason. A failure carries the attempt history.
+            let message = if status == IngestionItemStatus::Failed {
+                metadata::failure_message(&message, &attempts)
+            } else {
+                message
+            };
             store::finalize_terminal_failure(
                 &pool,
                 &event,

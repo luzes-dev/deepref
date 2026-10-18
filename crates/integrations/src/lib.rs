@@ -16,12 +16,15 @@ mod grobid;
 mod imports;
 mod openalex;
 mod pubmed;
+#[cfg(test)]
+mod test_permit;
 mod unpaywall;
 
 pub use crossref::{
     AbstractEnricher, AbstractSource, CROSSREF_BASE, CrossrefClient, CrossrefError,
-    CrossrefSearchError, OpenAlexLookup, StatusClassification, classify_status, clean_abstract,
-    raw_record_from_crossref_work, search_crossref,
+    CrossrefSearchError, EUROPE_PMC_RATE_PER_SECOND, EnricherBuildError, OpenAlexLookup,
+    StatusClassification, classify_status, clean_abstract, raw_record_from_crossref_work,
+    search_crossref,
 };
 pub use datacite::{
     DATACITE_BASE, DATACITE_RATE_PER_SECOND, DataCiteClient, DataCiteError,

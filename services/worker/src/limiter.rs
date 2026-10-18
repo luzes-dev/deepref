@@ -1,6 +1,8 @@
-use deepref_application::{PermitError, ProviderFuture, ProviderPermit};
+use deepref_application::{
+    OutboundRequest, OutboundService, PermitError, ProviderFuture, ProviderPermit,
+};
 use deepref_domain::ProviderKind;
-use deepref_integrations::{DATACITE_RATE_PER_SECOND, OpenAlexClient};
+use deepref_integrations::{DATACITE_RATE_PER_SECOND, EUROPE_PMC_RATE_PER_SECOND, OpenAlexClient};
 use sqlx::PgPool;
 
 /// Reserves a provider permit through the PostgreSQL adapter. The returned wait
@@ -37,35 +39,40 @@ impl<'a> ProviderLimiter<'a> {
 }
 
 impl ProviderPermit for ProviderLimiter<'_> {
-    fn acquire<'a>(&'a self, provider: ProviderKind) -> ProviderFuture<'a, (), PermitError> {
+    fn acquire<'a>(&'a self, request: OutboundRequest) -> ProviderFuture<'a, (), PermitError> {
         Box::pin(async move {
-            let rate = provider_rate(provider, self.crossref_rate_per_second, self.openalex)?;
-            acquire(self.pool, provider.as_str(), rate)
+            let rate = service_rate(
+                request.service,
+                self.crossref_rate_per_second,
+                self.openalex,
+            )?;
+            acquire(self.pool, request.service.as_str(), rate)
                 .await
                 .map_err(|error| PermitError(error.to_string()))
         })
     }
 }
 
-/// The per-second rate for `provider`. OpenAlex reads its rate from the client on each
-/// permit, so a downgrade to keyless lowers it for every later request. DataCite's rate
-/// is fixed by its service limits.
-fn provider_rate(
-    provider: ProviderKind,
+/// The per-second rate for `service`. OpenAlex reads its rate from the client on each
+/// permit, so a downgrade to keyless lowers it for every later request. DataCite's and
+/// Europe PMC's rates are fixed by their service limits.
+fn service_rate(
+    service: OutboundService,
     crossref_rate_per_second: u32,
     openalex: Option<&OpenAlexClient>,
 ) -> Result<u32, PermitError> {
-    match provider {
-        ProviderKind::Crossref => Ok(crossref_rate_per_second),
-        ProviderKind::OpenAlex => openalex
+    match service {
+        OutboundService::Provider(ProviderKind::Crossref) => Ok(crossref_rate_per_second),
+        OutboundService::Provider(ProviderKind::OpenAlex) => openalex
             .map(OpenAlexClient::rate_per_second)
-            .ok_or_else(|| no_rate(provider)),
-        ProviderKind::DataCite => Ok(DATACITE_RATE_PER_SECOND),
+            .ok_or_else(|| no_rate(service)),
+        OutboundService::Provider(ProviderKind::DataCite) => Ok(DATACITE_RATE_PER_SECOND),
+        OutboundService::EuropePmc => Ok(EUROPE_PMC_RATE_PER_SECOND),
     }
 }
 
-fn no_rate(provider: ProviderKind) -> PermitError {
-    PermitError(format!("no rate is configured for {}", provider.as_str()))
+fn no_rate(service: OutboundService) -> PermitError {
+    PermitError(format!("no rate is configured for {}", service.as_str()))
 }
 
 #[cfg(test)]
@@ -91,22 +98,38 @@ mod tests {
         let keyless = openalex(None);
 
         assert_eq!(
-            provider_rate(ProviderKind::OpenAlex, 4, Some(&keyed)),
+            service_rate(
+                OutboundService::Provider(ProviderKind::OpenAlex),
+                4,
+                Some(&keyed)
+            ),
             Ok(KEYED_RATE_PER_SECOND)
         );
         assert_eq!(
-            provider_rate(ProviderKind::OpenAlex, 4, Some(&keyless)),
+            service_rate(
+                OutboundService::Provider(ProviderKind::OpenAlex),
+                4,
+                Some(&keyless)
+            ),
             Ok(KEYLESS_RATE_PER_SECOND)
         );
     }
 
     #[test]
     fn crossref_keeps_the_configured_rate_datacite_its_fixed_one_and_openalex_needs_a_client() {
-        assert_eq!(provider_rate(ProviderKind::Crossref, 4, None), Ok(4));
+        let provider = OutboundService::Provider;
         assert_eq!(
-            provider_rate(ProviderKind::DataCite, 4, None),
+            service_rate(provider(ProviderKind::Crossref), 4, None),
+            Ok(4)
+        );
+        assert_eq!(
+            service_rate(provider(ProviderKind::DataCite), 4, None),
             Ok(DATACITE_RATE_PER_SECOND)
         );
-        assert!(provider_rate(ProviderKind::OpenAlex, 4, None).is_err());
+        assert_eq!(
+            service_rate(OutboundService::EuropePmc, 4, None),
+            Ok(EUROPE_PMC_RATE_PER_SECOND)
+        );
+        assert!(service_rate(provider(ProviderKind::OpenAlex), 4, None).is_err());
     }
 }

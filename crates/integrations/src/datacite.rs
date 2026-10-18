@@ -6,8 +6,8 @@ mod wire;
 use std::time::Duration;
 
 use deepref_application::{
-    FetchedWork, PermitError, ProviderFetchError, ProviderFuture, ProviderPermit, RawAuthor,
-    RawIdentifier, RawRecord, WorkProvider,
+    AttemptPurpose, FetchedWork, OutboundRequest, PermitError, ProviderFetchError, ProviderFuture,
+    ProviderPermit, RawAuthor, RawIdentifier, RawRecord, ReferenceReport, WorkProvider,
 };
 use deepref_domain::{IdentifierScheme, ProviderKind, WorkWithReferences, normalize_doi};
 use reqwest::{StatusCode, header};
@@ -58,8 +58,8 @@ impl DataCiteClient {
         self
     }
 
-    /// The lookup under the adapter's retry policy. The caller's permit covers the
-    /// first request, and each retry takes its own.
+    /// The lookup under the adapter's retry policy. Every request, the first included, takes
+    /// a permit immediately before it is sent.
     async fn get_metered(
         &self,
         doi: &str,
@@ -67,9 +67,12 @@ impl DataCiteClient {
     ) -> Result<Value, DataCiteError> {
         let mut attempts = 0_usize;
         loop {
-            if attempts > 0 {
-                permit.acquire(ProviderKind::DataCite).await?;
-            }
+            permit
+                .acquire(OutboundRequest::new(
+                    ProviderKind::DataCite,
+                    AttemptPurpose::Metadata,
+                ))
+                .await?;
             attempts += 1;
             match self.get_once(doi).await {
                 Err(error) if error.is_transient() && attempts < self.max_attempts => {
@@ -98,7 +101,7 @@ impl DataCiteClient {
         Ok(serde_json::from_slice(&body)?)
     }
 
-    /// The lookup and its identity check. The caller's permit covers the first request.
+    /// The lookup and its identity check.
     async fn fetch_metered(
         &self,
         doi: &str,
@@ -109,7 +112,7 @@ impl DataCiteClient {
         Ok(FetchedWork {
             work: checked_work(&doi, body)?,
             provider: ProviderKind::DataCite,
-            reference_gap: None,
+            references: ReferenceReport::default(),
         })
     }
 }
@@ -255,7 +258,11 @@ impl DataCiteError {
         let message = self.to_string();
         match self {
             Self::NotFound(doi) | Self::DoiMismatch { requested: doi, .. } => {
-                ProviderFetchError::NotFound { provider, doi }
+                ProviderFetchError::NotFound {
+                    provider,
+                    doi,
+                    reason: None,
+                }
             }
             Self::InvalidDoi(_) => ProviderFetchError::Rejected {
                 provider,
@@ -342,23 +349,7 @@ mod tests {
         request.lines().next().unwrap_or_default()
     }
 
-    #[derive(Default)]
-    struct RecordingPermit(Mutex<Vec<ProviderKind>>);
-
-    impl RecordingPermit {
-        fn taken(&self) -> Vec<ProviderKind> {
-            self.0.lock().expect("permit log").clone()
-        }
-    }
-
-    impl ProviderPermit for RecordingPermit {
-        fn acquire<'a>(&'a self, provider: ProviderKind) -> ProviderFuture<'a, (), PermitError> {
-            Box::pin(async move {
-                self.0.lock().expect("permit log").push(provider);
-                Ok(())
-            })
-        }
-    }
+    use crate::test_permit::RecordingPermit;
 
     fn client(base_url: String, max_attempts: usize) -> DataCiteClient {
         DataCiteClient::with_base_url(base_url, "ops@example.org")
@@ -393,10 +384,11 @@ mod tests {
             .expect("datacite should answer");
 
         assert_eq!(fetched.provider, ProviderKind::DataCite);
-        assert_eq!(fetched.reference_gap, None);
-        assert!(
-            permit.taken().is_empty(),
-            "the only request runs on the caller's permit"
+        assert_eq!(fetched.references, ReferenceReport::default());
+        assert_eq!(
+            permit.taken(),
+            vec![ProviderKind::DataCite],
+            "the only request takes a permit"
         );
         let requests = requests.lock().expect("request log");
         assert_eq!(
@@ -592,12 +584,13 @@ mod tests {
         assert_eq!(
             error,
             ProviderFetchError::NotFound {
+                reason: None,
                 provider: ProviderKind::DataCite,
                 doi: SOFTWARE_DOI.to_owned(),
             }
         );
         assert_eq!(requests.lock().expect("request log").len(), 1);
-        assert!(permit.taken().is_empty());
+        assert_eq!(permit.taken(), vec![ProviderKind::DataCite]);
     }
 
     #[tokio::test]
@@ -616,8 +609,8 @@ mod tests {
         assert_eq!(fetched.provider, ProviderKind::DataCite);
         assert_eq!(
             permit.taken(),
-            vec![ProviderKind::DataCite],
-            "the retry takes its own permit"
+            vec![ProviderKind::DataCite; 2],
+            "the first request and its retry each take a permit"
         );
         assert_eq!(requests.lock().expect("request log").len(), 2);
     }
@@ -700,6 +693,7 @@ mod tests {
         assert_eq!(
             error,
             ProviderFetchError::NotFound {
+                reason: None,
                 provider: ProviderKind::DataCite,
                 doi: SOFTWARE_DOI.to_owned(),
             }
@@ -715,12 +709,6 @@ mod tests {
         ])
         .await;
         let permit = RecordingPermit::default();
-        // The router takes the permit for the first request before it calls the adapter.
-        permit
-            .acquire(ProviderKind::DataCite)
-            .await
-            .expect("the caller's permit");
-
         fetch(&client(base, 3), SOFTWARE_DOI, &permit)
             .await
             .expect("the third attempt should answer");
@@ -730,7 +718,7 @@ mod tests {
         assert_eq!(
             permit.taken().len(),
             sent,
-            "one permit per request, the first one taken by the caller"
+            "one permit per request, the first included"
         );
     }
 
@@ -751,6 +739,7 @@ mod tests {
         assert_eq!(
             DataCiteError::NotFound(SOFTWARE_DOI.to_owned()).into_fetch_error(),
             ProviderFetchError::NotFound {
+                reason: None,
                 provider,
                 doi: SOFTWARE_DOI.to_owned(),
             }
@@ -762,6 +751,7 @@ mod tests {
             }
             .into_fetch_error(),
             ProviderFetchError::NotFound {
+                reason: None,
                 provider,
                 doi: SOFTWARE_DOI.to_owned(),
             }

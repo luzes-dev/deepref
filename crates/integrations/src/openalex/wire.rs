@@ -110,16 +110,34 @@ impl From<OpenAlexLocation> for OaLocation {
     }
 }
 
+/// What PDF selection reads from a stored location: the PDF URL and nothing else. Phase 1b
+/// stored `source` as OpenAlex's object and the current writer stores its display name, so the
+/// reader leaves `source` and every other field alone. A shape it does not read must not discard
+/// a candidate.
+#[derive(Debug, Default, Deserialize)]
+#[serde(default)]
+struct StoredPdfLocation {
+    pdf_url: Option<String>,
+}
+
+#[derive(Debug, Default, Deserialize)]
+#[serde(default)]
+struct StoredPdfs {
+    best_oa_location: Option<StoredPdfLocation>,
+    locations: Vec<StoredPdfLocation>,
+}
+
 /// The PDF URLs to try before Unpaywall, read from a stored `deepref_oa_urls` value, in
 /// preference order: the best location's PDF, then each listed location's PDF. Landing pages
-/// are never returned, and a missing or malformed value gives no candidates. The URLs are not
-/// validated here; the caller takes the first one that passes.
+/// are never returned, and a missing or malformed value gives no candidates. Both the value
+/// Phase 1b wrote and the one the current adapter writes are read, so cached works need no
+/// refetch. The URLs are not validated here; the caller takes the first one that passes.
 pub fn pdf_urls_from_oa_urls(stored: &Value) -> Vec<String> {
     // A JSON array would otherwise fill the struct's fields by position.
     if !stored.is_object() {
         return Vec::new();
     }
-    let Ok(oa_urls) = OaUrls::deserialize(stored) else {
+    let Ok(oa_urls) = StoredPdfs::deserialize(stored) else {
         return Vec::new();
     };
     oa_urls
@@ -205,19 +223,27 @@ pub(crate) fn referenced_ids(raw: &Value) -> Vec<String> {
         .collect()
 }
 
-/// The DOI of each OpenAlex ID in a list response. A result without a DOI is left
-/// out, so a target without one never becomes a reference.
-pub(crate) fn list_dois(body: &Value) -> HashMap<String, String> {
-    body.get("results")
-        .and_then(Value::as_array)
-        .into_iter()
-        .flatten()
+/// The DOI of each OpenAlex ID in a list response: `Some` for a usable DOI, `None` for a
+/// result with a null or invalid one. An ID the response leaves out is absent from the map.
+/// A body without a `results` array breaks the list contract and is an error, while
+/// `{"results":[]}` is a valid answer that omitted every requested ID.
+pub(crate) fn list_dois(
+    body: &Value,
+) -> Result<HashMap<String, Option<String>>, crate::openalex::OpenAlexError> {
+    let results = body.get("results").and_then(Value::as_array).ok_or(
+        crate::openalex::OpenAlexError::InvalidResponse("a list response has no results array"),
+    )?;
+    Ok(results
+        .iter()
         .filter_map(|result| {
             let id = openalex_id(result.get("id")?.as_str()?)?;
-            let doi = normalize_doi(result.get("doi")?.as_str()?).ok()?;
+            let doi = result
+                .get("doi")
+                .and_then(Value::as_str)
+                .and_then(|doi| normalize_doi(doi).ok());
             Some((id, doi))
         })
-        .collect()
+        .collect())
 }
 
 /// The year at the start of an ISO date such as `2005-08-02`.
@@ -330,6 +356,42 @@ mod tests {
         ] {
             assert!(pdf_urls_from_oa_urls(&stored).is_empty(), "{stored}");
         }
+    }
+
+    #[test]
+    fn reads_the_value_phase_1b_stored_with_an_object_source() {
+        let stored = json!({
+            "best_oa_location": {
+                "pdf_url": "https://repository.example.org/work.pdf",
+                "source": { "display_name": "Repository" }
+            },
+            "locations": []
+        });
+        assert_eq!(
+            pdf_urls_from_oa_urls(&stored),
+            ["https://repository.example.org/work.pdf"]
+        );
+    }
+
+    #[test]
+    fn a_secondary_location_with_an_object_source_does_not_discard_the_best_pdf() {
+        let stored = json!({
+            "best_oa_location": {
+                "pdf_url": "https://repo.example.org/best.pdf",
+                "source": "Repository"
+            },
+            "locations": [{
+                "pdf_url": "https://other.example.org/copy.pdf",
+                "source": { "display_name": "Other", "id": "https://openalex.org/S1" }
+            }]
+        });
+        assert_eq!(
+            pdf_urls_from_oa_urls(&stored),
+            [
+                "https://repo.example.org/best.pdf",
+                "https://other.example.org/copy.pdf"
+            ]
+        );
     }
 
     #[test]

@@ -4,7 +4,7 @@
 
 mod wire;
 
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::fmt;
 use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{Arc, Mutex, MutexGuard, PoisonError};
@@ -12,8 +12,9 @@ use std::time::{Duration, Instant};
 
 use chrono::{NaiveDate, Utc};
 use deepref_application::{
-    FetchedWork, PermitError, ProviderFetchError, ProviderFuture, ProviderPermit, RawAuthor,
-    RawIdentifier, RawRecord, ReferenceGap, WorkProvider,
+    AttemptPurpose, BudgetStop, FetchedWork, OutboundRequest, PermitError, ProviderFetchError,
+    ProviderFuture, ProviderPermit, RawAuthor, RawIdentifier, RawRecord, ReferenceReport,
+    WorkProvider,
 };
 use deepref_config::{IntegrationsConfig, OpenAlexCorpus};
 use deepref_domain::{
@@ -134,12 +135,14 @@ impl fmt::Debug for OpenAlexKey {
 }
 
 /// What this process knows about the daily list budget. A list call that comes back 429
-/// with no budget left stops every later list call until the reset. The low-budget
-/// warning fires once per UTC day.
+/// with no budget left stops every later list call until the reset. The budget is per
+/// process: each replica sends paid calls until it sees its own 429. Each warning fires once
+/// per UTC day.
 #[derive(Debug, Default)]
 struct ListBudget {
     stop: Mutex<Option<Stop>>,
-    warned_on: Mutex<Option<NaiveDate>>,
+    warned_low_on: Mutex<Option<NaiveDate>>,
+    warned_exhausted_on: Mutex<Option<NaiveDate>>,
 }
 
 #[derive(Debug, Clone, Copy)]
@@ -167,14 +170,23 @@ impl ListBudget {
     }
 
     /// True for the first low-budget response of each UTC day.
-    fn claim_daily_warning(&self, today: NaiveDate) -> bool {
-        let mut warned_on = lock(&self.warned_on);
-        if *warned_on == Some(today) {
-            return false;
-        }
-        *warned_on = Some(today);
-        true
+    fn claim_low_warning(&self, today: NaiveDate) -> bool {
+        claim_day(&self.warned_low_on, today)
     }
+
+    /// True for the first exhausted-budget response of each UTC day.
+    fn claim_exhausted_warning(&self, today: NaiveDate) -> bool {
+        claim_day(&self.warned_exhausted_on, today)
+    }
+}
+
+fn claim_day(marker: &Mutex<Option<NaiveDate>>, today: NaiveDate) -> bool {
+    let mut warned_on = lock(marker);
+    if *warned_on == Some(today) {
+        return false;
+    }
+    *warned_on = Some(today);
+    true
 }
 
 fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
@@ -182,9 +194,10 @@ fn lock<T>(mutex: &Mutex<T>) -> MutexGuard<'_, T> {
     mutex.lock().unwrap_or_else(PoisonError::into_inner)
 }
 
-/// Whether the remaining budget is under a tenth of the limit.
+/// Whether the remaining budget is under a tenth of the limit but not spent. A spent budget
+/// has its own warning.
 fn budget_is_low(limit: u64, remaining: u64) -> bool {
-    remaining.saturating_mul(10) < limit
+    remaining > 0 && remaining.saturating_mul(10) < limit
 }
 
 /// Seconds until the next UTC midnight, when the daily budget resets.
@@ -198,17 +211,24 @@ fn header_u64(headers: &header::HeaderMap, name: &str) -> Option<u64> {
     headers.get(name)?.to_str().ok()?.trim().parse().ok()
 }
 
-/// The two request shapes. A singleton is free and answers on the caller's permit. A list
-/// call costs money, so it takes a permit of its own.
+/// The two request shapes. A singleton is free. A list call costs money, so it checks the
+/// shared budget pause before and after it waits for its permit.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 enum Endpoint {
     Singleton,
     List,
 }
 
-/// The OpenAlex client. The caller's permit covers the first request of a lookup.
-/// Every later request takes its own permit from the callback, as the other
-/// adapters do.
+/// The OpenAlex client. Every request takes a permit from the callback immediately before
+/// it is sent, retries and redirect hops included.
+
+/// Attempts for the best-effort abstract lookup, which keeps its own short retry policy.
+const ENRICHMENT_MAX_ATTEMPTS: usize = 2;
+
+/// Redirect hops one request may follow. OpenAlex answers a merged entity with a 301.
+const MAX_REDIRECTS: usize = 3;
+
+/// The one OpenAlex client for a process. Clones share the key state and the list budget.
 #[derive(Debug, Clone)]
 pub struct OpenAlexClient {
     client: reqwest::Client,
@@ -243,8 +263,10 @@ impl OpenAlexClient {
         if mailto.trim().is_empty() {
             return Err(OpenAlexError::MissingContactEmail);
         }
+        // Redirects are followed by hand, so each hop takes a permit of its own.
         let client = reqwest::Client::builder()
             .timeout(Duration::from_secs(15))
+            .redirect(reqwest::redirect::Policy::none())
             .user_agent(format!("deepref/0.1 (mailto:{mailto})"))
             .build()
             .map_err(transport)?;
@@ -288,7 +310,8 @@ impl OpenAlexClient {
         let Some(key) = self.key.key() else {
             return OpenAlexKeyState::Keyless;
         };
-        if let Err(error) = permit.acquire(ProviderKind::OpenAlex).await {
+        let request = OutboundRequest::new(ProviderKind::OpenAlex, AttemptPurpose::Metadata);
+        if let Err(error) = permit.acquire(request).await {
             tracing::warn!(%error, "OpenAlex key probe skipped; keeping the key");
             return self.key.state();
         }
@@ -346,8 +369,7 @@ impl OpenAlexClient {
         ) else {
             return;
         };
-        if budget_is_low(limit, remaining)
-            && self.budget.claim_daily_warning(Utc::now().date_naive())
+        if budget_is_low(limit, remaining) && self.budget.claim_low_warning(Utc::now().date_naive())
         {
             tracing::warn!(
                 provider = ProviderKind::OpenAlex.as_str(),
@@ -374,40 +396,73 @@ impl OpenAlexClient {
         url
     }
 
-    /// One GET under the adapter's retry policy. `Ok(None)` is a 404. A rejected key
-    /// spends no attempt: the repeat is a new request without the key, not a retry of
-    /// the same one. Every request but the caller's first takes its own permit.
+    /// The request URL a redirect points at, when the hop stays on the API's own origin. A
+    /// redirect elsewhere could carry the key to another host, so it is not followed.
+    fn redirect_target(&self, current: &str, headers: &header::HeaderMap) -> Option<String> {
+        let location = headers.get(header::LOCATION)?.to_str().ok()?;
+        let current = reqwest::Url::parse(current).ok()?;
+        let next = current.join(location).ok()?;
+        (next.origin() == current.origin()).then(|| next.to_string())
+    }
+
+    /// One GET under the retry policy of `max_attempts`. `Ok(None)` is a 404. Every request
+    /// takes a permit immediately before it is sent, and a followed redirect is a request. A
+    /// rejected key spends no attempt: the repeat is a new request without the key, not a retry
+    /// of the same one. A list call checks the shared budget pause again after the permit wait,
+    /// because another clone may have spent the budget while this one waited.
     async fn get_metered(
         &self,
         endpoint: Endpoint,
+        purpose: AttemptPurpose,
+        max_attempts: usize,
         path_and_query: &str,
         permit: &dyn ProviderPermit,
     ) -> Result<Option<Value>, OpenAlexError> {
-        if endpoint == Endpoint::List
-            && let Some(reset_secs) = self.budget.stopped(Instant::now())
-        {
-            return Err(OpenAlexError::BudgetExhausted { reset_secs });
-        }
-        let mut requests = 0_usize;
+        let request = OutboundRequest::new(ProviderKind::OpenAlex, purpose);
+        let mut url = self.request_url(path_and_query);
+        let mut hops = 0_usize;
         let mut attempts = 0_usize;
         loop {
-            if requests > 0 || endpoint == Endpoint::List {
-                permit.acquire(ProviderKind::OpenAlex).await?;
+            if endpoint == Endpoint::List
+                && let Some(reset_secs) = self.budget.stopped(Instant::now())
+            {
+                return Err(OpenAlexError::BudgetExhausted { reset_secs });
             }
-            requests += 1;
+            permit.acquire(request).await?;
+            if endpoint == Endpoint::List
+                && let Some(reset_secs) = self.budget.stopped(Instant::now())
+            {
+                return Err(OpenAlexError::BudgetExhausted { reset_secs });
+            }
             let sent_with_key = self.key.key().is_some();
-            let request = self
+            let response = self
                 .client
-                .get(self.request_url(path_and_query))
-                .header(header::ACCEPT, "application/json");
+                .get(&url)
+                .header(header::ACCEPT, "application/json")
+                .send()
+                .await;
 
-            let failure = match request.send().await {
+            let failure = match response {
                 Ok(response) => {
                     let status = response.status();
                     self.observe_budget(response.headers());
                     if status.is_success() {
-                        let raw: Value = response.json().await.map_err(transport)?;
+                        let bytes = response.bytes().await.map_err(transport)?;
+                        let raw: Value = serde_json::from_slice(&bytes)?;
                         return Ok(Some(raw));
+                    }
+                    if status.is_redirection() {
+                        hops += 1;
+                        let next = (hops <= MAX_REDIRECTS)
+                            .then(|| self.redirect_target(&url, response.headers()))
+                            .flatten();
+                        match next {
+                            Some(next) => {
+                                url = next;
+                                continue;
+                            }
+                            None => return Err(OpenAlexError::UnexpectedStatus(status)),
+                        }
                     }
                     if sent_with_key
                         && matches!(status, StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN)
@@ -423,6 +478,8 @@ impl OpenAlexClient {
                                 .contains("key_not_activated");
                         if key_rejected {
                             self.key.downgrade("OpenAlex rejected the key");
+                            url = self.request_url(path_and_query);
+                            hops = 0;
                             continue;
                         }
                         return Err(OpenAlexError::Unauthorized(status));
@@ -439,11 +496,13 @@ impl OpenAlexClient {
                         {
                             let reset_secs = header_u64(response.headers(), "x-ratelimit-reset");
                             self.budget.stop(Instant::now(), reset_secs);
-                            tracing::warn!(
-                                provider = ProviderKind::OpenAlex.as_str(),
-                                reset_secs,
-                                "OpenAlex daily budget is spent; list calls stop until the reset"
-                            );
+                            if self.budget.claim_exhausted_warning(Utc::now().date_naive()) {
+                                tracing::warn!(
+                                    provider = ProviderKind::OpenAlex.as_str(),
+                                    reset_secs,
+                                    "OpenAlex daily budget is spent; list calls stop until the reset"
+                                );
+                            }
                             return Err(OpenAlexError::BudgetExhausted { reset_secs });
                         }
                         _ => match classify_status(status) {
@@ -459,41 +518,55 @@ impl OpenAlexClient {
             };
 
             attempts += 1;
-            if attempts >= self.max_attempts {
+            if attempts >= max_attempts {
                 return Err(failure);
             }
             sleep_backoff(attempts).await;
         }
     }
 
-    /// The singleton by DOI. Under `corpus=all`, a miss is retried once through a list
-    /// call over the full corpus. A stopped budget or a miss there answers not found.
+    /// The singleton by DOI, asking for the configured corpus. A 404 is a miss and the chain
+    /// moves on: there is no paid list retry to discover an expansion record.
     async fn lookup_raw(
         &self,
         doi: &str,
         permit: &dyn ProviderPermit,
     ) -> Result<Option<Value>, OpenAlexError> {
         let encoded = urlencoding::encode(doi).replace("%2F", "/");
-        let singleton = self
-            .get_metered(
-                Endpoint::Singleton,
-                &format!("/works/doi:{encoded}?select={SELECT_FIELDS}"),
-                permit,
-            )
-            .await?;
-        if singleton.is_some() || self.corpus != OpenAlexCorpus::All {
-            return Ok(singleton);
-        }
-        let path = format!("/works?filter=doi:{encoded}&corpus=all&select={SELECT_FIELDS}");
-        match self.get_metered(Endpoint::List, &path, permit).await {
-            Ok(Some(body)) => Ok(body.pointer("/results/0").cloned()),
-            Ok(None) | Err(OpenAlexError::BudgetExhausted { .. }) => Ok(None),
-            Err(error) => Err(error),
-        }
+        let corpus = self.corpus.as_str();
+        self.get_metered(
+            Endpoint::Singleton,
+            AttemptPurpose::Metadata,
+            self.max_attempts,
+            &format!("/works/doi:{encoded}?select={SELECT_FIELDS}&corpus={corpus}"),
+            permit,
+        )
+        .await
     }
 
-    /// Looks the DOI up, then resolves its references. The caller's permit covers the
-    /// singleton's first request.
+    /// The abstract's inverted index for a DOI, for Crossref's best-effort enrichment. It
+    /// shares this client's key state, rate and redirect handling, keeps its own short retry
+    /// policy, and never fails: every error is a miss.
+    pub(crate) async fn abstract_index(
+        &self,
+        doi: &str,
+        permit: &dyn ProviderPermit,
+    ) -> Option<Value> {
+        let encoded = urlencoding::encode(doi).replace("%2F", "/");
+        self.get_metered(
+            Endpoint::Singleton,
+            AttemptPurpose::AbstractEnrichment,
+            ENRICHMENT_MAX_ATTEMPTS,
+            &format!("/works/doi:{encoded}?select=abstract_inverted_index"),
+            permit,
+        )
+        .await
+        .ok()
+        .flatten()
+    }
+
+    /// Looks the DOI up, then resolves its references. A failure after the metadata
+    /// answered is a reference failure, which does not advance the metadata chain.
     async fn fetch_metered(
         &self,
         doi: &str,
@@ -505,75 +578,98 @@ impl OpenAlexClient {
             .await?
             .ok_or_else(|| OpenAlexError::NotFound(doi.clone()))?;
         let mut work = checked_work(&doi, raw, self.corpus)?;
-        let (references, budget_gap) = self
+        let resolution = self
             .resolve_references(&wire::referenced_ids(&work.raw), permit)
-            .await?;
-        let reference_gap = budget_gap.or_else(|| {
-            shortfall(references.len(), work.work.references_count).or(Some(
-                ReferenceGap::Unverified {
-                    resolved: references.len(),
-                },
-            ))
-        });
-        work.references = references;
+            .await
+            .map_err(|error| OpenAlexError::References(Box::new(error)))?;
+        work.references = resolution.references;
         Ok(FetchedWork {
             work,
             provider: ProviderKind::OpenAlex,
-            reference_gap,
+            references: resolution.report,
         })
     }
 
     /// Resolves OpenAlex reference IDs to DOIs, one list call per `LIST_CHUNK` IDs, run
-    /// in order. Targets without a DOI are left out. A budget stop keeps the references
-    /// resolved so far and reports the gap, and the metadata still answers.
+    /// in order. Targets without a DOI are left out and counted. A budget stop keeps the
+    /// references resolved so far and reports what it left unattempted, and the metadata still
+    /// answers.
     async fn resolve_references(
         &self,
         ids: &[String],
         permit: &dyn ProviderPermit,
-    ) -> Result<(Vec<Reference>, Option<ReferenceGap>), OpenAlexError> {
+    ) -> Result<Resolution, OpenAlexError> {
+        let mut seen = HashSet::new();
+        let ids: Vec<String> = ids
+            .iter()
+            .filter(|id| seen.insert(id.as_str()))
+            .cloned()
+            .collect();
+        let mut report = ReferenceReport {
+            targets: ids.len(),
+            ..ReferenceReport::default()
+        };
         let mut dois = HashMap::new();
-        let mut resolved = 0;
-        for chunk in ids.chunks(LIST_CHUNK) {
+        for (index, chunk) in ids.chunks(LIST_CHUNK).enumerate() {
             let path = format!(
                 "/works?filter=ids.openalex:{}&select=id,doi&per_page={LIST_CHUNK}",
                 chunk.join("|")
             );
-            match self.get_metered(Endpoint::List, &path, permit).await {
+            match self
+                .get_metered(
+                    Endpoint::List,
+                    AttemptPurpose::ReferenceResolution,
+                    self.max_attempts,
+                    &path,
+                    permit,
+                )
+                .await
+            {
                 Ok(Some(body)) => {
-                    dois.extend(wire::list_dois(&body));
-                    resolved += chunk.len();
+                    let listed = wire::list_dois(&body)?;
+                    for id in chunk {
+                        match listed.get(id) {
+                            Some(Some(doi)) => {
+                                dois.insert(id.clone(), doi.clone());
+                                report.retained += 1;
+                            }
+                            Some(None) => report.doi_less += 1,
+                            None => report.omitted += 1,
+                        }
+                    }
                 }
                 // A list call has no not-found answer, so a 404 here is an unexpected status.
                 Ok(None) => {
                     return Err(OpenAlexError::UnexpectedStatus(StatusCode::NOT_FOUND));
                 }
                 Err(OpenAlexError::BudgetExhausted { reset_secs }) => {
-                    let gap = ReferenceGap::BudgetExhausted {
-                        resolved,
-                        expected: ids.len(),
-                        reset_secs,
-                    };
-                    return Ok((references_in_order(ids, &dois), Some(gap)));
+                    report.unattempted = ids.len() - index * LIST_CHUNK;
+                    report.budget_stop = Some(BudgetStop { reset_secs });
+                    break;
                 }
                 Err(error) => return Err(error),
             }
         }
-        Ok((references_in_order(ids, &dois), None))
+        Ok(Resolution {
+            references: references_in_order(&ids, &dois),
+            report,
+        })
     }
 }
 
-/// The gap for an answer that lists fewer DOI references than the work reports. A target
-/// without a DOI at OpenAlex is missing from the list too, so it counts here. The count is
-/// the length of `referenced_works`, so it never reveals a reference OpenAlex did not match.
-fn shortfall(resolved: usize, reported: i32) -> Option<ReferenceGap> {
-    let expected = usize::try_from(reported).unwrap_or(0);
-    (resolved < expected).then_some(ReferenceGap::Shortfall { resolved, expected })
+/// The references a work's targets resolved to, and what resolution lost.
+struct Resolution {
+    references: Vec<Reference>,
+    report: ReferenceReport,
 }
 
-/// The references for the IDs that resolved to a DOI, in reference order.
+/// The references for the IDs that resolved to a DOI, in reference order. Two IDs that
+/// resolve to one DOI make one reference.
 fn references_in_order(ids: &[String], dois: &HashMap<String, String>) -> Vec<Reference> {
+    let mut seen = HashSet::new();
     ids.iter()
         .filter_map(|id| dois.get(id))
+        .filter(|doi| seen.insert(doi.as_str()))
         .map(|doi| doi_reference(doi.clone()))
         .collect()
 }
@@ -597,9 +693,10 @@ fn transport(error: reqwest::Error) -> OpenAlexError {
     OpenAlexError::Request(error.without_url())
 }
 
-/// Maps a 200 body after the identity check. A sibling record filed under another
-/// DOI, or a null DOI, is not the work that was asked for, so it is not found. Front
-/// matter is rejected here, before any reference list is resolved.
+/// Maps a 200 body after the identity check, then the corpus check, then the paratext check.
+/// A sibling record filed under another DOI, or a null DOI, is not the work that was asked
+/// for, so it is not found. Front matter is rejected here, before any reference list is
+/// resolved.
 fn checked_work(
     doi: &str,
     raw: Value,
@@ -623,15 +720,17 @@ fn checked_work(
             returned: body.doi,
         });
     }
-    if body.is_paratext() {
-        return Err(OpenAlexError::Paratext);
-    }
+    // Corpus eligibility comes before the paratext check: an expansion record is outside the
+    // core corpus, so it falls through to the next provider whatever its type.
     if body.is_xpac && corpus == OpenAlexCorpus::Core {
         tracing::debug!(
             requested = doi,
             "OpenAlex answered an expansion record under the core corpus"
         );
-        return Err(OpenAlexError::NotFound(doi.to_owned()));
+        return Err(OpenAlexError::CorpusExcluded(doi.to_owned()));
+    }
+    if body.is_paratext() {
+        return Err(OpenAlexError::Paratext);
     }
     Ok(body.into_domain(doi.to_owned(), raw))
 }
@@ -651,6 +750,10 @@ impl WorkProvider for OpenAlexClient {
                 .await
                 .map_err(OpenAlexError::into_fetch_error)
         })
+    }
+
+    fn unions_crossref_references(&self) -> bool {
+        true
     }
 }
 
@@ -699,6 +802,9 @@ pub enum OpenAlexError {
     Permit(#[from] PermitError),
     #[error("OpenAlex returned not found for {0}")]
     NotFound(String),
+    /// The record is an expansion-corpus record and the corpus is `core`.
+    #[error("OpenAlex has {0} only in the expansion corpus")]
+    CorpusExcluded(String),
     #[error("OpenAlex lists the work as paratext")]
     Paratext,
     #[error("OpenAlex answered {returned:?} for a request for {requested}")]
@@ -706,35 +812,62 @@ pub enum OpenAlexError {
         requested: String,
         returned: Option<String>,
     },
-    #[error("OpenAlex refused a keyless request: {0}")]
+    #[error("OpenAlex refused the request: {0}")]
     Unauthorized(StatusCode),
     #[error("OpenAlex returned retryable status: {0}")]
     RetryableStatus(StatusCode),
     #[error("OpenAlex's daily budget is spent; list calls stop until the reset")]
     BudgetExhausted { reset_secs: Option<u64> },
-    /// A status the adapter neither retries nor reads, such as a 400. It costs no further
-    /// request here, and the chain treats it as retryable.
+    /// A status the adapter neither retries nor reads, such as a 400. Retrying cannot fix it.
     #[error("OpenAlex returned an unexpected status: {0}")]
     UnexpectedStatus(StatusCode),
+    /// A transport failure: the request or its body did not complete.
     #[error("request failed: {0}")]
     Request(reqwest::Error),
+    /// A successful body that is not JSON, or JSON that is not the shape the adapter reads.
     #[error("invalid OpenAlex response: {0}")]
     Json(#[from] serde_json::Error),
+    /// A successful JSON body that breaks the response contract.
+    #[error("invalid OpenAlex response: {0}")]
+    InvalidResponse(&'static str),
     #[error("invalid DOI: {0}")]
     InvalidDoi(#[from] deepref_domain::DoiError),
+    /// The metadata answered and resolving its references failed with the inner error.
+    #[error("{0}")]
+    References(Box<OpenAlexError>),
 }
 
 impl OpenAlexError {
-    /// Classifies a failed lookup for the provider chain. Only a missing contact address can
-    /// never succeed, so it is the one Fatal. Anything OpenAlex might answer later is
-    /// Retryable, and so is a body that does not decode, whichever step caught it.
+    /// Whether another attempt could succeed: the network, a 5xx or a rate limit.
+    fn is_transient(&self) -> bool {
+        matches!(
+            self,
+            Self::RetryableStatus(_) | Self::Request(_) | Self::Permit(_)
+        )
+    }
+
+    /// Classifies a failed lookup for the provider chain. Network failures, 5xx responses
+    /// and rate limits are `Retryable`. Everything else that retrying cannot fix is `Fatal`
+    /// for the provider, and the chain records it and moves on: other 4xx statuses, an access
+    /// refusal that is not a key problem, and a body that does not decode or break the
+    /// response contract. A failure while resolving the references of an answered record is a
+    /// reference failure, which never advances the chain.
     fn into_fetch_error(self) -> ProviderFetchError {
         let provider = ProviderKind::OpenAlex;
         let message = self.to_string();
         match self {
             Self::NotFound(doi) | Self::DoiMismatch { requested: doi, .. } => {
-                ProviderFetchError::NotFound { provider, doi }
+                ProviderFetchError::NotFound {
+                    provider,
+                    doi,
+                    reason: None,
+                }
             }
+            Self::CorpusExcluded(doi) => ProviderFetchError::NotFound {
+                provider,
+                doi,
+                reason: Some("corpus_excluded".to_owned()),
+            },
             Self::InvalidDoi(_) => ProviderFetchError::Rejected {
                 provider,
                 reason: message,
@@ -745,14 +878,25 @@ impl OpenAlexError {
                 provider,
                 reason: "paratext".to_owned(),
             },
-            Self::Unauthorized(_)
-            | Self::RetryableStatus(_)
-            | Self::UnexpectedStatus(_)
-            | Self::BudgetExhausted { .. }
+            Self::References(inner) => {
+                let message = inner.to_string();
+                if inner.is_transient() {
+                    ProviderFetchError::ReferenceRetryable { provider, message }
+                } else {
+                    ProviderFetchError::ReferenceFatal { provider, message }
+                }
+            }
+            // A spent budget is handled where list calls are made; one that escapes is not a
+            // reason to stop the chain for good.
+            Self::RetryableStatus(_)
             | Self::Request(_)
+            | Self::Permit(_)
+            | Self::BudgetExhausted { .. } => ProviderFetchError::Retryable { provider, message },
+            Self::MissingContactEmail
+            | Self::Unauthorized(_)
+            | Self::UnexpectedStatus(_)
             | Self::Json(_)
-            | Self::Permit(_) => ProviderFetchError::Retryable { provider, message },
-            Self::MissingContactEmail => ProviderFetchError::Fatal { provider, message },
+            | Self::InvalidResponse(_) => ProviderFetchError::Fatal { provider, message },
         }
     }
 }
@@ -838,23 +982,7 @@ mod tests {
         (format!("http://{address}"), requests)
     }
 
-    #[derive(Default)]
-    struct RecordingPermit(Mutex<Vec<ProviderKind>>);
-
-    impl RecordingPermit {
-        fn taken(&self) -> Vec<ProviderKind> {
-            self.0.lock().expect("permit log").clone()
-        }
-    }
-
-    impl ProviderPermit for RecordingPermit {
-        fn acquire<'a>(&'a self, provider: ProviderKind) -> ProviderFuture<'a, (), PermitError> {
-            Box::pin(async move {
-                self.0.lock().expect("permit log").push(provider);
-                Ok(())
-            })
-        }
-    }
+    use crate::test_permit::RecordingPermit;
 
     fn client(base_url: String, api_key: Option<&str>, max_attempts: usize) -> OpenAlexClient {
         client_in(OpenAlexCorpus::Core, base_url, api_key, max_attempts)
@@ -874,12 +1002,6 @@ mod tests {
         )
         .expect("client should build")
         .with_max_attempts(max_attempts)
-    }
-
-    /// A list response carrying `work` as its first and only result.
-    fn corpus_hit(work: &str) -> String {
-        let work: Value = serde_json::from_str(work).expect("fixture is JSON");
-        json!({ "results": [work] }).to_string()
     }
 
     async fn fetch(
@@ -963,8 +1085,8 @@ mod tests {
         );
         assert_eq!(
             permit.taken(),
-            vec![ProviderKind::OpenAlex],
-            "the singleton runs on the caller's permit; the one list call takes its own"
+            vec![ProviderKind::OpenAlex; 2],
+            "the singleton and the one list call each take a permit"
         );
         let requests = requests.lock().expect("request log");
         assert_eq!(requests.len(), 2);
@@ -1149,7 +1271,7 @@ mod tests {
             "the two targets without a DOI are dropped and the rest keep reference order"
         );
         assert_eq!(fetched.work.work.references_count, 40);
-        assert_eq!(permit.taken(), vec![ProviderKind::OpenAlex]);
+        assert_eq!(permit.taken(), vec![ProviderKind::OpenAlex; 2]);
         let requests = requests.lock().expect("request log");
         assert_eq!(requests.len(), 2);
         assert_eq!(filter_ids(&requests[1]).len(), 40);
@@ -1211,8 +1333,8 @@ mod tests {
         assert_eq!(fetched.work.references.len(), 250);
         assert_eq!(
             permit.taken(),
-            vec![ProviderKind::OpenAlex; 3],
-            "each list call takes one permit"
+            vec![ProviderKind::OpenAlex; 4],
+            "the singleton and each list call take one permit"
         );
         let requests = requests.lock().expect("request log");
         assert_eq!(requests.len(), 4, "one singleton and three list calls");
@@ -1297,8 +1419,8 @@ mod tests {
         assert_eq!(dois(&fetched).len(), 8);
         assert_eq!(
             permit.taken(),
-            vec![ProviderKind::OpenAlex; 2],
-            "the retry takes a permit of its own"
+            vec![ProviderKind::OpenAlex; 3],
+            "the singleton, the list call and its retry each take a permit"
         );
         assert_eq!(requests.lock().expect("request log").len(), 3);
     }
@@ -1321,11 +1443,11 @@ mod tests {
         .expect_err("the list call should not answer");
 
         match error {
-            ProviderFetchError::Retryable { provider, message } => {
+            ProviderFetchError::ReferenceRetryable { provider, message } => {
                 assert_eq!(provider, ProviderKind::OpenAlex);
                 assert!(message.contains("429"), "{message}");
             }
-            other => panic!("expected a retryable failure, got {other:?}"),
+            other => panic!("expected a retryable reference failure, got {other:?}"),
         }
     }
 
@@ -1344,9 +1466,7 @@ mod tests {
         ])
         .await;
         let client = client(base, None, 1);
-        let expected_gap = Some(ReferenceGap::BudgetExhausted {
-            resolved: 0,
-            expected: 40,
+        let stopped = Some(BudgetStop {
             reset_secs: Some(3600),
         });
 
@@ -1358,21 +1478,24 @@ mod tests {
             Some("Why Most Published Research Findings Are False")
         );
         assert!(first.work.references.is_empty());
-        assert_eq!(first.reference_gap, expected_gap);
+        assert_eq!(first.references.budget_stop, stopped);
+        assert_eq!(first.references.targets, 40);
+        assert_eq!(first.references.unattempted, 40);
 
         let later = fetch(&client, ABSTRACT_DOI, &RecordingPermit::default())
             .await
             .expect("a later work answers from its singleton");
         assert!(later.work.references.is_empty());
-        assert_eq!(later.reference_gap, expected_gap);
+        assert_eq!(later.references.budget_stop, stopped);
+        assert_eq!(later.references.unattempted, 40);
 
         let unreferenced = fetch(&client, NO_REFERENCES_DOI, &RecordingPermit::default())
             .await
             .expect("a work without references answers");
         assert_eq!(
-            unreferenced.reference_gap,
-            Some(ReferenceGap::Unverified { resolved: 0 }),
-            "nothing was left to look up, and OpenAlex's own count cannot show what it missed"
+            unreferenced.references,
+            ReferenceReport::default(),
+            "nothing was left to look up, so nothing is lost"
         );
 
         let requests = requests.lock().expect("request log");
@@ -1412,18 +1535,22 @@ mod tests {
         assert_eq!(fetched.work.references.len(), 100);
         assert_eq!(dois(&fetched)[99], "10.9999/w1000099");
         assert_eq!(
-            fetched.reference_gap,
-            Some(ReferenceGap::BudgetExhausted {
-                resolved: 100,
-                expected: 250,
-                reset_secs: Some(120),
-            })
+            fetched.references,
+            ReferenceReport {
+                targets: 250,
+                retained: 100,
+                unattempted: 150,
+                budget_stop: Some(BudgetStop {
+                    reset_secs: Some(120)
+                }),
+                ..ReferenceReport::default()
+            }
         );
         assert_eq!(requests.lock().expect("request log").len(), 3);
     }
 
     #[tokio::test]
-    async fn a_list_that_resolves_fewer_dois_than_the_work_reports_is_a_shortfall() {
+    async fn a_target_returned_without_a_doi_is_counted_as_doi_less() {
         let ids = synthetic_ids(3);
         let (base, _) = scripted_server(vec![
             reply("200 OK", work_citing(&ids)),
@@ -1441,16 +1568,19 @@ mod tests {
 
         assert_eq!(dois(&fetched), vec!["10.9999/w1000000", "10.9999/w1000002"]);
         assert_eq!(
-            fetched.reference_gap,
-            Some(ReferenceGap::Shortfall {
-                resolved: 2,
-                expected: 3,
-            })
+            fetched.references,
+            ReferenceReport {
+                targets: 3,
+                retained: 2,
+                doi_less: 1,
+                ..ReferenceReport::default()
+            }
         );
+        assert!(fetched.references.is_degraded());
     }
 
     #[tokio::test]
-    async fn an_empty_reference_list_under_a_reported_count_is_a_shortfall() {
+    async fn an_empty_results_list_omits_every_target_and_is_still_a_valid_answer() {
         let (base, _) =
             scripted_server(vec![reply("200 OK", WORK), reply("200 OK", EMPTY_LIST)]).await;
 
@@ -1463,16 +1593,17 @@ mod tests {
         .expect("the metadata answers");
 
         assert_eq!(
-            fetched.reference_gap,
-            Some(ReferenceGap::Shortfall {
-                resolved: 0,
-                expected: 40,
-            })
+            fetched.references,
+            ReferenceReport {
+                targets: 40,
+                omitted: 40,
+                ..ReferenceReport::default()
+            }
         );
     }
 
     #[tokio::test]
-    async fn a_list_that_meets_the_reported_count_is_still_unverified() {
+    async fn a_list_that_resolves_every_target_is_complete() {
         let ids = synthetic_ids(3);
         let (base, _) = scripted_server(vec![
             reply("200 OK", work_citing(&ids)),
@@ -1489,9 +1620,106 @@ mod tests {
         .expect("the metadata answers");
 
         assert_eq!(
-            fetched.reference_gap,
-            Some(ReferenceGap::Unverified { resolved: 3 })
+            fetched.references,
+            ReferenceReport {
+                targets: 3,
+                retained: 3,
+                ..ReferenceReport::default()
+            }
         );
+        assert!(!fetched.references.is_degraded());
+    }
+
+    #[tokio::test]
+    async fn the_counts_of_an_earlier_batch_survive_a_later_budget_stop() {
+        let ids = synthetic_ids(101);
+        // Of the first batch of 100, 10 keep a DOI, 40 come back without one and 50 are omitted.
+        let returned = &ids[..50];
+        let without: Vec<&str> = ids[10..50].iter().map(String::as_str).collect();
+        let (base, _) = scripted_server(vec![
+            reply("200 OK", work_citing(&ids)),
+            reply("200 OK", list_body(returned, &without)),
+            Reply {
+                status: "429 Too Many Requests",
+                headers: "X-RateLimit-Remaining: 0\r\nX-RateLimit-Reset: 30\r\n".to_owned(),
+                body: "{}".to_owned(),
+            },
+        ])
+        .await;
+
+        let fetched = fetch(
+            &client(base, None, 1),
+            ABSTRACT_DOI,
+            &RecordingPermit::default(),
+        )
+        .await
+        .expect("the metadata answers");
+
+        assert_eq!(
+            fetched.references,
+            ReferenceReport {
+                targets: 101,
+                retained: 10,
+                omitted: 50,
+                doi_less: 40,
+                unattempted: 1,
+                budget_stop: Some(BudgetStop {
+                    reset_secs: Some(30)
+                }),
+            }
+        );
+    }
+
+    #[tokio::test]
+    async fn a_list_response_without_a_results_array_is_a_fatal_reference_failure() {
+        for body in [
+            "{}",
+            "null",
+            r#"{"results":{}}"#,
+            r#"{"unexpected":"no results array"}"#,
+        ] {
+            let (base, _) =
+                scripted_server(vec![reply("200 OK", WORK), reply("200 OK", body)]).await;
+
+            let error = fetch(
+                &client(base, None, 1),
+                ABSTRACT_DOI,
+                &RecordingPermit::default(),
+            )
+            .await
+            .expect_err("a broken list contract must not finalize the work");
+
+            assert!(
+                matches!(error, ProviderFetchError::ReferenceFatal { .. }),
+                "{body}: {error:?}"
+            );
+        }
+    }
+
+    #[tokio::test]
+    async fn a_later_batch_that_exhausts_its_retries_is_a_reference_failure() {
+        let ids = synthetic_ids(150);
+        let (base, requests) = scripted_server(vec![
+            reply("200 OK", work_citing(&ids)),
+            reply("200 OK", list_body(&ids[..100], &[])),
+            reply("502 Bad Gateway", "{}"),
+            reply("502 Bad Gateway", "{}"),
+        ])
+        .await;
+
+        let error = fetch(
+            &client(base, None, 2),
+            ABSTRACT_DOI,
+            &RecordingPermit::default(),
+        )
+        .await
+        .expect_err("a failed second batch must not answer");
+
+        assert!(
+            matches!(error, ProviderFetchError::ReferenceRetryable { .. }),
+            "{error:?}"
+        );
+        assert_eq!(requests.lock().expect("request log").len(), 4);
     }
 
     #[tokio::test]
@@ -1509,7 +1737,10 @@ mod tests {
         .expect_err("core excludes expansion records");
 
         assert!(
-            matches!(error, ProviderFetchError::NotFound { .. }),
+            matches!(
+                &error,
+                ProviderFetchError::NotFound { reason: Some(reason), .. } if reason == "corpus_excluded"
+            ),
             "{error:?}"
         );
         assert_eq!(requests.lock().expect("request log").len(), 1);
@@ -1553,11 +1784,11 @@ mod tests {
             .await
             .expect("the metadata still answers");
 
-        assert!(fetched.reference_gap.is_some());
+        assert!(fetched.references.budget_stop.is_some());
         assert_eq!(
             permit.taken(),
-            vec![ProviderKind::OpenAlex],
-            "one permit for the one list call that ran"
+            vec![ProviderKind::OpenAlex; 2],
+            "one permit for the singleton and one for the list call that ran"
         );
     }
 
@@ -1583,9 +1814,9 @@ mod tests {
             .await
             .expect("openalex should answer");
 
-        assert_eq!(*lock(&quiet_client.budget.warned_on), None);
+        assert_eq!(*lock(&quiet_client.budget.warned_low_on), None);
         assert_eq!(
-            *lock(&low_client.budget.warned_on),
+            *lock(&low_client.budget.warned_low_on),
             Some(Utc::now().date_naive())
         );
     }
@@ -1627,164 +1858,218 @@ mod tests {
             "a tenth exactly is not under a tenth"
         );
         assert!(budget_is_low(1000, 99));
+        assert!(
+            !budget_is_low(1000, 0),
+            "a spent budget has its own warning, not the low one"
+        );
 
         let budget = ListBudget::default();
         let day = NaiveDate::from_ymd_opt(2026, 10, 18).expect("valid date");
-        assert!(budget.claim_daily_warning(day));
-        assert!(!budget.claim_daily_warning(day));
-        assert!(budget.claim_daily_warning(day.succ_opt().expect("next day")));
+        assert!(budget.claim_low_warning(day));
+        assert!(!budget.claim_low_warning(day));
+        assert!(budget.claim_low_warning(day.succ_opt().expect("next day")));
+    }
+
+    #[test]
+    fn the_exhausted_warning_is_claimed_once_per_utc_day_apart_from_the_low_one() {
+        let budget = ListBudget::default();
+        let day = NaiveDate::from_ymd_opt(2026, 10, 18).expect("valid date");
+
+        assert!(budget.claim_low_warning(day));
+        assert!(budget.claim_exhausted_warning(day));
+        assert!(!budget.claim_exhausted_warning(day));
+        assert!(budget.claim_exhausted_warning(day.succ_opt().expect("next day")));
     }
 
     #[tokio::test]
-    async fn corpus_all_answers_a_work_the_core_corpus_misses() {
+    async fn the_singleton_asks_for_the_configured_corpus_and_a_404_costs_one_request() {
+        for corpus in [OpenAlexCorpus::Core, OpenAlexCorpus::All] {
+            let (base, requests) = scripted_server(vec![reply("404 Not Found", NOT_FOUND)]).await;
+            let client = client_in(corpus, base, None, 1);
+            let permit = RecordingPermit::default();
+
+            let error = fetch(&client, NO_REFERENCES_DOI, &permit)
+                .await
+                .expect_err("a 404 is a miss");
+
+            assert!(matches!(
+                error,
+                ProviderFetchError::NotFound { reason: None, .. }
+            ));
+            let requests = requests.lock().expect("request log");
+            assert_eq!(requests.len(), 1, "no paid list retry for {corpus:?}");
+            assert!(
+                requests[0].contains(&format!("corpus={}", corpus.as_str())),
+                "{}",
+                requests[0]
+            );
+            assert_eq!(permit.taken(), vec![ProviderKind::OpenAlex]);
+            assert_eq!(client.budget.stopped(Instant::now()), None);
+        }
+    }
+
+    #[tokio::test]
+    async fn an_expansion_paratext_record_falls_through_under_core_and_ends_under_all() {
+        let mut body: Value = serde_json::from_str(WORK).expect("fixture is JSON");
+        body["is_xpac"] = Value::Bool(true);
+        body["type"] = Value::String("paratext".to_owned());
+
+        let (base, _) = scripted_server(vec![reply("200 OK", body.to_string())]).await;
+        let core = fetch(
+            &client(base, None, 1),
+            ABSTRACT_DOI,
+            &RecordingPermit::default(),
+        )
+        .await
+        .expect_err("core excludes the expansion record first");
+        assert!(
+            matches!(
+                &core,
+                ProviderFetchError::NotFound { reason: Some(reason), .. } if reason == "corpus_excluded"
+            ),
+            "{core:?}"
+        );
+
+        let (base, requests) = scripted_server(vec![reply("200 OK", body.to_string())]).await;
+        let all = fetch(
+            &client_in(OpenAlexCorpus::All, base, None, 1),
+            ABSTRACT_DOI,
+            &RecordingPermit::default(),
+        )
+        .await
+        .expect_err("paratext ends the lookup under corpus=all");
+        assert_eq!(
+            all,
+            ProviderFetchError::Rejected {
+                provider: ProviderKind::OpenAlex,
+                reason: "paratext".to_owned(),
+            }
+        );
+        assert_eq!(
+            requests.lock().expect("request log").len(),
+            1,
+            "no reference resolution for paratext"
+        );
+    }
+
+    #[tokio::test]
+    async fn a_followed_redirect_takes_a_permit_of_its_own() {
         let (base, requests) = scripted_server(vec![
-            reply("404 Not Found", NOT_FOUND),
-            reply("200 OK", corpus_hit(NO_REFERENCES)),
+            redirect("/works/W2144981148"),
+            reply("200 OK", WORK),
+            reply("200 OK", EMPTY_LIST),
         ])
         .await;
         let permit = RecordingPermit::default();
 
-        let fetched = fetch(
-            &client_in(OpenAlexCorpus::All, base, None, 1),
-            NO_REFERENCES_DOI,
-            &permit,
-        )
-        .await
-        .expect("the corpus=all retry should answer");
+        fetch(&client(base, None, 1), ABSTRACT_DOI, &permit)
+            .await
+            .expect("the redirected work should answer");
 
-        assert_eq!(fetched.work.work.doi, NO_REFERENCES_DOI);
-        assert_eq!(fetched.provider, ProviderKind::OpenAlex);
-        assert_eq!(permit.taken(), vec![ProviderKind::OpenAlex]);
-        let requests = requests.lock().expect("request log");
-        assert_eq!(requests.len(), 2);
-        assert!(
-            requests[1].starts_with(
-                "GET /works?filter=doi:10.5281/zenodo.1&corpus=all&select=id,doi,display_name,"
-            ),
-            "{}",
-            requests[1]
-        );
-    }
-
-    #[tokio::test]
-    async fn a_corpus_all_miss_is_not_found() {
-        let (base, _) = scripted_server(vec![
-            reply("404 Not Found", NOT_FOUND),
-            reply("200 OK", EMPTY_LIST),
-        ])
-        .await;
-
-        let error = fetch(
-            &client_in(OpenAlexCorpus::All, base, None, 1),
-            NO_REFERENCES_DOI,
-            &RecordingPermit::default(),
-        )
-        .await
-        .expect_err("nothing in the corpus should answer");
-
+        assert_eq!(requests.lock().expect("request log").len(), 3);
         assert_eq!(
-            error,
-            ProviderFetchError::NotFound {
-                provider: ProviderKind::OpenAlex,
-                doi: NO_REFERENCES_DOI.to_owned(),
-            }
+            permit.requests().len(),
+            3,
+            "the singleton, its redirect hop and the list call each take a permit"
         );
     }
 
     #[tokio::test]
-    async fn the_first_corpus_all_hit_must_carry_the_requested_doi() {
-        let (base, _) = scripted_server(vec![
-            reply("404 Not Found", NOT_FOUND),
-            reply("200 OK", corpus_hit(WORK)),
-        ])
-        .await;
+    async fn a_redirect_to_another_origin_is_not_followed() {
+        let (base, requests) =
+            scripted_server(vec![redirect("https://example.org/works/W1")]).await;
 
         let error = fetch(
-            &client_in(OpenAlexCorpus::All, base, None, 1),
-            NO_REFERENCES_DOI,
+            &client(base, Some("test-key"), 1),
+            ABSTRACT_DOI,
             &RecordingPermit::default(),
         )
         .await
-        .expect_err("a record filed under another DOI must not answer");
+        .expect_err("a cross-origin redirect must not carry the key elsewhere");
 
-        assert!(matches!(
-            error,
-            ProviderFetchError::NotFound {
-                provider: ProviderKind::OpenAlex,
-                ..
-            }
-        ));
+        assert!(
+            matches!(error, ProviderFetchError::Fatal { .. }),
+            "{error:?}"
+        );
+        assert_eq!(requests.lock().expect("request log").len(), 1);
+    }
+
+    /// A permit that holds the first list request until released.
+    struct GatedPermit {
+        gate: tokio::sync::Notify,
+        waiting: tokio::sync::Notify,
+        held: std::sync::atomic::AtomicBool,
+    }
+
+    impl ProviderPermit for GatedPermit {
+        fn acquire<'a>(&'a self, request: OutboundRequest) -> ProviderFuture<'a, (), PermitError> {
+            Box::pin(async move {
+                if request.purpose == AttemptPurpose::ReferenceResolution
+                    && !self.held.swap(true, Ordering::AcqRel)
+                {
+                    self.waiting.notify_one();
+                    self.gate.notified().await;
+                }
+                Ok(())
+            })
+        }
     }
 
     #[tokio::test]
-    async fn corpus_all_is_not_asked_while_the_budget_is_stopped() {
+    async fn a_list_call_that_waited_for_its_permit_rechecks_the_budget_pause() {
         let (base, requests) = scripted_server(vec![
+            reply("200 OK", WORK),
             reply("200 OK", WORK),
             Reply {
                 status: "429 Too Many Requests",
                 headers: "X-RateLimit-Remaining: 0\r\nX-RateLimit-Reset: 600\r\n".to_owned(),
                 body: "{}".to_owned(),
             },
-            reply("404 Not Found", NOT_FOUND),
         ])
         .await;
-        let client = client_in(OpenAlexCorpus::All, base, None, 1);
-        fetch(&client, ABSTRACT_DOI, &RecordingPermit::default())
+        let waiting_client = client(base, None, 1);
+        let other = waiting_client.clone();
+        let gated = Arc::new(GatedPermit {
+            gate: tokio::sync::Notify::new(),
+            waiting: tokio::sync::Notify::new(),
+            held: std::sync::atomic::AtomicBool::new(false),
+        });
+
+        let blocked = {
+            let gated = Arc::clone(&gated);
+            tokio::spawn(async move { fetch_gated(&waiting_client, &gated).await })
+        };
+        gated.waiting.notified().await;
+        // Another clone spends the budget while the first one waits for its permit.
+        let spent = fetch(&other, ABSTRACT_DOI, &RecordingPermit::default())
             .await
             .expect("the singleton still answers");
+        assert!(spent.references.budget_stop.is_some());
+        gated.gate.notify_one();
 
-        let error = fetch(&client, NO_REFERENCES_DOI, &RecordingPermit::default())
+        let fetched = blocked
             .await
-            .expect_err("a stopped budget answers not found");
+            .expect("task joins")
+            .expect("metadata answers");
 
-        assert!(matches!(
-            error,
-            ProviderFetchError::NotFound {
-                provider: ProviderKind::OpenAlex,
-                ..
-            }
-        ));
-        let requests = requests.lock().expect("request log");
         assert_eq!(
-            requests.len(),
-            3,
-            "no corpus list call while the budget is stopped"
+            fetched.references.budget_stop,
+            Some(BudgetStop {
+                reset_secs: Some(600)
+            })
         );
-        assert!(
-            requests[2].starts_with("GET /works/doi:"),
-            "{}",
-            requests[2]
+        assert_eq!(
+            requests.lock().expect("request log").len(),
+            3,
+            "the waiting clone sent its singleton but not its list call"
         );
     }
 
-    #[tokio::test]
-    async fn a_corpus_all_retry_that_hits_the_budget_is_not_found() {
-        let (base, requests) = scripted_server(vec![
-            reply("404 Not Found", NOT_FOUND),
-            Reply {
-                status: "429 Too Many Requests",
-                headers: "X-RateLimit-Remaining: 0\r\nX-RateLimit-Reset: 60\r\n".to_owned(),
-                body: "{}".to_owned(),
-            },
-        ])
-        .await;
-
-        let error = fetch(
-            &client_in(OpenAlexCorpus::All, base, None, 5),
-            NO_REFERENCES_DOI,
-            &RecordingPermit::default(),
-        )
-        .await
-        .expect_err("a retry stopped by the budget answers not found");
-
-        assert!(matches!(
-            error,
-            ProviderFetchError::NotFound {
-                provider: ProviderKind::OpenAlex,
-                ..
-            }
-        ));
-        assert_eq!(requests.lock().expect("request log").len(), 2);
+    async fn fetch_gated(
+        client: &OpenAlexClient,
+        permit: &GatedPermit,
+    ) -> Result<FetchedWork, ProviderFetchError> {
+        WorkProvider::fetch_work_with_references(client, ABSTRACT_DOI, permit).await
     }
 
     #[tokio::test]
@@ -1799,12 +2084,15 @@ mod tests {
         .await
         .expect_err("a 404 in the core corpus is not found");
 
-        assert!(matches!(error, ProviderFetchError::NotFound { .. }));
+        assert!(matches!(
+            error,
+            ProviderFetchError::NotFound { reason: None, .. }
+        ));
         assert_eq!(requests.lock().expect("request log").len(), 1);
     }
 
     #[tokio::test]
-    async fn a_list_server_error_fails_the_whole_fetch_as_retryable() {
+    async fn a_list_server_error_is_a_retryable_reference_failure() {
         let (base, _) =
             scripted_server(vec![reply("200 OK", WORK), reply("502 Bad Gateway", "{}")]).await;
 
@@ -1818,7 +2106,7 @@ mod tests {
 
         assert!(matches!(
             error,
-            ProviderFetchError::Retryable {
+            ProviderFetchError::ReferenceRetryable {
                 provider: ProviderKind::OpenAlex,
                 ..
             }
@@ -1826,7 +2114,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_404_on_a_reference_list_call_is_retryable_so_the_chain_moves_on() {
+    async fn a_404_on_a_reference_list_call_is_a_fatal_reference_failure() {
         let (base, _) =
             scripted_server(vec![reply("200 OK", WORK), reply("404 Not Found", "{}")]).await;
 
@@ -1840,7 +2128,7 @@ mod tests {
 
         assert!(matches!(
             error,
-            ProviderFetchError::Retryable {
+            ProviderFetchError::ReferenceFatal {
                 provider: ProviderKind::OpenAlex,
                 ..
             }
@@ -1848,7 +2136,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn an_unexpected_400_on_the_singleton_is_retryable_without_a_repeat() {
+    async fn an_unexpected_400_on_the_singleton_is_fatal_without_a_repeat() {
         let (base, requests) = scripted_server(vec![reply("400 Bad Request", "{}")]).await;
 
         let error = fetch(
@@ -1861,7 +2149,7 @@ mod tests {
 
         assert!(matches!(
             error,
-            ProviderFetchError::Retryable {
+            ProviderFetchError::Fatal {
                 provider: ProviderKind::OpenAlex,
                 ..
             }
@@ -1870,9 +2158,9 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn an_undecodable_200_body_is_retryable_whichever_step_fails() {
+    async fn an_undecodable_200_body_is_fatal_whichever_step_fails() {
         // Text that is not JSON fails while the body is read. A JSON array fails when the
-        // work is mapped. Both must classify the same way.
+        // work is mapped. Both are a response-contract failure of the provider.
         for body in ["not json at all", "[1, 2, 3]"] {
             let (base, _) = scripted_server(vec![reply("200 OK", body)]).await;
 
@@ -1887,7 +2175,7 @@ mod tests {
             assert!(
                 matches!(
                     error,
-                    ProviderFetchError::Retryable {
+                    ProviderFetchError::Fatal {
                         provider: ProviderKind::OpenAlex,
                         ..
                     }
@@ -1956,7 +2244,7 @@ mod tests {
 
         assert_eq!(dois(&fetched).len(), 8);
         assert_eq!(client.key_state(), OpenAlexKeyState::Keyless);
-        assert_eq!(permit.taken(), vec![ProviderKind::OpenAlex; 2]);
+        assert_eq!(permit.taken(), vec![ProviderKind::OpenAlex; 3]);
         let requests = requests.lock().expect("request log");
         assert!(requests[0].contains("api_key=test-key"), "{}", requests[0]);
         assert!(requests[1].contains("api_key=test-key"), "{}", requests[1]);
@@ -2087,6 +2375,7 @@ mod tests {
         assert_eq!(
             error,
             ProviderFetchError::NotFound {
+                reason: None,
                 provider: ProviderKind::OpenAlex,
                 doi: SIBLING_REQUESTED_DOI.to_owned(),
             }
@@ -2107,7 +2396,8 @@ mod tests {
 
         assert!(matches!(
             error,
-            ProviderFetchError::NotFound { provider: ProviderKind::OpenAlex, ref doi }
+            ProviderFetchError::NotFound {
+                reason: None, provider: ProviderKind::OpenAlex, ref doi }
                 if doi == SIBLING_REQUESTED_DOI
         ));
     }
@@ -2129,6 +2419,7 @@ mod tests {
         assert!(matches!(
             error,
             ProviderFetchError::NotFound {
+                reason: None,
                 provider: ProviderKind::OpenAlex,
                 ..
             }
@@ -2150,6 +2441,7 @@ mod tests {
         assert_eq!(
             error,
             ProviderFetchError::NotFound {
+                reason: None,
                 provider: ProviderKind::OpenAlex,
                 doi: ABSTRACT_DOI.to_owned(),
             }
@@ -2177,8 +2469,8 @@ mod tests {
         assert_eq!(fetched.provider, ProviderKind::OpenAlex);
         assert_eq!(
             permit.taken(),
-            vec![ProviderKind::OpenAlex; 2],
-            "the singleton retry and the list call each take a permit"
+            vec![ProviderKind::OpenAlex; 3],
+            "the singleton, its retry and the list call each take a permit"
         );
         assert_eq!(requests.lock().expect("request log").len(), 3);
     }
@@ -2224,7 +2516,7 @@ mod tests {
             other => panic!("expected a retryable failure, got {other:?}"),
         }
         assert_eq!(requests.lock().expect("request log").len(), 2);
-        assert_eq!(permit.taken(), vec![ProviderKind::OpenAlex]);
+        assert_eq!(permit.taken(), vec![ProviderKind::OpenAlex; 2]);
     }
 
     /// A runtime rejection of the key: the first request carries it, the repeat
@@ -2248,8 +2540,8 @@ mod tests {
         assert_eq!(fetched.provider, ProviderKind::OpenAlex);
         assert_eq!(
             permit.taken(),
-            vec![ProviderKind::OpenAlex; 2],
-            "the keyless repeat and the list call each take a permit"
+            vec![ProviderKind::OpenAlex; 3],
+            "the rejected request, the keyless repeat and the list call each take a permit"
         );
         assert_eq!(client.key_state(), OpenAlexKeyState::Keyless);
         assert_eq!(client.rate_per_second(), KEYLESS_RATE_PER_SECOND);
@@ -2260,8 +2552,8 @@ mod tests {
             .expect("later lookups stay keyless and answer");
         assert_eq!(
             second.taken(),
-            vec![ProviderKind::OpenAlex],
-            "only the list call takes a permit"
+            vec![ProviderKind::OpenAlex; 2],
+            "the singleton and the list call each take a permit"
         );
 
         let requests = requests.lock().expect("request log");
@@ -2293,7 +2585,7 @@ mod tests {
             .expect_err("a forbidden response should not answer");
 
         assert!(
-            matches!(error, ProviderFetchError::Retryable { .. }),
+            matches!(error, ProviderFetchError::Fatal { .. }),
             "{error:?}"
         );
         assert_eq!(client.key_state(), OpenAlexKeyState::Keyed);
@@ -2301,7 +2593,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn a_keyless_refusal_is_retryable_so_the_chain_moves_on() {
+    async fn a_keyless_refusal_is_fatal_so_the_chain_records_it_and_moves_on() {
         let (base, _) = scripted_server(vec![reply("403 Forbidden", INVALID_KEY)]).await;
 
         let error = fetch(
@@ -2314,7 +2606,7 @@ mod tests {
 
         assert!(matches!(
             error,
-            ProviderFetchError::Retryable {
+            ProviderFetchError::Fatal {
                 provider: ProviderKind::OpenAlex,
                 ..
             }
@@ -2357,7 +2649,7 @@ mod tests {
             }
             other => panic!("expected a retryable failure, got {other:?}"),
         }
-        assert_eq!(permit.taken(), vec![ProviderKind::OpenAlex]);
+        assert_eq!(permit.taken(), vec![ProviderKind::OpenAlex; 2]);
     }
 
     #[tokio::test]
@@ -2535,6 +2827,7 @@ mod tests {
         assert_eq!(
             OpenAlexError::NotFound(ABSTRACT_DOI.to_owned()).into_fetch_error(),
             ProviderFetchError::NotFound {
+                reason: None,
                 provider,
                 doi: ABSTRACT_DOI.to_owned(),
             }
@@ -2546,6 +2839,7 @@ mod tests {
             }
             .into_fetch_error(),
             ProviderFetchError::NotFound {
+                reason: None,
                 provider,
                 doi: SIBLING_REQUESTED_DOI.to_owned(),
             }
@@ -2567,7 +2861,7 @@ mod tests {
         ));
         assert!(matches!(
             OpenAlexError::Unauthorized(StatusCode::FORBIDDEN).into_fetch_error(),
-            ProviderFetchError::Retryable { .. }
+            ProviderFetchError::Fatal { .. }
         ));
         assert!(matches!(
             OpenAlexError::BudgetExhausted {
@@ -2582,11 +2876,36 @@ mod tests {
         ));
         assert!(matches!(
             OpenAlexError::UnexpectedStatus(StatusCode::BAD_REQUEST).into_fetch_error(),
-            ProviderFetchError::Retryable { .. }
+            ProviderFetchError::Fatal { .. }
         ));
         assert!(matches!(
             OpenAlexError::Json(json).into_fetch_error(),
-            ProviderFetchError::Retryable { .. }
+            ProviderFetchError::Fatal { .. }
+        ));
+        assert!(matches!(
+            OpenAlexError::InvalidResponse("no results array").into_fetch_error(),
+            ProviderFetchError::Fatal { .. }
+        ));
+        assert_eq!(
+            OpenAlexError::CorpusExcluded(ABSTRACT_DOI.to_owned()).into_fetch_error(),
+            ProviderFetchError::NotFound {
+                provider,
+                doi: ABSTRACT_DOI.to_owned(),
+                reason: Some("corpus_excluded".to_owned()),
+            }
+        );
+        let stage = |inner| OpenAlexError::References(Box::new(inner)).into_fetch_error();
+        assert!(matches!(
+            stage(OpenAlexError::RetryableStatus(StatusCode::BAD_GATEWAY)),
+            ProviderFetchError::ReferenceRetryable { .. }
+        ));
+        assert!(matches!(
+            stage(OpenAlexError::InvalidResponse("no results array")),
+            ProviderFetchError::ReferenceFatal { .. }
+        ));
+        assert!(matches!(
+            stage(OpenAlexError::UnexpectedStatus(StatusCode::NOT_FOUND)),
+            ProviderFetchError::ReferenceFatal { .. }
         ));
         assert!(matches!(
             OpenAlexError::MissingContactEmail.into_fetch_error(),
@@ -2596,6 +2915,7 @@ mod tests {
 
     /// The contact address for the live smoke tests. It is read at run time, so no address is
     /// written to the source. `None` when `DEEPREF_CONTACT_EMAIL` is unset or blank.
+
     fn live_contact_email() -> Option<String> {
         std::env::var("DEEPREF_CONTACT_EMAIL")
             .ok()
@@ -2641,13 +2961,22 @@ mod tests {
         let body: Value = serde_json::from_str(WORK).expect("fixture is JSON");
         let ids: Vec<String> = wire::referenced_ids(&body).into_iter().take(5).collect();
 
-        let (references, gap) = client
+        let resolution = client
             .resolve_references(&ids, &RecordingPermit::default())
             .await
             .expect("the list call should resolve");
 
-        assert!(gap.is_none(), "the list call stopped early: {gap:?}");
-        assert!(!references.is_empty());
-        assert!(references.iter().all(|reference| reference.doi.is_some()));
+        assert!(
+            resolution.report.budget_stop.is_none(),
+            "the list call stopped early: {:?}",
+            resolution.report
+        );
+        assert!(!resolution.references.is_empty());
+        assert!(
+            resolution
+                .references
+                .iter()
+                .all(|reference| reference.doi.is_some())
+        );
     }
 }
