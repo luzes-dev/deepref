@@ -1,14 +1,12 @@
+use std::collections::HashMap;
+
 use chrono::Utc;
-use deepref_domain::{FetchStatus, ProviderKind, Work, WorkWithReferences};
+use deepref_domain::{FetchStatus, ProviderKind, Work, WorkWithReferences, normalize_doi};
 use serde::Deserialize;
 use serde_json::{Value, json};
 
 use crate::crossref::parse_openalex;
 
-/// Raw key for the OpenAlex IDs in `referenced_works`. `references` stays empty
-/// until the reference resolver turns these IDs into DOIs, so this list is what
-/// that resolver reads.
-const REFERENCED_WORKS_KEY: &str = "deepref_openalex_referenced_works";
 /// Raw key for the open-access locations (`best_oa_location` and `locations`),
 /// kept for PDF and licence lookups.
 const OA_URLS_KEY: &str = "deepref_oa_urls";
@@ -28,8 +26,6 @@ pub(crate) struct OpenAlexWork {
     cited_by_count: i32,
     #[serde(default)]
     referenced_works_count: i32,
-    #[serde(default)]
-    referenced_works: Vec<String>,
 }
 
 #[derive(Debug, Deserialize)]
@@ -45,8 +41,8 @@ struct OpenAlexSource {
 
 impl OpenAlexWork {
     /// Maps the work to the domain record. The abstract is rebuilt from the inverted
-    /// index through the Crossref cleanup. References stay empty until the resolver
-    /// runs, and the raw payload carries the OpenAlex IDs it will resolve.
+    /// index through the Crossref cleanup. `references` stays empty here; the adapter
+    /// fills it from the reference list calls.
     pub(crate) fn into_domain(self, doi: String, mut raw: Value) -> WorkWithReferences {
         let abstract_text = parse_openalex(&raw);
         let year = self
@@ -63,10 +59,6 @@ impl OpenAlexWork {
         });
         if let Some(object) = raw.as_object_mut() {
             object.insert(OA_URLS_KEY.to_owned(), oa_urls);
-            object.insert(
-                REFERENCED_WORKS_KEY.to_owned(),
-                json!(self.referenced_works),
-            );
         }
 
         WorkWithReferences {
@@ -91,6 +83,42 @@ impl OpenAlexWork {
             raw,
         }
     }
+}
+
+/// The short OpenAlex ID (`W` and digits) of an entity URL or bare ID, or `None` for
+/// anything else. The IDs go into list filters, so only this shape passes.
+pub(crate) fn openalex_id(value: &str) -> Option<String> {
+    let short = value.strip_prefix("https://openalex.org/").unwrap_or(value);
+    let digits = short.strip_prefix('W')?;
+    let well_formed = !digits.is_empty() && digits.bytes().all(|byte| byte.is_ascii_digit());
+    well_formed.then(|| short.to_owned())
+}
+
+/// The OpenAlex IDs a work lists in `referenced_works`, in order, malformed entries
+/// dropped.
+pub(crate) fn referenced_ids(raw: &Value) -> Vec<String> {
+    raw.get("referenced_works")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(Value::as_str)
+        .filter_map(openalex_id)
+        .collect()
+}
+
+/// The DOI of each OpenAlex ID in a list response. A result without a DOI is left
+/// out, so a target without one never becomes a reference.
+pub(crate) fn list_dois(body: &Value) -> HashMap<String, String> {
+    body.get("results")
+        .and_then(Value::as_array)
+        .into_iter()
+        .flatten()
+        .filter_map(|result| {
+            let id = openalex_id(result.get("id")?.as_str()?)?;
+            let doi = normalize_doi(result.get("doi")?.as_str()?).ok()?;
+            Some((id, doi))
+        })
+        .collect()
 }
 
 /// The year at the start of an ISO date such as `2005-08-02`.

@@ -4,6 +4,7 @@
 
 mod wire;
 
+use std::collections::HashMap;
 use std::fmt;
 use std::sync::Arc;
 use std::sync::atomic::{AtomicBool, Ordering};
@@ -14,7 +15,9 @@ use deepref_application::{
     RawIdentifier, RawRecord, WorkProvider,
 };
 use deepref_config::{IntegrationsConfig, OpenAlexCorpus};
-use deepref_domain::{IdentifierScheme, ProviderKind, WorkWithReferences, normalize_doi};
+use deepref_domain::{
+    IdentifierScheme, ProviderKind, Reference, WorkWithReferences, normalize_doi,
+};
 use reqwest::{StatusCode, header};
 use serde_json::Value;
 use thiserror::Error;
@@ -30,6 +33,10 @@ const SELECT_FIELDS: &str = concat!(
     "cited_by_count,referenced_works,referenced_works_count,best_oa_location,locations,",
     "is_retracted,is_paratext,ids,topics,authorships,abstract_inverted_index"
 );
+
+/// IDs per reference list call. One `ids.openalex:` filter takes at most 100 values,
+/// and one page returns at most 100 results.
+const LIST_CHUNK: usize = 100;
 
 /// Requests per second with a valid key (handoff section 5.1).
 pub const KEYED_RATE_PER_SECOND: u32 = 25;
@@ -108,6 +115,14 @@ impl fmt::Debug for OpenAlexKey {
             .field("state", &self.state())
             .finish()
     }
+}
+
+/// The two request shapes. A singleton is free and answers on the caller's permit. A list
+/// call costs money, so it takes a permit of its own.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum Endpoint {
+    Singleton,
+    List,
 }
 
 /// The OpenAlex client. The caller's permit covers the first request of a lookup.
@@ -239,50 +254,53 @@ impl OpenAlexClient {
         self.key.state()
     }
 
-    /// `GET /works/doi:{doi}` with the selected fields. The key is sent as a query
-    /// parameter only while the process is keyed.
-    fn singleton_request(&self, doi: &str) -> reqwest::RequestBuilder {
+    /// The request URL for a path and query. The key is added only while the process
+    /// is keyed, so a keyless process never sends it.
+    fn request_url(&self, path_and_query: &str) -> String {
         let mut url = format!(
-            "{}/works/doi:{}?select={SELECT_FIELDS}&mailto={}",
+            "{}{}&mailto={}",
             self.base_url,
-            urlencoding::encode(doi).replace("%2F", "/"),
+            path_and_query,
             urlencoding::encode(&self.mailto),
         );
         if let Some(key) = self.key.key() {
             url.push_str("&api_key=");
             url.push_str(&urlencoding::encode(key));
         }
-        self.client
-            .get(url)
-            .header(header::ACCEPT, "application/json")
+        url
     }
 
-    /// One lookup under the adapter's retry policy. A rejected key spends no attempt:
-    /// the repeat is a new request without the key, not a retry of the same one.
-    async fn fetch_metered(
+    /// One GET under the adapter's retry policy. `Ok(None)` is a 404. A rejected key
+    /// spends no attempt: the repeat is a new request without the key, not a retry of
+    /// the same one. Every request but the caller's first takes its own permit.
+    async fn get_metered(
         &self,
-        doi: &str,
+        endpoint: Endpoint,
+        path_and_query: &str,
         permit: &dyn ProviderPermit,
-    ) -> Result<WorkWithReferences, OpenAlexError> {
-        let doi = normalize_doi(doi)?;
+    ) -> Result<Option<Value>, OpenAlexError> {
         let mut requests = 0_usize;
         let mut attempts = 0_usize;
         loop {
-            if requests > 0 {
+            if requests > 0 || endpoint == Endpoint::List {
                 permit.acquire(ProviderKind::OpenAlex).await?;
             }
             requests += 1;
             let sent_with_key = self.key.key().is_some();
+            let request = self
+                .client
+                .get(self.request_url(path_and_query))
+                .header(header::ACCEPT, "application/json");
 
-            let failure = match self.singleton_request(&doi).send().await {
+            let failure = match request.send().await {
                 Ok(response) => {
                     let status = response.status();
                     if status.is_success() {
                         let raw: Value = response.json().await.map_err(transport)?;
-                        return checked_work(&doi, raw);
+                        return Ok(Some(raw));
                     }
                     match status {
-                        StatusCode::NOT_FOUND => return Err(OpenAlexError::NotFound(doi)),
+                        StatusCode::NOT_FOUND => return Ok(None),
                         StatusCode::UNAUTHORIZED | StatusCode::FORBIDDEN if sent_with_key => {
                             self.key.downgrade("OpenAlex rejected the key");
                             continue;
@@ -308,6 +326,69 @@ impl OpenAlexClient {
             }
             sleep_backoff(attempts).await;
         }
+    }
+
+    /// Looks the DOI up, then resolves its references. The caller's permit covers the
+    /// singleton's first request.
+    async fn fetch_metered(
+        &self,
+        doi: &str,
+        permit: &dyn ProviderPermit,
+    ) -> Result<WorkWithReferences, OpenAlexError> {
+        let doi = normalize_doi(doi)?;
+        let path = format!(
+            "/works/doi:{}?select={SELECT_FIELDS}",
+            urlencoding::encode(&doi).replace("%2F", "/")
+        );
+        let raw = self
+            .get_metered(Endpoint::Singleton, &path, permit)
+            .await?
+            .ok_or_else(|| OpenAlexError::NotFound(doi.clone()))?;
+        let mut work = checked_work(&doi, raw)?;
+        work.references = self
+            .resolve_references(&wire::referenced_ids(&work.raw), permit)
+            .await?;
+        Ok(work)
+    }
+
+    /// Resolves OpenAlex reference IDs to DOIs, one list call per `LIST_CHUNK` IDs, run
+    /// in order. Targets without a DOI are left out.
+    async fn resolve_references(
+        &self,
+        ids: &[String],
+        permit: &dyn ProviderPermit,
+    ) -> Result<Vec<Reference>, OpenAlexError> {
+        let mut dois = HashMap::new();
+        for chunk in ids.chunks(LIST_CHUNK) {
+            let path = format!(
+                "/works?filter=ids.openalex:{}&select=id,doi&per_page={LIST_CHUNK}",
+                chunk.join("|")
+            );
+            let body = self
+                .get_metered(Endpoint::List, &path, permit)
+                .await?
+                .ok_or(OpenAlexError::NonRetryableStatus(StatusCode::NOT_FOUND))?;
+            dois.extend(wire::list_dois(&body));
+        }
+        Ok(ids
+            .iter()
+            .filter_map(|id| dois.get(id))
+            .map(|doi| doi_reference(doi.clone()))
+            .collect())
+    }
+}
+
+/// A reference known only by its DOI.
+fn doi_reference(doi: String) -> Reference {
+    Reference {
+        doi: Some(doi),
+        key: None,
+        raw_unstructured: None,
+        article_title: None,
+        author: None,
+        year: None,
+        volume: None,
+        first_page: None,
     }
 }
 
@@ -455,6 +536,7 @@ impl OpenAlexError {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::json;
     use std::sync::Mutex;
 
     const ABSTRACT_DOI: &str = "10.1371/journal.pmed.0020124";
@@ -466,6 +548,9 @@ mod tests {
         include_str!("../tests/fixtures/openalex/work_without_references.json");
     const NOT_FOUND: &str = include_str!("../tests/fixtures/openalex/not_found.html");
     const INVALID_KEY: &str = include_str!("../tests/fixtures/openalex/key_invalid.json");
+    /// A real list-call response for the first ten references of `WORK`.
+    const REFERENCES_LIST: &str = include_str!("../tests/fixtures/openalex/references_list.json");
+    const EMPTY_LIST: &str = r#"{"meta":{"count":0},"results":[]}"#;
 
     /// One scripted response: status line, extra header lines, body.
     struct Reply {
@@ -563,9 +648,64 @@ mod tests {
         WorkProvider::fetch_work_with_references(client, doi, permit).await
     }
 
+    /// `WORK` with its `referenced_works` replaced by `ids`.
+    fn work_citing(ids: &[String]) -> String {
+        let mut body: Value = serde_json::from_str(WORK).expect("fixture is JSON");
+        body["referenced_works"] = json!(
+            ids.iter()
+                .map(|id| format!("https://openalex.org/{id}"))
+                .collect::<Vec<_>>()
+        );
+        body["referenced_works_count"] = json!(ids.len());
+        body.to_string()
+    }
+
+    fn synthetic_ids(count: usize) -> Vec<String> {
+        (0..count)
+            .map(|index| format!("W{}", 1_000_000 + index))
+            .collect()
+    }
+
+    /// A list response resolving each of `ids` to `10.9999/<lowercase id>`, except the
+    /// IDs in `without_doi`, which come back with a null DOI.
+    fn list_body(ids: &[String], without_doi: &[&str]) -> String {
+        let results: Vec<Value> = ids
+            .iter()
+            .map(|id| {
+                let doi = (!without_doi.contains(&id.as_str()))
+                    .then(|| format!("https://doi.org/10.9999/{}", id.to_lowercase()));
+                json!({"id": format!("https://openalex.org/{id}"), "doi": doi})
+            })
+            .collect();
+        json!({"meta": {"count": results.len()}, "results": results, "group_by": []}).to_string()
+    }
+
+    /// The IDs in a list request's `ids.openalex:` filter.
+    fn filter_ids(request_line: &str) -> Vec<&str> {
+        request_line
+            .split("filter=ids.openalex:")
+            .nth(1)
+            .unwrap_or_default()
+            .split('&')
+            .next()
+            .unwrap_or_default()
+            .split('|')
+            .collect()
+    }
+
+    fn dois(fetched: &FetchedWork) -> Vec<&str> {
+        fetched
+            .work
+            .references
+            .iter()
+            .filter_map(|reference| reference.doi.as_deref())
+            .collect()
+    }
+
     #[tokio::test]
     async fn a_found_work_is_answered_on_the_callers_permit_with_the_selected_fields() {
-        let (base, requests) = scripted_server(vec![reply("200 OK", WORK)]).await;
+        let (base, requests) =
+            scripted_server(vec![reply("200 OK", WORK), reply("200 OK", EMPTY_LIST)]).await;
         let client = client(base, None, 1);
         let permit = RecordingPermit::default();
 
@@ -579,12 +719,18 @@ mod tests {
             fetched.work.work.title.as_deref(),
             Some("Why Most Published Research Findings Are False")
         );
-        assert!(
-            permit.taken().is_empty(),
-            "the first request runs on the permit the caller took"
+        assert_eq!(
+            permit.taken(),
+            vec![ProviderKind::OpenAlex],
+            "the singleton runs on the caller's permit; the one list call takes its own"
         );
         let requests = requests.lock().expect("request log");
-        assert_eq!(requests.len(), 1);
+        assert_eq!(requests.len(), 2);
+        assert!(
+            requests[1].starts_with("GET /works?filter=ids.openalex:"),
+            "{}",
+            requests[1]
+        );
         assert!(
             requests[0].starts_with("GET /works/doi:10.1371/journal.pmed.0020124?select="),
             "{}",
@@ -600,7 +746,8 @@ mod tests {
 
     #[tokio::test]
     async fn the_mapping_carries_the_fixture_fields_and_rebuilds_the_abstract() {
-        let (base, _) = scripted_server(vec![reply("200 OK", WORK)]).await;
+        let (base, _) =
+            scripted_server(vec![reply("200 OK", WORK), reply("200 OK", EMPTY_LIST)]).await;
         let fetched = fetch(
             &client(base, None, 1),
             ABSTRACT_DOI,
@@ -651,8 +798,58 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn references_stay_empty_and_the_openalex_ids_wait_in_raw_for_the_resolver() {
-        let (base, _) = scripted_server(vec![reply("200 OK", WORK)]).await;
+    async fn referenced_works_resolve_to_dois_in_reference_order_through_one_list_call() {
+        let (base, requests) = scripted_server(vec![
+            reply("200 OK", WORK),
+            reply("200 OK", REFERENCES_LIST),
+        ])
+        .await;
+        let permit = RecordingPermit::default();
+
+        let fetched = fetch(&client(base, None, 1), ABSTRACT_DOI, &permit)
+            .await
+            .expect("openalex should answer");
+
+        assert_eq!(
+            dois(&fetched),
+            vec![
+                "10.1186/1471-2288-1-2",
+                "10.1038/35015718",
+                "10.1038/nrc1322",
+                "10.1038/ng749",
+                "10.1186/1471-2288-1-3",
+                "10.1056/nejmp048286",
+                "10.1001/jama.283.15.2008",
+                "10.1002/sim.4780030421",
+            ],
+            "the two targets without a DOI are dropped and the rest keep reference order"
+        );
+        assert_eq!(fetched.work.work.references_count, 40);
+        assert_eq!(permit.taken(), vec![ProviderKind::OpenAlex]);
+        let requests = requests.lock().expect("request log");
+        assert_eq!(requests.len(), 2);
+        assert_eq!(filter_ids(&requests[1]).len(), 40);
+        assert!(
+            requests[1].starts_with("GET /works?filter=ids.openalex:W1498364240|W1501619595|"),
+            "{}",
+            requests[1]
+        );
+        assert!(
+            requests[1].contains("&select=id,doi&per_page=100&mailto="),
+            "{}",
+            requests[1]
+        );
+    }
+
+    #[tokio::test]
+    async fn thirty_references_resolve_in_one_list_call() {
+        let ids = synthetic_ids(30);
+        let (base, requests) = scripted_server(vec![
+            reply("200 OK", work_citing(&ids)),
+            reply("200 OK", list_body(&ids, &[])),
+        ])
+        .await;
+
         let fetched = fetch(
             &client(base, None, 1),
             ABSTRACT_DOI,
@@ -661,20 +858,202 @@ mod tests {
         .await
         .expect("openalex should answer");
 
-        assert!(fetched.work.references.is_empty());
-        let pending = fetched.work.raw["deepref_openalex_referenced_works"]
-            .as_array()
-            .expect("the pending list is an array");
-        assert_eq!(pending.len(), 40);
+        assert_eq!(fetched.work.references.len(), 30);
+        assert_eq!(dois(&fetched)[0], "10.9999/w1000000");
+        let requests = requests.lock().expect("request log");
+        assert_eq!(requests.len(), 2, "one singleton and one list call");
         assert_eq!(
-            pending,
-            fetched.work.raw["referenced_works"].as_array().unwrap()
+            filter_ids(&requests[1]),
+            ids.iter().map(String::as_str).collect::<Vec<_>>()
         );
     }
 
     #[tokio::test]
+    async fn two_hundred_fifty_references_take_three_list_calls_of_100_100_50() {
+        let ids = synthetic_ids(250);
+        let (base, requests) = scripted_server(vec![
+            reply("200 OK", work_citing(&ids)),
+            reply("200 OK", list_body(&ids[..100], &[])),
+            reply("200 OK", list_body(&ids[100..200], &[])),
+            reply("200 OK", list_body(&ids[200..], &[])),
+        ])
+        .await;
+        let permit = RecordingPermit::default();
+
+        let fetched = fetch(&client(base, None, 1), ABSTRACT_DOI, &permit)
+            .await
+            .expect("openalex should answer");
+
+        assert_eq!(fetched.work.references.len(), 250);
+        assert_eq!(
+            permit.taken(),
+            vec![ProviderKind::OpenAlex; 3],
+            "each list call takes one permit"
+        );
+        let requests = requests.lock().expect("request log");
+        assert_eq!(requests.len(), 4, "one singleton and three list calls");
+        let chunks: Vec<usize> = requests[1..]
+            .iter()
+            .map(|request| filter_ids(request).len())
+            .collect();
+        assert_eq!(chunks, vec![100, 100, 50]);
+    }
+
+    #[tokio::test]
+    async fn list_dois_are_normalized_and_a_target_missing_from_the_response_is_dropped() {
+        let ids = vec!["W1".to_owned(), "W2".to_owned(), "W3".to_owned()];
+        let (base, _) = scripted_server(vec![
+            reply("200 OK", work_citing(&ids)),
+            reply(
+                "200 OK",
+                r#"{"results":[
+                    {"id":"https://openalex.org/W3","doi":"https://doi.org/10.1000/UPPER.Case"},
+                    {"id":"https://openalex.org/W1","doi":null}
+                ]}"#,
+            ),
+        ])
+        .await;
+
+        let fetched = fetch(
+            &client(base, None, 1),
+            ABSTRACT_DOI,
+            &RecordingPermit::default(),
+        )
+        .await
+        .expect("openalex should answer");
+
+        assert_eq!(dois(&fetched), vec!["10.1000/upper.case"]);
+    }
+
+    #[tokio::test]
+    async fn malformed_reference_ids_stay_out_of_the_list_filter() {
+        let mut body: Value = serde_json::from_str(&work_citing(&["W1".to_owned()]))
+            .expect("the citing work is JSON");
+        body["referenced_works"] = json!([
+            "https://openalex.org/W1",
+            "https://openalex.org/W2|W3",
+            "https://example.org/W4",
+        ]);
+        let (base, requests) = scripted_server(vec![
+            reply("200 OK", body.to_string()),
+            reply("200 OK", EMPTY_LIST),
+        ])
+        .await;
+
+        fetch(
+            &client(base, None, 1),
+            ABSTRACT_DOI,
+            &RecordingPermit::default(),
+        )
+        .await
+        .expect("openalex should answer");
+
+        let requests = requests.lock().expect("request log");
+        assert_eq!(filter_ids(&requests[1]), vec!["W1"]);
+    }
+
+    #[tokio::test]
+    async fn a_list_rate_limit_with_budget_left_is_retried_then_answers() {
+        let (base, requests) = scripted_server(vec![
+            reply("200 OK", WORK),
+            Reply {
+                status: "429 Too Many Requests",
+                headers: "X-RateLimit-Remaining: 5\r\n".to_owned(),
+                body: "{}".to_owned(),
+            },
+            reply("200 OK", REFERENCES_LIST),
+        ])
+        .await;
+        let permit = RecordingPermit::default();
+
+        let fetched = fetch(&client(base, None, 2), ABSTRACT_DOI, &permit)
+            .await
+            .expect("the retried list call should answer");
+
+        assert_eq!(dois(&fetched).len(), 8);
+        assert_eq!(
+            permit.taken(),
+            vec![ProviderKind::OpenAlex; 2],
+            "the retry takes a permit of its own"
+        );
+        assert_eq!(requests.lock().expect("request log").len(), 3);
+    }
+
+    #[tokio::test]
+    async fn a_list_rate_limit_with_budget_left_is_retryable_once_attempts_run_out() {
+        let limited = || Reply {
+            status: "429 Too Many Requests",
+            headers: "X-RateLimit-Remaining: 5\r\n".to_owned(),
+            body: "{}".to_owned(),
+        };
+        let (base, _) = scripted_server(vec![reply("200 OK", WORK), limited(), limited()]).await;
+
+        let error = fetch(
+            &client(base, None, 2),
+            ABSTRACT_DOI,
+            &RecordingPermit::default(),
+        )
+        .await
+        .expect_err("the list call should not answer");
+
+        match error {
+            ProviderFetchError::Retryable { provider, message } => {
+                assert_eq!(provider, ProviderKind::OpenAlex);
+                assert!(message.contains("429"), "{message}");
+            }
+            other => panic!("expected a retryable failure, got {other:?}"),
+        }
+    }
+
+    #[tokio::test]
+    async fn a_list_server_error_fails_the_whole_fetch_as_retryable() {
+        let (base, _) =
+            scripted_server(vec![reply("200 OK", WORK), reply("502 Bad Gateway", "{}")]).await;
+
+        let error = fetch(
+            &client(base, None, 1),
+            ABSTRACT_DOI,
+            &RecordingPermit::default(),
+        )
+        .await
+        .expect_err("a failed list call should not answer");
+
+        assert!(matches!(
+            error,
+            ProviderFetchError::Retryable {
+                provider: ProviderKind::OpenAlex,
+                ..
+            }
+        ));
+    }
+
+    #[tokio::test]
+    async fn a_rejected_key_on_a_list_call_downgrades_and_repeats_keyless() {
+        let (base, requests) = scripted_server(vec![
+            reply("200 OK", WORK),
+            reply("401 Unauthorized", INVALID_KEY),
+            reply("200 OK", REFERENCES_LIST),
+        ])
+        .await;
+        let client = client(base, Some("test-key"), 1);
+        let permit = RecordingPermit::default();
+
+        let fetched = fetch(&client, ABSTRACT_DOI, &permit)
+            .await
+            .expect("the keyless repeat should resolve the references");
+
+        assert_eq!(dois(&fetched).len(), 8);
+        assert_eq!(client.key_state(), OpenAlexKeyState::Keyless);
+        assert_eq!(permit.taken(), vec![ProviderKind::OpenAlex; 2]);
+        let requests = requests.lock().expect("request log");
+        assert!(requests[0].contains("api_key=test-key"), "{}", requests[0]);
+        assert!(requests[1].contains("api_key=test-key"), "{}", requests[1]);
+        assert!(!requests[2].contains("api_key"), "{}", requests[2]);
+    }
+
+    #[tokio::test]
     async fn a_work_without_references_keeps_an_empty_list_and_missing_source_fields_stay_none() {
-        let (base, _) = scripted_server(vec![reply("200 OK", NO_REFERENCES)]).await;
+        let (base, requests) = scripted_server(vec![reply("200 OK", NO_REFERENCES)]).await;
         let fetched = fetch(
             &client(base, None, 1),
             NO_REFERENCES_DOI,
@@ -684,9 +1063,11 @@ mod tests {
         .expect("openalex should answer");
 
         assert_eq!(fetched.work.work.references_count, 0);
+        assert!(fetched.work.references.is_empty());
         assert_eq!(
-            fetched.work.raw["deepref_openalex_referenced_works"],
-            serde_json::json!([])
+            requests.lock().expect("request log").len(),
+            1,
+            "a work without references makes no list call"
         );
         assert_eq!(fetched.work.work.publisher, None);
         assert_eq!(
@@ -698,8 +1079,12 @@ mod tests {
 
     #[tokio::test]
     async fn a_redirect_is_followed_and_the_matching_work_answers() {
-        let (base, requests) =
-            scripted_server(vec![redirect("/works/W2144981148"), reply("200 OK", WORK)]).await;
+        let (base, requests) = scripted_server(vec![
+            redirect("/works/W2144981148"),
+            reply("200 OK", WORK),
+            reply("200 OK", EMPTY_LIST),
+        ])
+        .await;
 
         let fetched = fetch(
             &client(base, None, 1),
@@ -710,7 +1095,7 @@ mod tests {
         .expect("the redirected work should answer");
 
         assert_eq!(fetched.work.work.doi, ABSTRACT_DOI);
-        assert_eq!(requests.lock().expect("request log").len(), 2);
+        assert_eq!(requests.lock().expect("request log").len(), 3);
     }
 
     #[tokio::test]
@@ -810,6 +1195,7 @@ mod tests {
                 body: "{}".to_owned(),
             },
             reply("200 OK", WORK),
+            reply("200 OK", EMPTY_LIST),
         ])
         .await;
         let permit = RecordingPermit::default();
@@ -819,8 +1205,12 @@ mod tests {
             .expect("the retry should answer");
 
         assert_eq!(fetched.provider, ProviderKind::OpenAlex);
-        assert_eq!(permit.taken(), vec![ProviderKind::OpenAlex]);
-        assert_eq!(requests.lock().expect("request log").len(), 2);
+        assert_eq!(
+            permit.taken(),
+            vec![ProviderKind::OpenAlex; 2],
+            "the singleton retry and the list call each take a permit"
+        );
+        assert_eq!(requests.lock().expect("request log").len(), 3);
     }
 
     #[tokio::test]
@@ -873,7 +1263,9 @@ mod tests {
         let (base, requests) = scripted_server(vec![
             reply(status, INVALID_KEY),
             reply("200 OK", WORK),
+            reply("200 OK", EMPTY_LIST),
             reply("200 OK", WORK),
+            reply("200 OK", EMPTY_LIST),
         ])
         .await;
         let client = client(base, Some("test-key"), 1);
@@ -884,7 +1276,11 @@ mod tests {
             .expect("the keyless repeat should answer");
 
         assert_eq!(fetched.provider, ProviderKind::OpenAlex);
-        assert_eq!(permit.taken(), vec![ProviderKind::OpenAlex]);
+        assert_eq!(
+            permit.taken(),
+            vec![ProviderKind::OpenAlex; 2],
+            "the keyless repeat and the list call each take a permit"
+        );
         assert_eq!(client.key_state(), OpenAlexKeyState::Keyless);
         assert_eq!(client.rate_per_second(), KEYLESS_RATE_PER_SECOND);
 
@@ -892,13 +1288,18 @@ mod tests {
         fetch(&client, ABSTRACT_DOI, &second)
             .await
             .expect("later lookups stay keyless and answer");
-        assert!(second.taken().is_empty());
+        assert_eq!(
+            second.taken(),
+            vec![ProviderKind::OpenAlex],
+            "only the list call takes a permit"
+        );
 
         let requests = requests.lock().expect("request log");
-        assert_eq!(requests.len(), 3);
+        assert_eq!(requests.len(), 5);
         assert!(requests[0].contains("api_key=test-key"), "{}", requests[0]);
-        assert!(!requests[1].contains("api_key"), "{}", requests[1]);
-        assert!(!requests[2].contains("api_key"), "{}", requests[2]);
+        for request in &requests[1..] {
+            assert!(!request.contains("api_key"), "{request}");
+        }
     }
 
     #[tokio::test]
@@ -1099,7 +1500,8 @@ mod tests {
 
     #[tokio::test]
     async fn the_raw_record_keeps_orcids_in_the_raw_payload_and_skips_unnamed_authors() {
-        let (base, _) = scripted_server(vec![reply("200 OK", WORK)]).await;
+        let (base, _) =
+            scripted_server(vec![reply("200 OK", WORK), reply("200 OK", EMPTY_LIST)]).await;
         let mut fetched = fetch(
             &client(base, None, 1),
             ABSTRACT_DOI,
