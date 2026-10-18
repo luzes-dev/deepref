@@ -219,9 +219,6 @@ enum Endpoint {
     List,
 }
 
-/// The OpenAlex client. Every request takes a permit from the callback immediately before
-/// it is sent, retries and redirect hops included.
-
 /// Attempts for the best-effort abstract lookup, which keeps its own short retry policy.
 const ENRICHMENT_MAX_ATTEMPTS: usize = 2;
 
@@ -229,6 +226,8 @@ const ENRICHMENT_MAX_ATTEMPTS: usize = 2;
 const MAX_REDIRECTS: usize = 3;
 
 /// The one OpenAlex client for a process. Clones share the key state and the list budget.
+/// Every request takes a permit from the callback immediately before it is sent, retries and
+/// redirect hops included.
 #[derive(Debug, Clone)]
 pub struct OpenAlexClient {
     client: reqwest::Client,
@@ -2915,7 +2914,6 @@ mod tests {
 
     /// The contact address for the live smoke tests. It is read at run time, so no address is
     /// written to the source. `None` when `DEEPREF_CONTACT_EMAIL` is unset or blank.
-
     fn live_contact_email() -> Option<String> {
         std::env::var("DEEPREF_CONTACT_EMAIL")
             .ok()

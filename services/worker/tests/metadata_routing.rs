@@ -267,7 +267,7 @@ async fn run_fetch_action(
     fixture: &Fixture,
     config: &WorkerConfig,
 ) -> Result<DeliveryAction> {
-    Ok(handle_job_with_documents_owned(
+    handle_job_with_documents_owned(
         pool.clone(),
         &fixture.job,
         &fixture.job.lease(OWNER),
@@ -276,7 +276,7 @@ async fn run_fetch_action(
         None,
         config,
     )
-    .await?)
+    .await
 }
 
 /// The work row's provenance, its raw payload, and the DOI's cache row provider and status.
