@@ -1192,7 +1192,7 @@ async fn doi_acquisitions_accept_only_enabled_metadata_providers() {
 }
 
 #[tokio::test]
-async fn doi_acquisitions_accept_openalex_under_the_default_chain_and_name_the_enabled_set() {
+async fn doi_acquisitions_accept_every_provider_under_the_default_chain() {
     let Some(pool) = database().await else {
         return;
     };
@@ -1207,22 +1207,39 @@ async fn doi_acquisitions_accept_openalex_under_the_default_chain_and_name_the_e
         ..Default::default()
     };
 
-    for providers in [json!(["datacite"]), json!(["openalex", "datacite"])] {
+    let mut run_ids = Vec::new();
+    for (key, providers, stored) in [
+        ("datacite-named", json!(["datacite"]), json!(["datacite"])),
+        (
+            "datacite-first",
+            json!(["datacite", "openalex"]),
+            json!(["openalex", "datacite"]),
+        ),
+    ] {
         let response = call_with_integrations(
             &pool,
             create_acquisition_request(
                 project_id,
-                None,
+                Some(key),
                 json!({"seed_dois": ["10.5555/default-chain"], "metadata_providers": providers}),
             ),
             default_chain.clone(),
         )
         .await;
-        assert_eq!(response.status(), StatusCode::BAD_REQUEST, "{providers}");
-        assert_eq!(
-            json_body(response).await["message"],
-            "datacite is not enabled in this deployment (enabled: openalex, crossref)"
-        );
+        assert_eq!(response.status(), StatusCode::CREATED, "{providers}");
+        let run_id = json_body(response).await["id"]
+            .as_str()
+            .expect("created acquisition should have an id")
+            .parse::<Uuid>()
+            .expect("acquisition id should be a UUID");
+        let config: serde_json::Value =
+            sqlx::query_scalar("SELECT config FROM acquisition_runs WHERE id=$1")
+                .bind(run_id)
+                .fetch_one(&pool)
+                .await
+                .expect("created config should load");
+        assert_eq!(config["metadata_providers"], stored, "{providers}");
+        run_ids.push(run_id);
     }
 
     let named = call_with_integrations(
@@ -1273,14 +1290,15 @@ async fn doi_acquisitions_accept_openalex_under_the_default_chain_and_name_the_e
             .expect("created config should load");
     assert_eq!(
         omitted_config["metadata_providers"],
-        json!(["openalex", "crossref"])
+        json!(["openalex", "crossref", "datacite"])
     );
 
-    clean_acquisition_projects(&pool, &[project_id], &[named_id, omitted_id]).await;
+    run_ids.extend([named_id, omitted_id]);
+    clean_acquisition_projects(&pool, &[project_id], &run_ids).await;
 }
 
 #[tokio::test]
-async fn the_deployment_allowlist_filters_the_chain_and_an_empty_one_is_unavailable() {
+async fn the_deployment_chain_is_the_allowlist_and_omitted_names_follow_it() {
     let Some(pool) = database().await else {
         return;
     };
@@ -1291,10 +1309,10 @@ async fn the_deployment_allowlist_filters_the_chain_and_an_empty_one_is_unavaila
         .await
         .expect("test project should insert");
 
-    // DataCite is configured but has no adapter in this build, so only Crossref is enabled.
+    // OpenAlex is outside this deployment's chain, so it is outside the allowlist too.
     let configured_chain = deepref_config::IntegrationsConfig {
         contact_email: TEST_CONTACT_EMAIL.to_owned(),
-        metadata_providers: vec![ProviderKind::DataCite, ProviderKind::Crossref],
+        metadata_providers: vec![ProviderKind::Crossref, ProviderKind::DataCite],
         ..Default::default()
     };
     let omitted = call_with_integrations(
@@ -1319,7 +1337,10 @@ async fn the_deployment_allowlist_filters_the_chain_and_an_empty_one_is_unavaila
             .fetch_one(&pool)
             .await
             .expect("created config should load");
-    assert_eq!(config["metadata_providers"], json!(["crossref"]));
+    assert_eq!(
+        config["metadata_providers"],
+        json!(["crossref", "datacite"])
+    );
 
     let named = call_with_integrations(
         &pool,
@@ -1334,25 +1355,8 @@ async fn the_deployment_allowlist_filters_the_chain_and_an_empty_one_is_unavaila
     assert_eq!(named.status(), StatusCode::BAD_REQUEST);
     assert_eq!(
         json_body(named).await["message"],
-        "openalex is not enabled in this deployment (enabled: crossref)"
+        "openalex is not enabled in this deployment (enabled: crossref, datacite)"
     );
-
-    let no_adapter = deepref_config::IntegrationsConfig {
-        contact_email: TEST_CONTACT_EMAIL.to_owned(),
-        metadata_providers: vec![ProviderKind::DataCite],
-        ..Default::default()
-    };
-    let unavailable = call_with_integrations(
-        &pool,
-        create_acquisition_request(
-            project_id,
-            None,
-            json!({"seed_dois": ["10.5555/unavailable"]}),
-        ),
-        no_adapter,
-    )
-    .await;
-    assert_eq!(unavailable.status(), StatusCode::SERVICE_UNAVAILABLE);
 
     clean_acquisition_projects(&pool, &[project_id], &[omitted_id]).await;
 }

@@ -128,9 +128,14 @@ fn crossref_work() -> String {
     .to_string()
 }
 
-/// The worker configuration with both adapters pointed at the mock servers. The
-/// abstract fallback is off, so no test reaches Europe PMC or the public OpenAlex API.
-fn worker_config(openalex: &MockServer, crossref: &MockServer) -> WorkerConfig {
+/// The worker configuration with every adapter pointed at the mock servers. The
+/// abstract fallback is off, so no test reaches Europe PMC, the public OpenAlex API or
+/// the public DataCite API.
+fn worker_config(
+    openalex: &MockServer,
+    crossref: &MockServer,
+    datacite: &MockServer,
+) -> WorkerConfig {
     let mut config = WorkerConfig::from_source(&|name| match name {
         "APP_ENV" => Some("local".into()),
         "DEEPREF_CONTACT_EMAIL" => Some(CONTACT_EMAIL.into()),
@@ -140,6 +145,7 @@ fn worker_config(openalex: &MockServer, crossref: &MockServer) -> WorkerConfig {
     .expect("local worker configuration");
     config.metadata = MetadataClients {
         crossref_base_url: crossref.base_url.clone(),
+        datacite_base_url: datacite.base_url.clone(),
         openalex: Some(
             OpenAlexClient::with_base_url(
                 openalex.base_url.clone(),
@@ -291,7 +297,14 @@ async fn an_uncached_doi_is_answered_by_openalex_and_keeps_the_crossref_lane_lab
     let crossref = MockServer::start(Vec::new()).await;
     let fixture = seed_work_fetch(&pool, doi, json!({})).await?;
 
-    run_fetch(&pool, &fixture, &worker_config(&openalex, &crossref)).await?;
+    let datacite = MockServer::start(Vec::new()).await;
+
+    run_fetch(
+        &pool,
+        &fixture,
+        &worker_config(&openalex, &crossref, &datacite),
+    )
+    .await?;
 
     let saved = provenance(&pool, doi).await?;
     assert_eq!(saved.metadata_provider, "openalex");
@@ -337,7 +350,14 @@ async fn the_run_chain_wins_over_the_deployment_default_for_an_uncached_doi() ->
     let fixture =
         seed_work_fetch(&pool, doi, json!({ "metadata_providers": ["crossref"] })).await?;
 
-    run_fetch(&pool, &fixture, &worker_config(&openalex, &crossref)).await?;
+    let datacite = MockServer::start(Vec::new()).await;
+
+    run_fetch(
+        &pool,
+        &fixture,
+        &worker_config(&openalex, &crossref, &datacite),
+    )
+    .await?;
 
     let saved = provenance(&pool, doi).await?;
     assert_eq!(saved.metadata_provider, "crossref");
@@ -367,7 +387,14 @@ async fn a_doi_openalex_does_not_know_falls_through_to_crossref() -> Result<()> 
     .await;
     let fixture = seed_work_fetch(&pool, doi, json!({})).await?;
 
-    run_fetch(&pool, &fixture, &worker_config(&openalex, &crossref)).await?;
+    let datacite = MockServer::start(Vec::new()).await;
+
+    run_fetch(
+        &pool,
+        &fixture,
+        &worker_config(&openalex, &crossref, &datacite),
+    )
+    .await?;
 
     let saved = provenance(&pool, doi).await?;
     assert_eq!(saved.metadata_provider, "crossref");

@@ -2,15 +2,23 @@ use std::fmt;
 
 use deepref_domain::ProviderKind;
 
-/// The chain used when `DEEPREF_METADATA_PROVIDERS` is unset: OpenAlex answers first
-/// and Crossref falls back. The default moves in stages (handoff section 5.1), and
-/// this constant is the only place it is written.
-const DEFAULT_METADATA_PROVIDERS: &[ProviderKind] =
-    &[ProviderKind::OpenAlex, ProviderKind::Crossref];
+/// The chain used when `DEEPREF_METADATA_PROVIDERS` is unset: OpenAlex answers first,
+/// Crossref falls back, and DataCite catches the datasets and software the other two
+/// do not hold. The default moves in stages (handoff section 5.1), and this constant is
+/// the only place it is written.
+const DEFAULT_METADATA_PROVIDERS: &[ProviderKind] = &[
+    ProviderKind::OpenAlex,
+    ProviderKind::Crossref,
+    ProviderKind::DataCite,
+];
 
-/// Providers with an adapter in this build. A chain may name only these. The
-/// domain enum also names providers whose adapters arrive in later phases.
-const PROVIDERS_WITH_ADAPTERS: &[ProviderKind] = &[ProviderKind::OpenAlex, ProviderKind::Crossref];
+/// Providers with an adapter in this build. A chain may name only these, so a provider
+/// added to the domain enum stays out of every deployment until its adapter lands.
+const PROVIDERS_WITH_ADAPTERS: &[ProviderKind] = &[
+    ProviderKind::OpenAlex,
+    ProviderKind::Crossref,
+    ProviderKind::DataCite,
+];
 
 /// Which OpenAlex records metadata lookups may answer from.
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -301,22 +309,21 @@ mod tests {
     }
 
     #[test]
-    fn the_metadata_chain_defaults_to_openalex_then_crossref_with_a_keyless_core_corpus() {
+    fn the_metadata_chain_defaults_to_openalex_crossref_then_datacite_with_a_keyless_core_corpus() {
+        let default_chain = [
+            ProviderKind::OpenAlex,
+            ProviderKind::Crossref,
+            ProviderKind::DataCite,
+        ];
         let default = IntegrationsConfig::default();
-        assert_eq!(
-            default.metadata_providers,
-            [ProviderKind::OpenAlex, ProviderKind::Crossref]
-        );
+        assert_eq!(default.metadata_providers, default_chain);
         assert_eq!(default.openalex_corpus, OpenAlexCorpus::Core);
 
         let config = load(&[]).unwrap();
-        assert_eq!(
-            config.metadata_providers,
-            [ProviderKind::OpenAlex, ProviderKind::Crossref]
-        );
+        assert_eq!(config.metadata_providers, default_chain);
         assert_eq!(config.openalex_api_key, None);
         assert_eq!(config.openalex_corpus, OpenAlexCorpus::Core);
-        assert_eq!(config.metadata_chain_label(), "openalex,crossref");
+        assert_eq!(config.metadata_chain_label(), "openalex,crossref,datacite");
     }
 
     #[test]
@@ -370,7 +377,7 @@ mod tests {
     }
 
     #[test]
-    fn only_providers_with_an_adapter_are_enabled() {
+    fn every_configured_provider_is_enabled_in_deployment_order() {
         let config = IntegrationsConfig {
             metadata_providers: vec![
                 ProviderKind::DataCite,
@@ -381,11 +388,19 @@ mod tests {
         };
         assert_eq!(
             config.enabled_metadata_providers(),
-            [ProviderKind::OpenAlex, ProviderKind::Crossref]
+            [
+                ProviderKind::DataCite,
+                ProviderKind::OpenAlex,
+                ProviderKind::Crossref
+            ]
         );
         assert_eq!(
             IntegrationsConfig::default().enabled_metadata_providers(),
-            [ProviderKind::OpenAlex, ProviderKind::Crossref]
+            [
+                ProviderKind::OpenAlex,
+                ProviderKind::Crossref,
+                ProviderKind::DataCite
+            ]
         );
     }
 
@@ -414,8 +429,13 @@ mod tests {
 
     #[test]
     fn a_provider_without_an_adapter_refuses_to_start_and_names_the_available_ones() {
+        // Every provider in the domain enum has an adapter now, so the refusal is checked
+        // against an adapter set that leaves DataCite out.
+        let adapters = [ProviderKind::OpenAlex, ProviderKind::Crossref];
         for (value, unavailable) in [("datacite", "datacite"), ("openalex,datacite", "datacite")] {
-            let error = load_error(&[("DEEPREF_METADATA_PROVIDERS", value)]);
+            let error = parse_metadata_chain(value, &adapters)
+                .expect_err("a chain naming a provider without an adapter should be refused")
+                .to_string();
             assert!(
                 error.contains(&format!("{unavailable} has no adapter yet"))
                     && error.contains("available providers are openalex, crossref"),

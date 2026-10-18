@@ -596,8 +596,9 @@ async fn import_identifiers(context: &Context<'_>) -> NodeResult {
                     ProviderKind::Crossref => records.push(
                         deepref_integrations::raw_record_from_crossref_work(fetched.work),
                     ),
-                    // No DataCite adapter exists in this build.
-                    ProviderKind::DataCite => unresolved += 1,
+                    ProviderKind::DataCite => records.push(
+                        deepref_integrations::raw_record_from_datacite_work(fetched.work),
+                    ),
                 },
                 Err(_) => unresolved += 1,
             }

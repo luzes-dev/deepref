@@ -5,7 +5,9 @@
 use deepref_application::{LostEdgeFill, LostEdges, ProviderRouter, RouteError, WorkProvider};
 use deepref_config::IntegrationsConfig;
 use deepref_domain::IngestionItemStatus;
-use deepref_integrations::{CROSSREF_BASE, CrossrefClient, OpenAlexClient, OpenAlexError};
+use deepref_integrations::{
+    CROSSREF_BASE, CrossrefClient, DATACITE_BASE, DataCiteClient, OpenAlexClient, OpenAlexError,
+};
 
 /// The metadata adapters one worker process shares. The OpenAlex client is built
 /// once at boot, because its key state and daily list budget belong to the process.
@@ -14,17 +16,20 @@ use deepref_integrations::{CROSSREF_BASE, CrossrefClient, OpenAlexClient, OpenAl
 pub struct MetadataClients {
     /// Where Crossref requests go. The public API unless a test points it at a mock.
     pub crossref_base_url: String,
+    /// Where DataCite requests go. The public API unless a test points it at a mock.
+    pub datacite_base_url: String,
     /// `None` without a contact e-mail, which leaves the OpenAlex lane unavailable,
     /// as it does for Crossref.
     pub openalex: Option<OpenAlexClient>,
 }
 
 impl Default for MetadataClients {
-    /// Crossref at the public API and no OpenAlex, which is the process without a contact
-    /// e-mail. Workflow steps that never reach the DOI lane take this.
+    /// Crossref and DataCite at the public APIs and no OpenAlex, which is the process
+    /// without a contact e-mail. Workflow steps that never reach the DOI lane take this.
     fn default() -> Self {
         Self {
             crossref_base_url: CROSSREF_BASE.to_owned(),
+            datacite_base_url: DATACITE_BASE.to_owned(),
             openalex: None,
         }
     }
@@ -40,6 +45,7 @@ impl MetadataClients {
         };
         Ok(Self {
             crossref_base_url: CROSSREF_BASE.to_owned(),
+            datacite_base_url: DATACITE_BASE.to_owned(),
             openalex,
         })
     }
@@ -56,7 +62,10 @@ pub fn router(
 ) -> anyhow::Result<ProviderRouter> {
     let crossref = CrossrefClient::for_base_url(&clients.crossref_base_url, integrations)?
         .with_max_attempts(retry_attempts);
-    let mut adapters: Vec<Box<dyn WorkProvider>> = vec![Box::new(crossref)];
+    let datacite =
+        DataCiteClient::with_base_url(&clients.datacite_base_url, &integrations.contact_email)?
+            .with_max_attempts(retry_attempts);
+    let mut adapters: Vec<Box<dyn WorkProvider>> = vec![Box::new(crossref), Box::new(datacite)];
     if let Some(openalex) = &clients.openalex {
         adapters.push(Box::new(openalex.clone().with_max_attempts(retry_attempts)));
     }
@@ -193,7 +202,7 @@ mod tests {
     }
 
     #[test]
-    fn a_configured_contact_email_registers_both_adapters_in_deployment_order() {
+    fn a_configured_contact_email_registers_every_adapter_in_deployment_order() {
         let integrations = IntegrationsConfig {
             contact_email: "ops@example.org".to_owned(),
             ..IntegrationsConfig::default()
@@ -202,7 +211,11 @@ mod tests {
             router(&integrations, &clients(&integrations), 5).expect("the lane should build");
         assert_eq!(
             router.enabled(),
-            [ProviderKind::OpenAlex, ProviderKind::Crossref]
+            [
+                ProviderKind::OpenAlex,
+                ProviderKind::Crossref,
+                ProviderKind::DataCite
+            ]
         );
     }
 

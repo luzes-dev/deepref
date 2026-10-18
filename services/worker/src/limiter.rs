@@ -1,6 +1,6 @@
 use deepref_application::{PermitError, ProviderFuture, ProviderPermit};
 use deepref_domain::ProviderKind;
-use deepref_integrations::OpenAlexClient;
+use deepref_integrations::{DATACITE_RATE_PER_SECOND, OpenAlexClient};
 use sqlx::PgPool;
 
 /// Reserves a provider permit through the PostgreSQL adapter. The returned wait
@@ -48,8 +48,8 @@ impl ProviderPermit for ProviderLimiter<'_> {
 }
 
 /// The per-second rate for `provider`. OpenAlex reads its rate from the client on each
-/// permit, so a downgrade to keyless lowers it for every later request. DataCite has no
-/// adapter in this build, so it has no rate.
+/// permit, so a downgrade to keyless lowers it for every later request. DataCite's rate
+/// is fixed by its service limits.
 fn provider_rate(
     provider: ProviderKind,
     crossref_rate_per_second: u32,
@@ -60,7 +60,7 @@ fn provider_rate(
         ProviderKind::OpenAlex => openalex
             .map(OpenAlexClient::rate_per_second)
             .ok_or_else(|| no_rate(provider)),
-        ProviderKind::DataCite => Err(no_rate(provider)),
+        ProviderKind::DataCite => Ok(DATACITE_RATE_PER_SECOND),
     }
 }
 
@@ -101,9 +101,12 @@ mod tests {
     }
 
     #[test]
-    fn crossref_keeps_the_configured_rate_and_the_others_have_none() {
+    fn crossref_keeps_the_configured_rate_datacite_its_fixed_one_and_openalex_needs_a_client() {
         assert_eq!(provider_rate(ProviderKind::Crossref, 4, None), Ok(4));
+        assert_eq!(
+            provider_rate(ProviderKind::DataCite, 4, None),
+            Ok(DATACITE_RATE_PER_SECOND)
+        );
         assert!(provider_rate(ProviderKind::OpenAlex, 4, None).is_err());
-        assert!(provider_rate(ProviderKind::DataCite, 4, None).is_err());
     }
 }
