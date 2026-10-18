@@ -287,6 +287,9 @@ mod tests {
     /// relations are all URLs.
     const DATASET: &str =
         include_str!("../tests/fixtures/datacite/zenodo_dataset_url_relations.json");
+    /// A real Zenodo preprint from the list endpoint. It cites one DOI and is cited by one.
+    const PREPRINT_DOI: &str = "10.5281/zenodo.20320323";
+    const PREPRINT: &str = include_str!("../tests/fixtures/datacite/zenodo_preprint_cites.json");
     const ABSTRACT_START: &str =
         "Yatomi City (Aichi Prefecture, Japan) operates a demand-responsive transport service";
 
@@ -462,7 +465,26 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn references_and_cites_become_references_and_incoming_relations_stay_in_raw() {
+    async fn cites_become_references_and_is_cited_by_stays_in_raw_on_a_second_record() {
+        let (base, _) = scripted_server(vec![reply("200 OK", PREPRINT)]).await;
+
+        let fetched = fetch(&client(base, 1), PREPRINT_DOI, &RecordingPermit::default())
+            .await
+            .expect("datacite should answer");
+
+        assert_eq!(reference_dois(&fetched), ["10.5281/zenodo.20399676"]);
+        assert_eq!(
+            fetched.work.raw["deepref_datacite_incoming"],
+            json!([{ "doi": "10.5281/zenodo.20412507", "relationType": "IsCitedBy" }])
+        );
+        assert!(
+            !reference_dois(&fetched).contains(&"10.5281/zenodo.20412507"),
+            "IsCitedBy names a citing work, never a reference"
+        );
+    }
+
+    #[tokio::test]
+    async fn references_become_references_and_incoming_relations_stay_in_raw() {
         let (base, _) = scripted_server(vec![reply("200 OK", SOFTWARE)]).await;
 
         let fetched = fetch(&client(base, 1), SOFTWARE_DOI, &RecordingPermit::default())
