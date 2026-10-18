@@ -1,0 +1,105 @@
+{
+  "data": {
+    "id": "10.5281/zenodo.22821143",
+    "type": "dois",
+    "attributes": {
+      "doi": "10.5281/zenodo.22821143",
+      "creators": [
+        {
+          "name": "Moteki, Yasutoshi",
+          "nameType": "Personal",
+          "givenName": "Yasutoshi",
+          "familyName": "Moteki",
+          "affiliation": [
+            "Nanzan University"
+          ],
+          "nameIdentifiers": [
+            {
+              "nameIdentifier": "0000-0001-7763-670X",
+              "nameIdentifierScheme": "ORCID"
+            }
+          ]
+        }
+      ],
+      "titles": [
+        {
+          "title": "Building a GTFS-Flex Feed from Published Stop Coordinates: Demand Responsive Transport in Yatomi City, Aichi, Japan"
+        }
+      ],
+      "publisher": "Zenodo",
+      "container": {},
+      "publicationYear": 2026,
+      "subjects": [
+        {
+          "subject": "GTFS-Flex"
+        },
+        {
+          "subject": "demand-responsive transport"
+        },
+        {
+          "subject": "DRT"
+        },
+        {
+          "subject": "open data"
+        },
+        {
+          "subject": "public transport"
+        },
+        {
+          "subject": "KML"
+        }
+      ],
+      "types": {
+        "ris": "COMP",
+        "bibtex": "misc",
+        "citeproc": "article",
+        "schemaOrg": "SoftwareSourceCode",
+        "resourceType": "",
+        "resourceTypeGeneral": "Software"
+      },
+      "relatedIdentifiers": [
+        {
+          "relationType": "References",
+          "relatedIdentifier": "10.5281/zenodo.22608420",
+          "resourceTypeGeneral": "Software",
+          "relatedIdentifierType": "DOI"
+        },
+        {
+          "relationType": "IsSupplementTo",
+          "relatedIdentifier": "10.2139/ssrn.7511579",
+          "resourceTypeGeneral": "Preprint",
+          "relatedIdentifierType": "DOI"
+        },
+        {
+          "relationType": "IsReferencedBy",
+          "relatedIdentifier": "10.5281/zenodo.23442879",
+          "resourceTypeGeneral": "Software",
+          "relatedIdentifierType": "DOI"
+        },
+        {
+          "relationType": "IsVersionOf",
+          "relatedIdentifier": "10.5281/zenodo.22699096",
+          "relatedIdentifierType": "DOI"
+        }
+      ],
+      "rightsList": [
+        {
+          "rights": "MIT License",
+          "rightsUri": "https://opensource.org/licenses/MIT",
+          "schemeUri": "https://spdx.org/licenses/",
+          "rightsIdentifier": "mit",
+          "rightsIdentifierScheme": "SPDX"
+        }
+      ],
+      "descriptions": [
+        {
+          "description": "Yatomi City (Aichi Prefecture, Japan) operates a demand-responsive transport service, Choisoko Yatomi, for which no GTFS feed is published. This record contains a GTFS-Flex feed for that service built from the city's published materials — its web pages, the service leaflet and its stop-location map — together with the R scripts that produced it and a Shiny application that searches trips between two stops.\n\nThe city publishes its stop locations as a Google My Maps layer with coordinates and attributes, so the feed is produced by converting that layer with build_stops.R; no georeferencing is involved. The service parameters — Monday to Saturday, 08:00–18:00, closures on Sundays, national holidays and the year-end period, bookings from two weeks ahead up to 30 minutes before the ride by phone or online — are taken from the city's page and leaflet and set at the top of build_feed.R. The feed covers the 107 public-facility and business stops; residential stops are not written to the feed, and fares, membership and vehicle transfers between operating areas are not encoded. It passes the Canonical GTFS Schedule Validator 8.0.1 with no errors and is recognized as fixed-stops demand-responsive transit. The validator output is deposited unmodified, in both JSON and HTML form.\n\nThis record is a companion to the Fuso Town feed (doi:10.5281/zenodo.22608420), where the same GTFS-Flex structure is reconstructed from a printed map. The application reads any GTFS-Flex feed with this file structure: the Yatomi feed is loaded at startup, the Fuso Town feed can be selected, and other feeds can be read by uploading a zip. Version 1.1 adds an English interface alongside the Japanese one. The deposited screenshot shows the application reading the published GTFS-Flex feed of Verkehrsverbund Berlin-Brandenburg.\n\nA zone-based feed for Tamana City, Kumamoto, composed from school districts, is at doi:10.5281/zenodo.23442879. The latest version of the application, which also reads zone-based feeds, is deposited there.\n\nLive demo: https://moteki.shinyapps.io/yatomi_flex/\n\nThis feed was created independently by the author from published information. It is offered as a demonstration that a demand-responsive service can be represented in GTFS-Flex from public sources, and as a template for municipalities that publish stop coordinates.\n\nInquiries about this feed should be directed to the author of this repository. Inquiries about the service itself should be directed to the city.\n\nRunning the application. The application reads the feed and returns an estimated departure and arrival window for a chosen pair of stops, together with the road route. gtfsflex_viewer3.zip contains the application with the files it reads. The same package hosted on the author's website can be launched directly from R:\n\n\n\n\n\n\n\n \n\n\n\n\nshiny::runUrl(\"https://policyevaluation.net/gtfsflex/gtfsflex_viewer3.zip\")\n\n\n\n\napp.R is also deposited on its own. The application requires the shiny, leaflet, dplyr, readr, httr, and jsonlite packages, and an internet connection for the OSRM routing endpoint set at the top of the script. Its interface is in Japanese, with an English option in the upper right of the page.\n\nA report describing this feed together with the Fuso feed is available at SSRN: https://doi.org/10.2139/ssrn.7511579\n\nGenerative AI declaration. The feed, the scripts, the application and this description were drafted and edited with Claude (Anthropic). The feed and the validation results were produced by running the code. The author has checked them and takes responsibility for the content.",
+          "descriptionType": "Abstract"
+        }
+      ],
+      "url": "https://zenodo.org/doi/10.5281/zenodo.22821143",
+      "referenceCount": 1,
+      "citationCount": 2
+    }
+  }
+}
