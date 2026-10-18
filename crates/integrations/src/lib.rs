@@ -22,7 +22,7 @@ pub use grobid::{
 pub use imports::{ImportParserAdapter, parse_import};
 pub use openalex::{
     KEYED_RATE_PER_SECOND, KEYLESS_RATE_PER_SECOND, OpenAlexClient, OpenAlexError, OpenAlexKey,
-    OpenAlexKeyState,
+    OpenAlexKeyState, raw_record_from_openalex_work,
 };
 pub use pubmed::{
     MAX_IDS_PER_FETCH, PubmedArticle, PubmedClient, PubmedError, REQUESTS_PER_SECOND,

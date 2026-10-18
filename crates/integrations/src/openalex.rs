@@ -10,10 +10,11 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::Duration;
 
 use deepref_application::{
-    FetchedWork, PermitError, ProviderFetchError, ProviderFuture, ProviderPermit, WorkProvider,
+    FetchedWork, PermitError, ProviderFetchError, ProviderFuture, ProviderPermit, RawAuthor,
+    RawIdentifier, RawRecord, WorkProvider,
 };
 use deepref_config::{IntegrationsConfig, OpenAlexCorpus};
-use deepref_domain::{ProviderKind, WorkWithReferences, normalize_doi};
+use deepref_domain::{IdentifierScheme, ProviderKind, WorkWithReferences, normalize_doi};
 use reqwest::{StatusCode, header};
 use serde_json::Value;
 use thiserror::Error;
@@ -359,6 +360,43 @@ impl WorkProvider for OpenAlexClient {
                 provider: ProviderKind::OpenAlex,
             })
         })
+    }
+}
+
+/// The import-path record for an OpenAlex work, mirroring
+/// `raw_record_from_crossref_work`. Authors come from `authorships` as literal names.
+/// An authorship without a display name is skipped.
+#[must_use]
+pub fn raw_record_from_openalex_work(work: WorkWithReferences) -> RawRecord {
+    let doi = work.work.doi.clone();
+    let authors = work
+        .raw
+        .get("authorships")
+        .and_then(Value::as_array)
+        .map(|authorships| {
+            authorships
+                .iter()
+                .filter_map(|authorship| {
+                    authorship
+                        .pointer("/author/display_name")
+                        .and_then(Value::as_str)
+                })
+                .map(RawAuthor::literal)
+                .collect()
+        })
+        .unwrap_or_default();
+    RawRecord {
+        source_identifiers: vec![RawIdentifier {
+            scheme: IdentifierScheme::Doi,
+            value: doi.clone(),
+            normalized_value: normalize_doi(&doi).unwrap_or(doi),
+        }],
+        title: work.work.title,
+        abstract_text: work.work.abstract_text,
+        authors,
+        publication_year: work.work.published_year.or(work.work.issued_year),
+        journal: work.work.container_title,
+        raw: work.raw,
     }
 }
 
@@ -1023,6 +1061,72 @@ mod tests {
 
         assert_eq!(state, OpenAlexKeyState::Keyed);
         assert_eq!(permit.taken(), vec![ProviderKind::OpenAlex]);
+    }
+
+    #[tokio::test]
+    async fn the_raw_record_carries_the_work_as_an_import_would() {
+        let (base, _) = scripted_server(vec![reply("200 OK", NO_REFERENCES)]).await;
+        let fetched = fetch(
+            &client(base, None, 1),
+            NO_REFERENCES_DOI,
+            &RecordingPermit::default(),
+        )
+        .await
+        .expect("openalex should answer");
+
+        let record = raw_record_from_openalex_work(fetched.work);
+
+        assert_eq!(record.source_identifiers.len(), 1);
+        assert_eq!(record.source_identifiers[0].scheme, IdentifierScheme::Doi);
+        assert_eq!(
+            record.source_identifiers[0].normalized_value,
+            NO_REFERENCES_DOI
+        );
+        assert_eq!(
+            record.authors,
+            vec![
+                RawAuthor::literal("Eduard C. Groen"),
+                RawAuthor::literal("Fabiano Dalpiaz"),
+            ]
+        );
+        assert_eq!(record.publication_year, Some(2025));
+        assert_eq!(
+            record.journal.as_deref(),
+            Some("Journal of Child Development, Exceptionality and Education")
+        );
+        assert!(record.abstract_text.is_some());
+    }
+
+    #[tokio::test]
+    async fn the_raw_record_keeps_orcids_in_the_raw_payload_and_skips_unnamed_authors() {
+        let (base, _) = scripted_server(vec![reply("200 OK", WORK)]).await;
+        let mut fetched = fetch(
+            &client(base, None, 1),
+            ABSTRACT_DOI,
+            &RecordingPermit::default(),
+        )
+        .await
+        .expect("openalex should answer");
+        let raw_orcid = fetched.work.raw["authorships"][0]["author"]["orcid"].clone();
+
+        let named = raw_record_from_openalex_work(fetched.work.clone());
+        assert_eq!(
+            named.authors,
+            vec![RawAuthor::literal("John P. A. Ioannidis")]
+        );
+        assert_eq!(
+            named.title.as_deref(),
+            Some("Why Most Published Research Findings Are False")
+        );
+        assert_eq!(named.publication_year, Some(2005));
+        assert_eq!(named.raw["authorships"][0]["author"]["orcid"], raw_orcid);
+
+        fetched.work.raw["authorships"] = serde_json::json!([
+            {"author": {"display_name": null, "orcid": null}},
+            {"author": {"display_name": "Ana Pereira"}}
+        ]);
+        let unnamed = raw_record_from_openalex_work(fetched.work);
+        assert_eq!(unnamed.authors, vec![RawAuthor::literal("Ana Pereira")]);
     }
 
     #[test]
