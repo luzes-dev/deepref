@@ -283,6 +283,9 @@ impl From<deepref_app::identity::IdentityStoreError> for ApiError {
             deepref_app::identity::IdentityStoreError::Corrupt(what) => {
                 Self::Internal(anyhow::anyhow!("stored user row is invalid: {what}"))
             }
+            deepref_app::identity::IdentityStoreError::Workspace(error) => {
+                Self::Internal(anyhow::anyhow!("onboarding failed: {error}"))
+            }
         }
     }
 }

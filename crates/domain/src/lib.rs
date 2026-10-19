@@ -14,6 +14,7 @@ pub mod protocol;
 mod provider;
 mod reference;
 mod work;
+pub mod workspace;
 
 pub use identity::{
     ExternalUserId, ExternalUserIdError, Principal, ServicePrincipal, SystemPrincipal,
@@ -24,6 +25,10 @@ pub use jobs::{InvalidJobKind, JobKind};
 pub use provider::{InvalidProviderKind, ProviderKind};
 pub use reference::Reference;
 pub use work::{FetchStatus, Work, WorkWithReferences};
+pub use workspace::{
+    ExternalOrganizationId, ExternalOrganizationIdError, GrantSource, MembershipStatus,
+    ProjectAccess, ProjectRole, WorkspaceKind, WorkspaceMembership, WorkspaceRole,
+};
 
 pub use acquisition::{AcquisitionRunId, AcquisitionSource, AcquisitionStatus, ImportFormat};
 pub use bibliography::{
@@ -78,6 +83,7 @@ typed_id!(ProjectId);
 typed_id!(ProtocolVersionId);
 typed_id!(ExclusionReasonId);
 typed_id!(UserId);
+typed_id!(WorkspaceId);
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Hash, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]

@@ -40,6 +40,7 @@ mod study;
 pub mod test_isolation;
 mod worker_runtime;
 mod workflows;
+pub mod workspaces;
 
 use sqlx::{
     PgPool,
@@ -220,6 +221,13 @@ pub use worker_runtime::{
     reserve_provider_permit,
 };
 pub use workflows::*;
+pub use workspaces::{
+    MIGRATION_WORKSPACE_ID, MembershipRecord, OrganizationSnapshot, ProjectAccessRecord,
+    ReconciliationReport, WorkspaceError, WorkspaceRecord, add_workspace_member,
+    apply_organization_snapshot, change_membership_role, change_project_access_role,
+    create_personal_workspace, delete_workspace, grant_project_access, reconcile_organizations,
+    remove_membership, rename_workspace, revoke_project_access, set_membership_status,
+};
 
 pub use ai_first::{
     AiFirstCohort, AiFirstError, AiFirstOverview, close_ai_first_cohort, draw_ai_first_audit,

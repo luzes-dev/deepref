@@ -19,6 +19,8 @@ pub enum IdentityStoreError {
     Database(#[from] sqlx::Error),
     #[error("stored user row is invalid: {0}")]
     Corrupt(&'static str),
+    #[error("onboarding the signed-in user failed")]
+    Workspace(#[from] crate::workspaces::WorkspaceError),
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -138,16 +140,24 @@ impl AuditEvent {
 }
 
 #[derive(Debug, Clone, Copy)]
-enum AuditPrincipal {
+pub(crate) enum AuditPrincipal {
     User(UserId),
     System,
 }
 
-async fn write_audit(
+/// Writes one administrative audit row. Every caller writes it in the same
+/// transaction as the change it records; `workspace_id` and `project_id` are
+/// the identifiers of the tenancy the change happened in (03a), and stay NULL
+/// for the identity events of 0085.
+#[allow(clippy::too_many_arguments)]
+pub(crate) async fn insert_admin_audit(
     tx: &mut Transaction<'_, Postgres>,
-    event: AuditEvent,
+    event_type: &str,
     principal: AuditPrincipal,
     target: Option<UserId>,
+    workspace_id: Option<Uuid>,
+    project_id: Option<Uuid>,
+    metadata: Value,
     audit: AuditRequest<'_>,
 ) -> Result<(), sqlx::Error> {
     let (kind, principal_user_id) = match principal {
@@ -157,20 +167,42 @@ async fn write_audit(
     sqlx::query(
         "INSERT INTO admin_audit_events
            (id, event_type, principal_kind, principal_user_id, target_user_id,
-            session_ref, request_id, metadata)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, $8)",
+            workspace_id, project_id, session_ref, request_id, metadata)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)",
     )
     .bind(Uuid::new_v4())
-    .bind(event.as_str())
+    .bind(event_type)
     .bind(kind)
     .bind(principal_user_id)
     .bind(target.map(UserId::as_uuid))
+    .bind(workspace_id)
+    .bind(project_id)
     .bind(audit.session_ref)
     .bind(audit.request_id)
-    .bind(event.metadata())
+    .bind(metadata)
     .execute(&mut **tx)
     .await?;
     Ok(())
+}
+
+async fn write_audit(
+    tx: &mut Transaction<'_, Postgres>,
+    event: AuditEvent,
+    principal: AuditPrincipal,
+    target: Option<UserId>,
+    audit: AuditRequest<'_>,
+) -> Result<(), sqlx::Error> {
+    insert_admin_audit(
+        tx,
+        event.as_str(),
+        principal,
+        target,
+        None,
+        None,
+        event.metadata(),
+        audit,
+    )
+    .await
 }
 
 const SELECT_BY_EXTERNAL_ID: &str = "SELECT id, workos_user_id, primary_email, display_name, status
@@ -247,6 +279,21 @@ pub async fn sign_in(
     if user.status != UserStatus::Active {
         tx.commit().await?;
         return Ok(SignIn::Deactivated);
+    }
+    if inserted {
+        // Onboarding (03a): the first sign-in creates one personal workspace
+        // with the user as owner, in this same transaction. A retried callback
+        // inserts no user (`inserted` is false), so it creates no second
+        // workspace; a user that existed before workspaces is onboarded by the
+        // staged migration instead.
+        crate::workspaces::create_personal_workspace(
+            &mut tx,
+            user.id,
+            profile.display_name.as_deref(),
+            &profile.email,
+            audit,
+        )
+        .await?;
     }
     sqlx::query(
         "INSERT INTO user_sessions

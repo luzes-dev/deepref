@@ -314,7 +314,11 @@ async fn audit_rows_hold_a_keyed_hash_and_no_secrets() {
             .fetch_all(&pool)
             .await
             .unwrap();
-    assert_eq!(rows.len(), 4, "provisioned, login, logout, session revoked");
+    assert_eq!(
+        rows.len(),
+        6,
+        "provisioned, personal workspace and owner membership, login, logout, session revoked"
+    );
     for row in &rows {
         for secret in [raw_session_id, "secret.person", "Secret Person", "user_A"] {
             assert!(!row.contains(secret), "audit row leaks {secret}: {row}");
@@ -430,8 +434,8 @@ async fn deactivation_is_compare_and_set_replay_safe_and_audited_once() {
             .await
             .unwrap();
     assert_eq!(
-        earlier_rows, 4,
-        "provisioned, login, session revoke and deactivation keep the UserId"
+        earlier_rows, 5,
+        "provisioned, personal membership, login, session revoke and deactivation keep the UserId"
     );
 }
 
