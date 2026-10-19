@@ -10,7 +10,7 @@ Read `00_PROGRAM.md`. Complete handoff 01 first. Part 04a proceeds alongside 02 
 
 PostgreSQL says what is true.
 
-Before 04b, an in-process dispatcher is the outbox recipient. It invokes typed handlers or enqueues durable jobs. A row is `delivered` only after the handler's durable effect has committed. Claiming or leasing a row never marks it delivered.
+Before 04b, an in-process dispatcher is the outbox recipient. It invokes typed handlers or enqueues durable jobs. A row is `delivered` only after every expected recipient's durable effect has committed. Claiming or leasing a row never marks it delivered.
 
 After 04b, JetStream carries messages but does not become authoritative state. Keep the outbox schema and rows; switch the publisher from the in-process dispatcher to the JetStream relay. A JetStream publish confirmation is recorded separately from handler delivery. A row is not `delivered` on claim or publish confirmation alone.
 
@@ -54,9 +54,25 @@ last_error
 
 Provide a persistence API to insert rows, claim a bounded batch atomically, renew or release leases, record retry state, and mark completion. Expired leases are reclaimable. Concurrent dispatchers must not hold the same active lease. Use PostgreSQL row locks or equivalent atomic selection.
 
-The in-process dispatcher invokes a typed handler or durably enqueues a job. A handler reports success only after its effect commits. If it enqueues a durable job, the committed enqueue is the effect for this outbox row; job execution has its own state and completion. Mark the row delivered after that commit, never on claim. Make handlers idempotent because a crash after effect commit but before delivery recording can cause redelivery.
+The in-process dispatcher invokes a typed handler or durably enqueues a job. A handler reports success only after its effect commits. If it enqueues a durable job, the committed enqueue is the effect for this outbox row; job execution has its own state and completion. Mark the row delivered only after every expected recipient's receipt commits, never on claim. Make handlers idempotent because a crash after effect commit but before the receipt commits can cause redelivery.
 
 Retry failures with backoff and preserve enough error state to diagnose them. Do not silently discard rows. Keep the same row contract for 04b: its JetStream relay claims these rows and records broker publication separately; do not add a second NATS-only outbox table.
+
+04a defines no scheduler. Publication retry backoff is not job scheduling: a delayed job's due time stays authoritative in 05's `DurableExecutionStore`, 05a's claim loop picks the job up when due, and 05b's due-time publisher writes the wakeup through these outbox rows when due.
+
+### Delivery completion with fan-out
+
+One message type may have more than one consumer. Model delivery per consumer, not per row.
+
+```text
+expected recipients   message type + version declares its consumer names
+per-consumer receipt  unique (event_id, consumer) row with state, attempts, next_attempt_at, last_error
+aggregate completion  the outbox row is `delivered` only when every expected recipient has a committed receipt
+```
+
+A consumer writes its receipt in the same transaction as its own effect or durable job enqueue, never on receipt of the message. A row with some but not all receipts stays pending for the missing recipients only: retries and backoff are tracked per recipient, and a consumer that already holds a receipt treats redelivery as a no-op.
+
+The expected recipient set is part of the message contract and is stable for a given message type and version. Adding, removing or renaming a consumer requires a new message version or an explicit backfill/replay decision; it never silently changes what `delivered` means for rows already committed.
 
 ### Integration inbox
 
@@ -146,6 +162,8 @@ Prefer stable IDs over copying entire aggregates. Consumers reload authoritative
 
 Use the same generic outbox rows and claim/lease API as 04a. The JetStream relay is a publisher adapter, not a second persistence model. Record successful JetStream publication in `published_at`; do not confuse broker confirmation with handler completion or mark a row delivered on publish alone.
 
+The ordinary publication loop selects rows with `published_at IS NULL`. Rows already published are excluded from ordinary publication retries even while per-consumer delivery is incomplete; a consumer that missed the message is repaired through explicit replay with the same stable event identity, not by republishing the row in the normal loop. Aggregate `delivered` completion still requires every expected recipient's receipt (see Delivery completion with fan-out): the relay records publication, not delivery.
+
 Handle:
 
 ```text
@@ -172,7 +190,7 @@ NAK/retry on retryable failure
 terminal handling after retry policy
 ```
 
-Application handlers must not receive NATS message objects. A crash after effect commit but before ACK may redeliver; handlers must be idempotent.
+Application handlers must not receive NATS message objects. A crash after effect commit but before ACK may redeliver; handlers must be idempotent. Before ACK, the consumer commits its receipt with the effect (see Delivery completion with fan-out); redelivery after the receipt commits is the idempotent no-op case.
 
 ### Idempotency
 
@@ -225,7 +243,10 @@ Cover:
 outbox row commits with authoritative transaction; rollback removes it
 concurrent claims, lease expiry/reclaim, and retry backoff
 claim alone never marks a row delivered
-delivery is recorded only after the handler effect or durable enqueue commits
+delivery is recorded only after the recipient's effect or durable enqueue commits
+fan-out: one failing consumer does not re-run a consumer whose receipt committed
+the row is delivered only after every expected recipient receipt commits
+recipient set is fixed per message type and version; an unexpected consumer is not counted
 crash after effect commit safely replays through an idempotent handler
 invalid WorkOS/Polar signature creates no inbox row
 provider-scoped duplicate webhook and concurrent duplicate receipt
@@ -242,6 +263,8 @@ Cover:
 same outbox rows dispatch through the in-process publisher and JetStream adapter
 outbox row commits with authoritative transaction; rollback removes it
 duplicate publication and ambiguous publish timeout
+relay selection skips rows with `published_at` set; ordinary retries do not republish
+a late consumer is repaired by explicit replay with the same event identity
 duplicate delivery and idempotent handler effect
 NATS unavailable and relay restart
 two relay instances and lease recovery
@@ -255,6 +278,6 @@ Use integration tests with a real ephemeral NATS instance where feasible.
 
 ## Completion criterion
 
-04a is complete for launch when PostgreSQL durably accepts WorkOS and Polar events, safely dispatches committed outbox work without a broker, retries and quarantines failures, and reconciles provider state. Claims alone never count as delivery.
+04a is complete for launch when PostgreSQL durably accepts WorkOS and Polar events, safely dispatches committed outbox work without a broker, retries and quarantines failures, and reconciles provider state. Claims alone never count as delivery, and a row completes only after every expected recipient's receipt commits.
 
-04b is complete only after `T-NATS` fires and the ADR cites its evidence. The same outbox rows can then publish through JetStream without making NATS authoritative, losing messages across process crashes, or bypassing PostgreSQL transaction boundaries.
+04b is complete only after `T-NATS` fires and the ADR cites its evidence. The same outbox rows can then publish through JetStream without making NATS authoritative, losing messages across process crashes, bypassing PostgreSQL transaction boundaries, or republishing rows the relay already published.
