@@ -1,3 +1,4 @@
+-- phase: expand
 -- 05a: typed job scope and workload pools.
 --
 -- The jobs table gains a typed scope (project | workspace | platform) and a
@@ -9,19 +10,33 @@
 -- Scope columns are `{scope, project_id, workspace_id}` and the consistency
 -- CHECK pins them together. `workspace_id` is a typed tenant reference without
 -- a foreign key: the workspace tables arrive with 03a.
+--
+-- Rolling deploys (docs/saas-program/12_OPERATIONS_ACCEPTANCE.md, "Migrations
+-- and rolling deploys"): binaries N and N-1 share this schema in both
+-- directions, so this migration is expand-phase only. `workload_class` stays
+-- nullable because an N-1 enqueue inserts without it; the fill trigger below
+-- classifies those rows exactly like the N writers do. A later contract
+-- migration adds NOT NULL once no N-1 writer remains. N-1 workers claim with
+-- `project_id IS NOT NULL` and know nothing of pools, so workspace- and
+-- platform-scoped jobs created by N (whose `project_id` is NULL) are invisible
+-- to them and are served only by N workers, exactly as intended.
 
 ALTER TABLE jobs
   ADD COLUMN IF NOT EXISTS workload_class text,
   ADD COLUMN IF NOT EXISTS scope text NOT NULL DEFAULT 'project',
   ADD COLUMN IF NOT EXISTS workspace_id uuid;
 
--- Backfill the class every existing kind maps to (the same mapping as
--- `JobKind::workload_class` in crates/domain/src/jobs.rs; docs/architecture.md
--- carries the normative table). A kind outside that mapping cannot be
--- classified; it lands in the generic `workflow` pool so the row stays
--- claimable and fails visibly at dispatch instead of becoming invisible.
-UPDATE jobs
-SET workload_class = CASE kind
+-- One kind-to-class mapping shared by the backfill and the fill trigger below
+-- (the same mapping as `JobKind::workload_class` in crates/domain/src/jobs.rs;
+-- docs/architecture.md carries the normative table). A kind outside that
+-- mapping cannot be classified; it lands in the generic `workflow` pool so the
+-- row stays claimable and fails visibly at dispatch instead of becoming
+-- invisible.
+CREATE OR REPLACE FUNCTION jobs_workload_class_for_kind(kind text)
+RETURNS text
+LANGUAGE sql IMMUTABLE
+AS $$
+  SELECT CASE $1
     WHEN 'assistant_agent_run' THEN 'ai'
     WHEN 'retrieve_document' THEN 'documents'
     WHEN 'parse_document' THEN 'documents'
@@ -33,10 +48,37 @@ SET workload_class = CASE kind
     WHEN 'recompute_prisma' THEN 'projection'
     ELSE 'workflow'
   END
+$$;
+
+UPDATE jobs
+SET workload_class = jobs_workload_class_for_kind(kind)
 WHERE workload_class IS NULL;
 
-ALTER TABLE jobs
-  ALTER COLUMN workload_class SET NOT NULL;
+-- Fill `workload_class` from `kind` for every writer that omits it: N writers
+-- set it at enqueue, an N-1 (previous release) enqueue leaves it NULL and is
+-- classified here, so both binaries insert cleanly during the rollout
+-- overlap. `UPDATE OF kind` keeps a kind swap re-classified without firing on
+-- unrelated updates. NOT NULL is deferred to a later contract migration once
+-- no N-1 writer remains; the CHECK below therefore tolerates NULL, and this
+-- trigger is what guarantees non-null in practice.
+CREATE OR REPLACE FUNCTION jobs_fill_workload_class()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+BEGIN
+  IF NEW.workload_class IS NULL THEN
+    NEW.workload_class := jobs_workload_class_for_kind(NEW.kind);
+  END IF;
+  RETURN NEW;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS jobs_workload_class_fill ON jobs;
+CREATE TRIGGER jobs_workload_class_fill
+  BEFORE INSERT OR UPDATE OF kind ON jobs
+  FOR EACH ROW
+  WHEN (NEW.workload_class IS NULL)
+  EXECUTE FUNCTION jobs_fill_workload_class();
 
 ALTER TABLE jobs
   DROP CONSTRAINT IF EXISTS jobs_workload_class_check;

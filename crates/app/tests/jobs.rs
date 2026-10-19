@@ -9,7 +9,7 @@ use std::time::Duration;
 use anyhow::{Result, ensure};
 use deepref_app::{PostgresDurableExecutionStore, claim_jobs, job, recover_expired_jobs};
 use deepref_application::jobs::{ClaimedJob, DurableExecutionStore, EnqueueJob, JobRetry};
-use deepref_domain::ProjectId;
+use deepref_domain::{ProjectId, WorkloadClass};
 
 use sqlx::{PgPool, Row};
 use uuid::Uuid;
@@ -534,6 +534,113 @@ async fn an_invalid_persisted_kind_fails_visibly_without_discarding_the_job() ->
         ensure!(row.get::<i32, _>("attempts") == 1);
         Ok::<_, anyhow::Error>(())
     }.await;
+    cleanup(&pool, project_id).await?;
+    result
+}
+
+/// A rolling deploy runs the previous release's binary (N-1) against this
+/// schema. Its enqueue statement knows nothing of `workload_class` or `scope`;
+/// the insert must still succeed, the fill trigger classifies the row from its
+/// kind, and the N claim loop delivers it in the pool its kind maps to — and
+/// in no other pool.
+#[tokio::test]
+async fn a_previous_release_enqueue_still_classifies_into_the_right_pool() -> Result<()> {
+    let Some(pool) = database().await else {
+        return Ok(());
+    };
+    let project_id = fixture_project(&pool).await?;
+    let result = async {
+        // The N-1 `enqueue_job` verbatim: the exact column list and statement
+        // shape the previous release inserts with (git show
+        // d3d46a87:crates/app/src/jobs.rs), no workload_class and no scope.
+        let mut n1_jobs = Vec::new();
+        for (id, kind, expected_class, expected_workload) in [
+            (
+                Uuid::new_v4(),
+                "parse_document",
+                "documents",
+                WorkloadClass::Documents,
+            ),
+            (
+                Uuid::new_v4(),
+                "assistant_agent_run",
+                "ai",
+                WorkloadClass::Ai,
+            ),
+        ] {
+            let inserted: Uuid = sqlx::query_scalar(
+                r#"INSERT INTO jobs (id,project_id,kind,payload,priority,max_attempts,dedupe_key)
+                   VALUES ($1,$2,$3,$4,$5,$6,$7)
+                   ON CONFLICT (dedupe_key) DO UPDATE SET id = jobs.id
+                   RETURNING id"#,
+            )
+            .bind(id)
+            .bind(project_id.as_uuid())
+            .bind(kind)
+            .bind(serde_json::json!({"fixture_job_id": id}))
+            .bind(0i32)
+            .bind(5i32)
+            .bind(format!("n-1-enqueue:{id}"))
+            .fetch_one(&pool)
+            .await?;
+            ensure!(inserted == id, "the N-1 insert returns its canonical id");
+            n1_jobs.push((id, expected_workload));
+
+            // The fill trigger classifies the row from its kind, exactly as
+            // the N writer would have at enqueue.
+            let row = sqlx::query("SELECT workload_class,scope FROM jobs WHERE id=$1")
+                .bind(id)
+                .fetch_one(&pool)
+                .await?;
+            ensure!(row.get::<String, _>("workload_class") == expected_class);
+            ensure!(row.get::<String, _>("scope") == "project");
+            ensure!(expected_workload.as_str() == expected_class);
+        }
+
+        // The N claim loop picks each row up in the pool its kind maps to.
+        let documents = claim_jobs(
+            &pool,
+            "n-1-claim-owner",
+            Duration::from_secs(30),
+            &[WorkloadClass::Documents],
+            10,
+        )
+        .await?;
+        ensure!(
+            documents.len() == 1,
+            "only the documents job is in the pool"
+        );
+        ensure!(documents[0].id == n1_jobs[0].0);
+        ensure!(documents[0].kind == deepref_domain::JobKind::ParseDocument);
+        ensure!(documents[0].scope == deepref_application::jobs::JobScope::Project(project_id));
+
+        let ai = claim_jobs(
+            &pool,
+            "n-1-claim-owner",
+            Duration::from_secs(30),
+            &[WorkloadClass::Ai],
+            10,
+        )
+        .await?;
+        ensure!(ai.len() == 1, "only the ai job is in the pool");
+        ensure!(ai[0].id == n1_jobs[1].0);
+        ensure!(ai[0].kind == deepref_domain::JobKind::AssistantAgentRun);
+        ensure!(ai[0].scope == deepref_application::jobs::JobScope::Project(project_id));
+
+        // Pool isolation holds for N-1 rows: neither pool sees the other's
+        // work once its own claim drained it.
+        let remaining = claim_jobs(
+            &pool,
+            "n-1-claim-owner",
+            Duration::from_secs(30),
+            &[WorkloadClass::Workflow],
+            10,
+        )
+        .await?;
+        ensure!(remaining.is_empty(), "no N-1 row leaks into another pool");
+        Ok::<_, anyhow::Error>(())
+    }
+    .await;
     cleanup(&pool, project_id).await?;
     result
 }
