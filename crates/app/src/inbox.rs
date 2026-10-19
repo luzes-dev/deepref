@@ -17,8 +17,15 @@ use deepref_application::inbox::{
     InboxRegistry, InboxRetry, WebhookVerifier,
 };
 use deepref_application::outbox::retry_backoff;
+use futures::FutureExt;
 use serde_json::Value;
 use sqlx::{PgPool, Postgres, Transaction};
+use std::panic::AssertUnwindSafe;
+
+/// Maximum authenticated request body retained by the inbox: 256 KiB.
+pub const MAX_INBOX_PAYLOAD_BYTES: usize = 256 * 1024;
+/// Processed payloads are eligible for minimization 30 days after completion.
+pub const INBOX_PAYLOAD_RETENTION_DAYS: i32 = 30;
 
 /// One provider webhook delivery to admit into the inbox.
 #[derive(Debug, Clone)]
@@ -43,6 +50,8 @@ pub enum ReceiveOutcome {
 
 #[derive(Debug, thiserror::Error)]
 pub enum InboxReceiveError {
+    #[error("webhook body is {size} bytes; inbox limit is {limit} bytes")]
+    PayloadTooLarge { size: usize, limit: usize },
     #[error("webhook rejected before insert: {0}")]
     Signature(#[from] deepref_application::inbox::WebhookVerificationError),
     #[error("webhook body is not valid JSON: {0}")]
@@ -60,6 +69,12 @@ pub async fn receive_webhook_event(
     verifier: &dyn WebhookVerifier,
     event: &ReceiveWebhookEvent<'_>,
 ) -> Result<ReceiveOutcome, InboxReceiveError> {
+    if event.body.len() > MAX_INBOX_PAYLOAD_BYTES {
+        return Err(InboxReceiveError::PayloadTooLarge {
+            size: event.body.len(),
+            limit: MAX_INBOX_PAYLOAD_BYTES,
+        });
+    }
     verifier.verify(event.body, event.signature)?;
     let payload: Value = serde_json::from_slice(event.body)?;
     let mut tx: Transaction<'_, Postgres> = pool.begin().await?;
@@ -99,43 +114,98 @@ pub struct ClaimedInboxEvent {
     pub claim_fence: InboxClaimFence,
 }
 
-/// Atomically claim a bounded batch of due inbox rows: `received` and `failed`
-/// rows that are due, plus `processing` rows whose lease expired (the worker
-/// crashed mid-processing). The claim spends one processing attempt.
+/// Recover supported abandoned claims, then claim due work. Attempts are
+/// charged when a claim starts, so an expired attempt already spent its budget.
+/// Recovery fences that generation and persists backoff/quarantine before a
+/// subsequent claim can increment the attempt count again.
 pub async fn claim_inbox_batch(
     pool: &PgPool,
+    registry: &InboxRegistry,
     owner: &str,
     lease: std::time::Duration,
     limit: i64,
 ) -> anyhow::Result<Vec<ClaimedInboxEvent>> {
+    anyhow::ensure!(
+        !lease.is_zero() && limit > 0,
+        "claim lease and limit must be positive"
+    );
+    let (providers, types): (Vec<String>, Vec<String>) = registry
+        .contracts()
+        .map(|(provider, kind)| (provider.to_owned(), kind.to_owned()))
+        .unzip();
+    if providers.is_empty() {
+        return Ok(Vec::new());
+    }
+    let mut tx = pool.begin().await?;
+    let expired = sqlx::query!(
+        r#"SELECT id,attempts,max_attempts,claim_generation,lease_owner AS "lease_owner!"
+           FROM integration_inbox_events
+           WHERE processing_state='processing' AND lease_expires_at <= clock_timestamp()
+             AND (provider,event_type) IN (SELECT * FROM unnest($1::text[],$2::text[]))
+           ORDER BY lease_expires_at,id FOR UPDATE SKIP LOCKED LIMIT $3"#,
+        &providers,
+        &types,
+        limit,
+    )
+    .fetch_all(&mut *tx)
+    .await?;
+    for event in expired {
+        let exhausted = event.attempts >= event.max_attempts;
+        let state = if exhausted { "quarantined" } else { "failed" };
+        let reason = format!(
+            "abandoned inbox claim after lease expiry (generation {}){}",
+            event.claim_generation,
+            if exhausted {
+                "; attempt budget exhausted"
+            } else {
+                ""
+            }
+        );
+        let quarantine_reason = exhausted.then_some(reason.as_str());
+        let delay_ms = retry_backoff(event.attempts).as_millis() as f64;
+        sqlx::query!(
+            r#"UPDATE integration_inbox_events
+               SET processing_state=$4,last_error=$5,quarantine_reason=$6,
+                 next_attempt_at=clock_timestamp()+($7::double precision*interval '1 millisecond'),
+                 lease_owner=NULL,lease_expires_at=NULL,claim_generation=claim_generation+1
+               WHERE id=$1 AND lease_owner=$2 AND claim_generation=$3
+                 AND processing_state='processing' AND lease_expires_at <= clock_timestamp()"#,
+            event.id,
+            event.lease_owner,
+            event.claim_generation,
+            state,
+            reason,
+            quarantine_reason,
+            delay_ms,
+        )
+        .execute(&mut *tx)
+        .await?;
+    }
     let lease_ms = lease.as_millis() as f64;
     let rows = sqlx::query!(
         r#"WITH candidate AS (
-             SELECT id
-             FROM integration_inbox_events
-             WHERE next_attempt_at <= now()
-               AND (processing_state IN ('received', 'failed')
-                 OR (processing_state = 'processing' AND lease_expires_at < clock_timestamp()))
-             ORDER BY received_at
-             FOR UPDATE SKIP LOCKED
-             LIMIT $3
+             SELECT id FROM integration_inbox_events
+             WHERE next_attempt_at <= clock_timestamp()
+               AND processing_state IN ('received','failed') AND lease_owner IS NULL
+               AND (provider,event_type) IN (SELECT * FROM unnest($4::text[],$5::text[]))
+             ORDER BY received_at,id FOR UPDATE SKIP LOCKED LIMIT $3
            )
            UPDATE integration_inbox_events i
-           SET processing_state = 'processing',
-               lease_owner = $1,
-               lease_expires_at = clock_timestamp() + ($2::double precision * interval '1 millisecond'),
-               attempts = i.attempts + 1,
-               claim_generation = i.claim_generation + 1
-           FROM candidate
-           WHERE i.id = candidate.id
-           RETURNING i.id, i.provider, i.provider_event_id, i.event_type, i.payload,
-                     i.attempts, i.max_attempts, i.claim_generation"#,
+           SET processing_state='processing',lease_owner=$1,
+               lease_expires_at=clock_timestamp()+($2::double precision*interval '1 millisecond'),
+               attempts=i.attempts+1,claim_generation=i.claim_generation+1
+           FROM candidate WHERE i.id=candidate.id
+           RETURNING i.id,i.provider,i.provider_event_id,i.event_type,i.payload AS "payload!",
+                     i.attempts,i.max_attempts,i.claim_generation"#,
         owner,
         lease_ms,
         limit,
+        &providers,
+        &types,
     )
-    .fetch_all(pool)
+    .fetch_all(&mut *tx)
     .await?;
+    tx.commit().await?;
     Ok(rows
         .into_iter()
         .map(|row| ClaimedInboxEvent {
@@ -149,6 +219,20 @@ pub async fn claim_inbox_batch(
             claim_fence: InboxClaimFence::new(owner, row.claim_generation),
         })
         .collect())
+}
+
+/// Park a directly supplied unsupported claim. Normal claims filter it out.
+pub async fn release_inbox_lease(
+    pool: &PgPool,
+    id: i64,
+    fence: &InboxClaimFence,
+) -> anyhow::Result<bool> {
+    Ok(sqlx::query!(
+        r#"UPDATE integration_inbox_events SET processing_state='received',lease_owner=NULL,lease_expires_at=NULL
+           WHERE id=$1 AND lease_owner=$2 AND claim_generation=$3
+             AND processing_state='processing' AND lease_expires_at > clock_timestamp()"#,
+        id, fence.owner(), fence.generation(),
+    ).execute(pool).await?.rows_affected() == 1)
 }
 
 /// Extend an inbox claim while its generation is still current and unexpired.
@@ -225,6 +309,7 @@ pub async fn complete_inbox_event_in_transaction(
     let updated = sqlx::query!(
         r#"UPDATE integration_inbox_events
            SET processing_state = 'processed', processed_at = now(),
+               payload_expires_at = clock_timestamp() + make_interval(days => $4),
                lease_owner = NULL, lease_expires_at = NULL, next_attempt_at = now()
            WHERE id = $1 AND lease_owner = $2 AND claim_generation = $3
              AND processing_state = 'processing' AND lease_expires_at > clock_timestamp()
@@ -232,6 +317,7 @@ pub async fn complete_inbox_event_in_transaction(
         context.inbox_id,
         context.claim_fence.owner(),
         context.claim_fence.generation(),
+        INBOX_PAYLOAD_RETENTION_DAYS,
     )
     .fetch_optional(&mut **tx)
     .await?;
@@ -311,6 +397,28 @@ pub async fn requeue_inbox_event(pool: &PgPool, id: i64) -> anyhow::Result<bool>
         == 1)
 }
 
+/// Minimize a bounded batch of expired processed payloads. This is an explicit
+/// maintenance operation, not a scheduler. Provider/event identity and processing
+/// evidence remain, so a late duplicate is still acknowledged without replay.
+pub async fn purge_processed_inbox_payloads(pool: &PgPool, limit: i64) -> anyhow::Result<u64> {
+    anyhow::ensure!(limit > 0, "payload purge limit must be positive");
+    Ok(sqlx::query!(
+        r#"WITH expired AS (
+             SELECT id FROM integration_inbox_events
+             WHERE processing_state='processed' AND payload IS NOT NULL
+               AND payload_expires_at <= clock_timestamp()
+             ORDER BY payload_expires_at,id FOR UPDATE SKIP LOCKED LIMIT $1
+           )
+           UPDATE integration_inbox_events i
+           SET payload=NULL,payload_purged_at=clock_timestamp()
+           FROM expired WHERE i.id=expired.id"#,
+        limit,
+    )
+    .execute(pool)
+    .await?
+    .rows_affected())
+}
+
 /// Current processing state and failure bookkeeping of one inbox row.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct InboxEventRecord {
@@ -363,7 +471,7 @@ pub async fn process_inbox_batch(
     lease: std::time::Duration,
     limit: i64,
 ) -> anyhow::Result<usize> {
-    let claimed = claim_inbox_batch(pool, owner, lease, limit).await?;
+    let claimed = claim_inbox_batch(pool, registry, owner, lease, limit).await?;
     let count = claimed.len();
     for event in &claimed {
         process_inbox_event(pool, registry, lease, event).await?;
@@ -372,9 +480,8 @@ pub async fn process_inbox_batch(
 }
 
 /// Process one claimed inbox row. An event type no handler is registered for
-/// is quarantined terminally — visible for review and replay, never silently
-/// discarded. Handlers must be idempotent and order-safe: duplicate and
-/// out-of-order provider delivery is normal.
+/// stays pending for a compatible deployment. Handlers must be idempotent and
+/// order-safe: duplicate and out-of-order provider delivery is normal.
 pub async fn process_inbox_event(
     pool: &PgPool,
     registry: &InboxRegistry,
@@ -383,17 +490,7 @@ pub async fn process_inbox_event(
 ) -> anyhow::Result<()> {
     let event_type = event.event_type.clone().unwrap_or_default();
     let Some(handler) = registry.handler(&event.provider, &event_type) else {
-        fail_inbox_event(
-            pool,
-            event.id,
-            &event.claim_fence,
-            &format!(
-                "no handler registered for {}/{event_type}; quarantined terminally",
-                event.provider
-            ),
-            InboxRetry::Terminal,
-        )
-        .await?;
+        release_inbox_lease(pool, event.id, &event.claim_fence).await?;
         return Ok(());
     };
     let context = InboxContext {
@@ -403,10 +500,13 @@ pub async fn process_inbox_event(
         event_type,
         claim_fence: event.claim_fence.clone(),
     };
-    if !renew_inbox_lease(pool, event.id, &event.claim_fence, lease).await? {
-        return Ok(());
-    }
-    match invoke_handler(handler, context.clone(), event.payload.clone()).await {
+    match crate::leased_handler::run(
+        lease,
+        || renew_inbox_lease(pool, event.id, &event.claim_fence, lease),
+        invoke_handler(handler, context.clone(), event.payload.clone()),
+    )
+    .await?
+    {
         Ok(()) => {
             if !complete_inbox_event(pool, &context).await? {
                 tracing::warn!(
@@ -455,31 +555,22 @@ pub async fn process_inbox_event(
     Ok(())
 }
 
-/// Run a handler on its own task so a panic becomes this event's failure
-/// instead of tearing down the processor.
+/// Inline ownership lets processor cancellation drop a handler's transaction;
+/// panic isolation does not create a detached child task.
 async fn invoke_handler(
     handler: &ErasedInboxHandler,
     context: InboxContext,
     payload: Value,
 ) -> Result<(), InboxHandlerError> {
-    let work = handler(context.clone(), payload);
-    match tokio::spawn(work).await {
+    let event_id = context.provider_event_id.clone();
+    match AssertUnwindSafe(async move { handler(context, payload).await })
+        .catch_unwind()
+        .await
+    {
         Ok(result) => result,
-        Err(error) if error.is_panic() => {
-            let panic = error.into_panic();
-            let message = panic
-                .downcast_ref::<&str>()
-                .map(|message| (*message).to_owned())
-                .or_else(|| panic.downcast_ref::<String>().cloned())
-                .unwrap_or_else(|| "non-string panic payload".to_owned());
-            Err(InboxHandlerError::Transient(format!(
-                "handler for {} panicked: {message}",
-                context.provider_event_id
-            )))
-        }
-        Err(error) => Err(InboxHandlerError::Transient(format!(
-            "handler for {} was cancelled: {error}",
-            context.provider_event_id
+        Err(panic) => Err(InboxHandlerError::Transient(format!(
+            "handler for {event_id} panicked: {}",
+            crate::leased_handler::panic_message(panic)
         ))),
     }
 }

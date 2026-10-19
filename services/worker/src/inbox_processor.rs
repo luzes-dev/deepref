@@ -12,7 +12,7 @@ use std::{future::Future, sync::Arc, time::Duration};
 use deepref_app::inbox::{ClaimedInboxEvent, process_inbox_event};
 use deepref_application::inbox::InboxRegistry;
 use sqlx::PgPool;
-use tokio::task::JoinSet;
+use tokio::{task::JoinSet, time::Instant};
 use tracing::Instrument;
 
 /// Settings of the inbox processing loop, separate from process wiring.
@@ -30,6 +30,12 @@ pub struct InboxProcessorConfig {
     pub drain_deadline: Duration,
 }
 
+/// Counters remain available to the process supervisor and integration tests.
+#[derive(Debug, Clone, Copy, Default)]
+pub struct InboxProcessorReport {
+    pub claim_errors: u64,
+}
+
 /// Process admitted provider events until `shutdown` resolves, then drain
 /// in-flight events within the configured deadline.
 pub async fn run(
@@ -38,12 +44,19 @@ pub async fn run(
     owner: String,
     config: InboxProcessorConfig,
     shutdown: impl Future<Output = ()> + Send,
-) -> anyhow::Result<()> {
+) -> anyhow::Result<InboxProcessorReport> {
+    anyhow::ensure!(
+        config.batch > 0
+            && config.concurrency > 0
+            && !config.poll_interval.is_zero()
+            && !config.claim_lease.is_zero(),
+        "processor limits must be positive"
+    );
     let mut active = JoinSet::new();
     let mut shutdown = Box::pin(shutdown);
-    let mut loop_error = None;
-    let mut tick = tokio::time::interval(config.poll_interval);
-    tick.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+    let mut report = InboxProcessorReport::default();
+    let mut consecutive_claim_errors: u32 = 0;
+    let mut next_claim = Instant::now();
 
     loop {
         tokio::select! {
@@ -55,19 +68,24 @@ pub async fn run(
                 match joined {
                     Ok(Ok(())) => {}
                     Ok(Err(error)) => {
-                        loop_error = Some(error);
-                        break;
+                        tracing::error!(%error, "inbox processor event failed; its lease will be recovered");
                     }
                     Err(error) => {
                         tracing::error!(%error, "inbox event task ended abnormally; its lease will be recovered");
                     }
                 }
             }
-            _ = tick.tick(), if active.len() < config.concurrency => {
+            _ = tokio::time::sleep_until(next_claim), if active.len() < config.concurrency => {
                 let free = (config.concurrency - active.len()) as i64;
                 let limit = config.batch.min(free.max(1));
-                match deepref_app::inbox::claim_inbox_batch(&pool, &owner, config.claim_lease, limit).await {
+                let claimed = tokio::select! {
+                    _ = &mut shutdown => break,
+                    result = deepref_app::inbox::claim_inbox_batch(&pool, &registry, &owner, config.claim_lease, limit) => result,
+                };
+                match claimed {
                     Ok(claimed) => {
+                        consecutive_claim_errors = 0;
+                        next_claim = Instant::now() + config.poll_interval;
                         for event in claimed {
                             let pool = pool.clone();
                             let registry = Arc::clone(&registry);
@@ -86,8 +104,14 @@ pub async fn run(
                         }
                     }
                     Err(error) => {
-                        loop_error = Some(error);
-                        break;
+                        report.claim_errors = report.claim_errors.saturating_add(1);
+                        consecutive_claim_errors = consecutive_claim_errors.saturating_add(1);
+                        let delay = Duration::from_millis(100)
+                            .saturating_mul(2u32.saturating_pow(consecutive_claim_errors.saturating_sub(1).min(6)))
+                            .min(Duration::from_secs(5));
+                        next_claim = Instant::now() + delay;
+                        tracing::warn!(%error, claim_errors=report.claim_errors, consecutive_claim_errors,
+                            retry_after_ms=delay.as_millis(), "inbox processor claim failed; retrying");
                     }
                 }
             }
@@ -97,7 +121,8 @@ pub async fn run(
     let drained = tokio::time::timeout(config.drain_deadline, async {
         while let Some(result) = active.join_next().await {
             match result {
-                Ok(result) => result?,
+                Ok(Err(error)) => tracing::warn!(%error, "inbox processor event failed during drain"),
+                Ok(Ok(())) => {},
                 Err(error) => {
                     tracing::error!(%error, "inbox event task ended abnormally during drain; its lease will be recovered");
                 }
@@ -106,14 +131,14 @@ pub async fn run(
         Ok::<(), anyhow::Error>(())
     })
     .await;
-    match drained {
-        Ok(result) => result?,
-        Err(_) => anyhow::bail!("inbox processor drain deadline exceeded"),
+    if drained.is_err() {
+        // JoinSet owns the actual handler futures. Aborting and awaiting every
+        // event drops transactions and locks before this processor returns.
+        active.abort_all();
+        while active.join_next().await.is_some() {}
+        anyhow::bail!("inbox processor drain deadline exceeded");
     }
-    if let Some(error) = loop_error {
-        return Err(error);
-    }
-    Ok(())
+    Ok(report)
 }
 
 /// One claimed inbox event on its own task: a failure is durable inbox state

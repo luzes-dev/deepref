@@ -22,6 +22,7 @@ mod extraction;
 mod graph;
 pub mod inbox;
 mod jobs;
+mod leased_handler;
 mod notifications;
 pub mod outbox;
 mod persistence;
@@ -155,8 +156,7 @@ pub use extraction::{
     list_field_definitions, list_values, record_manual_value, update_field_definition,
 };
 pub use graph::{
-    MAX_GRAPH_NODES, enqueue_metrics_recompute, enqueue_metrics_recompute_with_context,
-    load_project_graph, recompute_project_metrics,
+    MAX_GRAPH_NODES, enqueue_metrics_recompute, load_project_graph, recompute_project_metrics,
 };
 pub use jobs::{
     PostgresJobQueue, claim_job, complete_job, enqueue_job, enqueue_job_pool, fail_job, job,

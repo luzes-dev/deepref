@@ -73,6 +73,10 @@ fn registry_with(provider: &str, event_type: &str, behavior: Arc<Behavior>) -> I
     registry
 }
 
+fn claim_registry() -> InboxRegistry {
+    registry_with("workos", "user.created", Arc::new(Behavior::default()))
+}
+
 /// One signed provider delivery, owning its body and signature.
 struct SignedDelivery {
     event_id: String,
@@ -337,7 +341,7 @@ async fn processing_retries_with_backoff_then_quarantines_and_can_be_replayed() 
 }
 
 #[tokio::test]
-async fn an_unhandled_event_type_is_quarantined_terminally() -> Result<()> {
+async fn an_unhandled_event_type_stays_received() -> Result<()> {
     let Some(pool) = database().await else {
         return Ok(());
     };
@@ -348,11 +352,9 @@ async fn an_unhandled_event_type_is_quarantined_terminally() -> Result<()> {
 
     process_inbox_batch(&pool, &registry, "inbox-owner", Duration::from_secs(30), 8).await?;
     let record = get_inbox_event(&pool, id).await?.expect("inbox row");
-    assert_eq!(record.processing_state, InboxProcessingState::Quarantined);
-    let reason = record
-        .quarantine_reason
-        .expect("quarantine reason preserved");
-    assert!(reason.contains("no handler registered"), "got: {reason}");
+    assert_eq!(record.processing_state, InboxProcessingState::Received);
+    assert_eq!(record.attempts, 0);
+    assert!(record.quarantine_reason.is_none());
     Ok(())
 }
 
@@ -365,17 +367,50 @@ async fn an_expired_processing_lease_is_reclaimed() -> Result<()> {
     let delivery = SignedDelivery::new("evt_lease", "user.created", br#"{"id":"evt_lease"}"#);
     let id = accepted_id(&pool, &verifier, &delivery).await;
 
-    let claimed = claim_inbox_batch(&pool, "owner-a", Duration::from_secs(2), 8).await?;
+    let claimed = claim_inbox_batch(
+        &pool,
+        &claim_registry(),
+        "owner-a",
+        Duration::from_secs(2),
+        8,
+    )
+    .await?;
     assert_eq!(claimed.len(), 1);
     assert_eq!(claimed[0].attempts, 1);
     let record = get_inbox_event(&pool, id).await?.expect("inbox row");
     assert_eq!(record.processing_state, InboxProcessingState::Processing);
 
-    let second = claim_inbox_batch(&pool, "owner-b", Duration::from_secs(30), 8).await?;
+    let second = claim_inbox_batch(
+        &pool,
+        &claim_registry(),
+        "owner-b",
+        Duration::from_secs(30),
+        8,
+    )
+    .await?;
     assert!(second.is_empty(), "an active lease is exclusive");
 
     tokio::time::sleep(Duration::from_millis(2300)).await;
-    let reclaimed = claim_inbox_batch(&pool, "owner-b", Duration::from_secs(30), 8).await?;
+    assert!(
+        claim_inbox_batch(
+            &pool,
+            &claim_registry(),
+            "recovery",
+            Duration::from_secs(30),
+            8
+        )
+        .await?
+        .is_empty()
+    );
+    force_due(&pool, id).await;
+    let reclaimed = claim_inbox_batch(
+        &pool,
+        &claim_registry(),
+        "owner-b",
+        Duration::from_secs(30),
+        8,
+    )
+    .await?;
     assert_eq!(reclaimed.len(), 1, "the expired lease is reclaimed");
     assert_eq!(reclaimed[0].attempts, 2, "reclaim spends an attempt");
 
@@ -402,7 +437,14 @@ async fn stale_inbox_generation_cannot_commit_effect_or_completion() -> Result<(
     let verifier = HmacSha256Verifier::new(SECRET);
     let delivery = SignedDelivery::new("evt_stale", "user.created", br#"{"id":"evt_stale"}"#);
     let id = accepted_id(&pool, &verifier, &delivery).await;
-    let old_claim = claim_inbox_batch(&pool, "same-owner", Duration::from_secs(30), 8).await?;
+    let old_claim = claim_inbox_batch(
+        &pool,
+        &claim_registry(),
+        "same-owner",
+        Duration::from_secs(30),
+        8,
+    )
+    .await?;
     assert_eq!(old_claim.len(), 1);
     sqlx::query(
         "UPDATE integration_inbox_events SET lease_expires_at = clock_timestamp() - interval '1 second' WHERE id=$1",
@@ -410,7 +452,26 @@ async fn stale_inbox_generation_cannot_commit_effect_or_completion() -> Result<(
     .bind(id)
     .execute(&pool)
     .await?;
-    let new_claim = claim_inbox_batch(&pool, "same-owner", Duration::from_secs(30), 8).await?;
+    assert!(
+        claim_inbox_batch(
+            &pool,
+            &claim_registry(),
+            "recovery",
+            Duration::from_secs(30),
+            8
+        )
+        .await?
+        .is_empty()
+    );
+    force_due(&pool, id).await;
+    let new_claim = claim_inbox_batch(
+        &pool,
+        &claim_registry(),
+        "same-owner",
+        Duration::from_secs(30),
+        8,
+    )
+    .await?;
     assert_eq!(new_claim.len(), 1);
     assert!(new_claim[0].claim_fence.generation() > old_claim[0].claim_fence.generation());
 
@@ -439,5 +500,188 @@ async fn stale_inbox_generation_cannot_commit_effect_or_completion() -> Result<(
     assert!(complete_inbox_event(&pool, &inbox_context(&new_claim[0])).await?);
     let record = get_inbox_event(&pool, id).await?.expect("inbox row");
     assert_eq!(record.processing_state, InboxProcessingState::Processed);
+    Ok(())
+}
+
+#[tokio::test]
+async fn abandoned_inbox_attempts_back_off_then_quarantine() -> Result<()> {
+    let Some(pool) = database().await else {
+        return Ok(());
+    };
+    let verifier = HmacSha256Verifier::new(SECRET);
+    let delivery = SignedDelivery::new("evt_crashes", "user.created", br#"{"id":"evt_crashes"}"#);
+    let id = accepted_id(&pool, &verifier, &delivery).await;
+    sqlx::query("UPDATE integration_inbox_events SET max_attempts=2 WHERE id=$1")
+        .bind(id)
+        .execute(&pool)
+        .await?;
+    let registry = claim_registry();
+    for attempt in 1..=2 {
+        let claimed = claim_inbox_batch(
+            &pool,
+            &registry,
+            "crashed-worker",
+            Duration::from_secs(60),
+            1,
+        )
+        .await?;
+        assert_eq!(claimed.len(), 1);
+        assert_eq!(claimed[0].attempts, attempt);
+        sqlx::query("UPDATE integration_inbox_events SET lease_expires_at=clock_timestamp()-interval '1 second' WHERE id=$1").bind(id).execute(&pool).await?;
+        assert!(
+            claim_inbox_batch(&pool, &registry, "recovery", Duration::from_secs(60), 1)
+                .await?
+                .is_empty()
+        );
+        let row = get_inbox_event(&pool, id).await?.expect("row");
+        assert_eq!(row.attempts, attempt);
+        assert!(
+            row.last_error
+                .as_deref()
+                .is_some_and(|e| e.contains("abandoned inbox claim"))
+        );
+        if attempt == 1 {
+            assert_eq!(row.processing_state, InboxProcessingState::Failed);
+            let delayed: bool = sqlx::query_scalar(
+                "SELECT next_attempt_at>clock_timestamp() FROM integration_inbox_events WHERE id=$1",
+            )
+            .bind(id)
+            .fetch_one(&pool)
+            .await?;
+            assert!(delayed);
+            assert!(
+                claim_inbox_batch(&pool, &registry, "too-early", Duration::from_secs(60), 1)
+                    .await?
+                    .is_empty()
+            );
+            force_due(&pool, id).await;
+        }
+    }
+    let row = get_inbox_event(&pool, id).await?.expect("row");
+    assert_eq!(row.processing_state, InboxProcessingState::Quarantined);
+    assert!(
+        row.quarantine_reason
+            .is_some_and(|e| e.contains("attempt budget exhausted"))
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn an_empty_registry_shares_the_database_with_a_provider_registry() -> Result<()> {
+    let Some(pool) = database().await else {
+        return Ok(());
+    };
+    let verifier = HmacSha256Verifier::new(SECRET);
+    let delivery = SignedDelivery::new(
+        "evt_new_provider",
+        "user.created",
+        br#"{"id":"evt_new_provider"}"#,
+    );
+    let id = accepted_id(&pool, &verifier, &delivery).await;
+    assert_eq!(
+        process_inbox_batch(
+            &pool,
+            &InboxRegistry::new(),
+            "old-worker",
+            Duration::from_secs(60),
+            8
+        )
+        .await?,
+        0
+    );
+    let row = get_inbox_event(&pool, id).await?.expect("row");
+    assert_eq!(row.processing_state, InboxProcessingState::Received);
+    assert_eq!(row.attempts, 0);
+    assert_eq!(
+        process_inbox_batch(
+            &pool,
+            &claim_registry(),
+            "provider-worker",
+            Duration::from_secs(60),
+            8
+        )
+        .await?,
+        1
+    );
+    assert_eq!(
+        get_inbox_event(&pool, id)
+            .await?
+            .expect("row")
+            .processing_state,
+        InboxProcessingState::Processed
+    );
+    Ok(())
+}
+
+#[tokio::test]
+async fn receipt_rejects_payloads_above_256_kib_with_a_typed_error() -> Result<()> {
+    let Some(pool) = database().await else {
+        return Ok(());
+    };
+    let verifier = HmacSha256Verifier::new(SECRET);
+    let body = vec![b' '; deepref_app::inbox::MAX_INBOX_PAYLOAD_BYTES + 1];
+    let delivery = SignedDelivery::new("evt_large", "user.created", &body);
+    assert!(matches!(
+        receive_webhook_event(&pool, &verifier, &delivery.event()).await,
+        Err(InboxReceiveError::PayloadTooLarge { size, limit })
+            if size == limit + 1 && limit == 256 * 1024
+    ));
+    assert_eq!(rows_with_provider(&pool).await, 0);
+    Ok(())
+}
+
+#[tokio::test]
+async fn payload_purge_keeps_dedup_identity_and_unprocessed_payloads() -> Result<()> {
+    let Some(pool) = database().await else {
+        return Ok(());
+    };
+    let verifier = HmacSha256Verifier::new(SECRET);
+    let processed =
+        SignedDelivery::new("evt_retained", "user.created", br#"{"id":"evt_retained"}"#);
+    let processed_id = accepted_id(&pool, &verifier, &processed).await;
+    process_inbox_batch(
+        &pool,
+        &claim_registry(),
+        "worker",
+        Duration::from_secs(60),
+        8,
+    )
+    .await?;
+    let pending = SignedDelivery::new("evt_pending", "user.created", br#"{"id":"evt_pending"}"#);
+    let pending_id = accepted_id(&pool, &verifier, &pending).await;
+    let retention: bool = sqlx::query_scalar(
+        "SELECT payload_expires_at >= processed_at+interval '29 days' FROM integration_inbox_events WHERE id=$1",
+    )
+    .bind(processed_id)
+    .fetch_one(&pool)
+    .await?;
+    assert!(retention);
+    assert_eq!(
+        deepref_app::inbox::purge_processed_inbox_payloads(&pool, 8).await?,
+        0
+    );
+    sqlx::query("UPDATE integration_inbox_events SET payload_expires_at=clock_timestamp()-interval '1 day' WHERE id=$1").bind(processed_id).execute(&pool).await?;
+    assert_eq!(
+        deepref_app::inbox::purge_processed_inbox_payloads(&pool, 8).await?,
+        1
+    );
+    let row: (Option<serde_json::Value>, bool) = sqlx::query_as(
+        "SELECT payload,payload_purged_at IS NOT NULL FROM integration_inbox_events WHERE id=$1",
+    )
+    .bind(processed_id)
+    .fetch_one(&pool)
+    .await?;
+    assert_eq!(row, (None, true));
+    let retained: bool =
+        sqlx::query_scalar("SELECT payload IS NOT NULL FROM integration_inbox_events WHERE id=$1")
+            .bind(pending_id)
+            .fetch_one(&pool)
+            .await?;
+    assert!(retained);
+    assert_eq!(
+        receive_webhook_event(&pool, &verifier, &processed.event()).await?,
+        ReceiveOutcome::Duplicate
+    );
+    assert_eq!(rows_with_provider(&pool).await, 2);
     Ok(())
 }

@@ -1,113 +1,208 @@
-#![allow(
-    clippy::expect_used,
-    clippy::panic,
-    clippy::unwrap_used,
-    clippy::string_slice
-)]
-//! The in-process outbox dispatcher running in the worker process, driven
-//! end-to-end with the handoff 04a pilot message: business transaction ->
-//! outbox row -> claim -> typed handler -> committed durable job enqueue ->
-//! receipt -> delivered, then a responsive drain on shutdown. Skipped unless
-//! `DATABASE_URL` points at a reachable PostgreSQL.
+#![allow(clippy::expect_used, clippy::panic, clippy::unwrap_used)]
+//! Only synthetic contracts exercise the 04a dispatcher; metrics stay on jobs.
 
-use std::{sync::Arc, time::Duration};
+#[path = "support/processors.rs"]
+mod support;
 
-use deepref_app::outbox::{insert_outbox_event, pilot_outbox_registry};
-use deepref_application::outbox::{MetricsRecomputeMessage, NewOutboxEvent};
-use deepref_domain::events::{
-    EntityType, EventEnvelope, MetricsRecomputeRequested, SUBJECT_METRICS_RECOMPUTE_REQUESTED,
+use deepref_app::outbox::{insert_outbox_event, record_outbox_receipt};
+use deepref_application::outbox::{
+    NewOutboxEvent, OutboxHandlerError, OutboxMessage, OutboxRegistry, TypedOutboxHandler,
 };
 use deepref_worker::{outbox_dispatch, shutdown::on_signal};
+use serde::{Deserialize, Serialize};
 use sqlx::PgPool;
+use std::{
+    sync::{Arc, atomic::Ordering},
+    time::Duration,
+};
+use support::BlockedHandler;
 use tokio::sync::watch;
 use uuid::Uuid;
 
-async fn database() -> Option<PgPool> {
-    deepref_app::test_isolation::isolated_pool_from_env("DATABASE_URL", 8).await
+#[derive(Serialize, Deserialize)]
+struct WriteProject {
+    project_id: Uuid,
 }
-
-#[tokio::test]
-async fn the_dispatcher_loop_delivers_the_pilot_and_drains_on_shutdown() {
-    let Some(pool) = database().await else {
-        return;
-    };
-    let project_id = Uuid::new_v4();
-    sqlx::query("INSERT INTO projects (id,name) VALUES ($1,'outbox dispatch fixture')")
-        .bind(project_id)
-        .execute(&pool)
-        .await
-        .expect("project fixture inserts");
-
-    let registry = Arc::new(pilot_outbox_registry(&pool).expect("pilot contract registers"));
-    let (stop, signal) = watch::channel(false);
-    let loop_task = tokio::spawn(outbox_dispatch::run(
-        pool.clone(),
-        registry,
-        "test-outbox-dispatcher".to_owned(),
-        outbox_dispatch::OutboxDispatchConfig {
-            batch: 8,
-            concurrency: 2,
-            claim_lease: Duration::from_secs(30),
-            poll_interval: Duration::from_millis(50),
-            drain_deadline: Duration::from_secs(5),
-        },
-        on_signal(signal),
-    ));
-
-    let envelope: MetricsRecomputeMessage = EventEnvelope::v1(
-        SUBJECT_METRICS_RECOMPUTE_REQUESTED,
-        "outbox-dispatch-test",
-        EntityType::Project,
-        format!("project:{project_id}"),
-        1,
-        Uuid::new_v4(),
-        None,
-        MetricsRecomputeRequested {
-            project_id,
-            ingestion_id: None,
-        },
-    );
-    let event = NewOutboxEvent::for_message(envelope.event_id, &envelope).expect("serializes");
+impl OutboxMessage for WriteProject {
+    const TYPE: &'static str = "test.worker.write-project";
+    const VERSION: u32 = 1;
+    const CONSUMERS: &'static [&'static str] = &["fixture"];
+}
+fn registry(pool: &PgPool, blocked: Option<Arc<BlockedHandler>>) -> Arc<OutboxRegistry> {
+    let pool = pool.clone();
+    let handler: TypedOutboxHandler<WriteProject> = Arc::new(move |message, context| {
+        let pool = pool.clone();
+        let blocked = blocked.clone();
+        Box::pin(async move {
+            let effect = async {
+                let mut tx = pool.begin().await?;
+                sqlx::query("INSERT INTO projects(id,name) VALUES($1,'synthetic outbox effect')")
+                    .bind(message.project_id)
+                    .execute(&mut *tx)
+                    .await?;
+                support::block(blocked).await;
+                record_outbox_receipt(&mut tx, &context).await?;
+                tx.commit().await?;
+                Ok::<(), anyhow::Error>(())
+            }
+            .await;
+            effect.map_err(|e| OutboxHandlerError::Transient(e.to_string()))
+        })
+    });
+    let mut registry = OutboxRegistry::new();
+    registry
+        .register::<WriteProject>(&[("fixture", handler)])
+        .expect("fixture registers");
+    Arc::new(registry)
+}
+fn config() -> outbox_dispatch::OutboxDispatchConfig {
+    outbox_dispatch::OutboxDispatchConfig {
+        batch: 8,
+        concurrency: 2,
+        claim_lease: Duration::from_secs(10),
+        poll_interval: Duration::from_millis(20),
+        drain_deadline: Duration::from_millis(100),
+    }
+}
+async fn insert(pool: &PgPool, project_id: Uuid) -> Uuid {
+    let id = Uuid::new_v4();
+    let event = NewOutboxEvent::for_message(id, &WriteProject { project_id }).expect("serializes");
     let mut tx = pool.begin().await.expect("begin");
     insert_outbox_event(&mut tx, &event).await.expect("insert");
     tx.commit().await.expect("commit");
+    id
+}
 
-    let dedupe_key = format!("outbox-metrics-recompute:{}", event.event_id);
-    let mut jobs = 0;
-    for _ in 0..200 {
-        jobs = sqlx::query_scalar::<_, i64>("SELECT count(*) FROM jobs WHERE dedupe_key=$1")
-            .bind(&dedupe_key)
+#[tokio::test]
+async fn the_dispatcher_delivers_a_synthetic_fixture_and_drains() {
+    let Some(pool) = support::database().await else {
+        return;
+    };
+    let (stop, signal) = watch::channel(false);
+    let task = tokio::spawn(outbox_dispatch::run(
+        pool.clone(),
+        registry(&pool, None),
+        "fixture".into(),
+        config(),
+        on_signal(signal),
+    ));
+    let project = Uuid::new_v4();
+    let event = insert(&pool, project).await;
+    support::wait_for_project(&pool, project).await;
+    let state: String =
+        sqlx::query_scalar("SELECT delivery_state FROM outbox_events WHERE event_id=$1")
+            .bind(event)
             .fetch_one(&pool)
             .await
-            .expect("job count");
-        if jobs > 0 {
-            break;
-        }
-        tokio::time::sleep(Duration::from_millis(25)).await;
-    }
-    assert_eq!(
-        jobs, 1,
-        "the pilot consumer committed its durable job enqueue"
-    );
-
-    let (state, delivered_at): (String, Option<chrono::DateTime<chrono::Utc>>) =
-        sqlx::query_as("SELECT delivery_state, delivered_at FROM outbox_events WHERE event_id=$1")
-            .bind(event.event_id)
-            .fetch_one(&pool)
-            .await
-            .expect("event row");
+            .unwrap();
     assert_eq!(state, "delivered");
-    assert!(
-        delivered_at.is_some(),
-        "delivered means every receipt committed"
-    );
-
-    // Shutdown drains in-flight work and returns without waiting for the poll
-    // interval's worst case.
     stop.send_replace(true);
-    let drained = tokio::time::timeout(Duration::from_secs(10), loop_task)
+    assert_eq!(task.await.unwrap().unwrap().claim_errors, 0);
+}
+
+#[tokio::test]
+async fn a_transient_claim_error_does_not_stop_the_dispatcher() {
+    let Some(pool) = support::database().await else {
+        return;
+    };
+    sqlx::query("ALTER TABLE outbox_events RENAME TO paused_outbox_events")
+        .execute(&pool)
         .await
-        .expect("the dispatcher loop drains promptly")
-        .expect("the dispatcher loop does not panic");
-    assert!(drained.is_ok(), "clean drain: {drained:?}");
+        .unwrap();
+    let (stop, signal) = watch::channel(false);
+    let task = tokio::spawn(outbox_dispatch::run(
+        pool.clone(),
+        registry(&pool, None),
+        "retry-fixture".into(),
+        config(),
+        on_signal(signal),
+    ));
+    tokio::time::sleep(Duration::from_secs(1)).await;
+    assert!(
+        !task.is_finished(),
+        "a claim error must not stop processing"
+    );
+    sqlx::query("ALTER TABLE paused_outbox_events RENAME TO outbox_events")
+        .execute(&pool)
+        .await
+        .unwrap();
+    let project = Uuid::new_v4();
+    insert(&pool, project).await;
+    support::wait_for_project(&pool, project).await;
+    stop.send_replace(true);
+    assert!(
+        task.await.unwrap().unwrap().claim_errors > 0,
+        "the retry path was exercised"
+    );
+}
+
+#[tokio::test]
+async fn drain_deadline_aborts_and_awaits_a_blocked_outbox_transaction() {
+    let Some(pool) = support::database().await else {
+        return;
+    };
+    let blocked = Arc::new(BlockedHandler::default());
+    let (stop, signal) = watch::channel(false);
+    let task = tokio::spawn(outbox_dispatch::run(
+        pool.clone(),
+        registry(&pool, Some(Arc::clone(&blocked))),
+        "blocked-fixture".into(),
+        config(),
+        on_signal(signal),
+    ));
+    let project = Uuid::new_v4();
+    insert(&pool, project).await;
+    tokio::time::timeout(Duration::from_secs(30), blocked.entered.notified())
+        .await
+        .unwrap();
+    stop.send_replace(true);
+    let result = tokio::time::timeout(Duration::from_secs(5), task)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(result.is_err());
+    assert!(
+        blocked.dropped.load(Ordering::SeqCst),
+        "handler was dropped before shutdown returned"
+    );
+    blocked.resume.notify_one();
+    support::assert_no_project(&pool, project).await;
+}
+
+#[tokio::test]
+async fn heartbeat_renews_then_cancels_a_superseded_outbox_handler() {
+    let Some(pool) = support::database().await else {
+        return;
+    };
+    let blocked = Arc::new(BlockedHandler::default());
+    let mut config = config();
+    config.claim_lease = Duration::from_secs(1);
+    let (stop, signal) = watch::channel(false);
+    let task = tokio::spawn(outbox_dispatch::run(
+        pool.clone(),
+        registry(&pool, Some(Arc::clone(&blocked))),
+        "heartbeat-fixture".into(),
+        config,
+        on_signal(signal),
+    ));
+    let project = Uuid::new_v4();
+    let event = insert(&pool, project).await;
+    tokio::time::timeout(Duration::from_secs(30), blocked.entered.notified())
+        .await
+        .unwrap();
+    tokio::time::sleep(Duration::from_millis(2200)).await;
+    let row: (i32, bool) = sqlx::query_as(
+        "SELECT attempts,lease_expires_at>clock_timestamp() FROM outbox_events WHERE event_id=$1",
+    )
+    .bind(event)
+    .fetch_one(&pool)
+    .await
+    .unwrap();
+    assert_eq!(row, (1, true), "a long handler retains the same live claim");
+    sqlx::query("UPDATE outbox_events SET lease_owner='replacement',claim_generation=claim_generation+1,lease_expires_at=clock_timestamp()+interval '1 minute' WHERE event_id=$1").bind(event).execute(&pool).await.unwrap();
+    support::wait_for_drop(&blocked).await;
+    stop.send_replace(true);
+    task.await.unwrap().unwrap();
+    blocked.resume.notify_one();
+    support::assert_no_project(&pool, project).await;
 }

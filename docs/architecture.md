@@ -108,6 +108,20 @@ Other contexts temporarily retain their existing app-root interfaces.
 review and assistant-plan transports; unmigrated contexts and dev-test targets
 are intentionally outside that source rule.
 
+### Acceptance status
+
+Handoff 04a is foundation-only until 02/08 wire real WorkOS/Polar verifiers,
+handlers, and reconciliation. Acceptance still needs provider fixtures for real
+signatures, out-of-order projection updates, missed-event reconciliation, and
+commit-before-ack behavior. Production registries are empty; metrics recompute
+continues to enqueue jobs directly. Dispatcher effects are synthetic test
+fixtures until the production pilot in 04b.
+
+Inbox receipt accepts bodies up to 256 KiB. Processed payloads expire after
+30 days; the explicit `purge_processed_inbox_payloads` app operation replaces
+expired payloads with NULL while retaining `(provider, provider_event_id)` and
+processing evidence for deduplication. No purge scheduler is installed.
+
 ## AI foundation and evidence grounding
 
 `deepref-ai` is the provider-neutral seam for structured AI work. It owns typed

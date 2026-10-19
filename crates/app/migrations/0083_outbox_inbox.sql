@@ -1,3 +1,4 @@
+-- phase: expand
 -- Broker-independent publication outbox and provider integration inbox
 -- (handoff 04a). PostgreSQL stays authoritative: an outbox row is inserted in
 -- the same transaction as its authoritative change and is `delivered` only
@@ -80,7 +81,10 @@ CREATE TABLE integration_inbox_events (
   provider_event_id text NOT NULL
     CHECK (char_length(provider_event_id) BETWEEN 1 AND 255),
   event_type text,
-  payload jsonb NOT NULL,
+  -- Only processed payloads may be minimized; the dedup identity stays.
+  payload jsonb,
+  payload_expires_at timestamptz,
+  payload_purged_at timestamptz,
   received_at timestamptz NOT NULL DEFAULT now(),
   processing_state text NOT NULL DEFAULT 'received'
     CHECK (processing_state IN ('received', 'processing', 'processed', 'failed', 'quarantined')),
@@ -95,7 +99,9 @@ CREATE TABLE integration_inbox_events (
   claim_generation bigint NOT NULL DEFAULT 0 CHECK (claim_generation >= 0),
   CHECK ((lease_owner IS NULL) = (lease_expires_at IS NULL)),
   UNIQUE (provider, provider_event_id),
-  CHECK ((processing_state = 'processed') = (processed_at IS NOT NULL))
+  CHECK ((processing_state = 'processed') = (processed_at IS NOT NULL)),
+  CHECK (payload IS NOT NULL OR processing_state = 'processed'),
+  CHECK (payload_expires_at IS NULL OR processing_state = 'processed')
 );
 
 CREATE INDEX integration_inbox_claim_idx
@@ -104,3 +110,7 @@ CREATE INDEX integration_inbox_claim_idx
 CREATE INDEX integration_inbox_quarantine_idx
   ON integration_inbox_events (received_at)
   WHERE processing_state = 'quarantined';
+
+CREATE INDEX integration_inbox_payload_expiry_idx
+  ON integration_inbox_events (payload_expires_at)
+  WHERE processing_state = 'processed' AND payload IS NOT NULL;

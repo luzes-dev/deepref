@@ -20,18 +20,18 @@
 //! `ai_autonomy_outbox` is a separate, domain-specific obligation table and is
 //! deliberately not consolidated here.
 
-use std::{collections::BTreeMap, sync::Arc, time::Duration};
+use std::{collections::BTreeMap, time::Duration};
 
 use anyhow::Context;
 use chrono::{DateTime, Utc};
 use deepref_application::outbox::{
-    DeliveryContext, ErasedOutboxHandler, MetricsRecomputeMessage, NewOutboxEvent,
-    OutboxClaimFence, OutboxHandlerError, OutboxRegistry, OutboxRetry, RegistryError,
-    TypedOutboxHandler, retry_backoff,
+    DeliveryContext, ErasedOutboxHandler, NewOutboxEvent, OutboxClaimFence, OutboxHandlerError,
+    OutboxRegistry, OutboxRetry, retry_backoff,
 };
-use deepref_domain::{JobKind, ProjectId};
+use futures::FutureExt;
 use serde_json::Value;
 use sqlx::{PgPool, Postgres, Transaction};
+use std::panic::AssertUnwindSafe;
 use uuid::Uuid;
 
 /// Delivery state of one receipt row. `Retrying` is dispatcher bookkeeping for
@@ -155,25 +155,42 @@ pub async fn insert_outbox_event(
     Ok(rows.rows_affected() == 1)
 }
 
-/// Atomically claim a bounded batch of due, unleased rows for dispatch. The
-/// claim takes a lease (exclusive against concurrent dispatchers) and spends
-/// one claim attempt; it never changes delivery state. Expired leases are
-/// reclaimable.
+/// Recover abandoned supported claims before selecting due work. A claim
+/// spends an event attempt when it starts; recovery charges each missing
+/// consumer's attempt exactly once, fences the abandoned generation, and
+/// applies backoff or quarantine before another claim is possible.
 pub async fn claim_outbox_batch(
     pool: &PgPool,
+    registry: &OutboxRegistry,
     owner: &str,
     lease: Duration,
     limit: i64,
 ) -> anyhow::Result<Vec<ClaimedOutboxEvent>> {
+    anyhow::ensure!(
+        !lease.is_zero() && limit > 0,
+        "claim lease and limit must be positive"
+    );
+    let mut kinds = Vec::new();
+    let mut versions = Vec::new();
+    for (kind, version) in registry.contracts() {
+        kinds.push(kind.to_owned());
+        versions.push(i32::try_from(version).context("registered message version fits")?);
+    }
+    if kinds.is_empty() {
+        return Ok(Vec::new());
+    }
+    let mut tx = pool.begin().await?;
+    recover_abandoned_outbox_claims(&mut tx, &kinds, &versions, limit).await?;
     let lease_ms = lease.as_millis() as f64;
     let rows = sqlx::query!(
         r#"WITH candidate AS (
              SELECT event_id
              FROM outbox_events
-             WHERE delivery_state = 'pending'
-               AND (lease_expires_at IS NULL OR lease_expires_at < clock_timestamp())
-               AND next_attempt_at <= now()
-             ORDER BY created_at
+             WHERE delivery_state = 'pending' AND lease_owner IS NULL
+               AND next_attempt_at <= clock_timestamp()
+               AND (message_type, message_version) IN (
+                 SELECT * FROM unnest($4::text[], $5::integer[]))
+             ORDER BY created_at, event_id
              FOR UPDATE SKIP LOCKED
              LIMIT $3
            )
@@ -189,9 +206,12 @@ pub async fn claim_outbox_batch(
         owner,
         lease_ms,
         limit,
+        &kinds,
+        &versions,
     )
-    .fetch_all(pool)
+    .fetch_all(&mut *tx)
     .await?;
+    tx.commit().await?;
     rows.into_iter()
         .map(|row| {
             let event_id = row.event_id;
@@ -208,6 +228,91 @@ pub async fn claim_outbox_batch(
             })
         })
         .collect()
+}
+
+async fn recover_abandoned_outbox_claims(
+    tx: &mut Transaction<'_, Postgres>,
+    kinds: &[String],
+    versions: &[i32],
+    limit: i64,
+) -> anyhow::Result<()> {
+    let expired = sqlx::query!(
+        r#"SELECT event_id, expected_consumers, attempts, max_attempts, claim_generation,
+                  lease_owner AS "lease_owner!"
+           FROM outbox_events
+           WHERE delivery_state = 'pending' AND lease_expires_at <= clock_timestamp()
+             AND (message_type, message_version) IN (
+               SELECT * FROM unnest($1::text[], $2::integer[]))
+           ORDER BY lease_expires_at, event_id
+           FOR UPDATE SKIP LOCKED LIMIT $3"#,
+        kinds,
+        versions,
+        limit,
+    )
+    .fetch_all(&mut **tx)
+    .await?;
+    for event in expired {
+        let mut exhausted = event.attempts >= event.max_attempts;
+        let reason = format!(
+            "abandoned outbox claim after lease expiry (generation {})",
+            event.claim_generation
+        );
+        for consumer in event.expected_consumers {
+            let receipt = sqlx::query!(
+                "SELECT state, attempts FROM outbox_receipts WHERE event_id=$1 AND consumer=$2",
+                event.event_id,
+                consumer,
+            )
+            .fetch_optional(&mut **tx)
+            .await?;
+            if let Some(receipt) = &receipt {
+                if receipt.state == "delivered" {
+                    continue;
+                }
+                if receipt.state == "quarantined" {
+                    exhausted = true;
+                    continue;
+                }
+            }
+            let attempts = receipt.map_or(1, |receipt| receipt.attempts.saturating_add(1));
+            let terminal = exhausted || attempts >= event.max_attempts;
+            exhausted |= terminal;
+            let state = if terminal { "quarantined" } else { "retrying" };
+            let delay_ms = retry_backoff(attempts).as_millis() as f64;
+            sqlx::query!(
+                r#"INSERT INTO outbox_receipts (event_id,consumer,state,attempts,next_attempt_at,last_error)
+                   VALUES ($1,$2,$3,$4,clock_timestamp()+($5::double precision*interval '1 millisecond'),$6)
+                   ON CONFLICT (event_id,consumer) DO UPDATE
+                   SET state=EXCLUDED.state, attempts=EXCLUDED.attempts,
+                       next_attempt_at=EXCLUDED.next_attempt_at,last_error=EXCLUDED.last_error
+                   WHERE outbox_receipts.state <> 'delivered'"#,
+                event.event_id, consumer, state, attempts, delay_ms, reason,
+            ).execute(&mut **tx).await?;
+        }
+        let state = if exhausted { "quarantined" } else { "pending" };
+        let reason = if exhausted {
+            format!("{reason}; attempt budget exhausted")
+        } else {
+            reason
+        };
+        let delay_ms = retry_backoff(event.attempts).as_millis() as f64;
+        sqlx::query!(
+            r#"UPDATE outbox_events SET delivery_state=$4,last_error=$5,
+                 next_attempt_at=clock_timestamp()+($6::double precision*interval '1 millisecond'),
+                 lease_owner=NULL,lease_expires_at=NULL,claim_generation=claim_generation+1
+               WHERE event_id=$1 AND lease_owner=$2 AND claim_generation=$3
+                 AND delivery_state='pending' AND lease_expires_at <= clock_timestamp()"#,
+            event.event_id,
+            event.lease_owner,
+            event.claim_generation,
+            state,
+            reason,
+            delay_ms,
+        )
+        .execute(&mut **tx)
+        .await?;
+    }
+    Ok(())
 }
 
 /// Extend the claim lease while dispatching. `false` when the lease is no
@@ -627,7 +732,7 @@ pub async fn dispatch_outbox_batch(
     lease: Duration,
     limit: i64,
 ) -> anyhow::Result<usize> {
-    let claimed = claim_outbox_batch(pool, owner, lease, limit).await?;
+    let claimed = claim_outbox_batch(pool, registry, owner, lease, limit).await?;
     let count = claimed.len();
     for event in &claimed {
         dispatch_outbox_event(pool, registry, lease, event).await?;
@@ -638,8 +743,8 @@ pub async fn dispatch_outbox_batch(
 /// Dispatch one claimed row: invoke the registered handler for each expected
 /// consumer that has no committed receipt and is not still backing off, then
 /// settle the round. The row is never marked delivered here — only committed
-/// receipts complete it. An unknown message type or version is handled
-/// terminally (quarantined), not retried.
+/// receipts complete it. Unsupported contracts stay pending for a compatible
+/// deployment; the claim query normally excludes them before this point.
 pub async fn dispatch_outbox_event(
     pool: &PgPool,
     registry: &OutboxRegistry,
@@ -647,16 +752,7 @@ pub async fn dispatch_outbox_event(
     event: &ClaimedOutboxEvent,
 ) -> anyhow::Result<()> {
     if !registry.knows(&event.message_type, event.message_version) {
-        quarantine_outbox_event(
-            pool,
-            event.event_id,
-            &event.claim_fence,
-            &format!(
-                "unknown message type {} v{}; quarantined terminally",
-                event.message_type, event.message_version
-            ),
-        )
-        .await?;
+        release_outbox_lease(pool, event.event_id, &event.claim_fence).await?;
         return Ok(());
     }
     let receipts: BTreeMap<String, OutboxReceiptRecord> =
@@ -678,24 +774,9 @@ pub async fn dispatch_outbox_event(
         };
         let Some(handler) = registry.handler(&event.message_type, event.message_version, consumer)
         else {
-            record_outbox_consumer_failure(
-                pool,
-                event.event_id,
-                consumer,
-                &event.claim_fence,
-                &format!(
-                    "no handler registered for consumer {consumer} of {} v{}",
-                    event.message_type, event.message_version
-                ),
-                OutboxRetry::Terminal,
-                event.max_attempts,
-            )
-            .await?;
-            continue;
-        };
-        if !renew_outbox_lease(pool, event.event_id, &event.claim_fence, lease).await? {
+            release_outbox_lease(pool, event.event_id, &event.claim_fence).await?;
             return Ok(());
-        }
+        };
         let context = DeliveryContext {
             event_id: event.event_id,
             consumer: consumer.clone(),
@@ -703,7 +784,13 @@ pub async fn dispatch_outbox_event(
             message_version: event.message_version,
             claim_fence: event.claim_fence.clone(),
         };
-        match invoke_handler(handler, context, event.payload.clone()).await {
+        match crate::leased_handler::run(
+            lease,
+            || renew_outbox_lease(pool, event.event_id, &event.claim_fence, lease),
+            invoke_handler(handler, context, event.payload.clone()),
+        )
+        .await?
+        {
             Ok(()) => {
                 // The handler contract: success means the effect and the
                 // receipt committed together. Verify; a handler that skipped
@@ -767,31 +854,23 @@ pub async fn dispatch_outbox_event(
     Ok(())
 }
 
-/// Run a handler on its own task so a panic becomes this consumer's failure
-/// instead of tearing down the dispatcher.
+/// The processor owns this future directly. Catch panics without spawning a
+/// detachable child task, so processor cancellation drops the handler and any
+/// uncommitted transaction before the processor task can finish.
 async fn invoke_handler(
     handler: &ErasedOutboxHandler,
     context: DeliveryContext,
     payload: Value,
 ) -> Result<(), OutboxHandlerError> {
-    let work = handler(context.clone(), payload);
-    match tokio::spawn(work).await {
+    let consumer = context.consumer.clone();
+    match AssertUnwindSafe(async move { handler(context, payload).await })
+        .catch_unwind()
+        .await
+    {
         Ok(result) => result,
-        Err(error) if error.is_panic() => {
-            let panic = error.into_panic();
-            let message = panic
-                .downcast_ref::<&str>()
-                .map(|message| (*message).to_owned())
-                .or_else(|| panic.downcast_ref::<String>().cloned())
-                .unwrap_or_else(|| "non-string panic payload".to_owned());
-            Err(OutboxHandlerError::Transient(format!(
-                "handler for consumer {} panicked: {message}",
-                context.consumer
-            )))
-        }
-        Err(error) => Err(OutboxHandlerError::Transient(format!(
-            "handler for consumer {} was cancelled: {error}",
-            context.consumer
+        Err(panic) => Err(OutboxHandlerError::Transient(format!(
+            "handler for consumer {consumer} panicked: {}",
+            crate::leased_handler::panic_message(panic)
         ))),
     }
 }
@@ -809,61 +888,4 @@ async fn consumer_has_receipt(
     .fetch_optional(pool)
     .await?;
     Ok(exists.is_some())
-}
-
-/// The pilot consumer of the handoff 04a pilot message
-/// (`domain.metrics.recompute.requested.v1`): it durably enqueues the existing
-/// `RecomputeMetrics` job — the committed enqueue is this outbox row's effect,
-/// job execution has its own state and completion (05a). The enqueue uses the
-/// outbox event id as its dedupe key, so a redelivery after a crash between
-/// effect and receipt is a committed no-op. Metrics recomputation is an
-/// eventually consistent projection refresh, which is why it is safe as the
-/// pilot path.
-pub fn metrics_recompute_pilot_handler(
-    pool: PgPool,
-) -> TypedOutboxHandler<MetricsRecomputeMessage> {
-    Arc::new(
-        move |message: MetricsRecomputeMessage, context: DeliveryContext| {
-            let pool = pool.clone();
-            Box::pin(async move {
-                let project_id = message.payload.project_id;
-                let revision = message.revision.max(0);
-                let mut tx = pool
-                    .begin()
-                    .await
-                    .map_err(|error| OutboxHandlerError::Transient(error.to_string()))?;
-                let dedupe_key = format!("outbox-metrics-recompute:{}", context.event_id);
-                crate::jobs::enqueue_job(
-                    &mut tx,
-                    &crate::jobs::job(
-                        context.event_id,
-                        ProjectId::new(project_id),
-                        JobKind::RecomputeMetrics,
-                        serde_json::json!({"project_id": project_id, "revision": revision}),
-                        dedupe_key,
-                    ),
-                )
-                .await
-                .map_err(|error| OutboxHandlerError::Transient(error.to_string()))?;
-                record_outbox_receipt(&mut tx, &context)
-                    .await
-                    .map_err(|error| OutboxHandlerError::Transient(error.to_string()))?;
-                tx.commit()
-                    .await
-                    .map_err(|error| OutboxHandlerError::Transient(error.to_string()))?;
-                Ok(())
-            })
-        },
-    )
-}
-
-/// The worker's dispatch registry: the handoff 04a pilot contract only. Real
-/// message types register here as later handoffs adopt the outbox.
-pub fn pilot_outbox_registry(pool: &PgPool) -> Result<OutboxRegistry, RegistryError> {
-    let mut registry = OutboxRegistry::new();
-    registry.register::<MetricsRecomputeMessage>(&[(
-        "metrics-recompute",
-        metrics_recompute_pilot_handler(pool.clone()),
-    )])?;
-    Ok(registry)
 }

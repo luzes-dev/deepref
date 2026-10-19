@@ -844,6 +844,7 @@ dependencies = [
  "deepref-documents",
  "deepref-domain",
  "deepref-review",
+ "futures",
  "pgvector",
  "serde",
  "serde_json",

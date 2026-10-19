@@ -7,7 +7,7 @@
 )]
 //! Handoff 04a outbox semantics against a real PostgreSQL: transactional
 //! insert, exclusive claims, receipt-gated delivery, fan-out, per-consumer
-//! retry/quarantine and the pilot message path. Skipped unless `DATABASE_URL`
+//! retry/quarantine and synthetic message fixtures. Skipped unless `DATABASE_URL`
 //! points at a reachable PostgreSQL.
 
 use std::sync::{
@@ -19,16 +19,13 @@ use std::time::Duration;
 use anyhow::Result;
 use chrono::{DateTime, Utc};
 use deepref_app::outbox::{
-    dispatch_outbox_batch, insert_outbox_event, list_outbox_receipts, pilot_outbox_registry,
+    ReceiptState, dispatch_outbox_batch, insert_outbox_event, list_outbox_receipts,
     record_outbox_consumer_failure, record_outbox_receipt, replay_outbox_event,
     settle_outbox_event,
 };
 use deepref_application::outbox::{
     DeliveryContext, NewOutboxEvent, OutboxClaimFence, OutboxHandlerError, OutboxMessage,
     OutboxRegistry, OutboxRetry, TypedOutboxHandler,
-};
-use deepref_domain::events::{
-    EntityType, EventEnvelope, MetricsRecomputeRequested, SUBJECT_METRICS_RECOMPUTE_REQUESTED,
 };
 use deepref_domain::{JobKind, ProjectId};
 use serde::{Deserialize, Serialize};
@@ -72,6 +69,20 @@ impl OutboxMessage for Fanout {
     const TYPE: &'static str = "test.fanout";
     const VERSION: u32 = 1;
     const CONSUMERS: &'static [&'static str] = &["alpha", "beta"];
+}
+
+fn claim_registry() -> OutboxRegistry {
+    let mut registry = OutboxRegistry::new();
+    registry
+        .register::<Ping>(&[("alpha", Arc::new(|_, _| Box::pin(async { Ok(()) })))])
+        .expect("register");
+    registry
+        .register::<Fanout>(&[
+            ("alpha", Arc::new(|_, _| Box::pin(async { Ok(()) }))),
+            ("beta", Arc::new(|_, _| Box::pin(async { Ok(()) }))),
+        ])
+        .expect("register");
+    registry
 }
 
 /// What the test handler does per invocation. The effect is a durable job
@@ -304,13 +315,23 @@ async fn claims_are_exclusive_and_alone_never_mark_delivery() -> Result<()> {
     let event = ping_event(Uuid::new_v4(), "claim");
     insert(&pool, &event).await;
 
-    let first =
-        deepref_app::outbox::claim_outbox_batch(&pool, "owner-a", Duration::from_secs(60), 8)
-            .await?;
+    let first = deepref_app::outbox::claim_outbox_batch(
+        &pool,
+        &claim_registry(),
+        "owner-a",
+        Duration::from_secs(60),
+        8,
+    )
+    .await?;
     assert_eq!(first.len(), 1);
-    let second =
-        deepref_app::outbox::claim_outbox_batch(&pool, "owner-b", Duration::from_secs(60), 8)
-            .await?;
+    let second = deepref_app::outbox::claim_outbox_batch(
+        &pool,
+        &claim_registry(),
+        "owner-b",
+        Duration::from_secs(60),
+        8,
+    )
+    .await?;
     assert!(second.is_empty(), "an active lease is exclusive");
     let (state, delivered_at, ..) = event_row(&pool, event.event_id).await;
     assert_eq!(state, "pending", "claim alone never marks delivered");
@@ -319,14 +340,36 @@ async fn claims_are_exclusive_and_alone_never_mark_delivery() -> Result<()> {
     // An expired lease is reclaimable: the dispatcher crashed case.
     let expiring = ping_event(Uuid::new_v4(), "expiry");
     insert(&pool, &expiring).await;
-    let short =
-        deepref_app::outbox::claim_outbox_batch(&pool, "owner-c", Duration::from_millis(100), 8)
-            .await?;
+    let short = deepref_app::outbox::claim_outbox_batch(
+        &pool,
+        &claim_registry(),
+        "owner-c",
+        Duration::from_millis(100),
+        8,
+    )
+    .await?;
     assert_eq!(short.len(), 1);
     tokio::time::sleep(Duration::from_millis(300)).await;
-    let reclaimed =
-        deepref_app::outbox::claim_outbox_batch(&pool, "owner-b", Duration::from_secs(60), 8)
-            .await?;
+    assert!(
+        deepref_app::outbox::claim_outbox_batch(
+            &pool,
+            &claim_registry(),
+            "recovery",
+            Duration::from_secs(60),
+            8
+        )
+        .await?
+        .is_empty()
+    );
+    force_due(&pool, expiring.event_id).await;
+    let reclaimed = deepref_app::outbox::claim_outbox_batch(
+        &pool,
+        &claim_registry(),
+        "owner-b",
+        Duration::from_secs(60),
+        8,
+    )
+    .await?;
     assert_eq!(reclaimed.len(), 1, "the expired lease is reclaimed");
     assert_eq!(reclaimed[0].attempts, 2, "reclaim spends a claim attempt");
     Ok(())
@@ -339,10 +382,23 @@ async fn concurrent_claimers_cannot_claim_the_same_event() -> Result<()> {
     };
     let event = ping_event(Uuid::new_v4(), "concurrent claim");
     insert(&pool, &event).await;
+    let registry = claim_registry();
 
     let (first, second) = tokio::join!(
-        deepref_app::outbox::claim_outbox_batch(&pool, "concurrent-a", Duration::from_secs(30), 1,),
-        deepref_app::outbox::claim_outbox_batch(&pool, "concurrent-b", Duration::from_secs(30), 1,),
+        deepref_app::outbox::claim_outbox_batch(
+            &pool,
+            &registry,
+            "concurrent-a",
+            Duration::from_secs(30),
+            1,
+        ),
+        deepref_app::outbox::claim_outbox_batch(
+            &pool,
+            &registry,
+            "concurrent-b",
+            Duration::from_secs(30),
+            1,
+        ),
     );
     let first = first?;
     let second = second?;
@@ -361,9 +417,14 @@ async fn stale_generation_cannot_commit_effect_or_receipt_after_reclaim() -> Res
 
     // Reuse the owner string to prove the generation, rather than owner name,
     // is what fences an expired worker.
-    let old_claim =
-        deepref_app::outbox::claim_outbox_batch(&pool, "same-owner", Duration::from_secs(30), 1)
-            .await?;
+    let old_claim = deepref_app::outbox::claim_outbox_batch(
+        &pool,
+        &claim_registry(),
+        "same-owner",
+        Duration::from_secs(30),
+        1,
+    )
+    .await?;
     assert_eq!(old_claim.len(), 1);
     sqlx::query(
         "UPDATE outbox_events SET lease_expires_at = clock_timestamp() - interval '1 second' WHERE event_id=$1",
@@ -371,9 +432,26 @@ async fn stale_generation_cannot_commit_effect_or_receipt_after_reclaim() -> Res
     .bind(event.event_id)
     .execute(&pool)
     .await?;
-    let new_claim =
-        deepref_app::outbox::claim_outbox_batch(&pool, "same-owner", Duration::from_secs(30), 1)
-            .await?;
+    assert!(
+        deepref_app::outbox::claim_outbox_batch(
+            &pool,
+            &claim_registry(),
+            "recovery",
+            Duration::from_secs(30),
+            1
+        )
+        .await?
+        .is_empty()
+    );
+    force_due(&pool, event.event_id).await;
+    let new_claim = deepref_app::outbox::claim_outbox_batch(
+        &pool,
+        &claim_registry(),
+        "same-owner",
+        Duration::from_secs(30),
+        1,
+    )
+    .await?;
     assert_eq!(new_claim.len(), 1);
     assert!(new_claim[0].claim_fence.generation() > old_claim[0].claim_fence.generation());
 
@@ -398,11 +476,11 @@ async fn stale_generation_cannot_commit_effect_or_receipt_after_reclaim() -> Res
         effect.is_none(),
         "the stale receipt aborts its effect transaction"
     );
-    assert!(
-        list_outbox_receipts(&pool, event.event_id)
-            .await?
-            .is_empty()
-    );
+    let receipts = list_outbox_receipts(&pool, event.event_id).await?;
+    assert_eq!(receipts.len(), 1);
+    assert_eq!(receipts[0].state, ReceiptState::Retrying);
+    assert_eq!(receipts[0].attempts, 1);
+    assert!(receipts[0].delivered_at.is_none());
     let (state, delivered_at, ..) = event_row(&pool, event.event_id).await;
     assert_eq!(state, "pending");
     assert!(delivered_at.is_none());
@@ -576,9 +654,14 @@ async fn a_receipt_outside_the_expected_set_is_not_counted() -> Result<()> {
     };
     let event = fanout_event(Uuid::new_v4(), "rogue");
     insert(&pool, &event).await;
-    let claimed =
-        deepref_app::outbox::claim_outbox_batch(&pool, "rogue-owner", Duration::from_secs(30), 1)
-            .await?;
+    let claimed = deepref_app::outbox::claim_outbox_batch(
+        &pool,
+        &claim_registry(),
+        "rogue-owner",
+        Duration::from_secs(30),
+        1,
+    )
+    .await?;
     assert_eq!(claimed.len(), 1);
 
     let mut tx = pool.begin().await?;
@@ -603,9 +686,14 @@ async fn a_consumer_that_already_holds_a_receipt_is_a_no_op() -> Result<()> {
     };
     let event = ping_event(Uuid::new_v4(), "no-op");
     insert(&pool, &event).await;
-    let claimed =
-        deepref_app::outbox::claim_outbox_batch(&pool, "noop-owner", Duration::from_secs(30), 1)
-            .await?;
+    let claimed = deepref_app::outbox::claim_outbox_batch(
+        &pool,
+        &claim_registry(),
+        "noop-owner",
+        Duration::from_secs(30),
+        1,
+    )
+    .await?;
     assert_eq!(claimed.len(), 1);
     let mut tx = pool.begin().await?;
     let context = delivery_context(&claimed[0], "alpha");
@@ -620,7 +708,7 @@ async fn a_consumer_that_already_holds_a_receipt_is_a_no_op() -> Result<()> {
 }
 
 #[tokio::test]
-async fn unknown_message_type_is_handled_terminally() -> Result<()> {
+async fn unsupported_message_type_stays_pending() -> Result<()> {
     let Some(pool) = database().await else {
         return Ok(());
     };
@@ -645,17 +733,20 @@ async fn unknown_message_type_is_handled_terminally() -> Result<()> {
     )
     .await?;
     let (state, _, last_error, ..) = event_row(&pool, event.event_id).await;
-    assert_eq!(state, "quarantined");
-    let last_error = last_error.expect("quarantine keeps the reason");
+    assert_eq!(state, "pending");
     assert!(
-        last_error.contains("unknown message type test.unknown v9"),
-        "unexpected reason: {last_error}"
+        last_error.is_none(),
+        "unsupported contracts are not poison events"
     );
 
-    // Terminal means terminal: the row is never claimed again.
-    let claimed =
-        deepref_app::outbox::claim_outbox_batch(&pool, "unknown-owner", Duration::from_secs(30), 8)
-            .await?;
+    let claimed = deepref_app::outbox::claim_outbox_batch(
+        &pool,
+        &claim_registry(),
+        "unknown-owner",
+        Duration::from_secs(30),
+        8,
+    )
+    .await?;
     assert!(claimed.is_empty());
     Ok(())
 }
@@ -791,9 +882,14 @@ async fn terminal_failure_records_are_leases_aware_and_settle_releases() -> Resu
     };
     let event = ping_event(Uuid::new_v4(), "settle");
     insert(&pool, &event).await;
-    let claimed =
-        deepref_app::outbox::claim_outbox_batch(&pool, "settle-owner", Duration::from_secs(60), 8)
-            .await?;
+    let claimed = deepref_app::outbox::claim_outbox_batch(
+        &pool,
+        &claim_registry(),
+        "settle-owner",
+        Duration::from_secs(60),
+        8,
+    )
+    .await?;
     assert_eq!(claimed.len(), 1);
 
     let state = record_outbox_consumer_failure(
@@ -819,51 +915,126 @@ async fn terminal_failure_records_are_leases_aware_and_settle_releases() -> Resu
     let settled = settle_outbox_event(&pool, event.event_id, &claimed[0].claim_fence).await?;
     assert_eq!(settled, Some(deepref_app::outbox::DeliveryState::Pending));
     force_due(&pool, event.event_id).await;
-    let claimed_again =
-        deepref_app::outbox::claim_outbox_batch(&pool, "other-owner", Duration::from_secs(60), 8)
-            .await?;
+    let claimed_again = deepref_app::outbox::claim_outbox_batch(
+        &pool,
+        &claim_registry(),
+        "other-owner",
+        Duration::from_secs(60),
+        8,
+    )
+    .await?;
     assert_eq!(claimed_again.len(), 1, "settle released the lease");
     Ok(())
 }
 
 #[tokio::test]
-async fn the_pilot_message_runs_end_to_end_through_the_dispatcher() -> Result<()> {
+async fn abandoned_outbox_attempts_back_off_then_quarantine() -> Result<()> {
     let Some(pool) = database().await else {
         return Ok(());
     };
-    let project_id = project(&pool).await;
-    let envelope = EventEnvelope::v1(
-        SUBJECT_METRICS_RECOMPUTE_REQUESTED,
-        "outbox-test",
-        EntityType::Project,
-        format!("project:{project_id}"),
-        1,
+    let event = ping_event(Uuid::new_v4(), "repeated crashes").with_max_attempts(2);
+    insert(&pool, &event).await;
+    let registry = claim_registry();
+    for attempt in 1..=2 {
+        let claimed = deepref_app::outbox::claim_outbox_batch(
+            &pool,
+            &registry,
+            "crashed-worker",
+            Duration::from_secs(60),
+            1,
+        )
+        .await?;
+        assert_eq!(claimed.len(), 1);
+        assert_eq!(claimed[0].attempts, attempt);
+        sqlx::query("UPDATE outbox_events SET lease_expires_at=clock_timestamp()-interval '1 second' WHERE event_id=$1")
+            .bind(event.event_id).execute(&pool).await?;
+        let recovered = deepref_app::outbox::claim_outbox_batch(
+            &pool,
+            &registry,
+            "recovery",
+            Duration::from_secs(60),
+            1,
+        )
+        .await?;
+        assert!(
+            recovered.is_empty(),
+            "abandoned work must back off before another claim"
+        );
+        let receipts = list_outbox_receipts(&pool, event.event_id).await?;
+        assert_eq!(
+            receipts[0].attempts, attempt,
+            "abandoned consumer attempt was charged once"
+        );
+        assert!(
+            receipts[0]
+                .last_error
+                .as_deref()
+                .is_some_and(|e| e.contains("abandoned outbox claim"))
+        );
+        if attempt == 1 {
+            assert!(receipts[0].next_attempt_at > Utc::now());
+            assert!(
+                deepref_app::outbox::claim_outbox_batch(
+                    &pool,
+                    &registry,
+                    "too-early",
+                    Duration::from_secs(60),
+                    1
+                )
+                .await?
+                .is_empty()
+            );
+            force_due(&pool, event.event_id).await;
+        }
+    }
+    let (state, delivered_at, error, ..) = event_row(&pool, event.event_id).await;
+    assert_eq!(state, "quarantined");
+    assert!(delivered_at.is_none());
+    assert!(error.is_some_and(|e| e.contains("attempt budget exhausted")));
+    Ok(())
+}
+
+#[tokio::test]
+async fn an_empty_or_older_outbox_registry_leaves_new_contracts_pending() -> Result<()> {
+    let Some(pool) = database().await else {
+        return Ok(());
+    };
+    let known = ping_event(Uuid::new_v4(), "supported");
+    let newer = NewOutboxEvent::untyped(
         Uuid::new_v4(),
-        None,
-        MetricsRecomputeRequested {
-            project_id,
-            ingestion_id: None,
-        },
+        Ping::TYPE,
+        2,
+        json!({"note":"new version"}),
+        &["alpha"],
     );
-    let event = NewOutboxEvent::for_message(envelope.event_id, &envelope).expect("serializes");
-    let mut tx = pool.begin().await?;
-    insert_outbox_event(&mut tx, &event).await?;
-    tx.commit().await?;
-
-    let registry = pilot_outbox_registry(&pool)?;
-    dispatch_outbox_batch(&pool, &registry, "pilot-owner", Duration::from_secs(30), 8).await?;
-
-    let (state, delivered_at, ..) = event_row(&pool, event.event_id).await;
-    assert_eq!(state, "delivered");
-    assert!(delivered_at.is_some());
-    let dedupe_key = format!("outbox-metrics-recompute:{}", event.event_id);
-    assert_eq!(
-        jobs_with_dedupe(&pool, &dedupe_key).await,
-        1,
-        "the pilot consumer committed its durable job enqueue"
+    insert(&pool, &known).await;
+    insert(&pool, &newer).await;
+    assert!(
+        deepref_app::outbox::claim_outbox_batch(
+            &pool,
+            &OutboxRegistry::new(),
+            "old-worker",
+            Duration::from_secs(60),
+            8
+        )
+        .await?
+        .is_empty()
     );
-    let receipts = list_outbox_receipts(&pool, event.event_id).await?;
-    assert_eq!(receipts.len(), 1);
-    assert_eq!(receipts[0].consumer, "metrics-recompute");
+    let claimed = deepref_app::outbox::claim_outbox_batch(
+        &pool,
+        &claim_registry(),
+        "new-worker",
+        Duration::from_secs(60),
+        8,
+    )
+    .await?;
+    assert_eq!(claimed.len(), 1);
+    assert_eq!(claimed[0].event_id, known.event_id);
+    let row: (String, i32) =
+        sqlx::query_as("SELECT delivery_state,attempts FROM outbox_events WHERE event_id=$1")
+            .bind(newer.event_id)
+            .fetch_one(&pool)
+            .await?;
+    assert_eq!(row, ("pending".to_owned(), 0));
     Ok(())
 }

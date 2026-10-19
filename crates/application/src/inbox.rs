@@ -153,8 +153,7 @@ pub enum InboxRegistryError {
 }
 
 /// Typed handler registry keyed by `(provider, event_type)`. An event type no
-/// handler is registered for is quarantined terminally (visible for review and
-/// replay), never silently discarded.
+/// handler is registered for stays pending for a compatible deployment.
 #[derive(Clone, Default)]
 pub struct InboxRegistry {
     handlers: BTreeMap<(String, String), ErasedInboxHandler>,
@@ -190,6 +189,13 @@ impl InboxRegistry {
             });
         self.handlers.insert(key, erased);
         Ok(())
+    }
+
+    /// Provider contracts this worker can safely claim.
+    pub fn contracts(&self) -> impl Iterator<Item = (&str, &str)> {
+        self.handlers
+            .keys()
+            .map(|(provider, event_type)| (provider.as_str(), event_type.as_str()))
     }
 
     pub fn handler(&self, provider: &str, event_type: &str) -> Option<&ErasedInboxHandler> {

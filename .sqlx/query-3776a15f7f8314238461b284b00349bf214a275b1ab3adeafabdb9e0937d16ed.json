@@ -1,6 +1,6 @@
 {
   "db_name": "PostgreSQL",
-  "query": "WITH candidate AS (\n             SELECT event_id\n             FROM outbox_events\n             WHERE delivery_state = 'pending'\n               AND (lease_expires_at IS NULL OR lease_expires_at < clock_timestamp())\n               AND next_attempt_at <= now()\n             ORDER BY created_at\n             FOR UPDATE SKIP LOCKED\n             LIMIT $3\n           )\n           UPDATE outbox_events e\n           SET lease_owner = $1,\n               lease_expires_at = clock_timestamp() + ($2::double precision * interval '1 millisecond'),\n               attempts = e.attempts + 1,\n               claim_generation = e.claim_generation + 1\n           FROM candidate\n           WHERE e.event_id = candidate.event_id\n           RETURNING e.event_id, e.message_type, e.message_version, e.payload,\n                     e.expected_consumers, e.attempts, e.max_attempts, e.claim_generation",
+  "query": "WITH candidate AS (\n             SELECT event_id\n             FROM outbox_events\n             WHERE delivery_state = 'pending' AND lease_owner IS NULL\n               AND next_attempt_at <= clock_timestamp()\n               AND (message_type, message_version) IN (\n                 SELECT * FROM unnest($4::text[], $5::integer[]))\n             ORDER BY created_at, event_id\n             FOR UPDATE SKIP LOCKED\n             LIMIT $3\n           )\n           UPDATE outbox_events e\n           SET lease_owner = $1,\n               lease_expires_at = clock_timestamp() + ($2::double precision * interval '1 millisecond'),\n               attempts = e.attempts + 1,\n               claim_generation = e.claim_generation + 1\n           FROM candidate\n           WHERE e.event_id = candidate.event_id\n           RETURNING e.event_id, e.message_type, e.message_version, e.payload,\n                     e.expected_consumers, e.attempts, e.max_attempts, e.claim_generation",
   "describe": {
     "columns": [
       {
@@ -96,7 +96,9 @@
       "Left": [
         "Text",
         "Float8",
-        "Int8"
+        "Int8",
+        "TextArray",
+        "Int4Array"
       ]
     },
     "nullable": [
@@ -110,5 +112,5 @@
       false
     ]
   },
-  "hash": "ef94a8c925e01579d96ae91b8689ed014a194d15b442f06d743a028ed10695d9"
+  "hash": "3776a15f7f8314238461b284b00349bf214a275b1ab3adeafabdb9e0937d16ed"
 }

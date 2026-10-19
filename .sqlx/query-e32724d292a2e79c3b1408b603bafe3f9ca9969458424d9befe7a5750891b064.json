@@ -1,0 +1,14 @@
+{
+  "db_name": "PostgreSQL",
+  "query": "WITH expired AS (\n             SELECT id FROM integration_inbox_events\n             WHERE processing_state='processed' AND payload IS NOT NULL\n               AND payload_expires_at <= clock_timestamp()\n             ORDER BY payload_expires_at,id FOR UPDATE SKIP LOCKED LIMIT $1\n           )\n           UPDATE integration_inbox_events i\n           SET payload=NULL,payload_purged_at=clock_timestamp()\n           FROM expired WHERE i.id=expired.id",
+  "describe": {
+    "columns": [],
+    "parameters": {
+      "Left": [
+        "Int8"
+      ]
+    },
+    "nullable": []
+  },
+  "hash": "e32724d292a2e79c3b1408b603bafe3f9ca9969458424d9befe7a5750891b064"
+}

@@ -279,6 +279,13 @@ impl OutboxRegistry {
         Ok(())
     }
 
+    /// Contracts this worker can safely claim, used by persistence filtering.
+    pub fn contracts(&self) -> impl Iterator<Item = (&str, u32)> {
+        self.contracts
+            .keys()
+            .map(|(kind, version)| (kind.as_str(), *version))
+    }
+
     /// The frozen expected consumers of this contract, when it is registered.
     pub fn expected_consumers(
         &self,
@@ -302,9 +309,8 @@ impl OutboxRegistry {
             .and_then(|contract| contract.handlers.get(consumer))
     }
 
-    /// False when no contract is registered for this type + version. The
-    /// dispatcher handles that terminally: an unknown message type or version
-    /// is quarantined, never retried.
+    /// False when no contract is registered for this type + version. Workers
+    /// leave unsupported contracts pending for a compatible deployment.
     pub fn knows(&self, message_type: &str, message_version: u32) -> bool {
         self.contracts
             .contains_key(&(message_type.to_owned(), message_version))
@@ -321,26 +327,9 @@ pub enum OutboxRetry {
     Terminal,
 }
 
-/// The metrics-recompute wakeup pilot contract (handoff 04a). The domain
-/// event is an already eventually consistent projection refresh: recomputing
-/// project graph metrics converges no matter how often it runs, so it is the
-/// low-risk pilot message for the outbox → dispatcher → handler → durable job
-/// chain. Its consumer is `metrics-recompute`.
-pub type MetricsRecomputeMessage =
-    deepref_domain::events::EventEnvelope<deepref_domain::events::MetricsRecomputeRequested>;
-
-impl OutboxMessage for MetricsRecomputeMessage {
-    const TYPE: &'static str = deepref_domain::events::SUBJECT_METRICS_RECOMPUTE_REQUESTED;
-    const VERSION: u32 = 1;
-    const CONSUMERS: &'static [&'static str] = &["metrics-recompute"];
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
-    use deepref_domain::events::{
-        EntityType, EventEnvelope, MetricsRecomputeRequested, SUBJECT_METRICS_RECOMPUTE_REQUESTED,
-    };
 
     #[derive(Debug, Clone, Serialize, serde::Deserialize)]
     struct TestMessage {
@@ -401,31 +390,6 @@ mod tests {
         assert!(!registry.knows("test.other", 1));
         assert!(registry.handler("test.message", 1, "alpha").is_some());
         assert!(registry.handler("test.message", 1, "gamma").is_none());
-    }
-
-    #[test]
-    fn the_pilot_contract_names_one_stable_consumer() {
-        assert_eq!(
-            MetricsRecomputeMessage::TYPE,
-            SUBJECT_METRICS_RECOMPUTE_REQUESTED
-        );
-        assert_eq!(MetricsRecomputeMessage::VERSION, 1);
-        assert_eq!(MetricsRecomputeMessage::CONSUMERS, &["metrics-recompute"]);
-        let envelope: MetricsRecomputeMessage = EventEnvelope::v1(
-            SUBJECT_METRICS_RECOMPUTE_REQUESTED,
-            "test",
-            EntityType::Project,
-            "project:test",
-            1,
-            Uuid::nil(),
-            None,
-            MetricsRecomputeRequested {
-                project_id: Uuid::nil(),
-                ingestion_id: None,
-            },
-        );
-        let event = NewOutboxEvent::for_message(envelope.event_id, &envelope).expect("serializes");
-        assert_eq!(event.expected_consumers, vec!["metrics-recompute"]);
     }
 
     #[test]
