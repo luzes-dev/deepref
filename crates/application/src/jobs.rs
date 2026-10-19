@@ -78,6 +78,9 @@ pub struct ClaimedJob {
     pub scope: JobScope,
     pub kind: JobKind,
     pub payload: serde_json::Value,
+    /// Monotonic identity for this claim. Unlike `attempts`, it is never
+    /// refunded when unstarted work is released.
+    pub claim_seq: i64,
     pub attempts: i32,
     pub max_attempts: i32,
 }
@@ -104,24 +107,28 @@ impl ClaimedJob {
     }
 
     /// The claim token for this attempt, held by `owner` (the worker that
-    /// claimed it). Renew, complete and fail take effect only while this exact
-    /// attempt still holds the lease.
+    /// claimed it). `claim_seq` fences lifecycle writes; `attempt` remains the
+    /// refundable business-attempt count used by workflow bookkeeping.
     pub fn lease(&self, owner: impl Into<String>) -> JobLease {
         JobLease {
             id: self.id,
             owner: owner.into(),
+            claim_seq: self.claim_seq,
             attempt: self.attempts,
         }
     }
 }
 
 /// Fencing token for one claim of a job. The owner names the worker process;
-/// the attempt tells this claim apart from an earlier claim by the same
-/// process whose lease expired and was reclaimed.
+/// the monotonic claim sequence distinguishes claims even when a released
+/// claim refunds the business attempt counter.
 #[derive(Debug, Clone, PartialEq, Eq, Serialize, Deserialize)]
 pub struct JobLease {
     pub id: Uuid,
     pub owner: String,
+    pub claim_seq: i64,
+    /// Business attempt number. It may be refunded for an unstarted claim and
+    /// is not a fencing identity.
     pub attempt: i32,
 }
 
@@ -162,17 +169,17 @@ pub trait DurableExecutionStore: Send + Sync {
         limit: usize,
     ) -> impl Future<Output = anyhow::Result<Vec<ClaimedJob>>> + Send;
 
-    /// Extend the lease of the exact fenced attempt.
+    /// Extend the lease of the exact monotonic claim identity.
     fn renew(
         &self,
         lease: &JobLease,
         duration: Duration,
     ) -> impl Future<Output = anyhow::Result<bool>> + Send;
 
-    /// Terminal success of the exact fenced attempt.
+    /// Terminal success of the exact monotonic claim identity.
     fn complete(&self, lease: &JobLease) -> impl Future<Output = anyhow::Result<bool>> + Send;
 
-    /// Record a failed attempt of the exact fenced attempt. A retry persists
+    /// Record a failure for the exact monotonic claim identity. A retry persists
     /// its due time before the job becomes claimable again.
     fn fail(
         &self,
@@ -187,6 +194,16 @@ pub trait DurableExecutionStore: Send + Sync {
     /// business execution was accepted. Only valid for claims whose handler
     /// never started; the released token must then be discarded.
     fn release(&self, lease: &JobLease) -> impl Future<Output = anyhow::Result<bool>> + Send;
+
+    /// Release an unstarted claim only if the write can finish before the
+    /// absolute shutdown deadline. Implementations with remote or database
+    /// writes must enforce the deadline at the side-effect boundary as well
+    /// as at the caller, so a cancelled future cannot apply a late release.
+    fn release_until(
+        &self,
+        lease: &JobLease,
+        deadline: std::time::Instant,
+    ) -> impl Future<Output = anyhow::Result<bool>> + Send;
 
     /// Requeue or dead-letter jobs whose lease expired without a graceful
     /// completion or failure. Recovery never increments attempts: the expired

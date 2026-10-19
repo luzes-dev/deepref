@@ -216,8 +216,8 @@ pub use study::{
 };
 pub use worker_runtime::{
     MissingAcquisitionWork, WorkerLeaseRecovery, find_missing_acquisition_work,
-    record_worker_heartbeat, recover_expired_worker_state, remove_worker_heartbeat,
-    reserve_provider_permit,
+    record_worker_heartbeat, record_worker_heartbeat_with_capacities, recover_expired_worker_state,
+    remove_worker_heartbeat, reserve_provider_permit,
 };
 pub use workflows::*;
 

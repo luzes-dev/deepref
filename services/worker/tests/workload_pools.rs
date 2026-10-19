@@ -108,6 +108,45 @@ struct ShutdownAfterBatchTransport {
     shutdown: Mutex<Option<tokio::sync::oneshot::Sender<()>>>,
 }
 
+/// Locks the claimed row before signaling shutdown so releasing the unstarted
+/// claim blocks on PostgreSQL until the common shutdown deadline expires.
+struct LockedReleaseTransport {
+    inner: PostgresClaimTransport,
+    pool: PgPool,
+    job_id: Uuid,
+    lock_ready: Mutex<Option<tokio::sync::oneshot::Sender<()>>>,
+    unlock: Mutex<Option<tokio::sync::oneshot::Receiver<()>>>,
+    shutdown: Mutex<Option<tokio::sync::oneshot::Sender<()>>>,
+}
+
+impl WorkTransport for LockedReleaseTransport {
+    async fn next_work(&self, request: WorkRequest<'_>) -> anyhow::Result<Vec<ClaimedJob>> {
+        let jobs = self.inner.next_work(request).await?;
+        let lock_ready = if jobs.is_empty() {
+            None
+        } else {
+            self.lock_ready.lock().unwrap().take()
+        };
+        if let Some(lock_ready) = lock_ready {
+            let mut transaction = self.pool.begin().await?;
+            sqlx::query("SELECT id FROM jobs WHERE id=$1 FOR UPDATE")
+                .bind(self.job_id)
+                .fetch_one(&mut *transaction)
+                .await?;
+            let unlock = self.unlock.lock().unwrap().take().unwrap();
+            tokio::spawn(async move {
+                let _ = unlock.await;
+                let _ = transaction.rollback().await;
+            });
+            let _ = lock_ready.send(());
+            if let Some(shutdown) = self.shutdown.lock().unwrap().take() {
+                let _ = shutdown.send(());
+            }
+        }
+        Ok(jobs)
+    }
+}
+
 impl WorkTransport for ShutdownAfterBatchTransport {
     async fn next_work(&self, request: WorkRequest<'_>) -> anyhow::Result<Vec<ClaimedJob>> {
         let jobs = self.inner.next_work(request).await?;
@@ -212,6 +251,116 @@ async fn a_pool_worker_never_claims_another_workload_class() {
     let (state, attempts) = job_row(&pool, ai_id).await;
     assert_eq!(state, "queued", "ai work stays queued for an ai worker");
     assert_eq!(attempts, 0, "ai work is never claimed, let alone attempted");
+}
+
+#[tokio::test]
+async fn a_stalled_shutdown_release_uses_the_drain_deadline_and_leaves_the_lease_for_recovery() {
+    let Some(pool) = database().await else {
+        return;
+    };
+    let project_id = project(&pool).await;
+    let job_id = Uuid::new_v4();
+    enqueue_job_pool(
+        &pool,
+        &job(
+            job_id,
+            project_id,
+            JobKind::ParseDocument,
+            serde_json::json!({"document_id": Uuid::new_v4()}),
+            format!("pools-locked-release:{job_id}"),
+        ),
+    )
+    .await
+    .expect("enqueue fixture");
+
+    let (lock_ready, locked) = tokio::sync::oneshot::channel();
+    let (unlock, unlock_signal) = tokio::sync::oneshot::channel();
+    let (shutdown, shutdown_signal) = tokio::sync::oneshot::channel();
+    let transport = LockedReleaseTransport {
+        inner: PostgresClaimTransport {
+            store: PostgresDurableExecutionStore { pool: pool.clone() },
+        },
+        pool: pool.clone(),
+        job_id,
+        lock_ready: Mutex::new(Some(lock_ready)),
+        unlock: Mutex::new(Some(unlock_signal)),
+        shutdown: Mutex::new(Some(shutdown)),
+    };
+    let handler_called = Arc::new(AtomicUsize::new(0));
+    let handler: JobHandler = {
+        let handler_called = Arc::clone(&handler_called);
+        Arc::new(move |_job: ClaimedJob, _lease: JobLease| {
+            let handler_called = Arc::clone(&handler_called);
+            Box::pin(async move {
+                handler_called.fetch_add(1, Ordering::SeqCst);
+                Ok(DeliveryAction::Ack)
+            })
+        })
+    };
+    let loop_task = tokio::spawn(run_claim_loop(
+        transport,
+        PostgresDurableExecutionStore { pool: pool.clone() },
+        "pools-locked-release-test".to_owned(),
+        ClaimLoopConfig {
+            pools: vec![WorkloadClass::Documents],
+            pool_concurrency: HashMap::from([(WorkloadClass::Documents, 1)]),
+            max_batch: 1,
+            claim_lease: Duration::from_secs(30),
+            drain_deadline: Duration::from_millis(200),
+        },
+        handler,
+        async move {
+            let _ = shutdown_signal.await;
+        },
+    ));
+
+    tokio::time::timeout(Duration::from_secs(5), locked)
+        .await
+        .expect("transport locks the claimed row")
+        .expect("row lock is held");
+    tokio::time::timeout(Duration::from_secs(2), loop_task)
+        .await
+        .expect("shutdown returns within its one deadline")
+        .expect("claim loop task joins")
+        .expect("timed-out unstarted releases are left for recovery");
+
+    let row = sqlx::query("SELECT state,attempts,claim_seq FROM jobs WHERE id=$1")
+        .bind(job_id)
+        .fetch_one(&pool)
+        .await
+        .expect("claimed row");
+    assert_eq!(row.get::<String, _>("state"), "running");
+    assert_eq!(row.get::<i32, _>("attempts"), 1);
+    assert_eq!(row.get::<i64, _>("claim_seq"), 1);
+    assert_eq!(handler_called.load(Ordering::SeqCst), 0);
+
+    // Abandoning the release future does not cancel its statement on the
+    // server: once the lock is gone PostgreSQL may still apply that fenced
+    // release, refunding the unstarted attempt. Otherwise lease recovery
+    // requeues the claim and keeps the spent attempt. Both are correct.
+    let _ = unlock.send(());
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    sqlx::query(
+        "UPDATE jobs SET leased_until=now()-interval '1 second' WHERE id=$1 AND state='running'",
+    )
+    .bind(job_id)
+    .execute(&pool)
+    .await
+    .expect("expire the abandoned lease");
+    deepref_app::recover_expired_jobs(&pool)
+        .await
+        .expect("lease recovery requeues the abandoned claim");
+    let recovered = sqlx::query("SELECT state,attempts FROM jobs WHERE id=$1")
+        .bind(job_id)
+        .fetch_one(&pool)
+        .await
+        .expect("recovered row");
+    assert_eq!(recovered.get::<String, _>("state"), "queued");
+    assert!(
+        matches!(recovered.get::<i32, _>("attempts"), 0 | 1),
+        "a late fenced release refunds the attempt; recovery keeps it"
+    );
+    assert_eq!(handler_called.load(Ordering::SeqCst), 0);
 }
 
 /// A tick claims at most `min(free pool capacity, max_batch)` jobs in one
@@ -326,6 +475,113 @@ async fn batch_claims_are_bounded_by_free_pool_capacity() {
         "every batch stayed within free capacity: {calls:?}"
     );
     for id in ids {
+        let (state, attempts) = job_row(&pool, id).await;
+        assert_eq!(state, "completed");
+        assert_eq!(attempts, 1);
+    }
+}
+
+#[tokio::test]
+async fn a_poison_row_is_quarantined_while_valid_batch_siblings_run() {
+    let Some(pool) = database().await else {
+        return;
+    };
+    let project_id = project(&pool).await;
+    let poison_id = Uuid::new_v4();
+    sqlx::query(
+        "INSERT INTO jobs (id,project_id,kind,workload_class,priority,payload,dedupe_key)
+         VALUES ($1,$2,'invalid_persisted_kind','workflow',2147483647,'{}',$3)",
+    )
+    .bind(poison_id)
+    .bind(project_id.as_uuid())
+    .bind(format!("pools-poison:{poison_id}"))
+    .execute(&pool)
+    .await
+    .expect("poison row");
+    let valid_ids = [Uuid::new_v4(), Uuid::new_v4()];
+    for id in valid_ids {
+        enqueue_job_pool(
+            &pool,
+            &job(
+                id,
+                project_id,
+                JobKind::DurableRunStep,
+                serde_json::json!({"fixture": id}),
+                format!("pools-poison-valid:{id}"),
+            ),
+        )
+        .await
+        .expect("valid sibling");
+    }
+
+    let handled = Arc::new(Mutex::new(Vec::new()));
+    let handler: JobHandler = {
+        let handled = Arc::clone(&handled);
+        Arc::new(move |job: ClaimedJob, _lease: JobLease| {
+            let handled = Arc::clone(&handled);
+            Box::pin(async move {
+                handled.lock().unwrap().push(job.id);
+                Ok(DeliveryAction::Ack)
+            })
+        })
+    };
+    let shutdown = {
+        let pool = pool.clone();
+        async move {
+            loop {
+                let (dead, complete): (i64, i64) = sqlx::query_as(
+                    "SELECT count(*) FILTER (WHERE id=$1 AND state='dead'),
+                            count(*) FILTER (WHERE dedupe_key LIKE 'pools-poison-valid:%' AND state='completed')
+                     FROM jobs",
+                )
+                .bind(poison_id)
+                .fetch_one(&pool)
+                .await
+                .expect("poison completion counts");
+                if dead == 1 && complete == 2 {
+                    return;
+                }
+                tokio::time::sleep(Duration::from_millis(25)).await;
+            }
+        }
+    };
+    tokio::time::timeout(
+        Duration::from_secs(10),
+        run_claim_loop(
+            PostgresClaimTransport {
+                store: PostgresDurableExecutionStore { pool: pool.clone() },
+            },
+            PostgresDurableExecutionStore { pool: pool.clone() },
+            "pools-poison-test".to_owned(),
+            loop_config(
+                &[WorkloadClass::Workflow],
+                &[(WorkloadClass::Workflow, 3)],
+                3,
+            ),
+            handler,
+            shutdown,
+        ),
+    )
+    .await
+    .expect("valid siblings drain after poison quarantine")
+    .expect("claim loop succeeds");
+
+    let handled = handled.lock().unwrap().clone();
+    assert_eq!(handled.len(), 2);
+    assert!(valid_ids.iter().all(|id| handled.contains(id)));
+    let poison = sqlx::query("SELECT state,attempts,last_error FROM jobs WHERE id=$1")
+        .bind(poison_id)
+        .fetch_one(&pool)
+        .await
+        .expect("poison row");
+    assert_eq!(poison.get::<String, _>("state"), "dead");
+    assert_eq!(poison.get::<i32, _>("attempts"), 0);
+    assert!(
+        poison
+            .get::<String, _>("last_error")
+            .contains("invalid_persisted_kind")
+    );
+    for id in valid_ids {
         let (state, attempts) = job_row(&pool, id).await;
         assert_eq!(state, "completed");
         assert_eq!(attempts, 1);

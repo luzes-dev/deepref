@@ -506,34 +506,140 @@ async fn a_stale_attempt_of_the_same_owner_cannot_touch_the_reclaimed_job() -> R
 }
 
 #[tokio::test]
-async fn an_invalid_persisted_kind_fails_visibly_without_discarding_the_job() -> Result<()> {
+async fn a_released_claim_identity_cannot_mutate_a_reclaim_by_the_same_owner() -> Result<()> {
+    let Some(pool) = database().await else {
+        return Ok(());
+    };
+    let queue = PostgresDurableExecutionStore { pool: pool.clone() };
+    let project_id = fixture_project(&pool).await?;
+    let job_id = Uuid::new_v4();
+    let result = async {
+        queue
+            .enqueue(fixture_job(
+                project_id,
+                job_id,
+                deepref_domain::JobKind::RecomputeMetrics,
+                format!("jobs-integration-released-fence:{job_id}"),
+            ))
+            .await?;
+        let first = claim_one(&queue, "same-owner", Duration::from_secs(10))
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("first claim should be available"))?;
+        let stale = first.lease("same-owner");
+        ensure!(queue.release(&stale).await?, "unstarted claim is released");
+
+        let second = claim_one(&queue, "same-owner", Duration::from_secs(10))
+            .await?
+            .ok_or_else(|| anyhow::anyhow!("released job should be reclaimed"))?;
+        let live = second.lease("same-owner");
+        ensure!(
+            first.attempts == second.attempts,
+            "release refunds the attempt"
+        );
+        ensure!(
+            stale.claim_seq < live.claim_seq,
+            "each claim advances the independent claim identity"
+        );
+        ensure!(
+            !queue.renew(&stale, Duration::from_secs(10)).await?,
+            "the stale identity cannot renew the live claim"
+        );
+        ensure!(
+            !queue.complete(&stale).await?,
+            "the stale identity cannot complete the live claim"
+        );
+        ensure!(
+            !queue
+                .fail(&stale, "stale failure", JobRetry::DeadLetter)
+                .await?,
+            "the stale identity cannot fail the live claim"
+        );
+        ensure!(
+            !queue.release(&stale).await?,
+            "the stale identity cannot release the live claim"
+        );
+        let row = sqlx::query("SELECT state,attempts,claim_seq FROM jobs WHERE id=$1")
+            .bind(job_id)
+            .fetch_one(&pool)
+            .await?;
+        ensure!(row.get::<String, _>("state") == "running");
+        ensure!(row.get::<i32, _>("attempts") == 1);
+        ensure!(row.get::<i64, _>("claim_seq") == live.claim_seq);
+        ensure!(queue.complete(&live).await?, "current claim completes");
+        Ok::<_, anyhow::Error>(())
+    }
+    .await;
+
+    let cleanup_result = cleanup(&pool, project_id).await;
+    cleanup_result?;
+    result
+}
+
+#[tokio::test]
+async fn a_poison_row_is_quarantined_without_stranding_valid_batch_siblings() -> Result<()> {
     let Some(pool) = database().await else {
         return Ok(());
     };
     let project_id = fixture_project(&pool).await?;
-    let job_id = Uuid::new_v4();
+    let poison_id = Uuid::new_v4();
+    let valid_ids = [Uuid::new_v4(), Uuid::new_v4()];
+    let queue = PostgresDurableExecutionStore { pool: pool.clone() };
     let result = async {
         sqlx::query(
-            "INSERT INTO jobs (id,project_id,kind,workload_class,payload,priority,dedupe_key) VALUES ($1,$2,'invalid_persisted_kind','workflow','{}',$3,$4)",
+            "INSERT INTO jobs (id,project_id,kind,workload_class,payload,priority,dedupe_key)
+             VALUES ($1,$2,'invalid_persisted_kind','workflow','{}',2147483647,$3)",
         )
-        .bind(job_id)
+        .bind(poison_id)
         .bind(project_id.as_uuid())
-        .bind(i32::MAX)
-        .bind(format!("invalid-kind:{job_id}"))
+        .bind(format!("invalid-kind:{poison_id}"))
         .execute(&pool)
         .await?;
-        let queue = PostgresDurableExecutionStore { pool: pool.clone() };
-        let error = claim_one(&queue, "invalid-kind-owner", Duration::from_secs(30))
-            .await.expect_err("unknown persisted kind must not dispatch or fall back");
-        ensure!(format!("{error:#}").contains("invalid_persisted_kind"));
-        ensure!(format!("{error:#}").contains(&job_id.to_string()));
-        let row = sqlx::query("SELECT kind,state,attempts FROM jobs WHERE id=$1")
-            .bind(job_id).fetch_one(&pool).await?;
-        ensure!(row.get::<String, _>("kind") == "invalid_persisted_kind");
-        ensure!(row.get::<String, _>("state") == "running");
-        ensure!(row.get::<i32, _>("attempts") == 1);
+        for id in valid_ids {
+            queue
+                .enqueue(fixture_job(
+                    project_id,
+                    id,
+                    deepref_domain::JobKind::DurableRunStep,
+                    format!("valid-batch-sibling:{id}"),
+                ))
+                .await?;
+        }
+        let claimed = claim_jobs(
+            &pool,
+            "invalid-kind-owner",
+            Duration::from_secs(30),
+            &[WorkloadClass::Workflow],
+            3,
+        )
+        .await?;
+        ensure!(claimed.len() == 2, "valid siblings survive poison decoding");
+        ensure!(
+            claimed.iter().all(|job| valid_ids.contains(&job.id)),
+            "both returned jobs are valid siblings"
+        );
+        let poison = sqlx::query("SELECT kind,state,attempts,last_error FROM jobs WHERE id=$1")
+            .bind(poison_id)
+            .fetch_one(&pool)
+            .await?;
+        ensure!(poison.get::<String, _>("kind") == "invalid_persisted_kind");
+        ensure!(poison.get::<String, _>("state") == "dead");
+        ensure!(poison.get::<i32, _>("attempts") == 0);
+        ensure!(
+            poison
+                .get::<String, _>("last_error")
+                .contains("invalid_persisted_kind")
+        );
+        for id in valid_ids {
+            let row = sqlx::query("SELECT state,attempts FROM jobs WHERE id=$1")
+                .bind(id)
+                .fetch_one(&pool)
+                .await?;
+            ensure!(row.get::<String, _>("state") == "running");
+            ensure!(row.get::<i32, _>("attempts") == 1);
+        }
         Ok::<_, anyhow::Error>(())
-    }.await;
+    }
+    .await;
     cleanup(&pool, project_id).await?;
     result
 }

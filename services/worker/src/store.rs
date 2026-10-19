@@ -313,8 +313,8 @@ async fn validate_event_ownership(
     lease: &JobLease,
 ) -> anyhow::Result<()> {
     let valid = sqlx::query(
-        "SELECT id FROM jobs WHERE id=$1 AND state='running' AND lease_owner=$2 AND attempts=$3 AND leased_until>clock_timestamp() FOR UPDATE",
-    ).bind(lease.id).bind(&lease.owner).bind(lease.attempt).fetch_optional(&mut **tx).await?;
+        "SELECT id FROM jobs WHERE id=$1 AND state='running' AND lease_owner=$2 AND claim_seq=$3 AND leased_until>clock_timestamp() FOR UPDATE",
+    ).bind(lease.id).bind(&lease.owner).bind(lease.claim_seq).fetch_optional(&mut **tx).await?;
     if valid.is_none() {
         anyhow::bail!("job lease ownership was lost before persistence");
     }
@@ -799,6 +799,7 @@ mod tests {
         let mut lease = deepref_application::jobs::JobLease {
             id: event.event_id,
             owner: "current-owner".to_owned(),
+            claim_seq: 1,
             attempt: 1,
         };
         anyhow::ensure!(
@@ -812,7 +813,7 @@ mod tests {
             )
             .await
             .is_err(),
-            "a stale attempt must not settle the acquisition item"
+            "a stale claim identity must not settle the acquisition item"
         );
         let queued: i32 =
             sqlx::query_scalar("SELECT queued_count FROM acquisition_runs WHERE id=$1")
@@ -820,7 +821,7 @@ mod tests {
                 .fetch_one(&pool)
                 .await?;
         anyhow::ensure!(queued == 1, "stale completion changed the queued count");
-        lease.attempt = 2;
+        lease.claim_seq = 0;
         for _ in 0..2 {
             super::complete_without_doi(
                 &pool,
@@ -941,6 +942,7 @@ mod tests {
         let lease = JobLease {
             id: event.event_id,
             owner: "worker-fixture".to_owned(),
+            claim_seq: 0,
             attempt: 1,
         };
         Ok((event, lease))

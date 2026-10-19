@@ -250,6 +250,7 @@ async fn seed_work_fetch_to_depth(
         scope: JobScope::Project(ProjectId::new(project_id)),
         kind: JobKind::WorkFetchRequested,
         payload: serde_json::to_value(&event)?,
+        claim_seq: 0,
         attempts: 1,
         max_attempts: 5,
     };

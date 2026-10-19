@@ -169,19 +169,20 @@ pool. The only transport today is the PostgreSQL claim path
 `crates/app/src/jobs.rs`): delivery means claiming, and the claim remains the
 authority. No provider SDK or SQLx type appears in the ports.
 
-The delivery handler's state-transition matrix — every authoritative state a
-delivery can observe (queued/due, live lease, expired lease, stale generation,
-completed, cancelled, superseded, lost fence) mapped to its action and
-ACK/NAK/term response — is encoded in `services/worker/src/delivery.rs`
-(`delivery_matrix`) and tested row by row. The claim path enforces the same
-rows in SQL, fenced attempts keep lost fences from touching reclaimed work,
-and no matrix row answers with a transport NAK.
+`services/worker/src/delivery.rs` keeps a pure `delivery_matrix` helper for the
+05b broker response contract. The 05a PostgreSQL claim query checks queued
+state, due time, attempt budget and workload class; it does not inspect whether
+an owning run was cancelled or superseded. Runtime dispatch guards load the
+owning run and skip terminal work before invoking its handler. Broker
+ACK/NAK/term semantics belong to 05b, when a broker transport is introduced;
+the 05a claim path has no broker response to send.
 
-Business attempts increment exactly once, when a claim/fence is accepted.
-Failure retries persist their due time in `available_at`, the claim loop picks
-work up when it is due, and a claim released before its handler starts (a
-worker draining mid-batch) refunds its attempt. Expired-lease recovery reuses
-the attempt the crashed claim already spent.
+Business attempts increment when a claim is accepted and are refunded when an
+unstarted claim is released. The independent monotonic `claim_seq` advances on
+every claim and fences renew, complete, fail and release, even when a released
+claim is reclaimed by the same worker owner. Failure retries persist their due
+time in `available_at`, and expired-lease recovery reuses the attempt the
+crashed claim already spent.
 
 Every job row carries a typed scope — `project`, `workspace` or `platform`
 (`jobs.scope`, with `project_id` / `workspace_id` as the matching tenant

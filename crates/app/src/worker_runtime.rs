@@ -1,6 +1,7 @@
 use std::time::Duration;
 
 use chrono::{DateTime, Utc};
+use deepref_domain::WorkloadClass;
 use sqlx::{PgPool, Row};
 use uuid::Uuid;
 
@@ -117,14 +118,52 @@ pub async fn find_missing_acquisition_work(
 /// Upsert `owner`'s liveness row (`worker_heartbeats`), and prune rows of
 /// workers that stopped without a clean shutdown more than a day ago.
 pub async fn record_worker_heartbeat(pool: &PgPool, owner: &str) -> anyhow::Result<()> {
+    record_worker_heartbeat_inner(pool, owner, None).await
+}
+
+/// Refresh worker liveness and the configured capacities of its served pools.
+/// Keys are the fixed workload class names; no tenant identifiers are stored.
+pub async fn record_worker_heartbeat_with_capacities(
+    pool: &PgPool,
+    owner: &str,
+    pool_capacities: &[(WorkloadClass, usize)],
+) -> anyhow::Result<()> {
+    let mut capacity_json = serde_json::Map::new();
+    for (class, capacity) in pool_capacities {
+        let capacity = i64::try_from(*capacity).unwrap_or(i64::MAX);
+        capacity_json.insert(class.as_str().to_owned(), serde_json::Value::from(capacity));
+    }
+    record_worker_heartbeat_inner(pool, owner, Some(serde_json::Value::Object(capacity_json))).await
+}
+
+async fn record_worker_heartbeat_inner(
+    pool: &PgPool,
+    owner: &str,
+    pool_capacities: Option<serde_json::Value>,
+) -> anyhow::Result<()> {
     let mut tx = pool.begin().await?;
-    sqlx::query(
-        "INSERT INTO worker_heartbeats (owner) VALUES ($1)
-         ON CONFLICT (owner) DO UPDATE SET seen_at = now()",
-    )
-    .bind(owner)
-    .execute(&mut *tx)
-    .await?;
+    match pool_capacities {
+        Some(pool_capacities) => {
+            sqlx::query(
+                "INSERT INTO worker_heartbeats (owner,pool_capacities) VALUES ($1,$2)
+                 ON CONFLICT (owner) DO UPDATE
+                 SET seen_at=now(), pool_capacities=EXCLUDED.pool_capacities",
+            )
+            .bind(owner)
+            .bind(pool_capacities)
+            .execute(&mut *tx)
+            .await?;
+        }
+        None => {
+            sqlx::query(
+                "INSERT INTO worker_heartbeats (owner) VALUES ($1)
+                 ON CONFLICT (owner) DO UPDATE SET seen_at=now()",
+            )
+            .bind(owner)
+            .execute(&mut *tx)
+            .await?;
+        }
+    }
     sqlx::query("DELETE FROM worker_heartbeats WHERE seen_at < now() - interval '1 day'")
         .execute(&mut *tx)
         .await?;

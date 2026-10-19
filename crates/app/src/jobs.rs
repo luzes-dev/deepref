@@ -10,13 +10,14 @@ use serde_json::Value;
 use sqlx::{PgPool, Postgres, Row, Transaction, postgres::PgRow};
 use uuid::Uuid;
 
-/// Claim and fence the next eligible batch for the selected workload pools in
+/// Claim the next eligible batch for the selected workload pools in
 /// one statement. Eligibility is persisted state only: `queued`, due
 /// (`available_at <= now()`), and within the attempt budget. Claiming is
 /// filtered by workload class, never by `project_id IS NOT NULL`, so workspace-
 /// and platform-scoped work is claimable and no row needs a fabricated
 /// project. The batch is bounded by `LIMIT $4`; callers must never pass an
-/// unbounded limit or loop.
+/// unbounded limit or loop. The database advances `claim_seq` for each claim;
+/// business attempts remain independently refundable.
 const CLAIM: &str = r#"
 WITH candidate AS (
   SELECT id
@@ -36,9 +37,9 @@ claimed AS (
   FROM candidate
   WHERE j.id = candidate.id
   RETURNING j.id, j.project_id, j.workspace_id, j.scope, j.kind, j.payload,
-            j.attempts, j.max_attempts, j.priority, j.available_at
+            j.claim_seq, j.attempts, j.max_attempts, j.priority, j.available_at
 )
-SELECT id, project_id, workspace_id, scope, kind, payload, attempts, max_attempts
+SELECT id, project_id, workspace_id, scope, kind, payload, claim_seq, attempts, max_attempts
 FROM claimed
 ORDER BY priority DESC, available_at ASC, id ASC
 "#;
@@ -130,11 +131,10 @@ pub async fn recover_expired_jobs(pool: &PgPool) -> anyhow::Result<u64> {
     Ok(recovered.len() as u64)
 }
 
-/// Claim and fence up to `limit` eligible jobs in `pools` (empty = every
+/// Claim up to `limit` eligible jobs in `pools` (empty = every
 /// workload class) in one statement. This is the claim/fence authority: each
-/// returned job carries the fencing attempt that `renew`, `complete`, `fail`
-/// and `release` require, and it is also the only place business attempts
-/// increment.
+/// returned job carries a monotonic claim identity for `renew`, `complete`,
+/// `fail` and `release`; the business attempt count increments separately.
 pub async fn claim_jobs(
     pool: &PgPool,
     owner: &str,
@@ -150,7 +150,37 @@ pub async fn claim_jobs(
         .bind(i64::try_from(limit).unwrap_or(i64::MAX))
         .fetch_all(pool)
         .await?;
-    rows.iter().map(row_job).collect()
+    let mut claimed = Vec::with_capacity(rows.len());
+    for row in &rows {
+        match row_job(row) {
+            Ok(job) => claimed.push(job),
+            Err(error) => {
+                let id: Uuid = row.try_get("id")?;
+                let claim_seq: i64 = row.try_get("claim_seq")?;
+                let reason = truncate_reason(&format!("quarantined after claim decode: {error:#}"));
+                match quarantine_claim(pool, id, owner, claim_seq, &reason).await {
+                    Ok(true) => tracing::error!(
+                        job_id = %id,
+                        claim_seq,
+                        reason,
+                        "malformed claimed job quarantined"
+                    ),
+                    Ok(false) => tracing::warn!(
+                        job_id = %id,
+                        claim_seq,
+                        "malformed claimed job lost its fence before quarantine"
+                    ),
+                    Err(quarantine_error) => tracing::error!(
+                        job_id = %id,
+                        claim_seq,
+                        %quarantine_error,
+                        "malformed claimed job could not be quarantined; lease recovery will handle it"
+                    ),
+                }
+            }
+        }
+    }
+    Ok(claimed)
 }
 
 /// Claim one job across every workload class. Reclaim before selecting so
@@ -171,6 +201,7 @@ fn row_job(row: &PgRow) -> anyhow::Result<ClaimedJob> {
     let scope: String = row.try_get("scope")?;
     let project_id: Option<Uuid> = row.try_get("project_id")?;
     let workspace_id: Option<Uuid> = row.try_get("workspace_id")?;
+    let claim_seq: i64 = row.try_get("claim_seq")?;
     let scope = match scope.as_str() {
         "project" => JobScope::Project(ProjectId::new(
             project_id.with_context(|| format!("project-scoped job {id} has no project"))?,
@@ -188,9 +219,38 @@ fn row_job(row: &PgRow) -> anyhow::Result<ClaimedJob> {
             .parse::<JobKind>()
             .with_context(|| format!("invalid persisted kind for job {id}"))?,
         payload: row.try_get("payload")?,
+        claim_seq,
         attempts: row.try_get("attempts")?,
         max_attempts: row.try_get("max_attempts")?,
     })
+}
+
+fn truncate_reason(reason: &str) -> String {
+    reason.chars().take(4096).collect()
+}
+
+async fn quarantine_claim(
+    pool: &PgPool,
+    id: Uuid,
+    owner: &str,
+    claim_seq: i64,
+    reason: &str,
+) -> anyhow::Result<bool> {
+    Ok(sqlx::query(
+        "UPDATE jobs
+         SET state='dead', attempts=greatest(attempts - 1, 0), last_error=$4,
+             lease_owner=NULL, leased_until=NULL, lease_renewed_at=NULL
+         WHERE id=$1 AND state='running' AND lease_owner=$2 AND claim_seq=$3
+           AND leased_until > now()",
+    )
+    .bind(id)
+    .bind(owner)
+    .bind(claim_seq)
+    .bind(reason)
+    .execute(pool)
+    .await?
+    .rows_affected()
+        == 1)
 }
 
 pub async fn renew_job(
@@ -203,12 +263,12 @@ pub async fn renew_job(
         r#"UPDATE jobs
            SET leased_until = now() + ($3::double precision * interval '1 millisecond'),
                lease_renewed_at = now()
-           WHERE id = $1 AND state = 'running' AND lease_owner = $2 AND attempts = $4
+           WHERE id = $1 AND state = 'running' AND lease_owner = $2 AND claim_seq = $4
              AND leased_until > now()"#,
         lease.id,
         lease.owner,
         lease_ms,
-        lease.attempt,
+        lease.claim_seq,
     )
     .execute(pool)
     .await?
@@ -218,10 +278,10 @@ pub async fn renew_job(
 
 pub async fn complete_job(pool: &PgPool, lease: &JobLease) -> anyhow::Result<bool> {
     Ok(sqlx::query!(
-        "UPDATE jobs SET state='completed',completed_at=now(),lease_owner=NULL,leased_until=NULL,lease_renewed_at=NULL WHERE id=$1 AND state='running' AND lease_owner=$2 AND attempts=$3 AND leased_until > now()",
+        "UPDATE jobs SET state='completed',completed_at=now(),lease_owner=NULL,leased_until=NULL,lease_renewed_at=NULL WHERE id=$1 AND state='running' AND lease_owner=$2 AND claim_seq=$3 AND leased_until > now()",
         lease.id,
         lease.owner,
-        lease.attempt,
+        lease.claim_seq,
     )
     .execute(pool)
     .await?
@@ -252,14 +312,14 @@ pub async fn fail_job(
                lease_owner = NULL,
                leased_until = NULL,
                lease_renewed_at = NULL
-           WHERE id = $1 AND state = 'running' AND lease_owner = $2 AND attempts = $6
+           WHERE id = $1 AND state = 'running' AND lease_owner = $2 AND claim_seq = $6
              AND leased_until > now()"#,
         lease.id,
         lease.owner,
         dead_letter,
         error,
         retry_ms,
-        lease.attempt,
+        lease.claim_seq,
     )
     .execute(pool)
     .await?
@@ -281,16 +341,63 @@ pub async fn release_job(pool: &PgPool, lease: &JobLease) -> anyhow::Result<bool
                lease_owner = NULL,
                leased_until = NULL,
                lease_renewed_at = NULL
-           WHERE id = $1 AND state = 'running' AND lease_owner = $2 AND attempts = $3
+           WHERE id = $1 AND state = 'running' AND lease_owner = $2 AND claim_seq = $3
              AND leased_until > now()"#,
         lease.id,
         lease.owner,
-        lease.attempt,
+        lease.claim_seq,
     )
     .execute(pool)
     .await?
     .rows_affected()
         == 1)
+}
+
+async fn release_job_until(
+    pool: &PgPool,
+    lease: &JobLease,
+    deadline: std::time::Instant,
+) -> anyhow::Result<bool> {
+    const RELEASE_SAFETY_MARGIN: Duration = Duration::from_millis(50);
+
+    let mut transaction = pool.begin().await?;
+    let statement_timeout = deadline
+        .saturating_duration_since(std::time::Instant::now())
+        .saturating_sub(RELEASE_SAFETY_MARGIN);
+    let timeout_ms = statement_timeout.as_millis();
+    if timeout_ms == 0 {
+        return Ok(false);
+    }
+    let timeout = format!("{timeout_ms}ms");
+    sqlx::query(
+        "SELECT set_config('statement_timeout', $1, true), set_config('lock_timeout', $1, true)",
+    )
+    .bind(&timeout)
+    .execute(&mut *transaction)
+    .await?;
+
+    let result = sqlx::query(
+        r#"UPDATE jobs
+           SET state = 'queued',
+               attempts = greatest(attempts - 1, 0),
+               available_at = now(),
+               lease_owner = NULL,
+               leased_until = NULL,
+               lease_renewed_at = NULL
+           WHERE id = $1 AND state = 'running' AND lease_owner = $2 AND claim_seq = $3
+             AND leased_until > now()"#,
+    )
+    .bind(lease.id)
+    .bind(&lease.owner)
+    .bind(lease.claim_seq)
+    .execute(&mut *transaction)
+    .await?;
+
+    if deadline.saturating_duration_since(std::time::Instant::now()) <= RELEASE_SAFETY_MARGIN {
+        return Ok(false);
+    }
+    transaction.commit().await?;
+    Ok(result.rows_affected() == 1)
 }
 
 /// PostgreSQL implementation of the durable execution lifecycle
@@ -329,6 +436,14 @@ impl DurableExecutionStore for PostgresDurableExecutionStore {
 
     async fn release(&self, lease: &JobLease) -> anyhow::Result<bool> {
         release_job(&self.pool, lease).await
+    }
+
+    async fn release_until(
+        &self,
+        lease: &JobLease,
+        deadline: std::time::Instant,
+    ) -> anyhow::Result<bool> {
+        release_job_until(&self.pool, lease, deadline).await
     }
 
     async fn recover_expired(&self) -> anyhow::Result<u64> {

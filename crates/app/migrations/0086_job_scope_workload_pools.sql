@@ -16,15 +16,56 @@
 -- directions, so this migration is expand-phase only. `workload_class` stays
 -- nullable because an N-1 enqueue inserts without it; the fill trigger below
 -- classifies those rows exactly like the N writers do. A later contract
--- migration adds NOT NULL once no N-1 writer remains. N-1 workers claim with
+-- migration batches terminal history before adding NOT NULL, once no N-1
+-- writer remains. This migration classifies active rows only because the
+-- queued/running set is small; terminal history is never claimed and remains
+-- NULL until that contract migration. N-1 workers claim with
 -- `project_id IS NOT NULL` and know nothing of pools, so workspace- and
 -- platform-scoped jobs created by N (whose `project_id` is NULL) are invisible
 -- to them and are served only by N workers, exactly as intended.
 
+-- The old 0019 CHECK is NOT VALID, so historical active orphans can exist even
+-- though new writes cannot create them. Terminalize these before touching
+-- workload_class: updating them while active would violate that CHECK.
+UPDATE jobs
+SET state = 'dead',
+    last_error = 'quarantined by 0086: active job without project',
+    lease_owner = NULL,
+    leased_until = NULL,
+    lease_renewed_at = NULL
+WHERE state IN ('queued', 'running')
+  AND project_id IS NULL;
+
 ALTER TABLE jobs
   ADD COLUMN IF NOT EXISTS workload_class text,
   ADD COLUMN IF NOT EXISTS scope text NOT NULL DEFAULT 'project',
-  ADD COLUMN IF NOT EXISTS workspace_id uuid;
+  ADD COLUMN IF NOT EXISTS workspace_id uuid,
+  ADD COLUMN IF NOT EXISTS claim_seq bigint NOT NULL DEFAULT 0;
+
+-- Claim identity is independent of the refundable business attempt counter.
+-- This trigger also advances identity for N-1 claims made during the overlap
+-- window because those binaries only update state to `running`.
+CREATE OR REPLACE FUNCTION jobs_increment_claim_seq()
+RETURNS trigger
+LANGUAGE plpgsql
+AS $$
+BEGIN
+  NEW.claim_seq := OLD.claim_seq + 1;
+  RETURN NEW;
+END;
+$$;
+
+DROP TRIGGER IF EXISTS jobs_claim_identity_increment ON jobs;
+CREATE TRIGGER jobs_claim_identity_increment
+  BEFORE UPDATE OF state ON jobs
+  FOR EACH ROW
+  WHEN (OLD.state IS DISTINCT FROM 'running' AND NEW.state = 'running')
+  EXECUTE FUNCTION jobs_increment_claim_seq();
+
+-- Worker health needs low-cardinality capacity per serving pool. N-1
+-- heartbeats keep the empty default and remain compatible with this column.
+ALTER TABLE worker_heartbeats
+  ADD COLUMN IF NOT EXISTS pool_capacities jsonb NOT NULL DEFAULT '{}'::jsonb;
 
 -- One kind-to-class mapping shared by the backfill and the fill trigger below
 -- (the same mapping as `JobKind::workload_class` in crates/domain/src/jobs.rs;
@@ -52,7 +93,8 @@ $$;
 
 UPDATE jobs
 SET workload_class = jobs_workload_class_for_kind(kind)
-WHERE workload_class IS NULL;
+WHERE workload_class IS NULL
+  AND state IN ('queued', 'running');
 
 -- Fill `workload_class` from `kind` for every writer that omits it: N writers
 -- set it at enqueue, an N-1 (previous release) enqueue leaves it NULL and is
@@ -110,7 +152,3 @@ ALTER TABLE jobs
       AND workspace_id IS NULL)
   ) NOT VALID;
 
--- Pool-scoped claim scans: eligible work per workload class in due order.
-CREATE INDEX IF NOT EXISTS jobs_claim_pool_idx
-  ON jobs (workload_class, priority DESC, available_at ASC)
-  WHERE state = 'queued';

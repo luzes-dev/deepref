@@ -889,12 +889,12 @@ async fn claim_run(pool: &PgPool, run_id: Uuid, owner: &str) -> JobLease {
         .fetch_one(pool)
         .await
         .expect("run job exists");
-    let attempt: i32 = sqlx::query_scalar(
+    let row = sqlx::query(
         "UPDATE jobs
          SET state='running',lease_owner=$2,leased_until=now()+interval '5 minutes',
              lease_renewed_at=now(),attempts=attempts+1
          WHERE id=$1 AND state='queued'
-         RETURNING attempts",
+         RETURNING attempts,claim_seq",
     )
     .bind(job_id)
     .bind(owner)
@@ -904,7 +904,8 @@ async fn claim_run(pool: &PgPool, run_id: Uuid, owner: &str) -> JobLease {
     JobLease {
         id: job_id,
         owner: owner.to_owned(),
-        attempt,
+        claim_seq: row.get("claim_seq"),
+        attempt: row.get("attempts"),
     }
 }
 
@@ -957,7 +958,7 @@ async fn begin_node_attempt(
 
 async fn current_review_lease(pool: &PgPool, run: Uuid, owner: &str) -> JobLease {
     let row = sqlx::query(
-        "SELECT id,attempts FROM jobs WHERE payload->>'run_id'=$1
+        "SELECT id,attempts,claim_seq FROM jobs WHERE payload->>'run_id'=$1
         AND lease_owner=$2 AND state='running' ORDER BY available_at DESC,id LIMIT 1",
     )
     .bind(run.to_string())
@@ -968,6 +969,7 @@ async fn current_review_lease(pool: &PgPool, run: Uuid, owner: &str) -> JobLease
     JobLease {
         id: row.get("id"),
         owner: owner.to_owned(),
+        claim_seq: row.get("claim_seq"),
         attempt: row.get("attempts"),
     }
 }

@@ -610,7 +610,7 @@ where
         let row=sqlx::query("UPDATE jobs j SET state='running',lease_owner=$2,
             leased_until=now()+interval '5 minutes',lease_renewed_at=now(),attempts=attempts+1
             WHERE j.kind='durable_run_step' AND j.payload->>'run_id'=$1::uuid::text AND j.state='queued'
-            RETURNING j.id,j.project_id,j.kind,j.payload,j.attempts,j.max_attempts")
+            RETURNING j.id,j.project_id,j.kind,j.payload,j.claim_seq,j.attempts,j.max_attempts")
             .bind(run_id).bind(&owner).fetch_one(pool).await.expect("next typed review node claims");
         let job = ClaimedJob {
             id: row.get("id"),
@@ -620,6 +620,7 @@ where
                 .parse()
                 .expect("durable job kind"),
             payload: row.get("payload"),
+            claim_seq: row.get("claim_seq"),
             attempts: row.get("attempts"),
             max_attempts: row.get("max_attempts"),
         };

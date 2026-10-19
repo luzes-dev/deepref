@@ -203,11 +203,21 @@ pub async fn run_with_shutdown(
     // The heartbeat outlives the drain: the worker is alive until its last
     // in-flight job has been settled.
     let (heartbeat_stop, heartbeat_signal) = watch::channel(false);
+    let pool_capacities = pools
+        .iter()
+        .map(|pool| {
+            (
+                *pool,
+                config.pool_concurrency.get(pool).copied().unwrap_or(1),
+            )
+        })
+        .collect::<Vec<_>>();
     let heartbeat_task = tokio::spawn(heartbeat::run(
         pool.clone(),
         owner.clone(),
         heartbeat::HEARTBEAT_INTERVAL,
         heartbeat_signal,
+        pool_capacities,
     ));
     let loop_config = ClaimLoopConfig {
         pools,
@@ -283,7 +293,8 @@ fn production_handler(
 }
 
 /// Claim work and run it through `handler` until `shutdown` resolves, then
-/// drain in-flight jobs within the configured deadline.
+/// drain in-flight jobs within one absolute deadline. Shutdown releases for
+/// unstarted claims consume that same budget before active handlers drain.
 ///
 /// Claiming is per workload pool and bounded: each tick claims at most
 /// `min(free pool capacity, config.max_batch)` jobs for a pool, in one
@@ -291,7 +302,8 @@ fn production_handler(
 /// its siblings keep draining. Shutdown is observed between the claims of a
 /// batch and between batches: a partially dispatched batch is abandoned at
 /// once and its unstarted claims are released back to the queue (queued and
-/// immediately claimable, attempt refunded) instead of being left leased.
+/// immediately claimable, attempt refunded) while the shutdown budget remains;
+/// any release that times out is left for lease recovery.
 pub async fn run_claim_loop<T, S>(
     transport: T,
     store: S,
@@ -323,6 +335,7 @@ where
     let mut shutdown = Box::pin(shutdown);
     let mut loop_error = None;
     let mut idle = CLAIM_TICK;
+    let mut shutdown_deadline = None;
     // Persistent claim deadline: completion events pull it in, they never
     // restart it, so steady handler churn cannot starve new claims.
     let mut next_claim = tokio::time::Instant::now();
@@ -333,6 +346,7 @@ where
     while !draining {
         tokio::select! {
             _ = &mut shutdown => {
+                establish_shutdown_deadline(&mut shutdown_deadline, config.drain_deadline);
                 tracing::info!(active=active.len(), "worker drain started");
                 break;
             }
@@ -367,12 +381,24 @@ where
                 let mut claimed_any = false;
                 for pool in &config.pools {
                     if shutdown_peek(&mut shutdown).await {
+                        establish_shutdown_deadline(&mut shutdown_deadline, config.drain_deadline);
                         tracing::info!(active=active.len(), "worker drain started");
                         draining = true;
                         break;
                     }
                     let semaphore = &semaphores[pool];
                     let free = semaphore.available_permits();
+                    let capacity = config.pool_concurrency.get(pool).copied().unwrap_or(1);
+                    let in_flight = capacity.saturating_sub(free);
+                    let saturation = (capacity > 0)
+                        .then(|| in_flight as f64 / capacity as f64);
+                    tracing::debug!(
+                        pool = pool.as_str(),
+                        in_flight,
+                        capacity,
+                        saturation = ?saturation,
+                        "pool capacity tick"
+                    );
                     if free == 0 {
                         continue;
                     }
@@ -405,7 +431,8 @@ where
                         batch_cap = batch,
                         free_capacity = free,
                         claim_latency_ms = claimed_at.elapsed().as_millis() as u64,
-                        in_flight = claimed_total.saturating_sub(free),
+                        in_flight,
+                        capacity = claimed_total,
                         "pool claim batch"
                     );
                     claimed_any = claimed_any || !jobs.is_empty();
@@ -415,7 +442,12 @@ where
                             // claim after it. None of them started, so no
                             // business attempt is spent and no lease is left
                             // behind to expire.
-                            let released = release_unstarted(&store, &owner, &jobs[index..]).await;
+                            let deadline = establish_shutdown_deadline(
+                                &mut shutdown_deadline,
+                                config.drain_deadline,
+                            );
+                            let released =
+                                release_unstarted(&store, &owner, &jobs[index..], deadline).await;
                             tracing::info!(
                                 released,
                                 active = active.len(),
@@ -430,8 +462,17 @@ where
                                 // Free capacity was accounted before the
                                 // claim, so this cannot happen; if it ever
                                 // does, the claim must not be lost silently.
-                                let released =
-                                    release_unstarted(&store, &owner, &jobs[index..]).await;
+                                let deadline = establish_shutdown_deadline(
+                                    &mut shutdown_deadline,
+                                    config.drain_deadline,
+                                );
+                                let released = release_unstarted(
+                                    &store,
+                                    &owner,
+                                    &jobs[index..],
+                                    deadline,
+                                )
+                                .await;
                                 loop_error = Some(anyhow::anyhow!(
                                     "pool capacity vanished after a batch claim ({error}); released {released} unstarted claims"
                                 ));
@@ -478,7 +519,8 @@ where
         }
     }
 
-    let active_drained = tokio::time::timeout(config.drain_deadline, async {
+    let deadline = establish_shutdown_deadline(&mut shutdown_deadline, config.drain_deadline);
+    let active_drained = tokio::time::timeout_at(deadline, async {
         while let Some(result) = active.join_next().await {
             match result {
                 Ok(result) => result?,
@@ -503,6 +545,13 @@ where
     Ok(())
 }
 
+fn establish_shutdown_deadline(
+    deadline: &mut Option<tokio::time::Instant>,
+    budget: Duration,
+) -> tokio::time::Instant {
+    *deadline.get_or_insert_with(|| tokio::time::Instant::now() + budget)
+}
+
 /// Observe shutdown once, without consuming the future: the caller stops
 /// claiming and drains when it has resolved.
 async fn shutdown_peek(shutdown: &mut Pin<Box<impl Future<Output = ()> + Send>>) -> bool {
@@ -520,17 +569,30 @@ async fn release_unstarted<S: DurableExecutionStore>(
     store: &S,
     owner: &str,
     jobs: &[ClaimedJob],
+    deadline: tokio::time::Instant,
 ) -> usize {
     let mut released = 0;
-    for job in jobs {
-        match store.release(&job.lease(owner)).await {
-            Ok(true) => released += 1,
-            Ok(false) => tracing::warn!(
+    for (index, job) in jobs.iter().enumerate() {
+        match tokio::time::timeout_at(
+            deadline,
+            store.release_until(&job.lease(owner), deadline.into_std()),
+        )
+        .await
+        {
+            Err(_) => {
+                tracing::warn!(
+                    remaining = jobs.len() - index,
+                    "shutdown release deadline reached; remaining claims will be left for lease recovery"
+                );
+                break;
+            }
+            Ok(Ok(true)) => released += 1,
+            Ok(Ok(false)) => tracing::warn!(
                 job_id = %job.id,
                 kind = %job.kind,
                 "unstarted claim could not be released; its lease will be recovered"
             ),
-            Err(error) => tracing::error!(
+            Ok(Err(error)) => tracing::error!(
                 job_id = %job.id,
                 kind = %job.kind,
                 %error,
@@ -848,6 +910,7 @@ mod lease_deadline_tests {
             )),
             kind: deepref_domain::JobKind::RecomputeMetrics,
             payload: serde_json::json!({}),
+            claim_seq: 0,
             attempts: 1,
             max_attempts: 2,
         };

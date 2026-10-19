@@ -171,6 +171,7 @@ async fn retrieve_document_is_durable_idempotent_and_records_terminal_failure() 
             scope: JobScope::Project(project_id.into()),
             kind: deepref_domain::JobKind::RetrieveDocument,
             payload: serde_json::json!({"document_id": document_id}),
+            claim_seq: 0,
             attempts: 1,
             max_attempts: 5,
         };
@@ -289,6 +290,7 @@ async fn concurrent_retrieval_completion_cleans_the_losing_object() {
         scope: JobScope::Project(project_id.into()),
         kind: deepref_domain::JobKind::RetrieveDocument,
         payload: serde_json::json!({"document_id": document_id}),
+        claim_seq: 0,
         attempts: 1,
         max_attempts: 5,
     };
@@ -440,6 +442,7 @@ async fn parse_document_is_streamed_versioned_and_idempotent() {
         scope: JobScope::Project(project_id.into()),
         kind: deepref_domain::JobKind::ParseDocument,
         payload: serde_json::json!({"document_id": document_id, "parser_version": PARSER_VERSION}),
+        claim_seq: 0,
         attempts: 1,
         max_attempts: 5,
     };

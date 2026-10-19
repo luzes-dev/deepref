@@ -516,12 +516,12 @@ pub async fn load_leased_review_run(
          WHERE m.project_id=$1 AND m.automation_run_id=$2
            AND j.kind='durable_run_step' AND j.state='running'
            AND (j.payload->>'run_id')::uuid=r.id
-           AND j.lease_owner=$3 AND j.attempts=$4 AND j.leased_until > now()",
+           AND j.lease_owner=$3 AND j.claim_seq=$4 AND j.leased_until > now()",
     )
     .bind(project_id.as_uuid())
     .bind(run_id.as_uuid())
     .bind(&lease.owner)
-    .bind(lease.attempt)
+    .bind(lease.claim_seq)
     .bind(lease.id)
     .fetch_optional(pool)
     .await?

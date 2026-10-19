@@ -83,7 +83,7 @@ async fn claim_automation_job(
              leased_until=now()+($3 * interval '1 millisecond'),
              lease_renewed_at=now(), attempts=attempts+1
          WHERE id=$1 AND state='queued' AND available_at <= now()
-         RETURNING id,project_id,kind,payload,attempts,max_attempts",
+         RETURNING id,project_id,kind,payload,claim_seq,attempts,max_attempts",
     )
     .bind(job_id)
     .bind(owner)
@@ -96,6 +96,7 @@ async fn claim_automation_job(
         scope: deepref_application::jobs::JobScope::Project(ProjectId::new(row.get("project_id"))),
         kind: row.get::<String, _>("kind").parse()?,
         payload: row.get("payload"),
+        claim_seq: row.get("claim_seq"),
         attempts: row.get("attempts"),
         max_attempts: row.get("max_attempts"),
     })
@@ -248,6 +249,7 @@ async fn expired_job_recovery_reclaims_running_step_and_rejects_zombie_completio
                 &JobLease {
                     id: dispatch.job_id,
                     owner: "worker-b".to_owned(),
+                    claim_seq: lease_a.claim_seq,
                     attempt: 1
                 }
             )
@@ -683,6 +685,7 @@ async fn run_detail_aggregates_ai_usage_and_unclaimed_step_cannot_complete() -> 
         let unclaimed = JobLease {
             id: dispatch.job_id,
             owner: "unclaimed-worker".to_owned(),
+            claim_seq: 0,
             attempt: 1,
         };
         ensure!(matches!(

@@ -217,6 +217,7 @@ async fn heartbeat_is_written_while_running_and_removed_on_shutdown() {
         "heartbeat-test-worker".to_owned(),
         Duration::from_millis(50),
         stopped,
+        Vec::new(),
     ));
     let seen = async {
         loop {

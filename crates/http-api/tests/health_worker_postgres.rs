@@ -11,6 +11,7 @@ use axum::{
     body::{Body, to_bytes},
     http::{Request, StatusCode},
 };
+use deepref_domain::WorkloadClass;
 use deepref_http_api::{config::ApiConfig, routes::router, state::AppState};
 use serde_json::Value;
 use sqlx::PgPool;
@@ -65,7 +66,7 @@ async fn worker_health(pool: &PgPool) -> Value {
 }
 
 #[tokio::test]
-async fn dependencies_report_live_workers_from_heartbeats() {
+async fn dependencies_report_per_pool_queue_age_inflight_and_capacity() {
     let Some(pool) = database().await else { return };
 
     // No worker has ever run: none is live, and queued work is not progressing.
@@ -85,6 +86,26 @@ async fn dependencies_report_live_workers_from_heartbeats() {
     .execute(&pool)
     .await
     .expect("queued job");
+    sqlx::query(
+        "INSERT INTO jobs (id,project_id,kind,workload_class,state,lease_owner,leased_until,payload,dedupe_key)
+         VALUES ($1,$2,'health_running','workflow','running','health-worker',now()+interval '1 minute','{}',$3)",
+    )
+    .bind(Uuid::new_v4())
+    .bind(project_id)
+    .bind(format!("health-running:{project_id}"))
+    .execute(&pool)
+    .await
+    .expect("running job");
+    sqlx::query(
+        "INSERT INTO jobs (id,project_id,kind,workload_class,state,available_at,payload,dedupe_key)
+         VALUES ($1,$2,'health_future','workflow','queued',now()+interval '1 hour','{}',$3)",
+    )
+    .bind(Uuid::new_v4())
+    .bind(project_id)
+    .bind(format!("health-future:{project_id}"))
+    .execute(&pool)
+    .await
+    .expect("future job");
     let worker = worker_health(&pool).await;
     assert_eq!(worker["live_workers"], 0, "{worker}");
     assert!(worker["last_heartbeat_at"].is_null(), "{worker}");
@@ -92,15 +113,49 @@ async fn dependencies_report_live_workers_from_heartbeats() {
         worker["state"], "degraded",
         "queued work with no live worker is degraded: {worker}"
     );
+    let workflow = worker["pools"]
+        .as_array()
+        .expect("workload pool measurements")
+        .iter()
+        .find(|pool| pool["class"] == "workflow")
+        .expect("workflow pool is reported");
+    assert_eq!(
+        workflow["queue_depth"], 1,
+        "future work is not due: {worker}"
+    );
+    assert!(
+        workflow["oldest_due_age_seconds"].as_i64().is_some(),
+        "{worker}"
+    );
+    assert_eq!(workflow["in_flight"], 1, "{worker}");
+    assert_eq!(
+        workflow["capacity"], 0,
+        "no worker capacity is live: {worker}"
+    );
+    assert!(workflow["saturation"].is_null(), "{worker}");
 
     // A worker heartbeats: it is live and reported.
-    deepref_app::record_worker_heartbeat(&pool, "health-test-worker")
-        .await
-        .expect("heartbeat");
+    deepref_app::record_worker_heartbeat_with_capacities(
+        &pool,
+        "health-test-worker",
+        &[(WorkloadClass::Workflow, 2), (WorkloadClass::Documents, 4)],
+    )
+    .await
+    .expect("heartbeat");
     let worker = worker_health(&pool).await;
     assert_eq!(worker["live_workers"], 1, "{worker}");
     assert!(worker["last_heartbeat_at"].is_string(), "{worker}");
     assert_eq!(worker["state"], "available", "{worker}");
+    let workflow = worker["pools"]
+        .as_array()
+        .expect("workload pool measurements")
+        .iter()
+        .find(|pool| pool["class"] == "workflow")
+        .expect("workflow pool is reported");
+    assert_eq!(workflow["queue_depth"], 1, "{worker}");
+    assert_eq!(workflow["in_flight"], 1, "{worker}");
+    assert_eq!(workflow["capacity"], 2, "{worker}");
+    assert_eq!(workflow["saturation"], 0.5, "{worker}");
 
     // Its heartbeat goes stale (the process died without a clean shutdown).
     sqlx::query("UPDATE worker_heartbeats SET seen_at = now() - interval '10 minutes'")
