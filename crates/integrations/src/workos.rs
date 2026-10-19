@@ -96,19 +96,33 @@ impl WorkOsIdentityProvider {
         let Ok(session) = workos::unseal_session(sealed, &self.session_key) else {
             return Ok(state);
         };
-        let token = session.access_token.expose();
-        let signed_by_provider = signature_claims(token, &keys).is_some_and(|claims| {
-            session
-                .user
-                .as_ref()
-                .is_none_or(|user| user.id == claims.sub)
-        });
-        if !signed_by_provider {
-            // Verified against keys we hold: genuinely not a valid session.
+        let claims = match verify_access_token(session.access_token.expose(), &keys, unix_now()) {
+            TokenCheck::SignatureInvalid => {
+                // Verified against keys we hold: genuinely not a valid session.
+                return Ok(state);
+            }
+            TokenCheck::KeysUnusable => {
+                tracing::warn!("WorkOS signing keys cannot verify this token");
+                return Err(IdentityError::Unavailable);
+            }
+            TokenCheck::NotYetValid => {
+                // Signed by the provider but not valid yet (clock skew between
+                // WorkOS and this host). Retryable, never a verdict.
+                tracing::warn!("WorkOS access token is not valid yet");
+                return Err(IdentityError::Unavailable);
+            }
+            TokenCheck::Valid(claims) | TokenCheck::Expired(claims) => claims,
+        };
+        if session
+            .user
+            .as_ref()
+            .is_some_and(|user| user.id != claims.sub)
+        {
             return Ok(state);
         }
         // The token verifies, so the SDK's failure was its own key fetch.
-        // Give it one more read; if it still cannot decide, keep the session.
+        // Give it one more read (an expired token then reads as expired and
+        // takes the refresh path); if it still cannot decide, keep the session.
         let second = self.authenticate(sealed).await;
         if second.reason == "invalid_jwt" {
             tracing::warn!("WorkOS session verification failed on a validly signed token");
@@ -118,44 +132,107 @@ impl WorkOsIdentityProvider {
     }
 }
 
-#[derive(serde::Deserialize)]
+#[derive(Debug, serde::Deserialize)]
 struct SignedClaims {
     sub: String,
+    exp: u64,
 }
 
-/// The claims of `token` if its RS256 signature verifies against `keys`.
-/// Expiry is not judged here: an expired but genuine token must still read as
-/// one that needs a refresh.
-fn signature_claims(token: &str, keys: &workos::JwkSet) -> Option<SignedClaims> {
-    use jsonwebtoken::{Algorithm, DecodingKey, Validation};
-    let header = jsonwebtoken::decode_header(token).ok()?;
+/// What the adapter's own check of an access token against the signing keys
+/// found. Only [`Self::SignatureInvalid`] is a verdict on the session; the
+/// other failures are about the keys or the clock and are retryable.
+#[derive(Debug)]
+enum TokenCheck {
+    /// Signature, `nbf` and subject check out and the token is live.
+    Valid(SignedClaims),
+    /// Genuinely signed, but past `exp`: it needs a refresh.
+    Expired(SignedClaims),
+    /// Genuinely signed, but `nbf` is in the future.
+    NotYetValid,
+    /// Not a token these keys signed (or not a well-formed RS256 token).
+    SignatureInvalid,
+    /// The key set cannot decide: no or several keys for the `kid`, key
+    /// material that is not a usable RSA verification key.
+    KeysUnusable,
+}
+
+fn unix_now() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map_or(0, |elapsed| elapsed.as_secs())
+}
+
+/// Checks `token` against `keys` as the SDK does: RS256 only, the `kid` must
+/// match exactly one RSA signing key, `exp` and `sub` are required, `nbf` is
+/// enforced with zero leeway (the SDK's), and `exp` is judged by the caller's
+/// clock `now` only after the signature verifies, so an expired but genuine
+/// token reads as one that needs a refresh.
+///
+/// `iss` and `aud` are not checked, matching the SDK: the keys come from the
+/// JWKS endpoint of this client ID (`/sso/jwks/{client_id}`), which is what
+/// binds a token to this WorkOS environment, and the issuer WorkOS stamps
+/// varies with custom auth domains.
+fn verify_access_token(token: &str, keys: &workos::JwkSet, now: u64) -> TokenCheck {
+    use jsonwebtoken::{Algorithm, DecodingKey, Validation, errors::ErrorKind};
+    let Ok(header) = jsonwebtoken::decode_header(token) else {
+        return TokenCheck::SignatureInvalid;
+    };
     if header.alg != Algorithm::RS256 {
-        return None;
+        return TokenCheck::SignatureInvalid;
     }
-    let kid = header.kid.filter(|kid| !kid.is_empty())?;
+    let Some(kid) = header.kid.filter(|kid| !kid.is_empty()) else {
+        return TokenCheck::SignatureInvalid;
+    };
     let mut matching = keys
         .keys
         .iter()
         .filter(|key| key.kid.as_deref() == Some(kid.as_str()));
-    let key = matching.next()?;
+    let Some(key) = matching.next() else {
+        return TokenCheck::KeysUnusable;
+    };
     if matching.next().is_some()
         || key.kty.as_deref() != Some("RSA")
         || key.alg.as_deref().is_some_and(|alg| alg != "RS256")
         || key.use_.as_deref().is_some_and(|usage| usage != "sig")
+        || key.other.get("key_ops").is_some_and(|ops| {
+            ops.as_array()
+                .is_none_or(|ops| !ops.iter().any(|op| op.as_str() == Some("verify")))
+        })
     {
-        return None;
+        return TokenCheck::KeysUnusable;
     }
-    let jwk = serde_json::from_value(serde_json::to_value(key).ok()?).ok()?;
-    let decoding_key = DecodingKey::from_jwk(&jwk).ok()?;
+    let Some(decoding_key) = serde_json::to_value(key)
+        .ok()
+        .and_then(|value| serde_json::from_value(value).ok())
+        .and_then(|jwk| DecodingKey::from_jwk(&jwk).ok())
+    else {
+        return TokenCheck::KeysUnusable;
+    };
     let mut validation = Validation::new(Algorithm::RS256);
     validation.set_required_spec_claims(&["exp", "sub"]);
     validation.validate_exp = false;
+    validation.leeway = 0;
     validation.validate_nbf = true;
     validation.validate_aud = false;
-    let claims = jsonwebtoken::decode::<SignedClaims>(token, &decoding_key, &validation)
-        .ok()?
-        .claims;
-    (!claims.sub.is_empty()).then_some(claims)
+    let claims = match jsonwebtoken::decode::<SignedClaims>(token, &decoding_key, &validation) {
+        Ok(data) => data.claims,
+        Err(error) => {
+            return match error.kind() {
+                ErrorKind::ImmatureSignature => TokenCheck::NotYetValid,
+                ErrorKind::InvalidRsaKey(_) | ErrorKind::InvalidKeyFormat => {
+                    TokenCheck::KeysUnusable
+                }
+                _ => TokenCheck::SignatureInvalid,
+            };
+        }
+    };
+    if claims.sub.is_empty() {
+        TokenCheck::SignatureInvalid
+    } else if claims.exp <= now {
+        TokenCheck::Expired(claims)
+    } else {
+        TokenCheck::Valid(claims)
+    }
 }
 
 fn key_hex(password: &str, purpose: &str) -> String {

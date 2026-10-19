@@ -36,6 +36,12 @@ struct Inner {
     refresh: session::RefreshCoalescer,
     /// How long a request waits for another's in-flight refresh.
     refresh_wait: std::time::Duration,
+    /// How long a refresh lease protects the refresher.
+    refresh_lease: std::time::Duration,
+    /// How long one refresh (provider call and persist) may run. Always
+    /// comfortably inside the lease, so the lease cannot lapse under a
+    /// refresher that is still working.
+    refresh_budget: std::time::Duration,
 }
 
 impl AuthRuntime {
@@ -54,6 +60,8 @@ impl AuthRuntime {
                 session_tokens: SessionTokenKey::from_secret(session_ref_secret),
                 refresh: session::RefreshCoalescer::default(),
                 refresh_wait: std::time::Duration::from_secs(5),
+                refresh_lease: session::REFRESH_LEASE,
+                refresh_budget: session::REFRESH_LEASE / 2,
             }),
         }
     }
@@ -66,6 +74,40 @@ impl AuthRuntime {
             inner.refresh_wait = wait;
         }
         self
+    }
+
+    /// Sets how long a refresh lease lasts. A refresh is abandoned (retryable
+    /// error, cookie kept) after half of it, so the lease outlives the work.
+    #[must_use]
+    pub fn with_refresh_lease(mut self, lease: std::time::Duration) -> Self {
+        if let Some(inner) = Arc::get_mut(&mut self.inner) {
+            inner.refresh_lease = lease;
+            inner.refresh_budget = lease / 2;
+        }
+        self
+    }
+
+    pub(crate) fn refresh_lease(&self) -> std::time::Duration {
+        self.inner.refresh_lease
+    }
+
+    pub(crate) fn refresh_budget(&self) -> std::time::Duration {
+        self.inner.refresh_budget
+    }
+
+    pub(crate) fn refresh_gate(&self, session_id: uuid::Uuid) -> session::Gate {
+        self.inner.refresh.gate(session_id)
+    }
+
+    /// How many lease-claim queries this process has issued. Lets tests assert
+    /// that waiting requests do not each poll the database.
+    #[doc(hidden)]
+    pub fn refresh_lease_queries(&self) -> u64 {
+        self.inner.refresh.lease_queries()
+    }
+
+    pub(crate) fn count_lease_query(&self) {
+        self.inner.refresh.count_lease_query();
     }
 
     pub(crate) fn refresh_wait(&self) -> std::time::Duration {

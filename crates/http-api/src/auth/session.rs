@@ -20,7 +20,7 @@ use axum::{
 };
 use deepref_app::identity::{
     RefreshLease, SessionUpdate, StoredBrowserSession, UserRecord, claim_refresh_lease,
-    find_active_session, release_refresh_lease, update_active_session,
+    end_session_if_leased, find_active_session, release_refresh_lease, update_active_session,
 };
 use deepref_application::identity::{
     IdentityError, OpaqueSecret, ProviderSession, RefreshOutcome, SessionStatus,
@@ -44,10 +44,15 @@ const REFRESH_REUSE_WINDOW: Duration = Duration::from_secs(30);
 /// How long a refresh lease protects a refresh from other requests. It covers
 /// the provider call and the WorkOS replay grace, and frees a session whose
 /// refresher died.
-const REFRESH_LEASE: Duration = Duration::from_secs(30);
+pub(super) const REFRESH_LEASE: Duration = Duration::from_secs(30);
 
-/// How often a request that lost the lease checks for the winner's commit.
+/// How often a request that lost the lease checks for the winner's commit:
+/// starts here and doubles up to [`REFRESH_POLL_MAX`].
 const REFRESH_POLL: Duration = Duration::from_millis(100);
+const REFRESH_POLL_MAX: Duration = Duration::from_secs(1);
+
+/// Longest a lease release may take; the lease expires on its own anyway.
+const RELEASE_TIMEOUT: Duration = Duration::from_secs(2);
 
 /// How many times one request re-reads a session another request rotated
 /// under it before giving up with a retryable error.
@@ -218,13 +223,11 @@ async fn resolve(
                     return Ok(Resolution::Rejected(reason));
                 }
             }
-            Ok(SessionStatus::Expired(_)) => {
-                match refresh_expired(auth, pool, &stored, &token_hash).await? {
-                    Refresh::Persisted => {}
-                    Refresh::Superseded => continue,
-                    Refresh::Terminal(reason) => return Ok(Resolution::Rejected(reason)),
-                }
-            }
+            Ok(SessionStatus::Expired(_)) => match refresh_expired(auth, pool, &stored).await? {
+                Refresh::Persisted => {}
+                Refresh::Superseded => continue,
+                Refresh::Terminal(reason) => return Ok(Resolution::Rejected(reason)),
+            },
             Ok(SessionStatus::Invalid) => return Ok(Resolution::Rejected("invalid_session")),
             Err(error) => return Err(provider_error(error)),
         }
@@ -260,31 +263,100 @@ enum Refresh {
 /// Whoever takes the row's refresh lease spends the token; everyone else waits
 /// for that commit. Contention that does not resolve in time is a retryable
 /// provider error, never a verdict on the session.
+///
+/// Within this process, requests for one session queue on a gate and only the
+/// gate's holder queries the lease, so N waiters cost one poller, not N. The
+/// refresh itself is bounded by a budget well inside the lease, so ownership
+/// holds from the provider call through the commit.
 async fn refresh_expired(
     auth: &AuthRuntime,
     pool: &PgPool,
     stored: &StoredBrowserSession,
-    token_hash: &[u8],
 ) -> Result<Refresh, ApiError> {
+    let unavailable = || ApiError::Auth(AuthFailure::ProviderUnavailable);
     let owner = Uuid::new_v4();
-    let deadline = Instant::now() + auth.refresh_wait();
+    let started = tokio::time::Instant::now();
+    let deadline = started + auth.refresh_wait();
+    let gate = auth.refresh_gate(stored.id);
+    let Ok(mut state) = tokio::time::timeout_at(deadline, gate.lock_owned()).await else {
+        tracing::warn!("a competing session refresh did not finish in time");
+        return Err(unavailable());
+    };
+    // A request ahead of us in this process already stored a newer session.
+    if state
+        .settled
+        .is_some_and(|version| version >= stored.version)
+    {
+        return Ok(Refresh::Superseded);
+    }
+    // The holder ahead of us waited out the same contention and gave up after
+    // we began waiting: its answer is ours.
+    if state.gave_up.is_some_and(|at| at >= started) {
+        return Err(unavailable());
+    }
+    let mut backoff = REFRESH_POLL;
     loop {
-        match claim_refresh_lease(pool, stored.id, stored.version, owner, REFRESH_LEASE).await? {
-            RefreshLease::Claimed => break,
-            RefreshLease::Superseded => return Ok(Refresh::Superseded),
-            RefreshLease::Gone => return Ok(Refresh::Terminal("session_revoked_during_refresh")),
-            RefreshLease::Held if Instant::now() >= deadline => {
-                tracing::warn!("a competing session refresh did not finish in time");
-                return Err(ApiError::Auth(AuthFailure::ProviderUnavailable));
+        if tokio::time::Instant::now() >= deadline {
+            tracing::warn!("a competing session refresh did not finish in time");
+            state.gave_up = Some(tokio::time::Instant::now());
+            return Err(unavailable());
+        }
+        auth.count_lease_query();
+        let claim = tokio::time::timeout_at(
+            deadline,
+            claim_refresh_lease(pool, stored.id, stored.version, owner, auth.refresh_lease()),
+        )
+        .await;
+        match claim {
+            Err(_) => {
+                tracing::warn!("claiming a session refresh lease did not finish in time");
+                state.gave_up = Some(tokio::time::Instant::now());
+                return Err(unavailable());
             }
-            RefreshLease::Held => tokio::time::sleep(REFRESH_POLL).await,
+            Ok(claim) => match claim? {
+                RefreshLease::Claimed => break,
+                RefreshLease::Superseded => return Ok(Refresh::Superseded),
+                RefreshLease::Gone => {
+                    return Ok(Refresh::Terminal("session_revoked_during_refresh"));
+                }
+                RefreshLease::Held if tokio::time::Instant::now() >= deadline => {
+                    tracing::warn!("a competing session refresh did not finish in time");
+                    state.gave_up = Some(tokio::time::Instant::now());
+                    return Err(unavailable());
+                }
+                RefreshLease::Held => {
+                    tokio::time::sleep_until((tokio::time::Instant::now() + backoff).min(deadline))
+                        .await;
+                    backoff = (backoff * 2).min(REFRESH_POLL_MAX);
+                }
+            },
         }
     }
-    let outcome = refresh_and_persist(auth, pool, stored, token_hash, owner).await;
-    if !matches!(outcome, Ok(Refresh::Persisted))
-        && let Err(error) = release_refresh_lease(pool, stored.id, owner).await
+    let outcome = match tokio::time::timeout(
+        auth.refresh_budget(),
+        refresh_and_persist(auth, pool, stored, owner),
+    )
+    .await
     {
-        tracing::warn!(%error, "could not release a session refresh lease");
+        Ok(outcome) => outcome,
+        Err(_) => {
+            tracing::warn!("a session refresh exceeded its budget and was abandoned");
+            Err(unavailable())
+        }
+    };
+    if matches!(outcome, Ok(Refresh::Persisted)) {
+        state.settled = Some(stored.version);
+    } else {
+        match tokio::time::timeout(
+            RELEASE_TIMEOUT,
+            release_refresh_lease(pool, stored.id, owner),
+        )
+        .await
+        {
+            Ok(Ok(())) => {}
+            Ok(Err(error)) => tracing::warn!(%error, "could not release a session refresh lease"),
+            Err(_) => tracing::warn!("releasing a session refresh lease timed out"),
+        }
     }
     outcome
 }
@@ -293,7 +365,6 @@ async fn refresh_and_persist(
     auth: &AuthRuntime,
     pool: &PgPool,
     stored: &StoredBrowserSession,
-    token_hash: &[u8],
     owner: Uuid,
 ) -> Result<Refresh, ApiError> {
     match auth
@@ -328,17 +399,15 @@ async fn refresh_and_persist(
                 },
             )
         }
-        // The lease made this request the only one spending the token, so a
-        // rejection with the row unchanged means nobody rotated it: the
-        // session is over. A moved row is someone else's refresh to use.
+        // A rejection ends the session only if this request still owns the
+        // lease and the row is unchanged, decided in the same statement that
+        // revokes. Otherwise the rejection may be a replay of a token another
+        // refresh already rotated, and that refresh's result is the truth.
         RefreshOutcome::Rejected => Ok(
-            if find_active_session(pool, token_hash)
-                .await?
-                .is_some_and(|current| current.version != stored.version)
-            {
-                Refresh::Superseded
-            } else {
+            if end_session_if_leased(pool, stored.id, stored.version, owner).await? {
                 Refresh::Terminal("refresh_rejected")
+            } else {
+                Refresh::Superseded
             },
         ),
     }
@@ -360,15 +429,49 @@ fn provider_error(error: IdentityError) -> ApiError {
     }
 }
 
+/// Per-session gate within one process. Remembers how the last holder fared so
+/// queued requests inherit it instead of querying again.
+pub(crate) type Gate = Arc<tokio::sync::Mutex<GateState>>;
+
+#[derive(Default)]
+pub(crate) struct GateState {
+    /// Row version of the last refresh this process persisted.
+    settled: Option<i64>,
+    /// When the last holder gave up waiting on another replica's refresh.
+    gave_up: Option<tokio::time::Instant>,
+}
+
 type Slot = Arc<tokio::sync::Mutex<Option<(Instant, RefreshOutcome)>>>;
 
 /// Single-flight refresh keyed by the cookie being refreshed.
 #[derive(Default)]
 pub(crate) struct RefreshCoalescer {
     slots: Mutex<HashMap<[u8; 32], Slot>>,
+    gates: Mutex<HashMap<Uuid, Gate>>,
+    lease_queries: std::sync::atomic::AtomicU64,
 }
 
 impl RefreshCoalescer {
+    pub(crate) fn gate(&self, session_id: Uuid) -> Gate {
+        let mut gates = self
+            .gates
+            .lock()
+            .unwrap_or_else(std::sync::PoisonError::into_inner);
+        // Drop gates nobody holds or waits on.
+        gates.retain(|_, gate| Arc::strong_count(gate) > 1);
+        Arc::clone(gates.entry(session_id).or_default())
+    }
+
+    pub(crate) fn count_lease_query(&self) {
+        self.lease_queries
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+    }
+
+    pub(crate) fn lease_queries(&self) -> u64 {
+        self.lease_queries
+            .load(std::sync::atomic::Ordering::Relaxed)
+    }
+
     pub(crate) async fn refresh(
         &self,
         provider: &dyn deepref_application::identity::IdentityProvider,

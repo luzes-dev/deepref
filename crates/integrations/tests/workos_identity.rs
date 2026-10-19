@@ -24,7 +24,16 @@ use tokio::{
 
 const SIGNING_KEY: &[u8] = include_bytes!("fixtures/workos-test-signing-key.der");
 const JWK_MODULUS: &str = "8A1CDnFQ7iO-uQJXoghTf88CdGY8YMlL4g24oS4jcdR_0-9z5ZJabqV55Hs8wU2kmjiPpMu-pTYENvKoqmFhj6dfjjapJQnTrk92HtTH2Vn9RtShXR-Z8jtLTwxv8PC8g6_2mPnSfWcj_TTfwZAyPJFqO7qGIUQKfzvZro0Kd9rE1c46xM9xGotUQjq6VgfFVzWPQpzMSk2Z3Km6hFmLqahU0M5n3JMZNk-nUk2ObKg7Zv4sd3uAlURynTgGhKVd6EHZEENvXTsz7l8YM59PyhHXhWyXQ6CdckO_9Ki81MCodR4piP8WHtPKoBXpdICBsvNRqUhRdMFPgep6HFHhsQ";
+/// Long enough that a loaded machine still signs in before the token expires.
+const LIFETIME_BEFORE_EXPIRY: i64 = 5;
 const PASSWORD: &str = "a-cookie-password-of-at-least-32-characters";
+
+/// A well-formed RSA modulus that is not the signing key's.
+fn other_modulus() -> String {
+    let mut chars: Vec<char> = JWK_MODULUS.chars().collect();
+    chars[100] = if chars[100] == 'A' { 'B' } else { 'A' };
+    chars.into_iter().collect()
+}
 
 fn now() -> i64 {
     SystemTime::now()
@@ -33,15 +42,14 @@ fn now() -> i64 {
         .as_secs() as i64
 }
 
-fn access_token(sub: &str, sid: &str, expires_in: i64) -> String {
+fn access_token(sub: &str, sid: &str, expires_in: i64, not_before_in: Option<i64>) -> String {
     let mut header = Header::new(Algorithm::RS256);
     header.kid = Some("key_1".to_owned());
-    jsonwebtoken::encode(
-        &header,
-        &json!({ "sub": sub, "sid": sid, "iat": now(), "exp": now() + expires_in }),
-        &EncodingKey::from_rsa_der(SIGNING_KEY),
-    )
-    .unwrap()
+    let mut claims = json!({ "sub": sub, "sid": sid, "iat": now(), "exp": now() + expires_in });
+    if let Some(offset) = not_before_in {
+        claims["nbf"] = json!(now() + offset);
+    }
+    jsonwebtoken::encode(&header, &claims, &EncodingKey::from_rsa_der(SIGNING_KEY)).unwrap()
 }
 
 #[derive(Default)]
@@ -50,6 +58,10 @@ struct MockState {
     refresh_status: u16,
     jwks_modulus: String,
     jwks_status: u16,
+    /// Replaces the served `keys` array when set.
+    jwks_keys: Option<serde_json::Value>,
+    /// Stamps `nbf` on exchanged access tokens, relative to now.
+    not_before_in: Option<i64>,
     /// Statuses for the next signing-key requests, in order, before
     /// `jwks_status` applies again.
     jwks_script: Vec<u16>,
@@ -138,6 +150,9 @@ fn route(state: &mut MockState, method: &str, path: &str, body: &str) -> (u16, S
         if status != 200 {
             return (status, json!({ "message": "down" }).to_string());
         }
+        if let Some(keys) = &state.jwks_keys {
+            return (200, json!({ "keys": keys }).to_string());
+        }
         return (
             200,
             json!({ "keys": [{ "kty": "RSA", "kid": "key_1", "alg": "RS256", "use": "sig",
@@ -151,12 +166,12 @@ fn route(state: &mut MockState, method: &str, path: &str, body: &str) -> (u16, S
             match request["grant_type"].as_str() {
                 Some("authorization_code") => (
                     200,
-                    json!({ "user": user("user_01"), "access_token": access_token("user_01", "session_01", state.exchange_lifetime),
+                    json!({ "user": user("user_01"), "access_token": access_token("user_01", "session_01", state.exchange_lifetime, state.not_before_in),
                         "refresh_token": "refresh_1" }).to_string(),
                 ),
                 Some("refresh_token") if state.refresh_status == 200 => (
                     200,
-                    json!({ "user": user("user_01"), "access_token": access_token("user_01", "session_01", 300),
+                    json!({ "user": user("user_01"), "access_token": access_token("user_01", "session_01", 300, None),
                         "refresh_token": "refresh_2" }).to_string(),
                 ),
                 _ => (
@@ -208,6 +223,8 @@ async fn harness() -> Harness {
         refresh_status: 200,
         jwks_modulus: JWK_MODULUS.to_owned(),
         jwks_status: 200,
+        jwks_keys: None,
+        not_before_in: None,
         jwks_script: Vec::new(),
         requests: Vec::new(),
     }));
@@ -216,6 +233,25 @@ async fn harness() -> Harness {
         provider: WorkOsIdentityProvider::with_base_url(&config(PASSWORD), &base_url),
         state,
         base_url,
+    }
+}
+
+/// Waits until the clock has passed the session's access token expiry, however
+/// slowly the machine runs, instead of sleeping a fixed time.
+async fn wait_until_expired(provider: &WorkOsIdentityProvider, sealed: &OpaqueSecret) {
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(60);
+    loop {
+        if matches!(
+            provider.inspect_session(sealed).await,
+            Ok(SessionStatus::Expired(_))
+        ) {
+            return;
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the token never expired"
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(250)).await;
     }
 }
 
@@ -355,7 +391,7 @@ async fn tampered_foreign_and_empty_cookies_are_invalid() {
 #[tokio::test]
 async fn an_access_token_not_signed_by_the_provider_key_is_rejected() {
     let h = harness().await;
-    h.state.lock().unwrap().jwks_modulus = "1".repeat(JWK_MODULUS.len());
+    h.state.lock().unwrap().jwks_modulus = other_modulus();
     let started = h
         .provider
         .begin_login("https://app.example.com/cb")
@@ -370,9 +406,9 @@ async fn an_access_token_not_signed_by_the_provider_key_is_rejected() {
 #[tokio::test]
 async fn an_expired_access_token_reads_as_expired_and_refreshes() {
     let h = harness().await;
-    h.state.lock().unwrap().exchange_lifetime = 1;
+    h.state.lock().unwrap().exchange_lifetime = LIFETIME_BEFORE_EXPIRY;
     let (sealed, login) = login(&h).await;
-    tokio::time::sleep(std::time::Duration::from_millis(2200)).await;
+    wait_until_expired(&h.provider, &sealed).await;
     assert_eq!(
         h.provider.inspect_session(&sealed).await.unwrap(),
         SessionStatus::Expired(login.session.clone())
@@ -396,9 +432,9 @@ async fn an_expired_access_token_reads_as_expired_and_refreshes() {
 #[tokio::test]
 async fn a_revoked_refresh_token_is_rejected_and_an_outage_is_unavailable() {
     let h = harness().await;
-    h.state.lock().unwrap().exchange_lifetime = 1;
+    h.state.lock().unwrap().exchange_lifetime = LIFETIME_BEFORE_EXPIRY;
     let (sealed, _) = login(&h).await;
-    tokio::time::sleep(std::time::Duration::from_millis(2200)).await;
+    wait_until_expired(&h.provider, &sealed).await;
 
     h.state.lock().unwrap().refresh_status = 401;
     assert!(matches!(
@@ -487,7 +523,7 @@ async fn a_signing_key_outage_is_unavailable_not_an_invalid_session() {
 async fn a_bad_signature_is_invalid_even_when_the_keys_are_reachable() {
     let h = harness().await;
     let (sealed, _) = login(&h).await;
-    h.state.lock().unwrap().jwks_modulus = "1".repeat(JWK_MODULUS.len());
+    h.state.lock().unwrap().jwks_modulus = other_modulus();
     assert_eq!(
         cold_provider(&h).inspect_session(&sealed).await.unwrap(),
         SessionStatus::Invalid
@@ -515,9 +551,9 @@ async fn a_key_fetch_that_fails_twice_around_a_good_probe_keeps_the_session() {
 #[tokio::test]
 async fn invalid_grant_ends_the_session_at_http_400_as_well_as_401() {
     let h = harness().await;
-    h.state.lock().unwrap().exchange_lifetime = 1;
+    h.state.lock().unwrap().exchange_lifetime = LIFETIME_BEFORE_EXPIRY;
     let (sealed, _) = login(&h).await;
-    tokio::time::sleep(std::time::Duration::from_millis(2200)).await;
+    wait_until_expired(&h.provider, &sealed).await;
 
     h.state.lock().unwrap().refresh_status = 400;
     assert!(matches!(
@@ -534,4 +570,90 @@ async fn invalid_grant_ends_the_session_at_http_400_as_well_as_401() {
             "{transient}"
         );
     }
+}
+
+fn jwks_key(extra: serde_json::Value) -> serde_json::Value {
+    let mut key = json!({ "kty": "RSA", "kid": "key_1", "alg": "RS256", "use": "sig",
+        "n": JWK_MODULUS, "e": "AQAB" });
+    for (name, value) in extra.as_object().unwrap() {
+        key[name] = value.clone();
+    }
+    key
+}
+
+async fn exchange_with_keys(keys: serde_json::Value) -> Result<(), IdentityError> {
+    let h = harness().await;
+    h.state.lock().unwrap().jwks_keys = Some(keys);
+    let started = h
+        .provider
+        .begin_login("https://app.example.com/cb")
+        .unwrap();
+    h.provider
+        .complete_login("code_1", &started.code_verifier)
+        .await
+        .map(|_| ())
+}
+
+#[tokio::test]
+async fn unusable_signing_keys_are_unavailable_not_an_invalid_session() {
+    let other_kid = jwks_key(json!({ "kid": "key_2" }));
+    let cases = [
+        ("no key for the kid", json!([other_kid])),
+        (
+            "duplicate keys for the kid",
+            json!([jwks_key(json!({})), jwks_key(json!({}))]),
+        ),
+        ("not an RSA key", json!([jwks_key(json!({ "kty": "EC" }))])),
+        ("wrong use", json!([jwks_key(json!({ "use": "enc" }))])),
+        (
+            "bad key material",
+            json!([jwks_key(json!({ "n": "!!not-base64!!" }))]),
+        ),
+        (
+            "key_ops without verify",
+            json!([jwks_key(json!({ "key_ops": ["sign"] }))]),
+        ),
+    ];
+    for (name, keys) in cases {
+        assert!(
+            matches!(
+                exchange_with_keys(keys).await,
+                Err(IdentityError::Unavailable)
+            ),
+            "{name}"
+        );
+    }
+}
+
+#[tokio::test]
+async fn a_token_that_is_not_yet_valid_is_retryable_not_an_invalid_session() {
+    let h = harness().await;
+    h.state.lock().unwrap().not_before_in = Some(3600);
+    let started = h
+        .provider
+        .begin_login("https://app.example.com/cb")
+        .unwrap();
+    let result = h
+        .provider
+        .complete_login("code_1", &started.code_verifier)
+        .await;
+    assert!(
+        matches!(result, Err(IdentityError::Unavailable)),
+        "{result:?}"
+    );
+}
+
+#[tokio::test]
+async fn an_expired_token_read_through_a_key_blip_still_reads_as_expired() {
+    let h = harness().await;
+    h.state.lock().unwrap().exchange_lifetime = LIFETIME_BEFORE_EXPIRY;
+    let (sealed, login) = login(&h).await;
+    wait_until_expired(&h.provider, &sealed).await;
+    // The SDK's key fetch fails, the adapter's probe succeeds and shows a
+    // genuinely signed but expired token, then the SDK's retry succeeds.
+    h.state.lock().unwrap().jwks_script = vec![503, 200, 200];
+    assert_eq!(
+        cold_provider(&h).inspect_session(&sealed).await.unwrap(),
+        SessionStatus::Expired(login.session)
+    );
 }

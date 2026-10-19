@@ -21,7 +21,7 @@ use tower::ServiceExt;
 mod support;
 use support::{
     COOKIE_PASSWORD, LOGIN_COOKIE, ORIGIN, SESSION_COOKIE, auth_app, auth_app_waiting,
-    fake_identity::FakeIdentity,
+    auth_app_with, auth_runtime, fake_identity::FakeIdentity,
 };
 
 async fn database() -> Option<PgPool> {
@@ -528,6 +528,241 @@ async fn an_expired_refresh_lease_lets_a_later_request_refresh() {
         .unwrap();
     assert_eq!(response.status(), StatusCode::OK);
     assert_eq!(h.fake.refresh_calls.load(Ordering::SeqCst), 1);
+}
+
+async fn wait_for_refresh_call(h: &Harness) {
+    for _ in 0..200 {
+        if h.fake.refresh_calls.load(Ordering::SeqCst) >= 1 {
+            return;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(10)).await;
+    }
+    panic!("the refresh never reached the provider");
+}
+
+/// Hands the session's refresh lease to `rival`, as a takeover after expiry.
+async fn take_over_lease(h: &Harness, session_id: uuid::Uuid, rival: uuid::Uuid) {
+    sqlx::query(
+        "UPDATE user_sessions
+         SET refresh_lease_owner = $2, refresh_lease_until = now() + interval '60 seconds'
+         WHERE id = $1",
+    )
+    .bind(session_id)
+    .bind(rival)
+    .execute(&h.pool)
+    .await
+    .unwrap();
+}
+
+async fn revoked_at_is_null(h: &Harness, session_id: uuid::Uuid) -> bool {
+    sqlx::query_scalar("SELECT revoked_at IS NULL FROM user_sessions WHERE id = $1")
+        .bind(session_id)
+        .fetch_one(&h.pool)
+        .await
+        .unwrap()
+}
+
+#[tokio::test]
+async fn a_refresh_that_outlives_its_budget_is_abandoned_keeping_cookie_and_lease_free() {
+    let Some(h) = harness().await else { return };
+    let cookie_token = sign_in(&h, "user_A", "a@example.org").await;
+    let expired = h.fake.mint_expired_session("user_A");
+    replace_provider_session(&h, &cookie_token, &expired).await;
+    // A two-second lease gives the refresh a one-second budget; the provider
+    // takes three.
+    *h.fake.refresh_delay.lock().unwrap() = std::time::Duration::from_secs(3);
+    let app = auth_app_with(
+        h.pool.clone(),
+        auth_runtime(Arc::clone(&h.fake), std::time::Duration::from_secs(5))
+            .with_refresh_lease(std::time::Duration::from_secs(2)),
+    );
+    let started = std::time::Instant::now();
+    let slow = app
+        .clone()
+        .oneshot(get("/me", Some((SESSION_COOKIE, &cookie_token))))
+        .await
+        .unwrap();
+    assert!(
+        started.elapsed() < std::time::Duration::from_millis(2500),
+        "abandoned inside the lease, not after the provider answered"
+    );
+    assert_eq!(slow.status(), StatusCode::SERVICE_UNAVAILABLE);
+    assert!(set_cookies(&slow).is_empty(), "{:?}", set_cookies(&slow));
+    let owner: Option<uuid::Uuid> =
+        sqlx::query_scalar("SELECT refresh_lease_owner FROM user_sessions")
+            .fetch_one(&h.pool)
+            .await
+            .unwrap();
+    assert!(owner.is_none(), "the abandoned refresh released its lease");
+
+    *h.fake.refresh_delay.lock().unwrap() = std::time::Duration::ZERO;
+    let retry = app
+        .oneshot(get("/me", Some((SESSION_COOKIE, &cookie_token))))
+        .await
+        .unwrap();
+    assert_eq!(retry.status(), StatusCode::OK);
+}
+
+#[tokio::test]
+async fn a_rejection_after_the_lease_was_taken_over_does_not_clear_the_cookie() {
+    let Some(h) = harness().await else { return };
+    let cookie_token = sign_in(&h, "user_A", "a@example.org").await;
+    let revoked = h.fake.mint_revoked_session("user_A");
+    replace_provider_session(&h, &cookie_token, &revoked).await;
+    let token_hash = SessionTokenKey::from_secret(COOKIE_PASSWORD).token_hash(&cookie_token);
+    let stored = find_active_session(&h.pool, &token_hash)
+        .await
+        .unwrap()
+        .unwrap();
+    *h.fake.refresh_delay.lock().unwrap() = std::time::Duration::from_millis(600);
+    let app = auth_app_waiting(
+        h.pool.clone(),
+        Arc::clone(&h.fake),
+        std::time::Duration::from_secs(1),
+    );
+    let competitor = tokio::spawn({
+        let cookie_token = cookie_token.clone();
+        async move {
+            app.oneshot(get("/me", Some((SESSION_COOKIE, &cookie_token))))
+                .await
+                .unwrap()
+        }
+    });
+    wait_for_refresh_call(&h).await;
+    // The original owner is slow and its lease lapsed: another replica owns it
+    // now, and this competitor's invalid_grant is a replay, not a verdict.
+    take_over_lease(&h, stored.id, uuid::Uuid::new_v4()).await;
+    let response = competitor.await.unwrap();
+    assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+    assert!(
+        set_cookies(&response).is_empty(),
+        "{:?}",
+        set_cookies(&response)
+    );
+    assert!(revoked_at_is_null(&h, stored.id).await);
+}
+
+#[tokio::test]
+async fn a_rejection_after_the_owner_committed_uses_the_owners_session() {
+    let Some(h) = harness().await else { return };
+    let cookie_token = sign_in(&h, "user_A", "a@example.org").await;
+    let revoked = h.fake.mint_revoked_session("user_A");
+    replace_provider_session(&h, &cookie_token, &revoked).await;
+    let token_hash = SessionTokenKey::from_secret(COOKIE_PASSWORD).token_hash(&cookie_token);
+    let stored = find_active_session(&h.pool, &token_hash)
+        .await
+        .unwrap()
+        .unwrap();
+    *h.fake.refresh_delay.lock().unwrap() = std::time::Duration::from_millis(600);
+    let app = h.app.clone();
+    let competitor = tokio::spawn({
+        let cookie_token = cookie_token.clone();
+        async move {
+            app.oneshot(get("/me", Some((SESSION_COOKIE, &cookie_token))))
+                .await
+                .unwrap()
+        }
+    });
+    wait_for_refresh_call(&h).await;
+    let rival = uuid::Uuid::new_v4();
+    take_over_lease(&h, stored.id, rival).await;
+    commit_rival_refresh(&h, &stored, rival).await;
+    let response = competitor.await.unwrap();
+    assert_eq!(response.status(), StatusCode::OK);
+    assert!(set_cookies(&response).is_empty());
+    assert!(revoked_at_is_null(&h, stored.id).await);
+}
+
+#[tokio::test]
+async fn a_rejection_from_the_current_lease_owner_ends_the_session() {
+    let Some(h) = harness().await else { return };
+    let cookie_token = sign_in(&h, "user_A", "a@example.org").await;
+    let revoked = h.fake.mint_revoked_session("user_A");
+    replace_provider_session(&h, &cookie_token, &revoked).await;
+    let response = h
+        .app
+        .clone()
+        .oneshot(get("/me", Some((SESSION_COOKIE, &cookie_token))))
+        .await
+        .unwrap();
+    assert_eq!(response.status(), StatusCode::UNAUTHORIZED);
+    assert!(
+        set_cookies(&response)
+            .iter()
+            .any(|c| c.starts_with(&format!("{SESSION_COOKIE}=;")))
+    );
+    let live: i64 = count(
+        &h.pool,
+        "SELECT count(*) FROM user_sessions WHERE revoked_at IS NULL",
+    )
+    .await;
+    assert_eq!(live, 0, "the fenced decision revoked the local session");
+}
+
+#[tokio::test]
+async fn waiting_requests_in_one_process_share_one_lease_poller() {
+    let Some(h) = harness().await else { return };
+    let (cookie_token, _, _) =
+        session_under_a_competing_refresh(&h, std::time::Duration::from_secs(60)).await;
+    let runtime = auth_runtime(Arc::clone(&h.fake), std::time::Duration::from_millis(1500));
+    let app = auth_app_with(h.pool.clone(), runtime.clone());
+    let mut tasks = Vec::new();
+    for _ in 0..20 {
+        let app = app.clone();
+        let cookie_token = cookie_token.clone();
+        tasks.push(tokio::spawn(async move {
+            app.oneshot(get("/me", Some((SESSION_COOKIE, &cookie_token))))
+                .await
+                .unwrap()
+                .status()
+        }));
+    }
+    for task in tasks {
+        assert_eq!(task.await.unwrap(), StatusCode::SERVICE_UNAVAILABLE);
+    }
+    let queries = runtime.refresh_lease_queries();
+    assert!(
+        (1..=8).contains(&queries),
+        "20 waiters made {queries} lease queries; backoff over 1.5s allows about 5"
+    );
+}
+
+#[tokio::test]
+async fn the_refresh_wait_holds_even_when_the_lease_query_stalls() {
+    let Some(h) = harness().await else { return };
+    let cookie_token = sign_in(&h, "user_A", "a@example.org").await;
+    let expired = h.fake.mint_expired_session("user_A");
+    replace_provider_session(&h, &cookie_token, &expired).await;
+    let token_hash = SessionTokenKey::from_secret(COOKIE_PASSWORD).token_hash(&cookie_token);
+    let stored = find_active_session(&h.pool, &token_hash)
+        .await
+        .unwrap()
+        .unwrap();
+    // Another transaction holds the row, so the lease UPDATE blocks.
+    let mut blocker = h.pool.begin().await.unwrap();
+    sqlx::query("SELECT 1 FROM user_sessions WHERE id = $1 FOR UPDATE")
+        .bind(stored.id)
+        .execute(&mut *blocker)
+        .await
+        .unwrap();
+    let impatient = auth_app_waiting(
+        h.pool.clone(),
+        Arc::clone(&h.fake),
+        std::time::Duration::from_millis(500),
+    );
+    let started = std::time::Instant::now();
+    let response = impatient
+        .oneshot(get("/me", Some((SESSION_COOKIE, &cookie_token))))
+        .await
+        .unwrap();
+    assert!(
+        started.elapsed() < std::time::Duration::from_secs(3),
+        "took {:?}",
+        started.elapsed()
+    );
+    assert_eq!(response.status(), StatusCode::SERVICE_UNAVAILABLE);
+    assert!(set_cookies(&response).is_empty());
+    blocker.rollback().await.unwrap();
 }
 
 #[tokio::test]

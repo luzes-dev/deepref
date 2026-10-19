@@ -37,6 +37,8 @@ pub struct FakeIdentity {
     counter: AtomicUsize,
     pub revoked: Mutex<Vec<String>>,
     pub refresh_calls: AtomicUsize,
+    /// How long a refresh takes at the provider before it answers.
+    pub refresh_delay: Mutex<std::time::Duration>,
     /// While set, `inspect_session` fails as it does in a provider outage.
     pub inspect_unavailable: AtomicBool,
     pub fail_exchange: Mutex<Option<IdentityError>>,
@@ -166,6 +168,10 @@ impl IdentityProvider for FakeIdentity {
     ) -> IdentityFuture<'a, RefreshOutcome> {
         Box::pin(async move {
             self.refresh_calls.fetch_add(1, Ordering::SeqCst);
+            let delay = *self.refresh_delay.lock().unwrap();
+            if !delay.is_zero() {
+                tokio::time::sleep(delay).await;
+            }
             let session = {
                 let mut inner = self.inner.lock().unwrap();
                 match inner.sealed.get_mut(sealed.expose()) {

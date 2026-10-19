@@ -391,6 +391,36 @@ pub async fn release_refresh_lease(
     Ok(())
 }
 
+/// Ends the session because the provider rejected its refresh token, but only
+/// if `lease_owner` still holds the refresh lease and the row is still at
+/// `expected_version`. The check and the revocation are one statement, so a
+/// request whose lease lapsed (and whose rejection may be a competitor's
+/// replay of a token the real owner already rotated) cannot end a session that
+/// is being, or has been, renewed. Returns whether the session was ended; only
+/// then may the caller treat the session as over.
+pub async fn end_session_if_leased(
+    pool: &PgPool,
+    session_id: Uuid,
+    expected_version: i64,
+    lease_owner: Uuid,
+) -> Result<bool, IdentityStoreError> {
+    let ended = sqlx::query(
+        "UPDATE user_sessions
+         SET revoked_at = now(), refresh_lease_owner = NULL, refresh_lease_until = NULL
+         WHERE id = $1
+           AND version = $2
+           AND refresh_lease_owner = $3
+           AND revoked_at IS NULL",
+    )
+    .bind(session_id)
+    .bind(expected_version)
+    .bind(lease_owner)
+    .execute(pool)
+    .await?
+    .rows_affected();
+    Ok(ended == 1)
+}
+
 /// Persists a WorkOS refresh in the existing local session row, but only if the
 /// row is still at `expected_version` and `lease_owner` still holds the refresh
 /// lease. A request that lost either race holds a session that is already

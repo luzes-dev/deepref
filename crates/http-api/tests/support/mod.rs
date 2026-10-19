@@ -45,13 +45,30 @@ pub fn auth_app_waiting(
     fake: std::sync::Arc<fake_identity::FakeIdentity>,
     refresh_wait: std::time::Duration,
 ) -> axum::Router {
+    auth_app_with(pool, auth_runtime(fake, refresh_wait))
+}
+
+pub fn auth_runtime(
+    fake: std::sync::Arc<fake_identity::FakeIdentity>,
+    refresh_wait: std::time::Duration,
+) -> deepref_http_api::auth::AuthRuntime {
     let runtime = runtime_with(&[
         ("DEEPREF_AUTH_ENABLED", "true"),
         ("DEEPREF_PUBLIC_ORIGIN", ORIGIN),
     ]);
-    let auth =
-        deepref_http_api::auth::AuthRuntime::new(fake, &runtime.public_origin, COOKIE_PASSWORD)
-            .with_refresh_wait(refresh_wait);
+    deepref_http_api::auth::AuthRuntime::new(fake, &runtime.public_origin, COOKIE_PASSWORD)
+        .with_refresh_wait(refresh_wait)
+}
+
+/// The API router around an `auth` runtime the test keeps a handle to.
+pub fn auth_app_with(
+    pool: sqlx::PgPool,
+    auth: deepref_http_api::auth::AuthRuntime,
+) -> axum::Router {
+    let runtime = runtime_with(&[
+        ("DEEPREF_AUTH_ENABLED", "true"),
+        ("DEEPREF_PUBLIC_ORIGIN", ORIGIN),
+    ]);
     let mut runtime = runtime;
     runtime.workflow.niche_nodes_enabled = true;
     let workflow = runtime.workflow.clone();
